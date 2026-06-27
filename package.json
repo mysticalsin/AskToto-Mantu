@@ -1,0 +1,53 @@
+{
+  "name": "asktoto",
+  "version": "0.1.0",
+  "description": "AskToto — AI desktop overlay assistant",
+  "author": "AskToto",
+  "main": "./out/main/index.js",
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "preview": "electron-vite preview",
+    "start": "electron-vite preview",
+    "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
+    "test": "vitest run",
+    "dist": "electron-vite build && electron-builder --mac",
+    "dist:win": "electron-vite build && electron-builder --win",
+    "dist:win:appx": "electron-vite build && electron-builder --win appx"
+  },
+  "comment": "Only main-process runtime deps live in 'dependencies' (electron-builder bundles these into the app). All renderer deps are bundled by Vite at build time and kept in devDependencies to keep the package small.",
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.106.0",
+    "@azure/msal-node": "^5.3.0",
+    "@dust-tt/client": "^1.2.6",
+    "electron-log": "^5.4.4",
+    "electron-updater": "^6.8.9",
+    "openai": "^6.45.0",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@base-ui-components/react": "latest",
+    "@fontsource/inter": "latest",
+    "@huggingface/transformers": "^3.0.0",
+    "@tailwindcss/vite": "^4.0.0",
+    "@types/node": "^22.5.0",
+    "@types/react": "^18.3.5",
+    "@types/react-dom": "^18.3.0",
+    "@vitejs/plugin-react": "^4.3.1",
+    "@vitest/coverage-v8": "^4.1.9",
+    "electron": "^33.2.0",
+    "electron-builder": "^25.1.8",
+    "electron-vite": "^2.3.0",
+    "geist": "latest",
+    "lucide-react": "latest",
+    "playwright": "^1.61.1",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "shiki": "^4.3.0",
+    "streamdown": "latest",
+    "tailwindcss": "^4.0.0",
+    "typescript": "^5.6.3",
+    "vite": "^5.4.8",
+    "vitest": "^4.1.9"
+  }
+}
