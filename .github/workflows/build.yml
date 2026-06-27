@@ -1,0 +1,100 @@
+name: Build & Test
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+jobs:
+  quality:
+    name: Quality checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run build
+      - run: npm test
+
+  security:
+    name: Security & supply chain
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      # SCA gate: block on CRITICAL. High advisories are reported (not hard-failed) because the current
+      # highs are unreachable transitive deps under @dust-tt/client (express/router/path-to-regexp/qs —
+      # AskToto runs no inbound HTTP/MCP server, so those code paths are never hit; tracked as R-05).
+      # Escalate to --audit-level=high once @dust-tt/client ships a patched express.
+      - name: Dependency audit (block on critical)
+        run: npm audit --audit-level=critical
+      - name: Dependency audit (report high, non-blocking)
+        run: npm audit --audit-level=high || true
+      # Secret scan: fail if a key-shaped string is committed to source (allow .env.example placeholders).
+      - name: Secret scan
+        run: |
+          if grep -rInE '(nvapi-|sk-ant-|sk-or-|gsk_|fw_|tgp_v1_)[A-Za-z0-9_-]{16,}' \
+            --include='*.ts' --include='*.tsx' --include='*.js' --include='*.json' --include='*.yml' \
+            src .github electron-builder.yml 2>/dev/null; then
+            echo "::error::Possible committed secret found"; exit 1
+          fi
+          echo "No committed secrets found."
+      # SBOM (CycloneDX) for the supply-chain evidence package.
+      - name: Generate SBOM
+        run: npx --yes @cyclonedx/cyclonedx-npm --output-file sbom.json || echo "SBOM step skipped"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sbom
+          path: sbom.json
+          if-no-files-found: ignore
+
+  build-macos:
+    name: macOS package
+    needs: [quality, security]
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm run dist
+        env:
+          # Signing is skipped on CI unless you add your Apple certs as secrets.
+          ASKTOTO_DISABLE_CP: '1'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: asktoto-macos
+          path: release/*
+
+  build-windows:
+    name: Windows package
+    needs: [quality, security]
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm run dist:win
+      - run: npm run dist:win:appx
+        env:
+          # AppX packaging only works on Windows runners (needs the Windows SDK).
+          # Signing is skipped on CI unless you add your Windows cert as a secret
+          # via CSC_LINK / CSC_KEY_PASSWORD.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: asktoto-windows
+          path: release/*

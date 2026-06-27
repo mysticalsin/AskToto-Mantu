@@ -1,0 +1,69 @@
+appId: com.mantu.asktoto
+productName: AskToto
+copyright: © 2026 Mantu · AskToto — built by Tony Walteur
+# App icon: build/icon.png (1024² Mantu M) → electron-builder derives mac .icns + win .ico automatically.
+# Code signing is env-driven (see SIGNING.md):
+#   mac/win:  CSC_LINK (path/base64 of the .p12) + CSC_KEY_PASSWORD
+#   notarize: APPLE_ID + APPLE_APP_SPECIFIC_PASSWORD + APPLE_TEAM_ID
+directories:
+  output: release
+  buildResources: build
+files:
+  - out/**/*
+  - package.json
+  - '!out/**/*.map'
+  - '!**/*.d.ts'
+asar: true
+extraResources:
+  - from: build/managed-config.example.json
+    to: managed-config.example.json
+  - from: build/icon.png
+    to: icon.png
+  - from: resources/graphify_runner.py
+    to: graphify_runner.py
+mac:
+  category: public.app-category.productivity
+  target:
+    - dmg
+    - zip
+  hardenedRuntime: true
+  entitlements: build/entitlements.mac.plist
+  entitlementsInherit: build/entitlements.mac.plist
+  gatekeeperAssess: false
+  extendInfo:
+    NSMicrophoneUsageDescription: AskToto transcribes audio on-device to give you live AI suggestions.
+    NSScreenCaptureUsageDescription: AskToto captures system audio and your screen so the AI can help.
+    NSAppleEventsUsageDescription: AskToto detects when a meeting starts (Zoom/Teams/Meet) to auto-start.
+    LSUIElement: true
+dmg:
+  title: AskToto ${version}
+win:
+  icon: build/icon.png
+  publisherName: Mantu
+  target:
+    - nsis      # → AskToto-Setup-<version>.exe (installer)
+    - portable  # → AskToto-Portable-<version>.exe (no-install single exe)
+  artifactName: AskToto-Setup-${version}.${ext}
+  verifyUpdateCodeSignature: false
+  # Authenticode signing: set WIN_CSC_LINK + WIN_CSC_KEY_PASSWORD env (or use Azure Trusted Signing).
+  # rfc3161TimeStampServer left at electron-builder default.
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  shortcutName: AskToto
+portable:
+  artifactName: AskToto-Portable-${version}.${ext}
+appx:
+  artifactName: AskToto-${version}.${ext}
+  applicationId: AskToto
+  identityName: Mantu.AskToto
+  publisher: CN=Mantu
+  publisherDisplayName: Mantu
+  backgroundColor: transparent
+# Auto-update (electron-updater is wired in src/main/updater.ts). Replace the URL with your update host
+# (any static HTTPS server / S3 / Azure Blob), then `npm run dist` publishes latest-mac.yml + artifacts there.
+publish:
+  provider: generic
+  url: https://REPLACE-WITH-YOUR-UPDATE-HOST/asktoto

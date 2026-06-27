@@ -1,0 +1,430 @@
+import { z } from 'zod'
+import type { ProviderId } from './providers'
+
+export const ProviderIdSchema = z.enum([
+  'anthropic',
+  'openai',
+  'nvidia',
+  'deepseek',
+  'qwen',
+  'minimax',
+  'kimi',
+  'openrouter',
+  'groq',
+  'together',
+  'fireworks',
+  'mistral',
+  'dust',
+  'custom'
+])
+
+// Compile-time parity guard: ProviderIdSchema (this enum) must match the ProviderId union in
+// providers.ts exactly. If either side drifts, this assignment fails to typecheck.
+type _ProviderIdEnum = z.infer<typeof ProviderIdSchema>
+const _providerIdParity: ([_ProviderIdEnum] extends [ProviderId]
+  ? [ProviderId] extends [_ProviderIdEnum]
+    ? true
+    : never
+  : never) = true
+void _providerIdParity
+
+/** Single source of truth for every IPC channel name. */
+export const IPC = {
+  settingsGet: 'settings:get',
+  settingsSet: 'settings:set',
+  setApiKey: 'settings:setApiKey',
+  clearApiKey: 'settings:clearApiKey',
+  testApiKey: 'settings:testApiKey',
+  dustListAgents: 'dust:listAgents',
+  dustImportCli: 'dust:importCli',
+  graphifyStatus: 'graphify:status',
+  graphifyRebuild: 'graphify:rebuild',
+  graphifyRelated: 'graphify:related',
+  graphifyOpenGraph: 'graphify:openGraph',
+  authStatus: 'auth:status',
+  authSignIn: 'auth:signIn',
+  authSignOut: 'auth:signOut',
+  askStart: 'ask:start',
+  askCancel: 'ask:cancel',
+  streamDelta: 'stream:delta',
+  streamDone: 'stream:done',
+  streamError: 'stream:error',
+  captureScreen: 'capture:screen',
+  armAudio: 'audio:arm',
+  saveTranscript: 'transcript:save',
+  saveNote: 'note:save',
+  pickFolder: 'folder:pick',
+  openPath: 'path:open',
+  recallList: 'recall:list',
+  recallSearch: 'recall:search',
+  recallOpen: 'recall:open',
+  windowResize: 'window:resize',
+  windowMode: 'window:mode',
+  windowHide: 'window:hide',
+  windowToggle: 'window:toggle',
+  windowQuit: 'window:quit',
+  hotkey: 'hotkey',
+  meetingDetected: 'meeting:detected',
+  permissionsGet: 'permissions:get',
+  listeningState: 'listening:state'
+} as const
+
+export type AskMode = 'answer' | 'vision' | 'suggest' | 'summary' | 'recap'
+
+export const CONVERSATION_MODES = ['interview', 'meeting', 'sales', 'general'] as const
+export const ConversationModeSchema = z.enum(CONVERSATION_MODES)
+export type ConversationMode = z.infer<typeof ConversationModeSchema>
+
+export const ProfileSchema = z.object({
+  name: z.string().default(''),
+  role: z.string().default(''),
+  company: z.string().default(''),
+  resume: z.string().default(''),
+  jobDescription: z.string().default(''),
+  notes: z.string().default('')
+})
+export type Profile = z.infer<typeof ProfileSchema>
+
+export const TranscriptLineSchema = z.object({
+  speaker: z.enum(['them', 'you']),
+  text: z.string(),
+  t: z.number()
+})
+export type TranscriptLine = z.infer<typeof TranscriptLineSchema>
+
+export const SaveMeetingSchema = z.object({
+  title: z.string().default(''),
+  mode: ConversationModeSchema.default('general'),
+  startedAt: z.number(),
+  lines: z.array(TranscriptLineSchema),
+  recap: z.string().default('')
+})
+export type SaveMeeting = z.infer<typeof SaveMeetingSchema>
+
+export const SaveNoteSchema = z.object({
+  title: z.string().default(''),
+  mode: ConversationModeSchema.default('general'),
+  question: z.string().default(''),
+  answer: z.string().min(1)
+})
+export type SaveNote = z.infer<typeof SaveNoteSchema>
+
+export const ChatTurnSchema = z.object({
+  role: z.enum(['user', 'assistant']),
+  content: z.string()
+})
+export type ChatTurn = z.infer<typeof ChatTurnSchema>
+
+export const AskStartSchema = z.object({
+  id: z.string(),
+  mode: z.enum(['answer', 'vision', 'suggest', 'summary', 'recap']),
+  prompt: z.string().default(''),
+  /** base64 PNG (no data: prefix) for vision mode. Max ~4 MB raw (~5.5 MB base64 string). */
+  image: z
+    .string()
+    .refine(
+      (v) => !v || (v.length <= 5_500_000 && /^[A-Za-z0-9+/]*={0,2}$/.test(v)),
+      'Image must be a base64 string under 5.5 MB'
+    )
+    .optional(),
+  /** raw transcript text for suggest mode */
+  transcript: z.string().optional(),
+  history: z.array(ChatTurnSchema).default([])
+})
+export type AskStart = z.infer<typeof AskStartSchema>
+
+export const StreamDeltaSchema = z.object({ id: z.string(), text: z.string() })
+export type StreamDelta = z.infer<typeof StreamDeltaSchema>
+
+export const StreamDoneSchema = z.object({
+  id: z.string(),
+  inputTokens: z.number().optional(),
+  outputTokens: z.number().optional()
+})
+export type StreamDone = z.infer<typeof StreamDoneSchema>
+
+export const StreamErrorSchema = z.object({ id: z.string(), message: z.string() })
+export type StreamError = z.infer<typeof StreamErrorSchema>
+
+export const BaseSettingsSchema = z.object({
+  provider: ProviderIdSchema.default('anthropic'),
+  providerModels: z.record(z.string(), z.string()).default({}),
+  customBaseUrl: z
+    .string()
+    .refine(
+      (v) => v === '' || /^https:\/\//i.test(v),
+      'Custom endpoint must be an https:// URL'
+    )
+    .default(''),
+  // Per-provider THINKING-tier model override (parallel to providerModels). For Dust this is the
+  // thinking agent sId. Empty → fall back to the provider's built-in think model. See shared/routing.ts.
+  providerModelsThinking: z.record(z.string(), z.string()).default({}),
+  // Routing policy: 'auto' = Haiku for simple, Sonnet for hard/coding; 'always' = always think; 'never' = always base.
+  thinkingMode: z.enum(['auto', 'always', 'never']).default('auto'),
+  // Dust provider config (workspace id + region base; the agent sId lives in providerModels.dust)
+  dustWorkspaceId: z.string().default(''),
+  dustBaseUrl: z
+    .string()
+    .refine((v) => v === '' || /^https:\/\//i.test(v), 'Dust URL must be an https:// URL')
+    .default('https://dust.tt'),
+  // Azure AD (Entra) SSO config. These are PUBLIC identifiers — the PKCE public-client flow uses no
+  // client secret — so they live in settings, letting an admin enable Microsoft sign-in in-app without
+  // editing env vars or deploying managed-config.json. A machine-wide managed-config still overrides
+  // these (org tenant lock can't be loosened from the UI). See main/auth.ts readConfig().
+  azureClientId: z.string().default(''),
+  azureTenantId: z.string().default(''),
+  azureAllowedDomain: z.string().default(''),
+  // graphify knowledge-graph of the notes folder. backend 'auto' = local Claude Code CLI → stored
+  // Claude key → stored OpenAI key (never Gemini). On by default for new installs; degrades gracefully
+  // (shows an install hint, never throws) when graphify isn't installed. See main/graphify.ts.
+  graphifyEnabled: z.boolean().default(true),
+  graphifyAutoRebuild: z.boolean().default(true),
+  graphifyBackend: z.enum(['auto', 'claude', 'openai']).default('auto'),
+  // Multilingual. AskToto transcribes any spoken language and assists in the speaker's language live;
+  // the final recap/summary + answers are written in this language ('auto' = match the conversation).
+  outputLanguage: z.string().max(40).default('auto'),
+  // Encrypt saved transcripts/notes at rest (OS keychain). Off by default because it stops Dust agents,
+  // recall search, and the knowledge graph from reading the markdown. See main/transcripts.ts.
+  encryptTranscripts: z.boolean().default(false),
+  systemPrompt: z.string(),
+  // Per-mode system prompts (pre-filled from DEFAULT_MODE_PROMPTS; user edits override). Plug-and-play.
+  modePrompts: z.record(z.string(), z.string()).default({}),
+  // Imported reference documents (Cluely-style "add files for context"), keyed PER MODE so a doc
+  // attached for Interview never leaks into Sales/Meeting/General. Text-extracted client-side.
+  contextDocs: z
+    .record(
+      z.string(),
+      z.array(z.object({ name: z.string().max(200), text: z.string().max(120000) })).max(25)
+    )
+    .default({}),
+  temperature: z.number().min(0).max(1),
+  contentProtection: z.boolean(),
+  audioSource: z.enum(['mic', 'system', 'both']),
+  suggestEverySec: z.number().min(5).max(120),
+  mode: ConversationModeSchema.default('general'),
+  profile: ProfileSchema.default({}),
+  shortcuts: z.record(z.string(), z.string().min(1)).default({}),
+  autoSuggest: z.boolean().default(true),
+  showLiveTranscript: z.boolean().default(false),
+  meetingsFolder: z.string().default(''),
+  autoSaveTranscripts: z.boolean().default(false),
+  autoStartOnMeeting: z.boolean().default(false),
+  launchAtLogin: z.boolean().default(false),
+  onboardingDone: z.boolean().default(false),
+  recordingConsent: z.boolean().default(false),
+  playListenChime: z.boolean().default(true),
+  requireConsentIndicator: z.boolean().default(false),
+  lastConsentReminderAt: z.number().default(0),
+  customMeetingApps: z.array(z.string().min(1).max(80)).max(20).default([])
+})
+
+export const SettingsSchema = BaseSettingsSchema.refine(
+  (s) => s.provider !== 'custom' || /^https:\/\//i.test(s.customBaseUrl),
+  {
+    message: 'Custom provider requires a valid https:// endpoint URL',
+    path: ['customBaseUrl']
+  }
+)
+export type Settings = z.infer<typeof BaseSettingsSchema>
+
+/** What the renderer receives (never raw keys). */
+export const PublicSettingsSchema = BaseSettingsSchema.extend({
+  hasApiKey: z.boolean(),
+  hasKeys: z.record(z.string(), z.boolean()),
+  hasEncryption: z.boolean(),
+  resolvedMeetingsFolder: z.string(),
+  managedKeys: z.array(z.string()).default([]),
+  loginItemOpenAtLogin: z.boolean().default(false)
+})
+export type PublicSettings = z.infer<typeof PublicSettingsSchema>
+
+/** Patch type exposed to the renderer. Derived/computed fields are omitted because the main process ignores them. */
+export type SettingsPatch = Partial<
+  Omit<
+    PublicSettings,
+    'hasApiKey' | 'hasKeys' | 'hasEncryption' | 'resolvedMeetingsFolder' | 'managedKeys' | 'loginItemOpenAtLogin'
+  >
+>
+
+export const DEFAULT_SETTINGS: Settings = {
+  provider: 'anthropic',
+  providerModels: {},
+  providerModelsThinking: {},
+  thinkingMode: 'auto',
+  customBaseUrl: '',
+  dustWorkspaceId: '',
+  dustBaseUrl: 'https://dust.tt',
+  azureClientId: '',
+  azureTenantId: '',
+  azureAllowedDomain: '',
+  graphifyEnabled: true,
+  graphifyAutoRebuild: true,
+  graphifyBackend: 'auto',
+  outputLanguage: 'auto',
+  encryptTranscripts: false,
+  systemPrompt:
+    'You are AskToto, a fast, sharp desktop assistant living in an always-on overlay. ' +
+    'Answer concisely and directly in clean markdown. Lead with the answer. Use code blocks ' +
+    'with language tags, KaTeX for math ($...$), and tables when they help. No filler.',
+  modePrompts: {},
+  contextDocs: {},
+  temperature: 0.4,
+  contentProtection: true,
+  audioSource: 'both',
+  suggestEverySec: 15,
+  mode: 'general',
+  profile: { name: '', role: '', company: '', resume: '', jobDescription: '', notes: '' },
+  shortcuts: {}, // empty → built-in DEFAULT_SHORTCUTS apply (merged at hotkey registration)
+  autoSuggest: true,
+  showLiveTranscript: false,
+  meetingsFolder: '',
+  autoSaveTranscripts: false,
+  autoStartOnMeeting: false,
+  launchAtLogin: false,
+  onboardingDone: false,
+  recordingConsent: false,
+  playListenChime: true,
+  requireConsentIndicator: false,
+  lastConsentReminderAt: 0,
+  customMeetingApps: []
+}
+
+export const HOTKEY_ACTIONS: HotkeyAction[] = [
+  'ask',
+  'hide',
+  'reset',
+  'toggle-listen',
+  'capture',
+  'factcheck',
+  'scroll-up',
+  'scroll-down',
+  'settings'
+]
+
+export type HotkeyAction =
+  | 'ask'
+  | 'hide'
+  | 'reset'
+  | 'toggle-listen'
+  | 'capture'
+  | 'factcheck'
+  | 'scroll-up'
+  | 'scroll-down'
+  | 'settings'
+
+export const DEFAULT_SHORTCUTS: Record<HotkeyAction, string> = {
+  ask: 'CommandOrControl+Shift+Return',
+  hide: 'CommandOrControl+\\',
+  reset: 'CommandOrControl+Shift+R',
+  'toggle-listen': 'CommandOrControl+Shift+L',
+  capture: 'CommandOrControl+Shift+S',
+  factcheck: 'CommandOrControl+Shift+F',
+  'scroll-up': 'CommandOrControl+Alt+Up',
+  'scroll-down': 'CommandOrControl+Alt+Down',
+  settings: '' // no global shortcut by default; opened from bar or tray
+}
+
+export type PermissionStatus = 'granted' | 'denied' | 'unknown' | 'not-required'
+export interface PlatformPermissions {
+  microphone: PermissionStatus
+  screenRecording: PermissionStatus
+  accessibility: PermissionStatus
+}
+
+export interface MeetingSummary {
+  file: string
+  title: string
+  date: string
+  mode: string
+  durationMin: number
+  participants: string[]
+}
+export interface RecallHit extends MeetingSummary {
+  snippet: string
+  score: number
+}
+
+export const SetApiKeyPayloadSchema = z.object({
+  provider: ProviderIdSchema,
+  key: z.string()
+})
+export type SetApiKeyPayload = z.infer<typeof SetApiKeyPayloadSchema>
+
+export const ClearApiKeyPayloadSchema = z.object({
+  provider: ProviderIdSchema
+})
+export type ClearApiKeyPayload = z.infer<typeof ClearApiKeyPayloadSchema>
+
+export const TestApiKeyPayloadSchema = z.object({
+  provider: ProviderIdSchema,
+  key: z.string()
+})
+export type TestApiKeyPayload = z.infer<typeof TestApiKeyPayloadSchema>
+
+export interface TestKeyResponse {
+  ok: boolean
+  error?: string
+}
+
+/** Azure AD (Entra) sign-in. Restricts the app to the org's Microsoft domain and ties users to Dust. */
+export interface AuthStatus {
+  configured: boolean // true once AZURE_CLIENT_ID/AZURE_TENANT_ID/ASKTOTO_ALLOWED_DOMAIN are set
+  signedIn: boolean
+  email?: string
+  name?: string
+  domain?: string
+}
+export interface SignInResult {
+  ok: boolean
+  configured?: boolean
+  email?: string
+  error?: string
+}
+
+export interface DustAgent {
+  sId: string
+  name: string
+  description: string
+}
+export interface DustAgentsResponse {
+  ok: boolean
+  agents?: DustAgent[]
+  error?: string
+}
+
+/** Result of importing the local Dust CLI session (workspace + token + region) from the OS keychain. */
+export interface DustCliImport {
+  ok: boolean
+  workspaceId?: string
+  baseUrl?: string
+  error?: string
+}
+
+/** Status of the graphify knowledge-graph integration (see main/graphify.ts). */
+export interface GraphStatus {
+  enabled: boolean
+  installed: boolean // graphify importable on this machine
+  backend: string | null // resolved extraction backend (claude-cli | claude | openai), or null
+  building: boolean
+  hasGraph: boolean
+  lastBuiltAt?: number
+  nodes?: number
+  edges?: number
+  error?: string | null
+}
+
+/** Notes + topics connected to a given note, read from graph.json. */
+export interface GraphRelated {
+  ok: boolean
+  error?: string
+  topics: string[]
+  notes: { file: string; title: string; via: string[] }[]
+}
+
+export const CaptureResultSchema = z.object({
+  /** base64 PNG, no prefix */
+  image: z.string(),
+  width: z.number(),
+  height: z.number()
+})
+export type CaptureResult = z.infer<typeof CaptureResultSchema>

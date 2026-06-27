@@ -1,0 +1,444 @@
+@import 'tailwindcss';
+/* streamdown styles itself with Tailwind utilities — Tailwind v4 must scan its dist to emit them */
+@source "../../../node_modules/streamdown/dist";
+/* AskToto is always dark; streamdown's shiki colors live under the `dark:` variant.
+   Make `dark:` class-based (not prefers-color-scheme) so the dark code theme always applies. */
+@custom-variant dark (&:where(.dark, .dark *));
+
+@font-face {
+  font-family: 'Geist';
+  src: url('./assets/fonts/geist-sans.woff2') format('woff2');
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'InterVar';
+  src: url('./assets/fonts/inter.woff2') format('woff2');
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+
+@theme {
+  --font-ui: 'Geist', -apple-system, system-ui, sans-serif;
+  --font-body: 'InterVar', -apple-system, system-ui, sans-serif;
+  /* Mantu brand purple (Bright Purple #7F00DA / Primary Purple #6600AE). No yellow. */
+  --color-accent: #7f00da;
+  --color-accent-soft: rgba(127, 0, 218, 0.18);
+  --color-accent-glow: rgba(127, 0, 218, 0.30);
+  /* Bright text — pops on the more-transparent glass (Tony: "text can be very bright"). */
+  --color-ink: rgba(255, 255, 255, 1);
+  --color-ink-2: rgba(255, 255, 255, 0.86);
+  --color-ink-3: rgba(255, 255, 255, 0.74); /* ≥4.5:1 on the frosted glass (WCAG AA) */
+  --color-hair: rgba(255, 255, 255, 0.10);
+  --color-hair-soft: rgba(255, 255, 255, 0.06);
+  --color-hair-strong: rgba(255, 255, 255, 0.16);
+  --color-rim-light: rgba(255, 255, 255, 0.08);
+
+  /* Semantic colors (replace hardcoded hexes) */
+  --color-danger: #f0717a;
+  --color-danger-soft: rgba(240, 113, 122, 0.14);
+  --color-success: #83c092;
+  --color-success-soft: rgba(131, 192, 146, 0.12);
+
+  /* Glass surfaces — frosted Mantu purple; the blur keeps bright text legible while
+     the desktop shows through. */
+  --glass-fill: rgba(26, 0, 51, 0.44);
+  --glass-fill-elevated: rgba(34, 4, 64, 0.52);
+  --glass-fill-strong: rgba(20, 0, 40, 0.6);
+  --glass-tint-white: rgba(255, 255, 255, 0.06);
+  --glass-tint-black: rgba(0, 0, 0, 0.18);
+  --blur-bar: 34px;
+  --blur-panel: 42px;
+  --blur-saturate: 190%;
+
+  /* Listening state — neutral gray, much more opaque so thin text stays readable behind the overlay. */
+  --glass-fill-listening: rgba(18, 18, 22, 0.78);
+  --glass-fill-strong-listening: rgba(22, 22, 26, 0.86);
+  --glass-tint-white-listening: rgba(255, 255, 255, 0.04);
+  --blur-bar-listening: 24px;
+  --blur-panel-listening: 30px;
+
+  /* Spacing */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+
+  /* Radius */
+  --radius-sm: 8px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+  --radius-xl: 18px;
+  --radius-pill: 9999px;
+  --radius-control: 10px;
+
+  /* Elevation — depth + a faint Mantu-purple ambient glow for a premium, on-brand feel. */
+  --shadow-bar: 0 8px 28px rgba(0, 0, 0, 0.42), 0 2px 18px rgba(127, 0, 218, 0.12),
+    inset 0 0.5px 0 var(--color-rim-light);
+  --shadow-panel: 0 16px 48px rgba(0, 0, 0, 0.5), 0 4px 28px rgba(127, 0, 218, 0.12),
+    inset 0 1px 0 var(--color-rim-light);
+  --shadow-float: 0 4px 16px rgba(0, 0, 0, 0.35);
+
+  /* Motion */
+  --ease-spring: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-bounce: cubic-bezier(0.34, 1.56, 0.64, 1);
+  --duration-instant: 80ms;
+  --duration-hover: 150ms;
+  --duration-panel: 220ms;
+}
+
+:root {
+  color-scheme: dark;
+
+  /* ── Settings window theme: Cluely's two-pane layout, recolored to Mantu purple ──────────────
+     Mantu palette: Bright Purple #7F00DA, Primary Purple #6600AE, Dark #1A0033, white text. No yellow.
+     Used only by the Settings window (.cl-* surfaces). The overlay bar/panel use the glass system. */
+  --cl-bg: #14012a; /* app shell — solid Mantu purple-black */
+  --cl-background: #1a0033; /* content pane — Mantu Dark */
+  --cl-foreground: #ffffff;
+  --cl-card: #291050; /* raised purple surface */
+  --cl-muted: #291050;
+  --cl-muted-30: color-mix(in oklab, #291050 45%, transparent);
+  --cl-muted-40: color-mix(in oklab, #291050 55%, transparent);
+  --cl-muted-foreground: #cdbfe3; /* light desaturated purple, ≥4.5:1 on the dark settings surface (AA) */
+  --cl-border: rgba(255, 255, 255, 0.1);
+  --cl-input: rgba(255, 255, 255, 0.14);
+  --cl-primary: #7f00da; /* Mantu Bright Purple accent */
+  --cl-primary-foreground: #ffffff;
+  --cl-primary-soft: rgba(127, 0, 218, 0.18);
+  --cl-ring: #9a4dff;
+  --cl-destructive: oklch(70.4% 0.191 22.216);
+  --cl-success: oklch(74% 0.16 152);
+  --cl-radius: 0.625rem; /* 10px */
+}
+
+/* Cluely settings surfaces ----------------------------------------------------------------- */
+.cl-root {
+  background: var(--cl-bg);
+  color: var(--cl-foreground);
+  /* Re-map AskToto's accent/ink/hair tokens to Cluely's palette inside the settings window only,
+     so reused controls (toggles, mode picker, profile inputs) adopt Cluely blue + solid surfaces
+     without per-component edits. */
+  --color-accent: var(--cl-primary);
+  --color-accent-soft: var(--cl-primary-soft);
+  --color-accent-glow: var(--cl-primary-soft);
+  --color-ink: var(--cl-foreground);
+  --color-ink-2: var(--cl-muted-foreground);
+  --color-ink-3: color-mix(in oklab, var(--cl-muted-foreground) 70%, transparent);
+  --color-hair: var(--cl-border);
+  --color-hair-soft: var(--cl-border);
+  --color-hair-strong: var(--cl-input);
+  --color-success: var(--cl-success);
+  --color-danger: var(--cl-destructive);
+  --radius-control: var(--cl-radius);
+}
+.cl-header {
+  border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+  background: rgba(255, 255, 255, 0.035);
+}
+.cl-sidebar {
+  border-right: 1px solid var(--cl-border);
+  background: var(--cl-muted-40);
+}
+.cl-content {
+  background: var(--cl-background);
+}
+.cl-footer {
+  border-top: 1px solid var(--cl-border);
+  background: var(--cl-background);
+}
+.cl-card {
+  border: 1px solid var(--cl-border);
+  background: var(--cl-muted-30);
+  border-radius: 16px;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.18);
+}
+.cl-input {
+  border: 1px solid var(--cl-input);
+  background: oklch(100% 0 0 / 0.04);
+  border-radius: var(--cl-radius);
+  color: var(--cl-foreground);
+}
+.cl-input::placeholder {
+  color: var(--cl-muted-foreground);
+}
+.cl-navitem-active {
+  background: oklch(100% 0 0 / 0.06);
+  color: var(--cl-foreground);
+}
+.cl-eyebrow {
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--cl-muted-foreground);
+}
+.cl-focus:focus-visible {
+  outline: 2px solid var(--cl-ring); /* #9a4dff — clears the focus-indicator contrast floor */
+  outline-offset: 1px;
+}
+
+html,
+body,
+#root {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  background: transparent !important;
+  overflow: hidden;
+  -webkit-user-select: none;
+  user-select: none;
+  cursor: default;
+}
+
+body {
+  font-family: var(--font-body);
+  color: var(--color-ink);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+.font-ui {
+  font-family: var(--font-ui);
+}
+
+/* Screenshot backdrop (only when ?shotbg is set) — makes the transparent overlay visible in a PNG. */
+html.shot-bg,
+html.shot-bg body,
+html.shot-bg #root {
+  background: radial-gradient(circle at 30% 20%, #2a0a4d, #120022 70%) !important;
+}
+
+.drag {
+  -webkit-app-region: drag;
+}
+.no-drag {
+  -webkit-app-region: no-drag;
+}
+
+.glass {
+  background: var(--glass-tint-white), var(--glass-fill);
+  backdrop-filter: blur(var(--blur-bar)) saturate(var(--blur-saturate));
+  -webkit-backdrop-filter: blur(var(--blur-bar)) saturate(var(--blur-saturate));
+  border: 1px solid var(--color-hair);
+  box-shadow: var(--shadow-bar);
+}
+.glass-strong {
+  background: var(--glass-tint-white), var(--glass-fill-strong);
+  backdrop-filter: blur(var(--blur-panel)) saturate(var(--blur-saturate));
+  -webkit-backdrop-filter: blur(var(--blur-panel)) saturate(var(--blur-saturate));
+  border: 1px solid var(--color-hair);
+  box-shadow: var(--shadow-panel);
+}
+.glass-chip {
+  background: var(--glass-fill);
+  border: 1px solid var(--color-hair-soft);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.24);
+}
+
+/* Listening state — swap purple glass for a denser neutral gray so the user can read
+   the thin text clearly while the mic is on. */
+.listening .glass {
+  background: var(--glass-tint-white-listening), var(--glass-fill-listening);
+  backdrop-filter: blur(var(--blur-bar-listening)) saturate(120%);
+  -webkit-backdrop-filter: blur(var(--blur-bar-listening)) saturate(120%);
+  border-color: rgba(255, 255, 255, 0.14);
+}
+.listening .glass-strong {
+  background: var(--glass-tint-white-listening), var(--glass-fill-strong-listening);
+  backdrop-filter: blur(var(--blur-panel-listening)) saturate(120%);
+  -webkit-backdrop-filter: blur(var(--blur-panel-listening)) saturate(120%);
+  border-color: rgba(255, 255, 255, 0.16);
+}
+.listening .glass,
+.listening .glass-strong {
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.55), inset 0 0.5px 0 rgba(255, 255, 255, 0.1);
+}
+.listening {
+  --color-ink: rgba(255, 255, 255, 1);
+  --color-ink-2: rgba(255, 255, 255, 0.92);
+  --color-ink-3: rgba(255, 255, 255, 0.72);
+}
+
+@keyframes panel-enter {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+.panel-enter {
+  animation: panel-enter var(--duration-panel) var(--ease-spring);
+}
+
+@keyframes step-enter {
+  from {
+    opacity: 0;
+    transform: translateX(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+.step-enter {
+  animation: step-enter var(--duration-panel) var(--ease-spring);
+}
+
+.scroll-thin {
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-hair-strong) transparent;
+}
+.scroll-thin::-webkit-scrollbar {
+  width: 8px;
+}
+.scroll-thin::-webkit-scrollbar-thumb {
+  background: var(--color-hair-strong);
+  border-radius: 9999px;
+}
+.scroll-thin::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+input,
+textarea,
+button {
+  font-family: inherit;
+}
+input::placeholder {
+  color: var(--color-ink-3);
+}
+
+.focus-ring:focus-visible {
+  outline: 2px solid #b388f0; /* lighter purple → clears the 3:1 focus-indicator contrast floor */
+  outline-offset: 2px;
+}
+
+.focus-ring-strong:focus-visible {
+  outline: 3px solid #b388f0;
+  outline-offset: 2px;
+}
+
+@keyframes shimmer {
+  0% {
+    background-position: -200% 0;
+  }
+  100% {
+    background-position: 200% 0;
+  }
+}
+.shimmer {
+  background: linear-gradient(
+    90deg,
+    rgba(255, 255, 255, 0.05) 25%,
+    rgba(255, 255, 255, 0.13) 37%,
+    rgba(255, 255, 255, 0.05) 63%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 1.4s ease-in-out infinite;
+  border-radius: 6px;
+}
+
+@keyframes pulse-dot {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.35;
+    transform: scale(0.7);
+  }
+}
+.rec-dot {
+  animation: pulse-dot 1.1s ease-in-out infinite;
+}
+
+@keyframes fade-up {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.fade-up {
+  animation: fade-up 180ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+/* markdown surface inside the answer panel */
+.md {
+  font-size: 13.5px;
+  line-height: 1.62;
+  color: var(--color-ink);
+}
+.md :where(h1, h2, h3, h4) {
+  font-family: var(--font-ui);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  margin: 0.8em 0 0.4em;
+}
+.md :where(p, ul, ol) {
+  margin: 0.5em 0;
+}
+.md :where(ul, ol) {
+  padding-left: 1.2em;
+}
+.md a {
+  color: #b388f0; /* lighter Mantu purple — clears AA on the dark surface */
+  text-decoration: underline; /* don't rely on color alone as the only cue */
+  text-underline-offset: 2px;
+}
+.md code:not(pre code) {
+  background: rgba(255, 255, 255, 0.09);
+  padding: 0.1em 0.36em;
+  border-radius: 5px;
+  font-size: 0.9em;
+}
+.md pre {
+  border-radius: 12px !important;
+  border: 1px solid var(--color-hair-soft);
+  font-size: 12.5px;
+}
+.md :where(table) {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 12.5px;
+}
+.md :where(th, td) {
+  border: 1px solid var(--color-hair-soft);
+  padding: 4px 8px;
+  text-align: left;
+}
+
+@keyframes asktoto-loading-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.4;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0ms !important;
+    transition-duration: 0ms !important;
+  }
+  /* Spinners must still signal loading without rotation — swap the spin for a gentle opacity pulse. */
+  .loading-spinner {
+    animation: asktoto-loading-pulse 1.2s ease-in-out infinite !important;
+    animation-duration: 1.2s !important;
+  }
+}

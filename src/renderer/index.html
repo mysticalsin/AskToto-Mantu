@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="en" class="dark">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- Keep in sync with src/shared/providers.ts. Custom providers need a custom build (arbitrary HTTPS is intentionally not allowed). -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; base-uri 'self'; object-src 'none'; form-action 'none'; frame-src 'none'; img-src 'self' data: blob:; media-src 'self' blob: data:; connect-src 'self' blob: https://api.anthropic.com https://api.openai.com/v1 https://api.moonshot.ai/v1 https://integrate.api.nvidia.com/v1 https://api.deepseek.com/v1 https://dashscope-intl.aliyuncs.com/compatible-mode/v1 https://api.minimax.io/v1 https://openrouter.ai/api/v1 https://api.groq.com/openai/v1 https://api.together.xyz/v1 https://api.fireworks.ai/inference/v1 https://api.mistral.ai/v1 https://dust.tt https://*.dust.tt https://huggingface.co https://cdn.jsdelivr.net https://*.hf.co; script-src 'self' 'wasm-unsafe-eval' blob:; style-src 'self' 'unsafe-inline'; font-src 'self' data:; worker-src 'self' blob:;"
+    />
+    <title>AskToto</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
