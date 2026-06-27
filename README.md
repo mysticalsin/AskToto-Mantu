@@ -1,10 +1,23 @@
+<div align="center">
+
 # AskToto
+
+**The invisible AI copilot for every meeting.**
+A frameless, transparent, always-on-top glass overlay for macOS and Windows.
+
+<img src="docs/media/asktoto-hero.png" alt="AskToto overlay — Ask anything bar with a syntax-highlighted answer on frosted purple glass" width="760">
+
+`14 AI providers + Dust` · `thinking-mode routing` · `live transcription` · `knowledge graph` · `encrypted at rest`
+
+Built by **[Tony Walteur](https://www.linkedin.com/in/tonywalteur/)** · Mantu
+
+</div>
+
+---
 
 A macOS and Windows **AI desktop overlay**: a frameless, transparent, always-on-top glass assistant
 that floats over every app. Look and feel modeled on Cluely, rebuilt from scratch with Mantu branding
 and wired to many AI providers (Claude, GPT, Dust, and more).
-
-Built by **Tony Walteur** · Mantu.
 
 Three core actions:
 - **Ask** — type a question, get a streamed answer (rich markdown, code, tables).
