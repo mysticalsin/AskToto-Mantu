@@ -106,6 +106,22 @@ function loadDotEnv(): void {
   }
 }
 
+/** A provider is usable: a key exists AND any provider-specific setup is done (Dust needs a workspace + a
+ *  chosen agent; custom needs an https base URL + a model). */
+function isProviderReady(s: ReturnType<typeof getSettings>, provider: ProviderId): boolean {
+  if (!hasApiKey(provider)) return false
+  if (provider === 'dust') return !!s.dustWorkspaceId.trim() && !!s.providerModels.dust
+  if (provider === 'custom') return /^https:\/\//i.test(s.customBaseUrl) && !!s.providerModels.custom
+  return true
+}
+
+/** The provider an ask actually uses: the active one if it's ready, otherwise the first ready provider —
+ *  so a saved Kimi key answers even while Anthropic is still the nominal active provider. */
+function effectiveProvider(s: ReturnType<typeof getSettings>): ProviderId {
+  if (isProviderReady(s, s.provider)) return s.provider
+  return (Object.keys(PROVIDERS) as ProviderId[]).find((p) => isProviderReady(s, p)) ?? s.provider
+}
+
 function publicSettings(): PublicSettings {
   const s = getSettings()
   let loginItemOpenAtLogin = false
@@ -117,13 +133,9 @@ function publicSettings(): PublicSettings {
   // Active provider is usable: key present AND any provider-specific setup done (Dust needs a workspace +
   // a chosen base agent; custom needs an https base URL). Drives the add-key CTA so it only shows when the
   // app genuinely can't answer yet — not when a key for a DIFFERENT provider exists.
-  const providerReady =
-    hasApiKey(s.provider) &&
-    (s.provider === 'dust'
-      ? !!s.dustWorkspaceId.trim() && !!s.providerModels.dust
-      : s.provider === 'custom'
-        ? /^https:\/\//i.test(s.customBaseUrl) && !!s.providerModels.custom
-        : true)
+  // CTA hides when ANY provider is usable (active or not) — adding a Kimi key clears "add your Claude key"
+  // even while Anthropic is the nominal active provider.
+  const providerReady = isProviderReady(s, effectiveProvider(s))
   return {
     ...s,
     hasApiKey: hasApiKey(s.provider),
@@ -680,7 +692,7 @@ function registerIpc(): void {
       streams.set(req.id, handle)
     }
 
-    attempt(s.provider, [])
+    attempt(effectiveProvider(s), [])
     } catch (e) {
       win?.webContents.send(IPC.streamError, {
         id,

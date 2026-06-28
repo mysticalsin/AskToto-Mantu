@@ -185,14 +185,19 @@ export function useListen(onQuestion?: (line: TranscriptLine) => void): ListenAp
       }
       ensureWorker().postMessage({ type: 'init', model: 'Xenova/whisper-tiny' }) // multilingual
       let micOk = false
+      let sysOk = false
+      const openMic = async (): Promise<void> => {
+        const mic = await navigator.mediaDevices.getUserMedia({
+          audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true }
+        })
+        await openChannel('you', mic)
+        micOk = true
+      }
       try {
-        if (source === 'mic' || source === 'both') {
-          const mic = await navigator.mediaDevices.getUserMedia({
-            audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true }
-          })
-          await openChannel('you', mic)
-          micOk = true
-        }
+        // 1. Mic = the reliable channel. Open it first whenever it's requested.
+        if (source === 'mic' || source === 'both') await openMic()
+        // 2. System audio = best-effort. Needs macOS Screen Recording; if it's denied or the request is
+        //    cancelled ("user aborted"), NEVER kill the session — fall back to the mic and carry on.
         if (source === 'system' || source === 'both') {
           try {
             await window.toto.armAudio(true) // arm the loopback handler only for this request
@@ -203,19 +208,33 @@ export function useListen(onQuestion?: (line: TranscriptLine) => void): ListenAp
             } finally {
               await window.toto.armAudio(false)
             }
-            if (sys.getAudioTracks().length) await openChannel('them', sys)
-            else throw new Error('No system audio track')
-          } catch (sysErr) {
+            if (sys.getAudioTracks().length) {
+              await openChannel('them', sys)
+              sysOk = true
+            } else {
+              throw new Error('No system audio track')
+            }
+          } catch {
+            if (!micOk) {
+              try {
+                await openMic() // system asked for but unavailable → at least hear the user
+              } catch {
+                /* mic fallback failed too → handled by the not-anything check below */
+              }
+            }
             if (micOk) {
-              // degrade to mic-only rather than killing the whole session
               setState((s) => ({
                 ...s,
-                error: 'System audio unavailable — listening to your mic only. Grant Screen Recording for both sides.'
+                error:
+                  'Hearing your mic. To also capture the other side of the call, turn on Screen Recording in Settings → Privacy & Security, then start Listen again.'
               }))
-            } else {
-              throw sysErr
             }
           }
+        }
+        if (!micOk && !sysOk) {
+          throw new Error(
+            'Microphone unavailable. Allow Microphone for AskToto in System Settings → Privacy & Security, then start Listen again.'
+          )
         }
       } catch (err) {
         // hard failure: tear everything down so no channel stays hot while UI says "not listening"
