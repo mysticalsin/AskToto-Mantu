@@ -51,6 +51,7 @@ export const IPC = {
   streamDone: 'stream:done',
   streamError: 'stream:error',
   captureScreen: 'capture:screen',
+  prewarmCapture: 'capture:prewarm',
   armAudio: 'audio:arm',
   saveTranscript: 'transcript:save',
   saveNote: 'note:save',
@@ -249,6 +250,8 @@ export const PublicSettingsSchema = BaseSettingsSchema.extend({
   hasEncryption: z.boolean(),
   resolvedMeetingsFolder: z.string(),
   managedKeys: z.array(z.string()).default([]),
+  /** Providers whose key is set via an environment variable — in-app Remove is a no-op for these. */
+  envKeys: z.array(z.string()).default([]),
   loginItemOpenAtLogin: z.boolean().default(false)
 })
 export type PublicSettings = z.infer<typeof PublicSettingsSchema>
@@ -257,7 +260,14 @@ export type PublicSettings = z.infer<typeof PublicSettingsSchema>
 export type SettingsPatch = Partial<
   Omit<
     PublicSettings,
-    'hasApiKey' | 'hasKeys' | 'hasEncryption' | 'resolvedMeetingsFolder' | 'managedKeys' | 'loginItemOpenAtLogin'
+    | 'hasApiKey'
+    | 'providerReady'
+    | 'hasKeys'
+    | 'hasEncryption'
+    | 'resolvedMeetingsFolder'
+    | 'managedKeys'
+    | 'envKeys'
+    | 'loginItemOpenAtLogin'
   >
 >
 

@@ -62,8 +62,24 @@ appx:
   publisher: CN=Mantu
   publisherDisplayName: Mantu
   backgroundColor: transparent
-# Auto-update (electron-updater is wired in src/main/updater.ts). Replace the URL with your update host
-# (any static HTTPS server / S3 / Azure Blob), then `npm run dist` publishes latest-mac.yml + artifacts there.
+# ─── Auto-update feed (electron-updater is wired in src/main/updater.ts) ───────────────────
+# PRODUCTION SETUP (do this before cutting a public release — `npm run check:release` enforces it):
+#   1. Replace `url` below with the HTTPS host that will serve the updater manifests + artifacts:
+#        mac  → latest-mac.yml  +  AskToto-${version}-mac.zip  +  AskToto-${version}.dmg
+#        win  → latest.yml      +  AskToto-Setup-${version}.exe (nsis)
+#      Any static HTTPS origin works: S3 + CloudFront, Azure Blob + CDN, GitHub Releases proxy, nginx.
+#      MUST be HTTPS (electron-updater rejects plain http) and MUST keep the `REPLACE-WITH` token gone.
+#   2. Publish: `npm run dist` (mac) / `dist:win` builds + uploads. Upload ALL artifacts AND the
+#      generated *.yml manifests to the same `url` path so the client can resolve the next version.
+#   3. CODE SIGNING is required for the updater to trust artifacts (see SIGNING.md + header above):
+#        mac/win   → CSC_LINK (path or base64 of the .p12) + CSC_KEY_PASSWORD
+#                    (win can instead use WIN_CSC_LINK + WIN_CSC_KEY_PASSWORD / Azure Trusted Signing)
+#        mac notarize → APPLE_ID + APPLE_APP_SPECIFIC_PASSWORD + APPLE_TEAM_ID
+#      Unsigned macOS zip updates will be rejected by Gatekeeper on install.
+# Until `url` is set, updater.ts detects the `REPLACE-WITH` token in app-update.yml and skips auto-update.
 publish:
   provider: generic
-  url: https://REPLACE-WITH-YOUR-UPDATE-HOST/asktoto
+  # ↓↓↓ REPLACE-WITH your real HTTPS update host before release (keep `provider: generic`). ↓↓↓
+  url: https://REPLACE-WITH-YOUR-UPDATE-HOST.example.com/asktoto
+  # channel: latest        # (default) bump to `beta`/`alpha` for pre-release rings if you add them.
+  # useMultipleRangeRequest: false  # set false if your host/CDN mishandles HTTP range requests.

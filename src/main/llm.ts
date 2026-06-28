@@ -239,7 +239,7 @@ export function createStream(opts: {
     const client = new Anthropic({ apiKey: opts.apiKey })
     const stream = client.messages.stream({
       model: opts.model,
-      max_tokens: 4096,
+      max_tokens: opts.req.mode === 'recap' ? 8192 : 4096, // recaps run long — give them headroom
       temperature: opts.temperature,
       // Cache the static system/profile/context prefix (ephemeral) so repeated glances + multi-turn skip
       // re-processing it — cuts time-to-first-token and cost. The volatile screenshot stays in the message.
@@ -306,7 +306,7 @@ export function createStream(opts: {
       // Reasoning-only models (o-series, kimi-for-coding) spend a big chunk of the budget on hidden
       // reasoning BEFORE the answer, so give them more headroom or the answer can come back empty
       // (esp. on vision, where describing the image eats tokens). o-series uses max_completion_tokens.
-      const maxTokens = fixedTemperature ? 8192 : 4096
+      const maxTokens = fixedTemperature || opts.req.mode === 'recap' ? 8192 : 4096
       if (isOSeries) {
         params.max_completion_tokens = maxTokens
       } else {
