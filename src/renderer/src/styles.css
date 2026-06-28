@@ -42,13 +42,16 @@
   --color-success: #83c092;
   --color-success-soft: rgba(131, 192, 146, 0.12);
 
-  /* Glass surfaces — frosted Mantu purple; the blur keeps bright text legible while
-     the desktop shows through. */
-  --glass-fill: rgba(26, 0, 51, 0.44);
-  --glass-fill-elevated: rgba(34, 4, 64, 0.52);
-  --glass-fill-strong: rgba(20, 0, 40, 0.6);
+  /* Glass surfaces — neutral dark gray with a faint Mantu-purple undertone (desaturated so the bar reads
+     clearly over any desktop), still translucent but opaque enough to stay legible. Accents stay purple. */
+  --glass-fill: rgba(40, 39, 44, 0.58);
+  --glass-fill-elevated: rgba(48, 47, 53, 0.74);
+  --glass-fill-strong: rgba(34, 33, 39, 0.78);
   --glass-tint-white: rgba(255, 255, 255, 0.06);
-  --glass-tint-black: rgba(0, 0, 0, 0.18);
+  --glass-tint-black: rgba(0, 0, 0, 0.22);
+  /* A darker neutral scrim painted BEHIND the bar/chips (below the grey fill): keeps the frosted
+     translucency but guarantees a grey-enough backing so white text stays legible over a bright desktop. */
+  --glass-scrim-bar: rgba(16, 16, 20, 0.64);
   --blur-bar: 34px;
   --blur-panel: 42px;
   --blur-saturate: 190%;
@@ -211,6 +214,11 @@ html.shot-bg body,
 html.shot-bg #root {
   background: radial-gradient(circle at 30% 20%, #2a0a4d, #120022 70%) !important;
 }
+html.shot-bg-light,
+html.shot-bg-light body,
+html.shot-bg-light #root {
+  background: linear-gradient(135deg, #ffffff 0%, #eef0f4 55%, #e3e7ee 100%) !important;
+}
 
 .drag {
   -webkit-app-region: drag;
@@ -219,36 +227,56 @@ html.shot-bg #root {
   -webkit-app-region: no-drag;
 }
 
+/* NOTE: a `background` shorthand may carry at most ONE solid color (the final background-color); every
+   other layer MUST be an image. So each translucent color layer is wrapped in linear-gradient(c, c) to
+   make it a valid image layer — otherwise the whole declaration is invalid and the fill never paints
+   (which left the bar a pure backdrop-blur with no grey backing, so white text washed out over bright
+   desktops). Layers paint top→bottom: white tint over grey fill over the dark scrim (closest to backdrop). */
 .glass {
-  background: var(--glass-tint-white), var(--glass-fill);
+  background:
+    linear-gradient(var(--glass-tint-white), var(--glass-tint-white)),
+    linear-gradient(var(--glass-fill), var(--glass-fill)),
+    var(--glass-scrim-bar);
   backdrop-filter: blur(var(--blur-bar)) saturate(var(--blur-saturate));
   -webkit-backdrop-filter: blur(var(--blur-bar)) saturate(var(--blur-saturate));
   border: 1px solid var(--color-hair);
   box-shadow: var(--shadow-bar);
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
 }
 .glass-strong {
-  background: var(--glass-tint-white), var(--glass-fill-strong);
+  background:
+    linear-gradient(var(--glass-tint-white), var(--glass-tint-white)),
+    linear-gradient(var(--glass-fill-strong), var(--glass-fill-strong)),
+    var(--glass-scrim-bar);
   backdrop-filter: blur(var(--blur-panel)) saturate(var(--blur-saturate));
   -webkit-backdrop-filter: blur(var(--blur-panel)) saturate(var(--blur-saturate));
   border: 1px solid var(--color-hair);
   box-shadow: var(--shadow-panel);
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
 }
 .glass-chip {
-  background: var(--glass-fill);
+  background:
+    linear-gradient(var(--glass-fill), var(--glass-fill)),
+    var(--glass-scrim-bar);
   border: 1px solid var(--color-hair-soft);
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.24);
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.45);
 }
 
 /* Listening state — swap purple glass for a denser neutral gray so the user can read
    the thin text clearly while the mic is on. */
 .listening .glass {
-  background: var(--glass-tint-white-listening), var(--glass-fill-listening);
+  background:
+    linear-gradient(var(--glass-tint-white-listening), var(--glass-tint-white-listening)),
+    var(--glass-fill-listening);
   backdrop-filter: blur(var(--blur-bar-listening)) saturate(120%);
   -webkit-backdrop-filter: blur(var(--blur-bar-listening)) saturate(120%);
   border-color: rgba(255, 255, 255, 0.14);
 }
 .listening .glass-strong {
-  background: var(--glass-tint-white-listening), var(--glass-fill-strong-listening);
+  background:
+    linear-gradient(var(--glass-tint-white-listening), var(--glass-tint-white-listening)),
+    var(--glass-fill-strong-listening);
   backdrop-filter: blur(var(--blur-panel-listening)) saturate(120%);
   -webkit-backdrop-filter: blur(var(--blur-panel-listening)) saturate(120%);
   border-color: rgba(255, 255, 255, 0.16);
@@ -277,30 +305,23 @@ html.shot-bg #root {
   animation: panel-enter var(--duration-panel) var(--ease-spring);
 }
 
-@keyframes step-enter {
-  from {
-    opacity: 0;
-    transform: translateX(10px);
-  }
-  to {
-    opacity: 1;
-    transform: translateX(0);
-  }
-}
-.step-enter {
-  animation: step-enter var(--duration-panel) var(--ease-spring);
-}
-
 .scroll-thin {
   scrollbar-width: thin;
   scrollbar-color: var(--color-hair-strong) transparent;
 }
+/* macOS-native feel: a thin gutter whose thumb is invisible at rest and fades in only on hover/scroll. */
 .scroll-thin::-webkit-scrollbar {
-  width: 8px;
+  width: 6px;
 }
 .scroll-thin::-webkit-scrollbar-thumb {
-  background: var(--color-hair-strong);
+  background: transparent;
   border-radius: 9999px;
+  transition: background 160ms ease;
+}
+.scroll-thin:hover::-webkit-scrollbar-thumb,
+.scroll-thin:active::-webkit-scrollbar-thumb,
+.scroll-thin:focus-within::-webkit-scrollbar-thumb {
+  background: var(--color-hair-strong);
 }
 .scroll-thin::-webkit-scrollbar-track {
   background: transparent;

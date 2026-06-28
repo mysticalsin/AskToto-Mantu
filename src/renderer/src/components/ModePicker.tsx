@@ -1,10 +1,22 @@
-import { GraduationCap, Users, TrendingUp, MessageSquare, Settings2 } from 'lucide-react'
+import {
+  GraduationCap,
+  Users,
+  TrendingUp,
+  MessageSquare,
+  Settings2,
+  Handshake,
+  Presentation,
+  Headset
+} from 'lucide-react'
 import type { ConversationMode } from '@shared/ipc'
 
 const MODES: { id: ConversationMode; label: string; icon: typeof Users }[] = [
   { id: 'interview', label: 'Interview', icon: GraduationCap },
   { id: 'meeting', label: 'Meeting', icon: Users },
   { id: 'sales', label: 'Sales', icon: TrendingUp },
+  { id: 'negotiation', label: 'Negotiation', icon: Handshake },
+  { id: 'presentation', label: 'Presentation', icon: Presentation },
+  { id: 'support', label: 'Support', icon: Headset },
   { id: 'general', label: 'General', icon: MessageSquare }
 ]
 

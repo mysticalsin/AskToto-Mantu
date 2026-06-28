@@ -58,15 +58,17 @@ import { usePermissions } from '../state'
 const ctl =
   'no-drag font-body cl-input cl-focus px-3 py-2.5 text-[13px] text-[color:var(--cl-foreground)]'
 
-/** Friendly name for a routed model in the thinking-mode explainer. */
+/** Friendly name for a routed model in the thinking-mode explainer. Keeps raw model ids out of
+ *  user-facing copy — recognized brands by name, everything else as a plain tier word. */
 function prettyModel(m: string, provider: ProviderId, tier: 'base' | 'think'): string {
   if (provider === 'dust') return tier === 'think' ? 'your thinking agent' : 'your base agent'
-  if (!m) return tier === 'think' ? 'the deeper model' : 'the fast model'
-  if (/haiku/i.test(m)) return 'Haiku'
-  if (/sonnet/i.test(m)) return 'Sonnet'
-  if (/opus/i.test(m)) return 'Opus'
-  if (/reasoner|deepseek-r1|(^|[^a-z])r1([^a-z]|$)/i.test(m)) return `${m} (reasoning)`
-  return m
+  if (m) {
+    if (/haiku/i.test(m)) return 'Haiku'
+    if (/sonnet/i.test(m)) return 'Sonnet'
+    if (/opus/i.test(m)) return 'Opus'
+    if (/gpt-4o|gpt-4\.1|gpt-5/i.test(m)) return 'GPT'
+  }
+  return tier === 'think' ? 'the deeper model' : 'the fast model'
 }
 
 /**
@@ -345,6 +347,7 @@ function AiSection({
     if (!trimmed) {
       await clearKey(provider)
       setKey('')
+      setTest({ status: 'idle' })
       return
     }
     try {
@@ -354,10 +357,19 @@ function AiSection({
       setTest({ status: 'error', message: e instanceof Error ? e.message : 'Could not save the key.' })
       return
     }
-    setKey('')
     setSaved(true)
-    setTest({ status: 'idle' })
     setTimeout(() => setSaved(false), 1600)
+    // Auto-verify the key right after saving so the user immediately sees whether it actually works —
+    // no separate "Test" click. The ✓/✗ status renders below.
+    setTest({ status: 'loading' })
+    try {
+      const res = await testKey(provider, trimmed)
+      if (res.ok) setTest({ status: 'ok', message: 'Key is valid and working.' })
+      else setTest({ status: 'error', message: res.error || 'Saved, but the key did not work — check it and re-save.' })
+    } catch (e) {
+      setTest({ status: 'error', message: e instanceof Error ? e.message : 'Saved, but could not verify the key.' })
+    }
+    setKey('')
   }
 
   const onTest = async (): Promise<void> => {
@@ -725,7 +737,17 @@ function DustSetup({
     setCli({ busy: true, msg: null, ok: false })
     const r = await window.toto.dustImportCli()
     if (!r.ok) {
-      setCli({ busy: false, ok: false, msg: r.error || 'Could not read the Dust CLI session.' })
+      // No CLI session found → automatically kick off the setup (install + interactive login) instead of
+      // just printing a command. The login needs a browser OAuth, so it opens in a Terminal window.
+      setCli({ busy: true, ok: false, msg: 'No Dust CLI found — starting setup…' })
+      const s = await window.toto.dustSetupCli()
+      setCli({
+        busy: false,
+        ok: false,
+        msg: s.ok
+          ? 'Setup opened in Terminal. Finish the Dust login there, then click "Connect from Dust CLI" again.'
+          : s.error || r.error || 'Could not start the Dust CLI setup.'
+      })
       return
     }
     await patch({ provider: 'dust' }) // import set key/workspace/region in main; make Dust active + refresh
@@ -740,6 +762,7 @@ function DustSetup({
     if (!k) return
     setKeySaving(true)
     await saveKey('dust', k)
+    await patch({ provider: 'dust' }) // activate Dust so this key is used + the add-key CTA hides
     setDustKey('')
     setKeySaving(false)
   }
@@ -1101,8 +1124,16 @@ const MODE_LABEL: Record<ConversationMode, string> = {
   general: 'General',
   interview: 'Interview',
   meeting: 'Meeting',
-  sales: 'Sales'
+  sales: 'Sales',
+  negotiation: 'Negotiation',
+  presentation: 'Presentation',
+  support: 'Support'
 }
+
+const LANGUAGE_OPTIONS = [
+  'English', 'French', 'Spanish', 'German', 'Italian', 'Portuguese', 'Dutch',
+  'Polish', 'Arabic', 'Chinese', 'Japanese', 'Korean', 'Hindi', 'Russian', 'Turkish'
+]
 
 /** Editable, pre-filled system prompt for the selected default mode. Plug-and-play with reset. */
 function ModePromptEditor({
@@ -1325,15 +1356,22 @@ export function Settings({
       </header>
 
       {/* TOP tab bar (Tony: "setting bar at the top") — horizontal, scrolls if narrow */}
-      <nav className="cl-tabbar no-drag scroll-thin flex shrink-0 items-center gap-1 overflow-x-auto border-b border-[var(--cl-border)] px-2 py-1.5">
+      <nav
+        role="tablist"
+        aria-label="Settings sections"
+        className="cl-tabbar no-drag scroll-thin flex shrink-0 items-center gap-1 overflow-x-auto border-b border-[var(--cl-border)] px-2 py-1.5"
+      >
         {TABS.map((t) => {
           const active = t.id === tab
           return (
             <button
               key={t.id}
               type="button"
+              role="tab"
+              id={`settings-tab-${t.id}`}
+              aria-selected={active}
+              aria-controls="settings-panel"
               onClick={() => setTab(t.id)}
-              aria-current={active ? 'page' : undefined}
               className={[
                 'cl-focus flex shrink-0 items-center gap-1.5 rounded-full px-3 py-1.5 text-[12px] font-medium transition-colors',
                 active
@@ -1348,7 +1386,12 @@ export function Settings({
         })}
       </nav>
 
-      <main className="cl-content scroll-thin max-h-[480px] overflow-y-auto">
+      <main
+        role="tabpanel"
+        id="settings-panel"
+        aria-labelledby={`settings-tab-${tab}`}
+        className="cl-content scroll-thin max-h-[480px] overflow-y-auto"
+      >
         <div className="flex flex-col gap-6 px-5 py-5">
             {tab === 'ai' && (
               <AiSection settings={settings} patch={patch} saveKey={saveKey} clearKey={clearKey} testKey={testKey} />
@@ -1364,8 +1407,11 @@ export function Settings({
                 </Section>
                 <Section
                   title="Language"
-                  desc="AskToto understands every language and assists live in the speaker's language. Your answers and the meeting recap come back in this language."
+                  desc="AskToto assists live in the speaker's language. Pick the language for your answers, and a separate one for the saved summary/recap (handy when the meeting is in one language but you want the notes in another)."
                 >
+                  <label className="mb-1 block text-[11px] font-medium text-[color:var(--cl-muted-foreground)]">
+                    Answers & live assist
+                  </label>
                   <select
                     value={settings.outputLanguage}
                     onChange={(e) => patch({ outputLanguage: e.target.value })}
@@ -1373,10 +1419,23 @@ export function Settings({
                     className={'w-full ' + ctl}
                   >
                     <option value="auto">Auto · match the conversation</option>
-                    {[
-                      'English', 'French', 'Spanish', 'German', 'Italian', 'Portuguese', 'Dutch',
-                      'Polish', 'Arabic', 'Chinese', 'Japanese', 'Korean', 'Hindi', 'Russian', 'Turkish'
-                    ].map((l) => (
+                    {LANGUAGE_OPTIONS.map((l) => (
+                      <option key={l} value={l}>
+                        {l}
+                      </option>
+                    ))}
+                  </select>
+                  <label className="mb-1 mt-3 block text-[11px] font-medium text-[color:var(--cl-muted-foreground)]">
+                    Summary &amp; recap
+                  </label>
+                  <select
+                    value={settings.summaryLanguage}
+                    onChange={(e) => patch({ summaryLanguage: e.target.value })}
+                    disabled={settings.managedKeys.includes('summaryLanguage')}
+                    className={'w-full ' + ctl}
+                  >
+                    <option value="auto">Same as answers</option>
+                    {LANGUAGE_OPTIONS.map((l) => (
                       <option key={l} value={l}>
                         {l}
                       </option>
@@ -1435,6 +1494,13 @@ export function Settings({
                     onChange={(v) => patch({ playListenChime: v })}
                     disabled={settings.managedKeys.includes('playListenChime')}
                   />
+                  <ToggleRow
+                    label="Sound cues"
+                    desc="A subtle tone when an answer is ready, and a gentle one if it fails."
+                    on={settings.soundCues}
+                    onChange={(v) => patch({ soundCues: v })}
+                    disabled={settings.managedKeys.includes('soundCues')}
+                  />
                 </Section>
               </div>
             )}
@@ -1451,6 +1517,13 @@ export function Settings({
                   />
                 </Section>
                 <Section title="Recording consent" desc="Notice shown to you before AskToto records others.">
+                  <ToggleRow
+                    label="I will inform participants before recording"
+                    desc="Your acknowledgement that you follow your company's policy and the law when recording. Revocable here."
+                    on={settings.recordingConsent}
+                    onChange={(v) => patch({ recordingConsent: v })}
+                    disabled={settings.managedKeys.includes('recordingConsent')}
+                  />
                   <ToggleRow
                     label="Require consent reminder"
                     desc='Show the "other participants are being recorded" reminder every time Listen starts.'

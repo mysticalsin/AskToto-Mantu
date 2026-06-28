@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest'
-import { execFile } from 'node:child_process'
+import { execFile, execFileSync } from 'node:child_process'
 import { promisify } from 'node:util'
 import { importDustCliSession } from './dustcli'
 
@@ -8,8 +8,27 @@ const exec = promisify(execFile)
 // Real keychain round-trip — exercises the exact `security find-generic-password` path the app uses,
 // but against a THROWAWAY service so the user's real `dust login` session is never touched.
 const TEST_SERVICE = 'asktoto-dustcli-test'
-const isMac = process.platform === 'darwin'
 const ACCOUNTS = ['access_token', 'workspace_sid', 'region']
+
+// Probe once whether this environment can actually write the login keychain. Sandboxes and headless CI
+// deny `security add-generic-password`, where this real-keychain suite would FAIL rather than prove
+// anything — so skip cleanly there instead of reporting a false failure.
+function keychainWritable(): boolean {
+  if (process.platform !== 'darwin') return false
+  const probe = 'asktoto-dustcli-probe'
+  try {
+    execFileSync('security', ['add-generic-password', '-s', probe, '-a', 'probe', '-w', 'x'], { stdio: 'ignore' })
+    try {
+      execFileSync('security', ['delete-generic-password', '-s', probe, '-a', 'probe'], { stdio: 'ignore' })
+    } catch {
+      /* best-effort cleanup */
+    }
+    return true
+  } catch {
+    return false
+  }
+}
+const canKeychain = keychainWritable()
 
 async function delItem(account: string): Promise<void> {
   // Delete every duplicate (security keeps only one per service+account, but loop to be safe).
@@ -31,7 +50,7 @@ async function setSession(fields: Record<string, string>): Promise<void> {
   }
 }
 
-describe.runIf(isMac)('importDustCliSession (real keychain)', () => {
+describe.runIf(canKeychain)('importDustCliSession (real keychain)', () => {
   beforeAll(() => {
     process.env.DUST_CLI_KEYCHAIN_SERVICE = TEST_SERVICE
   })

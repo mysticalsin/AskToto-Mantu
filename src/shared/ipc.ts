@@ -37,6 +37,7 @@ export const IPC = {
   testApiKey: 'settings:testApiKey',
   dustListAgents: 'dust:listAgents',
   dustImportCli: 'dust:importCli',
+  dustSetupCli: 'dust:setupCli',
   graphifyStatus: 'graphify:status',
   graphifyRebuild: 'graphify:rebuild',
   graphifyRelated: 'graphify:related',
@@ -60,6 +61,7 @@ export const IPC = {
   recallOpen: 'recall:open',
   windowResize: 'window:resize',
   windowMode: 'window:mode',
+  windowMoveBy: 'window:moveBy',
   windowHide: 'window:hide',
   windowToggle: 'window:toggle',
   windowQuit: 'window:quit',
@@ -71,7 +73,15 @@ export const IPC = {
 
 export type AskMode = 'answer' | 'vision' | 'suggest' | 'summary' | 'recap'
 
-export const CONVERSATION_MODES = ['interview', 'meeting', 'sales', 'general'] as const
+export const CONVERSATION_MODES = [
+  'interview',
+  'meeting',
+  'sales',
+  'negotiation',
+  'presentation',
+  'support',
+  'general'
+] as const
 export const ConversationModeSchema = z.enum(CONVERSATION_MODES)
 export type ConversationMode = z.infer<typeof ConversationModeSchema>
 
@@ -119,7 +129,7 @@ export const AskStartSchema = z.object({
   id: z.string(),
   mode: z.enum(['answer', 'vision', 'suggest', 'summary', 'recap']),
   prompt: z.string().default(''),
-  /** base64 PNG (no data: prefix) for vision mode. Max ~4 MB raw (~5.5 MB base64 string). */
+  /** base64 image (JPEG from screen capture; no data: prefix) for vision mode. Max ~5.5 MB base64. */
   image: z
     .string()
     .refine(
@@ -183,6 +193,7 @@ export const BaseSettingsSchema = z.object({
   // Multilingual. AskToto transcribes any spoken language and assists in the speaker's language live;
   // the final recap/summary + answers are written in this language ('auto' = match the conversation).
   outputLanguage: z.string().max(40).default('auto'),
+  summaryLanguage: z.string().max(40).default('auto'), // recap/summary language ('auto' = follow outputLanguage)
   // Encrypt saved transcripts/notes at rest (OS keychain). Off by default because it stops Dust agents,
   // recall search, and the knowledge graph from reading the markdown. See main/transcripts.ts.
   encryptTranscripts: z.boolean().default(false),
@@ -213,6 +224,7 @@ export const BaseSettingsSchema = z.object({
   onboardingDone: z.boolean().default(false),
   recordingConsent: z.boolean().default(false),
   playListenChime: z.boolean().default(true),
+  soundCues: z.boolean().default(true), // subtle answer-ready / error sound cues
   requireConsentIndicator: z.boolean().default(false),
   lastConsentReminderAt: z.number().default(0),
   customMeetingApps: z.array(z.string().min(1).max(80)).max(20).default([])
@@ -230,6 +242,9 @@ export type Settings = z.infer<typeof BaseSettingsSchema>
 /** What the renderer receives (never raw keys). */
 export const PublicSettingsSchema = BaseSettingsSchema.extend({
   hasApiKey: z.boolean(),
+  /** Active provider is actually usable (key present AND any provider-specific setup done) — drives the
+   *  "add your key" CTA so it only shows when the app genuinely can't answer yet. */
+  providerReady: z.boolean(),
   hasKeys: z.record(z.string(), z.boolean()),
   hasEncryption: z.boolean(),
   resolvedMeetingsFolder: z.string(),
@@ -261,6 +276,7 @@ export const DEFAULT_SETTINGS: Settings = {
   graphifyAutoRebuild: true,
   graphifyBackend: 'auto',
   outputLanguage: 'auto',
+  summaryLanguage: 'auto',
   encryptTranscripts: false,
   systemPrompt:
     'You are AskToto, a fast, sharp desktop assistant living in an always-on overlay. ' +
@@ -284,6 +300,7 @@ export const DEFAULT_SETTINGS: Settings = {
   onboardingDone: false,
   recordingConsent: false,
   playListenChime: true,
+  soundCues: true,
   requireConsentIndicator: false,
   lastConsentReminderAt: 0,
   customMeetingApps: []
@@ -400,6 +417,12 @@ export interface DustCliImport {
   error?: string
 }
 
+/** Result of kicking off the Dust CLI setup (install + interactive login) when no session exists yet. */
+export interface DustCliSetup {
+  ok: boolean
+  error?: string
+}
+
 /** Status of the graphify knowledge-graph integration (see main/graphify.ts). */
 export interface GraphStatus {
   enabled: boolean
@@ -422,7 +445,7 @@ export interface GraphRelated {
 }
 
 export const CaptureResultSchema = z.object({
-  /** base64 PNG, no prefix */
+  /** base64 JPEG, no data: prefix */
   image: z.string(),
   width: z.number(),
   height: z.number()

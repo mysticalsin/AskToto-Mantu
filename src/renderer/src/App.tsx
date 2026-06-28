@@ -16,6 +16,7 @@ import { RecordingIndicator } from './components/RecordingIndicator'
 import { QuickActions, type QuickKind } from './components/QuickActions'
 import { useAsk, useAutoResize, useSettings, useAuth } from './state'
 import { useListen, playListenChime } from './lib/listen'
+import { playCue } from './lib/sound'
 import type { HotkeyAction, TranscriptLine, ConversationMode, ChatTurn } from '@shared/ipc'
 import { PROVIDERS } from '@shared/providers'
 
@@ -138,11 +139,15 @@ export function App(): JSX.Element {
     const id = String(meetingStartRef.current)
     if (savedRef.current === id || savingRef.current) return
 
-    savingRef.current = true
     const title =
       listen.lines.find((l) => l.speaker === 'them')?.text?.slice(0, 50) || `${mode} meeting`
 
     const doSave = async (): Promise<void> => {
+      // Acquire the in-flight lock only when the save actually starts — never at effect time. On the
+      // retry branch the real save is deferred behind a backoff timer; if that timer is cancelled
+      // (view change / reset) before it fires, a lock taken early would never release and would wedge
+      // auto-save dead for the rest of the session (savingRef stuck true → the guard above bails forever).
+      savingRef.current = true
       try {
         const r = await window.toto.saveTranscript({
           title,
@@ -182,6 +187,7 @@ export function App(): JSX.Element {
     const p = pendingUserRef.current
     if (!p || p.id !== a.id) return
     pendingUserRef.current = null
+    if (cancelledRef.current) return // user cancelled — don't record a truncated turn into memory
     const next: ChatTurn[] = [
       ...historyRef.current,
       { role: 'user', content: p.q },
@@ -201,6 +207,23 @@ export function App(): JSX.Element {
     ]
     copilotHistoryRef.current = next.slice(-12)
   }, [suggest.answer])
+
+  // Subtle sound cue when an Ask answer finishes (ready) or fails (error). Fires once on the
+  // streaming→done edge, gated by the soundCues setting. Live copilot suggestions stay silent (ambient).
+  const prevStreamingRef = useRef(false)
+  const cancelledRef = useRef(false) // set when the user explicitly stops/cancels an answer
+  useEffect(() => {
+    const a = ask.answer
+    const streaming = a?.streaming ?? false
+    if (prevStreamingRef.current && !streaming && a) {
+      // Only chime on a real completion/error — not when the user cancelled (streaming cleared, no error).
+      if (!cancelledRef.current && (settings?.soundCues ?? true)) {
+        playCue(a.error ? 'error' : 'ready')
+      }
+    }
+    if (!streaming) cancelledRef.current = false
+    prevStreamingRef.current = streaming
+  }, [ask.answer, settings?.soundCues])
 
   // auto-answer when the other person asks a question (debounce = suggestEverySec)
   onQuestionRef.current = (_line: TranscriptLine): void => {
@@ -339,22 +362,28 @@ export function App(): JSX.Element {
   const onStop = useCallback(() => {
     if (listen.listening) {
       if (suggest.answer?.streaming) suggest.cancel()
-      else if (ask.answer?.streaming) ask.cancel()
+      else if (ask.answer?.streaming) {
+        cancelledRef.current = true
+        ask.cancel()
+      }
     } else {
-      if (ask.answer?.streaming) ask.cancel()
-      else if (suggest.answer?.streaming) suggest.cancel()
+      if (ask.answer?.streaming) {
+        cancelledRef.current = true
+        ask.cancel()
+      } else if (suggest.answer?.streaming) suggest.cancel()
     }
   }, [listen.listening, ask, suggest])
 
   const retryAnswer = useCallback(() => {
     const p = ask.answer?.prompt
     if (!p) return
-    const id = ask.run({ mode: 'answer', prompt: p, history: historyRef.current })
-    pendingUserRef.current = { id, q: p }
+    const id = ask.retry() // replays the original request verbatim (keeps the screenshot for vision retries)
+    if (id) pendingUserRef.current = { id, q: p }
   }, [ask])
 
   const reset = useCallback(() => {
     const wasListening = listen.listening
+    cancelledRef.current = true // resetting mid-stream is a cancel, not a completion → no chime
     ask.cancel()
     suggest.cancel()
     if (wasListening) {
@@ -421,6 +450,48 @@ export function App(): JSX.Element {
       }),
     []
   )
+
+  // Every hook must run before the early returns below (sign-in wall / onboarding gates). This
+  // useCallback used to sit at the bottom of the component, so once a gate fired the hook count
+  // dropped between renders and the renderer crashed with React #300 ("rendered fewer hooks than
+  // expected") on first run / when signed out. Keep it here, above all conditional returns.
+  const onQuickAction = useCallback(
+    (kind: QuickKind) => {
+      if (kind === 'factcheck') factCheck()
+      else if (kind === 'whatnext') whatNext()
+      else if (kind === 'explain') {
+        const last = listen.listening ? listen.text().slice(-500) : ''
+        const q = last ? `Explain this in simple terms:\n"""\n${last}\n"""` : 'Explain what I should focus on right now.'
+        if (listen.listening) {
+          setView('copilot')
+          setCollapsed(false)
+          suggest.run({ mode: 'answer', prompt: q + GUARD_LINE, history: copilotHistoryRef.current })
+        } else {
+          setView('answer')
+          setCollapsed(false)
+          ask.run({ mode: 'answer', prompt: q })
+        }
+      } else if (kind === 'summarize') {
+        void askScreen('Summarize what is on my screen.')
+      }
+    },
+    [factCheck, whatNext, listen.listening, listen, suggest, ask, askScreen]
+  )
+
+  // Until settings AND auth resolve, render only a slim loading strip — never an interactive surface.
+  // This closes the first-run flash and the auth-gate-fail-open window: the SSO and onboarding gates
+  // below are skipped while their state is null, which would otherwise paint a usable bar before sign-in
+  // is enforced and before the no-key CTA can render. (DEMO bypasses this so screenshots still work.)
+  if (DEMO == null && (settings == null || auth.status == null)) {
+    return (
+      <div ref={setRoot} className="w-full p-1.5">
+        <div className="glass flex h-[40px] w-full items-center gap-2.5 rounded-full px-4">
+          <span className="h-2 w-2 animate-pulse rounded-full bg-[var(--color-accent)]" />
+          <span className="font-ui text-[12px] text-[color:var(--color-ink-3)]">Starting AskToto…</span>
+        </div>
+      </div>
+    )
+  }
 
   // Azure AD gate — blocks all use when SSO is configured and the user isn't signed in.
   if (auth.status?.configured && !auth.status.signedIn && DEMO == null) {
@@ -528,29 +599,6 @@ export function App(): JSX.Element {
   const showModeHeader = view === 'copilot' || DEMO === 'copilot'
   const panelOpen = (body != null && !collapsed) || DEMO != null
 
-  const onQuickAction = useCallback(
-    (kind: QuickKind) => {
-      if (kind === 'factcheck') factCheck()
-      else if (kind === 'whatnext') whatNext()
-      else if (kind === 'explain') {
-        const last = listen.listening ? listen.text().slice(-500) : ''
-        const q = last ? `Explain this in simple terms:\n"""\n${last}\n"""` : 'Explain what I should focus on right now.'
-        if (listen.listening) {
-          setView('copilot')
-          setCollapsed(false)
-          suggest.run({ mode: 'answer', prompt: q + GUARD_LINE, history: copilotHistoryRef.current })
-        } else {
-          setView('answer')
-          setCollapsed(false)
-          ask.run({ mode: 'answer', prompt: q })
-        }
-      } else if (kind === 'summarize') {
-        void askScreen('Summarize what is on my screen.')
-      }
-    },
-    [factCheck, whatNext, listen.listening, listen, suggest, ask, askScreen]
-  )
-
   return (
     <div ref={setRoot} className={['relative flex w-full flex-col gap-2 p-1.5', listen.listening ? 'listening' : ''].join(' ')}>
       <MeetingDetectedToast
@@ -580,6 +628,8 @@ export function App(): JSX.Element {
         onToggleListen={toggleListen}
         thinking={settings?.thinkingMode === 'always'}
         onToggleThink={() =>
+          // ON (always) → auto; auto/never → always. From 'never' it re-enables routing rather than
+          // silently jumping straight to always, keeping the bar consistent with the Settings tri-state.
           void patch({ thinkingMode: settings?.thinkingMode === 'always' ? 'auto' : 'always' })
         }
         onCapture={capture}
@@ -594,28 +644,31 @@ export function App(): JSX.Element {
         }}
         onHide={() => void window.toto.hide()}
         onClose={() => void window.toto.quit()}
+        stealth={settings?.contentProtection ?? true}
+        onToggleStealth={() => void patch({ contentProtection: !(settings?.contentProtection ?? true) })}
         seconds={seconds}
         panelOpen={panelOpen}
         onTogglePanel={() => setCollapsed((c) => !c)}
         focusSignal={focusSignal}
       />
       {listen.listening && <RecordingIndicator seconds={seconds} />}
-      {settings && !settings.hasApiKey && (
+      {settings && !settings.providerReady && (
         <button
           type="button"
           onClick={() => {
             setView('settings')
             setCollapsed(false)
           }}
-          className="no-drag focus-ring fade-up flex items-center justify-center gap-1.5 rounded-xl border border-[var(--color-accent)]/30 bg-[var(--color-accent-soft)] px-3 py-1.5 text-[11px] font-medium text-[var(--color-accent)] hover:opacity-90"
+          className="no-drag focus-ring fade-up flex items-center justify-center gap-1.5 rounded-xl border border-[var(--color-accent)]/30 bg-[var(--color-accent)] px-3 py-1.5 text-[11px] font-medium text-white hover:brightness-110"
         >
           Add your {PROVIDERS[settings.provider].label} API key to start asking
         </button>
       )}
-      <QuickActions
-        onAction={onQuickAction}
-        hint={listen.listening ? 'Quick actions work on the live conversation' : 'Quick actions use your screen or typed input'}
-      />
+      {/* Quick actions only on the answer/idle surface — not over Settings/History/Review, and not during
+          Listen (Copilot shows its own in-meeting action row there). */}
+      {view === 'answer' && !listen.listening && (
+        <QuickActions onAction={onQuickAction} hint="Quick actions use your screen or typed input" />
+      )}
       {panelOpen &&
         (view === 'settings' || DEMO === 'settings' ? (
           // Settings is its own self-contained panel — render directly under the bar (bar stays on top).

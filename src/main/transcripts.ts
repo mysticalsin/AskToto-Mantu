@@ -1,19 +1,40 @@
 import { app, safeStorage } from 'electron'
-import { readdirSync, readFileSync, existsSync, mkdirSync, writeFileSync, appendFileSync } from 'node:fs'
+import { readdirSync, readFileSync, existsSync, mkdirSync, writeFileSync, appendFileSync, unlinkSync } from 'node:fs'
 import { writeFile, rename, unlink } from 'node:fs/promises'
 import { join, basename } from 'node:path'
 import { homedir } from 'node:os'
+import { randomBytes } from 'node:crypto'
 import type { SaveMeeting, SaveNote, Settings } from '@shared/ipc'
 
 // Optional at-rest encryption for transcripts/notes (OS keychain). Files carry this marker when encrypted.
 const ENC_MARKER = Buffer.from('ATKENC1\n')
 
-/** Decode saved bytes, decrypting if the at-rest marker is present. */
-export function decodeSaved(buf: Buffer): string {
+// Shown in place of a transcript that can't be decrypted on this device (e.g. encrypted under a different
+// OS keychain/user — common when an encrypted file is OneDrive-synced to another machine). Beats a dead
+// "Open" click or a silent unhandled rejection.
+const UNDECRYPTABLE_MSG =
+  '# This transcript can\'t be opened here\n\n' +
+  'It was encrypted at rest on a different machine or user account, so this device\'s keychain cannot ' +
+  'decrypt it. Open it on the machine where it was created, or turn off at-rest encryption in Settings ' +
+  'before saving if you need transcripts portable across devices.\n'
+
+/** Decode saved bytes, decrypting if the at-rest marker is present. Returns null when an encrypted file
+ *  can't be decrypted on this machine (foreign keychain), so callers degrade instead of throwing. */
+function tryDecodeSaved(buf: Buffer): string | null {
   if (buf.length >= ENC_MARKER.length && buf.subarray(0, ENC_MARKER.length).equals(ENC_MARKER)) {
-    return safeStorage.decryptString(buf.subarray(ENC_MARKER.length))
+    try {
+      return safeStorage.decryptString(buf.subarray(ENC_MARKER.length))
+    } catch {
+      return null // undecryptable on this device — never throw out of a read path
+    }
   }
   return buf.toString('utf8')
+}
+
+/** Decode saved bytes, decrypting if needed. Never throws; yields '' for an undecryptable file so
+ *  search/list keep working. Use decryptToTemp() for the user-facing Open path (it shows the notice). */
+export function decodeSaved(buf: Buffer): string {
+  return tryDecodeSaved(buf) ?? ''
 }
 
 /** Read a saved transcript/note (sync), transparently decrypting if it was written encrypted. */
@@ -57,11 +78,41 @@ async function writeSaved(file: string, content: string, encrypt: boolean): Prom
   }
 }
 
+// Decrypted temp copies are tracked and deleted on quit so an encrypted transcript never leaves a
+// permanent cleartext file behind (the name is randomized so it isn't a predictable target either).
+const decryptedTemps = new Set<string>()
+let tempCleanupHooked = false
+
 /** Decrypt an encrypted transcript to a temp plaintext file so it can be opened in an editor.
- *  The temp copy is owner-only (0o600). It is a deliberate, short-lived decryption for viewing. */
+ *  Owner-only (0o600), randomized name, and unlinked on app quit. */
 export function decryptToTemp(path: string): string {
-  const tmp = join(app.getPath('temp'), `asktoto-${basename(path).replace(/\.md$/, '')}.md`)
-  writeFileSync(tmp, readSavedFile(path), { encoding: 'utf8', mode: 0o600 })
+  // Read + decrypt defensively: a foreign-keychain file yields the notice instead of throwing and
+  // leaving the user with a dead "Open" click.
+  let content: string
+  try {
+    content = tryDecodeSaved(readFileSync(path)) ?? UNDECRYPTABLE_MSG
+  } catch {
+    content = UNDECRYPTABLE_MSG
+  }
+  const tmp = join(
+    app.getPath('temp'),
+    `asktoto-${randomBytes(6).toString('hex')}-${basename(path).replace(/\.md$/, '')}.md`
+  )
+  writeFileSync(tmp, content, { encoding: 'utf8', mode: 0o600 })
+  decryptedTemps.add(tmp)
+  if (!tempCleanupHooked) {
+    tempCleanupHooked = true
+    app.on('will-quit', () => {
+      for (const t of decryptedTemps) {
+        try {
+          if (existsSync(t)) unlinkSync(t)
+        } catch {
+          /* best-effort cleanup */
+        }
+      }
+      decryptedTemps.clear()
+    })
+  }
   return tmp
 }
 
