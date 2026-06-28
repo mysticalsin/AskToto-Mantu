@@ -64,6 +64,21 @@ export function getPlatformPermissions(): PlatformPermissions {
 }
 
 /**
+ * Explicitly request microphone access — shows the macOS prompt the first time and returns whether it's
+ * granted. Calling this BEFORE getUserMedia avoids an opaque "the user aborted a request" AbortError when
+ * the mic permission hasn't been granted yet (the renderer can't reliably trigger the TCC prompt alone).
+ */
+export async function requestMicAccess(): Promise<boolean> {
+  if (process.platform !== 'darwin') return true
+  try {
+    if (systemPreferences.getMediaAccessStatus('microphone') === 'granted') return true
+    return await systemPreferences.askForMediaAccess('microphone')
+  } catch {
+    return false
+  }
+}
+
+/**
  * Returns a user-facing message explaining what permissions are needed for the current platform.
  */
 export function getPermissionHint(audioSource: 'mic' | 'system' | 'both'): string {

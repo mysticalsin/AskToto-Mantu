@@ -81,7 +81,7 @@ export function Bar(props: BarProps): JSX.Element {
         movedRef.current = false
       }}
       className={[
-        'glass flex h-[40px] w-full cursor-grab items-center gap-1 rounded-full pl-2 pr-1.5 active:cursor-grabbing',
+        'glass relative z-30 flex h-[40px] w-full cursor-grab items-center gap-1 rounded-full pl-2 pr-1.5 active:cursor-grabbing',
         // When NOT stealth, others can see the overlay in a screen share → ring the bar to make that obvious.
         props.stealth ? '' : 'outline outline-2 outline-offset-2 outline-[var(--color-danger)]'
       ].join(' ')}

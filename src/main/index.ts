@@ -52,7 +52,7 @@ import {
   decryptToTemp
 } from './transcripts'
 import { detectMeeting } from './meeting-detect'
-import { getPlatformPermissions } from './platform-perms'
+import { getPlatformPermissions, requestMicAccess } from './platform-perms'
 import { listMeetings, searchMeetings } from './recall'
 import { initAutoUpdate } from './updater'
 import { runSelfTest } from './selftest'
@@ -489,6 +489,10 @@ function registerIpc(): void {
   ipcMain.handle(IPC.permissionsGet, (e) => {
     assertMainWindow(e)
     return getPlatformPermissions()
+  })
+  ipcMain.handle(IPC.requestMicAccess, (e) => {
+    assertMainWindow(e)
+    return requestMicAccess()
   })
 
   ipcMain.handle(IPC.settingsSet, (e, patch) => {
