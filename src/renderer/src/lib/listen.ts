@@ -7,6 +7,42 @@ const MAX_QUEUE = 24 // ~2.4 min of audio; drop oldest if the model is slow/fail
 export type AudioSource = 'mic' | 'system' | 'both'
 type Speaker = 'them' | 'you'
 
+// The AudioWorklet processor, inlined as a Blob URL. Vite compiles Workers (new Worker(new URL(...))) but
+// NOT AudioWorklets (audioWorklet.addModule), so the old `new URL('./whisper-worklet.ts', import.meta.url)`
+// shipped an unbuilt path and addModule rejected with "The user aborted a request." — which broke Listen
+// entirely (looked like a mic-permission error, was actually the worklet failing to load). Inlining is
+// bundler-proof and loads under file:// in the packaged app.
+const WORKLET_SRC = `
+const WINDOW_SAMPLES = ${SR} * ${WINDOW_SEC}
+class WhisperWorklet extends AudioWorkletProcessor {
+  constructor() { super(); this.buf = new Float32Array(WINDOW_SAMPLES); this.fill = 0 }
+  process(inputs) {
+    const input = inputs[0]
+    if (!input || !input[0] || input[0].length === 0) return true
+    const data = input[0]
+    let offset = 0
+    while (offset < data.length) {
+      const take = Math.min(WINDOW_SAMPLES - this.fill, data.length - offset)
+      this.buf.set(data.subarray(offset, offset + take), this.fill)
+      this.fill += take
+      offset += take
+      if (this.fill >= WINDOW_SAMPLES) {
+        const chunk = this.buf.slice(0, WINDOW_SAMPLES)
+        this.port.postMessage({ audio: chunk }, [chunk.buffer])
+        this.fill = 0
+      }
+    }
+    return true
+  }
+}
+registerProcessor('whisper-worklet', WhisperWorklet)
+`
+let workletBlobUrl = ''
+function workletModuleUrl(): string {
+  if (!workletBlobUrl) workletBlobUrl = URL.createObjectURL(new Blob([WORKLET_SRC], { type: 'application/javascript' }))
+  return workletBlobUrl
+}
+
 /** Soft audible chime generated in-browser (no asset file). */
 export function playListenChime(): void {
   try {
@@ -149,8 +185,7 @@ export function useListen(onQuestion?: (line: TranscriptLine) => void): ListenAp
       closeChannel(sp) // close any prior channel for this speaker (avoid orphan on retry)
       const ctx = new AudioContext({ sampleRate: SR })
       const src = ctx.createMediaStreamSource(stream)
-      const workletUrl = new URL('./whisper-worklet.ts', import.meta.url).href
-      await ctx.audioWorklet.addModule(workletUrl)
+      await ctx.audioWorklet.addModule(workletModuleUrl())
       const worklet = new AudioWorkletNode(ctx, 'whisper-worklet', {
         numberOfInputs: 1,
         numberOfOutputs: 1,
