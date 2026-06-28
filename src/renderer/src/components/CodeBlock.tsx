@@ -7,14 +7,15 @@ import githubDark from 'shiki/themes/github-dark.mjs'
 import { Copy, Check } from 'lucide-react'
 
 // Alias any incoming fence language → a loaded grammar, else 'text' (built-in, no grammar needed).
+// Curated to the languages a meeting/sales/interview copilot actually shows. Rarer/heavier grammars
+// (c/cpp/csharp/ruby/php/swift/kotlin/scala/toml) are dropped — they render as plain text, trimming the
+// shipped grammar chunks (incl. the ~637KB cpp chunk).
 const ALIAS: Record<string, string> = {
   ts: 'typescript', typescript: 'typescript', tsx: 'tsx', js: 'javascript', javascript: 'javascript',
   jsx: 'jsx', json: 'json', python: 'python', py: 'python', bash: 'bash', sh: 'bash', shell: 'bash',
   shellscript: 'bash', zsh: 'bash', html: 'html', xml: 'html', css: 'css', go: 'go', golang: 'go',
-  rust: 'rust', rs: 'rust', java: 'java', c: 'c', 'c++': 'cpp', cpp: 'cpp', cc: 'cpp', csharp: 'csharp',
-  cs: 'csharp', 'c#': 'csharp', ruby: 'ruby', rb: 'ruby', php: 'php', sql: 'sql', yaml: 'yaml',
-  yml: 'yaml', toml: 'toml', markdown: 'markdown', md: 'markdown', swift: 'swift', kotlin: 'kotlin',
-  kt: 'kotlin', scala: 'scala', diff: 'diff', patch: 'diff'
+  rust: 'rust', rs: 'rust', java: 'java', sql: 'sql', yaml: 'yaml', yml: 'yaml',
+  markdown: 'markdown', md: 'markdown', diff: 'diff', patch: 'diff'
 }
 const norm = (l: string): string => ALIAS[(l || '').toLowerCase()] || 'text'
 
@@ -39,18 +40,9 @@ function highlighter(): Promise<HighlighterCore> {
         import('shiki/langs/go.mjs'),
         import('shiki/langs/rust.mjs'),
         import('shiki/langs/java.mjs'),
-        import('shiki/langs/c.mjs'),
-        import('shiki/langs/cpp.mjs'),
-        import('shiki/langs/csharp.mjs'),
-        import('shiki/langs/ruby.mjs'),
-        import('shiki/langs/php.mjs'),
         import('shiki/langs/sql.mjs'),
         import('shiki/langs/yaml.mjs'),
-        import('shiki/langs/toml.mjs'),
         import('shiki/langs/markdown.mjs'),
-        import('shiki/langs/swift.mjs'),
-        import('shiki/langs/kotlin.mjs'),
-        import('shiki/langs/scala.mjs'),
         import('shiki/langs/diff.mjs')
       ],
       engine: createOnigurumaEngine(import('shiki/wasm'))

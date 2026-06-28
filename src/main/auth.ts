@@ -108,12 +108,15 @@ let loaded = false
 function loadSession(): void {
   if (loaded) return
   loaded = true
+  // Only ever trust an ENCRYPTED session file. If safeStorage is unavailable we never wrote one (saveSession
+  // keeps the identity in memory), and a plaintext auth-session.bin would be forgeable — refuse to read it.
+  if (!safeStorage.isEncryptionAvailable()) {
+    session = null
+    return
+  }
   try {
     const buf = readFileSync(sessionPath())
-    const json = safeStorage.isEncryptionAvailable()
-      ? safeStorage.decryptString(buf)
-      : buf.toString('utf8')
-    session = JSON.parse(json) as Session
+    session = JSON.parse(safeStorage.decryptString(buf)) as Session
   } catch {
     session = null
   }
@@ -121,10 +124,11 @@ function loadSession(): void {
 
 function saveSession(s: Session): void {
   session = s
+  // Persist the identity ONLY when we can encrypt it; otherwise keep it in memory for this run rather than
+  // writing a forgeable plaintext session to disk. (Sign-in then re-prompts on next launch — the safe trade.)
+  if (!safeStorage.isEncryptionAvailable()) return
   try {
-    const json = JSON.stringify(s)
-    const data = safeStorage.isEncryptionAvailable() ? safeStorage.encryptString(json) : Buffer.from(json)
-    writeFileSync(sessionPath(), data, { mode: 0o600 })
+    writeFileSync(sessionPath(), safeStorage.encryptString(JSON.stringify(s)), { mode: 0o600 })
   } catch {
     /* in-memory only if write fails */
   }
