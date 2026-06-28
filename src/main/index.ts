@@ -565,6 +565,19 @@ function registerIpc(): void {
     assertMainWindow(e)
     prewarmCapture()
   })
+  // Open macOS System Settings straight to the relevant Privacy pane so the user can flip a denied
+  // permission without hunting (system audio capture needs Screen Recording, which can't be prompted).
+  ipcMain.handle(IPC.openPrivacySettings, (e, pane: unknown) => {
+    assertMainWindow(e)
+    if (process.platform !== 'darwin') return
+    const anchor =
+      pane === 'microphone'
+        ? 'Privacy_Microphone'
+        : pane === 'accessibility'
+          ? 'Privacy_Accessibility'
+          : 'Privacy_ScreenCapture'
+    void shell.openExternal(`x-apple.systempreferences:com.apple.preference.security?${anchor}`)
+  })
 
   ipcMain.handle(IPC.askStart, (e, raw) => {
     assertMainWindow(e)
