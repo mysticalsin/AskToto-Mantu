@@ -296,11 +296,14 @@ export function createStream(opts: {
         stream_options: { include_usage: true },
         messages: openaiMessages(opts.req, opts.system)
       }
-      // o-series uses max_completion_tokens; everyone else (incl. kimi-for-coding) uses max_tokens.
+      // Reasoning-only models (o-series, kimi-for-coding) spend a big chunk of the budget on hidden
+      // reasoning BEFORE the answer, so give them more headroom or the answer can come back empty
+      // (esp. on vision, where describing the image eats tokens). o-series uses max_completion_tokens.
+      const maxTokens = fixedTemperature ? 8192 : 4096
       if (isOSeries) {
-        params.max_completion_tokens = 4096
+        params.max_completion_tokens = maxTokens
       } else {
-        params.max_tokens = 4096
+        params.max_tokens = maxTokens
       }
       if (!fixedTemperature) {
         params.temperature = opts.temperature
