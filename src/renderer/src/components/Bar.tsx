@@ -72,16 +72,24 @@ export function Bar(props: BarProps): JSX.Element {
 
   return (
     <div
+      onPointerDown={(e) => {
+        // Drag the WHOLE bar from any non-interactive area (logo, label, gaps, divider, padding). Buttons +
+        // the input keep their own behavior. The 3px threshold in onMove lets a plain press still click.
+        if (e.button !== 0) return
+        if ((e.target as HTMLElement).closest('button, a, input, textarea, select, [role="button"]')) return
+        dragRef.current = { x: e.screenX, y: e.screenY }
+        movedRef.current = false
+      }}
       className={[
-        'glass drag flex h-[40px] w-full items-center gap-1 rounded-full pl-2 pr-1.5',
+        'glass flex h-[40px] w-full cursor-grab items-center gap-1 rounded-full pl-2 pr-1.5 active:cursor-grabbing',
         // When NOT stealth, others can see the overlay in a screen share → ring the bar to make that obvious.
         props.stealth ? '' : 'outline outline-2 outline-offset-2 outline-[var(--color-danger)]'
       ].join(' ')}
     >
       <span
-        title="Drag to move (⌘⌥ arrows also work)"
+        title="Drag anywhere on the bar to move it (⌘⌥ arrows also work)"
         aria-hidden="true"
-        className="drag -mr-0.5 flex cursor-grab items-center text-[color:var(--color-ink-3)] active:cursor-grabbing"
+        className="-mr-0.5 flex items-center text-[color:var(--color-ink-3)]"
       >
         <GripVertical size={15} />
       </span>
