@@ -2062,27 +2062,30 @@ function PermissionsSection(): JSX.Element {
     return <div className="text-[13px] text-[color:var(--cl-muted-foreground)]">Checking permissions…</div>
   }
 
-  const rows: { label: string; status: string; note: string }[] = [
+  const rows: { label: string; status: string; note: string; pane: 'microphone' | 'screen' | 'accessibility' }[] = [
     {
       label: 'Microphone',
       status: permissions.microphone,
+      pane: 'microphone',
       note: isWin
         ? 'Windows asks the first time you start Listen.'
-        : 'Grant in System Settings → Privacy & Security → Microphone.'
+        : 'Captures your voice. Open Settings below to allow it.'
     },
     {
       label: 'Screen / system audio',
       status: permissions.screenRecording,
+      pane: 'screen',
       note: isWin
         ? 'Windows may ask once before capturing system audio.'
-        : 'Grant in System Settings → Privacy & Security → Screen Recording.'
+        : "Capturing the OTHER side of a call needs Screen Recording — macOS won't pop a prompt for it, so open Settings below and toggle AskToto on, then come back."
     },
     {
       label: 'Auto-start on meeting',
       status: permissions.accessibility,
+      pane: 'accessibility',
       note: isWin
         ? 'No extra permission needed on Windows.'
-        : 'Grant Accessibility in System Settings → Privacy & Security.'
+        : 'Lets AskToto auto-open when a meeting starts. Optional.'
     }
   ]
 
@@ -2099,6 +2102,15 @@ function PermissionsSection(): JSX.Element {
               </span>
             </div>
             <div className="text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">{r.note}</div>
+            {!isWin && r.status !== 'granted' && (
+              <button
+                type="button"
+                onClick={() => void window.toto.openPrivacySettings(r.pane)}
+                className="no-drag cl-focus mt-1.5 inline-flex items-center gap-1 rounded-md border border-[var(--cl-input)] bg-white/[0.04] px-2 py-1 text-[11px] font-medium text-[color:var(--cl-foreground)] hover:bg-white/[0.08]"
+              >
+                Open System Settings →
+              </button>
+            )}
           </div>
         </div>
       ))}
@@ -2220,13 +2232,12 @@ function ProfileEditor({
   const inputCls = [ctl, disabled ? 'opacity-60' : ''].join(' ')
   const nameId = useId()
   const roleId = useId()
-  const companyId = useId()
   const jdId = useId()
   const resumeId = useId()
   const notesId = useId()
   return (
     <div className={['flex flex-col gap-2', disabled ? 'opacity-80' : ''].join(' ')}>
-      <div className="grid grid-cols-3 gap-2">
+      <div className="grid grid-cols-2 gap-2">
         <div className="flex flex-col gap-0.5">
           <label htmlFor={nameId} className="sr-only">Name</label>
           <LazyInput id={nameId} disabled={disabled} className={inputCls} placeholder="Name" value={profile.name} onCommit={(v) => set('name', v)} />
@@ -2235,10 +2246,9 @@ function ProfileEditor({
           <label htmlFor={roleId} className="sr-only">Role</label>
           <LazyInput id={roleId} disabled={disabled} className={inputCls} placeholder="Role" value={profile.role} onCommit={(v) => set('role', v)} />
         </div>
-        <div className="flex flex-col gap-0.5">
-          <label htmlFor={companyId} className="sr-only">Company</label>
-          <LazyInput id={companyId} disabled={disabled} className={inputCls} placeholder="Company" value={profile.company} onCommit={(v) => set('company', v)} />
-        </div>
+      </div>
+      <div className="text-[11px] text-[color:var(--cl-muted-foreground)]">
+        Company · <span className="font-medium text-[color:var(--cl-foreground)]">Mantu</span>
       </div>
       <label htmlFor={jdId} className="sr-only">Job description</label>
       <LazyTextarea

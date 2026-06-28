@@ -52,6 +52,7 @@ export const IPC = {
   streamError: 'stream:error',
   captureScreen: 'capture:screen',
   prewarmCapture: 'capture:prewarm',
+  openPrivacySettings: 'system:openPrivacySettings',
   armAudio: 'audio:arm',
   saveTranscript: 'transcript:save',
   saveNote: 'note:save',

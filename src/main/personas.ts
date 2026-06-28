@@ -10,7 +10,7 @@ function profileBlock(p: Profile): string {
   const parts: string[] = []
   if (p.name) parts.push(`Name: ${p.name}`)
   if (p.role) parts.push(`Target role: ${p.role}`)
-  if (p.company) parts.push(`Company: ${p.company}`)
+  parts.push('Company: Mantu') // the user always works at Mantu — fixed, not editable
   if (p.jobDescription) parts.push(`Job description:\n${p.jobDescription}`)
   if (p.resume) parts.push(`Background / resume:\n${p.resume}`)
   if (p.notes) parts.push(`Extra notes:\n${p.notes}`)

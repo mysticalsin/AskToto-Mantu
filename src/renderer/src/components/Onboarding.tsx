@@ -63,7 +63,7 @@ export function Onboarding({
   }
 
   return (
-    <div className="fade-up flex min-h-[300px] w-full flex-col items-center justify-center gap-6 px-4 py-8 text-center">
+    <div className="fade-up flex min-h-[300px] w-full flex-col items-center justify-center gap-6 rounded-3xl border border-white/10 bg-[linear-gradient(165deg,#3A0B6B_0%,#22084A_45%,#160030_100%)] px-6 py-10 text-center shadow-[0_24px_80px_rgba(0,0,0,0.55)]">
       <MantuLogo size={210} />
 
       <div className="flex flex-col gap-2">
@@ -97,7 +97,7 @@ export function Onboarding({
           disabled={busy || !recordingConsent}
           onClick={() => finish(true)}
           className={[
-            'no-drag focus-ring flex items-center justify-center gap-2 rounded-xl bg-[var(--color-accent)] px-4 py-2.5 text-[14px] font-medium text-white hover:brightness-110',
+            'no-drag focus-ring flex items-center justify-center gap-2 rounded-xl bg-[linear-gradient(180deg,#9A2BF0_0%,#7F00DA_100%)] px-4 py-2.5 text-[14px] font-semibold text-white shadow-[0_8px_24px_rgba(127,0,218,0.45)] hover:brightness-110',
             busy || !recordingConsent ? 'cursor-not-allowed opacity-50' : ''
           ].join(' ')}
         >
