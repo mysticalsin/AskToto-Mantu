@@ -133,8 +133,16 @@ function saveSession(s: Session): void {
 export function authStatus(): AuthStatus {
   loadSession()
   const cfg = readConfig()
-  // If config changed (e.g. domain) and an old session no longer matches, drop it.
-  if (cfg && session && session.domain !== cfg.allowedDomain) session = null
+  // If config changed (e.g. domain) and an old session no longer matches, drop it — from memory AND
+  // disk, so a stale-domain session can't linger in auth-session.bin past the `loaded` latch.
+  if (cfg && session && session.domain !== cfg.allowedDomain) {
+    session = null
+    try {
+      if (existsSync(sessionPath())) rmSync(sessionPath())
+    } catch {
+      /* best-effort */
+    }
+  }
   return {
     configured: !!cfg,
     signedIn: !!session,

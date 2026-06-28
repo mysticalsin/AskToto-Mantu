@@ -20,7 +20,7 @@ export function IconButton({
       aria-label={title}
       onClick={onClick}
       className={[
-        'no-drag focus-ring-strong grid h-[30px] w-[30px] place-items-center rounded-full transition-colors duration-[var(--duration-hover)]',
+        'no-drag focus-ring-strong grid h-[30px] w-[30px] place-items-center rounded-full transition-[transform,background-color,color] duration-[var(--duration-hover)] active:scale-[0.9]',
         active
           ? 'bg-[var(--color-accent-soft)] text-[var(--color-accent)]'
           : danger

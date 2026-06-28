@@ -138,20 +138,32 @@ export function RecallView({ onOpenFolder }: { onOpenFolder: () => void }): JSX.
   const [loading, setLoading] = useState(true)
   const [open, setOpen] = useState<string | null>(null) // file with its Related panel expanded
 
+  // Single fetch owner: immediate on mount / empty query, debounced for typed searches. A stale-guard
+  // drops out-of-order resolutions so a slow earlier response can't overwrite a newer one. (Previously a
+  // separate eager effect double-fetched on mount.)
   useEffect(() => {
-    window.toto
-      .recallList()
-      .then((l) => setItems(l))
-      .catch(() => {})
-      .finally(() => setLoading(false))
-  }, [])
-
-  useEffect(() => {
-    const t = setTimeout(() => {
+    let stale = false
+    const run = (): void => {
       const p = q.trim() ? window.toto.recallSearch(q.trim()) : window.toto.recallList()
-      p.then((l) => setItems(l)).catch(() => {})
-    }, 250)
-    return () => clearTimeout(t)
+      p.then((l) => {
+        if (!stale) setItems(l)
+      })
+        .catch(() => {})
+        .finally(() => {
+          if (!stale) setLoading(false)
+        })
+    }
+    if (!q.trim()) {
+      run()
+      return () => {
+        stale = true
+      }
+    }
+    const t = setTimeout(run, 250)
+    return () => {
+      stale = true
+      clearTimeout(t)
+    }
   }, [q])
 
   return (

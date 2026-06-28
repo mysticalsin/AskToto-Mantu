@@ -58,6 +58,8 @@ export interface ListenApi {
   text: () => string
 }
 
+const WORKER_IDLE_RELEASE_MS = 180_000 // 3 min: free the whisper worker + ONNX wasm after Listen goes idle
+
 export function useListen(onQuestion?: (line: TranscriptLine) => void): ListenApi {
   const [state, setState] = useState({
     listening: false,
@@ -68,6 +70,7 @@ export function useListen(onQuestion?: (line: TranscriptLine) => void): ListenAp
   const [lines, setLines] = useState<TranscriptLine[]>([])
 
   const workerRef = useRef<Worker | null>(null)
+  const workerIdleTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const channels = useRef<Partial<Record<Speaker, Channel>>>({})
   const queue = useRef<{ audio: Float32Array; speaker: Speaker }[]>([])
   const busy = useRef(false)
@@ -167,6 +170,10 @@ export function useListen(onQuestion?: (line: TranscriptLine) => void): ListenAp
 
   const start = useCallback(
     async (source: AudioSource): Promise<void> => {
+      if (workerIdleTimer.current) {
+        clearTimeout(workerIdleTimer.current) // re-arming before the idle release fires: keep the worker warm
+        workerIdleTimer.current = null
+      }
       queue.current = []
       busy.current = false
       liveRef.current = true
@@ -226,6 +233,15 @@ export function useListen(onQuestion?: (line: TranscriptLine) => void): ListenAp
           listening: false,
           loading: false
         }))
+        // A failed start shouldn't pin the whisper worker + ~21MB ONNX wasm in memory for the app's life —
+        // arm the same idle release stop() uses (ensureWorker recreates it on the next start()).
+        if (workerIdleTimer.current) clearTimeout(workerIdleTimer.current)
+        workerIdleTimer.current = setTimeout(() => {
+          workerRef.current?.terminate()
+          workerRef.current = null
+          readyRef.current = false
+          workerIdleTimer.current = null
+        }, WORKER_IDLE_RELEASE_MS)
       }
     },
     // closeChannel referenced in body (defined below); stable useCallback, omitted to avoid TDZ in deps
@@ -250,6 +266,16 @@ export function useListen(onQuestion?: (line: TranscriptLine) => void): ListenAp
     closeChannel('them')
     void window.toto.setListeningState(false).catch(() => {})
     setState((s) => ({ ...s, listening: false, loading: false, error: null }))
+    // Release the whisper worker (+ ~21MB ONNX wasm + loaded model) after a few idle minutes so it does
+    // not sit resident for the entire life of an always-on overlay. ensureWorker() recreates it and start()
+    // re-inits the model on the next session; re-arming within the window keeps it warm.
+    if (workerIdleTimer.current) clearTimeout(workerIdleTimer.current)
+    workerIdleTimer.current = setTimeout(() => {
+      workerRef.current?.terminate()
+      workerRef.current = null
+      readyRef.current = false
+      workerIdleTimer.current = null
+    }, WORKER_IDLE_RELEASE_MS)
   }, [closeChannel])
 
   const clear = useCallback((): void => {
@@ -265,6 +291,7 @@ export function useListen(onQuestion?: (line: TranscriptLine) => void): ListenAp
   useEffect(() => {
     return () => {
       stop()
+      if (workerIdleTimer.current) clearTimeout(workerIdleTimer.current)
       workerRef.current?.terminate()
       workerRef.current = null
     }

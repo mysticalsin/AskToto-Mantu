@@ -63,14 +63,14 @@ export function Onboarding({
   }
 
   return (
-    <div className="fade-up flex min-h-[260px] flex-col items-center justify-center gap-5 px-2 py-6 text-center">
-      <MantuLogo size={34} />
+    <div className="fade-up flex min-h-[300px] w-full flex-col items-center justify-center gap-6 px-4 py-8 text-center">
+      <MantuLogo size={210} />
 
-      <div className="flex flex-col gap-1.5">
-        <div className="font-ui text-[20px] font-semibold tracking-tight text-[color:var(--color-ink)]">
+      <div className="flex flex-col gap-2">
+        <div className="font-ui text-[24px] font-semibold tracking-tight text-[color:var(--color-ink)]">
           Your invisible AI copilot.
         </div>
-        <p className="max-w-[460px] text-[13px] leading-relaxed text-[color:var(--color-ink-2)]">
+        <p className="mx-auto max-w-[480px] text-[13.5px] leading-relaxed text-[color:var(--color-ink-2)]">
           AskToto floats over everything, hears your calls, and tells you exactly what to say in
           meetings, interviews, and sales. Sign in to get started.
         </p>
@@ -97,7 +97,7 @@ export function Onboarding({
           disabled={busy || !recordingConsent}
           onClick={() => finish(true)}
           className={[
-            'no-drag focus-ring flex items-center justify-center gap-2 rounded-xl bg-[var(--color-accent)] px-4 py-2.5 text-[14px] font-medium text-white hover:opacity-90',
+            'no-drag focus-ring flex items-center justify-center gap-2 rounded-xl bg-[var(--color-accent)] px-4 py-2.5 text-[14px] font-medium text-white hover:brightness-110',
             busy || !recordingConsent ? 'cursor-not-allowed opacity-50' : ''
           ].join(' ')}
         >

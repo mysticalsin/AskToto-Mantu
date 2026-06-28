@@ -44,11 +44,21 @@ function contextBlock(docs: { name: string; text: string }[] | undefined): strin
  *  - suggest (live assist): mirror the other person's language.
  *  - recap / summary / answer / vision: use `outputLanguage` ('auto' = the conversation's language).
  */
-function languageDirective(reqMode: AskStart['mode'], outputLanguage: string | undefined): string {
+function languageDirective(
+  reqMode: AskStart['mode'],
+  outputLanguage: string | undefined,
+  summaryLanguage?: string | undefined
+): string {
   if (reqMode === 'suggest') {
     return '\n\nLANGUAGE: Reply in the SAME language the other person is speaking — mirror their language naturally.'
   }
-  const lang = (outputLanguage || 'auto').trim()
+  // The recap/summary can target its OWN language, independent of the live answers. 'auto' (or 'same')
+  // falls back to the answer language (outputLanguage), which 'auto' itself = the conversation's language.
+  const isSummary = reqMode === 'recap' || reqMode === 'summary'
+  const summarySel = (summaryLanguage || 'auto').trim().toLowerCase()
+  const chosen =
+    isSummary && summarySel && summarySel !== 'auto' && summarySel !== 'same' ? summaryLanguage : outputLanguage
+  const lang = (chosen || 'auto').trim()
   if (!lang || lang.toLowerCase() === 'auto') {
     return '\n\nLANGUAGE: Respond in the main language of the conversation/input.'
   }
@@ -65,18 +75,21 @@ export function buildSystem(
   profile: Profile,
   modePrompts: Partial<Record<string, string>> | undefined,
   contextDocs: { name: string; text: string }[] | undefined,
-  outputLanguage?: string
+  outputLanguage?: string,
+  summaryLanguage?: string
 ): string {
   const untrusted =
     req.mode === 'suggest' || req.mode === 'summary' || req.mode === 'recap' || req.mode === 'vision'
   const guard = untrusted ? INJECTION_GUARD : ''
   const ctx = contextBlock(contextDocs)
-  const lang = languageDirective(req.mode, outputLanguage)
+  const lang = languageDirective(req.mode, outputLanguage, summaryLanguage)
 
   if (req.mode === 'summary') return SUMMARY_PROMPT + ctx + lang + guard
   if (req.mode === 'recap') return RECAP_PROMPT + ctx + lang + guard
 
   const prompt = effectiveModePrompt(mode, modePrompts)
-  const profileTail = mode === 'interview' || mode === 'sales' ? profileBlock(profile) : ''
+  // Modes where the user is performing as themselves benefit from the profile (background/role/company);
+  // general and meeting are neutral observers, so they skip it.
+  const profileTail = mode === 'general' || mode === 'meeting' ? '' : profileBlock(profile)
   return prompt + profileTail + ctx + lang + guard
 }

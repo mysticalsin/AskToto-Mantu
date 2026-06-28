@@ -53,7 +53,7 @@ import { getPlatformPermissions } from './platform-perms'
 import { listMeetings, searchMeetings } from './recall'
 import { initAutoUpdate } from './updater'
 import { runSelfTest } from './selftest'
-import { importDustCliSession } from './dustcli'
+import { importDustCliSession, setupDustCli } from './dustcli'
 import { graphifyStatus, buildGraph, relatedNotes, graphHtml, scheduleRebuild } from './graphify'
 import { SaveMeetingSchema, SaveNoteSchema } from '@shared/ipc'
 import { PROVIDERS, resolveModelTier, type ProviderId } from '@shared/providers'
@@ -203,7 +203,8 @@ function createWindow(): void {
   if (process.env['ELECTRON_RENDERER_URL']) {
     const params = new URLSearchParams()
     if (process.env.ASKTOTO_DEMO) params.set('demo', process.env.ASKTOTO_DEMO)
-    if (process.env.ASKTOTO_SHOT) params.set('shotbg', 'dark') // make the overlay visible in the capture
+    // make the overlay visible in the capture; ASKTOTO_SHOTBG=light tests legibility over a bright backdrop
+    if (process.env.ASKTOTO_SHOT) params.set('shotbg', process.env.ASKTOTO_SHOTBG || 'dark')
     const qs = params.toString()
     win.loadURL(process.env['ELECTRON_RENDERER_URL'] + (qs ? `?${qs}` : ''))
   } else {
@@ -279,10 +280,7 @@ const shortcutActions: Record<string, () => void> = {
   capture: () => sendHotkey('capture'),
   factcheck: () => sendHotkey('factcheck'),
   'scroll-up': () => moveBy(0, -60),
-  'scroll-down': () => moveBy(0, 60),
-  // legacy move aliases kept for any custom scroll-left/right mappings
-  'scroll-left': () => moveBy(-60, 0),
-  'scroll-right': () => moveBy(60, 0)
+  'scroll-down': () => moveBy(0, 60)
 }
 
 function resolveShortcut(action: HotkeyAction, user: Record<string, string>): string {
@@ -434,6 +432,13 @@ function registerIpc(): void {
     return { ok: true, workspaceId: s.workspaceId, baseUrl: s.baseUrl }
   })
 
+  // No CLI session yet → kick off the install + interactive login for the user (opens a Terminal window).
+  ipcMain.handle(IPC.dustSetupCli, async (e) => {
+    assertMainWindow(e)
+    if (!requireAuth()) return { ok: false, error: 'Sign in with your Mantu account first.' }
+    return setupDustCli()
+  })
+
   ipcMain.handle(IPC.authStatus, (e) => {
     assertMainWindow(e)
     return authStatus()
@@ -539,7 +544,7 @@ function registerIpc(): void {
       workspaceId: s.dustWorkspaceId,
       model,
       temperature: s.temperature,
-      system: buildSystem(req, s.mode, s.profile, s.modePrompts, s.contextDocs[s.mode] || [], s.outputLanguage),
+      system: buildSystem(req, s.mode, s.profile, s.modePrompts, s.contextDocs[s.mode] || [], s.outputLanguage, s.summaryLanguage),
       req,
       handlers: {
         onDelta: (text) => win?.webContents.send(IPC.streamDelta, { id: req.id, text }),
@@ -664,6 +669,14 @@ function registerIpc(): void {
     assertMainWindow(e)
     setWindowMode(mode === 'settings' ? 'settings' : 'bar')
   })
+  // Drag the overlay from anywhere on the bar (the renderer's JS drag drives this with screen-pixel deltas).
+  ipcMain.handle(IPC.windowMoveBy, (e, d: unknown) => {
+    assertMainWindow(e)
+    const { dx, dy } = (d ?? {}) as { dx?: number; dy?: number }
+    if (typeof dx === 'number' && typeof dy === 'number' && Number.isFinite(dx) && Number.isFinite(dy)) {
+      moveBy(dx, dy)
+    }
+  })
   ipcMain.handle(IPC.windowHide, (e) => {
     assertMainWindow(e)
     win?.hide()
@@ -721,17 +734,19 @@ if (!app.requestSingleInstanceLock()) {
       }
       const isMainFrame = !!frame && frame === mainFrame
       const originOk = !mainUrl || origin === expectedOrigin || origin === mainUrl
-      console.log('[display-media]', {
-        origin,
-        expectedOrigin,
-        frameUrl: frame?.url,
-        mainUrl,
-        mainFrame: isMainFrame,
-        originOk,
-        audioRequested: request.audioRequested,
-        videoRequested: request.videoRequested,
-        armed: audioArmed
-      })
+      if (process.env.ASKTOTO_DEBUG) {
+        console.log('[display-media]', {
+          origin,
+          expectedOrigin,
+          frameUrl: frame?.url,
+          mainUrl,
+          mainFrame: isMainFrame,
+          originOk,
+          audioRequested: request.audioRequested,
+          videoRequested: request.videoRequested,
+          armed: audioArmed
+        })
+      }
       if (!audioArmed) {
         callback({}) // deny unless the user explicitly started Listen
         return
@@ -758,12 +773,23 @@ if (!app.requestSingleInstanceLock()) {
   )
   session.defaultSession.setPermissionCheckHandler((wc, permission) => allowPermission(wc, permission))
 
-  registerIpc()
-  createWindow()
-  registerShortcuts()
-  createTray()
-  startMeetingPoller()
-  initAutoUpdate()
+  // Boot each subsystem in its own try/catch so one failure can't abort the rest, and stand up the
+  // tray + global shortcuts BEFORE the window. If createWindow() ever throws (transparent / always-on-top
+  // windows can fail on some GPU/compositor configs), the user still keeps a Show/Quit path instead of a
+  // hidden, unkillable process — the dock is already hidden and the taskbar is skipped.
+  const runStep = (name: string, fn: () => void): void => {
+    try {
+      fn()
+    } catch (e) {
+      console.error(`[boot] ${name} failed:`, e)
+    }
+  }
+  runStep('registerIpc', registerIpc)
+  runStep('createTray', createTray)
+  runStep('registerShortcuts', registerShortcuts)
+  runStep('createWindow', createWindow)
+  runStep('startMeetingPoller', startMeetingPoller)
+  runStep('initAutoUpdate', initAutoUpdate)
 
   app.on('activate', () => {
     if (!win) createWindow()

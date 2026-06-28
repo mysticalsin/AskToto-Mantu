@@ -33,8 +33,8 @@ export function SignInWall({
     if (!r.ok) setErr(r.error || 'Sign-in failed.')
   }
   return (
-    <div className="cl-root fade-up flex min-h-[280px] w-full flex-col items-center justify-center gap-5 rounded-2xl border border-[var(--cl-border)] p-8 text-center">
-      <MantuLogo size={36} />
+    <div className="cl-root fade-up flex min-h-[300px] w-full flex-col items-center justify-center gap-6 rounded-2xl border border-[var(--cl-border)] p-8 text-center">
+      <MantuLogo size={180} />
       <div className="flex flex-col gap-1.5">
         <div className="font-ui text-[18px] font-semibold text-[color:var(--cl-foreground)]">
           Sign in to use AskToto
@@ -49,7 +49,7 @@ export function SignInWall({
         type="button"
         onClick={go}
         disabled={busy}
-        className="no-drag cl-focus flex items-center justify-center gap-2 rounded-[10px] bg-[var(--cl-primary)] px-5 py-2.5 text-[14px] font-medium text-white hover:opacity-90 disabled:opacity-50"
+        className="no-drag cl-focus flex items-center justify-center gap-2 rounded-[10px] bg-[var(--cl-primary)] px-5 py-2.5 text-[14px] font-medium text-white hover:brightness-110 disabled:opacity-50"
       >
         {busy ? <Loader2 size={16} className="animate-spin" /> : <MsLogo size={16} />}
         Sign in with Microsoft

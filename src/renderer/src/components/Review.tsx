@@ -46,9 +46,13 @@ export function Review({
   const [now, setNow] = useState(Date.now())
 
   useEffect(() => {
+    // The live clock only feeds durationSec while there's no real transcript yet (lines.length <= 1).
+    // Once speech is captured the duration is fixed from line timestamps, so stop ticking and stop
+    // re-rendering the recap once a second for no visible change.
+    if (lines.length > 1) return
     const id = setInterval(() => setNow(Date.now()), 1000)
     return () => clearInterval(id)
-  }, [])
+  }, [lines.length])
 
   const plain = useMemo(
     () =>
