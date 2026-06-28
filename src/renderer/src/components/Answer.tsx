@@ -123,6 +123,11 @@ export function Answer({
     return (
       <div className="fade-up mx-auto max-w-[620px] flex flex-col gap-2">
         {header}
+        {/* Reasoning models (e.g. Kimi Code) think before the first token — show it's working, not stuck. */}
+        <div className="flex items-center gap-1.5 text-[12px] text-[color:var(--color-ink-2)]">
+          <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-[var(--color-accent)]" />
+          Thinking…
+        </div>
         <Skeleton />
       </div>
     )

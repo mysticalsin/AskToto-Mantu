@@ -65,11 +65,13 @@ export interface AskRequest {
 export function useAsk(): {
   answer: AnswerState | null
   run: (req: AskRequest) => string
+  retry: () => string
   cancel: () => void
   clear: () => void
 } {
   const [answer, setAnswer] = useState<AnswerState | null>(null)
   const idRef = useRef<string>('')
+  const lastReqRef = useRef<AskRequest | null>(null) // last request, so Retry can replay vision verbatim
   // Batch streamed tokens to one flush per animation frame. Without this, every token re-renders the
   // whole markdown answer and Streamdown re-lexes the entire growing string → O(n^2) on fast providers.
   const pendingRef = useRef('')
@@ -120,6 +122,7 @@ export function useAsk(): {
 
   const run = useCallback(
     (req: AskRequest): string => {
+      lastReqRef.current = req // remember the full request (mode + image) so Retry replays it exactly
       if (idRef.current) void window.toto.cancel(idRef.current) // abort any prior in-flight stream
       resetBuffer()
       const id = uid()
@@ -151,7 +154,11 @@ export function useAsk(): {
     setAnswer(null)
   }, [resetBuffer])
 
-  return { answer, run, cancel, clear }
+  // Replay the last request EXACTLY (same mode + screenshot + prompt) so retrying a vision answer re-sends
+  // the image instead of silently re-asking text-only and getting a blind "I can't see your screen" answer.
+  const retry = useCallback((): string => (lastReqRef.current ? run(lastReqRef.current) : ''), [run])
+
+  return { answer, run, retry, cancel, clear }
 }
 
 export function useSettings(): {

@@ -16,6 +16,7 @@ import {
   type TestKeyResponse,
   type DustAgentsResponse,
   type DustCliImport,
+  type DustCliSetup,
   type GraphStatus,
   type GraphRelated,
   type AuthStatus,
@@ -44,6 +45,7 @@ const api = {
     ipcRenderer.invoke(IPC.testApiKey, { provider, key }),
   dustListAgents: (): Promise<DustAgentsResponse> => ipcRenderer.invoke(IPC.dustListAgents),
   dustImportCli: (): Promise<DustCliImport> => ipcRenderer.invoke(IPC.dustImportCli),
+  dustSetupCli: (): Promise<DustCliSetup> => ipcRenderer.invoke(IPC.dustSetupCli),
   graphifyStatus: (): Promise<GraphStatus> => ipcRenderer.invoke(IPC.graphifyStatus),
   graphifyRebuild: (): Promise<GraphStatus> => ipcRenderer.invoke(IPC.graphifyRebuild),
   graphifyRelated: (file: string): Promise<GraphRelated> =>
@@ -70,6 +72,8 @@ const api = {
   resize: (height: number): Promise<void> => ipcRenderer.invoke(IPC.windowResize, { height }),
   windowMode: (mode: 'bar' | 'settings'): Promise<void> =>
     ipcRenderer.invoke(IPC.windowMode, mode),
+  windowMoveBy: (dx: number, dy: number): Promise<void> =>
+    ipcRenderer.invoke(IPC.windowMoveBy, { dx, dy }),
   hide: (): Promise<void> => ipcRenderer.invoke(IPC.windowHide),
   toggle: (): Promise<void> => ipcRenderer.invoke(IPC.windowToggle),
   quit: (): Promise<void> => ipcRenderer.invoke(IPC.windowQuit),

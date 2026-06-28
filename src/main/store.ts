@@ -178,8 +178,21 @@ export function setSettings(patch: Partial<Settings>): Settings {
   // Encrypted at rest (context docs + profile PII never hit disk as plaintext).
   const p = settingsPath()
   const tmp = `${p}.tmp`
-  writeFileSync(tmp, serializeUserRaw(next), { mode: 0o600 })
-  renameSync(tmp, p)
+  try {
+    writeFileSync(tmp, serializeUserRaw(next), { mode: 0o600 })
+    renameSync(tmp, p)
+  } catch (e) {
+    try {
+      if (existsSync(tmp)) rmSync(tmp) // don't leave an orphaned .tmp behind
+    } catch {
+      /* ignore */
+    }
+    throw new Error(
+      `Couldn't save settings — AskToto can't write to its data folder${
+        e instanceof Error && e.message ? ` (${e.message})` : ''
+      }. Check that the disk isn't full and the folder is writable.`
+    )
+  }
   return getSettings()
 }
 
@@ -198,7 +211,15 @@ export function setApiKey(provider: ProviderId, key: string): void {
         'Grant keychain access or set the key via the environment variable instead.'
     )
   }
-  writeFileSync(p, safeStorage.encryptString(trimmed), { mode: 0o600 })
+  try {
+    writeFileSync(p, safeStorage.encryptString(trimmed), { mode: 0o600 })
+  } catch (e) {
+    throw new Error(
+      `Couldn't save your API key — AskToto can't write to its data folder${
+        e instanceof Error && e.message ? ` (${e.message})` : ''
+      }. Check that the disk isn't full and the folder is writable.`
+    )
+  }
 }
 
 export function clearApiKey(provider: ProviderId): void {

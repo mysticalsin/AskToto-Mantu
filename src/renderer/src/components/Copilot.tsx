@@ -16,6 +16,9 @@ const SUGGEST_LABEL: Record<ConversationMode, string> = {
   interview: 'Say this',
   meeting: 'Suggested point',
   sales: 'Next move',
+  negotiation: 'Your move',
+  presentation: 'Say next',
+  support: 'Respond with',
   general: 'Suggestion'
 }
 
@@ -38,7 +41,7 @@ function Action({
       className={[
         'no-drag focus-ring flex items-center gap-1.5 rounded-full px-3 py-1.5 text-[12px] font-medium transition-colors duration-[var(--duration-hover)]',
         primary
-          ? 'bg-[var(--color-accent)] text-white hover:opacity-90'
+          ? 'bg-[var(--color-accent)] text-white hover:brightness-110'
           : 'bg-white/[0.06] text-[color:var(--color-ink-2)] hover:bg-white/[0.12] hover:text-[color:var(--color-ink)]'
       ].join(' ')}
     >
@@ -85,7 +88,7 @@ export function Copilot({
     <div className="flex flex-col gap-3">
       {/* What to say — the only content shown live */}
       <section aria-live="polite" aria-atomic="false" className="rounded-xl border-l-2 border-[var(--color-accent)] bg-[var(--color-accent-soft)] px-3.5 py-3">
-        <div className="mb-1.5 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-[var(--color-accent)]">
+        <div className="mb-1.5 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-[color:var(--color-ink)]">
           <Sparkles size={12} />
           {SUGGEST_LABEL[mode]}
         </div>

@@ -53,7 +53,7 @@ import { getPlatformPermissions } from './platform-perms'
 import { listMeetings, searchMeetings } from './recall'
 import { initAutoUpdate } from './updater'
 import { runSelfTest } from './selftest'
-import { importDustCliSession } from './dustcli'
+import { importDustCliSession, setupDustCli } from './dustcli'
 import { graphifyStatus, buildGraph, relatedNotes, graphHtml, scheduleRebuild } from './graphify'
 import { SaveMeetingSchema, SaveNoteSchema } from '@shared/ipc'
 import { PROVIDERS, resolveModelTier, type ProviderId } from '@shared/providers'
@@ -115,9 +115,20 @@ function publicSettings(): PublicSettings {
   } catch {
     /* not supported on this platform */
   }
+  // Active provider is usable: key present AND any provider-specific setup done (Dust needs a workspace +
+  // a chosen base agent; custom needs an https base URL). Drives the add-key CTA so it only shows when the
+  // app genuinely can't answer yet — not when a key for a DIFFERENT provider exists.
+  const providerReady =
+    hasApiKey(s.provider) &&
+    (s.provider === 'dust'
+      ? !!s.dustWorkspaceId.trim() && !!s.providerModels.dust
+      : s.provider === 'custom'
+        ? /^https:\/\//i.test(s.customBaseUrl)
+        : true)
   return {
     ...s,
     hasApiKey: hasApiKey(s.provider),
+    providerReady,
     hasKeys: hasKeysMap(),
     hasEncryption: encryptionAvailable(),
     resolvedMeetingsFolder: resolveMeetingsFolder(s),
@@ -203,7 +214,8 @@ function createWindow(): void {
   if (process.env['ELECTRON_RENDERER_URL']) {
     const params = new URLSearchParams()
     if (process.env.ASKTOTO_DEMO) params.set('demo', process.env.ASKTOTO_DEMO)
-    if (process.env.ASKTOTO_SHOT) params.set('shotbg', 'dark') // make the overlay visible in the capture
+    // make the overlay visible in the capture; ASKTOTO_SHOTBG=light tests legibility over a bright backdrop
+    if (process.env.ASKTOTO_SHOT) params.set('shotbg', process.env.ASKTOTO_SHOTBG || 'dark')
     const qs = params.toString()
     win.loadURL(process.env['ELECTRON_RENDERER_URL'] + (qs ? `?${qs}` : ''))
   } else {
@@ -215,7 +227,10 @@ function resizeTo(height: number): void {
   if (!win) return
   // In settings mode the window is a fixed-size two-pane surface; ignore content-driven height.
   if (settingsMode) return
-  const { workArea } = screen.getDisplayNearestPoint(screen.getCursorScreenPoint())
+  // Clamp + reposition against the display the OVERLAY is actually on (not the cursor's). Otherwise, on a
+  // laptop + external monitor of different heights, a streaming answer clamps to the wrong monitor and the
+  // window jumps vertically while the cursor sits on the other screen.
+  const { workArea } = screen.getDisplayMatching(win.getBounds())
   const h = Math.max(BAR_HEIGHT, Math.min(Math.round(height), workArea.height - 48))
   lastBarHeight = h
   const b = win.getBounds()
@@ -232,7 +247,7 @@ function resizeTo(height: number): void {
  */
 function setWindowMode(mode: 'bar' | 'settings'): void {
   if (!win) return
-  const { workArea } = screen.getDisplayNearestPoint(screen.getCursorScreenPoint())
+  const { workArea } = screen.getDisplayMatching(win.getBounds())
   const b = win.getBounds()
   if (mode === 'settings') {
     settingsMode = true
@@ -279,10 +294,7 @@ const shortcutActions: Record<string, () => void> = {
   capture: () => sendHotkey('capture'),
   factcheck: () => sendHotkey('factcheck'),
   'scroll-up': () => moveBy(0, -60),
-  'scroll-down': () => moveBy(0, 60),
-  // legacy move aliases kept for any custom scroll-left/right mappings
-  'scroll-left': () => moveBy(-60, 0),
-  'scroll-right': () => moveBy(60, 0)
+  'scroll-down': () => moveBy(0, 60)
 }
 
 function resolveShortcut(action: HotkeyAction, user: Record<string, string>): string {
@@ -434,6 +446,13 @@ function registerIpc(): void {
     return { ok: true, workspaceId: s.workspaceId, baseUrl: s.baseUrl }
   })
 
+  // No CLI session yet → kick off the install + interactive login for the user (opens a Terminal window).
+  ipcMain.handle(IPC.dustSetupCli, async (e) => {
+    assertMainWindow(e)
+    if (!requireAuth()) return { ok: false, error: 'Sign in with your Mantu account first.' }
+    return setupDustCli()
+  })
+
   ipcMain.handle(IPC.authStatus, (e) => {
     assertMainWindow(e)
     return authStatus()
@@ -452,11 +471,18 @@ function registerIpc(): void {
     if (!requireAuth()) throw new Error('Not signed in.')
     const disp = screen.getDisplayNearestPoint(screen.getCursorScreenPoint())
     const sf = disp.scaleFactor || 1
+    // Vision latency: render the thumbnail already capped at VISION_MAX_EDGE (smaller = faster capture +
+    // ~50% smaller upload + ~33% less model prefill). 1280px keeps dense on-screen text legible; q72 JPEG.
+    const VISION_MAX_EDGE = 1280
+    const VISION_JPEG_Q = 72
+    const fullW = Math.round(disp.size.width * sf)
+    const fullH = Math.round(disp.size.height * sf)
+    const capScale = Math.min(1, VISION_MAX_EDGE / Math.max(fullW, fullH))
     const sources = await desktopCapturer.getSources({
       types: ['screen'],
       thumbnailSize: {
-        width: Math.round(disp.size.width * sf),
-        height: Math.round(disp.size.height * sf)
+        width: Math.max(1, Math.round(fullW * capScale)),
+        height: Math.max(1, Math.round(fullH * capScale))
       }
     })
     const src =
@@ -465,12 +491,11 @@ function registerIpc(): void {
     let img = src.thumbnail
     const sz = img.getSize()
     const maxEdge = Math.max(sz.width, sz.height)
-    if (maxEdge > 1568) {
-      const scale = 1568 / maxEdge // cap for Claude vision; cuts payload + latency
+    if (maxEdge > VISION_MAX_EDGE) {
+      const scale = VISION_MAX_EDGE / maxEdge
       img = img.resize({ width: Math.round(sz.width * scale), height: Math.round(sz.height * scale) })
     }
-    // JPEG compress screenshots to cut LLM payload size / latency while keeping text readable.
-    const jpeg = img.toJPEG(88)
+    const jpeg = img.toJPEG(VISION_JPEG_Q)
     const size = img.getSize()
     return { image: jpeg.toString('base64'), width: size.width, height: size.height }
   })
@@ -539,7 +564,7 @@ function registerIpc(): void {
       workspaceId: s.dustWorkspaceId,
       model,
       temperature: s.temperature,
-      system: buildSystem(req, s.mode, s.profile, s.modePrompts, s.contextDocs[s.mode] || [], s.outputLanguage),
+      system: buildSystem(req, s.mode, s.profile, s.modePrompts, s.contextDocs[s.mode] || [], s.outputLanguage, s.summaryLanguage),
       req,
       handlers: {
         onDelta: (text) => win?.webContents.send(IPC.streamDelta, { id: req.id, text }),
@@ -664,6 +689,14 @@ function registerIpc(): void {
     assertMainWindow(e)
     setWindowMode(mode === 'settings' ? 'settings' : 'bar')
   })
+  // Drag the overlay from anywhere on the bar (the renderer's JS drag drives this with screen-pixel deltas).
+  ipcMain.handle(IPC.windowMoveBy, (e, d: unknown) => {
+    assertMainWindow(e)
+    const { dx, dy } = (d ?? {}) as { dx?: number; dy?: number }
+    if (typeof dx === 'number' && typeof dy === 'number' && Number.isFinite(dx) && Number.isFinite(dy)) {
+      moveBy(dx, dy)
+    }
+  })
   ipcMain.handle(IPC.windowHide, (e) => {
     assertMainWindow(e)
     win?.hide()
@@ -721,17 +754,19 @@ if (!app.requestSingleInstanceLock()) {
       }
       const isMainFrame = !!frame && frame === mainFrame
       const originOk = !mainUrl || origin === expectedOrigin || origin === mainUrl
-      console.log('[display-media]', {
-        origin,
-        expectedOrigin,
-        frameUrl: frame?.url,
-        mainUrl,
-        mainFrame: isMainFrame,
-        originOk,
-        audioRequested: request.audioRequested,
-        videoRequested: request.videoRequested,
-        armed: audioArmed
-      })
+      if (process.env.ASKTOTO_DEBUG) {
+        console.log('[display-media]', {
+          origin,
+          expectedOrigin,
+          frameUrl: frame?.url,
+          mainUrl,
+          mainFrame: isMainFrame,
+          originOk,
+          audioRequested: request.audioRequested,
+          videoRequested: request.videoRequested,
+          armed: audioArmed
+        })
+      }
       if (!audioArmed) {
         callback({}) // deny unless the user explicitly started Listen
         return
@@ -758,12 +793,23 @@ if (!app.requestSingleInstanceLock()) {
   )
   session.defaultSession.setPermissionCheckHandler((wc, permission) => allowPermission(wc, permission))
 
-  registerIpc()
-  createWindow()
-  registerShortcuts()
-  createTray()
-  startMeetingPoller()
-  initAutoUpdate()
+  // Boot each subsystem in its own try/catch so one failure can't abort the rest, and stand up the
+  // tray + global shortcuts BEFORE the window. If createWindow() ever throws (transparent / always-on-top
+  // windows can fail on some GPU/compositor configs), the user still keeps a Show/Quit path instead of a
+  // hidden, unkillable process — the dock is already hidden and the taskbar is skipped.
+  const runStep = (name: string, fn: () => void): void => {
+    try {
+      fn()
+    } catch (e) {
+      console.error(`[boot] ${name} failed:`, e)
+    }
+  }
+  runStep('registerIpc', registerIpc)
+  runStep('createTray', createTray)
+  runStep('registerShortcuts', registerShortcuts)
+  runStep('createWindow', createWindow)
+  runStep('startMeetingPoller', startMeetingPoller)
+  runStep('initAutoUpdate', initAutoUpdate)
 
   app.on('activate', () => {
     if (!win) createWindow()

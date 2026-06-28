@@ -4,42 +4,18 @@ import { useEffect, useRef, useState } from 'react'
 import { createHighlighterCore, type HighlighterCore } from 'shiki/core'
 import { createOnigurumaEngine } from 'shiki/engine/oniguruma'
 import githubDark from 'shiki/themes/github-dark.mjs'
-import typescript from 'shiki/langs/typescript.mjs'
-import tsx from 'shiki/langs/tsx.mjs'
-import javascript from 'shiki/langs/javascript.mjs'
-import jsx from 'shiki/langs/jsx.mjs'
-import json from 'shiki/langs/json.mjs'
-import python from 'shiki/langs/python.mjs'
-import bash from 'shiki/langs/bash.mjs'
-import html from 'shiki/langs/html.mjs'
-import css from 'shiki/langs/css.mjs'
-import go from 'shiki/langs/go.mjs'
-import rust from 'shiki/langs/rust.mjs'
-import java from 'shiki/langs/java.mjs'
-import clang from 'shiki/langs/c.mjs'
-import cpp from 'shiki/langs/cpp.mjs'
-import csharp from 'shiki/langs/csharp.mjs'
-import ruby from 'shiki/langs/ruby.mjs'
-import php from 'shiki/langs/php.mjs'
-import sql from 'shiki/langs/sql.mjs'
-import yaml from 'shiki/langs/yaml.mjs'
-import toml from 'shiki/langs/toml.mjs'
-import markdown from 'shiki/langs/markdown.mjs'
-import swift from 'shiki/langs/swift.mjs'
-import kotlin from 'shiki/langs/kotlin.mjs'
-import scala from 'shiki/langs/scala.mjs'
-import diff from 'shiki/langs/diff.mjs'
 import { Copy, Check } from 'lucide-react'
 
 // Alias any incoming fence language → a loaded grammar, else 'text' (built-in, no grammar needed).
+// Curated to the languages a meeting/sales/interview copilot actually shows. Rarer/heavier grammars
+// (c/cpp/csharp/ruby/php/swift/kotlin/scala/toml) are dropped — they render as plain text, trimming the
+// shipped grammar chunks (incl. the ~637KB cpp chunk).
 const ALIAS: Record<string, string> = {
   ts: 'typescript', typescript: 'typescript', tsx: 'tsx', js: 'javascript', javascript: 'javascript',
   jsx: 'jsx', json: 'json', python: 'python', py: 'python', bash: 'bash', sh: 'bash', shell: 'bash',
   shellscript: 'bash', zsh: 'bash', html: 'html', xml: 'html', css: 'css', go: 'go', golang: 'go',
-  rust: 'rust', rs: 'rust', java: 'java', c: 'c', 'c++': 'cpp', cpp: 'cpp', cc: 'cpp', csharp: 'csharp',
-  cs: 'csharp', 'c#': 'csharp', ruby: 'ruby', rb: 'ruby', php: 'php', sql: 'sql', yaml: 'yaml',
-  yml: 'yaml', toml: 'toml', markdown: 'markdown', md: 'markdown', swift: 'swift', kotlin: 'kotlin',
-  kt: 'kotlin', scala: 'scala', diff: 'diff', patch: 'diff'
+  rust: 'rust', rs: 'rust', java: 'java', sql: 'sql', yaml: 'yaml', yml: 'yaml',
+  markdown: 'markdown', md: 'markdown', diff: 'diff', patch: 'diff'
 }
 const norm = (l: string): string => ALIAS[(l || '').toLowerCase()] || 'text'
 
@@ -49,9 +25,25 @@ function highlighter(): Promise<HighlighterCore> {
   if (!hlPromise) {
     hlPromise = createHighlighterCore({
       themes: [githubDark],
+      // Lazy: each grammar is its own chunk, fetched only when the first code block actually renders,
+      // keeping ~2MB of TextMate grammars out of the cold-start bundle of an otherwise-idle overlay.
       langs: [
-        typescript, tsx, javascript, jsx, json, python, bash, html, css, go, rust, java, clang, cpp,
-        csharp, ruby, php, sql, yaml, toml, markdown, swift, kotlin, scala, diff
+        import('shiki/langs/typescript.mjs'),
+        import('shiki/langs/tsx.mjs'),
+        import('shiki/langs/javascript.mjs'),
+        import('shiki/langs/jsx.mjs'),
+        import('shiki/langs/json.mjs'),
+        import('shiki/langs/python.mjs'),
+        import('shiki/langs/bash.mjs'),
+        import('shiki/langs/html.mjs'),
+        import('shiki/langs/css.mjs'),
+        import('shiki/langs/go.mjs'),
+        import('shiki/langs/rust.mjs'),
+        import('shiki/langs/java.mjs'),
+        import('shiki/langs/sql.mjs'),
+        import('shiki/langs/yaml.mjs'),
+        import('shiki/langs/markdown.mjs'),
+        import('shiki/langs/diff.mjs')
       ],
       engine: createOnigurumaEngine(import('shiki/wasm'))
     })

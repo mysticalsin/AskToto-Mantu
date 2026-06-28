@@ -68,7 +68,9 @@ function graphHtmlPath(): string {
 
 // --- Python interpreter resolution (cached) -------------------------------------------------------
 
-let cachedPython: string | null | undefined
+// Only a POSITIVE interpreter path is ever cached (never a null miss), so installing python/graphifyy
+// after launch is picked up on the next probe instead of needing an app restart.
+let cachedPython: string | undefined
 
 async function canImport(py: string): Promise<boolean> {
   try {
@@ -117,7 +119,7 @@ async function detectPython(): Promise<string | null> {
   for (const c of IS_WIN ? ['python', 'py', 'python3'] : ['python3', 'python']) {
     if (await canImport(c)) return (cachedPython = c)
   }
-  return (cachedPython = null)
+  return null // miss is NOT cached → a later call re-probes once the tool is installed
 }
 
 // --- Backend selection ("reuse Dust/Claude", never Gemini) ---------------------------------------
@@ -236,10 +238,16 @@ export function scheduleRebuild(): void {
   // Encrypted transcripts are unreadable by the graphify runner — skip auto-rebuild in that mode.
   if (!s.graphifyEnabled || !s.graphifyAutoRebuild || s.encryptTranscripts) return
   if (rebuildTimer) clearTimeout(rebuildTimer)
-  rebuildTimer = setTimeout(() => {
+  const fire = (): void => {
     rebuildTimer = null
+    // A build is already running — retry shortly instead of dropping this note's update.
+    if (building) {
+      rebuildTimer = setTimeout(fire, 5_000)
+      return
+    }
     void buildGraph(true)
-  }, REBUILD_DEBOUNCE_MS)
+  }
+  rebuildTimer = setTimeout(fire, REBUILD_DEBOUNCE_MS)
 }
 
 // --- Related notes (read graph.json neighbours) --------------------------------------------------

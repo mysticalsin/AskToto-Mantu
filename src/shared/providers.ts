@@ -124,16 +124,20 @@ export const PROVIDERS: Record<ProviderId, ProviderDef> = {
   },
   kimi: {
     id: 'kimi',
-    label: 'Kimi · Moonshot',
+    label: 'Kimi · Code (K2.7)',
     kind: 'openai',
-    baseUrl: 'https://api.moonshot.ai/v1',
-    models: ['kimi-k2-0711-preview', 'moonshot-v1-128k', 'moonshot-v1-32k', 'moonshot-v1-8k'],
-    defaultModel: 'kimi-k2-0711-preview',
-    fastModel: 'moonshot-v1-8k',
-    keyHint: 'sk-…',
-    keyPattern: '', // sk- ambiguous
-    vision: false,
-    keyUrl: 'https://platform.moonshot.ai/console/api-keys'
+    // Kimi Code keys (sk-kimi-…) authenticate against the coding endpoint, NOT Moonshot's api.moonshot.ai
+    // (that one 401s for these keys). The single model is reasoning-only: it streams reasoning_content
+    // first, then the answer in content — llm.ts pings the watchdog on reasoning so the stream isn't aborted.
+    baseUrl: 'https://api.kimi.com/coding/v1',
+    models: ['kimi-for-coding'],
+    defaultModel: 'kimi-for-coding',
+    fastModel: 'kimi-for-coding',
+    thinkModel: 'kimi-for-coding',
+    keyHint: 'sk-kimi-…',
+    keyPattern: '^sk-kimi-',
+    vision: true, // kimi-for-coding supports image input
+    keyUrl: 'https://www.kimi.com/code/docs/en/'
   },
   openrouter: {
     id: 'openrouter',
