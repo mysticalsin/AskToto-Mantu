@@ -762,6 +762,7 @@ function DustSetup({
     if (!k) return
     setKeySaving(true)
     await saveKey('dust', k)
+    await patch({ provider: 'dust' }) // activate Dust so this key is used + the add-key CTA hides
     setDustKey('')
     setKeySaving(false)
   }

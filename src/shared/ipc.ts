@@ -242,6 +242,9 @@ export type Settings = z.infer<typeof BaseSettingsSchema>
 /** What the renderer receives (never raw keys). */
 export const PublicSettingsSchema = BaseSettingsSchema.extend({
   hasApiKey: z.boolean(),
+  /** Active provider is actually usable (key present AND any provider-specific setup done) — drives the
+   *  "add your key" CTA so it only shows when the app genuinely can't answer yet. */
+  providerReady: z.boolean(),
   hasKeys: z.record(z.string(), z.boolean()),
   hasEncryption: z.boolean(),
   resolvedMeetingsFolder: z.string(),

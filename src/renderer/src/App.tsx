@@ -651,7 +651,7 @@ export function App(): JSX.Element {
         focusSignal={focusSignal}
       />
       {listen.listening && <RecordingIndicator seconds={seconds} />}
-      {settings && !settings.hasApiKey && (
+      {settings && !settings.providerReady && (
         <button
           type="button"
           onClick={() => {
