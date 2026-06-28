@@ -44,14 +44,14 @@
 
   /* Glass surfaces — neutral dark gray with a faint Mantu-purple undertone (desaturated so the bar reads
      clearly over any desktop), still translucent but opaque enough to stay legible. Accents stay purple. */
-  --glass-fill: rgba(40, 39, 44, 0.68);
+  --glass-fill: rgba(40, 39, 44, 0.58);
   --glass-fill-elevated: rgba(48, 47, 53, 0.74);
   --glass-fill-strong: rgba(34, 33, 39, 0.78);
   --glass-tint-white: rgba(255, 255, 255, 0.06);
   --glass-tint-black: rgba(0, 0, 0, 0.22);
   /* A darker neutral scrim painted BEHIND the bar/chips (below the grey fill): keeps the frosted
      translucency but guarantees a grey-enough backing so white text stays legible over a bright desktop. */
-  --glass-scrim-bar: rgba(16, 16, 20, 0.74);
+  --glass-scrim-bar: rgba(16, 16, 20, 0.64);
   --blur-bar: 34px;
   --blur-panel: 42px;
   --blur-saturate: 190%;

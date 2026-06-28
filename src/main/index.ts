@@ -115,9 +115,20 @@ function publicSettings(): PublicSettings {
   } catch {
     /* not supported on this platform */
   }
+  // Active provider is usable: key present AND any provider-specific setup done (Dust needs a workspace +
+  // a chosen base agent; custom needs an https base URL). Drives the add-key CTA so it only shows when the
+  // app genuinely can't answer yet — not when a key for a DIFFERENT provider exists.
+  const providerReady =
+    hasApiKey(s.provider) &&
+    (s.provider === 'dust'
+      ? !!s.dustWorkspaceId.trim() && !!s.providerModels.dust
+      : s.provider === 'custom'
+        ? /^https:\/\//i.test(s.customBaseUrl)
+        : true)
   return {
     ...s,
     hasApiKey: hasApiKey(s.provider),
+    providerReady,
     hasKeys: hasKeysMap(),
     hasEncryption: encryptionAvailable(),
     resolvedMeetingsFolder: resolveMeetingsFolder(s),
@@ -457,11 +468,18 @@ function registerIpc(): void {
     if (!requireAuth()) throw new Error('Not signed in.')
     const disp = screen.getDisplayNearestPoint(screen.getCursorScreenPoint())
     const sf = disp.scaleFactor || 1
+    // Vision latency: render the thumbnail already capped at VISION_MAX_EDGE (smaller = faster capture +
+    // ~50% smaller upload + ~33% less model prefill). 1280px keeps dense on-screen text legible; q72 JPEG.
+    const VISION_MAX_EDGE = 1280
+    const VISION_JPEG_Q = 72
+    const fullW = Math.round(disp.size.width * sf)
+    const fullH = Math.round(disp.size.height * sf)
+    const capScale = Math.min(1, VISION_MAX_EDGE / Math.max(fullW, fullH))
     const sources = await desktopCapturer.getSources({
       types: ['screen'],
       thumbnailSize: {
-        width: Math.round(disp.size.width * sf),
-        height: Math.round(disp.size.height * sf)
+        width: Math.max(1, Math.round(fullW * capScale)),
+        height: Math.max(1, Math.round(fullH * capScale))
       }
     })
     const src =
@@ -470,12 +488,11 @@ function registerIpc(): void {
     let img = src.thumbnail
     const sz = img.getSize()
     const maxEdge = Math.max(sz.width, sz.height)
-    if (maxEdge > 1568) {
-      const scale = 1568 / maxEdge // cap for Claude vision; cuts payload + latency
+    if (maxEdge > VISION_MAX_EDGE) {
+      const scale = VISION_MAX_EDGE / maxEdge
       img = img.resize({ width: Math.round(sz.width * scale), height: Math.round(sz.height * scale) })
     }
-    // JPEG compress screenshots to cut LLM payload size / latency while keeping text readable.
-    const jpeg = img.toJPEG(88)
+    const jpeg = img.toJPEG(VISION_JPEG_Q)
     const size = img.getSize()
     return { image: jpeg.toString('base64'), width: size.width, height: size.height }
   })
