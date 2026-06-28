@@ -187,6 +187,7 @@ export function App(): JSX.Element {
     const p = pendingUserRef.current
     if (!p || p.id !== a.id) return
     pendingUserRef.current = null
+    if (cancelledRef.current) return // user cancelled — don't record a truncated turn into memory
     const next: ChatTurn[] = [
       ...historyRef.current,
       { role: 'user', content: p.q },
