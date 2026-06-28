@@ -14,7 +14,9 @@
     "check:release": "node scripts/check-release.mjs",
     "dist": "electron-vite build && electron-builder --mac",
     "dist:win": "electron-vite build && electron-builder --win",
-    "dist:win:appx": "electron-vite build && electron-builder --win appx"
+    "dist:win:appx": "electron-vite build && electron-builder --win appx",
+    "release": "npm run check:release && electron-vite build && electron-builder --mac --publish always",
+    "release:win": "npm run check:release && electron-vite build && electron-builder --win --publish always"
   },
   "comment": "Only main-process runtime deps live in 'dependencies' (electron-builder bundles these into the app). All renderer deps are bundled by Vite at build time and kept in devDependencies to keep the package small.",
   "dependencies": {
