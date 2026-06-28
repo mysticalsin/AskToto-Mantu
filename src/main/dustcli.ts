@@ -1,5 +1,8 @@
+import { app, shell } from 'electron'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
+import { writeFileSync } from 'node:fs'
+import { join } from 'node:path'
 import type { DustCliImport } from '@shared/ipc'
 
 const exec = promisify(execFile)
@@ -72,4 +75,52 @@ export async function importDustCliSession(): Promise<DustCliSession> {
     }
   }
   return { ok: true, token, workspaceId, baseUrl: regionToBaseUrl(region) }
+}
+
+/**
+ * Kick off the Dust CLI setup for a user with no session yet. We write a small EXECUTABLE `.command`
+ * script (install the CLI, then run the interactive `dust login`) and open it: macOS opens `.command`
+ * files in Terminal and runs them directly, so this needs NO Automation permission (unlike telling
+ * Terminal what to do via osascript, which silently fails until the user grants Automation access).
+ * One click → a Terminal window walks them through it. `dust login` needs a browser OAuth, so it has to
+ * run in a visible terminal. macOS only (matches importDustCliSession's keychain read).
+ */
+export async function setupDustCli(): Promise<{ ok: boolean; error?: string }> {
+  if (process.platform !== 'darwin') {
+    return {
+      ok: false,
+      error: 'Automatic setup is macOS-only for now. Run `npm i -g @dust-tt/dust-cli && dust login` in a terminal.'
+    }
+  }
+  try {
+    const script =
+      [
+        '#!/bin/bash',
+        'clear',
+        'echo "AskToto — Dust CLI setup"',
+        'echo "========================"',
+        'echo',
+        'if ! command -v npm >/dev/null 2>&1; then',
+        '  echo "✗ npm / Node.js not found. Install Node from https://nodejs.org, then run this again."',
+        '  echo; echo "Press any key to close."; read -n 1 -s; exit 1',
+        'fi',
+        'echo "Step 1/2  Installing the Dust CLI (npm i -g @dust-tt/dust-cli)…"',
+        'if ! npm i -g @dust-tt/dust-cli; then',
+        '  echo; echo "✗ Install failed (often a permissions issue with global npm)."',
+        '  echo "  Try:  sudo npm i -g @dust-tt/dust-cli   then run this again."',
+        '  echo; echo "Press any key to close."; read -n 1 -s; exit 1',
+        'fi',
+        'echo; echo "Step 2/2  Signing in to Dust (a browser window will open)…"',
+        'dust login',
+        'echo; echo "✓ Done. Go back to AskToto and click \\"Connect from Dust CLI\\" again."',
+        'echo "You can close this window."'
+      ].join('\n') + '\n'
+    const scriptPath = join(app.getPath('temp'), 'asktoto-dust-setup.command')
+    writeFileSync(scriptPath, script, { mode: 0o755 })
+    const err = await shell.openPath(scriptPath) // opens in Terminal and runs it; no Automation permission
+    if (err) return { ok: false, error: err }
+    return { ok: true }
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : String(e) }
+  }
 }

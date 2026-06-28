@@ -24,7 +24,7 @@ export function QuickActions({
             key={a.kind}
             type="button"
             onClick={() => onAction(a.kind)}
-            className="no-drag focus-ring glass-chip flex items-center gap-1.5 rounded-full px-3 py-1.5 text-[12px] font-medium text-[color:var(--color-ink-2)] transition-colors duration-[var(--duration-hover)] hover:text-[color:var(--color-ink)]"
+            className="no-drag focus-ring glass-chip flex items-center gap-1.5 rounded-full px-3 py-1.5 text-[12px] font-medium text-[color:var(--color-ink-2)] transition-[transform,background-color,color] duration-[var(--duration-hover)] hover:text-[color:var(--color-ink)] active:scale-[0.96]"
           >
             <a.icon size={13} className="text-[var(--color-accent)]" />
             {a.label}

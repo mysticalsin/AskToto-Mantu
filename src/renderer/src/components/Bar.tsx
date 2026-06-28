@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react'
-import { Mic, Camera, Settings2, History, ChevronUp, ChevronDown, ArrowUp, Square, X, GripVertical, Minus, Brain } from 'lucide-react'
+import { Mic, Camera, Settings2, History, ChevronUp, ChevronDown, ArrowUp, Square, X, GripVertical, Minus, Brain, Eye, EyeOff } from 'lucide-react'
 import { MantuMark } from './MantuMark'
 import { IconButton, Spinner } from './ui'
 
@@ -26,6 +26,8 @@ export interface BarProps {
   onHistory: () => void
   onHide: () => void
   onClose: () => void
+  stealth: boolean // true = hidden from screen-share/recording (others can't see it)
+  onToggleStealth: () => void
   seconds: number
   panelOpen: boolean
   onTogglePanel: () => void
@@ -34,13 +36,48 @@ export interface BarProps {
 
 export function Bar(props: BarProps): JSX.Element {
   const inputRef = useRef<HTMLInputElement>(null)
+  const dragRef = useRef<{ x: number; y: number } | null>(null)
+  const movedRef = useRef(false)
 
   useEffect(() => {
     if (props.focusSignal > 0) inputRef.current?.focus()
   }, [props.focusSignal])
 
+  // The bar's empty areas drag natively (-webkit-app-region). The text field can't be a drag region (you
+  // need to click into it), which left only a thin strip near the logo grabbable. This adds a JS drag on
+  // the input: hold + move past a few pixels → drag the whole window from anywhere; a plain click still
+  // focuses it to type. Deltas are in screen pixels, applied by the main process's moveBy().
+  useEffect(() => {
+    const onMove = (e: PointerEvent): void => {
+      if (!dragRef.current) return
+      const dx = e.screenX - dragRef.current.x
+      const dy = e.screenY - dragRef.current.y
+      if (!movedRef.current && Math.abs(dx) + Math.abs(dy) < 3) return
+      e.preventDefault() // suppress text selection while dragging
+      if (!movedRef.current) inputRef.current?.blur() // drop the caret once a drag begins
+      movedRef.current = true
+      dragRef.current = { x: e.screenX, y: e.screenY }
+      void window.toto.windowMoveBy(dx, dy)
+    }
+    const onUp = (): void => {
+      dragRef.current = null
+    }
+    window.addEventListener('pointermove', onMove, { passive: false })
+    window.addEventListener('pointerup', onUp)
+    return () => {
+      window.removeEventListener('pointermove', onMove)
+      window.removeEventListener('pointerup', onUp)
+    }
+  }, [])
+
   return (
-    <div className="glass drag flex h-[40px] w-full items-center gap-1 rounded-full pl-2 pr-1.5">
+    <div
+      className={[
+        'glass drag flex h-[40px] w-full items-center gap-1 rounded-full pl-2 pr-1.5',
+        // When NOT stealth, others can see the overlay in a screen share → ring the bar to make that obvious.
+        props.stealth ? '' : 'outline outline-2 outline-offset-2 outline-[var(--color-danger)]'
+      ].join(' ')}
+    >
       <span
         title="Drag to move (⌘⌥ arrows also work)"
         aria-hidden="true"
@@ -61,6 +98,18 @@ export function Bar(props: BarProps): JSX.Element {
         ref={inputRef}
         value={props.value}
         onChange={(e) => props.onChange(e.target.value)}
+        onPointerDown={(e) => {
+          if (e.button === 0) {
+            dragRef.current = { x: e.screenX, y: e.screenY }
+            movedRef.current = false
+          }
+        }}
+        onClick={(e) => {
+          if (movedRef.current) {
+            e.preventDefault() // it was a drag, not a click — keep it from acting like a focus click
+            movedRef.current = false
+          }
+        }}
         onKeyDown={(e) => {
           if (e.key === 'Enter' && !e.shiftKey) {
             e.preventDefault()
@@ -88,12 +137,11 @@ export function Bar(props: BarProps): JSX.Element {
       {/* Listen / Recording pill */}
       <button
         type="button"
-        role="button"
         aria-pressed={props.listening}
         onClick={props.onToggleListen}
         title={props.listening ? 'Stop listening' : 'Start listening'}
         className={[
-          'no-drag focus-ring flex h-[30px] items-center gap-1.5 rounded-full px-2.5 text-[12px] font-medium transition-colors duration-[var(--duration-hover)] ease-[var(--ease-spring)]',
+          'no-drag focus-ring flex h-[30px] items-center gap-1.5 rounded-full px-2.5 text-[12px] font-medium transition-[transform,background-color,color] duration-[var(--duration-hover)] ease-[var(--ease-spring)] active:scale-[0.96]',
           props.listening
             ? 'border border-[var(--color-danger)]/30 bg-[var(--color-danger-soft)] text-[color:var(--color-danger)]'
             : 'text-[color:var(--color-ink-2)] hover:bg-white/10 hover:text-[color:var(--color-ink)]'
@@ -124,9 +172,9 @@ export function Bar(props: BarProps): JSX.Element {
             : 'Thinking mode OFF — auto: fast model for simple, deep model for hard/coding'
         }
         className={[
-          'no-drag focus-ring flex h-[30px] items-center gap-1.5 rounded-full px-2.5 text-[12px] font-medium transition-colors duration-100 ease-[var(--ease-spring)]',
+          'no-drag focus-ring flex h-[30px] items-center gap-1.5 rounded-full px-2.5 text-[12px] font-medium transition-[transform,background-color,color] duration-[var(--duration-hover)] ease-[var(--ease-spring)] active:scale-[0.96]',
           props.thinking
-            ? 'border border-[var(--color-accent)]/40 bg-[var(--color-accent-soft)] text-[color:var(--color-accent)]'
+            ? 'border border-[var(--color-accent)] bg-[var(--color-accent)] text-white'
             : 'text-[color:var(--color-ink-2)] hover:bg-white/10 hover:text-[color:var(--color-ink)]'
         ].join(' ')}
       >
@@ -137,6 +185,27 @@ export function Bar(props: BarProps): JSX.Element {
       <IconButton title="Capture screen  (⌘⇧S)" onClick={props.onCapture}>
         {props.capturing ? <Spinner size={14} /> : <Camera size={15} />}
       </IconButton>
+
+      {/* Stealth toggle — whether AskToto shows up in screen shares / recordings (what OTHERS see). */}
+      <button
+        type="button"
+        onClick={props.onToggleStealth}
+        aria-label="Toggle screen-share visibility"
+        aria-pressed={!props.stealth}
+        title={
+          props.stealth
+            ? 'Hidden from screen sharing & recording — others cannot see AskToto. Click to make it visible.'
+            : 'VISIBLE in screen sharing & recording — others can see AskToto. Click to hide it.'
+        }
+        className={[
+          'no-drag focus-ring-strong grid h-[30px] w-[30px] place-items-center rounded-full transition-[transform,background-color,color] duration-[var(--duration-hover)] active:scale-[0.9]',
+          props.stealth
+            ? 'text-[color:var(--color-ink-2)] hover:bg-white/10 hover:text-[color:var(--color-ink)]'
+            : 'bg-[var(--color-danger-soft)] text-[color:var(--color-danger)]'
+        ].join(' ')}
+      >
+        {props.stealth ? <EyeOff size={15} /> : <Eye size={15} />}
+      </button>
 
       <IconButton title="Meeting history" onClick={props.onHistory}>
         <History size={15} />
