@@ -1518,6 +1518,13 @@ export function Settings({
                 </Section>
                 <Section title="Recording consent" desc="Notice shown to you before AskToto records others.">
                   <ToggleRow
+                    label="I will inform participants before recording"
+                    desc="Your acknowledgement that you follow your company's policy and the law when recording. Revocable here."
+                    on={settings.recordingConsent}
+                    onChange={(v) => patch({ recordingConsent: v })}
+                    disabled={settings.managedKeys.includes('recordingConsent')}
+                  />
+                  <ToggleRow
                     label="Require consent reminder"
                     desc='Show the "other participants are being recorded" reminder every time Listen starts.'
                     on={settings.requireConsentIndicator}
