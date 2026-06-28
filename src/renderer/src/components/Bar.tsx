@@ -123,6 +123,11 @@ export function Bar(props: BarProps): JSX.Element {
           if (e.key === 'Enter' && !e.shiftKey) {
             e.preventDefault()
             props.onSubmit()
+          } else if (e.key === 'Escape') {
+            // Universal "get out of my way" on an overlay: clear the field if it has text, else hide.
+            e.preventDefault()
+            if (props.value) props.onChange('')
+            else props.onHide()
           }
         }}
         placeholder="Ask anything…"

@@ -81,7 +81,10 @@ export function Copilot({
   const scroller = useRef<HTMLDivElement>(null)
   useEffect(() => {
     const el = scroller.current
-    if (el) el.scrollTop = el.scrollHeight
+    if (!el) return
+    // Only stick to the bottom if the user is already near it — don't yank them down while they scroll up
+    // to re-read earlier lines mid-meeting.
+    if (el.scrollHeight - el.scrollTop - el.clientHeight < 48) el.scrollTop = el.scrollHeight
   }, [lines])
 
   return (

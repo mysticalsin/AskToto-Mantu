@@ -12,7 +12,6 @@ import { SignInWall } from './components/SignInWall'
 import { ModeIndicator } from './components/ModePicker'
 import { MeetingDetectedToast } from './components/MeetingDetectedToast'
 import { RecordingConsentReminder } from './components/RecordingConsentReminder'
-import { RecordingIndicator } from './components/RecordingIndicator'
 import { QuickActions, type QuickKind } from './components/QuickActions'
 import { useAsk, useAutoResize, useSettings, useAuth } from './state'
 import { useListen, playListenChime } from './lib/listen'
@@ -651,7 +650,6 @@ export function App(): JSX.Element {
         onTogglePanel={() => setCollapsed((c) => !c)}
         focusSignal={focusSignal}
       />
-      {listen.listening && <RecordingIndicator seconds={seconds} />}
       {settings && !settings.providerReady && (
         <button
           type="button"
