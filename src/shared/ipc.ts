@@ -54,6 +54,7 @@ export const IPC = {
   prewarmCapture: 'capture:prewarm',
   openPrivacySettings: 'system:openPrivacySettings',
   armAudio: 'audio:arm',
+  requestMicAccess: 'audio:requestMic',
   saveTranscript: 'transcript:save',
   saveNote: 'note:save',
   pickFolder: 'folder:pick',

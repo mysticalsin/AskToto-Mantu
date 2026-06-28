@@ -62,6 +62,7 @@ const api = {
   openPrivacySettings: (pane: 'microphone' | 'screen' | 'accessibility'): Promise<void> =>
     ipcRenderer.invoke(IPC.openPrivacySettings, pane),
   armAudio: (on: boolean): Promise<void> => ipcRenderer.invoke(IPC.armAudio, on),
+  requestMicAccess: (): Promise<boolean> => ipcRenderer.invoke(IPC.requestMicAccess),
   saveTranscript: (m: SaveMeeting): Promise<{ path: string }> =>
     ipcRenderer.invoke(IPC.saveTranscript, m),
   saveNote: (n: SaveNote): Promise<{ path: string }> => ipcRenderer.invoke(IPC.saveNote, n),

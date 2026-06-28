@@ -186,10 +186,21 @@ export function useListen(onQuestion?: (line: TranscriptLine) => void): ListenAp
       ensureWorker().postMessage({ type: 'init', model: 'Xenova/whisper-tiny' }) // multilingual
       let micOk = false
       let sysOk = false
+      const MIC_HELP =
+        'Allow Microphone for AskToto in System Settings → Privacy & Security, then start Listen again.'
       const openMic = async (): Promise<void> => {
-        const mic = await navigator.mediaDevices.getUserMedia({
-          audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true }
-        })
+        // Request the OS mic permission up front (shows the prompt the first time) so getUserMedia doesn't
+        // reject with an opaque "the user aborted a request" when the mic hasn't been granted yet.
+        const granted = await window.toto.requestMicAccess().catch(() => true)
+        if (!granted) throw new Error(MIC_HELP)
+        let mic: MediaStream
+        try {
+          mic = await navigator.mediaDevices.getUserMedia({
+            audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true }
+          })
+        } catch {
+          throw new Error(MIC_HELP)
+        }
         await openChannel('you', mic)
         micOk = true
       }
