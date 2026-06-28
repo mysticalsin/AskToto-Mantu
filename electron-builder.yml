@@ -78,8 +78,12 @@ appx:
 #      Unsigned macOS zip updates will be rejected by Gatekeeper on install.
 # Until `url` is set, updater.ts detects the `REPLACE-WITH` token in app-update.yml and skips auto-update.
 publish:
-  provider: generic
-  # ↓↓↓ REPLACE-WITH your real HTTPS update host before release (keep `provider: generic`). ↓↓↓
-  url: https://REPLACE-WITH-YOUR-UPDATE-HOST.example.com/asktoto
+  # Updates are served from the PUBLIC AskToto-Releases repo's GitHub Releases — the app *code* repo stays
+  # private, only the built binaries + latest-mac.yml are published there. The installed app checks this repo
+  # on launch, downloads the new version in the background, and installs it on quit (perfect zero-click UX).
+  # To cut a release: create the public repo once (gh repo create mysticalsin/AskToto-Releases --public),
+  # set GH_TOKEN (a PAT with `repo` scope), then run `npm run release`.
+  provider: github
+  owner: mysticalsin
+  repo: AskToto-Releases
   # channel: latest        # (default) bump to `beta`/`alpha` for pre-release rings if you add them.
-  # useMultipleRangeRequest: false  # set false if your host/CDN mishandles HTTP range requests.

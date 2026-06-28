@@ -32,13 +32,28 @@ try {
   process.exit(1)
 }
 
-// Pull the `url:` value out of the `publish:` block (text-only; no YAML dependency).
-// Matches the first `url:` line at any indent and captures the rest of that line.
+// Accept either a `github` provider (owner + repo) or a `generic` provider with an HTTPS url.
+// Text-only checks; no YAML dependency.
+const isGithub = /^\s*provider:\s*github\s*(#.*)?$/m.test(yml)
+const owner = yml.match(/^\s*owner:\s*(\S+)\s*$/m)
+const repo = yml.match(/^\s*repo:\s*(\S+)\s*$/m)
 const urlMatch = yml.match(/^\s*url:\s*(\S.*?)\s*$/m)
 
+if (isGithub) {
+  if (!owner || !repo) {
+    console.error('[check:release] FAIL — github publish needs both `owner:` and `repo:` in electron-builder.yml.')
+    process.exit(1)
+  }
+  if ([owner[1], repo[1]].some((v) => v.includes(PLACEHOLDER_TOKEN))) {
+    console.error('[check:release] FAIL — replace the placeholder github owner/repo before release.')
+    process.exit(1)
+  }
+  console.log(`[check:release] OK — update channel = github releases (${owner[1]}/${repo[1]}).`)
+  process.exit(0)
+}
+
 if (!urlMatch) {
-  console.error('[check:release] FAIL — no `publish.url` found in electron-builder.yml.')
-  console.error('[check:release] Configure a `publish:` block (provider: generic + https url) before release.')
+  console.error('[check:release] FAIL — no update channel. Set `provider: github` (owner+repo) OR `provider: generic` + https `url:`.')
   process.exit(1)
 }
 
@@ -47,8 +62,8 @@ const url = urlMatch[1]
 if (url.includes(PLACEHOLDER_TOKEN)) {
   console.error('[check:release] FAIL — update channel is not configured.')
   console.error(`[check:release] publish.url still contains the "${PLACEHOLDER_TOKEN}" placeholder: ${url}`)
-  console.error('[check:release] Set a real HTTPS update host in electron-builder.yml (see comments there)')
-  console.error('[check:release] before cutting a release, or the shipped app cannot receive security patches.')
+  console.error('[check:release] Set a real HTTPS update host (or switch to provider: github) before release,')
+  console.error('[check:release] or the shipped app cannot receive security patches.')
   process.exit(1)
 }
 
