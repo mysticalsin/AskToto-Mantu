@@ -4,6 +4,7 @@ import { readFileSync, writeFileSync, existsSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import type { AuthStatus, SignInResult } from '@shared/ipc'
 import { getSettings } from './store'
+import { auditLog } from './logger'
 
 /**
  * Azure AD (Microsoft Entra) sign-in gate.
@@ -105,6 +106,84 @@ function sessionPath(): string {
 let session: Session | null = null
 let loaded = false
 
+/**
+ * Max age a locally-cached session is trusted before fresh interactive sign-in is required. The
+ * persisted auth-session.bin is a CACHE, not the authority — past this age it's dropped on read.
+ */
+const MAX_SESSION_AGE_MS = 7 * 24 * 60 * 60 * 1000 // 7 days
+/** Cadence of the background session re-validation sweep. */
+const REVALIDATE_INTERVAL_MS = 30 * 60 * 1000 // 30 min
+
+let revalidationTimer: ReturnType<typeof setInterval> | null = null
+
+/** Drop the current session from memory AND disk (mirrors the stale-domain / sign-out clear path). */
+function clearSession(): void {
+  session = null
+  try {
+    if (existsSync(sessionPath())) rmSync(sessionPath())
+  } catch {
+    /* best-effort */
+  }
+}
+
+/**
+ * Why a cached session should no longer be trusted, or null if it's still valid. Validity = within the
+ * max local age AND (when SSO is configured) still matching the allowed domain. Anything past these
+ * bounds forces fresh interactive sign-in.
+ */
+function expiryReason(s: Session, cfg: AzureConfig | null): 'max_age' | 'domain' | null {
+  if (typeof s.at !== 'number' || Date.now() - s.at > MAX_SESSION_AGE_MS) return 'max_age'
+  if (cfg && s.domain !== cfg.allowedDomain) return 'domain'
+  return null
+}
+
+/**
+ * Post-startup + periodic re-validation. The sign-in flow uses an ephemeral PublicClientApplication
+ * with no persisted MSAL token cache, so there's no cached account to acquireTokenSilent against;
+ * re-validation is therefore a re-check of max local age + config-domain match, clearing (memory +
+ * disk) and auditing on violation. If a persisted MSAL cache is wired later, add the silent-refresh
+ * call here and emit auditLog('auth.refresh_failed', {}) on its failure.
+ */
+function revalidateSession(): void {
+  loadSession()
+  if (!session) return
+  const reason = expiryReason(session, readConfig())
+  if (reason) {
+    clearSession()
+    auditLog('auth.expired', { reason })
+  }
+}
+
+/** Stop the background re-validation timer (teardown hook). */
+function stopRevalidationTimer(): void {
+  if (revalidationTimer) {
+    clearInterval(revalidationTimer)
+    revalidationTimer = null
+  }
+}
+
+/** Start the re-validation timer exactly once: a kick shortly after startup, then every interval. */
+function ensureRevalidationTimer(): void {
+  if (revalidationTimer) return
+  const sweep = (): void => {
+    try {
+      revalidateSession()
+    } catch {
+      /* re-validation is best-effort */
+    }
+  }
+  const kick = setTimeout(sweep, 10_000)
+  if (typeof kick.unref === 'function') kick.unref()
+  revalidationTimer = setInterval(sweep, REVALIDATE_INTERVAL_MS)
+  if (typeof revalidationTimer.unref === 'function') revalidationTimer.unref()
+  // Clear the interval on app quit so it doesn't outlive the process.
+  try {
+    app.on('will-quit', stopRevalidationTimer)
+  } catch {
+    /* app may be unavailable (e.g. tests) */
+  }
+}
+
 function loadSession(): void {
   if (loaded) return
   loaded = true
@@ -119,6 +198,12 @@ function loadSession(): void {
     session = JSON.parse(safeStorage.decryptString(buf)) as Session
   } catch {
     session = null
+  }
+  // Treat the file as a CACHE: a session past the max local age is evicted on read (memory + disk),
+  // forcing fresh interactive sign-in. (Config-domain re-validation needs cfg and runs in authStatus.)
+  if (session && (typeof session.at !== 'number' || Date.now() - session.at > MAX_SESSION_AGE_MS)) {
+    clearSession()
+    auditLog('auth.expired', { reason: 'max_age' })
   }
 }
 
@@ -137,16 +222,19 @@ function saveSession(s: Session): void {
 export function authStatus(): AuthStatus {
   loadSession()
   const cfg = readConfig()
-  // If config changed (e.g. domain) and an old session no longer matches, drop it — from memory AND
-  // disk, so a stale-domain session can't linger in auth-session.bin past the `loaded` latch.
-  if (cfg && session && session.domain !== cfg.allowedDomain) {
-    session = null
-    try {
-      if (existsSync(sessionPath())) rmSync(sessionPath())
-    } catch {
-      /* best-effort */
+  // The persisted session is a CACHE, not the authority. Drop it — from memory AND disk — once it
+  // exceeds the max local age OR (config changed) no longer matches the allowed domain, so a stale
+  // session can't linger in auth-session.bin past the `loaded` latch. This also catches a session
+  // that crosses the max-age boundary mid-run (loadSession only runs once).
+  if (session) {
+    const reason = expiryReason(session, cfg)
+    if (reason) {
+      clearSession()
+      auditLog('auth.expired', { reason })
     }
   }
+  // Bootstrap the background re-validation sweep on first status check (idempotent).
+  ensureRevalidationTimer()
   return {
     configured: !!cfg,
     signedIn: !!session,
@@ -253,9 +341,11 @@ export async function signIn(): Promise<SignInResult> {
     const tid = claims.tid || ''
 
     if (tid !== cfg.tenantId) {
+      auditLog('auth.denied', { domain: cfg.allowedDomain })
       return { ok: false, configured: true, error: 'That account is outside your organization.' }
     }
     if (!email.endsWith(`@${cfg.allowedDomain.toLowerCase()}`)) {
+      auditLog('auth.denied', { domain: cfg.allowedDomain })
       return { ok: false, configured: true, error: `Use your @${cfg.allowedDomain} account.` }
     }
 
@@ -266,6 +356,7 @@ export async function signIn(): Promise<SignInResult> {
       tid,
       at: Date.now()
     })
+    auditLog('auth.signin', { domain: cfg.allowedDomain })
     return { ok: true, configured: true, email }
   } catch (e) {
     return { ok: false, configured: true, error: e instanceof Error ? e.message : String(e) }
@@ -273,10 +364,6 @@ export async function signIn(): Promise<SignInResult> {
 }
 
 export function signOut(): void {
-  session = null
-  try {
-    if (existsSync(sessionPath())) rmSync(sessionPath())
-  } catch {
-    /* ignore */
-  }
+  clearSession()
+  auditLog('auth.signout')
 }

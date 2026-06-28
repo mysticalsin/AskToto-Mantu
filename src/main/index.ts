@@ -13,7 +13,7 @@ import {
   nativeImage
 } from 'electron'
 import { join, basename } from 'node:path'
-import { readFileSync, existsSync } from 'node:fs'
+import { readFileSync, existsSync, writeFileSync } from 'node:fs'
 import {
   IPC,
   AskStartSchema,
@@ -28,6 +28,8 @@ import {
   getSettings,
   setSettings,
   getLockedKeys,
+  getAllowedProviders,
+  getEnvKeyProviders,
   getApiKey,
   setApiKey,
   clearApiKey,
@@ -39,6 +41,7 @@ import {
 } from './store'
 import { createStream } from './llm'
 import { buildSystem } from './personas'
+import { initLogging, mainLog, auditLog } from './logger'
 import { authStatus, signIn as authSignIn, signOut as authSignOut, requireAuth } from './auth'
 import {
   saveMeeting,
@@ -61,9 +64,6 @@ import { routeTier } from '@shared/routing'
 
 const BAR_WIDTH = 700
 const BAR_HEIGHT = 64
-// Cluely-style settings window: a wider, fixed two-pane surface (sidebar + content).
-const SETTINGS_WIDTH = 920
-const SETTINGS_HEIGHT = 640
 
 /** Content protection hides the window from screen capture. Disable via env for dev/screenshots. */
 function contentProtectionOn(): boolean {
@@ -74,7 +74,6 @@ function contentProtectionOn(): boolean {
 let win: BrowserWindow | null = null
 let tray: Tray | null = null
 let audioArmed = false // loopback capture only granted during an explicit user-initiated Listen
-let settingsMode = false // when true the window is the fixed Cluely settings surface, not the bar
 let lastBarHeight = BAR_HEIGHT // remember the bar's content height to restore on settings exit
 const streams = new Map<string, { abort: () => void }>()
 
@@ -123,7 +122,7 @@ function publicSettings(): PublicSettings {
     (s.provider === 'dust'
       ? !!s.dustWorkspaceId.trim() && !!s.providerModels.dust
       : s.provider === 'custom'
-        ? /^https:\/\//i.test(s.customBaseUrl)
+        ? /^https:\/\//i.test(s.customBaseUrl) && !!s.providerModels.custom
         : true)
   return {
     ...s,
@@ -133,6 +132,7 @@ function publicSettings(): PublicSettings {
     hasEncryption: encryptionAvailable(),
     resolvedMeetingsFolder: resolveMeetingsFolder(s),
     managedKeys: getLockedKeys(),
+    envKeys: getEnvKeyProviders(),
     loginItemOpenAtLogin
   }
 }
@@ -225,8 +225,6 @@ function createWindow(): void {
 
 function resizeTo(height: number): void {
   if (!win) return
-  // In settings mode the window is a fixed-size two-pane surface; ignore content-driven height.
-  if (settingsMode) return
   // Clamp + reposition against the display the OVERLAY is actually on (not the cursor's). Otherwise, on a
   // laptop + external monitor of different heights, a streaming answer clamps to the wrong monitor and the
   // window jumps vertically while the cursor sits on the other screen.
@@ -245,30 +243,116 @@ function resizeTo(height: number): void {
  * Settings keeps the same top edge (so it grows downward from the bar) and centers horizontally,
  * clamped to the work area. Exiting restores the bar's width and last content height.
  */
-function setWindowMode(mode: 'bar' | 'settings'): void {
+// Re-center the compact bar on its current display. The old fixed 'settings' window-mode was removed —
+// settings renders as a panel under the bar now, so the window only ever lives in 'bar' mode.
+function setWindowMode(): void {
   if (!win) return
   const { workArea } = screen.getDisplayMatching(win.getBounds())
   const b = win.getBounds()
-  if (mode === 'settings') {
-    settingsMode = true
-    const w = Math.min(SETTINGS_WIDTH, workArea.width - 32)
-    const h = Math.min(SETTINGS_HEIGHT, workArea.height - 48)
-    let x = Math.round(b.x + (b.width - w) / 2) // expand around the bar's center
-    x = Math.max(workArea.x + 16, Math.min(x, workArea.x + workArea.width - w - 16))
-    const y = Math.max(workArea.y + 16, Math.min(b.y, workArea.y + workArea.height - h - 16))
-    win.setBounds({ x, y, width: w, height: h }, false)
-  } else {
-    settingsMode = false
-    let x = Math.round(b.x + (b.width - BAR_WIDTH) / 2)
-    x = Math.max(workArea.x + 16, Math.min(x, workArea.x + workArea.width - BAR_WIDTH - 16))
-    win.setBounds({ x, y: b.y, width: BAR_WIDTH, height: lastBarHeight }, false)
-  }
+  let x = Math.round(b.x + (b.width - BAR_WIDTH) / 2)
+  x = Math.max(workArea.x + 16, Math.min(x, workArea.x + workArea.width - BAR_WIDTH - 16))
+  win.setBounds({ x, y: b.y, width: BAR_WIDTH, height: lastBarHeight }, false)
 }
 
 function sendHotkey(action: HotkeyAction): void {
   if (!win) return
   if (!win.isVisible()) win.show()
   win.webContents.send(IPC.hotkey, action)
+}
+
+let fatalHandled = false
+/**
+ * Log + audit + dump any unhandled error. For a fatal exception, offer a ONE-TIME relaunch — but default to
+ * "Continue" so a benign async error never kills the overlay. No crashReporter upload by design (zero telemetry).
+ */
+function onFatal(kind: 'uncaughtException' | 'unhandledRejection', err: unknown): void {
+  const detail = err instanceof Error ? err.stack || err.message : String(err)
+  try {
+    mainLog.error(`[${kind}]`, detail)
+    auditLog('app.crash', { kind, message: err instanceof Error ? err.message : String(err) })
+    writeFileSync(
+      join(app.getPath('userData'), `crash-${Date.now()}.log`),
+      `${new Date().toISOString()} ${kind}\n${detail}\n`,
+      { mode: 0o600 }
+    )
+  } catch {
+    /* logging is best-effort — never throw out of the crash handler */
+  }
+  if (kind !== 'uncaughtException' || fatalHandled) return
+  fatalHandled = true
+  try {
+    const choice = dialog.showMessageBoxSync({
+      type: 'error',
+      title: 'AskToto hit a problem',
+      message: 'AskToto ran into an unexpected error.',
+      detail: 'A crash report was saved to your AskToto data folder. Relaunch now, or keep going.',
+      buttons: ['Relaunch AskToto', 'Continue'],
+      defaultId: 1,
+      cancelId: 1
+    })
+    if (choice === 0) {
+      app.relaunch()
+      app.exit(0)
+    }
+  } catch {
+    /* if the dialog itself fails, leave the app running */
+  }
+}
+
+// --- Screen capture (cached + pre-warmable for vision latency) -----------------------------------------
+// A vision ask issued within CAPTURE_TTL_MS of a (pre-warmed) capture reuses the JPEG instead of paying the
+// ~150-450ms capture cost again. Kept tiny so the screen the model sees is never visibly stale.
+const CAPTURE_TTL_MS = 1500
+let shotCache: { image: string; width: number; height: number; ts: number } | null = null
+
+async function captureScreenshot(): Promise<{ image: string; width: number; height: number }> {
+  const disp = screen.getDisplayNearestPoint(screen.getCursorScreenPoint())
+  const sf = disp.scaleFactor || 1
+  // Render the thumbnail already capped at VISION_MAX_EDGE (smaller = faster capture + ~50% smaller upload
+  // + ~33% less model prefill). 1280px keeps dense on-screen text legible; q72 JPEG.
+  const VISION_MAX_EDGE = 1280
+  const VISION_JPEG_Q = 72
+  const fullW = Math.round(disp.size.width * sf)
+  const fullH = Math.round(disp.size.height * sf)
+  const capScale = Math.min(1, VISION_MAX_EDGE / Math.max(fullW, fullH))
+  const sources = await desktopCapturer.getSources({
+    types: ['screen'],
+    thumbnailSize: {
+      width: Math.max(1, Math.round(fullW * capScale)),
+      height: Math.max(1, Math.round(fullH * capScale))
+    }
+  })
+  const src = sources.find((s) => String(s.display_id) === String(disp.id)) ?? sources[0]
+  if (!src) throw new Error('No screen source available (grant Screen Recording permission)')
+  let img = src.thumbnail
+  const sz = img.getSize()
+  const maxEdge = Math.max(sz.width, sz.height)
+  if (maxEdge > VISION_MAX_EDGE) {
+    const scale = VISION_MAX_EDGE / maxEdge
+    img = img.resize({ width: Math.round(sz.width * scale), height: Math.round(sz.height * scale) })
+  }
+  const jpeg = img.toJPEG(VISION_JPEG_Q)
+  const size = img.getSize()
+  return { image: jpeg.toString('base64'), width: size.width, height: size.height }
+}
+
+async function getScreenshot(): Promise<{ image: string; width: number; height: number }> {
+  if (shotCache && Date.now() - shotCache.ts < CAPTURE_TTL_MS) {
+    const { image, width, height } = shotCache
+    return { image, width, height }
+  }
+  const shot = await captureScreenshot()
+  shotCache = { ...shot, ts: Date.now() }
+  auditLog('capture.screen', { width: shot.width, height: shot.height, bytes: shot.image.length })
+  return shot
+}
+
+/** Fill the cache + warm the OS capture pipeline ahead of a real ask. Fire-and-forget; auth-gated. */
+function prewarmCapture(): void {
+  if (!requireAuth()) return
+  getScreenshot().catch(() => {
+    /* best-effort warm */
+  })
 }
 
 function moveBy(dx: number, dy: number): void {
@@ -398,6 +482,7 @@ function registerIpc(): void {
   ipcMain.handle(IPC.settingsSet, (e, patch) => {
     assertMainWindow(e)
     const next = setSettings(patch ?? {})
+    auditLog('settings.changed', { keys: Object.keys(patch ?? {}) })
     win?.setContentProtection(contentProtectionOn())
     try {
       app.setLoginItemSettings({ openAtLogin: next.launchAtLogin })
@@ -413,6 +498,7 @@ function registerIpc(): void {
     assertMainWindow(e)
     const parsed = SetApiKeyPayloadSchema.parse(payload)
     setApiKey(parsed.provider, parsed.key)
+    auditLog('key.set', { provider: parsed.provider })
     return { hasKeys: hasKeysMap() }
   })
 
@@ -420,6 +506,7 @@ function registerIpc(): void {
     assertMainWindow(e)
     const parsed = ClearApiKeyPayloadSchema.parse(payload)
     clearApiKey(parsed.provider)
+    auditLog('key.removed', { provider: parsed.provider })
     return { hasKeys: hasKeysMap() }
   })
 
@@ -457,9 +544,11 @@ function registerIpc(): void {
     assertMainWindow(e)
     return authStatus()
   })
-  ipcMain.handle(IPC.authSignIn, (e) => {
+  ipcMain.handle(IPC.authSignIn, async (e) => {
     assertMainWindow(e)
-    return authSignIn()
+    const status = await authSignIn()
+    prewarmCapture() // warm the cold capture pipeline now that we're signed in (no-op if not authed)
+    return status
   })
   ipcMain.handle(IPC.authSignOut, (e) => {
     assertMainWindow(e)
@@ -469,35 +558,12 @@ function registerIpc(): void {
   ipcMain.handle(IPC.captureScreen, async (event) => {
     assertMainWindow(event)
     if (!requireAuth()) throw new Error('Not signed in.')
-    const disp = screen.getDisplayNearestPoint(screen.getCursorScreenPoint())
-    const sf = disp.scaleFactor || 1
-    // Vision latency: render the thumbnail already capped at VISION_MAX_EDGE (smaller = faster capture +
-    // ~50% smaller upload + ~33% less model prefill). 1280px keeps dense on-screen text legible; q72 JPEG.
-    const VISION_MAX_EDGE = 1280
-    const VISION_JPEG_Q = 72
-    const fullW = Math.round(disp.size.width * sf)
-    const fullH = Math.round(disp.size.height * sf)
-    const capScale = Math.min(1, VISION_MAX_EDGE / Math.max(fullW, fullH))
-    const sources = await desktopCapturer.getSources({
-      types: ['screen'],
-      thumbnailSize: {
-        width: Math.max(1, Math.round(fullW * capScale)),
-        height: Math.max(1, Math.round(fullH * capScale))
-      }
-    })
-    const src =
-      sources.find((s) => String(s.display_id) === String(disp.id)) ?? sources[0]
-    if (!src) throw new Error('No screen source available (grant Screen Recording permission)')
-    let img = src.thumbnail
-    const sz = img.getSize()
-    const maxEdge = Math.max(sz.width, sz.height)
-    if (maxEdge > VISION_MAX_EDGE) {
-      const scale = VISION_MAX_EDGE / maxEdge
-      img = img.resize({ width: Math.round(sz.width * scale), height: Math.round(sz.height * scale) })
-    }
-    const jpeg = img.toJPEG(VISION_JPEG_Q)
-    const size = img.getSize()
-    return { image: jpeg.toString('base64'), width: size.width, height: size.height }
+    return getScreenshot()
+  })
+  // Pre-warm: prime the cache + spin up the OS capture pipeline so the next real vision ask is instant.
+  ipcMain.handle(IPC.prewarmCapture, (e) => {
+    assertMainWindow(e)
+    prewarmCapture()
   })
 
   ipcMain.handle(IPC.askStart, (e, raw) => {
@@ -516,69 +582,92 @@ function registerIpc(): void {
     try {
     const req = AskStartSchema.parse(raw)
     const s = getSettings()
-    const provider = s.provider
-    const def = PROVIDERS[provider]
-    const key = getApiKey(provider)
-    if (!key) {
-      win?.webContents.send(IPC.streamError, {
-        id: req.id,
-        message: `No API key for ${def.label}. Open Settings (gear) and add it.`
-      })
-      return
+    const allowed = getAllowedProviders() // org allowlist (null = unrestricted)
+
+    // Find the next eligible keyed provider not yet tried — for failover when the primary can't answer.
+    const failover = (tried: ProviderId[]): boolean => {
+      const tier = routeTier(req, s.thinkingMode)
+      const next = (Object.keys(PROVIDERS) as ProviderId[]).find(
+        (p) =>
+          !tried.includes(p) &&
+          (!allowed || allowed.includes(p)) &&
+          getApiKey(p).length > 0 &&
+          (req.mode !== 'vision' || PROVIDERS[p].vision) &&
+          !!resolveModelTier(p, s.providerModels, s.providerModelsThinking, tier)
+      )
+      if (!next) return false
+      attempt(next, tried)
+      return true
     }
-    // Route to the base (fast/cheap, e.g. Haiku) or think (stronger, e.g. Sonnet) tier per the user's
-    // thinking-mode policy and the question's difficulty. For Dust this picks base vs thinking agent.
-    const tier = routeTier(req, s.thinkingMode)
-    const model = resolveModelTier(provider, s.providerModels, s.providerModelsThinking, tier)
-    if (!model) {
-      win?.webContents.send(IPC.streamError, {
-        id: req.id,
-        message:
-          provider === 'dust'
+
+    // Validate a provider, start the stream, and on a PRE-token (TTFT) failure fall over to the next one.
+    const attempt = (provider: ProviderId, attempted: ProviderId[]): void => {
+      const def = PROVIDERS[provider]
+      if (allowed && !allowed.includes(provider)) {
+        auditLog('provider.blocked', { provider })
+        if (attempted.length === 0)
+          win?.webContents.send(IPC.streamError, {
+            id: req.id,
+            message: `${def.label} is not on your organization's approved provider list.`
+          })
+        else if (!failover(attempted.concat(provider))) win?.webContents.send(IPC.streamError, { id: req.id, message: 'No approved provider could answer.' })
+        return
+      }
+      const key = getApiKey(provider)
+      const tier = routeTier(req, s.thinkingMode)
+      const model = resolveModelTier(provider, s.providerModels, s.providerModelsThinking, tier)
+      const ineligible = !key
+        ? `No API key for ${def.label}. Open Settings (gear) and add it.`
+        : !model
+          ? provider === 'dust'
             ? `No ${tier === 'think' ? 'thinking' : 'base'} Dust agent set. Open Settings → Connect Dust and pick your agents.`
             : `No model set for ${def.label}. Pick a model in Settings.`
-      })
-      return
-    }
-    if (req.mode === 'vision' && !def.vision) {
-      win?.webContents.send(IPC.streamError, {
-        id: req.id,
-        message: `${def.label} can't read screenshots. Switch to Claude or GPT in Settings, or ask without a screen capture.`
-      })
-      return
-    }
-    if (provider === 'dust' && !s.dustWorkspaceId) {
-      win?.webContents.send(IPC.streamError, {
-        id: req.id,
-        message: 'Add your Dust workspace ID in Settings → Your AI → Dust setup.'
-      })
-      return
-    }
-    const baseURL =
-      provider === 'custom' ? s.customBaseUrl : provider === 'dust' ? s.dustBaseUrl : def.baseUrl
-    const handle = createStream({
-      providerId: provider,
-      kind: def.kind,
-      apiKey: key,
-      baseURL,
-      workspaceId: s.dustWorkspaceId,
-      model,
-      temperature: s.temperature,
-      system: buildSystem(req, s.mode, s.profile, s.modePrompts, s.contextDocs[s.mode] || [], s.outputLanguage, s.summaryLanguage),
-      req,
-      handlers: {
-        onDelta: (text) => win?.webContents.send(IPC.streamDelta, { id: req.id, text }),
-        onDone: (u) => {
-          streams.delete(req.id)
-          win?.webContents.send(IPC.streamDone, { id: req.id, ...u })
-        },
-        onError: (message) => {
-          streams.delete(req.id)
-          win?.webContents.send(IPC.streamError, { id: req.id, message })
-        }
+          : req.mode === 'vision' && !def.vision
+            ? `${def.label} can't read screenshots. Switch to Claude or GPT in Settings, or ask without a screen capture.`
+            : provider === 'dust' && !s.dustWorkspaceId
+              ? 'Add your Dust workspace ID in Settings → Your AI → Dust setup.'
+              : ''
+      if (ineligible) {
+        if (attempted.length === 0) win?.webContents.send(IPC.streamError, { id: req.id, message: ineligible })
+        else failover(attempted.concat(provider)) // a bad fallback — just skip to the next
+        return
       }
-    })
-    streams.set(req.id, handle)
+      const baseURL =
+        provider === 'custom' ? s.customBaseUrl : provider === 'dust' ? s.dustBaseUrl : def.baseUrl
+      auditLog('provider.request', { provider, model, mode: req.mode, tier, retry: attempted.length > 0 })
+      let gotToken = false
+      const handle = createStream({
+        providerId: provider,
+        kind: def.kind,
+        apiKey: key,
+        baseURL,
+        workspaceId: s.dustWorkspaceId,
+        model,
+        temperature: s.temperature,
+        system: buildSystem(req, s.mode, s.profile, s.modePrompts, s.contextDocs[s.mode] || [], s.outputLanguage, s.summaryLanguage, s.systemPrompt),
+        req,
+        handlers: {
+          onDelta: (text) => {
+            gotToken = true
+            win?.webContents.send(IPC.streamDelta, { id: req.id, text })
+          },
+          onDone: (u) => {
+            streams.delete(req.id)
+            win?.webContents.send(IPC.streamDone, { id: req.id, ...u })
+          },
+          onError: (message) => {
+            streams.delete(req.id)
+            auditLog('provider.failed', { provider, gotToken })
+            // Fall over only on a PRE-token failure (the user hasn't seen a partial answer yet).
+            if (!gotToken && failover(attempted.concat(provider))) return
+            win?.webContents.send(IPC.streamError, { id: req.id, message })
+          }
+        }
+      })
+      streams.set(req.id, handle)
+    }
+
+    attempt(s.provider, [])
     } catch (e) {
       win?.webContents.send(IPC.streamError, {
         id,
@@ -685,9 +774,9 @@ function registerIpc(): void {
     assertMainWindow(e)
     resizeTo(payload?.height ?? BAR_HEIGHT)
   })
-  ipcMain.handle(IPC.windowMode, (e, mode: unknown) => {
+  ipcMain.handle(IPC.windowMode, (e) => {
     assertMainWindow(e)
-    setWindowMode(mode === 'settings' ? 'settings' : 'bar')
+    setWindowMode()
   })
   // Drag the overlay from anywhere on the bar (the renderer's JS drag drives this with screen-pixel deltas).
   ipcMain.handle(IPC.windowMoveBy, (e, d: unknown) => {
@@ -721,10 +810,11 @@ if (!app.requestSingleInstanceLock()) {
     }
   })
   app.whenReady().then(async () => {
-  // Never let an unhandled error crash the overlay silently — log and keep the tray app alive.
-  // (No crashReporter upload by design: AskToto ships zero telemetry.)
-  process.on('uncaughtException', (err) => console.error('[uncaughtException]', err))
-  process.on('unhandledRejection', (reason) => console.error('[unhandledRejection]', reason))
+  initLogging() // route main-process logs to a rotated file before anything else can fail
+  // Never let an unhandled error crash the overlay silently — log to file, audit, write a crash dump, and
+  // (for a fatal exception) offer a one-time relaunch while defaulting to keep-alive.
+  process.on('uncaughtException', (err) => onFatal('uncaughtException', err))
+  process.on('unhandledRejection', (reason) => onFatal('unhandledRejection', reason))
   if (process.env.ASKTOTO_SELFTEST) {
     try {
       await runSelfTest(process.env.ASKTOTO_SELFTEST)
