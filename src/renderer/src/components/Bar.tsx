@@ -98,6 +98,7 @@ export function Bar(props: BarProps): JSX.Element {
         ref={inputRef}
         value={props.value}
         onChange={(e) => props.onChange(e.target.value)}
+        onFocus={() => void window.toto.prewarmCapture()} // prime the screenshot cache for an instant vision ask
         onPointerDown={(e) => {
           if (e.button === 0) {
             dragRef.current = { x: e.screenX, y: e.screenY }

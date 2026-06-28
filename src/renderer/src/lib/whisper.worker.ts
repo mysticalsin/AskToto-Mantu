@@ -1,8 +1,13 @@
 /// <reference lib="webworker" />
 import { pipeline, env } from '@huggingface/transformers'
 
-// Fetch models from the HF hub (no local model files bundled).
+// Model source + offline behavior. Default source = the HF hub, but cache the download in IndexedDB so
+// transcription works OFFLINE after the first run, and pin a model revision so an upstream change can't
+// silently swap the model out from under us. For a fully air-gapped install, drop the model files under a
+// served `models/` path and set env.localModelPath + env.allowLocalModels = true (remote stays the fallback).
 env.allowLocalModels = false
+env.useBrowserCache = true
+const MODEL_REVISION = 'main' // pin to a specific commit SHA in production to resist upstream drift/tampering
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 let asr: any = null
@@ -17,7 +22,8 @@ self.onmessage = async (e: MessageEvent): Promise<void> => {
     loading = true
     try {
       asr = await pipeline('automatic-speech-recognition', msg.model || 'Xenova/whisper-tiny', {
-        dtype: 'q8'
+        dtype: 'q8',
+        revision: MODEL_REVISION
       })
       post({ type: 'ready' })
     } catch (err) {

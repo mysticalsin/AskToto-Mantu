@@ -58,6 +58,7 @@ const api = {
   ask: (req: AskStart): Promise<void> => ipcRenderer.invoke(IPC.askStart, req),
   cancel: (id: string): Promise<void> => ipcRenderer.invoke(IPC.askCancel, id),
   capture: (): Promise<CaptureResult> => ipcRenderer.invoke(IPC.captureScreen),
+  prewarmCapture: (): Promise<void> => ipcRenderer.invoke(IPC.prewarmCapture),
   armAudio: (on: boolean): Promise<void> => ipcRenderer.invoke(IPC.armAudio, on),
   saveTranscript: (m: SaveMeeting): Promise<{ path: string }> =>
     ipcRenderer.invoke(IPC.saveTranscript, m),
