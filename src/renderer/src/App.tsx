@@ -376,8 +376,8 @@ export function App(): JSX.Element {
   const retryAnswer = useCallback(() => {
     const p = ask.answer?.prompt
     if (!p) return
-    const id = ask.run({ mode: 'answer', prompt: p, history: historyRef.current })
-    pendingUserRef.current = { id, q: p }
+    const id = ask.retry() // replays the original request verbatim (keeps the screenshot for vision retries)
+    if (id) pendingUserRef.current = { id, q: p }
   }, [ask])
 
   const reset = useCallback(() => {
@@ -663,10 +663,11 @@ export function App(): JSX.Element {
           Add your {PROVIDERS[settings.provider].label} API key to start asking
         </button>
       )}
-      <QuickActions
-        onAction={onQuickAction}
-        hint={listen.listening ? 'Quick actions work on the live conversation' : 'Quick actions use your screen or typed input'}
-      />
+      {/* Quick actions only on the answer/idle surface — not over Settings/History/Review, and not during
+          Listen (Copilot shows its own in-meeting action row there). */}
+      {view === 'answer' && !listen.listening && (
+        <QuickActions onAction={onQuickAction} hint="Quick actions use your screen or typed input" />
+      )}
       {panelOpen &&
         (view === 'settings' || DEMO === 'settings' ? (
           // Settings is its own self-contained panel — render directly under the bar (bar stays on top).
