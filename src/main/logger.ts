@@ -1,0 +1,66 @@
+import log from 'electron-log'
+import { app } from 'electron'
+import { join } from 'node:path'
+
+let initialized = false
+
+/**
+ * Route main-process logs to a rotated file (production logs were previously discarded). Best-effort —
+ * logging must never throw into app code. Call once, early in app startup.
+ */
+export function initLogging(): void {
+  if (initialized) return
+  initialized = true
+  try {
+    log.transports.file.level = 'info'
+    log.transports.file.maxSize = 5 * 1024 * 1024 // 5MB; electron-log rotates the file to *.old past this
+    log.transports.console.level = process.env.NODE_ENV === 'development' ? 'silly' : false
+  } catch {
+    /* logging is best-effort */
+  }
+}
+
+/** The shared main logger (file + dev console). Use for diagnostics + crash dumps. */
+export const mainLog = log
+
+// A separate, append-only AUDIT log for security-relevant events — one JSON object per line, its own
+// rotated file (userData/logs/audit.log), kept distinct from the noisy diagnostic log.
+const audit = log.create({ logId: 'audit' })
+try {
+  audit.transports.console.level = false
+  audit.transports.file.level = 'info'
+  audit.transports.file.maxSize = 5 * 1024 * 1024
+  audit.transports.file.format = '{text}' // we format the whole line as JSON ourselves
+  audit.transports.file.resolvePathFn = (): string => join(app.getPath('userData'), 'logs', 'audit.log')
+} catch {
+  /* best-effort */
+}
+
+export type AuditEvent =
+  | 'auth.signin'
+  | 'auth.signout'
+  | 'auth.expired'
+  | 'auth.refresh_failed'
+  | 'auth.denied'
+  | 'key.set'
+  | 'key.removed'
+  | 'capture.screen'
+  | 'transcript.saved'
+  | 'note.saved'
+  | 'provider.request'
+  | 'provider.failed'
+  | 'provider.blocked'
+  | 'settings.changed'
+  | 'app.crash'
+
+/**
+ * Append a structured audit record. NEVER pass secrets or message/transcript CONTENT — metadata only
+ * (provider id, mode, outcome, byte counts, domain, event type). Best-effort; never throws.
+ */
+export function auditLog(event: AuditEvent, detail: Record<string, unknown> = {}): void {
+  try {
+    audit.info(JSON.stringify({ ts: new Date().toISOString(), event, ...detail }))
+  } catch {
+    /* never let auditing break the app */
+  }
+}

@@ -97,6 +97,24 @@ export function getLockedKeys(): string[] {
   return [...new Set([...user, ...machine])]
 }
 
+/**
+ * Optional org allowlist of LLM provider ids (data-residency / governance), from managed-config
+ * `allowedProviders`. Null = no restriction (all providers allowed). Enforced in the main process before
+ * any screen/transcript egress, so a policy can confine data to approved/DPA-backed providers.
+ */
+export function getAllowedProviders(): string[] | null {
+  const v = (validatedManaged() as { allowedProviders?: unknown }).allowedProviders
+  if (!Array.isArray(v) || v.length === 0) return null
+  const list = v.filter((x): x is string => typeof x === 'string')
+  return list.length ? list : null
+}
+
+/** Providers whose key currently comes from an environment variable — for those, in-app 'Remove' is a
+ *  no-op (the env still resolves), so the UI shows a 'set via environment variable' chip instead. */
+export function getEnvKeyProviders(): string[] {
+  return PROVIDER_IDS.filter((p) => !!process.env[ENV_VAR[p]])
+}
+
 // Sensitive user data (context docs = pasted reference material, profile = resume/JD/notes) lives in
 // settings.json. Encrypt the whole user-overrides file at rest via the OS keychain (safeStorage) so it
 // isn't readable as plaintext on disk. Plaintext files (legacy, or platforms without a keyring) are still

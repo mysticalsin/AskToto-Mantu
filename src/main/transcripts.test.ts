@@ -1,10 +1,15 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { mkdtempSync, rmSync, readFileSync, readdirSync } from 'node:fs'
+import { mkdtempSync, rmSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
+import { generateKeyPairSync, privateDecrypt, createDecipheriv, constants } from 'node:crypto'
 import { safeStorage } from 'electron'
 import { saveMeeting, readSavedFile, isEncryptedFile } from './transcripts'
 import type { SaveMeeting, Settings } from '@shared/ipc'
+
+const V2_MARKER = 'ATKENC2\n'
+const parseEnvelope = (file: string): Record<string, unknown> =>
+  JSON.parse(readFileSync(file).subarray(V2_MARKER.length).toString('utf8'))
 
 vi.mock('electron')
 
@@ -19,11 +24,13 @@ describe('transcripts', () => {
   let settings: Settings
 
   beforeEach(() => {
+    delete process.env.ASKTOTO_ESCROW_PUBKEY // isolate escrow tests from each other and the host env
     folder = mkdtempSync(join(tmpdir(), 'asktoto-transcripts-test-'))
     settings = { ...baseSettings(), meetingsFolder: folder }
   })
 
   afterEach(() => {
+    delete process.env.ASKTOTO_ESCROW_PUBKEY
     rmSync(folder, { recursive: true, force: true })
     vi.restoreAllMocks()
   })
@@ -58,6 +65,68 @@ describe('transcripts', () => {
       ? readFileSync(join(folder, 'index.md'), 'utf8')
       : ''
     expect(idx).not.toContain('Secret board meeting')
+  })
+
+  it('writes a v2 envelope and round-trips when no escrow key is configured (no regression)', async () => {
+    delete process.env.ASKTOTO_ESCROW_PUBKEY
+    const enc = { ...settings, encryptTranscripts: true } as Settings
+    const file = await saveMeeting(enc, {
+      title: 'Quarterly review',
+      mode: 'meeting',
+      startedAt: 1_700_000_000_000,
+      lines: [{ speaker: 'them', text: 'SECRET-NO-ESCROW', t: 1_700_000_000_000 }],
+      recap: ''
+    })
+    const buf = readFileSync(file)
+    expect(buf.subarray(0, V2_MARKER.length).toString('utf8')).toBe(V2_MARKER) // v2 magic marker
+    expect(isEncryptedFile(file)).toBe(true)
+    expect(buf.toString('utf8')).not.toContain('SECRET-NO-ESCROW') // ciphertext, not plaintext
+    const env = parseEnvelope(file)
+    expect(env.v).toBe(2)
+    for (const k of ['iv', 'tag', 'ct', 'kLocal']) expect(typeof env[k]).toBe('string')
+    expect(env.kEscrow).toBeUndefined() // no escrow key → local-only wrap, behavior matches today
+    expect(readSavedFile(file)).toContain('SECRET-NO-ESCROW') // local keychain round-trips
+  })
+
+  it('writes a v2 escrow wrap an admin can recover with the org private key (out-of-band)', async () => {
+    const { publicKey, privateKey } = generateKeyPairSync('rsa', {
+      modulusLength: 2048,
+      publicKeyEncoding: { type: 'spki', format: 'pem' },
+      privateKeyEncoding: { type: 'pkcs8', format: 'pem' }
+    })
+    process.env.ASKTOTO_ESCROW_PUBKEY = publicKey
+    const enc = { ...settings, encryptTranscripts: true } as Settings
+    const file = await saveMeeting(enc, {
+      title: 'Board escrow test',
+      mode: 'meeting',
+      startedAt: 1_700_000_000_000,
+      lines: [{ speaker: 'them', text: 'ESCROW-RECOVERABLE-SECRET', t: 1_700_000_000_000 }],
+      recap: ''
+    })
+    const env = parseEnvelope(file)
+    expect(typeof env.kEscrow).toBe('string') // escrow wrap present when a pubkey is configured
+    // Admin recovery path: unwrap the content key with the org PRIVATE key, then AES-GCM-decrypt — no keychain.
+    const contentKey = privateDecrypt(
+      { key: privateKey, padding: constants.RSA_PKCS1_OAEP_PADDING, oaepHash: 'sha256' },
+      Buffer.from(env.kEscrow as string, 'base64')
+    )
+    const decipher = createDecipheriv('aes-256-gcm', contentKey, Buffer.from(env.iv as string, 'base64'))
+    decipher.setAuthTag(Buffer.from(env.tag as string, 'base64'))
+    const recovered = Buffer.concat([
+      decipher.update(Buffer.from(env.ct as string, 'base64')),
+      decipher.final()
+    ]).toString('utf8')
+    expect(recovered).toContain('ESCROW-RECOVERABLE-SECRET')
+    expect(readSavedFile(file)).toContain('ESCROW-RECOVERABLE-SECRET') // local decrypt still works too
+  })
+
+  it('still decrypts a legacy v1 (safeStorage-direct) file for backward compatibility', () => {
+    const plain = '# Legacy transcript\n\nV1-SECRET-PAYLOAD\n'
+    const v1 = Buffer.concat([Buffer.from('ATKENC1\n'), safeStorage.encryptString(plain)])
+    const file = join(folder, 'legacy-v1.md')
+    writeFileSync(file, v1)
+    expect(isEncryptedFile(file)).toBe(true)
+    expect(readSavedFile(file)).toBe(plain)
   })
 
   it('writes plaintext + index when encryption is off (unchanged default)', async () => {

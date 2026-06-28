@@ -76,20 +76,23 @@ export function buildSystem(
   modePrompts: Partial<Record<string, string>> | undefined,
   contextDocs: { name: string; text: string }[] | undefined,
   outputLanguage?: string,
-  summaryLanguage?: string
+  summaryLanguage?: string,
+  systemPrompt?: string
 ): string {
   const untrusted =
     req.mode === 'suggest' || req.mode === 'summary' || req.mode === 'recap' || req.mode === 'vision'
   const guard = untrusted ? INJECTION_GUARD : ''
   const ctx = contextBlock(contextDocs)
   const lang = languageDirective(req.mode, outputLanguage, summaryLanguage)
+  // Optional global custom instruction (Settings → Personalize), prepended to every mode's system prompt.
+  const prefix = systemPrompt && systemPrompt.trim() ? systemPrompt.trim() + '\n\n' : ''
 
-  if (req.mode === 'summary') return SUMMARY_PROMPT + ctx + lang + guard
-  if (req.mode === 'recap') return RECAP_PROMPT + ctx + lang + guard
+  if (req.mode === 'summary') return prefix + SUMMARY_PROMPT + ctx + lang + guard
+  if (req.mode === 'recap') return prefix + RECAP_PROMPT + ctx + lang + guard
 
   const prompt = effectiveModePrompt(mode, modePrompts)
   // Modes where the user is performing as themselves benefit from the profile (background/role/company);
   // general and meeting are neutral observers, so they skip it.
   const profileTail = mode === 'general' || mode === 'meeting' ? '' : profileBlock(profile)
-  return prompt + profileTail + ctx + lang + guard
+  return prefix + prompt + profileTail + ctx + lang + guard
 }

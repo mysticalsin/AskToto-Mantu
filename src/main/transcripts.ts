@@ -3,11 +3,136 @@ import { readdirSync, readFileSync, existsSync, mkdirSync, writeFileSync, append
 import { writeFile, rename, unlink } from 'node:fs/promises'
 import { join, basename } from 'node:path'
 import { homedir } from 'node:os'
-import { randomBytes } from 'node:crypto'
+import { randomBytes, createCipheriv, createDecipheriv, publicEncrypt, constants } from 'node:crypto'
 import type { SaveMeeting, SaveNote, Settings } from '@shared/ipc'
 
-// Optional at-rest encryption for transcripts/notes (OS keychain). Files carry this marker when encrypted.
+// Optional at-rest encryption for transcripts/notes. Two on-disk formats share one fixed-length
+// `ATKENC<n>\n` magic prefix so detection stays a simple prefix check:
+//   v1 (legacy) — ENC_MARKER + safeStorage.encryptString(plaintext). OS-keychain-direct.
+//   v2 (envelope) — ENC_MARKER_V2 + JSON: a per-file random AES-256-GCM content key encrypts the
+//     transcript; the content key is wrapped for the LOCAL keychain (kLocal, always) and, when an org
+//     escrow public key is configured, also for an out-of-band admin (kEscrow). Envelope encryption lets
+//     an org recover a transcript via the escrow private key even if the device/keychain is lost.
 const ENC_MARKER = Buffer.from('ATKENC1\n')
+const ENC_MARKER_V2 = Buffer.from('ATKENC2\n')
+const MARKER_LEN = ENC_MARKER.length // v1 and v2 markers are the same length — share one prefix check
+
+type EnvelopeV2 = {
+  v: 2
+  iv: string // base64, AES-GCM nonce (12 bytes)
+  tag: string // base64, AES-GCM auth tag (16 bytes)
+  ct: string // base64, AES-256-GCM ciphertext of the transcript
+  kLocal: string // base64, safeStorage-wrapped content key (this device can always decrypt)
+  kEscrow?: string // base64, RSA-OAEP(content key) under the org escrow public key — written, never read here
+}
+
+/** Machine-wide org-policy managed-config location IT can deploy (mirrors auth.ts / store.ts). */
+function adminManagedConfigPath(): string {
+  if (process.platform === 'darwin') return '/Library/Application Support/AskToto/managed-config.json'
+  if (process.platform === 'win32')
+    return join(process.env.ProgramData || 'C:\\ProgramData', 'AskToto', 'managed-config.json')
+  return '/etc/asktoto/managed-config.json'
+}
+
+/** Resolve a configured value to a PEM public key: inline PEM, a file path to one, or base64-wrapped PEM. */
+function resolveEscrowPem(raw: string | null | undefined): string | null {
+  const v = (raw || '').trim()
+  if (!v) return null
+  if (v.includes('-----BEGIN')) return v // inline PEM (env can hold newlines; managed-config a JSON string)
+  try {
+    if (existsSync(v)) {
+      const f = readFileSync(v, 'utf8')
+      if (f.includes('-----BEGIN')) return f
+    }
+  } catch {
+    /* not a readable path */
+  }
+  try {
+    const dec = Buffer.from(v, 'base64').toString('utf8') // base64-wrapped PEM (env-var-friendly)
+    if (dec.includes('-----BEGIN')) return dec
+  } catch {
+    /* not base64 */
+  }
+  return null
+}
+
+/** Raw-read an `escrowPubKey` string from a managed-config.json (escrow isn't a Settings schema key). */
+function readEscrowFromManaged(p: string): string | null {
+  try {
+    const obj = JSON.parse(readFileSync(p, 'utf8'))
+    return typeof obj?.escrowPubKey === 'string' ? obj.escrowPubKey : null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Org escrow public key (PEM), if configured. Precedence: env ASKTOTO_ESCROW_PUBKEY (dev) → machine-wide
+ * managed-config (IT policy) → per-user managed-config. Returns null when unset/unusable, so encryption
+ * silently falls back to local-only (no regression). Never throws; never logs key material.
+ */
+function readEscrowPubKey(): string | null {
+  const fromEnv = resolveEscrowPem(process.env.ASKTOTO_ESCROW_PUBKEY)
+  if (fromEnv) return fromEnv
+  try {
+    const machine = resolveEscrowPem(readEscrowFromManaged(adminManagedConfigPath()))
+    if (machine) return machine
+  } catch {
+    /* ignore */
+  }
+  try {
+    const user = resolveEscrowPem(readEscrowFromManaged(join(app.getPath('userData'), 'managed-config.json')))
+    if (user) return user
+  } catch {
+    /* ignore */
+  }
+  return null
+}
+
+/** Build the v2 envelope on-disk buffer (marker + JSON). May throw if the keychain is unavailable; callers
+ *  guard with safeStorage.isEncryptionAvailable() and fall back to plaintext, preserving today's behavior. */
+function encryptEnvelopeV2(content: string): Buffer {
+  const contentKey = randomBytes(32)
+  const iv = randomBytes(12)
+  const cipher = createCipheriv('aes-256-gcm', contentKey, iv)
+  const ct = Buffer.concat([cipher.update(content, 'utf8'), cipher.final()])
+  const tag = cipher.getAuthTag()
+  // LOCAL wrap: the OS keychain encrypts the content key so this device can always decrypt (current UX).
+  const kLocal = safeStorage.encryptString(contentKey.toString('base64'))
+  const env: EnvelopeV2 = {
+    v: 2,
+    iv: iv.toString('base64'),
+    tag: tag.toString('base64'),
+    ct: ct.toString('base64'),
+    kLocal: kLocal.toString('base64')
+  }
+  // ESCROW wrap (only when configured): RSA-OAEP(content key) so an admin holding the org PRIVATE key can
+  // recover the content key out-of-band. The app only ever WRITES kEscrow; it never reads it.
+  const pem = readEscrowPubKey()
+  if (pem) {
+    try {
+      const kEscrow = publicEncrypt(
+        { key: pem, padding: constants.RSA_PKCS1_OAEP_PADDING, oaepHash: 'sha256' },
+        contentKey
+      )
+      env.kEscrow = kEscrow.toString('base64')
+    } catch {
+      // A malformed escrow key must not break saving (no regression): write local-only. Never log key material.
+      console.warn('AskToto: escrow public key configured but unusable; wrote transcript without escrow wrap')
+    }
+  }
+  return Buffer.concat([ENC_MARKER_V2, Buffer.from(JSON.stringify(env), 'utf8')])
+}
+
+/** Decrypt a v2 envelope via the local keychain. Throws on malformed/foreign-keychain input so
+ *  tryDecodeSaved degrades to the UNDECRYPTABLE path instead of crashing a read. */
+function decryptEnvelopeV2(buf: Buffer): string {
+  const env = JSON.parse(buf.subarray(MARKER_LEN).toString('utf8')) as EnvelopeV2
+  const contentKey = Buffer.from(safeStorage.decryptString(Buffer.from(env.kLocal, 'base64')), 'base64')
+  const decipher = createDecipheriv('aes-256-gcm', contentKey, Buffer.from(env.iv, 'base64'))
+  decipher.setAuthTag(Buffer.from(env.tag, 'base64'))
+  return Buffer.concat([decipher.update(Buffer.from(env.ct, 'base64')), decipher.final()]).toString('utf8')
+}
 
 // Shown in place of a transcript that can't be decrypted on this device (e.g. encrypted under a different
 // OS keychain/user — common when an encrypted file is OneDrive-synced to another machine). Beats a dead
@@ -21,6 +146,15 @@ const UNDECRYPTABLE_MSG =
 /** Decode saved bytes, decrypting if the at-rest marker is present. Returns null when an encrypted file
  *  can't be decrypted on this machine (foreign keychain), so callers degrade instead of throwing. */
 function tryDecodeSaved(buf: Buffer): string | null {
+  // v2 envelope: AES-256-GCM content key wrapped by safeStorage (+ optional org escrow).
+  if (buf.length >= MARKER_LEN && buf.subarray(0, MARKER_LEN).equals(ENC_MARKER_V2)) {
+    try {
+      return decryptEnvelopeV2(buf)
+    } catch {
+      return null // malformed or foreign-keychain — never throw out of a read path
+    }
+  }
+  // v1 (legacy): safeStorage-direct. Kept for full backward compatibility with existing transcripts.
   if (buf.length >= ENC_MARKER.length && buf.subarray(0, ENC_MARKER.length).equals(ENC_MARKER)) {
     try {
       return safeStorage.decryptString(buf.subarray(ENC_MARKER.length))
@@ -45,8 +179,8 @@ export function readSavedFile(path: string): string {
 /** True if the file on disk is one of AskToto's encrypted transcripts. */
 export function isEncryptedFile(path: string): boolean {
   try {
-    const head = readFileSync(path).subarray(0, ENC_MARKER.length)
-    return head.equals(ENC_MARKER)
+    const head = readFileSync(path).subarray(0, MARKER_LEN)
+    return head.equals(ENC_MARKER) || head.equals(ENC_MARKER_V2)
   } catch {
     return false
   }
@@ -58,7 +192,8 @@ async function writeSaved(file: string, content: string, encrypt: boolean): Prom
   if (encrypt) {
     try {
       if (safeStorage.isEncryptionAvailable()) {
-        data = Buffer.concat([ENC_MARKER, safeStorage.encryptString(content)])
+        // v2 envelope: per-file AES-256-GCM content key, safeStorage-wrapped (+ optional org escrow wrap).
+        data = encryptEnvelopeV2(content)
       }
     } catch {
       /* keychain unavailable — fall back to plaintext below */

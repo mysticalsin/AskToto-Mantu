@@ -25,6 +25,7 @@ export function initAutoUpdate(): void {
     autoUpdater.autoDownload = true
     autoUpdater.autoInstallOnAppQuit = true
     autoUpdater.on('error', (e) => log.warn('[updater] error', e?.message ?? e))
+    autoUpdater.on('update-available', (i) => log.info('[updater] update-available', i?.version))
     autoUpdater.on('update-downloaded', (i) => log.info('[updater] downloaded', i?.version))
     // checkForUpdatesAndNotify shows the OS notification when an update is ready.
     void autoUpdater.checkForUpdatesAndNotify().catch((e) => log.warn('[updater] check failed', e?.message ?? e))

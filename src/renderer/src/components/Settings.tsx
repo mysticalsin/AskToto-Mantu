@@ -492,7 +492,14 @@ function AiSection({
             {test.status === 'loading' ? <Loader2 size={14} className="animate-spin" /> : null}
             Test
           </button>
-          {settings.hasKeys[provider] && (
+          {settings.envKeys.includes(provider) ? (
+            <span
+              title="This key is set via an environment variable on this machine. Remove it where it was defined; the in-app Remove can't clear it."
+              className="flex items-center rounded-[10px] border border-[var(--cl-input)] bg-white/[0.04] px-3 py-2.5 text-[12px] text-[color:var(--cl-muted-foreground)]"
+            >
+              Set via environment variable
+            </span>
+          ) : settings.hasKeys[provider] ? (
             <button
               type="button"
               onClick={onRemove}
@@ -501,7 +508,7 @@ function AiSection({
             >
               <Trash2 size={14} />
             </button>
-          )}
+          ) : null}
         </div>
 
         {hint && (
@@ -1443,6 +1450,17 @@ export function Settings({
                   </select>
                 </Section>
                 <ModePromptEditor settings={settings} patch={patch} />
+                <Section title="Custom instructions" desc="A global instruction added on top of every mode's prompt. Leave blank for the defaults.">
+                  <textarea
+                    value={settings.systemPrompt}
+                    onChange={(e) => patch({ systemPrompt: e.target.value })}
+                    disabled={settings.managedKeys.includes('systemPrompt')}
+                    rows={3}
+                    spellCheck={false}
+                    placeholder="e.g. Always answer in British English. Keep answers concise."
+                    className={'w-full resize-y ' + ctl}
+                  />
+                </Section>
                 <ContextDocs settings={settings} patch={patch} />
                 <Section title="About you" desc="The more AskToto knows, the sharper your answers. Used for interview & sales.">
                   <ProfileEditor profile={settings.profile} onChange={(p) => patch({ profile: p })} disabled={settings.managedKeys.includes('profile')} />
