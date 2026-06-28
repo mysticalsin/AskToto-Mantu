@@ -207,6 +207,15 @@ export function App(): JSX.Element {
     copilotHistoryRef.current = next.slice(-12)
   }, [suggest.answer])
 
+  // Live suggestions are ephemeral — clear a finished one after 10s so stale advice doesn't linger on
+  // screen. (It's already saved to copilotHistoryRef above; a new line just generates the next suggestion.)
+  useEffect(() => {
+    const a = suggest.answer
+    if (!a || a.streaming) return
+    const t = setTimeout(() => suggest.clear(), 10_000)
+    return () => clearTimeout(t)
+  }, [suggest.answer, suggest.clear])
+
   // Subtle sound cue when an Ask answer finishes (ready) or fails (error). Fires once on the
   // streaming→done edge, gated by the soundCues setting. Live copilot suggestions stay silent (ambient).
   const prevStreamingRef = useRef(false)
