@@ -227,7 +227,10 @@ function resizeTo(height: number): void {
   if (!win) return
   // In settings mode the window is a fixed-size two-pane surface; ignore content-driven height.
   if (settingsMode) return
-  const { workArea } = screen.getDisplayNearestPoint(screen.getCursorScreenPoint())
+  // Clamp + reposition against the display the OVERLAY is actually on (not the cursor's). Otherwise, on a
+  // laptop + external monitor of different heights, a streaming answer clamps to the wrong monitor and the
+  // window jumps vertically while the cursor sits on the other screen.
+  const { workArea } = screen.getDisplayMatching(win.getBounds())
   const h = Math.max(BAR_HEIGHT, Math.min(Math.round(height), workArea.height - 48))
   lastBarHeight = h
   const b = win.getBounds()
@@ -244,7 +247,7 @@ function resizeTo(height: number): void {
  */
 function setWindowMode(mode: 'bar' | 'settings'): void {
   if (!win) return
-  const { workArea } = screen.getDisplayNearestPoint(screen.getCursorScreenPoint())
+  const { workArea } = screen.getDisplayMatching(win.getBounds())
   const b = win.getBounds()
   if (mode === 'settings') {
     settingsMode = true
