@@ -290,6 +290,9 @@ export const BaseSettingsSchema = z.object({
   asrQuality: z.enum(['best', 'fast']).default('fast'), // fast = small model, ready fast (default); best = large, downloads
   asrEngine: z.enum(['whisper', 'parakeet']).default('whisper'), // whisper = ~99 langs (default); parakeet = European, fastest
   requireConsentIndicator: z.boolean().default(false),
+  // Strip high-confidence secrets (cards, API keys, SSNs, private keys) from the captured transcript
+  // before it's sent to a cloud model. On by default; never touches the typed question or the saved file.
+  redactSensitive: z.boolean().default(true),
   lastConsentReminderAt: z.number().default(0),
   customMeetingApps: z.array(z.string().min(1).max(80)).max(20).default([]),
   // CLI provider connection state. Keyed by ProviderId ('claude-cli', 'codex-cli').
@@ -388,6 +391,7 @@ export const DEFAULT_SETTINGS: Settings = {
   asrQuality: 'fast',
   asrEngine: 'whisper',
   requireConsentIndicator: false,
+  redactSensitive: true,
   lastConsentReminderAt: 0,
   customMeetingApps: [],
   cliConnected: {},

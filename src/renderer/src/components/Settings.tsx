@@ -2005,6 +2005,15 @@ export function Settings({
                     </div>
                   </ToggleRow>
                 </Section>
+                <Section title="Sensitive data" desc="Keep secrets out of what's sent to AI providers.">
+                  <ToggleRow
+                    label="Redact secrets before sending to AI"
+                    desc="Strips credit-card numbers, API keys, SSNs, and private keys from the captured transcript before it goes to a cloud model. Your typed questions and the saved transcript are never changed."
+                    on={settings.redactSensitive}
+                    onChange={(v) => patch({ redactSensitive: v })}
+                    disabled={settings.managedKeys.includes('redactSensitive')}
+                  />
+                </Section>
               </div>
             )}
 
