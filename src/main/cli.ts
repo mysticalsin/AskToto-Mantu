@@ -18,7 +18,7 @@ import { app, shell } from 'electron'
 import { writeFileSync } from 'node:fs'
 import type { ProviderId } from '@shared/providers'
 import { PROVIDERS } from '@shared/providers'
-import type { CliActionResult } from '@shared/ipc'
+import type { CliActionResult, CliInstallResult } from '@shared/ipc'
 
 const execFileAsync = promisify(execFile)
 
@@ -464,6 +464,159 @@ export async function setupCli(provider: ProviderId): Promise<{ ok: boolean; err
   try {
     const script = scriptLines.join('\n') + '\n'
     const scriptPath = join(app.getPath('temp'), `asktoto-${provider}-setup.command`)
+    writeFileSync(scriptPath, script, { mode: 0o755 })
+    const err = await shell.openPath(scriptPath)
+    if (err) return { ok: false, error: err }
+    return { ok: true }
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : String(e) }
+  }
+}
+
+// ─── installCli ──────────────────────────────────────────────────────────────────
+
+/**
+ * Install the CLI package for the given provider in-app, without opening a Terminal.
+ * Uses the user's login shell so node/npm and the user's npm prefix are on PATH.
+ * Progress lines are streamed to onProgress as they arrive.
+ * Returns {ok:true} on success; {needsTerminal:true} on EACCES; {ok:false, error} otherwise.
+ */
+export async function installCli(
+  provider: ProviderId,
+  onProgress: (line: string) => void
+): Promise<CliInstallResult> {
+  const cfg = CLI_CONFIGS[provider]
+  if (!cfg) return { ok: false, error: 'No installer for this provider.' }
+
+  const existing = await resolveBin(cfg.bin)
+  if (existing) {
+    onProgress('Already installed.')
+    return { ok: true }
+  }
+
+  const pkg =
+    provider === 'claude-cli'
+      ? '@anthropic-ai/claude-code'
+      : provider === 'codex-cli'
+        ? '@openai/codex'
+        : null
+
+  if (!pkg) {
+    return { ok: false, error: 'No installer for this provider.' }
+  }
+
+  return new Promise<CliInstallResult>((resolve) => {
+    const loginShell = process.env.SHELL || '/bin/zsh'
+    // pkg is a compile-time constant — no user input is interpolated here.
+    const child = spawn(loginShell, ['-lc', `npm i -g ${pkg}`], {
+      env: process.env,
+      shell: false,
+      stdio: ['ignore', 'pipe', 'pipe']
+    })
+
+    const stderrLines: string[] = []
+
+    function readLines(stream: NodeJS.ReadableStream): void {
+      const rl = createInterface({ input: stream, crlfDelay: Infinity })
+      rl.on('line', (line) => {
+        const trimmed = line.trim()
+        if (!trimmed) return
+        onProgress(trimmed)
+      })
+    }
+
+    // Collect stderr for error detection; also forward each line as progress.
+    const stderrRl = createInterface({ input: child.stderr!, crlfDelay: Infinity })
+    stderrRl.on('line', (line) => {
+      const trimmed = line.trim()
+      if (!trimmed) return
+      stderrLines.push(trimmed)
+      onProgress(trimmed)
+    })
+
+    readLines(child.stdout!)
+
+    child.on('error', (err) => {
+      resolve({ ok: false, error: err.message })
+    })
+
+    child.on('close', (code) => {
+      if (code === 0) {
+        resolve({ ok: true })
+        return
+      }
+      const stderrText = stderrLines.join('\n')
+      // Detect npm-not-found: npm missing means the shell printed 'command not found'
+      if (/command not found/i.test(stderrText)) {
+        resolve({
+          ok: false,
+          error: 'Node.js / npm not found. Install Node from nodejs.org, then try again.'
+        })
+        return
+      }
+      // Detect permission error → caller should offer the Terminal fallback
+      if (/EACCES|permission denied|not permitted/i.test(stderrText)) {
+        resolve({ ok: false, needsTerminal: true, error: 'Global install needs admin permission.' })
+        return
+      }
+      const tail = stderrText.slice(-300) || `Install failed (exit ${code}).`
+      resolve({ ok: false, error: tail })
+    })
+  })
+}
+
+// ─── loginCli ────────────────────────────────────────────────────────────────────
+
+/**
+ * Open a Terminal window for interactive CLI login only (no npm install step).
+ * The user has already installed the CLI in-app via installCli; this is the
+ * companion step for providers that require an interactive login flow.
+ * macOS only — mirrors setupCli's Terminal pattern.
+ */
+export async function loginCli(provider: ProviderId): Promise<{ ok: boolean; error?: string }> {
+  if (process.platform !== 'darwin') {
+    const label = PROVIDERS[provider]?.label ?? provider
+    return {
+      ok: false,
+      error: `Automatic login is macOS-only for now. Run '${provider === 'claude-cli' ? 'claude' : 'codex login'}' in a Terminal.`
+    }
+  }
+
+  let scriptLines: string[]
+
+  if (provider === 'claude-cli') {
+    scriptLines = [
+      '#!/bin/bash',
+      'clear',
+      'echo "AskToto — Claude Code CLI login"',
+      'echo "================================"',
+      'echo',
+      'echo "Type /login at the prompt below and follow the instructions."',
+      'echo "────────────────────────────────────────────────"',
+      'claude',
+      'echo; echo "✓ Done. Go back to AskToto and click \\"Connect\\" again."',
+      'echo "You can close this window."'
+    ]
+  } else if (provider === 'codex-cli') {
+    scriptLines = [
+      '#!/bin/bash',
+      'clear',
+      'echo "AskToto — OpenAI Codex CLI login"',
+      'echo "================================="',
+      'echo',
+      'echo "Follow the instructions below to sign in."',
+      'echo "────────────────────────────────────────────────"',
+      'codex login',
+      'echo; echo "✓ Done. Go back to AskToto and click \\"Connect\\" again."',
+      'echo "You can close this window."'
+    ]
+  } else {
+    return { ok: false, error: `loginCli: unknown provider '${provider}'` }
+  }
+
+  try {
+    const script = scriptLines.join('\n') + '\n'
+    const scriptPath = join(app.getPath('temp'), `asktoto-${provider}-login.command`)
     writeFileSync(scriptPath, script, { mode: 0o755 })
     const err = await shell.openPath(scriptPath)
     if (err) return { ok: false, error: err }

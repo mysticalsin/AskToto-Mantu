@@ -18,6 +18,7 @@ import {
   type DustCliImport,
   type DustCliSetup,
   type CliActionResult,
+  type CliInstallResult,
   type GraphStatus,
   type GraphRelated,
   type AuthStatus,
@@ -54,6 +55,17 @@ const api = {
     ipcRenderer.invoke(IPC.cliSetup, provider),
   cliTest: (provider: ProviderId): Promise<CliActionResult> =>
     ipcRenderer.invoke(IPC.cliTest, provider),
+  cliInstall: (provider: ProviderId, onProgress: (line: string) => void): Promise<CliInstallResult> => {
+    const listener = (_e: unknown, d: { provider: string; line: string }): void => {
+      if (d.provider === provider) onProgress(d.line)
+    }
+    ipcRenderer.on(IPC.cliInstallProgress, listener)
+    return ipcRenderer.invoke(IPC.cliInstall, provider).finally(() => {
+      ipcRenderer.removeListener(IPC.cliInstallProgress, listener)
+    })
+  },
+  cliLogin: (provider: ProviderId): Promise<{ ok: boolean; error?: string }> =>
+    ipcRenderer.invoke(IPC.cliLogin, provider),
   graphifyStatus: (): Promise<GraphStatus> => ipcRenderer.invoke(IPC.graphifyStatus),
   graphifyRebuild: (): Promise<GraphStatus> => ipcRenderer.invoke(IPC.graphifyRebuild),
   graphifyRelated: (file: string): Promise<GraphRelated> =>
