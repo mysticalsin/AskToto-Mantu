@@ -31,8 +31,18 @@ function idleWatchdog(onIdle: () => void): { ping: () => void; clear: () => void
   }
 }
 
-/** The user turn text for each ask mode (provider-agnostic). */
+const DEEPER_DIRECTIVE =
+  '\n\n(Go deeper: give a more thorough, detailed answer than your usual brief default — more reasoning, concrete specifics, and a short example or two where they help. Keep it well-structured; no filler.)'
+
+/** The user turn text for each ask mode, plus the optional "Go deeper" expansion. Lives in the per-turn user
+ *  message (NOT the cached system prefix), so requesting depth never invalidates the prompt cache. */
 function userText(req: AskStart): string {
+  const base = baseUserText(req)
+  return req.depth === 'deeper' ? base + DEEPER_DIRECTIVE : base
+}
+
+/** The base user turn text for each ask mode (provider-agnostic). */
+function baseUserText(req: AskStart): string {
   switch (req.mode) {
     case 'summary':
       return (

@@ -82,17 +82,21 @@ export function buildSystem(
   const untrusted =
     req.mode === 'suggest' || req.mode === 'summary' || req.mode === 'recap' || req.mode === 'vision'
   const guard = untrusted ? INJECTION_GUARD : ''
+  // Lead with the injection guard so the security boundary is the FIRST thing the model reads — before any
+  // untrusted transcript/screen text further down (the model otherwise reads the hostile text first, then
+  // the guard). INJECTION_GUARD leads with "\n\n"; trim it so it sits cleanly at the very front.
+  const lead = guard ? guard.trimStart() + '\n\n' : ''
   const ctx = contextBlock(contextDocs)
   const lang = languageDirective(req.mode, outputLanguage, summaryLanguage)
   // Optional global custom instruction (Settings → Personalize), prepended to every mode's system prompt.
   const prefix = systemPrompt && systemPrompt.trim() ? systemPrompt.trim() + '\n\n' : ''
 
-  if (req.mode === 'summary') return prefix + SUMMARY_PROMPT + ctx + lang + guard
-  if (req.mode === 'recap') return prefix + RECAP_PROMPT + ctx + lang + guard
+  if (req.mode === 'summary') return lead + prefix + SUMMARY_PROMPT + ctx + lang
+  if (req.mode === 'recap') return lead + prefix + RECAP_PROMPT + ctx + lang
 
   const prompt = effectiveModePrompt(mode, modePrompts)
   // Modes where the user is performing as themselves benefit from the profile (background/role/company);
   // general and meeting are neutral observers, so they skip it.
   const profileTail = mode === 'general' || mode === 'meeting' ? '' : profileBlock(profile)
-  return prefix + prompt + profileTail + ctx + lang + guard
+  return lead + prefix + prompt + profileTail + ctx + lang
 }
