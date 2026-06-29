@@ -28,7 +28,7 @@ function GraphBar(): JSX.Element | null {
   if (!status.installed) {
     return (
       <div className="rounded-xl border border-[var(--color-hair-soft)] bg-white/[0.03] px-3 py-2 text-[11px] text-[color:var(--color-ink-2)]">
-        Knowledge graph needs graphify — run{' '}
+        Knowledge graph needs graphify. Run{' '}
         <code className="rounded bg-white/[0.08] px-1">pip install graphifyy</code> (or{' '}
         <code className="rounded bg-white/[0.08] px-1">uv tool install graphifyy</code>), then Rebuild.
       </div>
@@ -53,7 +53,7 @@ function GraphBar(): JSX.Element | null {
             {status.backend ? ` · ${status.backend}` : ''}
           </>
         ) : (
-          'No graph yet — build it from your notes.'
+          'No graph yet. Build it from your notes.'
         )}
       </div>
       <div className="flex items-center gap-1">
@@ -200,7 +200,7 @@ export function RecallView({ onOpenFolder }: { onOpenFolder: () => void }): JSX.
           <div className="py-2 text-[13px] text-[color:var(--color-ink-2)]">Loading…</div>
         ) : items.length === 0 ? (
           <div className="py-2 text-[13px] text-[color:var(--color-ink-2)]">
-            {q.trim() ? 'No matching meetings.' : 'No meetings saved yet — finish one with End & review.'}
+            {q.trim() ? 'No matching meetings.' : 'No meetings saved yet. Finish one with End & review.'}
           </div>
         ) : (
           items.map((m) => (

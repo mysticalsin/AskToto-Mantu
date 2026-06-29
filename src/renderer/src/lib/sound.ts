@@ -5,7 +5,45 @@
  */
 type Cue = 'ready' | 'send' | 'error'
 
+// Master gate for ALL interface sounds (click feedback + cues). Synced from the `uiSounds` setting by the
+// app; when off, every sound in this module stays silent regardless of call site. Default on.
+let soundsOn = true
+export function setSoundsEnabled(on: boolean): void {
+  soundsOn = on
+}
+
+// One reused AudioContext for click feedback. Creating a fresh context per click would quickly hit
+// Chromium's ~6-live-context cap on rapid clicking; a single shared context avoids that entirely.
+let clickCtx: AudioContext | null = null
+
+/** Very soft, short click for button presses — Apple-like tap feedback, gated by the master setting. */
+export function playClick(): void {
+  if (!soundsOn) return
+  try {
+    const AudioCtx =
+      window.AudioContext ||
+      (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext
+    if (!AudioCtx) return
+    if (!clickCtx) clickCtx = new AudioCtx()
+    const ctx = clickCtx
+    if (ctx.state === 'suspended') void ctx.resume()
+    const osc = ctx.createOscillator()
+    const gain = ctx.createGain()
+    osc.type = 'sine'
+    osc.frequency.value = 880
+    gain.gain.setValueAtTime(0.0001, ctx.currentTime)
+    gain.gain.linearRampToValueAtTime(0.025, ctx.currentTime + 0.006)
+    gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.06)
+    osc.connect(gain).connect(ctx.destination)
+    osc.start(ctx.currentTime)
+    osc.stop(ctx.currentTime + 0.08)
+  } catch {
+    /* audio unavailable — stay silent */
+  }
+}
+
 export function playCue(kind: Cue): void {
+  if (!soundsOn) return
   try {
     const AudioCtx =
       window.AudioContext ||

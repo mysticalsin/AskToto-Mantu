@@ -3,6 +3,7 @@ import OpenAI from 'openai'
 import type { AskStart } from '@shared/ipc'
 import type { ProviderKind, ProviderId } from '@shared/providers'
 import { authStatus } from './auth'
+import { runCliStream } from './cli'
 
 export interface StreamHandlers {
   onDelta: (text: string) => void
@@ -140,6 +141,22 @@ export function createStream(opts: {
   req: AskStart
   handlers: StreamHandlers
 }): { abort: () => void } {
+  // CLI providers (claude-cli, codex-cli) — spawn the local binary, no API key required.
+  if (opts.kind === 'cli') {
+    // Flatten conversation history + current turn into a single prompt string.
+    const prompt = [
+      ...opts.req.history.map((t) => `${t.role === 'user' ? 'User' : 'Assistant'}: ${t.content}`),
+      userText(opts.req)
+    ].join('\n\n')
+    return runCliStream({
+      providerId: opts.providerId,
+      model: opts.model,
+      system: opts.system,
+      prompt,
+      handlers: opts.handlers
+    })
+  }
+
   // Dust routes through one of the user's own agents (the "model" is the agent sId). The agent's
   // own instructions/tools/retrieval govern the reply, so our system prompt is not injected here.
   if (opts.kind === 'dust') {

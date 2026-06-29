@@ -57,6 +57,7 @@ export function Copilot({
   mode,
   listening,
   loading,
+  loadingPct,
   error,
   showTranscript,
   onAnswer,
@@ -70,6 +71,7 @@ export function Copilot({
   mode: ConversationMode
   listening: boolean
   loading: boolean
+  loadingPct: number | null
   error: string | null
   showTranscript: boolean
   onAnswer: () => void
@@ -104,9 +106,9 @@ export function Copilot({
           <div className="text-[13px] text-[color:var(--color-ink-2)]">
             {listening
               ? mode === 'interview'
-                ? 'When the interviewer asks something, your answer appears here. Or tap Answer now.'
+                ? 'When the interviewer asks, your answer appears here. Or tap Answer now.'
                 : 'Suggestions appear as the conversation develops. Or tap Answer now.'
-              : 'Press Listen to start your live copilot.'}
+              : 'Press Listen to start.'}
           </div>
         )}
       </section>
@@ -117,7 +119,7 @@ export function Copilot({
         <Action icon={MessageSquareQuote} label="What to say next" onClick={onWhatNext} />
         <Action icon={ShieldCheck} label="Fact-check" onClick={onFactCheck} />
         <Action icon={MessageCircleQuestion} label="Ask" onClick={onAsk} />
-        <Action icon={FileText} label="End & review" onClick={onEnd} />
+        <Action icon={FileText} label="End meeting" onClick={onEnd} />
       </div>
 
       {/* Status / transcript */}
@@ -162,7 +164,8 @@ export function Copilot({
         <div className="flex items-center gap-2 text-[11px] text-[color:var(--color-ink-3)]">
           {loading ? (
             <>
-              <Spinner size={11} /> loading transcription model…
+              <Spinner size={11} />{' '}
+              {loadingPct != null ? `downloading speech model… ${loadingPct}%` : 'loading transcription model…'}
             </>
           ) : (
             <>

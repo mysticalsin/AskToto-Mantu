@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { app, safeStorage } from 'electron'
 import { DEFAULT_SETTINGS } from '@shared/ipc'
-import { getSettings, setSettings } from './store'
+import { getSettings, setSettings, getApiKey } from './store'
 
 vi.mock('electron')
 
@@ -114,6 +114,37 @@ describe('store', () => {
     writeFileSync(join(userData, 'settings.json'), JSON.stringify({ provider: 'openai', temperature: 0.7 }), 'utf8')
     expect(getSettings().provider).toBe('openai')
     expect(getSettings().temperature).toBe(0.7)
+  })
+
+  it('migrates a legacy plaintext API key to encrypted-at-rest on first read', () => {
+    // A pre-existing `plain:`-prefixed key file (from an older build) must (a) still return the key
+    // and (b) be re-encrypted on disk so it never lingers as plaintext. Idempotent thereafter.
+    // Use a real base64 round-trip (like the context-docs test) so "not plaintext" is meaningful.
+    vi.spyOn(safeStorage, 'encryptString').mockImplementation((v: string) =>
+      Buffer.from('B64:' + Buffer.from(v, 'utf8').toString('base64'))
+    )
+    vi.spyOn(safeStorage, 'decryptString').mockImplementation((b: Buffer) => {
+      const s = b.toString('utf8')
+      return s.startsWith('B64:') ? Buffer.from(s.slice(4), 'base64').toString('utf8') : s
+    })
+    const prev = process.env.MINIMAX_API_KEY
+    delete process.env.MINIMAX_API_KEY
+    try {
+      const keyFile = join(userData, 'key-minimax.bin')
+      writeFileSync(keyFile, Buffer.from('plain:sk-legacy-0001'))
+
+      // First read returns the plaintext...
+      expect(getApiKey('minimax')).toBe('sk-legacy-0001')
+      // ...and the file on disk is no longer the legacy plaintext marker, nor readable plaintext.
+      const after = readFileSync(keyFile)
+      expect(after.subarray(0, 6).toString('utf8')).not.toBe('plain:')
+      expect(after.toString('utf8')).not.toContain('sk-legacy-0001')
+      // Subsequent reads still return the same key (now via the decrypt path) — idempotent.
+      expect(getApiKey('minimax')).toBe('sk-legacy-0001')
+    } finally {
+      if (prev === undefined) delete process.env.MINIMAX_API_KEY
+      else process.env.MINIMAX_API_KEY = prev
+    }
   })
 
   it('ignores malformed keys in user overrides', () => {

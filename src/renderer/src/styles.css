@@ -240,7 +240,8 @@ html.shot-bg-light #root {
   backdrop-filter: blur(var(--blur-bar)) saturate(var(--blur-saturate));
   -webkit-backdrop-filter: blur(var(--blur-bar)) saturate(var(--blur-saturate));
   border: 1px solid var(--color-hair);
-  box-shadow: var(--shadow-bar);
+  /* Outer float + a specular top rim and a soft bottom shade — the "liquid glass" depth cue. */
+  box-shadow: var(--shadow-bar), inset 0 1px 0 0 rgba(255, 255, 255, 0.1), inset 0 -1px 0 0 rgba(0, 0, 0, 0.2);
   text-shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
 }
 .glass-strong {
@@ -251,7 +252,7 @@ html.shot-bg-light #root {
   backdrop-filter: blur(var(--blur-panel)) saturate(var(--blur-saturate));
   -webkit-backdrop-filter: blur(var(--blur-panel)) saturate(var(--blur-saturate));
   border: 1px solid var(--color-hair);
-  box-shadow: var(--shadow-panel);
+  box-shadow: var(--shadow-panel), inset 0 1px 0 0 rgba(255, 255, 255, 0.09), inset 0 -1px 0 0 rgba(0, 0, 0, 0.22);
   text-shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
 }
 .glass-chip {
@@ -461,5 +462,11 @@ input::placeholder {
   .loading-spinner {
     animation: asktoto-loading-pulse 1.2s ease-in-out infinite !important;
     animation-duration: 1.2s !important;
+  }
+  /* The recording dot is a liveness + consent signal — it must keep moving, not freeze. Opacity-only
+     pulse (no scale) respects reduced-motion while still clearly reading as "we are live". */
+  .rec-dot {
+    animation: asktoto-loading-pulse 1.4s ease-in-out infinite !important;
+    animation-duration: 1.4s !important;
   }
 }

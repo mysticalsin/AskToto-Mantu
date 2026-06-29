@@ -15,6 +15,9 @@ export const ProviderIdSchema = z.enum([
   'fireworks',
   'mistral',
   'dust',
+  'claude-cli',
+  'codex-cli',
+  'gemini',
   'custom'
 ])
 
@@ -45,6 +48,11 @@ export const IPC = {
   authStatus: 'auth:status',
   authSignIn: 'auth:signIn',
   authSignOut: 'auth:signOut',
+  calendarToday: 'calendar:today',
+  parakeetStatus: 'parakeet:status',
+  parakeetEnsure: 'parakeet:ensure',
+  parakeetFeed: 'parakeet:feed',
+  parakeetProgress: 'parakeet:progress',
   askStart: 'ask:start',
   askCancel: 'ask:cancel',
   streamDelta: 'stream:delta',
@@ -69,7 +77,11 @@ export const IPC = {
   hotkey: 'hotkey',
   meetingDetected: 'meeting:detected',
   permissionsGet: 'permissions:get',
-  listeningState: 'listening:state'
+  listeningState: 'listening:state',
+  asrBundled: 'asr:bundled',
+  cliDetect: 'cli:detect',
+  cliSetup: 'cli:setup',
+  cliTest: 'cli:test'
 } as const
 
 export type AskMode = 'answer' | 'vision' | 'suggest' | 'summary' | 'recap'
@@ -220,15 +232,23 @@ export const BaseSettingsSchema = z.object({
   showLiveTranscript: z.boolean().default(false),
   meetingsFolder: z.string().default(''),
   autoSaveTranscripts: z.boolean().default(false),
-  autoStartOnMeeting: z.boolean().default(false),
+  autoStartOnMeeting: z.boolean().default(true), // auto-starts recording directly on meeting detection
   launchAtLogin: z.boolean().default(false),
   onboardingDone: z.boolean().default(false),
   recordingConsent: z.boolean().default(false),
   playListenChime: z.boolean().default(true),
   soundCues: z.boolean().default(true), // subtle answer-ready / error sound cues
+  uiSounds: z.boolean().default(true), // master: soft click feedback on buttons (and gates all UI sounds)
+  showFullTranscriptInReview: z.boolean().default(false), // review = summary-first; transcript opt-in
+  asrQuality: z.enum(['best', 'fast']).default('fast'), // fast = small model, ready fast (default); best = large, downloads
+  asrEngine: z.enum(['whisper', 'parakeet']).default('whisper'), // whisper = ~99 langs (default); parakeet = European, fastest
   requireConsentIndicator: z.boolean().default(false),
   lastConsentReminderAt: z.number().default(0),
-  customMeetingApps: z.array(z.string().min(1).max(80)).max(20).default([])
+  customMeetingApps: z.array(z.string().min(1).max(80)).max(20).default([]),
+  // CLI provider connection state. Keyed by ProviderId ('claude-cli', 'codex-cli').
+  cliConnected: z.record(z.string(), z.boolean()).default({}),
+  // Whether the user has acknowledged the CLI integration notice banner.
+  cliNoticeAck: z.boolean().default(false)
 })
 
 export const SettingsSchema = BaseSettingsSchema.refine(
@@ -305,15 +325,21 @@ export const DEFAULT_SETTINGS: Settings = {
   showLiveTranscript: false,
   meetingsFolder: '',
   autoSaveTranscripts: false,
-  autoStartOnMeeting: false,
+  autoStartOnMeeting: true,
   launchAtLogin: false,
   onboardingDone: false,
   recordingConsent: false,
   playListenChime: true,
   soundCues: true,
+  uiSounds: true,
+  showFullTranscriptInReview: false,
+  asrQuality: 'fast',
+  asrEngine: 'whisper',
   requireConsentIndicator: false,
   lastConsentReminderAt: 0,
-  customMeetingApps: []
+  customMeetingApps: [],
+  cliConnected: {},
+  cliNoticeAck: false
 }
 
 export const HOTKEY_ACTIONS: HotkeyAction[] = [
@@ -413,6 +439,26 @@ export interface DustAgent {
   name: string
   description: string
 }
+
+/** A single calendar event for today's agenda (read-only, from Microsoft Graph). */
+export interface CalendarEvent {
+  subject: string
+  start: string // ISO datetime in the requested timezone
+  end: string
+  allDay: boolean
+  location?: string
+  online: boolean // has an online-meeting join link
+  joinUrl?: string
+  attendees: number
+}
+
+/** Result of pulling today's Outlook/M365 agenda. needsConsent → prompt a one-click connect (sign-in). */
+export interface CalendarTodayResult {
+  ok: boolean
+  needsConsent?: boolean
+  error?: string
+  events?: CalendarEvent[]
+}
 export interface DustAgentsResponse {
   ok: boolean
   agents?: DustAgent[]
@@ -430,6 +476,13 @@ export interface DustCliImport {
 /** Result of kicking off the Dust CLI setup (install + interactive login) when no session exists yet. */
 export interface DustCliSetup {
   ok: boolean
+  error?: string
+}
+
+/** Result of a CLI provider detect/test operation (claude-cli, codex-cli). */
+export interface CliActionResult {
+  ok: boolean
+  version?: string
   error?: string
 }
 

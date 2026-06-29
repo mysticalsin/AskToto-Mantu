@@ -12,3 +12,12 @@ coverage/
 .claude/
 
 .playwright-mcp/
+
+# Bundled ASR model weights — populated by `npm run fetch-models` before packaging.
+# The .gitkeep files in each dir ARE tracked so electron-builder extraResources config is valid.
+resources/models/**
+resources/asr/**
+resources/ort/**
+!resources/models/.gitkeep
+!resources/asr/.gitkeep
+!resources/ort/.gitkeep

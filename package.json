@@ -12,11 +12,15 @@
     "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
     "test": "vitest run",
     "check:release": "node scripts/check-release.mjs",
+    "fetch-models": "node scripts/fetch-models.mjs",
+    "predist": "node scripts/fetch-models.mjs",
     "dist": "electron-vite build && electron-builder --mac",
+    "predist:win": "node scripts/fetch-models.mjs",
     "dist:win": "electron-vite build && electron-builder --win",
     "dist:win:appx": "electron-vite build && electron-builder --win appx",
-    "release": "npm run check:release && electron-vite build && electron-builder --mac --publish always",
-    "release:win": "npm run check:release && electron-vite build && electron-builder --win --publish always"
+    "prepack": "node scripts/fetch-models.mjs",
+    "release": "npm run check:release && node scripts/fetch-models.mjs && electron-vite build && electron-builder --mac --publish always",
+    "release:win": "npm run check:release && node scripts/fetch-models.mjs && electron-vite build && electron-builder --win --publish always"
   },
   "comment": "Only main-process runtime deps live in 'dependencies' (electron-builder bundles these into the app). All renderer deps are bundled by Vite at build time and kept in devDependencies to keep the package small.",
   "dependencies": {
@@ -26,6 +30,7 @@
     "electron-log": "^5.4.4",
     "electron-updater": "^6.8.9",
     "openai": "^6.45.0",
+    "sherpa-onnx-node": "^1.13.3",
     "zod": "^3.23.8"
   },
   "devDependencies": {

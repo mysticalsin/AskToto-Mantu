@@ -17,10 +17,12 @@ import {
   type DustAgentsResponse,
   type DustCliImport,
   type DustCliSetup,
+  type CliActionResult,
   type GraphStatus,
   type GraphRelated,
   type AuthStatus,
   type SignInResult,
+  type CalendarTodayResult,
   type PlatformPermissions
 } from '@shared/ipc'
 import type { ProviderId } from '@shared/providers'
@@ -46,6 +48,12 @@ const api = {
   dustListAgents: (): Promise<DustAgentsResponse> => ipcRenderer.invoke(IPC.dustListAgents),
   dustImportCli: (): Promise<DustCliImport> => ipcRenderer.invoke(IPC.dustImportCli),
   dustSetupCli: (): Promise<DustCliSetup> => ipcRenderer.invoke(IPC.dustSetupCli),
+  cliDetect: (provider: ProviderId): Promise<CliActionResult> =>
+    ipcRenderer.invoke(IPC.cliDetect, provider),
+  cliSetup: (provider: ProviderId): Promise<{ ok: boolean; error?: string }> =>
+    ipcRenderer.invoke(IPC.cliSetup, provider),
+  cliTest: (provider: ProviderId): Promise<CliActionResult> =>
+    ipcRenderer.invoke(IPC.cliTest, provider),
   graphifyStatus: (): Promise<GraphStatus> => ipcRenderer.invoke(IPC.graphifyStatus),
   graphifyRebuild: (): Promise<GraphStatus> => ipcRenderer.invoke(IPC.graphifyRebuild),
   graphifyRelated: (file: string): Promise<GraphRelated> =>
@@ -54,6 +62,16 @@ const api = {
   authStatus: (): Promise<AuthStatus> => ipcRenderer.invoke(IPC.authStatus),
   signIn: (): Promise<SignInResult> => ipcRenderer.invoke(IPC.authSignIn),
   signOut: (): Promise<void> => ipcRenderer.invoke(IPC.authSignOut),
+  calendarToday: (tz: string): Promise<CalendarTodayResult> => ipcRenderer.invoke(IPC.calendarToday, tz),
+  parakeetStatus: (): Promise<{ ready: boolean }> => ipcRenderer.invoke(IPC.parakeetStatus),
+  parakeetEnsure: (): Promise<{ ok: boolean; error?: string }> => ipcRenderer.invoke(IPC.parakeetEnsure),
+  parakeetFeed: (samples: Float32Array, speaker: string): Promise<string> =>
+    ipcRenderer.invoke(IPC.parakeetFeed, { samples, speaker }),
+  onParakeetProgress: (cb: (pct: number) => void): (() => void) => {
+    const h = (_e: unknown, d: { pct: number }): void => cb(d.pct)
+    ipcRenderer.on(IPC.parakeetProgress, h)
+    return () => ipcRenderer.removeListener(IPC.parakeetProgress, h)
+  },
 
   ask: (req: AskStart): Promise<void> => ipcRenderer.invoke(IPC.askStart, req),
   cancel: (id: string): Promise<void> => ipcRenderer.invoke(IPC.askCancel, id),
@@ -69,6 +87,7 @@ const api = {
   recallSearch: (q: string): Promise<RecallHit[]> => ipcRenderer.invoke(IPC.recallSearch, q),
   recallOpen: (file: string): Promise<string> => ipcRenderer.invoke(IPC.recallOpen, file),
   setListeningState: (on: boolean): Promise<void> => ipcRenderer.invoke(IPC.listeningState, on),
+  asrBundled: (): Promise<boolean> => ipcRenderer.invoke(IPC.asrBundled),
 
   resize: (height: number): Promise<void> => ipcRenderer.invoke(IPC.windowResize, { height }),
   windowMode: (mode: 'bar' | 'settings'): Promise<void> =>
