@@ -87,11 +87,25 @@ export const IPC = {
   cliInstall: 'cli:install',
   cliInstallProgress: 'cli:install:progress',
   cliLogin: 'cli:login',
-  answerFeedback: 'answer:feedback'
+  answerFeedback: 'answer:feedback',
+  metricsRead: 'metrics:read'
 } as const
 
 /** User's verdict on an answer (metadata only — never the answer text). Feeds the audit log + future evals. */
 export type AnswerFeedback = { rating: 'up' | 'down'; kind?: string }
+
+/** On-device eval metrics aggregated from the local audit log (no content, never shipped). */
+export interface EvalMetrics {
+  answers: number
+  ttftP50Ms: number | null
+  ttftP95Ms: number | null
+  answerP50Ms: number | null
+  answerP95Ms: number | null
+  acceptance: { up: number; down: number; rate: number | null }
+  failures: number
+  fallbacks: number
+  byProvider: Record<string, number>
+}
 
 export type AskMode = 'answer' | 'vision' | 'suggest' | 'summary' | 'recap'
 

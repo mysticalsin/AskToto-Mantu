@@ -39,7 +39,8 @@ import {
   type ConversationMode,
   type AuthStatus,
   type GraphStatus,
-  type HotkeyAction
+  type HotkeyAction,
+  type EvalMetrics
 } from '@shared/ipc'
 import {
   PROVIDERS,
@@ -2158,6 +2159,12 @@ export function Settings({
                 <Section title="Permissions" desc="Status of the OS permissions AskToto needs.">
                   <PermissionsSection />
                 </Section>
+                <Section
+                  title="Diagnostics"
+                  desc="On-device performance + quality from your local audit log. Computed here; never leaves this device."
+                >
+                  <DiagnosticsSection />
+                </Section>
                 <div className="flex flex-col items-center gap-2 pt-2">
                   <MantuLogo size={22} />
                   <div className="flex items-center gap-1 text-[11px] text-[color:var(--cl-muted-foreground)]">
@@ -2200,6 +2207,47 @@ export function Settings({
           Done
         </button>
       </footer>
+    </div>
+  )
+}
+
+/** Read-only eval readout (latency p50/p95, acceptance, failovers) from the local audit log. */
+function DiagnosticsSection(): JSX.Element {
+  const [m, setM] = useState<EvalMetrics | null>(null)
+  useEffect(() => {
+    void window.toto.readMetrics().then(setM).catch(() => setM(null))
+  }, [])
+  const ms = (v: number | null): string => (v == null ? '—' : v >= 1000 ? `${(v / 1000).toFixed(1)}s` : `${Math.round(v)}ms`)
+  const pct = (r: number | null): string => (r == null ? '—' : `${Math.round(r * 100)}%`)
+  if (!m) {
+    return <div className="text-[12px] text-[color:var(--cl-muted-foreground)]">Loading…</div>
+  }
+  if (m.answers === 0 && m.acceptance.up + m.acceptance.down === 0) {
+    return (
+      <div className="text-[12px] text-[color:var(--cl-muted-foreground)]">
+        No data yet — ask a few questions and rate some answers, then check back.
+      </div>
+    )
+  }
+  const cells: [string, string][] = [
+    ['Answers', String(m.answers)],
+    ['First token · p50', ms(m.ttftP50Ms)],
+    ['First token · p95', ms(m.ttftP95Ms)],
+    ['Answer · p50', ms(m.answerP50Ms)],
+    ['Answer · p95', ms(m.answerP95Ms)],
+    ['Acceptance', pct(m.acceptance.rate)],
+    ['Rated up / down', `${m.acceptance.up} / ${m.acceptance.down}`],
+    ['Failovers', String(m.fallbacks)],
+    ['Failures', String(m.failures)]
+  ]
+  return (
+    <div className="grid grid-cols-3 gap-2">
+      {cells.map(([label, value]) => (
+        <div key={label} className="flex flex-col gap-0.5 rounded-[10px] bg-[var(--cl-card)] px-3 py-2">
+          <span className="text-[11px] text-[color:var(--cl-muted-foreground)]">{label}</span>
+          <span className="text-[15px] font-medium tabular-nums text-[color:var(--cl-foreground)]">{value}</span>
+        </div>
+      ))}
     </div>
   )
 }
