@@ -394,6 +394,7 @@ export function App(): JSX.Element {
   const endReview = useCallback(() => {
     const tx = listen.text()
     listen.stop()
+    autoStartedRef.current = false // manual end clears the auto-start flag
     setView('review')
     setCollapsed(false)
     if (tx.trim()) ask.run({ mode: 'recap', transcript: tx })
@@ -440,6 +441,7 @@ export function App(): JSX.Element {
     suggest.cancel()
     if (wasListening) {
       listen.stop()
+      autoStartedRef.current = false // manual reset clears the auto-start flag
       meetingStartRef.current = Date.now()
     }
     ask.clear()
@@ -745,18 +747,24 @@ export function App(): JSX.Element {
         onTogglePanel={() => setCollapsed((c) => !c)}
         focusSignal={focusSignal}
       />
-      {settings && !settings.providerReady && (
-        <button
-          type="button"
-          onClick={() => {
-            setView('settings')
-            setCollapsed(false)
-          }}
-          className="no-drag focus-ring fade-up flex items-center justify-center gap-1.5 rounded-xl border border-[var(--color-accent)]/30 bg-[var(--color-accent)] px-3 py-1.5 text-[11px] font-medium text-white hover:brightness-110"
-        >
-          Add your {PROVIDERS[settings.provider].label} API key
-        </button>
-      )}
+      {settings && !settings.providerReady && (() => {
+        const activeDef = PROVIDERS[settings.provider]
+        const cta = activeDef.kind === 'cli'
+          ? `Connect ${activeDef.label} in Settings`
+          : `Add your ${activeDef.label} API key`
+        return (
+          <button
+            type="button"
+            onClick={() => {
+              setView('settings')
+              setCollapsed(false)
+            }}
+            className="no-drag focus-ring fade-up flex items-center justify-center gap-1.5 rounded-xl border border-[var(--color-accent)]/30 bg-[var(--color-accent)] px-3 py-1.5 text-[11px] font-medium text-white hover:brightness-110"
+          >
+            {cta}
+          </button>
+        )
+      })()}
       {/* Quick actions only on the answer/idle surface — not over Settings/History/Review, and not during
           Listen (Copilot shows its own in-meeting action row there). */}
       {view === 'answer' && !listen.listening && (

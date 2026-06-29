@@ -59,9 +59,26 @@ async function resolveBin(bin: string): Promise<string | null> {
     binCache.set(bin, resolved)
     return resolved
   } catch {
-    binCache.set(bin, null)
     return null
   }
+}
+
+/** Env for spawning a CLI. For claude-cli, strip Claude-Code session + proxy vars so the spawned
+ *  `claude` runs as a clean standalone invocation against the user's own keychain login (avoids a
+ *  hang when AskToto is itself launched from a Claude Code session, and ignores a proxy base URL). */
+function cliEnv(provider: ProviderId): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...process.env }
+  if (provider === 'claude-cli') {
+    for (const k of Object.keys(env)) {
+      if (/^CLAUDE_CODE/i.test(k) || k === 'CLAUDECODE' || k === 'CLAUDE_AGENT_SDK_VERSION' || k === 'CLAUDE_TMPDIR') {
+        delete env[k]
+      }
+    }
+    delete env.ANTHROPIC_BASE_URL
+  } else if (provider === 'codex-cli') {
+    delete env.OPENAI_BASE_URL
+  }
+  return env
 }
 
 // ─── Per-provider CLI config ─────────────────────────────────────────────────────
@@ -197,7 +214,8 @@ export function runCliStream(opts: RunCliStreamOpts): { abort: () => void } {
         tmpCwd = await mkdtemp(join(tmpdir(), 'asktoto-cli-'))
         cwd = tmpCwd
       } catch {
-        // If mkdtemp fails, fall through — cwd stays undefined (inherits process.cwd())
+        fail(`${label}: could not create a sandbox working directory.`)
+        return
       }
     }
 
@@ -205,7 +223,7 @@ export function runCliStream(opts: RunCliStreamOpts): { abort: () => void } {
     const child = spawn(absBin, args, {
       cwd,
       signal: controller.signal,
-      env: process.env,
+      env: cliEnv(opts.providerId),
       // SECURITY: never use shell:true — args are passed as an array
       shell: false,
       stdio: ['ignore', 'pipe', 'pipe']
@@ -292,7 +310,7 @@ export async function detectCli(provider: ProviderId): Promise<CliActionResult> 
 
 // ─── testCli ─────────────────────────────────────────────────────────────────────
 
-const TEST_TIMEOUT_MS = 30_000
+const TEST_TIMEOUT_MS = 45_000
 
 /**
  * Prove that the CLI is installed AND authenticated by running a tiny prompt.
@@ -328,12 +346,13 @@ export async function testCli(provider: ProviderId): Promise<CliActionResult> {
     const timer = setTimeout(() => {
       timedOut = true
       child.kill('SIGTERM')
-      resolve({ ok: false, error: 'Timed out after 30 s — are you logged in?' })
+      if (tmpDir) rm(tmpDir, { recursive: true, force: true }).catch(() => {})
+      resolve({ ok: false, error: 'Timed out after 45 s — are you logged in?' })
     }, TEST_TIMEOUT_MS)
 
     const child = spawn(absBin, testArgs, {
       cwd: testCwd,
-      env: process.env,
+      env: cliEnv(provider),
       shell: false,
       stdio: ['ignore', 'pipe', 'pipe']
     })
