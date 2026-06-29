@@ -65,6 +65,7 @@ export interface AskRequest {
   image?: string
   transcript?: string
   history?: ChatTurn[]
+  depth?: 'deeper' // set by "Go deeper" → ask for a fuller answer than the brief default
 }
 
 /** Owns the streaming answer lifecycle over IPC. */
@@ -72,6 +73,7 @@ export function useAsk(): {
   answer: AnswerState | null
   run: (req: AskRequest) => string
   retry: () => string
+  deeper: () => string
   cancel: () => void
   clear: () => void
 } {
@@ -82,6 +84,7 @@ export function useAsk(): {
   // whole markdown answer and Streamdown re-lexes the entire growing string → O(n^2) on fast providers.
   const pendingRef = useRef('')
   const rafRef = useRef(0)
+  const firstTokenSentRef = useRef(false) // first delta flushes synchronously (min TTFT); rest batch per RAF
 
   useEffect(() => {
     const flush = (): void => {
@@ -94,7 +97,14 @@ export function useAsk(): {
     const offDelta = window.toto.onDelta((d: StreamDelta) => {
       if (d.id !== idRef.current) return
       pendingRef.current += d.text
-      if (!rafRef.current) rafRef.current = requestAnimationFrame(flush)
+      // Flush the FIRST token synchronously — that's the moment perceived latency is set; a RAF here would
+      // add ~16ms to time-to-first-token. Everything after is batched per frame to avoid O(n^2) re-lexing.
+      if (!firstTokenSentRef.current) {
+        firstTokenSentRef.current = true
+        flush()
+      } else if (!rafRef.current) {
+        rafRef.current = requestAnimationFrame(flush)
+      }
     })
     const offDone = window.toto.onDone((d: StreamDone) => {
       if (d.id !== idRef.current) return
@@ -124,6 +134,7 @@ export function useAsk(): {
 
   const resetBuffer = useCallback((): void => {
     pendingRef.current = ''
+    firstTokenSentRef.current = false // next request sync-flushes its own first token
     if (rafRef.current) {
       cancelAnimationFrame(rafRef.current)
       rafRef.current = 0
@@ -144,6 +155,7 @@ export function useAsk(): {
         prompt: req.prompt ?? '',
         image: req.image,
         transcript: req.transcript,
+        depth: req.depth,
         history: req.history ?? []
       })
       return id
@@ -168,7 +180,14 @@ export function useAsk(): {
   // the image instead of silently re-asking text-only and getting a blind "I can't see your screen" answer.
   const retry = useCallback((): string => (lastReqRef.current ? run(lastReqRef.current) : ''), [run])
 
-  return { answer, run, retry, cancel, clear }
+  // "Go deeper": replay the last request (mode + image + transcript + history preserved exactly, like retry)
+  // with the depth flag set, so the model expands its usually-brief answer.
+  const deeper = useCallback(
+    (): string => (lastReqRef.current ? run({ ...lastReqRef.current, depth: 'deeper' }) : ''),
+    [run]
+  )
+
+  return { answer, run, retry, deeper, cancel, clear }
 }
 
 export function useSettings(): {
@@ -244,6 +263,16 @@ export function usePermissions(): {
   }, [])
   useEffect(() => {
     void refresh()
+    const onFocus = () => void refresh()
+    const onVisibilityChange = () => {
+      if (document.visibilityState === 'visible') void refresh()
+    }
+    window.addEventListener('focus', onFocus)
+    document.addEventListener('visibilitychange', onVisibilityChange)
+    return () => {
+      window.removeEventListener('focus', onFocus)
+      document.removeEventListener('visibilitychange', onVisibilityChange)
+    }
   }, [refresh])
   return { permissions, refresh }
 }

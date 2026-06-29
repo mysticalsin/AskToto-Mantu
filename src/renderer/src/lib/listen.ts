@@ -15,6 +15,8 @@ function whisperWorkletUrl(): string {
 }
 const WINDOW_SEC = 6
 const MAX_QUEUE = 24 // ~2.4 min of audio; drop oldest if the model is slow/failed to load
+const PARAKEET_FEED_TIMEOUT_MS = 5000 // a single Parakeet window shouldn't take longer than this to transcribe
+const PARAKEET_MAX_FAILURES = 3 // consecutive Parakeet failures → fall back to Whisper for the rest of the session
 export type AudioSource = 'mic' | 'system' | 'both'
 type Speaker = 'them' | 'you'
 
@@ -108,6 +110,8 @@ export function useListen(onQuestion?: (line: TranscriptLine) => void): ListenAp
   const busy = useRef(false)
   const readyRef = useRef(false)
   const liveRef = useRef(false) // true only between start() and stop() — guards stale results
+  const crashedRef = useRef(false) // set in worker onerror (it already tore down) → stop() must not redo it
+  const parakeetFailures = useRef(0) // consecutive Parakeet IPC failures → switch to Whisper after a few
   const onQRef = useRef(onQuestion)
   onQRef.current = onQuestion
   const linesRef = useRef<TranscriptLine[]>([])
@@ -134,10 +138,26 @@ export function useListen(onQuestion?: (line: TranscriptLine) => void): ListenAp
     busy.current = true
     if (engineRef.current === 'parakeet') {
       // Parakeet runs in the MAIN process (native addon) — hand the window over IPC, get text back.
-      void window.toto
-        .parakeetFeed(job.audio, job.speaker)
-        .then((text) => commitLine(text, job.speaker))
-        .catch(() => {})
+      // Race against a timeout so a hung IPC can't stall the queue. On a real failure (reject or timeout)
+      // count it; after a few consecutive failures, switch the whole session to Whisper so windows stop
+      // being lost. An empty string is genuine silence (phantom-filtered in commitLine), never a failure.
+      const feed = window.toto.parakeetFeed(job.audio, job.speaker)
+      const timeout = new Promise<string>((_, reject) =>
+        setTimeout(() => reject(new Error('parakeet feed timed out')), PARAKEET_FEED_TIMEOUT_MS)
+      )
+      void Promise.race([feed, timeout])
+        .then((text) => {
+          parakeetFailures.current = 0 // success resets the streak
+          commitLine(text, job.speaker)
+        })
+        .catch((err) => {
+          parakeetFailures.current += 1
+          console.warn(
+            `[listen] parakeet window failed (${parakeetFailures.current}/${PARAKEET_MAX_FAILURES}):`,
+            (err as Error)?.message
+          )
+          if (parakeetFailures.current >= PARAKEET_MAX_FAILURES) fallBackToWhisper()
+        })
         .finally(() => {
           busy.current = false
           pump()
@@ -149,6 +169,9 @@ export function useListen(onQuestion?: (line: TranscriptLine) => void): ListenAp
       return
     }
     workerRef.current.postMessage({ type: 'audio', audio: job.audio, speaker: job.speaker }, [job.audio.buffer])
+    // fallBackToWhisper (called in the parakeet .catch above) is forward-declared below and intentionally
+    // omitted from deps: pump → fallBackToWhisper → ensureWorker → pump is a cycle, so listing it would TDZ
+    // at render. All four callbacks are stable (created once), so pump's captured reference never goes stale.
   }, [commitLine])
 
   const ensureWorker = useCallback((): Worker => {
@@ -189,17 +212,40 @@ export function useListen(onQuestion?: (line: TranscriptLine) => void): ListenAp
       workerRef.current?.terminate()
       workerRef.current = null
       readyRef.current = false
+      crashedRef.current = true // the crash handler already tore everything down — stop() must not redo it
     }
     workerRef.current = w
     return w
   }, [pump])
+
+  // Repeated Parakeet failures mid-session → permanently switch this session to Whisper so transcription
+  // keeps working (mirrors the init-time fallback in start()). The window that tripped the threshold is
+  // lost, but every subsequent window is transcribed by Whisper once its worker finishes loading.
+  // (ensureWorker/getAsrBundled are stable; referenced from pump above before this line — fine at call time.)
+  const fallBackToWhisper = useCallback((): void => {
+    if (engineRef.current !== 'parakeet') return // already switched
+    console.warn('[listen] parakeet failing repeatedly — switching to Whisper for the rest of this session')
+    engineRef.current = 'whisper'
+    readyRef.current = false
+    parakeetFailures.current = 0
+    setState((s) => ({ ...s, loading: true, error: 'Switched to the Whisper engine after repeated errors.' }))
+    void getAsrBundled()
+      .then((bundled) => {
+        ensureWorker().postMessage({ type: 'init', quality: loadedQualityRef.current ?? 'fast', bundled })
+      })
+      .catch(() => {})
+  }, [ensureWorker, getAsrBundled])
 
   const pushAudio = useCallback(
     (sp: Speaker, audio: Float32Array): void => {
       if (!liveRef.current) return
       queue.current.push({ audio, speaker: sp })
       if (queue.current.length > MAX_QUEUE) {
-        queue.current.splice(0, queue.current.length - MAX_QUEUE) // bound memory; drop oldest
+        const dropped = queue.current.length - MAX_QUEUE
+        queue.current.splice(0, dropped) // bound memory; drop oldest
+        // Backpressure: transcription is falling behind capture, so audio windows are being lost (corrupts
+        // the recap). Logged rather than silently swallowed so it's diagnosable instead of an invisible gap.
+        console.warn(`[listen] audio backpressure: dropped ${dropped} window(s) (queue > ${MAX_QUEUE})`)
       }
       pump()
     },
@@ -249,6 +295,8 @@ export function useListen(onQuestion?: (line: TranscriptLine) => void): ListenAp
       queue.current = []
       busy.current = false
       liveRef.current = true
+      crashedRef.current = false // fresh session — re-enable stop()'s teardown after any prior crash
+      parakeetFailures.current = 0 // reset the failure streak so a new session gets a clean shot at Parakeet
       engineRef.current = engine
       setState((s) => ({ ...s, error: null, listening: true }))
       try {
@@ -315,6 +363,7 @@ export function useListen(onQuestion?: (line: TranscriptLine) => void): ListenAp
       // mic-only, with a clear note instead of a scary abort.
       let micOk = false
       let sysOk = false
+      let sysErr: Error | null = null // captured for error-message classification below
 
       if (source === 'mic' || source === 'both') {
         try {
@@ -363,9 +412,16 @@ export function useListen(onQuestion?: (line: TranscriptLine) => void): ListenAp
           await openChannel('them', sys)
           sysOk = true
         } catch (e) {
-          console.warn('[listen] system-audio capture failed:', (e as Error)?.name, (e as Error)?.message)
+          sysErr = e as Error
+          console.warn('[listen] system-audio capture failed:', sysErr?.name, sysErr?.message)
         }
       }
+
+      /** True when getDisplayMedia threw an AbortError — the display was asleep / picker cancelled,
+       *  NOT a missing Screen Recording permission. */
+      const isSysAbort =
+        sysErr !== null &&
+        (sysErr.name === 'AbortError' || /abort/i.test(sysErr.message ?? ''))
 
       if (!micOk && !sysOk) {
         // Nothing came up — tear down so no half-open channel stays hot while the UI says "not listening".
@@ -377,10 +433,14 @@ export function useListen(onQuestion?: (line: TranscriptLine) => void): ListenAp
         } catch {
           /* ignore */
         }
-        const msg =
-          source === 'system'
-            ? 'Couldn’t capture system audio. Grant Screen Recording in System Settings, or switch Listen to your microphone in Settings → Audio.'
-            : 'Couldn’t start the microphone. Check Microphone access in System Settings → Privacy & Security → Microphone.'
+        let msg: string
+        if (source === 'system') {
+          msg = isSysAbort
+            ? "Couldn't start system audio (display may be asleep or screen capture is busy). Try again."
+            : "Couldn't capture system audio. Grant Screen Recording in System Settings, or switch Listen to your microphone in Settings → Audio."
+        } else {
+          msg = "Couldn't start the microphone. Check Microphone access in System Settings → Privacy & Security → Microphone."
+        }
         setState((s) => ({ ...s, error: msg, listening: false, loading: false }))
         // A failed start shouldn't pin the whisper worker + ~21MB ONNX wasm in memory for the app's life —
         // arm the same idle release stop() uses (ensureWorker recreates it on the next start()).
@@ -395,12 +455,14 @@ export function useListen(onQuestion?: (line: TranscriptLine) => void): ListenAp
       }
 
       // At least one side is live → we ARE listening. Surface a soft note if the other side is missing.
-      const note =
-        source === 'both' && micOk && !sysOk
-          ? 'System audio unavailable. Listening to your microphone only. Grant Screen Recording to hear the other side.'
-          : source === 'both' && !micOk && sysOk
-            ? 'Microphone unavailable. Listening to system audio only.'
-            : null
+      let note: string | null = null
+      if (source === 'both' && micOk && !sysOk) {
+        note = isSysAbort
+          ? 'System audio couldn\'t start (display may be asleep or screen capture is busy). Using your microphone only.'
+          : 'System audio unavailable. Listening to your microphone only. Grant Screen Recording to hear the other side.'
+      } else if (source === 'both' && !micOk && sysOk) {
+        note = 'Microphone unavailable. Listening to system audio only.'
+      }
       setState((s) => ({ ...s, error: note, listening: true, loading: !readyRef.current }))
     },
     // closeChannel referenced in body (defined below); stable useCallback, omitted to avoid TDZ in deps
@@ -418,23 +480,48 @@ export function useListen(onQuestion?: (line: TranscriptLine) => void): ListenAp
     delete channels.current[sp]
   }, [])
 
+  const stoppingRef = useRef(false) // double-stop guard
   const stop = useCallback((): void => {
-    liveRef.current = false
-    queue.current = [] // drop undispatched windows so they can't leak into the next session
-    closeChannel('you')
-    closeChannel('them')
-    void window.toto.setListeningState(false).catch(() => {})
-    setState((s) => ({ ...s, listening: false, loading: false, error: null }))
-    // Release the whisper worker (+ ~21MB ONNX wasm + loaded model) after a few idle minutes so it does
-    // not sit resident for the entire life of an always-on overlay. ensureWorker() recreates it and start()
-    // re-inits the model on the next session; re-arming within the window keeps it warm.
-    if (workerIdleTimer.current) clearTimeout(workerIdleTimer.current)
-    workerIdleTimer.current = setTimeout(() => {
-      workerRef.current?.terminate()
-      workerRef.current = null
-      readyRef.current = false
-      workerIdleTimer.current = null
-    }, WORKER_IDLE_RELEASE_MS)
+    // crashedRef → the worker onerror handler already ran the full teardown; running it again here would
+    // thrash state (re-fire setListeningState(false), wipe the crash error) → the "dead-end" tray mismatch.
+    if (stoppingRef.current || crashedRef.current) return // already stopping or already torn down by a crash
+    stoppingRef.current = true
+
+    // 1. Flush each open worklet's partial accumulation buffer WHILE liveRef is still true so that
+    //    any flushed audio message routes through pushAudio → pump → commitLine before teardown.
+    const speakers: Speaker[] = ['you', 'them']
+    for (const sp of speakers) {
+      const ch = channels.current[sp]
+      if (ch) {
+        try {
+          ch.worklet.port.postMessage('flush')
+        } catch {
+          /* ignore if port is already closed */
+        }
+      }
+    }
+
+    // 2. Defer the actual teardown by ~250 ms so the flushed audio message has time to traverse the
+    //    worklet → pushAudio → pump → commitLine path before the channel is torn down.
+    setTimeout(() => {
+      liveRef.current = false
+      queue.current = [] // drop undispatched windows so they can't leak into the next session
+      closeChannel('you')
+      closeChannel('them')
+      void window.toto.setListeningState(false).catch(() => {})
+      setState((s) => ({ ...s, listening: false, loading: false, error: null }))
+      stoppingRef.current = false
+      // Release the whisper worker (+ ~21MB ONNX wasm + loaded model) after a few idle minutes so it
+      // does not sit resident for the entire life of an always-on overlay. ensureWorker() recreates it
+      // and start() re-inits the model on the next session; re-arming within the window keeps it warm.
+      if (workerIdleTimer.current) clearTimeout(workerIdleTimer.current)
+      workerIdleTimer.current = setTimeout(() => {
+        workerRef.current?.terminate()
+        workerRef.current = null
+        readyRef.current = false
+        workerIdleTimer.current = null
+      }, WORKER_IDLE_RELEASE_MS)
+    }, 250)
   }, [closeChannel])
 
   const clear = useCallback((): void => {
