@@ -142,7 +142,7 @@ export function Bar(props: BarProps): JSX.Element {
         {/* Row 1 — hero input + ↵ submit */}
         <div
           className="flex items-center gap-4 px-6"
-          style={{ paddingTop: hasAnswer ? 8 : 12, paddingBottom: hasAnswer ? 12 : 12 }}
+          style={{ paddingTop: hasAnswer ? 6 : 8, paddingBottom: hasAnswer ? 10 : 8 }}
         >
           <input
             ref={inputRef}
@@ -160,7 +160,7 @@ export function Bar(props: BarProps): JSX.Element {
             aria-label="Ask AskToto anything"
             className={[
               'no-drag focus-ring font-body min-w-0 flex-1 bg-transparent tracking-[-0.01em] text-[color:var(--color-ink)] placeholder:text-[color:var(--color-ink-3)] caret-[var(--color-accent-2)]',
-              hasAnswer ? 'text-[15px]' : 'text-[21px] font-[450]'
+              hasAnswer ? 'text-[15px]' : 'text-[17px] font-[450]'
             ].join(' ')}
           />
           {props.busy ? (
@@ -187,7 +187,7 @@ export function Bar(props: BarProps): JSX.Element {
         </div>
 
         {/* Row 2 — toolbar */}
-        <div className="aw-toolbar flex items-center gap-3 border-t border-[var(--color-hair-soft)] px-5 py-2">
+        <div className="aw-toolbar flex items-center gap-3 border-t border-[var(--color-hair-soft)] px-5 py-1.5">
           {/* The Mantu mark IS the logo → opens Settings. (No menu — Quit/Hide live in the tray + hotkeys.) */}
           <button
             type="button"
