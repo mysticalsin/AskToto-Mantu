@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { generateKeyPairSync, privateDecrypt, createDecipheriv, constants } from 'node:crypto'
 import { safeStorage } from 'electron'
-import { saveMeeting, readSavedFile, isEncryptedFile } from './transcripts'
+import { saveMeeting, readSavedFile, isEncryptedFile, parseRecapMarkdown } from './transcripts'
 import type { SaveMeeting, Settings } from '@shared/ipc'
 
 const V2_MARKER = 'ATKENC2\n'
@@ -197,5 +197,62 @@ describe('transcripts', () => {
     const file2 = await saveMeeting(settings, meeting)
     expect(file1).not.toBe(file2)
     expect(file2).toMatch(/daily-standup-2\.md$/)
+  })
+})
+
+describe('parseRecapMarkdown', () => {
+  const SAMPLE = [
+    '## Overview:',
+    'We aligned on the Q3 launch and the budget.',
+    '',
+    '## Topics:',
+    '- Launch timeline',
+    '- Budget',
+    '',
+    '## Decisions:',
+    '- Ship on Sept 1',
+    '- Freeze scope Friday',
+    '',
+    '## Action items:',
+    '- Send the deck (Alice)',
+    '- Book the venue — Bob',
+    '- Finalize copy',
+    '',
+    '## Open questions:',
+    '- Who owns PR?',
+    '',
+    '## Notable quotes:',
+    '- "Ship it."'
+  ].join('\n')
+
+  it('splits the fixed RECAP_PROMPT sections into structured fields', () => {
+    const r = parseRecapMarkdown(SAMPLE)
+    expect(r.overview).toBe('We aligned on the Q3 launch and the budget.')
+    expect(r.topics).toEqual(['Launch timeline', 'Budget'])
+    expect(r.decisions).toEqual(['Ship on Sept 1', 'Freeze scope Friday'])
+    expect(r.openQuestions).toEqual(['Who owns PR?'])
+    expect(r.notableQuotes).toEqual(['"Ship it."'])
+  })
+
+  it('extracts action-item owners from "(Owner)" and "— Owner", leaving plain items unowned', () => {
+    const r = parseRecapMarkdown(SAMPLE)
+    expect(r.actionItems).toEqual([
+      { text: 'Send the deck', owner: 'Alice' },
+      { text: 'Book the venue', owner: 'Bob' },
+      { text: 'Finalize copy', owner: null }
+    ])
+  })
+
+  it('degrades to owner:null on a nested-paren owner rather than mis-splitting', () => {
+    const r = parseRecapMarkdown('## Action items:\n- Do the thing (Alice (boss))')
+    expect(r.actionItems).toEqual([{ text: 'Do the thing (Alice (boss))', owner: null }])
+  })
+
+  it('always preserves the full original markdown and never throws on junk input', () => {
+    expect(parseRecapMarkdown(SAMPLE).markdown).toBe(SAMPLE)
+    const empty = parseRecapMarkdown('not even markdown')
+    expect(empty.overview).toBe('')
+    expect(empty.decisions).toEqual([])
+    expect(empty.markdown).toBe('not even markdown')
   })
 })

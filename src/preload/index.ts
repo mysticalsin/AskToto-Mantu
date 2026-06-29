@@ -8,6 +8,7 @@ import {
   type CaptureResult,
   type SaveMeeting,
   type SaveNote,
+  type RecapExport,
   type MeetingSummary,
   type RecallHit,
   type StreamDelta,
@@ -93,6 +94,8 @@ const api = {
   saveTranscript: (m: SaveMeeting): Promise<{ path: string }> =>
     ipcRenderer.invoke(IPC.saveTranscript, m),
   saveNote: (n: SaveNote): Promise<{ path: string }> => ipcRenderer.invoke(IPC.saveNote, n),
+  exportRecapJson: (markdown: string): Promise<RecapExport> =>
+    ipcRenderer.invoke(IPC.exportRecapJson, markdown),
   pickFolder: (): Promise<PublicSettings> => ipcRenderer.invoke(IPC.pickFolder),
   openMeetingsFolder: (): Promise<void> => ipcRenderer.invoke(IPC.openPath),
   recallList: (): Promise<MeetingSummary[]> => ipcRenderer.invoke(IPC.recallList),

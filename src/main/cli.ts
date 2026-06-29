@@ -24,7 +24,8 @@ const execFileAsync = promisify(execFile)
 
 // ─── Idle watchdog (mirrors llm.ts) ────────────────────────────────────────────
 const STREAM_IDLE_MS = 120_000
-function idleWatchdog(onIdle: () => void): { ping: () => void; clear: () => void } {
+// exported for unit tests (cli.test.ts) — security/reliability-critical, must stay covered
+export function idleWatchdog(onIdle: () => void): { ping: () => void; clear: () => void } {
   let t: NodeJS.Timeout | null = setTimeout(onIdle, STREAM_IDLE_MS)
   return {
     ping: () => {
@@ -50,7 +51,7 @@ const binCache = new Map<string, string | null>()
  * Results are cached in-process — resolveBin is called on every streaming request, so caching
  * prevents repeated shell spawns per conversation turn.
  */
-async function resolveBin(bin: string): Promise<string | null> {
+export async function resolveBin(bin: string): Promise<string | null> {
   if (binCache.has(bin)) return binCache.get(bin) ?? null
   const shell = process.env.SHELL || '/bin/zsh'
   try {
@@ -66,7 +67,7 @@ async function resolveBin(bin: string): Promise<string | null> {
 /** Env for spawning a CLI. For claude-cli, strip Claude-Code session + proxy vars so the spawned
  *  `claude` runs as a clean standalone invocation against the user's own keychain login (avoids a
  *  hang when AskToto is itself launched from a Claude Code session, and ignores a proxy base URL). */
-function cliEnv(provider: ProviderId): NodeJS.ProcessEnv {
+export function cliEnv(provider: ProviderId): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { ...process.env }
   if (provider === 'claude-cli') {
     for (const k of Object.keys(env)) {
@@ -91,7 +92,8 @@ interface CliConfig {
   useTmpCwd: boolean
 }
 
-const CLI_CONFIGS: Partial<Record<ProviderId, CliConfig>> = {
+// exported for unit tests (cli.test.ts) — the locked-down arg arrays are a security invariant
+export const CLI_CONFIGS: Partial<Record<ProviderId, CliConfig>> = {
   'claude-cli': {
     bin: 'claude',
     buildArgs({ model, system, prompt }) {
@@ -624,4 +626,17 @@ export async function loginCli(provider: ProviderId): Promise<{ ok: boolean; err
   } catch (e) {
     return { ok: false, error: e instanceof Error ? e.message : String(e) }
   }
+}
+
+// ─── prewarmCli ────────────────────────────────────────────────────────────────
+
+/**
+ * Pre-resolve the 'claude' and 'codex' binaries (in parallel) to warm the binCache, so the first CLI ask
+ * doesn't pay the ~100-200ms login-shell lookup mid-stream. Fire-and-forget; errors are cached as null and
+ * handled gracefully downstream. Cheap to call repeatedly — a cache hit is instant. Mirrors prewarmCapture().
+ */
+export function prewarmCli(): void {
+  void Promise.all([resolveBin('claude'), resolveBin('codex')]).catch(() => {
+    /* best-effort warm */
+  })
 }

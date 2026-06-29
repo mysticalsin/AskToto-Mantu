@@ -53,6 +53,7 @@ export type AuditEvent =
   | 'settings.changed'
   | 'calendar.read'
   | 'app.crash'
+  | 'meeting.detect.degraded'
 
 /**
  * Append a structured audit record. NEVER pass secrets or message/transcript CONTENT — metadata only

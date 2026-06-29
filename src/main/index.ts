@@ -25,7 +25,8 @@ import {
   TestApiKeyPayloadSchema,
   DEFAULT_SHORTCUTS,
   type HotkeyAction,
-  type PublicSettings
+  type PublicSettings,
+  type CalendarEvent
 } from '@shared/ipc'
 import {
   getSettings,
@@ -51,6 +52,7 @@ import { parakeetModelReady, ensureParakeetModel, parakeetTranscribe } from './p
 import {
   saveMeeting,
   saveNote,
+  parseRecapMarkdown,
   resolveMeetingsFolder,
   ensureMeetingsFolder,
   isEncryptedFile,
@@ -62,7 +64,7 @@ import { listMeetings, searchMeetings } from './recall'
 import { initAutoUpdate } from './updater'
 import { runSelfTest } from './selftest'
 import { importDustCliSession, setupDustCli } from './dustcli'
-import { detectCli, testCli, setupCli, installCli, loginCli } from './cli'
+import { detectCli, testCli, setupCli, installCli, loginCli, prewarmCli } from './cli'
 import { graphifyStatus, buildGraph, relatedNotes, graphHtml, scheduleRebuild } from './graphify'
 import { SaveMeetingSchema, SaveNoteSchema } from '@shared/ipc'
 import { PROVIDERS, resolveModelTier, type ProviderId } from '@shared/providers'
@@ -203,6 +205,13 @@ function createWindow(): void {
   })
   win.webContents.on('will-navigate', (e, url) => {
     if (url !== win?.webContents.getURL()) e.preventDefault()
+  })
+  // Window-scoped ⌘Q / Ctrl+Q: only quits when this overlay is focused, not system-wide.
+  win.webContents.on('before-input-event', (e, input) => {
+    if ((input.meta || input.control) && input.key.toLowerCase() === 'q' && input.type === 'keyDown') {
+      e.preventDefault()
+      app.quit()
+    }
   })
 
   // Dev-only: screenshot ONLY this window (no desktop) for verification. Privacy-safe.
@@ -383,6 +392,30 @@ function moveBy(dx: number, dy: number): void {
   win.setBounds({ ...b, x, y })
 }
 
+/**
+ * Keep the overlay reachable across display topology changes (monitor unplugged, lid closed, resolution
+ * change). Without this the window stays anchored to a display that no longer exists and is stranded
+ * off-screen with no fix but a restart. On any change, if the window no longer intersects the visible work
+ * area of its matched display, clamp it back in (same math as moveBy). App-scoped listeners; live for the
+ * app's lifetime, so they're never removed.
+ */
+function registerScreenListeners(): void {
+  const reanchor = (): void => {
+    if (!win) return
+    const b = win.getBounds()
+    const { workArea: wa } = screen.getDisplayMatching(b)
+    const visible =
+      b.x + b.width > wa.x && b.x < wa.x + wa.width && b.y + b.height > wa.y && b.y < wa.y + wa.height
+    if (visible) return // still (partly) on a real display — leave it where the user put it
+    const x = Math.min(Math.max(b.x, wa.x), wa.x + wa.width - b.width)
+    const y = Math.min(Math.max(b.y, wa.y), wa.y + wa.height - b.height)
+    win.setBounds({ ...b, x, y })
+  }
+  screen.on('display-removed', reanchor)
+  screen.on('display-added', reanchor)
+  screen.on('display-metrics-changed', reanchor)
+}
+
 function toggleVisible(): void {
   if (!win) return
   if (win.isVisible()) win.hide()
@@ -420,13 +453,53 @@ function registerShortcuts(): void {
       console.warn(`[shortcuts] invalid accelerator for ${action}: ${accel}`, e)
     }
   }
-  // ⌘Q is intentionally global because the dock is hidden and the overlay has no normal quit path.
-  globalShortcut.register('CommandOrControl+Q', () => app.quit())
 }
 
 let meetingTimer: ReturnType<typeof setInterval> | null = null
 let meetingActive = false
 let meetingDetecting = false
+let meetingDetectFailures = 0 // consecutive poll failures → one degraded-audit signal once it's persistent
+
+// Cache today's agenda (~30s) so the 7s poller can cross-reference detected meetings against real calendar
+// events without hammering Graph. Validation only RESTRICTS auto-start when there are events to match
+// against; it always degrades OPEN when calendar is unavailable, so behavior is unchanged off Azure.
+let calendarCache: { events: CalendarEvent[]; ts: number } | null = null
+const CALENDAR_CACHE_TTL_MS = 30_000
+
+/**
+ * Should a window-title-detected meeting auto-start? Cross-references the detected title against today's
+ * Outlook agenda to reject false positives (e.g. "Q4 Review | Microsoft Teams" — a chat, not a call).
+ * Degrades OPEN (true) whenever calendar can't disprove it: browser-URL meetings (already high confidence),
+ * not signed in, Graph unavailable/consent-needed, or an empty agenda. Only an authenticated agenda WITH
+ * events and NO title match suppresses the auto-start (manual start always works regardless).
+ */
+async function shouldAutoStart(hit: string): Promise<boolean> {
+  const detail = hit.slice(hit.indexOf('|') + 1).trim()
+  if (!detail || /^https?:\/\//i.test(detail)) return true // browser meeting → matched by URL already
+  if (!requireAuth()) return true // no Azure / signed out → keep title-only behavior
+
+  let events = calendarCache?.events
+  if (!calendarCache || Date.now() - calendarCache.ts > CALENDAR_CACHE_TTL_MS) {
+    let tz = 'UTC'
+    try {
+      tz = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'
+    } catch {
+      /* keep UTC */
+    }
+    const res = await calendarToday(tz)
+    if (!res.ok || !res.events) return true // consent needed / Graph error → degrade open
+    events = res.events
+    calendarCache = { events, ts: Date.now() }
+  }
+  if (!events || events.length === 0) return true // nothing to match against → don't block
+
+  const title = detail.toLowerCase()
+  return events.some((ev) => {
+    const subj = ev.subject.trim().toLowerCase()
+    return subj.length >= 4 && (title.includes(subj) || subj.includes(title))
+  })
+}
+
 function startMeetingPoller(): void {
   if (meetingTimer) return
   meetingTimer = setInterval(async () => {
@@ -437,13 +510,25 @@ function startMeetingPoller(): void {
     meetingDetecting = true
     try {
       const hit = await detectMeeting(getSettings().customMeetingApps)
+      meetingDetectFailures = 0 // a completed poll (hit or not) clears the failure streak
       if (hit && !meetingActive) {
-        meetingActive = true
-        if (win && !win.isVisible()) win.show() // surface the overlay so the user sees recording start
-        win?.webContents.send(IPC.meetingDetected, { app: hit.split('|')[0], active: true })
+        if (await shouldAutoStart(hit)) {
+          meetingActive = true
+          if (win && !win.isVisible()) win.show() // surface the overlay so the user sees recording start
+          win?.webContents.send(IPC.meetingDetected, { app: hit.split('|')[0], active: true })
+        }
+        // else: probable false positive (no matching calendar event) — skip auto-start; manual still works
       } else if (!hit && meetingActive) {
         meetingActive = false
         win?.webContents.send(IPC.meetingDetected, { active: false }) // meeting ended → renderer wraps up
+      }
+    } catch (e) {
+      // osascript timeout / Automation-denied etc. Without this catch a broken detector looks identical to
+      // "no meeting". Log every failure; emit ONE degraded-audit signal once it's clearly persistent.
+      meetingDetectFailures++
+      mainLog.error('[meeting-detect] poll failed:', e instanceof Error ? e.message : String(e))
+      if (meetingDetectFailures === 3) {
+        auditLog('meeting.detect.degraded', { consecutiveFailures: meetingDetectFailures })
       }
     } finally {
       meetingDetecting = false
@@ -608,6 +693,7 @@ function registerIpc(): void {
     assertMainWindow(e)
     const status = await authSignIn()
     prewarmCapture() // warm the cold capture pipeline now that we're signed in (no-op if not authed)
+    prewarmCli() // warm the CLI binary cache so the first CLI ask doesn't stall on a login-shell lookup
     return status
   })
   ipcMain.handle(IPC.authSignOut, (e) => {
@@ -795,6 +881,14 @@ function registerIpc(): void {
     const r = { path: await saveNote(getSettings(), n) }
     scheduleRebuild()
     return r
+  })
+
+  // Parse a recap's markdown into a structured object (decisions + action-items-with-owners) the renderer
+  // can copy as JSON for Jira/Asana/Notion. Pure transform of text the renderer already holds — no disk I/O.
+  ipcMain.handle(IPC.exportRecapJson, (e, markdown: unknown) => {
+    assertMainWindow(e)
+    if (!requireAuth()) throw new Error('Not signed in.')
+    return parseRecapMarkdown(typeof markdown === 'string' ? markdown : '')
   })
 
   ipcMain.handle(IPC.graphifyStatus, (e) => {
@@ -1074,6 +1168,7 @@ if (!app.requestSingleInstanceLock()) {
   runStep('createTray', createTray)
   runStep('registerShortcuts', registerShortcuts)
   runStep('createWindow', createWindow)
+  runStep('registerScreenListeners', registerScreenListeners)
   runStep('startMeetingPoller', startMeetingPoller)
   runStep('initAutoUpdate', initAutoUpdate)
 

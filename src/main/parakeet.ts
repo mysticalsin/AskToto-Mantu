@@ -172,19 +172,23 @@ function getRecognizer(): any | null {
   }
 }
 
-/** Transcribe one mono 16kHz Float32 PCM window → text. Empty string if the engine isn't available. */
+/**
+ * Transcribe one mono 16kHz Float32 PCM window → text.
+ * THROWS if the engine is unavailable or decoding fails, so the renderer can tell a real failure apart from
+ * silence and fall back to Whisper (an empty string here means genuine no-speech, NOT a failure).
+ */
 export async function parakeetTranscribe(samples: Float32Array): Promise<string> {
   const rec = getRecognizer()
-  if (!rec) return ''
+  if (!rec) throw new Error('parakeet recognizer unavailable')
   try {
     const stream = rec.createStream()
     stream.acceptWaveform({ samples, sampleRate: SAMPLE_RATE })
     await rec.decodeAsync(stream)
     const r = rec.getResult(stream)
-    return (r?.text || '').trim()
+    return (r?.text || '').trim() // '' = genuine silence/no speech
   } catch (e) {
     mainLog.error('[parakeet] transcribe failed:', (e as Error)?.message)
-    return ''
+    throw e instanceof Error ? e : new Error(String(e)) // surface to renderer → Whisper fallback
   }
 }
 

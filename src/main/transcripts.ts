@@ -4,7 +4,7 @@ import { writeFile, rename, unlink } from 'node:fs/promises'
 import { join, basename } from 'node:path'
 import { homedir } from 'node:os'
 import { randomBytes, createCipheriv, createDecipheriv, publicEncrypt, constants } from 'node:crypto'
-import type { SaveMeeting, SaveNote, Settings } from '@shared/ipc'
+import type { SaveMeeting, SaveNote, Settings, RecapExport } from '@shared/ipc'
 
 // Optional at-rest encryption for transcripts/notes. Two on-disk formats share one fixed-length
 // `ATKENC<n>\n` magic prefix so detection stays a simple prefix check:
@@ -445,4 +445,51 @@ export async function saveMeeting(settings: Settings, m: SaveMeeting): Promise<s
     appendIndexRow(folder, dateStr, title, m.mode, durMin, file.slice(folder.length + 1))
   }
   return file
+}
+
+/**
+ * Parse a RECAP_PROMPT markdown document into a structured export (for piping into Jira/Asana/Notion).
+ * Sections come from RECAP_PROMPT's fixed "## Name:" headings; action-item owners are pulled from the
+ * common "task (Owner)" / "task — Owner" / "task - Owner" trailers when present. Best-effort: unknown or
+ * reworded sections fall through to empty arrays, and the full original markdown is always included so
+ * nothing is ever lost.
+ */
+export function parseRecapMarkdown(markdown: string): RecapExport {
+  const md = typeof markdown === 'string' ? markdown : ''
+
+  // Split on "## " headings; map each heading (colon-trimmed, lowercased) to its body up to the next "## ".
+  const sections: Record<string, string> = {}
+  for (const part of md.split(/^##\s+/m)) {
+    const nl = part.indexOf('\n')
+    if (nl === -1) continue
+    const heading = part.slice(0, nl).replace(/:\s*$/, '').trim().toLowerCase()
+    if (heading) sections[heading] = part.slice(nl + 1).trim()
+  }
+
+  const bullets = (text: string | undefined): string[] =>
+    (text || '')
+      .split('\n')
+      .map((l) => l.replace(/^\s*[-*]\s+/, '').trim()) // strip a leading bullet marker
+      .filter((l) => l.length > 0)
+
+  const actionItems = bullets(sections['action items']).map((text) => {
+    // "Do the thing (Alice)". Non-greedy text + a paren-free owner anchored to the end, so a stray inner
+    // paren (e.g. "(Alice (boss))") degrades gracefully to owner:null rather than a wrong split.
+    const paren = text.match(/^(.*?\S)\s*\(([^()]+)\)\s*$/)
+    if (paren) return { text: paren[1].trim(), owner: paren[2].trim() }
+    const dash = text.match(/^(.*\S)\s+[—-]\s+(.+)$/) // "Do the thing — Alice" / "Do the thing - Alice"
+    if (dash) return { text: dash[1].trim(), owner: dash[2].trim() }
+    return { text, owner: null as string | null }
+  })
+
+  return {
+    overview: sections['overview'] || '',
+    topics: bullets(sections['topics']),
+    keyQA: bullets(sections['key q&a'] || sections['key qa']),
+    decisions: bullets(sections['decisions']),
+    actionItems,
+    openQuestions: bullets(sections['open questions']),
+    notableQuotes: bullets(sections['notable quotes']),
+    markdown: md
+  }
 }

@@ -63,6 +63,7 @@ export const IPC = {
   armAudio: 'audio:arm',
   saveTranscript: 'transcript:save',
   saveNote: 'note:save',
+  exportRecapJson: 'recap:export-json',
   pickFolder: 'folder:pick',
   openPath: 'path:open',
   recallList: 'recall:list',
@@ -135,6 +136,20 @@ export const SaveNoteSchema = z.object({
 })
 export type SaveNote = z.infer<typeof SaveNoteSchema>
 
+/** Structured export of a meeting recap (decisions + action-items-with-owners) for Jira/Asana/Notion etc.
+ *  The full original markdown is always included so nothing is lost if a section heading was reworded. */
+export const RecapExportSchema = z.object({
+  overview: z.string(),
+  topics: z.array(z.string()),
+  keyQA: z.array(z.string()),
+  decisions: z.array(z.string()),
+  actionItems: z.array(z.object({ text: z.string(), owner: z.string().nullable() })),
+  openQuestions: z.array(z.string()),
+  notableQuotes: z.array(z.string()),
+  markdown: z.string()
+})
+export type RecapExport = z.infer<typeof RecapExportSchema>
+
 export const ChatTurnSchema = z.object({
   role: z.enum(['user', 'assistant']),
   content: z.string()
@@ -155,6 +170,8 @@ export const AskStartSchema = z.object({
     .optional(),
   /** raw transcript text for suggest mode */
   transcript: z.string().optional(),
+  /** 'deeper' = the user tapped "Go deeper" → re-ask for a fuller answer (injected per-turn, never cached) */
+  depth: z.enum(['deeper']).optional(),
   history: z.array(ChatTurnSchema).default([])
 })
 export type AskStart = z.infer<typeof AskStartSchema>
