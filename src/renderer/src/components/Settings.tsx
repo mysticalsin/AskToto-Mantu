@@ -722,7 +722,7 @@ function StepBadge({ n, done }: { n: number; done?: boolean }): JSX.Element {
 // ---------------------------------------------------------------------------
 
 type CliCardState = {
-  phase: 'idle' | 'confirming' | 'setup-opened' | 'connecting' | 'done' | 'error'
+  phase: 'idle' | 'confirming' | 'installing' | 'setup-opened' | 'connecting' | 'done' | 'error'
   msg: string | null
   version: string | null
 }
@@ -772,33 +772,60 @@ function CliIntegration({
     setState(id, { phase: 'confirming', msg: null, version: null })
   }
 
-  // Step 2: user clicks Continue → run cliSetup (opens Terminal)
-  const runSetup = async (id: 'claude-cli' | 'codex-cli'): Promise<void> => {
-    setState(id, { phase: 'connecting', msg: null, version: null })
-    const r = await window.toto.cliSetup(id)
-    if (r.ok) {
+  // Step 2: user clicks Continue → install silently, then connect
+  const runInstall = async (id: 'claude-cli' | 'codex-cli'): Promise<void> => {
+    setState(id, { phase: 'installing', msg: 'Installing…', version: null })
+
+    const installResult = await window.toto.cliInstall(id, (line) => {
+      setState(id, { phase: 'installing', msg: line, version: null })
+    })
+
+    if (installResult.needsTerminal) {
+      // Needs sudo / elevated perms — fall back to Terminal
+      window.toto.cliSetup(id)
       setState(id, {
         phase: 'setup-opened',
-        msg: 'Setup opened in Terminal. Finish there, then click Connect.',
+        msg: 'Finish setup in Terminal, then click Connect.',
         version: null
       })
-    } else {
-      setState(id, { phase: 'error', msg: r.error || 'Could not open the setup terminal.', version: null })
+      return
     }
+
+    if (!installResult.ok) {
+      setState(id, { phase: 'error', msg: installResult.error || 'Installation failed.', version: null })
+      return
+    }
+
+    // Install succeeded — test connection
+    setState(id, { phase: 'connecting', msg: 'Connecting…', version: null })
+    const testResult = await window.toto.cliTest(id)
+
+    if (testResult.ok) {
+      patch({ provider: id, cliConnected: { ...cliConnected, [id]: true } })
+      setState(id, { phase: 'done', msg: null, version: testResult.version ?? null })
+      return
+    }
+
+    // Not logged in — open login flow
+    window.toto.cliLogin(id)
+    setState(id, {
+      phase: 'setup-opened',
+      msg: 'Installed. Sign in in the window that opened, then click Connect.',
+      version: null
+    })
   }
 
-  // Connect: run cliTest → on ok, activate provider
+  // Connect button (setup-opened / error): re-run test only
   const connect = async (id: 'claude-cli' | 'codex-cli'): Promise<void> => {
     setState(id, { phase: 'connecting', msg: 'Connecting…', version: null })
     const r = await window.toto.cliTest(id)
     if (r.ok) {
-      const nextConnected = { ...cliConnected, [id]: true }
-      patch({ provider: id, cliConnected: nextConnected })
+      patch({ provider: id, cliConnected: { ...cliConnected, [id]: true } })
       setState(id, { phase: 'done', msg: null, version: r.version ?? null })
     } else {
       setState(id, {
         phase: 'error',
-        msg: r.error || 'Could not connect. Make sure you have finished the setup in Terminal.',
+        msg: r.error || 'Could not connect. Finish signing in, then try again.',
         version: null
       })
     }
@@ -846,8 +873,8 @@ function CliIntegration({
         : 'Routes questions through your local OpenAI Codex CLI install. Uses your ChatGPT or API account.'
     const confirmMsg =
       id === 'claude-cli'
-        ? 'Make sure you are signed in to your Claude (Pro/Max) account on this device.'
-        : 'Make sure you are signed in to your ChatGPT or OpenAI account on this device.'
+        ? 'Make sure you are signed in to your Claude (Pro or Max) account on this device before continuing.'
+        : 'Make sure you are signed in to your ChatGPT or OpenAI account on this device before continuing.'
 
     return (
       <div
@@ -876,7 +903,7 @@ function CliIntegration({
           <div className="flex flex-col gap-2 rounded-[8px] border border-[var(--cl-border)] bg-white/[0.04] p-2.5">
             <span className="text-[11px] leading-snug text-[color:var(--cl-foreground)]">{confirmMsg}</span>
             <div className="flex gap-2">
-              <button type="button" onClick={() => void runSetup(id)} className={primaryBtn}>
+              <button type="button" onClick={() => void runInstall(id)} className={primaryBtn}>
                 Continue
               </button>
               <button type="button" onClick={() => cancel(id)} className={secondaryBtn}>
@@ -886,7 +913,15 @@ function CliIntegration({
           </div>
         )}
 
-        {/* After setup opened */}
+        {/* Installing — live progress */}
+        {st.phase === 'installing' && (
+          <div className="flex items-center gap-2 text-[11px] text-[color:var(--cl-muted-foreground)]">
+            <Loader2 size={12} className="shrink-0 animate-spin" />
+            <span className="truncate">{st.msg ?? 'Installing…'}</span>
+          </div>
+        )}
+
+        {/* After setup opened in Terminal */}
         {st.phase === 'setup-opened' && st.msg && (
           <span className="text-[11px] text-[color:var(--cl-muted-foreground)]">{st.msg}</span>
         )}
@@ -899,37 +934,53 @@ function CliIntegration({
           </div>
         )}
 
+        {/* Connecting spinner */}
+        {st.phase === 'connecting' && (
+          <div className="flex items-center gap-2 text-[11px] text-[color:var(--cl-muted-foreground)]">
+            <Loader2 size={12} className="shrink-0 animate-spin" />
+            <span>Connecting…</span>
+          </div>
+        )}
+
         {/* Connected version info */}
-        {(st.phase === 'done' || isConnected) && st.version && (
+        {st.phase === 'done' && st.version && (
           <span className="text-[11px] text-[color:var(--cl-success)]">
             <CircleCheck size={12} className="mr-1 inline" />
             {st.version}
           </span>
         )}
 
-        {/* Action buttons — visible when not mid-confirm and not yet done */}
-        {st.phase !== 'confirming' && st.phase !== 'done' && (
+        {/* Primary action button — idle state only */}
+        {st.phase === 'idle' && (
           <div className="flex gap-2">
             <button
               type="button"
               onClick={() => startSetup(id)}
-              disabled={st.phase === 'connecting'}
-              className={secondaryBtn}
-            >
-              {st.phase === 'connecting' ? <Loader2 size={12} className="animate-spin" /> : null}
-              Set up
-            </button>
-            <button
-              type="button"
-              onClick={() => void connect(id)}
-              disabled={st.phase === 'connecting'}
               className={primaryBtn}
             >
-              {st.phase === 'connecting' ? <Loader2 size={12} className="animate-spin" /> : <Link2 size={12} />}
-              Connect
+              <Link2 size={12} />
+              {isConnected ? 'Reconnect' : 'Set up'}
             </button>
           </div>
         )}
+
+        {/* Connect button — visible in setup-opened or error phases */}
+        {(st.phase === 'setup-opened' || st.phase === 'error') && (
+          <div className="flex gap-2">
+            <button
+              type="button"
+              onClick={() => void connect(id)}
+              className={primaryBtn}
+            >
+              <Link2 size={12} />
+              Connect
+            </button>
+            <button type="button" onClick={() => cancel(id)} className={secondaryBtn}>
+              Cancel
+            </button>
+          </div>
+        )}
+
         {/* Reconnect link — shown after a successful connect */}
         {st.phase === 'done' && (
           <button

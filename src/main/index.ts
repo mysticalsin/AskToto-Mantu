@@ -62,7 +62,7 @@ import { listMeetings, searchMeetings } from './recall'
 import { initAutoUpdate } from './updater'
 import { runSelfTest } from './selftest'
 import { importDustCliSession, setupDustCli } from './dustcli'
-import { detectCli, testCli, setupCli } from './cli'
+import { detectCli, testCli, setupCli, installCli, loginCli } from './cli'
 import { graphifyStatus, buildGraph, relatedNotes, graphHtml, scheduleRebuild } from './graphify'
 import { SaveMeetingSchema, SaveNoteSchema } from '@shared/ipc'
 import { PROVIDERS, resolveModelTier, type ProviderId } from '@shared/providers'
@@ -587,6 +587,17 @@ function registerIpc(): void {
     assertMainWindow(e)
     if (!requireAuth()) return { ok: false, error: 'Sign in with your Mantu account first.' }
     return setupCli(typeof provider === 'string' ? (provider as ProviderId) : 'claude-cli')
+  })
+  ipcMain.handle(IPC.cliInstall, (e, provider: unknown) => {
+    assertMainWindow(e)
+    if (!requireAuth()) return { ok: false, error: 'Sign in with your Mantu account first.' }
+    const p = typeof provider === 'string' ? (provider as ProviderId) : 'claude-cli'
+    return installCli(p, (line) => win?.webContents.send(IPC.cliInstallProgress, { provider: p, line }))
+  })
+  ipcMain.handle(IPC.cliLogin, (e, provider: unknown) => {
+    assertMainWindow(e)
+    if (!requireAuth()) return { ok: false, error: 'Sign in with your Mantu account first.' }
+    return loginCli(typeof provider === 'string' ? (provider as ProviderId) : 'claude-cli')
   })
 
   ipcMain.handle(IPC.authStatus, (e) => {

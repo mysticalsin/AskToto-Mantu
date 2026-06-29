@@ -81,7 +81,10 @@ export const IPC = {
   asrBundled: 'asr:bundled',
   cliDetect: 'cli:detect',
   cliSetup: 'cli:setup',
-  cliTest: 'cli:test'
+  cliTest: 'cli:test',
+  cliInstall: 'cli:install',
+  cliInstallProgress: 'cli:install:progress',
+  cliLogin: 'cli:login'
 } as const
 
 export type AskMode = 'answer' | 'vision' | 'suggest' | 'summary' | 'recap'
@@ -483,6 +486,13 @@ export interface DustCliSetup {
 export interface CliActionResult {
   ok: boolean
   version?: string
+  error?: string
+}
+
+/** Result of an in-app CLI install attempt. needsTerminal → EACCES; fall back to setupCli. */
+export interface CliInstallResult {
+  ok: boolean
+  needsTerminal?: boolean
   error?: string
 }
 
