@@ -14,7 +14,7 @@
  * Total download: ~1.3 GB (one-time; subsequent runs skip existing files).
  */
 
-import { createWriteStream, existsSync, mkdirSync, statSync, copyFileSync, unlinkSync } from 'node:fs'
+import { createWriteStream, existsSync, mkdirSync, statSync, copyFileSync, renameSync, unlinkSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { get as httpsGet } from 'node:https'
 import { execFile } from 'node:child_process'
@@ -77,12 +77,13 @@ async function download(url, dest, { optional = false } = {}) {
     }
     throw err
   }
+  const part = dest + '.part'
   const total = Number(res.headers['content-length'] || 0)
   let got = 0
   let lastPct = -1
   try {
     await new Promise((resolve, reject) => {
-      const out = createWriteStream(dest)
+      const out = createWriteStream(part)
       res.on('data', (chunk) => {
         got += chunk.length
         if (total) {
@@ -98,7 +99,9 @@ async function download(url, dest, { optional = false } = {}) {
       out.on('error', reject)
       res.on('error', reject)
     })
+    renameSync(part, dest)
   } catch (err) {
+    try { unlinkSync(part) } catch { /* ignore — .part may not exist */ }
     if (optional) {
       console.log(`  [skip-optional] ${dest.replace(REPO_ROOT, '.')} (download error: ${err.message})`)
       return

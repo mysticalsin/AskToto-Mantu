@@ -15,7 +15,7 @@ import {
   net
 } from 'electron'
 import { join, basename, resolve, relative, isAbsolute, extname } from 'node:path'
-import { readFileSync, existsSync, writeFileSync } from 'node:fs'
+import { readFileSync, existsSync, writeFileSync, realpathSync } from 'node:fs'
 import { pathToFileURL } from 'node:url'
 import {
   IPC,
@@ -628,8 +628,8 @@ function registerIpc(): void {
   ipcMain.handle(IPC.parakeetFeed, async (e, payload: unknown) => {
     assertMainWindow(e)
     if (!requireAuth()) return ''
-    const p = payload as { samples?: Float32Array }
-    if (!p?.samples) return ''
+    const p = payload as { samples?: unknown }
+    if (!(p?.samples instanceof Float32Array)) return ''
     return parakeetTranscribe(p.samples)
   })
 
@@ -669,7 +669,7 @@ function registerIpc(): void {
         (p) =>
           !tried.includes(p) &&
           (!allowed || allowed.includes(p)) &&
-          getApiKey(p).length > 0 &&
+          (PROVIDERS[p].kind === 'cli' ? !!s.cliConnected[p] : getApiKey(p).length > 0) &&
           (req.mode !== 'vision' || PROVIDERS[p].vision) &&
           !!resolveModelTier(p, s.providerModels, s.providerModelsThinking, tier)
       )
@@ -694,7 +694,9 @@ function registerIpc(): void {
       const key = getApiKey(provider)
       const tier = routeTier(req, s.thinkingMode)
       const model = resolveModelTier(provider, s.providerModels, s.providerModelsThinking, tier)
-      const ineligible = def.kind !== 'cli' && !key
+      const ineligible = def.kind === 'cli' && !s.cliConnected[provider]
+        ? `${def.label} is not connected. Open Settings → CLI Integration to set it up.`
+        : def.kind !== 'cli' && !key
         ? `No API key for ${def.label}. Open Settings (gear) and add it.`
         : def.kind !== 'cli' && !model
           ? provider === 'dust'
@@ -1009,15 +1011,24 @@ if (!app.requestSingleInstanceLock()) {
         // url.host = e.g. "models" or "ort"; url.pathname = e.g. "/Xenova/whisper-base/config.json"
         const rel = decodeURIComponent(url.host + url.pathname)
         const abs = resolve(RES_BASE, rel)
-        // Path-traversal guard (separator-safe on Windows): reject any path that escapes RES_BASE
-        const relCheck = relative(RES_BASE, abs)
+        // Symlink escape guard: resolve symlinks to their real path before the traversal check.
+        // realpathSync throws ENOENT for non-existent paths → return 404.
+        let real: string
+        try {
+          real = realpathSync(abs)
+        } catch (e: unknown) {
+          if ((e as NodeJS.ErrnoException).code === 'ENOENT') {
+            return new Response(null, { status: 404 })
+          }
+          throw e
+        }
+        // Path-traversal guard (separator-safe on Windows): reject any path that escapes RES_BASE.
+        // Run the check against the real (symlink-resolved) path, not the raw abs path.
+        const relCheck = relative(RES_BASE, real)
         if (relCheck.startsWith('..') || isAbsolute(relCheck)) {
           return new Response(null, { status: 403 })
         }
-        if (!existsSync(abs)) {
-          return new Response(null, { status: 404 })
-        }
-        const resp = await net.fetch(pathToFileURL(abs).toString())
+        const resp = await net.fetch(pathToFileURL(real).toString())
         const TYPES: Record<string, string> = {
           '.mjs': 'text/javascript',
           '.js': 'text/javascript',
@@ -1026,7 +1037,7 @@ if (!app.requestSingleInstanceLock()) {
           '.onnx': 'application/octet-stream',
           '.txt': 'text/plain'
         }
-        const ct = TYPES[extname(abs).toLowerCase()]
+        const ct = TYPES[extname(real).toLowerCase()]
         if (!ct) return resp
         const headers = new Headers(resp.headers)
         headers.set('Content-Type', ct)

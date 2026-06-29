@@ -58,6 +58,10 @@ import { usePermissions } from '../state'
 const ctl =
   'no-drag font-body cl-input cl-focus px-3 py-2.5 text-[13px] text-[color:var(--cl-foreground)]'
 
+// Providers that have dedicated CLI/key cards in CliIntegration — excluded from the generic provider
+// tiles grid and the generic "key" Section. Must be kept in sync with the CliIntegration render logic.
+const CLI_PROVIDERS = new Set<ProviderId>(['dust', 'claude-cli', 'codex-cli', 'gemini'])
+
 /** Friendly name for a routed model in the thinking-mode explainer. Keeps raw model ids out of
  *  user-facing copy — recognized brands by name, everything else as a plain tier word. */
 function prettyModel(m: string, provider: ProviderId, tier: 'base' | 'think'): string {
@@ -393,7 +397,6 @@ function AiSection({
   const hint = detectHint(key, provider)
   const q = filter.trim().toLowerCase()
   // Dust, CLI providers, and Gemini have dedicated UI sections — exclude from the generic tiles grid.
-  const CLI_PROVIDERS = new Set<ProviderId>(['dust', 'claude-cli', 'codex-cli', 'gemini'])
   const shown = PROVIDER_IDS.filter(
     (id) => !CLI_PROVIDERS.has(id) && (!q || PROVIDERS[id].label.toLowerCase().includes(q))
   )
@@ -471,7 +474,7 @@ function AiSection({
         )}
       </Section>
 
-      {provider !== 'dust' && (
+      {!CLI_PROVIDERS.has(provider) && (
       <Section title={`${def.label} key`} desc="Stored encrypted on this device. Never sent anywhere except the provider.">
         <div className="flex items-center gap-2">
           <label htmlFor={keyInputId} className="sr-only">
@@ -805,16 +808,24 @@ function CliIntegration({
     setState(id, { phase: 'idle', msg: null, version: null })
   }
 
+  const [geminiError, setGeminiError] = useState<string | null>(null)
+
   const saveGeminiKey = async (): Promise<void> => {
     const k = geminiKey.trim()
     if (!k) return
     setGeminiSaving(true)
-    await saveKey('gemini', k)
-    await patch({ provider: 'gemini' })
-    setGeminiKey('')
-    setGeminiSaving(false)
-    setGeminiSaved(true)
-    setTimeout(() => setGeminiSaved(false), 1800)
+    setGeminiError(null)
+    try {
+      await saveKey('gemini', k)
+      await patch({ provider: 'gemini' })
+      setGeminiKey('')
+      setGeminiSaved(true)
+      setTimeout(() => setGeminiSaved(false), 1800)
+    } catch (e) {
+      setGeminiError(e instanceof Error ? e.message : 'Could not save the key.')
+    } finally {
+      setGeminiSaving(false)
+    }
   }
 
   const primaryBtn =
@@ -884,7 +895,7 @@ function CliIntegration({
         {st.phase === 'error' && st.msg && (
           <div className="flex items-start gap-1.5 text-[11px] text-[color:var(--cl-destructive)]">
             <AlertCircle size={13} className="mt-px shrink-0" />
-            <span>{st.msg} Run Set Up first, then Connect.</span>
+            <span>{st.msg}</span>
           </div>
         )}
 
@@ -896,8 +907,8 @@ function CliIntegration({
           </span>
         )}
 
-        {/* Action buttons — always visible unless mid-confirm */}
-        {st.phase !== 'confirming' && (
+        {/* Action buttons — visible when not mid-confirm and not yet done */}
+        {st.phase !== 'confirming' && st.phase !== 'done' && (
           <div className="flex gap-2">
             <button
               type="button"
@@ -918,6 +929,16 @@ function CliIntegration({
               Connect
             </button>
           </div>
+        )}
+        {/* Reconnect link — shown after a successful connect */}
+        {st.phase === 'done' && (
+          <button
+            type="button"
+            onClick={() => startSetup(id)}
+            className="no-drag cl-focus self-start text-[11px] text-[color:var(--cl-muted-foreground)] hover:text-[color:var(--cl-foreground)]"
+          >
+            Reconnect
+          </button>
         )}
       </div>
     )
@@ -984,34 +1005,42 @@ function CliIntegration({
               <CircleCheck size={12} /> Key saved.
             </span>
           ) : (
-            <div className="flex items-center gap-2">
-              <input
-                type="password"
-                value={geminiKey}
-                onChange={(e) => setGeminiKey(e.target.value)}
-                onKeyDown={(e) => e.key === 'Enter' && void saveGeminiKey()}
-                placeholder={geminiDef.keyHint || 'Paste your Google AI Studio key'}
-                className={'flex-1 ' + ctl}
-              />
-              <button
-                type="button"
-                onClick={() => void saveGeminiKey()}
-                disabled={geminiSaving || !geminiKey.trim()}
-                className={primaryBtn}
+            <>
+              <div className="flex items-center gap-2">
+                <input
+                  type="password"
+                  value={geminiKey}
+                  onChange={(e) => setGeminiKey(e.target.value)}
+                  onKeyDown={(e) => e.key === 'Enter' && void saveGeminiKey()}
+                  placeholder={geminiDef.keyHint || 'Paste your Google AI Studio key'}
+                  className={'flex-1 ' + ctl}
+                />
+                <button
+                  type="button"
+                  onClick={() => void saveGeminiKey()}
+                  disabled={geminiSaving || !geminiKey.trim()}
+                  className={primaryBtn}
+                >
+                  {geminiSaving ? <Loader2 size={12} className="animate-spin" /> : null}
+                  {geminiSaved ? 'Saved' : 'Save'}
+                </button>
+              </div>
+              {geminiError && (
+                <div className="flex items-start gap-1.5 text-[11px] text-[color:var(--cl-destructive)]">
+                  <AlertCircle size={13} className="mt-px shrink-0" />
+                  <span>{geminiError}</span>
+                </div>
+              )}
+              <a
+                href={geminiDef.keyUrl}
+                target="_blank"
+                rel="noreferrer"
+                className="no-drag inline-flex items-center gap-0.5 text-[11px] text-[color:var(--cl-primary)]"
               >
-                {geminiSaving ? <Loader2 size={12} className="animate-spin" /> : null}
-                {geminiSaved ? 'Saved' : 'Save'}
-              </button>
-            </div>
+                Get a key at Google AI Studio <ExternalLink size={11} />
+              </a>
+            </>
           )}
-          <a
-            href={geminiDef.keyUrl}
-            target="_blank"
-            rel="noreferrer"
-            className="no-drag inline-flex items-center gap-0.5 text-[11px] text-[color:var(--cl-primary)]"
-          >
-            Get a key at Google AI Studio <ExternalLink size={11} />
-          </a>
         </div>
 
         {/* Dust card — points to the Dust section below */}

@@ -273,6 +273,11 @@ export interface TestKeyResult {
 export async function testApiKey(provider: ProviderId, key: string): Promise<TestKeyResult> {
   const trimmed = key.trim()
   if (!trimmed) return { ok: false, error: 'No API key provided.' }
+  if (PROVIDERS[provider]?.kind === 'cli')
+    return {
+      ok: false,
+      error: 'CLI providers do not use API keys — connect via Settings → CLI Integration.'
+    }
 
   const def = PROVIDERS[provider]
   const settings = getSettings()

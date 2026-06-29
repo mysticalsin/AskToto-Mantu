@@ -287,6 +287,8 @@ export function useListen(onQuestion?: (line: TranscriptLine) => void): ListenAp
         }
       }
 
+      if (!liveRef.current) return
+
       if (engineRef.current === 'whisper') {
         // If the quality changed since the warm worker loaded (or we just fell back from Parakeet),
         // terminate so the next init reloads the correct model. Unchanged quality → instant warm restart.
@@ -321,6 +323,9 @@ export function useListen(onQuestion?: (line: TranscriptLine) => void): ListenAp
           })
           if (!liveRef.current) {
             mic.getTracks().forEach((t) => t.stop())
+            closeChannel('you')
+            closeChannel('them')
+            setState((s) => ({ ...s, listening: false }))
             return
           }
           await openChannel('you', mic)
@@ -350,6 +355,9 @@ export function useListen(onQuestion?: (line: TranscriptLine) => void): ListenAp
           if (!sys.getAudioTracks().length) throw new Error('no system audio track returned')
           if (!liveRef.current) {
             sys.getTracks().forEach((t) => t.stop())
+            closeChannel('you')
+            closeChannel('them')
+            setState((s) => ({ ...s, listening: false }))
             return
           }
           await openChannel('them', sys)

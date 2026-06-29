@@ -98,12 +98,16 @@ export async function ensureParakeetModel(onProgress?: (pct: number) => void): P
   }
 }
 
-function download(url: string, dest: string, onProgress?: (pct: number) => void): Promise<void> {
+function download(url: string, dest: string, onProgress?: (pct: number) => void, depth = 0): Promise<void> {
   return new Promise((resolve, reject) => {
+    if (depth > 5) {
+      reject(new Error('too many redirects'))
+      return
+    }
     const req = httpsGet(url, (res) => {
       if (res.statusCode && res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
         res.resume()
-        download(res.headers.location, dest, onProgress).then(resolve, reject) // follow GitHub redirect
+        download(res.headers.location, dest, onProgress, depth + 1).then(resolve, reject) // follow GitHub redirect
         return
       }
       if (res.statusCode !== 200) {
@@ -137,7 +141,7 @@ function download(url: string, dest: string, onProgress?: (pct: number) => void)
 function extractTarBz2(archive: string, dir: string): Promise<void> {
   // `tar` ships on macOS, Linux, and Windows 10+ and handles .tar.bz2 with -xjf.
   return new Promise((resolve, reject) => {
-    execFile('tar', ['xjf', archive, '-C', dir], (err) => (err ? reject(err) : resolve()))
+    execFile('tar', ['xjf', archive, '--no-absolute-paths', '-C', dir], (err) => (err ? reject(err) : resolve()))
   })
 }
 

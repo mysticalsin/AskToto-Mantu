@@ -24,7 +24,12 @@ export function MeetingDetectedToast({
   onDismissRef.current = onDismiss
 
   useEffect(() => {
-    if (!open) return
+    if (!open) {
+      // Reset so the next open always starts a fresh full-width progress bar,
+      // regardless of how quickly open toggles true→false→true.
+      setRemaining(timeoutMs)
+      return
+    }
     setRemaining(timeoutMs)
     const start = Date.now()
     const iv = setInterval(() => {

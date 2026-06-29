@@ -90,11 +90,16 @@ self.onmessage = async (e: MessageEvent): Promise<void> => {
     if (msg.bundled) {
       env.allowLocalModels = true
       env.localModelPath = 'asr-model://models'
+      // Zero-download guarantee: forbid any fallback fetch to the HF CDN when a bundled model file is
+      // missing. Without this, transformers.js silently fetches the missing file from the network,
+      // violating the "fully offline" contract. Fail visibly instead so missing files are caught early.
+      env.allowRemoteModels = false
       // env.backends.onnx.wasm is typed as potentially undefined; guard before writing.
       // Overrides the cdn.jsdelivr.net default so WASM blobs load from bundled resources/ort/.
       if (env.backends?.onnx?.wasm) env.backends.onnx.wasm.wasmPaths = 'asr-model://ort/'
     } else {
       env.allowLocalModels = false // remote models + transformers.js default CDN wasm (proven path)
+      // allowRemoteModels stays true (set at module level) — this is the normal dev/remote path.
     }
     try {
       await load(msg.quality === 'fast' ? 'fast' : 'best')
