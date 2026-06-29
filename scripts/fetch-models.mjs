@@ -43,7 +43,11 @@ function fetchStream(url) {
     const req = httpsGet(url, (res) => {
       if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
         res.resume()
-        fetchStream(res.headers.location).then(resolve, reject)
+        // HuggingFace returns RELATIVE Location headers for small config/tokenizer files (LFS weights
+        // redirect to absolute CDN URLs). Resolve against the request URL so https.get gets an absolute
+        // URL instead of throwing "Invalid URL" on a bare path.
+        const next = new URL(res.headers.location, url).toString()
+        fetchStream(next).then(resolve, reject)
         return
       }
       if (res.statusCode !== 200) {
