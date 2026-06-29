@@ -9,11 +9,11 @@ describe('aggregateMetrics', () => {
   it('computes latency percentiles, acceptance, failures, fallbacks, and per-provider counts', () => {
     const records: AuditRecord[] = [
       { event: 'provider.request', provider: 'anthropic' },
-      { event: 'provider.request', phase: 'done', ttftMs: 100, totalMs: 1000 },
+      { event: 'provider.request', phase: 'done', ttftMs: 100, totalMs: 1000, inputTokens: 10, outputTokens: 50 },
       { event: 'provider.request', provider: 'anthropic' },
-      { event: 'provider.request', phase: 'done', ttftMs: 200, totalMs: 2000 },
+      { event: 'provider.request', phase: 'done', ttftMs: 200, totalMs: 2000, inputTokens: 20, outputTokens: 100 },
       { event: 'provider.request', provider: 'dust', retry: true },
-      { event: 'provider.request', phase: 'done', ttftMs: 300, totalMs: 3000 },
+      { event: 'provider.request', phase: 'done', ttftMs: 300, totalMs: 3000, inputTokens: 30, outputTokens: 150 },
       { event: 'provider.failed' },
       { event: 'answer.feedback', rating: 'up' },
       { event: 'answer.feedback', rating: 'up' },
@@ -28,6 +28,8 @@ describe('aggregateMetrics', () => {
     expect(m.acceptance).toEqual({ up: 2, down: 1, rate: 2 / 3 })
     expect(m.failures).toBe(1)
     expect(m.fallbacks).toBe(1)
+    expect(m.tokensIn).toBe(60)
+    expect(m.tokensOut).toBe(300)
     expect(m.byProvider).toEqual({ anthropic: 2, dust: 1 })
   })
 
@@ -38,6 +40,8 @@ describe('aggregateMetrics', () => {
     expect(m.answerP95Ms).toBeNull()
     expect(m.acceptance).toEqual({ up: 0, down: 0, rate: null })
     expect(m.failures).toBe(0)
+    expect(m.tokensIn).toBe(0)
+    expect(m.tokensOut).toBe(0)
     expect(m.byProvider).toEqual({})
   })
 })

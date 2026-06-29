@@ -22,6 +22,8 @@ export interface AuditRecord {
   rating?: 'up' | 'down'
   provider?: string
   retry?: boolean
+  inputTokens?: number
+  outputTokens?: number
 }
 
 /** Nearest-rank percentile of an already-collected sample. Returns null for an empty sample. */
@@ -40,6 +42,8 @@ export function aggregateMetrics(records: AuditRecord[]): EvalMetrics {
   let down = 0
   let failures = 0
   let fallbacks = 0
+  let tokensIn = 0
+  let tokensOut = 0
   const byProvider: Record<string, number> = {}
 
   for (const r of records) {
@@ -49,6 +53,8 @@ export function aggregateMetrics(records: AuditRecord[]): EvalMetrics {
       if (r.phase === 'done') {
         if (typeof r.ttftMs === 'number') ttft.push(r.ttftMs)
         if (typeof r.totalMs === 'number') total.push(r.totalMs)
+        if (typeof r.inputTokens === 'number') tokensIn += r.inputTokens
+        if (typeof r.outputTokens === 'number') tokensOut += r.outputTokens
       } else {
         if (r.provider) byProvider[r.provider] = (byProvider[r.provider] || 0) + 1
         if (r.retry) fallbacks++
@@ -70,6 +76,8 @@ export function aggregateMetrics(records: AuditRecord[]): EvalMetrics {
     acceptance: { up, down, rate: up + down > 0 ? up / (up + down) : null },
     failures,
     fallbacks,
+    tokensIn,
+    tokensOut,
     byProvider
   }
 }
