@@ -78,8 +78,8 @@ import { SaveMeetingSchema, SaveNoteSchema } from '@shared/ipc'
 import { PROVIDERS, resolveModelTier, type ProviderId } from '@shared/providers'
 import { routeTier } from '@shared/routing'
 
-const BAR_WIDTH = 860
-const BAR_HEIGHT = 96 // initial idle height of the slimmer two-row widget; useAutoResize grows it for answers
+const BAR_WIDTH = 940
+const BAR_HEIGHT = 84 // initial idle height of the slimmer two-row widget; useAutoResize grows it for answers
 const BAR_MIN_HEIGHT = 44 // floor for the resize clamp so the collapsed control mini-pill can shrink fully
 const PILL_WIDTH = 220 // narrow width for the collapsed control mini-pill (so it isn't a wide click-trap)
 
