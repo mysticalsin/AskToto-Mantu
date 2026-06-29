@@ -27,3 +27,30 @@ describe('buildSystem — multilingual language policy', () => {
     expect(s).toMatch(/main language of the conversation/i)
   })
 })
+
+describe('buildSystem — grounding & trust', () => {
+  it('appends the grounding rail to answer + vision, not to the proactive suggest line', () => {
+    expect(buildSystem(req('answer'), 'general', EMPTY_PROFILE, {}, [])).toContain('GROUNDING & HONESTY')
+    expect(buildSystem(req('vision'), 'general', EMPTY_PROFILE, {}, [])).toContain('GROUNDING & HONESTY')
+    expect(buildSystem(req('suggest'), 'meeting', EMPTY_PROFILE, {}, [])).not.toContain('GROUNDING & HONESTY')
+  })
+
+  it('leads untrusted modes with the injection guard; a plain typed answer has none', () => {
+    expect(buildSystem(req('suggest'), 'meeting', EMPTY_PROFILE, {}, [])).toContain('SECURITY:')
+    expect(buildSystem(req('vision'), 'general', EMPTY_PROFILE, {}, [])).toContain('SECURITY:')
+    expect(buildSystem(req('answer'), 'general', EMPTY_PROFILE, {}, [])).not.toContain('SECURITY:')
+  })
+
+  it('includes the user profile for self-performing modes, not neutral observer modes', () => {
+    const p: Profile = { name: 'Tony', role: 'Chief of Staff', company: '', resume: '', jobDescription: '', notes: '' }
+    expect(buildSystem(req('answer'), 'interview', p, {}, [])).toContain('Chief of Staff')
+    expect(buildSystem(req('answer'), 'general', p, {}, [])).not.toContain('Chief of Staff')
+  })
+
+  it('summary / recap use their dedicated prompts and skip the grounding rail', () => {
+    const summary = buildSystem(req('summary'), 'general', EMPTY_PROFILE, {}, [])
+    expect(summary).toContain('Summarize this conversation')
+    expect(buildSystem(req('recap'), 'general', EMPTY_PROFILE, {}, [])).toContain('detailed post-meeting document')
+    expect(summary).not.toContain('GROUNDING & HONESTY')
+  })
+})
