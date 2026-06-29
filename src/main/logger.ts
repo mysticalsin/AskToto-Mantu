@@ -48,6 +48,7 @@ export type AuditEvent =
   | 'capture.screen'
   | 'transcript.saved'
   | 'note.saved'
+  | 'answer.feedback'
   | 'provider.request'
   | 'provider.failed'
   | 'provider.blocked'
