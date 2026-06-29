@@ -11,6 +11,7 @@ import {
   type DustAgentsResponse
 } from '@shared/ipc'
 import { PROVIDERS, PROVIDER_IDS, type ProviderId } from '@shared/providers'
+import { mainLog } from './logger'
 
 const dir = () => app.getPath('userData')
 const settingsPath = () => join(dir(), 'settings.json')
@@ -206,7 +207,7 @@ export function setSettings(patch: Partial<Settings>): Settings {
   const allowed: Record<string, unknown> = {}
   for (const [k, v] of Object.entries(clean)) {
     if (locked.includes(k)) {
-      console.warn(`[store] ignoring locked setting "${k}"`)
+      mainLog.warn(`[store] ignoring locked setting "${k}"`)
       continue
     }
     allowed[k] = v
@@ -266,7 +267,7 @@ export function clearApiKey(provider: ProviderId): void {
   try {
     rmSync(p)
   } catch (e) {
-    console.warn('[store] clearApiKey: could not delete key file for', provider, e)
+    mainLog.warn('[store] clearApiKey: could not delete key file for', provider, e)
   }
 }
 

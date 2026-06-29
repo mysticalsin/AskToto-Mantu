@@ -281,8 +281,12 @@ export function App(): JSX.Element {
     const everyMs = (settings?.suggestEverySec ?? 15) * 1000
     if (now - lastSuggestRef.current < everyMs) return
     lastSuggestRef.current = now
-    setView('copilot')
-    setCollapsed(false)
+    // Don't yank the user out of a panel they're actively using (Settings / Review / History / Agenda);
+    // the proactive read still runs and is waiting on the copilot surface when they come back.
+    if (view === 'answer' || view === 'copilot') {
+      setView('copilot')
+      setCollapsed(false)
+    }
     suggest.run({ mode: 'suggest', transcript: listen.text() })
   }
 

@@ -133,7 +133,7 @@ export function Copilot({
           <Markdown>{suggestion.text}</Markdown>
         ) : suggestion?.streaming ? (
           <div className="flex items-center gap-2 text-[13px] text-[color:var(--color-ink-2)]">
-            <Spinner size={13} /> thinking…
+            <Spinner size={13} /> Thinking…
           </div>
         ) : (
           <div className="text-[13px] text-[color:var(--color-ink-2)]">
