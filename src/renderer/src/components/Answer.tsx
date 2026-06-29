@@ -25,6 +25,18 @@ function parseVerdict(text: string): { key: string; rest: string } | null {
   return { key: m[1].toUpperCase(), rest: text.slice((m.index ?? 0) + m[0].length).replace(/^[\s:.-]*/, '') }
 }
 
+/** Turn a raw provider error into one actionable line of recovery coaching (section B failure states). */
+function errorHint(error: string): string | null {
+  const e = error.toLowerCase()
+  if (/rate.?limit|\b429\b|too many request/.test(e)) return 'The provider is rate-limiting you. Wait a moment, or switch providers in Settings.'
+  if (/invalid.*(key|api)|incorrect api key|unauthor|\b401\b|expired/.test(e)) return 'Your API key may be invalid or expired. Update it in Settings → Your AI.'
+  if (/timed out|timeout|no response/.test(e)) return 'The model took too long. Retry, or pick a faster tier in Settings → Thinking mode.'
+  if (/network|fetch failed|enotfound|econnrefused|getaddrinfo|offline|dns/.test(e)) return 'Looks like a network problem. Check your connection, then retry.'
+  if (/quota|insufficient|billing|credit|payment/.test(e)) return 'The provider reports a quota or billing issue. Check your account, or switch providers in Settings.'
+  if (/can.?t read screen|vision|screenshot/.test(e)) return "This provider can't read screens. Switch to Claude or GPT in Settings."
+  return null
+}
+
 export function Answer({
   text,
   streaming,
@@ -185,11 +197,15 @@ export function Answer({
   ) : null
 
   if (error) {
+    const hint = errorHint(error)
     return (
       <div className="fade-up mx-auto max-w-[620px] flex flex-col gap-2">
         {header}
         <div className="rounded-lg border border-[var(--color-danger)]/30 bg-[var(--color-danger)]/10 px-3 py-2.5 text-[13px] text-[var(--color-danger)]">
           {error}
+          {hint && (
+            <div className="mt-1.5 text-[12px] leading-snug text-[color:var(--color-ink-2)]">{hint}</div>
+          )}
         </div>
         {footer}
       </div>
