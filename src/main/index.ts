@@ -78,6 +78,7 @@ import {
 import { SaveMeetingSchema, SaveNoteSchema } from '@shared/ipc'
 import { PROVIDERS, resolveModelTier, type ProviderId } from '@shared/providers'
 import { routeTier } from '@shared/routing'
+import { redactSecrets } from '@shared/redact'
 
 const BAR_WIDTH = 940
 const BAR_HEIGHT = 84 // initial idle height of the slimmer two-row widget; useAutoResize grows it for answers
@@ -799,6 +800,10 @@ function registerIpc(): void {
     try {
     const req = AskStartSchema.parse(raw)
     const s = getSettings()
+    // Local-first redaction (brief section I): strip high-confidence secrets from the captured transcript
+    // before it leaves the device for a cloud model. Only the auto-captured transcript — never the user's
+    // own typed prompt, and never the locally-saved meeting file (which keeps the verbatim original).
+    if (s.redactSensitive && req.transcript) req.transcript = redactSecrets(req.transcript)
     const allowed = getAllowedProviders() // org allowlist (null = unrestricted)
 
     // Find the next eligible keyed provider not yet tried — for failover when the primary can't answer.
