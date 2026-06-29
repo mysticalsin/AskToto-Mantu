@@ -177,6 +177,7 @@ export function useAsk(): {
         image: req.image,
         transcript: req.transcript,
         depth: req.depth,
+        kind: req.kind,
         history: req.history ?? []
       })
       return id
