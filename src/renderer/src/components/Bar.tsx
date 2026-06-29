@@ -204,7 +204,7 @@ export function Bar(props: BarProps): JSX.Element {
           {/* Centered tools */}
           <div className="flex flex-1 items-center justify-center gap-4">
             <IconTool title="Capture screen  (⌘⇧S)" onClick={props.onCapture}>
-              {props.capturing ? <Spinner size={20} /> : <Image size={21} strokeWidth={1.85} />}
+              {props.capturing ? <Spinner size={21} /> : <Image size={21} strokeWidth={1.85} />}
             </IconTool>
             <IconTool
               title={
@@ -219,7 +219,7 @@ export function Bar(props: BarProps): JSX.Element {
               {props.stealth ? <EyeOff size={21} strokeWidth={1.85} /> : <Eye size={21} strokeWidth={1.85} />}
             </IconTool>
             <IconTool title="Conversation mode" onClick={() => setModeOpen((o) => !o)} active={modeOpen}>
-              <LayoutGrid size={20} strokeWidth={1.85} />
+              <LayoutGrid size={21} strokeWidth={1.85} />
             </IconTool>
             <span className="h-5 w-px bg-[var(--color-hair-soft)]" />
             <IconTool
@@ -252,7 +252,7 @@ export function Bar(props: BarProps): JSX.Element {
             </button>
             {/* Hide the bar entirely (a global hotkey ⌘\ brings it back). Distinct from minimize-to-pill. */}
             <IconTool title="Hide AskToto  (⌘\\)" onClick={() => void window.toto.hide()}>
-              <Minus size={18} strokeWidth={2} />
+              <Minus size={17} strokeWidth={2} />
             </IconTool>
             <IconTool title="Minimize to a small pill" onClick={props.onMinimize}>
               <Minimize2 size={17} strokeWidth={2} />

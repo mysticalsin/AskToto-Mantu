@@ -475,9 +475,9 @@ function registerShortcuts(): void {
     if (!accel) continue
     try {
       const ok = globalShortcut.register(accel, fn)
-      if (!ok) console.warn(`[shortcuts] failed to register ${action}: ${accel}`)
+      if (!ok) mainLog.warn(`[shortcuts] failed to register ${action}: ${accel}`)
     } catch (e) {
-      console.warn(`[shortcuts] invalid accelerator for ${action}: ${accel}`, e)
+      mainLog.warn(`[shortcuts] invalid accelerator for ${action}: ${accel}`, e)
     }
   }
 }
