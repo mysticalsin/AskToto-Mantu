@@ -26,6 +26,10 @@ export function RecordingConsentReminder({
     }
     if (shouldShowConsentReminder(Date.now(), lastReminderAt, requireIndicator)) {
       setOpen(true)
+      // In "require indicator" mode the banner is meant to stay up for the whole session. Do NOT arm the
+      // auto-dismiss/onAck timer: onAck patches lastReminderAt, which re-runs this effect and re-arms the
+      // timer — an unbounded settings-write loop (~every 6s) that also re-registers global shortcuts.
+      if (requireIndicator) return
       const t = setTimeout(() => {
         setOpen(false)
         ackRef.current()
@@ -50,18 +54,22 @@ export function RecordingConsentReminder({
             Other participants are being recorded. Make sure everyone has consented.
           </div>
         </div>
-        <button
-          type="button"
-          aria-label="Dismiss"
-          title="Dismiss"
-          onClick={() => {
-            setOpen(false)
-            onAck()
-          }}
-          className="no-drag focus-ring rounded-lg px-2.5 py-1.5 text-[12px] font-medium text-[color:var(--color-ink)] hover:bg-white/10"
-        >
-          <X size={14} />
-        </button>
+        {/* No manual dismiss in require-indicator mode — it must stay visible for the whole session
+            (and a dismiss would patch settings, re-triggering the effect). */}
+        {!requireIndicator && (
+          <button
+            type="button"
+            aria-label="Dismiss"
+            title="Dismiss"
+            onClick={() => {
+              setOpen(false)
+              onAck()
+            }}
+            className="no-drag focus-ring rounded-lg px-2.5 py-1.5 text-[12px] font-medium text-[color:var(--color-ink)] hover:bg-white/10"
+          >
+            <X size={14} />
+          </button>
+        )}
       </div>
     </div>
   )

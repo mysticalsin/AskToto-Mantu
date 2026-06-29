@@ -1,0 +1,455 @@
+/**
+ * CLI provider backend — claude-cli (Claude Code) and codex-cli (OpenAI Codex).
+ *
+ * SECURITY INVARIANTS (never relax):
+ *   - No shell:true. All spawns pass args as an array.
+ *   - claude-cli: --allowedTools '' --disallowedTools '*' so the agent can never execute arbitrary tools.
+ *   - codex-cli: features.shell_tool=false + runs in a throwaway tmp cwd.
+ *   - resolveBin() uses the login shell to find the absolute path — never relies on a minimal GUI PATH.
+ */
+
+import { spawn, execFile } from 'node:child_process'
+import { promisify } from 'node:util'
+import { mkdtemp, rm } from 'node:fs/promises'
+import { join } from 'node:path'
+import { tmpdir } from 'node:os'
+import { createInterface } from 'node:readline'
+import { app, shell } from 'electron'
+import { writeFileSync } from 'node:fs'
+import type { ProviderId } from '@shared/providers'
+import { PROVIDERS } from '@shared/providers'
+import type { CliActionResult } from '@shared/ipc'
+
+const execFileAsync = promisify(execFile)
+
+// ─── Idle watchdog (mirrors llm.ts) ────────────────────────────────────────────
+const STREAM_IDLE_MS = 120_000
+function idleWatchdog(onIdle: () => void): { ping: () => void; clear: () => void } {
+  let t: NodeJS.Timeout | null = setTimeout(onIdle, STREAM_IDLE_MS)
+  return {
+    ping: () => {
+      if (t) clearTimeout(t)
+      t = setTimeout(onIdle, STREAM_IDLE_MS)
+    },
+    clear: () => {
+      if (t) {
+        clearTimeout(t)
+        t = null
+      }
+    }
+  }
+}
+
+// ─── Binary resolution via login shell ──────────────────────────────────────────
+const binCache = new Map<string, string | null>()
+
+/**
+ * Resolve a CLI binary to its absolute path using the user's login shell.
+ * A packaged Electron app runs with a minimal PATH; the login shell loads the full environment
+ * (nvm, homebrew, user profile, etc.) so `claude` / `codex` installed globally are found.
+ * Results are cached in-process — resolveBin is called on every streaming request, so caching
+ * prevents repeated shell spawns per conversation turn.
+ */
+async function resolveBin(bin: string): Promise<string | null> {
+  if (binCache.has(bin)) return binCache.get(bin) ?? null
+  const shell = process.env.SHELL || '/bin/zsh'
+  try {
+    const { stdout } = await execFileAsync(shell, ['-lc', `command -v ${bin}`])
+    const resolved = stdout.trim() || null
+    binCache.set(bin, resolved)
+    return resolved
+  } catch {
+    binCache.set(bin, null)
+    return null
+  }
+}
+
+// ─── Per-provider CLI config ─────────────────────────────────────────────────────
+
+interface CliConfig {
+  bin: string
+  buildArgs(opts: { model: string; system: string; prompt: string }): string[]
+  parseLine(line: string): string | null
+  /** codex runs in a throwaway temp cwd so it never touches the user's project. */
+  useTmpCwd: boolean
+}
+
+const CLI_CONFIGS: Partial<Record<ProviderId, CliConfig>> = {
+  'claude-cli': {
+    bin: 'claude',
+    buildArgs({ model, system, prompt }) {
+      return [
+        '-p',
+        prompt,
+        '--output-format',
+        'stream-json',
+        '--verbose',
+        '--include-partial-messages',
+        '--max-turns',
+        '1',
+        '--allowedTools',
+        '',
+        '--disallowedTools',
+        '*',
+        ...(model ? ['--model', model] : []),
+        ...(system ? ['--append-system-prompt', system] : [])
+      ]
+    },
+    parseLine(line) {
+      try {
+        const obj = JSON.parse(line)
+        if (
+          obj.type === 'stream_event' &&
+          obj.event?.delta?.type === 'text_delta'
+        ) {
+          return typeof obj.event.delta.text === 'string' ? obj.event.delta.text : null
+        }
+        return null
+      } catch {
+        return null
+      }
+    },
+    useTmpCwd: false
+  },
+
+  'codex-cli': {
+    bin: 'codex',
+    buildArgs({ model, system, prompt }) {
+      return [
+        'exec',
+        prompt,
+        '--json',
+        '--skip-git-repo-check',
+        '-c',
+        'features.shell_tool=false',
+        ...(model ? ['-m', model] : []),
+        ...(system ? ['-c', `developer_instructions=${system}`] : [])
+      ]
+    },
+    parseLine(line) {
+      try {
+        const obj = JSON.parse(line)
+        if (obj.type === 'item.completed' && obj.item?.type === 'agent_message') {
+          return typeof obj.item.text === 'string' ? obj.item.text : null
+        }
+        return null
+      } catch {
+        return null
+      }
+    },
+    useTmpCwd: true
+  }
+}
+
+// ─── runCliStream ────────────────────────────────────────────────────────────────
+
+export interface RunCliStreamOpts {
+  providerId: ProviderId
+  model: string
+  system: string
+  prompt: string
+  handlers: {
+    onDelta: (text: string) => void
+    onDone: (u: Record<string, never>) => void
+    onError: (message: string) => void
+  }
+}
+
+/**
+ * Spawn the CLI binary and stream its output to handlers.
+ * Returns { abort } immediately; the stream runs asynchronously.
+ */
+export function runCliStream(opts: RunCliStreamOpts): { abort: () => void } {
+  const cfg = CLI_CONFIGS[opts.providerId]
+  const label = PROVIDERS[opts.providerId]?.label ?? opts.providerId
+
+  const controller = new AbortController()
+  let settled = false
+  let tmpCwd: string | undefined
+
+  let wd: { ping: () => void; clear: () => void }
+  const fail = (msg: string): void => {
+    if (settled || controller.signal.aborted) return
+    settled = true
+    wd?.clear()
+    opts.handlers.onError(msg)
+  }
+  wd = idleWatchdog(() => {
+    fail(`${label}: stream timed out — no output for ${STREAM_IDLE_MS / 1000}s.`)
+    controller.abort()
+  })
+
+  void (async () => {
+    if (!cfg) {
+      return fail(`${label}: unsupported CLI provider '${opts.providerId}'.`)
+    }
+
+    const absBin = await resolveBin(cfg.bin)
+    if (!absBin) {
+      wd.clear()
+      return fail(`${label} CLI not found. Set it up in Settings → CLI Integration.`)
+    }
+
+    // codex needs a throwaway working directory so it never mutates the user's project.
+    let cwd: string | undefined
+    if (cfg.useTmpCwd) {
+      try {
+        tmpCwd = await mkdtemp(join(tmpdir(), 'asktoto-cli-'))
+        cwd = tmpCwd
+      } catch {
+        // If mkdtemp fails, fall through — cwd stays undefined (inherits process.cwd())
+      }
+    }
+
+    const args = cfg.buildArgs({ model: opts.model, system: opts.system, prompt: opts.prompt })
+    const child = spawn(absBin, args, {
+      cwd,
+      signal: controller.signal,
+      env: process.env,
+      // SECURITY: never use shell:true — args are passed as an array
+      shell: false,
+      stdio: ['ignore', 'pipe', 'pipe']
+    })
+
+    const stderrChunks: Buffer[] = []
+    child.stderr?.on('data', (chunk: Buffer) => stderrChunks.push(chunk))
+
+    const rl = createInterface({ input: child.stdout!, crlfDelay: Infinity })
+    rl.on('line', (line) => {
+      if (!line.trim()) return
+      try {
+        const text = cfg.parseLine(line)
+        if (text !== null) {
+          wd.ping()
+          opts.handlers.onDelta(text)
+        }
+      } catch {
+        // Non-JSON lines (e.g. status messages) are silently ignored
+      }
+    })
+
+    child.on('error', (err) => {
+      if (controller.signal.aborted) return
+      fail(`${label}: spawn error — ${err.message}`)
+    })
+
+    child.on('close', (code) => {
+      rl.close()
+      void cleanup()
+      if (settled || controller.signal.aborted) return
+      if (code === 0) {
+        settled = true
+        wd.clear()
+        opts.handlers.onDone({})
+      } else {
+        const stderr = Buffer.concat(stderrChunks).toString('utf8').trim()
+        fail(stderr.slice(-500) || `${label}: exited with code ${code}`)
+      }
+    })
+  })()
+
+  async function cleanup(): Promise<void> {
+    if (tmpCwd) {
+      try {
+        await rm(tmpCwd, { recursive: true, force: true })
+      } catch {
+        /* best-effort cleanup */
+      }
+      tmpCwd = undefined
+    }
+  }
+
+  return {
+    abort: () => {
+      wd.clear()
+      controller.abort()
+    }
+  }
+}
+
+// ─── detectCli ───────────────────────────────────────────────────────────────────
+
+/**
+ * Check whether the CLI binary is installed and return its version string.
+ * Does NOT test authentication (use testCli for that).
+ */
+export async function detectCli(provider: ProviderId): Promise<CliActionResult> {
+  const cfg = CLI_CONFIGS[provider]
+  const label = PROVIDERS[provider]?.label ?? provider
+  if (!cfg) return { ok: false, error: `${label}: unsupported CLI provider.` }
+
+  const absBin = await resolveBin(cfg.bin)
+  if (!absBin) return { ok: false, error: `${label} not installed` }
+
+  try {
+    const { stdout } = await execFileAsync(absBin, ['--version'])
+    return { ok: true, version: stdout.trim().slice(0, 40) }
+  } catch {
+    // --version might fail on some builds; binary is present but couldn't run
+    return { ok: true, version: 'installed' }
+  }
+}
+
+// ─── testCli ─────────────────────────────────────────────────────────────────────
+
+const TEST_TIMEOUT_MS = 30_000
+
+/**
+ * Prove that the CLI is installed AND authenticated by running a tiny prompt.
+ * Returns { ok: true } iff the process exits 0 with non-empty stdout within 30 s.
+ */
+export async function testCli(provider: ProviderId): Promise<CliActionResult> {
+  const cfg = CLI_CONFIGS[provider]
+  const label = PROVIDERS[provider]?.label ?? provider
+  if (!cfg) return { ok: false, error: `${label}: unsupported CLI provider.` }
+
+  const absBin = await resolveBin(cfg.bin)
+  if (!absBin) return { ok: false, error: `${label} not installed` }
+
+  let testArgs: string[]
+  let testCwd: string | undefined
+  let tmpDir: string | undefined
+
+  if (provider === 'claude-cli') {
+    testArgs = ['-p', 'Reply with OK', '--output-format', 'text', '--max-turns', '1', '--allowedTools', '']
+  } else {
+    // codex-cli: needs a throwaway cwd
+    try {
+      tmpDir = await mkdtemp(join(tmpdir(), 'asktoto-clitest-'))
+      testCwd = tmpDir
+    } catch {
+      /* proceed without a dedicated cwd */
+    }
+    testArgs = ['exec', 'Reply with OK', '--skip-git-repo-check', '-c', 'features.shell_tool=false']
+  }
+
+  return new Promise<CliActionResult>((resolve) => {
+    let timedOut = false
+    const timer = setTimeout(() => {
+      timedOut = true
+      child.kill('SIGTERM')
+      resolve({ ok: false, error: 'Timed out after 30 s — are you logged in?' })
+    }, TEST_TIMEOUT_MS)
+
+    const child = spawn(absBin, testArgs, {
+      cwd: testCwd,
+      env: process.env,
+      shell: false,
+      stdio: ['ignore', 'pipe', 'pipe']
+    })
+
+    const stdoutChunks: Buffer[] = []
+    const stderrChunks: Buffer[] = []
+    child.stdout?.on('data', (c: Buffer) => stdoutChunks.push(c))
+    child.stderr?.on('data', (c: Buffer) => stderrChunks.push(c))
+
+    child.on('close', (code) => {
+      clearTimeout(timer)
+      if (timedOut) return
+      void (async () => {
+        if (tmpDir) {
+          try {
+            await rm(tmpDir, { recursive: true, force: true })
+          } catch {
+            /* best-effort */
+          }
+        }
+        const stdout = Buffer.concat(stdoutChunks).toString('utf8').trim()
+        const stderr = Buffer.concat(stderrChunks).toString('utf8').trim()
+        if (code === 0 && stdout.length > 0) {
+          resolve({ ok: true })
+        } else {
+          resolve({
+            ok: false,
+            error: stderr.slice(-300) || (stdout ? `unexpected output: ${stdout.slice(0, 100)}` : 'no output — are you logged in?')
+          })
+        }
+      })()
+    })
+
+    child.on('error', (err) => {
+      clearTimeout(timer)
+      if (timedOut) return
+      resolve({ ok: false, error: err.message })
+    })
+  })
+}
+
+// ─── setupCli ────────────────────────────────────────────────────────────────────
+
+/**
+ * Open a Terminal window that installs the CLI and walks the user through interactive login.
+ * Mirrors setupDustCli() in dustcli.ts — writes a .command script and shell.openPath's it.
+ * macOS only (like the Dust equivalent).
+ */
+export async function setupCli(provider: ProviderId): Promise<{ ok: boolean; error?: string }> {
+  if (process.platform !== 'darwin') {
+    const label = PROVIDERS[provider]?.label ?? provider
+    return {
+      ok: false,
+      error: `Automatic setup is macOS-only for now. Install ${label} manually.`
+    }
+  }
+
+  let scriptLines: string[]
+
+  if (provider === 'claude-cli') {
+    scriptLines = [
+      '#!/bin/bash',
+      'clear',
+      'echo "AskToto — Claude Code CLI setup"',
+      'echo "================================"',
+      'echo',
+      'if ! command -v npm >/dev/null 2>&1; then',
+      '  echo "✗ npm / Node.js not found. Install Node from https://nodejs.org, then run this again."',
+      '  echo; echo "Press any key to close."; read -n 1 -s; exit 1',
+      'fi',
+      'echo "Step 1/2  Installing Claude Code CLI (npm i -g @anthropic-ai/claude-code)…"',
+      'if ! npm i -g @anthropic-ai/claude-code; then',
+      '  echo; echo "✗ Install failed (often a permissions issue with global npm)."',
+      '  echo "  Try:  sudo npm i -g @anthropic-ai/claude-code   then run this again."',
+      '  echo; echo "Press any key to close."; read -n 1 -s; exit 1',
+      'fi',
+      'echo; echo "Step 2/2  Signing in to Claude (type /login at the prompt below)…"',
+      'echo "────────────────────────────────────────────────"',
+      'claude',
+      'echo; echo "✓ Done. Go back to AskToto and click \\"Connect\\" again."',
+      'echo "You can close this window."'
+    ]
+  } else if (provider === 'codex-cli') {
+    scriptLines = [
+      '#!/bin/bash',
+      'clear',
+      'echo "AskToto — OpenAI Codex CLI setup"',
+      'echo "================================="',
+      'echo',
+      'if ! command -v npm >/dev/null 2>&1; then',
+      '  echo "✗ npm / Node.js not found. Install Node from https://nodejs.org, then run this again."',
+      '  echo; echo "Press any key to close."; read -n 1 -s; exit 1',
+      'fi',
+      'echo "Step 1/2  Installing OpenAI Codex CLI (npm i -g @openai/codex)…"',
+      'if ! npm i -g @openai/codex; then',
+      '  echo; echo "✗ Install failed (often a permissions issue with global npm)."',
+      '  echo "  Try:  sudo npm i -g @openai/codex   then run this again."',
+      '  echo; echo "Press any key to close."; read -n 1 -s; exit 1',
+      'fi',
+      'echo; echo "Step 2/2  Signing in to OpenAI Codex…"',
+      'codex login',
+      'echo; echo "✓ Done. Go back to AskToto and click \\"Connect\\" again."',
+      'echo "You can close this window."'
+    ]
+  } else {
+    return { ok: false, error: `setupCli: unknown provider '${provider}'` }
+  }
+
+  try {
+    const script = scriptLines.join('\n') + '\n'
+    const scriptPath = join(app.getPath('temp'), `asktoto-${provider}-setup.command`)
+    writeFileSync(scriptPath, script, { mode: 0o755 })
+    const err = await shell.openPath(scriptPath)
+    if (err) return { ok: false, error: err }
+    return { ok: true }
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : String(e) }
+  }
+}

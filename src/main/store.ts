@@ -30,6 +30,9 @@ const ENV_VAR: Record<ProviderId, string> = {
   fireworks: 'FIREWORKS_API_KEY',
   mistral: 'MISTRAL_API_KEY',
   dust: 'DUST_API_KEY',
+  'claude-cli': '',
+  'codex-cli': '',
+  gemini: 'GEMINI_API_KEY',
   custom: 'ASKTOTO_CUSTOM_API_KEY'
 }
 
@@ -74,6 +77,19 @@ function readLockedFrom(p: string): string[] {
   }
 }
 
+/** Read the `allowedProviders` policy array straight from a raw managed-config file. It is NOT a settings
+ *  key, so it must be read here rather than via validatedManaged() (which drops non-schema keys). */
+function readAllowedFrom(p: string): string[] | null {
+  try {
+    const obj = JSON.parse(readFileSync(p, 'utf8'))
+    const arr: unknown[] = Array.isArray(obj?.allowedProviders) ? obj.allowedProviders : []
+    const list = [...new Set(arr.filter((x): x is string => typeof x === 'string'))]
+    return list.length ? list : null
+  } catch {
+    return null
+  }
+}
+
 /** Machine-wide org-policy location IT can deploy (admin-only write). */
 function adminManagedPath(): string {
   if (process.platform === 'darwin') return '/Library/Application Support/AskToto/managed-config.json'
@@ -103,10 +119,9 @@ export function getLockedKeys(): string[] {
  * any screen/transcript egress, so a policy can confine data to approved/DPA-backed providers.
  */
 export function getAllowedProviders(): string[] | null {
-  const v = (validatedManaged() as { allowedProviders?: unknown }).allowedProviders
-  if (!Array.isArray(v) || v.length === 0) return null
-  const list = v.filter((x): x is string => typeof x === 'string')
-  return list.length ? list : null
+  // Machine (admin) policy wins over the per-user managed file, mirroring validatedManaged() precedence.
+  // Read from the raw JSON because `allowedProviders` is a policy key, not a settings-schema key.
+  return readAllowedFrom(adminManagedPath()) ?? readAllowedFrom(join(dir(), 'managed-config.json'))
 }
 
 /** Providers whose key currently comes from an environment variable — for those, in-app 'Remove' is a
@@ -161,6 +176,11 @@ export function getSettings(): Settings {
   // Layering: DEFAULT < managed (org policy, live) < user overrides.
   const base = { ...DEFAULT_SETTINGS, ...validatedManaged() }
   const raw = readUserRaw()
+  // Locked keys are authoritative on READ too, not just on write: a value persisted before a lock (or a
+  // hand-edited settings.json) must not override the managed/default value. Strip locked keys from the
+  // user layer so org policy always wins.
+  const lockedKeys = getLockedKeys()
+  if (lockedKeys.length) for (const k of lockedKeys) delete (raw as Record<string, unknown>)[k]
   const whole = SettingsSchema.safeParse({ ...base, ...raw })
   if (whole.success) return whole.data
   // Tolerant migration: base is already valid; keep only the user keys that still validate, then
@@ -336,7 +356,21 @@ export function getApiKey(provider: ProviderId): string {
   if (env) return env
   try {
     const buf = readFileSync(keyPath(provider))
-    if (buf.subarray(0, 6).toString('utf8') === 'plain:') return buf.subarray(6).toString('utf8')
+    if (buf.subarray(0, 6).toString('utf8') === 'plain:') {
+      const plain = buf.subarray(6).toString('utf8')
+      // Migrate-on-read: upgrade a legacy plaintext key file to encrypted-at-rest the first
+      // time it's read (defense-in-depth for disk backups / OneDrive-synced userData). The
+      // re-encrypted blob no longer starts with 'plain:', so this runs at most once. Best-effort:
+      // a write failure just keeps the working plaintext file.
+      if (safeStorage.isEncryptionAvailable()) {
+        try {
+          writeFileSync(keyPath(provider), safeStorage.encryptString(plain), { mode: 0o600 })
+        } catch {
+          /* keep the plaintext file; the returned key still works */
+        }
+      }
+      return plain
+    }
     if (safeStorage.isEncryptionAvailable()) return safeStorage.decryptString(buf)
   } catch {
     /* none */

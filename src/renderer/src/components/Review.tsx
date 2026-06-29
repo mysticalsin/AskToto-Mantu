@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Copy, Check, FileText, ListTree, FolderOpen, Save, RotateCcw } from 'lucide-react'
+import { Copy, Check, FileText, ListTree, FolderOpen, Save, RotateCcw, ChevronRight, ChevronDown } from 'lucide-react'
 import type { TranscriptLine } from '@shared/ipc'
 import type { AnswerState } from '../state'
 import { Markdown } from './Markdown'
@@ -27,6 +27,7 @@ export function Review({
   saveAttempts,
   maxSaveAttempts,
   startedAt,
+  showTranscript,
   onOpenFolder,
   onSave,
   onDone
@@ -38,11 +39,14 @@ export function Review({
   saveAttempts?: number
   maxSaveAttempts?: number
   startedAt?: number
+  showTranscript?: boolean // opt-in: auto-expand the full transcript; default summary-only
   onOpenFolder: () => void
   onSave?: () => void
   onDone?: () => void
 }): JSX.Element {
   const [copied, setCopied] = useState(false)
+  const [notesCopied, setNotesCopied] = useState(false)
+  const [transcriptOpen, setTranscriptOpen] = useState(!!showTranscript)
   const [now, setNow] = useState(Date.now())
 
   useEffect(() => {
@@ -87,6 +91,18 @@ export function Review({
         const msg = e instanceof Error ? e.message : String(e)
         setCopyError(`Copy failed: ${msg}`)
       })
+  }
+
+  const copyNotes = (): void => {
+    const md = recap?.text
+    if (!md) return
+    navigator.clipboard
+      .writeText(md)
+      .then(() => {
+        setNotesCopied(true)
+        setTimeout(() => setNotesCopied(false), 1500)
+      })
+      .catch(() => {})
   }
 
   return (
@@ -147,8 +163,21 @@ export function Review({
       )}
 
       <section aria-live="polite" aria-atomic="false">
-        <div className="mb-1.5 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-[var(--color-accent)]">
-          <ListTree size={12} /> Meeting notes
+        <div className="mb-1.5 flex items-center justify-between">
+          <div className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-[var(--color-accent)]">
+            <ListTree size={12} /> Meeting notes
+          </div>
+          {recap?.text && (
+            <button
+              type="button"
+              onClick={copyNotes}
+              aria-label={notesCopied ? 'Copied notes' : 'Copy notes'}
+              className="no-drag focus-ring flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] text-[color:var(--color-ink-2)] hover:bg-white/10 hover:text-[color:var(--color-ink)]"
+            >
+              {notesCopied ? <Check size={11} className="text-[var(--color-success)]" /> : <Copy size={11} />}
+              {notesCopied ? 'Copied' : 'Copy notes'}
+            </button>
+          )}
         </div>
         {recap?.error ? (
           <div className="text-[13px] text-[var(--color-danger)]">{recap.error}</div>
@@ -165,11 +194,27 @@ export function Review({
         )}
       </section>
 
+      {lines.length === 0 ? null : !transcriptOpen ? (
+        // Summary-first: the full transcript is hidden behind a one-click disclosure unless the user has
+        // opted in (Settings → showFullTranscriptInReview). The notes above are the payoff.
+        <button
+          type="button"
+          onClick={() => setTranscriptOpen(true)}
+          className="no-drag focus-ring flex w-fit items-center gap-1.5 rounded-lg px-2 py-1.5 text-[11px] font-medium text-[color:var(--color-ink-3)] hover:bg-white/[0.06] hover:text-[color:var(--color-ink-2)]"
+        >
+          <FileText size={12} /> Show full transcript · {lines.length} lines
+          <ChevronRight size={12} />
+        </button>
+      ) : (
       <section>
         <div className="mb-1.5 flex items-center justify-between">
-          <div className="flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-wide text-[color:var(--color-ink-3)]">
-            <FileText size={12} /> Full transcript · {lines.length} lines
-          </div>
+          <button
+            type="button"
+            onClick={() => setTranscriptOpen(false)}
+            className="no-drag focus-ring flex items-center gap-1.5 rounded-md px-1 py-0.5 text-[11px] font-medium uppercase tracking-wide text-[color:var(--color-ink-3)] hover:text-[color:var(--color-ink-2)]"
+          >
+            <FileText size={12} /> Full transcript · {lines.length} lines <ChevronDown size={12} />
+          </button>
           <button
             type="button"
             aria-label={copied ? 'Copied transcript' : 'Copy transcript'}
@@ -210,6 +255,7 @@ export function Review({
           )}
         </div>
       </section>
+      )}
     </div>
   )
 }

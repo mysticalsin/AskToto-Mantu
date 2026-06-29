@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState, type ReactNode } from 'react'
+import { useEffect, useId, useRef, useState, type ReactNode, type RefObject } from 'react'
 import {
   Check,
   ExternalLink,
@@ -279,12 +279,12 @@ function detectHint(value: string, current: ProviderId): { kind: 'ok' | 'tip'; t
   const id = detectProvider(v)
   if (id) {
     if (id === current) return { kind: 'ok', text: `Detected ${PROVIDERS[id].label}.` }
-    return { kind: 'ok', text: `Detected ${PROVIDERS[id].label} — selected it for you.` }
+    return { kind: 'ok', text: `Detected ${PROVIDERS[id].label}. Selected automatically.` }
   }
   if (/^sk-/.test(v)) {
     return {
       kind: 'tip',
-      text: 'This key shape is shared by several providers — pick the right one above.'
+      text: 'This key shape is shared by several providers. Pick the right one above.'
     }
   }
   return null
@@ -365,7 +365,7 @@ function AiSection({
     try {
       const res = await testKey(provider, trimmed)
       if (res.ok) setTest({ status: 'ok', message: 'Key is valid and working.' })
-      else setTest({ status: 'error', message: res.error || 'Saved, but the key did not work — check it and re-save.' })
+      else setTest({ status: 'error', message: res.error || 'Saved, but the key did not work. Check it and re-save.' })
     } catch (e) {
       setTest({ status: 'error', message: e instanceof Error ? e.message : 'Saved, but could not verify the key.' })
     }
@@ -392,23 +392,36 @@ function AiSection({
 
   const hint = detectHint(key, provider)
   const q = filter.trim().toLowerCase()
-  // Dust is its own first-class integration (rendered above), not a tile alongside the raw LLMs.
+  // Dust, CLI providers, and Gemini have dedicated UI sections — exclude from the generic tiles grid.
+  const CLI_PROVIDERS = new Set<ProviderId>(['dust', 'claude-cli', 'codex-cli', 'gemini'])
   const shown = PROVIDER_IDS.filter(
-    (id) => id !== 'dust' && (!q || PROVIDERS[id].label.toLowerCase().includes(q))
+    (id) => !CLI_PROVIDERS.has(id) && (!q || PROVIDERS[id].label.toLowerCase().includes(q))
   )
+
+  const dustSectionRef = useRef<HTMLDivElement>(null)
 
   return (
     <div className="flex flex-col gap-5">
-      {/* Dust — AskToto's primary brain (your Second Brain agents). Always here, not a tile. */}
-      <DustSetup
+      {/* CLI Integration — Claude Code CLI, Codex CLI, Gemini, and Dust shortcut card */}
+      <CliIntegration
         settings={settings}
         patch={patch}
         saveKey={saveKey}
-        clearKey={clearKey}
-        active={provider === 'dust'}
+        dustSectionRef={dustSectionRef}
       />
 
-      <Section title="Or use a model provider" desc="Prefer a raw model? Pick one — paste a key and AskToto detects most of them.">
+      {/* Dust — AskToto's primary brain (your Second Brain agents). Always here, not a tile. */}
+      <div ref={dustSectionRef}>
+        <DustSetup
+          settings={settings}
+          patch={patch}
+          saveKey={saveKey}
+          clearKey={clearKey}
+          active={provider === 'dust'}
+        />
+      </div>
+
+      <Section title="Model provider" desc="Prefer a raw model? Pick one, paste a key, and AskToto detects the provider.">
         {PROVIDER_IDS.length > 8 && (
           <div className="relative mb-2">
             <Search
@@ -459,7 +472,7 @@ function AiSection({
       </Section>
 
       {provider !== 'dust' && (
-      <Section title={`${def.label} key`} desc="Stored encrypted on this device. It never leaves your machine except to call the provider.">
+      <Section title={`${def.label} key`} desc="Stored encrypted on this device. Never sent anywhere except the provider.">
         <div className="flex items-center gap-2">
           <label htmlFor={keyInputId} className="sr-only">
             {def.label} API key
@@ -471,7 +484,7 @@ function AiSection({
             onChange={(e) => onKeyChange(e.target.value)}
             onKeyDown={(e) => e.key === 'Enter' && onSave()}
             placeholder={
-              settings.hasKeys[provider] ? '•••••• saved — paste to replace' : `Paste your ${def.label} key`
+              settings.hasKeys[provider] ? '•••••• saved (paste to replace)' : `Paste your ${def.label} key`
             }
             className={'flex-1 ' + ctl}
           />
@@ -676,7 +689,7 @@ function AiSection({
         </div>
         <span className="mt-1.5 block text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
           {settings.thinkingMode === 'auto'
-            ? `Auto — simple questions use ${prettyModel(baseModelName, provider, 'base')}; coding, engineering & complex go to ${prettyModel(thinkModelName, provider, 'think')}.`
+            ? `Auto: simple questions use ${prettyModel(baseModelName, provider, 'base')}; coding, engineering & complex go to ${prettyModel(thinkModelName, provider, 'think')}.`
             : settings.thinkingMode === 'always'
               ? `Every answer uses ${prettyModel(thinkModelName, provider, 'think')} (deep mode).`
               : `Every answer uses ${prettyModel(baseModelName, provider, 'base')} (fastest & cheapest).`}
@@ -698,6 +711,341 @@ function StepBadge({ n, done }: { n: number; done?: boolean }): JSX.Element {
     >
       {done ? <CircleCheck size={14} /> : n}
     </span>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// CLI Integration section
+// ---------------------------------------------------------------------------
+
+type CliCardState = {
+  phase: 'idle' | 'confirming' | 'setup-opened' | 'connecting' | 'done' | 'error'
+  msg: string | null
+  version: string | null
+}
+
+function CliIntegration({
+  settings,
+  patch,
+  saveKey,
+  dustSectionRef
+}: {
+  settings: PublicSettings
+  patch: (p: Partial<PublicSettings>) => void
+  saveKey: (provider: ProviderId, k: string) => Promise<void>
+  dustSectionRef?: RefObject<HTMLDivElement>
+}): JSX.Element {
+  const provider = settings.provider
+  const cliConnected = settings.cliConnected ?? {}
+
+  // Per-CLI card state
+  const [claudeState, setClaudeState] = useState<CliCardState>({ phase: 'idle', msg: null, version: null })
+  const [codexState, setCodexState] = useState<CliCardState>({ phase: 'idle', msg: null, version: null })
+
+  // Gemini key state
+  const [geminiKey, setGeminiKey] = useState('')
+  const [geminiSaving, setGeminiSaving] = useState(false)
+  const [geminiSaved, setGeminiSaved] = useState(false)
+
+  // One-time notice: show when cliNoticeAck is false and any CLI was just connected
+  const [noticeDismissed, setNoticeDismissed] = useState(false)
+  const showNotice =
+    !settings.cliNoticeAck &&
+    !noticeDismissed &&
+    (!!cliConnected['claude-cli'] || !!cliConnected['codex-cli'])
+
+  const dismissNotice = (): void => {
+    setNoticeDismissed(true)
+    patch({ cliNoticeAck: true })
+  }
+
+  const getState = (id: 'claude-cli' | 'codex-cli'): CliCardState =>
+    id === 'claude-cli' ? claudeState : codexState
+  const setState = (id: 'claude-cli' | 'codex-cli', s: CliCardState): void =>
+    id === 'claude-cli' ? setClaudeState(s) : setCodexState(s)
+
+  // Step 1: show inline confirm prompt
+  const startSetup = (id: 'claude-cli' | 'codex-cli'): void => {
+    setState(id, { phase: 'confirming', msg: null, version: null })
+  }
+
+  // Step 2: user clicks Continue → run cliSetup (opens Terminal)
+  const runSetup = async (id: 'claude-cli' | 'codex-cli'): Promise<void> => {
+    setState(id, { phase: 'connecting', msg: null, version: null })
+    const r = await window.toto.cliSetup(id)
+    if (r.ok) {
+      setState(id, {
+        phase: 'setup-opened',
+        msg: 'Setup opened in Terminal. Finish there, then click Connect.',
+        version: null
+      })
+    } else {
+      setState(id, { phase: 'error', msg: r.error || 'Could not open the setup terminal.', version: null })
+    }
+  }
+
+  // Connect: run cliTest → on ok, activate provider
+  const connect = async (id: 'claude-cli' | 'codex-cli'): Promise<void> => {
+    setState(id, { phase: 'connecting', msg: 'Connecting…', version: null })
+    const r = await window.toto.cliTest(id)
+    if (r.ok) {
+      const nextConnected = { ...cliConnected, [id]: true }
+      patch({ provider: id, cliConnected: nextConnected })
+      setState(id, { phase: 'done', msg: null, version: r.version ?? null })
+    } else {
+      setState(id, {
+        phase: 'error',
+        msg: r.error || 'Could not connect. Make sure you have finished the setup in Terminal.',
+        version: null
+      })
+    }
+  }
+
+  const cancel = (id: 'claude-cli' | 'codex-cli'): void => {
+    setState(id, { phase: 'idle', msg: null, version: null })
+  }
+
+  const saveGeminiKey = async (): Promise<void> => {
+    const k = geminiKey.trim()
+    if (!k) return
+    setGeminiSaving(true)
+    await saveKey('gemini', k)
+    await patch({ provider: 'gemini' })
+    setGeminiKey('')
+    setGeminiSaving(false)
+    setGeminiSaved(true)
+    setTimeout(() => setGeminiSaved(false), 1800)
+  }
+
+  const primaryBtn =
+    'no-drag cl-focus flex items-center gap-1.5 rounded-[8px] bg-[var(--cl-primary)] px-3 py-1.5 text-[12px] font-medium text-white hover:opacity-90 disabled:opacity-50'
+  const secondaryBtn =
+    'no-drag cl-focus flex items-center gap-1.5 rounded-[8px] border border-[var(--cl-input)] bg-white/[0.04] px-3 py-1.5 text-[12px] text-[color:var(--cl-foreground)] hover:bg-white/[0.08] disabled:opacity-50'
+  const activePill =
+    'flex shrink-0 items-center gap-1 rounded-full bg-[var(--cl-primary-soft)] px-2 py-0.5 text-[11px] font-medium text-[color:var(--cl-primary)]'
+
+  const renderCliCard = (id: 'claude-cli' | 'codex-cli'): JSX.Element => {
+    const def = PROVIDERS[id]
+    const st = getState(id)
+    const isActive = provider === id
+    const isConnected = !!cliConnected[id]
+    const desc =
+      id === 'claude-cli'
+        ? 'Routes questions through your local Claude Code install. Uses your Pro or Max subscription.'
+        : 'Routes questions through your local OpenAI Codex CLI install. Uses your ChatGPT or API account.'
+    const confirmMsg =
+      id === 'claude-cli'
+        ? 'Make sure you are signed in to your Claude (Pro/Max) account on this device.'
+        : 'Make sure you are signed in to your ChatGPT or OpenAI account on this device.'
+
+    return (
+      <div
+        key={id}
+        className={[
+          'flex flex-col gap-2 rounded-[10px] border p-3',
+          isActive
+            ? 'border-[var(--cl-primary)] bg-[var(--cl-primary-soft)]/40'
+            : 'border-[var(--cl-border)] bg-white/[0.02]'
+        ].join(' ')}
+      >
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex flex-col gap-0.5">
+            <span className="text-[12px] font-medium text-[color:var(--cl-foreground)]">{def.label}</span>
+            <span className="text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">{desc}</span>
+          </div>
+          {isActive && (
+            <span className={activePill}>
+              <CircleCheck size={12} /> Active
+            </span>
+          )}
+        </div>
+
+        {/* Confirm step */}
+        {st.phase === 'confirming' && (
+          <div className="flex flex-col gap-2 rounded-[8px] border border-[var(--cl-border)] bg-white/[0.04] p-2.5">
+            <span className="text-[11px] leading-snug text-[color:var(--cl-foreground)]">{confirmMsg}</span>
+            <div className="flex gap-2">
+              <button type="button" onClick={() => void runSetup(id)} className={primaryBtn}>
+                Continue
+              </button>
+              <button type="button" onClick={() => cancel(id)} className={secondaryBtn}>
+                Cancel
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* After setup opened */}
+        {st.phase === 'setup-opened' && st.msg && (
+          <span className="text-[11px] text-[color:var(--cl-muted-foreground)]">{st.msg}</span>
+        )}
+
+        {/* Error */}
+        {st.phase === 'error' && st.msg && (
+          <div className="flex items-start gap-1.5 text-[11px] text-[color:var(--cl-destructive)]">
+            <AlertCircle size={13} className="mt-px shrink-0" />
+            <span>{st.msg} Run Set Up first, then Connect.</span>
+          </div>
+        )}
+
+        {/* Connected version info */}
+        {(st.phase === 'done' || isConnected) && st.version && (
+          <span className="text-[11px] text-[color:var(--cl-success)]">
+            <CircleCheck size={12} className="mr-1 inline" />
+            {st.version}
+          </span>
+        )}
+
+        {/* Action buttons — always visible unless mid-confirm */}
+        {st.phase !== 'confirming' && (
+          <div className="flex gap-2">
+            <button
+              type="button"
+              onClick={() => startSetup(id)}
+              disabled={st.phase === 'connecting'}
+              className={secondaryBtn}
+            >
+              {st.phase === 'connecting' ? <Loader2 size={12} className="animate-spin" /> : null}
+              Set up
+            </button>
+            <button
+              type="button"
+              onClick={() => void connect(id)}
+              disabled={st.phase === 'connecting'}
+              className={primaryBtn}
+            >
+              {st.phase === 'connecting' ? <Loader2 size={12} className="animate-spin" /> : <Link2 size={12} />}
+              Connect
+            </button>
+          </div>
+        )}
+      </div>
+    )
+  }
+
+  const geminiDef = PROVIDERS['gemini']
+  const geminiActive = provider === 'gemini'
+  const geminiHasKey = !!settings.hasKeys['gemini']
+
+  return (
+    <Section
+      title="CLI Integration"
+      desc="Connect local CLI tools or API-key providers. Each option routes through a different backend."
+    >
+      <div className="flex flex-col gap-3">
+
+        {/* One-time notice */}
+        {showNotice && (
+          <div className="flex items-start justify-between gap-2 rounded-[8px] border border-[var(--cl-primary)]/30 bg-[var(--cl-primary-soft)]/50 px-3 py-2.5">
+            <span className="text-[11px] leading-snug text-[color:var(--cl-foreground)]">
+              This uses your local CLI login. Depending on the tool, answers may use your subscription or API credits.
+            </span>
+            <button
+              type="button"
+              onClick={dismissNotice}
+              aria-label="Dismiss notice"
+              className="no-drag cl-focus shrink-0 rounded text-[color:var(--cl-muted-foreground)] hover:text-[color:var(--cl-foreground)]"
+            >
+              <X size={13} />
+            </button>
+          </div>
+        )}
+
+        {/* Claude Code CLI card */}
+        {renderCliCard('claude-cli')}
+
+        {/* Codex CLI card */}
+        {renderCliCard('codex-cli')}
+
+        {/* Gemini card — API key, not CLI */}
+        <div
+          className={[
+            'flex flex-col gap-2 rounded-[10px] border p-3',
+            geminiActive
+              ? 'border-[var(--cl-primary)] bg-[var(--cl-primary-soft)]/40'
+              : 'border-[var(--cl-border)] bg-white/[0.02]'
+          ].join(' ')}
+        >
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex flex-col gap-0.5">
+              <span className="text-[12px] font-medium text-[color:var(--cl-foreground)]">{geminiDef.label}</span>
+              <span className="text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
+                API key from Google AI Studio. Not a CLI; uses your Gemini API quota.
+              </span>
+            </div>
+            {geminiActive && (
+              <span className={activePill}>
+                <CircleCheck size={12} /> Active
+              </span>
+            )}
+          </div>
+          {geminiHasKey ? (
+            <span className="flex items-center gap-1 text-[11px] text-[color:var(--cl-success)]">
+              <CircleCheck size={12} /> Key saved.
+            </span>
+          ) : (
+            <div className="flex items-center gap-2">
+              <input
+                type="password"
+                value={geminiKey}
+                onChange={(e) => setGeminiKey(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && void saveGeminiKey()}
+                placeholder={geminiDef.keyHint || 'Paste your Google AI Studio key'}
+                className={'flex-1 ' + ctl}
+              />
+              <button
+                type="button"
+                onClick={() => void saveGeminiKey()}
+                disabled={geminiSaving || !geminiKey.trim()}
+                className={primaryBtn}
+              >
+                {geminiSaving ? <Loader2 size={12} className="animate-spin" /> : null}
+                {geminiSaved ? 'Saved' : 'Save'}
+              </button>
+            </div>
+          )}
+          <a
+            href={geminiDef.keyUrl}
+            target="_blank"
+            rel="noreferrer"
+            className="no-drag inline-flex items-center gap-0.5 text-[11px] text-[color:var(--cl-primary)]"
+          >
+            Get a key at Google AI Studio <ExternalLink size={11} />
+          </a>
+        </div>
+
+        {/* Dust card — points to the Dust section below */}
+        <div
+          className={[
+            'flex items-center justify-between gap-2 rounded-[10px] border p-3',
+            provider === 'dust'
+              ? 'border-[var(--cl-primary)] bg-[var(--cl-primary-soft)]/40'
+              : 'border-[var(--cl-border)] bg-white/[0.02]'
+          ].join(' ')}
+        >
+          <div className="flex flex-col gap-0.5">
+            <span className="text-[12px] font-medium text-[color:var(--cl-foreground)]">Dust · your agents</span>
+            <span className="text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
+              Your Second Brain agents via the Dust platform. Full setup in the section below.
+            </span>
+          </div>
+          {provider === 'dust' ? (
+            <span className={activePill}>
+              <CircleCheck size={12} /> Active
+            </span>
+          ) : (
+            <button
+              type="button"
+              onClick={() => dustSectionRef?.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
+              className={secondaryBtn}
+            >
+              Set up below
+            </button>
+          )}
+        </div>
+
+      </div>
+    </Section>
   )
 }
 
@@ -746,7 +1094,7 @@ function DustSetup({
     if (!r.ok) {
       // No CLI session found → automatically kick off the setup (install + interactive login) instead of
       // just printing a command. The login needs a browser OAuth, so it opens in a Terminal window.
-      setCli({ busy: true, ok: false, msg: 'No Dust CLI found — starting setup…' })
+      setCli({ busy: true, ok: false, msg: 'No Dust CLI found. Starting setup…' })
       const s = await window.toto.dustSetupCli()
       setCli({
         busy: false,
@@ -758,7 +1106,7 @@ function DustSetup({
       return
     }
     await patch({ provider: 'dust' }) // import set key/workspace/region in main; make Dust active + refresh
-    setCli({ busy: false, ok: true, msg: `Connected — workspace ${r.workspaceId}. Loading your agents…` })
+    setCli({ busy: false, ok: true, msg: `Connected. Workspace ${r.workspaceId}. Loading agents…` })
     await loadAgents()
   }
 
@@ -822,7 +1170,7 @@ function DustSetup({
   return (
     <Section
       title={active ? 'Dust · your brain (active)' : 'Dust · your brain'}
-      desc="AskToto's primary brain — your own Dust agents (Second Brain retrieval + tools). Connect once with the Dust CLI, pick a base (Haiku) and thinking (Sonnet) agent."
+      desc="Your Dust agents (Second Brain retrieval + tools) power AskToto. Connect with the Dust CLI, then pick a base (Haiku) and thinking (Sonnet) agent."
     >
       <div className="flex flex-col gap-4">
         {/* One-click: import the local Dust CLI session (token + workspace + region) from the keychain */}
@@ -843,7 +1191,7 @@ function DustSetup({
           </div>
           <span className="text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
             Already ran <code className="rounded bg-white/[0.08] px-1">dust login</code>? This reads your
-            session from the keychain — no key to copy. macOS may ask to allow keychain access once.
+            session from the keychain. No key to copy. macOS may ask to allow keychain access once.
           </span>
           {cli.msg && (
             <span
@@ -879,12 +1227,12 @@ function DustSetup({
               id={linkId}
               value={link}
               onChange={(e) => onLink(e.target.value)}
-              placeholder="Paste your Dust workspace or agent URL — it fills the rest in"
+              placeholder="Paste your Dust workspace or agent URL (fills the fields below)"
               className={'w-full pl-7 ' + ctl}
             />
           </div>
           <span className="pl-7 text-[11px] text-[color:var(--cl-muted-foreground)]">
-            e.g. https://dust.tt/w/<b>abc123</b>/builder/agents/<b>myAgent</b> — or fill the fields below.
+            e.g. https://dust.tt/w/<b>abc123</b>/builder/agents/<b>myAgent</b>, or fill the fields below.
           </span>
         </div>
 
@@ -952,7 +1300,7 @@ function DustSetup({
             </div>
           )}
           <span className="pl-7 text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
-            Get one at dust.tt → Settings → API Keys (admin). Or just use “Connect from Dust CLI” above.
+            Get one at dust.tt → Settings → API Keys (admin). Or use “Connect from Dust CLI” above.
           </span>
         </div>
 
@@ -1015,7 +1363,7 @@ function DustSetup({
             <input
               value={thinkAgent}
               onChange={(e) => setThinkAgent(e.target.value)}
-              placeholder="Thinking agent id (optional — defaults to base)"
+              placeholder="Thinking agent id (optional, defaults to base)"
               className={'w-full ' + ctl}
             />
           )}
@@ -1163,7 +1511,7 @@ function ModePromptEditor({
   return (
     <Section
       title={`Prompt · ${MODE_LABEL[mode]}`}
-      desc="Pre-filled with a strong default. Edit freely; every mode keeps its own. Reset anytime."
+      desc="Pre-filled with a default. Edit freely; each mode keeps its own. Reset anytime."
     >
       <LazyTextarea
         value={value}
@@ -1234,7 +1582,7 @@ function ContextDocs({
     if (kept.length) writeDocs([...docs, ...kept])
     const bits: string[] = []
     if (kept.length) bits.push(`Added ${kept.length} document${kept.length > 1 ? 's' : ''}.`)
-    if (droppedForCap > 0) bits.push(`${droppedForCap} not added — 25-document limit reached.`)
+    if (droppedForCap > 0) bits.push(`${droppedForCap} not added (25-document limit reached).`)
     if (skipped.length) bits.push(`Skipped (text files only, ≤2 MB): ${skipped.slice(0, 3).join(', ')}.`)
     if (!bits.length) bits.push('No text files found. Supported: txt, md, csv, json, code…')
     setNote(bits.join(' '))
@@ -1244,8 +1592,8 @@ function ContextDocs({
 
   return (
     <Section
-      title={`Context documents — ${MODE_LABEL[mode]}`}
-      desc="Import what this mode should know about — résumé, deck, brief, specs. Kept per-mode (no cross-leak), read on-device, woven into this mode's answers."
+      title={`Context documents: ${MODE_LABEL[mode]}`}
+      desc="Import what this mode should know: résumé, deck, brief, specs. Kept per-mode, read on-device."
     >
       <label
         htmlFor={inputId}
@@ -1406,7 +1754,7 @@ export function Settings({
 
             {tab === 'personalize' && (
               <div className="flex flex-col gap-6">
-                <Section title="Default mode" desc="Pick what AskToto is helping with. This is the only place to change it.">
+                <Section title="Default mode" desc="Pick what AskToto is helping with.">
                   <div className="flex items-center gap-2">
                     <ModePicker mode={settings.mode} onChange={(m) => patch({ mode: m })} size="sm" disabled={settings.managedKeys.includes('mode')} />
                     <ManagedChip keys={settings.managedKeys} k="mode" />
@@ -1414,7 +1762,7 @@ export function Settings({
                 </Section>
                 <Section
                   title="Language"
-                  desc="AskToto assists live in the speaker's language. Pick the language for your answers, and a separate one for the saved summary/recap (handy when the meeting is in one language but you want the notes in another)."
+                  desc="Pick the language for live answers, and a separate one for the saved summary (useful when the meeting is in one language but you want notes in another)."
                 >
                   <label className="mb-1 block text-[11px] font-medium text-[color:var(--cl-muted-foreground)]">
                     Answers & live assist
@@ -1450,7 +1798,7 @@ export function Settings({
                   </select>
                 </Section>
                 <ModePromptEditor settings={settings} patch={patch} />
-                <Section title="Custom instructions" desc="A global instruction added on top of every mode's prompt. Leave blank for the defaults.">
+                <Section title="Custom instructions" desc="Added to every mode's prompt. Leave blank to use the defaults.">
                   <textarea
                     value={settings.systemPrompt}
                     onChange={(e) => patch({ systemPrompt: e.target.value })}
@@ -1462,7 +1810,7 @@ export function Settings({
                   />
                 </Section>
                 <ContextDocs settings={settings} patch={patch} />
-                <Section title="About you" desc="The more AskToto knows, the sharper your answers. Used for interview & sales.">
+                <Section title="About you" desc="Used for interview and sales modes.">
                   <ProfileEditor profile={settings.profile} onChange={(p) => patch({ profile: p })} disabled={settings.managedKeys.includes('profile')} />
                 </Section>
               </div>
@@ -1500,10 +1848,31 @@ export function Settings({
                   </label>
                   <ToggleRow
                     label="Show live transcript"
-                    desc="Off = show only what to say; full transcript at the end."
+                    desc="On shows the rolling transcript alongside suggested replies; off shows replies only."
                     on={settings.showLiveTranscript}
                     onChange={(v) => patch({ showLiveTranscript: v })}
                     disabled={settings.managedKeys.includes('showLiveTranscript')}
+                  />
+                  <ToggleRow
+                    label="Show full transcript in review"
+                    desc="Off = the end-of-meeting screen shows just the summary; the transcript stays one click away."
+                    on={settings.showFullTranscriptInReview}
+                    onChange={(v) => patch({ showFullTranscriptInReview: v })}
+                    disabled={settings.managedKeys.includes('showFullTranscriptInReview')}
+                  />
+                  <ToggleRow
+                    label="Best transcription quality"
+                    desc="On = most accurate, any-language model (larger first-run download, GPU-accelerated). Off = a lighter, faster model with a smaller download."
+                    on={settings.asrQuality === 'best'}
+                    onChange={(v) => patch({ asrQuality: v ? 'best' : 'fast' })}
+                    disabled={settings.managedKeys.includes('asrQuality')}
+                  />
+                  <ToggleRow
+                    label="Use Parakeet engine (fastest · European only)"
+                    desc="On = NVIDIA Parakeet v3, very fast + accurate for 25 European languages (one-time ~487MB download on first use). Off = Whisper, which handles ~99 languages. Use Whisper for non-European speech."
+                    on={settings.asrEngine === 'parakeet'}
+                    onChange={(v) => patch({ asrEngine: v ? 'parakeet' : 'whisper' })}
+                    disabled={settings.managedKeys.includes('asrEngine')}
                   />
                   <ToggleRow
                     label="Play chime when recording starts"
@@ -1518,6 +1887,13 @@ export function Settings({
                     on={settings.soundCues}
                     onChange={(v) => patch({ soundCues: v })}
                     disabled={settings.managedKeys.includes('soundCues')}
+                  />
+                  <ToggleRow
+                    label="Interface sounds"
+                    desc="A soft click when you tap buttons. Turn off for fully silent interaction."
+                    on={settings.uiSounds}
+                    onChange={(v) => patch({ uiSounds: v })}
+                    disabled={settings.managedKeys.includes('uiSounds')}
                   />
                 </Section>
               </div>
@@ -1561,7 +1937,7 @@ export function Settings({
               <>
               <Section
                 title="Meetings & transcripts"
-                desc="Every meeting is saved here as a clean note your Dust agents can read and follow up on."
+                desc="Meetings are saved here as notes your Dust agents can read."
               >
                 <div className="cl-card px-3 py-2.5">
                   <div className="flex items-center gap-2">
@@ -1624,7 +2000,7 @@ export function Settings({
                     {settings.encryptTranscripts && (
                       <div className="mt-1 flex items-start gap-1.5 px-1 text-[11px] leading-snug text-[color:var(--cl-success)]">
                         <CircleCheck size={12} className="mt-0.5 shrink-0" />
-                        Encrypted at rest — even if the folder syncs to the cloud, the contents stay locked to
+                        Encrypted at rest. Even if the folder syncs to the cloud, contents stay locked to
                         this device. Opening a transcript shows a temporary decrypted copy.
                       </div>
                     )}
@@ -1775,7 +2151,7 @@ function GraphSection({
   return (
     <Section
       title="Knowledge graph"
-      desc="Turn your notes into a connected graph — see how meetings, people and topics link. Reuses your Claude / Claude Code (no extra key, never Gemini)."
+      desc="Build a graph from your notes to see how meetings, people, and topics connect. Reuses your Claude / Claude Code key (no extra key, never Gemini)."
     >
       <ToggleRow
         label="Build a knowledge graph of my notes"
@@ -1793,7 +2169,7 @@ function GraphSection({
             {!status ? (
               'Checking…'
             ) : !status.installed ? (
-              <span className="text-[color:var(--cl-muted-foreground)]">graphify not found — install it below.</span>
+              <span className="text-[color:var(--cl-muted-foreground)]">graphify not found. Install it below.</span>
             ) : status.building || busy ? (
               'Building the graph…'
             ) : status.hasGraph ? (
@@ -1802,7 +2178,7 @@ function GraphSection({
               </span>
             ) : (
               <span className="text-[color:var(--cl-muted-foreground)]">
-                No graph yet — Rebuild to create it{status.backend ? ` (via ${status.backend})` : ''}.
+                No graph yet. Rebuild to create one{status.backend ? ` (via ${status.backend})` : ''}.
               </span>
             )}
           </div>
@@ -1951,7 +2327,7 @@ function AccountRow({
           </a>{' '}
           register an app (platform <b>Mobile &amp; desktop</b>, redirect{' '}
           <code className="rounded bg-white/[0.06] px-1">http://localhost</code>), then paste its IDs.
-          These are public identifiers — no secret needed.
+          These are public identifiers. No secret needed.
         </p>
       </div>
       {field('Application (client) ID', clientId, setClientId, '00000000-0000-0000-0000-000000000000')}
@@ -2035,7 +2411,7 @@ function AccountRow({
           </button>
           <span className="text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
             Enable Microsoft (Entra) sign-in to lock AskToto to your Mantu domain and tie usage to Dust.
-            One-time setup — takes a minute.
+            One-time setup.
           </span>
           {err && <span className="text-[11px] text-[color:var(--cl-destructive)]">{err}</span>}
         </>
@@ -2269,7 +2645,7 @@ function ProfileEditor({
       />
       <div className="flex items-center gap-1.5 px-1 text-[11px] text-[color:var(--cl-muted-foreground)]">
         <Sparkles size={11} className="text-[color:var(--cl-primary)]" />
-        Tip: paste your résumé + the job post for spot-on interview answers.
+        Paste your résumé and the job post for better interview answers.
       </div>
     </div>
   )

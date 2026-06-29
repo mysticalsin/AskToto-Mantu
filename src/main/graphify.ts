@@ -194,6 +194,13 @@ export async function graphifyStatus(): Promise<GraphStatus> {
 /** Build (or incrementally update) the notes graph. Returns the final status. */
 export async function buildGraph(incremental = false): Promise<GraphStatus> {
   if (building) return graphifyStatus()
+  // When at-rest encryption is on, the saved notes are ciphertext that graphify can't read — a manual
+  // Rebuild would produce a garbage graph. scheduleRebuild() already skips for this reason; guard the
+  // shared entrypoint too so the Rebuild button can't bypass it.
+  if (getSettings().encryptTranscripts) {
+    lastError = 'Knowledge graph is unavailable while at-rest encryption is on (your notes are encrypted on disk).'
+    return graphifyStatus()
+  }
   // Set the lock SYNCHRONOUSLY before any await — detectPython()/pickBackend() do child-process I/O
   // that yields to the event loop, so a second caller (rebuild double-click + the debounced timer)
   // could otherwise pass the `if (building)` check and spawn a concurrent build into the same outDir.

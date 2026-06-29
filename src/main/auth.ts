@@ -1,10 +1,15 @@
 import { app, shell, safeStorage } from 'electron'
 import { createServer } from 'node:http'
 import { readFileSync, writeFileSync, existsSync, rmSync } from 'node:fs'
+import { randomBytes } from 'node:crypto'
 import { join } from 'node:path'
 import type { AuthStatus, SignInResult } from '@shared/ipc'
 import { getSettings } from './store'
 import { auditLog } from './logger'
+
+// Scopes requested at sign-in: identity + read-only calendar (so the agenda can be pulled later with no
+// extra consent prompt). Least privilege — Calendars.Read, never ReadWrite.
+const SIGN_IN_SCOPES = ['User.Read', 'Calendars.Read', 'openid', 'profile', 'email']
 
 /**
  * Azure AD (Microsoft Entra) sign-in gate.
@@ -103,6 +108,74 @@ function sessionPath(): string {
   return join(app.getPath('userData'), 'auth-session.bin')
 }
 
+function msalCachePath(): string {
+  return join(app.getPath('userData'), 'msal-cache.bin')
+}
+
+/**
+ * An MSAL token cache persisted to disk, encrypted at rest via the OS keychain (same discipline as
+ * saveSession + the API-key vault). This is what lets a Graph access token survive past the interactive
+ * sign-in so getGraphToken() can acquireTokenSilent later (e.g. to read the calendar). Never logged.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function makeCachePlugin(): any {
+  return {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    beforeCacheAccess: async (ctx: any): Promise<void> => {
+      try {
+        if (!safeStorage.isEncryptionAvailable()) return
+        ctx.tokenCache.deserialize(safeStorage.decryptString(readFileSync(msalCachePath())))
+      } catch {
+        /* no cache yet, or keychain unavailable — start empty */
+      }
+    },
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    afterCacheAccess: async (ctx: any): Promise<void> => {
+      if (!ctx.cacheHasChanged) return
+      try {
+        if (!safeStorage.isEncryptionAvailable()) return
+        writeFileSync(msalCachePath(), safeStorage.encryptString(ctx.tokenCache.serialize()), { mode: 0o600 })
+      } catch {
+        /* best-effort: token simply won't persist this run */
+      }
+    }
+  }
+}
+
+/** Build a PublicClientApplication wired to the encrypted on-disk token cache. Lazy-loads MSAL. */
+async function makePca(cfg: AzureConfig): Promise<import('@azure/msal-node').PublicClientApplication> {
+  const { PublicClientApplication } = await import('@azure/msal-node')
+  return new PublicClientApplication({
+    auth: { clientId: cfg.clientId, authority: `https://login.microsoftonline.com/${cfg.tenantId}` },
+    cache: { cachePlugin: makeCachePlugin() }
+  })
+}
+
+/**
+ * Silently obtain a Microsoft Graph access token for the given scopes from the cached account, refreshing
+ * via the persisted refresh token if needed. Returns null when SSO is unconfigured, no account is cached,
+ * or consent/refresh fails — callers treat null as "needs (re)connect" and never surface raw errors.
+ */
+export async function getGraphToken(scopes: string[]): Promise<string | null> {
+  const cfg = readConfig()
+  if (!cfg) return null
+  try {
+    const pca = await makePca(cfg)
+    const accounts = await pca.getTokenCache().getAllAccounts()
+    if (!accounts.length) return null
+    // Bind to the validated, signed-in session account — NOT just accounts[0] — so a stray/extra cached
+    // account can never be used to read another user's calendar.
+    loadSession()
+    const want = (session?.email || '').toLowerCase()
+    const account = accounts.find((a) => (a.username || '').toLowerCase() === want) ?? null
+    if (!account) return null
+    const result = await pca.acquireTokenSilent({ account, scopes, forceRefresh: false })
+    return result?.accessToken ?? null
+  } catch {
+    return null
+  }
+}
+
 let session: Session | null = null
 let loaded = false
 
@@ -121,6 +194,12 @@ function clearSession(): void {
   session = null
   try {
     if (existsSync(sessionPath())) rmSync(sessionPath())
+  } catch {
+    /* best-effort */
+  }
+  // Drop the Graph token cache alongside the identity, so sign-out/expiry also revokes calendar access.
+  try {
+    if (existsSync(msalCachePath())) rmSync(msalCachePath())
   } catch {
     /* best-effort */
   }
@@ -275,24 +354,33 @@ export async function signIn(): Promise<SignInResult> {
   if (!cfg) return { ok: true, configured: false } // not configured — let the user proceed
 
   try {
-    // Lazy-load MSAL so it's only pulled when Azure SSO is actually configured.
-    const { PublicClientApplication, CryptoProvider } = await import('@azure/msal-node')
-    const pca = new PublicClientApplication({
-      auth: {
-        clientId: cfg.clientId,
-        authority: `https://login.microsoftonline.com/${cfg.tenantId}`
-      }
-    })
+    // Lazy-load MSAL so it's only pulled when Azure SSO is actually configured. The PCA is wired to the
+    // encrypted on-disk token cache (makePca) so the Graph token survives for later calendar reads.
+    const { CryptoProvider } = await import('@azure/msal-node')
+    const pca = await makePca(cfg)
     const crypto = new CryptoProvider()
     const { verifier, challenge } = await crypto.generatePkceCodes()
+    // CSRF nonce echoed back on the loopback redirect; any request that doesn't carry it is ignored.
+    const state = randomBytes(16).toString('hex')
 
-    const SCOPES = ['User.Read', 'openid', 'profile', 'email']
     const captured = await new Promise<{ code: string; redirectUri: string }>((resolve, reject) => {
       let redirectUri = ''
       const server = createServer((req, res) => {
         const url = new URL(req.url || '/', 'http://localhost')
         const c = url.searchParams.get('code')
         const err = url.searchParams.get('error_description') || url.searchParams.get('error')
+        // Ignore stray hits (favicon, port probes) — keep listening for the real OAuth redirect.
+        if (!c && !err) {
+          res.writeHead(204)
+          res.end()
+          return
+        }
+        // CSRF check: the redirect MUST echo our state nonce. Reject anything else, keep waiting.
+        if (url.searchParams.get('state') !== state) {
+          res.writeHead(400, { 'Content-Type': 'text/plain' })
+          res.end('Invalid state.')
+          return
+        }
         res.writeHead(200, { 'Content-Type': 'text/html' })
         res.end(
           `<html><body style="font-family:system-ui;background:#1a0033;color:#fff;display:grid;place-items:center;height:100vh;margin:0"><div style="text-align:center"><h2>AskToto</h2><p>${c ? 'Signed in — you can close this window.' : 'Sign-in failed.'}</p></div></body></html>`
@@ -313,11 +401,12 @@ export async function signIn(): Promise<SignInResult> {
         redirectUri = `http://localhost:${port}`
         try {
           const authUrl = await pca.getAuthCodeUrl({
-            scopes: SCOPES,
+            scopes: SIGN_IN_SCOPES,
             redirectUri,
             codeChallenge: challenge,
             codeChallengeMethod: 'S256',
-            prompt: 'select_account'
+            prompt: 'select_account',
+            state
           })
           await shell.openExternal(authUrl)
         } catch (e) {
@@ -330,7 +419,7 @@ export async function signIn(): Promise<SignInResult> {
 
     const result = await pca.acquireTokenByCode({
       code: captured.code,
-      scopes: SCOPES,
+      scopes: SIGN_IN_SCOPES,
       redirectUri: captured.redirectUri,
       codeVerifier: verifier
     })
@@ -340,11 +429,28 @@ export async function signIn(): Promise<SignInResult> {
     const email = (result.account?.username || claims.preferred_username || claims.email || '').toLowerCase()
     const tid = claims.tid || ''
 
+    // acquireTokenByCode already persisted this account's Graph tokens to the encrypted cache. If we then
+    // REJECT the account (wrong tenant/domain), purge it so a disallowed account's tokens never linger.
+    const purgeRejected = async (): Promise<void> => {
+      try {
+        if (result.account) await pca.getTokenCache().removeAccount(result.account)
+      } catch {
+        /* fall through to the file wipe */
+      }
+      try {
+        if (existsSync(msalCachePath())) rmSync(msalCachePath())
+      } catch {
+        /* best-effort */
+      }
+    }
+
     if (tid !== cfg.tenantId) {
+      await purgeRejected()
       auditLog('auth.denied', { domain: cfg.allowedDomain })
       return { ok: false, configured: true, error: 'That account is outside your organization.' }
     }
     if (!email.endsWith(`@${cfg.allowedDomain.toLowerCase()}`)) {
+      await purgeRejected()
       auditLog('auth.denied', { domain: cfg.allowedDomain })
       return { ok: false, configured: true, error: `Use your @${cfg.allowedDomain} account.` }
     }

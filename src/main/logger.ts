@@ -51,6 +51,7 @@ export type AuditEvent =
   | 'provider.failed'
   | 'provider.blocked'
   | 'settings.changed'
+  | 'calendar.read'
   | 'app.crash'
 
 /**

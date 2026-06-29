@@ -12,8 +12,11 @@ export type ProviderId =
   | 'fireworks'
   | 'mistral'
   | 'dust'
+  | 'claude-cli'
+  | 'codex-cli'
+  | 'gemini'
   | 'custom'
-export type ProviderKind = 'anthropic' | 'openai' | 'dust' // wire protocol
+export type ProviderKind = 'anthropic' | 'openai' | 'dust' | 'cli' // wire protocol
 
 export interface ProviderDef {
   id: ProviderId
@@ -230,6 +233,48 @@ export const PROVIDERS: Record<ProviderId, ProviderDef> = {
     keyPattern: '', // Dust keys are sk- (ambiguous) — never auto-pick Dust
     vision: false, // routed via a Dust agent; screenshots not wired in v1
     keyUrl: 'https://docs.dust.tt/reference/developer-platform-overview'
+  },
+  'claude-cli': {
+    id: 'claude-cli',
+    label: 'Claude Code · CLI',
+    kind: 'cli',
+    baseUrl: '',
+    models: ['sonnet', 'opus', 'haiku'],
+    defaultModel: 'sonnet',
+    fastModel: 'haiku',
+    thinkModel: 'opus',
+    keyHint: '',
+    keyPattern: '',
+    vision: false,
+    keyUrl: ''
+  },
+  'codex-cli': {
+    id: 'codex-cli',
+    label: 'Codex · OpenAI CLI',
+    kind: 'cli',
+    baseUrl: '',
+    models: [],
+    defaultModel: '',
+    fastModel: '',
+    thinkModel: '',
+    keyHint: '',
+    keyPattern: '',
+    vision: false,
+    keyUrl: ''
+  },
+  gemini: {
+    id: 'gemini',
+    label: 'Gemini · Google',
+    kind: 'openai',
+    baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai/',
+    models: ['gemini-2.5-flash', 'gemini-2.5-pro', 'gemini-2.0-flash'],
+    defaultModel: 'gemini-2.5-flash',
+    fastModel: 'gemini-2.5-flash',
+    thinkModel: 'gemini-2.5-pro',
+    keyHint: 'AIza…',
+    keyPattern: '^AIza',
+    vision: true,
+    keyUrl: 'https://aistudio.google.com/apikey'
   },
   custom: {
     id: 'custom',

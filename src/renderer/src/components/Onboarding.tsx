@@ -1,7 +1,8 @@
-import { useState } from 'react'
-import { ShieldCheck, ArrowRight } from 'lucide-react'
-import type { PublicSettings, Profile } from '@shared/ipc'
+import { useEffect, useState } from 'react'
+import { ShieldCheck, ArrowRight, Mic, Camera, Sparkles, Check, AlertCircle } from 'lucide-react'
+import type { PublicSettings, Profile, PlatformPermissions } from '@shared/ipc'
 import type { ProviderId } from '@shared/providers'
+import { PROVIDERS } from '@shared/providers'
 import { MantuLogo } from './MantuLogo'
 
 /** Microsoft 4-square glyph (no lucide equivalent). */
@@ -17,10 +18,51 @@ function MsLogo({ size = 16 }: { size?: number }): JSX.Element {
   )
 }
 
+/** A single "here's what you can do" primer row. */
+function ActionRow({ icon: Icon, label, hint, keys }: { icon: typeof Mic; label: string; hint: string; keys?: string }): JSX.Element {
+  return (
+    <div className="flex items-center gap-3">
+      <div className="grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-[var(--color-accent-soft)] text-[var(--color-accent)]">
+        <Icon size={15} />
+      </div>
+      <div className="min-w-0 flex-1 text-left">
+        <div className="flex items-center gap-2 text-[13px] font-medium text-[color:var(--color-ink)]">
+          {label}
+          {keys && (
+            <kbd className="rounded border border-[var(--color-hair-soft)] bg-white/[0.05] px-1.5 py-0.5 font-mono text-[10px] text-[color:var(--color-ink-2)]">
+              {keys}
+            </kbd>
+          )}
+        </div>
+        <div className="text-[11px] leading-snug text-[color:var(--color-ink-2)]">{hint}</div>
+      </div>
+    </div>
+  )
+}
+
+/** A get-ready checklist line with a live status dot. */
+function CheckRow({ ok, label, hint }: { ok: boolean; label: string; hint: string }): JSX.Element {
+  return (
+    <div className="flex items-start gap-2.5">
+      <span
+        className={`mt-0.5 grid h-4 w-4 shrink-0 place-items-center rounded-full ${
+          ok ? 'bg-[var(--color-success)] text-white' : 'border border-[var(--color-hair-soft)] text-[color:var(--color-ink-3)]'
+        }`}
+      >
+        {ok ? <Check size={11} /> : <AlertCircle size={11} />}
+      </span>
+      <div className="text-left">
+        <span className="text-[12px] font-medium text-[color:var(--color-ink)]">{label}</span>
+        {!ok && <span className="ml-1.5 text-[11px] text-[color:var(--color-ink-2)]">{hint}</span>}
+      </div>
+    </div>
+  )
+}
+
 /**
- * 15-second onboarding: one screen. Consent + sign in, then go. Permissions are requested on first
- * use (mic/screen prompts), the API key + profile live in Settings. Microsoft (Azure AD) sign-in is
- * the intended gate — it ties the user to the Mantu domain and their Dust. See `signIn` wiring.
+ * Two-step onboarding. Step 1: consent + sign in / continue (the legal + identity gate). Step 2: a 15-second
+ * primer (what you can do + the shortcuts) plus a live "get ready" checklist (key / mic / screen) so a new
+ * user lands knowing how to use it and what's still missing — instead of an empty bar of cryptic icons.
  */
 export function Onboarding({
   settings,
@@ -35,8 +77,27 @@ export function Onboarding({
   const [recordingConsent, setRecordingConsent] = useState(settings.recordingConsent)
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
+  const [step, setStep] = useState<1 | 2>(1)
+  const [perms, setPerms] = useState<PlatformPermissions | null>(null)
 
-  const finish = async (viaSso: boolean): Promise<void> => {
+  // Pull live permission status when the checklist appears (and refresh shortly after, since the user may
+  // grant access in System Settings while this is open).
+  useEffect(() => {
+    if (step !== 2) return
+    let alive = true
+    const load = (): void => {
+      void window.toto.getPermissions().then((p) => alive && setPerms(p))
+    }
+    load()
+    const id = setInterval(load, 2500)
+    return () => {
+      alive = false
+      clearInterval(id)
+    }
+  }, [step])
+
+  // Step 1 → 2: optional Azure sign-in, then advance to the primer. onboardingDone is only set on "Get started".
+  const advance = async (viaSso: boolean): Promise<void> => {
     if (!recordingConsent) {
       setErr('Please confirm the consent box to continue.')
       return
@@ -44,7 +105,6 @@ export function Onboarding({
     setErr('')
     setBusy(true)
     try {
-      // Azure AD sign-in (domain-restricted) when configured; otherwise proceed.
       if (viaSso && window.toto.signIn) {
         const r = await window.toto.signIn()
         if (!r.ok) {
@@ -53,13 +113,61 @@ export function Onboarding({
           return
         }
       }
-      await patch({ onboardingDone: true, recordingConsent })
-      onDone()
+      setStep(2)
     } catch (e) {
-      setErr(e instanceof Error ? e.message : 'Could not finish setup.')
+      setErr(e instanceof Error ? e.message : 'Could not continue.')
     } finally {
       setBusy(false)
     }
+  }
+
+  const finish = (): void => {
+    void patch({ onboardingDone: true, recordingConsent })
+    onDone()
+  }
+
+  if (step === 2) {
+    const providerLabel = PROVIDERS[settings.provider]?.label ?? 'AI provider'
+    return (
+      <div className="fade-up flex min-h-[300px] w-full flex-col items-center gap-5 px-4 py-7 text-center">
+        <div className="flex flex-col items-center gap-1.5">
+          <MantuLogo size={150} />
+          <div className="font-ui text-[20px] font-semibold tracking-tight text-[color:var(--color-ink)]">
+            You’re set. Here’s how it works.
+          </div>
+        </div>
+
+        <div className="flex w-full max-w-[460px] flex-col gap-3 rounded-xl border border-[var(--color-hair-soft)] bg-white/[0.02] p-4">
+          <ActionRow icon={Sparkles} label="Ask anything" keys="⌘⇧↵" hint="Type a question, or capture your screen for visual help." />
+          <ActionRow icon={Mic} label="Listen to your call" hint="Transcribes both sides and suggests what to say, live." />
+          <ActionRow icon={Camera} label="Capture your screen" keys="⌘⇧S" hint="Get instant help with whatever you’re looking at." />
+        </div>
+
+        <div className="flex w-full max-w-[460px] flex-col gap-2 rounded-xl border border-[var(--color-hair-soft)] bg-white/[0.02] p-4">
+          <div className="mb-0.5 text-left text-[11px] font-semibold uppercase tracking-wide text-[color:var(--color-ink-3)]">
+            Get ready
+          </div>
+          <CheckRow ok={settings.providerReady} label={`${providerLabel} API key`} hint="add it in Settings → Your AI" />
+          <CheckRow ok={perms?.microphone === 'granted'} label="Microphone" hint="grant access when you first press Listen" />
+          <CheckRow ok={perms?.screenRecording === 'granted'} label="Screen recording" hint="needed for the other side of calls + screen capture" />
+        </div>
+
+        <button
+          type="button"
+          onClick={finish}
+          className="no-drag focus-ring inline-flex items-center justify-center gap-2 rounded-xl bg-[var(--color-accent)] px-5 py-2.5 text-[14px] font-medium text-white hover:brightness-110"
+        >
+          Get started <ArrowRight size={14} />
+        </button>
+        <button
+          type="button"
+          onClick={() => setStep(1)}
+          className="no-drag focus-ring text-[11px] text-[color:var(--color-ink-3)] hover:text-[color:var(--color-ink-2)]"
+        >
+          Back
+        </button>
+      </div>
+    )
   }
 
   return (
@@ -68,11 +176,11 @@ export function Onboarding({
 
       <div className="flex flex-col gap-2">
         <div className="font-ui text-[24px] font-semibold tracking-tight text-[color:var(--color-ink)]">
-          Your invisible AI copilot.
+          Your invisible meeting assistant.
         </div>
         <p className="mx-auto max-w-[480px] text-[13.5px] leading-relaxed text-[color:var(--color-ink-2)]">
-          AskToto floats over everything, hears your calls, and tells you exactly what to say in
-          meetings, interviews, and sales. Sign in to get started.
+          AskToto floats over everything, hears your calls, and tells you exactly what to say in meetings,
+          interviews, and sales.
         </p>
       </div>
 
@@ -84,8 +192,8 @@ export function Onboarding({
           className="no-drag mt-0.5 accent-[var(--color-accent)]"
         />
         <span className="text-[12px] leading-snug text-[color:var(--color-ink)]">
-          I will inform other participants before recording. AskToto follows my company&apos;s policy
-          and the law.
+          I will inform other participants before recording. AskToto follows my company&apos;s policy and the
+          law.
         </span>
       </label>
 
@@ -95,7 +203,7 @@ export function Onboarding({
         <button
           type="button"
           disabled={busy || !recordingConsent}
-          onClick={() => finish(true)}
+          onClick={() => advance(true)}
           className={[
             'no-drag focus-ring flex items-center justify-center gap-2 rounded-xl bg-[var(--color-accent)] px-4 py-2.5 text-[14px] font-medium text-white hover:brightness-110',
             busy || !recordingConsent ? 'cursor-not-allowed opacity-50' : ''
@@ -106,16 +214,16 @@ export function Onboarding({
         <button
           type="button"
           disabled={busy || !recordingConsent}
-          onClick={() => finish(false)}
+          onClick={() => advance(false)}
           className="no-drag focus-ring inline-flex items-center justify-center gap-1 rounded-xl px-4 py-2 text-[12px] text-[color:var(--color-ink-3)] hover:text-[color:var(--color-ink-2)]"
         >
-          Skip for now <ArrowRight size={12} />
+          Continue without signing in <ArrowRight size={12} />
         </button>
       </div>
 
       <div className="flex items-center gap-1.5 text-[11px] text-[color:var(--color-ink-3)]">
         <ShieldCheck size={12} className="text-[color:var(--color-accent)]" />
-        Restricted to your Mantu Microsoft account · permissions are asked when you first Listen.
+        Restricted to your Mantu Microsoft account · permissions are requested the first time you Listen.
       </div>
 
       <div className="text-[10px] text-[color:var(--color-ink-3)]">

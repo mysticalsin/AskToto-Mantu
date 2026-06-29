@@ -167,16 +167,18 @@ export async function detectMac(customApps: string[] = []): Promise<string> {
   const full = await runOsaScript(buildFullMacScript())
   if (full.stdout && full.stdout !== SYSTEM_EVENTS_DENIED) return full.stdout
 
-  // Full script succeeded but found nothing.
-  if (!full.err && full.stdout !== SYSTEM_EVENTS_DENIED) return ''
+  // Full script succeeded but found nothing. Still give user-defined custom apps a window-title pass
+  // (the AppleScript only knows the built-in browsers/apps) before giving up.
+  if (!full.err && full.stdout !== SYSTEM_EVENTS_DENIED && !customApps.length) return ''
 
   // Full script failed (e.g., missing Chrome dictionary) or System Events was denied.
   if (full.stdout !== SYSTEM_EVENTS_DENIED) {
     const title = await runOsaScript(buildTitleOnlyMacScript())
     if (title.stdout && title.stdout !== SYSTEM_EVENTS_DENIED) return title.stdout
-    if (!title.err && title.stdout !== SYSTEM_EVENTS_DENIED) return ''
+    if (!title.err && title.stdout !== SYSTEM_EVENTS_DENIED && !customApps.length) return ''
   }
 
-  // AppleScript is unavailable or blocked: fall back to CGWindow-backed window titles.
+  // AppleScript found nothing/was blocked: fall back to CGWindow-backed window titles (this is also the
+  // only path that honors custom meeting apps; it needs Screen Recording permission to read titles).
   return detectMacByWindowTitles(customApps)
 }

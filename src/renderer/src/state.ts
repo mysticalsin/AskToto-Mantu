@@ -51,11 +51,17 @@ export interface AnswerState {
   streaming: boolean
   error: string | null
   prompt: string
+  // User-facing header (the claim/question being asked). The `prompt` is the engineered scaffold that
+  // goes to the model and must NEVER be shown; `label` is what the UI displays. Falls back to '' (hidden).
+  label?: string
+  kind?: 'answer' | 'factcheck' // drives the verdict-card rendering for fact-checks
 }
 
 export interface AskRequest {
   mode: AskMode
   prompt?: string
+  label?: string
+  kind?: 'answer' | 'factcheck'
   image?: string
   transcript?: string
   history?: ChatTurn[]
@@ -98,10 +104,14 @@ export function useAsk(): {
     const offErr = window.toto.onError((e: StreamError) => {
       if (e.id !== idRef.current) return
       flush() // keep any partial answer captured before the error
+      // User-initiated aborts/cancels are not failures — never paint them as a red error on screen.
+      const aborted = /\babort|\bcancel/i.test(e.message || '')
       setAnswer((a) =>
         a
-          ? { ...a, streaming: false, error: e.message }
-          : { id: e.id, text: '', streaming: false, error: e.message, prompt: '' }
+          ? { ...a, streaming: false, error: aborted ? null : e.message }
+          : aborted
+            ? null
+            : { id: e.id, text: '', streaming: false, error: e.message, prompt: '' }
       )
     })
     return () => {
@@ -127,7 +137,7 @@ export function useAsk(): {
       resetBuffer()
       const id = uid()
       idRef.current = id
-      setAnswer({ id, text: '', streaming: true, error: null, prompt: req.prompt ?? '' })
+      setAnswer({ id, text: '', streaming: true, error: null, prompt: req.prompt ?? '', label: req.label, kind: req.kind })
       void window.toto.ask({
         id,
         mode: req.mode,

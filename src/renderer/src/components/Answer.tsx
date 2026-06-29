@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Copy, Check, RefreshCw, FileDown } from 'lucide-react'
+import { Copy, Check, RefreshCw, FileDown, ShieldCheck } from 'lucide-react'
 import { Markdown } from './Markdown'
 
 function Skeleton(): JSX.Element {
@@ -12,17 +12,34 @@ function Skeleton(): JSX.Element {
   )
 }
 
+/** A fact-check verdict: parse a leading "VERDICT: <X>" line; the rest is the bulleted reasoning. */
+const VERDICTS: Record<string, { label: string; chip: string }> = {
+  TRUE: { label: 'True', chip: 'bg-[var(--color-success)]/15 text-[var(--color-success)] border-[var(--color-success)]/30' },
+  FALSE: { label: 'False', chip: 'bg-[var(--color-danger)]/15 text-[var(--color-danger)] border-[var(--color-danger)]/30' },
+  MISLEADING: { label: 'Misleading', chip: 'bg-amber-400/15 text-amber-400 border-amber-400/30' },
+  UNVERIFIABLE: { label: 'Unverifiable', chip: 'bg-white/[0.06] text-[color:var(--color-ink-2)] border-[var(--color-hair-soft)]' }
+}
+function parseVerdict(text: string): { key: string; rest: string } | null {
+  const m = text.match(/VERDICT:\s*(TRUE|FALSE|MISLEADING|UNVERIFIABLE)\b/i)
+  if (!m) return null
+  return { key: m[1].toUpperCase(), rest: text.slice((m.index ?? 0) + m[0].length).replace(/^[\s:.-]*/, '') }
+}
+
 export function Answer({
   text,
   streaming,
   error,
   prompt,
+  label,
+  kind,
   onRetry
 }: {
   text: string
   streaming: boolean
   error: string | null
   prompt?: string
+  label?: string
+  kind?: 'answer' | 'factcheck'
   onRetry?: () => void
 }): JSX.Element {
   const [copied, setCopied] = useState(false)
@@ -32,8 +49,10 @@ export function Answer({
 
   const saveNote = (): void => {
     if (!text) return
+    // Save the user-facing label (the claim/question), NEVER the engineered prompt scaffold + guard line.
+    const noteTitle = label || prompt || ''
     window.toto
-      .saveNote({ title: prompt || '', mode: 'general', question: prompt || '', answer: text })
+      .saveNote({ title: noteTitle, mode: 'general', question: noteTitle, answer: text })
       .then(() => {
         setSaved(true)
         setSaveError(null)
@@ -41,9 +60,17 @@ export function Answer({
       })
       .catch((e) => setSaveError(`Save failed: ${e instanceof Error ? e.message : String(e)}`))
   }
-  const header = prompt ? (
+  // Show the user-facing label (the claim/question) — NEVER the engineered `prompt` scaffold. For plain
+  // asks the typed question IS the prompt, so it falls back to that; engineered callers pass a clean label.
+  const display = label ?? prompt
+  const header = display ? (
     <div className="rounded-lg border border-[var(--color-hair-soft)] bg-white/[0.03] px-3 py-2 text-[13px] font-medium text-[color:var(--color-ink)]">
-      {prompt}
+      {kind === 'factcheck' && (
+        <div className="mb-1 flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wide text-[color:var(--color-ink-3)]">
+          <ShieldCheck size={11} /> Fact-check
+        </div>
+      )}
+      {display}
     </div>
   ) : null
 
@@ -142,11 +169,28 @@ export function Answer({
       </div>
     )
   }
+  const verdict = kind === 'factcheck' ? parseVerdict(text) : null
   return (
     <div className="fade-up mx-auto max-w-[620px] flex flex-col gap-2">
       {header}
       <div aria-live="polite" aria-atomic="false" aria-busy={streaming}>
-        <Markdown>{text}</Markdown>
+        {verdict ? (
+          <div className="flex flex-col gap-2">
+            <span
+              className={`inline-flex w-fit items-center gap-1.5 rounded-full border px-2.5 py-1 text-[12px] font-semibold ${VERDICTS[verdict.key].chip}`}
+            >
+              {VERDICTS[verdict.key].label}
+            </span>
+            <Markdown>{verdict.rest}</Markdown>
+          </div>
+        ) : kind === 'factcheck' && streaming ? (
+          // Hide the raw "VERDICT:" scaffold from view until the verdict word streams in and parses.
+          <div className="flex items-center gap-1.5 text-[12px] text-[color:var(--color-ink-2)]">
+            <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-[var(--color-accent)]" /> Checking…
+          </div>
+        ) : (
+          <Markdown>{text}</Markdown>
+        )}
         {streaming && (
           <span className="ml-0.5 inline-block h-[14px] w-[6px] translate-y-[2px] animate-pulse rounded-[1px] bg-[var(--color-accent)] align-middle" />
         )}

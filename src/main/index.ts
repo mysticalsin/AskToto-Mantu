@@ -10,10 +10,13 @@ import {
   dialog,
   Tray,
   Menu,
-  nativeImage
+  nativeImage,
+  protocol,
+  net
 } from 'electron'
-import { join, basename } from 'node:path'
+import { join, basename, resolve, relative, isAbsolute, extname } from 'node:path'
 import { readFileSync, existsSync, writeFileSync } from 'node:fs'
+import { pathToFileURL } from 'node:url'
 import {
   IPC,
   AskStartSchema,
@@ -43,6 +46,8 @@ import { createStream } from './llm'
 import { buildSystem } from './personas'
 import { initLogging, mainLog, auditLog } from './logger'
 import { authStatus, signIn as authSignIn, signOut as authSignOut, requireAuth } from './auth'
+import { calendarToday } from './calendar'
+import { parakeetModelReady, ensureParakeetModel, parakeetTranscribe } from './parakeet'
 import {
   saveMeeting,
   saveNote,
@@ -57,12 +62,13 @@ import { listMeetings, searchMeetings } from './recall'
 import { initAutoUpdate } from './updater'
 import { runSelfTest } from './selftest'
 import { importDustCliSession, setupDustCli } from './dustcli'
+import { detectCli, testCli, setupCli } from './cli'
 import { graphifyStatus, buildGraph, relatedNotes, graphHtml, scheduleRebuild } from './graphify'
 import { SaveMeetingSchema, SaveNoteSchema } from '@shared/ipc'
 import { PROVIDERS, resolveModelTier, type ProviderId } from '@shared/providers'
 import { routeTier } from '@shared/routing'
 
-const BAR_WIDTH = 700
+const BAR_WIDTH = 860
 const BAR_HEIGHT = 64
 
 /** Content protection hides the window from screen capture. Disable via env for dev/screenshots. */
@@ -117,13 +123,16 @@ function publicSettings(): PublicSettings {
   // Active provider is usable: key present AND any provider-specific setup done (Dust needs a workspace +
   // a chosen base agent; custom needs an https base URL). Drives the add-key CTA so it only shows when the
   // app genuinely can't answer yet — not when a key for a DIFFERENT provider exists.
+  const activeDef = PROVIDERS[s.provider]
   const providerReady =
-    hasApiKey(s.provider) &&
-    (s.provider === 'dust'
-      ? !!s.dustWorkspaceId.trim() && !!s.providerModels.dust
-      : s.provider === 'custom'
-        ? /^https:\/\//i.test(s.customBaseUrl) && !!s.providerModels.custom
-        : true)
+    activeDef.kind === 'cli'
+      ? !!s.cliConnected[s.provider]
+      : hasApiKey(s.provider) &&
+        (s.provider === 'dust'
+          ? !!s.dustWorkspaceId.trim() && !!s.providerModels.dust
+          : s.provider === 'custom'
+            ? /^https:\/\//i.test(s.customBaseUrl) && !!s.providerModels.custom
+            : true)
   return {
     ...s,
     hasApiKey: hasApiKey(s.provider),
@@ -163,6 +172,7 @@ function createWindow(): void {
     minimizable: false,
     roundedCorners: true,
     backgroundColor: '#00000000',
+    acceptFirstMouse: true, // macOS: first click activates + hits the target without needing a second click
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
       sandbox: true,
@@ -179,6 +189,9 @@ function createWindow(): void {
   win.setHiddenInMissionControl?.(true)
 
   win.on('closed', () => {
+    // Abort any in-flight LLM streams so their callbacks don't fire against a destroyed window.
+    streams.forEach((s) => s.abort())
+    streams.clear()
     win = null
   })
 
@@ -315,13 +328,17 @@ async function captureScreenshot(): Promise<{ image: string; width: number; heig
   const fullW = Math.round(disp.size.width * sf)
   const fullH = Math.round(disp.size.height * sf)
   const capScale = Math.min(1, VISION_MAX_EDGE / Math.max(fullW, fullH))
-  const sources = await desktopCapturer.getSources({
-    types: ['screen'],
-    thumbnailSize: {
-      width: Math.max(1, Math.round(fullW * capScale)),
-      height: Math.max(1, Math.round(fullH * capScale))
-    }
-  })
+  const thumbnailSize = {
+    width: Math.max(1, Math.round(fullW * capScale)),
+    height: Math.max(1, Math.round(fullH * capScale))
+  }
+  let sources = await desktopCapturer.getSources({ types: ['screen'], thumbnailSize })
+  if (!sources.length) {
+    // getSources can return empty transiently (right after launch or a fresh Screen-Recording grant).
+    // Retry once before giving up so a momentary gap doesn't surface as a failed capture.
+    await new Promise((r) => setTimeout(r, 250))
+    sources = await desktopCapturer.getSources({ types: ['screen'], thumbnailSize })
+  }
   const src = sources.find((s) => String(s.display_id) === String(disp.id)) ?? sources[0]
   if (!src) throw new Error('No screen source available (grant Screen Recording permission)')
   let img = src.thumbnail
@@ -358,7 +375,12 @@ function prewarmCapture(): void {
 function moveBy(dx: number, dy: number): void {
   if (!win) return
   const b = win.getBounds()
-  win.setBounds({ ...b, x: b.x + dx, y: b.y + dy })
+  // Clamp to the matching display's work area so the bar can never be flung fully off-screen with no
+  // way back (now that the whole bar is a drag handle). Keeps the entire window reachable.
+  const { workArea } = screen.getDisplayMatching(b)
+  const x = Math.min(Math.max(b.x + dx, workArea.x), workArea.x + workArea.width - b.width)
+  const y = Math.min(Math.max(b.y + dy, workArea.y), workArea.y + workArea.height - b.height)
+  win.setBounds({ ...b, x, y })
 }
 
 function toggleVisible(): void {
@@ -410,7 +432,6 @@ function startMeetingPoller(): void {
   meetingTimer = setInterval(async () => {
     if (meetingDetecting) return // skip if the previous detect is still running (no overlap)
     if (!getSettings().onboardingDone || !getSettings().autoStartOnMeeting) {
-      meetingActive = false
       return
     }
     meetingDetecting = true
@@ -418,7 +439,7 @@ function startMeetingPoller(): void {
       const hit = await detectMeeting(getSettings().customMeetingApps)
       if (hit && !meetingActive) {
         meetingActive = true
-        if (win && !win.isVisible()) win.show() // surface the prompt/consent banner; don't fire on a hidden window
+        if (win && !win.isVisible()) win.show() // surface the overlay so the user sees recording start
         win?.webContents.send(IPC.meetingDetected, { app: hit.split('|')[0], active: true })
       } else if (!hit && meetingActive) {
         meetingActive = false
@@ -481,13 +502,18 @@ function registerIpc(): void {
 
   ipcMain.handle(IPC.settingsSet, (e, patch) => {
     assertMainWindow(e)
-    const next = setSettings(patch ?? {})
-    auditLog('settings.changed', { keys: Object.keys(patch ?? {}) })
+    const p = patch ?? {}
+    const next = setSettings(p)
+    auditLog('settings.changed', { keys: Object.keys(p) })
     win?.setContentProtection(contentProtectionOn())
-    try {
-      app.setLoginItemSettings({ openAtLogin: next.launchAtLogin })
-    } catch {
-      /* not supported on this platform */
+    // Only reconfigure the OS login item when that setting actually changed. Calling it on every
+    // unrelated save is wasteful and, on unsigned/dev builds, logs a noisy "Operation not permitted".
+    if ('launchAtLogin' in p) {
+      try {
+        app.setLoginItemSettings({ openAtLogin: next.launchAtLogin })
+      } catch {
+        /* not supported on this platform */
+      }
     }
     // Shortcuts may have changed — re-register from the new settings.
     registerShortcuts()
@@ -540,6 +566,29 @@ function registerIpc(): void {
     return setupDustCli()
   })
 
+  // CLI provider detection/testing/setup (claude-cli, codex-cli).
+  ipcMain.handle(IPC.cliDetect, (e, provider: unknown) => {
+    assertMainWindow(e)
+    if (!requireAuth()) return { ok: false, error: 'Sign in with your Mantu account first.' }
+    return detectCli(typeof provider === 'string' ? (provider as ProviderId) : 'claude-cli')
+  })
+  ipcMain.handle(IPC.cliTest, async (e, provider: unknown) => {
+    assertMainWindow(e)
+    if (!requireAuth()) return { ok: false, error: 'Sign in with your Mantu account first.' }
+    const p = typeof provider === 'string' ? (provider as ProviderId) : 'claude-cli'
+    const r = await testCli(p)
+    if (r.ok) {
+      const s = getSettings()
+      setSettings({ cliConnected: { ...s.cliConnected, [p]: true } })
+    }
+    return r
+  })
+  ipcMain.handle(IPC.cliSetup, (e, provider: unknown) => {
+    assertMainWindow(e)
+    if (!requireAuth()) return { ok: false, error: 'Sign in with your Mantu account first.' }
+    return setupCli(typeof provider === 'string' ? (provider as ProviderId) : 'claude-cli')
+  })
+
   ipcMain.handle(IPC.authStatus, (e) => {
     assertMainWindow(e)
     return authStatus()
@@ -553,6 +602,35 @@ function registerIpc(): void {
   ipcMain.handle(IPC.authSignOut, (e) => {
     assertMainWindow(e)
     return authSignOut()
+  })
+  ipcMain.handle(IPC.calendarToday, async (e, tz: unknown) => {
+    assertMainWindow(e)
+    if (!requireAuth()) return { ok: false, error: 'Sign in with your Mantu account first.' }
+    return calendarToday(typeof tz === 'string' ? tz : 'UTC')
+  })
+
+  // Parakeet (on-device, main-process). Whisper stays the renderer default; these only run when the user
+  // selects the Parakeet engine. All wrapped so a failure degrades to Whisper rather than breaking Listen.
+  ipcMain.handle(IPC.parakeetStatus, (e) => {
+    assertMainWindow(e)
+    return { ready: parakeetModelReady() }
+  })
+  ipcMain.handle(IPC.parakeetEnsure, async (e) => {
+    assertMainWindow(e)
+    if (!requireAuth()) return { ok: false }
+    try {
+      await ensureParakeetModel((pct) => win?.webContents.send(IPC.parakeetProgress, { pct }))
+      return { ok: parakeetModelReady() }
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) }
+    }
+  })
+  ipcMain.handle(IPC.parakeetFeed, async (e, payload: unknown) => {
+    assertMainWindow(e)
+    if (!requireAuth()) return ''
+    const p = payload as { samples?: Float32Array }
+    if (!p?.samples) return ''
+    return parakeetTranscribe(p.samples)
   })
 
   ipcMain.handle(IPC.captureScreen, async (event) => {
@@ -616,9 +694,9 @@ function registerIpc(): void {
       const key = getApiKey(provider)
       const tier = routeTier(req, s.thinkingMode)
       const model = resolveModelTier(provider, s.providerModels, s.providerModelsThinking, tier)
-      const ineligible = !key
+      const ineligible = def.kind !== 'cli' && !key
         ? `No API key for ${def.label}. Open Settings (gear) and add it.`
-        : !model
+        : def.kind !== 'cli' && !model
           ? provider === 'dust'
             ? `No ${tier === 'think' ? 'thinking' : 'base'} Dust agent set. Open Settings → Connect Dust and pick your agents.`
             : `No model set for ${def.label}. Pick a model in Settings.`
@@ -800,6 +878,18 @@ function registerIpc(): void {
   })
 }
 
+// ─── asr-model:// custom protocol ────────────────────────────────────────────
+// The packaged renderer loads over file://, which cannot fetch from the network.
+// We register a privileged custom scheme so the Whisper worker and transformers.js
+// can load bundled model weights (and the ONNX-runtime WASM blobs) via fetch()
+// without any network call. registerSchemesAsPrivileged MUST run before app ready.
+protocol.registerSchemesAsPrivileged([
+  {
+    scheme: 'asr-model',
+    privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true }
+  }
+])
+
 if (!app.requestSingleInstanceLock()) {
   app.quit()
 } else {
@@ -831,7 +921,7 @@ if (!app.requestSingleInstanceLock()) {
   // hand back the system audio loopback device (the "Them" channel) only.
   // Screenshot capture uses desktopCapturer directly, so no video track is ever returned here.
   session.defaultSession.setDisplayMediaRequestHandler(
-    (request, callback) => {
+    async (request, callback) => {
       const frame = request.frame
       const mainFrame = win?.webContents.mainFrame
       const origin = request.securityOrigin
@@ -843,7 +933,13 @@ if (!app.requestSingleInstanceLock()) {
         expectedOrigin = mainUrl
       }
       const isMainFrame = !!frame && frame === mainFrame
-      const originOk = !mainUrl || origin === expectedOrigin || origin === mainUrl
+      // In the PACKAGED app the renderer is loaded from file://, whose origin is the opaque string
+      // "null" (from new URL(...).origin) while the request reports securityOrigin "file:///". Without
+      // this case the check denied EVERY system-audio request in production. The real identity guard is
+      // isMainFrame (frame === the main window's frame); the origin match is defense-in-depth.
+      const isFileOrigin = origin.startsWith('file://')
+      const originOk =
+        !mainUrl || origin === expectedOrigin || origin === mainUrl || (expectedOrigin === 'null' && isFileOrigin)
       if (process.env.ASKTOTO_DEBUG) {
         console.log('[display-media]', {
           origin,
@@ -865,11 +961,17 @@ if (!app.requestSingleInstanceLock()) {
         callback({}) // deny requests from unexpected origins or subframes
         return
       }
-      if (!request.audioRequested || request.videoRequested) {
-        callback({}) // we only grant audio loopback here; never grant video
+      if (!request.audioRequested) {
+        callback({}) // must be an audio (loopback) request
         return
       }
-      callback({ audio: 'loopback' })
+      // macOS binds system-audio loopback to a ScreenCaptureKit screen stream, so the loopback only
+      // starts when a screen video source is attached. We grant one here (gated above on armed +
+      // main-frame + origin); the renderer drops the video track instantly, so no frame is rendered,
+      // saved, or sent. This is the only way to capture the "them" side of a call on macOS.
+      const sources = await desktopCapturer.getSources({ types: ['screen'] })
+      const screenSrc = sources[0]
+      callback(screenSrc ? { video: screenSrc, audio: 'loopback' } : {})
     },
     { useSystemPicker: false }
   )
@@ -882,6 +984,58 @@ if (!app.requestSingleInstanceLock()) {
     callback(allowPermission(wc, permission))
   )
   session.defaultSession.setPermissionCheckHandler((wc, permission) => allowPermission(wc, permission))
+
+  // ─── asr-model:// protocol handler ───────────────────────────────────────
+  // Maps asr-model://<host>/<pathname> → RES_BASE/<host>/<pathname> on disk.
+  // This lets the Whisper worker (served over file://) use fetch() to load
+  // bundled ONNX model weights and WASM blobs with zero network access.
+  // Path-traversal guard: relative() must stay within RES_BASE (separator-safe on Windows).
+  {
+    const REPO_ROOT = join(__dirname, '..', '..')
+    const RES_BASE = app.isPackaged
+      ? process.resourcesPath
+      : join(REPO_ROOT, 'resources')
+
+    // Expose whether the bundled ORT + a model file are present so the renderer
+    // only switches to the offline asr-model:// scheme when the assets exist.
+    const ASR_BUNDLED =
+      existsSync(join(RES_BASE, 'ort', 'ort-wasm-simd-threaded.jsep.wasm')) &&
+      existsSync(join(RES_BASE, 'models', 'Xenova', 'whisper-base', 'config.json'))
+    ipcMain.handle(IPC.asrBundled, () => ASR_BUNDLED)
+
+    protocol.handle('asr-model', async (req) => {
+      try {
+        const url = new URL(req.url)
+        // url.host = e.g. "models" or "ort"; url.pathname = e.g. "/Xenova/whisper-base/config.json"
+        const rel = decodeURIComponent(url.host + url.pathname)
+        const abs = resolve(RES_BASE, rel)
+        // Path-traversal guard (separator-safe on Windows): reject any path that escapes RES_BASE
+        const relCheck = relative(RES_BASE, abs)
+        if (relCheck.startsWith('..') || isAbsolute(relCheck)) {
+          return new Response(null, { status: 403 })
+        }
+        if (!existsSync(abs)) {
+          return new Response(null, { status: 404 })
+        }
+        const resp = await net.fetch(pathToFileURL(abs).toString())
+        const TYPES: Record<string, string> = {
+          '.mjs': 'text/javascript',
+          '.js': 'text/javascript',
+          '.wasm': 'application/wasm',
+          '.json': 'application/json',
+          '.onnx': 'application/octet-stream',
+          '.txt': 'text/plain'
+        }
+        const ct = TYPES[extname(abs).toLowerCase()]
+        if (!ct) return resp
+        const headers = new Headers(resp.headers)
+        headers.set('Content-Type', ct)
+        return new Response(resp.body, { status: resp.status, statusText: resp.statusText, headers })
+      } catch {
+        return new Response(null, { status: 500 })
+      }
+    })
+  }
 
   // Boot each subsystem in its own try/catch so one failure can't abort the rest, and stand up the
   // tray + global shortcuts BEFORE the window. If createWindow() ever throws (transparent / always-on-top

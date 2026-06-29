@@ -14,6 +14,11 @@ files:
   - '!out/**/*.map'
   - '!**/*.d.ts'
 asar: true
+# Native addons (.node) must live outside the asar to be loadable at runtime. sherpa-onnx-node (Parakeet
+# engine) + its per-platform binary packages are unpacked here so they ship + load in the installed app.
+asarUnpack:
+  - '**/node_modules/sherpa-onnx-node/**'
+  - '**/node_modules/sherpa-onnx-*/**'
 extraResources:
   - from: build/managed-config.example.json
     to: managed-config.example.json
@@ -21,6 +26,14 @@ extraResources:
     to: icon.png
   - from: resources/graphify_runner.py
     to: graphify_runner.py
+  # Bundled ASR model weights — served via asr-model:// protocol (zero runtime download).
+  # Populated by `npm run fetch-models` before packaging.
+  - from: resources/models
+    to: models
+  - from: resources/asr
+    to: asr
+  - from: resources/ort
+    to: ort
 mac:
   category: public.app-category.productivity
   target:
