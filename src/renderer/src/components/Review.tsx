@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Copy, Check, FileText, ListTree, FolderOpen, Save, RotateCcw, ChevronRight, ChevronDown } from 'lucide-react'
+import { Copy, Check, FileText, ListTree, FolderOpen, Save, RotateCcw, ChevronRight, ChevronDown, Download } from 'lucide-react'
 import type { TranscriptLine } from '@shared/ipc'
 import type { AnswerState } from '../state'
 import { Markdown } from './Markdown'
@@ -46,6 +46,8 @@ export function Review({
 }): JSX.Element {
   const [copied, setCopied] = useState(false)
   const [notesCopied, setNotesCopied] = useState(false)
+  const [jsonCopied, setJsonCopied] = useState(false)
+  const [exportError, setExportError] = useState<string | null>(null)
   const [transcriptOpen, setTranscriptOpen] = useState(!!showTranscript)
   const [now, setNow] = useState(Date.now())
 
@@ -103,6 +105,22 @@ export function Review({
         setTimeout(() => setNotesCopied(false), 1500)
       })
       .catch(() => {})
+  }
+
+  // Parse the recap markdown into a structured object (decisions + action-items-with-owners) in the main
+  // process, then copy it as JSON so it can be pasted straight into Jira/Asana/Notion without retyping.
+  const exportJson = (): void => {
+    const md = recap?.text
+    if (!md) return
+    setExportError(null)
+    window.toto
+      .exportRecapJson(md)
+      .then((json) => navigator.clipboard.writeText(JSON.stringify(json, null, 2)))
+      .then(() => {
+        setJsonCopied(true)
+        setTimeout(() => setJsonCopied(false), 1500)
+      })
+      .catch((e) => setExportError(`Export failed: ${e instanceof Error ? e.message : String(e)}`))
   }
 
   return (
@@ -168,17 +186,30 @@ export function Review({
             <ListTree size={12} /> Meeting notes
           </div>
           {recap?.text && (
-            <button
-              type="button"
-              onClick={copyNotes}
-              aria-label={notesCopied ? 'Copied notes' : 'Copy notes'}
-              className="no-drag focus-ring flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] text-[color:var(--color-ink-2)] hover:bg-white/10 hover:text-[color:var(--color-ink)]"
-            >
-              {notesCopied ? <Check size={11} className="text-[var(--color-success)]" /> : <Copy size={11} />}
-              {notesCopied ? 'Copied' : 'Copy notes'}
-            </button>
+            <div className="flex items-center gap-1">
+              <button
+                type="button"
+                onClick={copyNotes}
+                aria-label={notesCopied ? 'Copied notes' : 'Copy notes'}
+                className="no-drag focus-ring flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] text-[color:var(--color-ink-2)] hover:bg-white/10 hover:text-[color:var(--color-ink)]"
+              >
+                {notesCopied ? <Check size={11} className="text-[var(--color-success)]" /> : <Copy size={11} />}
+                {notesCopied ? 'Copied' : 'Copy notes'}
+              </button>
+              <button
+                type="button"
+                onClick={exportJson}
+                aria-label={jsonCopied ? 'Copied JSON' : 'Export notes as JSON'}
+                title="Copy structured JSON (decisions + action items) for Jira/Asana/Notion"
+                className="no-drag focus-ring flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] text-[color:var(--color-ink-2)] hover:bg-white/10 hover:text-[color:var(--color-ink)]"
+              >
+                {jsonCopied ? <Check size={11} className="text-[var(--color-success)]" /> : <Download size={11} />}
+                {jsonCopied ? 'Copied' : 'Export JSON'}
+              </button>
+            </div>
           )}
         </div>
+        {exportError && <div className="mb-1.5 text-[11px] text-[var(--color-danger)]">{exportError}</div>}
         {recap?.error ? (
           <div className="text-[13px] text-[var(--color-danger)]">{recap.error}</div>
         ) : recap?.text ? (

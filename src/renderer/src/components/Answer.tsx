@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Copy, Check, RefreshCw, FileDown, ShieldCheck } from 'lucide-react'
+import { Copy, Check, RefreshCw, FileDown, ShieldCheck, ChevronsDown } from 'lucide-react'
 import { Markdown } from './Markdown'
 
 function Skeleton(): JSX.Element {
@@ -32,7 +32,8 @@ export function Answer({
   prompt,
   label,
   kind,
-  onRetry
+  onRetry,
+  onGoDeeper
 }: {
   text: string
   streaming: boolean
@@ -41,6 +42,7 @@ export function Answer({
   label?: string
   kind?: 'answer' | 'factcheck'
   onRetry?: () => void
+  onGoDeeper?: () => void
 }): JSX.Element {
   const [copied, setCopied] = useState(false)
   const [copyError, setCopyError] = useState<string | null>(null)
@@ -119,6 +121,16 @@ export function Answer({
             className="no-drag focus-ring flex items-center gap-1 rounded-md px-2 py-1 text-[11px] text-[color:var(--color-ink-2)] hover:bg-white/10 hover:text-[color:var(--color-ink)]"
           >
             <RefreshCw size={11} /> Retry
+          </button>
+        )}
+        {text && onGoDeeper && kind !== 'factcheck' && (
+          <button
+            type="button"
+            onClick={onGoDeeper}
+            title="Re-answer with more depth and detail"
+            className="no-drag focus-ring flex items-center gap-1 rounded-md px-2 py-1 text-[11px] text-[color:var(--color-ink-2)] hover:bg-white/10 hover:text-[color:var(--color-ink)]"
+          >
+            <ChevronsDown size={11} /> Go deeper
           </button>
         )}
       </div>

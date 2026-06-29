@@ -304,6 +304,7 @@ export function App(): JSX.Element {
   )
 
   const submit = useCallback(() => {
+    if (!settings?.providerReady) return
     const q = input.trim()
     if (!q) return
     setCaptureError(null)
@@ -322,7 +323,7 @@ export function App(): JSX.Element {
       pendingUserRef.current = { id, q } // recorded into memory when it completes
     }
     setInput('')
-  }, [input, ask, suggest, listen])
+  }, [input, ask, suggest, listen, settings])
 
   const factCheck = useCallback(() => {
     const claim = input.trim()
@@ -431,6 +432,13 @@ export function App(): JSX.Element {
     const p = ask.answer?.prompt
     if (!p) return
     const id = ask.retry() // replays the original request verbatim (keeps the screenshot for vision retries)
+    if (id) pendingUserRef.current = { id, q: p }
+  }, [ask])
+
+  const goDeeper = useCallback(() => {
+    const p = ask.answer?.prompt
+    if (!p) return
+    const id = ask.deeper() // replays the request with depth:'deeper' → a fuller answer
     if (id) pendingUserRef.current = { id, q: p }
   }, [ask])
 
@@ -663,6 +671,7 @@ export function App(): JSX.Element {
         label={ask.answer?.label}
         kind={ask.answer?.kind}
         onRetry={captureError ? undefined : retryAnswer}
+        onGoDeeper={captureError ? undefined : goDeeper}
       />
     )
   }
