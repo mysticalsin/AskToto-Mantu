@@ -64,6 +64,7 @@ import { getPlatformPermissions } from './platform-perms'
 import { listMeetings, searchMeetings } from './recall'
 import { initAutoUpdate } from './updater'
 import { runSelfTest } from './selftest'
+import { readEvalMetrics, aggregateMetrics } from './metrics'
 import { refreshDustCliSession, setupDustCli } from './dustcli'
 import { detectCli, testCli, setupCli, installCli, loginCli, prewarmCli } from './cli'
 import {
@@ -974,6 +975,14 @@ function registerIpc(): void {
     const rating = r?.rating === 'up' || r?.rating === 'down' ? r.rating : null
     if (!rating) return
     auditLog('answer.feedback', { rating, kind: typeof r?.kind === 'string' ? r.kind : undefined })
+  })
+
+  // On-device eval metrics from the local audit log (latency p50/p95, acceptance, failures). Read-only,
+  // metadata-only — nothing leaves the device. Surfaced in Settings → About → Diagnostics.
+  ipcMain.handle(IPC.metricsRead, (e) => {
+    assertMainWindow(e)
+    if (!requireAuth()) return aggregateMetrics([])
+    return readEvalMetrics()
   })
 
   // Parse a recap's markdown into a structured object (decisions + action-items-with-owners) the renderer

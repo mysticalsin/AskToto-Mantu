@@ -12,6 +12,7 @@ import {
   type MeetingSummary,
   type RecallHit,
   type AnswerFeedback,
+  type EvalMetrics,
   type StreamDelta,
   type StreamDone,
   type StreamError,
@@ -96,6 +97,7 @@ const api = {
     ipcRenderer.invoke(IPC.saveTranscript, m),
   saveNote: (n: SaveNote): Promise<{ path: string }> => ipcRenderer.invoke(IPC.saveNote, n),
   answerFeedback: (f: AnswerFeedback): Promise<void> => ipcRenderer.invoke(IPC.answerFeedback, f),
+  readMetrics: (): Promise<EvalMetrics> => ipcRenderer.invoke(IPC.metricsRead),
   exportRecapJson: (markdown: string): Promise<RecapExport> =>
     ipcRenderer.invoke(IPC.exportRecapJson, markdown),
   pickFolder: (): Promise<PublicSettings> => ipcRenderer.invoke(IPC.pickFolder),
