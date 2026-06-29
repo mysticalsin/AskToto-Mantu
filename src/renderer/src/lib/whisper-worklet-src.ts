@@ -12,24 +12,25 @@
  * speech) rather than on a fixed clock, so a spoken question reaches the model ~1s after the speaker stops
  * instead of whenever a 6s boundary happens to land — much lower turn-detection latency. A 6s hard cap
  * still force-emits during long monologues, and near-silent windows are dropped (ASR hallucinates on them).
+ *
+ * The endpoint decision (speech-onset hysteresis + transient rejection) is the `makeVad` factory from
+ * ./vad — embedded here via `.toString()` so the unit-tested logic and the realtime logic are ONE source.
  */
+import { makeVad } from './vad'
+
 export const WHISPER_WORKLET_SRC = `
 const SAMPLE_RATE = 16000
-const MAX_SAMPLES = SAMPLE_RATE * 6                       // hard cap per window (long monologue → forced cut)
-const ENDPOINT_SAMPLES = Math.round(SAMPLE_RATE * 0.8)   // ~0.8s trailing silence after speech ends a turn
-const MIN_UTTERANCE_SAMPLES = Math.round(SAMPLE_RATE * 0.5) // don't endpoint windows shorter than this
-const SPEECH_RMS = 0.01                                   // per-quantum energy at/above this counts as speech
-const EMIT_RMS = 0.005                                    // whole-window energy below this → drop (silence)
+const MAX_SAMPLES = SAMPLE_RATE * 6   // hard cap per window (long monologue → forced cut)
+const EMIT_RMS = 0.005                // whole-window energy below this → drop (silence; ASR hallucinates on it)
+const makeVad = ${makeVad.toString()}
 class WhisperWorklet extends AudioWorkletProcessor {
   constructor() {
     super()
-    // Pre-allocated window; each ~128-sample quantum copies in at \`fill\`. We track trailing silence and
-    // whether the window has held any speech, and emit one transferable copy on end-of-turn or at the cap —
-    // O(1) per quantum, zero steady-state allocation on the realtime audio thread.
+    // Pre-allocated window; each ~128-sample quantum copies in at \`fill\`. A per-instance VAD decides when
+    // the turn has ended; we then emit one transferable copy — O(1) per quantum, zero steady-state alloc.
     this.buf = new Float32Array(MAX_SAMPLES)
     this.fill = 0
-    this.silence = 0       // consecutive trailing silent samples
-    this.hasSpeech = false // has the current window contained any speech?
+    this.vad = makeVad()
     this.port.onmessage = (e) => {
       if (e.data === 'flush') this.emit() // stop(): flush whatever's buffered before teardown
     }
@@ -37,8 +38,7 @@ class WhisperWorklet extends AudioWorkletProcessor {
   emit() {
     const n = this.fill
     this.fill = 0
-    this.silence = 0
-    this.hasSpeech = false
+    this.vad.reset()
     if (n === 0) return
     // Drop near-silent windows: Whisper/Parakeet hallucinate caption filler ("you", "thank you") on silence.
     let s = 0
@@ -51,10 +51,10 @@ class WhisperWorklet extends AudioWorkletProcessor {
     const input = inputs[0]
     if (!input || !input[0] || input[0].length === 0) return true
     const data = input[0]
-    // Energy of this quantum (~128 samples ≈ 8ms) → drives speech/silence endpointing.
+    // Energy of this quantum (~128 samples ≈ 8ms) → drives the VAD's speech/silence endpointing.
     let fs = 0
     for (let i = 0; i < data.length; i++) { const v = data[i]; fs += v * v }
-    const speech = Math.sqrt(fs / data.length) >= SPEECH_RMS
+    const rms = Math.sqrt(fs / data.length)
 
     let offset = 0
     while (offset < data.length) {
@@ -65,13 +65,7 @@ class WhisperWorklet extends AudioWorkletProcessor {
       if (this.fill >= MAX_SAMPLES) this.emit() // hard cap → force-cut a long monologue
     }
 
-    if (speech) { this.hasSpeech = true; this.silence = 0 }
-    else { this.silence += data.length }
-
-    // End of turn: speech occurred, then >=0.8s of silence, and the window is long enough to be real speech.
-    if (this.hasSpeech && this.silence >= ENDPOINT_SAMPLES && this.fill >= MIN_UTTERANCE_SAMPLES) {
-      this.emit()
-    }
+    if (this.vad.step(rms, data.length)) this.emit() // end of turn
     return true
   }
 }

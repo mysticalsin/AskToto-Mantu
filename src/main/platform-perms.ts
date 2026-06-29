@@ -46,7 +46,7 @@ export function getPlatformPermissions(): PlatformPermissions {
     return {
       microphone: macStatus('microphone'),
       screenRecording: macStatus('screen'),
-      accessibility: 'unknown' // Requires an AX check or prompt attempt
+      accessibility: systemPreferences.isTrustedAccessibilityClient(false) ? 'granted' : 'denied'
     }
   }
   if (process.platform === 'win32') {

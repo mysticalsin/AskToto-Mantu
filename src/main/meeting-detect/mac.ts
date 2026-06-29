@@ -89,26 +89,32 @@ return out
 
 function buildFullMacScript(): string {
   const urlChecks = MEETING_URL_PATTERNS.map((p) => `us contains "${p}"`).join(' or ')
+  // Emit a per-browser guarded block so we only reference a browser's scripting
+  // dictionary when that browser is actually running.  A machine without Chrome
+  // must never see `using terms from application "Google Chrome"` — that causes
+  // an osascript compile error even when the `tell` is never reached.
+  const chromiumBlocks = CHROMIUM_BROWSERS.map((bn) => {
+    const escaped = bn.replace(/"/g, '\\"')
+    return `if procNames contains "${escaped}" then
+  try
+    using terms from application "${escaped}"
+      tell application "${escaped}"
+        repeat with w in windows
+          repeat with t in tabs of w
+            set us to URL of t as text
+            if ${urlChecks} then return "${escaped}" & "|" & us
+          end repeat
+        end repeat
+      end tell
+    end using terms from
+  end try
+end if`
+  }).join('\n\n')
   return `${buildBaseMacScript()}
 -- Browser URL detection (requires browser Automation permission; isolated per browser).
+-- Each block is guarded by procNames so absent browsers never touch their dictionary.
 -- Returns early on first URL match (high-confidence signal — keep early return here).
-repeat with bName in {${appleStringList(CHROMIUM_BROWSERS)}}
-  set bn to bName as text
-  if procNames contains bn then
-    try
-      using terms from application "Google Chrome"
-        tell application bn
-          repeat with w in windows
-            repeat with t in tabs of w
-              set us to URL of t as text
-              if ${urlChecks} then return bn & "|" & us
-            end repeat
-          end repeat
-        end tell
-      end using terms from
-    end try
-  end if
-end repeat
+${chromiumBlocks}
 
 if procNames contains "Arc" then
   try

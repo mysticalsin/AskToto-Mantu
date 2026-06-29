@@ -4,6 +4,7 @@ struct OnboardingView: View {
     @EnvironmentObject var app: AppState
     @State private var key = ""
     @State private var detected: String?
+    @State private var recordingConsent = false
 
     var body: some View {
         ZStack {
@@ -27,14 +28,22 @@ struct OnboardingView: View {
                     if let d = detected { Label("Detected \(d)", systemImage: "sparkles").font(.caption).foregroundStyle(Mantu.accentText) }
                 }
                 .padding(.horizontal)
+                Toggle(isOn: $recordingConsent) {
+                    Text("I will inform other participants before recording. AskToto follows my company's policy and the law.")
+                        .font(.caption).foregroundStyle(Mantu.ink2)
+                }
+                .tint(Mantu.bright)
+                .padding(.horizontal)
                 Button {
                     let k = key.trimmingCharacters(in: .whitespacesAndNewlines)
                     if !k.isEmpty { app.setKey(k, for: app.providerId) }
                     app.onboardingDone = true
                 } label: {
                     Text("Get started").font(.headline).frame(maxWidth: .infinity).padding(.vertical, 14)
-                        .background(Mantu.bright, in: RoundedRectangle(cornerRadius: 14)).foregroundStyle(.white)
+                        .background(Mantu.bright.opacity(recordingConsent ? 1 : 0.35), in: RoundedRectangle(cornerRadius: 14))
+                        .foregroundStyle(.white)
                 }
+                .disabled(!recordingConsent)
                 .padding(.horizontal)
                 Button("Skip — add a key later") { app.onboardingDone = true }
                     .font(.caption).foregroundStyle(Mantu.ink3)

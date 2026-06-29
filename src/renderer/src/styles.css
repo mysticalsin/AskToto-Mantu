@@ -44,21 +44,21 @@
 
   /* Glass surfaces — neutral dark gray with a faint Mantu-purple undertone (desaturated so the bar reads
      clearly over any desktop), still translucent but opaque enough to stay legible. Accents stay purple. */
-  --glass-fill: rgba(40, 39, 44, 0.58);
-  --glass-fill-elevated: rgba(48, 47, 53, 0.74);
-  --glass-fill-strong: rgba(34, 33, 39, 0.78);
+  --glass-fill: rgba(34, 14, 60, 0.6);
+  --glass-fill-elevated: rgba(42, 20, 72, 0.76);
+  --glass-fill-strong: rgba(28, 11, 52, 0.8);
   --glass-tint-white: rgba(255, 255, 255, 0.06);
   --glass-tint-black: rgba(0, 0, 0, 0.22);
   /* A darker neutral scrim painted BEHIND the bar/chips (below the grey fill): keeps the frosted
      translucency but guarantees a grey-enough backing so white text stays legible over a bright desktop. */
-  --glass-scrim-bar: rgba(16, 16, 20, 0.64);
+  --glass-scrim-bar: rgba(13, 4, 28, 0.68);
   --blur-bar: 34px;
   --blur-panel: 42px;
   --blur-saturate: 190%;
 
   /* Listening state — neutral gray, much more opaque so thin text stays readable behind the overlay. */
-  --glass-fill-listening: rgba(18, 18, 22, 0.78);
-  --glass-fill-strong-listening: rgba(22, 22, 26, 0.86);
+  --glass-fill-listening: rgba(20, 8, 40, 0.82);
+  --glass-fill-strong-listening: rgba(16, 6, 34, 0.88);
   --glass-tint-white-listening: rgba(255, 255, 255, 0.04);
   --blur-bar-listening: 24px;
   --blur-panel-listening: 30px;
@@ -396,6 +396,51 @@ input::placeholder {
   animation: fade-up 180ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 
+/* Animated rainbow contour — shown around the ask bar while the agent is working (replaces the old
+   stop-square as the "thinking" signal). A rotating conic-gradient is masked to a thin border ring so
+   only the outline is colored; the input/buttons inside stay untouched. pointer-events:none so it
+   never intercepts clicks. */
+@property --cl-rainbow-angle {
+  syntax: '<angle>';
+  initial-value: 0deg;
+  inherits: false;
+}
+@keyframes cl-rainbow-spin {
+  to {
+    --cl-rainbow-angle: 360deg;
+  }
+}
+.rainbow-ring {
+  position: relative;
+}
+.rainbow-ring::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  padding: 1.5px;
+  background: conic-gradient(
+    from var(--cl-rainbow-angle),
+    #ff3b30,
+    #ff9500,
+    #ffcc00,
+    #34c759,
+    #32ade6,
+    #007aff,
+    #af52de,
+    #ff2d55,
+    #ff3b30
+  );
+  -webkit-mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  animation: cl-rainbow-spin 2.6s linear infinite;
+  pointer-events: none;
+  z-index: 2;
+}
+
 /* markdown surface inside the answer panel */
 .md {
   font-size: 13.5px;
@@ -468,5 +513,11 @@ input::placeholder {
   .rec-dot {
     animation: asktoto-loading-pulse 1.4s ease-in-out infinite !important;
     animation-duration: 1.4s !important;
+  }
+  /* The rainbow contour signals "agent is working" — keep it alive without rotation via a gentle
+     opacity breathe (the static gradient still reads as the rainbow outline). */
+  .rainbow-ring::before {
+    animation: asktoto-loading-pulse 1.6s ease-in-out infinite !important;
+    animation-duration: 1.6s !important;
   }
 }

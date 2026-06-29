@@ -59,11 +59,12 @@ import {
   decryptToTemp
 } from './transcripts'
 import { detectMeeting } from './meeting-detect'
+import { titleMatchesCalendar } from './meeting-detect/shared'
 import { getPlatformPermissions } from './platform-perms'
 import { listMeetings, searchMeetings } from './recall'
 import { initAutoUpdate } from './updater'
 import { runSelfTest } from './selftest'
-import { importDustCliSession, setupDustCli } from './dustcli'
+import { importDustCliSession, refreshDustCliSession, setupDustCli } from './dustcli'
 import { detectCli, testCli, setupCli, installCli, loginCli, prewarmCli } from './cli'
 import { graphifyStatus, buildGraph, relatedNotes, graphHtml, scheduleRebuild } from './graphify'
 import { SaveMeetingSchema, SaveNoteSchema } from '@shared/ipc'
@@ -139,6 +140,7 @@ function publicSettings(): PublicSettings {
     ...s,
     hasApiKey: hasApiKey(s.provider),
     providerReady,
+    visionReady: providerReady && activeDef.vision, // gates screen-ask so shots never hit a non-vision model
     hasKeys: hasKeysMap(),
     hasEncryption: encryptionAvailable(),
     resolvedMeetingsFolder: resolveMeetingsFolder(s),
@@ -252,6 +254,10 @@ function resizeTo(height: number): void {
   // window jumps vertically while the cursor sits on the other screen.
   const { workArea } = screen.getDisplayMatching(win.getBounds())
   const h = Math.max(BAR_HEIGHT, Math.min(Math.round(height), workArea.height - 48))
+  if (h === win.getBounds().height) {
+    lastBarHeight = h
+    return // idempotent — skip a no-op setBounds (belt-and-braces with the renderer-side resize dedup)
+  }
   lastBarHeight = h
   const b = win.getBounds()
   // Keep the panel fully on-screen; if it would grow below the work area, slide it up.
@@ -474,30 +480,29 @@ const CALENDAR_CACHE_TTL_MS = 30_000
  * events and NO title match suppresses the auto-start (manual start always works regardless).
  */
 async function shouldAutoStart(hit: string): Promise<boolean> {
-  const detail = hit.slice(hit.indexOf('|') + 1).trim()
-  if (!detail || /^https?:\/\//i.test(detail)) return true // browser meeting → matched by URL already
-  if (!requireAuth()) return true // no Azure / signed out → keep title-only behavior
-
-  let events = calendarCache?.events
-  if (!calendarCache || Date.now() - calendarCache.ts > CALENDAR_CACHE_TTL_MS) {
-    let tz = 'UTC'
-    try {
-      tz = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'
-    } catch {
-      /* keep UTC */
+  const detail = hit.slice(hit.indexOf('|') + 1)
+  const d = detail.trim()
+  // Resolve today's events (or leave null = unavailable). The match/degrade-open logic itself lives in the
+  // pure, unit-tested titleMatchesCalendar (handles URL / unavailable / empty / match).
+  let events: CalendarEvent[] | null = null
+  if (d && !/^https?:\/\//i.test(d) && requireAuth()) {
+    if (!calendarCache || Date.now() - calendarCache.ts > CALENDAR_CACHE_TTL_MS) {
+      let tz = 'UTC'
+      try {
+        tz = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'
+      } catch {
+        /* keep UTC */
+      }
+      const res = await calendarToday(tz)
+      if (res.ok && res.events) {
+        calendarCache = { events: res.events, ts: Date.now() }
+        events = res.events
+      }
+    } else {
+      events = calendarCache.events
     }
-    const res = await calendarToday(tz)
-    if (!res.ok || !res.events) return true // consent needed / Graph error → degrade open
-    events = res.events
-    calendarCache = { events, ts: Date.now() }
   }
-  if (!events || events.length === 0) return true // nothing to match against → don't block
-
-  const title = detail.toLowerCase()
-  return events.some((ev) => {
-    const subj = ev.subject.trim().toLowerCase()
-    return subj.length >= 4 && (title.includes(subj) || subj.includes(title))
-  })
+  return titleMatchesCalendar(detail, events)
 }
 
 function startMeetingPoller(): void {
@@ -790,7 +795,7 @@ function registerIpc(): void {
       }
       const key = getApiKey(provider)
       const tier = routeTier(req, s.thinkingMode)
-      const model = resolveModelTier(provider, s.providerModels, s.providerModelsThinking, tier)
+      const model = resolveModelTier(provider, s.providerModels, s.providerModelsThinking, tier, s.providerModelsDeep)
       const ineligible = def.kind === 'cli' && !s.cliConnected[provider]
         ? `${def.label} is not connected. Open Settings → CLI Integration to set it up.`
         : def.kind !== 'cli' && !key
@@ -819,6 +824,21 @@ function registerIpc(): void {
         apiKey: key,
         baseURL,
         workspaceId: s.dustWorkspaceId,
+        // Dust OAuth tokens (imported from the local CLI) expire after ~1h. On a pre-token 401 the
+        // stream asks for fresh creds: re-mint via the CLI, persist them, and replay once — so an
+        // expired token self-heals invisibly instead of surfacing an error.
+        refreshDustAuth:
+          provider === 'dust'
+            ? async () => {
+                const fresh = await refreshDustCliSession()
+                if (!fresh.ok || !fresh.token || !fresh.workspaceId) return null
+                setApiKey('dust', fresh.token)
+                const baseUrl = fresh.baseUrl || 'https://dust.tt'
+                setSettings({ dustWorkspaceId: fresh.workspaceId, dustBaseUrl: baseUrl })
+                auditLog('dust.token.refreshed', {})
+                return { apiKey: fresh.token, workspaceId: fresh.workspaceId, baseURL: baseUrl }
+              }
+            : undefined,
         model,
         temperature: s.temperature,
         system: buildSystem(req, s.mode, s.profile, s.modePrompts, s.contextDocs[s.mode] || [], s.outputLanguage, s.summaryLanguage, s.systemPrompt),
@@ -837,7 +857,14 @@ function registerIpc(): void {
             auditLog('provider.failed', { provider, gotToken })
             // Fall over only on a PRE-token failure (the user hasn't seen a partial answer yet).
             if (!gotToken && failover(attempted.concat(provider))) return
-            win?.webContents.send(IPC.streamError, { id: req.id, message })
+            // A Dust auth error here means the token expired AND the silent refresh failed (session
+            // truly gone) — give a clear one-click path instead of a raw API error.
+            const friendly =
+              provider === 'dust' &&
+              /oauth|unauthor|expired|authentication credential|invalid.*(token|credential)/i.test(message)
+                ? 'Your Dust session expired and could not refresh automatically. Open Settings and reconnect Dust once.'
+                : message
+            win?.webContents.send(IPC.streamError, { id: req.id, message: friendly })
           }
         }
       })
@@ -1164,10 +1191,32 @@ if (!app.requestSingleInstanceLock()) {
       console.error(`[boot] ${name} failed:`, e)
     }
   }
+  // Auto-connect the local Dust CLI session on every launch so Dust stays connected without a manual
+  // re-import. The imported OAuth token is short-lived (~1h) and goes stale between runs, so we refresh it
+  // (refreshDustCliSession runs `dust status` to mint a fresh one, then re-reads the keychain) and persist.
+  // Only for users who've already connected Dust (workspace set) → non-Dust users pay nothing. macOS only.
+  function autoConnectDust(): void {
+    if (process.platform !== 'darwin') return
+    if (!getSettings().dustWorkspaceId) return
+    void (async () => {
+      try {
+        const fresh = await refreshDustCliSession()
+        if (fresh.ok && fresh.token && fresh.workspaceId) {
+          setApiKey('dust', fresh.token)
+          setSettings({ dustWorkspaceId: fresh.workspaceId, dustBaseUrl: fresh.baseUrl || 'https://dust.tt' })
+          auditLog('dust.token.refreshed', { source: 'autoconnect' })
+        }
+      } catch {
+        /* best-effort — the Dust stream path also self-heals an expired token on first use */
+      }
+    })()
+  }
+
   runStep('registerIpc', registerIpc)
   runStep('createTray', createTray)
   runStep('registerShortcuts', registerShortcuts)
   runStep('createWindow', createWindow)
+  runStep('autoConnectDust', autoConnectDust)
   runStep('registerScreenListeners', registerScreenListeners)
   runStep('startMeetingPoller', startMeetingPoller)
   runStep('initAutoUpdate', initAutoUpdate)

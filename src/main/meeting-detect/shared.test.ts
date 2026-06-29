@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { isMeetingWindow, titleLooksLikeMeeting, MEETING_KEYWORDS } from './shared'
+import { isMeetingWindow, titleLooksLikeMeeting, titleMatchesCalendar, MEETING_KEYWORDS } from './shared'
 
 // ---------------------------------------------------------------------------
 // isMeetingWindow — Teams (meeting = true)
@@ -220,5 +220,40 @@ describe('isMeetingWindow regressions (audit)', () => {
 
   it('Zoom Meeting IS a meeting', () => {
     expect(isMeetingWindow('zoom.us', 'Zoom Meeting')).toBe(true)
+  })
+})
+
+describe('titleMatchesCalendar — auto-start gating against the agenda', () => {
+  const events = [{ subject: 'Q3 Roadmap Review' }, { subject: 'Standup' }, { subject: '1:1 with Sam' }]
+
+  it('degrades OPEN when the calendar is unavailable (null)', () => {
+    expect(titleMatchesCalendar('Q4 Review | Microsoft Teams', null)).toBe(true)
+  })
+
+  it('degrades OPEN on an empty agenda (nothing to match against)', () => {
+    expect(titleMatchesCalendar('Q4 Review | Microsoft Teams', [])).toBe(true)
+  })
+
+  it('always allows a browser-URL meeting regardless of the agenda', () => {
+    expect(titleMatchesCalendar('https://teams.microsoft.com/l/meetup-join/xyz', [])).toBe(true)
+    expect(titleMatchesCalendar('https://meet.google.com/abc-defg-hij', events)).toBe(true)
+  })
+
+  it('allows when the window title matches a calendar event (substring, either direction)', () => {
+    expect(titleMatchesCalendar('Q3 Roadmap Review | Microsoft Teams', events)).toBe(true)
+    expect(titleMatchesCalendar('Standup', events)).toBe(true)
+  })
+
+  it('SUPPRESSES a non-matching title when the agenda is available and non-empty', () => {
+    // The motivating false positive: a Teams chat window with no matching calendar event.
+    expect(titleMatchesCalendar('Random Banter | Microsoft Teams', events)).toBe(false)
+  })
+
+  it('ignores sub-4-char event subjects so tiny names can not match everything', () => {
+    expect(titleMatchesCalendar('Planning sync', [{ subject: 'AI' }])).toBe(false)
+  })
+
+  it('empty / whitespace detail degrades open', () => {
+    expect(titleMatchesCalendar('   ', events)).toBe(true)
   })
 })

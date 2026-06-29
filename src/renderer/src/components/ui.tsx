@@ -5,13 +5,16 @@ export function IconButton({
   onClick,
   title,
   active = false,
-  danger = false
+  danger = false,
+  solid = false
 }: {
   children: ReactNode
   onClick?: () => void
   title?: string
   active?: boolean
   danger?: boolean
+  /** Accent-filled primary action (the hero submit pill). */
+  solid?: boolean
 }): JSX.Element {
   return (
     <button
@@ -21,11 +24,13 @@ export function IconButton({
       onClick={onClick}
       className={[
         'no-drag focus-ring-strong grid h-[30px] w-[30px] place-items-center rounded-full transition-[transform,background-color,color] duration-[var(--duration-hover)] ease-[var(--ease-spring)] active:scale-[0.9]',
-        active
-          ? 'bg-[var(--color-accent-soft)] text-[var(--color-accent)]'
-          : danger
-            ? 'text-[var(--color-danger)] hover:bg-white/10'
-            : 'text-[color:var(--color-ink-2)] hover:bg-white/10 hover:text-[color:var(--color-ink)]'
+        solid
+          ? 'bg-[var(--color-accent)] text-white shadow-[0_4px_14px_-4px_rgba(127,0,218,0.45)] hover:brightness-110'
+          : active
+            ? 'bg-[var(--color-accent-soft)] text-[var(--color-accent)]'
+            : danger
+              ? 'text-[var(--color-danger)] hover:bg-white/10'
+              : 'text-[color:var(--color-ink-2)] hover:bg-white/10 hover:text-[color:var(--color-ink)]'
       ].join(' ')}
     >
       {children}

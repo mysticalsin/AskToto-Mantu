@@ -217,19 +217,30 @@ function expiryReason(s: Session, cfg: AzureConfig | null): 'max_age' | 'domain'
 }
 
 /**
- * Post-startup + periodic re-validation. The sign-in flow uses an ephemeral PublicClientApplication
- * with no persisted MSAL token cache, so there's no cached account to acquireTokenSilent against;
- * re-validation is therefore a re-check of max local age + config-domain match, clearing (memory +
- * disk) and auditing on violation. If a persisted MSAL cache is wired later, add the silent-refresh
- * call here and emit auditLog('auth.refresh_failed', {}) on its failure.
+ * Post-startup + periodic re-validation. Checks local max-age + config-domain match first, then
+ * probes the persisted MSAL refresh token silently (via makePca + acquireTokenSilent). A server-side
+ * revocation that leaves the local session file intact is caught by the token probe: if getGraphToken
+ * returns null the session is cleared so getAuthStatus() no longer shows "signed in".
  */
-function revalidateSession(): void {
+async function revalidateSession(): Promise<void> {
   loadSession()
   if (!session) return
   const reason = expiryReason(session, readConfig())
   if (reason) {
     clearSession()
     auditLog('auth.expired', { reason })
+    return
+  }
+  // Probe the refresh token against the server. getGraphToken attempts acquireTokenSilent; if the
+  // refresh token has been revoked server-side it returns null, so we treat that as a sign-out.
+  try {
+    const token = await getGraphToken(['User.Read'])
+    if (token === null) {
+      clearSession()
+      auditLog('auth.refresh_failed', {})
+    }
+  } catch {
+    /* best-effort: network unavailable — keep the existing session */
   }
 }
 
@@ -245,11 +256,9 @@ function stopRevalidationTimer(): void {
 function ensureRevalidationTimer(): void {
   if (revalidationTimer) return
   const sweep = (): void => {
-    try {
-      revalidateSession()
-    } catch {
+    revalidateSession().catch(() => {
       /* re-validation is best-effort */
-    }
+    })
   }
   const kick = setTimeout(sweep, 10_000)
   if (typeof kick.unref === 'function') kick.unref()

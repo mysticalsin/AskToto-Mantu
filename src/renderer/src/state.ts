@@ -28,14 +28,35 @@ export function uid(): string {
 export function useAutoResize(): (el: HTMLElement | null) => void {
   const roRef = useRef<ResizeObserver | null>(null)
   const rafRef = useRef(0)
+  const shrinkRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const lastSentRef = useRef(0) // last height pushed to main — dedups so a stream can't pump setBounds
   return useCallback((el: HTMLElement | null) => {
     roRef.current?.disconnect()
     roRef.current = null
+    if (shrinkRef.current) {
+      clearTimeout(shrinkRef.current)
+      shrinkRef.current = null
+    }
     if (!el) return
+    const push = (h: number): void => {
+      if (h === lastSentRef.current) return // idempotent — no redundant window.toto.resize per token
+      lastSentRef.current = h
+      window.toto.resize(h)
+    }
     const send = (): void => {
       cancelAnimationFrame(rafRef.current)
       rafRef.current = requestAnimationFrame(() => {
-        window.toto.resize(Math.ceil(el.getBoundingClientRect().height) + 2)
+        const h = Math.ceil(el.getBoundingClientRect().height) + 2
+        if (shrinkRef.current) {
+          clearTimeout(shrinkRef.current)
+          shrinkRef.current = null
+        }
+        if (h >= lastSentRef.current) {
+          push(h) // GROW immediately — streaming text must never clip behind the window edge
+        } else {
+          // SHRINK only after the content settles (~140ms) so a finishing stream doesn't pump the window down
+          shrinkRef.current = setTimeout(() => push(Math.ceil(el.getBoundingClientRect().height) + 2), 140)
+        }
       })
     }
     const ro = new ResizeObserver(send)
@@ -204,6 +225,11 @@ export function useSettings(): {
   }, [])
   useEffect(() => {
     void refresh()
+    // Refetch on focus so settings changed by the MAIN process (e.g. the Dust CLI auto-connect / token
+    // refresh on launch) surface in the UI without the user having to do anything.
+    const onFocus = (): void => void refresh()
+    window.addEventListener('focus', onFocus)
+    return () => window.removeEventListener('focus', onFocus)
   }, [refresh])
   const patch = useCallback(async (p: Partial<PublicSettings>) => {
     setSettings(await window.toto.setSettings(p))

@@ -179,3 +179,26 @@ export function isMeetingWindow(
 export function titleLooksLikeMeeting(title: string, customApps: string[] = []): boolean {
   return isMeetingWindow('', title, customApps)
 }
+
+/**
+ * Decide whether a window-title-detected meeting should auto-start, cross-referenced against today's
+ * calendar. Degrades OPEN (returns true) whenever the calendar cannot disprove it: a browser-URL meeting
+ * (already high-confidence), an unavailable calendar (events === null — signed out / no Azure / Graph
+ * error), or an empty agenda. Only an available, NON-empty agenda with NO title match returns false — which
+ * suppresses a likely chat-window false positive like "Q4 Review | Microsoft Teams".
+ *
+ * @param detail  window-title part after the "app|" prefix (e.g. "Q4 Review | Microsoft Teams" or a join URL)
+ * @param events  today's calendar events, or null when the calendar is unavailable
+ */
+export function titleMatchesCalendar(detail: string, events: { subject: string }[] | null): boolean {
+  const d = detail.trim()
+  if (!d || /^https?:\/\//i.test(d)) return true // browser meeting → already matched by URL pattern
+  if (events === null) return true // calendar unavailable → keep title-only behavior
+  if (events.length === 0) return true // nothing to match against → don't block
+  const title = d.toLowerCase()
+  return events.some((ev) => {
+    const subj = ev.subject.trim().toLowerCase()
+    // >=4 chars guards against tiny subjects ("Q4") matching half the window titles on screen.
+    return subj.length >= 4 && (title.includes(subj) || subj.includes(title))
+  })
+}

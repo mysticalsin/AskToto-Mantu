@@ -255,4 +255,37 @@ describe('parseRecapMarkdown', () => {
     expect(empty.decisions).toEqual([])
     expect(empty.markdown).toBe('not even markdown')
   })
+
+  // Real model output drifts from the prompt's exact format — headings sometimes drop the colon, action
+  // items arrive as checkboxes, owners use a dash. The parser must tolerate these without losing data.
+  it('tolerates real-output drift: no-colon headings, checkbox bullets, dash + paren owners', () => {
+    const real = [
+      '## Overview',
+      'The team reviewed launch readiness and resolved the pricing question.',
+      '',
+      '## Decisions',
+      '- [ ] Ship the beta to the design partners on Monday',
+      '* Lock pricing at $49/mo',
+      '',
+      '## Action items',
+      '- [ ] Draft the partner email — Priya',
+      '- Update the pricing page (Marco)',
+      '- Schedule the retro',
+      '',
+      '## Open questions',
+      '- Do we need legal sign-off on the new terms?'
+    ].join('\n')
+    const r = parseRecapMarkdown(real)
+    expect(r.overview).toBe('The team reviewed launch readiness and resolved the pricing question.')
+    expect(r.decisions).toEqual([
+      'Ship the beta to the design partners on Monday',
+      'Lock pricing at $49/mo'
+    ])
+    expect(r.actionItems).toEqual([
+      { text: 'Draft the partner email', owner: 'Priya' },
+      { text: 'Update the pricing page', owner: 'Marco' },
+      { text: 'Schedule the retro', owner: null }
+    ])
+    expect(r.openQuestions).toEqual(['Do we need legal sign-off on the new terms?'])
+  })
 })
