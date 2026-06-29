@@ -2228,6 +2228,7 @@ function DiagnosticsSection(): JSX.Element {
   }, [])
   const ms = (v: number | null): string => (v == null ? '—' : v >= 1000 ? `${(v / 1000).toFixed(1)}s` : `${Math.round(v)}ms`)
   const pct = (r: number | null): string => (r == null ? '—' : `${Math.round(r * 100)}%`)
+  const n = (v: number): string => (v >= 1000 ? `${(v / 1000).toFixed(1)}k` : String(v))
   if (!m) {
     return <div className="text-[12px] text-[color:var(--cl-muted-foreground)]">Loading…</div>
   }
@@ -2247,7 +2248,8 @@ function DiagnosticsSection(): JSX.Element {
     ['Acceptance', pct(m.acceptance.rate)],
     ['Rated up / down', `${m.acceptance.up} / ${m.acceptance.down}`],
     ['Failovers', String(m.fallbacks)],
-    ['Failures', String(m.failures)]
+    ['Failures', String(m.failures)],
+    ['Tokens in / out', `${n(m.tokensIn)} / ${n(m.tokensOut)}`]
   ]
   return (
     <div className="grid grid-cols-3 gap-2">

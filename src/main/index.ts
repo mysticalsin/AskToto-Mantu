@@ -910,8 +910,18 @@ function registerIpc(): void {
           },
           onDone: (u) => {
             streams.delete(req.id)
-            // Latency telemetry (metadata only) — feeds the p50/p95 TTFT + answer-latency evals (section H/D).
-            auditLog('provider.request', { provider, model, mode: req.mode, tier, phase: 'done', ttftMs, totalMs: Date.now() - startedAt })
+            // Latency + token telemetry (metadata only) — feeds the p50/p95 latency + cost evals (H/D/F).
+            auditLog('provider.request', {
+              provider,
+              model,
+              mode: req.mode,
+              tier,
+              phase: 'done',
+              ttftMs,
+              totalMs: Date.now() - startedAt,
+              inputTokens: u.inputTokens,
+              outputTokens: u.outputTokens
+            })
             win?.webContents.send(IPC.streamDone, { id: req.id, ...u })
           },
           onError: (message) => {

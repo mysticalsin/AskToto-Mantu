@@ -104,6 +104,8 @@ export interface EvalMetrics {
   acceptance: { up: number; down: number; rate: number | null }
   failures: number
   fallbacks: number
+  tokensIn: number
+  tokensOut: number
   byProvider: Record<string, number>
 }
 
