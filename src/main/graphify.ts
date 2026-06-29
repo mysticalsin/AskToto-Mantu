@@ -1,7 +1,7 @@
 import { app } from 'electron'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
-import { readFileSync, existsSync, statSync } from 'node:fs'
+import { readFileSync, existsSync, statSync, rmSync } from 'node:fs'
 import { join, basename, delimiter } from 'node:path'
 import { homedir } from 'node:os'
 import { getSettings, getApiKey, hasApiKey } from './store'
@@ -349,4 +349,23 @@ export function relatedNotes(noteFile: string): GraphRelated {
 
 export function graphHtml(): string | null {
   return existsSync(graphHtmlPath()) ? graphHtmlPath() : null
+}
+
+/**
+ * Delete the plaintext graph artifacts (graph.json + graph.html) from userData/graph.
+ *
+ * Called when at-rest encryption is toggled ON. Once notes are encrypted on disk the graph can no
+ * longer be (re)built, but a previously-built CLEARTEXT graph would otherwise linger on disk —
+ * graph.json holds every meeting's topics/entities and graph.html renders them — leaking exactly the
+ * meeting content the encryption is meant to protect. Best-effort: never throws (a failed unlink must
+ * not crash the settings write that triggered it).
+ */
+export function purgeGraphArtifacts(): void {
+  for (const p of [graphJsonPath(), graphHtmlPath()]) {
+    try {
+      if (existsSync(p)) rmSync(p, { force: true })
+    } catch (e) {
+      console.warn('[graphify] purgeGraphArtifacts: could not remove', p, e)
+    }
+  }
 }

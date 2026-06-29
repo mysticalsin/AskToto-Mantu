@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Copy, Check, FileText, ListTree, FolderOpen, Save, RotateCcw, ChevronRight, ChevronDown, Download } from 'lucide-react'
-import type { TranscriptLine } from '@shared/ipc'
+import { Copy, Check, FileText, ListTree, FolderOpen, Save, RotateCcw, ChevronRight, ChevronDown, Download, Clock } from 'lucide-react'
+import type { TranscriptLine, MeetingSummary } from '@shared/ipc'
 import type { AnswerState } from '../state'
 import { Markdown } from './Markdown'
 import { Spinner } from './ui'
@@ -17,6 +17,46 @@ function formatDuration(sec: number): string {
   const m = Math.floor(sec / 60)
   const s = Math.floor(sec % 60)
   return `${m}:${s.toString().padStart(2, '0')}`
+}
+
+function formatDurationMin(min: number): string {
+  if (min < 60) return `${min}m`
+  const h = Math.floor(min / 60)
+  const m = min % 60
+  return m === 0 ? `${h}h` : `${h}h ${m}m`
+}
+
+/** Group an array of MeetingSummary by their date field (YYYY-MM-DD string). */
+function groupByDate(meetings: import('@shared/ipc').MeetingSummary[]): [string, import('@shared/ipc').MeetingSummary[]][] {
+  const map = new Map<string, import('@shared/ipc').MeetingSummary[]>()
+  for (const m of meetings) {
+    const d = m.date.slice(0, 10) // normalise to YYYY-MM-DD
+    if (!map.has(d)) map.set(d, [])
+    map.get(d)!.push(m)
+  }
+  return Array.from(map.entries())
+}
+
+function friendlyDate(dateStr: string): string {
+  try {
+    const d = new Date(dateStr)
+    const today = new Date()
+    const yesterday = new Date(today)
+    yesterday.setDate(today.getDate() - 1)
+    if (d.toDateString() === today.toDateString()) return 'Today'
+    if (d.toDateString() === yesterday.toDateString()) return 'Yesterday'
+    return d.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' })
+  } catch {
+    return dateStr
+  }
+}
+
+function meetingTime(dateStr: string): string {
+  try {
+    return new Date(dateStr).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+  } catch {
+    return ''
+  }
 }
 
 export function Review({
@@ -50,6 +90,7 @@ export function Review({
   const [exportError, setExportError] = useState<string | null>(null)
   const [transcriptOpen, setTranscriptOpen] = useState(!!showTranscript)
   const [now, setNow] = useState(Date.now())
+  const [recentMeetings, setRecentMeetings] = useState<MeetingSummary[]>([])
 
   useEffect(() => {
     // The live clock only feeds durationSec while there's no real transcript yet (lines.length <= 1).
@@ -59,6 +100,10 @@ export function Review({
     const id = setInterval(() => setNow(Date.now()), 1000)
     return () => clearInterval(id)
   }, [lines.length])
+
+  useEffect(() => {
+    window.toto.recallList().then((list) => setRecentMeetings(list.slice(0, 20))).catch(() => {})
+  }, [])
 
   const plain = useMemo(
     () =>
@@ -286,6 +331,42 @@ export function Review({
           )}
         </div>
       </section>
+      )}
+
+      {/* Recent meetings list */}
+      {recentMeetings.length > 0 && (
+        <section className="mt-1">
+          <div className="mb-2 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-[color:var(--color-ink-3)]">
+            <Clock size={11} /> Recent meetings
+          </div>
+          <div className="scroll-thin flex max-h-[220px] flex-col gap-0.5 overflow-y-auto rounded-xl border border-[var(--color-hair-soft)] bg-white/[0.02] p-1.5">
+            {groupByDate(recentMeetings).map(([date, items]) => (
+              <div key={date}>
+                <div className="px-2 pb-0.5 pt-1 text-[10px] font-semibold uppercase tracking-wider text-[color:var(--color-ink-3)]">
+                  {friendlyDate(date)}
+                </div>
+                {items.map((item) => (
+                  <button
+                    key={item.file}
+                    type="button"
+                    onClick={() => void window.toto.recallOpen(item.file)}
+                    className="no-drag focus-ring flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left hover:bg-white/[0.06]"
+                  >
+                    <span className="min-w-0 flex-1 truncate text-[12px] text-[color:var(--color-ink)]">
+                      {item.title}
+                    </span>
+                    <span className="shrink-0 text-[11px] text-[color:var(--color-ink-3)]">
+                      {meetingTime(item.date)}
+                    </span>
+                    <span className="shrink-0 rounded-full bg-white/[0.06] px-1.5 py-0.5 text-[10px] text-[color:var(--color-ink-3)]">
+                      {formatDurationMin(item.durationMin)}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            ))}
+          </div>
+        </section>
       )}
     </div>
   )

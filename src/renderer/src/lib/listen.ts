@@ -501,11 +501,16 @@ export function useListen(onQuestion?: (line: TranscriptLine) => void): ListenAp
       }
     }
 
-    // 2. Defer the actual teardown by ~250 ms so the flushed audio message has time to traverse the
-    //    worklet → pushAudio → pump → commitLine path before the channel is torn down.
-    setTimeout(() => {
+    // 2. Tear down only once the flushed final window has actually been transcribed — i.e. the queue
+    //    has drained AND no decode is in flight (busy=false). The old fixed 250ms timer could fire
+    //    mid-decode, and commitLine (gated on liveRef) would drop the last sentence once liveRef flipped
+    //    false. liveRef stays TRUE through the drain so that final window still commits. A hard ceiling
+    //    guards against a hung/never-returning decode wedging teardown.
+    const DRAIN_CEILING_MS = 4000
+    const startedAt = Date.now()
+    const finishTeardown = (): void => {
       liveRef.current = false
-      queue.current = [] // drop undispatched windows so they can't leak into the next session
+      queue.current = [] // drop anything still undispatched past the ceiling so it can't leak into the next session
       closeChannel('you')
       closeChannel('them')
       void window.toto.setListeningState(false).catch(() => {})
@@ -521,7 +526,16 @@ export function useListen(onQuestion?: (line: TranscriptLine) => void): ListenAp
         readyRef.current = false
         workerIdleTimer.current = null
       }, WORKER_IDLE_RELEASE_MS)
-    }, 250)
+    }
+    const waitForDrain = (): void => {
+      if ((queue.current.length === 0 && !busy.current) || Date.now() - startedAt > DRAIN_CEILING_MS) {
+        finishTeardown()
+        return
+      }
+      setTimeout(waitForDrain, 60)
+    }
+    // Give the worklet's flush message a tick to post its final window into the queue, then wait for drain.
+    setTimeout(waitForDrain, 80)
   }, [closeChannel])
 
   const clear = useCallback((): void => {

@@ -49,6 +49,10 @@ struct ListenView: View {
     }
 
     private func newMeeting() {
+        // Stop the live recognizer first — clear() only blanks the transcript string, so a still-running
+        // mic would immediately refill it. Also cancel any in-flight answer stream from the old session.
+        if mic.isRecording { mic.stop() }
+        vm.cancel()
         mic.clear()
         savedPath = nil
         sessionID = UUID()

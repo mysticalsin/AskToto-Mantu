@@ -64,15 +64,24 @@ import { getPlatformPermissions } from './platform-perms'
 import { listMeetings, searchMeetings } from './recall'
 import { initAutoUpdate } from './updater'
 import { runSelfTest } from './selftest'
-import { importDustCliSession, refreshDustCliSession, setupDustCli } from './dustcli'
+import { refreshDustCliSession, setupDustCli } from './dustcli'
 import { detectCli, testCli, setupCli, installCli, loginCli, prewarmCli } from './cli'
-import { graphifyStatus, buildGraph, relatedNotes, graphHtml, scheduleRebuild } from './graphify'
+import {
+  graphifyStatus,
+  buildGraph,
+  relatedNotes,
+  graphHtml,
+  scheduleRebuild,
+  purgeGraphArtifacts
+} from './graphify'
 import { SaveMeetingSchema, SaveNoteSchema } from '@shared/ipc'
 import { PROVIDERS, resolveModelTier, type ProviderId } from '@shared/providers'
 import { routeTier } from '@shared/routing'
 
 const BAR_WIDTH = 860
-const BAR_HEIGHT = 64
+const BAR_HEIGHT = 96 // initial idle height of the slimmer two-row widget; useAutoResize grows it for answers
+const BAR_MIN_HEIGHT = 44 // floor for the resize clamp so the collapsed control mini-pill can shrink fully
+const PILL_WIDTH = 220 // narrow width for the collapsed control mini-pill (so it isn't a wide click-trap)
 
 /** Content protection hides the window from screen capture. Disable via env for dev/screenshots. */
 function contentProtectionOn(): boolean {
@@ -84,6 +93,7 @@ let win: BrowserWindow | null = null
 let tray: Tray | null = null
 let audioArmed = false // loopback capture only granted during an explicit user-initiated Listen
 let lastBarHeight = BAR_HEIGHT // remember the bar's content height to restore on settings exit
+let currentWidth = BAR_WIDTH // window width; narrows to PILL_WIDTH while collapsed to the control mini-pill
 const streams = new Map<string, { abort: () => void }>()
 
 /** Security: every privileged IPC handler must come from the main window's top frame.
@@ -253,17 +263,28 @@ function resizeTo(height: number): void {
   // laptop + external monitor of different heights, a streaming answer clamps to the wrong monitor and the
   // window jumps vertically while the cursor sits on the other screen.
   const { workArea } = screen.getDisplayMatching(win.getBounds())
-  const h = Math.max(BAR_HEIGHT, Math.min(Math.round(height), workArea.height - 48))
-  if (h === win.getBounds().height) {
+  const h = Math.max(BAR_MIN_HEIGHT, Math.min(Math.round(height), workArea.height - 48))
+  const b = win.getBounds()
+  if (h === b.height && currentWidth === b.width) {
     lastBarHeight = h
     return // idempotent — skip a no-op setBounds (belt-and-braces with the renderer-side resize dedup)
   }
   lastBarHeight = h
-  const b = win.getBounds()
   // Keep the panel fully on-screen; if it would grow below the work area, slide it up.
   const maxY = workArea.y + workArea.height - h - 8
   const y = Math.min(b.y, maxY)
-  win.setBounds({ x: b.x, y, width: BAR_WIDTH, height: h }, false)
+  // When the width changes (collapse to / expand from the mini-pill), recenter around the old midpoint
+  // so the overlay stays put; otherwise keep the left edge. Clamp x into the work area either way.
+  let x = currentWidth === b.width ? b.x : Math.round(b.x + (b.width - currentWidth) / 2)
+  x = Math.max(workArea.x + 8, Math.min(x, workArea.x + workArea.width - currentWidth - 8))
+  win.setBounds({ x, y, width: currentWidth, height: h }, false)
+}
+
+/** Collapse to / expand from the control mini-pill by switching the window width; the renderer's
+ *  auto-resize then settles the height to whichever surface is shown. */
+function setMinimizedWidth(narrow: boolean): void {
+  currentWidth = narrow ? PILL_WIDTH : BAR_WIDTH
+  resizeTo(lastBarHeight) // re-apply immediately so width + recenter land before the renderer re-measures
 }
 
 /**
@@ -277,9 +298,9 @@ function setWindowMode(): void {
   if (!win) return
   const { workArea } = screen.getDisplayMatching(win.getBounds())
   const b = win.getBounds()
-  let x = Math.round(b.x + (b.width - BAR_WIDTH) / 2)
-  x = Math.max(workArea.x + 16, Math.min(x, workArea.x + workArea.width - BAR_WIDTH - 16))
-  win.setBounds({ x, y: b.y, width: BAR_WIDTH, height: lastBarHeight }, false)
+  let x = Math.round(b.x + (b.width - currentWidth) / 2)
+  x = Math.max(workArea.x + 16, Math.min(x, workArea.x + workArea.width - currentWidth - 16))
+  win.setBounds({ x, y: b.y, width: currentWidth, height: lastBarHeight }, false)
 }
 
 function sendHotkey(action: HotkeyAction): void {
@@ -557,6 +578,10 @@ function createTray(): void {
         sendHotkey('settings')
       } },
       { label: 'Listen / Stop listening  (⌘⇧L)', click: () => sendHotkey('toggle-listen') },
+      { label: "Today's agenda", click: () => {
+        if (win && !win.isVisible()) win.show()
+        sendHotkey('agenda')
+      } },
       { label: 'New  (⌘⇧R)', click: () => sendHotkey('reset') },
       { type: 'separator' },
       { label: 'Quit AskToto', click: () => app.quit() }
@@ -593,8 +618,16 @@ function registerIpc(): void {
   ipcMain.handle(IPC.settingsSet, (e, patch) => {
     assertMainWindow(e)
     const p = patch ?? {}
+    const wasEncrypted = getSettings().encryptTranscripts
     const next = setSettings(p)
     auditLog('settings.changed', { keys: Object.keys(p) })
+    // At-rest encryption just turned on → purge any previously-built CLEARTEXT knowledge graph so it
+    // can't leak meeting topics/entities the encryption is meant to protect. (Builds are already
+    // blocked while encryption is on, so no graph will be regenerated until it's turned back off.)
+    if (!wasEncrypted && next.encryptTranscripts) {
+      purgeGraphArtifacts()
+      auditLog('graph.purged', { reason: 'encryption-enabled' })
+    }
     win?.setContentProtection(contentProtectionOn())
     // Only reconfigure the OS login item when that setting actually changed. Calling it on every
     // unrelated save is wasteful and, on unsigned/dev builds, logs a noisy "Operation not permitted".
@@ -639,10 +672,13 @@ function registerIpc(): void {
   })
 
   // Connect to Dust locally by importing the Dust CLI's keychain session (token + workspace + region).
+  // refreshDustCliSession first runs `dust status` so the CLI mints a fresh access token before we read
+  // it — without this, a reconnect after the ~1h OAuth token expires imports the stale token (import
+  // "succeeds" but every agent call then 401s). Refresh is cheap when the token is still valid.
   ipcMain.handle(IPC.dustImportCli, async (e) => {
     assertMainWindow(e)
     if (!requireAuth()) return { ok: false, error: 'Sign in with your Mantu account first.' }
-    const s = await importDustCliSession()
+    const s = await refreshDustCliSession()
     if (!s.ok || !s.token || !s.workspaceId) return { ok: false, error: s.error }
     setApiKey('dust', s.token)
     setSettings({ dustWorkspaceId: s.workspaceId, dustBaseUrl: s.baseUrl || 'https://dust.tt' })
@@ -989,6 +1025,10 @@ function registerIpc(): void {
   ipcMain.handle(IPC.windowMode, (e) => {
     assertMainWindow(e)
     setWindowMode()
+  })
+  ipcMain.handle(IPC.windowMinimize, (e, narrow: unknown) => {
+    assertMainWindow(e)
+    setMinimizedWidth(!!narrow)
   })
   // Drag the overlay from anywhere on the bar (the renderer's JS drag drives this with screen-pixel deltas).
   ipcMain.handle(IPC.windowMoveBy, (e, d: unknown) => {
