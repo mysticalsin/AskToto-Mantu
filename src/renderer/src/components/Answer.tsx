@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Copy, Check, RefreshCw, FileDown, ShieldCheck, ChevronsDown } from 'lucide-react'
+import { Copy, Check, RefreshCw, FileDown, ShieldCheck, ChevronsDown, ThumbsUp, ThumbsDown } from 'lucide-react'
 import { Markdown } from './Markdown'
 
 function Skeleton(): JSX.Element {
@@ -48,6 +48,13 @@ export function Answer({
   const [copyError, setCopyError] = useState<string | null>(null)
   const [saved, setSaved] = useState(false)
   const [saveError, setSaveError] = useState<string | null>(null)
+  const [rated, setRated] = useState<'up' | 'down' | null>(null)
+
+  // Record the user's verdict on this answer. Metadata only (rating + kind) → audit log; no content sent.
+  const rate = (r: 'up' | 'down'): void => {
+    setRated(r)
+    void window.toto.answerFeedback({ rating: r, kind: kind ?? 'answer' })
+  }
 
   const saveNote = (): void => {
     if (!text) return
@@ -132,6 +139,36 @@ export function Answer({
           >
             <ChevronsDown size={11} /> Go deeper
           </button>
+        )}
+        {text && (
+          <div className="ml-auto flex items-center gap-0.5" title="Was this useful?">
+            <button
+              type="button"
+              aria-label="Good answer"
+              onClick={() => rate('up')}
+              className={[
+                'no-drag focus-ring flex items-center rounded-md p-1 transition-colors',
+                rated === 'up'
+                  ? 'text-[color:var(--color-success)]'
+                  : 'text-[color:var(--color-ink-3)] hover:bg-white/10 hover:text-[color:var(--color-ink)]'
+              ].join(' ')}
+            >
+              <ThumbsUp size={11} />
+            </button>
+            <button
+              type="button"
+              aria-label="Bad answer"
+              onClick={() => rate('down')}
+              className={[
+                'no-drag focus-ring flex items-center rounded-md p-1 transition-colors',
+                rated === 'down'
+                  ? 'text-[color:var(--color-danger)]'
+                  : 'text-[color:var(--color-ink-3)] hover:bg-white/10 hover:text-[color:var(--color-ink)]'
+              ].join(' ')}
+            >
+              <ThumbsDown size={11} />
+            </button>
+          </div>
         )}
       </div>
       {saveError && (

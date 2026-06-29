@@ -86,8 +86,12 @@ export const IPC = {
   cliTest: 'cli:test',
   cliInstall: 'cli:install',
   cliInstallProgress: 'cli:install:progress',
-  cliLogin: 'cli:login'
+  cliLogin: 'cli:login',
+  answerFeedback: 'answer:feedback'
 } as const
+
+/** User's verdict on an answer (metadata only — never the answer text). Feeds the audit log + future evals. */
+export type AnswerFeedback = { rating: 'up' | 'down'; kind?: string }
 
 export type AskMode = 'answer' | 'vision' | 'suggest' | 'summary' | 'recap'
 

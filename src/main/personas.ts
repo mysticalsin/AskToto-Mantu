@@ -3,6 +3,7 @@ import {
   SUMMARY_PROMPT,
   RECAP_PROMPT,
   INJECTION_GUARD,
+  GROUNDING_RAIL,
   effectiveModePrompt
 } from '@shared/prompts'
 
@@ -98,5 +99,9 @@ export function buildSystem(
   // Modes where the user is performing as themselves benefit from the profile (background/role/company);
   // general and meeting are neutral observers, so they skip it.
   const profileTail = mode === 'general' || mode === 'meeting' ? '' : profileBlock(profile)
-  return lead + prefix + prompt + profileTail + ctx + lang
+  // Grounding rail: cite source / admit uncertainty / ≤1 clarifying question / never describe what it
+  // wasn't shown. Only for user-initiated answers (answer, vision) — NOT the proactive spoken suggest
+  // line (a parenthetical source tag would be awkward to say out loud).
+  const rail = req.mode === 'answer' || req.mode === 'vision' ? GROUNDING_RAIL : ''
+  return lead + prefix + prompt + profileTail + ctx + rail + lang
 }

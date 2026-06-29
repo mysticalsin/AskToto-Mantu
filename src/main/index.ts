@@ -946,6 +946,16 @@ function registerIpc(): void {
     return r
   })
 
+  // Answer feedback (good/bad) → audit log only. Metadata-only: the rating + answer kind, NEVER the
+  // answer text or question (those would be content). Seeds the H-section acceptance-rate eval later.
+  ipcMain.handle(IPC.answerFeedback, (e, raw: unknown) => {
+    assertMainWindow(e)
+    const r = raw as { rating?: unknown; kind?: unknown } | null
+    const rating = r?.rating === 'up' || r?.rating === 'down' ? r.rating : null
+    if (!rating) return
+    auditLog('answer.feedback', { rating, kind: typeof r?.kind === 'string' ? r.kind : undefined })
+  })
+
   // Parse a recap's markdown into a structured object (decisions + action-items-with-owners) the renderer
   // can copy as JSON for Jira/Asana/Notion. Pure transform of text the renderer already holds — no disk I/O.
   ipcMain.handle(IPC.exportRecapJson, (e, markdown: unknown) => {
