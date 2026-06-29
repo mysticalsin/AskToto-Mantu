@@ -59,13 +59,17 @@ function dustLogger(): Console {
 }
 
 const STREAM_IDLE_MS = 120_000
-/** Abort a stream that produces no token for STREAM_IDLE_MS (provider hang). Call ping() on each chunk. */
-function idleWatchdog(onIdle: () => void): { ping: () => void; clear: () => void } {
-  let t: NodeJS.Timeout | null = setTimeout(onIdle, STREAM_IDLE_MS)
+/**
+ * Abort a stream that produces no token for `ms` (provider hang / slow first token). Call ping() on each
+ * chunk to reset it. The budget is per-tier/mode (see the ask handler): a live suggest gives up fast so it
+ * stays real-time; a deep answer or a recap gets the full headroom.
+ */
+function idleWatchdog(onIdle: () => void, ms: number = STREAM_IDLE_MS): { ping: () => void; clear: () => void } {
+  let t: NodeJS.Timeout | null = setTimeout(onIdle, ms)
   return {
     ping: () => {
       if (t) clearTimeout(t)
-      t = setTimeout(onIdle, STREAM_IDLE_MS)
+      t = setTimeout(onIdle, ms)
     },
     clear: () => {
       if (t) {
@@ -198,6 +202,8 @@ export function createStream(opts: {
   refreshDustAuth?: () => Promise<{ apiKey: string; workspaceId?: string; baseURL?: string } | null>
   model: string
   temperature: number
+  /** Per-tier/mode idle-timeout budget in ms (abort if no token arrives within it). Defaults to 120s. */
+  idleMs?: number
   system: string
   req: AskStart
   handlers: StreamHandlers
@@ -242,7 +248,7 @@ export function createStream(opts: {
     wd = idleWatchdog(() => {
       fail('Timed out — no response from the agent.')
       controller.abort()
-    })
+    }, opts.idleMs)
     // Dust agents run with their own instructions and never receive opts.system. So fold EVERYTHING
     // the user configured (mode prompt, profile, imported context documents, and the anti-injection
     // guard) into the message itself — otherwise the model ignores what they sent.
@@ -361,7 +367,7 @@ export function createStream(opts: {
       opts.handlers.onError('Stream timed out — no response from the model.')
       aborted = true
       stream.abort()
-    })
+    }, opts.idleMs)
     stream.on('text', (t) => {
       wd.ping()
       opts.handlers.onDelta(t)
@@ -394,7 +400,7 @@ export function createStream(opts: {
   const wd = idleWatchdog(() => {
     opts.handlers.onError('Stream timed out — no response from the model.')
     controller.abort()
-  })
+  }, opts.idleMs)
   void (async () => {
     try {
       // OpenAI o-series reasoning models (o1/o3/o4…) reject `temperature` and `max_tokens`

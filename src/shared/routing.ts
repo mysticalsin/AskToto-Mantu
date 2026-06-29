@@ -70,11 +70,15 @@ export function isHeavyQuestion(text: string): boolean {
  *  auto → base (Haiku) for basic, think (Sonnet) for heavier, deep (Opus) for coding/deep reasoning.
  */
 export function routeTier(
-  req: { mode: RoutableMode; prompt?: string; transcript?: string },
+  req: { mode: RoutableMode; prompt?: string; transcript?: string; kind?: string },
   mode: ThinkingMode
 ): ModelTier {
   // Live suggestions must be instant — never escalate.
   if (req.mode === 'suggest') return 'base'
+  // Fact-checks are a verification action the user explicitly invoked — route them to the strongest
+  // model (the verifier path) so the verdict is as reliable as possible, unless the user has pinned
+  // fast-only mode as a hard cost cap.
+  if (req.kind === 'factcheck') return mode === 'never' ? 'base' : 'deep'
   if (mode === 'never') return 'base'
   if (mode === 'always') return 'deep' // explicit deep mode → the strongest model
 

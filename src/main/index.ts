@@ -853,7 +853,23 @@ function registerIpc(): void {
       const baseURL =
         provider === 'custom' ? s.customBaseUrl : provider === 'dust' ? s.dustBaseUrl : def.baseUrl
       auditLog('provider.request', { provider, model, mode: req.mode, tier, retry: attempted.length > 0 })
+      // Per-tier idle budget: a live suggest gives up fast to stay real-time; recaps + deep answers get the
+      // full headroom. Bounds time-to-first-token and triggers failover when a provider stalls before a token.
+      const idleMs =
+        req.mode === 'suggest'
+          ? 15_000
+          : req.mode === 'recap' || req.mode === 'summary'
+            ? 120_000
+            : tier === 'deep'
+              ? 120_000
+              : tier === 'think'
+                ? 90_000
+                : req.mode === 'vision'
+                  ? 60_000
+                  : 45_000
+      const startedAt = Date.now()
       let gotToken = false
+      let ttftMs: number | undefined
       const handle = createStream({
         providerId: provider,
         kind: def.kind,
@@ -877,15 +893,19 @@ function registerIpc(): void {
             : undefined,
         model,
         temperature: s.temperature,
+        idleMs,
         system: buildSystem(req, s.mode, s.profile, s.modePrompts, s.contextDocs[s.mode] || [], s.outputLanguage, s.summaryLanguage, s.systemPrompt),
         req,
         handlers: {
           onDelta: (text) => {
+            if (!gotToken) ttftMs = Date.now() - startedAt
             gotToken = true
             win?.webContents.send(IPC.streamDelta, { id: req.id, text })
           },
           onDone: (u) => {
             streams.delete(req.id)
+            // Latency telemetry (metadata only) — feeds the p50/p95 TTFT + answer-latency evals (section H/D).
+            auditLog('provider.request', { provider, model, mode: req.mode, tier, phase: 'done', ttftMs, totalMs: Date.now() - startedAt })
             win?.webContents.send(IPC.streamDone, { id: req.id, ...u })
           },
           onError: (message) => {

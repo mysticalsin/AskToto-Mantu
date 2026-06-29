@@ -177,6 +177,8 @@ export const AskStartSchema = z.object({
   transcript: z.string().optional(),
   /** 'deeper' = the user tapped "Go deeper" → re-ask for a fuller answer (injected per-turn, never cached) */
   depth: z.enum(['deeper']).optional(),
+  /** 'factcheck' = a verification ask → the router sends it to the strongest model (verifier path). */
+  kind: z.enum(['answer', 'factcheck']).optional(),
   history: z.array(ChatTurnSchema).default([])
 })
 export type AskStart = z.infer<typeof AskStartSchema>
