@@ -283,19 +283,19 @@ export function App(): JSX.Element {
   }
 
   const askScreen = useCallback(
-    async (prompt: string, opts?: { label?: string; kind?: 'answer' | 'factcheck' }): Promise<boolean> => {
-      if (capturing) return false
+    async (prompt: string, opts?: { label?: string; kind?: 'answer' | 'factcheck' }): Promise<string | null> => {
+      if (capturing) return null
       setView('answer')
       setCollapsed(false)
       setCaptureError(null)
       setCapturing(true)
       try {
         const shot = await window.toto.capture()
-        ask.run({ mode: 'vision', image: shot.image, prompt, label: opts?.label, kind: opts?.kind })
-        return true
+        // Return the run id so callers can track it (Retry/Go-deeper replay the same screenshot via lastReqRef).
+        return ask.run({ mode: 'vision', image: shot.image, prompt, label: opts?.label, kind: opts?.kind })
       } catch (e) {
         setCaptureError(e instanceof Error ? e.message : String(e))
-        return false
+        return null
       } finally {
         setCapturing(false)
       }
@@ -306,9 +306,11 @@ export function App(): JSX.Element {
   const submit = useCallback(() => {
     if (!settings?.providerReady) return
     const q = input.trim()
-    if (!q) return
     setCaptureError(null)
+    // Screen-aware router (Cluely "Uses Screen"): in a call → copilot; else screen-ask when enabled +
+    // vision-capable (empty input is meaningful — it asks about the screen); else a plain text ask.
     if (listen.listening) {
+      if (!q) return
       setView('copilot')
       setCollapsed(false)
       suggest.run({
@@ -316,14 +318,17 @@ export function App(): JSX.Element {
         prompt: withContext(q, listen.text()),
         history: copilotHistoryRef.current
       })
+    } else if ((settings.screenAsk ?? true) && settings.visionReady) {
+      void askScreen(q || 'Help me with what is on my screen.')
     } else {
+      if (!q) return
       setView('answer')
       setCollapsed(false)
       const id = ask.run({ mode: 'answer', prompt: q, history: historyRef.current })
       pendingUserRef.current = { id, q } // recorded into memory when it completes
     }
     setInput('')
-  }, [input, ask, suggest, listen, settings])
+  }, [input, ask, suggest, listen, settings, askScreen])
 
   const factCheck = useCallback(() => {
     const claim = input.trim()

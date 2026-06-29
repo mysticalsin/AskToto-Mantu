@@ -42,6 +42,7 @@ export type AuditEvent =
   | 'auth.expired'
   | 'auth.refresh_failed'
   | 'auth.denied'
+  | 'dust.token.refreshed'
   | 'key.set'
   | 'key.removed'
   | 'capture.screen'

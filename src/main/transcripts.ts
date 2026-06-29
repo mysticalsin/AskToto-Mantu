@@ -469,7 +469,7 @@ export function parseRecapMarkdown(markdown: string): RecapExport {
   const bullets = (text: string | undefined): string[] =>
     (text || '')
       .split('\n')
-      .map((l) => l.replace(/^\s*[-*]\s+/, '').trim()) // strip a leading bullet marker
+      .map((l) => l.replace(/^\s*[-*]\s+(\[[ xX]\]\s+)?/, '').trim()) // strip bullet + optional [ ]/[x] checkbox
       .filter((l) => l.length > 0)
 
   const actionItems = bullets(sections['action items']).map((text) => {

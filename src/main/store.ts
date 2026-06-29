@@ -262,7 +262,12 @@ export function setApiKey(provider: ProviderId, key: string): void {
 
 export function clearApiKey(provider: ProviderId): void {
   const p = keyPath(provider)
-  if (existsSync(p)) rmSync(p)
+  if (!existsSync(p)) return
+  try {
+    rmSync(p)
+  } catch (e) {
+    console.warn('[store] clearApiKey: could not delete key file for', provider, e)
+  }
 }
 
 export interface TestKeyResult {

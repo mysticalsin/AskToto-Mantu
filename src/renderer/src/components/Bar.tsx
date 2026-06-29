@@ -97,7 +97,9 @@ export function Bar(props: BarProps): JSX.Element {
       className={[
         'glass flex h-[38px] w-full items-center gap-1 rounded-full pl-2 pr-1.5',
         // When NOT stealth, others can see the overlay in a screen share → ring the bar to make that obvious.
-        props.stealth ? '' : 'outline outline-2 outline-offset-2 outline-[var(--color-danger)]'
+        props.stealth ? '' : 'outline outline-2 outline-offset-2 outline-[var(--color-danger)]',
+        // While the agent is working, an animated rainbow contour wraps the bar (the "thinking" signal).
+        props.busy ? 'rainbow-ring' : ''
       ].join(' ')}
     >
       <span
@@ -145,8 +147,9 @@ export function Bar(props: BarProps): JSX.Element {
       />
 
       {props.busy ? (
+        // No stop-square anymore — the rainbow contour shows it's working; a small X still cancels.
         <IconButton title="Stop" onClick={props.onStop} danger>
-          <Square size={14} fill="currentColor" />
+          <X size={16} />
         </IconButton>
       ) : (
         <IconButton title="Ask (↵)" onClick={props.onSubmit}>

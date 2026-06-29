@@ -6,6 +6,7 @@ struct ListenView: View {
     @StateObject private var mic = SpeechTranscriber()
     @StateObject private var vm = AskViewModel()
     @State private var savedPath: String?
+    @State private var sessionID = UUID()
 
     var body: some View {
         NavigationStack {
@@ -29,10 +30,28 @@ struct ListenView: View {
                     }
                     .padding()
                 }
+                .id(sessionID)
             }
             .navigationTitle("Listen")
             .toolbarBackground(Mantu.darker, for: .navigationBar)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button {
+                        newMeeting()
+                    } label: {
+                        Label("New Meeting", systemImage: "plus.circle")
+                            .labelStyle(.iconOnly)
+                    }
+                    .disabled(mic.transcript.isEmpty && !vm.streaming)
+                }
+            }
         }
+    }
+
+    private func newMeeting() {
+        mic.clear()
+        savedPath = nil
+        sessionID = UUID()
     }
 
     private var recordCard: some View {

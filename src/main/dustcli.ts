@@ -4,6 +4,7 @@ import { promisify } from 'node:util'
 import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { DustCliImport } from '@shared/ipc'
+import { resolveBin } from './cli'
 
 const exec = promisify(execFile)
 
@@ -75,6 +76,34 @@ export async function importDustCliSession(): Promise<DustCliSession> {
     }
   }
   return { ok: true, token, workspaceId, baseUrl: regionToBaseUrl(region) }
+}
+
+/**
+ * Force the local Dust CLI to mint a fresh access token, then re-read it from the keychain.
+ *
+ * The imported `access_token` is a short-lived OAuth token (~1h). The Dust CLI holds a long-lived
+ * refresh token and rotates the access token whenever it talks to the API. Running `dust status`
+ * (non-interactive — no browser, no prompt) exercises the CLI so it refreshes the keychain token;
+ * we then re-read it. As long as the CLI session itself is valid (the user has not run `dust logout`),
+ * this recovers a working token with no re-login. macOS only, matching importDustCliSession.
+ *
+ * Best-effort: a nonzero exit or timeout is swallowed — we always re-read whatever the CLI left in the
+ * keychain, which is the freshest token available. A hard timeout keeps a hung CLI off the answer path.
+ */
+export async function refreshDustCliSession(): Promise<DustCliSession> {
+  if (process.platform !== 'darwin') {
+    return { ok: false, error: 'Dust CLI refresh is macOS-only.' }
+  }
+  const bin = await resolveBin('dust')
+  if (bin) {
+    try {
+      // CI=1 suppresses the spinner / update-check UI; the timeout bounds the network round-trip.
+      await exec(bin, ['status'], { timeout: 25_000, env: { ...process.env, CI: '1' } })
+    } catch {
+      // ignore — fall through and re-read the keychain regardless of exit code
+    }
+  }
+  return importDustCliSession()
 }
 
 /**

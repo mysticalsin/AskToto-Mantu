@@ -26,9 +26,12 @@ export interface ProviderDef {
   models: string[] // suggestions for the datalist
   defaultModel: string
   fastModel: string // BASE tier — fast/cheap (e.g. Haiku); used for simple questions
-  /** THINKING tier — stronger/reasoning model (e.g. Sonnet) for hard/coding/complex questions.
+  /** THINKING tier — stronger/reasoning model (e.g. Sonnet) for heavier, analytical questions.
    *  Optional: falls back to defaultModel when unset. See resolveModelTier(). */
   thinkModel?: string
+  /** DEEP tier — the deepest model (e.g. Opus) for coding / deep reasoning / the hardest questions.
+   *  Optional: falls back to thinkModel when unset, so providers without a distinct deep model still work. */
+  deepModel?: string
   keyHint: string
   /** RegExp source matched against a pasted key for auto-detect; '' = not auto-detectable. */
   keyPattern: string
@@ -45,8 +48,9 @@ export const PROVIDERS: Record<ProviderId, ProviderDef> = {
     baseUrl: '',
     models: ['claude-opus-4-8', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'],
     defaultModel: 'claude-opus-4-8',
-    fastModel: 'claude-haiku-4-5-20251001', // base tier: Haiku
-    thinkModel: 'claude-sonnet-4-6', // thinking tier: Sonnet (per Tony — not Opus)
+    fastModel: 'claude-haiku-4-5-20251001', // base tier: Haiku — basic/quick questions
+    thinkModel: 'claude-sonnet-4-6', // think tier: Sonnet — heavier, analytical questions
+    deepModel: 'claude-opus-4-8', // deep tier: Opus — coding / deep reasoning / the hardest asks
     keyHint: 'sk-ant-…',
     keyPattern: '^sk-ant-',
     vision: true,
@@ -241,8 +245,9 @@ export const PROVIDERS: Record<ProviderId, ProviderDef> = {
     baseUrl: '',
     models: ['sonnet', 'opus', 'haiku'],
     defaultModel: 'sonnet',
-    fastModel: 'haiku',
-    thinkModel: 'opus',
+    fastModel: 'haiku', // base: Haiku
+    thinkModel: 'sonnet', // think: Sonnet — heavier questions
+    deepModel: 'opus', // deep: Opus — coding / deep reasoning
     keyHint: '',
     keyPattern: '',
     vision: false,
@@ -352,26 +357,33 @@ export function resolveModel(
   return chosen || def.defaultModel || ''
 }
 
-export type ModelTier = 'base' | 'think'
+export type ModelTier = 'base' | 'think' | 'deep'
 
 /**
  * Resolve the model/agent for a routing tier.
  *  - base  → the user's chosen base model, else the provider's fast/cheap model (e.g. Haiku).
  *  - think → the user's chosen thinking model, else the provider's reasoning model (e.g. Sonnet),
  *            else falls back to the base/default so a provider without a distinct think model still works.
- * For Dust the "model" is an agent sId: base = providerModels.dust, think = thinkModels.dust.
+ *  - deep  → the user's chosen deep model, else the provider's deepest model (e.g. Opus), else the
+ *            think model, so a provider without a distinct deep model degrades to its reasoning model.
+ * For Dust the "model" is an agent sId: base/think/deep = providerModels.dust / thinkModels.dust / deepModels.dust.
  */
 export function resolveModelTier(
   id: ProviderId,
   providerModels: Partial<Record<string, string>>,
   thinkModels: Partial<Record<string, string>>,
-  tier: ModelTier
+  tier: ModelTier,
+  deepModels: Partial<Record<string, string>> = {}
 ): string {
   const def = PROVIDERS[id]
   const base = (providerModels[id] || '').trim()
+  const think = (thinkModels[id] || '').trim() || def.thinkModel || ''
+  if (tier === 'deep') {
+    const deep = (deepModels[id] || '').trim()
+    return deep || def.deepModel || think || base || def.defaultModel || ''
+  }
   if (tier === 'think') {
-    const think = (thinkModels[id] || '').trim()
-    return think || def.thinkModel || base || def.defaultModel || ''
+    return think || base || def.defaultModel || ''
   }
   return base || def.fastModel || def.defaultModel || ''
 }

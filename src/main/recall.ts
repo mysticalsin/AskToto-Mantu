@@ -1,5 +1,4 @@
-import { readdirSync } from 'node:fs'
-import { readFile } from 'node:fs/promises'
+import { readFile, readdir } from 'node:fs/promises'
 import { join } from 'node:path'
 import { resolveMeetingsFolder, decodeSaved } from './transcripts'
 import { getSettings } from './store'
@@ -20,9 +19,10 @@ function frontmatter(text: string): Record<string, string> {
   return out
 }
 
-function meetingFiles(folder: string): string[] {
+async function meetingFiles(folder: string): Promise<string[]> {
   try {
-    return readdirSync(folder).filter((f) => f.endsWith('.md') && f !== 'README.md' && f !== 'index.md')
+    const files = await readdir(folder)
+    return files.filter((f) => f.endsWith('.md') && f !== 'README.md' && f !== 'index.md')
   } catch {
     return []
   }
@@ -37,6 +37,7 @@ interface Read {
 async function readMeeting(folder: string, file: string): Promise<Read | null> {
   try {
     const text = decodeSaved(await readFile(join(folder, file)))
+    if (!text) return null
     const fm = frontmatter(text)
     if (fm.type && fm.type !== 'meeting-transcript') return null
     return {
@@ -58,7 +59,7 @@ async function readMeeting(folder: string, file: string): Promise<Read | null> {
 /** Newest-first list of saved meetings. */
 export async function listMeetings(): Promise<MeetingSummary[]> {
   const folder = resolveMeetingsFolder(getSettings())
-  const read = await Promise.all(meetingFiles(folder).map((f) => readMeeting(folder, f)))
+  const read = await Promise.all((await meetingFiles(folder)).map((f) => readMeeting(folder, f)))
   return read
     .filter((r): r is Read => r !== null)
     .map((r) => r.sum)
@@ -70,7 +71,7 @@ export async function searchMeetings(query: string): Promise<RecallHit[]> {
   const folder = resolveMeetingsFolder(getSettings())
   const terms = query.toLowerCase().split(/\s+/).filter((t) => t.length > 1)
   if (!terms.length) return []
-  const read = await Promise.all(meetingFiles(folder).map((f) => readMeeting(folder, f)))
+  const read = await Promise.all((await meetingFiles(folder)).map((f) => readMeeting(folder, f)))
   const hits: RecallHit[] = []
   for (const r of read) {
     if (!r) continue

@@ -62,6 +62,24 @@ const ctl =
 // tiles grid and the generic "key" Section. Must be kept in sync with the CliIntegration render logic.
 const CLI_PROVIDERS = new Set<ProviderId>(['dust', 'claude-cli', 'codex-cli', 'gemini'])
 
+/**
+ * After disconnecting/removing the active provider, pick another provider that is actually ready
+ * (CLI providers need a live connection; the rest need a saved key) so the user is never left on a
+ * provider that can't answer. Falls back to Anthropic, which then shows the normal "add a key" prompt.
+ */
+function pickReadyProvider(
+  exclude: ProviderId,
+  hasKeys: Record<string, boolean>,
+  cliConnected: Record<string, boolean>
+): ProviderId {
+  const ready = PROVIDER_IDS.find(
+    (p) =>
+      p !== exclude &&
+      (PROVIDERS[p].kind === 'cli' ? !!cliConnected[p] : !!hasKeys[p])
+  )
+  return ready ?? 'anthropic'
+}
+
 /** Friendly name for a routed model in the thinking-mode explainer. Keeps raw model ids out of
  *  user-facing copy — recognized brands by name, everything else as a plain tier word. */
 function prettyModel(m: string, provider: ProviderId, tier: 'base' | 'think'): string {
@@ -392,6 +410,8 @@ function AiSection({
     await clearKey(provider)
     setKey('')
     setTest({ status: 'idle' })
+    // Removed the active provider's key — fall back to one that can still answer.
+    await patch({ provider: pickReadyProvider(provider, settings.hasKeys, settings.cliConnected ?? {}) })
   }
 
   const hint = detectHint(key, provider)
@@ -835,6 +855,16 @@ function CliIntegration({
     setState(id, { phase: 'idle', msg: null, version: null })
   }
 
+  // Disconnect AskToto from a CLI provider. Clears the connected flag (the global CLI itself is left
+  // installed — it's the user's own tool) and, if it was the active provider, switches to a ready one.
+  const disconnectCli = (id: 'claude-cli' | 'codex-cli'): void => {
+    const nextConnected = { ...cliConnected, [id]: false }
+    const next: Partial<PublicSettings> = { cliConnected: nextConnected }
+    if (provider === id) next.provider = pickReadyProvider(id, settings.hasKeys, nextConnected)
+    patch(next)
+    setState(id, { phase: 'idle', msg: null, version: null })
+  }
+
   const [geminiError, setGeminiError] = useState<string | null>(null)
 
   const saveGeminiKey = async (): Promise<void> => {
@@ -961,6 +991,12 @@ function CliIntegration({
               <Link2 size={12} />
               {isConnected ? 'Reconnect' : 'Set up'}
             </button>
+            {isConnected && (
+              <button type="button" onClick={() => disconnectCli(id)} className={secondaryBtn} title={`Disconnect ${def.label}`}>
+                <X size={12} />
+                Disconnect
+              </button>
+            )}
           </div>
         )}
 
@@ -981,15 +1017,24 @@ function CliIntegration({
           </div>
         )}
 
-        {/* Reconnect link — shown after a successful connect */}
+        {/* Reconnect / Disconnect links — shown after a successful connect */}
         {st.phase === 'done' && (
-          <button
-            type="button"
-            onClick={() => startSetup(id)}
-            className="no-drag cl-focus self-start text-[11px] text-[color:var(--cl-muted-foreground)] hover:text-[color:var(--cl-foreground)]"
-          >
-            Reconnect
-          </button>
+          <div className="flex items-center gap-3">
+            <button
+              type="button"
+              onClick={() => startSetup(id)}
+              className="no-drag cl-focus text-[11px] text-[color:var(--cl-muted-foreground)] hover:text-[color:var(--cl-foreground)]"
+            >
+              Reconnect
+            </button>
+            <button
+              type="button"
+              onClick={() => disconnectCli(id)}
+              className="no-drag cl-focus text-[11px] text-[color:var(--cl-muted-foreground)] hover:text-[color:var(--cl-destructive)]"
+            >
+              Disconnect
+            </button>
+          </div>
         )}
       </div>
     )
@@ -1022,6 +1067,36 @@ function CliIntegration({
             </button>
           </div>
         )}
+
+        {/* Dust card — your Second Brain agents (proposed first) */}
+        <div
+          className={[
+            'flex items-center justify-between gap-2 rounded-[10px] border p-3',
+            provider === 'dust'
+              ? 'border-[var(--cl-primary)] bg-[var(--cl-primary-soft)]/40'
+              : 'border-[var(--cl-border)] bg-white/[0.02]'
+          ].join(' ')}
+        >
+          <div className="flex flex-col gap-0.5">
+            <span className="text-[12px] font-medium text-[color:var(--cl-foreground)]">Dust · your agents</span>
+            <span className="text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
+              Your Second Brain agents via the Dust platform. Full setup in the section below.
+            </span>
+          </div>
+          {provider === 'dust' ? (
+            <span className={activePill}>
+              <CircleCheck size={12} /> Active
+            </span>
+          ) : (
+            <button
+              type="button"
+              onClick={() => dustSectionRef?.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
+              className={secondaryBtn}
+            >
+              Set up below
+            </button>
+          )}
+        </div>
 
         {/* Claude Code CLI card */}
         {renderCliCard('claude-cli')}
@@ -1091,36 +1166,6 @@ function CliIntegration({
                 Get a key at Google AI Studio <ExternalLink size={11} />
               </a>
             </>
-          )}
-        </div>
-
-        {/* Dust card — points to the Dust section below */}
-        <div
-          className={[
-            'flex items-center justify-between gap-2 rounded-[10px] border p-3',
-            provider === 'dust'
-              ? 'border-[var(--cl-primary)] bg-[var(--cl-primary-soft)]/40'
-              : 'border-[var(--cl-border)] bg-white/[0.02]'
-          ].join(' ')}
-        >
-          <div className="flex flex-col gap-0.5">
-            <span className="text-[12px] font-medium text-[color:var(--cl-foreground)]">Dust · your agents</span>
-            <span className="text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
-              Your Second Brain agents via the Dust platform. Full setup in the section below.
-            </span>
-          </div>
-          {provider === 'dust' ? (
-            <span className={activePill}>
-              <CircleCheck size={12} /> Active
-            </span>
-          ) : (
-            <button
-              type="button"
-              onClick={() => dustSectionRef?.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
-              className={secondaryBtn}
-            >
-              Set up below
-            </button>
           )}
         </div>
 
@@ -1203,6 +1248,17 @@ function DustSetup({
   }
   const removeDustKey = async (): Promise<void> => {
     await clearKey('dust')
+    // Full disconnect: drop the workspace, the selected agent, and switch off Dust if it was active.
+    const nextModels = { ...settings.providerModels }
+    delete nextModels.dust
+    const next: Partial<PublicSettings> = {
+      dustWorkspaceId: '',
+      dustBaseUrl: 'https://dust.tt',
+      providerModels: nextModels
+    }
+    if (settings.provider === 'dust')
+      next.provider = pickReadyProvider('dust', settings.hasKeys, settings.cliConnected ?? {})
+    await patch(next)
   }
   const useDust = (): void => void patch({ provider: 'dust' })
 
@@ -2585,6 +2641,109 @@ function displayAccelerator(a: string): string {
     .replace(/\\/g, '\\')
 }
 
+// Maps a KeyboardEvent key value to the Electron accelerator token.
+// Lone modifiers, PrintScreen, etc. are not valid as the main key.
+const LONE_MODIFIERS = new Set(['Control', 'Shift', 'Alt', 'Meta', 'OS', 'AltGraph', 'CapsLock'])
+
+function keyEventToAccelerator(e: React.KeyboardEvent<HTMLInputElement>): string | null {
+  const key = e.key
+  if (LONE_MODIFIERS.has(key)) return null // lone modifier — not a complete combo
+
+  const parts: string[] = []
+  if (e.ctrlKey || e.metaKey) parts.push('CommandOrControl')
+  if (e.altKey) parts.push('Alt')
+  if (e.shiftKey) parts.push('Shift')
+
+  // Must have at least one modifier — bare keys would conflict with typing
+  if (parts.length === 0) return null
+
+  // Normalise the main key to Electron accelerator notation
+  let main = key
+  if (key === ' ') main = 'Space'
+  else if (key === 'Enter') main = 'Return'
+  else if (key === 'ArrowUp') main = 'Up'
+  else if (key === 'ArrowDown') main = 'Down'
+  else if (key === 'ArrowLeft') main = 'Left'
+  else if (key === 'ArrowRight') main = 'Right'
+  else if (key === 'Escape') main = 'Escape'
+  else if (key === 'Backspace') main = 'Backspace'
+  else if (key === 'Delete') main = 'Delete'
+  else if (key === 'Tab') main = 'Tab'
+  else if (key.length === 1) main = key.toUpperCase() // A-Z, 0-9, punctuation
+  // Function keys (F1-F24), PageUp/PageDown, Home, End, Insert — pass through as-is
+
+  parts.push(main)
+  return parts.join('+')
+}
+
+function KeyRecorder({
+  value,
+  onChange
+}: {
+  value: string
+  onChange: (v: string) => void
+}): JSX.Element {
+  const [recording, setRecording] = useState(false)
+  const [preview, setPreview] = useState<string | null>(null)
+  const inputRef = useRef<HTMLInputElement>(null)
+
+  const onKeyDown = (e: React.KeyboardEvent<HTMLInputElement>): void => {
+    e.preventDefault()
+    e.stopPropagation()
+    const acc = keyEventToAccelerator(e)
+    if (acc === null) {
+      // Lone modifier — show visual feedback but don't commit
+      setPreview(null)
+      return
+    }
+    setPreview(acc)
+    onChange(acc)
+    // Brief delay so the user sees the capture, then blur
+    setTimeout(() => {
+      setRecording(false)
+      setPreview(null)
+      inputRef.current?.blur()
+    }, 120)
+  }
+
+  const onFocus = (): void => {
+    setRecording(true)
+    setPreview(null)
+  }
+
+  const onBlur = (): void => {
+    setRecording(false)
+    setPreview(null)
+  }
+
+  const displayed = recording
+    ? preview !== null
+      ? displayAccelerator(preview)
+      : 'Press a shortcut...'
+    : displayAccelerator(value) || 'Click to record'
+
+  return (
+    <input
+      ref={inputRef}
+      type="text"
+      readOnly
+      value={displayed}
+      onFocus={onFocus}
+      onBlur={onBlur}
+      onKeyDown={onKeyDown}
+      title="Click then press your desired key combination"
+      className={[
+        'no-drag cl-input font-ui min-w-0 flex-1 cursor-pointer select-none px-2 py-1 text-[12px] transition-colors',
+        recording
+          ? 'border-[var(--cl-primary)] bg-[var(--cl-primary-soft)] text-[color:var(--cl-primary)] outline-none ring-1 ring-[var(--cl-primary)]'
+          : value
+            ? 'text-[color:var(--cl-foreground)]'
+            : 'text-[color:var(--cl-muted-foreground)]'
+      ].join(' ')}
+    />
+  )
+}
+
 function Shortcuts({
   settings,
   patch
@@ -2594,10 +2753,7 @@ function Shortcuts({
 }): JSX.Element {
   const user = settings.shortcuts ?? {}
   const set = (action: HotkeyAction, value: string): void => {
-    const next = value.trim()
-    patch({
-      shortcuts: { ...user, [action]: next }
-    })
+    patch({ shortcuts: { ...user, [action]: value } })
   }
   const reset = (action: HotkeyAction): void => {
     const next = { ...user }
@@ -2616,20 +2772,7 @@ function Shortcuts({
                 {SHORTCUT_LABELS[action]}
               </span>
               <div className="flex flex-1 items-center gap-2">
-                <input
-                  type="text"
-                  value={current}
-                  placeholder={isDefault ? displayAccelerator(current) : 'Disabled'}
-                  onChange={(e) => set(action, e.target.value)}
-                  className={[
-                    'no-drag cl-input font-ui min-w-0 flex-1 px-2 py-1 text-[12px]',
-                    !isDefault ? 'text-[color:var(--cl-primary)]' : ''
-                  ].join(' ')}
-                  spellCheck={false}
-                />
-                <span className="text-[11px] text-[color:var(--cl-muted-foreground)]">
-                  {displayAccelerator(current)}
-                </span>
+                <KeyRecorder value={current} onChange={(v) => set(action, v)} />
                 <button
                   type="button"
                   onClick={() => set(action, '')}
@@ -2652,9 +2795,7 @@ function Shortcuts({
         })}
       </div>
       <div className="text-[11px] leading-relaxed text-[color:var(--cl-muted-foreground)]">
-        Format examples: <code className="text-[color:var(--cl-foreground)]">CommandOrControl+Shift+L</code>,{' '}
-        <code className="text-[color:var(--cl-foreground)]">Alt+F</code>. Invalid accelerators are ignored.
-        Changes are applied immediately in the running app.
+        Click a shortcut field and press your desired key combination. Changes apply immediately.
       </div>
     </div>
   )

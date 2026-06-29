@@ -3,18 +3,22 @@ import Foundation
 struct ChatTurn { let role: String; let content: String }
 
 enum LLMError: LocalizedError {
-    case noKey, http(Int, String), badResponse
+    case noKey, http(Int, String), badResponse, streamTimeout
     var errorDescription: String? {
         switch self {
         case .noKey: return "No API key. Add one in Settings."
         case .http(let c, let m): return "Provider error \(c): \(m)"
         case .badResponse: return "Unexpected response from the provider."
+        case .streamTimeout: return "No response from the provider for 120 seconds. Please try again."
         }
     }
 }
 
 /// Streams an answer as an AsyncThrowingStream<String> of text deltas. Handles both wire protocols.
 enum LLMClient {
+    /// Idle timeout: cancel the stream if no token arrives within this interval.
+    private static let idleTimeout: Duration = .seconds(120)
+
     static func stream(provider: Provider, apiKey: String, model: String, system: String,
                        history: [ChatTurn], user: String, imageBase64: String?,
                        temperature: Double) -> AsyncThrowingStream<String, Error> {
@@ -31,17 +35,61 @@ enum LLMClient {
                         for try await line in bytes.lines { body += line; if body.count > 600 { break } }
                         throw LLMError.http(http.statusCode, String(body.prefix(300)))
                     }
-                    for try await line in bytes.lines {
-                        guard line.hasPrefix("data:") else { continue }
-                        let payload = line.dropFirst(5).trimmingCharacters(in: .whitespaces)
-                        if payload == "[DONE]" { break }
-                        guard let data = payload.data(using: .utf8),
-                              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
-                        else { continue }
-                        if let text = delta(from: obj, kind: provider.kind), !text.isEmpty {
-                            continuation.yield(text)
+
+                    // #19 — per-stream idle watchdog: races the line iterator against a timeout
+                    // that resets on every received chunk.  A hanging connection will lose the race
+                    // after `idleTimeout` of silence and surface LLMError.streamTimeout.
+                    try await withThrowingTaskGroup(of: Void.self) { group in
+                        // Watchdog: a child Task sleeps for `idleTimeout`; the iterator cancels &
+                        // replaces it on each received chunk.  If the sleep completes without being
+                        // cancelled it means no token arrived in time → throw streamTimeout.
+                        // WatchdogHolder is @unchecked Sendable: mutation is always on one Task.
+                        final class WatchdogHolder: @unchecked Sendable {
+                            var task: Task<Void, Never>?
+
+                            func reset(timeout: Duration, onFire: @escaping @Sendable () -> Void) {
+                                task?.cancel()
+                                task = Task {
+                                    do {
+                                        try await Task.sleep(for: timeout)
+                                        onFire()
+                                    } catch { /* cancelled — new watchdog will be started */ }
+                                }
+                            }
+
+                            func cancel() { task?.cancel(); task = nil }
                         }
+
+                        let watchdog = WatchdogHolder()
+                        // Stream iterator task
+                        group.addTask {
+                            watchdog.reset(timeout: idleTimeout) {
+                                // surface timeout through continuation
+                                group.cancelAll()
+                            }
+                            var timedOut = false
+                            for try await line in bytes.lines {
+                                // Got activity — reset the watchdog
+                                watchdog.reset(timeout: idleTimeout) {
+                                    timedOut = true
+                                    group.cancelAll()
+                                }
+                                guard line.hasPrefix("data:") else { continue }
+                                let payload = line.dropFirst(5).trimmingCharacters(in: .whitespaces)
+                                if payload == "[DONE]" { break }
+                                guard let data = payload.data(using: .utf8),
+                                      let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+                                else { continue }
+                                if let text = delta(from: obj, kind: provider.kind), !text.isEmpty {
+                                    continuation.yield(text)
+                                }
+                            }
+                            watchdog.cancel()
+                            if timedOut { throw LLMError.streamTimeout }
+                        }
+                        try await group.waitForAll()
                     }
+
                     continuation.finish()
                 } catch {
                     continuation.finish(throwing: error)
@@ -54,8 +102,12 @@ enum LLMClient {
     private static func delta(from obj: [String: Any], kind: ProviderKind) -> String? {
         switch kind {
         case .openai:
-            let choices = obj["choices"] as? [[String: Any]]
-            return (choices?.first?["delta"] as? [String: Any])?["content"] as? String
+            // #20 — also surface reasoning_content deltas emitted by reasoning models (e.g. o1, o3).
+            let deltaObj = (obj["choices"] as? [[String: Any]])?.first?["delta"] as? [String: Any]
+            let content = deltaObj?["content"] as? String ?? ""
+            let reasoning = deltaObj?["reasoning_content"] as? String ?? ""
+            let combined = reasoning + content
+            return combined.isEmpty ? nil : combined
         case .anthropic:
             // event: content_block_delta -> { delta: { type: text_delta, text } }
             if (obj["type"] as? String) == "content_block_delta",

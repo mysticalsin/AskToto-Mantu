@@ -1,4 +1,5 @@
 import Foundation
+import SwiftUI
 import Speech
 import AVFoundation
 
@@ -13,7 +14,13 @@ final class SpeechTranscriber: ObservableObject {
     private let engine = AVAudioEngine()
     private var request: SFSpeechAudioBufferRecognitionRequest?
     private var task: SFSpeechRecognitionTask?
-    private let recognizer = SFSpeechRecognizer(locale: Locale(identifier: "en-US"))
+    /// Locale override — persisted so users can change it in Settings without re-launching.
+    /// Defaults to the device locale at first launch.
+    @AppStorage("speechLocale") private var speechLocaleIdentifier: String = Locale.current.identifier
+
+    private var recognizer: SFSpeechRecognizer? {
+        SFSpeechRecognizer(locale: Locale(identifier: speechLocaleIdentifier))
+    }
 
     func toggle() { isRecording ? stop() : start() }
 
@@ -36,7 +43,7 @@ final class SpeechTranscriber: ObservableObject {
         guard let recognizer, recognizer.isAvailable else { error = "Speech recognition unavailable."; return }
         do {
             let session = AVAudioSession.sharedInstance()
-            try session.setCategory(.record, mode: .measurement, options: .duckOthers)
+            try session.setCategory(.playAndRecord, mode: .measurement, options: [.mixWithOthers, .defaultToSpeaker, .allowBluetooth])
             try session.setActive(true, options: .notifyOthersOnDeactivation)
 
             let req = SFSpeechAudioBufferRecognitionRequest()

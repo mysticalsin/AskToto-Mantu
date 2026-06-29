@@ -202,7 +202,10 @@ export const BaseSettingsSchema = z.object({
   // Per-provider THINKING-tier model override (parallel to providerModels). For Dust this is the
   // thinking agent sId. Empty → fall back to the provider's built-in think model. See shared/routing.ts.
   providerModelsThinking: z.record(z.string(), z.string()).default({}),
-  // Routing policy: 'auto' = Haiku for simple, Sonnet for hard/coding; 'always' = always think; 'never' = always base.
+  // Per-provider DEEP-tier model override (parallel to the others). For Dust this is the deep agent sId.
+  // Empty → fall back to the provider's built-in deep model (e.g. Opus), then the think model.
+  providerModelsDeep: z.record(z.string(), z.string()).default({}),
+  // Routing policy: 'auto' = Haiku basic / Sonnet heavier / Opus coding+deep; 'always' = always Opus; 'never' = always Haiku.
   thinkingMode: z.enum(['auto', 'always', 'never']).default('auto'),
   // Dust provider config (workspace id + region base; the agent sId lives in providerModels.dust)
   dustWorkspaceId: z.string().default(''),
@@ -249,6 +252,9 @@ export const BaseSettingsSchema = z.object({
   profile: ProfileSchema.default({}),
   shortcuts: z.record(z.string(), z.string().min(1)).default({}),
   autoSuggest: z.boolean().default(true),
+  // Cluely "Uses Screen": when on (and the active provider is vision-capable), a hero ask captures the
+  // screen and answers about it. Default on. Gated by the derived `visionReady` flag in PublicSettings.
+  screenAsk: z.boolean().default(true),
   showLiveTranscript: z.boolean().default(false),
   meetingsFolder: z.string().default(''),
   autoSaveTranscripts: z.boolean().default(false),
@@ -286,6 +292,9 @@ export const PublicSettingsSchema = BaseSettingsSchema.extend({
   /** Active provider is actually usable (key present AND any provider-specific setup done) — drives the
    *  "add your key" CTA so it only shows when the app genuinely can't answer yet. */
   providerReady: z.boolean(),
+  /** Active provider is usable AND vision-capable — gates screen-ask so screenshots never route to a
+   *  non-vision model. Derived in publicSettings() from providerReady && PROVIDERS[provider].vision. */
+  visionReady: z.boolean(),
   hasKeys: z.record(z.string(), z.boolean()),
   hasEncryption: z.boolean(),
   resolvedMeetingsFolder: z.string(),
@@ -315,6 +324,7 @@ export const DEFAULT_SETTINGS: Settings = {
   provider: 'anthropic',
   providerModels: {},
   providerModelsThinking: {},
+  providerModelsDeep: {},
   thinkingMode: 'auto',
   customBaseUrl: '',
   dustWorkspaceId: '',
@@ -342,6 +352,7 @@ export const DEFAULT_SETTINGS: Settings = {
   profile: { name: '', role: '', company: '', resume: '', jobDescription: '', notes: '' },
   shortcuts: {}, // empty → built-in DEFAULT_SHORTCUTS apply (merged at hotkey registration)
   autoSuggest: true,
+  screenAsk: true,
   showLiveTranscript: false,
   meetingsFolder: '',
   autoSaveTranscripts: false,
