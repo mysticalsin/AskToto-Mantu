@@ -4,8 +4,11 @@
  * the opt-in "fastest, European" alternative to the default Whisper engine; if anything here is missing or
  * fails, the renderer silently falls back to Whisper, so this can never break live transcription.
  *
- * The model (~487 MB int8) is NOT bundled — it downloads once to userData on first use (mirrors the Whisper
- * model-download model) and is then fully offline.
+ * The model (~487 MB int8) ships BUNDLED in the app's resources (resources/asr, populated by
+ * `npm run fetch-models` before packaging) and loads straight from disk with zero network use — see
+ * modelDir() below, which always prefers the bundled copy. Only if that copy is absent (e.g. a dev build
+ * that skipped fetch-models) does it fall back to a one-time download to userData, after which it is
+ * fully offline. A correctly packaged build never downloads at use-time.
  */
 import { app } from 'electron'
 import { createWriteStream, existsSync, mkdirSync, rmSync } from 'node:fs'
