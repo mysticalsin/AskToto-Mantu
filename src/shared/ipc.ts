@@ -75,6 +75,7 @@ export const IPC = {
   windowHide: 'window:hide',
   windowToggle: 'window:toggle',
   windowQuit: 'window:quit',
+  windowMinimize: 'window:minimize',
   hotkey: 'hotkey',
   meetingDetected: 'meeting:detected',
   permissionsGet: 'permissions:get',
@@ -395,6 +396,7 @@ export type HotkeyAction =
   | 'scroll-up'
   | 'scroll-down'
   | 'settings'
+  | 'agenda'
 
 export const DEFAULT_SHORTCUTS: Record<HotkeyAction, string> = {
   ask: 'CommandOrControl+Shift+Return',
@@ -405,7 +407,10 @@ export const DEFAULT_SHORTCUTS: Record<HotkeyAction, string> = {
   factcheck: 'CommandOrControl+Shift+F',
   'scroll-up': 'CommandOrControl+Alt+Up',
   'scroll-down': 'CommandOrControl+Alt+Down',
-  settings: '' // no global shortcut by default; opened from bar or tray
+  settings: '', // no global shortcut by default; opened from bar or tray
+  // Agenda is reached from the tray only (the Cluely bar redesign dropped its toolbar button). Kept out
+  // of HOTKEY_ACTIONS so it gets no global key / no Settings row, but typed so the tray can trigger it.
+  agenda: ''
 }
 
 export type PermissionStatus = 'granted' | 'denied' | 'unknown' | 'not-required'

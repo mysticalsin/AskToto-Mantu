@@ -52,6 +52,7 @@ export type AuditEvent =
   | 'provider.failed'
   | 'provider.blocked'
   | 'settings.changed'
+  | 'graph.purged'
   | 'calendar.read'
   | 'app.crash'
   | 'meeting.detect.degraded'

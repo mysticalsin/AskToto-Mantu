@@ -25,6 +25,7 @@
   --font-body: 'InterVar', -apple-system, system-ui, sans-serif;
   /* Mantu brand purple (Bright Purple #7F00DA / Primary Purple #6600AE). No yellow. */
   --color-accent: #7f00da;
+  --color-accent-2: #a64dff; /* brighter purple — active toolbar icons, input cursor, chevron */
   --color-accent-soft: rgba(127, 0, 218, 0.18);
   --color-accent-glow: rgba(127, 0, 218, 0.30);
   /* Bright text — pops on the more-transparent glass (Tony: "text can be very bright"). */
@@ -439,6 +440,68 @@ input::placeholder {
   animation: cl-rainbow-spin 2.6s linear infinite;
   pointer-events: none;
   z-index: 2;
+}
+
+/* ── Ask widget — Cluely-style two-row overlay, Mantu purple glass ──────────────────────────
+   The hero input + ↵ on top, a slim toolbar below; answers expand inside it above the input. */
+:root {
+  /* Opaque enough that an answer/recap stays legible over ANY desktop behind the translucent window
+     (a busy doc bleeding through made the text unreadable). Still glassy via the backdrop blur. */
+  --aw-glass-top: rgba(22, 9, 44, 0.985);
+  --aw-glass-bot: rgba(16, 6, 36, 0.99);
+  --aw-btnfill: rgba(127, 0, 218, 0.45);
+  --aw-btnfill-hover: rgba(127, 0, 218, 0.62);
+}
+.aw-widget {
+  position: relative;
+  border-radius: 20px;
+  overflow: hidden;
+  background: var(--aw-glass-top);
+  backdrop-filter: blur(30px) saturate(155%);
+  -webkit-backdrop-filter: blur(30px) saturate(155%);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  box-shadow:
+    0 30px 70px -20px rgba(0, 0, 0, 0.74),
+    0 0 0 1px rgba(127, 0, 218, 0.09),
+    0 0 50px -14px var(--color-accent-glow),
+    inset 0 1px 0 rgba(255, 255, 255, 0.045);
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
+}
+.aw-toolbar {
+  background: var(--aw-glass-bot);
+}
+/* ↵ submit + the mini-pill mic/buttons share the purple fill */
+.aw-fill {
+  background: var(--aw-btnfill);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+.aw-fill:hover {
+  background: var(--aw-btnfill-hover);
+}
+/* the Mantu mark gets a soft brand glow ring */
+.aw-mark-glow {
+  box-shadow:
+    0 0 0 1px rgba(255, 255, 255, 0.16),
+    0 4px 14px -4px var(--color-accent-glow);
+}
+/* hover menu off the mark + the mode popover */
+.aw-menu {
+  background: var(--aw-glass-bot);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  box-shadow: 0 12px 26px -10px rgba(0, 0, 0, 0.6);
+}
+/* floating control mini-pill (collapsed state) */
+.aw-pill {
+  border-radius: 999px;
+  background: var(--aw-glass-bot);
+  backdrop-filter: blur(20px) saturate(150%);
+  -webkit-backdrop-filter: blur(20px) saturate(150%);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  box-shadow:
+    0 12px 28px -10px rgba(0, 0, 0, 0.6),
+    0 0 40px -16px var(--color-accent-glow);
 }
 
 /* markdown surface inside the answer panel */

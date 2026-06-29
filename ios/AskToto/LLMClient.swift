@@ -14,6 +14,15 @@ enum LLMError: LocalizedError {
     }
 }
 
+/// Records the time of the last stream activity so an idle watchdog can detect silence without ever
+/// touching the task group. An actor gives safe cross-task access (the producer bumps it, the watchdog
+/// reads it) with no locks and no `inout`/non-Sendable captures.
+private actor StreamIdleClock {
+    private var last = ContinuousClock.now
+    func bump() { last = ContinuousClock.now }
+    func idle() -> Duration { ContinuousClock.now - last }
+}
+
 /// Streams an answer as an AsyncThrowingStream<String> of text deltas. Handles both wire protocols.
 enum LLMClient {
     /// Idle timeout: cancel the stream if no token arrives within this interval.
@@ -36,44 +45,19 @@ enum LLMClient {
                         throw LLMError.http(http.statusCode, String(body.prefix(300)))
                     }
 
-                    // #19 — per-stream idle watchdog: races the line iterator against a timeout
-                    // that resets on every received chunk.  A hanging connection will lose the race
-                    // after `idleTimeout` of silence and surface LLMError.streamTimeout.
-                    try await withThrowingTaskGroup(of: Void.self) { group in
-                        // Watchdog: a child Task sleeps for `idleTimeout`; the iterator cancels &
-                        // replaces it on each received chunk.  If the sleep completes without being
-                        // cancelled it means no token arrived in time → throw streamTimeout.
-                        // WatchdogHolder is @unchecked Sendable: mutation is always on one Task.
-                        final class WatchdogHolder: @unchecked Sendable {
-                            var task: Task<Void, Never>?
-
-                            func reset(timeout: Duration, onFire: @escaping @Sendable () -> Void) {
-                                task?.cancel()
-                                task = Task {
-                                    do {
-                                        try await Task.sleep(for: timeout)
-                                        onFire()
-                                    } catch { /* cancelled — new watchdog will be started */ }
-                                }
-                            }
-
-                            func cancel() { task?.cancel(); task = nil }
-                        }
-
-                        let watchdog = WatchdogHolder()
-                        // Stream iterator task
+                    // #19 — per-stream idle watchdog. Two structured children race: the producer
+                    // streams tokens and bumps an activity clock; the watchdog wakes periodically and
+                    // fires once the clock has been idle for `idleTimeout`. Whichever finishes first
+                    // decides the outcome, so BOTH a first-token stall and a mid-stream hang surface as
+                    // LLMError.streamTimeout. Cancellation is driven from the OUTER scope via
+                    // group.cancelAll(); neither child captures `group` — that would not compile, since
+                    // `group` is a non-escapable `inout` and the child closures are @escaping @Sendable.
+                    let clock = StreamIdleClock()
+                    try await withThrowingTaskGroup(of: Bool.self) { group in
+                        // Producer — streams deltas, bumps the clock. Returns false (it never "times out").
                         group.addTask {
-                            watchdog.reset(timeout: idleTimeout) {
-                                // surface timeout through continuation
-                                group.cancelAll()
-                            }
-                            var timedOut = false
                             for try await line in bytes.lines {
-                                // Got activity — reset the watchdog
-                                watchdog.reset(timeout: idleTimeout) {
-                                    timedOut = true
-                                    group.cancelAll()
-                                }
+                                await clock.bump()
                                 guard line.hasPrefix("data:") else { continue }
                                 let payload = line.dropFirst(5).trimmingCharacters(in: .whitespaces)
                                 if payload == "[DONE]" { break }
@@ -84,10 +68,22 @@ enum LLMClient {
                                     continuation.yield(text)
                                 }
                             }
-                            watchdog.cancel()
-                            if timedOut { throw LLMError.streamTimeout }
+                            return false
                         }
-                        try await group.waitForAll()
+                        // Watchdog — wakes every 2s and fires (returns true) once the stream has been
+                        // idle for `idleTimeout`. Exits quietly (false) when cancelled by the producer.
+                        group.addTask {
+                            while true {
+                                try? await Task.sleep(for: .seconds(2))
+                                if Task.isCancelled { return false }
+                                if await clock.idle() >= idleTimeout { return true }
+                            }
+                        }
+                        // First child to finish decides it; cancel the loser. Producer-done → false → no
+                        // throw; watchdog-fired → true → streamTimeout.
+                        let timedOut = try await group.next() ?? false
+                        group.cancelAll()
+                        if timedOut { throw LLMError.streamTimeout }
                     }
 
                     continuation.finish()
@@ -102,12 +98,12 @@ enum LLMClient {
     private static func delta(from obj: [String: Any], kind: ProviderKind) -> String? {
         switch kind {
         case .openai:
-            // #20 — also surface reasoning_content deltas emitted by reasoning models (e.g. o1, o3).
+            // #20 — yield only the final answer `content`. reasoning_content (o1/o3, deepseek-reasoner,
+            // NIM r1) is the model's chain-of-thought; appending it would leak CoT into the displayed/
+            // saved answer, so it is intentionally dropped — the user-facing answer arrives in `content`.
             let deltaObj = (obj["choices"] as? [[String: Any]])?.first?["delta"] as? [String: Any]
             let content = deltaObj?["content"] as? String ?? ""
-            let reasoning = deltaObj?["reasoning_content"] as? String ?? ""
-            let combined = reasoning + content
-            return combined.isEmpty ? nil : combined
+            return content.isEmpty ? nil : content
         case .anthropic:
             // event: content_block_delta -> { delta: { type: text_delta, text } }
             if (obj["type"] as? String) == "content_block_delta",

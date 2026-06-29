@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState, lazy, Suspense } from 'react'
 import { Bar } from './components/Bar'
+import { ControlPill } from './components/ControlPill'
 import { Panel } from './components/Panel'
 import { Answer } from './components/Answer'
 import { Copilot } from './components/Copilot'
@@ -10,7 +11,6 @@ const Review = lazy(() => import('./components/Review').then((m) => ({ default: 
 const RecallView = lazy(() => import('./components/RecallView').then((m) => ({ default: m.RecallView })))
 const AgendaView = lazy(() => import('./components/AgendaView').then((m) => ({ default: m.AgendaView })))
 import { SignInWall } from './components/SignInWall'
-import { ModeIndicator } from './components/ModePicker'
 import { MeetingDetectedToast } from './components/MeetingDetectedToast'
 import { RecordingConsentReminder } from './components/RecordingConsentReminder'
 import { QuickActions, type QuickKind } from './components/QuickActions'
@@ -19,6 +19,7 @@ import { useListen, playListenChime } from './lib/listen'
 import { playCue, playClick, setSoundsEnabled } from './lib/sound'
 import type { HotkeyAction, TranscriptLine, ConversationMode, ChatTurn } from '@shared/ipc'
 import { PROVIDERS } from '@shared/providers'
+import { ASSIST_PROMPT } from '@shared/prompts'
 
 type View = 'answer' | 'copilot' | 'settings' | 'review' | 'history' | 'agenda'
 
@@ -36,7 +37,8 @@ const withContext = (q: string, transcript: string): string =>
 // suggestion should be glanceable and then get out of the way — 4 seconds, not lingering.
 const SUGGESTION_TTL_MS = 4000
 // Hard ceiling from when a suggestion first appears, so a stuck/never-finishing stream can't linger.
-const SUGGESTION_MAX_MS = 8000
+// Tony: an assist must never stay on screen longer than 7 seconds.
+const SUGGESTION_MAX_MS = 7000
 
 // Dev-only visual seed for screenshots (?demo=answer|copilot|settings|onboarding|review). No-op in prod.
 const DEMO = typeof location !== 'undefined' ? new URLSearchParams(location.search).get('demo') : null
@@ -81,6 +83,7 @@ export function App(): JSX.Element {
   const [input, setInput] = useState('')
   const [view, setView] = useState<View>('answer')
   const [collapsed, setCollapsed] = useState(false)
+  const [minimized, setMinimized] = useState(false) // collapsed to the floating control mini-pill
   const [capturing, setCapturing] = useState(false)
   const [captureError, setCaptureError] = useState<string | null>(null)
   const [seconds, setSeconds] = useState(0)
@@ -272,6 +275,7 @@ export function App(): JSX.Element {
   // auto-answer when the other person asks a question (debounce = suggestEverySec)
   onQuestionRef.current = (_line: TranscriptLine): void => {
     if (!(settings?.autoSuggest ?? true)) return
+    if (!settings?.providerReady) return // no provider → don't auto-fire a request that would just error
     if (suggest.answer?.streaming) return
     const now = Date.now()
     const everyMs = (settings?.suggestEverySec ?? 15) * 1000
@@ -282,8 +286,33 @@ export function App(): JSX.Element {
     suggest.run({ mode: 'suggest', transcript: listen.text() })
   }
 
+  const openSettings = useCallback((): void => {
+    setView('settings')
+    setCollapsed(false)
+  }, [])
+
+  // Single readiness gate for EVERY user-initiated request entry point (not just submit). When the
+  // active provider has no key / no CLI connection, route the user to Settings instead of firing an
+  // LLM request that fails reactively with a red stream error. Returns false → the caller must bail.
+  const requireProvider = useCallback((): boolean => {
+    if (settings?.providerReady) return true
+    openSettings()
+    return false
+  }, [settings?.providerReady, openSettings])
+
+  // Expand the floating control mini-pill back to the full widget. Hotkeys/Escape call this before
+  // acting so a request can never fire into an unmounted Bar (invisible work / wasted spend).
+  const unminimize = useCallback((): void => {
+    setMinimized(false)
+    void window.toto.minimize(false)
+  }, [])
+
   const askScreen = useCallback(
-    async (prompt: string, opts?: { label?: string; kind?: 'answer' | 'factcheck' }): Promise<string | null> => {
+    async (
+      prompt: string,
+      opts?: { label?: string; kind?: 'answer' | 'factcheck'; history?: ChatTurn[]; record?: string }
+    ): Promise<string | null> => {
+      if (!requireProvider()) return null
       if (capturing) return null
       setView('answer')
       setCollapsed(false)
@@ -292,7 +321,17 @@ export function App(): JSX.Element {
       try {
         const shot = await window.toto.capture()
         // Return the run id so callers can track it (Retry/Go-deeper replay the same screenshot via lastReqRef).
-        return ask.run({ mode: 'vision', image: shot.image, prompt, label: opts?.label, kind: opts?.kind })
+        const id = ask.run({
+          mode: 'vision',
+          image: shot.image,
+          prompt,
+          label: opts?.label,
+          kind: opts?.kind,
+          history: opts?.history
+        })
+        // record the turn into multi-turn memory when asked (typed screen-asks get follow-up continuity)
+        if (id && opts?.record) pendingUserRef.current = { id, q: opts.record }
+        return id
       } catch (e) {
         setCaptureError(e instanceof Error ? e.message : String(e))
         return null
@@ -300,17 +339,54 @@ export function App(): JSX.Element {
         setCapturing(false)
       }
     },
-    [ask, capturing]
+    [ask, capturing, requireProvider]
   )
 
+  const assist = useCallback(async (): Promise<void> => {
+    if (!requireProvider()) return
+    const tx = listen.text()
+    setView('copilot')
+    setCollapsed(false)
+    const basePrompt =
+      ASSIST_PROMPT +
+      '\n\nLive transcript (THEM = the other person, YOU = me):\n"""\n' +
+      tx.slice(-4000) +
+      '\n"""' +
+      GUARD_LINE
+    if (settings?.visionReady && (settings?.screenAsk ?? true)) {
+      try {
+        const shot = await window.toto.capture()
+        suggest.run({
+          mode: 'vision',
+          prompt: basePrompt,
+          image: shot.image,
+          label: 'Viewed screen',
+          history: copilotHistoryRef.current
+        })
+        return
+      } catch {
+        // fall through to text-only path
+      }
+    }
+    suggest.run({
+      mode: 'answer',
+      prompt: basePrompt,
+      label: 'Assist',
+      history: copilotHistoryRef.current
+    })
+  }, [suggest, listen, settings?.visionReady, settings?.screenAsk, requireProvider])
+
   const submit = useCallback(() => {
-    if (!settings?.providerReady) return
+    if (!requireProvider()) return
     const q = input.trim()
     setCaptureError(null)
     // Screen-aware router (Cluely "Uses Screen"): in a call → copilot; else screen-ask when enabled +
     // vision-capable (empty input is meaningful — it asks about the screen); else a plain text ask.
     if (listen.listening) {
-      if (!q) return
+      if (!q) {
+        void assist()
+        return
+      }
       setView('copilot')
       setCollapsed(false)
       suggest.run({
@@ -318,8 +394,11 @@ export function App(): JSX.Element {
         prompt: withContext(q, listen.text()),
         history: copilotHistoryRef.current
       })
-    } else if ((settings.screenAsk ?? true) && settings.visionReady) {
-      void askScreen(q || 'Help me with what is on my screen.')
+    } else if ((settings?.screenAsk ?? true) && settings?.visionReady) {
+      // Typed screen-ask: carry conversation memory + record the turn so follow-ups keep continuity
+      // (the default path for any vision-capable provider — without this, multi-turn was dead here).
+      const qScreen = q || 'Help me with what is on my screen.'
+      void askScreen(qScreen, { history: historyRef.current, record: qScreen })
     } else {
       if (!q) return
       setView('answer')
@@ -328,9 +407,10 @@ export function App(): JSX.Element {
       pendingUserRef.current = { id, q } // recorded into memory when it completes
     }
     setInput('')
-  }, [input, ask, suggest, listen, settings, askScreen])
+  }, [input, ask, suggest, listen, settings, askScreen, assist, requireProvider])
 
   const factCheck = useCallback(() => {
+    if (!requireProvider()) return
     const claim = input.trim()
     setCaptureError(null)
     setView('answer')
@@ -355,15 +435,17 @@ export function App(): JSX.Element {
     } else {
       void askScreen(FACT_SCREEN, { kind: 'factcheck', label: 'Claims on your screen' })
     }
-  }, [input, listen, ask, askScreen])
+  }, [input, listen, ask, askScreen, requireProvider])
 
   const answerNow = useCallback(() => {
+    if (!requireProvider()) return
     setView('copilot')
     setCollapsed(false)
     suggest.run({ mode: 'suggest', transcript: listen.text() })
-  }, [suggest, listen])
+  }, [suggest, listen, requireProvider])
 
   const whatNext = useCallback(() => {
+    if (!requireProvider()) return
     setView('copilot')
     setCollapsed(false)
     suggest.run({
@@ -374,11 +456,13 @@ export function App(): JSX.Element {
         '\n"""' +
         GUARD_LINE
     })
-  }, [suggest, listen])
+  }, [suggest, listen, requireProvider])
 
   const capture = useCallback(async () => {
     const q = input.trim()
-    const ok = await askScreen(q || 'Help me with what is on my screen.')
+    // Screen-ask from the Capture button carries memory + records the turn, same as a typed screen-ask.
+    const qScreen = q || 'Help me with what is on my screen.'
+    const ok = await askScreen(qScreen, { history: historyRef.current, record: qScreen })
     if (ok) setInput('')
   }, [askScreen, input])
 
@@ -471,6 +555,10 @@ export function App(): JSX.Element {
 
   const handlersRef = useRef<(a: HotkeyAction) => void>(() => {})
   handlersRef.current = (a: HotkeyAction): void => {
+    // From the minimized control-pill the Bar is unmounted, so any action that needs the widget (ask /
+    // capture / factcheck / settings / toggle-listen) must expand first — otherwise capture/factcheck
+    // would fire an LLM request into nothing (invisible work + wasted spend). 'hide' stays as-is.
+    if (a !== 'hide' && minimized) unminimize()
     if (a === 'ask') {
       setView(listen.listening ? 'copilot' : 'answer')
       setCollapsed(false)
@@ -482,6 +570,10 @@ export function App(): JSX.Element {
     else if (a === 'factcheck') factCheck()
     else if (a === 'settings') {
       setView((v) => (v === 'settings' ? 'answer' : 'settings'))
+      setCollapsed(false)
+    } else if (a === 'agenda') {
+      // Re-homed from the dropped Bar button to the tray → open the agenda panel.
+      setView('agenda')
       setCollapsed(false)
     }
   }
@@ -497,11 +589,21 @@ export function App(): JSX.Element {
       el.blur()
       return
     }
+    // From the minimized pill, Escape expands back to the full widget (the natural "back out" step).
+    if (minimized) {
+      unminimize()
+      return
+    }
     if (ask.answer?.streaming || suggest.answer?.streaming) {
       onStop()
     } else if (meetingPrompt.open) {
       setMeetingPrompt({ open: false })
     } else if (view !== 'answer') {
+      // Leaving the post-meeting Review must not drag the recap into the idle widget answer slot.
+      if (view === 'review') {
+        ask.clear()
+        suggest.clear()
+      }
       setView('answer')
     } else if (!collapsed) {
       setCollapsed(true)
@@ -556,6 +658,7 @@ export function App(): JSX.Element {
   // expected") on first run / when signed out. Keep it here, above all conditional returns.
   const onQuickAction = useCallback(
     (kind: QuickKind) => {
+      if (!requireProvider()) return
       if (kind === 'factcheck') factCheck()
       else if (kind === 'whatnext') whatNext()
       else if (kind === 'explain') {
@@ -574,7 +677,7 @@ export function App(): JSX.Element {
         void askScreen('Summarize what is on my screen.')
       }
     },
-    [factCheck, whatNext, listen.listening, listen, suggest, ask, askScreen]
+    [factCheck, whatNext, listen.listening, listen, suggest, ask, askScreen, requireProvider]
   )
 
   // Until settings AND auth resolve, render only a slim loading strip — never an interactive surface.
@@ -641,10 +744,9 @@ export function App(): JSX.Element {
         loadingPct={listen.loadingPct}
         error={listen.error}
         showTranscript={settings?.showLiveTranscript ?? false}
-        onAnswer={answerNow}
+        onAssist={() => void assist()}
         onWhatNext={whatNext}
         onFactCheck={factCheck}
-        onAsk={askFocus}
         onEnd={endReview}
       />
     )
@@ -694,17 +796,20 @@ export function App(): JSX.Element {
         loadingPct={null}
         error={null}
         showTranscript={false}
-        onAnswer={() => {}}
+        onAssist={() => {}}
         onWhatNext={() => {}}
         onFactCheck={() => {}}
-        onAsk={() => {}}
         onEnd={() => {}}
       />
     )
   else if (DEMO === 'history') body = <RecallView onOpenFolder={() => {}} />
 
-  const showModeHeader = view === 'copilot' || DEMO === 'copilot'
   const panelOpen = (body != null && !collapsed) || DEMO != null
+  // Answer / live-copilot bodies expand INSIDE the widget (above the input). Full views
+  // (settings / history / agenda / review) render as a panel BELOW the widget, as before.
+  const isWidgetBody =
+    body != null && (view === 'copilot' || view === 'answer' || DEMO === 'answer' || DEMO === 'copilot')
+  const isPanelBody = body != null && !isWidgetBody
 
   return (
     <div ref={setRoot} className={['relative flex w-full flex-col gap-2 p-1.5', listen.listening ? 'listening' : ''].join(' ')}>
@@ -723,85 +828,94 @@ export function App(): JSX.Element {
         requireIndicator={settings?.requireConsentIndicator ?? false}
         onAck={() => void patch({ lastConsentReminderAt: Date.now() })}
       />
-      <Bar
-        value={input}
-        onChange={setInput}
-        onSubmit={submit}
-        onStop={onStop}
-        busy={(ask.answer?.streaming || suggest.answer?.streaming) ?? false}
-        listening={listen.listening}
-        listenLoading={listen.loading}
-        onToggleListen={toggleListen}
-        thinking={settings?.thinkingMode === 'always'}
-        onToggleThink={() =>
-          // ON (always) → auto; auto/never → always. From 'never' it re-enables routing rather than
-          // silently jumping straight to always, keeping the bar consistent with the Settings tri-state.
-          void patch({ thinkingMode: settings?.thinkingMode === 'always' ? 'auto' : 'always' })
-        }
-        onCapture={capture}
-        capturing={capturing}
-        onHistory={() => {
-          setView((v) => (v === 'history' ? 'answer' : 'history'))
-          setCollapsed(false)
-        }}
-        onAgenda={() => {
-          setView((v) => (v === 'agenda' ? 'answer' : 'agenda'))
-          setCollapsed(false)
-        }}
-        onSettings={() => {
-          setView((v) => (v === 'settings' ? 'answer' : 'settings'))
-          setCollapsed(false)
-        }}
-        onHide={() => void window.toto.hide()}
-        onClose={() => void window.toto.quit()}
-        stealth={settings?.contentProtection ?? true}
-        onToggleStealth={() => void patch({ contentProtection: !(settings?.contentProtection ?? true) })}
-        seconds={seconds}
-        panelOpen={panelOpen}
-        onTogglePanel={() => setCollapsed((c) => !c)}
-        focusSignal={focusSignal}
-      />
-      {settings && !settings.providerReady && (() => {
-        const activeDef = PROVIDERS[settings.provider]
-        const cta = activeDef.kind === 'cli'
-          ? `Connect ${activeDef.label} in Settings`
-          : `Add your ${activeDef.label} API key`
-        return (
-          <button
-            type="button"
-            onClick={() => {
-              setView('settings')
+      {minimized ? (
+        <div className="flex w-full justify-center">
+          <ControlPill
+            listening={listen.listening}
+            onToggleListen={toggleListen}
+            onExpand={() => {
+              setMinimized(false)
+              void window.toto.minimize(false) // widen the window back to the full widget
+            }}
+            // Fully hide the window (a global hotkey restores it); reset so it reopens as the full widget.
+            onHide={() => {
+              setMinimized(false)
+              void window.toto.minimize(false)
+              void window.toto.hide()
+            }}
+          />
+        </div>
+      ) : (
+        <>
+          <Bar
+            value={input}
+            onChange={setInput}
+            onSubmit={submit}
+            onStop={onStop}
+            busy={(ask.answer?.streaming || suggest.answer?.streaming) ?? false}
+            listening={listen.listening}
+            onToggleListen={toggleListen}
+            onCapture={capture}
+            capturing={capturing}
+            mode={mode}
+            onSetMode={(m) => void patch({ mode: m })}
+            answer={isWidgetBody && !collapsed ? body : undefined}
+            onHistory={() => {
+              setView((v) => (v === 'history' ? 'answer' : 'history'))
               setCollapsed(false)
             }}
-            className="no-drag focus-ring fade-up flex items-center justify-center gap-1.5 rounded-xl border border-[var(--color-accent)]/30 bg-[var(--color-accent)] px-3 py-1.5 text-[11px] font-medium text-white hover:brightness-110"
-          >
-            {cta}
-          </button>
-        )
-      })()}
-      {/* Quick actions only on the answer/idle surface — not over Settings/History/Review, and not during
-          Listen (Copilot shows its own in-meeting action row there). */}
-      {view === 'answer' && !listen.listening && (
-        <QuickActions onAction={onQuickAction} hint="Screen or typed input" />
+            onSettings={() => {
+              setView((v) => (v === 'settings' ? 'answer' : 'settings'))
+              setCollapsed(false)
+            }}
+            onMinimize={() => {
+              setMinimized(true)
+              void window.toto.minimize(true) // collapse to the control mini-pill
+            }}
+            stealth={settings?.contentProtection ?? true}
+            onToggleStealth={() => void patch({ contentProtection: !(settings?.contentProtection ?? true) })}
+            seconds={seconds}
+            panelOpen={panelOpen}
+            onTogglePanel={() => setCollapsed((c) => !c)}
+            focusSignal={focusSignal}
+          />
+          {settings && !settings.providerReady && (() => {
+            const activeDef = PROVIDERS[settings.provider]
+            const cta = activeDef.kind === 'cli'
+              ? `Connect ${activeDef.label} in Settings`
+              : `Add your ${activeDef.label} API key`
+            return (
+              <button
+                type="button"
+                onClick={() => {
+                  setView('settings')
+                  setCollapsed(false)
+                }}
+                className="no-drag focus-ring fade-up flex items-center justify-center gap-1.5 rounded-xl border border-[var(--color-accent)]/30 bg-[var(--color-accent)] px-3 py-1.5 text-[11px] font-medium text-white hover:brightness-110"
+              >
+                {cta}
+              </button>
+            )
+          })()}
+          {/* Quick actions only on the idle answer surface — not over a shown answer/panel, not during Listen. */}
+          {view === 'answer' && body == null && !listen.listening && (
+            <QuickActions onAction={onQuickAction} hint="Screen or typed input" />
+          )}
+          {isPanelBody && panelOpen &&
+            (view === 'settings' || DEMO === 'settings' ? (
+              // Settings is its own self-contained panel — render directly under the bar (bar stays on top).
+              <Suspense fallback={<div className="cl-root rounded-2xl p-6 text-center text-[12px] text-[color:var(--cl-muted-foreground)]">Loading…</div>}>
+                {body}
+              </Suspense>
+            ) : (
+              <Panel>
+                <Suspense fallback={<div className="p-4 text-center text-[12px] text-[color:var(--color-ink-3)]">Loading…</div>}>
+                  {body}
+                </Suspense>
+              </Panel>
+            ))}
+        </>
       )}
-      {panelOpen &&
-        (view === 'settings' || DEMO === 'settings' ? (
-          // Settings is its own self-contained panel — render directly under the bar (bar stays on top).
-          <Suspense fallback={<div className="cl-root rounded-2xl p-6 text-center text-[12px] text-[color:var(--cl-muted-foreground)]">Loading…</div>}>
-            {body}
-          </Suspense>
-        ) : (
-          <Panel>
-            {showModeHeader && (
-              <div className="mb-2.5">
-                <ModeIndicator mode={DEMO === 'copilot' ? 'interview' : mode} />
-              </div>
-            )}
-            <Suspense fallback={<div className="p-4 text-center text-[12px] text-[color:var(--color-ink-3)]">Loading…</div>}>
-              {body}
-            </Suspense>
-          </Panel>
-        ))}
     </div>
   )
 }

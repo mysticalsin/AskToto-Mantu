@@ -45,8 +45,12 @@ struct OnboardingView: View {
                 }
                 .disabled(!recordingConsent)
                 .padding(.horizontal)
+                // Consent gates BOTH paths out of onboarding — "Skip" reaches the recording UI just
+                // like "Get started", so it must require the same recording-consent acknowledgement.
                 Button("Skip — add a key later") { app.onboardingDone = true }
                     .font(.caption).foregroundStyle(Mantu.ink3)
+                    .opacity(recordingConsent ? 1 : 0.35)
+                    .disabled(!recordingConsent)
                 Spacer()
                 Label("Built by Tony Walteur · Mantu", systemImage: "heart.fill")
                     .font(.caption2).foregroundStyle(Mantu.ink3)

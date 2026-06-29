@@ -109,6 +109,7 @@ const api = {
     ipcRenderer.invoke(IPC.windowMode, mode),
   windowMoveBy: (dx: number, dy: number): Promise<void> =>
     ipcRenderer.invoke(IPC.windowMoveBy, { dx, dy }),
+  minimize: (narrow: boolean): Promise<void> => ipcRenderer.invoke(IPC.windowMinimize, narrow),
   hide: (): Promise<void> => ipcRenderer.invoke(IPC.windowHide),
   toggle: (): Promise<void> => ipcRenderer.invoke(IPC.windowToggle),
   quit: (): Promise<void> => ipcRenderer.invoke(IPC.windowQuit),

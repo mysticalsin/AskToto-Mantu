@@ -58,8 +58,8 @@ import { usePermissions } from '../state'
 const ctl =
   'no-drag font-body cl-input cl-focus px-3 py-2.5 text-[13px] text-[color:var(--cl-foreground)]'
 
-// Providers that have dedicated CLI/key cards in CliIntegration — excluded from the generic provider
-// tiles grid and the generic "key" Section. Must be kept in sync with the CliIntegration render logic.
+// Providers excluded from the generic provider tiles grid + generic "key" Section. dust/claude-cli/
+// codex-cli have dedicated cards in CliIntegration; gemini is intentionally hidden from the UI entirely.
 const CLI_PROVIDERS = new Set<ProviderId>(['dust', 'claude-cli', 'codex-cli', 'gemini'])
 
 /**
@@ -416,7 +416,7 @@ function AiSection({
 
   const hint = detectHint(key, provider)
   const q = filter.trim().toLowerCase()
-  // Dust, CLI providers, and Gemini have dedicated UI sections — exclude from the generic tiles grid.
+  // Dust + CLI providers have dedicated UI sections; gemini is hidden — exclude all from the tiles grid.
   const shown = PROVIDER_IDS.filter(
     (id) => !CLI_PROVIDERS.has(id) && (!q || PROVIDERS[id].label.toLowerCase().includes(q))
   )
@@ -425,11 +425,10 @@ function AiSection({
 
   return (
     <div className="flex flex-col gap-5">
-      {/* CLI Integration — Claude Code CLI, Codex CLI, Gemini, and Dust shortcut card */}
+      {/* CLI Integration — Claude Code CLI, Codex CLI, and the Dust shortcut card */}
       <CliIntegration
         settings={settings}
         patch={patch}
-        saveKey={saveKey}
         dustSectionRef={dustSectionRef}
       />
 
@@ -750,12 +749,10 @@ type CliCardState = {
 function CliIntegration({
   settings,
   patch,
-  saveKey,
   dustSectionRef
 }: {
   settings: PublicSettings
   patch: (p: Partial<PublicSettings>) => void
-  saveKey: (provider: ProviderId, k: string) => Promise<void>
   dustSectionRef?: RefObject<HTMLDivElement>
 }): JSX.Element {
   const provider = settings.provider
@@ -764,11 +761,6 @@ function CliIntegration({
   // Per-CLI card state
   const [claudeState, setClaudeState] = useState<CliCardState>({ phase: 'idle', msg: null, version: null })
   const [codexState, setCodexState] = useState<CliCardState>({ phase: 'idle', msg: null, version: null })
-
-  // Gemini key state
-  const [geminiKey, setGeminiKey] = useState('')
-  const [geminiSaving, setGeminiSaving] = useState(false)
-  const [geminiSaved, setGeminiSaved] = useState(false)
 
   // One-time notice: show when cliNoticeAck is false and any CLI was just connected
   const [noticeDismissed, setNoticeDismissed] = useState(false)
@@ -863,26 +855,6 @@ function CliIntegration({
     if (provider === id) next.provider = pickReadyProvider(id, settings.hasKeys, nextConnected)
     patch(next)
     setState(id, { phase: 'idle', msg: null, version: null })
-  }
-
-  const [geminiError, setGeminiError] = useState<string | null>(null)
-
-  const saveGeminiKey = async (): Promise<void> => {
-    const k = geminiKey.trim()
-    if (!k) return
-    setGeminiSaving(true)
-    setGeminiError(null)
-    try {
-      await saveKey('gemini', k)
-      await patch({ provider: 'gemini' })
-      setGeminiKey('')
-      setGeminiSaved(true)
-      setTimeout(() => setGeminiSaved(false), 1800)
-    } catch (e) {
-      setGeminiError(e instanceof Error ? e.message : 'Could not save the key.')
-    } finally {
-      setGeminiSaving(false)
-    }
   }
 
   const primaryBtn =
@@ -1040,14 +1012,10 @@ function CliIntegration({
     )
   }
 
-  const geminiDef = PROVIDERS['gemini']
-  const geminiActive = provider === 'gemini'
-  const geminiHasKey = !!settings.hasKeys['gemini']
-
   return (
     <Section
       title="CLI Integration"
-      desc="Connect local CLI tools or API-key providers. Each option routes through a different backend."
+      desc="Connect a local CLI tool or your Dust agents. Each option routes through a different backend."
     >
       <div className="flex flex-col gap-3">
 
@@ -1103,71 +1071,6 @@ function CliIntegration({
 
         {/* Codex CLI card */}
         {renderCliCard('codex-cli')}
-
-        {/* Gemini card — API key, not CLI */}
-        <div
-          className={[
-            'flex flex-col gap-2 rounded-[10px] border p-3',
-            geminiActive
-              ? 'border-[var(--cl-primary)] bg-[var(--cl-primary-soft)]/40'
-              : 'border-[var(--cl-border)] bg-white/[0.02]'
-          ].join(' ')}
-        >
-          <div className="flex items-center justify-between gap-2">
-            <div className="flex flex-col gap-0.5">
-              <span className="text-[12px] font-medium text-[color:var(--cl-foreground)]">{geminiDef.label}</span>
-              <span className="text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
-                API key from Google AI Studio. Not a CLI; uses your Gemini API quota.
-              </span>
-            </div>
-            {geminiActive && (
-              <span className={activePill}>
-                <CircleCheck size={12} /> Active
-              </span>
-            )}
-          </div>
-          {geminiHasKey ? (
-            <span className="flex items-center gap-1 text-[11px] text-[color:var(--cl-success)]">
-              <CircleCheck size={12} /> Key saved.
-            </span>
-          ) : (
-            <>
-              <div className="flex items-center gap-2">
-                <input
-                  type="password"
-                  value={geminiKey}
-                  onChange={(e) => setGeminiKey(e.target.value)}
-                  onKeyDown={(e) => e.key === 'Enter' && void saveGeminiKey()}
-                  placeholder={geminiDef.keyHint || 'Paste your Google AI Studio key'}
-                  className={'flex-1 ' + ctl}
-                />
-                <button
-                  type="button"
-                  onClick={() => void saveGeminiKey()}
-                  disabled={geminiSaving || !geminiKey.trim()}
-                  className={primaryBtn}
-                >
-                  {geminiSaving ? <Loader2 size={12} className="animate-spin" /> : null}
-                  {geminiSaved ? 'Saved' : 'Save'}
-                </button>
-              </div>
-              {geminiError && (
-                <div className="flex items-start gap-1.5 text-[11px] text-[color:var(--cl-destructive)]">
-                  <AlertCircle size={13} className="mt-px shrink-0" />
-                  <span>{geminiError}</span>
-                </div>
-              )}
-              <a
-                href={geminiDef.keyUrl}
-                target="_blank"
-                rel="noreferrer"
-                className="no-drag inline-flex items-center gap-0.5 text-[11px] text-[color:var(--cl-primary)]"
-              >
-                Get a key at Google AI Studio <ExternalLink size={11} />
-              </a>
-            </>
-          )}
-        </div>
 
       </div>
     </Section>
@@ -1246,19 +1149,27 @@ function DustSetup({
     setDustKey('')
     setKeySaving(false)
   }
-  const removeDustKey = async (): Promise<void> => {
+  // Fully disconnect Dust: clear the saved token/key, drop the workspace + region + BOTH agents (base
+  // and thinking), switch off Dust if it's active, and reset the local CLI/agents UI so the card returns
+  // to its "connect" state. Used by both the CLI card's Disconnect and the manual key's Remove.
+  const disconnectDust = async (): Promise<void> => {
     await clearKey('dust')
-    // Full disconnect: drop the workspace, the selected agent, and switch off Dust if it was active.
     const nextModels = { ...settings.providerModels }
     delete nextModels.dust
+    const nextThinking = { ...settings.providerModelsThinking }
+    delete nextThinking.dust
     const next: Partial<PublicSettings> = {
       dustWorkspaceId: '',
       dustBaseUrl: 'https://dust.tt',
-      providerModels: nextModels
+      providerModels: nextModels,
+      providerModelsThinking: nextThinking
     }
     if (settings.provider === 'dust')
       next.provider = pickReadyProvider('dust', settings.hasKeys, settings.cliConnected ?? {})
     await patch(next)
+    setAgents(null)
+    setErr(null)
+    setCli({ busy: false, msg: null, ok: false })
   }
   const useDust = (): void => void patch({ provider: 'dust' })
 
@@ -1315,15 +1226,42 @@ function DustSetup({
             <span className="text-[12px] font-medium text-[color:var(--cl-foreground)]">
               Connect locally with the Dust CLI
             </span>
-            <button
-              type="button"
-              onClick={connectCli}
-              disabled={cli.busy}
-              className="no-drag cl-focus flex items-center gap-1.5 rounded-[8px] bg-[var(--cl-primary)] px-3 py-1.5 text-[12px] font-medium text-white hover:opacity-90 disabled:opacity-50"
-            >
-              {cli.busy ? <Loader2 size={13} className="animate-spin" /> : <Link2 size={13} />}
-              Connect from Dust CLI
-            </button>
+            {keySaved && hasWs ? (
+              // Already linked → offer Reconnect (re-imports a fresh token, fixing an expired session)
+              // and Disconnect (full reset back to the connect state).
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={connectCli}
+                  disabled={cli.busy}
+                  title="Re-import a fresh session from the Dust CLI"
+                  className="no-drag cl-focus flex items-center gap-1.5 rounded-[8px] bg-[var(--cl-primary)] px-3 py-1.5 text-[12px] font-medium text-white hover:opacity-90 disabled:opacity-50"
+                >
+                  {cli.busy ? <Loader2 size={13} className="animate-spin" /> : <RefreshCw size={13} />}
+                  Reconnect
+                </button>
+                <button
+                  type="button"
+                  onClick={disconnectDust}
+                  disabled={cli.busy}
+                  title="Disconnect Dust from AskToto"
+                  className="no-drag cl-focus flex items-center gap-1.5 rounded-[8px] border border-[var(--cl-destructive)]/30 bg-[var(--cl-destructive)]/10 px-3 py-1.5 text-[12px] font-medium text-[color:var(--cl-destructive)] hover:bg-[var(--cl-destructive)]/20 disabled:opacity-50"
+                >
+                  <X size={13} />
+                  Disconnect
+                </button>
+              </div>
+            ) : (
+              <button
+                type="button"
+                onClick={connectCli}
+                disabled={cli.busy}
+                className="no-drag cl-focus flex items-center gap-1.5 rounded-[8px] bg-[var(--cl-primary)] px-3 py-1.5 text-[12px] font-medium text-white hover:opacity-90 disabled:opacity-50"
+              >
+                {cli.busy ? <Loader2 size={13} className="animate-spin" /> : <Link2 size={13} />}
+                Connect from Dust CLI
+              </button>
+            )}
           </div>
           <span className="text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
             Already ran <code className="rounded bg-white/[0.08] px-1">dust login</code>? This reads your
@@ -1409,7 +1347,7 @@ function DustSetup({
               </span>
               <button
                 type="button"
-                onClick={removeDustKey}
+                onClick={disconnectDust}
                 className="no-drag cl-focus rounded-[8px] border border-[var(--cl-destructive)]/30 bg-[var(--cl-destructive)]/10 px-2.5 py-1 text-[11px] text-[color:var(--cl-destructive)] hover:bg-[var(--cl-destructive)]/20"
               >
                 Remove
@@ -2627,7 +2565,8 @@ const SHORTCUT_LABELS: Record<HotkeyAction, string> = {
   reset: 'New / reset',
   'scroll-up': 'Move up',
   'scroll-down': 'Move down',
-  settings: 'Open settings'
+  settings: 'Open settings',
+  agenda: "Today's agenda" // tray-only action; not listed in HOTKEY_ACTIONS so it renders no shortcut row
 }
 
 function displayAccelerator(a: string): string {

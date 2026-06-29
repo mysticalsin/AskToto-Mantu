@@ -217,10 +217,46 @@ function expiryReason(s: Session, cfg: AzureConfig | null): 'max_age' | 'domain'
 }
 
 /**
- * Post-startup + periodic re-validation. Checks local max-age + config-domain match first, then
- * probes the persisted MSAL refresh token silently (via makePca + acquireTokenSilent). A server-side
- * revocation that leaves the local session file intact is caught by the token probe: if getGraphToken
- * returns null the session is cleared so getAuthStatus() no longer shows "signed in".
+ * Probe the persisted refresh token against the server for the re-validation sweep. Distinguishes a
+ * genuine server-side revocation from a benign/transient failure so we only sign the user out when the
+ * token is ACTUALLY rejected:
+ *  - 'valid'   — the refresh token still works (forceRefresh hits the server)
+ *  - 'revoked' — the server explicitly rejected it (interaction required / invalid_grant) → sign out
+ *  - 'unknown' — inconclusive (offline, transient, no cached account) → KEEP the session
+ *
+ * This is the fix for the silent-sign-out bug: getGraphToken() collapses every failure (offline,
+ * empty cache, network blip) to null, so re-validating off it would log out users who just lost wifi.
+ */
+async function probeRefreshToken(): Promise<'valid' | 'revoked' | 'unknown'> {
+  const cfg = readConfig()
+  if (!cfg) return 'unknown'
+  try {
+    const pca = await makePca(cfg)
+    const accounts = await pca.getTokenCache().getAllAccounts()
+    if (!accounts.length) return 'unknown' // nothing cached to probe — not a revocation
+    loadSession()
+    const want = (session?.email || '').toLowerCase()
+    const account = accounts.find((a) => (a.username || '').toLowerCase() === want) ?? null
+    if (!account) return 'unknown'
+    // forceRefresh: actually exercise the refresh token against the server (vs returning a cached AT).
+    const result = await pca.acquireTokenSilent({ account, scopes: ['User.Read'], forceRefresh: true })
+    return result?.accessToken ? 'valid' : 'unknown'
+  } catch (e) {
+    // Only an explicit server rejection means the token is revoked. Network/transient/client errors
+    // are inconclusive and must NOT sign the user out.
+    const name = (e as { name?: string } | null)?.name ?? ''
+    const code = (e as { errorCode?: string } | null)?.errorCode ?? ''
+    if (name === 'InteractionRequiredAuthError' || /invalid_grant|interaction_required/i.test(`${name} ${code}`)) {
+      return 'revoked'
+    }
+    return 'unknown'
+  }
+}
+
+/**
+ * Post-startup + periodic re-validation. Checks local max-age + config-domain match first, then probes
+ * the persisted MSAL refresh token. Only an EXPLICIT server-side revocation clears the session — an
+ * offline or transient failure leaves the user signed in (see probeRefreshToken).
  */
 async function revalidateSession(): Promise<void> {
   loadSession()
@@ -231,16 +267,9 @@ async function revalidateSession(): Promise<void> {
     auditLog('auth.expired', { reason })
     return
   }
-  // Probe the refresh token against the server. getGraphToken attempts acquireTokenSilent; if the
-  // refresh token has been revoked server-side it returns null, so we treat that as a sign-out.
-  try {
-    const token = await getGraphToken(['User.Read'])
-    if (token === null) {
-      clearSession()
-      auditLog('auth.refresh_failed', {})
-    }
-  } catch {
-    /* best-effort: network unavailable — keep the existing session */
+  if ((await probeRefreshToken()) === 'revoked') {
+    clearSession()
+    auditLog('auth.refresh_failed', {})
   }
 }
 
