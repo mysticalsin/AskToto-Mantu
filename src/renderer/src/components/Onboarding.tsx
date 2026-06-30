@@ -176,12 +176,17 @@ export function Onboarding({
 
       <div className="flex flex-col gap-2">
         <div className="font-ui text-[24px] font-semibold tracking-tight text-[color:var(--color-ink)]">
-          Your invisible meeting assistant.
+          Your on-device AI copilot.
         </div>
         <p className="mx-auto max-w-[480px] text-[13.5px] leading-relaxed text-[color:var(--color-ink-2)]">
-          AskToto floats over everything, hears your calls, and tells you exactly what to say in meetings,
-          interviews, and sales.
+          Transcription runs locally on your Mac — audio never leaves your device. Answers are grounded in
+          your meeting context and cited so you can verify them. Everyone on the call knows it&apos;s there.
         </p>
+      </div>
+
+      <div className="flex items-center gap-1.5 rounded-lg bg-[var(--color-accent-soft)] px-3 py-2 text-[12px] text-[color:var(--color-accent)]">
+        <ShieldCheck size={12} />
+        Audio is processed on your Mac and never uploaded.
       </div>
 
       <label className="no-drag flex max-w-[460px] cursor-pointer items-start gap-2.5 rounded-xl border border-[var(--color-hair-soft)] bg-white/[0.03] p-3 text-left hover:bg-white/[0.06]">
@@ -192,8 +197,7 @@ export function Onboarding({
           className="no-drag mt-0.5 accent-[var(--color-accent)]"
         />
         <span className="text-[12px] leading-snug text-[color:var(--color-ink)]">
-          I will inform other participants before recording. AskToto follows my company&apos;s policy and the
-          law.
+          I&apos;ll tell everyone on the call before I record, and follow my company&apos;s policy and the law.
         </span>
       </label>
 
@@ -227,16 +231,7 @@ export function Onboarding({
       </div>
 
       <div className="text-[10px] text-[color:var(--color-ink-3)]">
-        Built by{' '}
-        <a
-          href="https://www.linkedin.com/in/tonywalteur/"
-          target="_blank"
-          rel="noopener noreferrer"
-          className="underline underline-offset-2 transition-colors hover:text-[color:var(--color-ink-2)]"
-        >
-          Tony Walteur
-        </a>{' '}
-        · Mantu
+        Mantu · AskToto
       </div>
     </div>
   )

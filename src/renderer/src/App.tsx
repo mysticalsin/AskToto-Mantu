@@ -88,6 +88,17 @@ export function App(): JSX.Element {
   const [captureError, setCaptureError] = useState<string | null>(null)
   const [seconds, setSeconds] = useState(0)
   const [focusSignal, setFocusSignal] = useState(0)
+  // A past meeting opened from History → shown read-only in Review (recap + transcript + Resume).
+  const [pastMeeting, setPastMeeting] = useState<{
+    file: string
+    title: string
+    date: string
+    recap: string
+    lines: TranscriptLine[]
+    startedAt: number
+  } | null>(null)
+  // Which Settings tab to open on (e.g. the bar's mode icon → 'personalize', calendar CTA → 'calendar').
+  const [settingsInitialTab, setSettingsInitialTab] = useState<'personalize' | 'calendar' | undefined>(undefined)
 
   const mode: ConversationMode = settings?.mode ?? 'general'
   const lastSuggestRef = useRef(0)
@@ -143,7 +154,8 @@ export function App(): JSX.Element {
   const answerError = ask.answer?.error ?? null
   useEffect(() => {
     if (view !== 'review') return
-    if (!(settings?.autoSaveTranscripts ?? false)) return
+    // Every meeting that produced a recap is saved (Tony: a started meeting is always kept). The
+    // autoSaveTranscripts toggle no longer gates this — abandoned meetings are saved separately on exit.
     if (answerStreaming || !answerText || answerError) return
     if (!listen.lines.length) return
     const id = String(meetingStartRef.current)
@@ -188,7 +200,7 @@ export function App(): JSX.Element {
       const t = setTimeout(() => void doSave(), delay)
       return () => clearTimeout(t)
     }
-  }, [view, answerStreaming, answerText, answerError, listen.lines, settings?.autoSaveTranscripts, mode, saveAttempts])
+  }, [view, answerStreaming, answerText, answerError, listen.lines, mode, saveAttempts])
 
   // record a completed Ask turn into conversation memory (for follow-ups)
   useEffect(() => {
@@ -291,6 +303,7 @@ export function App(): JSX.Element {
   }
 
   const openSettings = useCallback((): void => {
+    setSettingsInitialTab(undefined) // generic open → default tab (programmatic opens set their own first)
     setView('settings')
     setCollapsed(false)
   }, [])
@@ -375,7 +388,6 @@ export function App(): JSX.Element {
     suggest.run({
       mode: 'answer',
       prompt: basePrompt,
-      label: 'Assist',
       history: copilotHistoryRef.current
     })
   }, [suggest, listen, settings?.visionReady, settings?.screenAsk, requireProvider])
@@ -500,6 +512,66 @@ export function App(): JSX.Element {
     else startListen()
   }, [listen.listening, endReview, startListen])
 
+  // Persist a meeting's transcript immediately (used when a session is abandoned without a recap — e.g.
+  // "New meeting" or reset — so a started meeting is never lost). Idempotent per meeting via savedRef.
+  const saveMeetingNow = useCallback(
+    async (
+      lines: TranscriptLine[],
+      started: number,
+      recapText: string,
+      maxAttempts = MAX_SAVE_RETRIES
+    ): Promise<void> => {
+      // Persist a meeting that's being LEFT (New meeting / reset / quit / logout) so a started meeting
+      // is never lost. Self-contained: retries with backoff until it lands, and deliberately does NOT
+      // write the live session's savedRef/savedPath — the meeting being saved is gone, and writing them
+      // here (async, after the next session has already started) would pollute the new session's state
+      // (wrong "Analyzing" highlight, wrong recap path). Idempotent against the recap auto-save — which
+      // DOES pin savedRef — via the read-only guard. maxAttempts=0 on exit paths: a single best-effort
+      // try, so quitting is never blocked on the full retry loop.
+      if (!lines.length || savedRef.current === String(started)) return
+      const title = lines.find((l) => l.speaker === 'them')?.text?.slice(0, 50) || `${mode} meeting`
+      const payload = { title, mode, startedAt: started, lines, recap: recapText }
+      for (let attempt = 0; ; attempt++) {
+        try {
+          await window.toto.saveTranscript(payload)
+          return
+        } catch (e) {
+          if (attempt >= maxAttempts) {
+            setSaveError(e instanceof Error ? e.message : String(e))
+            return
+          }
+          await new Promise((r) => setTimeout(r, Math.min(1000 * 2 ** attempt, 8000)))
+        }
+      }
+    },
+    [mode]
+  )
+
+  // "New meeting" from the bar — save the meeting we're leaving, then start a fresh session right away.
+  const newMeeting = useCallback(() => {
+    void saveMeetingNow(listen.lines, meetingStartRef.current, '')
+    startListen()
+  }, [saveMeetingNow, listen.lines, startListen])
+
+  // Quit / Log out (from Settings) must first persist any in-flight meeting — a single best-effort save
+  // (maxAttempts=0) so app teardown is never blocked on the retry loop. Covers the "every started meeting
+  // is saved" rule for the exit paths the user actually clicks. (Reset / New meeting use the durable path.)
+  const flushLiveMeeting = useCallback(async (): Promise<void> => {
+    if (listen.listening && listen.lines.length) {
+      await saveMeetingNow(listen.lines, meetingStartRef.current, '', 0)
+    }
+  }, [listen.listening, listen.lines, saveMeetingNow])
+
+  const quitApp = useCallback(async (): Promise<void> => {
+    await flushLiveMeeting()
+    await window.toto.quit()
+  }, [flushLiveMeeting])
+
+  const logOut = useCallback(async (): Promise<void> => {
+    await flushLiveMeeting()
+    await window.toto.signOut()
+  }, [flushLiveMeeting])
+
   const askFocus = useCallback(() => {
     setView('copilot')
     setCollapsed(false)
@@ -541,6 +613,7 @@ export function App(): JSX.Element {
     ask.cancel()
     suggest.cancel()
     if (wasListening) {
+      void saveMeetingNow(listen.lines, meetingStartRef.current, '') // don't lose a started meeting on reset
       listen.stop()
       autoStartedRef.current = false // manual reset clears the auto-start flag
       meetingStartRef.current = Date.now()
@@ -553,9 +626,61 @@ export function App(): JSX.Element {
     pendingUserRef.current = null
     setInput('')
     setCaptureError(null)
+    setPastMeeting(null) // a hotkey reset from a past-meeting Review must not poison the next live recap
     setView('answer')
     setCollapsed(false)
-  }, [ask, suggest, listen, listen.listening])
+  }, [ask, suggest, listen, listen.listening, saveMeetingNow])
+
+  // Cluely "← back": dismiss the open answer/suggestion without tearing down a live session.
+  const clearAnswer = useCallback(() => {
+    ask.clear()
+    suggest.clear()
+    if (!listen.listening) setView('answer')
+  }, [ask, suggest, listen.listening])
+
+  // The bar/control-pill "Transcript" affordance toggles the live transcript inside the copilot panel.
+  const toggleTranscript = useCallback(() => {
+    void patch({ showLiveTranscript: !(settings?.showLiveTranscript ?? false) })
+  }, [patch, settings?.showLiveTranscript])
+
+  // The bar's mode (grid) icon — modes aren't switchable on the bar; route to Settings → Personalize.
+  const openModesPersonalize = useCallback(() => {
+    setSettingsInitialTab('personalize')
+    setView('settings')
+    setCollapsed(false)
+  }, [])
+
+  // Open a saved meeting from History as a read-only recap (Cluely recap detail) via the recall:read IPC.
+  const openPastMeeting = useCallback(async (file: string) => {
+    const r = await window.toto.recallRead(file)
+    if (!r.ok) return
+    setPastMeeting({
+      file,
+      title: r.title || 'Meeting',
+      date: r.startedAt ? new Date(r.startedAt).toLocaleString() : '',
+      recap: r.recap || '',
+      lines: r.lines || [],
+      startedAt: r.startedAt || 0
+    })
+    setView('review')
+    setCollapsed(false)
+  }, [])
+
+  // Cluely "Resume session": re-enter the meeting live, seeding the copilot's multi-turn memory with the
+  // prior recap so follow-ups keep continuity. (The live transcript hook owns its own lines, so earlier
+  // lines aren't replayed visually — the recap carries the context instead.)
+  const resumePastMeeting = useCallback(() => {
+    const pm = pastMeeting
+    setPastMeeting(null)
+    startListen()
+    copilotHistoryRef.current = [] // drop the prior session's memory before (maybe) seeding the recap
+    if (pm?.recap?.trim()) {
+      copilotHistoryRef.current = [
+        { role: 'user', content: 'Context from the earlier part of this meeting:\n' + pm.recap.slice(0, 4000) },
+        { role: 'assistant', content: 'Understood — continuing from there.' }
+      ]
+    }
+  }, [pastMeeting, startListen])
 
   const handlersRef = useRef<(a: HotkeyAction) => void>(() => {})
   handlersRef.current = (a: HotkeyAction): void => {
@@ -603,10 +728,12 @@ export function App(): JSX.Element {
     } else if (meetingPrompt.open) {
       setMeetingPrompt({ open: false })
     } else if (view !== 'answer') {
-      // Leaving the post-meeting Review must not drag the recap into the idle widget answer slot.
+      // Leaving the post-meeting Review must not drag the recap into the idle widget answer slot, nor
+      // leave a past-meeting snapshot that would later be mistaken for the next live recap.
       if (view === 'review') {
         ask.clear()
         suggest.clear()
+        setPastMeeting(null)
       }
       setView('answer')
     } else if (!collapsed) {
@@ -648,9 +775,9 @@ export function App(): JSX.Element {
             endReviewRef.current()
           }
         } else if (!listeningRef.current) {
-          // Meeting detected → start recording directly (the poller only fires this when autoStartOnMeeting is on).
-          startListenRef.current(true) // auto-started, so meeting-end auto-wraps up
-          setMeetingPrompt({ open: true, app: d?.app }) // brief "recording started" banner; auto-dismisses
+          // Meeting detected → show opt-in toast only. Nothing is recorded until the user clicks
+          // "Start listening". startListen is wired to the toast's onStart prop below.
+          setMeetingPrompt({ open: true, app: d?.app })
         }
       }),
     []
@@ -730,11 +857,27 @@ export function App(): JSX.Element {
         saveKey={saveKey}
         clearKey={clearKey}
         testKey={testKey}
+        initialTab={settingsInitialTab}
         onClose={() => setView('answer')}
+        onQuit={quitApp}
+        onLogout={logOut}
       />
     )
   } else if (view === 'history') {
-    body = <RecallView onOpenFolder={() => void window.toto.openMeetingsFolder()} />
+    body = (
+      <RecallView
+        onOpenFolder={() => void window.toto.openMeetingsFolder()}
+        onBack={() => setView('answer')}
+        onConnectCalendar={() => {
+          setSettingsInitialTab('calendar')
+          setView('settings')
+          setCollapsed(false)
+        }}
+        onNewChat={reset}
+        activeFile={savedPath ?? undefined}
+        onOpenMeeting={openPastMeeting}
+      />
+    )
   } else if (view === 'agenda') {
     body = <AgendaView />
   } else if (view === 'copilot') {
@@ -748,26 +891,36 @@ export function App(): JSX.Element {
         loadingPct={listen.loadingPct}
         error={listen.error}
         showTranscript={settings?.showLiveTranscript ?? false}
-        onAssist={() => void assist()}
-        onWhatNext={whatNext}
-        onFactCheck={factCheck}
+        onQuickAction={onQuickAction}
         onEnd={endReview}
       />
     )
   } else if (view === 'review') {
+    // Two sources: a just-ended live session (ask.answer recap + live lines), or a past meeting opened
+    // from History (pastMeeting — read-only recap + saved lines + a "Resume session" affordance).
+    const pm = pastMeeting
     body = (
       <Review
-        recap={ask.answer}
-        lines={listen.lines}
-        savedPath={savedPath}
-        saveError={saveError}
-        saveAttempts={saveAttempts}
+        recap={pm ? { id: 'past', text: pm.recap, streaming: false, error: null, prompt: '' } : ask.answer}
+        lines={pm ? pm.lines : listen.lines}
+        savedPath={pm ? pm.file : savedPath}
+        saveError={pm ? null : saveError}
+        saveAttempts={pm ? 0 : saveAttempts}
         maxSaveAttempts={MAX_SAVE_RETRIES}
-        startedAt={meetingStartRef.current}
-        showTranscript={settings?.showFullTranscriptInReview ?? false}
+        startedAt={pm ? pm.startedAt : meetingStartRef.current}
+        showTranscript={pm ? true : (settings?.showFullTranscriptInReview ?? false)}
+        meetingMeta={pm ? { title: pm.title, date: pm.date } : undefined}
         onOpenFolder={() => void window.toto.openMeetingsFolder()}
-        onSave={manualSave}
-        onDone={reset}
+        onSave={pm ? undefined : manualSave}
+        onResume={pm ? resumePastMeeting : undefined}
+        onDone={
+          pm
+            ? () => {
+                setPastMeeting(null)
+                setView('history')
+              }
+            : reset
+        }
       />
     )
   } else if (capturing && !ask.answer && !captureError) {
@@ -800,28 +953,37 @@ export function App(): JSX.Element {
         loadingPct={null}
         error={null}
         showTranscript={false}
-        onAssist={() => {}}
-        onWhatNext={() => {}}
-        onFactCheck={() => {}}
+        onQuickAction={() => {}}
         onEnd={() => {}}
       />
     )
   else if (DEMO === 'history') body = <RecallView onOpenFolder={() => {}} />
 
   const panelOpen = (body != null && !collapsed) || DEMO != null
-  // Answer / live-copilot bodies expand INSIDE the widget (above the input). Full views
-  // (settings / history / agenda / review) render as a panel BELOW the widget, as before.
-  const isWidgetBody =
-    body != null && (view === 'copilot' || view === 'answer' || DEMO === 'answer' || DEMO === 'copilot')
-  const isPanelBody = body != null && !isWidgetBody
+  const answerView = view === 'answer' || view === 'copilot' || DEMO === 'answer' || DEMO === 'copilot'
+  // Answer / live-copilot render INSIDE the expanded bar (one surface: big input → body → toolbar at the
+  // bottom). Only the full views (settings / history / review / agenda) render as a panel below the bar.
+  const barBody = answerView && !collapsed ? body : undefined
+  const isPanelBody = body != null && !answerView
+  // An actual answer/suggestion is open → the bar shows the ← back arrow + the follow-up placeholder.
+  const hasAnswer =
+    (view === 'answer' && (!!ask.answer || capturing)) ||
+    (view === 'copilot' && !!suggest.answer) ||
+    DEMO === 'answer' ||
+    DEMO === 'copilot'
+  // 'Viewed screen' chip when the active answer was grounded in a screenshot.
+  const ctxLabel =
+    (view === 'copilot' ? suggest.answer?.label : ask.answer?.label) === 'Viewed screen'
+      ? 'Viewed screen'
+      : undefined
 
   return (
     <div ref={setRoot} className={['relative flex w-full flex-col gap-2 p-1.5', listen.listening ? 'listening' : ''].join(' ')}>
       <MeetingDetectedToast
         open={meetingPrompt.open}
         app={meetingPrompt.app}
-        onStop={() => {
-          endReviewRef.current()
+        onStart={() => {
+          startListenRef.current(true) // user opted in — auto-started, so meeting-end can auto-wrap up
           setMeetingPrompt({ open: false })
         }}
         onDismiss={() => setMeetingPrompt({ open: false })}
@@ -863,12 +1025,21 @@ export function App(): JSX.Element {
             capturing={capturing}
             mode={mode}
             onSetMode={(m) => void patch({ mode: m })}
-            answer={isWidgetBody && !collapsed ? body : undefined}
+            hasAnswer={hasAnswer}
+            body={barBody}
+            onBack={hasAnswer ? clearAnswer : undefined}
+            contextLabel={ctxLabel}
+            onTranscript={toggleTranscript}
+            onNewMeeting={newMeeting}
+            onOpenModes={openModesPersonalize}
+            customModes={settings?.customModes}
+            canPrewarm={!!settings?.visionReady && (settings?.screenAsk ?? true)}
             onHistory={() => {
               setView((v) => (v === 'history' ? 'answer' : 'history'))
               setCollapsed(false)
             }}
             onSettings={() => {
+              setSettingsInitialTab(undefined) // logo-click opens the default tab, not a leftover programmatic one
               setView((v) => (v === 'settings' ? 'answer' : 'settings'))
               setCollapsed(false)
             }}
@@ -903,7 +1074,7 @@ export function App(): JSX.Element {
           })()}
           {/* Quick actions only on the idle answer surface — not over a shown answer/panel, not during Listen. */}
           {view === 'answer' && body == null && !listen.listening && (
-            <QuickActions onAction={onQuickAction} hint="Screen or typed input" />
+            <QuickActions onAction={onQuickAction} hint="Type a question, or capture your screen for visual help." />
           )}
           {isPanelBody && panelOpen &&
             (view === 'settings' || DEMO === 'settings' ? (

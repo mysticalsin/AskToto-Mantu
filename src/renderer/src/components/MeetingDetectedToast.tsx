@@ -6,9 +6,10 @@ const DEFAULT_TIMEOUT_MS = 6000
 export interface MeetingDetectedToastProps {
   open: boolean
   app?: string
-  /** Auto-dismiss delay in ms. Calls onDismiss (not onStop) — never stops recording. Defaults to 6s. */
+  /** Auto-dismiss delay in ms. Calls onDismiss — never starts recording. Defaults to 6s. */
   timeoutMs?: number
-  onStop: () => void
+  /** User opted in — start listening now. */
+  onStart: () => void
   onDismiss: () => void
 }
 
@@ -16,7 +17,7 @@ export function MeetingDetectedToast({
   open,
   app,
   timeoutMs = DEFAULT_TIMEOUT_MS,
-  onStop,
+  onStart,
   onDismiss
 }: MeetingDetectedToastProps): JSX.Element | null {
   const [remaining, setRemaining] = useState(timeoutMs)
@@ -37,7 +38,7 @@ export function MeetingDetectedToast({
       setRemaining(left)
       if (left === 0) {
         clearInterval(iv)
-        onDismissRef.current() // auto-dismiss never stops recording; it just hides the banner
+        onDismissRef.current() // auto-dismiss never starts recording; it just hides the banner
       }
     }, 250)
     return () => clearInterval(iv)
@@ -52,19 +53,19 @@ export function MeetingDetectedToast({
           <Mic size={15} className="shrink-0 text-[var(--color-accent)]" />
           <div>
             <div className="text-[13px] font-medium text-[color:var(--color-ink)]">
-              Recording started{app ? ` · ${app}` : ''}
+              Meeting detected{app ? ` · ${app}` : ''}
             </div>
             <div className="text-[11px] text-[color:var(--color-ink-2)]">
-              Meeting detected. AskToto is listening.
+              Nothing is recorded yet. Start listening?
             </div>
           </div>
         </div>
         <button
           type="button"
-          onClick={onStop}
+          onClick={onStart}
           className="no-drag focus-ring rounded-lg bg-[var(--color-accent)] px-3 py-1.5 text-[12px] font-medium text-white hover:opacity-90"
         >
-          Stop
+          Start listening
         </button>
         <button
           type="button"

@@ -5,15 +5,21 @@ import { tmpdir } from 'node:os'
 import { app, safeStorage } from 'electron'
 import { DEFAULT_SETTINGS } from '@shared/ipc'
 import { getSettings, setSettings, getApiKey } from './store'
+import { decryptSecret } from './secrets'
 
 vi.mock('electron')
 
-// Mirror store.ts at-rest encryption (marker + safeStorage) so tests can read what was persisted.
-const ENC_MARKER = Buffer.from('ATKENC1\n')
+// Mirror store.ts at-rest encryption so tests can read what was persisted. Two markers exist: V1 =
+// safeStorage (prod), V2 = AES-GCM file backend (dev / unpackaged — what these tests run under).
+const ENC_V1 = Buffer.from('ATKENC1\n')
+const ENC_V2 = Buffer.from('ATKENC2\n')
 function readPersisted(path: string): Record<string, unknown> {
   const buf = readFileSync(path)
-  if (buf.subarray(0, ENC_MARKER.length).equals(ENC_MARKER)) {
-    return JSON.parse(safeStorage.decryptString(buf.subarray(ENC_MARKER.length)))
+  if (buf.subarray(0, ENC_V2.length).equals(ENC_V2)) {
+    return JSON.parse(decryptSecret(buf.subarray(ENC_V2.length)))
+  }
+  if (buf.subarray(0, ENC_V1.length).equals(ENC_V1)) {
+    return JSON.parse(safeStorage.decryptString(buf.subarray(ENC_V1.length)))
   }
   return JSON.parse(buf.toString('utf8'))
 }
@@ -100,8 +106,10 @@ describe('store', () => {
       profile: { name: 'Tony', role: '', company: '', resume: 'CONFIDENTIAL-RESUME', jobDescription: '', notes: '' }
     })
     const bytes = readFileSync(join(userData, 'settings.json'))
-    // Marker present and the secret text is NOT readable as plaintext in the file.
-    expect(bytes.subarray(0, ENC_MARKER.length).equals(ENC_MARKER)).toBe(true)
+    // An encryption marker (V1 safeStorage or V2 AES) is present and the secret text is NOT plaintext.
+    const encrypted =
+      bytes.subarray(0, ENC_V1.length).equals(ENC_V1) || bytes.subarray(0, ENC_V2.length).equals(ENC_V2)
+    expect(encrypted).toBe(true)
     expect(bytes.toString('utf8')).not.toContain('SECRET-RESUME-CONTENT-12345')
     expect(bytes.toString('utf8')).not.toContain('CONFIDENTIAL-RESUME')
     // But it round-trips through getSettings.

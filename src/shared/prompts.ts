@@ -100,5 +100,5 @@ export function effectiveModePrompt(
   overrides: Partial<Record<string, string>> | undefined
 ): string {
   const o = overrides?.[mode]
-  return o && o.trim() ? o : DEFAULT_MODE_PROMPTS[mode]
+  return o && o.trim() ? o : (DEFAULT_MODE_PROMPTS[mode] ?? DEFAULT_MODE_PROMPTS.general)
 }

@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Copy, Check, FileText, ListTree, FolderOpen, Save, RotateCcw, ChevronRight, ChevronDown, Download, Clock } from 'lucide-react'
+import { Copy, Check, FileText, ListTree, FolderOpen, Save, RotateCcw, Play, ChevronDown, Download, Clock } from 'lucide-react'
 import type { TranscriptLine, MeetingSummary } from '@shared/ipc'
 import type { AnswerState } from '../state'
 import { Markdown } from './Markdown'
-import { Spinner } from './ui'
+import { Chip, TextButton, Spinner } from './ui'
 
 function clock(t: number): string {
   try {
@@ -68,9 +68,11 @@ export function Review({
   maxSaveAttempts,
   startedAt,
   showTranscript,
+  meetingMeta,
   onOpenFolder,
   onSave,
-  onDone
+  onDone,
+  onResume
 }: {
   recap: AnswerState | null
   lines: TranscriptLine[]
@@ -80,9 +82,11 @@ export function Review({
   maxSaveAttempts?: number
   startedAt?: number
   showTranscript?: boolean // opt-in: auto-expand the full transcript; default summary-only
+  meetingMeta?: { title: string; date: string }
   onOpenFolder: () => void
   onSave?: () => void
   onDone?: () => void
+  onResume?: () => void
 }): JSX.Element {
   const [copied, setCopied] = useState(false)
   const [notesCopied, setNotesCopied] = useState(false)
@@ -170,6 +174,12 @@ export function Review({
 
   return (
     <div className="flex flex-col gap-3">
+      {meetingMeta && (
+        <div className="mb-0.5">
+          <div className="font-ui text-[15px] font-semibold text-[color:var(--color-ink)]">{meetingMeta.title}</div>
+          <div className="mt-0.5 text-[12px] text-[color:var(--color-ink-3)]">{meetingMeta.date}</div>
+        </div>
+      )}
       <div className="flex items-center justify-between gap-2 text-[11px] text-[color:var(--color-ink-2)]">
         <div className="flex items-center gap-2">
           <span className="rounded-full bg-white/[0.06] px-2 py-0.5">Duration {formatDuration(durationSec)}</span>
@@ -178,24 +188,14 @@ export function Review({
           </span>
         </div>
         <div className="flex items-center gap-1.5">
+          {onResume && (
+            <Chip icon={Play} onClick={onResume} variant="accent">Resume session</Chip>
+          )}
           {onSave && (
-            <button
-              type="button"
-              onClick={onSave}
-              disabled={lines.length === 0 || !!savedPath}
-              className="no-drag focus-ring flex items-center gap-1 rounded-md px-2 py-1 text-[11px] text-[color:var(--color-ink-2)] hover:bg-white/10 hover:text-[color:var(--color-ink)] disabled:opacity-40"
-            >
-              <Save size={11} /> Save
-            </button>
+            <TextButton icon={Save} onClick={onSave} disabled={lines.length === 0 || !!savedPath}>Save</TextButton>
           )}
           {onDone && (
-            <button
-              type="button"
-              onClick={onDone}
-              className="no-drag focus-ring flex items-center gap-1 rounded-md bg-[var(--color-accent)] px-2 py-1 text-[11px] font-medium text-white hover:opacity-90"
-            >
-              <RotateCcw size={11} /> New meeting
-            </button>
+            <Chip icon={RotateCcw} onClick={onDone} variant="accent">New meeting</Chip>
           )}
         </div>
       </div>
@@ -227,30 +227,19 @@ export function Review({
 
       <section aria-live="polite" aria-atomic="false">
         <div className="mb-1.5 flex items-center justify-between">
-          <div className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-[var(--color-accent)]">
-            <ListTree size={12} /> Meeting notes
+          <div className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-[color:var(--color-ink-3)]">
+            <ListTree size={12} /> Discussion bullets
           </div>
           {recap?.text && (
             <div className="flex items-center gap-1">
-              <button
-                type="button"
-                onClick={copyNotes}
-                aria-label={notesCopied ? 'Copied notes' : 'Copy notes'}
-                className="no-drag focus-ring flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] text-[color:var(--color-ink-2)] hover:bg-white/10 hover:text-[color:var(--color-ink)]"
-              >
-                {notesCopied ? <Check size={11} className="text-[var(--color-success)]" /> : <Copy size={11} />}
-                {notesCopied ? 'Copied' : 'Copy notes'}
-              </button>
-              <button
-                type="button"
-                onClick={exportJson}
-                aria-label={jsonCopied ? 'Copied JSON' : 'Export notes as JSON'}
-                title="Copy structured JSON (decisions + action items) for Jira/Asana/Notion"
-                className="no-drag focus-ring flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] text-[color:var(--color-ink-2)] hover:bg-white/10 hover:text-[color:var(--color-ink)]"
-              >
+              <Chip onClick={copyNotes}>
+                {notesCopied ? <Check size={13} className="text-[var(--color-success)]" /> : <Copy size={13} />}
+                {notesCopied ? 'Copied' : 'Copy Summary'}
+              </Chip>
+              <TextButton onClick={exportJson} title="Copy structured JSON (decisions + action items) for Jira/Asana/Notion">
                 {jsonCopied ? <Check size={11} className="text-[var(--color-success)]" /> : <Download size={11} />}
                 {jsonCopied ? 'Copied' : 'Export JSON'}
-              </button>
+              </TextButton>
             </div>
           )}
         </div>
@@ -278,8 +267,10 @@ export function Review({
           onClick={() => setTranscriptOpen(true)}
           className="no-drag focus-ring flex w-fit items-center gap-1.5 rounded-lg px-2 py-1.5 text-[11px] font-medium text-[color:var(--color-ink-3)] hover:bg-white/[0.06] hover:text-[color:var(--color-ink-2)]"
         >
-          <FileText size={12} /> Show full transcript · {lines.length} lines
-          <ChevronRight size={12} />
+          <FileText size={12} />
+          Show Transcript
+          <span className="text-[color:var(--color-ink-3)] opacity-60">· {lines.length} lines</span>
+          <ChevronDown size={12} className="-rotate-90" />
         </button>
       ) : (
       <section>
@@ -291,15 +282,10 @@ export function Review({
           >
             <FileText size={12} /> Full transcript · {lines.length} lines <ChevronDown size={12} />
           </button>
-          <button
-            type="button"
-            aria-label={copied ? 'Copied transcript' : 'Copy transcript'}
-            onClick={copy}
-            className="no-drag focus-ring flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] text-[color:var(--color-ink-2)] hover:bg-white/10 hover:text-[color:var(--color-ink)]"
-          >
+          <TextButton onClick={copy}>
             {copied ? <Check size={11} className="text-[var(--color-success)]" /> : <Copy size={11} />}
             {copied ? 'Copied' : 'Copy'}
-          </button>
+          </TextButton>
         </div>
         {copyError && (
           <div className="mb-2 rounded-lg border border-[var(--color-danger)]/30 bg-[var(--color-danger)]/10 px-2 py-1 text-[11px] text-[var(--color-danger)]">
@@ -320,7 +306,7 @@ export function Review({
                     'shrink-0 text-[10px] font-semibold uppercase ' +
                     (l.speaker === 'them'
                       ? 'text-[color:var(--color-ink-2)]'
-                      : 'text-[var(--color-accent)]')
+                      : 'text-[color:var(--color-ink-3)]')
                   }
                 >
                   {l.speaker === 'them' ? 'Them' : 'You'}

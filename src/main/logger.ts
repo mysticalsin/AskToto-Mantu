@@ -42,11 +42,16 @@ export type AuditEvent =
   | 'auth.expired'
   | 'auth.refresh_failed'
   | 'auth.denied'
+  | 'google.signin'
+  | 'google.signin.domain_rejected'
+  | 'google.signout'
+  | 'google.calendar.read'
   | 'dust.token.refreshed'
   | 'key.set'
   | 'key.removed'
   | 'capture.screen'
   | 'transcript.saved'
+  | 'transcript.deleted'
   | 'note.saved'
   | 'answer.feedback'
   | 'provider.request'
@@ -57,6 +62,7 @@ export type AuditEvent =
   | 'calendar.read'
   | 'app.crash'
   | 'meeting.detect.degraded'
+  | 'recall.open'
 
 /**
  * Append a structured audit record. NEVER pass secrets or message/transcript CONTENT — metadata only

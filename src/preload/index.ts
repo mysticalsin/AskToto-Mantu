@@ -27,6 +27,8 @@ import {
   type AuthStatus,
   type SignInResult,
   type CalendarTodayResult,
+  type GoogleAuthStatus,
+  type RecallReadResult,
   type PlatformPermissions
 } from '@shared/ipc'
 import type { ProviderId } from '@shared/providers'
@@ -78,6 +80,13 @@ const api = {
   signIn: (): Promise<SignInResult> => ipcRenderer.invoke(IPC.authSignIn),
   signOut: (): Promise<void> => ipcRenderer.invoke(IPC.authSignOut),
   calendarToday: (tz: string): Promise<CalendarTodayResult> => ipcRenderer.invoke(IPC.calendarToday, tz),
+  // Google Calendar (parallel to the Microsoft/Outlook path; needs a provisioned GOOGLE_CLIENT_ID to connect).
+  googleAuthStatus: (): Promise<GoogleAuthStatus> => ipcRenderer.invoke(IPC.googleAuthStatus),
+  googleAuthStart: (): Promise<{ ok: boolean; email?: string; error?: string }> =>
+    ipcRenderer.invoke(IPC.googleAuthStart),
+  googleSignOut: (): Promise<{ ok: boolean }> => ipcRenderer.invoke(IPC.googleSignOut),
+  googleCalendarToday: (tz: string): Promise<CalendarTodayResult> =>
+    ipcRenderer.invoke(IPC.googleCalendarToday, tz),
   parakeetStatus: (): Promise<{ ready: boolean }> => ipcRenderer.invoke(IPC.parakeetStatus),
   parakeetEnsure: (): Promise<{ ok: boolean; error?: string }> => ipcRenderer.invoke(IPC.parakeetEnsure),
   parakeetFeed: (samples: Float32Array, speaker: string): Promise<string> =>
@@ -105,6 +114,9 @@ const api = {
   recallList: (): Promise<MeetingSummary[]> => ipcRenderer.invoke(IPC.recallList),
   recallSearch: (q: string): Promise<RecallHit[]> => ipcRenderer.invoke(IPC.recallSearch, q),
   recallOpen: (file: string): Promise<string> => ipcRenderer.invoke(IPC.recallOpen, file),
+  recallRead: (file: string): Promise<RecallReadResult> => ipcRenderer.invoke(IPC.recallRead, file),
+  recallDelete: (file: string): Promise<{ ok: boolean; error?: string }> =>
+    ipcRenderer.invoke(IPC.recallDelete, file),
   setListeningState: (on: boolean): Promise<void> => ipcRenderer.invoke(IPC.listeningState, on),
   asrBundled: (): Promise<boolean> => ipcRenderer.invoke(IPC.asrBundled),
 

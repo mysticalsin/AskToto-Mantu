@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react'
+import type { LucideIcon } from 'lucide-react'
 
 export function IconButton({
   children,
@@ -43,6 +44,73 @@ export function Kbd({ children }: { children: ReactNode }): JSX.Element {
     <kbd className="font-ui rounded-[5px] border border-[var(--color-hair-soft)] bg-white/[0.06] px-1.5 py-0.5 text-[10px] leading-none text-[color:var(--color-ink-3)]">
       {children}
     </kbd>
+  )
+}
+
+/** Rounded-full action pill — the single source-of-truth for chip geometry across the app.
+ *  variant 'neutral': semi-transparent surface, ink-2 label, brightens on hover.
+ *  variant 'accent':  solid accent fill, white label, brightens on hover.
+ *  Optionally renders a left-aligned icon at size 13. */
+export function Chip({
+  icon: Icon,
+  children,
+  onClick,
+  variant = 'neutral',
+  title
+}: {
+  icon?: LucideIcon
+  children: ReactNode
+  onClick: () => void
+  variant?: 'neutral' | 'accent'
+  title?: string
+}): JSX.Element {
+  return (
+    <button
+      type="button"
+      title={title}
+      onClick={onClick}
+      className={[
+        'no-drag focus-ring flex items-center gap-1.5 rounded-full px-3 py-1.5 text-[12px] font-medium transition-colors duration-[var(--duration-hover)]',
+        variant === 'accent'
+          ? 'bg-[var(--color-accent)] text-white hover:brightness-110'
+          : 'bg-white/[0.06] text-[color:var(--color-ink-2)] hover:bg-white/[0.12] hover:text-[color:var(--color-ink)]'
+      ].join(' ')}
+    >
+      {Icon && <Icon size={13} />}
+      {children}
+    </button>
+  )
+}
+
+/** Low-emphasis inline text action — secondary/tertiary surface with optional left icon at size 11.
+ *  Pass `ariaLabel` for icon-only buttons that have no visible text. */
+export function TextButton({
+  icon: Icon,
+  children,
+  onClick,
+  title,
+  disabled,
+  ariaLabel
+}: {
+  icon?: LucideIcon
+  children?: ReactNode
+  onClick?: () => void
+  title?: string
+  disabled?: boolean
+  ariaLabel?: string
+}): JSX.Element {
+  return (
+    <button
+      type="button"
+      title={title}
+      aria-label={ariaLabel}
+      onClick={onClick}
+      disabled={disabled}
+      className="no-drag focus-ring flex items-center gap-1 rounded-md px-2 py-1 text-[11px] text-[color:var(--color-ink-2)] hover:bg-white/10 hover:text-[color:var(--color-ink)] disabled:opacity-40"
+    >
+      {Icon && <Icon size={11} />}
+      {children}
+    </button>
   )
 }
 

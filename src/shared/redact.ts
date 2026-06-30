@@ -47,7 +47,8 @@ export function redactSecrets(input: string): string {
     /\bxox[baprs]-[A-Za-z0-9-]{10,}\b/g, // Slack tokens
     /\bAKIA[0-9A-Z]{16}\b/g, // AWS access key id
     /\bAIza[0-9A-Za-z_-]{35}\b/g, // Google API key
-    /\bBearer\s+[A-Za-z0-9._-]{20,}\b/g // Authorization: Bearer <token>
+    /\bBearer\s+[A-Za-z0-9._-]{20,}\b/g, // Authorization: Bearer <token>
+    /\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/g // bare JWT (header.payload.sig — eyJ prefix is base64url of '{"')
   ]
   for (const re of keyPatterns) text = text.replace(re, '[redacted key]')
 

@@ -2,46 +2,29 @@ import { useEffect, useRef, useState } from 'react'
 import {
   Sparkles,
   Eye,
+  Mic,
   ShieldCheck,
   MessageSquareQuote,
+  Lightbulb,
+  AlignLeft,
   Copy,
-  Check,
-  ChevronDown,
-  ChevronRight
+  Check
 } from 'lucide-react'
 import type { TranscriptLine } from '@shared/ipc'
 import type { AnswerState } from '../state'
+import type { QuickKind } from './QuickActions'
 import { Markdown } from './Markdown'
-import { Spinner } from './ui'
+import { Chip, TextButton, Spinner } from './ui'
 
-function Action({
-  icon: Icon,
-  label,
-  onClick,
-  primary
-}: {
-  icon: typeof Sparkles
-  label: string
-  onClick: () => void
-  primary?: boolean
-}): JSX.Element {
-  return (
-    <button
-      type="button"
-      aria-label={label}
-      onClick={onClick}
-      className={[
-        'no-drag focus-ring flex items-center gap-1.5 rounded-full px-3 py-1.5 text-[12px] font-medium transition-colors duration-[var(--duration-hover)]',
-        primary
-          ? 'bg-[var(--color-accent)] text-white hover:brightness-110'
-          : 'bg-white/[0.06] text-[color:var(--color-ink-2)] hover:bg-white/[0.12] hover:text-[color:var(--color-ink)]'
-      ].join(' ')}
-    >
-      <Icon size={13} />
-      {label}
-    </button>
-  )
-}
+// The individual question chips under the copilot card — the same set as the bar's QuickActions, wired
+// to the live conversation. (Replaces the single "Assist" button.)
+const COPILOT_CHIPS: { kind: QuickKind; label: string; icon: typeof Sparkles }[] = [
+  { kind: 'whatnext', label: 'What to say next', icon: MessageSquareQuote },
+  { kind: 'factcheck', label: 'Fact-check', icon: ShieldCheck },
+  { kind: 'explain', label: 'Explain', icon: Lightbulb },
+  { kind: 'summarize', label: 'Summarize screen', icon: AlignLeft }
+]
+
 
 export function Copilot({
   lines,
@@ -51,9 +34,7 @@ export function Copilot({
   loadingPct,
   error,
   showTranscript,
-  onAssist,
-  onWhatNext,
-  onFactCheck,
+  onQuickAction,
   onEnd: _onEnd
 }: {
   lines: TranscriptLine[]
@@ -64,13 +45,10 @@ export function Copilot({
   loadingPct: number | null
   error: string | null
   showTranscript: boolean
-  onAssist: () => void
-  onWhatNext: () => void
-  onFactCheck: () => void
+  onQuickAction: (k: QuickKind) => void
   onEnd: () => void
 }): JSX.Element {
   const scroller = useRef<HTMLDivElement>(null)
-  const [viewTx, setViewTx] = useState(false)
   const [copied, setCopied] = useState(false)
 
   useEffect(() => {
@@ -78,11 +56,14 @@ export function Copilot({
     if (el) el.scrollTop = el.scrollHeight
   }, [lines])
 
-  const showTx = showTranscript || viewTx
+  // Transcript is hidden during the call; the bar's "Transcript" button drives showTranscript on demand.
+  const showTx = showTranscript
 
   const isViewedScreen = suggestion?.label === 'Viewed screen'
   const EyebrowIcon = isViewedScreen ? Eye : Sparkles
-  const eyebrowLabel = suggestion?.label || 'Assist'
+  const eyebrowLabel = suggestion?.label || 'Copilot'
+  // Card wears accent fill/border only when there is actual content to show
+  const cardHasContent = Boolean(suggestion?.text || suggestion?.streaming)
 
   const copyText = (): void => {
     const txt = suggestion?.text
@@ -98,34 +79,30 @@ export function Copilot({
 
   return (
     <div className="flex flex-col gap-3">
-      {/* Suggestion card */}
-      <section aria-live="polite" aria-atomic="false" className="rounded-xl border-l-2 border-[var(--color-accent)] bg-[var(--color-accent-soft)] px-3.5 py-3">
+      {/* Suggestion card — neutral at rest; accent fill/border only when content is present */}
+      <section
+        aria-live="polite"
+        aria-atomic="false"
+        className={[
+          'rounded-[var(--radius-lg)] border px-3.5 py-3',
+          cardHasContent
+            ? 'border-[var(--color-accent)]/30 bg-[var(--color-accent-soft)]'
+            : 'border-[var(--color-hair)] bg-white/[0.03]'
+        ].join(' ')}
+      >
         <div className="mb-1.5 flex items-center justify-between">
           <div className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-[color:var(--color-ink)]">
             <EyebrowIcon size={12} />
             {eyebrowLabel}
           </div>
-          <div className="flex items-center gap-1">
-            {suggestion?.text && (
-              <button
-                type="button"
-                aria-label={copied ? 'Copied' : 'Copy suggestion'}
-                onClick={copyText}
-                className="no-drag focus-ring flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] text-[color:var(--color-ink-2)] hover:bg-white/10 hover:text-[color:var(--color-ink)]"
-              >
-                {copied ? <Check size={11} className="text-[var(--color-success)]" /> : <Copy size={11} />}
-              </button>
-            )}
-            <button
-              type="button"
-              aria-label="Assist"
-              onClick={onAssist}
-              className="no-drag focus-ring flex items-center gap-1.5 rounded-full bg-[var(--color-accent)] px-2.5 py-1 text-[11px] font-medium text-white hover:brightness-110"
+          {suggestion?.text && (
+            <TextButton
+              ariaLabel={copied ? 'Copied' : 'Copy suggestion'}
+              onClick={copyText}
             >
-              <Sparkles size={11} />
-              Assist
-            </button>
-          </div>
+              {copied ? <Check size={11} className="text-[var(--color-success)]" /> : <Copy size={11} />}
+            </TextButton>
+          )}
         </div>
         {suggestion?.error ? (
           <div className="text-[13px] text-[var(--color-danger)]">{suggestion.error}</div>
@@ -136,39 +113,40 @@ export function Copilot({
             <Spinner size={13} /> Thinking…
           </div>
         ) : (
-          <div className="text-[13px] text-[color:var(--color-ink-2)]">
-            {listening
-              ? 'Press Assist for a read of the conversation, or type a question.'
-              : 'Press Listen to start.'}
+          <div className="text-[13px] leading-snug text-[color:var(--color-ink-2)]">
+            {listening ? (
+              'Pick an action below, or type a question.'
+            ) : (
+              <>
+                Press the{' '}
+                <Mic size={12} className="inline-block align-middle" />{' '}
+                in the toolbar to start listening to your call.
+              </>
+            )}
           </div>
         )}
       </section>
 
-      {/* Secondary action row */}
+      {/* Action chips — the individual questions, same set as the bar's QuickActions, wired to the call. */}
       <div className="flex flex-wrap items-center gap-1.5">
-        <Action icon={MessageSquareQuote} label="What to say next" onClick={onWhatNext} />
-        <Action icon={ShieldCheck} label="Fact-check" onClick={onFactCheck} />
+        {COPILOT_CHIPS.map((c) => (
+          <Chip key={c.kind} icon={c.icon} onClick={() => onQuickAction(c.kind)}>{c.label}</Chip>
+        ))}
       </div>
 
-      {/* Status / transcript */}
+      {/* Transcript — hidden during the call; shown only when the user opens it (bar → Transcript). A
+          small loading line appears while the speech model warms up; no live "N captured" footer. */}
       {error ? (
         <div className="text-[13px] text-[var(--color-danger)]">{error}</div>
+      ) : loading ? (
+        <div className="flex items-center gap-2 text-[11px] text-[color:var(--color-ink-3)]">
+          <Spinner size={11} />
+          {loadingPct != null ? `Loading speech model… ${loadingPct}%` : 'Loading transcription model…'}
+        </div>
       ) : showTx ? (
         <section>
-          <div className="mb-1.5 flex items-center justify-between">
-            <div className="flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-wide text-[color:var(--color-ink-3)]">
-              Transcript
-              {loading && <span className="normal-case">· loading model…</span>}
-            </div>
-            {listening && (
-              <button
-                type="button"
-                onClick={() => setViewTx(false)}
-                className="no-drag focus-ring flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] text-[color:var(--color-ink-3)] hover:text-[color:var(--color-ink-2)]"
-              >
-                Hide transcript <ChevronDown size={11} />
-              </button>
-            )}
+          <div className="mb-1.5 flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-wide text-[color:var(--color-ink-3)]">
+            Transcript
           </div>
           <div
             ref={scroller}
@@ -199,34 +177,7 @@ export function Copilot({
             )}
           </div>
         </section>
-      ) : (
-        <div className="flex items-center justify-between text-[11px] text-[color:var(--color-ink-3)]">
-          <div className="flex items-center gap-2">
-            {loading ? (
-              <>
-                <Spinner size={11} />{' '}
-                {loadingPct != null ? `downloading speech model… ${loadingPct}%` : 'loading transcription model…'}
-              </>
-            ) : (
-              <>
-                {listening && <span className="rec-dot h-[6px] w-[6px] rounded-full bg-[var(--color-danger)]" />}
-                {listening
-                  ? `live · ${lines.length} captured`
-                  : 'not listening'}
-              </>
-            )}
-          </div>
-          {listening && !loading && (
-            <button
-              type="button"
-              onClick={() => setViewTx(true)}
-              className="no-drag focus-ring flex items-center gap-1 rounded-md px-1.5 py-0.5 hover:text-[color:var(--color-ink-2)]"
-            >
-              View transcript <ChevronRight size={11} />
-            </button>
-          )}
-        </div>
-      )}
+      ) : null}
     </div>
   )
 }

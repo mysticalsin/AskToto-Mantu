@@ -5,6 +5,7 @@ import { join, basename } from 'node:path'
 import { homedir } from 'node:os'
 import { randomBytes, createCipheriv, createDecipheriv, publicEncrypt, constants } from 'node:crypto'
 import type { SaveMeeting, SaveNote, Settings, RecapExport } from '@shared/ipc'
+import { encryptSecret, decryptSecret } from './secrets'
 
 // Optional at-rest encryption for transcripts/notes. Two on-disk formats share one fixed-length
 // `ATKENC<n>\n` magic prefix so detection stays a simple prefix check:
@@ -89,22 +90,39 @@ function readEscrowPubKey(): string | null {
   return null
 }
 
-/** Build the v2 envelope on-disk buffer (marker + JSON). May throw if the keychain is unavailable; callers
- *  guard with safeStorage.isEncryptionAvailable() and fall back to plaintext, preserving today's behavior. */
+/**
+ * Build the v2 envelope on-disk buffer (marker + JSON).
+ *
+ * kLocal encoding — a prefix selects the unwrap path on read:
+ *   'S:<base64>' — content key wrapped by safeStorage (OS keychain, preferred).
+ *   'F:<base64>' — content key wrapped by the AES-GCM file backend in secrets.ts
+ *                  (used when the keychain is unavailable: Linux, CI, no secret-service).
+ *   '<bare base64>' — legacy: written before this change; treated as safeStorage on read.
+ *
+ * The content key is always encrypted at rest. This function never falls through to cleartext —
+ * callers should let any error propagate (fail-closed).
+ */
 function encryptEnvelopeV2(content: string): Buffer {
   const contentKey = randomBytes(32)
   const iv = randomBytes(12)
   const cipher = createCipheriv('aes-256-gcm', contentKey, iv)
   const ct = Buffer.concat([cipher.update(content, 'utf8'), cipher.final()])
   const tag = cipher.getAuthTag()
-  // LOCAL wrap: the OS keychain encrypts the content key so this device can always decrypt (current UX).
-  const kLocal = safeStorage.encryptString(contentKey.toString('base64'))
+  // LOCAL wrap: prefer the OS keychain (safeStorage); when unavailable (Linux / CI / no
+  // secret-service) fall back to the AES-GCM file-backend key from secrets.ts. Either way the
+  // content key is always encrypted at rest — never stored in cleartext.
+  let kLocalField: string
+  if (safeStorage.isEncryptionAvailable()) {
+    kLocalField = 'S:' + safeStorage.encryptString(contentKey.toString('base64')).toString('base64')
+  } else {
+    kLocalField = 'F:' + encryptSecret(contentKey.toString('base64')).toString('base64')
+  }
   const env: EnvelopeV2 = {
     v: 2,
     iv: iv.toString('base64'),
     tag: tag.toString('base64'),
     ct: ct.toString('base64'),
-    kLocal: kLocal.toString('base64')
+    kLocal: kLocalField
   }
   // ESCROW wrap (only when configured): RSA-OAEP(content key) so an admin holding the org PRIVATE key can
   // recover the content key out-of-band. The app only ever WRITES kEscrow; it never reads it.
@@ -124,11 +142,21 @@ function encryptEnvelopeV2(content: string): Buffer {
   return Buffer.concat([ENC_MARKER_V2, Buffer.from(JSON.stringify(env), 'utf8')])
 }
 
-/** Decrypt a v2 envelope via the local keychain. Throws on malformed/foreign-keychain input so
- *  tryDecodeSaved degrades to the UNDECRYPTABLE path instead of crashing a read. */
+/** Decrypt a v2 envelope. Handles the 'S:' (safeStorage), 'F:' (file-backend), and legacy (bare
+ *  base64) kLocal encodings. Throws on malformed/foreign-keychain input so tryDecodeSaved degrades
+ *  to the UNDECRYPTABLE path instead of crashing a read. */
 function decryptEnvelopeV2(buf: Buffer): string {
   const env = JSON.parse(buf.subarray(MARKER_LEN).toString('utf8')) as EnvelopeV2
-  const contentKey = Buffer.from(safeStorage.decryptString(Buffer.from(env.kLocal, 'base64')), 'base64')
+  let contentKeyB64: string
+  if (env.kLocal.startsWith('F:')) {
+    // File-backend path: content key was wrapped by secrets.ts AES-GCM (no keychain required).
+    contentKeyB64 = decryptSecret(Buffer.from(env.kLocal.slice(2), 'base64'))
+  } else {
+    // safeStorage path: 'S:' prefix (new) or legacy bare base64 (no prefix, backward compat).
+    const raw = env.kLocal.startsWith('S:') ? env.kLocal.slice(2) : env.kLocal
+    contentKeyB64 = safeStorage.decryptString(Buffer.from(raw, 'base64'))
+  }
+  const contentKey = Buffer.from(contentKeyB64, 'base64')
   const decipher = createDecipheriv('aes-256-gcm', contentKey, Buffer.from(env.iv, 'base64'))
   decipher.setAuthTag(Buffer.from(env.tag, 'base64'))
   return Buffer.concat([decipher.update(Buffer.from(env.ct, 'base64')), decipher.final()]).toString('utf8')
@@ -186,18 +214,14 @@ export function isEncryptedFile(path: string): boolean {
   }
 }
 
-/** Atomic write; encrypts at rest when `encrypt` and the keychain is available. Cleans up temp on failure. */
+/** Atomic write; encrypts at rest when `encrypt` is true. Cleans up temp on failure. */
 async function writeSaved(file: string, content: string, encrypt: boolean): Promise<void> {
   let data: Buffer = Buffer.from(content, 'utf8')
   if (encrypt) {
-    try {
-      if (safeStorage.isEncryptionAvailable()) {
-        // v2 envelope: per-file AES-256-GCM content key, safeStorage-wrapped (+ optional org escrow wrap).
-        data = encryptEnvelopeV2(content)
-      }
-    } catch {
-      /* keychain unavailable — fall back to plaintext below */
-    }
+    // encryptEnvelopeV2 always produces an ATKENC2-marked encrypted envelope — safeStorage path
+    // when the keychain is available, AES-GCM file-backend path otherwise. Any error propagates
+    // to the caller (fail-closed): plaintext is never silently written when encryption is on.
+    data = encryptEnvelopeV2(content)
   }
   const tmp = `${file}.tmp`
   try {
@@ -249,6 +273,32 @@ export function decryptToTemp(path: string): string {
     })
   }
   return tmp
+}
+
+/**
+ * Startup sweep: removes orphaned `asktoto-<hex>-*.md` cleartext temp files left by a previous
+ * session that was hard-killed (SIGKILL) before the will-quit cleanup hook could run.
+ *
+ * INTEGRATOR: call this from the main process immediately after `app.whenReady()` resolves,
+ * before any transcript is opened, e.g.:
+ *   import { sweepStaleTempFiles } from './transcripts'
+ *   app.whenReady().then(() => { sweepStaleTempFiles(); … })
+ */
+export function sweepStaleTempFiles(): void {
+  try {
+    const tmp = app.getPath('temp')
+    for (const name of readdirSync(tmp)) {
+      if (/^asktoto-[0-9a-f]+-.*\.md$/.test(name)) {
+        try {
+          unlinkSync(join(tmp, name))
+        } catch {
+          /* best-effort — file may already be deleted or still open */
+        }
+      }
+    }
+  } catch {
+    /* ignore — temp dir unreadable */
+  }
 }
 
 const README = `# AskToto — Meeting transcripts

@@ -12,10 +12,11 @@ import {
   Menu,
   nativeImage,
   protocol,
-  net
+  net,
+  Notification
 } from 'electron'
 import { join, basename, resolve, relative, isAbsolute, extname } from 'node:path'
-import { readFileSync, existsSync, writeFileSync, realpathSync } from 'node:fs'
+import { readFileSync, existsSync, writeFileSync, realpathSync, readdirSync, unlinkSync } from 'node:fs'
 import { pathToFileURL } from 'node:url'
 import {
   IPC,
@@ -56,12 +57,15 @@ import {
   resolveMeetingsFolder,
   ensureMeetingsFolder,
   isEncryptedFile,
-  decryptToTemp
+  decryptToTemp,
+  sweepStaleTempFiles
 } from './transcripts'
 import { detectMeeting } from './meeting-detect'
 import { titleMatchesCalendar } from './meeting-detect/shared'
 import { getPlatformPermissions } from './platform-perms'
-import { listMeetings, searchMeetings } from './recall'
+import { listMeetings, searchMeetings, recallRead, deleteMeeting } from './recall'
+import { googleAuthStatus, googleSignIn, googleSignOut } from './google-auth'
+import { googleCalendarToday } from './google-calendar'
 import { initAutoUpdate } from './updater'
 import { runSelfTest } from './selftest'
 import { readEvalMetrics, aggregateMetrics } from './metrics'
@@ -97,6 +101,10 @@ let audioArmed = false // loopback capture only granted during an explicit user-
 let lastBarHeight = BAR_HEIGHT // remember the bar's content height to restore on settings exit
 let currentWidth = BAR_WIDTH // window width; narrows to PILL_WIDTH while collapsed to the control mini-pill
 const streams = new Map<string, { abort: () => void }>()
+
+// Cached Google sign-in state for publicSettings() (which must remain sync). Updated at startup and
+// by the google IPC handlers so the renderer always gets a fresh value on the NEXT settingsGet call.
+let googleSignedIn = false
 
 /** Security: every privileged IPC handler must come from the main window's top frame.
  *  Compromised subframes, devtools, or unexpected webContents are rejected here. */
@@ -158,7 +166,8 @@ function publicSettings(): PublicSettings {
     resolvedMeetingsFolder: resolveMeetingsFolder(s),
     managedKeys: getLockedKeys(),
     envKeys: getEnvKeyProviders(),
-    loginItemOpenAtLogin
+    loginItemOpenAtLogin,
+    googleConnected: googleSignedIn
   }
 }
 
@@ -220,14 +229,6 @@ function createWindow(): void {
   win.webContents.on('will-navigate', (e, url) => {
     if (url !== win?.webContents.getURL()) e.preventDefault()
   })
-  // Window-scoped ⌘Q / Ctrl+Q: only quits when this overlay is focused, not system-wide.
-  win.webContents.on('before-input-event', (e, input) => {
-    if ((input.meta || input.control) && input.key.toLowerCase() === 'q' && input.type === 'keyDown') {
-      e.preventDefault()
-      app.quit()
-    }
-  })
-
   // Dev-only: screenshot ONLY this window (no desktop) for verification. Privacy-safe.
   if (process.env.ASKTOTO_SHOT) {
     win.webContents.once('did-finish-load', () => {
@@ -321,9 +322,10 @@ function onFatal(kind: 'uncaughtException' | 'unhandledRejection', err: unknown)
   try {
     mainLog.error(`[${kind}]`, detail)
     auditLog('app.crash', { kind, message: err instanceof Error ? err.message : String(err) })
+    const redactedDetail = redactSecrets(detail)
     writeFileSync(
       join(app.getPath('userData'), `crash-${Date.now()}.log`),
-      `${new Date().toISOString()} ${kind}\n${detail}\n`,
+      `${new Date().toISOString()} ${kind}\n${redactedDetail}\n`,
       { mode: 0o600 }
     )
   } catch {
@@ -354,9 +356,9 @@ function onFatal(kind: 'uncaughtException' | 'unhandledRejection', err: unknown)
 // A vision ask issued within CAPTURE_TTL_MS of a (pre-warmed) capture reuses the JPEG instead of paying the
 // ~150-450ms capture cost again. Kept tiny so the screen the model sees is never visibly stale.
 const CAPTURE_TTL_MS = 1500
-let shotCache: { image: string; width: number; height: number; ts: number } | null = null
+let shotCache: { image: string; width: number; height: number; dispId: number; ts: number } | null = null
 
-async function captureScreenshot(): Promise<{ image: string; width: number; height: number }> {
+async function captureScreenshot(): Promise<{ image: string; width: number; height: number; dispId: number }> {
   const disp = screen.getDisplayNearestPoint(screen.getCursorScreenPoint())
   const sf = disp.scaleFactor || 1
   // Render the thumbnail already capped at VISION_MAX_EDGE (smaller = faster capture + ~50% smaller upload
@@ -388,24 +390,26 @@ async function captureScreenshot(): Promise<{ image: string; width: number; heig
   }
   const jpeg = img.toJPEG(VISION_JPEG_Q)
   const size = img.getSize()
-  return { image: jpeg.toString('base64'), width: size.width, height: size.height }
+  return { image: jpeg.toString('base64'), width: size.width, height: size.height, dispId: disp.id }
 }
 
-async function getScreenshot(): Promise<{ image: string; width: number; height: number }> {
-  if (shotCache && Date.now() - shotCache.ts < CAPTURE_TTL_MS) {
+async function getScreenshot(phase?: string): Promise<{ image: string; width: number; height: number }> {
+  const disp = screen.getDisplayNearestPoint(screen.getCursorScreenPoint())
+  if (shotCache && Date.now() - shotCache.ts < CAPTURE_TTL_MS && shotCache.dispId === disp.id) {
     const { image, width, height } = shotCache
     return { image, width, height }
   }
   const shot = await captureScreenshot()
   shotCache = { ...shot, ts: Date.now() }
-  auditLog('capture.screen', { width: shot.width, height: shot.height, bytes: shot.image.length })
-  return shot
+  auditLog('capture.screen', { width: shot.width, height: shot.height, bytes: shot.image.length, ...(phase ? { phase } : {}) })
+  const { image, width, height } = shot
+  return { image, width, height }
 }
 
 /** Fill the cache + warm the OS capture pipeline ahead of a real ask. Fire-and-forget; auth-gated. */
 function prewarmCapture(): void {
   if (!requireAuth()) return
-  getScreenshot().catch(() => {
+  getScreenshot('prewarm').catch(() => {
     /* best-effort warm */
   })
 }
@@ -462,7 +466,9 @@ const shortcutActions: Record<string, () => void> = {
   capture: () => sendHotkey('capture'),
   factcheck: () => sendHotkey('factcheck'),
   'scroll-up': () => moveBy(0, -60),
-  'scroll-down': () => moveBy(0, 60)
+  'scroll-down': () => moveBy(0, 60),
+  'scroll-left': () => moveBy(-60, 0),
+  'scroll-right': () => moveBy(60, 0)
 }
 
 function resolveShortcut(action: HotkeyAction, user: Record<string, string>): string {
@@ -488,6 +494,9 @@ let meetingTimer: ReturnType<typeof setInterval> | null = null
 let meetingActive = false
 let meetingDetecting = false
 let meetingDetectFailures = 0 // consecutive poll failures → one degraded-audit signal once it's persistent
+let notifTimer: ReturnType<typeof setInterval> | null = null
+let notifPrevPollMs = 0 // wall time of the previous notifier poll — used for edge-trigger logic
+const notifiedKeys = new Set<string>() // keys of events already notified this session
 
 // Cache today's agenda (~30s) so the 7s poller can cross-reference detected meetings against real calendar
 // events without hammering Graph. Validation only RESTRICTS auto-start when there are events to match
@@ -562,6 +571,71 @@ function startMeetingPoller(): void {
       meetingDetecting = false
     }
   }, 7000)
+}
+
+/**
+ * Native notification scheduler: fires a system notification ~1 minute before each calendar event.
+ * Polls every 30 s using the existing calendarCache (no extra Graph call when cache is warm).
+ * Gated on the meetingNotifications setting; silently no-ops when notifications aren't supported.
+ */
+function startMeetingNotifier(): void {
+  if (notifTimer) return
+  notifTimer = setInterval(async () => {
+    try {
+      if (!getSettings().meetingNotifications) return
+      if (!Notification.isSupported()) return
+
+      // Resolve today's events from the warm cache or a fresh Outlook fetch (same pattern as shouldAutoStart).
+      let events: CalendarEvent[] = []
+      if (calendarCache && Date.now() - calendarCache.ts <= CALENDAR_CACHE_TTL_MS) {
+        events = calendarCache.events
+      } else if (requireAuth()) {
+        let tz = 'UTC'
+        try { tz = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC' } catch { /* keep UTC */ }
+        const res = await calendarToday(tz)
+        if (res.ok && res.events) {
+          calendarCache = { events: res.events, ts: Date.now() }
+          events = res.events
+        }
+      }
+
+      const now = Date.now()
+      // Snapshot and advance the previous-poll timestamp for the edge-trigger calculation below.
+      const prevPollMs = notifPrevPollMs
+      notifPrevPollMs = now
+      for (const ev of events) {
+        if (!ev.start) continue
+        const startMs = Date.parse(ev.start)
+        if (isNaN(startMs)) continue
+        // Edge-trigger: fire on the first poll where the 60 s mark has been crossed, regardless of
+        // poll-interval jitter. The old "60–90 s window" would silently miss a notification when a
+        // poll slipped past the 30 s interval (e.g. T=91 s then T=59 s skips the window entirely).
+        const msUntil = startMs - now
+        if (msUntil < -30_000) continue // event started > 30 s ago — too late to notify
+        if (msUntil > 60_000) continue  // event is still > 60 s away — not yet due
+        // prevPollMs=0 means this is the first poll ever; treat prevMsUntil as ∞ so we fire immediately
+        // if an event is already within 60 s.
+        const prevMsUntil = prevPollMs > 0 ? startMs - prevPollMs : Number.POSITIVE_INFINITY
+        if (prevMsUntil <= 60_000) continue // threshold was already crossed at the previous poll
+        const key = `${ev.subject}@${ev.start}`
+        if (notifiedKeys.has(key)) continue
+        notifiedKeys.add(key)
+        try {
+          new Notification({
+            title: 'Meeting starting soon',
+            body: `${ev.subject} starts in 1 minute`
+          }).show()
+        } catch {
+          /* notifications may be blocked by the OS */
+        }
+      }
+    } catch (e) {
+      // calendarToday / Outlook fetch failure is transient (network, token expiry). Log a warning
+      // rather than letting the rejection escape as an unhandledRejection → bogus crash audit.
+      mainLog.warn('[meeting-notifier] tick failed:', e instanceof Error ? e.message : String(e))
+    }
+  }, 30_000)
+  if (typeof notifTimer.unref === 'function') notifTimer.unref()
 }
 
 function createTray(): void {
@@ -749,6 +823,52 @@ function registerIpc(): void {
     return calendarToday(typeof tz === 'string' ? tz : 'UTC')
   })
 
+  // Google Calendar OAuth + calendar access (no requireAuth gate — Google sign-in is independent of
+  // the Mantu/Azure gate; the user can connect Google Calendar without a corporate sign-in).
+  ipcMain.handle(IPC.googleAuthStatus, async (e) => {
+    assertMainWindow(e)
+    const status = googleAuthStatus()
+    googleSignedIn = status.signedIn
+    return status
+  })
+  ipcMain.handle(IPC.googleAuthStart, async (e) => {
+    assertMainWindow(e)
+    const result = await googleSignIn()
+    if (result.ok) googleSignedIn = true
+    return result
+  })
+  ipcMain.handle(IPC.googleSignOut, async (e) => {
+    assertMainWindow(e)
+    googleSignOut()
+    googleSignedIn = false
+    return { ok: true }
+  })
+  ipcMain.handle(IPC.googleCalendarToday, async (e, tz: unknown) => {
+    assertMainWindow(e)
+    // No requireAuth() gate — Google Calendar is independent of the Mantu/Azure sign-in (see the
+    // sibling handlers above). googleCalendarToday() itself returns { needsConsent } when Google
+    // isn't connected, so gating on the Mantu session here would create a dead-end "connect Google"
+    // loop that connecting Google can never clear once Azure SSO is enforced.
+    return googleCalendarToday(typeof tz === 'string' ? tz : 'UTC')
+  })
+
+  // Recall read: load a saved meeting back for "Resume session" (decode + parse the markdown).
+  ipcMain.handle(IPC.recallRead, async (e, file: unknown) => {
+    assertMainWindow(e)
+    if (!requireAuth()) return { ok: false, error: 'Sign in with your Mantu account first.' }
+    return recallRead(String(file ?? ''))
+  })
+
+  // Recall delete: GDPR right-to-erasure for a saved meeting — removes the file + its index row.
+  ipcMain.handle(IPC.recallDelete, async (e, file: unknown) => {
+    assertMainWindow(e)
+    if (!requireAuth()) return { ok: false, error: 'Sign in with your Mantu account first.' }
+    const safeName = basename(String(file ?? ''))
+    const result = await deleteMeeting(safeName)
+    if (result.ok) auditLog('transcript.deleted', { file: safeName })
+    return result
+  })
+
   // Parakeet (on-device, main-process). Whisper stays the renderer default; these only run when the user
   // selects the Parakeet engine. All wrapped so a failure degrades to Whisper rather than breaking Listen.
   ipcMain.handle(IPC.parakeetStatus, (e) => {
@@ -853,7 +973,7 @@ function registerIpc(): void {
               : ''
       if (ineligible) {
         if (attempted.length === 0) win?.webContents.send(IPC.streamError, { id: req.id, message: ineligible })
-        else failover(attempted.concat(provider)) // a bad fallback — just skip to the next
+        else if (!failover(attempted.concat(provider))) win?.webContents.send(IPC.streamError, { id: req.id, message: ineligible })
         return
       }
       const baseURL =
@@ -969,6 +1089,12 @@ function registerIpc(): void {
     if (!requireAuth()) throw new Error('Not signed in.')
     const m = SaveMeetingSchema.parse(raw)
     const r = { path: await saveMeeting(getSettings(), m) }
+    auditLog('transcript.saved', {
+      mode: m.mode,
+      lines: m.lines.length,
+      durMin: Math.round((Date.now() - m.startedAt) / 60_000),
+      encrypted: !!getSettings().encryptTranscripts
+    })
     scheduleRebuild() // refresh the knowledge graph with the new note (debounced; no-op if disabled)
     return r
   })
@@ -978,6 +1104,7 @@ function registerIpc(): void {
     if (!requireAuth()) throw new Error('Not signed in.')
     const n = SaveNoteSchema.parse(raw)
     const r = { path: await saveNote(getSettings(), n) }
+    auditLog('note.saved', { mode: n.mode })
     scheduleRebuild()
     return r
   })
@@ -1062,8 +1189,10 @@ function registerIpc(): void {
     if (!requireAuth()) return ''
     const folder = resolveMeetingsFolder(getSettings())
     const path = join(folder, basename(String(file ?? ''))) // basename blocks traversal
+    const encrypted = isEncryptedFile(path)
+    auditLog('recall.open', { encrypted })
     // Encrypted transcripts are unreadable in an editor — open a decrypted temp copy instead.
-    if (isEncryptedFile(path)) return shell.openPath(decryptToTemp(path))
+    if (encrypted) return shell.openPath(decryptToTemp(path))
     return shell.openPath(path)
   })
 
@@ -1129,6 +1258,16 @@ if (!app.requestSingleInstanceLock()) {
   })
   app.whenReady().then(async () => {
   initLogging() // route main-process logs to a rotated file before anything else can fail
+  // Prune stale crash logs to the most recent 5 (best-effort; filenames sort lexicographically by ts).
+  try {
+    const ud = app.getPath('userData')
+    const crashLogs = readdirSync(ud)
+      .filter((f) => /^crash-\d+\.log$/.test(f))
+      .sort()
+    for (const f of crashLogs.slice(0, Math.max(0, crashLogs.length - 5))) {
+      try { unlinkSync(join(ud, f)) } catch { /* ignore */ }
+    }
+  } catch { /* best-effort — never block startup */ }
   // Never let an unhandled error crash the overlay silently — log to file, audit, write a crash dump, and
   // (for a fatal exception) offer a one-time relaunch while defaulting to keep-alive.
   process.on('uncaughtException', (err) => onFatal('uncaughtException', err))
@@ -1144,6 +1283,7 @@ if (!app.requestSingleInstanceLock()) {
   }
   if (!app.isPackaged) loadDotEnv() // dev convenience only; never read a stray .env in production
   ensureMeetingsFolder(getSettings()) // create the self-documenting OneDrive folder on first run
+  sweepStaleTempFiles() // remove any decrypted-transcript temp copies orphaned by a previous hard-kill
   if (process.platform === 'darwin') app.dock?.hide()
   // System-audio loopback: when the renderer calls getDisplayMedia for audio,
   // hand back the system audio loopback device (the "Them" channel) only.
@@ -1197,7 +1337,13 @@ if (!app.requestSingleInstanceLock()) {
       // starts when a screen video source is attached. We grant one here (gated above on armed +
       // main-frame + origin); the renderer drops the video track instantly, so no frame is rendered,
       // saved, or sent. This is the only way to capture the "them" side of a call on macOS.
-      const sources = await desktopCapturer.getSources({ types: ['screen'] })
+      let sources = await desktopCapturer.getSources({ types: ['screen'] })
+      if (!sources.length) {
+        // getSources can return empty transiently right after a fresh Screen-Recording grant.
+        // Retry once (matching captureScreenshot) before giving up.
+        await new Promise((r) => setTimeout(r, 250))
+        sources = await desktopCapturer.getSources({ types: ['screen'] })
+      }
       const screenSrc = sources[0]
       callback(screenSrc ? { video: screenSrc, audio: 'loopback' } : {})
     },
@@ -1313,7 +1459,14 @@ if (!app.requestSingleInstanceLock()) {
   runStep('autoConnectDust', autoConnectDust)
   runStep('registerScreenListeners', registerScreenListeners)
   runStep('startMeetingPoller', startMeetingPoller)
+  runStep('startMeetingNotifier', startMeetingNotifier)
   runStep('initAutoUpdate', initAutoUpdate)
+
+  // Prime the googleSignedIn cache so the first publicSettings() call returns the correct value
+  // (the module-level default is false; this async read updates it without blocking startup).
+  void Promise.resolve().then(() => {
+    try { googleSignedIn = googleAuthStatus().signedIn } catch { /* ignore */ }
+  })
 
   app.on('activate', () => {
     if (!win) createWindow()
@@ -1329,4 +1482,5 @@ app.on('window-all-closed', () => {
 app.on('will-quit', () => {
   globalShortcut.unregisterAll()
   if (meetingTimer) clearInterval(meetingTimer)
+  if (notifTimer) clearInterval(notifTimer)
 })

@@ -57,7 +57,7 @@ export function SignInWall({
       {err && <div className="text-[12px] text-[color:var(--cl-destructive)]">{err}</div>}
       <div className="flex items-center gap-1.5 text-[11px] text-[color:var(--cl-muted-foreground)]">
         <ShieldCheck size={12} className="text-[color:var(--cl-primary)]" />
-        Locked to your Mantu tenant · ties your usage to Dust.
+        Only your Mantu Microsoft account can sign in. Transcription runs on your device.
       </div>
     </div>
   )
