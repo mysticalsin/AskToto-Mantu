@@ -1,8 +1,8 @@
-import { readFile, readdir } from 'node:fs/promises'
-import { join } from 'node:path'
+import { readFile, readdir, unlink, writeFile } from 'node:fs/promises'
+import { join, basename } from 'node:path'
 import { resolveMeetingsFolder, decodeSaved } from './transcripts'
 import { getSettings } from './store'
-import type { MeetingSummary, RecallHit } from '@shared/ipc'
+import type { MeetingSummary, RecallHit, RecallReadResult, TranscriptLine } from '@shared/ipc'
 
 // Independent meeting-history backend (own implementation, no third-party source). Reads the saved
 // transcript markdown files and provides list + keyword search so managers (and Dust agents) can
@@ -64,6 +64,111 @@ export async function listMeetings(): Promise<MeetingSummary[]> {
     .filter((r): r is Read => r !== null)
     .map((r) => r.sum)
     .sort((a, b) => (b.date || '').localeCompare(a.date || ''))
+}
+
+/**
+ * Read a saved meeting file back into memory for "Resume session".
+ * Parses frontmatter (title, mode, date → startedAt), the recap section, and the transcript lines.
+ * Constrained to the meetings folder (same basename guard as recallOpen in index.ts — no traversal).
+ */
+export async function recallRead(file: string): Promise<RecallReadResult> {
+  const folder = resolveMeetingsFolder(getSettings())
+  // basename blocks path traversal (mirrors the recallOpen guard in index.ts).
+  const safeName = basename(file)
+  const fullPath = join(folder, safeName)
+  let text: string
+  try {
+    text = decodeSaved(await readFile(fullPath))
+  } catch {
+    return { ok: false, error: 'Could not read the meeting file.' }
+  }
+  if (!text) return { ok: false, error: 'Meeting file could not be decrypted on this device.' }
+
+  const fm = frontmatter(text)
+
+  // Recover startedAt from the frontmatter `date` field (ISO string written by saveMeeting).
+  let startedAt: number | undefined
+  if (fm.date) {
+    const ms = Date.parse(fm.date)
+    if (!isNaN(ms)) startedAt = ms
+  }
+
+  // Extract the recap section (## Notes & follow-ups … up to the next ##).
+  let recap = ''
+  const recapMatch = text.match(/^## Notes & follow-ups\n+([\s\S]*?)(?=^## |\s*$)/m)
+  if (recapMatch) recap = recapMatch[1].trim()
+
+  // Parse transcript lines from the ## Full transcript section.
+  // Format written by saveMeeting: **[HH:MM:SS] Them:** text  or  **[HH:MM:SS] You:** text
+  const lines: TranscriptLine[] = []
+  const transcriptMatch = text.match(/^## Full transcript\n+([\s\S]*)$/m)
+  if (transcriptMatch) {
+    const body = transcriptMatch[1]
+    // Use the ISO date from frontmatter to reconstruct absolute timestamps (same calendar day).
+    const baseDate = startedAt ? new Date(startedAt) : null
+    const lineRe = /^\*\*\[(\d{2}):(\d{2}):(\d{2})\] (Them|You):\*\* (.+)$/gm
+    let m: RegExpExecArray | null
+    while ((m = lineRe.exec(body)) !== null) {
+      const [, hh, mm, ss, speakerLabel, lineText] = m
+      let t = 0
+      if (baseDate) {
+        const d = new Date(baseDate)
+        d.setHours(Number(hh), Number(mm), Number(ss), 0)
+        // If the reconstructed time is before startedAt (midnight crossing), push to the next day.
+        if (d.getTime() < startedAt!) d.setDate(d.getDate() + 1)
+        t = d.getTime()
+      }
+      lines.push({
+        speaker: speakerLabel === 'Them' ? 'them' : 'you',
+        text: lineText.trim(),
+        t
+      })
+    }
+  }
+
+  return {
+    ok: true,
+    title: fm.title || safeName.replace(/\.md$/, ''),
+    mode: fm.mode || 'general',
+    startedAt,
+    recap,
+    lines
+  }
+}
+
+/**
+ * Delete a saved meeting: remove the .md file from disk and strip its row from index.md.
+ * Constrains `file` to the meetings folder via basename() (mirrors the recallOpen guard — no traversal).
+ */
+export async function deleteMeeting(file: string): Promise<{ ok: boolean; error?: string }> {
+  const folder = resolveMeetingsFolder(getSettings())
+  const safeName = basename(file) // block traversal
+  if (!safeName || !safeName.endsWith('.md') || safeName === 'index.md' || safeName === 'README.md') {
+    return { ok: false, error: 'Invalid meeting file name.' }
+  }
+  const fullPath = join(folder, safeName)
+  try {
+    await unlink(fullPath)
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code
+    if (code === 'ENOENT') return { ok: false, error: 'Meeting file not found.' }
+    return { ok: false, error: 'Could not delete meeting file.' }
+  }
+  // Remove the matching row from index.md (best-effort — a missing / unreadable index is not fatal).
+  try {
+    const indexPath = join(folder, 'index.md')
+    const raw = await readFile(indexPath, 'utf8')
+    // Each row ends with `| [open](safeName) |` — match the exact filename in the link cell.
+    const escaped = safeName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    const filtered = raw
+      .split('\n')
+      .filter((line) => !new RegExp(`\\(${escaped}\\)`).test(line))
+      .join('\n')
+    if (filtered !== raw) await writeFile(indexPath, filtered, 'utf8')
+  } catch {
+    /* index update is best-effort; never fail the delete because of it */
+  }
+  return { ok: true }
 }
 
 /** Keyword search across saved meetings; returns scored hits with a snippet. */

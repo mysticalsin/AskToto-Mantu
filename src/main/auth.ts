@@ -6,6 +6,7 @@ import { join } from 'node:path'
 import type { AuthStatus, SignInResult } from '@shared/ipc'
 import { getSettings } from './store'
 import { auditLog } from './logger'
+import { useFileBackend, encryptSecret, decryptSecret } from './secrets'
 
 // Scopes requested at sign-in: identity + read-only calendar (so the agenda can be pulled later with no
 // extra consent prompt). Least privilege — Calendars.Read, never ReadWrite.
@@ -87,18 +88,26 @@ function readSettingsAzure(): Partial<AzureConfig> {
  * Config resolved by precedence: env (dev) → machine-wide managed-config (IT policy) → per-user
  * managed-config → in-app Settings. Env/managed win so an org deployment can't be loosened from the UI;
  * the Settings fallback makes SSO self-serve (dummy-proof) when no policy file is deployed.
+ *
+ * Side-effect: writes the sticky-configured flag on the first successful resolution so that
+ * requireAuth() keeps enforcing sign-in even if Settings are later cleared from the renderer.
  */
 function readConfig(): AzureConfig | null {
   const clientId = process.env.AZURE_CLIENT_ID
   const tenantId = process.env.AZURE_TENANT_ID
   const allowedDomain = process.env.ASKTOTO_ALLOWED_DOMAIN
-  if (clientId && tenantId && allowedDomain) return { clientId, tenantId, allowedDomain }
+  if (clientId && tenantId && allowedDomain) {
+    writeStickyConfigured()
+    return { clientId, tenantId, allowedDomain }
+  }
   const m = readManagedAzure()
   if (m.clientId && m.tenantId && m.allowedDomain) {
+    writeStickyConfigured()
     return { clientId: m.clientId, tenantId: m.tenantId, allowedDomain: m.allowedDomain }
   }
   const s = readSettingsAzure()
   if (s.clientId && s.tenantId && s.allowedDomain) {
+    writeStickyConfigured()
     return { clientId: s.clientId, tenantId: s.tenantId, allowedDomain: s.allowedDomain }
   }
   return null
@@ -108,14 +117,45 @@ function sessionPath(): string {
   return join(app.getPath('userData'), 'auth-session.bin')
 }
 
+// ─── Sticky-configured flag ───────────────────────────────────────────────────
+//
+// Written once the first time readConfig() resolves any SSO config (env, managed, or Settings).
+// requireAuth() treats this flag as "enforced" even if a compromised renderer later clears the
+// in-app Settings azure fields (which would otherwise flip configured→false, unlocking the gate).
+// Cleared only by a genuine authenticated sign-out (signOut() with a live session).
+//
+function stickyConfiguredPath(): string {
+  return join(app.getPath('userData'), 'auth-configured.flag')
+}
+
+function writeStickyConfigured(): void {
+  const p = stickyConfiguredPath()
+  if (!existsSync(p)) {
+    try { writeFileSync(p, '1', { mode: 0o600 }) } catch { /* best-effort */ }
+  }
+}
+
+function clearStickyConfigured(): void {
+  try {
+    const p = stickyConfiguredPath()
+    if (existsSync(p)) rmSync(p)
+  } catch { /* best-effort */ }
+}
+
+function isStickyConfigured(): boolean {
+  try { return existsSync(stickyConfiguredPath()) } catch { return false }
+}
+
 function msalCachePath(): string {
   return join(app.getPath('userData'), 'msal-cache.bin')
 }
 
 /**
- * An MSAL token cache persisted to disk, encrypted at rest via the OS keychain (same discipline as
- * saveSession + the API-key vault). This is what lets a Graph access token survive past the interactive
- * sign-in so getGraphToken() can acquireTokenSilent later (e.g. to read the calendar). Never logged.
+ * An MSAL token cache persisted to disk, encrypted at rest (same discipline as saveSession + the
+ * API-key vault). File backend is used in dev; safeStorage in prod. Migration: if the file was
+ * written by safeStorage it is re-saved with the current backend on first read.
+ * This is what lets a Graph access token survive past the interactive sign-in so getGraphToken()
+ * can acquireTokenSilent later (e.g. to read the calendar). Never logged.
  */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function makeCachePlugin(): any {
@@ -123,18 +163,36 @@ function makeCachePlugin(): any {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     beforeCacheAccess: async (ctx: any): Promise<void> => {
       try {
-        if (!safeStorage.isEncryptionAvailable()) return
-        ctx.tokenCache.deserialize(safeStorage.decryptString(readFileSync(msalCachePath())))
+        const buf = readFileSync(msalCachePath())
+        let json: string | null = null
+
+        if (useFileBackend()) {
+          try { json = decryptSecret(buf) } catch { /* not AES-GCM format — try safeStorage below */ }
+        }
+        // Fallback / migration: try safeStorage (old installs or prod reads on prod path)
+        if (json === null && safeStorage.isEncryptionAvailable()) {
+          try { json = safeStorage.decryptString(buf) } catch { /* not a safeStorage blob either */ }
+          // If we read it via safeStorage while in file-backend mode, migrate now (best-effort)
+          if (json !== null && useFileBackend()) {
+            try { writeFileSync(msalCachePath(), encryptSecret(json), { mode: 0o600 }) } catch { /* best-effort */ }
+          }
+        }
+        if (json !== null) ctx.tokenCache.deserialize(json)
       } catch {
-        /* no cache yet, or keychain unavailable — start empty */
+        /* no cache yet — start empty */
       }
     },
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     afterCacheAccess: async (ctx: any): Promise<void> => {
       if (!ctx.cacheHasChanged) return
       try {
-        if (!safeStorage.isEncryptionAvailable()) return
-        writeFileSync(msalCachePath(), safeStorage.encryptString(ctx.tokenCache.serialize()), { mode: 0o600 })
+        const json = ctx.tokenCache.serialize()
+        const blob = useFileBackend()
+          ? encryptSecret(json)
+          : safeStorage.isEncryptionAvailable()
+            ? safeStorage.encryptString(json)
+            : null
+        if (blob) writeFileSync(msalCachePath(), blob, { mode: 0o600 })
       } catch {
         /* best-effort: token simply won't persist this run */
       }
@@ -304,15 +362,23 @@ function ensureRevalidationTimer(): void {
 function loadSession(): void {
   if (loaded) return
   loaded = true
-  // Only ever trust an ENCRYPTED session file. If safeStorage is unavailable we never wrote one (saveSession
-  // keeps the identity in memory), and a plaintext auth-session.bin would be forgeable — refuse to read it.
-  if (!safeStorage.isEncryptionAvailable()) {
-    session = null
-    return
-  }
   try {
     const buf = readFileSync(sessionPath())
-    session = JSON.parse(safeStorage.decryptString(buf)) as Session
+    let json: string | null = null
+
+    // Try the file backend (covers dev + new prod installs).
+    if (useFileBackend()) {
+      try { json = decryptSecret(buf) } catch { /* not AES-GCM format — try safeStorage below */ }
+    }
+    // Fallback / migration: try safeStorage (old prod installs or prod reads on the safeStorage path).
+    if (json === null && safeStorage.isEncryptionAvailable()) {
+      try { json = safeStorage.decryptString(buf) } catch { /* not a safeStorage blob */ }
+      // Migrate to file backend if we're now in file-backend mode (best-effort).
+      if (json !== null && useFileBackend()) {
+        try { writeFileSync(sessionPath(), encryptSecret(json), { mode: 0o600 }) } catch { /* best-effort */ }
+      }
+    }
+    session = json !== null ? (JSON.parse(json) as Session) : null
   } catch {
     session = null
   }
@@ -326,11 +392,17 @@ function loadSession(): void {
 
 function saveSession(s: Session): void {
   session = s
-  // Persist the identity ONLY when we can encrypt it; otherwise keep it in memory for this run rather than
-  // writing a forgeable plaintext session to disk. (Sign-in then re-prompts on next launch — the safe trade.)
-  if (!safeStorage.isEncryptionAvailable()) return
+  // Always persist — the file backend (dev) or safeStorage (prod) guarantees encryption at rest.
+  // Without encryption neither was written before; we continue to prefer safeStorage in prod for
+  // defence-in-depth, but the file backend removes the "must have keychain" blocker for dev/CI.
   try {
-    writeFileSync(sessionPath(), safeStorage.encryptString(JSON.stringify(s)), { mode: 0o600 })
+    const json = JSON.stringify(s)
+    const blob = useFileBackend()
+      ? encryptSecret(json)
+      : safeStorage.isEncryptionAvailable()
+        ? safeStorage.encryptString(json)
+        : null
+    if (blob) writeFileSync(sessionPath(), blob, { mode: 0o600 })
   } catch {
     /* in-memory only if write fails */
   }
@@ -380,10 +452,16 @@ function authEnforced(): boolean {
  * this — a renderer-only gate (the SignInWall) is bypassable via DevTools or a renderer compromise.
  * Default: returns true when sign-in isn't enforced (SSO unconfigured) OR the user is signed in.
  * Fail-closed: with ASKTOTO_REQUIRE_AUTH (env or managed-config), require a signed-in session always.
+ *
+ * Sticky-configured guard: once SSO was configured from ANY source, requireAuth() treats the device
+ * as enforced even if the renderer later clears the in-app Settings azure fields (which would
+ * otherwise flip configured→false and open the privileged surface). The sticky flag is cleared only
+ * by an authenticated signOut() — never by a renderer settings update.
  */
 export function requireAuth(): boolean {
   const s = authStatus()
   if (authEnforced()) return s.signedIn
+  if (isStickyConfigured()) return s.signedIn
   return !s.configured || s.signedIn
 }
 
@@ -508,6 +586,13 @@ export async function signIn(): Promise<SignInResult> {
 }
 
 export function signOut(): void {
+  // Load session before clearing so we can detect a genuine (authenticated) sign-out.
+  // The sticky-configured flag is only cleared when there was a real active session —
+  // a bare signOut() call with no session must NOT clear it (prevents an attacker from
+  // calling signOut() to drop the sticky flag and then clearing Settings to bypass auth).
+  loadSession()
+  const wasSignedIn = !!session
   clearSession()
+  if (wasSignedIn) clearStickyConfigured()
   auditLog('auth.signout')
 }

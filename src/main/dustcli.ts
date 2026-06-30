@@ -5,6 +5,7 @@ import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { DustCliImport } from '@shared/ipc'
 import { resolveBin } from './cli'
+import { clearApiKey, setSettings } from './store'
 
 const exec = promisify(execFile)
 
@@ -104,6 +105,19 @@ export async function refreshDustCliSession(): Promise<DustCliSession> {
     }
   }
   return importDustCliSession()
+}
+
+/**
+ * Clear the stored Dust CLI session so the user can reconnect from scratch.
+ *
+ * Removes the Dust API token from AskToto's API-key vault (the short-lived OAuth bearer
+ * token imported from the Dust CLI keychain) and resets the workspace settings. Does NOT
+ * touch the Dust CLI's own system-keychain entries — the user can still `dust login` again
+ * without reinstalling the CLI. After disconnect the UI will show the "Connect" state.
+ */
+export function disconnectDustCli(): void {
+  clearApiKey('dust')
+  setSettings({ dustWorkspaceId: '', dustBaseUrl: 'https://dust.tt' })
 }
 
 /**

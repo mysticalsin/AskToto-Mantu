@@ -37,10 +37,10 @@ describe('CLI_CONFIGS — security-critical arg arrays (must never relax)', () =
     expect(args).toContain('stream-json')
   })
 
-  it('claude-cli passes the prompt via -p and omits model/system when empty', () => {
+  it('claude-cli sends the prompt via stdin (never argv) and omits model/system flags when empty', () => {
     const args = CLI_CONFIGS['claude-cli']!.buildArgs({ model: '', system: '', prompt: 'hello' })
-    expect(args[0]).toBe('-p')
-    expect(args[1]).toBe('hello')
+    expect(args[0]).toBe('-p') // print/non-interactive mode; the prompt is read from stdin
+    expect(args).not.toContain('hello') // confidential content must NEVER appear in argv (ps-visible)
     expect(args).not.toContain('--model')
     expect(args).not.toContain('--append-system-prompt')
     // even with no model/system the lockdown flags are still present
@@ -48,13 +48,14 @@ describe('CLI_CONFIGS — security-critical arg arrays (must never relax)', () =
     expect(args).toContain('--disallowedTools')
   })
 
-  it('codex-cli disables the shell tool, skips git checks, and sandboxes via exec', () => {
+  it('codex-cli disables the shell tool, skips git checks, sandboxes via exec, and keeps content off argv', () => {
     const args = CLI_CONFIGS['codex-cli']!.buildArgs({ model: 'gpt', system: 'sys', prompt: 'hi' })
     expect(args[0]).toBe('exec')
     expect(args).toContain('--json')
     expect(args).toContain('--skip-git-repo-check')
     expect(args).toContain('features.shell_tool=false')
-    expect(args).toContain('developer_instructions=sys')
+    expect(args).not.toContain('developer_instructions=sys') // system goes via stdin, not argv
+    expect(args.join(' ')).not.toContain('hi') // prompt must not appear in argv
     expect(args[args.indexOf('-m') + 1]).toBe('gpt')
   })
 

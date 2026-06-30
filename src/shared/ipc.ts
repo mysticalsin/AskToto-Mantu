@@ -49,6 +49,10 @@ export const IPC = {
   authSignIn: 'auth:signIn',
   authSignOut: 'auth:signOut',
   calendarToday: 'calendar:today',
+  googleAuthStart: 'google:authStart',
+  googleAuthStatus: 'google:status',
+  googleSignOut: 'google:signOut',
+  googleCalendarToday: 'google:calendarToday',
   parakeetStatus: 'parakeet:status',
   parakeetEnsure: 'parakeet:ensure',
   parakeetFeed: 'parakeet:feed',
@@ -69,6 +73,8 @@ export const IPC = {
   recallList: 'recall:list',
   recallSearch: 'recall:search',
   recallOpen: 'recall:open',
+  recallRead: 'recall:read',
+  recallDelete: 'recall:delete',
   windowResize: 'window:resize',
   windowMode: 'window:mode',
   windowMoveBy: 'window:moveBy',
@@ -121,7 +127,39 @@ export const CONVERSATION_MODES = [
   'general'
 ] as const
 export const ConversationModeSchema = z.enum(CONVERSATION_MODES)
-export type ConversationMode = z.infer<typeof ConversationModeSchema>
+/** The 7 built-in modes. */
+export type BuiltinMode = (typeof CONVERSATION_MODES)[number]
+/** Active mode id: a built-in id OR a user-created custom mode id. The `(string & {})` keeps literal
+ *  autocomplete for built-ins while accepting any custom id, so existing consumers compile unchanged. */
+export type ConversationMode = BuiltinMode | (string & {})
+
+/** Display labels for the 7 built-in modes (single source of truth, shared by ModePicker + Settings + bar). */
+export const BUILTIN_MODE_LABELS: Record<BuiltinMode, string> = {
+  general: 'General',
+  interview: 'Interview',
+  meeting: 'Meeting',
+  sales: 'Sales',
+  negotiation: 'Negotiation',
+  presentation: 'Presentation',
+  support: 'Support'
+}
+
+/** A user-created custom mode (id + display label). Its prompt lives in settings.modePrompts[id] and its
+ *  context files in settings.contextDocs[id]. Built-in modes are never stored here. */
+export interface CustomMode { id: string; label: string }
+
+/** Cluely-style ordered groups for the modes list (built-ins). Custom modes render under their own group in the UI. */
+export const MODE_GROUPS: { label: string; modes: BuiltinMode[] }[] = [
+  { label: 'General', modes: ['general'] },
+  { label: 'Live assist', modes: ['interview', 'sales', 'negotiation', 'presentation', 'support'] },
+  { label: 'Meetings', modes: ['meeting'] }
+]
+
+/** Resolve a mode id (built-in or custom) to its display label. */
+export function modeLabel(id: string, customModes: CustomMode[] = []): string {
+  if (id in BUILTIN_MODE_LABELS) return BUILTIN_MODE_LABELS[id as BuiltinMode]
+  return customModes.find((m) => m.id === id)?.label ?? id
+}
 
 export const ProfileSchema = z.object({
   name: z.string().default(''),
@@ -142,7 +180,7 @@ export type TranscriptLine = z.infer<typeof TranscriptLineSchema>
 
 export const SaveMeetingSchema = z.object({
   title: z.string().default(''),
-  mode: ConversationModeSchema.default('general'),
+  mode: z.string().default('general'),
   startedAt: z.number(),
   lines: z.array(TranscriptLineSchema),
   recap: z.string().default('')
@@ -151,7 +189,7 @@ export type SaveMeeting = z.infer<typeof SaveMeetingSchema>
 
 export const SaveNoteSchema = z.object({
   title: z.string().default(''),
-  mode: ConversationModeSchema.default('general'),
+  mode: z.string().default('general'),
   question: z.string().default(''),
   answer: z.string().min(1)
 })
@@ -243,6 +281,13 @@ export const BaseSettingsSchema = z.object({
   azureClientId: z.string().default(''),
   azureTenantId: z.string().default(''),
   azureAllowedDomain: z.string().default(''),
+  // Google OAuth desktop client id (public identifier — the installed-app PKCE flow uses no confidential
+  // secret). Set in Settings → Calendar to enable "Connect Google Calendar". Env GOOGLE_CLIENT_ID /
+  // managed-config still override. Empty → the Google row shows "needs setup".
+  googleClientId: z.string().default(''),
+  // Optional org-domain restriction for Google sign-in (e.g. "mantu.com"). Empty = any Google account.
+  // Managed-config google.allowedDomain overrides this. Enforced in main/google-auth.ts.
+  googleAllowedDomain: z.string().default(''),
   // graphify knowledge-graph of the notes folder. backend 'auto' = local Claude Code CLI → stored
   // Claude key → stored OpenAI key (never Gemini). On by default for new installs; degrades gracefully
   // (shows an install hint, never throws) when graphify isn't installed. See main/graphify.ts.
@@ -267,11 +312,18 @@ export const BaseSettingsSchema = z.object({
       z.array(z.object({ name: z.string().max(200), text: z.string().max(120000) })).max(25)
     )
     .default({}),
+  // User-created custom modes (id + label). Their prompt lives in modePrompts[id], files in contextDocs[id].
+  customModes: z
+    .array(z.object({ id: z.string().min(1).max(60), label: z.string().min(1).max(60) }))
+    .max(40)
+    .default([]),
+  // Fire a native notification 1 minute before each calendar meeting starts (gated; off by default).
+  meetingNotifications: z.boolean().default(false),
   temperature: z.number().min(0).max(1),
   contentProtection: z.boolean(),
   audioSource: z.enum(['mic', 'system', 'both']),
   suggestEverySec: z.number().min(5).max(120),
-  mode: ConversationModeSchema.default('general'),
+  mode: z.string().min(1).max(60).default('general'),
   profile: ProfileSchema.default({}),
   shortcuts: z.record(z.string(), z.string().min(1)).default({}),
   autoSuggest: z.boolean().default(true),
@@ -327,7 +379,9 @@ export const PublicSettingsSchema = BaseSettingsSchema.extend({
   managedKeys: z.array(z.string()).default([]),
   /** Providers whose key is set via an environment variable — in-app Remove is a no-op for these. */
   envKeys: z.array(z.string()).default([]),
-  loginItemOpenAtLogin: z.boolean().default(false)
+  loginItemOpenAtLogin: z.boolean().default(false),
+  /** A Google Calendar account is connected (OAuth tokens present in the main-process keychain). */
+  googleConnected: z.boolean().default(false)
 })
 export type PublicSettings = z.infer<typeof PublicSettingsSchema>
 
@@ -343,6 +397,7 @@ export type SettingsPatch = Partial<
     | 'managedKeys'
     | 'envKeys'
     | 'loginItemOpenAtLogin'
+    | 'googleConnected'
   >
 >
 
@@ -358,6 +413,8 @@ export const DEFAULT_SETTINGS: Settings = {
   azureClientId: '',
   azureTenantId: '',
   azureAllowedDomain: '',
+  googleClientId: '',
+  googleAllowedDomain: '',
   graphifyEnabled: true,
   graphifyAutoRebuild: true,
   graphifyBackend: 'auto',
@@ -370,6 +427,8 @@ export const DEFAULT_SETTINGS: Settings = {
     'with language tags, KaTeX for math ($...$), and tables when they help. No filler.',
   modePrompts: {},
   contextDocs: {},
+  customModes: [],
+  meetingNotifications: false,
   temperature: 0.4,
   contentProtection: true,
   audioSource: 'both',
@@ -409,6 +468,8 @@ export const HOTKEY_ACTIONS: HotkeyAction[] = [
   'factcheck',
   'scroll-up',
   'scroll-down',
+  'scroll-left',
+  'scroll-right',
   'settings'
 ]
 
@@ -421,6 +482,8 @@ export type HotkeyAction =
   | 'factcheck'
   | 'scroll-up'
   | 'scroll-down'
+  | 'scroll-left'
+  | 'scroll-right'
   | 'settings'
   | 'agenda'
 
@@ -433,6 +496,8 @@ export const DEFAULT_SHORTCUTS: Record<HotkeyAction, string> = {
   factcheck: 'CommandOrControl+Shift+F',
   'scroll-up': 'CommandOrControl+Alt+Up',
   'scroll-down': 'CommandOrControl+Alt+Down',
+  'scroll-left': 'CommandOrControl+Alt+Left',
+  'scroll-right': 'CommandOrControl+Alt+Right',
   settings: '', // no global shortcut by default; opened from bar or tray
   // Agenda is reached from the tray only (the Cluely bar redesign dropped its toolbar button). Kept out
   // of HOTKEY_ACTIONS so it gets no global key / no Settings row, but typed so the tray can trigger it.
@@ -521,6 +586,25 @@ export interface CalendarTodayResult {
   error?: string
   events?: CalendarEvent[]
 }
+
+/** Google Calendar OAuth status (parallel to the Microsoft AuthStatus). */
+export interface GoogleAuthStatus {
+  configured: boolean // a Google OAuth client id is provisioned (env GOOGLE_CLIENT_ID or settings)
+  signedIn: boolean
+  email?: string
+}
+
+/** Result of reading a saved meeting back for "Resume session" (decoded transcript + recap). */
+export interface RecallReadResult {
+  ok: boolean
+  error?: string
+  title?: string
+  mode?: string
+  startedAt?: number
+  recap?: string
+  lines?: TranscriptLine[]
+}
+
 export interface DustAgentsResponse {
   ok: boolean
   agents?: DustAgent[]

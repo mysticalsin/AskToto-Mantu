@@ -21,3 +21,8 @@ resources/ort/**
 !resources/models/.gitkeep
 !resources/asr/.gitkeep
 !resources/ort/.gitkeep
+
+# Session QA scratch (never commit — 100M+ Electron userData, one-off test artifacts)
+.temp-qa-userdata/
+deep-qa-test.mjs
+issues_to_fix.md

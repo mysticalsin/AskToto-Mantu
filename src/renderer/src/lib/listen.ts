@@ -17,6 +17,11 @@ const WINDOW_SEC = 6
 const MAX_QUEUE = 24 // ~2.4 min of audio; drop oldest if the model is slow/failed to load
 const PARAKEET_FEED_TIMEOUT_MS = 5000 // a single Parakeet window shouldn't take longer than this to transcribe
 const PARAKEET_MAX_FAILURES = 3 // consecutive Parakeet failures → fall back to Whisper for the rest of the session
+const PARAKEET_EMPTY_RUN_MAX = 5 // consecutive '' returns on flowing audio → treat as engine stall, fall back to Whisper
+const THEM_WATCHDOG_MS = 20_000 // 20 s with the 'them' channel open but no window emitted → surface soft note
+// Exact text of the soft "not hearing the other side" note, shared by the watchdog (sets it) and the
+// first-'them'-emission handler (clears it) so loopback arriving AFTER the watchdog fired isn't left stuck.
+const THEM_SILENT_MSG = 'Not hearing the other side — check the call volume and that Screen Recording is granted.'
 export type AudioSource = 'mic' | 'system' | 'both'
 type Speaker = 'them' | 'you'
 
@@ -72,6 +77,7 @@ interface Channel {
   src: MediaStreamAudioSourceNode
   worklet: AudioWorkletNode
   stream: MediaStream
+  gain?: GainNode // present on 'them' only: boosts quiet system-loopback above the VAD floor
 }
 
 export interface ListenApi {
@@ -119,6 +125,9 @@ export function useListen(onQuestion?: (line: TranscriptLine) => void): ListenAp
   const liveRef = useRef(false) // true only between start() and stop() — guards stale results
   const crashedRef = useRef(false) // set in worker onerror (it already tore down) → stop() must not redo it
   const parakeetFailures = useRef(0) // consecutive Parakeet IPC failures → switch to Whisper after a few
+  const parakeetEmptyRunRef = useRef(0) // consecutive '' returns on flowing audio → engine stall detection
+  const themWatchdogRef = useRef<ReturnType<typeof setTimeout> | null>(null) // fires if 'them' emits nothing for THEM_WATCHDOG_MS
+  const themHeardRef = useRef(false) // flips true on the first real 'them' window so we clear the watchdog note exactly once
   const onQRef = useRef(onQuestion)
   onQRef.current = onQuestion
   const linesRef = useRef<TranscriptLine[]>([])
@@ -172,8 +181,20 @@ export function useListen(onQuestion?: (line: TranscriptLine) => void): ListenAp
       )
       void Promise.race([feed, timeout])
         .then((text) => {
-          parakeetFailures.current = 0 // success resets the streak
-          commitLine(text, job.speaker)
+          parakeetFailures.current = 0 // success (even empty) resets the IPC-failure streak
+          if (text === '') {
+            // Empty but technically successful: the window passed EMIT_RMS so audio WAS flowing — the
+            // engine returning nothing every time signals a stall (wrong model path, native init failure,
+            // silent loopback bug). Fall back to Whisper after a run so windows aren't silently swallowed.
+            parakeetEmptyRunRef.current += 1
+            if (parakeetEmptyRunRef.current >= PARAKEET_EMPTY_RUN_MAX) {
+              console.warn('[listen] parakeet returning empty every window — falling back to Whisper')
+              fallBackToWhisper()
+            }
+          } else {
+            parakeetEmptyRunRef.current = 0
+            commitLine(text, job.speaker)
+          }
         })
         .catch((err) => {
           parakeetFailures.current += 1
@@ -296,14 +317,52 @@ export function useListen(onQuestion?: (line: TranscriptLine) => void): ListenAp
         numberOfOutputs: 1,
         channelCount: 1
       })
+      // 'them' (system loopback): un-AGC'd call audio is typically 2–4× quieter than mic input and
+      // often never crosses the fixed VAD ON/EMIT_RMS thresholds. A GainNode lifts it into the
+      // detectable range without altering the mic channel or the VAD thresholds themselves.
+      const gain = sp === 'them' ? ctx.createGain() : null
+      if (gain) gain.gain.value = 3.0 // ~10 dB boost; safe headroom before digital clip at 1.0
+
       worklet.port.onmessage = (ev: MessageEvent): void => {
         const data = ev.data as { audio?: Float32Array }
-        if (data.audio) pushAudio(sp, data.audio)
+        if (data.audio) {
+          // First real emission from 'them' proves the channel is alive: cancel the watchdog AND clear
+          // the soft note if it's already showing (loopback can arrive AFTER the 20 s window — the note
+          // must not stay stuck for the rest of the session). Guarded by themHeardRef so this runs once.
+          if (sp === 'them' && !themHeardRef.current) {
+            themHeardRef.current = true
+            if (themWatchdogRef.current) {
+              clearTimeout(themWatchdogRef.current)
+              themWatchdogRef.current = null
+            }
+            setState((s) => (s.error === THEM_SILENT_MSG ? { ...s, error: null } : s))
+          }
+          pushAudio(sp, data.audio)
+        }
       }
-      const ch: Channel = { ctx, src, worklet, stream }
+      const ch: Channel = { ctx, src, worklet, stream, gain: gain ?? undefined }
       channels.current[sp] = ch
-      src.connect(worklet)
+      if (gain) {
+        src.connect(gain)
+        gain.connect(worklet)
+      } else {
+        src.connect(worklet)
+      }
       worklet.connect(ctx.destination) // keeps the node processing; output stays silent
+
+      // Watchdog: if 'them' is open for THEM_WATCHDOG_MS with zero windows the loopback is likely
+      // still too quiet or the SCKit session is misconfigured. Surface a soft, non-fatal note the UI
+      // can display — mic keeps working, teardown is NOT triggered.
+      if (sp === 'them') {
+        themHeardRef.current = false // fresh channel — re-arm first-emission detection
+        if (themWatchdogRef.current) clearTimeout(themWatchdogRef.current)
+        themWatchdogRef.current = setTimeout(() => {
+          themWatchdogRef.current = null
+          if (liveRef.current && channels.current.them) {
+            setState((s) => ({ ...s, error: THEM_SILENT_MSG }))
+          }
+        }, THEM_WATCHDOG_MS)
+      }
     },
     [pushAudio]
   )
@@ -318,11 +377,20 @@ export function useListen(onQuestion?: (line: TranscriptLine) => void): ListenAp
         clearTimeout(workerIdleTimer.current) // re-arming before the idle release fires: keep the worker warm
         workerIdleTimer.current = null
       }
+      // A stop() may still be draining — cancel its initial kickoff timer and reset the stopping guard so
+      // this fresh session is not torn down when finishTeardown fires for the previous stop().
+      if (drainTimerRef.current) {
+        clearTimeout(drainTimerRef.current)
+        drainTimerRef.current = null
+      }
+      stoppingRef.current = false
+      sessionEpochRef.current += 1
       queue.current = []
       busy.current = false
       liveRef.current = true
       crashedRef.current = false // fresh session — re-enable stop()'s teardown after any prior crash
       parakeetFailures.current = 0 // reset the failure streak so a new session gets a clean shot at Parakeet
+      parakeetEmptyRunRef.current = 0 // clear the empty-window run counter for a fresh session
       engineRef.current = engine
       themRunRef.current = '' // fresh session → no carried-over 'them' question turn
       setState((s) => ({ ...s, error: null, listening: true }))
@@ -416,19 +484,30 @@ export function useListen(onQuestion?: (line: TranscriptLine) => void): ListenAp
           await window.toto.armAudio(true) // arm the loopback handler only for this request
           let sys: MediaStream
           try {
-            // macOS produces system-audio loopback ONLY as part of a ScreenCaptureKit (screen-video)
-            // stream — an audio-only getDisplayMedia never starts capture ("Error starting capture").
-            // So we request a minimal 1fps video track to start the stream, then immediately stop and
-            // remove it: only the system-audio track is kept, and no video frame is ever read or sent.
+            // macOS: system-audio loopback only arrives inside a ScreenCaptureKit screen stream —
+            // getDisplayMedia({ audio: true }) alone fails with "Error starting capture".  We
+            // request a minimal 1fps video track to start the SCKit session.
+            //
+            // IMPORTANT: do NOT call t.stop() on the video track here.  On macOS, the video and
+            // audio loopback share a single ScreenCaptureKit SCStream session.  Stopping the video
+            // track before the audio worklet is connected can terminate that SCStream, leaving the
+            // audio track in readyState='ended' — alive in getAudioTracks() but producing no PCM.
+            // openChannel() stores the full stream (video + audio); closeChannel() calls t.stop()
+            // on every track when Listen ends, releasing the recording indicator cleanly then.
             sys = await navigator.mediaDevices.getDisplayMedia({ video: { frameRate: 1 }, audio: true })
-            sys.getVideoTracks().forEach((t) => {
-              t.stop()
-              sys.removeTrack(t)
-            })
           } finally {
             await window.toto.armAudio(false)
           }
-          if (!sys.getAudioTracks().length) throw new Error('no system audio track returned')
+          // Verify a live (non-ended) audio track is present.  If Screen Recording permission is
+          // missing, main's handler returns callback({}) which makes getDisplayMedia throw AbortError
+          // (caught below as isSysPermDenied).  If permission is granted but the track is already
+          // ended (rare SCKit version mismatch), surface that explicitly rather than passing a
+          // silent stream to the worklet.
+          const liveAudio = sys.getAudioTracks().filter((t) => t.readyState !== 'ended')
+          if (!liveAudio.length) {
+            sys.getTracks().forEach((t) => t.stop())
+            throw new Error('no system audio track') // non-abort → isSysPermDenied = false below
+          }
           if (!liveRef.current) {
             sys.getTracks().forEach((t) => t.stop())
             closeChannel('you')
@@ -444,11 +523,16 @@ export function useListen(onQuestion?: (line: TranscriptLine) => void): ListenAp
         }
       }
 
-      /** True when getDisplayMedia threw an AbortError — the display was asleep / picker cancelled,
-       *  NOT a missing Screen Recording permission. */
-      const isSysAbort =
+      // AbortError or NotAllowedError from getDisplayMedia almost always means Screen Recording
+      // permission was denied.  main's setDisplayMediaRequestHandler uses { useSystemPicker: false }
+      // so there is NO user-facing picker to cancel — callback({}) from the main guard (fired when
+      // desktopCapturer.getSources() returns empty due to missing permission) is what throws AbortError
+      // in the renderer.  Surface the real cause rather than blaming a sleeping display.
+      const isSysPermDenied =
         sysErr !== null &&
-        (sysErr.name === 'AbortError' || /abort/i.test(sysErr.message ?? ''))
+        (sysErr.name === 'AbortError' ||
+          sysErr.name === 'NotAllowedError' ||
+          /abort/i.test(sysErr.message ?? ''))
 
       if (!micOk && !sysOk) {
         // Nothing came up — tear down so no half-open channel stays hot while the UI says "not listening".
@@ -462,8 +546,8 @@ export function useListen(onQuestion?: (line: TranscriptLine) => void): ListenAp
         }
         let msg: string
         if (source === 'system') {
-          msg = isSysAbort
-            ? "Couldn't start system audio (display may be asleep or screen capture is busy). Try again."
+          msg = isSysPermDenied
+            ? 'System audio needs Screen Recording permission — grant it in System Settings → Privacy & Security → Screen Recording, then restart Listen.'
             : "Couldn't capture system audio. Grant Screen Recording in System Settings, or switch Listen to your microphone in Settings → Audio."
         } else {
           msg = "Couldn't start the microphone. Check Microphone access in System Settings → Privacy & Security → Microphone."
@@ -484,8 +568,8 @@ export function useListen(onQuestion?: (line: TranscriptLine) => void): ListenAp
       // At least one side is live → we ARE listening. Surface a soft note if the other side is missing.
       let note: string | null = null
       if (source === 'both' && micOk && !sysOk) {
-        note = isSysAbort
-          ? 'System audio couldn\'t start (display may be asleep or screen capture is busy). Using your microphone only.'
+        note = isSysPermDenied
+          ? 'System audio needs Screen Recording permission. Listening to microphone only — grant it in System Settings → Privacy & Security → Screen Recording, then restart Listen.'
           : 'System audio unavailable. Listening to your microphone only. Grant Screen Recording to hear the other side.'
       } else if (source === 'both' && !micOk && sysOk) {
         note = 'Microphone unavailable. Listening to system audio only.'
@@ -499,8 +583,14 @@ export function useListen(onQuestion?: (line: TranscriptLine) => void): ListenAp
   const closeChannel = useCallback((sp: Speaker): void => {
     const ch = channels.current[sp]
     if (!ch) return
+    // Clear the 'them' watchdog so it cannot fire after the channel is gone.
+    if (sp === 'them' && themWatchdogRef.current) {
+      clearTimeout(themWatchdogRef.current)
+      themWatchdogRef.current = null
+    }
     ch.worklet.disconnect()
     ch.worklet.port.onmessage = null
+    ch.gain?.disconnect() // disconnect the boost node if present (them channel only)
     ch.src.disconnect()
     ch.stream.getTracks().forEach((t) => t.stop())
     void ch.ctx.close().catch(() => {})
@@ -508,11 +598,14 @@ export function useListen(onQuestion?: (line: TranscriptLine) => void): ListenAp
   }, [])
 
   const stoppingRef = useRef(false) // double-stop guard
+  const drainTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null) // pending initial drain kickoff timer
+  const sessionEpochRef = useRef(0) // incremented each start(); drain/finishTeardown bails if epoch changed
   const stop = useCallback((): void => {
     // crashedRef → the worker onerror handler already ran the full teardown; running it again here would
     // thrash state (re-fire setListeningState(false), wipe the crash error) → the "dead-end" tray mismatch.
     if (stoppingRef.current || crashedRef.current) return // already stopping or already torn down by a crash
     stoppingRef.current = true
+    const myEpoch = sessionEpochRef.current
 
     // 1. Flush each open worklet's partial accumulation buffer WHILE liveRef is still true so that
     //    any flushed audio message routes through pushAudio → pump → commitLine before teardown.
@@ -536,6 +629,10 @@ export function useListen(onQuestion?: (line: TranscriptLine) => void): ListenAp
     const DRAIN_CEILING_MS = 4000
     const startedAt = Date.now()
     const finishTeardown = (): void => {
+      // A new start() ran while we were draining — it already owns the session; do not clobber it.
+      // Leave stoppingRef alone: start() already reset it for the new session, so an old-epoch tick
+      // clearing it here would weaken that session's double-stop guard.
+      if (sessionEpochRef.current !== myEpoch) return
       liveRef.current = false
       queue.current = [] // drop anything still undispatched past the ceiling so it can't leak into the next session
       themRunRef.current = '' // run after the drain: any final flushed question already fired while liveRef was true
@@ -543,6 +640,7 @@ export function useListen(onQuestion?: (line: TranscriptLine) => void): ListenAp
       closeChannel('them')
       void window.toto.setListeningState(false).catch(() => {})
       setState((s) => ({ ...s, listening: false, loading: false, error: null }))
+      drainTimerRef.current = null
       stoppingRef.current = false
       // Release the whisper worker (+ ~21MB ONNX wasm + loaded model) after a few idle minutes so it
       // does not sit resident for the entire life of an always-on overlay. ensureWorker() recreates it
@@ -556,14 +654,18 @@ export function useListen(onQuestion?: (line: TranscriptLine) => void): ListenAp
       }, WORKER_IDLE_RELEASE_MS)
     }
     const waitForDrain = (): void => {
+      // A new start() ran — the previous stop()'s drain must not proceed; the new session owns the state.
+      // (Leave stoppingRef alone, same reason as finishTeardown.)
+      if (sessionEpochRef.current !== myEpoch) return
       if ((queue.current.length === 0 && !busy.current) || Date.now() - startedAt > DRAIN_CEILING_MS) {
         finishTeardown()
         return
       }
-      setTimeout(waitForDrain, 60)
+      // Track the re-arm in drainTimerRef so a fresh start() can cancel a still-pending drain tick.
+      drainTimerRef.current = setTimeout(waitForDrain, 60)
     }
     // Give the worklet's flush message a tick to post its final window into the queue, then wait for drain.
-    setTimeout(waitForDrain, 80)
+    drainTimerRef.current = setTimeout(waitForDrain, 80)
   }, [closeChannel])
 
   const clear = useCallback((): void => {

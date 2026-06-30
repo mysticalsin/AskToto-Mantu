@@ -12,7 +12,6 @@ import {
   AlertCircle,
   Trash2,
   Loader2,
-  Heart,
   Cpu,
   Wand2,
   ShieldCheck,
@@ -27,16 +26,35 @@ import {
   Upload,
   RotateCcw,
   Trash,
-  Network
+  Network,
+  Calendar,
+  Bell,
+  User,
+  MoreHorizontal,
+  Plus,
+  ArrowUp,
+  ArrowDown,
+  ArrowLeft,
+  ArrowRight,
+  MessageSquare,
+  Camera,
+  Eye,
+  Settings2,
+  type LucideIcon
 } from 'lucide-react'
 import {
   DEFAULT_SHORTCUTS,
   HOTKEY_ACTIONS,
+  BUILTIN_MODE_LABELS,
+  MODE_GROUPS,
+  modeLabel,
   type PublicSettings,
   type Profile,
   type TestKeyResponse,
   type DustAgent,
   type ConversationMode,
+  type BuiltinMode,
+  type CustomMode,
   type AuthStatus,
   type GraphStatus,
   type HotkeyAction,
@@ -53,6 +71,7 @@ import {
 import { DEFAULT_MODE_PROMPTS } from '@shared/prompts'
 import { MantuLogo } from './MantuLogo'
 import { MantuMark } from './MantuMark'
+import { AgendaView } from './AgendaView'
 import { usePermissions } from '../state'
 
 const ctl =
@@ -203,8 +222,8 @@ function Section({
 }): JSX.Element {
   return (
     <section className="flex flex-col">
-      <div className="mb-2.5">
-        <div className="cl-eyebrow flex h-[18px] items-center font-semibold">{title}</div>
+      <div className="mb-3">
+        <div className="text-[13px] font-semibold leading-snug text-[color:var(--cl-foreground)]">{title}</div>
         {desc && (
           <div className="mt-1 text-[12px] text-[color:var(--cl-muted-foreground)]">{desc}</div>
         )}
@@ -262,7 +281,8 @@ function ToggleRow({
   on,
   onChange,
   children,
-  disabled = false
+  disabled = false,
+  icon: Icon
 }: {
   label: string
   desc: string
@@ -270,6 +290,7 @@ function ToggleRow({
   onChange: (v: boolean) => void
   children?: ReactNode
   disabled?: boolean
+  icon?: LucideIcon
 }): JSX.Element {
   const id = useId()
   const toggleId = `${id}-toggle`
@@ -277,12 +298,13 @@ function ToggleRow({
     <label
       htmlFor={toggleId}
       className={[
-        'no-drag flex w-full items-center justify-between gap-3 rounded-xl px-1 py-2 text-left',
+        'no-drag flex w-full items-center justify-between gap-3 rounded-[var(--cl-radius)] px-1 py-2 text-left',
         disabled ? 'cursor-default' : 'cursor-pointer'
       ].join(' ')}
     >
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2 text-[13px] text-[color:var(--cl-foreground)]">
+          {Icon && <Icon size={14} className="shrink-0 text-[color:var(--cl-muted-foreground)]" />}
           {label}
           {disabled && <span className={managedChipCls}>Managed by your organization</span>}
         </div>
@@ -1531,7 +1553,7 @@ function AudioChoices({
             disabled={locked}
             onClick={() => patch({ audioSource: c.id })}
             className={[
-              'no-drag cl-focus flex flex-col items-center gap-1 rounded-xl border px-2 py-3 transition-colors',
+              'no-drag cl-focus flex flex-col items-center gap-1 rounded-[var(--cl-radius)] border px-2 py-3 transition-colors',
               active
                 ? 'border-[var(--cl-primary)] bg-[var(--cl-primary-soft)]'
                 : 'border-[var(--cl-border)] bg-white/[0.02] hover:bg-white/[0.05]',
@@ -1549,16 +1571,6 @@ function AudioChoices({
   )
 }
 
-const MODE_LABEL: Record<ConversationMode, string> = {
-  general: 'General',
-  interview: 'Interview',
-  meeting: 'Meeting',
-  sales: 'Sales',
-  negotiation: 'Negotiation',
-  presentation: 'Presentation',
-  support: 'Support'
-}
-
 const LANGUAGE_OPTIONS = [
   'English', 'French', 'Spanish', 'German', 'Italian', 'Portuguese', 'Dutch',
   'Polish', 'Arabic', 'Chinese', 'Japanese', 'Korean', 'Hindi', 'Russian', 'Turkish'
@@ -1568,15 +1580,19 @@ const LANGUAGE_OPTIONS = [
 function ModePromptEditor({
   settings,
   patch,
-  mode
+  mode,
+  modeDisplayLabel
 }: {
   settings: PublicSettings
   patch: (p: Partial<PublicSettings>) => void
   mode: ConversationMode
+  modeDisplayLabel?: string
 }): JSX.Element {
+  const isBuiltin = mode in BUILTIN_MODE_LABELS
   const override = settings.modePrompts[mode]
-  const value = override ?? DEFAULT_MODE_PROMPTS[mode]
-  const isCustom = !!override && override.trim() !== '' && override !== DEFAULT_MODE_PROMPTS[mode]
+  const defaultPrompt = isBuiltin ? DEFAULT_MODE_PROMPTS[mode as keyof typeof DEFAULT_MODE_PROMPTS] ?? '' : ''
+  const value = override ?? defaultPrompt
+  const isModified = !!override && override.trim() !== '' && override !== defaultPrompt
   const locked = settings.managedKeys.includes('modePrompts')
   const reset = (): void => {
     const m = { ...settings.modePrompts }
@@ -1584,32 +1600,35 @@ function ModePromptEditor({
     patch({ modePrompts: m })
   }
   return (
-    <Section
-      title={`Prompt · ${MODE_LABEL[mode]}`}
-      desc="Pre-filled with a default. Edit freely; each mode keeps its own. Reset anytime."
-    >
+    <div className="flex flex-col gap-1.5">
+      <label className="text-[12px] font-medium text-[color:var(--cl-muted-foreground)]">
+        {modeDisplayLabel ? `${modeDisplayLabel} prompt` : 'Mode prompt'}
+      </label>
       <LazyTextarea
         value={value}
         disabled={locked}
+        placeholder={isBuiltin ? 'Customize this mode’s system prompt…' : 'Write a system prompt for this mode…'}
         onCommit={(v) => patch({ modePrompts: { ...settings.modePrompts, [mode]: v } })}
         className={[ctl, 'h-44 w-full resize-none text-[12px] leading-relaxed', locked ? 'opacity-60' : ''].join(' ')}
       />
-      <div className="mt-1.5 flex items-center gap-3">
-        {isCustom ? (
-          <button
-            type="button"
-            onClick={reset}
-            disabled={locked}
-            className="no-drag cl-focus inline-flex items-center gap-1 text-[12px] text-[color:var(--cl-muted-foreground)] hover:text-[color:var(--cl-foreground)]"
-          >
-            <RotateCcw size={12} /> Reset to default
-          </button>
-        ) : (
-          <span className="text-[11px] text-[color:var(--cl-muted-foreground)]">Using the built-in default.</span>
+      <div className="flex items-center gap-3">
+        {isBuiltin && (
+          isModified ? (
+            <button
+              type="button"
+              onClick={reset}
+              disabled={locked}
+              className="no-drag cl-focus inline-flex items-center gap-1 text-[12px] text-[color:var(--cl-muted-foreground)] hover:text-[color:var(--cl-foreground)]"
+            >
+              <RotateCcw size={12} /> Reset to default
+            </button>
+          ) : (
+            <span className="text-[11px] text-[color:var(--cl-muted-foreground)]">Using the built-in default.</span>
+          )
         )}
         <ManagedChip keys={settings.managedKeys} k="modePrompts" />
       </div>
-    </Section>
+    </div>
   )
 }
 
@@ -1619,11 +1638,13 @@ const TEXT_FILE_RE = /\.(txt|md|markdown|csv|tsv|json|log|ya?ml|xml|html?|css|ts
 function ContextDocs({
   settings,
   patch,
-  mode
+  mode,
+  modeDisplayLabel
 }: {
   settings: PublicSettings
   patch: (p: Partial<PublicSettings>) => void
   mode: ConversationMode
+  modeDisplayLabel?: string
 }): JSX.Element {
   const docs = settings.contextDocs[mode] || []
   const [drag, setDrag] = useState(false)
@@ -1666,9 +1687,10 @@ function ContextDocs({
 
   const remove = (i: number): void => writeDocs(docs.filter((_, idx) => idx !== i))
 
+  const contextTitle = modeDisplayLabel ? `Context documents · ${modeDisplayLabel}` : 'Context documents'
   return (
     <Section
-      title={`Context documents: ${MODE_LABEL[mode]}`}
+      title={contextTitle}
       desc="Import what this mode should know: résumé, deck, brief, specs. Kept per-mode, read on-device."
     >
       <label
@@ -1684,7 +1706,7 @@ function ContextDocs({
           if (e.dataTransfer.files.length) void ingest(e.dataTransfer.files)
         }}
         className={[
-          'no-drag flex cursor-pointer flex-col items-center justify-center gap-1.5 rounded-xl border border-dashed px-4 py-6 text-center transition-colors',
+          'no-drag flex cursor-pointer flex-col items-center justify-center gap-1.5 rounded-[var(--cl-radius)] border border-dashed px-4 py-6 text-center transition-colors',
           drag
             ? 'border-[var(--cl-primary)] bg-[var(--cl-primary-soft)]'
             : 'border-[var(--cl-input)] bg-white/[0.02] hover:bg-white/[0.04]'
@@ -1692,7 +1714,11 @@ function ContextDocs({
       >
         <Upload size={18} className="text-[color:var(--cl-primary)]" />
         <span className="text-[13px] text-[color:var(--cl-foreground)]">
-          Drop files here or <span className="text-[color:var(--cl-primary)]">browse</span>
+          Adding files gives more context
+        </span>
+        <span className="text-[12px] text-[color:var(--cl-muted-foreground)]">
+          Drag &amp; drop files here to add them, or{' '}
+          <span className="text-[color:var(--cl-primary)]">browse files</span>
         </span>
         <span className="text-[11px] text-[color:var(--cl-muted-foreground)]">
           Text files (txt, md, csv, json, code) up to 2 MB · 25 max
@@ -1736,9 +1762,9 @@ function ContextDocs({
 }
 
 /**
- * Modes pane (two-column, Cluely-style): left = the mode list with the live "Active" marker; right = the
- * selected mode's editable system prompt + per-mode context files + a "Set active" control. Selecting a
- * mode on the left only changes what you're VIEWING/EDITING; "Set active" is what flips settings.mode.
+ * Modes pane (two-column, Cluely-style): left = the mode list with the live “Active” marker; right = the
+ * selected mode's editable system prompt + per-mode context files + a “Set active” control. Selecting a
+ * mode on the left only changes what you're VIEWING/EDITING; “Set active” is the sticky footer action.
  */
 function PersonalizeModes({
   settings,
@@ -1748,92 +1774,290 @@ function PersonalizeModes({
   patch: (p: Partial<PublicSettings>) => void
 }): JSX.Element {
   const active = settings.mode
-  const [selected, setSelected] = useState<ConversationMode>(active)
+  const customModes: CustomMode[] = settings.customModes ?? []
+  const [selected, setSelected] = useState<string>(active)
+  const [overflowOpen, setOverflowOpen] = useState(false)
+  const [renaming, setRenaming] = useState(false)
+  const [renameValue, setRenameValue] = useState('')
+  const [creatingNew, setCreatingNew] = useState(false)
+  const [newLabel, setNewLabel] = useState('')
   const locked = settings.managedKeys.includes('mode')
-  const modes = Object.keys(MODE_LABEL) as ConversationMode[]
+
+  // Ensure selected still exists (could be deleted)
+  const allIds = [
+    ...MODE_GROUPS.flatMap((g) => g.modes as string[]),
+    ...customModes.map((c) => c.id)
+  ]
+  const safeSelected = allIds.includes(selected) ? selected : (MODE_GROUPS[0]?.modes[0] ?? 'general')
+  const selectedLabel = modeLabel(safeSelected, customModes)
+  const isBuiltinSelected = safeSelected in BUILTIN_MODE_LABELS
+
+  const createNewMode = (): void => {
+    const label = newLabel.trim() || 'New Mode'
+    const id = `custom-${Date.now()}`
+    patch({ customModes: [...customModes, { id, label }] })
+    setSelected(id)
+    setCreatingNew(false)
+    setNewLabel('')
+  }
+
+  const startRename = (): void => {
+    setRenameValue(selectedLabel)
+    setRenaming(true)
+    setOverflowOpen(false)
+  }
+
+  const commitRename = (): void => {
+    const label = renameValue.trim()
+    if (label && !isBuiltinSelected) {
+      patch({ customModes: customModes.map((c) => c.id === safeSelected ? { ...c, label } : c) })
+    }
+    setRenaming(false)
+  }
+
+  const deleteCustomMode = (): void => {
+    setOverflowOpen(false)
+    const nextModes = customModes.filter((c) => c.id !== safeSelected)
+    const nextPrompts = { ...settings.modePrompts }
+    delete nextPrompts[safeSelected]
+    const nextDocs = { ...settings.contextDocs }
+    delete nextDocs[safeSelected]
+    const next: Partial<PublicSettings> = {
+      customModes: nextModes,
+      modePrompts: nextPrompts,
+      contextDocs: nextDocs
+    }
+    if (active === safeSelected) next.mode = 'general'
+    patch(next)
+    setSelected('general')
+  }
+
+  const resetBuiltinPrompt = (): void => {
+    setOverflowOpen(false)
+    const m = { ...settings.modePrompts }
+    delete m[safeSelected]
+    patch({ modePrompts: m })
+  }
+
+  const clearBuiltinDocs = (): void => {
+    setOverflowOpen(false)
+    const d = { ...settings.contextDocs }
+    delete d[safeSelected]
+    patch({ contextDocs: d })
+  }
+
+  const renderModeButton = (m: string, label: string): JSX.Element => {
+    const isSel = m === safeSelected
+    const isActive = m === active
+    return (
+      <button
+        key={m}
+        type="button"
+        onClick={() => { setSelected(m); setOverflowOpen(false) }}
+        aria-pressed={isSel}
+        className={[
+          'no-drag cl-focus flex items-center gap-2 rounded-[10px] border px-2.5 py-1.5 text-left transition-colors',
+          isSel
+            ? 'border-[var(--cl-primary)]/40 bg-[var(--cl-primary-soft)]'
+            : 'border-transparent hover:bg-white/[0.04]'
+        ].join(' ')}
+      >
+        <span
+          className={[
+            'grid size-5 shrink-0 place-items-center rounded-[6px] text-[10px] font-semibold',
+            isActive ? 'bg-[var(--cl-primary)] text-white' : 'bg-white/[0.06] text-[color:var(--cl-muted-foreground)]'
+          ].join(' ')}
+        >
+          {label[0]?.toUpperCase() ?? '?'}
+        </span>
+        <span className="min-w-0 flex-1 truncate text-[12px] text-[color:var(--cl-foreground)]">
+          {label}
+        </span>
+        {isActive && <CircleCheck size={13} className="shrink-0 text-[color:var(--cl-primary)]" />}
+      </button>
+    )
+  }
+
   return (
     <div className="grid grid-cols-[176px_1fr] gap-4">
-      {/* Left — mode list */}
-      <div className="flex flex-col gap-1">
-        <div className="cl-eyebrow mb-1 px-1 font-semibold">Modes</div>
-        {modes.map((m) => {
-          const isSel = m === selected
-          const isActive = m === active
-          return (
-            <button
-              key={m}
-              type="button"
-              onClick={() => setSelected(m)}
-              aria-pressed={isSel}
-              className={[
-                'no-drag cl-focus flex items-center gap-2.5 rounded-[10px] border px-2.5 py-2 text-left transition-colors',
-                isSel
-                  ? 'border-[var(--cl-primary)]/40 bg-[var(--cl-primary-soft)]'
-                  : 'border-transparent hover:bg-white/[0.04]'
-              ].join(' ')}
-            >
-              <span
-                className={[
-                  'grid size-6 shrink-0 place-items-center rounded-[7px] text-[11px] font-semibold',
-                  isActive ? 'bg-[var(--cl-primary)] text-white' : 'bg-white/[0.06] text-[color:var(--cl-muted-foreground)]'
-                ].join(' ')}
-              >
-                {MODE_LABEL[m][0]}
-              </span>
-              <span className="min-w-0 flex-1 truncate text-[12px] text-[color:var(--cl-foreground)]">
-                {MODE_LABEL[m]}
-              </span>
-              {isActive && <CircleCheck size={14} className="shrink-0 text-[color:var(--cl-primary)]" />}
-            </button>
-          )
-        })}
+      {/* Left — mode list grouped by MODE_GROUPS + Custom */}
+      <div className="flex flex-col gap-0.5">
+        {/* + New Mode button */}
+        {creatingNew ? (
+          <div className="mb-1 flex items-center gap-1">
+            <input
+              autoFocus
+              value={newLabel}
+              onChange={(e) => setNewLabel(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') createNewMode()
+                if (e.key === 'Escape') { setCreatingNew(false); setNewLabel('') }
+              }}
+              onBlur={createNewMode}
+              placeholder="Mode name…"
+              className={`flex-1 min-w-0 text-[12px] ${ctl} py-1.5`}
+            />
+          </div>
+        ) : (
+          <button
+            type="button"
+            onClick={() => setCreatingNew(true)}
+            className="no-drag cl-focus mb-1.5 flex items-center gap-1.5 rounded-[10px] border border-dashed border-[var(--cl-border)] px-2.5 py-1.5 text-[11px] text-[color:var(--cl-muted-foreground)] hover:border-[var(--cl-primary)]/50 hover:text-[color:var(--cl-primary)] transition-colors"
+          >
+            <Plus size={12} /> New Mode
+          </button>
+        )}
+
+        {/* Built-in groups */}
+        {MODE_GROUPS.map((group) => (
+          <div key={group.label} className="flex flex-col gap-0.5">
+            <div className="cl-eyebrow mb-0.5 px-1 text-[10px] font-semibold uppercase tracking-wider text-[color:var(--cl-muted-foreground)]">
+              {group.label}
+            </div>
+            {group.modes.map((m) => renderModeButton(m, BUILTIN_MODE_LABELS[m]))}
+          </div>
+        ))}
+
+        {/* Custom modes group */}
+        {customModes.length > 0 && (
+          <div className="mt-1 flex flex-col gap-0.5">
+            <div className="cl-eyebrow mb-0.5 px-1 text-[10px] font-semibold uppercase tracking-wider text-[color:var(--cl-muted-foreground)]">
+              Custom
+            </div>
+            {customModes.map((c) => renderModeButton(c.id, c.label))}
+          </div>
+        )}
       </div>
 
-      {/* Right — selected mode's prompt + files + activate */}
+      {/* Right — selected mode's prompt + files + sticky footer */}
       <div className="flex min-w-0 flex-col gap-4">
+        {/* Header */}
         <div className="flex items-center justify-between gap-3">
           <div className="min-w-0">
-            <div className="truncate text-[18px] font-semibold text-[color:var(--cl-foreground)]">
-              {MODE_LABEL[selected]}
-            </div>
+            {renaming && !isBuiltinSelected ? (
+              <input
+                autoFocus
+                value={renameValue}
+                onChange={(e) => setRenameValue(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') commitRename()
+                  if (e.key === 'Escape') setRenaming(false)
+                }}
+                onBlur={commitRename}
+                className={`text-[18px] font-semibold bg-transparent border-b border-[var(--cl-primary)] outline-none text-[color:var(--cl-foreground)] w-full max-w-[200px]`}
+              />
+            ) : (
+              <div className="truncate text-[18px] font-semibold text-[color:var(--cl-foreground)]">
+                {selectedLabel}
+              </div>
+            )}
             <div className="text-[12px] text-[color:var(--cl-muted-foreground)]">
-              {active === selected ? 'This is your active mode.' : 'Previewing — “Set active” to switch to it.'}
+              {active === safeSelected ? 'This is your active mode.' : 'Previewing. Set active below.'}
             </div>
           </div>
-          {active === selected ? (
-            <span className="flex shrink-0 items-center gap-1 rounded-full bg-[var(--cl-primary-soft)] px-2.5 py-1 text-[11px] font-medium text-[color:var(--cl-primary)]">
-              <CircleCheck size={12} /> Active
-            </span>
-          ) : (
+
+          {/* Overflow menu */}
+          <div className="relative flex items-center gap-2">
+            {active === safeSelected && (
+              <span className="flex shrink-0 items-center gap-1 rounded-full bg-[var(--cl-primary-soft)] px-2.5 py-1 text-[11px] font-medium text-[color:var(--cl-primary)]">
+                <CircleCheck size={12} /> Active
+              </span>
+            )}
+            <button
+              type="button"
+              onClick={() => setOverflowOpen((o) => !o)}
+              aria-label="Mode options"
+              className="no-drag cl-focus flex size-7 items-center justify-center rounded-md text-[color:var(--cl-muted-foreground)] hover:bg-white/[0.06] hover:text-[color:var(--cl-foreground)]"
+            >
+              <MoreHorizontal size={15} />
+            </button>
+            {overflowOpen && (
+              <div className="absolute right-0 top-8 z-20 min-w-[180px] rounded-[10px] border border-[var(--cl-border)] bg-[var(--cl-bg,#1a1a2e)] shadow-lg">
+                {isBuiltinSelected ? (
+                  <>
+                    <button
+                      type="button"
+                      onClick={resetBuiltinPrompt}
+                      className="no-drag w-full px-3 py-2 text-left text-[12px] text-[color:var(--cl-foreground)] hover:bg-white/[0.05] rounded-t-[10px]"
+                    >
+                      <RotateCcw size={12} className="mr-2 inline" />
+                      Reset prompt to default
+                    </button>
+                    <button
+                      type="button"
+                      onClick={clearBuiltinDocs}
+                      className="no-drag w-full px-3 py-2 text-left text-[12px] text-[color:var(--cl-foreground)] hover:bg-white/[0.05] rounded-b-[10px]"
+                    >
+                      <Trash size={12} className="mr-2 inline" />
+                      Clear context files
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <button
+                      type="button"
+                      onClick={startRename}
+                      className="no-drag w-full px-3 py-2 text-left text-[12px] text-[color:var(--cl-foreground)] hover:bg-white/[0.05] rounded-t-[10px]"
+                    >
+                      Rename
+                    </button>
+                    <button
+                      type="button"
+                      onClick={deleteCustomMode}
+                      className="no-drag w-full px-3 py-2 text-left text-[12px] text-[color:var(--cl-destructive)] hover:bg-white/[0.05] rounded-b-[10px]"
+                    >
+                      <Trash size={12} className="mr-2 inline" />
+                      Delete mode
+                    </button>
+                  </>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Prompt editor + context docs */}
+        <ModePromptEditor settings={settings} patch={patch} mode={safeSelected} modeDisplayLabel={selectedLabel} />
+        <ContextDocs settings={settings} patch={patch} mode={safeSelected} modeDisplayLabel={selectedLabel} />
+
+        {/* Sticky footer: Set active */}
+        {active !== safeSelected && (
+          <div className="flex justify-end border-t border-[var(--cl-border)] pt-3">
             <button
               type="button"
               disabled={locked}
-              onClick={() => patch({ mode: selected })}
-              className="no-drag cl-focus shrink-0 rounded-[10px] bg-[var(--cl-primary)] px-3.5 py-2 text-[12px] font-medium text-white hover:opacity-90 disabled:opacity-50"
+              onClick={() => patch({ mode: safeSelected })}
+              className="no-drag cl-focus rounded-[10px] bg-[var(--cl-primary)] px-4 py-2 text-[12px] font-medium text-white hover:opacity-90 disabled:opacity-50"
             >
               Set active
             </button>
-          )}
-        </div>
-        <ModePromptEditor settings={settings} patch={patch} mode={selected} />
-        <ContextDocs settings={settings} patch={patch} mode={selected} />
+          </div>
+        )}
       </div>
     </div>
   )
 }
 
-type TabId = 'ai' | 'personalize' | 'audio' | 'privacy' | 'meetings' | 'shortcuts' | 'about'
+type TabId =
+  | 'ai'
+  | 'personalize'
+  | 'audio'
+  | 'privacy'
+  | 'meetings'
+  | 'shortcuts'
+  | 'about'
+  | 'calendar'
+  | 'profile'
 
-// Cluely-aligned tab vocabulary + order (Modes is the spine, so it leads). Tab IDs are unchanged so the
-// content gates below keep working; only the visible labels/order move. Calendar + Notifications arrive
-// with their content in the calendar/notifications work package.
-const TABS: { id: TabId; label: string; icon: typeof Cpu }[] = [
+const TABS: { id: TabId; label: string; icon: LucideIcon }[] = [
   { id: 'personalize', label: 'Modes', icon: Wand2 },
   { id: 'ai', label: 'AI', icon: Cpu },
   { id: 'audio', label: 'Audio', icon: Mic },
+  { id: 'calendar', label: 'Calendar', icon: Calendar },
   { id: 'meetings', label: 'Meetings', icon: FolderOpen },
   { id: 'shortcuts', label: 'Keybinds', icon: Keyboard },
   { id: 'privacy', label: 'Privacy', icon: ShieldCheck },
+  { id: 'profile', label: 'Profile', icon: User },
   { id: 'about', label: 'About', icon: Info }
 ]
 
@@ -1843,7 +2067,10 @@ export function Settings({
   saveKey,
   clearKey,
   testKey,
-  onClose
+  onClose,
+  initialTab,
+  onQuit,
+  onLogout
 }: {
   settings: PublicSettings
   patch: (p: Partial<PublicSettings>) => void
@@ -1851,8 +2078,13 @@ export function Settings({
   clearKey: (provider: ProviderId) => Promise<void>
   testKey: (provider: ProviderId, k: string) => Promise<TestKeyResponse>
   onClose?: () => void
+  initialTab?: TabId
+  // Quit / Log out routed through the parent so any in-flight meeting is flushed to disk first.
+  // Fall back to the raw IPC if a parent doesn't supply them (keeps the component standalone).
+  onQuit?: () => void
+  onLogout?: () => void
 }): JSX.Element {
-  const [tab, setTab] = useState<TabId>('personalize') // open on Modes (the spine), like the Cluely reference
+  const [tab, setTab] = useState<TabId>(initialTab ?? 'personalize')
   const managed = settings.managedKeys.length > 0
 
   return (
@@ -1971,9 +2203,7 @@ export function Settings({
                     className={'w-full resize-y ' + ctl}
                   />
                 </Section>
-                <Section title="About you" desc="Used for interview and sales modes.">
-                  <ProfileEditor profile={settings.profile} onChange={(p) => patch({ profile: p })} disabled={settings.managedKeys.includes('profile')} />
-                </Section>
+                {/* ProfileEditor moved to the Profile tab */}
               </div>
             )}
 
@@ -1990,6 +2220,7 @@ export function Settings({
                     on={settings.autoSuggest}
                     onChange={(v) => patch({ autoSuggest: v })}
                     disabled={settings.managedKeys.includes('autoSuggest')}
+                    icon={MessageSquare}
                   />
                   <label className="flex items-center justify-between gap-3 px-1 py-2 text-[12px] text-[color:var(--cl-muted-foreground)]">
                     <span className="flex items-center gap-2">
@@ -2069,6 +2300,7 @@ export function Settings({
                     on={settings.contentProtection}
                     onChange={(v) => patch({ contentProtection: v })}
                     disabled={settings.managedKeys.includes('contentProtection')}
+                    icon={Camera}
                   />
                 </Section>
                 <Section title="Recording consent" desc="Notice shown to you before AskToto records others.">
@@ -2241,38 +2473,74 @@ export function Settings({
             )}
 
             {tab === 'shortcuts' && (
-              <Section title="Keyboard shortcuts" desc="Global shortcuts work even when AskToto is not focused. Leave blank to disable. Use Cmd (Mac) / Ctrl (Windows).">
+              <Section title="Keyboard shortcuts" desc="AskToto works with these easy to remember commands. Click any of the keybinds to edit.">
                 <Shortcuts settings={settings} patch={patch} />
               </Section>
             )}
 
+            {tab === 'calendar' && (
+              <CalendarTab settings={settings} patch={patch} />
+            )}
+
+            {tab === 'profile' && (
+              <div className="flex flex-col gap-6">
+                <Section title="About you" desc="Used for interview and sales modes. The more detail, the better the answers.">
+                  <ProfileEditor
+                    profile={settings.profile}
+                    onChange={(p) => patch({ profile: p })}
+                    disabled={settings.managedKeys.includes('profile')}
+                  />
+                </Section>
+              </div>
+            )}
+
             {tab === 'about' && (
               <div className="flex flex-col gap-6">
-                <Section title="Account" desc="Sign-in tying AskToto to your Mantu Microsoft account & Dust.">
+                <Section title="Account" desc="Sign-in tying AskToto to your Mantu Microsoft account and Dust.">
                   <AccountRow settings={settings} patch={patch} />
                 </Section>
                 <Section title="Permissions" desc="Status of the OS permissions AskToto needs.">
                   <PermissionsSection />
                 </Section>
                 <Section
-                  title="Diagnostics"
-                  desc="On-device performance + quality from your local audit log. Computed here; never leaves this device."
+                  title="Usage"
+                  desc="On-device performance and quality from your local audit log. Never leaves this device."
                 >
                   <DiagnosticsSection />
                 </Section>
-                <div className="flex flex-col items-center gap-2 pt-2">
-                  <MantuLogo size={22} />
-                  <div className="flex items-center gap-1 text-[11px] text-[color:var(--cl-muted-foreground)]">
-                    <Heart size={11} className="text-[color:var(--cl-destructive)]" />
-                    Built with care by{' '}
+                <div className="flex flex-col items-center gap-2.5 pb-2 pt-4">
+                  <MantuLogo size={150} />
+                  <div className="text-[13px] font-semibold text-[color:var(--cl-foreground)]">
+                    AskToto 0.1.0 · Mantu
+                  </div>
+                  <div className="flex items-center gap-2 text-[11px] text-[color:var(--cl-muted-foreground)]">
                     <a
-                      href="https://www.linkedin.com/in/tonywalteur/"
+                      href="https://www.mantu.com/legal/privacy-policy"
                       target="_blank"
                       rel="noopener noreferrer"
-                      className="underline underline-offset-2 transition-colors hover:text-[color:var(--cl-foreground)]"
+                      className="transition-colors hover:text-[color:var(--cl-foreground)]"
                     >
-                      Tony Walteur
+                      Privacy
                     </a>
+                    <span aria-hidden>·</span>
+                    <a
+                      href="https://www.mantu.com/legal/data-handling"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="transition-colors hover:text-[color:var(--cl-foreground)]"
+                    >
+                      Data handling
+                    </a>
+                    <span aria-hidden>·</span>
+                    <a
+                      href="mailto:support@mantu.com"
+                      className="transition-colors hover:text-[color:var(--cl-foreground)]"
+                    >
+                      Support
+                    </a>
+                  </div>
+                  <div className="text-[11px] text-[color:var(--cl-muted-foreground)]">
+                    Built at Mantu
                   </div>
                 </div>
               </div>
@@ -2280,24 +2548,36 @@ export function Settings({
         </div>
       </main>
 
-      {/* Footer — Mantu credit + Done */}
-      <footer className="cl-footer flex h-12 shrink-0 items-center justify-between rounded-b-2xl px-4">
-        <span className="text-[11px] text-[color:var(--cl-muted-foreground)]">
-          Built by{' '}
-          <a
-            href="https://www.linkedin.com/in/tonywalteur/"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="text-[color:var(--cl-primary)] underline underline-offset-2"
-          >
-            Tony Walteur
-          </a>{' '}
-          · Mantu
-        </span>
+      {/* Footer — secondary actions left, Done right */}
+      <footer className="cl-footer flex h-14 shrink-0 items-center gap-2 rounded-b-2xl px-4">
+        <button
+          type="button"
+          onClick={() => patch({ onboardingDone: false })}
+          className="no-drag cl-focus flex items-center gap-1.5 rounded-[10px] border border-[var(--cl-border)] bg-white/[0.03] px-3 py-2 text-[12px] text-[color:var(--cl-foreground)] transition-colors hover:border-[var(--cl-input)] hover:bg-white/[0.08]"
+        >
+          <RotateCcw size={13} className="shrink-0 text-[color:var(--cl-muted-foreground)]" />
+          Reset onboarding
+        </button>
+        <button
+          type="button"
+          onClick={() => (onLogout ? onLogout() : void window.toto.signOut())}
+          className="no-drag cl-focus flex items-center gap-1.5 rounded-[10px] border border-[var(--cl-border)] bg-white/[0.03] px-3 py-2 text-[12px] text-[color:var(--cl-foreground)] transition-colors hover:border-[var(--cl-input)] hover:bg-white/[0.08]"
+        >
+          <X size={13} className="shrink-0 text-[color:var(--cl-muted-foreground)]" />
+          Log out
+        </button>
+        <button
+          type="button"
+          onClick={() => (onQuit ? onQuit() : void window.toto.quit())}
+          className="no-drag cl-focus flex items-center gap-1.5 rounded-[10px] border border-[var(--cl-destructive)]/30 bg-[var(--cl-destructive)]/5 px-3 py-2 text-[12px] text-[color:var(--cl-destructive)] transition-colors hover:bg-[var(--cl-destructive)]/15"
+        >
+          <X size={13} className="shrink-0" />
+          Quit
+        </button>
         <button
           type="button"
           onClick={onClose}
-          className="no-drag cl-focus rounded-[10px] bg-[var(--cl-primary)] px-4 py-2 text-[13px] font-medium text-white hover:opacity-90"
+          className="no-drag cl-focus ml-auto rounded-[10px] bg-[var(--cl-primary)] px-5 py-2 text-[13px] font-semibold text-white hover:opacity-90"
         >
           Done
         </button>
@@ -2306,45 +2586,90 @@ export function Settings({
   )
 }
 
-/** Read-only eval readout (latency p50/p95, acceptance, failovers) from the local audit log. */
+/** Usage panel from the local audit log. Computed on-device; never sent anywhere. */
 function DiagnosticsSection(): JSX.Element {
   const [m, setM] = useState<EvalMetrics | null>(null)
   useEffect(() => {
     void window.toto.readMetrics().then(setM).catch(() => setM(null))
   }, [])
-  const ms = (v: number | null): string => (v == null ? '—' : v >= 1000 ? `${(v / 1000).toFixed(1)}s` : `${Math.round(v)}ms`)
+
+  const ms = (v: number | null): string =>
+    v == null ? '—' : v >= 1000 ? `${(v / 1000).toFixed(1)}s` : `${Math.round(v)}ms`
   const pct = (r: number | null): string => (r == null ? '—' : `${Math.round(r * 100)}%`)
   const n = (v: number): string => (v >= 1000 ? `${(v / 1000).toFixed(1)}k` : String(v))
+
   if (!m) {
     return <div className="text-[12px] text-[color:var(--cl-muted-foreground)]">Loading…</div>
   }
   if (m.answers === 0 && m.acceptance.up + m.acceptance.down === 0) {
     return (
       <div className="text-[12px] text-[color:var(--cl-muted-foreground)]">
-        No data yet — ask a few questions and rate some answers, then check back.
+        No data yet. Ask a few questions and rate some answers, then check back.
       </div>
     )
   }
-  const cells: [string, string][] = [
-    ['Answers', String(m.answers)],
-    ['First token · p50', ms(m.ttftP50Ms)],
-    ['First token · p95', ms(m.ttftP95Ms)],
-    ['Answer · p50', ms(m.answerP50Ms)],
-    ['Answer · p95', ms(m.answerP95Ms)],
-    ['Acceptance', pct(m.acceptance.rate)],
-    ['Rated up / down', `${m.acceptance.up} / ${m.acceptance.down}`],
-    ['Failovers', String(m.fallbacks)],
-    ['Failures', String(m.failures)],
-    ['Tokens in / out', `${n(m.tokensIn)} / ${n(m.tokensOut)}`]
-  ]
+
+  const card = (label: string, value: string, sub?: string): JSX.Element => (
+    <div key={label} className="flex flex-col gap-0.5 rounded-[10px] bg-[var(--cl-card)] px-3 py-2">
+      <span className="text-[10px] uppercase tracking-wide text-[color:var(--cl-muted-foreground)]">{label}</span>
+      <span className="text-[16px] font-semibold tabular-nums text-[color:var(--cl-foreground)]">{value}</span>
+      {sub && <span className="text-[10px] text-[color:var(--cl-muted-foreground)]">{sub}</span>}
+    </div>
+  )
+
+  const byProviderEntries = Object.entries(m.byProvider).filter(([, v]) => v > 0)
+
   return (
-    <div className="grid grid-cols-3 gap-2">
-      {cells.map(([label, value]) => (
-        <div key={label} className="flex flex-col gap-0.5 rounded-[10px] bg-[var(--cl-card)] px-3 py-2">
-          <span className="text-[11px] text-[color:var(--cl-muted-foreground)]">{label}</span>
-          <span className="text-[15px] font-medium tabular-nums text-[color:var(--cl-foreground)]">{value}</span>
+    <div className="flex flex-col gap-4">
+      {/* Volume */}
+      <div className="grid grid-cols-3 gap-2">
+        {card('Answers', String(m.answers))}
+        {card('Tokens in', n(m.tokensIn))}
+        {card('Tokens out', n(m.tokensOut))}
+      </div>
+
+      {/* Latency */}
+      <div>
+        <div className="mb-1.5 text-[11px] font-medium text-[color:var(--cl-muted-foreground)]">Latency</div>
+        <div className="grid grid-cols-4 gap-2">
+          {card('First token p50', ms(m.ttftP50Ms))}
+          {card('First token p95', ms(m.ttftP95Ms))}
+          {card('Full answer p50', ms(m.answerP50Ms))}
+          {card('Full answer p95', ms(m.answerP95Ms))}
         </div>
-      ))}
+      </div>
+
+      {/* Quality */}
+      <div>
+        <div className="mb-1.5 text-[11px] font-medium text-[color:var(--cl-muted-foreground)]">Quality</div>
+        <div className="grid grid-cols-4 gap-2">
+          {card('Acceptance', pct(m.acceptance.rate))}
+          {card('Rated up', String(m.acceptance.up))}
+          {card('Rated down', String(m.acceptance.down))}
+          {card('Fallbacks', String(m.fallbacks))}
+        </div>
+      </div>
+
+      {/* By provider */}
+      {byProviderEntries.length > 0 && (
+        <div>
+          <div className="mb-1.5 text-[11px] font-medium text-[color:var(--cl-muted-foreground)]">By provider</div>
+          <div className="flex flex-wrap gap-2">
+            {byProviderEntries.map(([provider, count]) => (
+              <div key={provider} className="flex flex-col gap-0.5 rounded-[10px] bg-[var(--cl-card)] px-3 py-2 min-w-[80px]">
+                <span className="text-[10px] uppercase tracking-wide text-[color:var(--cl-muted-foreground)]">{provider}</span>
+                <span className="text-[16px] font-semibold tabular-nums text-[color:var(--cl-foreground)]">{count}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {m.failures > 0 && (
+        <div className="flex items-center gap-1.5 text-[11px] text-[color:var(--cl-destructive)]">
+          <AlertCircle size={12} /> {m.failures} answer{m.failures !== 1 ? 's' : ''} failed
+        </div>
+      )}
     </div>
   )
 }
@@ -2639,6 +2964,310 @@ function AccountRow({
   )
 }
 
+// ---------------------------------------------------------------------------
+// Calendar tab
+// ---------------------------------------------------------------------------
+
+/**
+ * Calendar tab: Outlook (Microsoft) and Google Calendar. Both can be connected with paste-in IDs.
+ * Also hosts the meeting notification toggle (merged from the former Notifications tab).
+ */
+function CalendarTab({
+  settings,
+  patch
+}: {
+  settings: PublicSettings
+  patch: (p: Partial<PublicSettings>) => void
+}): JSX.Element {
+  const [authStatus, setAuthStatus] = useState<AuthStatus | null>(null)
+  const [outlookBusy, setOutlookBusy] = useState(false)
+  const [outlookErr, setOutlookErr] = useState<string | null>(null)
+  const [showOutlookSetup, setShowOutlookSetup] = useState(false)
+  const [savingOutlook, setSavingOutlook] = useState(false)
+  const [clientId, setClientId] = useState(settings.azureClientId || '')
+  const [tenantId, setTenantId] = useState(settings.azureTenantId || '')
+  const [domain, setDomain] = useState(settings.azureAllowedDomain || '')
+
+  const [googleStatus, setGoogleStatus] = useState<{ configured: boolean; signedIn: boolean; email?: string } | null>(null)
+  const [googleBusy, setGoogleBusy] = useState(false)
+
+  const refreshOutlook = (): void => {
+    void window.toto.authStatus().then(setAuthStatus).catch(() => setAuthStatus(null))
+  }
+  useEffect(refreshOutlook, [])
+
+  const refreshGoogle = (): void => {
+    const fn = (window.toto as Record<string, unknown>)['googleAuthStatus'] as
+      | (() => Promise<{ configured: boolean; signedIn: boolean; email?: string }>)
+      | undefined
+    if (!fn) { setGoogleStatus({ configured: false, signedIn: false }); return }
+    void fn().then(setGoogleStatus).catch(() => setGoogleStatus({ configured: false, signedIn: false }))
+  }
+  useEffect(refreshGoogle, [])
+
+  const saveOutlookIds = async (): Promise<void> => {
+    const ci = clientId.trim()
+    const ti = tenantId.trim()
+    const dom = domain.trim().replace(/^@/, '')
+    if (!ci || !ti || !dom) { setOutlookErr('All three fields are required.'); return }
+    setSavingOutlook(true)
+    setOutlookErr(null)
+    await patch({ azureClientId: ci, azureTenantId: ti, azureAllowedDomain: dom })
+    refreshOutlook()
+    setSavingOutlook(false)
+    setShowOutlookSetup(false)
+  }
+
+  const signInOutlook = async (): Promise<void> => {
+    setOutlookBusy(true)
+    setOutlookErr(null)
+    const r = await window.toto.signIn()
+    setOutlookBusy(false)
+    if (!r.ok) setOutlookErr(r.error || 'Sign-in failed.')
+    refreshOutlook()
+  }
+
+  const signOutOutlook = async (): Promise<void> => {
+    await window.toto.signOut()
+    refreshOutlook()
+  }
+
+  const connectGoogle = async (): Promise<void> => {
+    const fn = (window.toto as Record<string, unknown>)['googleAuthStart'] as (() => Promise<void>) | undefined
+    if (!fn) return
+    setGoogleBusy(true)
+    await fn()
+    setGoogleBusy(false)
+    refreshGoogle()
+  }
+
+  const disconnectGoogle = async (): Promise<void> => {
+    const fn = (window.toto as Record<string, unknown>)['googleSignOut'] as (() => Promise<void>) | undefined
+    if (!fn) return
+    await fn()
+    refreshGoogle()
+  }
+
+  const connectedPill = (
+    <span className="flex shrink-0 items-center gap-1 rounded-full bg-[var(--cl-primary-soft)] px-2.5 py-1 text-[11px] font-medium text-[color:var(--cl-primary)]">
+      <CircleCheck size={12} /> Connected
+    </span>
+  )
+
+  const idField = (
+    label: string,
+    val: string,
+    set: (v: string) => void,
+    placeholder: string
+  ): JSX.Element => (
+    <label className="flex flex-col gap-1">
+      <span className="text-[11px] font-medium text-[color:var(--cl-muted-foreground)]">{label}</span>
+      <input
+        value={val}
+        spellCheck={false}
+        autoComplete="off"
+        placeholder={placeholder}
+        onChange={(e) => set(e.target.value)}
+        className={`${ctl} w-full`}
+      />
+    </label>
+  )
+
+  const isOutlookConnected = !!authStatus?.signedIn
+  const isGoogleConnected = !!googleStatus?.signedIn
+  const eitherConnected = isOutlookConnected || isGoogleConnected
+
+  return (
+    <div className="flex flex-col gap-6">
+
+      {/* Notifications — merged from former Notifications tab */}
+      <Section title="Notifications">
+        <ToggleRow
+          label="Meeting alerts"
+          desc="Notify 1 minute before a scheduled meeting starts."
+          on={settings.meetingNotifications ?? false}
+          onChange={(v) => patch({ meetingNotifications: v })}
+          icon={Bell}
+        />
+      </Section>
+
+      {/* Microsoft / Outlook */}
+      <Section title="Microsoft / Outlook" desc="Connect your work Microsoft account to see Outlook calendar events.">
+        <div className="flex flex-col gap-2">
+          {authStatus === null && (
+            <Loader2 size={14} className="animate-spin text-[color:var(--cl-muted-foreground)]" />
+          )}
+
+          {isOutlookConnected && (
+            <div className="cl-card flex items-center justify-between gap-3 px-3 py-2.5">
+              <div className="flex items-center gap-2">
+                {connectedPill}
+                <span className="text-[12px] text-[color:var(--cl-foreground)]">{authStatus?.email}</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => void signOutOutlook()}
+                className="no-drag cl-focus rounded-[8px] border border-[var(--cl-input)] px-2.5 py-1.5 text-[12px] text-[color:var(--cl-foreground)] hover:bg-white/[0.06]"
+              >
+                Disconnect
+              </button>
+            </div>
+          )}
+
+          {!isOutlookConnected && authStatus?.configured && !showOutlookSetup && (
+            <div className="flex flex-col gap-2">
+              <button
+                type="button"
+                disabled={outlookBusy}
+                onClick={() => void signInOutlook()}
+                className="no-drag cl-focus flex items-center justify-center gap-2 rounded-[8px] bg-[var(--cl-primary)] px-3 py-2 text-[13px] font-medium text-white hover:opacity-90 disabled:opacity-50"
+              >
+                {outlookBusy ? <Loader2 size={14} className="animate-spin" /> : null}
+                Connect Microsoft account
+              </button>
+              <div className="flex items-center justify-between">
+                <span className="text-[11px] text-[color:var(--cl-muted-foreground)]">
+                  Restricted to @{authStatus.domain}.
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setShowOutlookSetup(true)}
+                  className="no-drag cl-focus text-[11px] text-[color:var(--cl-muted-foreground)] underline underline-offset-2 hover:text-[color:var(--cl-foreground)]"
+                >
+                  Change IDs
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Paste-in setup — shown when not configured, or when user clicks "Change IDs" */}
+          {authStatus !== null && (!authStatus.configured || showOutlookSetup) && (
+            <div className="flex flex-col gap-2.5 rounded-[10px] border border-[var(--cl-input)] bg-white/[0.02] p-3">
+              <div className="flex items-start gap-2">
+                <ShieldCheck size={14} className="mt-0.5 shrink-0 text-[color:var(--cl-primary)]" />
+                <p className="text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
+                  Register an app in{' '}
+                  <a
+                    href="https://entra.microsoft.com/#view/Microsoft_AAD_RegisteredApps/ApplicationsListBlade"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-0.5 text-[color:var(--cl-primary)] underline underline-offset-2"
+                  >
+                    Microsoft Entra <ExternalLink size={10} />
+                  </a>{' '}
+                  (platform: Mobile &amp; desktop, redirect: <code className="rounded bg-white/[0.06] px-1">http://localhost</code>).
+                  These are public IDs. No secret needed.
+                </p>
+              </div>
+              {idField('Application (client) ID', clientId, setClientId, '00000000-0000-0000-0000-000000000000')}
+              {idField('Directory (tenant) ID', tenantId, setTenantId, '00000000-0000-0000-0000-000000000000')}
+              {idField('Allowed email domain', domain, setDomain, 'mantu.com')}
+              {outlookErr && (
+                <span className="text-[11px] text-[color:var(--cl-destructive)]">{outlookErr}</span>
+              )}
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => void saveOutlookIds()}
+                  disabled={savingOutlook}
+                  className="no-drag cl-focus flex items-center gap-1.5 rounded-[8px] bg-[var(--cl-primary)] px-3 py-1.5 text-[12px] font-medium text-white hover:opacity-90 disabled:opacity-50"
+                >
+                  {savingOutlook ? <Loader2 size={13} className="animate-spin" /> : null}
+                  Save IDs
+                </button>
+                {showOutlookSetup && (
+                  <button
+                    type="button"
+                    onClick={() => { setShowOutlookSetup(false); setOutlookErr(null) }}
+                    className="no-drag cl-focus rounded-[8px] px-2.5 py-1.5 text-[12px] text-[color:var(--cl-muted-foreground)] hover:text-[color:var(--cl-foreground)]"
+                  >
+                    Cancel
+                  </button>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* Sign-in error — only when the setup form is closed (form shows its own error inline) */}
+          {outlookErr && authStatus?.configured && !showOutlookSetup && (
+            <span className="text-[11px] text-[color:var(--cl-destructive)]">{outlookErr}</span>
+          )}
+        </div>
+      </Section>
+
+      {/* Google Calendar */}
+      <Section
+        title="Google Calendar"
+        desc={
+          googleStatus?.signedIn
+            ? `Connected as ${googleStatus.email ?? 'your Google account'}.`
+            : googleStatus?.configured
+              ? 'Google Calendar is configured. Connect your account.'
+              : 'Paste a Google client ID to enable Google Calendar.'
+        }
+      >
+        <div className="flex flex-col gap-2">
+          {/* Paste-in field — always shown so the user can update the client ID */}
+          <label className="flex flex-col gap-1">
+            <span className="text-[11px] font-medium text-[color:var(--cl-muted-foreground)]">Google client ID</span>
+            <LazyInput
+              value={settings.googleClientId || ''}
+              onCommit={(v) => { patch({ googleClientId: v }); refreshGoogle() }}
+              placeholder="12345678901-abc….apps.googleusercontent.com"
+              className={`${ctl} w-full`}
+            />
+          </label>
+          <span className="text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
+            Create an OAuth client in{' '}
+            <a
+              href="https://console.cloud.google.com/apis/credentials"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-0.5 text-[color:var(--cl-primary)] underline underline-offset-2"
+            >
+              Google Cloud Console <ExternalLink size={10} />
+            </a>{' '}
+            (type: Desktop app).
+          </span>
+
+          {isGoogleConnected ? (
+            <div className="cl-card flex items-center justify-between gap-3 px-3 py-2.5">
+              <div className="flex items-center gap-2">
+                {connectedPill}
+                <span className="text-[12px] text-[color:var(--cl-foreground)]">{googleStatus?.email}</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => void disconnectGoogle()}
+                className="no-drag cl-focus rounded-[8px] border border-[var(--cl-input)] px-2.5 py-1.5 text-[12px] text-[color:var(--cl-foreground)] hover:bg-white/[0.06]"
+              >
+                Disconnect
+              </button>
+            </div>
+          ) : googleStatus?.configured ? (
+            <button
+              type="button"
+              disabled={googleBusy}
+              onClick={() => void connectGoogle()}
+              className="no-drag cl-focus flex items-center justify-center gap-2 rounded-[8px] bg-[var(--cl-primary)] px-3 py-2 text-[13px] font-medium text-white hover:opacity-90 disabled:opacity-50"
+            >
+              {googleBusy ? <Loader2 size={14} className="animate-spin" /> : null}
+              Connect Google Calendar
+            </button>
+          ) : null}
+        </div>
+      </Section>
+
+      {/* Agenda preview — shown when at least one calendar is connected */}
+      {eitherConnected && (
+        <Section title="Today's agenda" desc="Preview from your connected calendar.">
+          <AgendaView />
+        </Section>
+      )}
+    </div>
+  )
+}
+
 function PermissionDot({ status }: { status: string }): JSX.Element {
   const color =
     status === 'granted'
@@ -2710,8 +3339,41 @@ const SHORTCUT_LABELS: Record<HotkeyAction, string> = {
   reset: 'New / reset',
   'scroll-up': 'Move up',
   'scroll-down': 'Move down',
+  'scroll-left': 'Move left',
+  'scroll-right': 'Move right',
   settings: 'Open settings',
   agenda: "Today's agenda" // tray-only action; not listed in HOTKEY_ACTIONS so it renders no shortcut row
+}
+
+type ShortcutGroup = 'General' | 'Window'
+
+const SHORTCUT_GROUPS: Record<HotkeyAction, ShortcutGroup> = {
+  ask: 'General',
+  hide: 'General',
+  reset: 'General',
+  settings: 'General',
+  'toggle-listen': 'General',
+  capture: 'General',
+  factcheck: 'General',
+  'scroll-up': 'Window',
+  'scroll-down': 'Window',
+  'scroll-left': 'Window',
+  'scroll-right': 'Window',
+  agenda: 'General'
+}
+
+const SHORTCUT_ICONS: Partial<Record<HotkeyAction, LucideIcon>> = {
+  ask: MessageSquare,
+  hide: Eye,
+  reset: RotateCcw,
+  settings: Settings2,
+  'toggle-listen': Mic,
+  capture: Camera,
+  factcheck: CircleCheck,
+  'scroll-up': ArrowUp,
+  'scroll-down': ArrowDown,
+  'scroll-left': ArrowLeft,
+  'scroll-right': ArrowRight
 }
 
 function displayAccelerator(a: string): string {
@@ -2760,6 +3422,22 @@ function keyEventToAccelerator(e: React.KeyboardEvent<HTMLInputElement>): string
   return parts.join('+')
 }
 
+function KeyChips({ accelerator }: { accelerator: string }): JSX.Element {
+  if (!accelerator) {
+    return <span className="text-[11px] text-[color:var(--cl-muted-foreground)]">Click to record</span>
+  }
+  const parts = displayAccelerator(accelerator).split('+')
+  return (
+    <span className="flex flex-wrap items-center gap-0.5">
+      {parts.map((part, i) => (
+        <span key={i} className="inline-flex items-center rounded border border-[var(--cl-border)] bg-[var(--cl-card)] px-1.5 text-[11px] font-medium text-[color:var(--cl-foreground)]">
+          {part}
+        </span>
+      ))}
+    </span>
+  )
+}
+
 function KeyRecorder({
   value,
   onChange
@@ -2771,28 +3449,25 @@ function KeyRecorder({
   const [preview, setPreview] = useState<string | null>(null)
   const inputRef = useRef<HTMLInputElement>(null)
 
+  // Auto-focus the capture input when recording starts
+  useEffect(() => {
+    if (recording) inputRef.current?.focus()
+  }, [recording])
+
   const onKeyDown = (e: React.KeyboardEvent<HTMLInputElement>): void => {
     e.preventDefault()
     e.stopPropagation()
     const acc = keyEventToAccelerator(e)
     if (acc === null) {
-      // Lone modifier — show visual feedback but don't commit
       setPreview(null)
       return
     }
     setPreview(acc)
     onChange(acc)
-    // Brief delay so the user sees the capture, then blur
     setTimeout(() => {
       setRecording(false)
       setPreview(null)
-      inputRef.current?.blur()
     }, 120)
-  }
-
-  const onFocus = (): void => {
-    setRecording(true)
-    setPreview(null)
   }
 
   const onBlur = (): void => {
@@ -2800,31 +3475,30 @@ function KeyRecorder({
     setPreview(null)
   }
 
-  const displayed = recording
-    ? preview !== null
-      ? displayAccelerator(preview)
-      : 'Press a shortcut...'
-    : displayAccelerator(value) || 'Click to record'
+  if (recording) {
+    return (
+      <input
+        ref={inputRef}
+        type="text"
+        readOnly
+        value={preview !== null ? displayAccelerator(preview) : 'Recording… press keys'}
+        onBlur={onBlur}
+        onKeyDown={onKeyDown}
+        title="Press your desired key combination"
+        className="no-drag cl-input font-ui min-w-0 flex-1 cursor-pointer select-none px-2 py-1 text-[12px] border-[var(--cl-primary)] bg-[var(--cl-primary-soft)] text-[color:var(--cl-primary)] outline-none ring-1 ring-[var(--cl-primary)] transition-colors"
+      />
+    )
+  }
 
   return (
-    <input
-      ref={inputRef}
-      type="text"
-      readOnly
-      value={displayed}
-      onFocus={onFocus}
-      onBlur={onBlur}
-      onKeyDown={onKeyDown}
+    <button
+      type="button"
+      onClick={() => setRecording(true)}
       title="Click then press your desired key combination"
-      className={[
-        'no-drag cl-input font-ui min-w-0 flex-1 cursor-pointer select-none px-2 py-1 text-[12px] transition-colors',
-        recording
-          ? 'border-[var(--cl-primary)] bg-[var(--cl-primary-soft)] text-[color:var(--cl-primary)] outline-none ring-1 ring-[var(--cl-primary)]'
-          : value
-            ? 'text-[color:var(--cl-foreground)]'
-            : 'text-[color:var(--cl-muted-foreground)]'
-      ].join(' ')}
-    />
+      className="no-drag cl-focus cl-input min-w-0 flex-1 cursor-pointer px-2 py-1 text-left transition-colors hover:bg-white/[0.04]"
+    >
+      <KeyChips accelerator={value} />
+    </button>
   )
 }
 
@@ -2844,40 +3518,54 @@ function Shortcuts({
     next[action] = DEFAULT_SHORTCUTS[action] ?? ''
     patch({ shortcuts: next })
   }
+
+  const groups: ShortcutGroup[] = ['General', 'Window']
+
   return (
-    <div className="flex flex-col gap-2">
-      <div className="flex flex-col gap-1">
-        {HOTKEY_ACTIONS.map((action) => {
-          const current = user[action] ?? DEFAULT_SHORTCUTS[action] ?? ''
-          const isDefault = current === (DEFAULT_SHORTCUTS[action] ?? '')
-          return (
-            <div key={action} className="flex items-center justify-between gap-3 px-1 py-1.5 text-[13px]">
-              <span className="min-w-[140px] text-[color:var(--cl-muted-foreground)]">
-                {SHORTCUT_LABELS[action]}
-              </span>
-              <div className="flex flex-1 items-center gap-2">
-                <KeyRecorder value={current} onChange={(v) => set(action, v)} />
-                <button
-                  type="button"
-                  onClick={() => set(action, '')}
-                  className="no-drag cl-focus rounded-md px-2 py-1 text-[11px] text-[color:var(--cl-muted-foreground)] hover:bg-white/[0.06] hover:text-[color:var(--cl-foreground)]"
-                >
-                  Clear
-                </button>
-                {!isDefault && (
-                  <button
-                    type="button"
-                    onClick={() => reset(action)}
-                    className="no-drag cl-focus rounded-md px-2 py-1 text-[11px] text-[color:var(--cl-primary)] hover:bg-white/[0.06]"
-                  >
-                    Reset
-                  </button>
-                )}
-              </div>
+    <div className="flex flex-col gap-4">
+      {groups.map((group) => {
+        const actions = HOTKEY_ACTIONS.filter((a) => SHORTCUT_GROUPS[a] === group)
+        if (actions.length === 0) return null
+        return (
+          <div key={group} className="flex flex-col gap-1">
+            <div className="cl-eyebrow mb-1 px-1 text-[10px] font-semibold uppercase tracking-wider text-[color:var(--cl-muted-foreground)]">
+              {group}
             </div>
-          )
-        })}
-      </div>
+            {actions.map((action) => {
+              const current = user[action] ?? DEFAULT_SHORTCUTS[action] ?? ''
+              const isDefault = current === (DEFAULT_SHORTCUTS[action] ?? '')
+              const Icon = SHORTCUT_ICONS[action]
+              return (
+                <div key={action} className="flex items-center justify-between gap-3 px-1 py-1.5 text-[13px]">
+                  <span className="flex min-w-[140px] items-center gap-1.5 text-[12px] text-[color:var(--cl-muted-foreground)]">
+                    {Icon && <Icon size={14} className="shrink-0" />}
+                    {SHORTCUT_LABELS[action]}
+                  </span>
+                  <div className="flex flex-1 items-center gap-2">
+                    <KeyRecorder value={current} onChange={(v) => set(action, v)} />
+                    <button
+                      type="button"
+                      onClick={() => set(action, '')}
+                      className="no-drag cl-focus rounded-md px-2 py-1 text-[11px] text-[color:var(--cl-muted-foreground)] hover:bg-white/[0.06] hover:text-[color:var(--cl-foreground)]"
+                    >
+                      Clear
+                    </button>
+                    {!isDefault && (
+                      <button
+                        type="button"
+                        onClick={() => reset(action)}
+                        className="no-drag cl-focus rounded-md px-2 py-1 text-[11px] text-[color:var(--cl-primary)] hover:bg-white/[0.06]"
+                      >
+                        Reset
+                      </button>
+                    )}
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        )
+      })}
       <div className="text-[11px] leading-relaxed text-[color:var(--cl-muted-foreground)]">
         Click a shortcut field and press your desired key combination. Changes apply immediately.
       </div>

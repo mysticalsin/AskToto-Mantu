@@ -21,6 +21,17 @@ function openaiMessages(req: AskStart, system: string): any[] {
   return msgs
 }
 
+/**
+ * Some OpenAI-compatible provider endpoints (local models, certain proxies) reject
+ * `stream_options.include_usage` with a 400 or 422. Detect that so we can retry without it.
+ */
+function isStreamOptionsRejection(e: unknown): boolean {
+  if (!(e instanceof OpenAI.APIError)) return false
+  if (e.status !== 400 && e.status !== 422) return false
+  const body = (String(e.message ?? '') + JSON.stringify((e as any).error ?? '')).toLowerCase()
+  return body.includes('stream_options') || body.includes('include_usage')
+}
+
 /** OpenAI-compatible (GPT, Kimi/Moonshot, custom base URL) — the default for any non-cli/dust/anthropic kind. */
 export function streamOpenAI(opts: StreamOptions): StreamHandle {
   const client = new OpenAI({ apiKey: opts.apiKey, baseURL: opts.baseURL || undefined })
@@ -30,33 +41,36 @@ export function streamOpenAI(opts: StreamOptions): StreamHandle {
     controller.abort()
   }, opts.idleMs)
   void (async () => {
-    try {
-      // OpenAI o-series reasoning models (o1/o3/o4…) reject `temperature` and `max_tokens`
-      // (they use `max_completion_tokens` and a fixed temperature) — branch the params accordingly.
-      const isOSeries = /(^|\/)o\d/i.test(opts.model)
-      // Some reasoning models reject a CUSTOM temperature — only the default (1) is allowed, and sending
-      // any other value 400s. OpenAI o-series and Kimi Code's kimi-for-coding both behave this way, so we
-      // omit `temperature` entirely for them (and let the provider use its required default).
-      const fixedTemperature = isOSeries || /kimi-for-coding/i.test(opts.model)
+    // OpenAI o-series reasoning models (o1/o3/o4…) reject `temperature` and `max_tokens`
+    // (they use `max_completion_tokens` and a fixed temperature) — branch the params accordingly.
+    const isOSeries = /(^|\/)o\d/i.test(opts.model)
+    // Some reasoning models reject a CUSTOM temperature — only the default (1) is allowed, and sending
+    // any other value 400s. OpenAI o-series and Kimi Code's kimi-for-coding both behave this way, so we
+    // omit `temperature` entirely for them (and let the provider use its required default).
+    const fixedTemperature = isOSeries || /kimi-for-coding/i.test(opts.model)
+    // Reasoning-only models (o-series, kimi-for-coding) spend a big chunk of the budget on hidden
+    // reasoning BEFORE the answer, so give them more headroom or the answer can come back empty
+    // (esp. on vision, where describing the image eats tokens). o-series uses max_completion_tokens.
+    const maxTokens = fixedTemperature || opts.req.mode === 'recap' ? 8192 : 4096
+
+    // Inner function: build params + run the streaming loop. `includeUsage` controls whether
+    // stream_options.include_usage is sent — some providers 400 on it, triggering a retry without it.
+    const doStream = async (includeUsage: boolean): Promise<{ inputTokens?: number; outputTokens?: number }> => {
       const params: any = {
         model: opts.model,
         stream: true,
-        // Ask the provider to include token usage in the final stream chunk (else onDone reports blank).
-        stream_options: { include_usage: true },
         messages: openaiMessages(opts.req, opts.system)
       }
-      // Reasoning-only models (o-series, kimi-for-coding) spend a big chunk of the budget on hidden
-      // reasoning BEFORE the answer, so give them more headroom or the answer can come back empty
-      // (esp. on vision, where describing the image eats tokens). o-series uses max_completion_tokens.
-      const maxTokens = fixedTemperature || opts.req.mode === 'recap' ? 8192 : 4096
+      // Ask the provider to include token usage in the final stream chunk (else onDone reports blank).
+      // Omitted on retry when the provider rejected it (isStreamOptionsRejection).
+      if (includeUsage) params.stream_options = { include_usage: true }
       if (isOSeries) {
         params.max_completion_tokens = maxTokens
       } else {
         params.max_tokens = maxTokens
       }
-      if (!fixedTemperature) {
-        params.temperature = opts.temperature
-      }
+      if (!fixedTemperature) params.temperature = opts.temperature
+
       const stream = (await client.chat.completions.create(params, {
         signal: controller.signal
       })) as unknown as AsyncIterable<{
@@ -78,12 +92,22 @@ export function streamOpenAI(opts: StreamOptions): StreamHandle {
         const u = (chunk as { usage?: typeof usage }).usage
         if (u) usage = u
       }
+      return { inputTokens: usage?.prompt_tokens, outputTokens: usage?.completion_tokens }
+    }
+
+    try {
+      let usageResult: { inputTokens?: number; outputTokens?: number }
+      try {
+        usageResult = await doStream(true)
+      } catch (firstErr) {
+        // Retry once without stream_options for providers that reject the usage param.
+        // Parameter rejections arrive before any content, so no partial-output concern.
+        if (!isStreamOptionsRejection(firstErr) || controller.signal.aborted) throw firstErr
+        usageResult = await doStream(false)
+      }
       wd.clear()
       // Report real usage only if the provider included it; never a fabricated chunk count.
-      opts.handlers.onDone({
-        inputTokens: usage?.prompt_tokens,
-        outputTokens: usage?.completion_tokens
-      })
+      opts.handlers.onDone(usageResult)
     } catch (e) {
       wd.clear()
       if (controller.signal.aborted) return

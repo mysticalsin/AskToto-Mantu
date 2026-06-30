@@ -1,22 +1,27 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { useEffect, useRef, type ReactNode } from 'react'
 import {
   Image,
-  ArrowUp,
+  CornerDownLeft,
   X,
   Eye,
   EyeOff,
   ChevronUp,
   ChevronDown,
+  ChevronLeft,
   AudioLines,
   LayoutGrid,
   Minimize2,
-  Minus
+  FileText,
+  Pause,
+  Plus
 } from 'lucide-react'
 import { MantuMark } from './MantuMark'
-import { ModePicker } from './ModePicker'
 import { Spinner } from './ui'
 import { useWindowDrag } from '../lib/window-drag'
-import type { ConversationMode } from '@shared/ipc'
+import type { ConversationMode, CustomMode } from '@shared/ipc'
+
+/** Single source of truth for toolbar icon stroke — prevents per-icon drift. */
+const ICON_STROKE = 1.85
 
 function clock(s: number): string {
   const m = Math.floor(s / 60)
@@ -38,17 +43,35 @@ export interface BarProps {
   onHistory: () => void
   /** Collapse the widget down to the floating control mini-pill. */
   onMinimize: () => void
-  stealth: boolean // true = hidden from screen-share/recording (others can't see it)
+  /** When true, activates Private view — notes are excluded from shared screens. */
+  stealth: boolean
   onToggleStealth: () => void
   seconds: number
   panelOpen: boolean
   onTogglePanel: () => void
   focusSignal: number
-  /** Active conversation mode + setter (the toolbar grid icon opens a mode popover). */
+  /** Active conversation mode. The grid icon routes to Settings → Personalize (not a bar-level switcher). */
   mode: ConversationMode
   onSetMode: (m: ConversationMode) => void
-  /** When present, the answer/copilot body renders INSIDE the widget, above the input. */
-  answer?: ReactNode
+  /** The answer/copilot body. When present the bar EXPANDS into one surface: big input on top, this body
+   *  in the middle, and the toolbar drops to the bottom — no separate panel underneath. */
+  body?: ReactNode
+  /** An answer/suggestion is open (drives back-arrow, header separator, follow-up placeholder). */
+  hasAnswer?: boolean
+  /** When set, a ← button appears at the far left of the input row when an answer is open. */
+  onBack?: () => void
+  /** When set, renders a small inline chip (purple dot + Eye + label) near the input. */
+  contextLabel?: string
+  /** Routes the grid/mode icon to Settings → Personalize; modes are not switchable from the bar. */
+  onOpenModes?: () => void
+  /** Needed to resolve a custom mode id to its display label. */
+  customModes?: CustomMode[]
+  /** When listening, the right column shows a "Transcript" button calling this instead of "History". */
+  onTranscript?: () => void
+  /** Start a fresh meeting from the bar (ends + saves the current one, then begins a new session). */
+  onNewMeeting?: () => void
+  /** When true, calling prewarmCapture() on input focus is permitted (pass visionReady && screenAsk). */
+  canPrewarm?: boolean
 }
 
 /** A centered toolbar icon: muted by default, accent-2 when active, danger when flagged. */
@@ -72,7 +95,7 @@ function IconTool({
       aria-label={title}
       onClick={onClick}
       className={[
-        'no-drag focus-ring grid place-items-center rounded-lg p-1 transition-colors duration-[var(--duration-hover)] active:scale-[0.92]',
+        'no-drag focus-ring grid place-items-center rounded-[10px] p-1 transition-colors duration-[var(--duration-hover)] active:scale-[0.92]',
         danger && active
           ? 'text-[color:var(--color-danger)]'
           : active
@@ -87,7 +110,6 @@ function IconTool({
 
 export function Bar(props: BarProps): JSX.Element {
   const inputRef = useRef<HTMLInputElement>(null)
-  const [modeOpen, setModeOpen] = useState(false)
   // Drag the whole window from anywhere on the widget (shared with the control pill). Dragging blurs the
   // input so the caret drops; a press that starts inside the input is excluded so text-selection works.
   const drag = useWindowDrag(() => inputRef.current?.blur())
@@ -96,59 +118,57 @@ export function Bar(props: BarProps): JSX.Element {
     if (props.focusSignal > 0) inputRef.current?.focus()
   }, [props.focusSignal])
 
-  // Escape closes the conversation-mode dropdown. Capture-phase + stopPropagation so it preempts the
-  // app's global Escape ladder (which would otherwise collapse the widget instead of closing the menu).
-  useEffect(() => {
-    if (!modeOpen) return
-    const onKey = (e: KeyboardEvent): void => {
-      if (e.key === 'Escape') {
-        e.stopPropagation()
-        e.preventDefault()
-        setModeOpen(false)
-      }
-    }
-    window.addEventListener('keydown', onKey, true)
-    return () => window.removeEventListener('keydown', onKey, true)
-  }, [modeOpen])
-
-  const hasAnswer = !!props.answer
+  // When a body is present the bar EXPANDS into one surface (big input → body → toolbar at the bottom).
+  const expanded = !!props.body
+  const hasAnswer = props.hasAnswer ?? expanded
 
   return (
-    // The mode dropdown renders in-flow BELOW the widget (the widget has overflow:hidden + the window
-    // hugs its content, so an absolute popover would clip). The flex-col lets it grow the window.
+    // The flex-col lets additional in-flow elements grow the window as needed.
     <div className="relative flex w-full flex-col items-stretch gap-1.5">
-      {modeOpen && (
-        // Click-away closes the mode dropdown. Behind the dropdown, above the widget.
-        <button
-          type="button"
-          aria-hidden="true"
-          tabIndex={-1}
-          onClick={() => setModeOpen(false)}
-          className="no-drag fixed inset-0 z-20 cursor-default"
-        />
-      )}
-
       <div
         {...drag}
         className={[
           'aw-widget w-full',
-          props.busy ? 'rainbow-ring' : '',
-          props.stealth ? '' : 'outline outline-2 outline-offset-2 outline-[var(--color-danger)]'
+          // Working → fast rainbow ring; Private view on → calm slow rainbow contour as the indicator.
+          props.busy ? 'rainbow-ring' : props.stealth ? 'aw-hidden-rainbow' : ''
         ].join(' ')}
       >
-        {/* In-place answer (Answer / Copilot) — expands inside the widget above the input. */}
-        {props.answer && <div className="max-h-[46vh] overflow-y-auto px-6 pb-1 pt-4">{props.answer}</div>}
-
-        {/* Row 1 — hero input + ↵ submit */}
+        {/* Row 1 — hero input + ↵ submit. Grows when expanded so the "ask anything" reads big.
+            Padding and font-size transition together for a smooth expand/collapse. */}
         <div
-          className="flex items-center gap-4 px-6"
-          style={{ paddingTop: hasAnswer ? 6 : 8, paddingBottom: hasAnswer ? 10 : 8 }}
+          className={[
+            'flex items-center gap-3 px-5 transition-[padding,font-size] duration-[var(--duration-panel)] ease-[var(--ease-spring)]',
+            expanded ? 'border-b border-[var(--color-hair-soft)]' : ''
+          ].join(' ')}
+          style={{ paddingTop: expanded ? 11 : 5, paddingBottom: expanded ? 11 : 5 }}
         >
+          {/* Back arrow — far left of the input row when an answer is open and onBack is provided */}
+          {hasAnswer && props.onBack && (
+            <button
+              type="button"
+              title="Back"
+              aria-label="Back"
+              onClick={props.onBack}
+              className="no-drag focus-ring flex-none grid place-items-center rounded-[10px] p-1 text-[color:var(--color-ink-3)] transition-colors duration-[var(--duration-hover)] hover:text-[color:var(--color-ink)]"
+            >
+              <ChevronLeft size={18} strokeWidth={ICON_STROKE} />
+            </button>
+          )}
+
+          {/* Context label chip (e.g. 'Viewed screen') */}
+          {props.contextLabel && (
+            <span className="flex flex-none items-center gap-1 rounded-full bg-white/[0.05] px-2 py-0.5 text-[11px] text-[color:var(--color-ink-2)]">
+              <span className="h-[6px] w-[6px] rounded-full bg-[var(--color-accent)]" />
+              <Eye size={11} strokeWidth={ICON_STROKE} />
+              {props.contextLabel}
+            </span>
+          )}
+
           <input
             ref={inputRef}
             value={props.value}
             onChange={(e) => props.onChange(e.target.value)}
-            onFocus={() => void window.toto.prewarmCapture()}
+            onFocus={() => { if (props.canPrewarm) void window.toto.prewarmCapture() }}
             onKeyDown={(e) => {
               if (e.key === 'Enter' && !e.shiftKey) {
                 e.preventDefault()
@@ -169,68 +189,90 @@ export function Bar(props: BarProps): JSX.Element {
             spellCheck={false}
             aria-label="Ask AskToto anything"
             className={[
-              'no-drag focus-ring font-body min-w-0 flex-1 bg-transparent tracking-[-0.01em] text-[color:var(--color-ink)] placeholder:text-[color:var(--color-ink-3)] caret-[var(--color-accent-2)]',
-              hasAnswer ? 'text-[15px]' : 'text-[17px] font-[450]'
+              'no-drag focus-ring font-body min-w-0 flex-1 bg-transparent tracking-[-0.01em] text-[color:var(--color-ink)] placeholder:text-[color:var(--color-ink-3)] caret-[var(--color-accent-2)] transition-[font-size] duration-[var(--duration-panel)] ease-[var(--ease-spring)]',
+              expanded ? 'text-[18px] font-[450]' : 'text-[15px] font-[450]'
             ].join(' ')}
           />
+
           {props.busy ? (
             <button
               type="button"
               title="Stop"
               aria-label="Stop"
               onClick={props.onStop}
-              className="no-drag focus-ring grid h-[38px] w-[46px] place-items-center rounded-[12px] border border-[var(--color-danger)]/30 bg-[var(--color-danger-soft)] text-[color:var(--color-danger)] hover:bg-[var(--color-danger)]/20"
+              className="no-drag focus-ring grid h-[38px] w-[46px] place-items-center rounded-[10px] border border-[var(--color-danger)]/30 bg-[var(--color-danger-soft)] text-[color:var(--color-danger)] hover:bg-[var(--color-danger)]/20"
             >
               <X size={18} />
             </button>
           ) : (
+            // Hero submit — accent-filled, ~38px. The only aw-fill control in the bar row.
             <button
               type="button"
               title="Ask (↵)"
               aria-label="Ask"
               onClick={props.onSubmit}
-              className="aw-fill no-drag focus-ring grid h-[38px] w-[46px] place-items-center rounded-[12px] text-white hover:brightness-110"
+              className="aw-fill no-drag focus-ring flex-none grid h-[38px] w-[46px] place-items-center rounded-[10px] text-white transition-colors duration-[var(--duration-hover)]"
             >
-              <ArrowUp size={19} />
+              <CornerDownLeft size={15} strokeWidth={ICON_STROKE} />
             </button>
           )}
         </div>
 
-        {/* Row 2 — toolbar. 3-column grid (1fr · auto · 1fr) so the center tool cluster sits at the TRUE
-            horizontal center of the bar regardless of the differing left (logo) / right (History…) widths. */}
-        <div className="aw-toolbar grid grid-cols-[1fr_auto_1fr] items-center border-t border-[var(--color-hair-soft)] px-5 py-1.5">
-          {/* The Mantu mark IS the logo → opens Settings. (No menu — Quit/Hide live in the tray + hotkeys.) */}
+        {/* Body — CSS grid-rows 0fr→1fr animates height; opacity fades in sync. Always rendered so
+            the transition runs on mount rather than snapping on conditional mount/unmount. */}
+        <div
+          className="grid overflow-hidden transition-[grid-template-rows,opacity] duration-[var(--duration-panel)] ease-[var(--ease-spring)]"
+          style={{
+            gridTemplateRows: props.body ? '1fr' : '0fr',
+            opacity: props.body ? 1 : 0
+          }}
+        >
+          <div className="min-h-0">
+            <div className="aw-body scroll-thin max-h-[58vh] overflow-y-auto px-5 py-3">
+              {props.body}
+            </div>
+          </div>
+        </div>
+
+        {/* Row 2 — toolbar. 3-column grid (1fr · auto · 1fr) so the center tool cluster stays dead-center.
+            When the bar is expanded this row sits at the BOTTOM, under the body: logo left, icons center,
+            History / Transcript right. */}
+        <div className="aw-toolbar grid grid-cols-[1fr_auto_1fr] items-center border-t border-[var(--color-hair-soft)] px-5 py-1">
+          {/* The Mantu mark IS the logo → opens Settings. (Quit/Hide live in the tray + hotkeys.) */}
           <button
             type="button"
             title="Settings"
             aria-label="Settings"
             onClick={props.onSettings}
-            className="no-drag focus-ring block flex-none justify-self-start rounded-[8px]"
+            className="no-drag focus-ring block flex-none justify-self-start rounded-[10px]"
           >
-            <span className="aw-mark-glow block rounded-[8px]">
-              <MantuMark size={34} />
+            <span className="aw-mark-glow block rounded-[10px]">
+              <MantuMark size={30} />
             </span>
           </button>
 
-          {/* Centered tools — the middle (auto) grid column, dead-center of the bar */}
+          {/* Centered tools — the middle (auto) grid column, dead-center of the bar.
+              A fixed-width slot for the timer + pause prevents the cluster from shifting when listening
+              starts; Capture / Eye / Mode always stay in exactly the same position. */}
           <div className="flex items-center justify-center gap-4">
             <IconTool title="Capture screen  (⌘⇧S)" onClick={props.onCapture}>
-              {props.capturing ? <Spinner size={21} /> : <Image size={21} strokeWidth={1.85} />}
+              {props.capturing ? <Spinner size={19} /> : <Image size={19} strokeWidth={ICON_STROKE} />}
             </IconTool>
             <IconTool
               title={
                 props.stealth
-                  ? 'Hidden from screen sharing. Others cannot see AskToto. Click to show.'
-                  : 'Visible in screen sharing. Others can see AskToto. Click to hide.'
+                  ? 'Private view on — your notes stay off the shared screen (the call is still recorded openly). Click to show.'
+                  : 'Private view off — your notes appear if you share this screen. Click to hide notes.'
               }
               onClick={props.onToggleStealth}
               active={!props.stealth}
               danger
             >
-              {props.stealth ? <EyeOff size={21} strokeWidth={1.85} /> : <Eye size={21} strokeWidth={1.85} />}
+              {props.stealth ? <EyeOff size={19} strokeWidth={ICON_STROKE} /> : <Eye size={19} strokeWidth={ICON_STROKE} />}
             </IconTool>
-            <IconTool title="Conversation mode" onClick={() => setModeOpen((o) => !o)} active={modeOpen}>
-              <LayoutGrid size={21} strokeWidth={1.85} />
+            {/* Grid icon routes to Settings → Personalize; modes are not switchable from the bar. */}
+            <IconTool title="Conversation mode" onClick={() => props.onOpenModes?.()}>
+              <LayoutGrid size={19} strokeWidth={ICON_STROKE} />
             </IconTool>
             <span className="h-5 w-px bg-[var(--color-hair-soft)]" />
             <IconTool
@@ -242,58 +284,81 @@ export function Bar(props: BarProps): JSX.Element {
               {props.listening ? (
                 <span className="rec-dot h-[12px] w-[12px] rounded-full bg-[var(--color-danger)] shadow-[0_0_8px_var(--color-danger)]" />
               ) : (
-                <AudioLines size={21} strokeWidth={1.85} />
+                <AudioLines size={19} strokeWidth={ICON_STROKE} />
               )}
             </IconTool>
-            {props.listening && (
-              <span className="tabular-nums text-[12px] font-medium text-[color:var(--color-danger)]">
-                {clock(props.seconds)}
-              </span>
-            )}
+            {/* Fixed-width reserved slot for timer + pause — always present so the cluster never shifts */}
+            <div className="flex w-[72px] items-center gap-2">
+              {props.listening && (
+                <>
+                  <span className="tabular-nums text-[12px] font-medium text-[color:var(--color-danger)]">
+                    {clock(props.seconds)}
+                  </span>
+                  {/* Pause button — wired to listen-toggle for now; a true pause state is out of scope. */}
+                  <button
+                    type="button"
+                    title="Pause recording"
+                    aria-label="Pause recording"
+                    onClick={props.onToggleListen}
+                    className="no-drag focus-ring grid place-items-center rounded-[10px] p-1 text-[color:var(--color-ink-3)] transition-colors duration-[var(--duration-hover)] hover:text-[color:var(--color-ink)]"
+                  >
+                    <Pause size={16} strokeWidth={ICON_STROKE} />
+                  </button>
+                </>
+              )}
+            </div>
           </div>
 
-          {/* Right: History · hide · minimize-to-pill · expand/collapse */}
+          {/* Right: History/Transcript pill(s) + Minimize-to-pill + collapse-chevron (ghost).
+              No separate Hide button — global ⌘\ and tray handle that. */}
           <div className="flex flex-none items-center justify-self-end gap-2">
-            <button
-              type="button"
-              onClick={props.onHistory}
-              className="no-drag focus-ring mr-0.5 text-[13.5px] font-semibold text-[color:var(--color-ink-2)] hover:text-[color:var(--color-ink)]"
-            >
-              History
-            </button>
-            {/* Hide the bar entirely (a global hotkey ⌘\ brings it back). Distinct from minimize-to-pill. */}
-            <IconTool title="Hide AskToto  (⌘\\)" onClick={() => void window.toto.hide()}>
-              <Minus size={17} strokeWidth={2} />
-            </IconTool>
+            {/* Live pivot: New meeting + Transcript when listening, History otherwise */}
+            {props.listening ? (
+              <>
+                <button
+                  type="button"
+                  title="Start a new meeting"
+                  onClick={props.onNewMeeting}
+                  className="no-drag focus-ring flex items-center gap-1.5 rounded-full bg-[var(--color-accent-soft)] px-3 py-1.5 text-[13px] font-semibold text-[color:var(--color-accent)] transition-colors duration-[var(--duration-hover)] hover:bg-[var(--color-accent)]/25"
+                >
+                  <Plus size={13} strokeWidth={2} />
+                  New meeting
+                </button>
+                <button
+                  type="button"
+                  onClick={props.onTranscript}
+                  className="no-drag focus-ring mr-0.5 flex items-center gap-1.5 rounded-full bg-white/[0.05] px-3 py-1.5 text-[13px] font-semibold text-[color:var(--color-ink-2)] transition-colors duration-[var(--duration-hover)] hover:bg-white/[0.1] hover:text-[color:var(--color-ink)]"
+                >
+                  <FileText size={13} strokeWidth={ICON_STROKE} />
+                  Transcript
+                </button>
+              </>
+            ) : (
+              <button
+                type="button"
+                onClick={props.onHistory}
+                className="no-drag focus-ring mr-0.5 flex items-center gap-1.5 rounded-full bg-white/[0.05] px-3 py-1.5 text-[13px] font-semibold text-[color:var(--color-ink-2)] transition-colors duration-[var(--duration-hover)] hover:bg-white/[0.1] hover:text-[color:var(--color-ink)]"
+              >
+                History
+                <ChevronDown size={13} strokeWidth={ICON_STROKE} />
+              </button>
+            )}
             <IconTool title="Minimize to a small pill" onClick={props.onMinimize}>
-              <Minimize2 size={17} strokeWidth={2} />
+              <Minimize2 size={17} strokeWidth={ICON_STROKE} />
             </IconTool>
+            {/* Collapse-chevron: plain ghost, not aw-fill. Submit is the only accent-filled control. */}
             <button
               type="button"
               title={props.panelOpen ? 'Collapse' : 'Expand'}
               aria-label={props.panelOpen ? 'Collapse' : 'Expand'}
               onClick={props.onTogglePanel}
-              className="aw-fill no-drag focus-ring grid h-[32px] w-[36px] place-items-center rounded-[10px] text-white hover:brightness-110"
+              className="no-drag focus-ring grid h-[32px] w-[36px] place-items-center rounded-[10px] text-[color:var(--color-ink-3)] transition-colors duration-[var(--duration-hover)] hover:text-[color:var(--color-ink)]"
             >
-              {props.panelOpen ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+              {props.panelOpen ? <ChevronUp size={16} strokeWidth={ICON_STROKE} /> : <ChevronDown size={16} strokeWidth={ICON_STROKE} />}
             </button>
           </div>
         </div>
       </div>
-
-      {/* Mode picker — in-flow dropdown, centered. */}
-      {modeOpen && (
-        <div className="aw-menu fade-up z-30 self-center rounded-[12px] p-1.5">
-          <ModePicker
-            mode={props.mode}
-            size="sm"
-            onChange={(m) => {
-              setModeOpen(false)
-              props.onSetMode(m)
-            }}
-          />
-        </div>
-      )}
     </div>
   )
 }

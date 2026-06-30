@@ -1,6 +1,7 @@
 import { useState } from 'react'
-import { Copy, Check, RefreshCw, FileDown, ShieldCheck, ChevronsDown, ThumbsUp, ThumbsDown, Eye } from 'lucide-react'
+import { Copy, Check, RefreshCw, FileDown, ShieldCheck, ChevronsDown, ThumbsUp, ThumbsDown, Eye, Sparkles } from 'lucide-react'
 import { Markdown } from './Markdown'
+import { Chip, TextButton } from './ui'
 
 function Skeleton(): JSX.Element {
   return (
@@ -16,7 +17,7 @@ function Skeleton(): JSX.Element {
 const VERDICTS: Record<string, { label: string; chip: string }> = {
   TRUE: { label: 'True', chip: 'bg-[var(--color-success)]/15 text-[var(--color-success)] border-[var(--color-success)]/30' },
   FALSE: { label: 'False', chip: 'bg-[var(--color-danger)]/15 text-[var(--color-danger)] border-[var(--color-danger)]/30' },
-  MISLEADING: { label: 'Misleading', chip: 'bg-amber-400/15 text-amber-400 border-amber-400/30' },
+  MISLEADING: { label: 'Misleading', chip: 'bg-[var(--color-danger)]/10 text-[color:var(--color-danger)] border-[var(--color-danger)]/25' },
   UNVERIFIABLE: { label: 'Unverifiable', chip: 'bg-white/[0.06] text-[color:var(--color-ink-2)] border-[var(--color-hair-soft)]' }
 }
 function parseVerdict(text: string): { key: string; rest: string } | null {
@@ -45,7 +46,8 @@ export function Answer({
   label,
   kind,
   onRetry,
-  onGoDeeper
+  onGoDeeper,
+  onAssist
 }: {
   text: string
   streaming: boolean
@@ -55,6 +57,7 @@ export function Answer({
   kind?: 'answer' | 'factcheck'
   onRetry?: () => void
   onGoDeeper?: () => void
+  onAssist?: () => void
 }): JSX.Element {
   const [copied, setCopied] = useState(false)
   const [copyError, setCopyError] = useState<string | null>(null)
@@ -87,10 +90,16 @@ export function Answer({
   // "Viewed screen" context chip — the trust signal: it tells the user the answer was grounded in what
   // was on their screen (the screen-ask path tags the answer with this label). A live purple dot + Eye.
   const screenContext = label === 'Viewed screen'
+  const assistButton = onAssist ? (
+    <Chip icon={Sparkles} onClick={onAssist} variant="accent">Assist</Chip>
+  ) : null
   const header = screenContext ? (
-    <div className="flex w-fit items-center gap-1.5 rounded-full border border-[var(--color-accent)]/30 bg-[var(--color-accent-soft)] px-2.5 py-1 text-[11px] font-semibold text-[color:var(--color-ink-2)]">
-      <span className="h-1.5 w-1.5 rounded-full bg-[var(--color-accent-2)] shadow-[0_0_6px_var(--color-accent-2)]" />
-      <Eye size={12} /> Viewed screen
+    <div className="flex items-center justify-between gap-2">
+      <div className="flex w-fit items-center gap-1.5 rounded-full border border-[var(--color-accent)]/30 bg-[var(--color-accent-soft)] px-2.5 py-1 text-[11px] font-semibold text-[color:var(--color-ink-2)]">
+        <span className="h-1.5 w-1.5 rounded-full bg-[var(--color-accent-2)] shadow-[0_0_6px_var(--color-accent-2)]" />
+        <Eye size={12} /> Viewed screen
+      </div>
+      {assistButton}
     </div>
   ) : display ? (
     <div className="rounded-lg border border-[var(--color-hair-soft)] bg-white/[0.03] px-3 py-2 text-[13px] font-medium text-[color:var(--color-ink)]">
@@ -121,44 +130,19 @@ export function Answer({
   const footer = !streaming && (text || error) ? (
     <div className="mt-1 flex flex-col gap-1.5">
       <div className="flex items-center gap-1.5">
-        <button
-          type="button"
-          onClick={copy}
-          disabled={!text}
-          className="no-drag focus-ring flex items-center gap-1 rounded-md px-2 py-1 text-[11px] text-[color:var(--color-ink-2)] hover:bg-white/10 hover:text-[color:var(--color-ink)] disabled:opacity-40"
-        >
+        <TextButton onClick={copy} disabled={!text}>
           {copied ? <Check size={11} className="text-[var(--color-success)]" /> : <Copy size={11} />}
           {copied ? 'Copied' : 'Copy'}
-        </button>
+        </TextButton>
         {text && (
-          <button
-            type="button"
-            onClick={saveNote}
-            title="Save this answer as a markdown note"
-            className="no-drag focus-ring flex items-center gap-1 rounded-md px-2 py-1 text-[11px] text-[color:var(--color-ink-2)] hover:bg-white/10 hover:text-[color:var(--color-ink)]"
-          >
+          <TextButton onClick={saveNote} title="Save this answer as a markdown note">
             {saved ? <Check size={11} className="text-[var(--color-success)]" /> : <FileDown size={11} />}
             {saved ? 'Saved' : 'Save note'}
-          </button>
+          </TextButton>
         )}
-        {onRetry && (
-          <button
-            type="button"
-            onClick={onRetry}
-            className="no-drag focus-ring flex items-center gap-1 rounded-md px-2 py-1 text-[11px] text-[color:var(--color-ink-2)] hover:bg-white/10 hover:text-[color:var(--color-ink)]"
-          >
-            <RefreshCw size={11} /> Retry
-          </button>
-        )}
+        {onRetry && <TextButton icon={RefreshCw} onClick={onRetry}>Retry</TextButton>}
         {text && onGoDeeper && kind !== 'factcheck' && (
-          <button
-            type="button"
-            onClick={onGoDeeper}
-            title="Re-answer with more depth and detail"
-            className="no-drag focus-ring flex items-center gap-1 rounded-md px-2 py-1 text-[11px] text-[color:var(--color-ink-2)] hover:bg-white/10 hover:text-[color:var(--color-ink)]"
-          >
-            <ChevronsDown size={11} /> Go deeper
-          </button>
+          <TextButton icon={ChevronsDown} onClick={onGoDeeper} title="Re-answer with more depth and detail">Go deeper</TextButton>
         )}
         {text && (
           <div className="ml-auto flex items-center gap-0.5" title="Was this useful?">

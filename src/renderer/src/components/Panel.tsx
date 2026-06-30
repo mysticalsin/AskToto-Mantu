@@ -13,7 +13,7 @@ function panelMaxHeight(): number {
 export function Panel({ children }: { children: ReactNode }): JSX.Element {
   return (
     <div
-      className="glass-strong scroll-thin panel-enter overflow-y-auto rounded-2xl px-4 py-3.5"
+      className="glass-strong scroll-thin panel-enter overflow-y-auto rounded-[var(--radius-outer)] px-4 py-3.5"
       style={{ maxHeight: panelMaxHeight() }}
     >
       {children}

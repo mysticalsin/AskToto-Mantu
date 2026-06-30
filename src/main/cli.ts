@@ -57,7 +57,9 @@ export async function resolveBin(bin: string): Promise<string | null> {
   try {
     const { stdout } = await execFileAsync(shell, ['-lc', `command -v ${bin}`])
     const resolved = stdout.trim() || null
-    binCache.set(bin, resolved)
+    // Only cache positive hits; null (not-found) must not be cached so that a subsequent
+    // in-app install is picked up immediately without requiring an app restart.
+    if (resolved !== null) binCache.set(bin, resolved)
     return resolved
   } catch {
     return null
@@ -66,7 +68,9 @@ export async function resolveBin(bin: string): Promise<string | null> {
 
 /** Env for spawning a CLI. For claude-cli, strip Claude-Code session + proxy vars so the spawned
  *  `claude` runs as a clean standalone invocation against the user's own keychain login (avoids a
- *  hang when AskToto is itself launched from a Claude Code session, and ignores a proxy base URL). */
+ *  hang when AskToto is itself launched from a Claude Code session, and ignores a proxy base URL).
+ *  Also strips ANTHROPIC_API_KEY / ANTHROPIC_AUTH_TOKEN so the spawned `claude -p` uses the
+ *  interactive CLI login (honours the "no key required" contract) and not silent API-key billing. */
 export function cliEnv(provider: ProviderId): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { ...process.env }
   if (provider === 'claude-cli') {
@@ -76,6 +80,9 @@ export function cliEnv(provider: ProviderId): NodeJS.ProcessEnv {
       }
     }
     delete env.ANTHROPIC_BASE_URL
+    // Remove API-key vars so `claude -p` auths via the user's CLI login, not API-key billing.
+    delete env.ANTHROPIC_API_KEY
+    delete env.ANTHROPIC_AUTH_TOKEN
   } else if (provider === 'codex-cli') {
     delete env.OPENAI_BASE_URL
   }
@@ -86,7 +93,9 @@ export function cliEnv(provider: ProviderId): NodeJS.ProcessEnv {
 
 interface CliConfig {
   bin: string
-  buildArgs(opts: { model: string; system: string; prompt: string }): string[]
+  // Builds the argv list. Prompt and system content are delivered via stdin, never as argv
+  // args — prevents transcript/system text from appearing in `ps -ww` / /proc/<pid>/cmdline.
+  buildArgs(opts: { model: string }): string[]
   parseLine(line: string): string | null
   /** codex runs in a throwaway temp cwd so it never touches the user's project. */
   useTmpCwd: boolean
@@ -96,10 +105,11 @@ interface CliConfig {
 export const CLI_CONFIGS: Partial<Record<ProviderId, CliConfig>> = {
   'claude-cli': {
     bin: 'claude',
-    buildArgs({ model, system, prompt }) {
+    buildArgs({ model }) {
+      // '-p' with no positional arg puts claude in print/non-interactive mode reading from stdin.
+      // system + prompt are written to child.stdin after spawn — never exposed in argv.
       return [
         '-p',
-        prompt,
         '--output-format',
         'stream-json',
         '--verbose',
@@ -110,8 +120,7 @@ export const CLI_CONFIGS: Partial<Record<ProviderId, CliConfig>> = {
         '',
         '--disallowedTools',
         '*',
-        ...(model ? ['--model', model] : []),
-        ...(system ? ['--append-system-prompt', system] : [])
+        ...(model ? ['--model', model] : [])
       ]
     },
     parseLine(line) {
@@ -133,16 +142,16 @@ export const CLI_CONFIGS: Partial<Record<ProviderId, CliConfig>> = {
 
   'codex-cli': {
     bin: 'codex',
-    buildArgs({ model, system, prompt }) {
+    buildArgs({ model }) {
+      // 'exec' with no positional arg reads the prompt from stdin.
+      // system + prompt are written to child.stdin after spawn — never exposed in argv.
       return [
         'exec',
-        prompt,
         '--json',
         '--skip-git-repo-check',
         '-c',
         'features.shell_tool=false',
-        ...(model ? ['-m', model] : []),
-        ...(system ? ['-c', `developer_instructions=${system}`] : [])
+        ...(model ? ['-m', model] : [])
       ]
     },
     parseLine(line) {
@@ -221,15 +230,31 @@ export function runCliStream(opts: RunCliStreamOpts): { abort: () => void } {
       }
     }
 
-    const args = cfg.buildArgs({ model: opts.model, system: opts.system, prompt: opts.prompt })
+    const args = cfg.buildArgs({ model: opts.model })
     const child = spawn(absBin, args, {
       cwd,
       signal: controller.signal,
       env: cliEnv(opts.providerId),
       // SECURITY: never use shell:true — args are passed as an array
       shell: false,
-      stdio: ['ignore', 'pipe', 'pipe']
+      // 'pipe' for stdin so we can write prompt + system without exposing them in argv
+      stdio: ['pipe', 'pipe', 'pipe']
     })
+
+    // Write content to stdin — keeps transcript and system text out of argv (ps -ww / /proc).
+    // System text (if any) is prepended so the CLI sees it before the user prompt.
+    // EPIPE/ECONNRESET when the child exits before draining stdin is delivered ASYNCHRONOUSLY
+    // on the stdin Writable, so the sync try/catch below can't catch it — without this listener
+    // it escapes to process 'uncaughtException' and pops a false crash dialog. The child's own
+    // 'close'/'error' handlers report the real outcome.
+    child.stdin!.on('error', () => {})
+    try {
+      const stdinContent = [opts.system, opts.prompt].filter(Boolean).join('\n\n')
+      child.stdin!.write(stdinContent, 'utf8')
+      child.stdin!.end()
+    } catch {
+      // stdin already closed (child exited immediately) — 'error'/'close' events handle it
+    }
 
     const stderrChunks: Buffer[] = []
     child.stderr?.on('data', (chunk: Buffer) => stderrChunks.push(chunk))
@@ -331,7 +356,8 @@ export async function testCli(provider: ProviderId): Promise<CliActionResult> {
   let tmpDir: string | undefined
 
   if (provider === 'claude-cli') {
-    testArgs = ['-p', 'Reply with OK', '--output-format', 'text', '--max-turns', '1', '--allowedTools', '']
+    // '-p' with no positional arg reads the prompt from stdin (consistent with runCliStream).
+    testArgs = ['-p', '--output-format', 'text', '--max-turns', '1', '--allowedTools', '']
   } else {
     // codex-cli: needs a throwaway cwd
     try {
@@ -340,7 +366,8 @@ export async function testCli(provider: ProviderId): Promise<CliActionResult> {
     } catch {
       /* proceed without a dedicated cwd */
     }
-    testArgs = ['exec', 'Reply with OK', '--skip-git-repo-check', '-c', 'features.shell_tool=false']
+    // 'exec' with no positional arg reads the prompt from stdin (consistent with runCliStream).
+    testArgs = ['exec', '--skip-git-repo-check', '-c', 'features.shell_tool=false']
   }
 
   return new Promise<CliActionResult>((resolve) => {
@@ -356,8 +383,19 @@ export async function testCli(provider: ProviderId): Promise<CliActionResult> {
       cwd: testCwd,
       env: cliEnv(provider),
       shell: false,
-      stdio: ['ignore', 'pipe', 'pipe']
+      // 'pipe' for stdin so we write the test prompt without it appearing in argv
+      stdio: ['pipe', 'pipe', 'pipe']
     })
+
+    // Write test prompt via stdin — keeps it off argv, consistent with runCliStream.
+    // Swallow async EPIPE if the child dies before draining (see runCliStream for the full note).
+    child.stdin!.on('error', () => {})
+    try {
+      child.stdin!.write('Reply with OK', 'utf8')
+      child.stdin!.end()
+    } catch {
+      /* stdin already closed — handled below */
+    }
 
     const stdoutChunks: Buffer[] = []
     const stderrChunks: Buffer[] = []
@@ -544,6 +582,8 @@ export async function installCli(
 
     child.on('close', (code) => {
       if (code === 0) {
+        // Evict any stale null entry so resolveBin re-probes after a successful install.
+        binCache.delete(cfg.bin)
         resolve({ ok: true })
         return
       }
