@@ -155,7 +155,17 @@ export function Bar(props: BarProps): JSX.Element {
                 props.onSubmit()
               }
             }}
-            placeholder={hasAnswer ? 'Ask a follow-up…' : 'Ask anything about your screen'}
+            placeholder={
+              // State-driven (Cluely-style): a live meeting reframes it around the conversation; after an
+              // answer it invites a follow-up; idle it points at the screen.
+              props.listening
+                ? hasAnswer
+                  ? 'Ask a follow-up about the meeting…'
+                  : 'Ask anything about the meeting'
+                : hasAnswer
+                  ? 'Ask a follow-up…'
+                  : 'Ask anything about your screen'
+            }
             spellCheck={false}
             aria-label="Ask AskToto anything"
             className={[
