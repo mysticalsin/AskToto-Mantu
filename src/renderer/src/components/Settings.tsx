@@ -1824,13 +1824,16 @@ function PersonalizeModes({
 
 type TabId = 'ai' | 'personalize' | 'audio' | 'privacy' | 'meetings' | 'shortcuts' | 'about'
 
+// Cluely-aligned tab vocabulary + order (Modes is the spine, so it leads). Tab IDs are unchanged so the
+// content gates below keep working; only the visible labels/order move. Calendar + Notifications arrive
+// with their content in the calendar/notifications work package.
 const TABS: { id: TabId; label: string; icon: typeof Cpu }[] = [
-  { id: 'ai', label: 'Your AI', icon: Cpu },
-  { id: 'personalize', label: 'Personalize', icon: Wand2 },
+  { id: 'personalize', label: 'Modes', icon: Wand2 },
+  { id: 'ai', label: 'AI', icon: Cpu },
   { id: 'audio', label: 'Audio', icon: Mic },
-  { id: 'privacy', label: 'Privacy', icon: ShieldCheck },
   { id: 'meetings', label: 'Meetings', icon: FolderOpen },
-  { id: 'shortcuts', label: 'Shortcuts', icon: Keyboard },
+  { id: 'shortcuts', label: 'Keybinds', icon: Keyboard },
+  { id: 'privacy', label: 'Privacy', icon: ShieldCheck },
   { id: 'about', label: 'About', icon: Info }
 ]
 
@@ -1849,7 +1852,7 @@ export function Settings({
   testKey: (provider: ProviderId, k: string) => Promise<TestKeyResponse>
   onClose?: () => void
 }): JSX.Element {
-  const [tab, setTab] = useState<TabId>('ai')
+  const [tab, setTab] = useState<TabId>('personalize') // open on Modes (the spine), like the Cluely reference
   const managed = settings.managedKeys.length > 0
 
   return (
