@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Copy, Check, RefreshCw, FileDown, ShieldCheck, ChevronsDown, ThumbsUp, ThumbsDown } from 'lucide-react'
+import { Copy, Check, RefreshCw, FileDown, ShieldCheck, ChevronsDown, ThumbsUp, ThumbsDown, Eye } from 'lucide-react'
 import { Markdown } from './Markdown'
 
 function Skeleton(): JSX.Element {
@@ -84,7 +84,15 @@ export function Answer({
   // Show the user-facing label (the claim/question) — NEVER the engineered `prompt` scaffold. For plain
   // asks the typed question IS the prompt, so it falls back to that; engineered callers pass a clean label.
   const display = label ?? prompt
-  const header = display ? (
+  // "Viewed screen" context chip — the trust signal: it tells the user the answer was grounded in what
+  // was on their screen (the screen-ask path tags the answer with this label). A live purple dot + Eye.
+  const screenContext = label === 'Viewed screen'
+  const header = screenContext ? (
+    <div className="flex w-fit items-center gap-1.5 rounded-full border border-[var(--color-accent)]/30 bg-[var(--color-accent-soft)] px-2.5 py-1 text-[11px] font-semibold text-[color:var(--color-ink-2)]">
+      <span className="h-1.5 w-1.5 rounded-full bg-[var(--color-accent-2)] shadow-[0_0_6px_var(--color-accent-2)]" />
+      <Eye size={12} /> Viewed screen
+    </div>
+  ) : display ? (
     <div className="rounded-lg border border-[var(--color-hair-soft)] bg-white/[0.03] px-3 py-2 text-[13px] font-medium text-[color:var(--color-ink)]">
       {kind === 'factcheck' && (
         <div className="mb-1 flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wide text-[color:var(--color-ink-3)]">
