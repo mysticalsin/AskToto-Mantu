@@ -186,23 +186,24 @@ export function Bar(props: BarProps): JSX.Element {
           )}
         </div>
 
-        {/* Row 2 — toolbar */}
-        <div className="aw-toolbar flex items-center gap-3 border-t border-[var(--color-hair-soft)] px-5 py-1.5">
+        {/* Row 2 — toolbar. 3-column grid (1fr · auto · 1fr) so the center tool cluster sits at the TRUE
+            horizontal center of the bar regardless of the differing left (logo) / right (History…) widths. */}
+        <div className="aw-toolbar grid grid-cols-[1fr_auto_1fr] items-center border-t border-[var(--color-hair-soft)] px-5 py-1.5">
           {/* The Mantu mark IS the logo → opens Settings. (No menu — Quit/Hide live in the tray + hotkeys.) */}
           <button
             type="button"
             title="Settings"
             aria-label="Settings"
             onClick={props.onSettings}
-            className="no-drag focus-ring block flex-none rounded-[8px]"
+            className="no-drag focus-ring block flex-none justify-self-start rounded-[8px]"
           >
             <span className="aw-mark-glow block rounded-[8px]">
               <MantuMark size={34} />
             </span>
           </button>
 
-          {/* Centered tools */}
-          <div className="flex flex-1 items-center justify-center gap-4">
+          {/* Centered tools — the middle (auto) grid column, dead-center of the bar */}
+          <div className="flex items-center justify-center gap-4">
             <IconTool title="Capture screen  (⌘⇧S)" onClick={props.onCapture}>
               {props.capturing ? <Spinner size={21} /> : <Image size={21} strokeWidth={1.85} />}
             </IconTool>
@@ -242,7 +243,7 @@ export function Bar(props: BarProps): JSX.Element {
           </div>
 
           {/* Right: History · hide · minimize-to-pill · expand/collapse */}
-          <div className="flex flex-none items-center gap-2">
+          <div className="flex flex-none items-center justify-self-end gap-2">
             <button
               type="button"
               onClick={props.onHistory}

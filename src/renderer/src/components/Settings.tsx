@@ -51,7 +51,6 @@ import {
   type ProviderId
 } from '@shared/providers'
 import { DEFAULT_MODE_PROMPTS } from '@shared/prompts'
-import { ModePicker } from './ModePicker'
 import { MantuLogo } from './MantuLogo'
 import { MantuMark } from './MantuMark'
 import { usePermissions } from '../state'
@@ -1568,12 +1567,13 @@ const LANGUAGE_OPTIONS = [
 /** Editable, pre-filled system prompt for the selected default mode. Plug-and-play with reset. */
 function ModePromptEditor({
   settings,
-  patch
+  patch,
+  mode
 }: {
   settings: PublicSettings
   patch: (p: Partial<PublicSettings>) => void
+  mode: ConversationMode
 }): JSX.Element {
-  const mode = settings.mode
   const override = settings.modePrompts[mode]
   const value = override ?? DEFAULT_MODE_PROMPTS[mode]
   const isCustom = !!override && override.trim() !== '' && override !== DEFAULT_MODE_PROMPTS[mode]
@@ -1618,12 +1618,13 @@ const TEXT_FILE_RE = /\.(txt|md|markdown|csv|tsv|json|log|ya?ml|xml|html?|css|ts
 /** Cluely-style "add files for context" — reads text on-device and folds it into every answer. */
 function ContextDocs({
   settings,
-  patch
+  patch,
+  mode
 }: {
   settings: PublicSettings
   patch: (p: Partial<PublicSettings>) => void
+  mode: ConversationMode
 }): JSX.Element {
-  const mode = settings.mode
   const docs = settings.contextDocs[mode] || []
   const [drag, setDrag] = useState(false)
   const [note, setNote] = useState<string | null>(null)
@@ -1734,6 +1735,93 @@ function ContextDocs({
   )
 }
 
+/**
+ * Modes pane (two-column, Cluely-style): left = the mode list with the live "Active" marker; right = the
+ * selected mode's editable system prompt + per-mode context files + a "Set active" control. Selecting a
+ * mode on the left only changes what you're VIEWING/EDITING; "Set active" is what flips settings.mode.
+ */
+function PersonalizeModes({
+  settings,
+  patch
+}: {
+  settings: PublicSettings
+  patch: (p: Partial<PublicSettings>) => void
+}): JSX.Element {
+  const active = settings.mode
+  const [selected, setSelected] = useState<ConversationMode>(active)
+  const locked = settings.managedKeys.includes('mode')
+  const modes = Object.keys(MODE_LABEL) as ConversationMode[]
+  return (
+    <div className="grid grid-cols-[176px_1fr] gap-4">
+      {/* Left — mode list */}
+      <div className="flex flex-col gap-1">
+        <div className="cl-eyebrow mb-1 px-1 font-semibold">Modes</div>
+        {modes.map((m) => {
+          const isSel = m === selected
+          const isActive = m === active
+          return (
+            <button
+              key={m}
+              type="button"
+              onClick={() => setSelected(m)}
+              aria-pressed={isSel}
+              className={[
+                'no-drag cl-focus flex items-center gap-2.5 rounded-[10px] border px-2.5 py-2 text-left transition-colors',
+                isSel
+                  ? 'border-[var(--cl-primary)]/40 bg-[var(--cl-primary-soft)]'
+                  : 'border-transparent hover:bg-white/[0.04]'
+              ].join(' ')}
+            >
+              <span
+                className={[
+                  'grid size-6 shrink-0 place-items-center rounded-[7px] text-[11px] font-semibold',
+                  isActive ? 'bg-[var(--cl-primary)] text-white' : 'bg-white/[0.06] text-[color:var(--cl-muted-foreground)]'
+                ].join(' ')}
+              >
+                {MODE_LABEL[m][0]}
+              </span>
+              <span className="min-w-0 flex-1 truncate text-[12px] text-[color:var(--cl-foreground)]">
+                {MODE_LABEL[m]}
+              </span>
+              {isActive && <CircleCheck size={14} className="shrink-0 text-[color:var(--cl-primary)]" />}
+            </button>
+          )
+        })}
+      </div>
+
+      {/* Right — selected mode's prompt + files + activate */}
+      <div className="flex min-w-0 flex-col gap-4">
+        <div className="flex items-center justify-between gap-3">
+          <div className="min-w-0">
+            <div className="truncate text-[18px] font-semibold text-[color:var(--cl-foreground)]">
+              {MODE_LABEL[selected]}
+            </div>
+            <div className="text-[12px] text-[color:var(--cl-muted-foreground)]">
+              {active === selected ? 'This is your active mode.' : 'Previewing — “Set active” to switch to it.'}
+            </div>
+          </div>
+          {active === selected ? (
+            <span className="flex shrink-0 items-center gap-1 rounded-full bg-[var(--cl-primary-soft)] px-2.5 py-1 text-[11px] font-medium text-[color:var(--cl-primary)]">
+              <CircleCheck size={12} /> Active
+            </span>
+          ) : (
+            <button
+              type="button"
+              disabled={locked}
+              onClick={() => patch({ mode: selected })}
+              className="no-drag cl-focus shrink-0 rounded-[10px] bg-[var(--cl-primary)] px-3.5 py-2 text-[12px] font-medium text-white hover:opacity-90 disabled:opacity-50"
+            >
+              Set active
+            </button>
+          )}
+        </div>
+        <ModePromptEditor settings={settings} patch={patch} mode={selected} />
+        <ContextDocs settings={settings} patch={patch} mode={selected} />
+      </div>
+    </div>
+  )
+}
+
 type TabId = 'ai' | 'personalize' | 'audio' | 'privacy' | 'meetings' | 'shortcuts' | 'about'
 
 const TABS: { id: TabId; label: string; icon: typeof Cpu }[] = [
@@ -1829,11 +1917,8 @@ export function Settings({
 
             {tab === 'personalize' && (
               <div className="flex flex-col gap-6">
-                <Section title="Default mode" desc="Pick what AskToto is helping with.">
-                  <div className="flex items-center gap-2">
-                    <ModePicker mode={settings.mode} onChange={(m) => patch({ mode: m })} size="sm" disabled={settings.managedKeys.includes('mode')} />
-                    <ManagedChip keys={settings.managedKeys} k="mode" />
-                  </div>
+                <Section title="Modes" desc="Edit each mode's prompt and the files it can see, then set the one you want active.">
+                  <PersonalizeModes settings={settings} patch={patch} />
                 </Section>
                 <Section
                   title="Language"
@@ -1872,7 +1957,6 @@ export function Settings({
                     ))}
                   </select>
                 </Section>
-                <ModePromptEditor settings={settings} patch={patch} />
                 <Section title="Custom instructions" desc="Added to every mode's prompt. Leave blank to use the defaults.">
                   <textarea
                     value={settings.systemPrompt}
@@ -1884,7 +1968,6 @@ export function Settings({
                     className={'w-full resize-y ' + ctl}
                   />
                 </Section>
-                <ContextDocs settings={settings} patch={patch} />
                 <Section title="About you" desc="Used for interview and sales modes.">
                   <ProfileEditor profile={settings.profile} onChange={(p) => patch({ profile: p })} disabled={settings.managedKeys.includes('profile')} />
                 </Section>
