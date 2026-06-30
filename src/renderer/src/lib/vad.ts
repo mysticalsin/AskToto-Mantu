@@ -13,7 +13,9 @@
  */
 export function makeVad(): { step: (rms: number, n: number) => boolean; reset: () => void } {
   const SR = 16000
-  const ENDPOINT = Math.round(SR * 0.8) // continuous trailing silence that ends a turn (~0.8s)
+  const ENDPOINT = Math.round(SR * 0.6) // continuous trailing silence that ends a turn (~0.6s). Tuned for
+  // low turn-detection latency: still 2× a typical inter-word gap (~0.3s) so it never cuts mid-sentence,
+  // but ~0.2s snappier than a conservative 0.8s — the dominant slice of perceived live-caption lag.
   const MIN_SPEECH = Math.round(SR * 0.3) // real speech needed in-window before we'll endpoint (rejects transients)
   const ON = 0.012 // per-quantum RMS to ENTER the speech state
   const OFF = 0.006 // per-quantum RMS to EXIT it (ON > OFF = hysteresis, no flicker at the boundary)

@@ -46,10 +46,17 @@ export function playListenChime(): void {
 
 const QWORDS =
   /^(what|why|how|when|where|who|which|can|could|would|do|does|did|are|is|have|has|tell me|walk me|describe|explain|give me)\b/i
+// Words a complete question never ends on: articles, coordinating conjunctions, possessive determiners.
+// A line that dangles on one of these (e.g. "what is the…") is a question cut mid-sentence by a VAD endpoint,
+// not a finished one — so we hold off firing the auto-answer and let the coalesced turn accumulate the rest.
+// (Stranded prepositions like "where are you from" are deliberately NOT here — they DO end real questions.)
+const DANGLING = /\b(the|a|an|and|or|but|your|my|our|their|its)$/i
 export function isQuestion(t: string): boolean {
   const s = t.trim()
   if (!s) return false
-  return s.endsWith('?') || (s.split(/\s+/).length >= 3 && QWORDS.test(s))
+  if (s.endsWith('?')) return true // explicit terminal punctuation → complete even when short
+  if (DANGLING.test(s.replace(/[.,;:!\s]+$/, ''))) return false // still mid-sentence → not yet a question
+  return s.split(/\s+/).length >= 3 && QWORDS.test(s)
 }
 
 // Whisper (and to a lesser extent other ASR) emit caption-style filler on silence/non-speech. Drop a line
@@ -116,6 +123,12 @@ export function useListen(onQuestion?: (line: TranscriptLine) => void): ListenAp
   onQRef.current = onQuestion
   const linesRef = useRef<TranscriptLine[]>([])
   linesRef.current = lines
+  // Trailing run of consecutive 'them' speech (joined) since the last 'you' turn or last auto-answer fire.
+  // The auto-answer endpoints on this COALESCED turn rather than a single VAD window, so a question split
+  // across windows by a mid-sentence hesitation pause (more likely now the endpoint is a snappy 0.6s) still
+  // fires once and complete — instead of firing on the truncated first fragment and then being locked out
+  // by the App-level suggest throttle. Reset on a 'you' line, on fire, and on start()/clear().
+  const themRunRef = useRef('')
 
   // Add a transcribed line + fire the auto-answer hook. Shared by the Whisper worker and Parakeet paths.
   const commitLine = useCallback((text: string, speaker: Speaker): void => {
@@ -128,7 +141,19 @@ export function useListen(onQuestion?: (line: TranscriptLine) => void): ListenAp
       const next = [...linesRef.current, line]
       linesRef.current = next
       setLines(next)
-      if (line.speaker === 'them' && isQuestion(line.text)) onQRef.current?.(line)
+      // Auto-answer endpoints on the COALESCED 'them' turn (themRunRef), not a single VAD window: a 'you'
+      // line hands the turn back (clear the run); a 'them' line extends it. Fire once the joined run reads
+      // as a complete question, then consume the run so a continued sentence doesn't re-fire mid-thought.
+      if (line.speaker === 'them') {
+        themRunRef.current = themRunRef.current ? `${themRunRef.current} ${line.text}` : line.text
+        if (themRunRef.current.length > 600) themRunRef.current = themRunRef.current.slice(-600) // bound memory
+        if (isQuestion(themRunRef.current)) {
+          themRunRef.current = ''
+          onQRef.current?.(line)
+        }
+      } else {
+        themRunRef.current = ''
+      }
     }
   }, [])
 
@@ -204,6 +229,7 @@ export function useListen(onQuestion?: (line: TranscriptLine) => void): ListenAp
       // an unrecoverable dead end. Mirror stop()'s teardown so a crash returns to a clean idle state.
       liveRef.current = false
       queue.current = []
+      themRunRef.current = '' // crash wipes the in-progress 'them' question turn (parity with stop()/start())
       closeChannel('you')
       closeChannel('them')
       void window.toto.setListeningState(false).catch(() => {})
@@ -298,6 +324,7 @@ export function useListen(onQuestion?: (line: TranscriptLine) => void): ListenAp
       crashedRef.current = false // fresh session — re-enable stop()'s teardown after any prior crash
       parakeetFailures.current = 0 // reset the failure streak so a new session gets a clean shot at Parakeet
       engineRef.current = engine
+      themRunRef.current = '' // fresh session → no carried-over 'them' question turn
       setState((s) => ({ ...s, error: null, listening: true }))
       try {
         await window.toto.setListeningState(true)
@@ -511,6 +538,7 @@ export function useListen(onQuestion?: (line: TranscriptLine) => void): ListenAp
     const finishTeardown = (): void => {
       liveRef.current = false
       queue.current = [] // drop anything still undispatched past the ceiling so it can't leak into the next session
+      themRunRef.current = '' // run after the drain: any final flushed question already fired while liveRef was true
       closeChannel('you')
       closeChannel('them')
       void window.toto.setListeningState(false).catch(() => {})
@@ -540,6 +568,7 @@ export function useListen(onQuestion?: (line: TranscriptLine) => void): ListenAp
 
   const clear = useCallback((): void => {
     setLines([])
+    themRunRef.current = '' // wiping the transcript also drops any in-progress 'them' question turn
   }, [])
 
   const text = useCallback((): string => {

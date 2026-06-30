@@ -27,15 +27,15 @@ function run(segments: Array<{ rms: number; sec: number }>): Array<{ speechSec: 
 }
 
 describe('makeVad — voice-activity endpointing', () => {
-  it('emits once, ~0.8s after a real utterance ends', () => {
+  it('emits once, ~0.6s after a real utterance ends', () => {
     const emits = run([
       { rms: SPEECH, sec: 1.2 },
       { rms: SILENCE, sec: 1.0 }
     ])
     expect(emits).toHaveLength(1)
-    // 1.2s speech + ~0.8s of trailing silence before the endpoint fires.
-    expect(emits[0].sinceResetSec).toBeGreaterThanOrEqual(1.2 + 0.78)
-    expect(emits[0].sinceResetSec).toBeLessThanOrEqual(1.2 + 0.95)
+    // 1.2s speech + ~0.6s of trailing silence before the endpoint fires.
+    expect(emits[0].sinceResetSec).toBeGreaterThanOrEqual(1.2 + 0.58)
+    expect(emits[0].sinceResetSec).toBeLessThanOrEqual(1.2 + 0.75)
   })
 
   it('rejects a short transient (cough/click) — under the min-speech floor → no emit', () => {
@@ -47,7 +47,7 @@ describe('makeVad — voice-activity endpointing', () => {
   })
 
   it('does NOT cut a sentence on short inter-word gaps', () => {
-    // Three speech bursts separated by 0.3s gaps (< the 0.8s endpoint), then a real 1s pause.
+    // Three speech bursts separated by 0.3s gaps (< the 0.6s endpoint), then a real 1s pause.
     const emits = run([
       { rms: SPEECH, sec: 0.5 },
       { rms: SILENCE, sec: 0.3 },
@@ -56,7 +56,7 @@ describe('makeVad — voice-activity endpointing', () => {
       { rms: SPEECH, sec: 0.5 },
       { rms: SILENCE, sec: 1.0 }
     ])
-    expect(emits).toHaveLength(1) // only the final 0.8s+ silence ends the turn
+    expect(emits).toHaveLength(1) // only the final 0.6s+ silence ends the turn
   })
 
   it('emits separate windows for two distinct turns', () => {

@@ -120,8 +120,13 @@ self.onmessage = async (e: MessageEvent): Promise<void> => {
       return
     }
     try {
-      // No `language` set → Whisper auto-detects the spoken language per segment.
-      const out: any = await asr(msg.audio, { chunk_length_s: 30, stride_length_s: 5 })
+      // No `language` set → Whisper auto-detects the spoken language per window (keeps full multilingual
+      // coverage). Live windows are short (≤6s, VAD-endpointed) and always fit Whisper's native 30s context,
+      // so we decode the whole clip in ONE pass: no `chunk_length_s` stitching and `return_timestamps:false`
+      // so the decoder never spends generation steps emitting <|t|> timestamp tokens we don't use. Both cut
+      // per-window decode latency with zero accuracy cost — chunking only ever mattered for long files we
+      // never produce here.
+      const out: any = await asr(msg.audio, { return_timestamps: false })
       const text = (Array.isArray(out) ? out.map((o) => o.text).join(' ') : out?.text || '').trim()
       post({ type: 'text', text, speaker })
     } catch (err) {
