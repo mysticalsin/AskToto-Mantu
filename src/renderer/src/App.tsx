@@ -1174,6 +1174,7 @@ export function App(): JSX.Element {
         onOpenFolder={() => void window.toto.openMeetingsFolder()}
         onSave={pm ? undefined : manualSave}
         onResume={pm ? resumePastMeeting : undefined}
+        onOpenPastMeeting={openPastMeeting}
         onDone={
           pm
             ? () => {
