@@ -93,11 +93,9 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run dist:win
+      # AppX packaging only works on Windows runners (needs the Windows SDK). Signing is skipped on CI
+      # unless you add your Windows cert as a secret via CSC_LINK / CSC_KEY_PASSWORD.
       - run: npm run dist:win:appx
-        env:
-          # AppX packaging only works on Windows runners (needs the Windows SDK).
-          # Signing is skipped on CI unless you add your Windows cert as a secret
-          # via CSC_LINK / CSC_KEY_PASSWORD.
       - uses: actions/upload-artifact@v4
         with:
           name: asktoto-windows
