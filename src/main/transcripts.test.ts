@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { generateKeyPairSync, privateDecrypt, createDecipheriv, constants } from 'node:crypto'
 import { safeStorage } from 'electron'
-import { saveMeeting, readSavedFile, isEncryptedFile, parseRecapMarkdown } from './transcripts'
+import { saveMeeting, readSavedFile, isEncryptedFile, parseRecapMarkdown, recapMarkdownToHtml } from './transcripts'
 import type { SaveMeeting, Settings } from '@shared/ipc'
 
 const V2_MARKER = 'ATKENC2\n'
@@ -254,6 +254,26 @@ describe('parseRecapMarkdown', () => {
     expect(empty.overview).toBe('')
     expect(empty.decisions).toEqual([])
     expect(empty.markdown).toBe('not even markdown')
+  })
+
+  describe('recapMarkdownToHtml', () => {
+    it('converts headings and bullets to structured HTML, escaping unsafe characters', () => {
+      const html = recapMarkdownToHtml(SAMPLE, 'Q3 Planning <sync>')
+      expect(html).toContain('<h1>Q3 Planning &lt;sync&gt;</h1>')
+      expect(html).toContain('<h2>Overview:</h2>')
+      expect(html).toContain('<p>We aligned on the Q3 launch and the budget.</p>')
+      expect(html).toContain('<li>Launch timeline</li>')
+      expect(html).toContain('<li>Book the venue — Bob</li>')
+      expect(html).not.toContain('<script')
+    })
+
+    it('closes every opened <ul> and never throws on junk input', () => {
+      const html = recapMarkdownToHtml('## Action items:\n- one\n- two\n\nplain line')
+      expect(html.match(/<ul>/g)?.length).toBe(1)
+      expect(html.match(/<\/ul>/g)?.length).toBe(1)
+      expect(() => recapMarkdownToHtml('')).not.toThrow()
+      expect(recapMarkdownToHtml('')).toContain('<body>')
+    })
   })
 
   // Real model output drifts from the prompt's exact format — headings sometimes drop the colon, action

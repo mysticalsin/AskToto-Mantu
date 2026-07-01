@@ -93,10 +93,20 @@ export async function recallRead(file: string): Promise<RecallReadResult> {
     if (!isNaN(ms)) startedAt = ms
   }
 
-  // Extract the recap section (## Notes & follow-ups … up to the next ##).
+  // Extract the recap section (## Notes & follow-ups … up to ## Full transcript, saveMeeting's only
+  // other top-level section). The recap markdown itself starts with its own "## Overview:" heading
+  // (RECAP_PROMPT's format), so stopping at any "## " would match that nested heading immediately and
+  // capture nothing — the end must target the real sibling section specifically. Done as a plain slice +
+  // a second, END-only regex rather than one combined lookahead: with the /m flag (needed for the "^"
+  // start anchors), "$" matches before ANY newline, not just end-of-string, so a "\s*$" fallback inside
+  // the same lookahead stops at the end of the first line too — the exact bug this replaces.
   let recap = ''
-  const recapMatch = text.match(/^## Notes & follow-ups\n+([\s\S]*?)(?=^## |\s*$)/m)
-  if (recapMatch) recap = recapMatch[1].trim()
+  const startMatch = text.match(/^## Notes & follow-ups\n+/m)
+  if (startMatch) {
+    const afterStart = text.slice(startMatch.index! + startMatch[0].length)
+    const endIdx = afterStart.search(/^## Full transcript/m)
+    recap = (endIdx === -1 ? afterStart : afterStart.slice(0, endIdx)).trim()
+  }
 
   // Parse transcript lines from the ## Full transcript section.
   // Format written by saveMeeting: **[HH:MM:SS] Them:** text  or  **[HH:MM:SS] You:** text

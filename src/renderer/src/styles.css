@@ -265,8 +265,11 @@ html.shot-bg-light #root {
     linear-gradient(var(--glass-fill), var(--glass-fill)),
     var(--glass-scrim-bar);
   border: 1px solid var(--color-hair-soft);
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.24);
-  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.45);
+  /* No box-shadow: only used by QuickActions' pill row directly under the bar (small gap). Its own
+     shadow stacked under the bar's --shadow-bar (which already reaches well past the bar's edge) read
+     as one continuous grey halo under the chips, especially over a light background. The border + tinted
+     fill already give the pills enough definition without it. */
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.6);
 }
 
 /* Listening state — swap purple glass for a denser neutral gray so the user can read
@@ -383,8 +386,32 @@ input::placeholder {
     transform: scale(0.7);
   }
 }
+/* A one-shot expanding+fading ring layered behind the dot, so the MOMENT a meeting starts pops — the
+   steady pulse-dot breathe continues underneath for as long as listening stays on. The ::before element
+   is freshly created every time .rec-dot mounts (it only exists while listening is true), so this fires
+   automatically on every start with no JS — no "infinite", so it plays once and (with forwards) stays
+   invisible at its end state rather than reappearing each pulse cycle. */
+@keyframes mic-burst {
+  0% {
+    transform: scale(1);
+    opacity: 0.7;
+  }
+  100% {
+    transform: scale(2.6);
+    opacity: 0;
+  }
+}
 .rec-dot {
+  position: relative;
   animation: pulse-dot 1.1s ease-in-out infinite;
+}
+.rec-dot::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  background: var(--color-danger);
+  animation: mic-burst 0.55s ease-out forwards;
 }
 
 @keyframes fade-up {
@@ -399,6 +426,33 @@ input::placeholder {
 }
 .fade-up {
   animation: fade-up 180ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+/* "Develops like film" — the signature first-answer moment. When the streamed answer's first content
+   replaces the skeleton, it emerges THROUGH the frosted glass (blur → sharp) rather than snapping in,
+   masking the unavoidable provider TTFT (~300–750ms) so the reveal reads as the product working, not
+   waiting. Runs ONCE on mount of the content container; later streamed tokens append to an already-sharp
+   element, so the effect never re-triggers mid-stream. GPU-cheap: a single short filter+opacity tween on
+   one element. Honors prefers-reduced-motion via the global animation-duration:0 rule below (the element's
+   base style carries no blur, so the reduced-motion fallback simply shows sharp text instantly). */
+@keyframes develop-in {
+  from {
+    opacity: 0;
+    filter: blur(6px);
+    transform: translateY(3px);
+  }
+  60% {
+    opacity: 1;
+  }
+  to {
+    opacity: 1;
+    filter: blur(0);
+    transform: translateY(0);
+  }
+}
+.develop-in {
+  animation: develop-in 280ms cubic-bezier(0.22, 1, 0.36, 1);
+  will-change: filter, opacity, transform;
 }
 
 /* Animated rainbow contour — shown around the ask bar while the agent is working (replaces the old
@@ -443,6 +497,40 @@ input::placeholder {
   animation: cl-rainbow-spin 2.6s linear infinite;
   pointer-events: none;
   z-index: 2;
+}
+
+/* QuickActions chips are a true `rounded-full` pill — the end-caps clamp to a tight semicircle, and at
+   that curvature the mask-composite cutout above is unstable in Chromium (visible as stray pixels from
+   the conic-gradient's color stops, most noticeably green, flickering through). A prior attempt tried to
+   keep the ::before pseudo-element and hide it behind the chip via z-index:-1 — but `.glass-chip.rainbow-
+   ring` has no isolated stacking context (just `position: relative`, no `isolation`/z-index of its own),
+   so that negative z-index wasn't reliably contained to this one chip; it could still peek through
+   depending on paint order, which read as the same glitch. Real fix: drop the pseudo-element entirely for
+   this case and paint the ring as a second `background-image` layer on the chip itself, clipped to the
+   border-box while the chip's own fill/scrim stay clipped to the padding-box — a plain multi-layer
+   background paint has no masking, no z-index, no stacking-context ambiguity to get wrong. */
+.glass-chip.rainbow-ring::before {
+  content: none;
+}
+.glass-chip.rainbow-ring {
+  border: 1.5px solid transparent;
+  background-image:
+    linear-gradient(var(--glass-fill), var(--glass-fill)),
+    linear-gradient(var(--glass-scrim-bar), var(--glass-scrim-bar)),
+    conic-gradient(
+      from var(--cl-rainbow-angle),
+      #ff3b30,
+      #ff9500,
+      #34c759,
+      #32ade6,
+      #007aff,
+      #af52de,
+      #ff2d55,
+      #ff3b30
+    );
+  background-origin: padding-box, padding-box, border-box;
+  background-clip: padding-box, padding-box, border-box;
+  animation: cl-rainbow-spin 2.6s linear infinite;
 }
 
 /* "Hidden from screen sharing" (stealth ON) indicator — a calm, slow rainbow contour so the user can
@@ -508,8 +596,11 @@ input::placeholder {
   backdrop-filter: blur(var(--blur-panel)) saturate(var(--blur-saturate));
   -webkit-backdrop-filter: blur(var(--blur-panel)) saturate(var(--blur-saturate));
   border: 1px solid var(--color-hair);
+  /* No outer black drop-shadow (was 0 30px 70px -20px rgba(0,0,0,0.74)) — it bled well past the
+     widget's edges into the empty space around it, reading as a grey halo over a light desktop. The
+     thin purple ring + ambient glow + inset specular rim-light still give it a "lifted" feel without
+     smudging the background. */
   box-shadow:
-    0 30px 70px -20px rgba(0, 0, 0, 0.74),
     0 0 0 1px rgba(127, 0, 218, 0.09),
     0 0 50px -14px var(--color-accent-glow),
     inset 0 1px 0 rgba(255, 255, 255, 0.045);

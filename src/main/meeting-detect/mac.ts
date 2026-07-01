@@ -1,4 +1,5 @@
 import { execFile } from 'node:child_process'
+import { basename } from 'node:path'
 import { desktopCapturer } from 'electron'
 import { MEETING_URL_PATTERNS, isMeetingWindow, titleLooksLikeMeeting } from './shared'
 
@@ -87,13 +88,29 @@ return out
 `
 }
 
-function buildFullMacScript(): string {
+function getRunningProcessNames(): Promise<Set<string>> {
+  return new Promise((resolve) => {
+    execFile('ps', ['-axo', 'comm='], { timeout: 1500 }, (err, stdout) => {
+      if (err) {
+        resolve(new Set())
+        return
+      }
+      const names = new Set<string>()
+      for (const line of (stdout || '').split(/\n/)) {
+        const name = basename(line.trim())
+        if (name) names.add(name)
+      }
+      resolve(names)
+    })
+  })
+}
+
+export function buildFullMacScript(runningApps: Set<string> = new Set()): string {
   const urlChecks = MEETING_URL_PATTERNS.map((p) => `us contains "${p}"`).join(' or ')
-  // Emit a per-browser guarded block so we only reference a browser's scripting
-  // dictionary when that browser is actually running.  A machine without Chrome
-  // must never see `using terms from application "Google Chrome"` — that causes
-  // an osascript compile error even when the `tell` is never reached.
-  const chromiumBlocks = CHROMIUM_BROWSERS.map((bn) => {
+  // Emit URL-detection blocks ONLY for browsers known to be running. AppleScript compiles
+  // `using terms from application "…"` dictionaries before runtime `if procNames contains …`
+  // guards execute, so an absent browser must not appear in this script at all.
+  const chromiumBlocks = CHROMIUM_BROWSERS.filter((bn) => runningApps.has(bn)).map((bn) => {
     const escaped = bn.replace(/"/g, '\\"')
     return `if procNames contains "${escaped}" then
   try
@@ -110,13 +127,8 @@ function buildFullMacScript(): string {
   end try
 end if`
   }).join('\n\n')
-  return `${buildBaseMacScript()}
--- Browser URL detection (requires browser Automation permission; isolated per browser).
--- Each block is guarded by procNames so absent browsers never touch their dictionary.
--- Returns early on first URL match (high-confidence signal — keep early return here).
-${chromiumBlocks}
-
-if procNames contains "Arc" then
+  const arcBlock = runningApps.has('Arc') && runningApps.has('Google Chrome')
+    ? `if procNames contains "Arc" then
   try
     using terms from application "Google Chrome"
       tell application "Arc"
@@ -129,9 +141,10 @@ if procNames contains "Arc" then
       end tell
     end using terms from
   end try
-end if
-
-if procNames contains "Safari" then
+end if`
+    : ''
+  const safariBlock = runningApps.has('Safari')
+    ? `if procNames contains "Safari" then
   try
     tell application "Safari"
       repeat with w in windows
@@ -142,7 +155,17 @@ if procNames contains "Safari" then
       end repeat
     end tell
   end try
-end if
+end if`
+    : ''
+  return `${buildBaseMacScript()}
+-- Browser URL detection (requires browser Automation permission; isolated per browser).
+-- Only known-running browsers are emitted so absent browser dictionaries never compile.
+-- Returns early on first URL match (high-confidence signal — keep early return here).
+${chromiumBlocks}
+
+${arcBlock}
+
+${safariBlock}
 
 if sysEventsFailed then return "${SYSTEM_EVENTS_DENIED}"
 return out
@@ -192,7 +215,8 @@ async function detectMacByWindowTitles(customApps: string[] = []): Promise<strin
 }
 
 export async function detectMac(customApps: string[] = []): Promise<string> {
-  const full = await runOsaScript(buildFullMacScript())
+  const runningApps = await getRunningProcessNames()
+  const full = await runOsaScript(buildFullMacScript(runningApps))
 
   // Full script ran without error and returned real output (not a permission sentinel).
   // All window titles were already gathered in this pass — no need for a second AppleScript.

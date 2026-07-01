@@ -76,9 +76,11 @@ describe('store', () => {
 
     const result = setSettings({ temperature: 0.99, provider: 'openai', autoSuggest: false })
 
-    // Locked keys keep their previous / managed values.
+    // Locked keys keep their previous / managed values. providerModels has no managed override here, so
+    // it falls back to its DEFAULT_SETTINGS value — the hard-locked base Dust agent (DUST_BASE_AGENT_ID),
+    // not an empty map.
     expect(result.temperature).toBe(0.2)
-    expect(result.providerModels).toEqual({})
+    expect(result.providerModels).toEqual({ dust: 'vJxYHvTRBT' })
     // Unlocked keys are persisted.
     expect(result.provider).toBe('openai')
     expect(result.autoSuggest).toBe(false)

@@ -76,6 +76,11 @@ export interface AnswerState {
   // goes to the model and must NEVER be shown; `label` is what the UI displays. Falls back to '' (hidden).
   label?: string
   kind?: 'answer' | 'factcheck' // drives the verdict-card rendering for fact-checks
+  // True when this answer was grounded in a screenshot (req.mode === 'vision') — drives the "Viewed
+  // screen" trust chip independent of `label`/`prompt`, so a real typed question can show as the header
+  // AND still carry the trust chip (previously the chip only showed when label was the literal string
+  // 'Viewed screen', which overwrote — and so could never coexist with — the user's actual question).
+  usedScreen?: boolean
 }
 
 export interface AskRequest {
@@ -87,12 +92,15 @@ export interface AskRequest {
   transcript?: string
   history?: ChatTurn[]
   depth?: 'deeper' // set by "Go deeper" → ask for a fuller answer than the brief default
+  agentOverride?: string // pins a specific Dust agent sId regardless of tier routing (e.g. Spotlight Ref)
+  providerOverride?: ProviderId // forces this one request to a provider regardless of the active `provider` setting
 }
 
 /** Owns the streaming answer lifecycle over IPC. */
 export function useAsk(): {
   answer: AnswerState | null
   run: (req: AskRequest) => string
+  fail: (error: string, label?: string) => string
   retry: () => string
   deeper: () => string
   cancel: () => void
@@ -106,6 +114,13 @@ export function useAsk(): {
   const pendingRef = useRef('')
   const rafRef = useRef(0)
   const firstTokenSentRef = useRef(false) // first delta flushes synchronously (min TTFT); rest batch per RAF
+  // True from run() until the NEW request's first chunk of real output lands. While true, the previous
+  // answer's text is still on screen (run() deliberately does not blank it — Tony: answers must stay
+  // visible until the NEXT action actually has something to show, not vanish/flash "Thinking…" on click)
+  // and the first flush REPLACES rather than appends to it, so stale text never gets old content prefixed
+  // onto it. If the request ends with no real output at all (onDone/onError with zero deltas), the stale
+  // text is cleared then instead — so a copy/feedback action can never act on the wrong answer.
+  const pendingReplaceRef = useRef(false)
 
   useEffect(() => {
     const flush = (): void => {
@@ -113,7 +128,12 @@ export function useAsk(): {
       const chunk = pendingRef.current
       if (!chunk) return
       pendingRef.current = ''
-      setAnswer((a) => (a ? { ...a, text: a.text + chunk } : a))
+      setAnswer((a) => {
+        if (!a) return a
+        const text = pendingReplaceRef.current ? chunk : a.text + chunk
+        return { ...a, text }
+      })
+      pendingReplaceRef.current = false
     }
     const offDelta = window.toto.onDelta((d: StreamDelta) => {
       if (d.id !== idRef.current) return
@@ -130,16 +150,24 @@ export function useAsk(): {
     const offDone = window.toto.onDone((d: StreamDone) => {
       if (d.id !== idRef.current) return
       flush() // drain any buffered tokens before marking done
-      setAnswer((a) => (a ? { ...a, streaming: false } : a))
+      // Zero real output ever arrived (e.g. an empty completion) — drop the stale previous-answer text
+      // instead of leaving it looking like the result of THIS request.
+      const noOutput = pendingReplaceRef.current
+      pendingReplaceRef.current = false
+      setAnswer((a) => (a ? { ...a, streaming: false, text: noOutput ? '' : a.text } : a))
     })
     const offErr = window.toto.onError((e: StreamError) => {
       if (e.id !== idRef.current) return
       flush() // keep any partial answer captured before the error
-      // User-initiated aborts/cancels are not failures — never paint them as a red error on screen.
+      // User-initiated aborts/cancels are not failures — never paint them as a red error on screen. A
+      // cancel before any output simply reverts to whichever answer was already showing (the persistence
+      // contract above); a genuine error clears stale leftover text so Copy/feedback can't act on it.
       const aborted = /\babort|\bcancel/i.test(e.message || '')
+      const noOutput = pendingReplaceRef.current
+      pendingReplaceRef.current = false
       setAnswer((a) =>
         a
-          ? { ...a, streaming: false, error: aborted ? null : e.message }
+          ? { ...a, streaming: false, error: aborted ? null : e.message, text: !aborted && noOutput ? '' : a.text }
           : aborted
             ? null
             : { id: e.id, text: '', streaming: false, error: e.message, prompt: '' }
@@ -156,6 +184,7 @@ export function useAsk(): {
   const resetBuffer = useCallback((): void => {
     pendingRef.current = ''
     firstTokenSentRef.current = false // next request sync-flushes its own first token
+    pendingReplaceRef.current = true // next request's first chunk replaces (not appends to) old text
     if (rafRef.current) {
       cancelAnimationFrame(rafRef.current)
       rafRef.current = 0
@@ -169,7 +198,18 @@ export function useAsk(): {
       resetBuffer()
       const id = uid()
       idRef.current = id
-      setAnswer({ id, text: '', streaming: true, error: null, prompt: req.prompt ?? '', label: req.label, kind: req.kind })
+      // Deliberately keep the PREVIOUS answer's text on screen (not blanked to '') until this request's
+      // first real chunk lands — see pendingReplaceRef above.
+      setAnswer((prev) => ({
+        id,
+        text: prev?.text ?? '',
+        streaming: true,
+        error: null,
+        prompt: req.prompt ?? '',
+        label: req.label,
+        kind: req.kind,
+        usedScreen: req.mode === 'vision'
+      }))
       void window.toto.ask({
         id,
         mode: req.mode,
@@ -178,8 +218,23 @@ export function useAsk(): {
         transcript: req.transcript,
         depth: req.depth,
         kind: req.kind,
+        agentOverride: req.agentOverride,
+        providerOverride: req.providerOverride,
         history: req.history ?? []
       })
+      return id
+    },
+    [resetBuffer]
+  )
+
+  const fail = useCallback(
+    (error: string, label = ''): string => {
+      if (idRef.current) void window.toto.cancel(idRef.current)
+      resetBuffer()
+      const id = uid()
+      idRef.current = id
+      lastReqRef.current = null
+      setAnswer({ id, text: '', streaming: false, error, prompt: '', label })
       return id
     },
     [resetBuffer]
@@ -209,7 +264,7 @@ export function useAsk(): {
     [run]
   )
 
-  return { answer, run, retry, deeper, cancel, clear }
+  return { answer, run, fail, retry, deeper, cancel, clear }
 }
 
 export function useSettings(): {
@@ -280,6 +335,39 @@ export function useAuth(): {
   return { status, signIn, signOut, refresh }
 }
 
+export const PERMISSIONS_POLL_MS = 2500
+
+type PermissionRefreshEnv = {
+  window: Pick<Window, 'addEventListener' | 'removeEventListener'>
+  document: Pick<Document, 'addEventListener' | 'removeEventListener' | 'visibilityState'>
+}
+
+/** Keep permission UI live while it is mounted.
+ *
+ * macOS users often grant Screen Recording / Mic / Accessibility in System Settings while AskToto's
+ * Settings panel stays open. Focus/visibility refreshes catch the common return-to-app path, but they miss
+ * the split-view case where System Settings and AskToto are visible at the same time. Polling at the same
+ * cadence as onboarding (2.5s) keeps the status dots honest without adding meaningful work.
+ */
+export function startPermissionRefreshLoop(
+  refresh: () => void,
+  env: PermissionRefreshEnv = { window, document }
+): () => void {
+  refresh()
+  const onFocus = (): void => refresh()
+  const onVisibilityChange = (): void => {
+    if (env.document.visibilityState === 'visible') refresh()
+  }
+  const interval = setInterval(refresh, PERMISSIONS_POLL_MS)
+  env.window.addEventListener('focus', onFocus)
+  env.document.addEventListener('visibilitychange', onVisibilityChange)
+  return () => {
+    clearInterval(interval)
+    env.window.removeEventListener('focus', onFocus)
+    env.document.removeEventListener('visibilitychange', onVisibilityChange)
+  }
+}
+
 export function usePermissions(): {
   permissions: PlatformPermissions | null
   refresh: () => Promise<void>
@@ -289,17 +377,7 @@ export function usePermissions(): {
     setPermissions(await window.toto.getPermissions())
   }, [])
   useEffect(() => {
-    void refresh()
-    const onFocus = () => void refresh()
-    const onVisibilityChange = () => {
-      if (document.visibilityState === 'visible') void refresh()
-    }
-    window.addEventListener('focus', onFocus)
-    document.addEventListener('visibilitychange', onVisibilityChange)
-    return () => {
-      window.removeEventListener('focus', onFocus)
-      document.removeEventListener('visibilitychange', onVisibilityChange)
-    }
+    return startPermissionRefreshLoop(() => void refresh())
   }, [refresh])
   return { permissions, refresh }
 }

@@ -1,13 +1,14 @@
-import { app } from 'electron'
+import { app, type BrowserWindow } from 'electron'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import pkg from 'electron-updater'
 import log from 'electron-log'
+import { IPC } from '@shared/ipc'
 
 const { autoUpdater } = pkg
 
 /** Enterprise auto-update. Only runs in the packaged app; needs a real `publish` host (electron-builder.yml). */
-export function initAutoUpdate(): void {
+export function initAutoUpdate(win: BrowserWindow | null): void {
   if (!app.isPackaged) return
   // Skip if no real update host is configured (placeholder) — avoids failing checks every launch.
   try {
@@ -26,7 +27,11 @@ export function initAutoUpdate(): void {
     autoUpdater.autoInstallOnAppQuit = true
     autoUpdater.on('error', (e) => log.warn('[updater] error', e?.message ?? e))
     autoUpdater.on('update-available', (i) => log.info('[updater] update-available', i?.version))
-    autoUpdater.on('update-downloaded', (i) => log.info('[updater] downloaded', i?.version))
+    autoUpdater.on('update-downloaded', (i) => {
+      log.info('[updater] downloaded', i?.version)
+      // In-app banner (UpdateReadyToast) alongside the OS notification checkForUpdatesAndNotify already shows.
+      win?.webContents.send(IPC.updateDownloaded, { version: i?.version })
+    })
     // checkForUpdatesAndNotify shows the OS notification when an update is ready.
     void autoUpdater.checkForUpdatesAndNotify().catch((e) => log.warn('[updater] check failed', e?.message ?? e))
   } catch (e) {

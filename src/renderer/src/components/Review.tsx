@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Copy, Check, FileText, ListTree, FolderOpen, Save, RotateCcw, Play, ChevronDown, Download, Clock } from 'lucide-react'
+import { Copy, Check, FileText, ListTree, FolderOpen, Save, RotateCcw, Play, ChevronDown, Download, Clock, Mail } from 'lucide-react'
 import type { TranscriptLine, MeetingSummary } from '@shared/ipc'
 import type { AnswerState } from '../state'
+import { isNonSpeechLine } from '@shared/transcript-filter'
 import { Markdown } from './Markdown'
 import { Chip, TextButton, Spinner } from './ui'
 
@@ -69,10 +70,12 @@ export function Review({
   startedAt,
   showTranscript,
   meetingMeta,
+  followupDraft,
   onOpenFolder,
   onSave,
   onDone,
-  onResume
+  onResume,
+  onGenerateFollowup
 }: {
   recap: AnswerState | null
   lines: TranscriptLine[]
@@ -83,10 +86,13 @@ export function Review({
   startedAt?: number
   showTranscript?: boolean // opt-in: auto-expand the full transcript; default summary-only
   meetingMeta?: { title: string; date: string }
+  /** Draft follow-up email from the locked follow-up Dust agent — null until Generate is clicked. */
+  followupDraft?: AnswerState | null
   onOpenFolder: () => void
   onSave?: () => void
   onDone?: () => void
   onResume?: () => void
+  onGenerateFollowup?: () => void
 }): JSX.Element {
   const [copied, setCopied] = useState(false)
   const [notesCopied, setNotesCopied] = useState(false)
@@ -109,12 +115,16 @@ export function Review({
     window.toto.recallList().then((list) => setRecentMeetings(list.slice(0, 20))).catch(() => {})
   }, [])
 
+  // Drop non-speech captions ("[BELL RINGS]", "(applause)"…) from the displayed/copied transcript. New
+  // meetings never carry them (filtered at capture), but meetings saved by older builds still might.
+  const speechLines = useMemo(() => lines.filter((l) => !isNonSpeechLine(l.text)), [lines])
+
   const plain = useMemo(
     () =>
-      lines
+      speechLines
         .map((l) => `[${clock(l.t)}] ${l.speaker === 'them' ? 'Them' : 'You'}: ${l.text}`)
         .join('\n'),
-    [lines]
+    [speechLines]
   )
 
   const durationSec = useMemo(() => {
@@ -170,6 +180,52 @@ export function Review({
         setTimeout(() => setJsonCopied(false), 1500)
       })
       .catch((e) => setExportError(`Export failed: ${e instanceof Error ? e.message : String(e)}`))
+  }
+
+  const [pdfBusy, setPdfBusy] = useState(false)
+  const exportPdf = (): void => {
+    const md = recap?.text
+    if (!md) return
+    setPdfBusy(true)
+    setExportError(null)
+    window.toto
+      .recapPdf({ markdown: md, title: meetingMeta?.title })
+      .catch((e) => setExportError(`PDF export failed: ${e instanceof Error ? e.message : String(e)}`))
+      .finally(() => setPdfBusy(false))
+  }
+
+  // Editable follow-up draft: seeded from the streaming followupDraft.text until the user edits it, so
+  // their edits never get clobbered by a late token — a fresh draft (new id) re-arms seeding.
+  const [followupText, setFollowupText] = useState('')
+  const [followupEdited, setFollowupEdited] = useState(false)
+  const [followupCopied, setFollowupCopied] = useState(false)
+  useEffect(() => {
+    setFollowupEdited(false)
+  }, [followupDraft?.id])
+  useEffect(() => {
+    if (followupDraft?.text != null && !followupEdited) setFollowupText(followupDraft.text)
+  }, [followupDraft?.text, followupEdited])
+
+  const [mailError, setMailError] = useState<string | null>(null)
+  const copyFollowup = (): void => {
+    navigator.clipboard
+      .writeText(followupText)
+      .then(() => {
+        setFollowupCopied(true)
+        setTimeout(() => setFollowupCopied(false), 1500)
+      })
+      .catch(() => {})
+  }
+
+  // mailto: fallback (Phase 1) — opens the user's own default mail client with a prefilled draft.
+  // No attachments possible via mailto; sending stays entirely manual. Real Outlook drafts with
+  // attachments are a separate, later phase gated on Microsoft Graph scope consent.
+  const openFollowupInMail = (): void => {
+    setMailError(null)
+    const subject = meetingMeta?.title ? `Follow-up: ${meetingMeta.title}` : 'Follow-up'
+    window.toto
+      .openMailDraft({ subject, body: followupText })
+      .catch((e) => setMailError(`Couldn't open your mail app: ${e instanceof Error ? e.message : String(e)}`))
   }
 
   return (
@@ -228,17 +284,22 @@ export function Review({
       <section aria-live="polite" aria-atomic="false">
         <div className="mb-1.5 flex items-center justify-between">
           <div className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-[color:var(--color-ink-3)]">
-            <ListTree size={12} /> Discussion bullets
+            <ListTree size={12} /> Summary
           </div>
           {recap?.text && (
             <div className="flex items-center gap-1">
-              <Chip onClick={copyNotes}>
-                {notesCopied ? <Check size={13} className="text-[var(--color-success)]" /> : <Copy size={13} />}
+              {/* Accent-filled so the primary "copy the recap" action is unmissable on the review screen. */}
+              <Chip onClick={copyNotes} variant="accent">
+                {notesCopied ? <Check size={13} className="text-white" /> : <Copy size={13} />}
                 {notesCopied ? 'Copied' : 'Copy Summary'}
               </Chip>
               <TextButton onClick={exportJson} title="Copy structured JSON (decisions + action items) for Jira/Asana/Notion">
                 {jsonCopied ? <Check size={11} className="text-[var(--color-success)]" /> : <Download size={11} />}
                 {jsonCopied ? 'Copied' : 'Export JSON'}
+              </TextButton>
+              <TextButton onClick={exportPdf} disabled={pdfBusy} title="Save this summary as a PDF">
+                {pdfBusy ? <Spinner size={11} /> : <FileText size={11} />}
+                Export PDF
               </TextButton>
             </div>
           )}
@@ -258,6 +319,56 @@ export function Review({
           </div>
         )}
       </section>
+
+      {onGenerateFollowup && recap?.text && (
+        <section aria-live="polite">
+          <div className="mb-1.5 flex items-center justify-between">
+            <div className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-[color:var(--color-ink-3)]">
+              <Mail size={12} /> Follow-up
+            </div>
+            {!followupDraft && (
+              <Chip onClick={onGenerateFollowup} variant="accent">
+                <Mail size={13} /> Generate follow-up
+              </Chip>
+            )}
+          </div>
+          {followupDraft?.error ? (
+            <div className="text-[13px] text-[var(--color-danger)]">{followupDraft.error}</div>
+          ) : followupDraft?.streaming && !followupText ? (
+            <div className="flex items-center gap-2 py-1 text-[13px] text-[color:var(--color-ink-2)]">
+              <Spinner size={13} /> drafting follow-up…
+            </div>
+          ) : followupDraft ? (
+            <div className="flex flex-col gap-2">
+              <textarea
+                value={followupText}
+                onChange={(e) => {
+                  setFollowupEdited(true)
+                  setFollowupText(e.target.value)
+                }}
+                rows={10}
+                className="scroll-thin w-full resize-y rounded-xl border border-[var(--color-hair-soft)] bg-white/[0.02] p-3 text-[13px] leading-relaxed text-[color:var(--color-ink)] focus:outline-none"
+              />
+              <div className="flex items-center gap-1.5">
+                <TextButton onClick={copyFollowup}>
+                  {followupCopied ? <Check size={11} className="text-[var(--color-success)]" /> : <Copy size={11} />}
+                  {followupCopied ? 'Copied' : 'Copy'}
+                </TextButton>
+                <TextButton onClick={openFollowupInMail} disabled={!followupText}>
+                  <Mail size={11} /> Open in Mail
+                </TextButton>
+                <TextButton icon={RotateCcw} onClick={onGenerateFollowup}>
+                  Regenerate
+                </TextButton>
+              </div>
+              {mailError && <div className="text-[11px] text-[var(--color-danger)]">{mailError}</div>}
+              <div className="text-[11px] text-[color:var(--color-ink-3)]">
+                Review before sending — attach anything promised manually for now.
+              </div>
+            </div>
+          ) : null}
+        </section>
+      )}
 
       {lines.length === 0 ? null : !transcriptOpen ? (
         // Summary-first: the full transcript is hidden behind a one-click disclosure unless the user has
@@ -292,11 +403,13 @@ export function Review({
             {copyError}
           </div>
         )}
-        <div className="scroll-thin flex max-h-[300px] flex-col gap-2 overflow-y-auto rounded-xl border border-[var(--color-hair-soft)] bg-white/[0.02] p-3">
-          {lines.length === 0 ? (
+        {/* No inner scroll: the transcript flows in full and the single review panel scrolls as one, so the
+            whole Overview + transcript is visible without fighting a nested 300px scroll box. */}
+        <div className="flex flex-col gap-2 rounded-xl border border-[var(--color-hair-soft)] bg-white/[0.02] p-3">
+          {speechLines.length === 0 ? (
             <div className="text-[13px] text-[color:var(--color-ink-2)]">No transcript captured.</div>
           ) : (
-            lines.map((l, i) => (
+            speechLines.map((l, i) => (
               <div key={i} className="flex gap-2 text-[13px] leading-snug">
                 <span className="shrink-0 font-mono text-[10px] text-[color:var(--color-ink-3)]">
                   {clock(l.t)}

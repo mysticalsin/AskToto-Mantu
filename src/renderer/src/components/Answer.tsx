@@ -34,7 +34,8 @@ function errorHint(error: string): string | null {
   if (/timed out|timeout|no response/.test(e)) return 'The model took too long. Retry, or pick a faster tier in Settings → Thinking mode.'
   if (/network|fetch failed|enotfound|econnrefused|getaddrinfo|offline|dns/.test(e)) return 'Looks like a network problem. Check your connection, then retry.'
   if (/quota|insufficient|billing|credit|payment/.test(e)) return 'The provider reports a quota or billing issue. Check your account, or switch providers in Settings.'
-  if (/can.?t read screen|vision|screenshot/.test(e)) return "This provider can't read screens. Switch to Claude or GPT in Settings."
+  // No hint for the vision/screenshot case: the raw error ("… can't read screenshots. Switch to Claude
+  // or GPT in Settings, or ask without a screen capture.") is already complete — a hint duplicates it.
   return null
 }
 
@@ -45,6 +46,7 @@ export function Answer({
   prompt,
   label,
   kind,
+  usedScreen,
   onRetry,
   onGoDeeper,
   onAssist
@@ -55,6 +57,9 @@ export function Answer({
   prompt?: string
   label?: string
   kind?: 'answer' | 'factcheck'
+  /** True when this answer was grounded in a screenshot — drives the "Viewed screen" trust chip
+   *  independent of the displayed label/question (see state.ts AnswerState.usedScreen). */
+  usedScreen?: boolean
   onRetry?: () => void
   onGoDeeper?: () => void
   onAssist?: () => void
@@ -87,9 +92,11 @@ export function Answer({
   // Show the user-facing label (the claim/question) — NEVER the engineered `prompt` scaffold. For plain
   // asks the typed question IS the prompt, so it falls back to that; engineered callers pass a clean label.
   const display = label ?? prompt
-  // "Viewed screen" context chip — the trust signal: it tells the user the answer was grounded in what
-  // was on their screen (the screen-ask path tags the answer with this label). A live purple dot + Eye.
-  const screenContext = label === 'Viewed screen'
+  // "Viewed screen" trust signal: the answer was grounded in a screenshot (state.ts AnswerState.usedScreen,
+  // set from req.mode === 'vision' — independent of what's displayed, so a real typed question can show as
+  // the header AND still carry this badge). When there's nothing else to show (a blank-Enter screen-ask),
+  // the badge stands alone as its own header row; otherwise it's a small eyebrow above the real question.
+  const screenContext = !!usedScreen && !display
   const assistButton = onAssist ? (
     <Chip icon={Sparkles} onClick={onAssist} variant="accent">Assist</Chip>
   ) : null
@@ -106,6 +113,11 @@ export function Answer({
       {kind === 'factcheck' && (
         <div className="mb-1 flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wide text-[color:var(--color-ink-3)]">
           <ShieldCheck size={11} /> Fact-check
+        </div>
+      )}
+      {usedScreen && (
+        <div className="mb-1 flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wide text-[color:var(--color-ink-3)]">
+          <Eye size={11} /> Viewed screen
         </div>
       )}
       {display}
@@ -230,7 +242,7 @@ export function Answer({
   return (
     <div className="fade-up mx-auto max-w-[620px] flex flex-col gap-2">
       {header}
-      <div aria-live="polite" aria-atomic="false" aria-busy={streaming}>
+      <div className="develop-in" aria-live="polite" aria-atomic="false" aria-busy={streaming}>
         {verdict ? (
           <div className="flex flex-col gap-2">
             <span

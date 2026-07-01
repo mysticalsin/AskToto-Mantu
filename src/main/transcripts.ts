@@ -497,6 +497,51 @@ export async function saveMeeting(settings: Settings, m: SaveMeeting): Promise<s
   return file
 }
 
+function escapeHtml(s: string): string {
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+}
+
+/**
+ * Minimal, deterministic markdown→HTML for RECAP_PROMPT's fixed shape only (## headings, "-"/"*" bullet
+ * lists, plain paragraphs) — not a general markdown parser. Used solely to print a recap to PDF via
+ * Electron's webContents.printToPDF(); no npm dependency needed for that one job.
+ */
+export function recapMarkdownToHtml(markdown: string, title?: string): string {
+  const body: string[] = []
+  let inList = false
+  for (const raw of markdown.split('\n')) {
+    const line = raw.trimEnd()
+    const h2 = /^##\s+(.*)/.exec(line)
+    const bullet = /^[-*]\s+(.*)/.exec(line)
+    if (h2) {
+      if (inList) {
+        body.push('</ul>')
+        inList = false
+      }
+      body.push(`<h2>${escapeHtml(h2[1])}</h2>`)
+    } else if (bullet) {
+      if (!inList) {
+        body.push('<ul>')
+        inList = true
+      }
+      body.push(`<li>${escapeHtml(bullet[1])}</li>`)
+    } else if (line.trim()) {
+      if (inList) {
+        body.push('</ul>')
+        inList = false
+      }
+      body.push(`<p>${escapeHtml(line)}</p>`)
+    }
+  }
+  if (inList) body.push('</ul>')
+  const style =
+    'body{font-family:-apple-system,Helvetica,Arial,sans-serif;color:#1a1a1a;padding:32px;line-height:1.5}' +
+    'h1{font-size:20px;margin:0 0 4px}h2{font-size:14px;text-transform:uppercase;letter-spacing:.02em;' +
+    'color:#444;margin:20px 0 8px}ul{margin:0 0 8px;padding-left:20px}li{margin-bottom:4px}p{margin:0 0 8px}'
+  const heading = title ? `<h1>${escapeHtml(title)}</h1>` : ''
+  return `<!DOCTYPE html><html><head><meta charset="UTF-8"><style>${style}</style></head><body>${heading}${body.join('\n')}</body></html>`
+}
+
 /**
  * Parse a RECAP_PROMPT markdown document into a structured export (for piping into Jira/Asana/Notion).
  * Sections come from RECAP_PROMPT's fixed "## Name:" headings; action-item owners are pulled from the

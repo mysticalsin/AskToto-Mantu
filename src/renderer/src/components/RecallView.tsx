@@ -7,7 +7,8 @@ import {
   RefreshCw,
   ExternalLink,
   ChevronLeft,
-  Calendar
+  Calendar,
+  Trash2
 } from 'lucide-react'
 import { TextButton } from './ui'
 import type {
@@ -329,6 +330,22 @@ export function RecallView({
   const [open, setOpen] = useState<string | null>(null)
   /** Single-click selection for the "Open ↵" footer action. */
   const [selectedFile, setSelectedFile] = useState<string | null>(null)
+  /** File mid-delete — disables its trash button so a slow confirm dialog can't be double-clicked. */
+  const [deleting, setDeleting] = useState<string | null>(null)
+
+  // Meetings are always saved; deletion is the user's to undo that. The main process pops a native,
+  // unmissable confirm dialog before actually deleting (single click here is unambiguous — no "did that
+  // register?" two-click pattern), then removes the .md + its index row.
+  const onTrash = useCallback(async (file: string, title: string): Promise<void> => {
+    setDeleting(file)
+    const r = await window.toto.recallDelete(file, title).catch(() => ({ ok: false }))
+    setDeleting(null)
+    if (r.ok) {
+      setItems((xs) => xs.filter((x) => x.file !== file))
+      setSelectedFile((s) => (s === file ? null : s))
+      setOpen((o) => (o === file ? null : o))
+    }
+  }, [])
 
   // Single fetch owner: immediate on mount / empty query, debounced for typed searches.
   // A stale-guard drops out-of-order resolutions so a slow earlier response can't overwrite a newer one.
@@ -478,6 +495,18 @@ export function RecallView({
                         className="no-drag focus-ring grid h-7 w-7 shrink-0 place-items-center rounded-full text-[color:var(--color-ink-3)] hover:bg-white/[0.06] hover:text-[color:var(--color-ink)]"
                       >
                         <Network size={12} />
+                      </button>
+
+                      {/* Delete — single click opens a native confirm dialog (main process); see onTrash. */}
+                      <button
+                        type="button"
+                        aria-label="Delete meeting"
+                        title="Delete"
+                        disabled={deleting === m.file}
+                        onClick={() => void onTrash(m.file, m.title)}
+                        className="no-drag focus-ring grid h-7 w-7 shrink-0 place-items-center rounded-full text-[color:var(--color-ink-3)] transition-colors hover:bg-[var(--color-danger)]/10 hover:text-[var(--color-danger)] disabled:opacity-40"
+                      >
+                        <Trash2 size={12} />
                       </button>
                     </div>
 

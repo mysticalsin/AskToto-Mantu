@@ -70,13 +70,18 @@ export function Chip({
       title={title}
       onClick={onClick}
       className={[
-        'no-drag focus-ring flex items-center gap-1.5 rounded-full px-3 py-1.5 text-[12px] font-medium transition-colors duration-[var(--duration-hover)]',
+        'no-drag focus-ring flex items-center gap-1.5 rounded-full px-3 py-1.5 text-[12px] font-semibold transition-colors duration-[var(--duration-hover)]',
         variant === 'accent'
           ? 'bg-[var(--color-accent)] text-white hover:brightness-110'
-          : 'bg-white/[0.06] text-[color:var(--color-ink-2)] hover:bg-white/[0.12] hover:text-[color:var(--color-ink)]'
+          : 'bg-white/[0.08] text-white hover:bg-white/[0.16]'
       ].join(' ')}
     >
-      {Icon && <Icon size={13} />}
+      {Icon && (
+        <Icon
+          size={13}
+          className={variant === 'neutral' ? 'text-[var(--color-accent-2)]' : undefined}
+        />
+      )}
       {children}
     </button>
   )
@@ -111,6 +116,21 @@ export function TextButton({
       {Icon && <Icon size={11} />}
       {children}
     </button>
+  )
+}
+
+/** Instant custom tooltip on hover — same mechanism as Bar.tsx's IconTool, reused here so Settings
+ *  can move a control's explanation off always-visible body text and onto a hover trigger (e.g. an
+ *  info glyph next to the label). Unlike IconTool's tooltip (a few words, `whitespace-nowrap`), Settings
+ *  descriptions run full sentences — this wraps at a fixed width instead of stretching off-screen. */
+export function FieldHint({ text, children }: { text: string; children: ReactNode }): JSX.Element {
+  return (
+    <span className="group relative inline-flex">
+      {children}
+      <span className="pointer-events-none absolute -top-1.5 left-1/2 z-20 w-max max-w-[260px] -translate-x-1/2 -translate-y-full rounded-lg bg-black/90 px-2.5 py-1.5 text-left text-[11px] font-medium leading-snug text-white opacity-0 shadow-lg transition-opacity duration-150 group-hover:opacity-100">
+        {text}
+      </span>
+    </span>
   )
 }
 
