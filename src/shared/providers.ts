@@ -387,3 +387,14 @@ export function resolveModelTier(
   }
   return base || def.fastModel || def.defaultModel || ''
 }
+
+/** Is Dust configured with valid credentials right now — independent of whether it's the globally active
+ *  `provider`. Used to decide whether a specific task (recap, follow-up email, Spotlight Ref) can cascade
+ *  into Dust even while another provider (e.g. Kimi) handles everyday Q&A. */
+export function isDustReady(
+  hasKeys: Partial<Record<string, boolean>>,
+  dustWorkspaceId: string,
+  providerModels: Partial<Record<string, string>>
+): boolean {
+  return !!hasKeys['dust'] && !!dustWorkspaceId.trim() && !!providerModels['dust']
+}

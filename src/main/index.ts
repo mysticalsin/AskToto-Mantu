@@ -13,7 +13,8 @@ import {
   nativeImage,
   protocol,
   net,
-  Notification
+  Notification,
+  clipboard
 } from 'electron'
 import { join, basename, resolve, relative, isAbsolute, extname } from 'node:path'
 import { readFileSync, existsSync, writeFileSync, realpathSync, readdirSync, unlinkSync } from 'node:fs'
@@ -54,6 +55,7 @@ import {
   saveMeeting,
   saveNote,
   parseRecapMarkdown,
+  recapMarkdownToHtml,
   resolveMeetingsFolder,
   ensureMeetingsFolder,
   isEncryptedFile,
@@ -64,9 +66,8 @@ import { detectMeeting } from './meeting-detect'
 import { titleMatchesCalendar } from './meeting-detect/shared'
 import { getPlatformPermissions } from './platform-perms'
 import { listMeetings, searchMeetings, recallRead, deleteMeeting } from './recall'
-import { googleAuthStatus, googleSignIn, googleSignOut } from './google-auth'
-import { googleCalendarToday } from './google-calendar'
 import { initAutoUpdate } from './updater'
+import updaterPkg from 'electron-updater'
 import { runSelfTest } from './selftest'
 import { readEvalMetrics, aggregateMetrics } from './metrics'
 import { refreshDustCliSession, setupDustCli } from './dustcli'
@@ -101,10 +102,6 @@ let audioArmed = false // loopback capture only granted during an explicit user-
 let lastBarHeight = BAR_HEIGHT // remember the bar's content height to restore on settings exit
 let currentWidth = BAR_WIDTH // window width; narrows to PILL_WIDTH while collapsed to the control mini-pill
 const streams = new Map<string, { abort: () => void }>()
-
-// Cached Google sign-in state for publicSettings() (which must remain sync). Updated at startup and
-// by the google IPC handlers so the renderer always gets a fresh value on the NEXT settingsGet call.
-let googleSignedIn = false
 
 /** Security: every privileged IPC handler must come from the main window's top frame.
  *  Compromised subframes, devtools, or unexpected webContents are rejected here. */
@@ -166,8 +163,7 @@ function publicSettings(): PublicSettings {
     resolvedMeetingsFolder: resolveMeetingsFolder(s),
     managedKeys: getLockedKeys(),
     envKeys: getEnvKeyProviders(),
-    loginItemOpenAtLogin,
-    googleConnected: googleSignedIn
+    loginItemOpenAtLogin
   }
 }
 
@@ -393,17 +389,18 @@ async function captureScreenshot(): Promise<{ image: string; width: number; heig
   return { image: jpeg.toString('base64'), width: size.width, height: size.height, dispId: disp.id }
 }
 
-async function getScreenshot(phase?: string): Promise<{ image: string; width: number; height: number }> {
+async function getScreenshot(phase?: string): Promise<{ image: string; width: number; height: number; capturedAt: number }> {
   const disp = screen.getDisplayNearestPoint(screen.getCursorScreenPoint())
   if (shotCache && Date.now() - shotCache.ts < CAPTURE_TTL_MS && shotCache.dispId === disp.id) {
-    const { image, width, height } = shotCache
-    return { image, width, height }
+    const { image, width, height, ts } = shotCache
+    return { image, width, height, capturedAt: ts }
   }
   const shot = await captureScreenshot()
-  shotCache = { ...shot, ts: Date.now() }
+  const capturedAt = Date.now()
+  shotCache = { ...shot, ts: capturedAt }
   auditLog('capture.screen', { width: shot.width, height: shot.height, bytes: shot.image.length, ...(phase ? { phase } : {}) })
   const { image, width, height } = shot
-  return { image, width, height }
+  return { image, width, height, capturedAt }
 }
 
 /** Fill the cache + warm the OS capture pipeline ahead of a real ask. Fire-and-forget; auth-gated. */
@@ -823,35 +820,6 @@ function registerIpc(): void {
     return calendarToday(typeof tz === 'string' ? tz : 'UTC')
   })
 
-  // Google Calendar OAuth + calendar access (no requireAuth gate — Google sign-in is independent of
-  // the Mantu/Azure gate; the user can connect Google Calendar without a corporate sign-in).
-  ipcMain.handle(IPC.googleAuthStatus, async (e) => {
-    assertMainWindow(e)
-    const status = googleAuthStatus()
-    googleSignedIn = status.signedIn
-    return status
-  })
-  ipcMain.handle(IPC.googleAuthStart, async (e) => {
-    assertMainWindow(e)
-    const result = await googleSignIn()
-    if (result.ok) googleSignedIn = true
-    return result
-  })
-  ipcMain.handle(IPC.googleSignOut, async (e) => {
-    assertMainWindow(e)
-    googleSignOut()
-    googleSignedIn = false
-    return { ok: true }
-  })
-  ipcMain.handle(IPC.googleCalendarToday, async (e, tz: unknown) => {
-    assertMainWindow(e)
-    // No requireAuth() gate — Google Calendar is independent of the Mantu/Azure sign-in (see the
-    // sibling handlers above). googleCalendarToday() itself returns { needsConsent } when Google
-    // isn't connected, so gating on the Mantu session here would create a dead-end "connect Google"
-    // loop that connecting Google can never clear once Azure SSO is enforced.
-    return googleCalendarToday(typeof tz === 'string' ? tz : 'UTC')
-  })
-
   // Recall read: load a saved meeting back for "Resume session" (decode + parse the markdown).
   ipcMain.handle(IPC.recallRead, async (e, file: unknown) => {
     assertMainWindow(e)
@@ -860,10 +828,24 @@ function registerIpc(): void {
   })
 
   // Recall delete: GDPR right-to-erasure for a saved meeting — removes the file + its index row.
-  ipcMain.handle(IPC.recallDelete, async (e, file: unknown) => {
+  // Confirmed with a native, unmissable modal BEFORE deleting (sync — blocks until the user answers) so a
+  // single click is unambiguous: no "did that register?" two-click pattern that's easy to misread as broken.
+  ipcMain.handle(IPC.recallDelete, async (e, file: unknown, title: unknown) => {
     assertMainWindow(e)
     if (!requireAuth()) return { ok: false, error: 'Sign in with your Mantu account first.' }
     const safeName = basename(String(file ?? ''))
+    const label = typeof title === 'string' && title.trim() ? title.trim() : 'this meeting'
+    const dialogOpts = {
+      type: 'warning' as const,
+      title: 'Delete meeting',
+      message: `Delete "${label}"?`,
+      detail: 'This removes the saved transcript and notes from disk. This cannot be undone.',
+      buttons: ['Delete', 'Cancel'],
+      defaultId: 1,
+      cancelId: 1
+    }
+    const choice = win ? dialog.showMessageBoxSync(win, dialogOpts) : dialog.showMessageBoxSync(dialogOpts)
+    if (choice !== 0) return { ok: false, error: 'cancelled' }
     const result = await deleteMeeting(safeName)
     if (result.ok) auditLog('transcript.deleted', { file: safeName })
     return result
@@ -929,7 +911,15 @@ function registerIpc(): void {
     // Find the next eligible keyed provider not yet tried — for failover when the primary can't answer.
     const failover = (tried: ProviderId[]): boolean => {
       const tier = routeTier(req, s.thinkingMode)
-      const next = (Object.keys(PROVIDERS) as ProviderId[]).find(
+      // Candidate order honors the CLI-vs-API priority: when 'cli', CLI-kind providers sort first so a
+      // failover reaches for another local CLI before a metered API. V8's Array.sort is stable, so equal-
+      // rank providers keep their PROVIDERS declaration order; 'api' (default) leaves the order unchanged.
+      const order = (Object.keys(PROVIDERS) as ProviderId[]).slice().sort((a, b) =>
+        s.providerPriority === 'cli'
+          ? (PROVIDERS[a].kind === 'cli' ? 0 : 1) - (PROVIDERS[b].kind === 'cli' ? 0 : 1)
+          : 0
+      )
+      const next = order.find(
         (p) =>
           !tried.includes(p) &&
           (!allowed || allowed.includes(p)) &&
@@ -957,7 +947,10 @@ function registerIpc(): void {
       }
       const key = getApiKey(provider)
       const tier = routeTier(req, s.thinkingMode)
-      const model = resolveModelTier(provider, s.providerModels, s.providerModelsThinking, tier, s.providerModelsDeep)
+      const model =
+        req.agentOverride && provider === 'dust'
+          ? req.agentOverride
+          : resolveModelTier(provider, s.providerModels, s.providerModelsThinking, tier, s.providerModelsDeep)
       const ineligible = def.kind === 'cli' && !s.cliConnected[provider]
         ? `${def.label} is not connected. Open Settings → CLI Integration to set it up.`
         : def.kind !== 'cli' && !key
@@ -972,6 +965,12 @@ function registerIpc(): void {
               ? 'Add your Dust workspace ID in Settings → Your AI → Dust setup.'
               : ''
       if (ineligible) {
+        // Vision turn, but the active provider can't read images (e.g. Dust agents). Transparently fail
+        // over to a configured vision-capable provider (Claude/GPT) so a user who captured their screen
+        // still gets an answer — `failover` only picks a provider that has both a key and a model. Surface
+        // the error only when NO vision-capable provider is set up.
+        const visionGap = req.mode === 'vision' && !def.vision
+        if (visionGap && failover(attempted.concat(provider))) return
         if (attempted.length === 0) win?.webContents.send(IPC.streamError, { id: req.id, message: ineligible })
         else if (!failover(attempted.concat(provider))) win?.webContents.send(IPC.streamError, { id: req.id, message: ineligible })
         return
@@ -1063,7 +1062,16 @@ function registerIpc(): void {
       streams.set(req.id, handle)
     }
 
-    attempt(s.provider, [])
+    // Honor the CLI-vs-API priority for the FIRST provider tried: 'cli' prefers a connected CLI integration
+    // (Claude, then Codex) so the user's local subscription is used before any metered API. Otherwise — and
+    // whenever no CLI is connected — the user's explicitly-chosen `provider` stays primary (unchanged).
+    // req.providerOverride wins over all of that: it means "this specific request must go to provider X"
+    // (e.g. cascading a recap/follow-up/Spotlight-Ref request into Dust) regardless of what's globally active.
+    const cliPrimary =
+      s.providerPriority === 'cli'
+        ? (['claude-cli', 'codex-cli'] as ProviderId[]).find((p) => s.cliConnected[p])
+        : undefined
+    attempt(req.providerOverride ?? cliPrimary ?? s.provider, [])
     } catch (e) {
       win?.webContents.send(IPC.streamError, {
         id,
@@ -1133,6 +1141,32 @@ function registerIpc(): void {
     assertMainWindow(e)
     if (!requireAuth()) throw new Error('Not signed in.')
     return parseRecapMarkdown(typeof markdown === 'string' ? markdown : '')
+  })
+
+  // Local, Dust-independent PDF export of a recap — works with zero external prerequisites (no Dust
+  // tool config, no Graph scope). Renders a small self-contained HTML doc in a hidden throwaway window
+  // and prints it via Electron's own printToPDF; no PDF npm dependency needed for this one job.
+  ipcMain.handle(IPC.recapPdf, async (e, input: { markdown?: string; title?: string }) => {
+    assertMainWindow(e)
+    if (!requireAuth()) throw new Error('Not signed in.')
+    const md = typeof input?.markdown === 'string' ? input.markdown : ''
+    if (!md.trim()) throw new Error('No recap to export.')
+    const safeName = (input?.title || 'Meeting recap').replace(/[\\/:*?"<>|]/g, '-')
+    const r = await dialog.showSaveDialog({ defaultPath: `${safeName}.pdf`, filters: [{ name: 'PDF', extensions: ['pdf'] }] })
+    if (r.canceled || !r.filePath) return { ok: false as const }
+    const html = recapMarkdownToHtml(md, input?.title)
+    const pdfWin = new BrowserWindow({
+      show: false,
+      webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false, webSecurity: true }
+    })
+    try {
+      await pdfWin.loadURL('data:text/html;charset=UTF-8,' + encodeURIComponent(html))
+      const buffer = await pdfWin.webContents.printToPDF({ printBackground: true })
+      writeFileSync(r.filePath, buffer)
+    } finally {
+      pdfWin.destroy()
+    }
+    return { ok: true as const, path: r.filePath }
   })
 
   ipcMain.handle(IPC.graphifyStatus, (e) => {
@@ -1232,6 +1266,27 @@ function registerIpc(): void {
   ipcMain.handle(IPC.windowQuit, (e) => {
     assertMainWindow(e)
     app.quit()
+  })
+  ipcMain.handle(IPC.updateInstall, (e) => {
+    assertMainWindow(e)
+    updaterPkg.autoUpdater.quitAndInstall()
+  })
+  // mailto: fallback for the follow-up draft (Phase 1) — opens the user's own default mail client with
+  // a prefilled draft; sending stays entirely manual. No attachments possible via mailto (real Outlook
+  // drafts with attachments are a later phase, gated on Microsoft Graph scope consent). Some mail
+  // clients/OSes cap mailto: URL length, so long bodies are truncated with the full text left on the
+  // clipboard instead of silently cutting content the user can't recover.
+  ipcMain.handle(IPC.openMailDraft, (e, input: { subject?: string; body?: string }) => {
+    assertMainWindow(e)
+    if (!requireAuth()) throw new Error('Not signed in.')
+    const subject = typeof input?.subject === 'string' ? input.subject : ''
+    const rawBody = typeof input?.body === 'string' ? input.body : ''
+    const MAX_BODY = 1500
+    const truncated = rawBody.length > MAX_BODY
+    const body = truncated ? rawBody.slice(0, MAX_BODY) + '\n\n[Truncated — full text copied to your clipboard.]' : rawBody
+    if (truncated) clipboard.writeText(rawBody)
+    void shell.openExternal(`mailto:?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`)
+    return { truncated }
   })
 }
 
@@ -1431,42 +1486,23 @@ if (!app.requestSingleInstanceLock()) {
       console.error(`[boot] ${name} failed:`, e)
     }
   }
-  // Auto-connect the local Dust CLI session on every launch so Dust stays connected without a manual
-  // re-import. The imported OAuth token is short-lived (~1h) and goes stale between runs, so we refresh it
-  // (refreshDustCliSession runs `dust status` to mint a fresh one, then re-reads the keychain) and persist.
-  // Only for users who've already connected Dust (workspace set) → non-Dust users pay nothing. macOS only.
-  function autoConnectDust(): void {
-    if (process.platform !== 'darwin') return
-    if (!getSettings().dustWorkspaceId) return
-    void (async () => {
-      try {
-        const fresh = await refreshDustCliSession()
-        if (fresh.ok && fresh.token && fresh.workspaceId) {
-          setApiKey('dust', fresh.token)
-          setSettings({ dustWorkspaceId: fresh.workspaceId, dustBaseUrl: fresh.baseUrl || 'https://dust.tt' })
-          auditLog('dust.token.refreshed', { source: 'autoconnect' })
-        }
-      } catch {
-        /* best-effort — the Dust stream path also self-heals an expired token on first use */
-      }
-    })()
-  }
+  // NOTE: we deliberately do NOT eagerly refresh the Dust CLI session at launch. Reading the Dust CLI's
+  // keychain item (`security find-generic-password` on service `dust-cli`) from AskToto — a different
+  // binary than the `dust`/keytar process that created it — triggers a macOS "allow access" keychain
+  // prompt every launch (and "Always Allow" doesn't persist across unsigned rebuilds, since the app's
+  // code identity changes each build). The imported token is already persisted in AskToto's own encrypted
+  // store and survives restarts; if it has expired (~1h OAuth lifetime), the Dust stream path self-heals
+  // lazily on the first 401 (refreshDustAuth above) — re-minting via `dust status` + re-reading the
+  // keychain only when Dust is actually used, instead of unconditionally at every idle launch.
 
   runStep('registerIpc', registerIpc)
   runStep('createTray', createTray)
   runStep('registerShortcuts', registerShortcuts)
   runStep('createWindow', createWindow)
-  runStep('autoConnectDust', autoConnectDust)
   runStep('registerScreenListeners', registerScreenListeners)
   runStep('startMeetingPoller', startMeetingPoller)
   runStep('startMeetingNotifier', startMeetingNotifier)
-  runStep('initAutoUpdate', initAutoUpdate)
-
-  // Prime the googleSignedIn cache so the first publicSettings() call returns the correct value
-  // (the module-level default is false; this async read updates it without blocking startup).
-  void Promise.resolve().then(() => {
-    try { googleSignedIn = googleAuthStatus().signedIn } catch { /* ignore */ }
-  })
+  runStep('initAutoUpdate', () => initAutoUpdate(win))
 
   app.on('activate', () => {
     if (!win) createWindow()

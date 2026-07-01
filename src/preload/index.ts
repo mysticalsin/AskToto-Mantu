@@ -27,7 +27,6 @@ import {
   type AuthStatus,
   type SignInResult,
   type CalendarTodayResult,
-  type GoogleAuthStatus,
   type RecallReadResult,
   type PlatformPermissions
 } from '@shared/ipc'
@@ -80,13 +79,6 @@ const api = {
   signIn: (): Promise<SignInResult> => ipcRenderer.invoke(IPC.authSignIn),
   signOut: (): Promise<void> => ipcRenderer.invoke(IPC.authSignOut),
   calendarToday: (tz: string): Promise<CalendarTodayResult> => ipcRenderer.invoke(IPC.calendarToday, tz),
-  // Google Calendar (parallel to the Microsoft/Outlook path; needs a provisioned GOOGLE_CLIENT_ID to connect).
-  googleAuthStatus: (): Promise<GoogleAuthStatus> => ipcRenderer.invoke(IPC.googleAuthStatus),
-  googleAuthStart: (): Promise<{ ok: boolean; email?: string; error?: string }> =>
-    ipcRenderer.invoke(IPC.googleAuthStart),
-  googleSignOut: (): Promise<{ ok: boolean }> => ipcRenderer.invoke(IPC.googleSignOut),
-  googleCalendarToday: (tz: string): Promise<CalendarTodayResult> =>
-    ipcRenderer.invoke(IPC.googleCalendarToday, tz),
   parakeetStatus: (): Promise<{ ready: boolean }> => ipcRenderer.invoke(IPC.parakeetStatus),
   parakeetEnsure: (): Promise<{ ok: boolean; error?: string }> => ipcRenderer.invoke(IPC.parakeetEnsure),
   parakeetFeed: (samples: Float32Array, speaker: string): Promise<string> =>
@@ -115,8 +107,9 @@ const api = {
   recallSearch: (q: string): Promise<RecallHit[]> => ipcRenderer.invoke(IPC.recallSearch, q),
   recallOpen: (file: string): Promise<string> => ipcRenderer.invoke(IPC.recallOpen, file),
   recallRead: (file: string): Promise<RecallReadResult> => ipcRenderer.invoke(IPC.recallRead, file),
-  recallDelete: (file: string): Promise<{ ok: boolean; error?: string }> =>
-    ipcRenderer.invoke(IPC.recallDelete, file),
+  // title is shown in the native confirm dialog the main process pops up before deleting; optional.
+  recallDelete: (file: string, title?: string): Promise<{ ok: boolean; error?: string }> =>
+    ipcRenderer.invoke(IPC.recallDelete, file, title),
   setListeningState: (on: boolean): Promise<void> => ipcRenderer.invoke(IPC.listeningState, on),
   asrBundled: (): Promise<boolean> => ipcRenderer.invoke(IPC.asrBundled),
 
@@ -135,7 +128,15 @@ const api = {
   onError: (cb: (d: StreamError) => void): Unsub => sub(IPC.streamError, cb),
   onHotkey: (cb: (a: HotkeyAction) => void): Unsub => sub(IPC.hotkey, cb),
   onMeetingDetected: (cb: (d: { app?: string; active?: boolean }) => void): Unsub =>
-    sub(IPC.meetingDetected, cb)
+    sub(IPC.meetingDetected, cb),
+
+  onUpdateReady: (cb: (d: { version?: string }) => void): Unsub => sub(IPC.updateDownloaded, cb),
+  installUpdate: (): Promise<void> => ipcRenderer.invoke(IPC.updateInstall),
+
+  openMailDraft: (input: { subject: string; body: string }): Promise<{ truncated: boolean }> =>
+    ipcRenderer.invoke(IPC.openMailDraft, input),
+  recapPdf: (input: { markdown: string; title?: string }): Promise<{ ok: boolean; path?: string }> =>
+    ipcRenderer.invoke(IPC.recapPdf, input)
 }
 
 contextBridge.exposeInMainWorld('toto', api)

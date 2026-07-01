@@ -49,10 +49,6 @@ export const IPC = {
   authSignIn: 'auth:signIn',
   authSignOut: 'auth:signOut',
   calendarToday: 'calendar:today',
-  googleAuthStart: 'google:authStart',
-  googleAuthStatus: 'google:status',
-  googleSignOut: 'google:signOut',
-  googleCalendarToday: 'google:calendarToday',
   parakeetStatus: 'parakeet:status',
   parakeetEnsure: 'parakeet:ensure',
   parakeetFeed: 'parakeet:feed',
@@ -94,7 +90,11 @@ export const IPC = {
   cliInstallProgress: 'cli:install:progress',
   cliLogin: 'cli:login',
   answerFeedback: 'answer:feedback',
-  metricsRead: 'metrics:read'
+  metricsRead: 'metrics:read',
+  updateDownloaded: 'update:downloaded',
+  updateInstall: 'update:install',
+  recapPdf: 'recap:pdf',
+  openMailDraft: 'mail:openDraft'
 } as const
 
 /** User's verdict on an answer (metadata only — never the answer text). Feeds the audit log + future evals. */
@@ -233,6 +233,11 @@ export const AskStartSchema = z.object({
   depth: z.enum(['deeper']).optional(),
   /** 'factcheck' = a verification ask → the router sends it to the strongest model (verifier path). */
   kind: z.enum(['answer', 'factcheck']).optional(),
+  /** Pins a specific Dust agent sId regardless of tier routing (e.g. Spotlight Ref). Dust-only; ignored by other providers. */
+  agentOverride: z.string().optional(),
+  /** Forces this one request to a specific provider regardless of the globally active `provider` setting —
+   *  e.g. cascading a recap/follow-up/Spotlight-Ref request into Dust even when Kimi/Anthropic/etc. is active. */
+  providerOverride: ProviderIdSchema.optional(),
   history: z.array(ChatTurnSchema).default([])
 })
 export type AskStart = z.infer<typeof AskStartSchema>
@@ -252,6 +257,10 @@ export type StreamError = z.infer<typeof StreamErrorSchema>
 
 export const BaseSettingsSchema = z.object({
   provider: ProviderIdSchema.default('anthropic'),
+  // CLI-vs-API priority. 'api' (default) keeps the explicitly-chosen `provider` as primary. 'cli' makes a
+  // connected CLI integration (Claude/Codex) the primary so the user's local subscription is used before
+  // any metered API key, and prefers CLI on failover. With no CLI connected, 'cli' behaves like 'api'.
+  providerPriority: z.enum(['cli', 'api']).default('api'),
   providerModels: z.record(z.string(), z.string()).default({}),
   customBaseUrl: z
     .string()
@@ -266,6 +275,9 @@ export const BaseSettingsSchema = z.object({
   // Per-provider DEEP-tier model override (parallel to the others). For Dust this is the deep agent sId.
   // Empty → fall back to the provider's built-in deep model (e.g. Opus), then the think model.
   providerModelsDeep: z.record(z.string(), z.string()).default({}),
+  // Per-provider Spotlight Ref agent (parallel to the others). For Dust this is the sId of a dedicated
+  // agent that checks for sales references — independent of the tier (base/think/deep) routing above.
+  providerModelsSpotlightRef: z.record(z.string(), z.string()).default({}),
   // Routing policy: 'auto' = Haiku basic / Sonnet heavier / Opus coding+deep; 'always' = always Opus; 'never' = always Haiku.
   thinkingMode: z.enum(['auto', 'always', 'never']).default('auto'),
   // Dust provider config (workspace id + region base; the agent sId lives in providerModels.dust)
@@ -281,13 +293,6 @@ export const BaseSettingsSchema = z.object({
   azureClientId: z.string().default(''),
   azureTenantId: z.string().default(''),
   azureAllowedDomain: z.string().default(''),
-  // Google OAuth desktop client id (public identifier — the installed-app PKCE flow uses no confidential
-  // secret). Set in Settings → Calendar to enable "Connect Google Calendar". Env GOOGLE_CLIENT_ID /
-  // managed-config still override. Empty → the Google row shows "needs setup".
-  googleClientId: z.string().default(''),
-  // Optional org-domain restriction for Google sign-in (e.g. "mantu.com"). Empty = any Google account.
-  // Managed-config google.allowedDomain overrides this. Enforced in main/google-auth.ts.
-  googleAllowedDomain: z.string().default(''),
   // graphify knowledge-graph of the notes folder. backend 'auto' = local Claude Code CLI → stored
   // Claude key → stored OpenAI key (never Gemini). On by default for new installs; degrades gracefully
   // (shows an install hint, never throws) when graphify isn't installed. See main/graphify.ts.
@@ -340,6 +345,7 @@ export const BaseSettingsSchema = z.object({
   playListenChime: z.boolean().default(true),
   soundCues: z.boolean().default(true), // subtle answer-ready / error sound cues
   uiSounds: z.boolean().default(true), // master: soft click feedback on buttons (and gates all UI sounds)
+  quickActionsRainbow: z.boolean().default(true), // spinning rainbow border on the quick-action chips
   showFullTranscriptInReview: z.boolean().default(false), // review = summary-first; transcript opt-in
   asrQuality: z.enum(['best', 'fast']).default('fast'), // fast = small model, ready fast (default); best = large, downloads
   asrEngine: z.enum(['whisper', 'parakeet']).default('whisper'), // whisper = ~99 langs (default); parakeet = European, fastest
@@ -349,6 +355,8 @@ export const BaseSettingsSchema = z.object({
   redactSensitive: z.boolean().default(true),
   lastConsentReminderAt: z.number().default(0),
   customMeetingApps: z.array(z.string().min(1).max(80)).max(20).default([]),
+  // Words the ASR engine consistently mishears, always corrected in the live transcript (commitLine).
+  asrCorrections: z.array(z.object({ from: z.string().min(1).max(80), to: z.string().max(80) })).max(100).default([]),
   // CLI provider connection state. Keyed by ProviderId ('claude-cli', 'codex-cli').
   cliConnected: z.record(z.string(), z.boolean()).default({}),
   // Whether the user has acknowledged the CLI integration notice banner.
@@ -379,9 +387,7 @@ export const PublicSettingsSchema = BaseSettingsSchema.extend({
   managedKeys: z.array(z.string()).default([]),
   /** Providers whose key is set via an environment variable — in-app Remove is a no-op for these. */
   envKeys: z.array(z.string()).default([]),
-  loginItemOpenAtLogin: z.boolean().default(false),
-  /** A Google Calendar account is connected (OAuth tokens present in the main-process keychain). */
-  googleConnected: z.boolean().default(false)
+  loginItemOpenAtLogin: z.boolean().default(false)
 })
 export type PublicSettings = z.infer<typeof PublicSettingsSchema>
 
@@ -397,15 +403,22 @@ export type SettingsPatch = Partial<
     | 'managedKeys'
     | 'envKeys'
     | 'loginItemOpenAtLogin'
-    | 'googleConnected'
   >
 >
 
+// Hard-locked Dust agent sIds — Settings shows these read-only (see Settings.tsx DustSetup), not
+// user-editable pickers. Rotating an ID without a release: hand-edit userData/managed-config.json with
+// {"providerModels":{"dust":"NEW_ID"}} — the managed layer overrides these code defaults.
+export const DUST_BASE_AGENT_ID = 'vJxYHvTRBT' // Dust agent "AskToto" — the app's own agent, always the base agent; also drafts meeting follow-ups (no separate follow-up agent)
+export const DUST_SPOTLIGHT_REF_AGENT_ID = 'GOr913Zr5V' // Dust agent "Spotlight Ref"
+
 export const DEFAULT_SETTINGS: Settings = {
   provider: 'anthropic',
-  providerModels: {},
+  providerPriority: 'api',
+  providerModels: { dust: DUST_BASE_AGENT_ID },
   providerModelsThinking: {},
   providerModelsDeep: {},
+  providerModelsSpotlightRef: DUST_SPOTLIGHT_REF_AGENT_ID ? { dust: DUST_SPOTLIGHT_REF_AGENT_ID } : {},
   thinkingMode: 'auto',
   customBaseUrl: '',
   dustWorkspaceId: '',
@@ -413,8 +426,6 @@ export const DEFAULT_SETTINGS: Settings = {
   azureClientId: '',
   azureTenantId: '',
   azureAllowedDomain: '',
-  googleClientId: '',
-  googleAllowedDomain: '',
   graphifyEnabled: true,
   graphifyAutoRebuild: true,
   graphifyBackend: 'auto',
@@ -448,6 +459,7 @@ export const DEFAULT_SETTINGS: Settings = {
   playListenChime: true,
   soundCues: true,
   uiSounds: true,
+  quickActionsRainbow: true,
   showFullTranscriptInReview: false,
   asrQuality: 'fast',
   asrEngine: 'whisper',
@@ -455,6 +467,7 @@ export const DEFAULT_SETTINGS: Settings = {
   redactSensitive: true,
   lastConsentReminderAt: 0,
   customMeetingApps: [],
+  asrCorrections: [],
   cliConnected: {},
   cliNoticeAck: false
 }
@@ -587,13 +600,6 @@ export interface CalendarTodayResult {
   events?: CalendarEvent[]
 }
 
-/** Google Calendar OAuth status (parallel to the Microsoft AuthStatus). */
-export interface GoogleAuthStatus {
-  configured: boolean // a Google OAuth client id is provisioned (env GOOGLE_CLIENT_ID or settings)
-  signedIn: boolean
-  email?: string
-}
-
 /** Result of reading a saved meeting back for "Resume session" (decoded transcript + recap). */
 export interface RecallReadResult {
   ok: boolean
@@ -664,6 +670,8 @@ export const CaptureResultSchema = z.object({
   /** base64 JPEG, no data: prefix */
   image: z.string(),
   width: z.number(),
-  height: z.number()
+  height: z.number(),
+  /** Epoch ms when the screenshot was captured or cache-filled; used for real freshness UI. */
+  capturedAt: z.number().int().nonnegative()
 })
 export type CaptureResult = z.infer<typeof CaptureResultSchema>

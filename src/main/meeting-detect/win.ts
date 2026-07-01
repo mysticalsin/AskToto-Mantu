@@ -92,13 +92,6 @@ async function detectBrowserUrl(): Promise<string> {
   return ''
 }
 
-/** Window-title fallback using desktopCapturer (disabled in production on Windows by content protection). */
-// async function detectByWindowTitles(): Promise<string> {
-//   // Electron's desktopCapturer on Windows requires the app itself be capturable;
-//   // using it here is risky and slow. We prefer UIA and native title matching.
-//   return ''
-// }
-
 export async function detectWindows(customApps: string[] = []): Promise<string> {
   // Try browser URL detection first (most precise for Google Meet/Teams web).
   const browser = await detectBrowserUrl()

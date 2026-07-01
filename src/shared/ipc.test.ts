@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { AskStartSchema, SettingsSchema, DEFAULT_SETTINGS } from './ipc'
+import { AskStartSchema, CaptureResultSchema, SettingsSchema, DEFAULT_SETTINGS } from './ipc'
 
 describe('AskStartSchema', () => {
   it('accepts a valid vision payload with a small base64 PNG', () => {
@@ -37,6 +37,21 @@ describe('AskStartSchema', () => {
     }
     const result = AskStartSchema.safeParse(invalid)
     expect(result.success).toBe(false)
+  })
+})
+
+describe('CaptureResultSchema', () => {
+  it('requires a capturedAt timestamp for screen freshness UI', () => {
+    const parsed = CaptureResultSchema.safeParse({
+      image: Buffer.alloc(100).toString('base64'),
+      width: 1280,
+      height: 720,
+      capturedAt: 1_700_000_000_000
+    })
+    expect(parsed.success).toBe(true)
+    if (parsed.success) {
+      expect(parsed.data.capturedAt).toBe(1_700_000_000_000)
+    }
   })
 })
 

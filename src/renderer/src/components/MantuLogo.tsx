@@ -14,7 +14,7 @@ export function MantuLogo({
   return (
     <img
       src={logoUrl}
-      alt="Mantu — Audacious ideas, Delivered beyond"
+      alt="Mantu: Audacious ideas, Delivered beyond"
       className="select-none object-contain"
       style={{
         width: size,

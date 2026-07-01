@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { TranscriptLine } from '@shared/ipc'
+import { isNonSpeechLine } from '@shared/transcript-filter'
 import { WHISPER_WORKLET_SRC } from './whisper-worklet-src'
 
 const SR = 16000
@@ -22,6 +23,23 @@ const THEM_WATCHDOG_MS = 20_000 // 20 s with the 'them' channel open but no wind
 // Exact text of the soft "not hearing the other side" note, shared by the watchdog (sets it) and the
 // first-'them'-emission handler (clears it) so loopback arriving AFTER the watchdog fired isn't left stuck.
 const THEM_SILENT_MSG = 'Not hearing the other side — check the call volume and that Screen Recording is granted.'
+// Exact text of the "offline, waiting to reconnect" / "reconnected, restarting" notes, shared by
+// armNetworkRetry (sets them) and the worker's 'ready' handler (clears them once recovery succeeds) —
+// matched by exact string so other sticky notes (THEM_SILENT_MSG, the Parakeet-fallback footnote) are
+// never accidentally cleared by a network recovery that has nothing to do with them.
+const OFFLINE_MSG =
+  "No internet connection — the speech model is paused and will restart automatically once you're back online."
+const RECONNECTING_MSG = 'Back online — restarting the speech model…'
+// A model-load failure that looks connectivity-related (DNS/fetch/ECONNREFUSED-style messages
+// transformers.js/fetch surface), so it can be distinguished from a genuine non-network load failure
+// (e.g. a missing bundled file) — which should surface as-is instead of wrongly claiming "you're offline".
+const NETWORK_ERR =
+  /network|fetch failed|enotfound|econnrefused|getaddrinfo|offline|dns|failed to fetch|err_internet_disconnected/i
+
+/** Exported for unit testing — the pure decision behind armNetworkRetry (see useListen below). */
+export function looksLikeNetworkError(message: string, online: boolean): boolean {
+  return !online || NETWORK_ERR.test(message)
+}
 export type AudioSource = 'mic' | 'system' | 'both'
 type Speaker = 'them' | 'you'
 
@@ -64,14 +82,6 @@ export function isQuestion(t: string): boolean {
   return s.split(/\s+/).length >= 3 && QWORDS.test(s)
 }
 
-// Whisper (and to a lesser extent other ASR) emit caption-style filler on silence/non-speech. Drop a line
-// only when its ENTIRE text is one of these phantoms — never substring-match, so real speech is untouched.
-const PHANTOM = new Set(['you', 'thank you', 'thanks for watching', 'thanks', 'bye', 'okay', 'ok'])
-function isPhantom(t: string): boolean {
-  const s = t.trim().toLowerCase().replace(/[.!?\s]+$/g, '')
-  return s === '' || PHANTOM.has(s)
-}
-
 interface Channel {
   ctx: AudioContext
   src: MediaStreamAudioSourceNode
@@ -95,7 +105,15 @@ export interface ListenApi {
 
 const WORKER_IDLE_RELEASE_MS = 180_000 // 3 min: free the whisper worker + ONNX wasm after Listen goes idle
 
-export function useListen(onQuestion?: (line: TranscriptLine) => void): ListenApi {
+/** Escapes regex metacharacters so a user-typed correction word can't corrupt the pattern. */
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+export function useListen(
+  onQuestion?: (line: TranscriptLine) => void,
+  corrections?: { from: string; to: string }[]
+): ListenApi {
   const [state, setState] = useState({
     listening: false,
     ready: false,
@@ -130,6 +148,12 @@ export function useListen(onQuestion?: (line: TranscriptLine) => void): ListenAp
   const themHeardRef = useRef(false) // flips true on the first real 'them' window so we clear the watchdog note exactly once
   const onQRef = useRef(onQuestion)
   onQRef.current = onQuestion
+  // Compiled once per corrections-list change (not per line) — word-boundary + case-insensitive so
+  // correcting "Toto" never also corrupts "Tomato".
+  const correctionsRef = useRef<{ re: RegExp; to: string }[]>([])
+  correctionsRef.current = (corrections ?? [])
+    .filter((c) => c.from.trim())
+    .map((c) => ({ re: new RegExp(`\\b${escapeRegExp(c.from.trim())}\\b`, 'gi'), to: c.to }))
   const linesRef = useRef<TranscriptLine[]>([])
   linesRef.current = lines
   // Trailing run of consecutive 'them' speech (joined) since the last 'you' turn or last auto-answer fire.
@@ -141,10 +165,14 @@ export function useListen(onQuestion?: (line: TranscriptLine) => void): ListenAp
 
   // Add a transcribed line + fire the auto-answer hook. Shared by the Whisper worker and Parakeet paths.
   const commitLine = useCallback((text: string, speaker: Speaker): void => {
-    // Drop phantom/hallucinated lines before touching state (covers both Whisper and Parakeet paths).
-    if (isPhantom(text)) return
-    if (text && liveRef.current) {
-      const line: TranscriptLine = { speaker: speaker || 'you', text, t: Date.now() }
+    // Drop phantom/hallucinated lines + non-speech sound-event captions ("[BELL RINGS]", "(applause)",
+    // "♪♪♪") before touching state — so they never display live, never reach the recap, never get saved.
+    // Single chokepoint for both the Whisper worker and Parakeet paths.
+    if (isNonSpeechLine(text)) return
+    let corrected = text
+    for (const { re, to } of correctionsRef.current) corrected = corrected.replace(re, to)
+    if (corrected && liveRef.current) {
+      const line: TranscriptLine = { speaker: speaker || 'you', text: corrected, t: Date.now() }
       // Update the ref synchronously BEFORE firing onQ, so text() (read inside the handler) already
       // includes the line that triggered the auto-answer.
       const next = [...linesRef.current, line]
@@ -232,10 +260,23 @@ export function useListen(onQuestion?: (line: TranscriptLine) => void): ListenAp
       } else if (m.type === 'ready') {
         readyRef.current = true
         if (m.engine) console.info('[whisper] engine:', m.engine)
-        setState((s) => ({ ...s, ready: true, loading: false, loadingPct: null }))
+        // Clear the offline/reconnecting note on a successful recovery — but ONLY that exact note, so an
+        // unrelated sticky message (THEM_SILENT_MSG, the Parakeet-fallback footnote) is never clobbered.
+        setState((s) => ({
+          ...s,
+          ready: true,
+          loading: false,
+          loadingPct: null,
+          error: s.error === OFFLINE_MSG || s.error === RECONNECTING_MSG ? null : s.error
+        }))
         pump() // drain windows captured while the model loaded
       } else if (m.type === 'error') {
-        setState((s) => ({ ...s, error: m.message ?? 'transcription error', loading: false }))
+        // armNetworkRetry is defined further down (after ensureWorker) and forward-referenced via closure
+        // — same pattern as pump → fallBackToWhisper above. It only runs later, once this handler actually
+        // fires, by which point it's fully initialized; deliberately omitted from this useCallback's deps.
+        if (!armNetworkRetry(m.message ?? '')) {
+          setState((s) => ({ ...s, error: m.message ?? 'transcription error', loading: false }))
+        }
         busy.current = false
         pump()
       } else if (m.type === 'text') {
@@ -282,6 +323,57 @@ export function useListen(onQuestion?: (line: TranscriptLine) => void): ListenAp
       })
       .catch(() => {})
   }, [ensureWorker, getAsrBundled])
+
+  // Pending 'online' listener for a network-caused Whisper load failure, so a second failure (or a fresh
+  // session) can replace it instead of stacking listeners.
+  const networkRetryCleanupRef = useRef<(() => void) | null>(null)
+  const disarmNetworkRetry = useCallback((): void => {
+    networkRetryCleanupRef.current?.()
+    networkRetryCleanupRef.current = null
+  }, [])
+
+  /**
+   * Whisper's model only needs the network the FIRST time it loads (the bundled/packaged app loads from
+   * local resources and never touches the network at all — see whisper.worker.ts's allowRemoteModels
+   * guard). So the only way wifi can break transcription is a load failure before the model is ready.
+   * When that failure looks connectivity-related (offline, or the error text matches NETWORK_ERR), this
+   * shows a clear, sticky note and automatically retries the load once the browser reports 'online' —
+   * instead of leaving Whisper dead for the rest of the meeting with no visible explanation. Returns
+   * false for a non-network load failure (or one after the model was already ready), so the caller falls
+   * through to the original raw-error behavior unchanged.
+   */
+  const armNetworkRetry = useCallback(
+    (rawMessage: string): boolean => {
+      if (readyRef.current) return false // already loaded — a per-window error, not a load failure
+      if (!looksLikeNetworkError(rawMessage, navigator.onLine)) return false // unrelated failure — surface as-is
+      setState((s) => ({ ...s, loading: false, loadingPct: null, error: OFFLINE_MSG }))
+      disarmNetworkRetry()
+      const retry = (): void => {
+        disarmNetworkRetry()
+        if (!liveRef.current || readyRef.current || engineRef.current !== 'whisper') return
+        setState((s) => ({ ...s, loading: true, loadingPct: null, error: RECONNECTING_MSG }))
+        workerRef.current?.terminate()
+        workerRef.current = null
+        readyRef.current = false
+        void getAsrBundled()
+          .then((bundled) => {
+            if (!liveRef.current || readyRef.current) return
+            ensureWorker().postMessage({ type: 'init', quality: loadedQualityRef.current ?? 'fast', bundled })
+          })
+          .catch(() => {})
+      }
+      if (navigator.onLine) {
+        // The connection is already back by the time we got here — retry now. The browser only fires
+        // 'online' on a state TRANSITION, so waiting for a future event that may never come would wedge.
+        retry()
+      } else {
+        window.addEventListener('online', retry)
+        networkRetryCleanupRef.current = () => window.removeEventListener('online', retry)
+      }
+      return true
+    },
+    [disarmNetworkRetry, ensureWorker, getAsrBundled]
+  )
 
   const pushAudio = useCallback(
     (sp: Speaker, audio: Float32Array): void => {
@@ -388,6 +480,7 @@ export function useListen(onQuestion?: (line: TranscriptLine) => void): ListenAp
       queue.current = []
       busy.current = false
       liveRef.current = true
+      disarmNetworkRetry() // a fresh session supersedes any retry armed for the previous one
       crashedRef.current = false // fresh session — re-enable stop()'s teardown after any prior crash
       parakeetFailures.current = 0 // reset the failure streak so a new session gets a clean shot at Parakeet
       parakeetEmptyRunRef.current = 0 // clear the empty-window run counter for a fresh session
@@ -447,7 +540,14 @@ export function useListen(onQuestion?: (line: TranscriptLine) => void): ListenAp
         // bundled: true → worker uses the asr-model:// scheme (offline, packaged resources);
         //          false → worker uses transformers.js defaults (remote HF + CDN wasm, proven fallback).
         const bundled = await getAsrBundled()
-        ensureWorker().postMessage({ type: 'init', quality, bundled })
+        if (!bundled && !navigator.onLine && !readyRef.current) {
+          // Non-bundled (remote-model) path needs the network to fetch the model and we're offline right
+          // now — skip the guaranteed-to-fail fetch and go straight to the "waiting for network" state
+          // instead of surfacing a raw, confusing fetch error. armNetworkRetry arms the auto-restart.
+          armNetworkRetry('offline')
+        } else {
+          ensureWorker().postMessage({ type: 'init', quality, bundled })
+        }
         if (readyRef.current) pump() // warm worker already ready → drain immediately
       }
 
@@ -577,7 +677,7 @@ export function useListen(onQuestion?: (line: TranscriptLine) => void): ListenAp
       setState((s) => ({ ...s, error: note, listening: true, loading: !readyRef.current }))
     },
     // closeChannel referenced in body (defined below); stable useCallback, omitted to avoid TDZ in deps
-    [ensureWorker, openChannel, pump]
+    [armNetworkRetry, disarmNetworkRetry, ensureWorker, getAsrBundled, openChannel, pump]
   )
 
   const closeChannel = useCallback((sp: Speaker): void => {
@@ -634,6 +734,7 @@ export function useListen(onQuestion?: (line: TranscriptLine) => void): ListenAp
       // clearing it here would weaken that session's double-stop guard.
       if (sessionEpochRef.current !== myEpoch) return
       liveRef.current = false
+      disarmNetworkRetry() // session over — a pending 'online' retry must not fire into the next one
       queue.current = [] // drop anything still undispatched past the ceiling so it can't leak into the next session
       themRunRef.current = '' // run after the drain: any final flushed question already fired while liveRef was true
       closeChannel('you')
@@ -666,7 +767,7 @@ export function useListen(onQuestion?: (line: TranscriptLine) => void): ListenAp
     }
     // Give the worklet's flush message a tick to post its final window into the queue, then wait for drain.
     drainTimerRef.current = setTimeout(waitForDrain, 80)
-  }, [closeChannel])
+  }, [closeChannel, disarmNetworkRetry])
 
   const clear = useCallback((): void => {
     setLines([])
@@ -682,11 +783,12 @@ export function useListen(onQuestion?: (line: TranscriptLine) => void): ListenAp
   useEffect(() => {
     return () => {
       stop()
+      disarmNetworkRetry()
       if (workerIdleTimer.current) clearTimeout(workerIdleTimer.current)
       workerRef.current?.terminate()
       workerRef.current = null
     }
-  }, [stop])
+  }, [disarmNetworkRetry, stop])
 
   // Pre-warm the small default model in the BACKGROUND a few seconds after startup, so the first time the
   // user presses Listen the model is already loaded (no "downloading speech model…" spinner mid-meeting).

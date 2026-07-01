@@ -71,6 +71,7 @@ import {
 import { DEFAULT_MODE_PROMPTS } from '@shared/prompts'
 import { MantuLogo } from './MantuLogo'
 import { MantuMark } from './MantuMark'
+import { FieldHint } from './ui'
 import { AgendaView } from './AgendaView'
 import { usePermissions } from '../state'
 
@@ -306,9 +307,13 @@ function ToggleRow({
         <div className="flex items-center gap-2 text-[13px] text-[color:var(--cl-foreground)]">
           {Icon && <Icon size={14} className="shrink-0 text-[color:var(--cl-muted-foreground)]" />}
           {label}
+          {desc && (
+            <FieldHint text={desc}>
+              <Info size={12} className="shrink-0 text-[color:var(--cl-muted-foreground)] hover:text-[color:var(--cl-foreground)]" />
+            </FieldHint>
+          )}
           {disabled && <span className={managedChipCls}>Managed by your organization</span>}
         </div>
-        <div className="text-[12px] text-[color:var(--cl-muted-foreground)]">{desc}</div>
         {children}
       </div>
       <Toggle id={toggleId} on={on} onChange={onChange} label={label} disabled={disabled} />
@@ -605,7 +610,7 @@ function AiSection({
             <a
               href={def.keyUrl}
               target="_blank"
-              rel="noreferrer"
+              rel="noopener noreferrer"
               className="no-drag inline-flex items-center gap-0.5 text-[color:var(--cl-primary)]"
             >
               Get a key <ExternalLink size={11} />
@@ -1094,6 +1099,43 @@ function CliIntegration({
         {/* Codex CLI card */}
         {renderCliCard('codex-cli')}
 
+        {/* CLI-vs-API priority — only meaningful once a CLI is connected alongside an API provider. */}
+        {(!!cliConnected['claude-cli'] || !!cliConnected['codex-cli']) && (
+          <div className="flex items-center justify-between gap-3 rounded-[10px] border border-[var(--cl-border)] bg-white/[0.02] p-3">
+            <div className="flex flex-col gap-0.5 pr-2">
+              <span className="text-[12px] font-medium text-[color:var(--cl-foreground)]">Priority</span>
+              <span className="text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
+                {settings.providerPriority === 'cli'
+                  ? 'Use a connected CLI first (your subscription), fall back to your API key.'
+                  : 'Use your chosen API provider first, fall back to a CLI.'}
+              </span>
+            </div>
+            <div
+              role="radiogroup"
+              aria-label="Provider priority"
+              className="flex shrink-0 items-center rounded-[8px] border border-[var(--cl-border)] bg-white/[0.03] p-0.5"
+            >
+              {(['cli', 'api'] as const).map((opt) => (
+                <button
+                  key={opt}
+                  type="button"
+                  role="radio"
+                  aria-checked={settings.providerPriority === opt}
+                  onClick={() => patch({ providerPriority: opt })}
+                  className={[
+                    'no-drag cl-focus rounded-[6px] px-3 py-1 text-[12px] font-medium transition-colors',
+                    settings.providerPriority === opt
+                      ? 'bg-[var(--cl-primary)] text-white'
+                      : 'text-[color:var(--cl-muted-foreground)] hover:text-[color:var(--cl-foreground)]'
+                  ].join(' ')}
+                >
+                  {opt === 'cli' ? 'CLI' : 'API'}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
       </div>
     </Section>
   )
@@ -1125,12 +1167,15 @@ function DustSetup({
   })
   const linkId = useId()
   const wsId = useId()
-  const agentSel = useId()
   const thinkSel = useId()
 
   const isEu = /eu\.dust\.tt/i.test(settings.dustBaseUrl)
+  // Base + Spotlight Ref are hard-locked (DUST_BASE_AGENT_ID / DUST_SPOTLIGHT_REF_AGENT_ID in ipc.ts) —
+  // read-only display below, no picker, no setter. The base agent (AskToto) also drafts meeting
+  // follow-ups directly — there is no separate follow-up agent.
   const agent = settings.providerModels['dust'] ?? ''
   const thinkAgent = settings.providerModelsThinking['dust'] ?? ''
+  const spotlightAgent = settings.providerModelsSpotlightRef['dust'] ?? ''
   const keySaved = !!settings.hasKeys['dust']
   const hasWs = !!settings.dustWorkspaceId.trim()
   const connected = keySaved && hasWs && !!agent
@@ -1171,19 +1216,19 @@ function DustSetup({
     setDustKey('')
     setKeySaving(false)
   }
-  // Fully disconnect Dust: clear the saved token/key, drop the workspace + region + BOTH agents (base
-  // and thinking), switch off Dust if it's active, and reset the local CLI/agents UI so the card returns
+  // Fully disconnect Dust: clear the saved token/key, drop the workspace + region + the (user-editable)
+  // thinking agent, switch off Dust if it's active, and reset the local CLI/agents UI so the card returns
   // to its "connect" state. Used by both the CLI card's Disconnect and the manual key's Remove.
   const disconnectDust = async (): Promise<void> => {
     await clearKey('dust')
-    const nextModels = { ...settings.providerModels }
-    delete nextModels.dust
     const nextThinking = { ...settings.providerModelsThinking }
     delete nextThinking.dust
+    // Base + Spotlight Ref are hard-locked app defaults, not user data — leave them untouched so they
+    // resolve back to DUST_BASE_AGENT_ID/DUST_SPOTLIGHT_REF_AGENT_ID on reconnect rather than staying
+    // explicitly emptied in the persisted settings.
     const next: Partial<PublicSettings> = {
       dustWorkspaceId: '',
       dustBaseUrl: 'https://dust.tt',
-      providerModels: nextModels,
       providerModelsThinking: nextThinking
     }
     if (settings.provider === 'dust')
@@ -1195,14 +1240,14 @@ function DustSetup({
   }
   const useDust = (): void => void patch({ provider: 'dust' })
 
-  // Paste any Dust link → auto-fill workspace, region, and (if present) the agent.
+  // Paste any Dust link → auto-fill workspace + region. The base agent is hard-locked to AskToto, so a
+  // pasted link's agent id (if any) is intentionally ignored rather than silently overriding the lock.
   const onLink = (v: string): void => {
     setLink(v)
     const p = parseDustUrl(v)
     const next: Partial<PublicSettings> = {}
     if (p.workspaceId) next.dustWorkspaceId = p.workspaceId
     if (p.baseUrl) next.dustBaseUrl = p.baseUrl
-    if (p.agentId) next.providerModels = { ...settings.providerModels, dust: p.agentId }
     if (Object.keys(next).length) patch(next)
   }
 
@@ -1213,17 +1258,11 @@ function DustSetup({
     setLoading(false)
     if (r.ok && r.agents) {
       setAgents(r.agents)
-      if (!agent && r.agents[0]) {
-        patch({ providerModels: { ...settings.providerModels, dust: r.agents[0].sId } })
-      }
     } else {
       setAgents(null)
       setErr(r.error || 'Could not load your agents. Check the key + workspace, then retry.')
     }
   }
-
-  const setAgent = (sId: string): void =>
-    patch({ providerModels: { ...settings.providerModels, dust: sId } })
 
   const setThinkAgent = (sId: string): void =>
     patch({ providerModelsThinking: { ...settings.providerModelsThinking, dust: sId } })
@@ -1239,7 +1278,7 @@ function DustSetup({
   return (
     <Section
       title={active ? 'Dust · your brain (active)' : 'Dust · your brain'}
-      desc="Your Dust agents (Second Brain retrieval + tools) power AskToto. Connect with the Dust CLI, then pick a base (Haiku) and thinking (Sonnet) agent."
+      desc="Your Dust agents (Second Brain retrieval + tools) power AskToto. Connect with the Dust CLI, then pick a thinking agent for hard questions."
     >
       <div className="flex flex-col gap-4">
         {/* One-click: import the local Dust CLI session (token + workspace + region) from the keychain */}
@@ -1418,33 +1457,24 @@ function DustSetup({
             </button>
           </div>
 
-          {/* Base agent — used for simple questions (back it with Haiku in Dust) */}
-          <label htmlFor={agentSel} className="text-[11px] font-medium text-[color:var(--cl-muted-foreground)]">
-            Base agent · simple questions (e.g. Haiku-backed)
-          </label>
-          {agents && agents.length > 0 ? (
-            <select id={agentSel} value={agent} onChange={(e) => setAgent(e.target.value)} className={'w-full ' + ctl}>
-              <option value="" disabled>
-                Select an agent…
-              </option>
-              {agents.map((a) => (
-                <option key={a.sId} value={a.sId}>
-                  {a.name}
-                </option>
-              ))}
-            </select>
-          ) : (
-            <input
-              value={agent}
-              onChange={(e) => setAgent(e.target.value)}
-              placeholder="Base agent id (e.g. your Haiku agent)"
-              className={'w-full ' + ctl}
-            />
-          )}
+          {/* Base agent is hard-locked to AskToto (our own agent, Claude Sonnet-backed) — not a picker.
+              Read-only: resolves to the agent's live name once the agents list loads, else shows the raw
+              sId. It also drafts meeting follow-ups directly — there is no separate follow-up agent.
+              Rotating it needs a code change (DUST_BASE_AGENT_ID in ipc.ts) or, for an urgent rotation
+              without a release, a managed-config.json override. */}
+          <div className="flex flex-col gap-1">
+            <span className="flex items-center gap-1.5 text-[11px] font-medium text-[color:var(--cl-muted-foreground)]">
+              Base agent · AskToto
+              <span className={managedChipCls}>Managed by your organization</span>
+            </span>
+            <div className={'w-full opacity-60 ' + ctl}>
+              {agent ? agents?.find((a) => a.sId === agent)?.name ?? agent : 'Not configured yet'}
+            </div>
+          </div>
 
-          {/* Thinking agent — used for hard/coding questions & Think mode (back it with Sonnet in Dust) */}
+          {/* Thinking agent — used for hard/coding questions & Think mode. Still yours to pick. */}
           <label htmlFor={thinkSel} className="mt-1 text-[11px] font-medium text-[color:var(--cl-muted-foreground)]">
-            Thinking agent · hard, coding questions (e.g. Sonnet-backed) · optional
+            Thinking agent · hard, coding questions · optional
           </label>
           {agents && agents.length > 0 ? (
             <select id={thinkSel} value={thinkAgent} onChange={(e) => setThinkAgent(e.target.value)} className={'w-full ' + ctl}>
@@ -1463,6 +1493,17 @@ function DustSetup({
               className={'w-full ' + ctl}
             />
           )}
+
+          {/* Spotlight Ref agent is also hard-locked — not a picker. Same read-only pattern as base. */}
+          <div className="mt-1 flex flex-col gap-1">
+            <span className="flex items-center gap-1.5 text-[11px] font-medium text-[color:var(--cl-muted-foreground)]">
+              Spotlight Ref agent · finds sales references for the live use case
+              <span className={managedChipCls}>Managed by your organization</span>
+            </span>
+            <div className={'w-full opacity-60 ' + ctl}>
+              {spotlightAgent ? agents?.find((a) => a.sId === spotlightAgent)?.name ?? spotlightAgent : 'Not configured yet'}
+            </div>
+          </div>
           {err && (
             <div className="flex items-center gap-1.5 text-[11px] text-[color:var(--cl-destructive)]">
               <AlertCircle size={12} /> {err}
@@ -2287,6 +2328,44 @@ export function Settings({
                     onChange={(v) => patch({ uiSounds: v })}
                     disabled={settings.managedKeys.includes('uiSounds')}
                   />
+                  <ToggleRow
+                    label="Rainbow ring on quick actions"
+                    desc="Show the spinning rainbow border on the quick-action chips."
+                    on={settings.quickActionsRainbow}
+                    onChange={(v) => patch({ quickActionsRainbow: v })}
+                    disabled={settings.managedKeys.includes('quickActionsRainbow')}
+                  />
+                </Section>
+                <Section title="Vocabulary corrections" desc="Words the transcriber keeps getting wrong — always fix them.">
+                  <textarea
+                    value={settings.asrCorrections.map((c) => `${c.from} => ${c.to}`).join('\n')}
+                    onChange={(e) =>
+                      patch({
+                        asrCorrections: e.target.value
+                          .split('\n')
+                          .map((line) => {
+                            const i = line.indexOf('=>')
+                            if (i < 0) return null
+                            const from = line.slice(0, i).trim()
+                            const to = line.slice(i + 2).trim()
+                            return from ? { from, to } : null
+                          })
+                          .filter((c): c is { from: string; to: string } => c != null)
+                          .slice(0, 100)
+                      })
+                    }
+                    placeholder={'Toto => AskToto\nMantu => Mantu\nparakeet => Parakeet'}
+                    rows={3}
+                    disabled={settings.managedKeys.includes('asrCorrections')}
+                    className={[
+                      ctl,
+                      'h-20 resize-none text-[12px]',
+                      settings.managedKeys.includes('asrCorrections') ? 'opacity-60 cursor-not-allowed' : ''
+                    ].join(' ')}
+                  />
+                  <span className="text-[11px] text-[color:var(--cl-muted-foreground)]">
+                    One per line, format: heard =&gt; correct.
+                  </span>
                 </Section>
               </div>
             )}
@@ -2378,13 +2457,16 @@ export function Settings({
                   </div>
                 </div>
                 <div className="mt-2">
-                  <ToggleRow
-                    label="Auto-save transcripts"
-                    desc="Write the transcript + notes to the folder when a meeting ends."
-                    on={settings.autoSaveTranscripts}
-                    onChange={(v) => patch({ autoSaveTranscripts: v })}
-                    disabled={settings.managedKeys.includes('autoSaveTranscripts')}
-                  />
+                  <div className="rounded-lg bg-white/[0.03] px-3 py-2">
+                    <div className="flex items-center gap-2 text-[13px] font-medium text-[color:var(--cl-foreground)]">
+                      <Check size={14} className="text-[var(--color-accent)]" />
+                      Meetings are always saved
+                    </div>
+                    <div className="mt-0.5 text-[12px] leading-snug text-[color:var(--cl-muted-foreground)]">
+                      Every meeting&rsquo;s transcript and notes are written to the folder above when it ends.
+                      Remove any you don&rsquo;t want from History.
+                    </div>
+                  </div>
                   {!settings.encryptTranscripts && (
                     <div className="mt-1 flex items-start gap-1.5 px-1 text-[11px] leading-snug text-[color:var(--cl-destructive)]">
                       <AlertCircle size={12} className="mt-0.5 shrink-0" />
@@ -2538,6 +2620,22 @@ export function Settings({
                     >
                       Support
                     </a>
+                    <span aria-hidden>·</span>
+                    <a
+                      href="mailto:twalteur@amaris.com?subject=AskToto%20feedback"
+                      className="transition-colors hover:text-[color:var(--cl-foreground)]"
+                    >
+                      Send feedback
+                    </a>
+                    <span aria-hidden>·</span>
+                    <a
+                      href="https://www.linkedin.com/in/tonywalteur/"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="transition-colors hover:text-[color:var(--cl-foreground)]"
+                    >
+                      LinkedIn
+                    </a>
                   </div>
                   <div className="text-[11px] text-[color:var(--cl-muted-foreground)]">
                     Built at Mantu
@@ -2594,8 +2692,8 @@ function DiagnosticsSection(): JSX.Element {
   }, [])
 
   const ms = (v: number | null): string =>
-    v == null ? '—' : v >= 1000 ? `${(v / 1000).toFixed(1)}s` : `${Math.round(v)}ms`
-  const pct = (r: number | null): string => (r == null ? '—' : `${Math.round(r * 100)}%`)
+    v == null ? 'N/A' : v >= 1000 ? `${(v / 1000).toFixed(1)}s` : `${Math.round(v)}ms`
+  const pct = (r: number | null): string => (r == null ? 'N/A' : `${Math.round(r * 100)}%`)
   const n = (v: number): string => (v >= 1000 ? `${(v / 1000).toFixed(1)}k` : String(v))
 
   if (!m) {
@@ -2969,8 +3067,7 @@ function AccountRow({
 // ---------------------------------------------------------------------------
 
 /**
- * Calendar tab: Outlook (Microsoft) and Google Calendar. Both can be connected with paste-in IDs.
- * Also hosts the meeting notification toggle (merged from the former Notifications tab).
+ * Calendar tab: Microsoft / Outlook (Entra SSO) calendar connection plus the meeting notification toggle.
  */
 function CalendarTab({
   settings,
@@ -2988,22 +3085,10 @@ function CalendarTab({
   const [tenantId, setTenantId] = useState(settings.azureTenantId || '')
   const [domain, setDomain] = useState(settings.azureAllowedDomain || '')
 
-  const [googleStatus, setGoogleStatus] = useState<{ configured: boolean; signedIn: boolean; email?: string } | null>(null)
-  const [googleBusy, setGoogleBusy] = useState(false)
-
   const refreshOutlook = (): void => {
     void window.toto.authStatus().then(setAuthStatus).catch(() => setAuthStatus(null))
   }
   useEffect(refreshOutlook, [])
-
-  const refreshGoogle = (): void => {
-    const fn = (window.toto as Record<string, unknown>)['googleAuthStatus'] as
-      | (() => Promise<{ configured: boolean; signedIn: boolean; email?: string }>)
-      | undefined
-    if (!fn) { setGoogleStatus({ configured: false, signedIn: false }); return }
-    void fn().then(setGoogleStatus).catch(() => setGoogleStatus({ configured: false, signedIn: false }))
-  }
-  useEffect(refreshGoogle, [])
 
   const saveOutlookIds = async (): Promise<void> => {
     const ci = clientId.trim()
@@ -3032,22 +3117,6 @@ function CalendarTab({
     refreshOutlook()
   }
 
-  const connectGoogle = async (): Promise<void> => {
-    const fn = (window.toto as Record<string, unknown>)['googleAuthStart'] as (() => Promise<void>) | undefined
-    if (!fn) return
-    setGoogleBusy(true)
-    await fn()
-    setGoogleBusy(false)
-    refreshGoogle()
-  }
-
-  const disconnectGoogle = async (): Promise<void> => {
-    const fn = (window.toto as Record<string, unknown>)['googleSignOut'] as (() => Promise<void>) | undefined
-    if (!fn) return
-    await fn()
-    refreshGoogle()
-  }
-
   const connectedPill = (
     <span className="flex shrink-0 items-center gap-1 rounded-full bg-[var(--cl-primary-soft)] px-2.5 py-1 text-[11px] font-medium text-[color:var(--cl-primary)]">
       <CircleCheck size={12} /> Connected
@@ -3074,8 +3143,6 @@ function CalendarTab({
   )
 
   const isOutlookConnected = !!authStatus?.signedIn
-  const isGoogleConnected = !!googleStatus?.signedIn
-  const eitherConnected = isOutlookConnected || isGoogleConnected
 
   return (
     <div className="flex flex-col gap-6">
@@ -3195,72 +3262,9 @@ function CalendarTab({
         </div>
       </Section>
 
-      {/* Google Calendar */}
-      <Section
-        title="Google Calendar"
-        desc={
-          googleStatus?.signedIn
-            ? `Connected as ${googleStatus.email ?? 'your Google account'}.`
-            : googleStatus?.configured
-              ? 'Google Calendar is configured. Connect your account.'
-              : 'Paste a Google client ID to enable Google Calendar.'
-        }
-      >
-        <div className="flex flex-col gap-2">
-          {/* Paste-in field — always shown so the user can update the client ID */}
-          <label className="flex flex-col gap-1">
-            <span className="text-[11px] font-medium text-[color:var(--cl-muted-foreground)]">Google client ID</span>
-            <LazyInput
-              value={settings.googleClientId || ''}
-              onCommit={(v) => { patch({ googleClientId: v }); refreshGoogle() }}
-              placeholder="12345678901-abc….apps.googleusercontent.com"
-              className={`${ctl} w-full`}
-            />
-          </label>
-          <span className="text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
-            Create an OAuth client in{' '}
-            <a
-              href="https://console.cloud.google.com/apis/credentials"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="inline-flex items-center gap-0.5 text-[color:var(--cl-primary)] underline underline-offset-2"
-            >
-              Google Cloud Console <ExternalLink size={10} />
-            </a>{' '}
-            (type: Desktop app).
-          </span>
-
-          {isGoogleConnected ? (
-            <div className="cl-card flex items-center justify-between gap-3 px-3 py-2.5">
-              <div className="flex items-center gap-2">
-                {connectedPill}
-                <span className="text-[12px] text-[color:var(--cl-foreground)]">{googleStatus?.email}</span>
-              </div>
-              <button
-                type="button"
-                onClick={() => void disconnectGoogle()}
-                className="no-drag cl-focus rounded-[8px] border border-[var(--cl-input)] px-2.5 py-1.5 text-[12px] text-[color:var(--cl-foreground)] hover:bg-white/[0.06]"
-              >
-                Disconnect
-              </button>
-            </div>
-          ) : googleStatus?.configured ? (
-            <button
-              type="button"
-              disabled={googleBusy}
-              onClick={() => void connectGoogle()}
-              className="no-drag cl-focus flex items-center justify-center gap-2 rounded-[8px] bg-[var(--cl-primary)] px-3 py-2 text-[13px] font-medium text-white hover:opacity-90 disabled:opacity-50"
-            >
-              {googleBusy ? <Loader2 size={14} className="animate-spin" /> : null}
-              Connect Google Calendar
-            </button>
-          ) : null}
-        </div>
-      </Section>
-
-      {/* Agenda preview — shown when at least one calendar is connected */}
-      {eitherConnected && (
-        <Section title="Today's agenda" desc="Preview from your connected calendar.">
+      {/* Agenda preview — shown once the Outlook calendar is connected */}
+      {isOutlookConnected && (
+        <Section title="Today's agenda" desc="Preview from your Outlook calendar.">
           <AgendaView />
         </Section>
       )}

@@ -1,5 +1,20 @@
 import { useEffect, useState } from 'react'
-import { ShieldCheck, ArrowRight, Mic, Camera, Sparkles, Check, AlertCircle } from 'lucide-react'
+import {
+  ShieldCheck,
+  ArrowRight,
+  ArrowLeft,
+  Mic,
+  Camera,
+  Sparkles,
+  Zap,
+  FileText,
+  Plus,
+  LayoutGrid,
+  Brain,
+  Eye,
+  Check,
+  AlertCircle
+} from 'lucide-react'
 import type { PublicSettings, Profile, PlatformPermissions } from '@shared/ipc'
 import type { ProviderId } from '@shared/providers'
 import { PROVIDERS } from '@shared/providers'
@@ -18,7 +33,7 @@ function MsLogo({ size = 16 }: { size?: number }): JSX.Element {
   )
 }
 
-/** A single "here's what you can do" primer row. */
+/** A single "here's what you can do" primer row — also used for the toolbar walkthrough slides. */
 function ActionRow({ icon: Icon, label, hint, keys }: { icon: typeof Mic; label: string; hint: string; keys?: string }): JSX.Element {
   return (
     <div className="flex items-center gap-3">
@@ -59,10 +74,49 @@ function CheckRow({ ok, label, hint }: { ok: boolean; label: string; hint: strin
   )
 }
 
+/** 5-dot progress indicator for the walkthrough slides (2-4 are the toolbar tour; 1 and 5 are the
+ *  consent gate and readiness gate, which don't need it — they're the bookends, not part of the tour). */
+function StepDots({ step }: { step: number }): JSX.Element {
+  return (
+    <div className="flex items-center gap-1.5">
+      {[1, 2, 3, 4, 5].map((n) => (
+        <span
+          key={n}
+          className={`h-1.5 w-1.5 rounded-full ${n === step ? 'bg-[var(--color-accent)]' : 'bg-white/15'}`}
+        />
+      ))}
+    </div>
+  )
+}
+
+/** Shared Back/Next chrome for the toolbar-walkthrough slides (2-4). */
+function WalkNav({ onBack, onNext, step }: { onBack: () => void; onNext: () => void; step: number }): JSX.Element {
+  return (
+    <div className="flex w-full max-w-[460px] items-center justify-between">
+      <button
+        type="button"
+        onClick={onBack}
+        className="no-drag focus-ring inline-flex items-center gap-1 rounded-lg px-3 py-2 text-[12px] text-[color:var(--color-ink-3)] hover:text-[color:var(--color-ink-2)]"
+      >
+        <ArrowLeft size={12} /> Back
+      </button>
+      <StepDots step={step} />
+      <button
+        type="button"
+        onClick={onNext}
+        className="no-drag focus-ring inline-flex items-center gap-1.5 rounded-xl bg-[var(--color-accent)] px-4 py-2 text-[13px] font-medium text-white hover:brightness-110"
+      >
+        Next <ArrowRight size={13} />
+      </button>
+    </div>
+  )
+}
+
 /**
- * Two-step onboarding. Step 1: consent + sign in / continue (the legal + identity gate). Step 2: a 15-second
- * primer (what you can do + the shortcuts) plus a live "get ready" checklist (key / mic / screen) so a new
- * user lands knowing how to use it and what's still missing — instead of an empty bar of cryptic icons.
+ * 5-slide onboarding. Slide 1: consent + sign in / continue (the legal + identity gate — required, not
+ * skippable). Slides 2-4: a quick tour of every control on the toolbar, grouped by what they're for.
+ * Slide 5: a live "get ready" checklist (key / mic / screen) + Get started (the functional readiness
+ * gate). Slides 1 and 5 are load-bearing gates; 2-4 are pure walkthrough and can be skipped by Back/Next.
  */
 export function Onboarding({
   settings,
@@ -77,13 +131,13 @@ export function Onboarding({
   const [recordingConsent, setRecordingConsent] = useState(settings.recordingConsent)
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
-  const [step, setStep] = useState<1 | 2>(1)
+  const [step, setStep] = useState<1 | 2 | 3 | 4 | 5>(1)
   const [perms, setPerms] = useState<PlatformPermissions | null>(null)
 
-  // Pull live permission status when the checklist appears (and refresh shortly after, since the user may
-  // grant access in System Settings while this is open).
+  // Pull live permission status when the final checklist appears (and refresh shortly after, since the
+  // user may grant access in System Settings while this is open).
   useEffect(() => {
-    if (step !== 2) return
+    if (step !== 5) return
     let alive = true
     const load = (): void => {
       void window.toto.getPermissions().then((p) => alive && setPerms(p))
@@ -96,7 +150,8 @@ export function Onboarding({
     }
   }, [step])
 
-  // Step 1 → 2: optional Azure sign-in, then advance to the primer. onboardingDone is only set on "Get started".
+  // Step 1 → 2: optional Azure sign-in, then start the toolbar walkthrough. onboardingDone is only set
+  // on "Get started" (slide 5) — nothing here persists early.
   const advance = async (viaSso: boolean): Promise<void> => {
     if (!recordingConsent) {
       setErr('Please confirm the consent box to continue.')
@@ -127,20 +182,59 @@ export function Onboarding({
   }
 
   if (step === 2) {
+    return (
+      <div className="fade-up flex min-h-[300px] w-full flex-col items-center gap-5 px-4 py-7 text-center">
+        <div className="font-ui text-[18px] font-semibold tracking-tight text-[color:var(--color-ink)]">Ask + capture</div>
+        <div className="flex w-full max-w-[460px] flex-col gap-3 rounded-xl border border-[var(--color-hair-soft)] bg-white/[0.02] p-4">
+          <ActionRow icon={Sparkles} label="Ask anything" keys="⌘⇧↵" hint="Type a question, or capture your screen for visual help." />
+          <ActionRow icon={Camera} label="Capture screen" keys="⌘⇧S" hint="Get instant help with whatever you’re looking at." />
+          <ActionRow icon={Zap} label="Quick actions" hint="One-tap chips: What to say next · Fact-check · Explain · Summarize." />
+        </div>
+        <WalkNav step={2} onBack={() => setStep(1)} onNext={() => setStep(3)} />
+      </div>
+    )
+  }
+
+  if (step === 3) {
+    return (
+      <div className="fade-up flex min-h-[300px] w-full flex-col items-center gap-5 px-4 py-7 text-center">
+        <div className="font-ui text-[18px] font-semibold tracking-tight text-[color:var(--color-ink)]">Listen to your call</div>
+        <div className="flex w-full max-w-[460px] flex-col gap-3 rounded-xl border border-[var(--color-hair-soft)] bg-white/[0.02] p-4">
+          <ActionRow icon={Mic} label="Listen" hint="Transcribes both sides and suggests what to say, live." />
+          <ActionRow icon={FileText} label="Live transcript" hint="Toggle the rolling transcript any time." />
+          <ActionRow icon={Plus} label="New meeting" hint="Save the current call and start fresh." />
+        </div>
+        <WalkNav step={3} onBack={() => setStep(2)} onNext={() => setStep(4)} />
+      </div>
+    )
+  }
+
+  if (step === 4) {
+    return (
+      <div className="fade-up flex min-h-[300px] w-full flex-col items-center gap-5 px-4 py-7 text-center">
+        <div className="font-ui text-[18px] font-semibold tracking-tight text-[color:var(--color-ink)]">Control how it answers</div>
+        <div className="flex w-full max-w-[460px] flex-col gap-3 rounded-xl border border-[var(--color-hair-soft)] bg-white/[0.02] p-4">
+          <ActionRow icon={LayoutGrid} label="Modes" hint="Pick the conversation: Interview, Meeting, Sales, and more." />
+          <ActionRow icon={Brain} label="Deep thinking" hint="Force the strongest model. Glows purple when on." />
+          <ActionRow icon={Eye} label="Private view" hint="Hide your notes from a shared screen." />
+        </div>
+        <p className="max-w-[460px] text-[11px] leading-snug text-[color:var(--color-ink-3)]">
+          The Mantu logo opens Settings; minimize to a pill or collapse the panel any time.
+        </p>
+        <WalkNav step={4} onBack={() => setStep(3)} onNext={() => setStep(5)} />
+      </div>
+    )
+  }
+
+  if (step === 5) {
     const providerLabel = PROVIDERS[settings.provider]?.label ?? 'AI provider'
     return (
       <div className="fade-up flex min-h-[300px] w-full flex-col items-center gap-5 px-4 py-7 text-center">
         <div className="flex flex-col items-center gap-1.5">
           <MantuLogo size={150} />
           <div className="font-ui text-[20px] font-semibold tracking-tight text-[color:var(--color-ink)]">
-            You’re set. Here’s how it works.
+            You’re set. Let’s check you’re ready.
           </div>
-        </div>
-
-        <div className="flex w-full max-w-[460px] flex-col gap-3 rounded-xl border border-[var(--color-hair-soft)] bg-white/[0.02] p-4">
-          <ActionRow icon={Sparkles} label="Ask anything" keys="⌘⇧↵" hint="Type a question, or capture your screen for visual help." />
-          <ActionRow icon={Mic} label="Listen to your call" hint="Transcribes both sides and suggests what to say, live." />
-          <ActionRow icon={Camera} label="Capture your screen" keys="⌘⇧S" hint="Get instant help with whatever you’re looking at." />
         </div>
 
         <div className="flex w-full max-w-[460px] flex-col gap-2 rounded-xl border border-[var(--color-hair-soft)] bg-white/[0.02] p-4">
@@ -161,7 +255,7 @@ export function Onboarding({
         </button>
         <button
           type="button"
-          onClick={() => setStep(1)}
+          onClick={() => setStep(4)}
           className="no-drag focus-ring text-[11px] text-[color:var(--color-ink-3)] hover:text-[color:var(--color-ink-2)]"
         >
           Back
@@ -179,7 +273,7 @@ export function Onboarding({
           Your on-device AI copilot.
         </div>
         <p className="mx-auto max-w-[480px] text-[13.5px] leading-relaxed text-[color:var(--color-ink-2)]">
-          Transcription runs locally on your Mac — audio never leaves your device. Answers are grounded in
+          Transcription runs locally on your Mac. Audio never leaves your device. Answers are grounded in
           your meeting context and cited so you can verify them. Everyone on the call knows it&apos;s there.
         </p>
       </div>
