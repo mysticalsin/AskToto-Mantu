@@ -470,6 +470,7 @@ export function Bar(props: BarProps): JSX.Element {
       {modeOpen && (
         <div
           ref={modePopoverRef}
+          data-overlay
           className="glass-strong absolute left-1/2 top-full z-20 mt-1.5 -translate-x-1/2 rounded-[14px] p-1.5"
         >
           <ModePicker

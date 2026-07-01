@@ -27,12 +27,15 @@ export function uid(): string {
  */
 export function useAutoResize(): (el: HTMLElement | null) => void {
   const roRef = useRef<ResizeObserver | null>(null)
+  const moRef = useRef<MutationObserver | null>(null)
   const rafRef = useRef(0)
   const shrinkRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const lastSentRef = useRef(0) // last height pushed to main — dedups so a stream can't pump setBounds
   return useCallback((el: HTMLElement | null) => {
     roRef.current?.disconnect()
     roRef.current = null
+    moRef.current?.disconnect()
+    moRef.current = null
     if (shrinkRef.current) {
       clearTimeout(shrinkRef.current)
       shrinkRef.current = null
@@ -43,10 +46,25 @@ export function useAutoResize(): (el: HTMLElement | null) => void {
       lastSentRef.current = h
       window.toto.resize(h)
     }
+    // el.getBoundingClientRect().height reflects only el's own normal-flow box — a position:absolute
+    // descendant (a popover/dropdown, e.g. Bar's mode picker) never affects an ancestor's measured
+    // height, by CSS layout definition, even though it renders correctly and visibly in the DOM. Without
+    // accounting for it here, the window never grows to fit it: the dropdown is real, on-screen for
+    // Electron's purposes, and invisibly clipped by a window frame that stopped at the bar's own height.
+    // Any element needing to extend past el's box marks itself with data-overlay to opt into this.
+    const measure = (): number => {
+      const rect = el.getBoundingClientRect()
+      let bottom = rect.bottom
+      el.querySelectorAll<HTMLElement>('[data-overlay]').forEach((node) => {
+        const r = node.getBoundingClientRect()
+        if (r.bottom > bottom) bottom = r.bottom
+      })
+      return Math.ceil(bottom - rect.top)
+    }
     const send = (): void => {
       cancelAnimationFrame(rafRef.current)
       rafRef.current = requestAnimationFrame(() => {
-        const h = Math.ceil(el.getBoundingClientRect().height) + 2
+        const h = measure() + 2
         if (shrinkRef.current) {
           clearTimeout(shrinkRef.current)
           shrinkRef.current = null
@@ -55,13 +73,18 @@ export function useAutoResize(): (el: HTMLElement | null) => void {
           push(h) // GROW immediately — streaming text must never clip behind the window edge
         } else {
           // SHRINK only after the content settles (~140ms) so a finishing stream doesn't pump the window down
-          shrinkRef.current = setTimeout(() => push(Math.ceil(el.getBoundingClientRect().height) + 2), 140)
+          shrinkRef.current = setTimeout(() => push(measure() + 2), 140)
         }
       })
     }
     const ro = new ResizeObserver(send)
     ro.observe(el)
     roRef.current = ro
+    // A data-overlay element mounting/unmounting (e.g. opening the mode picker) doesn't change el's own
+    // box size, so ResizeObserver alone never fires for it — watch DOM insert/remove too.
+    const mo = new MutationObserver(send)
+    mo.observe(el, { childList: true, subtree: true })
+    moRef.current = mo
     send()
   }, [])
 }
