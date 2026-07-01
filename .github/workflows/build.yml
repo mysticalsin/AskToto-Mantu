@@ -1,8 +1,11 @@
 name: Build & Test
 
 on:
+  # No branch filter on push: GitHub creates a check-suite for every push regardless, and an EMPTY one
+  # (zero matching workflows) reports "failure" rather than skipped — so restricting this to main/master
+  # made every push to a feature branch show as a false CI failure with nothing to point to. Matching all
+  # branches gives real, meaningful pass/fail feedback everywhere instead of a phantom red X.
   push:
-    branches: [main, master]
   pull_request:
     branches: [main, master]
 
