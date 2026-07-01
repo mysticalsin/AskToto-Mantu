@@ -181,6 +181,63 @@ export async function deleteMeeting(file: string): Promise<{ ok: boolean; error?
   return { ok: true }
 }
 
+/**
+ * Delete every saved meeting + the index — a genuine "delete all my AskToto data" action, for a
+ * GDPR/CCPA erasure request or a full account wipe. The caller (index.ts) is responsible for also
+ * purging the knowledge graph (purgeGraphArtifacts) and prompting for confirmation first; this
+ * function does the actual file removal only. Best-effort per file — one failure doesn't abort the
+ * rest, so a partial wipe still removes everything it can.
+ */
+export async function deleteAllMeetings(): Promise<{ ok: boolean; deleted: number; failed: string[] }> {
+  const folder = resolveMeetingsFolder(getSettings())
+  const files = await meetingFiles(folder)
+  let deleted = 0
+  const failed: string[] = []
+  for (const file of files) {
+    try {
+      await unlink(join(folder, file))
+      deleted++
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') failed.push(file)
+    }
+  }
+  try {
+    await unlink(join(folder, 'index.md')) // recreated fresh (header-only) on the next save
+  } catch {
+    /* best-effort — a missing/unwritable index doesn't fail the overall wipe */
+  }
+  return { ok: failed.length === 0, deleted, failed }
+}
+
+// Filenames are always `YYYY-MM-DD_HHMMSS-<slug>.md` (see transcripts.ts) — parsed here rather than
+// trusting file mtime, since mtime changes on copy/sync (this folder is often OneDrive-synced) and
+// would silently corrupt age-based retention.
+const FILENAME_TIMESTAMP = /^(\d{4})-(\d{2})-(\d{2})_(\d{2})(\d{2})(\d{2})-/
+
+/**
+ * Auto-delete meetings older than `retentionDays` (storage-limitation control for recorded third-party
+ * speech). `retentionDays <= 0` means retention is off — keep everything, the historical default. Swept
+ * once per app launch (see index.ts). Reuses deleteMeeting per file so index.md stays row-accurate,
+ * unlike the wholesale deleteAllMeetings wipe.
+ */
+export async function sweepExpiredMeetings(retentionDays: number): Promise<{ deleted: number }> {
+  if (!retentionDays || retentionDays <= 0) return { deleted: 0 }
+  const folder = resolveMeetingsFolder(getSettings())
+  const files = await meetingFiles(folder)
+  const cutoff = Date.now() - retentionDays * 24 * 60 * 60 * 1000
+  let deleted = 0
+  for (const file of files) {
+    const m = file.match(FILENAME_TIMESTAMP)
+    if (!m) continue // unrecognized filename shape — never guess an age, skip rather than risk deleting the wrong file
+    const [, y, mo, d, h, mi, s] = m
+    const t = new Date(`${y}-${mo}-${d}T${h}:${mi}:${s}`).getTime()
+    if (!Number.isFinite(t) || t >= cutoff) continue
+    const r = await deleteMeeting(file)
+    if (r.ok) deleted++
+  }
+  return { deleted }
+}
+
 /** Keyword search across saved meetings; returns scored hits with a snippet. */
 export async function searchMeetings(query: string): Promise<RecallHit[]> {
   const folder = resolveMeetingsFolder(getSettings())

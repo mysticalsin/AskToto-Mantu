@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, readFileSync, writeFileSync, existsSync } from 'no
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { saveMeeting } from './transcripts'
-import { listMeetings, deleteMeeting, recallRead, searchMeetings } from './recall'
+import { listMeetings, deleteMeeting, recallRead, searchMeetings, deleteAllMeetings, sweepExpiredMeetings } from './recall'
 import type { Settings, SaveMeeting } from '@shared/ipc'
 
 vi.mock('electron')
@@ -73,6 +73,99 @@ describe('recall — deleteMeeting', () => {
     const second = await deleteMeeting(file)
     expect(second.ok).toBe(false)
     expect(second.error).toMatch(/not found/i)
+  })
+})
+
+describe('recall — deleteAllMeetings', () => {
+  let folder: string
+
+  beforeEach(() => {
+    folder = mkdtempSync(join(tmpdir(), 'asktoto-recall-test-'))
+    testSettings = { meetingsFolder: folder, encryptTranscripts: false } as Settings
+  })
+
+  afterEach(() => {
+    rmSync(folder, { recursive: true, force: true })
+    vi.restoreAllMocks()
+  })
+
+  it('removes every saved meeting and the index in one call', async () => {
+    const base: SaveMeeting = {
+      title: 'M',
+      mode: 'meeting',
+      startedAt: 1_700_000_000_000,
+      lines: [],
+      recap: 'r'
+    }
+    const f1 = await saveMeeting(testSettings, { ...base, title: 'One', startedAt: 1_700_000_000_000 })
+    const f2 = await saveMeeting(testSettings, { ...base, title: 'Two', startedAt: 1_700_000_100_000 })
+    expect((await listMeetings()).length).toBe(2)
+
+    const r = await deleteAllMeetings()
+    expect(r.ok).toBe(true)
+    expect(r.deleted).toBe(2)
+    expect(existsSync(f1)).toBe(false)
+    expect(existsSync(f2)).toBe(false)
+    expect((await listMeetings()).length).toBe(0)
+  })
+
+  it('is a safe no-op when there is nothing to delete', async () => {
+    const r = await deleteAllMeetings()
+    expect(r.ok).toBe(true)
+    expect(r.deleted).toBe(0)
+  })
+})
+
+describe('recall — sweepExpiredMeetings (retention)', () => {
+  let folder: string
+
+  beforeEach(() => {
+    folder = mkdtempSync(join(tmpdir(), 'asktoto-recall-test-'))
+    testSettings = { meetingsFolder: folder, encryptTranscripts: false } as Settings
+  })
+
+  afterEach(() => {
+    rmSync(folder, { recursive: true, force: true })
+    vi.restoreAllMocks()
+  })
+
+  it('retentionDays <= 0 means off — never deletes anything', async () => {
+    await saveMeeting(testSettings, {
+      title: 'Ancient',
+      mode: 'meeting',
+      startedAt: Date.now() - 400 * 24 * 60 * 60 * 1000,
+      lines: [],
+      recap: 'r'
+    })
+    const r = await sweepExpiredMeetings(0)
+    expect(r.deleted).toBe(0)
+    expect((await listMeetings()).length).toBe(1)
+  })
+
+  it('deletes only meetings older than the retention window, keeps recent ones', async () => {
+    const old = await saveMeeting(testSettings, {
+      title: 'Old one',
+      mode: 'meeting',
+      startedAt: Date.now() - 100 * 24 * 60 * 60 * 1000, // 100 days ago
+      lines: [],
+      recap: 'r'
+    })
+    const recent = await saveMeeting(testSettings, {
+      title: 'Recent one',
+      mode: 'meeting',
+      startedAt: Date.now() - 1 * 24 * 60 * 60 * 1000, // yesterday
+      lines: [],
+      recap: 'r'
+    })
+
+    const r = await sweepExpiredMeetings(30) // 30-day retention
+    expect(r.deleted).toBe(1)
+    expect(existsSync(old)).toBe(false)
+    expect(existsSync(recent)).toBe(true)
+
+    const remaining = await listMeetings()
+    expect(remaining.length).toBe(1)
+    expect(remaining[0].title).toBe('Recent one')
   })
 })
 

@@ -2608,7 +2608,10 @@ export function Settings({
                     icon={Camera}
                   />
                 </Section>
-                <Section title="Recording consent" desc="Notice shown to you before AskToto records others.">
+                <Section
+                  title="Recording consent"
+                  desc="This reminder is shown to YOU, the operator — it does not notify or ask the other participants. AskToto has no way to show anything to the other people on the call; getting their consent is on you, by whatever means your company policy or local law requires (verbal notice, a calendar invite disclosure, etc.)."
+                >
                   <ToggleRow
                     label="I will inform participants before recording"
                     desc="Your acknowledgement that you follow your company's policy and the law when recording. Revocable here."
@@ -2618,13 +2621,15 @@ export function Settings({
                   />
                   <ToggleRow
                     label="Require consent reminder"
-                    desc='Show the "other participants are being recorded" reminder every time Listen starts.'
+                    desc='Show the "other participants are being recorded" reminder every time Listen starts, instead of a one-time-per-day toast. On by default.'
                     on={settings.requireConsentIndicator}
                     onChange={(v) => patch({ requireConsentIndicator: v })}
                     disabled={settings.managedKeys.includes('requireConsentIndicator')}
                   >
                     <div className="mt-1.5 text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
-                      Useful for regulated environments or when local law requires explicit notice.
+                      Useful for regulated environments or when local law requires explicit notice. Note: this
+                      also does not distinguish or flag sensitive topics (health, legal, financial) that come up
+                      in a recorded call — everything spoken is transcribed and treated the same way.
                     </div>
                   </ToggleRow>
                 </Section>
@@ -2783,6 +2788,7 @@ export function Settings({
                 </div>
               </Section>
               <GraphSection settings={settings} patch={patch} />
+              <DangerZoneSection settings={settings} patch={patch} />
               </>
             )}
 
@@ -2821,6 +2827,16 @@ export function Settings({
                   desc="On-device performance and quality from your local audit log. Never leaves this device."
                 >
                   <DiagnosticsSection />
+                </Section>
+                <Section
+                  title="Open-source licenses"
+                  desc="Speech-transcription models bundled with this app, for full offline use — see THIRD_PARTY_NOTICES.md in the app's install directory for the complete text."
+                >
+                  <ul className="flex flex-col gap-1 text-[12px] text-[color:var(--cl-muted-foreground)]">
+                    <li>Whisper base &amp; large-v3-turbo (OpenAI, via Xenova/onnx-community) — Apache License 2.0</li>
+                    <li>Parakeet TDT 0.6B v3 (NVIDIA, via k2-fsa/sherpa-onnx) — CC-BY-4.0</li>
+                    <li>ONNX Runtime Web (Microsoft / Hugging Face) — MIT License</li>
+                  </ul>
                 </Section>
                 <div className="flex flex-col items-center gap-2.5 pb-2 pt-4">
                   <MantuLogo size={150} />
@@ -3099,6 +3115,91 @@ function GraphSection({
               </button>
             )}
           </div>
+        </div>
+      )}
+    </Section>
+  )
+}
+
+const RETENTION_OPTIONS: { days: number; label: string }[] = [
+  { days: 0, label: 'Keep forever (default)' },
+  { days: 30, label: '30 days' },
+  { days: 90, label: '90 days' },
+  { days: 180, label: '180 days' },
+  { days: 365, label: '1 year' }
+]
+
+/** GDPR/CCPA-facing controls: auto-retention window + a real "delete everything" action. Meeting
+ *  recordings capture OTHER people's speech, not just the operator's — this is the one place in
+ *  Settings that lets that be bounded or fully erased on demand, not just left to manual per-file cleanup. */
+function DangerZoneSection({
+  settings,
+  patch
+}: {
+  settings: PublicSettings
+  patch: (p: Partial<PublicSettings>) => void
+}): JSX.Element {
+  const [busy, setBusy] = useState(false)
+  const [result, setResult] = useState<{ ok: boolean; deleted: number; error?: string } | null>(null)
+
+  const deleteAll = async (): Promise<void> => {
+    setBusy(true)
+    setResult(null)
+    const r = await window.toto.recallDeleteAll()
+    setResult(r)
+    setBusy(false)
+  }
+
+  return (
+    <Section
+      title="Danger zone"
+      desc="Meeting recordings capture other people's speech too, not just yours — these controls bound or fully erase what's stored on this device."
+    >
+      <label className="mb-1 block text-[11px] font-medium text-[color:var(--cl-muted-foreground)]">
+        Auto-delete meetings older than
+      </label>
+      <select
+        value={settings.transcriptRetentionDays}
+        onChange={(e) => patch({ transcriptRetentionDays: Number(e.target.value) })}
+        disabled={settings.managedKeys.includes('transcriptRetentionDays')}
+        className={'w-full ' + ctl}
+      >
+        {RETENTION_OPTIONS.map((o) => (
+          <option key={o.days} value={o.days}>
+            {o.label}
+          </option>
+        ))}
+      </select>
+      <div className="mt-4 flex items-center justify-between gap-3 rounded-lg border border-[var(--cl-destructive)]/30 bg-[var(--cl-destructive)]/5 px-3 py-2.5">
+        <div>
+          <div className="text-[13px] font-medium text-[color:var(--cl-foreground)]">Delete all my data</div>
+          <div className="text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
+            Permanently removes every saved meeting, note, and the knowledge graph from this device. Cannot be undone.
+          </div>
+        </div>
+        <button
+          type="button"
+          onClick={() => void deleteAll()}
+          disabled={busy}
+          className="no-drag cl-focus flex shrink-0 items-center gap-1.5 rounded-[10px] border border-[var(--cl-destructive)]/40 bg-[var(--cl-destructive)]/15 px-3 py-2 text-[12px] font-medium text-[color:var(--cl-destructive)] hover:bg-[var(--cl-destructive)]/25 disabled:opacity-50"
+        >
+          <Trash2 size={13} /> {busy ? 'Deleting…' : 'Delete everything'}
+        </button>
+      </div>
+      {result && (
+        <div
+          className={[
+            'mt-2 text-[11px]',
+            result.ok || result.error === 'cancelled'
+              ? 'text-[color:var(--cl-muted-foreground)]'
+              : 'text-[color:var(--cl-destructive)]'
+          ].join(' ')}
+        >
+          {result.error === 'cancelled'
+            ? 'Cancelled — nothing was deleted.'
+            : result.ok
+              ? `Deleted ${result.deleted} meeting${result.deleted === 1 ? '' : 's'}.`
+              : `Deleted ${result.deleted}, but some files could not be removed.`}
         </div>
       )}
     </Section>

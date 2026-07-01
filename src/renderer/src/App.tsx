@@ -144,6 +144,24 @@ export function App(): JSX.Element {
     return () => clearInterval(iv)
   }, [listen.listening, listen.paused])
 
+  // Crash-recovery autosave: while a meeting is being listened to, periodically snapshot the transcript
+  // to disk. Without this, the transcript exists ONLY in this component's React state until the recap
+  // finishes at the end — a renderer crash or force-quit mid-meeting loses everything. Runs regardless of
+  // pause (a redundant overwrite of identical content is harmless; skipping it on pause would just widen
+  // the loss window right when nothing new is happening anyway, for no real benefit).
+  useEffect(() => {
+    if (!listen.listening) return
+    const AUTOSAVE_MS = 60_000
+    const iv = setInterval(() => {
+      if (!listen.lines.length) return
+      const title = listen.lines.find((l) => l.speaker === 'them')?.text?.slice(0, 50) || `${mode} meeting`
+      void window.toto
+        .saveDraftTranscript({ title, mode, startedAt: meetingStartRef.current, lines: listen.lines, recap: '' })
+        .catch(() => {}) // best-effort — never surface an autosave failure to the user mid-meeting
+    }, AUTOSAVE_MS)
+    return () => clearInterval(iv)
+  }, [listen.listening, listen.lines, mode])
+
   // Re-derive the "Seen Ns ago" chip label every tick so it ages in real time instead of freezing at
   // whatever value it had when the screenshot was taken. Gated on the chip actually being visible right
   // now (the current answer used the screen) — screenCapturedAt itself is never cleared between asks, so

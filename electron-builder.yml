@@ -26,6 +26,8 @@ extraResources:
     to: icon.png
   - from: resources/graphify_runner.py
     to: graphify_runner.py
+  - from: THIRD_PARTY_NOTICES.md
+    to: THIRD_PARTY_NOTICES.md
   # Bundled ASR model weights — served via asr-model:// protocol (zero runtime download).
   # Populated by `npm run fetch-models` before packaging.
   - from: resources/models

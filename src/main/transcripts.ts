@@ -497,6 +497,70 @@ export async function saveMeeting(settings: Settings, m: SaveMeeting): Promise<s
   return file
 }
 
+// Keyed by the meeting's OWN startedAt (like saveMeeting's real filename), not a single fixed name.
+// A fixed name would let the NEXT meeting's very first autosave tick silently overwrite a PREVIOUS
+// meeting's crash-recovery copy before anyone had a chance to notice it — defeating the whole point.
+const draftFilename = (started: number): string => `.autosave-draft-${stamp(started)}.md`
+
+/**
+ * Periodic best-effort snapshot of an IN-PROGRESS meeting (see the renderer's autosave timer while
+ * Listen is active). Overwrites this ONE meeting's own draft file every tick — never touches index.md.
+ * `type: meeting-transcript-draft` (not `meeting-transcript`) means readMeeting/listMeetings already
+ * ignore it (see recall.ts's frontmatter-type guard) — no extra filtering needed there.
+ *
+ * Without this, a renderer crash or force-quit mid-meeting loses the whole transcript with zero disk
+ * footprint (it exists only in React state until the recap-triggered save at the end). With it, the
+ * worst case is losing the last autosave interval, not the whole meeting. clearDraftTranscript removes
+ * it once the meeting ends normally and its real saveMeeting() has already succeeded. A crashed meeting's
+ * draft is left on disk (dot-prefixed, so it doesn't clutter the meetings list) rather than auto-recovered
+ * — that's a real, disclosed limitation: this closes the data-loss gap, it doesn't build recovery UX.
+ */
+export async function saveDraftTranscript(settings: Settings, m: SaveMeeting): Promise<void> {
+  try {
+    const folder = ensureMeetingsFolder(settings)
+    const started = m.startedAt || Date.now()
+    const file = join(folder, draftFilename(started))
+    const title = cleanTitle(m.title) || `${m.mode} meeting`
+    const transcript = m.lines
+      .map((l) => {
+        const d = new Date(l.t)
+        const t = `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
+        return `**[${t}] ${l.speaker === 'them' ? 'Them' : 'You'}:** ${l.text}`
+      })
+      .join('\n\n')
+    const frontmatter = [
+      '---',
+      'type: meeting-transcript-draft',
+      'source: AskToto',
+      `mode: ${m.mode}`,
+      `date: ${new Date(started).toISOString()}`,
+      `title: "${yamlSafeTitle(title)}"`,
+      'status: interrupted',
+      '---',
+      ''
+    ].join('\n')
+    const body =
+      `# ${title} (in progress — autosaved draft)\n\n` +
+      'This is an automatic snapshot of a meeting still in progress, or one that ended without a normal ' +
+      'save (crash / force quit). If AskToto is still running this meeting, ignore this file — the real ' +
+      'save replaces it when the meeting ends.\n\n' +
+      `## Transcript so far\n\n${transcript || '_No speech captured yet._'}\n`
+    await writeSaved(file, frontmatter + body, settings.encryptTranscripts)
+  } catch {
+    /* best-effort — an autosave failure must never interrupt the meeting */
+  }
+}
+
+/** Remove one meeting's autosave draft once it ends normally (its real saveMeeting() already succeeded). */
+export function clearDraftTranscript(settings: Settings, startedAt: number): void {
+  try {
+    const file = join(resolveMeetingsFolder(settings), draftFilename(startedAt))
+    if (existsSync(file)) unlinkSync(file)
+  } catch {
+    /* best-effort */
+  }
+}
+
 function escapeHtml(s: string): string {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 }
