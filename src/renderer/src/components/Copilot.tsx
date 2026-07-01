@@ -1,30 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
-import {
-  Sparkles,
-  Eye,
-  Mic,
-  ShieldCheck,
-  MessageSquareQuote,
-  Lightbulb,
-  AlignLeft,
-  Copy,
-  Check
-} from 'lucide-react'
+import { Eye, Mic, Copy, Check } from 'lucide-react'
 import type { TranscriptLine } from '@shared/ipc'
 import type { AnswerState } from '../state'
-import type { QuickKind } from './QuickActions'
 import { Markdown } from './Markdown'
 import { TextButton, Spinner } from './ui'
-
-// The individual question chips under the copilot card — the same set as the bar's QuickActions, wired
-// to the live conversation. (Replaces the single "Assist" button.)
-const COPILOT_CHIPS: { kind: QuickKind; label: string; icon: typeof Sparkles }[] = [
-  { kind: 'whatnext', label: 'What to say next', icon: MessageSquareQuote },
-  { kind: 'factcheck', label: 'Fact-check', icon: ShieldCheck },
-  { kind: 'explain', label: 'Explain', icon: Lightbulb },
-  { kind: 'summarize', label: 'Summarize screen', icon: AlignLeft }
-]
-
 
 export function Copilot({
   lines,
@@ -34,9 +13,7 @@ export function Copilot({
   loadingPct,
   error,
   showTranscript,
-  onQuickAction,
-  onEnd: _onEnd,
-  rainbowRing
+  onEnd: _onEnd
 }: {
   lines: TranscriptLine[]
   suggestion: AnswerState | null
@@ -46,10 +23,7 @@ export function Copilot({
   loadingPct: number | null
   error: string | null
   showTranscript: boolean
-  onQuickAction: (k: QuickKind) => void
   onEnd: () => void
-  /** Same spinning-gradient treatment the idle bar's quick actions used — settings.quickActionsRainbow. */
-  rainbowRing: boolean
 }): JSX.Element {
   const scroller = useRef<HTMLDivElement>(null)
   const [copied, setCopied] = useState(false)
@@ -144,27 +118,6 @@ export function Copilot({
           </div>
         )}
       </section>
-
-      {/* Action chips — the individual questions, shown only while actively listening. Raw buttons (not
-          the shared <Chip>) so the rainbow-ring treatment can use the same glass-chip pairing the old
-          idle QuickActions row used — .glass-chip.rainbow-ring exists specifically to avoid a Chromium
-          mask-composite glitch on rounded-full pills; <Chip>'s own background utility would fight it. */}
-      <div className="flex flex-wrap items-center justify-center gap-1.5">
-        {COPILOT_CHIPS.map((c) => (
-          <button
-            key={c.kind}
-            type="button"
-            onClick={() => onQuickAction(c.kind)}
-            className={[
-              'no-drag focus-ring glass-chip flex items-center gap-1.5 rounded-full px-3 py-1.5 text-[12px] font-semibold text-white transition-[transform,background-color] duration-[var(--duration-hover)] active:scale-[0.96]',
-              rainbowRing ? 'rainbow-ring' : ''
-            ].join(' ')}
-          >
-            <c.icon size={13} strokeWidth={2.25} className="text-[var(--color-accent-2)]" />
-            {c.label}
-          </button>
-        ))}
-      </div>
 
       {/* Transcript — hidden during the call; shown only when the user opens it (bar → Transcript). A
           small loading line appears while the speech model warms up; no live "N captured" footer. */}

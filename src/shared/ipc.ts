@@ -359,9 +359,19 @@ export const BaseSettingsSchema = z.object({
   soundCues: z.boolean().default(true), // subtle answer-ready / error sound cues
   uiSounds: z.boolean().default(true), // master: soft click feedback on buttons (and gates all UI sounds)
   quickActionsRainbow: z.boolean().default(true), // spinning rainbow border on the quick-action chips
+  // How see-through the overlay's glass background is. A multiplier on the default glass alpha values
+  // (see --glass-fill etc. in styles.css) — 1 = today's default look, lower = more transparent (see more
+  // of what's behind), higher = more opaque/solid (easier to read over a busy desktop). Values above 1
+  // simply saturate at fully opaque for the most solid backgrounds; nothing errors or clips oddly.
+  overlayOpacity: z.number().min(0.3).max(1.5).default(1),
   showFullTranscriptInReview: z.boolean().default(false), // review = summary-first; transcript opt-in
   asrQuality: z.enum(['best', 'fast']).default('fast'), // fast = small model, ready fast (default); best = large, downloads
   asrEngine: z.enum(['whisper', 'parakeet']).default('whisper'), // whisper = ~99 langs (default); parakeet = European, fastest
+  // A mid-session Parakeet→Whisper fallback (repeated failures) used to surface as a live error banner
+  // during the meeting — distracting for something that's really just a background engine swap. Tracked
+  // here instead so it's checkable in Settings after the fact, never shown live. Persists until the user
+  // dismisses it (Settings → Speech) — auto-clearing on the next meeting risks it vanishing unseen.
+  asrLastFallbackAt: z.number().nullable().default(null),
   // On by default: this reminder is the ONLY consent mechanism AskToto has today — it shows the
   // operator, never the other participants, and is not a substitute for actually telling people
   // they're being recorded. See the Settings copy near this toggle for the honest scope of what it does.
@@ -487,9 +497,11 @@ export const DEFAULT_SETTINGS: Settings = {
   soundCues: true,
   uiSounds: true,
   quickActionsRainbow: true,
+  overlayOpacity: 1,
   showFullTranscriptInReview: false,
   asrQuality: 'fast',
   asrEngine: 'whisper',
+  asrLastFallbackAt: null,
   requireConsentIndicator: true,
   redactSensitive: true,
   lastConsentReminderAt: 0,

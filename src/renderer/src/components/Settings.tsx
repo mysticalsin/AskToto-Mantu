@@ -71,7 +71,7 @@ import {
 import { DEFAULT_MODE_PROMPTS } from '@shared/prompts'
 import { MantuLogo } from './MantuLogo'
 import { MantuMark } from './MantuMark'
-import { FieldHint } from './ui'
+import { FieldHint, TextButton } from './ui'
 import { AgendaView } from './AgendaView'
 import { usePermissions } from '../state'
 
@@ -2419,6 +2419,28 @@ export function Settings({
 
             {tab === 'personalize' && (
               <div className="flex flex-col gap-6">
+                <Section title="Appearance" desc="How see-through the overlay's background is. Default matches what you see today.">
+                  <label className="flex items-center justify-between gap-3 px-1 py-2 text-[12px] text-[color:var(--cl-muted-foreground)]">
+                    <span className="flex items-center gap-2">
+                      {settings.overlayOpacity < 0.9
+                        ? 'More transparent'
+                        : settings.overlayOpacity > 1.1
+                          ? 'Less transparent'
+                          : 'Default'}
+                      <ManagedChip keys={settings.managedKeys} k="overlayOpacity" />
+                    </span>
+                    <input
+                      type="range"
+                      min={0.3}
+                      max={1.5}
+                      step={0.05}
+                      value={settings.overlayOpacity}
+                      disabled={settings.managedKeys.includes('overlayOpacity')}
+                      onChange={(e) => patch({ overlayOpacity: Number(e.target.value) })}
+                      className={['no-drag accent-[var(--cl-primary)]', settings.managedKeys.includes('overlayOpacity') ? 'opacity-60' : ''].join(' ')}
+                    />
+                  </label>
+                </Section>
                 <Section title="Modes" desc="Edit each mode's prompt and the files it can see, then set the one you want active.">
                   <PersonalizeModes settings={settings} patch={patch} />
                 </Section>
@@ -2533,6 +2555,15 @@ export function Settings({
                     onChange={(v) => patch({ asrEngine: v ? 'parakeet' : 'whisper' })}
                     disabled={settings.managedKeys.includes('asrEngine')}
                   />
+                  {settings.asrLastFallbackAt != null && (
+                    <div className="-mt-1 flex items-center justify-between gap-2 pl-1 text-[12px] text-[color:var(--color-ink-3)]">
+                      <span>
+                        Parakeet failed and auto-switched to Whisper for the rest of a recent meeting —{' '}
+                        {new Date(settings.asrLastFallbackAt).toLocaleString()}.
+                      </span>
+                      <TextButton onClick={() => patch({ asrLastFallbackAt: null })}>Dismiss</TextButton>
+                    </div>
+                  )}
                   <ToggleRow
                     label="Play chime when recording starts"
                     desc="A soft audible cue each time Listen begins."

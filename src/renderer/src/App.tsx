@@ -14,7 +14,7 @@ import { SignInWall } from './components/SignInWall'
 import { MeetingDetectedToast } from './components/MeetingDetectedToast'
 import { UpdateReadyToast } from './components/UpdateReadyToast'
 import { RecordingConsentReminder } from './components/RecordingConsentReminder'
-import type { QuickKind } from './components/QuickActions'
+import { QuickActions, type QuickKind } from './components/QuickActions'
 import { useAsk, useAutoResize, useSettings, useAuth } from './state'
 import { useListen, playListenChime } from './lib/listen'
 import { playCue, playClick, setSoundsEnabled } from './lib/sound'
@@ -86,7 +86,12 @@ export function App(): JSX.Element {
   const followup = useAsk() // Review screen's follow-up draft — must NOT reuse `ask`, which already holds the recap there
 
   const onQuestionRef = useRef<(l: TranscriptLine) => void>(() => {})
-  const listen = useListen((l) => onQuestionRef.current(l), settings?.asrCorrections)
+  const listen = useListen(
+    (l) => onQuestionRef.current(l),
+    settings?.asrCorrections,
+    // Persist a mid-session engine fallback to Settings (checkable after the fact) instead of a live banner.
+    () => void patch({ asrLastFallbackAt: Date.now() })
+  )
 
   const [input, setInput] = useState('')
   const [view, setView] = useState<View>('answer')
@@ -143,6 +148,13 @@ export function App(): JSX.Element {
     const iv = setInterval(() => setSeconds((s) => s + 1), 1000)
     return () => clearInterval(iv)
   }, [listen.listening, listen.paused])
+
+  // Drives the overlay's glass-background alpha (Settings → Personalize → Appearance). A single CSS
+  // variable multiplies every --glass-* alpha channel (see styles.css) — default 1 reproduces today's
+  // exact look untouched.
+  useEffect(() => {
+    document.documentElement.style.setProperty('--overlay-opacity-scale', String(settings?.overlayOpacity ?? 1))
+  }, [settings?.overlayOpacity])
 
   // Crash-recovery autosave: while a meeting is being listened to, periodically snapshot the transcript
   // to disk. Without this, the transcript exists ONLY in this component's React state until the recap
@@ -657,9 +669,23 @@ export function App(): JSX.Element {
     setSaveAttempts(0)
     listen.clear()
     suggest.clear()
+    // A new meeting always starts with the transcript hidden, regardless of whether it was left open
+    // during a previous meeting — "showLiveTranscript" persists across restarts (it's a Settings field,
+    // not per-session state), so without this reset a transcript opened once would stay defaulted-open
+    // for every future meeting until manually toggled off again.
+    if (settings?.showLiveTranscript) void patch({ showLiveTranscript: false })
     if (settings?.playListenChime ?? true) playListenChime()
     void listen.start(settings?.audioSource ?? 'both', settings?.asrQuality ?? 'fast', settings?.asrEngine ?? 'whisper')
-  }, [listen, suggest, settings?.audioSource, settings?.asrQuality, settings?.asrEngine, settings?.playListenChime])
+  }, [
+    listen,
+    suggest,
+    settings?.audioSource,
+    settings?.asrQuality,
+    settings?.asrEngine,
+    settings?.playListenChime,
+    settings?.showLiveTranscript,
+    patch
+  ])
 
   const endReview = useCallback(() => {
     const tx = listen.text()
@@ -1109,9 +1135,7 @@ export function App(): JSX.Element {
         loadingPct={listen.loadingPct}
         error={listen.error}
         showTranscript={settings?.showLiveTranscript ?? false}
-        onQuickAction={onQuickAction}
         onEnd={endReview}
-        rainbowRing={settings?.quickActionsRainbow !== false}
       />
     )
   } else if (view === 'review') {
@@ -1177,9 +1201,7 @@ export function App(): JSX.Element {
         loadingPct={null}
         error={null}
         showTranscript={false}
-        onQuickAction={() => {}}
         onEnd={() => {}}
-        rainbowRing
       />
     )
   else if (DEMO === 'history') body = <RecallView onOpenFolder={() => {}} />
@@ -1287,6 +1309,15 @@ export function App(): JSX.Element {
             onTogglePanel={() => setCollapsed((c) => !c)}
             focusSignal={focusSignal}
           />
+          {/* Quick actions render as their own row UNDER the whole bar (including its toolbar), only
+              while a meeting is actively being listened to — clean bar with nothing under it at launch
+              and after a meeting ends (Review screen), per Tony's ask. */}
+          {listen.listening && (
+            <QuickActions
+              onAction={onQuickAction}
+              rainbowRing={settings?.quickActionsRainbow !== false}
+            />
+          )}
           {/* Listen-engine status (offline/reconnecting/crash notes) — shown regardless of which view is
               active. Copilot already renders the same `listen.error` text inline among its chips, so skip
               it there to avoid showing the same note twice; every other view has no other place for it. */}
@@ -1310,9 +1341,6 @@ export function App(): JSX.Element {
               </button>
             )
           })()}
-          {/* No idle quick-actions row: the bar renders alone by default (launch + post-meeting Review).
-              The same 4 actions appear under Copilot's card instead, and only while actively listening —
-              see Copilot's rainbowRing-styled chip row. */}
           {isPanelBody && panelOpen &&
             (view === 'settings' || DEMO === 'settings' ? (
               // Settings is its own self-contained panel — render directly under the bar (bar stays on top).
