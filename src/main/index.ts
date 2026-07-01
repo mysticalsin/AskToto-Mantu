@@ -1311,7 +1311,15 @@ function registerIpc(): void {
     const md = typeof input?.markdown === 'string' ? input.markdown : ''
     if (!md.trim()) throw new Error('No recap to export.')
     const safeName = (input?.title || 'Meeting recap').replace(/[\\/:*?"<>|]/g, '-')
-    const r = await dialog.showSaveDialog({ defaultPath: `${safeName}.pdf`, filters: [{ name: 'PDF', extensions: ['pdf'] }] })
+    // AskToto is an LSUIElement (accessory) app — no Dock icon, not a normal foreground app. A dialog
+    // opened with no parent BrowserWindow has nothing to attach its sheet to and no window to activate,
+    // so it can silently fail to ever surface on screen: the promise just hangs forever with no error and
+    // no visible dialog. Anchoring it to `win` (already on screen) is what every other dialog in this
+    // file does — this one was the one exception.
+    const dialogOwner = win ?? undefined
+    const r = dialogOwner
+      ? await dialog.showSaveDialog(dialogOwner, { defaultPath: `${safeName}.pdf`, filters: [{ name: 'PDF', extensions: ['pdf'] }] })
+      : await dialog.showSaveDialog({ defaultPath: `${safeName}.pdf`, filters: [{ name: 'PDF', extensions: ['pdf'] }] })
     if (r.canceled || !r.filePath) return { ok: false as const }
     const html = recapMarkdownToHtml(md, input?.title)
     const pdfWin = new BrowserWindow({
@@ -1359,10 +1367,13 @@ function registerIpc(): void {
   // --- Filesystem pickers ---
   ipcMain.handle(IPC.pickFolder, async (e) => {
     assertMainWindow(e)
-    const r = await dialog.showOpenDialog({
+    // Same LSUIElement-accessory-app reasoning as recapPdf above: anchor to `win` so the dialog actually
+    // surfaces instead of silently hanging with nothing to attach to.
+    const openDialogOpts: Electron.OpenDialogOptions = {
       properties: ['openDirectory', 'createDirectory'],
       message: 'Choose where AskToto saves meeting transcripts'
-    })
+    }
+    const r = win ? await dialog.showOpenDialog(win, openDialogOpts) : await dialog.showOpenDialog(openDialogOpts)
     if (!r.canceled && r.filePaths[0]) setSettings({ meetingsFolder: r.filePaths[0] })
     return publicSettings()
   })
@@ -1663,14 +1674,25 @@ if (!app.requestSingleInstanceLock()) {
       console.error(`[boot] ${name} failed:`, e)
     }
   }
-  // NOTE: we deliberately do NOT eagerly refresh the Dust CLI session at launch. Reading the Dust CLI's
-  // keychain item (`security find-generic-password` on service `dust-cli`) from AskToto — a different
-  // binary than the `dust`/keytar process that created it — triggers a macOS "allow access" keychain
-  // prompt every launch (and "Always Allow" doesn't persist across unsigned rebuilds, since the app's
-  // code identity changes each build). The imported token is already persisted in AskToto's own encrypted
-  // store and survives restarts; if it has expired (~1h OAuth lifetime), the Dust stream path self-heals
-  // lazily on the first 401 (refreshDustAuth above) — re-minting via `dust status` + re-reading the
-  // keychain only when Dust is actually used, instead of unconditionally at every idle launch.
+  // Eagerly refresh the Dust CLI session at launch (Tony: "always stay connected") rather than waiting
+  // for a request to 401 first. Reading the Dust CLI's keychain item from AskToto — a different binary
+  // than the `dust`/keytar process that created it — does trigger a one-time macOS "allow access" prompt;
+  // on a real (signed or at least stable) install macOS remembers "Always Allow" for that app identity, so
+  // this costs one prompt ever, not one per restart. Only bothers if Dust was connected before; best-effort
+  // and fully silent on failure — the existing lazy on-401 refresh (refreshDustAuth above) still covers it
+  // if this doesn't run or doesn't succeed.
+  if (process.platform === 'darwin' && hasApiKey('dust')) {
+    void refreshDustCliSession()
+      .then((fresh) => {
+        if (!fresh.ok || !fresh.token || !fresh.workspaceId) return
+        setApiKey('dust', fresh.token)
+        setSettings({ dustWorkspaceId: fresh.workspaceId, dustBaseUrl: fresh.baseUrl || 'https://dust.tt' })
+        auditLog('dust.token.refreshed', { at: 'startup' })
+      })
+      .catch(() => {
+        /* best-effort — the lazy on-401 refresh in dust.ts still covers this */
+      })
+  }
 
   runStep('registerIpc', registerIpc)
   runStep('createTray', createTray)

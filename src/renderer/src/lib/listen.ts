@@ -117,7 +117,11 @@ function escapeRegExp(s: string): string {
 
 export function useListen(
   onQuestion?: (line: TranscriptLine) => void,
-  corrections?: { from: string; to: string }[]
+  corrections?: { from: string; to: string }[],
+  // Fired on a mid-session Parakeet→Whisper fallback. Deliberately NOT surfaced as a live error state —
+  // it's a background engine swap, not something worth interrupting the meeting for — so the caller can
+  // persist it to Settings (a checkable trace) instead of the UI showing an alarming banner.
+  onEngineFallback?: (reason: string) => void
 ): ListenApi {
   const [state, setState] = useState({
     listening: false,
@@ -156,6 +160,8 @@ export function useListen(
   const themHeardRef = useRef(false) // flips true on the first real 'them' window so we clear the watchdog note exactly once
   const onQRef = useRef(onQuestion)
   onQRef.current = onQuestion
+  const onFallbackRef = useRef(onEngineFallback)
+  onFallbackRef.current = onEngineFallback
   // Compiled once per corrections-list change (not per line) — word-boundary + case-insensitive so
   // correcting "Toto" never also corrupts "Tomato".
   const correctionsRef = useRef<{ re: RegExp; to: string }[]>([])
@@ -331,7 +337,10 @@ export function useListen(
     engineRef.current = 'whisper'
     readyRef.current = false
     parakeetFailures.current = 0
-    setState((s) => ({ ...s, loading: true, error: 'Switched to the Whisper engine after repeated errors.' }))
+    onFallbackRef.current?.('Parakeet failed repeatedly')
+    // loading only — no live `error` banner. The engine swap happens silently; onEngineFallback records
+    // it somewhere checkable (Settings) instead of interrupting the meeting.
+    setState((s) => ({ ...s, loading: true }))
     void getAsrBundled()
       .then((bundled) => {
         ensureWorker().postMessage({ type: 'init', quality: loadedQualityRef.current ?? 'fast', bundled })

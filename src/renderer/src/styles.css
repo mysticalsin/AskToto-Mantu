@@ -45,22 +45,27 @@
   --color-success-soft: rgba(131, 192, 146, 0.12);
 
   /* Glass surfaces — neutral dark gray with a faint Mantu-purple undertone (desaturated so the bar reads
-     clearly over any desktop), still translucent but opaque enough to stay legible. Accents stay purple. */
-  --glass-fill: rgba(34, 14, 60, 0.6);
-  --glass-fill-elevated: rgba(42, 20, 72, 0.76);
-  --glass-fill-strong: rgba(28, 11, 52, 0.8);
+     clearly over any desktop), still translucent but opaque enough to stay legible. Accents stay purple.
+     Alpha channels multiply by --overlay-opacity-scale (Settings → Personalize → Appearance; default 1 =
+     these exact values) so the user can make the overlay more or less see-through. rgb()'s slash-alpha
+     slot accepts a calc() expression directly and the browser clamps the result to [0,1] automatically,
+     so a scale above 1 just saturates at fully opaque rather than erroring or clipping oddly. */
+  --overlay-opacity-scale: 1;
+  --glass-fill: rgb(34 14 60 / calc(0.6 * var(--overlay-opacity-scale)));
+  --glass-fill-elevated: rgb(42 20 72 / calc(0.76 * var(--overlay-opacity-scale)));
+  --glass-fill-strong: rgb(28 11 52 / calc(0.8 * var(--overlay-opacity-scale)));
   --glass-tint-white: rgba(255, 255, 255, 0.06);
   --glass-tint-black: rgba(0, 0, 0, 0.22);
   /* A darker neutral scrim painted BEHIND the bar/chips (below the grey fill): keeps the frosted
      translucency but guarantees a grey-enough backing so white text stays legible over a bright desktop. */
-  --glass-scrim-bar: rgba(13, 4, 28, 0.68);
+  --glass-scrim-bar: rgb(13 4 28 / calc(0.68 * var(--overlay-opacity-scale)));
   --blur-bar: 34px;
   --blur-panel: 42px;
   --blur-saturate: 160%;
 
   /* Listening state — neutral gray, much more opaque so thin text stays readable behind the overlay. */
-  --glass-fill-listening: rgba(20, 8, 40, 0.82);
-  --glass-fill-strong-listening: rgba(16, 6, 34, 0.88);
+  --glass-fill-listening: rgb(20 8 40 / calc(0.82 * var(--overlay-opacity-scale)));
+  --glass-fill-strong-listening: rgb(16 6 34 / calc(0.88 * var(--overlay-opacity-scale)));
   --glass-tint-white-listening: rgba(255, 255, 255, 0.04);
   --blur-bar-listening: 24px;
   --blur-panel-listening: 30px;
