@@ -241,7 +241,7 @@ export function Onboarding({
           <div className="mb-0.5 text-left text-[11px] font-semibold uppercase tracking-wide text-[color:var(--color-ink-3)]">
             Get ready
           </div>
-          <CheckRow ok={settings.providerReady} label={PROVIDERS[settings.provider]?.kind === 'cli' ? `${providerLabel} CLI connected` : `${providerLabel} API key`} hint="add it in Settings → Your AI" />
+          <CheckRow ok={settings.providerReady} label={PROVIDERS[settings.provider]?.kind === 'cli' ? `${providerLabel} CLI connected` : `${providerLabel} API key`} hint="add it in Settings → AI" />
           <CheckRow ok={perms?.microphone === 'granted'} label="Microphone" hint="grant access when you first press Listen" />
           <CheckRow ok={perms?.screenRecording === 'granted'} label="Screen recording" hint="needed for the other side of calls + screen capture" />
         </div>

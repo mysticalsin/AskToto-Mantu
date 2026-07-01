@@ -57,7 +57,11 @@ win:
     - nsis      # → AskToto-Setup-<version>.exe (installer)
     - portable  # → AskToto-Portable-<version>.exe (no-install single exe)
   artifactName: AskToto-Setup-${version}.${ext}
-  verifyUpdateCodeSignature: false
+  # Must stay true: electron-updater checks the downloaded update's Authenticode signature before install.
+  # Inert today (no real publish.url is configured), but false would let a compromised release pipeline
+  # push an unsigned/mismatched .exe that installs with only a TLS+sha512 check. Flip only if you fully
+  # understand the tradeoff — do not disable this to work around a signing setup problem.
+  verifyUpdateCodeSignature: true
   # Authenticode signing: set WIN_CSC_LINK + WIN_CSC_KEY_PASSWORD env (or use Azure Trusted Signing).
   # rfc3161TimeStampServer left at electron-builder default.
 nsis:
