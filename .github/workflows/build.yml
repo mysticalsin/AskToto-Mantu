@@ -44,10 +44,13 @@ jobs:
       - name: Dependency audit (report high, non-blocking)
         run: npm audit --audit-level=high || true
       # Secret scan: fail if a key-shaped string is committed to source (allow .env.example placeholders).
+      # Test files are excluded — redact.test.ts intentionally contains fake key-shaped strings to verify
+      # the redaction function actually catches them; that's the test working, not a leak.
       - name: Secret scan
         run: |
           if grep -rInE '(nvapi-|sk-ant-|sk-or-|gsk_|fw_|tgp_v1_)[A-Za-z0-9_-]{16,}' \
             --include='*.ts' --include='*.tsx' --include='*.js' --include='*.json' --include='*.yml' \
+            --exclude='*.test.ts' --exclude='*.test.tsx' \
             src .github electron-builder.yml 2>/dev/null; then
             echo "::error::Possible committed secret found"; exit 1
           fi
