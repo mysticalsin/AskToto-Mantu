@@ -78,7 +78,7 @@ export function buildSpotlightRefPrompt(transcript: string, typed: string): stri
 }
 
 export function spotlightRefUnavailableMessage(): string {
-  return 'Connect Dust and pick a Spotlight Ref agent in Settings → Your AI to check for references.'
+  return 'Connect Dust and pick a Spotlight Ref agent in Settings → AI to check for references.'
 }
 
 export function quickActionUnavailableMessage(kind: QuickActionKind): string {

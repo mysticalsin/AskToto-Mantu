@@ -212,7 +212,7 @@ export async function buildGraph(incremental = false): Promise<GraphStatus> {
     if (!python) {
       lastError = 'graphify is not installed. Run: pip install graphifyy (or: uv tool install graphifyy).'
     } else if (!picked) {
-      lastError = 'No extraction backend. Install Claude Code, or add a Claude/OpenAI key in Settings → Your AI.'
+      lastError = 'No extraction backend. Install Claude Code, or add a Claude/OpenAI key in Settings → AI.'
     } else {
       const notes = resolveMeetingsFolder(getSettings())
       const args = ['build', '--input', notes, '--out', outDir(), '--backend', picked.backend]

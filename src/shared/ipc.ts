@@ -697,9 +697,14 @@ export type McpCrmTestConnectionPayload = z.infer<typeof McpCrmTestConnectionPay
 export const McpCrmSaveConnectionPayloadSchema = McpCrmTestConnectionPayloadSchema
 export type McpCrmSaveConnectionPayload = z.infer<typeof McpCrmSaveConnectionPayloadSchema>
 
+// Push args are always a small, flat object built by Review.tsx (title/date/summary strings) — bound the
+// shape so a tampered/buggy caller can't hand the MCP tool call an unbounded or deeply-nested payload.
+const McpCrmArgValueSchema = z.union([z.string().max(50_000), z.number(), z.boolean(), z.null()])
 export const McpCrmPushPayloadSchema = z.object({
   toolName: z.string().min(1, 'Choose a BidStack tool to push to.'),
-  args: z.record(z.string(), z.unknown())
+  args: z
+    .record(z.string(), McpCrmArgValueSchema)
+    .refine((a) => Object.keys(a).length <= 20, { message: 'Too many fields in the push payload.' })
 })
 export type McpCrmPushPayload = z.infer<typeof McpCrmPushPayloadSchema>
 
