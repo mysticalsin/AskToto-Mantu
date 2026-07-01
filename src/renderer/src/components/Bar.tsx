@@ -13,6 +13,7 @@ import {
   Minimize2,
   FileText,
   Pause,
+  Play,
   Plus,
   Brain,
   FileSearch
@@ -41,6 +42,10 @@ export interface BarProps {
   busy: boolean
   listening: boolean
   onToggleListen: () => void
+  /** True while a listening session is suspended mid-meeting (audio capture paused, nothing torn down). */
+  paused: boolean
+  /** Pause suspends capture without ending the meeting; Stop (onToggleListen) ends it. Distinct actions. */
+  onTogglePause: () => void
   onCapture: () => void
   capturing: boolean
   onSettings: () => void
@@ -363,7 +368,14 @@ export function Bar(props: BarProps): JSX.Element {
               cyanIdle
             >
               {props.listening ? (
-                <span className="rec-dot h-[12px] w-[12px] rounded-full bg-[var(--color-danger)] shadow-[0_0_8px_var(--color-danger)]" />
+                <span
+                  className={[
+                    'h-[12px] w-[12px] rounded-full',
+                    props.paused
+                      ? 'bg-[color:var(--color-ink-3)]'
+                      : 'rec-dot bg-[var(--color-danger)] shadow-[0_0_8px_var(--color-danger)]'
+                  ].join(' ')}
+                />
               ) : (
                 <AudioLines size={19} strokeWidth={ICON_STROKE} />
               )}
@@ -372,18 +384,28 @@ export function Bar(props: BarProps): JSX.Element {
             <div className="flex w-[72px] items-center gap-2">
               {props.listening && (
                 <>
-                  <span className="tabular-nums text-[12px] font-medium text-[color:var(--color-danger)]">
+                  <span
+                    className={[
+                      'tabular-nums text-[12px] font-medium',
+                      props.paused ? 'text-[color:var(--color-ink-3)]' : 'text-[color:var(--color-danger)]'
+                    ].join(' ')}
+                  >
                     {clock(props.seconds)}
                   </span>
-                  {/* Pause button — wired to listen-toggle for now; a true pause state is out of scope. */}
+                  {/* Pause suspends capture (mic + system audio stay warm, nothing is finalized/saved) —
+                      distinct from Stop (the danger dot above), which ends the meeting and saves it. */}
                   <button
                     type="button"
-                    title="Pause recording"
-                    aria-label="Pause recording"
-                    onClick={props.onToggleListen}
+                    title={props.paused ? 'Resume recording' : 'Pause recording'}
+                    aria-label={props.paused ? 'Resume recording' : 'Pause recording'}
+                    onClick={props.onTogglePause}
                     className="no-drag focus-ring grid place-items-center rounded-[10px] p-1 text-[color:var(--color-ink-3)] transition-colors duration-[var(--duration-hover)] hover:text-[color:var(--color-ink)]"
                   >
-                    <Pause size={16} strokeWidth={ICON_STROKE} />
+                    {props.paused ? (
+                      <Play size={16} strokeWidth={ICON_STROKE} />
+                    ) : (
+                      <Pause size={16} strokeWidth={ICON_STROKE} />
+                    )}
                   </button>
                 </>
               )}

@@ -14,7 +14,7 @@ import { SignInWall } from './components/SignInWall'
 import { MeetingDetectedToast } from './components/MeetingDetectedToast'
 import { UpdateReadyToast } from './components/UpdateReadyToast'
 import { RecordingConsentReminder } from './components/RecordingConsentReminder'
-import { QuickActions, type QuickKind } from './components/QuickActions'
+import type { QuickKind } from './components/QuickActions'
 import { useAsk, useAutoResize, useSettings, useAuth } from './state'
 import { useListen, playListenChime } from './lib/listen'
 import { playCue, playClick, setSoundsEnabled } from './lib/sound'
@@ -139,9 +139,10 @@ export function App(): JSX.Element {
       setSeconds(0)
       return
     }
+    if (listen.paused) return // freeze the on-screen clock while paused instead of counting dead air
     const iv = setInterval(() => setSeconds((s) => s + 1), 1000)
     return () => clearInterval(iv)
-  }, [listen.listening])
+  }, [listen.listening, listen.paused])
 
   // Re-derive the "Seen Ns ago" chip label every tick so it ages in real time instead of freezing at
   // whatever value it had when the screenshot was taken. Gated on the chip actually being visible right
@@ -1092,6 +1093,7 @@ export function App(): JSX.Element {
         showTranscript={settings?.showLiveTranscript ?? false}
         onQuickAction={onQuickAction}
         onEnd={endReview}
+        rainbowRing={settings?.quickActionsRainbow !== false}
       />
     )
   } else if (view === 'review') {
@@ -1159,6 +1161,7 @@ export function App(): JSX.Element {
         showTranscript={false}
         onQuickAction={() => {}}
         onEnd={() => {}}
+        rainbowRing
       />
     )
   else if (DEMO === 'history') body = <RecallView onOpenFolder={() => {}} />
@@ -1228,6 +1231,8 @@ export function App(): JSX.Element {
             busy={(ask.answer?.streaming || suggest.answer?.streaming) ?? false}
             listening={listen.listening}
             onToggleListen={toggleListen}
+            paused={listen.paused}
+            onTogglePause={() => (listen.paused ? listen.resume() : listen.pause())}
             onCapture={capture}
             capturing={capturing}
             mode={mode}
@@ -1287,14 +1292,9 @@ export function App(): JSX.Element {
               </button>
             )
           })()}
-          {/* Quick actions only on the idle answer surface — not over a shown answer/panel, not during Listen. */}
-          {view === 'answer' && body == null && !listen.listening && (
-            <QuickActions
-              onAction={onQuickAction}
-              hint="Type a question, or capture your screen for visual help."
-              rainbowRing={settings?.quickActionsRainbow !== false}
-            />
-          )}
+          {/* No idle quick-actions row: the bar renders alone by default (launch + post-meeting Review).
+              The same 4 actions appear under Copilot's card instead, and only while actively listening —
+              see Copilot's rainbowRing-styled chip row. */}
           {isPanelBody && panelOpen &&
             (view === 'settings' || DEMO === 'settings' ? (
               // Settings is its own self-contained panel — render directly under the bar (bar stays on top).

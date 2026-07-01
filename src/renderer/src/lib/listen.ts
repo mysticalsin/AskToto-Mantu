@@ -92,6 +92,7 @@ interface Channel {
 
 export interface ListenApi {
   listening: boolean
+  paused: boolean
   ready: boolean
   loading: boolean
   lines: TranscriptLine[]
@@ -99,6 +100,10 @@ export interface ListenApi {
   loadingPct: number | null // model-download progress (0-100) on first run, else null
   start: (source: AudioSource, quality?: 'best' | 'fast', engine?: 'whisper' | 'parakeet') => Promise<void>
   stop: () => void
+  /** Suspend capture without ending the meeting — the transcript, worker, and (on macOS) the fragile
+   *  system-audio loopback session all stay warm so resume() picks back up mid-session. */
+  pause: () => void
+  resume: () => void
   clear: () => void
   text: () => string
 }
@@ -116,6 +121,7 @@ export function useListen(
 ): ListenApi {
   const [state, setState] = useState({
     listening: false,
+    paused: false,
     ready: false,
     loading: false,
     error: null as string | null,
@@ -141,6 +147,8 @@ export function useListen(
   const busy = useRef(false)
   const readyRef = useRef(false)
   const liveRef = useRef(false) // true only between start() and stop() — guards stale results
+  const pausedRef = useRef(false) // true only between pause() and resume() — belt-and-suspenders on pushAudio;
+  // suspending each channel's AudioContext already stops the worklet from emitting in the first place.
   const crashedRef = useRef(false) // set in worker onerror (it already tore down) → stop() must not redo it
   const parakeetFailures = useRef(0) // consecutive Parakeet IPC failures → switch to Whisper after a few
   const parakeetEmptyRunRef = useRef(0) // consecutive '' returns on flowing audio → engine stall detection
@@ -290,12 +298,19 @@ export function useListen(
       // AudioContexts stay hot and the tray stays in 'recording' while the UI reads 'not listening',
       // an unrecoverable dead end. Mirror stop()'s teardown so a crash returns to a clean idle state.
       liveRef.current = false
+      pausedRef.current = false
       queue.current = []
       themRunRef.current = '' // crash wipes the in-progress 'them' question turn (parity with stop()/start())
       closeChannel('you')
       closeChannel('them')
       void window.toto.setListeningState(false).catch(() => {})
-      setState((s) => ({ ...s, error: err.message || 'transcription worker error', listening: false, loading: false }))
+      setState((s) => ({
+        ...s,
+        error: err.message || 'transcription worker error',
+        listening: false,
+        paused: false,
+        loading: false
+      }))
       busy.current = false
       workerRef.current?.terminate()
       workerRef.current = null
@@ -377,7 +392,7 @@ export function useListen(
 
   const pushAudio = useCallback(
     (sp: Speaker, audio: Float32Array): void => {
-      if (!liveRef.current) return
+      if (!liveRef.current || pausedRef.current) return
       queue.current.push({ audio, speaker: sp })
       if (queue.current.length > MAX_QUEUE) {
         const dropped = queue.current.length - MAX_QUEUE
@@ -480,13 +495,14 @@ export function useListen(
       queue.current = []
       busy.current = false
       liveRef.current = true
+      pausedRef.current = false
       disarmNetworkRetry() // a fresh session supersedes any retry armed for the previous one
       crashedRef.current = false // fresh session — re-enable stop()'s teardown after any prior crash
       parakeetFailures.current = 0 // reset the failure streak so a new session gets a clean shot at Parakeet
       parakeetEmptyRunRef.current = 0 // clear the empty-window run counter for a fresh session
       engineRef.current = engine
       themRunRef.current = '' // fresh session → no carried-over 'them' question turn
-      setState((s) => ({ ...s, error: null, listening: true }))
+      setState((s) => ({ ...s, error: null, listening: true, paused: false }))
       try {
         await window.toto.setListeningState(true)
       } catch {
@@ -697,6 +713,29 @@ export function useListen(
     delete channels.current[sp]
   }, [])
 
+  // Suspending each open channel's AudioContext (rather than closing it) halts the worklet's audio-render
+  // callback entirely — no new windows reach pushAudio — while leaving the MediaStream tracks alive. That
+  // matters most for the macOS 'them' channel: its video+audio pair shares one ScreenCaptureKit SCStream
+  // session (see the IMPORTANT comment in start() above), and stopping any track there would kill the whole
+  // session. Suspend/resume never touches tracks, so the loopback session survives a pause intact.
+  const pause = useCallback((): void => {
+    if (!liveRef.current || pausedRef.current) return
+    pausedRef.current = true
+    for (const ch of Object.values(channels.current)) {
+      void ch?.ctx.suspend().catch(() => {})
+    }
+    setState((s) => ({ ...s, paused: true }))
+  }, [])
+
+  const resume = useCallback((): void => {
+    if (!liveRef.current || !pausedRef.current) return
+    pausedRef.current = false
+    for (const ch of Object.values(channels.current)) {
+      void ch?.ctx.resume().catch(() => {})
+    }
+    setState((s) => ({ ...s, paused: false }))
+  }, [])
+
   const stoppingRef = useRef(false) // double-stop guard
   const drainTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null) // pending initial drain kickoff timer
   const sessionEpochRef = useRef(0) // incremented each start(); drain/finishTeardown bails if epoch changed
@@ -706,6 +745,14 @@ export function useListen(
     if (stoppingRef.current || crashedRef.current) return // already stopping or already torn down by a crash
     stoppingRef.current = true
     const myEpoch = sessionEpochRef.current
+
+    // 0. A worklet's port message is handled on the audio-rendering thread — it won't run while that
+    //    thread is suspended. Resume before flushing so a Stop hit while Paused still processes the flush
+    //    and commits the final window, instead of silently dropping it.
+    if (pausedRef.current) {
+      pausedRef.current = false
+      for (const ch of Object.values(channels.current)) void ch?.ctx.resume().catch(() => {})
+    }
 
     // 1. Flush each open worklet's partial accumulation buffer WHILE liveRef is still true so that
     //    any flushed audio message routes through pushAudio → pump → commitLine before teardown.
@@ -740,7 +787,7 @@ export function useListen(
       closeChannel('you')
       closeChannel('them')
       void window.toto.setListeningState(false).catch(() => {})
-      setState((s) => ({ ...s, listening: false, loading: false, error: null }))
+      setState((s) => ({ ...s, listening: false, paused: false, loading: false, error: null }))
       drainTimerRef.current = null
       stoppingRef.current = false
       // Release the whisper worker (+ ~21MB ONNX wasm + loaded model) after a few idle minutes so it
@@ -810,5 +857,5 @@ export function useListen(
     return () => clearTimeout(t)
   }, [ensureWorker, getAsrBundled])
 
-  return { ...state, lines, start, stop, clear, text }
+  return { ...state, lines, start, stop, pause, resume, clear, text }
 }

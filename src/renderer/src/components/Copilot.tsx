@@ -14,7 +14,7 @@ import type { TranscriptLine } from '@shared/ipc'
 import type { AnswerState } from '../state'
 import type { QuickKind } from './QuickActions'
 import { Markdown } from './Markdown'
-import { Chip, TextButton, Spinner } from './ui'
+import { TextButton, Spinner } from './ui'
 
 // The individual question chips under the copilot card — the same set as the bar's QuickActions, wired
 // to the live conversation. (Replaces the single "Assist" button.)
@@ -35,7 +35,8 @@ export function Copilot({
   error,
   showTranscript,
   onQuickAction,
-  onEnd: _onEnd
+  onEnd: _onEnd,
+  rainbowRing
 }: {
   lines: TranscriptLine[]
   suggestion: AnswerState | null
@@ -47,6 +48,8 @@ export function Copilot({
   showTranscript: boolean
   onQuickAction: (k: QuickKind) => void
   onEnd: () => void
+  /** Same spinning-gradient treatment the idle bar's quick actions used — settings.quickActionsRainbow. */
+  rainbowRing: boolean
 }): JSX.Element {
   const scroller = useRef<HTMLDivElement>(null)
   const [copied, setCopied] = useState(false)
@@ -142,10 +145,24 @@ export function Copilot({
         )}
       </section>
 
-      {/* Action chips — the individual questions, same set as the bar's QuickActions, wired to the call. */}
+      {/* Action chips — the individual questions, shown only while actively listening. Raw buttons (not
+          the shared <Chip>) so the rainbow-ring treatment can use the same glass-chip pairing the old
+          idle QuickActions row used — .glass-chip.rainbow-ring exists specifically to avoid a Chromium
+          mask-composite glitch on rounded-full pills; <Chip>'s own background utility would fight it. */}
       <div className="flex flex-wrap items-center justify-center gap-1.5">
         {COPILOT_CHIPS.map((c) => (
-          <Chip key={c.kind} icon={c.icon} onClick={() => onQuickAction(c.kind)}>{c.label}</Chip>
+          <button
+            key={c.kind}
+            type="button"
+            onClick={() => onQuickAction(c.kind)}
+            className={[
+              'no-drag focus-ring glass-chip flex items-center gap-1.5 rounded-full px-3 py-1.5 text-[12px] font-semibold text-white transition-[transform,background-color] duration-[var(--duration-hover)] active:scale-[0.96]',
+              rainbowRing ? 'rainbow-ring' : ''
+            ].join(' ')}
+          >
+            <c.icon size={13} strokeWidth={2.25} className="text-[var(--color-accent-2)]" />
+            {c.label}
+          </button>
         ))}
       </div>
 

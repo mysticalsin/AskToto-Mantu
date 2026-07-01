@@ -14,7 +14,8 @@ import {
   protocol,
   net,
   Notification,
-  clipboard
+  clipboard,
+  powerSaveBlocker
 } from 'electron'
 import { join, basename, resolve, relative, isAbsolute, extname } from 'node:path'
 import { readFileSync, existsSync, writeFileSync, realpathSync, readdirSync, unlinkSync } from 'node:fs'
@@ -690,6 +691,25 @@ function createTray(): void {
   }
 }
 
+// macOS App Nap (and equivalent OS-level suspension elsewhere) can throttle a minimized/occluded window's
+// process the same way it throttles any backgrounded app — independent of Electron's own
+// `backgroundThrottling` flag, which only covers Blink's internal timer/rAF throttling. If the renderer's
+// transcription worker gets deprioritized mid-meeting, the audio queue backs up and oldest windows are
+// silently dropped (see MAX_QUEUE in listen.ts), which reads as "the transcript stopped." Holding a
+// power-save blocker for the duration of a meeting keeps the process at normal priority regardless of
+// window visibility. Module-level id: only one meeting can be active at a time.
+let recordingPowerSaveBlockerId: number | null = null
+function setRecordingPowerSaveBlock(on: boolean): void {
+  if (on) {
+    if (recordingPowerSaveBlockerId === null || !powerSaveBlocker.isStarted(recordingPowerSaveBlockerId)) {
+      recordingPowerSaveBlockerId = powerSaveBlocker.start('prevent-app-suspension')
+    }
+  } else if (recordingPowerSaveBlockerId !== null) {
+    if (powerSaveBlocker.isStarted(recordingPowerSaveBlockerId)) powerSaveBlocker.stop(recordingPowerSaveBlockerId)
+    recordingPowerSaveBlockerId = null
+  }
+}
+
 /** Updates the tray/menubar to reflect whether recording is active. */
 function setTrayRecording(on: boolean): void {
   if (!tray) return
@@ -1310,6 +1330,7 @@ function registerIpc(): void {
   ipcMain.handle(IPC.listeningState, (e, on: unknown) => {
     assertMainWindow(e)
     setTrayRecording(!!on)
+    setRecordingPowerSaveBlock(!!on)
     // A new meeting starting is the one clean boundary for Dust conversation continuity — everything
     // from here until the NEXT meeting starts shares one conversation (see resetDustConversation).
     if (on) resetDustConversation()
