@@ -95,6 +95,10 @@ export function App(): JSX.Element {
   const [capturing, setCapturing] = useState(false)
   const [captureError, setCaptureError] = useState<string | null>(null)
   const [screenFreshness, setScreenFreshness] = useState<string>('Viewed screen')
+  // Raw capture timestamp behind screenFreshness — kept separately so the label can be re-derived every
+  // tick (see the interval below) instead of freezing at whatever age it happened to have when the
+  // screenshot was taken. Without this the "Seen Ns ago" chip would go stale the moment it rendered.
+  const [screenCapturedAt, setScreenCapturedAt] = useState<number | null>(null)
   const [seconds, setSeconds] = useState(0)
   const [focusSignal, setFocusSignal] = useState(0)
   // A past meeting opened from History → shown read-only in Review (recap + transcript + Resume).
@@ -133,6 +137,15 @@ export function App(): JSX.Element {
     const iv = setInterval(() => setSeconds((s) => s + 1), 1000)
     return () => clearInterval(iv)
   }, [listen.listening])
+
+  // Re-derive the "Seen Ns ago" chip label every tick so it ages in real time instead of freezing at
+  // whatever value it had when the screenshot was taken. Only runs while there's a capture to age —
+  // no timer sits idle before the first screen-ask of a session.
+  useEffect(() => {
+    if (screenCapturedAt == null) return
+    const iv = setInterval(() => setScreenFreshness(formatScreenFreshness(screenCapturedAt)), 500)
+    return () => clearInterval(iv)
+  }, [screenCapturedAt])
 
   const manualSave = useCallback(async (): Promise<void> => {
     const a = ask.answer
@@ -361,6 +374,7 @@ export function App(): JSX.Element {
       try {
         const shot = await window.toto.capture()
         setScreenFreshness(formatScreenFreshness(shot.capturedAt))
+        setScreenCapturedAt(shot.capturedAt)
         // Return the run id so callers can track it (Retry/Go-deeper replay the same screenshot via lastReqRef).
         const id = ask.run({
           mode: 'vision',
@@ -398,6 +412,7 @@ export function App(): JSX.Element {
       try {
         const shot = await window.toto.capture()
         setScreenFreshness(formatScreenFreshness(shot.capturedAt))
+        setScreenCapturedAt(shot.capturedAt)
         suggest.run({
           mode: 'vision',
           prompt: basePrompt,

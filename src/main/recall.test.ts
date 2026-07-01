@@ -1,9 +1,9 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { mkdtempSync, rmSync, readFileSync, existsSync } from 'node:fs'
+import { mkdtempSync, rmSync, readFileSync, writeFileSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { saveMeeting } from './transcripts'
-import { listMeetings, deleteMeeting, recallRead } from './recall'
+import { listMeetings, deleteMeeting, recallRead, searchMeetings } from './recall'
 import type { Settings, SaveMeeting } from '@shared/ipc'
 
 vi.mock('electron')
@@ -148,5 +148,64 @@ describe('recall — recallRead recap extraction', () => {
     const r = await recallRead(file)
     expect(r.ok).toBe(true)
     if (r.ok) expect(r.recap).toBe('')
+  })
+})
+
+// A meeting file can become undecryptable (corrupted bytes, or encrypted under a different device's
+// keychain — common when OneDrive syncs an encrypted transcript to another machine). Before, a per-row
+// decrypt failure had to degrade gracefully; these lock that in so one bad row never takes down History.
+describe('recall — undecryptable rows degrade gracefully', () => {
+  let folder: string
+
+  beforeEach(() => {
+    folder = mkdtempSync(join(tmpdir(), 'asktoto-recall-test-'))
+    testSettings = { meetingsFolder: folder, encryptTranscripts: false } as Settings
+  })
+
+  afterEach(() => {
+    rmSync(folder, { recursive: true, force: true })
+    vi.restoreAllMocks()
+  })
+
+  const goodMeeting: SaveMeeting = {
+    title: 'Readable meeting',
+    mode: 'meeting',
+    startedAt: 1_700_000_000_000,
+    lines: [{ speaker: 'them', text: 'This one decrypts fine', t: 1_700_000_000_000 }],
+    recap: 'All good.'
+  }
+
+  /** Write a file with the v2 envelope marker but malformed JSON after it, so the per-file decrypt
+   *  throws internally exactly like a corrupted-on-disk or foreign-keychain transcript would. */
+  function writeCorruptEncryptedFile(name: string): string {
+    const path = join(folder, name)
+    writeFileSync(path, Buffer.concat([Buffer.from('ATKENC2\n'), Buffer.from('not valid json{{{')]))
+    return path
+  }
+
+  it('listMeetings skips a corrupt row instead of throwing, and still returns the good ones', async () => {
+    const goodFile = await saveMeeting(testSettings, goodMeeting)
+    writeCorruptEncryptedFile('2024-01-01_000000-corrupt.md')
+
+    const list = await listMeetings()
+    expect(list.some((m) => goodFile.endsWith(m.file))).toBe(true)
+    expect(list.some((m) => m.file === '2024-01-01_000000-corrupt.md')).toBe(false)
+    expect(list).toHaveLength(1)
+  })
+
+  it('searchMeetings skips a corrupt row instead of throwing, and still finds the good ones', async () => {
+    await saveMeeting(testSettings, goodMeeting)
+    writeCorruptEncryptedFile('2024-01-01_000000-corrupt.md')
+
+    const hits = await searchMeetings('decrypts')
+    expect(hits).toHaveLength(1)
+    expect(hits[0].title).toBe('Readable meeting')
+  })
+
+  it('recallRead reports a clear error instead of throwing on a corrupt/undecryptable file', async () => {
+    const corruptFile = writeCorruptEncryptedFile('2024-01-01_000000-corrupt.md')
+    const r = await recallRead(corruptFile)
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.error).toMatch(/could not be decrypted/i)
   })
 })

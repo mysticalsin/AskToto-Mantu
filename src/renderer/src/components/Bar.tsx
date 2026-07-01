@@ -191,12 +191,26 @@ export function Bar(props: BarProps): JSX.Element {
             </button>
           )}
 
-          {/* Context label chip (e.g. 'Viewed screen') */}
+          {/* Context label chip (e.g. 'Seen 0.3s ago') — real screen-capture age, ticks every 500ms
+              in App.tsx so it never reads stale. */}
           {props.contextLabel && (
             <span className="flex flex-none items-center gap-1 rounded-full bg-white/[0.05] px-2 py-0.5 text-[11px] text-[color:var(--color-ink-2)]">
               <span className="h-[6px] w-[6px] rounded-full bg-[var(--color-accent)]" />
               <Eye size={11} strokeWidth={ICON_STROKE} />
               {props.contextLabel}
+            </span>
+          )}
+
+          {/* "Heard live" chip — sibling of the screen-freshness chip above (same pill styling), driven
+              directly by the real listening state (props.listening, sourced from useListen()'s live audio
+              pipeline) rather than a separate signal. Kept as its own chip instead of merged into
+              contextLabel because the two facts are independent: a screen can be stale while audio is
+              live, or vice versa — a single chip could only ever show one of them at a time. */}
+          {props.listening && (
+            <span className="flex flex-none items-center gap-1 rounded-full bg-white/[0.05] px-2 py-0.5 text-[11px] text-[color:var(--color-ink-2)]">
+              <span className="h-[6px] w-[6px] rounded-full bg-[var(--color-danger)]" />
+              <AudioLines size={11} strokeWidth={ICON_STROKE} />
+              Heard live
             </span>
           )}
 
