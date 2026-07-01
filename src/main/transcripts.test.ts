@@ -4,7 +4,15 @@ import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { generateKeyPairSync, privateDecrypt, createDecipheriv, constants } from 'node:crypto'
 import { safeStorage } from 'electron'
-import { saveMeeting, readSavedFile, isEncryptedFile, parseRecapMarkdown, recapMarkdownToHtml } from './transcripts'
+import {
+  saveMeeting,
+  readSavedFile,
+  isEncryptedFile,
+  parseRecapMarkdown,
+  recapMarkdownToHtml,
+  saveDraftTranscript,
+  clearDraftTranscript
+} from './transcripts'
 import type { SaveMeeting, Settings } from '@shared/ipc'
 
 const V2_MARKER = 'ATKENC2\n'
@@ -197,6 +205,75 @@ describe('transcripts', () => {
     const file2 = await saveMeeting(settings, meeting)
     expect(file1).not.toBe(file2)
     expect(file2).toMatch(/daily-standup-2\.md$/)
+  })
+})
+
+// Tony reported "if AskToto crashes mid-meeting the whole transcript is gone" — this exercises the
+// crash-recovery autosave's real file-IO path end to end against a temp folder.
+describe('saveDraftTranscript / clearDraftTranscript (crash-recovery autosave)', () => {
+  let folder: string
+  let settings: Settings
+
+  beforeEach(() => {
+    folder = mkdtempSync(join(tmpdir(), 'asktoto-draft-test-'))
+    settings = { ...baseSettings(), meetingsFolder: folder }
+  })
+
+  afterEach(() => {
+    rmSync(folder, { recursive: true, force: true })
+    vi.restoreAllMocks()
+  })
+
+  const meeting: SaveMeeting = {
+    title: 'Standup',
+    mode: 'meeting',
+    startedAt: 1_700_000_000_000,
+    lines: [{ speaker: 'them', text: 'Where are we on the migration?', t: 1_700_000_000_000 }],
+    recap: ''
+  }
+
+  it('writes a draft marked as a draft (not a real meeting-transcript), invisible to saveMeeting', async () => {
+    await saveDraftTranscript(settings, meeting)
+    const files = readdirSync(folder).filter((f) => f.endsWith('.md') && f !== 'index.md' && f !== 'README.md')
+    expect(files.length).toBe(1)
+    const content = readFileSync(join(folder, files[0]), 'utf8')
+    expect(content).toContain('type: meeting-transcript-draft')
+    expect(content).toContain('Where are we on the migration?')
+    // Real saveMeeting's own filename must never collide with the draft's.
+    const realFile = await saveMeeting(settings, meeting)
+    expect(realFile).not.toContain(files[0])
+  })
+
+  it('overwrites the SAME meeting\'s draft on repeated ticks instead of accumulating files', async () => {
+    await saveDraftTranscript(settings, meeting)
+    await saveDraftTranscript(settings, { ...meeting, lines: [...meeting.lines, { speaker: 'you', text: 'On track', t: 1_700_000_030_000 }] })
+    const drafts = readdirSync(folder).filter((f) => f.startsWith('.autosave-draft-'))
+    expect(drafts.length).toBe(1)
+    expect(readFileSync(join(folder, drafts[0]), 'utf8')).toContain('On track')
+  })
+
+  it('does NOT clobber a DIFFERENT (earlier) meeting\'s crash-recovery draft', async () => {
+    const crashed: SaveMeeting = { ...meeting, startedAt: 1_600_000_000_000, title: 'Crashed meeting' }
+    await saveDraftTranscript(settings, crashed) // meeting A crashed, left its draft on disk
+    await saveDraftTranscript(settings, meeting) // meeting B starts later, autosaves its own draft
+    const drafts = readdirSync(folder).filter((f) => f.startsWith('.autosave-draft-'))
+    expect(drafts.length).toBe(2) // both survive — meeting B's autosave must not overwrite meeting A's
+  })
+
+  it('clearDraftTranscript removes only that meeting\'s own draft', async () => {
+    const other: SaveMeeting = { ...meeting, startedAt: 1_600_000_000_000 }
+    await saveDraftTranscript(settings, meeting)
+    await saveDraftTranscript(settings, other)
+    clearDraftTranscript(settings, meeting.startedAt)
+    const drafts = readdirSync(folder).filter((f) => f.startsWith('.autosave-draft-'))
+    expect(drafts.length).toBe(1) // only `other`'s draft remains
+  })
+
+  it('never throws, even against an unwritable folder', async () => {
+    await expect(
+      saveDraftTranscript({ ...settings, meetingsFolder: '/nonexistent/\0bad' }, meeting)
+    ).resolves.toBeUndefined()
+    expect(() => clearDraftTranscript({ ...settings, meetingsFolder: '/nonexistent/\0bad' }, meeting.startedAt)).not.toThrow()
   })
 })
 

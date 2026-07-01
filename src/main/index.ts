@@ -59,6 +59,8 @@ import { parakeetModelReady, ensureParakeetModel, parakeetTranscribe } from './p
 import {
   saveMeeting,
   saveNote,
+  saveDraftTranscript,
+  clearDraftTranscript,
   parseRecapMarkdown,
   recapMarkdownToHtml,
   resolveMeetingsFolder,
@@ -70,7 +72,14 @@ import {
 import { detectMeeting } from './meeting-detect'
 import { titleMatchesCalendar } from './meeting-detect/shared'
 import { getPlatformPermissions } from './platform-perms'
-import { listMeetings, searchMeetings, recallRead, deleteMeeting } from './recall'
+import {
+  listMeetings,
+  searchMeetings,
+  recallRead,
+  deleteMeeting,
+  deleteAllMeetings,
+  sweepExpiredMeetings
+} from './recall'
 import { initAutoUpdate } from './updater'
 import updaterPkg from 'electron-updater'
 import { runSelfTest } from './selftest'
@@ -723,6 +732,7 @@ function setTrayRecording(on: boolean): void {
 }
 
 function registerIpc(): void {
+  // --- Settings & permissions ---
   ipcMain.handle(IPC.settingsGet, (e) => {
     assertMainWindow(e)
     return publicSettings()
@@ -760,6 +770,7 @@ function registerIpc(): void {
     return publicSettings()
   })
 
+  // --- Provider API keys ---
   ipcMain.handle(IPC.setApiKey, (e, payload: unknown) => {
     assertMainWindow(e)
     const parsed = SetApiKeyPayloadSchema.parse(payload)
@@ -782,6 +793,7 @@ function registerIpc(): void {
     return testApiKey(parsed.provider, parsed.key)
   })
 
+  // --- Dust integration ---
   ipcMain.handle(IPC.dustListAgents, (e) => {
     assertMainWindow(e)
     if (!requireAuth()) return { ok: false, error: 'Sign in with your Mantu account first.' }
@@ -809,6 +821,7 @@ function registerIpc(): void {
     return setupDustCli()
   })
 
+  // --- CLI providers (Claude Code / Codex / Gemini) ---
   // CLI provider detection/testing/setup (claude-cli, codex-cli).
   ipcMain.handle(IPC.cliDetect, (e, provider: unknown) => {
     assertMainWindow(e)
@@ -843,6 +856,7 @@ function registerIpc(): void {
     return loginCli(typeof provider === 'string' ? (provider as ProviderId) : 'claude-cli')
   })
 
+  // --- BidStack MCP / CRM push ---
   // BidStack 360° CRM — MCP push (Settings → CLI Integration card + Review's "Push to CRM").
   // Test connection: connects + authenticates + lists tools, persists NOTHING (mirrors BidStack's own
   // "Test endpoint" button). Lets the user verify before committing an endpoint/key to disk.
@@ -896,6 +910,7 @@ function registerIpc(): void {
     return r
   })
 
+  // --- Auth ---
   ipcMain.handle(IPC.authStatus, (e) => {
     assertMainWindow(e)
     return authStatus()
@@ -911,12 +926,14 @@ function registerIpc(): void {
     assertMainWindow(e)
     return authSignOut()
   })
+  // --- Calendar ---
   ipcMain.handle(IPC.calendarToday, async (e, tz: unknown) => {
     assertMainWindow(e)
     if (!requireAuth()) return { ok: false, error: 'Sign in with your Mantu account first.' }
     return calendarToday(typeof tz === 'string' ? tz : 'UTC')
   })
 
+  // --- Recall (meeting history): read/delete ---
   // Recall read: load a saved meeting back for "Resume session" (decode + parse the markdown).
   ipcMain.handle(IPC.recallRead, async (e, file: unknown) => {
     assertMainWindow(e)
@@ -948,6 +965,34 @@ function registerIpc(): void {
     return result
   })
 
+  // Delete EVERYTHING: every saved meeting + the index + the knowledge graph. For a GDPR/CCPA erasure
+  // request or a full account wipe — not the same as recallDelete's one-at-a-time flow. Extra-emphatic
+  // confirm (shows the real count, defaults to Cancel) since this is the single most destructive action
+  // in the app and cannot be undone.
+  ipcMain.handle(IPC.recallDeleteAll, async (e) => {
+    assertMainWindow(e)
+    if (!requireAuth()) return { ok: false, error: 'Sign in with your Mantu account first.' }
+    const meetings = await listMeetings()
+    if (meetings.length === 0) return { ok: true, deleted: 0 }
+    const dialogOpts = {
+      type: 'warning' as const,
+      title: 'Delete all AskToto data',
+      message: `Delete all ${meetings.length} saved meeting${meetings.length === 1 ? '' : 's'}?`,
+      detail:
+        'This permanently removes every saved transcript, note, and the knowledge graph from this device. This cannot be undone.',
+      buttons: ['Delete everything', 'Cancel'],
+      defaultId: 1,
+      cancelId: 1
+    }
+    const choice = win ? dialog.showMessageBoxSync(win, dialogOpts) : dialog.showMessageBoxSync(dialogOpts)
+    if (choice !== 0) return { ok: false, error: 'cancelled' }
+    const result = await deleteAllMeetings()
+    purgeGraphArtifacts()
+    auditLog('transcript.deleted', { bulk: true, deleted: result.deleted, failed: result.failed.length })
+    return result
+  })
+
+  // --- Parakeet ASR engine ---
   // Parakeet (on-device, main-process). Whisper stays the renderer default; these only run when the user
   // selects the Parakeet engine. All wrapped so a failure degrades to Whisper rather than breaking Listen.
   ipcMain.handle(IPC.parakeetStatus, (e) => {
@@ -972,6 +1017,7 @@ function registerIpc(): void {
     return parakeetTranscribe(p.samples)
   })
 
+  // --- Screen capture ---
   ipcMain.handle(IPC.captureScreen, async (event) => {
     assertMainWindow(event)
     if (!requireAuth()) throw new Error('Not signed in.')
@@ -983,6 +1029,7 @@ function registerIpc(): void {
     prewarmCapture()
   })
 
+  // --- Ask / LLM streaming ---
   ipcMain.handle(IPC.askStart, (e, raw) => {
     assertMainWindow(e)
     const id =
@@ -1183,17 +1230,20 @@ function registerIpc(): void {
     streams.delete(id)
   })
 
+  // --- Audio capture arming ---
   ipcMain.handle(IPC.armAudio, (e, on: boolean) => {
     assertMainWindow(e)
     if (!requireAuth()) return
     audioArmed = !!on
   })
 
+  // --- Transcript, notes & feedback persistence ---
   ipcMain.handle(IPC.saveTranscript, async (e, raw) => {
     assertMainWindow(e)
     if (!requireAuth()) throw new Error('Not signed in.')
     const m = SaveMeetingSchema.parse(raw)
     const r = { path: await saveMeeting(getSettings(), m) }
+    clearDraftTranscript(getSettings(), m.startedAt) // the real save landed — this autosave is now stale
     auditLog('transcript.saved', {
       mode: m.mode,
       lines: m.lines.length,
@@ -1202,6 +1252,17 @@ function registerIpc(): void {
     })
     scheduleRebuild() // refresh the knowledge graph with the new note (debounced; no-op if disabled)
     return r
+  })
+
+  // Periodic best-effort snapshot of an IN-PROGRESS meeting (renderer calls this every ~60s while
+  // Listen is active — see App.tsx). Never throws into the caller; a failed autosave must not interrupt
+  // the meeting. See saveDraftTranscript's own doc comment for why this exists (crash/force-quit recovery).
+  ipcMain.handle(IPC.saveDraftTranscript, async (e, raw) => {
+    assertMainWindow(e)
+    if (!requireAuth()) return
+    const parsed = SaveMeetingSchema.safeParse(raw)
+    if (!parsed.success) return
+    await saveDraftTranscript(getSettings(), parsed.data)
   })
 
   ipcMain.handle(IPC.saveNote, async (e, raw) => {
@@ -1224,6 +1285,7 @@ function registerIpc(): void {
     auditLog('answer.feedback', { rating, kind: typeof r?.kind === 'string' ? r.kind : undefined })
   })
 
+  // --- Metrics, export & PDF ---
   // On-device eval metrics from the local audit log (latency p50/p95, acceptance, failures). Read-only,
   // metadata-only — nothing leaves the device. Surfaced in Settings → About → Diagnostics.
   ipcMain.handle(IPC.metricsRead, (e) => {
@@ -1266,6 +1328,7 @@ function registerIpc(): void {
     return { ok: true as const, path: r.filePath }
   })
 
+  // --- Graphify knowledge graph ---
   ipcMain.handle(IPC.graphifyStatus, (e) => {
     assertMainWindow(e)
     if (!requireAuth()) return { enabled: false, installed: false, backend: null, building: false, hasGraph: false }
@@ -1293,6 +1356,7 @@ function registerIpc(): void {
     return html
   })
 
+  // --- Filesystem pickers ---
   ipcMain.handle(IPC.pickFolder, async (e) => {
     assertMainWindow(e)
     const r = await dialog.showOpenDialog({
@@ -1307,6 +1371,7 @@ function registerIpc(): void {
     assertMainWindow(e)
     return requireAuth() ? shell.openPath(resolveMeetingsFolder(getSettings())) : ''
   })
+  // --- Recall (meeting history): list/search/open ---
   ipcMain.handle(IPC.recallList, (e) => {
     assertMainWindow(e)
     return requireAuth() ? listMeetings() : []
@@ -1327,6 +1392,7 @@ function registerIpc(): void {
     return shell.openPath(path)
   })
 
+  // --- Listening state (tray icon + Dust conversation reset + power-save block) ---
   ipcMain.handle(IPC.listeningState, (e, on: unknown) => {
     assertMainWindow(e)
     setTrayRecording(!!on)
@@ -1336,6 +1402,7 @@ function registerIpc(): void {
     if (on) resetDustConversation()
   })
 
+  // --- Window management ---
   ipcMain.handle(IPC.windowResize, (e, payload: { height: number }) => {
     assertMainWindow(e)
     resizeTo(payload?.height ?? BAR_HEIGHT)
@@ -1368,10 +1435,12 @@ function registerIpc(): void {
     assertMainWindow(e)
     app.quit()
   })
+  // --- Auto-update ---
   ipcMain.handle(IPC.updateInstall, (e) => {
     assertMainWindow(e)
     updaterPkg.autoUpdater.quitAndInstall()
   })
+  // --- Mail draft ---
   // mailto: fallback for the follow-up draft (Phase 1) — opens the user's own default mail client with
   // a prefilled draft; sending stays entirely manual. No attachments possible via mailto (real Outlook
   // drafts with attachments are a later phase, gated on Microsoft Graph scope consent). Some mail
@@ -1440,6 +1509,10 @@ if (!app.requestSingleInstanceLock()) {
   if (!app.isPackaged) loadDotEnv() // dev convenience only; never read a stray .env in production
   ensureMeetingsFolder(getSettings()) // create the self-documenting OneDrive folder on first run
   sweepStaleTempFiles() // remove any decrypted-transcript temp copies orphaned by a previous hard-kill
+  // Auto-delete meetings past the configured retention window (off by default — see transcriptRetentionDays).
+  sweepExpiredMeetings(getSettings().transcriptRetentionDays).then((r) => {
+    if (r.deleted > 0) auditLog('transcript.deleted', { bulk: true, expired: true, deleted: r.deleted })
+  }).catch(() => { /* best-effort — never block startup */ })
   if (process.platform === 'darwin') app.dock?.hide()
   // System-audio loopback: when the renderer calls getDisplayMedia for audio,
   // hand back the system audio loopback device (the "Them" channel) only.

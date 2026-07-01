@@ -101,6 +101,8 @@ const api = {
   armAudio: (on: boolean): Promise<void> => ipcRenderer.invoke(IPC.armAudio, on),
   saveTranscript: (m: SaveMeeting): Promise<{ path: string }> =>
     ipcRenderer.invoke(IPC.saveTranscript, m),
+  // Periodic crash-recovery snapshot of an in-progress meeting — fire-and-forget, best-effort.
+  saveDraftTranscript: (m: SaveMeeting): Promise<void> => ipcRenderer.invoke(IPC.saveDraftTranscript, m),
   saveNote: (n: SaveNote): Promise<{ path: string }> => ipcRenderer.invoke(IPC.saveNote, n),
   answerFeedback: (f: AnswerFeedback): Promise<void> => ipcRenderer.invoke(IPC.answerFeedback, f),
   readMetrics: (): Promise<EvalMetrics> => ipcRenderer.invoke(IPC.metricsRead),
@@ -115,6 +117,9 @@ const api = {
   // title is shown in the native confirm dialog the main process pops up before deleting; optional.
   recallDelete: (file: string, title?: string): Promise<{ ok: boolean; error?: string }> =>
     ipcRenderer.invoke(IPC.recallDelete, file, title),
+  // Delete every saved meeting + the knowledge graph. Main pops its own (extra-emphatic) confirm dialog.
+  recallDeleteAll: (): Promise<{ ok: boolean; deleted: number; failed?: string[]; error?: string }> =>
+    ipcRenderer.invoke(IPC.recallDeleteAll),
   setListeningState: (on: boolean): Promise<void> => ipcRenderer.invoke(IPC.listeningState, on),
   asrBundled: (): Promise<boolean> => ipcRenderer.invoke(IPC.asrBundled),
 

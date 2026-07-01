@@ -104,23 +104,25 @@ describe('SettingsSchema', () => {
 
   it('defaults playListenChime, requireConsentIndicator, and lastConsentReminderAt', () => {
     expect(DEFAULT_SETTINGS.playListenChime).toBe(true)
-    expect(DEFAULT_SETTINGS.requireConsentIndicator).toBe(false)
+    // On by default: it's the only consent mechanism AskToto has, so the persistent reminder should be
+    // the opt-out, not the opt-in (mirrors the encryptTranscripts default-flip reasoning).
+    expect(DEFAULT_SETTINGS.requireConsentIndicator).toBe(true)
     expect(DEFAULT_SETTINGS.lastConsentReminderAt).toBe(0)
     const parsed = SettingsSchema.safeParse(DEFAULT_SETTINGS)
     expect(parsed.success).toBe(true)
   })
 
-  it('parses new consent/recording settings when provided', () => {
+  it('parses new consent/recording settings when provided (including turning the indicator off)', () => {
     const parsed = SettingsSchema.safeParse({
       ...DEFAULT_SETTINGS,
       playListenChime: false,
-      requireConsentIndicator: true,
+      requireConsentIndicator: false,
       lastConsentReminderAt: 1700000000000
     })
     expect(parsed.success).toBe(true)
     if (parsed.success) {
       expect(parsed.data.playListenChime).toBe(false)
-      expect(parsed.data.requireConsentIndicator).toBe(true)
+      expect(parsed.data.requireConsentIndicator).toBe(false)
       expect(parsed.data.lastConsentReminderAt).toBe(1700000000000)
     }
   })

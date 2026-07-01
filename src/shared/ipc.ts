@@ -62,6 +62,7 @@ export const IPC = {
   prewarmCapture: 'capture:prewarm',
   armAudio: 'audio:arm',
   saveTranscript: 'transcript:save',
+  saveDraftTranscript: 'transcript:saveDraft',
   saveNote: 'note:save',
   exportRecapJson: 'recap:export-json',
   pickFolder: 'folder:pick',
@@ -71,6 +72,7 @@ export const IPC = {
   recallOpen: 'recall:open',
   recallRead: 'recall:read',
   recallDelete: 'recall:delete',
+  recallDeleteAll: 'recall:deleteAll',
   windowResize: 'window:resize',
   windowMode: 'window:mode',
   windowMoveBy: 'window:moveBy',
@@ -313,6 +315,10 @@ export const BaseSettingsSchema = z.object({
   // at the meetings folder) needs to read the raw markdown — AskToto's own recall/search already decrypts
   // transparently either way. See main/transcripts.ts.
   encryptTranscripts: z.boolean().default(true),
+  // Auto-delete saved meetings older than N days (GDPR/CCPA storage-limitation control). 0 = off, keep
+  // forever (the historical default — an explicit choice, not a silent one, since flipping this on is
+  // itself destructive). Swept once per app launch; see sweepExpiredMeetings in main/recall.ts.
+  transcriptRetentionDays: z.number().int().min(0).max(3650).default(0),
   systemPrompt: z.string(),
   // Per-mode system prompts (pre-filled from DEFAULT_MODE_PROMPTS; user edits override). Plug-and-play.
   modePrompts: z.record(z.string(), z.string()).default({}),
@@ -356,7 +362,10 @@ export const BaseSettingsSchema = z.object({
   showFullTranscriptInReview: z.boolean().default(false), // review = summary-first; transcript opt-in
   asrQuality: z.enum(['best', 'fast']).default('fast'), // fast = small model, ready fast (default); best = large, downloads
   asrEngine: z.enum(['whisper', 'parakeet']).default('whisper'), // whisper = ~99 langs (default); parakeet = European, fastest
-  requireConsentIndicator: z.boolean().default(false),
+  // On by default: this reminder is the ONLY consent mechanism AskToto has today — it shows the
+  // operator, never the other participants, and is not a substitute for actually telling people
+  // they're being recorded. See the Settings copy near this toggle for the honest scope of what it does.
+  requireConsentIndicator: z.boolean().default(true),
   // Strip high-confidence secrets (cards, API keys, SSNs, private keys) from the captured transcript
   // before it's sent to a cloud model. On by default; never touches the typed question or the saved file.
   redactSensitive: z.boolean().default(true),
@@ -449,6 +458,7 @@ export const DEFAULT_SETTINGS: Settings = {
   outputLanguage: 'auto',
   summaryLanguage: 'auto',
   encryptTranscripts: true,
+  transcriptRetentionDays: 0,
   systemPrompt:
     'You are AskToto, a fast, sharp desktop assistant living in an always-on overlay. ' +
     'Answer concisely and directly in clean markdown. Lead with the answer. Use code blocks ' +
@@ -480,7 +490,7 @@ export const DEFAULT_SETTINGS: Settings = {
   showFullTranscriptInReview: false,
   asrQuality: 'fast',
   asrEngine: 'whisper',
-  requireConsentIndicator: false,
+  requireConsentIndicator: true,
   redactSensitive: true,
   lastConsentReminderAt: 0,
   customMeetingApps: [],
