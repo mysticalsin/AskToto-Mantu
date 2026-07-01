@@ -605,7 +605,7 @@ export function App(): JSX.Element {
     const dustReady = isDustReady(settings?.hasKeys ?? {}, settings?.dustWorkspaceId ?? '', settings?.providerModels ?? {})
     const refAgent = dustReady ? settings?.providerModels?.['dust'] ?? '' : ''
     if (!refAgent) {
-      followup.fail('Connect Dust in Settings → Your AI to generate a follow-up draft.', 'Follow-up')
+      openSettings('ai', 'Connect Dust here to generate a follow-up draft.')
       return
     }
     const title = pastMeeting?.title
@@ -617,7 +617,7 @@ export function App(): JSX.Element {
       (title ? `\n\nMeeting title: ${title}` : '') +
       `\n\nSummary:\n${recapText}`
     followup.run({ mode: 'answer', prompt, agentOverride: refAgent, providerOverride: 'dust' })
-  }, [pastMeeting, ask.answer, followup, settings?.hasKeys, settings?.dustWorkspaceId, settings?.providerModels])
+  }, [pastMeeting, ask.answer, followup, settings?.hasKeys, settings?.dustWorkspaceId, settings?.providerModels, openSettings])
 
   const capture = useCallback(async () => {
     const q = input.trim()

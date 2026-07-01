@@ -29,6 +29,30 @@ const CALL_TIMEOUT_MS = 30_000
 
 const errMsg = (e: unknown): string => (e instanceof Error ? e.message : String(e))
 
+// Cloud-metadata endpoints (AWS/GCP/Azure IMDS) must never be reachable through this client — a
+// tampered or mistyped Settings value pointed here, combined with the stored bearer token, would let
+// "push" act as an SSRF primitive against the host's own cloud credentials. Localhost/private-LAN
+// addresses are deliberately still allowed: that's BidStack's actual deployment model today (its own
+// Settings page defaults to http://localhost:4001).
+const BLOCKED_HOSTS = new Set(['169.254.169.254', 'metadata.google.internal', 'metadata.azure.com'])
+
+/** Reject non-http(s) schemes and known cloud-metadata hosts before any network call is made. */
+function validateEndpointUrl(url: string): string | null {
+  let parsed: URL
+  try {
+    parsed = new URL(url)
+  } catch {
+    return `"${url}" is not a valid URL.`
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    return `"${url}" must be an http or https URL.`
+  }
+  if (BLOCKED_HOSTS.has(parsed.hostname.toLowerCase())) {
+    return `"${url}" points at a cloud metadata address, which is never a valid BidStack endpoint.`
+  }
+  return null
+}
+
 /**
  * Turn a raw connect/call failure into a short, actionable message. MCP SDK errors and Node's
  * fetch errors don't have a stable shape, so this matches on common substrings rather than types.
@@ -106,11 +130,8 @@ export async function connectBidstack(endpointUrl: string, apiKey: string): Prom
   const key = (apiKey || '').trim()
   if (!url) return { ok: false, error: 'Enter the BidStack MCP endpoint URL first.' }
   if (!key) return { ok: false, error: 'Enter the BidStack API key first.' }
-  try {
-    new URL(url)
-  } catch {
-    return { ok: false, error: `"${url}" is not a valid URL.` }
-  }
+  const urlError = validateEndpointUrl(url)
+  if (urlError) return { ok: false, error: urlError }
   try {
     const tools = await withClient(url, key, CONNECT_TIMEOUT_MS, async (client) => {
       const res = await client.listTools()
@@ -146,6 +167,8 @@ export async function pushToBidstack(
   if (!url) return { ok: false, error: 'BidStack endpoint is not configured. Set it up in Settings first.' }
   if (!key) return { ok: false, error: 'BidStack API key is not configured. Set it up in Settings first.' }
   if (!tool) return { ok: false, error: 'No BidStack tool selected to push to.' }
+  const urlError = validateEndpointUrl(url)
+  if (urlError) return { ok: false, error: urlError }
   try {
     const result = await withClient(url, key, CALL_TIMEOUT_MS, (client) =>
       client.callTool({ name: tool, arguments: args })

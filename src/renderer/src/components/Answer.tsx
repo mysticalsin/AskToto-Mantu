@@ -30,7 +30,7 @@ function parseVerdict(text: string): { key: string; rest: string } | null {
 function errorHint(error: string): string | null {
   const e = error.toLowerCase()
   if (/rate.?limit|\b429\b|too many request/.test(e)) return 'The provider is rate-limiting you. Wait a moment, or switch providers in Settings.'
-  if (/invalid.*(key|api)|incorrect api key|unauthor|\b401\b|expired/.test(e)) return 'Your API key may be invalid or expired. Update it in Settings → Your AI.'
+  if (/invalid.*(key|api)|incorrect api key|unauthor|\b401\b|expired/.test(e)) return 'Your API key may be invalid or expired. Update it in Settings → AI.'
   if (/timed out|timeout|no response/.test(e)) return 'The model took too long. Retry, or pick a faster tier in Settings → Thinking mode.'
   if (/network|fetch failed|enotfound|econnrefused|getaddrinfo|offline|dns/.test(e)) return 'Looks like a network problem. Check your connection, then retry.'
   if (/quota|insufficient|billing|credit|payment/.test(e)) return 'The provider reports a quota or billing issue. Check your account, or switch providers in Settings.'

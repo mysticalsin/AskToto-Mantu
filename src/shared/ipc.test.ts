@@ -198,4 +198,29 @@ describe('McpCrmPushPayloadSchema', () => {
     expect(McpCrmPushPayloadSchema.safeParse({ toolName: 'x', args: [] }).success).toBe(false)
     expect(McpCrmPushPayloadSchema.safeParse({ toolName: 'x', args: 'not-an-object' }).success).toBe(false)
   })
+
+  it('rejects a nested object/array value inside args — flat primitives only', () => {
+    const r = McpCrmPushPayloadSchema.safeParse({ toolName: 'x', args: { nested: { a: 1 } } })
+    expect(r.success).toBe(false)
+  })
+
+  it('rejects an oversized string value inside args', () => {
+    const r = McpCrmPushPayloadSchema.safeParse({ toolName: 'x', args: { summary: 'a'.repeat(50_001) } })
+    expect(r.success).toBe(false)
+  })
+
+  it('rejects an args object with too many fields', () => {
+    const args: Record<string, string> = {}
+    for (let i = 0; i < 21; i++) args[`field${i}`] = 'v'
+    const r = McpCrmPushPayloadSchema.safeParse({ toolName: 'x', args })
+    expect(r.success).toBe(false)
+  })
+
+  it('accepts string/number/boolean/null primitive values within bounds', () => {
+    const r = McpCrmPushPayloadSchema.safeParse({
+      toolName: 'x',
+      args: { title: 'ok', count: 3, active: true, note: null }
+    })
+    expect(r.success).toBe(true)
+  })
 })

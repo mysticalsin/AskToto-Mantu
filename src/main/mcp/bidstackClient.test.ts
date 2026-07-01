@@ -190,4 +190,20 @@ describe('bidstackClient — against a real local Streamable HTTP mock (not Tony
     await expect(pushToBidstack(mock.url, '', 'push_meeting_recap', {})).resolves.toMatchObject({ ok: false })
     await expect(pushToBidstack(mock.url, API_KEY, '', {})).resolves.toMatchObject({ ok: false })
   })
+
+  it('refuses a cloud-metadata endpoint without ever making a network call (SSRF guard)', async () => {
+    const connect = await connectBidstack('http://169.254.169.254/latest/meta-data/', API_KEY)
+    expect(connect.ok).toBe(false)
+    expect(connect.error).toMatch(/cloud metadata/i)
+
+    const push = await pushToBidstack('http://169.254.169.254/', API_KEY, 'push_meeting_recap', {})
+    expect(push.ok).toBe(false)
+    expect(push.error).toMatch(/cloud metadata/i)
+  })
+
+  it('refuses a non-http(s) scheme (e.g. file:) before connecting', async () => {
+    const r = await connectBidstack('file:///etc/passwd', API_KEY)
+    expect(r.ok).toBe(false)
+    expect(r.error).toMatch(/http or https/i)
+  })
 })

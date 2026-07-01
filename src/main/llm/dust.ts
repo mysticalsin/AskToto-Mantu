@@ -52,9 +52,20 @@ function dustLogger(): Console {
 // meeting/listening session begins (see resetDustConversation, called from IPC.listeningState on `true`)
 // — never on stop, so a follow-up drafted right after the call still shares context with what happened
 // during it. Scoped to (workspaceId, agentId) so switching agents/workspaces mid-session can't leak one
-// agent's conversation into another's. Module-level state is safe here: AskToto is single-window/
-// single-active-meeting by construction, there is no concurrent-meeting case to isolate against.
-let activeConversation: { conversationId: string; workspaceId: string; agentId: string } | null = null
+// agent's conversation into another's. Also time-bounded (DUST_CONVERSATION_TTL_MS): without this, an
+// unrelated ad-hoc question asked hours or days later — with no new meeting having started in between —
+// would silently inherit that old meeting's private conversation history. Module-level state is safe
+// here: AskToto is single-window/single-active-meeting by construction, there is no concurrent-meeting
+// case to isolate against.
+type DustConversationRef = { conversationId: string; workspaceId: string; agentId: string; createdAt: number }
+const DUST_CONVERSATION_TTL_MS = 2 * 60 * 60 * 1000 // 2h — covers a meeting plus an immediate follow-up draft
+let activeConversation: DustConversationRef | null = null
+// Serializes conversation CREATION per (workspaceId, agentId): two Dust requests fired close together
+// (e.g. the auto-recap and a manual "Generate follow-up" click) must not both see no cached conversation
+// and each call createConversation, forking one meeting into two disconnected Dust conversations. Only
+// the create step needs this gate — once a conversation exists, concurrent postUserMessage calls into it
+// are already safe.
+let creationInFlight: Promise<void> | null = null
 
 /** Call when a new meeting/listening session starts — the next Dust request begins a fresh conversation. */
 export function resetDustConversation(): void {
@@ -134,12 +145,25 @@ export function streamDust(opts: StreamOptions): StreamHandle {
       return true
     }
     const workspaceId = creds.workspaceId || ''
-    const reusable =
-      activeConversation &&
-      activeConversation.workspaceId === workspaceId &&
-      activeConversation.agentId === opts.model
-        ? activeConversation
-        : null
+    const isFresh = (c: DustConversationRef | null): c is DustConversationRef =>
+      !!c &&
+      c.workspaceId === workspaceId &&
+      c.agentId === opts.model &&
+      Date.now() - c.createdAt < DUST_CONVERSATION_TTL_MS
+
+    // If a concurrent request is already creating this meeting's conversation, wait for it instead of
+    // racing a second createConversation — see creationInFlight comment above.
+    let releaseCreationGate: (() => void) | null = null
+    while (!isFresh(activeConversation)) {
+      if (!creationInFlight) {
+        creationInFlight = new Promise((resolve) => {
+          releaseCreationGate = resolve
+        })
+        break // we now hold the gate — we're the one creating it
+      }
+      await creationInFlight.catch(() => {})
+    }
+
     const messageBody = {
       content: preamble + userText(opts.req),
       mentions: [{ configurationId: opts.model }],
@@ -147,7 +171,8 @@ export function streamDust(opts: StreamOptions): StreamHandle {
     }
     let conversation: unknown
     let messageSId: string
-    if (reusable) {
+    if (isFresh(activeConversation)) {
+      const reusable = activeConversation
       // Same meeting, same agent — continue the existing conversation instead of starting cold.
       const posted = await api.postUserMessage({
         conversationId: reusable.conversationId,
@@ -175,6 +200,12 @@ export function streamDust(opts: StreamOptions): StreamHandle {
         visibility: 'unlisted',
         message: messageBody
       })
+      // Release the creation gate as soon as this attempt settles — any waiter must not deadlock on a
+      // retry-driven recursive call re-entering this same lock before we free it.
+      if (releaseCreationGate) {
+        ;(releaseCreationGate as () => void)()
+        creationInFlight = null
+      }
       if (created.isErr()) {
         if (await retryIfAuth(created.error)) return
         return fail(created.error.message)
@@ -183,7 +214,7 @@ export function streamDust(opts: StreamOptions): StreamHandle {
       messageSId = created.value.message.sId
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const sId = (conversation as any)?.sId
-      if (sId) activeConversation = { conversationId: sId, workspaceId, agentId: opts.model }
+      if (sId) activeConversation = { conversationId: sId, workspaceId, agentId: opts.model, createdAt: Date.now() }
       auditLog('dust.conversation', { action: 'created' })
     }
     const streamed = await api.streamAgentAnswerEvents({

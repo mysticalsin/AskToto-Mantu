@@ -1039,7 +1039,7 @@ function registerIpc(): void {
           : req.mode === 'vision' && !def.vision
             ? `${def.label} can't read screenshots. Switch to Claude or GPT in Settings, or ask without a screen capture.`
             : provider === 'dust' && !s.dustWorkspaceId
-              ? 'Add your Dust workspace ID in Settings → Your AI → Dust setup.'
+              ? 'Add your Dust workspace ID in Settings → AI → Dust setup.'
               : ''
       if (ineligible) {
         // Vision turn, but the active provider can't read images (e.g. Dust agents). Transparently fail

@@ -157,6 +157,24 @@ describe('store', () => {
     }
   })
 
+  it('encryptTranscripts defaults to true for an existing install that never touched the toggle', () => {
+    // settings.json is a SPARSE overlay of only explicitly-changed keys (see readUserRaw's docstring) —
+    // it is never pre-populated with a full snapshot of defaults. So an existing install that never
+    // touched this toggle has no `encryptTranscripts` key on disk at all, and correctly inherits
+    // whatever DEFAULT_SETTINGS says today — no migration needed. This test is the receipt for that
+    // claim: it simulates a pre-existing settings.json (written before this field existed) and confirms
+    // the new safer default (true) applies automatically.
+    writeFileSync(join(userData, 'settings.json'), JSON.stringify({ provider: 'openai' }), 'utf8')
+    expect(getSettings().encryptTranscripts).toBe(true)
+  })
+
+  it('respects an explicit prior opt-out of transcript encryption', () => {
+    // A user who deliberately disabled encryption keeps that choice — flipping the DEFAULT must never
+    // silently override an explicit user decision already persisted to disk.
+    writeFileSync(join(userData, 'settings.json'), JSON.stringify({ encryptTranscripts: false }), 'utf8')
+    expect(getSettings().encryptTranscripts).toBe(false)
+  })
+
   it('ignores malformed keys in user overrides', () => {
     const settingsPath = join(userData, 'settings.json')
     writeFileSync(
