@@ -28,6 +28,7 @@
   --color-accent-2: #a64dff; /* brighter purple — active toolbar icons, input cursor, chevron */
   --color-accent-soft: rgba(127, 0, 218, 0.18);
   --color-accent-glow: rgba(127, 0, 218, 0.30);
+  --color-cyan: #22d3ee; /* Start-listening idle state — a distinct, inviting color from the muted toolbar default */
   /* Bright text — pops on the more-transparent glass (Tony: "text can be very bright"). */
   --color-ink: rgba(255, 255, 255, 1);
   --color-ink-2: rgba(255, 255, 255, 0.86);

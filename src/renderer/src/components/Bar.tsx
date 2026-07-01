@@ -92,6 +92,7 @@ function IconTool({
   active,
   danger,
   rainbow,
+  cyanIdle,
   children
 }: {
   title: string
@@ -99,6 +100,9 @@ function IconTool({
   active?: boolean
   danger?: boolean
   rainbow?: boolean
+  // Idle (not-yet-active) color is cyan instead of the shared muted tone — used for the Listen button
+  // so "start recording" reads as a distinct, inviting action rather than a neutral toggle.
+  cyanIdle?: boolean
   children: ReactNode
 }): JSX.Element {
   return (
@@ -114,7 +118,9 @@ function IconTool({
             ? 'text-[color:var(--color-danger)]'
             : active
               ? 'text-[color:var(--color-accent-2)]'
-              : 'text-[color:var(--color-ink-3)] hover:text-[color:var(--color-ink)]'
+              : cyanIdle
+                ? 'text-[color:var(--color-cyan)] hover:brightness-110'
+                : 'text-[color:var(--color-ink-3)] hover:text-[color:var(--color-ink)]'
         ].join(' ')}
       >
         {children}
@@ -354,6 +360,7 @@ export function Bar(props: BarProps): JSX.Element {
               onClick={props.onToggleListen}
               active={props.listening}
               danger
+              cyanIdle
             >
               {props.listening ? (
                 <span className="rec-dot h-[12px] w-[12px] rounded-full bg-[var(--color-danger)] shadow-[0_0_8px_var(--color-danger)]" />
