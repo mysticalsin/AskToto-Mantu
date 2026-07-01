@@ -25,6 +25,9 @@ import {
   SetApiKeyPayloadSchema,
   ClearApiKeyPayloadSchema,
   TestApiKeyPayloadSchema,
+  McpCrmTestConnectionPayloadSchema,
+  McpCrmSaveConnectionPayloadSchema,
+  McpCrmPushPayloadSchema,
   DEFAULT_SHORTCUTS,
   type HotkeyAction,
   type PublicSettings,
@@ -46,6 +49,7 @@ import {
   listDustAgents
 } from './store'
 import { createStream } from './llm'
+import { resetDustConversation } from './llm/dust'
 import { buildSystem } from './personas'
 import { initLogging, mainLog, auditLog } from './logger'
 import { authStatus, signIn as authSignIn, signOut as authSignOut, requireAuth } from './auth'
@@ -72,6 +76,13 @@ import { runSelfTest } from './selftest'
 import { readEvalMetrics, aggregateMetrics } from './metrics'
 import { refreshDustCliSession, setupDustCli } from './dustcli'
 import { detectCli, testCli, setupCli, installCli, loginCli, prewarmCli } from './cli'
+import { connectBidstack, pushToBidstack } from './mcp/bidstackClient'
+import {
+  setBidstackApiKey,
+  getBidstackApiKey,
+  clearBidstackApiKey,
+  hasBidstackApiKey
+} from './mcp/bidstackSecrets'
 import {
   graphifyStatus,
   buildGraph,
@@ -812,6 +823,59 @@ function registerIpc(): void {
     return loginCli(typeof provider === 'string' ? (provider as ProviderId) : 'claude-cli')
   })
 
+  // BidStack 360° CRM — MCP push (Settings → CLI Integration card + Review's "Push to CRM").
+  // Test connection: connects + authenticates + lists tools, persists NOTHING (mirrors BidStack's own
+  // "Test endpoint" button). Lets the user verify before committing an endpoint/key to disk.
+  ipcMain.handle(IPC.mcpCrmTestConnection, async (e, payload: unknown) => {
+    assertMainWindow(e)
+    const parsed = McpCrmTestConnectionPayloadSchema.safeParse(payload)
+    if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message || 'Invalid input.' }
+    return connectBidstack(parsed.data.endpointUrl, parsed.data.apiKey)
+  })
+
+  // Save connection: re-verifies (never trust a stale/unverified endpoint+key) then persists the
+  // endpoint to settings, the key to the BidStack secrets file, and the discovered tools for the picker.
+  ipcMain.handle(IPC.mcpCrmSaveConnection, async (e, payload: unknown) => {
+    assertMainWindow(e)
+    const parsed = McpCrmSaveConnectionPayloadSchema.safeParse(payload)
+    if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message || 'Invalid input.' }
+    const r = await connectBidstack(parsed.data.endpointUrl, parsed.data.apiKey)
+    if (!r.ok) return r
+    setBidstackApiKey(parsed.data.apiKey)
+    setSettings({
+      bidstackEndpointUrl: parsed.data.endpointUrl.trim(),
+      bidstackConnected: true,
+      bidstackTools: r.tools ?? []
+    })
+    auditLog('bidstack.connected', { tools: (r.tools ?? []).length })
+    return r
+  })
+
+  ipcMain.handle(IPC.mcpCrmDisconnect, (e) => {
+    assertMainWindow(e)
+    clearBidstackApiKey()
+    setSettings({ bidstackConnected: false, bidstackTools: [] })
+    auditLog('bidstack.disconnected', {})
+    return { ok: true }
+  })
+
+  // Push: uses the already-saved endpoint + key. Never accepts an endpoint/key from the renderer here —
+  // only a previously tested-and-saved connection can push, so a compromised renderer can't redirect the
+  // push to an attacker-controlled MCP endpoint by passing arbitrary payload fields.
+  ipcMain.handle(IPC.mcpCrmPush, async (e, payload: unknown) => {
+    assertMainWindow(e)
+    const parsed = McpCrmPushPayloadSchema.safeParse(payload)
+    if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message || 'Invalid input.' }
+    const s = getSettings()
+    if (!s.bidstackConnected || !s.bidstackEndpointUrl || !hasBidstackApiKey()) {
+      return { ok: false, error: 'BidStack is not connected. Set it up in Settings → CLI Integration first.' }
+    }
+    const apiKey = getBidstackApiKey()
+    const r = await pushToBidstack(s.bidstackEndpointUrl, apiKey, parsed.data.toolName, parsed.data.args)
+    auditLog('bidstack.push', { tool: parsed.data.toolName, ok: r.ok })
+    return r
+  })
+
   ipcMain.handle(IPC.authStatus, (e) => {
     assertMainWindow(e)
     return authStatus()
@@ -1246,6 +1310,9 @@ function registerIpc(): void {
   ipcMain.handle(IPC.listeningState, (e, on: unknown) => {
     assertMainWindow(e)
     setTrayRecording(!!on)
+    // A new meeting starting is the one clean boundary for Dust conversation continuity — everything
+    // from here until the NEXT meeting starts shares one conversation (see resetDustConversation).
+    if (on) resetDustConversation()
   })
 
   ipcMain.handle(IPC.windowResize, (e, payload: { height: number }) => {

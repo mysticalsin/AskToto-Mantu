@@ -1,5 +1,5 @@
 import { authStatus } from '../auth'
-import { mainLog } from '../logger'
+import { mainLog, auditLog } from '../logger'
 import { type StreamOptions, type StreamHandle, errMsg, idleWatchdog, userText } from './shared'
 
 /**
@@ -44,6 +44,21 @@ function dustLogger(): Console {
   logger.log = (...a: unknown[]) => forward('info', a)
   logger.debug = (...a: unknown[]) => forward('info', a)
   return logger
+}
+
+// One Dust conversation per meeting, not one per request. Fact-check, Explain, Spotlight Ref, and every
+// other Dust-routed quick-action fired during the SAME meeting reuse this conversation, so the agent sees
+// the accumulated back-and-forth instead of a cold start on every call. Reset exactly once, when a NEW
+// meeting/listening session begins (see resetDustConversation, called from IPC.listeningState on `true`)
+// — never on stop, so a follow-up drafted right after the call still shares context with what happened
+// during it. Scoped to (workspaceId, agentId) so switching agents/workspaces mid-session can't leak one
+// agent's conversation into another's. Module-level state is safe here: AskToto is single-window/
+// single-active-meeting by construction, there is no concurrent-meeting case to isolate against.
+let activeConversation: { conversationId: string; workspaceId: string; agentId: string } | null = null
+
+/** Call when a new meeting/listening session starts — the next Dust request begins a fresh conversation. */
+export function resetDustConversation(): void {
+  activeConversation = null
 }
 
 /** Dust message context tied to the signed-in user, so usage is attributable in the Dust workspace. */
@@ -118,23 +133,62 @@ export function streamDust(opts: StreamOptions): StreamHandle {
       await run(fresh, false)
       return true
     }
-    const created = await api.createConversation({
-      title: null,
-      visibility: 'unlisted',
-      message: {
-        content: preamble + userText(opts.req),
-        mentions: [{ configurationId: opts.model }],
-        context: dustContext()
-      }
-    })
-    if (created.isErr()) {
-      if (await retryIfAuth(created.error)) return
-      return fail(created.error.message)
+    const workspaceId = creds.workspaceId || ''
+    const reusable =
+      activeConversation &&
+      activeConversation.workspaceId === workspaceId &&
+      activeConversation.agentId === opts.model
+        ? activeConversation
+        : null
+    const messageBody = {
+      content: preamble + userText(opts.req),
+      mentions: [{ configurationId: opts.model }],
+      context: dustContext()
     }
-    const { conversation, message } = created.value
+    let conversation: unknown
+    let messageSId: string
+    if (reusable) {
+      // Same meeting, same agent — continue the existing conversation instead of starting cold.
+      const posted = await api.postUserMessage({
+        conversationId: reusable.conversationId,
+        message: messageBody,
+        signal: controller.signal
+      })
+      if (posted.isErr()) {
+        // The cached conversation may have expired/been deleted server-side — fall back to a fresh one
+        // rather than failing the whole ask over a stale cache entry.
+        activeConversation = null
+        if (await retryIfAuth(posted.error)) return
+        return run(creds, allowRetry)
+      }
+      const fetched = await api.getConversation({ conversationId: reusable.conversationId, signal: controller.signal })
+      if (fetched.isErr()) {
+        activeConversation = null
+        return fail(fetched.error.message)
+      }
+      conversation = fetched.value
+      messageSId = posted.value.sId
+      auditLog('dust.conversation', { action: 'reused' })
+    } else {
+      const created = await api.createConversation({
+        title: null,
+        visibility: 'unlisted',
+        message: messageBody
+      })
+      if (created.isErr()) {
+        if (await retryIfAuth(created.error)) return
+        return fail(created.error.message)
+      }
+      conversation = created.value.conversation
+      messageSId = created.value.message.sId
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const sId = (conversation as any)?.sId
+      if (sId) activeConversation = { conversationId: sId, workspaceId, agentId: opts.model }
+      auditLog('dust.conversation', { action: 'created' })
+    }
     const streamed = await api.streamAgentAnswerEvents({
       conversation,
-      userMessageId: message.sId,
+      userMessageId: messageSId,
       signal: controller.signal
     })
     if (streamed.isErr()) {

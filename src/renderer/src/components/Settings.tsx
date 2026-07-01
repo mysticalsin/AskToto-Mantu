@@ -1093,6 +1093,9 @@ function CliIntegration({
           )}
         </div>
 
+        {/* BidStack CRM card — MCP push (separate credential from LLM providers; see bidstackSecrets.ts) */}
+        <BidstackCard settings={settings} patch={patch} />
+
         {/* Claude Code CLI card */}
         {renderCliCard('claude-cli')}
 
@@ -1140,6 +1143,219 @@ function CliIntegration({
     </Section>
   )
 }
+
+// ---------------------------------------------------------------------------
+// BidStack 360° CRM — MCP push (Settings → CLI Integration)
+// ---------------------------------------------------------------------------
+
+function BidstackCard({
+  settings,
+  patch
+}: {
+  settings: PublicSettings
+  patch: (p: Partial<PublicSettings>) => void
+}): JSX.Element {
+  const [open, setOpen] = useState(false)
+  const [endpointUrl, setEndpointUrl] = useState(settings.bidstackEndpointUrl || '')
+  const [apiKey, setApiKey] = useState('')
+  const [testState, setTestState] = useState<{
+    phase: 'idle' | 'testing' | 'tested' | 'saving' | 'error'
+    error: string | null
+    tools: string[] | null
+  }>({ phase: 'idle', error: null, tools: null })
+
+  const connected = settings.bidstackConnected
+  const endpointId = useId()
+  const keyId = useId()
+
+  const testConnection = async (): Promise<void> => {
+    setTestState({ phase: 'testing', error: null, tools: null })
+    const r = await window.toto.mcpCrmTestConnection({ endpointUrl: endpointUrl.trim(), apiKey: apiKey.trim() })
+    if (r.ok) {
+      setTestState({ phase: 'tested', error: null, tools: r.tools ?? [] })
+    } else {
+      setTestState({ phase: 'error', error: r.error || 'Could not connect.', tools: null })
+    }
+  }
+
+  const saveConnection = async (): Promise<void> => {
+    setTestState((s) => ({ ...s, phase: 'saving' }))
+    const r = await window.toto.mcpCrmSaveConnection({ endpointUrl: endpointUrl.trim(), apiKey: apiKey.trim() })
+    if (r.ok) {
+      await patch({
+        bidstackEndpointUrl: endpointUrl.trim(),
+        bidstackConnected: true,
+        bidstackTools: r.tools ?? []
+      })
+      setApiKey('')
+      setTestState({ phase: 'idle', error: null, tools: null })
+      setOpen(false)
+    } else {
+      setTestState({ phase: 'error', error: r.error || 'Could not save the connection.', tools: null })
+    }
+  }
+
+  const disconnect = async (): Promise<void> => {
+    await window.toto.mcpCrmDisconnect()
+    await patch({ bidstackConnected: false, bidstackEndpointUrl: '', bidstackTools: [] })
+    setEndpointUrl('')
+    setApiKey('')
+    setTestState({ phase: 'idle', error: null, tools: null })
+    setOpen(false)
+  }
+
+  return (
+    <div
+      className={[
+        'flex flex-col gap-2 rounded-[10px] border p-3',
+        connected ? 'border-[var(--cl-primary)] bg-[var(--cl-primary-soft)]/40' : 'border-[var(--cl-border)] bg-white/[0.02]'
+      ].join(' ')}
+    >
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex flex-col gap-0.5">
+          <span className="text-[12px] font-medium text-[color:var(--cl-foreground)]">BidStack · your CRM</span>
+          <span className="text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
+            Push meeting recaps to BidStack 360° over its MCP server. Manual, review-first — nothing sends automatically.
+          </span>
+        </div>
+        {connected ? (
+          <span className={activePillStyle}>
+            <CircleCheck size={12} /> Connected
+          </span>
+        ) : null}
+      </div>
+
+      {connected && !open ? (
+        <div className="flex items-center gap-3">
+          <span className="truncate text-[11px] text-[color:var(--cl-muted-foreground)]" title={settings.bidstackEndpointUrl}>
+            {settings.bidstackEndpointUrl}
+          </span>
+          <button
+            type="button"
+            onClick={() => {
+              setEndpointUrl(settings.bidstackEndpointUrl || '')
+              setOpen(true)
+            }}
+            className="no-drag cl-focus shrink-0 text-[11px] text-[color:var(--cl-muted-foreground)] hover:text-[color:var(--cl-foreground)]"
+          >
+            Reconnect
+          </button>
+          <button
+            type="button"
+            onClick={() => void disconnect()}
+            className="no-drag cl-focus shrink-0 text-[11px] text-[color:var(--cl-muted-foreground)] hover:text-[color:var(--cl-destructive)]"
+          >
+            Disconnect
+          </button>
+        </div>
+      ) : !open ? (
+        <button type="button" onClick={() => setOpen(true)} className={secondaryBtnStyle}>
+          <Link2 size={12} />
+          Set up
+        </button>
+      ) : (
+        <div className="flex flex-col gap-2">
+          <div className="flex flex-col gap-1">
+            <label htmlFor={endpointId} className="text-[11px] font-medium text-[color:var(--cl-muted-foreground)]">
+              MCP endpoint URL
+            </label>
+            <input
+              id={endpointId}
+              value={endpointUrl}
+              onChange={(e) => {
+                setEndpointUrl(e.target.value)
+                setTestState({ phase: 'idle', error: null, tools: null })
+              }}
+              placeholder="http://localhost:4001/mcp"
+              className={'w-full ' + ctl}
+            />
+          </div>
+          <div className="flex flex-col gap-1">
+            <label htmlFor={keyId} className="text-[11px] font-medium text-[color:var(--cl-muted-foreground)]">
+              API key
+            </label>
+            <input
+              id={keyId}
+              type="password"
+              value={apiKey}
+              onChange={(e) => {
+                setApiKey(e.target.value)
+                setTestState({ phase: 'idle', error: null, tools: null })
+              }}
+              placeholder="Bearer token from BidStack → Developer access → API keys (mcp + write scope)"
+              className={'w-full ' + ctl}
+            />
+          </div>
+
+          {testState.phase === 'error' && testState.error && (
+            <div className="flex items-start gap-1.5 text-[11px] text-[color:var(--cl-destructive)]">
+              <AlertCircle size={13} className="mt-px shrink-0" />
+              <span>{testState.error}</span>
+            </div>
+          )}
+          {testState.phase === 'tested' && testState.tools && (
+            <div className="flex items-start gap-1.5 text-[11px] text-[color:var(--cl-success)]">
+              <CircleCheck size={13} className="mt-px shrink-0" />
+              <span>
+                Connected.{' '}
+                {testState.tools.length > 0
+                  ? `Found ${testState.tools.length} tool${testState.tools.length === 1 ? '' : 's'}: ${testState.tools.join(', ')}`
+                  : 'BidStack reported no tools for this key’s scope.'}
+              </span>
+            </div>
+          )}
+
+          <div className="flex gap-2">
+            <button
+              type="button"
+              onClick={() => void testConnection()}
+              disabled={!endpointUrl.trim() || !apiKey.trim() || testState.phase === 'testing' || testState.phase === 'saving'}
+              className={secondaryBtnStyle}
+            >
+              {testState.phase === 'testing' ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />}
+              Test connection
+            </button>
+            <button
+              type="button"
+              onClick={() => void saveConnection()}
+              disabled={testState.phase !== 'tested'}
+              title={testState.phase !== 'tested' ? 'Test the connection successfully first' : undefined}
+              className={primaryBtnStyle}
+            >
+              {testState.phase === 'saving' ? <Loader2 size={12} className="animate-spin" /> : <Check size={12} />}
+              Save
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setOpen(false)
+                setApiKey('')
+                setTestState({ phase: 'idle', error: null, tools: null })
+              }}
+              className={secondaryBtnStyle}
+            >
+              Cancel
+            </button>
+          </div>
+          <span className="text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
+            Request only the <code className="rounded bg-white/[0.08] px-1">mcp + write</code> scope — this is a
+            push-only integration. The endpoint moves with wherever BidStack's backend actually runs; there is no
+            built-in default beyond the local-dev placeholder shown above.
+          </span>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// Shared button styles for BidstackCard (module scope — CliIntegration's own primaryBtn/secondaryBtn are
+// local to that component and not exported, so this is a small deliberate duplicate, not a shared import).
+const primaryBtnStyle =
+  'no-drag cl-focus flex items-center gap-1.5 rounded-[8px] bg-[var(--cl-primary)] px-3 py-1.5 text-[12px] font-medium text-white hover:opacity-90 disabled:opacity-50'
+const secondaryBtnStyle =
+  'no-drag cl-focus flex items-center gap-1.5 rounded-[8px] border border-[var(--cl-input)] bg-white/[0.04] px-3 py-1.5 text-[12px] text-[color:var(--cl-foreground)] hover:bg-white/[0.08] disabled:opacity-50'
+const activePillStyle =
+  'flex shrink-0 items-center gap-1 rounded-full bg-[var(--cl-primary-soft)] px-2 py-0.5 text-[11px] font-medium text-[color:var(--cl-primary)]'
 
 function DustSetup({
   settings,

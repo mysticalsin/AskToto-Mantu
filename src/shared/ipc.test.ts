@@ -1,5 +1,13 @@
 import { describe, it, expect } from 'vitest'
-import { AskStartSchema, CaptureResultSchema, SettingsSchema, DEFAULT_SETTINGS } from './ipc'
+import {
+  AskStartSchema,
+  CaptureResultSchema,
+  SettingsSchema,
+  DEFAULT_SETTINGS,
+  McpCrmTestConnectionPayloadSchema,
+  McpCrmSaveConnectionPayloadSchema,
+  McpCrmPushPayloadSchema
+} from './ipc'
 
 describe('AskStartSchema', () => {
   it('accepts a valid vision payload with a small base64 PNG', () => {
@@ -115,5 +123,79 @@ describe('SettingsSchema', () => {
       expect(parsed.data.requireConsentIndicator).toBe(true)
       expect(parsed.data.lastConsentReminderAt).toBe(1700000000000)
     }
+  })
+
+  it('defaults bidstackEndpointUrl, bidstackConnected, and bidstackTools', () => {
+    expect(DEFAULT_SETTINGS.bidstackEndpointUrl).toBe('')
+    expect(DEFAULT_SETTINGS.bidstackConnected).toBe(false)
+    expect(DEFAULT_SETTINGS.bidstackTools).toEqual([])
+  })
+})
+
+// BidStack CRM (MCP push) IPC payload validation — this is what index.ts's mcpCrm:* handlers run
+// every incoming payload through before ever touching the network or persisting anything.
+describe('McpCrmTestConnectionPayloadSchema / McpCrmSaveConnectionPayloadSchema', () => {
+  it('accepts a valid endpoint + key', () => {
+    const r = McpCrmTestConnectionPayloadSchema.safeParse({
+      endpointUrl: 'http://localhost:4001/mcp',
+      apiKey: 'sk-bidstack-abc'
+    })
+    expect(r.success).toBe(true)
+  })
+
+  it('rejects an empty endpoint URL', () => {
+    const r = McpCrmTestConnectionPayloadSchema.safeParse({ endpointUrl: '', apiKey: 'sk-abc' })
+    expect(r.success).toBe(false)
+  })
+
+  it('rejects an empty API key', () => {
+    const r = McpCrmTestConnectionPayloadSchema.safeParse({ endpointUrl: 'http://localhost:4001/mcp', apiKey: '' })
+    expect(r.success).toBe(false)
+  })
+
+  it('rejects a missing field entirely', () => {
+    const r = McpCrmTestConnectionPayloadSchema.safeParse({ endpointUrl: 'http://localhost:4001/mcp' })
+    expect(r.success).toBe(false)
+  })
+
+  it('rejects a non-object payload (e.g. a compromised/malformed renderer message)', () => {
+    expect(McpCrmTestConnectionPayloadSchema.safeParse(null).success).toBe(false)
+    expect(McpCrmTestConnectionPayloadSchema.safeParse('http://localhost:4001/mcp').success).toBe(false)
+    expect(McpCrmTestConnectionPayloadSchema.safeParse(undefined).success).toBe(false)
+  })
+
+  it('SaveConnection uses the identical shape as TestConnection', () => {
+    const payload = { endpointUrl: 'http://localhost:4001/mcp', apiKey: 'sk-abc' }
+    expect(McpCrmSaveConnectionPayloadSchema.safeParse(payload).success).toBe(true)
+  })
+})
+
+describe('McpCrmPushPayloadSchema', () => {
+  it('accepts a tool name with a plain args record', () => {
+    const r = McpCrmPushPayloadSchema.safeParse({
+      toolName: 'push_meeting_recap',
+      args: { title: 'Q3 sync', date: '2026-06-30', summary: 'Recap text.' }
+    })
+    expect(r.success).toBe(true)
+  })
+
+  it('accepts empty args', () => {
+    const r = McpCrmPushPayloadSchema.safeParse({ toolName: 'push_meeting_recap', args: {} })
+    expect(r.success).toBe(true)
+  })
+
+  it('rejects an empty tool name — never silently pushes to an unspecified tool', () => {
+    const r = McpCrmPushPayloadSchema.safeParse({ toolName: '', args: {} })
+    expect(r.success).toBe(false)
+  })
+
+  it('rejects a missing args field', () => {
+    const r = McpCrmPushPayloadSchema.safeParse({ toolName: 'push_meeting_recap' })
+    expect(r.success).toBe(false)
+  })
+
+  it('rejects args that is not a record (e.g. an array or string)', () => {
+    expect(McpCrmPushPayloadSchema.safeParse({ toolName: 'x', args: [] }).success).toBe(false)
+    expect(McpCrmPushPayloadSchema.safeParse({ toolName: 'x', args: 'not-an-object' }).success).toBe(false)
   })
 })

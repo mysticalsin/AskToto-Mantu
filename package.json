@@ -27,6 +27,7 @@
     "@anthropic-ai/sdk": "^0.106.0",
     "@azure/msal-node": "^5.3.0",
     "@dust-tt/client": "^1.2.6",
+    "@modelcontextprotocol/sdk": "^1.29.0",
     "electron-log": "^5.4.4",
     "electron-updater": "^6.8.9",
     "openai": "^6.45.0",

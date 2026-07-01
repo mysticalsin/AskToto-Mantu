@@ -28,7 +28,12 @@ import {
   type SignInResult,
   type CalendarTodayResult,
   type RecallReadResult,
-  type PlatformPermissions
+  type PlatformPermissions,
+  type McpCrmTestConnectionPayload,
+  type McpCrmSaveConnectionPayload,
+  type McpCrmPushPayload,
+  type McpCrmConnectResult,
+  type McpCrmPushResult
 } from '@shared/ipc'
 import type { ProviderId } from '@shared/providers'
 
@@ -136,7 +141,15 @@ const api = {
   openMailDraft: (input: { subject: string; body: string }): Promise<{ truncated: boolean }> =>
     ipcRenderer.invoke(IPC.openMailDraft, input),
   recapPdf: (input: { markdown: string; title?: string }): Promise<{ ok: boolean; path?: string }> =>
-    ipcRenderer.invoke(IPC.recapPdf, input)
+    ipcRenderer.invoke(IPC.recapPdf, input),
+
+  mcpCrmTestConnection: (payload: McpCrmTestConnectionPayload): Promise<McpCrmConnectResult> =>
+    ipcRenderer.invoke(IPC.mcpCrmTestConnection, payload),
+  mcpCrmSaveConnection: (payload: McpCrmSaveConnectionPayload): Promise<McpCrmConnectResult> =>
+    ipcRenderer.invoke(IPC.mcpCrmSaveConnection, payload),
+  mcpCrmDisconnect: (): Promise<{ ok: boolean }> => ipcRenderer.invoke(IPC.mcpCrmDisconnect),
+  mcpCrmPush: (payload: McpCrmPushPayload): Promise<McpCrmPushResult> =>
+    ipcRenderer.invoke(IPC.mcpCrmPush, payload)
 }
 
 contextBridge.exposeInMainWorld('toto', api)
