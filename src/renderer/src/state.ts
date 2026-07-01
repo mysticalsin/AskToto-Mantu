@@ -310,6 +310,33 @@ export function useSettings(): {
   return { settings, refresh, patch, saveKey, clearKey, testKey }
 }
 
+/** How often the renderer re-polls auth status while the app is open.
+ *
+ * main/auth.ts silently revalidates the MSAL session every REVALIDATE_INTERVAL_MS (30 min) and can drop
+ * a revoked session at any time — but that happens in the main process, with no push channel to the
+ * renderer. Without a poll here, useAuth()'s status is fetched once at mount and goes stale: the UI keeps
+ * showing "signed in" long after requireAuth() has flipped to false in main, so the user only discovers
+ * they were signed out when some unrelated privileged action fails. Polling (plus an immediate refresh on
+ * focus, for the fast path) keeps SignInWall/Settings honest without needing an IPC push mechanism.
+ */
+export const AUTH_POLL_MS = 5 * 60 * 1000 // 5 min — well under the 30 min main-process sweep
+
+type AuthRefreshEnv = {
+  window: Pick<Window, 'addEventListener' | 'removeEventListener'>
+}
+
+/** Keep auth status live while the app is open (mirrors startPermissionRefreshLoop's shape/rationale). */
+export function startAuthRefreshLoop(refresh: () => void, env: AuthRefreshEnv = { window }): () => void {
+  refresh()
+  const onFocus = (): void => refresh()
+  const interval = setInterval(refresh, AUTH_POLL_MS)
+  env.window.addEventListener('focus', onFocus)
+  return () => {
+    clearInterval(interval)
+    env.window.removeEventListener('focus', onFocus)
+  }
+}
+
 export function useAuth(): {
   status: AuthStatus | null
   signIn: () => Promise<SignInResult>
@@ -320,9 +347,7 @@ export function useAuth(): {
   const refresh = useCallback(async () => {
     setStatus(await window.toto.authStatus())
   }, [])
-  useEffect(() => {
-    void refresh()
-  }, [refresh])
+  useEffect(() => startAuthRefreshLoop(() => void refresh()), [refresh])
   const signIn = useCallback(async () => {
     const r = await window.toto.signIn()
     await refresh()

@@ -242,8 +242,8 @@ html.shot-bg-light #root {
     linear-gradient(var(--glass-tint-white), var(--glass-tint-white)),
     linear-gradient(var(--glass-fill), var(--glass-fill)),
     var(--glass-scrim-bar);
-  backdrop-filter: blur(var(--blur-bar)) saturate(var(--blur-saturate));
   -webkit-backdrop-filter: blur(var(--blur-bar)) saturate(var(--blur-saturate));
+  backdrop-filter: blur(var(--blur-bar)) saturate(var(--blur-saturate));
   border: 1px solid var(--color-hair);
   /* Outer float + a specular top rim and a soft bottom shade — the "liquid glass" depth cue. */
   box-shadow: var(--shadow-bar), inset 0 1px 0 0 rgba(255, 255, 255, 0.1), inset 0 -1px 0 0 rgba(0, 0, 0, 0.2);
@@ -254,8 +254,8 @@ html.shot-bg-light #root {
     linear-gradient(var(--glass-tint-white), var(--glass-tint-white)),
     linear-gradient(var(--glass-fill-strong), var(--glass-fill-strong)),
     var(--glass-scrim-bar);
-  backdrop-filter: blur(var(--blur-panel)) saturate(var(--blur-saturate));
   -webkit-backdrop-filter: blur(var(--blur-panel)) saturate(var(--blur-saturate));
+  backdrop-filter: blur(var(--blur-panel)) saturate(var(--blur-saturate));
   border: 1px solid var(--color-hair);
   box-shadow: var(--shadow-panel), inset 0 1px 0 0 rgba(255, 255, 255, 0.09), inset 0 -1px 0 0 rgba(0, 0, 0, 0.22);
   text-shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
@@ -278,16 +278,16 @@ html.shot-bg-light #root {
   background:
     linear-gradient(var(--glass-tint-white-listening), var(--glass-tint-white-listening)),
     var(--glass-fill-listening);
-  backdrop-filter: blur(var(--blur-bar-listening)) saturate(120%);
   -webkit-backdrop-filter: blur(var(--blur-bar-listening)) saturate(120%);
+  backdrop-filter: blur(var(--blur-bar-listening)) saturate(120%);
   border-color: rgba(255, 255, 255, 0.14);
 }
 .listening .glass-strong {
   background:
     linear-gradient(var(--glass-tint-white-listening), var(--glass-tint-white-listening)),
     var(--glass-fill-strong-listening);
-  backdrop-filter: blur(var(--blur-panel-listening)) saturate(120%);
   -webkit-backdrop-filter: blur(var(--blur-panel-listening)) saturate(120%);
+  backdrop-filter: blur(var(--blur-panel-listening)) saturate(120%);
   border-color: rgba(255, 255, 255, 0.16);
 }
 .listening .glass,
@@ -593,8 +593,8 @@ input::placeholder {
     linear-gradient(var(--glass-tint-white), var(--glass-tint-white)),
     linear-gradient(var(--glass-fill), var(--glass-fill)),
     var(--glass-scrim-bar);
-  backdrop-filter: blur(var(--blur-panel)) saturate(var(--blur-saturate));
   -webkit-backdrop-filter: blur(var(--blur-panel)) saturate(var(--blur-saturate));
+  backdrop-filter: blur(var(--blur-panel)) saturate(var(--blur-saturate));
   border: 1px solid var(--color-hair);
   /* No outer black drop-shadow (was 0 30px 70px -20px rgba(0,0,0,0.74)) — it bled well past the
      widget's edges into the empty space around it, reading as a grey halo over a light desktop. The
@@ -626,8 +626,8 @@ input::placeholder {
 /* hover menu off the mark + the mode popover */
 .aw-menu {
   background: var(--aw-glass-bot);
-  backdrop-filter: blur(20px);
   -webkit-backdrop-filter: blur(20px);
+  backdrop-filter: blur(20px);
   border: 1px solid rgba(255, 255, 255, 0.14);
   box-shadow: 0 12px 26px -10px rgba(0, 0, 0, 0.6);
 }
@@ -635,8 +635,8 @@ input::placeholder {
 .aw-pill {
   border-radius: 999px;
   background: var(--aw-glass-bot);
-  backdrop-filter: blur(20px) saturate(150%);
   -webkit-backdrop-filter: blur(20px) saturate(150%);
+  backdrop-filter: blur(20px) saturate(150%);
   border: 1px solid rgba(255, 255, 255, 0.12);
   box-shadow:
     0 12px 28px -10px rgba(0, 0, 0, 0.6),
