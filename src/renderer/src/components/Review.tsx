@@ -77,7 +77,8 @@ export function Review({
   onResume,
   onGenerateFollowup,
   bidstackConnected,
-  bidstackTools
+  bidstackTools,
+  onOpenPastMeeting
 }: {
   recap: AnswerState | null
   lines: TranscriptLine[]
@@ -99,6 +100,8 @@ export function Review({
   bidstackConnected?: boolean
   /** Tool names discovered from BidStack's MCP server at last connect — populates the tool picker. */
   bidstackTools?: string[]
+  /** Opens a "Recent meetings" row as a read-only past-meeting Review (same handler History uses). */
+  onOpenPastMeeting?: (file: string) => void
 }): JSX.Element {
   const [copied, setCopied] = useState(false)
   const [notesCopied, setNotesCopied] = useState(false)
@@ -581,7 +584,7 @@ export function Review({
                   <button
                     key={item.file}
                     type="button"
-                    onClick={() => void window.toto.recallOpen(item.file)}
+                    onClick={() => onOpenPastMeeting?.(item.file)}
                     className="no-drag focus-ring flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left hover:bg-white/[0.06]"
                   >
                     <span className="min-w-0 flex-1 truncate text-[12px] text-[color:var(--color-ink)]">
