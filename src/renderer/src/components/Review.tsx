@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Copy, Check, FileText, ListTree, FolderOpen, Save, RotateCcw, Play, ChevronDown, Download, Clock, Mail } from 'lucide-react'
+import { Copy, Check, FileText, ListTree, FolderOpen, Save, RotateCcw, Play, ChevronDown, Download, Clock, Mail, Send, AlertCircle } from 'lucide-react'
 import type { TranscriptLine, MeetingSummary } from '@shared/ipc'
 import type { AnswerState } from '../state'
 import { isNonSpeechLine } from '@shared/transcript-filter'
@@ -75,7 +75,9 @@ export function Review({
   onSave,
   onDone,
   onResume,
-  onGenerateFollowup
+  onGenerateFollowup,
+  bidstackConnected,
+  bidstackTools
 }: {
   recap: AnswerState | null
   lines: TranscriptLine[]
@@ -93,6 +95,10 @@ export function Review({
   onDone?: () => void
   onResume?: () => void
   onGenerateFollowup?: () => void
+  /** Whether BidStack CRM is connected (Settings → CLI Integration). Gates "Push to CRM". */
+  bidstackConnected?: boolean
+  /** Tool names discovered from BidStack's MCP server at last connect — populates the tool picker. */
+  bidstackTools?: string[]
 }): JSX.Element {
   const [copied, setCopied] = useState(false)
   const [notesCopied, setNotesCopied] = useState(false)
@@ -207,6 +213,40 @@ export function Review({
   }, [followupDraft?.text, followupEdited])
 
   const [mailError, setMailError] = useState<string | null>(null)
+
+  // "Push to CRM" — manual, review-first: shows the exact payload before it ever leaves the app, then
+  // fires a single MCP tool call to BidStack. Payload is deliberately thin: title, date, and the
+  // already-AI-summarized recap text — never raw transcript lines or file paths (see the confidentiality
+  // note in the plan this feature was built against).
+  const [pushOpen, setPushOpen] = useState(false)
+  const [pushTool, setPushTool] = useState('')
+  const [pushState, setPushState] = useState<{ phase: 'idle' | 'sending' | 'sent' | 'error'; error: string | null }>({
+    phase: 'idle',
+    error: null
+  })
+  useEffect(() => {
+    if (bidstackTools && bidstackTools.length > 0 && !pushTool) setPushTool(bidstackTools[0])
+  }, [bidstackTools, pushTool])
+
+  const crmPayload = useMemo(
+    () => ({
+      title: meetingMeta?.title || 'Untitled meeting',
+      date: meetingMeta?.date || new Date(startedAt ?? Date.now()).toISOString(),
+      summary: recap?.text || ''
+    }),
+    [meetingMeta?.title, meetingMeta?.date, recap?.text, startedAt]
+  )
+
+  const sendToCrm = async (): Promise<void> => {
+    if (!pushTool) return
+    setPushState({ phase: 'sending', error: null })
+    const r = await window.toto.mcpCrmPush({ toolName: pushTool, args: crmPayload })
+    if (r.ok) {
+      setPushState({ phase: 'sent', error: null })
+    } else {
+      setPushState({ phase: 'error', error: r.error || 'Push failed.' })
+    }
+  }
   const copyFollowup = (): void => {
     navigator.clipboard
       .writeText(followupText)
@@ -364,6 +404,99 @@ export function Review({
               {mailError && <div className="text-[11px] text-[var(--color-danger)]">{mailError}</div>}
               <div className="text-[11px] text-[color:var(--color-ink-3)]">
                 Review before sending — attach anything promised manually for now.
+              </div>
+            </div>
+          ) : null}
+        </section>
+      )}
+
+      {recap?.text && (
+        <section aria-live="polite">
+          <div className="mb-1.5 flex items-center justify-between">
+            <div className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-[color:var(--color-ink-3)]">
+              <Send size={12} /> CRM
+            </div>
+            {bidstackConnected && !pushOpen && pushState.phase !== 'sent' && (
+              <Chip onClick={() => setPushOpen(true)} variant="accent">
+                <Send size={13} /> Push to CRM
+              </Chip>
+            )}
+          </div>
+
+          {!bidstackConnected ? (
+            <div className="text-[12px] leading-snug text-[color:var(--color-ink-3)]">
+              Connect BidStack in Settings → CLI Integration to push this recap to your CRM.
+            </div>
+          ) : pushState.phase === 'sent' ? (
+            <div className="flex items-center gap-1.5 text-[13px] text-[var(--color-success)]">
+              <Check size={13} /> Pushed to BidStack.
+            </div>
+          ) : pushOpen ? (
+            <div className="flex flex-col gap-2">
+              {bidstackTools && bidstackTools.length > 0 ? (
+                <label className="flex flex-col gap-1 text-[11px] text-[color:var(--color-ink-3)]">
+                  BidStack tool
+                  <select
+                    value={pushTool}
+                    onChange={(e) => setPushTool(e.target.value)}
+                    className="no-drag rounded-lg border border-[var(--color-hair-soft)] bg-white/[0.02] px-2 py-1.5 text-[13px] text-[color:var(--color-ink)]"
+                  >
+                    {bidstackTools.map((t) => (
+                      <option key={t} value={t}>
+                        {t}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              ) : (
+                <div className="text-[11px] text-[color:var(--color-danger)]">
+                  BidStack reported no tools for this key's scope — nothing to push to. Check the key's
+                  scopes in Settings.
+                </div>
+              )}
+
+              {/* Exact payload preview — shown before anything is sent, same review-first discipline as
+                  the follow-up draft above. Deliberately thin: title/date/summary only, no transcript. */}
+              <div className="rounded-xl border border-[var(--color-hair-soft)] bg-white/[0.02] p-3 text-[12px]">
+                <div className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-[color:var(--color-ink-3)]">
+                  Payload preview
+                </div>
+                <div className="flex flex-col gap-1 text-[color:var(--color-ink-2)]">
+                  <div>
+                    <span className="text-[color:var(--color-ink-3)]">Title: </span>
+                    {crmPayload.title}
+                  </div>
+                  <div>
+                    <span className="text-[color:var(--color-ink-3)]">Date: </span>
+                    {crmPayload.date}
+                  </div>
+                  <div className="text-[color:var(--color-ink-3)]">Summary:</div>
+                  <div className="scroll-thin max-h-32 overflow-y-auto whitespace-pre-wrap rounded-lg bg-white/[0.03] p-2 text-[color:var(--color-ink)]">
+                    {crmPayload.summary || '(empty)'}
+                  </div>
+                </div>
+              </div>
+
+              {pushState.phase === 'error' && pushState.error && (
+                <div className="flex items-start gap-1.5 text-[11px] text-[var(--color-danger)]">
+                  <AlertCircle size={13} className="mt-px shrink-0" />
+                  <span>{pushState.error}</span>
+                </div>
+              )}
+
+              <div className="flex items-center gap-1.5">
+                <Chip onClick={() => void sendToCrm()} variant="accent">
+                  {pushState.phase === 'sending' ? <Spinner size={13} /> : <Send size={13} />}
+                  {pushState.phase === 'sending' ? 'Pushing…' : 'Confirm push'}
+                </Chip>
+                <TextButton
+                  onClick={() => {
+                    setPushOpen(false)
+                    setPushState({ phase: 'idle', error: null })
+                  }}
+                >
+                  Cancel
+                </TextButton>
               </div>
             </div>
           ) : null}

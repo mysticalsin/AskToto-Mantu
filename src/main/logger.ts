@@ -59,6 +59,10 @@ export type AuditEvent =
   | 'app.crash'
   | 'meeting.detect.degraded'
   | 'recall.open'
+  | 'bidstack.connected'
+  | 'bidstack.disconnected'
+  | 'bidstack.push'
+  | 'dust.conversation'
 
 /**
  * Append a structured audit record. NEVER pass secrets or message/transcript CONTENT — metadata only

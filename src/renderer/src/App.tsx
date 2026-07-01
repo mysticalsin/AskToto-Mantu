@@ -1111,6 +1111,8 @@ export function App(): JSX.Element {
         meetingMeta={pm ? { title: pm.title, date: pm.date } : undefined}
         followupDraft={followup.answer}
         onGenerateFollowup={generateFollowup}
+        bidstackConnected={settings?.bidstackConnected ?? false}
+        bidstackTools={settings?.bidstackTools ?? []}
         onOpenFolder={() => void window.toto.openMeetingsFolder()}
         onSave={pm ? undefined : manualSave}
         onResume={pm ? resumePastMeeting : undefined}

@@ -94,7 +94,11 @@ export const IPC = {
   updateDownloaded: 'update:downloaded',
   updateInstall: 'update:install',
   recapPdf: 'recap:pdf',
-  openMailDraft: 'mail:openDraft'
+  openMailDraft: 'mail:openDraft',
+  mcpCrmTestConnection: 'mcpCrm:testConnection',
+  mcpCrmSaveConnection: 'mcpCrm:saveConnection',
+  mcpCrmDisconnect: 'mcpCrm:disconnect',
+  mcpCrmPush: 'mcpCrm:push'
 } as const
 
 /** User's verdict on an answer (metadata only — never the answer text). Feeds the audit log + future evals. */
@@ -363,7 +367,17 @@ export const BaseSettingsSchema = z.object({
   // CLI provider connection state. Keyed by ProviderId ('claude-cli', 'codex-cli').
   cliConnected: z.record(z.string(), z.boolean()).default({}),
   // Whether the user has acknowledged the CLI integration notice banner.
-  cliNoticeAck: z.boolean().default(false)
+  cliNoticeAck: z.boolean().default(false),
+  // BidStack 360° CRM — MCP push (Settings → CLI Integration). The API key itself is NOT stored here;
+  // it goes through the same encrypted-file mechanism as provider keys, via main/mcp/bidstackSecrets.ts
+  // (kept out of the ProviderId union — a CRM credential, not an LLM provider). Never hardcode a default
+  // endpoint: BidStack's own Settings UI warns its local fallback is dev-only, so the user must supply
+  // wherever they actually deploy/run BidStack's backend.
+  bidstackEndpointUrl: z.string().default(''),
+  bidstackConnected: z.boolean().default(false),
+  // Tool names BidStack's MCP discovery returned at the last successful connect/save — populates the
+  // "Push to CRM" tool picker in Review.tsx so we never guess/hardcode BidStack's tool names.
+  bidstackTools: z.array(z.string()).default([])
 })
 
 export const SettingsSchema = BaseSettingsSchema.refine(
@@ -472,7 +486,10 @@ export const DEFAULT_SETTINGS: Settings = {
   customMeetingApps: [],
   asrCorrections: [],
   cliConnected: {},
-  cliNoticeAck: false
+  cliNoticeAck: false,
+  bidstackEndpointUrl: '',
+  bidstackConnected: false,
+  bidstackTools: []
 }
 
 export const HOTKEY_ACTIONS: HotkeyAction[] = [
@@ -667,6 +684,37 @@ export interface GraphRelated {
   error?: string
   topics: string[]
   notes: { file: string; title: string; via: string[] }[]
+}
+
+// ─── BidStack CRM (MCP push) ───────────────────────────────────────────────
+
+export const McpCrmTestConnectionPayloadSchema = z.object({
+  endpointUrl: z.string().min(1, 'Enter the BidStack MCP endpoint URL.'),
+  apiKey: z.string().min(1, 'Enter the BidStack API key.')
+})
+export type McpCrmTestConnectionPayload = z.infer<typeof McpCrmTestConnectionPayloadSchema>
+
+export const McpCrmSaveConnectionPayloadSchema = McpCrmTestConnectionPayloadSchema
+export type McpCrmSaveConnectionPayload = z.infer<typeof McpCrmSaveConnectionPayloadSchema>
+
+export const McpCrmPushPayloadSchema = z.object({
+  toolName: z.string().min(1, 'Choose a BidStack tool to push to.'),
+  args: z.record(z.string(), z.unknown())
+})
+export type McpCrmPushPayload = z.infer<typeof McpCrmPushPayloadSchema>
+
+/** Result of testing or saving a BidStack MCP connection — mirrors the SDK's listTools() discovery. */
+export interface McpCrmConnectResult {
+  ok: boolean
+  error?: string
+  tools?: string[]
+}
+
+/** Result of pushing to a BidStack MCP tool. */
+export interface McpCrmPushResult {
+  ok: boolean
+  error?: string
+  result?: unknown
 }
 
 export const CaptureResultSchema = z.object({
