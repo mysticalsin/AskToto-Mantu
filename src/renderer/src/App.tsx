@@ -161,18 +161,27 @@ export function App(): JSX.Element {
   // finishes at the end — a renderer crash or force-quit mid-meeting loses everything. Runs regardless of
   // pause (a redundant overwrite of identical content is harmless; skipping it on pause would just widen
   // the loss window right when nothing new is happening anyway, for no real benefit).
+  //
+  // linesRef exists so the interval below can read the LATEST transcript without listen.lines being a
+  // dependency of the effect that creates it. listen.lines is a new array reference on every transcribed
+  // line — if it were a dependency, the interval would be torn down and recreated (restarting its 60s
+  // countdown from zero) every single time someone spoke, so during an actively talkative meeting — the
+  // exact moment autosave matters most — it would rarely if ever reach 60s and actually fire.
+  const autosaveLinesRef = useRef(listen.lines)
+  autosaveLinesRef.current = listen.lines
   useEffect(() => {
     if (!listen.listening) return
     const AUTOSAVE_MS = 60_000
     const iv = setInterval(() => {
-      if (!listen.lines.length) return
-      const title = listen.lines.find((l) => l.speaker === 'them')?.text?.slice(0, 50) || `${mode} meeting`
+      const lines = autosaveLinesRef.current
+      if (!lines.length) return
+      const title = lines.find((l) => l.speaker === 'them')?.text?.slice(0, 50) || `${mode} meeting`
       void window.toto
-        .saveDraftTranscript({ title, mode, startedAt: meetingStartRef.current, lines: listen.lines, recap: '' })
+        .saveDraftTranscript({ title, mode, startedAt: meetingStartRef.current, lines, recap: '' })
         .catch(() => {}) // best-effort — never surface an autosave failure to the user mid-meeting
     }, AUTOSAVE_MS)
     return () => clearInterval(iv)
-  }, [listen.listening, listen.lines, mode])
+  }, [listen.listening, mode])
 
   // Re-derive the "Seen Ns ago" chip label every tick so it ages in real time instead of freezing at
   // whatever value it had when the screenshot was taken. Gated on the chip actually being visible right
