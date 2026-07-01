@@ -12,6 +12,7 @@ jobs:
   release-macos:
     name: macOS release
     runs-on: macos-latest
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -31,6 +32,7 @@ jobs:
   release-windows:
     name: Windows release
     runs-on: windows-latest
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4

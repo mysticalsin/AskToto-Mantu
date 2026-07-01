@@ -14,10 +14,10 @@
     "check:release": "node scripts/check-release.mjs",
     "fetch-models": "node scripts/fetch-models.mjs",
     "predist": "node scripts/fetch-models.mjs",
-    "dist": "electron-vite build && electron-builder --mac",
+    "dist": "electron-vite build && electron-builder --mac --publish never",
     "predist:win": "node scripts/fetch-models.mjs",
-    "dist:win": "electron-vite build && electron-builder --win",
-    "dist:win:appx": "electron-vite build && electron-builder --win appx",
+    "dist:win": "electron-vite build && electron-builder --win --publish never",
+    "dist:win:appx": "electron-vite build && electron-builder --win appx --publish never",
     "prepack": "node scripts/fetch-models.mjs",
     "release": "npm run check:release && node scripts/fetch-models.mjs && electron-vite build && electron-builder --mac --publish always",
     "release:win": "npm run check:release && node scripts/fetch-models.mjs && electron-vite build && electron-builder --win --publish always"
