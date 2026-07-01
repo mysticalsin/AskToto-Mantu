@@ -1590,10 +1590,13 @@ if (!app.requestSingleInstanceLock()) {
     { useSystemPicker: false }
   )
 
-  // Deny every web permission by default; only the main window may use audio media (the Listen mic).
-  // Everything else (geolocation, notifications, camera, clipboard-read, USB, MIDI, etc.) is rejected.
+  // Deny every web permission by default; only the main window may use audio media (the Listen mic) or
+  // write to the system clipboard (Copy Summary / Export JSON / copy-code buttons all need this — it's a
+  // one-way, user-initiated write of text the app itself built, not a snooping vector). clipboard-READ
+  // (reading arbitrary external clipboard content) stays denied along with geolocation, notifications,
+  // camera, USB, MIDI, etc.
   const allowPermission = (wc: Electron.WebContents | null, permission: string): boolean =>
-    permission === 'media' && !!win && wc === win.webContents
+    (permission === 'media' || permission === 'clipboard-sanitized-write') && !!win && wc === win.webContents
   session.defaultSession.setPermissionRequestHandler((wc, permission, callback) =>
     callback(allowPermission(wc, permission))
   )
