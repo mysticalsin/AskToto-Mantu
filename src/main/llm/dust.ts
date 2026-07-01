@@ -195,16 +195,22 @@ export function streamDust(opts: StreamOptions): StreamHandle {
       messageSId = posted.value.sId
       auditLog('dust.conversation', { action: 'reused' })
     } else {
-      const created = await api.createConversation({
-        title: null,
-        visibility: 'unlisted',
-        message: messageBody
-      })
-      // Release the creation gate as soon as this attempt settles — any waiter must not deadlock on a
-      // retry-driven recursive call re-entering this same lock before we free it.
-      if (releaseCreationGate) {
-        ;(releaseCreationGate as () => void)()
-        creationInFlight = null
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      let created: any
+      try {
+        created = await api.createConversation({
+          title: null,
+          visibility: 'unlisted',
+          message: messageBody
+        })
+      } finally {
+        // Release the creation gate no matter how this attempt settles — including a thrown exception,
+        // which the happy-path-only release this replaced would have left permanently pending, deadlocking
+        // every future Dust request in this app session (resetDustConversation never touches this gate).
+        if (releaseCreationGate) {
+          ;(releaseCreationGate as () => void)()
+          creationInFlight = null
+        }
       }
       if (created.isErr()) {
         if (await retryIfAuth(created.error)) return

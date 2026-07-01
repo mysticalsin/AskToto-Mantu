@@ -8,6 +8,7 @@ vi.mock('../logger', () => ({ mainLog: { info: vi.fn(), warn: vi.fn() }, auditLo
 
 const calls = { create: 0, post: 0, get: 0 }
 let convCounter = 0
+let throwOnNextCreate = false // one-shot: simulates createConversation rejecting instead of returning Result.Err
 
 function ok<T>(value: T): { isErr: () => false; value: T } {
   return { isErr: () => false, value }
@@ -17,6 +18,10 @@ vi.mock('@dust-tt/client', () => {
   class DustAPI {
     async createConversation(): Promise<ReturnType<typeof ok>> {
       calls.create++
+      if (throwOnNextCreate) {
+        throwOnNextCreate = false
+        throw new Error('simulated network exception (not a Result.Err)')
+      }
       convCounter++
       const sId = `conv-${convCounter}`
       return ok({ conversation: { sId }, message: { sId: `msg-create-${convCounter}` } })
@@ -77,6 +82,7 @@ describe('Dust conversation continuity (one conversation per meeting)', () => {
     calls.post = 0
     calls.get = 0
     convCounter = 0
+    throwOnNextCreate = false
   })
 
   it('reuses the same conversation for a second sequential message in the same meeting', async () => {
@@ -162,5 +168,20 @@ describe('Dust conversation continuity (one conversation per meeting)', () => {
     } finally {
       Date.now = realNow
     }
+  })
+
+  it('releases the creation gate even when createConversation throws, so the next request does not deadlock', async () => {
+    throwOnNextCreate = true
+    const opts1 = baseOpts()
+    streamDust(opts1)
+    // The thrown exception surfaces as a stream error (fail()), not onDone — confirm it doesn't hang.
+    await expect(waitDone(opts1.handlers)).rejects.toThrow()
+
+    // If the gate leaked (the pre-fix bug), this second call would hang forever waiting on a promise
+    // nothing ever resolves. It must complete normally instead.
+    const opts2 = baseOpts()
+    streamDust(opts2)
+    await waitDone(opts2.handlers)
+    expect(calls.create).toBe(2) // first attempt (threw) + second attempt (succeeded)
   })
 })

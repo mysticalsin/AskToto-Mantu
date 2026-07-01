@@ -21,6 +21,7 @@
 
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
+import { isIPv6 } from 'node:net'
 import { mainLog } from '../logger'
 
 /** Bound every BidStack round-trip so an unreachable/hung server never blocks the main process. */
@@ -36,6 +37,24 @@ const errMsg = (e: unknown): string => (e instanceof Error ? e.message : String(
 // Settings page defaults to http://localhost:4001).
 const BLOCKED_HOSTS = new Set(['169.254.169.254', 'metadata.google.internal', 'metadata.azure.com'])
 
+/**
+ * An IPv4-mapped IPv6 literal (e.g. "::ffff:169.254.169.254", or its hex-compressed form
+ * "::ffff:a9fe:a9fe" — the OS/network stack routes both to the same underlying IPv4 host) would
+ * otherwise bypass BLOCKED_HOSTS entirely, since URL's own hostname string never matches the plain
+ * dotted-decimal form. Returns the embedded IPv4 address if `host` is one of these, else null.
+ */
+function ipv4MappedAddress(host: string): string | null {
+  const dotted = host.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/i)
+  if (dotted) return dotted[1]
+  const hex = host.match(/^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/i)
+  if (hex) {
+    const hi = parseInt(hex[1], 16)
+    const lo = parseInt(hex[2], 16)
+    return `${(hi >> 8) & 0xff}.${hi & 0xff}.${(lo >> 8) & 0xff}.${lo & 0xff}`
+  }
+  return null
+}
+
 /** Reject non-http(s) schemes and known cloud-metadata hosts before any network call is made. */
 function validateEndpointUrl(url: string): string | null {
   let parsed: URL
@@ -47,7 +66,14 @@ function validateEndpointUrl(url: string): string | null {
   if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
     return `"${url}" must be an http or https URL.`
   }
-  if (BLOCKED_HOSTS.has(parsed.hostname.toLowerCase())) {
+  const rawHost = parsed.hostname.toLowerCase()
+  const bareHost = rawHost.startsWith('[') && rawHost.endsWith(']') ? rawHost.slice(1, -1) : rawHost
+  const candidates = [bareHost]
+  if (isIPv6(bareHost)) {
+    const mapped = ipv4MappedAddress(bareHost)
+    if (mapped) candidates.push(mapped)
+  }
+  if (candidates.some((h) => BLOCKED_HOSTS.has(h))) {
     return `"${url}" points at a cloud metadata address, which is never a valid BidStack endpoint.`
   }
   return null

@@ -206,4 +206,23 @@ describe('bidstackClient — against a real local Streamable HTTP mock (not Tony
     expect(r.ok).toBe(false)
     expect(r.error).toMatch(/http or https/i)
   })
+
+  it('refuses IPv4-mapped IPv6 forms of the cloud-metadata address (SSRF denylist bypass)', async () => {
+    // Both forms resolve/route to the same host as 169.254.169.254 — the OS network stack treats an
+    // IPv4-mapped IPv6 literal as that IPv4 address, so a plain-string hostname check alone misses them.
+    const dotted = await connectBidstack('http://[::ffff:169.254.169.254]/latest/meta-data/', API_KEY)
+    expect(dotted.ok).toBe(false)
+    expect(dotted.error).toMatch(/cloud metadata/i)
+
+    const hex = await connectBidstack('http://[::ffff:a9fe:a9fe]/latest/meta-data/', API_KEY)
+    expect(hex.ok).toBe(false)
+    expect(hex.error).toMatch(/cloud metadata/i)
+  })
+
+  it('still allows a legitimate IPv6 localhost endpoint (no over-blocking)', async () => {
+    // Guards against a fix that's too broad and blocks every IPv6 address, not just the mapped-metadata form.
+    const r = await connectBidstack('http://[::1]:1/mcp', API_KEY)
+    expect(r.ok).toBe(false)
+    expect(r.error).not.toMatch(/cloud metadata/i) // refused for being unreachable, not for the SSRF guard
+  })
 })
