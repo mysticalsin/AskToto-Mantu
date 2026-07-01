@@ -436,9 +436,14 @@ export function App(): JSX.Element {
         // record the turn into multi-turn memory when asked (typed screen-asks get follow-up continuity)
         if (id && opts?.record) pendingUserRef.current = { id, q: opts.record }
         return id
-      } catch (e) {
-        setCaptureError(e instanceof Error ? e.message : String(e))
-        return null
+      } catch {
+        // Screen capture failed (permission revoked, no display, a transient ScreenCaptureKit hiccup) —
+        // fall back to a text-only answer instead of blocking the whole ask on a raw IPC error message.
+        // Mirrors assist()'s existing graceful degradation for the in-meeting path; usedScreen naturally
+        // comes back false for a mode:'answer' run, so the UI never claims to have seen a screen it didn't.
+        const id = ask.run({ mode: 'answer', prompt, label: opts?.label, kind: opts?.kind, history: opts?.history })
+        if (id && opts?.record) pendingUserRef.current = { id, q: opts.record }
+        return id
       } finally {
         setCapturing(false)
       }
