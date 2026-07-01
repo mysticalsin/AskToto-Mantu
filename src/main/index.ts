@@ -389,7 +389,20 @@ async function captureScreenshot(): Promise<{ image: string; width: number; heig
   return { image: jpeg.toString('base64'), width: size.width, height: size.height, dispId: disp.id }
 }
 
+/** Thrown by getScreenshot() when Private View is on — lets callers show a specific message instead of a
+ *  generic capture failure. */
+class PrivateViewBlockedError extends Error {
+  constructor() {
+    super('Private View is on — screen capture is blocked. Turn it off to let AskToto see your screen.')
+    this.name = 'PrivateViewBlockedError'
+  }
+}
+
 async function getScreenshot(phase?: string): Promise<{ image: string; width: number; height: number; capturedAt: number }> {
+  // Private View promises AskToto won't look at (or send) the screen while it's on — that has to mean
+  // this app's own capture pipeline refuses to run, not just that OTHER apps can't screen-share our window
+  // (that's the separate, still-active setContentProtection() call on the BrowserWindow itself).
+  if (contentProtectionOn()) throw new PrivateViewBlockedError()
   const disp = screen.getDisplayNearestPoint(screen.getCursorScreenPoint())
   if (shotCache && Date.now() - shotCache.ts < CAPTURE_TTL_MS && shotCache.dispId === disp.id) {
     const { image, width, height, ts } = shotCache
@@ -1430,7 +1443,10 @@ if (!app.requestSingleInstanceLock()) {
     const ASR_BUNDLED =
       existsSync(join(RES_BASE, 'ort', 'ort-wasm-simd-threaded.jsep.wasm')) &&
       existsSync(join(RES_BASE, 'models', 'Xenova', 'whisper-base', 'config.json'))
-    ipcMain.handle(IPC.asrBundled, () => ASR_BUNDLED)
+    ipcMain.handle(IPC.asrBundled, (e) => {
+      assertMainWindow(e)
+      return ASR_BUNDLED
+    })
 
     protocol.handle('asr-model', async (req) => {
       try {

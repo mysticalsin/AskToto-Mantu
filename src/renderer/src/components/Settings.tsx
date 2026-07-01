@@ -2110,6 +2110,7 @@ export function Settings({
   testKey,
   onClose,
   initialTab,
+  notice,
   onQuit,
   onLogout
 }: {
@@ -2120,6 +2121,9 @@ export function Settings({
   testKey: (provider: ProviderId, k: string) => Promise<TestKeyResponse>
   onClose?: () => void
   initialTab?: TabId
+  // Shown as a small banner under the header — e.g. why the user got redirected here (no provider
+  // ready). Without this, a silent tab-open reads as broken rather than as a guided fix.
+  notice?: string
   // Quit / Log out routed through the parent so any in-flight meeting is flushed to disk first.
   // Fall back to the raw IPC if a parent doesn't supply them (keeps the component standalone).
   onQuit?: () => void
@@ -2148,6 +2152,12 @@ export function Settings({
           <X size={16} />
         </button>
       </header>
+
+      {notice && (
+        <div className="no-drag border-b border-[var(--cl-primary)]/30 bg-[var(--cl-primary-soft)] px-3.5 py-2 text-[12px] leading-snug text-[color:var(--cl-foreground)]">
+          {notice}
+        </div>
+      )}
 
       {/* TOP tab bar (Tony: "setting bar at the top") — horizontal, scrolls if narrow */}
       <nav
@@ -2409,7 +2419,13 @@ export function Settings({
                     on={settings.redactSensitive}
                     onChange={(v) => patch({ redactSensitive: v })}
                     disabled={settings.managedKeys.includes('redactSensitive')}
-                  />
+                  >
+                    <div className="mt-1.5 text-[11px] leading-snug text-[color:var(--color-danger)]">
+                      This only scrubs text. Screenshots sent for screen-based questions are NOT redacted —
+                      anything visible on-screen (passwords, IDs, open documents) goes to the provider as-is.
+                      Turn on Private View before capturing a screen you don't want sent.
+                    </div>
+                  </ToggleRow>
                 </Section>
               </div>
             )}
@@ -2476,7 +2492,7 @@ export function Settings({
                   )}
                   <ToggleRow
                     label="Encrypt transcripts at rest"
-                    desc="Locks saved transcripts/notes with your OS keychain so they're unreadable on disk. Trade-off: your Dust agents, recall search, and the knowledge graph can't read encrypted files."
+                    desc="Locks saved transcripts/notes with your OS keychain so they're unreadable on disk. On by default. AskToto's own History, search, and follow-up drafting still work normally — only a separate tool reading the raw files directly (outside AskToto) would be blocked."
                     on={settings.encryptTranscripts}
                     onChange={(v) => patch({ encryptTranscripts: v })}
                     disabled={settings.managedKeys.includes('encryptTranscripts')}

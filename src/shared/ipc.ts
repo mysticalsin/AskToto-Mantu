@@ -303,9 +303,12 @@ export const BaseSettingsSchema = z.object({
   // the final recap/summary + answers are written in this language ('auto' = match the conversation).
   outputLanguage: z.string().max(40).default('auto'),
   summaryLanguage: z.string().max(40).default('auto'), // recap/summary language ('auto' = follow outputLanguage)
-  // Encrypt saved transcripts/notes at rest (OS keychain). Off by default because it stops Dust agents,
-  // recall search, and the knowledge graph from reading the markdown. See main/transcripts.ts.
-  encryptTranscripts: z.boolean().default(false),
+  // Encrypt saved transcripts/notes at rest (OS keychain). On by default: recorded third-party speech
+  // usually lands in a OneDrive-synced folder, so plaintext should be the opt-out, not the opt-in. Turn
+  // this off only if something outside AskToto (a separate Dust/knowledge-graph pipeline pointed directly
+  // at the meetings folder) needs to read the raw markdown — AskToto's own recall/search already decrypts
+  // transparently either way. See main/transcripts.ts.
+  encryptTranscripts: z.boolean().default(true),
   systemPrompt: z.string(),
   // Per-mode system prompts (pre-filled from DEFAULT_MODE_PROMPTS; user edits override). Plug-and-play.
   modePrompts: z.record(z.string(), z.string()).default({}),
@@ -431,7 +434,7 @@ export const DEFAULT_SETTINGS: Settings = {
   graphifyBackend: 'auto',
   outputLanguage: 'auto',
   summaryLanguage: 'auto',
-  encryptTranscripts: false,
+  encryptTranscripts: true,
   systemPrompt:
     'You are AskToto, a fast, sharp desktop assistant living in an always-on overlay. ' +
     'Answer concisely and directly in clean markdown. Lead with the answer. Use code blocks ' +

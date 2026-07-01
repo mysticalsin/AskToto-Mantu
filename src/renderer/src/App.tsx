@@ -111,7 +111,12 @@ export function App(): JSX.Element {
     startedAt: number
   } | null>(null)
   // Which Settings tab to open on (e.g. the bar's mode icon → 'personalize', calendar CTA → 'calendar').
-  const [settingsInitialTab, setSettingsInitialTab] = useState<'personalize' | 'calendar' | undefined>(undefined)
+  const [settingsInitialTab, setSettingsInitialTab] = useState<'personalize' | 'calendar' | 'ai' | undefined>(
+    undefined
+  )
+  // Shown as a banner inside Settings — set when we redirect the user there for a specific reason
+  // (e.g. no provider configured) so the redirect explains itself instead of looking broken.
+  const [settingsNotice, setSettingsNotice] = useState<string | undefined>(undefined)
 
   const mode: ConversationMode = settings?.mode ?? 'general'
   const lastSuggestRef = useRef(0)
@@ -139,13 +144,16 @@ export function App(): JSX.Element {
   }, [listen.listening])
 
   // Re-derive the "Seen Ns ago" chip label every tick so it ages in real time instead of freezing at
-  // whatever value it had when the screenshot was taken. Only runs while there's a capture to age —
-  // no timer sits idle before the first screen-ask of a session.
+  // whatever value it had when the screenshot was taken. Gated on the chip actually being visible right
+  // now (the current answer used the screen) — screenCapturedAt itself is never cleared between asks, so
+  // gating on it alone left this ticking for the rest of the session after a single screen-grounded ask,
+  // force-re-rendering the whole app tree every 500ms long after the chip had stopped showing.
+  const showingScreenChip = view === 'copilot' ? !!suggest.answer?.usedScreen : !!ask.answer?.usedScreen
   useEffect(() => {
-    if (screenCapturedAt == null) return
+    if (screenCapturedAt == null || !showingScreenChip) return
     const iv = setInterval(() => setScreenFreshness(formatScreenFreshness(screenCapturedAt)), 500)
     return () => clearInterval(iv)
-  }, [screenCapturedAt])
+  }, [screenCapturedAt, showingScreenChip])
 
   const manualSave = useCallback(async (): Promise<void> => {
     const a = ask.answer
@@ -338,8 +346,9 @@ export function App(): JSX.Element {
     suggest.run({ mode: 'suggest', transcript: listen.text() })
   }
 
-  const openSettings = useCallback((): void => {
-    setSettingsInitialTab(undefined) // generic open → default tab (programmatic opens set their own first)
+  const openSettings = useCallback((tab?: 'personalize' | 'calendar' | 'ai', notice?: string): void => {
+    setSettingsInitialTab(tab) // generic open (no tab) → default tab; callers can target a specific one
+    setSettingsNotice(notice)
     setView('settings')
     setCollapsed(false)
   }, [])
@@ -349,7 +358,7 @@ export function App(): JSX.Element {
   // LLM request that fails reactively with a red stream error. Returns false → the caller must bail.
   const requireProvider = useCallback((): boolean => {
     if (settings?.providerReady) return true
-    openSettings()
+    openSettings('ai', 'Add an API key or connect a provider here to ask questions.')
     return false
   }, [settings?.providerReady, openSettings])
 
@@ -1046,6 +1055,7 @@ export function App(): JSX.Element {
         clearKey={clearKey}
         testKey={testKey}
         initialTab={settingsInitialTab}
+        notice={settingsNotice}
         onClose={() => setView('answer')}
         onQuit={quitApp}
         onLogout={logOut}
@@ -1058,6 +1068,7 @@ export function App(): JSX.Element {
         onBack={() => setView('answer')}
         onConnectCalendar={() => {
           setSettingsInitialTab('calendar')
+          setSettingsNotice(undefined)
           setView('settings')
           setCollapsed(false)
         }}
@@ -1163,9 +1174,7 @@ export function App(): JSX.Element {
     DEMO === 'answer' ||
     DEMO === 'copilot'
   // 'Viewed screen' chip when the active answer was grounded in a screenshot.
-  const ctxLabel = (view === 'copilot' ? suggest.answer?.usedScreen : ask.answer?.usedScreen)
-    ? screenFreshness
-    : undefined
+  const ctxLabel = showingScreenChip ? screenFreshness : undefined
 
   return (
     <div ref={setRoot} className={['relative flex w-full flex-col gap-2 p-1.5', listen.listening ? 'listening' : ''].join(' ')}>
@@ -1238,6 +1247,7 @@ export function App(): JSX.Element {
             }}
             onSettings={() => {
               setSettingsInitialTab(undefined) // logo-click opens the default tab, not a leftover programmatic one
+              setSettingsNotice(undefined) // ...and never a leftover "why am I here" banner either
               setView((v) => (v === 'settings' ? 'answer' : 'settings'))
               setCollapsed(false)
             }}
@@ -1268,10 +1278,7 @@ export function App(): JSX.Element {
             return (
               <button
                 type="button"
-                onClick={() => {
-                  setView('settings')
-                  setCollapsed(false)
-                }}
+                onClick={() => openSettings('ai', 'Add an API key or connect a provider here to ask questions.')}
                 className="no-drag focus-ring fade-up flex items-center justify-center gap-1.5 rounded-xl border border-[var(--color-accent)]/30 bg-[var(--color-accent)] px-3 py-1.5 text-[11px] font-medium text-white hover:brightness-110"
               >
                 {cta}
