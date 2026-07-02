@@ -18,7 +18,7 @@
 | 5 | ASR/ML engineer | 7 | Strong tiered pipeline with layered fallbacks, but the multilingual story doesn't match the ~99-language positioning and the default ships the weakest model even when the best one is bundled. |
 | 6 | LLM/prompt engineer | 7 | Well-engineered provider layer with three verified defects: default deep tier 400s, recaps see only the last ~16k chars, CLI path ignores the latency budget the live pillar depends on. |
 | 7 | Data/storage engineer | 7 | Excellent write path (atomic, envelope-encrypted, escrowed, crash-drafted); the read side re-decrypts the world per call and the crash-recovery net is unreachable by any real user. |
-| 8 | Build/release engineer | 6 | Unusually complete pipeline for v0.1, riding 4.6% under GitHub's 2 GiB hard limit, publishing draft releases the updater can't see, on EOL Electron 33. |
+| 8 | Build/release engineer | 6 | Unusually complete pipeline for v0.1, riding 4.6% under GitHub's 2 GiB hard limit; the draft-release and EOL-Electron findings are since fixed (`releaseType: release` + preflight gate; Electron 39). |
 | 9 | SRE / reliability engineer | 7 | Strong foundations (atomic writes, failover, backoff, drafts) — but the marquee meeting-copilot failure modes (sleep/wake, tray quit, ASR-crash restart) still lose or hide data. |
 | 10 | Project manager (scope/delivery) | 7 | Pillars complete and verified; the status-documentation layer actively contradicts the code and the only real ship blockers (m8 signing + Azure) sit idle 5 weeks from deadline. |
 | 11 | UX researcher (meeting workflows) | 6 | Strong during-meeting core; every JTBD phase has a real fumble — 4s/7s TTL erases typed answers, one 6-second opt-in window per meeting, failed recaps have no retry. |
@@ -179,12 +179,12 @@
 
 **Findings**
 - **Release artifacts 4.6% under GitHub's 2 GiB hard asset limit, no size gate** — dmg = 2,048,103,604 bytes (`release/latest-mac.yml`); ~95-128 MB headroom. Any growth breaks release upload after a 40-min build. *(high/small, reliability)*
-- **GitHub publish defaults to draft releaseType — auto-update likely never fires** — `electron-builder.yml:105-107`; electron-updater can't see drafts. Add `releaseType: release`. *(high/small, bug-risk)*
+- **GitHub publish defaulted to draft releaseType — since fixed** — `electron-builder.yml` now sets `releaseType: release`, enforced by the check:release preflight gate. *(resolved)*
 - **No packaged-artifact content verification — a modelless Windows build already shipped silently** — `release/AskToto-Setup-0.1.0.exe` is 178.5 MB with no models/asr/ort/asar-unpacked (verified). Add verify-artifact gate. *(high/small, test-gap)*
 - **>2GB Windows NSIS installer never installed on real hardware** — NSIS ~2GB internal limits; build ≠ install. *(high/small, device-compat)*
 - **CI packages 2.2 GB of models and uploads 14.2 GB of artifacts on every push to every branch** — `build.yml:8, 81-88, 102-109`; no cache, 27m50s vs 30m timeout. *(high/small, perf)*
 - **fetch-models pins nothing, verifies nothing** — mutable `main` revision, no hash/Content-Length check (`fetch-models.mjs:36-38, 88-120`). *(medium/small, security)*
-- **Electron 33.4.11 is past end-of-support** — packaged Chromium missing ~a year of CVE fixes; biggest single security lever. *(high/medium, security)*
+- **Electron 33.4.11 was past end-of-support — since fixed: bumped to Electron 39 (Chromium 142 / Node 22, min macOS 12)**. *(resolved)*
 - **Cross-building Windows from macOS silently drops the sherpa-onnx native addon** — only darwin-arm64 in node_modules; no win-arm64 binary exists at all. *(medium/small, device-compat)*
 - **macOS builds arm64-only; update manifest has no x64 entry** — `electron-builder.yml:41-43`; Intel users get nothing. Make it a decision, not an accident. *(medium/medium, device-compat)*
 - **Every release forces up to a 1.9 GiB background download per user; differential path unproven** — `updater.ts:26-27` autoDownload+autoInstallOnAppQuit. *(medium/medium, reliability)*
@@ -192,7 +192,7 @@
 - **21 MB ORT wasm ships twice** (asar + resources/ort) — deliberate safety net for the modelless-build failure; keep or exclude consciously. *(low/small, code-efficiency)*
 - **Build outputs + 2.26 GB of weights churn through OneDrive sync** — point output at a non-synced path. *(low/small, reliability)*
 
-**Quick wins:** releaseType: release; artifact size/content assertions in check-release; CI caching + gating + slim artifacts; pin HF downloads; move build output off OneDrive.
+**Quick wins:** releaseType: release (done); artifact size/content assertions in check-release; CI caching + gating + slim artifacts; pin HF downloads; move build output off OneDrive.
 **Strategic:** cut the artifact under ~1 GB (q4f16 large model or in-app 'accurate' download, parakeet.ts already has the pattern); prove the update loop end-to-end once (draft visibility, differential size, real Windows install, Intel-Mac story); Electron currency policy with the Playwright harness as regression net.
 
 ---
@@ -218,9 +218,9 @@
 ### 10. Project manager — scope/delivery (7/10)
 
 **Findings**
-- **README makes three false claims** — "not a git repository yet" (`README.md:126`), "~40 MB Whisper download on first Listen" (`:125` — actually ~1.3GB bundled offline), "14 providers" (`:10, :81` — 17 registered). First document Mantu IT reads for the m8 approval. *(high/small, knowledge-pipeline)*
-- **production-readiness/ presents a stale NOT READY verdict as current** — dated 2026-06-27, cites "repo not git-initialised", "59 tests" (now 287); linked as authoritative from README.md:119. Re-run or stamp as snapshot. *(high/medium, knowledge-pipeline)*
-- **REMAINING.md lists shipped work as open** — Parakeet checklist unchecked under a DONE header (`:30, :48-54`); flush-on-stop listed as missing but shipped. *(medium/small, knowledge-pipeline)*
+- **README makes three false claims** — "not a git repository yet" (`README.md:126`), "~40 MB Whisper download on first Listen" (`:125` — actually ~1.3GB bundled offline), "14 providers" (`:10, :81` — 17 registered). First document Mantu IT reads for the m8 approval. *(high/small, knowledge-pipeline)* *(since fixed — 2026-07-02 docs sweep corrected all three.)*
+- **production-readiness/ presents a stale NOT READY verdict as current** — dated 2026-06-27, cites "repo not git-initialised", "59 tests" (now 287); linked as authoritative from README.md:119. Re-run or stamp as snapshot. *(high/medium, knowledge-pipeline)* *(since fixed — README now labels it a superseded snapshot pointing to docs/audit/current-state.md.)*
+- **REMAINING.md lists shipped work as open** — Parakeet checklist unchecked under a DONE header (`:30, :48-54`); flush-on-stop listed as missing but shipped. *(medium/small, knowledge-pipeline)* *(since fixed — duplicate checklist pruned, stale claims corrected.)*
 - **Agenda 'Connect Outlook calendar' is a dead-end CTA for every user today** — Azure unprovisioned; check `authStatus().configured` on mount (`AgendaView.tsx:73-87, 131-146`). *(medium/small, ux-behavior)*
 - **Tray quit / window close silently loses an in-flight meeting** — accepted residual worth un-accepting (`asktoto-hardening-backlog.md:55`); corroborates SRE. *(medium/medium, reliability)*
 - **iOS companion is an unowned fourth surface** — drifted provider counts (14 vs 12 vs 17), no note sync, no CI. Freeze labeled experimental until desktop v1.0 (recommended). *(medium/medium, positioning)*
