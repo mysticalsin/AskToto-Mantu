@@ -2,7 +2,7 @@
 
 Goal: `goal-2026-06-28-asktoto-cluely-competitor` (deadline 2026-08-09). This is the resume-here list of
 what is NOT yet done. Everything else (the 3 UX P0s, transcription engine, system-audio fix, a11y core,
-capstone-audited code) is shipped + verified. Updated 2026-06-28.
+capstone-audited code) is shipped + verified. Updated 2026-07-02.
 
 ## 🔒 Human-gated — cannot be coded, need someone to act
 
@@ -51,16 +51,20 @@ Remaining polish (not blockers):
       default because Parakeet is European-only and would mis-handle non-European speech.
 
 ### Audio pipeline fixes (M) — applies to either engine
-- [ ] **Flush-on-stop**: the last ~6s of speech is dropped at `stop()` (worklet residual buffer never
-      emitted). Needs a flush handshake on the realtime audio thread + keep `liveRef` alive until the final
-      window transcribes + fold it into the recap. Deferred originally because a racy flush risks worse bugs;
-      needs live-audio verification.
+- [x] **Flush-on-stop** ✅ DONE — `stop()` posts a `flush` message to each open worklet, then
+      `waitForDrain()` polls every 60ms (4s ceiling) until the queue drains and no decode is in flight
+      before tearing down, so the final window commits instead of being dropped.
+      `src/renderer/src/lib/listen.ts:882-957`.
 - [ ] **VAD segmentation** (replace fixed 6s windows) so cuts land on speech pauses, not mid-word — removes
       the boundary-word artifact. Use silero-vad (`@ricky0123/vad-web` in renderer, or sherpa VAD in main).
 - [ ] Carry ~400ms overlap / previous-segment context across windows.
 
 ### m4 — Onboarding & activation (M)  — IN PROGRESS this session (primer step added)
-- [ ] Permission pre-flight with deep-links to System Settings + a visible mic-only fallback chip.
+- [x] Permission pre-flight with deep-links to System Settings ✅ DONE — Onboarding's step-5 readiness
+      checklist (`CheckRow`) shows live mic/screen-recording status with an "Open System Settings" deep-link
+      when denied. `src/renderer/src/components/Onboarding.tsx:58-94` (component) + `:282,:289` (wiring).
+- [ ] A visible mic-only fallback chip for an active Listen session — today a denied/failed system-audio
+      capture reuses the generic danger-styled error banner, not a dedicated chip.
 - [ ] Reorder Settings "AI" so the active provider's **key field is first** with inline auto-verify;
       demote the Dust/CLI wall to a collapsed disclosure.
 
@@ -81,7 +85,8 @@ Remaining polish (not blockers):
 ## P2 nits from the capstone audit (low priority, deferred)
 - [ ] Abort/cancel suppression in `state.ts` uses a substring regex — could swallow a genuine network error
       whose message contains "abort"/"cancel". Gate on a real user-cancel flag tagged by the main process.
-- [ ] `getSettings()` does 2 managed-config disk reads per call (locked-keys-on-read) — cache if it ever
-      shows on a hot path.
+- [x] `getSettings()` disk reads ✅ DONE — mtime-keyed `_settingsCache` (user/managed/admin settings.json)
+      short-circuits the decrypt/parse/validate path unless a file actually changed, with explicit
+      invalidation in `setSettings`/`setApiKey`/`clearApiKey`. `src/main/store.ts:207-234`.
 - [ ] `display-media` handler now grants a screen **video** source for macOS loopback (renderer drops it
       instantly). Gated (armed + main-frame + origin); revisit if a non-screen-capture loopback path appears.
