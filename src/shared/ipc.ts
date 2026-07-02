@@ -83,6 +83,7 @@ export const IPC = {
   hotkey: 'hotkey',
   meetingDetected: 'meeting:detected',
   permissionsGet: 'permissions:get',
+  permissionsOpenSettings: 'permissions:openSettings',
   listeningState: 'listening:state',
   asrBundled: 'asr:bundled',
   cliDetect: 'cli:detect',
@@ -387,6 +388,10 @@ export const BaseSettingsSchema = z.object({
   asrCorrections: z.array(z.object({ from: z.string().min(1).max(80), to: z.string().max(80) })).max(100).default([]),
   // CLI provider connection state. Keyed by ProviderId ('claude-cli', 'codex-cli').
   cliConnected: z.record(z.string(), z.boolean()).default({}),
+  // Epoch ms of the last Dust CLI token import. Gates the startup eager refresh: while the ~1h OAuth
+  // token is still fresh, launch does NOT touch the Dust CLI keychain item (each `security` read can
+  // cost a macOS keychain password prompt on identity-unstable dev builds). 0 = never imported.
+  dustTokenMintedAt: z.number().default(0),
   // Whether the user has acknowledged the CLI integration notice banner.
   cliNoticeAck: z.boolean().default(false),
   // BidStack 360° CRM — MCP push (Settings → CLI Integration). The API key itself is NOT stored here;
@@ -510,6 +515,7 @@ export const DEFAULT_SETTINGS: Settings = {
   customMeetingApps: [],
   asrCorrections: [],
   cliConnected: {},
+  dustTokenMintedAt: 0,
   cliNoticeAck: false,
   bidstackEndpointUrl: '',
   bidstackConnected: false,
@@ -523,6 +529,10 @@ export const HOTKEY_ACTIONS: HotkeyAction[] = [
   'toggle-listen',
   'capture',
   'factcheck',
+  'whatnext',
+  'explain',
+  'summarize',
+  'spotlight-ref',
   'scroll-up',
   'scroll-down',
   'scroll-left',
@@ -537,6 +547,12 @@ export type HotkeyAction =
   | 'toggle-listen'
   | 'capture'
   | 'factcheck'
+  // The remaining Quick Action chips (QuickActions.tsx's QuickKind) + Spotlight Ref — previously only
+  // 'factcheck' had a hotkey slot even though all four chips + Spotlight Ref are equally reachable by click.
+  | 'whatnext'
+  | 'explain'
+  | 'summarize'
+  | 'spotlight-ref'
   | 'scroll-up'
   | 'scroll-down'
   | 'scroll-left'
@@ -551,6 +567,12 @@ export const DEFAULT_SHORTCUTS: Record<HotkeyAction, string> = {
   'toggle-listen': 'CommandOrControl+Shift+L',
   capture: 'CommandOrControl+Shift+S',
   factcheck: 'CommandOrControl+Shift+F',
+  // Unassigned by default (no free, uncontested global combo obviously reads as "what to say next" /
+  // "explain" / "summarize" / "spotlight ref") — the Settings row still lets a user bind one.
+  whatnext: '',
+  explain: '',
+  summarize: '',
+  'spotlight-ref': '',
   'scroll-up': 'CommandOrControl+Alt+Up',
   'scroll-down': 'CommandOrControl+Alt+Down',
   'scroll-left': 'CommandOrControl+Alt+Left',

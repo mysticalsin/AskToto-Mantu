@@ -496,6 +496,10 @@ const shortcutActions: Record<string, () => void> = {
   'toggle-listen': () => sendHotkey('toggle-listen'),
   capture: () => sendHotkey('capture'),
   factcheck: () => sendHotkey('factcheck'),
+  whatnext: () => sendHotkey('whatnext'),
+  explain: () => sendHotkey('explain'),
+  summarize: () => sendHotkey('summarize'),
+  'spotlight-ref': () => sendHotkey('spotlight-ref'),
   'scroll-up': () => moveBy(0, -60),
   'scroll-down': () => moveBy(0, 60),
   'scroll-left': () => moveBy(-60, 0),
@@ -741,6 +745,15 @@ function registerIpc(): void {
     assertMainWindow(e)
     return getPlatformPermissions()
   })
+  // Deep-link to the relevant macOS Privacy pane once a permission has been denied — getUserMedia never
+  // re-prompts after a Deny, so without this a denied user has no in-app path back to granting it. The
+  // x-apple.systempreferences scheme only exists on macOS; a no-op elsewhere.
+  ipcMain.handle(IPC.permissionsOpenSettings, (e, kind: unknown) => {
+    assertMainWindow(e)
+    if (process.platform !== 'darwin') return
+    const pane = kind === 'screenRecording' ? 'Privacy_ScreenCapture' : 'Privacy_Microphone'
+    void shell.openExternal(`x-apple.systempreferences:com.apple.preference.security?${pane}`)
+  })
 
   ipcMain.handle(IPC.settingsSet, (e, patch) => {
     assertMainWindow(e)
@@ -810,7 +823,7 @@ function registerIpc(): void {
     const s = await refreshDustCliSession()
     if (!s.ok || !s.token || !s.workspaceId) return { ok: false, error: s.error }
     setApiKey('dust', s.token)
-    setSettings({ dustWorkspaceId: s.workspaceId, dustBaseUrl: s.baseUrl || 'https://dust.tt' })
+    setSettings({ dustWorkspaceId: s.workspaceId, dustBaseUrl: s.baseUrl || 'https://dust.tt', dustTokenMintedAt: Date.now() })
     return { ok: true, workspaceId: s.workspaceId, baseUrl: s.baseUrl }
   })
 
@@ -1155,7 +1168,7 @@ function registerIpc(): void {
                 if (!fresh.ok || !fresh.token || !fresh.workspaceId) return null
                 setApiKey('dust', fresh.token)
                 const baseUrl = fresh.baseUrl || 'https://dust.tt'
-                setSettings({ dustWorkspaceId: fresh.workspaceId, dustBaseUrl: baseUrl })
+                setSettings({ dustWorkspaceId: fresh.workspaceId, dustBaseUrl: baseUrl, dustTokenMintedAt: Date.now() })
                 auditLog('dust.token.refreshed', {})
                 return { apiKey: fresh.token, workspaceId: fresh.workspaceId, baseURL: baseUrl }
               }
@@ -1696,12 +1709,25 @@ if (!app.requestSingleInstanceLock()) {
   // this costs one prompt ever, not one per restart. Only bothers if Dust was connected before; best-effort
   // and fully silent on failure — the existing lazy on-401 refresh (refreshDustAuth above) still covers it
   // if this doesn't run or doesn't succeed.
-  if (process.platform === 'darwin' && hasApiKey('dust')) {
+  // Skip the eager refresh while the imported token is still fresh (<45 min of its ~1h life): the
+  // keychain read behind refreshDustCliSession can cost a macOS keychain password prompt on builds
+  // whose code identity churns (unsigned dev builds), and a fresh token has nothing to gain from it.
+  // The lazy on-401 refresh (refreshDustAuth above) still self-heals expiry invisibly either way.
+  const DUST_TOKEN_FRESH_MS = 45 * 60 * 1000
+  if (
+    process.platform === 'darwin' &&
+    hasApiKey('dust') &&
+    Date.now() - getSettings().dustTokenMintedAt > DUST_TOKEN_FRESH_MS
+  ) {
     void refreshDustCliSession()
       .then((fresh) => {
         if (!fresh.ok || !fresh.token || !fresh.workspaceId) return
         setApiKey('dust', fresh.token)
-        setSettings({ dustWorkspaceId: fresh.workspaceId, dustBaseUrl: fresh.baseUrl || 'https://dust.tt' })
+        setSettings({
+          dustWorkspaceId: fresh.workspaceId,
+          dustBaseUrl: fresh.baseUrl || 'https://dust.tt',
+          dustTokenMintedAt: Date.now()
+        })
         auditLog('dust.token.refreshed', { at: 'startup' })
       })
       .catch(() => {
@@ -1709,10 +1735,16 @@ if (!app.requestSingleInstanceLock()) {
       })
   }
 
-  runStep('registerIpc', registerIpc)
+  // createTray/registerShortcuts stay ahead of createWindow (see the boot-order comment above) — but
+  // registerIpc has no such dependency: every ipcMain.handle closure inside it reads `win`/`tray` lazily
+  // at INVOCATION time (assertMainWindow etc.), never at registration time, and the renderer can't issue
+  // its first IPC call before its own <script> has executed anyway. Moving it after createWindow lets the
+  // OS start loading/compositing the renderer a little earlier instead of waiting behind ~60 synchronous
+  // ipcMain.handle registrations first.
   runStep('createTray', createTray)
   runStep('registerShortcuts', registerShortcuts)
   runStep('createWindow', createWindow)
+  runStep('registerIpc', registerIpc)
   runStep('registerScreenListeners', registerScreenListeners)
   runStep('startMeetingPoller', startMeetingPoller)
   runStep('startMeetingNotifier', startMeetingNotifier)
