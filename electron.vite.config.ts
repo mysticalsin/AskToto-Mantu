@@ -17,7 +17,13 @@ export default defineConfig({
     // Bundle zod into the preload (a sandboxed preload cannot require() externalized deps).
     plugins: [externalizeDepsPlugin({ exclude: ['zod'] })],
     build: {
-      rollupOptions: { input: { index: resolve(__dirname, 'src/preload/index.ts') } }
+      rollupOptions: {
+        input: {
+          index: resolve(__dirname, 'src/preload/index.ts'),
+          // Minimal preload for the Mantu Intelligence dashboard window (see src/main/intelligence.ts).
+          intelligence: resolve(__dirname, 'src/preload/intelligence.ts')
+        }
+      }
     },
     resolve: {
       alias: { '@shared': resolve(__dirname, 'src/shared') }

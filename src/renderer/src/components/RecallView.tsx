@@ -79,60 +79,62 @@ function fmtTime(iso: string): string {
 // ---------------------------------------------------------------------------
 
 function GraphBar(): JSX.Element | null {
-  const [status, setStatus] = useState<GraphStatus | null>(null)
+  // Mantu Intelligence — the meeting brain (people, accounts, deals, win/loss reasons, graph).
+  // Replaces the old graphify note-graph as the "open graph" surface in History.
+  const [brain, setBrain] = useState<import('@shared/brain').BrainStatus | null>(null)
   const [busy, setBusy] = useState(false)
-  const refresh = (): void => void window.toto.graphifyStatus().then(setStatus)
-  useEffect(refresh, [])
+  const [error, setError] = useState<string | null>(null)
+  useEffect(() => {
+    void window.toto.brainStatus().then(setBrain).catch(() => {})
+  }, [])
 
-  if (!status || !status.enabled) return null
-
-  if (!status.installed) {
-    return (
-      <div className="rounded-xl border border-[var(--color-hair-soft)] bg-white/[0.03] px-3 py-2 text-[11px] text-[color:var(--color-ink-2)]">
-        Knowledge graph needs graphify. Run{' '}
-        <code className="rounded bg-white/[0.08] px-1">pip install graphifyy</code> (or{' '}
-        <code className="rounded bg-white/[0.08] px-1">uv tool install graphifyy</code>), then Rebuild.
-      </div>
-    )
-  }
-
-  const rebuild = async (): Promise<void> => {
+  const backfill = async (): Promise<void> => {
     setBusy(true)
-    setStatus(await window.toto.graphifyRebuild())
-    setBusy(false)
+    setError(null)
+    try {
+      await window.toto.brainBackfill()
+      setBrain(await window.toto.brainStatus())
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setBusy(false)
+    }
   }
 
+  const openDashboard = async (): Promise<void> => {
+    const r = await window.toto.brainOpenDashboard().catch((e) => ({ ok: false, error: String(e) }))
+    if (!r.ok) setError(r.error || 'Could not open Mantu Intelligence.')
+  }
+
+  const backfilling = !!brain?.backfill?.running
   return (
     <div className="flex items-center justify-between rounded-xl border border-[var(--color-hair-soft)] bg-white/[0.03] px-3 py-2">
       <div className="flex items-center gap-1.5 text-[11px] text-[color:var(--color-ink-2)]">
         <Network size={12} className="text-[var(--color-accent)]" />
-        {busy || status.building ? (
-          'Building knowledge graph…'
-        ) : status.hasGraph ? (
+        {error ? (
+          <span className="text-[var(--color-danger)]">{error}</span>
+        ) : backfilling ? (
+          <>Building your brain… {brain?.backfill?.done ?? 0}/{brain?.backfill?.total ?? 0} meetings</>
+        ) : brain && brain.meetings > 0 ? (
           <>
-            Graph · {status.nodes ?? 0} nodes · {status.edges ?? 0} links
-            {status.backend ? ` · ${status.backend}` : ''}
+            Intelligence · {brain.meetings} meetings · {brain.people} people · {brain.accounts} accounts
+            {brain.deals > 0 ? ` · ${brain.deals} deals` : ''}
           </>
         ) : (
-          'No graph yet. Build it from your notes.'
+          'Mantu Intelligence — build a brain from your meetings.'
         )}
       </div>
       <div className="flex items-center gap-1">
         <TextButton
-          onClick={rebuild}
-          disabled={busy || status.building}
-          title="Rebuild the graph from your notes"
+          onClick={() => void backfill()}
+          disabled={busy || backfilling}
+          title="Index every meeting (past + vault) into the brain"
         >
-          <RefreshCw size={11} className={busy || status.building ? 'animate-spin' : ''} /> Rebuild
+          <RefreshCw size={11} className={busy || backfilling ? 'animate-spin' : ''} /> Index meetings
         </TextButton>
-        {status.hasGraph && (
-          <TextButton
-            onClick={() => void window.toto.graphifyOpenGraph()}
-            title="Open the interactive graph"
-          >
-            <ExternalLink size={11} /> Open graph
-          </TextButton>
-        )}
+        <TextButton onClick={() => void openDashboard()} title="Open the Mantu Intelligence dashboard">
+          <ExternalLink size={11} /> Mantu Intelligence
+        </TextButton>
       </div>
     </div>
   )

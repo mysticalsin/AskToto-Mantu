@@ -1,0 +1,30 @@
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+node_modules
+dist
+dist-ssr
+*.local
+
+# Real deal data (client quotes, stakeholder names, commercial terms) — never committed. Only the
+# placeholder data.json (is_placeholder:true) belongs in git. Regenerate real data locally via
+# `node scripts/build-data.mjs`, which reads straight from the vault.
+public/data.json
+.confidentiality-pass.json
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?

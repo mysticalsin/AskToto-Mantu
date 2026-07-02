@@ -1,0 +1,51 @@
+@import "tailwindcss";
+
+@theme {
+  --color-mantu: #6600ae;
+  --color-mantu-light: #9645d6;
+  --color-mantu-dark: #4a007d;
+  --color-mantu-bg: #16091f;
+  --color-mantu-surface: #1f0f2b;
+  --color-mantu-surface-2: #2a1638;
+  --color-mantu-border: #3a2249;
+
+  --color-band-positive: #35c98f;
+  --color-band-stalled: #e0a836;
+  --color-band-negative: #e05a6b;
+
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--color-mantu-bg);
+  color: #ece6f2;
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+::selection {
+  background: var(--color-mantu);
+  color: white;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track {
+  background: var(--color-mantu-bg);
+}
+::-webkit-scrollbar-thumb {
+  background: var(--color-mantu-border);
+  border-radius: 6px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--color-mantu-light);
+}
