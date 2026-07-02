@@ -30,4 +30,22 @@ describe('isNonSpeechLine', () => {
     expect(isNonSpeechLine('Thanks for joining, let us start')).toBe(false)
     expect(isNonSpeechLine('I think [name] should own this')).toBe(false) // bracket mid-line, not whole-line
   })
+
+  it('keeps short real reactions that carry intonation ("?"/"!"), even when the bare word is a phantom', () => {
+    // A trailing "?" or "!" signals a genuine short reaction (an answer or an emphatic acknowledgment),
+    // unlike the flat, punctuation-less (or period-terminated) filler a hallucinating model emits on
+    // silence — so these must survive the filter and reach talkStats.
+    expect(isNonSpeechLine('OK?')).toBe(false)
+    expect(isNonSpeechLine('Bye?')).toBe(false)
+    expect(isNonSpeechLine('Okay!')).toBe(false)
+    expect(isNonSpeechLine('Thanks!')).toBe(false)
+  })
+
+  it('still drops the flat/period-terminated phantom shapes that are true ASR hallucinations', () => {
+    expect(isNonSpeechLine('ok')).toBe(true)
+    expect(isNonSpeechLine('Okay.')).toBe(true)
+    expect(isNonSpeechLine('bye')).toBe(true)
+    expect(isNonSpeechLine('Thank you.')).toBe(true) // repeated hallucination on silence
+    expect(isNonSpeechLine('thanks')).toBe(true)
+  })
 })

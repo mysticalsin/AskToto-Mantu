@@ -19,6 +19,11 @@ export function isNonSpeechLine(text: string): boolean {
   const trimmed = text.trim()
   if (trimmed === '') return true
   if (CAPTION.test(trimmed)) return true
-  const norm = trimmed.toLowerCase().replace(/[.!?\s]+$/g, '')
+  // Strip a trailing period (and whitespace) before matching the phantom set — but NOT a trailing "?"
+  // or "!". A hallucinated phantom is flat filler the model tacks onto silence ("Thank you.", "okay.")
+  // and is never spoken with real intonation, whereas a genuine short reaction from the other side
+  // ("Ok?", "Bye?", "Okay!") keeps that punctuation. Leaving "?"/"!" in place means those real
+  // utterances no longer normalize down to a bare PHANTOM entry, so they pass through as real speech.
+  const norm = trimmed.toLowerCase().replace(/[.\s]+$/g, '')
   return PHANTOM.has(norm)
 }

@@ -28,29 +28,41 @@ function formatDurationMin(min: number): string {
   return m === 0 ? `${h}h` : `${h}h ${m}m`
 }
 
-/** Group an array of MeetingSummary by their date field (YYYY-MM-DD string). */
+// Local (not UTC) calendar-day key for a timestamp, as "YYYY-MM-DD" — see the identical helper (and its
+// full rationale) in RecallView.tsx, which owns this logic. Truncating the raw ISO instant to its first
+// 10 characters grabs the UTC date, which is a different calendar day from the local one for roughly
+// half of every 24h cycle in any timezone west of UTC, so a meeting saved moments ago could key under
+// "yesterday". `toLocaleDateString('en-CA')` formats as plain YYYY-MM-DD using the LOCAL timezone.
+function localDateKey(dateStr: string): string {
+  const d = new Date(dateStr)
+  if (isNaN(d.getTime())) return dateStr.slice(0, 10)
+  return d.toLocaleDateString('en-CA')
+}
+
+/** Group an array of MeetingSummary by their LOCAL calendar day. */
 function groupByDate(meetings: import('@shared/ipc').MeetingSummary[]): [string, import('@shared/ipc').MeetingSummary[]][] {
   const map = new Map<string, import('@shared/ipc').MeetingSummary[]>()
   for (const m of meetings) {
-    const d = m.date.slice(0, 10) // normalise to YYYY-MM-DD
+    const d = localDateKey(m.date)
     if (!map.has(d)) map.set(d, [])
     map.get(d)!.push(m)
   }
   return Array.from(map.entries())
 }
 
-function friendlyDate(dateStr: string): string {
-  try {
-    const d = new Date(dateStr)
-    const today = new Date()
-    const yesterday = new Date(today)
-    yesterday.setDate(today.getDate() - 1)
-    if (d.toDateString() === today.toDateString()) return 'Today'
-    if (d.toDateString() === yesterday.toDateString()) return 'Yesterday'
-    return d.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' })
-  } catch {
-    return dateStr
-  }
+// `dateKey` is a LOCAL "YYYY-MM-DD" string from localDateKey/groupByDate — compared as a plain string
+// against today's/yesterday's own local keys (computed the same way), so the comparison never re-enters
+// ISO/UTC date parsing. The fallback display date is built from the key's numeric y/m/d via the
+// `Date(y, m, d)` constructor, which — unlike `new Date("YYYY-MM-DD")` — constructs local midnight.
+function friendlyDate(dateKey: string): string {
+  const [y, m, d] = dateKey.split('-').map(Number)
+  if (!y || !m || !d) return dateKey
+  const today = new Date()
+  if (dateKey === today.toLocaleDateString('en-CA')) return 'Today'
+  const yesterday = new Date(today)
+  yesterday.setDate(today.getDate() - 1)
+  if (dateKey === yesterday.toLocaleDateString('en-CA')) return 'Yesterday'
+  return new Date(y, m - 1, d).toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' })
 }
 
 function meetingTime(dateStr: string): string {
