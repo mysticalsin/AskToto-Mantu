@@ -51,6 +51,15 @@ import {
 } from './store'
 import { createStream } from './llm'
 import { resetDustConversation } from './llm/dust'
+import { enqueueIngest, startBackfill, brainBackfillProgress } from './brain/ingest'
+import {
+  readIndex as readBrainIndex,
+  readGraph as readBrainGraph,
+  readPerson as readBrainPerson,
+  readAccount as readBrainAccount,
+  readDeal as readBrainDeal,
+  listEntities as listBrainEntities
+} from './brain/store'
 import { buildSystem } from './personas'
 import { initLogging, mainLog, auditLog } from './logger'
 import { authStatus, signIn as authSignIn, signOut as authSignOut, requireAuth } from './auth'
@@ -1264,7 +1273,47 @@ function registerIpc(): void {
       encrypted: !!getSettings().encryptTranscripts
     })
     scheduleRebuild() // refresh the knowledge graph with the new note (debounced; no-op if disabled)
+    enqueueIngest(r.path) // Mantu Intelligence brain — background extraction; never blocks the save
     return r
+  })
+
+  // --- Mantu Intelligence brain (see src/main/brain/) ---
+  ipcMain.handle(IPC.brainStatus, (e) => {
+    assertMainWindow(e)
+    if (!requireAuth()) return null
+    const s = getSettings()
+    const idx = readBrainIndex(s)
+    const graph = readBrainGraph(s)
+    return {
+      meetings: Object.values(idx.ingested).filter((v) => v.ok).length,
+      people: listBrainEntities(s, 'person').length,
+      accounts: listBrainEntities(s, 'account').length,
+      deals: listBrainEntities(s, 'deal').length,
+      nodes: graph.nodes.length,
+      edges: graph.edges.length,
+      warnings: idx.warnings.length,
+      backfill: brainBackfillProgress()
+    }
+  })
+  ipcMain.handle(IPC.brainBackfill, (e) => {
+    assertMainWindow(e)
+    if (!requireAuth()) throw new Error('Not signed in.')
+    const r = startBackfill()
+    auditLog('brain.backfill.start', { queued: r.queued })
+    return r
+  })
+  // Full assembled dataset for the Mantu Intelligence dashboard (decrypted in main when needed).
+  ipcMain.handle(IPC.brainRead, (e) => {
+    assertMainWindow(e)
+    if (!requireAuth()) throw new Error('Not signed in.')
+    const s = getSettings()
+    return {
+      index: readBrainIndex(s),
+      graph: readBrainGraph(s),
+      people: listBrainEntities(s, 'person').map((slug) => readBrainPerson(s, slug)).filter(Boolean),
+      accounts: listBrainEntities(s, 'account').map((slug) => readBrainAccount(s, slug)).filter(Boolean),
+      deals: listBrainEntities(s, 'deal').map((slug) => readBrainDeal(s, slug)).filter(Boolean)
+    }
   })
 
   // Periodic best-effort snapshot of an IN-PROGRESS meeting (renderer calls this every ~60s while
