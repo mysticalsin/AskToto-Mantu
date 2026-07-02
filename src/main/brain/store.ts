@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readdirSync } from 'node:fs'
+import { existsSync, mkdirSync, readdirSync, rmSync } from 'node:fs'
 import { join, basename } from 'node:path'
 import type { Settings } from '@shared/ipc'
 import {
@@ -111,4 +111,24 @@ export function listMeetingExtractions(s: Settings): string[] {
   return readdirSync(dir)
     .filter((f) => f.endsWith('.json'))
     .map((f) => basename(f, '.json'))
+}
+
+/**
+ * Erase the entire `.brain/` store — every meeting extraction, entity file, the graph, and the index.
+ *
+ * Part of "Delete all AskToto data": the brain IS the knowledge graph now (the old userData/graph
+ * artifacts are legacy), and it holds the most sensitive derived data — named people, verbatim
+ * commitment quotes, stance trails. A wipe that leaves it on disk would break the dialog's promise
+ * that "every transcript, note, and the knowledge graph" is removed. Best-effort: never throws, so a
+ * locked file can't abort the surrounding meeting wipe. Returns whether the directory is gone.
+ */
+export function purgeBrain(settings: Settings): { ok: boolean } {
+  const root = brainDir(settings)
+  try {
+    if (existsSync(root)) rmSync(root, { recursive: true, force: true })
+    return { ok: !existsSync(root) }
+  } catch (e) {
+    console.warn('[brain] purgeBrain: could not remove', root, e)
+    return { ok: false }
+  }
 }
