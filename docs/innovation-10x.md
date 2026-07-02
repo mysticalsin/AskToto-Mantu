@@ -77,5 +77,13 @@ is a stepping stone to delegated attendance.
   meeting-cited slice of the brain (cheap slug-token matching, bounded, answer-mode only); it rides the
   per-turn user text (`shared.ts`) so it never breaks the prompt cache; `GROUNDING_RAIL` now demands
   exact source-meeting attribution and a "no past meetings on record" line when the brain is silent.
-- **#2, #4, #5, #6, #7, #8** — next build wave, in that order (2 and 4 feed off 1's data).
+- **#4 Silence Detector** — shipped. `src/shared/silence.ts` `computeSilence(extractions, now)` is a pure,
+  deterministic window-comparison over each account's topic/people/sentiment timeline: dropped themes
+  (ranked by prior persistence), vanished champions, cooling sentiment, or a relationship gone fully dark.
+  Rendered as the "Going quiet" rail in the Intelligence dashboard. No calendar dependency — it runs
+  entirely on the longitudinal brain, the exact signal a transcript-only tool structurally cannot compute.
+- **#2 Ambush Briefing** — BLOCKED on counterparty identity: the meeting-detected event carries only the
+  app (Teams/Zoom), not who is in the room, and calendar (Azure) is dormant. Deferred until calendar is
+  provisioned or early-transcript participant inference lands; building it now would brief on nobody.
+- **#5, #6, #7, #8** — next build wave.
 - **#9, #10** — after the brain accumulates volume (they need corpus density to shine).
