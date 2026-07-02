@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState, type ReactNode } from 'react'
+import { useEffect, useId, useRef, useState, type ComponentType, type ReactNode, type RefObject } from 'react'
 import {
   Check,
   ExternalLink,
@@ -12,11 +12,9 @@ import {
   AlertCircle,
   Trash2,
   Loader2,
-  Heart,
   Cpu,
   Wand2,
   ShieldCheck,
-  Keyboard,
   Info,
   X,
   Search,
@@ -27,19 +25,44 @@ import {
   Upload,
   RotateCcw,
   Trash,
-  Network
+  Network,
+  Calendar,
+  Bell,
+  User,
+  MoreHorizontal,
+  Plus,
+  ArrowUp,
+  ArrowDown,
+  ArrowLeft,
+  ArrowRight,
+  MessageSquare,
+  MessageSquareQuote,
+  Lightbulb,
+  AlignLeft,
+  FileSearch,
+  Camera,
+  Eye,
+  Settings2,
+  type LucideIcon
 } from 'lucide-react'
 import {
   DEFAULT_SHORTCUTS,
   HOTKEY_ACTIONS,
+  BUILTIN_MODE_LABELS,
+  MODE_GROUPS,
+  modeLabel,
   type PublicSettings,
   type Profile,
   type TestKeyResponse,
   type DustAgent,
   type ConversationMode,
+  type BuiltinMode,
+  type CustomMode,
   type AuthStatus,
   type GraphStatus,
-  type HotkeyAction
+  type HotkeyAction,
+  type EvalMetrics,
+  type MeetingSummary
 } from '@shared/ipc'
 import {
   PROVIDERS,
@@ -50,13 +73,36 @@ import {
   type ProviderId
 } from '@shared/providers'
 import { DEFAULT_MODE_PROMPTS } from '@shared/prompts'
-import { ModePicker } from './ModePicker'
 import { MantuLogo } from './MantuLogo'
 import { MantuMark } from './MantuMark'
+import { FieldHint, TextButton } from './ui'
+import { AgendaView } from './AgendaView'
 import { usePermissions } from '../state'
 
 const ctl =
   'no-drag font-body cl-input cl-focus px-3 py-2.5 text-[13px] text-[color:var(--cl-foreground)]'
+
+// Providers excluded from the generic provider tiles grid + generic "key" Section. dust/claude-cli/
+// codex-cli have dedicated cards in CliIntegration; gemini is intentionally hidden from the UI entirely.
+const CLI_PROVIDERS = new Set<ProviderId>(['dust', 'claude-cli', 'codex-cli', 'gemini'])
+
+/**
+ * After disconnecting/removing the active provider, pick another provider that is actually ready
+ * (CLI providers need a live connection; the rest need a saved key) so the user is never left on a
+ * provider that can't answer. Falls back to Anthropic, which then shows the normal "add a key" prompt.
+ */
+function pickReadyProvider(
+  exclude: ProviderId,
+  hasKeys: Record<string, boolean>,
+  cliConnected: Record<string, boolean>
+): ProviderId {
+  const ready = PROVIDER_IDS.find(
+    (p) =>
+      p !== exclude &&
+      (PROVIDERS[p].kind === 'cli' ? !!cliConnected[p] : !!hasKeys[p])
+  )
+  return ready ?? 'anthropic'
+}
 
 /** Friendly name for a routed model in the thinking-mode explainer. Keeps raw model ids out of
  *  user-facing copy — recognized brands by name, everything else as a plain tier word. */
@@ -181,8 +227,8 @@ function Section({
 }): JSX.Element {
   return (
     <section className="flex flex-col">
-      <div className="mb-2.5">
-        <div className="cl-eyebrow flex h-[18px] items-center font-semibold">{title}</div>
+      <div className="mb-3">
+        <div className="text-[13px] font-semibold leading-snug text-[color:var(--cl-foreground)]">{title}</div>
         {desc && (
           <div className="mt-1 text-[12px] text-[color:var(--cl-muted-foreground)]">{desc}</div>
         )}
@@ -240,7 +286,8 @@ function ToggleRow({
   on,
   onChange,
   children,
-  disabled = false
+  disabled = false,
+  icon: Icon
 }: {
   label: string
   desc: string
@@ -248,6 +295,7 @@ function ToggleRow({
   onChange: (v: boolean) => void
   children?: ReactNode
   disabled?: boolean
+  icon?: LucideIcon
 }): JSX.Element {
   const id = useId()
   const toggleId = `${id}-toggle`
@@ -255,16 +303,21 @@ function ToggleRow({
     <label
       htmlFor={toggleId}
       className={[
-        'no-drag flex w-full items-center justify-between gap-3 rounded-xl px-1 py-2 text-left',
+        'no-drag flex w-full items-center justify-between gap-3 rounded-[var(--cl-radius)] px-1 py-2 text-left',
         disabled ? 'cursor-default' : 'cursor-pointer'
       ].join(' ')}
     >
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2 text-[13px] text-[color:var(--cl-foreground)]">
+          {Icon && <Icon size={14} className="shrink-0 text-[color:var(--cl-muted-foreground)]" />}
           {label}
+          {desc && (
+            <FieldHint text={desc}>
+              <Info size={12} className="shrink-0 text-[color:var(--cl-muted-foreground)] hover:text-[color:var(--cl-foreground)]" />
+            </FieldHint>
+          )}
           {disabled && <span className={managedChipCls}>Managed by your organization</span>}
         </div>
-        <div className="text-[12px] text-[color:var(--cl-muted-foreground)]">{desc}</div>
         {children}
       </div>
       <Toggle id={toggleId} on={on} onChange={onChange} label={label} disabled={disabled} />
@@ -279,12 +332,12 @@ function detectHint(value: string, current: ProviderId): { kind: 'ok' | 'tip'; t
   const id = detectProvider(v)
   if (id) {
     if (id === current) return { kind: 'ok', text: `Detected ${PROVIDERS[id].label}.` }
-    return { kind: 'ok', text: `Detected ${PROVIDERS[id].label} — selected it for you.` }
+    return { kind: 'ok', text: `Detected ${PROVIDERS[id].label}. Selected automatically.` }
   }
   if (/^sk-/.test(v)) {
     return {
       kind: 'tip',
-      text: 'This key shape is shared by several providers — pick the right one above.'
+      text: 'This key shape is shared by several providers. Pick the right one above.'
     }
   }
   return null
@@ -313,7 +366,6 @@ function AiSection({
   const [adv, setAdv] = useState(false)
   const [filter, setFilter] = useState('')
   const skipClearRef = useRef(false) // don't wipe a freshly-pasted key when detection switches provider
-  const model = settings.providerModels[provider] ?? def.defaultModel
   const baseModelName = resolveModelTier(provider, settings.providerModels, settings.providerModelsThinking, 'base')
   const thinkModelName = resolveModelTier(provider, settings.providerModels, settings.providerModelsThinking, 'think')
   const keyInputId = useId()
@@ -365,7 +417,7 @@ function AiSection({
     try {
       const res = await testKey(provider, trimmed)
       if (res.ok) setTest({ status: 'ok', message: 'Key is valid and working.' })
-      else setTest({ status: 'error', message: res.error || 'Saved, but the key did not work — check it and re-save.' })
+      else setTest({ status: 'error', message: res.error || 'Saved, but the key did not work. Check it and re-save.' })
     } catch (e) {
       setTest({ status: 'error', message: e instanceof Error ? e.message : 'Saved, but could not verify the key.' })
     }
@@ -388,27 +440,40 @@ function AiSection({
     await clearKey(provider)
     setKey('')
     setTest({ status: 'idle' })
+    // Removed the active provider's key — fall back to one that can still answer.
+    await patch({ provider: pickReadyProvider(provider, settings.hasKeys, settings.cliConnected ?? {}) })
   }
 
   const hint = detectHint(key, provider)
   const q = filter.trim().toLowerCase()
-  // Dust is its own first-class integration (rendered above), not a tile alongside the raw LLMs.
+  // Dust + CLI providers have dedicated UI sections; gemini is hidden — exclude all from the tiles grid.
   const shown = PROVIDER_IDS.filter(
-    (id) => id !== 'dust' && (!q || PROVIDERS[id].label.toLowerCase().includes(q))
+    (id) => !CLI_PROVIDERS.has(id) && (!q || PROVIDERS[id].label.toLowerCase().includes(q))
   )
+
+  const dustSectionRef = useRef<HTMLDivElement>(null)
 
   return (
     <div className="flex flex-col gap-5">
-      {/* Dust — AskToto's primary brain (your Second Brain agents). Always here, not a tile. */}
-      <DustSetup
+      {/* CLI Integration — Claude Code CLI, Codex CLI, and the Dust shortcut card */}
+      <CliIntegration
         settings={settings}
         patch={patch}
-        saveKey={saveKey}
-        clearKey={clearKey}
-        active={provider === 'dust'}
+        dustSectionRef={dustSectionRef}
       />
 
-      <Section title="Or use a model provider" desc="Prefer a raw model? Pick one — paste a key and AskToto detects most of them.">
+      {/* Dust — AskToto's primary brain (your Second Brain agents). Always here, not a tile. */}
+      <div ref={dustSectionRef}>
+        <DustSetup
+          settings={settings}
+          patch={patch}
+          saveKey={saveKey}
+          clearKey={clearKey}
+          active={provider === 'dust'}
+        />
+      </div>
+
+      <Section title="Model provider" desc="Prefer a raw model? Pick one, paste a key, and AskToto detects the provider.">
         {PROVIDER_IDS.length > 8 && (
           <div className="relative mb-2">
             <Search
@@ -458,8 +523,8 @@ function AiSection({
         )}
       </Section>
 
-      {provider !== 'dust' && (
-      <Section title={`${def.label} key`} desc="Stored encrypted on this device. It never leaves your machine except to call the provider.">
+      {!CLI_PROVIDERS.has(provider) && (
+      <Section title={`${def.label} key`} desc="Stored encrypted on this device. Never sent anywhere except the provider.">
         <div className="flex items-center gap-2">
           <label htmlFor={keyInputId} className="sr-only">
             {def.label} API key
@@ -471,7 +536,7 @@ function AiSection({
             onChange={(e) => onKeyChange(e.target.value)}
             onKeyDown={(e) => e.key === 'Enter' && onSave()}
             placeholder={
-              settings.hasKeys[provider] ? '•••••• saved — paste to replace' : `Paste your ${def.label} key`
+              settings.hasKeys[provider] ? '•••••• saved (paste to replace)' : `Paste your ${def.label} key`
             }
             className={'flex-1 ' + ctl}
           />
@@ -548,7 +613,7 @@ function AiSection({
             <a
               href={def.keyUrl}
               target="_blank"
-              rel="noreferrer"
+              rel="noopener noreferrer"
               className="no-drag inline-flex items-center gap-0.5 text-[color:var(--cl-primary)]"
             >
               Get a key <ExternalLink size={11} />
@@ -574,13 +639,16 @@ function AiSection({
                 <input
                   id={modelInputId}
                   list={`m-${provider}`}
-                  value={model}
-                  disabled={settings.managedKeys.includes('providerModels')}
+                  value={baseModelName}
+                  disabled={provider === 'anthropic' || settings.managedKeys.includes('providerModels')}
                   onChange={(e) =>
                     patch({ providerModels: { ...settings.providerModels, [provider]: e.target.value } })
                   }
                   placeholder={def.fastModel || 'base model id'}
-                  className={['w-full', ctl, settings.managedKeys.includes('providerModels') ? 'opacity-60' : ''].join(' ')}
+                  className={[
+                    'w-full', ctl,
+                    provider === 'anthropic' || settings.managedKeys.includes('providerModels') ? 'opacity-60' : ''
+                  ].join(' ')}
                 />
                 <ManagedChip keys={settings.managedKeys} k="providerModels" />
               </div>
@@ -593,16 +661,25 @@ function AiSection({
                 id={`think-${provider}`}
                 list={`m-${provider}`}
                 value={settings.providerModelsThinking[provider] ?? ''}
-                disabled={settings.managedKeys.includes('providerModelsThinking')}
+                disabled={provider === 'anthropic' || settings.managedKeys.includes('providerModelsThinking')}
                 onChange={(e) =>
                   patch({
                     providerModelsThinking: { ...settings.providerModelsThinking, [provider]: e.target.value }
                   })
                 }
                 placeholder={def.thinkModel || def.defaultModel || 'thinking model id'}
-                className={['w-full', ctl, settings.managedKeys.includes('providerModelsThinking') ? 'opacity-60' : ''].join(' ')}
+                className={[
+                  'w-full', ctl,
+                  provider === 'anthropic' || settings.managedKeys.includes('providerModelsThinking') ? 'opacity-60' : ''
+                ].join(' ')}
               />
             </div>
+            {provider === 'anthropic' && (
+              <p className="text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
+                Locked: base always answers as Haiku, thinking as Sonnet — a cost guardrail. Hard/coding
+                questions still escalate to Opus automatically; that tier isn't shown here.
+              </p>
+            )}
             <datalist id={`m-${provider}`}>
               {def.models.map((m) => (
                 <option key={m} value={m} />
@@ -676,7 +753,7 @@ function AiSection({
         </div>
         <span className="mt-1.5 block text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
           {settings.thinkingMode === 'auto'
-            ? `Auto — simple questions use ${prettyModel(baseModelName, provider, 'base')}; coding, engineering & complex go to ${prettyModel(thinkModelName, provider, 'think')}.`
+            ? `Auto: simple questions use ${prettyModel(baseModelName, provider, 'base')}; coding, engineering & complex go to ${prettyModel(thinkModelName, provider, 'think')}.`
             : settings.thinkingMode === 'always'
               ? `Every answer uses ${prettyModel(thinkModelName, provider, 'think')} (deep mode).`
               : `Every answer uses ${prettyModel(baseModelName, provider, 'base')} (fastest & cheapest).`}
@@ -700,6 +777,614 @@ function StepBadge({ n, done }: { n: number; done?: boolean }): JSX.Element {
     </span>
   )
 }
+
+// ---------------------------------------------------------------------------
+// CLI Integration section
+// ---------------------------------------------------------------------------
+
+type CliCardState = {
+  phase: 'idle' | 'confirming' | 'installing' | 'setup-opened' | 'connecting' | 'done' | 'error'
+  msg: string | null
+  version: string | null
+}
+
+function CliIntegration({
+  settings,
+  patch,
+  dustSectionRef
+}: {
+  settings: PublicSettings
+  patch: (p: Partial<PublicSettings>) => void
+  dustSectionRef?: RefObject<HTMLDivElement>
+}): JSX.Element {
+  const provider = settings.provider
+  const cliConnected = settings.cliConnected ?? {}
+
+  // Guards every setState below against firing after this component unmounts (e.g. the user closes
+  // Settings while runInstall's cliInstall/cliTest awaits are still in flight — those IPC calls keep
+  // running to completion in the main process regardless of whether this card is still on screen).
+  const mountedRef = useRef(true)
+  useEffect(() => {
+    return () => {
+      mountedRef.current = false
+    }
+  }, [])
+
+  // Per-CLI card state
+  const [claudeState, setClaudeState] = useState<CliCardState>({ phase: 'idle', msg: null, version: null })
+  const [codexState, setCodexState] = useState<CliCardState>({ phase: 'idle', msg: null, version: null })
+
+  // One-time notice: show when cliNoticeAck is false and any CLI was just connected
+  const [noticeDismissed, setNoticeDismissed] = useState(false)
+  const showNotice =
+    !settings.cliNoticeAck &&
+    !noticeDismissed &&
+    (!!cliConnected['claude-cli'] || !!cliConnected['codex-cli'])
+
+  const dismissNotice = (): void => {
+    setNoticeDismissed(true)
+    patch({ cliNoticeAck: true })
+  }
+
+  const getState = (id: 'claude-cli' | 'codex-cli'): CliCardState =>
+    id === 'claude-cli' ? claudeState : codexState
+  // Single choke point for all card-state writes — guarding here covers every setState call in
+  // runInstall/connect/cancel/disconnectCli without needing a check at each await site.
+  const setState = (id: 'claude-cli' | 'codex-cli', s: CliCardState): void => {
+    if (!mountedRef.current) return
+    id === 'claude-cli' ? setClaudeState(s) : setCodexState(s)
+  }
+
+  // Step 1: show inline confirm prompt
+  const startSetup = (id: 'claude-cli' | 'codex-cli'): void => {
+    setState(id, { phase: 'confirming', msg: null, version: null })
+  }
+
+  // Step 2: user clicks Continue → install silently, then connect
+  const runInstall = async (id: 'claude-cli' | 'codex-cli'): Promise<void> => {
+    setState(id, { phase: 'installing', msg: 'Installing…', version: null })
+
+    const installResult = await window.toto.cliInstall(id, (line) => {
+      setState(id, { phase: 'installing', msg: line, version: null })
+    })
+
+    if (installResult.needsTerminal) {
+      // Needs sudo / elevated perms — fall back to Terminal
+      window.toto.cliSetup(id)
+      setState(id, {
+        phase: 'setup-opened',
+        msg: 'Finish setup in Terminal, then click Connect.',
+        version: null
+      })
+      return
+    }
+
+    if (!installResult.ok) {
+      setState(id, { phase: 'error', msg: installResult.error || 'Installation failed.', version: null })
+      return
+    }
+
+    // Install succeeded — test connection
+    setState(id, { phase: 'connecting', msg: 'Connecting…', version: null })
+    const testResult = await window.toto.cliTest(id)
+
+    if (testResult.ok) {
+      patch({ provider: id, cliConnected: { ...cliConnected, [id]: true } })
+      setState(id, { phase: 'done', msg: null, version: testResult.version ?? null })
+      return
+    }
+
+    // Not logged in — open login flow
+    window.toto.cliLogin(id)
+    setState(id, {
+      phase: 'setup-opened',
+      msg: 'Installed. Sign in in the window that opened, then click Connect.',
+      version: null
+    })
+  }
+
+  // Connect button (setup-opened / error): re-run test only
+  const connect = async (id: 'claude-cli' | 'codex-cli'): Promise<void> => {
+    setState(id, { phase: 'connecting', msg: 'Connecting…', version: null })
+    const r = await window.toto.cliTest(id)
+    if (r.ok) {
+      patch({ provider: id, cliConnected: { ...cliConnected, [id]: true } })
+      setState(id, { phase: 'done', msg: null, version: r.version ?? null })
+    } else {
+      setState(id, {
+        phase: 'error',
+        msg: r.error || 'Could not connect. Finish signing in, then try again.',
+        version: null
+      })
+    }
+  }
+
+  const cancel = (id: 'claude-cli' | 'codex-cli'): void => {
+    setState(id, { phase: 'idle', msg: null, version: null })
+  }
+
+  // Disconnect AskToto from a CLI provider. Clears the connected flag (the global CLI itself is left
+  // installed — it's the user's own tool) and, if it was the active provider, switches to a ready one.
+  const disconnectCli = (id: 'claude-cli' | 'codex-cli'): void => {
+    const nextConnected = { ...cliConnected, [id]: false }
+    const next: Partial<PublicSettings> = { cliConnected: nextConnected }
+    if (provider === id) next.provider = pickReadyProvider(id, settings.hasKeys, nextConnected)
+    patch(next)
+    setState(id, { phase: 'idle', msg: null, version: null })
+  }
+
+  const primaryBtn =
+    'no-drag cl-focus flex items-center gap-1.5 rounded-[8px] bg-[var(--cl-primary)] px-3 py-1.5 text-[12px] font-medium text-white hover:opacity-90 disabled:opacity-50'
+  const secondaryBtn =
+    'no-drag cl-focus flex items-center gap-1.5 rounded-[8px] border border-[var(--cl-input)] bg-white/[0.04] px-3 py-1.5 text-[12px] text-[color:var(--cl-foreground)] hover:bg-white/[0.08] disabled:opacity-50'
+  const activePill =
+    'flex shrink-0 items-center gap-1 rounded-full bg-[var(--cl-primary-soft)] px-2 py-0.5 text-[11px] font-medium text-[color:var(--cl-primary)]'
+
+  const renderCliCard = (id: 'claude-cli' | 'codex-cli'): JSX.Element => {
+    const def = PROVIDERS[id]
+    const st = getState(id)
+    const isActive = provider === id
+    const isConnected = !!cliConnected[id]
+    const desc =
+      id === 'claude-cli'
+        ? 'Routes questions through your local Claude Code install. Uses your Pro or Max subscription.'
+        : 'Routes questions through your local OpenAI Codex CLI install. Uses your ChatGPT or API account.'
+    const confirmMsg =
+      id === 'claude-cli'
+        ? 'Make sure you are signed in to your Claude (Pro or Max) account on this device before continuing.'
+        : 'Make sure you are signed in to your ChatGPT or OpenAI account on this device before continuing.'
+
+    return (
+      <div
+        key={id}
+        className={[
+          'flex flex-col gap-2 rounded-[10px] border p-3',
+          isActive
+            ? 'border-[var(--cl-primary)] bg-[var(--cl-primary-soft)]/40'
+            : 'border-[var(--cl-border)] bg-white/[0.02]'
+        ].join(' ')}
+      >
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex flex-col gap-0.5">
+            <span className="text-[12px] font-medium text-[color:var(--cl-foreground)]">{def.label}</span>
+            <span className="text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">{desc}</span>
+          </div>
+          {isActive && (
+            <span className={activePill}>
+              <CircleCheck size={12} /> Active
+            </span>
+          )}
+        </div>
+
+        {/* Confirm step */}
+        {st.phase === 'confirming' && (
+          <div className="flex flex-col gap-2 rounded-[8px] border border-[var(--cl-border)] bg-white/[0.04] p-2.5">
+            <span className="text-[11px] leading-snug text-[color:var(--cl-foreground)]">{confirmMsg}</span>
+            <div className="flex gap-2">
+              <button type="button" onClick={() => void runInstall(id)} className={primaryBtn}>
+                Continue
+              </button>
+              <button type="button" onClick={() => cancel(id)} className={secondaryBtn}>
+                Cancel
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Installing — live progress */}
+        {st.phase === 'installing' && (
+          <div className="flex items-center gap-2 text-[11px] text-[color:var(--cl-muted-foreground)]">
+            <Loader2 size={12} className="shrink-0 animate-spin" />
+            <span className="truncate">{st.msg ?? 'Installing…'}</span>
+          </div>
+        )}
+
+        {/* After setup opened in Terminal */}
+        {st.phase === 'setup-opened' && st.msg && (
+          <span className="text-[11px] text-[color:var(--cl-muted-foreground)]">{st.msg}</span>
+        )}
+
+        {/* Error */}
+        {st.phase === 'error' && st.msg && (
+          <div className="flex items-start gap-1.5 text-[11px] text-[color:var(--cl-destructive)]">
+            <AlertCircle size={13} className="mt-px shrink-0" />
+            <span>{st.msg}</span>
+          </div>
+        )}
+
+        {/* Connecting spinner */}
+        {st.phase === 'connecting' && (
+          <div className="flex items-center gap-2 text-[11px] text-[color:var(--cl-muted-foreground)]">
+            <Loader2 size={12} className="shrink-0 animate-spin" />
+            <span>Connecting…</span>
+          </div>
+        )}
+
+        {/* Connected version info */}
+        {st.phase === 'done' && st.version && (
+          <span className="text-[11px] text-[color:var(--cl-success)]">
+            <CircleCheck size={12} className="mr-1 inline" />
+            {st.version}
+          </span>
+        )}
+
+        {/* Primary action button — idle state only */}
+        {st.phase === 'idle' && (
+          <div className="flex gap-2">
+            <button
+              type="button"
+              onClick={() => startSetup(id)}
+              className={primaryBtn}
+            >
+              <Link2 size={12} />
+              {isConnected ? 'Reconnect' : 'Set up'}
+            </button>
+            {isConnected && (
+              <button type="button" onClick={() => disconnectCli(id)} className={secondaryBtn} title={`Disconnect ${def.label}`}>
+                <X size={12} />
+                Disconnect
+              </button>
+            )}
+          </div>
+        )}
+
+        {/* Connect button — visible in setup-opened or error phases */}
+        {(st.phase === 'setup-opened' || st.phase === 'error') && (
+          <div className="flex gap-2">
+            <button
+              type="button"
+              onClick={() => void connect(id)}
+              className={primaryBtn}
+            >
+              <Link2 size={12} />
+              Connect
+            </button>
+            <button type="button" onClick={() => cancel(id)} className={secondaryBtn}>
+              Cancel
+            </button>
+          </div>
+        )}
+
+        {/* Reconnect / Disconnect links — shown after a successful connect */}
+        {st.phase === 'done' && (
+          <div className="flex items-center gap-3">
+            <button
+              type="button"
+              onClick={() => startSetup(id)}
+              className="no-drag cl-focus text-[11px] text-[color:var(--cl-muted-foreground)] hover:text-[color:var(--cl-foreground)]"
+            >
+              Reconnect
+            </button>
+            <button
+              type="button"
+              onClick={() => disconnectCli(id)}
+              className="no-drag cl-focus text-[11px] text-[color:var(--cl-muted-foreground)] hover:text-[color:var(--cl-destructive)]"
+            >
+              Disconnect
+            </button>
+          </div>
+        )}
+      </div>
+    )
+  }
+
+  return (
+    <Section
+      title="CLI Integration"
+      desc="Connect a local CLI tool or your Dust agents. Each option routes through a different backend."
+    >
+      <div className="flex flex-col gap-3">
+
+        {/* One-time notice */}
+        {showNotice && (
+          <div className="flex items-start justify-between gap-2 rounded-[8px] border border-[var(--cl-primary)]/30 bg-[var(--cl-primary-soft)]/50 px-3 py-2.5">
+            <span className="text-[11px] leading-snug text-[color:var(--cl-foreground)]">
+              This uses your local CLI login. Depending on the tool, answers may use your subscription or API credits.
+            </span>
+            <button
+              type="button"
+              onClick={dismissNotice}
+              aria-label="Dismiss notice"
+              className="no-drag cl-focus shrink-0 rounded text-[color:var(--cl-muted-foreground)] hover:text-[color:var(--cl-foreground)]"
+            >
+              <X size={13} />
+            </button>
+          </div>
+        )}
+
+        {/* Dust card — your Second Brain agents (proposed first) */}
+        <div
+          className={[
+            'flex items-center justify-between gap-2 rounded-[10px] border p-3',
+            provider === 'dust'
+              ? 'border-[var(--cl-primary)] bg-[var(--cl-primary-soft)]/40'
+              : 'border-[var(--cl-border)] bg-white/[0.02]'
+          ].join(' ')}
+        >
+          <div className="flex flex-col gap-0.5">
+            <span className="text-[12px] font-medium text-[color:var(--cl-foreground)]">Dust · your agents</span>
+            <span className="text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
+              Your Second Brain agents via the Dust platform. Full setup in the section below.
+            </span>
+          </div>
+          {provider === 'dust' ? (
+            <span className={activePill}>
+              <CircleCheck size={12} /> Active
+            </span>
+          ) : (
+            <button
+              type="button"
+              onClick={() => dustSectionRef?.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
+              className={secondaryBtn}
+            >
+              Set up below
+            </button>
+          )}
+        </div>
+
+        {/* BidStack CRM card — MCP push (separate credential from LLM providers; see bidstackSecrets.ts) */}
+        <BidstackCard settings={settings} patch={patch} />
+
+        {/* Claude Code CLI card */}
+        {renderCliCard('claude-cli')}
+
+        {/* Codex CLI card */}
+        {renderCliCard('codex-cli')}
+
+        {/* CLI-vs-API priority — only meaningful once a CLI is connected alongside an API provider. */}
+        {(!!cliConnected['claude-cli'] || !!cliConnected['codex-cli']) && (
+          <div className="flex items-center justify-between gap-3 rounded-[10px] border border-[var(--cl-border)] bg-white/[0.02] p-3">
+            <div className="flex flex-col gap-0.5 pr-2">
+              <span className="text-[12px] font-medium text-[color:var(--cl-foreground)]">Priority</span>
+              <span className="text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
+                {settings.providerPriority === 'cli'
+                  ? 'Use a connected CLI first (your subscription), fall back to your API key.'
+                  : 'Use your chosen API provider first, fall back to a CLI.'}
+              </span>
+            </div>
+            <div
+              role="radiogroup"
+              aria-label="Provider priority"
+              className="flex shrink-0 items-center rounded-[8px] border border-[var(--cl-border)] bg-white/[0.03] p-0.5"
+            >
+              {(['cli', 'api'] as const).map((opt) => (
+                <button
+                  key={opt}
+                  type="button"
+                  role="radio"
+                  aria-checked={settings.providerPriority === opt}
+                  onClick={() => patch({ providerPriority: opt })}
+                  className={[
+                    'no-drag cl-focus rounded-[6px] px-3 py-1 text-[12px] font-medium transition-colors',
+                    settings.providerPriority === opt
+                      ? 'bg-[var(--cl-primary)] text-white'
+                      : 'text-[color:var(--cl-muted-foreground)] hover:text-[color:var(--cl-foreground)]'
+                  ].join(' ')}
+                >
+                  {opt === 'cli' ? 'CLI' : 'API'}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
+      </div>
+    </Section>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// BidStack 360° CRM — MCP push (Settings → CLI Integration)
+// ---------------------------------------------------------------------------
+
+function BidstackCard({
+  settings,
+  patch
+}: {
+  settings: PublicSettings
+  patch: (p: Partial<PublicSettings>) => void
+}): JSX.Element {
+  const [open, setOpen] = useState(false)
+  const [endpointUrl, setEndpointUrl] = useState(settings.bidstackEndpointUrl || '')
+  const [apiKey, setApiKey] = useState('')
+  const [testState, setTestState] = useState<{
+    phase: 'idle' | 'testing' | 'tested' | 'saving' | 'error'
+    error: string | null
+    tools: string[] | null
+  }>({ phase: 'idle', error: null, tools: null })
+
+  const connected = settings.bidstackConnected
+  const endpointId = useId()
+  const keyId = useId()
+
+  const testConnection = async (): Promise<void> => {
+    setTestState({ phase: 'testing', error: null, tools: null })
+    const r = await window.toto.mcpCrmTestConnection({ endpointUrl: endpointUrl.trim(), apiKey: apiKey.trim() })
+    if (r.ok) {
+      setTestState({ phase: 'tested', error: null, tools: r.tools ?? [] })
+    } else {
+      setTestState({ phase: 'error', error: r.error || 'Could not connect.', tools: null })
+    }
+  }
+
+  const saveConnection = async (): Promise<void> => {
+    setTestState((s) => ({ ...s, phase: 'saving' }))
+    const r = await window.toto.mcpCrmSaveConnection({ endpointUrl: endpointUrl.trim(), apiKey: apiKey.trim() })
+    if (r.ok) {
+      await patch({
+        bidstackEndpointUrl: endpointUrl.trim(),
+        bidstackConnected: true,
+        bidstackTools: r.tools ?? []
+      })
+      setApiKey('')
+      setTestState({ phase: 'idle', error: null, tools: null })
+      setOpen(false)
+    } else {
+      setTestState({ phase: 'error', error: r.error || 'Could not save the connection.', tools: null })
+    }
+  }
+
+  const disconnect = async (): Promise<void> => {
+    await window.toto.mcpCrmDisconnect()
+    await patch({ bidstackConnected: false, bidstackEndpointUrl: '', bidstackTools: [] })
+    setEndpointUrl('')
+    setApiKey('')
+    setTestState({ phase: 'idle', error: null, tools: null })
+    setOpen(false)
+  }
+
+  return (
+    <div
+      className={[
+        'flex flex-col gap-2 rounded-[10px] border p-3',
+        connected ? 'border-[var(--cl-primary)] bg-[var(--cl-primary-soft)]/40' : 'border-[var(--cl-border)] bg-white/[0.02]'
+      ].join(' ')}
+    >
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex flex-col gap-0.5">
+          <span className="text-[12px] font-medium text-[color:var(--cl-foreground)]">BidStack · your CRM</span>
+          <span className="text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
+            Push meeting recaps to BidStack 360° over its MCP server. Manual, review-first — nothing sends automatically.
+          </span>
+        </div>
+        {connected ? (
+          <span className={activePillStyle}>
+            <CircleCheck size={12} /> Connected
+          </span>
+        ) : null}
+      </div>
+
+      {connected && !open ? (
+        <div className="flex items-center gap-3">
+          <span className="truncate text-[11px] text-[color:var(--cl-muted-foreground)]" title={settings.bidstackEndpointUrl}>
+            {settings.bidstackEndpointUrl}
+          </span>
+          <button
+            type="button"
+            onClick={() => {
+              setEndpointUrl(settings.bidstackEndpointUrl || '')
+              setOpen(true)
+            }}
+            className="no-drag cl-focus shrink-0 text-[11px] text-[color:var(--cl-muted-foreground)] hover:text-[color:var(--cl-foreground)]"
+          >
+            Reconnect
+          </button>
+          <button
+            type="button"
+            onClick={() => void disconnect()}
+            className="no-drag cl-focus shrink-0 text-[11px] text-[color:var(--cl-muted-foreground)] hover:text-[color:var(--cl-destructive)]"
+          >
+            Disconnect
+          </button>
+        </div>
+      ) : !open ? (
+        <button type="button" onClick={() => setOpen(true)} className={secondaryBtnStyle}>
+          <Link2 size={12} />
+          Set up
+        </button>
+      ) : (
+        <div className="flex flex-col gap-2">
+          <div className="flex flex-col gap-1">
+            <label htmlFor={endpointId} className="text-[11px] font-medium text-[color:var(--cl-muted-foreground)]">
+              MCP endpoint URL
+            </label>
+            <input
+              id={endpointId}
+              value={endpointUrl}
+              onChange={(e) => {
+                setEndpointUrl(e.target.value)
+                setTestState({ phase: 'idle', error: null, tools: null })
+              }}
+              placeholder="http://localhost:4001/mcp"
+              className={'w-full ' + ctl}
+            />
+          </div>
+          <div className="flex flex-col gap-1">
+            <label htmlFor={keyId} className="text-[11px] font-medium text-[color:var(--cl-muted-foreground)]">
+              API key
+            </label>
+            <input
+              id={keyId}
+              type="password"
+              value={apiKey}
+              onChange={(e) => {
+                setApiKey(e.target.value)
+                setTestState({ phase: 'idle', error: null, tools: null })
+              }}
+              placeholder="Bearer token from BidStack → Developer access → API keys (mcp + write scope)"
+              className={'w-full ' + ctl}
+            />
+          </div>
+
+          {testState.phase === 'error' && testState.error && (
+            <div className="flex items-start gap-1.5 text-[11px] text-[color:var(--cl-destructive)]">
+              <AlertCircle size={13} className="mt-px shrink-0" />
+              <span>{testState.error}</span>
+            </div>
+          )}
+          {testState.phase === 'tested' && testState.tools && (
+            <div className="flex items-start gap-1.5 text-[11px] text-[color:var(--cl-success)]">
+              <CircleCheck size={13} className="mt-px shrink-0" />
+              <span>
+                Connected.{' '}
+                {testState.tools.length > 0
+                  ? `Found ${testState.tools.length} tool${testState.tools.length === 1 ? '' : 's'}: ${testState.tools.join(', ')}`
+                  : 'BidStack reported no tools for this key’s scope.'}
+              </span>
+            </div>
+          )}
+
+          <div className="flex gap-2">
+            <button
+              type="button"
+              onClick={() => void testConnection()}
+              disabled={!endpointUrl.trim() || !apiKey.trim() || testState.phase === 'testing' || testState.phase === 'saving'}
+              className={secondaryBtnStyle}
+            >
+              {testState.phase === 'testing' ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />}
+              Test connection
+            </button>
+            <button
+              type="button"
+              onClick={() => void saveConnection()}
+              disabled={testState.phase !== 'tested'}
+              title={testState.phase !== 'tested' ? 'Test the connection successfully first' : undefined}
+              className={primaryBtnStyle}
+            >
+              {testState.phase === 'saving' ? <Loader2 size={12} className="animate-spin" /> : <Check size={12} />}
+              Save
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setOpen(false)
+                setApiKey('')
+                setTestState({ phase: 'idle', error: null, tools: null })
+              }}
+              className={secondaryBtnStyle}
+            >
+              Cancel
+            </button>
+          </div>
+          <span className="text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
+            Request only the <code className="rounded bg-white/[0.08] px-1">mcp + write</code> scope — this is a
+            push-only integration. The endpoint moves with wherever BidStack's backend actually runs; there is no
+            built-in default beyond the local-dev placeholder shown above.
+          </span>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// Shared button styles for BidstackCard (module scope — CliIntegration's own primaryBtn/secondaryBtn are
+// local to that component and not exported, so this is a small deliberate duplicate, not a shared import).
+const primaryBtnStyle =
+  'no-drag cl-focus flex items-center gap-1.5 rounded-[8px] bg-[var(--cl-primary)] px-3 py-1.5 text-[12px] font-medium text-white hover:opacity-90 disabled:opacity-50'
+const secondaryBtnStyle =
+  'no-drag cl-focus flex items-center gap-1.5 rounded-[8px] border border-[var(--cl-input)] bg-white/[0.04] px-3 py-1.5 text-[12px] text-[color:var(--cl-foreground)] hover:bg-white/[0.08] disabled:opacity-50'
+const activePillStyle =
+  'flex shrink-0 items-center gap-1 rounded-full bg-[var(--cl-primary-soft)] px-2 py-0.5 text-[11px] font-medium text-[color:var(--cl-primary)]'
 
 function DustSetup({
   settings,
@@ -727,12 +1412,15 @@ function DustSetup({
   })
   const linkId = useId()
   const wsId = useId()
-  const agentSel = useId()
   const thinkSel = useId()
 
   const isEu = /eu\.dust\.tt/i.test(settings.dustBaseUrl)
+  // Base + Spotlight Ref are hard-locked (DUST_BASE_AGENT_ID / DUST_SPOTLIGHT_REF_AGENT_ID in ipc.ts) —
+  // read-only display below, no picker, no setter. The base agent (AskToto) also drafts meeting
+  // follow-ups directly — there is no separate follow-up agent.
   const agent = settings.providerModels['dust'] ?? ''
   const thinkAgent = settings.providerModelsThinking['dust'] ?? ''
+  const spotlightAgent = settings.providerModelsSpotlightRef['dust'] ?? ''
   const keySaved = !!settings.hasKeys['dust']
   const hasWs = !!settings.dustWorkspaceId.trim()
   const connected = keySaved && hasWs && !!agent
@@ -746,7 +1434,7 @@ function DustSetup({
     if (!r.ok) {
       // No CLI session found → automatically kick off the setup (install + interactive login) instead of
       // just printing a command. The login needs a browser OAuth, so it opens in a Terminal window.
-      setCli({ busy: true, ok: false, msg: 'No Dust CLI found — starting setup…' })
+      setCli({ busy: true, ok: false, msg: 'No Dust CLI found. Starting setup…' })
       const s = await window.toto.dustSetupCli()
       setCli({
         busy: false,
@@ -758,7 +1446,7 @@ function DustSetup({
       return
     }
     await patch({ provider: 'dust' }) // import set key/workspace/region in main; make Dust active + refresh
-    setCli({ busy: false, ok: true, msg: `Connected — workspace ${r.workspaceId}. Loading your agents…` })
+    setCli({ busy: false, ok: true, msg: `Connected. Workspace ${r.workspaceId}. Loading agents…` })
     await loadAgents()
   }
 
@@ -773,19 +1461,38 @@ function DustSetup({
     setDustKey('')
     setKeySaving(false)
   }
-  const removeDustKey = async (): Promise<void> => {
+  // Fully disconnect Dust: clear the saved token/key, drop the workspace + region + the (user-editable)
+  // thinking agent, switch off Dust if it's active, and reset the local CLI/agents UI so the card returns
+  // to its "connect" state. Used by both the CLI card's Disconnect and the manual key's Remove.
+  const disconnectDust = async (): Promise<void> => {
     await clearKey('dust')
+    const nextThinking = { ...settings.providerModelsThinking }
+    delete nextThinking.dust
+    // Base + Spotlight Ref are hard-locked app defaults, not user data — leave them untouched so they
+    // resolve back to DUST_BASE_AGENT_ID/DUST_SPOTLIGHT_REF_AGENT_ID on reconnect rather than staying
+    // explicitly emptied in the persisted settings.
+    const next: Partial<PublicSettings> = {
+      dustWorkspaceId: '',
+      dustBaseUrl: 'https://dust.tt',
+      providerModelsThinking: nextThinking
+    }
+    if (settings.provider === 'dust')
+      next.provider = pickReadyProvider('dust', settings.hasKeys, settings.cliConnected ?? {})
+    await patch(next)
+    setAgents(null)
+    setErr(null)
+    setCli({ busy: false, msg: null, ok: false })
   }
   const useDust = (): void => void patch({ provider: 'dust' })
 
-  // Paste any Dust link → auto-fill workspace, region, and (if present) the agent.
+  // Paste any Dust link → auto-fill workspace + region. The base agent is hard-locked to AskToto, so a
+  // pasted link's agent id (if any) is intentionally ignored rather than silently overriding the lock.
   const onLink = (v: string): void => {
     setLink(v)
     const p = parseDustUrl(v)
     const next: Partial<PublicSettings> = {}
     if (p.workspaceId) next.dustWorkspaceId = p.workspaceId
     if (p.baseUrl) next.dustBaseUrl = p.baseUrl
-    if (p.agentId) next.providerModels = { ...settings.providerModels, dust: p.agentId }
     if (Object.keys(next).length) patch(next)
   }
 
@@ -796,17 +1503,11 @@ function DustSetup({
     setLoading(false)
     if (r.ok && r.agents) {
       setAgents(r.agents)
-      if (!agent && r.agents[0]) {
-        patch({ providerModels: { ...settings.providerModels, dust: r.agents[0].sId } })
-      }
     } else {
       setAgents(null)
       setErr(r.error || 'Could not load your agents. Check the key + workspace, then retry.')
     }
   }
-
-  const setAgent = (sId: string): void =>
-    patch({ providerModels: { ...settings.providerModels, dust: sId } })
 
   const setThinkAgent = (sId: string): void =>
     patch({ providerModelsThinking: { ...settings.providerModelsThinking, dust: sId } })
@@ -822,7 +1523,7 @@ function DustSetup({
   return (
     <Section
       title={active ? 'Dust · your brain (active)' : 'Dust · your brain'}
-      desc="AskToto's primary brain — your own Dust agents (Second Brain retrieval + tools). Connect once with the Dust CLI, pick a base (Haiku) and thinking (Sonnet) agent."
+      desc="Your Dust agents (Second Brain retrieval + tools) power AskToto. Connect with the Dust CLI, then pick a thinking agent for hard questions."
     >
       <div className="flex flex-col gap-4">
         {/* One-click: import the local Dust CLI session (token + workspace + region) from the keychain */}
@@ -831,19 +1532,46 @@ function DustSetup({
             <span className="text-[12px] font-medium text-[color:var(--cl-foreground)]">
               Connect locally with the Dust CLI
             </span>
-            <button
-              type="button"
-              onClick={connectCli}
-              disabled={cli.busy}
-              className="no-drag cl-focus flex items-center gap-1.5 rounded-[8px] bg-[var(--cl-primary)] px-3 py-1.5 text-[12px] font-medium text-white hover:opacity-90 disabled:opacity-50"
-            >
-              {cli.busy ? <Loader2 size={13} className="animate-spin" /> : <Link2 size={13} />}
-              Connect from Dust CLI
-            </button>
+            {keySaved && hasWs ? (
+              // Already linked → offer Reconnect (re-imports a fresh token, fixing an expired session)
+              // and Disconnect (full reset back to the connect state).
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={connectCli}
+                  disabled={cli.busy}
+                  title="Re-import a fresh session from the Dust CLI"
+                  className="no-drag cl-focus flex items-center gap-1.5 rounded-[8px] bg-[var(--cl-primary)] px-3 py-1.5 text-[12px] font-medium text-white hover:opacity-90 disabled:opacity-50"
+                >
+                  {cli.busy ? <Loader2 size={13} className="animate-spin" /> : <RefreshCw size={13} />}
+                  Reconnect
+                </button>
+                <button
+                  type="button"
+                  onClick={disconnectDust}
+                  disabled={cli.busy}
+                  title="Disconnect Dust from AskToto"
+                  className="no-drag cl-focus flex items-center gap-1.5 rounded-[8px] border border-[var(--cl-destructive)]/30 bg-[var(--cl-destructive)]/10 px-3 py-1.5 text-[12px] font-medium text-[color:var(--cl-destructive)] hover:bg-[var(--cl-destructive)]/20 disabled:opacity-50"
+                >
+                  <X size={13} />
+                  Disconnect
+                </button>
+              </div>
+            ) : (
+              <button
+                type="button"
+                onClick={connectCli}
+                disabled={cli.busy}
+                className="no-drag cl-focus flex items-center gap-1.5 rounded-[8px] bg-[var(--cl-primary)] px-3 py-1.5 text-[12px] font-medium text-white hover:opacity-90 disabled:opacity-50"
+              >
+                {cli.busy ? <Loader2 size={13} className="animate-spin" /> : <Link2 size={13} />}
+                Connect from Dust CLI
+              </button>
+            )}
           </div>
           <span className="text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
             Already ran <code className="rounded bg-white/[0.08] px-1">dust login</code>? This reads your
-            session from the keychain — no key to copy. macOS may ask to allow keychain access once.
+            session from the keychain. No key to copy. macOS may ask to allow keychain access once.
           </span>
           {cli.msg && (
             <span
@@ -879,12 +1607,12 @@ function DustSetup({
               id={linkId}
               value={link}
               onChange={(e) => onLink(e.target.value)}
-              placeholder="Paste your Dust workspace or agent URL — it fills the rest in"
+              placeholder="Paste your Dust workspace or agent URL (fills the fields below)"
               className={'w-full pl-7 ' + ctl}
             />
           </div>
           <span className="pl-7 text-[11px] text-[color:var(--cl-muted-foreground)]">
-            e.g. https://dust.tt/w/<b>abc123</b>/builder/agents/<b>myAgent</b> — or fill the fields below.
+            e.g. https://dust.tt/w/<b>abc123</b>/builder/agents/<b>myAgent</b>, or fill the fields below.
           </span>
         </div>
 
@@ -925,7 +1653,7 @@ function DustSetup({
               </span>
               <button
                 type="button"
-                onClick={removeDustKey}
+                onClick={disconnectDust}
                 className="no-drag cl-focus rounded-[8px] border border-[var(--cl-destructive)]/30 bg-[var(--cl-destructive)]/10 px-2.5 py-1 text-[11px] text-[color:var(--cl-destructive)] hover:bg-[var(--cl-destructive)]/20"
               >
                 Remove
@@ -952,7 +1680,7 @@ function DustSetup({
             </div>
           )}
           <span className="pl-7 text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
-            Get one at dust.tt → Settings → API Keys (admin). Or just use “Connect from Dust CLI” above.
+            Get one at dust.tt → Settings → API Keys (admin). Or use “Connect from Dust CLI” above.
           </span>
         </div>
 
@@ -974,33 +1702,24 @@ function DustSetup({
             </button>
           </div>
 
-          {/* Base agent — used for simple questions (back it with Haiku in Dust) */}
-          <label htmlFor={agentSel} className="text-[11px] font-medium text-[color:var(--cl-muted-foreground)]">
-            Base agent · simple questions (e.g. Haiku-backed)
-          </label>
-          {agents && agents.length > 0 ? (
-            <select id={agentSel} value={agent} onChange={(e) => setAgent(e.target.value)} className={'w-full ' + ctl}>
-              <option value="" disabled>
-                Select an agent…
-              </option>
-              {agents.map((a) => (
-                <option key={a.sId} value={a.sId}>
-                  {a.name}
-                </option>
-              ))}
-            </select>
-          ) : (
-            <input
-              value={agent}
-              onChange={(e) => setAgent(e.target.value)}
-              placeholder="Base agent id (e.g. your Haiku agent)"
-              className={'w-full ' + ctl}
-            />
-          )}
+          {/* Base agent is hard-locked to AskToto (our own agent, Claude Sonnet-backed) — not a picker.
+              Read-only: resolves to the agent's live name once the agents list loads, else shows the raw
+              sId. It also drafts meeting follow-ups directly — there is no separate follow-up agent.
+              Rotating it needs a code change (DUST_BASE_AGENT_ID in ipc.ts) or, for an urgent rotation
+              without a release, a managed-config.json override. */}
+          <div className="flex flex-col gap-1">
+            <span className="flex items-center gap-1.5 text-[11px] font-medium text-[color:var(--cl-muted-foreground)]">
+              Base agent · AskToto
+              <span className={managedChipCls}>Managed by your organization</span>
+            </span>
+            <div className={'w-full opacity-60 ' + ctl}>
+              {agent ? agents?.find((a) => a.sId === agent)?.name ?? agent : 'Not configured yet'}
+            </div>
+          </div>
 
-          {/* Thinking agent — used for hard/coding questions & Think mode (back it with Sonnet in Dust) */}
+          {/* Thinking agent — used for hard/coding questions & Think mode. Still yours to pick. */}
           <label htmlFor={thinkSel} className="mt-1 text-[11px] font-medium text-[color:var(--cl-muted-foreground)]">
-            Thinking agent · hard, coding questions (e.g. Sonnet-backed) · optional
+            Thinking agent · hard, coding questions · optional
           </label>
           {agents && agents.length > 0 ? (
             <select id={thinkSel} value={thinkAgent} onChange={(e) => setThinkAgent(e.target.value)} className={'w-full ' + ctl}>
@@ -1015,10 +1734,21 @@ function DustSetup({
             <input
               value={thinkAgent}
               onChange={(e) => setThinkAgent(e.target.value)}
-              placeholder="Thinking agent id (optional — defaults to base)"
+              placeholder="Thinking agent id (optional, defaults to base)"
               className={'w-full ' + ctl}
             />
           )}
+
+          {/* Spotlight Ref agent is also hard-locked — not a picker. Same read-only pattern as base. */}
+          <div className="mt-1 flex flex-col gap-1">
+            <span className="flex items-center gap-1.5 text-[11px] font-medium text-[color:var(--cl-muted-foreground)]">
+              Spotlight Ref agent · finds sales references for the live use case
+              <span className={managedChipCls}>Managed by your organization</span>
+            </span>
+            <div className={'w-full opacity-60 ' + ctl}>
+              {spotlightAgent ? agents?.find((a) => a.sId === spotlightAgent)?.name ?? spotlightAgent : 'Not configured yet'}
+            </div>
+          </div>
           {err && (
             <div className="flex items-center gap-1.5 text-[11px] text-[color:var(--cl-destructive)]">
               <AlertCircle size={12} /> {err}
@@ -1109,7 +1839,7 @@ function AudioChoices({
             disabled={locked}
             onClick={() => patch({ audioSource: c.id })}
             className={[
-              'no-drag cl-focus flex flex-col items-center gap-1 rounded-xl border px-2 py-3 transition-colors',
+              'no-drag cl-focus flex flex-col items-center gap-1 rounded-[var(--cl-radius)] border px-2 py-3 transition-colors',
               active
                 ? 'border-[var(--cl-primary)] bg-[var(--cl-primary-soft)]'
                 : 'border-[var(--cl-border)] bg-white/[0.02] hover:bg-white/[0.05]',
@@ -1127,16 +1857,6 @@ function AudioChoices({
   )
 }
 
-const MODE_LABEL: Record<ConversationMode, string> = {
-  general: 'General',
-  interview: 'Interview',
-  meeting: 'Meeting',
-  sales: 'Sales',
-  negotiation: 'Negotiation',
-  presentation: 'Presentation',
-  support: 'Support'
-}
-
 const LANGUAGE_OPTIONS = [
   'English', 'French', 'Spanish', 'German', 'Italian', 'Portuguese', 'Dutch',
   'Polish', 'Arabic', 'Chinese', 'Japanese', 'Korean', 'Hindi', 'Russian', 'Turkish'
@@ -1145,15 +1865,20 @@ const LANGUAGE_OPTIONS = [
 /** Editable, pre-filled system prompt for the selected default mode. Plug-and-play with reset. */
 function ModePromptEditor({
   settings,
-  patch
+  patch,
+  mode,
+  modeDisplayLabel
 }: {
   settings: PublicSettings
   patch: (p: Partial<PublicSettings>) => void
+  mode: ConversationMode
+  modeDisplayLabel?: string
 }): JSX.Element {
-  const mode = settings.mode
+  const isBuiltin = mode in BUILTIN_MODE_LABELS
   const override = settings.modePrompts[mode]
-  const value = override ?? DEFAULT_MODE_PROMPTS[mode]
-  const isCustom = !!override && override.trim() !== '' && override !== DEFAULT_MODE_PROMPTS[mode]
+  const defaultPrompt = isBuiltin ? DEFAULT_MODE_PROMPTS[mode as keyof typeof DEFAULT_MODE_PROMPTS] ?? '' : ''
+  const value = override ?? defaultPrompt
+  const isModified = !!override && override.trim() !== '' && override !== defaultPrompt
   const locked = settings.managedKeys.includes('modePrompts')
   const reset = (): void => {
     const m = { ...settings.modePrompts }
@@ -1161,32 +1886,35 @@ function ModePromptEditor({
     patch({ modePrompts: m })
   }
   return (
-    <Section
-      title={`Prompt · ${MODE_LABEL[mode]}`}
-      desc="Pre-filled with a strong default. Edit freely; every mode keeps its own. Reset anytime."
-    >
+    <div className="flex flex-col gap-1.5">
+      <label className="text-[12px] font-medium text-[color:var(--cl-muted-foreground)]">
+        {modeDisplayLabel ? `${modeDisplayLabel} prompt` : 'Mode prompt'}
+      </label>
       <LazyTextarea
         value={value}
         disabled={locked}
+        placeholder={isBuiltin ? 'Customize this mode’s system prompt…' : 'Write a system prompt for this mode…'}
         onCommit={(v) => patch({ modePrompts: { ...settings.modePrompts, [mode]: v } })}
         className={[ctl, 'h-44 w-full resize-none text-[12px] leading-relaxed', locked ? 'opacity-60' : ''].join(' ')}
       />
-      <div className="mt-1.5 flex items-center gap-3">
-        {isCustom ? (
-          <button
-            type="button"
-            onClick={reset}
-            disabled={locked}
-            className="no-drag cl-focus inline-flex items-center gap-1 text-[12px] text-[color:var(--cl-muted-foreground)] hover:text-[color:var(--cl-foreground)]"
-          >
-            <RotateCcw size={12} /> Reset to default
-          </button>
-        ) : (
-          <span className="text-[11px] text-[color:var(--cl-muted-foreground)]">Using the built-in default.</span>
+      <div className="flex items-center gap-3">
+        {isBuiltin && (
+          isModified ? (
+            <button
+              type="button"
+              onClick={reset}
+              disabled={locked}
+              className="no-drag cl-focus inline-flex items-center gap-1 text-[12px] text-[color:var(--cl-muted-foreground)] hover:text-[color:var(--cl-foreground)]"
+            >
+              <RotateCcw size={12} /> Reset to default
+            </button>
+          ) : (
+            <span className="text-[11px] text-[color:var(--cl-muted-foreground)]">Using the built-in default.</span>
+          )
         )}
         <ManagedChip keys={settings.managedKeys} k="modePrompts" />
       </div>
-    </Section>
+    </div>
   )
 }
 
@@ -1195,12 +1923,15 @@ const TEXT_FILE_RE = /\.(txt|md|markdown|csv|tsv|json|log|ya?ml|xml|html?|css|ts
 /** Cluely-style "add files for context" — reads text on-device and folds it into every answer. */
 function ContextDocs({
   settings,
-  patch
+  patch,
+  mode,
+  modeDisplayLabel
 }: {
   settings: PublicSettings
   patch: (p: Partial<PublicSettings>) => void
+  mode: ConversationMode
+  modeDisplayLabel?: string
 }): JSX.Element {
-  const mode = settings.mode
   const docs = settings.contextDocs[mode] || []
   const [drag, setDrag] = useState(false)
   const [note, setNote] = useState<string | null>(null)
@@ -1234,7 +1965,7 @@ function ContextDocs({
     if (kept.length) writeDocs([...docs, ...kept])
     const bits: string[] = []
     if (kept.length) bits.push(`Added ${kept.length} document${kept.length > 1 ? 's' : ''}.`)
-    if (droppedForCap > 0) bits.push(`${droppedForCap} not added — 25-document limit reached.`)
+    if (droppedForCap > 0) bits.push(`${droppedForCap} not added (25-document limit reached).`)
     if (skipped.length) bits.push(`Skipped (text files only, ≤2 MB): ${skipped.slice(0, 3).join(', ')}.`)
     if (!bits.length) bits.push('No text files found. Supported: txt, md, csv, json, code…')
     setNote(bits.join(' '))
@@ -1242,10 +1973,11 @@ function ContextDocs({
 
   const remove = (i: number): void => writeDocs(docs.filter((_, idx) => idx !== i))
 
+  const contextTitle = modeDisplayLabel ? `Context documents · ${modeDisplayLabel}` : 'Context documents'
   return (
     <Section
-      title={`Context documents — ${MODE_LABEL[mode]}`}
-      desc="Import what this mode should know about — résumé, deck, brief, specs. Kept per-mode (no cross-leak), read on-device, woven into this mode's answers."
+      title={contextTitle}
+      desc="Import what this mode should know: résumé, deck, brief, specs. Kept per-mode, read on-device."
     >
       <label
         htmlFor={inputId}
@@ -1260,7 +1992,7 @@ function ContextDocs({
           if (e.dataTransfer.files.length) void ingest(e.dataTransfer.files)
         }}
         className={[
-          'no-drag flex cursor-pointer flex-col items-center justify-center gap-1.5 rounded-xl border border-dashed px-4 py-6 text-center transition-colors',
+          'no-drag flex cursor-pointer flex-col items-center justify-center gap-1.5 rounded-[var(--cl-radius)] border border-dashed px-4 py-6 text-center transition-colors',
           drag
             ? 'border-[var(--cl-primary)] bg-[var(--cl-primary-soft)]'
             : 'border-[var(--cl-input)] bg-white/[0.02] hover:bg-white/[0.04]'
@@ -1268,7 +2000,11 @@ function ContextDocs({
       >
         <Upload size={18} className="text-[color:var(--cl-primary)]" />
         <span className="text-[13px] text-[color:var(--cl-foreground)]">
-          Drop files here or <span className="text-[color:var(--cl-primary)]">browse</span>
+          Adding files gives more context
+        </span>
+        <span className="text-[12px] text-[color:var(--cl-muted-foreground)]">
+          Drag &amp; drop files here to add them, or{' '}
+          <span className="text-[color:var(--cl-primary)]">browse files</span>
         </span>
         <span className="text-[11px] text-[color:var(--cl-muted-foreground)]">
           Text files (txt, md, csv, json, code) up to 2 MB · 25 max
@@ -1311,15 +2047,309 @@ function ContextDocs({
   )
 }
 
-type TabId = 'ai' | 'personalize' | 'audio' | 'privacy' | 'meetings' | 'shortcuts' | 'about'
+/**
+ * Modes pane (two-column, Cluely-style): left = the mode list with the live “Active” marker; right = the
+ * selected mode's editable system prompt + per-mode context files + a “Set active” control. Selecting a
+ * mode on the left only changes what you're VIEWING/EDITING; “Set active” is the sticky footer action.
+ */
+function PersonalizeModes({
+  settings,
+  patch
+}: {
+  settings: PublicSettings
+  patch: (p: Partial<PublicSettings>) => void
+}): JSX.Element {
+  const active = settings.mode
+  const customModes: CustomMode[] = settings.customModes ?? []
+  const [selected, setSelected] = useState<string>(active)
+  const [overflowOpen, setOverflowOpen] = useState(false)
+  const [renaming, setRenaming] = useState(false)
+  const [renameValue, setRenameValue] = useState('')
+  const [creatingNew, setCreatingNew] = useState(false)
+  const [newLabel, setNewLabel] = useState('')
+  const locked = settings.managedKeys.includes('mode')
 
-const TABS: { id: TabId; label: string; icon: typeof Cpu }[] = [
-  { id: 'ai', label: 'Your AI', icon: Cpu },
-  { id: 'personalize', label: 'Personalize', icon: Wand2 },
+  // Ensure selected still exists (could be deleted)
+  const allIds = [
+    ...MODE_GROUPS.flatMap((g) => g.modes as string[]),
+    ...customModes.map((c) => c.id)
+  ]
+  const safeSelected = allIds.includes(selected) ? selected : (MODE_GROUPS[0]?.modes[0] ?? 'general')
+  const selectedLabel = modeLabel(safeSelected, customModes)
+  const isBuiltinSelected = safeSelected in BUILTIN_MODE_LABELS
+
+  const createNewMode = (): void => {
+    const label = newLabel.trim() || 'New Mode'
+    const id = `custom-${Date.now()}`
+    patch({ customModes: [...customModes, { id, label }] })
+    setSelected(id)
+    setCreatingNew(false)
+    setNewLabel('')
+  }
+
+  const startRename = (): void => {
+    setRenameValue(selectedLabel)
+    setRenaming(true)
+    setOverflowOpen(false)
+  }
+
+  const commitRename = (): void => {
+    const label = renameValue.trim()
+    if (label && !isBuiltinSelected) {
+      patch({ customModes: customModes.map((c) => c.id === safeSelected ? { ...c, label } : c) })
+    }
+    setRenaming(false)
+  }
+
+  const deleteCustomMode = (): void => {
+    setOverflowOpen(false)
+    const nextModes = customModes.filter((c) => c.id !== safeSelected)
+    const nextPrompts = { ...settings.modePrompts }
+    delete nextPrompts[safeSelected]
+    const nextDocs = { ...settings.contextDocs }
+    delete nextDocs[safeSelected]
+    const next: Partial<PublicSettings> = {
+      customModes: nextModes,
+      modePrompts: nextPrompts,
+      contextDocs: nextDocs
+    }
+    if (active === safeSelected) next.mode = 'general'
+    patch(next)
+    setSelected('general')
+  }
+
+  const resetBuiltinPrompt = (): void => {
+    setOverflowOpen(false)
+    const m = { ...settings.modePrompts }
+    delete m[safeSelected]
+    patch({ modePrompts: m })
+  }
+
+  const clearBuiltinDocs = (): void => {
+    setOverflowOpen(false)
+    const d = { ...settings.contextDocs }
+    delete d[safeSelected]
+    patch({ contextDocs: d })
+  }
+
+  const renderModeButton = (m: string, label: string): JSX.Element => {
+    const isSel = m === safeSelected
+    const isActive = m === active
+    return (
+      <button
+        key={m}
+        type="button"
+        onClick={() => { setSelected(m); setOverflowOpen(false) }}
+        aria-pressed={isSel}
+        className={[
+          'no-drag cl-focus flex items-center gap-2 rounded-[10px] border px-2.5 py-1.5 text-left transition-colors',
+          isSel
+            ? 'border-[var(--cl-primary)]/40 bg-[var(--cl-primary-soft)]'
+            : 'border-transparent hover:bg-white/[0.04]'
+        ].join(' ')}
+      >
+        <span
+          className={[
+            'grid size-5 shrink-0 place-items-center rounded-[6px] text-[10px] font-semibold',
+            isActive ? 'bg-[var(--cl-primary)] text-white' : 'bg-white/[0.06] text-[color:var(--cl-muted-foreground)]'
+          ].join(' ')}
+        >
+          {label[0]?.toUpperCase() ?? '?'}
+        </span>
+        <span className="min-w-0 flex-1 truncate text-[12px] text-[color:var(--cl-foreground)]">
+          {label}
+        </span>
+        {isActive && <CircleCheck size={13} className="shrink-0 text-[color:var(--cl-primary)]" />}
+      </button>
+    )
+  }
+
+  return (
+    <div className="grid grid-cols-[176px_1fr] gap-4">
+      {/* Left — mode list grouped by MODE_GROUPS + Custom */}
+      <div className="flex flex-col gap-0.5">
+        {/* + New Mode button */}
+        {creatingNew ? (
+          <div className="mb-1 flex items-center gap-1">
+            <input
+              autoFocus
+              value={newLabel}
+              onChange={(e) => setNewLabel(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') createNewMode()
+                if (e.key === 'Escape') { setCreatingNew(false); setNewLabel('') }
+              }}
+              onBlur={createNewMode}
+              placeholder="Mode name…"
+              className={`flex-1 min-w-0 text-[12px] ${ctl} py-1.5`}
+            />
+          </div>
+        ) : (
+          <button
+            type="button"
+            onClick={() => setCreatingNew(true)}
+            className="no-drag cl-focus mb-1.5 flex items-center gap-1.5 rounded-[10px] border border-dashed border-[var(--cl-border)] px-2.5 py-1.5 text-[11px] text-[color:var(--cl-muted-foreground)] hover:border-[var(--cl-primary)]/50 hover:text-[color:var(--cl-primary)] transition-colors"
+          >
+            <Plus size={12} /> New Mode
+          </button>
+        )}
+
+        {/* Built-in groups */}
+        {MODE_GROUPS.map((group) => (
+          <div key={group.label} className="flex flex-col gap-0.5">
+            <div className="cl-eyebrow mb-0.5 px-1 text-[10px] font-semibold uppercase tracking-wider text-[color:var(--cl-muted-foreground)]">
+              {group.label}
+            </div>
+            {group.modes.map((m) => renderModeButton(m, BUILTIN_MODE_LABELS[m]))}
+          </div>
+        ))}
+
+        {/* Custom modes group */}
+        {customModes.length > 0 && (
+          <div className="mt-1 flex flex-col gap-0.5">
+            <div className="cl-eyebrow mb-0.5 px-1 text-[10px] font-semibold uppercase tracking-wider text-[color:var(--cl-muted-foreground)]">
+              Custom
+            </div>
+            {customModes.map((c) => renderModeButton(c.id, c.label))}
+          </div>
+        )}
+      </div>
+
+      {/* Right — selected mode's prompt + files + sticky footer */}
+      <div className="flex min-w-0 flex-col gap-4">
+        {/* Header */}
+        <div className="flex items-center justify-between gap-3">
+          <div className="min-w-0">
+            {renaming && !isBuiltinSelected ? (
+              <input
+                autoFocus
+                value={renameValue}
+                onChange={(e) => setRenameValue(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') commitRename()
+                  if (e.key === 'Escape') setRenaming(false)
+                }}
+                onBlur={commitRename}
+                className={`text-[18px] font-semibold bg-transparent border-b border-[var(--cl-primary)] outline-none text-[color:var(--cl-foreground)] w-full max-w-[200px]`}
+              />
+            ) : (
+              <div className="truncate text-[18px] font-semibold text-[color:var(--cl-foreground)]">
+                {selectedLabel}
+              </div>
+            )}
+            <div className="text-[12px] text-[color:var(--cl-muted-foreground)]">
+              {active === safeSelected ? 'This is your active mode.' : 'Previewing. Set active below.'}
+            </div>
+          </div>
+
+          {/* Overflow menu */}
+          <div className="relative flex items-center gap-2">
+            {active === safeSelected && (
+              <span className="flex shrink-0 items-center gap-1 rounded-full bg-[var(--cl-primary-soft)] px-2.5 py-1 text-[11px] font-medium text-[color:var(--cl-primary)]">
+                <CircleCheck size={12} /> Active
+              </span>
+            )}
+            <button
+              type="button"
+              onClick={() => setOverflowOpen((o) => !o)}
+              aria-label="Mode options"
+              className="no-drag cl-focus flex size-7 items-center justify-center rounded-md text-[color:var(--cl-muted-foreground)] hover:bg-white/[0.06] hover:text-[color:var(--cl-foreground)]"
+            >
+              <MoreHorizontal size={15} />
+            </button>
+            {overflowOpen && (
+              <div className="absolute right-0 top-8 z-20 min-w-[180px] rounded-[10px] border border-[var(--cl-border)] bg-[var(--cl-bg,#1a1a2e)] shadow-lg">
+                {isBuiltinSelected ? (
+                  <>
+                    <button
+                      type="button"
+                      onClick={resetBuiltinPrompt}
+                      className="no-drag w-full px-3 py-2 text-left text-[12px] text-[color:var(--cl-foreground)] hover:bg-white/[0.05] rounded-t-[10px]"
+                    >
+                      <RotateCcw size={12} className="mr-2 inline" />
+                      Reset prompt to default
+                    </button>
+                    <button
+                      type="button"
+                      onClick={clearBuiltinDocs}
+                      className="no-drag w-full px-3 py-2 text-left text-[12px] text-[color:var(--cl-foreground)] hover:bg-white/[0.05] rounded-b-[10px]"
+                    >
+                      <Trash size={12} className="mr-2 inline" />
+                      Clear context files
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <button
+                      type="button"
+                      onClick={startRename}
+                      className="no-drag w-full px-3 py-2 text-left text-[12px] text-[color:var(--cl-foreground)] hover:bg-white/[0.05] rounded-t-[10px]"
+                    >
+                      Rename
+                    </button>
+                    <button
+                      type="button"
+                      onClick={deleteCustomMode}
+                      className="no-drag w-full px-3 py-2 text-left text-[12px] text-[color:var(--cl-destructive)] hover:bg-white/[0.05] rounded-b-[10px]"
+                    >
+                      <Trash size={12} className="mr-2 inline" />
+                      Delete mode
+                    </button>
+                  </>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Prompt editor + context docs */}
+        <ModePromptEditor settings={settings} patch={patch} mode={safeSelected} modeDisplayLabel={selectedLabel} />
+        <ContextDocs settings={settings} patch={patch} mode={safeSelected} modeDisplayLabel={selectedLabel} />
+
+        {/* Sticky footer: Set active */}
+        {active !== safeSelected && (
+          <div className="flex justify-end border-t border-[var(--cl-border)] pt-3">
+            <button
+              type="button"
+              disabled={locked}
+              onClick={() => patch({ mode: safeSelected })}
+              className="no-drag cl-focus rounded-[10px] bg-[var(--cl-primary)] px-4 py-2 text-[12px] font-medium text-white hover:opacity-90 disabled:opacity-50"
+            >
+              Set active
+            </button>
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+type TabId =
+  | 'ai'
+  | 'personalize'
+  | 'audio'
+  | 'privacy'
+  | 'meetings'
+  | 'intelligence'
+  | 'about'
+  | 'calendar'
+  | 'profile'
+
+// Icons are Lucide components except Mantu Intelligence, which carries the official Mantu "M" mark —
+// both render through the same `<t.icon size={14} />` call, so the type is the shared size-taking shape.
+const TABS: { id: TabId; label: string; icon: LucideIcon | ComponentType<{ size?: number }> }[] = [
+  // Tab id stays 'personalize' (nothing keys off the label) — labeled to cover BOTH children rendered
+  // under it: the transparency/appearance slider AND the Modes editor. A plain rename to just "Appearance"
+  // would hide Modes (which onboarding explicitly teaches by that name) behind an unrelated-looking tab.
+  { id: 'personalize', label: 'Modes & Display', icon: Wand2 },
+  { id: 'ai', label: 'AI', icon: Cpu },
   { id: 'audio', label: 'Audio', icon: Mic },
-  { id: 'privacy', label: 'Privacy', icon: ShieldCheck },
+  { id: 'calendar', label: 'Calendar', icon: Calendar },
   { id: 'meetings', label: 'Meetings', icon: FolderOpen },
-  { id: 'shortcuts', label: 'Shortcuts', icon: Keyboard },
+  { id: 'intelligence', label: 'Mantu Intelligence', icon: MantuMark },
+  { id: 'privacy', label: 'Privacy', icon: ShieldCheck },
+  // Profile + Keybinds merged: both are "how AskToto is set up for YOU" (who you are / how you drive it).
+  { id: 'profile', label: 'Profile & Keybinds', icon: User },
   { id: 'about', label: 'About', icon: Info }
 ]
 
@@ -1329,7 +2359,14 @@ export function Settings({
   saveKey,
   clearKey,
   testKey,
-  onClose
+  onClose,
+  initialTab,
+  notice,
+  onQuit,
+  onLogout,
+  onOpenIntelligence,
+  onOpenHistory,
+  onOpenMeeting
 }: {
   settings: PublicSettings
   patch: (p: Partial<PublicSettings>) => void
@@ -1337,8 +2374,21 @@ export function Settings({
   clearKey: (provider: ProviderId) => Promise<void>
   testKey: (provider: ProviderId, k: string) => Promise<TestKeyResponse>
   onClose?: () => void
+  initialTab?: TabId
+  // Mantu Intelligence tab navigation — routed through the parent because the dashboard (BrainView),
+  // meeting History, and a past meeting's Review are top-level views, not children of Settings.
+  onOpenIntelligence?: () => void
+  onOpenHistory?: () => void
+  onOpenMeeting?: (file: string) => void
+  // Shown as a small banner under the header — e.g. why the user got redirected here (no provider
+  // ready). Without this, a silent tab-open reads as broken rather than as a guided fix.
+  notice?: string
+  // Quit / Log out routed through the parent so any in-flight meeting is flushed to disk first.
+  // Fall back to the raw IPC if a parent doesn't supply them (keeps the component standalone).
+  onQuit?: () => void
+  onLogout?: () => void
 }): JSX.Element {
-  const [tab, setTab] = useState<TabId>('ai')
+  const [tab, setTab] = useState<TabId>(initialTab ?? 'personalize')
   const managed = settings.managedKeys.length > 0
 
   return (
@@ -1361,6 +2411,12 @@ export function Settings({
           <X size={16} />
         </button>
       </header>
+
+      {notice && (
+        <div className="no-drag border-b border-[var(--cl-primary)]/30 bg-[var(--cl-primary-soft)] px-3.5 py-2 text-[12px] leading-snug text-[color:var(--cl-foreground)]">
+          {notice}
+        </div>
+      )}
 
       {/* TOP tab bar (Tony: "setting bar at the top") — horizontal, scrolls if narrow */}
       <nav
@@ -1406,15 +2462,34 @@ export function Settings({
 
             {tab === 'personalize' && (
               <div className="flex flex-col gap-6">
-                <Section title="Default mode" desc="Pick what AskToto is helping with. This is the only place to change it.">
-                  <div className="flex items-center gap-2">
-                    <ModePicker mode={settings.mode} onChange={(m) => patch({ mode: m })} size="sm" disabled={settings.managedKeys.includes('mode')} />
-                    <ManagedChip keys={settings.managedKeys} k="mode" />
-                  </div>
+                <Section title="Appearance" desc="How see-through the overlay's background is. Default matches what you see today.">
+                  <label className="flex items-center justify-between gap-3 px-1 py-2 text-[12px] text-[color:var(--cl-muted-foreground)]">
+                    <span className="flex items-center gap-2">
+                      {settings.overlayOpacity < 0.9
+                        ? 'More transparent'
+                        : settings.overlayOpacity > 1.1
+                          ? 'Less transparent'
+                          : 'Default'}
+                      <ManagedChip keys={settings.managedKeys} k="overlayOpacity" />
+                    </span>
+                    <input
+                      type="range"
+                      min={0.3}
+                      max={1.5}
+                      step={0.05}
+                      value={settings.overlayOpacity}
+                      disabled={settings.managedKeys.includes('overlayOpacity')}
+                      onChange={(e) => patch({ overlayOpacity: Number(e.target.value) })}
+                      className={['no-drag accent-[var(--cl-primary)]', settings.managedKeys.includes('overlayOpacity') ? 'opacity-60' : ''].join(' ')}
+                    />
+                  </label>
+                </Section>
+                <Section title="Modes" desc="Edit each mode's prompt and the files it can see, then set the one you want active.">
+                  <PersonalizeModes settings={settings} patch={patch} />
                 </Section>
                 <Section
                   title="Language"
-                  desc="AskToto assists live in the speaker's language. Pick the language for your answers, and a separate one for the saved summary/recap (handy when the meeting is in one language but you want the notes in another)."
+                  desc="Pick the language for live answers, and a separate one for the saved summary (useful when the meeting is in one language but you want notes in another)."
                 >
                   <label className="mb-1 block text-[11px] font-medium text-[color:var(--cl-muted-foreground)]">
                     Answers & live assist
@@ -1449,8 +2524,7 @@ export function Settings({
                     ))}
                   </select>
                 </Section>
-                <ModePromptEditor settings={settings} patch={patch} />
-                <Section title="Custom instructions" desc="A global instruction added on top of every mode's prompt. Leave blank for the defaults.">
+                <Section title="Custom instructions" desc="Added to every mode's prompt. Leave blank to use the defaults.">
                   <textarea
                     value={settings.systemPrompt}
                     onChange={(e) => patch({ systemPrompt: e.target.value })}
@@ -1461,10 +2535,7 @@ export function Settings({
                     className={'w-full resize-y ' + ctl}
                   />
                 </Section>
-                <ContextDocs settings={settings} patch={patch} />
-                <Section title="About you" desc="The more AskToto knows, the sharper your answers. Used for interview & sales.">
-                  <ProfileEditor profile={settings.profile} onChange={(p) => patch({ profile: p })} disabled={settings.managedKeys.includes('profile')} />
-                </Section>
+                {/* ProfileEditor moved to the Profile tab */}
               </div>
             )}
 
@@ -1481,6 +2552,7 @@ export function Settings({
                     on={settings.autoSuggest}
                     onChange={(v) => patch({ autoSuggest: v })}
                     disabled={settings.managedKeys.includes('autoSuggest')}
+                    icon={MessageSquare}
                   />
                   <label className="flex items-center justify-between gap-3 px-1 py-2 text-[12px] text-[color:var(--cl-muted-foreground)]">
                     <span className="flex items-center gap-2">
@@ -1500,11 +2572,41 @@ export function Settings({
                   </label>
                   <ToggleRow
                     label="Show live transcript"
-                    desc="Off = show only what to say; full transcript at the end."
+                    desc="On shows the rolling transcript alongside suggested replies; off shows replies only."
                     on={settings.showLiveTranscript}
                     onChange={(v) => patch({ showLiveTranscript: v })}
                     disabled={settings.managedKeys.includes('showLiveTranscript')}
                   />
+                  <ToggleRow
+                    label="Show full transcript in review"
+                    desc="Off = the end-of-meeting screen shows just the summary; the transcript stays one click away."
+                    on={settings.showFullTranscriptInReview}
+                    onChange={(v) => patch({ showFullTranscriptInReview: v })}
+                    disabled={settings.managedKeys.includes('showFullTranscriptInReview')}
+                  />
+                  <ToggleRow
+                    label="Best transcription quality"
+                    desc="On = most accurate, any-language model (larger first-run download, GPU-accelerated). Off = a lighter, faster model with a smaller download."
+                    on={settings.asrQuality === 'best'}
+                    onChange={(v) => patch({ asrQuality: v ? 'best' : 'fast' })}
+                    disabled={settings.managedKeys.includes('asrQuality')}
+                  />
+                  <ToggleRow
+                    label="Use Parakeet engine (fastest · European only)"
+                    desc="On = NVIDIA Parakeet v3, very fast + accurate for 25 European languages (one-time ~487MB download on first use). Off = Whisper, which handles ~99 languages. Use Whisper for non-European speech."
+                    on={settings.asrEngine === 'parakeet'}
+                    onChange={(v) => patch({ asrEngine: v ? 'parakeet' : 'whisper' })}
+                    disabled={settings.managedKeys.includes('asrEngine')}
+                  />
+                  {settings.asrLastFallbackAt != null && (
+                    <div className="-mt-1 flex items-center justify-between gap-2 pl-1 text-[12px] text-[color:var(--color-ink-3)]">
+                      <span>
+                        Parakeet failed and auto-switched to Whisper for the rest of a recent meeting —{' '}
+                        {new Date(settings.asrLastFallbackAt).toLocaleString()}.
+                      </span>
+                      <TextButton onClick={() => patch({ asrLastFallbackAt: null })}>Dismiss</TextButton>
+                    </div>
+                  )}
                   <ToggleRow
                     label="Play chime when recording starts"
                     desc="A soft audible cue each time Listen begins."
@@ -1519,6 +2621,51 @@ export function Settings({
                     onChange={(v) => patch({ soundCues: v })}
                     disabled={settings.managedKeys.includes('soundCues')}
                   />
+                  <ToggleRow
+                    label="Interface sounds"
+                    desc="A soft click when you tap buttons. Turn off for fully silent interaction."
+                    on={settings.uiSounds}
+                    onChange={(v) => patch({ uiSounds: v })}
+                    disabled={settings.managedKeys.includes('uiSounds')}
+                  />
+                  <ToggleRow
+                    label="Rainbow ring on quick actions"
+                    desc="Show the spinning rainbow border on the quick-action chips."
+                    on={settings.quickActionsRainbow}
+                    onChange={(v) => patch({ quickActionsRainbow: v })}
+                    disabled={settings.managedKeys.includes('quickActionsRainbow')}
+                  />
+                </Section>
+                <Section title="Vocabulary corrections" desc="Words the transcriber keeps getting wrong — always fix them.">
+                  <textarea
+                    value={settings.asrCorrections.map((c) => `${c.from} => ${c.to}`).join('\n')}
+                    onChange={(e) =>
+                      patch({
+                        asrCorrections: e.target.value
+                          .split('\n')
+                          .map((line) => {
+                            const i = line.indexOf('=>')
+                            if (i < 0) return null
+                            const from = line.slice(0, i).trim()
+                            const to = line.slice(i + 2).trim()
+                            return from ? { from, to } : null
+                          })
+                          .filter((c): c is { from: string; to: string } => c != null)
+                          .slice(0, 100)
+                      })
+                    }
+                    placeholder={'Toto => AskToto\nMantu => Mantu\nparakeet => Parakeet'}
+                    rows={3}
+                    disabled={settings.managedKeys.includes('asrCorrections')}
+                    className={[
+                      ctl,
+                      'h-20 resize-none text-[12px]',
+                      settings.managedKeys.includes('asrCorrections') ? 'opacity-60 cursor-not-allowed' : ''
+                    ].join(' ')}
+                  />
+                  <span className="text-[11px] text-[color:var(--cl-muted-foreground)]">
+                    One per line, format: heard =&gt; correct.
+                  </span>
                 </Section>
               </div>
             )}
@@ -1532,9 +2679,13 @@ export function Settings({
                     on={settings.contentProtection}
                     onChange={(v) => patch({ contentProtection: v })}
                     disabled={settings.managedKeys.includes('contentProtection')}
+                    icon={Camera}
                   />
                 </Section>
-                <Section title="Recording consent" desc="Notice shown to you before AskToto records others.">
+                <Section
+                  title="Recording consent"
+                  desc="This reminder is shown to YOU, the operator — it does not notify or ask the other participants. AskToto has no way to show anything to the other people on the call; getting their consent is on you, by whatever means your company policy or local law requires (verbal notice, a calendar invite disclosure, etc.)."
+                >
                   <ToggleRow
                     label="I will inform participants before recording"
                     desc="Your acknowledgement that you follow your company's policy and the law when recording. Revocable here."
@@ -1544,13 +2695,30 @@ export function Settings({
                   />
                   <ToggleRow
                     label="Require consent reminder"
-                    desc='Show the "other participants are being recorded" reminder every time Listen starts.'
+                    desc='Show the "other participants are being recorded" reminder every time Listen starts, instead of a one-time-per-day toast. On by default.'
                     on={settings.requireConsentIndicator}
                     onChange={(v) => patch({ requireConsentIndicator: v })}
                     disabled={settings.managedKeys.includes('requireConsentIndicator')}
                   >
                     <div className="mt-1.5 text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
-                      Useful for regulated environments or when local law requires explicit notice.
+                      Useful for regulated environments or when local law requires explicit notice. Note: this
+                      also does not distinguish or flag sensitive topics (health, legal, financial) that come up
+                      in a recorded call — everything spoken is transcribed and treated the same way.
+                    </div>
+                  </ToggleRow>
+                </Section>
+                <Section title="Sensitive data" desc="Keep secrets out of what's sent to AI providers.">
+                  <ToggleRow
+                    label="Redact secrets before sending to AI"
+                    desc="Strips credit-card numbers, API keys, SSNs, and private keys from the captured transcript before it goes to a cloud model. Your typed questions and the saved transcript are never changed."
+                    on={settings.redactSensitive}
+                    onChange={(v) => patch({ redactSensitive: v })}
+                    disabled={settings.managedKeys.includes('redactSensitive')}
+                  >
+                    <div className="mt-1.5 text-[11px] leading-snug text-[color:var(--color-danger)]">
+                      This only scrubs text. Screenshots sent for screen-based questions are NOT redacted —
+                      anything visible on-screen (passwords, IDs, open documents) goes to the provider as-is.
+                      Turn on Private View before capturing a screen you don't want sent.
                     </div>
                   </ToggleRow>
                 </Section>
@@ -1561,7 +2729,7 @@ export function Settings({
               <>
               <Section
                 title="Meetings & transcripts"
-                desc="Every meeting is saved here as a clean note your Dust agents can read and follow up on."
+                desc="Meetings are saved here as notes your Dust agents can read."
               >
                 <div className="cl-card px-3 py-2.5">
                   <div className="flex items-center gap-2">
@@ -1600,13 +2768,16 @@ export function Settings({
                   </div>
                 </div>
                 <div className="mt-2">
-                  <ToggleRow
-                    label="Auto-save transcripts"
-                    desc="Write the transcript + notes to the folder when a meeting ends."
-                    on={settings.autoSaveTranscripts}
-                    onChange={(v) => patch({ autoSaveTranscripts: v })}
-                    disabled={settings.managedKeys.includes('autoSaveTranscripts')}
-                  />
+                  <div className="rounded-lg bg-white/[0.03] px-3 py-2">
+                    <div className="flex items-center gap-2 text-[13px] font-medium text-[color:var(--cl-foreground)]">
+                      <Check size={14} className="text-[var(--color-accent)]" />
+                      Meetings are always saved
+                    </div>
+                    <div className="mt-0.5 text-[12px] leading-snug text-[color:var(--cl-muted-foreground)]">
+                      Every meeting&rsquo;s transcript and notes are written to the folder above when it ends.
+                      Remove any you don&rsquo;t want from History.
+                    </div>
+                  </div>
                   {!settings.encryptTranscripts && (
                     <div className="mt-1 flex items-start gap-1.5 px-1 text-[11px] leading-snug text-[color:var(--cl-destructive)]">
                       <AlertCircle size={12} className="mt-0.5 shrink-0" />
@@ -1616,7 +2787,7 @@ export function Settings({
                   )}
                   <ToggleRow
                     label="Encrypt transcripts at rest"
-                    desc="Locks saved transcripts/notes with your OS keychain so they're unreadable on disk. Trade-off: your Dust agents, recall search, and the knowledge graph can't read encrypted files."
+                    desc="Locks saved transcripts/notes with your OS keychain so they're unreadable on disk. On by default. AskToto's own History, search, and follow-up drafting still work normally — only a separate tool reading the raw files directly (outside AskToto) would be blocked."
                     on={settings.encryptTranscripts}
                     onChange={(v) => patch({ encryptTranscripts: v })}
                     disabled={settings.managedKeys.includes('encryptTranscripts')}
@@ -1624,7 +2795,7 @@ export function Settings({
                     {settings.encryptTranscripts && (
                       <div className="mt-1 flex items-start gap-1.5 px-1 text-[11px] leading-snug text-[color:var(--cl-success)]">
                         <CircleCheck size={12} className="mt-0.5 shrink-0" />
-                        Encrypted at rest — even if the folder syncs to the cloud, the contents stay locked to
+                        Encrypted at rest. Even if the folder syncs to the cloud, contents stay locked to
                         this device. Opening a transcript shows a temporary decrypted copy.
                       </div>
                     )}
@@ -1690,37 +2861,113 @@ export function Settings({
                   </div>
                 </div>
               </Section>
-              <GraphSection settings={settings} patch={patch} />
+              <DangerZoneSection settings={settings} patch={patch} />
               </>
             )}
 
-            {tab === 'shortcuts' && (
-              <Section title="Keyboard shortcuts" desc="Global shortcuts work even when AskToto is not focused. Leave blank to disable. Use Cmd (Mac) / Ctrl (Windows).">
-                <Shortcuts settings={settings} patch={patch} />
-              </Section>
+            {tab === 'intelligence' && (
+              <IntelligenceTab
+                settings={settings}
+                patch={patch}
+                onOpenIntelligence={onOpenIntelligence}
+                onOpenHistory={onOpenHistory}
+                onOpenMeeting={onOpenMeeting}
+              />
+            )}
+
+            {tab === 'calendar' && (
+              <CalendarTab settings={settings} patch={patch} />
+            )}
+
+            {tab === 'profile' && (
+              <div className="flex flex-col gap-6">
+                <Section title="About you" desc="Used for interview and sales modes. The more detail, the better the answers.">
+                  <ProfileEditor
+                    profile={settings.profile}
+                    onChange={(p) => patch({ profile: p })}
+                    disabled={settings.managedKeys.includes('profile')}
+                  />
+                </Section>
+                {/* Keybinds live with Profile: both are "how AskToto is set up for you". */}
+                <Section title="Keyboard shortcuts" desc="AskToto works with these easy to remember commands. Click any of the keybinds to edit.">
+                  <Shortcuts settings={settings} patch={patch} />
+                </Section>
+              </div>
             )}
 
             {tab === 'about' && (
               <div className="flex flex-col gap-6">
-                <Section title="Account" desc="Sign-in tying AskToto to your Mantu Microsoft account & Dust.">
+                <Section title="Account" desc="Sign-in tying AskToto to your Mantu Microsoft account and Dust.">
                   <AccountRow settings={settings} patch={patch} />
                 </Section>
                 <Section title="Permissions" desc="Status of the OS permissions AskToto needs.">
                   <PermissionsSection />
                 </Section>
-                <div className="flex flex-col items-center gap-2 pt-2">
-                  <MantuLogo size={22} />
-                  <div className="flex items-center gap-1 text-[11px] text-[color:var(--cl-muted-foreground)]">
-                    <Heart size={11} className="text-[color:var(--cl-destructive)]" />
-                    Built with care by{' '}
+                <Section
+                  title="Usage"
+                  desc="On-device performance and quality from your local audit log. Never leaves this device."
+                >
+                  <DiagnosticsSection />
+                </Section>
+                <Section
+                  title="Open-source licenses"
+                  desc="Speech-transcription models bundled with this app, for full offline use — see THIRD_PARTY_NOTICES.md in the app's install directory for the complete text."
+                >
+                  <ul className="flex flex-col gap-1 text-[12px] text-[color:var(--cl-muted-foreground)]">
+                    <li>Whisper base &amp; large-v3-turbo (OpenAI, via Xenova/onnx-community) — Apache License 2.0</li>
+                    <li>Parakeet TDT 0.6B v3 (NVIDIA, via k2-fsa/sherpa-onnx) — CC-BY-4.0</li>
+                    <li>ONNX Runtime Web (Microsoft / Hugging Face) — MIT License</li>
+                  </ul>
+                </Section>
+                <div className="flex flex-col items-center gap-2.5 pb-2 pt-4">
+                  <MantuLogo size={190} />
+                  <div className="text-[13px] font-semibold text-[color:var(--cl-foreground)]">
+                    AskToto 1.0.0 · Mantu
+                  </div>
+                  <div className="flex items-center gap-2 text-[11px] text-[color:var(--cl-muted-foreground)]">
+                    <a
+                      href="https://www.mantu.com/legal/privacy-policy"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="transition-colors hover:text-[color:var(--cl-foreground)]"
+                    >
+                      Privacy
+                    </a>
+                    <span aria-hidden>·</span>
+                    <a
+                      href="https://www.mantu.com/legal/data-handling"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="transition-colors hover:text-[color:var(--cl-foreground)]"
+                    >
+                      Data handling
+                    </a>
+                    <span aria-hidden>·</span>
+                    <a
+                      href="mailto:support@mantu.com"
+                      className="transition-colors hover:text-[color:var(--cl-foreground)]"
+                    >
+                      Support
+                    </a>
+                    <span aria-hidden>·</span>
+                    <a
+                      href="mailto:twalteur@amaris.com?subject=AskToto%20feedback"
+                      className="transition-colors hover:text-[color:var(--cl-foreground)]"
+                    >
+                      Send feedback
+                    </a>
+                    <span aria-hidden>·</span>
                     <a
                       href="https://www.linkedin.com/in/tonywalteur/"
                       target="_blank"
                       rel="noopener noreferrer"
-                      className="underline underline-offset-2 transition-colors hover:text-[color:var(--cl-foreground)]"
+                      className="transition-colors hover:text-[color:var(--cl-foreground)]"
                     >
-                      Tony Walteur
+                      LinkedIn
                     </a>
+                  </div>
+                  <div className="text-[11px] text-[color:var(--cl-muted-foreground)]">
+                    Built at Mantu · Built by Tony Walteur
                   </div>
                 </div>
               </div>
@@ -1728,28 +2975,233 @@ export function Settings({
         </div>
       </main>
 
-      {/* Footer — Mantu credit + Done */}
-      <footer className="cl-footer flex h-12 shrink-0 items-center justify-between rounded-b-2xl px-4">
-        <span className="text-[11px] text-[color:var(--cl-muted-foreground)]">
-          Built by{' '}
-          <a
-            href="https://www.linkedin.com/in/tonywalteur/"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="text-[color:var(--cl-primary)] underline underline-offset-2"
-          >
-            Tony Walteur
-          </a>{' '}
-          · Mantu
-        </span>
+      {/* Footer — secondary actions left, Done right */}
+      <footer className="cl-footer flex h-14 shrink-0 items-center gap-2 rounded-b-2xl px-4">
+        <button
+          type="button"
+          onClick={() => patch({ onboardingDone: false })}
+          className="no-drag cl-focus flex items-center gap-1.5 rounded-[10px] border border-[var(--cl-border)] bg-white/[0.03] px-3 py-2 text-[12px] text-[color:var(--cl-foreground)] transition-colors hover:border-[var(--cl-input)] hover:bg-white/[0.08]"
+        >
+          <RotateCcw size={13} className="shrink-0 text-[color:var(--cl-muted-foreground)]" />
+          Reset onboarding
+        </button>
+        <button
+          type="button"
+          onClick={() => (onLogout ? onLogout() : void window.toto.signOut())}
+          className="no-drag cl-focus flex items-center gap-1.5 rounded-[10px] border border-[var(--cl-border)] bg-white/[0.03] px-3 py-2 text-[12px] text-[color:var(--cl-foreground)] transition-colors hover:border-[var(--cl-input)] hover:bg-white/[0.08]"
+        >
+          <X size={13} className="shrink-0 text-[color:var(--cl-muted-foreground)]" />
+          Log out
+        </button>
+        <button
+          type="button"
+          onClick={() => (onQuit ? onQuit() : void window.toto.quit())}
+          className="no-drag cl-focus flex items-center gap-1.5 rounded-[10px] border border-[var(--cl-destructive)]/30 bg-[var(--cl-destructive)]/5 px-3 py-2 text-[12px] text-[color:var(--cl-destructive)] transition-colors hover:bg-[var(--cl-destructive)]/15"
+        >
+          <X size={13} className="shrink-0" />
+          Quit
+        </button>
         <button
           type="button"
           onClick={onClose}
-          className="no-drag cl-focus rounded-[10px] bg-[var(--cl-primary)] px-4 py-2 text-[13px] font-medium text-white hover:opacity-90"
+          className="no-drag cl-focus ml-auto rounded-[10px] bg-[var(--cl-primary)] px-5 py-2 text-[13px] font-semibold text-white hover:opacity-90"
         >
           Done
         </button>
       </footer>
+    </div>
+  )
+}
+
+/** Usage panel from the local audit log. Computed on-device; never sent anywhere. */
+function DiagnosticsSection(): JSX.Element {
+  const [m, setM] = useState<EvalMetrics | null>(null)
+  useEffect(() => {
+    void window.toto.readMetrics().then(setM).catch(() => setM(null))
+  }, [])
+
+  const ms = (v: number | null): string =>
+    v == null ? 'N/A' : v >= 1000 ? `${(v / 1000).toFixed(1)}s` : `${Math.round(v)}ms`
+  const pct = (r: number | null): string => (r == null ? 'N/A' : `${Math.round(r * 100)}%`)
+  const n = (v: number): string => (v >= 1000 ? `${(v / 1000).toFixed(1)}k` : String(v))
+
+  if (!m) {
+    return <div className="text-[12px] text-[color:var(--cl-muted-foreground)]">Loading…</div>
+  }
+  if (m.answers === 0 && m.acceptance.up + m.acceptance.down === 0) {
+    return (
+      <div className="text-[12px] text-[color:var(--cl-muted-foreground)]">
+        No data yet. Ask a few questions and rate some answers, then check back.
+      </div>
+    )
+  }
+
+  const card = (label: string, value: string, sub?: string): JSX.Element => (
+    <div key={label} className="flex flex-col gap-0.5 rounded-[10px] bg-[var(--cl-card)] px-3 py-2">
+      <span className="text-[10px] uppercase tracking-wide text-[color:var(--cl-muted-foreground)]">{label}</span>
+      <span className="text-[16px] font-semibold tabular-nums text-[color:var(--cl-foreground)]">{value}</span>
+      {sub && <span className="text-[10px] text-[color:var(--cl-muted-foreground)]">{sub}</span>}
+    </div>
+  )
+
+  const byProviderEntries = Object.entries(m.byProvider).filter(([, v]) => v > 0)
+
+  return (
+    <div className="flex flex-col gap-4">
+      {/* Volume */}
+      <div className="grid grid-cols-3 gap-2">
+        {card('Answers', String(m.answers))}
+        {card('Tokens in', n(m.tokensIn))}
+        {card('Tokens out', n(m.tokensOut))}
+      </div>
+
+      {/* Latency */}
+      <div>
+        <div className="mb-1.5 text-[11px] font-medium text-[color:var(--cl-muted-foreground)]">Latency</div>
+        <div className="grid grid-cols-4 gap-2">
+          {card('First token p50', ms(m.ttftP50Ms))}
+          {card('First token p95', ms(m.ttftP95Ms))}
+          {card('Full answer p50', ms(m.answerP50Ms))}
+          {card('Full answer p95', ms(m.answerP95Ms))}
+        </div>
+      </div>
+
+      {/* Quality */}
+      <div>
+        <div className="mb-1.5 text-[11px] font-medium text-[color:var(--cl-muted-foreground)]">Quality</div>
+        <div className="grid grid-cols-4 gap-2">
+          {card('Acceptance', pct(m.acceptance.rate))}
+          {card('Rated up', String(m.acceptance.up))}
+          {card('Rated down', String(m.acceptance.down))}
+          {card('Fallbacks', String(m.fallbacks))}
+        </div>
+      </div>
+
+      {/* By provider */}
+      {byProviderEntries.length > 0 && (
+        <div>
+          <div className="mb-1.5 text-[11px] font-medium text-[color:var(--cl-muted-foreground)]">By provider</div>
+          <div className="flex flex-wrap gap-2">
+            {byProviderEntries.map(([provider, count]) => (
+              <div key={provider} className="flex flex-col gap-0.5 rounded-[10px] bg-[var(--cl-card)] px-3 py-2 min-w-[80px]">
+                <span className="text-[10px] uppercase tracking-wide text-[color:var(--cl-muted-foreground)]">{provider}</span>
+                <span className="text-[16px] font-semibold tabular-nums text-[color:var(--cl-foreground)]">{count}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {m.failures > 0 && (
+        <div className="flex items-center gap-1.5 text-[11px] text-[color:var(--cl-destructive)]">
+          <AlertCircle size={12} /> {m.failures} answer{m.failures !== 1 ? 's' : ''} failed
+        </div>
+      )}
+    </div>
+  )
+}
+
+/**
+ * Mantu Intelligence tab — everything "what my meetings know" in one place: the Intelligence dashboard
+ * (graphs), the knowledge-graph builder, and the recent meetings history with follow-up entry points.
+ * Navigation is delegated to the parent (BrainView / History / a meeting's Review are top-level views).
+ */
+function IntelligenceTab({
+  settings,
+  patch,
+  onOpenIntelligence,
+  onOpenHistory,
+  onOpenMeeting
+}: {
+  settings: PublicSettings
+  patch: (p: Partial<PublicSettings>) => void
+  onOpenIntelligence?: () => void
+  onOpenHistory?: () => void
+  onOpenMeeting?: (file: string) => void
+}): JSX.Element {
+  const [meetings, setMeetings] = useState<MeetingSummary[] | null>(null)
+  useEffect(() => {
+    let alive = true
+    void window.toto.recallList().then((list) => {
+      if (alive) setMeetings(list)
+    })
+    return () => {
+      alive = false
+    }
+  }, [])
+  const recent = (meetings ?? []).slice(0, 6)
+  // MeetingSummary.date is an ISO stamp — render it as a short human date ("Jun 30"), not a log line.
+  const shortDate = (iso: string): string => {
+    const d = new Date(iso)
+    return isNaN(d.getTime()) ? iso : d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
+  }
+
+  return (
+    <div className="flex flex-col gap-6">
+      <Section
+        title="Mantu Intelligence"
+        desc="Your meeting brain — dashboards and graphs built from every meeting AskToto has captured: pipeline, people, deals going cold, and the week's Mars draft."
+      >
+        <div className="cl-card flex items-center gap-3 px-3 py-3">
+          <MantuMark size={34} />
+          <div className="min-w-0 flex-1">
+            <div className="text-[13px] font-medium text-[color:var(--cl-foreground)]">Intelligence dashboard</div>
+            <div className="truncate text-[11px] text-[color:var(--cl-muted-foreground)]">
+              Graphs and insights from {meetings === null ? 'your' : meetings.length} indexed meeting{meetings !== null && meetings.length === 1 ? '' : 's'}.
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={onOpenIntelligence}
+            disabled={!onOpenIntelligence}
+            className="no-drag cl-focus flex shrink-0 items-center gap-1.5 rounded-[10px] bg-[var(--cl-primary)] px-3 py-2 text-[12px] font-medium text-white hover:opacity-90 disabled:opacity-50"
+          >
+            <ExternalLink size={13} /> Open
+          </button>
+        </div>
+      </Section>
+
+      <Section
+        title="Meetings & follow-up"
+        desc="Recent meeting history. Open one to review its recap, transcript, and generate a follow-up."
+      >
+        <div className="flex flex-col gap-1.5">
+          {meetings === null ? (
+            <div className="cl-card px-3 py-2.5 text-[12px] text-[color:var(--cl-muted-foreground)]">Loading…</div>
+          ) : recent.length === 0 ? (
+            <div className="cl-card px-3 py-2.5 text-[12px] text-[color:var(--cl-muted-foreground)]">
+              No meetings saved yet — they appear here as soon as one ends.
+            </div>
+          ) : (
+            recent.map((m) => (
+              <button
+                key={m.file}
+                type="button"
+                onClick={() => onOpenMeeting?.(m.file)}
+                disabled={!onOpenMeeting}
+                className="no-drag cl-focus cl-card flex items-center gap-2.5 px-3 py-2.5 text-left transition-colors hover:bg-white/[0.06] disabled:opacity-60"
+              >
+                <FileText size={14} className="shrink-0 text-[color:var(--cl-primary)]" />
+                <span className="min-w-0 flex-1 truncate text-[12px] text-[color:var(--cl-foreground)]">{m.title}</span>
+                <span className="shrink-0 text-[11px] text-[color:var(--cl-muted-foreground)]">
+                  {shortDate(m.date)}
+                  {m.durationMin ? ` · ${m.durationMin} min` : ''}
+                </span>
+              </button>
+            ))
+          )}
+          <button
+            type="button"
+            onClick={onOpenHistory}
+            disabled={!onOpenHistory}
+            className="no-drag cl-focus mt-1 flex items-center justify-center gap-1.5 rounded-[10px] border border-[var(--cl-input)] bg-white/[0.04] px-3 py-2 text-[12px] text-[color:var(--cl-foreground)] hover:bg-white/[0.08] disabled:opacity-50"
+          >
+            Open full history
+          </button>
+        </div>
+      </Section>
+
+      <GraphSection settings={settings} patch={patch} />
     </div>
   )
 }
@@ -1775,7 +3227,7 @@ function GraphSection({
   return (
     <Section
       title="Knowledge graph"
-      desc="Turn your notes into a connected graph — see how meetings, people and topics link. Reuses your Claude / Claude Code (no extra key, never Gemini)."
+      desc="Build a graph from your notes to see how meetings, people, and topics connect. Reuses your Claude / Claude Code key (no extra key, never Gemini)."
     >
       <ToggleRow
         label="Build a knowledge graph of my notes"
@@ -1793,7 +3245,7 @@ function GraphSection({
             {!status ? (
               'Checking…'
             ) : !status.installed ? (
-              <span className="text-[color:var(--cl-muted-foreground)]">graphify not found — install it below.</span>
+              <span className="text-[color:var(--cl-muted-foreground)]">graphify not found. Install it below.</span>
             ) : status.building || busy ? (
               'Building the graph…'
             ) : status.hasGraph ? (
@@ -1802,7 +3254,7 @@ function GraphSection({
               </span>
             ) : (
               <span className="text-[color:var(--cl-muted-foreground)]">
-                No graph yet — Rebuild to create it{status.backend ? ` (via ${status.backend})` : ''}.
+                No graph yet. Rebuild to create one{status.backend ? ` (via ${status.backend})` : ''}.
               </span>
             )}
           </div>
@@ -1849,6 +3301,91 @@ function GraphSection({
               </button>
             )}
           </div>
+        </div>
+      )}
+    </Section>
+  )
+}
+
+const RETENTION_OPTIONS: { days: number; label: string }[] = [
+  { days: 0, label: 'Keep forever (default)' },
+  { days: 30, label: '30 days' },
+  { days: 90, label: '90 days' },
+  { days: 180, label: '180 days' },
+  { days: 365, label: '1 year' }
+]
+
+/** GDPR/CCPA-facing controls: auto-retention window + a real "delete everything" action. Meeting
+ *  recordings capture OTHER people's speech, not just the operator's — this is the one place in
+ *  Settings that lets that be bounded or fully erased on demand, not just left to manual per-file cleanup. */
+function DangerZoneSection({
+  settings,
+  patch
+}: {
+  settings: PublicSettings
+  patch: (p: Partial<PublicSettings>) => void
+}): JSX.Element {
+  const [busy, setBusy] = useState(false)
+  const [result, setResult] = useState<{ ok: boolean; deleted: number; error?: string } | null>(null)
+
+  const deleteAll = async (): Promise<void> => {
+    setBusy(true)
+    setResult(null)
+    const r = await window.toto.recallDeleteAll()
+    setResult(r)
+    setBusy(false)
+  }
+
+  return (
+    <Section
+      title="Danger zone"
+      desc="Meeting recordings capture other people's speech too, not just yours — these controls bound or fully erase what's stored on this device."
+    >
+      <label className="mb-1 block text-[11px] font-medium text-[color:var(--cl-muted-foreground)]">
+        Auto-delete meetings older than
+      </label>
+      <select
+        value={settings.transcriptRetentionDays}
+        onChange={(e) => patch({ transcriptRetentionDays: Number(e.target.value) })}
+        disabled={settings.managedKeys.includes('transcriptRetentionDays')}
+        className={'w-full ' + ctl}
+      >
+        {RETENTION_OPTIONS.map((o) => (
+          <option key={o.days} value={o.days}>
+            {o.label}
+          </option>
+        ))}
+      </select>
+      <div className="mt-4 flex items-center justify-between gap-3 rounded-lg border border-[var(--cl-destructive)]/30 bg-[var(--cl-destructive)]/5 px-3 py-2.5">
+        <div>
+          <div className="text-[13px] font-medium text-[color:var(--cl-foreground)]">Delete all my data</div>
+          <div className="text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
+            Permanently removes every saved meeting, note, and the knowledge graph from this device. Cannot be undone.
+          </div>
+        </div>
+        <button
+          type="button"
+          onClick={() => void deleteAll()}
+          disabled={busy}
+          className="no-drag cl-focus flex shrink-0 items-center gap-1.5 rounded-[10px] border border-[var(--cl-destructive)]/40 bg-[var(--cl-destructive)]/15 px-3 py-2 text-[12px] font-medium text-[color:var(--cl-destructive)] hover:bg-[var(--cl-destructive)]/25 disabled:opacity-50"
+        >
+          <Trash2 size={13} /> {busy ? 'Deleting…' : 'Delete everything'}
+        </button>
+      </div>
+      {result && (
+        <div
+          className={[
+            'mt-2 text-[11px]',
+            result.ok || result.error === 'cancelled'
+              ? 'text-[color:var(--cl-muted-foreground)]'
+              : 'text-[color:var(--cl-destructive)]'
+          ].join(' ')}
+        >
+          {result.error === 'cancelled'
+            ? 'Cancelled — nothing was deleted.'
+            : result.ok
+              ? `Deleted ${result.deleted} meeting${result.deleted === 1 ? '' : 's'}.`
+              : `Deleted ${result.deleted}, but some files could not be removed.`}
         </div>
       )}
     </Section>
@@ -1951,7 +3488,7 @@ function AccountRow({
           </a>{' '}
           register an app (platform <b>Mobile &amp; desktop</b>, redirect{' '}
           <code className="rounded bg-white/[0.06] px-1">http://localhost</code>), then paste its IDs.
-          These are public identifiers — no secret needed.
+          These are public identifiers. No secret needed.
         </p>
       </div>
       {field('Application (client) ID', clientId, setClientId, '00000000-0000-0000-0000-000000000000')}
@@ -2035,10 +3572,220 @@ function AccountRow({
           </button>
           <span className="text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
             Enable Microsoft (Entra) sign-in to lock AskToto to your Mantu domain and tie usage to Dust.
-            One-time setup — takes a minute.
+            One-time setup.
           </span>
           {err && <span className="text-[11px] text-[color:var(--cl-destructive)]">{err}</span>}
         </>
+      )}
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Calendar tab
+// ---------------------------------------------------------------------------
+
+/**
+ * Calendar tab: Microsoft / Outlook (Entra SSO) calendar connection plus the meeting notification toggle.
+ */
+function CalendarTab({
+  settings,
+  patch
+}: {
+  settings: PublicSettings
+  patch: (p: Partial<PublicSettings>) => void
+}): JSX.Element {
+  const [authStatus, setAuthStatus] = useState<AuthStatus | null>(null)
+  const [outlookBusy, setOutlookBusy] = useState(false)
+  const [outlookErr, setOutlookErr] = useState<string | null>(null)
+  const [showOutlookSetup, setShowOutlookSetup] = useState(false)
+  const [savingOutlook, setSavingOutlook] = useState(false)
+  const [clientId, setClientId] = useState(settings.azureClientId || '')
+  const [tenantId, setTenantId] = useState(settings.azureTenantId || '')
+  const [domain, setDomain] = useState(settings.azureAllowedDomain || '')
+
+  const refreshOutlook = (): void => {
+    void window.toto.authStatus().then(setAuthStatus).catch(() => setAuthStatus(null))
+  }
+  useEffect(refreshOutlook, [])
+
+  const saveOutlookIds = async (): Promise<void> => {
+    const ci = clientId.trim()
+    const ti = tenantId.trim()
+    const dom = domain.trim().replace(/^@/, '')
+    if (!ci || !ti || !dom) { setOutlookErr('All three fields are required.'); return }
+    setSavingOutlook(true)
+    setOutlookErr(null)
+    await patch({ azureClientId: ci, azureTenantId: ti, azureAllowedDomain: dom })
+    refreshOutlook()
+    setSavingOutlook(false)
+    setShowOutlookSetup(false)
+  }
+
+  const signInOutlook = async (): Promise<void> => {
+    setOutlookBusy(true)
+    setOutlookErr(null)
+    const r = await window.toto.signIn()
+    setOutlookBusy(false)
+    if (!r.ok) setOutlookErr(r.error || 'Sign-in failed.')
+    refreshOutlook()
+  }
+
+  const signOutOutlook = async (): Promise<void> => {
+    await window.toto.signOut()
+    refreshOutlook()
+  }
+
+  const connectedPill = (
+    <span className="flex shrink-0 items-center gap-1 rounded-full bg-[var(--cl-primary-soft)] px-2.5 py-1 text-[11px] font-medium text-[color:var(--cl-primary)]">
+      <CircleCheck size={12} /> Connected
+    </span>
+  )
+
+  const idField = (
+    label: string,
+    val: string,
+    set: (v: string) => void,
+    placeholder: string
+  ): JSX.Element => (
+    <label className="flex flex-col gap-1">
+      <span className="text-[11px] font-medium text-[color:var(--cl-muted-foreground)]">{label}</span>
+      <input
+        value={val}
+        spellCheck={false}
+        autoComplete="off"
+        placeholder={placeholder}
+        onChange={(e) => set(e.target.value)}
+        className={`${ctl} w-full`}
+      />
+    </label>
+  )
+
+  const isOutlookConnected = !!authStatus?.signedIn
+
+  return (
+    <div className="flex flex-col gap-6">
+
+      {/* Notifications — merged from former Notifications tab */}
+      <Section title="Notifications">
+        <ToggleRow
+          label="Meeting alerts"
+          desc="Notify 1 minute before a scheduled meeting starts."
+          on={settings.meetingNotifications ?? false}
+          onChange={(v) => patch({ meetingNotifications: v })}
+          icon={Bell}
+        />
+      </Section>
+
+      {/* Microsoft / Outlook */}
+      <Section title="Microsoft / Outlook" desc="Connect your work Microsoft account to see Outlook calendar events.">
+        <div className="flex flex-col gap-2">
+          {authStatus === null && (
+            <Loader2 size={14} className="animate-spin text-[color:var(--cl-muted-foreground)]" />
+          )}
+
+          {isOutlookConnected && (
+            <div className="cl-card flex items-center justify-between gap-3 px-3 py-2.5">
+              <div className="flex items-center gap-2">
+                {connectedPill}
+                <span className="text-[12px] text-[color:var(--cl-foreground)]">{authStatus?.email}</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => void signOutOutlook()}
+                className="no-drag cl-focus rounded-[8px] border border-[var(--cl-input)] px-2.5 py-1.5 text-[12px] text-[color:var(--cl-foreground)] hover:bg-white/[0.06]"
+              >
+                Disconnect
+              </button>
+            </div>
+          )}
+
+          {!isOutlookConnected && authStatus?.configured && !showOutlookSetup && (
+            <div className="flex flex-col gap-2">
+              <button
+                type="button"
+                disabled={outlookBusy}
+                onClick={() => void signInOutlook()}
+                className="no-drag cl-focus flex items-center justify-center gap-2 rounded-[8px] bg-[var(--cl-primary)] px-3 py-2 text-[13px] font-medium text-white hover:opacity-90 disabled:opacity-50"
+              >
+                {outlookBusy ? <Loader2 size={14} className="animate-spin" /> : null}
+                Connect Microsoft account
+              </button>
+              <div className="flex items-center justify-between">
+                <span className="text-[11px] text-[color:var(--cl-muted-foreground)]">
+                  Restricted to @{authStatus.domain}.
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setShowOutlookSetup(true)}
+                  className="no-drag cl-focus text-[11px] text-[color:var(--cl-muted-foreground)] underline underline-offset-2 hover:text-[color:var(--cl-foreground)]"
+                >
+                  Change IDs
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Paste-in setup — shown when not configured, or when user clicks "Change IDs" */}
+          {authStatus !== null && (!authStatus.configured || showOutlookSetup) && (
+            <div className="flex flex-col gap-2.5 rounded-[10px] border border-[var(--cl-input)] bg-white/[0.02] p-3">
+              <div className="flex items-start gap-2">
+                <ShieldCheck size={14} className="mt-0.5 shrink-0 text-[color:var(--cl-primary)]" />
+                <p className="text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
+                  Register an app in{' '}
+                  <a
+                    href="https://entra.microsoft.com/#view/Microsoft_AAD_RegisteredApps/ApplicationsListBlade"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-0.5 text-[color:var(--cl-primary)] underline underline-offset-2"
+                  >
+                    Microsoft Entra <ExternalLink size={10} />
+                  </a>{' '}
+                  (platform: Mobile &amp; desktop, redirect: <code className="rounded bg-white/[0.06] px-1">http://localhost</code>).
+                  These are public IDs. No secret needed.
+                </p>
+              </div>
+              {idField('Application (client) ID', clientId, setClientId, '00000000-0000-0000-0000-000000000000')}
+              {idField('Directory (tenant) ID', tenantId, setTenantId, '00000000-0000-0000-0000-000000000000')}
+              {idField('Allowed email domain', domain, setDomain, 'mantu.com')}
+              {outlookErr && (
+                <span className="text-[11px] text-[color:var(--cl-destructive)]">{outlookErr}</span>
+              )}
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => void saveOutlookIds()}
+                  disabled={savingOutlook}
+                  className="no-drag cl-focus flex items-center gap-1.5 rounded-[8px] bg-[var(--cl-primary)] px-3 py-1.5 text-[12px] font-medium text-white hover:opacity-90 disabled:opacity-50"
+                >
+                  {savingOutlook ? <Loader2 size={13} className="animate-spin" /> : null}
+                  Save IDs
+                </button>
+                {showOutlookSetup && (
+                  <button
+                    type="button"
+                    onClick={() => { setShowOutlookSetup(false); setOutlookErr(null) }}
+                    className="no-drag cl-focus rounded-[8px] px-2.5 py-1.5 text-[12px] text-[color:var(--cl-muted-foreground)] hover:text-[color:var(--cl-foreground)]"
+                  >
+                    Cancel
+                  </button>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* Sign-in error — only when the setup form is closed (form shows its own error inline) */}
+          {outlookErr && authStatus?.configured && !showOutlookSetup && (
+            <span className="text-[11px] text-[color:var(--cl-destructive)]">{outlookErr}</span>
+          )}
+        </div>
+      </Section>
+
+      {/* Agenda preview — shown once the Outlook calendar is connected */}
+      {isOutlookConnected && (
+        <Section title="Today's agenda" desc="Preview from your Outlook calendar.">
+          <AgendaView />
+        </Section>
       )}
     </div>
   )
@@ -2113,9 +3860,55 @@ const SHORTCUT_LABELS: Record<HotkeyAction, string> = {
   factcheck: 'Fact-check',
   'toggle-listen': 'Toggle Listen',
   reset: 'New / reset',
+  whatnext: 'What to say next',
+  explain: 'Explain',
+  summarize: 'Summarize screen',
+  'spotlight-ref': 'Spotlight Ref',
   'scroll-up': 'Move up',
   'scroll-down': 'Move down',
-  settings: 'Open settings'
+  'scroll-left': 'Move left',
+  'scroll-right': 'Move right',
+  settings: 'Open settings',
+  agenda: "Today's agenda" // tray-only action; not listed in HOTKEY_ACTIONS so it renders no shortcut row
+}
+
+type ShortcutGroup = 'General' | 'Window'
+
+const SHORTCUT_GROUPS: Record<HotkeyAction, ShortcutGroup> = {
+  ask: 'General',
+  hide: 'General',
+  reset: 'General',
+  settings: 'General',
+  'toggle-listen': 'General',
+  capture: 'General',
+  factcheck: 'General',
+  whatnext: 'General',
+  explain: 'General',
+  summarize: 'General',
+  'spotlight-ref': 'General',
+  'scroll-up': 'Window',
+  'scroll-down': 'Window',
+  'scroll-left': 'Window',
+  'scroll-right': 'Window',
+  agenda: 'General'
+}
+
+const SHORTCUT_ICONS: Partial<Record<HotkeyAction, LucideIcon>> = {
+  ask: MessageSquare,
+  hide: Eye,
+  reset: RotateCcw,
+  settings: Settings2,
+  'toggle-listen': Mic,
+  capture: Camera,
+  factcheck: CircleCheck,
+  whatnext: MessageSquareQuote,
+  explain: Lightbulb,
+  summarize: AlignLeft,
+  'spotlight-ref': FileSearch,
+  'scroll-up': ArrowUp,
+  'scroll-down': ArrowDown,
+  'scroll-left': ArrowLeft,
+  'scroll-right': ArrowRight
 }
 
 function displayAccelerator(a: string): string {
@@ -2129,6 +3922,121 @@ function displayAccelerator(a: string): string {
     .replace(/\\/g, '\\')
 }
 
+// Maps a KeyboardEvent key value to the Electron accelerator token.
+// Lone modifiers, PrintScreen, etc. are not valid as the main key.
+const LONE_MODIFIERS = new Set(['Control', 'Shift', 'Alt', 'Meta', 'OS', 'AltGraph', 'CapsLock'])
+
+function keyEventToAccelerator(e: React.KeyboardEvent<HTMLInputElement>): string | null {
+  const key = e.key
+  if (LONE_MODIFIERS.has(key)) return null // lone modifier — not a complete combo
+
+  const parts: string[] = []
+  if (e.ctrlKey || e.metaKey) parts.push('CommandOrControl')
+  if (e.altKey) parts.push('Alt')
+  if (e.shiftKey) parts.push('Shift')
+
+  // Must have at least one modifier — bare keys would conflict with typing
+  if (parts.length === 0) return null
+
+  // Normalise the main key to Electron accelerator notation
+  let main = key
+  if (key === ' ') main = 'Space'
+  else if (key === 'Enter') main = 'Return'
+  else if (key === 'ArrowUp') main = 'Up'
+  else if (key === 'ArrowDown') main = 'Down'
+  else if (key === 'ArrowLeft') main = 'Left'
+  else if (key === 'ArrowRight') main = 'Right'
+  else if (key === 'Escape') main = 'Escape'
+  else if (key === 'Backspace') main = 'Backspace'
+  else if (key === 'Delete') main = 'Delete'
+  else if (key === 'Tab') main = 'Tab'
+  else if (key.length === 1) main = key.toUpperCase() // A-Z, 0-9, punctuation
+  // Function keys (F1-F24), PageUp/PageDown, Home, End, Insert — pass through as-is
+
+  parts.push(main)
+  return parts.join('+')
+}
+
+function KeyChips({ accelerator }: { accelerator: string }): JSX.Element {
+  if (!accelerator) {
+    return <span className="text-[11px] text-[color:var(--cl-muted-foreground)]">Click to record</span>
+  }
+  const parts = displayAccelerator(accelerator).split('+')
+  return (
+    <span className="flex flex-wrap items-center gap-0.5">
+      {parts.map((part, i) => (
+        <span key={i} className="inline-flex items-center rounded border border-[var(--cl-border)] bg-[var(--cl-card)] px-1.5 text-[11px] font-medium text-[color:var(--cl-foreground)]">
+          {part}
+        </span>
+      ))}
+    </span>
+  )
+}
+
+function KeyRecorder({
+  value,
+  onChange
+}: {
+  value: string
+  onChange: (v: string) => void
+}): JSX.Element {
+  const [recording, setRecording] = useState(false)
+  const [preview, setPreview] = useState<string | null>(null)
+  const inputRef = useRef<HTMLInputElement>(null)
+
+  // Auto-focus the capture input when recording starts
+  useEffect(() => {
+    if (recording) inputRef.current?.focus()
+  }, [recording])
+
+  const onKeyDown = (e: React.KeyboardEvent<HTMLInputElement>): void => {
+    e.preventDefault()
+    e.stopPropagation()
+    const acc = keyEventToAccelerator(e)
+    if (acc === null) {
+      setPreview(null)
+      return
+    }
+    setPreview(acc)
+    onChange(acc)
+    setTimeout(() => {
+      setRecording(false)
+      setPreview(null)
+    }, 120)
+  }
+
+  const onBlur = (): void => {
+    setRecording(false)
+    setPreview(null)
+  }
+
+  if (recording) {
+    return (
+      <input
+        ref={inputRef}
+        type="text"
+        readOnly
+        value={preview !== null ? displayAccelerator(preview) : 'Recording… press keys'}
+        onBlur={onBlur}
+        onKeyDown={onKeyDown}
+        title="Press your desired key combination"
+        className="no-drag cl-input font-ui min-w-0 flex-1 cursor-pointer select-none px-2 py-1 text-[12px] border-[var(--cl-primary)] bg-[var(--cl-primary-soft)] text-[color:var(--cl-primary)] outline-none ring-1 ring-[var(--cl-primary)] transition-colors"
+      />
+    )
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={() => setRecording(true)}
+      title="Click then press your desired key combination"
+      className="no-drag cl-focus cl-input min-w-0 flex-1 cursor-pointer px-2 py-1 text-left transition-colors hover:bg-white/[0.04]"
+    >
+      <KeyChips accelerator={value} />
+    </button>
+  )
+}
+
 function Shortcuts({
   settings,
   patch
@@ -2138,67 +4046,63 @@ function Shortcuts({
 }): JSX.Element {
   const user = settings.shortcuts ?? {}
   const set = (action: HotkeyAction, value: string): void => {
-    const next = value.trim()
-    patch({
-      shortcuts: { ...user, [action]: next }
-    })
+    patch({ shortcuts: { ...user, [action]: value } })
   }
   const reset = (action: HotkeyAction): void => {
     const next = { ...user }
     next[action] = DEFAULT_SHORTCUTS[action] ?? ''
     patch({ shortcuts: next })
   }
+
+  const groups: ShortcutGroup[] = ['General', 'Window']
+
   return (
-    <div className="flex flex-col gap-2">
-      <div className="flex flex-col gap-1">
-        {HOTKEY_ACTIONS.map((action) => {
-          const current = user[action] ?? DEFAULT_SHORTCUTS[action] ?? ''
-          const isDefault = current === (DEFAULT_SHORTCUTS[action] ?? '')
-          return (
-            <div key={action} className="flex items-center justify-between gap-3 px-1 py-1.5 text-[13px]">
-              <span className="min-w-[140px] text-[color:var(--cl-muted-foreground)]">
-                {SHORTCUT_LABELS[action]}
-              </span>
-              <div className="flex flex-1 items-center gap-2">
-                <input
-                  type="text"
-                  value={current}
-                  placeholder={isDefault ? displayAccelerator(current) : 'Disabled'}
-                  onChange={(e) => set(action, e.target.value)}
-                  className={[
-                    'no-drag cl-input font-ui min-w-0 flex-1 px-2 py-1 text-[12px]',
-                    !isDefault ? 'text-[color:var(--cl-primary)]' : ''
-                  ].join(' ')}
-                  spellCheck={false}
-                />
-                <span className="text-[11px] text-[color:var(--cl-muted-foreground)]">
-                  {displayAccelerator(current)}
-                </span>
-                <button
-                  type="button"
-                  onClick={() => set(action, '')}
-                  className="no-drag cl-focus rounded-md px-2 py-1 text-[11px] text-[color:var(--cl-muted-foreground)] hover:bg-white/[0.06] hover:text-[color:var(--cl-foreground)]"
-                >
-                  Clear
-                </button>
-                {!isDefault && (
-                  <button
-                    type="button"
-                    onClick={() => reset(action)}
-                    className="no-drag cl-focus rounded-md px-2 py-1 text-[11px] text-[color:var(--cl-primary)] hover:bg-white/[0.06]"
-                  >
-                    Reset
-                  </button>
-                )}
-              </div>
+    <div className="flex flex-col gap-4">
+      {groups.map((group) => {
+        const actions = HOTKEY_ACTIONS.filter((a) => SHORTCUT_GROUPS[a] === group)
+        if (actions.length === 0) return null
+        return (
+          <div key={group} className="flex flex-col gap-1">
+            <div className="cl-eyebrow mb-1 px-1 text-[10px] font-semibold uppercase tracking-wider text-[color:var(--cl-muted-foreground)]">
+              {group}
             </div>
-          )
-        })}
-      </div>
+            {actions.map((action) => {
+              const current = user[action] ?? DEFAULT_SHORTCUTS[action] ?? ''
+              const isDefault = current === (DEFAULT_SHORTCUTS[action] ?? '')
+              const Icon = SHORTCUT_ICONS[action]
+              return (
+                <div key={action} className="flex items-center justify-between gap-3 px-1 py-1.5 text-[13px]">
+                  <span className="flex min-w-[140px] items-center gap-1.5 text-[12px] text-[color:var(--cl-muted-foreground)]">
+                    {Icon && <Icon size={14} className="shrink-0" />}
+                    {SHORTCUT_LABELS[action]}
+                  </span>
+                  <div className="flex flex-1 items-center gap-2">
+                    <KeyRecorder value={current} onChange={(v) => set(action, v)} />
+                    <button
+                      type="button"
+                      onClick={() => set(action, '')}
+                      className="no-drag cl-focus rounded-md px-2 py-1 text-[11px] text-[color:var(--cl-muted-foreground)] hover:bg-white/[0.06] hover:text-[color:var(--cl-foreground)]"
+                    >
+                      Clear
+                    </button>
+                    {!isDefault && (
+                      <button
+                        type="button"
+                        onClick={() => reset(action)}
+                        className="no-drag cl-focus rounded-md px-2 py-1 text-[11px] text-[color:var(--cl-primary)] hover:bg-white/[0.06]"
+                      >
+                        Reset
+                      </button>
+                    )}
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        )
+      })}
       <div className="text-[11px] leading-relaxed text-[color:var(--cl-muted-foreground)]">
-        Format examples: <code className="text-[color:var(--cl-foreground)]">CommandOrControl+Shift+L</code>,{' '}
-        <code className="text-[color:var(--cl-foreground)]">Alt+F</code>. Invalid accelerators are ignored.
-        Changes are applied immediately in the running app.
+        Click a shortcut field and press your desired key combination. Changes apply immediately.
       </div>
     </div>
   )
@@ -2269,7 +4173,7 @@ function ProfileEditor({
       />
       <div className="flex items-center gap-1.5 px-1 text-[11px] text-[color:var(--cl-muted-foreground)]">
         <Sparkles size={11} className="text-[color:var(--cl-primary)]" />
-        Tip: paste your résumé + the job post for spot-on interview answers.
+        Paste your résumé and the job post for better interview answers.
       </div>
     </div>
   )

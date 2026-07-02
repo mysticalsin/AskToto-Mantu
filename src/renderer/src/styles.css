@@ -25,8 +25,10 @@
   --font-body: 'InterVar', -apple-system, system-ui, sans-serif;
   /* Mantu brand purple (Bright Purple #7F00DA / Primary Purple #6600AE). No yellow. */
   --color-accent: #7f00da;
+  --color-accent-2: #a64dff; /* brighter purple — active toolbar icons, input cursor, chevron */
   --color-accent-soft: rgba(127, 0, 218, 0.18);
   --color-accent-glow: rgba(127, 0, 218, 0.30);
+  --color-cyan: #22d3ee; /* Start-listening idle state — a distinct, inviting color from the muted toolbar default */
   /* Bright text — pops on the more-transparent glass (Tony: "text can be very bright"). */
   --color-ink: rgba(255, 255, 255, 1);
   --color-ink-2: rgba(255, 255, 255, 0.86);
@@ -43,22 +45,27 @@
   --color-success-soft: rgba(131, 192, 146, 0.12);
 
   /* Glass surfaces — neutral dark gray with a faint Mantu-purple undertone (desaturated so the bar reads
-     clearly over any desktop), still translucent but opaque enough to stay legible. Accents stay purple. */
-  --glass-fill: rgba(40, 39, 44, 0.58);
-  --glass-fill-elevated: rgba(48, 47, 53, 0.74);
-  --glass-fill-strong: rgba(34, 33, 39, 0.78);
+     clearly over any desktop), still translucent but opaque enough to stay legible. Accents stay purple.
+     Alpha channels multiply by --overlay-opacity-scale (Settings → Personalize → Appearance; default 1 =
+     these exact values) so the user can make the overlay more or less see-through. rgb()'s slash-alpha
+     slot accepts a calc() expression directly and the browser clamps the result to [0,1] automatically,
+     so a scale above 1 just saturates at fully opaque rather than erroring or clipping oddly. */
+  --overlay-opacity-scale: 1;
+  --glass-fill: rgb(34 14 60 / calc(0.6 * var(--overlay-opacity-scale)));
+  --glass-fill-elevated: rgb(42 20 72 / calc(0.76 * var(--overlay-opacity-scale)));
+  --glass-fill-strong: rgb(28 11 52 / calc(0.8 * var(--overlay-opacity-scale)));
   --glass-tint-white: rgba(255, 255, 255, 0.06);
   --glass-tint-black: rgba(0, 0, 0, 0.22);
   /* A darker neutral scrim painted BEHIND the bar/chips (below the grey fill): keeps the frosted
      translucency but guarantees a grey-enough backing so white text stays legible over a bright desktop. */
-  --glass-scrim-bar: rgba(16, 16, 20, 0.64);
+  --glass-scrim-bar: rgb(13 4 28 / calc(0.68 * var(--overlay-opacity-scale)));
   --blur-bar: 34px;
   --blur-panel: 42px;
-  --blur-saturate: 190%;
+  --blur-saturate: 160%;
 
   /* Listening state — neutral gray, much more opaque so thin text stays readable behind the overlay. */
-  --glass-fill-listening: rgba(18, 18, 22, 0.78);
-  --glass-fill-strong-listening: rgba(22, 22, 26, 0.86);
+  --glass-fill-listening: rgb(20 8 40 / calc(0.82 * var(--overlay-opacity-scale)));
+  --glass-fill-strong-listening: rgb(16 6 34 / calc(0.88 * var(--overlay-opacity-scale)));
   --glass-tint-white-listening: rgba(255, 255, 255, 0.04);
   --blur-bar-listening: 24px;
   --blur-panel-listening: 30px;
@@ -71,13 +78,17 @@
   --space-5: 20px;
   --space-6: 24px;
 
-  /* Radius */
+  /* Radius — concentric ladder: outer > card > control > pill */
+  --radius-outer: 16px;   /* floating widget / window chrome */
   --radius-sm: 8px;
   --radius-md: 10px;
-  --radius-lg: 14px;
+  --radius-lg: 14px;      /* cards — always inner to radius-outer */
   --radius-xl: 18px;
   --radius-pill: 9999px;
-  --radius-control: 10px;
+  --radius-control: 10px; /* inputs, chips */
+
+  /* Focus ring — single shared hue (lighter purple → clears 3:1 contrast floor on dark surfaces) */
+  --color-focus: #b388f0;
 
   /* Elevation — depth + a faint Mantu-purple ambient glow for a premium, on-brand feel. */
   --shadow-bar: 0 8px 28px rgba(0, 0, 0, 0.42), 0 2px 18px rgba(127, 0, 218, 0.12),
@@ -113,7 +124,7 @@
   --cl-primary: #7f00da; /* Mantu Bright Purple accent */
   --cl-primary-foreground: #ffffff;
   --cl-primary-soft: rgba(127, 0, 218, 0.18);
-  --cl-ring: #9a4dff;
+  --cl-ring: var(--color-focus); /* unified with overlay focus-ring via --color-focus */
   --cl-destructive: oklch(70.4% 0.191 22.216);
   --cl-success: oklch(74% 0.16 152);
   --cl-radius: 0.625rem; /* 10px */
@@ -157,7 +168,7 @@
 .cl-card {
   border: 1px solid var(--cl-border);
   background: var(--cl-muted-30);
-  border-radius: 16px;
+  border-radius: var(--radius-lg);
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.18);
 }
 .cl-input {
@@ -180,7 +191,7 @@
   color: var(--cl-muted-foreground);
 }
 .cl-focus:focus-visible {
-  outline: 2px solid var(--cl-ring); /* #9a4dff — clears the focus-indicator contrast floor */
+  outline: 2px solid var(--color-focus); /* unified with .focus-ring via --color-focus */
   outline-offset: 1px;
 }
 
@@ -237,10 +248,11 @@ html.shot-bg-light #root {
     linear-gradient(var(--glass-tint-white), var(--glass-tint-white)),
     linear-gradient(var(--glass-fill), var(--glass-fill)),
     var(--glass-scrim-bar);
-  backdrop-filter: blur(var(--blur-bar)) saturate(var(--blur-saturate));
   -webkit-backdrop-filter: blur(var(--blur-bar)) saturate(var(--blur-saturate));
+  backdrop-filter: blur(var(--blur-bar)) saturate(var(--blur-saturate));
   border: 1px solid var(--color-hair);
-  box-shadow: var(--shadow-bar);
+  /* Outer float + a specular top rim and a soft bottom shade — the "liquid glass" depth cue. */
+  box-shadow: var(--shadow-bar), inset 0 1px 0 0 rgba(255, 255, 255, 0.1), inset 0 -1px 0 0 rgba(0, 0, 0, 0.2);
   text-shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
 }
 .glass-strong {
@@ -248,10 +260,10 @@ html.shot-bg-light #root {
     linear-gradient(var(--glass-tint-white), var(--glass-tint-white)),
     linear-gradient(var(--glass-fill-strong), var(--glass-fill-strong)),
     var(--glass-scrim-bar);
-  backdrop-filter: blur(var(--blur-panel)) saturate(var(--blur-saturate));
   -webkit-backdrop-filter: blur(var(--blur-panel)) saturate(var(--blur-saturate));
+  backdrop-filter: blur(var(--blur-panel)) saturate(var(--blur-saturate));
   border: 1px solid var(--color-hair);
-  box-shadow: var(--shadow-panel);
+  box-shadow: var(--shadow-panel), inset 0 1px 0 0 rgba(255, 255, 255, 0.09), inset 0 -1px 0 0 rgba(0, 0, 0, 0.22);
   text-shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
 }
 .glass-chip {
@@ -259,8 +271,11 @@ html.shot-bg-light #root {
     linear-gradient(var(--glass-fill), var(--glass-fill)),
     var(--glass-scrim-bar);
   border: 1px solid var(--color-hair-soft);
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.24);
-  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.45);
+  /* No box-shadow: only used by QuickActions' pill row directly under the bar (small gap). Its own
+     shadow stacked under the bar's --shadow-bar (which already reaches well past the bar's edge) read
+     as one continuous grey halo under the chips, especially over a light background. The border + tinted
+     fill already give the pills enough definition without it. */
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.6);
 }
 
 /* Listening state — swap purple glass for a denser neutral gray so the user can read
@@ -269,16 +284,16 @@ html.shot-bg-light #root {
   background:
     linear-gradient(var(--glass-tint-white-listening), var(--glass-tint-white-listening)),
     var(--glass-fill-listening);
-  backdrop-filter: blur(var(--blur-bar-listening)) saturate(120%);
   -webkit-backdrop-filter: blur(var(--blur-bar-listening)) saturate(120%);
+  backdrop-filter: blur(var(--blur-bar-listening)) saturate(120%);
   border-color: rgba(255, 255, 255, 0.14);
 }
 .listening .glass-strong {
   background:
     linear-gradient(var(--glass-tint-white-listening), var(--glass-tint-white-listening)),
     var(--glass-fill-strong-listening);
-  backdrop-filter: blur(var(--blur-panel-listening)) saturate(120%);
   -webkit-backdrop-filter: blur(var(--blur-panel-listening)) saturate(120%);
+  backdrop-filter: blur(var(--blur-panel-listening)) saturate(120%);
   border-color: rgba(255, 255, 255, 0.16);
 }
 .listening .glass,
@@ -337,12 +352,12 @@ input::placeholder {
 }
 
 .focus-ring:focus-visible {
-  outline: 2px solid #b388f0; /* lighter purple → clears the 3:1 focus-indicator contrast floor */
+  outline: 2px solid var(--color-focus);
   outline-offset: 2px;
 }
 
 .focus-ring-strong:focus-visible {
-  outline: 3px solid #b388f0;
+  outline: 3px solid var(--color-focus);
   outline-offset: 2px;
 }
 
@@ -377,8 +392,32 @@ input::placeholder {
     transform: scale(0.7);
   }
 }
+/* A one-shot expanding+fading ring layered behind the dot, so the MOMENT a meeting starts pops — the
+   steady pulse-dot breathe continues underneath for as long as listening stays on. The ::before element
+   is freshly created every time .rec-dot mounts (it only exists while listening is true), so this fires
+   automatically on every start with no JS — no "infinite", so it plays once and (with forwards) stays
+   invisible at its end state rather than reappearing each pulse cycle. */
+@keyframes mic-burst {
+  0% {
+    transform: scale(1);
+    opacity: 0.7;
+  }
+  100% {
+    transform: scale(2.6);
+    opacity: 0;
+  }
+}
 .rec-dot {
+  position: relative;
   animation: pulse-dot 1.1s ease-in-out infinite;
+}
+.rec-dot::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  background: var(--color-danger);
+  animation: mic-burst 0.55s ease-out forwards;
 }
 
 @keyframes fade-up {
@@ -393,6 +432,227 @@ input::placeholder {
 }
 .fade-up {
   animation: fade-up 180ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+/* "Develops like film" — the signature first-answer moment. When the streamed answer's first content
+   replaces the skeleton, it emerges THROUGH the frosted glass (blur → sharp) rather than snapping in,
+   masking the unavoidable provider TTFT (~300–750ms) so the reveal reads as the product working, not
+   waiting. Runs ONCE on mount of the content container; later streamed tokens append to an already-sharp
+   element, so the effect never re-triggers mid-stream. GPU-cheap: a single short filter+opacity tween on
+   one element. Honors prefers-reduced-motion via the global animation-duration:0 rule below (the element's
+   base style carries no blur, so the reduced-motion fallback simply shows sharp text instantly). */
+@keyframes develop-in {
+  from {
+    opacity: 0;
+    filter: blur(6px);
+    transform: translateY(3px);
+  }
+  60% {
+    opacity: 1;
+  }
+  to {
+    opacity: 1;
+    filter: blur(0);
+    transform: translateY(0);
+  }
+}
+.develop-in {
+  animation: develop-in 280ms cubic-bezier(0.22, 1, 0.36, 1);
+  will-change: filter, opacity, transform;
+}
+
+/* Animated rainbow contour — shown around the ask bar while the agent is working (replaces the old
+   stop-square as the "thinking" signal). A rotating conic-gradient is masked to a thin border ring so
+   only the outline is colored; the input/buttons inside stay untouched. pointer-events:none so it
+   never intercepts clicks. */
+@property --cl-rainbow-angle {
+  syntax: '<angle>';
+  initial-value: 0deg;
+  inherits: false;
+}
+@keyframes cl-rainbow-spin {
+  to {
+    --cl-rainbow-angle: 360deg;
+  }
+}
+.rainbow-ring {
+  position: relative;
+}
+.rainbow-ring::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  padding: 1.5px;
+  background: conic-gradient(
+    from var(--cl-rainbow-angle),
+    #ff3b30,
+    #ff9500,
+    #34c759,
+    #32ade6,
+    #007aff,
+    #af52de,
+    #ff2d55,
+    #ff3b30
+  );
+  -webkit-mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  animation: cl-rainbow-spin 2.6s linear infinite;
+  /* Stepped instead of continuous — repaints ~9x/s instead of every frame; still reads as rotating. */
+  animation-timing-function: steps(24, end);
+  pointer-events: none;
+  z-index: 2;
+}
+
+/* QuickActions chips are a true `rounded-full` pill — the end-caps clamp to a tight semicircle, and at
+   that curvature the mask-composite cutout above is unstable in Chromium (visible as stray pixels from
+   the conic-gradient's color stops, most noticeably green, flickering through). A prior attempt tried to
+   keep the ::before pseudo-element and hide it behind the chip via z-index:-1 — but `.glass-chip.rainbow-
+   ring` has no isolated stacking context (just `position: relative`, no `isolation`/z-index of its own),
+   so that negative z-index wasn't reliably contained to this one chip; it could still peek through
+   depending on paint order, which read as the same glitch. Real fix: drop the pseudo-element entirely for
+   this case and paint the ring as a second `background-image` layer on the chip itself, clipped to the
+   border-box while the chip's own fill/scrim stay clipped to the padding-box — a plain multi-layer
+   background paint has no masking, no z-index, no stacking-context ambiguity to get wrong. */
+.glass-chip.rainbow-ring::before {
+  content: none;
+}
+.glass-chip.rainbow-ring {
+  border: 1.5px solid transparent;
+  background-image:
+    linear-gradient(var(--glass-fill), var(--glass-fill)),
+    linear-gradient(var(--glass-scrim-bar), var(--glass-scrim-bar)),
+    conic-gradient(
+      from var(--cl-rainbow-angle),
+      #ff3b30,
+      #ff9500,
+      #34c759,
+      #32ade6,
+      #007aff,
+      #af52de,
+      #ff2d55,
+      #ff3b30
+    );
+  background-origin: padding-box, padding-box, border-box;
+  background-clip: padding-box, padding-box, border-box;
+  animation: cl-rainbow-spin 2.6s linear infinite;
+  /* Stepped instead of continuous — repaints ~9x/s instead of every frame; still reads as rotating. */
+  animation-timing-function: steps(24, end);
+}
+
+/* "Hidden from screen sharing" (stealth ON) indicator — a calm, slow rainbow contour so the user can
+   see at a glance that AskToto is private/hidden. Same masked conic-gradient as the thinking ring, but
+   slower + a touch bolder so the two states stay distinct (fast = working, slow = hidden). */
+.aw-hidden-rainbow {
+  position: relative;
+}
+.aw-hidden-rainbow::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  padding: 2px;
+  background: conic-gradient(
+    from var(--cl-rainbow-angle),
+    #ff3b30,
+    #ff9500,
+    #34c759,
+    #32ade6,
+    #007aff,
+    #af52de,
+    #ff2d55,
+    #ff3b30
+  );
+  -webkit-mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  /* Static, not spinning — an always-visible idle indicator has no business burning a compositor
+     animation for the whole time stealth is on. (This is exactly the look prefers-reduced-motion
+     used to fall back to; it's now the default for everyone.) */
+  pointer-events: none;
+  z-index: 2;
+  opacity: 0.92;
+}
+
+/* ── Ask widget — Cluely-style two-row overlay, Mantu purple glass ──────────────────────────
+   The hero input + ↵ on top, a slim toolbar below; answers expand inside it above the input.
+   Glass technique: same 3-layer system as .glass — white tint → translucent fill → dark scrim.
+   Shared tokens: --blur-panel/--blur-saturate/--glass-scrim-bar/--glass-fill/--glass-tint-white.
+   The scrim (--glass-scrim-bar) keeps text legible over any desktop; the ~0.6 fill lets the
+   backdrop blur breathe through. */
+:root {
+  /* Toolbar strip sits slightly darker/denser than the main widget body */
+  --aw-glass-bot: rgba(16, 6, 36, 0.99);
+  --aw-btnfill: rgba(127, 0, 218, 0.45);
+  --aw-btnfill-hover: rgba(127, 0, 218, 0.62);
+}
+.aw-widget {
+  position: relative;
+  border-radius: var(--radius-outer);
+  overflow: hidden;
+  /* 3-layer glass: white specular tint → ~0.6 purple fill → dark scrim (same technique as .glass) */
+  background:
+    linear-gradient(var(--glass-tint-white), var(--glass-tint-white)),
+    linear-gradient(var(--glass-fill), var(--glass-fill)),
+    var(--glass-scrim-bar);
+  -webkit-backdrop-filter: blur(var(--blur-panel)) saturate(var(--blur-saturate));
+  backdrop-filter: blur(var(--blur-panel)) saturate(var(--blur-saturate));
+  border: 1px solid var(--color-hair);
+  /* No outer black drop-shadow (was 0 30px 70px -20px rgba(0,0,0,0.74)) — it bled well past the
+     widget's edges into the empty space around it, reading as a grey halo over a light desktop. The
+     thin purple ring + ambient glow + inset specular rim-light still give it a "lifted" feel without
+     smudging the background. */
+  box-shadow:
+    0 0 0 1px rgba(127, 0, 218, 0.09),
+    0 0 50px -14px var(--color-accent-glow),
+    inset 0 1px 0 rgba(255, 255, 255, 0.045);
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
+}
+.aw-toolbar {
+  background: var(--aw-glass-bot);
+}
+/* ↵ submit + the mini-pill mic/buttons share the purple fill */
+.aw-fill {
+  background: var(--aw-btnfill);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+.aw-fill:hover {
+  background: var(--aw-btnfill-hover);
+}
+/* the Mantu mark gets a soft brand glow ring. Kept tight (small blur, generous negative spread) since
+   the control pill's own window is hugged to its visible content — a wider glow than this gets hard-
+   clipped into a flat-edged smudge at the window boundary instead of fading out naturally. */
+.aw-mark-glow {
+  box-shadow:
+    0 0 0 1px rgba(255, 255, 255, 0.16),
+    0 3px 8px -4px var(--color-accent-glow);
+}
+/* hover menu off the mark + the mode popover */
+.aw-menu {
+  background: var(--aw-glass-bot);
+  -webkit-backdrop-filter: blur(20px);
+  backdrop-filter: blur(20px);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  box-shadow: 0 12px 26px -10px rgba(0, 0, 0, 0.6);
+}
+/* floating control mini-pill (collapsed state). The window is hugged tightly to this element's own
+   width/height (see data-hug-width in state.ts) — a shadow with too much reach gets hard-clipped into
+   a flat-edged box at the window boundary instead of fading out, so this stays deliberately more
+   contained than a typical floating-panel shadow. */
+.aw-pill {
+  border-radius: 999px;
+  background: var(--aw-glass-bot);
+  -webkit-backdrop-filter: blur(20px) saturate(150%);
+  backdrop-filter: blur(20px) saturate(150%);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  box-shadow:
+    0 6px 16px -8px rgba(0, 0, 0, 0.55),
+    0 0 16px -8px var(--color-accent-glow);
 }
 
 /* markdown surface inside the answer panel */
@@ -461,5 +721,17 @@ input::placeholder {
   .loading-spinner {
     animation: asktoto-loading-pulse 1.2s ease-in-out infinite !important;
     animation-duration: 1.2s !important;
+  }
+  /* The recording dot is a liveness + consent signal — it must keep moving, not freeze. Opacity-only
+     pulse (no scale) respects reduced-motion while still clearly reading as "we are live". */
+  .rec-dot {
+    animation: asktoto-loading-pulse 1.4s ease-in-out infinite !important;
+    animation-duration: 1.4s !important;
+  }
+  /* The rainbow contour signals "agent is working" — keep it alive without rotation via a gentle
+     opacity breathe (the static gradient still reads as the rainbow outline). */
+  .rainbow-ring::before {
+    animation: asktoto-loading-pulse 1.6s ease-in-out infinite !important;
+    animation-duration: 1.6s !important;
   }
 }

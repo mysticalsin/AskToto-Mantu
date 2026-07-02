@@ -1,0 +1,106 @@
+import { useEffect, useRef } from 'react'
+
+/**
+ * Drag the whole overlay window from its empty surface. macOS -webkit-app-region drag only catches the
+ * few empty pixels between controls, so we widen it in JS: a pointer-down on non-interactive surface arms
+ * a drag, moving past an 8px dead-zone moves the window via the main process's moveBy(); a real drag
+ * swallows its trailing click so it doesn't fire whatever it ended on.
+ *
+ * Interactive controls (anything `.no-drag` — every button/link/slider — plus text fields) never arm a
+ * drag: they exist to be clicked/typed in, and a click that drifts a few px must stay a click. That is
+ * exactly the no-drag hint native app-region already encodes; the JS layer honours the same one.
+ *
+ * Shared by the main widget (Bar) and the collapsed control pill (ControlPill). Pass onDragStart to
+ * react to the first move (e.g. blur the text input so the caret drops while dragging).
+ */
+export function useWindowDrag(onDragStart?: () => void): {
+  onPointerDown: (e: React.PointerEvent) => void
+  onClickCapture: (e: React.MouseEvent) => void
+} {
+  const dragRef = useRef<{ x: number; y: number } | null>(null)
+  const movedRef = useRef(false)
+  // Coalesce pointermove -> windowMoveBy IPC: accumulate the summed delta and flush at most every ~12ms
+  // instead of one IPC round-trip per pointermove (which can fire well above 60Hz on a trackpad/high-poll
+  // mouse) — the window still tracks the pointer continuously, just via fewer, larger moveBy calls.
+  const pendingDxRef = useRef(0)
+  const pendingDyRef = useRef(0)
+  const lastSendRef = useRef(0)
+  // Mirror the latest onDragStart into a ref so the effect below never needs it in its dep array. Callers
+  // that pass a fresh inline callback every render (easy to do by accident) would otherwise tear down and
+  // re-add the window pointermove/pointerup listeners on every one of those renders; reading through a ref
+  // keeps the listeners mounted once for the component's lifetime while still always invoking the latest
+  // callback.
+  const onDragStartRef = useRef(onDragStart)
+  onDragStartRef.current = onDragStart
+
+  useEffect(() => {
+    const flush = (): void => {
+      if (pendingDxRef.current === 0 && pendingDyRef.current === 0) return
+      const dx = pendingDxRef.current
+      const dy = pendingDyRef.current
+      pendingDxRef.current = 0
+      pendingDyRef.current = 0
+      lastSendRef.current = performance.now()
+      void window.toto.windowMoveBy(dx, dy)
+    }
+    const onMove = (e: PointerEvent): void => {
+      if (!dragRef.current) return
+      const dx = e.screenX - dragRef.current.x
+      const dy = e.screenY - dragRef.current.y
+      if (!movedRef.current && Math.abs(dx) + Math.abs(dy) < 8) return
+      e.preventDefault()
+      if (!movedRef.current) onDragStartRef.current?.()
+      movedRef.current = true
+      dragRef.current = { x: e.screenX, y: e.screenY }
+      pendingDxRef.current += dx
+      pendingDyRef.current += dy
+      if (performance.now() - lastSendRef.current >= 12) flush()
+    }
+    const onUp = (): void => {
+      dragRef.current = null
+      flush() // land any still-buffered delta so the last few px of a drag are never dropped
+      // movedRef is intentionally NOT reset here. The trailing `click` still needs to see it (onClickCapture
+      // swallows the click that ends a drag). It is cleared deterministically at the start of the next press
+      // (onPointerDown) and by onClickCapture itself — never via rAF. An always-on-top overlay is usually
+      // unfocused, and a blurred window's requestAnimationFrame is throttled/paused, so an rAF reset could
+      // leave movedRef stuck true and silently swallow the NEXT real click.
+    }
+    window.addEventListener('pointermove', onMove, { passive: false })
+    window.addEventListener('pointerup', onUp)
+    return () => {
+      window.removeEventListener('pointermove', onMove)
+      window.removeEventListener('pointerup', onUp)
+    }
+    // Deliberately no deps: onDragStart is read through onDragStartRef (see above) so the window listeners
+    // are attached exactly once per mounted instance, never torn down/re-added on caller re-renders.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  return {
+    onPointerDown: (e) => {
+      // Start of a new gesture: clear any stale drag flag here (deterministic), never via rAF on pointerup.
+      movedRef.current = false
+      pendingDxRef.current = 0
+      pendingDyRef.current = 0
+      // Only arm a window-drag from the bar's own EMPTY surface — never from an interactive control or a
+      // text field. Every clickable in the widget/pill is marked `.no-drag`; honour that hint here the same
+      // way native -webkit-app-region does. Arming on buttons meant a click that drifted only a few px
+      // (routine on a trackpad) crossed the 8px dead-zone, so onClickCapture silently ate it and the button
+      // "wouldn't click". A control exists to be clicked or typed in: a slightly-imperfect click stays a
+      // click. The generous empty surface (padding, gaps between controls, the toolbar background) still drags.
+      if ((e.target as HTMLElement).closest('.no-drag, input, textarea, [contenteditable=""], [contenteditable="true"]')) {
+        return
+      }
+      if (e.button === 0) {
+        dragRef.current = { x: e.screenX, y: e.screenY }
+      }
+    },
+    onClickCapture: (e) => {
+      if (movedRef.current) {
+        e.preventDefault()
+        e.stopPropagation()
+        movedRef.current = false
+      }
+    }
+  }
+}
