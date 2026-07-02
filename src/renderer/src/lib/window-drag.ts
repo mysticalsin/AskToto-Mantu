@@ -7,16 +7,26 @@ import { useEffect, useRef } from 'react'
  * swallows its trailing click so it doesn't fire whatever it ended on.
  *
  * Interactive controls (anything `.no-drag` — every button/link/slider — plus text fields) never arm a
- * drag: they exist to be clicked/typed in, and a click that drifts a few px must stay a click. That is
- * exactly the no-drag hint native app-region already encodes; the JS layer honours the same one.
+ * drag by default: they exist to be clicked/typed in, and a click that drifts a few px must stay a
+ * click. That is exactly the no-drag hint native app-region already encodes; the JS layer honours it.
+ *
+ * `armOnControls` inverts that for surfaces that are nearly ALL controls: the collapsed control pill is
+ * a row of buttons with only slivers of padding between them, so excluding buttons left it effectively
+ * undraggable. There the drag arms everywhere (text fields still excluded) and `deadZonePx` is raised so
+ * a drifting click on a button still lands as a click — only a deliberate pull moves the window.
  *
  * Shared by the main widget (Bar) and the collapsed control pill (ControlPill). Pass onDragStart to
  * react to the first move (e.g. blur the text input so the caret drops while dragging).
  */
-export function useWindowDrag(onDragStart?: () => void): {
+export function useWindowDrag(
+  onDragStart?: () => void,
+  opts?: { armOnControls?: boolean; deadZonePx?: number }
+): {
   onPointerDown: (e: React.PointerEvent) => void
   onClickCapture: (e: React.MouseEvent) => void
 } {
+  const armOnControls = opts?.armOnControls ?? false
+  const deadZonePx = opts?.deadZonePx ?? 8
   const dragRef = useRef<{ x: number; y: number } | null>(null)
   const movedRef = useRef(false)
   // Coalesce pointermove -> windowMoveBy IPC: accumulate the summed delta and flush at most every ~12ms
@@ -32,6 +42,10 @@ export function useWindowDrag(onDragStart?: () => void): {
   // callback.
   const onDragStartRef = useRef(onDragStart)
   onDragStartRef.current = onDragStart
+  // Same ref treatment for the dead-zone: the effect's listeners mount once, so they read the current
+  // value through a ref rather than closing over a possibly-stale prop.
+  const deadZoneRef = useRef(deadZonePx)
+  deadZoneRef.current = deadZonePx
 
   useEffect(() => {
     const flush = (): void => {
@@ -47,7 +61,7 @@ export function useWindowDrag(onDragStart?: () => void): {
       if (!dragRef.current) return
       const dx = e.screenX - dragRef.current.x
       const dy = e.screenY - dragRef.current.y
-      if (!movedRef.current && Math.abs(dx) + Math.abs(dy) < 8) return
+      if (!movedRef.current && Math.abs(dx) + Math.abs(dy) < deadZoneRef.current) return
       e.preventDefault()
       if (!movedRef.current) onDragStartRef.current?.()
       movedRef.current = true
@@ -82,13 +96,18 @@ export function useWindowDrag(onDragStart?: () => void): {
       movedRef.current = false
       pendingDxRef.current = 0
       pendingDyRef.current = 0
-      // Only arm a window-drag from the bar's own EMPTY surface — never from an interactive control or a
-      // text field. Every clickable in the widget/pill is marked `.no-drag`; honour that hint here the same
-      // way native -webkit-app-region does. Arming on buttons meant a click that drifted only a few px
-      // (routine on a trackpad) crossed the 8px dead-zone, so onClickCapture silently ate it and the button
-      // "wouldn't click". A control exists to be clicked or typed in: a slightly-imperfect click stays a
-      // click. The generous empty surface (padding, gaps between controls, the toolbar background) still drags.
-      if ((e.target as HTMLElement).closest('.no-drag, input, textarea, [contenteditable=""], [contenteditable="true"]')) {
+      // Default: only arm a window-drag from the surface's own EMPTY space — never from an interactive
+      // control or a text field. Every clickable in the widget/pill is marked `.no-drag`; honour that hint
+      // here the same way native -webkit-app-region does. Arming on buttons meant a click that drifted only
+      // a few px (routine on a trackpad) crossed the dead-zone, so onClickCapture silently ate it and the
+      // button "wouldn't click". A control exists to be clicked or typed in: a slightly-imperfect click
+      // stays a click. Button-dense surfaces (the control pill) opt into armOnControls instead — they have
+      // no meaningful empty space, so buttons must arm the drag and the caller raises deadZonePx to keep
+      // drifting clicks landing as clicks. Text fields never arm either way (drag-select must work).
+      const exclude = armOnControls
+        ? 'input, textarea, [contenteditable=""], [contenteditable="true"]'
+        : '.no-drag, input, textarea, [contenteditable=""], [contenteditable="true"]'
+      if ((e.target as HTMLElement).closest(exclude)) {
         return
       }
       if (e.button === 0) {

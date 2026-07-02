@@ -27,7 +27,11 @@ export function ControlPill({
   paused: boolean
   startedAt: number
 }): JSX.Element {
-  const drag = useWindowDrag()
+  // The pill is a row of buttons with only slivers of padding — with the default "never arm on
+  // controls" rule it has almost no draggable surface at all. Arm everywhere instead, with a raised
+  // dead-zone so a drifting click on pause/stop/expand still lands as a click; a deliberate pull moves
+  // the window (and the trailing click of a real drag is still swallowed).
+  const drag = useWindowDrag(undefined, { armOnControls: true, deadZonePx: 14 })
   return (
     // data-hug-width: lets useAutoResize report this element's own shrink-to-fit width to the window
     // instead of the wider fixed guess — without it, the window stayed wider than the visible pill and
