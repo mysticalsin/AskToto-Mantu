@@ -2,9 +2,16 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
+    <!-- This window renders the DECRYPTED meeting brain. Lock the document down: same-origin only,
+         no remote scripts/frames/connections, no form posts. Style stays 'unsafe-inline' for the
+         Vite-injected style tags; everything else is 'self' or off. -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-src 'none'"
+    />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Deal Psychology Coaching Dashboard</title>
+    <title>Mantu Intelligence</title>
   </head>
   <body>
     <div id="root"></div>

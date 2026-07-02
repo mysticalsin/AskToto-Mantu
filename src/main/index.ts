@@ -1653,9 +1653,15 @@ if (!app.requestSingleInstanceLock()) {
     if (r.recovered > 0) auditLog('transcript.recovered', { recovered: r.recovered })
   }).catch(() => { /* best-effort — never block startup */ })
   // Auto-delete meetings past the configured retention window (off by default — see transcriptRetentionDays).
-  sweepExpiredMeetings(getSettings().transcriptRetentionDays).then((r) => {
-    if (r.deleted > 0) auditLog('transcript.deleted', { bulk: true, expired: true, deleted: r.deleted })
-  }).catch(() => { /* best-effort — never block startup */ })
+  // Runs at launch AND every 6 hours after: this overlay realistically stays up for weeks, so a launch-only
+  // sweep silently stopped enforcing retention the day after boot (storage-limitation promise broken).
+  const runRetentionSweep = (): void => {
+    sweepExpiredMeetings(getSettings().transcriptRetentionDays).then((r) => {
+      if (r.deleted > 0) auditLog('transcript.deleted', { bulk: true, expired: true, deleted: r.deleted })
+    }).catch(() => { /* best-effort — never block startup or the interval */ })
+  }
+  runRetentionSweep()
+  setInterval(runRetentionSweep, 6 * 60 * 60 * 1000)
   if (process.platform === 'darwin') app.dock?.hide()
   // System-audio loopback: when the renderer calls getDisplayMedia for audio,
   // hand back the system audio loopback device (the "Them" channel) only.
