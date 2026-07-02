@@ -2877,7 +2877,7 @@ export function Settings({
                   </ul>
                 </Section>
                 <div className="flex flex-col items-center gap-2.5 pb-2 pt-4">
-                  <MantuLogo size={150} />
+                  <MantuLogo size={190} />
                   <div className="text-[13px] font-semibold text-[color:var(--cl-foreground)]">
                     AskToto 0.1.0 · Mantu
                   </div>
@@ -2924,7 +2924,7 @@ export function Settings({
                     </a>
                   </div>
                   <div className="text-[11px] text-[color:var(--cl-muted-foreground)]">
-                    Built at Mantu
+                    Built at Mantu · Built by Tony Walteur
                   </div>
                 </div>
               </div>
