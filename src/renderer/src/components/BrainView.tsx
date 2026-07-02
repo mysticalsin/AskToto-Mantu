@@ -479,13 +479,13 @@ export function BrainView({ onBack }: { onBack: () => void }): JSX.Element {
             </div>
           )}
 
-          {/* Footer: bridge to the interactive graph */}
+          {/* Footer: escalate from this in-overlay glance to the full dedicated dashboard window */}
           <button
             type="button"
-            onClick={() => void window.toto.graphifyOpenGraph()}
+            onClick={() => void window.toto.brainOpenDashboard()}
             className="no-drag focus-ring flex items-center justify-center gap-1.5 rounded-xl border border-[var(--color-hair-soft)] bg-white/[0.02] px-3 py-2 text-[11px] font-semibold text-[color:var(--color-ink-3)] hover:text-[color:var(--color-ink)]"
           >
-            <ExternalLink size={12} /> Open the interactive knowledge graph
+            <ExternalLink size={12} /> Open the full Mantu Intelligence dashboard
           </button>
         </>
       )}
