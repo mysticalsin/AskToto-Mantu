@@ -80,6 +80,7 @@ export const IPC = {
   recallDeleteAll: 'recall:deleteAll',
   debriefSave: 'debrief:save',
   brainCommitmentSettle: 'brain:commitmentSettle',
+  brainSetDealOutcome: 'brain:setDealOutcome',
   windowResize: 'window:resize',
   windowMode: 'window:mode',
   windowMoveBy: 'window:moveBy',
@@ -208,6 +209,15 @@ export const SaveNoteSchema = z.object({
   answer: z.string().min(1)
 })
 export type SaveNote = z.infer<typeof SaveNoteSchema>
+
+/** Payload for brain:setDealOutcome — the human marks a deal open/won/lost (see DealEntitySchema.outcome
+ *  in shared/brain.ts; the LLM never sets it). dealSlug carries the deal's display name, the same
+ *  convention brain:commitmentSettle's `deal` field uses — it's slugified in main before the store write. */
+export const SetDealOutcomePayloadSchema = z.object({
+  dealSlug: z.string().min(1),
+  outcome: z.enum(['open', 'won', 'lost'])
+})
+export type SetDealOutcomePayload = z.infer<typeof SetDealOutcomePayloadSchema>
 
 /** Structured export of a meeting recap (decisions + action-items-with-owners) for Jira/Asana/Notion etc.
  *  The full original markdown is always included so nothing is lost if a section heading was reworded. */

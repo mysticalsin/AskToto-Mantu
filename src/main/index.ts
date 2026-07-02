@@ -29,6 +29,7 @@ import {
   McpCrmTestConnectionPayloadSchema,
   McpCrmSaveConnectionPayloadSchema,
   McpCrmPushPayloadSchema,
+  SetDealOutcomePayloadSchema,
   DEFAULT_SHORTCUTS,
   type HotkeyAction,
   type PublicSettings,
@@ -63,6 +64,7 @@ import {
   listMeetingExtractions as listBrainMeetingExtractions,
   readMeetingExtraction as readBrainMeetingExtraction,
   purgeBrain,
+  setDealOutcome,
   slugify as brainSlugify
 } from './brain/store'
 import { buildBrainContext } from './brain/context'
@@ -1446,6 +1448,19 @@ function registerIpc(): void {
       deals: listBrainEntities(s, 'deal').map((slug) => readBrainDeal(s, slug)).filter(Boolean),
       meetings: listBrainMeetingExtractions(s).map((slug) => readBrainMeetingExtraction(s, slug)).filter(Boolean)
     }
+  })
+  // Deal outcome — the human closes the loop the LLM never may (see DealEntitySchema.outcome). Main-window
+  // only: it's a brain WRITE, like brainCommitmentSettle. Same slug convention too: the renderer sends the
+  // deal's display name in `dealSlug`, slugified here before it reaches the store.
+  ipcMain.handle(IPC.brainSetDealOutcome, async (e, raw) => {
+    assertMainWindow(e)
+    if (!requireAuth()) return { ok: false, error: 'Sign in with your Mantu account first.' }
+    const parsed = SetDealOutcomePayloadSchema.safeParse(raw)
+    if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message || 'Invalid input.' }
+    const updated = await setDealOutcome(getSettings(), brainSlugify(parsed.data.dealSlug), parsed.data.outcome)
+    if (!updated) return { ok: false, error: 'Deal not found.' }
+    auditLog('brain.deal.outcome', { outcome: parsed.data.outcome })
+    return { ok: true }
   })
 
   // Periodic best-effort snapshot of an IN-PROGRESS meeting (renderer calls this every ~60s while
