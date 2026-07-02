@@ -47,11 +47,22 @@ export function useDashboardData(): State {
     // fills in as the brain grows instead of freezing at whatever existed when the window opened.
     // Cheap status poll gates the full re-read; the interval dies as soon as the backfill stops.
     let lastCount = -1
+    // A persistently-null status (e.g. auth expired) must stop the poll — without this it never hits
+    // the clear-check below (which only runs when `st` is truthy) and polls the dead IPC forever. A
+    // transient null (one hiccup) must NOT stop it, so only consecutive nulls count; any real response
+    // resets the streak.
+    let consecutiveNulls = 0
+    const MAX_CONSECUTIVE_NULLS = 3
     const iv = window.intelligence
       ? setInterval(async () => {
           try {
             const st = (await window.intelligence!.getStatus()) as { meetings?: number; backfill?: { running?: boolean } } | null
-            if (!st) return
+            if (!st) {
+              consecutiveNulls += 1
+              if (consecutiveNulls >= MAX_CONSECUTIVE_NULLS) clearInterval(iv!)
+              return
+            }
+            consecutiveNulls = 0
             const changed = typeof st.meetings === 'number' && st.meetings !== lastCount
             if (changed) load()
             if (typeof st.meetings === 'number') lastCount = st.meetings
