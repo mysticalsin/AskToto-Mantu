@@ -6,7 +6,7 @@ import type { Settings } from '@shared/ipc'
 import { MeetingExtractionSchema, type MeetingExtraction } from '@shared/brain'
 import { computeSilence } from '@shared/silence'
 import { buildMarsWeek } from '@shared/mars'
-import { ingestExtraction } from './ingest'
+import { ingestExtraction, settleCommitment } from './ingest'
 import {
   slugify,
   readGraph,
@@ -127,10 +127,9 @@ describe.each([
     const rfp = readDeal(s, slugify('Globex RFP'))!
     rfp.outcome = 'lost' // lost long ago — must NOT count in this week's Mars
     await writeDeal(s, slugify('Globex RFP'), rfp)
-    const core = readDeal(s, slugify('Acme Core Banking'))!
-    const ciso = core.commitments.find((c) => c.text.includes('CISO'))!
-    ciso.status = 'kept' // Claire delivered her intro — settled by human action
-    await writeDeal(s, slugify('Acme Core Banking'), core)
+    // Claire delivered her intro — settled through the real settlement path (deal + person mirror).
+    const settled = await settleCommitment(s, slugify('Acme Core Banking'), 'intro AskToto to the CISO', 'kept')
+    if (!settled.ok) throw new Error(settled.error)
 
     // Read everything back OFF DISK through the real readers (what IPC brain:read serves).
     extractions = listMeetingExtractions(s)
@@ -186,9 +185,14 @@ describe.each([
     expect(core.commitments.filter((c) => c.status === 'kept')).toHaveLength(1)
     const renewal = readDeal(s, 'globex-renewal')!
     expect(renewal.commitments.filter((c) => c.status === 'open').map((c) => c.text)).toEqual(['send renewal terms'])
-    // The named person's own ledger caught her spoken promise.
-    expect(readPerson(s, 'claire-dubois')!.commitments.map((c) => c.text)).toEqual(['intro AskToto to the CISO'])
+    // The named person's own ledger caught her spoken promise — and settlement mirrored onto it,
+    // so the per-person kept-promise reliability read (kept 1/1) is computable from real data.
+    const claire = readPerson(s, 'claire-dubois')!
+    expect(claire.commitments.map((c) => ({ text: c.text, status: c.status }))).toEqual([
+      { text: 'intro AskToto to the CISO', status: 'kept' }
+    ])
   })
+
 
   it('Silence Detector finds exactly the planted decay — and nothing else', () => {
     const silence = computeSilence(extractions, NOW)
@@ -262,5 +266,22 @@ describe.each([
       console.log(`  ${String(label).padEnd(26)} planted=${String(planted).padEnd(4)} computed=${computed}`)
       expect(computed).toBe(planted)
     }
+  })
+
+  // LAST on purpose: this ingests a 9th meeting, mutating the world the tests above pinned.
+  it('a re-spoken promise stays ONE ledger row, aging from when it was first made', async () => {
+    // Same promise text extracted again from a newer meeting — the classic double-count trap.
+    const again = MeetingExtractionSchema.parse({
+      title24: 'Terms follow-up',
+      topics: ['renewal'],
+      account: { name: 'Globex', sector: 'retail', confidence: 'EXTRACTED' },
+      deal: { name: 'Globex Renewal', stage: 'open' },
+      commitments: [{ text: 'send renewal terms', by: 'you', quote: 'again: I will send renewal terms', confidence: 'EXTRACTED' }]
+    })
+    await ingestExtraction(s, again, transcriptMd(0), join(folder, 'globex-3.md'))
+    const renewal = readDeal(s, 'globex-renewal')!
+    const rows = renewal.commitments.filter((c) => c.text === 'send renewal terms')
+    expect(rows).toHaveLength(1) // one obligation, not two
+    expect(rows[0].date).toBe(iso(70)) // aging anchored to the FIRST time it was promised
   })
 })

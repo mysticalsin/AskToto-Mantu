@@ -15,7 +15,8 @@ import {
   RefreshCw,
   TrendingUp,
   Users,
-  VolumeX
+  VolumeX,
+  X
 } from 'lucide-react'
 import type { BrainRead, BrainStatus, Band, DealEntity, LedgerCommitment } from '@shared/brain'
 import type { MeetingSummary } from '@shared/ipc'
@@ -276,6 +277,21 @@ export function BrainView({ onBack }: { onBack: () => void }): JSX.Element {
     void refresh()
   }, [refresh])
 
+  // Settle a ledger promise (kept/broken) and re-read — the row leaves "Open promises" and starts
+  // counting toward the per-person reliability read. Human-only action; the LLM never settles.
+  const settlePromise = useCallback(
+    async (deal: string, text: string, status: 'kept' | 'broken'): Promise<void> => {
+      try {
+        const r = await window.toto.brainCommitmentSettle(deal, text, status)
+        if (r.ok) await refresh()
+        else setError(r.error ?? 'Could not settle the promise.')
+      } catch (e) {
+        setError(e instanceof Error ? e.message : String(e))
+      }
+    },
+    [refresh]
+  )
+
   // While a backfill is running, poll so the dashboard fills in live as extractions land.
   const backfillRunning = !!status?.backfill?.running
   useEffect(() => {
@@ -485,6 +501,28 @@ export function BrainView({ onBack }: { onBack: () => void }): JSX.Element {
                         </span>
                       )}
                       <span className="shrink-0 truncate text-[10px] text-[color:var(--color-ink-3)]">{c.deal}</span>
+                      {/* Settlement — the human closes the loop. Settled rows leave this rail on refresh
+                          and feed the per-person kept-promise reliability read. */}
+                      <span className="flex shrink-0 items-center gap-0.5">
+                        <button
+                          type="button"
+                          aria-label="Mark kept"
+                          title="Kept — promise delivered"
+                          onClick={() => void settlePromise(c.deal, c.text, 'kept')}
+                          className="no-drag focus-ring grid h-5 w-5 place-items-center rounded text-[color:var(--color-ink-3)] hover:bg-white/10 hover:text-[var(--color-success)]"
+                        >
+                          <Check size={11} />
+                        </button>
+                        <button
+                          type="button"
+                          aria-label="Mark broken"
+                          title="Broken — promise not delivered"
+                          onClick={() => void settlePromise(c.deal, c.text, 'broken')}
+                          className="no-drag focus-ring grid h-5 w-5 place-items-center rounded text-[color:var(--color-ink-3)] hover:bg-white/10 hover:text-[var(--color-danger)]"
+                        >
+                          <X size={11} />
+                        </button>
+                      </span>
                     </div>
                   )
                 })}
@@ -663,6 +701,25 @@ export function BrainView({ onBack }: { onBack: () => void }): JSX.Element {
                         </span>
                       )}
                     </span>
+                    {/* Kept-promise reliability — only settled promises count (kept vs broken);
+                        open ones prove nothing yet. Shown only once at least one is settled. */}
+                    {(() => {
+                      const kept = (p.commitments ?? []).filter((c) => c.status === 'kept').length
+                      const broken = (p.commitments ?? []).filter((c) => c.status === 'broken').length
+                      if (kept + broken === 0) return null
+                      return (
+                        <span
+                          className="shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold"
+                          title={`${kept} kept, ${broken} broken — settled promises only`}
+                          style={{
+                            color: broken > kept ? 'var(--color-danger)' : 'var(--color-success)',
+                            background: 'rgba(255,255,255,0.05)'
+                          }}
+                        >
+                          kept {kept}/{kept + broken}
+                        </span>
+                      )
+                    })()}
                     <span className="shrink-0 rounded-full bg-white/[0.05] px-2 py-0.5 text-[10px] font-semibold text-[color:var(--color-ink-3)]">
                       {p.meetings.length}×
                     </span>

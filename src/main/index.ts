@@ -51,7 +51,7 @@ import {
 } from './store'
 import { createStream } from './llm'
 import { resetDustConversation } from './llm/dust'
-import { enqueueIngest, startBackfill, brainBackfillProgress, resumeBackfillIfPending } from './brain/ingest'
+import { enqueueIngest, startBackfill, brainBackfillProgress, resumeBackfillIfPending, settleCommitment } from './brain/ingest'
 import { openIntelligenceWindow, isIntelligenceSender } from './intelligence'
 import {
   readIndex as readBrainIndex,
@@ -62,7 +62,8 @@ import {
   listEntities as listBrainEntities,
   listMeetingExtractions as listBrainMeetingExtractions,
   readMeetingExtraction as readBrainMeetingExtraction,
-  purgeBrain
+  purgeBrain,
+  slugify as brainSlugify
 } from './brain/store'
 import { buildBrainContext } from './brain/context'
 import { buildSystem } from './personas'
@@ -1023,6 +1024,22 @@ function registerIpc(): void {
       enqueueIngest(join(resolveMeetingsFolder(s), safeName)) // fold the unsaid layer into the brain
     }
     return result
+  })
+
+  // Commitment settlement — the human closes the loop the LLM never may (kept/broken are only ever
+  // set here or by future CRM sync). Main-window only: it's a brain WRITE, unlike the read channels.
+  ipcMain.handle(IPC.brainCommitmentSettle, async (e, raw) => {
+    assertMainWindow(e)
+    if (!requireAuth()) return { ok: false, error: 'Sign in with your Mantu account first.' }
+    const p = raw as { deal?: unknown; text?: unknown; status?: unknown }
+    const status = String(p?.status ?? '')
+    if (!['open', 'kept', 'broken'].includes(status)) return { ok: false, error: 'Bad status.' }
+    const deal = String(p?.deal ?? '')
+    const text = String(p?.text ?? '')
+    if (!deal || !text) return { ok: false, error: 'Missing commitment.' }
+    const r = await settleCommitment(getSettings(), brainSlugify(deal), text, status as 'open' | 'kept' | 'broken')
+    if (r.ok) auditLog('brain.commitment.settled', { status })
+    return r
   })
 
   // Delete EVERYTHING: every saved meeting + the index + the knowledge graph. For a GDPR/CCPA erasure

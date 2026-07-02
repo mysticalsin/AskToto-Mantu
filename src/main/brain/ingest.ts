@@ -119,6 +119,11 @@ const pushUnique = <T>(arr: T[], item: T, key: (t: T) => string): void => {
   if (!arr.some((x) => key(x) === key(item))) arr.push(item)
 }
 
+/** Ledger identity for a commitment is its normalized TEXT — a promise re-spoken in a later meeting
+ *  ("I'll send the deck", again) is the same obligation, not a second open row. The earliest-dated
+ *  row wins (pushUnique keeps the first), so aging starts from when the promise was first made. */
+export const commitmentKey = (text: string): string => text.toLowerCase().replace(/\s+/g, ' ').trim()
+
 /** Merge one meeting's extraction into the entity + graph files. Pure data transforms — no LLM here. */
 export async function mergeExtraction(
   s: Settings,
@@ -178,7 +183,7 @@ export async function mergeExtraction(
     person.commitments ??= []
     for (const c of x.commitments) {
       if (c.by.toLowerCase() === p.name.toLowerCase()) {
-        pushUnique(person.commitments, { ...c, meeting: ref.file, date: ref.date, status: 'open' as const }, (t) => t.meeting + t.text)
+        pushUnique(person.commitments, { ...c, meeting: ref.file, date: ref.date, status: 'open' as const }, (t) => commitmentKey(t.text))
       }
     }
     addNode(`person:${pslug}`, 'person', p.name)
@@ -228,7 +233,7 @@ export async function mergeExtraction(
       pushUnique(
         deal.commitments,
         { ...c, meeting: ref.file, date: ref.date, status: 'open' as const },
-        (t) => t.meeting + t.text
+        (t) => commitmentKey(t.text)
       )
     }
     for (const f of x.feedback) pushUnique(deal.feedback, { ...f, meeting: ref.file }, (t) => t.meeting + t.note)
@@ -266,6 +271,37 @@ export function lintBrain(s: Settings): string[] {
     }
   }
   return warnings
+}
+
+/**
+ * Settle a commitment — the human closes the loop the LLM never may. Flips the matching row (by
+ * normalized text) on the deal's ledger AND any person ledger holding the same promise, so the two
+ * copies can't diverge. This is what makes the ledger a live count of what is actually owed, and
+ * what makes a per-person kept-promise rate computable at all.
+ */
+export async function settleCommitment(
+  s: Settings,
+  dealSlug: string,
+  text: string,
+  status: 'open' | 'kept' | 'broken'
+): Promise<{ ok: boolean; error?: string }> {
+  const key = commitmentKey(text)
+  const deal = readDeal(s, dealSlug)
+  if (!deal) return { ok: false, error: 'Deal not found.' }
+  const row = deal.commitments.find((c) => commitmentKey(c.text) === key)
+  if (!row) return { ok: false, error: 'Commitment not found on this deal.' }
+  row.status = status
+  await writeDeal(s, dealSlug, deal)
+  // Mirror onto the named person's own ledger when one holds the same promise.
+  for (const pslug of listEntities(s, 'person')) {
+    const person = readPerson(s, pslug)
+    const match = person?.commitments?.find((c) => commitmentKey(c.text) === key)
+    if (person && match) {
+      match.status = status
+      await writePerson(s, pslug, person)
+    }
+  }
+  return { ok: true }
 }
 
 // ── Queue + backfill ─────────────────────────────────────────────────────────

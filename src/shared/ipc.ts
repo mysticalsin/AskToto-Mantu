@@ -79,6 +79,7 @@ export const IPC = {
   recallDelete: 'recall:delete',
   recallDeleteAll: 'recall:deleteAll',
   debriefSave: 'debrief:save',
+  brainCommitmentSettle: 'brain:commitmentSettle',
   windowResize: 'window:resize',
   windowMode: 'window:mode',
   windowMoveBy: 'window:moveBy',
