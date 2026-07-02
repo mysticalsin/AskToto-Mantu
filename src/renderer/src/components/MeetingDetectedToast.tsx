@@ -3,6 +3,17 @@ import { Mic, X } from 'lucide-react'
 
 const DEFAULT_TIMEOUT_MS = 6000
 
+// The detector (src/main/meeting-detect/mac.ts) reports raw process names — some read fine as-is
+// ("Slack", "Discord", "RingCentral", browser names), others read like unfinished internal codes.
+// Only the latter need a human label; everything else falls through unchanged.
+const APP_LABELS: Record<string, string> = {
+  'zoom.us': 'Zoom',
+  MSTeams: 'Microsoft Teams',
+  'Microsoft Teams (work or school)': 'Microsoft Teams',
+  'Cisco Webex Meetings': 'Webex',
+  GoTo: 'GoTo Meeting'
+}
+
 export interface MeetingDetectedToastProps {
   open: boolean
   app?: string
@@ -46,39 +57,43 @@ export function MeetingDetectedToast({
 
   if (!open) return null
 
+  const appLabel = app ? (APP_LABELS[app] ?? app) : undefined
+
   return (
-    <div role="alert" aria-live="assertive" className="fade-up rounded-xl border border-[var(--color-hair-soft)] bg-[var(--glass-fill-strong)] px-3.5 py-2.5 shadow-[var(--shadow-float)]">
+    <div role="alert" aria-live="assertive" className="fade-up glass-strong relative overflow-hidden rounded-[14px] px-3.5 py-2.5">
       <div className="flex items-center gap-3">
-        <div className="flex flex-1 items-center gap-2">
-          <Mic size={15} className="shrink-0 text-[var(--color-accent)]" />
-          <div>
-            <div className="text-[13px] font-medium text-[color:var(--color-ink)]">
-              Meeting detected{app ? ` · ${app}` : ''}
-            </div>
-            <div className="text-[11px] text-[color:var(--color-ink-2)]">
-              Nothing is recorded yet. Start listening?
-            </div>
+        <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-[var(--color-accent-soft)]">
+          <Mic size={14} className="text-[var(--color-accent-2)]" />
+        </div>
+        <div className="min-w-0 flex-1">
+          <div className="truncate text-[13px] font-medium text-[color:var(--color-ink)]">
+            Meeting detected{appLabel ? ` · ${appLabel}` : ''}
+          </div>
+          <div className="truncate text-[11px] leading-snug text-[color:var(--color-ink-2)]">
+            Nothing is recorded until you start.
           </div>
         </div>
-        <button
-          type="button"
-          onClick={onStart}
-          className="no-drag focus-ring rounded-lg bg-[var(--color-accent)] px-3 py-1.5 text-[12px] font-medium text-white hover:opacity-90"
-        >
-          Start listening
-        </button>
-        <button
-          type="button"
-          onClick={onDismiss}
-          className="no-drag focus-ring flex items-center gap-1 rounded-lg px-2 py-1.5 text-[12px] text-[color:var(--color-ink-2)] hover:bg-white/10 hover:text-[color:var(--color-ink)]"
-          aria-label="Dismiss"
-        >
-          <X size={13} />
-        </button>
+        <div className="flex shrink-0 items-center gap-1">
+          <button
+            type="button"
+            onClick={onStart}
+            className="no-drag focus-ring h-[30px] shrink-0 rounded-full border border-white/10 bg-[var(--color-accent)] px-3.5 text-[12px] font-semibold text-white shadow-[0_2px_12px_var(--color-accent-glow)] transition-[filter] duration-[var(--duration-hover)] hover:brightness-110"
+          >
+            Start listening
+          </button>
+          <button
+            type="button"
+            onClick={onDismiss}
+            className="no-drag focus-ring grid h-[30px] w-[30px] shrink-0 place-items-center rounded-full text-[color:var(--color-ink-2)] hover:bg-white/10 hover:text-[color:var(--color-ink)]"
+            aria-label="Dismiss"
+          >
+            <X size={14} />
+          </button>
+        </div>
       </div>
-      <div className="mt-2 h-1 w-full overflow-hidden rounded-full bg-white/10">
+      <div className="absolute inset-x-0 bottom-0 h-[2px] bg-white/[0.08]">
         <div
-          className="h-full bg-[var(--color-accent)] transition-all duration-300 ease-linear"
+          className="h-full bg-gradient-to-r from-[var(--color-accent)] to-[var(--color-accent-2)] transition-[width] duration-300 ease-linear"
           style={{ width: `${(remaining / timeoutMs) * 100}%` }}
         />
       </div>

@@ -1238,27 +1238,47 @@ export function App(): JSX.Element {
 
   return (
     <div ref={setRoot} className={['relative flex w-full flex-col gap-2 p-1.5', listen.listening ? 'listening' : ''].join(' ')}>
-      <MeetingDetectedToast
-        open={meetingPrompt.open}
-        app={meetingPrompt.app}
-        onStart={() => {
-          startListenRef.current(true) // user opted in — auto-started, so meeting-end can auto-wrap up
-          setMeetingPrompt({ open: false })
-        }}
-        onDismiss={() => setMeetingPrompt({ open: false })}
-      />
-      <UpdateReadyToast
-        open={updateReady.open}
-        version={updateReady.version}
-        onRestart={() => void window.toto.installUpdate()}
-        onDismiss={() => setUpdateReady({ open: false })}
-      />
-      <RecordingConsentReminder
-        listening={listen.listening}
-        lastReminderAt={settings?.lastConsentReminderAt ?? 0}
-        requireIndicator={settings?.requireConsentIndicator ?? false}
-        onAck={() => void patch({ lastConsentReminderAt: Date.now() })}
-      />
+      {(() => {
+        const toasts = (
+          <>
+            <MeetingDetectedToast
+              open={meetingPrompt.open}
+              app={meetingPrompt.app}
+              onStart={() => {
+                startListenRef.current(true) // user opted in — auto-started, so meeting-end can auto-wrap up
+                setMeetingPrompt({ open: false })
+              }}
+              onDismiss={() => setMeetingPrompt({ open: false })}
+            />
+            <UpdateReadyToast
+              open={updateReady.open}
+              version={updateReady.version}
+              onRestart={() => void window.toto.installUpdate()}
+              onDismiss={() => setUpdateReady({ open: false })}
+            />
+            <RecordingConsentReminder
+              listening={listen.listening}
+              lastReminderAt={settings?.lastConsentReminderAt ?? 0}
+              requireIndicator={settings?.requireConsentIndicator ?? false}
+              onAck={() => void patch({ lastConsentReminderAt: Date.now() })}
+            />
+          </>
+        )
+        // These toasts render even while minimized (the control pill is a separate, narrower window
+        // width). Without this, a toast opening while minimized had to squeeze into the ~200px pill
+        // width — "Meeting detected · Microsoft Teams" wrapped mid-word and the whole layout crushed.
+        // Widen the window to fit a toast via the same data-hug-width contract the pill itself uses
+        // (useAutoResize picks the FIRST [data-hug-width] match in document order, so this wrapper —
+        // rendered before the pill below — wins while a toast is open, and control reverts to the
+        // pill's own report the instant the toast closes and this wrapper unmounts).
+        return minimized && (meetingPrompt.open || updateReady.open) ? (
+          <div data-hug-width className="mx-auto flex w-[500px] flex-col gap-2 px-1.5">
+            {toasts}
+          </div>
+        ) : (
+          toasts
+        )
+      })()}
       {minimized ? (
         <div className="flex w-full justify-center">
           <ControlPill

@@ -1416,13 +1416,15 @@ function registerIpc(): void {
   // --- Window management ---
   ipcMain.handle(IPC.windowResize, (e, payload: { height: number; width?: number }) => {
     assertMainWindow(e)
-    // A view can opt into reporting its own visible width (today only the collapsed control mini-pill,
-    // via data-hug-width) instead of relying on the fixed BAR_WIDTH/PILL_WIDTH guess. Without this the
-    // pill's real content (~170px) sat centered inside the fixed 220px window, leaving an invisible
-    // ~25px-per-side strip that still blocked clicks to whatever was behind it — a real click-trap, not
-    // just a cosmetic gap. Floor/ceiling guard against a measurement glitch reporting something absurd.
+    // A view can opt into reporting its own visible width (the collapsed control mini-pill, and a toast
+    // that widens the pill to fit itself while minimized) instead of relying on the fixed
+    // BAR_WIDTH/PILL_WIDTH guess. Without this the pill's real content (~170px) sat centered inside the
+    // fixed 220px window, leaving an invisible ~25px-per-side strip that still blocked clicks to whatever
+    // was behind it. Floor/ceiling guard against a measurement glitch reporting something absurd — the
+    // ceiling is BAR_WIDTH itself since nothing legitimately needs to be wider than the full bar (a lower
+    // ceiling here once clipped a wider toast's own content that had genuinely asked for more room).
     if (typeof payload?.width === 'number' && Number.isFinite(payload.width)) {
-      currentWidth = Math.max(120, Math.min(Math.ceil(payload.width) + 4, 400))
+      currentWidth = Math.max(120, Math.min(Math.ceil(payload.width) + 4, BAR_WIDTH))
     }
     resizeTo(payload?.height ?? BAR_HEIGHT)
   })
