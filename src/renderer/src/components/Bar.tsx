@@ -14,6 +14,7 @@ import {
   FileText,
   Pause,
   Play,
+  Square,
   Plus,
   Brain,
   FileSearch
@@ -273,9 +274,18 @@ export const Bar = memo(function Bar(props: BarProps): JSX.Element {
               live, or vice versa — a single chip could only ever show one of them at a time. */}
           {props.listening && (
             <span className="flex flex-none items-center gap-1 rounded-full bg-white/[0.05] px-2 py-0.5 text-[11px] text-[color:var(--color-ink-2)]">
-              <span className="h-[6px] w-[6px] rounded-full bg-[var(--color-danger)]" />
-              <AudioLines size={11} strokeWidth={ICON_STROKE} />
-              Heard live
+              {props.paused ? (
+                <>
+                  <Pause size={11} strokeWidth={ICON_STROKE} className="text-[color:var(--color-warn,#fac775)]" />
+                  Paused
+                </>
+              ) : (
+                <>
+                  <span className="h-[6px] w-[6px] rounded-full bg-[var(--color-danger)]" />
+                  <AudioLines size={11} strokeWidth={ICON_STROKE} />
+                  Heard live
+                </>
+              )}
             </span>
           )}
 
@@ -434,8 +444,8 @@ export const Bar = memo(function Bar(props: BarProps): JSX.Element {
                 <AudioLines size={19} strokeWidth={ICON_STROKE} />
               )}
             </IconTool>
-            {/* Fixed-width reserved slot for timer + pause — always present so the cluster never shifts */}
-            <div className="flex w-[72px] items-center gap-2">
+            {/* Fixed-width reserved slot for timer + pause + stop — always present so the cluster never shifts */}
+            <div className="flex w-[100px] items-center gap-2">
               {props.listening && (
                 <>
                   <ElapsedClock startedAt={props.startedAt} paused={props.paused} />
@@ -453,6 +463,17 @@ export const Bar = memo(function Bar(props: BarProps): JSX.Element {
                     ) : (
                       <Pause size={16} strokeWidth={ICON_STROKE} />
                     )}
+                  </button>
+                  {/* Stop — ends the meeting (recap + save), identical to the rec-dot above; an explicit
+                      square makes "end" discoverable next to Pause instead of hiding behind the dot. */}
+                  <button
+                    type="button"
+                    title="Stop & end meeting"
+                    aria-label="Stop and end meeting"
+                    onClick={props.onToggleListen}
+                    className="no-drag focus-ring grid place-items-center rounded-[10px] p-1 text-[color:var(--color-danger)] transition-colors duration-[var(--duration-hover)] hover:brightness-125"
+                  >
+                    <Square size={14} strokeWidth={ICON_STROKE} fill="currentColor" />
                   </button>
                 </>
               )}
