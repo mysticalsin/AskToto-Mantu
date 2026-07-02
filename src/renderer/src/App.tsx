@@ -308,20 +308,22 @@ export function App(): JSX.Element {
   }, [ask.answer, suggest.answer, view])
 
   // Live copilot suggestions are ephemeral — auto-dismiss SUGGESTION_TTL_MS after one finishes so the
-  // card doesn't linger over the call. The timer arms only once streaming ends; a new/updated suggestion
-  // re-runs this effect and resets it (the cleanup clears the previous timer).
+  // card doesn't linger over the call. ONLY ambient auto-suggestions (answer.ephemeral) count down:
+  // user-initiated turns on this surface (typed questions, Assist, quick actions) stay until the user
+  // acts — auto-wiping an answer someone asked for is data loss. The timer arms only once streaming
+  // ends; a new/updated suggestion re-runs this effect and resets it (the cleanup clears the timer).
   useEffect(() => {
     const a = suggest.answer
-    if (!a || a.streaming) return // still streaming → wait for it to finish before counting down
+    if (!a || !a.ephemeral || a.streaming) return // still streaming → wait before counting down
     const t = setTimeout(() => suggest.clear(), SUGGESTION_TTL_MS)
     return () => clearTimeout(t)
   }, [suggest.answer, suggest.clear])
 
-  // Hard ceiling: arm a max-age timer the moment a suggestion first appears (null→non-null) or its
-  // identity changes (new suggestion). Fires regardless of streaming state so a stream that never
-  // finishes still gets cleared. The cleanup cancels the timer on identity change or unmount so each
-  // new suggestion gets a fresh SUGGESTION_MAX_MS budget.
-  const suggestId = suggest.answer?.id ?? null
+  // Hard ceiling: arm a max-age timer the moment an AMBIENT suggestion first appears (null→non-null)
+  // or its identity changes (new suggestion). Fires regardless of streaming state so a stream that
+  // never finishes still gets cleared. The cleanup cancels the timer on identity change or unmount so
+  // each new suggestion gets a fresh SUGGESTION_MAX_MS budget.
+  const suggestId = suggest.answer?.ephemeral ? suggest.answer.id : null
   useEffect(() => {
     if (suggestId === null) return
     const t = setTimeout(() => suggest.clear(), SUGGESTION_MAX_MS)

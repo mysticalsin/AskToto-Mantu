@@ -140,6 +140,10 @@ export interface AnswerState {
   // AND still carry the trust chip (previously the chip only showed when label was the literal string
   // 'Viewed screen', which overwrote — and so could never coexist with — the user's actual question).
   usedScreen?: boolean
+  // True only for AMBIENT auto-suggestions (req.mode === 'suggest'). Gates the copilot auto-dismiss
+  // TTL: user-initiated turns on the same surface (typed questions, Assist, quick actions) must stay
+  // until the user acts — auto-wiping them 4-7s after they finish is data loss (and a WCAG 2.2.1 miss).
+  ephemeral?: boolean
 }
 
 export interface AskRequest {
@@ -267,7 +271,8 @@ export function useAsk(): {
         prompt: req.prompt ?? '',
         label: req.label,
         kind: req.kind,
-        usedScreen: req.mode === 'vision'
+        usedScreen: req.mode === 'vision',
+        ephemeral: req.mode === 'suggest'
       }))
       void window.toto.ask({
         id,
