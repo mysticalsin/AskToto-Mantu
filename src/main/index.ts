@@ -119,7 +119,7 @@ import {
   purgeGraphArtifacts
 } from './graphify'
 import { SaveMeetingSchema, SaveNoteSchema } from '@shared/ipc'
-import { PROVIDERS, resolveModelTier, type ProviderId } from '@shared/providers'
+import { PROVIDERS, resolveModelTier, applyInteractiveGuardrail, type ProviderId } from '@shared/providers'
 import { routeTier } from '@shared/routing'
 import { redactSecrets } from '@shared/redact'
 
@@ -1203,10 +1203,14 @@ function registerIpc(): void {
       }
       const key = getApiKey(provider)
       const tier = routeTier(req, s.thinkingMode)
-      const model =
+      let model =
         req.agentOverride && provider === 'dust'
           ? req.agentOverride
           : resolveModelTier(provider, s.providerModels, s.providerModelsThinking, tier, s.providerModelsDeep)
+      // Guardrail (per Tony): CLI is Sonnet-only, Anthropic base/think are pinned to Haiku/Sonnet — both
+      // regardless of what routeTier or a user's providerModels override picked. Opus stays reachable only
+      // through the Graph pipeline (brain/ingest.ts, graphify.ts), which never calls this function.
+      model = applyInteractiveGuardrail(provider, tier, model)
       const ineligible = def.kind === 'cli' && !s.cliConnected[provider]
         ? `${def.label} is not connected. Open Settings → CLI Integration to set it up.`
         : def.kind !== 'cli' && !key
