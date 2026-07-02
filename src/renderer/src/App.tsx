@@ -1260,6 +1260,9 @@ export function App(): JSX.Element {
         onClose={() => setView('answer')}
         onQuit={quitApp}
         onLogout={logOut}
+        onOpenIntelligence={() => setView('brain')}
+        onOpenHistory={() => setView('history')}
+        onOpenMeeting={(file) => void openPastMeeting(file)}
       />
     )
   } else if (view === 'history') {

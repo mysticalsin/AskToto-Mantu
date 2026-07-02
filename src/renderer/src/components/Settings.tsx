@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState, type ReactNode, type RefObject } from 'react'
+import { useEffect, useId, useRef, useState, type ComponentType, type ReactNode, type RefObject } from 'react'
 import {
   Check,
   ExternalLink,
@@ -15,7 +15,6 @@ import {
   Cpu,
   Wand2,
   ShieldCheck,
-  Keyboard,
   Info,
   X,
   Search,
@@ -62,7 +61,8 @@ import {
   type AuthStatus,
   type GraphStatus,
   type HotkeyAction,
-  type EvalMetrics
+  type EvalMetrics,
+  type MeetingSummary
 } from '@shared/ipc'
 import {
   PROVIDERS,
@@ -2316,12 +2316,14 @@ type TabId =
   | 'audio'
   | 'privacy'
   | 'meetings'
-  | 'shortcuts'
+  | 'intelligence'
   | 'about'
   | 'calendar'
   | 'profile'
 
-const TABS: { id: TabId; label: string; icon: LucideIcon }[] = [
+// Icons are Lucide components except Mantu Intelligence, which carries the official Mantu "M" mark —
+// both render through the same `<t.icon size={14} />` call, so the type is the shared size-taking shape.
+const TABS: { id: TabId; label: string; icon: LucideIcon | ComponentType<{ size?: number }> }[] = [
   // Tab id stays 'personalize' (nothing keys off the label) — labeled to cover BOTH children rendered
   // under it: the transparency/appearance slider AND the Modes editor. A plain rename to just "Appearance"
   // would hide Modes (which onboarding explicitly teaches by that name) behind an unrelated-looking tab.
@@ -2330,9 +2332,10 @@ const TABS: { id: TabId; label: string; icon: LucideIcon }[] = [
   { id: 'audio', label: 'Audio', icon: Mic },
   { id: 'calendar', label: 'Calendar', icon: Calendar },
   { id: 'meetings', label: 'Meetings', icon: FolderOpen },
-  { id: 'shortcuts', label: 'Keybinds', icon: Keyboard },
+  { id: 'intelligence', label: 'Mantu Intelligence', icon: MantuMark },
   { id: 'privacy', label: 'Privacy', icon: ShieldCheck },
-  { id: 'profile', label: 'Profile', icon: User },
+  // Profile + Keybinds merged: both are "how AskToto is set up for YOU" (who you are / how you drive it).
+  { id: 'profile', label: 'Profile & Keybinds', icon: User },
   { id: 'about', label: 'About', icon: Info }
 ]
 
@@ -2346,7 +2349,10 @@ export function Settings({
   initialTab,
   notice,
   onQuit,
-  onLogout
+  onLogout,
+  onOpenIntelligence,
+  onOpenHistory,
+  onOpenMeeting
 }: {
   settings: PublicSettings
   patch: (p: Partial<PublicSettings>) => void
@@ -2355,6 +2361,11 @@ export function Settings({
   testKey: (provider: ProviderId, k: string) => Promise<TestKeyResponse>
   onClose?: () => void
   initialTab?: TabId
+  // Mantu Intelligence tab navigation — routed through the parent because the dashboard (BrainView),
+  // meeting History, and a past meeting's Review are top-level views, not children of Settings.
+  onOpenIntelligence?: () => void
+  onOpenHistory?: () => void
+  onOpenMeeting?: (file: string) => void
   // Shown as a small banner under the header — e.g. why the user got redirected here (no provider
   // ready). Without this, a silent tab-open reads as broken rather than as a guided fix.
   notice?: string
@@ -2836,15 +2847,18 @@ export function Settings({
                   </div>
                 </div>
               </Section>
-              <GraphSection settings={settings} patch={patch} />
               <DangerZoneSection settings={settings} patch={patch} />
               </>
             )}
 
-            {tab === 'shortcuts' && (
-              <Section title="Keyboard shortcuts" desc="AskToto works with these easy to remember commands. Click any of the keybinds to edit.">
-                <Shortcuts settings={settings} patch={patch} />
-              </Section>
+            {tab === 'intelligence' && (
+              <IntelligenceTab
+                settings={settings}
+                patch={patch}
+                onOpenIntelligence={onOpenIntelligence}
+                onOpenHistory={onOpenHistory}
+                onOpenMeeting={onOpenMeeting}
+              />
             )}
 
             {tab === 'calendar' && (
@@ -2859,6 +2873,10 @@ export function Settings({
                     onChange={(p) => patch({ profile: p })}
                     disabled={settings.managedKeys.includes('profile')}
                   />
+                </Section>
+                {/* Keybinds live with Profile: both are "how AskToto is set up for you". */}
+                <Section title="Keyboard shortcuts" desc="AskToto works with these easy to remember commands. Click any of the keybinds to edit.">
+                  <Shortcuts settings={settings} patch={patch} />
                 </Section>
               </div>
             )}
@@ -2890,7 +2908,7 @@ export function Settings({
                 <div className="flex flex-col items-center gap-2.5 pb-2 pt-4">
                   <MantuLogo size={190} />
                   <div className="text-[13px] font-semibold text-[color:var(--cl-foreground)]">
-                    AskToto 0.1.0 · Mantu
+                    AskToto 1.0.0 · Mantu
                   </div>
                   <div className="flex items-center gap-2 text-[11px] text-[color:var(--cl-muted-foreground)]">
                     <a
@@ -3065,6 +3083,111 @@ function DiagnosticsSection(): JSX.Element {
           <AlertCircle size={12} /> {m.failures} answer{m.failures !== 1 ? 's' : ''} failed
         </div>
       )}
+    </div>
+  )
+}
+
+/**
+ * Mantu Intelligence tab — everything "what my meetings know" in one place: the Intelligence dashboard
+ * (graphs), the knowledge-graph builder, and the recent meetings history with follow-up entry points.
+ * Navigation is delegated to the parent (BrainView / History / a meeting's Review are top-level views).
+ */
+function IntelligenceTab({
+  settings,
+  patch,
+  onOpenIntelligence,
+  onOpenHistory,
+  onOpenMeeting
+}: {
+  settings: PublicSettings
+  patch: (p: Partial<PublicSettings>) => void
+  onOpenIntelligence?: () => void
+  onOpenHistory?: () => void
+  onOpenMeeting?: (file: string) => void
+}): JSX.Element {
+  const [meetings, setMeetings] = useState<MeetingSummary[] | null>(null)
+  useEffect(() => {
+    let alive = true
+    void window.toto.recallList().then((list) => {
+      if (alive) setMeetings(list)
+    })
+    return () => {
+      alive = false
+    }
+  }, [])
+  const recent = (meetings ?? []).slice(0, 6)
+  // MeetingSummary.date is an ISO stamp — render it as a short human date ("Jun 30"), not a log line.
+  const shortDate = (iso: string): string => {
+    const d = new Date(iso)
+    return isNaN(d.getTime()) ? iso : d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
+  }
+
+  return (
+    <div className="flex flex-col gap-6">
+      <Section
+        title="Mantu Intelligence"
+        desc="Your meeting brain — dashboards and graphs built from every meeting AskToto has captured: pipeline, people, deals going cold, and the week's Mars draft."
+      >
+        <div className="cl-card flex items-center gap-3 px-3 py-3">
+          <MantuMark size={34} />
+          <div className="min-w-0 flex-1">
+            <div className="text-[13px] font-medium text-[color:var(--cl-foreground)]">Intelligence dashboard</div>
+            <div className="truncate text-[11px] text-[color:var(--cl-muted-foreground)]">
+              Graphs and insights from {meetings === null ? 'your' : meetings.length} indexed meeting{meetings !== null && meetings.length === 1 ? '' : 's'}.
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={onOpenIntelligence}
+            disabled={!onOpenIntelligence}
+            className="no-drag cl-focus flex shrink-0 items-center gap-1.5 rounded-[10px] bg-[var(--cl-primary)] px-3 py-2 text-[12px] font-medium text-white hover:opacity-90 disabled:opacity-50"
+          >
+            <ExternalLink size={13} /> Open
+          </button>
+        </div>
+      </Section>
+
+      <Section
+        title="Meetings & follow-up"
+        desc="Recent meeting history. Open one to review its recap, transcript, and generate a follow-up."
+      >
+        <div className="flex flex-col gap-1.5">
+          {meetings === null ? (
+            <div className="cl-card px-3 py-2.5 text-[12px] text-[color:var(--cl-muted-foreground)]">Loading…</div>
+          ) : recent.length === 0 ? (
+            <div className="cl-card px-3 py-2.5 text-[12px] text-[color:var(--cl-muted-foreground)]">
+              No meetings saved yet — they appear here as soon as one ends.
+            </div>
+          ) : (
+            recent.map((m) => (
+              <button
+                key={m.file}
+                type="button"
+                onClick={() => onOpenMeeting?.(m.file)}
+                disabled={!onOpenMeeting}
+                className="no-drag cl-focus cl-card flex items-center gap-2.5 px-3 py-2.5 text-left transition-colors hover:bg-white/[0.06] disabled:opacity-60"
+              >
+                <FileText size={14} className="shrink-0 text-[color:var(--cl-primary)]" />
+                <span className="min-w-0 flex-1 truncate text-[12px] text-[color:var(--cl-foreground)]">{m.title}</span>
+                <span className="shrink-0 text-[11px] text-[color:var(--cl-muted-foreground)]">
+                  {shortDate(m.date)}
+                  {m.durationMin ? ` · ${m.durationMin} min` : ''}
+                </span>
+              </button>
+            ))
+          )}
+          <button
+            type="button"
+            onClick={onOpenHistory}
+            disabled={!onOpenHistory}
+            className="no-drag cl-focus mt-1 flex items-center justify-center gap-1.5 rounded-[10px] border border-[var(--cl-input)] bg-white/[0.04] px-3 py-2 text-[12px] text-[color:var(--cl-foreground)] hover:bg-white/[0.08] disabled:opacity-50"
+          >
+            Open full history
+          </button>
+        </div>
+      </Section>
+
+      <GraphSection settings={settings} patch={patch} />
     </div>
   )
 }
