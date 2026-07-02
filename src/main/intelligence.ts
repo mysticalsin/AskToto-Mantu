@@ -27,7 +27,8 @@ export function isIntelligenceSender(wc: Electron.WebContents): boolean {
 function bundleIndexHtml(): string | null {
   const candidates = [
     join(process.resourcesPath || '', 'intelligence', 'index.html'), // packaged app
-    join(app.getAppPath(), 'intelligence', 'dist', 'index.html') // repo/dev fallback
+    join(__dirname, '..', '..', 'intelligence', 'dist', 'index.html'), // `electron out/main/index.js` (QA/local runs)
+    join(app.getAppPath(), 'intelligence', 'dist', 'index.html') // `electron .` dev run
   ]
   return candidates.find((p) => existsSync(p)) ?? null
 }
@@ -39,7 +40,11 @@ export function openIntelligenceWindow(): { ok: boolean; error?: string } {
     return { ok: true }
   }
   const html = bundleIndexHtml()
-  if (!html) return { ok: false, error: 'Intelligence dashboard bundle not found — rebuild the app.' }
+  if (!html)
+    return {
+      ok: false,
+      error: 'Intelligence dashboard bundle not found — run `npm run build:intelligence`, then restart.'
+    }
   intelWin = new BrowserWindow({
     width: 1280,
     height: 840,

@@ -9,5 +9,6 @@ import { execFileSync } from 'node:child_process'
 
 export default async function afterPack(context) {
   if (context.electronPlatformName !== 'darwin') return
+  console.log(`  • afterPack: stripping xattrs (OneDrive detritus) from ${context.appOutDir}`)
   execFileSync('xattr', ['-cr', context.appOutDir], { stdio: 'inherit' })
 }
