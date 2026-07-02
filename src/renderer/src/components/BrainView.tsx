@@ -12,10 +12,12 @@ import {
   Minus,
   RefreshCw,
   TrendingUp,
-  Users
+  Users,
+  VolumeX
 } from 'lucide-react'
 import type { BrainRead, BrainStatus, Band, DealEntity, LedgerCommitment } from '@shared/brain'
 import type { MeetingSummary } from '@shared/ipc'
+import { computeSilence } from '@shared/silence'
 import { MantuMark } from './MantuMark'
 import { Spinner } from './ui'
 
@@ -322,6 +324,11 @@ export function BrainView({ onBack }: { onBack: () => void }): JSX.Element {
     return all.sort((a, b) => (a.date || '').localeCompare(b.date || '')).slice(0, 8)
   }, [data])
 
+  // Silence Detector: what accounts STOPPED saying — dropped themes, vanished champions, cooling, or
+  // gone fully quiet. Computed from the meeting extractions' topic/people timeline; empty until an
+  // account has enough history to compare windows. Stamp the real clock once (the analysis is pure).
+  const silence = useMemo(() => computeSilence(data?.meetings ?? [], Date.now()).slice(0, 6), [data])
+
   const ingested = status?.meetings ?? 0
   const notIngested = Math.max(0, meetings.length - ingested)
   const bf = status?.backfill
@@ -473,6 +480,61 @@ export function BrainView({ onBack }: { onBack: () => void }): JSX.Element {
                     </div>
                   )
                 })}
+              </div>
+            </div>
+          )}
+
+          {/* SILENCE DETECTOR — accounts going quiet: dropped themes, vanished champions, cooling, dark */}
+          {silence.length > 0 && (
+            <div className="rounded-xl border border-[var(--color-hair-soft)] bg-white/[0.02] px-3 py-2.5">
+              <SectionTitle>
+                <VolumeX size={11} className="mr-1 inline" />
+                Going quiet — what accounts stopped saying
+              </SectionTitle>
+              <div className="flex flex-col gap-1.5">
+                {silence.map((s) => (
+                  <div key={s.account} className="text-[12px]">
+                    <div className="flex items-center gap-2">
+                      <span className="min-w-0 truncate font-semibold text-[color:var(--color-ink)]">{s.account}</span>
+                      <span className="shrink-0 text-[10px] text-[color:var(--color-ink-3)]">{s.sector}</span>
+                      <span className="flex-1" />
+                      {s.cooling && (
+                        <span className="shrink-0 text-[10px] font-semibold" style={{ color: MIXED_COLOR }}>
+                          cooling
+                        </span>
+                      )}
+                      {s.wentDark ? (
+                        <span
+                          className="shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold"
+                          style={{ color: 'var(--color-danger)', background: 'rgba(255,255,255,0.05)' }}
+                        >
+                          Silent {s.daysQuiet}d
+                        </span>
+                      ) : (
+                        <span
+                          className="shrink-0 text-[10px] font-semibold"
+                          style={{ color: s.daysQuiet >= 30 ? 'var(--color-danger)' : 'var(--color-ink-3)' }}
+                        >
+                          {s.daysQuiet}d quiet
+                        </span>
+                      )}
+                    </div>
+                    {(s.droppedTopics.length > 0 || s.vanishedPeople.length > 0) && (
+                      <div className="mt-0.5 flex flex-wrap items-center gap-1 text-[10px] text-[color:var(--color-ink-3)]">
+                        {s.droppedTopics.slice(0, 4).map((t) => (
+                          <span key={t.topic} className="rounded px-1.5 py-0.5" style={{ background: 'rgba(255,255,255,0.04)' }}>
+                            dropped: {t.topic}
+                          </span>
+                        ))}
+                        {s.vanishedPeople.slice(0, 2).map((p) => (
+                          <span key={p} className="rounded px-1.5 py-0.5" style={{ background: 'rgba(255,255,255,0.04)' }}>
+                            {p} went quiet
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                ))}
               </div>
             </div>
           )}
