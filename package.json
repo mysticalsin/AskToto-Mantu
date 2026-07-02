@@ -1,6 +1,6 @@
 {
   "name": "asktoto",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "AskToto — AI desktop overlay assistant",
   "author": "Tony Walteur <tony.walteur@gmail.com>",
   "main": "./out/main/index.js",
@@ -17,11 +17,11 @@
     "predist": "node scripts/fetch-models.mjs && npm run build:intelligence",
     "dist": "electron-vite build && electron-builder --mac --publish never",
     "predist:win": "node scripts/fetch-models.mjs",
-    "dist:win": "electron-vite build && electron-builder --win --publish never",
+    "dist:win": "node scripts/fetch-models.mjs && npm run build:intelligence && electron-vite build && electron-builder --win --publish never",
     "dist:win:appx": "electron-vite build && electron-builder --win appx --publish never",
     "prepack": "node scripts/fetch-models.mjs",
-    "release": "npm run check:release && node scripts/fetch-models.mjs && electron-vite build && electron-builder --mac --publish always",
-    "release:win": "npm run check:release && node scripts/fetch-models.mjs && electron-vite build && electron-builder --win --publish always"
+    "release": "npm run check:release && node scripts/fetch-models.mjs && npm run build:intelligence && electron-vite build && electron-builder --mac --publish always",
+    "release:win": "npm run check:release && node scripts/fetch-models.mjs && npm run build:intelligence && electron-vite build && electron-builder --win --publish always"
   },
   "comment": "Only main-process runtime deps live in 'dependencies' (electron-builder bundles these into the app). All renderer deps are bundled by Vite at build time and kept in devDependencies to keep the package small.",
   "dependencies": {

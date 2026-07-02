@@ -27,7 +27,20 @@ Three core actions:
 Plus one-click **Fact-check**, **Hide from screen capture**, a visible recording indicator, a
 **knowledge graph** of your notes (graphify), and **transcripts encrypted at rest by default**.
 
-## Quick start
+## Install (v1.0.0)
+
+Grab the installer for your OS from the [AskToto-Releases](https://github.com/mysticalsin/AskToto-Releases/releases) page:
+
+- **macOS** — `AskToto-1.0.0.dmg` (Apple Silicon; macOS 12+). v1.0.0 is not yet notarized:
+  first launch needs right-click → Open → Open (one time). Auto-update activates once builds
+  are signed + notarized.
+- **Windows** — `AskToto-Setup-1.0.0.exe` (installer) or `AskToto-Portable-1.0.0.exe`
+  (no-install). v1.0.0 is not yet Authenticode-signed: SmartScreen will warn — More info →
+  Run anyway.
+
+All transcription runs on-device; models are bundled (no first-run download).
+
+## Quick start (from source)
 
 ```bash
 npm install
