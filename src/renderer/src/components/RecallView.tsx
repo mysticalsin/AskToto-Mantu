@@ -110,6 +110,19 @@ function GraphBar(): JSX.Element | null {
     void window.toto.brainStatus().then(setBrain).catch(() => {})
   }, [])
 
+  // Backfill runs in the main process over minutes (one Dust call per meeting) — a single post-click
+  // fetch froze this bar on "Building your brain… 0/X" forever, since nothing ever asked again. Poll
+  // while a backfill is actually running; stop as soon as it isn't (self-clears via the effect re-run
+  // when brain.backfill.running flips false — same pattern as the dashboard's own auto-refresh).
+  const backfillRunning = !!brain?.backfill?.running
+  useEffect(() => {
+    if (!backfillRunning) return
+    const iv = setInterval(() => {
+      void window.toto.brainStatus().then(setBrain).catch(() => {})
+    }, 3000)
+    return () => clearInterval(iv)
+  }, [backfillRunning])
+
   const backfill = async (): Promise<void> => {
     setBusy(true)
     setError(null)
