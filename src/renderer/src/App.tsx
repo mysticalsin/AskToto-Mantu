@@ -928,11 +928,25 @@ export function App(): JSX.Element {
   const onToggleThinking = useCallback(() => {
     void patch({ thinkingMode: settings?.thinkingMode === 'always' ? 'auto' : 'always' })
   }, [patch, settings?.thinkingMode])
+  // History/Settings toggle open↔closed on repeat clicks. setView is a startTransition (required to
+  // avoid #426 — see its definition above), so a genuinely rapid double-click can fire both toggles
+  // before the first even commits: open, then immediately close, netting a visible no-op — "History
+  // sometimes doesn't seem to register." A real re-open click is never this fast, so debouncing the
+  // toggle direction (not the click itself — Bar's own button still responds every time) fixes it
+  // without touching the intentional close-on-second-click behavior.
+  const lastHistoryToggleRef = useRef(0)
   const onBarHistory = useCallback(() => {
+    const now = Date.now()
+    if (now - lastHistoryToggleRef.current < 400) return
+    lastHistoryToggleRef.current = now
     setView((v) => (v === 'history' ? 'answer' : 'history'))
     setCollapsed(false)
   }, [])
+  const lastSettingsToggleRef = useRef(0)
   const onBarSettings = useCallback(() => {
+    const now = Date.now()
+    if (now - lastSettingsToggleRef.current < 400) return
+    lastSettingsToggleRef.current = now
     setSettingsInitialTab(undefined) // logo-click opens the default tab, not a leftover programmatic one
     setSettingsNotice(undefined) // ...and never a leftover "why am I here" banner either
     setView((v) => (v === 'settings' ? 'answer' : 'settings'))
