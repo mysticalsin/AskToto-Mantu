@@ -43,6 +43,13 @@ import {
 
 // ── LLM call ─────────────────────────────────────────────────────────────────
 
+/** Cheap "is any provider usable at all" check — reuses pickProvider's own resolution logic so the two
+ *  can never drift out of sync. Used to bail out of backfill work BEFORE burning a queued job (and its
+ *  one reinforcement retry) on a call that's guaranteed to reject with "No configured AI provider". */
+function hasUsableProvider(s: Settings): boolean {
+  return pickProvider(s) !== null
+}
+
 /** Pick the first usable text provider: the active one, then any other with credentials + a model. */
 function pickProvider(s: Settings): { provider: ProviderId; model: string; key: string } | null {
   const order = [s.provider, ...(Object.keys(PROVIDERS) as ProviderId[])]
@@ -333,7 +340,7 @@ export async function settleCommitment(
 
 // ── Queue + backfill ─────────────────────────────────────────────────────────
 
-type Job = { file: string; source: 'meetings' | 'vault' }
+type Job = { file: string; source: 'meetings' | 'vault'; origin: 'live' | 'backfill' }
 const queue: Job[] = []
 let running = false
 let backfillTotal = 0
@@ -380,10 +387,13 @@ export async function ingestExtraction(s: Settings, x: MeetingExtraction, md: st
   await mergeExtraction(s, x, ref)
   await updateIndex(s, (idx) => {
     idx.ingested[key] = { at: Date.now(), ok: true }
-    idx.warnings = lintBrain(s)
   })
 }
 
+/** `origin: 'live'` = a just-saved/just-debriefed meeting ingested one at a time (enqueueIngest) — its
+ *  warnings must refresh right away. `origin: 'backfill'` = a job queued by startBackfill; linting is
+ *  deferred to pump()'s drained branch so a 100+ meeting backfill re-lints the whole brain ONCE, not
+ *  once per meeting (lintBrain walks every person + deal entity file — O(entities) work per call). */
 async function processJob(job: Job): Promise<void> {
   const s = getSettings()
   try {
@@ -394,25 +404,61 @@ async function processJob(job: Job): Promise<void> {
   } catch (e) {
     await updateIndex(s, (idx) => {
       idx.ingested[basename(job.file)] = { at: Date.now(), ok: false, error: e instanceof Error ? e.message : String(e) }
-      idx.warnings = lintBrain(s)
     })
     auditLog('brain.ingest', { ok: false, source: job.source })
   }
+  if (job.origin === 'live') {
+    await updateIndex(s, (idx) => {
+      idx.warnings = lintBrain(s)
+    })
+  }
 }
+
+// Set true while a backfill's jobs are still queued/running; cleared (with its one lint pass) the first
+// time the queue drains after it — so a later plain live ingest, which also drains the queue, doesn't
+// re-trigger the backfill's one-time cleanup.
+let backfillLintPending = false
+
+// Logged at most once per no-provider stall, not once per bailed job — a 60+ transcript backfill with
+// no provider configured would otherwise spam this warning once per queued job.
+let loggedNoProviderStall = false
 
 function pump(): void {
   if (running) return
-  const job = queue.shift()
-  if (!job) {
-    // Queue drained — if a backfill was in flight, clear the resume flag so the next boot stays idle.
-    if (backfillTotal > 0 && backfillDone >= backfillTotal) {
-      const s = getSettings()
-      void updateIndex(s, (idx) => {
-        idx.backfillRequested = false
+  // Find the first job pump() can actually act on: a live job always qualifies, a backfill job only
+  // qualifies while a provider is configured. A provider can be removed (cleared key, CLI disconnected)
+  // after startBackfill() already queued jobs — re-checking here, not just at queue time, stops a
+  // mid-backfill provider loss from burning every remaining job on a guaranteed "No configured AI
+  // provider" failure (each with its one reinforcement retry, i.e. 2 doomed calls per job). Backfill
+  // jobs stay AT THE FRONT of the queue (never removed here) so a live job enqueued behind a stalled
+  // backfill still gets picked and processed — the stall must never starve normal per-meeting ingests.
+  let s: Settings | null = null
+  const idx = queue.findIndex((j) => {
+    if (j.origin !== 'backfill') return true
+    s ??= getSettings()
+    return hasUsableProvider(s)
+  })
+  if (idx === -1) {
+    // Every queued job is a backfill job and no provider is configured — nothing to do right now.
+    if (queue.length > 0 && !loggedNoProviderStall) {
+      loggedNoProviderStall = true
+      mainLog.warn('[brain] backfill paused: no configured AI provider — will resume next time one is available')
+    }
+    // Queue drained (or fully stalled) — if a backfill was in flight, clear the resume flag and run the
+    // ONE deferred lint pass for the whole batch. Guarded to the true-drain case only (queue actually
+    // empty): a stall must never trip the "backfill finished" cleanup while jobs are still waiting.
+    if (queue.length === 0 && backfillLintPending && backfillTotal > 0 && backfillDone >= backfillTotal) {
+      backfillLintPending = false
+      const sx = getSettings()
+      void updateIndex(sx, (i) => {
+        i.backfillRequested = false
+        i.warnings = lintBrain(sx)
       })
     }
     return
   }
+  loggedNoProviderStall = false
+  const [job] = queue.splice(idx, 1)
   running = true
   void processJob(job).finally(() => {
     running = false
@@ -423,7 +469,7 @@ function pump(): void {
 
 /** Enqueue one just-saved meeting (fire-and-forget; called after saveMeeting completes). */
 export function enqueueIngest(file: string): void {
-  queue.push({ file, source: 'meetings' })
+  queue.push({ file, source: 'meetings', origin: 'live' })
   pump()
 }
 
@@ -458,6 +504,14 @@ export function startBackfill(): { queued: number } {
   const s = getSettings()
   const idx = readIndex(s)
   if (!idx.backfillRequested) void updateIndex(s, (i) => { i.backfillRequested = true })
+  // No provider configured: skip the directory scan + queueing entirely rather than queueing 60+ jobs
+  // that pump() would just re-queue one at a time anyway (see its own no-provider guard above). Cheaper,
+  // and the log stays a single line instead of one per bailed job. backfillRequested is left true (set
+  // just above) so resumeBackfillIfPending tries again on a later boot once a provider is configured.
+  if (!hasUsableProvider(s)) {
+    mainLog.warn('[brain] backfill requested but no configured AI provider — deferring until one is set up')
+    return { queued: 0 }
+  }
   const already = new Set(Object.entries(idx.ingested).filter(([, v]) => v.ok).map(([k]) => k))
   // The ingest log is a cache of "already extracted", not the source of truth — if it's ever out of
   // sync with reality (the race above, a manual edit, a version before this log existed), a real
@@ -476,16 +530,17 @@ export function startBackfill(): { queued: number } {
       !inFlight.has(f) &&
       !extractedSlugs.has(slugify(f))
     ) {
-      candidates.push({ file: join(folder, f), source: 'meetings' })
+      candidates.push({ file: join(folder, f), source: 'meetings', origin: 'backfill' })
     }
   }
   for (const f of existsSync(VAULT_TRANSCRIPTS) ? readdirSync(VAULT_TRANSCRIPTS) : []) {
     if (f.endsWith('.md') && !already.has(f) && !inFlight.has(f) && !extractedSlugs.has(slugify(f))) {
-      candidates.push({ file: join(VAULT_TRANSCRIPTS, f), source: 'vault' })
+      candidates.push({ file: join(VAULT_TRANSCRIPTS, f), source: 'vault', origin: 'backfill' })
     }
   }
   // Accumulate rather than overwrite: a re-entrant call must extend an in-flight backfill's progress
   // tracking, not reset it out from under the jobs already queued.
+  if (candidates.length > 0) backfillLintPending = true
   backfillTotal += candidates.length
   queue.push(...candidates)
   pump()

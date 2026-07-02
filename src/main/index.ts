@@ -1033,8 +1033,8 @@ function registerIpc(): void {
       defaultId: 1,
       cancelId: 1
     }
-    const choice = win ? dialog.showMessageBoxSync(win, dialogOpts) : dialog.showMessageBoxSync(dialogOpts)
-    if (choice !== 0) return { ok: false, error: 'cancelled' }
+    const { response } = win ? await dialog.showMessageBox(win, dialogOpts) : await dialog.showMessageBox(dialogOpts)
+    if (response !== 0) return { ok: false, error: 'cancelled' }
     const result = await deleteMeeting(safeName)
     if (result.ok) auditLog('transcript.deleted', { file: safeName })
     return result
@@ -1094,8 +1094,8 @@ function registerIpc(): void {
       defaultId: 1,
       cancelId: 1
     }
-    const choice = win ? dialog.showMessageBoxSync(win, dialogOpts) : dialog.showMessageBoxSync(dialogOpts)
-    if (choice !== 0) return { ok: false, error: 'cancelled' }
+    const { response } = win ? await dialog.showMessageBox(win, dialogOpts) : await dialog.showMessageBox(dialogOpts)
+    if (response !== 0) return { ok: false, error: 'cancelled' }
     const result = await deleteAllMeetings()
     purgeGraphArtifacts() // legacy userData/graph artifacts
     const brainPurge = purgeBrain(getSettings()) // the `.brain/` knowledge store — entities, quotes, graph
@@ -1745,7 +1745,6 @@ if (!app.requestSingleInstanceLock()) {
     return
   }
   if (!app.isPackaged) loadDotEnv() // dev convenience only; never read a stray .env in production
-  ensureMeetingsFolder(getSettings()) // create the self-documenting OneDrive folder on first run
   sweepStaleTempFiles() // remove any decrypted-transcript temp copies orphaned by a previous hard-kill
   // Promote any orphaned crash-recovery drafts into real meetings BEFORE the retention sweep, so a
   // recovered meeting is visible in History and immediately subject to the same retention policy.
@@ -1957,6 +1956,10 @@ if (!app.requestSingleInstanceLock()) {
   runStep('createTray', createTray)
   runStep('registerShortcuts', registerShortcuts)
   runStep('createWindow', createWindow)
+  // Synchronous OneDrive filesystem work (mkdir + two writeFileSync calls on first run) — nothing
+  // before the window depends on the folder existing yet (saveMeeting/saveNote create it themselves on
+  // first use), so it no longer sits ahead of createWindow on the boot path.
+  runStep('ensureMeetingsFolder', () => ensureMeetingsFolder(getSettings()))
   runStep('registerIpc', registerIpc)
   runStep('registerScreenListeners', registerScreenListeners)
   runStep('startMeetingPoller', startMeetingPoller)

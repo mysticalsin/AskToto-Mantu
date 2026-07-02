@@ -51,6 +51,17 @@ function highlighter(): Promise<HighlighterCore> {
   return hlPromise
 }
 
+// Pre-warm the highlighter singleton shortly after this module loads, so the FIRST code block to
+// actually stream in doesn't burst-fetch every curated grammar + the oniguruma wasm engine all at once
+// mid-answer. Idle-scheduled (2s fallback where requestIdleCallback isn't available) so it never
+// competes with first paint/streaming text for the main thread.
+if (typeof window !== 'undefined') {
+  const ric = (window as unknown as { requestIdleCallback?: (cb: () => void) => number }).requestIdleCallback
+  const warm = (): void => void highlighter().catch(() => {})
+  if (ric) ric(warm)
+  else setTimeout(warm, 2000)
+}
+
 /** Block code with real shiki colors (inline-styled spans → always render). */
 function Block({ code, lang }: { code: string; lang: string }): JSX.Element {
   const [html, setHtml] = useState('')

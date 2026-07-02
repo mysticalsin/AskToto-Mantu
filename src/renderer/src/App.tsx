@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, lazy, Suspense, startTransition } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, lazy, Suspense, startTransition } from 'react'
 import { Bar } from './components/Bar'
 import { ControlPill } from './components/ControlPill'
 import { Panel } from './components/Panel'
@@ -36,7 +36,6 @@ import {
   quickActionUnavailableMessage,
   spotlightRefUnavailableMessage
 } from '@shared/quick-actions'
-import { formatScreenFreshness } from '@shared/perception'
 
 type View = 'answer' | 'copilot' | 'settings' | 'review' | 'history' | 'agenda' | 'brain'
 
@@ -117,25 +116,38 @@ export function App(): JSX.Element {
   // chunk resolves, so a transition wrap — not just preloading — is what's required). Warm both chunks here
   // too, purely so that first transition resolves on the very next tick instead of after a real parse/fetch
   // wait: cheap (local bundled files, not a network fetch) and shortens the brief bail-to-old-UI window a
-  // transition shows while the chunk is still loading.
+  // transition shows while the chunk is still loading. Idle-scheduled (2s fallback) and staggered — Answer/
+  // Copilot first since they're reachable from the very first keystroke, Settings/RecallView ~1s later —
+  // so none of this warm-up competes with first paint on a cold launch.
   useEffect(() => {
-    void import('./components/Answer')
-    void import('./components/Copilot')
+    const ric = (window as unknown as { requestIdleCallback?: (cb: () => void) => number }).requestIdleCallback
+    const idle = (cb: () => void, fallbackMs: number): void => {
+      if (ric) ric(cb)
+      else setTimeout(cb, fallbackMs)
+    }
+    idle(() => {
+      void import('./components/Answer')
+      void import('./components/Copilot')
+    }, 2000)
     // Also warm the two toolbar-button views (Settings is a large chunk) so their first click commits its
     // transition on the next tick instead of after a cold parse — otherwise that load beat reads as the
     // button "not responding". Deeper views (Review/Brain/Agenda) stay lazy until actually navigated to.
-    void import('./components/Settings')
-    void import('./components/RecallView')
+    const t = setTimeout(() => {
+      idle(() => {
+        void import('./components/Settings')
+        void import('./components/RecallView')
+      }, 2000)
+    }, 1000)
+    return () => clearTimeout(t)
   }, [])
 
   const [collapsed, setCollapsed] = useState(false)
   const [minimized, setMinimized] = useState(false) // collapsed to the floating control mini-pill
   const [capturing, setCapturing] = useState(false)
   const [captureError, setCaptureError] = useState<string | null>(null)
-  const [screenFreshness, setScreenFreshness] = useState<string>('Viewed screen')
-  // Raw capture timestamp behind screenFreshness — kept separately so the label can be re-derived every
-  // tick (see the interval below) instead of freezing at whatever age it happened to have when the
-  // screenshot was taken. Without this the "Seen Ns ago" chip would go stale the moment it rendered.
+  // Raw capture timestamp for the "Seen Ns ago" trust chip — Bar's ScreenFreshnessChip owns the actual
+  // 500ms tick/label formatting itself, so this only changes when a real new capture happens (it no
+  // longer forces the whole App tree to re-render every half second while the chip is showing).
   const [screenCapturedAt, setScreenCapturedAt] = useState<number | null>(null)
   const [focusSignal, setFocusSignal] = useState(0)
   // A past meeting opened from History → shown read-only in Review (recap + transcript + Resume).
@@ -209,17 +221,11 @@ export function App(): JSX.Element {
     return () => clearInterval(iv)
   }, [listen.listening, mode])
 
-  // Re-derive the "Seen Ns ago" chip label every tick so it ages in real time instead of freezing at
-  // whatever value it had when the screenshot was taken. Gated on the chip actually being visible right
-  // now (the current answer used the screen) — screenCapturedAt itself is never cleared between asks, so
-  // gating on it alone left this ticking for the rest of the session after a single screen-grounded ask,
-  // force-re-rendering the whole app tree every 500ms long after the chip had stopped showing.
+  // Gates whether the "Seen Ns ago" screen-freshness chip shows at all — screenCapturedAt itself is
+  // never cleared between asks, so gating on it alone would keep showing a stale chip long after the
+  // current answer/suggestion stopped being screen-grounded. The actual ticking/label formatting now
+  // lives in Bar's ScreenFreshnessChip (own 500ms interval), not here.
   const showingScreenChip = view === 'copilot' ? !!suggest.answer?.usedScreen : !!ask.answer?.usedScreen
-  useEffect(() => {
-    if (screenCapturedAt == null || !showingScreenChip) return
-    const iv = setInterval(() => setScreenFreshness(formatScreenFreshness(screenCapturedAt)), 500)
-    return () => clearInterval(iv)
-  }, [screenCapturedAt, showingScreenChip])
 
   const manualSave = useCallback(async (): Promise<void> => {
     const a = ask.answer
@@ -473,7 +479,6 @@ export function App(): JSX.Element {
       setCapturing(true)
       try {
         const shot = await window.toto.capture()
-        setScreenFreshness(formatScreenFreshness(shot.capturedAt))
         setScreenCapturedAt(shot.capturedAt)
         // Return the run id so callers can track it (Retry/Go-deeper replay the same screenshot via lastReqRef).
         const id = ask.run({
@@ -499,7 +504,7 @@ export function App(): JSX.Element {
         setCapturing(false)
       }
     },
-    [ask, capturing, requireProvider]
+    [ask.run, capturing, requireProvider]
   )
 
   const assist = useCallback(async (): Promise<void> => {
@@ -516,7 +521,6 @@ export function App(): JSX.Element {
     if (settings?.visionReady && (settings?.screenAsk ?? true)) {
       try {
         const shot = await window.toto.capture()
-        setScreenFreshness(formatScreenFreshness(shot.capturedAt))
         setScreenCapturedAt(shot.capturedAt)
         suggest.run({
           mode: 'vision',
@@ -535,7 +539,7 @@ export function App(): JSX.Element {
       prompt: basePrompt,
       history: copilotHistoryRef.current
     })
-  }, [suggest, listen, settings?.visionReady, settings?.screenAsk, requireProvider])
+  }, [suggest.run, listen.text, settings?.visionReady, settings?.screenAsk, requireProvider])
 
   const submit = useCallback(() => {
     if (!requireProvider()) return
@@ -590,7 +594,18 @@ export function App(): JSX.Element {
       pendingUserRef.current = { id, q } // recorded into memory when it completes
     }
     setInput('')
-  }, [input, ask, suggest, listen, settings, askScreen, assist, requireProvider])
+  }, [
+    input,
+    ask.answer,
+    ask.run,
+    suggest.run,
+    listen.listening,
+    listen.text,
+    settings?.screenAsk,
+    askScreen,
+    assist,
+    requireProvider
+  ])
 
   const factCheck = useCallback(() => {
     if (!requireProvider()) return
@@ -627,14 +642,25 @@ export function App(): JSX.Element {
       ask.run({ mode: 'answer', kind: 'factcheck', label: claim, prompt: buildFactCheckClaimPrompt(claim) })
       setInput('')
     }
-  }, [input, listen, ask, askScreen, settings?.screenAsk, settings?.visionReady, requireProvider])
+  }, [
+    input,
+    listen.text,
+    listen.listening,
+    listen.lines,
+    ask.fail,
+    ask.run,
+    askScreen,
+    settings?.screenAsk,
+    settings?.visionReady,
+    requireProvider
+  ])
 
   const answerNow = useCallback(() => {
     if (!requireProvider()) return
     setView('copilot')
     setCollapsed(false)
     suggest.run({ mode: 'suggest', transcript: listen.text() })
-  }, [suggest, listen, requireProvider])
+  }, [suggest.run, listen.text, requireProvider])
 
   const whatNext = useCallback(() => {
     if (!requireProvider()) return
@@ -662,7 +688,17 @@ export function App(): JSX.Element {
       : buildWhatNextPrompt(transcript, 'transcript')
     ask.run({ mode: 'answer', prompt: prompt + GUARD_LINE, history: historyRef.current })
     setInput('')
-  }, [input, ask, suggest, listen, askScreen, settings?.screenAsk, settings?.visionReady, requireProvider])
+  }, [
+    input,
+    ask.fail,
+    ask.run,
+    suggest.run,
+    listen.text,
+    askScreen,
+    settings?.screenAsk,
+    settings?.visionReady,
+    requireProvider
+  ])
 
   // Spotlight Ref only ever uses the locked Dust agent — never the globally active provider — so its
   // readiness gate is Dust's own credentials (isDustReady), not requireProvider()/settings.providerReady,
@@ -689,7 +725,15 @@ export function App(): JSX.Element {
       history: historyRef.current
     })
     setInput('')
-  }, [input, ask, listen, settings?.hasKeys, settings?.dustWorkspaceId, settings?.providerModelsSpotlightRef])
+  }, [
+    input,
+    ask.fail,
+    ask.run,
+    listen.text,
+    settings?.hasKeys,
+    settings?.dustWorkspaceId,
+    settings?.providerModelsSpotlightRef
+  ])
 
   // Review screen's "Generate follow-up" — there is no separate follow-up agent; the AskToto base Dust
   // agent (locked, see DUST_BASE_AGENT_ID) drafts follow-ups too. Renders inline on Review (no view
@@ -713,7 +757,15 @@ export function App(): JSX.Element {
       (title ? `\n\nMeeting title: ${title}` : '') +
       `\n\nSummary:\n${recapText}`
     followup.run({ mode: 'answer', prompt, agentOverride: refAgent, providerOverride: 'dust' })
-  }, [pastMeeting, ask.answer, followup, settings?.hasKeys, settings?.dustWorkspaceId, settings?.providerModels, openSettings])
+  }, [
+    pastMeeting,
+    ask.answer,
+    followup.run,
+    settings?.hasKeys,
+    settings?.dustWorkspaceId,
+    settings?.providerModels,
+    openSettings
+  ])
 
   const capture = useCallback(async () => {
     const q = input.trim()
@@ -750,8 +802,11 @@ export function App(): JSX.Element {
     if (settings?.playListenChime ?? true) playListenChime()
     void listen.start(settings?.audioSource ?? 'both', settings?.asrQuality ?? 'fast', settings?.asrEngine ?? 'whisper')
   }, [
-    listen,
-    suggest,
+    listen.listening,
+    listen.lines,
+    listen.clear,
+    listen.start,
+    suggest.clear,
     settings?.audioSource,
     settings?.asrQuality,
     settings?.asrEngine,
@@ -781,7 +836,7 @@ export function App(): JSX.Element {
       const dustReady = isDustReady(settings?.hasKeys ?? {}, settings?.dustWorkspaceId ?? '', settings?.providerModels ?? {})
       ask.run({ mode: 'recap', transcript: tx, ...(dustReady ? { providerOverride: 'dust' as const } : {}) })
     } else ask.clear()
-  }, [listen, ask, settings?.hasKeys, settings?.dustWorkspaceId, settings?.providerModels])
+  }, [listen.text, listen.stop, ask.run, ask.clear, settings?.hasKeys, settings?.dustWorkspaceId, settings?.providerModels])
 
   const toggleListen = useCallback(() => {
     if (listen.listening) endReview()
@@ -868,21 +923,21 @@ export function App(): JSX.Element {
         ask.cancel()
       } else if (suggest.answer?.streaming) suggest.cancel()
     }
-  }, [listen.listening, ask, suggest])
+  }, [listen.listening, ask.answer, ask.cancel, suggest.answer, suggest.cancel])
 
   const retryAnswer = useCallback(() => {
     const p = ask.answer?.prompt
     if (!p) return
     const id = ask.retry() // replays the original request verbatim (keeps the screenshot for vision retries)
     if (id) pendingUserRef.current = { id, q: p }
-  }, [ask])
+  }, [ask.answer, ask.retry])
 
   const goDeeper = useCallback(() => {
     const p = ask.answer?.prompt
     if (!p) return
     const id = ask.deeper() // replays the request with depth:'deeper' → a fuller answer
     if (id) pendingUserRef.current = { id, q: p }
-  }, [ask])
+  }, [ask.answer, ask.deeper])
 
   const reset = useCallback(() => {
     const wasListening = listen.listening
@@ -906,14 +961,24 @@ export function App(): JSX.Element {
     setPastMeeting(null) // a hotkey reset from a past-meeting Review must not poison the next live recap
     setView('answer')
     setCollapsed(false)
-  }, [ask, suggest, listen, listen.listening, saveMeetingNow])
+  }, [
+    listen.listening,
+    ask.cancel,
+    ask.clear,
+    suggest.cancel,
+    suggest.clear,
+    listen.lines,
+    listen.stop,
+    listen.clear,
+    saveMeetingNow
+  ])
 
   // Cluely "← back": dismiss the open answer/suggestion without tearing down a live session.
   const clearAnswer = useCallback(() => {
     ask.clear()
     suggest.clear()
     if (!listen.listening) setView('answer')
-  }, [ask, suggest, listen.listening])
+  }, [ask.clear, suggest.clear, listen.listening])
 
   // The bar/control-pill "Transcript" affordance toggles the live transcript inside the copilot panel.
   const toggleTranscript = useCallback(() => {
@@ -923,7 +988,10 @@ export function App(): JSX.Element {
   // Stabilized Bar callbacks (previously fresh inline arrow functions on every render) — a prerequisite
   // for React.memo(Bar) to actually skip re-renders; an unstable prop defeats memo's shallow comparison
   // regardless of how many other props are stable.
-  const onTogglePause = useCallback(() => (listen.paused ? listen.resume() : listen.pause()), [listen])
+  const onTogglePause = useCallback(
+    () => (listen.paused ? listen.resume() : listen.pause()),
+    [listen.paused, listen.resume, listen.pause]
+  )
   const onSetMode = useCallback((m: ConversationMode) => void patch({ mode: m }), [patch])
   const onToggleThinking = useCallback(() => {
     void patch({ thinkingMode: settings?.thinkingMode === 'always' ? 'auto' : 'always' })
@@ -1210,18 +1278,190 @@ export function App(): JSX.Element {
       factCheck,
       whatNext,
       input,
-      listen,
+      listen.text,
       settings?.screenAsk,
       settings?.visionReady,
       settings?.hasKeys,
       settings?.dustWorkspaceId,
       settings?.providerModels,
-      suggest,
-      ask,
+      suggest.run,
+      ask.run,
+      ask.fail,
       askScreen,
       requireProvider
     ]
   )
+
+  // Panel body — memoized so state changes unrelated to the active view/answer (typing in the ask input,
+  // the elapsed-meeting clock, focus signals, etc.) don't rebuild this whole element tree on every App
+  // render. Without this, `body` was a fresh JSX literal every single render, which defeated memo(Bar)'s
+  // shallow prop comparison for its `body` prop no matter how stable every OTHER prop was. Must sit above
+  // the early-return gates below — every hook in this component runs unconditionally before them (see
+  // onQuickAction's own comment above for why: rendered-fewer-hooks-than-expected otherwise).
+  const body: JSX.Element | null = useMemo(() => {
+    let b: JSX.Element | null = null
+    if ((view === 'settings' || DEMO === 'settings') && settings) {
+      // Settings is self-contained (its own rounded panel) — rendered below the bar, NOT inside <Panel>.
+      b = (
+        <Settings
+          settings={settings}
+          patch={patch}
+          saveKey={saveKey}
+          clearKey={clearKey}
+          testKey={testKey}
+          initialTab={settingsInitialTab}
+          notice={settingsNotice}
+          onClose={() => setView('answer')}
+          onQuit={quitApp}
+          onLogout={logOut}
+          onOpenIntelligence={() => setView('brain')}
+          onOpenHistory={() => setView('history')}
+          onOpenMeeting={(file) => void openPastMeeting(file)}
+        />
+      )
+    } else if (view === 'history') {
+      b = (
+        <RecallView
+          onOpenFolder={() => void window.toto.openMeetingsFolder()}
+          onBack={() => setView('answer')}
+          onConnectCalendar={() => {
+            setSettingsInitialTab('calendar')
+            setSettingsNotice(undefined)
+            setView('settings')
+            setCollapsed(false)
+          }}
+          onNewChat={reset}
+          activeFile={savedPath ?? undefined}
+          onOpenMeeting={openPastMeeting}
+          onIntelligence={() => setView('brain')}
+        />
+      )
+    } else if (view === 'brain') {
+      b = <BrainView onBack={() => setView('history')} />
+    } else if (view === 'agenda') {
+      b = <AgendaView />
+    } else if (view === 'copilot') {
+      b = (
+        <Copilot
+          lines={listen.lines}
+          suggestion={suggest.answer}
+          mode={mode}
+          listening={listen.listening}
+          loading={listen.loading}
+          loadingPct={listen.loadingPct}
+          error={listen.error}
+          showTranscript={settings?.showLiveTranscript ?? false}
+          onEnd={endReview}
+        />
+      )
+    } else if (view === 'review') {
+      // Two sources: a just-ended live session (ask.answer recap + live lines), or a past meeting opened
+      // from History (pastMeeting — read-only recap + saved lines + a "Resume session" affordance).
+      const pm = pastMeeting
+      b = (
+        <Review
+          recap={pm ? { id: 'past', text: pm.recap, streaming: false, error: null, prompt: '' } : ask.answer}
+          lines={pm ? pm.lines : listen.lines}
+          savedPath={pm ? pm.file : savedPath}
+          saveError={pm ? null : saveError}
+          saveAttempts={pm ? 0 : saveAttempts}
+          maxSaveAttempts={MAX_SAVE_RETRIES}
+          startedAt={pm ? pm.startedAt : meetingStartRef.current}
+          showTranscript={pm ? true : (settings?.showFullTranscriptInReview ?? false)}
+          meetingMeta={pm ? { title: pm.title, date: pm.date } : undefined}
+          followupDraft={followup.answer}
+          onGenerateFollowup={generateFollowup}
+          bidstackConnected={settings?.bidstackConnected ?? false}
+          bidstackTools={settings?.bidstackTools ?? []}
+          onOpenFolder={() => void window.toto.openMeetingsFolder()}
+          onSave={pm ? undefined : manualSave}
+          onResume={pm ? resumePastMeeting : undefined}
+          onOpenPastMeeting={openPastMeeting}
+          onDone={
+            pm
+              ? () => {
+                  setPastMeeting(null)
+                  setView('history')
+                }
+              : reset
+          }
+        />
+      )
+    } else if (capturing || captureError || ask.answer) {
+      // While a new screen capture is in flight (capturing), force the streaming/empty display even when
+      // ask.answer still holds the PREVIOUS turn's finished answer — otherwise a repeat screen-ask (blank
+      // Enter, or any screen-ask after the first) silently paints that stale answer as static text with no
+      // busy signal for the whole capture window (footer/Retry/Go-deeper are already gated on !streaming,
+      // so forcing streaming=true here correctly hides them too).
+      b = (
+        <Answer
+          text={capturing ? '' : ask.answer?.text ?? ''}
+          streaming={capturing || (ask.answer?.streaming ?? false)}
+          error={captureError ?? ask.answer?.error ?? null}
+          prompt={ask.answer?.prompt ?? ''}
+          label={ask.answer?.label}
+          kind={ask.answer?.kind}
+          usedScreen={ask.answer?.usedScreen}
+          onRetry={capturing || captureError ? undefined : retryAnswer}
+          onGoDeeper={capturing || captureError ? undefined : goDeeper}
+        />
+      )
+    }
+
+    // Demo overrides
+    if (DEMO === 'answer') b = <Answer text={DEMO_ANSWER} streaming={false} error={null} />
+    else if (DEMO === 'copilot')
+      b = (
+        <Copilot
+          lines={DEMO_LINES}
+          suggestion={{ id: 'd', text: DEMO_SUG, streaming: false, error: null, prompt: '' }}
+          mode="interview"
+          listening
+          loading={false}
+          loadingPct={null}
+          error={null}
+          showTranscript={false}
+          onEnd={() => {}}
+        />
+      )
+    else if (DEMO === 'history') b = <RecallView onOpenFolder={() => {}} />
+
+    return b
+  }, [
+    view,
+    settings,
+    patch,
+    saveKey,
+    clearKey,
+    testKey,
+    settingsInitialTab,
+    settingsNotice,
+    quitApp,
+    logOut,
+    openPastMeeting,
+    reset,
+    savedPath,
+    mode,
+    listen.lines,
+    suggest.answer,
+    listen.listening,
+    listen.loading,
+    listen.loadingPct,
+    listen.error,
+    endReview,
+    pastMeeting,
+    ask.answer,
+    saveError,
+    saveAttempts,
+    followup.answer,
+    generateFollowup,
+    manualSave,
+    resumePastMeeting,
+    capturing,
+    captureError,
+    retryAnswer,
+    goDeeper
+  ])
 
   // Until settings AND auth resolve, render only a slim loading strip — never an interactive surface.
   // This closes the first-run flash and the auth-gate-fail-open window: the SSO and onboarding gates
@@ -1258,134 +1498,6 @@ export function App(): JSX.Element {
     )
   }
 
-  // Panel body
-  let body: JSX.Element | null = null
-  if ((view === 'settings' || DEMO === 'settings') && settings) {
-    // Settings is self-contained (its own rounded panel) — rendered below the bar, NOT inside <Panel>.
-    body = (
-      <Settings
-        settings={settings}
-        patch={patch}
-        saveKey={saveKey}
-        clearKey={clearKey}
-        testKey={testKey}
-        initialTab={settingsInitialTab}
-        notice={settingsNotice}
-        onClose={() => setView('answer')}
-        onQuit={quitApp}
-        onLogout={logOut}
-        onOpenIntelligence={() => setView('brain')}
-        onOpenHistory={() => setView('history')}
-        onOpenMeeting={(file) => void openPastMeeting(file)}
-      />
-    )
-  } else if (view === 'history') {
-    body = (
-      <RecallView
-        onOpenFolder={() => void window.toto.openMeetingsFolder()}
-        onBack={() => setView('answer')}
-        onConnectCalendar={() => {
-          setSettingsInitialTab('calendar')
-          setSettingsNotice(undefined)
-          setView('settings')
-          setCollapsed(false)
-        }}
-        onNewChat={reset}
-        activeFile={savedPath ?? undefined}
-        onOpenMeeting={openPastMeeting}
-        onIntelligence={() => setView('brain')}
-      />
-    )
-  } else if (view === 'brain') {
-    body = <BrainView onBack={() => setView('history')} />
-  } else if (view === 'agenda') {
-    body = <AgendaView />
-  } else if (view === 'copilot') {
-    body = (
-      <Copilot
-        lines={listen.lines}
-        suggestion={suggest.answer}
-        mode={mode}
-        listening={listen.listening}
-        loading={listen.loading}
-        loadingPct={listen.loadingPct}
-        error={listen.error}
-        showTranscript={settings?.showLiveTranscript ?? false}
-        onEnd={endReview}
-      />
-    )
-  } else if (view === 'review') {
-    // Two sources: a just-ended live session (ask.answer recap + live lines), or a past meeting opened
-    // from History (pastMeeting — read-only recap + saved lines + a "Resume session" affordance).
-    const pm = pastMeeting
-    body = (
-      <Review
-        recap={pm ? { id: 'past', text: pm.recap, streaming: false, error: null, prompt: '' } : ask.answer}
-        lines={pm ? pm.lines : listen.lines}
-        savedPath={pm ? pm.file : savedPath}
-        saveError={pm ? null : saveError}
-        saveAttempts={pm ? 0 : saveAttempts}
-        maxSaveAttempts={MAX_SAVE_RETRIES}
-        startedAt={pm ? pm.startedAt : meetingStartRef.current}
-        showTranscript={pm ? true : (settings?.showFullTranscriptInReview ?? false)}
-        meetingMeta={pm ? { title: pm.title, date: pm.date } : undefined}
-        followupDraft={followup.answer}
-        onGenerateFollowup={generateFollowup}
-        bidstackConnected={settings?.bidstackConnected ?? false}
-        bidstackTools={settings?.bidstackTools ?? []}
-        onOpenFolder={() => void window.toto.openMeetingsFolder()}
-        onSave={pm ? undefined : manualSave}
-        onResume={pm ? resumePastMeeting : undefined}
-        onOpenPastMeeting={openPastMeeting}
-        onDone={
-          pm
-            ? () => {
-                setPastMeeting(null)
-                setView('history')
-              }
-            : reset
-        }
-      />
-    )
-  } else if (capturing || captureError || ask.answer) {
-    // While a new screen capture is in flight (capturing), force the streaming/empty display even when
-    // ask.answer still holds the PREVIOUS turn's finished answer — otherwise a repeat screen-ask (blank
-    // Enter, or any screen-ask after the first) silently paints that stale answer as static text with no
-    // busy signal for the whole capture window (footer/Retry/Go-deeper are already gated on !streaming,
-    // so forcing streaming=true here correctly hides them too).
-    body = (
-      <Answer
-        text={capturing ? '' : ask.answer?.text ?? ''}
-        streaming={capturing || (ask.answer?.streaming ?? false)}
-        error={captureError ?? ask.answer?.error ?? null}
-        prompt={ask.answer?.prompt ?? ''}
-        label={ask.answer?.label}
-        kind={ask.answer?.kind}
-        usedScreen={ask.answer?.usedScreen}
-        onRetry={capturing || captureError ? undefined : retryAnswer}
-        onGoDeeper={capturing || captureError ? undefined : goDeeper}
-      />
-    )
-  }
-
-  // Demo overrides
-  if (DEMO === 'answer') body = <Answer text={DEMO_ANSWER} streaming={false} error={null} />
-  else if (DEMO === 'copilot')
-    body = (
-      <Copilot
-        lines={DEMO_LINES}
-        suggestion={{ id: 'd', text: DEMO_SUG, streaming: false, error: null, prompt: '' }}
-        mode="interview"
-        listening
-        loading={false}
-        loadingPct={null}
-        error={null}
-        showTranscript={false}
-        onEnd={() => {}}
-      />
-    )
-  else if (DEMO === 'history') body = <RecallView onOpenFolder={() => {}} />
-
   const panelOpen = (body != null && !collapsed) || DEMO != null
   // The collapse-chevron only has something to do when there's actual content behind it. Idle (no
   // answer, no history/settings/review open) means toggling `collapsed` flips a bit nothing reads —
@@ -1402,8 +1514,8 @@ export function App(): JSX.Element {
     (view === 'copilot' && !!suggest.answer) ||
     DEMO === 'answer' ||
     DEMO === 'copilot'
-  // 'Viewed screen' chip when the active answer was grounded in a screenshot.
-  const ctxLabel = showingScreenChip ? screenFreshness : undefined
+  // Screen-freshness chip when the active answer was grounded in a screenshot — Bar ticks its own label.
+  const ctxCapturedAt = showingScreenChip ? screenCapturedAt : null
   // Recording chrome (Heard live chip, timer, Pause/Stop, New meeting/Transcript pills, Quick Actions,
   // the consent reminder, the listening glass tint) must vanish the INSTANT Stop is initiated — it must not
   // lag behind listen.listening, which stays true for up to DRAIN_CEILING_MS (4s) while listen.ts finishes
@@ -1517,7 +1629,7 @@ export function App(): JSX.Element {
             hasAnswer={hasAnswer}
             body={barBody}
             onBack={hasAnswer ? clearAnswer : undefined}
-            contextLabel={ctxLabel}
+            screenCapturedAt={ctxCapturedAt}
             onTranscript={toggleTranscript}
             onNewMeeting={newMeeting}
             customModes={settings?.customModes}

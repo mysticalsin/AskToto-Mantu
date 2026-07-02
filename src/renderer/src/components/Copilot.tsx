@@ -5,6 +5,9 @@ import type { AnswerState } from '../state'
 import { Markdown } from './Markdown'
 import { TextButton, Spinner } from './ui'
 
+// Cap on how many transcript lines render live in the copilot panel — see the comment above transcriptRows.
+const TRANSCRIPT_RENDER_LIMIT = 150
+
 export const Copilot = memo(function Copilot({
   lines,
   suggestion,
@@ -34,27 +37,31 @@ export const Copilot = memo(function Copilot({
   // shared/ipc.ts TranscriptLine) is a stable identity for an existing line; `-${i}` guards the
   // theoretical case of two lines sharing the same millisecond without weakening the stability for the
   // common case (t never changes for an already-committed line).
-  const transcriptRows = useMemo(
-    () =>
-      lines.map((l, i) => (
-        <div key={`${l.t}-${i}`} className={l.speaker === 'you' ? 'flex justify-end' : 'flex justify-start'}>
-          <div
-            className={[
-              'max-w-[82%] rounded-[var(--radius-xl)] px-3 py-1.5 text-[13px] leading-snug',
-              l.speaker === 'you'
-                ? 'bg-[var(--color-accent-soft)] text-[color:var(--color-ink)]'
-                : 'bg-white/[0.06] text-[color:var(--color-ink)]'
-            ].join(' ')}
-          >
-            <span className="mr-1.5 text-[10px] font-semibold uppercase text-[color:var(--color-ink-3)]">
-              {l.speaker === 'you' ? 'You' : 'Them'}
-            </span>
-            {l.text}
-          </div>
+  //
+  // A long call can accumulate thousands of lines — rendering/diffing all of them live is dead weight
+  // once the panel can only ever show a scrollable tail of it. Cap the LIVE render to the most recent
+  // TRANSCRIPT_RENDER_LIMIT lines; the full transcript is still saved and viewable in the Review screen.
+  const truncated = lines.length > TRANSCRIPT_RENDER_LIMIT
+  const transcriptRows = useMemo(() => {
+    const visible = lines.length > TRANSCRIPT_RENDER_LIMIT ? lines.slice(-TRANSCRIPT_RENDER_LIMIT) : lines
+    return visible.map((l, i) => (
+      <div key={`${l.t}-${i}`} className={l.speaker === 'you' ? 'flex justify-end' : 'flex justify-start'}>
+        <div
+          className={[
+            'max-w-[82%] rounded-[var(--radius-xl)] px-3 py-1.5 text-[13px] leading-snug',
+            l.speaker === 'you'
+              ? 'bg-[var(--color-accent-soft)] text-[color:var(--color-ink)]'
+              : 'bg-white/[0.06] text-[color:var(--color-ink)]'
+          ].join(' ')}
+        >
+          <span className="mr-1.5 text-[10px] font-semibold uppercase text-[color:var(--color-ink-3)]">
+            {l.speaker === 'you' ? 'You' : 'Them'}
+          </span>
+          {l.text}
         </div>
-      )),
-    [lines]
-  )
+      </div>
+    ))
+  }, [lines])
 
   useEffect(() => {
     const el = scroller.current
@@ -161,6 +168,11 @@ export const Copilot = memo(function Copilot({
           <div className="mb-1.5 flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-wide text-[color:var(--color-ink-3)]">
             Transcript
           </div>
+          {truncated && (
+            <div className="mb-1.5 text-[11px] text-[color:var(--color-ink-3)]">
+              Earlier lines are in the Review transcript
+            </div>
+          )}
           <div
             ref={scroller}
             className="scroll-thin flex max-h-[240px] flex-col gap-1.5 overflow-y-auto pr-1"

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, startTransition } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, startTransition } from 'react'
 import type {
   AskMode,
   ChatTurn,
@@ -97,7 +97,10 @@ export function useAutoResize(): (el: HTMLElement | null) => void {
       cancelAnimationFrame(rafRef.current)
       rafRef.current = requestAnimationFrame(() => {
         const m = measure()
-        const h = m.height + 2
+        // Quantize the GROW path to a 24px step so a streaming answer's per-frame growth coalesces into
+        // far fewer resize IPCs instead of one per tiny reflow. The settle-shrink branch below is
+        // untouched and still lands the content's exact final height.
+        const h = Math.ceil((m.height + 2) / 24) * 24
         if (shrinkRef.current) {
           clearTimeout(shrinkRef.current)
           shrinkRef.current = null
@@ -346,7 +349,13 @@ export function useAsk(): {
     [run]
   )
 
-  return { answer, run, fail, retry, deeper, cancel, clear }
+  // Memoized so consumers (App.tsx passes this whole object around as a dependency) only see a new
+  // identity when the answer itself actually changes — run/fail/retry/deeper/cancel/clear are already
+  // useCallback-stable, so without this the returned object was a fresh literal on every render.
+  return useMemo(
+    () => ({ answer, run, fail, retry, deeper, cancel, clear }),
+    [answer, run, fail, retry, deeper, cancel, clear]
+  )
 }
 
 export function useSettings(): {

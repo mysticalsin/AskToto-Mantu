@@ -17,6 +17,7 @@ export default defineConfig({
     // Bundle zod into the preload (a sandboxed preload cannot require() externalized deps).
     plugins: [externalizeDepsPlugin({ exclude: ['zod'] })],
     build: {
+      minify: 'esbuild', // preload parses before first paint — same unminified-default fix as renderer
       rollupOptions: {
         input: {
           index: resolve(__dirname, 'src/preload/index.ts'),
@@ -39,6 +40,10 @@ export default defineConfig({
     },
     plugins: [react(), tailwindcss()],
     build: {
+      // electron-vite defaults to minify:false — that shipped every bundle unminified (≈2x parse
+      // bytes on the entry chunk and on every lazy view's first click). Main stays readable for
+      // crash-log stack traces; the renderer is where the cold-start parse cost lives.
+      minify: 'esbuild',
       rollupOptions: { input: { index: resolve(__dirname, 'src/renderer/index.html') } }
     },
     // transformers.js ships wasm + workers; don't pre-bundle it

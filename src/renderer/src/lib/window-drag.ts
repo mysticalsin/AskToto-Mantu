@@ -19,8 +19,23 @@ export function useWindowDrag(onDragStart?: () => void): {
 } {
   const dragRef = useRef<{ x: number; y: number } | null>(null)
   const movedRef = useRef(false)
+  // Coalesce pointermove -> windowMoveBy IPC: accumulate the summed delta and flush at most every ~12ms
+  // instead of one IPC round-trip per pointermove (which can fire well above 60Hz on a trackpad/high-poll
+  // mouse) — the window still tracks the pointer continuously, just via fewer, larger moveBy calls.
+  const pendingDxRef = useRef(0)
+  const pendingDyRef = useRef(0)
+  const lastSendRef = useRef(0)
 
   useEffect(() => {
+    const flush = (): void => {
+      if (pendingDxRef.current === 0 && pendingDyRef.current === 0) return
+      const dx = pendingDxRef.current
+      const dy = pendingDyRef.current
+      pendingDxRef.current = 0
+      pendingDyRef.current = 0
+      lastSendRef.current = performance.now()
+      void window.toto.windowMoveBy(dx, dy)
+    }
     const onMove = (e: PointerEvent): void => {
       if (!dragRef.current) return
       const dx = e.screenX - dragRef.current.x
@@ -30,10 +45,13 @@ export function useWindowDrag(onDragStart?: () => void): {
       if (!movedRef.current) onDragStart?.()
       movedRef.current = true
       dragRef.current = { x: e.screenX, y: e.screenY }
-      void window.toto.windowMoveBy(dx, dy)
+      pendingDxRef.current += dx
+      pendingDyRef.current += dy
+      if (performance.now() - lastSendRef.current >= 12) flush()
     }
     const onUp = (): void => {
       dragRef.current = null
+      flush() // land any still-buffered delta so the last few px of a drag are never dropped
       // movedRef is intentionally NOT reset here. The trailing `click` still needs to see it (onClickCapture
       // swallows the click that ends a drag). It is cleared deterministically at the start of the next press
       // (onPointerDown) and by onClickCapture itself — never via rAF. An always-on-top overlay is usually
@@ -52,6 +70,8 @@ export function useWindowDrag(onDragStart?: () => void): {
     onPointerDown: (e) => {
       // Start of a new gesture: clear any stale drag flag here (deterministic), never via rAF on pointerup.
       movedRef.current = false
+      pendingDxRef.current = 0
+      pendingDyRef.current = 0
       // Only arm a window-drag from the bar's own EMPTY surface — never from an interactive control or a
       // text field. Every clickable in the widget/pill is marked `.no-drag`; honour that hint here the same
       // way native -webkit-app-region does. Arming on buttons meant a click that drifted only a few px
