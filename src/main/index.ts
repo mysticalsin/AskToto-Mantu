@@ -123,6 +123,10 @@ import { PROVIDERS, resolveModelTier, type ProviderId } from '@shared/providers'
 import { routeTier } from '@shared/routing'
 import { redactSecrets } from '@shared/redact'
 
+// Belt-and-braces with the per-meeting powerSaveBlocker below: keep Chromium itself from ever
+// deprioritizing the (hidden) renderer that hosts the transcription worker. Must run before app ready.
+app.commandLine.appendSwitch('disable-renderer-backgrounding')
+
 const BAR_WIDTH = 880
 const BAR_HEIGHT = 84 // initial idle height of the slimmer two-row widget; useAutoResize grows it for answers
 const BAR_MIN_HEIGHT = 44 // floor for the resize clamp so the collapsed control mini-pill can shrink fully
