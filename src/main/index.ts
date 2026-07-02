@@ -292,6 +292,16 @@ function createWindow(): void {
   win.webContents.on('will-navigate', (e, url) => {
     if (url !== win?.webContents.getURL()) e.preventDefault()
   })
+  // Debug aid (opt-in via ASKTOTO_DEBUG_RENDERER): mirror renderer warnings/errors into the main-process
+  // log so a crash-to-error-boundary can be diagnosed without opening the renderer devtools.
+  if (process.env.ASKTOTO_DEBUG_RENDERER) {
+    win.webContents.on('console-message', (_e, level, message, line, sourceId) => {
+      if (level >= 2) console.log(`[renderer] ${message}  (${sourceId}:${line})`)
+    })
+    win.webContents.on('render-process-gone', (_e, details) => {
+      console.log(`[renderer-gone] reason=${details.reason} exitCode=${details.exitCode}`)
+    })
+  }
   // Dev-only: screenshot ONLY this window (no desktop) for verification. Privacy-safe.
   if (process.env.ASKTOTO_SHOT) {
     win.webContents.once('did-finish-load', () => {
