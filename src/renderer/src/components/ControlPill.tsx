@@ -33,7 +33,7 @@ export function ControlPill({
         title="Expand AskToto"
         aria-label="Expand AskToto"
         onClick={onExpand}
-        className="no-drag focus-ring block rounded-[8px]"
+        className="no-drag focus-ring block shrink-0 rounded-[8px]"
       >
         <span className="aw-mark-glow block rounded-[8px]">
           <MantuMark size={30} />
@@ -43,7 +43,7 @@ export function ControlPill({
         type="button"
         onClick={onHide}
         aria-label="Hide AskToto"
-        className="no-drag focus-ring flex h-[34px] items-center gap-1.5 rounded-full bg-white/[0.06] px-3.5 text-[13px] font-semibold text-[color:var(--color-ink-2)] hover:bg-white/10 hover:text-[color:var(--color-ink)]"
+        className="no-drag focus-ring flex h-[34px] shrink-0 items-center gap-1.5 rounded-full bg-white/[0.06] px-3.5 text-[13px] font-semibold text-[color:var(--color-ink-2)] hover:bg-white/10 hover:text-[color:var(--color-ink)]"
       >
         <X size={14} /> Hide
       </button>
@@ -54,7 +54,7 @@ export function ControlPill({
         aria-pressed={listening}
         onClick={onToggleListen}
         className={[
-          'no-drag focus-ring grid h-[34px] w-[34px] place-items-center rounded-full transition-colors',
+          'no-drag focus-ring grid h-[34px] w-[34px] shrink-0 place-items-center rounded-full transition-colors',
           listening
             ? 'bg-[var(--color-danger-soft)] text-[color:var(--color-danger)]'
             : 'bg-white/[0.06] text-[color:var(--color-ink-2)] hover:bg-white/10 hover:text-[color:var(--color-ink)]'
