@@ -204,6 +204,8 @@ export type SaveNote = z.infer<typeof SaveNoteSchema>
 /** Structured export of a meeting recap (decisions + action-items-with-owners) for Jira/Asana/Notion etc.
  *  The full original markdown is always included so nothing is lost if a section heading was reworded. */
 export const RecapExportSchema = z.object({
+  title24: z.string(),
+  tags: z.array(z.string()),
   overview: z.string(),
   topics: z.array(z.string()),
   keyQA: z.array(z.string()),
@@ -573,6 +575,7 @@ export interface MeetingSummary {
   mode: string
   durationMin: number
   participants: string[]
+  topics?: string[]
 }
 export interface RecallHit extends MeetingSummary {
   snippet: string

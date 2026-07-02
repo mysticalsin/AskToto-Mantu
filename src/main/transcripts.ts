@@ -448,7 +448,15 @@ export async function saveMeeting(settings: Settings, m: SaveMeeting): Promise<s
   const folder = ensureMeetingsFolder(settings)
 
   const started = m.startedAt || Date.now()
-  const title = cleanTitle(m.title) || `${m.mode} meeting`
+  const heuristicTitle = cleanTitle(m.title) || `${m.mode} meeting`
+
+  // Main is the single source of truth for the final title: when a recap was generated, prefer its
+  // "## Title" (2-4 real words naming the topic) over the renderer's "first sentence of theirs" heuristic.
+  // Falls back to the renderer-provided title when there's no recap yet, or the model left Title empty.
+  const recapParsed = m.recap ? parseRecapMarkdown(m.recap) : null
+  const title = cleanTitle(recapParsed?.title24 || '') || heuristicTitle
+  const tags = recapParsed?.tags || []
+
   let file = join(folder, `${stamp(started)}-${slug(title)}.md`)
   for (let n = 2; existsSync(file); n++) {
     file = join(folder, `${stamp(started)}-${slug(title)}-${n}.md`)
@@ -477,6 +485,7 @@ export async function saveMeeting(settings: Settings, m: SaveMeeting): Promise<s
       `participants: [${participants.join(', ')}]`,
       `duration_min: ${durMin}`,
       `lines: ${m.lines.length}`,
+      ...(tags.length ? [`topics: [${tags.map((t) => yamlSafeTitle(t)).join(', ')}]`] : []),
       'status: ready-for-followup',
       '---',
       ''
@@ -617,12 +626,30 @@ export function parseRecapMarkdown(markdown: string): RecapExport {
   const md = typeof markdown === 'string' ? markdown : ''
 
   // Split on "## " headings; map each heading (colon-trimmed, lowercased) to its body up to the next "## ".
+  // Models sometimes emit the content INLINE on the heading line ("## Title: Renault Contract Renewal")
+  // instead of on the next line — the prompt's own "## Title: 2 to 4 words…" template invites that shape.
+  // For KNOWN section names, split at the first colon and treat the remainder as the body's first line;
+  // unknown headings keep the strict whole-line key so a legitimate colon in prose isn't mis-split.
+  const KNOWN = new Set([
+    'title', 'tags', 'overview', 'topics', 'key q&a', 'key qa',
+    'decisions', 'action items', 'open questions', 'notable quotes'
+  ])
   const sections: Record<string, string> = {}
   for (const part of md.split(/^##\s+/m)) {
     const nl = part.indexOf('\n')
-    if (nl === -1) continue
-    const heading = part.slice(0, nl).replace(/:\s*$/, '').trim().toLowerCase()
-    if (heading) sections[heading] = part.slice(nl + 1).trim()
+    const headRaw = (nl === -1 ? part : part.slice(0, nl)).trim()
+    let body = nl === -1 ? '' : part.slice(nl + 1).trim()
+    let heading = headRaw.replace(/:\s*$/, '').trim().toLowerCase()
+    const colon = headRaw.indexOf(':')
+    if (colon > 0 && colon < headRaw.length - 1) {
+      const maybeKey = headRaw.slice(0, colon).trim().toLowerCase()
+      if (KNOWN.has(maybeKey)) {
+        heading = maybeKey
+        const inline = headRaw.slice(colon + 1).trim()
+        body = body ? `${inline}\n${body}` : inline
+      }
+    }
+    if (heading) sections[heading] = body
   }
 
   const bullets = (text: string | undefined): string[] =>
@@ -641,7 +668,33 @@ export function parseRecapMarkdown(markdown: string): RecapExport {
     return { text, owner: null as string | null }
   })
 
+  // "## Title:" body — first line only, wrapping quotes/emphasis (models mirror the prompt's quoted
+  // example) and trailing punctuation stripped, capped for filename/UI safety.
+  const titleBody = (sections['title'] || '').split('\n')[0].trim()
+  const title24 = titleBody
+    .replace(/^["'“”*_\s]+|["'“”*_\s]+$/g, '')
+    .replace(/[.!?,;:]+$/, '')
+    .trim()
+    .slice(0, 60)
+
+  // "## Tags:" body — usually one comma-separated line, but tolerate the model emitting a bullet list.
+  // Tags feed unquoted YAML flow-sequence frontmatter and React keys, so strip quote/bracket/backslash
+  // characters, dedup case-insensitively, cap at 5.
+  const tagsSection = sections['tags'] || ''
+  const tagList = /^\s*[-*]/m.test(tagsSection) ? bullets(tagsSection) : [tagsSection]
+  const tags: string[] = []
+  const seenTags = new Set<string>()
+  for (const raw of tagList.flatMap((t) => t.split(/[,\n]/))) {
+    const tag = raw.replace(/["'“”\\[\]]/g, '').trim()
+    if (!tag || seenTags.has(tag.toLowerCase())) continue
+    seenTags.add(tag.toLowerCase())
+    tags.push(tag)
+    if (tags.length === 5) break
+  }
+
   return {
+    title24,
+    tags,
     overview: sections['overview'] || '',
     topics: bullets(sections['topics']),
     keyQA: bullets(sections['key q&a'] || sections['key qa']),

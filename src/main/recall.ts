@@ -40,6 +40,7 @@ async function readMeeting(folder: string, file: string): Promise<Read | null> {
     if (!text) return null
     const fm = frontmatter(text)
     if (fm.type && fm.type !== 'meeting-transcript') return null
+    const topics = (fm.topics || '').split(',').map((s) => s.trim()).filter(Boolean)
     return {
       text,
       sum: {
@@ -48,7 +49,8 @@ async function readMeeting(folder: string, file: string): Promise<Read | null> {
         date: fm.date || '',
         mode: fm.mode || 'general',
         durationMin: Number(fm.duration_min || 0),
-        participants: (fm.participants || '').split(',').map((s) => s.trim()).filter(Boolean)
+        participants: (fm.participants || '').split(',').map((s) => s.trim()).filter(Boolean),
+        ...(topics.length ? { topics } : {})
       }
     }
   } catch {
