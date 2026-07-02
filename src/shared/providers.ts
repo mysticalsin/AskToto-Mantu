@@ -388,6 +388,19 @@ export function resolveModelTier(
   return base || def.fastModel || def.defaultModel || ''
 }
 
+/** Cost/safety guardrail (per Tony): the CLI provider only ever answers as Sonnet in the interactive
+ *  ask flow — never Haiku, never Opus — regardless of routeTier's escalation (hard/coding questions,
+ *  factcheck, or thinkingMode 'always' would otherwise reach Opus here). The direct Anthropic API
+ *  key's base/think tiers are pinned to Haiku/Sonnet so a stray providerModels edit can't drift them.
+ *  Deep tier is deliberately EXEMPT on both — that's the Graph extraction pipeline's reserved path to
+ *  Opus (brain/ingest.ts and graphify.ts call resolveModelTier directly and never reach this function). */
+export function applyInteractiveGuardrail(id: ProviderId, tier: ModelTier, model: string): string {
+  if (id === 'claude-cli') return PROVIDERS['claude-cli'].thinkModel ?? 'sonnet'
+  if (id === 'anthropic' && tier === 'base') return PROVIDERS.anthropic.fastModel
+  if (id === 'anthropic' && tier === 'think') return PROVIDERS.anthropic.thinkModel ?? model
+  return model
+}
+
 /** Is Dust configured with valid credentials right now — independent of whether it's the globally active
  *  `provider`. Used to decide whether a specific task (recap, follow-up email, Spotlight Ref) can cascade
  *  into Dust even while another provider (e.g. Kimi) handles everyday Q&A. */
