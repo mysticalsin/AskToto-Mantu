@@ -72,7 +72,10 @@ is a stepping stone to delegated attendance.
 
 ## Implementation status
 
-- **#1 Commitment Ledger** — shipped in this session (extraction schema + ingest merge + dashboard rail).
-- **#3 Receipt Mode** — prompt-layer shipped (source-meeting attribution + grounded-or-silent line).
+- **#1 Commitment Ledger** — shipped (extraction schema + ingest merge + dashboard rail).
+- **#3 Receipt Mode** — shipped end-to-end. `src/main/brain/context.ts` assembles the question-relevant,
+  meeting-cited slice of the brain (cheap slug-token matching, bounded, answer-mode only); it rides the
+  per-turn user text (`shared.ts`) so it never breaks the prompt cache; `GROUNDING_RAIL` now demands
+  exact source-meeting attribution and a "no past meetings on record" line when the brain is silent.
 - **#2, #4, #5, #6, #7, #8** — next build wave, in that order (2 and 4 feed off 1's data).
 - **#9, #10** — after the brain accumulates volume (they need corpus density to shine).

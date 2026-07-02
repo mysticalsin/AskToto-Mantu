@@ -60,8 +60,11 @@ import {
   readAccount as readBrainAccount,
   readDeal as readBrainDeal,
   listEntities as listBrainEntities,
+  listMeetingExtractions as listBrainMeetingExtractions,
+  readMeetingExtraction as readBrainMeetingExtraction,
   purgeBrain
 } from './brain/store'
+import { buildBrainContext } from './brain/context'
 import { buildSystem } from './personas'
 import { initLogging, mainLog, auditLog } from './logger'
 import { authStatus, signIn as authSignIn, signOut as authSignOut, requireAuth } from './auth'
@@ -1093,6 +1096,18 @@ function registerIpc(): void {
     // before it leaves the device for a cloud model. Only the auto-captured transcript — never the user's
     // own typed prompt, and never the locally-saved meeting file (which keeps the verbatim original).
     if (s.redactSensitive && req.transcript) req.transcript = redactSecrets(req.transcript)
+    // Receipt Mode: ground a typed answer in the user's own past meetings. Match the brain against the
+    // question (which already carries the live transcript tail via the renderer's withContext) and inject
+    // the relevant, meeting-cited slice per-turn. Answer mode only — never the latency-critical spoken
+    // suggest line or the screen-only vision turn. Best-effort: a brain read must never block an answer.
+    if (req.mode === 'answer') {
+      try {
+        const hit = buildBrainContext(s, `${req.prompt}\n${req.transcript ?? ''}`)
+        req.brainContext = hit.block || undefined
+      } catch (err) {
+        console.warn('[brain] context assembly failed', err)
+      }
+    }
     const allowed = getAllowedProviders() // org allowlist (null = unrestricted)
 
     // Find the next eligible keyed provider not yet tried — for failover when the primary can't answer.

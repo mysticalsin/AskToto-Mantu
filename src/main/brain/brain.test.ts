@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os'
 import type { Settings } from '@shared/ipc'
 import { MeetingExtractionSchema, type MeetingExtraction } from '@shared/brain'
 import { extractJsonObject, mergeExtraction, lintBrain } from './ingest'
+import { buildBrainContext } from './context'
 import {
   brainDir,
   slugify,
@@ -136,6 +137,51 @@ describe('brain', () => {
       await mergeExtraction(s, x, { file: 'chat.md', date: '', title: 'chat' })
       expect(listEntities(s, 'account')).toHaveLength(0)
       expect(listEntities(s, 'deal')).toHaveLength(0)
+    })
+  })
+
+  describe('buildBrainContext (Receipt Mode)', () => {
+    it('returns the relevant, meeting-cited slice when the question names a known entity', async () => {
+      const x = sampleExtraction()
+      x.commitments = [
+        { text: 'send the ROI deck', by: 'Maria Silva', due_hint: 'by Friday', quote: "I'll get you the ROI deck", confidence: 'EXTRACTED' }
+      ]
+      await mergeExtraction(s, x, { file: 'm1.md', date: '2026-06-14', title: 'LATAM SAP pricing defense' })
+
+      const { block, matched } = buildBrainContext(s, 'what did Maria Silva promise on pricing?')
+      expect(matched).toBe(true)
+      expect(block).toContain('Maria Silva')
+      expect(block).toContain('LATAM SAP pricing defense') // the source-meeting citation
+      expect(block).toContain('2026-06-14')
+      expect(block).toContain('ROI deck') // her open commitment, carried with its citation
+    })
+
+    it('matches an account and a deal named in the question', async () => {
+      await mergeExtraction(s, sampleExtraction(), { file: 'm1.md', date: '2026-06-14', title: 't' })
+      const acc = buildBrainContext(s, "how is the L'Oréal relationship going?")
+      expect(acc.matched).toBe(true)
+      expect(acc.block).toContain("L'Oréal")
+
+      const deal = buildBrainContext(s, 'give me the state of the LATAM SAP AMS deal')
+      expect(deal.matched).toBe(true)
+      expect(deal.block.toLowerCase()).toContain('latam sap ams')
+    })
+
+    it('returns nothing when the question names no known entity (drives the "not in your meetings" line)', async () => {
+      await mergeExtraction(s, sampleExtraction(), { file: 'm1.md', date: '', title: 't' })
+      const { block, matched } = buildBrainContext(s, 'what do you know about Globex Corporation?')
+      expect(matched).toBe(false)
+      expect(block).toBe('')
+    })
+
+    it('does not false-match a known entity name as a substring of an unrelated word', async () => {
+      // A person slugged "sap" must not match the word "disappear"; whole-token boundaries only.
+      const x = sampleExtraction()
+      x.people = [{ name: 'Sap', role: null, org: null, confidence: 'EXTRACTED' }]
+      x.account = null
+      x.deal = null
+      await mergeExtraction(s, x, { file: 'm1.md', date: '', title: 't' })
+      expect(buildBrainContext(s, 'the concerns seem to disappear over time').matched).toBe(false)
     })
   })
 

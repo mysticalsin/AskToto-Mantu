@@ -251,6 +251,10 @@ export const AskStartSchema = z.object({
   /** Forces this one request to a specific provider regardless of the globally active `provider` setting —
    *  e.g. cascading a recap/follow-up/Spotlight-Ref request into Dust even when Kimi/Anthropic/etc. is active. */
   providerOverride: ProviderIdSchema.optional(),
+  /** Receipt Mode: relevant past-meeting knowledge, assembled in main from the brain (never sent by the
+   *  renderer — main overwrites it after parse). Injected per-turn into the user text so it never pollutes
+   *  or invalidates the cached system prompt. Capped for defense-in-depth against a hostile renderer. */
+  brainContext: z.string().max(8000).optional(),
   history: z.array(ChatTurnSchema).default([])
 })
 export type AskStart = z.infer<typeof AskStartSchema>
