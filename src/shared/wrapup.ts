@@ -16,15 +16,22 @@ const ENDING_WINDOW_LINES = 8 // an ending phrase only counts when the meeting i
 
 // Explicit ending language. Word-ish boundaries via regex; case-insensitive.
 const ENDING_CUES: RegExp[] = [
-  /\blet'?s wrap\b/i,
-  /\bwrap(ping)? (this |it )?up\b/i,
+  // "let's wrap" alone is a sign-off ("let's wrap for today"), but not when what follows is "up"
+  // (that shape is the next cue's job) or a direct object ("let's wrap the pricing section" — a topic
+  // transition, not the meeting ending).
+  /\blet'?s wrap\b(?!\s+(?:up\b|the|this|that|those|these|our|my|your|his|her|their|its|a|an)\b)/i,
+  // "wrap (this/it) up" is the sign-off shape; "wrap up the/this/... <noun>" right after is a topic
+  // transition ("let's wrap up the pricing section and move to timelines"), not the meeting ending.
+  /\bwrap(ping)? (this |it )?up\b(?!\s+(?:the|this|that|those|these|our|my|your|his|her|their|its|a|an)\b)/i,
   /\b(gotta|got to|have to|need to) (run|jump|drop|hop off)\b/i,
   /\bwe'?re (at|out of) time\b/i,
   /\brunning (out of|low on) time\b/i,
   /\btop of the hour\b/i,
   /\blet'?s call it\b/i,
   /\bthanks?,? (everyone|everybody|all|guys|both of you)\b/i,
-  /\bthanks? (so much )?for (your|the) time\b/i,
+  // "thanks for your time" as a sign-off vs. mid-meeting ("...explaining the architecture, now onto
+  // pricing") — a following gerund clause means the "time" was spent on something, not a closing line.
+  /\bthanks? (so much )?for (your|the) time\b(?!\s+\w+ing\b)/i,
   /\b(great|good|nice|lovely) (talking|chatting|catching up|to see you|seeing you)\b/i,
   /\bhave a (good|great|nice) (one|day|evening|weekend|week)\b/i,
   /\btalk (to you )?(soon|later|next week)\b/i,
@@ -46,7 +53,13 @@ const OWNED_STEP_CUES: RegExp[] = [
   /\blet'?s (schedule|book|set up|put) (a|the|some)?\s?(call|meeting|time|session|demo|workshop)\b/i,
   /\bi'?ll send (over|you|the|a)\b/i,
   /\b(calendar|invite) (invite|out|coming|on its way)\b/i,
-  /\bpencil(ed)? in\b/i
+  /\bpencil(ed)? in\b/i,
+  // Named third-party ownership ("Sarah will handle the follow-up", "Marc is going to send the
+  // numbers") — the cues above only recognize first-person (I/we) or second-person (you) commitments.
+  // Case-SENSITIVE and deliberately conservative: a real name reads as capitalized wherever it sits in
+  // the sentence, while a capitalized common word/pronoun only looks that way at a sentence's start
+  // ("It will improve...") — the exclusion list below blocks the common ones from posing as a name.
+  /\b(?!It\b|We\b|They\b|This\b|That\b|He\b|She\b|You\b|There\b|Here\b|The\b|Let\b|I\b|So\b|And\b|But\b|Ok\b|Okay\b|Well\b|Maybe\b|Also\b|Then\b|Now\b|Someone\b|Everyone\b|Something\b|Everything\b|Yes\b|No\b)[A-Z][a-z]+(?:'ll| will| is going to) (?:send|share|get|set up|schedule|book|draft|prepare|put together|circulate|follow up|circle back|intro|introduce|forward|email|ping|handle|take (?:that|this|it|the action)|own|work on|look into|reach out|call|review|update|finalize|close|sort out|deal with|get back)\b/
 ]
 
 export interface HonkVerdict {

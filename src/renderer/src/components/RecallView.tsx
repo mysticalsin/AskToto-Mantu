@@ -23,6 +23,9 @@ import type {
 
 // ---------------------------------------------------------------------------
 // Helpers duplicated from Review.tsx — DO NOT edit Review.tsx; it owns these.
+// Exception: the local-date-grouping helpers below (localDateKey / groupByLocalDate / friendlyDate)
+// had a same-shaped UTC/local mismatch bug in both copies, so both were fixed in lockstep — see the
+// identical (unexported) copy in Review.tsx's "Recent meetings" panel.
 // ---------------------------------------------------------------------------
 
 function formatDurationMin(min: number): string {
@@ -40,30 +43,49 @@ function meetingTime(dateStr: string): string {
   }
 }
 
-function groupByDate(
+/**
+ * Local (not UTC) calendar-day key for a timestamp, as "YYYY-MM-DD". Meetings are saved with a full
+ * ISO instant (e.g. "2026-07-02T17:50:34.312Z"); truncating that string to its first 10 characters
+ * grabs the UTC date, which is a different calendar day from the local one for roughly half of every
+ * 24h cycle in any timezone west of UTC — so a meeting saved moments ago could key under "yesterday".
+ * `toLocaleDateString('en-CA')` formats as plain YYYY-MM-DD using the LOCAL timezone, which keeps the
+ * key anchored to the same wall-clock day the user actually sees. Exported for unit testing.
+ */
+export function localDateKey(dateStr: string): string {
+  const d = new Date(dateStr)
+  if (isNaN(d.getTime())) return dateStr.slice(0, 10)
+  return d.toLocaleDateString('en-CA')
+}
+
+/** Group meetings by their LOCAL calendar day. Exported for unit testing. */
+export function groupByLocalDate(
   meetings: (MeetingSummary | RecallHit)[]
 ): [string, (MeetingSummary | RecallHit)[]][] {
   const map = new Map<string, (MeetingSummary | RecallHit)[]>()
   for (const m of meetings) {
-    const d = m.date.slice(0, 10)
+    const d = localDateKey(m.date)
     if (!map.has(d)) map.set(d, [])
     map.get(d)!.push(m)
   }
   return Array.from(map.entries())
 }
 
-function friendlyDate(dateStr: string): string {
-  try {
-    const d = new Date(dateStr)
-    const today = new Date()
-    const yesterday = new Date(today)
-    yesterday.setDate(today.getDate() - 1)
-    if (d.toDateString() === today.toDateString()) return 'Today'
-    if (d.toDateString() === yesterday.toDateString()) return 'Yesterday'
-    return d.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' })
-  } catch {
-    return dateStr
-  }
+/**
+ * `dateKey` is a LOCAL "YYYY-MM-DD" string from `localDateKey`/`groupByLocalDate` — compared as a
+ * plain string against today's/yesterday's own local keys (computed the same way), so the comparison
+ * never re-enters ISO/UTC date parsing. The fallback display date is built from the key's numeric
+ * y/m/d via the `Date(y, m, d)` constructor, which — unlike `new Date("YYYY-MM-DD")` — is specified to
+ * construct local midnight, not UTC midnight. Exported for unit testing.
+ */
+export function friendlyDate(dateKey: string): string {
+  const [y, m, d] = dateKey.split('-').map(Number)
+  if (!y || !m || !d) return dateKey
+  const today = new Date()
+  if (dateKey === today.toLocaleDateString('en-CA')) return 'Today'
+  const yesterday = new Date(today)
+  yesterday.setDate(today.getDate() - 1)
+  if (dateKey === yesterday.toLocaleDateString('en-CA')) return 'Yesterday'
+  return new Date(y, m - 1, d).toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' })
 }
 
 /** Format a calendar event start/end time for the upcoming row. */
@@ -390,7 +412,7 @@ export function RecallView({
     if (f) openMeeting(f)
   }
 
-  const groups = groupByDate(items)
+  const groups = groupByLocalDate(items)
 
   return (
     <div className="flex h-full flex-col">

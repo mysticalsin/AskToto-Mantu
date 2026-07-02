@@ -69,6 +69,56 @@ describe('detectNoDecisionEnding', () => {
     const lines = [line('them', 'thanks everyone, bye')]
     expect(detectNoDecisionEnding(lines, START, START + 15 * MIN).honk).toBe(false)
   })
+
+  it('a mid-meeting "wrap up" topic transition is not treated as the meeting ending', () => {
+    const lines = [
+      ...aimlessBody(),
+      line('them', "Ok let's wrap up the pricing section and move to timelines.")
+    ]
+    expect(detectNoDecisionEnding(lines, START, START + 20 * MIN).honk).toBe(false)
+  })
+
+  it('"thanks for your time" explaining something mid-meeting is not the meeting ending', () => {
+    const lines = [
+      ...aimlessBody(),
+      line('them', 'Thanks for your time explaining the architecture, now onto pricing.')
+    ]
+    expect(detectNoDecisionEnding(lines, START, START + 20 * MIN).honk).toBe(false)
+  })
+
+  it('a topic-transition "wrap up" earlier in the window does not suppress a real ending later', () => {
+    const lines = [
+      ...aimlessBody(),
+      line('them', "Let's wrap up the pricing section for now."),
+      line('you', 'Sounds good, moving on.'),
+      line('them', "Alright, thanks everyone — let's wrap up here.")
+    ]
+    const v = detectNoDecisionEnding(lines, START, START + 20 * MIN)
+    expect(v.honk).toBe(true)
+  })
+
+  it('bare "let\'s wrap up" (no object) at the real end still honks', () => {
+    const lines = [...aimlessBody(), line('them', "Alright, let's wrap up.")]
+    const v = detectNoDecisionEnding(lines, START, START + 20 * MIN)
+    expect(v.honk).toBe(true)
+  })
+
+  it('"wrapping up here" and "wrap up now" still honk', () => {
+    expect(
+      detectNoDecisionEnding(
+        [...aimlessBody(), line('them', "We're wrapping up here.")],
+        START,
+        START + 20 * MIN
+      ).honk
+    ).toBe(true)
+    expect(
+      detectNoDecisionEnding(
+        [...aimlessBody(), line('them', 'Let us wrap up now.')],
+        START,
+        START + 20 * MIN
+      ).honk
+    ).toBe(true)
+  })
 })
 
 describe('hasOwnedNextStep', () => {
@@ -86,8 +136,18 @@ describe('hasOwnedNextStep', () => {
   it.each([
     'we should probably think about next steps at some point',
     'someone ought to look into that',
-    'it would be good to reconnect eventually'
+    'it would be good to reconnect eventually',
+    'It will improve the workflow eventually.', // sentence-initial capital, not a name
+    'This will help the rollout a lot.'
   ])('rejects vague intent: %s', (text) => {
     expect(hasOwnedNextStep([line('them', text)])).toBe(false)
+  })
+
+  it.each([
+    'Sarah will handle the follow-up with legal.',
+    'Marc is going to send the numbers.',
+    "Priya'll schedule the workshop for next week."
+  ])('recognizes named third-party ownership: %s', (text) => {
+    expect(hasOwnedNextStep([line('them', text)])).toBe(true)
   })
 })
