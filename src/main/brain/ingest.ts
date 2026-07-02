@@ -280,29 +280,42 @@ export function brainBackfillProgress(): { total: number; done: number; running:
   return { total: backfillTotal, done: backfillDone, running }
 }
 
+/**
+ * The full post-extraction ingest: stamp provenance from the transcript's frontmatter (the model
+ * can't know its own source file/date), persist the extraction, merge into entities/graph, mark the
+ * ingest log, and refresh lint warnings. Exported so the end-to-end proof can drive fixtures through
+ * the EXACT production path — the UI's headline "meetings ingested" stat reads the index this writes.
+ */
+export async function ingestExtraction(s: Settings, x: MeetingExtraction, md: string, file: string): Promise<void> {
+  const idx = readIndex(s)
+  const key = basename(file)
+  const dateMatch = md.match(/^date:\s*(\S+)/m)
+  const ref: MeetingRef = { file: key, date: dateMatch?.[1] ?? '', title: x.title24 || key }
+  // Stamp provenance the model can't know (its own source file + meeting date) so consumers can join
+  // extractions back to meetings (call-grade timelines, meeting feeds) without re-reading entity refs.
+  x.source_file = key
+  x.date = ref.date
+  await writeMeetingExtraction(s, slugify(key), x)
+  await mergeExtraction(s, x, ref)
+  idx.ingested[key] = { at: Date.now(), ok: true }
+  idx.warnings = lintBrain(s)
+  await writeIndex(s, idx)
+}
+
 async function processJob(job: Job): Promise<void> {
   const s = getSettings()
-  const idx = readIndex(s)
-  const key = basename(job.file)
   try {
     const md = readSavedFile(job.file)
     const x = await extractMeeting(s, md, job.file)
-    const dateMatch = md.match(/^date:\s*(\S+)/m)
-    const ref: MeetingRef = { file: key, date: dateMatch?.[1] ?? '', title: x.title24 || key }
-    // Stamp provenance the model can't know (its own source file + meeting date) so consumers can join
-    // extractions back to meetings (call-grade timelines, meeting feeds) without re-reading entity refs.
-    x.source_file = key
-    x.date = ref.date
-    await writeMeetingExtraction(s, slugify(key), x)
-    await mergeExtraction(s, x, ref)
-    idx.ingested[key] = { at: Date.now(), ok: true }
+    await ingestExtraction(s, x, md, job.file)
     auditLog('brain.ingest', { ok: true, source: job.source })
   } catch (e) {
-    idx.ingested[key] = { at: Date.now(), ok: false, error: e instanceof Error ? e.message : String(e) }
+    const idx = readIndex(s)
+    idx.ingested[basename(job.file)] = { at: Date.now(), ok: false, error: e instanceof Error ? e.message : String(e) }
+    idx.warnings = lintBrain(s)
+    await writeIndex(s, idx)
     auditLog('brain.ingest', { ok: false, source: job.source })
   }
-  idx.warnings = lintBrain(s)
-  await writeIndex(s, idx)
 }
 
 function pump(): void {

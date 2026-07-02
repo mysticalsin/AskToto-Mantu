@@ -5,13 +5,17 @@ ledger, Silence Detector, Mars week, Going-Cold) is computed from recorded meeti
 invented, never estimated.
 
 **Proof mechanism:** `src/main/brain/e2e-proof.test.ts` plants a fully known ground truth and pushes
-it through the REAL pipeline — real `mergeExtraction`, real JSON files written to a real disk
-folder, real store readers (the same code `brain:read` IPC serves the dashboards) — then asserts
-every derived number equals what was planted. Nothing is mocked except the Electron runtime itself.
-The one nondeterministic production step (LLM extraction) is represented by fixtures that pass the
-exact same zod schema live output must pass; everything downstream executes for real.
+it through the EXACT production ingest (`ingestExtraction` — the same function `processJob` runs
+after the LLM step): provenance stamping from transcript frontmatter, extraction persist, entity
+merge, ingest-log index write, lint refresh — real JSON files on a real disk folder, read back
+through the same store readers the `brain:read` IPC serves. The whole world runs TWICE, plaintext
+and encrypted-at-rest, and must produce identical numbers. Fixtures deliberately carry no date or
+source file — if production stamping broke, every date-driven number would fail. The UI's headline
+"meetings ingested" stat reads the ingest-log index, which is asserted directly (8 entries, all ok).
+Nothing is mocked except the Electron runtime itself. The one nondeterministic production step (LLM
+extraction) is represented by fixtures that pass the exact same zod schema live output must pass.
 
-Reproduce: `npx vitest run src/main/brain/e2e-proof.test.ts` — 7/7 must pass.
+Reproduce: `npx vitest run src/main/brain/e2e-proof.test.ts` — 8 assertions × 2 storage modes.
 
 ## The planted world
 
@@ -51,11 +55,17 @@ Negative controls (things that must NOT appear, asserted absent): "pricing" as a
 
 ## Graph time-decay layer (Going-Cold)
 
-`intelligence` workspace has no test runner; its pure logic is proven by a 14-assertion runtime
-smoke executed with Node type-stripping (freshness tiers, coldest-first rail ordering,
-ledger-commitment-over-topic hook precedence, single-threaded and unmapped detection).
-The adapter (`brainToDashboard`) compiles under `tsc -b` and only reshapes — it carries these
-fields through without arithmetic.
+`intelligence` workspace has no test runner; its pure logic is proven by a committed runtime smoke —
+`intelligence/scripts/going-cold.smoke.mjs`, run with `npm run smoke` inside `intelligence/` —
+covering freshness tiers, coldest-first rail ordering, ledger-commitment-over-topic hook precedence,
+single-threaded and unmapped detection, and the diacritic slug join ("José Álvarez" must land on the
+same node id the store minted).
+
+Honest scope note on the adapter (`brainToDashboard`): counts, dates, ledger, silence, and Mars are
+proven end-to-end above. The adapter additionally COMPUTES display-layer values that are heuristic
+by design and labeled as such in the UI: coaching-insight evidence tiers (grounding + recurrence —
+never rendered as a percentage), graph degree, and connected-component communities. Deal value is
+never computed at all — transcripts carry no money, and the UI states that instead of showing $0.
 
 ## What is NOT claimed
 
