@@ -30,10 +30,14 @@ export function streamAnthropic(opts: StreamOptions): StreamHandle {
     opts.handlers.onError(errMsg(e))
   }
   const client = new Anthropic({ apiKey: opts.apiKey })
+  // Claude Opus 4.7+, Sonnet 5+, and Fable/Mythos-class models removed sampling parameters — sending
+  // `temperature` returns a 400 on every request (the default model claude-opus-4-8 is one of them).
+  // Omit it there; older models keep honoring the user's temperature setting.
+  const noTemperature = /claude-(opus-4-[789]|opus-[5-9]|sonnet-[5-9]|fable|mythos)/i.test(opts.model)
   const stream = client.messages.stream({
     model: opts.model,
     max_tokens: opts.req.mode === 'recap' ? 8192 : 4096, // recaps run long — give them headroom
-    temperature: opts.temperature,
+    ...(noTemperature ? {} : { temperature: opts.temperature }),
     // Cache the static system/profile/context prefix (ephemeral) so repeated glances + multi-turn skip
     // re-processing it — cuts time-to-first-token and cost. The volatile screenshot stays in the message.
     system: [{ type: 'text', text: opts.system, cache_control: { type: 'ephemeral' } }],
