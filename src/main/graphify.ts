@@ -215,7 +215,16 @@ export async function buildGraph(incremental = false): Promise<GraphStatus> {
       lastError = 'No extraction backend. Install Claude Code, or add a Claude/OpenAI key in Settings → AI.'
     } else {
       const notes = resolveMeetingsFolder(getSettings())
-      const args = ['build', '--input', notes, '--out', outDir(), '--backend', picked.backend]
+      // Graph extraction is explicitly exempt from the CLI/Anthropic interactive guardrail (see
+      // shared/providers.ts applyInteractiveGuardrail) — it's a bounded, infrequent background job where
+      // extraction quality matters more than per-call cost, so it's allowed to reach for Opus. 'openai'
+      // gets no override (no Anthropic Opus equivalent) — unchanged, whatever graphifyy's own default is.
+      const modelArg =
+        picked.backend === 'claude-cli' ? 'opus' : picked.backend === 'claude' ? 'claude-opus-4-8' : undefined
+      const args = [
+        'build', '--input', notes, '--out', outDir(), '--backend', picked.backend,
+        ...(modelArg ? ['--model', modelArg] : [])
+      ]
       if (incremental) args.push('--incremental')
       const { stdout } = await exec(python, [runnerPath(), ...args], {
         env: spawnEnv(picked.apiKey ? { GRAPHIFY_API_KEY: picked.apiKey } : {}),
