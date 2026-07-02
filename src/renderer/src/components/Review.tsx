@@ -3,6 +3,7 @@ import { Copy, Check, FileText, ListTree, FolderOpen, Save, RotateCcw, Play, Che
 import type { TranscriptLine, MeetingSummary } from '@shared/ipc'
 import type { AnswerState } from '../state'
 import { isNonSpeechLine } from '@shared/transcript-filter'
+import { talkStats } from '@shared/talkstats'
 import { Markdown } from './Markdown'
 import { Chip, TextButton, Spinner } from './ui'
 
@@ -299,6 +300,22 @@ export const Review = memo(function Review({
           <span className="rounded-full bg-white/[0.06] px-2 py-0.5">
             {participants} participant{participants === 1 ? '' : 's'}
           </span>
+          {/* Talk ratio — word share over real speech lines. Amber past 70%: in a client meeting,
+              the one selling should not be the one talking. Details on hover. */}
+          {(() => {
+            const s = talkStats(lines.filter((l) => !isNonSpeechLine(l.text)))
+            if (s.youShare === null) return null
+            const pct = Math.round(s.youShare * 100)
+            return (
+              <span
+                className="rounded-full bg-white/[0.06] px-2 py-0.5"
+                title={`${s.youWords} of ${s.youWords + s.themWords} words · longest monologue ${formatDuration(s.longestMonologueSec)} · they asked ${s.themQuestions} question${s.themQuestions === 1 ? '' : 's'}`}
+                style={pct >= 70 ? { color: '#e0af68' } : undefined}
+              >
+                You spoke {pct}%
+              </span>
+            )
+          })()}
         </div>
         <div className="flex items-center gap-1.5">
           {onResume && (
