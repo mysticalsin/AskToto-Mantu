@@ -921,6 +921,7 @@ function registerIpc(): void {
   // "Test endpoint" button). Lets the user verify before committing an endpoint/key to disk.
   ipcMain.handle(IPC.mcpCrmTestConnection, async (e, payload: unknown) => {
     assertMainWindow(e)
+    if (!requireAuth()) return { ok: false, error: 'Sign in with your Mantu account first.' }
     const parsed = McpCrmTestConnectionPayloadSchema.safeParse(payload)
     if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message || 'Invalid input.' }
     return connectBidstack(parsed.data.endpointUrl, parsed.data.apiKey)
@@ -930,6 +931,7 @@ function registerIpc(): void {
   // endpoint to settings, the key to the BidStack secrets file, and the discovered tools for the picker.
   ipcMain.handle(IPC.mcpCrmSaveConnection, async (e, payload: unknown) => {
     assertMainWindow(e)
+    if (!requireAuth()) return { ok: false, error: 'Sign in with your Mantu account first.' }
     const parsed = McpCrmSaveConnectionPayloadSchema.safeParse(payload)
     if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message || 'Invalid input.' }
     const r = await connectBidstack(parsed.data.endpointUrl, parsed.data.apiKey)
@@ -946,6 +948,7 @@ function registerIpc(): void {
 
   ipcMain.handle(IPC.mcpCrmDisconnect, (e) => {
     assertMainWindow(e)
+    if (!requireAuth()) return { ok: false, error: 'Sign in with your Mantu account first.' }
     clearBidstackApiKey()
     setSettings({ bidstackConnected: false, bidstackTools: [] })
     auditLog('bidstack.disconnected', {})
@@ -957,6 +960,7 @@ function registerIpc(): void {
   // push to an attacker-controlled MCP endpoint by passing arbitrary payload fields.
   ipcMain.handle(IPC.mcpCrmPush, async (e, payload: unknown) => {
     assertMainWindow(e)
+    if (!requireAuth()) return { ok: false, error: 'Sign in with your Mantu account first.' }
     const parsed = McpCrmPushPayloadSchema.safeParse(payload)
     if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message || 'Invalid input.' }
     const s = getSettings()
@@ -1181,7 +1185,12 @@ function registerIpc(): void {
           (!allowed || allowed.includes(p)) &&
           (PROVIDERS[p].kind === 'cli' ? !!s.cliConnected[p] : getApiKey(p).length > 0) &&
           (req.mode !== 'vision' || PROVIDERS[p].vision) &&
-          !!resolveModelTier(p, s.providerModels, s.providerModelsThinking, tier)
+          // CLI providers (e.g. codex-cli) may have no configured model at all — attempt() below
+          // already exempts kind==='cli' from the "no model" ineligibility check (the CLI just uses
+          // its own default), so a failover candidate must be exempted the same way or a fully
+          // default-configured CLI provider can never be selected.
+          (PROVIDERS[p].kind === 'cli' ||
+            !!resolveModelTier(p, s.providerModels, s.providerModelsThinking, tier, s.providerModelsDeep))
       )
       if (!next) return false
       attempt(next, tried)
@@ -1405,7 +1414,9 @@ function registerIpc(): void {
   // and re-extract everything with the current schema/prompt. This is the upgrade path for legacy
   // extractions (e.g. untagged feedback that rendered as a flat confidence wall in the dashboard).
   ipcMain.handle(IPC.brainRebuildAll, (e) => {
-    assertBrainReader(e)
+    // Privileged write (purges the derived brain store) — main-window only, like brainCommitmentSettle,
+    // never the Mantu Intelligence window's assertBrainReader (that's for the three read-only channels).
+    assertMainWindow(e)
     if (!requireAuth()) throw new Error('Not signed in.')
     purgeBrain(getSettings())
     const r = startBackfill()

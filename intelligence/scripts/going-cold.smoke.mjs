@@ -83,4 +83,34 @@ const g2 = buildGoingCold(b2, NOW)
 assert.ok(g2.touch.has('person:jose-alvarez'), 'accented person must join under the store slug')
 assert.equal(g2.touch.get('person:jose-alvarez').freshness, 'cold')
 
+// Case-insensitive `by`: an LLM-cased "You" must still land in the yours-branch and read correctly —
+// not be misread as a third party literally named "You" owing the user (the semantically-backwards bug).
+const b3 = {
+  index: { warnings: [] },
+  graph: { nodes: [], edges: [] },
+  people: [{ name: 'Case Upper', role: null, account: null, meetings: [{ file: 'k.md', date: iso(50), title: 'Kickoff' }],
+    commitments: [{ text: 'send the deck', by: 'You', status: 'open' }] }],
+  accounts: [],
+  deals: [],
+  meetings: []
+}
+const g3 = buildGoingCold(b3, NOW)
+const caseUpper = g3.rail.find((r) => r.label === 'Case Upper')
+assert.ok(caseUpper.hook.startsWith('You still owe them: send the deck'), caseUpper.hook)
+
+// Legacy shape: a commitment record with no `status` key at all must still count as open (mirrors
+// LedgerCommitmentSchema's own default) rather than silently falling back to the weaker topic hook.
+const b4 = {
+  index: { warnings: [] },
+  graph: { nodes: [], edges: [] },
+  people: [{ name: 'Legacy Status', role: null, account: null, meetings: [{ file: 'l.md', date: iso(50), title: 'Old sync' }],
+    commitments: [{ text: 'send the proposal', by: 'you' }] }],
+  accounts: [],
+  deals: [],
+  meetings: []
+}
+const g4 = buildGoingCold(b4, NOW)
+const legacyStatus = g4.rail.find((r) => r.label === 'Legacy Status')
+assert.ok(legacyStatus.hook.includes('send the proposal'), legacyStatus.hook)
+
 console.log('goingCold smoke: ALL ASSERTIONS PASSED —', g.rail.length, 'rail rows,', g.touch.size, 'touched nodes, diacritic join OK')
