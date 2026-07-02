@@ -123,7 +123,8 @@ const api = {
   setListeningState: (on: boolean): Promise<void> => ipcRenderer.invoke(IPC.listeningState, on),
   asrBundled: (): Promise<boolean> => ipcRenderer.invoke(IPC.asrBundled),
 
-  resize: (height: number): Promise<void> => ipcRenderer.invoke(IPC.windowResize, { height }),
+  resize: (height: number, width?: number): Promise<void> =>
+    ipcRenderer.invoke(IPC.windowResize, { height, width }),
   windowMode: (mode: 'bar' | 'settings'): Promise<void> =>
     ipcRenderer.invoke(IPC.windowMode, mode),
   windowMoveBy: (dx: number, dy: number): Promise<void> =>

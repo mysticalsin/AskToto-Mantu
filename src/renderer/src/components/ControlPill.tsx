@@ -20,8 +20,12 @@ export function ControlPill({
 }): JSX.Element {
   const drag = useWindowDrag()
   return (
+    // data-hug-width: lets useAutoResize report this element's own shrink-to-fit width to the window
+    // instead of the wider fixed guess — without it, the window stayed wider than the visible pill and
+    // silently swallowed clicks meant for whatever app was behind that invisible margin.
     <div
       {...drag}
+      data-hug-width
       className="aw-pill inline-flex items-center gap-2 p-1.5"
     >
       <button
