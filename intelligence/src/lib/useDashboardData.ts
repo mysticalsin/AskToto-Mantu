@@ -27,15 +27,39 @@ export function useDashboardData(): State {
       if (!res.ok) throw new Error(`Failed to load data.json (${res.status})`)
       return res.json()
     }
-    ;(window.intelligence ? fromBrain() : fromFile())
-      .then((data) => {
-        if (!cancelled) setState({ data, loading: false, error: null })
-      })
-      .catch((err: Error) => {
-        if (!cancelled) setState({ data: null, loading: false, error: err.message })
-      })
+    const load = (): void => {
+      ;(window.intelligence ? fromBrain() : fromFile())
+        .then((data) => {
+          if (!cancelled) setState({ data, loading: false, error: null })
+        })
+        .catch((err: Error) => {
+          if (!cancelled) setState((prev) => ({ data: prev.data, loading: false, error: prev.data ? null : err.message }))
+        })
+    }
+    load()
+    // Live mode only: while a backfill is ingesting meetings in the host app, refresh so the dashboard
+    // fills in as the brain grows instead of freezing at whatever existed when the window opened.
+    // Cheap status poll gates the full re-read; the interval dies as soon as the backfill stops.
+    let lastCount = -1
+    const iv = window.intelligence
+      ? setInterval(async () => {
+          try {
+            const st = (await window.intelligence!.getStatus()) as { meetings?: number; backfill?: { running?: boolean } } | null
+            if (!st) return
+            const changed = typeof st.meetings === 'number' && st.meetings !== lastCount
+            if (changed) load()
+            if (typeof st.meetings === 'number') lastCount = st.meetings
+            if (!st.backfill?.running && !changed && lastCount !== -1) {
+              clearInterval(iv!)
+            }
+          } catch {
+            /* transient IPC hiccup — next tick retries */
+          }
+        }, 10_000)
+      : null
     return () => {
       cancelled = true
+      if (iv) clearInterval(iv)
     }
   }, [])
 

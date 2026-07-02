@@ -231,7 +231,7 @@ export async function mergeExtraction(
         (t) => t.meeting + t.text
       )
     }
-    for (const f of x.feedback) pushUnique(deal.feedback, { note: f, meeting: ref.file }, (t) => t.meeting + t.note)
+    for (const f of x.feedback) pushUnique(deal.feedback, { ...f, meeting: ref.file }, (t) => t.meeting + t.note)
     addNode(`deal:${dslug}`, 'deal', deal.name)
     addEdge(`deal:${dslug}`, meetingId, 'discussed-in', 'EXTRACTED')
     if (accountSlug) {
@@ -289,6 +289,10 @@ async function processJob(job: Job): Promise<void> {
     const x = await extractMeeting(s, md, job.file)
     const dateMatch = md.match(/^date:\s*(\S+)/m)
     const ref: MeetingRef = { file: key, date: dateMatch?.[1] ?? '', title: x.title24 || key }
+    // Stamp provenance the model can't know (its own source file + meeting date) so consumers can join
+    // extractions back to meetings (call-grade timelines, meeting feeds) without re-reading entity refs.
+    x.source_file = key
+    x.date = ref.date
     await writeMeetingExtraction(s, slugify(key), x)
     await mergeExtraction(s, x, ref)
     idx.ingested[key] = { at: Date.now(), ok: true }

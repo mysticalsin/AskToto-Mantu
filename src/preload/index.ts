@@ -87,6 +87,7 @@ const api = {
   brainBackfill: (): Promise<{ queued: number }> => ipcRenderer.invoke(IPC.brainBackfill),
   brainOpenDashboard: (): Promise<{ ok: boolean; error?: string }> =>
     ipcRenderer.invoke(IPC.brainOpenDashboard),
+  brainRebuildAll: (): Promise<{ queued: number }> => ipcRenderer.invoke(IPC.brainRebuildAll),
   brainRead: (): Promise<import('@shared/brain').BrainRead> => ipcRenderer.invoke(IPC.brainRead),
   authStatus: (): Promise<AuthStatus> => ipcRenderer.invoke(IPC.authStatus),
   signIn: (): Promise<SignInResult> => ipcRenderer.invoke(IPC.authSignIn),

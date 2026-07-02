@@ -1343,6 +1343,17 @@ function registerIpc(): void {
     auditLog('brain.backfill.start', { queued: r.queued })
     return r
   })
+  // Full rebuild: wipe the DERIVED store (entities/graph/extractions — never the source transcripts)
+  // and re-extract everything with the current schema/prompt. This is the upgrade path for legacy
+  // extractions (e.g. untagged feedback that rendered as a flat confidence wall in the dashboard).
+  ipcMain.handle(IPC.brainRebuildAll, (e) => {
+    assertBrainReader(e)
+    if (!requireAuth()) throw new Error('Not signed in.')
+    purgeBrain(getSettings())
+    const r = startBackfill()
+    auditLog('brain.backfill.start', { queued: r.queued, rebuild: true })
+    return r
+  })
   // Full assembled dataset for the Mantu Intelligence dashboard (decrypted in main when needed).
   ipcMain.handle(IPC.brainRead, (e) => {
     assertBrainReader(e)
@@ -1353,7 +1364,8 @@ function registerIpc(): void {
       graph: readBrainGraph(s),
       people: listBrainEntities(s, 'person').map((slug) => readBrainPerson(s, slug)).filter(Boolean),
       accounts: listBrainEntities(s, 'account').map((slug) => readBrainAccount(s, slug)).filter(Boolean),
-      deals: listBrainEntities(s, 'deal').map((slug) => readBrainDeal(s, slug)).filter(Boolean)
+      deals: listBrainEntities(s, 'deal').map((slug) => readBrainDeal(s, slug)).filter(Boolean),
+      meetings: listBrainMeetingExtractions(s).map((slug) => readBrainMeetingExtraction(s, slug)).filter(Boolean)
     }
   })
 
