@@ -52,6 +52,7 @@ import {
 import { createStream } from './llm'
 import { resetDustConversation } from './llm/dust'
 import { enqueueIngest, startBackfill, brainBackfillProgress, resumeBackfillIfPending } from './brain/ingest'
+import { openIntelligenceWindow, isIntelligenceSender } from './intelligence'
 import {
   readIndex as readBrainIndex,
   readGraph as readBrainGraph,
@@ -70,6 +71,7 @@ import {
   saveNote,
   saveDraftTranscript,
   clearDraftTranscript,
+  recoverOrphanDrafts,
   parseRecapMarkdown,
   recapMarkdownToHtml,
   resolveMeetingsFolder,
@@ -144,6 +146,18 @@ function assertMainWindow(event: Electron.IpcMainInvokeEvent): void {
   if (!frame || frame.parent !== null || frame.url !== win.webContents.getURL()) {
     throw new Error('IPC denied: not main frame')
   }
+}
+
+/** The three read-only brain channels are ALSO callable from the Mantu Intelligence window's top frame
+ *  (its preload exposes nothing else — see src/preload/intelligence.ts). Everything privileged stays
+ *  main-window-only via assertMainWindow. */
+function assertBrainReader(event: Electron.IpcMainInvokeEvent): void {
+  const frame = event.senderFrame
+  if (isIntelligenceSender(event.sender)) {
+    if (!frame || frame.parent !== null) throw new Error('IPC denied: not main frame')
+    return
+  }
+  assertMainWindow(event)
 }
 
 /** Minimal .env loader (no dep) — dev convenience; prod uses in-app key. */
@@ -1278,8 +1292,13 @@ function registerIpc(): void {
   })
 
   // --- Mantu Intelligence brain (see src/main/brain/) ---
-  ipcMain.handle(IPC.brainStatus, (e) => {
+  ipcMain.handle(IPC.brainOpenDashboard, (e) => {
     assertMainWindow(e)
+    if (!requireAuth()) throw new Error('Not signed in.')
+    return openIntelligenceWindow()
+  })
+  ipcMain.handle(IPC.brainStatus, (e) => {
+    assertBrainReader(e)
     if (!requireAuth()) return null
     const s = getSettings()
     const idx = readBrainIndex(s)
@@ -1296,7 +1315,7 @@ function registerIpc(): void {
     }
   })
   ipcMain.handle(IPC.brainBackfill, (e) => {
-    assertMainWindow(e)
+    assertBrainReader(e)
     if (!requireAuth()) throw new Error('Not signed in.')
     const r = startBackfill()
     auditLog('brain.backfill.start', { queued: r.queued })
@@ -1304,7 +1323,7 @@ function registerIpc(): void {
   })
   // Full assembled dataset for the Mantu Intelligence dashboard (decrypted in main when needed).
   ipcMain.handle(IPC.brainRead, (e) => {
-    assertMainWindow(e)
+    assertBrainReader(e)
     if (!requireAuth()) throw new Error('Not signed in.')
     const s = getSettings()
     return {
@@ -1594,6 +1613,11 @@ if (!app.requestSingleInstanceLock()) {
   if (!app.isPackaged) loadDotEnv() // dev convenience only; never read a stray .env in production
   ensureMeetingsFolder(getSettings()) // create the self-documenting OneDrive folder on first run
   sweepStaleTempFiles() // remove any decrypted-transcript temp copies orphaned by a previous hard-kill
+  // Promote any orphaned crash-recovery drafts into real meetings BEFORE the retention sweep, so a
+  // recovered meeting is visible in History and immediately subject to the same retention policy.
+  recoverOrphanDrafts(getSettings()).then((r) => {
+    if (r.recovered > 0) auditLog('transcript.recovered', { recovered: r.recovered })
+  }).catch(() => { /* best-effort — never block startup */ })
   // Auto-delete meetings past the configured retention window (off by default — see transcriptRetentionDays).
   sweepExpiredMeetings(getSettings().transcriptRetentionDays).then((r) => {
     if (r.deleted > 0) auditLog('transcript.deleted', { bulk: true, expired: true, deleted: r.deleted })

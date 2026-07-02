@@ -572,6 +572,48 @@ export function clearDraftTranscript(settings: Settings, startedAt: number): voi
   }
 }
 
+/**
+ * Promote orphaned autosave drafts into real, visible meetings (run once at launch). A draft only
+ * survives on disk when its meeting never reached a normal save — a crash or force-quit — so leaving
+ * it as an invisible dot-file meant the recording of third-party speech sat outside History, outside
+ * the retention sweep, and outside recovery, forever. Promotion re-enters it into the normal
+ * lifecycle: it appears in History as "(recovered)", retention applies (the recovered filename keeps
+ * the stamp prefix the sweep parses), and the user loses at most the final autosave interval instead
+ * of the whole meeting. Runs before any Listen session starts, and drafts are keyed by their own
+ * startedAt, so a live meeting's draft can never be promoted out from under it. Undecryptable drafts
+ * (foreign keychain) are left in place for the device that can read them.
+ */
+export async function recoverOrphanDrafts(settings: Settings): Promise<{ recovered: number }> {
+  let recovered = 0
+  try {
+    const folder = resolveMeetingsFolder(settings)
+    if (!existsSync(folder)) return { recovered }
+    for (const f of readdirSync(folder)) {
+      if (!f.startsWith('.autosave-draft-') || !f.endsWith('.md')) continue
+      const draftPath = join(folder, f)
+      try {
+        const text = decodeSaved(readFileSync(draftPath))
+        if (!text) continue // undecryptable on this device — leave it alone
+        const promoted = text
+          .replace('type: meeting-transcript-draft', 'type: meeting-transcript')
+          .replace('status: interrupted', 'status: recovered')
+          .replace(' (in progress — autosaved draft)', ' (recovered)')
+        const stampPart = f.slice('.autosave-draft-'.length, -'.md'.length)
+        let out = join(folder, `${stampPart}-recovered.md`)
+        for (let n = 2; existsSync(out); n++) out = join(folder, `${stampPart}-recovered-${n}.md`)
+        await writeSaved(out, promoted, settings.encryptTranscripts)
+        unlinkSync(draftPath)
+        recovered++
+      } catch {
+        /* one unreadable draft must not block recovering the others */
+      }
+    }
+  } catch {
+    /* best-effort — recovery must never block launch */
+  }
+  return { recovered }
+}
+
 function escapeHtml(s: string): string {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 }

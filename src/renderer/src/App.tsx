@@ -670,6 +670,13 @@ export function App(): JSX.Element {
 
   const startListen = useCallback((auto = false) => {
     autoStartedRef.current = auto // true only for meeting-detected auto-start, so auto-end can fire
+    // A previous session's transcript can still be sitting unsaved in listen state (ASR crash tore the
+    // session down; a failed recap was abandoned). listen.clear() below would wipe it — rescue first.
+    // Idempotent via savedRef, so normally-saved meetings never double-save. Ref-indirected because
+    // saveMeetingNow is defined later in this component (same pattern as endReviewRef).
+    if (!listen.listening && listen.lines.length) {
+      void saveMeetingNowRef.current?.(listen.lines, meetingStartRef.current, '')
+    }
     setView('copilot')
     setCollapsed(false)
     meetingStartRef.current = Date.now()
@@ -751,6 +758,10 @@ export function App(): JSX.Element {
     },
     [mode]
   )
+
+  // Forward reference for startListen (defined above saveMeetingNow) — see its rescue comment.
+  const saveMeetingNowRef = useRef<typeof saveMeetingNow | null>(null)
+  saveMeetingNowRef.current = saveMeetingNow
 
   // "New meeting" from the bar — save the meeting we're leaving, then start a fresh session right away.
   // A single click ends the live meeting and snaps the timer to 0:00 with no other visible change — easy
@@ -957,6 +968,13 @@ export function App(): JSX.Element {
       // Leaving the post-meeting Review must not drag the recap into the idle widget answer slot, nor
       // leave a past-meeting snapshot that would later be mistaken for the next live recap.
       if (view === 'review') {
+        // Escaping a Review whose recap failed (or was cancelled) previously orphaned the transcript —
+        // it existed only in listen state and the next session start wiped it. Rescue it on the way
+        // out; idempotent via savedRef when the recap auto-save already landed. Past-meeting Reviews
+        // (pastMeeting set) are already on disk — only a LIVE session's review needs the rescue.
+        if (!pastMeeting && listen.lines.length) {
+          void saveMeetingNow(listen.lines, meetingStartRef.current, ask.answer?.error ? '' : (ask.answer?.text ?? ''))
+        }
         ask.clear()
         suggest.clear()
         setPastMeeting(null)
