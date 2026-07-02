@@ -1,5 +1,8 @@
 appId: com.mantu.asktoto
 productName: AskToto
+# Strip OneDrive/Finder xattrs from the packed app before signing — codesign hard-rejects them
+# ("resource fork … detritus not allowed"); this repo lives in CloudStorage so they're everywhere.
+afterPack: scripts/after-pack.mjs
 copyright: © 2026 Mantu · AskToto — built by Tony Walteur
 # App icon: build/icon.png (1024² Mantu M) → electron-builder derives mac .icns + win .ico automatically.
 # Code signing is env-driven (see SIGNING.md):
