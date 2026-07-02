@@ -1242,7 +1242,7 @@ The AudioWorklet runs inside Electron's Chromium renderer — it is a Web Audio 
 
 macOS-native is doubly wrong because it eliminates Windows entirely and breaks the cross-platform distribution already working via `electron-builder`.
 
-Stay on Electron 33+ (currently pinned). Upgrade to Electron 34/35 when stable to track Chromium security patches. Adopt `electron-vite`'s native ESM output (already configured) and never deviate from the Chromium + Node version the Electron team ships.
+Stay current on Electron (now 39 — Chromium 142, Node 22; minimum macOS 12). Keep bumping to new stable majors to track Chromium security patches. Adopt `electron-vite`'s native ESM output (already configured) and never deviate from the Chromium + Node version the Electron team ships.
 
 ---
 

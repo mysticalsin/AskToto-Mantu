@@ -51,5 +51,7 @@ then `-exportArchive` with an `exportOptions.plist`, using an App Store Connect 
 (`APP_STORE_CONNECT_KEY_ID` / `ISSUER_ID` / `.p8`).
 
 ## Auto-update host
-`electron-builder.yml → publish.url` is a placeholder. Point it at your static HTTPS host (S3 / Azure
-Blob / any server); `npm run dist` then uploads `latest-mac.yml` + artifacts there for electron-updater.
+Auto-update is served from the public **AskToto-Releases** GitHub repo (`electron-builder.yml` publish
+block: `provider: github`, `releaseType: release` — enforced by the `npm run check:release` preflight
+gate). `npm run dist` builds without publishing; `npm run release` (needs `GH_TOKEN` with repo scope)
+uploads `latest-mac.yml` + artifacts to that repo's Releases for electron-updater.

@@ -17,7 +17,9 @@ unsigned builds) and the Outlook agenda / SSO stay dormant.
       grant delegated **`User.Read` + `Calendars.Read`**; set `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`,
       `azureAllowedDomain`. Once set, the in-app "Connect Outlook calendar" goes live (code is all there:
       `src/main/auth.ts` getGraphToken + `src/main/calendar.ts` + `AgendaView.tsx`).
-- [ ] **Signed update channel** — wire only AFTER signing; set `verifyUpdateCodeSignature: true`.
+- [ ] **Signed update channel** — `verifyUpdateCodeSignature: true` is set and publish is wired to the
+      AskToto-Releases GitHub repo with `releaseType: release` (enforced by the `npm run check:release`
+      preflight gate); remaining: sign the artifacts (above).
 
 ### m9 — Acceptance (BLOCKER for "done")
 - [ ] **Real-call sign-off (Tony)** — a real 30-min call incl. a non-English speaker: transcription accurate,
@@ -28,11 +30,14 @@ unsigned builds) and the Outlook agenda / SSO stay dormant.
 ## 🛠 Dedicated code efforts — too large/risky to batch; each needs a focused pass
 
 ### m2 — Parakeet v3 optional engine ✅ DONE + VERIFIED (2026-06-28)
-The Whisper engine (large-v3-turbo via WebGPU, ~99 languages) is the **default**. **Parakeet v3 is now
-integrated** as the opt-in "fastest, 25 European languages" engine (Settings → Audio → "Use Parakeet engine").
+Whisper is the **default** engine; the default quality tier is 'fast' (WASM whisper-base q8), with 'best'
+(WebGPU large-v3-turbo, ~99 languages) the opt-in Settings → Audio quality — its weights are already bundled.
+**Parakeet v3 is now integrated** as the opt-in "fastest, 25 European languages" engine (Settings → Audio →
+"Use Parakeet engine").
 
 Shipped: `sherpa-onnx-node` v1.13.3 (N-API native addon — loads in Electron, no rebuild) in `src/main/parakeet.ts`
-(OfflineRecognizer + one-time ~487MB model download to userData + transcribe), IPC `parakeet:status/ensure/feed`,
+(OfflineRecognizer + bundled model weights — `resources/asr` via `npm run fetch-models`, zero-download in packaged
+builds, one-time userData download only as a dev fallback — + transcribe), IPC `parakeet:status/ensure/feed`,
 preload methods, `listen.ts` engine routing (Whisper-fallback-safe — any Parakeet failure degrades to Whisper),
 the Settings selector, and `asarUnpack` for the native binary. **Verified end-to-end**: recognizer constructs +
 transcribed the German sample correctly ("Alles hat ein Ende, nur die Wurst hat zwei."), and the default Whisper
@@ -45,14 +50,6 @@ Remaining polish (not blockers):
 - [ ] Optionally make Parakeet the default for European-heavy users (one-line: `asrEngine` default). Kept Whisper
       default because Parakeet is European-only and would mis-handle non-European speech.
 
-- [ ] Integrate **`sherpa-onnx-node`** (native addon, prebuilt cross-platform binaries — no Python) running
-      the converted **`sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8`** model with **Silero VAD** segmentation.
-- [ ] electron-builder packaging: `asarUnpack` the `.node` binaries, `electron-rebuild` for the Electron ABI,
-      codesign the native lib (ties into m8).
-- [ ] Audio reroute: renderer AudioWorklet PCM → IPC → main (sherpa VAD + recognizer) → IPC → renderer.
-- [ ] Wire the existing `asrEngine`-style selector (currently a Best/Fast Whisper toggle in Settings → Audio).
-- Note: Parakeet v3 is **European-only** — keep Whisper as the any-language default.
-
 ### Audio pipeline fixes (M) — applies to either engine
 - [ ] **Flush-on-stop**: the last ~6s of speech is dropped at `stop()` (worklet residual buffer never
       emitted). Needs a flush handshake on the realtime audio thread + keep `liveRef` alive until the final
@@ -64,7 +61,7 @@ Remaining polish (not blockers):
 
 ### m4 — Onboarding & activation (M)  — IN PROGRESS this session (primer step added)
 - [ ] Permission pre-flight with deep-links to System Settings + a visible mic-only fallback chip.
-- [ ] Reorder Settings "Your AI" so the active provider's **key field is first** with inline auto-verify;
+- [ ] Reorder Settings "AI" so the active provider's **key field is first** with inline auto-verify;
       demote the Dust/CLI wall to a collapsed disclosure.
 
 ### m6 — Visual & motion premium pass (L)
@@ -77,6 +74,8 @@ Remaining polish (not blockers):
       large-v3-turbo downloads in the background, then swap. (Mid-session model swap — needs care.)
 - [ ] First-run **~800MB download** UX: a clearer "downloading the speech model (~800MB, one-time)" notice +
       metered-connection awareness. (A `loadingPct` % already shows.)
+- Note: packaged builds bundle all weights — **no first-run download**. The two items above apply only to
+      dev builds without `fetch-models`; deprioritize or drop.
 - [ ] 60-minute meeting soak test (memory stability under continuous WebGPU inference — transformers.js #860).
 
 ## P2 nits from the capstone audit (low priority, deferred)

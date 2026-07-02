@@ -16,11 +16,11 @@
 | P0-5 | **Silent mid-meeting capture death** — no track.onended, no devicechange, no powerMonitor, one-shot watchdog | reliability | `src/renderer/src/lib/listen.ts:418-484` | Bluetooth disconnect or lid-close sleep leaves the UI saying "Listening" while a whole side of the meeting is silently lost — the most common field failure for the core pillar. (Audio, SRE) |
 | P0-6 | **"Never lose a meeting" gap** — one-keypress loss exits (Escape after failed recap, startListen after ASR crash, tray quit) + crash drafts invisible and never swept | bug-risk / privacy | `src/renderer/src/App.tsx:686, 926-934`, `src/main/index.ts:694`, `src/main/recall.ts:217`, `src/main/transcripts.ts:512` | Multiple verified paths where a captured meeting is destroyed or unrecoverable, and orphaned drafts of third-party speech outlive retention forever. Trust-defining for a recording product. (SRE, UXR, Storage, CS, PM) |
 | P0-7 | **Recall list/search re-reads + re-decrypts every meeting file on every call** | perf | `src/main/recall.ts:62-69, 244-267` | The one path that degrades linearly with product success — per keystroke, with sync keychain decrypts on the main loop, on a OneDrive folder (hydration storms). (Arch, MainPerf, Storage) |
-| P0-8 | **Release/auto-update pipeline is broken-by-default** — draft releaseType the updater can't see, 4.6% headroom under GitHub's 2 GiB hard limit, no artifact content verification (a modelless Windows build already shipped) | reliability | `electron-builder.yml:105-107`, `scripts/check-release.mjs` | `npm run release` "succeeds" while no installed app ever updates; one model or Electron bump breaks release upload after a 40-min build. (Build) |
+| P0-8 | **Release/auto-update pipeline** — draft releaseType the updater can't see (since fixed: `releaseType: release` set + enforced by the check:release preflight gate), 4.6% headroom under GitHub's 2 GiB hard limit, no artifact content verification (a modelless Windows build already shipped) | reliability | `electron-builder.yml`, `scripts/check-release.mjs` | Remaining: size headroom + artifact content gates; one model or Electron bump breaks release upload after a 40-min build. (Build) |
 | P0-9 | **Fixed-threshold energy VAD** — noisy rooms degrade to 6s hard cuts; quiet talkers silently vanish | reliability | `src/renderer/src/lib/vad.ts:20-21` | The two dominant real-world transcript-quality failure modes; the pipeline works in a quiet room with wired audio and falls over silently outside it. (Audio, ASR) |
-| P0-10 | **One 6-second opt-in window per meeting** — toast auto-dismisses and never re-prompts | ux-behavior | `src/renderer/src/components/MeetingDetectedToast.tsx:4,50-53`, `src/main/index.ts:582-591` | Miss the toast while unmuting and the meeting is never captured; this is the entry point to the entire product. Also a WCAG timing failure. (UXR, A11y) |
-| P0-11 | **Electron 33.4.11 is past end-of-support** — packaged Chromium missing ~a year of CVE fixes | security | `package.json:47` | The single biggest security lever for an app that joins meetings and renders LLM/web content; also a likely IT-approval question. (Build) |
-| P0-12 | **Status docs actively contradict the code** — README's three false claims + stale NOT READY production-readiness verdict | knowledge-pipeline / positioning | `README.md:5,10,125-126`, `production-readiness/` | These are the first documents Mantu IT reads for the m8 signing/Azure approval — the only real ship gate; they currently unsell the offline-ASR moat and claim there is no CI. (PM, CMO, Comp) |
+| P0-10 | **One 6-second opt-in window per meeting — RESOLVED: timeout dismissals now re-offer every 60s (max 3) while the meeting is live; explicit X/Escape declines are respected** | ux-behavior | `src/renderer/src/components/MeetingDetectedToast.tsx`, `src/renderer/src/App.tsx` | Was the entry point to the entire product; a glance away no longer costs the meeting. (UXR, A11y) |
+| P0-11 | **Electron 33.4.11 was past end-of-support — RESOLVED: bumped to Electron 39 (Chromium 142 / Node 22, min macOS 12)** | security | `package.json` | Was the single biggest security lever for an app that joins meetings and renders LLM/web content; keep a quarterly currency policy. (Build) |
+| P0-12 | **Status docs actively contradict the code — RESOLVED (2026-07-02 docs sweep): README's false claims corrected, production-readiness/ labeled a superseded snapshot, REMAINING.md de-duplicated** | knowledge-pipeline / positioning | `README.md`, `production-readiness/` | These are the first documents Mantu IT reads for the m8 signing/Azure approval; they now match the code. (PM, CMO, Comp) |
 
 ---
 
@@ -131,7 +131,7 @@ Grouped for batching; each is independently shippable.
 - Merge the 49-commit branch to main; triage the two stale remote branches.
 
 ### CI / QA / release
-- `releaseType: release` in electron-builder publish — part of P0-8.
+- `releaseType: release` in electron-builder publish — done (set + enforced by check:release); part of P0-8.
 - Artifact size (<~1.95 GiB) + content assertions (models/asr/ort/sherpa present) — part of P0-8.
 - CI: cache resources/{models,asr,ort}; gate package jobs to main/tags; upload only installers + manifests; bump the Windows timeout (`build.yml`).
 - Add `npm test` to the build-macos CI job.
@@ -151,7 +151,7 @@ Legend: **[P0-n]** = in the top-12 list · impact/effort · reporters.
 
 1. **[P0-5] Silent mid-meeting capture death** — track.onended + devicechange + powerMonitor resume + periodic watchdog, wired into the session-epoch re-acquire. high/medium. (Audio, SRE)
 2. **[P0-3] CLI stream ignores the per-tier idle budget** — thread idleMs; delete the duplicate watchdog. high/small. (Arch, LLM)
-3. **[P0-8] Release pipeline: draft releases, 2 GiB ceiling, unverified artifacts, never-installed >2GB NSIS** — releaseType, size/content gates, one real Windows install. high/small each. (Build)
+3. **[P0-8] Release pipeline: draft releases (since fixed: `releaseType: release` + preflight gate), 2 GiB ceiling, unverified artifacts, never-installed >2GB NSIS** — remaining: size/content gates, one real Windows install. high/small each. (Build)
 4. **[P0-9] Fixed-threshold VAD** — rolling-min noise floor with relative ON/OFF inside makeVad (keeps the tested-transplant design). high/medium. (Audio, ASR)
 5. **[P0-6] Crash-recovery loop end-to-end** — sweep orphan drafts (small), launch-time "Recover interrupted meeting" promotion (medium), tray-quit flush handshake (small), render-process-gone self-heal (small), 15s autosave + failure telemetry (small). high/mixed. (Storage, SRE, UXR, CS)
 6. **No local fallback when the meetings folder is unwritable** — after retries, write to userData/recovery; drafts too. high/medium. (SRE) — `transcripts.ts:333`, `App.tsx:256-273`
@@ -290,7 +290,7 @@ Legend: **[P0-n]** = in the top-12 list · impact/effort · reporters.
 
 ### Security
 
-1. **[P0-11] Electron 33 past EOL** — bump to current stable; re-run the Playwright harness over capture/loopback/asr-model://; adopt a quarterly currency policy. high/medium. (Build)
+1. **[P0-11] Electron 33 past EOL — DONE: bumped to Electron 39 (Chromium 142 / Node 22, min macOS 12)** — re-run the Playwright harness over capture/loopback/asr-model://; adopt a quarterly currency policy. (Build)
 2. **fetch-models pins nothing, verifies nothing** — commit-SHA URLs + byte/hash assertions (mirror the pin in whisper.worker.ts MODEL_REVISION). medium/small. (Build, ASR) — `fetch-models.mjs:36-38, 88-120`
 3. **IPC boundary gaps: cli*/recall*/window* unvalidated** — zod schemas at the boundary. medium/small. (Arch) — `index.ts:826-857`
 4. **Encryption lifecycle: toggling strands files both directions; index desync** — batch migrate + rebuild on toggle. medium/medium. (Storage)
