@@ -23,6 +23,12 @@ const THEM_WATCHDOG_MS = 20_000 // 20 s with the 'them' channel open but no wind
 // Exact text of the soft "not hearing the other side" note, shared by the watchdog (sets it) and the
 // first-'them'-emission handler (clears it) so loopback arriving AFTER the watchdog fired isn't left stuck.
 const THEM_SILENT_MSG = 'Not hearing the other side — check the call volume and that Screen Recording is granted.'
+// Silent-capture-death recovery notes. A Bluetooth headset disconnect, default-device change, or
+// lid-close sleep kills a capture track with no error anywhere — the UI kept saying "Listening" while
+// a whole side of the meeting was silently lost. Matched by exact string (same contract as the notes above).
+const MIC_LOST_MSG = 'Microphone input stopped (device disconnected or sleep) — reconnecting automatically…'
+const THEM_LOST_MSG =
+  'System-audio capture stopped (display sleep or a device change) — toggle Listen to restart it.'
 // Exact text of the "offline, waiting to reconnect" / "reconnected, restarting" notes, shared by
 // armNetworkRetry (sets them) and the worker's 'ready' handler (clears them once recovery succeeds) —
 // matched by exact string so other sticky notes (THEM_SILENT_MSG, the Parakeet-fallback footnote) are
@@ -466,6 +472,33 @@ export function useListen(
       }
       worklet.connect(ctx.destination) // keeps the node processing; output stays silent
 
+      // Silent-death detection: a track that ends OUTSIDE our own teardown (Bluetooth disconnect,
+      // default-device switch, lid-close sleep terminating the SCStream) previously left the UI saying
+      // "Listening" while this side of the meeting was silently lost. (`track.stop()` from closeChannel
+      // does NOT fire 'ended' on the stopping context, and the identity guard covers replaced channels.)
+      // Mic: surface the note and re-acquire automatically. System audio: getDisplayMedia can't be
+      // re-requested without the arm/gesture dance, so surface an actionable note instead.
+      stream.getAudioTracks().forEach((t) => {
+        t.onended = (): void => {
+          if (!liveRef.current || channels.current[sp] !== ch) return
+          console.warn(`[listen] ${sp} audio track ended unexpectedly (device change / sleep)`)
+          closeChannel(sp)
+          if (sp === 'you') {
+            setState((s) => ({ ...s, error: MIC_LOST_MSG }))
+            void recoverMicRef.current?.()
+          } else {
+            setState((s) => ({ ...s, error: THEM_LOST_MSG }))
+          }
+        }
+      })
+      // macOS can leave an AudioContext suspended after sleep/wake even when its tracks survive —
+      // resume it instead of processing silence forever.
+      ctx.onstatechange = (): void => {
+        if (liveRef.current && channels.current[sp] === ch && ctx.state === 'suspended') {
+          void ctx.resume().catch(() => {})
+        }
+      }
+
       // Watchdog: if 'them' is open for THEM_WATCHDOG_MS with zero windows the loopback is likely
       // still too quiet or the SCKit session is misconfigured. Surface a soft, non-fatal note the UI
       // can display — mic keeps working, teardown is NOT triggered.
@@ -482,6 +515,53 @@ export function useListen(
     },
     [pushAudio]
   )
+
+  // Re-acquire the microphone after its track died (device disconnect / sleep) or the default input
+  // moved (Bluetooth headset on/off). Kept in a ref so openChannel (defined above) can call it without
+  // a circular useCallback dependency — same forward-reference pattern as pump/armNetworkRetry.
+  const micRecoveringRef = useRef(false)
+  const recoverMicRef = useRef<(() => Promise<void>) | null>(null)
+  recoverMicRef.current = async (): Promise<void> => {
+    if (!liveRef.current || micRecoveringRef.current) return
+    micRecoveringRef.current = true
+    try {
+      const mic = await navigator.mediaDevices.getUserMedia({
+        audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true }
+      })
+      if (!liveRef.current) {
+        mic.getTracks().forEach((t) => t.stop())
+        return
+      }
+      await openChannel('you', mic)
+      setState((s) => (s.error === MIC_LOST_MSG ? { ...s, error: null } : s))
+    } catch {
+      // Nothing to acquire (no mic connected) — the sticky MIC_LOST_MSG stays until a device change
+      // retriggers recovery or the user restarts Listen.
+      setState((s) => ({ ...s, error: MIC_LOST_MSG }))
+    } finally {
+      micRecoveringRef.current = false
+    }
+  }
+
+  // Follow the default input across device changes while the mic channel is live. A Bluetooth switch
+  // often leaves the old track "alive" but permanently silent (no 'ended' event) — the classic silent
+  // death. Debounced: connect+disconnect storms settle before we re-acquire once.
+  const devChangeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  useEffect(() => {
+    const onDeviceChange = (): void => {
+      if (!liveRef.current || !channels.current.you) return
+      if (devChangeTimerRef.current) clearTimeout(devChangeTimerRef.current)
+      devChangeTimerRef.current = setTimeout(() => {
+        devChangeTimerRef.current = null
+        void recoverMicRef.current?.()
+      }, 800)
+    }
+    navigator.mediaDevices.addEventListener('devicechange', onDeviceChange)
+    return () => {
+      navigator.mediaDevices.removeEventListener('devicechange', onDeviceChange)
+      if (devChangeTimerRef.current) clearTimeout(devChangeTimerRef.current)
+    }
+  }, [])
 
   const start = useCallback(
     async (
