@@ -82,10 +82,19 @@ jobs:
         env:
           # Signing is skipped on CI unless you add your Apple certs as secrets.
           ASKTOTO_DISABLE_CP: '1'
+      # Upload installers only — never release/* wholesale. The unpacked mac-arm64/ app dir pushed a
+      # single run's artifact to ~6 GB and repeated runs blew the org's Actions storage quota, which
+      # then failed every packaging job at the upload step. Installers + update metadata are all a PR
+      # reviewer needs; 3-day retention because these are PR-verification builds, not releases.
       - uses: actions/upload-artifact@v4
         with:
           name: asktoto-macos
-          path: release/*
+          retention-days: 3
+          path: |
+            release/*.dmg
+            release/*.zip
+            release/*.blockmap
+            release/latest*.yml
 
   build-windows:
     name: Windows package
@@ -103,7 +112,13 @@ jobs:
       # AppX packaging only works on Windows runners (needs the Windows SDK). Signing is skipped on CI
       # unless you add your Windows cert as a secret via CSC_LINK / CSC_KEY_PASSWORD.
       - run: npm run dist:win:appx
+      # Installers only, same rationale as the macOS job (win-unpacked/ was ~7.5 GB per run).
       - uses: actions/upload-artifact@v4
         with:
           name: asktoto-windows
-          path: release/*
+          retention-days: 3
+          path: |
+            release/*.exe
+            release/*.appx
+            release/*.blockmap
+            release/latest*.yml
