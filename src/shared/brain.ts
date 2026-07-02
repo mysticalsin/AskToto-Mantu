@@ -95,9 +95,39 @@ export const MeetingExtractionSchema = z.object({
     .nullable()
     .default(null),
   signals: z.array(MeetingSignalSchema).default([]),
-  missed_signals: z.array(z.object({ statement: z.string(), why_it_matters: z.string().default('') })).default([]),
+  missed_signals: z
+    .array(
+      z.object({
+        statement: z.string(),
+        why_it_matters: z.string().default(''),
+        quote: z.string().default(''), // the transcript moment that shows the missed opening ('' if none)
+        confidence: ConfidenceSchema.default('INFERRED')
+      })
+    )
+    .default([]),
   commitments: z.array(CommitmentSchema).default([]),
-  feedback: z.array(z.string()).default([]) // what the seller could work on, grounded in this call
+  // Coaching notes. Accepts the legacy plain-string form (early extractions) and normalizes it: an
+  // untagged note is by definition the model's inference, so it lands as INFERRED with no quote —
+  // that legacy flatness is exactly why every insight once displayed an identical 60% confidence.
+  feedback: z
+    .array(
+      z.union([
+        z.string(),
+        z.object({
+          note: z.string(),
+          quote: z.string().default(''), // verbatim moment the note is anchored to ('' if none)
+          confidence: ConfidenceSchema.default('INFERRED')
+        })
+      ])
+    )
+    .transform((items) =>
+      items.map((i) => (typeof i === 'string' ? { note: i, quote: '', confidence: 'INFERRED' as const } : i))
+    )
+    .default([]),
+  // Stamped by the ingest job (not the model): source transcript basename + its ISO date, so consumers
+  // (call-grade timelines, meeting feeds) can join extractions back to meetings without re-reading refs.
+  source_file: z.string().default(''),
+  date: z.string().default('')
 })
 export type MeetingExtraction = z.infer<typeof MeetingExtractionSchema>
 
@@ -144,9 +174,28 @@ export const DealEntitySchema = z.object({
   velocity: VelocitySchema.default({ signal: 'no-hard-date-found', evidence: '' }),
   meetings: z.array(MeetingRefSchema).default([]),
   signals: z.array(MeetingSignalSchema.extend({ meeting: z.string() })).default([]),
-  missed_signals: z.array(z.object({ statement: z.string(), why_it_matters: z.string().default(''), meeting: z.string() })).default([]),
+  missed_signals: z
+    .array(
+      z.object({
+        statement: z.string(),
+        why_it_matters: z.string().default(''),
+        quote: z.string().default(''),
+        confidence: ConfidenceSchema.default('INFERRED'),
+        meeting: z.string()
+      })
+    )
+    .default([]),
   commitments: z.array(LedgerCommitmentSchema).default([]),
-  feedback: z.array(z.object({ note: z.string(), meeting: z.string() })).default([])
+  feedback: z
+    .array(
+      z.object({
+        note: z.string(),
+        quote: z.string().default(''),
+        confidence: ConfidenceSchema.default('INFERRED'),
+        meeting: z.string()
+      })
+    )
+    .default([])
 })
 export type DealEntity = z.infer<typeof DealEntitySchema>
 
@@ -186,6 +235,9 @@ export interface BrainRead {
   people: PersonEntity[]
   accounts: AccountEntity[]
   deals: DealEntity[]
+  /** Per-meeting extractions (title/sentiment/topics + ingest-stamped source_file/date) — feeds
+   *  call-grade timelines and meeting feeds without the dashboard re-deriving them from entity refs. */
+  meetings: MeetingExtraction[]
 }
 
 /** Renderer/dashboard-facing status summary. */
@@ -214,9 +266,9 @@ export const BRAIN_EXTRACTION_PROMPT = `You are the ingestion step of a meeting 
   "people": [{"name": "...", "role": "..." or null, "org": "..." or null, "confidence": "EXTRACTED|INFERRED|AMBIGUOUS"}],
   "deal": {"name": "...", "stage": "...", "win_likelihood_band": "good|mixed|concerning" or null, "band_evidence": "...", "velocity": {"signal": "hard-calendar-gate|soft-organizational-gate|no-hard-date-found", "evidence": "..."}} or null,
   "signals": [{"kind": "positive|objection|neutral", "statement": "...", "quote": "verbatim transcript line or empty string", "confidence": "EXTRACTED|INFERRED|AMBIGUOUS"}],
-  "missed_signals": [{"statement": "an opening or risk the seller did not pursue", "why_it_matters": "..."}],
+  "missed_signals": [{"statement": "an opening or risk the seller did not pursue", "why_it_matters": "...", "quote": "the verbatim moment showing the missed opening, or empty string", "confidence": "EXTRACTED|INFERRED|AMBIGUOUS"}],
   "commitments": [{"text": "what was promised, as a short actionable sentence", "by": "you" | "them" | "Person Name", "due_hint": "verbatim timing words ('by Friday', 'after the board') or empty string", "quote": "verbatim transcript line or empty string", "confidence": "EXTRACTED|INFERRED|AMBIGUOUS"}],
-  "feedback": ["one short coaching note grounded in this call"]
+  "feedback": [{"note": "one short coaching note grounded in this call", "quote": "the verbatim moment the note is anchored to, or empty string", "confidence": "EXTRACTED|INFERRED|AMBIGUOUS"}]
 }
 
 Hard rules:
@@ -227,4 +279,5 @@ Hard rules:
 - win_likelihood_band is a qualitative judgement with band_evidence citing why — never output probabilities.
 - velocity: "hard-calendar-gate" only for a concrete date/meeting commitment (quote it); vague intent is "soft-organizational-gate"; otherwise "no-hard-date-found".
 - commitments: only promises actually SPOKEN and owned ("I'll send the deck", "we'll intro you to Claire", "you'll have the numbers Friday"). "you" = the app's user, "them" = the other side generically, a name when the speaker is clear. Aspirations ("we should...") and process talk are NOT commitments. Quote the line whenever possible.
+- feedback / missed_signals confidence: EXTRACTED only when you can quote the exact moment; a judgement without a quotable anchor is INFERRED; a stretch is AMBIGUOUS. Differentiate honestly — do not tag everything the same.
 - Keep every string concise. Reply with the JSON object only.`

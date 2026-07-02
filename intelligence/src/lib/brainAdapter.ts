@@ -31,8 +31,16 @@ interface BrainDeal {
   velocity: { signal: string; evidence: string }
   meetings: Array<{ file: string; date: string; title: string }>
   signals: BrainSignal[]
-  missed_signals: Array<{ statement: string; why_it_matters: string; meeting: string }>
-  feedback: Array<{ note: string; meeting: string }>
+  missed_signals: Array<{ statement: string; why_it_matters: string; quote?: string; confidence?: Conf; meeting: string }>
+  feedback: Array<{ note: string; quote?: string; confidence?: Conf; meeting: string }>
+}
+interface BrainMeeting {
+  source_file: string
+  date: string
+  title24: string
+  sentiment: WinLikelihoodBand
+  topics: string[]
+  account: { name: string } | null
 }
 interface BrainAccount {
   name: string
@@ -51,6 +59,7 @@ export interface BrainRead {
   people: BrainPerson[]
   accounts: BrainAccount[]
   deals: BrainDeal[]
+  meetings?: BrainMeeting[]
 }
 
 declare global {
@@ -79,7 +88,7 @@ function categorize(text: string): Category {
   return 'process'
 }
 
-function toDeal(d: BrainDeal, sectorByAccount: Map<string, string>): Deal {
+function toDeal(d: BrainDeal, sectorByAccount: Map<string, string>, meetingsByFile: Map<string, BrainMeeting>): Deal {
   const claims: Claim[] = d.signals.map((sig, i) => ({
     claim_id: `${slug(d.name)}-${i}`,
     statement: sig.statement,
@@ -90,6 +99,24 @@ function toDeal(d: BrainDeal, sectorByAccount: Map<string, string>): Deal {
     source: { file: sig.meeting, quote_or_paraphrase: sig.quote || sig.statement, grounding: sig.quote ? groundingOf(sig.confidence) : 'assumed' },
     confidence: confidenceOf(sig.confidence)
   }))
+  // Per-call quality timeline: join the deal's meeting refs to their extractions' sentiment. The
+  // sentiment IS the qualitative grade (same good/mixed/concerning vocabulary); meetings whose
+  // extraction hasn't landed yet (backfill still running) simply don't appear rather than guessing.
+  const call_grades = d.meetings
+    .map((ref) => {
+      const m = meetingsByFile.get(ref.file)
+      if (!m) return null
+      return {
+        date: (m.date || ref.date || '').slice(0, 10),
+        label: m.title24 || ref.title,
+        grade: m.sentiment,
+        note: m.topics.slice(0, 3).join(' · '),
+        is_client_facing: !!m.account
+      }
+    })
+    .filter((g): g is NonNullable<typeof g> => g !== null)
+    .sort((a, b) => a.date.localeCompare(b.date))
+
   return {
     bid_id: slug(d.name),
     account: d.account,
@@ -100,43 +127,100 @@ function toDeal(d: BrainDeal, sectorByAccount: Map<string, string>): Deal {
     value_usd: null, // the brain never invents money — no value data in transcripts
     stage: d.stage || (d.velocity.signal === 'hard-calendar-gate' ? 'moving (hard date)' : 'open'),
     claims,
-    call_grades: [] // per-call grades arrive with per-meeting sentiment in a later brain read
+    call_grades
   }
 }
 
+/**
+ * Confidence engine for coaching insights. Three honest inputs, no flat defaults (the first version
+ * hardcoded 0.6 everywhere and the whole Coaching view read as an identical wall of "60%"):
+ *   1. Source tag from the extraction (EXTRACTED = the model could quote the moment, INFERRED = a
+ *      judgement, AMBIGUOUS = a stretch) → base 0.85 / 0.55 / 0.35.
+ *   2. Corroboration: the same pattern observed again (another meeting or deal) raises confidence
+ *      +0.06 per extra observation, capped at +0.18 — repetition is evidence.
+ *   3. Anchor quote: any verbatim transcript anchor adds +0.05 and flips grounding to 'verified'.
+ * Cap 0.95. Grounding: quoted → verified; INFERRED → assumed; AMBIGUOUS → unknown.
+ */
+function insightConfidence(base: Conf, observations: number, hasQuote: boolean): { confidence: number; grounding: Grounding } {
+  const baseScore = base === 'EXTRACTED' ? 0.85 : base === 'INFERRED' ? 0.55 : 0.35
+  const corroboration = Math.min(0.18, Math.max(0, observations - 1) * 0.06)
+  const quoteBoost = hasQuote ? 0.05 : 0
+  return {
+    confidence: Math.min(0.95, baseScore + corroboration + quoteBoost),
+    grounding: hasQuote ? 'verified' : groundingOf(base)
+  }
+}
+
+/** Grouping key: same category + the first significant words — repeated coaching themes cluster into
+ *  ONE insight with a real n_observations instead of n copies each claiming a single observation. */
+function patternKey(category: Category, text: string): string {
+  const words = text
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, '')
+    .split(/\s+/)
+    .filter((w) => w.length > 3 && !['this', 'that', 'with', 'from', 'their', 'client', 'next', 'call'].includes(w))
+    .slice(0, 4)
+  return `${category}|${words.join('-')}`
+}
+
+interface RawObservation {
+  kind: 'feedback' | 'missed'
+  text: string
+  why: string
+  quote: string
+  confidence: Conf
+  meeting: string
+  dealSlug: string
+}
+
 function toInsights(deals: BrainDeal[]): CoachingInsight[] {
-  const out: CoachingInsight[] = []
+  const observations: RawObservation[] = []
   for (const d of deals) {
-    for (const [i, f] of d.feedback.entries()) {
-      out.push({
-        insight_id: `${slug(d.name)}-fb-${i}`,
-        pattern: f.note,
-        n_observations: 1,
-        deals: [slug(d.name)],
-        what_happened: `Observed during ${f.meeting}`,
-        why_it_matters: 'Coaching note grounded in this call.',
-        coaching_move: f.note,
-        category: categorize(f.note),
-        confidence: 0.6,
-        grounding: 'assumed',
-        sources: [{ file: f.meeting, quote_or_paraphrase: f.note }]
-      })
+    for (const f of d.feedback) {
+      observations.push({ kind: 'feedback', text: f.note, why: '', quote: f.quote ?? '', confidence: f.confidence ?? 'INFERRED', meeting: f.meeting, dealSlug: slug(d.name) })
     }
-    for (const [i, ms] of d.missed_signals.entries()) {
-      out.push({
-        insight_id: `${slug(d.name)}-ms-${i}`,
-        pattern: ms.statement,
-        n_observations: 1,
-        deals: [slug(d.name)],
-        what_happened: ms.statement,
-        why_it_matters: ms.why_it_matters || 'An opening the seller did not pursue.',
-        coaching_move: `Next call: pursue this directly — ${ms.statement}`,
-        category: categorize(ms.statement),
-        confidence: 0.6,
-        grounding: 'assumed',
-        sources: [{ file: ms.meeting, quote_or_paraphrase: ms.statement }]
-      })
+    for (const ms of d.missed_signals) {
+      observations.push({ kind: 'missed', text: ms.statement, why: ms.why_it_matters, quote: ms.quote ?? '', confidence: ms.confidence ?? 'INFERRED', meeting: ms.meeting, dealSlug: slug(d.name) })
     }
+  }
+
+  // Cluster repeated patterns across meetings/deals — corroboration is what earns confidence.
+  const groups = new Map<string, RawObservation[]>()
+  for (const o of observations) {
+    const key = patternKey(categorize(o.text), o.text)
+    if (!groups.has(key)) groups.set(key, [])
+    groups.get(key)!.push(o)
+  }
+
+  const out: CoachingInsight[] = []
+  let i = 0
+  for (const group of groups.values()) {
+    // Best-evidenced observation leads the card; the rest corroborate.
+    const rank = (c: Conf): number => (c === 'EXTRACTED' ? 2 : c === 'INFERRED' ? 1 : 0)
+    const lead = [...group].sort((a, b) => rank(b.confidence) - rank(a.confidence) || b.quote.length - a.quote.length)[0]
+    const dealsIn = [...new Set(group.map((o) => o.dealSlug))]
+    const meetingsIn = new Set(group.map((o) => o.meeting))
+    const hasQuote = group.some((o) => o.quote.length > 0)
+    const { confidence, grounding } = insightConfidence(lead.confidence, meetingsIn.size, hasQuote)
+    out.push({
+      insight_id: `insight-${i++}-${lead.dealSlug}`,
+      pattern: lead.text,
+      n_observations: group.length,
+      deals: dealsIn,
+      what_happened: lead.kind === 'missed' ? lead.text : `Observed during ${lead.meeting}`,
+      why_it_matters:
+        lead.why ||
+        (meetingsIn.size > 1
+          ? `Recurred across ${meetingsIn.size} meetings — a pattern, not a one-off.`
+          : lead.kind === 'missed'
+            ? 'An opening the seller did not pursue.'
+            : 'Coaching note grounded in this call.'),
+      coaching_move: lead.kind === 'missed' ? `Next call: pursue this directly — ${lead.text}` : lead.text,
+      category: categorize(lead.text),
+      confidence,
+      grounding,
+      sources: group.slice(0, 5).map((o) => ({ file: o.meeting, quote_or_paraphrase: o.quote || o.text }))
+    })
   }
   return out
 }
@@ -182,7 +266,8 @@ export function brainToDashboard(b: BrainRead): DashboardData {
   const bandByDeal = new Map(b.deals.map((d) => [slug(d.name), d.win_likelihood_band ?? ('mixed' as WinLikelihoodBand)]))
   const accountByPerson = new Map(b.people.map((p) => [slug(p.name), p.account ?? undefined]))
 
-  const deals = b.deals.map((d) => toDeal(d, sectorByAccount))
+  const meetingsByFile = new Map((b.meetings ?? []).map((m) => [m.source_file, m]))
+  const deals = b.deals.map((d) => toDeal(d, sectorByAccount, meetingsByFile))
   const insights = toInsights(b.deals)
 
   // Meetings are dropped from the DISPLAY graph (61 meeting nodes would drown the entity structure);
