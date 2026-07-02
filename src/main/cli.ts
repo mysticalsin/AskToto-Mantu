@@ -25,12 +25,15 @@ const execFileAsync = promisify(execFile)
 // ─── Idle watchdog (mirrors llm.ts) ────────────────────────────────────────────
 const STREAM_IDLE_MS = 120_000
 // exported for unit tests (cli.test.ts) — security/reliability-critical, must stay covered
-export function idleWatchdog(onIdle: () => void): { ping: () => void; clear: () => void } {
-  let t: NodeJS.Timeout | null = setTimeout(onIdle, STREAM_IDLE_MS)
+export function idleWatchdog(
+  onIdle: () => void,
+  idleMs: number = STREAM_IDLE_MS
+): { ping: () => void; clear: () => void } {
+  let t: NodeJS.Timeout | null = setTimeout(onIdle, idleMs)
   return {
     ping: () => {
       if (t) clearTimeout(t)
-      t = setTimeout(onIdle, STREAM_IDLE_MS)
+      t = setTimeout(onIdle, idleMs)
     },
     clear: () => {
       if (t) {
@@ -176,6 +179,8 @@ export interface RunCliStreamOpts {
   model: string
   system: string
   prompt: string
+  /** Idle watchdog budget in ms (per-tier: live suggest ~15s, recap/deep 120s). Defaults to 120s. */
+  idleMs?: number
   handlers: {
     onDelta: (text: string) => void
     onDone: (u: Record<string, never>) => void
@@ -202,10 +207,13 @@ export function runCliStream(opts: RunCliStreamOpts): { abort: () => void } {
     wd?.clear()
     opts.handlers.onError(msg)
   }
+  // Per-tier idle budget from the caller (a live suggest gives up in seconds so failover can fire;
+  // recaps get full headroom) — a hung CLI must not block the real-time path for the full 120s.
+  const idleMs = opts.idleMs ?? STREAM_IDLE_MS
   wd = idleWatchdog(() => {
-    fail(`${label}: stream timed out — no output for ${STREAM_IDLE_MS / 1000}s.`)
+    fail(`${label}: stream timed out — no output for ${Math.round(idleMs / 1000)}s.`)
     controller.abort()
-  })
+  }, idleMs)
 
   void (async () => {
     if (!cfg) {

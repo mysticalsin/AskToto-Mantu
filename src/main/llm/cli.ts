@@ -13,6 +13,7 @@ export function streamCli(opts: StreamOptions): StreamHandle {
     model: opts.model,
     system: opts.system,
     prompt,
+    idleMs: opts.idleMs, // per-tier budget — live suggest must fail over fast, not block 120s
     handlers: opts.handlers
   })
 }
