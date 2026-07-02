@@ -20,6 +20,10 @@ asarUnpack:
   - '**/node_modules/sherpa-onnx-node/**'
   - '**/node_modules/sherpa-onnx-*/**'
 extraResources:
+  # Mantu Intelligence dashboard — static build of the intelligence/ workspace, loaded in its own
+  # window (src/main/intelligence.ts). Populated by `npm run build:intelligence` before packaging.
+  - from: intelligence/dist
+    to: intelligence
   - from: build/managed-config.example.json
     to: managed-config.example.json
   - from: build/icon.png

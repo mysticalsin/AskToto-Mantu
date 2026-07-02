@@ -48,6 +48,7 @@ export const IPC = {
   brainStatus: 'brain:status',
   brainBackfill: 'brain:backfill',
   brainRead: 'brain:read',
+  brainOpenDashboard: 'brain:openDashboard',
   authStatus: 'auth:status',
   authSignIn: 'auth:signIn',
   authSignOut: 'auth:signOut',
