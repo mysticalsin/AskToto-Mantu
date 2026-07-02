@@ -51,7 +51,7 @@ import {
 } from './store'
 import { createStream } from './llm'
 import { resetDustConversation } from './llm/dust'
-import { enqueueIngest, startBackfill, brainBackfillProgress } from './brain/ingest'
+import { enqueueIngest, startBackfill, brainBackfillProgress, resumeBackfillIfPending } from './brain/ingest'
 import {
   readIndex as readBrainIndex,
   readGraph as readBrainGraph,
@@ -1798,6 +1798,9 @@ if (!app.requestSingleInstanceLock()) {
   runStep('startMeetingPoller', startMeetingPoller)
   runStep('startMeetingNotifier', startMeetingNotifier)
   runStep('initAutoUpdate', () => initAutoUpdate(win))
+  // Resume an interrupted brain backfill (flag persists in .brain/index.json until the queue drains).
+  // Delayed so the boot path and first paint never compete with background LLM extractions.
+  setTimeout(() => resumeBackfillIfPending(), 15_000)
 
   app.on('activate', () => {
     if (!win) createWindow()

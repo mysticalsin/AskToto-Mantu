@@ -147,7 +147,10 @@ export const BrainIndexSchema = z.object({
   // Ingest log keyed by source file basename — makes rebuilds/backfills resumable and idempotent.
   ingested: z.record(z.string(), z.object({ at: z.number(), ok: z.boolean(), error: z.string().optional() })).default({}),
   // Lint findings (contradictions/staleness). Surfaced in the dashboard; never auto-resolved.
-  warnings: z.array(z.string()).default([])
+  warnings: z.array(z.string()).default([]),
+  // True from "user asked for a backfill" until the queue fully drains — lets a quit/relaunch resume
+  // the remaining transcripts automatically instead of stalling until someone re-clicks the button.
+  backfillRequested: z.boolean().default(false)
 })
 export type BrainIndex = z.infer<typeof BrainIndexSchema>
 

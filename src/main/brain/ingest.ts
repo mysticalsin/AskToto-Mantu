@@ -286,7 +286,18 @@ async function processJob(job: Job): Promise<void> {
 function pump(): void {
   if (running) return
   const job = queue.shift()
-  if (!job) return
+  if (!job) {
+    // Queue drained — if a backfill was in flight, clear the resume flag so the next boot stays idle.
+    if (backfillTotal > 0 && backfillDone >= backfillTotal) {
+      const s = getSettings()
+      const idx = readIndex(s)
+      if (idx.backfillRequested) {
+        idx.backfillRequested = false
+        void writeIndex(s, idx)
+      }
+    }
+    return
+  }
   running = true
   void processJob(job).finally(() => {
     running = false
@@ -307,10 +318,29 @@ const VAULT_TRANSCRIPTS = join(
   'Library/CloudStorage/OneDrive-MantuGroup/Documents/AI Second Brain/Meetings/Confidential'
 )
 
+/**
+ * Resume an interrupted backfill on app boot: the request flag persists in index.json until the queue
+ * fully drains, so a quit/relaunch mid-backfill picks up the remaining transcripts automatically.
+ * Never starts spontaneously — only when a backfill was explicitly requested and left unfinished.
+ */
+export function resumeBackfillIfPending(): void {
+  try {
+    const idx = readIndex(getSettings())
+    if (idx.backfillRequested) {
+      const r = startBackfill()
+      if (r.queued > 0) mainLog.info(`[brain] resuming interrupted backfill: ${r.queued} transcripts remaining`)
+    }
+  } catch {
+    /* brain store unreadable — a manual backfill will surface the real error */
+  }
+}
+
 /** Queue every not-yet-ingested transcript from the meetings folder + the vault. Resumable via index. */
 export function startBackfill(): { queued: number } {
   const s = getSettings()
   const idx = readIndex(s)
+  idx.backfillRequested = true
+  void writeIndex(s, idx)
   const already = new Set(Object.entries(idx.ingested).filter(([, v]) => v.ok).map(([k]) => k))
   const candidates: Job[] = []
   const folder = resolveMeetingsFolder(s)
