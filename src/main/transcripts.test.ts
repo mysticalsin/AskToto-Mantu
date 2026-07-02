@@ -13,7 +13,8 @@ import {
   saveDraftTranscript,
   clearDraftTranscript,
   appendDebrief,
-  DEBRIEF_HEADING
+  DEBRIEF_HEADING,
+  recoverOrphanDrafts
 } from './transcripts'
 import type { SaveMeeting, Settings } from '@shared/ipc'
 
@@ -323,6 +324,34 @@ describe('appendDebrief (90-second off-record layer)', () => {
     expect(md.match(new RegExp(DEBRIEF_HEADING.replace(/[()]/g, '\\$&'), 'g'))).toHaveLength(1)
   })
 
+  it('a debrief containing its own "## " heading line round-trips without corrupting the rest of the file, and a re-save still replaces exactly one debrief', async () => {
+    const file = await saved()
+    const name = file.split('/').pop()!
+    const sneaky = 'CFO seemed distracted.\n## Sneaky heading\nAlso send the follow-up email.'
+    await appendDebrief(settings, name, sneaky)
+    let md = readSavedFile(file)
+    // The rest of the document (written before the debrief) must survive untouched.
+    expect(md).toContain('## Full transcript')
+    expect(md).toContain('the price is high')
+    // The debrief's own content — including the heading-shaped line — must all be present...
+    expect(md).toContain('CFO seemed distracted.')
+    expect(md).toContain('Sneaky heading')
+    expect(md).toContain('Also send the follow-up email.')
+    // ...but the embedded "## " line must never be mistaken for a real section boundary: exactly two
+    // real "## " headings exist in the whole file (Full transcript, Debrief), not a phantom third one.
+    expect(md.match(/^## /gm)?.length).toBe(2)
+
+    // A second save must still replace the whole debrief cleanly, with no stale tail leaking through.
+    await appendDebrief(settings, name, 'Totally new, unrelated second read.')
+    md = readSavedFile(file)
+    expect(md).not.toContain('Sneaky heading')
+    expect(md).not.toContain('CFO seemed distracted')
+    expect(md).not.toContain('follow-up email')
+    expect(md).toContain('Totally new, unrelated second read.')
+    expect(md.match(new RegExp(DEBRIEF_HEADING.replace(/[()]/g, '\\$&'), 'g'))).toHaveLength(1)
+    expect(md.match(/^## /gm)?.length).toBe(2)
+  })
+
   it('refuses missing files and non-transcript files, and stays inside the meetings folder', async () => {
     expect((await appendDebrief(settings, 'nope.md', 'x')).ok).toBe(false)
     writeFileSync(join(folder, 'random.md'), '---\ntype: note\n---\nhello')
@@ -408,6 +437,28 @@ describe('saveDraftTranscript / clearDraftTranscript (crash-recovery autosave)',
     expect(drafts.length).toBe(2) // both survive — meeting B's autosave must not overwrite meeting A's
   })
 
+  it('does NOT clobber a different meeting\'s draft when both start within the same wall-clock second', async () => {
+    // stamp()'s HHMMSS has only 1-second resolution — these two startedAt values are 500ms apart but
+    // land in the identical second, which used to collide on the same draft filename.
+    const meetingA: SaveMeeting = {
+      ...meeting,
+      startedAt: 1_700_000_000_000,
+      lines: [{ speaker: 'them', text: 'AAAA content from meeting A', t: 1_700_000_000_000 }]
+    }
+    const meetingB: SaveMeeting = {
+      ...meeting,
+      startedAt: 1_700_000_000_500,
+      lines: [{ speaker: 'them', text: 'BBBB content from meeting B', t: 1_700_000_000_500 }]
+    }
+    await saveDraftTranscript(settings, meetingA)
+    await saveDraftTranscript(settings, meetingB)
+    const drafts = readdirSync(folder).filter((f) => f.startsWith('.autosave-draft-'))
+    expect(drafts.length).toBe(2) // distinct filenames — no collision
+    const contents = drafts.map((f) => readFileSync(join(folder, f), 'utf8'))
+    expect(contents.some((c) => c.includes('AAAA content from meeting A'))).toBe(true)
+    expect(contents.some((c) => c.includes('BBBB content from meeting B'))).toBe(true)
+  })
+
   it('clearDraftTranscript removes only that meeting\'s own draft', async () => {
     const other: SaveMeeting = { ...meeting, startedAt: 1_600_000_000_000 }
     await saveDraftTranscript(settings, meeting)
@@ -422,6 +473,82 @@ describe('saveDraftTranscript / clearDraftTranscript (crash-recovery autosave)',
       saveDraftTranscript({ ...settings, meetingsFolder: '/nonexistent/\0bad' }, meeting)
     ).resolves.toBeUndefined()
     expect(() => clearDraftTranscript({ ...settings, meetingsFolder: '/nonexistent/\0bad' }, meeting.startedAt)).not.toThrow()
+  })
+})
+
+describe('recoverOrphanDrafts (crash-recovery promotion)', () => {
+  let folder: string
+  let settings: Settings
+
+  beforeEach(() => {
+    folder = mkdtempSync(join(tmpdir(), 'asktoto-recover-test-'))
+    settings = { ...baseSettings(), meetingsFolder: folder }
+  })
+
+  afterEach(() => {
+    rmSync(folder, { recursive: true, force: true })
+    vi.restoreAllMocks()
+  })
+
+  const meeting: SaveMeeting = {
+    title: 'Crashed standup',
+    mode: 'meeting',
+    startedAt: 1_700_000_000_000,
+    lines: [{ speaker: 'them', text: 'Where are we on the migration?', t: 1_700_000_000_000 }],
+    recap: ''
+  }
+
+  const promotedFiles = (): string[] => readdirSync(folder).filter((f) => f.includes('-recovered'))
+  const draftFiles = (): string[] => readdirSync(folder).filter((f) => f.startsWith('.autosave-draft-'))
+
+  it('promotes an orphan draft into a real, visible meeting-transcript file', async () => {
+    await saveDraftTranscript(settings, meeting)
+    const r = await recoverOrphanDrafts(settings)
+    expect(r.recovered).toBe(1)
+    expect(draftFiles().length).toBe(0)
+    expect(promotedFiles().length).toBe(1)
+    const content = readFileSync(join(folder, promotedFiles()[0]), 'utf8')
+    expect(content).toContain('type: meeting-transcript')
+    expect(content).not.toContain('type: meeting-transcript-draft')
+    expect(content).toContain('Where are we on the migration?')
+    expect(content).toContain('(recovered)')
+  })
+
+  it('running recovery twice on the same still-orphaned draft never creates a duplicate meeting (idempotent)', async () => {
+    await saveDraftTranscript(settings, meeting)
+    const r1 = await recoverOrphanDrafts(settings)
+    expect(r1.recovered).toBe(1)
+    const afterFirst = promotedFiles()
+    expect(afterFirst.length).toBe(1)
+
+    // Simulate the exact failure mode this guards against: the promoted copy already exists on disk
+    // (written by the run above) but a draft with the SAME derived filename shows up again — the real
+    // trigger is unlinkSync throwing right after a successful writeSaved, which leaves the original
+    // draft in place; recreating it here reproduces the same on-disk shape without needing to mock fs.
+    await saveDraftTranscript(settings, meeting)
+    expect(draftFiles().length).toBe(1)
+    const r2 = await recoverOrphanDrafts(settings)
+    expect(r2.recovered).toBe(0) // already-promoted draft is skipped, not re-counted
+    const afterSecond = promotedFiles()
+    expect(afterSecond.length).toBe(1) // still exactly one meeting — no "-recovered-2.md" duplicate
+    expect(afterSecond).toEqual(afterFirst) // the same single file, not a new copy
+    expect(draftFiles().length).toBe(0) // the stale draft was still cleaned up on this second run
+  })
+
+  it('adds the recovered meeting to index.md in plaintext mode, mirroring saveMeeting', async () => {
+    await saveDraftTranscript(settings, meeting) // settings.encryptTranscripts is unset/false here
+    await recoverOrphanDrafts(settings)
+    const idx = readFileSync(join(folder, 'index.md'), 'utf8')
+    expect(idx).toContain('Crashed standup')
+    expect(idx).toContain(promotedFiles()[0])
+  })
+
+  it('does NOT add an index.md row when encryption is on, mirroring saveMeeting', async () => {
+    const enc = { ...settings, encryptTranscripts: true } as Settings
+    await saveDraftTranscript(enc, meeting)
+    await recoverOrphanDrafts(enc)
+    const idx = readdirSync(folder).includes('index.md') ? readFileSync(join(folder, 'index.md'), 'utf8') : ''
+    expect(idx).not.toContain('Crashed standup')
   })
 })
 

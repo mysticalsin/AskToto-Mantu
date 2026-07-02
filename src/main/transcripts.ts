@@ -508,6 +508,15 @@ export async function saveMeeting(settings: Settings, m: SaveMeeting): Promise<s
   return file
 }
 
+/** Neutralize any line that would be parsed as a markdown heading (e.g. "## Sneaky heading") inside a
+ *  user-authored debrief body. Without this, a heading-shaped line in the user's OWN text is
+ *  indistinguishable from a real document section — both to appendDebrief's own replace-boundary search
+ *  below and to any markdown renderer. Escaping the leading `#`s keeps the text fully visible, just not
+ *  heading syntax. */
+function escapeHeadingLines(s: string): string {
+  return s.replace(/^(#{1,6})(\s)/gm, '\\$1$2')
+}
+
 /**
  * 90-Second Debrief (innovation #6): append the user's post-meeting gut-read — what was NOT said
  * aloud, hallway remarks, instinct — to the saved meeting as its own section. This is the off-record
@@ -517,8 +526,18 @@ export async function saveMeeting(settings: Settings, m: SaveMeeting): Promise<s
  *
  * Idempotent: a second save REPLACES the debrief section rather than stacking copies. `file` must be a
  * bare basename inside the meetings folder (callers pass basename; we re-basename for defense).
+ *
+ * The section boundary is TWO layers deep, since either alone can be defeated by adversarial-looking-
+ * but-perfectly-normal user text (e.g. a debrief that itself starts with "## "):
+ *   1. The debrief body is sanitized on write (escapeHeadingLines) so it can never contain a real
+ *      "## "-shaped line in the first place.
+ *   2. The section is terminated by an explicit `DEBRIEF_END_MARKER` HTML comment, so the replace logic
+ *      finds the exact end of the PREVIOUS debrief instead of scanning for the next "## " (which would
+ *      match text inside the debrief body on an older, pre-marker file). Files written before this
+ *      marker existed fall back to the old "next heading" search.
  */
 export const DEBRIEF_HEADING = '## Debrief (off the record)'
+const DEBRIEF_END_MARKER = '<!-- /debrief -->'
 export async function appendDebrief(
   settings: Settings,
   file: string,
@@ -534,13 +553,26 @@ export async function appendDebrief(
     return { ok: false, error: 'Could not read the meeting file.' }
   }
   if (!/^type: meeting-transcript$/m.test(md)) return { ok: false, error: 'Not a meeting transcript.' }
-  const section = `${DEBRIEF_HEADING}\n\n_Captured right after the meeting — impressions, not transcript._\n\n${text.trim()}\n`
+  const safeText = escapeHeadingLines(text.trim())
+  const section =
+    `${DEBRIEF_HEADING}\n\n_Captured right after the meeting — impressions, not transcript._\n\n` +
+    `${safeText}\n${DEBRIEF_END_MARKER}\n`
   const start = md.indexOf(DEBRIEF_HEADING)
-  const next = start >= 0 ? md.indexOf('\n## ', start + DEBRIEF_HEADING.length) : -1
-  const updated =
-    start >= 0
-      ? md.slice(0, start) + section + (next >= 0 ? md.slice(next + 1) : '')
-      : md.trimEnd() + '\n\n' + section
+  let updated: string
+  if (start < 0) {
+    updated = md.trimEnd() + '\n\n' + section
+  } else {
+    const markerIdx = md.indexOf(DEBRIEF_END_MARKER, start + DEBRIEF_HEADING.length)
+    if (markerIdx >= 0) {
+      // Exact boundary: everything after the marker's own line belongs to whatever comes next.
+      const afterMarker = md.indexOf('\n', markerIdx)
+      updated = md.slice(0, start) + section + (afterMarker >= 0 ? md.slice(afterMarker + 1) : '')
+    } else {
+      // Legacy file written before this marker existed: fall back to the old heuristic.
+      const next = md.indexOf('\n## ', start + DEBRIEF_HEADING.length)
+      updated = md.slice(0, start) + section + (next >= 0 ? md.slice(next + 1) : '')
+    }
+  }
   await writeSaved(path, updated, settings.encryptTranscripts)
   return { ok: true }
 }
@@ -548,7 +580,12 @@ export async function appendDebrief(
 // Keyed by the meeting's OWN startedAt (like saveMeeting's real filename), not a single fixed name.
 // A fixed name would let the NEXT meeting's very first autosave tick silently overwrite a PREVIOUS
 // meeting's crash-recovery copy before anyone had a chance to notice it — defeating the whole point.
-const draftFilename = (started: number): string => `.autosave-draft-${stamp(started)}.md`
+// stamp() alone only has 1-second (HHMMSS) resolution, so two meetings starting in the same wall-clock
+// second would still collide on it — the millisecond suffix (kept behind its own "-", so it still reads
+// as "<HHMMSS>-<ms>" for recall.ts's FILENAME_TIMESTAMP retention regex, which only requires a literal
+// "-" right after the 6-digit time) closes that gap down to true per-meeting uniqueness.
+const draftFilename = (started: number): string =>
+  `.autosave-draft-${stamp(started)}-${String(started % 1000).padStart(3, '0')}.md`
 
 /**
  * Periodic best-effort snapshot of an IN-PROGRESS meeting (see the renderer's autosave timer while
@@ -609,6 +646,8 @@ export function clearDraftTranscript(settings: Settings, startedAt: number): voi
   }
 }
 
+const IN_PROGRESS_SUFFIX = ' (in progress — autosaved draft)'
+
 /**
  * Promote orphaned autosave drafts into real, visible meetings (run once at launch). A draft only
  * survives on disk when its meeting never reached a normal save — a crash or force-quit — so leaving
@@ -618,7 +657,10 @@ export function clearDraftTranscript(settings: Settings, startedAt: number): voi
  * the stamp prefix the sweep parses), and the user loses at most the final autosave interval instead
  * of the whole meeting. Runs before any Listen session starts, and drafts are keyed by their own
  * startedAt, so a live meeting's draft can never be promoted out from under it. Undecryptable drafts
- * (foreign keychain) are left in place for the device that can read them.
+ * (foreign keychain) are left in place for the device that can read them. Idempotent across repeated
+ * runs: a draft whose promoted file already exists (e.g. because a prior run's unlink failed after a
+ * successful write) is never re-promoted — only its stale source file is retried for cleanup — and,
+ * in plaintext mode, the recovered meeting gets an index.md row exactly like a normally-saved one.
  */
 export async function recoverOrphanDrafts(settings: Settings): Promise<{ recovered: number }> {
   let recovered = 0
@@ -629,18 +671,50 @@ export async function recoverOrphanDrafts(settings: Settings): Promise<{ recover
       if (!f.startsWith('.autosave-draft-') || !f.endsWith('.md')) continue
       const draftPath = join(folder, f)
       try {
+        const stampPart = f.slice('.autosave-draft-'.length, -'.md'.length)
+        const primaryOut = join(folder, `${stampPart}-recovered.md`)
+        if (existsSync(primaryOut)) {
+          // Already promoted by a previous run — this draft only still exists because that run's
+          // unlink below failed afterward (transient EBUSY/EPERM; this folder is often OneDrive-synced).
+          // Re-promoting would write a second, fully duplicate "-recovered-2.md" copy of the same
+          // meeting, so just retry the cleanup and move on without touching `recovered`.
+          try {
+            unlinkSync(draftPath)
+          } catch {
+            /* still stale for the next run — harmless; the existsSync(primaryOut) guard prevents a dupe */
+          }
+          continue
+        }
         const text = decodeSaved(readFileSync(draftPath))
         if (!text) continue // undecryptable on this device — leave it alone
         const promoted = text
           .replace('type: meeting-transcript-draft', 'type: meeting-transcript')
           .replace('status: interrupted', 'status: recovered')
-          .replace(' (in progress — autosaved draft)', ' (recovered)')
-        const stampPart = f.slice('.autosave-draft-'.length, -'.md'.length)
-        let out = join(folder, `${stampPart}-recovered.md`)
+          .replace(IN_PROGRESS_SUFFIX, ' (recovered)')
+        let out = primaryOut
         for (let n = 2; existsSync(out); n++) out = join(folder, `${stampPart}-recovered-${n}.md`)
         await writeSaved(out, promoted, settings.encryptTranscripts)
-        unlinkSync(draftPath)
+        try {
+          unlinkSync(draftPath)
+        } catch {
+          // The promoted copy is already safely on disk; a future run will see primaryOut exists and
+          // skip re-promoting this same stale draft (see the guard above), only retrying its cleanup.
+        }
         recovered++
+
+        // Mirror saveMeeting's exact plaintext-mode index.md bookkeeping (same condition, same row
+        // shape) — a recovered meeting should be just as discoverable from index.md as a normal one.
+        if (!settings.encryptTranscripts) {
+          const lines = text.split('\n')
+          const dateLine = lines.find((l) => l.startsWith('date: '))
+          const modeLine = lines.find((l) => l.startsWith('mode: '))
+          const h1Line = lines.find((l) => l.startsWith('# ') && l.endsWith(IN_PROGRESS_SUFFIX))
+          const d = dateLine ? new Date(dateLine.slice('date: '.length)) : new Date()
+          const dateStr = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
+          const title = h1Line ? h1Line.slice(2, -IN_PROGRESS_SUFFIX.length) : 'Recovered meeting'
+          const mode = modeLine ? modeLine.slice('mode: '.length) : 'meeting'
+          appendIndexRow(folder, dateStr, title, mode, 0, basename(out))
+        }
       } catch {
         /* one unreadable draft must not block recovering the others */
       }
