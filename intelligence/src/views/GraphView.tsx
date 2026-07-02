@@ -34,14 +34,15 @@ function fmtUsd(n: number): string {
 }
 
 function emptySummary(key: string, label: string): ScopeSummary {
-  return { key, label, deal_count: 0, total_value_usd: 0, band_counts: { good: 0, mixed: 0, concerning: 0 }, insight_ids: [] }
+  return { key, label, deal_count: 0, total_value_usd: null, band_counts: { good: 0, mixed: 0, concerning: 0 }, insight_ids: [] }
 }
 
 function mergeSummaries(summaries: ScopeSummary[]): ScopeSummary {
   const merged = emptySummary('all', 'All')
   for (const s of summaries) {
     merged.deal_count += s.deal_count
-    merged.total_value_usd += s.total_value_usd
+    // Sum only real values; if no scope has value data the merged total stays null (not $0).
+    if (s.total_value_usd !== null) merged.total_value_usd = (merged.total_value_usd ?? 0) + s.total_value_usd
     merged.band_counts.good += s.band_counts.good
     merged.band_counts.mixed += s.band_counts.mixed
     merged.band_counts.concerning += s.band_counts.concerning
@@ -433,7 +434,12 @@ export function GraphView({ data }: Props) {
             </div>
             <div className="rounded-md bg-black/20 p-2">
               <div className="text-white/40">Value at stake</div>
-              <div className="text-base font-semibold text-white/90">{fmtUsd(roiSummary.total_value_usd)}</div>
+              <div className="text-base font-semibold text-white/90">
+                {roiSummary.total_value_usd === null ? '—' : fmtUsd(roiSummary.total_value_usd)}
+              </div>
+              {roiSummary.total_value_usd === null && (
+                <div className="text-[9px] leading-tight text-white/30">no value data in transcripts</div>
+              )}
             </div>
           </div>
           <div className="mt-2 flex gap-1.5">
@@ -457,8 +463,9 @@ export function GraphView({ data }: Props) {
             <p className="mt-3 text-[11px] italic text-white/30">No grounded coaching insights tied to this scope yet.</p>
           )}
           <p className="mt-2 text-[10px] leading-relaxed text-white/30">
-            Value + win-likelihood distribution are real, cited data. No fabricated ROI % — there's no
-            cost/spend data in the vault to compute one against.
+            Win-likelihood distribution is real, cited data. Deal value shows only when a source
+            recorded one — transcripts carry no money data, so the live brain never invents a figure.
+            No fabricated ROI % either: there's no cost/spend data to compute one against.
           </p>
         </div>
 

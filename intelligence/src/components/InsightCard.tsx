@@ -57,7 +57,13 @@ export function InsightCard({ insight, index, onSelectDeal }: Props) {
 
       <div className="mt-4 flex items-center justify-between text-[11px] text-white/40">
         <div className="flex items-center gap-3">
-          <span>Confidence {(insight.confidence * 100).toFixed(0)}%</span>
+          {/* Evidence stated as what it IS — grounding tier + recurrence. Never a percentage: the
+              store's own rule (brain.ts) is that no % can be calibrated from this data, and the
+              underlying score is a heuristic tier constant, not a measured probability. */}
+          <span>
+            {insight.grounding === 'verified' ? 'Quoted evidence' : insight.grounding === 'assumed' ? 'Inferred' : 'Tentative'}
+            {insight.n_observations >= 2 ? ` · seen ${insight.n_observations}×` : ''}
+          </span>
           <span>·</span>
           <span>{insight.deals.length} deal{insight.deals.length === 1 ? '' : 's'}</span>
         </div>

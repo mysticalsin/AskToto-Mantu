@@ -10,7 +10,8 @@ import type {
   ScopeSummary,
   WinLikelihoodBand
 } from '../types/data'
-import { buildGoingCold } from './goingCold'
+import { buildGoingCold } from './goingCold.ts'
+import { slug } from './slug.ts'
 
 /**
  * Adapter: AskToto's live brain (window.intelligence.getData(), IPC brain:read) → this dashboard's
@@ -81,7 +82,6 @@ declare global {
   }
 }
 
-const slug = (s: string): string => s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'x'
 const groundingOf = (c: Conf): Grounding => (c === 'EXTRACTED' ? 'verified' : c === 'INFERRED' ? 'assumed' : 'unknown')
 const confidenceOf = (c: Conf): number => (c === 'EXTRACTED' ? 0.9 : c === 'INFERRED' ? 0.6 : 0.3)
 
@@ -329,7 +329,7 @@ export function brainToDashboard(b: BrainRead): DashboardData {
       key: slug(a.name),
       label: a.name,
       deal_count: deals.filter((d) => d.account === a.name).length,
-      total_value_usd: 0,
+      total_value_usd: null, // no money data in transcripts — the UI states this, never shows $0
       band_counts: counts,
       insight_ids: insights.filter((i) => i.deals.some((bd) => deals.find((d) => d.bid_id === bd)?.account === a.name)).map((i) => i.insight_id)
     }
@@ -339,7 +339,7 @@ export function brainToDashboard(b: BrainRead): DashboardData {
     const inSector = deals.filter((d) => d.sector === sec)
     const counts = band0()
     for (const d of inSector) counts[d.win_likelihood_band]++
-    return { key: slug(sec), label: sec, deal_count: inSector.length, total_value_usd: 0, band_counts: counts, insight_ids: [] }
+    return { key: slug(sec), label: sec, deal_count: inSector.length, total_value_usd: null, band_counts: counts, insight_ids: [] }
   })
 
   return {

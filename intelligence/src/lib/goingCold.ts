@@ -1,4 +1,5 @@
-import type { BrainRead } from './brainAdapter'
+import type { BrainRead } from './brainAdapter.ts'
+import { slug } from './slug.ts'
 
 /**
  * Going-Cold engine (innovation #8) — the graph learns time.
@@ -52,7 +53,6 @@ export function freshnessOf(daysQuiet: number): Freshness {
   return 'cold'
 }
 
-const slug = (s: string): string => s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'x'
 
 function touchOf(meetings: Array<{ date: string; title?: string }> | undefined, now: number): TouchInfo | null {
   const dated = (meetings ?? []).filter((m) => m.date)
