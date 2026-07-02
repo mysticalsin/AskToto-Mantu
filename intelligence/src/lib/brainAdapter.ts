@@ -8,7 +8,13 @@ import type {
   Category,
   Grounding,
   ScopeSummary,
-  WinLikelihoodBand
+  WinLikelihoodBand,
+  Commitment,
+  Account,
+  Person,
+  MeetingFeedRow,
+  IngestError,
+  StatusCounts
 } from '../types/data'
 import { buildGoingCold } from './goingCold.ts'
 import { slug } from './slug.ts'
@@ -21,9 +27,19 @@ import { slug } from './slug.ts'
  */
 
 // ── Brain shapes (mirror src/shared/brain.ts in the host app; kept loose on purpose) ─────────────
+// This is a workspace boundary (intelligence/ cannot import src/shared) so these are hand-mirrored,
+// not imported. Source of truth + line numbers as of this writing, re-check on brain.ts schema changes:
+//   ConfidenceSchema             brain.ts:15    MeetingSignalSchema   brain.ts:42-47
+//   CommitmentSchema/Ledger      brain.ts:54-69 MeetingExtractionSchema brain.ts:72-132 (meetings feed)
+//   PersonEntitySchema           brain.ts:142-151 (role/meetings/stance_trail/commitments)
+//   AccountEntitySchema          brain.ts:153-164 (win_reasons/loss_reasons)
+//   DealEntitySchema             brain.ts:166-200 (band_evidence/velocity/commitments)
+//   GraphNodeSchema/GraphEdgeSchema/BrainGraphSchema brain.ts:202-217
+//   BrainIndexSchema              brain.ts:219-229 (ingested/warnings)
+//   BrainRead (assembled shape)   brain.ts:232-241
 type Conf = 'EXTRACTED' | 'INFERRED' | 'AMBIGUOUS'
 interface BrainSignal { kind: 'positive' | 'objection' | 'neutral'; statement: string; quote: string; confidence: Conf; meeting: string }
-interface BrainCommitment { text: string; by: string; status: string; due_hint?: string; meeting?: string; date?: string }
+interface BrainCommitment { text: string; by: string; status: string; due_hint?: string; quote?: string; confidence?: Conf; meeting?: string; date?: string }
 interface BrainDeal {
   name: string
   account: string
@@ -31,7 +47,7 @@ interface BrainDeal {
   outcome: 'open' | 'won' | 'lost'
   win_likelihood_band: WinLikelihoodBand | null
   band_evidence: string
-  velocity: { signal: string; evidence: string }
+  velocity: { signal: 'hard-calendar-gate' | 'soft-organizational-gate' | 'no-hard-date-found'; evidence: string }
   meetings: Array<{ file: string; date: string; title: string }>
   signals: BrainSignal[]
   missed_signals: Array<{ statement: string; why_it_matters: string; quote?: string; confidence?: Conf; meeting: string }>
@@ -61,10 +77,11 @@ interface BrainPerson {
   role: string | null
   account: string | null
   meetings?: Array<{ file: string; date: string; title: string }>
+  stance_trail?: Array<{ meeting: string; kind: string; statement: string }>
   commitments?: BrainCommitment[]
 }
 export interface BrainRead {
-  index: { warnings: string[] }
+  index: { warnings: string[]; ingested: Record<string, { at: number; ok: boolean; error?: string }> }
   graph: { nodes: Array<{ id: string; type: string; label: string }>; edges: Array<{ from: string; to: string; rel: string; confidence: Conf }> }
   people: BrainPerson[]
   accounts: BrainAccount[]
@@ -97,14 +114,30 @@ function categorize(text: string): Category {
   return 'process'
 }
 
+/** Normalizes a brain commitment (ledger entry, loose `status: string`) into the display shape's strict
+ *  status union — an unrecognized/legacy status defaults to 'open', mirroring LedgerCommitmentSchema's
+ *  own default and the same fallback goingCold.ts already applies to missing statuses. */
+function toCommitment(c: BrainCommitment): Commitment {
+  return {
+    text: c.text,
+    by: c.by,
+    status: c.status === 'kept' || c.status === 'broken' ? c.status : 'open',
+    due_hint: c.due_hint ?? '',
+    quote: c.quote ?? '',
+    date: c.date ?? '',
+    meeting: c.meeting ?? ''
+  }
+}
+
 function toDeal(d: BrainDeal, sectorByAccount: Map<string, string>, meetingsByFile: Map<string, BrainMeeting>): Deal {
+  // raised_by and was_deciding_factor are deliberately absent: the signal extraction schema has no
+  // "who raised this" or "was this the deciding factor" field to ground either in, and the previous
+  // code faked them ('meeting participant', false) — an honest adapter omits what it doesn't know.
   const claims: Claim[] = d.signals.map((sig, i) => ({
     claim_id: `${slug(d.name)}-${i}`,
     statement: sig.statement,
     category: categorize(sig.statement + ' ' + sig.quote),
-    raised_by: 'meeting participant',
     stance: sig.kind === 'positive' ? 'positive-signal' : sig.kind === 'objection' ? 'objection' : 'neutral-observation',
-    was_deciding_factor: false,
     source: { file: sig.meeting, quote_or_paraphrase: sig.quote || sig.statement, grounding: sig.quote ? groundingOf(sig.confidence) : 'assumed' },
     confidence: confidenceOf(sig.confidence)
   }))
@@ -135,8 +168,11 @@ function toDeal(d: BrainDeal, sectorByAccount: Map<string, string>, meetingsByFi
     win_likelihood_band: d.win_likelihood_band ?? 'mixed',
     value_usd: null, // the brain never invents money — no value data in transcripts
     stage: d.stage || (d.velocity.signal === 'hard-calendar-gate' ? 'moving (hard date)' : 'open'),
+    band_evidence: d.band_evidence ?? '',
+    velocity: d.velocity,
     claims,
-    call_grades
+    call_grades,
+    commitments: (d.commitments ?? []).map(toCommitment)
   }
 }
 
@@ -234,46 +270,104 @@ function toInsights(deals: BrainDeal[]): CoachingInsight[] {
   return out
 }
 
-/** Connected components via union-find (same approach as the old build-data.mjs) for real clusters. */
+/**
+ * Deterministic label propagation (Raghavan et al., asynchronous variant) for real graph-structural
+ * clusters. Connected components (the previous approach) collapse an entire connected graph into ONE
+ * community the moment any edge bridges two otherwise-separate clusters — exactly the case AskToto's
+ * graph hits once a single cross-account edge exists. Label propagation instead lets each node adopt
+ * its neighborhood's majority label, which respects locally dense sub-clusters (an account with its
+ * people/deals/sector) even when a thin bridge connects them to the rest of the graph.
+ *
+ * Determinism, on purpose (no randomness anywhere):
+ *   - Node processing order is always the input `nodes` array order (never shuffled).
+ *   - Updates are asynchronous (a node sees neighbors already updated earlier in the SAME round) —
+ *     standard practice to avoid oscillation, and reproducible here because the order is fixed.
+ *   - Ties are broken by keeping the node's current label when it's among the winners, else by the
+ *     first-encountered label in (fixed) neighbor order — never by comparing label strings/ids.
+ *   - A small, fixed round count (4) intentionally stops short of full convergence: convergence is
+ *     what collapses everything into one or two giant communities; a few rounds preserve the more
+ *     useful, smaller local clusters.
+ */
+const LABEL_PROPAGATION_ROUNDS = 4
+
 function communities(nodes: GraphNode[], edges: GraphEdge[]): void {
-  const parent = new Map<string, string>()
-  const find = (x: string): string => {
-    let r = x
-    while (parent.get(r) !== r) r = parent.get(r)!
-    parent.set(x, r)
-    return r
-  }
-  for (const n of nodes) parent.set(n.id, n.id)
+  const index = new Map(nodes.map((n, i) => [n.id, i]))
+  const adjacency: string[][] = nodes.map(() => [])
   for (const e of edges) {
-    if (!parent.has(e.from) || !parent.has(e.to)) continue
-    const a = find(e.from)
-    const b = find(e.to)
-    if (a !== b) parent.set(a, b)
+    const a = index.get(e.from)
+    const b = index.get(e.to)
+    if (a === undefined || b === undefined || a === b) continue
+    adjacency[a].push(e.to)
+    adjacency[b].push(e.from)
   }
-  const roots = new Map<string, number>()
+
+  const label = new Map<string, string>(nodes.map((n) => [n.id, n.id]))
+  for (let round = 0; round < LABEL_PROPAGATION_ROUNDS; round++) {
+    let changed = false
+    for (let i = 0; i < nodes.length; i++) {
+      const neighbors = adjacency[i]
+      if (neighbors.length === 0) continue
+      const counts = new Map<string, number>()
+      for (const nb of neighbors) {
+        const l = label.get(nb)!
+        counts.set(l, (counts.get(l) ?? 0) + 1)
+      }
+      const own = label.get(nodes[i].id)!
+      let best = own
+      let bestCount = counts.get(own) ?? 0
+      for (const [candidate, count] of counts) {
+        if (count > bestCount) {
+          best = candidate
+          bestCount = count
+        }
+      }
+      if (best !== own) {
+        label.set(nodes[i].id, best)
+        changed = true
+      }
+    }
+    if (!changed) break // stable early — no need to burn the remaining rounds
+  }
+
+  const communityIdOf = new Map<string, number>()
   const members = new Map<number, GraphNode[]>()
   for (const n of nodes) {
-    const root = find(n.id)
-    if (!roots.has(root)) roots.set(root, roots.size)
-    const cid = roots.get(root)!
+    const l = label.get(n.id)!
+    if (!communityIdOf.has(l)) communityIdOf.set(l, communityIdOf.size)
+    const cid = communityIdOf.get(l)!
     n.community_id = cid
     if (!members.has(cid)) members.set(cid, [])
     members.get(cid)!.push(n)
   }
-  for (const [cid, ns] of members) {
+  for (const [, ns] of members) {
     // Label by the dominant sector, else the account, else the first label — real groupings, no "Community N".
     const bySector = new Map<string, number>()
     for (const n of ns) if (n.sector) bySector.set(n.sector, (bySector.get(n.sector) ?? 0) + 1)
     const top = [...bySector.entries()].sort((a, b) => b[1] - a[1])[0]?.[0]
-    const label = top ?? ns.find((n) => n.type === 'account')?.label ?? ns[0]?.label ?? `group ${cid}`
-    for (const n of ns) n.community_label = label
+    const communityLabel = top ?? ns.find((n) => n.type === 'account')?.label ?? ns[0]?.label ?? 'group'
+    for (const n of ns) n.community_label = communityLabel
   }
+}
+
+/** Latest dated ref from an entity's own meeting list — real, derived, never fabricated. Used to give
+ *  the graph's info panel an actual source reference instead of just id+label+type (see GraphNode's
+ *  ref/date/is_client_facing doc comment in types/data.ts). */
+function latestMeetingRef(
+  refs: Array<{ file: string; date: string; title: string }> | undefined
+): { file: string; date: string } | null {
+  const dated = (refs ?? []).filter((m) => m.date)
+  if (!dated.length) return null
+  const last = dated.reduce((a, b) => (a.date > b.date ? a : b))
+  return { file: last.file, date: last.date }
 }
 
 export function brainToDashboard(b: BrainRead): DashboardData {
   const sectorByAccount = new Map(b.accounts.map((a) => [a.name, a.sector]))
   const bandByDeal = new Map(b.deals.map((d) => [slug(d.name), d.win_likelihood_band ?? ('mixed' as WinLikelihoodBand)]))
   const accountByPerson = new Map(b.people.map((p) => [slug(p.name), p.account ?? undefined]))
+  const accountBySlug = new Map(b.accounts.map((a) => [slug(a.name), a]))
+  const personBySlug = new Map(b.people.map((p) => [slug(p.name), p]))
+  const dealBySlug = new Map(b.deals.map((d) => [slug(d.name), d]))
 
   const meetingsByFile = new Map((b.meetings ?? []).map((m) => [m.source_file, m]))
   const deals = b.deals.map((d) => toDeal(d, sectorByAccount, meetingsByFile))
@@ -291,6 +385,12 @@ export function brainToDashboard(b: BrainRead): DashboardData {
     .map((n) => {
       const bare = n.id.replace(/^[a-z_]+:/, '')
       const t = cold.touch.get(n.id)
+      const entityMeetings =
+        n.type === 'account' ? accountBySlug.get(bare)?.meetings
+        : n.type === 'person' ? personBySlug.get(bare)?.meetings
+        : n.type === 'deal' ? dealBySlug.get(bare)?.meetings
+        : undefined
+      const ref = latestMeetingRef(entityMeetings)
       return {
         id: n.id,
         label: n.label,
@@ -302,6 +402,9 @@ export function brainToDashboard(b: BrainRead): DashboardData {
         degree: 0,
         community_id: 0,
         community_label: '',
+        ref: ref?.file,
+        date: ref?.date,
+        is_client_facing: ref ? !!meetingsByFile.get(ref.file)?.account : undefined,
         last_touch: t?.lastTouch,
         days_quiet: t?.daysQuiet,
         freshness: t?.freshness,
@@ -339,8 +442,60 @@ export function brainToDashboard(b: BrainRead): DashboardData {
     const inSector = deals.filter((d) => d.sector === sec)
     const counts = band0()
     for (const d of inSector) counts[d.win_likelihood_band]++
-    return { key: slug(sec), label: sec, deal_count: inSector.length, total_value_usd: null, band_counts: counts, insight_ids: [] }
+    return {
+      key: slug(sec),
+      label: sec,
+      deal_count: inSector.length,
+      total_value_usd: null,
+      band_counts: counts,
+      // Same rollup as the account summary above, keyed by sector instead of account name — this was
+      // hardcoded to [] before, silently emptying every sector's coaching-insight panel.
+      insight_ids: insights.filter((i) => i.deals.some((bd) => deals.find((d) => d.bid_id === bd)?.sector === sec)).map((i) => i.insight_id)
+    }
   })
+
+  const accountsOut: Account[] = b.accounts.map((a) => ({
+    slug: slug(a.name),
+    name: a.name,
+    sector: a.sector,
+    strategic: a.strategic,
+    win_reasons: a.win_reasons ?? [],
+    loss_reasons: a.loss_reasons ?? []
+  }))
+
+  const peopleOut: Person[] = b.people.map((p) => ({
+    slug: slug(p.name),
+    name: p.name,
+    role: p.role,
+    account: p.account,
+    stance_trail: p.stance_trail ?? [],
+    commitments: (p.commitments ?? []).map(toCommitment)
+  }))
+
+  // Newest first — a feed reads top-down by recency, same convention as an inbox.
+  const meetingsFeed: MeetingFeedRow[] = [...(b.meetings ?? [])]
+    .sort((a, b2) => (b2.date || '').localeCompare(a.date || ''))
+    .map((m) => ({
+      slug: slug(m.source_file),
+      title24: m.title24,
+      date: (m.date || '').slice(0, 10),
+      account: m.account?.name ?? null,
+      sentiment: m.sentiment,
+      topics: m.topics
+    }))
+
+  const ingestErrors: IngestError[] = Object.entries(b.index.ingested ?? {})
+    .filter(([, v]) => !v.ok)
+    .map(([file, v]) => ({ file, error: v.error ?? '' }))
+
+  const status: StatusCounts = {
+    meetings: Object.values(b.index.ingested ?? {}).filter((v) => v.ok).length,
+    people: b.people.length,
+    accounts: b.accounts.length,
+    deals: b.deals.length,
+    nodes: b.graph.nodes.length,
+    edges: b.graph.edges.length
+  }
 
   return {
     meta: {
@@ -354,6 +509,12 @@ export function brainToDashboard(b: BrainRead): DashboardData {
     account_graph: { nodes, edges },
     account_summaries: accountSummaries,
     sector_summaries: sectorSummaries,
-    going_cold: cold.rail
+    going_cold: cold.rail,
+    accounts: accountsOut,
+    people: peopleOut,
+    meetings_feed: meetingsFeed,
+    warnings: b.index.warnings,
+    ingest_errors: ingestErrors,
+    status
   }
 }
