@@ -135,6 +135,9 @@ const api = {
   // Commitment settlement: mark a ledger promise kept/broken (or reopen). Deal = display name.
   brainCommitmentSettle: (deal: string, text: string, status: 'open' | 'kept' | 'broken'): Promise<{ ok: boolean; error?: string }> =>
     ipcRenderer.invoke(IPC.brainCommitmentSettle, { deal, text, status }),
+  // Deal outcome: mark a deal open/won/lost (or reopen). dealSlug = display name, slugified in main.
+  brainSetDealOutcome: (dealSlug: string, outcome: 'open' | 'won' | 'lost'): Promise<{ ok: boolean; error?: string }> =>
+    ipcRenderer.invoke(IPC.brainSetDealOutcome, { dealSlug, outcome }),
   setListeningState: (on: boolean): Promise<void> => ipcRenderer.invoke(IPC.listeningState, on),
   asrBundled: (): Promise<boolean> => ipcRenderer.invoke(IPC.asrBundled),
 

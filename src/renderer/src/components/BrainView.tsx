@@ -197,7 +197,13 @@ function SectorBars({ sectors }: { sectors: { sector: string; n: number }[] }): 
   )
 }
 
-function DealRow({ deal }: { deal: DealEntity }): JSX.Element {
+function DealRow({
+  deal,
+  onSetOutcome
+}: {
+  deal: DealEntity
+  onSetOutcome: (deal: DealEntity, outcome: 'open' | 'won' | 'lost') => void
+}): JSX.Element {
   const band = deal.win_likelihood_band ? BAND_META[deal.win_likelihood_band] : null
   const vel = VELOCITY_META[deal.velocity.signal]
   const last = deal.meetings[deal.meetings.length - 1]
@@ -212,11 +218,21 @@ function DealRow({ deal }: { deal: DealEntity }): JSX.Element {
           {deal.account && <span className="font-normal text-[color:var(--color-ink-3)]"> · {deal.account}</span>}
         </div>
         {closed ? (
-          <Chip
-            label={deal.outcome === 'won' ? 'Won' : 'Lost'}
-            color={deal.outcome === 'won' ? 'var(--color-success)' : 'var(--color-danger)'}
-            Icon={deal.outcome === 'won' ? TrendingUp : AlertTriangle}
-          />
+          <>
+            <Chip
+              label={deal.outcome === 'won' ? 'Won' : 'Lost'}
+              color={deal.outcome === 'won' ? 'var(--color-success)' : 'var(--color-danger)'}
+              Icon={deal.outcome === 'won' ? TrendingUp : AlertTriangle}
+            />
+            {/* Human closes the loop, human can reopen it — mirrors the ledger's kept/broken flow. */}
+            <button
+              type="button"
+              onClick={() => onSetOutcome(deal, 'open')}
+              className="no-drag focus-ring shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-semibold text-[color:var(--color-ink-3)] hover:bg-white/10 hover:text-[color:var(--color-ink)]"
+            >
+              Reopen
+            </button>
+          </>
         ) : (
           <>
             {band ? (
@@ -225,6 +241,23 @@ function DealRow({ deal }: { deal: DealEntity }): JSX.Element {
               <Chip label="No read" color="var(--color-ink-3)" Icon={HelpCircle} />
             )}
             <Chip label={vel.label} color={vel.color} Icon={vel.Icon} title={deal.velocity.evidence || undefined} />
+            {/* Outcome — never set by the LLM. A human marking a deal won/lost is the only writer. */}
+            <span className="flex shrink-0 items-center gap-0.5">
+              <button
+                type="button"
+                onClick={() => onSetOutcome(deal, 'won')}
+                className="no-drag focus-ring rounded-full px-1.5 py-0.5 text-[10px] font-semibold text-[color:var(--color-ink-3)] hover:bg-white/10 hover:text-[var(--color-success)]"
+              >
+                Won
+              </button>
+              <button
+                type="button"
+                onClick={() => onSetOutcome(deal, 'lost')}
+                className="no-drag focus-ring rounded-full px-1.5 py-0.5 text-[10px] font-semibold text-[color:var(--color-ink-3)] hover:bg-white/10 hover:text-[var(--color-danger)]"
+              >
+                Lost
+              </button>
+            </span>
           </>
         )}
       </div>
@@ -290,6 +323,33 @@ export function BrainView({ onBack }: { onBack: () => void }): JSX.Element {
       }
     },
     [refresh]
+  )
+
+  // Mark a deal open/won/lost — human-only action; the LLM never sets outcome. Optimistic: the row
+  // flips the instant the write is confirmed, no round trip back through brainRead needed.
+  const handleSetDealOutcome = useCallback(
+    async (deal: DealEntity, outcome: 'open' | 'won' | 'lost'): Promise<void> => {
+      try {
+        const r = await window.toto.brainSetDealOutcome(deal.name, outcome)
+        if (r.ok) {
+          setData((prev) =>
+            prev
+              ? {
+                  ...prev,
+                  deals: prev.deals.map((d) =>
+                    d.name === deal.name && d.account === deal.account ? { ...d, outcome } : d
+                  )
+                }
+              : prev
+          )
+        } else {
+          setError(r.error ?? 'Could not update the deal outcome.')
+        }
+      } catch (e) {
+        setError(e instanceof Error ? e.message : String(e))
+      }
+    },
+    []
   )
 
   // While a backfill is running, poll so the dashboard fills in live as extractions land.
@@ -700,7 +760,7 @@ export function BrainView({ onBack }: { onBack: () => void }): JSX.Element {
               <SectionTitle>Opportunities — win read &amp; momentum</SectionTitle>
               <div className="flex flex-col gap-1.5">
                 {deals.map((d) => (
-                  <DealRow key={d.name + d.account} deal={d} />
+                  <DealRow key={d.name + d.account} deal={d} onSetOutcome={handleSetDealOutcome} />
                 ))}
               </div>
             </div>

@@ -104,6 +104,23 @@ export const readDeal = (s: Settings, slug: string): DealEntity | null =>
 export const writeDeal = (s: Settings, slug: string, v: DealEntity): Promise<void> =>
   writeJson(s, join('entities', 'deal', `${slug}.json`), v)
 
+/**
+ * Set a deal's outcome (open/won/lost) — the human closes the loop the LLM never may (see the
+ * DealEntitySchema.outcome doc comment in shared/brain.ts). Returns the updated entity, or null when
+ * the slug doesn't match any deal on disk (deleted, mistyped, or never ingested).
+ */
+export async function setDealOutcome(
+  s: Settings,
+  dealSlug: string,
+  outcome: DealEntity['outcome']
+): Promise<DealEntity | null> {
+  const deal = readDeal(s, dealSlug)
+  if (!deal) return null
+  deal.outcome = outcome
+  await writeDeal(s, dealSlug, deal)
+  return deal
+}
+
 /** List entity slugs of a kind (file basenames sans .json). */
 export function listEntities(s: Settings, kind: 'person' | 'account' | 'deal'): string[] {
   const dir = join(brainDir(s), 'entities', kind)
