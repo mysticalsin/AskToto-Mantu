@@ -13,12 +13,53 @@
 // it reads electron-builder.yml as text and string/regex-checks it, so it needs no YAML parser.
 //
 // Self-test locally: `node scripts/check-release.mjs`
+//
+// Optional artifact-size gate: GitHub hard-caps a single release asset at 2 GiB — an upload past that
+// fails only at the very last step of `electron-builder --publish always`, after the full build +
+// codesign + notarize run has already burned CI time and secrets budget. Set ASKTOTO_ARTIFACTS_DIR to
+// the directory electron-builder wrote its .dmg/.zip/.exe into (e.g. right after `electron-builder`
+// runs, before the publish step) to have this script also stat every such file in that directory and
+// FAIL if any is >= 1.9 GiB (a safety buffer under the 2 GiB limit), WARN if any is >= 1.7 GiB. This
+// check is opt-in and does nothing when the env var is unset — CI can wire it in when ready; it is not
+// currently invoked anywhere in package.json or .github/workflows.
 
-import { readFileSync } from 'node:fs'
+import { readFileSync, readdirSync, statSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 
 const PLACEHOLDER_TOKEN = 'REPLACE-WITH'
+const GIB = 1024 ** 3
+const ARTIFACT_FAIL_BYTES = 1.9 * GIB
+const ARTIFACT_WARN_BYTES = 1.7 * GIB
+
+/** Stat every .dmg/.zip/.exe in ASKTOTO_ARTIFACTS_DIR (when set) against the GitHub 2 GiB asset limit.
+ *  Returns false only on a genuine gate failure (oversize artifact or unreadable dir) — a false return
+ *  should make the overall script exit non-zero, same as the update-channel checks above. */
+function checkArtifactSizes() {
+  const dir = process.env.ASKTOTO_ARTIFACTS_DIR
+  if (!dir) return true
+  let entries
+  try {
+    entries = readdirSync(dir)
+  } catch (err) {
+    console.error(`[check:release] FAIL — ASKTOTO_ARTIFACTS_DIR is set to "${dir}" but it could not be read.`)
+    console.error(`[check:release] ${err?.message ?? err}`)
+    return false
+  }
+  let ok = true
+  for (const name of entries) {
+    if (!/\.(dmg|zip|exe)$/i.test(name)) continue
+    const size = statSync(join(dir, name)).size
+    const gib = (size / GIB).toFixed(2)
+    if (size >= ARTIFACT_FAIL_BYTES) {
+      console.error(`[check:release] FAIL — ${name} is ${gib} GiB, at/over the ${(ARTIFACT_FAIL_BYTES / GIB).toFixed(1)} GiB gate (GitHub's hard per-asset limit is 2 GiB).`)
+      ok = false
+    } else if (size >= ARTIFACT_WARN_BYTES) {
+      console.warn(`[check:release] WARN — ${name} is ${gib} GiB, approaching GitHub's 2 GiB per-asset limit.`)
+    }
+  }
+  return ok
+}
 
 const here = dirname(fileURLToPath(import.meta.url))
 const ymlPath = join(here, '..', 'electron-builder.yml')
@@ -58,7 +99,7 @@ if (isGithub) {
     process.exit(1)
   }
   console.log(`[check:release] OK — update channel = github releases (${owner[1]}/${repo[1]}, releaseType=release).`)
-  process.exit(0)
+  process.exit(checkArtifactSizes() ? 0 : 1)
 }
 
 if (!urlMatch) {
@@ -83,4 +124,4 @@ if (!/^https:\/\//i.test(url)) {
 }
 
 console.log(`[check:release] OK — update channel configured (publish.url = ${url}).`)
-process.exit(0)
+process.exit(checkArtifactSizes() ? 0 : 1)
