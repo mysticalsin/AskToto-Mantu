@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { TranscriptLine } from '@shared/ipc'
 import { isNonSpeechLine } from '@shared/transcript-filter'
 import { WHISPER_WORKLET_SRC } from './whisper-worklet-src'
@@ -952,5 +952,11 @@ export function useListen(
     return () => clearTimeout(t)
   }, [ensureWorker, getAsrBundled])
 
-  return { ...state, lines, start, stop, pause, resume, clear, text }
+  // Memoized so consumers (App.tsx passes this whole object around as a dependency) only see a new
+  // identity when a real piece of it changes — start/stop/pause/resume/clear/text are already
+  // useCallback-stable, so without this the returned object was a fresh literal on every render.
+  return useMemo(
+    () => ({ ...state, lines, start, stop, pause, resume, clear, text }),
+    [state, lines, start, stop, pause, resume, clear, text]
+  )
 }

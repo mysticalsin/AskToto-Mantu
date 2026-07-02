@@ -349,8 +349,19 @@ function appendIndexRow(folder: string, dateStr: string, title: string, mode: st
   }
 }
 
+// detectOneDrive() does a handful of sync fs calls (existsSync/readdirSync) and its answer can't change
+// mid-process (the OneDrive sync root doesn't move while AskToto is running) — resolveMeetingsFolder
+// calls it on every settings read, so memoize once per process rather than re-stating the same paths
+// every time.
+let _oneDriveCache: string | undefined
+
 /** Find the user's OneDrive root. Cross-platform (macOS / Windows / Linux). */
 export function detectOneDrive(): string {
+  if (_oneDriveCache !== undefined) return _oneDriveCache
+  return (_oneDriveCache = detectOneDriveUncached())
+}
+
+function detectOneDriveUncached(): string {
   // Windows: OneDrive sets env vars to its sync roots.
   if (process.platform === 'win32') {
     for (const e of [process.env.OneDriveCommercial, process.env.OneDrive, process.env.OneDriveConsumer]) {

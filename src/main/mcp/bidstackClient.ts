@@ -19,8 +19,8 @@
  *     stack traces or fetch() internals leaking to the renderer.
  */
 
-import { Client } from '@modelcontextprotocol/sdk/client/index.js'
-import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
+import type { Client } from '@modelcontextprotocol/sdk/client/index.js'
+import type { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
 import { isIPv6 } from 'node:net'
 import { mainLog } from '../logger'
 
@@ -107,24 +107,26 @@ function classifyError(e: unknown, endpointUrl: string): string {
   return raw || 'BidStack connection failed for an unknown reason.'
 }
 
-/** Build a fresh client + transport for a single call. Never reused across calls — each connect() /
- *  push is a short-lived session, matching how dust.ts creates a fresh DustAPI per stream. */
-function buildTransport(endpointUrl: string, apiKey: string): StreamableHTTPClientTransport {
-  return new StreamableHTTPClientTransport(new URL(endpointUrl), {
-    requestInit: {
-      headers: { Authorization: `Bearer ${apiKey}` }
-    }
-  })
-}
-
 async function withClient<T>(
   endpointUrl: string,
   apiKey: string,
   timeoutMs: number,
   fn: (client: Client) => Promise<T>
 ): Promise<T> {
+  // Lazy-loaded: the MCP SDK's require tree costs real time at every process boot even though most
+  // sessions never touch BidStack at all (it's an opt-in integration, not a default provider).
+  const [{ Client }, { StreamableHTTPClientTransport }] = await Promise.all([
+    import('@modelcontextprotocol/sdk/client/index.js'),
+    import('@modelcontextprotocol/sdk/client/streamableHttp.js')
+  ])
   const client = new Client({ name: 'asktoto', version: '1.0.0' }, { capabilities: {} })
-  const transport = buildTransport(endpointUrl, apiKey)
+  // Fresh client + transport for this one call — never reused across calls, matching how dust.ts
+  // creates a fresh DustAPI per stream.
+  const transport = new StreamableHTTPClientTransport(new URL(endpointUrl), {
+    requestInit: {
+      headers: { Authorization: `Bearer ${apiKey}` }
+    }
+  })
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), timeoutMs)
   try {

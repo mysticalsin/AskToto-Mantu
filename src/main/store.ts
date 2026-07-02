@@ -1,8 +1,6 @@
 import { app, safeStorage } from 'electron'
 import { readFileSync, writeFileSync, existsSync, mkdirSync, rmSync, renameSync, statSync } from 'node:fs'
 import { join } from 'node:path'
-import Anthropic from '@anthropic-ai/sdk'
-import OpenAI from 'openai'
 import {
   DEFAULT_SETTINGS,
   BaseSettingsSchema,
@@ -401,6 +399,9 @@ export async function testApiKey(provider: ProviderId, key: string): Promise<Tes
       const r = await api.getAgentConfigurations({})
       if (r.isErr()) return { ok: false, error: r.error.message }
     } else if (def.kind === 'anthropic') {
+      // Lazy-loaded: this SDK's own require tree costs real time at process boot even for the vast
+      // majority of sessions that never test/use this specific provider (see openai below, same reason).
+      const { default: Anthropic } = await import('@anthropic-ai/sdk')
       const client = new Anthropic({ apiKey: trimmed })
       await client.messages.create({
         model: def.fastModel || def.defaultModel,
@@ -417,6 +418,7 @@ export async function testApiKey(provider: ProviderId, key: string): Promise<Tes
       if (!model) {
         return { ok: false, error: 'Set a model id in Advanced first, then test.' }
       }
+      const { default: OpenAI } = await import('openai')
       const client = new OpenAI({ apiKey: trimmed, baseURL: baseURL || undefined })
       await client.chat.completions.create({
         model,

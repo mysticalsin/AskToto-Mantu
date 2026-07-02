@@ -16,6 +16,7 @@
     "build:intelligence": "cd intelligence && npm ci && npm run build",
     "predist": "node scripts/fetch-models.mjs && npm run build:intelligence",
     "dist": "electron-vite build && electron-builder --mac --publish never",
+    "dist:local": "electron-vite build && electron-builder --mac --publish never -c.directories.output=/Users/tony/AI-Brain-build/asktoto-release -c.mac.identity='TotoWhisper Dev'",
     "predist:win": "node scripts/fetch-models.mjs",
     "dist:win": "node scripts/fetch-models.mjs && npm run build:intelligence && electron-vite build && electron-builder --win --publish never",
     "dist:win:appx": "electron-vite build && electron-builder --win appx --publish never",

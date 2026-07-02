@@ -25,6 +25,7 @@ import { Spinner } from './ui'
 import { useWindowDrag } from '../lib/window-drag'
 import { modeLabel } from '@shared/ipc'
 import type { ConversationMode, CustomMode } from '@shared/ipc'
+import { formatScreenFreshness } from '@shared/perception'
 
 /** Single source of truth for toolbar icon stroke — prevents per-icon drift. */
 const ICON_STROKE = 1.85
@@ -87,6 +88,33 @@ export const ElapsedClock = memo(function ElapsedClock({
   )
 })
 
+/** Screen-capture freshness chip ("Seen 0.3s ago") — owns its own 500ms tick, same pattern as
+ *  ElapsedClock above. Previously this ticked via App-level state (setInterval + setState in App.tsx),
+ *  which re-rendered the ENTIRE App tree (including Bar's ~500-line JSX and whichever body was mounted)
+ *  every half second for as long as a screen-grounded answer was showing. Isolating the tick here means
+ *  it only ever re-renders this one chip. Renders nothing when capturedAt is null/undefined (no
+ *  screen-grounded answer active right now). */
+const ScreenFreshnessChip = memo(function ScreenFreshnessChip({
+  capturedAt
+}: {
+  capturedAt?: number | null
+}): JSX.Element | null {
+  const [, setTick] = useState(0)
+  useEffect(() => {
+    if (capturedAt == null) return
+    const iv = setInterval(() => setTick((t) => t + 1), 500)
+    return () => clearInterval(iv)
+  }, [capturedAt])
+  if (capturedAt == null) return null
+  return (
+    <span className="flex flex-none items-center gap-1 rounded-full bg-white/[0.05] px-2 py-0.5 text-[11px] text-[color:var(--color-ink-2)]">
+      <span className="h-[6px] w-[6px] rounded-full bg-[var(--color-accent)]" />
+      <Eye size={11} strokeWidth={ICON_STROKE} />
+      {formatScreenFreshness(capturedAt)}
+    </span>
+  )
+})
+
 export interface BarProps {
   value: string
   onChange: (v: string) => void
@@ -127,8 +155,9 @@ export interface BarProps {
   hasAnswer?: boolean
   /** When set, a ← button appears at the far left of the input row when an answer is open. */
   onBack?: () => void
-  /** When set, renders a small inline chip (purple dot + Eye + label) near the input. */
-  contextLabel?: string
+  /** When set (non-null), renders the screen-freshness chip (purple dot + Eye + "Seen Ns ago") near the
+   *  input — the raw capture timestamp; ScreenFreshnessChip owns formatting + its own 500ms tick. */
+  screenCapturedAt?: number | null
   /** Needed to resolve a custom mode id to its display label. */
   customModes?: CustomMode[]
   /** When listening, the right column shows a "Transcript" button calling this instead of "History". */
@@ -260,15 +289,9 @@ export const Bar = memo(function Bar(props: BarProps): JSX.Element {
             </button>
           )}
 
-          {/* Context label chip (e.g. 'Seen 0.3s ago') — real screen-capture age, ticks every 500ms
-              in App.tsx so it never reads stale. */}
-          {props.contextLabel && (
-            <span className="flex flex-none items-center gap-1 rounded-full bg-white/[0.05] px-2 py-0.5 text-[11px] text-[color:var(--color-ink-2)]">
-              <span className="h-[6px] w-[6px] rounded-full bg-[var(--color-accent)]" />
-              <Eye size={11} strokeWidth={ICON_STROKE} />
-              {props.contextLabel}
-            </span>
-          )}
+          {/* Screen-freshness chip (e.g. 'Seen 0.3s ago') — real screen-capture age; ticks itself every
+              500ms (see ScreenFreshnessChip above) so it never reads stale. */}
+          <ScreenFreshnessChip capturedAt={props.screenCapturedAt} />
 
           {/* "Heard live" chip — sibling of the screen-freshness chip above (same pill styling), driven
               directly by the real listening state (props.listening, sourced from useListen()'s live audio

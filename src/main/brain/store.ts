@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readdirSync, rmSync } from 'node:fs'
+import { existsSync, mkdirSync, readdirSync, rmSync, statSync } from 'node:fs'
 import { join, basename } from 'node:path'
 import { createHash } from 'node:crypto'
 import type { Settings } from '@shared/ipc'
@@ -58,20 +58,48 @@ function ensureDirs(settings: Settings): string {
   return root
 }
 
+// Per-file parse cache validated by (mtimeMs, size), mirroring the proven pattern in recall.ts (readCache).
+// Three independent pollers (Mantu Intelligence dashboard status, RecallView's brain badge, the full
+// brainRead dataset) hit these same index/graph/entity files every 3-10s — without this, every poll
+// re-read + decrypted + JSON.parsed + zod-validated every file from scratch. A stat() replaces that full
+// round trip when the file is unchanged; any mtime/size change (including our own writes, see writeJson
+// below) re-reads. Corrupt/absent files cache `null` too, so they stop costing repeated reads.
+const jsonCache = new Map<string, { mtimeMs: number; size: number; value: unknown }>()
+const JSON_CACHE_MAX = 2000 // safety valve — see recall.ts's identical guard
+
 function readJson<T>(settings: Settings, rel: string, parse: (v: unknown) => T): T | null {
   const p = join(brainDir(settings), rel)
-  if (!existsSync(p)) return null
+  let mtimeMs: number
+  let size: number
   try {
-    return parse(JSON.parse(readSavedFile(p)))
+    const st = statSync(p)
+    mtimeMs = st.mtimeMs
+    size = st.size
   } catch {
-    return null // corrupt/undecryptable file — callers treat as absent; ingest will rewrite it
+    jsonCache.delete(p)
+    return null
   }
+  const hit = jsonCache.get(p)
+  if (hit && hit.mtimeMs === mtimeMs && hit.size === size) return hit.value as T
+  let value: T | null
+  try {
+    value = parse(JSON.parse(readSavedFile(p)))
+  } catch {
+    value = null // corrupt/undecryptable file — callers treat as absent; ingest will rewrite it
+  }
+  if (jsonCache.size >= JSON_CACHE_MAX) jsonCache.clear()
+  jsonCache.set(p, { mtimeMs, size, value })
+  return value
 }
 
 async function writeJson(settings: Settings, rel: string, value: unknown): Promise<void> {
   ensureDirs(settings)
   const p = join(brainDir(settings), rel)
   await writeSaved(p, JSON.stringify(value, null, 2), !!settings.encryptTranscripts)
+  // Invalidate rather than pre-populate: `value` here is the pre-serialize object, not necessarily
+  // byte-identical to what a fresh parse() of the written JSON would yield (zod defaults/transforms) —
+  // and relying on mtime alone risks a same-mtime rapid write-then-read on low-resolution filesystems.
+  jsonCache.delete(p)
 }
 
 // ── Typed accessors ──────────────────────────────────────────────────────────

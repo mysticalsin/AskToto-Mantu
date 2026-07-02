@@ -501,6 +501,8 @@ input::placeholder {
   -webkit-mask-composite: xor;
   mask-composite: exclude;
   animation: cl-rainbow-spin 2.6s linear infinite;
+  /* Stepped instead of continuous — repaints ~9x/s instead of every frame; still reads as rotating. */
+  animation-timing-function: steps(24, end);
   pointer-events: none;
   z-index: 2;
 }
@@ -537,6 +539,8 @@ input::placeholder {
   background-origin: padding-box, padding-box, border-box;
   background-clip: padding-box, padding-box, border-box;
   animation: cl-rainbow-spin 2.6s linear infinite;
+  /* Stepped instead of continuous — repaints ~9x/s instead of every frame; still reads as rotating. */
+  animation-timing-function: steps(24, end);
 }
 
 /* "Hidden from screen sharing" (stealth ON) indicator — a calm, slow rainbow contour so the user can
@@ -567,15 +571,12 @@ input::placeholder {
     linear-gradient(#000 0 0);
   -webkit-mask-composite: xor;
   mask-composite: exclude;
-  animation: cl-rainbow-spin 5s linear infinite;
+  /* Static, not spinning — an always-visible idle indicator has no business burning a compositor
+     animation for the whole time stealth is on. (This is exactly the look prefers-reduced-motion
+     used to fall back to; it's now the default for everyone.) */
   pointer-events: none;
   z-index: 2;
   opacity: 0.92;
-}
-@media (prefers-reduced-motion: reduce) {
-  .aw-hidden-rainbow::before {
-    animation: none !important; /* static rainbow contour — no rotation */
-  }
 }
 
 /* ── Ask widget — Cluely-style two-row overlay, Mantu purple glass ──────────────────────────

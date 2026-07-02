@@ -8,6 +8,13 @@ copyright: © 2026 Mantu · AskToto — built by Tony Walteur
 # Code signing is env-driven (see SIGNING.md):
 #   mac/win:  CSC_LINK (path/base64 of the .p12) + CSC_KEY_PASSWORD
 #   notarize: APPLE_ID + APPLE_APP_SPECIFIC_PASSWORD + APPLE_TEAM_ID
+# NOTE (local dev builds only): do NOT add `mac.identity` or override `directories.output` here.
+#   - identity: this yml is shared with CI (build.yml/release.yml), which has no signing cert —
+#     pinning an identity name that doesn't exist in CI's keychain would hard-fail electron-builder there.
+#   - directories.output: CI's build.yml uploads artifacts from `release/*` (see .github/workflows/build.yml);
+#     changing the default here would silently break that upload step on every PR.
+#   Local rebuilds that need keychain-safe signing + an OneDrive-free output dir should use
+#   `npm run dist:local`, which passes both as one-off `-c` CLI overrides instead (see package.json).
 directories:
   output: release
   buildResources: build
