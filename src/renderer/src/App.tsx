@@ -121,6 +121,11 @@ export function App(): JSX.Element {
   useEffect(() => {
     void import('./components/Answer')
     void import('./components/Copilot')
+    // Also warm the two toolbar-button views (Settings is a large chunk) so their first click commits its
+    // transition on the next tick instead of after a cold parse — otherwise that load beat reads as the
+    // button "not responding". Deeper views (Review/Brain/Agenda) stay lazy until actually navigated to.
+    void import('./components/Settings')
+    void import('./components/RecallView')
   }, [])
 
   const [collapsed, setCollapsed] = useState(false)
