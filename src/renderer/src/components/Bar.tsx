@@ -326,7 +326,12 @@ export const Bar = memo(function Bar(props: BarProps): JSX.Element {
               type="button"
               title="Stop"
               aria-label="Stop"
-              onClick={props.onStop}
+              // While a meeting is live this is the big, obvious control in the bar — it must end the
+              // meeting (same path as the toolbar's rec-dot / Square Stop), not just cancel whatever
+              // answer happens to be streaming. Cancelling-only here silently ate the click: the stream
+              // stopped, the button reverted to "Ask", and the meeting kept running with no summary.
+              // Outside a meeting this button has no "end" concept, so it keeps the plain stream-cancel.
+              onClick={props.listening ? props.onToggleListen : props.onStop}
               className="no-drag focus-ring grid h-[38px] w-[46px] place-items-center rounded-[10px] border border-[var(--color-danger)]/30 bg-[var(--color-danger-soft)] text-[color:var(--color-danger)] hover:bg-[var(--color-danger)]/20"
             >
               <X size={18} />
