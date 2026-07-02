@@ -113,6 +113,9 @@ export interface BarProps {
   startedAt: number
   panelOpen: boolean
   onTogglePanel: () => void
+  /** False when there's no answer/history/settings content behind the bar for the chevron to reveal —
+   *  disables it instead of leaving a click that visibly does nothing. */
+  canTogglePanel: boolean
   focusSignal: number
   /** Active conversation mode. The grid icon opens an in-bar popover (ModePicker) to switch directly. */
   mode: ConversationMode
@@ -523,13 +526,20 @@ export const Bar = memo(function Bar(props: BarProps): JSX.Element {
             <IconTool title="Minimize to a small pill" onClick={props.onMinimize}>
               <Minimize2 size={17} strokeWidth={ICON_STROKE} />
             </IconTool>
-            {/* Collapse-chevron: plain ghost, not aw-fill. Submit is the only accent-filled control. */}
+            {/* Collapse-chevron: plain ghost, not aw-fill. Submit is the only accent-filled control.
+                Disabled (not hidden, so the toolbar doesn't jump) when there's nothing behind the bar
+                for it to reveal — e.g. idle with no answer/history/settings open. */}
             <button
               type="button"
-              title={props.panelOpen ? 'Collapse' : 'Expand'}
+              title={!props.canTogglePanel ? 'Nothing to expand yet' : props.panelOpen ? 'Collapse' : 'Expand'}
               aria-label={props.panelOpen ? 'Collapse' : 'Expand'}
+              aria-disabled={!props.canTogglePanel}
+              disabled={!props.canTogglePanel}
               onClick={props.onTogglePanel}
-              className="no-drag focus-ring grid h-[32px] w-[36px] place-items-center rounded-[10px] text-[color:var(--color-ink-3)] transition-colors duration-[var(--duration-hover)] hover:text-[color:var(--color-ink)]"
+              className={[
+                'no-drag focus-ring grid h-[32px] w-[36px] place-items-center rounded-[10px] text-[color:var(--color-ink-3)] transition-colors duration-[var(--duration-hover)]',
+                props.canTogglePanel ? 'hover:text-[color:var(--color-ink)]' : 'cursor-not-allowed opacity-40'
+              ].join(' ')}
             >
               {props.panelOpen ? <ChevronUp size={16} strokeWidth={ICON_STROKE} /> : <ChevronDown size={16} strokeWidth={ICON_STROKE} />}
             </button>

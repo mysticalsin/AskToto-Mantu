@@ -1370,6 +1370,10 @@ export function App(): JSX.Element {
   else if (DEMO === 'history') body = <RecallView onOpenFolder={() => {}} />
 
   const panelOpen = (body != null && !collapsed) || DEMO != null
+  // The collapse-chevron only has something to do when there's actual content behind it. Idle (no
+  // answer, no history/settings/review open) means toggling `collapsed` flips a bit nothing reads —
+  // a click that visibly does nothing reads as a broken button, so disable it instead.
+  const canTogglePanel = body != null || DEMO != null
   const answerView = view === 'answer' || view === 'copilot' || DEMO === 'answer' || DEMO === 'copilot'
   // Answer / live-copilot render INSIDE the expanded bar (one surface: big input → body → toolbar at the
   // bottom). Only the full views (settings / history / review / agenda) render as a panel below the bar.
@@ -1512,6 +1516,7 @@ export function App(): JSX.Element {
             startedAt={meetingStartRef.current}
             panelOpen={panelOpen}
             onTogglePanel={onTogglePanel}
+            canTogglePanel={canTogglePanel}
             focusSignal={focusSignal}
           />
           {/* Quick actions render as their own row UNDER the whole bar (including its toolbar), only
