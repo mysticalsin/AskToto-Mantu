@@ -333,6 +333,10 @@ export function BrainView({ onBack }: { onBack: () => void }): JSX.Element {
   // account has enough history to compare windows. Stamp the real clock once (the analysis is pure).
   const silence = useMemo(() => computeSilence(data?.meetings ?? [], Date.now()).slice(0, 6), [data])
 
+  // Mars week: the weekly-report skeleton (meetings, first contacts, won/lost, follow-ups, at-risk)
+  // over the last 7 days — the dashboard section behind the header's copy button.
+  const mars = useMemo(() => buildMarsWeek(data?.meetings ?? [], data?.deals ?? [], Date.now()), [data])
+
   const ingested = status?.meetings ?? 0
   const notIngested = Math.max(0, meetings.length - ingested)
   const bf = status?.backfill
@@ -358,25 +362,6 @@ export function BrainView({ onBack }: { onBack: () => void }): JSX.Element {
             Your meeting knowledge, compounding — grounded in transcripts, never invented.
           </div>
         </div>
-        {/* Mars week draft — the weekly report skeleton (meetings, new accounts, won/lost, follow-ups),
-            assembled from the last 7 days of the brain and copied as paste-ready markdown. */}
-        {(data?.meetings?.length ?? 0) > 0 && (
-          <button
-            type="button"
-            onClick={() => {
-              const md = renderMarsMarkdown(buildMarsWeek(data?.meetings ?? [], data?.deals ?? [], Date.now()))
-              void navigator.clipboard.writeText(md).then(() => {
-                setMarsCopied(true)
-                setTimeout(() => setMarsCopied(false), 2000)
-              })
-            }}
-            title="Copy this week's Mars draft (meetings, new accounts, won/lost, open follow-ups)"
-            className="no-drag focus-ring flex h-7 shrink-0 items-center gap-1.5 rounded-lg px-2 text-[11px] font-semibold text-[color:var(--color-ink-3)] hover:text-[color:var(--color-ink)]"
-          >
-            {marsCopied ? <Check size={12} className="text-[var(--color-success)]" /> : <ClipboardList size={12} />}
-            {marsCopied ? 'Copied' : 'Mars week'}
-          </button>
-        )}
         <button
           type="button"
           onClick={() => void refresh()}
@@ -503,6 +488,91 @@ export function BrainView({ onBack }: { onBack: () => void }): JSX.Element {
                     </div>
                   )
                 })}
+              </div>
+            </div>
+          )}
+
+          {/* MARS WEEK — the weekly-report section: this week's facts, ready to file. */}
+          {mars.meetings.length > 0 && (
+            <div className="rounded-xl border border-[var(--color-hair-soft)] bg-white/[0.02] px-3 py-2.5">
+              <div className="mb-1.5 flex items-center justify-between">
+                <SectionTitle>
+                  <ClipboardList size={11} className="mr-1 inline" />
+                  Mars week — {mars.weekStart} → {mars.weekEnd}
+                </SectionTitle>
+                <button
+                  type="button"
+                  onClick={() => {
+                    void navigator.clipboard.writeText(renderMarsMarkdown(mars)).then(() => {
+                      setMarsCopied(true)
+                      setTimeout(() => setMarsCopied(false), 2000)
+                    })
+                  }}
+                  title="Copy the full Mars draft as markdown"
+                  className="no-drag focus-ring flex items-center gap-1 rounded-lg px-1.5 py-0.5 text-[10px] font-semibold text-[color:var(--color-ink-3)] hover:text-[color:var(--color-ink)]"
+                >
+                  {marsCopied ? <Check size={11} className="text-[var(--color-success)]" /> : <ClipboardList size={11} />}
+                  {marsCopied ? 'Copied' : 'Copy draft'}
+                </button>
+              </div>
+              <div className="mb-2 grid grid-cols-4 gap-1.5 text-center">
+                {(
+                  [
+                    ['Meetings', mars.meetings.length],
+                    ['New accounts', mars.newAccounts.length],
+                    ['Won', mars.won.length],
+                    ['Lost', mars.lost.length]
+                  ] as const
+                ).map(([label, n]) => (
+                  <div key={label} className="rounded-lg bg-white/[0.03] px-1.5 py-1">
+                    <div className="text-[15px] font-semibold text-[color:var(--color-ink)]">{n}</div>
+                    <div className="text-[9px] uppercase tracking-wide text-[color:var(--color-ink-3)]">{label}</div>
+                  </div>
+                ))}
+              </div>
+              <div className="flex flex-col gap-1">
+                {mars.meetings.slice(0, 6).map((m) => (
+                  <div key={m.date + m.title} className="flex items-center gap-2 text-[12px]">
+                    <span className="shrink-0 text-[10px] tabular-nums text-[color:var(--color-ink-3)]">{m.date.slice(5)}</span>
+                    <span className="min-w-0 flex-1 truncate text-[color:var(--color-ink-2)]">
+                      <span className="text-[color:var(--color-ink)]">{m.title}</span>
+                      {m.account && <span className="text-[color:var(--color-ink-3)]"> · {m.account}</span>}
+                    </span>
+                    {m.firstContact && (
+                      <span
+                        className="shrink-0 rounded-full px-1.5 py-0.5 text-[9px] font-semibold"
+                        style={{ color: 'var(--color-accent-2)', background: 'rgba(255,255,255,0.05)' }}
+                      >
+                        First contact
+                      </span>
+                    )}
+                    {m.band && (
+                      <span className="shrink-0 text-[10px] text-[color:var(--color-ink-3)]">{m.band}</span>
+                    )}
+                  </div>
+                ))}
+                {mars.meetings.length > 6 && (
+                  <div className="text-[10px] text-[color:var(--color-ink-3)]">
+                    +{mars.meetings.length - 6} more in the copied draft
+                  </div>
+                )}
+              </div>
+              {(mars.openFollowups.length > 0 || mars.atRisk.length > 0) && (
+                <div className="mt-1.5 flex flex-wrap gap-1 text-[10px] text-[color:var(--color-ink-3)]">
+                  {mars.openFollowups.length > 0 && (
+                    <span className="rounded px-1.5 py-0.5" style={{ background: 'rgba(255,255,255,0.04)' }}>
+                      {mars.openFollowups.length} open follow-up{mars.openFollowups.length === 1 ? '' : 's'}
+                    </span>
+                  )}
+                  {mars.atRisk.length > 0 && (
+                    <span className="rounded px-1.5 py-0.5" style={{ background: 'rgba(255,255,255,0.04)', color: MIXED_COLOR }}>
+                      {mars.atRisk.length} at risk
+                    </span>
+                  )}
+                </div>
+              )}
+              <div className="mt-1.5 text-[10px] text-[color:var(--color-ink-3)]">
+                Facts from recorded meetings — the Mars bucket (prospection / cold call / QM) is yours to confirm.
               </div>
             </div>
           )}
