@@ -279,5 +279,6 @@ Hard rules:
 - win_likelihood_band is a qualitative judgement with band_evidence citing why — never output probabilities.
 - velocity: "hard-calendar-gate" only for a concrete date/meeting commitment (quote it); vague intent is "soft-organizational-gate"; otherwise "no-hard-date-found".
 - commitments: only promises actually SPOKEN and owned ("I'll send the deck", "we'll intro you to Claire", "you'll have the numbers Friday"). "you" = the app's user, "them" = the other side generically, a name when the speaker is clear. Aspirations ("we should...") and process talk are NOT commitments. Quote the line whenever possible.
+- A "## Debrief (off the record)" section, when present, is the user's own post-meeting gut-read (what was NOT said aloud). Use it for signals, missed_signals, and sentiment — always tagged INFERRED, never quoted as if spoken, and never a source of commitments.
 - feedback / missed_signals confidence: EXTRACTED only when you can quote the exact moment; a judgement without a quotable anchor is INFERRED; a stretch is AMBIGUOUS. Differentiate honestly — do not tag everything the same.
 - Keep every string concise. Reply with the JSON object only.`

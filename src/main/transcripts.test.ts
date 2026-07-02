@@ -11,7 +11,9 @@ import {
   parseRecapMarkdown,
   recapMarkdownToHtml,
   saveDraftTranscript,
-  clearDraftTranscript
+  clearDraftTranscript,
+  appendDebrief,
+  DEBRIEF_HEADING
 } from './transcripts'
 import type { SaveMeeting, Settings } from '@shared/ipc'
 
@@ -281,6 +283,81 @@ describe('transcripts', () => {
 
 // Tony reported "if AskToto crashes mid-meeting the whole transcript is gone" — this exercises the
 // crash-recovery autosave's real file-IO path end to end against a temp folder.
+describe('appendDebrief (90-second off-record layer)', () => {
+  let folder: string
+  let settings: Settings
+
+  beforeEach(() => {
+    folder = mkdtempSync(join(tmpdir(), 'asktoto-debrief-test-'))
+    settings = { ...baseSettings(), meetingsFolder: folder }
+  })
+  afterEach(() => rmSync(folder, { recursive: true, force: true }))
+
+  const saved = async (): Promise<string> =>
+    saveMeeting(settings, {
+      title: 'Pricing defense',
+      mode: 'meeting',
+      startedAt: 1_700_000_000_000,
+      lines: [{ speaker: 'them', text: 'the price is high', t: 1_700_000_000_000 }],
+      recap: ''
+    })
+
+  it('appends the debrief as its own section in the saved meeting', async () => {
+    const file = await saved()
+    const r = await appendDebrief(settings, file.split('/').pop()!, 'CFO seemed checked out; champion did the selling for us.')
+    expect(r.ok).toBe(true)
+    const md = readSavedFile(file)
+    expect(md).toContain(DEBRIEF_HEADING)
+    expect(md).toContain('CFO seemed checked out')
+    expect(md.indexOf('## Full transcript')).toBeLessThan(md.indexOf(DEBRIEF_HEADING)) // appended after
+  })
+
+  it('a second save replaces the debrief instead of stacking copies', async () => {
+    const file = await saved()
+    const name = file.split('/').pop()!
+    await appendDebrief(settings, name, 'first read')
+    await appendDebrief(settings, name, 'second, better read')
+    const md = readSavedFile(file)
+    expect(md).not.toContain('first read')
+    expect(md).toContain('second, better read')
+    expect(md.match(new RegExp(DEBRIEF_HEADING.replace(/[()]/g, '\\$&'), 'g'))).toHaveLength(1)
+  })
+
+  it('refuses missing files and non-transcript files, and stays inside the meetings folder', async () => {
+    expect((await appendDebrief(settings, 'nope.md', 'x')).ok).toBe(false)
+    writeFileSync(join(folder, 'random.md'), '---\ntype: note\n---\nhello')
+    expect((await appendDebrief(settings, 'random.md', 'x')).ok).toBe(false)
+    const file = await saved()
+    // path traversal collapses to basename → still resolves to the real meeting inside the folder
+    const r = await appendDebrief(settings, `../../${file.split('/').pop()!}`, 'gut read')
+    expect(r.ok).toBe(true)
+    expect(readSavedFile(file)).toContain('gut read')
+  })
+
+  it('round-trips through at-rest encryption', async () => {
+    vi.spyOn(safeStorage, 'encryptString').mockImplementation((v: string) =>
+      Buffer.from('B64:' + Buffer.from(v, 'utf8').toString('base64'))
+    )
+    vi.spyOn(safeStorage, 'decryptString').mockImplementation((b: Buffer) => {
+      const s = b.toString('utf8')
+      return s.startsWith('B64:') ? Buffer.from(s.slice(4), 'base64').toString('utf8') : s
+    })
+    const enc = { ...settings, encryptTranscripts: true } as Settings
+    const file = await saveMeeting(enc, {
+      title: 'Secret sync',
+      mode: 'meeting',
+      startedAt: 1_700_000_000_000,
+      lines: [{ speaker: 'them', text: 'hello', t: 1_700_000_000_000 }],
+      recap: ''
+    })
+    const r = await appendDebrief(enc, file.split('/').pop()!, 'OFF-RECORD-HUNCH')
+    expect(r.ok).toBe(true)
+    expect(readFileSync(file).toString('utf8')).not.toContain('OFF-RECORD-HUNCH') // encrypted on disk
+    expect(readSavedFile(file)).toContain('OFF-RECORD-HUNCH')
+    vi.restoreAllMocks()
+  })
+})
+
 describe('saveDraftTranscript / clearDraftTranscript (crash-recovery autosave)', () => {
   let folder: string
   let settings: Settings
