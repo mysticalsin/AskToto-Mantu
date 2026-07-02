@@ -517,6 +517,20 @@ export function RecallView({
                       </div>
                     )}
 
+                    {/* Topic chips — up to 3, derived from the recap's "## Tags" section (see saveMeeting). */}
+                    {!!m.topics?.length && (
+                      <div className="flex flex-wrap gap-1 px-9 pb-1.5">
+                        {m.topics.slice(0, 3).map((t, i) => (
+                          <span
+                            key={`${t}-${i}`}
+                            className="rounded-full bg-[var(--color-accent-soft)] px-2 py-0.5 text-[10px] font-medium text-[var(--color-accent)]"
+                          >
+                            {t}
+                          </span>
+                        ))}
+                      </div>
+                    )}
+
                     {/* Connections panel */}
                     {open === m.file && (
                       <div className="border-t border-[var(--color-hair-soft)]">

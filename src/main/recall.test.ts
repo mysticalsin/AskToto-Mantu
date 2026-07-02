@@ -74,6 +74,22 @@ describe('recall — deleteMeeting', () => {
     expect(second.ok).toBe(false)
     expect(second.error).toMatch(/not found/i)
   })
+
+  it('surfaces the recap-derived topics from frontmatter in listMeetings', async () => {
+    await saveMeeting(testSettings, {
+      ...meeting,
+      recap: '## Title:\nRoadmap lock-in\n\n## Tags:\nroadmap, Q3, budget\n\n## Overview:\nx'
+    })
+    const list = await listMeetings()
+    expect(list[0].title).toBe('Roadmap lock-in')
+    expect(list[0].topics).toEqual(['roadmap', 'Q3', 'budget'])
+  })
+
+  it('omits topics when the meeting has no recap tags', async () => {
+    await saveMeeting(testSettings, meeting)
+    const list = await listMeetings()
+    expect(list[0].topics).toBeUndefined()
+  })
 })
 
 describe('recall — deleteAllMeetings', () => {

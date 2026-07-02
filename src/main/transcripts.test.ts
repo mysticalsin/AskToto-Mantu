@@ -206,6 +206,77 @@ describe('transcripts', () => {
     expect(file1).not.toBe(file2)
     expect(file2).toMatch(/daily-standup-2\.md$/)
   })
+
+  // Tony's spec: main is the single source of truth for the final title — the recap's "## Title" beats
+  // the renderer's "first 50 chars of their first sentence" heuristic whenever a recap is present.
+  it('prefers the recap\'s "## Title" over the renderer-provided heuristic title', async () => {
+    const meeting: SaveMeeting = {
+      title: 'interview meeting', // renderer heuristic fallback
+      mode: 'interview',
+      startedAt: 1_700_000_000_000,
+      lines: [],
+      recap: '## Title:\nLATAM SAP pricing defense\n\n## Tags:\npricing, LATAM, SAP\n\n## Overview:\nx'
+    }
+    const file = await saveMeeting(settings, meeting)
+    const contents = readFileSync(file, 'utf8')
+    expect(contents).toContain('title: "LATAM SAP pricing defense"')
+    expect(contents).toContain('# LATAM SAP pricing defense')
+    expect(file).toContain('latam-sap-pricing-defense')
+    expect(contents).not.toContain('interview meeting')
+  })
+
+  it('falls back to the renderer-provided heuristic title when there is no recap yet', async () => {
+    const meeting: SaveMeeting = {
+      title: 'What do you think about the roadmap',
+      mode: 'meeting',
+      startedAt: 1_700_000_000_000,
+      lines: [],
+      recap: ''
+    }
+    const file = await saveMeeting(settings, meeting)
+    const contents = readFileSync(file, 'utf8')
+    expect(contents).toContain('title: "What do you think about the roadmap"')
+  })
+
+  it('falls back to the heuristic title when the recap has no Title section', async () => {
+    const meeting: SaveMeeting = {
+      title: 'What do you think about the roadmap',
+      mode: 'meeting',
+      startedAt: 1_700_000_000_000,
+      lines: [],
+      recap: '## Overview:\nNo title section in this recap.'
+    }
+    const file = await saveMeeting(settings, meeting)
+    const contents = readFileSync(file, 'utf8')
+    expect(contents).toContain('title: "What do you think about the roadmap"')
+  })
+
+  it('writes topics into frontmatter as a yaml-safe list when the recap has Tags', async () => {
+    const meeting: SaveMeeting = {
+      title: 'Q3 planning',
+      mode: 'meeting',
+      startedAt: 1_700_000_000_000,
+      lines: [],
+      recap: '## Title:\nQ3 roadmap planning\n\n## Tags:\npricing, "LATAM", SAP\n\n## Overview:\nx'
+    }
+    const file = await saveMeeting(settings, meeting)
+    const contents = readFileSync(file, 'utf8')
+    // Quotes are stripped at parse time so the unquoted YAML flow sequence stays clean on round-trip.
+    expect(contents).toContain('topics: [pricing, LATAM, SAP]')
+  })
+
+  it('omits the topics frontmatter line when the recap has no Tags', async () => {
+    const meeting: SaveMeeting = {
+      title: 'Q3 planning',
+      mode: 'meeting',
+      startedAt: 1_700_000_000_000,
+      lines: [],
+      recap: ''
+    }
+    const file = await saveMeeting(settings, meeting)
+    const contents = readFileSync(file, 'utf8')
+    expect(contents).not.toContain('topics:')
+  })
 })
 
 // Tony reported "if AskToto crashes mid-meeting the whole transcript is gone" — this exercises the
@@ -279,6 +350,12 @@ describe('saveDraftTranscript / clearDraftTranscript (crash-recovery autosave)',
 
 describe('parseRecapMarkdown', () => {
   const SAMPLE = [
+    '## Title:',
+    'Q3 launch budget',
+    '',
+    '## Tags:',
+    'launch, budget, Q3, roadmap',
+    '',
     '## Overview:',
     'We aligned on the Q3 launch and the budget.',
     '',
@@ -304,11 +381,86 @@ describe('parseRecapMarkdown', () => {
 
   it('splits the fixed RECAP_PROMPT sections into structured fields', () => {
     const r = parseRecapMarkdown(SAMPLE)
+    expect(r.title24).toBe('Q3 launch budget')
+    expect(r.tags).toEqual(['launch', 'budget', 'Q3', 'roadmap'])
     expect(r.overview).toBe('We aligned on the Q3 launch and the budget.')
     expect(r.topics).toEqual(['Launch timeline', 'Budget'])
     expect(r.decisions).toEqual(['Ship on Sept 1', 'Freeze scope Friday'])
     expect(r.openQuestions).toEqual(['Who owns PR?'])
     expect(r.notableQuotes).toEqual(['"Ship it."'])
+  })
+
+  describe('title24 / tags', () => {
+    it('strips trailing punctuation and caps length', () => {
+      const r = parseRecapMarkdown('## Title:\nLATAM SAP pricing defense!!!\n\n## Overview:\nx')
+      expect(r.title24).toBe('LATAM SAP pricing defense')
+    })
+
+    it('caps an overlong title to exactly 60 chars', () => {
+      const long = 'A'.repeat(80)
+      const r = parseRecapMarkdown(`## Title:\n${long}\n\n## Overview:\nx`)
+      expect(r.title24).toBe('A'.repeat(60))
+    })
+
+    it('strips the wrapping quotes/emphasis models mirror from the prompt example', () => {
+      const r = parseRecapMarkdown('## Title:\n"LATAM SAP pricing defense"\n\n## Overview:\nx')
+      expect(r.title24).toBe('LATAM SAP pricing defense')
+      const bold = parseRecapMarkdown('## Title:\n**Q3 budget lock**\n\n## Overview:\nx')
+      expect(bold.title24).toBe('Q3 budget lock')
+    })
+
+    it('strips quote/bracket junk from tags and dedupes them case-insensitively', () => {
+      const r = parseRecapMarkdown('## Tags:\npricing, Pricing, "LATAM", [SAP], pricing, budget\n\n## Overview:\nx')
+      expect(r.tags).toEqual(['pricing', 'LATAM', 'SAP', 'budget'])
+    })
+
+    it('returns empty string when the Title section is absent', () => {
+      const r = parseRecapMarkdown('## Overview:\nJust an overview, no title section.')
+      expect(r.title24).toBe('')
+    })
+
+    it('only reads the first line of the Title body', () => {
+      const r = parseRecapMarkdown('## Title:\nReal title\nExtra stray line\n\n## Overview:\nx')
+      expect(r.title24).toBe('Real title')
+    })
+
+    it('parses a comma-separated Tags line, trimmed and capped to 5', () => {
+      const r = parseRecapMarkdown('## Tags:\n one , two ,three,four,five,six \n\n## Overview:\nx')
+      expect(r.tags).toEqual(['one', 'two', 'three', 'four', 'five'])
+    })
+
+    it('tolerates the model emitting Tags as a bullet list instead of a comma line', () => {
+      const r = parseRecapMarkdown('## Tags:\n- pricing\n- LATAM\n- SAP\n\n## Overview:\nx')
+      expect(r.tags).toEqual(['pricing', 'LATAM', 'SAP'])
+    })
+
+    it('returns an empty array when the Tags section is absent', () => {
+      const r = parseRecapMarkdown('## Overview:\nNo tags here.')
+      expect(r.tags).toEqual([])
+    })
+
+    // Regression: real models emit the content INLINE on the heading line ("## Title: Renault Contract
+    // Renewal"), mirroring the prompt's own template shape. The first live run produced exactly this and
+    // title24 came back empty, so the saved file silently fell back to the first-words heuristic name.
+    it('parses inline heading content ("## Title: X" on one line), the shape real models emit', () => {
+      const md = '## Title: Renault Contract Renewal\n## Tags: Renault, procurement, contract renewal, data migration, pricing\n## Overview: A working discussion on renewing the contract.'
+      const r = parseRecapMarkdown(md)
+      expect(r.title24).toBe('Renault Contract Renewal')
+      expect(r.tags).toEqual(['Renault', 'procurement', 'contract renewal', 'data migration', 'pricing'])
+      expect(r.overview).toBe('A working discussion on renewing the contract.')
+    })
+
+    it('parses an inline final section with no trailing newline', () => {
+      const r = parseRecapMarkdown('## Overview: x\n## Tags: alpha, beta')
+      expect(r.tags).toEqual(['alpha', 'beta'])
+    })
+
+    it('does not colon-split unknown headings (a colon inside prose-style headings stays intact)', () => {
+      const r = parseRecapMarkdown('## Note: not a known section\nBody here\n## Overview:\nx')
+      expect(r.overview).toBe('x')
+      // The unknown heading keeps its whole-line key; nothing leaks into known sections.
+      expect(r.title24).toBe('')
+    })
   })
 
   it('extracts action-item owners from "(Owner)" and "— Owner", leaving plain items unowned', () => {

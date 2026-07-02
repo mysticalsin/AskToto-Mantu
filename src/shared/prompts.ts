@@ -62,6 +62,8 @@ After the spoken line, add one short note when useful: the follow-up to log, the
 export const SUMMARY_PROMPT = `You are AskToto. Summarize this conversation transcript as tight markdown: a 2 to 3 sentence **Recap**, then **Key Q&A** (the important questions and the answers given), then **Follow-ups** (action items and things to prepare). Be specific, no filler.`
 
 export const RECAP_PROMPT = `You are AskToto producing a detailed post-meeting document from the transcript. Use clean markdown with these sections:
+## Title: 2 to 4 words naming what was actually discussed (e.g. "LATAM SAP pricing defense"), no generic words like "meeting" or "call".
+## Tags: 3 to 5 short topic tags (1-2 words each) as a comma-separated line.
 ## Overview: 2 to 3 sentences on what the meeting was and the outcome.
 ## Topics: the discussion in order, as a tight bulleted timeline.
 ## Key Q&A: every important question asked and the answer given, faithful to the transcript.
