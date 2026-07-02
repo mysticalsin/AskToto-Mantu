@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, lazy, Suspense } from 'react'
+import { useCallback, useEffect, useRef, useState, lazy, Suspense, startTransition } from 'react'
 import { Bar } from './components/Bar'
 import { ControlPill } from './components/ControlPill'
 import { Panel } from './components/Panel'
@@ -99,7 +99,17 @@ export function App(): JSX.Element {
   )
 
   const [input, setInput] = useState('')
-  const [view, setView] = useState<View>('answer')
+  // Every view except the idle bar is a lazy chunk. A view switch inside a click handler renders on
+  // React 18's synchronous discrete lane — if the target chunk isn't loaded yet the component
+  // suspends DURING sync input and React throws #426 ("A component suspended while responding to
+  // synchronous input"), crashing to the error boundary ("AskToto hit a snag") instead of showing
+  // the Suspense fallback. Reproduced physically on first "Start listening" (cold Copilot chunk).
+  // The documented fix: mark view switches as transitions — the old view stays up for the few ms the
+  // chunk needs, then the new one mounts. setView keeps its identity via the useCallback wrapper.
+  const [view, setViewRaw] = useState<View>('answer')
+  const setView = useCallback((v: View | ((prev: View) => View)): void => {
+    startTransition(() => setViewRaw(v))
+  }, [])
   const [collapsed, setCollapsed] = useState(false)
   const [minimized, setMinimized] = useState(false) // collapsed to the floating control mini-pill
   const [capturing, setCapturing] = useState(false)
