@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { mkdtempSync, rmSync, readFileSync } from 'node:fs'
+import { mkdtempSync, rmSync, readFileSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import type { Settings } from '@shared/ipc'
@@ -15,7 +15,8 @@ import {
   writeDeal,
   readIndex,
   writeIndex,
-  listEntities
+  listEntities,
+  purgeBrain
 } from './store'
 
 vi.mock('electron')
@@ -157,6 +158,22 @@ describe('brain', () => {
     const onDisk = readFileSync(join(brainDir(s), 'index.json'), 'utf8')
     expect(onDisk).toContain('"m1.md"') // plaintext when encryptTranscripts is falsy
     expect(readIndex(s).ingested['m1.md'].ok).toBe(true)
+  })
+
+  it('purgeBrain erases the whole .brain store — entities, graph, and index (delete-all-data)', async () => {
+    await mergeExtraction(s, sampleExtraction(), { file: 'm1.md', date: '2026-07-01', title: 't' })
+    expect(existsSync(brainDir(s))).toBe(true)
+    expect(listEntities(s, 'person').length).toBeGreaterThan(0)
+
+    const r = purgeBrain(s)
+    expect(r.ok).toBe(true)
+    expect(existsSync(brainDir(s))).toBe(false) // nothing left on disk — no lingering quotes/entities
+    expect(listEntities(s, 'person')).toHaveLength(0)
+  })
+
+  it('purgeBrain is a no-op that succeeds when no brain has been built yet', () => {
+    expect(existsSync(brainDir(s))).toBe(false)
+    expect(purgeBrain(s).ok).toBe(true)
   })
 
   it('store encrypts brain files at rest when encryptTranscripts is on', async () => {

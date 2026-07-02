@@ -59,7 +59,8 @@ import {
   readPerson as readBrainPerson,
   readAccount as readBrainAccount,
   readDeal as readBrainDeal,
-  listEntities as listBrainEntities
+  listEntities as listBrainEntities,
+  purgeBrain
 } from './brain/store'
 import { buildSystem } from './personas'
 import { initLogging, mainLog, auditLog } from './logger'
@@ -1023,8 +1024,14 @@ function registerIpc(): void {
     const choice = win ? dialog.showMessageBoxSync(win, dialogOpts) : dialog.showMessageBoxSync(dialogOpts)
     if (choice !== 0) return { ok: false, error: 'cancelled' }
     const result = await deleteAllMeetings()
-    purgeGraphArtifacts()
-    auditLog('transcript.deleted', { bulk: true, deleted: result.deleted, failed: result.failed.length })
+    purgeGraphArtifacts() // legacy userData/graph artifacts
+    const brainPurge = purgeBrain(getSettings()) // the `.brain/` knowledge store — entities, quotes, graph
+    auditLog('transcript.deleted', {
+      bulk: true,
+      deleted: result.deleted,
+      failed: result.failed.length,
+      brainPurged: brainPurge.ok
+    })
     return result
   })
 
