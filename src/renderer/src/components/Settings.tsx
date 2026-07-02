@@ -366,7 +366,6 @@ function AiSection({
   const [adv, setAdv] = useState(false)
   const [filter, setFilter] = useState('')
   const skipClearRef = useRef(false) // don't wipe a freshly-pasted key when detection switches provider
-  const model = settings.providerModels[provider] ?? def.defaultModel
   const baseModelName = resolveModelTier(provider, settings.providerModels, settings.providerModelsThinking, 'base')
   const thinkModelName = resolveModelTier(provider, settings.providerModels, settings.providerModelsThinking, 'think')
   const keyInputId = useId()
@@ -640,7 +639,7 @@ function AiSection({
                 <input
                   id={modelInputId}
                   list={`m-${provider}`}
-                  value={model}
+                  value={baseModelName}
                   disabled={provider === 'anthropic' || settings.managedKeys.includes('providerModels')}
                   onChange={(e) =>
                     patch({ providerModels: { ...settings.providerModels, [provider]: e.target.value } })
