@@ -503,14 +503,23 @@ function prewarmCapture(): void {
   })
 }
 
+/** Clamp a single axis (pos/size) into a work-area span, without inverting when the window is bigger
+ *  than the display. Math.min(Math.max(pos, areaPos), areaPos + areaSpan - size) assumes
+ *  areaPos + areaSpan - size >= areaPos; when size > areaSpan that upper bound falls below areaPos and
+ *  min/max invert, pushing the window partially off-screen instead of pinning it. Pin to areaPos instead. */
+function clampAxis(pos: number, size: number, areaPos: number, areaSpan: number): number {
+  if (size >= areaSpan) return areaPos
+  return Math.min(Math.max(pos, areaPos), areaPos + areaSpan - size)
+}
+
 function moveBy(dx: number, dy: number): void {
   if (!win) return
   const b = win.getBounds()
   // Clamp to the matching display's work area so the bar can never be flung fully off-screen with no
   // way back (now that the whole bar is a drag handle). Keeps the entire window reachable.
   const { workArea } = screen.getDisplayMatching(b)
-  const x = Math.min(Math.max(b.x + dx, workArea.x), workArea.x + workArea.width - b.width)
-  const y = Math.min(Math.max(b.y + dy, workArea.y), workArea.y + workArea.height - b.height)
+  const x = clampAxis(b.x + dx, b.width, workArea.x, workArea.width)
+  const y = clampAxis(b.y + dy, b.height, workArea.y, workArea.height)
   win.setBounds({ ...b, x, y })
 }
 
@@ -529,8 +538,8 @@ function registerScreenListeners(): void {
     const visible =
       b.x + b.width > wa.x && b.x < wa.x + wa.width && b.y + b.height > wa.y && b.y < wa.y + wa.height
     if (visible) return // still (partly) on a real display — leave it where the user put it
-    const x = Math.min(Math.max(b.x, wa.x), wa.x + wa.width - b.width)
-    const y = Math.min(Math.max(b.y, wa.y), wa.y + wa.height - b.height)
+    const x = clampAxis(b.x, b.width, wa.x, wa.width)
+    const y = clampAxis(b.y, b.height, wa.y, wa.height)
     win.setBounds({ ...b, x, y })
   }
   screen.on('display-removed', reanchor)
@@ -1637,7 +1646,12 @@ function registerIpc(): void {
       // being hard-clipped at the window edge — see the .aw-pill / .aw-mark-glow comments in styles.css.
       currentWidth = Math.max(120, Math.min(Math.ceil(payload.width) + 10, BAR_WIDTH))
     }
-    resizeTo(payload?.height ?? BAR_HEIGHT)
+    // Same finite-number guard as width: a NaN/Infinity height from a renderer layout glitch would
+    // otherwise reach resizeTo's Math.round/min/max unclamped, poisoning them to NaN and making
+    // win.setBounds throw or leave the window in a broken size. Fall back to BAR_HEIGHT instead.
+    const height =
+      typeof payload?.height === 'number' && Number.isFinite(payload.height) ? payload.height : BAR_HEIGHT
+    resizeTo(height)
   })
   ipcMain.handle(IPC.windowMode, (e) => {
     assertMainWindow(e)
