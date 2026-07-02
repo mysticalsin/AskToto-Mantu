@@ -70,19 +70,36 @@ export function userText(req: AskStart): string {
   return req.depth === 'deeper' ? base + DEEPER_DIRECTIVE : base
 }
 
+/**
+ * Clip a transcript to the artifact's context budget, keeping the TAIL (most recent speech).
+ * Post-meeting artifacts must cover the whole meeting: the old flat 16k-char cap silently dropped
+ * everything but the last ~20 minutes, and every downstream artifact (title, tags, action items,
+ * follow-ups) inherited that hole. When a transcript genuinely exceeds the cap, say so up front
+ * so the model can acknowledge partial coverage instead of presenting the tail as the meeting.
+ */
+function clippedTranscript(transcript: string | undefined, cap: number): string {
+  const t = transcript || ''
+  if (t.length <= cap) return t
+  return `[NOTE: transcript truncated — this is only the final ${cap} of ${t.length} characters; earlier discussion is missing]\n` + t.slice(-cap)
+}
+
+// ~60k tokens ≈ 4-5 hours of speech: effectively never truncates a real meeting.
+const RECAP_TRANSCRIPT_CAP = 240_000
+const SUMMARY_TRANSCRIPT_CAP = 120_000
+
 /** The base user turn text for each ask mode (provider-agnostic). */
 function baseUserText(req: AskStart): string {
   switch (req.mode) {
     case 'summary':
       return (
         'Conversation transcript:\n\n"""\n' +
-        (req.transcript || '').slice(-12000) +
+        clippedTranscript(req.transcript, SUMMARY_TRANSCRIPT_CAP) +
         '\n"""\n\nSummarize it as instructed.'
       )
     case 'recap':
       return (
         'Full conversation transcript (labeled THEM = the other person, YOU = me):\n\n"""\n' +
-        (req.transcript || '').slice(-16000) +
+        clippedTranscript(req.transcript, RECAP_TRANSCRIPT_CAP) +
         '\n"""\n\nProduce the detailed post-meeting document exactly as instructed.'
       )
     case 'suggest':
