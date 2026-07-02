@@ -160,6 +160,13 @@ export function useListen(
   const busy = useRef(false)
   const readyRef = useRef(false)
   const liveRef = useRef(false) // true only between start() and stop() — guards stale results
+  // Synchronous in-flight guard for start(): a rapid double-click/double-hotkey on Listen calls start()
+  // twice before React re-renders listen.listening to true (that state update is async), so a boolean
+  // ref — set synchronously at the very top of start(), before any `await` — is required; guarding on
+  // component state or disabling the button is not enough to stop the second call from ever entering.
+  // Cleared in start()'s own `finally` on every exit path (success, failure, or early return), so it
+  // can never wedge a later, legitimate session.
+  const startingRef = useRef(false)
   const pausedRef = useRef(false) // true only between pause() and resume() — belt-and-suspenders on pushAudio;
   // suspending each channel's AudioContext already stops the worklet from emitting in the first place.
   const crashedRef = useRef(false) // set in worker onerror (it already tore down) → stop() must not redo it
@@ -427,6 +434,22 @@ export function useListen(
     [pump]
   )
 
+  // Arms (or re-arms) the 'them'-silence watchdog: if no 'them' window has been emitted within
+  // THEM_WATCHDOG_MS of this call, surface the soft THEM_SILENT_MSG note. Shared by openChannel (channel
+  // just opened) and resume() (channel survives a pause, but the clock must restart from the resume point
+  // — see resume()'s comment for why it must not keep ticking through a pause). No-op once themHeardRef is
+  // already true, so it can never fire a false note after real 'them' audio has already been heard.
+  function armThemWatchdog(): void {
+    if (themWatchdogRef.current) clearTimeout(themWatchdogRef.current)
+    if (themHeardRef.current) return
+    themWatchdogRef.current = setTimeout(() => {
+      themWatchdogRef.current = null
+      if (liveRef.current && !pausedRef.current && channels.current.them) {
+        setState((s) => ({ ...s, error: THEM_SILENT_MSG }))
+      }
+    }, THEM_WATCHDOG_MS)
+  }
+
   const openChannel = useCallback(
     async (sp: Speaker, stream: MediaStream): Promise<void> => {
       closeChannel(sp) // close any prior channel for this speaker (avoid orphan on retry)
@@ -498,9 +521,12 @@ export function useListen(
         }
       })
       // macOS can leave an AudioContext suspended after sleep/wake even when its tracks survive —
-      // resume it instead of processing silence forever.
+      // resume it instead of processing silence forever. But pause() ALSO suspends this same ctx on
+      // purpose (see pause() below) — without the pausedRef check this handler would immediately
+      // resume it right back, so an intentional pause could never actually stay suspended. Only an
+      // UNEXPECTED suspension (OS/interruption) should be auto-resumed; a user-initiated pause must not.
       ctx.onstatechange = (): void => {
-        if (liveRef.current && channels.current[sp] === ch && ctx.state === 'suspended') {
+        if (liveRef.current && !pausedRef.current && channels.current[sp] === ch && ctx.state === 'suspended') {
           void ctx.resume().catch(() => {})
         }
       }
@@ -510,13 +536,7 @@ export function useListen(
       // can display — mic keeps working, teardown is NOT triggered.
       if (sp === 'them') {
         themHeardRef.current = false // fresh channel — re-arm first-emission detection
-        if (themWatchdogRef.current) clearTimeout(themWatchdogRef.current)
-        themWatchdogRef.current = setTimeout(() => {
-          themWatchdogRef.current = null
-          if (liveRef.current && channels.current.them) {
-            setState((s) => ({ ...s, error: THEM_SILENT_MSG }))
-          }
-        }, THEM_WATCHDOG_MS)
+        armThemWatchdog()
       }
     },
     [pushAudio]
@@ -575,217 +595,230 @@ export function useListen(
       quality: 'best' | 'fast' = 'best',
       engine: 'whisper' | 'parakeet' = 'whisper'
     ): Promise<void> => {
-      if (workerIdleTimer.current) {
-        clearTimeout(workerIdleTimer.current) // re-arming before the idle release fires: keep the worker warm
-        workerIdleTimer.current = null
-      }
-      // A stop() may still be draining — cancel its initial kickoff timer and reset the stopping guard so
-      // this fresh session is not torn down when finishTeardown fires for the previous stop().
-      if (drainTimerRef.current) {
-        clearTimeout(drainTimerRef.current)
-        drainTimerRef.current = null
-      }
-      stoppingRef.current = false
-      sessionEpochRef.current += 1
-      queue.current = []
-      busy.current = false
-      liveRef.current = true
-      pausedRef.current = false
-      disarmNetworkRetry() // a fresh session supersedes any retry armed for the previous one
-      crashedRef.current = false // fresh session — re-enable stop()'s teardown after any prior crash
-      parakeetFailures.current = 0 // reset the failure streak so a new session gets a clean shot at Parakeet
-      parakeetEmptyRunRef.current = 0 // clear the empty-window run counter for a fresh session
-      engineRef.current = engine
-      themRunRef.current = '' // fresh session → no carried-over 'them' question turn
-      setState((s) => ({ ...s, error: null, listening: true, paused: false }))
+      // Re-entrancy guard: a rapid double-click/double-hotkey calls start() twice before React re-renders
+      // listen.listening to true (that state flip is async), so this MUST be a synchronous ref check right
+      // at the top, before the first `await` — checking/disabling on component state is too late and lets
+      // the second call open a full second set of mic/system-audio channels (leaked AudioContext + stream).
+      // Cleared in the `finally` below so it never wedges a future session.
+      if (startingRef.current) return
+      startingRef.current = true
       try {
-        await window.toto.setListeningState(true)
-      } catch {
-        /* main may not have a tray; ignore */
-      }
-
-      if (engine === 'parakeet') {
-        // Parakeet runs in the MAIN process; free any warm Whisper worker, then ensure the model (a one-time
-        // ~487MB download with progress). ANY failure falls back to Whisper so Listen always works.
-        if (workerRef.current) {
-          workerRef.current.terminate()
-          workerRef.current = null
-        }
-        loadedQualityRef.current = null
-        readyRef.current = false
-        setState((s) => ({ ...s, loading: true, loadingPct: null }))
-        try {
-          const st = await window.toto.parakeetStatus()
-          if (!st.ready) {
-            const off = window.toto.onParakeetProgress((pct) => setState((s) => ({ ...s, loadingPct: pct })))
-            try {
-              const r = await window.toto.parakeetEnsure()
-              if (!r?.ok) throw new Error(r?.error || 'parakeet model unavailable')
-            } finally {
-              off()
-            }
-          }
-          readyRef.current = true
-          setState((s) => ({ ...s, ready: true, loading: false, loadingPct: null }))
-          pump()
-        } catch (e) {
-          console.warn('[listen] parakeet unavailable, using whisper:', (e as Error)?.message)
-          engineRef.current = 'whisper'
-        }
-      }
-
-      if (!liveRef.current) return
-
-      if (engineRef.current === 'whisper') {
-        // If the quality changed since the warm worker loaded (or we just fell back from Parakeet),
-        // terminate so the next init reloads the correct model. Unchanged quality → instant warm restart.
-        if (workerRef.current && loadedQualityRef.current !== null && loadedQualityRef.current !== quality) {
-          workerRef.current.terminate()
-          workerRef.current = null
-          readyRef.current = false
-        }
-        loadedQualityRef.current = quality
-        setState((s) => ({ ...s, loading: !readyRef.current }))
-        // The worker selects the model: 'best' → WebGPU + whisper-large-v3-turbo (~99 languages); 'fast'
-        // (or fallback) → WASM + whisper-base. init is a no-op if a model is already loaded.
-        // bundled: true → worker uses the asr-model:// scheme (offline, packaged resources);
-        //          false → worker uses transformers.js defaults (remote HF + CDN wasm, proven fallback).
-        const bundled = await getAsrBundled()
-        if (!bundled && !navigator.onLine && !readyRef.current) {
-          // Non-bundled (remote-model) path needs the network to fetch the model and we're offline right
-          // now — skip the guaranteed-to-fail fetch and go straight to the "waiting for network" state
-          // instead of surfacing a raw, confusing fetch error. armNetworkRetry arms the auto-restart.
-          armNetworkRetry('offline')
-        } else {
-          ensureWorker().postMessage({ type: 'init', quality, bundled })
-        }
-        if (readyRef.current) pump() // warm worker already ready → drain immediately
-      }
-
-      // Capture each side INDEPENDENTLY. The mic ("you") and the system loopback ("them") fail for
-      // different reasons (mic = Microphone permission; loopback = Screen Recording + Electron's
-      // getDisplayMedia, which throws a raw "user aborted a request" on many machines). Isolating them
-      // means a system-audio failure never masks a perfectly good microphone — you keep listening,
-      // mic-only, with a clear note instead of a scary abort.
-      let micOk = false
-      let sysOk = false
-      let sysErr: Error | null = null // captured for error-message classification below
-
-      if (source === 'mic' || source === 'both') {
-        try {
-          const mic = await navigator.mediaDevices.getUserMedia({
-            audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true }
-          })
-          if (!liveRef.current) {
-            mic.getTracks().forEach((t) => t.stop())
-            closeChannel('you')
-            closeChannel('them')
-            setState((s) => ({ ...s, listening: false }))
-            return
-          }
-          await openChannel('you', mic)
-          micOk = true
-        } catch (e) {
-          console.warn('[listen] microphone capture failed:', (e as Error)?.name, (e as Error)?.message)
-        }
-      }
-
-      if (source === 'system' || source === 'both') {
-        try {
-          await window.toto.armAudio(true) // arm the loopback handler only for this request
-          let sys: MediaStream
-          try {
-            // macOS: system-audio loopback only arrives inside a ScreenCaptureKit screen stream —
-            // getDisplayMedia({ audio: true }) alone fails with "Error starting capture".  We
-            // request a minimal 1fps video track to start the SCKit session.
-            //
-            // IMPORTANT: do NOT call t.stop() on the video track here.  On macOS, the video and
-            // audio loopback share a single ScreenCaptureKit SCStream session.  Stopping the video
-            // track before the audio worklet is connected can terminate that SCStream, leaving the
-            // audio track in readyState='ended' — alive in getAudioTracks() but producing no PCM.
-            // openChannel() stores the full stream (video + audio); closeChannel() calls t.stop()
-            // on every track when Listen ends, releasing the recording indicator cleanly then.
-            sys = await navigator.mediaDevices.getDisplayMedia({ video: { frameRate: 1 }, audio: true })
-          } finally {
-            await window.toto.armAudio(false)
-          }
-          // Verify a live (non-ended) audio track is present.  If Screen Recording permission is
-          // missing, main's handler returns callback({}) which makes getDisplayMedia throw AbortError
-          // (caught below as isSysPermDenied).  If permission is granted but the track is already
-          // ended (rare SCKit version mismatch), surface that explicitly rather than passing a
-          // silent stream to the worklet.
-          const liveAudio = sys.getAudioTracks().filter((t) => t.readyState !== 'ended')
-          if (!liveAudio.length) {
-            sys.getTracks().forEach((t) => t.stop())
-            throw new Error('no system audio track') // non-abort → isSysPermDenied = false below
-          }
-          if (!liveRef.current) {
-            sys.getTracks().forEach((t) => t.stop())
-            closeChannel('you')
-            closeChannel('them')
-            setState((s) => ({ ...s, listening: false }))
-            return
-          }
-          await openChannel('them', sys)
-          sysOk = true
-        } catch (e) {
-          sysErr = e as Error
-          console.warn('[listen] system-audio capture failed:', sysErr?.name, sysErr?.message)
-        }
-      }
-
-      // AbortError or NotAllowedError from getDisplayMedia almost always means Screen Recording
-      // permission was denied.  main's setDisplayMediaRequestHandler uses { useSystemPicker: false }
-      // so there is NO user-facing picker to cancel — callback({}) from the main guard (fired when
-      // desktopCapturer.getSources() returns empty due to missing permission) is what throws AbortError
-      // in the renderer.  Surface the real cause rather than blaming a sleeping display.
-      const isSysPermDenied =
-        sysErr !== null &&
-        (sysErr.name === 'AbortError' ||
-          sysErr.name === 'NotAllowedError' ||
-          /abort/i.test(sysErr.message ?? ''))
-
-      if (!micOk && !sysOk) {
-        // Nothing came up — tear down so no half-open channel stays hot while the UI says "not listening".
-        liveRef.current = false
-        closeChannel('you')
-        closeChannel('them')
-        try {
-          await window.toto.setListeningState(false)
-        } catch {
-          /* ignore */
-        }
-        let msg: string
-        if (source === 'system') {
-          msg = isSysPermDenied
-            ? 'System audio needs Screen Recording permission — grant it in System Settings → Privacy & Security → Screen Recording, then restart Listen.'
-            : "Couldn't capture system audio. Grant Screen Recording in System Settings, or switch Listen to your microphone in Settings → Audio."
-        } else {
-          msg = "Couldn't start the microphone. Check Microphone access in System Settings → Privacy & Security → Microphone."
-        }
-        setState((s) => ({ ...s, error: msg, listening: false, loading: false }))
-        // A failed start shouldn't pin the whisper worker + ~21MB ONNX wasm in memory for the app's life —
-        // arm the same idle release stop() uses (ensureWorker recreates it on the next start()).
-        if (workerIdleTimer.current) clearTimeout(workerIdleTimer.current)
-        workerIdleTimer.current = setTimeout(() => {
-          workerRef.current?.terminate()
-          workerRef.current = null
-          readyRef.current = false
+        if (workerIdleTimer.current) {
+          clearTimeout(workerIdleTimer.current) // re-arming before the idle release fires: keep the worker warm
           workerIdleTimer.current = null
-        }, WORKER_IDLE_RELEASE_MS)
-        return
-      }
+        }
+        // A stop() may still be draining — cancel its initial kickoff timer and reset the stopping guard so
+        // this fresh session is not torn down when finishTeardown fires for the previous stop().
+        if (drainTimerRef.current) {
+          clearTimeout(drainTimerRef.current)
+          drainTimerRef.current = null
+        }
+        stoppingRef.current = false
+        sessionEpochRef.current += 1
+        queue.current = []
+        busy.current = false
+        liveRef.current = true
+        pausedRef.current = false
+        disarmNetworkRetry() // a fresh session supersedes any retry armed for the previous one
+        crashedRef.current = false // fresh session — re-enable stop()'s teardown after any prior crash
+        parakeetFailures.current = 0 // reset the failure streak so a new session gets a clean shot at Parakeet
+        parakeetEmptyRunRef.current = 0 // clear the empty-window run counter for a fresh session
+        engineRef.current = engine
+        themRunRef.current = '' // fresh session → no carried-over 'them' question turn
+        setState((s) => ({ ...s, error: null, listening: true, paused: false }))
+        try {
+          await window.toto.setListeningState(true)
+        } catch {
+          /* main may not have a tray; ignore */
+        }
 
-      // At least one side is live → we ARE listening. Surface a soft note if the other side is missing.
-      let note: string | null = null
-      if (source === 'both' && micOk && !sysOk) {
-        note = isSysPermDenied
-          ? 'System audio needs Screen Recording permission. Listening to microphone only — grant it in System Settings → Privacy & Security → Screen Recording, then restart Listen.'
-          : 'System audio unavailable. Listening to your microphone only. Grant Screen Recording to hear the other side.'
-      } else if (source === 'both' && !micOk && sysOk) {
-        note = 'Microphone unavailable. Listening to system audio only.'
+        if (engine === 'parakeet') {
+          // Parakeet runs in the MAIN process; free any warm Whisper worker, then ensure the model (a one-time
+          // ~487MB download with progress). ANY failure falls back to Whisper so Listen always works.
+          if (workerRef.current) {
+            workerRef.current.terminate()
+            workerRef.current = null
+          }
+          loadedQualityRef.current = null
+          readyRef.current = false
+          setState((s) => ({ ...s, loading: true, loadingPct: null }))
+          try {
+            const st = await window.toto.parakeetStatus()
+            if (!st.ready) {
+              const off = window.toto.onParakeetProgress((pct) => setState((s) => ({ ...s, loadingPct: pct })))
+              try {
+                const r = await window.toto.parakeetEnsure()
+                if (!r?.ok) throw new Error(r?.error || 'parakeet model unavailable')
+              } finally {
+                off()
+              }
+            }
+            readyRef.current = true
+            setState((s) => ({ ...s, ready: true, loading: false, loadingPct: null }))
+            pump()
+          } catch (e) {
+            console.warn('[listen] parakeet unavailable, using whisper:', (e as Error)?.message)
+            engineRef.current = 'whisper'
+          }
+        }
+
+        if (!liveRef.current) return
+
+        if (engineRef.current === 'whisper') {
+          // If the quality changed since the warm worker loaded (or we just fell back from Parakeet),
+          // terminate so the next init reloads the correct model. Unchanged quality → instant warm restart.
+          if (workerRef.current && loadedQualityRef.current !== null && loadedQualityRef.current !== quality) {
+            workerRef.current.terminate()
+            workerRef.current = null
+            readyRef.current = false
+          }
+          loadedQualityRef.current = quality
+          setState((s) => ({ ...s, loading: !readyRef.current }))
+          // The worker selects the model: 'best' → WebGPU + whisper-large-v3-turbo (~99 languages); 'fast'
+          // (or fallback) → WASM + whisper-base. init is a no-op if a model is already loaded.
+          // bundled: true → worker uses the asr-model:// scheme (offline, packaged resources);
+          //          false → worker uses transformers.js defaults (remote HF + CDN wasm, proven fallback).
+          const bundled = await getAsrBundled()
+          if (!bundled && !navigator.onLine && !readyRef.current) {
+            // Non-bundled (remote-model) path needs the network to fetch the model and we're offline right
+            // now — skip the guaranteed-to-fail fetch and go straight to the "waiting for network" state
+            // instead of surfacing a raw, confusing fetch error. armNetworkRetry arms the auto-restart.
+            armNetworkRetry('offline')
+          } else {
+            ensureWorker().postMessage({ type: 'init', quality, bundled })
+          }
+          if (readyRef.current) pump() // warm worker already ready → drain immediately
+        }
+
+        // Capture each side INDEPENDENTLY. The mic ("you") and the system loopback ("them") fail for
+        // different reasons (mic = Microphone permission; loopback = Screen Recording + Electron's
+        // getDisplayMedia, which throws a raw "user aborted a request" on many machines). Isolating them
+        // means a system-audio failure never masks a perfectly good microphone — you keep listening,
+        // mic-only, with a clear note instead of a scary abort.
+        let micOk = false
+        let sysOk = false
+        let sysErr: Error | null = null // captured for error-message classification below
+
+        if (source === 'mic' || source === 'both') {
+          try {
+            const mic = await navigator.mediaDevices.getUserMedia({
+              audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true }
+            })
+            if (!liveRef.current) {
+              mic.getTracks().forEach((t) => t.stop())
+              closeChannel('you')
+              closeChannel('them')
+              setState((s) => ({ ...s, listening: false }))
+              return
+            }
+            await openChannel('you', mic)
+            micOk = true
+          } catch (e) {
+            console.warn('[listen] microphone capture failed:', (e as Error)?.name, (e as Error)?.message)
+          }
+        }
+
+        if (source === 'system' || source === 'both') {
+          try {
+            await window.toto.armAudio(true) // arm the loopback handler only for this request
+            let sys: MediaStream
+            try {
+              // macOS: system-audio loopback only arrives inside a ScreenCaptureKit screen stream —
+              // getDisplayMedia({ audio: true }) alone fails with "Error starting capture".  We
+              // request a minimal 1fps video track to start the SCKit session.
+              //
+              // IMPORTANT: do NOT call t.stop() on the video track here.  On macOS, the video and
+              // audio loopback share a single ScreenCaptureKit SCStream session.  Stopping the video
+              // track before the audio worklet is connected can terminate that SCStream, leaving the
+              // audio track in readyState='ended' — alive in getAudioTracks() but producing no PCM.
+              // openChannel() stores the full stream (video + audio); closeChannel() calls t.stop()
+              // on every track when Listen ends, releasing the recording indicator cleanly then.
+              sys = await navigator.mediaDevices.getDisplayMedia({ video: { frameRate: 1 }, audio: true })
+            } finally {
+              await window.toto.armAudio(false)
+            }
+            // Verify a live (non-ended) audio track is present.  If Screen Recording permission is
+            // missing, main's handler returns callback({}) which makes getDisplayMedia throw AbortError
+            // (caught below as isSysPermDenied).  If permission is granted but the track is already
+            // ended (rare SCKit version mismatch), surface that explicitly rather than passing a
+            // silent stream to the worklet.
+            const liveAudio = sys.getAudioTracks().filter((t) => t.readyState !== 'ended')
+            if (!liveAudio.length) {
+              sys.getTracks().forEach((t) => t.stop())
+              throw new Error('no system audio track') // non-abort → isSysPermDenied = false below
+            }
+            if (!liveRef.current) {
+              sys.getTracks().forEach((t) => t.stop())
+              closeChannel('you')
+              closeChannel('them')
+              setState((s) => ({ ...s, listening: false }))
+              return
+            }
+            await openChannel('them', sys)
+            sysOk = true
+          } catch (e) {
+            sysErr = e as Error
+            console.warn('[listen] system-audio capture failed:', sysErr?.name, sysErr?.message)
+          }
+        }
+
+        // AbortError or NotAllowedError from getDisplayMedia almost always means Screen Recording
+        // permission was denied.  main's setDisplayMediaRequestHandler uses { useSystemPicker: false }
+        // so there is NO user-facing picker to cancel — callback({}) from the main guard (fired when
+        // desktopCapturer.getSources() returns empty due to missing permission) is what throws AbortError
+        // in the renderer.  Surface the real cause rather than blaming a sleeping display.
+        const isSysPermDenied =
+          sysErr !== null &&
+          (sysErr.name === 'AbortError' ||
+            sysErr.name === 'NotAllowedError' ||
+            /abort/i.test(sysErr.message ?? ''))
+
+        if (!micOk && !sysOk) {
+          // Nothing came up — tear down so no half-open channel stays hot while the UI says "not listening".
+          liveRef.current = false
+          closeChannel('you')
+          closeChannel('them')
+          try {
+            await window.toto.setListeningState(false)
+          } catch {
+            /* ignore */
+          }
+          let msg: string
+          if (source === 'system') {
+            msg = isSysPermDenied
+              ? 'System audio needs Screen Recording permission — grant it in System Settings → Privacy & Security → Screen Recording, then restart Listen.'
+              : "Couldn't capture system audio. Grant Screen Recording in System Settings, or switch Listen to your microphone in Settings → Audio."
+          } else {
+            msg = "Couldn't start the microphone. Check Microphone access in System Settings → Privacy & Security → Microphone."
+          }
+          setState((s) => ({ ...s, error: msg, listening: false, loading: false }))
+          // A failed start shouldn't pin the whisper worker + ~21MB ONNX wasm in memory for the app's life —
+          // arm the same idle release stop() uses (ensureWorker recreates it on the next start()).
+          if (workerIdleTimer.current) clearTimeout(workerIdleTimer.current)
+          workerIdleTimer.current = setTimeout(() => {
+            workerRef.current?.terminate()
+            workerRef.current = null
+            readyRef.current = false
+            workerIdleTimer.current = null
+          }, WORKER_IDLE_RELEASE_MS)
+          return
+        }
+
+        // At least one side is live → we ARE listening. Surface a soft note if the other side is missing.
+        let note: string | null = null
+        if (source === 'both' && micOk && !sysOk) {
+          note = isSysPermDenied
+            ? 'System audio needs Screen Recording permission. Listening to microphone only — grant it in System Settings → Privacy & Security → Screen Recording, then restart Listen.'
+            : 'System audio unavailable. Listening to your microphone only. Grant Screen Recording to hear the other side.'
+        } else if (source === 'both' && !micOk && sysOk) {
+          note = 'Microphone unavailable. Listening to system audio only.'
+        }
+        setState((s) => ({ ...s, error: note, listening: true, loading: !readyRef.current }))
+      } finally {
+        // Every exit path (the several early `return`s above, a thrown error, or the normal fall-through)
+        // clears the guard so a later, legitimate start() is never permanently blocked.
+        startingRef.current = false
       }
-      setState((s) => ({ ...s, error: note, listening: true, loading: !readyRef.current }))
     },
     // closeChannel referenced in body (defined below); stable useCallback, omitted to avoid TDZ in deps
     [armNetworkRetry, disarmNetworkRetry, ensureWorker, getAsrBundled, openChannel, pump]
@@ -819,6 +852,14 @@ export function useListen(
     for (const ch of Object.values(channels.current)) {
       void ch?.ctx.suspend().catch(() => {})
     }
+    // The 'them' watchdog is armed once at channel-open and otherwise runs on a wall-clock timer that
+    // doesn't know about pause — left ticking, an ordinary pause longer than THEM_WATCHDOG_MS (20s) fires
+    // a false "not hearing the other side" note over what is actually an intentional pause with nothing
+    // wrong. Clear it here; resume() re-arms from the resume point so the full window applies post-pause.
+    if (themWatchdogRef.current) {
+      clearTimeout(themWatchdogRef.current)
+      themWatchdogRef.current = null
+    }
     setState((s) => ({ ...s, paused: true }))
   }, [])
 
@@ -828,6 +869,10 @@ export function useListen(
     for (const ch of Object.values(channels.current)) {
       void ch?.ctx.resume().catch(() => {})
     }
+    // Re-arm the 'them' watchdog (paused above) so a still-silent 'them' channel gets a fresh
+    // THEM_WATCHDOG_MS window post-resume instead of staying permanently disarmed. No-op if 'them' isn't
+    // open, or if it already emitted audio before the pause (armThemWatchdog checks themHeardRef).
+    if (channels.current.them) armThemWatchdog()
     setState((s) => ({ ...s, paused: false }))
   }, [])
 
