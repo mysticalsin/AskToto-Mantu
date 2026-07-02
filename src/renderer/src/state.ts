@@ -31,6 +31,7 @@ export function useAutoResize(): (el: HTMLElement | null) => void {
   const rafRef = useRef(0)
   const shrinkRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const lastSentRef = useRef(0) // last height pushed to main — dedups so a stream can't pump setBounds
+  const lastSentWidthRef = useRef(0) // last reported width — 0 until a [data-hug-width] view reports one
   return useCallback((el: HTMLElement | null) => {
     roRef.current?.disconnect()
     roRef.current = null
@@ -41,10 +42,13 @@ export function useAutoResize(): (el: HTMLElement | null) => void {
       shrinkRef.current = null
     }
     if (!el) return
-    const push = (h: number): void => {
-      if (h === lastSentRef.current) return // idempotent — no redundant window.toto.resize per token
+    const push = (h: number, w?: number): void => {
+      // Idempotent on height alone unless a width report is present AND changed — a view with no
+      // [data-hug-width] element (the common case) never has anything new to say about width.
+      if (h === lastSentRef.current && (w === undefined || w === lastSentWidthRef.current)) return
       lastSentRef.current = h
-      window.toto.resize(h)
+      if (w !== undefined) lastSentWidthRef.current = w
+      window.toto.resize(h, w)
     }
     // el.getBoundingClientRect().height reflects only el's own normal-flow box — a position:absolute
     // descendant (a popover/dropdown, e.g. Bar's mode picker) never affects an ancestor's measured
@@ -52,28 +56,39 @@ export function useAutoResize(): (el: HTMLElement | null) => void {
     // accounting for it here, the window never grows to fit it: the dropdown is real, on-screen for
     // Electron's purposes, and invisibly clipped by a window frame that stopped at the bar's own height.
     // Any element needing to extend past el's box marks itself with data-overlay to opt into this.
-    const measure = (): number => {
+    const measure = (): { height: number; width?: number } => {
       const rect = el.getBoundingClientRect()
       let bottom = rect.bottom
       el.querySelectorAll<HTMLElement>('[data-overlay]').forEach((node) => {
         const r = node.getBoundingClientRect()
         if (r.bottom > bottom) bottom = r.bottom
       })
-      return Math.ceil(bottom - rect.top)
+      // el itself is always the full window width (it's the shared centering/layout root for every view),
+      // so it can never report a meaningful WIDTH the way it already does for height. A view whose visible
+      // surface is narrower than the window — today only the collapsed control mini-pill — opts in by
+      // marking its own shrink-to-fit element with data-hug-width; every other view has none, so width
+      // stays unreported and that view's window width is untouched (unaffected by this at all).
+      const hugTarget = el.querySelector<HTMLElement>('[data-hug-width]')
+      const width = hugTarget ? Math.ceil(hugTarget.getBoundingClientRect().width) : undefined
+      return { height: Math.ceil(bottom - rect.top), width }
     }
     const send = (): void => {
       cancelAnimationFrame(rafRef.current)
       rafRef.current = requestAnimationFrame(() => {
-        const h = measure() + 2
+        const m = measure()
+        const h = m.height + 2
         if (shrinkRef.current) {
           clearTimeout(shrinkRef.current)
           shrinkRef.current = null
         }
         if (h >= lastSentRef.current) {
-          push(h) // GROW immediately — streaming text must never clip behind the window edge
+          push(h, m.width) // GROW immediately — streaming text must never clip behind the window edge
         } else {
           // SHRINK only after the content settles (~140ms) so a finishing stream doesn't pump the window down
-          shrinkRef.current = setTimeout(() => push(measure() + 2), 140)
+          shrinkRef.current = setTimeout(() => {
+            const m2 = measure()
+            push(m2.height + 2, m2.width)
+          }, 140)
         }
       })
     }
