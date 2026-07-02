@@ -1,31 +1,8 @@
 import { app, type BrowserWindow } from 'electron'
-import { readFileSync, writeFileSync } from 'node:fs'
+import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import log from 'electron-log'
 import { IPC } from '@shared/ipc'
-
-// Backoff sidecar: a bare epoch-ms timestamp of the last 404 (releases repo/feed not found yet). One
-// check runs per app launch (no interval — see initAutoUpdate below), so this must survive across
-// restarts to actually skip anything; a module-level variable would reset every boot and never fire.
-// Same userData-sidecar idiom as auth.ts's auth-configured.flag / msal-cache.bin.
-const BACKOFF_HOURS = 24
-const backoffPath = (): string => join(app.getPath('userData'), 'updater-404-backoff.txt')
-
-function readBackoffUntil(): number {
-  try {
-    return Number(readFileSync(backoffPath(), 'utf8')) || 0
-  } catch {
-    return 0 // no sidecar yet — never backed off
-  }
-}
-
-function writeBackoffUntil(untilMs: number): void {
-  try {
-    writeFileSync(backoffPath(), String(untilMs), 'utf8')
-  } catch {
-    /* best-effort — worst case a future 404 just logs once more than strictly needed */
-  }
-}
 
 /** A 404 means the releases repo/feed doesn't exist (yet) — distinct from a transient network/server
  *  error, which should keep logging normally so a real outage stays visible. */
@@ -45,14 +22,6 @@ export function initAutoUpdate(win: BrowserWindow | null): void {
   } catch {
     return // no app-update.yml → updates not set up
   }
-  // A prior check already found the feed 404ing (repo not published yet) — skip the network round-trip
-  // entirely rather than repeat a check guaranteed to fail the same way, until the backoff window lapses.
-  const backoffUntil = readBackoffUntil()
-  if (backoffUntil > Date.now()) {
-    const hoursLeft = Math.ceil((backoffUntil - Date.now()) / 3_600_000)
-    log.warn(`[updater] update feed not available (404) — next check in ${hoursLeft}h`)
-    return
-  }
   try {
     // Lazy-required: electron-updater's require tree costs real time at every process boot even though
     // both early returns above already skip this function entirely in dev and in any unconfigured build
@@ -63,16 +32,22 @@ export function initAutoUpdate(win: BrowserWindow | null): void {
     log.transports.file.level = 'info'
     autoUpdater.autoDownload = true
     autoUpdater.autoInstallOnAppQuit = true
+    // AppUpdater's own constructor registers a default 'error' listener that unconditionally logs the
+    // full stack via its logger, regardless of cause — on a 404 that's a full HttpError stack PLUS our
+    // own warn below PLUS the checkForUpdatesAndNotify() rejection below (electron-updater both emits
+    // 'error' AND rethrows into the promise), three lines for the exact same failure every launch.
+    // Replace the default listener with our own so a 404 — the releases repo not existing yet, an
+    // already-diagnosed, expected state — logs just one short line, while every other error keeps its
+    // current (full-stack) visibility. Safe: an EventEmitter only throws on an unhandled 'error' emit
+    // when there are NO listeners at all, and we always add one right after removing the default.
+    autoUpdater.removeAllListeners('error')
     autoUpdater.on('error', (e: Error) => {
-      // A 404 is the expected, already-diagnosed "releases repo doesn't exist yet" case — one short line
-      // instead of electron-updater's own default listener (a full stack dump) plus this handler plus the
-      // checkForUpdatesAndNotify() rejection below, three log lines for the exact same failure every launch.
       if (isNotFound(e)) {
-        writeBackoffUntil(Date.now() + BACKOFF_HOURS * 3_600_000)
-        log.warn(`[updater] update feed not available (404) — next check in ${BACKOFF_HOURS}h`)
+        log.warn('[updater] update feed not available (404)')
         return
       }
-      log.warn('[updater] error', e?.message ?? e)
+      // Non-404: keep the same full-stack visibility the removed default listener used to provide.
+      log.warn('[updater] error', e?.stack || e?.message || e)
     })
     autoUpdater.on('update-available', (i: { version?: string }) => log.info('[updater] update-available', i?.version))
     autoUpdater.on('update-downloaded', (i: { version?: string }) => {
@@ -82,7 +57,8 @@ export function initAutoUpdate(win: BrowserWindow | null): void {
     })
     // checkForUpdatesAndNotify shows the OS notification when an update is ready. The 'error' listener
     // above always fires first for the same failure and already logs it (short for 404, full for anything
-    // else) — swallow it here silently rather than logging the identical failure a second time.
+    // else) — swallow it here silently rather than logging the identical failure a second time. Cadence
+    // is untouched: this runs once per app launch, no interval.
     void autoUpdater.checkForUpdatesAndNotify().catch(() => {
       /* already logged by the 'error' listener above */
     })
