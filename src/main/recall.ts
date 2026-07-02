@@ -1,4 +1,4 @@
-import { readFile, readdir, unlink, writeFile } from 'node:fs/promises'
+import { readFile, readdir, stat, unlink, writeFile } from 'node:fs/promises'
 import { join, basename } from 'node:path'
 import { resolveMeetingsFolder, decodeSaved } from './transcripts'
 import { getSettings } from './store'
@@ -33,10 +33,42 @@ interface Read {
   text: string
 }
 
-/** Read + decode one file once (async), parse its frontmatter. Null if it isn't a meeting transcript. */
+// Per-file read cache validated by (mtimeMs, size) on every use. List and search previously re-read
+// AND re-decrypted every meeting file on every call — per keystroke while searching — the one path
+// that degrades linearly as the library grows, with decryption work on the main process. A stat()
+// replaces the full read+decode when the file is unchanged; any mtime/size change re-reads, and a
+// vanished file drops its entry. Saved meetings are immutable-after-write, so hits are the norm.
+// Null results (non-meeting or undecryptable files) are cached too, so they stop costing reads.
+const readCache = new Map<string, { mtimeMs: number; size: number; read: Read | null }>()
+// Safety valve: the cache is bounded by the meetings folder size in practice, but never let a
+// pathological folder (or repeated folder switches) grow it without limit.
+const READ_CACHE_MAX = 2000
+
+/** Read + decode one file (async), parse its frontmatter. Null if it isn't a meeting transcript.
+ *  Served from readCache when the file is unchanged since the last read. */
 async function readMeeting(folder: string, file: string): Promise<Read | null> {
+  const path = join(folder, file)
+  let mtimeMs: number
+  let size: number
   try {
-    const text = decodeSaved(await readFile(join(folder, file)))
+    const st = await stat(path)
+    mtimeMs = st.mtimeMs
+    size = st.size
+  } catch {
+    readCache.delete(path)
+    return null
+  }
+  const hit = readCache.get(path)
+  if (hit && hit.mtimeMs === mtimeMs && hit.size === size) return hit.read
+  const read = await readMeetingUncached(path, file)
+  if (readCache.size >= READ_CACHE_MAX) readCache.clear()
+  readCache.set(path, { mtimeMs, size, read })
+  return read
+}
+
+async function readMeetingUncached(path: string, file: string): Promise<Read | null> {
+  try {
+    const text = decodeSaved(await readFile(path))
     if (!text) return null
     const fm = frontmatter(text)
     if (fm.type && fm.type !== 'meeting-transcript') return null
