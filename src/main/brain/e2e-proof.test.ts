@@ -152,6 +152,7 @@ describe('END-TO-END PROOF: planted ground truth → real pipeline → every das
     expect(byType('person')).toBe(3)
     expect(byType('deal')).toBe(5)
     expect(byType('sector')).toBe(3) // banking, retail, technology
+    expect(byType('meeting')).toBe(8) // one node per ingested meeting (display layers drop these)
     const edgeKeys = g.edges.map((e) => `${e.from}|${e.to}|${e.rel}`)
     expect(new Set(edgeKeys).size).toBe(edgeKeys.length) // zero duplicate edges after 8 merges
     expect(g.edges.some((e) => e.from === 'person:claire-dubois' && e.rel === 'works-at')).toBe(true)
@@ -213,8 +214,8 @@ describe('END-TO-END PROOF: planted ground truth → real pipeline → every das
       ['accounts', 3, listEntities(s, 'account').length],
       ['people', 3, listEntities(s, 'person').length],
       ['deals', 5, listEntities(s, 'deal').length],
-      ['graph nodes', g.nodes.length, g.nodes.length],
-      ['graph edges (unique)', g.edges.length, new Set(g.edges.map((e) => `${e.from}|${e.to}|${e.rel}`)).size],
+      ['graph nodes', 22, g.nodes.length], // 3 accounts + 3 people + 5 deals + 3 sectors + 8 meetings
+      ['graph duplicate edges', 0, g.edges.length - new Set(g.edges.map((e) => `${e.from}|${e.to}|${e.rel}`)).size],
       ['open commitments', 2, deals.flatMap((d) => d.commitments).filter((c) => c.status === 'open').length],
       ['kept commitments', 1, deals.flatMap((d) => d.commitments).filter((c) => c.status === 'kept').length],
       ['silence signals', 2, silence.length],
