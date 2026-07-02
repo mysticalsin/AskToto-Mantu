@@ -29,6 +29,9 @@ const THEM_SILENT_MSG = 'Not hearing the other side — check the call volume an
 const MIC_LOST_MSG = 'Microphone input stopped (device disconnected or sleep) — reconnecting automatically…'
 const THEM_LOST_MSG =
   'System-audio capture stopped (display sleep or a device change) — toggle Listen to restart it.'
+// Backpressure became user-visible truncation: transcription fell behind capture long enough that
+// audio windows were discarded. Exact-string contract like the other sticky notes.
+const DROPPED_MSG = 'Transcription fell behind — some audio was skipped. The transcript may have gaps.'
 // Exact text of the "offline, waiting to reconnect" / "reconnected, restarting" notes, shared by
 // armNetworkRetry (sets them) and the worker's 'ready' handler (clears them once recovery succeeds) —
 // matched by exact string so other sticky notes (THEM_SILENT_MSG, the Parakeet-fallback footnote) are
@@ -415,6 +418,9 @@ export function useListen(
         // Backpressure: transcription is falling behind capture, so audio windows are being lost (corrupts
         // the recap). Logged rather than silently swallowed so it's diagnosable instead of an invisible gap.
         console.warn(`[listen] audio backpressure: dropped ${dropped} window(s) (queue > ${MAX_QUEUE})`)
+        // Surface it — a silent drop reads as "the transcript stopped" with no explanation. Never
+        // clobber a more specific note already showing (offline, device-lost, them-silent).
+        setState((s) => (s.error == null ? { ...s, error: DROPPED_MSG } : s))
       }
       pump()
     },
