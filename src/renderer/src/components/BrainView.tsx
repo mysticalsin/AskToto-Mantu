@@ -350,8 +350,14 @@ export function BrainView({ onBack }: { onBack: () => void }): JSX.Element {
   const silence = useMemo(() => computeSilence(data?.meetings ?? [], Date.now()).slice(0, 6), [data])
 
   // Mars week: the weekly-report skeleton (meetings, first contacts, won/lost, follow-ups, at-risk)
-  // over the last 7 days — the dashboard section behind the header's copy button.
+  // over the last 7 days — plus the SAME computation shifted one week back, so every tile can show
+  // week-over-week movement (trend first, level second). Same pure function, different `now`: the
+  // delta is as provable as the level.
   const mars = useMemo(() => buildMarsWeek(data?.meetings ?? [], data?.deals ?? [], Date.now()), [data])
+  const marsPrev = useMemo(
+    () => buildMarsWeek(data?.meetings ?? [], data?.deals ?? [], Date.now() - 7 * 24 * 60 * 60 * 1000),
+    [data]
+  )
 
   const ingested = status?.meetings ?? 0
   const notIngested = Math.max(0, meetings.length - ingested)
@@ -556,17 +562,35 @@ export function BrainView({ onBack }: { onBack: () => void }): JSX.Element {
               <div className="mb-2 grid grid-cols-4 gap-1.5 text-center">
                 {(
                   [
-                    ['Meetings', mars.meetings.length],
-                    ['New accounts', mars.newAccounts.length],
-                    ['Won', mars.won.length],
-                    ['Lost', mars.lost.length]
+                    ['Meetings', mars.meetings.length, marsPrev.meetings.length],
+                    ['New accounts', mars.newAccounts.length, marsPrev.newAccounts.length],
+                    ['Won', mars.won.length, marsPrev.won.length],
+                    ['Lost', mars.lost.length, marsPrev.lost.length]
                   ] as const
-                ).map(([label, n]) => (
-                  <div key={label} className="rounded-lg bg-white/[0.03] px-1.5 py-1">
-                    <div className="text-[15px] font-semibold text-[color:var(--color-ink)]">{n}</div>
-                    <div className="text-[9px] uppercase tracking-wide text-[color:var(--color-ink-3)]">{label}</div>
-                  </div>
-                ))}
+                ).map(([label, n, prev]) => {
+                  const d = n - prev
+                  return (
+                    <div key={label} className="rounded-lg bg-white/[0.03] px-1.5 py-1">
+                      <div className="flex items-baseline justify-center gap-1">
+                        <span className="text-[15px] font-semibold text-[color:var(--color-ink)]">{n}</span>
+                        {d !== 0 && (
+                          <span
+                            className="text-[9px] font-semibold"
+                            title={`${prev} last week`}
+                            style={{
+                              // Direction color follows MEANING: more losses is bad, more of the rest is good.
+                              color:
+                                (label === 'Lost' ? d < 0 : d > 0) ? 'var(--color-success)' : 'var(--color-danger)'
+                            }}
+                          >
+                            {d > 0 ? `▲${d}` : `▼${-d}`}
+                          </span>
+                        )}
+                      </div>
+                      <div className="text-[9px] uppercase tracking-wide text-[color:var(--color-ink-3)]">{label}</div>
+                    </div>
+                  )
+                })}
               </div>
               <div className="flex flex-col gap-1">
                 {mars.meetings.slice(0, 6).map((m) => (
