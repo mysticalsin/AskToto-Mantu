@@ -3,10 +3,10 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import type { Settings } from '@shared/ipc'
-import { MeetingExtractionSchema, type MeetingExtraction, type MeetingRef } from '@shared/brain'
+import { MeetingExtractionSchema, type MeetingExtraction } from '@shared/brain'
 import { computeSilence } from '@shared/silence'
 import { buildMarsWeek } from '@shared/mars'
-import { mergeExtraction } from './ingest'
+import { ingestExtraction } from './ingest'
 import {
   slugify,
   readGraph,
@@ -17,7 +17,7 @@ import {
   listEntities,
   listMeetingExtractions,
   readMeetingExtraction,
-  writeMeetingExtraction
+  readIndex
 } from './store'
 
 vi.mock('electron')
@@ -58,6 +58,8 @@ function fx(p: {
   commitments?: { text: string; by: string; due_hint?: string }[]
   sentiment?: 'good' | 'mixed' | 'concerning'
 }): Fixture {
+  // Deliberately NO source_file / date here — production stamps provenance from the transcript's
+  // frontmatter inside ingestExtraction. If stamping broke, every date-driven number below would fail.
   const x = MeetingExtractionSchema.parse({
     title24: p.title,
     topics: p.topics,
@@ -65,12 +67,14 @@ function fx(p: {
     account: p.account ? { name: p.account.name, sector: p.account.sector, confidence: 'EXTRACTED' } : null,
     people: (p.people ?? []).map((pp) => ({ name: pp.name, role: pp.role ?? null, org: null, confidence: 'EXTRACTED' })),
     deal: p.deal ? { name: p.deal.name, stage: p.deal.stage ?? 'open', win_likelihood_band: p.deal.band ?? null } : null,
-    commitments: (p.commitments ?? []).map((c) => ({ ...c, quote: `"${c.text}"`, confidence: 'EXTRACTED' })),
-    source_file: p.file,
-    date: iso(p.daysAgo)
+    commitments: (p.commitments ?? []).map((c) => ({ ...c, quote: `"${c.text}"`, confidence: 'EXTRACTED' }))
   })
   return { file: p.file, daysAgo: p.daysAgo, x }
 }
+
+/** Minimal transcript markdown carrying the frontmatter production stamps provenance from. */
+const transcriptMd = (daysAgo: number): string =>
+  `---\ntype: meeting-transcript\nsource: AskToto\ndate: ${iso(daysAgo)}\n---\n\n## Full transcript\n\n**[10:00:00] Them:** hello\n`
 
 // ── GROUND TRUTH ─────────────────────────────────────────────────────────────
 // Acme (banking): 5 meetings. 'migration' discussed in the three old ones, gone recently (dropped
@@ -91,20 +95,26 @@ const FIXTURES: Fixture[] = [
   fx({ file: 'initech-1.md', daysAgo: 2, account: { name: 'Initech', sector: 'technology' }, title: 'Pilot debrief', topics: ['pilot'], deal: { name: 'Initech Pilot', band: 'concerning' }, sentiment: 'concerning' })
 ]
 
-describe('END-TO-END PROOF: planted ground truth → real pipeline → every dashboard number', () => {
+// Both storage modes run the identical planted world: the numbers must be indistinguishable whether
+// the brain files sit plaintext or inside the ATKENC envelope (encryptTranscripts on).
+describe.each([
+  ['plaintext', false],
+  ['encrypted-at-rest', true]
+])('END-TO-END PROOF (%s): planted ground truth → real pipeline → every dashboard number', (_mode, encrypt) => {
   let folder: string
   let s: Settings
   let extractions: MeetingExtraction[]
 
   beforeAll(async () => {
     folder = mkdtempSync(join(tmpdir(), 'asktoto-e2e-proof-'))
-    s = { meetingsFolder: folder } as Settings
+    s = { meetingsFolder: folder, encryptTranscripts: encrypt } as Settings
 
-    // The REAL ingest path: persist each extraction and merge it into the entity store on disk.
+    // The EXACT production ingest path (ingestExtraction = processJob minus the LLM call):
+    // provenance stamping from transcript frontmatter, extraction persist, entity merge, ingest-log
+    // index write, lint refresh. Deep-clone fixtures so the two storage modes can't contaminate each other.
     for (const f of FIXTURES) {
-      const ref: MeetingRef = { file: f.file, date: iso(f.daysAgo), title: f.x.title24 }
-      await writeMeetingExtraction(s, slugify(f.file), f.x)
-      await mergeExtraction(s, f.x, ref)
+      const x = MeetingExtractionSchema.parse(JSON.parse(JSON.stringify(f.x)))
+      await ingestExtraction(s, x, transcriptMd(f.daysAgo), join(folder, f.file))
     }
 
     // Human actions (the only way outcomes/settlements ever move — never the LLM):
@@ -128,6 +138,17 @@ describe('END-TO-END PROOF: planted ground truth → real pipeline → every das
       .filter((x): x is MeetingExtraction => !!x)
   })
   afterAll(() => rmSync(folder, { recursive: true, force: true }))
+
+  it('the UI headline "meetings ingested" number — the ingest-log index — records all 8, ok, stamped', () => {
+    const idx = readIndex(s)
+    const entries = Object.entries(idx.ingested)
+    expect(entries).toHaveLength(8) // BrainView's headline stat counts exactly these
+    expect(entries.every(([, v]) => v.ok)).toBe(true)
+    // Production stamping proven: the fixtures carried NO date/source — the frontmatter did.
+    const acme4 = readMeetingExtraction(s, slugify('acme-4.md'))!
+    expect(acme4.source_file).toBe('acme-4.md')
+    expect(acme4.date).toBe(iso(3))
+  })
 
   it('entity counts match the planted world exactly', () => {
     expect(listEntities(s, 'account').sort()).toEqual(['acme', 'globex', 'initech'])
@@ -176,13 +197,20 @@ describe('END-TO-END PROOF: planted ground truth → real pipeline → every das
     const globex = silence[0]
     expect(globex.wentDark).toBe(true)
     expect(globex.daysQuiet).toBe(70)
-    expect(globex.droppedTopics.map((t) => t.topic)).toEqual(expect.arrayContaining(['rfp', 'renewal']))
+    // Exact list, exact persistence counts — an invented extra topic or count would fail here.
+    expect(globex.droppedTopics).toEqual([
+      { topic: 'rfp', priorMentions: 2 },
+      { topic: 'renewal', priorMentions: 1 }
+    ])
     expect(globex.vanishedPeople).toEqual(['Maria Silva'])
 
     const acme = silence[1]
     expect(acme.wentDark).toBe(false)
-    expect(acme.droppedTopics[0]).toEqual({ topic: 'migration', priorMentions: 3 }) // 3 old meetings raised it
-    expect(acme.droppedTopics.map((t) => t.topic)).not.toContain('pricing') // still live 3 days ago
+    expect(acme.cooling).toBe(false) // recent sentiment did not fall vs prior — must not cry wolf
+    expect(acme.droppedTopics).toEqual([
+      { topic: 'migration', priorMentions: 3 }, // 3 old meetings raised it
+      { topic: 'security', priorMentions: 1 }
+    ]) // 'pricing' correctly absent — still live 3 days ago
     expect(acme.vanishedPeople).toEqual(['Claire Dubois'])
     expect(acme.daysQuiet).toBe(1)
   })
