@@ -91,7 +91,11 @@ is a stepping stone to delegated attendance.
 - **#6 90-Second Debrief** — shipped. Post-meeting off-record card in Review (`appendDebrief` →
   "## Debrief (off the record)" inside the saved meeting: same encryption/retention/deletion), re-ingested
   so the brain folds the unsaid into signals — extraction treats it as INFERRED user impressions, never quotes.
-- **#7, #8** — next build wave.
+- **#8 Going-Cold Rail** — shipped, fused into the relationship graph (`intelligence/src/lib/goingCold.ts`
+  + GraphView). Nodes fade by freshness (≤14d / ≤45d / beyond), edges inherit the colder endpoint, the
+  sidebar rail names the coldest relationships with ledger-grounded re-engagement hooks, and structural
+  risk is flagged in place: single-threaded deals + unmapped ("unexplored") accounts.
+- **#7 Sparring Mode** — next build wave.
 - **#9, #10** — after the brain accumulates volume (they need corpus density to shine).
 
 ## Bonus (user-requested, 2026-07-02)
