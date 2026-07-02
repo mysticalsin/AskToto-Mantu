@@ -1,5 +1,6 @@
 import { existsSync, mkdirSync, readdirSync, rmSync } from 'node:fs'
 import { join, basename } from 'node:path'
+import { createHash } from 'node:crypto'
 import type { Settings } from '@shared/ipc'
 import {
   BrainIndexSchema,
@@ -31,15 +32,22 @@ export function brainDir(settings: Settings): string {
 }
 
 export function slugify(s: string): string {
-  return (
-    s
-      .toLowerCase()
-      .normalize('NFKD')
-      .replace(/[̀-ͯ]/g, '') // strip diacritics so "L'Oréal" and "L'Oreal" share a slug
-      .replace(/[^a-z0-9]+/g, '-')
-      .replace(/^-+|-+$/g, '')
-      .slice(0, 60) || 'unknown'
-  )
+  const base = s
+    .toLowerCase()
+    .normalize('NFKD')
+    .replace(/[̀-ͯ]/g, '') // strip diacritics so "L'Oréal" and "L'Oreal" share a slug
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 60)
+  if (base) return base
+  // A name written entirely in a non-Latin script (Chinese, Cyrillic, Arabic, pure emoji) or one
+  // that's blank/whitespace-only collapses the ASCII pass above to '' — falling back to a fixed
+  // 'unknown' would silently merge every such distinct entity into one shared file (a real
+  // cross-account confidentiality bug for a tool whose job is per-account isolation). Instead, hash
+  // the NFKC-normalized original name: deterministic (same name → same slug every time) and
+  // collision-resistant (different names → different slugs) without ever touching the ASCII path above.
+  const hash = createHash('sha256').update(s.normalize('NFKC')).digest('hex').slice(0, 8)
+  return `x-${hash}`
 }
 
 function ensureDirs(settings: Settings): string {
