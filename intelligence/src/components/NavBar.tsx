@@ -56,10 +56,10 @@ export function NavBar() {
             </NavLink>
           ))}
         </nav>
+        {/* HashRouter + file:// packaging: a root-relative href navigates the top frame to the
+            filesystem root instead of the app's own route. Hash nav stays in-window and in-app. */}
         <a
-          href="/embed"
-          target="_blank"
-          rel="noopener noreferrer"
+          href="#/embed"
           className="text-xs font-medium text-mantu-light hover:underline"
         >
           Compact embed view →

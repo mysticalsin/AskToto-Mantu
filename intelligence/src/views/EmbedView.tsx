@@ -30,8 +30,10 @@ export function EmbedView({ data }: Props) {
         ))}
       </motion.div>
       <div className="mt-4 text-center">
+        {/* HashRouter + file://: a root-relative href (even with target="_top") resolves to the
+            filesystem root, not the app route. "#/" is the real path to the full dashboard. */}
         <a
-          href="/"
+          href="#/"
           target="_top"
           className="text-xs font-medium text-mantu-light hover:underline"
         >

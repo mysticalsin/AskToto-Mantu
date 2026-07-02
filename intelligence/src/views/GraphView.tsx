@@ -105,6 +105,18 @@ export function GraphView({ data }: Props) {
     return true
   }
 
+  // Cheap identity for the graph's actual shape (ids + confidence/band/freshness — everything the
+  // effect below draws) so a poll tick that reloads the same underlying graph into a new object
+  // doesn't blow away and rebuild the vis-network canvas (destroy() resets pan/zoom/physics and
+  // flickers every 10s while a backfill is running). Only a real content change re-triggers it.
+  const graphSignature = useMemo(() => {
+    const nodePart = graph.nodes
+      .map((n) => `${n.id}:${n.community_id}:${n.win_likelihood_band ?? ''}:${n.freshness ?? ''}`)
+      .join('|')
+    const edgePart = graph.edges.map((e) => `${e.from}>${e.to}:${e.relation}:${e.confidence}`).join('|')
+    return `${nodePart}##${edgePart}`
+  }, [graph])
+
   useEffect(() => {
     if (!containerRef.current) return
 
@@ -200,8 +212,10 @@ export function GraphView({ data }: Props) {
       network.destroy()
       networkRef.current = null
     }
+    // Keyed on the signature (content), not the `graph` object identity — a poll tick that produces
+    // an equivalent graph in a freshly-allocated object must NOT rebuild the canvas.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [graph])
+  }, [graphSignature])
 
   // Re-apply combined visibility whenever any filter dimension changes.
   useEffect(() => {
