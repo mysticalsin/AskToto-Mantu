@@ -641,12 +641,15 @@ function AiSection({
                   id={modelInputId}
                   list={`m-${provider}`}
                   value={model}
-                  disabled={settings.managedKeys.includes('providerModels')}
+                  disabled={provider === 'anthropic' || settings.managedKeys.includes('providerModels')}
                   onChange={(e) =>
                     patch({ providerModels: { ...settings.providerModels, [provider]: e.target.value } })
                   }
                   placeholder={def.fastModel || 'base model id'}
-                  className={['w-full', ctl, settings.managedKeys.includes('providerModels') ? 'opacity-60' : ''].join(' ')}
+                  className={[
+                    'w-full', ctl,
+                    provider === 'anthropic' || settings.managedKeys.includes('providerModels') ? 'opacity-60' : ''
+                  ].join(' ')}
                 />
                 <ManagedChip keys={settings.managedKeys} k="providerModels" />
               </div>
@@ -659,16 +662,25 @@ function AiSection({
                 id={`think-${provider}`}
                 list={`m-${provider}`}
                 value={settings.providerModelsThinking[provider] ?? ''}
-                disabled={settings.managedKeys.includes('providerModelsThinking')}
+                disabled={provider === 'anthropic' || settings.managedKeys.includes('providerModelsThinking')}
                 onChange={(e) =>
                   patch({
                     providerModelsThinking: { ...settings.providerModelsThinking, [provider]: e.target.value }
                   })
                 }
                 placeholder={def.thinkModel || def.defaultModel || 'thinking model id'}
-                className={['w-full', ctl, settings.managedKeys.includes('providerModelsThinking') ? 'opacity-60' : ''].join(' ')}
+                className={[
+                  'w-full', ctl,
+                  provider === 'anthropic' || settings.managedKeys.includes('providerModelsThinking') ? 'opacity-60' : ''
+                ].join(' ')}
               />
             </div>
+            {provider === 'anthropic' && (
+              <p className="text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
+                Locked: base always answers as Haiku, thinking as Sonnet — a cost guardrail. Hard/coding
+                questions still escalate to Opus automatically; that tier isn't shown here.
+              </p>
+            )}
             <datalist id={`m-${provider}`}>
               {def.models.map((m) => (
                 <option key={m} value={m} />
