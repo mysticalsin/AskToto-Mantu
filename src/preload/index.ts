@@ -47,6 +47,8 @@ function sub<T>(channel: string, cb: (payload: T) => void): Unsub {
 const api = {
   getSettings: (): Promise<PublicSettings> => ipcRenderer.invoke(IPC.settingsGet),
   getPermissions: (): Promise<PlatformPermissions> => ipcRenderer.invoke(IPC.permissionsGet),
+  openPermissionSettings: (kind: 'microphone' | 'screenRecording'): Promise<void> =>
+    ipcRenderer.invoke(IPC.permissionsOpenSettings, kind),
   setSettings: (patch: Partial<Settings> | import('@shared/ipc').SettingsPatch): Promise<PublicSettings> =>
     ipcRenderer.invoke(IPC.settingsSet, patch),
   setApiKey: (provider: ProviderId, key: string): Promise<{ hasKeys: Record<string, boolean> }> =>

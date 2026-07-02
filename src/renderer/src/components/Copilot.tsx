@@ -1,11 +1,11 @@
-import { useEffect, useRef, useState } from 'react'
+import { memo, useEffect, useMemo, useRef, useState } from 'react'
 import { Eye, Mic, Copy, Check } from 'lucide-react'
 import type { TranscriptLine } from '@shared/ipc'
 import type { AnswerState } from '../state'
 import { Markdown } from './Markdown'
 import { TextButton, Spinner } from './ui'
 
-export function Copilot({
+export const Copilot = memo(function Copilot({
   lines,
   suggestion,
   listening,
@@ -27,6 +27,34 @@ export function Copilot({
 }): JSX.Element {
   const scroller = useRef<HTMLDivElement>(null)
   const [copied, setCopied] = useState(false)
+
+  // The transcript only ever grows — remapping the WHOLE array to JSX on every render (a array-index key,
+  // no memoization) meant every parent re-render (e.g. the old 1Hz `seconds` tick) re-diffed the entire
+  // history instead of just the newest line. `l.t` (a Date.now() timestamp, set once per line — see
+  // shared/ipc.ts TranscriptLine) is a stable identity for an existing line; `-${i}` guards the
+  // theoretical case of two lines sharing the same millisecond without weakening the stability for the
+  // common case (t never changes for an already-committed line).
+  const transcriptRows = useMemo(
+    () =>
+      lines.map((l, i) => (
+        <div key={`${l.t}-${i}`} className={l.speaker === 'you' ? 'flex justify-end' : 'flex justify-start'}>
+          <div
+            className={[
+              'max-w-[82%] rounded-[var(--radius-xl)] px-3 py-1.5 text-[13px] leading-snug',
+              l.speaker === 'you'
+                ? 'bg-[var(--color-accent-soft)] text-[color:var(--color-ink)]'
+                : 'bg-white/[0.06] text-[color:var(--color-ink)]'
+            ].join(' ')}
+          >
+            <span className="mr-1.5 text-[10px] font-semibold uppercase text-[color:var(--color-ink-3)]">
+              {l.speaker === 'you' ? 'You' : 'Them'}
+            </span>
+            {l.text}
+          </div>
+        </div>
+      )),
+    [lines]
+  )
 
   useEffect(() => {
     const el = scroller.current
@@ -142,27 +170,11 @@ export function Copilot({
                 {listening ? 'Waiting for speech…' : 'No audio yet.'}
               </div>
             ) : (
-              lines.map((l, i) => (
-                <div key={i} className={l.speaker === 'you' ? 'flex justify-end' : 'flex justify-start'}>
-                  <div
-                    className={[
-                      'max-w-[82%] rounded-[var(--radius-xl)] px-3 py-1.5 text-[13px] leading-snug',
-                      l.speaker === 'you'
-                        ? 'bg-[var(--color-accent-soft)] text-[color:var(--color-ink)]'
-                        : 'bg-white/[0.06] text-[color:var(--color-ink)]'
-                    ].join(' ')}
-                  >
-                    <span className="mr-1.5 text-[10px] font-semibold uppercase text-[color:var(--color-ink-3)]">
-                      {l.speaker === 'you' ? 'You' : 'Them'}
-                    </span>
-                    {l.text}
-                  </div>
-                </div>
-              ))
+              transcriptRows
             )}
           </div>
         </section>
       ) : null}
     </div>
   )
-}
+})

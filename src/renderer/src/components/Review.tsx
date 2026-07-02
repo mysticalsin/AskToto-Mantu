@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { memo, useEffect, useMemo, useState } from 'react'
 import { Copy, Check, FileText, ListTree, FolderOpen, Save, RotateCcw, Play, ChevronDown, Download, Clock, Mail, Send, AlertCircle } from 'lucide-react'
 import type { TranscriptLine, MeetingSummary } from '@shared/ipc'
 import type { AnswerState } from '../state'
@@ -60,7 +60,7 @@ function meetingTime(dateStr: string): string {
   }
 }
 
-export function Review({
+export const Review = memo(function Review({
   recap,
   lines,
   savedPath,
@@ -605,4 +605,4 @@ export function Review({
       )}
     </div>
   )
-}
+})

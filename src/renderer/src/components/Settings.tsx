@@ -37,6 +37,10 @@ import {
   ArrowLeft,
   ArrowRight,
   MessageSquare,
+  MessageSquareQuote,
+  Lightbulb,
+  AlignLeft,
+  FileSearch,
   Camera,
   Eye,
   Settings2,
@@ -2307,7 +2311,10 @@ type TabId =
   | 'profile'
 
 const TABS: { id: TabId; label: string; icon: LucideIcon }[] = [
-  { id: 'personalize', label: 'Modes', icon: Wand2 },
+  // Tab id stays 'personalize' (nothing keys off the label) — labeled to cover BOTH children rendered
+  // under it: the transparency/appearance slider AND the Modes editor. A plain rename to just "Appearance"
+  // would hide Modes (which onboarding explicitly teaches by that name) behind an unrelated-looking tab.
+  { id: 'personalize', label: 'Modes & Display', icon: Wand2 },
   { id: 'ai', label: 'AI', icon: Cpu },
   { id: 'audio', label: 'Audio', icon: Mic },
   { id: 'calendar', label: 'Calendar', icon: Calendar },
@@ -3705,6 +3712,10 @@ const SHORTCUT_LABELS: Record<HotkeyAction, string> = {
   factcheck: 'Fact-check',
   'toggle-listen': 'Toggle Listen',
   reset: 'New / reset',
+  whatnext: 'What to say next',
+  explain: 'Explain',
+  summarize: 'Summarize screen',
+  'spotlight-ref': 'Spotlight Ref',
   'scroll-up': 'Move up',
   'scroll-down': 'Move down',
   'scroll-left': 'Move left',
@@ -3723,6 +3734,10 @@ const SHORTCUT_GROUPS: Record<HotkeyAction, ShortcutGroup> = {
   'toggle-listen': 'General',
   capture: 'General',
   factcheck: 'General',
+  whatnext: 'General',
+  explain: 'General',
+  summarize: 'General',
+  'spotlight-ref': 'General',
   'scroll-up': 'Window',
   'scroll-down': 'Window',
   'scroll-left': 'Window',
@@ -3738,6 +3753,10 @@ const SHORTCUT_ICONS: Partial<Record<HotkeyAction, LucideIcon>> = {
   'toggle-listen': Mic,
   capture: Camera,
   factcheck: CircleCheck,
+  whatnext: MessageSquareQuote,
+  explain: Lightbulb,
+  summarize: AlignLeft,
+  'spotlight-ref': FileSearch,
   'scroll-up': ArrowUp,
   'scroll-down': ArrowDown,
   'scroll-left': ArrowLeft,

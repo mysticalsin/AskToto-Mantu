@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { memo, useEffect, useState } from 'react'
 import { Copy, Check, RefreshCw, FileDown, ShieldCheck, ChevronsDown, ThumbsUp, ThumbsDown, Eye, Sparkles } from 'lucide-react'
 import { Markdown } from './Markdown'
 import { Chip, TextButton } from './ui'
@@ -39,7 +39,7 @@ function errorHint(error: string): string | null {
   return null
 }
 
-export function Answer({
+export const Answer = memo(function Answer({
   text,
   streaming,
   error,
@@ -69,6 +69,21 @@ export function Answer({
   const [saved, setSaved] = useState(false)
   const [saveError, setSaveError] = useState<string | null>(null)
   const [rated, setRated] = useState<'up' | 'down' | null>(null)
+
+  // Elapsed-time-aware "Thinking…" message. Some providers (Dust) take ~40-48s to first token — the same
+  // static label for that whole window reads as stuck rather than working. Ticks only while the thinking
+  // branch (!text && streaming) is actually showing; resets the moment it isn't, so the next request starts
+  // from 0 rather than inheriting a stale count.
+  const thinking = !text && streaming
+  const [thinkingSecs, setThinkingSecs] = useState(0)
+  useEffect(() => {
+    if (!thinking) {
+      setThinkingSecs(0)
+      return
+    }
+    const iv = setInterval(() => setThinkingSecs((s) => s + 1), 1000)
+    return () => clearInterval(iv)
+  }, [thinking])
 
   // Record the user's verdict on this answer. Metadata only (rating + kind) → audit log; no content sent.
   const rate = (r: 'up' | 'down'): void => {
@@ -215,14 +230,17 @@ export function Answer({
       </div>
     )
   }
-  if (!text && streaming) {
+  if (thinking) {
+    // Reasoning models (e.g. Kimi Code) think before the first token, and Dust specifically can take
+    // ~40-48s to first token — past ~8s, swap the static label for an elapsed-time count so a long wait
+    // still reads as "working" instead of "stuck".
+    const label = thinkingSecs >= 8 ? `Still working… (${thinkingSecs}s)` : 'Thinking…'
     return (
       <div className="fade-up mx-auto max-w-[620px] flex flex-col gap-2">
         {header}
-        {/* Reasoning models (e.g. Kimi Code) think before the first token — show it's working, not stuck. */}
         <div className="flex items-center gap-1.5 text-[12px] text-[color:var(--color-ink-2)]">
           <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-[var(--color-accent)]" />
-          Thinking…
+          {label}
         </div>
         <Skeleton />
       </div>
@@ -267,4 +285,4 @@ export function Answer({
       {footer}
     </div>
   )
-}
+})

@@ -1,3 +1,4 @@
+import { memo } from 'react'
 import { ShieldCheck, Lightbulb, MessageSquareQuote, AlignLeft } from 'lucide-react'
 
 export type QuickKind = 'factcheck' | 'whatnext' | 'explain' | 'summarize'
@@ -9,7 +10,7 @@ const ACTIONS: { kind: QuickKind; label: string; icon: typeof ShieldCheck }[] = 
   { kind: 'summarize', label: 'Summarize screen', icon: AlignLeft }
 ]
 
-export function QuickActions({
+export const QuickActions = memo(function QuickActions({
   onAction,
   hint,
   rainbowRing
@@ -54,4 +55,4 @@ export function QuickActions({
       )}
     </div>
   )
-}
+})
