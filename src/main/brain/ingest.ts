@@ -9,6 +9,8 @@ import {
   type MeetingRef,
   type BrainGraph
 } from '@shared/brain'
+import { INJECTION_GUARD } from '@shared/prompts'
+import { redactSecrets } from '@shared/redact'
 import { getSettings, getApiKey } from '../store'
 import { createStream } from '../llm'
 import { readSavedFile, resolveMeetingsFolder } from '../transcripts'
@@ -98,10 +100,20 @@ export function extractJsonObject(raw: string): string {
   return body.slice(start, end + 1)
 }
 
+/** Lead with the injection guard, exactly like personas.ts's buildSystem does for its other untrusted-
+ *  transcript modes (suggest/summary/recap/vision) — the meeting transcript is third-party data the
+ *  model must never treat as instructions. Exported so the assembly itself is directly testable. */
+export const buildExtractionSystem = (extra = ''): string =>
+  INJECTION_GUARD.trimStart() + '\n\n' + BRAIN_EXTRACTION_PROMPT + extra
+
 async function extractMeeting(s: Settings, transcriptMd: string, sourceFile: string): Promise<MeetingExtraction> {
-  const user = `Meeting transcript (file: ${basename(sourceFile)}):\n\n"""\n${transcriptMd.slice(0, 24000)}\n"""`
+  // Same redaction discipline as the live ask path (index.ts's askStart handler): the locally-saved
+  // transcript file keeps the verbatim original on disk — only the copy sent to the cloud model for
+  // extraction is stripped of high-confidence secrets, and only when the user has redaction enabled.
+  const safeMd = s.redactSensitive ? redactSecrets(transcriptMd) : transcriptMd
+  const user = `Meeting transcript (file: ${basename(sourceFile)}):\n\n"""\n${safeMd.slice(0, 24000)}\n"""`
   const attempt = async (extra: string): Promise<MeetingExtraction> => {
-    const raw = await runCompletion(s, BRAIN_EXTRACTION_PROMPT + extra, user, `brain-${Date.now()}`)
+    const raw = await runCompletion(s, buildExtractionSystem(extra), user, `brain-${Date.now()}`)
     return MeetingExtractionSchema.parse(JSON.parse(extractJsonObject(raw)))
   }
   try {
@@ -121,8 +133,18 @@ const pushUnique = <T>(arr: T[], item: T, key: (t: T) => string): void => {
 
 /** Ledger identity for a commitment is its normalized TEXT — a promise re-spoken in a later meeting
  *  ("I'll send the deck", again) is the same obligation, not a second open row. The earliest-dated
- *  row wins (pushUnique keeps the first), so aging starts from when the promise was first made. */
-export const commitmentKey = (text: string): string => text.toLowerCase().replace(/\s+/g, ' ').trim()
+ *  row wins (pushUnique keeps the first), so aging starts from when the promise was first made.
+ *  Normalizes Unicode form (NFKC, so visually-identical composed/decomposed text matches), strips
+ *  trailing sentence punctuation (a re-spoken "Send the deck." vs "send the deck" is one obligation),
+ *  then case-folds and collapses whitespace. */
+export const commitmentKey = (text: string): string =>
+  text
+    .normalize('NFKC')
+    .trim()
+    .replace(/[.!?…]+$/u, '')
+    .toLowerCase()
+    .replace(/\s+/g, ' ')
+    .trim()
 
 /** Merge one meeting's extraction into the entity + graph files. Pure data transforms — no LLM here. */
 export async function mergeExtraction(
@@ -180,6 +202,9 @@ export async function mergeExtraction(
     }
     // Commitments spoken BY this person (matched by name) join their personal ledger — over time this
     // yields a kept-promise read per counterpart, a signal no transcript-only tool can compute.
+    // Accepted design: in a deal-less meeting (x.deal is null, below) there is no ledger to also add
+    // these to, so such commitments live ONLY here and stay 'open' forever (settleCommitment is
+    // deal-keyed) — a known, accepted limitation, not a bug to fix.
     person.commitments ??= []
     for (const c of x.commitments) {
       if (c.by.toLowerCase() === p.name.toLowerCase()) {

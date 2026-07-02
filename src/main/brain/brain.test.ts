@@ -3,8 +3,9 @@ import { mkdtempSync, rmSync, readFileSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import type { Settings } from '@shared/ipc'
-import { MeetingExtractionSchema, type MeetingExtraction } from '@shared/brain'
-import { extractJsonObject, mergeExtraction, lintBrain } from './ingest'
+import { MeetingExtractionSchema, BRAIN_EXTRACTION_PROMPT, type MeetingExtraction } from '@shared/brain'
+import { INJECTION_GUARD } from '@shared/prompts'
+import { extractJsonObject, mergeExtraction, lintBrain, commitmentKey, buildExtractionSystem } from './ingest'
 import { buildBrainContext } from './context'
 import {
   brainDir,
@@ -194,6 +195,88 @@ describe('brain', () => {
       await writeDeal(s, dslug, deal)
       const warnings = lintBrain(s)
       expect(warnings.some((w) => w.includes('won') && w.includes('win-likelihood'))).toBe(true)
+    })
+  })
+
+  describe('slugify — non-Latin / emoji names', () => {
+    it('two different non-Latin names never collapse to the same slug (no cross-entity merge)', () => {
+      const beijing = slugify('北京公司')
+      const moscow = slugify('Москва Банк')
+      expect(beijing).not.toBe('unknown')
+      expect(moscow).not.toBe('unknown')
+      expect(beijing).not.toBe(moscow)
+    })
+
+    it('the same non-Latin name always produces the same slug (deterministic across calls)', () => {
+      expect(slugify('北京公司')).toBe(slugify('北京公司'))
+      expect(slugify('🎉🎊')).toBe(slugify('🎉🎊'))
+    })
+
+    it('falls back to a stable x-<hash> form, distinct from the ASCII slug path', () => {
+      expect(slugify('北京公司')).toMatch(/^x-[0-9a-f]{8}$/)
+      // Existing ASCII/diacritic behavior is untouched — no accidental regression on real slugs.
+      expect(slugify("L'Oréal")).toBe('l-oreal')
+    })
+
+    it('two Chinese-named accounts stay fully separate through the real merge pipeline', async () => {
+      const beijing = sampleExtraction()
+      beijing.account = { name: '北京公司', sector: 'technology', sector_confidence: 'INFERRED', confidence: 'EXTRACTED' }
+      beijing.deal = null
+      beijing.people = []
+      const shanghai = sampleExtraction()
+      shanghai.account = { name: '上海银行', sector: 'banking', sector_confidence: 'INFERRED', confidence: 'EXTRACTED' }
+      shanghai.deal = null
+      shanghai.people = []
+
+      await mergeExtraction(s, beijing, { file: 'b1.md', date: '', title: 't' })
+      await mergeExtraction(s, shanghai, { file: 's1.md', date: '', title: 't' })
+
+      const accounts = listEntities(s, 'account')
+      expect(accounts).toHaveLength(2) // NOT merged into a single 'unknown'
+      expect(accounts).not.toContain('unknown')
+      const names = accounts.map((slug) => readAccount(s, slug)!.name).sort()
+      expect(names).toEqual(['上海银行', '北京公司'])
+    })
+  })
+
+  describe('commitmentKey', () => {
+    it('trailing punctuation does not create a duplicate obligation', () => {
+      expect(commitmentKey('Send the deck.')).toBe(commitmentKey('send the deck'))
+      expect(commitmentKey('Send the deck!')).toBe(commitmentKey('send the deck'))
+      expect(commitmentKey('Send the deck…')).toBe(commitmentKey('send the deck'))
+    })
+
+    it('NFKC-equivalent (composed vs decomposed) text produces the same key', () => {
+      const composed = 'résumé' // résumé, single precomposed é
+      const decomposed = 'résumé' // résumé, e + combining acute accent
+      expect(commitmentKey(composed)).toBe(commitmentKey(decomposed))
+    })
+
+    it('still case-folds and collapses whitespace as before', () => {
+      expect(commitmentKey('  Send   the DECK  ')).toBe('send the deck')
+    })
+  })
+
+  describe('buildExtractionSystem (injection guard)', () => {
+    it('leads with the injection guard, ahead of the extraction prompt', () => {
+      const system = buildExtractionSystem()
+      const guardStart = system.indexOf(INJECTION_GUARD.trim())
+      const promptStart = system.indexOf(BRAIN_EXTRACTION_PROMPT)
+      expect(guardStart).toBe(0) // the guard is the very first thing the model reads
+      expect(promptStart).toBeGreaterThan(guardStart)
+    })
+
+    it('preserves the extraction prompt verbatim, including its trailing instruction', () => {
+      const system = buildExtractionSystem()
+      expect(system).toContain('Reply with the JSON object only.')
+      expect(system.endsWith('Reply with the JSON object only.')).toBe(true)
+    })
+
+    it('appends the retry reinforcement text after the base prompt, guard still leading', () => {
+      const extra = '\n\nREMINDER: your ENTIRE reply must be one valid JSON object. No fences, no prose.'
+      const system = buildExtractionSystem(extra)
+      expect(system.indexOf(INJECTION_GUARD.trim())).toBe(0)
+      expect(system.endsWith(extra.trim())).toBe(true)
     })
   })
 
