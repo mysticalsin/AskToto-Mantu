@@ -166,12 +166,20 @@ export async function mergeExtraction(
 
   for (const p of x.people) {
     const pslug = slugify(p.name)
-    const person = readPerson(s, pslug) ?? { name: p.name, role: null, account: null, meetings: [], quotes: [], stance_trail: [] }
+    const person = readPerson(s, pslug) ?? { name: p.name, role: null, account: null, meetings: [], quotes: [], stance_trail: [], commitments: [] }
     if (p.role && !person.role) person.role = p.role
     if ((p.org || x.account) && !person.account) person.account = p.org || x.account?.name || null
     pushUnique(person.meetings, ref, (m) => m.file)
     for (const sig of x.signals) {
       if (sig.quote) pushUnique(person.stance_trail, { meeting: ref.file, kind: sig.kind, statement: sig.statement }, (t) => t.meeting + t.statement)
+    }
+    // Commitments spoken BY this person (matched by name) join their personal ledger — over time this
+    // yields a kept-promise read per counterpart, a signal no transcript-only tool can compute.
+    person.commitments ??= []
+    for (const c of x.commitments) {
+      if (c.by.toLowerCase() === p.name.toLowerCase()) {
+        pushUnique(person.commitments, { ...c, meeting: ref.file, date: ref.date, status: 'open' as const }, (t) => t.meeting + t.text)
+      }
     }
     addNode(`person:${pslug}`, 'person', p.name)
     addEdge(`person:${pslug}`, meetingId, 'attends', p.confidence)
@@ -199,6 +207,7 @@ export async function mergeExtraction(
       meetings: [],
       signals: [],
       missed_signals: [],
+      commitments: [],
       feedback: []
     }
     if (x.deal.stage) deal.stage = x.deal.stage
@@ -213,6 +222,15 @@ export async function mergeExtraction(
     pushUnique(deal.meetings, ref, (m) => m.file)
     for (const sig of x.signals) pushUnique(deal.signals, { ...sig, meeting: ref.file }, (t) => t.meeting + t.statement)
     for (const ms of x.missed_signals) pushUnique(deal.missed_signals, { ...ms, meeting: ref.file }, (t) => t.meeting + t.statement)
+    // Commitment Ledger: promises spoken in this meeting join the deal's ledger as open obligations.
+    // Status stays 'open' until later evidence or a human marks it — the merge never guesses.
+    for (const c of x.commitments) {
+      pushUnique(
+        deal.commitments,
+        { ...c, meeting: ref.file, date: ref.date, status: 'open' as const },
+        (t) => t.meeting + t.text
+      )
+    }
     for (const f of x.feedback) pushUnique(deal.feedback, { note: f, meeting: ref.file }, (t) => t.meeting + t.note)
     addNode(`deal:${dslug}`, 'deal', deal.name)
     addEdge(`deal:${dslug}`, meetingId, 'discussed-in', 'EXTRACTED')
