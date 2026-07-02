@@ -117,8 +117,20 @@ function baseUserText(req: AskStart): string {
     case 'vision':
       return req.prompt || 'What is on my screen right now? Help me with it.'
     default:
-      return req.prompt
+      // Receipt Mode: prepend the relevant, meeting-cited slice of the user's own brain (assembled in
+      // main). It leads so the model reads its grounded knowledge before the question. Per-turn only —
+      // this stays out of the cached system prefix, so grounding never invalidates the prompt cache.
+      return req.brainContext ? brainContextBlock(req.brainContext) + req.prompt : req.prompt
   }
+}
+
+/** Wrap the assembled brain slice with a clear, quotable header the GROUNDING_RAIL refers back to. */
+function brainContextBlock(block: string): string {
+  return (
+    'KNOWLEDGE FROM YOUR PAST MEETINGS (each fact ends with its source meeting — cite it when you use the fact):\n' +
+    block +
+    '\n\n'
+  )
 }
 
 /** Detect the real image MIME from the base64 magic bytes (JPEG = "/9j/", PNG = "iVBOR").
