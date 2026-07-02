@@ -7,6 +7,8 @@ import {
   CalendarCheck,
   CalendarClock,
   CalendarX,
+  Check,
+  ClipboardList,
   ExternalLink,
   HelpCircle,
   Minus,
@@ -18,6 +20,7 @@ import {
 import type { BrainRead, BrainStatus, Band, DealEntity, LedgerCommitment } from '@shared/brain'
 import type { MeetingSummary } from '@shared/ipc'
 import { computeSilence } from '@shared/silence'
+import { buildMarsWeek, renderMarsMarkdown } from '@shared/mars'
 import { MantuMark } from './MantuMark'
 import { Spinner } from './ui'
 
@@ -244,6 +247,7 @@ const BAND_ORDER: Record<string, number> = { concerning: 0, mixed: 1, good: 2 }
 
 export function BrainView({ onBack }: { onBack: () => void }): JSX.Element {
   const [data, setData] = useState<BrainRead | null>(null)
+  const [marsCopied, setMarsCopied] = useState(false)
   const [status, setStatus] = useState<BrainStatus | null>(null)
   const [meetings, setMeetings] = useState<MeetingSummary[]>([])
   const [loading, setLoading] = useState(true)
@@ -354,6 +358,25 @@ export function BrainView({ onBack }: { onBack: () => void }): JSX.Element {
             Your meeting knowledge, compounding — grounded in transcripts, never invented.
           </div>
         </div>
+        {/* Mars week draft — the weekly report skeleton (meetings, new accounts, won/lost, follow-ups),
+            assembled from the last 7 days of the brain and copied as paste-ready markdown. */}
+        {(data?.meetings?.length ?? 0) > 0 && (
+          <button
+            type="button"
+            onClick={() => {
+              const md = renderMarsMarkdown(buildMarsWeek(data?.meetings ?? [], data?.deals ?? [], Date.now()))
+              void navigator.clipboard.writeText(md).then(() => {
+                setMarsCopied(true)
+                setTimeout(() => setMarsCopied(false), 2000)
+              })
+            }}
+            title="Copy this week's Mars draft (meetings, new accounts, won/lost, open follow-ups)"
+            className="no-drag focus-ring flex h-7 shrink-0 items-center gap-1.5 rounded-lg px-2 text-[11px] font-semibold text-[color:var(--color-ink-3)] hover:text-[color:var(--color-ink)]"
+          >
+            {marsCopied ? <Check size={12} className="text-[var(--color-success)]" /> : <ClipboardList size={12} />}
+            {marsCopied ? 'Copied' : 'Mars week'}
+          </button>
+        )}
         <button
           type="button"
           onClick={() => void refresh()}
