@@ -82,6 +82,9 @@ const api = {
   graphifyRelated: (file: string): Promise<GraphRelated> =>
     ipcRenderer.invoke(IPC.graphifyRelated, file),
   graphifyOpenGraph: (): Promise<string> => ipcRenderer.invoke(IPC.graphifyOpenGraph),
+  brainStatus: (): Promise<import('@shared/brain').BrainStatus | null> =>
+    ipcRenderer.invoke(IPC.brainStatus),
+  brainBackfill: (): Promise<{ queued: number }> => ipcRenderer.invoke(IPC.brainBackfill),
   authStatus: (): Promise<AuthStatus> => ipcRenderer.invoke(IPC.authStatus),
   signIn: (): Promise<SignInResult> => ipcRenderer.invoke(IPC.authSignIn),
   signOut: (): Promise<void> => ipcRenderer.invoke(IPC.authSignOut),

@@ -145,16 +145,20 @@ export function streamDust(opts: StreamOptions): StreamHandle {
       return true
     }
     const workspaceId = creds.workspaceId || ''
+    // freshConversation (background jobs like brain ingest): never join OR become the cached meeting
+    // conversation — an extraction must not see meeting context, and the meeting must not see it.
     const isFresh = (c: DustConversationRef | null): c is DustConversationRef =>
+      !opts.freshConversation &&
       !!c &&
       c.workspaceId === workspaceId &&
       c.agentId === opts.model &&
       Date.now() - c.createdAt < DUST_CONVERSATION_TTL_MS
 
     // If a concurrent request is already creating this meeting's conversation, wait for it instead of
-    // racing a second createConversation — see creationInFlight comment above.
+    // racing a second createConversation — see creationInFlight comment above. Fresh-conversation
+    // requests skip the gate entirely: they never touch the shared cache slot.
     let releaseCreationGate: (() => void) | null = null
-    while (!isFresh(activeConversation)) {
+    while (!opts.freshConversation && !isFresh(activeConversation)) {
       if (!creationInFlight) {
         creationInFlight = new Promise((resolve) => {
           releaseCreationGate = resolve
@@ -220,8 +224,11 @@ export function streamDust(opts: StreamOptions): StreamHandle {
       messageSId = created.value.message.sId
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const sId = (conversation as any)?.sId
-      if (sId) activeConversation = { conversationId: sId, workspaceId, agentId: opts.model, createdAt: Date.now() }
-      auditLog('dust.conversation', { action: 'created' })
+      // A fresh-conversation request must not hijack the meeting's cache slot with its throwaway thread.
+      if (sId && !opts.freshConversation) {
+        activeConversation = { conversationId: sId, workspaceId, agentId: opts.model, createdAt: Date.now() }
+      }
+      auditLog('dust.conversation', { action: opts.freshConversation ? 'created-isolated' : 'created' })
     }
     const streamed = await api.streamAgentAnswerEvents({
       conversation,

@@ -63,6 +63,8 @@ export type AuditEvent =
   | 'bidstack.disconnected'
   | 'bidstack.push'
   | 'dust.conversation'
+  | 'brain.ingest'
+  | 'brain.backfill.start'
 
 /**
  * Append a structured audit record. NEVER pass secrets or message/transcript CONTENT — metadata only

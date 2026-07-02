@@ -214,8 +214,10 @@ export function isEncryptedFile(path: string): boolean {
   }
 }
 
-/** Atomic write; encrypts at rest when `encrypt` is true. Cleans up temp on failure. */
-async function writeSaved(file: string, content: string, encrypt: boolean): Promise<void> {
+/** Atomic write; encrypts at rest when `encrypt` is true. Cleans up temp on failure.
+ *  Exported for the brain store (src/main/brain/) so derived knowledge files share the exact same
+ *  at-rest encryption semantics as the transcripts they're built from. */
+export async function writeSaved(file: string, content: string, encrypt: boolean): Promise<void> {
   let data: Buffer = Buffer.from(content, 'utf8')
   if (encrypt) {
     // encryptEnvelopeV2 always produces an ATKENC2-marked encrypted envelope — safeStorage path

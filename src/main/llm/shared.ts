@@ -31,6 +31,12 @@ export interface StreamOptions {
   temperature: number
   /** Per-tier/mode idle-timeout budget in ms (abort if no token arrives within it). Defaults to 120s. */
   idleMs?: number
+  /**
+   * Dust only: force a brand-new, uncached conversation for this request. Background jobs (brain
+   * ingest) must NOT join the live meeting's cached conversation — they'd contaminate the meeting's
+   * context and inherit meeting context into the extraction. No effect on other providers.
+   */
+  freshConversation?: boolean
   system: string
   req: AskStart
   handlers: StreamHandlers
