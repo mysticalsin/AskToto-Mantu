@@ -1,7 +1,7 @@
 {
   "name": "asktoto",
   "version": "1.0.0",
-  "description": "AskToto — AI desktop overlay assistant",
+  "description": "AskToto \u2014 AI desktop overlay assistant",
   "author": "Tony Walteur <tony.walteur@gmail.com>",
   "main": "./out/main/index.js",
   "scripts": {
@@ -13,7 +13,7 @@
     "test": "vitest run",
     "check:release": "node scripts/check-release.mjs",
     "fetch-models": "node scripts/fetch-models.mjs",
-    "build:intelligence": "cd intelligence && npm run build",
+    "build:intelligence": "cd intelligence && npm ci && npm run build",
     "predist": "node scripts/fetch-models.mjs && npm run build:intelligence",
     "dist": "electron-vite build && electron-builder --mac --publish never",
     "predist:win": "node scripts/fetch-models.mjs",
