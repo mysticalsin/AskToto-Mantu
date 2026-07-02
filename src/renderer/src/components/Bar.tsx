@@ -44,7 +44,7 @@ function clock(s: number): string {
  *  Pause must exclude dead air from the displayed time (the old counter simply stopped incrementing while
  *  paused) — tracked here as accumulated pausedMs, subtracted from the raw wall-clock delta so a long pause
  *  doesn't make the clock jump forward on resume. */
-const ElapsedClock = memo(function ElapsedClock({
+export const ElapsedClock = memo(function ElapsedClock({
   startedAt,
   paused
 }: {

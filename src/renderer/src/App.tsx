@@ -1408,6 +1408,9 @@ export function App(): JSX.Element {
         <div className="flex w-full justify-center">
           <ControlPill
             listening={listen.listening}
+            paused={listen.paused}
+            startedAt={meetingStartRef.current}
+            onTogglePause={onTogglePause}
             onToggleListen={toggleListen}
             onExpand={() => {
               setMinimized(false)
