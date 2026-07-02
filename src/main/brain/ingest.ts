@@ -29,7 +29,8 @@ import {
   writeAccount,
   readDeal,
   writeDeal,
-  listEntities
+  listEntities,
+  listMeetingExtractions
 } from './store'
 
 /**
@@ -458,16 +459,30 @@ export function startBackfill(): { queued: number } {
   const idx = readIndex(s)
   if (!idx.backfillRequested) void updateIndex(s, (i) => { i.backfillRequested = true })
   const already = new Set(Object.entries(idx.ingested).filter(([, v]) => v.ok).map(([k]) => k))
+  // The ingest log is a cache of "already extracted", not the source of truth — if it's ever out of
+  // sync with reality (the race above, a manual edit, a version before this log existed), a real
+  // extraction file already on disk still means the work is done. Checking both means a lost/stale
+  // log costs a status-count fib, never a re-burned Dust call re-processing finished meetings.
+  const extractedSlugs = new Set(listMeetingExtractions(s))
   const inFlight = new Set(queue.map((j) => basename(j.file)))
   const candidates: Job[] = []
   const folder = resolveMeetingsFolder(s)
   for (const f of existsSync(folder) ? readdirSync(folder) : []) {
-    if (f.endsWith('.md') && !f.startsWith('.') && f !== 'index.md' && !already.has(f) && !inFlight.has(f)) {
+    if (
+      f.endsWith('.md') &&
+      !f.startsWith('.') &&
+      f !== 'index.md' &&
+      !already.has(f) &&
+      !inFlight.has(f) &&
+      !extractedSlugs.has(slugify(f))
+    ) {
       candidates.push({ file: join(folder, f), source: 'meetings' })
     }
   }
   for (const f of existsSync(VAULT_TRANSCRIPTS) ? readdirSync(VAULT_TRANSCRIPTS) : []) {
-    if (f.endsWith('.md') && !already.has(f) && !inFlight.has(f)) candidates.push({ file: join(VAULT_TRANSCRIPTS, f), source: 'vault' })
+    if (f.endsWith('.md') && !already.has(f) && !inFlight.has(f) && !extractedSlugs.has(slugify(f))) {
+      candidates.push({ file: join(VAULT_TRANSCRIPTS, f), source: 'vault' })
+    }
   }
   // Accumulate rather than overwrite: a re-entrant call must extend an in-flight backfill's progress
   // tracking, not reset it out from under the jobs already queued.
