@@ -2,6 +2,7 @@ import { memo, useEffect, useState } from 'react'
 import { Copy, Check, RefreshCw, FileDown, ShieldCheck, ChevronsDown, ThumbsUp, ThumbsDown, Eye } from 'lucide-react'
 import { Markdown } from './Markdown'
 import { TextButton } from './ui'
+import { useFlash } from '../lib/useFlash'
 
 function Skeleton(): JSX.Element {
   return (
@@ -62,9 +63,9 @@ export const Answer = memo(function Answer({
   onRetry?: () => void
   onGoDeeper?: () => void
 }): JSX.Element {
-  const [copied, setCopied] = useState(false)
+  const [copied, flashCopied] = useFlash(1500)
   const [copyError, setCopyError] = useState<string | null>(null)
-  const [saved, setSaved] = useState(false)
+  const [saved, flashSaved] = useFlash(1800)
   const [saveError, setSaveError] = useState<string | null>(null)
   const [rated, setRated] = useState<'up' | 'down' | null>(null)
 
@@ -96,9 +97,8 @@ export const Answer = memo(function Answer({
     window.toto
       .saveNote({ title: noteTitle, mode: 'general', question: noteTitle, answer: text })
       .then(() => {
-        setSaved(true)
+        flashSaved()
         setSaveError(null)
-        setTimeout(() => setSaved(false), 1800)
       })
       .catch((e) => setSaveError(`Save failed: ${e instanceof Error ? e.message : String(e)}`))
   }
@@ -136,9 +136,8 @@ export const Answer = memo(function Answer({
     navigator.clipboard
       .writeText(text)
       .then(() => {
-        setCopied(true)
+        flashCopied()
         setCopyError(null)
-        setTimeout(() => setCopied(false), 1500)
       })
       .catch((e) => {
         const msg = e instanceof Error ? e.message : String(e)

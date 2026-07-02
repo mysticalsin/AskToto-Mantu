@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, memo, type ReactNode } from 'react'
+import { useCallback, useEffect, useRef, useState, memo, type ReactNode } from 'react'
 import {
   Image,
   CornerDownLeft,
@@ -228,7 +228,12 @@ export const Bar = memo(function Bar(props: BarProps): JSX.Element {
   const inputRef = useRef<HTMLInputElement>(null)
   // Drag the whole window from anywhere on the widget (shared with the control pill). Dragging blurs the
   // input so the caret drops; a press that starts inside the input is excluded so text-selection works.
-  const drag = useWindowDrag(() => inputRef.current?.blur())
+  // useCallback keeps this a stable identity across renders (inputRef itself never changes) — an inline
+  // arrow function here would be a fresh callback on every render, which used to bust useWindowDrag's
+  // effect dep and tear down/re-add its window pointermove/pointerup listeners on every frame while an
+  // answer streamed (Bar re-renders up to ~60/s during that time).
+  const onDragStart = useCallback(() => inputRef.current?.blur(), [])
+  const drag = useWindowDrag(onDragStart)
 
   useEffect(() => {
     if (props.focusSignal > 0) inputRef.current?.focus()

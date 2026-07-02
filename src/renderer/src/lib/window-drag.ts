@@ -25,6 +25,13 @@ export function useWindowDrag(onDragStart?: () => void): {
   const pendingDxRef = useRef(0)
   const pendingDyRef = useRef(0)
   const lastSendRef = useRef(0)
+  // Mirror the latest onDragStart into a ref so the effect below never needs it in its dep array. Callers
+  // that pass a fresh inline callback every render (easy to do by accident) would otherwise tear down and
+  // re-add the window pointermove/pointerup listeners on every one of those renders; reading through a ref
+  // keeps the listeners mounted once for the component's lifetime while still always invoking the latest
+  // callback.
+  const onDragStartRef = useRef(onDragStart)
+  onDragStartRef.current = onDragStart
 
   useEffect(() => {
     const flush = (): void => {
@@ -42,7 +49,7 @@ export function useWindowDrag(onDragStart?: () => void): {
       const dy = e.screenY - dragRef.current.y
       if (!movedRef.current && Math.abs(dx) + Math.abs(dy) < 8) return
       e.preventDefault()
-      if (!movedRef.current) onDragStart?.()
+      if (!movedRef.current) onDragStartRef.current?.()
       movedRef.current = true
       dragRef.current = { x: e.screenX, y: e.screenY }
       pendingDxRef.current += dx
@@ -64,7 +71,10 @@ export function useWindowDrag(onDragStart?: () => void): {
       window.removeEventListener('pointermove', onMove)
       window.removeEventListener('pointerup', onUp)
     }
-  }, [onDragStart])
+    // Deliberately no deps: onDragStart is read through onDragStartRef (see above) so the window listeners
+    // are attached exactly once per mounted instance, never torn down/re-added on caller re-renders.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   return {
     onPointerDown: (e) => {
