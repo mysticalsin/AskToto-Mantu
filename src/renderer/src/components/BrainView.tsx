@@ -14,7 +14,7 @@ import {
   TrendingUp,
   Users
 } from 'lucide-react'
-import type { BrainRead, BrainStatus, Band, DealEntity } from '@shared/brain'
+import type { BrainRead, BrainStatus, Band, DealEntity, LedgerCommitment } from '@shared/brain'
 import type { MeetingSummary } from '@shared/ipc'
 import { MantuMark } from './MantuMark'
 import { Spinner } from './ui'
@@ -311,6 +311,17 @@ export function BrainView({ onBack }: { onBack: () => void }): JSX.Element {
     [data]
   )
 
+  // Commitment Ledger: every open promise across all deals, oldest first (age = urgency).
+  const openPromises = useMemo(() => {
+    const all: (LedgerCommitment & { deal: string })[] = []
+    for (const d of data?.deals ?? []) {
+      for (const c of d.commitments ?? []) {
+        if (c.status === 'open') all.push({ ...c, deal: d.name })
+      }
+    }
+    return all.sort((a, b) => (a.date || '').localeCompare(b.date || '')).slice(0, 8)
+  }, [data])
+
   const ingested = status?.meetings ?? 0
   const notIngested = Math.max(0, meetings.length - ingested)
   const bf = status?.backfill
@@ -421,6 +432,48 @@ export function BrainView({ onBack }: { onBack: () => void }): JSX.Element {
                 Accounts by sector
               </SectionTitle>
               <SectorBars sectors={sectors} />
+            </div>
+          )}
+
+          {/* COMMITMENT LEDGER — open promises across every deal, oldest (most urgent) first */}
+          {openPromises.length > 0 && (
+            <div className="rounded-xl border border-[var(--color-hair-soft)] bg-white/[0.02] px-3 py-2.5">
+              <SectionTitle>
+                <CalendarCheck size={11} className="mr-1 inline" />
+                Open promises
+              </SectionTitle>
+              <div className="flex flex-col gap-1">
+                {openPromises.map((c) => {
+                  const days = c.date ? Math.max(0, Math.floor((Date.now() - Date.parse(c.date)) / 86400000)) : null
+                  const yours = c.by === 'you'
+                  return (
+                    <div key={c.meeting + c.text} className="flex items-center gap-2 text-[12px]" title={c.quote || undefined}>
+                      <span
+                        className="shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold"
+                        style={{
+                          color: yours ? 'var(--color-accent-2)' : MIXED_COLOR,
+                          background: 'rgba(255,255,255,0.05)'
+                        }}
+                      >
+                        {yours ? 'You' : c.by === 'them' ? 'Them' : c.by}
+                      </span>
+                      <span className="min-w-0 flex-1 truncate text-[color:var(--color-ink-2)]">{c.text}</span>
+                      {c.due_hint && (
+                        <span className="shrink-0 text-[10px] italic text-[color:var(--color-ink-3)]">“{c.due_hint}”</span>
+                      )}
+                      {days !== null && (
+                        <span
+                          className="shrink-0 text-[10px] font-semibold"
+                          style={{ color: days >= 7 ? 'var(--color-danger)' : 'var(--color-ink-3)' }}
+                        >
+                          {days === 0 ? 'today' : `${days}d`}
+                        </span>
+                      )}
+                      <span className="shrink-0 truncate text-[10px] text-[color:var(--color-ink-3)]">{c.deal}</span>
+                    </div>
+                  )
+                })}
+              </div>
             </div>
           )}
 

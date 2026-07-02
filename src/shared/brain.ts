@@ -46,6 +46,28 @@ export const MeetingSignalSchema = z.object({
   confidence: ConfidenceSchema.default('EXTRACTED')
 })
 
+/**
+ * A promise actually SPOKEN in a meeting — the atomic unit of follow-through (the Commitment Ledger).
+ * `by` is 'you' (the app's user), 'them' (the other side generically), or a named person. Status only
+ * moves off 'open' via later meeting evidence or explicit human action — never by LLM guesswork.
+ */
+export const CommitmentSchema = z.object({
+  text: z.string(),
+  by: z.string().default('you'),
+  due_hint: z.string().default(''), // verbatim timing language ("by Friday", "after the board") or ''
+  quote: z.string().default(''),
+  confidence: ConfidenceSchema.default('EXTRACTED')
+})
+export type Commitment = z.infer<typeof CommitmentSchema>
+
+/** A commitment as stored on an entity: carries its source meeting and a settlement status. */
+export const LedgerCommitmentSchema = CommitmentSchema.extend({
+  meeting: z.string(),
+  date: z.string().default(''), // ISO date of the source meeting — drives aging on the dashboard
+  status: z.enum(['open', 'kept', 'broken']).default('open')
+})
+export type LedgerCommitment = z.infer<typeof LedgerCommitmentSchema>
+
 /** One meeting's structured extraction — the unit the ingest LLM call must return as pure JSON. */
 export const MeetingExtractionSchema = z.object({
   schema_version: z.number().default(BRAIN_SCHEMA_VERSION),
@@ -74,6 +96,7 @@ export const MeetingExtractionSchema = z.object({
     .default(null),
   signals: z.array(MeetingSignalSchema).default([]),
   missed_signals: z.array(z.object({ statement: z.string(), why_it_matters: z.string().default('') })).default([]),
+  commitments: z.array(CommitmentSchema).default([]),
   feedback: z.array(z.string()).default([]) // what the seller could work on, grounded in this call
 })
 export type MeetingExtraction = z.infer<typeof MeetingExtractionSchema>
@@ -92,7 +115,8 @@ export const PersonEntitySchema = z.object({
   account: z.string().nullable().default(null),
   meetings: z.array(MeetingRefSchema).default([]),
   quotes: z.array(z.object({ quote: z.string(), meeting: z.string() })).default([]),
-  stance_trail: z.array(z.object({ meeting: z.string(), kind: z.string(), statement: z.string() })).default([])
+  stance_trail: z.array(z.object({ meeting: z.string(), kind: z.string(), statement: z.string() })).default([]),
+  commitments: z.array(LedgerCommitmentSchema).default([])
 })
 export type PersonEntity = z.infer<typeof PersonEntitySchema>
 
@@ -121,6 +145,7 @@ export const DealEntitySchema = z.object({
   meetings: z.array(MeetingRefSchema).default([]),
   signals: z.array(MeetingSignalSchema.extend({ meeting: z.string() })).default([]),
   missed_signals: z.array(z.object({ statement: z.string(), why_it_matters: z.string().default(''), meeting: z.string() })).default([]),
+  commitments: z.array(LedgerCommitmentSchema).default([]),
   feedback: z.array(z.object({ note: z.string(), meeting: z.string() })).default([])
 })
 export type DealEntity = z.infer<typeof DealEntitySchema>
@@ -190,6 +215,7 @@ export const BRAIN_EXTRACTION_PROMPT = `You are the ingestion step of a meeting 
   "deal": {"name": "...", "stage": "...", "win_likelihood_band": "good|mixed|concerning" or null, "band_evidence": "...", "velocity": {"signal": "hard-calendar-gate|soft-organizational-gate|no-hard-date-found", "evidence": "..."}} or null,
   "signals": [{"kind": "positive|objection|neutral", "statement": "...", "quote": "verbatim transcript line or empty string", "confidence": "EXTRACTED|INFERRED|AMBIGUOUS"}],
   "missed_signals": [{"statement": "an opening or risk the seller did not pursue", "why_it_matters": "..."}],
+  "commitments": [{"text": "what was promised, as a short actionable sentence", "by": "you" | "them" | "Person Name", "due_hint": "verbatim timing words ('by Friday', 'after the board') or empty string", "quote": "verbatim transcript line or empty string", "confidence": "EXTRACTED|INFERRED|AMBIGUOUS"}],
   "feedback": ["one short coaching note grounded in this call"]
 }
 
@@ -200,4 +226,5 @@ Hard rules:
 - sector is your best classification of the ACCOUNT's industry (e.g. L'Oréal → retail/consumer-goods, a bank → banking); tag it INFERRED unless the sector is stated outright.
 - win_likelihood_band is a qualitative judgement with band_evidence citing why — never output probabilities.
 - velocity: "hard-calendar-gate" only for a concrete date/meeting commitment (quote it); vague intent is "soft-organizational-gate"; otherwise "no-hard-date-found".
+- commitments: only promises actually SPOKEN and owned ("I'll send the deck", "we'll intro you to Claire", "you'll have the numbers Friday"). "you" = the app's user, "them" = the other side generically, a name when the speaker is clear. Aspirations ("we should...") and process talk are NOT commitments. Quote the line whenever possible.
 - Keep every string concise. Reply with the JSON object only.`
