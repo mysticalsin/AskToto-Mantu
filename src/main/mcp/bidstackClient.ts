@@ -148,6 +148,24 @@ export interface BidstackConnectResult {
   tools?: string[]
 }
 
+// Concurrent callers for the SAME endpoint+key (e.g. Settings' "Test connection" and a status refresh
+// racing at once) share ONE real network round-trip and ONE "connect failed" log line instead of each
+// opening their own connection and each logging their own copy of the same failure.
+const inFlight = new Map<string, Promise<BidstackConnectResult>>()
+
+async function connectBidstackNow(url: string, key: string): Promise<BidstackConnectResult> {
+  try {
+    const tools = await withClient(url, key, CONNECT_TIMEOUT_MS, async (client) => {
+      const res = await client.listTools()
+      return res.tools.map((t) => t.name)
+    })
+    return { ok: true, tools }
+  } catch (e) {
+    mainLog.warn('[bidstack] connect failed', errMsg(e))
+    return { ok: false, error: classifyError(e, url) }
+  }
+}
+
 /**
  * Connect to BidStack's MCP endpoint, authenticate, and list its declared tools. Used both by
  * "Test connection" (no persistence) and to refresh the tool picker after a successful save.
@@ -160,16 +178,14 @@ export async function connectBidstack(endpointUrl: string, apiKey: string): Prom
   if (!key) return { ok: false, error: 'Enter the BidStack API key first.' }
   const urlError = validateEndpointUrl(url)
   if (urlError) return { ok: false, error: urlError }
-  try {
-    const tools = await withClient(url, key, CONNECT_TIMEOUT_MS, async (client) => {
-      const res = await client.listTools()
-      return res.tools.map((t) => t.name)
-    })
-    return { ok: true, tools }
-  } catch (e) {
-    mainLog.warn('[bidstack] connect failed', errMsg(e))
-    return { ok: false, error: classifyError(e, url) }
-  }
+
+  const configKey = `${url} ${key}`
+  const existing = inFlight.get(configKey)
+  if (existing) return existing
+
+  const attempt = connectBidstackNow(url, key).finally(() => inFlight.delete(configKey))
+  inFlight.set(configKey, attempt)
+  return attempt
 }
 
 export interface BidstackPushResult {

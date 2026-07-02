@@ -345,6 +345,11 @@ const queue: Job[] = []
 let running = false
 let backfillTotal = 0
 let backfillDone = 0
+// The job pump() is currently awaiting processJob() for — already spliced out of `queue`, so a
+// concurrent startBackfill() call (re-clicking "Index meetings" mid-extraction) can't see it there.
+// Tracked separately so startBackfill()'s own in-flight/dedup check also covers it, or the file being
+// extracted right now would get queued a second time.
+let currentJob: Job | null = null
 
 // index.json has several independent writers (each job's own success/failure record, the
 // queue-drained cleanup, and startBackfill's `backfillRequested` flag) that all do a
@@ -459,10 +464,16 @@ function pump(): void {
   }
   loggedNoProviderStall = false
   const [job] = queue.splice(idx, 1)
+  currentJob = job
   running = true
   void processJob(job).finally(() => {
     running = false
-    if (job.source === 'vault' || backfillTotal > 0) backfillDone = Math.min(backfillTotal, backfillDone + 1)
+    currentJob = null
+    // Only a backfill-origin job advances the backfill progress counter — a live (just-saved meeting)
+    // job processed while a backfill happens to be queued must never nudge someone else's progress bar
+    // (this is also what makes backfillDone/backfillTotal meaningful to reset per-run below: they only
+    // ever move in lockstep with backfill-origin work).
+    if (job.origin === 'backfill') backfillDone = Math.min(backfillTotal, backfillDone + 1)
     pump()
   })
 }
@@ -518,7 +529,24 @@ export function startBackfill(): { queued: number } {
   // extraction file already on disk still means the work is done. Checking both means a lost/stale
   // log costs a status-count fib, never a re-burned Dust call re-processing finished meetings.
   const extractedSlugs = new Set(listMeetingExtractions(s))
+  // pump() has already spliced the currently-processing job out of `queue` by the time it's mid-extract
+  // — omitting it here would let a re-click of "Index meetings" while that extraction is still running
+  // queue the exact same file a second time. currentJob covers both a backfill job and a live job (a
+  // live job can never collide with a backfill candidate by content, but checking it unconditionally is
+  // simpler than branching on origin and costs nothing).
   const inFlight = new Set(queue.map((j) => basename(j.file)))
+  if (currentJob) inFlight.add(basename(currentJob.file))
+  // A fresh run: no backfill-origin work left queued or in flight from a previous batch. Reset the
+  // progress counters here rather than accumulate onto a finished run's stale total/done — otherwise a
+  // live meeting save processed after backfill #1 finished (which left backfillTotal > 0 behind) would
+  // still pass the old `if (backfillTotal > 0)` check and corrupt backfill #2's freshly-started progress
+  // readout with counts left over from a completed, unrelated run.
+  const backfillInFlight =
+    queue.some((j) => j.origin === 'backfill') || currentJob?.origin === 'backfill'
+  if (!backfillInFlight) {
+    backfillTotal = 0
+    backfillDone = 0
+  }
   const candidates: Job[] = []
   const folder = resolveMeetingsFolder(s)
   for (const f of existsSync(folder) ? readdirSync(folder) : []) {
