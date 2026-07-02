@@ -68,8 +68,20 @@ export function useAutoResize(): (el: HTMLElement | null) => void {
       // surface is narrower than the window — today only the collapsed control mini-pill — opts in by
       // marking its own shrink-to-fit element with data-hug-width; every other view has none, so width
       // stays unreported and that view's window width is untouched (unaffected by this at all).
+      // Report the hug target's NATURAL width, not its rendered rect: when the window is already
+      // narrow (minimize shrinks it before the pill's first report), flex squeezes the pill to the
+      // window and rect.width just echoes that squeeze back — the window then settles too small and
+      // amputates the pill's right end (the mic button was cut in half). scrollWidth is layout truth
+      // regardless of the squeeze; it's padding-box, so add the borders back.
       const hugTarget = el.querySelector<HTMLElement>('[data-hug-width]')
-      const width = hugTarget ? Math.ceil(hugTarget.getBoundingClientRect().width) : undefined
+      const width = hugTarget
+        ? Math.ceil(
+            Math.max(
+              hugTarget.getBoundingClientRect().width,
+              hugTarget.scrollWidth + (hugTarget.offsetWidth - hugTarget.clientWidth)
+            )
+          )
+        : undefined
       return { height: Math.ceil(bottom - rect.top), width }
     }
     const send = (): void => {
@@ -132,6 +144,9 @@ export interface AskRequest {
   depth?: 'deeper' // set by "Go deeper" → ask for a fuller answer than the brief default
   agentOverride?: string // pins a specific Dust agent sId regardless of tier routing (e.g. Spotlight Ref)
   providerOverride?: ProviderId // forces this one request to a provider regardless of the active `provider` setting
+  // Vision only: skip re-sending `image` — main reuses the screenshot it already has in shotCache from the
+  // capture() call moments ago, so the same base64 JPEG isn't serialized across contextBridge twice.
+  useLastCapture?: boolean
 }
 
 /** Owns the streaming answer lifecycle over IPC. */
@@ -258,6 +273,7 @@ export function useAsk(): {
         kind: req.kind,
         agentOverride: req.agentOverride,
         providerOverride: req.providerOverride,
+        useLastCapture: req.useLastCapture,
         history: req.history ?? []
       })
       return id
