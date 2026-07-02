@@ -1,10 +1,20 @@
 appId: com.mantu.asktoto
 productName: AskToto
+# Strip OneDrive/Finder xattrs from the packed app before signing — codesign hard-rejects them
+# ("resource fork … detritus not allowed"); this repo lives in CloudStorage so they're everywhere.
+afterPack: scripts/after-pack.mjs
 copyright: © 2026 Mantu · AskToto — built by Tony Walteur
 # App icon: build/icon.png (1024² Mantu M) → electron-builder derives mac .icns + win .ico automatically.
 # Code signing is env-driven (see SIGNING.md):
 #   mac/win:  CSC_LINK (path/base64 of the .p12) + CSC_KEY_PASSWORD
 #   notarize: APPLE_ID + APPLE_APP_SPECIFIC_PASSWORD + APPLE_TEAM_ID
+# NOTE (local dev builds only): do NOT add `mac.identity` or override `directories.output` here.
+#   - identity: this yml is shared with CI (build.yml/release.yml), which has no signing cert —
+#     pinning an identity name that doesn't exist in CI's keychain would hard-fail electron-builder there.
+#   - directories.output: CI's build.yml uploads artifacts from `release/*` (see .github/workflows/build.yml);
+#     changing the default here would silently break that upload step on every PR.
+#   Local rebuilds that need keychain-safe signing + an OneDrive-free output dir should use
+#   `npm run dist:local`, which passes both as one-off `-c` CLI overrides instead (see package.json).
 directories:
   output: release
   buildResources: build
@@ -14,13 +24,32 @@ files:
   - '!out/**/*.map'
   - '!**/*.d.ts'
 asar: true
+# Native addons (.node) must live outside the asar to be loadable at runtime. sherpa-onnx-node (Parakeet
+# engine) + its per-platform binary packages are unpacked here so they ship + load in the installed app.
+asarUnpack:
+  - '**/node_modules/sherpa-onnx-node/**'
+  - '**/node_modules/sherpa-onnx-*/**'
 extraResources:
+  # Mantu Intelligence dashboard — static build of the intelligence/ workspace, loaded in its own
+  # window (src/main/intelligence.ts). Populated by `npm run build:intelligence` before packaging.
+  - from: intelligence/dist
+    to: intelligence
   - from: build/managed-config.example.json
     to: managed-config.example.json
   - from: build/icon.png
     to: icon.png
   - from: resources/graphify_runner.py
     to: graphify_runner.py
+  - from: THIRD_PARTY_NOTICES.md
+    to: THIRD_PARTY_NOTICES.md
+  # Bundled ASR model weights — served via asr-model:// protocol (zero runtime download).
+  # Populated by `npm run fetch-models` before packaging.
+  - from: resources/models
+    to: models
+  - from: resources/asr
+    to: asr
+  - from: resources/ort
+    to: ort
 mac:
   category: public.app-category.productivity
   target:
@@ -44,7 +73,11 @@ win:
     - nsis      # → AskToto-Setup-<version>.exe (installer)
     - portable  # → AskToto-Portable-<version>.exe (no-install single exe)
   artifactName: AskToto-Setup-${version}.${ext}
-  verifyUpdateCodeSignature: false
+  # Must stay true: electron-updater checks the downloaded update's Authenticode signature before install.
+  # Inert today (no real publish.url is configured), but false would let a compromised release pipeline
+  # push an unsigned/mismatched .exe that installs with only a TLS+sha512 check. Flip only if you fully
+  # understand the tradeoff — do not disable this to work around a signing setup problem.
+  verifyUpdateCodeSignature: true
   # Authenticode signing: set WIN_CSC_LINK + WIN_CSC_KEY_PASSWORD env (or use Azure Trusted Signing).
   # rfc3161TimeStampServer left at electron-builder default.
 nsis:
@@ -63,20 +96,13 @@ appx:
   publisherDisplayName: Mantu
   backgroundColor: transparent
 # ─── Auto-update feed (electron-updater is wired in src/main/updater.ts) ───────────────────
-# PRODUCTION SETUP (do this before cutting a public release — `npm run check:release` enforces it):
-#   1. Replace `url` below with the HTTPS host that will serve the updater manifests + artifacts:
-#        mac  → latest-mac.yml  +  AskToto-${version}-mac.zip  +  AskToto-${version}.dmg
-#        win  → latest.yml      +  AskToto-Setup-${version}.exe (nsis)
-#      Any static HTTPS origin works: S3 + CloudFront, Azure Blob + CDN, GitHub Releases proxy, nginx.
-#      MUST be HTTPS (electron-updater rejects plain http) and MUST keep the `REPLACE-WITH` token gone.
-#   2. Publish: `npm run dist` (mac) / `dist:win` builds + uploads. Upload ALL artifacts AND the
-#      generated *.yml manifests to the same `url` path so the client can resolve the next version.
-#   3. CODE SIGNING is required for the updater to trust artifacts (see SIGNING.md + header above):
-#        mac/win   → CSC_LINK (path or base64 of the .p12) + CSC_KEY_PASSWORD
-#                    (win can instead use WIN_CSC_LINK + WIN_CSC_KEY_PASSWORD / Azure Trusted Signing)
-#        mac notarize → APPLE_ID + APPLE_APP_SPECIFIC_PASSWORD + APPLE_TEAM_ID
-#      Unsigned macOS zip updates will be rejected by Gatekeeper on install.
-# Until `url` is set, updater.ts detects the `REPLACE-WITH` token in app-update.yml and skips auto-update.
+# FLOW: push a v* tag → CI (release.yml) builds + publishes to the public AskToto-Releases repo →
+# every installed app finds the new version on launch, downloads in the background, installs on quit.
+# CODE SIGNING is required for the updater to trust artifacts (see SIGNING.md):
+#   mac/win      → CSC_LINK (path or base64 of the .p12) + CSC_KEY_PASSWORD
+#                  (win can instead use WIN_CSC_LINK + WIN_CSC_KEY_PASSWORD / Azure Trusted Signing)
+#   mac notarize → APPLE_ID + APPLE_APP_SPECIFIC_PASSWORD + APPLE_TEAM_ID
+# Unsigned macOS zip updates will be rejected by Gatekeeper on install.
 publish:
   # Updates are served from the PUBLIC AskToto-Releases repo's GitHub Releases — the app *code* repo stays
   # private, only the built binaries + latest-mac.yml are published there. The installed app checks this repo
@@ -86,4 +112,8 @@ publish:
   provider: github
   owner: mysticalsin
   repo: AskToto-Releases
+  # Without this line electron-builder creates DRAFT releases — and electron-updater resolves versions
+  # from the public releases feed, which never contains drafts: every install would poll forever and
+  # find nothing. `release` publishes the moment CI finishes; the v* tag push is the human approval gate.
+  releaseType: release
   # channel: latest        # (default) bump to `beta`/`alpha` for pre-release rings if you add them.

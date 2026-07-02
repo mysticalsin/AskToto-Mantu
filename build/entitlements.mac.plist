@@ -2,11 +2,20 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
   <dict>
+    <!-- V8 JIT compilation (required for Electron / Node.js) -->
     <key>com.apple.security.cs.allow-jit</key>
     <true/>
+    <!-- Node.js native addons need unsigned executable memory -->
     <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
     <true/>
+    <!-- Electron loads dylibs (native modules, sherpa-onnx) not signed by Apple -->
+    <key>com.apple.security.cs.disable-library-validation</key>
+    <true/>
+    <!-- Microphone — on-device Whisper transcription -->
     <key>com.apple.security.device.audio-input</key>
+    <true/>
+    <!-- Network client — OAuth loopback flows (Microsoft, Google), API calls -->
+    <key>com.apple.security.network.client</key>
     <true/>
   </dict>
 </plist>

@@ -30,9 +30,17 @@ final class NoteStore: ObservableObject {
     }
 
     func reload() {
+        let folder = self.folder
+        Task {
+            let loaded = await Self.loadNotes(from: folder)
+            await MainActor.run { self.notes = loaded }
+        }
+    }
+
+    private nonisolated static func loadNotes(from folder: URL) async -> [Note] {
         let urls = (try? FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: [.contentModificationDateKey]))?
             .filter { $0.pathExtension == "md" && $0.lastPathComponent != "README.md" } ?? []
-        notes = urls.map { url in
+        return urls.map { url in
             let body = (try? String(contentsOf: url, encoding: .utf8)) ?? ""
             let title = frontmatter(body, "title") ?? url.deletingPathExtension().lastPathComponent
             let mode = frontmatter(body, "mode") ?? "general"
@@ -41,10 +49,11 @@ final class NoteStore: ObservableObject {
         }.sorted { $0.date > $1.date }
     }
 
-    private func frontmatter(_ body: String, _ key: String) -> String? {
-        for line in body.split(separator: "\n").prefix(12) {
+    private nonisolated static func frontmatter(_ body: String, _ key: String) -> String? {
+        for line in body.components(separatedBy: .newlines).prefix(12) {
             if line.hasPrefix("\(key):") {
-                return line.dropFirst(key.count + 1).trimmingCharacters(in: CharacterSet(charactersIn: " \"'"))
+                return String(line.dropFirst(key.count + 1))
+                    .trimmingCharacters(in: CharacterSet(charactersIn: " \r\"'"))
             }
         }
         return nil

@@ -1,8 +1,6 @@
 import { app, safeStorage } from 'electron'
-import { readFileSync, writeFileSync, existsSync, mkdirSync, rmSync, renameSync } from 'node:fs'
+import { readFileSync, writeFileSync, existsSync, mkdirSync, rmSync, renameSync, statSync } from 'node:fs'
 import { join } from 'node:path'
-import Anthropic from '@anthropic-ai/sdk'
-import OpenAI from 'openai'
 import {
   DEFAULT_SETTINGS,
   BaseSettingsSchema,
@@ -11,6 +9,8 @@ import {
   type DustAgentsResponse
 } from '@shared/ipc'
 import { PROVIDERS, PROVIDER_IDS, type ProviderId } from '@shared/providers'
+import { mainLog } from './logger'
+import { useFileBackend, encryptSecret, decryptSecret } from './secrets'
 
 const dir = () => app.getPath('userData')
 const settingsPath = () => join(dir(), 'settings.json')
@@ -30,6 +30,9 @@ const ENV_VAR: Record<ProviderId, string> = {
   fireworks: 'FIREWORKS_API_KEY',
   mistral: 'MISTRAL_API_KEY',
   dust: 'DUST_API_KEY',
+  'claude-cli': '',
+  'codex-cli': '',
+  gemini: 'GEMINI_API_KEY',
   custom: 'ASKTOTO_CUSTOM_API_KEY'
 }
 
@@ -74,6 +77,19 @@ function readLockedFrom(p: string): string[] {
   }
 }
 
+/** Read the `allowedProviders` policy array straight from a raw managed-config file. It is NOT a settings
+ *  key, so it must be read here rather than via validatedManaged() (which drops non-schema keys). */
+function readAllowedFrom(p: string): string[] | null {
+  try {
+    const obj = JSON.parse(readFileSync(p, 'utf8'))
+    const arr: unknown[] = Array.isArray(obj?.allowedProviders) ? obj.allowedProviders : []
+    const list = [...new Set(arr.filter((x): x is string => typeof x === 'string'))]
+    return list.length ? list : null
+  } catch {
+    return null
+  }
+}
+
 /** Machine-wide org-policy location IT can deploy (admin-only write). */
 function adminManagedPath(): string {
   if (process.platform === 'darwin') return '/Library/Application Support/AskToto/managed-config.json'
@@ -103,10 +119,9 @@ export function getLockedKeys(): string[] {
  * any screen/transcript egress, so a policy can confine data to approved/DPA-backed providers.
  */
 export function getAllowedProviders(): string[] | null {
-  const v = (validatedManaged() as { allowedProviders?: unknown }).allowedProviders
-  if (!Array.isArray(v) || v.length === 0) return null
-  const list = v.filter((x): x is string => typeof x === 'string')
-  return list.length ? list : null
+  // Machine (admin) policy wins over the per-user managed file, mirroring validatedManaged() precedence.
+  // Read from the raw JSON because `allowedProviders` is a policy key, not a settings-schema key.
+  return readAllowedFrom(adminManagedPath()) ?? readAllowedFrom(join(dir(), 'managed-config.json'))
 }
 
 /** Providers whose key currently comes from an environment variable — for those, in-app 'Remove' is a
@@ -116,10 +131,14 @@ export function getEnvKeyProviders(): string[] {
 }
 
 // Sensitive user data (context docs = pasted reference material, profile = resume/JD/notes) lives in
-// settings.json. Encrypt the whole user-overrides file at rest via the OS keychain (safeStorage) so it
-// isn't readable as plaintext on disk. Plaintext files (legacy, or platforms without a keyring) are still
-// read and silently upgraded to encrypted on the next write.
-const ENC_MARKER = Buffer.from('ATKENC1\n')
+// settings.json. Encrypt the whole user-overrides file at rest so it isn't readable as plaintext on disk.
+//
+// Two on-disk formats:
+//   ATKENC2\n + AES-GCM blob  — written by the file backend (dev / ASKTOTO_LOCAL_KEYSTORE / no keychain)
+//   ATKENC1\n + safeStorage   — legacy prod format; migrated to ATKENC2 on next read/write in file-backend
+//   raw JSON                  — legacy plaintext; migrated to ATKENC2 on next write
+const ENC_MARKER_V1 = Buffer.from('ATKENC1\n') // legacy: safeStorage (prod)
+const ENC_MARKER_V2 = Buffer.from('ATKENC2\n') // new: AES-GCM file backend
 
 /** Sparse user overrides (only keys the user actually changed). Decrypts at-rest encryption. */
 function readUserRaw(): Record<string, unknown> {
@@ -129,27 +148,55 @@ function readUserRaw(): Record<string, unknown> {
   } catch {
     return {} // no file yet
   }
-  if (buf.length >= ENC_MARKER.length && buf.subarray(0, ENC_MARKER.length).equals(ENC_MARKER)) {
+
+  // ── New AES-GCM format (file backend) ────────────────────────────────────────
+  if (buf.length >= ENC_MARKER_V2.length && buf.subarray(0, ENC_MARKER_V2.length).equals(ENC_MARKER_V2)) {
     try {
-      return JSON.parse(safeStorage.decryptString(buf.subarray(ENC_MARKER.length)))
+      return JSON.parse(decryptSecret(buf.subarray(ENC_MARKER_V2.length)))
     } catch {
-      // Undecryptable (e.g. keychain/OS user changed). Don't brick — fall back to defaults.
-      return {}
+      return {} // Corrupt or key rotated — don't brick the app
     }
   }
+
+  // ── Legacy safeStorage format (ATKENC1) — migrate to file backend on next write ──
+  if (buf.length >= ENC_MARKER_V1.length && buf.subarray(0, ENC_MARKER_V1.length).equals(ENC_MARKER_V1)) {
+    if (safeStorage.isEncryptionAvailable()) {
+      try {
+        const data = JSON.parse(safeStorage.decryptString(buf.subarray(ENC_MARKER_V1.length)))
+        // Best-effort migration: write the current backend format so subsequent reads don't need safeStorage.
+        if (useFileBackend()) {
+          try {
+            const p = settingsPath()
+            const tmp = `${p}.tmp`
+            writeFileSync(tmp, serializeUserRaw(data), { mode: 0o600 })
+            renameSync(tmp, p)
+          } catch { /* migration is best-effort; old format still works */ }
+        }
+        return data
+      } catch {
+        return {} // Undecryptable (keychain/OS user changed) — fall back to defaults
+      }
+    }
+    return {} // safeStorage unavailable + V1 file = unreadable; fall back to defaults
+  }
+
+  // ── Legacy plaintext ─────────────────────────────────────────────────────────
   try {
-    return JSON.parse(buf.toString('utf8')) // legacy plaintext, or encryption-unavailable platform
+    return JSON.parse(buf.toString('utf8'))
   } catch {
     return {}
   }
 }
 
-/** Serialize user overrides, encrypted at rest when the OS keychain is available. */
+/** Serialize user overrides, encrypted at rest. */
 function serializeUserRaw(obj: Record<string, unknown>): Buffer {
   const json = JSON.stringify(obj, null, 2)
+  if (useFileBackend()) {
+    return Buffer.concat([ENC_MARKER_V2, encryptSecret(json)])
+  }
   try {
     if (safeStorage.isEncryptionAvailable()) {
-      return Buffer.concat([ENC_MARKER, safeStorage.encryptString(json)])
+      return Buffer.concat([ENC_MARKER_V1, safeStorage.encryptString(json)])
     }
   } catch {
     /* keychain not ready — write plaintext below */
@@ -157,24 +204,74 @@ function serializeUserRaw(obj: Record<string, unknown>): Buffer {
   return Buffer.from(json, 'utf8')
 }
 
+// ─── Settings memoisation ────────────────────────────────────────────────────────
+// getSettings() is called on every IPC handler and every /ask. The full parse path includes an AES
+// decrypt of settings.json + JSON parse + Zod validation — expensive at conversation pace.
+// Strategy: cache the parsed result keyed on the mtimes of all three on-disk inputs so that:
+//   • user writes (setSettings) are picked up via a changed settings.json mtime, and
+//   • org-policy changes (IT edits managed-config) are picked up via changed managed-config mtimes
+//     without requiring an app restart.
+// Cache is also explicitly invalidated in setSettings / setApiKey / clearApiKey for safety.
+
+function safeMtime(p: string): number {
+  try { return statSync(p).mtimeMs } catch { return 0 }
+}
+
+interface SettingsCache {
+  value: Settings
+  userMtime: number
+  managedMtime: number
+  adminMtime: number
+}
+let _settingsCache: SettingsCache | null = null
+
+function currentSettingsMtimes(): Pick<SettingsCache, 'userMtime' | 'managedMtime' | 'adminMtime'> {
+  return {
+    userMtime: safeMtime(settingsPath()),
+    managedMtime: safeMtime(join(dir(), 'managed-config.json')),
+    adminMtime: safeMtime(adminManagedPath())
+  }
+}
+
 export function getSettings(): Settings {
+  const m = currentSettingsMtimes()
+  if (
+    _settingsCache &&
+    _settingsCache.userMtime === m.userMtime &&
+    _settingsCache.managedMtime === m.managedMtime &&
+    _settingsCache.adminMtime === m.adminMtime
+  ) {
+    return _settingsCache.value
+  }
+
   // Layering: DEFAULT < managed (org policy, live) < user overrides.
   const base = { ...DEFAULT_SETTINGS, ...validatedManaged() }
   const raw = readUserRaw()
+  // Locked keys are authoritative on READ too, not just on write: a value persisted before a lock (or a
+  // hand-edited settings.json) must not override the managed/default value. Strip locked keys from the
+  // user layer so org policy always wins.
+  const lockedKeys = getLockedKeys()
+  if (lockedKeys.length) for (const k of lockedKeys) delete (raw as Record<string, unknown>)[k]
   const whole = SettingsSchema.safeParse({ ...base, ...raw })
-  if (whole.success) return whole.data
-  // Tolerant migration: base is already valid; keep only the user keys that still validate, then
-  // repair the one cross-field invariant (provider:'custom' needs an https customBaseUrl) so a stale
-  // settings.json can NEVER make getSettings throw and brick every IPC handler that reads it.
-  const merged: Record<string, unknown> = { ...base, ...validKeysOnly(raw) }
-  if (merged.provider === 'custom' && !/^https:\/\//i.test(String(merged.customBaseUrl ?? ''))) {
-    // Reset to a provider-INDEPENDENT safe default — base.provider can itself be the invalid 'custom'
-    // (e.g. from managed-config), which would make the repair a no-op and getSettings throw org-wide.
-    merged.provider = DEFAULT_SETTINGS.provider
+  let value: Settings
+  if (whole.success) {
+    value = whole.data
+  } else {
+    // Tolerant migration: base is already valid; keep only the user keys that still validate, then
+    // repair the one cross-field invariant (provider:'custom' needs an https customBaseUrl) so a stale
+    // settings.json can NEVER make getSettings throw and brick every IPC handler that reads it.
+    const merged: Record<string, unknown> = { ...base, ...validKeysOnly(raw) }
+    if (merged.provider === 'custom' && !/^https:\/\//i.test(String(merged.customBaseUrl ?? ''))) {
+      // Reset to a provider-INDEPENDENT safe default — base.provider can itself be the invalid 'custom'
+      // (e.g. from managed-config), which would make the repair a no-op and getSettings throw org-wide.
+      merged.provider = DEFAULT_SETTINGS.provider
+    }
+    const repaired = SettingsSchema.safeParse(merged)
+    value = repaired.success ? repaired.data : SettingsSchema.parse(DEFAULT_SETTINGS) // always valid
   }
-  const repaired = SettingsSchema.safeParse(merged)
-  if (repaired.success) return repaired.data
-  return SettingsSchema.parse(DEFAULT_SETTINGS) // DEFAULT_SETTINGS is always valid → can never throw
+
+  _settingsCache = { value, ...m }
+  return value
 }
 
 export function setSettings(patch: Partial<Settings>): Settings {
@@ -186,7 +283,7 @@ export function setSettings(patch: Partial<Settings>): Settings {
   const allowed: Record<string, unknown> = {}
   for (const [k, v] of Object.entries(clean)) {
     if (locked.includes(k)) {
-      console.warn(`[store] ignoring locked setting "${k}"`)
+      mainLog.warn(`[store] ignoring locked setting "${k}"`)
       continue
     }
     allowed[k] = v
@@ -211,8 +308,18 @@ export function setSettings(patch: Partial<Settings>): Settings {
       }. Check that the disk isn't full and the folder is writable.`
     )
   }
+  _settingsCache = null // invalidate so getSettings re-reads the just-written file
   return getSettings()
 }
+
+// Format marker prepended to AES-GCM encrypted key blobs (8 bytes, ASCII, no clash with safeStorage blobs).
+const AES_KEY_MARKER = Buffer.from('ATKAES1\n')
+
+// ─── API-key memoisation ─────────────────────────────────────────────────────────
+// getApiKey() is called inside every IPC handler that needs the key (ask, test, dust agents…).
+// Each call hits the filesystem + runs AES-GCM decryption. Cache per provider; invalidated on
+// setApiKey / clearApiKey so a rotation is always reflected immediately.
+const _apiKeyCache = new Map<ProviderId, string>()
 
 export function setApiKey(provider: ProviderId, key: string): void {
   ensureDir()
@@ -223,14 +330,21 @@ export function setApiKey(provider: ProviderId, key: string): void {
     clearApiKey(provider)
     return
   }
-  if (!safeStorage.isEncryptionAvailable()) {
-    throw new Error(
-      'Encryption is unavailable on this machine. AskToto cannot safely store your API key. ' +
-        'Grant keychain access or set the key via the environment variable instead.'
-    )
+  let blob: Buffer
+  if (useFileBackend()) {
+    // AES-GCM file backend — always available, never touches the keychain.
+    blob = Buffer.concat([AES_KEY_MARKER, encryptSecret(trimmed)])
+  } else {
+    if (!safeStorage.isEncryptionAvailable()) {
+      throw new Error(
+        'Encryption is unavailable on this machine. AskToto cannot safely store your API key. ' +
+          'Grant keychain access or set the key via the environment variable instead.'
+      )
+    }
+    blob = safeStorage.encryptString(trimmed)
   }
   try {
-    writeFileSync(p, safeStorage.encryptString(trimmed), { mode: 0o600 })
+    writeFileSync(p, blob, { mode: 0o600 })
   } catch (e) {
     throw new Error(
       `Couldn't save your API key — AskToto can't write to its data folder${
@@ -238,11 +352,20 @@ export function setApiKey(provider: ProviderId, key: string): void {
       }. Check that the disk isn't full and the folder is writable.`
     )
   }
+  _apiKeyCache.delete(provider)
+  _settingsCache = null
 }
 
 export function clearApiKey(provider: ProviderId): void {
   const p = keyPath(provider)
-  if (existsSync(p)) rmSync(p)
+  if (!existsSync(p)) return
+  try {
+    rmSync(p)
+  } catch (e) {
+    mainLog.warn('[store] clearApiKey: could not delete key file for', provider, e)
+  }
+  _apiKeyCache.delete(provider)
+  _settingsCache = null
 }
 
 export interface TestKeyResult {
@@ -253,6 +376,11 @@ export interface TestKeyResult {
 export async function testApiKey(provider: ProviderId, key: string): Promise<TestKeyResult> {
   const trimmed = key.trim()
   if (!trimmed) return { ok: false, error: 'No API key provided.' }
+  if (PROVIDERS[provider]?.kind === 'cli')
+    return {
+      ok: false,
+      error: 'CLI providers do not use API keys — connect via Settings → CLI Integration.'
+    }
 
   const def = PROVIDERS[provider]
   const settings = getSettings()
@@ -271,6 +399,9 @@ export async function testApiKey(provider: ProviderId, key: string): Promise<Tes
       const r = await api.getAgentConfigurations({})
       if (r.isErr()) return { ok: false, error: r.error.message }
     } else if (def.kind === 'anthropic') {
+      // Lazy-loaded: this SDK's own require tree costs real time at process boot even for the vast
+      // majority of sessions that never test/use this specific provider (see openai below, same reason).
+      const { default: Anthropic } = await import('@anthropic-ai/sdk')
       const client = new Anthropic({ apiKey: trimmed })
       await client.messages.create({
         model: def.fastModel || def.defaultModel,
@@ -287,6 +418,7 @@ export async function testApiKey(provider: ProviderId, key: string): Promise<Tes
       if (!model) {
         return { ok: false, error: 'Set a model id in Advanced first, then test.' }
       }
+      const { default: OpenAI } = await import('openai')
       const client = new OpenAI({ apiKey: trimmed, baseURL: baseURL || undefined })
       await client.chat.completions.create({
         model,
@@ -301,8 +433,9 @@ export async function testApiKey(provider: ProviderId, key: string): Promise<Tes
   }
 }
 
+/** Always true — the AES-GCM file backend is always available as a fallback. */
 export function encryptionAvailable(): boolean {
-  return safeStorage.isEncryptionAvailable()
+  return true
 }
 
 /** List the user's Dust agents (for the dummy-proof agent picker). Uses the saved Dust key. */
@@ -332,16 +465,49 @@ export async function listDustAgents(): Promise<DustAgentsResponse> {
 }
 
 export function getApiKey(provider: ProviderId): string {
+  // Env-var keys bypass the cache — they're already an O(1) lookup and must stay live.
   const env = process.env[ENV_VAR[provider]]
   if (env) return env
+
+  if (_apiKeyCache.has(provider)) return _apiKeyCache.get(provider)!
+
+  // Compute from disk (file read + AES decrypt). All paths below land on a single `key` assignment
+  // so we can cache the result regardless of which branch resolved it.
+  let key = ''
   try {
     const buf = readFileSync(keyPath(provider))
-    if (buf.subarray(0, 6).toString('utf8') === 'plain:') return buf.subarray(6).toString('utf8')
-    if (safeStorage.isEncryptionAvailable()) return safeStorage.decryptString(buf)
+
+    // ── Legacy plaintext (oldest format) ──────────────────────────────────────
+    if (buf.subarray(0, 6).toString('utf8') === 'plain:') {
+      const plain = buf.subarray(6).toString('utf8')
+      // Migrate to current backend on first read (defense-in-depth for disk backups).
+      // setApiKey will delete _apiKeyCache[provider]; we re-set it below.
+      try { setApiKey(provider, plain) } catch { /* keep the plaintext file; key still works */ }
+      key = plain
+    } else if (buf.length > AES_KEY_MARKER.length && buf.subarray(0, AES_KEY_MARKER.length).equals(AES_KEY_MARKER)) {
+      // ── New AES-GCM format (ATKAES1 marker) ────────────────────────────────
+      try {
+        key = decryptSecret(buf.subarray(AES_KEY_MARKER.length))
+      } catch {
+        key = '' // Corrupt or key rotated
+      }
+    } else if (safeStorage.isEncryptionAvailable()) {
+      // ── Legacy safeStorage blob (no marker) — migrate to current backend ────
+      try {
+        const plain = safeStorage.decryptString(buf)
+        // Best-effort migration: re-save with the current backend so future reads don't need keychain.
+        try { setApiKey(provider, plain) } catch { /* keep the old blob; key still works */ }
+        key = plain
+      } catch {
+        /* not a safeStorage blob for this OS user — unreadable */
+      }
+    }
   } catch {
-    /* none */
+    /* file missing or unreadable */
   }
-  return ''
+
+  _apiKeyCache.set(provider, key)
+  return key
 }
 
 export function hasApiKey(provider: ProviderId): boolean {

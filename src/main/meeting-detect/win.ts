@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process'
-import { MEETING_KEYWORDS, MEETING_URL_PATTERNS, titleLooksLikeMeeting } from './shared'
+import { MEETING_URL_PATTERNS, isMeetingWindow } from './shared'
 
 export const TEAMS_TOKENS = ['teams meeting', 'microsoft teams call', 'teams call']
 export const SLACK_TOKENS = ['slack | huddle', 'slack call', 'huddle', 'slack huddle']
@@ -72,33 +72,10 @@ async function detectNativeApps(customApps: string[] = []): Promise<string> {
 
 /**
  * Pure function to decide whether a single Windows process/window pair is a meeting.
- * Exported for unit testing.
+ * Exported for unit testing. Delegates entirely to the shared isMeetingWindow gate.
  */
 export function nativeWindowMatches(procName: string, title: string, customApps: string[] = []): boolean {
-  const p = procName.toLowerCase()
-  const t = title.toLowerCase()
-
-  for (const app of customApps) {
-    if (app && (p.includes(app.toLowerCase()) || t.includes(app.toLowerCase()))) return true
-  }
-
-  if (p.includes('zoom') && t.includes('meeting')) return true
-  if (
-    p.includes('teams') &&
-    (TEAMS_TOKENS.some((token) => t.includes(token)) ||
-      (t.includes('teams') && MEETING_KEYWORDS.some((k) => t.includes(k.toLowerCase()))))
-  )
-    return true
-  if (
-    p.includes('slack') &&
-    (SLACK_TOKENS.some((token) => t.includes(token)) ||
-      (t.includes('slack') && MEETING_KEYWORDS.some((k) => t.includes(k.toLowerCase()))))
-  )
-    return true
-  if (p.includes('webex') || p.includes('gotomeeting')) return true
-  const compact = t.replace(/\s+/g, '')
-  if (compact.includes('gotomeeting') || compact.includes('gotowebinar')) return true
-  return false
+  return isMeetingWindow(procName, title, customApps)
 }
 
 /** Browser URL detection via UI Automation. */
@@ -114,13 +91,6 @@ async function detectBrowserUrl(): Promise<string> {
   }
   return ''
 }
-
-/** Window-title fallback using desktopCapturer (disabled in production on Windows by content protection). */
-// async function detectByWindowTitles(): Promise<string> {
-//   // Electron's desktopCapturer on Windows requires the app itself be capturable;
-//   // using it here is risky and slow. We prefer UIA and native title matching.
-//   return ''
-// }
 
 export async function detectWindows(customApps: string[] = []): Promise<string> {
   // Try browser URL detection first (most precise for Google Meet/Teams web).

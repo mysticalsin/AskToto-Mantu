@@ -7,7 +7,7 @@ A frameless, transparent, always-on-top glass overlay for macOS and Windows.
 
 <img src="docs/media/asktoto-hero.png" alt="AskToto overlay — Ask anything bar with a syntax-highlighted answer on frosted purple glass" width="760">
 
-`14 AI providers + Dust` · `thinking-mode routing` · `live transcription` · `knowledge graph` · `encrypted at rest`
+`16 AI providers + Dust` · `thinking-mode routing` · `live transcription` · `knowledge graph` · `encrypted at rest`
 
 Built by **[Tony Walteur](https://www.linkedin.com/in/tonywalteur/)** · Mantu
 
@@ -25,9 +25,22 @@ Three core actions:
 - **Listen** — live mic + system-audio transcription (on-device Whisper), real-time suggestions.
 
 Plus one-click **Fact-check**, **Hide from screen capture**, a visible recording indicator, a
-**knowledge graph** of your notes (graphify), and an optional **encrypt-transcripts** mode.
+**knowledge graph** of your notes (graphify), and **transcripts encrypted at rest by default**.
 
-## Quick start
+## Install (v1.0.0)
+
+Grab the installer for your OS from the [AskToto-Releases](https://github.com/mysticalsin/AskToto-Releases/releases) page:
+
+- **macOS** — `AskToto-1.0.0.dmg` (Apple Silicon; macOS 12+). v1.0.0 is not yet notarized:
+  first launch needs right-click → Open → Open (one time). Auto-update activates once builds
+  are signed + notarized.
+- **Windows** — `AskToto-Setup-1.0.0.exe` (installer) or `AskToto-Portable-1.0.0.exe`
+  (no-install). v1.0.0 is not yet Authenticode-signed: SmartScreen will warn — More info →
+  Run anyway.
+
+All transcription runs on-device; models are bundled (no first-run download).
+
+## Quick start (from source)
 
 ```bash
 npm install
@@ -38,7 +51,7 @@ npm run build        # bundle main + preload + renderer → out/
 npm run dist         # package a signed-runtime app → release/ (electron-builder)
 ```
 
-Set a provider key in-app: gear → **Your AI** → paste your key → Save (stored encrypted on-device via
+Set a provider key in-app: gear → **AI** → paste your key → Save (stored encrypted on-device via
 Electron `safeStorage`). Or connect **Dust** (your own agents) with one click from the Dust CLI session.
 
 ## Repository map
@@ -51,7 +64,8 @@ AskToto/
 │   │   ├── index.ts         windows, global hotkeys, IPC handlers (requireAuth + assertMainWindow)
 │   │   ├── store.ts         settings + API keys, encrypted at rest (safeStorage)
 │   │   ├── auth.ts          Azure AD (Entra) SSO, domain-locked; requireAuth() gate
-│   │   ├── llm.ts           streaming to Anthropic / OpenAI-compatible / Dust
+│   │   ├── llm/             provider strategies — streaming to Anthropic SDK / OpenAI-compatible
+│   │   │                    (incl. Gemini) / Dust / CLI (Claude Code, Codex); llm.ts is the dispatch shim
 │   │   ├── personas.ts      mode + language system prompts
 │   │   ├── transcripts.ts   meeting/note markdown, optional at-rest encryption
 │   │   ├── recall.ts        list/search saved meetings (decrypt-aware)
@@ -65,8 +79,8 @@ AskToto/
 │   │   └── lib/whisper*      on-device Whisper STT (Web Worker)
 │   └── shared/              cross-process contract
 │       ├── ipc.ts            IPC channels + zod schemas + settings schema
-│       ├── providers.ts      14-provider registry + model-tier routing
-│       ├── routing.ts        thinking-mode router (base vs think tier)
+│       ├── providers.ts      16-provider + Dust registry + model-tier routing
+│       ├── routing.ts        thinking-mode router (base / think / deep tiers)
 │       └── prompts.ts        default mode prompts
 ├── resources/graphify_runner.py   graphify pipeline (bundled via extraResources)
 ├── ios/                     SwiftUI companion app (XcodeGen)
@@ -78,17 +92,20 @@ AskToto/
 
 ## Features
 
-- **14 providers + Dust.** Claude, GPT, NVIDIA, DeepSeek, Qwen, MiniMax, Kimi, OpenRouter, Groq,
-  Together, Fireworks, Mistral, custom OpenAI-compatible, and **Dust** (your own agents, the primary
-  brain). Keys auto-detected from prefix; each stored encrypted.
-- **Thinking mode.** `auto` routes simple questions to a fast model (Haiku) and coding/engineering to a
-  deeper one (Sonnet); a Bar toggle forces deep mode. For Dust: a base agent + a thinking agent.
+- **16 providers + Dust.** Claude, GPT, Gemini, NVIDIA, DeepSeek, Qwen, MiniMax, Kimi, OpenRouter,
+  Groq, Together, Fireworks, Mistral, custom OpenAI-compatible, keyless Claude Code / Codex CLI
+  backends, and **Dust** (your own agents, the primary brain). Keys auto-detected from prefix; each
+  stored encrypted.
+- **Thinking mode.** `auto` routes simple questions to Haiku, heavier analytical questions to Sonnet,
+  and coding/engineering/deep reasoning to Opus; the Bar toggle forces Opus. For Dust: a base agent +
+  a thinking agent.
 - **Knowledge graph.** graphify turns the notes folder into a connected graph; per-note "Related"
   panel + an interactive graph. Reuses your Claude Code (no extra key).
 - **Multilingual.** Transcribes any spoken language, assists in the speaker's language, writes the
   recap in the language you pick (Settings → Personalize → Language).
 - **Azure SSO.** Optional, domain-locked Microsoft sign-in; `requireAuth()` guards every privileged IPC.
-- **Encryption at rest.** Settings/keys always encrypted (keychain); transcripts encryptable on demand.
+- **Encryption at rest.** Settings/keys always encrypted (keychain); transcripts envelope-encrypted
+  (AES-256-GCM) by default — can be disabled per user or locked on via managed config.
 
 ## Hotkeys (global)
 
@@ -108,7 +125,7 @@ AskToto/
 - **Keys never reach the renderer** (only `hasKeys` booleans). Settings + keys encrypted at rest.
 - **Content protection** hides the window from screen capture (on by default in packaged builds).
 - **What leaves the device:** prompts go to the provider you choose; transcripts save to your notes
-  folder (which may sync to OneDrive unless you enable encrypt-transcripts); Dust/graph read those notes.
+  folder (which may sync to OneDrive — envelope-encrypted by default); Dust/graph read those notes.
 
 ## Docs
 
@@ -116,14 +133,21 @@ AskToto/
 - `docs/planning/` — plan + roadmap history
 - `docs/audits/` — prior audit + QA reports
 - `docs/SIGNING.md` — code-signing / notarization setup
-- `production-readiness/` — the production-readiness audit (gate matrix, findings, evidence)
+- `production-readiness/` — production-readiness audit snapshot (2026-06-27, pre-git / pre-bundled-ASR —
+  several headline findings since remediated; see `docs/audit/current-state.md` for the current picture)
 
 ## Known gaps (honest)
 
-- Real answers need a provider key (or Dust). Pipelines reach the APIs; a bad key returns a clean UI error.
+- Real answers need a provider key, a connected Claude Code / Codex CLI (keyless), or Dust. A bad key
+  returns a clean UI error.
 - Code signing / notarization needs an Apple Developer ID cert; Windows signing needs a Windows runner.
-- Whisper model (~40 MB) downloads from the HF hub on first Listen (needs internet once).
-- Not a git repository yet; no branch protection / CI gating on commits.
+- ASR weights (Whisper base + large-v3-turbo + Parakeet) are bundled into the installer by
+  `npm run fetch-models` (run automatically by `predist`) and load offline via the `asr-model://`
+  protocol — no download on first Listen. Dev builds without fetched models fall back to a one-time
+  CDN download.
+- Git repo with a GitHub remote (mysticalsin/AskToto-Mantu) and CI on every push (typecheck, vitest,
+  npm audit, SBOM, secret scan — `.github/workflows/build.yml`); branch protection on `main` is not
+  yet configured.
 
 ## Provenance
 

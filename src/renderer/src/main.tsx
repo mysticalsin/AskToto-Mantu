@@ -10,6 +10,14 @@ class ErrorBoundary extends Component<{ children: ReactNode }, { error: Error | 
   static getDerivedStateFromError(error: Error): { error: Error } {
     return { error }
   }
+  // Surface the real fault: the on-screen card only shows error.message, but the stack + the React
+  // component stack (which component threw) are what actually pin a render crash. console.error is
+  // forwarded to the main-process log when ASKTOTO_DEBUG_RENDERER is set, so a field crash is diagnosable
+  // without the renderer devtools open.
+  componentDidCatch(error: Error, info: { componentStack?: string | null }): void {
+    // eslint-disable-next-line no-console
+    console.error('[error-boundary]', error?.message, '\nstack:', error?.stack, '\ncomponentStack:', info?.componentStack)
+  }
   render(): ReactNode {
     if (!this.state.error) return this.props.children
     return (

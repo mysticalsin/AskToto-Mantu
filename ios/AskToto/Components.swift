@@ -37,6 +37,8 @@ struct MarkdownText: View {
                 })))
             } else if !line.trimmingCharacters(in: .whitespaces).isEmpty {
                 out.append(Block(view: AnyView(inline(line))))
+            } else {
+                out.append(Block(view: AnyView(Spacer().frame(height: 6))))
             }
             i += 1
         }

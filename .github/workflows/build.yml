@@ -1,15 +1,20 @@
 name: Build & Test
 
 on:
+  # No branch filter on push: GitHub creates a check-suite for every push regardless, and an EMPTY one
+  # (zero matching workflows) reports "failure" rather than skipped — so restricting this to main/master
+  # made every push to a feature branch show as a false CI failure with nothing to point to. Matching all
+  # branches gives real, meaningful pass/fail feedback everywhere instead of a phantom red X.
   push:
-    branches: [main, master]
   pull_request:
     branches: [main, master]
+  workflow_dispatch:
 
 jobs:
   quality:
     name: Quality checks
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -24,6 +29,7 @@ jobs:
   security:
     name: Security & supply chain
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -40,10 +46,13 @@ jobs:
       - name: Dependency audit (report high, non-blocking)
         run: npm audit --audit-level=high || true
       # Secret scan: fail if a key-shaped string is committed to source (allow .env.example placeholders).
+      # Test files are excluded — redact.test.ts intentionally contains fake key-shaped strings to verify
+      # the redaction function actually catches them; that's the test working, not a leak.
       - name: Secret scan
         run: |
           if grep -rInE '(nvapi-|sk-ant-|sk-or-|gsk_|fw_|tgp_v1_)[A-Za-z0-9_-]{16,}' \
             --include='*.ts' --include='*.tsx' --include='*.js' --include='*.json' --include='*.yml' \
+            --exclude='*.test.ts' --exclude='*.test.tsx' \
             src .github electron-builder.yml 2>/dev/null; then
             echo "::error::Possible committed secret found"; exit 1
           fi
@@ -61,6 +70,7 @@ jobs:
     name: macOS package
     needs: [quality, security]
     runs-on: macos-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -72,15 +82,25 @@ jobs:
         env:
           # Signing is skipped on CI unless you add your Apple certs as secrets.
           ASKTOTO_DISABLE_CP: '1'
+      # Upload installers only — never release/* wholesale. The unpacked mac-arm64/ app dir pushed a
+      # single run's artifact to ~6 GB and repeated runs blew the org's Actions storage quota, which
+      # then failed every packaging job at the upload step. Installers + update metadata are all a PR
+      # reviewer needs; 3-day retention because these are PR-verification builds, not releases.
       - uses: actions/upload-artifact@v4
         with:
           name: asktoto-macos
-          path: release/*
+          retention-days: 3
+          path: |
+            release/*.dmg
+            release/*.zip
+            release/*.blockmap
+            release/latest*.yml
 
   build-windows:
     name: Windows package
     needs: [quality, security]
     runs-on: windows-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -89,12 +109,16 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run dist:win
+      # AppX packaging only works on Windows runners (needs the Windows SDK). Signing is skipped on CI
+      # unless you add your Windows cert as a secret via CSC_LINK / CSC_KEY_PASSWORD.
       - run: npm run dist:win:appx
-        env:
-          # AppX packaging only works on Windows runners (needs the Windows SDK).
-          # Signing is skipped on CI unless you add your Windows cert as a secret
-          # via CSC_LINK / CSC_KEY_PASSWORD.
+      # Installers only, same rationale as the macOS job (win-unpacked/ was ~7.5 GB per run).
       - uses: actions/upload-artifact@v4
         with:
           name: asktoto-windows
-          path: release/*
+          retention-days: 3
+          path: |
+            release/*.exe
+            release/*.appx
+            release/*.blockmap
+            release/latest*.yml

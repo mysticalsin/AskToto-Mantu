@@ -1,0 +1,437 @@
+{
+  "meta": {
+    "is_placeholder": true,
+    "note": "PLACEHOLDER DATA — replace public/data.json with the real extraction output before this is used for anything real. Generic example content only; not derived from any real deal, client, or transcript.",
+    "generated": "1970-01-01T00:00:00Z",
+    "n_deals": 3
+  },
+  "deals": [
+    {
+      "bid_id": "example-deal-alpha",
+      "account": "example-account-a",
+      "strategic_group": "example-group-north",
+      "sector": "example-sector-1",
+      "display_name": "Example Deal Alpha",
+      "outcome": "open",
+      "win_likelihood_band": "good",
+      "value_usd": 1000000,
+      "stage": "Propose",
+      "claims": [
+        {
+          "claim_id": "example-deal-alpha-claim-1",
+          "statement": "Example placeholder claim: buyer questioned resource-based pricing model.",
+          "category": "pricing",
+          "raised_by": "example-buyer-contact",
+          "stance": "objection",
+          "was_deciding_factor": true,
+          "source": {
+            "file": "example/path/to/source-note.md",
+            "quote_or_paraphrase": "PLACEHOLDER — example quote text goes here.",
+            "grounding": "unknown"
+          },
+          "confidence": 0
+        },
+        {
+          "claim_id": "example-deal-alpha-claim-2",
+          "statement": "Example placeholder claim: buyer expressed positive signal on delivery team fit.",
+          "category": "technical-fit",
+          "raised_by": "example-buyer-contact-2",
+          "stance": "positive-signal",
+          "was_deciding_factor": false,
+          "source": {
+            "file": "example/path/to/source-note-2.md",
+            "quote_or_paraphrase": "PLACEHOLDER — example quote text goes here.",
+            "grounding": "unknown"
+          },
+          "confidence": 0
+        }
+      ],
+      "call_grades": [
+        {
+          "date": "1970-01-01",
+          "label": "Example discovery call",
+          "grade": "mixed",
+          "note": "PLACEHOLDER — example call note.",
+          "is_client_facing": true
+        },
+        {
+          "date": "1970-01-15",
+          "label": "Example defense call",
+          "grade": "concerning",
+          "note": "PLACEHOLDER — example call note.",
+          "is_client_facing": true
+        }
+      ]
+    },
+    {
+      "bid_id": "example-deal-beta",
+      "account": "example-account-b",
+      "strategic_group": "example-group-north",
+      "sector": "example-sector-2",
+      "display_name": "Example Deal Beta",
+      "outcome": "lost",
+      "win_likelihood_band": "concerning",
+      "value_usd": 400000,
+      "stage": "Closed",
+      "claims": [
+        {
+          "claim_id": "example-deal-beta-claim-1",
+          "statement": "Example placeholder claim: timing misaligned with buyer's budget cycle.",
+          "category": "timing",
+          "raised_by": "example-buyer-contact-3",
+          "stance": "objection",
+          "was_deciding_factor": true,
+          "source": {
+            "file": "example/path/to/source-note-3.md",
+            "quote_or_paraphrase": "PLACEHOLDER — example quote text goes here.",
+            "grounding": "unknown"
+          },
+          "confidence": 0
+        }
+      ],
+      "call_grades": [
+        {
+          "date": "1970-02-01",
+          "label": "Example kickoff call",
+          "grade": "good",
+          "note": "PLACEHOLDER — example call note.",
+          "is_client_facing": true
+        }
+      ]
+    },
+    {
+      "bid_id": "example-deal-gamma",
+      "account": "example-account-c",
+      "strategic_group": "example-group-south",
+      "sector": "example-sector-1",
+      "display_name": "Example Deal Gamma",
+      "outcome": "open",
+      "win_likelihood_band": "mixed",
+      "value_usd": null,
+      "stage": "Discover",
+      "claims": [
+        {
+          "claim_id": "example-deal-gamma-claim-1",
+          "statement": "Example placeholder claim: competitor mentioned as incumbent.",
+          "category": "competitor",
+          "raised_by": "example-buyer-contact-4",
+          "stance": "neutral-observation",
+          "was_deciding_factor": false,
+          "source": {
+            "file": "example/path/to/source-note-4.md",
+            "quote_or_paraphrase": "PLACEHOLDER — example quote text goes here.",
+            "grounding": "unknown"
+          },
+          "confidence": 0
+        }
+      ],
+      "call_grades": [
+        {
+          "date": "1970-03-01",
+          "label": "Example intro call",
+          "grade": "mixed",
+          "note": "PLACEHOLDER — example call note.",
+          "is_client_facing": true
+        }
+      ]
+    }
+  ],
+  "coaching_insights": [
+    {
+      "insight_id": "example-insight-1",
+      "pattern": "PLACEHOLDER PATTERN — example: resource-based pricing reads as value-blind",
+      "n_observations": 1,
+      "deals": [
+        "example-deal-alpha"
+      ],
+      "what_happened": "PLACEHOLDER — example description of what happened across the cited deal(s).",
+      "why_it_matters": "PLACEHOLDER — example description of why this matters; single-deal observation, not yet a pattern.",
+      "coaching_move": "PLACEHOLDER COACHING MOVE — example: lead with outcome-based pricing framing instead of headcount math.",
+      "category": "pricing",
+      "confidence": 0.2,
+      "grounding": "unknown",
+      "sources": [
+        {
+          "file": "example/path/to/source-note.md",
+          "quote_or_paraphrase": "PLACEHOLDER — example quote text goes here."
+        }
+      ]
+    },
+    {
+      "insight_id": "example-insight-2",
+      "pattern": "PLACEHOLDER PATTERN — example: timing objections recur near budget-cycle boundaries",
+      "n_observations": 1,
+      "deals": [
+        "example-deal-beta"
+      ],
+      "what_happened": "PLACEHOLDER — example description of what happened across the cited deal(s).",
+      "why_it_matters": "PLACEHOLDER — single-deal observation, not yet a pattern.",
+      "coaching_move": "PLACEHOLDER COACHING MOVE — example: confirm budget-cycle timing during discovery, before proposing.",
+      "category": "timing",
+      "confidence": 0.2,
+      "grounding": "unknown",
+      "sources": [
+        {
+          "file": "example/path/to/source-note-3.md",
+          "quote_or_paraphrase": "PLACEHOLDER — example quote text goes here."
+        }
+      ]
+    },
+    {
+      "insight_id": "example-insight-3",
+      "pattern": "PLACEHOLDER PATTERN — example: technical-fit signals correlate with faster progression",
+      "n_observations": 1,
+      "deals": [
+        "example-deal-alpha"
+      ],
+      "what_happened": "PLACEHOLDER — example description of what happened across the cited deal(s).",
+      "why_it_matters": "PLACEHOLDER — single-deal observation, not yet a pattern.",
+      "coaching_move": "PLACEHOLDER COACHING MOVE — example: surface delivery-team credentials earlier in the cycle.",
+      "category": "technical-fit",
+      "confidence": 0.15,
+      "grounding": "unknown",
+      "sources": [
+        {
+          "file": "example/path/to/source-note-2.md",
+          "quote_or_paraphrase": "PLACEHOLDER — example quote text goes here."
+        }
+      ]
+    }
+  ],
+  "account_graph": {
+    "nodes": [
+      {
+        "id": "acct-example-account-a",
+        "label": "example-account-a",
+        "type": "account",
+        "account": "example-account-a",
+        "strategic_group": "example-group-north",
+        "sector": "example-sector-1",
+        "degree": 2,
+        "community_id": 0,
+        "community_label": "example-sector-1"
+      },
+      {
+        "id": "acct-example-account-b",
+        "label": "example-account-b",
+        "type": "account",
+        "account": "example-account-b",
+        "strategic_group": "example-group-north",
+        "sector": "example-sector-2",
+        "degree": 2,
+        "community_id": 0,
+        "community_label": "example-sector-1"
+      },
+      {
+        "id": "acct-example-account-c",
+        "label": "example-account-c",
+        "type": "account",
+        "account": "example-account-c",
+        "strategic_group": "example-group-south",
+        "sector": "example-sector-1",
+        "degree": 2,
+        "community_id": 1,
+        "community_label": "example-sector-1"
+      },
+      {
+        "id": "example-deal-alpha",
+        "label": "Example Deal Alpha",
+        "type": "deal",
+        "account": "example-account-a",
+        "strategic_group": "example-group-north",
+        "sector": "example-sector-1",
+        "win_likelihood_band": "good",
+        "bid_id": "example-deal-alpha",
+        "degree": 3,
+        "community_id": 0,
+        "community_label": "example-sector-1"
+      },
+      {
+        "id": "example-deal-beta",
+        "label": "Example Deal Beta",
+        "type": "deal",
+        "account": "example-account-b",
+        "strategic_group": "example-group-north",
+        "sector": "example-sector-2",
+        "win_likelihood_band": "concerning",
+        "bid_id": "example-deal-beta",
+        "degree": 2,
+        "community_id": 0,
+        "community_label": "example-sector-1"
+      },
+      {
+        "id": "example-deal-gamma",
+        "label": "Example Deal Gamma",
+        "type": "deal",
+        "account": "example-account-c",
+        "strategic_group": "example-group-south",
+        "sector": "example-sector-1",
+        "win_likelihood_band": "mixed",
+        "bid_id": "example-deal-gamma",
+        "degree": 2,
+        "community_id": 1,
+        "community_label": "example-sector-1"
+      },
+      {
+        "id": "person-example-buyer-contact",
+        "label": "example-buyer-contact",
+        "type": "person",
+        "account": "example-account-a",
+        "degree": 1,
+        "community_id": 0,
+        "community_label": "example-sector-1"
+      },
+      {
+        "id": "person-example-buyer-contact-2",
+        "label": "example-buyer-contact-2",
+        "type": "person",
+        "account": "example-account-a",
+        "degree": 1,
+        "community_id": 0,
+        "community_label": "example-sector-1"
+      },
+      {
+        "id": "person-example-buyer-contact-3",
+        "label": "example-buyer-contact-3",
+        "type": "person",
+        "account": "example-account-b",
+        "degree": 1,
+        "community_id": 0,
+        "community_label": "example-sector-1"
+      },
+      {
+        "id": "person-example-buyer-contact-4",
+        "label": "example-buyer-contact-4",
+        "type": "person",
+        "account": "example-account-c",
+        "degree": 1,
+        "community_id": 1,
+        "community_label": "example-sector-1"
+      }
+    ],
+    "edges": [
+      {
+        "from": "example-deal-alpha",
+        "to": "acct-example-account-a",
+        "relation": "belongs_to",
+        "confidence": "EXTRACTED"
+      },
+      {
+        "from": "example-deal-beta",
+        "to": "acct-example-account-b",
+        "relation": "belongs_to",
+        "confidence": "EXTRACTED"
+      },
+      {
+        "from": "example-deal-gamma",
+        "to": "acct-example-account-c",
+        "relation": "belongs_to",
+        "confidence": "EXTRACTED"
+      },
+      {
+        "from": "person-example-buyer-contact",
+        "to": "example-deal-alpha",
+        "relation": "raised_claim_in",
+        "confidence": "EXTRACTED"
+      },
+      {
+        "from": "person-example-buyer-contact-2",
+        "to": "example-deal-alpha",
+        "relation": "raised_claim_in",
+        "confidence": "EXTRACTED"
+      },
+      {
+        "from": "person-example-buyer-contact-3",
+        "to": "example-deal-beta",
+        "relation": "raised_claim_in",
+        "confidence": "EXTRACTED"
+      },
+      {
+        "from": "person-example-buyer-contact-4",
+        "to": "example-deal-gamma",
+        "relation": "raised_claim_in",
+        "confidence": "INFERRED"
+      },
+      {
+        "from": "example-deal-alpha",
+        "to": "example-deal-beta",
+        "relation": "conceptually_related_to",
+        "confidence": "AMBIGUOUS"
+      }
+    ]
+  },
+  "account_summaries": [
+    {
+      "key": "example-account-a",
+      "label": "example-account-a",
+      "deal_count": 1,
+      "total_value_usd": 1000000,
+      "band_counts": {
+        "good": 1,
+        "mixed": 0,
+        "concerning": 0
+      },
+      "insight_ids": [
+        "example-insight-1",
+        "example-insight-3"
+      ]
+    },
+    {
+      "key": "example-account-b",
+      "label": "example-account-b",
+      "deal_count": 1,
+      "total_value_usd": 400000,
+      "band_counts": {
+        "good": 0,
+        "mixed": 0,
+        "concerning": 1
+      },
+      "insight_ids": [
+        "example-insight-2"
+      ]
+    },
+    {
+      "key": "example-account-c",
+      "label": "example-account-c",
+      "deal_count": 1,
+      "total_value_usd": 0,
+      "band_counts": {
+        "good": 0,
+        "mixed": 1,
+        "concerning": 0
+      },
+      "insight_ids": []
+    }
+  ],
+  "sector_summaries": [
+    {
+      "key": "example-sector-1",
+      "label": "example-sector-1",
+      "deal_count": 2,
+      "total_value_usd": 1000000,
+      "band_counts": {
+        "good": 1,
+        "mixed": 1,
+        "concerning": 0
+      },
+      "insight_ids": [
+        "example-insight-1",
+        "example-insight-3"
+      ]
+    },
+    {
+      "key": "example-sector-2",
+      "label": "example-sector-2",
+      "deal_count": 1,
+      "total_value_usd": 400000,
+      "band_counts": {
+        "good": 0,
+        "mixed": 0,
+        "concerning": 1
+      },
+      "insight_ids": [
+        "example-insight-2"
+      ]
+    }
+  ]
+}

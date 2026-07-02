@@ -1,6 +1,7 @@
 import { execFile } from 'node:child_process'
+import { basename } from 'node:path'
 import { desktopCapturer } from 'electron'
-import { MEETING_KEYWORDS, MEETING_URL_PATTERNS, titleLooksLikeMeeting } from './shared'
+import { MEETING_URL_PATTERNS, isMeetingWindow, titleLooksLikeMeeting } from './shared'
 
 const MAC_NATIVE_APPS = [
   'zoom.us',
@@ -25,6 +26,11 @@ function appleStringList(items: string[]): string {
   return items.map((s) => `"${s.replace(/"/g, '\\"')}"`).join(', ')
 }
 
+/**
+ * Base AppleScript: enumerates every window of every known native app and browser,
+ * accumulating "appName|windowTitle" lines into `out` (newline-separated).
+ * Does NOT return early on a keyword match — the JS side applies isMeetingWindow.
+ */
 function buildBaseMacScript(): string {
   return `
 set out to ""
@@ -38,7 +44,6 @@ end try
 
 set nativeApps to {${appleStringList(MAC_NATIVE_APPS)}}
 set browsers to {${appleStringList(MAC_BROWSERS)}}
-set keywords to {${appleStringList(MEETING_KEYWORDS)}}
 
 repeat with appName in nativeApps
   set an to appName as text
@@ -47,11 +52,11 @@ repeat with appName in nativeApps
       tell application "System Events" to set wins to name of windows of process an
       repeat with w in wins
         set wt to w as text
-        repeat with kw in keywords
-          ignoring case
-            if wt contains (kw as text) then return an & "|" & wt
-          end ignoring
-        end repeat
+        if out is "" then
+          set out to an & "|" & wt
+        else
+          set out to out & linefeed & an & "|" & wt
+        end if
       end repeat
     end try
   end if
@@ -64,11 +69,11 @@ repeat with bName in browsers
       tell application "System Events" to set wins to name of windows of process bn
       repeat with w in wins
         set wt to w as text
-        repeat with kw in keywords
-          ignoring case
-            if wt contains (kw as text) then return bn & "|" & wt
-          end ignoring
-        end repeat
+        if out is "" then
+          set out to bn & "|" & wt
+        else
+          set out to out & linefeed & bn & "|" & wt
+        end if
       end repeat
     end try
   end if
@@ -83,29 +88,47 @@ return out
 `
 }
 
-function buildFullMacScript(): string {
-  const urlChecks = MEETING_URL_PATTERNS.map((p) => `us contains "${p}"`).join(' or ')
-  return `${buildBaseMacScript()}
--- Browser URL detection (requires browser Automation permission; isolated per browser).
-repeat with bName in {${appleStringList(CHROMIUM_BROWSERS)}}
-  set bn to bName as text
-  if procNames contains bn then
-    try
-      using terms from application "Google Chrome"
-        tell application bn
-          repeat with w in windows
-            repeat with t in tabs of w
-              set us to URL of t as text
-              if ${urlChecks} then return bn & "|" & us
-            end repeat
-          end repeat
-        end tell
-      end using terms from
-    end try
-  end if
-end repeat
+function getRunningProcessNames(): Promise<Set<string>> {
+  return new Promise((resolve) => {
+    execFile('ps', ['-axo', 'comm='], { timeout: 1500 }, (err, stdout) => {
+      if (err) {
+        resolve(new Set())
+        return
+      }
+      const names = new Set<string>()
+      for (const line of (stdout || '').split(/\n/)) {
+        const name = basename(line.trim())
+        if (name) names.add(name)
+      }
+      resolve(names)
+    })
+  })
+}
 
-if procNames contains "Arc" then
+export function buildFullMacScript(runningApps: Set<string> = new Set()): string {
+  const urlChecks = MEETING_URL_PATTERNS.map((p) => `us contains "${p}"`).join(' or ')
+  // Emit URL-detection blocks ONLY for browsers known to be running. AppleScript compiles
+  // `using terms from application "…"` dictionaries before runtime `if procNames contains …`
+  // guards execute, so an absent browser must not appear in this script at all.
+  const chromiumBlocks = CHROMIUM_BROWSERS.filter((bn) => runningApps.has(bn)).map((bn) => {
+    const escaped = bn.replace(/"/g, '\\"')
+    return `if procNames contains "${escaped}" then
+  try
+    using terms from application "${escaped}"
+      tell application "${escaped}"
+        repeat with w in windows
+          repeat with t in tabs of w
+            set us to URL of t as text
+            if ${urlChecks} then return "${escaped}" & "|" & us
+          end repeat
+        end repeat
+      end tell
+    end using terms from
+  end try
+end if`
+  }).join('\n\n')
+  const arcBlock = runningApps.has('Arc') && runningApps.has('Google Chrome')
+    ? `if procNames contains "Arc" then
   try
     using terms from application "Google Chrome"
       tell application "Arc"
@@ -118,9 +141,10 @@ if procNames contains "Arc" then
       end tell
     end using terms from
   end try
-end if
-
-if procNames contains "Safari" then
+end if`
+    : ''
+  const safariBlock = runningApps.has('Safari')
+    ? `if procNames contains "Safari" then
   try
     tell application "Safari"
       repeat with w in windows
@@ -131,7 +155,17 @@ if procNames contains "Safari" then
       end repeat
     end tell
   end try
-end if
+end if`
+    : ''
+  return `${buildBaseMacScript()}
+-- Browser URL detection (requires browser Automation permission; isolated per browser).
+-- Only known-running browsers are emitted so absent browser dictionaries never compile.
+-- Returns early on first URL match (high-confidence signal — keep early return here).
+${chromiumBlocks}
+
+${arcBlock}
+
+${safariBlock}
 
 if sysEventsFailed then return "${SYSTEM_EVENTS_DENIED}"
 return out
@@ -144,6 +178,23 @@ function runOsaScript(script: string): Promise<{ stdout: string; err: Error | nu
       resolve({ stdout: (stdout || '').trim(), err: err || null })
     })
   })
+}
+
+/**
+ * Parse the accumulated "app|title" lines from AppleScript and return the first
+ * line that isMeetingWindow considers an active meeting, or '' if none.
+ */
+function firstMeetingLine(raw: string, customApps: string[] = []): string {
+  for (const line of raw.split(/\n/)) {
+    const trimmed = line.trim()
+    if (!trimmed) continue
+    const pipeIdx = trimmed.indexOf('|')
+    if (pipeIdx === -1) continue
+    const appName = trimmed.slice(0, pipeIdx)
+    const title = trimmed.slice(pipeIdx + 1)
+    if (isMeetingWindow(appName, title, customApps)) return trimmed
+  }
+  return ''
 }
 
 /** CGWindow-backed fallback: enumerate window titles without AppleScript/Accessibility. */
@@ -164,19 +215,46 @@ async function detectMacByWindowTitles(customApps: string[] = []): Promise<strin
 }
 
 export async function detectMac(customApps: string[] = []): Promise<string> {
-  const full = await runOsaScript(buildFullMacScript())
-  if (full.stdout && full.stdout !== SYSTEM_EVENTS_DENIED) return full.stdout
+  const runningApps = await getRunningProcessNames()
+  const full = await runOsaScript(buildFullMacScript(runningApps))
 
-  // Full script succeeded but found nothing.
-  if (!full.err && full.stdout !== SYSTEM_EVENTS_DENIED) return ''
+  // Full script ran without error and returned real output (not a permission sentinel).
+  // All window titles were already gathered in this pass — no need for a second AppleScript.
+  const fullSucceeded =
+    !full.err && full.stdout !== SYSTEM_EVENTS_DENIED
 
-  // Full script failed (e.g., missing Chrome dictionary) or System Events was denied.
-  if (full.stdout !== SYSTEM_EVENTS_DENIED) {
-    const title = await runOsaScript(buildTitleOnlyMacScript())
-    if (title.stdout && title.stdout !== SYSTEM_EVENTS_DENIED) return title.stdout
-    if (!title.err && title.stdout !== SYSTEM_EVENTS_DENIED) return ''
+  if (fullSucceeded && full.stdout) {
+    // Browser URL match comes back as a single "browser|url" line (early return in AppleScript).
+    // It won't contain a newline and won't match firstMeetingLine's isMeetingWindow check
+    // (URL != window title), so handle it first.
+    const isUrlResult = MEETING_URL_PATTERNS.some((p) => full.stdout.includes(p))
+    if (isUrlResult) return full.stdout
+
+    // Apply the smart isMeetingWindow gate over all accumulated lines.
+    const match = firstMeetingLine(full.stdout, customApps)
+    if (match) return match
   }
 
-  // AppleScript is unavailable or blocked: fall back to CGWindow-backed window titles.
+  if (fullSucceeded) {
+    // Full script ran cleanly but found no qualified meeting — window titles were already
+    // enumerated above. For custom apps, fall through to the CGWindow pass (which can catch
+    // apps the AppleScript list doesn't cover); for built-ins only, we're done.
+    if (!customApps.length) return ''
+    return detectMacByWindowTitles(customApps)
+  }
+
+  // Full script failed (e.g., missing Chrome dictionary) or System Events was denied.
+  // Run the title-only script which skips the browser-URL block that can cause failures.
+  if (full.stdout !== SYSTEM_EVENTS_DENIED) {
+    const title = await runOsaScript(buildTitleOnlyMacScript())
+    if (title.stdout && title.stdout !== SYSTEM_EVENTS_DENIED) {
+      const match = firstMeetingLine(title.stdout, customApps)
+      if (match) return match
+    }
+    if (!title.err && title.stdout !== SYSTEM_EVENTS_DENIED && !customApps.length) return ''
+  }
+
+  // AppleScript found nothing/was blocked: fall back to CGWindow-backed window titles (this is also the
+  // only path that honors custom meeting apps; it needs Screen Recording permission to read titles).
   return detectMacByWindowTitles(customApps)
 }
