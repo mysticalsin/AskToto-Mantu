@@ -86,20 +86,13 @@ appx:
   publisherDisplayName: Mantu
   backgroundColor: transparent
 # ─── Auto-update feed (electron-updater is wired in src/main/updater.ts) ───────────────────
-# PRODUCTION SETUP (do this before cutting a public release — `npm run check:release` enforces it):
-#   1. Replace `url` below with the HTTPS host that will serve the updater manifests + artifacts:
-#        mac  → latest-mac.yml  +  AskToto-${version}-mac.zip  +  AskToto-${version}.dmg
-#        win  → latest.yml      +  AskToto-Setup-${version}.exe (nsis)
-#      Any static HTTPS origin works: S3 + CloudFront, Azure Blob + CDN, GitHub Releases proxy, nginx.
-#      MUST be HTTPS (electron-updater rejects plain http) and MUST keep the `REPLACE-WITH` token gone.
-#   2. Publish: `npm run dist` (mac) / `dist:win` builds + uploads. Upload ALL artifacts AND the
-#      generated *.yml manifests to the same `url` path so the client can resolve the next version.
-#   3. CODE SIGNING is required for the updater to trust artifacts (see SIGNING.md + header above):
-#        mac/win   → CSC_LINK (path or base64 of the .p12) + CSC_KEY_PASSWORD
-#                    (win can instead use WIN_CSC_LINK + WIN_CSC_KEY_PASSWORD / Azure Trusted Signing)
-#        mac notarize → APPLE_ID + APPLE_APP_SPECIFIC_PASSWORD + APPLE_TEAM_ID
-#      Unsigned macOS zip updates will be rejected by Gatekeeper on install.
-# Until `url` is set, updater.ts detects the `REPLACE-WITH` token in app-update.yml and skips auto-update.
+# FLOW: push a v* tag → CI (release.yml) builds + publishes to the public AskToto-Releases repo →
+# every installed app finds the new version on launch, downloads in the background, installs on quit.
+# CODE SIGNING is required for the updater to trust artifacts (see SIGNING.md):
+#   mac/win      → CSC_LINK (path or base64 of the .p12) + CSC_KEY_PASSWORD
+#                  (win can instead use WIN_CSC_LINK + WIN_CSC_KEY_PASSWORD / Azure Trusted Signing)
+#   mac notarize → APPLE_ID + APPLE_APP_SPECIFIC_PASSWORD + APPLE_TEAM_ID
+# Unsigned macOS zip updates will be rejected by Gatekeeper on install.
 publish:
   # Updates are served from the PUBLIC AskToto-Releases repo's GitHub Releases — the app *code* repo stays
   # private, only the built binaries + latest-mac.yml are published there. The installed app checks this repo
@@ -109,4 +102,8 @@ publish:
   provider: github
   owner: mysticalsin
   repo: AskToto-Releases
+  # Without this line electron-builder creates DRAFT releases — and electron-updater resolves versions
+  # from the public releases feed, which never contains drafts: every install would poll forever and
+  # find nothing. `release` publishes the moment CI finishes; the v* tag push is the human approval gate.
+  releaseType: release
   # channel: latest        # (default) bump to `beta`/`alpha` for pre-release rings if you add them.

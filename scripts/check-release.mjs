@@ -48,7 +48,16 @@ if (isGithub) {
     console.error('[check:release] FAIL — replace the placeholder github owner/repo before release.')
     process.exit(1)
   }
-  console.log(`[check:release] OK — update channel = github releases (${owner[1]}/${repo[1]}).`)
+  // electron-builder's GitHub publisher defaults to DRAFT releases — and electron-updater resolves
+  // versions from the public releases feed, which never contains drafts. Without releaseType: release,
+  // every "release" lands invisible and no installed app can ever update.
+  if (!/^\s*releaseType:\s*release\s*(#.*)?$/m.test(yml)) {
+    console.error('[check:release] FAIL — publish.releaseType must be `release`.')
+    console.error('[check:release] electron-builder defaults to draft releases, which electron-updater can never see:')
+    console.error('[check:release] the pipeline would upload artifacts forever without any install ever updating.')
+    process.exit(1)
+  }
+  console.log(`[check:release] OK — update channel = github releases (${owner[1]}/${repo[1]}, releaseType=release).`)
   process.exit(0)
 }
 
