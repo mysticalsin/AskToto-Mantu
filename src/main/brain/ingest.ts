@@ -7,7 +7,8 @@ import {
   MeetingExtractionSchema,
   type MeetingExtraction,
   type MeetingRef,
-  type BrainGraph
+  type BrainGraph,
+  type BrainIndex
 } from '@shared/brain'
 import { INJECTION_GUARD } from '@shared/prompts'
 import { redactSecrets } from '@shared/redact'
@@ -337,6 +338,25 @@ let running = false
 let backfillTotal = 0
 let backfillDone = 0
 
+// index.json has several independent writers (each job's own success/failure record, the
+// queue-drained cleanup, and startBackfill's `backfillRequested` flag) that all do a
+// read-whole-file → mutate one field → write-whole-file-back round trip. Without serializing
+// them, two overlapping round trips — e.g. a second startBackfill() call (re-clicking "Index
+// meetings", or resumeBackfillIfPending firing) landing mid-run — silently drop whichever wrote
+// last with the staler snapshot. Production symptom: every extraction kept succeeding, but
+// idx.ingested ended up empty because a stale rewrite kept clobbering it. Every mutation of
+// index.json now goes through this single serialized lane.
+let indexLock: Promise<void> = Promise.resolve()
+export function updateIndex(s: Settings, mutate: (idx: BrainIndex) => void): Promise<void> {
+  const run = indexLock.then(async () => {
+    const idx = readIndex(s)
+    mutate(idx)
+    await writeIndex(s, idx)
+  })
+  indexLock = run.catch(() => {})
+  return run
+}
+
 export function brainBackfillProgress(): { total: number; done: number; running: boolean } {
   return { total: backfillTotal, done: backfillDone, running }
 }
@@ -348,7 +368,6 @@ export function brainBackfillProgress(): { total: number; done: number; running:
  * the EXACT production path — the UI's headline "meetings ingested" stat reads the index this writes.
  */
 export async function ingestExtraction(s: Settings, x: MeetingExtraction, md: string, file: string): Promise<void> {
-  const idx = readIndex(s)
   const key = basename(file)
   const dateMatch = md.match(/^date:\s*(\S+)/m)
   const ref: MeetingRef = { file: key, date: dateMatch?.[1] ?? '', title: x.title24 || key }
@@ -358,9 +377,10 @@ export async function ingestExtraction(s: Settings, x: MeetingExtraction, md: st
   x.date = ref.date
   await writeMeetingExtraction(s, slugify(key), x)
   await mergeExtraction(s, x, ref)
-  idx.ingested[key] = { at: Date.now(), ok: true }
-  idx.warnings = lintBrain(s)
-  await writeIndex(s, idx)
+  await updateIndex(s, (idx) => {
+    idx.ingested[key] = { at: Date.now(), ok: true }
+    idx.warnings = lintBrain(s)
+  })
 }
 
 async function processJob(job: Job): Promise<void> {
@@ -371,10 +391,10 @@ async function processJob(job: Job): Promise<void> {
     await ingestExtraction(s, x, md, job.file)
     auditLog('brain.ingest', { ok: true, source: job.source })
   } catch (e) {
-    const idx = readIndex(s)
-    idx.ingested[basename(job.file)] = { at: Date.now(), ok: false, error: e instanceof Error ? e.message : String(e) }
-    idx.warnings = lintBrain(s)
-    await writeIndex(s, idx)
+    await updateIndex(s, (idx) => {
+      idx.ingested[basename(job.file)] = { at: Date.now(), ok: false, error: e instanceof Error ? e.message : String(e) }
+      idx.warnings = lintBrain(s)
+    })
     auditLog('brain.ingest', { ok: false, source: job.source })
   }
 }
@@ -386,11 +406,9 @@ function pump(): void {
     // Queue drained — if a backfill was in flight, clear the resume flag so the next boot stays idle.
     if (backfillTotal > 0 && backfillDone >= backfillTotal) {
       const s = getSettings()
-      const idx = readIndex(s)
-      if (idx.backfillRequested) {
+      void updateIndex(s, (idx) => {
         idx.backfillRequested = false
-        void writeIndex(s, idx)
-      }
+      })
     }
     return
   }
@@ -431,25 +449,29 @@ export function resumeBackfillIfPending(): void {
   }
 }
 
-/** Queue every not-yet-ingested transcript from the meetings folder + the vault. Resumable via index. */
+/** Queue every not-yet-ingested transcript from the meetings folder + the vault. Resumable via index.
+ *  Safe to call again while a backfill is already running (re-clicking "Index meetings",
+ *  resumeBackfillIfPending firing mid-session) — it tops up the queue instead of resetting progress,
+ *  and skips files already queued or completed so nothing is double-processed. */
 export function startBackfill(): { queued: number } {
   const s = getSettings()
   const idx = readIndex(s)
-  idx.backfillRequested = true
-  void writeIndex(s, idx)
+  if (!idx.backfillRequested) void updateIndex(s, (i) => { i.backfillRequested = true })
   const already = new Set(Object.entries(idx.ingested).filter(([, v]) => v.ok).map(([k]) => k))
+  const inFlight = new Set(queue.map((j) => basename(j.file)))
   const candidates: Job[] = []
   const folder = resolveMeetingsFolder(s)
   for (const f of existsSync(folder) ? readdirSync(folder) : []) {
-    if (f.endsWith('.md') && !f.startsWith('.') && f !== 'index.md' && !already.has(f)) {
+    if (f.endsWith('.md') && !f.startsWith('.') && f !== 'index.md' && !already.has(f) && !inFlight.has(f)) {
       candidates.push({ file: join(folder, f), source: 'meetings' })
     }
   }
   for (const f of existsSync(VAULT_TRANSCRIPTS) ? readdirSync(VAULT_TRANSCRIPTS) : []) {
-    if (f.endsWith('.md') && !already.has(f)) candidates.push({ file: join(VAULT_TRANSCRIPTS, f), source: 'vault' })
+    if (f.endsWith('.md') && !already.has(f) && !inFlight.has(f)) candidates.push({ file: join(VAULT_TRANSCRIPTS, f), source: 'vault' })
   }
-  backfillTotal = candidates.length
-  backfillDone = 0
+  // Accumulate rather than overwrite: a re-entrant call must extend an in-flight backfill's progress
+  // tracking, not reset it out from under the jobs already queued.
+  backfillTotal += candidates.length
   queue.push(...candidates)
   pump()
   return { queued: candidates.length }
