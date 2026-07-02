@@ -132,6 +132,9 @@ const api = {
   // 90-Second Debrief: append the off-record gut-read to a saved meeting (basename only).
   debriefSave: (file: string, text: string): Promise<{ ok: boolean; error?: string }> =>
     ipcRenderer.invoke(IPC.debriefSave, { file, text }),
+  // Commitment settlement: mark a ledger promise kept/broken (or reopen). Deal = display name.
+  brainCommitmentSettle: (deal: string, text: string, status: 'open' | 'kept' | 'broken'): Promise<{ ok: boolean; error?: string }> =>
+    ipcRenderer.invoke(IPC.brainCommitmentSettle, { deal, text, status }),
   setListeningState: (on: boolean): Promise<void> => ipcRenderer.invoke(IPC.listeningState, on),
   asrBundled: (): Promise<boolean> => ipcRenderer.invoke(IPC.asrBundled),
 
