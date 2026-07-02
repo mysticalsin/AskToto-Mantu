@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { DataSet } from 'vis-data'
 import { Network } from 'vis-network/standalone'
-import type { DashboardData, GraphNode, ScopeSummary, WinLikelihoodBand } from '../types/data'
+import type { DashboardData, GraphNode, Reason, ScopeSummary, WinLikelihoodBand } from '../types/data'
 import { bandColor, bandLabel } from '../lib/format'
 
 interface Props {
@@ -52,7 +52,14 @@ function mergeSummaries(summaries: ScopeSummary[]): ScopeSummary {
 }
 
 export function GraphView({ data }: Props) {
-  const { account_graph: graph, account_summaries: accountSummaries, sector_summaries: sectorSummaries, coaching_insights: insights } = data
+  const {
+    account_graph: graph,
+    account_summaries: accountSummaries,
+    sector_summaries: sectorSummaries,
+    coaching_insights: insights,
+    accounts,
+    people,
+  } = data
   const navigate = useNavigate()
   const containerRef = useRef<HTMLDivElement>(null)
   const networkRef = useRef<Network | null>(null)
@@ -247,6 +254,20 @@ export function GraphView({ data }: Props) {
     [insights, roiSummary],
   )
 
+  // Single-account scope only — the actual cited win/loss reasons for that account, not just band
+  // counts. accountSummaries.key === accounts[].slug (both slug(account name) — see brainAdapter.ts).
+  const roiAccount = useMemo(() => {
+    if (roiScope.type !== 'account' || !roiScope.key) return null
+    return accounts.find((a) => a.slug === roiScope.key) ?? null
+  }, [roiScope, accounts])
+
+  // Node ids carry a `type:` prefix (e.g. "person:jane-doe"); the bare remainder is the person's slug.
+  const selectedPerson = useMemo(() => {
+    if (!selected || selected.type !== 'person') return null
+    const bare = selected.id.replace(/^[a-z_]+:/, '')
+    return people.find((p) => p.slug === bare) ?? null
+  }, [selected, people])
+
   const isThin = accountGroups.length <= 1 && sectorGroups.length <= 1
 
   return (
@@ -288,6 +309,7 @@ export function GraphView({ data }: Props) {
             <div className="space-y-1 text-xs text-white/70">
               <div className="text-sm font-semibold text-white/90">{selected.label}</div>
               <div>Type: {selected.type}</div>
+              {selected.type === 'person' && selectedPerson?.role && <div>Role: {selectedPerson.role}</div>}
               {selected.account && <div>Account: {selected.account}</div>}
               {selected.sector && <div>Sector: {selected.sector}</div>}
               {selected.strategic_group && <div>Strategic group: {selected.strategic_group}</div>}
@@ -450,6 +472,12 @@ export function GraphView({ data }: Props) {
               </div>
             ))}
           </div>
+          {roiAccount && (roiAccount.win_reasons.length > 0 || roiAccount.loss_reasons.length > 0) && (
+            <div className="mt-3 space-y-3">
+              <ReasonList title="Why we win" tone="good" reasons={roiAccount.win_reasons} />
+              <ReasonList title="Why we lose" tone="concerning" reasons={roiAccount.loss_reasons} />
+            </div>
+          )}
           {roiInsights.length > 0 ? (
             <div className="mt-3 space-y-1.5">
               <div className="text-[11px] uppercase tracking-wide text-white/40">Why (grounded insights)</div>
@@ -582,6 +610,35 @@ export function GraphView({ data }: Props) {
           {graph.nodes.length} nodes · {graph.edges.length} edges · {communityGroups.length} communit{communityGroups.length === 1 ? 'y' : 'ies'}
         </div>
       </aside>
+    </div>
+  )
+}
+
+/** The actual cited reasons behind an account's win/loss record — statement up front, verbatim
+ *  quote in the title tooltip so the row stays scannable. Capped by the caller, not here. */
+function ReasonList({ title, tone, reasons }: { title: string; tone: WinLikelihoodBand; reasons: Reason[] }) {
+  if (reasons.length === 0) return null
+  const shown = reasons.slice(0, 3)
+  const extra = reasons.length - shown.length
+  return (
+    <div>
+      <div className="mb-1 flex items-center gap-1.5 text-[11px] uppercase tracking-wide text-white/40">
+        <span className="h-2 w-2 rounded-full" style={{ background: bandColor[tone] }} />
+        {title}
+      </div>
+      <div className="space-y-1.5">
+        {shown.map((r, i) => (
+          <div
+            key={i}
+            title={r.quote}
+            className="rounded-md border-l-2 bg-black/20 px-2 py-1.5 text-[11px] text-white/70"
+            style={{ borderLeftColor: bandColor[tone] }}
+          >
+            {r.statement}
+          </div>
+        ))}
+        {extra > 0 && <div className="pl-2 text-[10px] text-white/30">+{extra} more</div>}
+      </div>
     </div>
   )
 }

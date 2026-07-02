@@ -8,6 +8,7 @@ const links = [
   { to: '/deals', label: 'Deals' },
   { to: '/stats', label: 'Stats' },
   { to: '/graph', label: 'Relationships' },
+  { to: '/meetings', label: 'Meetings' },
 ]
 
 export function NavBar() {
