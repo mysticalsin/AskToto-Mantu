@@ -21,7 +21,8 @@ export interface MeetingDetectedToastProps {
   timeoutMs?: number
   /** User opted in — start listening now. */
   onStart: () => void
-  onDismiss: () => void
+  /** 'timeout' = the bar ran out (the user may never have seen it); 'user' = an explicit X (respect it). */
+  onDismiss: (reason: 'timeout' | 'user') => void
 }
 
 export function MeetingDetectedToast({
@@ -49,7 +50,7 @@ export function MeetingDetectedToast({
       setRemaining(left)
       if (left === 0) {
         clearInterval(iv)
-        onDismissRef.current() // auto-dismiss never starts recording; it just hides the banner
+        onDismissRef.current('timeout') // auto-dismiss never starts recording; it just hides the banner
       }
     }, 250)
     return () => clearInterval(iv)
@@ -83,7 +84,7 @@ export function MeetingDetectedToast({
           </button>
           <button
             type="button"
-            onClick={onDismiss}
+            onClick={() => onDismiss('user')}
             className="no-drag focus-ring grid h-[30px] w-[30px] shrink-0 place-items-center rounded-full text-[color:var(--color-ink-2)] hover:bg-white/10 hover:text-[color:var(--color-ink)]"
             aria-label="Dismiss"
           >

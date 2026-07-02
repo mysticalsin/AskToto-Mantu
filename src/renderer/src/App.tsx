@@ -963,6 +963,9 @@ export function App(): JSX.Element {
     if (ask.answer?.streaming || suggest.answer?.streaming) {
       onStop()
     } else if (meetingPrompt.open) {
+      // Escape is an explicit decline, same as the X — don't re-offer for this meeting.
+      meetingLiveRef.current.declined = true
+      clearMeetingReoffer()
       setMeetingPrompt({ open: false })
     } else if (view !== 'answer') {
       // Leaving the post-meeting Review must not drag the recap into the idle widget answer slot, nor
@@ -1009,10 +1012,29 @@ export function App(): JSX.Element {
   startListenRef.current = startListen
   const endReviewRef = useRef(endReview)
   endReviewRef.current = endReview
+  // Meeting-opt-in re-offer state. Main sends meetingDetected {active:true} exactly ONCE per meeting
+  // (a latch in the poller), and the toast auto-dismisses after 6s — so a user who glanced away for six
+  // seconds used to lose the entire meeting with no way back. Track whether the meeting is still live and
+  // re-surface the offer after a TIMEOUT dismiss; an explicit X means "not this meeting" and is respected.
+  const meetingLiveRef = useRef<{ live: boolean; app?: string; declined: boolean; reoffers: number }>({
+    live: false,
+    declined: false,
+    reoffers: 0
+  })
+  const meetingReofferTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const clearMeetingReoffer = (): void => {
+    if (meetingReofferTimer.current) {
+      clearTimeout(meetingReofferTimer.current)
+      meetingReofferTimer.current = null
+    }
+  }
   useEffect(
     () =>
       window.toto.onMeetingDetected((d) => {
         if (d && d.active === false) {
+          meetingLiveRef.current = { live: false, declined: false, reoffers: 0 }
+          clearMeetingReoffer()
+          setMeetingPrompt({ open: false })
           // meeting ended — only auto-wrap-up sessions we auto-started (don't end manual ones)
           if (listeningRef.current && autoStartedRef.current) {
             autoStartedRef.current = false
@@ -1021,11 +1043,13 @@ export function App(): JSX.Element {
         } else if (!listeningRef.current) {
           // Meeting detected → show opt-in toast only. Nothing is recorded until the user clicks
           // "Start listening". startListen is wired to the toast's onStart prop below.
+          meetingLiveRef.current = { live: true, app: d?.app, declined: false, reoffers: 0 }
           setMeetingPrompt({ open: true, app: d?.app })
         }
       }),
     []
   )
+  useEffect(() => clearMeetingReoffer, []) // unmount safety
 
   useEffect(() => window.toto.onUpdateReady((d) => setUpdateReady({ open: true, version: d?.version })), [])
 
@@ -1300,9 +1324,31 @@ export function App(): JSX.Element {
               app={meetingPrompt.app}
               onStart={() => {
                 startListenRef.current(true) // user opted in — auto-started, so meeting-end can auto-wrap up
+                clearMeetingReoffer()
                 setMeetingPrompt({ open: false })
               }}
-              onDismiss={() => setMeetingPrompt({ open: false })}
+              onDismiss={(reason) => {
+                setMeetingPrompt({ open: false })
+                const m = meetingLiveRef.current
+                if (reason === 'user') {
+                  // Explicit X = "not this meeting". No more offers until the next meeting starts.
+                  m.declined = true
+                  clearMeetingReoffer()
+                  return
+                }
+                // Timed out unseen. While the meeting is still live and nothing is recording, quietly
+                // re-offer every minute (max 3 times) so a glance away doesn't cost the whole meeting.
+                if (m.live && !m.declined && m.reoffers < 3) {
+                  m.reoffers += 1
+                  clearMeetingReoffer()
+                  meetingReofferTimer.current = setTimeout(() => {
+                    const cur = meetingLiveRef.current
+                    if (cur.live && !cur.declined && !listeningRef.current) {
+                      setMeetingPrompt({ open: true, app: cur.app })
+                    }
+                  }, 60_000)
+                }
+              }}
             />
             <UpdateReadyToast
               open={updateReady.open}
