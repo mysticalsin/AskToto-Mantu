@@ -6,6 +6,7 @@ import { CoachingView } from './views/CoachingView'
 import { DealView } from './views/DealView'
 import { StatsView } from './views/StatsView'
 import { GraphView } from './views/GraphView'
+import { MeetingsView } from './views/MeetingsView'
 import { EmbedView } from './views/EmbedView'
 
 function LoadingOrError({ loading, error }: { loading: boolean; error: string | null }) {
@@ -48,6 +49,7 @@ function DashboardRoutes() {
           <Route path="/deals" element={<DealView data={data} />} />
           <Route path="/stats" element={<StatsView data={data} />} />
           <Route path="/graph" element={<GraphView data={data} />} />
+          <Route path="/meetings" element={<MeetingsView data={data} />} />
         </Routes>
       )}
     </div>

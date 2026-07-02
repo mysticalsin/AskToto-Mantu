@@ -10,6 +10,7 @@ import {
   groundingLabel,
   outcomeLabel,
 } from '../lib/format'
+import { ledgerTotals } from '../lib/ledgerstats'
 
 interface Props {
   data: DashboardData
@@ -28,6 +29,20 @@ const gradeGlyph: Record<string, string> = {
   mixed: '~',
   concerning: '!',
   'not-applicable': '–',
+}
+
+// Humanized labels for the brain's velocity-signal vocabulary (deal.velocity.signal).
+const velocityLabel: Record<string, string> = {
+  'hard-calendar-gate': 'Hard date on calendar',
+  'soft-organizational-gate': 'Soft organizational gate',
+  'no-hard-date-found': 'No hard date found',
+}
+
+// Same chip language as StanceTag below — open/kept/broken commitment status.
+const commitmentStatusStyle: Record<string, string> = {
+  open: 'bg-amber-500/15 text-amber-300',
+  kept: 'bg-emerald-500/15 text-emerald-300',
+  broken: 'bg-rose-500/15 text-rose-300',
 }
 
 export function DealView({ data }: Props) {
@@ -55,6 +70,14 @@ export function DealView({ data }: Props) {
       <div className="mx-auto max-w-7xl px-6 py-8 text-sm text-white/50">No deals available.</div>
     )
   }
+
+  const commitmentTotals = ledgerTotals(deal.commitments)
+  // Open commitments surface first (they need attention); within each group, newest first.
+  const sortedCommitments = [...deal.commitments].sort((a, b) => {
+    if (a.status === 'open' && b.status !== 'open') return -1
+    if (a.status !== 'open' && b.status === 'open') return 1
+    return (b.date ?? '').localeCompare(a.date ?? '')
+  })
 
   return (
     <div className="mx-auto max-w-7xl px-6 py-8">
@@ -106,11 +129,60 @@ export function DealView({ data }: Props) {
                   value={bandLabel[deal.win_likelihood_band]}
                   dot={bandColor[deal.win_likelihood_band]}
                 />
+                {deal.band_evidence && (
+                  <div className="border-b border-white/5 pb-1.5 text-[11px] italic text-white/40">
+                    Why this band: &ldquo;{deal.band_evidence}&rdquo;
+                  </div>
+                )}
                 <Row
-                  label="Value"
-                  value={deal.value_usd ? `$${deal.value_usd.toLocaleString()}` : 'Unknown'}
+                  label="Velocity"
+                  value={velocityLabel[deal.velocity.signal] ?? deal.velocity.signal}
+                  title={deal.velocity.evidence || undefined}
                 />
+                {deal.velocity.evidence && (
+                  <div className="text-[11px] text-white/40">{deal.velocity.evidence}</div>
+                )}
               </dl>
+            </div>
+
+            <div className="rounded-xl border border-[var(--color-mantu-border)] bg-[var(--color-mantu-surface)] p-5">
+              <div className="mb-3 flex items-baseline justify-between">
+                <h3 className="text-sm font-semibold uppercase tracking-wide text-white/60">
+                  Commitments
+                </h3>
+                <span className="text-[11px] text-white/40">
+                  {commitmentTotals.open} open · {commitmentTotals.kept} kept ·{' '}
+                  {commitmentTotals.broken} broken
+                </span>
+              </div>
+              <div className="space-y-3">
+                {sortedCommitments.map((c, i) => (
+                  <div
+                    key={i}
+                    className="rounded-lg border border-white/5 bg-black/20 p-3"
+                    title={c.quote || undefined}
+                  >
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <span
+                        className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${commitmentStatusStyle[c.status] ?? ''}`}
+                      >
+                        {c.status}
+                      </span>
+                      <span className="text-[11px] text-white/40">{c.date}</span>
+                    </div>
+                    <p className="mt-1.5 text-xs text-white/80">{c.text}</p>
+                    <div className="mt-1 flex flex-wrap items-center gap-x-2 text-[11px] text-white/40">
+                      <span>By {c.by}</span>
+                      {c.due_hint && <span>· Due {c.due_hint}</span>}
+                    </div>
+                  </div>
+                ))}
+                {deal.commitments.length === 0 && (
+                  <div className="text-xs text-white/30">
+                    No commitments captured on this deal yet.
+                  </div>
+                )}
+              </div>
             </div>
 
             <div className="rounded-xl border border-[var(--color-mantu-border)] bg-[var(--color-mantu-surface)] p-5">
@@ -173,11 +245,6 @@ export function DealView({ data }: Props) {
                         {categoryLabel[claim.category]}
                       </span>
                       <StanceTag stance={claim.stance} />
-                      {claim.was_deciding_factor && (
-                        <span className="rounded-full bg-white/10 px-2 py-0.5 text-[10px] font-semibold text-white/70">
-                          Deciding factor
-                        </span>
-                      )}
                     </div>
                     <GroundingBadge g={claim.source.grounding} />
                   </div>
@@ -187,7 +254,9 @@ export function DealView({ data }: Props) {
                       <span className="font-mono text-[10px] text-mantu-light/80">
                         {claim.source.file}
                       </span>
-                      <span className="text-[10px]">Raised by {claim.raised_by}</span>
+                      {claim.raised_by && (
+                        <span className="text-[10px]">Raised by {claim.raised_by}</span>
+                      )}
                     </div>
                     <div className="italic">&ldquo;{claim.source.quote_or_paraphrase}&rdquo;</div>
                   </div>
@@ -206,11 +275,21 @@ export function DealView({ data }: Props) {
   )
 }
 
-function Row({ label, value, dot }: { label: string; value: string; dot?: string }) {
+function Row({
+  label,
+  value,
+  dot,
+  title,
+}: {
+  label: string
+  value: string
+  dot?: string
+  title?: string
+}) {
   return (
     <div className="flex items-center justify-between border-b border-white/5 pb-1.5">
       <dt className="text-white/40">{label}</dt>
-      <dd className="flex items-center gap-1.5 font-medium text-white/85">
+      <dd className="flex items-center gap-1.5 font-medium text-white/85" title={title}>
         {dot && <span className="h-2 w-2 rounded-full" style={{ background: dot }} />}
         {value}
       </dd>
