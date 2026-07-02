@@ -127,6 +127,19 @@ import { redactSecrets } from '@shared/redact'
 // deprioritizing the (hidden) renderer that hosts the transcription worker. Must run before app ready.
 app.commandLine.appendSwitch('disable-renderer-backgrounding')
 
+// QA hook (same family as ASKTOTO_DEMO / ASKTOTO_SHOT): point the app at an isolated profile so
+// physical QA never reads — or refuses to write over — the packaged app's keychain-wrapped real
+// userData. Must run before anything touches app.getPath('userData').
+if (process.env.ASKTOTO_USERDATA) app.setPath('userData', process.env.ASKTOTO_USERDATA)
+
+// Unpackaged (npm run dev / QA) runs must never share the packaged app's userData: its settings.json
+// is safeStorage-encrypted under the packaged binary's keychain identity, so a dev process can't
+// decrypt it — reads fall back to defaults (onboarding reappears) and the write guard refuses to
+// clobber it, wedging onboarding at the last slide. A '-dev' suffixed profile sidesteps all of it.
+if (!app.isPackaged && !process.env.ASKTOTO_USERDATA) {
+  app.setPath('userData', `${app.getPath('userData')}-dev`)
+}
+
 const BAR_WIDTH = 880
 const BAR_HEIGHT = 84 // initial idle height of the slimmer two-row widget; useAutoResize grows it for answers
 const BAR_MIN_HEIGHT = 44 // floor for the resize clamp so the collapsed control mini-pill can shrink fully

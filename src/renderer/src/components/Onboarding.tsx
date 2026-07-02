@@ -149,12 +149,15 @@ export function Onboarding({
 }: {
   settings: PublicSettings
   saveKey?: (provider: ProviderId, k: string) => Promise<void>
+  // Real impl (state.ts) returns Promise<void> and awaits disk persistence; typed void to match the
+  // Settings prop contract. `await patch(...)` still waits for the write before finish() calls onDone.
   patch: (p: Partial<PublicSettings>) => void
   onDone: () => void
 }): JSX.Element {
   const [recordingConsent, setRecordingConsent] = useState(settings.recordingConsent)
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
+  const [finishErr, setFinishErr] = useState('')
   const [step, setStep] = useState<1 | 2 | 3 | 4 | 5>(1)
   const [perms, setPerms] = useState<PlatformPermissions | null>(null)
 
@@ -200,9 +203,14 @@ export function Onboarding({
     }
   }
 
-  const finish = (): void => {
-    void patch({ onboardingDone: true, recordingConsent })
-    onDone()
+  const finish = async (): Promise<void> => {
+    setFinishErr('')
+    try {
+      await patch({ onboardingDone: true, recordingConsent })
+      onDone()
+    } catch (e) {
+      setFinishErr(`Couldn't save your setup — ${e instanceof Error ? e.message : String(e)}`)
+    }
   }
 
   if (step === 2) {
@@ -284,11 +292,12 @@ export function Onboarding({
 
         <button
           type="button"
-          onClick={finish}
+          onClick={() => void finish()}
           className="no-drag focus-ring inline-flex items-center justify-center gap-2 rounded-xl bg-[var(--color-accent)] px-5 py-2.5 text-[14px] font-medium text-white hover:brightness-110"
         >
           Get started <ArrowRight size={14} />
         </button>
+        {finishErr && <div className="text-[12px] text-[color:var(--color-danger)]">{finishErr}</div>}
         <button
           type="button"
           onClick={() => setStep(4)}
