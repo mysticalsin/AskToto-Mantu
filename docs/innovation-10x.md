@@ -85,5 +85,17 @@ is a stepping stone to delegated attendance.
 - **#2 Ambush Briefing** — BLOCKED on counterparty identity: the meeting-detected event carries only the
   app (Teams/Zoom), not who is in the room, and calendar (Azure) is dormant. Deferred until calendar is
   provisioned or early-transcript participant inference lands; building it now would brief on nobody.
-- **#5, #6, #7, #8** — next build wave.
+- **#5 No-Decision Honk** — shipped. `src/shared/wrapup.ts` detects an explicit ending phrase with no
+  owned next step anywhere in the meeting (biased hard toward silence); one nudge per session through
+  the existing copilot surface with a drafted "force the ask" line (`buildNoDecisionPrompt`).
+- **#6 90-Second Debrief** — shipped. Post-meeting off-record card in Review (`appendDebrief` →
+  "## Debrief (off the record)" inside the saved meeting: same encryption/retention/deletion), re-ingested
+  so the brain folds the unsaid into signals — extraction treats it as INFERRED user impressions, never quotes.
+- **#7, #8** — next build wave.
 - **#9, #10** — after the brain accumulates volume (they need corpus density to shine).
+
+## Bonus (user-requested, 2026-07-02)
+
+- **Mars week draft** — `src/shared/mars.ts` + a "Mars week" copy button in the Intelligence dashboard:
+  the weekly report skeleton (meetings, first contacts, won/lost from human-set outcomes only, ledger
+  follow-ups, at-risk) assembled from the last 7 days. Facts only; Mars buckets left to the human.
