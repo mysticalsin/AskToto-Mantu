@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { useEffect, useRef, useState, memo, type ReactNode } from 'react'
 import {
   Image,
   CornerDownLeft,
@@ -34,6 +34,58 @@ function clock(s: number): string {
   return `${m}:${r.toString().padStart(2, '0')}`
 }
 
+/** Owns its own 1 Hz tick — previously `seconds` lived in App's top-level state and ticked the WHOLE App
+ *  tree (including Bar's full ~500-line JSX and whichever body was mounted) once a second for the entire
+ *  meeting. Isolating the interval here means the tick only ever re-renders this one <span>. Derives
+ *  elapsed time from `startedAt` (a wall-clock timestamp) rather than counting up itself, so it can never
+ *  drift from the real meeting duration even if a render is skipped/delayed.
+ *
+ *  Pause must exclude dead air from the displayed time (the old counter simply stopped incrementing while
+ *  paused) — tracked here as accumulated pausedMs, subtracted from the raw wall-clock delta so a long pause
+ *  doesn't make the clock jump forward on resume. */
+const ElapsedClock = memo(function ElapsedClock({
+  startedAt,
+  paused
+}: {
+  startedAt: number
+  paused: boolean
+}): JSX.Element {
+  const [now, setNow] = useState(() => Date.now())
+  const pausedMsRef = useRef(0) // total time already spent paused this meeting
+  const pausedAtRef = useRef<number | null>(null) // wall-clock moment the current pause began
+  useEffect(() => {
+    if (paused) {
+      pausedAtRef.current = Date.now()
+      return
+    }
+    if (pausedAtRef.current != null) {
+      pausedMsRef.current += Date.now() - pausedAtRef.current
+      pausedAtRef.current = null
+    }
+    const iv = setInterval(() => setNow(Date.now()), 1000)
+    return () => clearInterval(iv)
+  }, [paused])
+  // startedAt changing means a NEW meeting — reset the accumulated pause bookkeeping so it doesn't leak
+  // across sessions (a ref, so this can't just be a useState initializer keyed on mount).
+  const startedAtRef = useRef(startedAt)
+  if (startedAtRef.current !== startedAt) {
+    startedAtRef.current = startedAt
+    pausedMsRef.current = 0
+    pausedAtRef.current = null
+  }
+  const seconds = Math.max(0, Math.floor((now - startedAt - pausedMsRef.current) / 1000))
+  return (
+    <span
+      className={[
+        'tabular-nums text-[12px] font-medium',
+        paused ? 'text-[color:var(--color-ink-3)]' : 'text-[color:var(--color-danger)]'
+      ].join(' ')}
+    >
+      {clock(seconds)}
+    </span>
+  )
+})
+
 export interface BarProps {
   value: string
   onChange: (v: string) => void
@@ -55,7 +107,9 @@ export interface BarProps {
   /** When true, activates Private view — notes are excluded from shared screens. */
   stealth: boolean
   onToggleStealth: () => void
-  seconds: number
+  /** Wall-clock start time of the current meeting (Date.now() at startListen) — ElapsedClock derives the
+   *  ticking display from this instead of App owning a 1 Hz `seconds` counter. Ignored while !listening. */
+  startedAt: number
   panelOpen: boolean
   onTogglePanel: () => void
   focusSignal: number
@@ -137,7 +191,7 @@ function IconTool({
   )
 }
 
-export function Bar(props: BarProps): JSX.Element {
+export const Bar = memo(function Bar(props: BarProps): JSX.Element {
   const inputRef = useRef<HTMLInputElement>(null)
   // Drag the whole window from anywhere on the widget (shared with the control pill). Dragging blurs the
   // input so the caret drops; a press that starts inside the input is excluded so text-selection works.
@@ -384,14 +438,7 @@ export function Bar(props: BarProps): JSX.Element {
             <div className="flex w-[72px] items-center gap-2">
               {props.listening && (
                 <>
-                  <span
-                    className={[
-                      'tabular-nums text-[12px] font-medium',
-                      props.paused ? 'text-[color:var(--color-ink-3)]' : 'text-[color:var(--color-danger)]'
-                    ].join(' ')}
-                  >
-                    {clock(props.seconds)}
-                  </span>
+                  <ElapsedClock startedAt={props.startedAt} paused={props.paused} />
                   {/* Pause suspends capture (mic + system audio stay warm, nothing is finalized/saved) —
                       distinct from Stop (the danger dot above), which ends the meeting and saves it. */}
                   <button
@@ -486,4 +533,4 @@ export function Bar(props: BarProps): JSX.Element {
       )}
     </div>
   )
-}
+})

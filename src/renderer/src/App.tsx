@@ -2,17 +2,20 @@ import { useCallback, useEffect, useRef, useState, lazy, Suspense } from 'react'
 import { Bar } from './components/Bar'
 import { ControlPill } from './components/ControlPill'
 import { Panel } from './components/Panel'
-import { Answer } from './components/Answer'
-import { Copilot } from './components/Copilot'
 import { Onboarding } from './components/Onboarding'
-// Heavy, rarely-first views are code-split so they don't weigh down the overlay's startup.
+// Heavy, rarely-first views are code-split so they don't weigh down the overlay's startup. Answer and
+// Copilot pull in Markdown.tsx -> streamdown + shiki/core, which have no reason to parse/execute before
+// the user has asked anything — deferring them keeps that weight out of the eager boot chunk.
 const Settings = lazy(() => import('./components/Settings').then((m) => ({ default: m.Settings })))
 const Review = lazy(() => import('./components/Review').then((m) => ({ default: m.Review })))
 const RecallView = lazy(() => import('./components/RecallView').then((m) => ({ default: m.RecallView })))
 const AgendaView = lazy(() => import('./components/AgendaView').then((m) => ({ default: m.AgendaView })))
+const Answer = lazy(() => import('./components/Answer').then((m) => ({ default: m.Answer })))
+const Copilot = lazy(() => import('./components/Copilot').then((m) => ({ default: m.Copilot })))
 import { SignInWall } from './components/SignInWall'
 import { MeetingDetectedToast } from './components/MeetingDetectedToast'
 import { UpdateReadyToast } from './components/UpdateReadyToast'
+import { NewMeetingToast } from './components/NewMeetingToast'
 import { RecordingConsentReminder } from './components/RecordingConsentReminder'
 import { QuickActions, type QuickKind } from './components/QuickActions'
 import { useAsk, useAutoResize, useSettings, useAuth } from './state'
@@ -104,7 +107,6 @@ export function App(): JSX.Element {
   // tick (see the interval below) instead of freezing at whatever age it happened to have when the
   // screenshot was taken. Without this the "Seen Ns ago" chip would go stale the moment it rendered.
   const [screenCapturedAt, setScreenCapturedAt] = useState<number | null>(null)
-  const [seconds, setSeconds] = useState(0)
   const [focusSignal, setFocusSignal] = useState(0)
   // A past meeting opened from History → shown read-only in Review (recap + transcript + Resume).
   const [pastMeeting, setPastMeeting] = useState<{
@@ -137,17 +139,8 @@ export function App(): JSX.Element {
   const MAX_SAVE_RETRIES = 5
   const [meetingPrompt, setMeetingPrompt] = useState<{ open: boolean; app?: string }>({ open: false })
   const [updateReady, setUpdateReady] = useState<{ open: boolean; version?: string }>({ open: false })
+  const [newMeetingToast, setNewMeetingToast] = useState(false)
   const autoStartedRef = useRef(false)
-
-  useEffect(() => {
-    if (!listen.listening) {
-      setSeconds(0)
-      return
-    }
-    if (listen.paused) return // freeze the on-screen clock while paused instead of counting dead air
-    const iv = setInterval(() => setSeconds((s) => s + 1), 1000)
-    return () => clearInterval(iv)
-  }, [listen.listening, listen.paused])
 
   // Drives the overlay's glass-background alpha (Settings → Personalize → Appearance). A single CSS
   // variable multiplies every --glass-* alpha channel (see styles.css) — default 1 reproduces today's
@@ -757,9 +750,12 @@ export function App(): JSX.Element {
   )
 
   // "New meeting" from the bar — save the meeting we're leaving, then start a fresh session right away.
+  // A single click ends the live meeting and snaps the timer to 0:00 with no other visible change — easy
+  // to miss on a misclick mid-call — so surface a brief toast confirming what just happened.
   const newMeeting = useCallback(() => {
     void saveMeetingNow(listen.lines, meetingStartRef.current, '')
     startListen()
+    setNewMeetingToast(true)
   }, [saveMeetingNow, listen.lines, startListen])
 
   // Quit / Log out (from Settings) must first persist any in-flight meeting — a single best-effort save
@@ -846,6 +842,33 @@ export function App(): JSX.Element {
     void patch({ showLiveTranscript: !(settings?.showLiveTranscript ?? false) })
   }, [patch, settings?.showLiveTranscript])
 
+  // Stabilized Bar callbacks (previously fresh inline arrow functions on every render) — a prerequisite
+  // for React.memo(Bar) to actually skip re-renders; an unstable prop defeats memo's shallow comparison
+  // regardless of how many other props are stable.
+  const onTogglePause = useCallback(() => (listen.paused ? listen.resume() : listen.pause()), [listen])
+  const onSetMode = useCallback((m: ConversationMode) => void patch({ mode: m }), [patch])
+  const onToggleThinking = useCallback(() => {
+    void patch({ thinkingMode: settings?.thinkingMode === 'always' ? 'auto' : 'always' })
+  }, [patch, settings?.thinkingMode])
+  const onBarHistory = useCallback(() => {
+    setView((v) => (v === 'history' ? 'answer' : 'history'))
+    setCollapsed(false)
+  }, [])
+  const onBarSettings = useCallback(() => {
+    setSettingsInitialTab(undefined) // logo-click opens the default tab, not a leftover programmatic one
+    setSettingsNotice(undefined) // ...and never a leftover "why am I here" banner either
+    setView((v) => (v === 'settings' ? 'answer' : 'settings'))
+    setCollapsed(false)
+  }, [])
+  const onBarMinimize = useCallback(() => {
+    setMinimized(true)
+    void window.toto.minimize(true) // collapse to the control mini-pill
+  }, [])
+  const onToggleStealth = useCallback(() => {
+    void patch({ contentProtection: !(settings?.contentProtection ?? true) })
+  }, [patch, settings?.contentProtection])
+  const onTogglePanel = useCallback(() => setCollapsed((c) => !c), [])
+
   // Open a saved meeting from History as a read-only recap (Cluely recap detail) via the recall:read IPC.
   const openPastMeeting = useCallback(async (file: string) => {
     const r = await window.toto.recallRead(file)
@@ -893,6 +916,10 @@ export function App(): JSX.Element {
     else if (a === 'toggle-listen') toggleListen()
     else if (a === 'capture') capture()
     else if (a === 'factcheck') factCheck()
+    else if (a === 'whatnext') whatNext()
+    else if (a === 'explain') onQuickAction('explain')
+    else if (a === 'summarize') onQuickAction('summarize')
+    else if (a === 'spotlight-ref') spotlightRef()
     else if (a === 'settings') {
       setView((v) => (v === 'settings' ? 'answer' : 'settings'))
       setCollapsed(false)
@@ -1185,20 +1212,23 @@ export function App(): JSX.Element {
         }
       />
     )
-  } else if (capturing && !ask.answer && !captureError) {
-    body = <Answer text="" streaming error={null} />
-  } else if (captureError || ask.answer) {
+  } else if (capturing || captureError || ask.answer) {
+    // While a new screen capture is in flight (capturing), force the streaming/empty display even when
+    // ask.answer still holds the PREVIOUS turn's finished answer — otherwise a repeat screen-ask (blank
+    // Enter, or any screen-ask after the first) silently paints that stale answer as static text with no
+    // busy signal for the whole capture window (footer/Retry/Go-deeper are already gated on !streaming,
+    // so forcing streaming=true here correctly hides them too).
     body = (
       <Answer
-        text={ask.answer?.text ?? ''}
-        streaming={ask.answer?.streaming ?? false}
+        text={capturing ? '' : ask.answer?.text ?? ''}
+        streaming={capturing || (ask.answer?.streaming ?? false)}
         error={captureError ?? ask.answer?.error ?? null}
         prompt={ask.answer?.prompt ?? ''}
         label={ask.answer?.label}
         kind={ask.answer?.kind}
         usedScreen={ask.answer?.usedScreen}
-        onRetry={captureError ? undefined : retryAnswer}
-        onGoDeeper={captureError ? undefined : goDeeper}
+        onRetry={capturing || captureError ? undefined : retryAnswer}
+        onGoDeeper={capturing || captureError ? undefined : goDeeper}
       />
     )
   }
@@ -1256,6 +1286,7 @@ export function App(): JSX.Element {
               onRestart={() => void window.toto.installUpdate()}
               onDismiss={() => setUpdateReady({ open: false })}
             />
+            <NewMeetingToast open={newMeetingToast} onDismiss={() => setNewMeetingToast(false)} />
             <RecordingConsentReminder
               listening={listen.listening}
               lastReminderAt={settings?.lastConsentReminderAt ?? 0}
@@ -1271,7 +1302,7 @@ export function App(): JSX.Element {
         // (useAutoResize picks the FIRST [data-hug-width] match in document order, so this wrapper —
         // rendered before the pill below — wins while a toast is open, and control reverts to the
         // pill's own report the instant the toast closes and this wrapper unmounts).
-        return minimized && (meetingPrompt.open || updateReady.open) ? (
+        return minimized && (meetingPrompt.open || updateReady.open || newMeetingToast) ? (
           <div data-hug-width className="mx-auto flex w-[500px] flex-col gap-2 px-1.5">
             {toasts}
           </div>
@@ -1307,11 +1338,11 @@ export function App(): JSX.Element {
             listening={listen.listening}
             onToggleListen={toggleListen}
             paused={listen.paused}
-            onTogglePause={() => (listen.paused ? listen.resume() : listen.pause())}
+            onTogglePause={onTogglePause}
             onCapture={capture}
             capturing={capturing}
             mode={mode}
-            onSetMode={(m) => void patch({ mode: m })}
+            onSetMode={onSetMode}
             hasAnswer={hasAnswer}
             body={barBody}
             onBack={hasAnswer ? clearAnswer : undefined}
@@ -1321,27 +1352,16 @@ export function App(): JSX.Element {
             customModes={settings?.customModes}
             canPrewarm={!!settings?.visionReady && (settings?.screenAsk ?? true)}
             thinkingOn={settings?.thinkingMode === 'always'}
-            onToggleThinking={() => void patch({ thinkingMode: settings?.thinkingMode === 'always' ? 'auto' : 'always' })}
+            onToggleThinking={onToggleThinking}
             onSpotlightRef={spotlightRef}
-            onHistory={() => {
-              setView((v) => (v === 'history' ? 'answer' : 'history'))
-              setCollapsed(false)
-            }}
-            onSettings={() => {
-              setSettingsInitialTab(undefined) // logo-click opens the default tab, not a leftover programmatic one
-              setSettingsNotice(undefined) // ...and never a leftover "why am I here" banner either
-              setView((v) => (v === 'settings' ? 'answer' : 'settings'))
-              setCollapsed(false)
-            }}
-            onMinimize={() => {
-              setMinimized(true)
-              void window.toto.minimize(true) // collapse to the control mini-pill
-            }}
+            onHistory={onBarHistory}
+            onSettings={onBarSettings}
+            onMinimize={onBarMinimize}
             stealth={settings?.contentProtection ?? true}
-            onToggleStealth={() => void patch({ contentProtection: !(settings?.contentProtection ?? true) })}
-            seconds={seconds}
+            onToggleStealth={onToggleStealth}
+            startedAt={meetingStartRef.current}
             panelOpen={panelOpen}
-            onTogglePanel={() => setCollapsed((c) => !c)}
+            onTogglePanel={onTogglePanel}
             focusSignal={focusSignal}
           />
           {/* Quick actions render as their own row UNDER the whole bar (including its toolbar), only

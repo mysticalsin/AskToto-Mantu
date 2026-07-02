@@ -59,10 +59,19 @@ export function useAutoResize(): (el: HTMLElement | null) => void {
     const measure = (): { height: number; width?: number } => {
       const rect = el.getBoundingClientRect()
       let bottom = rect.bottom
-      el.querySelectorAll<HTMLElement>('[data-overlay]').forEach((node) => {
-        const r = node.getBoundingClientRect()
-        if (r.bottom > bottom) bottom = r.bottom
-      })
+      // data-overlay is only ever mounted by the (usually-closed) mode popover — querySelectorAll always
+      // walks the full subtree even when nothing matches, and this runs on every MutationObserver firing,
+      // which during a streaming answer is roughly every animation frame (Streamdown/CodeBlock mutate the
+      // DOM continuously as tokens arrive). querySelector (singular) short-circuits at the first match, so
+      // the overwhelmingly common "no overlay mounted" case skips straight past instead of enumerating —
+      // only fall back to querySelectorAll (to correctly max() over more than one) once we know there's at
+      // least one to look at.
+      if (el.querySelector('[data-overlay]')) {
+        el.querySelectorAll<HTMLElement>('[data-overlay]').forEach((node) => {
+          const r = node.getBoundingClientRect()
+          if (r.bottom > bottom) bottom = r.bottom
+        })
+      }
       // el itself is always the full window width (it's the shared centering/layout root for every view),
       // so it can never report a meaningful WIDTH the way it already does for height. A view whose visible
       // surface is narrower than the window — today only the collapsed control mini-pill — opts in by
@@ -144,9 +153,6 @@ export interface AskRequest {
   depth?: 'deeper' // set by "Go deeper" → ask for a fuller answer than the brief default
   agentOverride?: string // pins a specific Dust agent sId regardless of tier routing (e.g. Spotlight Ref)
   providerOverride?: ProviderId // forces this one request to a provider regardless of the active `provider` setting
-  // Vision only: skip re-sending `image` — main reuses the screenshot it already has in shotCache from the
-  // capture() call moments ago, so the same base64 JPEG isn't serialized across contextBridge twice.
-  useLastCapture?: boolean
 }
 
 /** Owns the streaming answer lifecycle over IPC. */
@@ -273,7 +279,6 @@ export function useAsk(): {
         kind: req.kind,
         agentOverride: req.agentOverride,
         providerOverride: req.providerOverride,
-        useLastCapture: req.useLastCapture,
         history: req.history ?? []
       })
       return id

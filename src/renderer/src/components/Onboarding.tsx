@@ -55,8 +55,23 @@ function ActionRow({ icon: Icon, label, hint, keys }: { icon: typeof Mic; label:
   )
 }
 
-/** A get-ready checklist line with a live status dot. */
-function CheckRow({ ok, label, hint }: { ok: boolean; label: string; hint: string }): JSX.Element {
+/** A get-ready checklist line with a live status dot. `onFix` renders an inline "Open System Settings"
+ *  link — only meaningful when the OS has recorded an explicit Deny (see the `denied` prop): on 'unknown'
+ *  the right move is to just trigger the permission prompt via Listen, not send the user to Settings, and
+ *  on 'granted' there's nothing to fix. */
+function CheckRow({
+  ok,
+  denied,
+  label,
+  hint,
+  onFix
+}: {
+  ok: boolean
+  denied?: boolean
+  label: string
+  hint: string
+  onFix?: () => void
+}): JSX.Element {
   return (
     <div className="flex items-start gap-2.5">
       <span
@@ -69,6 +84,15 @@ function CheckRow({ ok, label, hint }: { ok: boolean; label: string; hint: strin
       <div className="text-left">
         <span className="text-[12px] font-medium text-[color:var(--color-ink)]">{label}</span>
         {!ok && <span className="ml-1.5 text-[11px] text-[color:var(--color-ink-2)]">{hint}</span>}
+        {!ok && denied && onFix && (
+          <button
+            type="button"
+            onClick={onFix}
+            className="no-drag focus-ring ml-1.5 text-[11px] font-medium text-[color:var(--color-accent-2)] hover:underline"
+          >
+            Open System Settings
+          </button>
+        )}
       </div>
     </div>
   )
@@ -242,8 +266,20 @@ export function Onboarding({
             Get ready
           </div>
           <CheckRow ok={settings.providerReady} label={PROVIDERS[settings.provider]?.kind === 'cli' ? `${providerLabel} CLI connected` : `${providerLabel} API key`} hint="add it in Settings → AI" />
-          <CheckRow ok={perms?.microphone === 'granted'} label="Microphone" hint="grant access when you first press Listen" />
-          <CheckRow ok={perms?.screenRecording === 'granted'} label="Screen recording" hint="needed for the other side of calls + screen capture" />
+          <CheckRow
+            ok={perms?.microphone === 'granted'}
+            denied={perms?.microphone === 'denied'}
+            label="Microphone"
+            hint="grant access when you first press Listen"
+            onFix={() => void window.toto.openPermissionSettings('microphone')}
+          />
+          <CheckRow
+            ok={perms?.screenRecording === 'granted'}
+            denied={perms?.screenRecording === 'denied'}
+            label="Screen recording"
+            hint="needed for the other side of calls + screen capture"
+            onFix={() => void window.toto.openPermissionSettings('screenRecording')}
+          />
         </div>
 
         <button
