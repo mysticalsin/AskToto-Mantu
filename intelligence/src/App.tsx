@@ -33,6 +33,13 @@ function DashboardRoutes() {
     <div className="min-h-screen">
       <NavBar />
       {data?.meta.is_placeholder && <PlaceholderBanner note={data.meta.note} />}
+      {/* File-mode data (no live brain bridge) always shows its age — a data.json baked months ago
+          must never read as current. Live-brain mode regenerates on read, so no banner needed. */}
+      {data && !data.meta.is_placeholder && !window.intelligence && (
+        <div className="border-b border-white/10 bg-white/[0.03] px-4 py-1.5 text-[11px] text-white/50" role="status">
+          Static data file — as of {new Date(data.meta.generated).toLocaleString()}. Open inside AskToto for live numbers.
+        </div>
+      )}
       {!data ? (
         <LoadingOrError loading={loading} error={error} />
       ) : (

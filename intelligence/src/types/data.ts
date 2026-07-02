@@ -145,7 +145,9 @@ export interface ScopeSummary {
   key: string
   label: string
   deal_count: number
-  total_value_usd: number
+  // null = no value data exists in this scope's sources (the live brain never extracts money from
+  // transcripts). Views must render the absence honestly ("no value data"), never a fabricated $0.
+  total_value_usd: number | null
   band_counts: Record<WinLikelihoodBand, number>
   insight_ids: string[]
 }
