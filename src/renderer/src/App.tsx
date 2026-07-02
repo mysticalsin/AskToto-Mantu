@@ -24,7 +24,8 @@ import { useListen, playListenChime } from './lib/listen'
 import { playCue, playClick, setSoundsEnabled } from './lib/sound'
 import type { HotkeyAction, TranscriptLine, ConversationMode, ChatTurn } from '@shared/ipc'
 import { PROVIDERS, isDustReady } from '@shared/providers'
-import { ASSIST_PROMPT } from '@shared/prompts'
+import { ASSIST_PROMPT, buildNoDecisionPrompt } from '@shared/prompts'
+import { detectNoDecisionEnding } from '@shared/wrapup'
 import {
   FACT_CHECK_SCREEN_PROMPT,
   buildExplainPrompt,
@@ -381,6 +382,29 @@ export function App(): JSX.Element {
     }
     suggest.run({ mode: 'suggest', transcript: listen.text() })
   }
+
+  // No-Decision Honk (innovation #5): once per meeting, when the conversation sounds like it's wrapping
+  // with nothing decided and nothing owned, push ONE "force the ask" nudge through the existing copilot
+  // suggestion surface. Latched per session; biased to silence (see shared/wrapup.ts). Same gates as
+  // auto-suggest — respects the user's proactive-copilot switch and never fires without a provider.
+  const honkedRef = useRef(false)
+  useEffect(() => {
+    if (listen.listening) honkedRef.current = false // new session re-arms the honk
+  }, [listen.listening])
+  useEffect(() => {
+    if (!listen.listening || honkedRef.current) return
+    if (!(settings?.autoSuggest ?? true) || !settings?.providerReady) return
+    if (suggest.answer?.streaming) return
+    const verdict = detectNoDecisionEnding(listen.lines, meetingStartRef.current, Date.now())
+    if (!verdict.honk) return
+    honkedRef.current = true
+    if (view === 'answer' || view === 'copilot') {
+      setView('copilot')
+      setCollapsed(false)
+    }
+    suggest.run({ mode: 'answer', prompt: buildNoDecisionPrompt(listen.text()) + GUARD_LINE })
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- fire on new transcript lines only
+  }, [listen.lines])
 
   const openSettings = useCallback((tab?: 'personalize' | 'calendar' | 'ai', notice?: string): void => {
     setSettingsInitialTab(tab) // generic open (no tab) → default tab; callers can target a specific one

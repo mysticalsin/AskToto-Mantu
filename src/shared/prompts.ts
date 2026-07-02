@@ -106,6 +106,22 @@ GROUNDING & HONESTY:
 - When the user asks about a person, company, or deal and that block is absent or has no entry for it, say plainly you have nothing on them in the recorded meetings (e.g. "I don't have any past meetings with Acme on record") before offering general help. Never fabricate a shared history.`
 
 /**
+ * No-Decision Honk (innovation #5): fired once when the meeting sounds like it's ending with nothing
+ * decided and nothing owned (see shared/wrapup.ts). Asks for a nudge + ONE line that forces the ask.
+ */
+export function buildNoDecisionPrompt(transcript: string): string {
+  return `This meeting sounds like it's about to end with no decision and no owned next step. Give me exactly two short lines:
+NUDGE: one blunt sentence naming the risk (ending with nothing owned).
+SAY THIS: one natural line I can say right now that locks a concrete next step with an owner and a date, grounded in what was actually discussed.
+No preamble, no third line.
+
+Live transcript (THEM = the other person, YOU = me):
+"""
+${transcript.slice(-4000)}
+"""`
+}
+
+/**
  * Proactive "read the room" prompt for the Assist button.
  * The model should output two short sentences: (a) what is being discussed right now,
  * then (b) the single safest, most useful move for the user. Plain, concrete, no framing.
