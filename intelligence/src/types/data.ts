@@ -23,9 +23,15 @@ export interface Claim {
   claim_id: string
   statement: string
   category: Category
-  raised_by: string
+  // Optional: the brain's signal extraction never tags who raised a claim — the field used to be
+  // hardcoded to the fake constant 'meeting participant'. Omitted (not faked) when unknown; views must
+  // render its absence, never invent a speaker.
+  raised_by?: string
   stance: Stance
-  was_deciding_factor: boolean
+  // Optional and never set by the live adapter: the extraction schema has no "was this the deciding
+  // factor" signal to ground it in, and hardcoding it to `false` (the previous behavior) is a fabricated
+  // fact, not an honest absence. Kept as a field (not deleted) only because DealView.tsx still reads it.
+  was_deciding_factor?: boolean
   source: {
     file: string
     quote_or_paraphrase: string
@@ -55,6 +61,21 @@ export interface CoachingInsight {
 // method_note in the vault) — this is an LLM-as-judge qualitative estimate grounded in cited evidence.
 export type WinLikelihoodBand = 'good' | 'mixed' | 'concerning'
 
+/**
+ * A promise actually spoken in a meeting (the brain's Commitment Ledger — src/main/brain/store.ts's
+ * LedgerCommitmentSchema). `by` is 'you', 'them', or a named person (freeform, no enum in the source).
+ * `status` only ever moves off 'open' via later meeting evidence or explicit human action.
+ */
+export interface Commitment {
+  text: string
+  by: string
+  status: 'open' | 'kept' | 'broken'
+  due_hint: string
+  quote: string
+  date: string
+  meeting: string
+}
+
 export interface Deal {
   bid_id: string
   account: string
@@ -67,6 +88,12 @@ export interface Deal {
   win_likelihood_band: WinLikelihoodBand
   value_usd: number | null
   stage: string
+  // Why the band is what it is, in the extraction's own words — '' when the brain recorded none.
+  band_evidence: string
+  velocity: {
+    signal: 'hard-calendar-gate' | 'soft-organizational-gate' | 'no-hard-date-found'
+    evidence: string
+  }
   claims: Claim[]
   call_grades: Array<{
     date: string
@@ -79,6 +106,7 @@ export interface Deal {
     note: string
     is_client_facing: boolean
   }>
+  commitments: Commitment[]
 }
 
 /** account_graph node/edge shape for the relationship-graph view. */
@@ -152,6 +180,67 @@ export interface ScopeSummary {
   insight_ids: string[]
 }
 
+/** A cited reason an account was won or lost — statement + verbatim anchor + source meeting. */
+export interface Reason {
+  statement: string
+  quote: string
+  meeting: string
+}
+
+/** The account entity itself (distinct from ScopeSummary, which is a per-scope rollup across deals). */
+export interface Account {
+  slug: string
+  name: string
+  sector: string
+  strategic: boolean
+  win_reasons: Reason[]
+  loss_reasons: Reason[]
+}
+
+export interface StanceTrailEntry {
+  meeting: string
+  kind: string
+  statement: string
+}
+
+/** The person entity itself — role, which account they belong to, their own commitment ledger, and
+ *  the trail of stances they've taken across meetings (for spotting a champion cooling off). */
+export interface Person {
+  slug: string
+  name: string
+  role: string | null
+  account: string | null
+  stance_trail: StanceTrailEntry[]
+  commitments: Commitment[]
+}
+
+/** One row of the meetings feed — every ingested meeting, newest first. */
+export interface MeetingFeedRow {
+  slug: string
+  title24: string
+  date: string
+  account: string | null
+  sentiment: WinLikelihoodBand
+  topics: string[]
+}
+
+/** A transcript that failed extraction — surfaced honestly instead of silently vanishing from counts. */
+export interface IngestError {
+  file: string
+  error: string
+}
+
+/** Mirrors the host app's BrainStatus counts (src/shared/brain.ts) — the raw brain, not the
+ *  display-filtered graph (account_graph drops meeting nodes; these counts don't). */
+export interface StatusCounts {
+  meetings: number
+  people: number
+  accounts: number
+  deals: number
+  nodes: number
+  edges: number
+}
+
 export interface DashboardData {
   meta: {
     is_placeholder: boolean
@@ -167,4 +256,13 @@ export interface DashboardData {
   sector_summaries: ScopeSummary[]
   // Going-Cold rail (optional: absent in placeholder data.json) — coldest relationships first.
   going_cold?: GoingColdRow[]
+  // Entity detail carried through in full (see Account/Person doc comments) — the graph/scope summaries
+  // above are rollups; these are the underlying records, e.g. for a per-account or per-person detail view.
+  accounts: Account[]
+  people: Person[]
+  meetings_feed: MeetingFeedRow[]
+  // Brain-wide health, surfaced honestly instead of dropped on the floor.
+  warnings: string[]
+  ingest_errors: IngestError[]
+  status: StatusCounts
 }
