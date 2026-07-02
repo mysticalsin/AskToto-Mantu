@@ -623,11 +623,13 @@ input::placeholder {
 .aw-fill:hover {
   background: var(--aw-btnfill-hover);
 }
-/* the Mantu mark gets a soft brand glow ring */
+/* the Mantu mark gets a soft brand glow ring. Kept tight (small blur, generous negative spread) since
+   the control pill's own window is hugged to its visible content — a wider glow than this gets hard-
+   clipped into a flat-edged smudge at the window boundary instead of fading out naturally. */
 .aw-mark-glow {
   box-shadow:
     0 0 0 1px rgba(255, 255, 255, 0.16),
-    0 4px 14px -4px var(--color-accent-glow);
+    0 3px 8px -4px var(--color-accent-glow);
 }
 /* hover menu off the mark + the mode popover */
 .aw-menu {
@@ -637,7 +639,10 @@ input::placeholder {
   border: 1px solid rgba(255, 255, 255, 0.14);
   box-shadow: 0 12px 26px -10px rgba(0, 0, 0, 0.6);
 }
-/* floating control mini-pill (collapsed state) */
+/* floating control mini-pill (collapsed state). The window is hugged tightly to this element's own
+   width/height (see data-hug-width in state.ts) — a shadow with too much reach gets hard-clipped into
+   a flat-edged box at the window boundary instead of fading out, so this stays deliberately more
+   contained than a typical floating-panel shadow. */
 .aw-pill {
   border-radius: 999px;
   background: var(--aw-glass-bot);
@@ -645,8 +650,8 @@ input::placeholder {
   backdrop-filter: blur(20px) saturate(150%);
   border: 1px solid rgba(255, 255, 255, 0.12);
   box-shadow:
-    0 12px 28px -10px rgba(0, 0, 0, 0.6),
-    0 0 40px -16px var(--color-accent-glow);
+    0 6px 16px -8px rgba(0, 0, 0, 0.55),
+    0 0 16px -8px var(--color-accent-glow);
 }
 
 /* markdown surface inside the answer panel */

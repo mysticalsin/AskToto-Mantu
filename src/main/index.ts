@@ -1424,7 +1424,9 @@ function registerIpc(): void {
     // ceiling is BAR_WIDTH itself since nothing legitimately needs to be wider than the full bar (a lower
     // ceiling here once clipped a wider toast's own content that had genuinely asked for more room).
     if (typeof payload?.width === 'number' && Number.isFinite(payload.width)) {
-      currentWidth = Math.max(120, Math.min(Math.ceil(payload.width) + 4, BAR_WIDTH))
+      // +10 (not the height report's +2) gives the pill's own box-shadow/glow room to render without
+      // being hard-clipped at the window edge — see the .aw-pill / .aw-mark-glow comments in styles.css.
+      currentWidth = Math.max(120, Math.min(Math.ceil(payload.width) + 10, BAR_WIDTH))
     }
     resizeTo(payload?.height ?? BAR_HEIGHT)
   })
