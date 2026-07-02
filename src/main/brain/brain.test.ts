@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import type { Settings } from '@shared/ipc'
 import { MeetingExtractionSchema, BRAIN_EXTRACTION_PROMPT, type MeetingExtraction } from '@shared/brain'
 import { INJECTION_GUARD } from '@shared/prompts'
-import { extractJsonObject, mergeExtraction, lintBrain, commitmentKey, buildExtractionSystem } from './ingest'
+import { extractJsonObject, mergeExtraction, lintBrain, commitmentKey, buildExtractionSystem, updateIndex } from './ingest'
 import { buildBrainContext } from './context'
 import {
   brainDir,
@@ -303,6 +303,15 @@ describe('brain', () => {
   it('purgeBrain is a no-op that succeeds when no brain has been built yet', () => {
     expect(existsSync(brainDir(s))).toBe(false)
     expect(purgeBrain(s).ok).toBe(true)
+  })
+
+  it('updateIndex serializes concurrent mutations — no lost writes (production bug: idx.ingested went empty despite every extraction succeeding, because index.json has several independent writers — job completions, the queue-drained cleanup, a re-entrant startBackfill() call — and an unserialized read-mutate-write on each silently dropped whichever wrote last with a stale snapshot)', async () => {
+    await Promise.all(
+      Array.from({ length: 10 }, (_, i) => updateIndex(s, (idx) => { idx.ingested[`m${i}.md`] = { at: i, ok: true } }))
+    )
+    const idx = readIndex(s)
+    expect(Object.keys(idx.ingested)).toHaveLength(10)
+    for (let i = 0; i < 10; i++) expect(idx.ingested[`m${i}.md`]?.ok).toBe(true)
   })
 
   it('store encrypts brain files at rest when encryptTranscripts is on', async () => {
