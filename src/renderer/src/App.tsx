@@ -110,6 +110,19 @@ export function App(): JSX.Element {
   const setView = useCallback((v: View | ((prev: View) => View)): void => {
     startTransition(() => setViewRaw(v))
   }, [])
+
+  // Same #426 hazard as the view-switch fix above, but for the Answer/Copilot chunks themselves — see
+  // state.ts useAsk().run()/fail(), which now wrap their first-mount setAnswer in startTransition (the
+  // actual fix; React always suspends a lazy component's very first render attempt no matter how fast the
+  // chunk resolves, so a transition wrap — not just preloading — is what's required). Warm both chunks here
+  // too, purely so that first transition resolves on the very next tick instead of after a real parse/fetch
+  // wait: cheap (local bundled files, not a network fetch) and shortens the brief bail-to-old-UI window a
+  // transition shows while the chunk is still loading.
+  useEffect(() => {
+    void import('./components/Answer')
+    void import('./components/Copilot')
+  }, [])
+
   const [collapsed, setCollapsed] = useState(false)
   const [minimized, setMinimized] = useState(false) // collapsed to the floating control mini-pill
   const [capturing, setCapturing] = useState(false)
@@ -153,6 +166,9 @@ export function App(): JSX.Element {
   const [updateReady, setUpdateReady] = useState<{ open: boolean; version?: string }>({ open: false })
   const [newMeetingToast, setNewMeetingToast] = useState(false)
   const autoStartedRef = useRef(false)
+  // Idempotence latch for endReview() re-entry — see endReview's own comment for the exact hazard it
+  // guards against. Cleared at the start of every fresh session (startListen) so a later stop can fire.
+  const stoppingRef = useRef(false)
 
   // Drives the overlay's glass-background alpha (Settings → Personalize → Appearance). A single CSS
   // variable multiplies every --glass-* alpha channel (see styles.css) — default 1 reproduces today's
@@ -704,6 +720,7 @@ export function App(): JSX.Element {
 
   const startListen = useCallback((auto = false) => {
     autoStartedRef.current = auto // true only for meeting-detected auto-start, so auto-end can fire
+    stoppingRef.current = false // a fresh session can be stopped again — clear any latch left by the last one
     // A previous session's transcript can still be sitting unsaved in listen state (ASR crash tore the
     // session down; a failed recap was abandoned). listen.clear() below would wipe it — rescue first.
     // Idempotent via savedRef, so normally-saved meetings never double-save. Ref-indirected because
@@ -739,6 +756,14 @@ export function App(): JSX.Element {
   ])
 
   const endReview = useCallback(() => {
+    // Idempotence latch: listen.listening stays true for up to DRAIN_CEILING_MS (4s) after stop() while
+    // the audio drain finishes in the background (listen.ts), so toggleListen() can still read "listening"
+    // and re-enter endReview() from a second Stop click landing inside that window. Without this guard the
+    // re-entrant call runs ask.run({mode:'recap', ...}) again, which unconditionally cancels the in-flight
+    // recap stream and restarts it (state.ts run()) — so a user reasonably clicking Stop again (because the
+    // UI still looked "live") could cancel/restart the summary indefinitely instead of ever seeing it land.
+    if (stoppingRef.current) return
+    stoppingRef.current = true
     const tx = listen.text()
     listen.stop()
     autoStartedRef.current = false // manual end clears the auto-start flag
@@ -1014,7 +1039,13 @@ export function App(): JSX.Element {
         }
         ask.clear()
         suggest.clear()
+        // A past meeting opened from History returns there on Escape — matching the Review "Done" button's
+        // own onDone, which calls setView('history') for pastMeeting. A live session's just-ended Review has
+        // no "came from" surface to return to, so it falls through to the idle bar as before.
+        const returnTo = pastMeeting ? 'history' : 'answer'
         setPastMeeting(null)
+        setView(returnTo)
+        return
       }
       setView('answer')
     } else if (!collapsed) {
@@ -1347,9 +1378,16 @@ export function App(): JSX.Element {
     DEMO === 'copilot'
   // 'Viewed screen' chip when the active answer was grounded in a screenshot.
   const ctxLabel = showingScreenChip ? screenFreshness : undefined
+  // Recording chrome (Heard live chip, timer, Pause/Stop, New meeting/Transcript pills, Quick Actions,
+  // the consent reminder, the listening glass tint) must vanish the INSTANT Stop is initiated — it must not
+  // lag behind listen.listening, which stays true for up to DRAIN_CEILING_MS (4s) while listen.ts finishes
+  // draining audio in the background (see listen.ts stop()). endReview() flips `view` to 'review'
+  // synchronously, so gating the visible chrome on the view — not the raw listening flag — makes Review
+  // render clean immediately while the real drain safely finishes behind it.
+  const showListeningChrome = listen.listening && view !== 'review'
 
   return (
-    <div ref={setRoot} className={['relative flex w-full flex-col gap-2 p-1.5', listen.listening ? 'listening' : ''].join(' ')}>
+    <div ref={setRoot} className={['relative flex w-full flex-col gap-2 p-1.5', showListeningChrome ? 'listening' : ''].join(' ')}>
       {(() => {
         const toasts = (
           <>
@@ -1392,7 +1430,7 @@ export function App(): JSX.Element {
             />
             <NewMeetingToast open={newMeetingToast} onDismiss={() => setNewMeetingToast(false)} />
             <RecordingConsentReminder
-              listening={listen.listening}
+              listening={showListeningChrome}
               lastReminderAt={settings?.lastConsentReminderAt ?? 0}
               requireIndicator={settings?.requireConsentIndicator ?? false}
               onAck={() => void patch({ lastConsentReminderAt: Date.now() })}
@@ -1442,7 +1480,7 @@ export function App(): JSX.Element {
             onSubmit={submit}
             onStop={onStop}
             busy={(ask.answer?.streaming || suggest.answer?.streaming) ?? false}
-            listening={listen.listening}
+            listening={showListeningChrome}
             onToggleListen={toggleListen}
             paused={listen.paused}
             onTogglePause={onTogglePause}
@@ -1474,7 +1512,7 @@ export function App(): JSX.Element {
           {/* Quick actions render as their own row UNDER the whole bar (including its toolbar), only
               while a meeting is actively being listened to — clean bar with nothing under it at launch
               and after a meeting ends (Review screen), per Tony's ask. */}
-          {listen.listening && (
+          {showListeningChrome && (
             <QuickActions
               onAction={onQuickAction}
               rainbowRing={settings?.quickActionsRainbow !== false}
@@ -1483,7 +1521,7 @@ export function App(): JSX.Element {
           {/* Listen-engine status (offline/reconnecting/crash notes) — shown regardless of which view is
               active. Copilot already renders the same `listen.error` text inline among its chips, so skip
               it there to avoid showing the same note twice; every other view has no other place for it. */}
-          {listen.listening && listen.error && view !== 'copilot' && (
+          {showListeningChrome && listen.error && view !== 'copilot' && (
             <div className="fade-up rounded-xl border border-[var(--color-danger)]/30 bg-[var(--color-danger)]/10 px-3 py-1.5 text-[11px] leading-snug text-[var(--color-danger)]">
               {listen.error}
             </div>

@@ -1,7 +1,7 @@
 import { memo, useEffect, useState } from 'react'
-import { Copy, Check, RefreshCw, FileDown, ShieldCheck, ChevronsDown, ThumbsUp, ThumbsDown, Eye, Sparkles } from 'lucide-react'
+import { Copy, Check, RefreshCw, FileDown, ShieldCheck, ChevronsDown, ThumbsUp, ThumbsDown, Eye } from 'lucide-react'
 import { Markdown } from './Markdown'
-import { Chip, TextButton } from './ui'
+import { TextButton } from './ui'
 
 function Skeleton(): JSX.Element {
   return (
@@ -48,8 +48,7 @@ export const Answer = memo(function Answer({
   kind,
   usedScreen,
   onRetry,
-  onGoDeeper,
-  onAssist
+  onGoDeeper
 }: {
   text: string
   streaming: boolean
@@ -62,7 +61,6 @@ export const Answer = memo(function Answer({
   usedScreen?: boolean
   onRetry?: () => void
   onGoDeeper?: () => void
-  onAssist?: () => void
 }): JSX.Element {
   const [copied, setCopied] = useState(false)
   const [copyError, setCopyError] = useState<string | null>(null)
@@ -112,16 +110,10 @@ export const Answer = memo(function Answer({
   // the header AND still carry this badge). When there's nothing else to show (a blank-Enter screen-ask),
   // the badge stands alone as its own header row; otherwise it's a small eyebrow above the real question.
   const screenContext = !!usedScreen && !display
-  const assistButton = onAssist ? (
-    <Chip icon={Sparkles} onClick={onAssist} variant="accent">Assist</Chip>
-  ) : null
   const header = screenContext ? (
-    <div className="flex items-center justify-between gap-2">
-      <div className="flex w-fit items-center gap-1.5 rounded-full border border-[var(--color-accent)]/30 bg-[var(--color-accent-soft)] px-2.5 py-1 text-[11px] font-semibold text-[color:var(--color-ink-2)]">
-        <span className="h-1.5 w-1.5 rounded-full bg-[var(--color-accent-2)] shadow-[0_0_6px_var(--color-accent-2)]" />
-        <Eye size={12} /> Viewed screen
-      </div>
-      {assistButton}
+    <div className="flex w-fit items-center gap-1.5 rounded-full border border-[var(--color-accent)]/30 bg-[var(--color-accent-soft)] px-2.5 py-1 text-[11px] font-semibold text-[color:var(--color-ink-2)]">
+      <span className="h-1.5 w-1.5 rounded-full bg-[var(--color-accent-2)] shadow-[0_0_6px_var(--color-accent-2)]" />
+      <Eye size={12} /> Viewed screen
     </div>
   ) : display ? (
     <div className="rounded-lg border border-[var(--color-hair-soft)] bg-white/[0.03] px-3 py-2 text-[13px] font-medium text-[color:var(--color-ink)]">

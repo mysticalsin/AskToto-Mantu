@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState, startTransition } from 'react'
 import type {
   AskMode,
   ChatTurn,
@@ -263,17 +263,31 @@ export function useAsk(): {
       idRef.current = id
       // Deliberately keep the PREVIOUS answer's text on screen (not blanked to '') until this request's
       // first real chunk lands — see pendingReplaceRef above.
-      setAnswer((prev) => ({
-        id,
-        text: prev?.text ?? '',
-        streaming: true,
-        error: null,
-        prompt: req.prompt ?? '',
-        label: req.label,
-        kind: req.kind,
-        usedScreen: req.mode === 'vision',
-        ephemeral: req.mode === 'suggest'
-      }))
+      //
+      // startTransition: this is the update that mounts <Answer>/<Copilot> for the FIRST time in a fresh
+      // session (answer flips null -> non-null), in DIRECT response to synchronous input (Enter keydown, a
+      // toolbar click). Those are lazy-loaded chunks (App.tsx) with no Suspense boundary around their
+      // inline bar-body render slot — if the chunk hasn't resolved yet, an un-transitioned update suspends
+      // mid-synchronous-input and React throws #426 ("AskToto hit a snag"), exactly like the view-switch
+      // hazard App.tsx's setView already documents and fixes the same way. Reproduced physically via
+      // Spotlight Ref's ask.fail() (no provider gate, so it's the very first render in a fresh session) —
+      // App.tsx also warms both chunks on mount to shrink the window further, but that alone does not
+      // prevent the crash: React always suspends a lazy component's very FIRST render attempt regardless of
+      // whether the module is already cached, so the transition wrap is the actual fix; the warm-up just
+      // makes it resolve on the very next tick instead of after a real network/parse wait.
+      startTransition(() => {
+        setAnswer((prev) => ({
+          id,
+          text: prev?.text ?? '',
+          streaming: true,
+          error: null,
+          prompt: req.prompt ?? '',
+          label: req.label,
+          kind: req.kind,
+          usedScreen: req.mode === 'vision',
+          ephemeral: req.mode === 'suggest'
+        }))
+      })
       void window.toto.ask({
         id,
         mode: req.mode,
@@ -298,7 +312,11 @@ export function useAsk(): {
       const id = uid()
       idRef.current = id
       lastReqRef.current = null
-      setAnswer({ id, text: '', streaming: false, error, prompt: '', label })
+      // Same #426 hazard/fix as run() above — fail() is the path a gate-free entry point (e.g. Spotlight
+      // Ref with no ref agent configured) uses to mount <Answer> for the very first time in a session.
+      startTransition(() => {
+        setAnswer({ id, text: '', streaming: false, error, prompt: '', label })
+      })
       return id
     },
     [resetBuffer]
