@@ -73,6 +73,7 @@ import { parakeetModelReady, ensureParakeetModel, parakeetTranscribe } from './p
 import {
   saveMeeting,
   saveNote,
+  appendDebrief,
   saveDraftTranscript,
   clearDraftTranscript,
   recoverOrphanDrafts,
@@ -1002,6 +1003,25 @@ function registerIpc(): void {
     if (choice !== 0) return { ok: false, error: 'cancelled' }
     const result = await deleteMeeting(safeName)
     if (result.ok) auditLog('transcript.deleted', { file: safeName })
+    return result
+  })
+
+  // 90-Second Debrief (innovation #6): the user's off-record gut-read, appended to the saved meeting.
+  // Same file → inherits encryption/retention/deletion, and the brain re-ingest below folds the unsaid
+  // observations into signals on the next extraction pass.
+  ipcMain.handle(IPC.debriefSave, async (e, raw) => {
+    assertMainWindow(e)
+    if (!requireAuth()) return { ok: false, error: 'Sign in with your Mantu account first.' }
+    const p = raw as { file?: unknown; text?: unknown }
+    const safeName = basename(String(p?.file ?? ''))
+    const text = String(p?.text ?? '').slice(0, 8000)
+    if (!safeName.endsWith('.md') || !text.trim()) return { ok: false, error: 'Nothing to save.' }
+    const s = getSettings()
+    const result = await appendDebrief(s, safeName, text)
+    if (result.ok) {
+      auditLog('transcript.debrief', { file: safeName })
+      enqueueIngest(join(resolveMeetingsFolder(s), safeName)) // fold the unsaid layer into the brain
+    }
     return result
   })
 

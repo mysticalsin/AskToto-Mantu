@@ -508,6 +508,43 @@ export async function saveMeeting(settings: Settings, m: SaveMeeting): Promise<s
   return file
 }
 
+/**
+ * 90-Second Debrief (innovation #6): append the user's post-meeting gut-read — what was NOT said
+ * aloud, hallway remarks, instinct — to the saved meeting as its own section. This is the off-record
+ * layer: the transcript records what was spoken; the debrief records what the user sensed. It lives in
+ * the same file so it inherits encryption, retention, deletion, and brain ingest (the extraction reads
+ * the full markdown, so debrief observations feed signals/missed_signals on the next ingest).
+ *
+ * Idempotent: a second save REPLACES the debrief section rather than stacking copies. `file` must be a
+ * bare basename inside the meetings folder (callers pass basename; we re-basename for defense).
+ */
+export const DEBRIEF_HEADING = '## Debrief (off the record)'
+export async function appendDebrief(
+  settings: Settings,
+  file: string,
+  text: string
+): Promise<{ ok: boolean; error?: string }> {
+  const folder = resolveMeetingsFolder(settings)
+  const path = join(folder, basename(file))
+  if (!existsSync(path)) return { ok: false, error: 'Meeting file not found.' }
+  let md: string
+  try {
+    md = readSavedFile(path)
+  } catch {
+    return { ok: false, error: 'Could not read the meeting file.' }
+  }
+  if (!/^type: meeting-transcript$/m.test(md)) return { ok: false, error: 'Not a meeting transcript.' }
+  const section = `${DEBRIEF_HEADING}\n\n_Captured right after the meeting — impressions, not transcript._\n\n${text.trim()}\n`
+  const start = md.indexOf(DEBRIEF_HEADING)
+  const next = start >= 0 ? md.indexOf('\n## ', start + DEBRIEF_HEADING.length) : -1
+  const updated =
+    start >= 0
+      ? md.slice(0, start) + section + (next >= 0 ? md.slice(next + 1) : '')
+      : md.trimEnd() + '\n\n' + section
+  await writeSaved(path, updated, settings.encryptTranscripts)
+  return { ok: true }
+}
+
 // Keyed by the meeting's OWN startedAt (like saveMeeting's real filename), not a single fixed name.
 // A fixed name would let the NEXT meeting's very first autosave tick silently overwrite a PREVIOUS
 // meeting's crash-recovery copy before anyone had a chance to notice it — defeating the whole point.

@@ -129,6 +129,9 @@ const api = {
   // Delete every saved meeting + the knowledge graph. Main pops its own (extra-emphatic) confirm dialog.
   recallDeleteAll: (): Promise<{ ok: boolean; deleted: number; failed?: string[]; error?: string }> =>
     ipcRenderer.invoke(IPC.recallDeleteAll),
+  // 90-Second Debrief: append the off-record gut-read to a saved meeting (basename only).
+  debriefSave: (file: string, text: string): Promise<{ ok: boolean; error?: string }> =>
+    ipcRenderer.invoke(IPC.debriefSave, { file, text }),
   setListeningState: (on: boolean): Promise<void> => ipcRenderer.invoke(IPC.listeningState, on),
   asrBundled: (): Promise<boolean> => ipcRenderer.invoke(IPC.asrBundled),
 

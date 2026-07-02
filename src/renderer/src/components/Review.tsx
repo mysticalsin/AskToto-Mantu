@@ -1,5 +1,5 @@
 import { memo, useEffect, useMemo, useState } from 'react'
-import { Copy, Check, FileText, ListTree, FolderOpen, Save, RotateCcw, Play, ChevronDown, Download, Clock, Mail, Send, AlertCircle } from 'lucide-react'
+import { Copy, Check, FileText, ListTree, FolderOpen, Save, RotateCcw, Play, ChevronDown, Download, Clock, Mail, Send, AlertCircle, EarOff } from 'lucide-react'
 import type { TranscriptLine, MeetingSummary } from '@shared/ipc'
 import type { AnswerState } from '../state'
 import { isNonSpeechLine } from '@shared/transcript-filter'
@@ -108,6 +108,20 @@ export const Review = memo(function Review({
   const [jsonCopied, setJsonCopied] = useState(false)
   const [exportError, setExportError] = useState<string | null>(null)
   const [transcriptOpen, setTranscriptOpen] = useState(!!showTranscript)
+  // 90-Second Debrief (innovation #6): the off-record layer — what was NOT said out loud.
+  const [debrief, setDebrief] = useState('')
+  const [debriefState, setDebriefState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle')
+  const saveDebrief = async (): Promise<void> => {
+    if (!savedPath || !debrief.trim() || debriefState === 'saving') return
+    setDebriefState('saving')
+    try {
+      const file = savedPath.split('/').pop() ?? savedPath
+      const r = await window.toto.debriefSave(file, debrief)
+      setDebriefState(r.ok ? 'saved' : 'error')
+    } catch {
+      setDebriefState('error')
+    }
+  }
   const [now, setNow] = useState(Date.now())
   const [recentMeetings, setRecentMeetings] = useState<MeetingSummary[]>([])
 
@@ -322,6 +336,42 @@ export const Review = memo(function Review({
           </span>
           <span className="font-medium text-[var(--color-success)]">Open</span>
         </button>
+      )}
+
+      {/* 90-SECOND DEBRIEF — the unsaid, captured while it's still warm. Live reviews only (a past
+          meeting's moment has passed). Stored inside the saved meeting file: same encryption, same
+          retention, same deletion; the brain folds it into signals on re-ingest. */}
+      {savedPath && !meetingMeta && (
+        <div className="rounded-xl border border-[var(--color-hair-soft)] bg-white/[0.02] px-3 py-2.5">
+          <div className="mb-1.5 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-[color:var(--color-ink-3)]">
+            <EarOff size={12} /> 90-second debrief — off the record
+          </div>
+          {debriefState === 'saved' ? (
+            <div className="flex items-center gap-2 text-[12px] text-[color:var(--color-ink-2)]">
+              <Check size={13} className="text-[var(--color-success)]" />
+              Saved with the meeting. It feeds your intelligence brain, never a follow-up email.
+            </div>
+          ) : (
+            <>
+              <textarea
+                value={debrief}
+                onChange={(e) => setDebrief(e.target.value)}
+                rows={2}
+                placeholder="What wasn't said out loud? Hallway remarks, hesitation, your gut read…"
+                className="no-drag focus-ring w-full resize-none rounded-lg border border-[var(--color-hair-soft)] bg-white/[0.03] px-2.5 py-1.5 text-[12px] text-[color:var(--color-ink)] placeholder:text-[color:var(--color-ink-3)]"
+              />
+              <div className="mt-1.5 flex items-center justify-between">
+                <span className="text-[10px] text-[color:var(--color-ink-3)]">
+                  {debriefState === 'error' ? 'Could not save — try again.' : 'Impressions, not transcript. 90 seconds, then move on.'}
+                </span>
+                <TextButton onClick={() => void saveDebrief()} disabled={!debrief.trim() || debriefState === 'saving'}>
+                  {debriefState === 'saving' ? <Spinner size={11} /> : <Save size={11} />}
+                  Save debrief
+                </TextButton>
+              </div>
+            </>
+          )}
+        </div>
       )}
 
       <section aria-live="polite" aria-atomic="false">

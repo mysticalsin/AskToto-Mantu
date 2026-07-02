@@ -78,6 +78,7 @@ export const IPC = {
   recallRead: 'recall:read',
   recallDelete: 'recall:delete',
   recallDeleteAll: 'recall:deleteAll',
+  debriefSave: 'debrief:save',
   windowResize: 'window:resize',
   windowMode: 'window:mode',
   windowMoveBy: 'window:moveBy',
