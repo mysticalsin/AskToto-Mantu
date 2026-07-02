@@ -32,7 +32,7 @@ Reproduce: `npx vitest run src/main/brain/e2e-proof.test.ts` — 7/7 must pass.
 | Meetings ingested | 8 | 8 |
 | Accounts / people / deals | 3 / 3 / 5 | 3 / 3 / 5 |
 | Person→meeting joins | Claire 3, Tom 4, exact files | exact match |
-| Graph nodes by type | 3 acct + 3 person + 5 deal + 3 sector | exact match |
+| Graph nodes by type | 3 acct + 3 person + 5 deal + 3 sector + 8 meetings = 22 | exact match |
 | Duplicate graph edges after 8 merges | 0 | 0 |
 | Commitments: open / kept | 2 / 1 (exact texts) | exact match |
 | Person ledger (Claire's own promise) | 1, exact text | exact match |
