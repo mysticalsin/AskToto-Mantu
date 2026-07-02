@@ -1700,6 +1700,12 @@ if (!app.requestSingleInstanceLock()) {
   })
   app.whenReady().then(async () => {
   initLogging() // route main-process logs to a rotated file before anything else can fail
+  // Unpackaged (dev/QA) runs show Electron's default icon in the Dock — brand them with the Mantu M so
+  // a dev window is never mistaken for "the Electron thing". Packaged builds get build/icon.png baked
+  // in by electron-builder (mac .icns / win .ico) and don't need this.
+  if (process.platform === 'darwin' && !app.isPackaged) {
+    try { app.dock?.setIcon(join(__dirname, '../../build/icon.png')) } catch { /* cosmetic only */ }
+  }
   // Prune stale crash logs to the most recent 5 (best-effort; filenames sort lexicographically by ts).
   try {
     const ud = app.getPath('userData')
