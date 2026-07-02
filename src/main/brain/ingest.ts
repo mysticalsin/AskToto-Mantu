@@ -49,7 +49,7 @@ function pickProvider(s: Settings): { provider: ProviderId; model: string; key: 
     const connected = def.kind === 'cli' ? !!s.cliConnected[p] : key.length > 0
     if (!connected) continue
     if (p === 'dust' && !s.dustWorkspaceId) continue
-    const model = resolveModelTier(p, s.providerModels, s.providerModelsThinking, 'base')
+    const model = resolveModelTier(p, s.providerModels, s.providerModelsThinking, 'deep', s.providerModelsDeep)
     if (!model) continue
     return { provider: p, model, key }
   }
