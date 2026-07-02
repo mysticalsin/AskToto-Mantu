@@ -10,6 +10,7 @@ import type {
   ScopeSummary,
   WinLikelihoodBand
 } from '../types/data'
+import { buildGoingCold } from './goingCold'
 
 /**
  * Adapter: AskToto's live brain (window.intelligence.getData(), IPC brain:read) → this dashboard's
@@ -21,6 +22,7 @@ import type {
 // ── Brain shapes (mirror src/shared/brain.ts in the host app; kept loose on purpose) ─────────────
 type Conf = 'EXTRACTED' | 'INFERRED' | 'AMBIGUOUS'
 interface BrainSignal { kind: 'positive' | 'objection' | 'neutral'; statement: string; quote: string; confidence: Conf; meeting: string }
+interface BrainCommitment { text: string; by: string; status: string; due_hint?: string; meeting?: string; date?: string }
 interface BrainDeal {
   name: string
   account: string
@@ -33,6 +35,7 @@ interface BrainDeal {
   signals: BrainSignal[]
   missed_signals: Array<{ statement: string; why_it_matters: string; quote?: string; confidence?: Conf; meeting: string }>
   feedback: Array<{ note: string; quote?: string; confidence?: Conf; meeting: string }>
+  commitments?: BrainCommitment[]
 }
 interface BrainMeeting {
   source_file: string
@@ -52,7 +55,13 @@ interface BrainAccount {
   win_reasons: Array<{ statement: string; quote: string; meeting: string }>
   loss_reasons: Array<{ statement: string; quote: string; meeting: string }>
 }
-interface BrainPerson { name: string; role: string | null; account: string | null }
+interface BrainPerson {
+  name: string
+  role: string | null
+  account: string | null
+  meetings?: Array<{ file: string; date: string; title: string }>
+  commitments?: BrainCommitment[]
+}
 export interface BrainRead {
   index: { warnings: string[] }
   graph: { nodes: Array<{ id: string; type: string; label: string }>; edges: Array<{ from: string; to: string; rel: string; confidence: Conf }> }
@@ -270,6 +279,10 @@ export function brainToDashboard(b: BrainRead): DashboardData {
   const deals = b.deals.map((d) => toDeal(d, sectorByAccount, meetingsByFile))
   const insights = toInsights(b.deals)
 
+  // Going-Cold layer: freshness per entity from its own dated meeting refs + structural risk
+  // (single-threaded deals, unmapped accounts). Stamped once at adapt time.
+  const cold = buildGoingCold(b, Date.now())
+
   // Meetings are dropped from the DISPLAY graph (61 meeting nodes would drown the entity structure);
   // their connectivity survives because people/accounts/deals were already linked during ingest.
   const keepTypes = new Set(['account', 'person', 'deal', 'sector'])
@@ -277,6 +290,7 @@ export function brainToDashboard(b: BrainRead): DashboardData {
     .filter((n) => keepTypes.has(n.type))
     .map((n) => {
       const bare = n.id.replace(/^[a-z_]+:/, '')
+      const t = cold.touch.get(n.id)
       return {
         id: n.id,
         label: n.label,
@@ -287,7 +301,12 @@ export function brainToDashboard(b: BrainRead): DashboardData {
         bid_id: n.type === 'deal' ? bare : undefined,
         degree: 0,
         community_id: 0,
-        community_label: ''
+        community_label: '',
+        last_touch: t?.lastTouch,
+        days_quiet: t?.daysQuiet,
+        freshness: t?.freshness,
+        single_threaded: n.type === 'deal' ? cold.singleThreaded.has(n.id) : undefined,
+        unmapped: n.type === 'account' ? cold.unmapped.has(n.id) : undefined
       }
     })
   const nodeIds = new Set(nodes.map((n) => n.id))
@@ -334,6 +353,7 @@ export function brainToDashboard(b: BrainRead): DashboardData {
     coaching_insights: insights,
     account_graph: { nodes, edges },
     account_summaries: accountSummaries,
-    sector_summaries: sectorSummaries
+    sector_summaries: sectorSummaries,
+    going_cold: cold.rail
   }
 }

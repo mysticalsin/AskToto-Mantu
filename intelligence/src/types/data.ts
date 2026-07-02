@@ -104,6 +104,25 @@ export interface GraphNode {
   // from the dominant sector/account inside that component, not a generic "Community N".
   community_id: number
   community_label: string
+  // Going-Cold layer (innovation #8): the graph learns time. Derived from each entity's own dated
+  // meeting refs — absent when the entity has no dated meetings (placeholder data included).
+  last_touch?: string
+  days_quiet?: number
+  freshness?: 'fresh' | 'cooling' | 'cold'
+  /** Deal at an account with ≤1 mapped person — the whole deal hangs on one thread. */
+  single_threaded?: boolean
+  /** Account with zero mapped people — the unexplored region. */
+  unmapped?: boolean
+}
+
+/** A "going cold" rail row: a cooling/cold relationship plus the honest re-engagement hook. */
+export interface GoingColdRow {
+  nodeId: string
+  label: string
+  type: 'person' | 'account'
+  account?: string
+  daysQuiet: number
+  hook: string
 }
 
 export interface GraphEdge {
@@ -144,4 +163,6 @@ export interface DashboardData {
   // Per-account and per-sector rollups for the graph view's win/loss + ROI intelligence panel.
   account_summaries: ScopeSummary[]
   sector_summaries: ScopeSummary[]
+  // Going-Cold rail (optional: absent in placeholder data.json) — coldest relationships first.
+  going_cold?: GoingColdRow[]
 }

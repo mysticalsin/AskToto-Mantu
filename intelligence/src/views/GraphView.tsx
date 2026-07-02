@@ -100,17 +100,28 @@ export function GraphView({ data }: Props) {
   useEffect(() => {
     if (!containerRef.current) return
 
+    // Going-Cold rendering: relationships fade as they age (the decay IS the information). Fresh
+    // nodes render at full strength; cooling ones dim; cold ones are ghosts you can't unsee.
+    const FRESHNESS_OPACITY: Record<string, number> = { fresh: 1, cooling: 0.72, cold: 0.42 }
+    const nodeOpacity = (n: GraphNode): number => (n.freshness ? FRESHNESS_OPACITY[n.freshness] : 1)
+
     const nodesDs = new DataSet(
       graph.nodes.map((n) => {
         const fill = communityColor(n.community_id)
         const ring = n.type === 'deal' && n.win_likelihood_band ? bandColor[n.win_likelihood_band] : fill
+        const quiet = n.days_quiet !== undefined ? ` · quiet ${n.days_quiet}d` : ''
         return {
           id: n.id,
           label: n.label,
-          title: n.label,
+          title: `${n.label}${quiet}${n.single_threaded ? ' · SINGLE-THREADED' : ''}${n.unmapped ? ' · no people mapped' : ''}`,
           shape: 'dot',
           size: TYPE_SIZE[n.type],
-          color: { background: fill, border: ring, highlight: { background: '#ffffff', border: ring } },
+          color: {
+            background: fill,
+            border: ring,
+            highlight: { background: '#ffffff', border: ring },
+            opacity: nodeOpacity(n),
+          },
           borderWidth: n.type === 'deal' && n.win_likelihood_band ? 3 : 1.5,
           font: { size: 12, color: '#ece6f2' },
           _raw: n,
@@ -118,6 +129,15 @@ export function GraphView({ data }: Props) {
       }),
     )
     nodesDsRef.current = nodesDs
+
+    // Edge opacity inherits the colder endpoint — a cold relationship's whole thread recedes together.
+    const freshnessById = new Map(graph.nodes.map((n) => [n.id, n.freshness]))
+    const edgeFade = (from: string, to: string): number => {
+      const f = [freshnessById.get(from), freshnessById.get(to)]
+      if (f.includes('cold')) return 0.35
+      if (f.includes('cooling')) return 0.65
+      return 1
+    }
 
     const edgesDs = new DataSet(
       graph.edges.map((e, i) => ({
@@ -128,7 +148,7 @@ export function GraphView({ data }: Props) {
         title: `${e.relation} [${e.confidence}]`,
         dashes: e.confidence !== 'EXTRACTED',
         width: e.confidence === 'EXTRACTED' ? 2 : 1,
-        color: { opacity: e.confidence === 'EXTRACTED' ? 0.7 : 0.35, color: '#9645d6' },
+        color: { opacity: (e.confidence === 'EXTRACTED' ? 0.7 : 0.35) * edgeFade(e.from, e.to), color: '#9645d6' },
         arrows: { to: { enabled: true, scaleFactor: 0.5 } },
       })),
     )
@@ -283,6 +303,30 @@ export function GraphView({ data }: Props) {
                 </div>
               )}
               {selected.date && <div>Date: {selected.date}</div>}
+              {selected.days_quiet !== undefined && (
+                <div className="flex items-center gap-1.5">
+                  Last touched:
+                  <span
+                    className="rounded-full px-1.5 py-0.5 text-[10px] font-semibold"
+                    style={{
+                      color: selected.freshness === 'cold' ? '#f7768e' : selected.freshness === 'cooling' ? '#e0af68' : '#9ece6a',
+                      background: 'rgba(255,255,255,0.06)',
+                    }}
+                  >
+                    {selected.days_quiet === 0 ? 'today' : `${selected.days_quiet}d ago`} · {selected.freshness}
+                  </span>
+                </div>
+              )}
+              {selected.single_threaded && (
+                <div className="rounded-md border border-amber-400/25 bg-amber-400/10 px-2 py-1 text-[11px] text-amber-200/90">
+                  Single-threaded — this deal's account has one mapped contact. One departure kills the thread; map a second stakeholder.
+                </div>
+              )}
+              {selected.unmapped && (
+                <div className="rounded-md border border-amber-400/25 bg-amber-400/10 px-2 py-1 text-[11px] text-amber-200/90">
+                  Unexplored — no people mapped at this account yet. The relationship exists only on paper.
+                </div>
+              )}
               {selected.is_client_facing !== undefined && (
                 <div>{selected.is_client_facing ? 'Client-facing' : 'Internal (not client-facing)'}</div>
               )}
@@ -318,6 +362,38 @@ export function GraphView({ data }: Props) {
             <p className="text-xs italic text-white/30">Click a node to inspect it</p>
           )}
         </div>
+
+        {/* Going cold — relationship entropy, named and actionable (innovation #8) */}
+        {(data.going_cold?.length ?? 0) > 0 && (
+          <div className="border-b border-[var(--color-mantu-border)] p-4">
+            <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-white/40">Going cold</h3>
+            <div className="max-h-56 space-y-1.5 overflow-y-auto">
+              {data.going_cold!.slice(0, 6).map((r) => (
+                <button
+                  key={r.nodeId}
+                  onClick={() => focusNode(r.nodeId)}
+                  className="block w-full rounded-md bg-black/20 px-2 py-1.5 text-left hover:bg-white/5"
+                >
+                  <div className="flex items-center gap-2 text-xs">
+                    <span className="truncate font-medium text-white/85">{r.label}</span>
+                    {r.account && <span className="truncate text-[10px] text-white/35">{r.account}</span>}
+                    <span
+                      className="ml-auto shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-semibold"
+                      style={{ color: r.daysQuiet > 45 ? '#f7768e' : '#e0af68', background: 'rgba(255,255,255,0.06)' }}
+                    >
+                      {r.daysQuiet}d quiet
+                    </span>
+                  </div>
+                  <div className="mt-0.5 text-[11px] leading-snug text-white/50">{r.hook}</div>
+                </button>
+              ))}
+            </div>
+            <p className="mt-2 text-[10px] leading-relaxed text-white/30">
+              Hooks come from your own open promises and last real topics — never invented. Faded nodes in
+              the graph are these relationships decaying in place.
+            </p>
+          </div>
+        )}
 
         {/* Win/Loss & ROI intelligence */}
         <div className="border-b border-[var(--color-mantu-border)] p-4">
@@ -490,6 +566,8 @@ export function GraphView({ data }: Props) {
           <p className="mt-4 text-[10px] leading-relaxed text-white/30">
             Node fill = community (real connected-component clustering, not hand-assigned). Deal-node ring =
             win-likelihood band. Solid edges = extracted directly from source. Dashed = inferred or ambiguous.
+            Fading = going cold: full strength ≤14 days since last meeting, dimmed ≤45, ghosted beyond —
+            relationship entropy made visible.
           </p>
         </div>
 
