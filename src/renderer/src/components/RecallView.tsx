@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { memo, useCallback, useEffect, useMemo, useState } from 'react'
 import {
   Search,
   FolderOpen,
@@ -337,6 +337,132 @@ function UpcomingSection({
   )
 }
 
+// Cap the first paint of the meeting list to the most recent N — a daily user can accumulate hundreds of
+// saved meetings, and rendering all of them (grouped, per-row) on every keystroke in the search box (which
+// re-renders before the debounced IPC search even replaces `items`) visibly stutters. The "Show all"
+// button below opts into the full list once the user actually wants it.
+const INITIAL_RENDER_CAP = 100
+
+// ---------------------------------------------------------------------------
+// One meeting row — memoized so re-renders of RecallView (e.g. a keystroke in the search box before the
+// debounced search resolves) don't re-render every already-rendered row, only ones whose props changed.
+// ---------------------------------------------------------------------------
+
+const MeetingRow = memo(function MeetingRow({
+  meeting,
+  isSelected,
+  isActive,
+  isDeleting,
+  isOpen,
+  onSelect,
+  onOpen,
+  onToggleConnections,
+  onTrash
+}: {
+  meeting: MeetingSummary | RecallHit
+  isSelected: boolean
+  isActive: boolean
+  isDeleting: boolean
+  isOpen: boolean
+  onSelect: (file: string) => void
+  onOpen: (file: string) => void
+  onToggleConnections: (file: string) => void
+  onTrash: (file: string, title: string) => void
+}): JSX.Element {
+  const m = meeting
+  const hit = 'snippet' in m ? (m as RecallHit) : null
+
+  return (
+    <div className={`rounded-lg transition-colors${isSelected ? ' bg-white/[0.08]' : ''}`}>
+      {/* Row */}
+      <div className="flex items-center gap-1">
+        <button
+          type="button"
+          onClick={() => onSelect(m.file)}
+          onDoubleClick={() => onOpen(m.file)}
+          className="no-drag focus-ring flex flex-1 items-center gap-2 rounded-lg px-2 py-1.5 text-left hover:bg-white/[0.06]"
+        >
+          <FileText size={12} className="shrink-0 text-[color:var(--color-ink-3)]" />
+          <span className="min-w-0 flex-1 truncate text-[12px] font-medium text-[color:var(--color-ink)]">
+            {m.title}
+          </span>
+
+          {/* Analyzing badge */}
+          {isActive && (
+            <span className="shrink-0 rounded-full bg-[var(--color-accent-soft)] px-2 py-0.5 text-[10px] text-[color:var(--color-accent)]">
+              Analyzing
+            </span>
+          )}
+
+          {/* Duration badge + time */}
+          <div className="ml-auto flex shrink-0 items-center gap-1.5">
+            {m.durationMin > 0 && (
+              <span className="rounded-full bg-white/[0.06] px-1.5 text-[10px] text-[color:var(--color-ink-3)]">
+                {formatDurationMin(m.durationMin)}
+              </span>
+            )}
+            <span className="tabular-nums text-[11px] text-[color:var(--color-ink-3)]">
+              {meetingTime(m.date)}
+            </span>
+          </div>
+        </button>
+
+        {/* Knowledge-graph expand — icon-only compact button */}
+        <button
+          type="button"
+          aria-label="Show connections"
+          aria-expanded={isOpen}
+          title="Connections"
+          onClick={() => onToggleConnections(m.file)}
+          className="no-drag focus-ring grid h-7 w-7 shrink-0 place-items-center rounded-full text-[color:var(--color-ink-3)] hover:bg-white/[0.06] hover:text-[color:var(--color-ink)]"
+        >
+          <Network size={12} />
+        </button>
+
+        {/* Delete — single click opens a native confirm dialog (main process); see onTrash. */}
+        <button
+          type="button"
+          aria-label="Delete meeting"
+          title="Delete"
+          disabled={isDeleting}
+          onClick={() => onTrash(m.file, m.title)}
+          className="no-drag focus-ring grid h-7 w-7 shrink-0 place-items-center rounded-full text-[color:var(--color-ink-3)] transition-colors hover:bg-[var(--color-danger)]/10 hover:text-[var(--color-danger)] disabled:opacity-40"
+        >
+          <Trash2 size={12} />
+        </button>
+      </div>
+
+      {/* Search snippet (RecallHit only) */}
+      {hit?.snippet && (
+        <div className="line-clamp-2 px-9 pb-1 text-[11px] text-[color:var(--color-ink-2)]">
+          …{hit.snippet}…
+        </div>
+      )}
+
+      {/* Topic chips — up to 3, derived from the recap's "## Tags" section (see saveMeeting). */}
+      {!!m.topics?.length && (
+        <div className="flex flex-wrap gap-1 px-9 pb-1.5">
+          {m.topics.slice(0, 3).map((t, i) => (
+            <span
+              key={`${t}-${i}`}
+              className="rounded-full bg-[var(--color-accent-soft)] px-2 py-0.5 text-[10px] font-medium text-[var(--color-accent)]"
+            >
+              {t}
+            </span>
+          ))}
+        </div>
+      )}
+
+      {/* Connections panel */}
+      {isOpen && (
+        <div className="border-t border-[var(--color-hair-soft)]">
+          <Related file={m.file} />
+        </div>
+      )}
+    </div>
+  )
+})
+
 // ---------------------------------------------------------------------------
 // Main export
 // ---------------------------------------------------------------------------
@@ -365,6 +491,10 @@ export function RecallView({
   onIntelligence?: () => void
 }): JSX.Element {
   const [q, setQ] = useState('')
+  // The value actually sent to the IPC search / used for grouping — updates 250ms after `q` settles (same
+  // delay the search IPC call itself already waited for below), so every keystroke's re-render groups
+  // against this stable value instead of re-running groupByLocalDate synchronously on each keystroke.
+  const [debouncedQ, setDebouncedQ] = useState('')
   const [items, setItems] = useState<(MeetingSummary | RecallHit)[]>([])
   const [loading, setLoading] = useState(true)
   /** File whose knowledge-graph Related panel is expanded. */
@@ -373,6 +503,8 @@ export function RecallView({
   const [selectedFile, setSelectedFile] = useState<string | null>(null)
   /** File mid-delete — disables its trash button so a slow confirm dialog can't be double-clicked. */
   const [deleting, setDeleting] = useState<string | null>(null)
+  /** Opt-in past the INITIAL_RENDER_CAP — set once the user clicks "Show all N meetings". */
+  const [showAll, setShowAll] = useState(false)
 
   // Meetings are always saved; deletion is the user's to undo that. The main process pops a native,
   // unmissable confirm dialog before actually deleting (single click here is unambiguous — no "did that
@@ -387,6 +519,16 @@ export function RecallView({
       setOpen((o) => (o === file ? null : o))
     }
   }, [])
+  // Fire-and-forget wrapper matching MeetingRow's sync onTrash prop — kept stable via useCallback so the
+  // memoized row doesn't re-render just because this component re-rendered.
+  const trashMeeting = useCallback((file: string, title: string): void => {
+    void onTrash(file, title)
+  }, [onTrash])
+  const selectFile = useCallback((file: string): void => setSelectedFile(file), [])
+  const toggleConnections = useCallback(
+    (file: string): void => setOpen((o) => (o === file ? null : file)),
+    []
+  )
 
   // Single fetch owner: immediate on mount / empty query, debounced for typed searches.
   // A stale-guard drops out-of-order resolutions so a slow earlier response can't overwrite a newer one.
@@ -395,7 +537,10 @@ export function RecallView({
     const run = (): void => {
       const p = q.trim() ? window.toto.recallSearch(q.trim()) : window.toto.recallList()
       p.then((l) => {
-        if (!stale) setItems(l)
+        if (!stale) {
+          setItems(l)
+          setDebouncedQ(q)
+        }
       })
         .catch(() => {})
         .finally(() => {
@@ -416,16 +561,39 @@ export function RecallView({
   }, [q])
 
   /** Open the selected file (or the first item as a fallback) — in-app recap when wired, else OS-open. */
-  const openMeeting = (f: string): void => {
-    if (onOpenMeeting) onOpenMeeting(f)
-    else void window.toto.recallOpen(f)
-  }
+  const openMeeting = useCallback(
+    (f: string): void => {
+      if (onOpenMeeting) onOpenMeeting(f)
+      else void window.toto.recallOpen(f)
+    },
+    [onOpenMeeting]
+  )
   const openSelected = (): void => {
     const f = selectedFile ?? items[0]?.file
     if (f) openMeeting(f)
   }
 
-  const groups = groupByLocalDate(items)
+  // Keyed on [items, debouncedQ] rather than the raw per-keystroke `q` — items only changes when the
+  // debounced search actually resolves, so this recomputes once per real result instead of once per
+  // keystroke. debouncedQ is included only so the memo is legibly tied to "the query these items answer",
+  // not because grouping itself reads it.
+  const allGroups = useMemo(() => groupByLocalDate(items), [items, debouncedQ])
+
+  // Cap the first paint to the most recent INITIAL_RENDER_CAP meetings (across groups, in existing order —
+  // recallList/recallSearch already return newest-first) unless the user opted into "Show all".
+  const totalCount = items.length
+  const groups = useMemo(() => {
+    if (showAll || totalCount <= INITIAL_RENDER_CAP) return allGroups
+    let remaining = INITIAL_RENDER_CAP
+    const capped: [string, (MeetingSummary | RecallHit)[]][] = []
+    for (const [date, meetingsForDate] of allGroups) {
+      if (remaining <= 0) break
+      const slice = meetingsForDate.slice(0, remaining)
+      capped.push([date, slice])
+      remaining -= slice.length
+    }
+    return capped
+  }, [allGroups, showAll, totalCount])
 
   return (
     <div className="flex h-full flex-col">
@@ -473,116 +641,40 @@ export function RecallView({
               : 'No meetings saved yet. Finish one with End & review.'}
           </div>
         ) : (
-          groups.map(([date, meetingsForDate]) => (
-            <div key={date}>
-              {/* Date group header */}
-              <div className="cl-eyebrow px-1 pb-1 pt-2 text-[color:var(--color-ink-3)]">
-                {friendlyDate(date)}
-              </div>
+          <>
+            {groups.map(([date, meetingsForDate]) => (
+              <div key={date}>
+                {/* Date group header */}
+                <div className="cl-eyebrow px-1 pb-1 pt-2 text-[color:var(--color-ink-3)]">
+                  {friendlyDate(date)}
+                </div>
 
-              {meetingsForDate.map((m) => {
-                const isSelected = selectedFile === m.file
-                const isActive = activeFile === m.file
-                const hit = 'snippet' in m ? (m as RecallHit) : null
-
-                return (
-                  <div
+                {meetingsForDate.map((m) => (
+                  <MeetingRow
                     key={m.file}
-                    className={`rounded-lg transition-colors${isSelected ? ' bg-white/[0.08]' : ''}`}
-                  >
-                    {/* Row */}
-                    <div className="flex items-center gap-1">
-                      <button
-                        type="button"
-                        onClick={() => setSelectedFile(m.file)}
-                        onDoubleClick={() => openMeeting(m.file)}
-                        className="no-drag focus-ring flex flex-1 items-center gap-2 rounded-lg px-2 py-1.5 text-left hover:bg-white/[0.06]"
-                      >
-                        <FileText
-                          size={12}
-                          className="shrink-0 text-[color:var(--color-ink-3)]"
-                        />
-                        <span className="min-w-0 flex-1 truncate text-[12px] font-medium text-[color:var(--color-ink)]">
-                          {m.title}
-                        </span>
-
-                        {/* Analyzing badge */}
-                        {isActive && (
-                          <span className="shrink-0 rounded-full bg-[var(--color-accent-soft)] px-2 py-0.5 text-[10px] text-[color:var(--color-accent)]">
-                            Analyzing
-                          </span>
-                        )}
-
-                        {/* Duration badge + time */}
-                        <div className="ml-auto flex shrink-0 items-center gap-1.5">
-                          {m.durationMin > 0 && (
-                            <span className="rounded-full bg-white/[0.06] px-1.5 text-[10px] text-[color:var(--color-ink-3)]">
-                              {formatDurationMin(m.durationMin)}
-                            </span>
-                          )}
-                          <span className="tabular-nums text-[11px] text-[color:var(--color-ink-3)]">
-                            {meetingTime(m.date)}
-                          </span>
-                        </div>
-                      </button>
-
-                      {/* Knowledge-graph expand — icon-only compact button */}
-                      <button
-                        type="button"
-                        aria-label="Show connections"
-                        aria-expanded={open === m.file}
-                        title="Connections"
-                        onClick={() => setOpen((o) => (o === m.file ? null : m.file))}
-                        className="no-drag focus-ring grid h-7 w-7 shrink-0 place-items-center rounded-full text-[color:var(--color-ink-3)] hover:bg-white/[0.06] hover:text-[color:var(--color-ink)]"
-                      >
-                        <Network size={12} />
-                      </button>
-
-                      {/* Delete — single click opens a native confirm dialog (main process); see onTrash. */}
-                      <button
-                        type="button"
-                        aria-label="Delete meeting"
-                        title="Delete"
-                        disabled={deleting === m.file}
-                        onClick={() => void onTrash(m.file, m.title)}
-                        className="no-drag focus-ring grid h-7 w-7 shrink-0 place-items-center rounded-full text-[color:var(--color-ink-3)] transition-colors hover:bg-[var(--color-danger)]/10 hover:text-[var(--color-danger)] disabled:opacity-40"
-                      >
-                        <Trash2 size={12} />
-                      </button>
-                    </div>
-
-                    {/* Search snippet (RecallHit only) */}
-                    {hit?.snippet && (
-                      <div className="line-clamp-2 px-9 pb-1 text-[11px] text-[color:var(--color-ink-2)]">
-                        …{hit.snippet}…
-                      </div>
-                    )}
-
-                    {/* Topic chips — up to 3, derived from the recap's "## Tags" section (see saveMeeting). */}
-                    {!!m.topics?.length && (
-                      <div className="flex flex-wrap gap-1 px-9 pb-1.5">
-                        {m.topics.slice(0, 3).map((t, i) => (
-                          <span
-                            key={`${t}-${i}`}
-                            className="rounded-full bg-[var(--color-accent-soft)] px-2 py-0.5 text-[10px] font-medium text-[var(--color-accent)]"
-                          >
-                            {t}
-                          </span>
-                        ))}
-                      </div>
-                    )}
-
-                    {/* Connections panel */}
-                    {open === m.file && (
-                      <div className="border-t border-[var(--color-hair-soft)]">
-                        <Related file={m.file} />
-                      </div>
-                    )}
-                  </div>
-                )
-              })}
-            </div>
-          ))
+                    meeting={m}
+                    isSelected={selectedFile === m.file}
+                    isActive={activeFile === m.file}
+                    isDeleting={deleting === m.file}
+                    isOpen={open === m.file}
+                    onSelect={selectFile}
+                    onOpen={openMeeting}
+                    onToggleConnections={toggleConnections}
+                    onTrash={trashMeeting}
+                  />
+                ))}
+              </div>
+            ))}
+            {!showAll && totalCount > INITIAL_RENDER_CAP && (
+              <button
+                type="button"
+                onClick={() => setShowAll(true)}
+                className="no-drag focus-ring mt-1 w-full rounded-lg px-2 py-1.5 text-center text-[11px] font-medium text-[color:var(--color-ink-3)] hover:bg-white/[0.06] hover:text-[color:var(--color-ink-2)]"
+              >
+                Show all {totalCount} meetings
+              </button>
+            )}
+          </>
         )}
       </div>
 

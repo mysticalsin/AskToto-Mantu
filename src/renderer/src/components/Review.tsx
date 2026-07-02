@@ -6,6 +6,7 @@ import { isNonSpeechLine } from '@shared/transcript-filter'
 import { talkStats } from '@shared/talkstats'
 import { Markdown } from './Markdown'
 import { Chip, TextButton, Spinner } from './ui'
+import { useFlash } from '../lib/useFlash'
 
 function clock(t: number): string {
   try {
@@ -116,9 +117,9 @@ export const Review = memo(function Review({
   /** Opens a "Recent meetings" row as a read-only past-meeting Review (same handler History uses). */
   onOpenPastMeeting?: (file: string) => void
 }): JSX.Element {
-  const [copied, setCopied] = useState(false)
-  const [notesCopied, setNotesCopied] = useState(false)
-  const [jsonCopied, setJsonCopied] = useState(false)
+  const [copied, flashCopied] = useFlash(1500)
+  const [notesCopied, flashNotesCopied] = useFlash(1500)
+  const [jsonCopied, flashJsonCopied] = useFlash(1500)
   const [exportError, setExportError] = useState<string | null>(null)
   const [transcriptOpen, setTranscriptOpen] = useState(!!showTranscript)
   // 90-Second Debrief (innovation #6): the off-record layer — what was NOT said out loud.
@@ -180,9 +181,8 @@ export const Review = memo(function Review({
     navigator.clipboard
       .writeText(plain)
       .then(() => {
-        setCopied(true)
+        flashCopied()
         setCopyError(null)
-        setTimeout(() => setCopied(false), 1500)
       })
       .catch((e) => {
         const msg = e instanceof Error ? e.message : String(e)
@@ -196,8 +196,7 @@ export const Review = memo(function Review({
     navigator.clipboard
       .writeText(md)
       .then(() => {
-        setNotesCopied(true)
-        setTimeout(() => setNotesCopied(false), 1500)
+        flashNotesCopied()
       })
       .catch(() => {})
   }
@@ -212,8 +211,7 @@ export const Review = memo(function Review({
       .exportRecapJson(md)
       .then((json) => navigator.clipboard.writeText(JSON.stringify(json, null, 2)))
       .then(() => {
-        setJsonCopied(true)
-        setTimeout(() => setJsonCopied(false), 1500)
+        flashJsonCopied()
       })
       .catch((e) => setExportError(`Export failed: ${e instanceof Error ? e.message : String(e)}`))
   }
@@ -234,7 +232,7 @@ export const Review = memo(function Review({
   // their edits never get clobbered by a late token — a fresh draft (new id) re-arms seeding.
   const [followupText, setFollowupText] = useState('')
   const [followupEdited, setFollowupEdited] = useState(false)
-  const [followupCopied, setFollowupCopied] = useState(false)
+  const [followupCopied, flashFollowupCopied] = useFlash(1500)
   useEffect(() => {
     setFollowupEdited(false)
   }, [followupDraft?.id])
@@ -281,8 +279,7 @@ export const Review = memo(function Review({
     navigator.clipboard
       .writeText(followupText)
       .then(() => {
-        setFollowupCopied(true)
-        setTimeout(() => setFollowupCopied(false), 1500)
+        flashFollowupCopied()
       })
       .catch(() => {})
   }

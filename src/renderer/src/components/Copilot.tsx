@@ -4,9 +4,34 @@ import type { TranscriptLine } from '@shared/ipc'
 import type { AnswerState } from '../state'
 import { Markdown } from './Markdown'
 import { TextButton, Spinner } from './ui'
+import { useFlash } from '../lib/useFlash'
 
 // Cap on how many transcript lines render live in the copilot panel — see the comment above transcriptRows.
 const TRANSCRIPT_RENDER_LIMIT = 150
+
+/** One transcript bubble. Memoized so appending a new line only mounts/renders the new row — React.memo's
+ *  default shallow-prop comparison is enough here because `line` is a stable, never-mutated object once
+ *  committed (see listen.ts's commitLine), so every already-rendered row's props are referentially
+ *  unchanged and its render is skipped entirely. */
+const TranscriptRow = memo(function TranscriptRow({ line }: { line: TranscriptLine }): JSX.Element {
+  return (
+    <div className={line.speaker === 'you' ? 'flex justify-end' : 'flex justify-start'}>
+      <div
+        className={[
+          'max-w-[82%] rounded-[var(--radius-xl)] px-3 py-1.5 text-[13px] leading-snug',
+          line.speaker === 'you'
+            ? 'bg-[var(--color-accent-soft)] text-[color:var(--color-ink)]'
+            : 'bg-white/[0.06] text-[color:var(--color-ink)]'
+        ].join(' ')}
+      >
+        <span className="mr-1.5 text-[10px] font-semibold uppercase text-[color:var(--color-ink-3)]">
+          {line.speaker === 'you' ? 'You' : 'Them'}
+        </span>
+        {line.text}
+      </div>
+    </div>
+  )
+})
 
 export const Copilot = memo(function Copilot({
   lines,
@@ -29,7 +54,7 @@ export const Copilot = memo(function Copilot({
   onEnd: () => void
 }): JSX.Element {
   const scroller = useRef<HTMLDivElement>(null)
-  const [copied, setCopied] = useState(false)
+  const [copied, flashCopied] = useFlash(1500)
 
   // The transcript only ever grows — remapping the WHOLE array to JSX on every render (a array-index key,
   // no memoization) meant every parent re-render (e.g. the old 1Hz `seconds` tick) re-diffed the entire
@@ -44,23 +69,10 @@ export const Copilot = memo(function Copilot({
   const truncated = lines.length > TRANSCRIPT_RENDER_LIMIT
   const transcriptRows = useMemo(() => {
     const visible = lines.length > TRANSCRIPT_RENDER_LIMIT ? lines.slice(-TRANSCRIPT_RENDER_LIMIT) : lines
-    return visible.map((l, i) => (
-      <div key={`${l.t}-${i}`} className={l.speaker === 'you' ? 'flex justify-end' : 'flex justify-start'}>
-        <div
-          className={[
-            'max-w-[82%] rounded-[var(--radius-xl)] px-3 py-1.5 text-[13px] leading-snug',
-            l.speaker === 'you'
-              ? 'bg-[var(--color-accent-soft)] text-[color:var(--color-ink)]'
-              : 'bg-white/[0.06] text-[color:var(--color-ink)]'
-          ].join(' ')}
-        >
-          <span className="mr-1.5 text-[10px] font-semibold uppercase text-[color:var(--color-ink-3)]">
-            {l.speaker === 'you' ? 'You' : 'Them'}
-          </span>
-          {l.text}
-        </div>
-      </div>
-    ))
+    // Each row is a memoized TranscriptRow keyed by its stable `t` timestamp (see the comment above) — React
+    // skips re-rendering every row whose `line` prop reference is unchanged, so appending one new line only
+    // does real work for that one new row instead of the whole visible slice.
+    return visible.map((l, i) => <TranscriptRow key={`${l.t}-${i}`} line={l} />)
   }, [lines])
 
   useEffect(() => {
@@ -83,8 +95,7 @@ export const Copilot = memo(function Copilot({
     navigator.clipboard
       .writeText(txt)
       .then(() => {
-        setCopied(true)
-        setTimeout(() => setCopied(false), 1500)
+        flashCopied()
       })
       .catch(() => {})
   }

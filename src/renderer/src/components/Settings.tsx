@@ -800,6 +800,16 @@ function CliIntegration({
   const provider = settings.provider
   const cliConnected = settings.cliConnected ?? {}
 
+  // Guards every setState below against firing after this component unmounts (e.g. the user closes
+  // Settings while runInstall's cliInstall/cliTest awaits are still in flight — those IPC calls keep
+  // running to completion in the main process regardless of whether this card is still on screen).
+  const mountedRef = useRef(true)
+  useEffect(() => {
+    return () => {
+      mountedRef.current = false
+    }
+  }, [])
+
   // Per-CLI card state
   const [claudeState, setClaudeState] = useState<CliCardState>({ phase: 'idle', msg: null, version: null })
   const [codexState, setCodexState] = useState<CliCardState>({ phase: 'idle', msg: null, version: null })
@@ -818,8 +828,12 @@ function CliIntegration({
 
   const getState = (id: 'claude-cli' | 'codex-cli'): CliCardState =>
     id === 'claude-cli' ? claudeState : codexState
-  const setState = (id: 'claude-cli' | 'codex-cli', s: CliCardState): void =>
+  // Single choke point for all card-state writes — guarding here covers every setState call in
+  // runInstall/connect/cancel/disconnectCli without needing a check at each await site.
+  const setState = (id: 'claude-cli' | 'codex-cli', s: CliCardState): void => {
+    if (!mountedRef.current) return
     id === 'claude-cli' ? setClaudeState(s) : setCodexState(s)
+  }
 
   // Step 1: show inline confirm prompt
   const startSetup = (id: 'claude-cli' | 'codex-cli'): void => {
