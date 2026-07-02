@@ -8,7 +8,8 @@ import {
   ExternalLink,
   ChevronLeft,
   Calendar,
-  Trash2
+  Trash2,
+  Brain
 } from 'lucide-react'
 import { TextButton } from './ui'
 import type {
@@ -309,7 +310,8 @@ export function RecallView({
   onConnectCalendar,
   activeFile,
   onNewChat,
-  onOpenMeeting
+  onOpenMeeting,
+  onIntelligence
 }: {
   onOpenFolder: () => void
   /** Optional: ← back button in the header. */
@@ -322,6 +324,8 @@ export function RecallView({
   onNewChat?: () => void
   /** Optional: open a meeting's recap in-app (Cluely recap detail). Falls back to OS-open when absent. */
   onOpenMeeting?: (file: string) => void
+  /** Optional: opens the Mantu Intelligence dashboard (brain view). */
+  onIntelligence?: () => void
 }): JSX.Element {
   const [q, setQ] = useState('')
   const [items, setItems] = useState<(MeetingSummary | RecallHit)[]>([])
@@ -553,6 +557,16 @@ export function RecallView({
             <kbd className="rounded bg-white/[0.06] px-1 py-0.5 text-[10px] text-[color:var(--color-ink-3)]">↵</kbd>
           </TextButton>
           <TextButton icon={FolderOpen} onClick={onOpenFolder}>Open folder</TextButton>
+          {onIntelligence && (
+            <button
+              type="button"
+              onClick={onIntelligence}
+              title="Mantu Intelligence — your meeting knowledge dashboard"
+              className="no-drag focus-ring flex items-center gap-1.5 rounded-full bg-[var(--color-accent-soft)] px-2.5 py-1 text-[11px] font-semibold text-[color:var(--color-accent-2)] ring-1 ring-inset ring-[var(--color-accent)]/30 transition-colors hover:bg-[var(--color-accent)]/25"
+            >
+              <Brain size={12} strokeWidth={2.2} /> Intelligence
+            </button>
+          )}
         </div>
 
         {onNewChat && (

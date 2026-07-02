@@ -154,6 +154,15 @@ export const BrainIndexSchema = z.object({
 })
 export type BrainIndex = z.infer<typeof BrainIndexSchema>
 
+/** Full assembled dataset returned by IPC brain:read — everything the Intelligence dashboard renders. */
+export interface BrainRead {
+  index: BrainIndex
+  graph: BrainGraph
+  people: PersonEntity[]
+  accounts: AccountEntity[]
+  deals: DealEntity[]
+}
+
 /** Renderer/dashboard-facing status summary. */
 export interface BrainStatus {
   meetings: number

@@ -85,6 +85,7 @@ const api = {
   brainStatus: (): Promise<import('@shared/brain').BrainStatus | null> =>
     ipcRenderer.invoke(IPC.brainStatus),
   brainBackfill: (): Promise<{ queued: number }> => ipcRenderer.invoke(IPC.brainBackfill),
+  brainRead: (): Promise<import('@shared/brain').BrainRead> => ipcRenderer.invoke(IPC.brainRead),
   authStatus: (): Promise<AuthStatus> => ipcRenderer.invoke(IPC.authStatus),
   signIn: (): Promise<SignInResult> => ipcRenderer.invoke(IPC.authSignIn),
   signOut: (): Promise<void> => ipcRenderer.invoke(IPC.authSignOut),
