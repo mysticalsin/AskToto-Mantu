@@ -56,6 +56,7 @@ export function AgendaView(): JSX.Element {
 
   const load = useCallback(async (): Promise<void> => {
     setLoading(true)
+    setNotConfigured(false)
     const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'
     try {
       setRes(await window.toto.calendarToday(tz))
@@ -78,9 +79,13 @@ export function AgendaView(): JSX.Element {
         setNotConfigured(true)
         return
       }
-      if (r.ok) await load()
+      if (r.ok) {
+        await load()
+      } else {
+        setRes({ ok: false, error: r.error || 'Sign-in failed.' })
+      }
     } catch {
-      /* ignore — surfaced by the reload below */
+      /* ignore */
     } finally {
       setConnecting(false)
     }

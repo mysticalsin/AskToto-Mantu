@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { motion } from 'framer-motion'
+import { motion, AnimatePresence } from 'framer-motion'
 import type { CoachingInsight } from '../types/data'
 import { categoryLabel, groundingColor, groundingLabel } from '../lib/format'
 
@@ -17,8 +17,7 @@ export function InsightCard({ insight, index, onSelectDeal }: Props) {
     <motion.div
       layout
       initial={{ opacity: 0, y: 16 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.35, delay: index * 0.06, ease: 'easeOut' }}
+      animate={{ opacity: 1, y: 0, transition: { duration: 0.35, delay: index * 0.06, ease: 'easeOut' } }}
       whileHover={{ y: -4 }}
       className="group rounded-xl border border-[var(--color-mantu-border)] bg-[var(--color-mantu-surface)] p-5 shadow-lg shadow-black/20 transition-shadow hover:shadow-xl hover:shadow-mantu/10"
     >
@@ -75,33 +74,45 @@ export function InsightCard({ insight, index, onSelectDeal }: Props) {
         </button>
       </div>
 
-      {expanded && (
-        <motion.div
-          initial={{ opacity: 0, height: 0 }}
-          animate={{ opacity: 1, height: 'auto' }}
-          exit={{ opacity: 0, height: 0 }}
-          className="mt-3 space-y-2 border-t border-white/10 pt-3"
-        >
-          <p className="text-xs text-white/60">{insight.what_happened}</p>
-          {insight.sources.map((s, i) => (
-            <div key={i} className="rounded-md bg-black/20 p-2 text-xs text-white/50">
-              <div className="mb-1 font-mono text-[10px] text-mantu-light/80">{s.file}</div>
-              <div className="italic">&ldquo;{s.quote_or_paraphrase}&rdquo;</div>
-            </div>
-          ))}
-          <div className="flex flex-wrap gap-1.5 pt-1">
-            {insight.deals.map((d) => (
-              <button
-                key={d}
-                onClick={() => onSelectDeal?.(d)}
-                className="rounded-full border border-mantu/40 px-2 py-0.5 text-[11px] text-mantu-light transition-colors hover:bg-mantu/20"
-              >
-                {d} →
-              </button>
+      <AnimatePresence>
+        {expanded && (
+          <motion.div
+            key="detail"
+            initial={{ opacity: 0, height: 0 }}
+            animate={{ opacity: 1, height: 'auto' }}
+            exit={{ opacity: 0, height: 0 }}
+            className="mt-3 space-y-2 border-t border-white/10 pt-3"
+          >
+            <p className="text-xs text-white/60">{insight.what_happened}</p>
+            {insight.sources.map((s, i) => (
+              <div key={i} className="rounded-md bg-black/20 p-2 text-xs text-white/50">
+                <div className="mb-1 font-mono text-[10px] text-mantu-light/80">{s.file}</div>
+                <div className="italic">&ldquo;{s.quote_or_paraphrase}&rdquo;</div>
+              </div>
             ))}
-          </div>
-        </motion.div>
-      )}
+            <div className="flex flex-wrap gap-1.5 pt-1">
+              {insight.deals.map((d) =>
+                onSelectDeal ? (
+                  <button
+                    key={d}
+                    onClick={() => onSelectDeal(d)}
+                    className="rounded-full border border-mantu/40 px-2 py-0.5 text-[11px] text-mantu-light transition-colors hover:bg-mantu/20"
+                  >
+                    {d} →
+                  </button>
+                ) : (
+                  <span
+                    key={d}
+                    className="rounded-full border border-white/10 px-2 py-0.5 text-[11px] text-white/40"
+                  >
+                    {d}
+                  </span>
+                )
+              )}
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </motion.div>
   )
 }

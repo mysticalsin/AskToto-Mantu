@@ -306,9 +306,10 @@ export function computeRelated(
   const related = new Map<string, { title: string; via: Set<string> }>()
   const addNote = (n: GNode | undefined, via?: string): void => {
     if (!isNote(n) || !n!.source_file || sf(n) === base) return
-    const cur = related.get(n!.source_file) || { title: n!.label, via: new Set<string>() }
+    const key = sf(n)
+    const cur = related.get(key) || { title: n!.label, via: new Set<string>() }
     if (via) cur.via.add(via)
-    related.set(n!.source_file, cur)
+    related.set(key, cur)
   }
 
   // 1-hop from my nodes.
@@ -341,7 +342,7 @@ export function computeRelated(
     ok: true,
     topics: [...topicIds].map((id) => byId.get(id)?.label).filter((x): x is string => !!x).slice(0, 12),
     notes: [...related.entries()]
-      .map(([file, r]) => ({ file: basename(file), title: r.title, via: [...r.via].slice(0, 3) }))
+      .map(([file, r]) => ({ file, title: r.title, via: [...r.via].slice(0, 3) }))
       .slice(0, 12)
   }
 }

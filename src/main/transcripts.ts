@@ -343,7 +343,8 @@ function appendIndexRow(folder: string, dateStr: string, title: string, mode: st
     const index = join(folder, 'index.md')
     if (!existsSync(index)) writeFileSync(index, INDEX_HEADER, 'utf8')
     const safeTitle = title.replace(/\|/g, '/')
-    appendFileSync(index, `| ${dateStr} | ${safeTitle} | ${mode} | ${durMin} min | [open](${fileName}) |\n`, 'utf8')
+    const safeMode = mode.replace(/\|/g, '/').replace(/[\r\n]/g, ' ')
+    appendFileSync(index, `| ${dateStr} | ${safeTitle} | ${safeMode} | ${durMin} min | [open](${fileName}) |\n`, 'utf8')
   } catch {
     /* ignore */
   }
@@ -433,7 +434,7 @@ export async function saveNote(settings: Settings, n: SaveNote): Promise<string>
     '---',
     'type: note',
     'source: AskToto',
-    `mode: ${n.mode}`,
+    `mode: "${yamlSafeTitle(cleanTitle(n.mode))}"`,
     `date: ${new Date(started).toISOString()}`,
     `title: "${yamlSafeTitle(title)}"`,
     'status: ready-for-followup',
@@ -460,7 +461,11 @@ export async function saveNote(settings: Settings, n: SaveNote): Promise<string>
 export async function saveMeeting(settings: Settings, m: SaveMeeting): Promise<string> {
   const folder = ensureMeetingsFolder(settings)
 
-  const started = m.startedAt || Date.now()
+  // Guard against non-finite/out-of-range values (e.g. Infinity), not just falsy ones: Date's valid
+  // range is +/-8.64e15ms from epoch, and anything outside it throws RangeError from toISOString()
+  // below with no surrounding try/catch, losing the whole meeting.
+  const started =
+    m.startedAt && Number.isFinite(m.startedAt) && Math.abs(m.startedAt) <= 8.64e15 ? m.startedAt : Date.now()
   const heuristicTitle = cleanTitle(m.title) || `${m.mode} meeting`
 
   // Main is the single source of truth for the final title: when a recap was generated, prefer its
@@ -492,7 +497,7 @@ export async function saveMeeting(settings: Settings, m: SaveMeeting): Promise<s
       '---',
       'type: meeting-transcript',
       'source: AskToto',
-      `mode: ${m.mode}`,
+      `mode: "${yamlSafeTitle(cleanTitle(m.mode))}"`,
       `date: ${new Date(started).toISOString()}`,
       `title: "${yamlSafeTitle(title)}"`,
       `participants: [${participants.join(', ')}]`,
@@ -628,7 +633,7 @@ export async function saveDraftTranscript(settings: Settings, m: SaveMeeting): P
       '---',
       'type: meeting-transcript-draft',
       'source: AskToto',
-      `mode: ${m.mode}`,
+      `mode: "${yamlSafeTitle(cleanTitle(m.mode))}"`,
       `date: ${new Date(started).toISOString()}`,
       `title: "${yamlSafeTitle(title)}"`,
       'status: interrupted',
@@ -678,8 +683,10 @@ export async function recoverOrphanDrafts(settings: Settings): Promise<{ recover
   try {
     const folder = resolveMeetingsFolder(settings)
     if (!existsSync(folder)) return { recovered }
-    for (const f of readdirSync(folder)) {
+    for (const dirent of readdirSync(folder, { withFileTypes: true })) {
+      const f = dirent.name
       if (!f.startsWith('.autosave-draft-') || !f.endsWith('.md')) continue
+      if (!dirent.isFile()) continue // never follow a symlink planted with a draft-shaped name
       const draftPath = join(folder, f)
       try {
         const stampPart = f.slice('.autosave-draft-'.length, -'.md'.length)
@@ -723,7 +730,9 @@ export async function recoverOrphanDrafts(settings: Settings): Promise<{ recover
           const d = dateLine ? new Date(dateLine.slice('date: '.length)) : new Date()
           const dateStr = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
           const title = h1Line ? h1Line.slice(2, -IN_PROGRESS_SUFFIX.length) : 'Recovered meeting'
-          const mode = modeLine ? modeLine.slice('mode: '.length) : 'meeting'
+          // mode is now written quoted (see saveDraftTranscript); strip the wrapping quotes so a
+          // recovered meeting's index row shows the bare value, same as before that change.
+          const mode = modeLine ? modeLine.slice('mode: '.length).replace(/^"|"$/g, '') : 'meeting'
           appendIndexRow(folder, dateStr, title, mode, 0, basename(out))
         }
       } catch {

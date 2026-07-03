@@ -137,14 +137,17 @@ function download(url: string, dest: string, onProgress?: (pct: number) => void,
       out.on('error', reject)
       res.on('error', reject)
     })
+    req.setTimeout(30000, () => req.destroy(new Error('model download timed out')))
     req.on('error', reject)
   })
 }
 
 function extractTarBz2(archive: string, dir: string): Promise<void> {
   // `tar` ships on macOS, Linux, and Windows 10+ and handles .tar.bz2 with -xjf.
+  // bsdtar (macOS) does not support --no-absolute-paths; both bsdtar and GNU tar already
+  // strip leading '/' from archive member names by default, so omitting it is safe.
   return new Promise((resolve, reject) => {
-    execFile('tar', ['xjf', archive, '--no-absolute-paths', '-C', dir], (err) => (err ? reject(err) : resolve()))
+    execFile('tar', ['xjf', archive, '-C', dir], (err) => (err ? reject(err) : resolve()))
   })
 }
 

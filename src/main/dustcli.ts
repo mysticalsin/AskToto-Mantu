@@ -2,6 +2,7 @@ import { app, shell } from 'electron'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { writeFileSync } from 'node:fs'
+import { randomBytes } from 'node:crypto'
 import { join } from 'node:path'
 import type { DustCliImport } from '@shared/ipc'
 import { resolveBin } from './cli'
@@ -161,8 +162,8 @@ export async function setupDustCli(): Promise<{ ok: boolean; error?: string }> {
         'echo; echo "✓ Done. Go back to AskToto and click \\"Connect from Dust CLI\\" again."',
         'echo "You can close this window."'
       ].join('\n') + '\n'
-    const scriptPath = join(app.getPath('temp'), 'asktoto-dust-setup.command')
-    writeFileSync(scriptPath, script, { mode: 0o755 })
+    const scriptPath = join(app.getPath('temp'), `asktoto-dust-setup-${randomBytes(8).toString('hex')}.command`)
+    writeFileSync(scriptPath, script, { mode: 0o755, flag: 'wx' })
     const err = await shell.openPath(scriptPath) // opens in Terminal and runs it; no Automation permission
     if (err) return { ok: false, error: err }
     return { ok: true }

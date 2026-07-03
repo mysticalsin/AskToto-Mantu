@@ -31,20 +31,21 @@ const stanceColor: Record<string, string> = {
   unknown: 'rgba(255,255,255,0.28)',
 }
 
-/** Every commitment carries `text` + `by` but not a stable id — dedupe on that pair so a commitment
- *  echoed in both a deal's ledger and a person's ledger (the same promise, seen from two entities)
- *  isn't double-counted. First occurrence wins. */
+/** Every commitment carries `text` + `by` but not a stable id — dedupe on `text` + `by` + `meeting` +
+ *  `date` so only the same occurrence, echoed in both a deal's ledger and a person's ledger (the same
+ *  promise, seen from two entities), collapses into one row. Distinct commitments that merely share
+ *  text and speaker across different meetings aren't merged. First occurrence wins. */
 function dedupeCommitments(commitments: Commitment[]): Commitment[] {
   const seen = new Map<string, Commitment>()
   for (const c of commitments) {
-    const key = `${c.text}||${c.by}`
+    const key = `${c.text}||${c.by}||${c.meeting}||${c.date}`
     if (!seen.has(key)) seen.set(key, c)
   }
   return Array.from(seen.values())
 }
 
 export function StatsView({ data }: Props) {
-  const now = useMemo(() => Date.now(), [])
+  const now = Date.now()
 
   const totalClaims = data.deals.reduce((sum, d) => sum + d.claims.length, 0)
   const recurringInsights = data.coaching_insights.filter((i) => i.n_observations >= 2).length

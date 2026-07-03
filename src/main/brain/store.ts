@@ -32,13 +32,19 @@ export function brainDir(settings: Settings): string {
 }
 
 export function slugify(s: string): string {
-  const base = s
+  const full = s
     .toLowerCase()
     .normalize('NFKD')
     .replace(/[̀-ͯ]/g, '') // strip diacritics so "L'Oréal" and "L'Oreal" share a slug
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-+|-+$/g, '')
-    .slice(0, 60)
+  // Two distinct long names that share an identical 60-char prefix would otherwise collide onto the
+  // same slug and silently merge their entity files. Only truncate when needed, and disambiguate the
+  // truncation with a short content hash so different long names still map to different slugs.
+  const base =
+    full.length > 60
+      ? `${full.slice(0, 51)}-${createHash('sha256').update(full).digest('hex').slice(0, 8)}`
+      : full
   if (base) return base
   // A name written entirely in a non-Latin script (Chinese, Cyrillic, Arabic, pure emoji) or one
   // that's blank/whitespace-only collapses the ASCII pass above to '' — falling back to a fixed

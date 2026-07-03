@@ -54,12 +54,29 @@ export function freshnessOf(daysQuiet: number): Freshness {
 }
 
 
+/**
+ * Parses a leading `YYYY-MM-DD` off a date string as a UTC midnight timestamp, rejecting anything
+ * that isn't a real calendar date (mirrors momentum.ts's / ledgerstats.ts's parseDateUTC — duplicated
+ * rather than shared so this file stays a standalone, dependency-free unit like those two).
+ */
+function parseDateUTC(dateStr: string): number | null {
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(dateStr)
+  if (!m) return null
+  const year = Number(m[1])
+  const month = Number(m[2])
+  const day = Number(m[3])
+  const t = Date.UTC(year, month - 1, day)
+  const check = new Date(t)
+  if (check.getUTCFullYear() !== year || check.getUTCMonth() !== month - 1 || check.getUTCDate() !== day) return null
+  return t
+}
+
 function touchOf(meetings: Array<{ date: string; title?: string }> | undefined, now: number): TouchInfo | null {
   const dated = (meetings ?? []).filter((m) => m.date)
   if (dated.length === 0) return null
   const last = dated.reduce((a, b) => (a.date > b.date ? a : b))
-  const t = new Date(last.date).getTime()
-  if (!Number.isFinite(t)) return null
+  const t = parseDateUTC(last.date)
+  if (t === null) return null
   const daysQuiet = Math.max(0, Math.floor((now - t) / DAY))
   return { lastTouch: last.date.slice(0, 10), daysQuiet, freshness: freshnessOf(daysQuiet) }
 }

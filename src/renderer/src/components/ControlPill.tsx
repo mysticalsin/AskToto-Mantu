@@ -52,10 +52,10 @@ export function ControlPill({
         <>
           <span
             className={[
-              'h-[9px] w-[9px] shrink-0 rounded-full',
+              'h-[9px] w-[9px] shrink-0 rounded-full rec-dot',
               paused
-                ? 'bg-[color:var(--color-ink-3)]'
-                : 'rec-dot bg-[var(--color-danger)] shadow-[0_0_8px_var(--color-danger)]'
+                ? 'bg-[color:var(--color-ink-3)] [animation-play-state:paused]'
+                : 'bg-[var(--color-danger)] shadow-[0_0_8px_var(--color-danger)]'
             ].join(' ')}
           />
           <ElapsedClock startedAt={startedAt} paused={paused} />

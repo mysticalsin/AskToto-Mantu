@@ -107,9 +107,9 @@ function getRunningProcessNames(): Promise<Set<string>> {
 
 export function buildFullMacScript(runningApps: Set<string> = new Set()): string {
   const urlChecks = MEETING_URL_PATTERNS.map((p) => `us contains "${p}"`).join(' or ')
-  // Emit URL-detection blocks ONLY for browsers known to be running. AppleScript compiles
-  // `using terms from application "…"` dictionaries before runtime `if procNames contains …`
-  // guards execute, so an absent browser must not appear in this script at all.
+  // Emit URL-detection blocks ONLY for browsers known to be running. Each block is wrapped in a
+  // runtime try/end try, so a dictionary that fails to resolve is swallowed safely at execution
+  // time rather than needing to be pre-filtered out of the script.
   const chromiumBlocks = CHROMIUM_BROWSERS.filter((bn) => runningApps.has(bn)).map((bn) => {
     const escaped = bn.replace(/"/g, '\\"')
     return `if procNames contains "${escaped}" then

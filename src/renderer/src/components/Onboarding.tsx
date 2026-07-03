@@ -219,7 +219,7 @@ export function Onboarding({
   // Pull live permission status when the final checklist appears (and refresh shortly after, since the
   // user may grant access in System Settings while this is open).
   useEffect(() => {
-    if (step !== 5) return
+    if (step !== 6) return
     let alive = true
     const load = (): void => {
       void window.toto.getPermissions().then((p) => alive && setPerms(p))
@@ -340,6 +340,15 @@ export function Onboarding({
       patch({ provider })
       setStep(6)
     }
+    // "Claude Code or Codex" is one tile for two different CLIs, so detect which one is actually on
+    // the machine instead of always assuming Claude Code (otherwise a Codex-only install lands on the
+    // wrong provider and the next screen shows it as not connected).
+    const chooseCli = async (): Promise<void> => {
+      const claude = await window.toto.cliDetect('claude-cli')
+      if (claude.ok) return choose('claude-cli')
+      const codex = await window.toto.cliDetect('codex-cli')
+      choose(codex.ok ? 'codex-cli' : 'claude-cli')
+    }
     return (
       <div className="fade-up flex min-h-[300px] w-full flex-col items-center gap-5 px-4 py-7 text-center">
         <div className="flex flex-col items-center gap-1.5">
@@ -362,7 +371,7 @@ export function Onboarding({
             title="Claude Code or Codex"
             badge="No key needed"
             desc="Already use Claude Code or Codex in your terminal? Connect it. Nothing extra to pay, nothing to paste."
-            onClick={() => choose('claude-cli')}
+            onClick={() => void chooseCli()}
           />
           <ProviderOption
             icon={KeyRound}

@@ -119,7 +119,7 @@ export const PROVIDERS: Record<ProviderId, ProviderDef> = {
     fastModel: 'qwen-turbo',
     keyHint: 'sk-…',
     keyPattern: '', // sk- ambiguous
-    vision: false,
+    vision: false, // default/fast models are text-only (qwen-vl-max is vision but not the resolved model)
     keyUrl: 'https://bailian.console.alibabacloud.com/'
   },
   minimax: {
@@ -162,7 +162,7 @@ export const PROVIDERS: Record<ProviderId, ProviderDef> = {
     baseUrl: 'https://openrouter.ai/api/v1',
     models: [
       'openai/gpt-4o-mini',
-      'anthropic/claude-3.5-sonnet',
+      'anthropic/claude-sonnet-5',
       'meta-llama/llama-3.3-70b-instruct',
       'deepseek/deepseek-chat',
       'google/gemini-2.0-flash-001'
@@ -199,7 +199,7 @@ export const PROVIDERS: Record<ProviderId, ProviderDef> = {
     fastModel: 'mistral-small-latest',
     keyHint: 'API key',
     keyPattern: '', // not reliably prefixed
-    vision: false,
+    vision: false, // default/fast models are text-only (pixtral is vision but not the resolved model)
     keyUrl: 'https://console.mistral.ai/api-keys'
   },
   dust: {
@@ -335,7 +335,7 @@ export function resolveModel(
 ): string {
   const def = PROVIDERS[id]
   const chosen = providerModels[id]
-  if (fast) return def.fastModel || chosen || def.defaultModel || ''
+  if (fast) return chosen || def.fastModel || def.defaultModel || ''
   return chosen || def.defaultModel || ''
 }
 
@@ -371,10 +371,10 @@ export function resolveModelTier(
 }
 
 /** Cost/safety guardrail (per Tony): the CLI provider only ever answers as Sonnet in the interactive
- *  ask flow — never Haiku, never Opus — regardless of routeTier's escalation (hard/coding questions,
+ *  ask flow, never Haiku, never Opus, regardless of routeTier's escalation (hard/coding questions,
  *  factcheck, or thinkingMode 'always' would otherwise reach Opus here). The direct Anthropic API
  *  key's base/think tiers are pinned to Haiku/Sonnet so a stray providerModels edit can't drift them.
- *  Deep tier is deliberately EXEMPT on both — that's the Graph extraction pipeline's reserved path to
+ *  Deep tier is deliberately EXEMPT on both: that's the Graph extraction pipeline's reserved path to
  *  Opus (brain/ingest.ts and graphify.ts call resolveModelTier directly and never reach this function). */
 export function applyInteractiveGuardrail(id: ProviderId, tier: ModelTier, model: string): string {
   if (id === 'claude-cli') return PROVIDERS['claude-cli'].thinkModel ?? 'sonnet'

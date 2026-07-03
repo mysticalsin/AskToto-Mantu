@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { Mic, X } from 'lucide-react'
 import { AUTO_DISMISS_MS, shouldShowConsentReminder } from '../lib/consent'
 
@@ -25,7 +25,9 @@ export function RecordingConsentReminder({
   const openChangeRef = useRef(onOpenChange)
   openChangeRef.current = onOpenChange
   // Mirror the banner's visibility up to the parent whenever it flips (drives the minimized-pill widen).
-  useEffect(() => {
+  // useLayoutEffect (not useEffect) so the parent's width state updates before paint, avoiding a
+  // squeeze-then-snap flicker when the banner appears while minimized to the control pill.
+  useLayoutEffect(() => {
     openChangeRef.current?.(open)
   }, [open])
 

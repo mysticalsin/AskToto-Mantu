@@ -78,7 +78,9 @@ export function BarRow({
           style={{ background: color ?? MANTU_GRADIENT }}
         />
       </div>
-      <div className="w-10 flex-shrink-0 text-right text-xs text-white/50">{valueLabel ?? value}</div>
+      <div className="min-w-[2.5rem] flex-shrink-0 whitespace-nowrap text-right text-xs text-white/50">
+        {valueLabel ?? value}
+      </div>
     </div>
   )
 }

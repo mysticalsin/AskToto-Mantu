@@ -47,12 +47,12 @@ export async function calendarToday(tz: string): Promise<CalendarTodayResult> {
   if (!token) return { ok: false, needsConsent: true }
 
   const zone = typeof tz === 'string' && tz ? tz : 'UTC'
-  const { start, end } = todayBounds(zone)
-  const url =
-    `${GRAPH}/me/calendarView?startDateTime=${encodeURIComponent(start)}&endDateTime=${encodeURIComponent(end)}` +
-    `&$select=subject,start,end,location,isAllDay,onlineMeeting,attendees&$orderby=start/dateTime&$top=25`
 
   try {
+    const { start, end } = todayBounds(zone)
+    const url =
+      `${GRAPH}/me/calendarView?startDateTime=${encodeURIComponent(start)}&endDateTime=${encodeURIComponent(end)}` +
+      `&$select=subject,start,end,location,isAllDay,onlineMeeting,attendees&$orderby=start/dateTime&$top=25`
     const res = await fetch(url, {
       headers: { Authorization: `Bearer ${token}`, Prefer: `outlook.timezone="${zone}"` }
     })

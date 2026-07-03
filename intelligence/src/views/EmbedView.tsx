@@ -26,7 +26,11 @@ export function EmbedView({ data }: Props) {
       {data.meta.is_placeholder && <PlaceholderBanner note={data.meta.note} compact />}
       <motion.div layout className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
         {top.map((insight, i) => (
-          <InsightCard key={insight.insight_id} insight={insight} index={i} />
+          <InsightCard
+            key={insight.insight_id}
+            insight={insight}
+            index={i}
+          />
         ))}
       </motion.div>
       <div className="mt-4 text-center">
