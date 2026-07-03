@@ -31,8 +31,10 @@ import { accelLabel } from '../lib/keys'
 const ICON_STROKE = 1.85
 
 function clock(s: number): string {
-  const m = Math.floor(s / 60)
+  const h = Math.floor(s / 3600)
+  const m = Math.floor((s % 3600) / 60)
   const r = s % 60
+  if (h > 0) return `${h}:${m.toString().padStart(2, '0')}:${r.toString().padStart(2, '0')}`
   return `${m}:${r.toString().padStart(2, '0')}`
 }
 
@@ -187,6 +189,7 @@ function IconTool({
   cyanIdle,
   ariaHasPopup,
   ariaExpanded,
+  edgeRight,
   children
 }: {
   title: string
@@ -200,6 +203,9 @@ function IconTool({
   // Set on tools that open a popover/menu (e.g. Mode), so screen readers announce the disclosure state.
   ariaHasPopup?: boolean
   ariaExpanded?: boolean
+  // Set on tools that sit close to the widget's right edge, so the tooltip anchors from its right side
+  // instead of centering off the trigger (which would otherwise get clipped by the widget's overflow:hidden).
+  edgeRight?: boolean
   children: ReactNode
 }): JSX.Element {
   return (
@@ -224,7 +230,12 @@ function IconTool({
       >
         {children}
       </button>
-      <span className="pointer-events-none absolute -top-1.5 left-1/2 z-20 -translate-x-1/2 -translate-y-full whitespace-nowrap rounded-lg bg-black/90 px-2.5 py-1 text-[11px] font-medium text-white opacity-0 shadow-lg transition-opacity duration-150 group-hover:opacity-100 peer-focus-visible:opacity-100">
+      <span
+        className={[
+          'pointer-events-none absolute -top-1.5 z-20 -translate-y-full whitespace-nowrap rounded-lg bg-black/90 px-2.5 py-1 text-[11px] font-medium text-white opacity-0 shadow-lg transition-opacity duration-150 group-hover:opacity-100 peer-focus-visible:opacity-100',
+          edgeRight ? 'right-0' : 'left-1/2 -translate-x-1/2'
+        ].join(' ')}
+      >
         {title}
       </span>
     </div>
@@ -253,12 +264,38 @@ export const Bar = memo(function Bar(props: BarProps): JSX.Element {
       setModeOpen(false)
     }
     const onKeyDown = (e: KeyboardEvent): void => {
-      if (e.key !== 'Escape') return
-      // Stop this Escape from reaching App.tsx's window-level handler, which would otherwise also
-      // collapse/hide the overlay on top of closing this popover.
-      e.stopPropagation()
-      setModeOpen(false)
-      modeRef.current?.querySelector('button')?.focus()
+      if (e.key === 'Escape') {
+        // Stop this Escape from reaching App.tsx's window-level handler, which would otherwise also
+        // collapse/hide the overlay on top of closing this popover.
+        e.stopPropagation()
+        setModeOpen(false)
+        modeRef.current?.querySelector('button')?.focus()
+        return
+      }
+      // Trap Tab within the open popover (WCAG 2.4.3): a keyboard-only user tabbing off the last item
+      // would otherwise land on the page behind the menu. Wrap first↔last while it's open.
+      if (e.key === 'Tab') {
+        const pop = modePopoverRef.current
+        if (!pop) return
+        const focusables = Array.from(
+          pop.querySelectorAll<HTMLElement>(
+            'button:not([disabled]), [href], input:not([disabled]), select, textarea, [tabindex]:not([tabindex="-1"])'
+          )
+        )
+        if (!focusables.length) return
+        const first = focusables[0]
+        const last = focusables[focusables.length - 1]
+        const active = document.activeElement as HTMLElement | null
+        if (e.shiftKey) {
+          if (active === first || !pop.contains(active)) {
+            e.preventDefault()
+            last.focus()
+          }
+        } else if (active === last || !pop.contains(active)) {
+          e.preventDefault()
+          first.focus()
+        }
+      }
     }
     document.addEventListener('mousedown', onDown)
     document.addEventListener('keydown', onKeyDown)
@@ -414,29 +451,30 @@ export const Bar = memo(function Bar(props: BarProps): JSX.Element {
           </div>
         </div>
 
-        {/* Row 2 — toolbar. 3-column grid (1fr · auto · 1fr) so the center tool cluster stays dead-center.
-            When the bar is expanded this row sits at the BOTTOM, under the body: logo left, icons center,
-            History / Transcript right. */}
-        <div className="aw-toolbar grid grid-cols-[1fr_auto_1fr] items-center border-t border-[var(--color-hair-soft)] px-5 py-1">
+        {/* Row 2 — toolbar. Three in-flow flex children: the logo (left), the tool cluster (center, flex-1
+            so it centers in the space left between the flanking groups), and History/Transcript (right).
+            The cluster is a normal flex child, NOT absolutely positioned, so it can never overlap the
+            right-hand group when that group is wide during a live meeting (New meeting + Transcript). */}
+        <div className="aw-toolbar flex items-center justify-between border-t border-[var(--color-hair-soft)] px-5 py-1">
           {/* The Mantu mark IS the logo → opens Settings. (Quit/Hide live in the tray + hotkeys.) */}
           <button
             type="button"
             title="Settings"
             aria-label="Settings"
             onClick={props.onSettings}
-            className="no-drag focus-ring block flex-none justify-self-start rounded-[10px]"
+            className="no-drag focus-ring block flex-none rounded-[10px]"
           >
             <span className="aw-mark-glow block rounded-[10px]">
               <MantuMark size={30} />
             </span>
           </button>
 
-          {/* Centered tools — the middle (auto) grid column, dead-center of the bar.
-              A fixed-width slot for the timer + pause prevents the cluster from shifting when listening
-              starts; Capture / Spotlight Ref / Mode / Deep thinking / Private view always stay in exactly
-              the same position, with the divider right before Listen. */}
-          <div className="flex items-center justify-center gap-4">
-            <IconTool title={`Capture screen  (${accelLabel('CommandOrControl+Shift+S')})`} onClick={props.onCapture}>
+          {/* Centered tools — flex-1 + justify-center keeps them centered in the space between the logo and
+              the right group. A fixed-width slot for the timer + pause keeps the cluster from shifting when
+              listening starts; Capture / Spotlight Ref / Mode / Deep thinking / Private view stay put, with
+              the divider right before Listen. */}
+          <div className="flex min-w-0 flex-1 items-center justify-center gap-4">
+            <IconTool title={`Capture screen (${accelLabel('CommandOrControl+Shift+S')})`} onClick={props.onCapture}>
               {props.capturing ? <Spinner size={19} /> : <Image size={19} strokeWidth={ICON_STROKE} />}
             </IconTool>
             {/* Spotlight Ref — asks a dedicated Dust agent whether Mantu has relevant sales references
@@ -537,7 +575,7 @@ export const Bar = memo(function Bar(props: BarProps): JSX.Element {
 
           {/* Right: History/Transcript pill(s) + Minimize-to-pill + collapse-chevron (ghost).
               No separate Hide button — global ⌘\ and tray handle that. */}
-          <div className="flex flex-none items-center justify-self-end gap-1.5">
+          <div className="flex flex-none items-center gap-1.5">
             {/* Live pivot: New meeting + Transcript when listening, History otherwise */}
             {props.listening ? (
               <>
@@ -570,7 +608,7 @@ export const Bar = memo(function Bar(props: BarProps): JSX.Element {
                 <ChevronDown size={13} strokeWidth={ICON_STROKE} />
               </button>
             )}
-            <IconTool title="Minimize to a small pill" onClick={props.onMinimize}>
+            <IconTool title="Minimize to a small pill" onClick={props.onMinimize} edgeRight>
               <Minimize2 size={17} strokeWidth={ICON_STROKE} />
             </IconTool>
             {/* Collapse-chevron: plain ghost, not aw-fill. Submit is the only accent-filled control.

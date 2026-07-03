@@ -103,6 +103,12 @@
   --duration-instant: 80ms;
   --duration-hover: 150ms;
   --duration-panel: 220ms;
+
+  /* Z-index scale: a documented registry so future overlays (tooltip, popover, toast) can be placed
+     deliberately relative to existing ones instead of guessing a magic number. */
+  --z-ring: 2;
+  --z-toast: 40;
+  --z-popover: 50;
 }
 
 :root {
@@ -403,7 +409,9 @@ input::placeholder {
     opacity: 0.7;
   }
   100% {
-    transform: scale(2.6);
+    /* Capped below 2x so the burst's radius stays inside the gap to the adjacent ElapsedClock text
+       instead of lapping over its first digit(s). */
+    transform: scale(1.8);
     opacity: 0;
   }
 }
@@ -504,7 +512,7 @@ input::placeholder {
   /* Stepped instead of continuous — repaints ~9x/s instead of every frame; still reads as rotating. */
   animation-timing-function: steps(24, end);
   pointer-events: none;
-  z-index: 2;
+  z-index: var(--z-ring);
 }
 
 /* QuickActions chips are a true `rounded-full` pill — the end-caps clamp to a tight semicircle, and at
@@ -575,7 +583,7 @@ input::placeholder {
      animation for the whole time stealth is on. (This is exactly the look prefers-reduced-motion
      used to fall back to; it's now the default for everyone.) */
   pointer-events: none;
-  z-index: 2;
+  z-index: var(--z-ring);
   opacity: 0.92;
 }
 
@@ -660,6 +668,12 @@ input::placeholder {
   font-size: 13.5px;
   line-height: 1.62;
   color: var(--color-ink);
+  overflow-wrap: anywhere;
+}
+/* Code blocks keep their intrinsic width and horizontal scroll (streamdown puts overflow-x-auto on the
+   <pre>); the anywhere-wrap above is for prose only, so reset it here or long tokens break mid-character. */
+.md :where(pre, pre code) {
+  overflow-wrap: normal;
 }
 .md :where(h1, h2, h3, h4) {
   font-family: var(--font-ui);
@@ -698,6 +712,7 @@ input::placeholder {
   border: 1px solid var(--color-hair-soft);
   padding: 4px 8px;
   text-align: left;
+  word-break: break-word;
 }
 
 @keyframes asktoto-loading-pulse {

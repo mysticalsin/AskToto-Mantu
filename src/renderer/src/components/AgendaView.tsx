@@ -13,18 +13,18 @@ function fmtTime(iso: string): string {
 function EventRow({ ev }: { ev: CalendarEvent }): JSX.Element {
   return (
     <div className="flex items-start gap-3 rounded-xl border border-[var(--color-hair-soft)] bg-white/[0.03] px-3 py-2.5">
-      <div className="w-[58px] shrink-0 pt-0.5 text-right">
-        <div className="text-[12px] font-medium tabular-nums text-[color:var(--color-ink)]">
+      <div className="w-[64px] shrink-0 pt-0.5 text-right">
+        <div className="whitespace-nowrap text-[12px] font-medium tabular-nums text-[color:var(--color-ink)]">
           {ev.allDay ? 'All day' : fmtTime(ev.start)}
         </div>
         {!ev.allDay && (
-          <div className="text-[10px] tabular-nums text-[color:var(--color-ink-3)]">{fmtTime(ev.end)}</div>
+          <div className="whitespace-nowrap text-[10px] tabular-nums text-[color:var(--color-ink-3)]">{fmtTime(ev.end)}</div>
         )}
       </div>
       <div className="min-w-0 flex-1">
         <div className="truncate text-[13px] font-medium text-[color:var(--color-ink)]">{ev.subject}</div>
         <div className="mt-0.5 flex flex-wrap items-center gap-x-2.5 gap-y-0.5 text-[11px] text-[color:var(--color-ink-2)]">
-          {ev.location && <span className="truncate">{ev.location}</span>}
+          {ev.location && <span title={ev.location} className="min-w-0 max-w-[180px] truncate">{ev.location}</span>}
           {ev.attendees > 0 && (
             <span className="inline-flex items-center gap-1">
               <Users size={11} /> {ev.attendees}

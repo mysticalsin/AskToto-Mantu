@@ -96,7 +96,7 @@ function Block({ code, lang }: { code: string; lang: string }): JSX.Element {
   return (
     <div className="group relative my-2 overflow-hidden rounded-xl border border-[var(--color-hair-soft)]">
       <div className="flex items-center justify-between border-b border-[var(--color-hair-soft)] bg-white/[0.05] px-3 py-1.5">
-        <span className="font-ui text-[10px] uppercase tracking-wide text-[color:var(--color-ink-2)]">
+        <span className="min-w-0 truncate font-ui text-[10px] uppercase tracking-wide text-[color:var(--color-ink-2)]">
           {lang || 'code'}
         </span>
         <button
@@ -135,7 +135,7 @@ export function CodeBlock(props: any): JSX.Element {
   const isBlock = !inline && (lang !== '' || text.includes('\n'))
   if (!isBlock) {
     return (
-      <code className="rounded-[5px] bg-white/[0.09] px-[0.36em] py-[0.1em] text-[0.9em]">
+      <code className="rounded-[5px] bg-white/[0.09] px-[0.36em] py-[0.1em] text-[0.9em] break-words">
         {children}
       </code>
     )

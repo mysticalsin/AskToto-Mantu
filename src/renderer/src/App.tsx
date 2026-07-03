@@ -158,8 +158,18 @@ export function App(): JSX.Element {
 
   const [collapsed, setCollapsed] = useState(false)
   const [minimized, setMinimized] = useState(false) // collapsed to the floating control mini-pill
+  // Widen the minimized pill's window ONLY while the consent banner is actually on-screen (it auto-dismisses
+  // after a few seconds, or stays for the whole session in require-indicator mode). Driven by the reminder's
+  // own open state via onOpenChange, not by the raw `listening` flag — otherwise the pill stayed 500px wide
+  // for the entire meeting.
+  const [consentReminderOpen, setConsentReminderOpen] = useState(false)
   const [capturing, setCapturing] = useState(false)
   const [captureError, setCaptureError] = useState<string | null>(null)
+  // Set true after consecutive autosave failures during a live meeting (disk full / permissions) so the
+  // user is warned before the final recap save can also fail — autosave is best-effort but a sustained
+  // run of misses is a real data-loss risk that used to be swallowed entirely (.catch(() => {})).
+  const [autosaveWarn, setAutosaveWarn] = useState(false)
+  const autosaveFailsRef = useRef(0)
   // Raw capture timestamp for the "Seen Ns ago" trust chip — Bar's ScreenFreshnessChip owns the actual
   // 500ms tick/label formatting itself, so this only changes when a real new capture happens (it no
   // longer forces the whole App tree to re-render every half second while the chip is showing).
@@ -247,6 +257,8 @@ export function App(): JSX.Element {
   autosaveLinesRef.current = listen.lines
   useEffect(() => {
     if (!listen.listening) return
+    autosaveFailsRef.current = 0
+    setAutosaveWarn(false)
     const AUTOSAVE_MS = 60_000
     const iv = setInterval(() => {
       const lines = autosaveLinesRef.current
@@ -254,7 +266,18 @@ export function App(): JSX.Element {
       const title = lines.find((l) => l.speaker === 'them')?.text?.slice(0, 50) || `${mode} meeting`
       void window.toto
         .saveDraftTranscript({ title, mode, startedAt: meetingStartRef.current, lines, recap: '' })
-        .catch(() => {}) // best-effort — never surface an autosave failure to the user mid-meeting
+        .then(() => {
+          // A good save clears any prior warning — a transient blip shouldn't leave a stale banner up.
+          autosaveFailsRef.current = 0
+          setAutosaveWarn(false)
+        })
+        .catch(() => {
+          // Best-effort, but a RUN of failures (disk full / permissions) risks losing the whole meeting
+          // silently. After 2 consecutive misses (~2 min), warn so the user can act before the recap save
+          // also fails — a single blip stays quiet.
+          autosaveFailsRef.current += 1
+          if (autosaveFailsRef.current >= 2) setAutosaveWarn(true)
+        })
     }, AUTOSAVE_MS)
     return () => clearInterval(iv)
   }, [listen.listening, mode])
@@ -547,11 +570,20 @@ export function App(): JSX.Element {
         // record the turn into multi-turn memory when asked (typed screen-asks get follow-up continuity)
         if (id && opts?.record) pendingUserRef.current = { id, q: opts.record }
         return id
-      } catch {
-        // Screen capture failed (permission revoked, no display, a transient ScreenCaptureKit hiccup) —
-        // fall back to a text-only answer instead of blocking the whole ask on a raw IPC error message.
-        // Mirrors assist()'s existing graceful degradation for the in-meeting path; usedScreen naturally
-        // comes back false for a mode:'answer' run, so the UI never claims to have seen a screen it didn't.
+      } catch (e) {
+        // Screen capture failed (permission revoked, no display, Private View on, a transient
+        // ScreenCaptureKit hiccup) — fall back to a text-only answer instead of blocking the whole ask,
+        // BUT surface a non-terminal notice so the user knows WHY the screen wasn't seen (this used to
+        // degrade silently: captureError was declared but never set). usedScreen comes back false for a
+        // mode:'answer' run, so the UI never claims to have seen a screen it didn't.
+        // IPC flattens the custom PrivateViewBlockedError to a plain message string (its class/name is
+        // lost across the boundary), so we match on the message content, not `instanceof`.
+        const raw = e instanceof Error ? e.message : String(e)
+        setCaptureError(
+          /private view/i.test(raw)
+            ? 'Private View is on, so AskToto couldn’t see your screen — answering from context only. Turn Private View off to include the screen.'
+            : 'Couldn’t capture your screen — answering from context only.'
+        )
         const id = ask.run({ mode: 'answer', prompt, label: opts?.label, kind: opts?.kind, history: opts?.history })
         if (id && opts?.record) pendingUserRef.current = { id, q: opts.record }
         return id
@@ -567,13 +599,19 @@ export function App(): JSX.Element {
     const tx = listen.text()
     setView('copilot')
     setCollapsed(false)
+    setCaptureError(null)
     const basePrompt =
       ASSIST_PROMPT +
       '\n\nLive transcript (THEM = the other person, YOU = me):\n"""\n' +
       tx.slice(-4000) +
       '\n"""' +
       GUARD_LINE
-    if (settings?.visionReady && (settings?.screenAsk ?? true)) {
+    // NOT gated on visionReady (the ACTIVE provider's own vision support): askScreen/suggest.run → the
+    // main process fails over to a vision-capable provider when the active one can't read images (see the
+    // typed screen-ask path). Gating here made Assist silently skip capture whenever a non-vision provider
+    // (e.g. Dust) was active, even with a usable vision key configured. Only screenAsk (the user's toggle)
+    // gates it now.
+    if (settings?.screenAsk ?? true) {
       try {
         const shot = await window.toto.capture()
         setScreenCapturedAt(shot.capturedAt)
@@ -585,8 +623,15 @@ export function App(): JSX.Element {
           history: copilotHistoryRef.current
         })
         return
-      } catch {
-        // fall through to text-only path
+      } catch (e) {
+        // Surface WHY capture failed (Private View, permission) as a non-terminal notice, then fall
+        // through to the transcript-only suggestion — this used to swallow the failure silently.
+        const raw = e instanceof Error ? e.message : String(e)
+        setCaptureError(
+          /private view/i.test(raw)
+            ? 'Private View is on, so AskToto couldn’t see your screen — suggesting from the conversation only. Turn Private View off to include the screen.'
+            : 'Couldn’t capture your screen — suggesting from the conversation only.'
+        )
       }
     }
     suggest.run({
@@ -594,7 +639,7 @@ export function App(): JSX.Element {
       prompt: basePrompt,
       history: copilotHistoryRef.current
     })
-  }, [suggest.run, listen.text, settings?.visionReady, settings?.screenAsk, requireProvider])
+  }, [suggest.run, listen.text, settings?.screenAsk, requireProvider])
 
   const submit = useCallback(() => {
     if (!requireProvider()) return
@@ -1351,6 +1396,8 @@ export function App(): JSX.Element {
           loading={listen.loading}
           loadingPct={listen.loadingPct}
           error={listen.error}
+          captureNotice={captureError}
+          autosaveWarning={autosaveWarn}
           showTranscript={settings?.showLiveTranscript ?? false}
           onEnd={endReview}
         />
@@ -1378,6 +1425,7 @@ export function App(): JSX.Element {
           onSave={pm ? undefined : manualSave}
           onResume={pm ? resumePastMeeting : undefined}
           onOpenPastMeeting={openPastMeeting}
+          isPastMeeting={!!pm}
           onDone={
             pm
               ? () => {
@@ -1398,13 +1446,14 @@ export function App(): JSX.Element {
         <Answer
           text={capturing ? '' : ask.answer?.text ?? ''}
           streaming={capturing || (ask.answer?.streaming ?? false)}
-          error={captureError ?? ask.answer?.error ?? null}
+          error={ask.answer?.error ?? null}
+          captureNotice={captureError}
           prompt={ask.answer?.prompt ?? ''}
           label={ask.answer?.label}
           kind={ask.answer?.kind}
           usedScreen={ask.answer?.usedScreen}
-          onRetry={capturing || captureError ? undefined : retryAnswer}
-          onGoDeeper={capturing || captureError ? undefined : goDeeper}
+          onRetry={capturing ? undefined : retryAnswer}
+          onGoDeeper={capturing ? undefined : goDeeper}
         />
       )
     }
@@ -1547,6 +1596,7 @@ export function App(): JSX.Element {
               listening={showListeningChrome}
               lastReminderAt={settings?.lastConsentReminderAt ?? 0}
               requireIndicator={settings?.requireConsentIndicator ?? false}
+              onOpenChange={setConsentReminderOpen}
               onAck={() => void patch({ lastConsentReminderAt: Date.now() })}
             />
           </>
@@ -1558,7 +1608,7 @@ export function App(): JSX.Element {
         // match in document order, so this wrapper — rendered before the pill below — wins while a
         // toast is open, and control reverts to the pill's own report the instant the toast closes and
         // this wrapper unmounts).
-        return minimized && (updateReady.open || newMeetingToast) ? (
+        return minimized && (updateReady.open || newMeetingToast || consentReminderOpen) ? (
           <div data-hug-width className="mx-auto flex w-[500px] flex-col gap-2 px-1.5">
             {toasts}
           </div>
@@ -1637,11 +1687,11 @@ export function App(): JSX.Element {
               active. Copilot already renders the same `listen.error` text inline among its chips, so skip
               it there to avoid showing the same note twice; every other view has no other place for it. */}
           {showListeningChrome && listen.error && view !== 'copilot' && (
-            <div className="fade-up rounded-xl border border-[var(--color-danger)]/30 bg-[var(--color-danger)]/10 px-3 py-1.5 text-[11px] leading-snug text-[var(--color-danger)]">
+            <div title={listen.error ?? undefined} className="fade-up rounded-xl border border-[var(--color-danger)]/30 bg-[var(--color-danger)]/10 px-3 py-1.5 text-[11px] leading-snug text-[var(--color-danger)] line-clamp-2">
               {listen.error}
             </div>
           )}
-          {settings && !settings.providerReady && !nudgeExpired && (() => {
+          {settings && !settings.providerReady && !nudgeExpired && view !== 'settings' && (() => {
             const activeDef = PROVIDERS[settings.provider]
             const cta = activeDef.kind === 'cli'
               ? `Connect ${activeDef.label} in Settings`
@@ -1650,7 +1700,7 @@ export function App(): JSX.Element {
               <button
                 type="button"
                 onClick={() => openSettings('ai', 'Add an API key or connect a provider here to ask questions.')}
-                className="no-drag focus-ring fade-up flex items-center justify-center gap-1.5 rounded-xl border border-[var(--color-accent)]/30 bg-[var(--color-accent)] px-3 py-1.5 text-[11px] font-medium text-white hover:brightness-110"
+                className="no-drag focus-ring fade-up flex items-center justify-center gap-1.5 whitespace-nowrap rounded-xl border border-[var(--color-accent)]/30 bg-[var(--color-accent)] px-3 py-1.5 text-[11px] font-medium text-white hover:brightness-110"
               >
                 {cta}
               </button>

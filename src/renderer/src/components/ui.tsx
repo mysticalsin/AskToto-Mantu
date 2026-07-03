@@ -73,7 +73,7 @@ export function Chip({
       onClick={onClick}
       disabled={disabled}
       className={[
-        'no-drag focus-ring flex items-center gap-1.5 rounded-full px-3 py-1.5 text-[12px] font-semibold transition-colors duration-[var(--duration-hover)]',
+        'no-drag focus-ring flex min-w-0 items-center gap-1.5 rounded-full px-3 py-1.5 text-[12px] font-semibold transition-colors duration-[var(--duration-hover)]',
         'disabled:opacity-60 disabled:pointer-events-none',
         variant === 'accent'
           ? 'bg-[var(--color-accent)] text-white hover:brightness-110'
@@ -86,7 +86,14 @@ export function Chip({
           className={variant === 'neutral' ? 'text-[var(--color-accent-2)]' : undefined}
         />
       )}
-      {children}
+      {/* Only wrap a plain text/number label in the truncate span. Call sites that compose their own
+          icon + text (or text + <kbd>) as children must keep them as separate flex-row siblings, or a
+          single truncate span glues them together with no gap. */}
+      {typeof children === 'string' || typeof children === 'number' ? (
+        <span className="truncate">{children}</span>
+      ) : (
+        children
+      )}
     </button>
   )
 }
@@ -115,10 +122,15 @@ export function TextButton({
       aria-label={ariaLabel}
       onClick={onClick}
       disabled={disabled}
-      className="no-drag focus-ring flex items-center gap-1 rounded-md px-2 py-1 text-[11px] text-[color:var(--color-ink-2)] hover:bg-white/10 hover:text-[color:var(--color-ink)] disabled:opacity-40"
+      className="no-drag focus-ring flex min-w-0 items-center gap-1 rounded-md px-2 py-1 text-[11px] text-[color:var(--color-ink-2)] hover:bg-white/10 hover:text-[color:var(--color-ink)] disabled:opacity-40"
     >
       {Icon && <Icon size={11} />}
-      {children}
+      {children != null &&
+        (typeof children === 'string' || typeof children === 'number' ? (
+          <span className="truncate">{children}</span>
+        ) : (
+          children
+        ))}
     </button>
   )
 }
@@ -131,7 +143,7 @@ export function FieldHint({ text, children }: { text: string; children: ReactNod
   return (
     <span className="group relative inline-flex">
       {children}
-      <span className="pointer-events-none absolute -top-1.5 left-1/2 z-20 w-max max-w-[260px] -translate-x-1/2 -translate-y-full rounded-lg bg-black/90 px-2.5 py-1.5 text-left text-[11px] font-medium leading-snug text-white opacity-0 shadow-lg transition-opacity duration-150 group-hover:opacity-100">
+      <span className="pointer-events-none absolute left-1/2 top-full z-20 mt-1.5 w-max max-w-[260px] -translate-x-1/2 rounded-lg bg-black/90 px-2.5 py-1.5 text-left text-[11px] font-medium leading-snug text-white opacity-0 shadow-lg transition-opacity duration-150 group-hover:opacity-100">
         {text}
       </span>
     </span>

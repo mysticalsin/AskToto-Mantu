@@ -1,5 +1,5 @@
 import { memo, useEffect, useMemo, useRef, useState } from 'react'
-import { Eye, Mic, Copy, Check } from 'lucide-react'
+import { Eye, EyeOff, Mic, Copy, Check, AlertTriangle } from 'lucide-react'
 import type { TranscriptLine } from '@shared/ipc'
 import type { AnswerState } from '../state'
 import { Markdown } from './Markdown'
@@ -18,7 +18,7 @@ const TranscriptRow = memo(function TranscriptRow({ line }: { line: TranscriptLi
     <div className={line.speaker === 'you' ? 'flex justify-end' : 'flex justify-start'}>
       <div
         className={[
-          'max-w-[82%] rounded-[var(--radius-xl)] px-3 py-1.5 text-[13px] leading-snug',
+          'max-w-[82%] rounded-[var(--radius-xl)] px-3 py-1.5 text-[13px] leading-snug break-words',
           line.speaker === 'you'
             ? 'bg-[var(--color-accent-soft)] text-[color:var(--color-ink)]'
             : 'bg-white/[0.06] text-[color:var(--color-ink)]'
@@ -40,6 +40,8 @@ export const Copilot = memo(function Copilot({
   loading,
   loadingPct,
   error,
+  captureNotice,
+  autosaveWarning,
   showTranscript,
   onEnd: _onEnd
 }: {
@@ -50,6 +52,13 @@ export const Copilot = memo(function Copilot({
   loading: boolean
   loadingPct: number | null
   error: string | null
+  /** Non-terminal notice that screen capture failed (Private View on, permission revoked) while the
+   *  suggestion STILL streams from the transcript — shown as an amber strip above the card, not in place
+   *  of the answer (mirrors Answer.tsx's captureNotice). */
+  captureNotice?: string | null
+  /** True after repeated autosave failures during a live meeting — a data-loss warning so the user can
+   *  free disk / fix permissions before the meeting ends and the recap save also fails. */
+  autosaveWarning?: boolean
   showTranscript: boolean
   onEnd: () => void
 }): JSX.Element {
@@ -102,6 +111,28 @@ export const Copilot = memo(function Copilot({
 
   return (
     <div className="flex flex-col gap-3">
+      {/* Non-terminal capture-failure strip: the suggestion below still streams from the transcript, so
+          this only tells the user WHY the screen wasn't seen (amber, not the red error card). */}
+      {captureNotice && (
+        <div
+          role="status"
+          className="flex items-start gap-1.5 rounded-lg border border-[var(--color-warn,#fac775)]/30 bg-[var(--color-warn,#fac775)]/10 px-3 py-2 text-[12px] leading-snug text-[color:var(--color-ink-2)] break-words [overflow-wrap:anywhere]"
+        >
+          <EyeOff size={13} className="mt-0.5 shrink-0 text-[color:var(--color-warn,#fac775)]" />
+          <span>{captureNotice}</span>
+        </div>
+      )}
+      {/* Autosave data-loss warning — stronger (danger) treatment than the capture notice; the meeting is
+          still recording but recent minutes may not be persisting. */}
+      {autosaveWarning && (
+        <div
+          role="alert"
+          className="flex items-start gap-1.5 rounded-lg border border-[var(--color-danger)]/40 bg-[var(--color-danger)]/10 px-3 py-2 text-[12px] leading-snug text-[color:var(--color-danger)] break-words [overflow-wrap:anywhere]"
+        >
+          <AlertTriangle size={13} className="mt-0.5 shrink-0" />
+          <span>Autosave is failing — recent minutes may not be saved. Check free disk space and folder permissions.</span>
+        </div>
+      )}
       {/* Suggestion card — neutral at rest; accent fill/border only when content is present */}
       <section
         aria-live="polite"
@@ -143,7 +174,7 @@ export const Copilot = memo(function Copilot({
           </div>
         )}
         {suggestion?.error ? (
-          <div className="text-[13px] text-[var(--color-danger)]">{suggestion.error}</div>
+          <div className="text-[13px] text-[var(--color-danger)] break-words">{suggestion.error}</div>
         ) : suggestion?.text ? (
           <Markdown>{suggestion.text}</Markdown>
         ) : suggestion?.streaming ? (
@@ -168,7 +199,7 @@ export const Copilot = memo(function Copilot({
       {/* Transcript — hidden during the call; shown only when the user opens it (bar → Transcript). A
           small loading line appears while the speech model warms up; no live "N captured" footer. */}
       {error ? (
-        <div className="text-[13px] text-[var(--color-danger)]">{error}</div>
+        <div className="text-[13px] text-[var(--color-danger)] break-words">{error}</div>
       ) : loading ? (
         <div className="flex items-center gap-2 text-[11px] text-[color:var(--color-ink-3)]">
           <Spinner size={11} />
