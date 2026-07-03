@@ -124,13 +124,31 @@ function escapeRegExp(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
 
+/**
+ * Acquire the microphone, honouring a chosen deviceId when one is set. If that specific device has gone
+ * away (e.g. AirPods disconnected), fall back to the system default so a meeting never loses its mic over
+ * a device that vanished. Empty deviceId means "follow the system default" from the start.
+ */
+async function acquireMic(deviceId: string): Promise<MediaStream> {
+  const base: MediaTrackConstraints = { channelCount: 1, echoCancellation: true, noiseSuppression: true }
+  if (!deviceId) return navigator.mediaDevices.getUserMedia({ audio: base })
+  try {
+    return await navigator.mediaDevices.getUserMedia({ audio: { ...base, deviceId: { exact: deviceId } } })
+  } catch {
+    return navigator.mediaDevices.getUserMedia({ audio: base })
+  }
+}
+
 export function useListen(
   onQuestion?: (line: TranscriptLine) => void,
   corrections?: { from: string; to: string }[],
   // Fired on a mid-session Parakeet→Whisper fallback. Deliberately NOT surfaced as a live error state —
   // it's a background engine swap, not something worth interrupting the meeting for — so the caller can
   // persist it to Settings (a checkable trace) instead of the UI showing an alarming banner.
-  onEngineFallback?: (reason: string) => void
+  onEngineFallback?: (reason: string) => void,
+  // Preferred microphone deviceId ('' = system default). Read through a ref so a change mid-session takes
+  // effect on the next (re)acquire without re-subscribing anything.
+  micDeviceId?: string
 ): ListenApi {
   const [state, setState] = useState({
     listening: false,
@@ -184,6 +202,9 @@ export function useListen(
   correctionsRef.current = (corrections ?? [])
     .filter((c) => c.from.trim())
     .map((c) => ({ re: new RegExp(`\\b${escapeRegExp(c.from.trim())}\\b`, 'gi'), to: c.to }))
+  // Preferred mic, read through a ref so the latest choice is used on every (re)acquire.
+  const micDeviceIdRef = useRef<string>('')
+  micDeviceIdRef.current = micDeviceId ?? ''
   const linesRef = useRef<TranscriptLine[]>([])
   linesRef.current = lines
   // Trailing run of consecutive 'them' speech (joined) since the last 'you' turn or last auto-answer fire.
@@ -551,9 +572,7 @@ export function useListen(
     if (!liveRef.current || micRecoveringRef.current) return
     micRecoveringRef.current = true
     try {
-      const mic = await navigator.mediaDevices.getUserMedia({
-        audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true }
-      })
+      const mic = await acquireMic(micDeviceIdRef.current)
       if (!liveRef.current) {
         mic.getTracks().forEach((t) => t.stop())
         return
@@ -701,9 +720,7 @@ export function useListen(
 
         if (source === 'mic' || source === 'both') {
           try {
-            const mic = await navigator.mediaDevices.getUserMedia({
-              audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true }
-            })
+            const mic = await acquireMic(micDeviceIdRef.current)
             if (!liveRef.current) {
               mic.getTracks().forEach((t) => t.stop())
               closeChannel('you')

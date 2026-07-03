@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState, type ComponentType, type ReactNode, type RefObject } from 'react'
+import { useCallback, useEffect, useId, useRef, useState, type ComponentType, type ReactNode, type RefObject } from 'react'
 import {
   Check,
   ExternalLink,
@@ -1963,6 +1963,82 @@ function AudioChoices({
   )
 }
 
+/** Microphone chooser: system default plus any input device (built-in, AirPods, iPhone, a headset).
+ *  Device labels are blank until mic permission is granted once, so we offer a one-click reveal. The
+ *  actual capture (lib/listen.ts) falls back to the default if the chosen device has disconnected. */
+function MicPicker({
+  settings,
+  patch
+}: {
+  settings: PublicSettings
+  patch: (p: Partial<PublicSettings>) => void
+}): JSX.Element {
+  const [devices, setDevices] = useState<MediaDeviceInfo[]>([])
+  const [needsPerm, setNeedsPerm] = useState(false)
+
+  const refresh = useCallback(async (): Promise<void> => {
+    try {
+      const mics = (await navigator.mediaDevices.enumerateDevices()).filter((d) => d.kind === 'audioinput')
+      setNeedsPerm(mics.length > 0 && mics.every((d) => !d.label)) // labels blank until permission granted
+      setDevices(mics)
+    } catch {
+      setDevices([])
+    }
+  }, [])
+
+  useEffect(() => {
+    void refresh()
+    navigator.mediaDevices.addEventListener('devicechange', refresh)
+    return () => navigator.mediaDevices.removeEventListener('devicechange', refresh)
+  }, [refresh])
+
+  const unlockLabels = useCallback(async (): Promise<void> => {
+    try {
+      const s = await navigator.mediaDevices.getUserMedia({ audio: true })
+      s.getTracks().forEach((t) => t.stop()) // just needed the grant so labels populate
+      await refresh()
+    } catch {
+      /* denied — leave the generic names in place */
+    }
+  }, [refresh])
+
+  const locked = settings.managedKeys.includes('micDeviceId')
+  return (
+    <div className="mt-3 flex flex-col gap-1.5">
+      <div className="flex items-center gap-2">
+        <span className="shrink-0 text-[12px] text-[color:var(--cl-muted-foreground)]">Microphone</span>
+        <select
+          value={settings.micDeviceId}
+          disabled={locked}
+          onChange={(e) => patch({ micDeviceId: e.target.value })}
+          className={'no-drag flex-1 ' + ctl + (locked ? ' opacity-60' : '')}
+        >
+          <option value="">System default</option>
+          {devices.map((d, i) => (
+            <option key={d.deviceId || i} value={d.deviceId}>
+              {d.label || `Microphone ${i + 1}`}
+            </option>
+          ))}
+        </select>
+      </div>
+      {needsPerm ? (
+        <button
+          type="button"
+          onClick={() => void unlockLabels()}
+          className="no-drag w-fit text-[11px] text-[color:var(--cl-primary)] hover:underline"
+        >
+          Show device names
+        </button>
+      ) : (
+        <span className="text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
+          Choose a specific mic, or keep the system default. If a chosen device disconnects, AskToto falls
+          back to the default so a meeting never loses its mic.
+        </span>
+      )}
+    </div>
+  )
+}
+
 const LANGUAGE_OPTIONS = [
   'English', 'French', 'Spanish', 'German', 'Italian', 'Portuguese', 'Dutch',
   'Polish', 'Arabic', 'Chinese', 'Japanese', 'Korean', 'Hindi', 'Russian', 'Turkish'
@@ -2657,6 +2733,7 @@ export function Settings({
                 <Section title="Listen to" desc="Whose audio AskToto transcribes during a meeting.">
                   <div className="mb-2"><ManagedChip keys={settings.managedKeys} k="audioSource" /></div>
                   <AudioChoices settings={settings} patch={patch} />
+                  <MicPicker settings={settings} patch={patch} />
                 </Section>
                 <Section title="In meetings">
                   <ToggleRow
