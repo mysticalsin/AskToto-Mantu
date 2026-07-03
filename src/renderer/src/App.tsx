@@ -485,10 +485,20 @@ export function App(): JSX.Element {
     ): Promise<string | null> => {
       if (!requireProvider()) return null
       if (capturing) return null
-      setView('answer')
-      setCollapsed(false)
-      setCaptureError(null)
-      setCapturing(true)
+      // Mount the Answer view + the "capturing" busy state as ONE transition. `capturing` (not just
+      // `view`) drives the first mount of the lazy <Answer> chunk in the render branch below, and React
+      // ALWAYS suspends a lazy component's very first render — so a bare synchronous setCapturing(true)
+      // here suspended DURING discrete click input and threw #426 ("hit a snag") on the first screen-ask.
+      // setView is already a transition, but this sibling setCapturing(true) was not, so it mounted
+      // <Answer> on the synchronous lane and defeated that wrap. Batching all four in one startTransition
+      // keeps the mount on the transition lane: the prior UI holds for the ~1 tick the chunk needs, then
+      // Answer commits. (Only data-dependent because a keyless profile bails at requireProvider first.)
+      startTransition(() => {
+        setView('answer')
+        setCollapsed(false)
+        setCaptureError(null)
+        setCapturing(true)
+      })
       try {
         const shot = await window.toto.capture()
         setScreenCapturedAt(shot.capturedAt)
