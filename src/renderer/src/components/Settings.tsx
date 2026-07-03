@@ -2970,6 +2970,21 @@ export function Settings({
                 >
                   <DiagnosticsSection />
                 </Section>
+                <Section title="Thanks" desc="AskToto got better because someone used it before it was ready.">
+                  <p className="text-[12px] leading-relaxed text-[color:var(--cl-muted-foreground)]">
+                    To{' '}
+                    <a
+                      href="https://www.linkedin.com/in/marc-bisiou"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="no-drag font-medium text-[color:var(--cl-primary)] transition-colors hover:underline"
+                    >
+                      Marc Bisiou
+                    </a>
+                    , patient zero: the first to test every build, and generous with the feedback and support
+                    that shaped this app.
+                  </p>
+                </Section>
                 <Section
                   title="Open-source licenses"
                   desc="Speech-transcription models bundled with this app, for full offline use — see THIRD_PARTY_NOTICES.md in the app's install directory for the complete text."
