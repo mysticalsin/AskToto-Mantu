@@ -3311,11 +3311,11 @@ function GraphSection({
   return (
     <Section
       title="Knowledge graph"
-      desc="Build a graph from your notes to see how meetings, people, and topics connect. Reuses your Claude / Claude Code key (no extra key, never Gemini)."
+      desc="See how your meetings, people, and topics connect. Uses your existing Claude or Claude Code sign-in, so there is no extra key to add."
     >
       <ToggleRow
         label="Build a knowledge graph of my notes"
-        desc="Runs graphify over your notes folder. Connections appear in Meeting history (the network icon on each note)."
+        desc="Links the people, deals, and topics across your saved meetings. Connections show up in Meeting history (the network icon on each note)."
         on={settings.graphifyEnabled}
         onChange={(v) => patch({ graphifyEnabled: v })}
       />
@@ -3329,25 +3329,19 @@ function GraphSection({
             {!status ? (
               'Checking…'
             ) : !status.installed ? (
-              <span className="text-[color:var(--cl-muted-foreground)]">graphify not found. Install it below.</span>
+              <span className="text-[color:var(--cl-muted-foreground)]">
+                Getting the graph ready. This happens once in the background and can take a minute.
+              </span>
             ) : status.building || busy ? (
               'Building the graph…'
             ) : status.hasGraph ? (
               <span className="text-[color:var(--cl-foreground)]">
-                {status.nodes ?? 0} nodes · {status.edges ?? 0} links{status.backend ? ` · ${status.backend}` : ''}
+                {status.nodes ?? 0} nodes · {status.edges ?? 0} links
               </span>
             ) : (
-              <span className="text-[color:var(--cl-muted-foreground)]">
-                No graph yet. Rebuild to create one{status.backend ? ` (via ${status.backend})` : ''}.
-              </span>
+              <span className="text-[color:var(--cl-muted-foreground)]">No graph yet. Select Rebuild to create one.</span>
             )}
           </div>
-          {status && !status.installed && (
-            <span className="text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
-              Install once: <code className="rounded bg-white/[0.08] px-1">pip install graphifyy</code> or{' '}
-              <code className="rounded bg-white/[0.08] px-1">uv tool install graphifyy</code>, then Rebuild.
-            </span>
-          )}
           <ToggleRow
             label="Auto-rebuild after each note"
             desc="Refresh the graph automatically (incremental) when a meeting or note is saved."
