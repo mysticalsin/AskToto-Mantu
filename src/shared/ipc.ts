@@ -372,9 +372,9 @@ export const BaseSettingsSchema = z.object({
   showLiveTranscript: z.boolean().default(false),
   meetingsFolder: z.string().default(''),
   autoSaveTranscripts: z.boolean().default(false),
-  // deprecated — kept so persisted settings/managed-config still parse. The auto-start-on-meeting-detected
-  // popup was removed (too intrusive); Listen is manual-only now (Bar button, ControlPill mic, hotkey).
-  autoStartOnMeeting: z.boolean().default(true),
+  // Gates the (popup-free) meeting watcher. OFF by default per Tony: detection is opt-in — the popup
+  // it once fed was removed as too intrusive; Listen is manual-only (Bar button, ControlPill mic, hotkey).
+  autoStartOnMeeting: z.boolean().default(false),
   launchAtLogin: z.boolean().default(false),
   onboardingDone: z.boolean().default(false),
   recordingConsent: z.boolean().default(false),
@@ -518,7 +518,7 @@ export const DEFAULT_SETTINGS: Settings = {
   showLiveTranscript: false,
   meetingsFolder: '',
   autoSaveTranscripts: false,
-  autoStartOnMeeting: true, // deprecated — kept so persisted settings/managed-config still parse
+  autoStartOnMeeting: false, // meeting detection is opt-in (gates the popup-free watcher)
   launchAtLogin: false,
   onboardingDone: false,
   recordingConsent: false,
