@@ -157,7 +157,7 @@ function GraphBar(): JSX.Element | null {
             {brain.deals > 0 ? ` · ${brain.deals} deals` : ''}
           </>
         ) : (
-          'Mantu Intelligence — build a brain from your meetings.'
+          'Mantu Intelligence: build a brain from your meetings.'
         )}
       </div>
       <div className="flex items-center gap-1">
@@ -691,7 +691,7 @@ export function RecallView({
             <button
               type="button"
               onClick={onIntelligence}
-              title="Mantu Intelligence — your meeting knowledge dashboard"
+              title="Mantu Intelligence: your meeting knowledge dashboard"
               className="no-drag focus-ring flex items-center gap-1.5 rounded-full bg-[var(--color-accent-soft)] px-2.5 py-1 text-[11px] font-semibold text-[color:var(--color-accent-2)] ring-1 ring-inset ring-[var(--color-accent)]/30 transition-colors hover:bg-[var(--color-accent)]/25"
             >
               <Brain size={12} strokeWidth={2.2} /> Intelligence

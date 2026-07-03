@@ -663,7 +663,7 @@ function AiSection({
           </div>
           {provider === 'anthropic' && (
             <p className="text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
-              Locked: base always answers as Haiku, thinking as Sonnet — a cost guardrail. Hard/coding
+              Locked: base always answers as Haiku, thinking as Sonnet, a cost guardrail. Hard/coding
               questions still escalate to Opus automatically; that tier isn't shown here.
             </p>
           )}
@@ -764,7 +764,7 @@ function AiSection({
 
       <ExpandableSection
         title="Experience: more models"
-        desc="Bring your own key from another provider, or try something different. Closed by default — Anthropic above covers most people."
+        desc="Bring your own key from another provider, or try something different. Closed by default; Anthropic above covers most people."
       >
         <Section title="Model provider" desc="Prefer a raw model? Pick one, paste a key, and AskToto detects the provider.">
           {PROVIDER_IDS.length > 8 && (
@@ -1350,7 +1350,7 @@ function BidstackCard({
         <div className="flex flex-col gap-0.5">
           <span className="text-[12px] font-medium text-[color:var(--cl-foreground)]">Polo Pre-Sales · your CRM</span>
           <span className="text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
-            Push meeting recaps to Polo Pre-Sales over its MCP server. Manual, review-first — nothing sends automatically.
+            Push meeting recaps to Polo Pre-Sales over its MCP server. Manual and review-first: nothing sends automatically.
           </span>
         </div>
         {connected ? (
@@ -1473,7 +1473,7 @@ function BidstackCard({
             </button>
           </div>
           <span className="text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
-            Request only the <code className="rounded bg-white/[0.08] px-1">mcp + write</code> scope — this is a
+            Request only the <code className="rounded bg-white/[0.08] px-1">mcp + write</code> scope. This is a
             push-only integration. The endpoint moves with wherever Polo Pre-Sales' backend actually runs; there is no
             built-in default beyond the local-dev placeholder shown above.
           </span>
@@ -2791,7 +2791,7 @@ export function Settings({
                   {settings.asrLastFallbackAt != null && (
                     <div className="-mt-1 flex items-center justify-between gap-2 pl-1 text-[12px] text-[color:var(--color-ink-3)]">
                       <span>
-                        Parakeet failed and auto-switched to Whisper for the rest of a recent meeting —{' '}
+                        Parakeet failed and auto-switched to Whisper for the rest of a recent meeting.{' '}
                         {new Date(settings.asrLastFallbackAt).toLocaleString()}.
                       </span>
                       <TextButton onClick={() => patch({ asrLastFallbackAt: null })}>Dismiss</TextButton>
@@ -2826,7 +2826,7 @@ export function Settings({
                     disabled={settings.managedKeys.includes('quickActionsRainbow')}
                   />
                 </Section>
-                <Section title="Vocabulary corrections" desc="Words the transcriber keeps getting wrong — always fix them.">
+                <Section title="Vocabulary corrections" desc="Words the transcriber keeps getting wrong. Fix them once, applied to every meeting.">
                   <textarea
                     value={settings.asrCorrections.map((c) => `${c.from} => ${c.to}`).join('\n')}
                     onChange={(e) =>
@@ -2874,7 +2874,7 @@ export function Settings({
                 </Section>
                 <Section
                   title="Recording consent"
-                  desc="This reminder is shown to YOU, the operator — it does not notify or ask the other participants. AskToto has no way to show anything to the other people on the call; getting their consent is on you, by whatever means your company policy or local law requires (verbal notice, a calendar invite disclosure, etc.)."
+                  desc="This reminder is shown to YOU, the operator. It does not notify or ask the other participants. AskToto has no way to show anything to the other people on the call; getting their consent is on you, by whatever means your company policy or local law requires (verbal notice, a calendar invite disclosure, etc.)."
                 >
                   <ToggleRow
                     label="I will inform participants before recording"
@@ -2893,7 +2893,7 @@ export function Settings({
                     <div className="mt-1.5 text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
                       Useful for regulated environments or when local law requires explicit notice. Note: this
                       also does not distinguish or flag sensitive topics (health, legal, financial) that come up
-                      in a recorded call — everything spoken is transcribed and treated the same way.
+                      in a recorded call; everything spoken is transcribed and treated the same way.
                     </div>
                   </ToggleRow>
                 </Section>
@@ -2906,7 +2906,7 @@ export function Settings({
                     disabled={settings.managedKeys.includes('redactSensitive')}
                   >
                     <div className="mt-1.5 text-[11px] leading-snug text-[color:var(--color-danger)]">
-                      This only scrubs text. Screenshots sent for screen-based questions are NOT redacted —
+                      This only scrubs text. Screenshots sent for screen-based questions are NOT redacted;
                       anything visible on-screen (passwords, IDs, open documents) goes to the provider as-is.
                       Turn on Private View before capturing a screen you don't want sent.
                     </div>
@@ -2977,7 +2977,7 @@ export function Settings({
                   )}
                   <ToggleRow
                     label="Encrypt transcripts at rest"
-                    desc="Locks saved transcripts/notes with your OS keychain so they're unreadable on disk. On by default. AskToto's own History, search, and follow-up drafting still work normally — only a separate tool reading the raw files directly (outside AskToto) would be blocked."
+                    desc="Locks saved transcripts/notes with your OS keychain so they're unreadable on disk. On by default. AskToto's own History, search, and follow-up drafting still work normally; only a separate tool reading the raw files directly (outside AskToto) would be blocked."
                     on={settings.encryptTranscripts}
                     onChange={(v) => patch({ encryptTranscripts: v })}
                     disabled={settings.managedKeys.includes('encryptTranscripts')}
@@ -3065,12 +3065,12 @@ export function Settings({
                 </Section>
                 <Section
                   title="Open-source licenses"
-                  desc="Speech-transcription models bundled with this app, for full offline use — see THIRD_PARTY_NOTICES.md in the app's install directory for the complete text."
+                  desc="Speech-transcription models bundled with this app, for full offline use. See THIRD_PARTY_NOTICES.md in the app's install directory for the complete text."
                 >
                   <ul className="flex flex-col gap-1 text-[12px] text-[color:var(--cl-muted-foreground)]">
-                    <li>Whisper base &amp; large-v3-turbo (OpenAI, via Xenova/onnx-community) — Apache License 2.0</li>
-                    <li>Parakeet TDT 0.6B v3 (NVIDIA, via k2-fsa/sherpa-onnx) — CC-BY-4.0</li>
-                    <li>ONNX Runtime Web (Microsoft / Hugging Face) — MIT License</li>
+                    <li>Whisper base &amp; large-v3-turbo (OpenAI, via Xenova/onnx-community): Apache License 2.0</li>
+                    <li>Parakeet TDT 0.6B v3 (NVIDIA, via k2-fsa/sherpa-onnx): CC-BY-4.0</li>
+                    <li>ONNX Runtime Web (Microsoft / Hugging Face): MIT License</li>
                   </ul>
                 </Section>
                 <div className="flex flex-col items-center gap-2.5 pb-2 pt-4">
@@ -3294,7 +3294,7 @@ function IntelligenceTab({
     <div className="flex flex-col gap-6">
       <Section
         title="Mantu Intelligence"
-        desc="Your meeting brain — dashboards and graphs built from every meeting AskToto has captured: pipeline, people, deals going cold, and the week's Mars draft."
+        desc="Your meeting brain: dashboards and graphs built from every meeting AskToto has captured, covering pipeline, people, deals going cold, and the week's Mars draft."
       >
         <div className="cl-card flex items-center gap-3 px-3 py-3">
           <MantuMark size={34} />
@@ -3324,7 +3324,7 @@ function IntelligenceTab({
             <div className="cl-card px-3 py-2.5 text-[12px] text-[color:var(--cl-muted-foreground)]">Loading…</div>
           ) : recent.length === 0 ? (
             <div className="cl-card px-3 py-2.5 text-[12px] text-[color:var(--cl-muted-foreground)]">
-              No meetings saved yet — they appear here as soon as one ends.
+              No meetings saved yet. They appear here as soon as one ends.
             </div>
           ) : (
             recent.map((m) => (
@@ -3757,7 +3757,7 @@ function DangerZoneSection({
   return (
     <Section
       title="Danger zone"
-      desc="Meeting recordings capture other people's speech too, not just yours — these controls bound or fully erase what's stored on this device."
+      desc="Meeting recordings capture other people's speech too, not just yours, so these controls bound or fully erase what's stored on this device."
     >
       <label className="mb-1 block text-[11px] font-medium text-[color:var(--cl-muted-foreground)]">
         Auto-delete meetings older than
@@ -3800,7 +3800,7 @@ function DangerZoneSection({
           ].join(' ')}
         >
           {result.error === 'cancelled'
-            ? 'Cancelled — nothing was deleted.'
+            ? 'Cancelled. Nothing was deleted.'
             : result.ok
               ? `Deleted ${result.deleted} meeting${result.deleted === 1 ? '' : 's'}.`
               : `Deleted ${result.deleted}, but some files could not be removed.`}
