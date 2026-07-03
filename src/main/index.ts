@@ -118,6 +118,7 @@ import {
   scheduleRebuild,
   purgeGraphArtifacts
 } from './graphify'
+import { runFirstRunBootstrap } from './bootstrap'
 import { SaveMeetingSchema, SaveNoteSchema } from '@shared/ipc'
 import { PROVIDERS, resolveModelTier, applyInteractiveGuardrail, type ProviderId } from '@shared/providers'
 import { routeTier } from '@shared/routing'
@@ -1943,6 +1944,14 @@ if (!app.requestSingleInstanceLock()) {
   // Resume an interrupted brain backfill (flag persists in .brain/index.json until the queue drains).
   // Delayed so the boot path and first paint never compete with background LLM extractions.
   setTimeout(() => resumeBackfillIfPending(), 15_000)
+
+  // First-run bootstrap: silently install the knowledge-graph engine (and preflight npm) in the
+  // background so that feature "just works" without ever asking the user to run a terminal command.
+  // Fire-and-forget, never rejects, self-limits to a few launches. Delayed so it never competes with
+  // boot or first paint. mainLog (electron-log) satisfies the BootstrapLogger info/warn/error shape.
+  setTimeout(() => {
+    void runFirstRunBootstrap({ userDataDir: app.getPath('userData'), log: mainLog })
+  }, 20_000)
 
   app.on('activate', () => {
     if (!win) createWindow()
