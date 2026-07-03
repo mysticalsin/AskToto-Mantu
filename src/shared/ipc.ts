@@ -377,6 +377,10 @@ export const BaseSettingsSchema = z.object({
   autoStartOnMeeting: z.boolean().default(false),
   launchAtLogin: z.boolean().default(false),
   onboardingDone: z.boolean().default(false),
+  // When onboarding finished (ms). Anchors the 10-minute "Add your API key" nudge so it expires on a
+  // wall clock instead of nagging forever, and survives relaunch (a per-session timer would reset it). 0
+  // = never finished (or a legacy profile that predates this field; the app backfills it once on load).
+  onboardingDoneAt: z.number().default(0),
   recordingConsent: z.boolean().default(false),
   playListenChime: z.boolean().default(true),
   soundCues: z.boolean().default(true), // subtle answer-ready / error sound cues
@@ -521,6 +525,7 @@ export const DEFAULT_SETTINGS: Settings = {
   autoStartOnMeeting: false, // meeting detection is opt-in (gates the popup-free watcher)
   launchAtLogin: false,
   onboardingDone: false,
+  onboardingDoneAt: 0,
   recordingConsent: false,
   playListenChime: true,
   soundCues: true,

@@ -181,6 +181,31 @@ export function App(): JSX.Element {
   // (e.g. no provider configured) so the redirect explains itself instead of looking broken.
   const [settingsNotice, setSettingsNotice] = useState<string | undefined>(undefined)
 
+  // The "Add your API key" nudge under the bar is a first-run courtesy, not a permanent nag. It shows
+  // while no provider is ready, but only for 10 minutes after onboarding — then it steps aside (Settings
+  // is always one M-logo click away). Anchored to the PERSISTED onboardingDoneAt so a relaunch can't
+  // restart the clock and nag forever; `nudgeExpired` flips it off live via a timeout even if the app
+  // sits idle past the mark.
+  const [nudgeExpired, setNudgeExpired] = useState(false)
+  const onboardingDoneAt = settings?.onboardingDoneAt ?? 0
+  useEffect(() => {
+    if (settings?.onboardingDone && !onboardingDoneAt) {
+      // Legacy profile that finished onboarding before this field existed: start the clock now (one
+      // write) so the nudge still auto-expires instead of lingering forever.
+      void patch({ onboardingDoneAt: Date.now() })
+      return
+    }
+    if (!onboardingDoneAt) return
+    const remaining = onboardingDoneAt + 10 * 60 * 1000 - Date.now()
+    if (remaining <= 0) {
+      setNudgeExpired(true)
+      return
+    }
+    setNudgeExpired(false)
+    const t = setTimeout(() => setNudgeExpired(true), remaining)
+    return () => clearTimeout(t)
+  }, [settings?.onboardingDone, onboardingDoneAt, patch])
+
   const mode: ConversationMode = settings?.mode ?? 'general'
   const lastSuggestRef = useRef(0)
   const historyRef = useRef<ChatTurn[]>([]) // multi-turn memory for plain Ask follow-ups
@@ -1608,7 +1633,7 @@ export function App(): JSX.Element {
               {listen.error}
             </div>
           )}
-          {settings && !settings.providerReady && (() => {
+          {settings && !settings.providerReady && !nudgeExpired && (() => {
             const activeDef = PROVIDERS[settings.provider]
             const cta = activeDef.kind === 'cli'
               ? `Connect ${activeDef.label} in Settings`
