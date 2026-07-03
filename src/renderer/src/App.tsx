@@ -294,9 +294,14 @@ export function App(): JSX.Element {
   const answerError = ask.answer?.error ?? null
   useEffect(() => {
     if (view !== 'review') return
-    // Every meeting that produced a recap is saved (Tony: a started meeting is always kept). The
-    // autoSaveTranscripts toggle no longer gates this — abandoned meetings are saved separately on exit.
-    if (answerStreaming || !answerText || answerError) return
+    // Persist the meeting once the recap attempt has SETTLED — whether it produced a summary or failed.
+    // The transcript comes from on-device speech recognition and needs no API key, so a keyless session
+    // (recap errors for want of a provider) must still keep its transcript; we just save it with an empty
+    // recap instead of dropping the whole meeting. A settled attempt = not streaming AND has either text
+    // (success) or an error; a null answer (no recap run, e.g. a silent session) falls through to the
+    // exit-path saveMeetingNow. The autoSaveTranscripts toggle no longer gates this.
+    const settled = !answerStreaming && (!!answerText || !!answerError)
+    if (!settled) return
     if (!listen.lines.length) return
     const id = String(meetingStartRef.current)
     if (savedRef.current === id || savingRef.current) return
@@ -316,7 +321,9 @@ export function App(): JSX.Element {
           mode,
           startedAt: meetingStartRef.current,
           lines: listen.lines,
-          recap: answerText
+          // Save the summary when we have one; a keyless (errored) recap saves an empty summary so the
+          // transcript is still kept. The Review screen shows the transcript from lines either way.
+          recap: answerError ? '' : answerText
         })
         savedRef.current = id // pin only on success → failure can retry
         setSavedPath(r.path)
@@ -1360,7 +1367,7 @@ export function App(): JSX.Element {
           saveAttempts={pm ? 0 : saveAttempts}
           maxSaveAttempts={MAX_SAVE_RETRIES}
           startedAt={pm ? pm.startedAt : meetingStartRef.current}
-          showTranscript={pm ? true : (settings?.showFullTranscriptInReview ?? false)}
+          showTranscript={settings?.showFullTranscriptInReview ?? false}
           meetingMeta={pm ? { title: pm.title, date: pm.date } : undefined}
           followupDraft={followup.answer}
           onGenerateFollowup={generateFollowup}
