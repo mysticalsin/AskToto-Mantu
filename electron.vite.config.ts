@@ -1,11 +1,15 @@
 import { resolve } from 'path'
-import { defineConfig, externalizeDepsPlugin } from 'electron-vite'
+import { defineConfig, externalizeDepsPlugin, bytecodePlugin } from 'electron-vite'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 
 export default defineConfig({
   main: {
-    plugins: [externalizeDepsPlugin()],
+    // bytecodePlugin compiles the main-process bundle to V8 bytecode (.jsc): the shipped app carries
+    // no readable main-process JS at all — prompts, brain/ingest logic, and LLM orchestration can't be
+    // read out of the asar. Renderer/preload stay minified-only (a sandboxed preload and a Chromium
+    // renderer can't load bytecode). This is a hardening bar, not absolute protection.
+    plugins: [externalizeDepsPlugin(), bytecodePlugin()],
     build: {
       rollupOptions: { input: { index: resolve(__dirname, 'src/main/index.ts') } }
     },
