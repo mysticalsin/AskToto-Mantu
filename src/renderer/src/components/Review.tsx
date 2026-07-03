@@ -564,10 +564,16 @@ export const Review = memo(function Review({
               )}
 
               <div className="flex items-center gap-1.5">
-                <Chip onClick={() => void sendToCrm()} variant="accent">
-                  {pushState.phase === 'sending' ? <Spinner size={13} /> : <Send size={13} />}
-                  {pushState.phase === 'sending' ? 'Pushing…' : 'Confirm push'}
-                </Chip>
+                {/* Only render Confirm push when there is a tool to push to. With a zero-tool key scope the
+                    tool picker never renders and pushTool stays '', so sendToCrm() would return at its
+                    `if (!pushTool)` guard — a dead click with no feedback. Gating the Chip here leaves only
+                    Cancel plus the "reported no tools" note, so the button is never a silent no-op. */}
+                {pushTool && (
+                  <Chip onClick={() => void sendToCrm()} variant="accent">
+                    {pushState.phase === 'sending' ? <Spinner size={13} /> : <Send size={13} />}
+                    {pushState.phase === 'sending' ? 'Pushing…' : 'Confirm push'}
+                  </Chip>
+                )}
                 <TextButton
                   onClick={() => {
                     setPushOpen(false)
