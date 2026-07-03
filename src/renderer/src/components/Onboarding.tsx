@@ -19,6 +19,7 @@ import type { PublicSettings, Profile, PlatformPermissions } from '@shared/ipc'
 import type { ProviderId } from '@shared/providers'
 import { PROVIDERS } from '@shared/providers'
 import { MantuLogo } from './MantuLogo'
+import { accelLabel } from '../lib/keys'
 
 /** Microsoft 4-square glyph (no lucide equivalent). */
 function MsLogo({ size = 16 }: { size?: number }): JSX.Element {
@@ -218,8 +219,8 @@ export function Onboarding({
       <div className="fade-up flex min-h-[300px] w-full flex-col items-center gap-5 px-4 py-7 text-center">
         <div className="font-ui text-[18px] font-semibold tracking-tight text-[color:var(--color-ink)]">Ask + capture</div>
         <div className="flex w-full max-w-[460px] flex-col gap-3 rounded-xl border border-[var(--color-hair-soft)] bg-white/[0.02] p-4">
-          <ActionRow icon={Sparkles} label="Ask anything" keys="⌘⇧↵" hint="Type a question, or capture your screen for visual help." />
-          <ActionRow icon={Camera} label="Capture screen" keys="⌘⇧S" hint="Get instant help with whatever you’re looking at." />
+          <ActionRow icon={Sparkles} label="Ask anything" keys={accelLabel('CommandOrControl+Shift+Return')} hint="Type a question, or capture your screen for visual help." />
+          <ActionRow icon={Camera} label="Capture screen" keys={accelLabel('CommandOrControl+Shift+S')} hint="Get instant help with whatever you’re looking at." />
           <ActionRow icon={Zap} label="Quick actions" hint="One-tap chips: What to say next · Fact-check · Explain · Summarize." />
         </div>
         <WalkNav step={2} onBack={() => setStep(1)} onNext={() => setStep(3)} />

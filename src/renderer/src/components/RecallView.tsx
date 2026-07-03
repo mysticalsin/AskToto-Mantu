@@ -12,6 +12,7 @@ import {
   Brain
 } from 'lucide-react'
 import { TextButton } from './ui'
+import { accelLabel } from '../lib/keys'
 import type {
   MeetingSummary,
   RecallHit,
@@ -701,7 +702,7 @@ export function RecallView({
         {onNewChat && (
           <TextButton onClick={onNewChat}>
             New chat
-            <kbd className="rounded bg-white/[0.06] px-1 py-0.5 text-[10px] text-[color:var(--color-ink-3)]">⌘R</kbd>
+            <kbd className="rounded bg-white/[0.06] px-1 py-0.5 text-[10px] text-[color:var(--color-ink-3)]">{accelLabel('CommandOrControl+R')}</kbd>
           </TextButton>
         )}
       </div>

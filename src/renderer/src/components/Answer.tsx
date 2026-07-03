@@ -3,6 +3,7 @@ import { Copy, Check, RefreshCw, FileDown, ShieldCheck, ChevronsDown, ThumbsUp, 
 import { Markdown } from './Markdown'
 import { TextButton } from './ui'
 import { useFlash } from '../lib/useFlash'
+import { accelLabel } from '../lib/keys'
 
 function Skeleton(): JSX.Element {
   return (
@@ -242,7 +243,7 @@ export const Answer = memo(function Answer({
       <div className="fade-up mx-auto max-w-[620px] flex flex-col gap-2">
         {header}
         <div className="rounded-lg border border-[var(--color-hair-soft)] bg-white/[0.03] px-3 py-6 text-center text-[13px] text-[color:var(--color-ink-2)]">
-          Ask a question or press ⌘⇧S to capture your screen.
+          Ask a question or press {accelLabel('CommandOrControl+Shift+S')} to capture your screen.
         </div>
       </div>
     )

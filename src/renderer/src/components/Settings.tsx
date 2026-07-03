@@ -79,6 +79,7 @@ import { MantuMark } from './MantuMark'
 import { FieldHint, TextButton } from './ui'
 import { AgendaView } from './AgendaView'
 import { usePermissions } from '../state'
+import { displayAccelerator } from '../lib/keys'
 
 const ctl =
   'no-drag font-body cl-input cl-focus px-3 py-2.5 text-[13px] text-[color:var(--cl-foreground)]'
@@ -4077,16 +4078,6 @@ const SHORTCUT_ICONS: Partial<Record<HotkeyAction, LucideIcon>> = {
   'scroll-right': ArrowRight
 }
 
-function displayAccelerator(a: string): string {
-  return a
-    .replace(/CommandOrControl/g, '⌘')
-    .replace(/Command/g, '⌘')
-    .replace(/Control/g, 'Ctrl')
-    .replace(/Shift/g, '⇧')
-    .replace(/Alt/g, '⌥')
-    .replace(/Return/g, '↵')
-    .replace(/\\/g, '\\')
-}
 
 // Maps a KeyboardEvent key value to the Electron accelerator token.
 // Lone modifiers, PrintScreen, etc. are not valid as the main key.
