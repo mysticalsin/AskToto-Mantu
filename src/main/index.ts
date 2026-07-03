@@ -1669,7 +1669,12 @@ function registerIpc(): void {
     assertMainWindow(e)
     if (!requireAuth()) return ''
     const folder = resolveMeetingsFolder(getSettings())
-    const path = join(folder, basename(String(file ?? ''))) // basename blocks traversal
+    const safeName = basename(String(file ?? '')) // basename blocks traversal
+    // Only ever open AskToto's own .md meeting transcripts. The meetings folder is user-chosen
+    // (could be Desktop/Downloads), and shell.openPath launches the OS handler for whatever it finds,
+    // which would execute a .command/.app/.exe. Mirror deleteMeeting()/debriefSave()'s .md guard.
+    if (!safeName.endsWith('.md') || safeName === 'index.md' || safeName === 'README.md') return ''
+    const path = join(folder, safeName)
     const encrypted = isEncryptedFile(path)
     auditLog('recall.open', { encrypted })
     // Encrypted transcripts are unreadable in an editor — open a decrypted temp copy instead.
@@ -1933,6 +1938,9 @@ if (!app.requestSingleInstanceLock()) {
     protocol.handle('asr-model', async (req) => {
       try {
         const url = new URL(req.url)
+        // Restrict to the two roots this protocol is meant to serve. Without this, app.asar and other
+        // resourcesPath siblings resolve inside RES_BASE too and would be served as raw source bytes.
+        if (url.host !== 'models' && url.host !== 'ort') return new Response(null, { status: 403 })
         // url.host = e.g. "models" or "ort"; url.pathname = e.g. "/Xenova/whisper-base/config.json"
         const rel = decodeURIComponent(url.host + url.pathname)
         const abs = resolve(RES_BASE, rel)
