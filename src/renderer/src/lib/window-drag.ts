@@ -116,9 +116,13 @@ export function useWindowDrag(
       // this window is frameless+transparent so that CSS property genuinely drives an OS-level drag.
       // Since the app-level instance now wraps that header too, excluding `.drag` here stops the two
       // mechanisms from BOTH firing on the same gesture and doubling every moveBy delta.
+      // `a` (any link) is excluded in BOTH modes: an anchor is inherently a control you click to
+      // navigate, never a drag handle, so grabbing one must never arm a window drag. This is the root
+      // guard for the whole class of "link swallowed by a drifted click" bug — it makes every link
+      // safe by default, even ones that forgot the explicit `no-drag` hint, present and future.
       const exclude = armOnControls
-        ? 'input, textarea, [contenteditable=""], [contenteditable="true"]'
-        : '.no-drag, .drag, input, textarea, [contenteditable=""], [contenteditable="true"]'
+        ? 'a, input, textarea, [contenteditable=""], [contenteditable="true"]'
+        : 'a, .no-drag, .drag, input, textarea, [contenteditable=""], [contenteditable="true"]'
       if ((e.target as HTMLElement).closest(exclude)) {
         return
       }
