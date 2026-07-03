@@ -253,7 +253,7 @@ export function Onboarding({
       await patch({ onboardingDone: true, onboardingDoneAt: Date.now(), recordingConsent })
       onDone()
     } catch (e) {
-      setFinishErr(`Couldn't save your setup — ${e instanceof Error ? e.message : String(e)}`)
+      setFinishErr(`Couldn't save your setup. ${e instanceof Error ? e.message : String(e)}`)
     }
   }
 
@@ -350,7 +350,7 @@ export function Onboarding({
           onClick={() => setStep(6)}
           className="no-drag focus-ring inline-flex items-center gap-1 text-[12px] text-[color:var(--color-ink-3)] hover:text-[color:var(--color-ink-2)]"
         >
-          Decide later — recording and transcripts still work <ArrowRight size={11} />
+          Decide later; recording and transcripts still work <ArrowRight size={11} />
         </button>
         <button
           type="button"

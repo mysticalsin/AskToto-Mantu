@@ -22,23 +22,23 @@ const PARAKEET_EMPTY_RUN_MAX = 5 // consecutive '' returns on flowing audio → 
 const THEM_WATCHDOG_MS = 20_000 // 20 s with the 'them' channel open but no window emitted → surface soft note
 // Exact text of the soft "not hearing the other side" note, shared by the watchdog (sets it) and the
 // first-'them'-emission handler (clears it) so loopback arriving AFTER the watchdog fired isn't left stuck.
-const THEM_SILENT_MSG = 'Not hearing the other side — check the call volume and that Screen Recording is granted.'
+const THEM_SILENT_MSG = 'Not hearing the other side. Check the call volume and that Screen Recording is granted.'
 // Silent-capture-death recovery notes. A Bluetooth headset disconnect, default-device change, or
 // lid-close sleep kills a capture track with no error anywhere — the UI kept saying "Listening" while
 // a whole side of the meeting was silently lost. Matched by exact string (same contract as the notes above).
-const MIC_LOST_MSG = 'Microphone input stopped (device disconnected or sleep) — reconnecting automatically…'
+const MIC_LOST_MSG = 'Microphone input stopped (device disconnected or sleep); reconnecting automatically…'
 const THEM_LOST_MSG =
-  'System-audio capture stopped (display sleep or a device change) — toggle Listen to restart it.'
+  'System-audio capture stopped (display sleep or a device change). Toggle Listen to restart it.'
 // Backpressure became user-visible truncation: transcription fell behind capture long enough that
 // audio windows were discarded. Exact-string contract like the other sticky notes.
-const DROPPED_MSG = 'Transcription fell behind — some audio was skipped. The transcript may have gaps.'
+const DROPPED_MSG = 'Transcription fell behind, so some audio was skipped. The transcript may have gaps.'
 // Exact text of the "offline, waiting to reconnect" / "reconnected, restarting" notes, shared by
 // armNetworkRetry (sets them) and the worker's 'ready' handler (clears them once recovery succeeds) —
 // matched by exact string so other sticky notes (THEM_SILENT_MSG, the Parakeet-fallback footnote) are
 // never accidentally cleared by a network recovery that has nothing to do with them.
 const OFFLINE_MSG =
-  "No internet connection — the speech model is paused and will restart automatically once you're back online."
-const RECONNECTING_MSG = 'Back online — restarting the speech model…'
+  "No internet connection. The speech model is paused and will restart automatically once you're back online."
+const RECONNECTING_MSG = 'Back online. Restarting the speech model…'
 // A model-load failure that looks connectivity-related (DNS/fetch/ECONNREFUSED-style messages
 // transformers.js/fetch surface), so it can be distinguished from a genuine non-network load failure
 // (e.g. a missing bundled file) — which should surface as-is instead of wrongly claiming "you're offline".
@@ -803,7 +803,7 @@ export function useListen(
           let msg: string
           if (source === 'system') {
             msg = isSysPermDenied
-              ? 'System audio needs Screen Recording permission — grant it in System Settings → Privacy & Security → Screen Recording, then restart Listen.'
+              ? 'System audio needs Screen Recording permission. Grant it in System Settings → Privacy & Security → Screen Recording, then restart Listen.'
               : "Couldn't capture system audio. Grant Screen Recording in System Settings, or switch Listen to your microphone in Settings → Audio."
           } else {
             msg = "Couldn't start the microphone. Check Microphone access in System Settings → Privacy & Security → Microphone."
@@ -825,7 +825,7 @@ export function useListen(
         let note: string | null = null
         if (source === 'both' && micOk && !sysOk) {
           note = isSysPermDenied
-            ? 'System audio needs Screen Recording permission. Listening to microphone only — grant it in System Settings → Privacy & Security → Screen Recording, then restart Listen.'
+            ? 'System audio needs Screen Recording permission. Listening to microphone only; grant it in System Settings → Privacy & Security → Screen Recording, then restart Listen.'
             : 'System audio unavailable. Listening to your microphone only. Grant Screen Recording to hear the other side.'
         } else if (source === 'both' && !micOk && sysOk) {
           note = 'Microphone unavailable. Listening to system audio only.'

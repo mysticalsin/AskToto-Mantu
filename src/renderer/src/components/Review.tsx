@@ -370,7 +370,7 @@ export const Review = memo(function Review({
       {savedPath && !meetingMeta && (
         <div className="rounded-xl border border-[var(--color-hair-soft)] bg-white/[0.02] px-3 py-2.5">
           <div className="mb-1.5 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-[color:var(--color-ink-3)]">
-            <EarOff size={12} /> 90-second debrief — off the record
+            <EarOff size={12} /> 90-second debrief, off the record
           </div>
           {debriefState === 'saved' ? (
             <div className="flex items-center gap-2 text-[12px] text-[color:var(--color-ink-2)]">
@@ -388,7 +388,7 @@ export const Review = memo(function Review({
               />
               <div className="mt-1.5 flex items-center justify-between">
                 <span className="text-[10px] text-[color:var(--color-ink-3)]">
-                  {debriefState === 'error' ? 'Could not save — try again.' : 'Impressions, not transcript. 90 seconds, then move on.'}
+                  {debriefState === 'error' ? 'Could not save. Try again.' : 'Impressions, not transcript. 90 seconds, then move on.'}
                 </span>
                 <TextButton onClick={() => void saveDebrief()} disabled={!debrief.trim() || debriefState === 'saving'}>
                   {debriefState === 'saving' ? <Spinner size={11} /> : <Save size={11} />}
@@ -482,7 +482,7 @@ export const Review = memo(function Review({
               </div>
               {mailError && <div className="text-[11px] text-[var(--color-danger)]">{mailError}</div>}
               <div className="text-[11px] text-[color:var(--color-ink-3)]">
-                Review before sending — attach anything promised manually for now.
+                Review before sending, and attach anything promised manually for now.
               </div>
             </div>
           ) : null}
@@ -529,7 +529,7 @@ export const Review = memo(function Review({
                 </label>
               ) : (
                 <div className="text-[11px] text-[color:var(--color-danger)]">
-                  Polo Pre-Sales reported no tools for this key's scope — nothing to push to. Check the key's
+                  Polo Pre-Sales reported no tools for this key's scope, so there is nothing to push to. Check the key's
                   scopes in Settings.
                 </div>
               )}

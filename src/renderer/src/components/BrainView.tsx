@@ -441,7 +441,7 @@ export function BrainView({ onBack }: { onBack: () => void }): JSX.Element {
             Mantu Intelligence
           </div>
           <div className="text-[11px] text-[color:var(--color-ink-3)]">
-            Your meeting knowledge, compounding — grounded in transcripts, never invented.
+            Your meeting knowledge, compounding. Grounded in transcripts, never invented.
           </div>
         </div>
         <button
@@ -573,7 +573,7 @@ export function BrainView({ onBack }: { onBack: () => void }): JSX.Element {
                         <button
                           type="button"
                           aria-label="Mark kept"
-                          title="Kept — promise delivered"
+                          title="Kept: promise delivered"
                           onClick={() => void settlePromise(c.deal, c.text, 'kept')}
                           className="no-drag focus-ring grid h-5 w-5 place-items-center rounded text-[color:var(--color-ink-3)] hover:bg-white/10 hover:text-[var(--color-success)]"
                         >
@@ -582,7 +582,7 @@ export function BrainView({ onBack }: { onBack: () => void }): JSX.Element {
                         <button
                           type="button"
                           aria-label="Mark broken"
-                          title="Broken — promise not delivered"
+                          title="Broken: promise not delivered"
                           onClick={() => void settlePromise(c.deal, c.text, 'broken')}
                           className="no-drag focus-ring grid h-5 w-5 place-items-center rounded text-[color:var(--color-ink-3)] hover:bg-white/10 hover:text-[var(--color-danger)]"
                         >
@@ -602,7 +602,7 @@ export function BrainView({ onBack }: { onBack: () => void }): JSX.Element {
               <div className="mb-1.5 flex items-center justify-between">
                 <SectionTitle>
                   <ClipboardList size={11} className="mr-1 inline" />
-                  Mars week — {mars.weekStart} → {mars.weekEnd}
+                  Mars week: {mars.weekStart} → {mars.weekEnd}
                 </SectionTitle>
                 <button
                   type="button"
@@ -694,7 +694,7 @@ export function BrainView({ onBack }: { onBack: () => void }): JSX.Element {
                 </div>
               )}
               <div className="mt-1.5 text-[10px] text-[color:var(--color-ink-3)]">
-                Facts from recorded meetings — the Mars bucket (prospection / cold call / QM) is yours to confirm.
+                Facts from recorded meetings. The Mars bucket (prospection / cold call / QM) is yours to confirm.
               </div>
             </div>
           )}
@@ -704,7 +704,7 @@ export function BrainView({ onBack }: { onBack: () => void }): JSX.Element {
             <div className="rounded-xl border border-[var(--color-hair-soft)] bg-white/[0.02] px-3 py-2.5">
               <SectionTitle>
                 <VolumeX size={11} className="mr-1 inline" />
-                Going quiet — what accounts stopped saying
+                Going quiet: what accounts stopped saying
               </SectionTitle>
               <div className="flex flex-col gap-1.5">
                 {silence.map((s) => (
@@ -757,7 +757,7 @@ export function BrainView({ onBack }: { onBack: () => void }): JSX.Element {
           {/* PREDICTIVE — opportunities */}
           {deals.length > 0 && (
             <div>
-              <SectionTitle>Opportunities — win read &amp; momentum</SectionTitle>
+              <SectionTitle>Opportunities: win read &amp; momentum</SectionTitle>
               <div className="flex flex-col gap-1.5">
                 {deals.map((d) => (
                   <DealRow key={d.name + d.account} deal={d} onSetOutcome={handleSetDealOutcome} />
@@ -781,7 +781,7 @@ export function BrainView({ onBack }: { onBack: () => void }): JSX.Element {
                       {(p.role || p.account) && (
                         <span className="text-[color:var(--color-ink-3)]">
                           {' '}
-                          — {[p.role, p.account].filter(Boolean).join(' @ ')}
+                          {[p.role, p.account].filter(Boolean).join(' @ ')}
                         </span>
                       )}
                     </span>
@@ -794,7 +794,7 @@ export function BrainView({ onBack }: { onBack: () => void }): JSX.Element {
                       return (
                         <span
                           className="shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold"
-                          title={`${kept} kept, ${broken} broken — settled promises only`}
+                          title={`${kept} kept, ${broken} broken (settled promises only)`}
                           style={{
                             color: broken > kept ? 'var(--color-danger)' : 'var(--color-success)',
                             background: 'rgba(255,255,255,0.05)'
