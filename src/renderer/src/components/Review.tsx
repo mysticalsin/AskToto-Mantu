@@ -266,6 +266,7 @@ export const Review = memo(function Review({
   )
 
   const sendToCrm = async (): Promise<void> => {
+    if (pushState.phase === 'sending') return
     if (!pushTool) return
     setPushState({ phase: 'sending', error: null })
     const r = await window.toto.mcpCrmPush({ toolName: pushTool, args: crmPayload })
@@ -569,7 +570,11 @@ export const Review = memo(function Review({
                     `if (!pushTool)` guard — a dead click with no feedback. Gating the Chip here leaves only
                     Cancel plus the "reported no tools" note, so the button is never a silent no-op. */}
                 {pushTool && (
-                  <Chip onClick={() => void sendToCrm()} variant="accent">
+                  <Chip
+                    onClick={() => void sendToCrm()}
+                    variant="accent"
+                    disabled={pushState.phase === 'sending'}
+                  >
                     {pushState.phase === 'sending' ? <Spinner size={13} /> : <Send size={13} />}
                     {pushState.phase === 'sending' ? 'Pushing…' : 'Confirm push'}
                   </Chip>

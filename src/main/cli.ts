@@ -19,6 +19,7 @@ import { tmpdir } from 'node:os'
 import { createInterface } from 'node:readline'
 import { app, shell } from 'electron'
 import { existsSync, writeFileSync } from 'node:fs'
+import { randomBytes } from 'node:crypto'
 import type { ProviderId } from '@shared/providers'
 import { PROVIDERS } from '@shared/providers'
 import type { CliActionResult, CliInstallResult } from '@shared/ipc'
@@ -690,8 +691,8 @@ export async function setupCli(provider: ProviderId): Promise<{ ok: boolean; err
 
   try {
     const script = scriptLines.join('\n') + '\n'
-    const scriptPath = join(app.getPath('temp'), `asktoto-${provider}-setup.${isWin ? 'cmd' : 'command'}`)
-    writeFileSync(scriptPath, script, { mode: 0o755 })
+    const scriptPath = join(app.getPath('temp'), `asktoto-${provider}-setup-${randomBytes(8).toString('hex')}.${isWin ? 'cmd' : 'command'}`)
+    writeFileSync(scriptPath, script, { mode: 0o755, flag: 'wx' })
     const err = await shell.openPath(scriptPath)
     if (err) return { ok: false, error: err }
     return { ok: true }
@@ -899,8 +900,8 @@ export async function loginCli(provider: ProviderId): Promise<{ ok: boolean; err
 
   try {
     const script = scriptLines.join('\n') + '\n'
-    const scriptPath = join(app.getPath('temp'), `asktoto-${provider}-login.${isWin ? 'cmd' : 'command'}`)
-    writeFileSync(scriptPath, script, { mode: 0o755 })
+    const scriptPath = join(app.getPath('temp'), `asktoto-${provider}-login-${randomBytes(8).toString('hex')}.${isWin ? 'cmd' : 'command'}`)
+    writeFileSync(scriptPath, script, { mode: 0o755, flag: 'wx' })
     const err = await shell.openPath(scriptPath)
     if (err) return { ok: false, error: err }
     return { ok: true }

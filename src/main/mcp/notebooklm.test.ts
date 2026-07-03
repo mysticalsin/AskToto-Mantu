@@ -160,7 +160,9 @@ describe('installNotebookLmCli', () => {
     h.execFileImpl.mockRejectedValue(new Error('command not found')) // nlm AND every manager miss
     const r = await installNotebookLmCli(vi.fn())
     expect(r.ok).toBe(false)
-    expect(r.error).toMatch(/uv/i)
+    // Plain-language, IT-facing copy — no Python-packaging jargon leaks to a non-technical user.
+    expect(r.error).toMatch(/could not set up|IT team/i)
+    expect(r.error).not.toMatch(/\b(uv|pipx|pip|astral)\b/i)
     expect(h.spawnImpl).not.toHaveBeenCalled()
   })
 

@@ -39,6 +39,15 @@ function isShellProbe(args: string[], command: string): boolean {
   return Array.isArray(args) && args.includes(command)
 }
 
+/**
+ * True when a login-shell run (`['-lc', '<cmdline>']`) invokes `binary` as the first word of its
+ * command line — i.e. an installer step. POSIX installs run through `$SHELL -lc "uv tool install …"`
+ * (bootstrap.ts platformRun), so the binary is inside args[1], not the spawn's `cmd`.
+ */
+function isShellRun(args: string[], binary: string): boolean {
+  return Array.isArray(args) && args[0] === '-lc' && typeof args[1] === 'string' && args[1].startsWith(binary + ' ')
+}
+
 // ─── Pure helpers — no mocking needed ────────────────────────────────────────────────────────────
 
 describe('parseWhereLines — Windows `where` stdout parsing (probe parsing)', () => {
@@ -166,7 +175,7 @@ describe('runFirstRunBootstrap — darwin: already installed', () => {
     expect(state.attempts).toBe(0) // detection-only — no install attempt was spent
     expect(state.lastAttempt).toBeNull()
     // No installer binary (uv/pip3) was ever invoked.
-    expect(h.execFileImpl.mock.calls.some((c) => c[0] === 'uv' || c[0] === 'pip3')).toBe(false)
+    expect(h.execFileImpl.mock.calls.some((c) => isShellRun(c[1], 'uv') || isShellRun(c[1], 'pip3'))).toBe(false)
     // The write is atomic: no orphaned .tmp file left behind.
     expect(existsSync(join(dir, 'bootstrap.json.tmp'))).toBe(false)
   })
@@ -205,12 +214,12 @@ describe('runFirstRunBootstrap — darwin: installer-order fallback', () => {
       if (isShellProbe(args, 'graphify --version')) {
         return graphifyInstalled ? Promise.resolve({ stdout: 'v1', stderr: '' }) : Promise.reject(new Error('not found'))
       }
-      if (cmd === 'uv') return Promise.reject(new Error('command not found: uv'))
-      if (cmd === 'pip3') {
+      if (isShellRun(args, 'uv')) return Promise.reject(new Error('command not found: uv'))
+      if (isShellRun(args, 'pip3')) {
         graphifyInstalled = true
         return Promise.resolve({ stdout: 'Successfully installed graphifyy', stderr: '' })
       }
-      return Promise.reject(new Error(`unexpected spawn: ${cmd}`))
+      return Promise.reject(new Error(`unexpected spawn: ${cmd} ${JSON.stringify(args)}`))
     })
     const log = makeLog()
 
@@ -223,8 +232,8 @@ describe('runFirstRunBootstrap — darwin: installer-order fallback', () => {
     expect(state.lastAttempt).not.toBeNull()
 
     // uv was tried before pip3 (fallback order preserved).
-    const uvIdx = h.execFileImpl.mock.calls.findIndex((c) => c[0] === 'uv')
-    const pip3Idx = h.execFileImpl.mock.calls.findIndex((c) => c[0] === 'pip3')
+    const uvIdx = h.execFileImpl.mock.calls.findIndex((c) => isShellRun(c[1], 'uv'))
+    const pip3Idx = h.execFileImpl.mock.calls.findIndex((c) => isShellRun(c[1], 'pip3'))
     expect(uvIdx).toBeGreaterThanOrEqual(0)
     expect(pip3Idx).toBeGreaterThan(uvIdx)
   })
@@ -233,9 +242,9 @@ describe('runFirstRunBootstrap — darwin: installer-order fallback', () => {
     h.execFileImpl.mockImplementation((cmd: string, args: string[]) => {
       if (isShellProbe(args, 'command -v npm')) return Promise.resolve({ stdout: 'found', stderr: '' })
       if (isShellProbe(args, 'graphify --version')) return Promise.reject(new Error('not found'))
-      if (cmd === 'uv') return Promise.reject(new Error('command not found: uv'))
-      if (cmd === 'pip3') return Promise.reject(new Error('pip3: permission denied'))
-      return Promise.reject(new Error(`unexpected spawn: ${cmd}`))
+      if (isShellRun(args, 'uv')) return Promise.reject(new Error('command not found: uv'))
+      if (isShellRun(args, 'pip3')) return Promise.reject(new Error('pip3: permission denied'))
+      return Promise.reject(new Error(`unexpected spawn: ${cmd} ${JSON.stringify(args)}`))
     })
     const log = makeLog()
 
@@ -268,7 +277,7 @@ describe('runFirstRunBootstrap — retry budget across simulated app launches', 
   it('attempts once per simulated launch, up to MAX_LAUNCH_ATTEMPTS, then stops spawning installers', async () => {
     const log = makeLog()
     const installCallCount = (): number =>
-      h.execFileImpl.mock.calls.filter((c) => c[0] === 'uv' || c[0] === 'pip3').length
+      h.execFileImpl.mock.calls.filter((c) => isShellRun(c[1], 'uv') || isShellRun(c[1], 'pip3')).length
 
     for (let launch = 1; launch <= MAX_LAUNCH_ATTEMPTS; launch++) {
       await runFirstRunBootstrap({ userDataDir: dir, log, now: () => 1000 * launch })

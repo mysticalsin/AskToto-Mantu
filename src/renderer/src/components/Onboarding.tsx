@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import {
   ShieldCheck,
   ArrowRight,
@@ -108,12 +108,15 @@ function CheckRow({
   denied,
   label,
   hint,
+  note,
   onFix
 }: {
   ok: boolean
   denied?: boolean
   label: string
   hint: string
+  /** Neutral copy shown even when `ok` is true (e.g. Windows' "we'll ask you later" note). */
+  note?: string
   onFix?: () => void
 }): JSX.Element {
   return (
@@ -127,6 +130,7 @@ function CheckRow({
       </span>
       <div className="text-left">
         <span className="text-[12px] font-medium text-[color:var(--color-ink)]">{label}</span>
+        {ok && note && <span className="ml-1.5 text-[11px] text-[color:var(--color-ink-2)]">{note}</span>}
         {!ok && <span className="ml-1.5 text-[11px] text-[color:var(--color-ink-2)]">{hint}</span>}
         {!ok && denied && onFix && (
           <button
@@ -204,6 +208,13 @@ export function Onboarding({
   const [finishErr, setFinishErr] = useState('')
   const [step, setStep] = useState<1 | 2 | 3 | 4 | 5 | 6>(1)
   const [perms, setPerms] = useState<PlatformPermissions | null>(null)
+  const headingRef = useRef<HTMLHeadingElement | null>(null)
+
+  // Move focus to the new step's heading on every transition so screen readers announce it instead of
+  // silently dropping focus to <body>.
+  useEffect(() => {
+    headingRef.current?.focus()
+  }, [step])
 
   // Pull live permission status when the final checklist appears (and refresh shortly after, since the
   // user may grant access in System Settings while this is open).
@@ -260,7 +271,13 @@ export function Onboarding({
   if (step === 2) {
     return (
       <div className="fade-up flex min-h-[300px] w-full flex-col items-center gap-5 px-4 py-7 text-center">
-        <div className="font-ui text-[18px] font-semibold tracking-tight text-[color:var(--color-ink)]">Ask + capture</div>
+        <div
+          ref={headingRef}
+          tabIndex={-1}
+          className="font-ui text-[18px] font-semibold tracking-tight text-[color:var(--color-ink)] outline-none"
+        >
+          Ask + capture
+        </div>
         <div className="flex w-full max-w-[460px] flex-col gap-3 rounded-xl border border-[var(--color-hair-soft)] bg-white/[0.02] p-4">
           <ActionRow icon={Sparkles} label="Ask anything" keys={accelLabel('CommandOrControl+Shift+Return')} hint="Type a question, or capture your screen for visual help." />
           <ActionRow icon={Camera} label="Capture screen" keys={accelLabel('CommandOrControl+Shift+S')} hint="Get instant help with whatever you’re looking at." />
@@ -274,7 +291,13 @@ export function Onboarding({
   if (step === 3) {
     return (
       <div className="fade-up flex min-h-[300px] w-full flex-col items-center gap-5 px-4 py-7 text-center">
-        <div className="font-ui text-[18px] font-semibold tracking-tight text-[color:var(--color-ink)]">Listen to your call</div>
+        <div
+          ref={headingRef}
+          tabIndex={-1}
+          className="font-ui text-[18px] font-semibold tracking-tight text-[color:var(--color-ink)] outline-none"
+        >
+          Listen to your call
+        </div>
         <div className="flex w-full max-w-[460px] flex-col gap-3 rounded-xl border border-[var(--color-hair-soft)] bg-white/[0.02] p-4">
           <ActionRow icon={Mic} label="Listen" hint="Transcribes both sides and suggests what to say, live." />
           <ActionRow icon={FileText} label="Live transcript" hint="Toggle the rolling transcript any time." />
@@ -288,7 +311,13 @@ export function Onboarding({
   if (step === 4) {
     return (
       <div className="fade-up flex min-h-[300px] w-full flex-col items-center gap-5 px-4 py-7 text-center">
-        <div className="font-ui text-[18px] font-semibold tracking-tight text-[color:var(--color-ink)]">Control how it answers</div>
+        <div
+          ref={headingRef}
+          tabIndex={-1}
+          className="font-ui text-[18px] font-semibold tracking-tight text-[color:var(--color-ink)] outline-none"
+        >
+          Control how it answers
+        </div>
         <div className="flex w-full max-w-[460px] flex-col gap-3 rounded-xl border border-[var(--color-hair-soft)] bg-white/[0.02] p-4">
           <ActionRow icon={LayoutGrid} label="Modes" hint="Pick the conversation: Interview, Meeting, Sales, and more." />
           <ActionRow icon={Brain} label="Deep thinking" hint="Force the strongest model. Glows purple when on." />
@@ -314,7 +343,11 @@ export function Onboarding({
     return (
       <div className="fade-up flex min-h-[300px] w-full flex-col items-center gap-5 px-4 py-7 text-center">
         <div className="flex flex-col items-center gap-1.5">
-          <div className="font-ui text-[18px] font-semibold tracking-tight text-[color:var(--color-ink)]">
+          <div
+            ref={headingRef}
+            tabIndex={-1}
+            className="font-ui text-[18px] font-semibold tracking-tight text-[color:var(--color-ink)] outline-none"
+          >
             How should AskToto answer you?
           </div>
           <p className="max-w-[460px] text-[12px] leading-snug text-[color:var(--color-ink-2)]">
@@ -365,11 +398,20 @@ export function Onboarding({
 
   if (step === 6) {
     const providerLabel = PROVIDERS[settings.provider]?.label ?? 'AI provider'
+    // Windows has no OS-level permission API, so status is always 'unknown' there; treat that as the
+    // expected state instead of a permanent not-granted so the checklist doesn't look broken.
+    const isWindows = window.navigator.platform.includes('Win')
+    const micWinUnknown = isWindows && perms?.microphone === 'unknown'
+    const screenWinUnknown = isWindows && perms?.screenRecording === 'unknown'
     return (
       <div className="fade-up flex min-h-[300px] w-full flex-col items-center gap-5 px-4 py-7 text-center">
         <div className="flex flex-col items-center gap-1.5">
           <MantuLogo size={150} />
-          <div className="font-ui text-[20px] font-semibold tracking-tight text-[color:var(--color-ink)]">
+          <div
+            ref={headingRef}
+            tabIndex={-1}
+            className="font-ui text-[20px] font-semibold tracking-tight text-[color:var(--color-ink)] outline-none"
+          >
             You’re set. Let’s check you’re ready.
           </div>
         </div>
@@ -378,19 +420,21 @@ export function Onboarding({
           <div className="mb-0.5 text-left text-[11px] font-semibold uppercase tracking-wide text-[color:var(--color-ink-3)]">
             Get ready
           </div>
-          <CheckRow ok={settings.providerReady} label={PROVIDERS[settings.provider]?.kind === 'cli' ? `${providerLabel} CLI connected` : `${providerLabel} API key`} hint="add it in Settings → AI" />
+          <CheckRow ok={settings.providerReady} label={PROVIDERS[settings.provider]?.kind === 'cli' ? `${providerLabel} connected` : `${providerLabel} API key`} hint="add it in Settings → AI" />
           <CheckRow
-            ok={perms?.microphone === 'granted'}
+            ok={perms?.microphone === 'granted' || micWinUnknown}
             denied={perms?.microphone === 'denied'}
             label="Microphone"
             hint="grant access when you first press Listen"
+            note={micWinUnknown ? 'Windows will ask the first time you Listen' : undefined}
             onFix={() => void window.toto.openPermissionSettings('microphone')}
           />
           <CheckRow
-            ok={perms?.screenRecording === 'granted'}
+            ok={perms?.screenRecording === 'granted' || screenWinUnknown}
             denied={perms?.screenRecording === 'denied'}
             label="Screen recording"
             hint="needed for the other side of calls + screen capture"
+            note={screenWinUnknown ? 'Windows will ask the first time you Listen' : undefined}
             onFix={() => void window.toto.openPermissionSettings('screenRecording')}
           />
         </div>
@@ -402,7 +446,11 @@ export function Onboarding({
         >
           Get started <ArrowRight size={14} />
         </button>
-        {finishErr && <div className="text-[12px] text-[color:var(--color-danger)]">{finishErr}</div>}
+        {finishErr && (
+          <div role="alert" className="text-[12px] text-[color:var(--color-danger)]">
+            {finishErr}
+          </div>
+        )}
         <button
           type="button"
           onClick={() => setStep(5)}
@@ -419,7 +467,11 @@ export function Onboarding({
       <MantuLogo size={210} />
 
       <div className="flex flex-col gap-2">
-        <div className="font-ui text-[24px] font-semibold tracking-tight text-[color:var(--color-ink)]">
+        <div
+          ref={headingRef}
+          tabIndex={-1}
+          className="font-ui text-[24px] font-semibold tracking-tight text-[color:var(--color-ink)] outline-none"
+        >
           Your on-device AI copilot.
         </div>
         <p className="mx-auto max-w-[480px] text-[13.5px] leading-relaxed text-[color:var(--color-ink-2)]">
@@ -445,7 +497,11 @@ export function Onboarding({
         </span>
       </label>
 
-      {err && <div className="text-[12px] text-[color:var(--color-danger)]">{err}</div>}
+      {err && (
+        <div role="alert" className="text-[12px] text-[color:var(--color-danger)]">
+          {err}
+        </div>
+      )}
 
       <div className="flex w-full max-w-[460px] flex-col gap-2">
         <button

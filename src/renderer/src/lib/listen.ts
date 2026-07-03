@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { TranscriptLine } from '@shared/ipc'
 import { isNonSpeechLine } from '@shared/transcript-filter'
 import { WHISPER_WORKLET_SRC } from './whisper-worklet-src'
+import { isWindows } from './keys'
 
 const SR = 16000
 
@@ -22,7 +23,9 @@ const PARAKEET_EMPTY_RUN_MAX = 5 // consecutive '' returns on flowing audio → 
 const THEM_WATCHDOG_MS = 20_000 // 20 s with the 'them' channel open but no window emitted → surface soft note
 // Exact text of the soft "not hearing the other side" note, shared by the watchdog (sets it) and the
 // first-'them'-emission handler (clears it) so loopback arriving AFTER the watchdog fired isn't left stuck.
-const THEM_SILENT_MSG = 'Not hearing the other side. Check the call volume and that Screen Recording is granted.'
+const THEM_SILENT_MSG = isWindows
+  ? 'Not hearing the other side. Check the call volume and that the meeting is playing through your default output device.'
+  : 'Not hearing the other side. Check the call volume and that Screen Recording is granted.'
 // Silent-capture-death recovery notes. A Bluetooth headset disconnect, default-device change, or
 // lid-close sleep kills a capture track with no error anywhere — the UI kept saying "Listening" while
 // a whole side of the meeting was silently lost. Matched by exact string (same contract as the notes above).
@@ -802,11 +805,15 @@ export function useListen(
           }
           let msg: string
           if (source === 'system') {
-            msg = isSysPermDenied
-              ? 'System audio needs Screen Recording permission. Grant it in System Settings → Privacy & Security → Screen Recording, then restart Listen.'
-              : "Couldn't capture system audio. Grant Screen Recording in System Settings, or switch Listen to your microphone in Settings → Audio."
+            msg = isWindows
+              ? 'Could not capture system audio. Make sure the meeting plays through your default output device and no other app has it exclusively, or switch Listen to your microphone in Settings, Audio tab.'
+              : isSysPermDenied
+                ? 'System audio needs Screen Recording permission. Grant it in System Settings → Privacy & Security → Screen Recording, then restart Listen.'
+                : "Couldn't capture system audio. Grant Screen Recording in System Settings, or switch Listen to your microphone in Settings → Audio."
           } else {
-            msg = "Couldn't start the microphone. Check Microphone access in System Settings → Privacy & Security → Microphone."
+            msg = isWindows
+              ? 'Could not start the microphone. Check that Windows microphone access is allowed for AskToto and that a mic is connected.'
+              : "Couldn't start the microphone. Check Microphone access in System Settings → Privacy & Security → Microphone."
           }
           setState((s) => ({ ...s, error: msg, listening: false, loading: false }))
           // A failed start shouldn't pin the whisper worker + ~21MB ONNX wasm in memory for the app's life —
@@ -824,9 +831,11 @@ export function useListen(
         // At least one side is live → we ARE listening. Surface a soft note if the other side is missing.
         let note: string | null = null
         if (source === 'both' && micOk && !sysOk) {
-          note = isSysPermDenied
-            ? 'System audio needs Screen Recording permission. Listening to microphone only; grant it in System Settings → Privacy & Security → Screen Recording, then restart Listen.'
-            : 'System audio unavailable. Listening to your microphone only. Grant Screen Recording to hear the other side.'
+          note = isWindows
+            ? 'System audio unavailable. Listening to your microphone only. Check that the meeting plays through your default output device.'
+            : isSysPermDenied
+              ? 'System audio needs Screen Recording permission. Listening to microphone only; grant it in System Settings → Privacy & Security → Screen Recording, then restart Listen.'
+              : 'System audio unavailable. Listening to your microphone only. Grant Screen Recording to hear the other side.'
         } else if (source === 'both' && !micOk && sysOk) {
           note = 'Microphone unavailable. Listening to system audio only.'
         }
