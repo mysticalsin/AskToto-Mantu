@@ -33,7 +33,13 @@ import {
   type McpCrmSaveConnectionPayload,
   type McpCrmPushPayload,
   type McpCrmConnectResult,
-  type McpCrmPushResult
+  type McpCrmPushResult,
+  type NotebookLmAskPayload,
+  type NotebookLmDetectResult,
+  type NotebookLmInstallResult,
+  type NotebookLmLoginResult,
+  type NotebookLmConnectResult,
+  type NotebookLmAskResult
 } from '@shared/ipc'
 import type { ProviderId } from '@shared/providers'
 
@@ -171,7 +177,19 @@ const api = {
     ipcRenderer.invoke(IPC.mcpCrmSaveConnection, payload),
   mcpCrmDisconnect: (): Promise<{ ok: boolean }> => ipcRenderer.invoke(IPC.mcpCrmDisconnect),
   mcpCrmPush: (payload: McpCrmPushPayload): Promise<McpCrmPushResult> =>
-    ipcRenderer.invoke(IPC.mcpCrmPush, payload)
+    ipcRenderer.invoke(IPC.mcpCrmPush, payload),
+  notebookLmDetect: (): Promise<NotebookLmDetectResult> => ipcRenderer.invoke(IPC.notebookLmDetect),
+  notebookLmInstall: (onProgress: (line: string) => void): Promise<NotebookLmInstallResult> => {
+    const listener = (_e: unknown, d: { line: string }): void => onProgress(d.line)
+    ipcRenderer.on(IPC.notebookLmInstallProgress, listener)
+    return ipcRenderer.invoke(IPC.notebookLmInstall).finally(() => {
+      ipcRenderer.removeListener(IPC.notebookLmInstallProgress, listener)
+    })
+  },
+  notebookLmLogin: (): Promise<NotebookLmLoginResult> => ipcRenderer.invoke(IPC.notebookLmLogin),
+  notebookLmConnect: (): Promise<NotebookLmConnectResult> => ipcRenderer.invoke(IPC.notebookLmConnect),
+  notebookLmAsk: (payload: NotebookLmAskPayload): Promise<NotebookLmAskResult> =>
+    ipcRenderer.invoke(IPC.notebookLmAsk, payload)
 }
 
 contextBridge.exposeInMainWorld('toto', api)

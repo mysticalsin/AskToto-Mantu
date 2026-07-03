@@ -29,6 +29,7 @@ import {
   McpCrmTestConnectionPayloadSchema,
   McpCrmSaveConnectionPayloadSchema,
   McpCrmPushPayloadSchema,
+  NotebookLmAskPayloadSchema,
   SetDealOutcomePayloadSchema,
   DEFAULT_SHORTCUTS,
   type HotkeyAction,
@@ -104,6 +105,7 @@ import { readEvalMetrics, aggregateMetrics } from './metrics'
 import { refreshDustCliSession, setupDustCli } from './dustcli'
 import { detectCli, testCli, setupCli, installCli, loginCli, prewarmCli } from './cli'
 import { connectBidstack, pushToBidstack } from './mcp/bidstackClient'
+import { detectNotebookLmCli, installNotebookLmCli, connectNotebookLm, askNotebookLm } from './mcp/notebooklm'
 import {
   setBidstackApiKey,
   getBidstackApiKey,
@@ -954,6 +956,86 @@ function registerIpc(): void {
     const apiKey = getBidstackApiKey()
     const r = await pushToBidstack(s.bidstackEndpointUrl, apiKey, parsed.data.toolName, parsed.data.args)
     auditLog('bidstack.push', { tool: parsed.data.toolName, ok: r.ok })
+    return r
+  })
+
+  // --- NotebookLM research (MCP, stdio; Settings → Mantu Intelligence) ---
+  ipcMain.handle(IPC.notebookLmDetect, (e) => {
+    assertMainWindow(e)
+    if (!requireAuth()) return { ok: false, error: 'Sign in with your Mantu account first.' }
+    return detectNotebookLmCli()
+  })
+  ipcMain.handle(IPC.notebookLmInstall, async (e) => {
+    assertMainWindow(e)
+    if (!requireAuth()) return { ok: false, error: 'Sign in with your Mantu account first.' }
+    const r = await installNotebookLmCli((line) => win?.webContents.send(IPC.notebookLmInstallProgress, { line }))
+    auditLog('notebooklm.install', { ok: r.ok })
+    return r
+  })
+  // One-click Google sign-in: open a Terminal running `nlm login`, which opens the user's browser and
+  // stores the session in the CLI's own state. Mirrors loginCli's script-open pattern so nobody has to
+  // type a command themselves — dummy-proof, same as every other connect flow.
+  ipcMain.handle(IPC.notebookLmLogin, async (e) => {
+    assertMainWindow(e)
+    if (!requireAuth()) return { ok: false, error: 'Sign in with your Mantu account first.' }
+    const isWin = process.platform === 'win32'
+    if (!isWin && process.platform !== 'darwin') {
+      return { ok: false, error: 'Automatic sign-in is not available on this OS yet. Run `nlm login` in a terminal, then click Connect.' }
+    }
+    try {
+      const scriptLines = isWin
+        ? [
+            '@echo off',
+            'cls',
+            'echo AskToto - NotebookLM sign-in',
+            'echo ==========================',
+            'echo.',
+            'echo A browser window will open. Sign in with your Google account.',
+            'echo ----------------------------------------',
+            'call nlm login',
+            'echo.',
+            'echo Done. Go back to AskToto and click Connect.',
+            'pause'
+          ]
+        : [
+            '#!/bin/bash',
+            'clear',
+            'echo "AskToto — NotebookLM sign-in"',
+            'echo "============================"',
+            'echo',
+            'echo "A browser window will open. Sign in with your Google account."',
+            'echo "────────────────────────────────────────────────"',
+            'nlm login',
+            'echo; echo "✓ Done. Go back to AskToto and click \\"Connect\\"."',
+            'echo "You can close this window."'
+          ]
+      const scriptPath = join(app.getPath('temp'), `asktoto-notebooklm-login.${isWin ? 'cmd' : 'command'}`)
+      writeFileSync(scriptPath, scriptLines.join('\n') + '\n', { mode: 0o755 })
+      const errMsg = await shell.openPath(scriptPath)
+      auditLog('notebooklm.login', { opened: !errMsg })
+      return errMsg ? { ok: false, error: errMsg } : { ok: true }
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) }
+    }
+  })
+  ipcMain.handle(IPC.notebookLmConnect, async (e) => {
+    assertMainWindow(e)
+    if (!requireAuth()) return { ok: false, error: 'Sign in with your Mantu account first.' }
+    const r = await connectNotebookLm()
+    if (r.ok) setSettings({ notebookLmConnected: true, notebookLmTools: r.tools ?? [] })
+    auditLog('notebooklm.connected', { ok: r.ok, tools: (r.tools ?? []).length })
+    return r
+  })
+  ipcMain.handle(IPC.notebookLmAsk, async (e, payload: unknown) => {
+    assertMainWindow(e)
+    if (!requireAuth()) return { ok: false, error: 'Sign in with your Mantu account first.' }
+    const parsed = NotebookLmAskPayloadSchema.safeParse(payload)
+    if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message || 'Invalid input.' }
+    if (!getSettings().notebookLmConnected) {
+      return { ok: false, error: 'NotebookLM is not connected. Set it up in Settings → Mantu Intelligence first.' }
+    }
+    const r = await askNotebookLm(parsed.data)
+    auditLog('notebooklm.ask', { ok: r.ok, scoped: !!parsed.data.notebookId })
     return r
   })
 
