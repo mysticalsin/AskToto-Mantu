@@ -361,6 +361,10 @@ export const BaseSettingsSchema = z.object({
   temperature: z.number().min(0).max(1),
   contentProtection: z.boolean(),
   audioSource: z.enum(['mic', 'system', 'both']),
+  // Preferred microphone (MediaDevices deviceId). '' = follow the system default input. A specific id
+  // (device mic, AirPods, iPhone, a Windows input) is used when present; if it has gone away, capture
+  // falls back to the default so a meeting never loses its mic over a disconnected device.
+  micDeviceId: z.string().default(''),
   suggestEverySec: z.number().min(5).max(120),
   mode: z.string().min(1).max(60).default('general'),
   profile: ProfileSchema.default({}),
@@ -513,6 +517,7 @@ export const DEFAULT_SETTINGS: Settings = {
   temperature: 0.4,
   contentProtection: true,
   audioSource: 'both',
+  micDeviceId: '',
   suggestEverySec: 15,
   mode: 'general',
   profile: { name: '', role: '', company: '', resume: '', jobDescription: '', notes: '' },

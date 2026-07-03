@@ -108,7 +108,8 @@ export function App(): JSX.Element {
     (l) => onQuestionRef.current(l),
     settings?.asrCorrections,
     // Persist a mid-session engine fallback to Settings (checkable after the fact) instead of a live banner.
-    () => void patch({ asrLastFallbackAt: Date.now() })
+    () => void patch({ asrLastFallbackAt: Date.now() }),
+    settings?.micDeviceId
   )
 
   const [input, setInput] = useState('')
