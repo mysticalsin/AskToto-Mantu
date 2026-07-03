@@ -74,7 +74,7 @@ function validateEndpointUrl(url: string): string | null {
     if (mapped) candidates.push(mapped)
   }
   if (candidates.some((h) => BLOCKED_HOSTS.has(h))) {
-    return `"${url}" points at a cloud metadata address, which is never a valid BidStack endpoint.`
+    return `"${url}" points at a cloud metadata address, which is never a valid Polo Pre-Sales endpoint.`
   }
   return null
 }
@@ -87,10 +87,10 @@ function classifyError(e: unknown, endpointUrl: string): string {
   const raw = errMsg(e)
   const blob = raw.toLowerCase()
   if (blob.includes('abort')) {
-    return `Timed out connecting to BidStack at ${endpointUrl}. Check the endpoint is reachable.`
+    return `Timed out connecting to Polo Pre-Sales at ${endpointUrl}. Check the endpoint is reachable.`
   }
   if (blob.includes('401') || blob.includes('unauthor') || blob.includes('forbidden') || blob.includes('403')) {
-    return 'BidStack rejected the API key (401/403). Check the key and its mcp scopes.'
+    return 'Polo Pre-Sales rejected the API key (401/403). Check the key and its mcp scopes.'
   }
   if (
     blob.includes('econnrefused') ||
@@ -99,12 +99,12 @@ function classifyError(e: unknown, endpointUrl: string): string {
     blob.includes('fetch failed') ||
     blob.includes('network')
   ) {
-    return `Could not reach BidStack at ${endpointUrl}. Check the endpoint URL and that the server is running.`
+    return `Could not reach Polo Pre-Sales at ${endpointUrl}. Check the endpoint URL and that the server is running.`
   }
   if (blob.includes('invalid url') || blob.includes('failed to parse url')) {
     return `"${endpointUrl}" is not a valid URL.`
   }
-  return raw || 'BidStack connection failed for an unknown reason.'
+  return raw || 'Polo Pre-Sales connection failed for an unknown reason.'
 }
 
 async function withClient<T>(
@@ -174,8 +174,8 @@ async function connectBidstackNow(url: string, key: string): Promise<BidstackCon
 export async function connectBidstack(endpointUrl: string, apiKey: string): Promise<BidstackConnectResult> {
   const url = (endpointUrl || '').trim()
   const key = (apiKey || '').trim()
-  if (!url) return { ok: false, error: 'Enter the BidStack MCP endpoint URL first.' }
-  if (!key) return { ok: false, error: 'Enter the BidStack API key first.' }
+  if (!url) return { ok: false, error: 'Enter the Polo Pre-Sales MCP endpoint URL first.' }
+  if (!key) return { ok: false, error: 'Enter the Polo Pre-Sales API key first.' }
   const urlError = validateEndpointUrl(url)
   if (urlError) return { ok: false, error: urlError }
 
@@ -208,9 +208,9 @@ export async function pushToBidstack(
   const url = (endpointUrl || '').trim()
   const key = (apiKey || '').trim()
   const tool = (toolName || '').trim()
-  if (!url) return { ok: false, error: 'BidStack endpoint is not configured. Set it up in Settings first.' }
-  if (!key) return { ok: false, error: 'BidStack API key is not configured. Set it up in Settings first.' }
-  if (!tool) return { ok: false, error: 'No BidStack tool selected to push to.' }
+  if (!url) return { ok: false, error: 'Polo Pre-Sales endpoint is not configured. Set it up in Settings first.' }
+  if (!key) return { ok: false, error: 'Polo Pre-Sales API key is not configured. Set it up in Settings first.' }
+  if (!tool) return { ok: false, error: 'No Polo Pre-Sales tool selected to push to.' }
   const urlError = validateEndpointUrl(url)
   if (urlError) return { ok: false, error: urlError }
   try {
@@ -220,7 +220,7 @@ export async function pushToBidstack(
     if (result && typeof result === 'object' && (result as { isError?: boolean }).isError) {
       const content = (result as { content?: Array<{ type: string; text?: string }> }).content
       const text = content?.find((c) => c.type === 'text')?.text
-      return { ok: false, error: text || 'BidStack reported an error running the tool.' }
+      return { ok: false, error: text || 'Polo Pre-Sales reported an error running the tool.' }
     }
     return { ok: true, result }
   } catch (e) {

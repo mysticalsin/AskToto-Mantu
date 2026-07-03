@@ -510,15 +510,53 @@ function clampAxis(pos: number, size: number, areaPos: number, areaSpan: number)
   return Math.min(Math.max(pos, areaPos), areaPos + areaSpan - size)
 }
 
+// How much of the window must stay visibly reachable on some display while it's being dragged — enough
+// to grab it back, not the whole thing. Below this it's treated as flung off-screen and pulled back in.
+const DRAG_VISIBLE_MARGIN = 40
+
+/** Loosened clampAxis: pins `pos` so between `margin` and `size` px (whichever is smaller) of the
+ *  window stays inside [areaPos, areaPos + areaSpan), instead of pinning the WHOLE window inside it.
+ *  Only used as the moveBy() fallback below — letting most of the window hang off a display's edge is
+ *  what lets a drag glide across a gap to a neighboring monitor instead of stopping dead at the first
+ *  display's boundary. */
+function clampAxisMargin(pos: number, size: number, areaPos: number, areaSpan: number, margin: number): number {
+  const m = Math.min(margin, size, areaSpan)
+  return Math.min(Math.max(pos, areaPos - size + m), areaPos + areaSpan - m)
+}
+
+/** True if, positioned at (x, y), at least DRAG_VISIBLE_MARGIN px of the window overlaps the work area
+ *  of at least one CONNECTED display — checked against the union of every display (getAllDisplays()),
+ *  not just whichever one the window started the drag on. */
+function isReachable(x: number, y: number, width: number, height: number): boolean {
+  const marginW = Math.min(DRAG_VISIBLE_MARGIN, width)
+  const marginH = Math.min(DRAG_VISIBLE_MARGIN, height)
+  return screen.getAllDisplays().some(({ workArea: wa }) => {
+    const overlapW = Math.min(x + width, wa.x + wa.width) - Math.max(x, wa.x)
+    const overlapH = Math.min(y + height, wa.y + wa.height) - Math.max(y, wa.y)
+    return overlapW >= marginW && overlapH >= marginH
+  })
+}
+
 function moveBy(dx: number, dy: number): void {
   if (!win) return
   const b = win.getBounds()
-  // Clamp to the matching display's work area so the bar can never be flung fully off-screen with no
-  // way back (now that the whole bar is a drag handle). Keeps the entire window reachable.
-  const { workArea } = screen.getDisplayMatching(b)
-  const x = clampAxis(b.x + dx, b.width, workArea.x, workArea.width)
-  const y = clampAxis(b.y + dy, b.height, workArea.y, workArea.height)
-  win.setBounds({ ...b, x, y })
+  const x = b.x + dx
+  const y = b.y + dy
+  // Free movement anywhere that keeps the window reachable on SOME display — covers dragging clean
+  // across to a neighboring monitor (or over the gap between two of them), not just within the one the
+  // window started on. Clamping against only the "current" display here (the old behavior) is what used
+  // to stick a drag pinned to that display's edge, since the matched display never changed until the
+  // window had already fully crossed onto it — which the clamp itself was preventing.
+  if (isReachable(x, y, b.width, b.height)) {
+    win.setBounds({ ...b, x, y })
+    return
+  }
+  // Unreachable (flung past every display): pull back onto the display nearest the ATTEMPTED position,
+  // not the window's old bounds, so a fast drag lands on whichever monitor it was actually headed toward.
+  const { workArea } = screen.getDisplayMatching({ x, y, width: b.width, height: b.height })
+  const cx = clampAxisMargin(x, b.width, workArea.x, workArea.width, DRAG_VISIBLE_MARGIN)
+  const cy = clampAxisMargin(y, b.height, workArea.y, workArea.height, DRAG_VISIBLE_MARGIN)
+  win.setBounds({ ...b, x: cx, y: cy })
 }
 
 /**
@@ -910,7 +948,7 @@ function registerIpc(): void {
     if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message || 'Invalid input.' }
     const s = getSettings()
     if (!s.bidstackConnected || !s.bidstackEndpointUrl || !hasBidstackApiKey()) {
-      return { ok: false, error: 'BidStack is not connected. Set it up in Settings → CLI Integration first.' }
+      return { ok: false, error: 'Polo Pre-Sales is not connected. Set it up in Settings → Mantu Intelligence first.' }
     }
     const apiKey = getBidstackApiKey()
     const r = await pushToBidstack(s.bidstackEndpointUrl, apiKey, parsed.data.toolName, parsed.data.args)

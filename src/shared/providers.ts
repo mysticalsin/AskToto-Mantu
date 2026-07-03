@@ -8,8 +8,6 @@ export type ProviderId =
   | 'kimi'
   | 'openrouter'
   | 'groq'
-  | 'together'
-  | 'fireworks'
   | 'mistral'
   | 'dust'
   | 'claude-cli'
@@ -21,6 +19,9 @@ export type ProviderKind = 'anthropic' | 'openai' | 'dust' | 'cli' // wire proto
 export interface ProviderDef {
   id: ProviderId
   label: string
+  /** One-line, plain-language reason to pick this provider. Shown under its tile in Settings'
+   *  "Experience: more models" section — honest and specific, never marketing language. */
+  blurb: string
   kind: ProviderKind
   baseUrl: string // openai-kind base; '' = sdk default (anthropic) or user-set (custom)
   models: string[] // suggestions for the datalist
@@ -44,6 +45,7 @@ export const PROVIDERS: Record<ProviderId, ProviderDef> = {
   anthropic: {
     id: 'anthropic',
     label: 'Claude · Anthropic',
+    blurb: 'The models AskToto is built and tuned for by default.',
     kind: 'anthropic',
     baseUrl: '',
     models: ['claude-opus-4-8', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'],
@@ -59,6 +61,7 @@ export const PROVIDERS: Record<ProviderId, ProviderDef> = {
   openai: {
     id: 'openai',
     label: 'GPT · OpenAI',
+    blurb: 'Strong general models with wide tool support.',
     kind: 'openai',
     baseUrl: 'https://api.openai.com/v1',
     models: ['gpt-4o', 'gpt-4o-mini', 'gpt-4.1', 'gpt-4.1-mini', 'o4-mini'],
@@ -72,6 +75,7 @@ export const PROVIDERS: Record<ProviderId, ProviderDef> = {
   nvidia: {
     id: 'nvidia',
     label: 'NVIDIA · NIM',
+    blurb: 'Open-weight models hosted on NVIDIA infrastructure, including DeepSeek R1.',
     kind: 'openai',
     baseUrl: 'https://integrate.api.nvidia.com/v1',
     models: [
@@ -92,6 +96,7 @@ export const PROVIDERS: Record<ProviderId, ProviderDef> = {
   deepseek: {
     id: 'deepseek',
     label: 'DeepSeek',
+    blurb: 'Cheap, capable models with a dedicated step-by-step reasoning mode.',
     kind: 'openai',
     baseUrl: 'https://api.deepseek.com/v1',
     models: ['deepseek-chat', 'deepseek-reasoner'],
@@ -106,6 +111,7 @@ export const PROVIDERS: Record<ProviderId, ProviderDef> = {
   qwen: {
     id: 'qwen',
     label: 'Qwen · Alibaba',
+    blurb: "Alibaba's models, strong at Chinese-language and vision tasks.",
     kind: 'openai',
     baseUrl: 'https://dashscope-intl.aliyuncs.com/compatible-mode/v1',
     models: ['qwen-max', 'qwen-plus', 'qwen-turbo', 'qwen-vl-max'],
@@ -119,6 +125,7 @@ export const PROVIDERS: Record<ProviderId, ProviderDef> = {
   minimax: {
     id: 'minimax',
     label: 'MiniMax',
+    blurb: 'A China-market model family with a generous free tier.',
     kind: 'openai',
     baseUrl: 'https://api.minimax.io/v1',
     models: ['MiniMax-Text-01', 'abab6.5s-chat'],
@@ -132,6 +139,7 @@ export const PROVIDERS: Record<ProviderId, ProviderDef> = {
   kimi: {
     id: 'kimi',
     label: 'Kimi · Code (K2.7)',
+    blurb: 'A coding-focused reasoning model built for agentic, multi-step work.',
     kind: 'openai',
     // Kimi Code keys (sk-kimi-…) authenticate against the coding endpoint, NOT Moonshot's api.moonshot.ai
     // (that one 401s for these keys). The single model is reasoning-only: it streams reasoning_content
@@ -149,6 +157,7 @@ export const PROVIDERS: Record<ProviderId, ProviderDef> = {
   openrouter: {
     id: 'openrouter',
     label: 'OpenRouter',
+    blurb: 'One key routes to dozens of models from every major lab.',
     kind: 'openai',
     baseUrl: 'https://openrouter.ai/api/v1',
     models: [
@@ -168,6 +177,7 @@ export const PROVIDERS: Record<ProviderId, ProviderDef> = {
   groq: {
     id: 'groq',
     label: 'Groq',
+    blurb: 'The fastest responses, great for live meetings.',
     kind: 'openai',
     baseUrl: 'https://api.groq.com/openai/v1',
     models: ['llama-3.3-70b-versatile', 'llama-3.1-8b-instant', 'moonshotai/kimi-k2-instruct'],
@@ -178,43 +188,10 @@ export const PROVIDERS: Record<ProviderId, ProviderDef> = {
     vision: false,
     keyUrl: 'https://console.groq.com/keys'
   },
-  together: {
-    id: 'together',
-    label: 'Together AI',
-    kind: 'openai',
-    baseUrl: 'https://api.together.xyz/v1',
-    models: [
-      'meta-llama/Llama-3.3-70B-Instruct-Turbo',
-      'deepseek-ai/DeepSeek-V3',
-      'Qwen/Qwen2.5-72B-Instruct-Turbo'
-    ],
-    defaultModel: 'meta-llama/Llama-3.3-70B-Instruct-Turbo',
-    fastModel: 'meta-llama/Llama-3.1-8B-Instruct-Turbo',
-    keyHint: 'tgp_v1_…',
-    keyPattern: '^tgp_v1_',
-    vision: false,
-    keyUrl: 'https://api.together.xyz/settings/api-keys'
-  },
-  fireworks: {
-    id: 'fireworks',
-    label: 'Fireworks AI',
-    kind: 'openai',
-    baseUrl: 'https://api.fireworks.ai/inference/v1',
-    models: [
-      'accounts/fireworks/models/llama-v3p3-70b-instruct',
-      'accounts/fireworks/models/deepseek-v3',
-      'accounts/fireworks/models/qwen2p5-72b-instruct'
-    ],
-    defaultModel: 'accounts/fireworks/models/llama-v3p3-70b-instruct',
-    fastModel: 'accounts/fireworks/models/llama-v3p1-8b-instruct',
-    keyHint: 'fw_…',
-    keyPattern: '^fw_',
-    vision: false,
-    keyUrl: 'https://fireworks.ai/account/api-keys'
-  },
   mistral: {
     id: 'mistral',
     label: 'Mistral',
+    blurb: 'European-hosted models, useful where data residency matters.',
     kind: 'openai',
     baseUrl: 'https://api.mistral.ai/v1',
     models: ['mistral-large-latest', 'mistral-small-latest', 'pixtral-large-latest'],
@@ -228,6 +205,7 @@ export const PROVIDERS: Record<ProviderId, ProviderDef> = {
   dust: {
     id: 'dust',
     label: 'Dust · your agents',
+    blurb: 'Your own Second Brain agents — the deepest integration with your meeting history.',
     kind: 'dust',
     baseUrl: 'https://dust.tt', // EU workspaces: https://eu.dust.tt
     models: [], // "model" here = a Dust agent sId; it's workspace-specific, no suggestions
@@ -241,6 +219,7 @@ export const PROVIDERS: Record<ProviderId, ProviderDef> = {
   'claude-cli': {
     id: 'claude-cli',
     label: 'Claude Code · CLI',
+    blurb: 'Routes through your existing Claude Code subscription, no separate API key.',
     kind: 'cli',
     baseUrl: '',
     models: ['sonnet', 'opus', 'haiku'],
@@ -256,6 +235,7 @@ export const PROVIDERS: Record<ProviderId, ProviderDef> = {
   'codex-cli': {
     id: 'codex-cli',
     label: 'Codex · OpenAI CLI',
+    blurb: 'Routes through your existing ChatGPT or OpenAI Codex CLI subscription.',
     kind: 'cli',
     baseUrl: '',
     models: [],
@@ -270,6 +250,7 @@ export const PROVIDERS: Record<ProviderId, ProviderDef> = {
   gemini: {
     id: 'gemini',
     label: 'Gemini · Google',
+    blurb: "Google's models with a very large context window.",
     kind: 'openai',
     baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai/',
     models: ['gemini-2.5-flash', 'gemini-2.5-pro', 'gemini-2.0-flash'],
@@ -284,6 +265,7 @@ export const PROVIDERS: Record<ProviderId, ProviderDef> = {
   custom: {
     id: 'custom',
     label: 'Custom · OpenAI-compatible',
+    blurb: 'Point at any OpenAI-compatible endpoint you already run.',
     kind: 'openai',
     baseUrl: '',
     models: [],

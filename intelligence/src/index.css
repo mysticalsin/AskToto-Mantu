@@ -49,3 +49,12 @@ body {
 ::-webkit-scrollbar-thumb:hover {
   background: var(--color-mantu-light);
 }
+
+/* Lets the dashboard's header be grabbed anywhere to move this normal-framed window, not just the OS
+   title bar above it. Interactive children opt back out so their clicks still land (see NavBar.tsx). */
+.win-drag {
+  -webkit-app-region: drag;
+}
+.win-no-drag {
+  -webkit-app-region: no-drag;
+}

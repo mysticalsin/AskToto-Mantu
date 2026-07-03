@@ -504,17 +504,17 @@ export const Review = memo(function Review({
 
           {!bidstackConnected ? (
             <div className="text-[12px] leading-snug text-[color:var(--color-ink-3)]">
-              Connect BidStack in Settings → CLI Integration to push this recap to your CRM.
+              Connect Polo Pre-Sales in Settings → Mantu Intelligence to push this recap to your CRM.
             </div>
           ) : pushState.phase === 'sent' ? (
             <div className="flex items-center gap-1.5 text-[13px] text-[var(--color-success)]">
-              <Check size={13} /> Pushed to BidStack.
+              <Check size={13} /> Pushed to Polo Pre-Sales.
             </div>
           ) : pushOpen ? (
             <div className="flex flex-col gap-2">
               {bidstackTools && bidstackTools.length > 0 ? (
                 <label className="flex flex-col gap-1 text-[11px] text-[color:var(--color-ink-3)]">
-                  BidStack tool
+                  Polo Pre-Sales tool
                   <select
                     value={pushTool}
                     onChange={(e) => setPushTool(e.target.value)}
@@ -529,7 +529,7 @@ export const Review = memo(function Review({
                 </label>
               ) : (
                 <div className="text-[11px] text-[color:var(--color-danger)]">
-                  BidStack reported no tools for this key's scope — nothing to push to. Check the key's
+                  Polo Pre-Sales reported no tools for this key's scope — nothing to push to. Check the key's
                   scopes in Settings.
                 </div>
               )}
