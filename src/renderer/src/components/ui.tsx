@@ -141,9 +141,9 @@ export function TextButton({
  *  descriptions run full sentences — this wraps at a fixed width instead of stretching off-screen. */
 export function FieldHint({ text, children }: { text: string; children: ReactNode }): JSX.Element {
   return (
-    <span className="group relative inline-flex">
+    <span className="group focus-ring relative inline-flex" tabIndex={0} role="button" aria-label={text}>
       {children}
-      <span className="pointer-events-none absolute left-1/2 top-full z-20 mt-1.5 w-max max-w-[260px] -translate-x-1/2 rounded-lg bg-black/90 px-2.5 py-1.5 text-left text-[11px] font-medium leading-snug text-white opacity-0 shadow-lg transition-opacity duration-150 group-hover:opacity-100">
+      <span className="pointer-events-none absolute left-0 top-full z-20 mt-1.5 w-max max-w-[260px] rounded-lg bg-black/90 px-2.5 py-1.5 text-left text-[11px] font-medium leading-snug text-white opacity-0 shadow-lg transition-opacity duration-150 group-hover:opacity-100 group-focus:opacity-100">
         {text}
       </span>
     </span>

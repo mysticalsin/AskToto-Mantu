@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useMemo, useState } from 'react'
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   Search,
   FolderOpen,
@@ -37,11 +37,10 @@ function formatDurationMin(min: number): string {
 }
 
 function meetingTime(dateStr: string): string {
-  try {
-    return new Date(dateStr).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-  } catch {
-    return ''
-  }
+  if (!dateStr) return ''
+  const d = new Date(dateStr)
+  if (isNaN(d.getTime())) return ''
+  return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
 }
 
 /**
@@ -180,7 +179,13 @@ function GraphBar(): JSX.Element | null {
 // Inline connections panel — unchanged from original
 // ---------------------------------------------------------------------------
 
-function Related({ file }: { file: string }): JSX.Element {
+function Related({
+  file,
+  onOpen
+}: {
+  file: string
+  onOpen: (file: string) => void
+}): JSX.Element {
   const [data, setData] = useState<GraphRelated | null>(null)
   useEffect(() => {
     let alive = true
@@ -219,7 +224,7 @@ function Related({ file }: { file: string }): JSX.Element {
           {data.topics.map((t) => (
             <span
               key={t}
-              className="rounded-full bg-[var(--color-accent-soft)] px-2 py-0.5 text-[10px] font-medium text-[var(--color-accent)]"
+              className="truncate max-w-full rounded-full bg-[var(--color-accent-soft)] px-2 py-0.5 text-[10px] font-medium text-[var(--color-accent)]"
             >
               {t}
             </span>
@@ -230,7 +235,7 @@ function Related({ file }: { file: string }): JSX.Element {
         <button
           key={n.file}
           type="button"
-          onClick={() => void window.toto.recallOpen(n.file)}
+          onClick={() => onOpen(n.file)}
           className="no-drag focus-ring flex flex-col gap-0.5 rounded-lg px-2 py-1 text-left hover:bg-white/[0.06]"
         >
           <span className="truncate text-[12px] text-[color:var(--color-ink)]">{n.title}</span>
@@ -391,7 +396,7 @@ const MeetingRow = memo(function MeetingRow({
           {/* Analyzing badge */}
           {isActive && (
             <span className="shrink-0 rounded-full bg-[var(--color-accent-soft)] px-2 py-0.5 text-[10px] text-[color:var(--color-accent)]">
-              Analyzing
+              Just saved
             </span>
           )}
 
@@ -446,7 +451,7 @@ const MeetingRow = memo(function MeetingRow({
           {m.topics.slice(0, 3).map((t, i) => (
             <span
               key={`${t}-${i}`}
-              className="rounded-full bg-[var(--color-accent-soft)] px-2 py-0.5 text-[10px] font-medium text-[var(--color-accent)]"
+              className="truncate max-w-full rounded-full bg-[var(--color-accent-soft)] px-2 py-0.5 text-[10px] font-medium text-[var(--color-accent)]"
             >
               {t}
             </span>
@@ -457,7 +462,7 @@ const MeetingRow = memo(function MeetingRow({
       {/* Connections panel */}
       {isOpen && (
         <div className="border-t border-[var(--color-hair-soft)]">
-          <Related file={m.file} />
+          <Related file={m.file} onOpen={onOpen} />
         </div>
       )}
     </div>
@@ -482,7 +487,7 @@ export function RecallView({
   onBack?: () => void
   /** Optional: called when the user clicks "Connect your calendar". */
   onConnectCalendar?: () => void
-  /** Optional: any row whose file === activeFile shows a purple "Analyzing" badge. */
+  /** Optional: any row whose file === activeFile shows a purple "Just saved" badge. */
   activeFile?: string
   /** Optional: called by the "New chat ⌘R" footer button. */
   onNewChat?: () => void
@@ -506,6 +511,9 @@ export function RecallView({
   const [deleting, setDeleting] = useState<string | null>(null)
   /** Opt-in past the INITIAL_RENDER_CAP — set once the user clicks "Show all N meetings". */
   const [showAll, setShowAll] = useState(false)
+  /** The scrollable meeting-list container — focused before a row unmounts (e.g. on delete) so a
+   *  keyboard user's focus doesn't fall through to <body> when the focused Delete button is removed. */
+  const listRef = useRef<HTMLDivElement>(null)
 
   // Meetings are always saved; deletion is the user's to undo that. The main process pops a native,
   // unmissable confirm dialog before actually deleting (single click here is unambiguous — no "did that
@@ -515,6 +523,7 @@ export function RecallView({
     const r = await window.toto.recallDelete(file, title).catch(() => ({ ok: false }))
     setDeleting(null)
     if (r.ok) {
+      listRef.current?.focus()
       setItems((xs) => xs.filter((x) => x.file !== file))
       setSelectedFile((s) => (s === file ? null : s))
       setOpen((o) => (o === file ? null : o))
@@ -536,6 +545,7 @@ export function RecallView({
   useEffect(() => {
     let stale = false
     const run = (): void => {
+      setLoading(true)
       const p = q.trim() ? window.toto.recallSearch(q.trim()) : window.toto.recallList()
       p.then((l) => {
         if (!stale) {
@@ -614,6 +624,9 @@ export function RecallView({
           <input
             value={q}
             onChange={(e) => setQ(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && !e.nativeEvent.isComposing) openSelected()
+            }}
             placeholder="Ask or search anything"
             spellCheck={false}
             aria-label="Search past meetings"
@@ -632,7 +645,7 @@ export function RecallView({
       </div>
 
       {/* ── DATE-GROUPED MEETING LIST ───────────────────────────────────── */}
-      <div className="scroll-thin min-h-0 flex-1 overflow-y-auto pr-1">
+      <div ref={listRef} tabIndex={-1} className="scroll-thin min-h-0 flex-1 overflow-y-auto pr-1">
         {loading ? (
           <div className="py-2 text-[13px] text-[color:var(--color-ink-2)]">Loading…</div>
         ) : items.length === 0 ? (

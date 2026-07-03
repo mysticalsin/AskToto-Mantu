@@ -18,6 +18,8 @@ export function useDashboardData(): State {
 
   useEffect(() => {
     let cancelled = false
+    let requestId = 0
+    let lastLoadAt = 0
     const fromBrain = async (): Promise<DashboardData> => {
       const { brainToDashboard } = await import('./brainAdapter')
       return brainToDashboard(await window.intelligence!.getData())
@@ -34,25 +36,33 @@ export function useDashboardData(): State {
       return res.json()
     }
     const load = (): void => {
+      const myId = ++requestId
+      lastLoadAt = Date.now()
       ;(window.intelligence ? fromBrain() : fromFile())
         .then((data) => {
-          if (!cancelled) setState({ data, loading: false, error: null })
+          if (!cancelled && myId === requestId) setState({ data, loading: false, error: null })
         })
         .catch((err: Error) => {
-          if (!cancelled) setState((prev) => ({ data: prev.data, loading: false, error: prev.data ? null : err.message }))
+          if (!cancelled && myId === requestId)
+            setState((prev) => ({ data: prev.data, loading: false, error: prev.data ? null : err.message }))
         })
     }
     load()
     // Live mode only: while a backfill is ingesting meetings in the host app, refresh so the dashboard
     // fills in as the brain grows instead of freezing at whatever existed when the window opened.
-    // Cheap status poll gates the full re-read; the interval dies as soon as the backfill stops.
+    // Cheap status poll gates the full re-read for the life of the mount (see STALE_REFRESH_MS below).
     let lastCount = -1
-    // A persistently-null status (e.g. auth expired) must stop the poll — without this it never hits
-    // the clear-check below (which only runs when `st` is truthy) and polls the dead IPC forever. A
-    // transient null (one hiccup) must NOT stop it, so only consecutive nulls count; any real response
-    // resets the streak.
+    // A persistently-null status (e.g. auth expired) must stop the poll, since nothing else here
+    // ever clears it, and without this it would poll the dead IPC forever. A transient null (one
+    // hiccup) must NOT stop it, so only consecutive nulls count; any real response resets the streak.
     let consecutiveNulls = 0
     const MAX_CONSECUTIVE_NULLS = 3
+    // Wall-clock floor so now()-derived fields (Going-Cold freshness, days-quiet) don't freeze at
+    // whatever they were on first load: even when the meeting count never changes, force a reload
+    // once this much time has passed. Comfortably below FRESH_DAYS (14 days) so a tier change is
+    // never missed. The poll itself is never self-cleared anymore (see below) so this keeps firing
+    // for the life of the mount, not just until the first quiet tick.
+    const STALE_REFRESH_MS = 30 * 60 * 1000
     const iv = window.intelligence
       ? setInterval(async () => {
           try {
@@ -64,13 +74,14 @@ export function useDashboardData(): State {
             }
             consecutiveNulls = 0
             const changed = typeof st.meetings === 'number' && st.meetings !== lastCount
-            if (changed) load()
+            const stale = Date.now() - lastLoadAt >= STALE_REFRESH_MS
+            if (changed || stale) load()
             if (typeof st.meetings === 'number') lastCount = st.meetings
-            if (!st.backfill?.running && !changed && lastCount !== -1) {
-              clearInterval(iv!)
-            }
+            // No self-clear here: the poll is a cheap IPC status call gated by `changed`/`stale`
+            // before doing the expensive load(), so there's no cost to leaving it alive for the
+            // life of the mount. The only termination path is the consecutive-null check above.
           } catch {
-            /* transient IPC hiccup — next tick retries */
+            /* transient IPC hiccup, next tick retries */
           }
         }, 10_000)
       : null

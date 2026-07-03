@@ -42,6 +42,12 @@ export function useAutoResize(): (el: HTMLElement | null) => void {
       shrinkRef.current = null
     }
     if (!el) return
+    // A genuine view swap (Bar<->Settings/onboarding/sign-in) attaches a brand-new, unrelated element.
+    // Reset the dedup baseline so this view's first send() is judged against a fresh 0, not the PREVIOUS
+    // view's last-sent height — otherwise a shorter new view wrongly reads as a SHRINK (line 108) and gets
+    // held back by the 140ms settle debounce meant only for a streaming answer settling in place.
+    lastSentRef.current = 0
+    lastSentWidthRef.current = 0
     const push = (h: number, w?: number): void => {
       // Idempotent on height alone unless a width report is present AND changed — a view with no
       // [data-hug-width] element (the common case) never has anything new to say about width.

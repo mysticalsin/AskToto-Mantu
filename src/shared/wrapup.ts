@@ -19,10 +19,11 @@ const ENDING_CUES: RegExp[] = [
   // "let's wrap" alone is a sign-off ("let's wrap for today"), but not when what follows is "up"
   // (that shape is the next cue's job) or a direct object ("let's wrap the pricing section" — a topic
   // transition, not the meeting ending).
-  /\blet'?s wrap\b(?!\s+(?:up\b|the|this|that|those|these|our|my|your|his|her|their|its|a|an)\b)/i,
-  // "wrap (this/it) up" is the sign-off shape; "wrap up the/this/... <noun>" right after is a topic
-  // transition ("let's wrap up the pricing section and move to timelines"), not the meeting ending.
-  /\bwrap(ping)? (this |it )?up\b(?!\s+(?:the|this|that|those|these|our|my|your|his|her|their|its|a|an)\b)/i,
+  /\blet'?s wrap\b(?!\s+(?:up\b|(?:on|about|regarding|concerning)?\s*(?:the|this|that|those|these|our|my|your|his|her|their|its|a|an)\b))/i,
+  // "wrap (this/it) up" is the sign-off shape; "wrap up the/this/... <noun>" right after (optionally
+  // via a preposition like "on"/"about") is a topic transition ("let's wrap up on this pricing question,
+  // then move to timelines"), not the meeting ending.
+  /\bwrap(ping)? (this |it )?up\b(?!\s+(?:on|about|regarding|concerning)?\s*(?:the|this|that|those|these|our|my|your|his|her|their|its|a|an)\b)/i,
   /\b(gotta|got to|have to|need to) (run|jump|drop|hop off)\b/i,
   /\bwe'?re (at|out of) time\b/i,
   /\brunning (out of|low on) time\b/i,

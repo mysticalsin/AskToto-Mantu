@@ -1,5 +1,5 @@
 import { basename, join } from 'node:path'
-import { existsSync, readdirSync } from 'node:fs'
+import { existsSync, readdirSync, statSync } from 'node:fs'
 import type { Settings, AskStart } from '@shared/ipc'
 import { PROVIDERS, resolveModelTier, type ProviderId } from '@shared/providers'
 import {
@@ -170,7 +170,7 @@ export async function mergeExtraction(
   const meetingId = `meeting:${slugify(ref.file)}`
   addNode(meetingId, 'meeting', ref.title || ref.file)
 
-  const accountSlug = x.account ? slugify(x.account.name) : null
+  const accountSlug = x.account && x.account.name.trim() ? slugify(x.account.name) : null
   if (x.account && accountSlug) {
     const acc = readAccount(s, accountSlug) ?? {
       name: x.account.name,
@@ -201,6 +201,7 @@ export async function mergeExtraction(
   }
 
   for (const p of x.people) {
+    if (!p.name.trim()) continue
     const pslug = slugify(p.name)
     const person = readPerson(s, pslug) ?? { name: p.name, role: null, account: null, meetings: [], quotes: [], stance_trail: [], commitments: [] }
     if (p.role && !person.role) person.role = p.role
@@ -382,8 +383,27 @@ export function brainBackfillProgress(): { total: number; done: number; running:
  */
 export async function ingestExtraction(s: Settings, x: MeetingExtraction, md: string, file: string): Promise<void> {
   const key = basename(file)
-  const dateMatch = md.match(/^date:\s*(\S+)/m)
-  const ref: MeetingRef = { file: key, date: dateMatch?.[1] ?? '', title: x.title24 || key }
+  // Frontmatter dates aren't always bare tokens: hand-authored or vault-exported files commonly quote
+  // the value (`date: "2024-01-15T10:00:00.000Z"`), and a naive \S+ match would keep the quote marks,
+  // producing a value that fails Date.parse() downstream and later renders as an obviously broken
+  // 'NaN days'. Strip optional wrapping quotes and validate before trusting either field; `start:`
+  // (the meeting's actual start time) is tried when `date:` is missing or unparseable, then the file's
+  // own mtime as a last resort, so a blank/garbage date never silently sorts as the oldest thing on
+  // the Commitment Ledger.
+  const readFrontmatterDate = (field: 'date' | 'start'): string | null => {
+    const raw = md.match(new RegExp(`^${field}:\\s*"?([^"\\n]+?)"?\\s*$`, 'm'))?.[1]
+    return raw && !Number.isNaN(Date.parse(raw)) ? raw : null
+  }
+  let date = readFrontmatterDate('date') ?? readFrontmatterDate('start')
+  if (!date) {
+    try {
+      date = statSync(file).mtime.toISOString()
+    } catch {
+      date = ''
+    }
+    mainLog.warn(`[brain] ${key}: no usable date/start frontmatter, falling back to ${date || 'an empty date'}`)
+  }
+  const ref: MeetingRef = { file: key, date, title: x.title24 || key }
   // Stamp provenance the model can't know (its own source file + meeting date) so consumers can join
   // extractions back to meetings (call-grade timelines, meeting feeds) without re-reading entity refs.
   x.source_file = key

@@ -10,15 +10,18 @@ interface Props {
 
 export function CountUp({ value, decimals = 0, suffix = '', className }: Props) {
   const ref = useRef<HTMLSpanElement>(null)
+  const lastRef = useRef(0)
 
   useEffect(() => {
     const el = ref.current
     if (!el) return
-    const controls = animate(0, value, {
+    const from = lastRef.current
+    const controls = animate(from, value, {
       duration: 0.9,
       ease: 'easeOut',
       onUpdate(v) {
         el.textContent = `${v.toFixed(decimals)}${suffix}`
+        lastRef.current = v
       },
     })
     return () => controls.stop()

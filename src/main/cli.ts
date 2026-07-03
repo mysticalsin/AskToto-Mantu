@@ -4,7 +4,8 @@
  * SECURITY INVARIANTS (never relax):
  *   - No shell:true. All spawns pass args as an array. On Windows, a `.cmd` npm shim is launched via
  *     cmd.exe as the *target executable* (see resolveSpawnTarget) — that is not shell:true, and any
- *     arg containing a quote/newline is rejected first (see cmdShimSpawn).
+ *     arg containing a quote, newline, or a cmd.exe command-separator/expansion metacharacter
+ *     (&|^%<>()!) is rejected first (see cmdShimSpawn).
  *   - claude-cli: --allowedTools '' --disallowedTools '*' so the agent can never execute arbitrary tools.
  *   - codex-cli: features.shell_tool=false + runs in a throwaway tmp cwd.
  *   - resolveBin() finds the absolute path via the login shell (mac/Linux) or `where` + an APPDATA
@@ -160,15 +161,21 @@ export function isCmdShim(bin: string): boolean {
  * SECURITY: this does NOT reopen the "no shell:true" invariant declared at the top of this file — the
  * spawn() call at each site still passes shell:false; cmd.exe here is only the *target executable*,
  * not a shell re-interpreting a joined string. But cmd.exe's own argv parsing (unlike execve) treats
- * '"' and newlines specially, so any arg containing either is rejected before the argv array is built.
- * Every arg that reaches this function is a fixed constant from CLI_CONFIGS/testCli (flags, model id)
- * — free-text (prompt/system) always goes via stdin, never argv — so this should never trip in
- * practice; it exists as a defense-in-depth backstop, not a real-world limitation.
+ * '"', newlines, and its own command-separator/escape/redirection metacharacters (& | ^ % < > ( ) !)
+ * specially, so any arg containing one of those is rejected before the argv array is built. Node's
+ * libuv only quotes an argv element when it contains whitespace or a quote, so a metacharacter with no
+ * surrounding space would otherwise reach cmd.exe completely unquoted. Not every arg that reaches this
+ * function is a fixed constant: the model id can be free text a user typed into Settings (codex-cli has
+ * no fixed model list, and the brain-ingest path can deliver a model string without going through the
+ * interactive guardrail) — free-text prompt/system content always goes via stdin, never argv, but the
+ * model id does not, which is exactly why this backstop exists.
  */
 export function cmdShimSpawn(bin: string, args: string[]): { command: string; args: string[] } {
   for (const a of [bin, ...args]) {
-    if (/["\r\n]/.test(a)) {
-      throw new Error('refusing to spawn: an argument contains a quote or newline (unsafe for cmd.exe)')
+    if (/["\r\n&|^%<>()!]/.test(a)) {
+      throw new Error(
+        'refusing to spawn: an argument contains a quote, newline, or cmd.exe metacharacter (unsafe for cmd.exe)'
+      )
     }
   }
   return { command: process.env.ComSpec || 'cmd.exe', args: ['/d', '/s', '/c', bin, ...args] }

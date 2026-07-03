@@ -21,8 +21,10 @@ function frontmatter(text: string): Record<string, string> {
 
 async function meetingFiles(folder: string): Promise<string[]> {
   try {
-    const files = await readdir(folder)
-    return files.filter((f) => f.endsWith('.md') && f !== 'README.md' && f !== 'index.md')
+    const entries = await readdir(folder, { withFileTypes: true })
+    return entries
+      .filter((e) => e.isFile() && e.name.endsWith('.md') && e.name !== 'README.md' && e.name !== 'index.md')
+      .map((e) => e.name)
   } catch {
     return []
   }
@@ -135,7 +137,7 @@ export async function recallRead(file: string): Promise<RecallReadResult> {
   // start anchors), "$" matches before ANY newline, not just end-of-string, so a "\s*$" fallback inside
   // the same lookahead stops at the end of the first line too — the exact bug this replaces.
   let recap = ''
-  const startMatch = text.match(/^## Notes & follow-ups\n+/m)
+  const startMatch = text.match(/^## Notes & follow-ups[\r\n]+/m)
   if (startMatch) {
     const afterStart = text.slice(startMatch.index! + startMatch[0].length)
     const endIdx = afterStart.search(/^## Full transcript/m)
@@ -145,23 +147,27 @@ export async function recallRead(file: string): Promise<RecallReadResult> {
   // Parse transcript lines from the ## Full transcript section.
   // Format written by saveMeeting: **[HH:MM:SS] Them:** text  or  **[HH:MM:SS] You:** text
   const lines: TranscriptLine[] = []
-  const transcriptMatch = text.match(/^## Full transcript\n+([\s\S]*)$/m)
+  const transcriptMatch = text.match(/^## Full transcript[\r\n]+([\s\S]*)$/m)
   if (transcriptMatch) {
     const body = transcriptMatch[1]
     // Use the ISO date from frontmatter to reconstruct absolute timestamps (same calendar day).
-    const baseDate = startedAt ? new Date(startedAt) : null
+    // When startedAt is missing (unparsable/absent date field), fall back to an arbitrary fixed
+    // anchor (read time) so every line still gets a real, monotonically increasing timestamp instead
+    // of collapsing to 0 — the parsed HH:MM:SS is real elapsed-time data even without a calendar date.
+    const baseDate = startedAt ? new Date(startedAt) : new Date()
     const lineRe = /^\*\*\[(\d{2}):(\d{2}):(\d{2})\] (Them|You):\*\* (.+)$/gm
     let m: RegExpExecArray | null
+    let prevT: number | undefined = startedAt
     while ((m = lineRe.exec(body)) !== null) {
       const [, hh, mm, ss, speakerLabel, lineText] = m
-      let t = 0
-      if (baseDate) {
-        const d = new Date(baseDate)
-        d.setHours(Number(hh), Number(mm), Number(ss), 0)
-        // If the reconstructed time is before startedAt (midnight crossing), push to the next day.
-        if (d.getTime() < startedAt!) d.setDate(d.getDate() + 1)
-        t = d.getTime()
-      }
+      const d = new Date(baseDate)
+      d.setHours(Number(hh), Number(mm), Number(ss), 0)
+      // If the reconstructed time is before the previous line's timestamp (midnight crossing), push
+      // to the next day — compares against the previous line rather than startedAt so this still
+      // works when startedAt is unavailable.
+      if (prevT !== undefined && d.getTime() < prevT) d.setDate(d.getDate() + 1)
+      const t = d.getTime()
+      prevT = t
       lines.push({
         speaker: speakerLabel === 'Them' ? 'them' : 'you',
         text: lineText.trim(),
@@ -282,7 +288,11 @@ export async function searchMeetings(query: string): Promise<RecallHit[]> {
   for (const r of read) {
     if (!r) continue
     const { sum, text } = r
-    const lc = text.toLowerCase()
+    // Strip the frontmatter block before scoring/snippeting so boilerplate keys (type, source,
+    // status, etc.) don't manufacture hits or snippets for terms that never appear in the actual
+    // recap/transcript body (mirrors the delimiter the frontmatter() helper already uses).
+    const body = text.replace(/^---\n[\s\S]*?\n---\n?/, '')
+    const lc = body.toLowerCase()
     let score = 0
     for (const t of terms) {
       const inTitle = sum.title.toLowerCase().includes(t) ? 3 : 0
@@ -290,9 +300,12 @@ export async function searchMeetings(query: string): Promise<RecallHit[]> {
       score += inTitle + count
     }
     if (score === 0) continue
-    const first = lc.indexOf(terms[0])
+    // Anchor the snippet on a term that actually occurs in the body, falling back to terms[0] only
+    // if none do (a multi-word search whose first word only matched via the title bonus).
+    const anchor = terms.find((t) => lc.includes(t)) ?? terms[0]
+    const first = lc.indexOf(anchor)
     const start = Math.max(0, first - 60)
-    const snippet = text.slice(start, start + 200).replace(/\s+/g, ' ').trim()
+    const snippet = body.slice(start, start + 200).replace(/\s+/g, ' ').trim()
     hits.push({ ...sum, snippet, score })
   }
   return hits.sort((a, b) => b.score - a.score).slice(0, 25)

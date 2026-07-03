@@ -34,6 +34,18 @@ function isStreamOptionsRejection(e: unknown): boolean {
 
 /** OpenAI-compatible (GPT, Kimi/Moonshot, custom base URL) — the default for any non-cli/dust/anthropic kind. */
 export function streamOpenAI(opts: StreamOptions): StreamHandle {
+  // Guard against silently falling through to the SDK's default baseURL (api.openai.com) when the
+  // Custom provider has no endpoint configured — without this, a misconfigured 'custom' entry would
+  // send its key and model to OpenAI's real backend instead of failing loudly.
+  if (opts.providerId === 'custom' && !opts.baseURL) {
+    // Fire asynchronously so the caller has already stored the returned handle before onError runs.
+    // A synchronous onError re-enters attempt()/failover in index.ts and its streams.set would be
+    // clobbered by this dummy handle, leaving Cancel/quit unable to abort the real fallback stream.
+    queueMicrotask(() =>
+      opts.handlers.onError('No endpoint URL set for the Custom provider. Open Settings and add one.')
+    )
+    return { abort: () => {} }
+  }
   const client = new OpenAI({ apiKey: opts.apiKey, baseURL: opts.baseURL || undefined })
   const controller = new AbortController()
   const wd = idleWatchdog(() => {

@@ -41,12 +41,14 @@ export function createMeetingWatcher(options: MeetingWatcherOptions): MeetingWat
   const { intervalMs, getApps, onChange, onError } = options
   let detecting = false // skip a tick if the previous poll is still in flight (no overlap)
   let active = false
+  let stopped = false
 
   const timer: ReturnType<typeof setInterval> = setInterval(() => {
     if (detecting) return
     detecting = true
     detectMeeting(getApps())
       .then((hit) => {
+        if (stopped) return
         if (hit && !active) {
           active = true
           onChange({ app: hit.split('|')[0], active: true })
@@ -63,6 +65,7 @@ export function createMeetingWatcher(options: MeetingWatcherOptions): MeetingWat
 
   return {
     stop(): void {
+      stopped = true
       clearInterval(timer)
     }
   }

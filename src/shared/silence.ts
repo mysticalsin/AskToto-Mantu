@@ -50,7 +50,13 @@ function parseDate(d: string | undefined): number {
 }
 
 function norm(s: string): string {
-  return s.trim().toLowerCase()
+  // Strip diacritics too, so e.g. "L'Oreal" and "L'Oréal" normalize to the same grouping key,
+  // matching the canonical entity store's slugify() (src/main/brain/store.ts).
+  return s
+    .trim()
+    .toLowerCase()
+    .normalize('NFKD')
+    .replace(/[̀-ͯ]/g, '')
 }
 
 function uniqueByNorm(values: string[]): string[] {
