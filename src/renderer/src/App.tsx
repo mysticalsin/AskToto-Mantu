@@ -14,7 +14,6 @@ const BrainView = lazy(() => import('./components/BrainView').then((m) => ({ def
 const Answer = lazy(() => import('./components/Answer').then((m) => ({ default: m.Answer })))
 const Copilot = lazy(() => import('./components/Copilot').then((m) => ({ default: m.Copilot })))
 import { SignInWall } from './components/SignInWall'
-import { MeetingDetectedToast } from './components/MeetingDetectedToast'
 import { UpdateReadyToast } from './components/UpdateReadyToast'
 import { NewMeetingToast } from './components/NewMeetingToast'
 import { RecordingConsentReminder } from './components/RecordingConsentReminder'
@@ -179,10 +178,8 @@ export function App(): JSX.Element {
   const [saveError, setSaveError] = useState<string | null>(null)
   const [saveAttempts, setSaveAttempts] = useState(0)
   const MAX_SAVE_RETRIES = 5
-  const [meetingPrompt, setMeetingPrompt] = useState<{ open: boolean; app?: string }>({ open: false })
   const [updateReady, setUpdateReady] = useState<{ open: boolean; version?: string }>({ open: false })
   const [newMeetingToast, setNewMeetingToast] = useState(false)
-  const autoStartedRef = useRef(false)
   // Idempotence latch for endReview() re-entry — see endReview's own comment for the exact hazard it
   // guards against. Cleared at the start of every fresh session (startListen) so a later stop can fire.
   const stoppingRef = useRef(false)
@@ -775,13 +772,12 @@ export function App(): JSX.Element {
     if (ok) setInput('')
   }, [askScreen, input])
 
-  const startListen = useCallback((auto = false) => {
-    autoStartedRef.current = auto // true only for meeting-detected auto-start, so auto-end can fire
+  const startListen = useCallback(() => {
     stoppingRef.current = false // a fresh session can be stopped again — clear any latch left by the last one
     // A previous session's transcript can still be sitting unsaved in listen state (ASR crash tore the
     // session down; a failed recap was abandoned). listen.clear() below would wipe it — rescue first.
     // Idempotent via savedRef, so normally-saved meetings never double-save. Ref-indirected because
-    // saveMeetingNow is defined later in this component (same pattern as endReviewRef).
+    // saveMeetingNow is defined later in this component.
     if (!listen.listening && listen.lines.length) {
       void saveMeetingNowRef.current?.(listen.lines, meetingStartRef.current, '')
     }
@@ -826,7 +822,6 @@ export function App(): JSX.Element {
     stoppingRef.current = true
     const tx = listen.text()
     listen.stop()
-    autoStartedRef.current = false // manual end clears the auto-start flag
     setView('review')
     setCollapsed(false)
     if (tx.trim()) {
@@ -947,7 +942,6 @@ export function App(): JSX.Element {
     if (wasListening) {
       void saveMeetingNow(listen.lines, meetingStartRef.current, '') // don't lose a started meeting on reset
       listen.stop()
-      autoStartedRef.current = false // manual reset clears the auto-start flag
       meetingStartRef.current = Date.now()
     }
     ask.clear()
@@ -1092,7 +1086,7 @@ export function App(): JSX.Element {
   useEffect(() => window.toto.onHotkey((a) => handlersRef.current(a)), [])
 
   // Global Escape — the most-expected key on an overlay. Precedence, least to most destructive:
-  // cancel a live stream → dismiss the meeting prompt → close an open surface → collapse → hide the bar.
+  // cancel a live stream → close an open surface → collapse → hide the bar.
   const escapeRef = useRef<() => void>(() => {})
   escapeRef.current = (): void => {
     // While typing, Escape just drops focus from the field — it should never collapse/hide the overlay.
@@ -1108,11 +1102,6 @@ export function App(): JSX.Element {
     }
     if (ask.answer?.streaming || suggest.answer?.streaming) {
       onStop()
-    } else if (meetingPrompt.open) {
-      // Escape is an explicit decline, same as the X — don't re-offer for this meeting.
-      meetingLiveRef.current.declined = true
-      clearMeetingReoffer()
-      setMeetingPrompt({ open: false })
     } else if (view !== 'answer') {
       // Leaving the post-meeting Review must not drag the recap into the idle widget answer slot, nor
       // leave a past-meeting snapshot that would later be mistaken for the next live recap.
@@ -1156,52 +1145,6 @@ export function App(): JSX.Element {
   useEffect(() => {
     void window.toto.windowMode('bar')
   }, [])
-
-  // auto-start Listen when a meeting is detected; auto-end+save when it ends (main polls both edges)
-  const listeningRef = useRef(false)
-  listeningRef.current = listen.listening
-  const startListenRef = useRef(startListen)
-  startListenRef.current = startListen
-  const endReviewRef = useRef(endReview)
-  endReviewRef.current = endReview
-  // Meeting-opt-in re-offer state. Main sends meetingDetected {active:true} exactly ONCE per meeting
-  // (a latch in the poller), and the toast auto-dismisses after 6s — so a user who glanced away for six
-  // seconds used to lose the entire meeting with no way back. Track whether the meeting is still live and
-  // re-surface the offer after a TIMEOUT dismiss; an explicit X means "not this meeting" and is respected.
-  const meetingLiveRef = useRef<{ live: boolean; app?: string; declined: boolean; reoffers: number }>({
-    live: false,
-    declined: false,
-    reoffers: 0
-  })
-  const meetingReofferTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const clearMeetingReoffer = (): void => {
-    if (meetingReofferTimer.current) {
-      clearTimeout(meetingReofferTimer.current)
-      meetingReofferTimer.current = null
-    }
-  }
-  useEffect(
-    () =>
-      window.toto.onMeetingDetected((d) => {
-        if (d && d.active === false) {
-          meetingLiveRef.current = { live: false, declined: false, reoffers: 0 }
-          clearMeetingReoffer()
-          setMeetingPrompt({ open: false })
-          // meeting ended — only auto-wrap-up sessions we auto-started (don't end manual ones)
-          if (listeningRef.current && autoStartedRef.current) {
-            autoStartedRef.current = false
-            endReviewRef.current()
-          }
-        } else if (!listeningRef.current) {
-          // Meeting detected → show opt-in toast only. Nothing is recorded until the user clicks
-          // "Start listening". startListen is wired to the toast's onStart prop below.
-          meetingLiveRef.current = { live: true, app: d?.app, declined: false, reoffers: 0 }
-          setMeetingPrompt({ open: true, app: d?.app })
-        }
-      }),
-    []
-  )
-  useEffect(() => clearMeetingReoffer, []) // unmount safety
 
   useEffect(() => window.toto.onUpdateReady((d) => setUpdateReady({ open: true, version: d?.version })), [])
 
@@ -1529,37 +1472,6 @@ export function App(): JSX.Element {
       {(() => {
         const toasts = (
           <>
-            <MeetingDetectedToast
-              open={meetingPrompt.open}
-              app={meetingPrompt.app}
-              onStart={() => {
-                startListenRef.current(true) // user opted in — auto-started, so meeting-end can auto-wrap up
-                clearMeetingReoffer()
-                setMeetingPrompt({ open: false })
-              }}
-              onDismiss={(reason) => {
-                setMeetingPrompt({ open: false })
-                const m = meetingLiveRef.current
-                if (reason === 'user') {
-                  // Explicit X = "not this meeting". No more offers until the next meeting starts.
-                  m.declined = true
-                  clearMeetingReoffer()
-                  return
-                }
-                // Timed out unseen. While the meeting is still live and nothing is recording, quietly
-                // re-offer every minute (max 3 times) so a glance away doesn't cost the whole meeting.
-                if (m.live && !m.declined && m.reoffers < 3) {
-                  m.reoffers += 1
-                  clearMeetingReoffer()
-                  meetingReofferTimer.current = setTimeout(() => {
-                    const cur = meetingLiveRef.current
-                    if (cur.live && !cur.declined && !listeningRef.current) {
-                      setMeetingPrompt({ open: true, app: cur.app })
-                    }
-                  }, 60_000)
-                }
-              }}
-            />
             <UpdateReadyToast
               open={updateReady.open}
               version={updateReady.version}
@@ -1577,12 +1489,12 @@ export function App(): JSX.Element {
         )
         // These toasts render even while minimized (the control pill is a separate, narrower window
         // width). Without this, a toast opening while minimized had to squeeze into the ~200px pill
-        // width — "Meeting detected · Microsoft Teams" wrapped mid-word and the whole layout crushed.
-        // Widen the window to fit a toast via the same data-hug-width contract the pill itself uses
-        // (useAutoResize picks the FIRST [data-hug-width] match in document order, so this wrapper —
-        // rendered before the pill below — wins while a toast is open, and control reverts to the
-        // pill's own report the instant the toast closes and this wrapper unmounts).
-        return minimized && (meetingPrompt.open || updateReady.open || newMeetingToast) ? (
+        // width and the whole layout crushed. Widen the window to fit a toast via the same
+        // data-hug-width contract the pill itself uses (useAutoResize picks the FIRST [data-hug-width]
+        // match in document order, so this wrapper — rendered before the pill below — wins while a
+        // toast is open, and control reverts to the pill's own report the instant the toast closes and
+        // this wrapper unmounts).
+        return minimized && (updateReady.open || newMeetingToast) ? (
           <div data-hug-width className="mx-auto flex w-[500px] flex-col gap-2 px-1.5">
             {toasts}
           </div>

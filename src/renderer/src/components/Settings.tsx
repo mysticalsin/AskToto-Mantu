@@ -2801,64 +2801,12 @@ export function Settings({
                     )}
                   </ToggleRow>
                   <ToggleRow
-                    label="Auto-start on a meeting"
-                    desc="Begin listening automatically when a Teams / Zoom / Meet call starts."
-                    on={settings.autoStartOnMeeting}
-                    onChange={(v) => patch({ autoStartOnMeeting: v })}
-                    disabled={settings.managedKeys.includes('autoStartOnMeeting')}
-                  >
-                    <div className="mt-1.5 flex flex-col gap-1 text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
-                      <span>
-                        {window.navigator.platform.toLowerCase().includes('win')
-                          ? 'On Windows, AskToto detects meetings by reading window titles and browser tabs.'
-                          : 'Needs Accessibility + Automation permissions in System Settings → Privacy & Security.'}
-                      </span>
-                      <span className="inline-flex items-center gap-1">
-                        <span
-                          className={[
-                            'inline-block h-1.5 w-1.5 rounded-full',
-                            settings.autoStartOnMeeting ? 'bg-[var(--cl-primary)]' : 'bg-white/20'
-                          ].join(' ')}
-                        />
-                        {settings.autoStartOnMeeting ? 'Watching for meetings' : 'Not watching'}
-                      </span>
-                    </div>
-                  </ToggleRow>
-                  <ToggleRow
                     label="Launch at login"
                     desc="Open AskToto automatically when you sign in."
                     on={settings.launchAtLogin}
                     onChange={(v) => patch({ launchAtLogin: v })}
                     disabled={settings.managedKeys.includes('launchAtLogin')}
                   />
-                  <div className="mt-3 flex flex-col gap-1.5">
-                    <label className="text-[12px] font-medium text-[color:var(--cl-foreground)]">
-                      Custom meeting apps
-                    </label>
-                    <textarea
-                      value={settings.customMeetingApps.join('\n')}
-                      onChange={(e) =>
-                        patch({
-                          customMeetingApps: e.target.value
-                            .split('\n')
-                            .map((s) => s.trim())
-                            .filter(Boolean)
-                            .slice(0, 20)
-                        })
-                      }
-                      placeholder="Around&#10;Amazon Chime&#10;Jitsi"
-                      rows={3}
-                      disabled={settings.managedKeys.includes('customMeetingApps')}
-                      className={[
-                        ctl,
-                        'h-20 resize-none text-[12px]',
-                        settings.managedKeys.includes('customMeetingApps') ? 'opacity-60 cursor-not-allowed' : ''
-                      ].join(' ')}
-                    />
-                    <span className="text-[11px] text-[color:var(--cl-muted-foreground)]">
-                      One app name per line. AskToto will also treat windows with these names as meetings.
-                    </span>
-                  </div>
                 </div>
               </Section>
               <DangerZoneSection settings={settings} patch={patch} />

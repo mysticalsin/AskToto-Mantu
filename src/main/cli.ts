@@ -2,10 +2,13 @@
  * CLI provider backend — claude-cli (Claude Code) and codex-cli (OpenAI Codex).
  *
  * SECURITY INVARIANTS (never relax):
- *   - No shell:true. All spawns pass args as an array.
+ *   - No shell:true. All spawns pass args as an array. On Windows, a `.cmd` npm shim is launched via
+ *     cmd.exe as the *target executable* (see resolveSpawnTarget) — that is not shell:true, and any
+ *     arg containing a quote/newline is rejected first (see cmdShimSpawn).
  *   - claude-cli: --allowedTools '' --disallowedTools '*' so the agent can never execute arbitrary tools.
  *   - codex-cli: features.shell_tool=false + runs in a throwaway tmp cwd.
- *   - resolveBin() uses the login shell to find the absolute path — never relies on a minimal GUI PATH.
+ *   - resolveBin() finds the absolute path via the login shell (mac/Linux) or `where` + an APPDATA
+ *     probe (Windows) — never relies on a minimal GUI PATH.
  */
 
 import { spawn, execFile } from 'node:child_process'
@@ -15,7 +18,7 @@ import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { createInterface } from 'node:readline'
 import { app, shell } from 'electron'
-import { writeFileSync } from 'node:fs'
+import { existsSync, writeFileSync } from 'node:fs'
 import type { ProviderId } from '@shared/providers'
 import { PROVIDERS } from '@shared/providers'
 import type { CliActionResult, CliInstallResult } from '@shared/ipc'
@@ -44,18 +47,63 @@ export function idleWatchdog(
   }
 }
 
-// ─── Binary resolution via login shell ──────────────────────────────────────────
+// ─── Binary resolution: login shell (mac/Linux) or `where` + npm global probe (Windows) ────────
 const binCache = new Map<string, string | null>()
 
+/** Parse `where <bin>` stdout: return the first hit ending in .cmd or .exe. `where` can list several
+ *  shadowed matches (e.g. an extension-less dir entry) — only a .cmd shim or .exe is launchable. */
+export function parseWhereOutput(stdout: string): string | null {
+  const lines = stdout
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter(Boolean)
+  return lines.find((l) => /\.(cmd|exe)$/i.test(l)) ?? null
+}
+
+/** npm's default global-bin locations on Windows for a given binary name. Used as a fallback when
+ *  `where` misses right after a fresh in-app `npm i -g`: a GUI process (Electron launched from Explorer
+ *  or a shortcut) holds a PATH snapshot that does not pick up a PATH change npm may have written to the
+ *  registry mid-session, so `where` can legitimately miss a binary that was just installed. */
+export function npmGlobalBinCandidates(bin: string): string[] {
+  const appData = process.env.APPDATA ?? ''
+  if (!appData) return []
+  return [join(appData, 'npm', `${bin}.cmd`), join(appData, 'npm', `${bin}.exe`)]
+}
+
 /**
- * Resolve a CLI binary to its absolute path using the user's login shell.
- * A packaged Electron app runs with a minimal PATH; the login shell loads the full environment
- * (nvm, homebrew, user profile, etc.) so `claude` / `codex` installed globally are found.
+ * Resolve a CLI binary to its absolute path.
+ * A packaged Electron app runs with a minimal PATH. On macOS/Linux the login shell loads the full
+ * environment (nvm, homebrew, user profile, etc.) so `claude` / `codex` installed globally are found.
+ * On Windows there is no login-shell equivalent, so we shell out to `where`, then fall back to probing
+ * npm's default global-bin folder directly (see npmGlobalBinCandidates) for the stale-PATH case above.
  * Results are cached in-process — resolveBin is called on every streaming request, so caching
  * prevents repeated shell spawns per conversation turn.
  */
 export async function resolveBin(bin: string): Promise<string | null> {
   if (binCache.has(bin)) return binCache.get(bin) ?? null
+
+  if (process.platform === 'win32') {
+    try {
+      const { stdout } = await execFileAsync('where', [bin])
+      const resolved = parseWhereOutput(stdout)
+      if (resolved) {
+        binCache.set(bin, resolved)
+        return resolved
+      }
+    } catch {
+      // `where` exits non-zero when nothing on PATH matches — fall through to the APPDATA probe.
+    }
+    for (const candidate of npmGlobalBinCandidates(bin)) {
+      if (existsSync(candidate)) {
+        binCache.set(bin, candidate)
+        return candidate
+      }
+    }
+    // Not caching the miss mirrors the mac/Linux branch below — a subsequent in-app install must be
+    // picked up immediately without requiring an app restart.
+    return null
+  }
+
   const shell = process.env.SHELL || '/bin/zsh'
   try {
     const { stdout } = await execFileAsync(shell, ['-lc', `command -v ${bin}`])
@@ -90,6 +138,45 @@ export function cliEnv(provider: ProviderId): NodeJS.ProcessEnv {
     delete env.OPENAI_BASE_URL
   }
   return env
+}
+
+// ─── Windows .cmd shim spawn ─────────────────────────────────────────────────────
+// npm's global installer puts a `<bin>.cmd` batch-file shim on Windows (it wraps the real JS entry
+// point). `resolveBin` can therefore return a `.cmd` path there instead of a `.exe`.
+
+/** True when the resolved binary is a Windows npm shim (`<bin>.cmd`), which cannot be spawned directly. */
+export function isCmdShim(bin: string): boolean {
+  return /\.cmd$/i.test(bin)
+}
+
+/**
+ * Build the { command, args } to launch a `.cmd` shim via cmd.exe. Node/Electron builds patched for
+ * CVE-2024-27980 throw EINVAL when spawn() is given a `.cmd`/`.bat` target directly with shell:false —
+ * on Windows, batch files can only be launched through cmd.exe's own argument parser, never execve'd.
+ * `/d` skips AutoRun scripts, `/s` keeps the quoting of the rest of the command line intact, `/c` runs
+ * it and exits.
+ *
+ * SECURITY: this does NOT reopen the "no shell:true" invariant declared at the top of this file — the
+ * spawn() call at each site still passes shell:false; cmd.exe here is only the *target executable*,
+ * not a shell re-interpreting a joined string. But cmd.exe's own argv parsing (unlike execve) treats
+ * '"' and newlines specially, so any arg containing either is rejected before the argv array is built.
+ * Every arg that reaches this function is a fixed constant from CLI_CONFIGS/testCli (flags, model id)
+ * — free-text (prompt/system) always goes via stdin, never argv — so this should never trip in
+ * practice; it exists as a defense-in-depth backstop, not a real-world limitation.
+ */
+export function cmdShimSpawn(bin: string, args: string[]): { command: string; args: string[] } {
+  for (const a of [bin, ...args]) {
+    if (/["\r\n]/.test(a)) {
+      throw new Error('refusing to spawn: an argument contains a quote or newline (unsafe for cmd.exe)')
+    }
+  }
+  return { command: process.env.ComSpec || 'cmd.exe', args: ['/d', '/s', '/c', bin, ...args] }
+}
+
+/** Resolve the actual { command, args } to spawn for a CLI binary: direct on macOS/Linux and for
+ *  Windows .exe binaries; routed through cmd.exe for Windows .cmd shims (see cmdShimSpawn above). */
+export function resolveSpawnTarget(bin: string, args: string[]): { command: string; args: string[] } {
+  return isCmdShim(bin) ? cmdShimSpawn(bin, args) : { command: bin, args }
 }
 
 // ─── Per-provider CLI config ─────────────────────────────────────────────────────
@@ -239,11 +326,21 @@ export function runCliStream(opts: RunCliStreamOpts): { abort: () => void } {
     }
 
     const args = cfg.buildArgs({ model: opts.model })
-    const child = spawn(absBin, args, {
+    let spawnTarget: { command: string; args: string[] }
+    try {
+      // Windows .cmd shims must go through cmd.exe (see resolveSpawnTarget); everything else spawns
+      // directly, byte-identical to before.
+      spawnTarget = resolveSpawnTarget(absBin, args)
+    } catch (e) {
+      wd.clear()
+      return fail(`${label}: ${e instanceof Error ? e.message : 'refusing unsafe spawn arguments'}`)
+    }
+    const child = spawn(spawnTarget.command, spawnTarget.args, {
       cwd,
       signal: controller.signal,
       env: cliEnv(opts.providerId),
-      // SECURITY: never use shell:true — args are passed as an array
+      // SECURITY: never use shell:true — args are passed as an array. On Windows, cmd.exe may be the
+      // spawn target for a .cmd shim (see resolveSpawnTarget) but it is never invoked as a shell here.
       shell: false,
       // 'pipe' for stdin so we can write prompt + system without exposing them in argv
       stdio: ['pipe', 'pipe', 'pipe']
@@ -335,7 +432,10 @@ export async function detectCli(provider: ProviderId): Promise<CliActionResult> 
   if (!absBin) return { ok: false, error: `${label} not installed` }
 
   try {
-    const { stdout } = await execFileAsync(absBin, ['--version'])
+    // Windows .cmd shims must go through cmd.exe (see resolveSpawnTarget) — the same EINVAL landmine
+    // as the spawn() call sites below, just reached via execFile here instead.
+    const spawnTarget = resolveSpawnTarget(absBin, ['--version'])
+    const { stdout } = await execFileAsync(spawnTarget.command, spawnTarget.args)
     return { ok: true, version: stdout.trim().slice(0, 40) }
   } catch {
     // --version might fail on some builds; binary is present but couldn't run
@@ -378,6 +478,16 @@ export async function testCli(provider: ProviderId): Promise<CliActionResult> {
     testArgs = ['exec', '--skip-git-repo-check', '-c', 'features.shell_tool=false']
   }
 
+  let spawnTarget: { command: string; args: string[] }
+  try {
+    // Windows .cmd shims must go through cmd.exe (see resolveSpawnTarget); everything else spawns
+    // directly, byte-identical to before.
+    spawnTarget = resolveSpawnTarget(absBin, testArgs)
+  } catch (e) {
+    if (tmpDir) await rm(tmpDir, { recursive: true, force: true }).catch(() => {})
+    return { ok: false, error: e instanceof Error ? e.message : 'refusing unsafe spawn arguments' }
+  }
+
   return new Promise<CliActionResult>((resolve) => {
     let timedOut = false
     const timer = setTimeout(() => {
@@ -387,9 +497,11 @@ export async function testCli(provider: ProviderId): Promise<CliActionResult> {
       resolve({ ok: false, error: 'Timed out after 45 s — are you logged in?' })
     }, TEST_TIMEOUT_MS)
 
-    const child = spawn(absBin, testArgs, {
+    const child = spawn(spawnTarget.command, spawnTarget.args, {
       cwd: testCwd,
       env: cliEnv(provider),
+      // SECURITY: never use shell:true. cmd.exe may be the spawn target for a Windows .cmd shim (see
+      // resolveSpawnTarget) but it is never invoked as a shell here.
       shell: false,
       // 'pipe' for stdin so we write the test prompt without it appearing in argv
       stdio: ['pipe', 'pipe', 'pipe']
@@ -445,22 +557,89 @@ export async function testCli(provider: ProviderId): Promise<CliActionResult> {
 // ─── setupCli ────────────────────────────────────────────────────────────────────
 
 /**
- * Open a Terminal window that installs the CLI and walks the user through interactive login.
- * Mirrors setupDustCli() in dustcli.ts — writes a .command script and shell.openPath's it.
- * macOS only (like the Dust equivalent).
+ * Open a Terminal (macOS) or console (Windows) window that installs the CLI and walks the user
+ * through interactive login. Mirrors setupDustCli() in dustcli.ts — writes a script and
+ * shell.openPath's it: a .command file on macOS, a .cmd batch file on Windows (Windows opens .cmd
+ * files in a console and runs them, so this needs no extra permission either).
  */
 export async function setupCli(provider: ProviderId): Promise<{ ok: boolean; error?: string }> {
-  if (process.platform !== 'darwin') {
+  if (process.platform !== 'darwin' && process.platform !== 'win32') {
     const label = PROVIDERS[provider]?.label ?? provider
     return {
       ok: false,
-      error: `Automatic setup is macOS-only for now. Install ${label} manually.`
+      error: `Automatic setup isn't available on this OS yet. Install ${label} manually.`
     }
   }
 
+  const isWin = process.platform === 'win32'
   let scriptLines: string[]
 
-  if (provider === 'claude-cli') {
+  if (isWin) {
+    if (provider === 'claude-cli') {
+      scriptLines = [
+        '@echo off',
+        'cls',
+        'echo AskToto - Claude Code CLI setup',
+        'echo ================================',
+        'echo.',
+        'where npm >nul 2>nul',
+        'if errorlevel 1 (',
+        '  echo npm / Node.js not found. Install Node from https://nodejs.org, then run this again.',
+        '  echo.',
+        '  pause',
+        '  exit /b 1',
+        ')',
+        'echo Step 1/2  Installing Claude Code CLI (npm i -g @anthropic-ai/claude-code)...',
+        'call npm i -g @anthropic-ai/claude-code',
+        'if errorlevel 1 (',
+        '  echo.',
+        '  echo Install failed - often a permissions issue. Try running this file as Administrator.',
+        '  echo.',
+        '  pause',
+        '  exit /b 1',
+        ')',
+        'echo.',
+        'echo Step 2/2  Signing in to Claude (type /login at the prompt below)...',
+        'echo ----------------------------------------',
+        'call claude',
+        'echo.',
+        'echo Done. Go back to AskToto and click Connect again.',
+        'pause'
+      ]
+    } else if (provider === 'codex-cli') {
+      scriptLines = [
+        '@echo off',
+        'cls',
+        'echo AskToto - OpenAI Codex CLI setup',
+        'echo =================================',
+        'echo.',
+        'where npm >nul 2>nul',
+        'if errorlevel 1 (',
+        '  echo npm / Node.js not found. Install Node from https://nodejs.org, then run this again.',
+        '  echo.',
+        '  pause',
+        '  exit /b 1',
+        ')',
+        'echo Step 1/2  Installing OpenAI Codex CLI (npm i -g @openai/codex)...',
+        'call npm i -g @openai/codex',
+        'if errorlevel 1 (',
+        '  echo.',
+        '  echo Install failed - often a permissions issue. Try running this file as Administrator.',
+        '  echo.',
+        '  pause',
+        '  exit /b 1',
+        ')',
+        'echo.',
+        'echo Step 2/2  Signing in to OpenAI Codex...',
+        'call codex login',
+        'echo.',
+        'echo Done. Go back to AskToto and click Connect again.',
+        'pause'
+      ]
+    } else {
+      return { ok: false, error: `setupCli: unknown provider '${provider}'` }
+    }
+  } else if (provider === 'claude-cli') {
     scriptLines = [
       '#!/bin/bash',
       'clear',
@@ -511,7 +690,7 @@ export async function setupCli(provider: ProviderId): Promise<{ ok: boolean; err
 
   try {
     const script = scriptLines.join('\n') + '\n'
-    const scriptPath = join(app.getPath('temp'), `asktoto-${provider}-setup.command`)
+    const scriptPath = join(app.getPath('temp'), `asktoto-${provider}-setup.${isWin ? 'cmd' : 'command'}`)
     writeFileSync(scriptPath, script, { mode: 0o755 })
     const err = await shell.openPath(scriptPath)
     if (err) return { ok: false, error: err }
@@ -523,11 +702,16 @@ export async function setupCli(provider: ProviderId): Promise<{ ok: boolean; err
 
 // ─── installCli ──────────────────────────────────────────────────────────────────
 
+/** Matches stderr indicating the global npm install lacked permission — mac/Linux report EACCES,
+ *  Windows reports EPERM (e.g. a locked file, or a non-admin user without write access to the global
+ *  npm prefix). Either way the caller should offer the Terminal/console fallback instead of retrying. */
+export const INSTALL_PERMISSION_ERROR_RE = /EACCES|EPERM|permission denied|not permitted/i
+
 /**
  * Install the CLI package for the given provider in-app, without opening a Terminal.
- * Uses the user's login shell so node/npm and the user's npm prefix are on PATH.
- * Progress lines are streamed to onProgress as they arrive.
- * Returns {ok:true} on success; {needsTerminal:true} on EACCES; {ok:false, error} otherwise.
+ * Uses the user's login shell (mac/Linux) or cmd.exe (Windows) so node/npm and the user's npm prefix
+ * are on PATH. Progress lines are streamed to onProgress as they arrive.
+ * Returns {ok:true} on success; {needsTerminal:true} on EACCES/EPERM; {ok:false, error} otherwise.
  */
 export async function installCli(
   provider: ProviderId,
@@ -556,11 +740,18 @@ export async function installCli(
   return new Promise<CliInstallResult>((resolve) => {
     const loginShell = process.env.SHELL || '/bin/zsh'
     // pkg is a compile-time constant — no user input is interpolated here.
-    const child = spawn(loginShell, ['-lc', `npm i -g ${pkg}`], {
-      env: process.env,
-      shell: false,
-      stdio: ['ignore', 'pipe', 'pipe']
-    })
+    const child =
+      process.platform === 'win32'
+        ? spawn(process.env.ComSpec || 'cmd.exe', ['/d', '/s', '/c', 'npm', 'i', '-g', pkg], {
+            env: process.env,
+            shell: false,
+            stdio: ['ignore', 'pipe', 'pipe']
+          })
+        : spawn(loginShell, ['-lc', `npm i -g ${pkg}`], {
+            env: process.env,
+            shell: false,
+            stdio: ['ignore', 'pipe', 'pipe']
+          })
 
     const stderrLines: string[] = []
 
@@ -592,6 +783,17 @@ export async function installCli(
       if (code === 0) {
         // Evict any stale null entry so resolveBin re-probes after a successful install.
         binCache.delete(cfg.bin)
+        // Windows: PATH can still be stale in this very process right after the install (see
+        // resolveBin) — pre-seed the cache from npm's default global-bin folder so the very next
+        // resolveBin() call (e.g. the caller's immediate re-check) succeeds without waiting on `where`.
+        if (process.platform === 'win32') {
+          for (const candidate of npmGlobalBinCandidates(cfg.bin)) {
+            if (existsSync(candidate)) {
+              binCache.set(cfg.bin, candidate)
+              break
+            }
+          }
+        }
         resolve({ ok: true })
         return
       }
@@ -605,7 +807,7 @@ export async function installCli(
         return
       }
       // Detect permission error → caller should offer the Terminal fallback
-      if (/EACCES|permission denied|not permitted/i.test(stderrText)) {
+      if (INSTALL_PERMISSION_ERROR_RE.test(stderrText)) {
         resolve({ ok: false, needsTerminal: true, error: 'Global install needs admin permission.' })
         return
       }
@@ -618,23 +820,54 @@ export async function installCli(
 // ─── loginCli ────────────────────────────────────────────────────────────────────
 
 /**
- * Open a Terminal window for interactive CLI login only (no npm install step).
- * The user has already installed the CLI in-app via installCli; this is the
- * companion step for providers that require an interactive login flow.
- * macOS only — mirrors setupCli's Terminal pattern.
+ * Open a Terminal (macOS) or console (Windows) window for interactive CLI login only (no npm
+ * install step). The user has already installed the CLI in-app via installCli; this is the
+ * companion step for providers that require an interactive login flow. Mirrors setupCli's pattern.
  */
 export async function loginCli(provider: ProviderId): Promise<{ ok: boolean; error?: string }> {
-  if (process.platform !== 'darwin') {
-    const label = PROVIDERS[provider]?.label ?? provider
+  if (process.platform !== 'darwin' && process.platform !== 'win32') {
     return {
       ok: false,
-      error: `Automatic login is macOS-only for now. Run '${provider === 'claude-cli' ? 'claude' : 'codex login'}' in a Terminal.`
+      error: `Automatic login isn't available on this OS yet. Run '${provider === 'claude-cli' ? 'claude' : 'codex login'}' in a terminal.`
     }
   }
 
+  const isWin = process.platform === 'win32'
   let scriptLines: string[]
 
-  if (provider === 'claude-cli') {
+  if (isWin) {
+    if (provider === 'claude-cli') {
+      scriptLines = [
+        '@echo off',
+        'cls',
+        'echo AskToto - Claude Code CLI login',
+        'echo ================================',
+        'echo.',
+        'echo Type /login at the prompt below and follow the instructions.',
+        'echo ----------------------------------------',
+        'call claude',
+        'echo.',
+        'echo Done. Go back to AskToto and click Connect again.',
+        'pause'
+      ]
+    } else if (provider === 'codex-cli') {
+      scriptLines = [
+        '@echo off',
+        'cls',
+        'echo AskToto - OpenAI Codex CLI login',
+        'echo =================================',
+        'echo.',
+        'echo Follow the instructions below to sign in.',
+        'echo ----------------------------------------',
+        'call codex login',
+        'echo.',
+        'echo Done. Go back to AskToto and click Connect again.',
+        'pause'
+      ]
+    } else {
+      return { ok: false, error: `loginCli: unknown provider '${provider}'` }
+    }
+  } else if (provider === 'claude-cli') {
     scriptLines = [
       '#!/bin/bash',
       'clear',
@@ -666,7 +899,7 @@ export async function loginCli(provider: ProviderId): Promise<{ ok: boolean; err
 
   try {
     const script = scriptLines.join('\n') + '\n'
-    const scriptPath = join(app.getPath('temp'), `asktoto-${provider}-login.command`)
+    const scriptPath = join(app.getPath('temp'), `asktoto-${provider}-login.${isWin ? 'cmd' : 'command'}`)
     writeFileSync(scriptPath, script, { mode: 0o755 })
     const err = await shell.openPath(scriptPath)
     if (err) return { ok: false, error: err }

@@ -89,7 +89,6 @@ export const IPC = {
   windowQuit: 'window:quit',
   windowMinimize: 'window:minimize',
   hotkey: 'hotkey',
-  meetingDetected: 'meeting:detected',
   permissionsGet: 'permissions:get',
   permissionsOpenSettings: 'permissions:openSettings',
   listeningState: 'listening:state',
@@ -375,7 +374,9 @@ export const BaseSettingsSchema = z.object({
   showLiveTranscript: z.boolean().default(false),
   meetingsFolder: z.string().default(''),
   autoSaveTranscripts: z.boolean().default(false),
-  autoStartOnMeeting: z.boolean().default(true), // auto-starts recording directly on meeting detection
+  // deprecated — kept so persisted settings/managed-config still parse. The auto-start-on-meeting-detected
+  // popup was removed (too intrusive); Listen is manual-only now (Bar button, ControlPill mic, hotkey).
+  autoStartOnMeeting: z.boolean().default(true),
   launchAtLogin: z.boolean().default(false),
   onboardingDone: z.boolean().default(false),
   recordingConsent: z.boolean().default(false),
@@ -404,6 +405,8 @@ export const BaseSettingsSchema = z.object({
   // before it's sent to a cloud model. On by default; never touches the typed question or the saved file.
   redactSensitive: z.boolean().default(true),
   lastConsentReminderAt: z.number().default(0),
+  // deprecated — kept so persisted settings/managed-config still parse (was only used by the removed
+  // auto-start-on-meeting-detected popup's app-name matching).
   customMeetingApps: z.array(z.string().min(1).max(80)).max(20).default([]),
   // Words the ASR engine consistently mishears, always corrected in the live transcript (commitLine).
   asrCorrections: z.array(z.object({ from: z.string().min(1).max(80), to: z.string().max(80) })).max(100).default([]),
@@ -517,7 +520,7 @@ export const DEFAULT_SETTINGS: Settings = {
   showLiveTranscript: false,
   meetingsFolder: '',
   autoSaveTranscripts: false,
-  autoStartOnMeeting: true,
+  autoStartOnMeeting: true, // deprecated — kept so persisted settings/managed-config still parse
   launchAtLogin: false,
   onboardingDone: false,
   recordingConsent: false,
@@ -533,7 +536,7 @@ export const DEFAULT_SETTINGS: Settings = {
   requireConsentIndicator: true,
   redactSensitive: true,
   lastConsentReminderAt: 0,
-  customMeetingApps: [],
+  customMeetingApps: [], // deprecated — kept so persisted settings/managed-config still parse
   asrCorrections: [],
   cliConnected: {},
   dustTokenMintedAt: 0,
