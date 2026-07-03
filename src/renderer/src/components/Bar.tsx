@@ -25,6 +25,7 @@ import { Spinner } from './ui'
 import { modeLabel } from '@shared/ipc'
 import type { ConversationMode, CustomMode } from '@shared/ipc'
 import { formatScreenFreshness } from '@shared/perception'
+import { accelLabel } from '../lib/keys'
 
 /** Single source of truth for toolbar icon stroke — prevents per-icon drift. */
 const ICON_STROKE = 1.85
@@ -361,7 +362,7 @@ export const Bar = memo(function Bar(props: BarProps): JSX.Element {
             // Hero submit — accent-filled, ~38px. The only aw-fill control in the bar row.
             <button
               type="button"
-              title="Ask (↵)"
+              title={`Ask (${accelLabel('Return')})`}
               aria-label="Ask"
               onClick={props.onSubmit}
               className="aw-fill no-drag focus-ring flex-none grid h-[38px] w-[46px] place-items-center rounded-[10px] text-white transition-colors duration-[var(--duration-hover)]"
@@ -409,7 +410,7 @@ export const Bar = memo(function Bar(props: BarProps): JSX.Element {
               starts; Capture / Spotlight Ref / Mode / Deep thinking / Private view always stay in exactly
               the same position, with the divider right before Listen. */}
           <div className="flex items-center justify-center gap-4">
-            <IconTool title="Capture screen  (⌘⇧S)" onClick={props.onCapture}>
+            <IconTool title={`Capture screen  (${accelLabel('CommandOrControl+Shift+S')})`} onClick={props.onCapture}>
               {props.capturing ? <Spinner size={19} /> : <Image size={19} strokeWidth={ICON_STROKE} />}
             </IconTool>
             {/* Spotlight Ref — asks a dedicated Dust agent whether Mantu has relevant sales references
