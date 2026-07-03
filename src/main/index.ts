@@ -88,8 +88,6 @@ import {
   decryptToTemp,
   sweepStaleTempFiles
 } from './transcripts'
-import { detectMeeting } from './meeting-detect'
-import { titleMatchesCalendar } from './meeting-detect/shared'
 import { getPlatformPermissions } from './platform-perms'
 import {
   listMeetings,
@@ -592,88 +590,14 @@ function registerShortcuts(): void {
   }
 }
 
-let meetingTimer: ReturnType<typeof setInterval> | null = null
-let meetingActive = false
-let meetingDetecting = false
-let meetingDetectFailures = 0 // consecutive poll failures → one degraded-audit signal once it's persistent
 let notifTimer: ReturnType<typeof setInterval> | null = null
 let notifPrevPollMs = 0 // wall time of the previous notifier poll — used for edge-trigger logic
 const notifiedKeys = new Set<string>() // keys of events already notified this session
 
-// Cache today's agenda (~30s) so the 7s poller can cross-reference detected meetings against real calendar
-// events without hammering Graph. Validation only RESTRICTS auto-start when there are events to match
-// against; it always degrades OPEN when calendar is unavailable, so behavior is unchanged off Azure.
+// Cache today's agenda (~30s) so startMeetingNotifier can cross-reference upcoming events against real
+// calendar data without hammering Graph on every 30s poll.
 let calendarCache: { events: CalendarEvent[]; ts: number } | null = null
 const CALENDAR_CACHE_TTL_MS = 30_000
-
-/**
- * Should a window-title-detected meeting auto-start? Cross-references the detected title against today's
- * Outlook agenda to reject false positives (e.g. "Q4 Review | Microsoft Teams" — a chat, not a call).
- * Degrades OPEN (true) whenever calendar can't disprove it: browser-URL meetings (already high confidence),
- * not signed in, Graph unavailable/consent-needed, or an empty agenda. Only an authenticated agenda WITH
- * events and NO title match suppresses the auto-start (manual start always works regardless).
- */
-async function shouldAutoStart(hit: string): Promise<boolean> {
-  const detail = hit.slice(hit.indexOf('|') + 1)
-  const d = detail.trim()
-  // Resolve today's events (or leave null = unavailable). The match/degrade-open logic itself lives in the
-  // pure, unit-tested titleMatchesCalendar (handles URL / unavailable / empty / match).
-  let events: CalendarEvent[] | null = null
-  if (d && !/^https?:\/\//i.test(d) && requireAuth()) {
-    if (!calendarCache || Date.now() - calendarCache.ts > CALENDAR_CACHE_TTL_MS) {
-      let tz = 'UTC'
-      try {
-        tz = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'
-      } catch {
-        /* keep UTC */
-      }
-      const res = await calendarToday(tz)
-      if (res.ok && res.events) {
-        calendarCache = { events: res.events, ts: Date.now() }
-        events = res.events
-      }
-    } else {
-      events = calendarCache.events
-    }
-  }
-  return titleMatchesCalendar(detail, events)
-}
-
-function startMeetingPoller(): void {
-  if (meetingTimer) return
-  meetingTimer = setInterval(async () => {
-    if (meetingDetecting) return // skip if the previous detect is still running (no overlap)
-    if (!getSettings().onboardingDone || !getSettings().autoStartOnMeeting) {
-      return
-    }
-    meetingDetecting = true
-    try {
-      const hit = await detectMeeting(getSettings().customMeetingApps)
-      meetingDetectFailures = 0 // a completed poll (hit or not) clears the failure streak
-      if (hit && !meetingActive) {
-        if (await shouldAutoStart(hit)) {
-          meetingActive = true
-          if (win && !win.isVisible()) win.show() // surface the overlay so the user sees recording start
-          win?.webContents.send(IPC.meetingDetected, { app: hit.split('|')[0], active: true })
-        }
-        // else: probable false positive (no matching calendar event) — skip auto-start; manual still works
-      } else if (!hit && meetingActive) {
-        meetingActive = false
-        win?.webContents.send(IPC.meetingDetected, { active: false }) // meeting ended → renderer wraps up
-      }
-    } catch (e) {
-      // osascript timeout / Automation-denied etc. Without this catch a broken detector looks identical to
-      // "no meeting". Log every failure; emit ONE degraded-audit signal once it's clearly persistent.
-      meetingDetectFailures++
-      mainLog.error('[meeting-detect] poll failed:', e instanceof Error ? e.message : String(e))
-      if (meetingDetectFailures === 3) {
-        auditLog('meeting.detect.degraded', { consecutiveFailures: meetingDetectFailures })
-      }
-    } finally {
-      meetingDetecting = false
-    }
-  }, 7000)
-}
 
 /**
  * Native notification scheduler: fires a system notification ~1 minute before each calendar event.
@@ -687,7 +611,7 @@ function startMeetingNotifier(): void {
       if (!getSettings().meetingNotifications) return
       if (!Notification.isSupported()) return
 
-      // Resolve today's events from the warm cache or a fresh Outlook fetch (same pattern as shouldAutoStart).
+      // Resolve today's events from the warm cache or a fresh Outlook fetch.
       let events: CalendarEvent[] = []
       if (calendarCache && Date.now() - calendarCache.ts <= CALENDAR_CACHE_TTL_MS) {
         events = calendarCache.events
@@ -1976,7 +1900,6 @@ if (!app.requestSingleInstanceLock()) {
   runStep('ensureMeetingsFolder', () => ensureMeetingsFolder(getSettings()))
   runStep('registerIpc', registerIpc)
   runStep('registerScreenListeners', registerScreenListeners)
-  runStep('startMeetingPoller', startMeetingPoller)
   runStep('startMeetingNotifier', startMeetingNotifier)
   runStep('initAutoUpdate', () => initAutoUpdate(win))
   // Resume an interrupted brain backfill (flag persists in .brain/index.json until the queue drains).
@@ -1996,6 +1919,5 @@ app.on('window-all-closed', () => {
 
 app.on('will-quit', () => {
   globalShortcut.unregisterAll()
-  if (meetingTimer) clearInterval(meetingTimer)
   if (notifTimer) clearInterval(notifTimer)
 })

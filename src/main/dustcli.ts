@@ -61,7 +61,7 @@ export async function importDustCliSession(): Promise<DustCliSession> {
   if (process.platform !== 'darwin') {
     return {
       ok: false,
-      error: 'Dust CLI import is macOS-only for now — paste your Dust API key + workspace ID manually.'
+      error: 'On Windows, paste your Dust API key or workspace link instead — Settings → AI → Dust.'
     }
   }
   const [token, workspaceId, region] = await Promise.all([
@@ -93,7 +93,10 @@ export async function importDustCliSession(): Promise<DustCliSession> {
  */
 export async function refreshDustCliSession(): Promise<DustCliSession> {
   if (process.platform !== 'darwin') {
-    return { ok: false, error: 'Dust CLI refresh is macOS-only.' }
+    return {
+      ok: false,
+      error: 'On Windows, paste your Dust API key or workspace link instead — Settings → AI → Dust.'
+    }
   }
   const bin = await resolveBin('dust')
   if (bin) {
@@ -132,7 +135,7 @@ export async function setupDustCli(): Promise<{ ok: boolean; error?: string }> {
   if (process.platform !== 'darwin') {
     return {
       ok: false,
-      error: 'Automatic setup is macOS-only for now. Run `npm i -g @dust-tt/dust-cli && dust login` in a terminal.'
+      error: 'On Windows, paste your Dust API key or workspace link instead — Settings → AI → Dust.'
     }
   }
   try {

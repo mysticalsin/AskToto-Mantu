@@ -156,8 +156,6 @@ const api = {
   onDone: (cb: (d: StreamDone) => void): Unsub => sub(IPC.streamDone, cb),
   onError: (cb: (d: StreamError) => void): Unsub => sub(IPC.streamError, cb),
   onHotkey: (cb: (a: HotkeyAction) => void): Unsub => sub(IPC.hotkey, cb),
-  onMeetingDetected: (cb: (d: { app?: string; active?: boolean }) => void): Unsub =>
-    sub(IPC.meetingDetected, cb),
 
   onUpdateReady: (cb: (d: { version?: string }) => void): Unsub => sub(IPC.updateDownloaded, cb),
   installUpdate: (): Promise<void> => ipcRenderer.invoke(IPC.updateInstall),
