@@ -3363,6 +3363,186 @@ function IntelligenceTab({
       >
         <BidstackCard settings={settings} patch={patch} />
       </Section>
+
+      <Section
+        title="NotebookLM research"
+        desc="Ask your NotebookLM notebooks research questions during or after a meeting. Connected through your own Google account, all in one place."
+      >
+        <NotebookLmCard settings={settings} patch={patch} />
+      </Section>
+    </div>
+  )
+}
+
+/** NotebookLM research connector (MCP). A small state machine: detect the CLI, install it silently if
+ *  missing, sign in with Google (one click, opens a Terminal + browser), connect, then ask notebooks
+ *  questions inline. Mirrors the CLI cards' phase flow so it feels native to the rest of Settings. */
+function NotebookLmCard({
+  settings,
+  patch
+}: {
+  settings: PublicSettings
+  patch: (p: Partial<PublicSettings>) => void
+}): JSX.Element {
+  const [phase, setPhase] = useState<
+    'checking' | 'not-installed' | 'installing' | 'connecting' | 'connected' | 'sign-in-needed' | 'error'
+  >('checking')
+  const [status, setStatus] = useState('')
+  const [question, setQuestion] = useState('')
+  const [answer, setAnswer] = useState<{ text?: string; error?: string } | null>(null)
+  const [asking, setAsking] = useState(false)
+
+  const probeConnect = useCallback(async (): Promise<void> => {
+    setPhase('connecting')
+    setStatus('')
+    const r = await window.toto.notebookLmConnect()
+    if (r.ok) {
+      patch({ notebookLmConnected: true, notebookLmTools: r.tools ?? [] })
+      setPhase('connected')
+    } else if (r.needsSignIn) {
+      setPhase('sign-in-needed')
+      setStatus(r.error ?? '')
+    } else {
+      setPhase('error')
+      setStatus(r.error ?? 'Could not connect to NotebookLM.')
+    }
+  }, [patch])
+
+  useEffect(() => {
+    let alive = true
+    void window.toto.notebookLmDetect().then((d) => {
+      if (!alive) return
+      if (d.ok) void probeConnect()
+      else setPhase('not-installed')
+    })
+    return () => {
+      alive = false
+    }
+  }, [probeConnect])
+
+  const install = async (): Promise<void> => {
+    setPhase('installing')
+    setStatus('Getting NotebookLM ready…')
+    const r = await window.toto.notebookLmInstall((line) => setStatus(line))
+    if (r.ok) void probeConnect()
+    else {
+      setPhase('error')
+      setStatus(r.error || 'Could not set up NotebookLM.')
+    }
+  }
+
+  const signIn = async (): Promise<void> => {
+    const r = await window.toto.notebookLmLogin()
+    if (!r.ok) {
+      setPhase('error')
+      setStatus(r.error || 'Could not open sign-in.')
+    }
+    // On success the user finishes in the Terminal/browser, then clicks Connect below.
+  }
+
+  const ask = async (): Promise<void> => {
+    const q = question.trim()
+    if (!q || asking) return
+    setAsking(true)
+    setAnswer(null)
+    const r = await window.toto.notebookLmAsk({ question: q })
+    setAnswer(r.ok ? { text: r.text } : { error: r.error || 'No answer.' })
+    setAsking(false)
+  }
+
+  const busy = phase === 'checking' || phase === 'connecting' || phase === 'installing'
+  const primaryBtn =
+    'no-drag cl-focus flex items-center gap-1.5 rounded-[10px] bg-[var(--cl-primary)] px-3 py-2 text-[12px] font-medium text-white hover:opacity-90 disabled:opacity-50'
+  const ghostBtn =
+    'no-drag cl-focus flex items-center gap-1.5 rounded-[10px] border border-[var(--cl-input)] bg-white/[0.04] px-3 py-2 text-[12px] text-[color:var(--cl-foreground)] hover:bg-white/[0.08]'
+
+  return (
+    <div className="flex flex-col gap-2.5">
+      <div className="cl-card flex items-center gap-2 px-3 py-2.5 text-[12px]">
+        <Search
+          size={15}
+          className={phase === 'connected' ? 'text-[color:var(--cl-primary)]' : 'text-[color:var(--cl-muted-foreground)]'}
+        />
+        {phase === 'checking' && <span className="text-[color:var(--cl-muted-foreground)]">Checking…</span>}
+        {phase === 'connecting' && <span className="text-[color:var(--cl-muted-foreground)]">Connecting to NotebookLM…</span>}
+        {phase === 'installing' && (
+          <span className="truncate text-[color:var(--cl-muted-foreground)]">{status || 'Setting up…'}</span>
+        )}
+        {phase === 'not-installed' && <span className="text-[color:var(--cl-muted-foreground)]">Not set up yet.</span>}
+        {phase === 'sign-in-needed' && (
+          <span className="text-[color:var(--cl-muted-foreground)]">Sign in with your Google account to connect.</span>
+        )}
+        {phase === 'error' && <span className="text-[color:var(--color-danger)]">{status || 'Something went wrong.'}</span>}
+        {phase === 'connected' && (
+          <span className="text-[color:var(--cl-foreground)]">
+            Connected · {settings.notebookLmTools.length} tool{settings.notebookLmTools.length === 1 ? '' : 's'}
+          </span>
+        )}
+        {busy && <RefreshCw size={12} className="ml-auto animate-spin text-[color:var(--cl-muted-foreground)]" />}
+      </div>
+
+      {phase === 'not-installed' && (
+        <button type="button" onClick={() => void install()} className={primaryBtn + ' w-fit'}>
+          <Search size={13} /> Set up NotebookLM
+        </button>
+      )}
+
+      {phase === 'sign-in-needed' && (
+        <div className="flex flex-col gap-2">
+          <span className="text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
+            A Terminal opens and signs you in through your browser. When it says done, come back and click
+            Connect.
+          </span>
+          <div className="flex gap-2">
+            <button type="button" onClick={() => void signIn()} className={primaryBtn}>
+              <ExternalLink size={13} /> Sign in with Google
+            </button>
+            <button type="button" onClick={() => void probeConnect()} className={ghostBtn}>
+              <RefreshCw size={13} /> Connect
+            </button>
+          </div>
+        </div>
+      )}
+
+      {phase === 'error' && (
+        <button type="button" onClick={() => void probeConnect()} className={ghostBtn + ' w-fit'}>
+          <RefreshCw size={13} /> Retry
+        </button>
+      )}
+
+      {phase === 'connected' && (
+        <div className="flex flex-col gap-2">
+          <div className="flex gap-2">
+            <input
+              value={question}
+              onChange={(e) => setQuestion(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') void ask()
+              }}
+              placeholder="Ask your notebooks a question…"
+              className={'flex-1 ' + ctl}
+            />
+            <button
+              type="button"
+              onClick={() => void ask()}
+              disabled={asking || !question.trim()}
+              className={primaryBtn}
+            >
+              {asking ? <RefreshCw size={13} className="animate-spin" /> : <Sparkles size={13} />} Ask
+            </button>
+          </div>
+          {answer?.text && (
+            <div className="cl-card whitespace-pre-wrap px-3 py-2.5 text-[12px] leading-relaxed text-[color:var(--cl-foreground)]">
+              {answer.text}
+            </div>
+          )}
+          {answer?.error && (
+            <div className="flex items-start gap-1.5 text-[11px] text-[color:var(--color-danger)]">
+              <AlertCircle size={13} className="mt-px shrink-0" /> {answer.error}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   )
 }
