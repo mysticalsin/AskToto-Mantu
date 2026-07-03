@@ -13,7 +13,10 @@ import {
   Brain,
   Eye,
   Check,
-  AlertCircle
+  AlertCircle,
+  Terminal,
+  KeyRound,
+  Building2
 } from 'lucide-react'
 import type { PublicSettings, Profile, PlatformPermissions } from '@shared/ipc'
 import type { ProviderId } from '@shared/providers'
@@ -53,6 +56,46 @@ function ActionRow({ icon: Icon, label, hint, keys }: { icon: typeof Mic; label:
         <div className="text-[11px] leading-snug text-[color:var(--color-ink-2)]">{hint}</div>
       </div>
     </div>
+  )
+}
+
+/** One selectable "how to power AskToto" path on the provider-choice slide. A plain-language card the
+ *  user taps to route themselves — no jargon, no key required to read it. */
+function ProviderOption({
+  icon: Icon,
+  title,
+  badge,
+  desc,
+  onClick
+}: {
+  icon: typeof Mic
+  title: string
+  badge?: string
+  desc: string
+  onClick: () => void
+}): JSX.Element {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="no-drag focus-ring group flex items-start gap-3 rounded-xl border border-[var(--color-hair-soft)] bg-white/[0.02] p-3.5 text-left transition-colors hover:border-[var(--color-accent)] hover:bg-white/[0.05]"
+    >
+      <div className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-[var(--color-accent-soft)] text-[var(--color-accent)]">
+        <Icon size={17} />
+      </div>
+      <div className="min-w-0 flex-1">
+        <div className="flex items-center gap-2">
+          <span className="text-[13.5px] font-medium text-[color:var(--color-ink)]">{title}</span>
+          {badge && (
+            <span className="rounded-full bg-[var(--color-success)]/15 px-1.5 py-0.5 text-[10px] font-medium text-[var(--color-success)]">
+              {badge}
+            </span>
+          )}
+        </div>
+        <div className="mt-0.5 text-[11.5px] leading-snug text-[color:var(--color-ink-2)]">{desc}</div>
+      </div>
+      <ArrowRight size={15} className="mt-1 shrink-0 text-[color:var(--color-ink-3)] group-hover:text-[color:var(--color-accent)]" />
+    </button>
   )
 }
 
@@ -159,7 +202,7 @@ export function Onboarding({
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
   const [finishErr, setFinishErr] = useState('')
-  const [step, setStep] = useState<1 | 2 | 3 | 4 | 5>(1)
+  const [step, setStep] = useState<1 | 2 | 3 | 4 | 5 | 6>(1)
   const [perms, setPerms] = useState<PlatformPermissions | null>(null)
 
   // Pull live permission status when the final checklist appears (and refresh shortly after, since the
@@ -260,6 +303,67 @@ export function Onboarding({
   }
 
   if (step === 5) {
+    // Route the user to a provider in plain language, then let the readiness step (6) confirm setup.
+    // Picking a path just sets the active provider (Tony's routing: an API key -> Anthropic/Claude, a
+    // Dust team -> Dust, an installed CLI -> Claude Code). "Decide later" is honoured — recording and
+    // transcripts never need a key, so nobody is blocked here.
+    const choose = (provider: ProviderId): void => {
+      patch({ provider })
+      setStep(6)
+    }
+    return (
+      <div className="fade-up flex min-h-[300px] w-full flex-col items-center gap-5 px-4 py-7 text-center">
+        <div className="flex flex-col items-center gap-1.5">
+          <div className="font-ui text-[18px] font-semibold tracking-tight text-[color:var(--color-ink)]">
+            How should AskToto answer you?
+          </div>
+          <p className="max-w-[460px] text-[12px] leading-snug text-[color:var(--color-ink-2)]">
+            Transcription is always free and runs on your device. To get live answers, pick one way to
+            connect the AI. You can change this any time in Settings.
+          </p>
+        </div>
+
+        <div className="flex w-full max-w-[460px] flex-col gap-2.5">
+          <ProviderOption
+            icon={Terminal}
+            title="Claude Code or Codex"
+            badge="No key needed"
+            desc="Already use Claude Code or Codex in your terminal? Connect it. Nothing extra to pay, nothing to paste."
+            onClick={() => choose('claude-cli')}
+          />
+          <ProviderOption
+            icon={KeyRound}
+            title="An API key"
+            desc="Have a key from Anthropic (Claude) or another provider? Paste it and you're set. You pay your provider directly."
+            onClick={() => choose('anthropic')}
+          />
+          <ProviderOption
+            icon={Building2}
+            title="Mantu Dust"
+            desc="Use Mantu's shared Dust workspace. Best if your team already runs on Dust."
+            onClick={() => choose('dust')}
+          />
+        </div>
+
+        <button
+          type="button"
+          onClick={() => setStep(6)}
+          className="no-drag focus-ring inline-flex items-center gap-1 text-[12px] text-[color:var(--color-ink-3)] hover:text-[color:var(--color-ink-2)]"
+        >
+          Decide later — recording and transcripts still work <ArrowRight size={11} />
+        </button>
+        <button
+          type="button"
+          onClick={() => setStep(4)}
+          className="no-drag focus-ring text-[11px] text-[color:var(--color-ink-3)] hover:text-[color:var(--color-ink-2)]"
+        >
+          Back
+        </button>
+      </div>
+    )
+  }
+
+  if (step === 6) {
     const providerLabel = PROVIDERS[settings.provider]?.label ?? 'AI provider'
     return (
       <div className="fade-up flex min-h-[300px] w-full flex-col items-center gap-5 px-4 py-7 text-center">
@@ -301,7 +405,7 @@ export function Onboarding({
         {finishErr && <div className="text-[12px] text-[color:var(--color-danger)]">{finishErr}</div>}
         <button
           type="button"
-          onClick={() => setStep(4)}
+          onClick={() => setStep(5)}
           className="no-drag focus-ring text-[11px] text-[color:var(--color-ink-3)] hover:text-[color:var(--color-ink-2)]"
         >
           Back
