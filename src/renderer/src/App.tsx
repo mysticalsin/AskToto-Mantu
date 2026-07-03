@@ -19,6 +19,7 @@ import { NewMeetingToast } from './components/NewMeetingToast'
 import { RecordingConsentReminder } from './components/RecordingConsentReminder'
 import { QuickActions, type QuickKind } from './components/QuickActions'
 import { useAsk, useAutoResize, useSettings, useAuth } from './state'
+import { useWindowDrag } from './lib/window-drag'
 import { useListen, playListenChime } from './lib/listen'
 import { playCue, playClick, setSoundsEnabled } from './lib/sound'
 import type { HotkeyAction, TranscriptLine, ConversationMode, ChatTurn } from '@shared/ipc'
@@ -81,6 +82,20 @@ const DEMO_SUG = `**Say this:** "At Mantu I led the AskToto build — a Cluely-c
 
 export function App(): JSX.Element {
   const setRoot = useAutoResize() // callback ref — tracks the live root across view switches
+
+  // Single window-drag instance for the ENTIRE app — every surface (loading strip, sign-in wall,
+  // onboarding, and the main bar/panel) spreads this same object on its own root div below, rather than
+  // each surface (or Bar itself) owning its own hook. It arms from any empty, non-`.no-drag` surface —
+  // including panels/toasts/gates that never used to be draggable. noTouch keeps a Windows touchscreen's
+  // scroll gesture scrolling instead of moving the window; the minimized ControlPill keeps its own
+  // separate armOnControls instance and this one is withheld while minimized (see `minimized` below) so
+  // exactly one instance is ever armed at a time. Blurring the active input on drag-start replaces the
+  // input-blur Bar used to do itself before it had its own useWindowDrag instance.
+  const onWindowDragStart = useCallback(() => {
+    const el = document.activeElement
+    if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) el.blur()
+  }, [])
+  const windowDrag = useWindowDrag(onWindowDragStart, { noTouch: true })
 
   const { settings, patch, saveKey, clearKey, testKey, refresh } = useSettings()
   const auth = useAuth() // Azure AD gate (only enforces when configured)
@@ -1412,7 +1427,7 @@ export function App(): JSX.Element {
   // is enforced and before the no-key CTA can render. (DEMO bypasses this so screenshots still work.)
   if (DEMO == null && (settings == null || auth.status == null)) {
     return (
-      <div ref={setRoot} className="w-full p-1.5">
+      <div ref={setRoot} {...windowDrag} className="w-full p-1.5">
         <div className="glass flex h-[38px] w-full items-center gap-2.5 rounded-full px-4">
           <span className="h-2 w-2 animate-pulse rounded-full bg-[var(--color-accent)]" />
           <span className="font-ui text-[12px] text-[color:var(--color-ink-3)]">Starting AskToto…</span>
@@ -1424,7 +1439,7 @@ export function App(): JSX.Element {
   // Azure AD gate — blocks all use when SSO is configured and the user isn't signed in.
   if (auth.status?.configured && !auth.status.signedIn && DEMO == null) {
     return (
-      <div ref={setRoot} className="w-full p-1.5">
+      <div ref={setRoot} {...windowDrag} className="w-full p-1.5">
         <SignInWall status={auth.status} onSignIn={auth.signIn} />
       </div>
     )
@@ -1433,7 +1448,7 @@ export function App(): JSX.Element {
   // Onboarding gate (first run)
   if (settings && !settings.onboardingDone && DEMO == null) {
     return (
-      <div ref={setRoot} className="flex w-full flex-col gap-2 p-1.5">
+      <div ref={setRoot} {...windowDrag} className="flex w-full flex-col gap-2 p-1.5">
         <Panel>
           <Onboarding settings={settings} saveKey={saveKey} patch={patch} onDone={() => void refresh()} />
         </Panel>
@@ -1468,7 +1483,13 @@ export function App(): JSX.Element {
   const showListeningChrome = listen.listening && view !== 'review'
 
   return (
-    <div ref={setRoot} className={['relative flex w-full flex-col gap-2 p-1.5', showListeningChrome ? 'listening' : ''].join(' ')}>
+    // Root drag is withheld while minimized: ControlPill (rendered below) arms its OWN drag instance on
+    // its own narrower pill div, and arming both here and there would double every moveBy delta.
+    <div
+      ref={setRoot}
+      {...(minimized ? {} : windowDrag)}
+      className={['relative flex w-full flex-col gap-2 p-1.5', showListeningChrome ? 'listening' : ''].join(' ')}
+    >
       {(() => {
         const toasts = (
           <>

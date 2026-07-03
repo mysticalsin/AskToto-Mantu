@@ -70,6 +70,7 @@ import {
   detectProvider,
   parseDustUrl,
   resolveModelTier,
+  isDustReady,
   type ProviderId
 } from '@shared/providers'
 import { DEFAULT_MODE_PROMPTS } from '@shared/prompts'
@@ -100,6 +101,18 @@ function pickReadyProvider(
     (p) =>
       p !== exclude &&
       (PROVIDERS[p].kind === 'cli' ? !!cliConnected[p] : !!hasKeys[p])
+  )
+  return ready ?? 'anthropic'
+}
+
+/** The provider Settings nudges the user toward inside "Experience: more models" — an Anthropic key
+ *  beats everything, then a configured Dust, then whichever other provider already has a working key
+ *  or CLI connection. Drives the small "Best pick" badge on a provider tile. */
+function recommendedProvider(settings: PublicSettings): ProviderId {
+  if (settings.hasKeys['anthropic']) return 'anthropic'
+  if (isDustReady(settings.hasKeys, settings.dustWorkspaceId, settings.providerModels)) return 'dust'
+  const ready = PROVIDER_IDS.find((p) =>
+    PROVIDERS[p].kind === 'cli' ? !!settings.cliConnected?.[p] : !!settings.hasKeys[p]
   )
   return ready ?? 'anthropic'
 }
@@ -234,6 +247,44 @@ function Section({
         )}
       </div>
       {children}
+    </section>
+  )
+}
+
+/** Like Section, but its body is collapsed behind a details-style toggle — closed on every mount, no
+ *  persisted "remember this was open" state. Used for secondary content (e.g. "Experience: more
+ *  models") that shouldn't compete with the primary flow for attention. */
+function ExpandableSection({
+  title,
+  desc,
+  children
+}: {
+  title: string
+  desc?: string
+  children: ReactNode
+}): JSX.Element {
+  const [open, setOpen] = useState(false)
+  return (
+    <section className="flex flex-col">
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        aria-expanded={open}
+        className="no-drag cl-focus flex w-full items-center justify-between gap-2 text-left"
+      >
+        <div>
+          <div className="text-[13px] font-semibold leading-snug text-[color:var(--cl-foreground)]">{title}</div>
+          {desc && <div className="mt-1 text-[12px] text-[color:var(--cl-muted-foreground)]">{desc}</div>}
+        </div>
+        <ChevronDown
+          size={14}
+          className={[
+            'mt-0.5 shrink-0 text-[color:var(--cl-muted-foreground)] transition-transform',
+            open ? 'rotate-180' : ''
+          ].join(' ')}
+        />
+      </button>
+      {open && <div className="mt-3 flex flex-col gap-5">{children}</div>}
     </section>
   )
 }
@@ -446,12 +497,216 @@ function AiSection({
 
   const hint = detectHint(key, provider)
   const q = filter.trim().toLowerCase()
-  // Dust + CLI providers have dedicated UI sections; gemini is hidden — exclude all from the tiles grid.
+  // Dust + CLI providers have dedicated UI sections; gemini is hidden; Anthropic has its own always-
+  // visible card below — exclude all from the "Experience: more models" tiles grid.
   const shown = PROVIDER_IDS.filter(
-    (id) => !CLI_PROVIDERS.has(id) && (!q || PROVIDERS[id].label.toLowerCase().includes(q))
+    (id) => !CLI_PROVIDERS.has(id) && id !== 'anthropic' && (!q || PROVIDERS[id].label.toLowerCase().includes(q))
   )
+  const recommended = recommendedProvider(settings)
 
   const dustSectionRef = useRef<HTMLDivElement>(null)
+
+  // The "{provider} key" card — shown for whichever raw provider is currently active. Rendered at the
+  // top level when that's Anthropic (the primary flow), or inside "Experience: more models" otherwise.
+  // null for CLI providers (Dust/Claude Code/Codex have their own dedicated cards, no generic key box).
+  const keyEntrySection = !CLI_PROVIDERS.has(provider) ? (
+    <Section title={`${def.label} key`} desc="Stored encrypted on this device. Never sent anywhere except the provider.">
+      <div className="flex items-center gap-2">
+        <label htmlFor={keyInputId} className="sr-only">
+          {def.label} API key
+        </label>
+        <input
+          id={keyInputId}
+          type="password"
+          value={key}
+          onChange={(e) => onKeyChange(e.target.value)}
+          onKeyDown={(e) => e.key === 'Enter' && onSave()}
+          placeholder={
+            settings.hasKeys[provider] ? '•••••• saved (paste to replace)' : `Paste your ${def.label} key`
+          }
+          className={'flex-1 ' + ctl}
+        />
+        <button
+          type="button"
+          onClick={onSave}
+          className="no-drag cl-focus flex items-center gap-1 rounded-[10px] bg-[var(--cl-primary)] px-4 py-2.5 text-[13px] font-medium text-white hover:opacity-90"
+        >
+          {saved ? <Check size={14} /> : null}
+          {saved ? 'Saved' : 'Save'}
+        </button>
+        <button
+          type="button"
+          onClick={onTest}
+          disabled={test.status === 'loading'}
+          className="no-drag cl-focus flex items-center gap-1 rounded-[10px] border border-[var(--cl-input)] bg-white/[0.04] px-3 py-2.5 text-[13px] text-[color:var(--cl-foreground)] hover:bg-white/[0.08] disabled:opacity-50"
+        >
+          {test.status === 'loading' ? <Loader2 size={14} className="animate-spin" /> : null}
+          Test
+        </button>
+        {settings.envKeys.includes(provider) ? (
+          <span
+            title="This key is set via an environment variable on this machine. Remove it where it was defined; the in-app Remove can't clear it."
+            className="flex items-center rounded-[10px] border border-[var(--cl-input)] bg-white/[0.04] px-3 py-2.5 text-[12px] text-[color:var(--cl-muted-foreground)]"
+          >
+            Set via environment variable
+          </span>
+        ) : settings.hasKeys[provider] ? (
+          <button
+            type="button"
+            onClick={onRemove}
+            title="Remove saved key"
+            className="no-drag cl-focus flex items-center justify-center rounded-[10px] border border-[var(--cl-destructive)]/30 bg-[var(--cl-destructive)]/10 px-3 py-2.5 text-[color:var(--cl-destructive)] hover:bg-[var(--cl-destructive)]/20"
+          >
+            <Trash2 size={14} />
+          </button>
+        ) : null}
+      </div>
+
+      {hint && (
+        <div
+          className={[
+            'mt-2 flex items-center gap-1.5 text-[12px]',
+            hint.kind === 'ok'
+              ? 'text-[color:var(--cl-primary)]'
+              : 'text-[color:var(--cl-muted-foreground)]'
+          ].join(' ')}
+        >
+          <Sparkles size={13} /> {hint.text}
+        </div>
+      )}
+
+      {test.status !== 'idle' && test.status !== 'loading' && (
+        <div
+          className={[
+            'mt-2 flex items-center gap-1.5 text-[12px]',
+            test.status === 'ok'
+              ? 'text-[color:var(--cl-success)]'
+              : 'text-[color:var(--cl-destructive)]'
+          ].join(' ')}
+        >
+          {test.status === 'ok' ? <Check size={13} /> : <AlertCircle size={13} />}
+          {test.message}
+        </div>
+      )}
+
+      <div className="mt-2 flex items-center justify-between text-[12px]">
+        <span className="text-[color:var(--cl-muted-foreground)]">
+          {settings.hasEncryption
+            ? 'Stored encrypted on this device.'
+            : 'Stored locally (encryption unavailable).'}
+        </span>
+        {def.keyUrl && (
+          <a
+            href={def.keyUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="no-drag inline-flex items-center gap-0.5 text-[color:var(--cl-primary)]"
+          >
+            Get a key <ExternalLink size={11} />
+          </a>
+        )}
+      </div>
+
+      <button
+        type="button"
+        onClick={() => setAdv((a) => !a)}
+        className="no-drag mt-2 flex items-center gap-1 text-[12px] text-[color:var(--cl-muted-foreground)] hover:text-[color:var(--cl-foreground)]"
+      >
+        <ChevronDown size={12} className={adv ? 'rotate-180 transition-transform' : 'transition-transform'} />
+        Advanced
+      </button>
+      {adv && (
+        <div className="mt-2 flex flex-col gap-2">
+          <div className="flex flex-col gap-1">
+            <label htmlFor={modelInputId} className="text-[11px] font-medium text-[color:var(--cl-muted-foreground)]">
+              Base model · fast, cheap
+            </label>
+            <div className="flex items-center gap-2">
+              <input
+                id={modelInputId}
+                list={`m-${provider}`}
+                value={baseModelName}
+                disabled={provider === 'anthropic' || settings.managedKeys.includes('providerModels')}
+                onChange={(e) =>
+                  patch({ providerModels: { ...settings.providerModels, [provider]: e.target.value } })
+                }
+                placeholder={def.fastModel || 'base model id'}
+                className={[
+                  'w-full', ctl,
+                  provider === 'anthropic' || settings.managedKeys.includes('providerModels') ? 'opacity-60' : ''
+                ].join(' ')}
+              />
+              <ManagedChip keys={settings.managedKeys} k="providerModels" />
+            </div>
+          </div>
+          <div className="flex flex-col gap-1">
+            <label htmlFor={`think-${provider}`} className="text-[11px] font-medium text-[color:var(--cl-muted-foreground)]">
+              Thinking model · hard, coding questions
+            </label>
+            <input
+              id={`think-${provider}`}
+              list={`m-${provider}`}
+              value={settings.providerModelsThinking[provider] ?? ''}
+              disabled={provider === 'anthropic' || settings.managedKeys.includes('providerModelsThinking')}
+              onChange={(e) =>
+                patch({
+                  providerModelsThinking: { ...settings.providerModelsThinking, [provider]: e.target.value }
+                })
+              }
+              placeholder={def.thinkModel || def.defaultModel || 'thinking model id'}
+              className={[
+                'w-full', ctl,
+                provider === 'anthropic' || settings.managedKeys.includes('providerModelsThinking') ? 'opacity-60' : ''
+              ].join(' ')}
+            />
+          </div>
+          {provider === 'anthropic' && (
+            <p className="text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
+              Locked: base always answers as Haiku, thinking as Sonnet — a cost guardrail. Hard/coding
+              questions still escalate to Opus automatically; that tier isn't shown here.
+            </p>
+          )}
+          <datalist id={`m-${provider}`}>
+            {def.models.map((m) => (
+              <option key={m} value={m} />
+            ))}
+          </datalist>
+          {provider === 'custom' && (
+            <div className="flex items-center gap-2">
+              <label htmlFor={baseUrlInputId} className="sr-only">
+                Custom endpoint URL
+              </label>
+              <LazyInput
+                id={baseUrlInputId}
+                value={settings.customBaseUrl}
+                disabled={settings.managedKeys.includes('customBaseUrl')}
+                onCommit={(v) => patch({ customBaseUrl: v })}
+                placeholder="https://your-endpoint/v1"
+                className={['w-full', ctl, settings.managedKeys.includes('customBaseUrl') ? 'opacity-60' : ''].join(' ')}
+              />
+              <ManagedChip keys={settings.managedKeys} k="customBaseUrl" />
+            </div>
+          )}
+          <label className="flex items-center justify-between gap-3 px-1 text-[12px] text-[color:var(--cl-muted-foreground)]">
+            <span className="flex items-center gap-2">
+              Creativity · {settings.temperature.toFixed(1)}
+              <ManagedChip keys={settings.managedKeys} k="temperature" />
+            </span>
+            <input
+              type="range"
+              min={0}
+              max={1}
+              step={0.1}
+              value={settings.temperature}
+              disabled={settings.managedKeys.includes('temperature')}
+              onChange={(e) => patch({ temperature: Number(e.target.value) })}
+              className={['no-drag accent-[var(--cl-primary)]', settings.managedKeys.includes('temperature') ? 'opacity-60' : ''].join(' ')}
+            />
+          </label>
+        </div>
+      )}
+    </Section>
+  ) : null
 
   return (
     <div className="flex flex-col gap-5">
@@ -473,254 +728,107 @@ function AiSection({
         />
       </div>
 
-      <Section title="Model provider" desc="Prefer a raw model? Pick one, paste a key, and AskToto detects the provider.">
-        {PROVIDER_IDS.length > 8 && (
-          <div className="relative mb-2">
-            <Search
-              size={13}
-              className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-[color:var(--cl-muted-foreground)]"
-            />
-            <input
-              value={filter}
-              onChange={(e) => setFilter(e.target.value)}
-              placeholder="Filter providers…"
-              className={'w-full pl-7 ' + ctl}
-            />
-          </div>
-        )}
-        <div className="grid grid-cols-3 gap-2">
-          {shown.map((id) => {
-            const active = id === provider
-            return (
-              <button
-                key={id}
-                type="button"
-                aria-pressed={active}
-                disabled={locked}
-                onClick={() => patch({ provider: id })}
-                className={[
-                  'no-drag cl-focus flex items-center justify-between gap-1.5 rounded-[10px] border px-2.5 py-2 text-left transition-colors',
-                  active
-                    ? 'border-[var(--cl-primary)] bg-[var(--cl-primary-soft)]'
-                    : 'border-[var(--cl-border)] bg-white/[0.02] hover:bg-white/[0.05]',
-                  locked ? 'opacity-60 cursor-not-allowed' : ''
-                ].join(' ')}
-              >
-                <span className="truncate text-[12px] font-medium text-[color:var(--cl-foreground)]">
-                  {PROVIDERS[id].label}
-                </span>
-                {settings.hasKeys[id] && (
-                  <Check size={14} className="shrink-0 text-[color:var(--cl-success)]" />
-                )}
-              </button>
-            )
-          })}
-        </div>
-        {locked && (
-          <div className="mt-2">
-            <span className={managedChipCls}>Managed by your organization</span>
-          </div>
-        )}
-      </Section>
-
-      {!CLI_PROVIDERS.has(provider) && (
-      <Section title={`${def.label} key`} desc="Stored encrypted on this device. Never sent anywhere except the provider.">
-        <div className="flex items-center gap-2">
-          <label htmlFor={keyInputId} className="sr-only">
-            {def.label} API key
-          </label>
-          <input
-            id={keyInputId}
-            type="password"
-            value={key}
-            onChange={(e) => onKeyChange(e.target.value)}
-            onKeyDown={(e) => e.key === 'Enter' && onSave()}
-            placeholder={
-              settings.hasKeys[provider] ? '•••••• saved (paste to replace)' : `Paste your ${def.label} key`
-            }
-            className={'flex-1 ' + ctl}
-          />
-          <button
-            type="button"
-            onClick={onSave}
-            className="no-drag cl-focus flex items-center gap-1 rounded-[10px] bg-[var(--cl-primary)] px-4 py-2.5 text-[13px] font-medium text-white hover:opacity-90"
-          >
-            {saved ? <Check size={14} /> : null}
-            {saved ? 'Saved' : 'Save'}
-          </button>
-          <button
-            type="button"
-            onClick={onTest}
-            disabled={test.status === 'loading'}
-            className="no-drag cl-focus flex items-center gap-1 rounded-[10px] border border-[var(--cl-input)] bg-white/[0.04] px-3 py-2.5 text-[13px] text-[color:var(--cl-foreground)] hover:bg-white/[0.08] disabled:opacity-50"
-          >
-            {test.status === 'loading' ? <Loader2 size={14} className="animate-spin" /> : null}
-            Test
-          </button>
-          {settings.envKeys.includes(provider) ? (
-            <span
-              title="This key is set via an environment variable on this machine. Remove it where it was defined; the in-app Remove can't clear it."
-              className="flex items-center rounded-[10px] border border-[var(--cl-input)] bg-white/[0.04] px-3 py-2.5 text-[12px] text-[color:var(--cl-muted-foreground)]"
-            >
-              Set via environment variable
-            </span>
-          ) : settings.hasKeys[provider] ? (
-            <button
-              type="button"
-              onClick={onRemove}
-              title="Remove saved key"
-              className="no-drag cl-focus flex items-center justify-center rounded-[10px] border border-[var(--cl-destructive)]/30 bg-[var(--cl-destructive)]/10 px-3 py-2.5 text-[color:var(--cl-destructive)] hover:bg-[var(--cl-destructive)]/20"
-            >
-              <Trash2 size={14} />
-            </button>
-          ) : null}
-        </div>
-
-        {hint && (
-          <div
-            className={[
-              'mt-2 flex items-center gap-1.5 text-[12px]',
-              hint.kind === 'ok'
-                ? 'text-[color:var(--cl-primary)]'
-                : 'text-[color:var(--cl-muted-foreground)]'
-            ].join(' ')}
-          >
-            <Sparkles size={13} /> {hint.text}
-          </div>
-        )}
-
-        {test.status !== 'idle' && test.status !== 'loading' && (
-          <div
-            className={[
-              'mt-2 flex items-center gap-1.5 text-[12px]',
-              test.status === 'ok'
-                ? 'text-[color:var(--cl-success)]'
-                : 'text-[color:var(--cl-destructive)]'
-            ].join(' ')}
-          >
-            {test.status === 'ok' ? <Check size={13} /> : <AlertCircle size={13} />}
-            {test.message}
-          </div>
-        )}
-
-        <div className="mt-2 flex items-center justify-between text-[12px]">
-          <span className="text-[color:var(--cl-muted-foreground)]">
-            {settings.hasEncryption
-              ? 'Stored encrypted on this device.'
-              : 'Stored locally (encryption unavailable).'}
+      {/* Anthropic — the primary, recommended provider. Always visible: a compact summary row here,
+          plus its full key card below whenever it's the one currently answering questions. */}
+      <div
+        className={[
+          'flex items-center justify-between gap-2 rounded-[10px] border p-3',
+          provider === 'anthropic'
+            ? 'border-[var(--cl-primary)] bg-[var(--cl-primary-soft)]/40'
+            : 'border-[var(--cl-border)] bg-white/[0.02]'
+        ].join(' ')}
+      >
+        <div className="flex flex-col gap-0.5">
+          <span className="text-[12px] font-medium text-[color:var(--cl-foreground)]">{PROVIDERS.anthropic.label}</span>
+          <span className="text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
+            {PROVIDERS.anthropic.blurb}
           </span>
-          {def.keyUrl && (
-            <a
-              href={def.keyUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="no-drag inline-flex items-center gap-0.5 text-[color:var(--cl-primary)]"
-            >
-              Get a key <ExternalLink size={11} />
-            </a>
-          )}
         </div>
-
-        <button
-          type="button"
-          onClick={() => setAdv((a) => !a)}
-          className="no-drag mt-2 flex items-center gap-1 text-[12px] text-[color:var(--cl-muted-foreground)] hover:text-[color:var(--cl-foreground)]"
-        >
-          <ChevronDown size={12} className={adv ? 'rotate-180 transition-transform' : 'transition-transform'} />
-          Advanced
-        </button>
-        {adv && (
-          <div className="mt-2 flex flex-col gap-2">
-            <div className="flex flex-col gap-1">
-              <label htmlFor={modelInputId} className="text-[11px] font-medium text-[color:var(--cl-muted-foreground)]">
-                Base model · fast, cheap
-              </label>
-              <div className="flex items-center gap-2">
-                <input
-                  id={modelInputId}
-                  list={`m-${provider}`}
-                  value={baseModelName}
-                  disabled={provider === 'anthropic' || settings.managedKeys.includes('providerModels')}
-                  onChange={(e) =>
-                    patch({ providerModels: { ...settings.providerModels, [provider]: e.target.value } })
-                  }
-                  placeholder={def.fastModel || 'base model id'}
-                  className={[
-                    'w-full', ctl,
-                    provider === 'anthropic' || settings.managedKeys.includes('providerModels') ? 'opacity-60' : ''
-                  ].join(' ')}
-                />
-                <ManagedChip keys={settings.managedKeys} k="providerModels" />
-              </div>
-            </div>
-            <div className="flex flex-col gap-1">
-              <label htmlFor={`think-${provider}`} className="text-[11px] font-medium text-[color:var(--cl-muted-foreground)]">
-                Thinking model · hard, coding questions
-              </label>
-              <input
-                id={`think-${provider}`}
-                list={`m-${provider}`}
-                value={settings.providerModelsThinking[provider] ?? ''}
-                disabled={provider === 'anthropic' || settings.managedKeys.includes('providerModelsThinking')}
-                onChange={(e) =>
-                  patch({
-                    providerModelsThinking: { ...settings.providerModelsThinking, [provider]: e.target.value }
-                  })
-                }
-                placeholder={def.thinkModel || def.defaultModel || 'thinking model id'}
-                className={[
-                  'w-full', ctl,
-                  provider === 'anthropic' || settings.managedKeys.includes('providerModelsThinking') ? 'opacity-60' : ''
-                ].join(' ')}
-              />
-            </div>
-            {provider === 'anthropic' && (
-              <p className="text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
-                Locked: base always answers as Haiku, thinking as Sonnet — a cost guardrail. Hard/coding
-                questions still escalate to Opus automatically; that tier isn't shown here.
-              </p>
-            )}
-            <datalist id={`m-${provider}`}>
-              {def.models.map((m) => (
-                <option key={m} value={m} />
-              ))}
-            </datalist>
-            {provider === 'custom' && (
-              <div className="flex items-center gap-2">
-                <label htmlFor={baseUrlInputId} className="sr-only">
-                  Custom endpoint URL
-                </label>
-                <LazyInput
-                  id={baseUrlInputId}
-                  value={settings.customBaseUrl}
-                  disabled={settings.managedKeys.includes('customBaseUrl')}
-                  onCommit={(v) => patch({ customBaseUrl: v })}
-                  placeholder="https://your-endpoint/v1"
-                  className={['w-full', ctl, settings.managedKeys.includes('customBaseUrl') ? 'opacity-60' : ''].join(' ')}
-                />
-                <ManagedChip keys={settings.managedKeys} k="customBaseUrl" />
-              </div>
-            )}
-            <label className="flex items-center justify-between gap-3 px-1 text-[12px] text-[color:var(--cl-muted-foreground)]">
-              <span className="flex items-center gap-2">
-                Creativity · {settings.temperature.toFixed(1)}
-                <ManagedChip keys={settings.managedKeys} k="temperature" />
-              </span>
-              <input
-                type="range"
-                min={0}
-                max={1}
-                step={0.1}
-                value={settings.temperature}
-                disabled={settings.managedKeys.includes('temperature')}
-                onChange={(e) => patch({ temperature: Number(e.target.value) })}
-                className={['no-drag accent-[var(--cl-primary)]', settings.managedKeys.includes('temperature') ? 'opacity-60' : ''].join(' ')}
-              />
-            </label>
-          </div>
+        {provider === 'anthropic' ? (
+          <span className="flex shrink-0 items-center gap-1 rounded-full bg-[var(--cl-primary-soft)] px-2 py-0.5 text-[11px] font-medium text-[color:var(--cl-primary)]">
+            <CircleCheck size={12} /> Active
+          </span>
+        ) : (
+          <button
+            type="button"
+            onClick={() => patch({ provider: 'anthropic' })}
+            className="no-drag cl-focus flex shrink-0 items-center gap-1.5 rounded-[8px] border border-[var(--cl-input)] bg-white/[0.04] px-3 py-1.5 text-[12px] text-[color:var(--cl-foreground)] hover:bg-white/[0.08]"
+          >
+            Use this
+          </button>
         )}
-      </Section>
-      )}
+      </div>
+
+      {provider === 'anthropic' && keyEntrySection}
+
+      <ExpandableSection
+        title="Experience: more models"
+        desc="Bring your own key from another provider, or try something different. Closed by default — Anthropic above covers most people."
+      >
+        <Section title="Model provider" desc="Prefer a raw model? Pick one, paste a key, and AskToto detects the provider.">
+          {PROVIDER_IDS.length > 8 && (
+            <div className="relative mb-2">
+              <Search
+                size={13}
+                className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-[color:var(--cl-muted-foreground)]"
+              />
+              <input
+                value={filter}
+                onChange={(e) => setFilter(e.target.value)}
+                placeholder="Filter providers…"
+                className={'w-full pl-7 ' + ctl}
+              />
+            </div>
+          )}
+          <div className="grid grid-cols-2 gap-2">
+            {shown.map((id) => {
+              const active = id === provider
+              return (
+                <button
+                  key={id}
+                  type="button"
+                  aria-pressed={active}
+                  disabled={locked}
+                  onClick={() => patch({ provider: id })}
+                  className={[
+                    'no-drag cl-focus flex flex-col items-start gap-0.5 rounded-[10px] border px-2.5 py-2 text-left transition-colors',
+                    active
+                      ? 'border-[var(--cl-primary)] bg-[var(--cl-primary-soft)]'
+                      : 'border-[var(--cl-border)] bg-white/[0.02] hover:bg-white/[0.05]',
+                    locked ? 'opacity-60 cursor-not-allowed' : ''
+                  ].join(' ')}
+                >
+                  <span className="flex w-full items-center justify-between gap-1.5">
+                    <span className="truncate text-[12px] font-medium text-[color:var(--cl-foreground)]">
+                      {PROVIDERS[id].label}
+                    </span>
+                    <span className="flex shrink-0 items-center gap-1">
+                      {id === recommended && (
+                        <span className="rounded-full bg-[var(--cl-primary-soft)] px-1.5 py-0 text-[10px] font-medium text-[color:var(--cl-primary)]">
+                          Best pick
+                        </span>
+                      )}
+                      {settings.hasKeys[id] && (
+                        <Check size={14} className="shrink-0 text-[color:var(--cl-success)]" />
+                      )}
+                    </span>
+                  </span>
+                  <span className="text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
+                    {PROVIDERS[id].blurb}
+                  </span>
+                </button>
+              )
+            })}
+          </div>
+          {locked && (
+            <div className="mt-2">
+              <span className={managedChipCls}>Managed by your organization</span>
+            </div>
+          )}
+        </Section>
+
+        {provider !== 'anthropic' && keyEntrySection}
+      </ExpandableSection>
 
       {/* Thinking mode — applies to whatever's active (raw model tiers, or your two Dust agents) */}
       <Section title="Thinking mode" desc="When to use a fast model vs. a deeper one for harder questions.">
@@ -1122,9 +1230,6 @@ function CliIntegration({
           )}
         </div>
 
-        {/* BidStack CRM card — MCP push (separate credential from LLM providers; see bidstackSecrets.ts) */}
-        <BidstackCard settings={settings} patch={patch} />
-
         {/* Claude Code CLI card */}
         {renderCliCard('claude-cli')}
 
@@ -1174,7 +1279,7 @@ function CliIntegration({
 }
 
 // ---------------------------------------------------------------------------
-// BidStack 360° CRM — MCP push (Settings → CLI Integration)
+// Polo Pre-Sales CRM — MCP push (Settings → Mantu Intelligence)
 // ---------------------------------------------------------------------------
 
 function BidstackCard({
@@ -1242,9 +1347,9 @@ function BidstackCard({
     >
       <div className="flex items-center justify-between gap-2">
         <div className="flex flex-col gap-0.5">
-          <span className="text-[12px] font-medium text-[color:var(--cl-foreground)]">BidStack · your CRM</span>
+          <span className="text-[12px] font-medium text-[color:var(--cl-foreground)]">Polo Pre-Sales · your CRM</span>
           <span className="text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
-            Push meeting recaps to BidStack 360° over its MCP server. Manual, review-first — nothing sends automatically.
+            Push meeting recaps to Polo Pre-Sales over its MCP server. Manual, review-first — nothing sends automatically.
           </span>
         </div>
         {connected ? (
@@ -1311,7 +1416,7 @@ function BidstackCard({
                 setApiKey(e.target.value)
                 setTestState({ phase: 'idle', error: null, tools: null })
               }}
-              placeholder="Bearer token from BidStack → Developer access → API keys (mcp + write scope)"
+              placeholder="Bearer token from Polo Pre-Sales → Developer access → API keys (mcp + write scope)"
               className={'w-full ' + ctl}
             />
           </div>
@@ -1329,7 +1434,7 @@ function BidstackCard({
                 Connected.{' '}
                 {testState.tools.length > 0
                   ? `Found ${testState.tools.length} tool${testState.tools.length === 1 ? '' : 's'}: ${testState.tools.join(', ')}`
-                  : 'BidStack reported no tools for this key’s scope.'}
+                  : 'Polo Pre-Sales reported no tools for this key’s scope.'}
               </span>
             </div>
           )}
@@ -1368,7 +1473,7 @@ function BidstackCard({
           </div>
           <span className="text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
             Request only the <code className="rounded bg-white/[0.08] px-1">mcp + write</code> scope — this is a
-            push-only integration. The endpoint moves with wherever BidStack's backend actually runs; there is no
+            push-only integration. The endpoint moves with wherever Polo Pre-Sales' backend actually runs; there is no
             built-in default beyond the local-dev placeholder shown above.
           </span>
         </div>
@@ -2390,6 +2495,12 @@ export function Settings({
 }): JSX.Element {
   const [tab, setTab] = useState<TabId>(initialTab ?? 'personalize')
   const managed = settings.managedKeys.length > 0
+  // Switching tabs must land at the top of the new tab's content — the scroll container otherwise
+  // keeps whatever scroll position the previous tab was left at.
+  const contentRef = useRef<HTMLElement>(null)
+  useEffect(() => {
+    if (contentRef.current) contentRef.current.scrollTop = 0
+  }, [tab])
 
   return (
     <div className="cl-root panel-enter flex w-full flex-col overflow-hidden rounded-2xl shadow-[var(--shadow-panel)] text-[color:var(--cl-foreground)]">
@@ -2450,6 +2561,7 @@ export function Settings({
       </nav>
 
       <main
+        ref={contentRef}
         role="tabpanel"
         id="settings-panel"
         aria-labelledby={`settings-tab-${tab}`}
@@ -2608,8 +2720,8 @@ export function Settings({
                     </div>
                   )}
                   <ToggleRow
-                    label="Play chime when recording starts"
-                    desc="A soft audible cue each time Listen begins."
+                    label="Start-of-recording chime"
+                    desc="Plays a short tone so everyone knows the moment AskToto starts listening."
                     on={settings.playListenChime}
                     onChange={(v) => patch({ playListenChime: v })}
                     disabled={settings.managedKeys.includes('playListenChime')}
@@ -2807,6 +2919,7 @@ export function Settings({
                     onChange={(v) => patch({ launchAtLogin: v })}
                     disabled={settings.managedKeys.includes('launchAtLogin')}
                   />
+                  <CustomMeetingAppsField settings={settings} patch={patch} />
                 </div>
               </Section>
               <DangerZoneSection settings={settings} patch={patch} />
@@ -3150,6 +3263,13 @@ function IntelligenceTab({
       </Section>
 
       <GraphSection settings={settings} patch={patch} />
+
+      <Section
+        title="Polo Pre-Sales"
+        desc="Push meeting recaps to your pre-sales CRM. Manual and review-first: nothing sends automatically."
+      >
+        <BidstackCard settings={settings} patch={patch} />
+      </Section>
     </div>
   )
 }
@@ -3252,6 +3372,89 @@ function GraphSection({
         </div>
       )}
     </Section>
+  )
+}
+
+/**
+ * "Custom meeting apps" — free text, one app name per line, persisted as a trimmed array (the setting
+ * a future meeting-detector reads; this field just has to keep it editable and correct today).
+ *
+ * Needs its own local raw-text buffer rather than binding the textarea straight to
+ * `settings.customMeetingApps.join('\n')`: that array is already trimmed/filtered of blank entries, so
+ * the instant you press Enter to start a new line, the next patch() round-trip echoes back settings
+ * with that blank line stripped — the controlled value snaps back to no-trailing-newline and Enter
+ * looks like it does nothing. Keeping the raw text in local state (committed to settings, debounced)
+ * lets a blank in-progress line survive until the user actually types something on it or leaves the field.
+ */
+function CustomMeetingAppsField({
+  settings,
+  patch
+}: {
+  settings: PublicSettings
+  patch: (p: Partial<PublicSettings>) => void
+}): JSX.Element {
+  const [raw, setRaw] = useState(settings.customMeetingApps.join('\n'))
+  // The last array WE persisted — lets the sync effect tell "settings echoed our own commit back"
+  // (ignore) apart from "an external change landed" (e.g. managed-config; resync from it).
+  const lastPersistedRef = useRef(settings.customMeetingApps)
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  useEffect(() => {
+    const incoming = settings.customMeetingApps
+    const prev = lastPersistedRef.current
+    const same = incoming.length === prev.length && incoming.every((v, i) => v === prev[i])
+    if (!same) {
+      lastPersistedRef.current = incoming
+      setRaw(incoming.join('\n'))
+    }
+  }, [settings.customMeetingApps])
+
+  const commit = (text: string): void => {
+    const parsed = text
+      .split('\n')
+      .map((s) => s.trim())
+      .filter(Boolean)
+      .slice(0, 20)
+    lastPersistedRef.current = parsed
+    patch({ customMeetingApps: parsed })
+  }
+
+  const onChange = (v: string): void => {
+    setRaw(v)
+    if (timerRef.current) clearTimeout(timerRef.current)
+    timerRef.current = setTimeout(() => commit(v), 350)
+  }
+
+  const onBlur = (): void => {
+    if (timerRef.current) {
+      clearTimeout(timerRef.current)
+      timerRef.current = null
+    }
+    commit(raw)
+  }
+
+  return (
+    <div className="mt-3 flex flex-col gap-1.5">
+      <label className="text-[12px] font-medium text-[color:var(--cl-foreground)]">
+        Custom meeting apps
+      </label>
+      <textarea
+        value={raw}
+        onChange={(e) => onChange(e.target.value)}
+        onBlur={onBlur}
+        placeholder="Around&#10;Amazon Chime&#10;Jitsi"
+        rows={3}
+        disabled={settings.managedKeys.includes('customMeetingApps')}
+        className={[
+          ctl,
+          'h-20 resize-none text-[12px]',
+          settings.managedKeys.includes('customMeetingApps') ? 'opacity-60 cursor-not-allowed' : ''
+        ].join(' ')}
+      />
+      <span className="text-[11px] text-[color:var(--cl-muted-foreground)]">
+        One app name per line. AskToto will also treat windows with these names as meetings.
+      </span>
+    </div>
   )
 }
 

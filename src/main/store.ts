@@ -26,8 +26,6 @@ const ENV_VAR: Record<ProviderId, string> = {
   kimi: 'MOONSHOT_API_KEY',
   openrouter: 'OPENROUTER_API_KEY',
   groq: 'GROQ_API_KEY',
-  together: 'TOGETHER_API_KEY',
-  fireworks: 'FIREWORKS_API_KEY',
   mistral: 'MISTRAL_API_KEY',
   dust: 'DUST_API_KEY',
   'claude-cli': '',
@@ -247,6 +245,12 @@ export function getSettings(): Settings {
   // Layering: DEFAULT < managed (org policy, live) < user overrides.
   const base = { ...DEFAULT_SETTINGS, ...validatedManaged() }
   const raw = readUserRaw()
+  // Migration: 'together' and 'fireworks' were removed as LLM providers. A settings.json written before
+  // the removal may still name one as the active provider — coerce it back to the default so a stale
+  // value never resurfaces a provider the UI no longer offers. (managed-config is already filtered
+  // through validKeysOnly() above, via validatedManaged(), so it can't carry a stale provider through.)
+  // Any saved key file for that provider is left untouched on disk; it's simply never surfaced again.
+  if (raw.provider === 'together' || raw.provider === 'fireworks') raw.provider = DEFAULT_SETTINGS.provider
   // Locked keys are authoritative on READ too, not just on write: a value persisted before a lock (or a
   // hand-edited settings.json) must not override the managed/default value. Strip locked keys from the
   // user layer so org policy always wins.

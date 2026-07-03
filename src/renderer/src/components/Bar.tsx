@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, memo, type ReactNode } from 'react'
+import { useEffect, useRef, useState, memo, type ReactNode } from 'react'
 import {
   Image,
   CornerDownLeft,
@@ -22,7 +22,6 @@ import {
 import { MantuMark } from './MantuMark'
 import { ModePicker } from './ModePicker'
 import { Spinner } from './ui'
-import { useWindowDrag } from '../lib/window-drag'
 import { modeLabel } from '@shared/ipc'
 import type { ConversationMode, CustomMode } from '@shared/ipc'
 import { formatScreenFreshness } from '@shared/perception'
@@ -226,14 +225,6 @@ function IconTool({
 
 export const Bar = memo(function Bar(props: BarProps): JSX.Element {
   const inputRef = useRef<HTMLInputElement>(null)
-  // Drag the whole window from anywhere on the widget (shared with the control pill). Dragging blurs the
-  // input so the caret drops; a press that starts inside the input is excluded so text-selection works.
-  // useCallback keeps this a stable identity across renders (inputRef itself never changes) — an inline
-  // arrow function here would be a fresh callback on every render, which used to bust useWindowDrag's
-  // effect dep and tear down/re-add its window pointermove/pointerup listeners on every frame while an
-  // answer streamed (Bar re-renders up to ~60/s during that time).
-  const onDragStart = useCallback(() => inputRef.current?.blur(), [])
-  const drag = useWindowDrag(onDragStart)
 
   useEffect(() => {
     if (props.focusSignal > 0) inputRef.current?.focus()
@@ -265,7 +256,6 @@ export const Bar = memo(function Bar(props: BarProps): JSX.Element {
     // The flex-col lets additional in-flow elements grow the window as needed.
     <div className="relative flex w-full flex-col items-stretch gap-1.5">
       <div
-        {...drag}
         className={[
           'aw-widget w-full',
           // Working → fast rainbow ring; Private view on → calm slow rainbow contour as the indicator.

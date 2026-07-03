@@ -11,8 +11,6 @@ export const ProviderIdSchema = z.enum([
   'kimi',
   'openrouter',
   'groq',
-  'together',
-  'fireworks',
   'mistral',
   'dust',
   'claude-cli',
@@ -391,7 +389,7 @@ export const BaseSettingsSchema = z.object({
   overlayOpacity: z.number().min(0.3).max(1.5).default(1),
   showFullTranscriptInReview: z.boolean().default(false), // review = summary-first; transcript opt-in
   asrQuality: z.enum(['best', 'fast']).default('fast'), // fast = small model, ready fast (default); best = large, downloads
-  asrEngine: z.enum(['whisper', 'parakeet']).default('whisper'), // whisper = ~99 langs (default); parakeet = European, fastest
+  asrEngine: z.enum(['whisper', 'parakeet']).default('parakeet'), // parakeet = European, fastest (default); whisper = ~99 langs
   // A mid-session Parakeet→Whisper fallback (repeated failures) used to surface as a live error banner
   // during the meeting — distracting for something that's really just a background engine swap. Tracked
   // here instead so it's checkable in Settings after the fact, never shown live. Persists until the user
@@ -531,7 +529,7 @@ export const DEFAULT_SETTINGS: Settings = {
   overlayOpacity: 1,
   showFullTranscriptInReview: false,
   asrQuality: 'fast',
-  asrEngine: 'whisper',
+  asrEngine: 'parakeet',
   asrLastFallbackAt: null,
   requireConsentIndicator: true,
   redactSensitive: true,
@@ -760,8 +758,8 @@ export interface GraphRelated {
 // ─── BidStack CRM (MCP push) ───────────────────────────────────────────────
 
 export const McpCrmTestConnectionPayloadSchema = z.object({
-  endpointUrl: z.string().min(1, 'Enter the BidStack MCP endpoint URL.'),
-  apiKey: z.string().min(1, 'Enter the BidStack API key.')
+  endpointUrl: z.string().min(1, 'Enter the Polo Pre-Sales MCP endpoint URL.'),
+  apiKey: z.string().min(1, 'Enter the Polo Pre-Sales API key.')
 })
 export type McpCrmTestConnectionPayload = z.infer<typeof McpCrmTestConnectionPayloadSchema>
 
@@ -772,7 +770,7 @@ export type McpCrmSaveConnectionPayload = z.infer<typeof McpCrmSaveConnectionPay
 // shape so a tampered/buggy caller can't hand the MCP tool call an unbounded or deeply-nested payload.
 const McpCrmArgValueSchema = z.union([z.string().max(50_000), z.number(), z.boolean(), z.null()])
 export const McpCrmPushPayloadSchema = z.object({
-  toolName: z.string().min(1, 'Choose a BidStack tool to push to.'),
+  toolName: z.string().min(1, 'Choose a Polo Pre-Sales tool to push to.'),
   args: z
     .record(z.string(), McpCrmArgValueSchema)
     .refine((a) => Object.keys(a).length <= 20, { message: 'Too many fields in the push payload.' })

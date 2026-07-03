@@ -13,7 +13,11 @@ const links = [
 
 export function NavBar() {
   return (
-    <header className="sticky top-0 z-20 border-b border-[var(--color-mantu-border)] bg-[var(--color-mantu-bg)]/90 backdrop-blur">
+    // win-drag: lets you grab the header anywhere to move this normal-framed window, not just the thin
+    // OS title bar above it (CSS-only — no JS drag here, since the vis-network graph view and selectable
+    // text below would fight a JS pointer-based drag). Every interactive child opts back out via
+    // win-no-drag so its clicks still land.
+    <header className="win-drag sticky top-0 z-20 border-b border-[var(--color-mantu-border)] bg-[var(--color-mantu-bg)]/90 backdrop-blur">
       <div className="mx-auto flex max-w-7xl items-center justify-between px-6 py-3">
         <div className="flex items-center gap-3">
           {/* Real Mantu "M" mark (same asset as the app icon), not the favicon's stylized bolt shape.
@@ -31,14 +35,14 @@ export function NavBar() {
                 href={LINKEDIN_URL}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="text-white/60 hover:text-white/90 hover:underline"
+                className="win-no-drag text-white/60 hover:text-white/90 hover:underline"
               >
                 Tony Walteur
               </a>
             </div>
           </div>
         </div>
-        <nav className="flex items-center gap-1 rounded-lg bg-white/5 p-1">
+        <nav className="win-no-drag flex items-center gap-1 rounded-lg bg-white/5 p-1">
           {links.map((l) => (
             <NavLink
               key={l.to}
@@ -60,7 +64,7 @@ export function NavBar() {
             filesystem root instead of the app's own route. Hash nav stays in-window and in-app. */}
         <a
           href="#/embed"
-          className="text-xs font-medium text-mantu-light hover:underline"
+          className="win-no-drag text-xs font-medium text-mantu-light hover:underline"
         >
           Compact embed view →
         </a>

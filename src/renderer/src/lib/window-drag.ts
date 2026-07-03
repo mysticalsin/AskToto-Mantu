@@ -17,16 +17,21 @@ import { useEffect, useRef } from 'react'
  *
  * Shared by the main widget (Bar) and the collapsed control pill (ControlPill). Pass onDragStart to
  * react to the first move (e.g. blur the text input so the caret drops while dragging).
+ *
+ * `noTouch` skips arming a drag for touch pointers entirely — used by the single root-level instance
+ * (hoisted over the whole app, including scrollable panels) so a touchscreen drag-to-scroll gesture on
+ * Windows keeps scrolling instead of moving the window. Mouse and pen are unaffected.
  */
 export function useWindowDrag(
   onDragStart?: () => void,
-  opts?: { armOnControls?: boolean; deadZonePx?: number }
+  opts?: { armOnControls?: boolean; deadZonePx?: number; noTouch?: boolean }
 ): {
   onPointerDown: (e: React.PointerEvent) => void
   onClickCapture: (e: React.MouseEvent) => void
 } {
   const armOnControls = opts?.armOnControls ?? false
   const deadZonePx = opts?.deadZonePx ?? 8
+  const noTouch = opts?.noTouch ?? false
   const dragRef = useRef<{ x: number; y: number } | null>(null)
   const movedRef = useRef(false)
   // Coalesce pointermove -> windowMoveBy IPC: accumulate the summed delta and flush at most every ~12ms
@@ -96,6 +101,9 @@ export function useWindowDrag(
       movedRef.current = false
       pendingDxRef.current = 0
       pendingDyRef.current = 0
+      // Touch pointers never arm a drag here when noTouch is set — a touchscreen's scroll gesture must
+      // stay a scroll, not get hijacked into moving the window.
+      if (noTouch && e.pointerType === 'touch') return
       // Default: only arm a window-drag from the surface's own EMPTY space — never from an interactive
       // control or a text field. Every clickable in the widget/pill is marked `.no-drag`; honour that hint
       // here the same way native -webkit-app-region does. Arming on buttons meant a click that drifted only
@@ -104,9 +112,13 @@ export function useWindowDrag(
       // stays a click. Button-dense surfaces (the control pill) opt into armOnControls instead — they have
       // no meaningful empty space, so buttons must arm the drag and the caller raises deadZonePx to keep
       // drifting clicks landing as clicks. Text fields never arm either way (drag-select must work).
+      // `.drag` (e.g. Settings' own header) already moves the window natively via -webkit-app-region —
+      // this window is frameless+transparent so that CSS property genuinely drives an OS-level drag.
+      // Since the app-level instance now wraps that header too, excluding `.drag` here stops the two
+      // mechanisms from BOTH firing on the same gesture and doubling every moveBy delta.
       const exclude = armOnControls
         ? 'input, textarea, [contenteditable=""], [contenteditable="true"]'
-        : '.no-drag, input, textarea, [contenteditable=""], [contenteditable="true"]'
+        : '.no-drag, .drag, input, textarea, [contenteditable=""], [contenteditable="true"]'
       if ((e.target as HTMLElement).closest(exclude)) {
         return
       }

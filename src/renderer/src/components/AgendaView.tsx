@@ -160,7 +160,10 @@ export function AgendaView(): JSX.Element {
   }
 
   return (
-    <div className="no-drag max-h-[560px] overflow-y-auto">
+    // No height cap or inner scroll here: this view renders inside Settings' Calendar tab, whose
+    // tabpanel (main.cl-content, 480px cap) is the ONE scroll container. A taller nested scroll box
+    // trapped the wheel and clipped the bottom of the section — the classic nested-scroll trap.
+    <div className="no-drag">
       {header}
       {body}
     </div>
