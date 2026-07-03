@@ -206,7 +206,7 @@ export function Onboarding({
   const finish = async (): Promise<void> => {
     setFinishErr('')
     try {
-      await patch({ onboardingDone: true, recordingConsent })
+      await patch({ onboardingDone: true, onboardingDoneAt: Date.now(), recordingConsent })
       onDone()
     } catch (e) {
       setFinishErr(`Couldn't save your setup — ${e instanceof Error ? e.message : String(e)}`)
