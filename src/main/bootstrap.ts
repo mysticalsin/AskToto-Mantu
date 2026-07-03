@@ -146,8 +146,9 @@ async function winRun(
   return execFileAsync(target, args, opts)
 }
 
-/** Cross-platform single-command runner: login shell on darwin (see detectGraphify), direct argv
- *  spawn (env-augmented, no shell) elsewhere on POSIX, and winRun's ComSpec-aware path on Windows. */
+/** Cross-platform single-command runner: login shell on POSIX (same technique as detectGraphify,
+ *  so pyenv/MacPorts/cargo/conda shims on PATH are picked up), and winRun's ComSpec-aware path on
+ *  Windows. */
 async function platformRun(
   isWin: boolean,
   command: string,
@@ -155,7 +156,8 @@ async function platformRun(
   timeoutMs: number
 ): Promise<{ stdout: string; stderr: string }> {
   if (isWin) return winRun(command, args, timeoutMs)
-  return execFileAsync(command, args, { timeout: timeoutMs, env: installEnv(false) })
+  const shell = process.env.SHELL || '/bin/zsh'
+  return execFileAsync(shell, ['-lc', [command, ...args].join(' ')], { timeout: timeoutMs })
 }
 
 // ─── Detection ──────────────────────────────────────────────────────────────────────────────────

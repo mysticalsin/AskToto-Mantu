@@ -449,9 +449,8 @@ function AiSection({
   const onSave = async (): Promise<void> => {
     const trimmed = key.trim()
     if (!trimmed) {
-      await clearKey(provider)
-      setKey('')
-      setTest({ status: 'idle' })
+      // Empty input must never delete the stored key; removal is the trash-can (onRemove) button only.
+      setTest({ status: 'error', message: 'Paste a key above to save it.' })
       return
     }
     try {
@@ -521,7 +520,7 @@ function AiSection({
           type="password"
           value={key}
           onChange={(e) => onKeyChange(e.target.value)}
-          onKeyDown={(e) => e.key === 'Enter' && onSave()}
+          onKeyDown={(e) => e.key === 'Enter' && test.status !== 'loading' && onSave()}
           placeholder={
             settings.hasKeys[provider] ? '•••••• saved (paste to replace)' : `Paste your ${def.label} key`
           }
@@ -530,7 +529,8 @@ function AiSection({
         <button
           type="button"
           onClick={onSave}
-          className="no-drag cl-focus flex items-center gap-1 rounded-[10px] bg-[var(--cl-primary)] px-4 py-2.5 text-[13px] font-medium text-white hover:opacity-90"
+          disabled={test.status === 'loading'}
+          className="no-drag cl-focus flex items-center gap-1 rounded-[10px] bg-[var(--cl-primary)] px-4 py-2.5 text-[13px] font-medium text-white hover:opacity-90 disabled:opacity-50"
         >
           {saved ? <Check size={14} /> : null}
           {saved ? 'Saved' : 'Save'}
@@ -962,7 +962,7 @@ function CliIntegration({
       window.toto.cliSetup(id)
       setState(id, {
         phase: 'setup-opened',
-        msg: 'Finish setup in Terminal, then click Connect.',
+        msg: 'Finish setup in the window that opened, then click Connect.',
         version: null
       })
       return
@@ -1521,6 +1521,9 @@ function DustSetup({
   const thinkSel = useId()
 
   const isEu = /eu\.dust\.tt/i.test(settings.dustBaseUrl)
+  // The CLI connect flow (dustImportCli/dustSetupCli) is darwin-only in main; on Windows it always
+  // fails, so skip straight to the manual key steps instead of showing a dead-end button.
+  const isWin = window.navigator.platform.toLowerCase().includes('win')
   // Base + Spotlight Ref are hard-locked (DUST_BASE_AGENT_ID / DUST_SPOTLIGHT_REF_AGENT_ID in ipc.ts) —
   // read-only display below, no picker, no setter. The base agent (AskToto) also drafts meeting
   // follow-ups directly — there is no separate follow-up agent.
@@ -1632,72 +1635,76 @@ function DustSetup({
       desc="Your Dust agents (Second Brain retrieval + tools) power AskToto. Connect with the Dust CLI, then pick a thinking agent for hard questions."
     >
       <div className="flex flex-col gap-4">
-        {/* One-click: import the local Dust CLI session (token + workspace + region) from the keychain */}
-        <div className="flex flex-col gap-1.5 rounded-[10px] border border-[var(--cl-primary)]/30 bg-[var(--cl-primary-soft)]/40 p-3">
-          <div className="flex items-center justify-between gap-2">
-            <span className="text-[12px] font-medium text-[color:var(--cl-foreground)]">
-              Connect locally with the Dust CLI
-            </span>
-            {keySaved && hasWs ? (
-              // Already linked → offer Reconnect (re-imports a fresh token, fixing an expired session)
-              // and Disconnect (full reset back to the connect state).
-              <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={connectCli}
-                  disabled={cli.busy}
-                  title="Re-import a fresh session from the Dust CLI"
-                  className="no-drag cl-focus flex items-center gap-1.5 rounded-[8px] bg-[var(--cl-primary)] px-3 py-1.5 text-[12px] font-medium text-white hover:opacity-90 disabled:opacity-50"
-                >
-                  {cli.busy ? <Loader2 size={13} className="animate-spin" /> : <RefreshCw size={13} />}
-                  Reconnect
-                </button>
-                <button
-                  type="button"
-                  onClick={disconnectDust}
-                  disabled={cli.busy}
-                  title="Disconnect Dust from AskToto"
-                  className="no-drag cl-focus flex items-center gap-1.5 rounded-[8px] border border-[var(--cl-destructive)]/30 bg-[var(--cl-destructive)]/10 px-3 py-1.5 text-[12px] font-medium text-[color:var(--cl-destructive)] hover:bg-[var(--cl-destructive)]/20 disabled:opacity-50"
-                >
-                  <X size={13} />
-                  Disconnect
-                </button>
+        {!isWin && (
+          <>
+            {/* One-click: import the local Dust CLI session (token + workspace + region) from the keychain */}
+            <div className="flex flex-col gap-1.5 rounded-[10px] border border-[var(--cl-primary)]/30 bg-[var(--cl-primary-soft)]/40 p-3">
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-[12px] font-medium text-[color:var(--cl-foreground)]">
+                  Connect locally with the Dust CLI
+                </span>
+                {keySaved && hasWs ? (
+                  // Already linked → offer Reconnect (re-imports a fresh token, fixing an expired session)
+                  // and Disconnect (full reset back to the connect state).
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={connectCli}
+                      disabled={cli.busy}
+                      title="Re-import a fresh session from the Dust CLI"
+                      className="no-drag cl-focus flex items-center gap-1.5 rounded-[8px] bg-[var(--cl-primary)] px-3 py-1.5 text-[12px] font-medium text-white hover:opacity-90 disabled:opacity-50"
+                    >
+                      {cli.busy ? <Loader2 size={13} className="animate-spin" /> : <RefreshCw size={13} />}
+                      Reconnect
+                    </button>
+                    <button
+                      type="button"
+                      onClick={disconnectDust}
+                      disabled={cli.busy}
+                      title="Disconnect Dust from AskToto"
+                      className="no-drag cl-focus flex items-center gap-1.5 rounded-[8px] border border-[var(--cl-destructive)]/30 bg-[var(--cl-destructive)]/10 px-3 py-1.5 text-[12px] font-medium text-[color:var(--cl-destructive)] hover:bg-[var(--cl-destructive)]/20 disabled:opacity-50"
+                    >
+                      <X size={13} />
+                      Disconnect
+                    </button>
+                  </div>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={connectCli}
+                    disabled={cli.busy}
+                    className="no-drag cl-focus flex items-center gap-1.5 rounded-[8px] bg-[var(--cl-primary)] px-3 py-1.5 text-[12px] font-medium text-white hover:opacity-90 disabled:opacity-50"
+                  >
+                    {cli.busy ? <Loader2 size={13} className="animate-spin" /> : <Link2 size={13} />}
+                    Connect from Dust CLI
+                  </button>
+                )}
               </div>
-            ) : (
-              <button
-                type="button"
-                onClick={connectCli}
-                disabled={cli.busy}
-                className="no-drag cl-focus flex items-center gap-1.5 rounded-[8px] bg-[var(--cl-primary)] px-3 py-1.5 text-[12px] font-medium text-white hover:opacity-90 disabled:opacity-50"
-              >
-                {cli.busy ? <Loader2 size={13} className="animate-spin" /> : <Link2 size={13} />}
-                Connect from Dust CLI
-              </button>
-            )}
-          </div>
-          <span className="text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
-            Already ran <code className="rounded bg-white/[0.08] px-1">dust login</code>? This reads your
-            session from the keychain. No key to copy. macOS may ask to allow keychain access once.
-          </span>
-          {cli.msg && (
-            <span
-              className={[
-                'text-[11px]',
-                cli.ok ? 'text-[color:var(--cl-success)]' : 'text-[color:var(--cl-destructive)]'
-              ].join(' ')}
-            >
-              {cli.msg}
-            </span>
-          )}
-        </div>
+              <span className="text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
+                Already ran <code className="rounded bg-white/[0.08] px-1">dust login</code>? This reads your
+                session from the keychain. No key to copy. macOS may ask to allow keychain access once.
+              </span>
+              {cli.msg && (
+                <span
+                  className={[
+                    'text-[11px]',
+                    cli.ok ? 'text-[color:var(--cl-success)]' : 'text-[color:var(--cl-destructive)]'
+                  ].join(' ')}
+                >
+                  {cli.msg}
+                </span>
+              )}
+            </div>
 
-        <div className="flex items-center gap-2">
-          <div className="h-px flex-1 bg-[var(--cl-border)]" />
-          <span className="text-[10px] uppercase tracking-wide text-[color:var(--cl-muted-foreground)]">
-            or set up manually
-          </span>
-          <div className="h-px flex-1 bg-[var(--cl-border)]" />
-        </div>
+            <div className="flex items-center gap-2">
+              <div className="h-px flex-1 bg-[var(--cl-border)]" />
+              <span className="text-[10px] uppercase tracking-wide text-[color:var(--cl-muted-foreground)]">
+                or set up manually
+              </span>
+              <div className="h-px flex-1 bg-[var(--cl-border)]" />
+            </div>
+          </>
+        )}
 
         {/* Step 1 — paste a link, everything auto-fills */}
         <div className="flex flex-col gap-1.5">
@@ -1786,7 +1793,8 @@ function DustSetup({
             </div>
           )}
           <span className="pl-7 text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
-            Get one at dust.tt → Settings → API Keys (admin). Or use “Connect from Dust CLI” above.
+            Get one at dust.tt → Settings → API Keys (admin).
+            {!isWin && ' Or use “Connect from Dust CLI” above.'}
           </span>
         </div>
 
@@ -2011,6 +2019,7 @@ function MicPicker({
           value={settings.micDeviceId}
           disabled={locked}
           onChange={(e) => patch({ micDeviceId: e.target.value })}
+          aria-label="Microphone"
           className={'no-drag flex-1 ' + ctl + (locked ? ' opacity-60' : '')}
         >
           <option value="">System default</option>
@@ -2186,7 +2195,19 @@ function ContextDocs({
         </span>
         <span className="text-[12px] text-[color:var(--cl-muted-foreground)]">
           Drag &amp; drop files here to add them, or{' '}
-          <span className="text-[color:var(--cl-primary)]">browse files</span>
+          <button
+            type="button"
+            onClick={(e) => {
+              // Stop the click from bubbling to the wrapping <label>, which would otherwise forward
+              // its own synthetic click to the input and open the picker twice.
+              e.preventDefault()
+              e.stopPropagation()
+              document.getElementById(inputId)?.click()
+            }}
+            className="no-drag cl-focus rounded text-[color:var(--cl-primary)] underline-offset-2 hover:underline"
+          >
+            Browse files
+          </button>
         </span>
         <span className="text-[11px] text-[color:var(--cl-muted-foreground)]">
           Text files (txt, md, csv, json, code) up to 2 MB · 25 max
@@ -2250,6 +2271,29 @@ function PersonalizeModes({
   const [creatingNew, setCreatingNew] = useState(false)
   const [newLabel, setNewLabel] = useState('')
   const locked = settings.managedKeys.includes('mode')
+  const overflowRef = useRef<HTMLDivElement>(null)
+
+  // Dismiss the "Mode options" overflow menu on an outside click or Escape (mirrors Bar.tsx's
+  // ModePicker outside-click pattern).
+  useEffect(() => {
+    if (!overflowOpen) return
+    const onDown = (e: MouseEvent): void => {
+      if (overflowRef.current?.contains(e.target as Node)) return
+      setOverflowOpen(false)
+    }
+    const onKeyDown = (e: KeyboardEvent): void => {
+      if (e.key !== 'Escape') return
+      // Stop this Escape from reaching any window-level handler while just closing this menu.
+      e.stopPropagation()
+      setOverflowOpen(false)
+    }
+    document.addEventListener('mousedown', onDown)
+    document.addEventListener('keydown', onKeyDown)
+    return () => {
+      document.removeEventListener('mousedown', onDown)
+      document.removeEventListener('keydown', onKeyDown)
+    }
+  }, [overflowOpen])
 
   // Ensure selected still exists (could be deleted)
   const allIds = [
@@ -2425,7 +2469,7 @@ function PersonalizeModes({
           </div>
 
           {/* Overflow menu */}
-          <div className="relative flex items-center gap-2">
+          <div ref={overflowRef} className="relative flex items-center gap-2">
             {active === safeSelected && (
               <span className="flex shrink-0 items-center gap-1 rounded-full bg-[var(--cl-primary-soft)] px-2.5 py-1 text-[11px] font-medium text-[color:var(--cl-primary)]">
                 <CircleCheck size={12} /> Active
@@ -2435,6 +2479,8 @@ function PersonalizeModes({
               type="button"
               onClick={() => setOverflowOpen((o) => !o)}
               aria-label="Mode options"
+              aria-haspopup="menu"
+              aria-expanded={overflowOpen}
               className="no-drag cl-focus flex size-7 items-center justify-center rounded-md text-[color:var(--cl-muted-foreground)] hover:bg-white/[0.06] hover:text-[color:var(--cl-foreground)]"
             >
               <MoreHorizontal size={15} />
@@ -2687,6 +2733,7 @@ export function Settings({
                     value={settings.outputLanguage}
                     onChange={(e) => patch({ outputLanguage: e.target.value })}
                     disabled={settings.managedKeys.includes('outputLanguage')}
+                    aria-label="Answers and live assist language"
                     className={'w-full ' + ctl}
                   >
                     <option value="auto">Auto · match the conversation</option>
@@ -2703,6 +2750,7 @@ export function Settings({
                     value={settings.summaryLanguage}
                     onChange={(e) => patch({ summaryLanguage: e.target.value })}
                     disabled={settings.managedKeys.includes('summaryLanguage')}
+                    aria-label="Summary and recap language"
                     className={'w-full ' + ctl}
                   >
                     <option value="auto">Same as answers</option>
@@ -3490,7 +3538,7 @@ function NotebookLmCard({
       {phase === 'sign-in-needed' && (
         <div className="flex flex-col gap-2">
           <span className="text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
-            A Terminal opens and signs you in through your browser. When it says done, come back and click
+            A window opens and signs you in through your browser. When it says done, come back and click
             Connect.
           </span>
           <div className="flex gap-2">
@@ -3589,6 +3637,12 @@ function GraphSection({
               <span className="text-[color:var(--cl-muted-foreground)]">
                 Getting the graph ready. This happens once in the background and can take a minute.
               </span>
+            ) : !status.backend ? (
+              <span className="text-[color:var(--cl-muted-foreground)]">
+                Connect Claude Code, or add a Claude or OpenAI key in Settings, AI tab, to build the graph.
+              </span>
+            ) : status.error && !status.hasGraph ? (
+              <span className="text-[color:var(--color-danger)]">{status.error}</span>
             ) : status.building || busy ? (
               'Building the graph…'
             ) : status.hasGraph ? (
@@ -3610,6 +3664,7 @@ function GraphSection({
             <select
               value={settings.graphifyBackend}
               onChange={(e) => patch({ graphifyBackend: e.target.value as 'auto' | 'claude' | 'openai' })}
+              aria-label="Graphify engine"
               className={'flex-1 ' + ctl}
             >
               <option value="auto">Auto · Claude Code, then your Claude or OpenAI key</option>
@@ -3621,7 +3676,7 @@ function GraphSection({
             <button
               type="button"
               onClick={rebuild}
-              disabled={busy || status?.building || !status?.installed}
+              disabled={busy || status?.building || !status?.installed || !status?.backend}
               className="no-drag cl-focus flex items-center gap-1.5 rounded-[10px] bg-[var(--cl-primary)] px-3 py-2 text-[12px] font-medium text-white hover:opacity-90 disabled:opacity-50"
             >
               <RefreshCw size={13} className={busy || status?.building ? 'animate-spin' : ''} /> Rebuild now
@@ -3766,6 +3821,7 @@ function DangerZoneSection({
         value={settings.transcriptRetentionDays}
         onChange={(e) => patch({ transcriptRetentionDays: Number(e.target.value) })}
         disabled={settings.managedKeys.includes('transcriptRetentionDays')}
+        aria-label="Auto-delete meetings older than"
         className={'w-full ' + ctl}
       >
         {RETENTION_OPTIONS.map((o) => (

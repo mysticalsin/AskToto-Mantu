@@ -185,6 +185,8 @@ function IconTool({
   danger,
   rainbow,
   cyanIdle,
+  ariaHasPopup,
+  ariaExpanded,
   children
 }: {
   title: string
@@ -195,6 +197,9 @@ function IconTool({
   // Idle (not-yet-active) color is cyan instead of the shared muted tone — used for the Listen button
   // so "start recording" reads as a distinct, inviting action rather than a neutral toggle.
   cyanIdle?: boolean
+  // Set on tools that open a popover/menu (e.g. Mode), so screen readers announce the disclosure state.
+  ariaHasPopup?: boolean
+  ariaExpanded?: boolean
   children: ReactNode
 }): JSX.Element {
   return (
@@ -202,9 +207,11 @@ function IconTool({
       <button
         type="button"
         aria-label={title}
+        aria-haspopup={ariaHasPopup ? 'menu' : undefined}
+        aria-expanded={ariaExpanded}
         onClick={onClick}
         className={[
-          'no-drag focus-ring grid place-items-center rounded-[10px] p-1 transition-colors duration-[var(--duration-hover)] active:scale-[0.92]',
+          'no-drag focus-ring peer grid place-items-center rounded-[10px] p-1 transition-colors duration-[var(--duration-hover)] active:scale-[0.92]',
           rainbow ? 'rainbow-ring' : '',
           danger && active
             ? 'text-[color:var(--color-danger)]'
@@ -217,7 +224,7 @@ function IconTool({
       >
         {children}
       </button>
-      <span className="pointer-events-none absolute -top-1.5 left-1/2 z-20 -translate-x-1/2 -translate-y-full whitespace-nowrap rounded-lg bg-black/90 px-2.5 py-1 text-[11px] font-medium text-white opacity-0 shadow-lg transition-opacity duration-150 group-hover:opacity-100">
+      <span className="pointer-events-none absolute -top-1.5 left-1/2 z-20 -translate-x-1/2 -translate-y-full whitespace-nowrap rounded-lg bg-black/90 px-2.5 py-1 text-[11px] font-medium text-white opacity-0 shadow-lg transition-opacity duration-150 group-hover:opacity-100 peer-focus-visible:opacity-100">
         {title}
       </span>
     </div>
@@ -245,8 +252,27 @@ export const Bar = memo(function Bar(props: BarProps): JSX.Element {
       if (modePopoverRef.current?.contains(t)) return
       setModeOpen(false)
     }
+    const onKeyDown = (e: KeyboardEvent): void => {
+      if (e.key !== 'Escape') return
+      // Stop this Escape from reaching App.tsx's window-level handler, which would otherwise also
+      // collapse/hide the overlay on top of closing this popover.
+      e.stopPropagation()
+      setModeOpen(false)
+      modeRef.current?.querySelector('button')?.focus()
+    }
     document.addEventListener('mousedown', onDown)
-    return () => document.removeEventListener('mousedown', onDown)
+    document.addEventListener('keydown', onKeyDown)
+    return () => {
+      document.removeEventListener('mousedown', onDown)
+      document.removeEventListener('keydown', onKeyDown)
+    }
+  }, [modeOpen])
+
+  // Move focus into the popover the moment it opens, so Tab order and screen-reader focus start
+  // inside the menu instead of staying stranded on the trigger.
+  useEffect(() => {
+    if (!modeOpen) return
+    modePopoverRef.current?.querySelector('button')?.focus()
   }, [modeOpen])
 
   // When a body is present the bar EXPANDS into one surface (big input → body → toolbar at the bottom).
@@ -428,6 +454,8 @@ export const Bar = memo(function Bar(props: BarProps): JSX.Element {
                 title={modeLabel(props.mode, props.customModes)}
                 onClick={() => setModeOpen((o) => !o)}
                 active={modeOpen}
+                ariaHasPopup
+                ariaExpanded={modeOpen}
               >
                 <LayoutGrid size={19} strokeWidth={ICON_STROKE} />
               </IconTool>

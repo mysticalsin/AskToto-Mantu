@@ -275,7 +275,7 @@ export async function installNotebookLmCli(onProgress: (line: string) => void): 
   if (!manager || !managerBin) {
     return {
       ok: false,
-      error: 'No Python package manager found (uv, pipx, or pip). Install uv from astral.sh/uv, then try again.'
+      error: 'AskToto could not set up NotebookLM automatically on this computer. Your IT team can enable it, or try again later.'
     }
   }
 
@@ -341,7 +341,7 @@ export async function installNotebookLmCli(onProgress: (line: string) => void): 
         finish({
           ok: false,
           needsTerminal: true,
-          error: 'Install needs a permission you have not granted, or your Python setup blocks package installs. Install uv from astral.sh/uv and try again.'
+          error: 'AskToto does not have permission to finish setting up NotebookLM on this computer. Your IT team can help, or try again later.'
         })
         return
       }

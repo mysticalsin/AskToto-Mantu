@@ -20,6 +20,7 @@ import {
 import { join, basename, resolve, relative, isAbsolute, extname } from 'node:path'
 import { readFileSync, existsSync, writeFileSync, realpathSync, readdirSync, unlinkSync } from 'node:fs'
 import { pathToFileURL } from 'node:url'
+import { randomBytes } from 'node:crypto'
 import {
   IPC,
   AskStartSchema,
@@ -714,18 +715,28 @@ function createTray(): void {
     if (!img.isEmpty()) img = img.resize({ width: 18, height: 18 })
     tray = new Tray(img.isEmpty() ? nativeImage.createEmpty() : img)
     if (process.platform === 'darwin' && img.isEmpty()) tray.setTitle(' ◉ Toto')
+    const user = getSettings().shortcuts ?? {}
+    const winKeys = process.platform === 'win32'
+    const fmtAccel = (a: string): string =>
+      !a ? '' : winKeys
+        ? a.replace(/CommandOrControl|CmdOrCtrl|Control/g, 'Ctrl').replace(/Command|Meta|Super/g, 'Win').replace(/Return/g, 'Enter')
+        : a.replace(/CommandOrControl|CmdOrCtrl|Command|Meta/g, '⌘').replace(/Shift/g, '⇧').replace(/Alt/g, '⌥').replace(/Control/g, 'Ctrl').replace(/Return/g, '↵').replace(/\+/g, '')
+    const label = (base: string, action: HotkeyAction): string => {
+      const k = fmtAccel(resolveShortcut(action, user))
+      return k ? `${base}  (${k})` : base
+    }
     const menu = Menu.buildFromTemplate([
-      { label: 'Show / Hide  (⌘\\)', click: toggleVisible },
+      { label: label('Show / Hide', 'hide'), click: toggleVisible },
       { label: 'Settings…', click: () => {
         if (win && !win.isVisible()) win.show()
         sendHotkey('settings')
       } },
-      { label: 'Listen / Stop listening  (⌘⇧L)', click: () => sendHotkey('toggle-listen') },
+      { label: label('Listen / Stop listening', 'toggle-listen'), click: () => sendHotkey('toggle-listen') },
       { label: "Today's agenda", click: () => {
         if (win && !win.isVisible()) win.show()
         sendHotkey('agenda')
       } },
-      { label: 'New  (⌘⇧R)', click: () => sendHotkey('reset') },
+      { label: label('New', 'reset'), click: () => sendHotkey('reset') },
       { type: 'separator' },
       { label: 'Quit AskToto', click: () => app.quit() }
     ])
@@ -1009,8 +1020,8 @@ function registerIpc(): void {
             'echo; echo "✓ Done. Go back to AskToto and click \\"Connect\\"."',
             'echo "You can close this window."'
           ]
-      const scriptPath = join(app.getPath('temp'), `asktoto-notebooklm-login.${isWin ? 'cmd' : 'command'}`)
-      writeFileSync(scriptPath, scriptLines.join('\n') + '\n', { mode: 0o755 })
+      const scriptPath = join(app.getPath('temp'), `asktoto-notebooklm-login-${randomBytes(8).toString('hex')}.${isWin ? 'cmd' : 'command'}`)
+      writeFileSync(scriptPath, scriptLines.join('\n') + '\n', { mode: 0o755, flag: 'wx' })
       const errMsg = await shell.openPath(scriptPath)
       auditLog('notebooklm.login', { opened: !errMsg })
       return errMsg ? { ok: false, error: errMsg } : { ok: true }

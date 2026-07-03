@@ -56,21 +56,25 @@ export function Chip({
   children,
   onClick,
   variant = 'neutral',
-  title
+  title,
+  disabled
 }: {
   icon?: LucideIcon
   children: ReactNode
   onClick: () => void
   variant?: 'neutral' | 'accent'
   title?: string
+  disabled?: boolean
 }): JSX.Element {
   return (
     <button
       type="button"
       title={title}
       onClick={onClick}
+      disabled={disabled}
       className={[
         'no-drag focus-ring flex items-center gap-1.5 rounded-full px-3 py-1.5 text-[12px] font-semibold transition-colors duration-[var(--duration-hover)]',
+        'disabled:opacity-60 disabled:pointer-events-none',
         variant === 'accent'
           ? 'bg-[var(--color-accent)] text-white hover:brightness-110'
           : 'bg-white/[0.08] text-white hover:bg-white/[0.16]'
