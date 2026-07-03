@@ -62,7 +62,7 @@ export function ModePicker({
 }): JSX.Element {
   const pad = size === 'sm' ? 'px-2 py-1 text-[11px]' : 'px-2.5 py-1.5 text-[12px]'
   return (
-    <div className="no-drag inline-flex items-center gap-0.5 rounded-full bg-white/[0.05] p-0.5">
+    <div className="no-drag flex max-w-[860px] flex-wrap items-center gap-0.5 rounded-full bg-white/[0.05] p-0.5">
       {MODES.map((m) => {
         const active = m.id === mode
         return (
@@ -73,7 +73,7 @@ export function ModePicker({
             disabled={disabled}
             onClick={() => onChange(m.id)}
             className={[
-              'focus-ring flex items-center gap-1.5 rounded-full font-medium transition-colors duration-[var(--duration-hover)]',
+              'focus-ring flex min-w-0 items-center gap-1.5 rounded-full font-medium transition-colors duration-[var(--duration-hover)]',
               pad,
               active
                 ? 'bg-[var(--color-accent)] text-white'
@@ -81,8 +81,8 @@ export function ModePicker({
               disabled ? 'opacity-50 cursor-not-allowed' : ''
             ].join(' ')}
           >
-            <m.icon size={13} />
-            {m.label}
+            <m.icon size={13} className="shrink-0" />
+            <span className="truncate">{m.label}</span>
           </button>
         )
       })}
@@ -96,7 +96,7 @@ export function ModePicker({
             disabled={disabled}
             onClick={() => onChange(cm.id)}
             className={[
-              'focus-ring flex items-center gap-1.5 rounded-full font-medium transition-colors duration-[var(--duration-hover)]',
+              'focus-ring flex min-w-0 items-center gap-1.5 rounded-full font-medium transition-colors duration-[var(--duration-hover)]',
               pad,
               active
                 ? 'bg-[var(--color-accent)] text-white'
@@ -104,8 +104,8 @@ export function ModePicker({
               disabled ? 'opacity-50 cursor-not-allowed' : ''
             ].join(' ')}
           >
-            <Sparkles size={13} />
-            {cm.label}
+            <Sparkles size={13} className="shrink-0" />
+            <span className="max-w-[110px] truncate">{cm.label}</span>
           </button>
         )
       })}

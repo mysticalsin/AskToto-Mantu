@@ -1,5 +1,5 @@
 import { memo, useEffect, useState } from 'react'
-import { Copy, Check, RefreshCw, FileDown, ShieldCheck, ChevronsDown, ThumbsUp, ThumbsDown, Eye } from 'lucide-react'
+import { Copy, Check, RefreshCw, FileDown, ShieldCheck, ChevronsDown, ThumbsUp, ThumbsDown, Eye, EyeOff } from 'lucide-react'
 import { Markdown } from './Markdown'
 import { TextButton } from './ui'
 import { useFlash } from '../lib/useFlash'
@@ -45,6 +45,7 @@ export const Answer = memo(function Answer({
   text,
   streaming,
   error,
+  captureNotice,
   prompt,
   label,
   kind,
@@ -55,6 +56,10 @@ export const Answer = memo(function Answer({
   text: string
   streaming: boolean
   error: string | null
+  /** Non-terminal notice that screen capture failed (e.g. Private View on, permission revoked) while the
+   *  answer STILL streams from text/context. Shown as a small banner above the body — never replaces the
+   *  answer the way `error` (a terminal provider failure) does. */
+  captureNotice?: string | null
   prompt?: string
   label?: string
   kind?: 'answer' | 'factcheck'
@@ -117,7 +122,7 @@ export const Answer = memo(function Answer({
       <Eye size={12} /> Viewed screen
     </div>
   ) : display ? (
-    <div className="rounded-lg border border-[var(--color-hair-soft)] bg-white/[0.03] px-3 py-2 text-[13px] font-medium text-[color:var(--color-ink)]">
+    <div className="rounded-lg border border-[var(--color-hair-soft)] bg-white/[0.03] px-3 py-2 text-[13px] font-medium text-[color:var(--color-ink)] break-words">
       {kind === 'factcheck' && (
         <div className="mb-1 flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wide text-[color:var(--color-ink-3)]">
           <ShieldCheck size={11} /> Fact-check
@@ -129,6 +134,19 @@ export const Answer = memo(function Answer({
         </div>
       )}
       {display}
+    </div>
+  ) : null
+
+  // Non-terminal capture-failure banner: the answer below still streams from text/context, so this sits
+  // as a small warning strip above it (amber, not the red terminal-error treatment) telling the user WHY
+  // the screen wasn't seen — instead of silently degrading to a text-only answer with no signal.
+  const notice = captureNotice ? (
+    <div
+      role="status"
+      className="flex items-start gap-1.5 rounded-lg border border-[var(--color-warn,#fac775)]/30 bg-[var(--color-warn,#fac775)]/10 px-3 py-2 text-[12px] leading-snug text-[color:var(--color-ink-2)] break-words [overflow-wrap:anywhere]"
+    >
+      <EyeOff size={13} className="mt-0.5 shrink-0 text-[color:var(--color-warn,#fac775)]" />
+      <span>{captureNotice}</span>
     </div>
   ) : null
 
@@ -212,10 +230,10 @@ export const Answer = memo(function Answer({
     return (
       <div className="fade-up mx-auto max-w-[620px] flex flex-col gap-2">
         {header}
-        <div className="rounded-lg border border-[var(--color-danger)]/30 bg-[var(--color-danger)]/10 px-3 py-2.5 text-[13px] text-[var(--color-danger)]">
+        <div className="rounded-lg border border-[var(--color-danger)]/30 bg-[var(--color-danger)]/10 px-3 py-2.5 text-[13px] text-[var(--color-danger)] break-words [overflow-wrap:anywhere]">
           {error}
           {hint && (
-            <div className="mt-1.5 text-[12px] leading-snug text-[color:var(--color-ink-2)]">{hint}</div>
+            <div className="mt-1.5 text-[12px] leading-snug text-[color:var(--color-ink-2)] break-words [overflow-wrap:anywhere]">{hint}</div>
           )}
         </div>
         {footer}
@@ -230,6 +248,7 @@ export const Answer = memo(function Answer({
     return (
       <div className="fade-up mx-auto max-w-[620px] flex flex-col gap-2">
         {header}
+        {notice}
         <div className="flex items-center gap-1.5 text-[12px] text-[color:var(--color-ink-2)]">
           <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-[var(--color-accent)]" />
           {label}
@@ -242,6 +261,7 @@ export const Answer = memo(function Answer({
     return (
       <div className="fade-up mx-auto max-w-[620px] flex flex-col gap-2">
         {header}
+        {notice}
         <div className="rounded-lg border border-[var(--color-hair-soft)] bg-white/[0.03] px-3 py-6 text-center text-[13px] text-[color:var(--color-ink-2)]">
           Ask a question or press {accelLabel('CommandOrControl+Shift+S')} to capture your screen.
         </div>
@@ -252,6 +272,7 @@ export const Answer = memo(function Answer({
   return (
     <div className="fade-up mx-auto max-w-[620px] flex flex-col gap-2">
       {header}
+      {notice}
       <div className="develop-in" aria-live="polite" aria-atomic="false" aria-busy={streaming}>
         {verdict ? (
           <div className="flex flex-col gap-2">

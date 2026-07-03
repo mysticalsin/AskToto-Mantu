@@ -107,7 +107,7 @@ function Chip({
 
 /** Meetings-per-week bars: single hue, thin marks, rounded data ends, native tooltips per bar. */
 function WeeklyBars({ meetings }: { meetings: MeetingSummary[] }): JSX.Element {
-  const { weeks, max } = useMemo(() => {
+  const { weeks, max, maxIdx } = useMemo(() => {
     const now = weekStart(Date.now())
     const counts = new Map<number, number>()
     for (const m of meetings) {
@@ -121,7 +121,9 @@ function WeeklyBars({ meetings }: { meetings: MeetingSummary[] }): JSX.Element {
       const w = now - (WEEKS_SHOWN - 1 - i) * WEEK_MS
       return { w, n: counts.get(w) || 0 }
     })
-    return { weeks, max: Math.max(1, ...weeks.map((x) => x.n)) }
+    const max = Math.max(1, ...weeks.map((x) => x.n))
+    const maxIdx = weeks.reduce((best, x, i) => (x.n > weeks[best].n ? i : best), 0)
+    return { weeks, max, maxIdx }
   }, [meetings])
 
   const W = 480
@@ -133,7 +135,13 @@ function WeeklyBars({ meetings }: { meetings: MeetingSummary[] }): JSX.Element {
 
   return (
     <div>
-      <svg viewBox={`0 0 ${W} ${H}`} className="block h-[64px] w-full" role="img" aria-label="Meetings per week">
+      <svg
+        viewBox={`0 0 ${W} ${H}`}
+        preserveAspectRatio="none"
+        className="block h-[64px] w-full"
+        role="img"
+        aria-label="Meetings per week"
+      >
         {weeks.map(({ w, n }, i) => {
           const h = n === 0 ? 2 : Math.max(4, (n / max) * (H - 14))
           const x = i * (bw + gap)
@@ -150,7 +158,7 @@ function WeeklyBars({ meetings }: { meetings: MeetingSummary[] }): JSX.Element {
                 <title>{`Week of ${fmt(w)}: ${n} meeting${n === 1 ? '' : 's'}`}</title>
               </rect>
               {/* Selective direct labels: only the busiest week and the current week carry a number. */}
-              {n > 0 && (n === max || i === WEEKS_SHOWN - 1) && (
+              {n > 0 && (i === maxIdx || i === WEEKS_SHOWN - 1) && (
                 <text
                   x={x + bw / 2}
                   y={H - h - 4}
@@ -184,13 +192,15 @@ function SectorBars({ sectors }: { sectors: { sector: string; n: number }[] }): 
           <div className="w-32 shrink-0 truncate text-right text-[11px] capitalize text-[color:var(--color-ink-3)]">
             {sector.replace(/-/g, ' ')}
           </div>
-          <div className="h-[6px] flex-1 overflow-hidden rounded-full bg-white/[0.05]">
+          <div className="h-[6px] min-w-[24px] flex-1 overflow-hidden rounded-full bg-white/[0.05]">
             <div
               className="h-full rounded-full bg-[var(--color-accent-2)]"
               style={{ width: `${(n / max) * 100}%` }}
             />
           </div>
-          <div className="w-5 shrink-0 text-[11px] font-semibold text-[color:var(--color-ink-2)]">{n}</div>
+          <div className="min-w-[1.25rem] shrink-0 text-right text-[11px] font-semibold text-[color:var(--color-ink-2)]">
+            {n}
+          </div>
         </div>
       ))}
     </div>
@@ -262,7 +272,7 @@ function DealRow({
         )}
       </div>
       <div className="flex items-center gap-3 text-[11px] text-[color:var(--color-ink-3)]">
-        {deal.stage && <span className="truncate">{deal.stage}</span>}
+        {deal.stage && <span className="min-w-0 flex-1 truncate">{deal.stage}</span>}
         <span className="shrink-0">
           {deal.meetings.length} meeting{deal.meetings.length === 1 ? '' : 's'}
           {last?.date ? ` · last ${new Date(last.date).toLocaleDateString()}` : ''}
@@ -556,7 +566,12 @@ export function BrainView({ onBack }: { onBack: () => void }): JSX.Element {
                       </span>
                       <span className="min-w-0 flex-1 truncate text-[color:var(--color-ink-2)]">{c.text}</span>
                       {c.due_hint && (
-                        <span className="shrink-0 text-[10px] italic text-[color:var(--color-ink-3)]">“{c.due_hint}”</span>
+                        <span
+                          className="max-w-[110px] shrink-0 truncate text-[10px] italic text-[color:var(--color-ink-3)]"
+                          title={c.due_hint}
+                        >
+                          “{c.due_hint}”
+                        </span>
                       )}
                       {days !== null && (
                         <span
@@ -566,7 +581,9 @@ export function BrainView({ onBack }: { onBack: () => void }): JSX.Element {
                           {days === 0 ? 'today' : `${days}d`}
                         </span>
                       )}
-                      <span className="shrink-0 truncate text-[10px] text-[color:var(--color-ink-3)]">{c.deal}</span>
+                      <span className="min-w-0 max-w-[90px] shrink truncate text-[10px] text-[color:var(--color-ink-3)]" title={c.deal}>
+                        {c.deal}
+                      </span>
                       {/* Settlement — the human closes the loop. Settled rows leave this rail on refresh
                           and feed the per-person kept-promise reliability read. */}
                       <span className="flex shrink-0 items-center gap-0.5">

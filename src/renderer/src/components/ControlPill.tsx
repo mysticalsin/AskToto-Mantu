@@ -44,7 +44,7 @@ export function ControlPill({
         onClick={onExpand}
         className="no-drag focus-ring block shrink-0 rounded-[8px]"
       >
-        <span className="aw-mark-glow block rounded-[8px]">
+        <span className="aw-mark-glow block rounded-[22%]">
           <MantuMark size={30} />
         </span>
       </button>
@@ -89,7 +89,7 @@ export function ControlPill({
           <Mic size={16} />
         </button>
       )}
-      <span className="h-[16px] w-px shrink-0 bg-white/10" />
+      <span className="h-[16px] w-px shrink-0 bg-white/20" />
       <button
         type="button"
         onClick={onHide}

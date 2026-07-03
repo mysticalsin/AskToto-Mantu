@@ -235,7 +235,7 @@ function Related({ file }: { file: string }): JSX.Element {
         >
           <span className="truncate text-[12px] text-[color:var(--color-ink)]">{n.title}</span>
           {n.via.length > 0 && (
-            <span className="text-[10px] text-[color:var(--color-ink-3)]">
+            <span className="truncate text-[10px] text-[color:var(--color-ink-3)]">
               via {n.via.join(', ')}
             </span>
           )}
@@ -435,14 +435,14 @@ const MeetingRow = memo(function MeetingRow({
 
       {/* Search snippet (RecallHit only) */}
       {hit?.snippet && (
-        <div className="line-clamp-2 px-9 pb-1 text-[11px] text-[color:var(--color-ink-2)]">
+        <div className="line-clamp-2 px-7 pb-1 text-[11px] text-[color:var(--color-ink-2)]">
           …{hit.snippet}…
         </div>
       )}
 
       {/* Topic chips — up to 3, derived from the recap's "## Tags" section (see saveMeeting). */}
       {!!m.topics?.length && (
-        <div className="flex flex-wrap gap-1 px-9 pb-1.5">
+        <div className="flex flex-wrap gap-1 px-7 pb-1.5">
           {m.topics.slice(0, 3).map((t, i) => (
             <span
               key={`${t}-${i}`}

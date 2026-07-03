@@ -566,7 +566,7 @@ function AiSection({
       {hint && (
         <div
           className={[
-            'mt-2 flex items-center gap-1.5 text-[12px]',
+            'mt-2 flex items-start gap-1.5 text-[12px]',
             hint.kind === 'ok'
               ? 'text-[color:var(--cl-primary)]'
               : 'text-[color:var(--cl-muted-foreground)]'
@@ -579,7 +579,7 @@ function AiSection({
       {test.status !== 'idle' && test.status !== 'loading' && (
         <div
           className={[
-            'mt-2 flex items-center gap-1.5 text-[12px]',
+            'mt-2 flex items-start gap-1.5 text-[12px]',
             test.status === 'ok'
               ? 'text-[color:var(--cl-success)]'
               : 'text-[color:var(--cl-destructive)]'
@@ -633,7 +633,7 @@ function AiSection({
                 }
                 placeholder={def.fastModel || 'base model id'}
                 className={[
-                  'w-full', ctl,
+                  'flex-1 min-w-0', ctl,
                   provider === 'anthropic' || settings.managedKeys.includes('providerModels') ? 'opacity-60' : ''
                 ].join(' ')}
               />
@@ -683,7 +683,7 @@ function AiSection({
                 disabled={settings.managedKeys.includes('customBaseUrl')}
                 onCommit={(v) => patch({ customBaseUrl: v })}
                 placeholder="https://your-endpoint/v1"
-                className={['w-full', ctl, settings.managedKeys.includes('customBaseUrl') ? 'opacity-60' : ''].join(' ')}
+                className={['flex-1 min-w-0', ctl, settings.managedKeys.includes('customBaseUrl') ? 'opacity-60' : ''].join(' ')}
               />
               <ManagedChip keys={settings.managedKeys} k="customBaseUrl" />
             </div>
@@ -1084,7 +1084,7 @@ function CliIntegration({
         {st.phase === 'installing' && (
           <div className="flex items-center gap-2 text-[11px] text-[color:var(--cl-muted-foreground)]">
             <Loader2 size={12} className="shrink-0 animate-spin" />
-            <span className="truncate">{st.msg ?? 'Installing…'}</span>
+            <span className="min-w-0 flex-1 truncate">{st.msg ?? 'Installing…'}</span>
           </div>
         )}
 
@@ -1362,7 +1362,7 @@ function BidstackCard({
 
       {connected && !open ? (
         <div className="flex items-center gap-3">
-          <span className="truncate text-[11px] text-[color:var(--cl-muted-foreground)]" title={settings.bidstackEndpointUrl}>
+          <span className="min-w-0 flex-1 truncate text-[11px] text-[color:var(--cl-muted-foreground)]" title={settings.bidstackEndpointUrl}>
             {settings.bidstackEndpointUrl}
           </span>
           <button
@@ -1826,7 +1826,7 @@ function DustSetup({
               Base agent · AskToto
               <span className={managedChipCls}>Managed by your organization</span>
             </span>
-            <div className={'w-full opacity-60 ' + ctl}>
+            <div className={'w-full truncate opacity-60 ' + ctl}>
               {agent ? agents?.find((a) => a.sId === agent)?.name ?? agent : 'Not configured yet'}
             </div>
           </div>
@@ -2068,7 +2068,7 @@ function ModePromptEditor({
   const isBuiltin = mode in BUILTIN_MODE_LABELS
   const override = settings.modePrompts[mode]
   const defaultPrompt = isBuiltin ? DEFAULT_MODE_PROMPTS[mode as keyof typeof DEFAULT_MODE_PROMPTS] ?? '' : ''
-  const value = override ?? defaultPrompt
+  const value = override && override.trim() !== '' ? override : defaultPrompt
   const isModified = !!override && override.trim() !== '' && override !== defaultPrompt
   const locked = settings.managedKeys.includes('modePrompts')
   const reset = (): void => {
@@ -2393,7 +2393,7 @@ function PersonalizeModes({
   return (
     <div className="grid grid-cols-[176px_1fr] gap-4">
       {/* Left — mode list grouped by MODE_GROUPS + Custom */}
-      <div className="flex flex-col gap-0.5">
+      <div className="scroll-thin flex max-h-[360px] flex-col gap-0.5 overflow-y-auto">
         {/* + New Mode button */}
         {creatingNew ? (
           <div className="mb-1 flex items-center gap-1">
@@ -2690,7 +2690,7 @@ export function Settings({
         aria-labelledby={`settings-tab-${tab}`}
         className="cl-content scroll-thin max-h-[480px] overflow-y-auto"
       >
-        <div className="flex flex-col gap-6 px-5 py-5">
+        <div className="flex flex-col gap-6 px-5 pt-5 pb-16">
             {tab === 'ai' && (
               <AiSection settings={settings} patch={patch} saveKey={saveKey} clearKey={clearKey} testKey={testKey} />
             )}
@@ -2972,7 +2972,7 @@ export function Settings({
                 <div className="cl-card px-3 py-2.5">
                   <div className="flex items-center gap-2">
                     <FolderOpen size={15} className="shrink-0 text-[color:var(--cl-primary)]" />
-                    <span className="flex-1 truncate text-[12px] text-[color:var(--cl-foreground)]" title={settings.resolvedMeetingsFolder}>
+                    <span className="min-w-0 flex-1 truncate text-[12px] text-[color:var(--cl-foreground)]" title={settings.resolvedMeetingsFolder}>
                       {settings.resolvedMeetingsFolder}
                     </span>
                     <ManagedChip keys={settings.managedKeys} k="meetingsFolder" />
@@ -3514,13 +3514,17 @@ function NotebookLmCard({
         {phase === 'checking' && <span className="text-[color:var(--cl-muted-foreground)]">Checking…</span>}
         {phase === 'connecting' && <span className="text-[color:var(--cl-muted-foreground)]">Connecting to NotebookLM…</span>}
         {phase === 'installing' && (
-          <span className="truncate text-[color:var(--cl-muted-foreground)]">{status || 'Setting up…'}</span>
+          <span className="min-w-0 flex-1 truncate text-[color:var(--cl-muted-foreground)]">{status || 'Setting up…'}</span>
         )}
         {phase === 'not-installed' && <span className="text-[color:var(--cl-muted-foreground)]">Not set up yet.</span>}
         {phase === 'sign-in-needed' && (
           <span className="text-[color:var(--cl-muted-foreground)]">Sign in with your Google account to connect.</span>
         )}
-        {phase === 'error' && <span className="text-[color:var(--color-danger)]">{status || 'Something went wrong.'}</span>}
+        {phase === 'error' && (
+          <span className="min-w-0 flex-1 break-words text-[color:var(--color-danger)]" title={status}>
+            {status || 'Something went wrong.'}
+          </span>
+        )}
         {phase === 'connected' && (
           <span className="text-[color:var(--cl-foreground)]">
             Connected · {settings.notebookLmTools.length} tool{settings.notebookLmTools.length === 1 ? '' : 's'}
@@ -3830,8 +3834,8 @@ function DangerZoneSection({
           </option>
         ))}
       </select>
-      <div className="mt-4 flex items-center justify-between gap-3 rounded-lg border border-[var(--cl-destructive)]/30 bg-[var(--cl-destructive)]/5 px-3 py-2.5">
-        <div>
+      <div className="mt-4 flex items-start justify-between gap-3 rounded-lg border border-[var(--cl-destructive)]/30 bg-[var(--cl-destructive)]/5 px-3 py-2.5">
+        <div className="min-w-0">
           <div className="text-[13px] font-medium text-[color:var(--cl-foreground)]">Delete all my data</div>
           <div className="text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
             Permanently removes every saved meeting, note, and the knowledge graph from this device. Cannot be undone.

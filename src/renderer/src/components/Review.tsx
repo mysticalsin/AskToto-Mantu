@@ -1,5 +1,5 @@
 import { memo, useEffect, useMemo, useState } from 'react'
-import { Copy, Check, FileText, ListTree, FolderOpen, Save, RotateCcw, Play, ChevronDown, Download, Clock, Mail, Send, AlertCircle, EarOff } from 'lucide-react'
+import { Copy, Check, FileText, ListTree, FolderOpen, Save, RotateCcw, Play, ChevronDown, Download, Clock, Mail, Send, AlertCircle, EarOff, ArrowLeft } from 'lucide-react'
 import type { TranscriptLine, MeetingSummary } from '@shared/ipc'
 import type { AnswerState } from '../state'
 import { isNonSpeechLine } from '@shared/transcript-filter'
@@ -92,7 +92,8 @@ export const Review = memo(function Review({
   onGenerateFollowup,
   bidstackConnected,
   bidstackTools,
-  onOpenPastMeeting
+  onOpenPastMeeting,
+  isPastMeeting
 }: {
   recap: AnswerState | null
   lines: TranscriptLine[]
@@ -116,6 +117,8 @@ export const Review = memo(function Review({
   bidstackTools?: string[]
   /** Opens a "Recent meetings" row as a read-only past-meeting Review (same handler History uses). */
   onOpenPastMeeting?: (file: string) => void
+  /** True when reviewing a past meeting reopened from History, so onDone returns to History rather than starting a new meeting. */
+  isPastMeeting?: boolean
 }): JSX.Element {
   const [copied, flashCopied] = useFlash(1500)
   const [notesCopied, flashNotesCopied] = useFlash(1500)
@@ -335,7 +338,9 @@ export const Review = memo(function Review({
             <TextButton icon={Save} onClick={onSave} disabled={lines.length === 0 || !!savedPath}>Save</TextButton>
           )}
           {onDone && (
-            <Chip icon={RotateCcw} onClick={onDone} variant="accent">New meeting</Chip>
+            <Chip icon={isPastMeeting ? ArrowLeft : RotateCcw} onClick={onDone} variant="accent">
+              {isPastMeeting ? 'Back to history' : 'New meeting'}
+            </Chip>
           )}
         </div>
       </div>
@@ -453,7 +458,12 @@ export const Review = memo(function Review({
             )}
           </div>
           {followupDraft?.error ? (
-            <div className="text-[13px] text-[var(--color-danger)]">{followupDraft.error}</div>
+            <div className="flex flex-col gap-2">
+              <div className="text-[13px] text-[var(--color-danger)]">{followupDraft.error}</div>
+              <div className="flex items-center gap-1.5">
+                <TextButton icon={RotateCcw} onClick={onGenerateFollowup}>Retry</TextButton>
+              </div>
+            </div>
           ) : followupDraft?.streaming && !followupText ? (
             <div className="flex items-center gap-2 py-1 text-[13px] text-[color:var(--color-ink-2)]">
               <Spinner size={13} /> drafting follow-up…

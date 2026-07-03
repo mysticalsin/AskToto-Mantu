@@ -7,17 +7,27 @@ export interface RecordingConsentReminderProps {
   lastReminderAt: number
   requireIndicator: boolean
   onAck: () => void
+  /** Reports whether the banner is currently on-screen, so the parent can size the window to fit it
+   *  only while it is actually visible (it auto-dismisses, or stays for the whole session). */
+  onOpenChange?: (open: boolean) => void
 }
 
 export function RecordingConsentReminder({
   listening,
   lastReminderAt,
   requireIndicator,
-  onAck
+  onAck,
+  onOpenChange
 }: RecordingConsentReminderProps): JSX.Element | null {
   const [open, setOpen] = useState(false)
   const ackRef = useRef(onAck)
   ackRef.current = onAck
+  const openChangeRef = useRef(onOpenChange)
+  openChangeRef.current = onOpenChange
+  // Mirror the banner's visibility up to the parent whenever it flips (drives the minimized-pill widen).
+  useEffect(() => {
+    openChangeRef.current?.(open)
+  }, [open])
 
   useEffect(() => {
     if (!listening) {
@@ -50,7 +60,7 @@ export function RecordingConsentReminder({
           <div className="truncate text-[13px] font-medium text-[color:var(--color-ink)]">
             AskToto is listening
           </div>
-          <div className="truncate text-[11px] leading-snug text-[color:var(--color-ink-2)]">
+          <div className="text-[11px] leading-snug text-[color:var(--color-ink-2)]">
             Other participants are being recorded. Make sure everyone has consented.
           </div>
         </div>

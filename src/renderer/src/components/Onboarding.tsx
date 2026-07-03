@@ -485,7 +485,7 @@ export function Onboarding({
         Audio is processed on your Mac and never uploaded.
       </div>
 
-      <label className="no-drag flex max-w-[460px] cursor-pointer items-start gap-2.5 rounded-xl border border-[var(--color-hair-soft)] bg-white/[0.03] p-3 text-left hover:bg-white/[0.06]">
+      <label className="no-drag flex w-full max-w-[460px] cursor-pointer items-start gap-2.5 rounded-xl border border-[var(--color-hair-soft)] bg-white/[0.03] p-3 text-left hover:bg-white/[0.06]">
         <input
           type="checkbox"
           checked={recordingConsent}
