@@ -106,7 +106,13 @@ export const IPC = {
   mcpCrmTestConnection: 'mcpCrm:testConnection',
   mcpCrmSaveConnection: 'mcpCrm:saveConnection',
   mcpCrmDisconnect: 'mcpCrm:disconnect',
-  mcpCrmPush: 'mcpCrm:push'
+  mcpCrmPush: 'mcpCrm:push',
+  notebookLmDetect: 'notebookLm:detect',
+  notebookLmInstall: 'notebookLm:install',
+  notebookLmInstallProgress: 'notebookLm:install:progress',
+  notebookLmLogin: 'notebookLm:login',
+  notebookLmConnect: 'notebookLm:connect',
+  notebookLmAsk: 'notebookLm:ask'
 } as const
 
 /** User's verdict on an answer (metadata only — never the answer text). Feeds the audit log + future evals. */
@@ -433,7 +439,12 @@ export const BaseSettingsSchema = z.object({
   bidstackConnected: z.boolean().default(false),
   // Tool names BidStack's MCP discovery returned at the last successful connect/save — populates the
   // "Push to CRM" tool picker in Review.tsx so we never guess/hardcode BidStack's tool names.
-  bidstackTools: z.array(z.string()).default([])
+  bidstackTools: z.array(z.string()).default([]),
+  // NotebookLM research (MCP, stdio; Settings → Mantu Intelligence). No endpoint or key to persist — auth
+  // lives entirely in the nlm CLI's own state under the user's home dir — only connected-status + the
+  // tool names discovered at connect time.
+  notebookLmConnected: z.boolean().default(false),
+  notebookLmTools: z.array(z.string()).default([])
 })
 
 export const SettingsSchema = BaseSettingsSchema.refine(
@@ -551,7 +562,9 @@ export const DEFAULT_SETTINGS: Settings = {
   cliNoticeAck: false,
   bidstackEndpointUrl: '',
   bidstackConnected: false,
-  bidstackTools: []
+  bidstackTools: [],
+  notebookLmConnected: false,
+  notebookLmTools: []
 }
 
 export const HOTKEY_ACTIONS: HotkeyAction[] = [
@@ -800,6 +813,20 @@ export interface McpCrmPushResult {
   error?: string
   result?: unknown
 }
+
+// --- NotebookLM research (MCP, stdio) --- ipc.ts cannot import from main/mcp/*, so these structurally
+// mirror notebooklm.ts's own exported shapes rather than reuse them.
+export const NotebookLmAskPayloadSchema = z.object({
+  question: z.string().min(1, 'Enter a question for NotebookLM first.').max(4_000),
+  notebookId: z.string().max(200).optional()
+})
+export type NotebookLmAskPayload = z.infer<typeof NotebookLmAskPayloadSchema>
+
+export interface NotebookLmDetectResult { ok: boolean; version?: string; error?: string }
+export interface NotebookLmInstallResult { ok: boolean; error?: string; needsTerminal?: boolean }
+export interface NotebookLmLoginResult { ok: boolean; error?: string }
+export interface NotebookLmConnectResult { ok: boolean; error?: string; tools?: string[]; needsSignIn?: boolean }
+export interface NotebookLmAskResult { ok: boolean; error?: string; text?: string; needsSignIn?: boolean }
 
 export const CaptureResultSchema = z.object({
   /** base64 JPEG, no data: prefix */
