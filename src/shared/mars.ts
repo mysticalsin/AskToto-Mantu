@@ -107,7 +107,7 @@ export function buildMarsWeek(extractions: MeetingExtraction[], deals: DealEntit
 /** Render the week as a paste-ready markdown draft, honest about what the data can and cannot claim. */
 export function renderMarsMarkdown(w: MarsWeek): string {
   const lines: string[] = []
-  lines.push(`# Mars week draft — ${w.weekStart} → ${w.weekEnd}`)
+  lines.push(`# Mars week draft: ${w.weekStart} → ${w.weekEnd}`)
   lines.push('')
   lines.push('_Auto-drafted from recorded meetings. Counts are facts; the Mars bucket (prospection / cold call / QM) is yours to confirm._')
   lines.push('')
@@ -121,7 +121,7 @@ export function renderMarsMarkdown(w: MarsWeek): string {
       m.band && `read: ${m.band}`,
       m.firstContact && 'FIRST CONTACT'
     ].filter(Boolean)
-    lines.push(`- ${m.date} — ${m.title} (${bits.join(', ')})`)
+    lines.push(`- ${m.date}: ${m.title} (${bits.join(', ')})`)
   }
   lines.push('')
 
@@ -130,24 +130,24 @@ export function renderMarsMarkdown(w: MarsWeek): string {
   lines.push('')
 
   lines.push(`## Projects won (${w.won.length})`)
-  lines.push(w.won.length ? w.won.map((d) => `- ${d.name}${d.account ? ` — ${d.account}` : ''}`).join('\n') : '- none marked won this week')
+  lines.push(w.won.length ? w.won.map((d) => `- ${d.name}${d.account ? ` (${d.account})` : ''}`).join('\n') : '- none marked won this week')
   lines.push('')
 
   lines.push(`## Projects lost (${w.lost.length})`)
-  lines.push(w.lost.length ? w.lost.map((d) => `- ${d.name}${d.account ? ` — ${d.account}` : ''}`).join('\n') : '- none marked lost this week')
+  lines.push(w.lost.length ? w.lost.map((d) => `- ${d.name}${d.account ? ` (${d.account})` : ''}`).join('\n') : '- none marked lost this week')
   lines.push('')
 
   lines.push(`## Open follow-ups (${w.openFollowups.length})`)
   if (w.openFollowups.length === 0) lines.push('- none open')
   for (const f of w.openFollowups) {
     const owner = f.by === 'you' ? 'You' : f.by === 'them' ? 'Them' : f.by
-    lines.push(`- ${owner}: ${f.text}${f.due_hint ? ` (${f.due_hint})` : ''} — ${f.deal}${f.date ? `, from ${f.date}` : ''}`)
+    lines.push(`- ${owner}: ${f.text}${f.due_hint ? ` (${f.due_hint})` : ''}, ${f.deal}${f.date ? `, from ${f.date}` : ''}`)
   }
   lines.push('')
 
   if (w.atRisk.length) {
     lines.push(`## At risk (${w.atRisk.length})`)
-    for (const d of w.atRisk) lines.push(`- ${d.name}${d.account ? ` — ${d.account}` : ''}${d.evidence ? `: ${d.evidence}` : ''}`)
+    for (const d of w.atRisk) lines.push(`- ${d.name}${d.account ? ` (${d.account})` : ''}${d.evidence ? `: ${d.evidence}` : ''}`)
     lines.push('')
   }
 

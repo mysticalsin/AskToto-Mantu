@@ -63,7 +63,7 @@ export function RecordingConsentReminder({
             AskToto is listening
           </div>
           <div className="text-[11px] leading-snug text-[color:var(--color-ink-2)]">
-            Other participants are being recorded. Make sure everyone has consented.
+            You’re recording other participants. Make sure everyone has consented.
           </div>
         </div>
         {/* No manual dismiss in require-indicator mode — it must stay visible for the whole session

@@ -129,8 +129,8 @@ export function AgendaView(): JSX.Element {
   } else if (notConfigured) {
     body = (
       <div className="px-1 py-5 text-[12px] leading-relaxed text-[color:var(--color-ink-2)]">
-        Calendar needs your organization’s Microsoft sign-in to be set up (Azure AD client &amp; tenant).
-        Ask your IT admin to enable it, then connect here.
+        This needs your org’s Microsoft sign-in configured first (Azure AD client &amp; tenant).
+        Ask your IT admin to turn it on, then connect here.
       </div>
     )
   } else if (res?.needsConsent) {

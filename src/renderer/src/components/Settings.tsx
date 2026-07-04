@@ -992,7 +992,7 @@ function CliIntegration({
     window.toto.cliLogin(id)
     setState(id, {
       phase: 'setup-opened',
-      msg: 'Installed. Sign in in the window that opened, then click Connect.',
+      msg: 'Installed. Sign in through the window that opened, then click Connect.',
       version: null
     })
   }
@@ -1509,8 +1509,8 @@ function BidstackCard({
           </div>
           <span className="text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
             Request only the <code className="rounded bg-white/[0.08] px-1">mcp + write</code> scope. This is a
-            push-only integration. The endpoint moves with wherever Polo Pre-Sales' backend actually runs; there is no
-            built-in default beyond the local-dev placeholder shown above.
+            push-only integration. The endpoint depends on where your Polo Pre-Sales backend runs; there's no
+            default beyond the local-dev placeholder shown above.
           </span>
         </div>
       )}
@@ -2252,7 +2252,7 @@ function ContextDocs({
       >
         <Upload size={18} className="text-[color:var(--cl-primary)]" />
         <span className="text-[13px] text-[color:var(--cl-foreground)]">
-          Adding files gives more context
+          Give it more to work with
         </span>
         <span className="text-[12px] text-[color:var(--cl-muted-foreground)]">
           Drag &amp; drop files here to add them, or{' '}

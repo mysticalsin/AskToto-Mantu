@@ -558,7 +558,7 @@ export function BrainView({ onBack }: { onBack: () => void }): JSX.Element {
             (status?.accounts ?? 0) === 0 &&
             (status?.deals ?? 0) === 0 && (
               <div className="rounded-xl border border-[var(--color-hair-soft)] bg-white/[0.02] px-3 py-2.5 text-[12px] leading-snug text-[color:var(--color-ink-3)]">
-                Meetings are ingested, but no people, accounts, or deals were extracted yet — usually the
+                Meetings are ingested, but no people, accounts, or deals were extracted yet. Usually the
                 transcripts are short or don&rsquo;t name clients. Longer, client-facing meetings will fill this in.
               </div>
             )}

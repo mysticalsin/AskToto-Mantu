@@ -566,7 +566,7 @@ export const Review = memo(function Review({
                 </label>
               ) : (
                 <div className="text-[11px] text-[color:var(--color-danger)]">
-                  Polo Pre-Sales reported no tools for this key's scope, so there is nothing to push to. Check the key's
+                  Polo Pre-Sales has no tools in this key's scope, so there's nothing to push to. Check the key's
                   scopes in Settings.
                 </div>
               )}

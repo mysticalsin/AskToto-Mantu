@@ -453,12 +453,12 @@ export function GraphView({ data }: Props) {
               )}
               {selected.single_threaded && (
                 <div className="rounded-md border border-amber-400/25 bg-amber-400/10 px-2 py-1 text-[11px] text-amber-200/90">
-                  Single-threaded — this deal's account has one mapped contact. One departure kills the thread; map a second stakeholder.
+                  Single-threaded: this deal's account has one mapped contact. One departure kills the thread; map a second stakeholder.
                 </div>
               )}
               {selected.unmapped && (
                 <div className="rounded-md border border-amber-400/25 bg-amber-400/10 px-2 py-1 text-[11px] text-amber-200/90">
-                  Unexplored — no people mapped at this account yet. The relationship exists only on paper.
+                  Unexplored: no people mapped at this account yet. The relationship exists only on paper.
                 </div>
               )}
               {selected.is_client_facing !== undefined && (
@@ -523,7 +523,7 @@ export function GraphView({ data }: Props) {
               ))}
             </div>
             <p className="mt-2 text-[10px] leading-relaxed text-white/30">
-              Hooks come from your own open promises and last real topics — never invented. Faded nodes in
+              Hooks come from your own open promises and last real topics, never invented. Faded nodes in
               the graph are these relationships decaying in place.
             </p>
           </div>
@@ -568,7 +568,7 @@ export function GraphView({ data }: Props) {
             <div className="rounded-md bg-black/20 p-2">
               <div className="text-white/40">Value at stake</div>
               <div className="text-base font-semibold text-white/90">
-                {roiSummary.total_value_usd === null ? '—' : fmtUsd(roiSummary.total_value_usd)}
+                {roiSummary.total_value_usd === null ? 'N/A' : fmtUsd(roiSummary.total_value_usd)}
               </div>
               {roiSummary.total_value_usd === null && (
                 <div className="text-[9px] leading-tight text-white/30">no value data in transcripts</div>
@@ -603,7 +603,7 @@ export function GraphView({ data }: Props) {
           )}
           <p className="mt-2 text-[10px] leading-relaxed text-white/30">
             Win-likelihood distribution is real, cited data. Deal value shows only when a source
-            recorded one — transcripts carry no money data, so the live brain never invents a figure.
+            recorded one. Transcripts carry no money data, so the live brain never invents a figure.
             No fabricated ROI % either: there's no cost/spend data to compute one against.
           </p>
         </div>
@@ -613,8 +613,7 @@ export function GraphView({ data }: Props) {
           {isThin && (
             <p className="mb-3 rounded-md border border-amber-400/20 bg-amber-400/5 px-2.5 py-2 text-[11px] leading-relaxed text-amber-200/80">
               {accountGroups.length} account · {sectorGroups.length} sector · {communityGroups.length} community in
-              today's data — filters below are real and ready to scale, there just isn't diversity to filter across
-              yet.
+              today's data. The filters below work, there just isn't enough variety yet to filter across.
             </p>
           )}
 
@@ -712,8 +711,8 @@ export function GraphView({ data }: Props) {
           <p className="mt-4 text-[10px] leading-relaxed text-white/30">
             Node fill = community (real connected-component clustering, not hand-assigned). Deal-node ring =
             win-likelihood band. Solid edges = extracted directly from source. Dashed = inferred or ambiguous.
-            Fading = going cold: full strength ≤14 days since last meeting, dimmed ≤45, ghosted beyond —
-            relationship entropy made visible.
+            Fading = going cold: full strength ≤14 days since last meeting, dimmed ≤45, ghosted beyond.
+            Relationship entropy made visible.
           </p>
         </div>
 
