@@ -86,14 +86,19 @@ export function hasBidstackApiKey(): boolean {
   return getBidstackApiKey().length > 0
 }
 
-export function clearBidstackApiKey(): void {
+/** Returns false if the on-disk key file could not be deleted (the in-memory cache is always cleared) —
+ *  so the disconnect handler can tell the user their key wasn't actually removed instead of falsely
+ *  reporting success while the secret survives on disk. */
+export function clearBidstackApiKey(): boolean {
+  _cache = ''
   const p = keyPath()
   if (existsSync(p)) {
     try {
       rmSync(p)
     } catch (e) {
       mainLog.warn('[bidstack] could not delete key file', e)
+      return false
     }
   }
-  _cache = ''
+  return true
 }

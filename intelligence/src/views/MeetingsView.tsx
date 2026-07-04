@@ -88,14 +88,18 @@ export function MeetingsView({ data }: Props) {
 }
 
 function MeetingRow({ meeting }: { meeting: MeetingFeedRow }) {
-  const shownTopics = meeting.topics.slice(0, 4)
-  const extraTopics = meeting.topics.length - shownTopics.length
+  const topics = meeting.topics ?? []
+  const shownTopics = topics.slice(0, 4)
+  const extraTopics = topics.length - shownTopics.length
+  // Sentiment can be absent (an ungraded/internal meeting) — show a neutral grey dot + honest label
+  // instead of an undefined background and a literal title="undefined".
+  const hasSentiment = meeting.sentiment != null
   return (
     <div className="flex items-center gap-3 rounded-lg border border-[var(--color-mantu-border)] bg-[var(--color-mantu-surface)] px-4 py-3">
       <span
         className="h-2.5 w-2.5 flex-shrink-0 rounded-full"
-        style={{ background: bandColor[meeting.sentiment] }}
-        title={bandLabel[meeting.sentiment]}
+        style={{ background: hasSentiment ? bandColor[meeting.sentiment] : 'rgba(255,255,255,0.28)' }}
+        title={hasSentiment ? bandLabel[meeting.sentiment] : 'No sentiment recorded'}
       />
       <span className="flex-shrink-0 whitespace-nowrap text-xs text-white/40">{humanizeDate(meeting.date)}</span>
       <span className="min-w-0 flex-1 truncate text-sm text-white/85">{meeting.title24}</span>
@@ -104,7 +108,7 @@ function MeetingRow({ meeting }: { meeting: MeetingFeedRow }) {
           {meeting.account}
         </span>
       )}
-      {meeting.topics.length > 0 && (
+      {topics.length > 0 && (
         <div className="flex flex-shrink-0 items-center gap-1">
           {shownTopics.map((t) => (
             <span key={t} className="rounded-full bg-white/[0.04] px-2 py-0.5 text-[10px] text-white/40">

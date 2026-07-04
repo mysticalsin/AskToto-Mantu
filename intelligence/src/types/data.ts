@@ -85,7 +85,10 @@ export interface Deal {
   sector: string
   display_name: string
   outcome: DealOutcome
-  win_likelihood_band: WinLikelihoodBand
+  // null = the brain never graded this deal (no cited evidence). MUST stay null — coercing it to a real
+  // band (previously '?? mixed') fabricates a qualitative sales signal and inflates the mixed count in
+  // every chart/summary. Views render null as an explicit "ungraded" state.
+  win_likelihood_band: WinLikelihoodBand | null
   value_usd: number | null
   stage: string
   // Why the band is what it is, in the extraction's own words — '' when the brain recorded none.

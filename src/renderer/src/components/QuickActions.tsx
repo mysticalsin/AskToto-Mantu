@@ -30,6 +30,7 @@ export const QuickActions = memo(function QuickActions({
           <button
             key={a.kind}
             type="button"
+            aria-label={a.label}
             onClick={() => onAction(a.kind)}
             className={[
               'no-drag focus-ring glass-chip flex items-center gap-1.5 rounded-full px-3 py-1.5 text-[12px] font-semibold text-white transition-[transform,background-color] duration-[var(--duration-hover)] active:scale-[0.96]',

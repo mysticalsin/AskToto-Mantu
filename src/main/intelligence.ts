@@ -2,6 +2,18 @@ import { BrowserWindow, shell, app } from 'electron'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { existsSync } from 'node:fs'
+import { getSettings } from './store'
+
+/** Private View (content protection) for the dashboard — mirrors the overlay's contentProtectionOn().
+ *  The dashboard aggregates the most sensitive cross-meeting data (people/accounts/deals/quotes/
+ *  commitments), so it must be excluded from screen capture/share whenever the overlay is. */
+const intelCpOn = (): boolean => !process.env.ASKTOTO_DISABLE_CP && getSettings().contentProtection
+
+/** Re-apply Private View to the (open) dashboard window — called from settingsSet when the toggle flips,
+ *  same as the overlay's win.setContentProtection() re-apply. */
+export function syncIntelContentProtection(): void {
+  if (intelWin && !intelWin.isDestroyed()) intelWin.setContentProtection(intelCpOn())
+}
 
 /**
  * The Mantu Intelligence dashboard — a normal, resizable window (not the overlay). Loads the
@@ -60,6 +72,9 @@ export function openIntelligenceWindow(): { ok: boolean; error?: string } {
       webSecurity: true
     }
   })
+  // Private View covers the dashboard too — without this the most sensitive aggregated view stayed
+  // screen-capturable even with Private View on everywhere else.
+  intelWin.setContentProtection(intelCpOn())
   intelWin.on('closed', () => {
     intelWin = null
   })

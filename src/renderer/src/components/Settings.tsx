@@ -1618,6 +1618,15 @@ function DustSetup({
     }
   }
 
+  // When Dust was already connected in a prior session (key + workspace saved), load the agent list on
+  // mount — otherwise reopening Settings shows raw agent sIds instead of names and the Thinking-agent
+  // control degrades from a dropdown to a bare text input until a manual refresh.
+  useEffect(() => {
+    if (keySaved && hasWs && agents === null && !loading) void loadAgents()
+    // loadAgents is stable enough for this mount-on-connect check; re-run only when connection state flips.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [keySaved, hasWs])
+
   const setThinkAgent = (sId: string): void =>
     patch({ providerModelsThinking: { ...settings.providerModelsThinking, dust: sId } })
 
@@ -2646,7 +2655,10 @@ export function Settings({
         </button>
       </header>
 
-      {notice && (
+      {/* The redirect nudge (e.g. "Add an API key here") is targeted at a specific tab via
+          openSettings(tab, notice), so only show it while the user is ON that tab — once they navigate
+          away it no longer points at anything visible. Reappears if they come back to the tab. */}
+      {notice && tab === (initialTab ?? 'personalize') && (
         <div className="no-drag border-b border-[var(--cl-primary)]/30 bg-[var(--cl-primary-soft)] px-3.5 py-2 text-[12px] leading-snug text-[color:var(--cl-foreground)]">
           {notice}
         </div>
@@ -3218,15 +3230,45 @@ export function Settings({
 /** Usage panel from the local audit log. Computed on-device; never sent anywhere. */
 function DiagnosticsSection(): JSX.Element {
   const [m, setM] = useState<EvalMetrics | null>(null)
+  // Distinguish a genuine load FAILURE from the still-loading state — previously a failed readMetrics()
+  // set m back to null, leaving "Loading…" on screen forever with no way to recover.
+  const [loadErr, setLoadErr] = useState(false)
+  const [reloadKey, setReloadKey] = useState(0)
   useEffect(() => {
-    void window.toto.readMetrics().then(setM).catch(() => setM(null))
-  }, [])
+    let cancelled = false
+    setLoadErr(false)
+    void window.toto
+      .readMetrics()
+      .then((v) => {
+        if (!cancelled) setM(v)
+      })
+      .catch(() => {
+        if (!cancelled) setLoadErr(true)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [reloadKey])
 
   const ms = (v: number | null): string =>
     v == null ? 'N/A' : v >= 1000 ? `${(v / 1000).toFixed(1)}s` : `${Math.round(v)}ms`
   const pct = (r: number | null): string => (r == null ? 'N/A' : `${Math.round(r * 100)}%`)
   const n = (v: number): string => (v >= 1000 ? `${(v / 1000).toFixed(1)}k` : String(v))
 
+  if (loadErr) {
+    return (
+      <div className="flex items-center gap-2 text-[12px] text-[color:var(--cl-muted-foreground)]">
+        <span>Couldn’t load usage metrics.</span>
+        <button
+          type="button"
+          onClick={() => setReloadKey((k) => k + 1)}
+          className="no-drag focus-ring rounded-full bg-[var(--cl-card)] px-2.5 py-1 text-[11px] font-semibold text-[color:var(--cl-foreground)] hover:bg-white/10"
+        >
+          Retry
+        </button>
+      </div>
+    )
+  }
   if (!m) {
     return <div className="text-[12px] text-[color:var(--cl-muted-foreground)]">Loading…</div>
   }
@@ -3458,6 +3500,16 @@ function NotebookLmCard({
 
   useEffect(() => {
     let alive = true
+    // Trust the persisted flag on mount: if NotebookLM was connected in a prior session, show 'connected'
+    // rather than re-running a LIVE detect/connect on every Settings open — a transient network hiccup on
+    // a routine reopen would otherwise flip a working integration to 'sign-in-needed'/'error' for no real
+    // reason. A real failure still surfaces when the user actually asks (notebookLmAsk).
+    if (settings.notebookLmConnected) {
+      setPhase('connected')
+      return () => {
+        alive = false
+      }
+    }
     void window.toto.notebookLmDetect().then((d) => {
       if (!alive) return
       if (d.ok) void probeConnect()
@@ -3466,7 +3518,7 @@ function NotebookLmCard({
     return () => {
       alive = false
     }
-  }, [probeConnect])
+  }, [probeConnect, settings.notebookLmConnected])
 
   const install = async (): Promise<void> => {
     setPhase('installing')

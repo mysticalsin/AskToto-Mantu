@@ -31,7 +31,7 @@ const THEM_SILENT_MSG = isWindows
 // a whole side of the meeting was silently lost. Matched by exact string (same contract as the notes above).
 const MIC_LOST_MSG = 'Microphone input stopped (device disconnected or sleep); reconnecting automatically…'
 const THEM_LOST_MSG =
-  'System-audio capture stopped (display sleep or a device change). Toggle Listen to restart it.'
+  'System-audio capture stopped (display sleep or a device change); reconnecting automatically…'
 // Backpressure became user-visible truncation: transcription fell behind capture long enough that
 // audio windows were discarded. Exact-string contract like the other sticky notes.
 const DROPPED_MSG = 'Transcription fell behind, so some audio was skipped. The transcript may have gaps.'
@@ -529,8 +529,9 @@ export function useListen(
       // default-device switch, lid-close sleep terminating the SCStream) previously left the UI saying
       // "Listening" while this side of the meeting was silently lost. (`track.stop()` from closeChannel
       // does NOT fire 'ended' on the stopping context, and the identity guard covers replaced channels.)
-      // Mic: surface the note and re-acquire automatically. System audio: getDisplayMedia can't be
-      // re-requested without the arm/gesture dance, so surface an actionable note instead.
+      // Both sides now surface a "reconnecting…" note and re-acquire automatically — mic via
+      // recoverMicRef, system audio via recoverSystemAudioRef (which re-runs the programmatic arm-dance
+      // getDisplayMedia; no user gesture is needed, so a blip no longer forces a "Toggle Listen" restart).
       stream.getAudioTracks().forEach((t) => {
         t.onended = (): void => {
           if (!liveRef.current || channels.current[sp] !== ch) return
@@ -541,6 +542,7 @@ export function useListen(
             void recoverMicRef.current?.()
           } else {
             setState((s) => ({ ...s, error: THEM_LOST_MSG }))
+            void recoverSystemAudioRef.current?.()
           }
         }
       })
@@ -591,6 +593,46 @@ export function useListen(
     }
   }
 
+  // Re-acquire system-audio ('them') after its loopback track died (display sleep, default-output swap,
+  // Bluetooth change). Mirrors recoverMicRef but re-runs the arm-dance getDisplayMedia acquisition that
+  // start() uses — this IS doable programmatically (armAudio + the main-process loopback handler need no
+  // user gesture), so a mid-meeting blip no longer forces a destructive "Toggle Listen" restart that would
+  // end the meeting and split it into two transcripts. Also invoked by the live permission watcher when
+  // Screen Recording flips to granted mid-session. Routed through openChannel so the them-watchdog + the
+  // themHeardRef first-emission detection re-arm for free.
+  const sysRecoveringRef = useRef(false)
+  // True while the current session requested system audio ('system'/'both') — gates the live permission
+  // watcher so a mic-only session never tries to grab the loopback.
+  const wantsSystemRef = useRef(false)
+  const recoverSystemAudioRef = useRef<(() => Promise<void>) | null>(null)
+  recoverSystemAudioRef.current = async (): Promise<void> => {
+    if (!liveRef.current || sysRecoveringRef.current) return
+    if (channels.current.them) return // already have a live 'them' channel — nothing to recover
+    sysRecoveringRef.current = true
+    try {
+      await window.toto.armAudio(true)
+      let sys: MediaStream
+      try {
+        sys = await navigator.mediaDevices.getDisplayMedia({ video: { frameRate: 1 }, audio: true })
+      } finally {
+        await window.toto.armAudio(false)
+      }
+      const liveAudio = sys.getAudioTracks().filter((t) => t.readyState !== 'ended')
+      if (!liveRef.current || !liveAudio.length) {
+        sys.getTracks().forEach((t) => t.stop())
+        return
+      }
+      await openChannel('them', sys)
+      setState((s) => (s.error === THEM_LOST_MSG ? { ...s, error: null } : s))
+    } catch {
+      // Couldn't re-acquire (permission genuinely revoked, or no loopback available) — leave the sticky
+      // note so the live permission watcher / a devicechange can retrigger recovery later.
+      setState((s) => (s.error === null ? { ...s, error: THEM_LOST_MSG } : s))
+    } finally {
+      sysRecoveringRef.current = false
+    }
+  }
+
   // Follow the default input across device changes while the mic channel is live. A Bluetooth switch
   // often leaves the old track "alive" but permanently silent (no 'ended' event) — the classic silent
   // death. Debounced: connect+disconnect storms settle before we re-acquire once.
@@ -610,6 +652,26 @@ export function useListen(
       if (devChangeTimerRef.current) clearTimeout(devChangeTimerRef.current)
     }
   }, [])
+
+  // Live Screen-Recording permission watcher. If a session wants system audio but the 'them' channel
+  // never opened (permission wasn't granted at start, so the user is on the mic-only fallback), poll for
+  // the permission flipping to 'granted' and auto-resume the them channel IN PLACE — no destructive
+  // "Toggle Listen" restart. This is the "set up automatically" behaviour: after the one unavoidable macOS
+  // Settings toggle, AskToto picks up system audio on its own. Only runs while listening + system was
+  // requested; the getPermissions poll is skipped entirely once 'them' is live.
+  useEffect(() => {
+    if (!state.listening || !wantsSystemRef.current) return
+    const iv = setInterval(() => {
+      if (channels.current.them || sysRecoveringRef.current) return // already have it / mid-recovery
+      void window.toto
+        .getPermissions()
+        .then((p) => {
+          if (p?.screenRecording === 'granted' && !channels.current.them) void recoverSystemAudioRef.current?.()
+        })
+        .catch(() => {})
+    }, 3000)
+    return () => clearInterval(iv)
+  }, [state.listening])
 
   const start = useCallback(
     async (
@@ -640,6 +702,7 @@ export function useListen(
         queue.current = []
         busy.current = false
         liveRef.current = true
+        wantsSystemRef.current = source === 'system' || source === 'both'
         pausedRef.current = false
         disarmNetworkRetry() // a fresh session supersedes any retry armed for the previous one
         crashedRef.current = false // fresh session — re-enable stop()'s teardown after any prior crash

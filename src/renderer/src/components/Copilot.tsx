@@ -199,7 +199,21 @@ export const Copilot = memo(function Copilot({
       {/* Transcript — hidden during the call; shown only when the user opens it (bar → Transcript). A
           small loading line appears while the speech model warms up; no live "N captured" footer. */}
       {error ? (
-        <div className="text-[13px] text-[var(--color-danger)] break-words">{error}</div>
+        <div className="flex flex-col gap-1.5 text-[13px] text-[var(--color-danger)] break-words">
+          <span>{error}</span>
+          {/* Make a Screen-Recording error actionable instead of inert text: one tap deep-links to the
+              exact macOS pane (the IPC already exists, previously only used in Onboarding). Once granted,
+              the live permission watcher auto-resumes the 'them' channel — no Listen restart needed. */}
+          {/screen recording/i.test(error) && (
+            <button
+              type="button"
+              onClick={() => void window.toto.openPermissionSettings('screenRecording')}
+              className="no-drag focus-ring w-fit rounded-full bg-[var(--color-danger)]/15 px-2.5 py-1 text-[11px] font-semibold text-[var(--color-danger)] hover:bg-[var(--color-danger)]/25"
+            >
+              Open Screen Recording settings
+            </button>
+          )}
+        </div>
       ) : loading ? (
         <div className="flex items-center gap-2 text-[11px] text-[color:var(--color-ink-3)]">
           <Spinner size={11} />

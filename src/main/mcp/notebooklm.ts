@@ -31,7 +31,8 @@
 
 import { spawn, execFile } from 'node:child_process'
 import { promisify } from 'node:util'
-import type { Client } from '@modelcontextprotocol/sdk/client/index.js'
+import { Client } from '@modelcontextprotocol/sdk/client/index.js'
+import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 import { createInterface } from 'node:readline'
 import { mainLog } from '../logger'
 
@@ -164,12 +165,9 @@ async function withStdioClient<T>(
   timeoutMs: number,
   fn: (client: Client, opts: StdioRequestOpts) => Promise<T>
 ): Promise<T> {
-  // Lazy-loaded: the MCP SDK's require tree costs real boot time even though most sessions never
-  // touch NotebookLM at all (opt-in integration, not a default provider) — mirrors bidstackClient.ts.
-  const [{ Client }, { StdioClientTransport }] = await Promise.all([
-    import('@modelcontextprotocol/sdk/client/index.js'),
-    import('@modelcontextprotocol/sdk/client/stdio.js')
-  ])
+  // MCP SDK statically imported (NOT `await import()`): the main process is bytecode-compiled and dynamic
+  // import throws "A dynamic import callback was not specified" under bytecode, which broke every
+  // NotebookLM action. The SDK ships a CJS build (dist/cjs), so the static import is bytecode-safe.
   const client = new Client({ name: 'asktoto', version: '1.0.0' }, { capabilities: {} })
   // Fresh client + transport (= fresh spawned process) per call — never reused across calls, same
   // policy as bidstackClient.ts. `stderr: 'pipe'` so a crash's stderr never leaks to AskToto's own

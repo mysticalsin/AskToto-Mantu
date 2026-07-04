@@ -19,8 +19,8 @@
  *     stack traces or fetch() internals leaking to the renderer.
  */
 
-import type { Client } from '@modelcontextprotocol/sdk/client/index.js'
-import type { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
+import { Client } from '@modelcontextprotocol/sdk/client/index.js'
+import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
 import { isIPv6 } from 'node:net'
 import { mainLog } from '../logger'
 
@@ -113,12 +113,9 @@ async function withClient<T>(
   timeoutMs: number,
   fn: (client: Client) => Promise<T>
 ): Promise<T> {
-  // Lazy-loaded: the MCP SDK's require tree costs real time at every process boot even though most
-  // sessions never touch BidStack at all (it's an opt-in integration, not a default provider).
-  const [{ Client }, { StreamableHTTPClientTransport }] = await Promise.all([
-    import('@modelcontextprotocol/sdk/client/index.js'),
-    import('@modelcontextprotocol/sdk/client/streamableHttp.js')
-  ])
+  // MCP SDK statically imported (NOT `await import()`): the main process is bytecode-compiled and dynamic
+  // import throws "A dynamic import callback was not specified" under bytecode, which broke every BidStack
+  // action. The SDK ships a CJS build (dist/cjs), so the static import is bytecode-safe.
   const client = new Client({ name: 'asktoto', version: '1.0.0' }, { capabilities: {} })
   // Fresh client + transport for this one call — never reused across calls, matching how dust.ts
   // creates a fresh DustAPI per stream.
