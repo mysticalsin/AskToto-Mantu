@@ -144,7 +144,6 @@ export const CONVERSATION_MODES = [
   'support',
   'general'
 ] as const
-export const ConversationModeSchema = z.enum(CONVERSATION_MODES)
 /** The 7 built-in modes. */
 export type BuiltinMode = (typeof CONVERSATION_MODES)[number]
 /** Active mode id: a built-in id OR a user-created custom mode id. The `(string & {})` keeps literal
@@ -220,7 +219,6 @@ export const SetDealOutcomePayloadSchema = z.object({
   dealSlug: z.string().min(1),
   outcome: z.enum(['open', 'won', 'lost'])
 })
-export type SetDealOutcomePayload = z.infer<typeof SetDealOutcomePayloadSchema>
 
 /** Structured export of a meeting recap (decisions + action-items-with-owners) for Jira/Asana/Notion etc.
  *  The full original markdown is always included so nothing is lost if a section heading was reworded. */
@@ -658,18 +656,15 @@ export const SetApiKeyPayloadSchema = z.object({
   provider: ProviderIdSchema,
   key: z.string()
 })
-export type SetApiKeyPayload = z.infer<typeof SetApiKeyPayloadSchema>
 
 export const ClearApiKeyPayloadSchema = z.object({
   provider: ProviderIdSchema
 })
-export type ClearApiKeyPayload = z.infer<typeof ClearApiKeyPayloadSchema>
 
 export const TestApiKeyPayloadSchema = z.object({
   provider: ProviderIdSchema,
   key: z.string()
 })
-export type TestApiKeyPayload = z.infer<typeof TestApiKeyPayloadSchema>
 
 export interface TestKeyResponse {
   ok: boolean

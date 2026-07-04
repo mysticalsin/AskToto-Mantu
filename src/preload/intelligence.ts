@@ -17,6 +17,4 @@ const api = {
   backfill: (): Promise<{ queued: number }> => ipcRenderer.invoke('brain:backfill')
 }
 
-export type IntelligenceApi = typeof api
-
 contextBridge.exposeInMainWorld('intelligence', api)

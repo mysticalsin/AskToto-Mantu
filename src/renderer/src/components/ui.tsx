@@ -39,14 +39,6 @@ export function IconButton({
   )
 }
 
-export function Kbd({ children }: { children: ReactNode }): JSX.Element {
-  return (
-    <kbd className="font-ui rounded-[5px] border border-[var(--color-hair-soft)] bg-white/[0.06] px-1.5 py-0.5 text-[10px] leading-none text-[color:var(--color-ink-3)]">
-      {children}
-    </kbd>
-  )
-}
-
 /** Rounded-full action pill — the single source-of-truth for chip geometry across the app.
  *  variant 'neutral': semi-transparent surface, ink-2 label, brightens on hover.
  *  variant 'accent':  solid accent fill, white label, brightens on hover.

@@ -63,14 +63,6 @@ export function useFileBackend(): boolean {
 }
 
 /**
- * True when encryption is available. Always true: the file backend is always usable
- * as long as the userData directory is writable.
- */
-export function secretsAvailable(): boolean {
-  return true
-}
-
-/**
  * Load or generate the per-install AES-256-GCM key.
  * Persisted to <userData>/secret-key.bin with mode 0o600.
  * Created once on first use; stable for the lifetime of the userData directory.
