@@ -75,6 +75,7 @@ export const IPC = {
   recallOpen: 'recall:open',
   recallRead: 'recall:read',
   recallDelete: 'recall:delete',
+  recallRename: 'recall:rename',
   recallDeleteAll: 'recall:deleteAll',
   debriefSave: 'debrief:save',
   brainCommitmentSettle: 'brain:commitmentSettle',
@@ -711,6 +712,14 @@ export interface CalendarTodayResult {
   error?: string
   events?: CalendarEvent[]
 }
+
+/** Payload for recall:rename — fix an auto-generated meeting title after the fact. `file` is a bare
+ *  basename (re-basenamed in main for defense); `title` mirrors recall.ts's own RENAME_TITLE_MAX cap. */
+export const RenameMeetingPayloadSchema = z.object({
+  file: z.string().min(1, 'Missing meeting file.'),
+  title: z.string().min(1, 'Enter a title.').max(120)
+})
+export type RenameMeetingPayload = z.infer<typeof RenameMeetingPayloadSchema>
 
 /** Result of reading a saved meeting back for "Resume session" (decoded transcript + recap). */
 export interface RecallReadResult {

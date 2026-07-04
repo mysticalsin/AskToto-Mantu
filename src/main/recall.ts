@@ -1,8 +1,8 @@
 import { readFile, readdir, stat, unlink, writeFile } from 'node:fs/promises'
 import { join, basename } from 'node:path'
-import { resolveMeetingsFolder, decodeSaved } from './transcripts'
+import { resolveMeetingsFolder, decodeSaved, isEncryptedFile, writeSaved } from './transcripts'
 import { getSettings } from './store'
-import type { MeetingSummary, RecallHit, RecallReadResult, TranscriptLine } from '@shared/ipc'
+import type { MeetingSummary, RecallHit, RecallReadResult, Settings, TranscriptLine } from '@shared/ipc'
 
 // Independent meeting-history backend (own implementation, no third-party source). Reads the saved
 // transcript markdown files and provides list + keyword search so managers (and Dust agents) can
@@ -218,6 +218,110 @@ export async function deleteMeeting(file: string): Promise<{ ok: boolean; error?
   } catch {
     /* index update is best-effort; never fail the delete because of it */
   }
+  return { ok: true }
+}
+
+// Sanitize a user-typed title for safe storage in YAML frontmatter and a markdown H1: strip
+// control/newline characters (a raw newline would break out of the frontmatter's single-line `title:`
+// value, or fork the H1 across lines), collapse whitespace, and cap length so an unbounded paste can't
+// bloat the file. Duplicated from transcripts.ts's own cleanTitle/yamlSafeTitle (not exported there,
+// and transcripts.ts is outside this feature's owned files) rather than imported.
+const RENAME_TITLE_MAX = 120
+function sanitizeRenameTitle(s: string): string {
+  return (s || '')
+    .replace(/[\r\n\x00-\x08\x0b\x0c\x0e-\x1f]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, RENAME_TITLE_MAX)
+}
+function yamlSafeRenameTitle(s: string): string {
+  return s.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, ' ')
+}
+
+/**
+ * Rename a saved meeting after the fact (the recap-generated title can be wrong or too terse). Updates
+ * the frontmatter `title:` value AND the body's first H1 heading in place — the FILE itself is never
+ * renamed, so index.md rows, saved deep-links, and knowledge-graph edges (all keyed by filename) stay
+ * valid. Same basename guard as deleteMeeting (no traversal, no touching index.md/README.md).
+ *
+ * Encryption is preserved exactly as found: `isEncryptedFile` (not the current `settings.encryptTranscripts`
+ * toggle, which may have changed since this file was saved) decides whether to decrypt-edit-re-encrypt or
+ * edit the plaintext in place, so a renamed encrypted meeting stays encrypted and still opens normally.
+ */
+export async function renameMeeting(
+  settings: Settings,
+  file: string,
+  newTitle: string
+): Promise<{ ok: boolean; error?: string }> {
+  const folder = resolveMeetingsFolder(settings)
+  const safeName = basename(file) // block traversal
+  if (!safeName || !safeName.endsWith('.md') || safeName === 'index.md' || safeName === 'README.md') {
+    return { ok: false, error: 'Invalid meeting file name.' }
+  }
+  const title = sanitizeRenameTitle(newTitle)
+  if (!title) return { ok: false, error: 'Enter a title.' }
+
+  const fullPath = join(folder, safeName)
+  let raw: Buffer
+  try {
+    raw = await readFile(fullPath)
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code
+    if (code === 'ENOENT') return { ok: false, error: 'Meeting file not found.' }
+    return { ok: false, error: 'Could not read the meeting file.' }
+  }
+
+  const wasEncrypted = isEncryptedFile(fullPath)
+  const text = decodeSaved(raw)
+  if (!text) return { ok: false, error: 'Meeting file could not be decrypted on this device.' }
+
+  // Replace the frontmatter `title:` value (always written double-quoted — see saveMeeting/saveNote)
+  // within the frontmatter block only, so a coincidental "title:"-looking line in the transcript body
+  // can never be mistaken for it.
+  const fmMatch = text.match(/^---\n[\s\S]*?\n---/)
+  if (!fmMatch) return { ok: false, error: 'Not a meeting transcript.' }
+  const escapedTitle = yamlSafeRenameTitle(title)
+  const newFmBlock = fmMatch[0].replace(/^title:\s*"(?:[^"\\]|\\.)*"\s*$/m, `title: "${escapedTitle}"`)
+  if (newFmBlock === fmMatch[0]) return { ok: false, error: 'Could not find a title to rename in this file.' }
+  let updated = text.slice(0, fmMatch.index!) + newFmBlock + text.slice(fmMatch.index! + fmMatch[0].length)
+
+  // Replace the body's first H1 heading (the only "# " line — recap sections use "## "). Best-effort:
+  // an old/malformed file missing it still gets the frontmatter update above.
+  updated = updated.replace(/^#(?!#).*$/m, `# ${title}`)
+
+  try {
+    await writeSaved(fullPath, updated, wasEncrypted)
+  } catch {
+    return { ok: false, error: 'Could not save the new title.' }
+  }
+
+  // Mirror the matching row's Title column in index.md (best-effort — a missing/unreadable index is
+  // not fatal, same as deleteMeeting). Skipped for encrypted meetings: index.md is plaintext, so it never
+  // carries titles for encrypted files in the first place (see saveMeeting/appendIndexRow).
+  if (!wasEncrypted) {
+    try {
+      const indexPath = join(folder, 'index.md')
+      const rawIndex = await readFile(indexPath, 'utf8')
+      const marker = `[open](${safeName})`
+      const safeTitleCell = title.replace(/\|/g, '/')
+      let changed = false
+      const updatedIndex = rawIndex
+        .split('\n')
+        .map((line) => {
+          if (!line.includes(marker)) return line
+          const cells = line.split('|')
+          if (cells.length < 6) return line
+          cells[2] = ` ${safeTitleCell} `
+          changed = true
+          return cells.join('|')
+        })
+        .join('\n')
+      if (changed) await writeFile(indexPath, updatedIndex, 'utf8')
+    } catch {
+      /* index update is best-effort; never fail the rename because of it */
+    }
+  }
+
   return { ok: true }
 }
 

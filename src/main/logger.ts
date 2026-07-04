@@ -51,6 +51,7 @@ export type AuditEvent =
   | 'capture.display_mismatch'
   | 'transcript.saved'
   | 'transcript.deleted'
+  | 'transcript.renamed'
   | 'transcript.recovered'
   | 'transcript.debrief'
   | 'brain.commitment.settled'
