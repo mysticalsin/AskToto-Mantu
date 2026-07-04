@@ -71,47 +71,58 @@ async function download(url, dest, { optional = false } = {}) {
   }
   ensureDir(dirname(dest))
   console.log(`  [fetch] ${url}`)
-  let res
-  try {
-    res = await fetchStream(url)
-  } catch (err) {
-    if (optional) {
-      console.log(`  [skip-optional] ${dest.replace(REPO_ROOT, '.')} (not in repo: ${err.message})`)
-      return
-    }
-    throw err
-  }
   const part = dest + '.part'
-  const total = Number(res.headers['content-length'] || 0)
-  let got = 0
-  let lastPct = -1
-  try {
-    await new Promise((resolve, reject) => {
-      const out = createWriteStream(part)
-      res.on('data', (chunk) => {
-        got += chunk.length
-        if (total) {
-          const pct = Math.round((got / total) * 100)
-          if (pct !== lastPct && pct % 10 === 0) {
-            lastPct = pct
-            process.stdout.write(`\r    ${pct}%  (${(got / 1024 / 1024).toFixed(1)} MB)`)
+  const MAX_ATTEMPTS = 3
+  let lastErr
+  // Retry with backoff: a single transient blip (DNS, HF rate-limit, connection reset) across ~15 files /
+  // ~1.3 GB otherwise fails the whole predist / CI step and forces a full manual rerun. A client error
+  // (404: the file just isn't in this repo) never changes on retry, so it breaks out immediately, which
+  // matters for the optional-file probes.
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    try {
+      const res = await fetchStream(url)
+      const total = Number(res.headers['content-length'] || 0)
+      let got = 0
+      let lastPct = -1
+      await new Promise((resolve, reject) => {
+        const out = createWriteStream(part)
+        res.on('data', (chunk) => {
+          got += chunk.length
+          if (total) {
+            const pct = Math.round((got / total) * 100)
+            if (pct !== lastPct && pct % 10 === 0) {
+              lastPct = pct
+              process.stdout.write(`\r    ${pct}%  (${(got / 1024 / 1024).toFixed(1)} MB)`)
+            }
           }
-        }
+        })
+        res.pipe(out)
+        out.on('finish', () => { process.stdout.write('\n'); out.close(resolve) })
+        out.on('error', reject)
+        res.on('error', reject)
       })
-      res.pipe(out)
-      out.on('finish', () => { process.stdout.write('\n'); out.close(resolve) })
-      out.on('error', reject)
-      res.on('error', reject)
-    })
-    renameSync(part, dest)
-  } catch (err) {
-    try { unlinkSync(part) } catch { /* ignore — .part may not exist */ }
-    if (optional) {
-      console.log(`  [skip-optional] ${dest.replace(REPO_ROOT, '.')} (download error: ${err.message})`)
+      // Integrity: a truncated download (connection dropped mid-stream) would otherwise rename a partial
+      // file into place and read back later as a corrupt model. Verify the byte count against Content-Length.
+      const size = statSync(part).size
+      if (total && size !== total) throw new Error(`incomplete download: got ${size} of ${total} bytes`)
+      renameSync(part, dest)
       return
+    } catch (err) {
+      lastErr = err
+      try { unlinkSync(part) } catch { /* .part may not exist */ }
+      const clientErr = /HTTP 4\d\d/.test(err.message || '')
+      if (attempt < MAX_ATTEMPTS && !clientErr) {
+        const backoffMs = 1000 * 2 ** (attempt - 1)
+        console.log(`  [retry ${attempt}/${MAX_ATTEMPTS - 1}] ${err.message}; waiting ${backoffMs}ms`)
+        await new Promise((r) => setTimeout(r, backoffMs))
+      } else break
     }
-    throw err
   }
+  if (optional) {
+    console.log(`  [skip-optional] ${dest.replace(REPO_ROOT, '.')} (${lastErr && lastErr.message})`)
+    return
+  }
+  throw lastErr
 }
 
 /** Build a HuggingFace resolve URL for a given repo + file (main revision). */
