@@ -13,11 +13,16 @@ const ACTIONS: { kind: QuickKind; label: string; icon: typeof ShieldCheck }[] = 
 export const QuickActions = memo(function QuickActions({
   onAction,
   hint,
-  rainbowRing
+  rainbowRing,
+  providerReady = true
 }: {
   onAction: (k: QuickKind) => void
   hint?: string
   rainbowRing: boolean
+  // Optional: when false, the chips render in the disabled/dimmed treatment (matching the collapse-
+  // chevron pattern in Bar.tsx) with a tooltip instead of only surfacing the gate after a click bounces
+  // the user into Settings. Defaults to true so existing callers are unaffected until wired.
+  providerReady?: boolean
 }): JSX.Element {
   return (
     // mt-1.5: a touch more breathing room under the bar — its --shadow-bar reaches well past its own
@@ -31,10 +36,14 @@ export const QuickActions = memo(function QuickActions({
             key={a.kind}
             type="button"
             aria-label={a.label}
+            title={providerReady ? undefined : 'Connect an AI provider to use this'}
+            aria-disabled={!providerReady}
+            disabled={!providerReady}
             onClick={() => onAction(a.kind)}
             className={[
               'no-drag focus-ring glass-chip flex items-center gap-1.5 rounded-full px-3 py-1.5 text-[12px] font-semibold text-white transition-[transform,background-color] duration-[var(--duration-hover)] active:scale-[0.96]',
-              rainbowRing ? 'rainbow-ring' : ''
+              rainbowRing ? 'rainbow-ring' : '',
+              providerReady ? '' : 'cursor-not-allowed opacity-40'
             ].join(' ')}
           >
             <a.icon size={13} strokeWidth={2.25} className="text-[var(--color-accent-2)]" />

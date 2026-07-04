@@ -400,11 +400,15 @@ const MeetingRow = memo(function MeetingRow({
             </span>
           )}
 
-          {/* Duration badge + time */}
+          {/* Duration badge + time. durationMin rounds to 0 both for a genuinely empty capture (no
+              speech at all, participants: []) and for an older saved meeting whose real duration
+              was under a minute. participants.length > 0 means at least one line was captured
+              (see saveMeeting's participants derivation), so it distinguishes the two: show "<1m"
+              for a real quick meeting, hide the badge only when there is truly no content. */}
           <div className="ml-auto flex shrink-0 items-center gap-1.5">
-            {m.durationMin > 0 && (
+            {(m.durationMin > 0 || m.participants.length > 0) && (
               <span className="rounded-full bg-white/[0.06] px-1.5 text-[10px] text-[color:var(--color-ink-3)]">
-                {formatDurationMin(m.durationMin)}
+                {m.durationMin > 0 ? formatDurationMin(m.durationMin) : '<1m'}
               </span>
             )}
             <span className="tabular-nums text-[11px] text-[color:var(--color-ink-3)]">

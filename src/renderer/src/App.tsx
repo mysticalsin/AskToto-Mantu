@@ -44,6 +44,25 @@ const GUARD_LINE =
 const withContext = (q: string, transcript: string): string =>
   `${q}\n\nUse this live conversation transcript as context (THEM = the other person, YOU = me):\n"""\n${transcript.slice(-3000)}\n"""${GUARD_LINE}`
 
+// Character budget for the default meeting title below.
+const TITLE_BUDGET = 50
+// Default meeting title, derived from the first thing the other person said — used by History, Settings'
+// Mantu Intelligence list, and every autosave/exit-save payload whenever no explicit title exists yet (the
+// normal state before an AI key is wired up). A blind character slice landed mid-word ("Minute, boxe, fin
+// de projet.") and read as a bug on the flagship brain surfaces. This trims to the LAST WHOLE WORD inside
+// the budget and appends an ellipsis, and falls back to a clean `${mode} meeting` whenever the quote is
+// empty or too messy to trim cleanly (no word break within budget).
+const defaultMeetingTitle = (lines: TranscriptLine[], mode: ConversationMode): string => {
+  const fallback = `${mode} meeting`
+  const quote = lines.find((l) => l.speaker === 'them')?.text?.trim()
+  if (!quote) return fallback
+  if (quote.length <= TITLE_BUDGET) return quote
+  const cut = quote.slice(0, TITLE_BUDGET)
+  const lastSpace = cut.lastIndexOf(' ')
+  if (lastSpace < TITLE_BUDGET * 0.3) return fallback // no clean word break — too messy to trim
+  return `${cut.slice(0, lastSpace).trimEnd()}…`
+}
+
 // How long a finished live copilot suggestion stays on screen before it auto-dismisses. Tony's call: a
 // suggestion should be glanceable and then get out of the way — 4 seconds, not lingering.
 const SUGGESTION_TTL_MS = 4000
@@ -263,7 +282,7 @@ export function App(): JSX.Element {
     const iv = setInterval(() => {
       const lines = autosaveLinesRef.current
       if (!lines.length) return
-      const title = lines.find((l) => l.speaker === 'them')?.text?.slice(0, 50) || `${mode} meeting`
+      const title = defaultMeetingTitle(lines, mode)
       void window.toto
         .saveDraftTranscript({ title, mode, startedAt: meetingStartRef.current, lines, recap: '' })
         .then(() => {
@@ -292,8 +311,7 @@ export function App(): JSX.Element {
     const a = ask.answer
     if (!a || a.streaming || !listen.lines.length) return
     try {
-      const title =
-        listen.lines.find((l) => l.speaker === 'them')?.text?.slice(0, 50) || `${mode} meeting`
+      const title = defaultMeetingTitle(listen.lines, mode)
       const r = await window.toto.saveTranscript({
         title,
         mode,
@@ -330,8 +348,7 @@ export function App(): JSX.Element {
     const id = String(meetingStartRef.current)
     if (savedRef.current === id || savingRef.current) return
 
-    const title =
-      listen.lines.find((l) => l.speaker === 'them')?.text?.slice(0, 50) || `${mode} meeting`
+    const title = defaultMeetingTitle(listen.lines, mode)
 
     const doSave = async (): Promise<void> => {
       // Acquire the in-flight lock only when the save actually starts — never at effect time. On the
@@ -581,8 +598,8 @@ export function App(): JSX.Element {
         const raw = e instanceof Error ? e.message : String(e)
         setCaptureError(
           /private view/i.test(raw)
-            ? 'Private View is on, so AskToto couldn’t see your screen — answering from context only. Turn Private View off to include the screen.'
-            : 'Couldn’t capture your screen — answering from context only.'
+            ? 'Private View is on, so AskToto couldn’t see your screen. Answering from context only. Turn Private View off to include the screen.'
+            : 'Couldn’t capture your screen. Answering from context only.'
         )
         const id = ask.run({ mode: 'answer', prompt, label: opts?.label, kind: opts?.kind, history: opts?.history })
         if (id && opts?.record) pendingUserRef.current = { id, q: opts.record }
@@ -629,8 +646,8 @@ export function App(): JSX.Element {
         const raw = e instanceof Error ? e.message : String(e)
         setCaptureError(
           /private view/i.test(raw)
-            ? 'Private View is on, so AskToto couldn’t see your screen — suggesting from the conversation only. Turn Private View off to include the screen.'
-            : 'Couldn’t capture your screen — suggesting from the conversation only.'
+            ? 'Private View is on, so AskToto couldn’t see your screen. Suggesting from the conversation only. Turn Private View off to include the screen.'
+            : 'Couldn’t capture your screen. Suggesting from the conversation only.'
         )
       }
     }
@@ -958,7 +975,7 @@ export function App(): JSX.Element {
       // DOES pin savedRef — via the read-only guard. maxAttempts=0 on exit paths: a single best-effort
       // try, so quitting is never blocked on the full retry loop.
       if (!lines.length || savedRef.current === String(started)) return
-      const title = lines.find((l) => l.speaker === 'them')?.text?.slice(0, 50) || `${mode} meeting`
+      const title = defaultMeetingTitle(lines, mode)
       const payload = { title, mode, startedAt: started, lines, recap: recapText }
       for (let attempt = 0; ; attempt++) {
         try {
@@ -1559,7 +1576,7 @@ export function App(): JSX.Element {
     return (
       <div ref={setRoot} {...windowDrag} className="flex w-full flex-col gap-2 p-1.5">
         <Panel>
-          <Onboarding settings={settings} saveKey={saveKey} patch={patch} onDone={() => void refresh()} />
+          <Onboarding settings={settings} saveKey={saveKey} patch={patch} onOpenAiSettings={() => openSettings('ai')} onDone={() => void refresh()} />
         </Panel>
       </div>
     )
@@ -1713,6 +1730,7 @@ export function App(): JSX.Element {
             <QuickActions
               onAction={onQuickAction}
               rainbowRing={settings?.quickActionsRainbow !== false}
+              providerReady={settings?.providerReady ?? false}
             />
           )}
           {/* Listen-engine status (offline/reconnecting/crash notes) — shown regardless of which view is
@@ -1723,7 +1741,7 @@ export function App(): JSX.Element {
               {listen.error}
             </div>
           )}
-          {settings && !settings.providerReady && !nudgeExpired && view !== 'settings' && (() => {
+          {settings && !settings.providerReady && !nudgeExpired && view !== 'settings' && !showListeningChrome && (() => {
             const activeDef = PROVIDERS[settings.provider]
             const cta = activeDef.kind === 'cli'
               ? `Connect ${activeDef.label} in Settings`

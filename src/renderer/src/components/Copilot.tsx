@@ -133,7 +133,7 @@ export const Copilot = memo(function Copilot({
           className="flex items-start gap-1.5 rounded-lg border border-[var(--color-danger)]/40 bg-[var(--color-danger)]/10 px-3 py-2 text-[12px] leading-snug text-[color:var(--color-danger)] break-words [overflow-wrap:anywhere]"
         >
           <AlertTriangle size={13} className="mt-0.5 shrink-0" />
-          <span>Autosave is failing — recent minutes may not be saved. Check free disk space and folder permissions.</span>
+          <span>Autosave is failing. Recent minutes may not be saved. Check free disk space and folder permissions.</span>
         </div>
       )}
       {/* Suggestion card — neutral at rest; accent fill/border only when content is present */}
