@@ -1259,7 +1259,7 @@ function CliIntegration({
             <button
               type="button"
               onClick={() => dustSectionRef?.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
-              className={secondaryBtn}
+              className={primaryBtn}
             >
               Set up below
             </button>
@@ -2775,8 +2775,10 @@ export function Settings({
         aria-label="Settings sections"
         className="cl-tabbar no-drag scroll-thin flex shrink-0 items-center justify-between gap-0.5 overflow-x-auto border-b border-[var(--cl-border)] px-2 py-1.5"
       >
-        {TABS.map((t) => {
+        {TABS.map((t, i) => {
           const active = t.id === tab
+          // Roving tabindex per the APG tabs pattern: only the active tab is Tab-reachable; arrow keys
+          // move focus and activation between the rest.
           return (
             <button
               key={t.id}
@@ -2785,7 +2787,16 @@ export function Settings({
               id={`settings-tab-${t.id}`}
               aria-selected={active}
               aria-controls="settings-panel"
+              tabIndex={active ? 0 : -1}
               onClick={() => setTab(t.id)}
+              onKeyDown={(e) => {
+                if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return
+                e.preventDefault()
+                const dir = e.key === 'ArrowRight' ? 1 : -1
+                const next = TABS[(i + dir + TABS.length) % TABS.length]
+                setTab(next.id)
+                document.getElementById(`settings-tab-${next.id}`)?.focus()
+              }}
               className={[
                 'cl-focus flex shrink-0 items-center gap-1.5 rounded-full px-2.5 py-1.5 text-[12px] font-medium transition-colors',
                 active
@@ -3201,7 +3212,7 @@ export function Settings({
 
             {tab === 'about' && (
               <div className="flex flex-col gap-6">
-                <Section title="Account" desc="Sign-in tying AskToto to your Mantu Microsoft account and Dust.">
+                <Section title="Account" desc="Signing in ties AskToto to your Mantu Microsoft account and Dust.">
                   <AccountRow settings={settings} patch={patch} />
                 </Section>
                 <Section title="Permissions" desc="Status of the OS permissions AskToto needs.">
@@ -3298,7 +3309,11 @@ export function Settings({
       <footer className="cl-footer flex h-14 shrink-0 items-center gap-2 rounded-b-2xl px-4">
         <button
           type="button"
-          onClick={() => patch({ onboardingDone: false })}
+          onClick={() => {
+            if (window.confirm("Show the intro tour again? Your settings won't change.")) {
+              patch({ onboardingDone: false })
+            }
+          }}
           className="no-drag cl-focus flex items-center gap-1.5 rounded-[10px] border border-[var(--cl-border)] bg-white/[0.03] px-3 py-2 text-[12px] text-[color:var(--cl-foreground)] transition-colors hover:border-[var(--cl-input)] hover:bg-white/[0.08]"
         >
           <RotateCcw size={13} className="shrink-0 text-[color:var(--cl-muted-foreground)]" />
@@ -3306,7 +3321,11 @@ export function Settings({
         </button>
         <button
           type="button"
-          onClick={() => (onLogout ? onLogout() : void window.toto.signOut())}
+          onClick={() => {
+            if (window.confirm("Log out of AskToto? You'll need to sign in again to use Dust and your Mantu Microsoft account.")) {
+              onLogout ? onLogout() : void window.toto.signOut()
+            }
+          }}
           className="no-drag cl-focus flex items-center gap-1.5 rounded-[10px] border border-[var(--cl-border)] bg-white/[0.03] px-3 py-2 text-[12px] text-[color:var(--cl-foreground)] transition-colors hover:border-[var(--cl-input)] hover:bg-white/[0.08]"
         >
           <X size={13} className="shrink-0 text-[color:var(--cl-muted-foreground)]" />
@@ -3960,7 +3979,7 @@ function CustomMeetingAppsField({
         value={raw}
         onChange={(e) => onChange(e.target.value)}
         onBlur={onBlur}
-        placeholder="Around&#10;Amazon Chime&#10;Jitsi"
+        placeholder="e.g. Around&#10;Amazon Chime&#10;Jitsi"
         rows={3}
         disabled={settings.managedKeys.includes('customMeetingApps')}
         className={[
@@ -4682,10 +4701,13 @@ function KeyRecorder({
   onChange
 }: {
   value: string
-  onChange: (v: string) => void
+  // Returns a conflict message to display inline (and block the change) or null once the accelerator
+  // was accepted and committed.
+  onChange: (v: string) => string | null
 }): JSX.Element {
   const [recording, setRecording] = useState(false)
   const [preview, setPreview] = useState<string | null>(null)
+  const [conflictMsg, setConflictMsg] = useState<string | null>(null)
   const inputRef = useRef<HTMLInputElement>(null)
 
   // Auto-focus the capture input when recording starts
@@ -4700,6 +4722,7 @@ function KeyRecorder({
       e.preventDefault()
       setRecording(false)
       setPreview(null)
+      setConflictMsg(null)
       return
     }
     e.preventDefault()
@@ -4709,8 +4732,16 @@ function KeyRecorder({
       setPreview(null)
       return
     }
+    const err = onChange(acc)
+    if (err) {
+      // Blocked by a collision with another action's binding — stay in recording mode so the user can
+      // immediately try a different combination, and name what it collided with.
+      setPreview(acc)
+      setConflictMsg(err)
+      return
+    }
+    setConflictMsg(null)
     setPreview(acc)
-    onChange(acc)
     setTimeout(() => {
       setRecording(false)
       setPreview(null)
@@ -4720,20 +4751,26 @@ function KeyRecorder({
   const onBlur = (): void => {
     setRecording(false)
     setPreview(null)
+    setConflictMsg(null)
   }
 
   if (recording) {
     return (
-      <input
-        ref={inputRef}
-        type="text"
-        readOnly
-        value={preview !== null ? displayAccelerator(preview) : 'Recording… press keys'}
-        onBlur={onBlur}
-        onKeyDown={onKeyDown}
-        title="Press your desired key combination"
-        className="no-drag cl-input font-ui min-w-0 flex-1 cursor-pointer select-none px-2 py-1 text-[12px] border-[var(--cl-primary)] bg-[var(--cl-primary-soft)] text-[color:var(--cl-primary)] outline-none ring-1 ring-[var(--cl-primary)] transition-colors"
-      />
+      <div className="flex min-w-0 flex-1 flex-col gap-1">
+        <input
+          ref={inputRef}
+          type="text"
+          readOnly
+          value={preview !== null ? displayAccelerator(preview) : 'Recording… press keys'}
+          onBlur={onBlur}
+          onKeyDown={onKeyDown}
+          title="Press your desired key combination"
+          className="no-drag cl-input font-ui min-w-0 flex-1 cursor-pointer select-none px-2 py-1 text-[12px] border-[var(--cl-primary)] bg-[var(--cl-primary-soft)] text-[color:var(--cl-primary)] outline-none ring-1 ring-[var(--cl-primary)] transition-colors"
+        />
+        {conflictMsg && (
+          <span className="text-[11px] text-[color:var(--cl-destructive)]">{conflictMsg}</span>
+        )}
+      </div>
     )
   }
 
@@ -4757,13 +4794,24 @@ function Shortcuts({
   patch: (p: Partial<PublicSettings>) => void
 }): JSX.Element {
   const user = settings.shortcuts ?? {}
-  const set = (action: HotkeyAction, value: string): void => {
-    patch({ shortcuts: { ...user, [action]: value } })
-  }
   const reset = (action: HotkeyAction): void => {
     const next = { ...user }
     next[action] = DEFAULT_SHORTCUTS[action] ?? ''
     patch({ shortcuts: next })
+  }
+  // An action's currently-resolved binding — its own override, or the shipped default.
+  const resolvedShortcut = (a: HotkeyAction): string => user[a] ?? DEFAULT_SHORTCUTS[a] ?? ''
+  // Rebinding one action must never silently steal another's hotkey (Electron's registerShortcuts()
+  // just rebinds duplicates to whichever registers last, with no error), so validate against every
+  // other action's resolved binding before committing. Returns a conflict message to surface inline
+  // (and blocks the save) instead of committing, or null once the value is safely persisted.
+  const set = (action: HotkeyAction, value: string): string | null => {
+    if (value) {
+      const other = HOTKEY_ACTIONS.find((a) => a !== action && resolvedShortcut(a) === value)
+      if (other) return `Already used by ${SHORTCUT_LABELS[other]}.`
+    }
+    patch({ shortcuts: { ...user, [action]: value } })
+    return null
   }
 
   const groups: ShortcutGroup[] = ['General', 'Window']

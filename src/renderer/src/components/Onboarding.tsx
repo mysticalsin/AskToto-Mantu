@@ -109,7 +109,8 @@ function CheckRow({
   label,
   hint,
   note,
-  onFix
+  onFix,
+  fixLabel
 }: {
   ok: boolean
   denied?: boolean
@@ -118,12 +119,19 @@ function CheckRow({
   /** Neutral copy shown even when `ok` is true (e.g. Windows' "we'll ask you later" note). */
   note?: string
   onFix?: () => void
+  /** Custom text for the fix link. Its presence also unlocks the link without requiring `denied` — used
+   *  by the provider/API-key row, which has no OS-permission "denied" concept to gate on. */
+  fixLabel?: string
 }): JSX.Element {
   return (
-    <div className="flex items-start gap-2.5">
+    <div
+      className={`flex items-start gap-2.5 rounded-lg ${
+        ok ? '' : 'border border-[var(--color-warn,#fac775)]/30 bg-[var(--color-warn,#fac775)]/10 p-2'
+      }`}
+    >
       <span
         className={`mt-0.5 grid h-4 w-4 shrink-0 place-items-center rounded-full ${
-          ok ? 'bg-[var(--color-success)] text-white' : 'border border-[var(--color-hair-soft)] text-[color:var(--color-ink-3)]'
+          ok ? 'bg-[var(--color-success)] text-white' : 'bg-[var(--color-warn,#fac775)] text-white'
         }`}
       >
         {ok ? <Check size={11} /> : <AlertCircle size={11} />}
@@ -132,13 +140,13 @@ function CheckRow({
         <span className="text-[12px] font-medium text-[color:var(--color-ink)]">{label}</span>
         {ok && note && <span className="ml-1.5 text-[11px] text-[color:var(--color-ink-2)]">{note}</span>}
         {!ok && <span className="ml-1.5 text-[11px] text-[color:var(--color-ink-2)]">{hint}</span>}
-        {!ok && denied && onFix && (
+        {!ok && onFix && (denied || fixLabel) && (
           <button
             type="button"
             onClick={onFix}
             className="no-drag focus-ring ml-1.5 text-[11px] font-medium text-[color:var(--color-accent-2)] hover:underline"
           >
-            Open System Settings
+            {fixLabel ?? 'Open System Settings'}
           </button>
         )}
       </div>
@@ -146,8 +154,9 @@ function CheckRow({
   )
 }
 
-/** 5-dot progress indicator for the walkthrough slides (2-4 are the toolbar tour; 1 and 5 are the
- *  consent gate and readiness gate, which don't need it — they're the bookends, not part of the tour). */
+/** 5-dot progress indicator for the walkthrough + provider-choice slides (2-4 are the toolbar tour,
+ *  5 is the provider picker; 1 and 6 are the consent gate and readiness gate, which don't need it since
+ *  they're the bookends, not part of the countable sequence). */
 function StepDots({ step }: { step: number }): JSX.Element {
   return (
     <div className="flex items-center gap-1.5">
@@ -185,15 +194,17 @@ function WalkNav({ onBack, onNext, step }: { onBack: () => void; onNext: () => v
 }
 
 /**
- * 5-slide onboarding. Slide 1: consent + sign in / continue (the legal + identity gate — required, not
+ * 6-slide onboarding. Slide 1: consent + sign in / continue (the legal + identity gate, required, not
  * skippable). Slides 2-4: a quick tour of every control on the toolbar, grouped by what they're for.
- * Slide 5: a live "get ready" checklist (key / mic / screen) + Get started (the functional readiness
- * gate). Slides 1 and 5 are load-bearing gates; 2-4 are pure walkthrough and can be skipped by Back/Next.
+ * Slide 5: pick how AskToto answers (CLI / API key / Dust), part of the same countable sequence as 2-4.
+ * Slide 6: a live "get ready" checklist (provider / mic / screen) + Get started (the functional readiness
+ * gate). Slides 1 and 6 are load-bearing gates; 2-5 are walkthrough/choice and can be skipped by Back/Next.
  */
 export function Onboarding({
   settings,
   patch,
-  onDone
+  onDone,
+  onOpenAiSettings
 }: {
   settings: PublicSettings
   saveKey?: (provider: ProviderId, k: string) => Promise<void>
@@ -201,6 +212,9 @@ export function Onboarding({
   // Settings prop contract. `await patch(...)` still waits for the write before finish() calls onDone.
   patch: (p: Partial<PublicSettings>) => void
   onDone: () => void
+  /** Optional: opens Settings -> AI in place, wired onto the provider/API-key readiness row. Parent
+   *  wiring is added separately; the row simply has no click-through fix when this is left undefined. */
+  onOpenAiSettings?: () => void
 }): JSX.Element {
   const [recordingConsent, setRecordingConsent] = useState(settings.recordingConsent)
   const [busy, setBusy] = useState(false)
@@ -281,8 +295,13 @@ export function Onboarding({
         <div className="flex w-full max-w-[460px] flex-col gap-3 rounded-xl border border-[var(--color-hair-soft)] bg-white/[0.02] p-4">
           <ActionRow icon={Sparkles} label="Ask anything" keys={accelLabel('CommandOrControl+Shift+Return')} hint="Type a question, or capture your screen for visual help." />
           <ActionRow icon={Camera} label="Capture screen" keys={accelLabel('CommandOrControl+Shift+S')} hint="Get instant help with whatever you’re looking at." />
-          <ActionRow icon={Zap} label="Quick actions" hint="One-tap chips: What to say next · Fact-check · Explain · Summarize." />
+          <ActionRow icon={Zap} label="Quick actions" hint="One-tap chips: What to say next · Fact-check · Explain · Summarize screen." />
         </div>
+        {/* Invisible placeholder matching step 4's caption line, so WalkNav sits at the same height on
+            every slide instead of jumping only when the real caption is present. */}
+        <p className="invisible max-w-[460px] text-[11px] leading-snug text-[color:var(--color-ink-3)]" aria-hidden="true">
+          The Mantu logo opens Settings; minimize to a pill or collapse the panel any time.
+        </p>
         <WalkNav step={2} onBack={() => setStep(1)} onNext={() => setStep(3)} />
       </div>
     )
@@ -303,6 +322,11 @@ export function Onboarding({
           <ActionRow icon={FileText} label="Live transcript" hint="Toggle the rolling transcript any time." />
           <ActionRow icon={Plus} label="New meeting" hint="Save the current call and start fresh." />
         </div>
+        {/* Invisible placeholder matching step 4's caption line, so WalkNav sits at the same height on
+            every slide instead of jumping only when the real caption is present. */}
+        <p className="invisible max-w-[460px] text-[11px] leading-snug text-[color:var(--color-ink-3)]" aria-hidden="true">
+          The Mantu logo opens Settings; minimize to a pill or collapse the panel any time.
+        </p>
         <WalkNav step={3} onBack={() => setStep(2)} onNext={() => setStep(4)} />
       </div>
     )
@@ -320,7 +344,7 @@ export function Onboarding({
         </div>
         <div className="flex w-full max-w-[460px] flex-col gap-3 rounded-xl border border-[var(--color-hair-soft)] bg-white/[0.02] p-4">
           <ActionRow icon={LayoutGrid} label="Modes" hint="Pick the conversation: Interview, Meeting, Sales, and more." />
-          <ActionRow icon={Brain} label="Deep thinking" hint="Force the strongest model. Glows purple when on." />
+          <ActionRow icon={Brain} label="Deep thinking" hint="Force the strongest model. Rainbow ring shows when on." />
           <ActionRow icon={Eye} label="Private view" hint="Hide your notes from a shared screen." />
         </div>
         <p className="max-w-[460px] text-[11px] leading-snug text-[color:var(--color-ink-3)]">
@@ -394,6 +418,7 @@ export function Onboarding({
         >
           Decide later; recording and transcripts still work <ArrowRight size={11} />
         </button>
+        <StepDots step={5} />
         <button
           type="button"
           onClick={() => setStep(4)}
@@ -412,6 +437,11 @@ export function Onboarding({
     const isWindows = window.navigator.platform.includes('Win')
     const micWinUnknown = isWindows && perms?.microphone === 'unknown'
     const screenWinUnknown = isWindows && perms?.screenRecording === 'unknown'
+    const micOk = perms?.microphone === 'granted' || micWinUnknown
+    const screenOk = perms?.screenRecording === 'granted' || screenWinUnknown
+    // The headline only claims completion once every row below actually agrees; otherwise it stays a
+    // neutral invitation to check, so it never contradicts a still-unmet item in the list underneath.
+    const allReady = settings.providerReady && micOk && screenOk
     return (
       <div className="fade-up flex min-h-[300px] w-full flex-col items-center gap-5 px-4 py-7 text-center">
         <div className="flex flex-col items-center gap-1.5">
@@ -421,7 +451,7 @@ export function Onboarding({
             tabIndex={-1}
             className="font-ui text-[20px] font-semibold tracking-tight text-[color:var(--color-ink)] outline-none"
           >
-            You’re set. Let’s check you’re ready.
+            {allReady ? 'You’re set.' : 'Let’s check you’re ready.'}
           </div>
         </div>
 
@@ -429,9 +459,15 @@ export function Onboarding({
           <div className="mb-0.5 text-left text-[11px] font-semibold uppercase tracking-wide text-[color:var(--color-ink-3)]">
             Get ready
           </div>
-          <CheckRow ok={settings.providerReady} label={PROVIDERS[settings.provider]?.kind === 'cli' ? `${providerLabel} connected` : `${providerLabel} API key`} hint="add it in Settings → AI" />
           <CheckRow
-            ok={perms?.microphone === 'granted' || micWinUnknown}
+            ok={settings.providerReady}
+            label={PROVIDERS[settings.provider]?.kind === 'cli' ? `${providerLabel} connected` : `${providerLabel} API key`}
+            hint="add it in Settings → AI"
+            onFix={onOpenAiSettings}
+            fixLabel="Open Settings → AI"
+          />
+          <CheckRow
+            ok={micOk}
             denied={perms?.microphone === 'denied'}
             label="Microphone"
             hint="grant access when you first press Listen"
@@ -439,7 +475,7 @@ export function Onboarding({
             onFix={() => void window.toto.openPermissionSettings('microphone')}
           />
           <CheckRow
-            ok={perms?.screenRecording === 'granted' || screenWinUnknown}
+            ok={screenOk}
             denied={perms?.screenRecording === 'denied'}
             label="Screen recording"
             hint="needed for the other side of calls + screen capture"

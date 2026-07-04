@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, memo, type ReactNode } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState, memo, type ReactNode } from 'react'
 import {
   Image,
   CornerDownLeft,
@@ -241,9 +241,15 @@ function IconTool({
       >
         {children}
       </button>
+      {/* Toolbar row sits directly under the input row with only a hairline border between them (no
+          reserved gap) — a negative offset large enough to clear the input row's placeholder text would
+          push the tooltip above the widget's own top edge, where the window (hugged tight to content)
+          would hard-clip it. Anchoring just below the icon's own top instead keeps the tooltip fully
+          on-screen and clear of "Ask anything…" above, at the cost of a couple of px tucked over the
+          icon's own padding — invisible in practice since the cursor is already on the icon on hover. */}
       <span
         className={[
-          'pointer-events-none absolute -top-1.5 z-20 -translate-y-full whitespace-nowrap rounded-lg bg-black/90 px-2.5 py-1 text-[11px] font-medium text-white opacity-0 shadow-lg transition-opacity duration-150 group-hover:opacity-100 peer-focus-visible:opacity-100',
+          'pointer-events-none absolute top-1.5 z-20 -translate-y-full whitespace-nowrap rounded-lg bg-black/90 px-2.5 py-0.5 text-[11px] font-medium text-white opacity-0 shadow-lg transition-opacity duration-150 group-hover:opacity-100 peer-focus-visible:opacity-100',
           edgeRight ? 'right-0' : edgeLeft ? 'left-0' : 'left-1/2 -translate-x-1/2'
         ].join(' ')}
       >
@@ -266,6 +272,12 @@ export const Bar = memo(function Bar(props: BarProps): JSX.Element {
   const [modeOpen, setModeOpen] = useState(false)
   const modeRef = useRef<HTMLDivElement>(null)
   const modePopoverRef = useRef<HTMLDivElement>(null)
+  // The outer wrapper is the popover's actual positioned ancestor (it renders as a sibling of
+  // .aw-widget, not inside it) — modeAnchorLeft is computed against this, not the viewport.
+  const wrapRef = useRef<HTMLDivElement>(null)
+  // Horizontal anchor (px from wrapRef's left edge) for the popover below, measured off modeRef's real
+  // position so it originates from the icon that opens it instead of centering under the whole bar.
+  const [modeAnchorLeft, setModeAnchorLeft] = useState<number | null>(null)
   useEffect(() => {
     if (!modeOpen) return
     const onDown = (e: MouseEvent): void => {
@@ -324,13 +336,33 @@ export const Bar = memo(function Bar(props: BarProps): JSX.Element {
     modePopoverRef.current?.querySelector('button')?.focus()
   }, [modeOpen])
 
+  // Anchor the popover horizontally to the Mode icon's real position rather than the bar's center —
+  // useLayoutEffect so this lands before paint (no visible snap from a fallback center position).
+  // Clamped against the popover's own measured width so a long custom-mode list can never push it past
+  // the bar's edges even though modeRef itself sits well left of center.
+  useLayoutEffect(() => {
+    if (!modeOpen) return
+    const place = (): void => {
+      const iconRect = modeRef.current?.getBoundingClientRect()
+      const wrapRect = wrapRef.current?.getBoundingClientRect()
+      if (!iconRect || !wrapRect) return
+      const iconCenter = iconRect.left + iconRect.width / 2 - wrapRect.left
+      const half = (modePopoverRef.current?.offsetWidth ?? 0) / 2
+      const margin = 8
+      setModeAnchorLeft(Math.min(Math.max(iconCenter, half + margin), wrapRect.width - half - margin))
+    }
+    place()
+    window.addEventListener('resize', place)
+    return () => window.removeEventListener('resize', place)
+  }, [modeOpen])
+
   // When a body is present the bar EXPANDS into one surface (big input → body → toolbar at the bottom).
   const expanded = !!props.body
   const hasAnswer = props.hasAnswer ?? expanded
 
   return (
     // The flex-col lets additional in-flow elements grow the window as needed.
-    <div className="relative flex w-full flex-col items-stretch gap-1.5">
+    <div ref={wrapRef} className="relative flex w-full flex-col items-stretch gap-1.5">
       <div
         className={[
           'aw-widget w-full',
@@ -651,12 +683,14 @@ export const Bar = memo(function Bar(props: BarProps): JSX.Element {
 
       {/* Mode popover — deliberately a SIBLING of .aw-widget (not nested inside it), because .aw-widget
           has overflow:hidden for its rounded-corner blur backdrop, which would otherwise clip this.
-          Centered under the whole bar (good enough visually; the mode icon sits in the center cluster). */}
+          Anchored to modeAnchorLeft (the Mode icon's own measured position, see the layout effect
+          above) rather than centering under the whole bar, so it opens directly under its trigger. */}
       {modeOpen && (
         <div
           ref={modePopoverRef}
           data-overlay
-          className="glass-strong absolute left-1/2 top-full z-20 mt-1.5 -translate-x-1/2 rounded-[14px] p-1.5"
+          className="glass-strong absolute top-full z-20 mt-1.5 -translate-x-1/2 rounded-[14px] p-1.5"
+          style={{ left: modeAnchorLeft ?? '50%' }}
         >
           <ModePicker
             mode={props.mode}
