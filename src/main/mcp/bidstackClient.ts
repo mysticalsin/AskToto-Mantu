@@ -21,7 +21,8 @@
 
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
-import { isIPv6 } from 'node:net'
+import { isIP, isIPv6 } from 'node:net'
+import { promises as dns } from 'node:dns'
 import { mainLog } from '../logger'
 
 /** Bound every BidStack round-trip so an unreachable/hung server never blocks the main process. */
@@ -35,7 +36,23 @@ const errMsg = (e: unknown): string => (e instanceof Error ? e.message : String(
 // "push" act as an SSRF primitive against the host's own cloud credentials. Localhost/private-LAN
 // addresses are deliberately still allowed: that's BidStack's actual deployment model today (its own
 // Settings page defaults to http://localhost:4001).
-const BLOCKED_HOSTS = new Set(['169.254.169.254', 'metadata.google.internal', 'metadata.azure.com'])
+const BLOCKED_HOSTS = new Set([
+  '169.254.169.254',
+  'metadata.google.internal',
+  'metadata.azure.com',
+  'fd00:ec2::254', // AWS's IPv6 IMDS address
+  '100.100.100.200' // Alibaba Cloud's metadata address
+])
+
+/**
+ * Cloud metadata services live in the IPv4 link-local range (169.254.0.0/16) — checking the whole
+ * range instead of a single literal catches every provider's IMDS endpoint (AWS/GCP/Azure/DigitalOcean),
+ * not just the one literal address already listed above.
+ */
+function isLinkLocalIPv4(ip: string): boolean {
+  const parts = ip.split('.')
+  return parts.length === 4 && parts[0] === '169' && parts[1] === '254'
+}
 
 /**
  * An IPv4-mapped IPv6 literal (e.g. "::ffff:169.254.169.254", or its hex-compressed form
@@ -55,8 +72,12 @@ function ipv4MappedAddress(host: string): string | null {
   return null
 }
 
-/** Reject non-http(s) schemes and known cloud-metadata hosts before any network call is made. */
-function validateEndpointUrl(url: string): string | null {
+/**
+ * Reject non-http(s) schemes and known cloud-metadata hosts before any network call is made. A
+ * hostname that isn't already a literal IP is resolved via DNS so a plain-looking name pointed at a
+ * metadata address (rather than the literal address itself) can't sail past the check below.
+ */
+async function validateEndpointUrl(url: string): Promise<string | null> {
   let parsed: URL
   try {
     parsed = new URL(url)
@@ -73,8 +94,26 @@ function validateEndpointUrl(url: string): string | null {
     const mapped = ipv4MappedAddress(bareHost)
     if (mapped) candidates.push(mapped)
   }
-  if (candidates.some((h) => BLOCKED_HOSTS.has(h))) {
+  if (candidates.some((h) => BLOCKED_HOSTS.has(h) || isLinkLocalIPv4(h))) {
     return `"${url}" points at a cloud metadata address, which is never a valid Polo Pre-Sales endpoint.`
+  }
+  if (!isIP(bareHost)) {
+    try {
+      // dns.lookup has no timeout/signal option, and a black-holing resolver (broken VPN, captive
+      // portal) would otherwise hang the main process here, defeating this file's hard-timeout contract.
+      // Bound it well under CONNECT_TIMEOUT_MS; a timeout falls through to the same catch as a lookup
+      // failure (the real connect below surfaces any genuine problem).
+      const resolved = await Promise.race([
+        dns.lookup(bareHost, { all: true }),
+        new Promise<never>((_, reject) => setTimeout(() => reject(new Error('dns lookup timeout')), 3000))
+      ])
+      if (resolved.some((r) => BLOCKED_HOSTS.has(r.address) || isLinkLocalIPv4(r.address))) {
+        return `"${url}" resolves to a cloud metadata address, which is never a valid Polo Pre-Sales endpoint.`
+      }
+    } catch {
+      /* a DNS lookup failure here isn't this guard's concern — the real connect attempt below will
+         surface it as a normal connection error */
+    }
   }
   return null
 }
@@ -104,7 +143,10 @@ function classifyError(e: unknown, endpointUrl: string): string {
   if (blob.includes('invalid url') || blob.includes('failed to parse url')) {
     return `"${endpointUrl}" is not a valid URL.`
   }
-  return raw || 'Polo Pre-Sales connection failed for an unknown reason.'
+  // Unclassified failure shape — never return the raw exception text to the renderer (it may contain
+  // stack-derived detail, internal module paths, or MCP SDK/fetch internals). `raw` is still logged
+  // by the caller's mainLog.warn for diagnostics.
+  return 'Polo Pre-Sales connection failed for an unknown reason. Check the endpoint and API key.'
 }
 
 async function withClient<T>(
@@ -173,7 +215,7 @@ export async function connectBidstack(endpointUrl: string, apiKey: string): Prom
   const key = (apiKey || '').trim()
   if (!url) return { ok: false, error: 'Enter the Polo Pre-Sales MCP endpoint URL first.' }
   if (!key) return { ok: false, error: 'Enter the Polo Pre-Sales API key first.' }
-  const urlError = validateEndpointUrl(url)
+  const urlError = await validateEndpointUrl(url)
   if (urlError) return { ok: false, error: urlError }
 
   const configKey = `${url} ${key}`
@@ -208,7 +250,7 @@ export async function pushToBidstack(
   if (!url) return { ok: false, error: 'Polo Pre-Sales endpoint is not configured. Set it up in Settings first.' }
   if (!key) return { ok: false, error: 'Polo Pre-Sales API key is not configured. Set it up in Settings first.' }
   if (!tool) return { ok: false, error: 'No Polo Pre-Sales tool selected to push to.' }
-  const urlError = validateEndpointUrl(url)
+  const urlError = await validateEndpointUrl(url)
   if (urlError) return { ok: false, error: urlError }
   try {
     const result = await withClient(url, key, CALL_TIMEOUT_MS, (client) =>
@@ -217,7 +259,9 @@ export async function pushToBidstack(
     if (result && typeof result === 'object' && (result as { isError?: boolean }).isError) {
       const content = (result as { content?: Array<{ type: string; text?: string }> }).content
       const text = content?.find((c) => c.type === 'text')?.text
-      return { ok: false, error: text || 'Polo Pre-Sales reported an error running the tool.' }
+      // The tool's own error text comes from the external MCP server — untrusted content, so it's
+      // capped before ever reaching the renderer, matching this module's short-actionable-message policy.
+      return { ok: false, error: (text || 'Polo Pre-Sales reported an error running the tool.').slice(0, 500) }
     }
     return { ok: true, result }
   } catch (e) {

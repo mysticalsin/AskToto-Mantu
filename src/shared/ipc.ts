@@ -318,7 +318,8 @@ export const BaseSettingsSchema = z.object({
   dustBaseUrl: z
     .string()
     .refine((v) => v === '' || /^https:\/\//i.test(v), 'Dust URL must be an https:// URL')
-    .default('https://dust.tt'),
+    .default('https://dust.tt')
+    .transform((v) => v || 'https://dust.tt'),
   // Azure AD (Entra) SSO config. These are PUBLIC identifiers — the PKCE public-client flow uses no
   // client secret — so they live in settings, letting an admin enable Microsoft sign-in in-app without
   // editing env vars or deploying managed-config.json. A machine-wide managed-config still overrides

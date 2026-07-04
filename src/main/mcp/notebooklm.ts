@@ -323,7 +323,8 @@ export async function installNotebookLmCli(onProgress: (line: string) => void): 
     })
 
     child.on('error', (err) => {
-      finish({ ok: false, error: `Could not start the installer: ${errMsg(err) || 'unknown error'}.` })
+      mainLog.warn('[notebooklm] install spawn failed', errMsg(err))
+      finish({ ok: false, error: 'Could not start the installer. Check your network connection and try again.' })
     })
 
     child.on('close', (code) => {

@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { DataSet } from 'vis-data'
 import { Network } from 'vis-network/standalone'
-import type { DashboardData, GraphNode, Reason, ScopeSummary, WinLikelihoodBand } from '../types/data'
+import type { DashboardData, GraphEdge, GraphNode, Reason, ScopeSummary, WinLikelihoodBand } from '../types/data'
 import { bandColor, bandLabel } from '../lib/format'
 
 interface Props {
@@ -31,6 +31,65 @@ function fmtUsd(n: number): string {
   if (n >= 1_000_000) return `$${(n / 1_000_000).toFixed(1)}M`
   if (n >= 1_000) return `$${(n / 1_000).toFixed(0)}K`
   return `$${n}`
+}
+
+// Going-Cold rendering: relationships fade as they age (the decay IS the information). Fresh
+// nodes render at full strength; cooling ones dim; cold ones are ghosts you can't unsee.
+const FRESHNESS_OPACITY: Record<string, number> = { fresh: 1, cooling: 0.72, cold: 0.42 }
+function nodeOpacity(n: GraphNode): number {
+  return n.freshness ? FRESHNESS_OPACITY[n.freshness] : 1
+}
+
+// Shared by the mount-only Network setup and the incremental reconcile effect below, so a poll
+// tick that only adds/removes a few nodes can update the existing DataSet in place instead of
+// tearing down and rebuilding the whole vis-network canvas.
+function buildNodeItem(n: GraphNode) {
+  const fill = communityColor(n.community_id)
+  const ring = n.type === 'deal' && n.win_likelihood_band ? bandColor[n.win_likelihood_band] : fill
+  const quiet = n.days_quiet !== undefined ? ` · quiet ${n.days_quiet}d` : ''
+  return {
+    id: n.id,
+    label: n.label,
+    title: `${n.label}${quiet}${n.single_threaded ? ' · SINGLE-THREADED' : ''}${n.unmapped ? ' · no people mapped' : ''}`,
+    shape: 'dot',
+    size: TYPE_SIZE[n.type],
+    color: {
+      background: fill,
+      border: ring,
+      highlight: { background: '#ffffff', border: ring },
+      opacity: nodeOpacity(n),
+    },
+    borderWidth: n.type === 'deal' && n.win_likelihood_band ? 3 : 1.5,
+    font: { size: 12, color: '#ece6f2' },
+  }
+}
+
+// Edge opacity inherits the colder endpoint — a cold relationship's whole thread recedes together.
+function edgeFade(freshnessById: Map<string, GraphNode['freshness']>, from: string, to: string): number {
+  const f = [freshnessById.get(from), freshnessById.get(to)]
+  if (f.includes('cold')) return 0.35
+  if (f.includes('cooling')) return 0.65
+  return 1
+}
+
+// Stable content-based id (not array position) so an edge whose confidence changes, or a graph
+// whose edges array is reordered, still reconciles as an update rather than a spurious remove+add.
+function edgeKey(e: GraphEdge): string {
+  return `${e.from}>${e.to}:${e.relation}`
+}
+
+function buildEdgeItem(e: GraphEdge, freshnessById: Map<string, GraphNode['freshness']>) {
+  return {
+    id: edgeKey(e),
+    from: e.from,
+    to: e.to,
+    label: '',
+    title: `${e.relation} [${e.confidence}]`,
+    dashes: e.confidence !== 'EXTRACTED',
+    width: e.confidence === 'EXTRACTED' ? 2 : 1,
+    color: { opacity: (e.confidence === 'EXTRACTED' ? 0.7 : 0.35) * edgeFade(freshnessById, e.from, e.to), color: '#9645d6' },
+    arrows: { to: { enabled: true, scaleFactor: 0.5 } },
+  }
 }
 
 function emptySummary(key: string, label: string): ScopeSummary {
@@ -64,6 +123,11 @@ export function GraphView({ data }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
   const networkRef = useRef<Network | null>(null)
   const nodesDsRef = useRef<DataSet<any> | null>(null)
+  const edgesDsRef = useRef<DataSet<any> | null>(null)
+  // Always-current view of graph.nodes for the click handler below, which is registered once in the
+  // mount-only effect and must not read a stale closure over graph.nodes from whenever it was set up.
+  const liveNodesRef = useRef(graph.nodes)
+  const searchInputRef = useRef<HTMLInputElement>(null)
 
   const [search, setSearch] = useState('')
   const [searchOpen, setSearchOpen] = useState(false)
@@ -117,61 +181,25 @@ export function GraphView({ data }: Props) {
     return `${nodePart}##${edgePart}`
   }, [graph])
 
+  // Keeps liveNodesRef current every render so the click handler registered once below (mount-only
+  // effect) always reads today's node data instead of a stale closure.
+  useEffect(() => {
+    liveNodesRef.current = graph.nodes
+  })
+
+  // Mount-only: creates the Network + DataSets exactly once. Content updates (new/removed nodes or
+  // edges from a poll tick) are reconciled in place by the effect below instead of destroying and
+  // recreating the canvas, which used to reset pan/zoom and replay the stabilization animation on
+  // every small backfill increment.
   useEffect(() => {
     if (!containerRef.current) return
 
-    // Going-Cold rendering: relationships fade as they age (the decay IS the information). Fresh
-    // nodes render at full strength; cooling ones dim; cold ones are ghosts you can't unsee.
-    const FRESHNESS_OPACITY: Record<string, number> = { fresh: 1, cooling: 0.72, cold: 0.42 }
-    const nodeOpacity = (n: GraphNode): number => (n.freshness ? FRESHNESS_OPACITY[n.freshness] : 1)
-
-    const nodesDs = new DataSet(
-      graph.nodes.map((n) => {
-        const fill = communityColor(n.community_id)
-        const ring = n.type === 'deal' && n.win_likelihood_band ? bandColor[n.win_likelihood_band] : fill
-        const quiet = n.days_quiet !== undefined ? ` · quiet ${n.days_quiet}d` : ''
-        return {
-          id: n.id,
-          label: n.label,
-          title: `${n.label}${quiet}${n.single_threaded ? ' · SINGLE-THREADED' : ''}${n.unmapped ? ' · no people mapped' : ''}`,
-          shape: 'dot',
-          size: TYPE_SIZE[n.type],
-          color: {
-            background: fill,
-            border: ring,
-            highlight: { background: '#ffffff', border: ring },
-            opacity: nodeOpacity(n),
-          },
-          borderWidth: n.type === 'deal' && n.win_likelihood_band ? 3 : 1.5,
-          font: { size: 12, color: '#ece6f2' },
-          _raw: n,
-        }
-      }),
-    )
+    const nodesDs = new DataSet(graph.nodes.map(buildNodeItem))
     nodesDsRef.current = nodesDs
 
-    // Edge opacity inherits the colder endpoint — a cold relationship's whole thread recedes together.
     const freshnessById = new Map(graph.nodes.map((n) => [n.id, n.freshness]))
-    const edgeFade = (from: string, to: string): number => {
-      const f = [freshnessById.get(from), freshnessById.get(to)]
-      if (f.includes('cold')) return 0.35
-      if (f.includes('cooling')) return 0.65
-      return 1
-    }
-
-    const edgesDs = new DataSet(
-      graph.edges.map((e, i) => ({
-        id: i,
-        from: e.from,
-        to: e.to,
-        label: '',
-        title: `${e.relation} [${e.confidence}]`,
-        dashes: e.confidence !== 'EXTRACTED',
-        width: e.confidence === 'EXTRACTED' ? 2 : 1,
-        color: { opacity: (e.confidence === 'EXTRACTED' ? 0.7 : 0.35) * edgeFade(e.from, e.to), color: '#9645d6' },
-        arrows: { to: { enabled: true, scaleFactor: 0.5 } },
-      })),
-    )
+    const edgesDs = new DataSet(graph.edges.map((e) => buildEdgeItem(e, freshnessById)))
+    edgesDsRef.current = edgesDs
 
     const network = new Network(
       containerRef.current,
@@ -203,17 +231,64 @@ export function GraphView({ data }: Props) {
 
     network.on('click', (params: { nodes: string[] }) => {
       if (params.nodes.length > 0) {
-        const raw = nodesDs.get(params.nodes[0]) as any
-        setSelected(raw._raw)
+        const id = params.nodes[0]
+        setSelected(liveNodesRef.current.find((n) => n.id === id) ?? null)
       }
     })
 
     return () => {
       network.destroy()
       networkRef.current = null
+      nodesDsRef.current = null
+      edgesDsRef.current = null
     }
-    // Keyed on the signature (content), not the `graph` object identity — a poll tick that produces
-    // an equivalent graph in a freshly-allocated object must NOT rebuild the canvas.
+    // Deliberately empty — this effect must run exactly once, on mount. Reconciliation on content
+    // change happens in the next effect via DataSet update()/remove(), not by re-running this one.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  // Reconciles the existing DataSets in place whenever the graph's real content changes (keyed on
+  // graphSignature, not `graph` object identity, so a poll tick producing an equivalent graph in a
+  // freshly-allocated object is a no-op). Uses update()/remove() rather than destroying and
+  // recreating the Network, so pan/zoom/selection survive incremental backfill growth.
+  useEffect(() => {
+    const nodesDs = nodesDsRef.current
+    const edgesDs = edgesDsRef.current
+    if (!nodesDs || !edgesDs) return
+
+    // Capture the pre-update id sets so we can tell genuinely NEW nodes/edges from in-place metadata
+    // changes: physics is disabled after the first stabilization, so a newly added node would otherwise
+    // freeze at its naive initial position instead of being pulled toward its neighbors.
+    const existingNodeIds = new Set(nodesDs.getIds() as string[])
+    const existingEdgeIds = new Set(edgesDs.getIds() as string[])
+
+    const desiredNodes = graph.nodes.map(buildNodeItem)
+    const desiredNodeIds = new Set(desiredNodes.map((n) => n.id))
+    const staleNodeIds = (nodesDs.getIds() as string[]).filter((id) => !desiredNodeIds.has(id))
+    if (staleNodeIds.length > 0) nodesDs.remove(staleNodeIds)
+    nodesDs.update(desiredNodes)
+    const nodesAdded = desiredNodes.some((n) => !existingNodeIds.has(n.id as string))
+
+    const freshnessById = new Map(graph.nodes.map((n) => [n.id, n.freshness]))
+    const desiredEdges = graph.edges.map((e) => buildEdgeItem(e, freshnessById))
+    const desiredEdgeIds = new Set(desiredEdges.map((e) => e.id))
+    const staleEdgeIds = (edgesDs.getIds() as string[]).filter((id) => !desiredEdgeIds.has(id))
+    if (staleEdgeIds.length > 0) edgesDs.remove(staleEdgeIds)
+    edgesDs.update(desiredEdges)
+    const edgesAdded = desiredEdges.some((e) => !existingEdgeIds.has(e.id as string))
+
+    // Only when real new ids arrived: re-enable physics briefly to lay the new nodes out against their
+    // neighbours, then freeze again. Metadata-only ticks (freshness/band/confidence) skip this and stay
+    // perfectly still, preserving the no-flicker goal of the in-place reconcile.
+    if (nodesAdded || edgesAdded) {
+      const network = networkRef.current
+      if (network) {
+        network.setOptions({ physics: { enabled: true } })
+        network.once('stabilizationIterationsDone', () => {
+          network.setOptions({ physics: { enabled: false } })
+        })
+      }
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [graphSignature])
 
@@ -234,12 +309,19 @@ export function GraphView({ data }: Props) {
   function focusNode(id: string) {
     const network = networkRef.current
     if (!network) return
+    const n = graph.nodes.find((x) => x.id === id) ?? null
+    // If a filter currently hides this node, reveal it — otherwise the camera pans to a node that
+    // never renders and the click looks like it silently did nothing.
+    if (n && !nodeVisible(n)) nodesDsRef.current?.update({ id, hidden: false })
     network.focus(id, { scale: 1.4, animation: true })
     network.selectNodes([id])
-    const n = graph.nodes.find((x) => x.id === id) ?? null
     setSelected(n)
     setSearch('')
     setSearchOpen(false)
+    // The control that triggered this (a search suggestion or a Neighbors/Going-cold row button)
+    // is about to unmount along with the list it lives in — move focus to the always-present search
+    // input instead of letting it silently fall back to <body>.
+    searchInputRef.current?.focus()
   }
 
   function toggleInSet<T>(setter: React.Dispatch<React.SetStateAction<Set<T>>>, key: T) {
@@ -295,10 +377,17 @@ export function GraphView({ data }: Props) {
         {/* Search */}
         <div className="relative shrink-0 border-b border-[var(--color-mantu-border)] p-3">
           <input
+            ref={searchInputRef}
             value={search}
             onChange={(e) => {
               setSearch(e.target.value)
               setSearchOpen(true)
+            }}
+            onKeyDown={(e) => {
+              if (e.key === 'Escape') {
+                setSearchOpen(false)
+                e.currentTarget.blur()
+              }
             }}
             placeholder="Search nodes..."
             className="w-full rounded-md border border-[var(--color-mantu-border)] bg-black/30 px-3 py-1.5 text-sm text-white/90 outline-none focus:border-mantu"

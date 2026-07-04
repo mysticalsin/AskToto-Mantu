@@ -86,9 +86,11 @@ function readLockedFrom(p: string): string[] {
 function readAllowedFrom(p: string): string[] | null {
   try {
     const obj = JSON.parse(readFileSync(p, 'utf8'))
-    const arr: unknown[] = Array.isArray(obj?.allowedProviders) ? obj.allowedProviders : []
-    const list = [...new Set(arr.filter((x): x is string => typeof x === 'string'))]
-    return list.length ? list : null
+    const raw = obj?.allowedProviders
+    // An explicit empty array is a real deny-all policy, not "no policy" — only an absent/non-array
+    // key means null (no restriction). Collapsing the two let `"allowedProviders": []` fail open.
+    if (!Array.isArray(raw)) return null
+    return [...new Set(raw.filter((x): x is string => typeof x === 'string'))]
   } catch {
     return null
   }
@@ -157,7 +159,8 @@ function readUserRaw(): Record<string, unknown> {
   if (buf.length >= ENC_MARKER_V2.length && buf.subarray(0, ENC_MARKER_V2.length).equals(ENC_MARKER_V2)) {
     try {
       return JSON.parse(decryptSecret(buf.subarray(ENC_MARKER_V2.length)))
-    } catch {
+    } catch (e) {
+      mainLog.warn('[store] settings.json undecryptable (AES-GCM); falling back to defaults', e)
       return {} // Corrupt or key rotated — don't brick the app
     }
   }
@@ -202,10 +205,12 @@ function serializeUserRaw(obj: Record<string, unknown>): Buffer {
     if (safeStorage.isEncryptionAvailable()) {
       return Buffer.concat([ENC_MARKER_V1, safeStorage.encryptString(json)])
     }
-  } catch {
-    /* keychain not ready — write plaintext below */
+  } catch (e) {
+    throw new Error(
+      `Encryption unavailable — refusing to write settings as plaintext (${e instanceof Error ? e.message : String(e)})`
+    )
   }
-  return Buffer.from(json, 'utf8')
+  throw new Error('Encryption unavailable — refusing to write settings as plaintext')
 }
 
 // ─── Settings memoisation ────────────────────────────────────────────────────────
@@ -353,9 +358,18 @@ export function setApiKey(provider: ProviderId, key: string): void {
     }
     blob = safeStorage.encryptString(trimmed)
   }
+  // Atomic write: a crash mid-write must not leave a truncated/corrupt key file (which would silently
+  // read back as "no key"). Mirrors the tmp-file + rename pattern already used in setSettings.
+  const tmp = `${p}.tmp`
   try {
-    writeFileSync(p, blob, { mode: 0o600 })
+    writeFileSync(tmp, blob, { mode: 0o600 })
+    renameSync(tmp, p)
   } catch (e) {
+    try {
+      if (existsSync(tmp)) rmSync(tmp) // don't leave an orphaned .tmp behind
+    } catch {
+      /* ignore */
+    }
     throw new Error(
       `Couldn't save your API key — AskToto can't write to its data folder${
         e instanceof Error && e.message ? ` (${e.message})` : ''
@@ -490,7 +504,8 @@ export function getApiKey(provider: ProviderId): string {
       // ── New AES-GCM format (ATKAES1 marker) ────────────────────────────────
       try {
         key = decryptSecret(buf.subarray(AES_KEY_MARKER.length))
-      } catch {
+      } catch (e) {
+        mainLog.warn('[store] key file undecryptable for', provider, e)
         key = '' // Corrupt or key rotated
       }
     } else if (safeStorage.isEncryptionAvailable()) {

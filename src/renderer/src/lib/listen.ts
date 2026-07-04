@@ -90,8 +90,13 @@ export function isQuestion(t: string): boolean {
   const s = t.trim()
   if (!s) return false
   if (s.endsWith('?')) return true // explicit terminal punctuation → complete even when short
-  if (DANGLING.test(s.replace(/[.,;:!\s]+$/, ''))) return false // still mid-sentence → not yet a question
-  return s.split(/\s+/).length >= 3 && QWORDS.test(s)
+  // Evaluate only the run's last clause: an accumulated/long turn may carry a completed leading sentence
+  // (e.g. "So we shipped the update. What should we prioritize") -- QWORDS must match that clause's opening
+  // word, not the whole run's, or a finished non-question opener permanently blocks every later question
+  // in the same 'them' turn.
+  const lastClause = s.split(/(?<=[.!?])\s+/).pop() ?? s
+  if (DANGLING.test(lastClause.replace(/[.,;:!?\s]+$/, ''))) return false // still mid-sentence → not yet a question
+  return lastClause.split(/\s+/).length >= 3 && QWORDS.test(lastClause)
 }
 
 interface Channel {
@@ -524,6 +529,10 @@ export function useListen(
         src.connect(worklet)
       }
       worklet.connect(ctx.destination) // keeps the node processing; output stays silent
+      // If a pause is already in effect (e.g. this channel just finished mic/system-audio recovery mid-pause),
+      // suspend it immediately instead of leaving it running until the next resume()/stop(). The onstatechange
+      // handler below already guards on pausedRef.current, so it will correctly leave this suspended context alone.
+      if (pausedRef.current) void ctx.suspend().catch(() => {})
 
       // Silent-death detection: a track that ends OUTSIDE our own teardown (Bluetooth disconnect,
       // default-device switch, lid-close sleep terminating the SCStream) previously left the UI saying
@@ -696,6 +705,11 @@ export function useListen(
         if (drainTimerRef.current) {
           clearTimeout(drainTimerRef.current)
           drainTimerRef.current = null
+          // The cancelled drain never got to run finishTeardown's closeChannel calls -- close both channels
+          // here so a speaker the new source excludes (e.g. restarting mic-only after a mic+system session)
+          // doesn't leak its AudioContext/MediaStream indefinitely.
+          closeChannel('you')
+          closeChannel('them')
         }
         stoppingRef.current = false
         sessionEpochRef.current += 1
@@ -938,9 +952,6 @@ export function useListen(
   const pause = useCallback((): void => {
     if (!liveRef.current || pausedRef.current) return
     pausedRef.current = true
-    for (const ch of Object.values(channels.current)) {
-      void ch?.ctx.suspend().catch(() => {})
-    }
     // The 'them' watchdog is armed once at channel-open and otherwise runs on a wall-clock timer that
     // doesn't know about pause — left ticking, an ordinary pause longer than THEM_WATCHDOG_MS (20s) fires
     // a false "not hearing the other side" note over what is actually an intentional pause with nothing
@@ -949,6 +960,41 @@ export function useListen(
       clearTimeout(themWatchdogRef.current)
       themWatchdogRef.current = null
     }
+    // Flush each worklet's partial PCM/VAD buffer before its AudioContext actually suspends. Without this,
+    // whatever's mid-utterance in the worklet (buf/fill/vad hysteresis) survives the pause untouched, and
+    // resume() lets it keep writing new audio straight into that stale buffer with no reset in between --
+    // splicing pre-pause and post-resume speech into one garbled utterance. flush (the worklet's emit())
+    // always resets buf/fill/vad even when the flushed audio itself is silence/near-empty, so this alone
+    // stops the splice; pushAudio already drops anything it emits since pausedRef.current is true.
+    // The actual ctx.suspend() is deferred behind a short drain wait -- same pattern as stop()'s
+    // waitForDrain, minus its teardown side effects (no closeChannel, no session/queue wipe) since pause is
+    // reversible and the channels must stay alive -- giving the cross-thread flush message time to reach
+    // the worklet before rendering halts. Flushed again right before suspending in case fresh audio arrived
+    // during that wait.
+    const flushAll = (): void => {
+      for (const ch of Object.values(channels.current)) {
+        try {
+          ch?.worklet.port.postMessage('flush')
+        } catch {
+          /* ignore if port is already closed */
+        }
+      }
+    }
+    flushAll()
+    const PAUSE_DRAIN_CEILING_MS = 4000
+    const startedAt = Date.now()
+    const waitThenSuspend = (): void => {
+      if (!pausedRef.current) return // resumed before the drain finished — nothing left to suspend
+      if ((queue.current.length === 0 && !busy.current) || Date.now() - startedAt > PAUSE_DRAIN_CEILING_MS) {
+        flushAll()
+        for (const ch of Object.values(channels.current)) {
+          void ch?.ctx.suspend().catch(() => {})
+        }
+        return
+      }
+      setTimeout(waitThenSuspend, 60)
+    }
+    setTimeout(waitThenSuspend, 80)
     setState((s) => ({ ...s, paused: true }))
   }, [])
 
@@ -1058,13 +1104,22 @@ export function useListen(
 
   useEffect(() => {
     return () => {
-      stop()
+      // Unmount must release hardware synchronously -- stop()'s drain is async (up to DRAIN_CEILING_MS)
+      // and would keep running (and re-arm a new workerIdleTimer) after this instance is gone with nothing
+      // left able to cancel it. So this bypasses stop() entirely and tears everything down directly.
+      if (drainTimerRef.current) {
+        clearTimeout(drainTimerRef.current)
+        drainTimerRef.current = null
+      }
+      liveRef.current = false
       disarmNetworkRetry()
+      closeChannel('you')
+      closeChannel('them')
       if (workerIdleTimer.current) clearTimeout(workerIdleTimer.current)
       workerRef.current?.terminate()
       workerRef.current = null
     }
-  }, [disarmNetworkRetry, stop])
+  }, [closeChannel, disarmNetworkRetry])
 
   // Pre-warm the small default model in the BACKGROUND a few seconds after startup, so the first time the
   // user presses Listen the model is already loaded (no "downloading speech model…" spinner mid-meeting).

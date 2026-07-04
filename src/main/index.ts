@@ -75,7 +75,7 @@ import { buildSystem } from './personas'
 import { initLogging, mainLog, auditLog } from './logger'
 import { authStatus, signIn as authSignIn, signOut as authSignOut, requireAuth } from './auth'
 import { calendarToday } from './calendar'
-import { parakeetModelReady, ensureParakeetModel, parakeetTranscribe } from './parakeet'
+import { parakeetModelReady, ensureParakeetModel, parakeetTranscribe, parakeetRelease } from './parakeet'
 import {
   saveMeeting,
   saveNote,
@@ -216,15 +216,21 @@ function publicSettings(): PublicSettings {
   // a chosen base agent; custom needs an https base URL). Drives the add-key CTA so it only shows when the
   // app genuinely can't answer yet — not when a key for a DIFFERENT provider exists.
   const activeDef = PROVIDERS[s.provider]
+  // Org allowlist (null = unrestricted) — the SAME source of truth askStart's attempt()/failover() enforce
+  // at request time. Folding it in here keeps UI readiness from drifting out of sync with what's actually
+  // allowed to answer (previously a blocked provider could show "ready" with no setup CTA, then reject
+  // every ask).
+  const allowed = getAllowedProviders()
   const providerReady =
-    activeDef.kind === 'cli'
+    (!allowed || allowed.includes(s.provider)) &&
+    (activeDef.kind === 'cli'
       ? !!s.cliConnected[s.provider]
       : hasApiKey(s.provider) &&
         (s.provider === 'dust'
           ? !!s.dustWorkspaceId.trim() && !!s.providerModels.dust
           : s.provider === 'custom'
             ? /^https:\/\//i.test(s.customBaseUrl) && !!s.providerModels.custom
-            : true)
+            : true))
   return {
     ...s,
     hasApiKey: hasApiKey(s.provider),
@@ -235,7 +241,10 @@ function publicSettings(): PublicSettings {
     // screen-ask/quick-action to capture even when the active provider (e.g. Dust) is text-only, because
     // the main process transparently fails the vision turn over to this provider instead of dead-ending.
     visionAvailable: (Object.keys(PROVIDERS) as ProviderId[]).some(
-      (p) => PROVIDERS[p].vision && (PROVIDERS[p].kind === 'cli' ? !!s.cliConnected[p] : hasApiKey(p))
+      (p) =>
+        PROVIDERS[p].vision &&
+        (!allowed || allowed.includes(p)) &&
+        (PROVIDERS[p].kind === 'cli' ? !!s.cliConnected[p] : hasApiKey(p))
     ),
     hasKeys: hasKeysMap(),
     hasEncryption: encryptionAvailable(),
@@ -405,9 +414,12 @@ let fatalHandled = false
 function onFatal(kind: 'uncaughtException' | 'unhandledRejection', err: unknown): void {
   const detail = err instanceof Error ? err.stack || err.message : String(err)
   try {
-    mainLog.error(`[${kind}]`, detail)
-    auditLog('app.crash', { kind, message: err instanceof Error ? err.message : String(err) })
+    // Redact BEFORE writing to any sink — an error stack/message routinely embeds the data involved in the
+    // failing operation, so mainLog and auditLog (both persistent) must never see the raw value, same as
+    // the crash-*.log dump below.
     const redactedDetail = redactSecrets(detail)
+    mainLog.error(`[${kind}]`, redactedDetail)
+    auditLog('app.crash', { kind, message: redactSecrets(err instanceof Error ? err.message : String(err)) })
     writeFileSync(
       join(app.getPath('userData'), `crash-${Date.now()}.log`),
       `${new Date().toISOString()} ${kind}\n${redactedDetail}\n`,
@@ -858,7 +870,9 @@ function registerIpc(): void {
     assertMainWindow(e)
     const parsed = SetApiKeyPayloadSchema.parse(payload)
     setApiKey(parsed.provider, parsed.key)
-    auditLog('key.set', { provider: parsed.provider })
+    // setApiKey() silently treats an empty/whitespace key as "clear the saved key" (store.ts) — audit the
+    // actual effect, not just the channel name, so a credential removal is never mislabeled as a set.
+    auditLog(parsed.key.trim() ? 'key.set' : 'key.removed', { provider: parsed.provider })
     return { hasKeys: hasKeysMap() }
   })
 
@@ -998,6 +1012,12 @@ function registerIpc(): void {
     const s = getSettings()
     if (!s.bidstackConnected || !s.bidstackEndpointUrl || !hasBidstackApiKey()) {
       return { ok: false, error: 'Polo Pre-Sales is not connected. Set it up in Settings → Mantu Intelligence first.' }
+    }
+    // Only a tool the user actually saw and picked when the connection was tested/saved may be invoked —
+    // otherwise a compromised or buggy renderer call could reach an unintended (possibly destructive) MCP
+    // tool on the user's live CRM connection.
+    if (!s.bidstackTools.includes(parsed.data.toolName)) {
+      return { ok: false, error: 'Unknown Polo Pre-Sales tool.' }
     }
     const apiKey = getBidstackApiKey()
     const r = await pushToBidstack(s.bidstackEndpointUrl, apiKey, parsed.data.toolName, parsed.data.args)
@@ -1230,6 +1250,11 @@ function registerIpc(): void {
     if (!requireAuth()) return ''
     const p = payload as { samples?: unknown }
     if (!(p?.samples instanceof Float32Array)) return ''
+    // Cap a single feed chunk generously above the renderer's real ~6s windows (WINDOW_SEC in listen.ts) at
+    // 16kHz mono — every other renderer-supplied blob in this file is bounded the same way (debriefSave,
+    // openMailDraft, McpCrmArgValueSchema); without this a malicious/malfunctioning renderer could force a
+    // synchronous decode of an arbitrarily large buffer and hang or OOM the whole app.
+    if (p.samples.length > 16_000 * 30) return ''
     return parakeetTranscribe(p.samples)
   })
 
@@ -1724,7 +1749,10 @@ function registerIpc(): void {
     setRecordingPowerSaveBlock(!!on)
     // A new meeting starting is the one clean boundary for Dust conversation continuity — everything
     // from here until the NEXT meeting starts shares one conversation (see resetDustConversation).
+    // It's also the clean boundary to free Parakeet's ~487MB native recognizer between meetings/on idle,
+    // instead of leaving it resident in the main process for the rest of the app's life.
     if (on) resetDustConversation()
+    else parakeetRelease()
   })
 
   // --- Window management ---

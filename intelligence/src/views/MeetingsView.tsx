@@ -104,14 +104,17 @@ function MeetingRow({ meeting }: { meeting: MeetingFeedRow }) {
       <span className="flex-shrink-0 whitespace-nowrap text-xs text-white/40">{humanizeDate(meeting.date)}</span>
       <span className="min-w-0 flex-1 truncate text-sm text-white/85">{meeting.title24}</span>
       {meeting.account && (
-        <span className="flex-shrink-0 truncate rounded-full bg-white/5 px-2 py-0.5 text-[10px] font-medium text-white/60">
+        <span
+          className="max-w-[140px] flex-shrink-0 truncate rounded-full bg-white/5 px-2 py-0.5 text-[10px] font-medium text-white/60"
+          title={meeting.account}
+        >
           {meeting.account}
         </span>
       )}
       {topics.length > 0 && (
         <div className="flex flex-shrink-0 items-center gap-1">
           {shownTopics.map((t) => (
-            <span key={t} className="rounded-full bg-white/[0.04] px-2 py-0.5 text-[10px] text-white/40">
+            <span key={t} className="max-w-[100px] truncate rounded-full bg-white/[0.04] px-2 py-0.5 text-[10px] text-white/40">
               {t}
             </span>
           ))}
