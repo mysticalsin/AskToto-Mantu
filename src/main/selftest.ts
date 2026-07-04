@@ -40,7 +40,7 @@ export async function runSelfTest(outPath: string): Promise<void> {
     ok('malformed managed-config does not crash getSettings', !threw && !!s)
     ok('managed bad temperature dropped → numeric default', !!s && typeof s.temperature === 'number')
     ok('managed valid provider applied (kimi)', !!s && s.provider === 'kimi')
-    ok('managed bad mode dropped → valid mode', !!s && ['interview', 'meeting', 'sales', 'general'].includes(s.mode))
+    ok('managed bad mode kept as a usable string (custom modes are free-form)', !!s && typeof s.mode === 'string' && s.mode.length > 0)
   } catch (e) {
     ok('managed-config suite', false, String(e))
   } finally {
@@ -68,7 +68,10 @@ export async function runSelfTest(outPath: string): Promise<void> {
   // 3. Real transcript save: collision-safe + index + README + Dust frontmatter
   try {
     const folder = join(tmpdir(), 'asktoto-selftest-' + Date.now())
-    setSettings({ meetingsFolder: folder, autoSaveTranscripts: true })
+    // Plaintext mode exercises the human-readable index + Dust frontmatter bookkeeping deterministically.
+    // (The shipped default is encryptTranscripts:true, where the index is intentionally skipped so titles/
+    //  dates don't leak and the file is ciphertext — that path is covered by its own check below.)
+    setSettings({ meetingsFolder: folder, autoSaveTranscripts: true, encryptTranscripts: false })
     ensureMeetingsFolder(getSettings())
     const startedAt = Date.parse('2026-06-26T16:00:00')
     const lines = [
@@ -83,7 +86,14 @@ export async function runSelfTest(outPath: string): Promise<void> {
     ok('same-minute meetings → distinct files (collision-safe)', f1 !== f2 && existsSync(f1) && existsSync(f2))
     ok('index lists both meetings', (readFileSync(join(folder, 'index.md'), 'utf8').match(/\[open\]/g) || []).length >= 2)
     ok('transcript carries Dust frontmatter', readFileSync(f1, 'utf8').includes('status: ready-for-followup'))
-    setSettings({ meetingsFolder: '' })
+    // Encrypted mode (the shipped default): the saved file must NOT be plaintext-readable at rest.
+    setSettings({ encryptTranscripts: true })
+    const fe = await saveMeeting(getSettings(), { ...m, title: 'Secret' })
+    ok(
+      'encrypted transcript is ciphertext at rest',
+      existsSync(fe) && !readFileSync(fe, 'utf8').includes('Can you walk me through it?')
+    )
+    setSettings({ meetingsFolder: '', encryptTranscripts: true })
     rmSync(folder, { recursive: true, force: true })
     rmSync(settingsFile, { force: true })
   } catch (e) {
