@@ -36,7 +36,7 @@ export const QuickActions = memo(function QuickActions({
             key={a.kind}
             type="button"
             aria-label={a.label}
-            title={providerReady ? undefined : 'Connect an AI provider to use this'}
+            title={providerReady ? undefined : 'Connect an AI provider first'}
             aria-disabled={!providerReady}
             disabled={!providerReady}
             onClick={() => onAction(a.kind)}

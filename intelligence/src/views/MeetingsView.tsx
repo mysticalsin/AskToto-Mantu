@@ -34,13 +34,13 @@ export function MeetingsView({ data }: Props) {
     <div className="mx-auto max-w-7xl px-6 py-8">
       <h1 className="text-2xl font-semibold text-white/95">Meetings</h1>
       <p className="mt-1 text-xs text-white/40">
-        Every ingested meeting, newest first — {meetings.length} total
+        Every ingested meeting, newest first: {meetings.length} total
         {density.undated > 0 ? `, ${density.undated} undated (excluded from the cadence strip below)` : ''}.
       </p>
 
       <div className="mt-6 rounded-xl border border-[var(--color-mantu-border)] bg-[var(--color-mantu-surface)] p-4">
         <div className="mb-2 flex items-center justify-between text-[11px] uppercase tracking-wide text-white/40">
-          <span>Meeting cadence — last 12 weeks</span>
+          <span>Meeting cadence: last 12 weeks</span>
           {maxCount > 0 && <span className="text-white/30">peak {maxCount}/wk</span>}
         </div>
         {meetings.length === 0 ? (

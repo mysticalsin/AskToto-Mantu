@@ -103,7 +103,7 @@ export function StatsView({ data }: Props) {
         animate={{ opacity: 1 }}
         className="mt-4 rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-sm text-amber-300"
       >
-        <strong className="font-semibold">n = {data.deals.length} — illustrative until more deals close.</strong>{' '}
+        <strong className="font-semibold">n = {data.deals.length}: illustrative until more deals close.</strong>{' '}
         These numbers describe a handful of deals, not a portfolio. Treat every stat below as a
         single-point observation, not a trend, until real volume accumulates.
       </motion.div>
@@ -284,7 +284,7 @@ export function StatsView({ data }: Props) {
               <ul className="space-y-2 text-xs text-white/60">
                 {data.ingest_errors.map((e, i) => (
                   <li key={i}>
-                    <span className="text-white/80">{e.file}</span> — {e.error}
+                    <span className="text-white/80">{e.file}</span>: {e.error}
                   </li>
                 ))}
               </ul>
