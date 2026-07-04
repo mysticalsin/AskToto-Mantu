@@ -69,3 +69,13 @@ a `v*` tag. Everything below is account setup only the owner can do.
 
 Local signed mac build without CI: `npm run dist:local` with the login Keychain unlocked, dmg lands in
 `~/AI-Brain-build/asktoto-release/` (dev-signed; see the macOS section above for notarized builds).
+
+## Signature gate (`verify:signing`)
+
+`scripts/verify-signing.mjs` positively verifies a build is validly signed instead of trusting the
+builder's exit code (`codesign --verify --deep --strict` on macOS, `Get-AuthenticodeSignature` on
+Windows, plus a Gatekeeper/`spctl` check). `dist:local` runs it automatically at the end and fails on a
+genuinely broken signature. Run it standalone with `npm run verify:signing [artifactsDir]`. For release
+gating add `--require-notarized`, which also fails when Gatekeeper does not accept the app (not notarized
+/ not a Developer ID cert) — wire `node scripts/verify-signing.mjs --require-notarized` into `release.yml`
+after the build step once you have a Developer ID cert + notarization creds set.
