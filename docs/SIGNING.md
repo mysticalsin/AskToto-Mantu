@@ -39,19 +39,33 @@ npm run dist
 ```
 electron-builder signs with `CSC_LINK` and notarizes automatically when the `APPLE_*` vars are present.
 
-## iOS (.ipa)
-
-Open `ios/AskToto.xcodeproj` → target **AskToto** → **Signing & Capabilities**:
-- Set **Team** (or `DEVELOPMENT_TEAM` in `ios/project.yml`).
-- Bundle id `com.mantu.asktoto`. Xcode manages the provisioning profile automatically.
-- Archive → Distribute (App Store / Ad Hoc / Enterprise).
-
-CI: `xcodebuild -project ios/AskToto.xcodeproj -scheme AskToto -archivePath out.xcarchive archive`
-then `-exportArchive` with an `exportOptions.plist`, using an App Store Connect API key
-(`APP_STORE_CONNECT_KEY_ID` / `ISSUER_ID` / `.p8`).
-
 ## Auto-update host
 Auto-update is served from the public **AskToto-Releases** GitHub repo (`electron-builder.yml` publish
 block: `provider: github`, `releaseType: release` — enforced by the `npm run check:release` preflight
 gate). `npm run dist` builds without publishing; `npm run release` (needs `GH_TOKEN` with repo scope)
 uploads `latest-mac.yml` + artifacts to that repo's Releases for electron-updater.
+
+## Ship checklist (mac + Windows, end to end)
+
+The CI is already wired: `.github/workflows/build.yml` builds, tests, and packages BOTH platforms on
+every push/PR (unsigned unless certs are set); `release.yml` builds, signs, notarizes, and publishes on
+a `v*` tag. Everything below is account setup only the owner can do.
+
+1. **Enable Actions** on `mysticalsin/AskToto-Mantu` (Settings, Actions, General, allow all actions).
+   With nothing else set, one push produces UNSIGNED mac `.dmg`/`.zip` and Windows `.exe`/`.appx` as
+   downloadable run artifacts (3-day retention). Fastest way to get the Windows app in hand.
+2. **Create the public `AskToto-Releases` repo** (empty). It is the auto-update feed target.
+3. **Add repo secrets** (Settings, Secrets and variables, Actions):
+   - `GH_TOKEN`: a PAT with `repo` scope on AskToto-Releases (the publish target).
+   - macOS: `CSC_LINK` (base64 of your Developer ID Application .p12), `CSC_KEY_PASSWORD`, `APPLE_ID`,
+     `APPLE_APP_SPECIFIC_PASSWORD`, `APPLE_TEAM_ID`.
+   - Windows: `WIN_CSC_LINK` (base64 of your Authenticode .pfx), `WIN_CSC_KEY_PASSWORD`.
+   - Base64 a cert: `base64 -i cert.p12 | pbcopy`.
+4. **Get a Developer ID Application cert** (Apple Developer, Certificates) if you lack one, so Gatekeeper
+   accepts the mac build without the "unidentified developer" prompt. The dev-signed local `dist:local`
+   build already runs for you and internal testers via right-click, Open.
+5. **Release**: merge to `main`, then `git tag v1.0.0 && git push origin v1.0.0`. `release.yml` signs,
+   notarizes, and publishes both installers to AskToto-Releases; installed apps auto-update from there.
+
+Local signed mac build without CI: `npm run dist:local` with the login Keychain unlocked, dmg lands in
+`~/AI-Brain-build/asktoto-release/` (dev-signed; see the macOS section above for notarized builds).
