@@ -3281,7 +3281,7 @@ export function Settings({
                     </a>
                     <span aria-hidden>·</span>
                     <a
-                      href="mailto:twalteur@amaris.com?subject=AskToto%20feedback"
+                      href="mailto:support@mantu.com?subject=AskToto%20feedback"
                       className="transition-colors hover:text-[color:var(--cl-foreground)]"
                     >
                       Send feedback

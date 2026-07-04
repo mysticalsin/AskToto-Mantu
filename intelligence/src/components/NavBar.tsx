@@ -1,8 +1,5 @@
 import { NavLink } from 'react-router-dom'
 
-// TODO(tony): drop in the real profile URL — never fabricated, waiting on Tony to supply it.
-const LINKEDIN_URL = 'https://www.linkedin.com/in/'
-
 const links = [
   { to: '/', label: 'Coaching', end: true },
   { to: '/deals', label: 'Deals' },
@@ -29,17 +26,7 @@ export function NavBar() {
           />
           <div>
             <div className="text-sm font-semibold text-white/90">Mantu Intelligence</div>
-            <div className="text-[11px] text-white/40">
-              Your meetings, compounded - built by{' '}
-              <a
-                href={LINKEDIN_URL}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="win-no-drag text-white/60 hover:text-white/90 hover:underline"
-              >
-                Tony Walteur
-              </a>
-            </div>
+            <div className="text-[11px] text-white/40">Your meetings, compounded, by Mantu</div>
           </div>
         </div>
         <nav className="win-no-drag flex items-center gap-1 rounded-lg bg-white/5 p-1">

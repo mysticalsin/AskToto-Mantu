@@ -112,19 +112,6 @@ export async function refreshDustCliSession(): Promise<DustCliSession> {
 }
 
 /**
- * Clear the stored Dust CLI session so the user can reconnect from scratch.
- *
- * Removes the Dust API token from AskToto's API-key vault (the short-lived OAuth bearer
- * token imported from the Dust CLI keychain) and resets the workspace settings. Does NOT
- * touch the Dust CLI's own system-keychain entries — the user can still `dust login` again
- * without reinstalling the CLI. After disconnect the UI will show the "Connect" state.
- */
-export function disconnectDustCli(): void {
-  clearApiKey('dust')
-  setSettings({ dustWorkspaceId: '', dustBaseUrl: 'https://dust.tt' })
-}
-
-/**
  * Kick off the Dust CLI setup for a user with no session yet. We write a small EXECUTABLE `.command`
  * script (install the CLI, then run the interactive `dust login`) and open it: macOS opens `.command`
  * files in Terminal and runs them directly, so this needs NO Automation permission (unlike telling
