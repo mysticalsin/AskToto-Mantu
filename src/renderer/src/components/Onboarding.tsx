@@ -545,6 +545,3 @@ export function Onboarding({
     </div>
   )
 }
-
-/** Kept for type-compat with callers that pass a profile (unused in the fast flow). */
-export type OnboardingProfile = Profile

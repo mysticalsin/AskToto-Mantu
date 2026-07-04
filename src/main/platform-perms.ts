@@ -62,22 +62,3 @@ export function getPlatformPermissions(): PlatformPermissions {
     accessibility: 'not-required'
   }
 }
-
-/**
- * Returns a user-facing message explaining what permissions are needed for the current platform.
- */
-export function getPermissionHint(audioSource: 'mic' | 'system' | 'both'): string {
-  if (process.platform === 'darwin') {
-    if (audioSource === 'mic') return 'Needs Microphone permission.'
-    if (audioSource === 'system')
-      return 'Needs Screen Recording permission to capture system audio.'
-    return 'Needs Microphone + Screen Recording permissions.'
-  }
-  if (process.platform === 'win32') {
-    if (audioSource === 'mic') return 'Needs Microphone permission.'
-    if (audioSource === 'system')
-      return 'Windows will ask once before capturing system audio.'
-    return 'Needs Microphone permission. Windows will ask once for system audio.'
-  }
-  return ''
-}

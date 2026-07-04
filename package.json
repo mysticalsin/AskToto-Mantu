@@ -1,7 +1,7 @@
 {
   "name": "asktoto",
   "version": "1.0.0",
-  "description": "AskToto \u2014 AI desktop overlay assistant",
+  "description": "AskToto — AI desktop overlay assistant",
   "author": "Tony Walteur <tony.walteur@gmail.com>",
   "main": "./out/main/index.js",
   "scripts": {
@@ -39,8 +39,6 @@
     "zod": "^3.23.8"
   },
   "devDependencies": {
-    "@base-ui-components/react": "latest",
-    "@fontsource/inter": "latest",
     "@huggingface/transformers": "^3.0.0",
     "@tailwindcss/vite": "^4.0.0",
     "@types/node": "^22.5.0",
@@ -51,7 +49,6 @@
     "electron": "^39.8.10",
     "electron-builder": "^25.1.8",
     "electron-vite": "^2.3.0",
-    "geist": "latest",
     "lucide-react": "latest",
     "playwright": "^1.61.1",
     "react": "^18.3.1",
