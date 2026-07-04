@@ -2684,10 +2684,13 @@ const TABS: { id: TabId; label: string; icon: LucideIcon | ComponentType<{ size?
   { id: 'audio', label: 'Audio', icon: Mic },
   { id: 'calendar', label: 'Calendar', icon: Calendar },
   { id: 'meetings', label: 'Meetings', icon: FolderOpen },
-  { id: 'intelligence', label: 'Mantu Intelligence', icon: MantuMark },
+  // Label shortened to keep all nine tabs on ONE line at the overlay's width — the MantuMark icon already
+  // signals "Mantu"; the tab id stays 'intelligence' so nothing else changes.
+  { id: 'intelligence', label: 'Intelligence', icon: MantuMark },
   { id: 'privacy', label: 'Privacy', icon: ShieldCheck },
   // Profile + Keybinds merged: both are "how AskToto is set up for YOU" (who you are / how you drive it).
-  { id: 'profile', label: 'Profile & Keybinds', icon: User },
+  // Labeled just "Profile" so all nine tabs fit one line; keybinds live inside this tab.
+  { id: 'profile', label: 'Profile', icon: User },
   { id: 'about', label: 'About', icon: Info }
 ]
 
@@ -2770,7 +2773,7 @@ export function Settings({
       <nav
         role="tablist"
         aria-label="Settings sections"
-        className="cl-tabbar no-drag scroll-thin flex shrink-0 items-center gap-1 overflow-x-auto border-b border-[var(--cl-border)] px-2 py-1.5"
+        className="cl-tabbar no-drag scroll-thin flex shrink-0 items-center justify-between gap-0.5 overflow-x-auto border-b border-[var(--cl-border)] px-2 py-1.5"
       >
         {TABS.map((t) => {
           const active = t.id === tab
@@ -2784,7 +2787,7 @@ export function Settings({
               aria-controls="settings-panel"
               onClick={() => setTab(t.id)}
               className={[
-                'cl-focus flex shrink-0 items-center gap-1.5 rounded-full px-3 py-1.5 text-[12px] font-medium transition-colors',
+                'cl-focus flex shrink-0 items-center gap-1.5 rounded-full px-2.5 py-1.5 text-[12px] font-medium transition-colors',
                 active
                   ? 'bg-[var(--cl-primary)] text-white'
                   : 'text-[color:var(--cl-muted-foreground)] hover:bg-white/[0.06] hover:text-[color:var(--cl-foreground)]'
