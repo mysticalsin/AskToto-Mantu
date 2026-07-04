@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   AlertTriangle,
   ArrowLeft,
@@ -24,6 +24,7 @@ import { computeSilence } from '@shared/silence'
 import { buildMarsWeek, renderMarsMarkdown } from '@shared/mars'
 import { MantuMark } from './MantuMark'
 import { Spinner } from './ui'
+import { useFlash } from '../lib/useFlash'
 
 /**
  * Mantu Intelligence — the second-brain dashboard over the meeting knowledge store (.brain/).
@@ -218,6 +219,15 @@ function DealRow({
   const vel = VELOCITY_META[deal.velocity.signal]
   const last = deal.meetings[deal.meetings.length - 1]
   const closed = deal.outcome !== 'open'
+  // Won/Lost unmounts those buttons in favor of a Chip + "Reopen" — hand keyboard focus to Reopen
+  // on that transition so it doesn't fall through to <body>. Guarded so it only fires on the actual
+  // open→closed transition, not on initial mount of an already-closed deal.
+  const reopenRef = useRef<HTMLButtonElement>(null)
+  const wasClosedRef = useRef(closed)
+  useEffect(() => {
+    if (closed && !wasClosedRef.current) reopenRef.current?.focus()
+    wasClosedRef.current = closed
+  }, [closed])
   return (
     <div
       className={`flex flex-col gap-1 rounded-xl border border-[var(--color-hair-soft)] bg-white/[0.02] px-3 py-2 ${closed ? 'opacity-60' : ''}`}
@@ -237,6 +247,7 @@ function DealRow({
             {/* Human closes the loop, human can reopen it — mirrors the ledger's kept/broken flow. */}
             <button
               type="button"
+              ref={reopenRef}
               onClick={() => onSetOutcome(deal, 'open')}
               className="no-drag focus-ring shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-semibold text-[color:var(--color-ink-3)] hover:bg-white/10 hover:text-[color:var(--color-ink)]"
             >
@@ -291,14 +302,20 @@ const BAND_ORDER: Record<string, number> = { concerning: 0, mixed: 1, good: 2 }
 
 export function BrainView({ onBack }: { onBack: () => void }): JSX.Element {
   const [data, setData] = useState<BrainRead | null>(null)
-  const [marsCopied, setMarsCopied] = useState(false)
+  const [marsCopied, flashMarsCopied] = useFlash(2000)
   const [status, setStatus] = useState<BrainStatus | null>(null)
   const [meetings, setMeetings] = useState<MeetingSummary[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [backfilling, setBackfilling] = useState(false)
+  // Guards against overlapping polls during a long backfill: brainRead can take longer than the 4s
+  // poll interval as ingestion grows, so without this an older, slower-resolving snapshot can land
+  // after a newer one and make the KPI tiles/lists visibly jump backward.
+  const refreshingRef = useRef(false)
 
   const refresh = useCallback(async (): Promise<void> => {
+    if (refreshingRef.current) return
+    refreshingRef.current = true
     try {
       const [read, st, list] = await Promise.all([
         window.toto.brainRead(),
@@ -313,6 +330,7 @@ export function BrainView({ onBack }: { onBack: () => void }): JSX.Element {
       setError(e instanceof Error ? e.message : String(e))
     } finally {
       setLoading(false)
+      refreshingRef.current = false
     }
   }, [])
 
@@ -320,14 +338,20 @@ export function BrainView({ onBack }: { onBack: () => void }): JSX.Element {
     void refresh()
   }, [refresh])
 
+  // Settling a promise removes its row (and the button that had focus) from "Open promises" — hand
+  // focus to the section container so it doesn't fall through to <body>.
+  const openPromisesRef = useRef<HTMLDivElement>(null)
+
   // Settle a ledger promise (kept/broken) and re-read — the row leaves "Open promises" and starts
   // counting toward the per-person reliability read. Human-only action; the LLM never settles.
   const settlePromise = useCallback(
     async (deal: string, text: string, status: 'kept' | 'broken'): Promise<void> => {
       try {
         const r = await window.toto.brainCommitmentSettle(deal, text, status)
-        if (r.ok) await refresh()
-        else setError(r.error ?? 'Could not settle the promise.')
+        if (r.ok) {
+          await refresh()
+          openPromisesRef.current?.focus()
+        } else setError(r.error ?? 'Could not settle the promise.')
       } catch (e) {
         setError(e instanceof Error ? e.message : String(e))
       }
@@ -557,7 +581,11 @@ export function BrainView({ onBack }: { onBack: () => void }): JSX.Element {
 
           {/* COMMITMENT LEDGER — open promises across every deal, oldest (most urgent) first */}
           {openPromises.length > 0 && (
-            <div className="rounded-xl border border-[var(--color-hair-soft)] bg-white/[0.02] px-3 py-2.5">
+            <div
+              ref={openPromisesRef}
+              tabIndex={-1}
+              className="focus-ring rounded-xl border border-[var(--color-hair-soft)] bg-white/[0.02] px-3 py-2.5"
+            >
               <SectionTitle>
                 <CalendarCheck size={11} className="mr-1 inline" />
                 Open promises
@@ -638,8 +666,7 @@ export function BrainView({ onBack }: { onBack: () => void }): JSX.Element {
                   type="button"
                   onClick={() => {
                     void navigator.clipboard.writeText(renderMarsMarkdown(mars)).then(() => {
-                      setMarsCopied(true)
-                      setTimeout(() => setMarsCopied(false), 2000)
+                      flashMarsCopied()
                     })
                   }}
                   title="Copy the full Mars draft as markdown"
@@ -861,7 +888,13 @@ export function BrainView({ onBack }: { onBack: () => void }): JSX.Element {
           {/* Footer: escalate from this in-overlay glance to the full dedicated dashboard window */}
           <button
             type="button"
-            onClick={() => void window.toto.brainOpenDashboard()}
+            onClick={() => {
+              void window.toto.brainOpenDashboard()
+                .catch((e) => ({ ok: false, error: String(e) }))
+                .then((r) => {
+                  if (!r.ok) setError(r.error || 'Could not open Mantu Intelligence.')
+                })
+            }}
             className="no-drag focus-ring flex items-center justify-center gap-1.5 rounded-xl border border-[var(--color-hair-soft)] bg-white/[0.02] px-3 py-2 text-[11px] font-semibold text-[color:var(--color-ink-3)] hover:text-[color:var(--color-ink)]"
           >
             <ExternalLink size={12} /> Open the full Mantu Intelligence dashboard

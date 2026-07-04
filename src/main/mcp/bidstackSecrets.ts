@@ -90,15 +90,18 @@ export function hasBidstackApiKey(): boolean {
  *  so the disconnect handler can tell the user their key wasn't actually removed instead of falsely
  *  reporting success while the secret survives on disk. */
 export function clearBidstackApiKey(): boolean {
-  _cache = ''
   const p = keyPath()
   if (existsSync(p)) {
     try {
       rmSync(p)
     } catch (e) {
       mainLog.warn('[bidstack] could not delete key file', e)
+      // Invalidate only — don't assert the key is empty. The encrypted file is still on disk with
+      // the real secret, so the next read should recompute from disk instead of lying "no key".
+      _cache = null
       return false
     }
   }
+  _cache = ''
   return true
 }

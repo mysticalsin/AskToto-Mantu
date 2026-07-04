@@ -6,6 +6,7 @@ import { DustAPI } from '@dust-tt/client'
 import { authStatus } from '../auth'
 import { mainLog, auditLog } from '../logger'
 import { type StreamOptions, type StreamHandle, errMsg, idleWatchdog, userText } from './shared'
+import { redactSecrets } from '@shared/redact'
 
 /**
  * Logger for the @dust-tt/client. It logs several EXPECTED, already-handled conditions straight to
@@ -36,8 +37,20 @@ function dustLogger(): Console {
       .join(' ')
   const forward = (level: 'info' | 'warn', args: unknown[]): void => {
     try {
-      if (DUST_BENIGN.test(blobOf(args))) return // expected + handled elsewhere — don't alarm the console
-      mainLog[level]('[dust-client]', ...args)
+      // The SDK attaches content-bearing fields (rawText/conversation/message) to error objects on schema
+      // drift — rawText is the raw response body, which for a conversation call is the full transcript +
+      // prompt just sent to Dust. Strip those fields before this ever reaches the on-disk log; redactSecrets
+      // alone only catches high-confidence secret patterns, not general transcript content.
+      const sanitized = args.map((a) => {
+        if (a && typeof a === 'object' && !(a instanceof Error)) {
+          const { rawText, conversation, message, ...rest } = a as Record<string, unknown>
+          return rest
+        }
+        return a
+      })
+      const blob = blobOf(sanitized)
+      if (DUST_BENIGN.test(blob)) return // expected + handled elsewhere — don't alarm the console
+      mainLog[level]('[dust-client]', redactSecrets(blob))
     } catch {
       /* logging must never throw into the stream */
     }
@@ -71,10 +84,14 @@ let activeConversation: DustConversationRef | null = null
 // the create step needs this gate — once a conversation exists, concurrent postUserMessage calls into it
 // are already safe.
 let creationInFlight: Promise<void> | null = null
+// Bumped on every reset so an in-flight createConversation that straddles a meeting-boundary reset can
+// detect it happened and skip repopulating the cache with the (now-stale) previous meeting's conversation.
+let conversationEpoch = 0
 
 /** Call when a new meeting/listening session starts — the next Dust request begins a fresh conversation. */
 export function resetDustConversation(): void {
   activeConversation = null
+  conversationEpoch++
 }
 
 /** Dust message context tied to the signed-in user, so usage is attributable in the Dust workspace. */
@@ -133,6 +150,9 @@ export function streamDust(opts: StreamOptions): StreamHandle {
     creds: { apiKey: string; workspaceId?: string; baseURL?: string },
     allowRetry: boolean
   ): Promise<void> => {
+    // Snapshot the epoch before this request's creation gate/await — if a meeting-boundary reset bumps it
+    // before we finish, we must not repopulate the cache with what is now a stale conversation.
+    const epochAtStart = conversationEpoch
     // `any` preserves the original (dynamic-import `as any`) behavior — the client's request/response
     // types don't match this code's message shape, and reconciling the full Dust SDK surface is out of
     // scope for the bytecode fix. Runtime behavior is unchanged; only the static import differs.
@@ -232,7 +252,9 @@ export function streamDust(opts: StreamOptions): StreamHandle {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const sId = (conversation as any)?.sId
       // A fresh-conversation request must not hijack the meeting's cache slot with its throwaway thread.
-      if (sId && !opts.freshConversation) {
+      // Nor may a request that straddled a meeting-boundary reset (epoch changed while we awaited
+      // createConversation) repopulate the cache with the now-stale previous meeting's conversation.
+      if (sId && !opts.freshConversation && epochAtStart === conversationEpoch) {
         activeConversation = { conversationId: sId, workspaceId, agentId: opts.model, createdAt: Date.now() }
       }
       auditLog('dust.conversation', { action: opts.freshConversation ? 'created-isolated' : 'created' })

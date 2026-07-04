@@ -1045,6 +1045,7 @@ export function App(): JSX.Element {
     if (wasListening) {
       void saveMeetingNow(listen.lines, meetingStartRef.current, '') // don't lose a started meeting on reset
       listen.stop()
+      stoppingRef.current = true // mask the up-to-4s drain window, same as endReview's own guard
       meetingStartRef.current = Date.now()
     }
     ask.clear()
@@ -1338,6 +1339,11 @@ export function App(): JSX.Element {
     ]
   )
 
+  // BrainView is reachable from two different entry points — Settings' "Intelligence dashboard" card and
+  // RecallView/History's own Intelligence button — so remember which one was actually used and have its
+  // Back arrow return there, instead of a single hardcoded destination.
+  const brainReturnViewRef = useRef<View>('history')
+
   // Panel body — memoized so state changes unrelated to the active view/answer (typing in the ask input,
   // the elapsed-meeting clock, focus signals, etc.) don't rebuild this whole element tree on every App
   // render. Without this, `body` was a fresh JSX literal every single render, which defeated memo(Bar)'s
@@ -1360,7 +1366,10 @@ export function App(): JSX.Element {
           onClose={() => setView('answer')}
           onQuit={quitApp}
           onLogout={logOut}
-          onOpenIntelligence={() => setView('brain')}
+          onOpenIntelligence={() => {
+            brainReturnViewRef.current = 'settings'
+            setView('brain')
+          }}
           onOpenHistory={() => setView('history')}
           onOpenMeeting={(file) => void openPastMeeting(file)}
         />
@@ -1379,11 +1388,14 @@ export function App(): JSX.Element {
           onNewChat={reset}
           activeFile={savedPath ?? undefined}
           onOpenMeeting={openPastMeeting}
-          onIntelligence={() => setView('brain')}
+          onIntelligence={() => {
+            brainReturnViewRef.current = 'history'
+            setView('brain')
+          }}
         />
       )
     } else if (view === 'brain') {
-      b = <BrainView onBack={() => setView('history')} />
+      b = <BrainView onBack={() => setView(brainReturnViewRef.current)} />
     } else if (view === 'agenda') {
       b = <AgendaView />
     } else if (view === 'copilot') {
@@ -1577,7 +1589,7 @@ export function App(): JSX.Element {
   // draining audio in the background (see listen.ts stop()). endReview() flips `view` to 'review'
   // synchronously, so gating the visible chrome on the view — not the raw listening flag — makes Review
   // render clean immediately while the real drain safely finishes behind it.
-  const showListeningChrome = listen.listening && view !== 'review'
+  const showListeningChrome = listen.listening && view !== 'review' && !stoppingRef.current
 
   return (
     // Root drag is withheld while minimized: ControlPill (rendered below) arms its OWN drag instance on
@@ -1613,12 +1625,21 @@ export function App(): JSX.Element {
         // match in document order, so this wrapper — rendered before the pill below — wins while a
         // toast is open, and control reverts to the pill's own report the instant the toast closes and
         // this wrapper unmounts).
-        return minimized && (updateReady.open || newMeetingToast || consentReminderOpen) ? (
-          <div data-hug-width className="mx-auto flex w-[500px] flex-col gap-2 px-1.5">
+        //
+        // The wrapper element itself stays a single, stable <div> across both states — only its
+        // data-hug-width attribute and className toggle. Switching between a bare fragment and a real
+        // div here (as this used to do) changes the element type React sees in this slot, so it
+        // unmounts and remounts every toast underneath the instant one flips `open`, restarting its
+        // fade-in mid-animation. `contents` keeps the non-widened case layout-equivalent to the old
+        // bare-fragment render.
+        const widen = minimized && (updateReady.open || newMeetingToast || consentReminderOpen)
+        return (
+          <div
+            data-hug-width={widen || undefined}
+            className={widen ? 'mx-auto flex w-[500px] flex-col gap-2 px-1.5' : 'contents'}
+          >
             {toasts}
           </div>
-        ) : (
-          toasts
         )
       })()}
       {minimized ? (
@@ -1662,6 +1683,7 @@ export function App(): JSX.Element {
             onBack={hasAnswer ? clearAnswer : undefined}
             screenCapturedAt={ctxCapturedAt}
             onTranscript={toggleTranscript}
+            transcriptShown={settings?.showLiveTranscript ?? false}
             onNewMeeting={newMeeting}
             customModes={settings?.customModes}
             canPrewarm={!!settings?.visionAvailable && (settings?.screenAsk ?? true)}

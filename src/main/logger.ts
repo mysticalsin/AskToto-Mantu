@@ -14,6 +14,7 @@ export function initLogging(): void {
   try {
     log.transports.file.level = 'info'
     log.transports.file.maxSize = 5 * 1024 * 1024 // 5MB; electron-log rotates the file to *.old past this
+    log.transports.file.writeOptions = { ...log.transports.file.writeOptions, mode: 0o600 }
     log.transports.console.level = process.env.NODE_ENV === 'development' ? 'silly' : false
   } catch {
     /* logging is best-effort */
@@ -32,6 +33,7 @@ try {
   audit.transports.file.maxSize = 5 * 1024 * 1024
   audit.transports.file.format = '{text}' // we format the whole line as JSON ourselves
   audit.transports.file.resolvePathFn = (): string => join(app.getPath('userData'), 'logs', 'audit.log')
+  audit.transports.file.writeOptions = { ...audit.transports.file.writeOptions, mode: 0o600 }
 } catch {
   /* best-effort */
 }

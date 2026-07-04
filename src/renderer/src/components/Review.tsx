@@ -1,4 +1,4 @@
-import { memo, useEffect, useMemo, useState } from 'react'
+import { memo, useEffect, useMemo, useRef, useState } from 'react'
 import { Copy, Check, FileText, ListTree, FolderOpen, Save, RotateCcw, Play, ChevronDown, Download, Clock, Mail, Send, AlertCircle, EarOff, ArrowLeft } from 'lucide-react'
 import type { TranscriptLine, MeetingSummary } from '@shared/ipc'
 import type { AnswerState } from '../state'
@@ -145,6 +145,9 @@ export const Review = memo(function Review({
   }
   const [now, setNow] = useState(Date.now())
   const [recentMeetings, setRecentMeetings] = useState<MeetingSummary[]>([])
+  // Focus anchor for the Summary section — Retry summary moves focus here first, since the button it's
+  // clicked on unmounts the instant retry starts (recap.error clears), which would otherwise drop focus to <body>.
+  const summaryRef = useRef<HTMLElement>(null)
 
   useEffect(() => {
     // The live clock only feeds durationSec while there's no real transcript yet (lines.length <= 1).
@@ -412,12 +415,12 @@ export const Review = memo(function Review({
         </div>
       )}
 
-      <section aria-live="polite" aria-atomic="false">
+      <section ref={summaryRef} tabIndex={-1} aria-live="polite" aria-atomic="false">
         <div className="mb-1.5 flex items-center justify-between">
           <div className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-[color:var(--color-ink-3)]">
             <ListTree size={12} /> Summary
           </div>
-          {recap?.text && (
+          {recap?.text && !recap?.error && (
             <div className="flex items-center gap-1">
               {/* Accent-filled so the primary "copy the recap" action is unmissable on the review screen. */}
               <Chip onClick={copyNotes} variant="accent">
@@ -443,7 +446,15 @@ export const Review = memo(function Review({
                 "New meeting", which throws away the whole saved transcript. */}
             {onRetryRecap && (
               <div className="flex items-center gap-1.5">
-                <TextButton icon={RotateCcw} onClick={onRetryRecap}>Retry summary</TextButton>
+                <TextButton
+                  icon={RotateCcw}
+                  onClick={() => {
+                    summaryRef.current?.focus()
+                    onRetryRecap?.()
+                  }}
+                >
+                  Retry summary
+                </TextButton>
               </div>
             )}
           </div>
@@ -515,7 +526,7 @@ export const Review = memo(function Review({
         </section>
       )}
 
-      {recap?.text && (
+      {recap?.text && !recap?.error && (
         <section aria-live="polite">
           <div className="mb-1.5 flex items-center justify-between">
             <div className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-[color:var(--color-ink-3)]">
@@ -609,6 +620,7 @@ export const Review = memo(function Review({
                     setPushOpen(false)
                     setPushState({ phase: 'idle', error: null })
                   }}
+                  disabled={pushState.phase === 'sending'}
                 >
                   Cancel
                 </TextButton>
@@ -628,7 +640,7 @@ export const Review = memo(function Review({
         >
           <FileText size={12} />
           Show Transcript
-          <span className="text-[color:var(--color-ink-3)] opacity-60">· {lines.length} lines</span>
+          <span className="text-[color:var(--color-ink-3)] opacity-60">· {speechLines.length} lines</span>
           <ChevronDown size={12} className="-rotate-90" />
         </button>
       ) : (
@@ -639,7 +651,7 @@ export const Review = memo(function Review({
             onClick={() => setTranscriptOpen(false)}
             className="no-drag focus-ring flex items-center gap-1.5 rounded-md px-1 py-0.5 text-[11px] font-medium uppercase tracking-wide text-[color:var(--color-ink-3)] hover:text-[color:var(--color-ink-2)]"
           >
-            <FileText size={12} /> Full transcript · {lines.length} lines <ChevronDown size={12} />
+            <FileText size={12} /> Full transcript · {speechLines.length} lines <ChevronDown size={12} />
           </button>
           <TextButton onClick={copy}>
             {copied ? <Check size={11} className="text-[var(--color-success)]" /> : <Copy size={11} />}
@@ -672,7 +684,7 @@ export const Review = memo(function Review({
                 >
                   {l.speaker === 'them' ? 'Them' : 'You'}
                 </span>
-                <span className="text-[color:var(--color-ink)]">{l.text}</span>
+                <span className="min-w-0 flex-1 break-words text-[color:var(--color-ink)]">{l.text}</span>
               </div>
             ))
           )}

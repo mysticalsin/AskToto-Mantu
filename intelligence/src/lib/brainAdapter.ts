@@ -129,7 +129,7 @@ function toCommitment(c: BrainCommitment): Commitment {
   }
 }
 
-function toDeal(d: BrainDeal, sectorByAccount: Map<string, string>, meetingsByFile: Map<string, BrainMeeting>): Deal {
+function toDeal(d: BrainDeal, accountBySlug: Map<string, BrainAccount>, meetingsByFile: Map<string, BrainMeeting>): Deal {
   // raised_by and was_deciding_factor are deliberately absent: the signal extraction schema has no
   // "who raised this" or "was this the deciding factor" field to ground either in, and the previous
   // code faked them ('meeting participant', false) — an honest adapter omits what it doesn't know.
@@ -162,7 +162,7 @@ function toDeal(d: BrainDeal, sectorByAccount: Map<string, string>, meetingsByFi
   return {
     bid_id: slug(d.name),
     account: d.account,
-    sector: sectorByAccount.get(d.account) ?? 'other',
+    sector: accountBySlug.get(slug(d.account))?.sector ?? 'other',
     display_name: d.name,
     outcome: d.outcome,
     win_likelihood_band: d.win_likelihood_band ?? null, // preserve "ungraded" — never fabricate a band
@@ -370,7 +370,7 @@ export function brainToDashboard(b: BrainRead): DashboardData {
   const dealBySlug = new Map(b.deals.map((d) => [slug(d.name), d]))
 
   const meetingsByFile = new Map((b.meetings ?? []).map((m) => [m.source_file, m]))
-  const deals = b.deals.map((d) => toDeal(d, sectorByAccount, meetingsByFile))
+  const deals = b.deals.map((d) => toDeal(d, accountBySlug, meetingsByFile))
   const insights = toInsights(b.deals)
 
   // Going-Cold layer: freshness per entity from its own dated meeting refs + structural risk
@@ -426,16 +426,21 @@ export function brainToDashboard(b: BrainRead): DashboardData {
 
   const band0 = (): Record<WinLikelihoodBand, number> => ({ good: 0, mixed: 0, concerning: 0 })
   const accountSummaries: ScopeSummary[] = b.accounts.map((a) => {
+    // Joined by slug, not raw name equality — `d.account` and `a.name` are independently frozen at two
+    // different first-creation timestamps in ingest.ts, so casing/punctuation drift between two LLM
+    // extractions of the same account name (e.g. "Acme Corp" vs "ACME Corp.") must still resolve to the
+    // same account, exactly as accountBySlug/dealBySlug/personBySlug already do above.
+    const accSlug = slug(a.name)
     const counts = band0()
     // Ungraded deals (null band) are deliberately NOT counted into any band — no fabrication.
-    for (const d of deals.filter((d) => d.account === a.name)) if (d.win_likelihood_band) counts[d.win_likelihood_band]++
+    for (const d of deals.filter((d) => slug(d.account) === accSlug)) if (d.win_likelihood_band) counts[d.win_likelihood_band]++
     return {
-      key: slug(a.name),
+      key: accSlug,
       label: a.name,
-      deal_count: deals.filter((d) => d.account === a.name).length,
+      deal_count: deals.filter((d) => slug(d.account) === accSlug).length,
       total_value_usd: null, // no money data in transcripts — the UI states this, never shows $0
       band_counts: counts,
-      insight_ids: insights.filter((i) => i.deals.some((bd) => deals.find((d) => d.bid_id === bd)?.account === a.name)).map((i) => i.insight_id)
+      insight_ids: insights.filter((i) => i.deals.some((bd) => slug(deals.find((d) => d.bid_id === bd)?.account ?? '') === accSlug)).map((i) => i.insight_id)
     }
   })
   const sectors = [...new Set(b.accounts.map((a) => a.sector))]

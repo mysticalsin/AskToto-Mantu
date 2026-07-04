@@ -65,6 +65,7 @@ export const ElapsedClock = memo(function ElapsedClock({
     if (pausedAtRef.current != null) {
       pausedMsRef.current += Date.now() - pausedAtRef.current
       pausedAtRef.current = null
+      setNow(Date.now())
     }
     const iv = setInterval(() => setNow(Date.now()), 1000)
     return () => clearInterval(iv)
@@ -164,6 +165,8 @@ export interface BarProps {
   customModes?: CustomMode[]
   /** When listening, the right column shows a "Transcript" button calling this instead of "History". */
   onTranscript?: () => void
+  /** Whether the live transcript panel is currently shown, so the button label reads Hide vs Show. */
+  transcriptShown?: boolean
   /** Start a fresh meeting from the bar (ends + saves the current one, then begins a new session). */
   onNewMeeting?: () => void
   /** When true, calling prewarmCapture() on input focus is permitted (pass visionReady && screenAsk). */
@@ -193,6 +196,7 @@ function IconTool({
   ariaHasPopup,
   ariaExpanded,
   edgeRight,
+  edgeLeft,
   children
 }: {
   title: string
@@ -209,6 +213,10 @@ function IconTool({
   // Set on tools that sit close to the widget's right edge, so the tooltip anchors from its right side
   // instead of centering off the trigger (which would otherwise get clipped by the widget's overflow:hidden).
   edgeRight?: boolean
+  // Set on tools that sit close to the widget's left edge (e.g. Mode, whose label is user-authored and
+  // can run long), so the tooltip anchors from its left side and grows rightward instead of centering
+  // off the trigger and getting clipped by the widget's overflow:hidden on the opposite side.
+  edgeLeft?: boolean
   children: ReactNode
 }): JSX.Element {
   return (
@@ -236,7 +244,7 @@ function IconTool({
       <span
         className={[
           'pointer-events-none absolute -top-1.5 z-20 -translate-y-full whitespace-nowrap rounded-lg bg-black/90 px-2.5 py-1 text-[11px] font-medium text-white opacity-0 shadow-lg transition-opacity duration-150 group-hover:opacity-100 peer-focus-visible:opacity-100',
-          edgeRight ? 'right-0' : 'left-1/2 -translate-x-1/2'
+          edgeRight ? 'right-0' : edgeLeft ? 'left-0' : 'left-1/2 -translate-x-1/2'
         ].join(' ')}
       >
         {title}
@@ -265,6 +273,7 @@ export const Bar = memo(function Bar(props: BarProps): JSX.Element {
       if (modeRef.current?.contains(t)) return
       if (modePopoverRef.current?.contains(t)) return
       setModeOpen(false)
+      modeRef.current?.querySelector('button')?.focus()
     }
     const onKeyDown = (e: KeyboardEvent): void => {
       if (e.key === 'Escape') {
@@ -412,8 +421,8 @@ export const Bar = memo(function Bar(props: BarProps): JSX.Element {
           {props.busy ? (
             <button
               type="button"
-              title="Stop"
-              aria-label="Stop"
+              title={props.listening ? 'Stop & end meeting' : 'Stop'}
+              aria-label={props.listening ? 'Stop and end meeting' : 'Stop'}
               // While a meeting is live this is the big, obvious control in the bar — it must end the
               // meeting (same path as the toolbar's rec-dot / Square Stop), not just cancel whatever
               // answer happens to be streaming. Cancelling-only here silently ate the click: the stream
@@ -501,6 +510,7 @@ export const Bar = memo(function Bar(props: BarProps): JSX.Element {
                 active={modeOpen}
                 ariaHasPopup
                 ariaExpanded={modeOpen}
+                edgeLeft
               >
                 <LayoutGrid size={19} strokeWidth={ICON_STROKE} />
               </IconTool>
@@ -534,10 +544,10 @@ export const Bar = memo(function Bar(props: BarProps): JSX.Element {
               {props.listening ? (
                 <span
                   className={[
-                    'h-[12px] w-[12px] rounded-full',
+                    'h-[12px] w-[12px] rounded-full rec-dot',
                     props.paused
-                      ? 'bg-[color:var(--color-ink-3)]'
-                      : 'rec-dot bg-[var(--color-danger)] shadow-[0_0_8px_var(--color-danger)]'
+                      ? 'bg-[color:var(--color-ink-3)] [animation-play-state:paused]'
+                      : 'bg-[var(--color-danger)] shadow-[0_0_8px_var(--color-danger)]'
                   ].join(' ')}
                 />
               ) : (
@@ -597,7 +607,7 @@ export const Bar = memo(function Bar(props: BarProps): JSX.Element {
                 </button>
                 <button
                   type="button"
-                  title="Show the live transcript"
+                  title={props.transcriptShown ? 'Hide the live transcript' : 'Show the live transcript'}
                   onClick={props.onTranscript}
                   className="no-drag focus-ring mr-0.5 flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full bg-white/[0.05] px-2.5 py-1.5 text-[13px] font-semibold leading-none text-[color:var(--color-ink-2)] transition-colors duration-[var(--duration-hover)] hover:bg-white/[0.1] hover:text-[color:var(--color-ink)]"
                 >
@@ -653,6 +663,7 @@ export const Bar = memo(function Bar(props: BarProps): JSX.Element {
             onChange={(m) => {
               props.onSetMode(m)
               setModeOpen(false)
+              modeRef.current?.querySelector('button')?.focus()
             }}
             customModes={props.customModes}
             size="sm"

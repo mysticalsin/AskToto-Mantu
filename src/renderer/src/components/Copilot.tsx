@@ -1,5 +1,5 @@
 import { memo, useEffect, useMemo, useRef, useState } from 'react'
-import { Eye, EyeOff, Mic, Copy, Check, AlertTriangle } from 'lucide-react'
+import { Eye, EyeOff, AudioLines, Copy, Check, AlertTriangle } from 'lucide-react'
 import type { TranscriptLine } from '@shared/ipc'
 import type { AnswerState } from '../state'
 import { Markdown } from './Markdown'
@@ -77,11 +77,14 @@ export const Copilot = memo(function Copilot({
   // TRANSCRIPT_RENDER_LIMIT lines; the full transcript is still saved and viewable in the Review screen.
   const truncated = lines.length > TRANSCRIPT_RENDER_LIMIT
   const transcriptRows = useMemo(() => {
-    const visible = lines.length > TRANSCRIPT_RENDER_LIMIT ? lines.slice(-TRANSCRIPT_RENDER_LIMIT) : lines
-    // Each row is a memoized TranscriptRow keyed by its stable `t` timestamp (see the comment above) — React
-    // skips re-rendering every row whose `line` prop reference is unchanged, so appending one new line only
-    // does real work for that one new row instead of the whole visible slice.
-    return visible.map((l, i) => <TranscriptRow key={`${l.t}-${i}`} line={l} />)
+    const start = Math.max(0, lines.length - TRANSCRIPT_RENDER_LIMIT)
+    const visible = lines.slice(start)
+    // Each row is a memoized TranscriptRow keyed by its stable `t` timestamp plus its ABSOLUTE position in
+    // `lines` (see the comment above) — keying by the slice-relative index instead would reshuffle every
+    // row's key as the render-limit window slides forward, defeating TranscriptRow's memoization and
+    // remounting the whole visible slice on every new line. `start + i` never changes for an
+    // already-committed line, so React skips re-rendering every row whose `line` prop is unchanged.
+    return visible.map((l, i) => <TranscriptRow key={`${l.t}-${start + i}`} line={l} />)
   }, [lines])
 
   useEffect(() => {
@@ -188,7 +191,7 @@ export const Copilot = memo(function Copilot({
             ) : (
               <>
                 Press the{' '}
-                <Mic size={12} className="inline-block align-middle" />{' '}
+                <AudioLines size={12} className="inline-block align-middle" />{' '}
                 in the toolbar to start listening to your call.
               </>
             )}

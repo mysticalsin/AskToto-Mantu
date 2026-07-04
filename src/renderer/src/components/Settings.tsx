@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useRef, useState, type ComponentType, type ReactNode, type RefObject } from 'react'
+import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type ComponentType, type ReactNode, type RefObject } from 'react'
 import {
   Check,
   ExternalLink,
@@ -383,7 +383,9 @@ function detectHint(value: string, current: ProviderId): { kind: 'ok' | 'tip'; t
   if (!v) return null
   const id = detectProvider(v)
   if (id) {
-    if (id === current) return { kind: 'ok', text: `Detected ${PROVIDERS[id].label}.` }
+    // Only promise an auto-switch when one will actually happen: onKeyChange won't switch to a
+    // CLI_PROVIDERS member (e.g. gemini has no selectable UI), so don't claim it did.
+    if (id === current || CLI_PROVIDERS.has(id)) return { kind: 'ok', text: `Detected ${PROVIDERS[id].label}.` }
     return { kind: 'ok', text: `Detected ${PROVIDERS[id].label}. Selected automatically.` }
   }
   if (/^sk-/.test(v)) {
@@ -440,7 +442,7 @@ function AiSection({
     setTest({ status: 'idle' })
     if (locked) return
     const id = detectProvider(value)
-    if (id && id !== provider) {
+    if (id && id !== provider && !CLI_PROVIDERS.has(id)) {
       skipClearRef.current = true // keep the key we just captured across the provider switch
       patch({ provider: id })
     }
@@ -749,6 +751,8 @@ function AiSection({
           <span className="flex shrink-0 items-center gap-1 rounded-full bg-[var(--cl-primary-soft)] px-2 py-0.5 text-[11px] font-medium text-[color:var(--cl-primary)]">
             <CircleCheck size={12} /> Active
           </span>
+        ) : locked ? (
+          <span className={managedChipCls}>Managed by your organization</span>
         ) : (
           <button
             type="button"
@@ -892,7 +896,7 @@ function StepBadge({ n, done }: { n: number; done?: boolean }): JSX.Element {
 // ---------------------------------------------------------------------------
 
 type CliCardState = {
-  phase: 'idle' | 'confirming' | 'installing' | 'setup-opened' | 'connecting' | 'done' | 'error'
+  phase: 'idle' | 'confirming' | 'installing' | 'setup-opened' | 'connecting' | 'done' | 'error' | 'install-error'
   msg: string | null
   version: string | null
 }
@@ -908,6 +912,7 @@ function CliIntegration({
 }): JSX.Element {
   const provider = settings.provider
   const cliConnected = settings.cliConnected ?? {}
+  const locked = settings.managedKeys.includes('provider')
 
   // Guards every setState below against firing after this component unmounts (e.g. the user closes
   // Settings while runInstall's cliInstall/cliTest awaits are still in flight — those IPC calls keep
@@ -969,7 +974,7 @@ function CliIntegration({
     }
 
     if (!installResult.ok) {
-      setState(id, { phase: 'error', msg: installResult.error || 'Installation failed.', version: null })
+      setState(id, { phase: 'install-error', msg: installResult.error || 'Installation failed.', version: null })
       return
     }
 
@@ -978,7 +983,7 @@ function CliIntegration({
     const testResult = await window.toto.cliTest(id)
 
     if (testResult.ok) {
-      patch({ provider: id, cliConnected: { ...cliConnected, [id]: true } })
+      patch({ provider: id })
       setState(id, { phase: 'done', msg: null, version: testResult.version ?? null })
       return
     }
@@ -997,7 +1002,7 @@ function CliIntegration({
     setState(id, { phase: 'connecting', msg: 'Connecting…', version: null })
     const r = await window.toto.cliTest(id)
     if (r.ok) {
-      patch({ provider: id, cliConnected: { ...cliConnected, [id]: true } })
+      patch({ provider: id })
       setState(id, { phase: 'done', msg: null, version: r.version ?? null })
     } else {
       setState(id, {
@@ -1058,10 +1063,12 @@ function CliIntegration({
             <span className="text-[12px] font-medium text-[color:var(--cl-foreground)]">{def.label}</span>
             <span className="text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">{desc}</span>
           </div>
-          {isActive && (
+          {isActive ? (
             <span className={activePill}>
               <CircleCheck size={12} /> Active
             </span>
+          ) : (
+            locked && <span className={managedChipCls}>Managed by your organization</span>
           )}
         </div>
 
@@ -1094,7 +1101,7 @@ function CliIntegration({
         )}
 
         {/* Error */}
-        {st.phase === 'error' && st.msg && (
+        {(st.phase === 'error' || st.phase === 'install-error') && st.msg && (
           <div className="flex items-start gap-1.5 text-[11px] text-[color:var(--cl-destructive)]">
             <AlertCircle size={13} className="mt-px shrink-0" />
             <span>{st.msg}</span>
@@ -1123,13 +1130,20 @@ function CliIntegration({
             <button
               type="button"
               onClick={() => startSetup(id)}
+              disabled={locked}
               className={primaryBtn}
             >
               <Link2 size={12} />
               {isConnected ? 'Reconnect' : 'Set up'}
             </button>
             {isConnected && (
-              <button type="button" onClick={() => disconnectCli(id)} className={secondaryBtn} title={`Disconnect ${def.label}`}>
+              <button
+                type="button"
+                onClick={() => disconnectCli(id)}
+                disabled={locked && isActive}
+                className={secondaryBtn}
+                title={`Disconnect ${def.label}`}
+              >
                 <X size={12} />
                 Disconnect
               </button>
@@ -1143,10 +1157,29 @@ function CliIntegration({
             <button
               type="button"
               onClick={() => void connect(id)}
+              disabled={locked}
               className={primaryBtn}
             >
               <Link2 size={12} />
               Connect
+            </button>
+            <button type="button" onClick={() => cancel(id)} className={secondaryBtn}>
+              Cancel
+            </button>
+          </div>
+        )}
+
+        {/* Retry button — visible when the install itself failed (never got as far as a connect test) */}
+        {st.phase === 'install-error' && (
+          <div className="flex gap-2">
+            <button
+              type="button"
+              onClick={() => void runInstall(id)}
+              disabled={locked}
+              className={primaryBtn}
+            >
+              <Link2 size={12} />
+              Retry install
             </button>
             <button type="button" onClick={() => cancel(id)} className={secondaryBtn}>
               Cancel
@@ -1160,14 +1193,16 @@ function CliIntegration({
             <button
               type="button"
               onClick={() => startSetup(id)}
-              className="no-drag cl-focus text-[11px] text-[color:var(--cl-muted-foreground)] hover:text-[color:var(--cl-foreground)]"
+              disabled={locked}
+              className="no-drag cl-focus text-[11px] text-[color:var(--cl-muted-foreground)] hover:text-[color:var(--cl-foreground)] disabled:opacity-50"
             >
               Reconnect
             </button>
             <button
               type="button"
               onClick={() => disconnectCli(id)}
-              className="no-drag cl-focus text-[11px] text-[color:var(--cl-muted-foreground)] hover:text-[color:var(--cl-destructive)]"
+              disabled={locked && isActive}
+              className="no-drag cl-focus text-[11px] text-[color:var(--cl-muted-foreground)] hover:text-[color:var(--cl-destructive)] disabled:opacity-50"
             >
               Disconnect
             </button>
@@ -1524,6 +1559,7 @@ function DustSetup({
   // The CLI connect flow (dustImportCli/dustSetupCli) is darwin-only in main; on Windows it always
   // fails, so skip straight to the manual key steps instead of showing a dead-end button.
   const isWin = window.navigator.platform.toLowerCase().includes('win')
+  const locked = settings.managedKeys.includes('provider')
   // Base + Spotlight Ref are hard-locked (DUST_BASE_AGENT_ID / DUST_SPOTLIGHT_REF_AGENT_ID in ipc.ts) —
   // read-only display below, no picker, no setter. The base agent (AskToto) also drafts meeting
   // follow-ups directly — there is no separate follow-up agent.
@@ -1572,7 +1608,8 @@ function DustSetup({
   }
   // Fully disconnect Dust: clear the saved token/key, drop the workspace + region + the (user-editable)
   // thinking agent, switch off Dust if it's active, and reset the local CLI/agents UI so the card returns
-  // to its "connect" state. Used by both the CLI card's Disconnect and the manual key's Remove.
+  // to its "connect" state. Used by the CLI card's Disconnect button only — the manual key's Remove uses
+  // the narrower removeDustKey below, which doesn't touch workspace/region/thinking agent.
   const disconnectDust = async (): Promise<void> => {
     await clearKey('dust')
     const nextThinking = { ...settings.providerModelsThinking }
@@ -1591,6 +1628,13 @@ function DustSetup({
     setAgents(null)
     setErr(null)
     setCli({ busy: false, msg: null, ok: false })
+  }
+  // Remove just the saved Dust API key (Step 3's "Remove") — mirrors AiSection.onRemove. Leaves the
+  // workspace, region, and thinking-agent choice untouched, unlike the full disconnectDust reset above.
+  const removeDustKey = async (): Promise<void> => {
+    await clearKey('dust')
+    if (settings.provider === 'dust')
+      await patch({ provider: pickReadyProvider('dust', settings.hasKeys, settings.cliConnected ?? {}) })
   }
   const useDust = (): void => void patch({ provider: 'dust' })
 
@@ -1656,10 +1700,11 @@ function DustSetup({
                   // Already linked → offer Reconnect (re-imports a fresh token, fixing an expired session)
                   // and Disconnect (full reset back to the connect state).
                   <div className="flex items-center gap-2">
+                    {locked && <span className={managedChipCls}>Managed by your organization</span>}
                     <button
                       type="button"
                       onClick={connectCli}
-                      disabled={cli.busy}
+                      disabled={cli.busy || locked}
                       title="Re-import a fresh session from the Dust CLI"
                       className="no-drag cl-focus flex items-center gap-1.5 rounded-[8px] bg-[var(--cl-primary)] px-3 py-1.5 text-[12px] font-medium text-white hover:opacity-90 disabled:opacity-50"
                     >
@@ -1669,7 +1714,7 @@ function DustSetup({
                     <button
                       type="button"
                       onClick={disconnectDust}
-                      disabled={cli.busy}
+                      disabled={cli.busy || (locked && active)}
                       title="Disconnect Dust from AskToto"
                       className="no-drag cl-focus flex items-center gap-1.5 rounded-[8px] border border-[var(--cl-destructive)]/30 bg-[var(--cl-destructive)]/10 px-3 py-1.5 text-[12px] font-medium text-[color:var(--cl-destructive)] hover:bg-[var(--cl-destructive)]/20 disabled:opacity-50"
                     >
@@ -1678,15 +1723,18 @@ function DustSetup({
                     </button>
                   </div>
                 ) : (
-                  <button
-                    type="button"
-                    onClick={connectCli}
-                    disabled={cli.busy}
-                    className="no-drag cl-focus flex items-center gap-1.5 rounded-[8px] bg-[var(--cl-primary)] px-3 py-1.5 text-[12px] font-medium text-white hover:opacity-90 disabled:opacity-50"
-                  >
-                    {cli.busy ? <Loader2 size={13} className="animate-spin" /> : <Link2 size={13} />}
-                    Connect from Dust CLI
-                  </button>
+                  <div className="flex items-center gap-2">
+                    {locked && <span className={managedChipCls}>Managed by your organization</span>}
+                    <button
+                      type="button"
+                      onClick={connectCli}
+                      disabled={cli.busy || locked}
+                      className="no-drag cl-focus flex items-center gap-1.5 rounded-[8px] bg-[var(--cl-primary)] px-3 py-1.5 text-[12px] font-medium text-white hover:opacity-90 disabled:opacity-50"
+                    >
+                      {cli.busy ? <Loader2 size={13} className="animate-spin" /> : <Link2 size={13} />}
+                      Connect from Dust CLI
+                    </button>
+                  </div>
                 )}
               </div>
               <span className="text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
@@ -1775,8 +1823,9 @@ function DustSetup({
               </span>
               <button
                 type="button"
-                onClick={disconnectDust}
-                className="no-drag cl-focus rounded-[8px] border border-[var(--cl-destructive)]/30 bg-[var(--cl-destructive)]/10 px-2.5 py-1 text-[11px] text-[color:var(--cl-destructive)] hover:bg-[var(--cl-destructive)]/20"
+                onClick={removeDustKey}
+                disabled={locked && active}
+                className="no-drag cl-focus rounded-[8px] border border-[var(--cl-destructive)]/30 bg-[var(--cl-destructive)]/10 px-2.5 py-1 text-[11px] text-[color:var(--cl-destructive)] hover:bg-[var(--cl-destructive)]/20 disabled:opacity-50"
               >
                 Remove
               </button>
@@ -1794,11 +1843,12 @@ function DustSetup({
               <button
                 type="button"
                 onClick={saveDustKey}
-                disabled={keySaving || !dustKey.trim()}
+                disabled={keySaving || !dustKey.trim() || locked}
                 className="no-drag cl-focus flex items-center gap-1 rounded-[10px] bg-[var(--cl-primary)] px-3 py-2.5 text-[13px] font-medium text-white hover:opacity-90 disabled:opacity-50"
               >
                 {keySaving ? <Loader2 size={14} className="animate-spin" /> : null} Save
               </button>
+              {locked && <span className={managedChipCls}>Managed by your organization</span>}
             </div>
           )}
           <span className="pl-7 text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
@@ -1898,6 +1948,8 @@ function DustSetup({
             <span className="flex shrink-0 items-center gap-1 rounded-full bg-[var(--cl-primary-soft)] px-2 py-0.5 text-[11px] font-medium text-[color:var(--cl-primary)]">
               <CircleCheck size={12} /> Active
             </span>
+          ) : locked ? (
+            <span className={managedChipCls}>Managed by your organization</span>
           ) : (
             connected && (
               <button
@@ -2281,6 +2333,10 @@ function PersonalizeModes({
   const [newLabel, setNewLabel] = useState('')
   const locked = settings.managedKeys.includes('mode')
   const overflowRef = useRef<HTMLDivElement>(null)
+  // Two-step inline confirm for the overflow menu's destructive actions (mirrors the CLI-install
+  // "confirming" phase idiom elsewhere in this file) — first click asks, second click actually deletes.
+  const [confirmClear, setConfirmClear] = useState(false)
+  const [confirmDelete, setConfirmDelete] = useState(false)
 
   // Dismiss the "Mode options" overflow menu on an outside click or Escape (mirrors Bar.tsx's
   // ModePicker outside-click pattern).
@@ -2312,6 +2368,13 @@ function PersonalizeModes({
   const safeSelected = allIds.includes(selected) ? selected : (MODE_GROUPS[0]?.modes[0] ?? 'general')
   const selectedLabel = modeLabel(safeSelected, customModes)
   const isBuiltinSelected = safeSelected in BUILTIN_MODE_LABELS
+
+  // Drop any pending "are you sure?" state when the menu closes or the viewed mode changes, so a stale
+  // confirm from a different mode can never be armed by a later click.
+  useEffect(() => {
+    setConfirmClear(false)
+    setConfirmDelete(false)
+  }, [overflowOpen, safeSelected])
 
   const createNewMode = (): void => {
     const label = newLabel.trim() || 'New Mode'
@@ -2506,14 +2569,33 @@ function PersonalizeModes({
                       <RotateCcw size={12} className="mr-2 inline" />
                       Reset prompt to default
                     </button>
-                    <button
-                      type="button"
-                      onClick={clearBuiltinDocs}
-                      className="no-drag w-full px-3 py-2 text-left text-[12px] text-[color:var(--cl-foreground)] hover:bg-white/[0.05] rounded-b-[10px]"
-                    >
-                      <Trash size={12} className="mr-2 inline" />
-                      Clear context files
-                    </button>
+                    {confirmClear ? (
+                      <div className="flex items-center gap-1 px-3 py-2 rounded-b-[10px]">
+                        <button
+                          type="button"
+                          onClick={clearBuiltinDocs}
+                          className="no-drag flex-1 text-left text-[12px] font-medium text-[color:var(--cl-destructive)] hover:underline"
+                        >
+                          Confirm clear?
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setConfirmClear(false)}
+                          className="no-drag text-[12px] text-[color:var(--cl-muted-foreground)] hover:text-[color:var(--cl-foreground)]"
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => setConfirmClear(true)}
+                        className="no-drag w-full px-3 py-2 text-left text-[12px] text-[color:var(--cl-foreground)] hover:bg-white/[0.05] rounded-b-[10px]"
+                      >
+                        <Trash size={12} className="mr-2 inline" />
+                        Clear context files
+                      </button>
+                    )}
                   </>
                 ) : (
                   <>
@@ -2524,14 +2606,33 @@ function PersonalizeModes({
                     >
                       Rename
                     </button>
-                    <button
-                      type="button"
-                      onClick={deleteCustomMode}
-                      className="no-drag w-full px-3 py-2 text-left text-[12px] text-[color:var(--cl-destructive)] hover:bg-white/[0.05] rounded-b-[10px]"
-                    >
-                      <Trash size={12} className="mr-2 inline" />
-                      Delete mode
-                    </button>
+                    {confirmDelete ? (
+                      <div className="flex items-center gap-1 px-3 py-2 rounded-b-[10px]">
+                        <button
+                          type="button"
+                          onClick={deleteCustomMode}
+                          className="no-drag flex-1 text-left text-[12px] font-medium text-[color:var(--cl-destructive)] hover:underline"
+                        >
+                          Confirm delete?
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setConfirmDelete(false)}
+                          className="no-drag text-[12px] text-[color:var(--cl-muted-foreground)] hover:text-[color:var(--cl-foreground)]"
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => setConfirmDelete(true)}
+                        className="no-drag w-full px-3 py-2 text-left text-[12px] text-[color:var(--cl-destructive)] hover:bg-white/[0.05] rounded-b-[10px]"
+                      >
+                        <Trash size={12} className="mr-2 inline" />
+                        Delete mode
+                      </button>
+                    )}
                   </>
                 )}
               </div>
@@ -2628,9 +2729,10 @@ export function Settings({
   const [tab, setTab] = useState<TabId>(initialTab ?? 'personalize')
   const managed = settings.managedKeys.length > 0
   // Switching tabs must land at the top of the new tab's content — the scroll container otherwise
-  // keeps whatever scroll position the previous tab was left at.
+  // keeps whatever scroll position the previous tab was left at. useLayoutEffect (not useEffect) so this
+  // runs before the browser paints the new tab, avoiding a one-frame flash at the old scroll offset.
   const contentRef = useRef<HTMLElement>(null)
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (contentRef.current) contentRef.current.scrollTop = 0
   }, [tab])
 
@@ -3227,9 +3329,13 @@ export function Settings({
   )
 }
 
+// Last metrics fetched this session — reusing this on remount lets a tab revisit show the previous
+// numbers instantly instead of flashing "Loading…" again, while the effect below still refreshes it.
+let lastMetrics: EvalMetrics | null = null
+
 /** Usage panel from the local audit log. Computed on-device; never sent anywhere. */
 function DiagnosticsSection(): JSX.Element {
-  const [m, setM] = useState<EvalMetrics | null>(null)
+  const [m, setM] = useState<EvalMetrics | null>(lastMetrics)
   // Distinguish a genuine load FAILURE from the still-loading state — previously a failed readMetrics()
   // set m back to null, leaving "Loading…" on screen forever with no way to recover.
   const [loadErr, setLoadErr] = useState(false)
@@ -3240,7 +3346,10 @@ function DiagnosticsSection(): JSX.Element {
     void window.toto
       .readMetrics()
       .then((v) => {
-        if (!cancelled) setM(v)
+        if (!cancelled) {
+          setM(v)
+          lastMetrics = v
+        }
       })
       .catch(() => {
         if (!cancelled) setLoadErr(true)
@@ -3345,6 +3454,10 @@ function DiagnosticsSection(): JSX.Element {
   )
 }
 
+// Last recent-meetings list fetched this session — reused on remount so revisiting this tab shows the
+// prior list instantly instead of flashing "Loading…" again, while the effect below still refreshes it.
+let lastMeetings: MeetingSummary[] | null = null
+
 /**
  * Mantu Intelligence tab — everything "what my meetings know" in one place: the Intelligence dashboard
  * (graphs), the knowledge-graph builder, and the recent meetings history with follow-up entry points.
@@ -3363,11 +3476,14 @@ function IntelligenceTab({
   onOpenHistory?: () => void
   onOpenMeeting?: (file: string) => void
 }): JSX.Element {
-  const [meetings, setMeetings] = useState<MeetingSummary[] | null>(null)
+  const [meetings, setMeetings] = useState<MeetingSummary[] | null>(lastMeetings)
   useEffect(() => {
     let alive = true
     void window.toto.recallList().then((list) => {
-      if (alive) setMeetings(list)
+      if (alive) {
+        setMeetings(list)
+        lastMeetings = list
+      }
     })
     return () => {
       alive = false
@@ -3526,16 +3642,21 @@ function NotebookLmCard({
     const r = await window.toto.notebookLmInstall((line) => setStatus(line))
     if (r.ok) void probeConnect()
     else {
-      setPhase('error')
+      // Route back to 'not-installed' (not the generic 'error' phase) so the "Set up NotebookLM" button
+      // reappears — 'error' phase's Retry is bound to probeConnect, which would just fail again since
+      // the CLI was never installed, trapping the user in a retry loop.
       setStatus(r.error || 'Could not set up NotebookLM.')
+      setPhase('not-installed')
     }
   }
 
   const signIn = async (): Promise<void> => {
     const r = await window.toto.notebookLmLogin()
     if (!r.ok) {
-      setPhase('error')
+      // Same reasoning as install() above — stay on 'sign-in-needed' so "Sign in with Google" stays
+      // reachable, instead of the generic 'error' phase's probeConnect-only Retry.
       setStatus(r.error || 'Could not open sign-in.')
+      setPhase('sign-in-needed')
     }
     // On success the user finishes in the Terminal/browser, then clicks Connect below.
   }
@@ -3568,7 +3689,9 @@ function NotebookLmCard({
         {phase === 'installing' && (
           <span className="min-w-0 flex-1 truncate text-[color:var(--cl-muted-foreground)]">{status || 'Setting up…'}</span>
         )}
-        {phase === 'not-installed' && <span className="text-[color:var(--cl-muted-foreground)]">Not set up yet.</span>}
+        {phase === 'not-installed' && (
+          <span className="text-[color:var(--cl-muted-foreground)]">{status || 'Not set up yet.'}</span>
+        )}
         {phase === 'sign-in-needed' && (
           <span className="text-[color:var(--cl-muted-foreground)]">Sign in with your Google account to connect.</span>
         )}
@@ -3660,13 +3783,22 @@ function GraphSection({
 }): JSX.Element {
   const [status, setStatus] = useState<GraphStatus | null>(null)
   const [busy, setBusy] = useState(false)
+  const [rebuildErr, setRebuildErr] = useState<string | null>(null)
   const refresh = (): void => void window.toto.graphifyStatus().then(setStatus)
   useEffect(refresh, [settings.graphifyEnabled])
 
   const rebuild = async (): Promise<void> => {
     setBusy(true)
-    setStatus(await window.toto.graphifyRebuild())
-    setBusy(false)
+    setRebuildErr(null)
+    try {
+      setStatus(await window.toto.graphifyRebuild())
+    } catch (e) {
+      // e.g. the SSO session expired between opening Settings and clicking Rebuild — without this catch,
+      // the rejection propagates past setBusy(false) and the button stays disabled/spinning forever.
+      setRebuildErr(e instanceof Error ? e.message : 'Could not rebuild the graph.')
+    } finally {
+      setBusy(false)
+    }
   }
 
   return (
@@ -3747,6 +3879,11 @@ function GraphSection({
               </button>
             )}
           </div>
+          {rebuildErr && (
+            <div className="flex items-center gap-1.5 text-[11px] text-[color:var(--color-danger)]">
+              <AlertCircle size={12} /> {rebuildErr}
+            </div>
+          )}
         </div>
       )}
     </Section>
@@ -3915,12 +4052,18 @@ function DangerZoneSection({
             ? 'Cancelled. Nothing was deleted.'
             : result.ok
               ? `Deleted ${result.deleted} meeting${result.deleted === 1 ? '' : 's'}.`
-              : `Deleted ${result.deleted}, but some files could not be removed.`}
+              : result.error
+                ? result.error
+                : `Deleted ${result.deleted}, but some files could not be removed.`}
         </div>
       )}
     </Section>
   )
 }
+
+// Last auth status fetched this session — reused on remount so revisiting the About tab shows the
+// prior sign-in state instantly instead of flashing "Checking…" again.
+let lastAuthStatus: AuthStatus | null = null
 
 function AccountRow({
   settings,
@@ -3931,7 +4074,7 @@ function AccountRow({
   // Settings prop contract. `await patch(...)` still waits for the write before we re-read auth status.
   patch: (p: Partial<PublicSettings>) => void
 }): JSX.Element {
-  const [status, setStatus] = useState<AuthStatus | null>(null)
+  const [status, setStatus] = useState<AuthStatus | null>(lastAuthStatus)
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState<string | null>(null)
   const [showSetup, setShowSetup] = useState(false)
@@ -3939,19 +4082,35 @@ function AccountRow({
   const [clientId, setClientId] = useState(settings.azureClientId || '')
   const [tenantId, setTenantId] = useState(settings.azureTenantId || '')
   const [domain, setDomain] = useState(settings.azureAllowedDomain || '')
-  const refresh = (): void => void window.toto.authStatus().then(setStatus)
+  // Guards state writes after unmount — signIn awaits an unbounded OS-level OAuth flow, and the user can
+  // switch to another Settings tab (unmounting this row) before it resolves.
+  const mountedRef = useRef(true)
+  useEffect(() => {
+    return () => {
+      mountedRef.current = false
+    }
+  }, [])
+  const refresh = (): void => {
+    void window.toto.authStatus().then((v) => {
+      if (!mountedRef.current) return
+      setStatus(v)
+      lastAuthStatus = v
+    })
+  }
   useEffect(refresh, [])
 
   const signIn = async (): Promise<void> => {
     setBusy(true)
     setErr(null)
     const r = await window.toto.signIn()
+    if (!mountedRef.current) return
     setBusy(false)
     if (!r.ok) setErr(r.error || 'Sign-in failed.')
     refresh()
   }
   const signOut = async (): Promise<void> => {
     await window.toto.signOut()
+    if (!mountedRef.current) return
     refresh()
   }
 
@@ -4115,6 +4274,10 @@ function AccountRow({
 // Calendar tab
 // ---------------------------------------------------------------------------
 
+// Last Outlook auth status fetched this session — reused on remount so revisiting the Calendar tab
+// shows the prior connection state instantly instead of flashing a loading spinner again.
+let lastOutlookAuthStatus: AuthStatus | null = null
+
 /**
  * Calendar tab: Microsoft / Outlook (Entra SSO) calendar connection plus the meeting notification toggle.
  */
@@ -4125,7 +4288,7 @@ function CalendarTab({
   settings: PublicSettings
   patch: (p: Partial<PublicSettings>) => void
 }): JSX.Element {
-  const [authStatus, setAuthStatus] = useState<AuthStatus | null>(null)
+  const [authStatus, setAuthStatus] = useState<AuthStatus | null>(lastOutlookAuthStatus)
   const [outlookBusy, setOutlookBusy] = useState(false)
   const [outlookErr, setOutlookErr] = useState<string | null>(null)
   const [showOutlookSetup, setShowOutlookSetup] = useState(false)
@@ -4133,9 +4296,25 @@ function CalendarTab({
   const [clientId, setClientId] = useState(settings.azureClientId || '')
   const [tenantId, setTenantId] = useState(settings.azureTenantId || '')
   const [domain, setDomain] = useState(settings.azureAllowedDomain || '')
+  // Guards state writes after unmount — signInOutlook awaits an unbounded OS-level OAuth flow, and the
+  // user can switch to another Settings tab (unmounting this tab) before it resolves.
+  const mountedRef = useRef(true)
+  useEffect(() => {
+    return () => {
+      mountedRef.current = false
+    }
+  }, [])
 
   const refreshOutlook = (): void => {
-    void window.toto.authStatus().then(setAuthStatus).catch(() => setAuthStatus(null))
+    void window.toto.authStatus()
+      .then((v) => {
+        if (!mountedRef.current) return
+        setAuthStatus(v)
+        lastOutlookAuthStatus = v
+      })
+      .catch(() => {
+        if (mountedRef.current) setAuthStatus(null)
+      })
   }
   useEffect(refreshOutlook, [])
 
@@ -4156,6 +4335,7 @@ function CalendarTab({
     setOutlookBusy(true)
     setOutlookErr(null)
     const r = await window.toto.signIn()
+    if (!mountedRef.current) return
     setOutlookBusy(false)
     if (!r.ok) setOutlookErr(r.error || 'Sign-in failed.')
     refreshOutlook()
@@ -4163,6 +4343,7 @@ function CalendarTab({
 
   const signOutOutlook = async (): Promise<void> => {
     await window.toto.signOut()
+    if (!mountedRef.current) return
     refreshOutlook()
   }
 
@@ -4225,7 +4406,7 @@ function CalendarTab({
                 onClick={() => void signOutOutlook()}
                 className="no-drag cl-focus rounded-[8px] border border-[var(--cl-input)] px-2.5 py-1.5 text-[12px] text-[color:var(--cl-foreground)] hover:bg-white/[0.06]"
               >
-                Disconnect
+                Sign out
               </button>
             </div>
           )}
@@ -4510,6 +4691,14 @@ function KeyRecorder({
   }, [recording])
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLInputElement>): void => {
+    if (e.key === 'Escape') {
+      // Cancel recording without trapping the keystroke — don't stopPropagation, so it still bubbles to
+      // any other listener (e.g. an overlay's own Escape handler) that might also care.
+      e.preventDefault()
+      setRecording(false)
+      setPreview(null)
+      return
+    }
     e.preventDefault()
     e.stopPropagation()
     const acc = keyEventToAccelerator(e)
