@@ -9,6 +9,7 @@ import {
   ChevronLeft,
   Calendar,
   Trash2,
+  Pencil,
   Brain
 } from 'lucide-react'
 import { TextButton } from './ui'
@@ -359,21 +360,39 @@ const MeetingRow = memo(function MeetingRow({
   isSelected,
   isActive,
   isDeleting,
+  isEditing,
+  editingValue,
+  isRenaming,
   isOpen,
   onSelect,
   onOpen,
   onToggleConnections,
-  onTrash
+  onTrash,
+  onStartEdit,
+  onEditingChange,
+  onCommitEdit,
+  onCancelEdit
 }: {
   meeting: MeetingSummary | RecallHit
   isSelected: boolean
   isActive: boolean
   isDeleting: boolean
+  /** This row's inline rename input is open. */
+  isEditing: boolean
+  /** The rename input's current value — only meaningful while isEditing (constant '' otherwise, so
+   *  this memoized row never re-renders from keystrokes typed into a DIFFERENT row's rename input). */
+  editingValue: string
+  /** A rename request for this row is in flight — disables the pencil button (mirrors isDeleting). */
+  isRenaming: boolean
   isOpen: boolean
   onSelect: (file: string) => void
   onOpen: (file: string) => void
   onToggleConnections: (file: string) => void
   onTrash: (file: string, title: string) => void
+  onStartEdit: (file: string, title: string) => void
+  onEditingChange: (value: string) => void
+  onCommitEdit: () => void
+  onCancelEdit: () => void
 }): JSX.Element {
   const m = meeting
   const hit = 'snippet' in m ? (m as RecallHit) : null
@@ -382,64 +401,107 @@ const MeetingRow = memo(function MeetingRow({
     <div className={`rounded-lg transition-colors${isSelected ? ' bg-white/[0.08]' : ''}`}>
       {/* Row */}
       <div className="flex items-center gap-1">
-        <button
-          type="button"
-          onClick={() => onSelect(m.file)}
-          onDoubleClick={() => onOpen(m.file)}
-          className="no-drag focus-ring flex flex-1 items-center gap-2 rounded-lg px-2 py-1.5 text-left hover:bg-white/[0.06]"
-        >
-          <FileText size={12} className="shrink-0 text-[color:var(--color-ink-3)]" />
-          <span className="min-w-0 flex-1 truncate text-[12px] font-medium text-[color:var(--color-ink)]">
-            {m.title}
-          </span>
-
-          {/* Analyzing badge */}
-          {isActive && (
-            <span className="shrink-0 rounded-full bg-[var(--color-accent-soft)] px-2 py-0.5 text-[10px] text-[color:var(--color-accent)]">
-              Just saved
-            </span>
-          )}
-
-          {/* Duration badge + time. durationMin rounds to 0 both for a genuinely empty capture (no
-              speech at all, participants: []) and for an older saved meeting whose real duration
-              was under a minute. participants.length > 0 means at least one line was captured
-              (see saveMeeting's participants derivation), so it distinguishes the two: show "<1m"
-              for a real quick meeting, hide the badge only when there is truly no content. */}
-          <div className="ml-auto flex shrink-0 items-center gap-1.5">
-            {(m.durationMin > 0 || m.participants.length > 0) && (
-              <span className="rounded-full bg-white/[0.06] px-1.5 text-[10px] text-[color:var(--color-ink-3)]">
-                {m.durationMin > 0 ? formatDurationMin(m.durationMin) : '<1m'}
-              </span>
-            )}
-            <span className="tabular-nums text-[11px] text-[color:var(--color-ink-3)]">
-              {meetingTime(m.date)}
-            </span>
+        {isEditing ? (
+          <div className="flex flex-1 items-center gap-2 rounded-lg px-2 py-1.5">
+            <FileText size={12} className="shrink-0 text-[color:var(--color-ink-3)]" />
+            <input
+              autoFocus
+              value={editingValue}
+              onChange={(e) => onEditingChange(e.target.value)}
+              onKeyDown={(e) => {
+                // Keep Enter/Escape self-contained: without stopPropagation the keydown bubbles to App's
+                // global Escape handler, which would close the whole History panel instead of just the
+                // rename field.
+                if (e.key === 'Enter') {
+                  e.stopPropagation()
+                  onCommitEdit()
+                }
+                if (e.key === 'Escape') {
+                  e.stopPropagation()
+                  onCancelEdit()
+                }
+              }}
+              onBlur={onCommitEdit}
+              maxLength={120}
+              spellCheck={false}
+              aria-label="Meeting title"
+              className="no-drag focus-ring min-w-0 flex-1 rounded-md bg-white/[0.08] px-2 py-1 text-[12px] font-medium text-[color:var(--color-ink)] outline-none"
+            />
           </div>
-        </button>
+        ) : (
+          <>
+            <button
+              type="button"
+              onClick={() => onSelect(m.file)}
+              onDoubleClick={() => onOpen(m.file)}
+              className="no-drag focus-ring flex flex-1 items-center gap-2 rounded-lg px-2 py-1.5 text-left hover:bg-white/[0.06]"
+            >
+              <FileText size={12} className="shrink-0 text-[color:var(--color-ink-3)]" />
+              <span className="min-w-0 flex-1 truncate text-[12px] font-medium text-[color:var(--color-ink)]">
+                {m.title}
+              </span>
 
-        {/* Knowledge-graph expand — icon-only compact button */}
-        <button
-          type="button"
-          aria-label="Show connections"
-          aria-expanded={isOpen}
-          title="Connections"
-          onClick={() => onToggleConnections(m.file)}
-          className="no-drag focus-ring grid h-7 w-7 shrink-0 place-items-center rounded-full text-[color:var(--color-ink-3)] hover:bg-white/[0.06] hover:text-[color:var(--color-ink)]"
-        >
-          <Network size={12} />
-        </button>
+              {/* Analyzing badge */}
+              {isActive && (
+                <span className="shrink-0 rounded-full bg-[var(--color-accent-soft)] px-2 py-0.5 text-[10px] text-[color:var(--color-accent)]">
+                  Just saved
+                </span>
+              )}
 
-        {/* Delete — single click opens a native confirm dialog (main process); see onTrash. */}
-        <button
-          type="button"
-          aria-label="Delete meeting"
-          title="Delete"
-          disabled={isDeleting}
-          onClick={() => onTrash(m.file, m.title)}
-          className="no-drag focus-ring grid h-7 w-7 shrink-0 place-items-center rounded-full text-[color:var(--color-ink-3)] transition-colors hover:bg-[var(--color-danger)]/10 hover:text-[var(--color-danger)] disabled:opacity-40"
-        >
-          <Trash2 size={12} />
-        </button>
+              {/* Duration badge + time. durationMin rounds to 0 both for a genuinely empty capture (no
+                  speech at all, participants: []) and for an older saved meeting whose real duration
+                  was under a minute. participants.length > 0 means at least one line was captured
+                  (see saveMeeting's participants derivation), so it distinguishes the two: show "<1m"
+                  for a real quick meeting, hide the badge only when there is truly no content. */}
+              <div className="ml-auto flex shrink-0 items-center gap-1.5">
+                {(m.durationMin > 0 || m.participants.length > 0) && (
+                  <span className="rounded-full bg-white/[0.06] px-1.5 text-[10px] text-[color:var(--color-ink-3)]">
+                    {m.durationMin > 0 ? formatDurationMin(m.durationMin) : '<1m'}
+                  </span>
+                )}
+                <span className="tabular-nums text-[11px] text-[color:var(--color-ink-3)]">
+                  {meetingTime(m.date)}
+                </span>
+              </div>
+            </button>
+
+            {/* Rename — opens an inline title input; see onStartEdit. */}
+            <button
+              type="button"
+              aria-label="Rename meeting"
+              title="Rename"
+              disabled={isRenaming}
+              onClick={() => onStartEdit(m.file, m.title)}
+              className="no-drag focus-ring grid h-7 w-7 shrink-0 place-items-center rounded-full text-[color:var(--color-ink-3)] hover:bg-white/[0.06] hover:text-[color:var(--color-ink)] disabled:opacity-40"
+            >
+              <Pencil size={12} />
+            </button>
+
+            {/* Knowledge-graph expand — icon-only compact button */}
+            <button
+              type="button"
+              aria-label="Show connections"
+              aria-expanded={isOpen}
+              title="Connections"
+              onClick={() => onToggleConnections(m.file)}
+              className="no-drag focus-ring grid h-7 w-7 shrink-0 place-items-center rounded-full text-[color:var(--color-ink-3)] hover:bg-white/[0.06] hover:text-[color:var(--color-ink)]"
+            >
+              <Network size={12} />
+            </button>
+
+            {/* Delete — single click opens a native confirm dialog (main process); see onTrash. */}
+            <button
+              type="button"
+              aria-label="Delete meeting"
+              title="Delete"
+              disabled={isDeleting}
+              onClick={() => onTrash(m.file, m.title)}
+              className="no-drag focus-ring grid h-7 w-7 shrink-0 place-items-center rounded-full text-[color:var(--color-ink-3)] transition-colors hover:bg-[var(--color-danger)]/10 hover:text-[var(--color-danger)] disabled:opacity-40"
+            >
+              <Trash2 size={12} />
+            </button>
+          </>
+        )}
       </div>
 
       {/* Search snippet (RecallHit only) */}
@@ -513,6 +575,12 @@ export function RecallView({
   const [selectedFile, setSelectedFile] = useState<string | null>(null)
   /** File mid-delete — disables its trash button so a slow confirm dialog can't be double-clicked. */
   const [deleting, setDeleting] = useState<string | null>(null)
+  /** File whose inline rename input is open (null = no row is being renamed). */
+  const [editingFile, setEditingFile] = useState<string | null>(null)
+  /** The open rename input's current value. */
+  const [editingValue, setEditingValue] = useState('')
+  /** File mid-rename-save — disables its pencil button while the IPC call is in flight. */
+  const [renaming, setRenaming] = useState<string | null>(null)
   /** Opt-in past the INITIAL_RENDER_CAP — set once the user clicks "Show all N meetings". */
   const [showAll, setShowAll] = useState(false)
   /** The scrollable meeting-list container — focused before a row unmounts (e.g. on delete) so a
@@ -543,6 +611,43 @@ export function RecallView({
     (file: string): void => setOpen((o) => (o === file ? null : file)),
     []
   )
+
+  // Rename: fix an auto-generated title after the fact. Opens an inline input pre-filled with the
+  // current title; Enter/blur commits, Escape cancels (mirrors Settings.tsx's mode-rename idiom).
+  // editingRef mirrors the editingFile/editingValue state so commitEdit/cancelEdit can read the latest
+  // values with a STABLE (empty-deps) callback identity — every MeetingRow receives the same function
+  // reference for these props, so a keystroke in one row's rename input only re-renders that row (the
+  // memoized rows compare props shallowly; a changing callback identity would defeat that for all of them).
+  const editingRef = useRef<{ file: string | null; value: string }>({ file: null, value: '' })
+  const startEdit = useCallback((file: string, title: string): void => {
+    editingRef.current = { file, value: title }
+    setEditingFile(file)
+    setEditingValue(title)
+  }, [])
+  const changeEditValue = useCallback((value: string): void => {
+    editingRef.current.value = value
+    setEditingValue(value)
+  }, [])
+  const cancelEdit = useCallback((): void => {
+    editingRef.current = { file: null, value: '' }
+    setEditingFile(null)
+  }, [])
+  const commitEdit = useCallback((): void => {
+    const { file, value } = editingRef.current
+    editingRef.current = { file: null, value: '' }
+    setEditingFile(null)
+    if (!file) return
+    const title = value.trim()
+    if (!title) return // empty after trim — nothing to save, just close the input
+    setRenaming(file)
+    window.toto
+      .recallRename(file, title)
+      .then((r) => {
+        if (r.ok) setItems((xs) => xs.map((x) => (x.file === file ? { ...x, title } : x)))
+      })
+      .catch(() => {})
+      .finally(() => setRenaming(null))
+  }, [])
 
   // Single fetch owner: immediate on mount / empty query, debounced for typed searches.
   // A stale-guard drops out-of-order resolutions so a slow earlier response can't overwrite a newer one.
@@ -674,11 +779,18 @@ export function RecallView({
                     isSelected={selectedFile === m.file}
                     isActive={activeFile === m.file}
                     isDeleting={deleting === m.file}
+                    isEditing={editingFile === m.file}
+                    editingValue={editingFile === m.file ? editingValue : ''}
+                    isRenaming={renaming === m.file}
                     isOpen={open === m.file}
                     onSelect={selectFile}
                     onOpen={openMeeting}
                     onToggleConnections={toggleConnections}
                     onTrash={trashMeeting}
+                    onStartEdit={startEdit}
+                    onEditingChange={changeEditValue}
+                    onCommitEdit={commitEdit}
+                    onCancelEdit={cancelEdit}
                   />
                 ))}
               </div>

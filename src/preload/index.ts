@@ -132,6 +132,10 @@ const api = {
   // title is shown in the native confirm dialog the main process pops up before deleting; optional.
   recallDelete: (file: string, title?: string): Promise<{ ok: boolean; error?: string }> =>
     ipcRenderer.invoke(IPC.recallDelete, file, title),
+  // Fix an auto-generated title after the fact. Never renames the file on disk — only the in-file
+  // frontmatter `title:` + H1 heading (and the index.md row, in plaintext mode).
+  recallRename: (file: string, title: string): Promise<{ ok: boolean; error?: string }> =>
+    ipcRenderer.invoke(IPC.recallRename, { file, title }),
   // Delete every saved meeting + the knowledge graph. Main pops its own (extra-emphatic) confirm dialog.
   recallDeleteAll: (): Promise<{ ok: boolean; deleted: number; failed?: string[]; error?: string }> =>
     ipcRenderer.invoke(IPC.recallDeleteAll),

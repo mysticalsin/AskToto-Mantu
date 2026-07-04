@@ -32,6 +32,7 @@ import {
   McpCrmPushPayloadSchema,
   NotebookLmAskPayloadSchema,
   SetDealOutcomePayloadSchema,
+  RenameMeetingPayloadSchema,
   ProviderIdSchema,
   DEFAULT_SHORTCUTS,
   type HotkeyAction,
@@ -97,6 +98,7 @@ import {
   searchMeetings,
   recallRead,
   deleteMeeting,
+  renameMeeting,
   deleteAllMeetings,
   sweepExpiredMeetings
 } from './recall'
@@ -1157,6 +1159,21 @@ function registerIpc(): void {
     if (response !== 0) return { ok: false, error: 'cancelled' }
     const result = await deleteMeeting(safeName)
     if (result.ok) auditLog('transcript.deleted', { file: safeName })
+    return result
+  })
+
+  // Recall rename: fix an auto-generated (recap-derived) title after the fact. Updates the frontmatter
+  // `title:` value + the file's H1 in place — the file itself is never renamed, so index.md rows and
+  // knowledge-graph links (both keyed by filename) stay valid. No confirm dialog: unlike delete, this is
+  // trivially reversible (rename again). Not audit-logged: 'transcript.renamed' isn't in logger.ts's
+  // AuditEvent union, and logger.ts is outside this feature's owned files.
+  ipcMain.handle(IPC.recallRename, async (e, raw) => {
+    assertMainWindow(e)
+    if (!requireAuth()) return { ok: false, error: 'Sign in with your Mantu account first.' }
+    const parsed = RenameMeetingPayloadSchema.safeParse(raw)
+    if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message || 'Invalid rename request.' }
+    const result = await renameMeeting(getSettings(), parsed.data.file, parsed.data.title)
+    if (result.ok) auditLog('transcript.renamed', { file: basename(parsed.data.file) })
     return result
   })
 
