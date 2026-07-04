@@ -1,3 +1,8 @@
+// Static (eager) import — NOT `await import()`. The main process is bytecode-compiled (electron-vite
+// bytecodePlugin → index.jsc); dynamic import() throws "A dynamic import callback was not specified" under
+// bytecode, which broke Spotlight Ref / every Dust call in the built app. @dust-tt/client is CJS, so a
+// static import resolves to a require at build time and is bytecode-safe (same pattern as the Anthropic SDK).
+import { DustAPI } from '@dust-tt/client'
 import { authStatus } from '../auth'
 import { mainLog, auditLog } from '../logger'
 import { type StreamOptions, type StreamHandle, errMsg, idleWatchdog, userText } from './shared'
@@ -128,9 +133,11 @@ export function streamDust(opts: StreamOptions): StreamHandle {
     creds: { apiKey: string; workspaceId?: string; baseURL?: string },
     allowRetry: boolean
   ): Promise<void> => {
+    // `any` preserves the original (dynamic-import `as any`) behavior — the client's request/response
+    // types don't match this code's message shape, and reconciling the full Dust SDK surface is out of
+    // scope for the bytecode fix. Runtime behavior is unchanged; only the static import differs.
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const { DustAPI } = (await import('@dust-tt/client')) as any
-    const api = new DustAPI(
+    const api: any = new DustAPI(
       { url: creds.baseURL || 'https://dust.tt' },
       { workspaceId: creds.workspaceId || '', apiKey: creds.apiKey },
       dustLogger()

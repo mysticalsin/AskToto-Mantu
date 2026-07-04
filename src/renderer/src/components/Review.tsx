@@ -90,6 +90,7 @@ export const Review = memo(function Review({
   onDone,
   onResume,
   onGenerateFollowup,
+  onRetryRecap,
   bidstackConnected,
   bidstackTools,
   onOpenPastMeeting,
@@ -111,6 +112,9 @@ export const Review = memo(function Review({
   onDone?: () => void
   onResume?: () => void
   onGenerateFollowup?: () => void
+  /** Replay the recap generation after a failure (transient Dust/rate-limit blip) — without this the
+   *  only recovery was "New meeting", which discards the whole saved session. */
+  onRetryRecap?: () => void
   /** Whether BidStack CRM is connected (Settings → CLI Integration). Gates "Push to CRM". */
   bidstackConnected?: boolean
   /** Tool names discovered from BidStack's MCP server at last connect — populates the tool picker. */
@@ -152,8 +156,10 @@ export const Review = memo(function Review({
   }, [lines.length])
 
   useEffect(() => {
+    // Keyed on savedPath (not just mount): the meeting's own async save lands AFTER this screen mounts,
+    // so a mount-only fetch never includes the meeting you just finished. Re-fetch when the save resolves.
     window.toto.recallList().then((list) => setRecentMeetings(list.slice(0, 20))).catch(() => {})
-  }, [])
+  }, [savedPath])
 
   // Drop non-speech captions ("[BELL RINGS]", "(applause)"…) from the displayed/copied transcript. New
   // meetings never carry them (filtered at capture), but meetings saved by older builds still might.
@@ -431,7 +437,16 @@ export const Review = memo(function Review({
         </div>
         {exportError && <div className="mb-1.5 text-[11px] text-[var(--color-danger)]">{exportError}</div>}
         {recap?.error ? (
-          <div className="text-[13px] text-[var(--color-danger)]">{recap.error}</div>
+          <div className="flex flex-col gap-2">
+            <div className="text-[13px] text-[var(--color-danger)]">{recap.error}</div>
+            {/* Scoped retry — replays just the recap request. Previously the only recovery was
+                "New meeting", which throws away the whole saved transcript. */}
+            {onRetryRecap && (
+              <div className="flex items-center gap-1.5">
+                <TextButton icon={RotateCcw} onClick={onRetryRecap}>Retry summary</TextButton>
+              </div>
+            )}
+          </div>
         ) : recap?.text ? (
           <Markdown>{recap.text}</Markdown>
         ) : !recap && lines.length === 0 ? (

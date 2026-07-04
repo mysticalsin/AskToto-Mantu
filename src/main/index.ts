@@ -32,6 +32,7 @@ import {
   McpCrmPushPayloadSchema,
   NotebookLmAskPayloadSchema,
   SetDealOutcomePayloadSchema,
+  ProviderIdSchema,
   DEFAULT_SHORTCUTS,
   type HotkeyAction,
   type PublicSettings,
@@ -55,7 +56,7 @@ import {
 import { createStream } from './llm'
 import { resetDustConversation } from './llm/dust'
 import { enqueueIngest, startBackfill, brainBackfillProgress, resumeBackfillIfPending, settleCommitment } from './brain/ingest'
-import { openIntelligenceWindow, isIntelligenceSender } from './intelligence'
+import { openIntelligenceWindow, isIntelligenceSender, syncIntelContentProtection } from './intelligence'
 import {
   readIndex as readBrainIndex,
   readGraph as readBrainGraph,
@@ -229,6 +230,13 @@ function publicSettings(): PublicSettings {
     hasApiKey: hasApiKey(s.provider),
     providerReady,
     visionReady: providerReady && activeDef.vision, // gates screen-ask so shots never hit a non-vision model
+    // "Some configured provider can read images" — not necessarily the ACTIVE one. Mirrors the failover
+    // candidate test (~1287): a keyed/CLI-connected provider with vision. Lets the renderer route a
+    // screen-ask/quick-action to capture even when the active provider (e.g. Dust) is text-only, because
+    // the main process transparently fails the vision turn over to this provider instead of dead-ending.
+    visionAvailable: (Object.keys(PROVIDERS) as ProviderId[]).some(
+      (p) => PROVIDERS[p].vision && (PROVIDERS[p].kind === 'cli' ? !!s.cliConnected[p] : hasApiKey(p))
+    ),
     hasKeys: hasKeysMap(),
     hasEncryption: encryptionAvailable(),
     resolvedMeetingsFolder: resolveMeetingsFolder(s),
@@ -450,13 +458,27 @@ async function captureScreenshot(): Promise<{ image: string; width: number; heig
     height: Math.max(1, Math.round(fullH * capScale))
   }
   let sources = await desktopCapturer.getSources({ types: ['screen'], thumbnailSize })
-  if (!sources.length) {
-    // getSources can return empty transiently (right after launch or a fresh Screen-Recording grant).
-    // Retry once before giving up so a momentary gap doesn't surface as a failed capture.
-    await new Promise((r) => setTimeout(r, 250))
+  // getSources can return empty transiently (right after launch or a fresh Screen-Recording grant). A
+  // fresh macOS permission grant can take longer than a single tick to propagate to ScreenCaptureKit, so
+  // retry with a short backoff (250ms, then 500ms) before giving up — a single fixed 250ms retry sometimes
+  // fired the spurious "No screen source available" right after the user granted permission.
+  for (let attempt = 0; !sources.length && attempt < 2; attempt++) {
+    await new Promise((r) => setTimeout(r, 250 * (attempt + 1)))
     sources = await desktopCapturer.getSources({ types: ['screen'], thumbnailSize })
   }
-  const src = sources.find((s) => String(s.display_id) === String(disp.id)) ?? sources[0]
+  // Match the source to the display under the cursor. When no source reports a matching display_id (empty
+  // display_id on some platforms, or a stale topology after a monitor change/unplug), fall back to the
+  // first source — but AUDIT the mismatch so a wrong-monitor capture leaves a trace instead of silently
+  // answering about the wrong screen.
+  const matched = sources.find((s) => String(s.display_id) === String(disp.id))
+  if (!matched && sources.length > 1) {
+    auditLog('capture.display_mismatch', {
+      requested: String(disp.id),
+      available: sources.map((s) => String(s.display_id)),
+      using: sources[0] ? String(sources[0].display_id) : 'none'
+    })
+  }
+  const src = matched ?? sources[0]
   if (!src) throw new Error('No screen source available (grant Screen Recording permission)')
   let img = src.thumbnail
   const sz = img.getSize()
@@ -490,6 +512,10 @@ async function getScreenshot(phase?: string): Promise<{ image: string; width: nu
     return { image, width, height, capturedAt: ts }
   }
   const shot = await captureScreenshot()
+  // Re-check after the async capture: Private View could have been toggled ON while getSources()/resize
+  // were in flight. Without this second check, a frame grabbed a moment before the toggle would still be
+  // cached and sent to the model — breaking the Private View guarantee on a mid-capture toggle.
+  if (contentProtectionOn()) throw new PrivateViewBlockedError()
   const capturedAt = Date.now()
   shotCache = { ...shot, ts: capturedAt }
   auditLog('capture.screen', { width: shot.width, height: shot.height, bytes: shot.image.length, ...(phase ? { phase } : {}) })
@@ -812,6 +838,7 @@ function registerIpc(): void {
       auditLog('graph.purged', { reason: 'encryption-enabled' })
     }
     win?.setContentProtection(contentProtectionOn())
+    syncIntelContentProtection() // keep the dashboard window's Private View in lockstep with the overlay
     // Only reconfigure the OS login item when that setting actually changed. Calling it on every
     // unrelated save is wasteful and, on unsigned/dev builds, logs a noisy "Operation not permitted".
     if ('launchAtLogin' in p) {
@@ -882,12 +909,16 @@ function registerIpc(): void {
   ipcMain.handle(IPC.cliDetect, (e, provider: unknown) => {
     assertMainWindow(e)
     if (!requireAuth()) return { ok: false, error: 'Sign in with your Mantu account first.' }
-    return detectCli(typeof provider === 'string' ? (provider as ProviderId) : 'claude-cli')
+    // Validate against the known provider enum (parse, don't blind-cast) — an unrecognized string falls
+    // back to the default CLI provider instead of reaching detectCli() as a bogus id.
+    const parsed = ProviderIdSchema.safeParse(provider)
+    return detectCli(parsed.success ? parsed.data : 'claude-cli')
   })
   ipcMain.handle(IPC.cliTest, async (e, provider: unknown) => {
     assertMainWindow(e)
     if (!requireAuth()) return { ok: false, error: 'Sign in with your Mantu account first.' }
-    const p = typeof provider === 'string' ? (provider as ProviderId) : 'claude-cli'
+    const parsedProvider = ProviderIdSchema.safeParse(provider)
+    const p = parsedProvider.success ? parsedProvider.data : 'claude-cli'
     const r = await testCli(p)
     if (r.ok) {
       const s = getSettings()
@@ -946,9 +977,13 @@ function registerIpc(): void {
   ipcMain.handle(IPC.mcpCrmDisconnect, (e) => {
     assertMainWindow(e)
     if (!requireAuth()) return { ok: false, error: 'Sign in with your Mantu account first.' }
-    clearBidstackApiKey()
+    const keyRemoved = clearBidstackApiKey()
     setSettings({ bidstackConnected: false, bidstackTools: [] })
-    auditLog('bidstack.disconnected', {})
+    auditLog('bidstack.disconnected', { keyFileRemoved: keyRemoved })
+    // Don't falsely report a clean disconnect when the secret is still on disk — the connection is marked
+    // off, but the user needs to know the key file survived so they can remove it manually.
+    if (!keyRemoved)
+      return { ok: false, error: 'Disconnected, but the stored BidStack key file could not be deleted — remove it manually.' }
     return { ok: true }
   })
 
@@ -1890,10 +1925,11 @@ if (!app.requestSingleInstanceLock()) {
       // main-frame + origin); the renderer drops the video track instantly, so no frame is rendered,
       // saved, or sent. This is the only way to capture the "them" side of a call on macOS.
       let sources = await desktopCapturer.getSources({ types: ['screen'] })
-      if (!sources.length) {
-        // getSources can return empty transiently right after a fresh Screen-Recording grant.
-        // Retry once (matching captureScreenshot) before giving up.
-        await new Promise((r) => setTimeout(r, 250))
+      // getSources can return empty transiently right after a fresh Screen-Recording grant. Retry with a
+      // short backoff (250ms, then 500ms) before giving up — matches captureScreenshot; a single fixed
+      // retry sometimes lost the loopback attach on the first meeting after granting permission.
+      for (let attempt = 0; !sources.length && attempt < 2; attempt++) {
+        await new Promise((r) => setTimeout(r, 250 * (attempt + 1)))
         sources = await desktopCapturer.getSources({ types: ['screen'] })
       }
       const screenSrc = sources[0]

@@ -11,6 +11,12 @@ import {
 import { PROVIDERS, PROVIDER_IDS, type ProviderId } from '@shared/providers'
 import { mainLog } from './logger'
 import { useFileBackend, encryptSecret, decryptSecret } from './secrets'
+// Static (eager) imports — dynamic import() throws under the bytecode-compiled main (electron-vite
+// bytecodePlugin). These SDKs are already eager-loaded by the streaming modules (llm/anthropic|dust|openai),
+// so this adds no startup cost; it just makes the key-test + Dust-agent-list paths bytecode-safe.
+import { DustAPI } from '@dust-tt/client'
+import Anthropic from '@anthropic-ai/sdk'
+import OpenAI from 'openai'
 
 const dir = () => app.getPath('userData')
 const settingsPath = () => join(dir(), 'settings.json')
@@ -393,8 +399,6 @@ export async function testApiKey(provider: ProviderId, key: string): Promise<Tes
       if (!settings.dustWorkspaceId) {
         return { ok: false, error: 'Add your Dust workspace ID in the Dust setup below first.' }
       }
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const { DustAPI } = (await import('@dust-tt/client')) as any
       const api = new DustAPI(
         { url: settings.dustBaseUrl || def.baseUrl },
         { workspaceId: settings.dustWorkspaceId, apiKey: trimmed },
@@ -403,9 +407,6 @@ export async function testApiKey(provider: ProviderId, key: string): Promise<Tes
       const r = await api.getAgentConfigurations({})
       if (r.isErr()) return { ok: false, error: r.error.message }
     } else if (def.kind === 'anthropic') {
-      // Lazy-loaded: this SDK's own require tree costs real time at process boot even for the vast
-      // majority of sessions that never test/use this specific provider (see openai below, same reason).
-      const { default: Anthropic } = await import('@anthropic-ai/sdk')
       const client = new Anthropic({ apiKey: trimmed })
       await client.messages.create({
         model: def.fastModel || def.defaultModel,
@@ -422,7 +423,6 @@ export async function testApiKey(provider: ProviderId, key: string): Promise<Tes
       if (!model) {
         return { ok: false, error: 'Set a model id in Advanced first, then test.' }
       }
-      const { default: OpenAI } = await import('openai')
       const client = new OpenAI({ apiKey: trimmed, baseURL: baseURL || undefined })
       await client.chat.completions.create({
         model,
@@ -449,8 +449,6 @@ export async function listDustAgents(): Promise<DustAgentsResponse> {
   if (!key) return { ok: false, error: 'Paste and Save your Dust API key first.' }
   if (!settings.dustWorkspaceId) return { ok: false, error: 'Add your Dust workspace ID first.' }
   try {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const { DustAPI } = (await import('@dust-tt/client')) as any
     const api = new DustAPI(
       { url: settings.dustBaseUrl || PROVIDERS.dust.baseUrl },
       { workspaceId: settings.dustWorkspaceId, apiKey: key },

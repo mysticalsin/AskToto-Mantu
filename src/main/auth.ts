@@ -3,6 +3,7 @@ import { createServer } from 'node:http'
 import { readFileSync, writeFileSync, existsSync, rmSync } from 'node:fs'
 import { randomBytes } from 'node:crypto'
 import { join } from 'node:path'
+import { PublicClientApplication, CryptoProvider } from '@azure/msal-node'
 import type { AuthStatus, SignInResult } from '@shared/ipc'
 import { getSettings } from './store'
 import { auditLog } from './logger'
@@ -200,9 +201,11 @@ function makeCachePlugin(): any {
   }
 }
 
-/** Build a PublicClientApplication wired to the encrypted on-disk token cache. Lazy-loads MSAL. */
-async function makePca(cfg: AzureConfig): Promise<import('@azure/msal-node').PublicClientApplication> {
-  const { PublicClientApplication } = await import('@azure/msal-node')
+/** Build a PublicClientApplication wired to the encrypted on-disk token cache. MSAL is statically
+ *  imported (NOT `await import()`): the main process is bytecode-compiled, and dynamic import throws
+ *  "A dynamic import callback was not specified" under bytecode — which crashed SSO sign-in + Graph token
+ *  refresh in the built app. @azure/msal-node has a CJS entry, so the static import is bytecode-safe. */
+async function makePca(cfg: AzureConfig): Promise<PublicClientApplication> {
   return new PublicClientApplication({
     auth: { clientId: cfg.clientId, authority: `https://login.microsoftonline.com/${cfg.tenantId}` },
     cache: { cachePlugin: makeCachePlugin() }
@@ -470,9 +473,8 @@ export async function signIn(): Promise<SignInResult> {
   if (!cfg) return { ok: true, configured: false } // not configured — let the user proceed
 
   try {
-    // Lazy-load MSAL so it's only pulled when Azure SSO is actually configured. The PCA is wired to the
-    // encrypted on-disk token cache (makePca) so the Graph token survives for later calendar reads.
-    const { CryptoProvider } = await import('@azure/msal-node')
+    // PCA is wired to the encrypted on-disk token cache (makePca) so the Graph token survives for later
+    // calendar reads. (CryptoProvider is now statically imported — see makePca for the bytecode rationale.)
     const pca = await makePca(cfg)
     const crypto = new CryptoProvider()
     const { verifier, challenge } = await crypto.generatePkceCodes()

@@ -61,7 +61,13 @@
           "note": "PLACEHOLDER — example call note.",
           "is_client_facing": true
         }
-      ]
+      ],
+      "velocity": {
+        "signal": "soft-organizational-gate",
+        "evidence": "Buying committee still forming; no firm date yet."
+      },
+      "commitments": [],
+      "band_evidence": ""
     },
     {
       "bid_id": "example-deal-beta",
@@ -97,7 +103,13 @@
           "note": "PLACEHOLDER — example call note.",
           "is_client_facing": true
         }
-      ]
+      ],
+      "velocity": {
+        "signal": "no-hard-date-found",
+        "evidence": "No compelling event; slipped to the incumbent."
+      },
+      "commitments": [],
+      "band_evidence": ""
     },
     {
       "bid_id": "example-deal-gamma",
@@ -133,7 +145,13 @@
           "note": "PLACEHOLDER — example call note.",
           "is_client_facing": true
         }
-      ]
+      ],
+      "velocity": {
+        "signal": "soft-organizational-gate",
+        "evidence": "Buying committee still forming; no firm date yet."
+      },
+      "commitments": [],
+      "band_evidence": ""
     }
   ],
   "coaching_insights": [

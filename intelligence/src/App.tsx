@@ -1,5 +1,6 @@
-import { Route, Routes } from 'react-router-dom'
+import { Route, Routes, useLocation } from 'react-router-dom'
 import { NavBar } from './components/NavBar'
+import { ErrorBoundary } from './components/ErrorBoundary'
 import { PlaceholderBanner } from './components/PlaceholderBanner'
 import { useDashboardData } from './lib/useDashboardData'
 import { CoachingView } from './views/CoachingView'
@@ -29,6 +30,9 @@ function LoadingOrError({ loading, error }: { loading: boolean; error: string | 
 
 function DashboardRoutes() {
   const { data, loading, error } = useDashboardData()
+  // Key the boundary on the route so switching tabs remounts it fresh and clears a prior view's error;
+  // NavBar sits outside it, so navigation always recovers a crashed view.
+  const { pathname } = useLocation()
 
   return (
     <div className="min-h-screen">
@@ -44,13 +48,15 @@ function DashboardRoutes() {
       {!data ? (
         <LoadingOrError loading={loading} error={error} />
       ) : (
-        <Routes>
-          <Route path="/" element={<CoachingView data={data} />} />
-          <Route path="/deals" element={<DealView data={data} />} />
-          <Route path="/stats" element={<StatsView data={data} />} />
-          <Route path="/graph" element={<GraphView data={data} />} />
-          <Route path="/meetings" element={<MeetingsView data={data} />} />
-        </Routes>
+        <ErrorBoundary key={pathname}>
+          <Routes>
+            <Route path="/" element={<CoachingView data={data} />} />
+            <Route path="/deals" element={<DealView data={data} />} />
+            <Route path="/stats" element={<StatsView data={data} />} />
+            <Route path="/graph" element={<GraphView data={data} />} />
+            <Route path="/meetings" element={<MeetingsView data={data} />} />
+          </Routes>
+        </ErrorBoundary>
       )}
     </div>
   )

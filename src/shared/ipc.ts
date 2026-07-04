@@ -465,6 +465,10 @@ export const PublicSettingsSchema = BaseSettingsSchema.extend({
   /** Active provider is usable AND vision-capable — gates screen-ask so screenshots never route to a
    *  non-vision model. Derived in publicSettings() from providerReady && PROVIDERS[provider].vision. */
   visionReady: z.boolean(),
+  /** SOME configured provider can read images (not necessarily the active one). A screen-ask / quick
+   *  action routes to capture when this is true even if the active provider is text-only (e.g. Dust) —
+   *  the main process fails over to the vision provider. Prevents the Dust-active screenshot dead-end. */
+  visionAvailable: z.boolean().default(false),
   hasKeys: z.record(z.string(), z.boolean()),
   hasEncryption: z.boolean(),
   resolvedMeetingsFolder: z.string(),

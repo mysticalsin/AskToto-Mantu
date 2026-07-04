@@ -288,9 +288,12 @@ export function GraphView({ data }: Props) {
     <div className="flex h-[calc(100vh-57px)]">
       <div ref={containerRef} className="flex-1 bg-[var(--color-mantu-bg)]" />
 
-      <aside className="flex w-96 flex-shrink-0 flex-col overflow-hidden border-l border-[var(--color-mantu-border)] bg-[var(--color-mantu-surface)]">
+      {/* overflow-y-auto (not -hidden) + every direct child `shrink-0`: the sidebar scrolls as one
+          column so no section can be flex-compressed into its neighbour (the old overlap) or clipped
+          off the bottom, at any window height. */}
+      <aside className="flex w-96 flex-shrink-0 flex-col overflow-y-auto border-l border-[var(--color-mantu-border)] bg-[var(--color-mantu-surface)]">
         {/* Search */}
-        <div className="relative border-b border-[var(--color-mantu-border)] p-3">
+        <div className="relative shrink-0 border-b border-[var(--color-mantu-border)] p-3">
           <input
             value={search}
             onChange={(e) => {
@@ -316,8 +319,10 @@ export function GraphView({ data }: Props) {
           )}
         </div>
 
-        {/* Info panel */}
-        <div className="min-h-[160px] border-b border-[var(--color-mantu-border)] p-4">
+        {/* Info panel — shrink-0 so a tall node's fields can't be flex-compressed below content
+            height (min-h would otherwise defeat min-height:auto), which spilled the neighbors list
+            over the "Going cold" panel below. */}
+        <div className="min-h-[160px] shrink-0 border-b border-[var(--color-mantu-border)] p-4">
           <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-white/40">Node info</h3>
           {selected ? (
             <div className="space-y-1 text-xs text-white/70">
@@ -346,11 +351,14 @@ export function GraphView({ data }: Props) {
                   <span
                     className="rounded-full px-1.5 py-0.5 text-[10px] font-semibold"
                     style={{
-                      color: selected.freshness === 'cold' ? '#f7768e' : selected.freshness === 'cooling' ? '#e0af68' : '#9ece6a',
+                      // Neutral grey when freshness is unknown — don't default to green ("fresh"), which
+                      // would fabricate a healthy signal the data never carried.
+                      color: selected.freshness === 'cold' ? '#f7768e' : selected.freshness === 'cooling' ? '#e0af68' : selected.freshness === 'fresh' ? '#9ece6a' : 'rgba(255,255,255,0.5)',
                       background: 'rgba(255,255,255,0.06)',
                     }}
                   >
-                    {selected.days_quiet === 0 ? 'today' : `${selected.days_quiet}d ago`} · {selected.freshness}
+                    {selected.days_quiet === 0 ? 'today' : `${selected.days_quiet}d ago`}
+                    {selected.freshness ? ` · ${selected.freshness}` : ''}
                   </span>
                 </div>
               )}
@@ -402,7 +410,7 @@ export function GraphView({ data }: Props) {
 
         {/* Going cold — relationship entropy, named and actionable (innovation #8) */}
         {(data.going_cold?.length ?? 0) > 0 && (
-          <div className="border-b border-[var(--color-mantu-border)] p-4">
+          <div className="shrink-0 border-b border-[var(--color-mantu-border)] p-4">
             <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-white/40">Going cold</h3>
             <div className="max-h-56 space-y-1.5 overflow-y-auto">
               {data.going_cold!.slice(0, 6).map((r) => (
@@ -433,7 +441,7 @@ export function GraphView({ data }: Props) {
         )}
 
         {/* Win/Loss & ROI intelligence */}
-        <div className="border-b border-[var(--color-mantu-border)] p-4">
+        <div className="shrink-0 border-b border-[var(--color-mantu-border)] p-4">
           <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-white/40">Win/Loss &amp; ROI</h3>
           <select
             value={roiScope.type === 'all' ? 'all' : `${roiScope.type}:${roiScope.key}`}
@@ -512,7 +520,7 @@ export function GraphView({ data }: Props) {
         </div>
 
         {/* Filters + community legend */}
-        <div className="flex-1 overflow-y-auto p-4">
+        <div className="shrink-0 p-4">
           {isThin && (
             <p className="mb-3 rounded-md border border-amber-400/20 bg-amber-400/5 px-2.5 py-2 text-[11px] leading-relaxed text-amber-200/80">
               {accountGroups.length} account · {sectorGroups.length} sector · {communityGroups.length} community in
@@ -620,7 +628,7 @@ export function GraphView({ data }: Props) {
           </p>
         </div>
 
-        <div className="border-t border-[var(--color-mantu-border)] px-4 py-2 text-[11px] text-white/30">
+        <div className="shrink-0 border-t border-[var(--color-mantu-border)] px-4 py-2 text-[11px] text-white/30">
           {graph.nodes.length} nodes · {graph.edges.length} edges · {communityGroups.length} communit{communityGroups.length === 1 ? 'y' : 'ies'}
         </div>
       </aside>

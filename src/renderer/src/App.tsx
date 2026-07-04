@@ -711,7 +711,7 @@ export function App(): JSX.Element {
     if (!requireProvider()) return
     const claim = input.trim()
     const transcript = listen.text()
-    const canUseScreen = Boolean((settings?.screenAsk ?? true) && settings?.visionReady)
+    const canUseScreen = Boolean((settings?.screenAsk ?? true) && settings?.visionAvailable)
     const route = chooseQuickActionRoute({ kind: 'factcheck', input: claim, transcript, canUseScreen })
     setCaptureError(null)
     setView('answer')
@@ -751,7 +751,7 @@ export function App(): JSX.Element {
     ask.run,
     askScreen,
     settings?.screenAsk,
-    settings?.visionReady,
+    settings?.visionAvailable,
     requireProvider
   ])
 
@@ -766,7 +766,7 @@ export function App(): JSX.Element {
     if (!requireProvider()) return
     const typed = input.trim()
     const transcript = listen.text()
-    const canUseScreen = Boolean((settings?.screenAsk ?? true) && settings?.visionReady)
+    const canUseScreen = Boolean((settings?.screenAsk ?? true) && settings?.visionAvailable)
     const route = chooseQuickActionRoute({ kind: 'whatnext', input: typed, transcript, canUseScreen })
     setView(route.target)
     setCollapsed(false)
@@ -796,7 +796,7 @@ export function App(): JSX.Element {
     listen.text,
     askScreen,
     settings?.screenAsk,
-    settings?.visionReady,
+    settings?.visionAvailable,
     requireProvider
   ])
 
@@ -1263,7 +1263,7 @@ export function App(): JSX.Element {
         if (!requireProvider()) return
         const typed = input.trim()
         const transcript = listen.text()
-        const canUseScreen = Boolean((settings?.screenAsk ?? true) && settings?.visionReady)
+        const canUseScreen = Boolean((settings?.screenAsk ?? true) && settings?.visionAvailable)
         const route = chooseQuickActionRoute({ kind, input: typed, transcript, canUseScreen })
         setCaptureError(null)
         if (route.transport === 'screen') {
@@ -1291,7 +1291,7 @@ export function App(): JSX.Element {
       } else if (kind === 'summarize') {
         if (!requireProvider()) return
         const transcript = listen.text()
-        const canUseScreen = Boolean((settings?.screenAsk ?? true) && settings?.visionReady)
+        const canUseScreen = Boolean((settings?.screenAsk ?? true) && settings?.visionAvailable)
         // route.transport is the single source of truth for vision-vs-text — it already prioritizes the
         // screen over a merely-present transcript (see chooseQuickActionRoute); don't re-decide below.
         const route = chooseQuickActionRoute({ kind, input: input.trim(), transcript, canUseScreen })
@@ -1326,7 +1326,7 @@ export function App(): JSX.Element {
       input,
       listen.text,
       settings?.screenAsk,
-      settings?.visionReady,
+      settings?.visionAvailable,
       settings?.hasKeys,
       settings?.dustWorkspaceId,
       settings?.providerModels,
@@ -1419,6 +1419,7 @@ export function App(): JSX.Element {
           meetingMeta={pm ? { title: pm.title, date: pm.date } : undefined}
           followupDraft={followup.answer}
           onGenerateFollowup={generateFollowup}
+          onRetryRecap={pm ? undefined : retryAnswer}
           bidstackConnected={settings?.bidstackConnected ?? false}
           bidstackTools={settings?.bidstackTools ?? []}
           onOpenFolder={() => void window.toto.openMeetingsFolder()}
@@ -1444,6 +1445,10 @@ export function App(): JSX.Element {
       // so forcing streaming=true here correctly hides them too).
       b = (
         <Answer
+          // Key on the answer id so a NEW turn remounts <Answer> — otherwise React reuses the instance and
+          // the prior turn's thumbs-up/down (`rated`) + copy/save flash state bleed onto the new answer,
+          // corrupting feedback telemetry. (capturing has no id yet → stable 'pending' until the run lands.)
+          key={ask.answer?.id ?? 'pending'}
           text={capturing ? '' : ask.answer?.text ?? ''}
           streaming={capturing || (ask.answer?.streaming ?? false)}
           error={ask.answer?.error ?? null}
@@ -1659,10 +1664,15 @@ export function App(): JSX.Element {
             onTranscript={toggleTranscript}
             onNewMeeting={newMeeting}
             customModes={settings?.customModes}
-            canPrewarm={!!settings?.visionReady && (settings?.screenAsk ?? true)}
+            canPrewarm={!!settings?.visionAvailable && (settings?.screenAsk ?? true)}
             thinkingOn={settings?.thinkingMode === 'always'}
             onToggleThinking={onToggleThinking}
             onSpotlightRef={spotlightRef}
+            spotlightReady={isDustReady(
+              settings?.hasKeys ?? {},
+              settings?.dustWorkspaceId ?? '',
+              settings?.providerModelsSpotlightRef ?? {}
+            )}
             onHistory={onBarHistory}
             onSettings={onBarSettings}
             onMinimize={onBarMinimize}

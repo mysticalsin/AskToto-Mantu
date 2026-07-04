@@ -71,9 +71,13 @@ export function DealView({ data }: Props) {
     )
   }
 
-  const commitmentTotals = ledgerTotals(deal.commitments)
+  // Defensive: velocity/commitments are type-required but a real brain record (or a hand-built data.json)
+  // can omit them — read them unguarded and one absent field would crash the whole view (now also caught
+  // by the route ErrorBoundary, but degrade in place rather than blanking the view).
+  const commitments = deal.commitments ?? []
+  const commitmentTotals = ledgerTotals(commitments)
   // Open commitments surface first (they need attention); within each group, newest first.
-  const sortedCommitments = [...deal.commitments].sort((a, b) => {
+  const sortedCommitments = [...commitments].sort((a, b) => {
     if (a.status === 'open' && b.status !== 'open') return -1
     if (a.status !== 'open' && b.status === 'open') return 1
     return (b.date ?? '').localeCompare(a.date ?? '')
@@ -99,7 +103,7 @@ export function DealView({ data }: Props) {
           >
             <span
               className="mr-1.5 inline-block h-2 w-2 rounded-full align-middle"
-              style={{ background: bandColor[d.win_likelihood_band] }}
+              style={{ background: d.win_likelihood_band ? bandColor[d.win_likelihood_band] : 'rgba(255,255,255,0.28)' }}
             />
             {d.display_name}
           </button>
@@ -126,21 +130,25 @@ export function DealView({ data }: Props) {
                 <Row label="Outcome" value={outcomeLabel[deal.outcome]} />
                 <Row
                   label="Win likelihood"
-                  value={bandLabel[deal.win_likelihood_band]}
-                  dot={bandColor[deal.win_likelihood_band]}
+                  value={deal.win_likelihood_band ? bandLabel[deal.win_likelihood_band] : 'Ungraded (no cited evidence)'}
+                  dot={deal.win_likelihood_band ? bandColor[deal.win_likelihood_band] : 'rgba(255,255,255,0.28)'}
                 />
                 {deal.band_evidence && (
                   <div className="border-b border-white/5 pb-1.5 text-[11px] italic text-white/40">
                     Why this band: &ldquo;{deal.band_evidence}&rdquo;
                   </div>
                 )}
-                <Row
-                  label="Velocity"
-                  value={velocityLabel[deal.velocity.signal] ?? deal.velocity.signal}
-                  title={deal.velocity.evidence || undefined}
-                />
-                {deal.velocity.evidence && (
-                  <div className="text-[11px] text-white/40">{deal.velocity.evidence}</div>
+                {deal.velocity && (
+                  <>
+                    <Row
+                      label="Velocity"
+                      value={velocityLabel[deal.velocity.signal] ?? deal.velocity.signal}
+                      title={deal.velocity.evidence || undefined}
+                    />
+                    {deal.velocity.evidence && (
+                      <div className="text-[11px] text-white/40">{deal.velocity.evidence}</div>
+                    )}
+                  </>
                 )}
               </dl>
             </div>
@@ -170,14 +178,14 @@ export function DealView({ data }: Props) {
                       </span>
                       <span className="text-[11px] text-white/40">{c.date}</span>
                     </div>
-                    <p className="mt-1.5 text-xs text-white/80">{c.text}</p>
+                    <p className="mt-1.5 break-words text-xs text-white/80 [overflow-wrap:anywhere]">{c.text}</p>
                     <div className="mt-1 flex flex-wrap items-center gap-x-2 text-[11px] text-white/40">
                       <span>By {c.by}</span>
                       {c.due_hint && <span>· Due {c.due_hint}</span>}
                     </div>
                   </div>
                 ))}
-                {deal.commitments.length === 0 && (
+                {commitments.length === 0 && (
                   <div className="text-xs text-white/30">
                     No commitments captured on this deal yet.
                   </div>
@@ -248,7 +256,7 @@ export function DealView({ data }: Props) {
                     </div>
                     <GroundingBadge g={claim.source.grounding} />
                   </div>
-                  <p className="mt-2 text-sm text-white/85">{claim.statement}</p>
+                  <p className="mt-2 break-words text-sm text-white/85 [overflow-wrap:anywhere]">{claim.statement}</p>
                   <div className="mt-2 rounded-md bg-black/20 p-2 text-xs text-white/50">
                     <div className="mb-1 flex items-center justify-between">
                       <span className="font-mono text-[10px] text-mantu-light/80">
@@ -258,7 +266,7 @@ export function DealView({ data }: Props) {
                         <span className="text-[10px]">Raised by {claim.raised_by}</span>
                       )}
                     </div>
-                    <div className="italic">&ldquo;{claim.source.quote_or_paraphrase}&rdquo;</div>
+                    <div className="break-words italic [overflow-wrap:anywhere]">&ldquo;{claim.source.quote_or_paraphrase}&rdquo;</div>
                   </div>
                 </motion.div>
               ))}

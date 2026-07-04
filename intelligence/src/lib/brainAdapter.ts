@@ -165,7 +165,7 @@ function toDeal(d: BrainDeal, sectorByAccount: Map<string, string>, meetingsByFi
     sector: sectorByAccount.get(d.account) ?? 'other',
     display_name: d.name,
     outcome: d.outcome,
-    win_likelihood_band: d.win_likelihood_band ?? 'mixed',
+    win_likelihood_band: d.win_likelihood_band ?? null, // preserve "ungraded" — never fabricate a band
     value_usd: null, // the brain never invents money — no value data in transcripts
     stage: d.stage || (d.velocity.signal === 'hard-calendar-gate' ? 'moving (hard date)' : 'open'),
     band_evidence: d.band_evidence ?? '',
@@ -363,7 +363,7 @@ function latestMeetingRef(
 
 export function brainToDashboard(b: BrainRead): DashboardData {
   const sectorByAccount = new Map(b.accounts.map((a) => [a.name, a.sector]))
-  const bandByDeal = new Map(b.deals.map((d) => [slug(d.name), d.win_likelihood_band ?? ('mixed' as WinLikelihoodBand)]))
+  const bandByDeal = new Map(b.deals.map((d) => [slug(d.name), d.win_likelihood_band ?? null]))
   const accountByPerson = new Map(b.people.map((p) => [slug(p.name), p.account ?? undefined]))
   const accountBySlug = new Map(b.accounts.map((a) => [slug(a.name), a]))
   const personBySlug = new Map(b.people.map((p) => [slug(p.name), p]))
@@ -397,7 +397,7 @@ export function brainToDashboard(b: BrainRead): DashboardData {
         type: n.type as GraphNode['type'],
         account: n.type === 'person' ? accountByPerson.get(bare) : n.type === 'account' ? n.label : undefined,
         sector: n.type === 'account' ? sectorByAccount.get(n.label) : n.type === 'sector' ? n.label : undefined,
-        win_likelihood_band: n.type === 'deal' ? bandByDeal.get(bare) : undefined,
+        win_likelihood_band: n.type === 'deal' ? bandByDeal.get(bare) ?? undefined : undefined,
         bid_id: n.type === 'deal' ? bare : undefined,
         degree: 0,
         community_id: 0,
@@ -427,7 +427,8 @@ export function brainToDashboard(b: BrainRead): DashboardData {
   const band0 = (): Record<WinLikelihoodBand, number> => ({ good: 0, mixed: 0, concerning: 0 })
   const accountSummaries: ScopeSummary[] = b.accounts.map((a) => {
     const counts = band0()
-    for (const d of deals.filter((d) => d.account === a.name)) counts[d.win_likelihood_band]++
+    // Ungraded deals (null band) are deliberately NOT counted into any band — no fabrication.
+    for (const d of deals.filter((d) => d.account === a.name)) if (d.win_likelihood_band) counts[d.win_likelihood_band]++
     return {
       key: slug(a.name),
       label: a.name,
@@ -441,7 +442,7 @@ export function brainToDashboard(b: BrainRead): DashboardData {
   const sectorSummaries: ScopeSummary[] = sectors.map((sec) => {
     const inSector = deals.filter((d) => d.sector === sec)
     const counts = band0()
-    for (const d of inSector) counts[d.win_likelihood_band]++
+    for (const d of inSector) if (d.win_likelihood_band) counts[d.win_likelihood_band]++
     return {
       key: slug(sec),
       label: sec,

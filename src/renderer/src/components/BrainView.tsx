@@ -526,6 +526,19 @@ export function BrainView({ onBack }: { onBack: () => void }): JSX.Element {
             <StatTile value={status?.edges ?? 0} label="Connections" />
           </div>
 
+          {/* Ingested, but nothing extracted — explain the 0/0/0 instead of leaving bare zeros that read
+              as "broken". Happens with short or non-client-facing transcripts. */}
+          {ingested > 0 &&
+            !bf?.running &&
+            (status?.people ?? 0) === 0 &&
+            (status?.accounts ?? 0) === 0 &&
+            (status?.deals ?? 0) === 0 && (
+              <div className="rounded-xl border border-[var(--color-hair-soft)] bg-white/[0.02] px-3 py-2.5 text-[12px] leading-snug text-[color:var(--color-ink-3)]">
+                Meetings are ingested, but no people, accounts, or deals were extracted yet — usually the
+                transcripts are short or don&rsquo;t name clients. Longer, client-facing meetings will fill this in.
+              </div>
+            )}
+
           {/* FACTUAL — volume + sectors */}
           <div className="rounded-xl border border-[var(--color-hair-soft)] bg-white/[0.02] px-3 py-2.5">
             <SectionTitle>Meetings per week</SectionTitle>
