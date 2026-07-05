@@ -495,29 +495,31 @@ export const Bar = memo(function Bar(props: BarProps): JSX.Element {
           </div>
         </div>
 
-        {/* Row 2 — toolbar. Three in-flow flex children: the logo (left), the tool cluster (center, flex-1
-            so it centers in the space left between the flanking groups), and History/Transcript (right).
-            The cluster is a normal flex child, NOT absolutely positioned, so it can never overlap the
-            right-hand group when that group is wide during a live meeting (New meeting + Transcript). */}
-        <div className="aw-toolbar flex items-center justify-between border-t border-[var(--color-hair-soft)] px-5 py-1">
+        {/* Row 2 — toolbar. A 3-column grid (1fr | auto | 1fr): the logo (left), the tool cluster
+            (middle), and History/Transcript (right). Equal flexible flanks center the cluster on the
+            WINDOW, not on the leftover space between two unequal neighbors (flex justify-between put
+            the cluster's midpoint left of the window's). Tracks never overlap, so the cluster still
+            can't collide with the right-hand group when that group is wide during a live meeting. */}
+        <div className="aw-toolbar grid grid-cols-[1fr_auto_1fr] items-center border-t border-[var(--color-hair-soft)] px-5 py-1">
           {/* The Mantu mark IS the logo → opens Settings. (Quit/Hide live in the tray + hotkeys.) */}
           <button
             type="button"
             title="Settings"
             aria-label="Settings"
             onClick={props.onSettings}
-            className="no-drag focus-ring block flex-none rounded-[10px]"
+            className="no-drag focus-ring block flex-none justify-self-start rounded-[10px]"
           >
             <span className="aw-mark-glow block rounded-[10px]">
               <MantuMark size={30} />
             </span>
           </button>
 
-          {/* Centered tools — flex-1 + justify-center keeps them centered in the space between the logo and
-              the right group. A fixed-width slot for the timer + pause keeps the cluster from shifting when
-              listening starts; Capture / Spotlight Ref / Mode / Deep thinking / Private view stay put, with
-              the divider right before Listen. */}
-          <div className="flex min-w-0 flex-1 items-center justify-center gap-4">
+          {/* Centered tools — the grid's auto middle track. While listening, the timer/pause/stop slot on
+              the right is mirrored by an equal-width spacer on the left, so the icons stay put when a
+              meeting starts AND the group's midpoint stays on the window's centerline (a one-sided slot
+              dragged the whole cluster ~58px left of center). Idle, neither side renders. */}
+          <div className="flex min-w-0 items-center justify-center gap-4">
+            {props.listening && <span aria-hidden className="w-[100px] flex-none" />}
             <IconTool title={`Capture screen (${accelLabel('CommandOrControl+Shift+S')})`} onClick={props.onCapture}>
               {props.capturing ? <Spinner size={19} /> : <Image size={19} strokeWidth={ICON_STROKE} />}
             </IconTool>
@@ -586,10 +588,10 @@ export const Bar = memo(function Bar(props: BarProps): JSX.Element {
                 <AudioLines size={19} strokeWidth={ICON_STROKE} />
               )}
             </IconTool>
-            {/* Fixed-width reserved slot for timer + pause + stop — always present so the cluster never shifts */}
-            <div className="flex w-[100px] items-center gap-2">
-              {props.listening && (
-                <>
+            {/* Timer + pause + stop — rendered only while listening, mirrored by the spacer at the
+                cluster's other end so the icons between them never move. */}
+            {props.listening && (
+              <div className="flex w-[100px] flex-none items-center gap-2">
                   <ElapsedClock startedAt={props.startedAt} paused={props.paused} />
                   {/* Pause suspends capture (mic + system audio stay warm, nothing is finalized/saved) —
                       distinct from Stop (the danger dot above), which ends the meeting and saves it. */}
@@ -617,14 +619,13 @@ export const Bar = memo(function Bar(props: BarProps): JSX.Element {
                   >
                     <Square size={14} strokeWidth={ICON_STROKE} fill="currentColor" />
                   </button>
-                </>
-              )}
-            </div>
+              </div>
+            )}
           </div>
 
           {/* Right: History/Transcript pill(s) + Minimize-to-pill + collapse-chevron (ghost).
               No separate Hide button — global ⌘\ and tray handle that. */}
-          <div className="flex flex-none items-center gap-1.5">
+          <div className="flex flex-none items-center justify-self-end gap-1.5">
             {/* Live pivot: New meeting + Transcript when listening, History otherwise */}
             {props.listening ? (
               <>
