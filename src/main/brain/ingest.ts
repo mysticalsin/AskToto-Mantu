@@ -343,14 +343,30 @@ export async function settleCommitment(
 
 type Job = { file: string; source: 'meetings' | 'vault'; origin: 'live' | 'backfill' }
 const queue: Job[] = []
-let running = false
+
+// The network-bound stage (extractMeeting, seconds-to-a-minute per call) is what a 100-meeting backfill
+// was burning wall-clock time on serially, so up to EXTRACT_CONCURRENCY of those calls now run at once.
+// The local-mutation stage (ingestExtraction, plus the error-path index write) stays on a single
+// promise chain — ingestChain — so entity files (account/person/deal/graph, none of which have their own
+// read-modify-write lock the way index.json has `indexLock` below) are never read-modify-written by two
+// jobs at the same time. Concurrency lives entirely in "how many extractions can be in flight", not in
+// "how many merges can run at once".
+const EXTRACT_CONCURRENCY = 3
 let backfillTotal = 0
 let backfillDone = 0
-// The job pump() is currently awaiting processJob() for — already spliced out of `queue`, so a
-// concurrent startBackfill() call (re-clicking "Index meetings" mid-extraction) can't see it there.
-// Tracked separately so startBackfill()'s own in-flight/dedup check also covers it, or the file being
-// extracted right now would get queued a second time.
-let currentJob: Job | null = null
+// Jobs currently running extractMeeting — bounded to EXTRACT_CONCURRENCY. A job leaves this set the
+// moment its extraction settles (success or failure), immediately freeing a slot for the next one,
+// independent of how long that job's own serial ingest takes to reach the front of ingestChain.
+const extracting = new Set<Job>()
+// Every job that's been spliced out of `queue` but hasn't yet finished its FULL lifecycle (extracting,
+// or sitting in/being processed by ingestChain) — a superset of `extracting`. Replaces the old single
+// `currentJob`: with concurrent extraction, more than one file can be "not in queue, not yet ingested"
+// at a time, so startBackfill()'s in-flight dedup guard (a file being worked on right now must not get
+// queued a second time by a re-click of "Index meetings") needs a set, not a single slot.
+const inFlightJobs = new Set<Job>()
+// Serializes ingestExtraction + the error-path index write, in the order each job's EXTRACTION finished
+// (not the order jobs started) — see the EXTRACT_CONCURRENCY comment above for why this must stay serial.
+let ingestChain: Promise<void> = Promise.resolve()
 
 // index.json has several independent writers (each job's own success/failure record, the
 // queue-drained cleanup, and startBackfill's `backfillRequested` flag) that all do a
@@ -372,7 +388,9 @@ export function updateIndex(s: Settings, mutate: (idx: BrainIndex) => void): Pro
 }
 
 export function brainBackfillProgress(): { total: number; done: number; running: boolean } {
-  return { total: backfillTotal, done: backfillDone, running }
+  // "running" while anything is queued, extracting, or waiting on/undergoing its serial ingest —
+  // inFlightJobs alone already covers both the extracting and the ingesting stage (see its declaration).
+  return { total: backfillTotal, done: backfillDone, running: queue.length > 0 || inFlightJobs.size > 0 }
 }
 
 /**
@@ -415,16 +433,38 @@ export async function ingestExtraction(s: Settings, x: MeetingExtraction, md: st
   })
 }
 
-/** `origin: 'live'` = a just-saved/just-debriefed meeting ingested one at a time (enqueueIngest) — its
- *  warnings must refresh right away. `origin: 'backfill'` = a job queued by startBackfill; linting is
- *  deferred to pump()'s drained branch so a 100+ meeting backfill re-lints the whole brain ONCE, not
- *  once per meeting (lintBrain walks every person + deal entity file — O(entities) work per call). */
-async function processJob(job: Job): Promise<void> {
+/** The network-bound half of a job: read the transcript, run the (possibly-retried) LLM extraction.
+ *  Never rejects — a failure is carried as data (`ok: false`) so the caller can run up to
+ *  EXTRACT_CONCURRENCY of these concurrently with Promise machinery, not try/catch across awaits. */
+type JobResult =
+  | { job: Job; s: Settings; ok: true; x: MeetingExtraction; md: string }
+  | { job: Job; s: Settings; ok: false; error: unknown }
+
+async function runExtractionStage(job: Job): Promise<JobResult> {
+  // One Settings snapshot per job, taken at the moment its extraction starts, reused for its ingest and
+  // live-lint below — matches the pre-concurrency behavior of reading Settings once per job rather than
+  // re-reading (and risking a mid-job change) between the extraction and ingest stages.
   const s = getSettings()
   try {
     const md = readSavedFile(job.file)
     const x = await extractMeeting(s, md, job.file)
-    await ingestExtraction(s, x, md, job.file)
+    return { job, s, ok: true, x, md }
+  } catch (error) {
+    return { job, s, ok: false, error }
+  }
+}
+
+/** The local-mutation half of a job: ingest (or record the error), then a live job's own immediate lint.
+ *  `origin: 'live'` = a just-saved/just-debriefed meeting ingested one at a time (enqueueIngest) — its
+ *  warnings must refresh right away. `origin: 'backfill'` = a job queued by startBackfill; linting is
+ *  deferred to maybeFinishDrain() so a 100+ meeting backfill re-lints the whole brain ONCE, not once per
+ *  meeting (lintBrain walks every person + deal entity file — O(entities) work per call). Always called
+ *  through `ingestChain` (never directly) so two of these never run concurrently. */
+async function finishJob(result: JobResult): Promise<void> {
+  const { job, s } = result
+  try {
+    if (!result.ok) throw result.error
+    await ingestExtraction(s, result.x, result.md, job.file)
     auditLog('brain.ingest', { ok: true, source: job.source })
   } catch (e) {
     await updateIndex(s, (idx) => {
@@ -437,65 +477,90 @@ async function processJob(job: Job): Promise<void> {
       idx.warnings = lintBrain(s)
     })
   }
+  // Only a backfill-origin job advances the backfill progress counter — a live (just-saved meeting) job
+  // finishing while a backfill happens to be running must never nudge someone else's progress bar (this
+  // is also what makes backfillDone/backfillTotal meaningful to reset per-run in startBackfill: they only
+  // ever move in lockstep with backfill-origin work). Bumped here, inside ingestChain, so it advances in
+  // the same strictly-serial order as the ingest/error-record it belongs to.
+  if (job.origin === 'backfill') backfillDone = Math.min(backfillTotal, backfillDone + 1)
 }
 
-// Set true while a backfill's jobs are still queued/running; cleared (with its one lint pass) the first
-// time the queue drains after it — so a later plain live ingest, which also drains the queue, doesn't
-// re-trigger the backfill's one-time cleanup.
+// Set true while a backfill's jobs are still queued/extracting/ingesting; cleared (with its one lint
+// pass) the first time everything drains after it — so a later plain live ingest, which also drains the
+// queue, doesn't re-trigger the backfill's one-time cleanup.
 let backfillLintPending = false
 
 // Logged at most once per no-provider stall, not once per bailed job — a 60+ transcript backfill with
 // no provider configured would otherwise spam this warning once per queued job.
 let loggedNoProviderStall = false
 
-function pump(): void {
-  if (running) return
-  // Find the first job pump() can actually act on: a live job always qualifies, a backfill job only
-  // qualifies while a provider is configured. A provider can be removed (cleared key, CLI disconnected)
-  // after startBackfill() already queued jobs — re-checking here, not just at queue time, stops a
-  // mid-backfill provider loss from burning every remaining job on a guaranteed "No configured AI
-  // provider" failure (each with its one reinforcement retry, i.e. 2 doomed calls per job). Backfill
-  // jobs stay AT THE FRONT of the queue (never removed here) so a live job enqueued behind a stalled
-  // backfill still gets picked and processed — the stall must never starve normal per-meeting ingests.
-  let s: Settings | null = null
-  const idx = queue.findIndex((j) => {
-    if (j.origin !== 'backfill') return true
-    s ??= getSettings()
-    return hasUsableProvider(s)
-  })
-  if (idx === -1) {
-    // Every queued job is a backfill job and no provider is configured — nothing to do right now.
-    if (queue.length > 0 && !loggedNoProviderStall) {
-      loggedNoProviderStall = true
-      mainLog.warn('[brain] backfill paused: no configured AI provider — will resume next time one is available')
-    }
-    // Queue drained (or fully stalled) — if a backfill was in flight, clear the resume flag and run the
-    // ONE deferred lint pass for the whole batch. Guarded to the true-drain case only (queue actually
-    // empty): a stall must never trip the "backfill finished" cleanup while jobs are still waiting.
-    if (queue.length === 0 && backfillLintPending && backfillTotal > 0 && backfillDone >= backfillTotal) {
-      backfillLintPending = false
-      const sx = getSettings()
-      void updateIndex(sx, (i) => {
-        i.backfillRequested = false
-        i.warnings = lintBrain(sx)
-      })
-    }
-    return
+/** Runs after every state change (a job dequeued, an extraction settled, an ingest completed) to check
+ *  for a TRUE drain: queue empty AND nothing extracting AND nothing waiting on/undergoing ingest AND the
+ *  whole backfill batch has been accounted for. A stall (jobs stuck in `queue` because no provider is
+ *  configured) must never trip this — inFlightJobs and queue both being empty is what makes it "true". */
+function maybeFinishDrain(): void {
+  if (
+    queue.length === 0 &&
+    inFlightJobs.size === 0 &&
+    backfillLintPending &&
+    backfillTotal > 0 &&
+    backfillDone >= backfillTotal
+  ) {
+    backfillLintPending = false
+    const sx = getSettings()
+    void updateIndex(sx, (i) => {
+      i.backfillRequested = false
+      i.warnings = lintBrain(sx)
+    })
   }
-  loggedNoProviderStall = false
-  const [job] = queue.splice(idx, 1)
-  currentJob = job
-  running = true
-  void processJob(job).finally(() => {
-    running = false
-    currentJob = null
-    // Only a backfill-origin job advances the backfill progress counter — a live (just-saved meeting)
-    // job processed while a backfill happens to be queued must never nudge someone else's progress bar
-    // (this is also what makes backfillDone/backfillTotal meaningful to reset per-run below: they only
-    // ever move in lockstep with backfill-origin work).
-    if (job.origin === 'backfill') backfillDone = Math.min(backfillTotal, backfillDone + 1)
-    pump()
-  })
+}
+
+function pump(): void {
+  // Keep starting extractions until EXTRACT_CONCURRENCY are in flight or nothing left qualifies. Each
+  // iteration re-finds the first job pump() can actually act on: a live job always qualifies, a backfill
+  // job only qualifies while a provider is configured. A provider can be removed (cleared key, CLI
+  // disconnected) after startBackfill() already queued jobs — re-checking here, not just at queue time,
+  // stops a mid-backfill provider loss from burning every remaining job on a guaranteed "No configured AI
+  // provider" failure (each with its one reinforcement retry, i.e. 2 doomed calls per job). Backfill jobs
+  // stay AT THE FRONT of the queue (never removed here) so a live job enqueued behind a stalled backfill
+  // still gets picked and processed — the stall must never starve normal per-meeting ingests.
+  while (extracting.size < EXTRACT_CONCURRENCY) {
+    let s: Settings | null = null
+    const idx = queue.findIndex((j) => {
+      if (j.origin !== 'backfill') return true
+      s ??= getSettings()
+      return hasUsableProvider(s)
+    })
+    if (idx === -1) {
+      // Every queued job is a backfill job and no provider is configured — nothing to do right now.
+      if (queue.length > 0 && !loggedNoProviderStall) {
+        loggedNoProviderStall = true
+        mainLog.warn('[brain] backfill paused: no configured AI provider — will resume next time one is available')
+      }
+      break
+    }
+    loggedNoProviderStall = false
+    const [job] = queue.splice(idx, 1)
+    extracting.add(job)
+    inFlightJobs.add(job)
+    void runExtractionStage(job).then((result) => {
+      extracting.delete(job)
+      pump() // a slot just freed — start the next eligible extraction now, without waiting on this job's ingest
+      ingestChain = ingestChain
+        .then(() => finishJob(result))
+        // Defensive: finishJob catches its own extraction/ingest errors internally and should never
+        // reject, but if it somehow did, letting the rejection propagate unhandled would permanently wedge
+        // ingestChain — every later job's `.then()` chained onto a rejected promise skips straight to
+        // re-rejecting, so no further job would ever ingest. Swallowing it here (like indexLock does
+        // above) keeps the chain alive for the next job.
+        .catch((e) => mainLog.error('[brain] unexpected error finishing a brain ingest job:', e))
+        .finally(() => {
+          inFlightJobs.delete(job)
+          pump() // this job's ingest just completed — re-check for a drain, and for newly-eligible backfill work
+        })
+    })
+  }
+  maybeFinishDrain()
 }
 
 /** Enqueue one just-saved meeting (fire-and-forget; called after saveMeeting completes). */
@@ -549,20 +614,20 @@ export function startBackfill(): { queued: number } {
   // extraction file already on disk still means the work is done. Checking both means a lost/stale
   // log costs a status-count fib, never a re-burned Dust call re-processing finished meetings.
   const extractedSlugs = new Set(listMeetingExtractions(s))
-  // pump() has already spliced the currently-processing job out of `queue` by the time it's mid-extract
-  // — omitting it here would let a re-click of "Index meetings" while that extraction is still running
-  // queue the exact same file a second time. currentJob covers both a backfill job and a live job (a
-  // live job can never collide with a backfill candidate by content, but checking it unconditionally is
-  // simpler than branching on origin and costs nothing).
+  // pump() has already spliced any currently-extracting-or-ingesting job out of `queue` by the time it's
+  // mid-flight — omitting those here would let a re-click of "Index meetings" queue the exact same file
+  // a second time while it's still being extracted (or is sitting in ingestChain). inFlightJobs covers
+  // both a backfill job and a live job (a live job can never collide with a backfill candidate by
+  // content, but checking it unconditionally is simpler than branching on origin and costs nothing).
   const inFlight = new Set(queue.map((j) => basename(j.file)))
-  if (currentJob) inFlight.add(basename(currentJob.file))
+  for (const j of inFlightJobs) inFlight.add(basename(j.file))
   // A fresh run: no backfill-origin work left queued or in flight from a previous batch. Reset the
   // progress counters here rather than accumulate onto a finished run's stale total/done — otherwise a
   // live meeting save processed after backfill #1 finished (which left backfillTotal > 0 behind) would
   // still pass the old `if (backfillTotal > 0)` check and corrupt backfill #2's freshly-started progress
   // readout with counts left over from a completed, unrelated run.
   const backfillInFlight =
-    queue.some((j) => j.origin === 'backfill') || currentJob?.origin === 'backfill'
+    queue.some((j) => j.origin === 'backfill') || [...inFlightJobs].some((j) => j.origin === 'backfill')
   if (!backfillInFlight) {
     backfillTotal = 0
     backfillDone = 0
