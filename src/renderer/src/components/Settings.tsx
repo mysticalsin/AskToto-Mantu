@@ -3347,7 +3347,7 @@ export function Settings({
                   <p className="text-[12px] leading-relaxed text-[color:var(--cl-muted-foreground)]">
                     To{' '}
                     <a
-                      href="https://www.linkedin.com/in/marc-bisiou"
+                      href="https://www.linkedin.com/in/marc-bisiou-1a79ba78/"
                       target="_blank"
                       rel="noopener noreferrer"
                       className="no-drag font-medium text-[color:var(--cl-primary)] transition-colors hover:underline"
@@ -3358,16 +3358,9 @@ export function Settings({
                     that shaped this app.
                   </p>
                 </Section>
-                <Section
-                  title="Open-source licenses"
-                  desc="Speech-transcription models bundled with this app, for full offline use. See THIRD_PARTY_NOTICES.md in the app's install directory for the complete text."
-                >
-                  <ul className="flex flex-col gap-1 text-[12px] text-[color:var(--cl-muted-foreground)]">
-                    <li>Whisper base &amp; large-v3-turbo (OpenAI, via Xenova/onnx-community): Apache License 2.0</li>
-                    <li>Parakeet TDT 0.6B v3 (NVIDIA, via k2-fsa/sherpa-onnx): CC-BY-4.0</li>
-                    <li>ONNX Runtime Web (Microsoft / Hugging Face): MIT License</li>
-                  </ul>
-                </Section>
+                {/* Model/library license attributions live in THIRD_PARTY_NOTICES.md, shipped in the
+                    app's install directory (electron-builder extraFiles) — kept out of the UI on
+                    purpose (Tony, 2026-07-05). */}
                 <div className="flex flex-col items-center gap-2.5 pb-2 pt-4">
                   <MantuLogo size={190} />
                   <div className="text-[13px] font-semibold text-[color:var(--cl-foreground)]">
