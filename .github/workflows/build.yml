@@ -78,6 +78,17 @@ jobs:
           node-version: 20
           cache: npm
       - run: npm ci
+      # Bundled ASR models (~1.3 GB, fetched by predist -> scripts/fetch-models.mjs) are the same set of
+      # files on every run unless that script's URLs change — cache them keyed on its hash so PR builds
+      # don't re-download ~1.3 GB from HuggingFace/GitHub on every push. fetch-models.mjs already skips
+      # any file that's present with non-zero size, so a warm cache makes predist a near no-op.
+      - uses: actions/cache@v4
+        with:
+          path: |
+            resources/models
+            resources/asr
+            resources/ort
+          key: asr-models-${{ runner.os }}-${{ hashFiles('scripts/fetch-models.mjs') }}
       - run: npm run dist
         env:
           # Signing is skipped on CI unless you add your Apple certs as secrets.
@@ -108,9 +119,20 @@ jobs:
           node-version: 20
           cache: npm
       - run: npm ci
+      # Same model cache as the macOS job — see the comment there. Paths are OS-agnostic (plain model
+      # files), keyed by runner.os anyway since GitHub scopes/evicts caches independently per OS.
+      - uses: actions/cache@v4
+        with:
+          path: |
+            resources/models
+            resources/asr
+            resources/ort
+          key: asr-models-${{ runner.os }}-${{ hashFiles('scripts/fetch-models.mjs') }}
       - run: npm run dist:win
       # AppX packaging only works on Windows runners (needs the Windows SDK). Signing is skipped on CI
-      # unless you add your Windows cert as a secret via CSC_LINK / CSC_KEY_PASSWORD.
+      # unless you add your Windows cert as a secret via WIN_CSC_LINK / WIN_CSC_KEY_PASSWORD (see
+      # docs/SIGNING.md and release.yml — this build job itself never sets those, so it always ships
+      # unsigned, same as the macOS job above).
       - run: npm run dist:win:appx
       # Installers only, same rationale as the macOS job (win-unpacked/ was ~7.5 GB per run).
       - uses: actions/upload-artifact@v4
