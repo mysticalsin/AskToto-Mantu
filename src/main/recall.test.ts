@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { mkdtempSync, rmSync, readFileSync, writeFileSync, existsSync } from 'node:fs'
-import { join } from 'node:path'
+import { join, basename } from 'node:path'
 import { tmpdir } from 'node:os'
 import { safeStorage } from 'electron'
 import { saveMeeting, isEncryptedFile } from './transcripts'
@@ -48,12 +48,14 @@ describe('recall — deleteMeeting', () => {
 
     const indexPath = join(folder, 'index.md')
     expect(existsSync(indexPath)).toBe(true)
-    expect(readFileSync(indexPath, 'utf8')).toContain(file.split('/').pop()!)
+    // basename(), not a POSIX-only '/' split — saveMeeting's returned path is OS-native (backslash-joined
+    // on Windows), and index.md always stores the bare filename regardless of platform.
+    expect(readFileSync(indexPath, 'utf8')).toContain(basename(file))
 
     const r = await deleteMeeting(file)
     expect(r.ok).toBe(true)
     expect(existsSync(file)).toBe(false)
-    expect(readFileSync(indexPath, 'utf8')).not.toContain(file.split('/').pop()!)
+    expect(readFileSync(indexPath, 'utf8')).not.toContain(basename(file))
 
     const after = await listMeetings()
     expect(after.some((m) => file.endsWith(m.file))).toBe(false)
