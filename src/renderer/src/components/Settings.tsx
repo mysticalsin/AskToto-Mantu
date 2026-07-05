@@ -2591,7 +2591,9 @@ function PersonalizeModes({
               onChange={(e) => setNewLabel(e.target.value)}
               onKeyDown={(e) => {
                 if (e.key === 'Enter') createNewMode()
-                if (e.key === 'Escape') { setCreatingNew(false); setNewLabel('') }
+                // stopPropagation: App.tsx's global Escape handler blur()s the focused input, which
+                // would fire onBlur={createNewMode} and create the mode the user is cancelling.
+                if (e.key === 'Escape') { e.stopPropagation(); setCreatingNew(false); setNewLabel('') }
               }}
               onBlur={createNewMode}
               placeholder="Mode name…"
@@ -2641,7 +2643,9 @@ function PersonalizeModes({
                 onChange={(e) => setRenameValue(e.target.value)}
                 onKeyDown={(e) => {
                   if (e.key === 'Enter') commitRename()
-                  if (e.key === 'Escape') setRenaming(false)
+                  // stopPropagation: App.tsx's global Escape handler blur()s the focused input, which
+                  // would fire onBlur={commitRename} and save the rename the user is cancelling.
+                  if (e.key === 'Escape') { e.stopPropagation(); setRenaming(false) }
                 }}
                 onBlur={commitRename}
                 className={`text-[18px] font-semibold bg-transparent border-b border-[var(--cl-primary)] outline-none text-[color:var(--cl-foreground)] w-full max-w-[200px]`}
@@ -3289,7 +3293,6 @@ export function Settings({
                     onChange={(v) => patch({ launchAtLogin: v })}
                     disabled={settings.managedKeys.includes('launchAtLogin')}
                   />
-                  <CustomMeetingAppsField settings={settings} patch={patch} />
                 </div>
               </Section>
               <DangerZoneSection settings={settings} patch={patch} />
@@ -3976,7 +3979,7 @@ function GraphSection({
                 {status.nodes ?? 0} nodes · {status.edges ?? 0} links
               </span>
             ) : (
-              <span className="text-[color:var(--cl-muted-foreground)]">No graph yet. Select Rebuild to create one.</span>
+              <span className="text-[color:var(--cl-muted-foreground)]">No graph yet. Select Rebuild now to create one.</span>
             )}
           </div>
           <ToggleRow
@@ -4025,89 +4028,6 @@ function GraphSection({
         </div>
       )}
     </Section>
-  )
-}
-
-/**
- * "Custom meeting apps" — free text, one app name per line, persisted as a trimmed array (the setting
- * a future meeting-detector reads; this field just has to keep it editable and correct today).
- *
- * Needs its own local raw-text buffer rather than binding the textarea straight to
- * `settings.customMeetingApps.join('\n')`: that array is already trimmed/filtered of blank entries, so
- * the instant you press Enter to start a new line, the next patch() round-trip echoes back settings
- * with that blank line stripped — the controlled value snaps back to no-trailing-newline and Enter
- * looks like it does nothing. Keeping the raw text in local state (committed to settings, debounced)
- * lets a blank in-progress line survive until the user actually types something on it or leaves the field.
- */
-function CustomMeetingAppsField({
-  settings,
-  patch
-}: {
-  settings: PublicSettings
-  patch: (p: Partial<PublicSettings>) => void
-}): JSX.Element {
-  const [raw, setRaw] = useState(settings.customMeetingApps.join('\n'))
-  // The last array WE persisted — lets the sync effect tell "settings echoed our own commit back"
-  // (ignore) apart from "an external change landed" (e.g. managed-config; resync from it).
-  const lastPersistedRef = useRef(settings.customMeetingApps)
-  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-
-  useEffect(() => {
-    const incoming = settings.customMeetingApps
-    const prev = lastPersistedRef.current
-    const same = incoming.length === prev.length && incoming.every((v, i) => v === prev[i])
-    if (!same) {
-      lastPersistedRef.current = incoming
-      setRaw(incoming.join('\n'))
-    }
-  }, [settings.customMeetingApps])
-
-  const commit = (text: string): void => {
-    const parsed = text
-      .split('\n')
-      .map((s) => s.trim())
-      .filter(Boolean)
-      .slice(0, 20)
-    lastPersistedRef.current = parsed
-    patch({ customMeetingApps: parsed })
-  }
-
-  const onChange = (v: string): void => {
-    setRaw(v)
-    if (timerRef.current) clearTimeout(timerRef.current)
-    timerRef.current = setTimeout(() => commit(v), 350)
-  }
-
-  const onBlur = (): void => {
-    if (timerRef.current) {
-      clearTimeout(timerRef.current)
-      timerRef.current = null
-    }
-    commit(raw)
-  }
-
-  return (
-    <div className="mt-3 flex flex-col gap-1.5">
-      <label className="text-[12px] font-medium text-[color:var(--cl-foreground)]">
-        Custom meeting apps
-      </label>
-      <textarea
-        value={raw}
-        onChange={(e) => onChange(e.target.value)}
-        onBlur={onBlur}
-        placeholder="e.g. Around&#10;Amazon Chime&#10;Jitsi"
-        rows={3}
-        disabled={settings.managedKeys.includes('customMeetingApps')}
-        className={[
-          ctl,
-          'h-20 resize-none text-[12px]',
-          settings.managedKeys.includes('customMeetingApps') ? 'opacity-60 cursor-not-allowed' : ''
-        ].join(' ')}
-      />
-      <span className="text-[11px] text-[color:var(--cl-muted-foreground)]">
-        One app name per line. AskToto will also treat windows with these names as meetings.
-      </span>
-    </div>
   )
 }
 

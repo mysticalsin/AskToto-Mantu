@@ -389,7 +389,7 @@ export function GraphView({ data }: Props) {
                 e.currentTarget.blur()
               }
             }}
-            placeholder="Search nodes..."
+            placeholder="Search nodes…"
             className="w-full rounded-md border border-[var(--color-mantu-border)] bg-black/30 px-3 py-1.5 text-sm text-white/90 outline-none focus:border-mantu"
           />
           {searchOpen && searchMatches.length > 0 && (

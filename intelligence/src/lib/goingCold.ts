@@ -90,14 +90,14 @@ type Commitment = { text: string; by: string; status: string }
  *  the ORIGINAL casing for a genuine named third party (never for the you/them sentinels themselves). */
 function hookFor(openCommitments: Commitment[], lastTitle: string): string {
   const yours = openCommitments.find((c) => c.by.toLowerCase() === 'you')
-  if (yours) return `You still owe them: ${yours.text} — deliver it as the reopener.`
+  if (yours) return `You still owe them: ${yours.text}. Deliver it as the reopener.`
   const theirs = openCommitments[0]
   if (theirs) {
     const theirsIsThem = theirs.by.toLowerCase() === 'them'
     const who = theirsIsThem ? 'They' : theirs.by
-    return `${who} still owe${theirsIsThem ? '' : 's'} you: ${theirs.text} — chase it.`
+    return `${who} still owe${theirsIsThem ? '' : 's'} you: ${theirs.text}. Chase it.`
   }
-  return lastTitle ? `No open thread — reopen with a value note on "${lastTitle}".` : 'No open thread — reopen with a value note.'
+  return lastTitle ? `No open thread. Reopen with a value note on "${lastTitle}".` : 'No open thread. Reopen with a value note.'
 }
 
 export function buildGoingCold(b: BrainRead, now: number): GoingCold {

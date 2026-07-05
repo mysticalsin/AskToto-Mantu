@@ -24,15 +24,21 @@ export function EmbedView({ data }: Props) {
   return (
     <div className="min-h-screen bg-[var(--color-mantu-bg)] p-4">
       {data.meta.is_placeholder && <PlaceholderBanner note={data.meta.note} compact />}
-      <motion.div layout className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
-        {top.map((insight, i) => (
-          <InsightCard
-            key={insight.insight_id}
-            insight={insight}
-            index={i}
-          />
-        ))}
-      </motion.div>
+      {top.length === 0 ? (
+        <div className="mt-3 rounded-xl border border-dashed border-white/15 p-10 text-center text-sm text-white/40">
+          No coaching insights for this filter yet.
+        </div>
+      ) : (
+        <motion.div layout className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
+          {top.map((insight, i) => (
+            <InsightCard
+              key={insight.insight_id}
+              insight={insight}
+              index={i}
+            />
+          ))}
+        </motion.div>
+      )}
       <div className="mt-4 text-center">
         {/* HashRouter + file://: a root-relative href (even with target="_top") resolves to the
             filesystem root, not the app route. "#/" is the real path to the full dashboard. */}
