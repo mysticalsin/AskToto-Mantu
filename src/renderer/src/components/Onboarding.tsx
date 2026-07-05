@@ -22,7 +22,7 @@ import type { PublicSettings, Profile, PlatformPermissions } from '@shared/ipc'
 import type { ProviderId } from '@shared/providers'
 import { PROVIDERS } from '@shared/providers'
 import { MantuLogo } from './MantuLogo'
-import { accelLabel } from '../lib/keys'
+import { accelLabel, isWindows } from '../lib/keys'
 
 /** Microsoft 4-square glyph (no lucide equivalent). */
 function MsLogo({ size = 16 }: { size?: number }): JSX.Element {
@@ -522,14 +522,15 @@ export function Onboarding({
           Your on-device AI copilot.
         </div>
         <p className="mx-auto max-w-[480px] text-[13.5px] leading-relaxed text-[color:var(--color-ink-2)]">
-          Transcription runs locally on your Mac. Audio never leaves your device. Answers are grounded in
-          your meeting context and cited so you can verify them. Everyone on the call knows it&apos;s there.
+          Transcription runs locally on your {isWindows ? 'computer' : 'Mac'}. Audio never leaves your
+          device. Answers are grounded in your meeting context and cited so you can verify them. Everyone
+          on the call knows it&apos;s there.
         </p>
       </div>
 
       <div className="flex items-center gap-1.5 rounded-lg bg-[var(--color-accent-soft)] px-3 py-2 text-[12px] text-[color:var(--color-accent)]">
         <ShieldCheck size={12} />
-        Audio is processed on your Mac and never uploaded.
+        Audio is processed on your {isWindows ? 'computer' : 'Mac'} and never uploaded.
       </div>
 
       <label className="no-drag flex w-full max-w-[460px] cursor-pointer items-start gap-2.5 rounded-xl border border-[var(--color-hair-soft)] bg-white/[0.03] p-3 text-left hover:bg-white/[0.06]">

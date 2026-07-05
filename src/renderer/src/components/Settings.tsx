@@ -1810,7 +1810,7 @@ function DustSetup({
               </div>
               <span className="text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
                 Already ran <code className="rounded bg-white/[0.08] px-1">dust login</code>? This reads your
-                session from the keychain. No key to copy. macOS may ask to allow keychain access once.
+                session from the keychain. No key to copy. Your OS may ask to allow keychain access once.
               </span>
               {cli.msg && (
                 <span
