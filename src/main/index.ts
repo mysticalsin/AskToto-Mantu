@@ -109,7 +109,7 @@ import { initAutoUpdate } from './updater'
 import updaterPkg from 'electron-updater'
 import { runSelfTest } from './selftest'
 import { readEvalMetrics, aggregateMetrics } from './metrics'
-import { refreshDustCliSession, setupDustCli } from './dustcli'
+import { importDustCliSession, refreshDustCliSession, setupDustCli } from './dustcli'
 import { detectCli, testCli, setupCli, installCli, loginCli, prewarmCli } from './cli'
 import { connectBidstack, pushToBidstack } from './mcp/bidstackClient'
 import { detectNotebookLmCli, installNotebookLmCli, connectNotebookLm, askNotebookLm } from './mcp/notebooklm'
@@ -938,10 +938,43 @@ function registerIpc(): void {
   })
 
   // No CLI session yet → kick off the install + interactive login for the user (opens a Terminal window).
+  // Then poll the keychain until the login lands and import it automatically — one login, zero extra
+  // clicks: without this the user had to come back and press "Connect from Dust CLI" a second time.
+  let dustSetupPoll: ReturnType<typeof setInterval> | null = null
   ipcMain.handle(IPC.dustSetupCli, async (e) => {
     assertMainWindow(e)
     if (!requireAuth()) return { ok: false, error: 'Sign in with your Mantu account first.' }
-    return setupDustCli()
+    const r = await setupDustCli()
+    if (r.ok && process.platform === 'darwin') {
+      if (dustSetupPoll) clearInterval(dustSetupPoll)
+      const startedAt = Date.now()
+      dustSetupPoll = setInterval(() => {
+        if (Date.now() - startedAt > 5 * 60 * 1000) {
+          if (dustSetupPoll) clearInterval(dustSetupPoll)
+          dustSetupPoll = null
+          return
+        }
+        void importDustCliSession().then((s) => {
+          if (!s.ok || !s.token || !s.workspaceId) return
+          if (dustSetupPoll) clearInterval(dustSetupPoll)
+          dustSetupPoll = null
+          setApiKey('dust', s.token)
+          setSettings({
+            dustWorkspaceId: s.workspaceId,
+            dustBaseUrl: s.baseUrl || 'https://dust.tt',
+            dustTokenMintedAt: Date.now()
+          })
+          auditLog('dust.token.refreshed', { at: 'setup-autoimport' })
+          if (Notification.isSupported()) {
+            new Notification({
+              title: 'Dust connected',
+              body: 'AskToto is linked to your Dust workspace.'
+            }).show()
+          }
+        })
+      }, 5000)
+    }
+    return r
   })
 
   // --- CLI providers (Claude Code / Codex / Gemini) ---
@@ -2124,11 +2157,9 @@ if (!app.requestSingleInstanceLock()) {
   // whose code identity churns (unsigned dev builds), and a fresh token has nothing to gain from it.
   // The lazy on-401 refresh (refreshDustAuth above) still self-heals expiry invisibly either way.
   const DUST_TOKEN_FRESH_MS = 45 * 60 * 1000
-  if (
-    process.platform === 'darwin' &&
-    hasApiKey('dust') &&
-    Date.now() - getSettings().dustTokenMintedAt > DUST_TOKEN_FRESH_MS
-  ) {
+  const refreshAndPersistDust = (at: string): void => {
+    if (process.platform !== 'darwin' || !hasApiKey('dust')) return
+    if (Date.now() - getSettings().dustTokenMintedAt <= DUST_TOKEN_FRESH_MS) return
     void refreshDustCliSession()
       .then((fresh) => {
         if (!fresh.ok || !fresh.token || !fresh.workspaceId) return
@@ -2138,12 +2169,17 @@ if (!app.requestSingleInstanceLock()) {
           dustBaseUrl: fresh.baseUrl || 'https://dust.tt',
           dustTokenMintedAt: Date.now()
         })
-        auditLog('dust.token.refreshed', { at: 'startup' })
+        auditLog('dust.token.refreshed', { at })
       })
       .catch(() => {
         /* best-effort — the lazy on-401 refresh in dust.ts still covers this */
       })
   }
+  refreshAndPersistDust('startup')
+  // Keep the session warm for the app's whole lifetime: re-mint whenever the token passes 45 min of
+  // its ~1h life, so it never expires mid-meeting and the user never sees a Dust reconnect. The
+  // single-flight guard inside refreshDustCliSession makes this safe alongside the on-401 path.
+  setInterval(() => refreshAndPersistDust('interval'), 10 * 60 * 1000)
 
   // createTray/registerShortcuts stay ahead of createWindow (see the boot-order comment above) — but
   // registerIpc has no such dependency: every ipcMain.handle closure inside it reads `win`/`tray` lazily

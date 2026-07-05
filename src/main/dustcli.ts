@@ -92,6 +92,15 @@ export async function importDustCliSession(): Promise<DustCliSession> {
  * Best-effort: a nonzero exit or timeout is swallowed — we always re-read whatever the CLI left in the
  * keychain, which is the freshest token available. A hard timeout keeps a hung CLI off the answer path.
  */
+// Overlapping refreshes are dangerous, not just wasteful: Dust's OAuth refresh tokens rotate and are
+// single-use, so two concurrent `dust status` runs (startup refresh racing a 401-triggered one) can
+// burn a stale refresh token and invalidate the whole CLI session — the exact "why am I running
+// `dust login` again" failure. Single-flight collapses concurrent callers onto one mint, and a short
+// result cache absorbs bursts (several streams 401ing together) without re-spawning the CLI.
+let refreshInflight: Promise<DustCliSession> | null = null
+let lastRefresh: { at: number; session: DustCliSession } | null = null
+const REFRESH_RESULT_TTL_MS = 30_000
+
 export async function refreshDustCliSession(): Promise<DustCliSession> {
   if (process.platform !== 'darwin') {
     return {
@@ -99,16 +108,29 @@ export async function refreshDustCliSession(): Promise<DustCliSession> {
       error: 'On Windows, paste your Dust API key or workspace link instead — Settings → AI → Dust.'
     }
   }
-  const bin = await resolveBin('dust')
-  if (bin) {
-    try {
-      // CI=1 suppresses the spinner / update-check UI; the timeout bounds the network round-trip.
-      await exec(bin, ['status'], { timeout: 25_000, env: { ...process.env, CI: '1' } })
-    } catch {
-      // ignore — fall through and re-read the keychain regardless of exit code
-    }
+  if (refreshInflight) return refreshInflight
+  if (lastRefresh && lastRefresh.session.ok && Date.now() - lastRefresh.at < REFRESH_RESULT_TTL_MS) {
+    return lastRefresh.session
   }
-  return importDustCliSession()
+  refreshInflight = (async () => {
+    try {
+      const bin = await resolveBin('dust')
+      if (bin) {
+        try {
+          // CI=1 suppresses the spinner / update-check UI; the timeout bounds the network round-trip.
+          await exec(bin, ['status'], { timeout: 25_000, env: { ...process.env, CI: '1' } })
+        } catch {
+          // ignore — fall through and re-read the keychain regardless of exit code
+        }
+      }
+      const s = await importDustCliSession()
+      lastRefresh = { at: Date.now(), session: s }
+      return s
+    } finally {
+      refreshInflight = null
+    }
+  })()
+  return refreshInflight
 }
 
 /**
