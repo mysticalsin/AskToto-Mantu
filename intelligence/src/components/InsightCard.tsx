@@ -17,7 +17,9 @@ export function InsightCard({ insight, index, onSelectDeal }: Props) {
     <motion.div
       layout
       initial={{ opacity: 0, y: 16 }}
-      animate={{ opacity: 1, y: 0, transition: { duration: 0.35, delay: index * 0.06, ease: 'easeOut' } }}
+      // Cap the stagger at 8 cards — beyond that, delay*index would keep the Nth card invisible for
+      // seconds on a deep account/deal history, which reads as missing content, not a nice reveal.
+      animate={{ opacity: 1, y: 0, transition: { duration: 0.35, delay: Math.min(index, 8) * 0.06, ease: 'easeOut' } }}
       whileHover={{ y: -4 }}
       className="group rounded-xl border border-[var(--color-mantu-border)] bg-[var(--color-mantu-surface)] p-5 shadow-lg shadow-black/20 transition-shadow hover:shadow-xl hover:shadow-mantu/10"
     >
