@@ -83,11 +83,9 @@ AskToto/
 │       ├── routing.ts        thinking-mode router (base / think / deep tiers)
 │       └── prompts.ts        default mode prompts
 ├── resources/graphify_runner.py   graphify pipeline (bundled via extraResources)
-├── ios/                     SwiftUI companion app (XcodeGen)
 ├── build/                   app icon, entitlements, managed-config example
 ├── electron-builder.yml     packaging (dmg/zip/nsis/appx), signing via env
-├── docs/                    design, planning history, prior audits, SIGNING.md
-└── production-readiness/    production-readiness audit package (gates + evidence)
+└── docs/                    design spec, architecture, hardening backlog, SIGNING.md
 ```
 
 ## Features
@@ -130,11 +128,9 @@ AskToto/
 ## Docs
 
 - `docs/design/` — design spec
-- `docs/planning/` — plan + roadmap history
-- `docs/audits/` — prior audit + QA reports
 - `docs/SIGNING.md` — code-signing / notarization setup
-- `production-readiness/` — production-readiness audit snapshot (2026-06-27, pre-git / pre-bundled-ASR —
-  several headline findings since remediated; see `docs/audit/current-state.md` for the current picture)
+- `docs/asktoto-architecture.md` — architecture reference
+- `docs/asktoto-hardening-backlog.md` — deferred hardening items
 
 ## Known gaps (honest)
 
