@@ -53,4 +53,18 @@ describe('buildSystem — grounding & trust', () => {
     expect(buildSystem(req('recap'), 'general', EMPTY_PROFILE, {}, [])).toContain('detailed post-meeting document')
     expect(summary).not.toContain('GROUNDING & HONESTY')
   })
+
+  it('recap is mode-aware: the active conversation mode appends its FOCUS block, general stays plain', () => {
+    const salesRecap = buildSystem(req('recap'), 'sales', EMPTY_PROFILE, {}, [])
+    expect(salesRecap).toContain('detailed post-meeting document') // section skeleton intact
+    expect(salesRecap).toContain('MODE FOCUS (Sales)')
+    expect(salesRecap).toMatch(/buying signals/i)
+
+    const generalRecap = buildSystem(req('recap'), 'general', EMPTY_PROFILE, {}, [])
+    expect(generalRecap).not.toContain('MODE FOCUS')
+
+    const customRecap = buildSystem(req('recap'), 'my-custom-mode', EMPTY_PROFILE, {}, [])
+    expect(customRecap).not.toContain('MODE FOCUS')
+    expect(customRecap).toContain('detailed post-meeting document')
+  })
 })
