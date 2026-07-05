@@ -1665,6 +1665,22 @@ function registerIpc(): void {
       meetings: listBrainMeetingExtractions(s).map((slug) => readBrainMeetingExtraction(s, slug)).filter(Boolean)
     }
   })
+  // Canonical people/account NAMES ONLY (never quotes, roles, deals, or any other entity field) — feeds
+  // the renderer's ASR entity-casing bias (lib/entity-casing.ts) so a live transcript can spell a known
+  // name correctly. Read-only, best-effort: an unsigned-in/empty brain just yields no names, never throws,
+  // since this runs opportunistically (mount + after a meeting saves), not in response to a user action.
+  ipcMain.handle(IPC.brainEntityNames, (e) => {
+    assertMainWindow(e)
+    if (!requireAuth()) return { names: [] }
+    const s = getSettings()
+    const people = listBrainEntities(s, 'person')
+      .map((slug) => readBrainPerson(s, slug)?.name)
+      .filter((n): n is string => !!n)
+    const accounts = listBrainEntities(s, 'account')
+      .map((slug) => readBrainAccount(s, slug)?.name)
+      .filter((n): n is string => !!n)
+    return { names: Array.from(new Set([...people, ...accounts])).slice(0, 500) }
+  })
   // Deal outcome — the human closes the loop the LLM never may (see DealEntitySchema.outcome). Main-window
   // only: it's a brain WRITE, like brainCommitmentSettle. Same slug convention too: the renderer sends the
   // deal's display name in `dealSlug`, slugified here before it reaches the store.

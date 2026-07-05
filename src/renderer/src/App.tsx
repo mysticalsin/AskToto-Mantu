@@ -123,12 +123,16 @@ export function App(): JSX.Element {
   const followup = useAsk() // Review screen's follow-up draft — must NOT reuse `ask`, which already holds the recap there
 
   const onQuestionRef = useRef<(l: TranscriptLine) => void>(() => {})
+  // Canonical people/account names for the ASR entity-casing bias (see lib/entity-casing.ts). Fetched
+  // below (once on mount, refreshed after a meeting saves); declared here so useListen can read it.
+  const [entityNames, setEntityNames] = useState<string[]>([])
   const listen = useListen(
     (l) => onQuestionRef.current(l),
     settings?.asrCorrections,
     // Persist a mid-session engine fallback to Settings (checkable after the fact) instead of a live banner.
     () => void patch({ asrLastFallbackAt: Date.now() }),
-    settings?.micDeviceId
+    settings?.micDeviceId,
+    settings?.asrEntityBias ? entityNames : undefined
   )
 
   const [input, setInput] = useState('')
@@ -245,6 +249,21 @@ export function App(): JSX.Element {
   const savedRef = useRef('')
   const savingRef = useRef(false)
   const [savedPath, setSavedPath] = useState<string | null>(null)
+  // Refresh the entity-casing name list once on mount, and again whenever a meeting finishes saving —
+  // the best available "the brain might have new names" signal (extraction itself runs async in main
+  // after the save, so this is a best-effort refresh, not a guarantee the very latest meeting is in it).
+  useEffect(() => {
+    let alive = true
+    void window.toto
+      .brainEntityNames()
+      .then((r) => {
+        if (alive) setEntityNames(r.names)
+      })
+      .catch(() => {})
+    return () => {
+      alive = false
+    }
+  }, [savedPath])
   const [saveError, setSaveError] = useState<string | null>(null)
   const [saveAttempts, setSaveAttempts] = useState(0)
   const MAX_SAVE_RETRIES = 5

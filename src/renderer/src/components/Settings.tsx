@@ -377,6 +377,77 @@ function ToggleRow({
   )
 }
 
+/**
+ * "Suggest names from your meetings" — one-click seeding of the vocabulary-corrections list from the
+ * brain's known people/account names (brain:entityNames). Fetches lazily on first click (not on every
+ * Settings open), then shows names not already covered by an existing correction (same `from`, folded to
+ * lowercase) or already present byte-identical as a correction's `to`. Clicking a chip appends
+ * `<lowercased name> => <Canonical Name>`, respecting the same 100-entry cap the textarea itself enforces.
+ */
+function VocabSuggestions({
+  settings,
+  patch
+}: {
+  settings: PublicSettings
+  patch: (p: Partial<PublicSettings>) => void
+}): JSX.Element {
+  const [names, setNames] = useState<string[] | null>(null)
+  const [loading, setLoading] = useState(false)
+  const locked = settings.managedKeys.includes('asrCorrections')
+
+  const load = useCallback((): void => {
+    setLoading(true)
+    void window.toto
+      .brainEntityNames()
+      .then((r) => setNames(r.names))
+      .catch(() => setNames([]))
+      .finally(() => setLoading(false))
+  }, [])
+
+  if (names === null) {
+    return (
+      <div className="mt-0.5">
+        <TextButton onClick={load} disabled={loading || locked}>
+          {loading ? 'Looking…' : 'Suggest names from your meetings'}
+        </TextButton>
+      </div>
+    )
+  }
+
+  const covered = new Set(
+    settings.asrCorrections.flatMap((c) => [c.from.trim().toLowerCase(), c.to.trim()])
+  )
+  const suggestions = names.filter((n) => !covered.has(n.toLowerCase()) && !covered.has(n))
+  const atCap = settings.asrCorrections.length >= 100
+
+  if (suggestions.length === 0) {
+    return (
+      <div className="mt-0.5 text-[11px] text-[color:var(--cl-muted-foreground)]">
+        No new names to suggest from your meetings.
+      </div>
+    )
+  }
+
+  return (
+    <div className="mt-1 flex flex-wrap gap-1.5">
+      {suggestions.slice(0, 20).map((name) => (
+        <button
+          key={name}
+          type="button"
+          disabled={locked || atCap}
+          title={`Add "${name.toLowerCase()} => ${name}"`}
+          onClick={() =>
+            patch({ asrCorrections: [...settings.asrCorrections, { from: name.toLowerCase(), to: name }].slice(0, 100) })
+          }
+          className="no-drag focus-ring rounded-full border border-[var(--cl-border)] bg-white/[0.04] px-2 py-0.5 text-[11px] text-[color:var(--cl-foreground)] hover:bg-white/[0.09] disabled:opacity-40"
+        >
+          + {name}
+        </button>
+      ))}
+    </div>
+  )
+}
+
 /** Friendly hint for an auto-detected or ambiguous pasted key. */
 function detectHint(value: string, current: ProviderId): { kind: 'ok' | 'tip'; text: string } | null {
   const v = value.trim()
@@ -3123,6 +3194,13 @@ export function Settings({
                   />
                 </Section>
                 <Section title="Vocabulary corrections" desc="Words the transcriber keeps getting wrong. Fix them once, applied to every meeting.">
+                  <ToggleRow
+                    label="Spell known names correctly"
+                    desc="Spell names from your meeting history correctly in transcripts (people and accounts your brain already knows)."
+                    on={settings.asrEntityBias}
+                    onChange={(v) => patch({ asrEntityBias: v })}
+                    disabled={settings.managedKeys.includes('asrEntityBias')}
+                  />
                   <textarea
                     value={settings.asrCorrections.map((c) => `${c.from} => ${c.to}`).join('\n')}
                     onChange={(e) =>
@@ -3152,6 +3230,7 @@ export function Settings({
                   <span className="text-[11px] text-[color:var(--cl-muted-foreground)]">
                     One per line, format: heard =&gt; correct.
                   </span>
+                  <VocabSuggestions settings={settings} patch={patch} />
                 </Section>
               </div>
             )}
