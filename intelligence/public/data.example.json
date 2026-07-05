@@ -1,217 +1,402 @@
 {
   "meta": {
     "is_placeholder": true,
-    "note": "PLACEHOLDER DATA — replace public/data.json with the real extraction output before this is used for anything real. Generic example content only; not derived from any real deal, client, or transcript.",
-    "generated": "1970-01-01T00:00:00Z",
-    "n_deals": 3
+    "note": "EXAMPLE DATA — entirely fictional (Example Account/Deal/Person names). Conforms to the current DashboardData contract for local dev and tests; replace public/data.json with real extraction output before shipping.",
+    "generated": "2026-07-05T00:00:00.000Z",
+    "n_deals": 4
   },
   "deals": [
     {
       "bid_id": "example-deal-alpha",
-      "account": "example-account-a",
-      "strategic_group": "example-group-north",
-      "sector": "example-sector-1",
+      "account": "Example Account Alpha",
+      "sector": "Financial Services",
       "display_name": "Example Deal Alpha",
       "outcome": "open",
       "win_likelihood_band": "good",
-      "value_usd": 1000000,
+      "value_usd": null,
       "stage": "Propose",
+      "band_evidence": "Procurement's pricing objection was resolved and the technical deep dive cleared their compliance bar.",
+      "velocity": {
+        "signal": "hard-calendar-gate",
+        "evidence": "Security review board meets first Tuesday of each month; must clear before the board sign-off window closes."
+      },
       "claims": [
         {
-          "claim_id": "example-deal-alpha-claim-1",
-          "statement": "Example placeholder claim: buyer questioned resource-based pricing model.",
+          "claim_id": "example-deal-alpha-1",
+          "statement": "Alpha's procurement lead pushed back on resource-based pricing, wanting outcome-based terms instead.",
           "category": "pricing",
-          "raised_by": "example-buyer-contact",
           "stance": "objection",
-          "was_deciding_factor": true,
           "source": {
-            "file": "example/path/to/source-note.md",
-            "quote_or_paraphrase": "PLACEHOLDER — example quote text goes here.",
-            "grounding": "unknown"
+            "file": "meetings/2026-03-24-alpha-requirements-workshop.md",
+            "quote_or_paraphrase": "We don't want to pay for headcount, we want to pay for the outcome.",
+            "grounding": "verified"
           },
-          "confidence": 0
+          "confidence": 0.82
         },
         {
-          "claim_id": "example-deal-alpha-claim-2",
-          "statement": "Example placeholder claim: buyer expressed positive signal on delivery team fit.",
+          "claim_id": "example-deal-alpha-2",
+          "statement": "IT Director confirmed the platform's security posture met their compliance bar.",
           "category": "technical-fit",
-          "raised_by": "example-buyer-contact-2",
           "stance": "positive-signal",
-          "was_deciding_factor": false,
           "source": {
-            "file": "example/path/to/source-note-2.md",
-            "quote_or_paraphrase": "PLACEHOLDER — example quote text goes here.",
-            "grounding": "unknown"
+            "file": "meetings/2026-05-10-alpha-technical-deep-dive.md",
+            "quote_or_paraphrase": "This clears our SOC 2 gap analysis.",
+            "grounding": "verified"
           },
-          "confidence": 0
+          "confidence": 0.78
         }
       ],
       "call_grades": [
         {
-          "date": "1970-01-01",
-          "label": "Example discovery call",
+          "date": "2026-03-24",
+          "label": "Alpha Requirements Workshop",
           "grade": "mixed",
-          "note": "PLACEHOLDER — example call note.",
+          "note": "requirements · technical-fit",
           "is_client_facing": true
         },
         {
-          "date": "1970-01-15",
-          "label": "Example defense call",
-          "grade": "concerning",
-          "note": "PLACEHOLDER — example call note.",
+          "date": "2026-05-10",
+          "label": "Alpha Technical Deep Dive",
+          "grade": "good",
+          "note": "technical-fit · security",
+          "is_client_facing": true
+        },
+        {
+          "date": "2026-06-20",
+          "label": "Alpha Exec Check-in",
+          "grade": "good",
+          "note": "relationship · process",
           "is_client_facing": true
         }
       ],
-      "velocity": {
-        "signal": "soft-organizational-gate",
-        "evidence": "Buying committee still forming; no firm date yet."
-      },
-      "commitments": [],
-      "band_evidence": ""
+      "commitments": [
+        {
+          "text": "Send the finalized security questionnaire responses",
+          "by": "you",
+          "status": "kept",
+          "due_hint": "by end of week",
+          "quote": "We'll turn the questionnaire around by Friday.",
+          "date": "2026-03-24",
+          "meeting": "meetings/2026-03-24-alpha-requirements-workshop.md"
+        },
+        {
+          "text": "Introduce the CFO for a validation call",
+          "by": "them",
+          "status": "broken",
+          "due_hint": "within two weeks",
+          "quote": "I'll get our CFO on a call with you in the next couple weeks.",
+          "date": "2026-05-10",
+          "meeting": "meetings/2026-05-10-alpha-technical-deep-dive.md"
+        },
+        {
+          "text": "Share the updated implementation timeline with the security team",
+          "by": "Alex Example",
+          "status": "open",
+          "due_hint": "",
+          "quote": "I'll get you the updated timeline once security signs off.",
+          "date": "2026-06-20",
+          "meeting": "meetings/2026-06-20-alpha-exec-checkin.md"
+        }
+      ]
     },
     {
       "bid_id": "example-deal-beta",
-      "account": "example-account-b",
-      "strategic_group": "example-group-north",
-      "sector": "example-sector-2",
+      "account": "Example Account Beta",
+      "sector": "Technology",
       "display_name": "Example Deal Beta",
-      "outcome": "lost",
+      "outcome": "open",
       "win_likelihood_band": "concerning",
-      "value_usd": 400000,
-      "stage": "Closed",
+      "value_usd": null,
+      "stage": "Discover",
+      "band_evidence": "No compelling event and unresolved budget authority ahead of renewal.",
+      "velocity": {
+        "signal": "no-hard-date-found",
+        "evidence": "No compelling event identified; renewal timing is discretionary."
+      },
       "claims": [
         {
-          "claim_id": "example-deal-beta-claim-1",
-          "statement": "Example placeholder claim: timing misaligned with buyer's budget cycle.",
+          "claim_id": "example-deal-beta-1",
+          "statement": "Beta flagged no hard deadline driving the decision, raising stall risk.",
           "category": "timing",
-          "raised_by": "example-buyer-contact-3",
           "stance": "objection",
-          "was_deciding_factor": true,
           "source": {
-            "file": "example/path/to/source-note-3.md",
-            "quote_or_paraphrase": "PLACEHOLDER — example quote text goes here.",
-            "grounding": "unknown"
+            "file": "meetings/2026-04-02-beta-intro-call.md",
+            "quote_or_paraphrase": "There's no real trigger event pushing us to decide by a certain date.",
+            "grounding": "verified"
           },
-          "confidence": 0
+          "confidence": 0.7
+        },
+        {
+          "claim_id": "example-deal-beta-2",
+          "statement": "Budget authority is unconfirmed heading into contract renewal.",
+          "category": "commercial-model",
+          "stance": "objection",
+          "source": {
+            "file": "meetings/2026-06-28-beta-renewal-planning.md",
+            "quote_or_paraphrase": "I still need sign-off before we can commit budget.",
+            "grounding": "assumed"
+          },
+          "confidence": 0.55
         }
       ],
       "call_grades": [
         {
-          "date": "1970-02-01",
-          "label": "Example kickoff call",
-          "grade": "good",
-          "note": "PLACEHOLDER — example call note.",
+          "date": "2026-04-02",
+          "label": "Beta Intro Call",
+          "grade": "concerning",
+          "note": "pricing · timing",
+          "is_client_facing": true
+        },
+        {
+          "date": "2026-06-28",
+          "label": "Beta Renewal Planning",
+          "grade": "mixed",
+          "note": "pricing · timing",
           "is_client_facing": true
         }
       ],
-      "velocity": {
-        "signal": "no-hard-date-found",
-        "evidence": "No compelling event; slipped to the incumbent."
-      },
-      "commitments": [],
-      "band_evidence": ""
+      "commitments": [
+        {
+          "text": "Confirm renewed budget authority before Q3 planning",
+          "by": "Jordan Example",
+          "status": "open",
+          "due_hint": "before contract renewal",
+          "quote": "I need to confirm budget authority before we can move forward.",
+          "date": "2026-06-28",
+          "meeting": "meetings/2026-06-28-beta-renewal-planning.md"
+        }
+      ]
     },
     {
       "bid_id": "example-deal-gamma",
-      "account": "example-account-c",
-      "strategic_group": "example-group-south",
-      "sector": "example-sector-1",
+      "account": "Example Account Gamma",
+      "sector": "Technology",
       "display_name": "Example Deal Gamma",
-      "outcome": "open",
-      "win_likelihood_band": "mixed",
+      "outcome": "won",
+      "win_likelihood_band": "good",
       "value_usd": null,
-      "stage": "Discover",
+      "stage": "Closed - Won",
+      "band_evidence": "Commercial terms were approved without further negotiation and the contract was signed.",
+      "velocity": {
+        "signal": "hard-calendar-gate",
+        "evidence": "Signature was gated to close before fiscal year-end."
+      },
       "claims": [
         {
-          "claim_id": "example-deal-gamma-claim-1",
-          "statement": "Example placeholder claim: competitor mentioned as incumbent.",
-          "category": "competitor",
-          "raised_by": "example-buyer-contact-4",
-          "stance": "neutral-observation",
-          "was_deciding_factor": false,
+          "claim_id": "example-deal-gamma-1",
+          "statement": "Gamma's steering committee approved commercial terms without further negotiation.",
+          "category": "commercial-model",
+          "stance": "positive-signal",
           "source": {
-            "file": "example/path/to/source-note-4.md",
-            "quote_or_paraphrase": "PLACEHOLDER — example quote text goes here.",
+            "file": "meetings/2026-04-18-gamma-commercial-review.md",
+            "quote_or_paraphrase": "Terms look good, let's move to signature.",
+            "grounding": "verified"
+          },
+          "confidence": 0.88
+        },
+        {
+          "claim_id": "example-deal-gamma-2",
+          "statement": "Contract was signed with no competitor mentioned in the final stage.",
+          "category": "competitor",
+          "stance": "neutral-observation",
+          "source": {
+            "file": "meetings/2026-05-20-gamma-contract-signature.md",
+            "quote_or_paraphrase": "No other vendor came up in this call.",
             "grounding": "unknown"
           },
-          "confidence": 0
+          "confidence": 0.4
         }
       ],
       "call_grades": [
         {
-          "date": "1970-03-01",
-          "label": "Example intro call",
+          "date": "2026-03-10",
+          "label": "Gamma Discovery Call",
           "grade": "mixed",
-          "note": "PLACEHOLDER — example call note.",
+          "note": "discovery · technical-fit",
+          "is_client_facing": true
+        },
+        {
+          "date": "2026-04-18",
+          "label": "Gamma Commercial Review",
+          "grade": "good",
+          "note": "pricing · commercial-model",
+          "is_client_facing": true
+        },
+        {
+          "date": "2026-05-20",
+          "label": "Gamma Contract Signature",
+          "grade": "good",
+          "note": "commercial-model · process",
           "is_client_facing": true
         }
       ],
+      "commitments": [
+        {
+          "text": "Deliver signed SOW within 5 business days",
+          "by": "you",
+          "status": "kept",
+          "due_hint": "within 5 business days",
+          "quote": "We'll have the signed SOW back to you within the week.",
+          "date": "2026-05-20",
+          "meeting": "meetings/2026-05-20-gamma-contract-signature.md"
+        }
+      ]
+    },
+    {
+      "bid_id": "example-deal-delta",
+      "account": "Example Account Beta",
+      "sector": "Technology",
+      "display_name": "Example Deal Delta",
+      "outcome": "lost",
+      "win_likelihood_band": null,
+      "value_usd": null,
+      "stage": "Closed - Lost",
+      "band_evidence": "",
       "velocity": {
         "signal": "soft-organizational-gate",
-        "evidence": "Buying committee still forming; no firm date yet."
+        "evidence": "Steering committee approval process stalled without a hard deadline forcing a decision."
       },
-      "commitments": [],
-      "band_evidence": ""
+      "claims": [
+        {
+          "claim_id": "example-deal-delta-1",
+          "statement": "Steering committee withheld final budget approval, stalling the deal past its window.",
+          "category": "process",
+          "stance": "objection",
+          "source": {
+            "file": "meetings/2026-05-01-beta-delta-budget-review.md",
+            "quote_or_paraphrase": "The committee didn't sign off in time.",
+            "grounding": "verified"
+          },
+          "confidence": 0.75
+        },
+        {
+          "claim_id": "example-deal-delta-2",
+          "statement": "Incumbent vendor was retained instead due to existing integration footprint.",
+          "category": "competitor",
+          "stance": "objection",
+          "source": {
+            "file": "meetings/2026-06-02-beta-delta-closeout.md",
+            "quote_or_paraphrase": "We're staying with our current vendor for now given how embedded they already are.",
+            "grounding": "verified"
+          },
+          "confidence": 0.8
+        }
+      ],
+      "call_grades": [
+        {
+          "date": "2026-05-01",
+          "label": "Beta Delta Budget Review",
+          "grade": "concerning",
+          "note": "timing · pricing",
+          "is_client_facing": true
+        },
+        {
+          "date": "2026-06-02",
+          "label": "Beta Delta Closeout",
+          "grade": "concerning",
+          "note": "competitor · timing",
+          "is_client_facing": true
+        }
+      ],
+      "commitments": [
+        {
+          "text": "Provide final budget approval from the steering committee",
+          "by": "them",
+          "status": "broken",
+          "due_hint": "by the closeout call",
+          "quote": "I expect steering committee sign-off before we close this out.",
+          "date": "2026-06-02",
+          "meeting": "meetings/2026-06-02-beta-delta-closeout.md"
+        }
+      ]
     }
   ],
   "coaching_insights": [
     {
-      "insight_id": "example-insight-1",
-      "pattern": "PLACEHOLDER PATTERN — example: resource-based pricing reads as value-blind",
-      "n_observations": 1,
-      "deals": [
-        "example-deal-alpha"
-      ],
-      "what_happened": "PLACEHOLDER — example description of what happened across the cited deal(s).",
-      "why_it_matters": "PLACEHOLDER — example description of why this matters; single-deal observation, not yet a pattern.",
-      "coaching_move": "PLACEHOLDER COACHING MOVE — example: lead with outcome-based pricing framing instead of headcount math.",
+      "insight_id": "insight-0-example-deal-alpha",
+      "pattern": "Resource-based pricing reads as value-blind to procurement-led buyers",
+      "n_observations": 2,
+      "deals": ["example-deal-alpha"],
+      "what_happened": "Procurement raised the same pricing objection twice across the deal.",
+      "why_it_matters": "Recurred across 2 meetings: a pattern, not a one-off.",
+      "coaching_move": "Lead with outcome-based pricing framing before procurement anchors on headcount math.",
       "category": "pricing",
-      "confidence": 0.2,
-      "grounding": "unknown",
+      "confidence": 0.85,
+      "grounding": "verified",
       "sources": [
         {
-          "file": "example/path/to/source-note.md",
-          "quote_or_paraphrase": "PLACEHOLDER — example quote text goes here."
+          "file": "meetings/2026-03-24-alpha-requirements-workshop.md",
+          "quote_or_paraphrase": "We don't want to pay for headcount, we want to pay for the outcome."
+        },
+        {
+          "file": "meetings/2026-06-20-alpha-exec-checkin.md",
+          "quote_or_paraphrase": "Pricing structure is still the open question for our board."
         }
       ]
     },
     {
-      "insight_id": "example-insight-2",
-      "pattern": "PLACEHOLDER PATTERN — example: timing objections recur near budget-cycle boundaries",
-      "n_observations": 1,
-      "deals": [
-        "example-deal-beta"
-      ],
-      "what_happened": "PLACEHOLDER — example description of what happened across the cited deal(s).",
-      "why_it_matters": "PLACEHOLDER — single-deal observation, not yet a pattern.",
-      "coaching_move": "PLACEHOLDER COACHING MOVE — example: confirm budget-cycle timing during discovery, before proposing.",
+      "insight_id": "insight-1-example-deal-beta",
+      "pattern": "Deals without a hard compelling event stall past their decision window",
+      "n_observations": 3,
+      "deals": ["example-deal-beta", "example-deal-delta"],
+      "what_happened": "Both Beta-account deals lacked a forcing deadline and slipped.",
+      "why_it_matters": "Recurred across 3 meetings: a pattern, not a one-off.",
+      "coaching_move": "Manufacture a compelling event (pricing lock, resource availability window) during discovery instead of waiting for the buyer to find one.",
       "category": "timing",
-      "confidence": 0.2,
-      "grounding": "unknown",
+      "confidence": 0.8,
+      "grounding": "verified",
       "sources": [
         {
-          "file": "example/path/to/source-note-3.md",
-          "quote_or_paraphrase": "PLACEHOLDER — example quote text goes here."
+          "file": "meetings/2026-04-02-beta-intro-call.md",
+          "quote_or_paraphrase": "There's no real trigger event pushing us to decide by a certain date."
+        },
+        {
+          "file": "meetings/2026-05-01-beta-delta-budget-review.md",
+          "quote_or_paraphrase": "The committee didn't sign off in time."
+        },
+        {
+          "file": "meetings/2026-06-02-beta-delta-closeout.md",
+          "quote_or_paraphrase": "We're staying with our current vendor for now given how embedded they already are."
         }
       ]
     },
     {
-      "insight_id": "example-insight-3",
-      "pattern": "PLACEHOLDER PATTERN — example: technical-fit signals correlate with faster progression",
+      "insight_id": "insight-2-example-deal-alpha",
+      "pattern": "Early security/compliance proof clears procurement-level objections",
       "n_observations": 1,
-      "deals": [
-        "example-deal-alpha"
-      ],
-      "what_happened": "PLACEHOLDER — example description of what happened across the cited deal(s).",
-      "why_it_matters": "PLACEHOLDER — single-deal observation, not yet a pattern.",
-      "coaching_move": "PLACEHOLDER COACHING MOVE — example: surface delivery-team credentials earlier in the cycle.",
+      "deals": ["example-deal-alpha"],
+      "what_happened": "Observed during meetings/2026-05-10-alpha-technical-deep-dive.md",
+      "why_it_matters": "Single-deal observation, not yet a pattern.",
+      "coaching_move": "Surface SOC 2 / compliance evidence earlier in the cycle, before procurement raises it unprompted.",
       "category": "technical-fit",
-      "confidence": 0.15,
-      "grounding": "unknown",
+      "confidence": 0.7,
+      "grounding": "verified",
       "sources": [
         {
-          "file": "example/path/to/source-note-2.md",
-          "quote_or_paraphrase": "PLACEHOLDER — example quote text goes here."
+          "file": "meetings/2026-05-10-alpha-technical-deep-dive.md",
+          "quote_or_paraphrase": "This clears our SOC 2 gap analysis."
+        }
+      ]
+    },
+    {
+      "insight_id": "insight-3-example-deal-gamma",
+      "pattern": "Competitor presence goes unasked in later-stage calls",
+      "n_observations": 2,
+      "deals": ["example-deal-gamma", "example-deal-delta"],
+      "what_happened": "Neither late-stage call surfaced a direct competitor question.",
+      "why_it_matters": "Recurred across 2 meetings: a pattern, not a one-off.",
+      "coaching_move": "Ask a direct competitor question in every late-stage call, even when momentum feels positive.",
+      "category": "competitor",
+      "confidence": 0.6,
+      "grounding": "assumed",
+      "sources": [
+        {
+          "file": "meetings/2026-05-20-gamma-contract-signature.md",
+          "quote_or_paraphrase": "No other vendor came up in this call."
+        },
+        {
+          "file": "meetings/2026-06-02-beta-delta-closeout.md",
+          "quote_or_paraphrase": "We're staying with our current vendor for now given how embedded they already are."
         }
       ]
     }
@@ -219,237 +404,539 @@
   "account_graph": {
     "nodes": [
       {
-        "id": "acct-example-account-a",
-        "label": "example-account-a",
-        "type": "account",
-        "account": "example-account-a",
-        "strategic_group": "example-group-north",
-        "sector": "example-sector-1",
-        "degree": 2,
+        "id": "sector:Financial Services",
+        "label": "Financial Services",
+        "type": "sector",
+        "sector": "Financial Services",
+        "degree": 1,
         "community_id": 0,
-        "community_label": "example-sector-1"
+        "community_label": "Financial Services"
       },
       {
-        "id": "acct-example-account-b",
-        "label": "example-account-b",
-        "type": "account",
-        "account": "example-account-b",
-        "strategic_group": "example-group-north",
-        "sector": "example-sector-2",
-        "degree": 2,
-        "community_id": 0,
-        "community_label": "example-sector-1"
-      },
-      {
-        "id": "acct-example-account-c",
-        "label": "example-account-c",
-        "type": "account",
-        "account": "example-account-c",
-        "strategic_group": "example-group-south",
-        "sector": "example-sector-1",
+        "id": "sector:Technology",
+        "label": "Technology",
+        "type": "sector",
+        "sector": "Technology",
         "degree": 2,
         "community_id": 1,
-        "community_label": "example-sector-1"
+        "community_label": "Technology"
       },
       {
-        "id": "example-deal-alpha",
+        "id": "account:example-account-alpha",
+        "label": "Example Account Alpha",
+        "type": "account",
+        "account": "Example Account Alpha",
+        "sector": "Financial Services",
+        "degree": 7,
+        "community_id": 0,
+        "community_label": "Financial Services",
+        "ref": "meetings/2026-06-20-alpha-exec-checkin.md",
+        "date": "2026-06-20",
+        "is_client_facing": true,
+        "last_touch": "2026-06-20",
+        "days_quiet": 15,
+        "freshness": "cooling"
+      },
+      {
+        "id": "account:example-account-beta",
+        "label": "Example Account Beta",
+        "type": "account",
+        "account": "Example Account Beta",
+        "sector": "Technology",
+        "degree": 4,
+        "community_id": 1,
+        "community_label": "Technology",
+        "ref": "meetings/2026-06-28-beta-renewal-planning.md",
+        "date": "2026-06-28",
+        "is_client_facing": true,
+        "last_touch": "2026-06-28",
+        "days_quiet": 7,
+        "freshness": "fresh"
+      },
+      {
+        "id": "account:example-account-gamma",
+        "label": "Example Account Gamma",
+        "type": "account",
+        "account": "Example Account Gamma",
+        "sector": "Technology",
+        "degree": 2,
+        "community_id": 1,
+        "community_label": "Technology",
+        "ref": "meetings/2026-05-20-gamma-contract-signature.md",
+        "date": "2026-05-20",
+        "is_client_facing": true,
+        "last_touch": "2026-05-20",
+        "days_quiet": 46,
+        "freshness": "cold",
+        "unmapped": true
+      },
+      {
+        "id": "deal:example-deal-alpha",
         "label": "Example Deal Alpha",
         "type": "deal",
-        "account": "example-account-a",
-        "strategic_group": "example-group-north",
-        "sector": "example-sector-1",
         "win_likelihood_band": "good",
         "bid_id": "example-deal-alpha",
-        "degree": 3,
+        "degree": 1,
         "community_id": 0,
-        "community_label": "example-sector-1"
+        "community_label": "Financial Services",
+        "ref": "meetings/2026-06-20-alpha-exec-checkin.md",
+        "date": "2026-06-20",
+        "is_client_facing": true,
+        "last_touch": "2026-06-20",
+        "days_quiet": 15,
+        "freshness": "cooling"
       },
       {
-        "id": "example-deal-beta",
+        "id": "deal:example-deal-beta",
         "label": "Example Deal Beta",
         "type": "deal",
-        "account": "example-account-b",
-        "strategic_group": "example-group-north",
-        "sector": "example-sector-2",
         "win_likelihood_band": "concerning",
         "bid_id": "example-deal-beta",
-        "degree": 2,
-        "community_id": 0,
-        "community_label": "example-sector-1"
+        "degree": 1,
+        "community_id": 1,
+        "community_label": "Technology",
+        "ref": "meetings/2026-06-28-beta-renewal-planning.md",
+        "date": "2026-06-28",
+        "is_client_facing": true,
+        "last_touch": "2026-06-28",
+        "days_quiet": 7,
+        "freshness": "fresh",
+        "single_threaded": true
       },
       {
-        "id": "example-deal-gamma",
+        "id": "deal:example-deal-gamma",
         "label": "Example Deal Gamma",
         "type": "deal",
-        "account": "example-account-c",
-        "strategic_group": "example-group-south",
-        "sector": "example-sector-1",
-        "win_likelihood_band": "mixed",
+        "win_likelihood_band": "good",
         "bid_id": "example-deal-gamma",
-        "degree": 2,
-        "community_id": 1,
-        "community_label": "example-sector-1"
-      },
-      {
-        "id": "person-example-buyer-contact",
-        "label": "example-buyer-contact",
-        "type": "person",
-        "account": "example-account-a",
-        "degree": 1,
-        "community_id": 0,
-        "community_label": "example-sector-1"
-      },
-      {
-        "id": "person-example-buyer-contact-2",
-        "label": "example-buyer-contact-2",
-        "type": "person",
-        "account": "example-account-a",
-        "degree": 1,
-        "community_id": 0,
-        "community_label": "example-sector-1"
-      },
-      {
-        "id": "person-example-buyer-contact-3",
-        "label": "example-buyer-contact-3",
-        "type": "person",
-        "account": "example-account-b",
-        "degree": 1,
-        "community_id": 0,
-        "community_label": "example-sector-1"
-      },
-      {
-        "id": "person-example-buyer-contact-4",
-        "label": "example-buyer-contact-4",
-        "type": "person",
-        "account": "example-account-c",
         "degree": 1,
         "community_id": 1,
-        "community_label": "example-sector-1"
+        "community_label": "Technology",
+        "ref": "meetings/2026-05-20-gamma-contract-signature.md",
+        "date": "2026-05-20",
+        "is_client_facing": true,
+        "last_touch": "2026-05-20",
+        "days_quiet": 46,
+        "freshness": "cold"
+      },
+      {
+        "id": "deal:example-deal-delta",
+        "label": "Example Deal Delta",
+        "type": "deal",
+        "bid_id": "example-deal-delta",
+        "degree": 1,
+        "community_id": 1,
+        "community_label": "Technology",
+        "ref": "meetings/2026-06-02-beta-delta-closeout.md",
+        "date": "2026-06-02",
+        "is_client_facing": true,
+        "last_touch": "2026-06-02",
+        "days_quiet": 33,
+        "freshness": "cooling"
+      },
+      {
+        "id": "person:alex-example",
+        "label": "Alex Example",
+        "type": "person",
+        "account": "Example Account Alpha",
+        "degree": 1,
+        "community_id": 0,
+        "community_label": "Financial Services",
+        "ref": "meetings/2026-06-20-alpha-exec-checkin.md",
+        "date": "2026-06-20",
+        "is_client_facing": true,
+        "last_touch": "2026-06-20",
+        "days_quiet": 15,
+        "freshness": "cooling"
+      },
+      {
+        "id": "person:blair-example",
+        "label": "Blair Example",
+        "type": "person",
+        "account": "Example Account Alpha",
+        "degree": 1,
+        "community_id": 0,
+        "community_label": "Financial Services",
+        "ref": "meetings/2026-05-10-alpha-technical-deep-dive.md",
+        "date": "2026-05-10",
+        "is_client_facing": true,
+        "last_touch": "2026-05-10",
+        "days_quiet": 56,
+        "freshness": "cold"
+      },
+      {
+        "id": "person:casey-example",
+        "label": "Casey Example",
+        "type": "person",
+        "account": "Example Account Alpha",
+        "degree": 1,
+        "community_id": 0,
+        "community_label": "Financial Services",
+        "ref": "meetings/2026-05-10-alpha-technical-deep-dive.md",
+        "date": "2026-05-10",
+        "is_client_facing": true,
+        "last_touch": "2026-05-10",
+        "days_quiet": 56,
+        "freshness": "cold"
+      },
+      {
+        "id": "person:drew-example",
+        "label": "Drew Example",
+        "type": "person",
+        "account": "Example Account Alpha",
+        "degree": 1,
+        "community_id": 0,
+        "community_label": "Financial Services",
+        "ref": "meetings/2026-03-24-alpha-requirements-workshop.md",
+        "date": "2026-03-24",
+        "is_client_facing": true,
+        "last_touch": "2026-03-24",
+        "days_quiet": 103,
+        "freshness": "cold"
+      },
+      {
+        "id": "person:emery-example",
+        "label": "Emery Example",
+        "type": "person",
+        "account": "Example Account Alpha",
+        "degree": 1,
+        "community_id": 0,
+        "community_label": "Financial Services",
+        "ref": "meetings/2026-06-20-alpha-exec-checkin.md",
+        "date": "2026-06-20",
+        "is_client_facing": true,
+        "last_touch": "2026-06-20",
+        "days_quiet": 15,
+        "freshness": "cooling"
+      },
+      {
+        "id": "person:jordan-example",
+        "label": "Jordan Example",
+        "type": "person",
+        "account": "Example Account Beta",
+        "degree": 1,
+        "community_id": 1,
+        "community_label": "Technology",
+        "ref": "meetings/2026-06-28-beta-renewal-planning.md",
+        "date": "2026-06-28",
+        "is_client_facing": true,
+        "last_touch": "2026-06-28",
+        "days_quiet": 7,
+        "freshness": "fresh"
       }
     ],
     "edges": [
-      {
-        "from": "example-deal-alpha",
-        "to": "acct-example-account-a",
-        "relation": "belongs_to",
-        "confidence": "EXTRACTED"
-      },
-      {
-        "from": "example-deal-beta",
-        "to": "acct-example-account-b",
-        "relation": "belongs_to",
-        "confidence": "EXTRACTED"
-      },
-      {
-        "from": "example-deal-gamma",
-        "to": "acct-example-account-c",
-        "relation": "belongs_to",
-        "confidence": "EXTRACTED"
-      },
-      {
-        "from": "person-example-buyer-contact",
-        "to": "example-deal-alpha",
-        "relation": "raised_claim_in",
-        "confidence": "EXTRACTED"
-      },
-      {
-        "from": "person-example-buyer-contact-2",
-        "to": "example-deal-alpha",
-        "relation": "raised_claim_in",
-        "confidence": "EXTRACTED"
-      },
-      {
-        "from": "person-example-buyer-contact-3",
-        "to": "example-deal-beta",
-        "relation": "raised_claim_in",
-        "confidence": "EXTRACTED"
-      },
-      {
-        "from": "person-example-buyer-contact-4",
-        "to": "example-deal-gamma",
-        "relation": "raised_claim_in",
-        "confidence": "INFERRED"
-      },
-      {
-        "from": "example-deal-alpha",
-        "to": "example-deal-beta",
-        "relation": "conceptually_related_to",
-        "confidence": "AMBIGUOUS"
-      }
+      { "from": "account:example-account-alpha", "to": "sector:Financial Services", "relation": "in-sector", "confidence": "EXTRACTED" },
+      { "from": "account:example-account-beta", "to": "sector:Technology", "relation": "in-sector", "confidence": "EXTRACTED" },
+      { "from": "account:example-account-gamma", "to": "sector:Technology", "relation": "in-sector", "confidence": "EXTRACTED" },
+      { "from": "deal:example-deal-alpha", "to": "account:example-account-alpha", "relation": "belongs-to", "confidence": "EXTRACTED" },
+      { "from": "deal:example-deal-beta", "to": "account:example-account-beta", "relation": "belongs-to", "confidence": "EXTRACTED" },
+      { "from": "deal:example-deal-gamma", "to": "account:example-account-gamma", "relation": "belongs-to", "confidence": "EXTRACTED" },
+      { "from": "deal:example-deal-delta", "to": "account:example-account-beta", "relation": "belongs-to", "confidence": "EXTRACTED" },
+      { "from": "person:alex-example", "to": "account:example-account-alpha", "relation": "works-at", "confidence": "EXTRACTED" },
+      { "from": "person:blair-example", "to": "account:example-account-alpha", "relation": "works-at", "confidence": "EXTRACTED" },
+      { "from": "person:casey-example", "to": "account:example-account-alpha", "relation": "works-at", "confidence": "INFERRED" },
+      { "from": "person:drew-example", "to": "account:example-account-alpha", "relation": "works-at", "confidence": "INFERRED" },
+      { "from": "person:emery-example", "to": "account:example-account-alpha", "relation": "works-at", "confidence": "AMBIGUOUS" },
+      { "from": "person:jordan-example", "to": "account:example-account-beta", "relation": "works-at", "confidence": "EXTRACTED" }
     ]
   },
   "account_summaries": [
     {
-      "key": "example-account-a",
-      "label": "example-account-a",
+      "key": "example-account-alpha",
+      "label": "Example Account Alpha",
       "deal_count": 1,
-      "total_value_usd": 1000000,
-      "band_counts": {
-        "good": 1,
-        "mixed": 0,
-        "concerning": 0
-      },
-      "insight_ids": [
-        "example-insight-1",
-        "example-insight-3"
-      ]
+      "total_value_usd": null,
+      "band_counts": { "good": 1, "mixed": 0, "concerning": 0 },
+      "insight_ids": ["insight-0-example-deal-alpha", "insight-2-example-deal-alpha"]
     },
     {
-      "key": "example-account-b",
-      "label": "example-account-b",
-      "deal_count": 1,
-      "total_value_usd": 400000,
-      "band_counts": {
-        "good": 0,
-        "mixed": 0,
-        "concerning": 1
-      },
-      "insight_ids": [
-        "example-insight-2"
-      ]
+      "key": "example-account-beta",
+      "label": "Example Account Beta",
+      "deal_count": 2,
+      "total_value_usd": null,
+      "band_counts": { "good": 0, "mixed": 0, "concerning": 1 },
+      "insight_ids": ["insight-1-example-deal-beta", "insight-3-example-deal-gamma"]
     },
     {
-      "key": "example-account-c",
-      "label": "example-account-c",
+      "key": "example-account-gamma",
+      "label": "Example Account Gamma",
       "deal_count": 1,
-      "total_value_usd": 0,
-      "band_counts": {
-        "good": 0,
-        "mixed": 1,
-        "concerning": 0
-      },
-      "insight_ids": []
+      "total_value_usd": null,
+      "band_counts": { "good": 1, "mixed": 0, "concerning": 0 },
+      "insight_ids": ["insight-3-example-deal-gamma"]
     }
   ],
   "sector_summaries": [
     {
-      "key": "example-sector-1",
-      "label": "example-sector-1",
-      "deal_count": 2,
-      "total_value_usd": 1000000,
-      "band_counts": {
-        "good": 1,
-        "mixed": 1,
-        "concerning": 0
-      },
-      "insight_ids": [
-        "example-insight-1",
-        "example-insight-3"
+      "key": "financial-services",
+      "label": "Financial Services",
+      "deal_count": 1,
+      "total_value_usd": null,
+      "band_counts": { "good": 1, "mixed": 0, "concerning": 0 },
+      "insight_ids": ["insight-0-example-deal-alpha", "insight-2-example-deal-alpha"]
+    },
+    {
+      "key": "technology",
+      "label": "Technology",
+      "deal_count": 3,
+      "total_value_usd": null,
+      "band_counts": { "good": 1, "mixed": 0, "concerning": 1 },
+      "insight_ids": ["insight-1-example-deal-beta", "insight-3-example-deal-gamma"]
+    }
+  ],
+  "going_cold": [
+    {
+      "nodeId": "person:drew-example",
+      "label": "Drew Example",
+      "type": "person",
+      "account": "Example Account Alpha",
+      "daysQuiet": 103,
+      "hook": "Alex Example still owes you: Share the updated implementation timeline with the security team. Chase it."
+    },
+    {
+      "nodeId": "person:blair-example",
+      "label": "Blair Example",
+      "type": "person",
+      "account": "Example Account Alpha",
+      "daysQuiet": 56,
+      "hook": "Alex Example still owes you: Share the updated implementation timeline with the security team. Chase it."
+    },
+    {
+      "nodeId": "account:example-account-gamma",
+      "label": "Example Account Gamma",
+      "type": "account",
+      "daysQuiet": 46,
+      "hook": "No open thread. Reopen with a value note on \"Gamma Contract Signature\"."
+    }
+  ],
+  "accounts": [
+    {
+      "slug": "example-account-alpha",
+      "name": "Example Account Alpha",
+      "sector": "Financial Services",
+      "strategic": true,
+      "win_reasons": [
+        {
+          "statement": "Security and compliance concerns were fully resolved after the technical deep dive.",
+          "quote": "This clears our SOC 2 gap analysis.",
+          "meeting": "meetings/2026-05-10-alpha-technical-deep-dive.md"
+        }
+      ],
+      "loss_reasons": []
+    },
+    {
+      "slug": "example-account-beta",
+      "name": "Example Account Beta",
+      "sector": "Technology",
+      "strategic": false,
+      "win_reasons": [],
+      "loss_reasons": [
+        {
+          "statement": "Deal Delta lost to the incumbent vendor due to switching-cost concerns.",
+          "quote": "We're staying with our current vendor for now given how embedded they already are.",
+          "meeting": "meetings/2026-06-02-beta-delta-closeout.md"
+        }
       ]
     },
     {
-      "key": "example-sector-2",
-      "label": "example-sector-2",
-      "deal_count": 1,
-      "total_value_usd": 400000,
-      "band_counts": {
-        "good": 0,
-        "mixed": 0,
-        "concerning": 1
-      },
-      "insight_ids": [
-        "example-insight-2"
+      "slug": "example-account-gamma",
+      "name": "Example Account Gamma",
+      "sector": "Technology",
+      "strategic": true,
+      "win_reasons": [
+        {
+          "statement": "Commercial terms were approved without further negotiation, clearing the path to signature.",
+          "quote": "Terms look good, let's move to signature.",
+          "meeting": "meetings/2026-04-18-gamma-commercial-review.md"
+        }
+      ],
+      "loss_reasons": []
+    }
+  ],
+  "people": [
+    {
+      "slug": "alex-example",
+      "name": "Alex Example",
+      "role": "VP Procurement",
+      "account": "Example Account Alpha",
+      "stance_trail": [
+        {
+          "meeting": "meetings/2026-03-24-alpha-requirements-workshop.md",
+          "kind": "objection",
+          "statement": "We don't want to pay for headcount, we want to pay for the outcome."
+        },
+        {
+          "meeting": "meetings/2026-06-20-alpha-exec-checkin.md",
+          "kind": "positive",
+          "statement": "Pricing structure is still the open question for our board, but we're leaning your way."
+        }
+      ],
+      "commitments": [
+        {
+          "text": "Share the updated implementation timeline with the security team",
+          "by": "Alex Example",
+          "status": "open",
+          "due_hint": "",
+          "quote": "I'll get you the updated timeline once security signs off.",
+          "date": "2026-06-20",
+          "meeting": "meetings/2026-06-20-alpha-exec-checkin.md"
+        }
+      ]
+    },
+    {
+      "slug": "blair-example",
+      "name": "Blair Example",
+      "role": "IT Director",
+      "account": "Example Account Alpha",
+      "stance_trail": [
+        {
+          "meeting": "meetings/2026-05-10-alpha-technical-deep-dive.md",
+          "kind": "positive",
+          "statement": "This clears our SOC 2 gap analysis."
+        }
+      ],
+      "commitments": []
+    },
+    {
+      "slug": "casey-example",
+      "name": "Casey Example",
+      "role": null,
+      "account": "Example Account Alpha",
+      "stance_trail": [],
+      "commitments": []
+    },
+    {
+      "slug": "drew-example",
+      "name": "Drew Example",
+      "role": "Finance Controller",
+      "account": "Example Account Alpha",
+      "stance_trail": [],
+      "commitments": []
+    },
+    {
+      "slug": "emery-example",
+      "name": "Emery Example",
+      "role": "Legal Counsel",
+      "account": "Example Account Alpha",
+      "stance_trail": [],
+      "commitments": []
+    },
+    {
+      "slug": "jordan-example",
+      "name": "Jordan Example",
+      "role": "Head of Operations",
+      "account": "Example Account Beta",
+      "stance_trail": [
+        {
+          "meeting": "meetings/2026-04-02-beta-intro-call.md",
+          "kind": "objection",
+          "statement": "There's no real trigger event pushing us to decide by a certain date."
+        }
+      ],
+      "commitments": [
+        {
+          "text": "Confirm renewed budget authority before Q3 planning",
+          "by": "Jordan Example",
+          "status": "open",
+          "due_hint": "before contract renewal",
+          "quote": "I need to confirm budget authority before we can move forward.",
+          "date": "2026-06-28",
+          "meeting": "meetings/2026-06-28-beta-renewal-planning.md"
+        }
       ]
     }
-  ]
+  ],
+  "meetings_feed": [
+    {
+      "slug": "meetings-2026-06-28-beta-renewal-planning-md",
+      "title24": "Beta Renewal Planning",
+      "date": "2026-06-28",
+      "account": "Example Account Beta",
+      "sentiment": "mixed",
+      "topics": ["pricing", "timing"]
+    },
+    {
+      "slug": "meetings-2026-06-20-alpha-exec-checkin-md",
+      "title24": "Alpha Exec Check-in",
+      "date": "2026-06-20",
+      "account": "Example Account Alpha",
+      "sentiment": "good",
+      "topics": ["relationship", "process"]
+    },
+    {
+      "slug": "meetings-2026-06-02-beta-delta-closeout-md",
+      "title24": "Beta Delta Closeout",
+      "date": "2026-06-02",
+      "account": "Example Account Beta",
+      "sentiment": "concerning",
+      "topics": ["competitor", "timing"]
+    },
+    {
+      "slug": "meetings-2026-05-20-gamma-contract-signature-md",
+      "title24": "Gamma Contract Signature",
+      "date": "2026-05-20",
+      "account": "Example Account Gamma",
+      "sentiment": "good",
+      "topics": ["commercial-model", "process"]
+    },
+    {
+      "slug": "meetings-2026-05-10-alpha-technical-deep-dive-md",
+      "title24": "Alpha Technical Deep Dive",
+      "date": "2026-05-10",
+      "account": "Example Account Alpha",
+      "sentiment": "good",
+      "topics": ["technical-fit", "security"]
+    },
+    {
+      "slug": "meetings-2026-05-01-beta-delta-budget-review-md",
+      "title24": "Beta Delta Budget Review",
+      "date": "2026-05-01",
+      "account": "Example Account Beta",
+      "sentiment": "concerning",
+      "topics": ["timing", "pricing"]
+    },
+    {
+      "slug": "meetings-2026-04-18-gamma-commercial-review-md",
+      "title24": "Gamma Commercial Review",
+      "date": "2026-04-18",
+      "account": "Example Account Gamma",
+      "sentiment": "good",
+      "topics": ["pricing", "commercial-model"]
+    },
+    {
+      "slug": "meetings-2026-04-02-beta-intro-call-md",
+      "title24": "Beta Intro Call",
+      "date": "2026-04-02",
+      "account": "Example Account Beta",
+      "sentiment": "concerning",
+      "topics": ["pricing", "timing"]
+    },
+    {
+      "slug": "meetings-2026-03-24-alpha-requirements-workshop-md",
+      "title24": "Alpha Requirements Workshop",
+      "date": "2026-03-24",
+      "account": "Example Account Alpha",
+      "sentiment": "mixed",
+      "topics": ["requirements", "technical-fit"]
+    },
+    {
+      "slug": "meetings-2026-03-10-gamma-discovery-call-md",
+      "title24": "Gamma Discovery Call",
+      "date": "2026-03-10",
+      "account": "Example Account Gamma",
+      "sentiment": "mixed",
+      "topics": ["discovery", "technical-fit"]
+    }
+  ],
+  "warnings": [],
+  "ingest_errors": [],
+  "status": {
+    "meetings": 10,
+    "people": 6,
+    "accounts": 3,
+    "deals": 4,
+    "nodes": 25,
+    "edges": 41
+  }
 }

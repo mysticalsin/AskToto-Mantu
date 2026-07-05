@@ -1,7 +1,9 @@
 import { useMemo } from 'react'
+import { Link } from 'react-router-dom'
 import type { DashboardData, MeetingFeedRow } from '../types/data'
 import { bandColor, bandLabel } from '../lib/format'
 import { meetingsPerWeek } from '../lib/momentum'
+import { slug } from '../lib/slug'
 
 interface Props {
   data: DashboardData
@@ -29,6 +31,13 @@ export function MeetingsView({ data }: Props) {
     [meetings],
   )
   const maxCount = Math.max(0, ...density.buckets.map((b) => b.count))
+
+  // Real account node ids from the same graph the Relationships tab renders — an account badge only
+  // becomes a link when a matching node genuinely exists, otherwise it stays the plain text it is today.
+  const accountNodeIds = useMemo(
+    () => new Set(data.account_graph.nodes.filter((n) => n.type === 'account').map((n) => n.id)),
+    [data.account_graph.nodes],
+  )
 
   return (
     <div className="mx-auto max-w-7xl px-6 py-8">
@@ -80,22 +89,28 @@ export function MeetingsView({ data }: Props) {
             No meetings ingested yet.
           </p>
         ) : (
-          meetings.map((m) => <MeetingRow key={m.slug} meeting={m} />)
+          meetings.map((m) => <MeetingRow key={m.slug} meeting={m} accountNodeIds={accountNodeIds} />)
         )}
       </div>
     </div>
   )
 }
 
-function MeetingRow({ meeting }: { meeting: MeetingFeedRow }) {
+function MeetingRow({ meeting, accountNodeIds }: { meeting: MeetingFeedRow; accountNodeIds: Set<string> }) {
   const topics = meeting.topics ?? []
   const shownTopics = topics.slice(0, 4)
   const extraTopics = topics.length - shownTopics.length
   // Sentiment can be absent (an ungraded/internal meeting) — show a neutral grey dot + honest label
   // instead of an undefined background and a literal title="undefined".
   const hasSentiment = meeting.sentiment != null
+  // Deep-link contract: `account:<slug>` matches the id convention minted at ingest (ingest.ts) and
+  // carried through unchanged in account_graph.nodes — only link when that exact node exists.
+  const accountNodeId = meeting.account ? `account:${slug(meeting.account)}` : null
+  const accountIsLinkable = accountNodeId !== null && accountNodeIds.has(accountNodeId)
+  const accountBadgeClass =
+    'max-w-[140px] flex-shrink-0 truncate rounded-full bg-white/5 px-2 py-0.5 text-[10px] font-medium text-white/60'
   return (
-    <div className="flex items-center gap-3 rounded-lg border border-[var(--color-mantu-border)] bg-[var(--color-mantu-surface)] px-4 py-3">
+    <div className="meeting-row flex items-center gap-3 rounded-lg border border-[var(--color-mantu-border)] bg-[var(--color-mantu-surface)] px-4 py-3">
       <span
         className="h-2.5 w-2.5 flex-shrink-0 rounded-full"
         style={{ background: hasSentiment ? bandColor[meeting.sentiment] : 'rgba(255,255,255,0.28)' }}
@@ -103,11 +118,17 @@ function MeetingRow({ meeting }: { meeting: MeetingFeedRow }) {
       />
       <span className="flex-shrink-0 whitespace-nowrap text-xs text-white/40">{humanizeDate(meeting.date)}</span>
       <span className="min-w-0 flex-1 truncate text-sm text-white/85">{meeting.title24}</span>
-      {meeting.account && (
-        <span
-          className="max-w-[140px] flex-shrink-0 truncate rounded-full bg-white/5 px-2 py-0.5 text-[10px] font-medium text-white/60"
-          title={meeting.account}
+      {meeting.account && accountIsLinkable && (
+        <Link
+          to={`/graph?focus=${accountNodeId}`}
+          title={`Open ${meeting.account} in Relationships`}
+          className={`${accountBadgeClass} transition-colors hover:bg-mantu/25 hover:text-white/85`}
         >
+          {meeting.account}
+        </Link>
+      )}
+      {meeting.account && !accountIsLinkable && (
+        <span className={accountBadgeClass} title={meeting.account}>
           {meeting.account}
         </span>
       )}

@@ -58,3 +58,12 @@ body {
 .win-no-drag {
   -webkit-app-region: no-drag;
 }
+
+/* MeetingsView's feed has no windowing/pagination — every ingested meeting renders as a row. This
+   lets the browser skip layout/paint for off-screen rows (content-visibility: auto) while reserving
+   an intrinsic size close to a real row's height so scrollbar length and scroll position stay stable
+   before a row has ever been rendered. */
+.meeting-row {
+  content-visibility: auto;
+  contain-intrinsic-size: 0 52px;
+}

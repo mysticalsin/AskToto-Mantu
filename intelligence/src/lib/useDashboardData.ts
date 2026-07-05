@@ -33,7 +33,19 @@ export function useDashboardData(): State {
       }
       const res = await fetch(`${import.meta.env.BASE_URL}data.json`)
       if (!res.ok) throw new Error(`Failed to load data.json (${res.status})`)
-      return res.json()
+      const json = await res.json()
+      // A data.json generated against an older schema crashes each view with an opaque TypeError
+      // deep in a useMemo. Check the top-level contract here instead, so a stale file fails once,
+      // loudly, with the fix in the message.
+      for (const k of [
+        'deals', 'people', 'accounts', 'meetings_feed', 'coaching_insights', 'account_graph',
+        'account_summaries', 'sector_summaries', 'status', 'warnings', 'ingest_errors'
+      ]) {
+        if (!(k in json)) {
+          throw new Error(`data.json is stale: missing "${k}". Rebuild it with intelligence/scripts/build-data.mjs.`)
+        }
+      }
+      return json as DashboardData
     }
     const load = (): void => {
       const myId = ++requestId

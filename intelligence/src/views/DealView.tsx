@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { useSearchParams } from 'react-router-dom'
-import type { DashboardData, Grounding } from '../types/data'
+import { Link, useSearchParams } from 'react-router-dom'
+import type { Commitment, DashboardData, GraphNode, Grounding } from '../types/data'
 import {
   bandColor,
   bandLabel,
@@ -11,6 +11,7 @@ import {
   outcomeLabel,
 } from '../lib/format'
 import { ledgerTotals } from '../lib/ledgerstats'
+import { slug } from '../lib/slug'
 
 interface Props {
   data: DashboardData
@@ -45,6 +46,54 @@ const commitmentStatusStyle: Record<string, string> = {
   broken: 'bg-rose-500/15 text-rose-300',
 }
 
+// Deep-link contract: `account:<slug>` / `person:<slug>` match the id convention minted at ingest
+// (src/main/brain/ingest.ts) and carried through unchanged in account_graph.nodes — only link when
+// that exact node exists, otherwise a mention stays the plain text it is today. 'you'/'them' are the
+// ledger's own sentinels for the rep and the counterparty, never real people to link to.
+const MENTION_SENTINELS = new Set(['you', 'them'])
+
+function personNodeId(name: string | null | undefined): string | null {
+  const trimmed = name?.trim()
+  if (!trimmed || MENTION_SENTINELS.has(trimmed.toLowerCase())) return null
+  return `person:${slug(trimmed)}`
+}
+
+function accountNodeId(name: string | null | undefined): string | null {
+  const trimmed = name?.trim()
+  if (!trimmed) return null
+  return `account:${slug(trimmed)}`
+}
+
+interface DealRisk {
+  score: number
+  reasons: string[]
+}
+
+// Signals the chip row doesn't already show via its win-likelihood dot: the account_graph's own read
+// on this deal's relationship health (freshness/single-threaded, from goingCold's build-time analysis)
+// plus the commitment ledger's broken-promise count. A clean deal with none of these fires no badge.
+function dealRisk(commitments: Commitment[], node: GraphNode | undefined): DealRisk {
+  const broken = ledgerTotals(commitments).broken
+  let score = 0
+  const reasons: string[] = []
+  if (node?.freshness === 'cold') {
+    score += 3
+    reasons.push('going cold')
+  } else if (node?.freshness === 'cooling') {
+    score += 1
+    reasons.push('cooling')
+  }
+  if (node?.single_threaded) {
+    score += 2
+    reasons.push('single-threaded')
+  }
+  if (broken > 0) {
+    score += broken * 2
+    reasons.push(`${broken} broken commitment${broken > 1 ? 's' : ''}`)
+  }
+  return { score, reasons }
+}
+
 export function DealView({ data }: Props) {
   const [params, setParams] = useSearchParams()
   const bidParam = params.get('bid')
@@ -59,6 +108,26 @@ export function DealView({ data }: Props) {
     () => data.deals.find((d) => d.bid_id === selected) ?? data.deals[0],
     [data.deals, selected],
   )
+
+  // Real node ids from the same graph the Relationships tab renders — a mention only becomes a link
+  // when a matching node genuinely exists.
+  const graphNodeIds = useMemo(
+    () => new Set(data.account_graph.nodes.map((n) => n.id)),
+    [data.account_graph.nodes],
+  )
+
+  // Chip picker, risk-first: join each deal to its own account_graph node (by type + bid_id) for the
+  // relationship-health signals, score it alongside its broken-commitment count, and put the deal that
+  // most needs attention leftmost — no separate screen required to find it.
+  const rankedDeals = useMemo(() => {
+    const dealNodeByBidId = new Map<string, GraphNode>()
+    for (const n of data.account_graph.nodes) {
+      if (n.type === 'deal' && n.bid_id) dealNodeByBidId.set(n.bid_id, n)
+    }
+    return data.deals
+      .map((d) => ({ deal: d, risk: dealRisk(d.commitments ?? [], dealNodeByBidId.get(d.bid_id)) }))
+      .sort((a, b) => b.risk.score - a.risk.score)
+  }, [data.deals, data.account_graph.nodes])
 
   function selectDeal(bidId: string) {
     setSelected(bidId)
@@ -83,6 +152,9 @@ export function DealView({ data }: Props) {
     return (b.date ?? '').localeCompare(a.date ?? '')
   })
 
+  const accountLinkId = accountNodeId(deal.account)
+  const accountIsLinkable = accountLinkId !== null && graphNodeIds.has(accountLinkId)
+
   return (
     <div className="mx-auto max-w-7xl px-6 py-8">
       <h1 className="text-2xl font-semibold text-white/95">Deal breakdown</h1>
@@ -91,7 +163,7 @@ export function DealView({ data }: Props) {
       </p>
 
       <div className="mt-6 flex flex-wrap gap-2">
-        {data.deals.map((d) => (
+        {rankedDeals.map(({ deal: d, risk }) => (
           <button
             key={d.bid_id}
             onClick={() => selectDeal(d.bid_id)}
@@ -105,6 +177,15 @@ export function DealView({ data }: Props) {
               className="mr-1.5 inline-block h-2 w-2 rounded-full align-middle"
               style={{ background: d.win_likelihood_band ? bandColor[d.win_likelihood_band] : 'rgba(255,255,255,0.28)' }}
             />
+            {risk.score > 0 && (
+              <span
+                className="mr-1.5 inline-flex h-3.5 w-3.5 flex-shrink-0 items-center justify-center rounded-full align-middle text-[8px] font-bold text-black/80"
+                style={{ background: gradeColor.concerning }}
+                title={`At risk: ${risk.reasons.join(', ')}`}
+              >
+                !
+              </span>
+            )}
             {d.display_name}
           </button>
         ))}
@@ -123,7 +204,12 @@ export function DealView({ data }: Props) {
             <div className="rounded-xl border border-[var(--color-mantu-border)] bg-[var(--color-mantu-surface)] p-5">
               <h2 className="text-lg font-semibold text-white/90">{deal.display_name}</h2>
               <dl className="mt-3 space-y-2 text-sm">
-                <Row label="Account" value={deal.account} />
+                <Row
+                  label="Account"
+                  value={deal.account}
+                  linkTo={accountIsLinkable ? `/graph?focus=${accountLinkId}` : undefined}
+                  linkTitle={accountIsLinkable ? `Open ${deal.account} in Relationships` : undefined}
+                />
                 {deal.strategic_group && <Row label="Strategic group" value={deal.strategic_group} />}
                 <Row label="Sector" value={deal.sector} />
                 <Row label="Stage" value={deal.stage} />
@@ -164,27 +250,44 @@ export function DealView({ data }: Props) {
                 </span>
               </div>
               <div className="space-y-3">
-                {sortedCommitments.map((c, i) => (
-                  <div
-                    key={i}
-                    className="rounded-lg border border-white/5 bg-black/20 p-3"
-                    title={c.quote || undefined}
-                  >
-                    <div className="flex flex-wrap items-center justify-between gap-2">
-                      <span
-                        className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${commitmentStatusStyle[c.status] ?? ''}`}
-                      >
-                        {c.status}
-                      </span>
-                      <span className="text-[11px] text-white/40">{c.date}</span>
+                {sortedCommitments.map((c, i) => {
+                  const byId = personNodeId(c.by)
+                  const byIsLinkable = byId !== null && graphNodeIds.has(byId)
+                  return (
+                    <div
+                      key={i}
+                      className="rounded-lg border border-white/5 bg-black/20 p-3"
+                      title={c.quote || undefined}
+                    >
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <span
+                          className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${commitmentStatusStyle[c.status] ?? ''}`}
+                        >
+                          {c.status}
+                        </span>
+                        <span className="text-[11px] text-white/40">{c.date}</span>
+                      </div>
+                      <p className="mt-1.5 break-words text-xs text-white/80 [overflow-wrap:anywhere]">{c.text}</p>
+                      <div className="mt-1 flex flex-wrap items-center gap-x-2 text-[11px] text-white/40">
+                        <span>
+                          By{' '}
+                          {byIsLinkable ? (
+                            <Link
+                              to={`/graph?focus=${byId}`}
+                              title={`Open ${c.by} in Relationships`}
+                              className="hover:text-mantu-light hover:underline"
+                            >
+                              {c.by}
+                            </Link>
+                          ) : (
+                            c.by
+                          )}
+                        </span>
+                        {c.due_hint && <span>· Due {c.due_hint}</span>}
+                      </div>
                     </div>
-                    <p className="mt-1.5 break-words text-xs text-white/80 [overflow-wrap:anywhere]">{c.text}</p>
-                    <div className="mt-1 flex flex-wrap items-center gap-x-2 text-[11px] text-white/40">
-                      <span>By {c.by}</span>
-                      {c.due_hint && <span>· Due {c.due_hint}</span>}
-                    </div>
-                  </div>
-                ))}
+                  )
+                })}
                 {commitments.length === 0 && (
                   <div className="text-xs text-white/30">
                     No commitments captured on this deal yet.
@@ -239,37 +342,54 @@ export function DealView({ data }: Props) {
               Psychology claims ({deal.claims.length})
             </h3>
             <div className="space-y-3">
-              {deal.claims.map((claim, i) => (
-                <motion.div
-                  key={claim.claim_id}
-                  initial={{ opacity: 0, y: 10 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  transition={{ delay: i * 0.05 }}
-                  className="rounded-lg border border-[var(--color-mantu-border)] bg-[var(--color-mantu-surface)] p-4"
-                >
-                  <div className="flex flex-wrap items-center justify-between gap-2">
-                    <div className="flex items-center gap-2">
-                      <span className="rounded-full bg-mantu/20 px-2 py-0.5 text-[10px] font-semibold uppercase text-mantu-light">
-                        {categoryLabel[claim.category]}
-                      </span>
-                      <StanceTag stance={claim.stance} />
+              {deal.claims.map((claim, i) => {
+                const raisedById = personNodeId(claim.raised_by)
+                const raisedByIsLinkable = raisedById !== null && graphNodeIds.has(raisedById)
+                return (
+                  <motion.div
+                    key={claim.claim_id}
+                    initial={{ opacity: 0, y: 10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ delay: i * 0.05 }}
+                    className="rounded-lg border border-[var(--color-mantu-border)] bg-[var(--color-mantu-surface)] p-4"
+                  >
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div className="flex items-center gap-2">
+                        <span className="rounded-full bg-mantu/20 px-2 py-0.5 text-[10px] font-semibold uppercase text-mantu-light">
+                          {categoryLabel[claim.category]}
+                        </span>
+                        <StanceTag stance={claim.stance} />
+                      </div>
+                      <GroundingBadge g={claim.source.grounding} />
                     </div>
-                    <GroundingBadge g={claim.source.grounding} />
-                  </div>
-                  <p className="mt-2 break-words text-sm text-white/85 [overflow-wrap:anywhere]">{claim.statement}</p>
-                  <div className="mt-2 rounded-md bg-black/20 p-2 text-xs text-white/50">
-                    <div className="mb-1 flex items-center justify-between">
-                      <span className="font-mono text-[10px] text-mantu-light/80">
-                        {claim.source.file}
-                      </span>
-                      {claim.raised_by && (
-                        <span className="text-[10px]">Raised by {claim.raised_by}</span>
-                      )}
+                    <p className="mt-2 break-words text-sm text-white/85 [overflow-wrap:anywhere]">{claim.statement}</p>
+                    <div className="mt-2 rounded-md bg-black/20 p-2 text-xs text-white/50">
+                      <div className="mb-1 flex items-center justify-between">
+                        <span className="font-mono text-[10px] text-mantu-light/80">
+                          {claim.source.file}
+                        </span>
+                        {claim.raised_by && (
+                          <span className="text-[10px]">
+                            Raised by{' '}
+                            {raisedByIsLinkable ? (
+                              <Link
+                                to={`/graph?focus=${raisedById}`}
+                                title={`Open ${claim.raised_by} in Relationships`}
+                                className="hover:text-mantu-light hover:underline"
+                              >
+                                {claim.raised_by}
+                              </Link>
+                            ) : (
+                              claim.raised_by
+                            )}
+                          </span>
+                        )}
+                      </div>
+                      <div className="break-words italic [overflow-wrap:anywhere]">&ldquo;{claim.source.quote_or_paraphrase}&rdquo;</div>
                     </div>
-                    <div className="break-words italic [overflow-wrap:anywhere]">&ldquo;{claim.source.quote_or_paraphrase}&rdquo;</div>
-                  </div>
-                </motion.div>
-              ))}
+                  </motion.div>
+                )
+              })}
               {deal.claims.length === 0 && (
                 <div className="rounded-lg border border-dashed border-white/15 p-6 text-center text-xs text-white/30">
                   No claims extracted for this deal yet.
@@ -288,18 +408,28 @@ function Row({
   value,
   dot,
   title,
+  linkTo,
+  linkTitle,
 }: {
   label: string
   value: string
   dot?: string
   title?: string
+  linkTo?: string
+  linkTitle?: string
 }) {
   return (
     <div className="flex items-center justify-between border-b border-white/5 pb-1.5">
       <dt className="text-white/40">{label}</dt>
       <dd className="flex items-center gap-1.5 font-medium text-white/85" title={title}>
         {dot && <span className="h-2 w-2 rounded-full" style={{ background: dot }} />}
-        {value}
+        {linkTo ? (
+          <Link to={linkTo} title={linkTitle} className="hover:text-mantu-light hover:underline">
+            {value}
+          </Link>
+        ) : (
+          value
+        )}
       </dd>
     </div>
   )

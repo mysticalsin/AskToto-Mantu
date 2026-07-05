@@ -416,15 +416,15 @@ export function brainToDashboard(b: BrainRead): DashboardData {
         unmapped: n.type === 'account' ? cold.unmapped.has(n.id) : undefined
       }
     })
-  const nodeIds = new Set(nodes.map((n) => n.id))
+  // Map lookup, not nodes.find() per edge — this reruns on every 10s poll tick during an active
+  // backfill, and a linear find() per endpoint made it O(edges × nodes) on what should be O(edges).
+  const nodeById = new Map(nodes.map((n) => [n.id, n]))
   const edges: GraphEdge[] = b.graph.edges
-    .filter((e) => nodeIds.has(e.from) && nodeIds.has(e.to))
+    .filter((e) => nodeById.has(e.from) && nodeById.has(e.to))
     .map((e) => ({ from: e.from, to: e.to, relation: e.rel, confidence: e.confidence }))
   for (const e of edges) {
-    const f = nodes.find((n) => n.id === e.from)
-    const t = nodes.find((n) => n.id === e.to)
-    if (f) f.degree++
-    if (t) t.degree++
+    nodeById.get(e.from)!.degree++
+    nodeById.get(e.to)!.degree++
   }
   communities(nodes, edges)
 

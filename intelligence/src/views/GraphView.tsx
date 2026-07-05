@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import { DataSet } from 'vis-data'
 import { Network } from 'vis-network/standalone'
 import type { DashboardData, GraphEdge, GraphNode, Reason, ScopeSummary, WinLikelihoodBand } from '../types/data'
 import { bandColor, bandLabel } from '../lib/format'
+import { slug } from '../lib/slug'
 
 interface Props {
   data: DashboardData
@@ -31,6 +32,22 @@ function fmtUsd(n: number): string {
   if (n >= 1_000_000) return `$${(n / 1_000_000).toFixed(1)}M`
   if (n >= 1_000) return `$${(n / 1_000).toFixed(0)}K`
   return `$${n}`
+}
+
+// Same palette as DealView's StanceTag, remapped onto the vocabulary the brain actually writes for a
+// person's stance_trail (positive/objection/neutral — see brain.ts's PersonEntitySchema), which differs
+// from the claim-level Stance union DealView reads (positive-signal/neutral-observation/objection).
+const STANCE_KIND_STYLE: Record<string, string> = {
+  positive: 'bg-emerald-500/15 text-emerald-300',
+  objection: 'bg-rose-500/15 text-rose-300',
+  neutral: 'bg-white/10 text-white/60',
+}
+
+// Same palette as DealView's commitment-status chip.
+const COMMITMENT_STATUS_STYLE: Record<string, string> = {
+  open: 'bg-amber-500/15 text-amber-300',
+  kept: 'bg-emerald-500/15 text-emerald-300',
+  broken: 'bg-rose-500/15 text-rose-300',
 }
 
 // Going-Cold rendering: relationships fade as they age (the decay IS the information). Fresh
@@ -120,6 +137,7 @@ export function GraphView({ data }: Props) {
     people,
   } = data
   const navigate = useNavigate()
+  const [searchParams] = useSearchParams()
   const containerRef = useRef<HTMLDivElement>(null)
   const networkRef = useRef<Network | null>(null)
   const nodesDsRef = useRef<DataSet<any> | null>(null)
@@ -128,6 +146,10 @@ export function GraphView({ data }: Props) {
   // mount-only effect and must not read a stale closure over graph.nodes from whenever it was set up.
   const liveNodesRef = useRef(graph.nodes)
   const searchInputRef = useRef<HTMLInputElement>(null)
+  // Which `?focus=` value (see the deep-link effect below) has already been applied, so a later poll
+  // tick that merely refreshes graph.nodes doesn't re-run focusNode and yank the camera/selection away
+  // from whatever the rep has since clicked on.
+  const appliedFocusRef = useRef<string | null>(null)
 
   const [search, setSearch] = useState('')
   const [searchOpen, setSearchOpen] = useState(false)
@@ -161,6 +183,14 @@ export function GraphView({ data }: Props) {
     return Array.from(m.entries()).sort((a, b) => a[0] - b[0])
   }, [graph.nodes])
 
+  // Structural relationship risk (single-threaded deals, unmapped accounts) — computed for every node
+  // by brainAdapter.ts/goingCold.ts already, but previously only surfaced one node at a time inside the
+  // click-triggered Node info panel. Aggregated here so the sidebar names every at-risk node up front.
+  const relationshipRisk = useMemo(
+    () => graph.nodes.filter((n) => n.single_threaded || n.unmapped),
+    [graph.nodes],
+  )
+
   function nodeVisible(n: GraphNode): boolean {
     if (n.account && hiddenAccounts.has(n.account)) return false
     if (n.sector && hiddenSectors.has(n.sector)) return false
@@ -186,6 +216,15 @@ export function GraphView({ data }: Props) {
   useEffect(() => {
     liveNodesRef.current = graph.nodes
   })
+
+  // Re-resolves the selected node against the latest graph.nodes on every poll tick. Without this,
+  // `selected` stays the exact object captured at click time forever — its days_quiet/freshness/
+  // win_likelihood_band freeze at that instant while the DataSets underneath keep updating, so a rep who
+  // leaves the Node info panel open silently sees stale going-cold data for the rest of the session. If
+  // the node has since been removed from the graph, fall back to no selection instead of showing a ghost.
+  useEffect(() => {
+    setSelected((prev) => (prev ? graph.nodes.find((n) => n.id === prev.id) ?? null : prev))
+  }, [graph.nodes])
 
   // Mount-only: creates the Network + DataSets exactly once. Content updates (new/removed nodes or
   // edges from a poll tick) are reconciled in place by the effect below instead of destroying and
@@ -232,7 +271,18 @@ export function GraphView({ data }: Props) {
     network.on('click', (params: { nodes: string[] }) => {
       if (params.nodes.length > 0) {
         const id = params.nodes[0]
-        setSelected(liveNodesRef.current.find((n) => n.id === id) ?? null)
+        const n = liveNodesRef.current.find((x) => x.id === id) ?? null
+        setSelected(n)
+        // Clicking an account or sector bubble scopes the Win/Loss & ROI panel to it too — one click
+        // to the cited reasons instead of click-then-hunt-in-the-dropdown. Bare id derived the same way
+        // selectedPerson's useMemo strips the `type:` prefix below. Sector node ids carry the RAW
+        // sector name (ingest mints `sector:${acc.sector}` unslugified, unlike account/person/deal),
+        // while sectorSummaries keys are slugged — slug the sector's bare id or the summary lookup and
+        // the <select> both miss for any real-world sector name.
+        if (n && (n.type === 'account' || n.type === 'sector')) {
+          const bare = n.id.replace(/^[a-z_]+:/, '')
+          setRoiScope({ type: n.type, key: n.type === 'sector' ? slug(bare) : bare })
+        }
       }
     })
 
@@ -299,6 +349,21 @@ export function GraphView({ data }: Props) {
     ds.update(graph.nodes.map((n) => ({ id: n.id, hidden: !nodeVisible(n) })))
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hiddenAccounts, hiddenSectors, hiddenCommunities, hiddenBands, graph.nodes])
+
+  // Deep-link entry point: `#/graph?focus=<nodeId>` (account:<slug> or person:<slug>, matching the id
+  // convention in account_graph.nodes) focuses and selects that node once it's present in the graph.
+  // Guarded by appliedFocusRef so a later poll tick that only refreshes graph.nodes doesn't re-run this
+  // and yank the camera away from whatever the rep has since clicked on; re-runs only if the `focus`
+  // param itself changes to a new value, or the target node wasn't there yet and just arrived.
+  useEffect(() => {
+    const focus = searchParams.get('focus')
+    if (!focus || focus === appliedFocusRef.current) return
+    const n = liveNodesRef.current.find((x) => x.id === focus)
+    if (!n) return
+    appliedFocusRef.current = focus
+    focusNode(focus)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams, graph.nodes])
 
   const searchMatches = useMemo(() => {
     const q = search.trim().toLowerCase()
@@ -474,6 +539,51 @@ export function GraphView({ data }: Props) {
                   Open in Deal view →
                 </button>
               )}
+              {selectedPerson && selectedPerson.stance_trail.length > 0 && (
+                <div className="mt-2">
+                  <div className="mb-1 text-[11px] text-white/40">
+                    Stance trail ({selectedPerson.stance_trail.length})
+                  </div>
+                  <div className="max-h-32 space-y-1 overflow-y-auto">
+                    {selectedPerson.stance_trail.map((s, i) => (
+                      <div key={i} className="rounded bg-black/20 px-2 py-1 text-[11px] leading-snug" title={s.meeting}>
+                        <span className={`mr-1.5 rounded-full px-1.5 py-0.5 text-[9px] font-semibold ${STANCE_KIND_STYLE[s.kind] ?? 'bg-white/10 text-white/60'}`}>
+                          {s.kind}
+                        </span>
+                        <span className="text-white/70">{s.statement}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {selectedPerson && selectedPerson.commitments.length > 0 && (
+                <div className="mt-2">
+                  <div className="mb-1 text-[11px] text-white/40">
+                    Commitments ({selectedPerson.commitments.length})
+                  </div>
+                  <div className="max-h-32 space-y-1.5 overflow-y-auto">
+                    {selectedPerson.commitments.map((c, i) => (
+                      <div
+                        key={i}
+                        title={c.quote || undefined}
+                        className="rounded-md border border-white/5 bg-black/20 px-2 py-1.5 text-[11px]"
+                      >
+                        <div className="flex items-center justify-between gap-2">
+                          <span className={`rounded-full px-1.5 py-0.5 text-[9px] font-semibold ${COMMITMENT_STATUS_STYLE[c.status] ?? ''}`}>
+                            {c.status}
+                          </span>
+                          <span className="text-white/40">{c.date}</span>
+                        </div>
+                        <p className="mt-1 break-words text-white/80 [overflow-wrap:anywhere]">{c.text}</p>
+                        <div className="mt-0.5 text-white/40">
+                          By {c.by}
+                          {c.due_hint && ` · Due ${c.due_hint}`}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
               {neighbors.length > 0 && (
                 <div className="mt-2">
                   <div className="mb-1 text-[11px] text-white/40">Neighbors ({neighbors.length})</div>
@@ -525,6 +635,36 @@ export function GraphView({ data }: Props) {
             <p className="mt-2 text-[10px] leading-relaxed text-white/30">
               Hooks come from your own open promises and last real topics, never invented. Faded nodes in
               the graph are these relationships decaying in place.
+            </p>
+          </div>
+        )}
+
+        {/* Relationship risk — structural flags (one mapped contact, or zero) computed for every node
+            already, surfaced in aggregate instead of requiring a click through each one to find them. */}
+        {relationshipRisk.length > 0 && (
+          <div className="shrink-0 border-b border-[var(--color-mantu-border)] p-4">
+            <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-white/40">Relationship risk</h3>
+            <div className="max-h-56 space-y-1.5 overflow-y-auto">
+              {relationshipRisk.map((n) => (
+                <button
+                  key={n.id}
+                  onClick={() => focusNode(n.id)}
+                  className="block w-full rounded-md bg-black/20 px-2 py-1.5 text-left hover:bg-white/5"
+                >
+                  <div className="flex items-center gap-2 text-xs">
+                    <span className="truncate font-medium text-white/85">{n.label}</span>
+                    {n.account && n.account !== n.label && (
+                      <span className="truncate text-[10px] text-white/35">{n.account}</span>
+                    )}
+                    <span className="ml-auto shrink-0 rounded-full bg-amber-400/10 px-1.5 py-0.5 text-[10px] font-semibold text-amber-200/90">
+                      {n.single_threaded ? 'single-threaded' : 'unmapped'}
+                    </span>
+                  </div>
+                </button>
+              ))}
+            </div>
+            <p className="mt-2 text-[10px] leading-relaxed text-white/30">
+              Deals with one mapped contact, or accounts with zero. Structural exposure, not a prediction.
             </p>
           </div>
         )}

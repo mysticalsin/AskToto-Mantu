@@ -1,8 +1,10 @@
 import { useMemo } from 'react'
 import { motion } from 'framer-motion'
+import { Link } from 'react-router-dom'
 import type { Category, Commitment, DashboardData, Stance } from '../types/data'
 import { categoryLabel } from '../lib/format'
-import { meetingsPerWeek, rollingAverage, sentimentSeries } from '../lib/momentum'
+import { accountCadence, meetingsPerWeek, rollingAverage, sentimentSeries } from '../lib/momentum'
+import { slug } from '../lib/slug'
 import {
   agingBuckets,
   bandDistribution,
@@ -76,6 +78,17 @@ export function StatsView({ data }: Props) {
   const weekly = useMemo(() => meetingsPerWeek(momentumMeetings, now, 12), [momentumMeetings, now])
   const sentiment = useMemo(() => sentimentSeries(momentumMeetings), [momentumMeetings])
   const sentimentRolling = useMemo(() => rollingAverage(sentiment, 3), [sentiment])
+  const cadence = useMemo(() => accountCadence(momentumMeetings, now), [momentumMeetings, now])
+  const cadenceMax = Math.max(1, ...cadence.map((c) => c.meetingsPerMonth))
+
+  // Deep-link resolution: a mention only becomes a link when a matching node id already exists in the
+  // real graph (never fabricated) — 'you'/'them' sentinels never link, they aren't graph entities.
+  const graphNodeIds = useMemo(() => new Set(data.account_graph.nodes.map((n) => n.id)), [data.account_graph.nodes])
+  function graphFocusHref(kind: 'account' | 'person', name: string): string | null {
+    if (kind === 'person' && (name.toLowerCase() === 'you' || name.toLowerCase() === 'them')) return null
+    const id = `${kind}:${slug(name)}`
+    return graphNodeIds.has(id) ? `/graph?focus=${encodeURIComponent(id)}` : null
+  }
 
   const allCommitments = useMemo(() => {
     const combined = [...data.deals.flatMap((d) => d.commitments), ...data.people.flatMap((p) => p.commitments)]
@@ -174,6 +187,57 @@ export function StatsView({ data }: Props) {
         </div>
       </Section>
 
+      {/* Account cadence — an account's own historical rhythm, not a fixed day threshold, so a client
+          that used to meet weekly and has slid to monthly surfaces here before it ever trips Going-Cold. */}
+      <Section title="Account cadence">
+        <Card>
+          <CardLabel>Meetings per month by account (stalest first)</CardLabel>
+          {cadence.length === 0 ? (
+            <Empty text="No dated account meetings yet." />
+          ) : (
+            <>
+              <div className="space-y-3">
+                {cadence.slice(0, 6).map((c, i) => {
+                  const bar = (
+                    <BarRow
+                      label={c.account}
+                      value={c.meetingsPerMonth}
+                      max={cadenceMax}
+                      valueLabel={`${c.meetingsPerMonth.toFixed(1)}/mo`}
+                      delay={i * 0.05}
+                    />
+                  )
+                  const href = graphFocusHref('account', c.account)
+                  return (
+                    <div key={c.account}>
+                      {href ? (
+                        <Link
+                          to={href}
+                          title="Open in relationship graph"
+                          className="block rounded-md transition-colors hover:bg-white/5"
+                        >
+                          {bar}
+                        </Link>
+                      ) : (
+                        bar
+                      )}
+                      <div className="mt-1 pl-[9.5rem] text-[11px] text-white/30">
+                        last touch {c.daysSinceLast === 0 ? 'today' : `${c.daysSinceLast}d ago`}
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+              {cadence.length > 6 && (
+                <p className="mt-2 text-[11px] text-white/30">
+                  +{cadence.length - 6} more account{cadence.length - 6 === 1 ? '' : 's'}, not shown above.
+                </p>
+              )}
+            </>
+          )}
+        </Card>
+      </Section>
+
       {/* Follow-through */}
       <Section title="Follow-through">
         <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
@@ -216,15 +280,30 @@ export function StatsView({ data }: Props) {
               <div className="space-y-2">
                 {worstReliability.map((r) => {
                   const pct = Math.round((r.keptRate ?? 0) * 100)
-                  return (
+                  const bar = (
                     <BarRow
-                      key={r.person}
                       label={r.person}
                       value={pct}
                       max={100}
                       color="var(--color-band-negative)"
                       valueLabel={`${pct}% (${r.kept}/${r.kept + r.broken})`}
                     />
+                  )
+                  const href = graphFocusHref('person', r.person)
+                  return (
+                    <div key={r.person}>
+                      {href ? (
+                        <Link
+                          to={href}
+                          title="Open in relationship graph"
+                          className="block rounded-md transition-colors hover:bg-white/5"
+                        >
+                          {bar}
+                        </Link>
+                      ) : (
+                        bar
+                      )}
+                    </div>
                   )
                 })}
               </div>
