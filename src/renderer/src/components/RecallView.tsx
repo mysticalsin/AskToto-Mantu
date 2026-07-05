@@ -10,17 +10,21 @@ import {
   Calendar,
   Trash2,
   Pencil,
-  Brain
+  Brain,
+  Upload
 } from 'lucide-react'
 import { TextButton } from './ui'
 import { accelLabel } from '../lib/keys'
+import { uid } from '../state'
+import { chunkAudio, decodeAndResampleToMono16k } from '../lib/import-audio'
 import type {
   MeetingSummary,
   RecallHit,
   GraphStatus,
   GraphRelated,
   CalendarTodayResult,
-  CalendarEvent
+  CalendarEvent,
+  ImportAudioPickResult
 } from '@shared/ipc'
 
 // ---------------------------------------------------------------------------
@@ -594,6 +598,12 @@ export function RecallView({
   /** The scrollable meeting-list container — focused before a row unmounts (e.g. on delete) so a
    *  keyboard user's focus doesn't fall through to <body> when the focused Delete button is removed. */
   const listRef = useRef<HTMLDivElement>(null)
+  /** "Import audio" button state — idle outside a run; disables the button and drives its label. */
+  const [importState, setImportState] = useState<{
+    stage: 'idle' | 'decoding' | 'transcribing' | 'saving'
+    pct: number
+    error: string | null
+  }>({ stage: 'idle', pct: 0, error: null })
 
   // Meetings are always saved; deletion is the user's to undo that. The main process pops a native,
   // unmissable confirm dialog before actually deleting (single click here is unambiguous — no "did that
@@ -685,6 +695,65 @@ export function RecallView({
       })
       .finally(() => setRenaming(null))
   }, [])
+
+  // Re-runs the same list/search fetch the mount effect below uses, so a freshly imported meeting shows
+  // up immediately — mirrors how onTrash/commitEdit update `items` after their own mutation.
+  const refreshList = useCallback((): void => {
+    const p = q.trim() ? window.toto.recallSearch(q.trim()) : window.toto.recallList()
+    p.then(setItems).catch(() => {})
+  }, [q])
+
+  // Import audio: pick a recording, decode/resample it locally (main has no ffmpeg — see
+  // lib/import-audio.ts), then stream it to main as ~30s windows, one IPC round trip at a time, each
+  // one transcribed on-device before the next is sent. See main/import-audio.ts for the save + ingest.
+  const importAudio = useCallback(async (): Promise<void> => {
+    setImportState({ stage: 'decoding', pct: 0, error: null })
+    let picked: ImportAudioPickResult
+    try {
+      picked = await window.toto.importAudioPick()
+    } catch (e) {
+      setImportState({ stage: 'idle', pct: 0, error: e instanceof Error ? e.message : 'Could not open the file picker.' })
+      return
+    }
+    if (picked.cancelled) {
+      setImportState({ stage: 'idle', pct: 0, error: null })
+      return
+    }
+    if (!picked.path) {
+      setImportState({ stage: 'idle', pct: 0, error: picked.error || 'Could not read the selected file.' })
+      return
+    }
+    let unsub: (() => void) | null = null
+    try {
+      const buf = await window.toto.importAudioRead(picked.path)
+      const samples = await decodeAndResampleToMono16k(buf)
+      const chunks = chunkAudio(samples)
+      const sessionId = uid()
+      unsub = window.toto.onImportAudioProgress((d) => {
+        if (d.sessionId !== sessionId) return
+        setImportState({ stage: d.stage, pct: d.pct, error: null })
+      })
+      let last: { ok: boolean; error?: string } | undefined
+      for (let seq = 0; seq < chunks.length; seq++) {
+        last = await window.toto.importAudioTranscribe({
+          sessionId,
+          seq,
+          totalChunks: chunks.length,
+          done: seq === chunks.length - 1,
+          name: picked.name || 'Imported audio',
+          mtimeMs: picked.mtimeMs ?? Date.now(),
+          samples: chunks[seq]
+        })
+        if (!last?.ok) throw new Error(last?.error || 'Import failed.')
+      }
+      setImportState({ stage: 'idle', pct: 0, error: null })
+      refreshList()
+    } catch (e) {
+      setImportState({ stage: 'idle', pct: 0, error: e instanceof Error ? e.message : 'Could not import this recording.' })
+    } finally {
+      unsub?.()
+    }
+  }, [refreshList])
 
   // Single fetch owner: immediate on mount / empty query, debounced for typed searches.
   // A stale-guard drops out-of-order resolutions so a slow earlier response can't overwrite a newer one.
@@ -780,7 +849,24 @@ export function RecallView({
           />
           <Search size={14} className="shrink-0 text-[color:var(--color-ink-3)]" />
         </div>
+        <TextButton
+          icon={Upload}
+          onClick={() => void importAudio()}
+          disabled={importState.stage !== 'idle'}
+          title="Import an audio recording and transcribe it on-device"
+        >
+          {importState.stage === 'idle'
+            ? 'Import audio'
+            : importState.stage === 'decoding'
+              ? 'Decoding…'
+              : importState.stage === 'transcribing'
+                ? `Transcribing ${importState.pct}%`
+                : 'Saving…'}
+        </TextButton>
       </div>
+      {importState.error && (
+        <div className="mb-2 px-1 text-[11px] text-[var(--color-danger)]">{importState.error}</div>
+      )}
 
       {/* ── UPCOMING CALENDAR SECTION ───────────────────────────────────── */}
       <UpcomingSection onConnectCalendar={onConnectCalendar} />

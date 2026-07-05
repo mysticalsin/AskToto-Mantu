@@ -39,7 +39,11 @@ import {
   type NotebookLmInstallResult,
   type NotebookLmLoginResult,
   type NotebookLmConnectResult,
-  type NotebookLmAskResult
+  type NotebookLmAskResult,
+  type ImportAudioChunk,
+  type ImportAudioPickResult,
+  type ImportAudioChunkResult,
+  type ImportAudioProgress
 } from '@shared/ipc'
 import type { ProviderId } from '@shared/providers'
 
@@ -121,6 +125,12 @@ const api = {
   // Periodic crash-recovery snapshot of an in-progress meeting — fire-and-forget, best-effort.
   saveDraftTranscript: (m: SaveMeeting): Promise<void> => ipcRenderer.invoke(IPC.saveDraftTranscript, m),
   saveNote: (n: SaveNote): Promise<{ path: string }> => ipcRenderer.invoke(IPC.saveNote, n),
+  // Import audio file: pick → read its bytes once → stream ~30s transcribed windows (see main/import-audio.ts).
+  importAudioPick: (): Promise<ImportAudioPickResult> => ipcRenderer.invoke(IPC.importAudioPick),
+  importAudioRead: (path: string): Promise<ArrayBuffer> => ipcRenderer.invoke(IPC.importAudioRead, path),
+  importAudioTranscribe: (chunk: ImportAudioChunk): Promise<ImportAudioChunkResult> =>
+    ipcRenderer.invoke(IPC.importAudioTranscribe, chunk),
+  onImportAudioProgress: (cb: (d: ImportAudioProgress) => void): Unsub => sub(IPC.importAudioProgress, cb),
   answerFeedback: (f: AnswerFeedback): Promise<void> => ipcRenderer.invoke(IPC.answerFeedback, f),
   readMetrics: (): Promise<EvalMetrics> => ipcRenderer.invoke(IPC.metricsRead),
   exportRecapJson: (markdown: string): Promise<RecapExport> =>

@@ -67,6 +67,10 @@ export const IPC = {
   saveTranscript: 'transcript:save',
   saveDraftTranscript: 'transcript:saveDraft',
   saveNote: 'note:save',
+  importAudioPick: 'import-audio:pick',
+  importAudioRead: 'import-audio:read',
+  importAudioTranscribe: 'import-audio:transcribe',
+  importAudioProgress: 'import-audio:progress',
   exportRecapJson: 'recap:export-json',
   pickFolder: 'folder:pick',
   openPath: 'path:open',
@@ -214,6 +218,60 @@ export const SaveNoteSchema = z.object({
   answer: z.string().min(1)
 })
 export type SaveNote = z.infer<typeof SaveNoteSchema>
+
+/**
+ * Import audio file → on-device transcription (see main/import-audio.ts). The renderer decodes any
+ * target format + resamples/mixes down to 16kHz mono locally (Chromium can; main has no ffmpeg), then
+ * streams it to main as a sequence of ~30s windows over repeated invoke calls rather than one giant
+ * transfer. `samples` is capped well above a real ~30s window at 16kHz mono — same defensive reasoning
+ * as parakeetFeed's own cap — so a malicious/malfunctioning renderer can't force a huge synchronous
+ * decode. `name`/`mtimeMs` mirror what importAudioPick already handed the renderer (the source file's
+ * name + modified time); main only reads them when a chunk starts a NEW session (an unseen sessionId),
+ * to derive the saved meeting's title (humanized filename) and startedAt (file mtime) — later chunks in
+ * the same session ignore them.
+ */
+const IMPORT_AUDIO_MAX_CHUNK_SAMPLES = 16_000 * 35
+export const ImportAudioChunkSchema = z.object({
+  sessionId: z.string().min(1).max(200),
+  seq: z.number().int().nonnegative(),
+  totalChunks: z.number().int().positive().max(20_000),
+  done: z.boolean(),
+  name: z.string().max(300),
+  mtimeMs: z.number().finite(),
+  samples: z
+    .instanceof(Float32Array)
+    .refine((s) => s.length <= IMPORT_AUDIO_MAX_CHUNK_SAMPLES, 'Audio chunk too large.')
+})
+export type ImportAudioChunk = z.infer<typeof ImportAudioChunkSchema>
+
+/** Result of import-audio:pick — the picked file's path/name/size/mtime, `cancelled` if the user
+ *  dismissed the dialog, or `error` (e.g. over the 500 MB source-file cap). */
+export interface ImportAudioPickResult {
+  cancelled?: boolean
+  error?: string
+  path?: string
+  name?: string
+  sizeBytes?: number
+  mtimeMs?: number
+}
+
+/** Result of one import-audio:transcribe call. Only `file`/`title`/`lines` are populated on the final
+ *  (done) chunk, once the accumulated transcript has actually been saved. */
+export interface ImportAudioChunkResult {
+  ok: boolean
+  error?: string
+  file?: string
+  title?: string
+  lines?: TranscriptLine[]
+}
+
+/** Pushed via webContents.send while a session is transcribing/saving — drives the "Import audio"
+ *  button's progress label in RecallView. */
+export interface ImportAudioProgress {
+  sessionId: string
+  pct: number
+  stage: 'transcribing' | 'saving'
+}
 
 /** Payload for brain:setDealOutcome — the human marks a deal open/won/lost (see DealEntitySchema.outcome
  *  in shared/brain.ts; the LLM never sets it). dealSlug carries the deal's display name, the same

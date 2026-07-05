@@ -35,6 +35,7 @@ import {
   SetDealOutcomePayloadSchema,
   RenameMeetingPayloadSchema,
   UpdateRecapPayloadSchema,
+  ImportAudioChunkSchema,
   ProviderIdSchema,
   DEFAULT_SHORTCUTS,
   type HotkeyAction,
@@ -79,6 +80,7 @@ import { initLogging, mainLog, auditLog } from './logger'
 import { authStatus, signIn as authSignIn, signOut as authSignOut, requireAuth } from './auth'
 import { calendarToday } from './calendar'
 import { parakeetModelReady, ensureParakeetModel, parakeetTranscribe, parakeetRelease } from './parakeet'
+import { pickAudioFile, readPickedAudioFile, handleImportChunk, abandonImportSession } from './import-audio'
 import {
   saveMeeting,
   saveNote,
@@ -305,6 +307,7 @@ function createWindow(): void {
     // Abort any in-flight LLM streams so their callbacks don't fire against a destroyed window.
     streams.forEach((s) => s.abort())
     streams.clear()
+    abandonImportSession() // the renderer that owned this session is gone — free its accumulated lines
     win = null
   })
 
@@ -1705,6 +1708,27 @@ function registerIpc(): void {
     const rating = r?.rating === 'up' || r?.rating === 'down' ? r.rating : null
     if (!rating) return
     auditLog('answer.feedback', { rating, kind: typeof r?.kind === 'string' ? r.kind : undefined })
+  })
+
+  // --- Import audio file (on-device transcription of a picked recording; see main/import-audio.ts) ---
+  ipcMain.handle(IPC.importAudioPick, async (e) => {
+    assertMainWindow(e)
+    if (!requireAuth()) return { error: 'Not signed in.' }
+    return pickAudioFile(win)
+  })
+  ipcMain.handle(IPC.importAudioRead, async (e, path: unknown) => {
+    assertMainWindow(e)
+    if (!requireAuth()) throw new Error('Not signed in.')
+    return readPickedAudioFile(typeof path === 'string' ? path : '')
+  })
+  ipcMain.handle(IPC.importAudioTranscribe, async (e, raw) => {
+    assertMainWindow(e)
+    if (!requireAuth()) return { ok: false, error: 'Not signed in.' }
+    const parsed = ImportAudioChunkSchema.safeParse(raw)
+    if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message || 'Invalid audio chunk.' }
+    return handleImportChunk(getSettings(), parsed.data, (pct, stage) =>
+      win?.webContents.send(IPC.importAudioProgress, { sessionId: parsed.data.sessionId, pct, stage })
+    )
   })
 
   // --- Metrics, export & PDF ---
