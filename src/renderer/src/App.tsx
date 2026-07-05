@@ -1367,140 +1367,150 @@ export function App(): JSX.Element {
   // shallow prop comparison for its `body` prop no matter how stable every OTHER prop was. Must sit above
   // the early-return gates below — every hook in this component runs unconditionally before them (see
   // onQuickAction's own comment above for why: rendered-fewer-hooks-than-expected otherwise).
-  const body: JSX.Element | null = useMemo(() => {
-    let b: JSX.Element | null = null
-    if ((view === 'settings' || DEMO === 'settings') && settings) {
-      // Settings is self-contained (its own rounded panel) — rendered below the bar, NOT inside <Panel>.
-      b = (
-        <Settings
-          settings={settings}
-          patch={patch}
-          saveKey={saveKey}
-          clearKey={clearKey}
-          testKey={testKey}
-          initialTab={settingsInitialTab}
-          notice={settingsNotice}
-          onClose={() => setView('answer')}
-          onQuit={quitApp}
-          onLogout={logOut}
-          onOpenIntelligence={() => {
-            brainReturnViewRef.current = 'settings'
-            setView('brain')
-          }}
-          onOpenHistory={() => setView('history')}
-          onOpenMeeting={(file) => void openPastMeeting(file)}
-        />
-      )
-    } else if (view === 'history') {
-      b = (
-        <RecallView
-          onOpenFolder={() => void window.toto.openMeetingsFolder()}
-          onBack={() => setView('answer')}
-          onConnectCalendar={() => {
-            setSettingsInitialTab('calendar')
-            setSettingsNotice(undefined)
-            setView('settings')
-            setCollapsed(false)
-          }}
-          onNewChat={reset}
-          activeFile={savedPath ?? undefined}
-          onOpenMeeting={openPastMeeting}
-          onIntelligence={() => {
-            brainReturnViewRef.current = 'history'
-            setView('brain')
-          }}
-        />
-      )
-    } else if (view === 'brain') {
-      b = <BrainView onBack={() => setView(brainReturnViewRef.current)} />
-    } else if (view === 'agenda') {
-      b = <AgendaView />
-    } else if (view === 'copilot') {
-      b = (
-        <Copilot
-          lines={listen.lines}
-          suggestion={suggest.answer}
-          mode={mode}
-          listening={listen.listening}
-          loading={listen.loading}
-          loadingPct={listen.loadingPct}
-          error={listen.error}
-          captureNotice={captureError}
-          autosaveWarning={autosaveWarn}
-          showTranscript={settings?.showLiveTranscript ?? false}
-          onEnd={endReview}
-        />
-      )
-    } else if (view === 'review') {
-      // Two sources: a just-ended live session (ask.answer recap + live lines), or a past meeting opened
-      // from History (pastMeeting — read-only recap + saved lines + a "Resume session" affordance).
-      const pm = pastMeeting
-      b = (
-        <Review
-          recap={pm ? { id: 'past', text: pm.recap, streaming: false, error: null, prompt: '' } : ask.answer}
-          lines={pm ? pm.lines : listen.lines}
-          savedPath={pm ? pm.file : savedPath}
-          saveError={pm ? null : saveError}
-          saveAttempts={pm ? 0 : saveAttempts}
-          maxSaveAttempts={MAX_SAVE_RETRIES}
-          startedAt={pm ? pm.startedAt : meetingStartRef.current}
-          showTranscript={settings?.showFullTranscriptInReview ?? false}
-          meetingMeta={pm ? { title: pm.title, date: pm.date } : undefined}
-          followupDraft={followup.answer}
-          onGenerateFollowup={generateFollowup}
-          onRetryRecap={pm ? undefined : retryAnswer}
-          bidstackConnected={settings?.bidstackConnected ?? false}
-          bidstackTools={settings?.bidstackTools ?? []}
-          onOpenFolder={() => void window.toto.openMeetingsFolder()}
-          onSave={pm ? undefined : manualSave}
-          onResume={pm ? resumePastMeeting : undefined}
-          onOpenPastMeeting={openPastMeeting}
-          isPastMeeting={!!pm}
-          onRecapSaved={
-            pm
-              ? (recap) => setPastMeeting((prev) => (prev ? { ...prev, recap } : prev))
-              : undefined
-          }
-          onDone={
-            pm
-              ? () => {
-                  setPastMeeting(null)
-                  setView('history')
-                }
-              : reset
-          }
-        />
-      )
-    } else if (capturing || captureError || ask.answer) {
-      // While a new screen capture is in flight (capturing), force the streaming/empty display even when
-      // ask.answer still holds the PREVIOUS turn's finished answer — otherwise a repeat screen-ask (blank
-      // Enter, or any screen-ask after the first) silently paints that stale answer as static text with no
-      // busy signal for the whole capture window (footer/Retry/Go-deeper are already gated on !streaming,
-      // so forcing streaming=true here correctly hides them too).
-      b = (
-        <Answer
-          // Key on the answer id so a NEW turn remounts <Answer> — otherwise React reuses the instance and
-          // the prior turn's thumbs-up/down (`rated`) + copy/save flash state bleed onto the new answer,
-          // corrupting feedback telemetry. (capturing has no id yet → stable 'pending' until the run lands.)
-          key={ask.answer?.id ?? 'pending'}
-          text={capturing ? '' : ask.answer?.text ?? ''}
-          streaming={capturing || (ask.answer?.streaming ?? false)}
-          error={ask.answer?.error ?? null}
-          captureNotice={captureError}
-          prompt={ask.answer?.prompt ?? ''}
-          label={ask.answer?.label}
-          kind={ask.answer?.kind}
-          usedScreen={ask.answer?.usedScreen}
-          onRetry={capturing ? undefined : retryAnswer}
-          onGoDeeper={capturing ? undefined : goDeeper}
-        />
-      )
-    }
-
-    // Demo overrides
-    if (DEMO === 'answer') b = <Answer text={DEMO_ANSWER} streaming={false} error={null} />
-    else if (DEMO === 'copilot')
-      b = (
+  // One useMemo PER view branch, not one shared memo over all seven: a single memo's dep array unioned
+  // every branch's dependencies, so a streaming suggest.answer flush (60/sec) rebuilt the element for
+  // whatever panel was open — a fresh <Settings> element per frame fully re-rendered its ~5000 lines even
+  // though nothing it reads changed. Per-branch memos keep each element's identity stable unless ITS OWN
+  // inputs change, so React bails out of the untouched subtree entirely.
+  const settingsBody = useMemo(() => {
+    if (!settings) return null
+    // Settings is self-contained (its own rounded panel) — rendered below the bar, NOT inside <Panel>.
+    return (
+      <Settings
+        settings={settings}
+        patch={patch}
+        saveKey={saveKey}
+        clearKey={clearKey}
+        testKey={testKey}
+        initialTab={settingsInitialTab}
+        notice={settingsNotice}
+        onClose={() => setView('answer')}
+        onQuit={quitApp}
+        onLogout={logOut}
+        onOpenIntelligence={() => {
+          brainReturnViewRef.current = 'settings'
+          setView('brain')
+        }}
+        onOpenHistory={() => setView('history')}
+        onOpenMeeting={(file) => void openPastMeeting(file)}
+      />
+    )
+  }, [settings, patch, saveKey, clearKey, testKey, settingsInitialTab, settingsNotice, quitApp, logOut, openPastMeeting])
+  const historyBody = useMemo(
+    () => (
+      <RecallView
+        onOpenFolder={() => void window.toto.openMeetingsFolder()}
+        onBack={() => setView('answer')}
+        onConnectCalendar={() => {
+          setSettingsInitialTab('calendar')
+          setSettingsNotice(undefined)
+          setView('settings')
+          setCollapsed(false)
+        }}
+        onNewChat={reset}
+        activeFile={savedPath ?? undefined}
+        onOpenMeeting={openPastMeeting}
+        onIntelligence={() => {
+          brainReturnViewRef.current = 'history'
+          setView('brain')
+        }}
+      />
+    ),
+    [reset, savedPath, openPastMeeting]
+  )
+  const brainBody = useMemo(() => <BrainView onBack={() => setView(brainReturnViewRef.current)} />, [])
+  const agendaBody = useMemo(() => <AgendaView />, [])
+  const copilotBody = useMemo(
+    () => (
+      <Copilot
+        lines={listen.lines}
+        suggestion={suggest.answer}
+        mode={mode}
+        listening={listen.listening}
+        loading={listen.loading}
+        loadingPct={listen.loadingPct}
+        error={listen.error}
+        captureNotice={captureError}
+        autosaveWarning={autosaveWarn}
+        showTranscript={settings?.showLiveTranscript ?? false}
+        onEnd={endReview}
+      />
+    ),
+    // autosaveWarn was MISSING from the old shared dep array — a latent stale-warning bug the split fixes.
+    [listen.lines, suggest.answer, mode, listen.listening, listen.loading, listen.loadingPct, listen.error, captureError, autosaveWarn, settings?.showLiveTranscript, endReview]
+  )
+  const reviewBody = useMemo(() => {
+    // Two sources: a just-ended live session (ask.answer recap + live lines), or a past meeting opened
+    // from History (pastMeeting — read-only recap + saved lines + a "Resume session" affordance).
+    const pm = pastMeeting
+    return (
+      <Review
+        recap={pm ? { id: 'past', text: pm.recap, streaming: false, error: null, prompt: '' } : ask.answer}
+        lines={pm ? pm.lines : listen.lines}
+        savedPath={pm ? pm.file : savedPath}
+        saveError={pm ? null : saveError}
+        saveAttempts={pm ? 0 : saveAttempts}
+        maxSaveAttempts={MAX_SAVE_RETRIES}
+        startedAt={pm ? pm.startedAt : meetingStartRef.current}
+        showTranscript={settings?.showFullTranscriptInReview ?? false}
+        meetingMeta={pm ? { title: pm.title, date: pm.date } : undefined}
+        followupDraft={followup.answer}
+        onGenerateFollowup={generateFollowup}
+        onRetryRecap={pm ? undefined : retryAnswer}
+        bidstackConnected={settings?.bidstackConnected ?? false}
+        bidstackTools={settings?.bidstackTools ?? []}
+        onOpenFolder={() => void window.toto.openMeetingsFolder()}
+        onSave={pm ? undefined : manualSave}
+        onResume={pm ? resumePastMeeting : undefined}
+        onOpenPastMeeting={openPastMeeting}
+        isPastMeeting={!!pm}
+        onRecapSaved={
+          pm
+            ? (recap) => setPastMeeting((prev) => (prev ? { ...prev, recap } : prev))
+            : undefined
+        }
+        onDone={
+          pm
+            ? () => {
+                setPastMeeting(null)
+                setView('history')
+              }
+            : reset
+        }
+      />
+    )
+  }, [pastMeeting, ask.answer, listen.lines, savedPath, saveError, saveAttempts, settings?.showFullTranscriptInReview, settings?.bidstackConnected, settings?.bidstackTools, followup.answer, generateFollowup, retryAnswer, manualSave, resumePastMeeting, openPastMeeting, reset])
+  const answerBody = useMemo(() => {
+    if (!(capturing || captureError || ask.answer)) return null
+    // While a new screen capture is in flight (capturing), force the streaming/empty display even when
+    // ask.answer still holds the PREVIOUS turn's finished answer — otherwise a repeat screen-ask (blank
+    // Enter, or any screen-ask after the first) silently paints that stale answer as static text with no
+    // busy signal for the whole capture window (footer/Retry/Go-deeper are already gated on !streaming,
+    // so forcing streaming=true here correctly hides them too).
+    return (
+      <Answer
+        // Key on the answer id so a NEW turn remounts <Answer> — otherwise React reuses the instance and
+        // the prior turn's thumbs-up/down (`rated`) + copy/save flash state bleed onto the new answer,
+        // corrupting feedback telemetry. (capturing has no id yet → stable 'pending' until the run lands.)
+        key={ask.answer?.id ?? 'pending'}
+        text={capturing ? '' : ask.answer?.text ?? ''}
+        streaming={capturing || (ask.answer?.streaming ?? false)}
+        error={ask.answer?.error ?? null}
+        captureNotice={captureError}
+        prompt={ask.answer?.prompt ?? ''}
+        label={ask.answer?.label}
+        kind={ask.answer?.kind}
+        usedScreen={ask.answer?.usedScreen}
+        onRetry={capturing ? undefined : retryAnswer}
+        onGoDeeper={capturing ? undefined : goDeeper}
+      />
+    )
+  }, [capturing, captureError, ask.answer, retryAnswer, goDeeper])
+  // Demo overrides (DEMO is a build/query-time constant, so these memos are inert in real sessions).
+  const demoBody = useMemo(() => {
+    if (DEMO === 'answer') return <Answer text={DEMO_ANSWER} streaming={false} error={null} />
+    if (DEMO === 'copilot')
+      return (
         <Copilot
           lines={DEMO_LINES}
           suggestion={{ id: 'd', text: DEMO_SUG, streaming: false, error: null, prompt: '' }}
@@ -1513,44 +1523,25 @@ export function App(): JSX.Element {
           onEnd={() => {}}
         />
       )
-    else if (DEMO === 'history') b = <RecallView onOpenFolder={() => {}} />
-
-    return b
-  }, [
-    view,
-    settings,
-    patch,
-    saveKey,
-    clearKey,
-    testKey,
-    settingsInitialTab,
-    settingsNotice,
-    quitApp,
-    logOut,
-    openPastMeeting,
-    reset,
-    savedPath,
-    mode,
-    listen.lines,
-    suggest.answer,
-    listen.listening,
-    listen.loading,
-    listen.loadingPct,
-    listen.error,
-    endReview,
-    pastMeeting,
-    ask.answer,
-    saveError,
-    saveAttempts,
-    followup.answer,
-    generateFollowup,
-    manualSave,
-    resumePastMeeting,
-    capturing,
-    captureError,
-    retryAnswer,
-    goDeeper
-  ])
+    if (DEMO === 'history') return <RecallView onOpenFolder={() => {}} />
+    return null
+  }, [])
+  const body: JSX.Element | null =
+    DEMO === 'answer' || DEMO === 'copilot' || DEMO === 'history'
+      ? demoBody
+      : (view === 'settings' || DEMO === 'settings') && settings
+        ? settingsBody
+        : view === 'history'
+          ? historyBody
+          : view === 'brain'
+            ? brainBody
+            : view === 'agenda'
+              ? agendaBody
+              : view === 'copilot'
+                ? copilotBody
+                : view === 'review'
+                  ? reviewBody
+                  : answerBody
 
   // Until settings AND auth resolve, render only a slim loading strip — never an interactive surface.
   // This closes the first-run flash and the auth-gate-fail-open window: the SSO and onboarding gates
