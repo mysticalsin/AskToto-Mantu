@@ -1,10 +1,10 @@
 import type { AskStart, ConversationMode, Profile } from '@shared/ipc'
 import {
   SUMMARY_PROMPT,
-  RECAP_PROMPT,
   INJECTION_GUARD,
   GROUNDING_RAIL,
-  effectiveModePrompt
+  effectiveModePrompt,
+  recapPromptFor
 } from '@shared/prompts'
 
 function profileBlock(p: Profile): string {
@@ -93,7 +93,7 @@ export function buildSystem(
   const prefix = systemPrompt && systemPrompt.trim() ? systemPrompt.trim() + '\n\n' : ''
 
   if (req.mode === 'summary') return lead + prefix + SUMMARY_PROMPT + ctx + lang
-  if (req.mode === 'recap') return lead + prefix + RECAP_PROMPT + ctx + lang
+  if (req.mode === 'recap') return lead + prefix + recapPromptFor(mode) + ctx + lang
 
   const prompt = effectiveModePrompt(mode, modePrompts)
   // Modes where the user is performing as themselves benefit from the profile (background/role/company);
