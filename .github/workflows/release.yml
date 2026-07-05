@@ -28,6 +28,9 @@ jobs:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      # Positive signature gate: fail the release if any published artifact isn't validly signed,
+      # instead of trusting electron-builder's exit code (docs/SIGNING.md §Signature gate).
+      - run: node scripts/verify-signing.mjs release
 
   release-windows:
     name: Windows release
@@ -45,3 +48,5 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
           WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
           WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
+      # Positive signature gate (Get-AuthenticodeSignature must report Valid on every exe).
+      - run: node scripts/verify-signing.mjs release
