@@ -1,6 +1,6 @@
 # AskToto — Enterprise Security & Reliability Hardening Backlog
 
-Next tier after the (completed) Apple-grade refinement backlog (`docs/asktoto-refinement-backlog.md`).
+Next tier after the completed Apple-grade refinement backlog (27 items, all shipped).
 These are issues a security & reliability audit would flag for production/enterprise deployment, each
 verified in the real code. None duplicate the 27 already-done refinement items.
 
