@@ -55,6 +55,7 @@ export type AuditEvent =
   | 'transcript.recap_edited'
   | 'transcript.recovered'
   | 'transcript.debrief'
+  | 'transcript.imported'
   | 'brain.commitment.settled'
   | 'brain.deal.outcome'
   | 'note.saved'
