@@ -115,6 +115,18 @@ describe('resolveBinary — login-shell lookup with in-process caching', () => {
 // ─── detectNotebookLmCli ─────────────────────────────────────────────────────────
 
 describe('detectNotebookLmCli', () => {
+  // These mocks encode the mac/Linux login-shell branch (`sh -lc 'command -v <bin>'`) of
+  // resolveBinary — pin the platform so this suite is deterministic when the test runner itself is
+  // Windows (resolveBinary's win32 branch shells out to `where` with a different argv shape).
+  // Mirrors the setPlatform pattern in cli-win.test.ts / cli.test.ts.
+  const REAL_PLATFORM = process.platform
+  beforeEach(() => {
+    Object.defineProperty(process, 'platform', { value: 'darwin', configurable: true })
+  })
+  afterEach(() => {
+    Object.defineProperty(process, 'platform', { value: REAL_PLATFORM, configurable: true })
+  })
+
   it('reports not installed when `nlm` is not on PATH', async () => {
     h.execFileImpl.mockRejectedValue(new Error('command not found'))
     const r = await detectNotebookLmCli()
@@ -147,6 +159,18 @@ describe('detectNotebookLmCli', () => {
 // ─── installNotebookLmCli ──────────────────────────────────────────────────────────
 
 describe('installNotebookLmCli', () => {
+  // Same rationale as detectNotebookLmCli above: these mocks encode the mac/Linux login-shell
+  // resolution branch (`sh -lc 'command -v <bin>'`, homebrew-style paths) that resolveBinary and
+  // the install spawn take together — pin the platform so the suite is deterministic when the test
+  // runner itself is Windows.
+  const REAL_PLATFORM = process.platform
+  beforeEach(() => {
+    Object.defineProperty(process, 'platform', { value: 'darwin', configurable: true })
+  })
+  afterEach(() => {
+    Object.defineProperty(process, 'platform', { value: REAL_PLATFORM, configurable: true })
+  })
+
   it('short-circuits when nlm is already installed, without touching any package manager', async () => {
     h.execFileImpl.mockResolvedValue({ stdout: '/usr/local/bin/nlm\n', stderr: '' })
     const onProgress = vi.fn()
