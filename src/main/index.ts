@@ -15,7 +15,8 @@ import {
   net,
   Notification,
   clipboard,
-  powerSaveBlocker
+  powerSaveBlocker,
+  systemPreferences
 } from 'electron'
 import { join, basename, resolve, relative, isAbsolute, extname } from 'node:path'
 import { readFileSync, existsSync, writeFileSync, realpathSync, readdirSync, unlinkSync } from 'node:fs'
@@ -838,6 +839,27 @@ function registerIpc(): void {
     if (process.platform !== 'darwin') return
     const pane = kind === 'screenRecording' ? 'Privacy_ScreenCapture' : 'Privacy_Microphone'
     void shell.openExternal(`x-apple.systempreferences:com.apple.preference.security?${pane}`)
+  })
+  // Front-load the OS permission prompts during onboarding (macOS only) so the first real meeting
+  // isn't interrupted by them. Serial, and only for permissions not yet granted: mic has a direct
+  // prompt API; Screen Recording has none, but a 1px desktopCapturer probe registers the app with
+  // TCC and raises the system prompt. Accessibility is deliberately NOT requested — nothing in the
+  // app needs it since meeting-detect was removed, and an unexplained Accessibility prompt is
+  // exactly the kind of thing enterprise IT flags. Never re-prompts after an explicit Deny (macOS
+  // suppresses those anyway); the checklist's "Open System Settings" link stays the recovery path.
+  ipcMain.handle(IPC.permissionsRequestUpfront, async (e) => {
+    assertMainWindow(e)
+    if (process.platform === 'darwin') {
+      if (systemPreferences.getMediaAccessStatus('microphone') === 'not-determined') {
+        await systemPreferences.askForMediaAccess('microphone').catch(() => false)
+      }
+      if (systemPreferences.getMediaAccessStatus('screen') !== 'granted') {
+        await desktopCapturer
+          .getSources({ types: ['screen'], thumbnailSize: { width: 1, height: 1 } })
+          .catch(() => [])
+      }
+    }
+    return getPlatformPermissions()
   })
 
   ipcMain.handle(IPC.settingsSet, (e, patch) => {

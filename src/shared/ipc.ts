@@ -91,6 +91,7 @@ export const IPC = {
   hotkey: 'hotkey',
   permissionsGet: 'permissions:get',
   permissionsOpenSettings: 'permissions:openSettings',
+  permissionsRequestUpfront: 'permissions:requestUpfront',
   listeningState: 'listening:state',
   asrBundled: 'asr:bundled',
   cliDetect: 'cli:detect',
