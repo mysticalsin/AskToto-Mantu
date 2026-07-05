@@ -364,6 +364,7 @@ const MeetingRow = memo(function MeetingRow({
   editingValue,
   isRenaming,
   isOpen,
+  error,
   onSelect,
   onOpen,
   onToggleConnections,
@@ -385,6 +386,8 @@ const MeetingRow = memo(function MeetingRow({
   /** A rename request for this row is in flight — disables the pencil button (mirrors isDeleting). */
   isRenaming: boolean
   isOpen: boolean
+  /** Most recent rename/delete failure for this row, or null — see onTrash/commitEdit. */
+  error: string | null
   onSelect: (file: string) => void
   onOpen: (file: string) => void
   onToggleConnections: (file: string) => void
@@ -472,7 +475,7 @@ const MeetingRow = memo(function MeetingRow({
               title="Rename"
               disabled={isRenaming}
               onClick={() => onStartEdit(m.file, m.title)}
-              className="no-drag focus-ring grid h-7 w-7 shrink-0 place-items-center rounded-full text-[color:var(--color-ink-3)] hover:bg-white/[0.06] hover:text-[color:var(--color-ink)] disabled:opacity-40"
+              className="no-drag focus-ring grid h-7 w-7 shrink-0 place-items-center rounded-full text-[color:var(--color-ink-3)] transition-colors hover:bg-white/[0.06] hover:text-[color:var(--color-ink)] disabled:opacity-40"
             >
               <Pencil size={12} />
             </button>
@@ -484,7 +487,7 @@ const MeetingRow = memo(function MeetingRow({
               aria-expanded={isOpen}
               title="Connections"
               onClick={() => onToggleConnections(m.file)}
-              className="no-drag focus-ring grid h-7 w-7 shrink-0 place-items-center rounded-full text-[color:var(--color-ink-3)] hover:bg-white/[0.06] hover:text-[color:var(--color-ink)]"
+              className="no-drag focus-ring grid h-7 w-7 shrink-0 place-items-center rounded-full text-[color:var(--color-ink-3)] transition-colors hover:bg-white/[0.06] hover:text-[color:var(--color-ink)]"
             >
               <Network size={12} />
             </button>
@@ -503,6 +506,9 @@ const MeetingRow = memo(function MeetingRow({
           </>
         )}
       </div>
+
+      {/* Rename/delete error — transient inline message; see onTrash/commitEdit. */}
+      {error && <div className="px-7 pb-1 text-[11px] text-[var(--color-danger)]">{error}</div>}
 
       {/* Search snippet (RecallHit only) */}
       {hit?.snippet && (
@@ -581,6 +587,8 @@ export function RecallView({
   const [editingValue, setEditingValue] = useState('')
   /** File mid-rename-save — disables its pencil button while the IPC call is in flight. */
   const [renaming, setRenaming] = useState<string | null>(null)
+  /** Most recent rename/delete failure — file + message shown as an inline error under that row. */
+  const [rowError, setRowError] = useState<{ file: string; message: string } | null>(null)
   /** Opt-in past the INITIAL_RENDER_CAP — set once the user clicks "Show all N meetings". */
   const [showAll, setShowAll] = useState(false)
   /** The scrollable meeting-list container — focused before a row unmounts (e.g. on delete) so a
@@ -592,13 +600,20 @@ export function RecallView({
   // register?" two-click pattern), then removes the .md + its index row.
   const onTrash = useCallback(async (file: string, title: string): Promise<void> => {
     setDeleting(file)
-    const r = await window.toto.recallDelete(file, title).catch(() => ({ ok: false }))
+    const r = await window.toto
+      .recallDelete(file, title)
+      .catch((e): { ok: boolean; error?: string } => ({
+        ok: false,
+        error: e instanceof Error ? e.message : String(e)
+      }))
     setDeleting(null)
     if (r.ok) {
       listRef.current?.focus()
       setItems((xs) => xs.filter((x) => x.file !== file))
       setSelectedFile((s) => (s === file ? null : s))
       setOpen((o) => (o === file ? null : o))
+    } else if (r.error !== 'cancelled') {
+      setRowError({ file, message: r.error || 'Could not delete meeting.' })
     }
   }, [])
   // Fire-and-forget wrapper matching MeetingRow's sync onTrash prop — kept stable via useCallback so the
@@ -623,14 +638,17 @@ export function RecallView({
     editingRef.current = { file, value: title }
     setEditingFile(file)
     setEditingValue(title)
+    setRowError((e) => (e?.file === file ? null : e))
   }, [])
   const changeEditValue = useCallback((value: string): void => {
     editingRef.current.value = value
     setEditingValue(value)
   }, [])
   const cancelEdit = useCallback((): void => {
+    const { file } = editingRef.current
     editingRef.current = { file: null, value: '' }
     setEditingFile(null)
+    setRowError((e) => (e?.file === file ? null : e))
   }, [])
   const commitEdit = useCallback((): void => {
     const { file, value } = editingRef.current
@@ -643,9 +661,28 @@ export function RecallView({
     window.toto
       .recallRename(file, title)
       .then((r) => {
-        if (r.ok) setItems((xs) => xs.map((x) => (x.file === file ? { ...x, title } : x)))
+        if (r.ok) {
+          setItems((xs) => xs.map((x) => (x.file === file ? { ...x, title } : x)))
+          setRowError((e) => (e?.file === file ? null : e))
+        } else {
+          // Reopen the input with the attempted title so the user can retry — unless they've since
+          // started renaming another row, in which case only surface the error, don't steal the editor.
+          if (editingRef.current.file === null) {
+            editingRef.current = { file, value: title }
+            setEditingFile(file)
+            setEditingValue(title)
+          }
+          setRowError({ file, message: r.error || 'Could not rename meeting.' })
+        }
       })
-      .catch(() => {})
+      .catch((e) => {
+        if (editingRef.current.file === null) {
+          editingRef.current = { file, value: title }
+          setEditingFile(file)
+          setEditingValue(title)
+        }
+        setRowError({ file, message: e instanceof Error ? e.message : 'Could not rename meeting.' })
+      })
       .finally(() => setRenaming(null))
   }, [])
 
@@ -783,6 +820,7 @@ export function RecallView({
                     editingValue={editingFile === m.file ? editingValue : ''}
                     isRenaming={renaming === m.file}
                     isOpen={open === m.file}
+                    error={rowError?.file === m.file ? rowError.message : null}
                     onSelect={selectFile}
                     onOpen={openMeeting}
                     onToggleConnections={toggleConnections}

@@ -27,7 +27,7 @@ export class ErrorBoundary extends Component<{ children: ReactNode }, { error: E
             {this.state.error.message}
           </p>
           <p className="mt-3 text-xs text-white/50">
-            Switch tabs or reload — the rest of the dashboard is unaffected.
+            Switch tabs or reload. The rest of the dashboard is unaffected.
           </p>
         </div>
       )

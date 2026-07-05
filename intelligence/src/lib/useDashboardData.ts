@@ -29,7 +29,7 @@ export function useDashboardData(): State {
       // there is a wiring failure, and silently serving a baked-in data.json would present stale
       // vault numbers as current. Fail loudly instead; the file path is for standalone/dev only.
       if (window.location.protocol === 'file:') {
-        throw new Error('Live brain bridge unavailable (preload failed) — refusing to show stale bundled data.')
+        throw new Error('Live brain bridge unavailable (preload failed). Refusing to show stale bundled data.')
       }
       const res = await fetch(`${import.meta.env.BASE_URL}data.json`)
       if (!res.ok) throw new Error(`Failed to load data.json (${res.status})`)

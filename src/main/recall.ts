@@ -111,6 +111,9 @@ export async function recallRead(file: string): Promise<RecallReadResult> {
   const folder = resolveMeetingsFolder(getSettings())
   // basename blocks path traversal (mirrors the recallOpen guard in index.ts).
   const safeName = basename(file)
+  if (!safeName || !safeName.endsWith('.md') || safeName === 'index.md' || safeName === 'README.md') {
+    return { ok: false, error: 'Invalid meeting file name.' }
+  }
   const fullPath = join(folder, safeName)
   let text: string
   try {

@@ -26,7 +26,7 @@ export function NavBar() {
           />
           <div>
             <div className="text-sm font-semibold text-white/90">Mantu Intelligence</div>
-            <div className="text-[11px] text-white/40">Your meetings, compounded, by Mantu</div>
+            <div className="text-[11px] text-white/40">Your meetings, compounded</div>
           </div>
         </div>
         <nav className="win-no-drag flex items-center gap-1 rounded-lg bg-white/5 p-1">

@@ -225,7 +225,10 @@ export async function writeSaved(file: string, content: string, encrypt: boolean
     // to the caller (fail-closed): plaintext is never silently written when encryption is on.
     data = encryptEnvelopeV2(content)
   }
-  const tmp = `${file}.tmp`
+  // Unique per-call tmp name: two concurrent writers to the SAME target (e.g. a background brain
+  // ingest and an IPC-driven edit both updating one entity file) would otherwise share `${file}.tmp` —
+  // the first rename steals the second writer's bytes and the second rename throws ENOENT.
+  const tmp = `${file}.${randomBytes(6).toString('hex')}.tmp`
   try {
     await writeFile(tmp, data, { mode: 0o600 }) // async: off the main-process event loop
     await rename(tmp, file)

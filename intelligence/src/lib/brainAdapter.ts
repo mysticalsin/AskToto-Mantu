@@ -256,11 +256,11 @@ function toInsights(deals: BrainDeal[]): CoachingInsight[] {
       why_it_matters:
         lead.why ||
         (meetingsIn.size > 1
-          ? `Recurred across ${meetingsIn.size} meetings — a pattern, not a one-off.`
+          ? `Recurred across ${meetingsIn.size} meetings: a pattern, not a one-off.`
           : lead.kind === 'missed'
             ? 'An opening the seller did not pursue.'
             : 'Coaching note grounded in this call.'),
-      coaching_move: lead.kind === 'missed' ? `Next call: pursue this directly — ${lead.text}` : lead.text,
+      coaching_move: lead.kind === 'missed' ? `Next call, pursue this directly: ${lead.text}` : lead.text,
       category: categorize(lead.text),
       confidence,
       grounding,
@@ -333,7 +333,11 @@ function communities(nodes: GraphNode[], edges: GraphEdge[]): void {
   const members = new Map<number, GraphNode[]>()
   for (const n of nodes) {
     const l = label.get(n.id)!
-    if (!communityIdOf.has(l)) communityIdOf.set(l, communityIdOf.size)
+    if (!communityIdOf.has(l)) {
+      let hash = 0
+      for (let i = 0; i < l.length; i++) hash = (hash * 31 + l.charCodeAt(i)) | 0
+      communityIdOf.set(l, hash >>> 0)
+    }
     const cid = communityIdOf.get(l)!
     n.community_id = cid
     if (!members.has(cid)) members.set(cid, [])
@@ -506,7 +510,7 @@ export function brainToDashboard(b: BrainRead): DashboardData {
   return {
     meta: {
       is_placeholder: false,
-      note: 'Live from your Mantu Intelligence brain — grounded in your meeting transcripts.',
+      note: 'Live from your Mantu Intelligence brain, grounded in your meeting transcripts.',
       generated: new Date().toISOString(),
       n_deals: deals.length
     },
