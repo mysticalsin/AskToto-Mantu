@@ -30,6 +30,7 @@ import {
   resetSecretKeyCache,
   useFileBackend
 } from './secrets'
+import { adminManagedConfigPath, trustedAdminManagedPath } from './win-security'
 // Static (eager) imports — dynamic import() throws under the bytecode-compiled main (electron-vite
 // bytecodePlugin). These SDKs are already eager-loaded by the streaming modules (llm/anthropic|dust|openai),
 // so this adds no startup cost; it just makes the key-test + Dust-agent-list paths bytecode-safe.
@@ -139,19 +140,16 @@ function readAllowedFrom(p: string): string[] | null {
   }
 }
 
-/** Machine-wide org-policy location IT can deploy (admin-only write). */
-function adminManagedPath(): string {
-  if (process.platform === 'darwin') return '/Library/Application Support/Métis/managed-config.json'
-  if (process.platform === 'win32')
-    return join(process.env.ProgramData || 'C:\\ProgramData', 'Métis', 'managed-config.json')
-  return '/etc/asktoto/managed-config.json'
-}
+// The machine-wide org-policy path lives in win-security.ts (single source of truth). On Windows it is
+// only honored when admin-owned + not user-writable (trustedAdminManagedPath); on macOS/Linux the
+// root-owned parent dir already enforces that, so the trusted path == the real path.
 
 /** Enterprise managed defaults: per-user (userData) overlaid by machine-wide admin policy. Validated. */
 export function validatedManaged(): Record<string, unknown> {
+  const admin = trustedAdminManagedPath()
   return {
     ...readManagedFrom(join(dir(), 'managed-config.json')),
-    ...readManagedFrom(adminManagedPath()), // machine policy wins over the per-user file
+    ...(admin ? readManagedFrom(admin) : {}), // machine policy wins over the per-user file (win32: only if admin-trusted)
     ...caheEditionPolicy().managedDefaults
   }
 }
@@ -159,7 +157,8 @@ export function validatedManaged(): Record<string, unknown> {
 /** Keys that IT has locked; user edits to these are silently dropped. */
 export function getLockedKeys(): string[] {
   const user = readLockedFrom(join(dir(), 'managed-config.json'))
-  const machine = readLockedFrom(adminManagedPath())
+  const admin = trustedAdminManagedPath()
+  const machine = admin ? readLockedFrom(admin) : []
   return [...new Set([...user, ...machine, ...caheEditionPolicy().lockedKeys])]
 }
 
@@ -171,7 +170,8 @@ export function getLockedKeys(): string[] {
 export function getAllowedProviders(): string[] | null {
   // Machine (admin) policy wins over the per-user managed file, mirroring validatedManaged() precedence.
   // Read from the raw JSON because `allowedProviders` is a policy key, not a settings-schema key.
-  const configured = readAllowedFrom(adminManagedPath()) ?? readAllowedFrom(join(dir(), 'managed-config.json'))
+  const admin = trustedAdminManagedPath()
+  const configured = (admin ? readAllowedFrom(admin) : null) ?? readAllowedFrom(join(dir(), 'managed-config.json'))
   const edition = caheEditionPolicy().allowedProviders
   if (!edition) return configured
   // Cahê narrows the package surface to Kimi and Dust. An IT allowlist is still authoritative: intersect
@@ -387,7 +387,7 @@ function currentSettingsMtimes(): Pick<SettingsCache, 'userMtime' | 'managedMtim
   return {
     userMtime: safeMtime(settingsPath()),
     managedMtime: safeMtime(join(dir(), 'managed-config.json')),
-    adminMtime: safeMtime(adminManagedPath()),
+    adminMtime: safeMtime(adminManagedConfigPath()),
     caheEdition: isCaheEdition()
   }
 }
