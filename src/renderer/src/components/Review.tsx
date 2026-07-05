@@ -217,13 +217,14 @@ export const Review = memo(function Review({
   }
 
   useEffect(() => {
-    // The live clock only feeds durationSec while there's no real transcript yet (lines.length <= 1).
-    // Once speech is captured the duration is fixed from line timestamps, so stop ticking and stop
-    // re-rendering the recap once a second for no visible change.
-    if (lines.length > 1) return
+    // The live clock only feeds durationSec while a JUST-ENDED session has no real transcript yet
+    // (lines.length <= 1). Once speech is captured the duration is fixed from line timestamps; and a
+    // reopened past meeting must never tick at all — its wall-clock fallback would show time since the
+    // meeting started (file mtime for imports) and grow while you read it.
+    if (lines.length > 1 || isPastMeeting) return
     const id = setInterval(() => setNow(Date.now()), 1000)
     return () => clearInterval(id)
-  }, [lines.length])
+  }, [lines.length, isPastMeeting])
 
   useEffect(() => {
     // Keyed on savedPath (not just mount): the meeting's own async save lands AFTER this screen mounts,
@@ -248,9 +249,13 @@ export const Review = memo(function Review({
       const times = lines.map((l) => l.t)
       return Math.floor((Math.max(...times) - Math.min(...times)) / 1000)
     }
+    // A saved past meeting with a single line (e.g. a short audio import that fit one transcription
+    // window) has no measurable span — the wall-clock fallback below is only for a LIVE just-ended
+    // session whose lines haven't landed yet. 0 hides the Duration chip below.
+    if (isPastMeeting) return 0
     if (startedAt) return Math.floor((now - startedAt) / 1000)
     return 0
-  }, [lines, startedAt, now])
+  }, [lines, startedAt, now, isPastMeeting])
 
   const participants = useMemo(() => new Set(lines.map((l) => l.speaker)).size, [lines])
 
@@ -385,7 +390,9 @@ export const Review = memo(function Review({
       )}
       <div className="flex items-center justify-between gap-2 text-[11px] text-[color:var(--color-ink-2)]">
         <div className="flex items-center gap-2">
-          <span className="rounded-full bg-white/[0.06] px-2 py-0.5">Duration {formatDuration(durationSec)}</span>
+          {durationSec > 0 && (
+            <span className="rounded-full bg-white/[0.06] px-2 py-0.5">Duration {formatDuration(durationSec)}</span>
+          )}
           <span className="rounded-full bg-white/[0.06] px-2 py-0.5">
             {participants} participant{participants === 1 ? '' : 's'}
           </span>
