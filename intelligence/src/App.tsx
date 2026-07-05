@@ -1,14 +1,20 @@
+import { Suspense, lazy } from 'react'
 import { Route, Routes, useLocation } from 'react-router-dom'
 import { NavBar } from './components/NavBar'
 import { ErrorBoundary } from './components/ErrorBoundary'
 import { PlaceholderBanner } from './components/PlaceholderBanner'
 import { useDashboardData } from './lib/useDashboardData'
+import { BriefingView } from './views/BriefingView'
 import { CoachingView } from './views/CoachingView'
 import { DealView } from './views/DealView'
 import { StatsView } from './views/StatsView'
-import { GraphView } from './views/GraphView'
 import { MeetingsView } from './views/MeetingsView'
 import { EmbedView } from './views/EmbedView'
+
+// Lazy: GraphView drags in vis-network + vis-data — most of the whole bundle — which every other
+// route otherwise pays for at cold start. Renderer code is not bytecode-compiled (that constraint
+// is src/main only), so dynamic import is safe here, and Vite splits it into its own chunk.
+const GraphView = lazy(() => import('./views/GraphView').then((m) => ({ default: m.GraphView })))
 
 function LoadingOrError({ loading, error }: { loading: boolean; error: string | null }) {
   if (loading) {
@@ -50,10 +56,24 @@ function DashboardRoutes() {
       ) : (
         <ErrorBoundary key={pathname}>
           <Routes>
-            <Route path="/" element={<CoachingView data={data} />} />
+            <Route path="/" element={<BriefingView data={data} />} />
+            <Route path="/coaching" element={<CoachingView data={data} />} />
             <Route path="/deals" element={<DealView data={data} />} />
             <Route path="/stats" element={<StatsView data={data} />} />
-            <Route path="/graph" element={<GraphView data={data} />} />
+            <Route
+              path="/graph"
+              element={
+                <Suspense
+                  fallback={
+                    <div className="flex h-64 items-center justify-center text-sm text-white/40">
+                      Loading the relationship graph…
+                    </div>
+                  }
+                >
+                  <GraphView data={data} />
+                </Suspense>
+              }
+            />
             <Route path="/meetings" element={<MeetingsView data={data} />} />
           </Routes>
         </ErrorBoundary>

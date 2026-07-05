@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState, memo, type ReactNode } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, memo, type ReactNode } from 'react'
 import {
   Image,
   CornerDownLeft,
@@ -360,18 +360,13 @@ export const Bar = memo(function Bar(props: BarProps): JSX.Element {
   const expanded = !!props.body
   const hasAnswer = props.hasAnswer ?? expanded
 
-  return (
-    // The flex-col lets additional in-flow elements grow the window as needed.
-    <div ref={wrapRef} className="relative flex w-full flex-col items-stretch gap-1.5">
-      <div
-        className={[
-          'aw-widget w-full',
-          // Working → fast rainbow ring; Private view on → calm slow rainbow contour as the indicator.
-          props.busy ? 'rainbow-ring' : props.stealth ? 'aw-hidden-rainbow' : ''
-        ].join(' ')}
-      >
-        {/* Row 1 — hero input + ↵ submit. Grows when expanded so the "ask anything" reads big.
-            Padding and font-size transition together for a smooth expand/collapse. */}
+  // Row 1 and the toolbar row are memoized ELEMENTS: `body` gets a fresh reference on every RAF-batched
+  // stream flush (up to 60/sec while an answer streams), which defeats Bar's outer memo — without these,
+  // every flush rebuilt and reconciled ~50 chrome elements (9 IconTools, input, pills) whose state never
+  // changes mid-stream. Stable element identity here makes React bail out of both subtrees, so a flush
+  // only reconciles the body slot. Same isolation philosophy as ScreenFreshnessChip/ElapsedClock above.
+  const inputRow = useMemo(
+    () => (
         <div
           className={[
             'flex items-center gap-3 px-5 transition-[padding,font-size] duration-[var(--duration-panel)] ease-[var(--ease-spring)]',
@@ -478,28 +473,12 @@ export const Bar = memo(function Bar(props: BarProps): JSX.Element {
             </button>
           )}
         </div>
+    ),
+    [expanded, hasAnswer, props.onBack, props.screenCapturedAt, props.listening, props.paused, props.value, props.onChange, props.canPrewarm, props.onSubmit, props.busy, props.onToggleListen, props.onStop]
+  )
 
-        {/* Body — CSS grid-rows 0fr→1fr animates height; opacity fades in sync. Always rendered so
-            the transition runs on mount rather than snapping on conditional mount/unmount. */}
-        <div
-          className="grid overflow-hidden transition-[grid-template-rows,opacity] duration-[var(--duration-panel)] ease-[var(--ease-spring)]"
-          style={{
-            gridTemplateRows: props.body ? '1fr' : '0fr',
-            opacity: props.body ? 1 : 0
-          }}
-        >
-          <div className="min-h-0">
-            <div className="aw-body scroll-thin max-h-[76vh] overflow-y-auto px-5 py-3">
-              {props.body}
-            </div>
-          </div>
-        </div>
-
-        {/* Row 2 — toolbar. A 3-column grid (1fr | auto | 1fr): the logo (left), the tool cluster
-            (middle), and History/Transcript (right). Equal flexible flanks center the cluster on the
-            WINDOW, not on the leftover space between two unequal neighbors (flex justify-between put
-            the cluster's midpoint left of the window's). Tracks never overlap, so the cluster still
-            can't collide with the right-hand group when that group is wide during a live meeting. */}
+  const toolbarRow = useMemo(
+    () => (
         <div className="aw-toolbar grid grid-cols-[1fr_auto_1fr] items-center border-t border-[var(--color-hair-soft)] px-5 py-1">
           {/* The Mantu mark IS the logo → opens Settings. (Quit/Hide live in the tray + hotkeys.) */}
           <button
@@ -680,6 +659,41 @@ export const Bar = memo(function Bar(props: BarProps): JSX.Element {
             </button>
           </div>
         </div>
+    ),
+    [props.onSettings, props.listening, props.onCapture, props.capturing, props.spotlightReady, props.onSpotlightRef, props.mode, props.customModes, modeOpen, props.thinkingOn, props.onToggleThinking, props.stealth, props.onToggleStealth, props.onToggleListen, props.paused, props.startedAt, props.onTogglePause, props.onNewMeeting, props.transcriptShown, props.onTranscript, props.onHistory, props.onMinimize, props.canTogglePanel, props.panelOpen, props.onTogglePanel]
+  )
+
+  return (
+    // The flex-col lets additional in-flow elements grow the window as needed.
+    <div ref={wrapRef} className="relative flex w-full flex-col items-stretch gap-1.5">
+      <div
+        className={[
+          'aw-widget w-full',
+          // Working → fast rainbow ring; Private view on → calm slow rainbow contour as the indicator.
+          props.busy ? 'rainbow-ring' : props.stealth ? 'aw-hidden-rainbow' : ''
+        ].join(' ')}
+      >
+        {/* Row 1 — hero input + ↵ submit (memoized element above). */}
+        {inputRow}
+
+        {/* Body — CSS grid-rows 0fr→1fr animates height; opacity fades in sync. Always rendered so
+            the transition runs on mount rather than snapping on conditional mount/unmount. */}
+        <div
+          className="grid overflow-hidden transition-[grid-template-rows,opacity] duration-[var(--duration-panel)] ease-[var(--ease-spring)]"
+          style={{
+            gridTemplateRows: props.body ? '1fr' : '0fr',
+            opacity: props.body ? 1 : 0
+          }}
+        >
+          <div className="min-h-0">
+            <div className="aw-body scroll-thin max-h-[76vh] overflow-y-auto px-5 py-3">
+              {props.body}
+            </div>
+          </div>
+        </div>
+
+        {/* Row 2 — toolbar (memoized element above, same rationale as Row 1). */}
+        {toolbarRow}
       </div>
 
       {/* Mode popover — deliberately a SIBLING of .aw-widget (not nested inside it), because .aw-widget

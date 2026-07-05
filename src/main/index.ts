@@ -106,7 +106,6 @@ import {
   sweepExpiredMeetings
 } from './recall'
 import { initAutoUpdate } from './updater'
-import updaterPkg from 'electron-updater'
 import { runSelfTest } from './selftest'
 import { readEvalMetrics, aggregateMetrics } from './metrics'
 import { importDustCliSession, refreshDustCliSession, setupDustCli } from './dustcli'
@@ -1897,7 +1896,11 @@ function registerIpc(): void {
   // --- Auto-update ---
   ipcMain.handle(IPC.updateInstall, (e) => {
     assertMainWindow(e)
-    updaterPkg.autoUpdater.quitAndInstall()
+    // Lazy-required (same pattern + rationale as updater.ts): a static import here put
+    // electron-updater's whole require tree (~46ms) on every boot for a once-per-update button.
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const { autoUpdater } = require('electron-updater') as typeof import('electron-updater')
+    autoUpdater.quitAndInstall()
   })
   // --- Mail draft ---
   // mailto: fallback for the follow-up draft (Phase 1) — opens the user's own default mail client with
