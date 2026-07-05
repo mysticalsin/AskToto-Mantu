@@ -70,8 +70,7 @@ AskToto/
 │   │   ├── transcripts.ts   meeting/note markdown, optional at-rest encryption
 │   │   ├── recall.ts        list/search saved meetings (decrypt-aware)
 │   │   ├── graphify.ts      knowledge-graph bridge (spawns the runner)
-│   │   ├── dustcli.ts       import the local Dust CLI keychain session (macOS)
-│   │   └── meeting-detect/  Zoom/Teams/Meet detection (mac.ts / win.ts)
+│   │   └── dustcli.ts       import the local Dust CLI keychain session (macOS)
 │   ├── preload/index.ts     contextBridge `window.toto` API (contextIsolation on)
 │   ├── renderer/src/        glass UI (React + Tailwind v4)
 │   │   ├── components/       Bar, Settings, RecallView, Answer, CodeBlock, …
@@ -107,14 +106,14 @@ AskToto/
 
 ## Hotkeys (global)
 
-| Shortcut | Action |
-|---|---|
-| `⌘\` | Show / hide the overlay |
-| `⌘⇧Return` | Ask (global) |
-| `⌘⇧S` | Capture screen, then ask |
-| `⌘⇧F` | Fact-check (input text, or the screen if empty) |
-| `⌘⇧L` | Toggle Listen |
-| `⌘⌥ + arrows` | Move the overlay |
+| macOS | Windows | Action |
+|---|---|---|
+| `⌘\` | `Ctrl+\` | Show / hide the overlay |
+| `⌘⇧Return` | `Ctrl+Shift+Enter` | Ask (global) |
+| `⌘⇧S` | `Ctrl+Shift+S` | Capture screen, then ask |
+| `⌘⇧F` | `Ctrl+Shift+F` | Fact-check (input text, or the screen if empty) |
+| `⌘⇧L` | `Ctrl+Shift+L` | Toggle Listen |
+| `⌘⌥ + arrows` | `Ctrl+Alt + arrows` | Move the overlay |
 
 ## Security & privacy
 

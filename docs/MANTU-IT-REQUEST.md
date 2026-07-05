@@ -27,8 +27,19 @@ These map to the build env vars the release script already reads:
 | App-specific password | `APPLE_APP_SPECIFIC_PASSWORD` |
 | Team ID | `APPLE_TEAM_ID` |
 
-(Windows is out of scope for v1 — macOS first. If/when we ship Windows we'll need Authenticode or Azure
-Trusted Signing + a Windows signing runner.)
+## 1b. Windows — code-signing trust (pick ONE path)
+
+Windows builds are Authenticode-signed today with an internal self-signed certificate
+(`CN=Mantu`, SHA-256, RFC 3161 timestamped). Signed installers verify as **Valid** on any machine
+that trusts the certificate; on other machines SmartScreen warns. Two ways to get fleet trust:
+
+- **Path A — internal trust (no purchase, works today):** distribute the public `.cer` (never the
+  `.pfx`) via GPO or Intune to **Trusted Root Certification Authorities** and **Trusted Publishers**
+  on managed machines. Full steps: `docs/ENTERPRISE-DEPLOY-WINDOWS.md`.
+- **Path B — public trust (recommended for wider distribution):** an **Azure Trusted Signing**
+  account (or an OV Authenticode certificate). Maps to build env vars `WIN_CSC_LINK` +
+  `WIN_CSC_KEY_PASSWORD` (or the Azure signing parameters) in CI — nothing else in the pipeline
+  changes, and SmartScreen reputation accrues publicly.
 
 ## 2. Azure (Microsoft Entra) app registration — for Outlook agenda + sign-in
 
