@@ -325,6 +325,98 @@ export async function renameMeeting(
   return { ok: true }
 }
 
+// Sane cap on an edited recap so a runaway paste can't bloat the saved file. Kept in lockstep with the
+// UpdateRecapPayloadSchema max in shared/ipc.ts (defense-in-depth: the renderer's textarea already caps too).
+const RECAP_MAX = 20000
+// Normalize an edited recap for storage: CRLF→LF (a textarea on Windows yields \r\n, which would drift the
+// markdown vs. the always-\n files saveMeeting writes), strip a leading BOM, and cap length. Deliberately
+// does NOT collapse newlines or strip headings — unlike a title, the recap IS multi-line markdown with its
+// own "## " sub-headings (Overview / Decisions / Action items …), so that structure must survive editing.
+function sanitizeRecap(s: string): string {
+  return (s || '').replace(/\r\n/g, '\n').replace(/^\uFEFF/, '').slice(0, RECAP_MAX)
+}
+
+/**
+ * Rewrite ONLY the recap section of a saved meeting after the fact (fix a mis-heard name, tick an action
+ * item, annotate). Replaces the body of the "## Notes & follow-ups" section — the exact span recallRead
+ * parses, bounded before the sibling "## Full transcript" heading — with the edited markdown, leaving the
+ * frontmatter, the H1, the meta line, and the entire "## Full transcript" section untouched. The FILE is
+ * never renamed. If the meeting was saved with an empty recap (saveMeeting omits the heading entirely in
+ * that case), the section is INSERTED immediately before "## Full transcript" so it parses identically to a
+ * normally-saved recap. Same basename guard as renameMeeting/deleteMeeting (no traversal, no index/README).
+ *
+ * Encryption is preserved exactly as found: isEncryptedFile (not the live `encryptTranscripts` toggle, which
+ * may differ from when this file was saved) decides decrypt-edit-re-encrypt vs. edit-plaintext-in-place, so
+ * an edited encrypted meeting stays encrypted and still opens. index.md is not touched: it carries only
+ * title/date/duration/link, none of which the recap changes.
+ */
+export async function updateMeetingRecap(
+  settings: Settings,
+  file: string,
+  newRecap: string
+): Promise<{ ok: boolean; error?: string }> {
+  const folder = resolveMeetingsFolder(settings)
+  const safeName = basename(file) // block traversal
+  if (!safeName || !safeName.endsWith('.md') || safeName === 'index.md' || safeName === 'README.md') {
+    return { ok: false, error: 'Invalid meeting file name.' }
+  }
+
+  const recap = sanitizeRecap(newRecap)
+  // Guard the one string that would corrupt the round-trip: recallRead ends the recap at the FIRST line
+  // beginning "## Full transcript". If the edited notes contained that heading, re-reading would swallow
+  // everything after it into the transcript. Reject rather than silently mangle the user's own text.
+  if (/^## Full transcript/m.test(recap)) {
+    return { ok: false, error: 'The "## Full transcript" heading is reserved. Please rename it in your notes.' }
+  }
+  const body = recap.trim()
+
+  const fullPath = join(folder, safeName)
+  let raw: Buffer
+  try {
+    raw = await readFile(fullPath)
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code
+    if (code === 'ENOENT') return { ok: false, error: 'Meeting file not found.' }
+    return { ok: false, error: 'Could not read the meeting file.' }
+  }
+
+  const wasEncrypted = isEncryptedFile(fullPath)
+  const text = decodeSaved(raw)
+  if (!text) return { ok: false, error: 'Meeting file could not be decrypted on this device.' }
+
+  let updated: string
+  const startMatch = text.match(/^## Notes & follow-ups[\r\n]+/m)
+  if (startMatch) {
+    // Existing section: replace its body only. `head` runs up to and including the heading + the newlines
+    // saveMeeting wrote after it; `tail` is the untouched remainder from "## Full transcript" onward (or
+    // '' when, defensively, no such section exists). The rebuilt "\n\n" restores the single blank line
+    // before the next section so the markdown — and recallRead's slice — stay well-formed.
+    const bodyStart = startMatch.index! + startMatch[0].length
+    const afterStart = text.slice(bodyStart)
+    const endIdx = afterStart.search(/^## Full transcript/m)
+    const head = text.slice(0, bodyStart)
+    const tail = endIdx === -1 ? '' : afterStart.slice(endIdx)
+    updated = tail
+      ? `${head}${body}${body ? '\n\n' : ''}${tail}`
+      : `${head}${body}${body ? '\n' : ''}`
+  } else {
+    // No notes section yet (meeting saved with an empty recap). Insert one immediately before the
+    // "## Full transcript" heading so recallRead parses it exactly as it would a normally-saved recap.
+    const txMatch = text.match(/^## Full transcript/m)
+    if (!txMatch) return { ok: false, error: 'This does not look like a meeting file.' }
+    if (!body) return { ok: true } // nothing to add and no section to change — a no-op success
+    const at = txMatch.index!
+    updated = `${text.slice(0, at)}## Notes & follow-ups\n\n${body}\n\n${text.slice(at)}`
+  }
+
+  try {
+    await writeSaved(fullPath, updated, wasEncrypted)
+  } catch {
+    return { ok: false, error: 'Could not save your changes.' }
+  }
+  return { ok: true }
+}
+
 /**
  * Delete every saved meeting + the index — a genuine "delete all my AskToto data" action, for a
  * GDPR/CCPA erasure request or a full account wipe. The caller (index.ts) is responsible for also

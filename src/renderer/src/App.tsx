@@ -1456,6 +1456,11 @@ export function App(): JSX.Element {
           onResume={pm ? resumePastMeeting : undefined}
           onOpenPastMeeting={openPastMeeting}
           isPastMeeting={!!pm}
+          onRecapSaved={
+            pm
+              ? (recap) => setPastMeeting((prev) => (prev ? { ...prev, recap } : prev))
+              : undefined
+          }
           onDone={
             pm
               ? () => {
