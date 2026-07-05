@@ -230,15 +230,17 @@ export function Onboarding({
     headingRef.current?.focus()
   }, [step])
 
-  // Pull live permission status when the final checklist appears (and refresh shortly after, since the
-  // user may grant access in System Settings while this is open).
+  // When the final checklist appears, first TRIGGER the OS permission prompts for anything still
+  // missing (mic prompt + Screen Recording TCC registration; main sequences them) so the user grants
+  // everything here instead of mid-first-meeting — then poll live status, since granting Screen
+  // Recording happens in System Settings while this stays open.
   useEffect(() => {
     if (step !== 6) return
     let alive = true
     const load = (): void => {
       void window.toto.getPermissions().then((p) => alive && setPerms(p))
     }
-    load()
+    void window.toto.requestPermissionsUpfront().then((p) => alive && setPerms(p)).catch(load)
     const id = setInterval(load, 2500)
     return () => {
       alive = false
