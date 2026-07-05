@@ -5,7 +5,6 @@
   "providerModels": { "anthropic": "claude-opus-4-8" },
   "meetingsFolder": "",
   "autoSaveTranscripts": true,
-  "autoStartOnMeeting": true,
   "launchAtLogin": true,
   "contentProtection": true,
   "audioSource": "both"
