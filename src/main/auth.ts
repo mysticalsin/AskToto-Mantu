@@ -8,6 +8,7 @@ import type { AuthStatus, SignInResult } from '@shared/ipc'
 import { getSettings } from './store'
 import { auditLog } from './logger'
 import { useFileBackend, encryptSecret, decryptSecret } from './secrets'
+import { trustedAdminManagedPath } from './win-security'
 
 // Scopes requested at sign-in: identity + read-only calendar (so the agenda can be pulled later with no
 // extra consent prompt). Least privilege — Calendars.Read, never ReadWrite.
@@ -43,18 +44,17 @@ interface Session {
   at: number
 }
 
-/** Machine-wide org-policy file IT can deploy (matches store.ts adminManagedPath). */
-function adminManagedPath(): string {
-  if (process.platform === 'darwin') return '/Library/Application Support/AskToto/managed-config.json'
-  if (process.platform === 'win32')
-    return join(process.env.ProgramData || 'C:\\ProgramData', 'AskToto', 'managed-config.json')
-  return '/etc/asktoto/managed-config.json'
-}
+// The machine-wide org-policy path + its win32 admin-trust gate live in win-security.ts. On Windows a
+// forged %ProgramData%\AskToto\managed-config.json (user-writable by default) is NOT honored, so it
+// cannot redirect SSO to an attacker tenant or force-lock the app.
 
 /** Read an { azure: { clientId, tenantId, allowedDomain } } block from managed-config (admin or per-user). */
 function readManagedAzure(): Partial<AzureConfig> {
   // Admin/machine policy FIRST so a user-writable per-user file can't override the org tenant lock.
-  for (const p of [adminManagedPath(), join(app.getPath('userData'), 'managed-config.json')]) {
+  const paths = [trustedAdminManagedPath(), join(app.getPath('userData'), 'managed-config.json')].filter(
+    (p): p is string => !!p
+  )
+  for (const p of paths) {
     try {
       const az = JSON.parse(readFileSync(p, 'utf8'))?.azure
       if (az?.clientId && az?.tenantId && az?.allowedDomain) {
@@ -447,7 +447,10 @@ export function authStatus(): AuthStatus {
 function authEnforced(): boolean {
   if (/^(1|true|yes)$/i.test(process.env.ASKTOTO_REQUIRE_AUTH || '')) return true
   // Machine-wide managed-config can also force it: { "requireAuth": true }.
-  for (const p of [adminManagedPath(), join(app.getPath('userData'), 'managed-config.json')]) {
+  const paths = [trustedAdminManagedPath(), join(app.getPath('userData'), 'managed-config.json')].filter(
+    (p): p is string => !!p
+  )
+  for (const p of paths) {
     try {
       if (JSON.parse(readFileSync(p, 'utf8'))?.requireAuth === true) return true
     } catch {
@@ -523,7 +526,11 @@ export async function signIn(): Promise<SignInResult> {
       server.listen(0, '127.0.0.1', async () => {
         const addr = server.address()
         const port = typeof addr === 'object' && addr ? addr.port : 0
-        redirectUri = `http://localhost:${port}`
+        // Match the literal bind address (127.0.0.1), NOT `localhost`: on Windows `localhost` resolves to
+        // ::1 first, and the browser's callback to an IPv6 address the server never listens on can stall
+        // or drop the OAuth code. Entra's loopback handling accepts http://127.0.0.1 on any port for the
+        // "Mobile and desktop applications" platform exactly like http://localhost.
+        redirectUri = `http://127.0.0.1:${port}`
         try {
           const authUrl = await pca.getAuthCodeUrl({
             scopes: SIGN_IN_SCOPES,
