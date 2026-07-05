@@ -1,5 +1,5 @@
 import { memo, useEffect, useMemo, useRef, useState } from 'react'
-import { Copy, Check, FileText, ListTree, FolderOpen, Save, RotateCcw, Play, ChevronDown, Download, Clock, Mail, Send, AlertCircle, EarOff, ArrowLeft } from 'lucide-react'
+import { Copy, Check, FileText, ListTree, FolderOpen, Save, RotateCcw, Play, ChevronDown, Download, Clock, Mail, Send, AlertCircle, EarOff, ArrowLeft, Pencil, X } from 'lucide-react'
 import type { TranscriptLine, MeetingSummary } from '@shared/ipc'
 import type { AnswerState } from '../state'
 import { isNonSpeechLine } from '@shared/transcript-filter'
@@ -94,7 +94,8 @@ export const Review = memo(function Review({
   bidstackConnected,
   bidstackTools,
   onOpenPastMeeting,
-  isPastMeeting
+  isPastMeeting,
+  onRecapSaved
 }: {
   recap: AnswerState | null
   lines: TranscriptLine[]
@@ -123,6 +124,9 @@ export const Review = memo(function Review({
   onOpenPastMeeting?: (file: string) => void
   /** True when reviewing a past meeting reopened from History, so onDone returns to History rather than starting a new meeting. */
   isPastMeeting?: boolean
+  /** Called with the new recap markdown after a successful in-place edit save, so the owner (App) can keep
+   *  its own copy (used by Resume + follow-up generation) consistent without a disk re-read. */
+  onRecapSaved?: (recap: string) => void
 }): JSX.Element {
   const [copied, flashCopied] = useFlash(1500)
   const [notesCopied, flashNotesCopied] = useFlash(1500)
@@ -148,6 +152,69 @@ export const Review = memo(function Review({
   // Focus anchor for the Summary section — Retry summary moves focus here first, since the button it's
   // clicked on unmounts the instant retry starts (recap.error clears), which would otherwise drop focus to <body>.
   const summaryRef = useRef<HTMLElement>(null)
+
+  // ── Editable recap (past meetings only) ──────────────────────────────────
+  // Past-meeting recaps are read-only by default; Edit lets the user fix a mis-heard name, tick an action
+  // item, or annotate. `editedRecap` holds the post-save copy shown in place — the recap PROP is owned by
+  // App and isn't re-read from disk here — so null means "follow the prop". `recapText` is the single value
+  // every consumer below (Markdown render, Copy Summary, Export JSON/PDF, CRM payload) reads, so an edit
+  // reflects everywhere at once.
+  const [editingRecap, setEditingRecap] = useState(false)
+  const [recapDraft, setRecapDraft] = useState('')
+  const [recapSaving, setRecapSaving] = useState(false)
+  const [recapEditError, setRecapEditError] = useState<string | null>(null)
+  const [editedRecap, setEditedRecap] = useState<string | null>(null)
+  // A different meeting loaded into this reused Review instance → drop any in-progress/edited state.
+  useEffect(() => {
+    setEditingRecap(false)
+    setEditedRecap(null)
+    setRecapEditError(null)
+  }, [savedPath])
+  // Track the latest savedPath so a save that resolves AFTER the user navigated to a different past
+  // meeting (via the Recent meetings list) bails out instead of painting its result onto the wrong one.
+  const savedPathRef = useRef(savedPath)
+  useEffect(() => {
+    savedPathRef.current = savedPath
+  }, [savedPath])
+  const recapText = editedRecap ?? recap?.text ?? ''
+
+  const startEditRecap = (): void => {
+    setRecapDraft(recapText)
+    setRecapEditError(null)
+    setEditingRecap(true)
+  }
+  const cancelEditRecap = (): void => {
+    setEditingRecap(false)
+    setRecapEditError(null)
+  }
+  const saveRecap = async (): Promise<void> => {
+    if (!savedPath || recapSaving) return
+    const forPath = savedPath
+    setRecapSaving(true)
+    setRecapEditError(null)
+    try {
+      const file = savedPath.split('/').pop() ?? savedPath
+      const r = await window.toto.recallUpdateRecap(file, recapDraft)
+      // The disk write already targeted the right file, but if the user navigated to a different meeting
+      // while it was in flight, drop the result rather than paint meeting A's edit onto meeting B.
+      if (savedPathRef.current !== forPath) return
+      if (r.ok) {
+        // Store the trimmed value so the in-place copy matches exactly what a disk re-read would return
+        // (updateMeetingRecap + recallRead both trim the recap section).
+        const saved = recapDraft.trim()
+        setEditedRecap(saved)
+        onRecapSaved?.(saved)
+        setEditingRecap(false)
+      } else {
+        setRecapEditError(r.error || 'Could not save your changes.')
+      }
+    } catch (e) {
+      if (savedPathRef.current !== forPath) return
+      setRecapEditError(`Could not save your changes: ${e instanceof Error ? e.message : String(e)}`)
+    } finally {
+      setRecapSaving(false)
+    }
+  }
 
   useEffect(() => {
     // The live clock only feeds durationSec while there's no real transcript yet (lines.length <= 1).
@@ -203,7 +270,7 @@ export const Review = memo(function Review({
   }
 
   const copyNotes = (): void => {
-    const md = recap?.text
+    const md = recapText
     if (!md) return
     navigator.clipboard
       .writeText(md)
@@ -216,7 +283,7 @@ export const Review = memo(function Review({
   // Parse the recap markdown into a structured object (decisions + action-items-with-owners) in the main
   // process, then copy it as JSON so it can be pasted straight into Jira/Asana/Notion without retyping.
   const exportJson = (): void => {
-    const md = recap?.text
+    const md = recapText
     if (!md) return
     setExportError(null)
     window.toto
@@ -230,7 +297,7 @@ export const Review = memo(function Review({
 
   const [pdfBusy, setPdfBusy] = useState(false)
   const exportPdf = (): void => {
-    const md = recap?.text
+    const md = recapText
     if (!md) return
     setPdfBusy(true)
     setExportError(null)
@@ -272,9 +339,9 @@ export const Review = memo(function Review({
     () => ({
       title: meetingMeta?.title || 'Untitled meeting',
       date: meetingMeta?.date || new Date(startedAt ?? Date.now()).toISOString(),
-      summary: recap?.text || ''
+      summary: recapText
     }),
-    [meetingMeta?.title, meetingMeta?.date, recap?.text, startedAt]
+    [meetingMeta?.title, meetingMeta?.date, recapText, startedAt]
   )
 
   const sendToCrm = async (): Promise<void> => {
@@ -420,26 +487,79 @@ export const Review = memo(function Review({
           <div className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-[color:var(--color-ink-3)]">
             <ListTree size={12} /> Summary
           </div>
-          {recap?.text && !recap?.error && (
+          {editingRecap ? (
+            // Edit mode toolbar: Save / Cancel. Replaces Copy/Export, which don't apply mid-edit.
             <div className="flex items-center gap-1">
-              {/* Accent-filled so the primary "copy the recap" action is unmissable on the review screen. */}
-              <Chip onClick={copyNotes} variant="accent">
-                {notesCopied ? <Check size={13} className="text-white" /> : <Copy size={13} />}
-                {notesCopied ? 'Copied' : 'Copy Summary'}
+              <Chip onClick={() => void saveRecap()} variant="accent" disabled={recapSaving}>
+                {recapSaving ? <Spinner size={13} /> : <Check size={13} />}
+                {recapSaving ? 'Saving' : 'Save'}
               </Chip>
-              <TextButton onClick={exportJson} title="Copy structured JSON (decisions + action items) for Jira/Asana/Notion">
-                {jsonCopied ? <Check size={11} className="text-[var(--color-success)]" /> : <Download size={11} />}
-                {jsonCopied ? 'Copied' : 'Export JSON'}
+              <TextButton onClick={cancelEditRecap} disabled={recapSaving}>
+                <X size={11} /> Cancel
               </TextButton>
-              <TextButton onClick={exportPdf} disabled={pdfBusy} title="Save this summary as a PDF">
-                {pdfBusy ? <Spinner size={11} /> : <FileText size={11} />}
-                Export PDF
-              </TextButton>
+            </div>
+          ) : (
+            <div className="flex items-center gap-1">
+              {/* Edit — past meetings only (a live session's recap is still owned by the ask state, and may
+                  be streaming/retryable). Available even when the recap is empty, so a meeting saved without
+                  one can still be annotated. */}
+              {isPastMeeting && !recap?.error && (
+                <TextButton onClick={startEditRecap} title="Edit these notes">
+                  <Pencil size={11} /> Edit
+                </TextButton>
+              )}
+              {recapText && !recap?.error && (
+                <>
+                  {/* Accent-filled so the primary "copy the recap" action is unmissable on the review screen. */}
+                  <Chip onClick={copyNotes} variant="accent">
+                    {notesCopied ? <Check size={13} className="text-white" /> : <Copy size={13} />}
+                    {notesCopied ? 'Copied' : 'Copy Summary'}
+                  </Chip>
+                  <TextButton onClick={exportJson} title="Copy structured JSON (decisions + action items) for Jira/Asana/Notion">
+                    {jsonCopied ? <Check size={11} className="text-[var(--color-success)]" /> : <Download size={11} />}
+                    {jsonCopied ? 'Copied' : 'Export JSON'}
+                  </TextButton>
+                  <TextButton onClick={exportPdf} disabled={pdfBusy} title="Save this summary as a PDF">
+                    {pdfBusy ? <Spinner size={11} /> : <FileText size={11} />}
+                    Export PDF
+                  </TextButton>
+                </>
+              )}
             </div>
           )}
         </div>
         {exportError && <div className="mb-1.5 text-[11px] text-[var(--color-danger)]">{exportError}</div>}
-        {recap?.error ? (
+        {editingRecap ? (
+          <div className="flex flex-col gap-2">
+            <textarea
+              value={recapDraft}
+              autoFocus
+              onChange={(e) => setRecapDraft(e.target.value)}
+              onKeyDown={(e) => {
+                // Escape cancels; stopPropagation keeps it from bubbling to App's global Escape handler
+                // (which would otherwise act on the whole overlay). Cmd/Ctrl+Enter saves, matching the
+                // app's other commit shortcuts.
+                if (e.key === 'Escape') {
+                  e.stopPropagation()
+                  cancelEditRecap()
+                } else if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+                  e.stopPropagation()
+                  e.preventDefault()
+                  void saveRecap()
+                }
+              }}
+              rows={14}
+              maxLength={20000}
+              spellCheck={false}
+              aria-label="Edit meeting notes"
+              className="scroll-thin no-drag w-full resize-y rounded-xl border border-[var(--color-hair-soft)] bg-white/[0.02] p-3 text-[13px] leading-relaxed text-[color:var(--color-ink)] focus:outline-none"
+            />
+            {recapEditError && <div className="text-[11px] text-[var(--color-danger)]">{recapEditError}</div>}
+            <div className="text-[11px] text-[color:var(--color-ink-3)]">
+              Markdown supported. Changes are saved to this meeting. Cmd or Ctrl + Enter to save, Esc to cancel.
+            </div>
+          </div>
+        ) : recap?.error ? (
           <div className="flex flex-col gap-2">
             <div className="text-[13px] text-[var(--color-danger)]">{recap.error}</div>
             {/* Scoped retry — replays just the recap request. Previously the only recovery was
@@ -458,8 +578,14 @@ export const Review = memo(function Review({
               </div>
             )}
           </div>
-        ) : recap?.text ? (
-          <Markdown>{recap.text}</Markdown>
+        ) : recapText ? (
+          <Markdown>{recapText}</Markdown>
+        ) : isPastMeeting ? (
+          // A past meeting saved without a recap (e.g. a keyless summary failure). Not a spinner — the
+          // work is long over; offer to add notes instead.
+          <div className="text-[13px] text-[color:var(--color-ink-2)]">
+            No notes saved for this meeting. Select Edit to add some.
+          </div>
         ) : !recap && lines.length === 0 ? (
           <div className="text-[13px] text-[color:var(--color-ink-2)]">
             No speech was captured this session.
@@ -471,7 +597,7 @@ export const Review = memo(function Review({
         )}
       </section>
 
-      {onGenerateFollowup && recap?.text && (
+      {onGenerateFollowup && recapText && !editingRecap && (
         <section aria-live="polite">
           <div className="mb-1.5 flex items-center justify-between">
             <div className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-[color:var(--color-ink-3)]">
@@ -526,7 +652,7 @@ export const Review = memo(function Review({
         </section>
       )}
 
-      {recap?.text && !recap?.error && (
+      {recapText && !recap?.error && !editingRecap && (
         <section aria-live="polite">
           <div className="mb-1.5 flex items-center justify-between">
             <div className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-[color:var(--color-ink-3)]">

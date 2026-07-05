@@ -33,6 +33,7 @@ import {
   NotebookLmAskPayloadSchema,
   SetDealOutcomePayloadSchema,
   RenameMeetingPayloadSchema,
+  UpdateRecapPayloadSchema,
   ProviderIdSchema,
   DEFAULT_SHORTCUTS,
   type HotkeyAction,
@@ -99,6 +100,7 @@ import {
   recallRead,
   deleteMeeting,
   renameMeeting,
+  updateMeetingRecap,
   deleteAllMeetings,
   sweepExpiredMeetings
 } from './recall'
@@ -1174,6 +1176,21 @@ function registerIpc(): void {
     if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message || 'Invalid rename request.' }
     const result = await renameMeeting(getSettings(), parsed.data.file, parsed.data.title)
     if (result.ok) auditLog('transcript.renamed', { file: basename(parsed.data.file) })
+    return result
+  })
+
+  // Recall update-recap: edit a saved meeting's recap ("## Notes & follow-ups") after the fact — fix a
+  // mis-heard name, tick an action item, annotate. Rewrites only that section in place; frontmatter + the
+  // full transcript are untouched, and the file is never renamed (mirrors recallRename's reasoning). No
+  // confirm dialog: reversible by editing again. Audit-logged (metadata only — never the recap text) for
+  // parity with 'transcript.renamed'.
+  ipcMain.handle(IPC.recallUpdateRecap, async (e, raw) => {
+    assertMainWindow(e)
+    if (!requireAuth()) return { ok: false, error: 'Sign in with your Mantu account first.' }
+    const parsed = UpdateRecapPayloadSchema.safeParse(raw)
+    if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message || 'Invalid edit request.' }
+    const result = await updateMeetingRecap(getSettings(), parsed.data.file, parsed.data.recap)
+    if (result.ok) auditLog('transcript.recap_edited', { file: basename(parsed.data.file) })
     return result
   })
 

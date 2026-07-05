@@ -2,8 +2,9 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { mkdtempSync, rmSync, readFileSync, writeFileSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { saveMeeting } from './transcripts'
-import { listMeetings, deleteMeeting, recallRead, searchMeetings, deleteAllMeetings, sweepExpiredMeetings } from './recall'
+import { safeStorage } from 'electron'
+import { saveMeeting, isEncryptedFile } from './transcripts'
+import { listMeetings, deleteMeeting, recallRead, searchMeetings, deleteAllMeetings, sweepExpiredMeetings, updateMeetingRecap } from './recall'
 import type { Settings, SaveMeeting } from '@shared/ipc'
 
 vi.mock('electron')
@@ -257,6 +258,133 @@ describe('recall — recallRead recap extraction', () => {
     const r = await recallRead(file)
     expect(r.ok).toBe(true)
     if (r.ok) expect(r.recap).toBe('')
+  })
+})
+
+// Editable AI recap: after a recap is generated it is read-only in the UI; this backend lets the user fix
+// a wrong name / tick an action item / annotate. The load-bearing property is PARSEABILITY — the edited
+// "## Notes & follow-ups" section must still start/end exactly where recallRead expects, so reopening the
+// meeting (and all CRM/follow-up parsing) keeps working. These drive the real save → edit → read path.
+describe('recall — updateMeetingRecap', () => {
+  let folder: string
+
+  beforeEach(() => {
+    folder = mkdtempSync(join(tmpdir(), 'asktoto-recall-test-'))
+    testSettings = { meetingsFolder: folder, encryptTranscripts: false } as Settings
+  })
+
+  afterEach(() => {
+    rmSync(folder, { recursive: true, force: true })
+    vi.restoreAllMocks()
+  })
+
+  const meeting: SaveMeeting = {
+    title: 'Q3 planning sync',
+    mode: 'meeting',
+    startedAt: 1_700_000_000_000,
+    lines: [
+      { speaker: 'them', text: 'Let us lock the roadmap', t: 1_700_000_000_000 },
+      { speaker: 'you', text: 'Agreed, ship Q3', t: 1_700_000_005_000 }
+    ],
+    // Real-shape recap: its own "## " sub-headings live inside "## Notes & follow-ups".
+    recap: '## Overview:\nInitial notes.\n\n## Action items:\n- Send deck (Bob)'
+  }
+
+  it('rewrites only the recap section; recallRead returns the edit and the transcript still parses', async () => {
+    const file = await saveMeeting(testSettings, meeting)
+    const edited = '## Overview:\nAlice (not Bob) owns the deck.\n\n## Action items:\n- Send deck (Alice)'
+    const r = await updateMeetingRecap(testSettings, file, edited)
+    expect(r.ok).toBe(true)
+
+    const read = await recallRead(file)
+    expect(read.ok).toBe(true)
+    if (read.ok) {
+      expect(read.recap).toBe(edited) // round-trips through its own internal "## " headings
+      expect(read.lines).toHaveLength(2) // "## Full transcript" boundary intact
+      expect(read.lines[1]).toMatchObject({ speaker: 'you', text: 'Agreed, ship Q3' })
+      expect(read.title).toBe('Q3 planning sync') // frontmatter untouched by a recap edit
+    }
+  })
+
+  it('accepts a bare basename (what the renderer sends)', async () => {
+    const file = await saveMeeting(testSettings, meeting)
+    const base = file.split('/').pop()!
+    const r = await updateMeetingRecap(testSettings, base, 'New notes.')
+    expect(r.ok).toBe(true)
+    const read = await recallRead(file)
+    if (read.ok) expect(read.recap).toBe('New notes.')
+  })
+
+  it('inserts a notes section when the meeting was saved without a recap', async () => {
+    const file = await saveMeeting(testSettings, { ...meeting, recap: '' })
+    let read = await recallRead(file)
+    if (read.ok) expect(read.recap).toBe('') // no notes section yet
+
+    const r = await updateMeetingRecap(testSettings, file, 'Added after the fact.')
+    expect(r.ok).toBe(true)
+    read = await recallRead(file)
+    expect(read.ok).toBe(true)
+    if (read.ok) {
+      expect(read.recap).toBe('Added after the fact.')
+      expect(read.lines).toHaveLength(2) // transcript preserved
+    }
+  })
+
+  it('rejects an edit that injects the reserved "## Full transcript" heading, leaving the file untouched', async () => {
+    const file = await saveMeeting(testSettings, meeting)
+    const before = readFileSync(file, 'utf8')
+    const r = await updateMeetingRecap(testSettings, file, 'Notes\n\n## Full transcript\nfake line')
+    expect(r.ok).toBe(false)
+    expect(r.error).toMatch(/reserved/i)
+    expect(readFileSync(file, 'utf8')).toBe(before) // never written
+  })
+
+  it('refuses index.md / README.md / non-.md / empty names', async () => {
+    for (const bad of ['index.md', 'README.md', 'notes.txt', '']) {
+      const r = await updateMeetingRecap(testSettings, bad, 'x')
+      expect(r.ok).toBe(false)
+    }
+  })
+
+  it('reports a clear error on a missing file', async () => {
+    const r = await updateMeetingRecap(testSettings, '2024-01-01_000000-gone.md', 'x')
+    expect(r.ok).toBe(false)
+    expect(r.error).toMatch(/not found/i)
+  })
+
+  it('caps an oversized recap at 20000 chars', async () => {
+    const file = await saveMeeting(testSettings, meeting)
+    const r = await updateMeetingRecap(testSettings, file, 'A'.repeat(25000))
+    expect(r.ok).toBe(true)
+    const read = await recallRead(file)
+    if (read.ok) expect(read.recap).toBe('A'.repeat(20000))
+  })
+
+  it("preserves the file's own encryption state — encrypted stays encrypted, and follows the file, not the live setting", async () => {
+    // Real base64 round-trip through a mocked keychain (mirrors transcripts.test.ts's encryption test).
+    vi.spyOn(safeStorage, 'isEncryptionAvailable').mockReturnValue(true)
+    vi.spyOn(safeStorage, 'encryptString').mockImplementation((v: string) =>
+      Buffer.from('B64:' + Buffer.from(v, 'utf8').toString('base64'))
+    )
+    vi.spyOn(safeStorage, 'decryptString').mockImplementation((b: Buffer) => {
+      const s = b.toString('utf8')
+      return s.startsWith('B64:') ? Buffer.from(s.slice(4), 'base64').toString('utf8') : s
+    })
+    const enc = { ...testSettings, encryptTranscripts: true } as Settings
+    const file = await saveMeeting(enc, meeting)
+    expect(isEncryptedFile(file)).toBe(true)
+
+    // Toggle the SETTING off to prove the edit follows the FILE's own encrypted state (isEncryptedFile),
+    // not the live encryptTranscripts toggle (which may have changed since the file was saved).
+    const settingOff = { ...enc, encryptTranscripts: false } as Settings
+    const r = await updateMeetingRecap(settingOff, file, 'Edited while encrypted.')
+    expect(r.ok).toBe(true)
+    expect(isEncryptedFile(file)).toBe(true) // still encrypted after the edit
+    expect(readFileSync(file, 'utf8')).not.toContain('Edited while encrypted.') // ciphertext, not plaintext
+
+    const read = await recallRead(file)
+    expect(read.ok).toBe(true)
+    if (read.ok) expect(read.recap).toBe('Edited while encrypted.')
   })
 })
 

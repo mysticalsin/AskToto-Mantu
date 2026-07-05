@@ -136,6 +136,11 @@ const api = {
   // frontmatter `title:` + H1 heading (and the index.md row, in plaintext mode).
   recallRename: (file: string, title: string): Promise<{ ok: boolean; error?: string }> =>
     ipcRenderer.invoke(IPC.recallRename, { file, title }),
+  // Edit a saved meeting's recap ("## Notes & follow-ups") after the fact. Rewrites only that section in
+  // place (frontmatter + full transcript untouched); never renames the file. Preserves the file's own
+  // encrypted/plaintext state.
+  recallUpdateRecap: (file: string, recap: string): Promise<{ ok: boolean; error?: string }> =>
+    ipcRenderer.invoke(IPC.recallUpdateRecap, { file, recap }),
   // Delete every saved meeting + the knowledge graph. Main pops its own (extra-emphatic) confirm dialog.
   recallDeleteAll: (): Promise<{ ok: boolean; deleted: number; failed?: string[]; error?: string }> =>
     ipcRenderer.invoke(IPC.recallDeleteAll),

@@ -76,6 +76,7 @@ export const IPC = {
   recallRead: 'recall:read',
   recallDelete: 'recall:delete',
   recallRename: 'recall:rename',
+  recallUpdateRecap: 'recall:update-recap',
   recallDeleteAll: 'recall:deleteAll',
   debriefSave: 'debrief:save',
   brainCommitmentSettle: 'brain:commitmentSettle',
@@ -720,6 +721,15 @@ export const RenameMeetingPayloadSchema = z.object({
   title: z.string().min(1, 'Enter a title.').max(120)
 })
 export type RenameMeetingPayload = z.infer<typeof RenameMeetingPayloadSchema>
+
+/** Payload for recall:update-recap — edit a saved meeting's recap ("## Notes & follow-ups") after the
+ *  fact. `file` is a bare basename (re-basenamed in main for defense); `recap` mirrors recall.ts's own
+ *  RECAP_MAX cap. Empty is allowed (clearing the notes / annotating a meeting that had no recap yet). */
+export const UpdateRecapPayloadSchema = z.object({
+  file: z.string().min(1, 'Missing meeting file.'),
+  recap: z.string().max(20000)
+})
+export type UpdateRecapPayload = z.infer<typeof UpdateRecapPayloadSchema>
 
 /** Result of reading a saved meeting back for "Resume session" (decoded transcript + recap). */
 export interface RecallReadResult {
