@@ -6,6 +6,7 @@ import { homedir } from 'node:os'
 import { randomBytes, createCipheriv, createDecipheriv, publicEncrypt, constants } from 'node:crypto'
 import type { SaveMeeting, SaveNote, Settings, RecapExport, TranscriptLine } from '@shared/ipc'
 import { encryptSecret, decryptSecret, useFileBackend } from './secrets'
+import { trustedAdminManagedPath, lockPathToCurrentUserWin32 } from './win-security'
 
 // Optional at-rest encryption for transcripts/notes. Two on-disk formats share one fixed-length
 // `ATKENC<n>\n` magic prefix so detection stays a simple prefix check:
@@ -27,13 +28,10 @@ type EnvelopeV2 = {
   kEscrow?: string // base64, RSA-OAEP(content key) under the org escrow public key — written, never read here
 }
 
-/** Machine-wide org-policy managed-config location IT can deploy (mirrors auth.ts / store.ts). */
-function adminManagedConfigPath(): string {
-  if (process.platform === 'darwin') return '/Library/Application Support/Métis/managed-config.json'
-  if (process.platform === 'win32')
-    return join(process.env.ProgramData || 'C:\\ProgramData', 'Métis', 'managed-config.json')
-  return '/etc/asktoto/managed-config.json'
-}
+// The machine-wide managed-config path + its win32 admin-trust gate live in win-security.ts. This
+// matters most here: a forged, user-writable %ProgramData%\Métis\managed-config.json could set
+// `escrowPubKey` to an attacker key and silently escrow every future transcript to them. The trust gate
+// (admin-owned + no Users-write ACE) blocks that on Windows; root-owned dirs enforce it on macOS/Linux.
 
 /** Resolve a configured value to a PEM public key: inline PEM, a file path to one, or base64-wrapped PEM. */
 function resolveEscrowPem(raw: string | null | undefined): string | null {
@@ -76,7 +74,8 @@ function readEscrowPubKey(): string | null {
   const fromEnv = resolveEscrowPem(process.env.ASKTOTO_ESCROW_PUBKEY)
   if (fromEnv) return fromEnv
   try {
-    const machine = resolveEscrowPem(readEscrowFromManaged(adminManagedConfigPath()))
+    const adminPath = trustedAdminManagedPath() // null on win32 unless admin-owned + not user-writable
+    const machine = adminPath ? resolveEscrowPem(readEscrowFromManaged(adminPath)) : null
     if (machine) return machine
   } catch {
     /* ignore */
@@ -265,8 +264,10 @@ export async function writeSaved(file: string, content: string, encrypt: boolean
 const decryptedTemps = new Set<string>()
 let tempCleanupHooked = false
 
-/** Decrypt an encrypted transcript to a temp plaintext file so it can be opened in an editor.
- *  Owner-only (0o600), randomized name, and unlinked on app quit. */
+/** Decrypt an encrypted transcript to a temp plaintext file so it can be opened in an editor. The file
+ *  lives under the per-user temp dir (user-scoped ACL), has a randomized name, and is unlinked on app
+ *  quit. Confidentiality: POSIX `mode: 0o600` on the write below (owner-only on macOS/Linux) is a no-op
+ *  on Windows, so on win32 we additionally apply an explicit owner-only DACL via lockPathToCurrentUserWin32. */
 export function decryptToTemp(path: string): string {
   // Read + decrypt defensively: a foreign-keychain file yields the notice instead of throwing and
   // leaving the user with a dead "Open" click.
@@ -281,6 +282,7 @@ export function decryptToTemp(path: string): string {
     `asktoto-${randomBytes(6).toString('hex')}-${basename(path).replace(/\.md$/, '')}.md`
   )
   writeFileSync(tmp, content, { encoding: 'utf8', mode: 0o600 })
+  lockPathToCurrentUserWin32(tmp) // mode bits are ignored on Windows; enforce owner-only via DACL
   decryptedTemps.add(tmp)
   if (!tempCleanupHooked) {
     tempCleanupHooked = true
