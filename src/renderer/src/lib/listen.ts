@@ -3,6 +3,7 @@ import type { TranscriptLine } from '@shared/ipc'
 import { isNonSpeechLine } from '@shared/transcript-filter'
 import { WHISPER_WORKLET_SRC } from './whisper-worklet-src'
 import { isWindows } from './keys'
+import { compileEntityCasingCandidates, applyEntityCasingCompiled } from './entity-casing'
 
 const SR = 16000
 
@@ -156,7 +157,12 @@ export function useListen(
   onEngineFallback?: (reason: string) => void,
   // Preferred microphone deviceId ('' = system default). Read through a ref so a change mid-session takes
   // effect on the next (re)acquire without re-subscribing anything.
-  micDeviceId?: string
+  micDeviceId?: string,
+  // Canonical people/account names from the brain (brain:entityNames), for the ASR entity-casing bias —
+  // spells a known name correctly (e.g. "l'oreal" -> "L'Oréal") without any fuzzy/phonetic guessing. Gated
+  // by settings.asrEntityBias in App.tsx (pass undefined/[] to disable). Applied AFTER asrCorrections so
+  // an explicit user correction always wins.
+  entityNames?: string[]
 ): ListenApi {
   const [state, setState] = useState({
     listening: false,
@@ -210,6 +216,9 @@ export function useListen(
   correctionsRef.current = (corrections ?? [])
     .filter((c) => c.from.trim())
     .map((c) => ({ re: new RegExp(`\\b${escapeRegExp(c.from.trim())}\\b`, 'gi'), to: c.to }))
+  // Compiled once per entityNames-list change (not per line), same idiom as correctionsRef above.
+  const entityCasingRef = useRef<ReturnType<typeof compileEntityCasingCandidates>>([])
+  entityCasingRef.current = compileEntityCasingCandidates(entityNames ?? [])
   // Preferred mic, read through a ref so the latest choice is used on every (re)acquire.
   const micDeviceIdRef = useRef<string>('')
   micDeviceIdRef.current = micDeviceId ?? ''
@@ -230,6 +239,8 @@ export function useListen(
     if (isNonSpeechLine(text)) return
     let corrected = text
     for (const { re, to } of correctionsRef.current) corrected = corrected.replace(re, to)
+    // Entity-casing bias runs AFTER corrections so an explicit user correction always wins.
+    if (entityCasingRef.current.length) corrected = applyEntityCasingCompiled(entityCasingRef.current, corrected)
     if (corrected && liveRef.current) {
       const line: TranscriptLine = { speaker: speaker || 'you', text: corrected, t: Date.now() }
       // Update the ref synchronously BEFORE firing onQ, so text() (read inside the handler) already

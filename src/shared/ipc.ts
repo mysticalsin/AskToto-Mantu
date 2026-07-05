@@ -46,6 +46,7 @@ export const IPC = {
   brainStatus: 'brain:status',
   brainBackfill: 'brain:backfill',
   brainRead: 'brain:read',
+  brainEntityNames: 'brain:entityNames',
   brainOpenDashboard: 'brain:openDashboard',
   brainRebuildAll: 'brain:rebuildAll',
   authStatus: 'auth:status',
@@ -482,6 +483,10 @@ export const BaseSettingsSchema = z.object({
   customMeetingApps: z.array(z.string().min(1).max(80)).max(20).default([]),
   // Words the ASR engine consistently mishears, always corrected in the live transcript (commitLine).
   asrCorrections: z.array(z.object({ from: z.string().min(1).max(80), to: z.string().max(80) })).max(100).default([]),
+  // Entity-casing bias (SAFE — exact-match only, never phonetic/fuzzy): spell people/account names the
+  // brain already knows with their canonical casing in the live transcript. Names come from
+  // brain:entityNames; see main/index.ts and lib/entity-casing.ts. On by default.
+  asrEntityBias: z.boolean().default(true),
   // CLI provider connection state. Keyed by ProviderId ('claude-cli', 'codex-cli').
   cliConnected: z.record(z.string(), z.boolean()).default({}),
   // Epoch ms of the last Dust CLI token import. Gates the startup eager refresh: while the ~1h OAuth
@@ -621,6 +626,7 @@ export const DEFAULT_SETTINGS: Settings = {
   lastConsentReminderAt: 0,
   customMeetingApps: [], // deprecated — kept so persisted settings/managed-config still parse
   asrCorrections: [],
+  asrEntityBias: true,
   cliConnected: {},
   dustTokenMintedAt: 0,
   cliNoticeAck: false,
@@ -854,6 +860,13 @@ export interface GraphRelated {
   error?: string
   topics: string[]
   notes: { file: string; title: string; via: string[] }[]
+}
+
+/** Result of brain:entityNames — canonical people/account names ONLY (never quotes, roles, deal data,
+ *  or anything else from the entity files), for the ASR entity-casing bias feature. See
+ *  lib/entity-casing.ts and the brainEntityNames handler in main/index.ts. */
+export interface BrainEntityNamesResult {
+  names: string[]
 }
 
 // ─── BidStack CRM (MCP push) ───────────────────────────────────────────────

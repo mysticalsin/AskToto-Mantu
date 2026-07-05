@@ -101,6 +101,9 @@ const api = {
     ipcRenderer.invoke(IPC.brainOpenDashboard),
   brainRebuildAll: (): Promise<{ queued: number }> => ipcRenderer.invoke(IPC.brainRebuildAll),
   brainRead: (): Promise<import('@shared/brain').BrainRead> => ipcRenderer.invoke(IPC.brainRead),
+  // Canonical people/account names only — feeds the ASR entity-casing bias (lib/entity-casing.ts).
+  brainEntityNames: (): Promise<import('@shared/ipc').BrainEntityNamesResult> =>
+    ipcRenderer.invoke(IPC.brainEntityNames),
   authStatus: (): Promise<AuthStatus> => ipcRenderer.invoke(IPC.authStatus),
   signIn: (): Promise<SignInResult> => ipcRenderer.invoke(IPC.authSignIn),
   signOut: (): Promise<void> => ipcRenderer.invoke(IPC.authSignOut),
