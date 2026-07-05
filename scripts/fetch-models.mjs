@@ -211,10 +211,15 @@ async function fetchParakeet() {
     return
   }
   ensureDir(destDir)
-  const archive = join(destDir, `${MODEL_NAME}.tar.bz2`)
+  const archiveName = `${MODEL_NAME}.tar.bz2`
+  const archive = join(destDir, archiveName)
   await download(MODEL_URL, archive)
   console.log('  [extract] tar xjf ...')
-  await execFileAsync('tar', ['xjf', archive, '-C', destDir])
+  // Extract with the archive named RELATIVELY from cwd=destDir, never as an absolute path. GNU tar on
+  // Windows parses an absolute path like `D:\...\file.tar.bz2` as a remote `host:path` spec (the drive
+  // letter + colon), then fails with "Cannot connect to D: resolve failed". A bare relative name has no
+  // colon, so both GNU tar (Git/MSYS) and the BSD tar bundled in Windows System32 extract it correctly.
+  await execFileAsync('tar', ['xjf', archiveName], { cwd: destDir })
   // Clean up archive
   try { unlinkSync(archive) } catch { /* ignore */ }
   if (!requiredFiles.every(filePresent)) {
