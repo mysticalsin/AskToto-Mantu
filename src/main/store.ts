@@ -440,8 +440,13 @@ export function getSettings(): Settings {
     // repair the one cross-field invariant (provider:'custom' needs an https customBaseUrl) so a stale
     // settings.json can NEVER make getSettings throw and brick every IPC handler that reads it.
     const merged: Record<string, unknown> = { ...base, ...validKeysOnly(raw) }
-    if (merged.provider === 'custom' && !/^https:\/\//i.test(String(merged.customBaseUrl ?? ''))) {
-      // Reset to a provider-INDEPENDENT safe default — base.provider can itself be the invalid 'custom'
+    // Only reset `provider` when the provider value itself doesn't validate against the schema's
+    // enum — never merely because customBaseUrl is empty/not-yet-https. A user who just picked
+    // Custom (customBaseUrl: '') has a perfectly valid provider choice; clobbering it here reverts
+    // the UI silently back to the default provider before they ever get to type a base URL.
+    const providerCheck = shape().provider.safeParse(merged.provider)
+    if (!providerCheck.success) {
+      // Reset to a provider-INDEPENDENT safe default — base.provider can itself be the invalid value
       // (e.g. from managed-config), which would make the repair a no-op and getSettings throw org-wide.
       merged.provider = DEFAULT_SETTINGS.provider
     }
