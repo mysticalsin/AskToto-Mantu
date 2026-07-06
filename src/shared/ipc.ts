@@ -123,7 +123,8 @@ export const IPC = {
   notebookLmConnect: 'notebookLm:connect',
   notebookLmAsk: 'notebookLm:ask',
   licenseActivate: 'license:activate',
-  licenseStatus: 'license:status'
+  licenseStatus: 'license:status',
+  licenseGate: 'license:gate'
 } as const
 
 /** User's verdict on an answer (metadata only — never the answer text). Feeds the audit log + future evals. */
@@ -515,8 +516,9 @@ export const BaseSettingsSchema = z.object({
   notebookLmTools: z.array(z.string()).default([]),
   // Phone-home license activation against a self-hosted license server (see main/license.ts). Gate is
   // OFF by default: Tony has not deployed a server yet, and shipping this on by default would lock him
-  // out of his own app at next launch. checkLicenseGrace() implements the offline-grace logic but is not
-  // wired into a startup gate yet — that's a deliberate follow-up once activation has been tested end to end.
+  // out of his own app at next launch. checkLicenseGrace() IS wired into a real startup gate (App.tsx's
+  // LicenseGate, via the license:gate IPC channel, plus a 12h background re-validation in main/index.ts) —
+  // turning this on only matters once a license server is deployed and this device has activated.
   licenseServerUrl: z.string().default(''),
   licenseKey: z.string().default(''),
   licenseCompanyName: z.string().default(''),
@@ -972,6 +974,17 @@ export interface LicenseStatusResult {
   licenseValid: boolean
   licenseLastValidatedAt: number
   licenseGateEnabled: boolean
+}
+
+/** Startup-gate verdict for App.tsx's boot gate, derived by calling checkLicenseGrace() fresh on every
+ *  call (see the license:gate handler in main/index.ts). Deliberately its own small shape rather than a
+ *  field on LicenseStatusResult: license:status is gated behind requireAuth() (an SSO-signed-in check),
+ *  but this channel must be reachable even when signed out — a revoked or unlicensed device has to learn
+ *  that BEFORE burning an SSO round trip, not after (license outranks SSO in App.tsx's gate order). */
+export interface LicenseGateVerdict {
+  gateEnabled: boolean
+  allowed: boolean
+  reason?: 'not_activated' | 'expired_grace'
 }
 
 export const CaptureResultSchema = z.object({

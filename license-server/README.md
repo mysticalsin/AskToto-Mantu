@@ -17,7 +17,8 @@ Docker anywhere) and point the app at via a server URL.
 ## How it works
 
 - Each company gets one **license key** with a **seat cap** (max concurrent
-  activated machines).
+  activated machines), plus optional contact name, contact email, and notes
+  for your own record-keeping (deal notes, plan tier, whatever's useful).
 - The AskToto client calls `/activate` once per machine, then periodically
   calls `/heartbeat` to stay validated.
 - The client is responsible for a 7-day offline grace period if it can't
@@ -45,7 +46,22 @@ Environment variables:
 ## Deploying
 
 This is a plain Node HTTP service — any of the following works. Pick
-whichever fits your existing infra; none of this is prescriptive.
+whichever fits your existing infra; none of this is prescriptive. In all
+cases: the only thing that must survive restarts/redeploys is the `data/`
+directory (or wherever `LICENSE_DB_PATH` points) — that's where
+`licenses.json` and `audit.jsonl` live.
+
+- **Docker Compose - one command on any box, including a Raspberry Pi** (the
+  node:22-alpine base image is multi-arch, so the identical compose file builds
+  natively on arm64 Pi 4/5, armv7, and x86 PCs):
+  ```bash
+  cd license-server
+  LICENSE_ADMIN_TOKEN=$(openssl rand -hex 24) docker compose up -d --build
+  ```
+  Save that token somewhere safe (it is the admin credential). Dashboard:
+  `http://<host>:8420/admin/ui`. License data lives on the `license_data`
+  volume and survives rebuilds; updating = `git pull` then the same command.
+  On a Pi, give the first build a few minutes.
 
 - **Docker, anywhere** (a VPS, a container platform, etc.):
   ```bash
@@ -58,16 +74,26 @@ whichever fits your existing infra; none of this is prescriptive.
   Make sure `/app/data` is a persistent volume — otherwise licenses.json is
   lost on every container restart.
 
-- **Fly.io**: `fly launch` in this directory (it'll detect the Dockerfile),
-  then `fly secrets set LICENSE_ADMIN_TOKEN=...` and attach a small volume
-  mounted at `/app/data` (set `LICENSE_DB_PATH=/app/data/licenses.json`).
+Railway (or any other VPS with Docker) works the same way: create a service
+from this directory, set `LICENSE_ADMIN_TOKEN`, and attach a persistent
+volume mounted at `/app/data`.
 
-- **Railway**: create a new service from this directory, set the
-  `LICENSE_ADMIN_TOKEN` environment variable, and attach a persistent volume
-  mounted at `/app/data`.
+### Deploy to Fly.io
 
-In all cases: the only thing that must survive restarts/redeploys is the
-`data/` directory (or wherever `LICENSE_DB_PATH` points).
+`fly.toml` in this directory already points at the Dockerfile, sets the
+internal port to `8420`, and mounts a volume at `/app/data` (where the
+server's default `LICENSE_DB_PATH` already resolves inside the container —
+no extra env var needed). From `license-server/`:
+
+```bash
+fly launch --no-deploy                              # uses the existing fly.toml, don't deploy yet
+fly volumes create license_data --size 1 --region iad  # match the region in fly.toml
+fly secrets set LICENSE_ADMIN_TOKEN=$(openssl rand -hex 32)
+fly deploy
+```
+
+Fly gives you HTTPS automatically. A plain VPS needs Caddy or a Cloudflare
+proxy in front instead.
 
 ## Generating a license
 
@@ -96,6 +122,52 @@ License created successfully.
 
     ATK-7QHM2K9X3VBN8ZC1FGJ0
 ```
+
+## Backups
+
+`data/licenses.json` is the business record; back it up with
+`node scripts/backup.mjs --url <server-url> --token <admin-token>` (writes a
+timestamped JSON file into `./backups/`, gitignored, default `--out`).
+
+Crontab example (daily at 2am):
+
+```
+0 2 * * * cd /path/to/license-server && node scripts/backup.mjs --url https://your-license-server.example.com --token "$LICENSE_ADMIN_TOKEN" --out /path/to/backups >> /var/log/asktoto-license-backup.log 2>&1
+```
+
+## Managing licenses in the browser
+
+The server ships with a small admin dashboard, no separate deploy needed.
+
+Open `<your-server-url>/admin/ui` in a browser (e.g.
+`https://your-license-server.example.com/admin/ui`, or `http://localhost:8420/admin/ui`
+when running locally). Visiting `/admin` redirects there too. Paste in your
+`LICENSE_ADMIN_TOKEN` when prompted. It's stored only in that browser's
+`localStorage`, so you won't need to re-enter it next time on the same device.
+
+From the dashboard you can:
+
+- See every license at a glance: company, seats used vs. cap, seats active
+  in the last 30 days, status (active/revoked/expired), created and expiry
+  dates.
+- Create a new license (company name, seat cap, optional expiry, optional
+  contact name/email and notes).
+- Open a license to see its full key, its activated machines, and free a
+  seat for any of them.
+- Revoke or unrevoke a license, edit its seat cap or expiry date, and edit
+  its contact name/email or notes.
+- Export every license as a CSV file (button in the header) for finance or
+  a spreadsheet.
+- Switch to the audit log view to see every admin mutation (create, revoke,
+  unrevoke, patch, seat free) with a timestamp and details.
+
+The page itself contains no secrets. Only the browser calling it needs the
+admin token, and every admin action still goes through the same
+bearer-token-gated API described below. Sign out from the header to clear
+the token from that browser.
+
+The CLI (`npm run generate-license`) still works exactly as before, it's the
+better option for scripting or batch-issuing licenses.
 
 ## Endpoint reference
 
@@ -127,7 +199,10 @@ Re-validates an already-activated machine. Never consumes a seat.
 
 **`POST /deactivate`** — `{ licenseKey, machineId }`
 
-Frees a seat.
+Frees a seat. Unauthenticated by design (the app itself calls this to free
+its own seat on uninstall), but the dashboard's "free seat" button also
+calls this same route with the admin token attached — the audit log tells
+the two apart (see below).
 
 - `{ ok: true }` on success
 - `{ ok: false, error: "not_found" }` — unknown license key, or machine wasn't activated
@@ -138,21 +213,34 @@ All require header `Authorization: Bearer <LICENSE_ADMIN_TOKEN>`. If the
 server has no `LICENSE_ADMIN_TOKEN` configured, every admin route returns
 `503` rather than silently allowing or denying.
 
-**`POST /admin/licenses`** — `{ companyName, seatCap, expiresAt? }`
+**`POST /admin/licenses`** — `{ companyName, seatCap, expiresAt?, contactName?, contactEmail?, notes? }`
 → `{ licenseKey, companyName, seatCap, expiresAt }`
 
 **`GET /admin/licenses`**
-→ list of `{ licenseKey, companyName, seatCap, seatsUsed, revoked, expiresAt, createdAt }`
-(no `activations`/`machineId` detail in the list view)
+→ list of `{ licenseKey, companyName, seatCap, seatsUsed, activeSeats30d, revoked, expiresAt, createdAt, contactName }`
+(no `activations`/`machineId`/`contactEmail`/`notes` detail in the list view)
 
 **`GET /admin/licenses/:key`**
-→ full detail, including the `activations` array (`machineId`, `machineName`, `activatedAt`, `lastSeenAt`)
+→ full detail: everything in the list view plus `contactEmail`, `notes`, and
+the `activations` array (`machineId`, `machineName`, `activatedAt`, `lastSeenAt`)
+
+**`GET /admin/licenses.csv`** → `text/csv`, one row per license:
+`companyName,licenseKey,seatCap,seatsUsed,activeSeats30d,revoked,createdAt,expiresAt,contactName,contactEmail`
+(ISO dates, RFC4180 quoting)
 
 **`POST /admin/licenses/:key/revoke`** → sets `revoked: true`, returns full detail
 
 **`POST /admin/licenses/:key/unrevoke`** → sets `revoked: false`, returns full detail
 
-**`PATCH /admin/licenses/:key`** — `{ seatCap?, expiresAt? }` → updates and returns full detail
+**`PATCH /admin/licenses/:key`** — `{ seatCap?, expiresAt?, contactName?, contactEmail?, notes? }`
+(at least one field required) → updates and returns full detail
+
+**`GET /admin/audit?limit=200`** → the last `limit` audit entries (default
+200, max 1000), newest first: `{ at, action, licenseKey, details }` where
+`action` is one of `create`, `revoke`, `unrevoke`, `patch`, `deactivate`,
+`deactivate_admin`. Stored as an append-only JSONL file
+(`data/audit.jsonl`) next to `licenses.json`; a write failure here logs a
+warning but never fails the request that triggered it.
 
 ## Tests
 

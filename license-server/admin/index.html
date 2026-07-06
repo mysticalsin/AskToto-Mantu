@@ -1,0 +1,1624 @@
+<!doctype html>
+<!-- asktoto-license-admin-ui -->
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>AskToto licenses</title>
+<style>
+  :root {
+    --bg: #17131f;
+    --bg-panel: #1e1829;
+    --bg-panel-2: #251e33;
+    --bg-hover: #2a2238;
+    --bg-input: #150f1f;
+    --border: rgba(255, 255, 255, 0.08);
+    --border-strong: rgba(255, 255, 255, 0.16);
+    --text: #f2eef9;
+    --text-muted: #a898c2;
+    --text-faint: #6f6484;
+    --accent: #9645d6;
+    --accent-hover: #a855e0;
+    --accent-soft: rgba(150, 69, 214, 0.16);
+    --accent-soft-strong: rgba(150, 69, 214, 0.3);
+    --success: #34d399;
+    --success-soft: rgba(52, 211, 153, 0.14);
+    --danger: #f87171;
+    --danger-soft: rgba(248, 113, 113, 0.14);
+    --warning: #fbbf24;
+    --warning-soft: rgba(251, 191, 36, 0.14);
+    --radius: 10px;
+    --radius-lg: 16px;
+    --shadow: 0 20px 50px rgba(0, 0, 0, 0.5);
+    --mono: ui-monospace, "SF Mono", "Cascadia Code", Menlo, Consolas, monospace;
+  }
+
+  * { box-sizing: border-box; }
+
+  html, body {
+    margin: 0;
+    padding: 0;
+    height: 100%;
+  }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    font-size: 14px;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .hidden { display: none !important; }
+
+  button {
+    font-family: inherit;
+    font-size: 13px;
+    cursor: pointer;
+    border: none;
+    outline: none;
+  }
+
+  button:disabled { opacity: 0.55; cursor: not-allowed; }
+
+  input {
+    font-family: inherit;
+    font-size: 14px;
+  }
+
+  a { color: var(--accent); }
+
+  /* ---------- buttons ---------- */
+
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 9px 16px;
+    border-radius: var(--radius);
+    font-weight: 600;
+    transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+    white-space: nowrap;
+  }
+
+  .btn-primary {
+    background: var(--accent);
+    color: #fff;
+  }
+  .btn-primary:hover:not(:disabled) { background: var(--accent-hover); }
+
+  .btn-ghost {
+    background: transparent;
+    border: 1px solid var(--border-strong);
+    color: var(--text);
+  }
+  .btn-ghost:hover:not(:disabled) { background: var(--bg-hover); }
+
+  .btn-danger {
+    background: transparent;
+    border: 1px solid rgba(248, 113, 113, 0.4);
+    color: var(--danger);
+  }
+  .btn-danger:hover:not(:disabled) { background: var(--danger-soft); }
+
+  .btn-link {
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    padding: 6px 4px;
+    font-weight: 500;
+    text-decoration: none;
+  }
+  .btn-link:hover { color: var(--text); }
+
+  .btn-sm { padding: 5px 10px; font-size: 12px; border-radius: 8px; }
+
+  .icon-btn {
+    background: transparent;
+    border: 1px solid var(--border-strong);
+    color: var(--text-muted);
+    width: 34px;
+    height: 34px;
+    border-radius: var(--radius);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .icon-btn:hover:not(:disabled) { background: var(--bg-hover); color: var(--text); }
+
+  /* ---------- gate screen ---------- */
+
+  .gate-screen {
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+  }
+
+  .gate-card {
+    width: 100%;
+    max-width: 400px;
+    background: var(--bg-panel);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow);
+    padding: 36px 32px;
+  }
+
+  .gate-mark {
+    width: 40px;
+    height: 40px;
+    border-radius: 11px;
+    background: linear-gradient(135deg, var(--accent), #6b21a8);
+    margin: 0 auto 20px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 700;
+    font-size: 16px;
+    color: #fff;
+  }
+
+  .gate-card h1 {
+    font-size: 18px;
+    text-align: center;
+    margin: 0 0 6px;
+  }
+
+  .gate-card p.gate-sub {
+    text-align: center;
+    color: var(--text-muted);
+    font-size: 13px;
+    margin: 0 0 24px;
+  }
+
+  .field-label {
+    display: block;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-muted);
+    margin-bottom: 6px;
+  }
+
+  .text-input {
+    width: 100%;
+    background: var(--bg-input);
+    border: 1px solid var(--border-strong);
+    color: var(--text);
+    padding: 10px 12px;
+    border-radius: var(--radius);
+    transition: border-color 0.15s ease;
+  }
+  .text-input:focus { border-color: var(--accent); }
+  .text-input::placeholder { color: var(--text-faint); }
+
+  textarea.text-input { resize: vertical; min-height: 64px; line-height: 1.4; }
+
+  .gate-card .btn-primary {
+    width: 100%;
+    justify-content: center;
+    margin-top: 16px;
+    padding: 11px 16px;
+  }
+
+  .inline-error {
+    margin-top: 12px;
+    font-size: 13px;
+    color: var(--danger);
+    background: var(--danger-soft);
+    border: 1px solid rgba(248, 113, 113, 0.25);
+    border-radius: var(--radius);
+    padding: 10px 12px;
+  }
+
+  /* ---------- dashboard shell ---------- */
+
+  .dashboard { min-height: 100vh; }
+
+  header.top-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 20px 32px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .brand {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+
+  .brand .gate-mark { margin: 0; width: 34px; height: 34px; font-size: 14px; }
+
+  .brand-text h1 {
+    font-size: 16px;
+    margin: 0;
+  }
+
+  .brand-text .summary {
+    font-size: 12.5px;
+    color: var(--text-muted);
+    margin-top: 2px;
+  }
+
+  .top-actions {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+
+  main.content {
+    padding: 28px 32px 60px;
+    max-width: 1180px;
+    margin: 0 auto;
+  }
+
+  .view-tabs {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 16px;
+  }
+
+  .table-card {
+    background: var(--bg-panel);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    overflow: hidden;
+  }
+
+  .table-scroll { overflow-x: auto; }
+
+  table.licenses-table {
+    width: 100%;
+    border-collapse: collapse;
+    min-width: 760px;
+  }
+
+  .licenses-table thead th {
+    text-align: left;
+    font-size: 11.5px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--text-faint);
+    font-weight: 600;
+    padding: 14px 20px;
+    border-bottom: 1px solid var(--border);
+    background: var(--bg-panel-2);
+  }
+
+  .licenses-table tbody tr {
+    border-bottom: 1px solid var(--border);
+    cursor: pointer;
+    transition: background 0.12s ease;
+  }
+  .licenses-table tbody tr:last-child { border-bottom: none; }
+  .licenses-table tbody tr:hover { background: var(--bg-hover); }
+
+  .licenses-table td {
+    padding: 14px 20px;
+    vertical-align: middle;
+  }
+
+  .company-cell { font-weight: 600; }
+
+  .key-cell {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    font-family: var(--mono);
+    color: var(--text-muted);
+    font-size: 12.5px;
+  }
+
+  .copy-btn {
+    background: transparent;
+    border: 1px solid var(--border-strong);
+    color: var(--text-faint);
+    border-radius: 6px;
+    width: 24px;
+    height: 24px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    position: relative;
+  }
+  .copy-btn:hover { color: var(--text); background: var(--bg-hover); }
+  .copy-btn.copied { color: var(--success); border-color: rgba(52, 211, 153, 0.4); }
+
+  .copy-flash {
+    position: absolute;
+    bottom: 120%;
+    left: 50%;
+    transform: translateX(-50%);
+    background: var(--success);
+    color: #06281c;
+    font-size: 11px;
+    font-weight: 700;
+    padding: 3px 7px;
+    border-radius: 6px;
+    white-space: nowrap;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.15s ease, transform 0.15s ease;
+  }
+  .copy-flash.show { opacity: 1; transform: translateX(-50%) translateY(-2px); }
+
+  .seats-cell { color: var(--text-muted); font-variant-numeric: tabular-nums; }
+  .seats-cell strong { color: var(--text); }
+
+  .mono-cell {
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--text-muted);
+  }
+
+  .pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 4px 10px;
+    border-radius: 999px;
+    font-size: 12px;
+    font-weight: 600;
+  }
+  .pill::before {
+    content: "";
+    width: 6px;
+    height: 6px;
+    border-radius: 999px;
+    background: currentColor;
+  }
+  .pill-active { background: var(--success-soft); color: var(--success); }
+  .pill-revoked { background: var(--danger-soft); color: var(--danger); }
+  .pill-expired { background: var(--warning-soft); color: var(--warning); }
+
+  .date-cell { color: var(--text-muted); white-space: nowrap; }
+
+  .empty-state {
+    padding: 60px 20px;
+    text-align: center;
+    color: var(--text-muted);
+  }
+  .empty-state .btn-primary { margin-top: 16px; }
+
+  /* ---------- overlay ---------- */
+
+  .layer-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(8, 5, 14, 0.6);
+    backdrop-filter: blur(2px);
+    z-index: 40;
+    opacity: 0;
+    transition: opacity 0.18s ease;
+  }
+  .layer-overlay.closed { opacity: 0; pointer-events: none; }
+  .layer-overlay:not(.closed) { opacity: 1; }
+
+  /* ---------- drawer ---------- */
+
+  .drawer {
+    position: fixed;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    width: min(460px, 100vw);
+    background: var(--bg-panel);
+    border-left: 1px solid var(--border-strong);
+    box-shadow: var(--shadow);
+    z-index: 50;
+    display: flex;
+    flex-direction: column;
+    transform: translateX(100%);
+    transition: transform 0.2s ease;
+  }
+  .drawer:not(.closed) { transform: translateX(0); }
+  .drawer.closed { transform: translateX(100%); }
+
+  .drawer-head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    padding: 22px 24px 16px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .drawer-head h2 { font-size: 17px; margin: 0 0 4px; }
+
+  .drawer-body {
+    padding: 20px 24px 40px;
+    overflow-y: auto;
+    flex: 1;
+  }
+
+  .drawer-section { margin-bottom: 26px; }
+  .drawer-section:last-child { margin-bottom: 0; }
+
+  .drawer-section h3 {
+    font-size: 11.5px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--text-faint);
+    margin: 0 0 12px;
+  }
+
+  .kv-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 0;
+    border-bottom: 1px solid var(--border);
+    gap: 12px;
+  }
+  .kv-row:last-child { border-bottom: none; }
+  .kv-row .kv-label { color: var(--text-muted); font-size: 12.5px; }
+  .kv-row .kv-value { font-weight: 600; text-align: right; }
+
+  .full-key-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-family: var(--mono);
+    font-size: 12.5px;
+    background: var(--bg-input);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 10px 12px;
+    word-break: break-all;
+  }
+
+  .edit-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .edit-row .text-input { flex: 1; }
+
+  .activation-item {
+    padding: 12px 0;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+  }
+  .activation-item:last-child { border-bottom: none; }
+  .activation-main { min-width: 0; }
+  .activation-name { font-weight: 600; font-size: 13px; }
+  .activation-meta {
+    color: var(--text-faint);
+    font-size: 12px;
+    margin-top: 2px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .no-activations {
+    color: var(--text-faint);
+    font-size: 13px;
+    padding: 8px 0;
+  }
+
+  .drawer-actions {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+  }
+
+  /* ---------- modal ---------- */
+
+  .modal {
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -48%);
+    width: min(440px, calc(100vw - 32px));
+    background: var(--bg-panel);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow);
+    z-index: 61;
+    padding: 28px;
+    opacity: 0;
+    transition: opacity 0.15s ease, transform 0.15s ease;
+    pointer-events: none;
+  }
+  .modal:not(.closed) {
+    opacity: 1;
+    transform: translate(-50%, -50%);
+    pointer-events: auto;
+  }
+
+  .modal h2 { font-size: 17px; margin: 0 0 18px; }
+
+  .modal-field { margin-bottom: 16px; }
+  .modal-field:last-of-type { margin-bottom: 0; }
+
+  .modal-footer {
+    display: flex;
+    justify-content: flex-end;
+    gap: 10px;
+    margin-top: 22px;
+  }
+
+  .key-reveal {
+    font-family: var(--mono);
+    font-size: 16px;
+    letter-spacing: 0.02em;
+    background: var(--bg-input);
+    border: 1px solid var(--accent-soft-strong);
+    border-radius: var(--radius);
+    padding: 16px;
+    word-break: break-all;
+    text-align: center;
+    color: var(--text);
+    margin-bottom: 14px;
+  }
+
+  .success-note {
+    font-size: 12.5px;
+    color: var(--text-muted);
+    line-height: 1.5;
+    margin: 0 0 20px;
+  }
+
+  /* ---------- toast ---------- */
+
+  #toast-container {
+    position: fixed;
+    bottom: 24px;
+    right: 24px;
+    z-index: 80;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    max-width: 340px;
+  }
+
+  .toast {
+    background: var(--bg-panel-2);
+    border: 1px solid var(--border-strong);
+    border-left: 3px solid var(--accent);
+    border-radius: var(--radius);
+    padding: 12px 14px;
+    font-size: 13px;
+    box-shadow: var(--shadow);
+    animation: toast-in 0.18s ease;
+  }
+  .toast.toast-error { border-left-color: var(--danger); }
+  .toast.toast-success { border-left-color: var(--success); }
+
+  @keyframes toast-in {
+    from { opacity: 0; transform: translateY(8px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+
+  ::-webkit-scrollbar { width: 10px; height: 10px; }
+  ::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 6px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+</style>
+</head>
+<body>
+
+  <div id="gate-screen" class="gate-screen">
+    <div class="gate-card">
+      <div class="gate-mark">A</div>
+      <h1>AskToto licenses</h1>
+      <p class="gate-sub">Enter the admin token for this server to continue.</p>
+      <label class="field-label" for="gate-token-input">Admin token</label>
+      <input id="gate-token-input" class="text-input" type="password" placeholder="Paste your admin token" autocomplete="off" spellcheck="false" />
+      <button id="gate-connect-btn" class="btn btn-primary">Connect</button>
+      <div id="gate-error" class="inline-error hidden"></div>
+    </div>
+  </div>
+
+  <div id="dashboard" class="dashboard hidden">
+    <header class="top-bar">
+      <div class="brand">
+        <div class="gate-mark">A</div>
+        <div class="brand-text">
+          <h1>AskToto licenses</h1>
+          <div id="summary-text" class="summary">Loading…</div>
+        </div>
+      </div>
+      <div class="top-actions">
+        <button id="btn-refresh" class="icon-btn" title="Refresh">&#8635;</button>
+        <button id="btn-export-csv" class="btn btn-ghost">Export CSV</button>
+        <button id="btn-new-license" class="btn btn-primary">New license</button>
+        <button id="btn-sign-out" class="btn-link">Sign out</button>
+      </div>
+    </header>
+
+    <main class="content">
+      <div class="view-tabs">
+        <button id="tab-licenses" class="btn btn-primary btn-sm" data-view="licenses">Licenses</button>
+        <button id="tab-audit" class="btn btn-ghost btn-sm" data-view="audit">Audit log</button>
+      </div>
+
+      <div id="licenses-view">
+        <div class="table-card">
+          <div class="table-scroll">
+            <table class="licenses-table">
+              <thead>
+                <tr>
+                  <th>Company</th>
+                  <th>License key</th>
+                  <th>Seats</th>
+                  <th>Active 30d</th>
+                  <th>Status</th>
+                  <th>Created</th>
+                  <th>Expires</th>
+                </tr>
+              </thead>
+              <tbody id="licenses-tbody"></tbody>
+            </table>
+          </div>
+          <div id="empty-state" class="empty-state hidden">
+            <div>No licenses yet.</div>
+            <button id="empty-new-license-btn" class="btn btn-primary">Create your first license</button>
+          </div>
+        </div>
+      </div>
+
+      <div id="audit-view" class="hidden">
+        <div class="table-card">
+          <div class="table-scroll">
+            <table class="licenses-table">
+              <thead>
+                <tr>
+                  <th>Time</th>
+                  <th>Action</th>
+                  <th>License key</th>
+                  <th>Details</th>
+                </tr>
+              </thead>
+              <tbody id="audit-tbody"></tbody>
+            </table>
+          </div>
+          <div id="audit-empty-state" class="empty-state hidden">
+            <div>No audit entries yet.</div>
+          </div>
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <!-- detail drawer -->
+  <div id="drawer-overlay" class="layer-overlay closed"></div>
+  <aside id="detail-drawer" class="drawer closed">
+    <div class="drawer-head">
+      <div>
+        <h2 id="drawer-company">&nbsp;</h2>
+        <span id="drawer-status" class="pill">&nbsp;</span>
+      </div>
+      <button class="icon-btn" data-action="close-drawer" title="Close">&#10005;</button>
+    </div>
+    <div id="drawer-body" class="drawer-body"></div>
+  </aside>
+
+  <!-- modals -->
+  <div id="modal-overlay" class="layer-overlay closed"></div>
+
+  <div id="new-license-modal" class="modal closed">
+    <div id="nl-form-view">
+      <h2>New license</h2>
+      <div class="modal-field">
+        <label class="field-label" for="nl-company">Company name</label>
+        <input id="nl-company" class="text-input" type="text" placeholder="Acme Corp" />
+      </div>
+      <div class="modal-field">
+        <label class="field-label" for="nl-seats">Seat cap</label>
+        <input id="nl-seats" class="text-input" type="number" min="1" step="1" value="5" />
+      </div>
+      <div class="modal-field">
+        <label class="field-label" for="nl-expiry">Expiry date (optional)</label>
+        <input id="nl-expiry" class="text-input" type="date" />
+      </div>
+      <div class="modal-field">
+        <label class="field-label" for="nl-contact-name">Contact name (optional)</label>
+        <input id="nl-contact-name" class="text-input" type="text" placeholder="Jane Doe" maxlength="200" />
+      </div>
+      <div class="modal-field">
+        <label class="field-label" for="nl-contact-email">Contact email (optional)</label>
+        <input id="nl-contact-email" class="text-input" type="email" placeholder="jane@acme.com" maxlength="200" />
+      </div>
+      <div class="modal-field">
+        <label class="field-label" for="nl-notes">Notes (optional)</label>
+        <textarea id="nl-notes" class="text-input" placeholder="Deal notes, plan tier, anything worth remembering" maxlength="2000"></textarea>
+      </div>
+      <div id="nl-error" class="inline-error hidden"></div>
+      <div class="modal-footer">
+        <button id="nl-cancel-btn" class="btn btn-ghost">Cancel</button>
+        <button id="nl-create-btn" class="btn btn-primary">Create license</button>
+      </div>
+    </div>
+    <div id="nl-success-view" class="hidden">
+      <h2>License created</h2>
+      <div id="nl-key-display" class="key-reveal"></div>
+      <p class="success-note">
+        This key is shown here once for convenience, but nothing is hidden afterwards.
+        You can always find it again in the licenses table.
+      </p>
+      <div class="modal-footer">
+        <button id="nl-copy-btn" class="btn btn-ghost">Copy key</button>
+        <button id="nl-done-btn" class="btn btn-primary">Done</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="confirm-modal" class="modal closed">
+    <h2 id="confirm-title">Are you sure?</h2>
+    <p id="confirm-message" class="success-note"></p>
+    <div class="modal-footer">
+      <button id="confirm-cancel-btn" class="btn btn-ghost">Cancel</button>
+      <button id="confirm-ok-btn" class="btn btn-danger">Confirm</button>
+    </div>
+  </div>
+
+  <div id="toast-container"></div>
+
+<script>
+(function () {
+  'use strict';
+
+  var TOKEN_KEY = 'asktoto-license-admin-token';
+  var token = localStorage.getItem(TOKEN_KEY);
+  var currentDetail = null;
+  var pendingConfirmAction = null;
+
+  // ---------- element refs ----------
+  var gateScreen = document.getElementById('gate-screen');
+  var gateTokenInput = document.getElementById('gate-token-input');
+  var gateConnectBtn = document.getElementById('gate-connect-btn');
+  var gateError = document.getElementById('gate-error');
+
+  var dashboard = document.getElementById('dashboard');
+  var summaryText = document.getElementById('summary-text');
+  var btnRefresh = document.getElementById('btn-refresh');
+  var btnExportCsv = document.getElementById('btn-export-csv');
+  var btnNewLicense = document.getElementById('btn-new-license');
+  var btnSignOut = document.getElementById('btn-sign-out');
+  var emptyNewLicenseBtn = document.getElementById('empty-new-license-btn');
+
+  var tabLicenses = document.getElementById('tab-licenses');
+  var tabAudit = document.getElementById('tab-audit');
+  var licensesView = document.getElementById('licenses-view');
+  var auditView = document.getElementById('audit-view');
+  var currentView = 'licenses';
+
+  var tbody = document.getElementById('licenses-tbody');
+  var emptyState = document.getElementById('empty-state');
+
+  var auditTbody = document.getElementById('audit-tbody');
+  var auditEmptyState = document.getElementById('audit-empty-state');
+
+  var drawerOverlay = document.getElementById('drawer-overlay');
+  var detailDrawer = document.getElementById('detail-drawer');
+  var drawerCompany = document.getElementById('drawer-company');
+  var drawerStatus = document.getElementById('drawer-status');
+  var drawerBody = document.getElementById('drawer-body');
+
+  var modalOverlay = document.getElementById('modal-overlay');
+
+  var newLicenseModal = document.getElementById('new-license-modal');
+  var nlFormView = document.getElementById('nl-form-view');
+  var nlSuccessView = document.getElementById('nl-success-view');
+  var nlCompany = document.getElementById('nl-company');
+  var nlSeats = document.getElementById('nl-seats');
+  var nlExpiry = document.getElementById('nl-expiry');
+  var nlContactName = document.getElementById('nl-contact-name');
+  var nlContactEmail = document.getElementById('nl-contact-email');
+  var nlNotes = document.getElementById('nl-notes');
+  var nlError = document.getElementById('nl-error');
+  var nlCreateBtn = document.getElementById('nl-create-btn');
+  var nlCancelBtn = document.getElementById('nl-cancel-btn');
+  var nlKeyDisplay = document.getElementById('nl-key-display');
+  var nlCopyBtn = document.getElementById('nl-copy-btn');
+  var nlDoneBtn = document.getElementById('nl-done-btn');
+
+  var confirmModal = document.getElementById('confirm-modal');
+  var confirmTitle = document.getElementById('confirm-title');
+  var confirmMessage = document.getElementById('confirm-message');
+  var confirmCancelBtn = document.getElementById('confirm-cancel-btn');
+  var confirmOkBtn = document.getElementById('confirm-ok-btn');
+
+  var toastContainer = document.getElementById('toast-container');
+
+  // ---------- helpers ----------
+
+  function escapeHtml(str) {
+    if (str === null || str === undefined) return '';
+    return String(str)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }
+
+  function truncateMiddle(str, keepStart, keepEnd) {
+    keepStart = keepStart || 9;
+    keepEnd = keepEnd || 6;
+    if (!str || str.length <= keepStart + keepEnd + 1) return str;
+    return str.slice(0, keepStart) + '…' + str.slice(str.length - keepEnd);
+  }
+
+  function formatDate(ms) {
+    if (ms === null || ms === undefined) return 'Never';
+    var d = new Date(ms);
+    return d.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
+  }
+
+  function formatDateTime(ms) {
+    if (ms === null || ms === undefined) return '';
+    var d = new Date(ms);
+    return d.toLocaleString(undefined, { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+  }
+
+  function relativeTime(ms) {
+    if (ms === null || ms === undefined) return 'never';
+    var diff = Date.now() - ms;
+    if (diff < 0) diff = 0;
+    var sec = Math.round(diff / 1000);
+    if (sec < 45) return 'just now';
+    var min = Math.round(sec / 60);
+    if (min < 60) return min + 'm ago';
+    var hr = Math.round(min / 60);
+    if (hr < 24) return hr + 'h ago';
+    var day = Math.round(hr / 24);
+    if (day < 30) return day + 'd ago';
+    var mo = Math.round(day / 30);
+    if (mo < 12) return mo + 'mo ago';
+    var yr = Math.round(mo / 12);
+    return yr + 'y ago';
+  }
+
+  function licenseState(license) {
+    if (license.revoked) return 'revoked';
+    if (license.expiresAt !== null && license.expiresAt !== undefined && license.expiresAt < Date.now()) {
+      return 'expired';
+    }
+    return 'active';
+  }
+
+  function stateLabel(state) {
+    if (state === 'revoked') return 'Revoked';
+    if (state === 'expired') return 'Expired';
+    return 'Active';
+  }
+
+  function pillHtml(state) {
+    return '<span class="pill pill-' + state + '">' + stateLabel(state) + '</span>';
+  }
+
+  function showToast(message, type) {
+    var el = document.createElement('div');
+    el.className = 'toast' + (type ? ' toast-' + type : '');
+    el.textContent = message;
+    toastContainer.appendChild(el);
+    setTimeout(function () {
+      el.style.opacity = '0';
+      el.style.transition = 'opacity 0.2s ease';
+      setTimeout(function () { el.remove(); }, 220);
+    }, 4200);
+  }
+
+  function copyToClipboard(text, btnEl) {
+    function flash() {
+      if (!btnEl) return;
+      var flashEl = btnEl.querySelector('.copy-flash');
+      if (flashEl) {
+        flashEl.classList.add('show');
+        setTimeout(function () { flashEl.classList.remove('show'); }, 1100);
+      } else {
+        var original = btnEl.textContent;
+        btnEl.classList.add('copied');
+        btnEl.textContent = 'Copied';
+        setTimeout(function () {
+          btnEl.classList.remove('copied');
+          btnEl.textContent = original;
+        }, 1100);
+      }
+    }
+    if (navigator.clipboard && window.isSecureContext) {
+      navigator.clipboard.writeText(text).then(flash, function () { fallbackCopy(text); flash(); });
+    } else {
+      fallbackCopy(text);
+      flash();
+    }
+  }
+
+  function fallbackCopy(text) {
+    var ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.position = 'fixed';
+    ta.style.opacity = '0';
+    document.body.appendChild(ta);
+    ta.select();
+    try { document.execCommand('copy'); } catch (e) { /* best effort */ }
+    document.body.removeChild(ta);
+  }
+
+  // ---------- API wrapper ----------
+
+  function ApiError(kind, status, body) {
+    this.kind = kind;
+    this.status = status;
+    this.body = body;
+  }
+
+  function apiFetch(path, options) {
+    options = options || {};
+    var headers = Object.assign({}, options.headers || {});
+    if (token) headers['Authorization'] = 'Bearer ' + token;
+    if (options.body && !headers['Content-Type']) headers['Content-Type'] = 'application/json';
+    return fetch(path, Object.assign({}, options, { headers: headers })).then(function (res) {
+      if (res.status === 401) {
+        handleUnauthorized();
+        throw new ApiError('unauthorized', 401, null);
+      }
+      return res.json().catch(function () { return null; }).then(function (json) {
+        return { status: res.status, json: json };
+      });
+    });
+  }
+
+  function handleUnauthorized() {
+    localStorage.removeItem(TOKEN_KEY);
+    token = null;
+    closeDrawer();
+    closeNewLicenseModal();
+    closeConfirm();
+    showGate('Your session ended. Reconnect with the admin token to continue.');
+  }
+
+  // ---------- gate ----------
+
+  function showGate(message) {
+    dashboard.classList.add('hidden');
+    gateScreen.classList.remove('hidden');
+    if (message) {
+      gateError.textContent = message;
+      gateError.classList.remove('hidden');
+    } else {
+      gateError.classList.add('hidden');
+      gateError.textContent = '';
+    }
+    gateTokenInput.value = '';
+    setTimeout(function () { gateTokenInput.focus(); }, 0);
+  }
+
+  function showDashboard() {
+    gateScreen.classList.add('hidden');
+    dashboard.classList.remove('hidden');
+  }
+
+  function attemptConnect() {
+    var candidate = gateTokenInput.value.trim();
+    if (!candidate) {
+      gateError.textContent = 'Enter your admin token.';
+      gateError.classList.remove('hidden');
+      return;
+    }
+    gateConnectBtn.disabled = true;
+    gateError.classList.add('hidden');
+    var previousToken = token;
+    token = candidate;
+    apiFetch('/admin/licenses')
+      .then(function (result) {
+        if (result.status === 200) {
+          localStorage.setItem(TOKEN_KEY, candidate);
+          showDashboard();
+          renderLicenses(result.json || []);
+        } else if (result.status === 503) {
+          token = previousToken;
+          gateError.textContent = 'Admin routes are disabled on this server. Set LICENSE_ADMIN_TOKEN and try again.';
+          gateError.classList.remove('hidden');
+        } else {
+          token = previousToken;
+          gateError.textContent = 'Could not connect. Please try again.';
+          gateError.classList.remove('hidden');
+        }
+      })
+      .catch(function (err) {
+        token = previousToken;
+        if (err instanceof ApiError && err.kind === 'unauthorized') {
+          gateError.textContent = 'Wrong admin token.';
+        } else {
+          gateError.textContent = 'Could not reach the server. Check your connection and try again.';
+        }
+        gateError.classList.remove('hidden');
+      })
+      .finally(function () {
+        gateConnectBtn.disabled = false;
+      });
+  }
+
+  function signOut() {
+    localStorage.removeItem(TOKEN_KEY);
+    token = null;
+    closeDrawer();
+    showGate();
+  }
+
+  // ---------- table rendering ----------
+
+  function loadLicenses() {
+    return apiFetch('/admin/licenses').then(function (result) {
+      if (result.status !== 200) {
+        showToast('Could not load licenses.', 'error');
+        return;
+      }
+      renderLicenses(result.json || []);
+    }).catch(function (err) {
+      if (!(err instanceof ApiError && err.kind === 'unauthorized')) {
+        showToast('Could not load licenses.', 'error');
+      }
+    });
+  }
+
+  function renderLicenses(list) {
+    var totalSeatsUsed = 0;
+    list.forEach(function (l) { totalSeatsUsed += l.seatsUsed; });
+    summaryText.textContent = list.length + (list.length === 1 ? ' license' : ' licenses') +
+      ', ' + totalSeatsUsed + (totalSeatsUsed === 1 ? ' seat' : ' seats') + ' in use across all';
+
+    if (list.length === 0) {
+      tbody.innerHTML = '';
+      emptyState.classList.remove('hidden');
+      return;
+    }
+    emptyState.classList.add('hidden');
+
+    var rows = list.map(function (l) {
+      var state = licenseState(l);
+      return '' +
+        '<tr data-key="' + escapeHtml(l.licenseKey) + '">' +
+          '<td class="company-cell">' + escapeHtml(l.companyName) + '</td>' +
+          '<td>' +
+            '<span class="key-cell">' +
+              '<span>' + escapeHtml(truncateMiddle(l.licenseKey)) + '</span>' +
+              '<button class="copy-btn" data-copy="' + escapeHtml(l.licenseKey) + '" title="Copy license key">' +
+                '&#128203;' +
+                '<span class="copy-flash">Copied</span>' +
+              '</button>' +
+            '</span>' +
+          '</td>' +
+          '<td class="seats-cell"><strong>' + l.seatsUsed + '</strong> / ' + l.seatCap + '</td>' +
+          '<td class="seats-cell">' + l.activeSeats30d + '</td>' +
+          '<td>' + pillHtml(state) + '</td>' +
+          '<td class="date-cell">' + formatDate(l.createdAt) + '</td>' +
+          '<td class="date-cell">' + formatDate(l.expiresAt) + '</td>' +
+        '</tr>';
+    });
+    tbody.innerHTML = rows.join('');
+  }
+
+  tbody.addEventListener('click', function (e) {
+    var copyBtn = e.target.closest('[data-copy]');
+    if (copyBtn) {
+      copyToClipboard(copyBtn.getAttribute('data-copy'), copyBtn);
+      return;
+    }
+    var row = e.target.closest('tr[data-key]');
+    if (row) openDetail(row.getAttribute('data-key'));
+  });
+
+  // ---------- view tabs (licenses / audit log) ----------
+
+  function switchView(view) {
+    currentView = view;
+    var showAudit = view === 'audit';
+    auditView.classList.toggle('hidden', !showAudit);
+    licensesView.classList.toggle('hidden', showAudit);
+    tabAudit.classList.toggle('btn-primary', showAudit);
+    tabAudit.classList.toggle('btn-ghost', !showAudit);
+    tabLicenses.classList.toggle('btn-primary', !showAudit);
+    tabLicenses.classList.toggle('btn-ghost', showAudit);
+    if (showAudit) loadAudit();
+    else loadLicenses();
+  }
+
+  tabLicenses.addEventListener('click', function () { switchView('licenses'); });
+  tabAudit.addEventListener('click', function () { switchView('audit'); });
+
+  // ---------- audit log ----------
+
+  function loadAudit() {
+    return apiFetch('/admin/audit?limit=200').then(function (result) {
+      if (result.status !== 200) {
+        showToast('Could not load the audit log.', 'error');
+        return;
+      }
+      renderAudit(result.json || []);
+    }).catch(function (err) {
+      if (!(err instanceof ApiError && err.kind === 'unauthorized')) {
+        showToast('Could not load the audit log.', 'error');
+      }
+    });
+  }
+
+  function renderAudit(list) {
+    if (list.length === 0) {
+      auditTbody.innerHTML = '';
+      auditEmptyState.classList.remove('hidden');
+      return;
+    }
+    auditEmptyState.classList.add('hidden');
+
+    var rows = list.map(function (entry) {
+      return '' +
+        '<tr>' +
+          '<td class="date-cell">' + formatDateTime(entry.at) + '</td>' +
+          '<td class="mono-cell">' + escapeHtml(entry.action) + '</td>' +
+          '<td class="mono-cell">' + escapeHtml(truncateMiddle(entry.licenseKey)) + '</td>' +
+          '<td class="mono-cell">' + escapeHtml(JSON.stringify(entry.details || {})) + '</td>' +
+        '</tr>';
+    });
+    auditTbody.innerHTML = rows.join('');
+  }
+
+  // ---------- CSV export ----------
+
+  function exportCsv() {
+    var headers = {};
+    if (token) headers.Authorization = 'Bearer ' + token;
+    fetch('/admin/licenses.csv', { headers: headers }).then(function (res) {
+      if (res.status === 401) {
+        handleUnauthorized();
+        throw new Error('unauthorized');
+      }
+      if (!res.ok) throw new Error('export failed');
+      return res.blob();
+    }).then(function (blob) {
+      // A plain <a href> can't carry the Authorization header, so the file
+      // has to be fetched and downloaded through a blob URL instead.
+      var blobUrl = URL.createObjectURL(blob);
+      var link = document.createElement('a');
+      link.href = blobUrl;
+      link.download = 'asktoto-licenses-' + new Date().toISOString().slice(0, 10) + '.csv';
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      setTimeout(function () { URL.revokeObjectURL(blobUrl); }, 1000);
+    }).catch(function (err) {
+      if (err.message !== 'unauthorized') {
+        showToast('Could not export the CSV file.', 'error');
+      }
+    });
+  }
+
+  // ---------- detail drawer ----------
+
+  function openDetail(key) {
+    apiFetch('/admin/licenses/' + encodeURIComponent(key)).then(function (result) {
+      if (result.status !== 200) {
+        showToast('Could not load license detail.', 'error');
+        return;
+      }
+      currentDetail = result.json;
+      renderDrawer(currentDetail);
+      drawerOverlay.classList.remove('closed');
+      detailDrawer.classList.remove('closed');
+    }).catch(function (err) {
+      if (!(err instanceof ApiError && err.kind === 'unauthorized')) {
+        showToast('Could not load license detail.', 'error');
+      }
+    });
+  }
+
+  function refreshDetailIfOpen() {
+    if (!currentDetail || detailDrawer.classList.contains('closed')) return;
+    var key = currentDetail.licenseKey;
+    apiFetch('/admin/licenses/' + encodeURIComponent(key)).then(function (result) {
+      if (result.status === 200) {
+        currentDetail = result.json;
+        renderDrawer(currentDetail);
+      }
+    }).catch(function () { /* silent: table refresh already covers the summary */ });
+  }
+
+  function closeDrawer() {
+    drawerOverlay.classList.add('closed');
+    detailDrawer.classList.add('closed');
+    currentDetail = null;
+  }
+
+  function renderDrawer(detail) {
+    var state = licenseState(detail);
+    drawerCompany.textContent = detail.companyName;
+    drawerStatus.className = 'pill pill-' + state;
+    drawerStatus.textContent = stateLabel(state);
+
+    var activationsHtml;
+    if (!detail.activations || detail.activations.length === 0) {
+      activationsHtml = '<div class="no-activations">No machines activated yet.</div>';
+    } else {
+      activationsHtml = detail.activations.map(function (a) {
+        var label = a.machineName || a.machineId;
+        return '' +
+          '<div class="activation-item">' +
+            '<div class="activation-main">' +
+              '<div class="activation-name">' + escapeHtml(label) + '</div>' +
+              '<div class="activation-meta">Activated ' + formatDate(a.activatedAt) + ' &middot; last seen ' + relativeTime(a.lastSeenAt) + '</div>' +
+            '</div>' +
+            '<button class="btn btn-ghost btn-sm" data-action="free-seat" data-machine="' + escapeHtml(a.machineId) + '">Free seat</button>' +
+          '</div>';
+      }).join('');
+    }
+
+    var revokeAction = detail.revoked
+      ? '<button class="btn btn-primary" data-action="unrevoke">Unrevoke</button>'
+      : '<button class="btn btn-danger" data-action="revoke">Revoke</button>';
+
+    drawerBody.innerHTML = '' +
+      '<div class="drawer-section">' +
+        '<h3>License key</h3>' +
+        '<div class="full-key-row">' +
+          '<span style="flex:1">' + escapeHtml(detail.licenseKey) + '</span>' +
+          '<button class="copy-btn" data-copy="' + escapeHtml(detail.licenseKey) + '" title="Copy license key">&#128203;<span class="copy-flash">Copied</span></button>' +
+        '</div>' +
+      '</div>' +
+      '<div class="drawer-section">' +
+        '<h3>Details</h3>' +
+        '<div class="kv-row"><span class="kv-label">Created</span><span class="kv-value">' + formatDate(detail.createdAt) + '</span></div>' +
+        '<div class="kv-row"><span class="kv-label">Seats used</span><span class="kv-value">' + detail.seatsUsed + ' / ' + detail.seatCap + '</span></div>' +
+      '</div>' +
+      '<div class="drawer-section">' +
+        '<h3>Seat cap</h3>' +
+        '<div class="edit-row">' +
+          '<input id="seat-input" class="text-input" type="number" min="1" step="1" value="' + detail.seatCap + '" />' +
+          '<button class="btn btn-ghost" data-action="save-seats">Save</button>' +
+        '</div>' +
+      '</div>' +
+      '<div class="drawer-section">' +
+        '<h3>Expiry date</h3>' +
+        '<div class="edit-row">' +
+          '<input id="expiry-input" class="text-input" type="date" value="' + (detail.expiresAt ? msToDateInput(detail.expiresAt) : '') + '" />' +
+          '<button class="btn btn-ghost" data-action="save-expiry">Save</button>' +
+        '</div>' +
+      '</div>' +
+      '<div class="drawer-section">' +
+        '<h3>Contact</h3>' +
+        '<div class="modal-field">' +
+          '<input id="contact-name-input" class="text-input" type="text" placeholder="Contact name" maxlength="200" value="' + escapeHtml(detail.contactName) + '" />' +
+        '</div>' +
+        '<div class="edit-row">' +
+          '<input id="contact-email-input" class="text-input" type="email" placeholder="Contact email" maxlength="200" value="' + escapeHtml(detail.contactEmail) + '" />' +
+          '<button class="btn btn-ghost" data-action="save-contact">Save</button>' +
+        '</div>' +
+      '</div>' +
+      '<div class="drawer-section">' +
+        '<h3>Notes</h3>' +
+        '<div class="edit-row">' +
+          '<textarea id="notes-input" class="text-input" maxlength="2000" placeholder="Deal notes, plan tier, anything worth remembering">' + escapeHtml(detail.notes) + '</textarea>' +
+          '<button class="btn btn-ghost" data-action="save-notes">Save</button>' +
+        '</div>' +
+      '</div>' +
+      '<div class="drawer-section">' +
+        '<h3>Activations</h3>' +
+        activationsHtml +
+      '</div>' +
+      '<div class="drawer-section drawer-actions">' +
+        revokeAction +
+      '</div>';
+  }
+
+  function msToDateInput(ms) {
+    return new Date(ms).toISOString().slice(0, 10);
+  }
+
+  detailDrawer.addEventListener('click', function (e) {
+    var target = e.target.closest('[data-action], [data-copy]');
+    if (!target) return;
+    var copyAttr = target.getAttribute('data-copy');
+    if (copyAttr) {
+      copyToClipboard(copyAttr, target);
+      return;
+    }
+    var action = target.getAttribute('data-action');
+    if (!currentDetail) return;
+    var key = currentDetail.licenseKey;
+    if (action === 'close-drawer') {
+      closeDrawer();
+    } else if (action === 'revoke') {
+      openConfirm('Revoke license', 'Revoke the license for ' + currentDetail.companyName + '? Every activated machine is blocked immediately.', function () {
+        setRevoked(key, true);
+      });
+    } else if (action === 'unrevoke') {
+      openConfirm('Unrevoke license', 'Unrevoke the license for ' + currentDetail.companyName + '? Activated machines will be able to validate again.', function () {
+        setRevoked(key, false);
+      });
+    } else if (action === 'save-seats') {
+      saveSeats(key);
+    } else if (action === 'save-expiry') {
+      saveExpiry(key);
+    } else if (action === 'save-contact') {
+      saveContact(key);
+    } else if (action === 'save-notes') {
+      saveNotes(key);
+    } else if (action === 'free-seat') {
+      var machineId = target.getAttribute('data-machine');
+      openConfirm('Free this seat', 'Free this seat? The machine will need to reactivate to use the app again.', function () {
+        freeSeat(key, machineId);
+      });
+    }
+  });
+
+  function setRevoked(key, revoked) {
+    var path = '/admin/licenses/' + encodeURIComponent(key) + '/' + (revoked ? 'revoke' : 'unrevoke');
+    apiFetch(path, { method: 'POST' }).then(function (result) {
+      if (result.status === 200) {
+        showToast(revoked ? 'License revoked.' : 'License unrevoked.', 'success');
+        currentDetail = result.json;
+        renderDrawer(currentDetail);
+        loadLicenses();
+      } else {
+        showToast('Could not update the license.', 'error');
+      }
+    }).catch(function (err) {
+      if (!(err instanceof ApiError && err.kind === 'unauthorized')) {
+        showToast('Could not update the license.', 'error');
+      }
+    });
+  }
+
+  function saveSeats(key) {
+    var input = document.getElementById('seat-input');
+    var value = parseInt(input.value, 10);
+    if (!Number.isInteger(value) || value < 1) {
+      showToast('Seat cap must be a whole number of 1 or more.', 'error');
+      return;
+    }
+    apiFetch('/admin/licenses/' + encodeURIComponent(key), {
+      method: 'PATCH',
+      body: JSON.stringify({ seatCap: value }),
+    }).then(function (result) {
+      if (result.status === 200) {
+        showToast('Seat cap updated.', 'success');
+        currentDetail = result.json;
+        renderDrawer(currentDetail);
+        loadLicenses();
+      } else {
+        showToast('Could not update seat cap.', 'error');
+      }
+    }).catch(function (err) {
+      if (!(err instanceof ApiError && err.kind === 'unauthorized')) {
+        showToast('Could not update seat cap.', 'error');
+      }
+    });
+  }
+
+  function saveExpiry(key) {
+    var input = document.getElementById('expiry-input');
+    var raw = input.value;
+    var expiresAt = raw ? new Date(raw + 'T00:00:00Z').getTime() : null;
+    apiFetch('/admin/licenses/' + encodeURIComponent(key), {
+      method: 'PATCH',
+      body: JSON.stringify({ expiresAt: expiresAt }),
+    }).then(function (result) {
+      if (result.status === 200) {
+        showToast('Expiry date updated.', 'success');
+        currentDetail = result.json;
+        renderDrawer(currentDetail);
+        loadLicenses();
+      } else {
+        showToast('Could not update the expiry date.', 'error');
+      }
+    }).catch(function (err) {
+      if (!(err instanceof ApiError && err.kind === 'unauthorized')) {
+        showToast('Could not update the expiry date.', 'error');
+      }
+    });
+  }
+
+  function saveContact(key) {
+    var contactName = document.getElementById('contact-name-input').value.trim();
+    var contactEmail = document.getElementById('contact-email-input').value.trim();
+    apiFetch('/admin/licenses/' + encodeURIComponent(key), {
+      method: 'PATCH',
+      body: JSON.stringify({ contactName: contactName, contactEmail: contactEmail }),
+    }).then(function (result) {
+      if (result.status === 200) {
+        showToast('Contact details updated.', 'success');
+        currentDetail = result.json;
+        renderDrawer(currentDetail);
+        loadLicenses();
+      } else {
+        showToast('Could not update contact details.', 'error');
+      }
+    }).catch(function (err) {
+      if (!(err instanceof ApiError && err.kind === 'unauthorized')) {
+        showToast('Could not update contact details.', 'error');
+      }
+    });
+  }
+
+  function saveNotes(key) {
+    var notes = document.getElementById('notes-input').value.trim();
+    apiFetch('/admin/licenses/' + encodeURIComponent(key), {
+      method: 'PATCH',
+      body: JSON.stringify({ notes: notes }),
+    }).then(function (result) {
+      if (result.status === 200) {
+        showToast('Notes updated.', 'success');
+        currentDetail = result.json;
+        renderDrawer(currentDetail);
+      } else {
+        showToast('Could not update notes.', 'error');
+      }
+    }).catch(function (err) {
+      if (!(err instanceof ApiError && err.kind === 'unauthorized')) {
+        showToast('Could not update notes.', 'error');
+      }
+    });
+  }
+
+  function freeSeat(key, machineId) {
+    apiFetch('/deactivate', {
+      method: 'POST',
+      body: JSON.stringify({ licenseKey: key, machineId: machineId }),
+    }).then(function (result) {
+      if (result.status === 200 && result.json && result.json.ok) {
+        showToast('Seat freed.', 'success');
+        refreshDetailIfOpen();
+        loadLicenses();
+      } else {
+        showToast('Could not free that seat.', 'error');
+      }
+    }).catch(function (err) {
+      if (!(err instanceof ApiError && err.kind === 'unauthorized')) {
+        showToast('Could not free that seat.', 'error');
+      }
+    });
+  }
+
+  // ---------- new license modal ----------
+
+  function openNewLicenseModal() {
+    nlCompany.value = '';
+    nlSeats.value = '5';
+    nlExpiry.value = '';
+    nlContactName.value = '';
+    nlContactEmail.value = '';
+    nlNotes.value = '';
+    nlError.classList.add('hidden');
+    nlFormView.classList.remove('hidden');
+    nlSuccessView.classList.add('hidden');
+    modalOverlay.classList.remove('closed');
+    newLicenseModal.classList.remove('closed');
+    setTimeout(function () { nlCompany.focus(); }, 0);
+  }
+
+  function closeNewLicenseModal() {
+    modalOverlay.classList.add('closed');
+    newLicenseModal.classList.add('closed');
+  }
+
+  function submitNewLicense() {
+    var companyName = nlCompany.value.trim();
+    var seatCap = parseInt(nlSeats.value, 10);
+    var expiryRaw = nlExpiry.value;
+
+    if (!companyName) {
+      nlError.textContent = 'Company name is required.';
+      nlError.classList.remove('hidden');
+      return;
+    }
+    if (!Number.isInteger(seatCap) || seatCap < 1) {
+      nlError.textContent = 'Seat cap must be a whole number of 1 or more.';
+      nlError.classList.remove('hidden');
+      return;
+    }
+    var expiresAt = expiryRaw ? new Date(expiryRaw + 'T00:00:00Z').getTime() : null;
+    var contactName = nlContactName.value.trim();
+    var contactEmail = nlContactEmail.value.trim();
+    var notes = nlNotes.value.trim();
+
+    nlError.classList.add('hidden');
+    nlCreateBtn.disabled = true;
+    apiFetch('/admin/licenses', {
+      method: 'POST',
+      body: JSON.stringify({
+        companyName: companyName,
+        seatCap: seatCap,
+        expiresAt: expiresAt,
+        contactName: contactName,
+        contactEmail: contactEmail,
+        notes: notes,
+      }),
+    }).then(function (result) {
+      if (result.status === 201) {
+        nlKeyDisplay.textContent = result.json.licenseKey;
+        nlFormView.classList.add('hidden');
+        nlSuccessView.classList.remove('hidden');
+        loadLicenses();
+      } else {
+        nlError.textContent = 'Could not create the license. Check the fields and try again.';
+        nlError.classList.remove('hidden');
+      }
+    }).catch(function (err) {
+      if (!(err instanceof ApiError && err.kind === 'unauthorized')) {
+        nlError.textContent = 'Could not reach the server. Try again.';
+        nlError.classList.remove('hidden');
+      }
+    }).finally(function () {
+      nlCreateBtn.disabled = false;
+    });
+  }
+
+  // ---------- confirm modal ----------
+
+  function openConfirm(title, message, onConfirm) {
+    confirmTitle.textContent = title;
+    confirmMessage.textContent = message;
+    pendingConfirmAction = onConfirm;
+    modalOverlay.classList.remove('closed');
+    confirmModal.classList.remove('closed');
+  }
+
+  function closeConfirm() {
+    modalOverlay.classList.add('closed');
+    confirmModal.classList.add('closed');
+    pendingConfirmAction = null;
+  }
+
+  confirmOkBtn.addEventListener('click', function () {
+    var action = pendingConfirmAction;
+    closeConfirm();
+    if (action) action();
+  });
+  confirmCancelBtn.addEventListener('click', closeConfirm);
+
+  // ---------- wiring ----------
+
+  gateConnectBtn.addEventListener('click', attemptConnect);
+  gateTokenInput.addEventListener('keydown', function (e) {
+    if (e.key === 'Enter') attemptConnect();
+  });
+
+  btnSignOut.addEventListener('click', signOut);
+  btnRefresh.addEventListener('click', function () {
+    if (currentView === 'audit') loadAudit();
+    else loadLicenses();
+  });
+  btnExportCsv.addEventListener('click', exportCsv);
+  btnNewLicense.addEventListener('click', openNewLicenseModal);
+  emptyNewLicenseBtn.addEventListener('click', openNewLicenseModal);
+
+  nlCancelBtn.addEventListener('click', closeNewLicenseModal);
+  nlCreateBtn.addEventListener('click', submitNewLicense);
+  nlDoneBtn.addEventListener('click', closeNewLicenseModal);
+  nlCopyBtn.addEventListener('click', function () { copyToClipboard(nlKeyDisplay.textContent, nlCopyBtn); });
+
+  drawerOverlay.addEventListener('click', closeDrawer);
+  modalOverlay.addEventListener('click', function () {
+    if (!confirmModal.classList.contains('closed')) closeConfirm();
+    else if (!newLicenseModal.classList.contains('closed')) closeNewLicenseModal();
+  });
+
+  document.addEventListener('keydown', function (e) {
+    if (e.key !== 'Escape') return;
+    if (!confirmModal.classList.contains('closed')) closeConfirm();
+    else if (!newLicenseModal.classList.contains('closed')) closeNewLicenseModal();
+    else if (!detailDrawer.classList.contains('closed')) closeDrawer();
+  });
+
+  // ---------- init ----------
+
+  if (token) {
+    showDashboard();
+    loadLicenses().catch(function () { /* handled via apiFetch already */ });
+  } else {
+    showGate();
+  }
+})();
+</script>
+</body>
+</html>

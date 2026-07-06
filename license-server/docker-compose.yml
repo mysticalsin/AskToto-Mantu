@@ -1,0 +1,23 @@
+# One-command deployment on any Docker host - a Raspberry Pi, a spare PC, a VPS:
+#
+#   LICENSE_ADMIN_TOKEN=$(openssl rand -hex 24) docker compose up -d --build
+#
+# (or put LICENSE_ADMIN_TOKEN in a .env file next to this - .env is gitignored.)
+# The node:22-alpine base is multi-arch, so the same build works on arm64 (Pi 4/5),
+# armv7, and x86 without changes. License data lives on the named volume below and
+# survives rebuilds and updates; the dashboard is at http://<host>:8420/admin/ui.
+services:
+  license-server:
+    build: .
+    container_name: asktoto-license
+    restart: unless-stopped
+    ports:
+      - '8420:8420'
+    environment:
+      PORT: '8420'
+      LICENSE_ADMIN_TOKEN: ${LICENSE_ADMIN_TOKEN:?set LICENSE_ADMIN_TOKEN (e.g. openssl rand -hex 24)}
+    volumes:
+      - license_data:/app/data
+
+volumes:
+  license_data:

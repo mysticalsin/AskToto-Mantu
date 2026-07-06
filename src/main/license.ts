@@ -2,9 +2,10 @@
  * Phone-home license activation against a self-hosted license server (server side lives in
  * license-server/, built separately — this file only ever speaks its fixed JSON contract).
  *
- * Nothing here is wired into a startup gate yet. checkLicenseGrace() exists and is fully tested, but is
- * called from nowhere except its own test — a future task adds the actual app-launch enforcement once
- * activation has been verified end to end against a real deployed server.
+ * Wired into real enforcement: main/index.ts's license:gate IPC handler calls checkLicenseGrace() for
+ * the renderer's boot gate (App.tsx's <LicenseGate/>), and a 12h background interval re-validates via
+ * heartbeat() whenever licenseGateEnabled && licenseValid. All of it is a no-op — no network call, no
+ * blocking screen — while licenseGateEnabled is false (the shipped default).
  */
 import { app } from 'electron'
 import { randomUUID } from 'node:crypto'
@@ -137,8 +138,8 @@ export interface LicenseGraceResult {
   reason?: 'not_activated' | 'expired_grace'
 }
 
-/** Called once at app startup (only meaningful once a future gate actually enforces its result — see the
- *  file header). Offline-first: a valid, recently-checked license never touches the network. */
+/** Called by the license:gate IPC handler (main/index.ts), which backs the renderer's boot gate
+ *  (App.tsx's <LicenseGate/>). Offline-first: a valid, recently-checked license never touches the network. */
 export function checkLicenseGrace(): LicenseGraceResult {
   const s = getSettings()
   if (!s.licenseGateEnabled) return { allowed: true }

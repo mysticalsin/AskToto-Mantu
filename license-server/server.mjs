@@ -2,6 +2,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createApp } from './lib/app.mjs';
 import { createStore } from './lib/store.mjs';
+import { createAuditLog } from './lib/audit.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -11,8 +12,9 @@ const DB_PATH = process.env.LICENSE_DB_PATH || path.join(__dirname, 'data', 'lic
 async function main() {
   const store = createStore(DB_PATH);
   await store.load();
+  const auditLog = createAuditLog(DB_PATH);
 
-  const app = createApp(store);
+  const app = createApp(store, auditLog);
 
   const httpServer = app.listen(PORT, () => {
     console.log(`[license-server] listening on port ${PORT}`);
@@ -31,6 +33,7 @@ async function main() {
     console.log(`[license-server] received ${signal}, shutting down...`);
     httpServer.close(async () => {
       await store.idle();
+      await auditLog.idle();
       process.exit(0);
     });
   }
