@@ -195,6 +195,50 @@ describe('license-server', () => {
     assert.deepEqual(heartbeat.json, { ok: false, error: 'revoked' });
   });
 
+  it('export returns the exact store, and restore replaces it (with a snapshot + audit) after validating', async () => {
+    seedLicense({ seatCap: 2, activations: [{ machineId: 'm1', machineName: 'x', activatedAt: 1, lastSeenAt: 1 }] });
+
+    const unauthorizedExport = await get('/admin/export');
+    assert.equal(unauthorizedExport.status, 401);
+
+    const exported = await get('/admin/export', adminHeaders());
+    assert.equal(exported.status, 200);
+    assert.equal(exported.json.licenses.length, 1);
+    assert.equal(exported.json.licenses[0].activations.length, 1);
+
+    // Restore a DIFFERENT dataset (two fresh licenses) and confirm it fully replaces the old one.
+    const replacement = [
+      { licenseKey: 'ATK-RESTORE-A', companyName: 'Restored A', seatCap: 5, createdAt: 1, expiresAt: null, revoked: false, activations: [] },
+      { licenseKey: 'ATK-RESTORE-B', companyName: 'Restored B', seatCap: 3, createdAt: 1, expiresAt: null, revoked: false, activations: [] },
+    ];
+    const restored = await post('/admin/restore', { licenses: replacement }, adminHeaders());
+    assert.equal(restored.status, 200);
+    assert.equal(restored.json.ok, true);
+    assert.equal(restored.json.restoredCount, 2);
+
+    const after = await get('/admin/export', adminHeaders());
+    assert.equal(after.json.licenses.length, 2);
+    const gone = await get('/admin/licenses/ATK-0000000000000000TEST', adminHeaders());
+    assert.equal(gone.status, 404); // the original was replaced, not merged
+
+    const auditRestore = (await get('/admin/audit', adminHeaders())).json.find((e) => e.action === 'restore');
+    assert.ok(auditRestore, 'restore is audited');
+    assert.equal(auditRestore.details.restoredCount, 2);
+  });
+
+  it('restore rejects a malformed payload without mutating the store', async () => {
+    seedLicense({ seatCap: 2 });
+    const unauthorized = await post('/admin/restore', { licenses: [] });
+    assert.equal(unauthorized.status, 401);
+
+    // A license record missing its key is invalid -> 400, store untouched.
+    const bad = await post('/admin/restore', { licenses: [{ companyName: 'No Key', seatCap: 1, activations: [] }] }, adminHeaders());
+    assert.equal(bad.status, 400);
+    const still = await get('/admin/export', adminHeaders());
+    assert.equal(still.json.licenses.length, 1);
+    assert.equal(still.json.licenses[0].licenseKey, 'ATK-0000000000000000TEST');
+  });
+
   it('delete permanently removes a license, audits a snapshot, and requires the admin token', async () => {
     seedLicense({ seatCap: 2 });
 
