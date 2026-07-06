@@ -840,9 +840,13 @@ export function RecallView({
       if (onOpenMeeting) {
         const result = onOpenMeeting(f)
         if (result instanceof Promise) {
-          void result.then((err) => {
-            if (err) setRowError({ file: f, message: err })
-          })
+          void result
+            .then((err) => {
+              if (err) setRowError({ file: f, message: err })
+            })
+            .catch((e) =>
+              setRowError({ file: f, message: e instanceof Error ? e.message : 'Could not open this meeting.' })
+            )
         }
       } else {
         void window.toto.recallOpen(f)
@@ -920,9 +924,11 @@ export function RecallView({
             ? 'Import audio'
             : importState.stage === 'decoding'
               ? 'Decoding…'
-              : importState.stage === 'transcribing'
-                ? `Transcribing ${importState.pct}%`
-                : 'Saving…'}
+              : importState.stage === 'downloading'
+                ? `Downloading model ${importState.pct}%`
+                : importState.stage === 'transcribing'
+                  ? `Transcribing ${importState.pct}%`
+                  : 'Saving…'}
         </TextButton>
       </div>
       {importState.error && (

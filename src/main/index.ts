@@ -167,6 +167,10 @@ let tray: Tray | null = null
 let audioArmed = false // loopback capture only granted during an explicit user-initiated Listen
 let lastBarHeight = BAR_HEIGHT // remember the bar's content height to restore on settings exit
 let currentWidth = BAR_WIDTH // window width; narrows to PILL_WIDTH while collapsed to the control mini-pill
+// True while collapsed to the control mini-pill. Guards lastBarHeight below: the pill's own (much shorter)
+// content height must never overwrite the remembered full-bar height, or expanding back out would apply
+// the tiny pill height first and squish/flash before the renderer's next resize report corrects it.
+let isMinimized = false
 const streams = new Map<string, { abort: () => void }>()
 
 /** Security: every privileged IPC handler must come from the main window's top frame.
@@ -304,12 +308,16 @@ function createWindow(): void {
   win.setContentProtection(contentProtectionOn())
   win.setHiddenInMissionControl?.(true)
 
+  // Capture THIS window instance so a late 'closed' from a crashed/replaced window can't null out a
+  // freshly-recreated one (render-process-gone recovery reassigns `win` before the old one's 'closed'
+  // may fire). Only clear the module ref when it still points at the window that closed.
+  const self = win
   win.on('closed', () => {
     // Abort any in-flight LLM streams so their callbacks don't fire against a destroyed window.
     streams.forEach((s) => s.abort())
     streams.clear()
     abandonImportSession() // the renderer that owned this session is gone — free its accumulated lines
-    win = null
+    if (win === self) win = null
   })
 
   // Security: never let model-output links navigate the trusted renderer or open child windows
@@ -321,16 +329,23 @@ function createWindow(): void {
   win.webContents.on('will-navigate', (e, url) => {
     if (url !== win?.webContents.getURL()) e.preventDefault()
   })
-  // Debug aid (opt-in via ASKTOTO_DEBUG_RENDERER): mirror renderer warnings/errors into the main-process
-  // log so a crash-to-error-boundary can be diagnosed without opening the renderer devtools.
+  // Debug aid (opt-in via ASKTOTO_DEBUG_RENDERER): mirror renderer console warnings/errors into the
+  // main-process log so a crash-to-error-boundary can be diagnosed without opening the renderer devtools.
   if (process.env.ASKTOTO_DEBUG_RENDERER) {
     win.webContents.on('console-message', (_e, level, message, line, sourceId) => {
       if (level >= 2) console.log(`[renderer] ${message}  (${sourceId}:${line})`)
     })
-    win.webContents.on('render-process-gone', (_e, details) => {
-      console.log(`[renderer-gone] reason=${details.reason} exitCode=${details.exitCode}`)
-    })
   }
+  // A crashed/OOM-killed renderer otherwise leaves `win` pointing at a dead BrowserWindow forever — every
+  // hotkey/IPC path guarded by `if (!win) return` would then silently no-op for the rest of the process
+  // lifetime. Self-heal the same way boot recovery does (see ensureWindow): log + audit, drop the stale
+  // reference, and recreate immediately. Registered unconditionally — NOT gated behind ASKTOTO_DEBUG_RENDERER.
+  win.webContents.on('render-process-gone', (_e, details) => {
+    mainLog.error(`[renderer-gone] reason=${details.reason} exitCode=${details.exitCode}`)
+    auditLog('app.crash', { kind: 'render_gone', reason: details.reason })
+    win = null
+    ensureWindow()
+  })
   // Dev-only: screenshot ONLY this window (no desktop) for verification. Privacy-safe.
   if (process.env.ASKTOTO_SHOT) {
     win.webContents.once('did-finish-load', () => {
@@ -367,7 +382,8 @@ function createWindow(): void {
  *  lifetime. Callers that previously did `if (!win) return` should call this instead. A repeated
  *  failure is logged and swallowed — it just leaves win null again, same as the original no-op. */
 function ensureWindow(): BrowserWindow | null {
-  if (win) return win
+  if (win && !win.isDestroyed()) return win
+  win = null // a destroyed-but-non-null win is just as dead as null — treat it the same before recreating
   try {
     createWindow()
   } catch (e) {
@@ -386,10 +402,12 @@ function resizeTo(height: number): void {
   const h = Math.max(BAR_MIN_HEIGHT, Math.min(Math.round(height), workArea.height - 48))
   const b = win.getBounds()
   if (h === b.height && currentWidth === b.width) {
-    lastBarHeight = h
+    // Only remember this height for restore-on-expand when it's the real bar, not the mini-pill's
+    // much shorter content — see isMinimized comment above.
+    if (!isMinimized) lastBarHeight = h
     return // idempotent — skip a no-op setBounds (belt-and-braces with the renderer-side resize dedup)
   }
-  lastBarHeight = h
+  if (!isMinimized) lastBarHeight = h
   // Keep the panel fully on-screen; if it would grow below the work area, slide it up.
   const maxY = workArea.y + workArea.height - h - 8
   const y = Math.min(b.y, maxY)
@@ -403,6 +421,9 @@ function resizeTo(height: number): void {
 /** Collapse to / expand from the control mini-pill by switching the window width; the renderer's
  *  auto-resize then settles the height to whichever surface is shown. */
 function setMinimizedWidth(narrow: boolean): void {
+  // Flip BEFORE resizeTo so the pill's own resize reports (while narrow) never clobber lastBarHeight,
+  // and so expanding restores the last real bar height instead of the pill's tiny one.
+  isMinimized = narrow
   currentWidth = narrow ? PILL_WIDTH : BAR_WIDTH
   resizeTo(lastBarHeight) // re-apply immediately so width + recenter land before the renderer re-measures
 }
@@ -1556,7 +1577,7 @@ function registerIpc(): void {
             ? `No ${tier === 'think' ? 'thinking' : 'base'} Dust agent set. Open Settings → Connect Dust and pick your agents.`
             : `No model set for ${def.label}. Pick a model in Settings.`
           : req.mode === 'vision' && !def.vision
-            ? `${def.label} can't read screenshots. Switch to Claude or GPT in Settings, or ask without a screen capture.`
+            ? `${def.label} can't read screenshots. Switch to a vision-capable provider like Claude, GPT, Gemini, Kimi, or OpenRouter in Settings, or ask without a screen capture.`
             : provider === 'dust' && !s.dustWorkspaceId
               ? 'Add your Dust workspace ID in Settings → AI → Dust setup.'
               : ''

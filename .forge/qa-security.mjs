@@ -46,6 +46,13 @@ const out = await win.evaluate(async () => {
     const s = await window.toto.getSettings()
     r.settingsGet = { hasProfile: !!s.profile, resume: s.profile?.resume ?? '(none)', notes: s.profile?.notes ?? '(none)' }
   } catch (e) { r.settingsGet = { error: String(e).slice(0, 120) } }
+  // pickFolder must reject pre-auth (returns cancelled BEFORE opening a native dialog)
+  try {
+    const before = (await window.toto.getSettings())?.meetingsFolder
+    const pf = await window.toto.pickFolder()
+    const after = (await window.toto.getSettings())?.meetingsFolder
+    r.pickFolder = { cancelled: pf?.cancelled === true, folderUnchanged: before === after }
+  } catch (e) { r.pickFolder = { error: String(e).slice(0, 120) } }
   return r
 })
 console.log(JSON.stringify(out, null, 2))
@@ -55,6 +62,7 @@ rec('setApiKey-rejected', out.setApiKey?.wrote !== true, `wrote=${out.setApiKey?
 rec('testApiKey-rejected', out.testApiKey?.ok === false, `ok=${out.testApiKey?.ok} error=${out.testApiKey?.error || ''}`)
 rec('settingsSet-not-persisted', out.settingsSet?.persisted !== true, `persisted=${out.settingsSet?.persisted} value=${out.settingsSet?.customBaseUrl}`)
 rec('settingsGet-pii-redacted', (out.settingsGet?.resume === '' || out.settingsGet?.resume === '(none)'), `resume=${JSON.stringify(out.settingsGet?.resume)}`)
+rec('pickFolder-rejected', out.pickFolder?.cancelled === true && out.pickFolder?.folderUnchanged !== false, `cancelled=${out.pickFolder?.cancelled} folderUnchanged=${out.pickFolder?.folderUnchanged}`)
 
 await app.close()
 try { rmSync(UDD, { recursive: true, force: true }) } catch {}
