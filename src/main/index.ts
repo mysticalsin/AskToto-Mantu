@@ -291,9 +291,11 @@ const BAR_HEIGHT = 84 // initial idle height of the slimmer two-row widget; useA
 const BAR_MIN_HEIGHT = 44 // floor for the resize clamp so the collapsed control mini-pill can shrink fully
 const PILL_WIDTH = 220 // narrow width for the collapsed control mini-pill (so it isn't a wide click-trap)
 
-/** Content protection hides the window from screen capture. Disable via env for dev/screenshots. */
+/** Content protection hides the window from screen capture. Disable via env for dev/screenshots ONLY —
+ *  gated to unpackaged builds so a packaged process can never have capture protection stripped by
+ *  `setx ASKTOTO_DISABLE_CP 1` + relaunch (mirrors the safeStorage backend gate in secrets.ts). */
 function contentProtectionOn(): boolean {
-  if (process.env.ASKTOTO_DISABLE_CP) return false
+  if (!app.isPackaged && process.env.ASKTOTO_DISABLE_CP) return false
   return getSettings().contentProtection
 }
 
@@ -770,6 +772,10 @@ function publicSettings(): PublicSettings {
   return {
     ...s,
     hasApiKey: hasApiKey(s.provider),
+    // Reflect the value actually applied to the window, not the raw stored setting — otherwise a dev
+    // process running with ASKTOTO_DISABLE_CP would show "Content protection: On" in Settings while
+    // capture protection is really off.
+    contentProtection: contentProtectionOn(),
     providerReady,
     // gates screen-ask so shots never hit a non-vision model — ORs localVisionReady so a local-only setup
     // (no cloud provider configured at all) still counts as vision-ready.
@@ -820,6 +826,14 @@ function topCenter(width: number, height: number): { x: number; y: number } {
 }
 
 function createWindow(): void {
+  // Crash/recovery guard: render-process-gone recovery and the boot-retry path both rebuild the window
+  // from scratch, but isMinimized/currentWidth are module-level state that otherwise survives from before
+  // the crash. If the overlay had been collapsed to the mini-pill (currentWidth === PILL_WIDTH) at the
+  // moment it died, the freshly-recreated full-size window's mount effect calls setWindowMode() ->
+  // setBounds({ width: currentWidth }), squeezing the recovered Bar down to the 220px pill width — with
+  // resizable:false blocking any manual fix. Reset both so a recovered window always starts full-size.
+  isMinimized = false
+  currentWidth = BAR_WIDTH
   // Fresh-install onboarding is a ~640px panel, not the 84px bar. The renderer's content-driven auto-resize
   // can be starved by the macOS compositor on a just-created transparent, always-on-top overlay (rAF/timers
   // frozen for a beat after first paint), which would otherwise leave onboarding clipped to bar height with
@@ -863,6 +877,7 @@ function createWindow(): void {
     }
   })
 
+  try {
   win.setAlwaysOnTop(true, 'screen-saver')
   // setVisibleOnAllWorkspaces is a documented no-op on Windows (Electron: "This API does nothing on
   // Windows") — gate the call so it isn't dead code there. Windows has no public API for pinning a
@@ -882,6 +897,21 @@ function createWindow(): void {
     overlay.on('show', reassertSkipTaskbar)
     overlay.on('restore', reassertSkipTaskbar)
     overlay.on('focus', reassertSkipTaskbar)
+  }
+  } catch (e) {
+    // A throw here (rare GPU/compositor-specific native call failure) previously left `win` pointing at a
+    // half-configured, never-loaded BrowserWindow that ensureWindow() would treat as healthy forever — it
+    // only checks `win && !win.isDestroyed()`, with no load-state check. Destroy the partial window and
+    // null the module ref before rethrowing so the caller (the boot runStep's catch, or ensureWindow's own
+    // try/catch on recovery) can cleanly recreate on its next attempt instead of reusing a broken window.
+    mainLog.error('[createWindow] post-construction setup failed, discarding partial window:', e)
+    try {
+      win?.destroy()
+    } catch {
+      /* already gone */
+    }
+    win = null
+    throw e
   }
 
   // Capture THIS window instance so a late 'closed' from a crashed/replaced window can't null out a
@@ -910,7 +940,9 @@ function createWindow(): void {
   // main-process log so a crash-to-error-boundary can be diagnosed without opening the renderer devtools.
   if (process.env.ASKTOTO_DEBUG_RENDERER) {
     win.webContents.on('console-message', (_e, level, message, line, sourceId) => {
-      if (level >= 2) console.log(`[renderer] ${message}  (${sourceId}:${line})`)
+      // console.* is a no-op in a packaged GUI build with no console — route to the real sink so this
+      // debug mirror actually produces diagnosable output.
+      if (level >= 2) mainLog.info(`[renderer] ${message}  (${sourceId}:${line})`)
     })
   }
   // The BrowserWindow survives a renderer crash (GPU/compositor crash, OOM in the in-renderer ASR
@@ -1355,11 +1387,18 @@ function registerScreenListeners(): void {
 }
 
 function toggleVisible(): void {
-  if (!win) return
-  if (win.isVisible()) win.hide()
+  // ensureWindow() silently CREATES a new window when `win` is null/destroyed (e.g. after a boot-time
+  // createWindow() failure) — and a freshly created window starts visible. Without this check, the
+  // isVisible() branch below would immediately re-hide the just-recovered window, so the first Ctrl+\
+  // after such a failure looked like a no-op and the user had to press it twice.
+  const hadNoWindow = !win || win.isDestroyed()
+  const w = ensureWindow()
+  if (!w) return
+  if (!hadNoWindow && w.isVisible()) w.hide()
   else {
-    win.show()
-    win.webContents.send(IPC.hotkey, 'ask')
+    w.show()
+    w.focus()
+    w.webContents.send(IPC.hotkey, 'ask')
   }
 }
 
@@ -1646,6 +1685,20 @@ function managedEffectsSnapshot(): string {
   const s = getSettings()
   return JSON.stringify({ contentProtection: s.contentProtection, shortcuts: s.shortcuts })
 }
+
+/** Best-effort, idempotent cleanup: delete any lingering CLEARTEXT knowledge-graph artifacts whenever
+ *  at-rest encryption is effectively ON. Exists because a managed-config/admin `encryptTranscripts:true`
+ *  never goes through settingsSet (it's picked up live by getSettings()'s mtime cache, and a locked key
+ *  is dropped from every settingsSet patch besides), so the settingsSet-time purge below never fires for
+ *  it — graph.json/graph.html would otherwise linger forever, undeletable in-app, defeating the org
+ *  encryption guarantee. Safe to call on every settingsGet poll and at boot: graphHtml() is a single
+ *  existsSync, and purgeGraphArtifacts() itself no-ops once the files are gone. */
+function purgeGraphIfEncryptedAndStale(reason: string): void {
+  if (getSettings().encryptTranscripts && graphHtml()) {
+    purgeGraphArtifacts()
+    auditLog('graph.purged', { reason })
+  }
+}
 let lastAppliedManagedSnapshot: string | null = null
 
 function registerIpc(): void {
@@ -1666,6 +1719,9 @@ function registerIpc(): void {
       rebuildTrayMenu()
     }
     lastAppliedManagedSnapshot = managedSnap
+    // Close the managed-config gap described above — runs on every poll, not just on detected drift,
+    // so it also catches encryption enabled at boot with a stale plaintext graph already on disk.
+    purgeGraphIfEncryptedAndStale('encryption-active')
     // Auth is enforced and this caller isn't signed in: don't hard-fail (the renderer needs settings to
     // render the SignInWall itself), but redact PII an unauthenticated renderer/DevTools caller has no
     // business reading — the resume/job-description/notes profile fields and any imported per-mode
@@ -3594,9 +3650,26 @@ if (!app.requestSingleInstanceLock()) {
   runRetentionSweep()
   setInterval(runRetentionSweep, 6 * 60 * 60 * 1000)
   if (process.platform === 'darwin') app.dock?.hide()
+
+  // Boot each subsystem in its own try/catch so a failure in one can't silently abort the rest. Defined
+  // here (ahead of its call sites) so the display-media/permission/asr-model registrations immediately
+  // below — previously registered unguarded — run inside it too: a throw during any of those must not
+  // take out createTray/registerShortcuts/createWindow further down the boot sequence.
+  const runStep = (name: string, fn: () => void): void => {
+    try {
+      fn()
+    } catch (e) {
+      // console.error is a no-op in a packaged GUI build with no console — route to the real sinks so a
+      // boot-step failure is actually diagnosable and shows up in the audit trail.
+      mainLog.error(`[boot] ${name} failed:`, e)
+      auditLog('app.crash', { kind: 'boot_step', step: name })
+    }
+  }
+
   // System-audio loopback: when the renderer calls getDisplayMedia for audio,
   // hand back the system audio loopback device (the "Them" channel) only.
   // Screenshot capture uses desktopCapturer directly, so no video track is ever returned here.
+  runStep('setDisplayMediaHandler', () => {
   session.defaultSession.setDisplayMediaRequestHandler(
     async (request, callback) => {
       // Electron validates the callback argument against the request: denying a request that asked for
@@ -3706,25 +3779,28 @@ if (!app.requestSingleInstanceLock()) {
       const screenSrc = sources[0]
       callback(screenSrc ? { video: screenSrc, audio: 'loopback' } : {})
   }
+  })
 
   // Deny every web permission by default; only the main window may use audio media (the Listen mic) or
   // write to the system clipboard (Copy Summary / Export JSON / copy-code buttons all need this — it's a
   // one-way, user-initiated write of text the app itself built, not a snooping vector). clipboard-READ
   // (reading arbitrary external clipboard content) stays denied along with geolocation, notifications,
   // camera, USB, MIDI, etc.
-  const allowPermission = (wc: Electron.WebContents | null, permission: string): boolean =>
-    (permission === 'media' || permission === 'clipboard-sanitized-write') && !!win && wc === win.webContents
-  session.defaultSession.setPermissionRequestHandler((wc, permission, callback) =>
-    callback(allowPermission(wc, permission))
-  )
-  session.defaultSession.setPermissionCheckHandler((wc, permission) => allowPermission(wc, permission))
+  runStep('permissionHandlers', () => {
+    const allowPermission = (wc: Electron.WebContents | null, permission: string): boolean =>
+      (permission === 'media' || permission === 'clipboard-sanitized-write') && !!win && wc === win.webContents
+    session.defaultSession.setPermissionRequestHandler((wc, permission, callback) =>
+      callback(allowPermission(wc, permission))
+    )
+    session.defaultSession.setPermissionCheckHandler((wc, permission) => allowPermission(wc, permission))
+  })
 
   // ─── asr-model:// protocol handler ───────────────────────────────────────
   // Maps asr-model://<host>/<pathname> → RES_BASE/<host>/<pathname> on disk.
   // This lets the Whisper worker (served over file://) use fetch() to load
   // bundled ONNX model weights and WASM blobs with zero network access.
   // Path-traversal guard: relative() must stay within RES_BASE (separator-safe on Windows).
-  {
+  runStep('asrModelProtocol', () => {
     const REPO_ROOT = join(__dirname, '..', '..')
     const RES_BASE = app.isPackaged
       ? process.resourcesPath
@@ -3806,19 +3882,13 @@ if (!app.requestSingleInstanceLock()) {
         return respond(null, { status: 500 })
       }
     })
-  }
+  })
 
-  // Boot each subsystem in its own try/catch so one failure can't abort the rest, and stand up the
-  // tray + global shortcuts BEFORE the window. If createWindow() ever throws (transparent / always-on-top
-  // windows can fail on some GPU/compositor configs), the user still keeps a Show/Quit path instead of a
-  // hidden, unkillable process — the dock is already hidden and the taskbar is skipped.
-  const runStep = (name: string, fn: () => void): void => {
-    try {
-      fn()
-    } catch (e) {
-      console.error(`[boot] ${name} failed:`, e)
-    }
-  }
+  // runStep is defined above (ahead of the display-media/permission/asr-model registrations so they can
+  // use it too). From here: stand up the tray + global shortcuts BEFORE the window. If createWindow() ever
+  // throws (transparent / always-on-top windows can fail on some GPU/compositor configs), the user still
+  // keeps a Show/Quit path instead of a hidden, unkillable process — the dock is already hidden and the
+  // taskbar is skipped.
   // Eagerly refresh the Dust CLI session at launch (Tony: "always stay connected") rather than waiting
   // for a request to 401 first. Reading the Dust CLI's keychain item from Métis — a different binary
   // than the `dust`/keytar process that created it — does trigger a one-time macOS "allow access" prompt;
@@ -3870,6 +3940,9 @@ if (!app.requestSingleInstanceLock()) {
     12 * 60 * 60 * 1000
   )
 
+  // Catch the case where encryption was already on (managed-config or a previous run) with a stale
+  // plaintext graph sitting on disk since before the first settingsGet poll from the renderer.
+  runStep('purgeGraphIfEncryptedAndStale', () => purgeGraphIfEncryptedAndStale('encryption-active-boot'))
   // createTray/registerShortcuts stay ahead of createWindow (see the boot-order comment above) — but
   // registerIpc has no such dependency: every ipcMain.handle closure inside it reads `win`/`tray` lazily
   // at INVOCATION time (assertMainWindow etc.), never at registration time, and the renderer can't issue
@@ -3913,7 +3986,13 @@ if (!app.requestSingleInstanceLock()) {
     if (!win) createWindow()
     else win.show()
   })
-  }).catch((e) => console.error('Métis startup failed:', e))
+  }).catch((e) => {
+    // console.error is a no-op in a packaged GUI build with no console — route to the real sinks (same
+    // redact-before-log discipline as onFatal) so a boot failure is actually diagnosable and audited.
+    const detail = e instanceof Error ? e.stack || e.message : String(e)
+    mainLog.error('[boot] Métis startup failed:', redactSecrets(detail))
+    auditLog('app.crash', { kind: 'boot', message: redactSecrets(e instanceof Error ? e.message : String(e)) })
+  })
 }
 
 app.on('window-all-closed', () => {

@@ -26,6 +26,7 @@ import { useWindowDrag } from './lib/window-drag'
 import { useListen, playListenChime } from './lib/listen'
 import { transcriptToText, recapPersistAction } from './lib/transcript'
 import { playCue, playClick, setSoundsEnabled } from './lib/sound'
+import { DEFAULT_SHORTCUTS } from '@shared/ipc'
 import type { HotkeyAction, TranscriptLine, ConversationMode, ChatTurn, LicenseGateVerdict } from '@shared/ipc'
 import { PROVIDERS, isDustReady } from '@shared/providers'
 import { ASSIST_PROMPT, buildNoDecisionPrompt } from '@shared/prompts'
@@ -132,6 +133,14 @@ export function App(): JSX.Element {
   const windowDrag = useWindowDrag(onWindowDragStart, { noTouch: true })
 
   const { settings, bootError: settingsBootError, patch, saveKey, recoverEncryptedProfile, clearKey, testKey, refresh } = useSettings()
+  // The live, user-rebindable Capture accelerator — Bar/Answer's tooltip must reflect an override or a
+  // clear, not the shipped default, so this resolves it the same way Settings' Shortcuts panel does
+  // (an explicit override, falling back to DEFAULT_SHORTCUTS) instead of a hardcoded literal. Declared
+  // this early (not just above the JSX return) because the answerBody useMemo below also reads it.
+  const captureAccel = settings?.shortcuts?.['capture'] ?? DEFAULT_SHORTCUTS.capture
+  // IT-managed lock on contentProtection (Settings gates the same toggle with this) — Bar's Private-view
+  // icon must go inert rather than silently no-op when clicked under a managed profile.
+  const stealthLocked = settings?.managedKeys?.includes('contentProtection') ?? false
   const auth = useAuth() // Azure AD gate (only enforces when configured)
   const bootError = settingsBootError ?? auth.bootError
 
@@ -942,6 +951,10 @@ export function App(): JSX.Element {
           history: historyRef.current,
           record: 'Help me with what is on my screen.'
         })
+        // askScreen no-ops (returns null) when a prior capture is still in flight — without this return,
+        // the unconditional setInput('') below would still fire and silently drop whatever the user just
+        // typed, with no feedback that the ask never went out.
+        return
       } else if (priorAnswerOk) {
         // Typed follow-up while an answer is already showing: stay fast — no new capture. The prior
         // turn's text already describes what was on screen, so the model reasons from that; an explicit
@@ -2218,9 +2231,10 @@ export function App(): JSX.Element {
         // never checked).
         onRetry={capturing || !ask.answer?.prompt ? undefined : retryAnswer}
         onGoDeeper={capturing ? undefined : goDeeper}
+        captureAccel={captureAccel}
       />
     )
-  }, [capturing, captureError, ask.answer, retryAnswer, goDeeper])
+  }, [capturing, captureError, ask.answer, retryAnswer, goDeeper, captureAccel])
   // Demo overrides (DEMO is a build/query-time constant, so these memos are inert in real sessions).
   const demoBody = useMemo(() => {
     if (DEMO === 'answer') return <Answer text={DEMO_ANSWER} streaming={false} error={null} />
@@ -2483,6 +2497,7 @@ export function App(): JSX.Element {
             onTogglePause={onTogglePause}
             onCapture={capture}
             capturing={capturing}
+            captureAccel={captureAccel}
             mode={mode}
             onSetMode={onSetMode}
             hasAnswer={hasAnswer}
@@ -2507,6 +2522,7 @@ export function App(): JSX.Element {
             onMinimize={onBarMinimize}
             stealth={settings?.contentProtection ?? true}
             onToggleStealth={onToggleStealth}
+            stealthLocked={stealthLocked}
             startedAt={meetingStartRef.current}
             panelOpen={panelOpen}
             onTogglePanel={onTogglePanel}
