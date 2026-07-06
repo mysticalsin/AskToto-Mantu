@@ -164,6 +164,15 @@ function contentProtectionOn(): boolean {
   return getSettings().contentProtection
 }
 
+// Private View — the user's "don't look at my screen" switch (bar eye button / Settings → Privacy).
+// Distinct from contentProtection above, which only hides the WINDOW from other apps' capture:
+// contentProtection defaults ON (the overlay should be invisible in screen-shares), so using it to
+// also gate our own capture killed screen-asks on every fresh install.
+function privateViewOn(): boolean {
+  if (process.env.ASKTOTO_DISABLE_CP) return false
+  return getSettings().privateView
+}
+
 let win: BrowserWindow | null = null
 let tray: Tray | null = null
 let audioArmed = false // loopback capture only granted during an explicit user-initiated Listen
@@ -541,7 +550,7 @@ async function getScreenshot(phase?: string): Promise<{ image: string; width: nu
   // (that's the separate, still-active setContentProtection() call on the BrowserWindow itself).
   // AUDIT the block: a run of user-invisible capture failures used to leave zero trace in the audit log,
   // which made "couldn't capture my screen" reports undiagnosable after the fact.
-  if (contentProtectionOn()) {
+  if (privateViewOn()) {
     auditLog('capture.blocked', { reason: 'private_view', ...(phase ? { phase } : {}) })
     throw new PrivateViewBlockedError()
   }
@@ -563,7 +572,7 @@ async function getScreenshot(phase?: string): Promise<{ image: string; width: nu
   // Re-check after the async capture: Private View could have been toggled ON while getSources()/resize
   // were in flight. Without this second check, a frame grabbed a moment before the toggle would still be
   // cached and sent to the model — breaking the Private View guarantee on a mid-capture toggle.
-  if (contentProtectionOn()) throw new PrivateViewBlockedError()
+  if (privateViewOn()) throw new PrivateViewBlockedError()
   const capturedAt = Date.now()
   shotCache = { ...shot, ts: capturedAt }
   auditLog('capture.screen', { width: shot.width, height: shot.height, bytes: shot.image.length, ...(phase ? { phase } : {}) })

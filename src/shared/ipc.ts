@@ -430,7 +430,14 @@ export const BaseSettingsSchema = z.object({
   // Fire a native notification 1 minute before each calendar meeting starts (gated; off by default).
   meetingNotifications: z.boolean().default(false),
   temperature: z.number().min(0).max(1),
+  // Hide the AskToto WINDOW from screen capture & sharing (other apps can't see the overlay).
+  // Purely about the window — it never blocks AskToto's own screen capture.
   contentProtection: z.boolean(),
+  // Private View: AskToto itself won't look at (or send) YOUR screen while this is on — gates the
+  // whole capture pipeline in main. Split from contentProtection on 2026-07-06: one flag carried both
+  // promises, and since contentProtection defaults ON, every fresh install had screen-asks dead on
+  // arrival ("Couldn't capture your screen") with nothing in the UI explaining why.
+  privateView: z.boolean(),
   audioSource: z.enum(['mic', 'system', 'both']),
   // Preferred microphone (MediaDevices deviceId). '' = follow the system default input. A specific id
   // (device mic, AirPods, iPhone, a Windows input) is used when present; if it has gone away, capture
@@ -614,6 +621,7 @@ export const DEFAULT_SETTINGS: Settings = {
   meetingNotifications: false,
   temperature: 0.4,
   contentProtection: true,
+  privateView: false,
   audioSource: 'both',
   micDeviceId: '',
   suggestEverySec: 15,
