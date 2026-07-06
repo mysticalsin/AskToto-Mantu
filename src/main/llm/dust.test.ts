@@ -185,3 +185,24 @@ describe('Dust conversation continuity (one conversation per meeting)', () => {
     expect(calls.create).toBe(2) // first attempt (threw) + second attempt (succeeded)
   })
 })
+
+describe('isDustAuthError — 401 phrasing drift across Dust API versions', async () => {
+  const { isDustAuthError } = await import('./dust')
+
+  it('recognizes every observed 401 wording so refresh-and-retry fires', () => {
+    expect(isDustAuthError({ type: 'expired_oauth_token_error' })).toBe(true)
+    expect(isDustAuthError({ message: 'The request does not have valid authentication credentials.' })).toBe(true)
+    // The wording that reached a user on 2026-07-06 (Spotlight Ref failure) — previously unmatched:
+    expect(isDustAuthError({ message: 'The user request does not have a valid authenticated credential.' })).toBe(true)
+    expect(isDustAuthError({ message: 'Unauthorized' })).toBe(true)
+    expect(isDustAuthError({ message: 'Invalid API token' })).toBe(true)
+    expect(isDustAuthError({ status: 401, message: 'anything' })).toBe(true)
+  })
+
+  it('does not classify ordinary failures as auth errors', () => {
+    expect(isDustAuthError(null)).toBe(false)
+    expect(isDustAuthError({ message: 'agent not found' })).toBe(false)
+    expect(isDustAuthError({ message: 'rate limited, retry later' })).toBe(false)
+    expect(isDustAuthError({ status: 500, message: 'internal error' })).toBe(false)
+  })
+})

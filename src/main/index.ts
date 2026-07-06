@@ -500,7 +500,20 @@ async function captureScreenshot(): Promise<{ image: string; width: number; heig
     })
   }
   const src = matched ?? sources[0]
-  if (!src) throw new Error('No screen source available (grant Screen Recording permission)')
+  if (!src) {
+    // Diagnose WHY before failing: a missing/revoked Screen Recording grant is by far the most common
+    // cause, and it needs a specific, actionable message (macOS also requires an app RESTART after
+    // granting — a fresh grant doesn't reach an already-running ScreenCaptureKit session).
+    const status = process.platform === 'darwin' ? systemPreferences.getMediaAccessStatus('screen') : 'granted'
+    if (status !== 'granted') {
+      throw new Error(
+        'Screen Recording permission is off for AskToto. Enable it in System Settings → Privacy & Security → Screen Recording, then quit and reopen AskToto.'
+      )
+    }
+    throw new Error(
+      'No screen source available. If you granted Screen Recording just now, quit and reopen AskToto — macOS only applies the permission to a fresh launch.'
+    )
+  }
   let img = src.thumbnail
   const sz = img.getSize()
   const maxEdge = Math.max(sz.width, sz.height)
@@ -526,13 +539,27 @@ async function getScreenshot(phase?: string): Promise<{ image: string; width: nu
   // Private View promises AskToto won't look at (or send) the screen while it's on — that has to mean
   // this app's own capture pipeline refuses to run, not just that OTHER apps can't screen-share our window
   // (that's the separate, still-active setContentProtection() call on the BrowserWindow itself).
-  if (contentProtectionOn()) throw new PrivateViewBlockedError()
+  // AUDIT the block: a run of user-invisible capture failures used to leave zero trace in the audit log,
+  // which made "couldn't capture my screen" reports undiagnosable after the fact.
+  if (contentProtectionOn()) {
+    auditLog('capture.blocked', { reason: 'private_view', ...(phase ? { phase } : {}) })
+    throw new PrivateViewBlockedError()
+  }
   const disp = screen.getDisplayNearestPoint(screen.getCursorScreenPoint())
   if (shotCache && Date.now() - shotCache.ts < CAPTURE_TTL_MS && shotCache.dispId === disp.id) {
     const { image, width, height, ts } = shotCache
     return { image, width, height, capturedAt: ts }
   }
-  const shot = await captureScreenshot()
+  let shot: Awaited<ReturnType<typeof captureScreenshot>>
+  try {
+    shot = await captureScreenshot()
+  } catch (e) {
+    auditLog('capture.failed', {
+      reason: e instanceof Error ? e.message : String(e),
+      ...(phase ? { phase } : {})
+    })
+    throw e
+  }
   // Re-check after the async capture: Private View could have been toggled ON while getSources()/resize
   // were in flight. Without this second check, a frame grabbed a moment before the toggle would still be
   // cached and sent to the model — breaking the Private View guarantee on a mid-capture toggle.

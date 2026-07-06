@@ -19,7 +19,23 @@ import { redactSecrets } from '@shared/redact'
  * `console` so any method the client calls still exists.
  */
 const DUST_BENIGN =
-  /expired_oauth_token|valid authentication credentials|is not valid json|failed parsing chunk|failed processing event stream|aborterror|operation was aborted/i
+  /expired_oauth_token|valid authenticat\w+ credentials?|is not valid json|failed parsing chunk|failed processing event stream|aborterror|operation was aborted/i
+
+// A Dust OAuth token that has expired surfaces as a 401 before any answer token — but the exact
+// wording drifts across Dust API versions: "expired_oauth_token_error", "…does not have valid
+// authentication credentials", and (current) "the user request does not have a valid authenticated
+// credential". Match the whole family ("authenticat…" + "credential" in either order, any suffixes)
+// so the refresh-and-retry self-heal actually fires instead of surfacing the raw 401 to the user.
+// Module-scope + exported so the phrasing coverage is pinned by tests.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function isDustAuthError(err: any): boolean {
+  if (!err) return false
+  const blob = `${err.type ?? ''} ${err.code ?? ''} ${err.message ?? err}`.toLowerCase()
+  return (
+    err.status === 401 ||
+    /oauth|unauthor|expired|invalid.*(token|credential)|authenticat\w*\s+credential|credential.*authenticat/.test(blob)
+  )
+}
 function dustLogger(): Console {
   const blobOf = (args: unknown[]): string =>
     args
@@ -130,14 +146,7 @@ export function streamDust(opts: StreamOptions): StreamHandle {
     wd?.clear()
     opts.handlers.onError(msg)
   }
-  // A Dust OAuth token that has expired surfaces as a 401 / expired_oauth_token_error before any
-  // answer token. Recognise it so we can refresh + retry exactly once instead of failing the ask.
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const isAuthErr = (err: any): boolean => {
-    if (!err) return false
-    const blob = `${err.type ?? ''} ${err.code ?? ''} ${err.message ?? err}`.toLowerCase()
-    return err.status === 401 || /oauth|unauthor|expired|invalid.*(token|credential)|authentication credential/.test(blob)
-  }
+  const isAuthErr = isDustAuthError
   wd = idleWatchdog(() => {
     fail('Timed out — no response from the agent.')
     controller.abort()

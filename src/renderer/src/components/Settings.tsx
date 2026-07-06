@@ -1688,9 +1688,12 @@ function DustSetup({
   // fails, so skip straight to the manual key steps instead of showing a dead-end button.
   const isWin = window.navigator.platform.toLowerCase().includes('win')
   const locked = settings.managedKeys.includes('provider')
-  // Base agent is user-editable (picker below, defaults to the AskToto agent, one-click reset).
-  // Spotlight Ref stays hard-locked (DUST_SPOTLIGHT_REF_AGENT_ID in ipc.ts) — read-only display.
-  // The base agent also drafts meeting follow-ups directly — there is no separate follow-up agent.
+  // Base agent is user-editable (picker below, defaults to the AskToto agent, one-click reset) —
+  // gated by the same 'providerModels' managed-key as the Advanced base-model field in AiSection, not
+  // by the CLI-connection lock above. Spotlight Ref stays hard-locked (DUST_SPOTLIGHT_REF_AGENT_ID in
+  // ipc.ts) — read-only display. The base agent also drafts meeting follow-ups directly — there is no
+  // separate follow-up agent.
+  const agentsLocked = settings.managedKeys.includes('providerModels')
   const agent = settings.providerModels['dust'] ?? ''
   const thinkAgent = settings.providerModelsThinking['dust'] ?? ''
   const spotlightAgent = settings.providerModelsSpotlightRef['dust'] ?? ''
@@ -1735,18 +1738,21 @@ function DustSetup({
     setKeySaving(false)
   }
   // Fully disconnect Dust: clear the saved token/key, drop the workspace + region + the (user-editable)
-  // thinking agent, switch off Dust if it's active, and reset the local CLI/agents UI so the card returns
-  // to its "connect" state. Used by the CLI card's Disconnect button only — the manual key's Remove uses
-  // the narrower removeDustKey below, which doesn't touch workspace/region/thinking agent.
+  // thinking agent, reset the (also user-editable) base agent back to the AskToto default, switch off
+  // Dust if it's active, and reset the local CLI/agents UI so the card returns to its "connect" state.
+  // Used by the CLI card's Disconnect button only — the manual key's Remove uses the narrower
+  // removeDustKey below, which doesn't touch workspace/region/base/thinking agent.
   const disconnectDust = async (): Promise<void> => {
     await clearKey('dust')
     const nextThinking = { ...settings.providerModelsThinking }
     delete nextThinking.dust
-    // Base + Spotlight Ref are left untouched: the base agent is now the user's own choice (worth
-    // preserving across a reconnect), and Spotlight Ref is a hard-locked app default.
+    // Base is now user-changeable, so disconnect restores it to the AskToto default rather than leaving
+    // a stale custom agent id pointing at a workspace you just disconnected from. Spotlight Ref is left
+    // untouched — it's a hard-locked app default, not user data.
     const next: Partial<PublicSettings> = {
       dustWorkspaceId: '',
       dustBaseUrl: 'https://dust.tt',
+      providerModels: { ...settings.providerModels, dust: DUST_BASE_AGENT_ID },
       providerModelsThinking: nextThinking
     }
     if (settings.provider === 'dust')
@@ -1802,10 +1808,12 @@ function DustSetup({
   const setThinkAgent = (sId: string): void =>
     patch({ providerModelsThinking: { ...settings.providerModelsThinking, dust: sId } })
 
-  // Empty commits fall back to the AskToto default — the base agent must never end up blank, because
-  // isDustReady() (and every task that cascades into Dust) requires providerModels.dust to be set.
+  // Commits directly on every change, same as setThinkAgent — the select never offers an empty option,
+  // and the text-input fallback's onBlur (below) catches a still-blank field and restores the default
+  // there instead of fighting the user's edit on every keystroke. The base agent must never persist
+  // blank: isDustReady() (and every task that cascades into Dust) requires providerModels.dust to be set.
   const setBaseAgent = (sId: string): void =>
-    patch({ providerModels: { ...settings.providerModels, dust: sId.trim() || DUST_BASE_AGENT_ID } })
+    patch({ providerModels: { ...settings.providerModels, dust: sId } })
 
   const regionBtn = (eu: boolean): string =>
     [
@@ -2008,21 +2016,27 @@ function DustSetup({
             </button>
           </div>
 
-          {/* Base agent — answers everything by default and drafts meeting follow-ups (no separate
-              follow-up agent). User-editable: a dropdown once the agents list loads (with the current
-              sId kept selectable even if it's not in the list), a bare sId input before that, and a
-              one-click reset back to the AskToto default whenever it's been changed. setBaseAgent
-              treats an empty commit as reset so Dust can never end up with a blank base agent. */}
+          {/* Base agent — answers everyday questions and drafts meeting follow-ups directly (no separate
+              follow-up agent). User-editable: a dropdown once the agents list loads (keeping the current
+              sId selectable even if it's not in the workspace), a bare sId input before that, and a
+              one-click reset back to the AskToto default whenever it's been changed. The select never
+              offers an empty option and the input restores the default on blur if left blank, so the
+              base agent can never persist empty. Locked by the same 'providerModels' managed-key as the
+              Advanced base-model field in AiSection above. */}
           <div className="flex flex-col gap-1">
             <span className="flex items-center justify-between text-[11px] font-medium text-[color:var(--cl-muted-foreground)]">
-              <span>Base agent · answers everything by default</span>
+              <span className="flex items-center gap-1.5">
+                Base agent · answers everyday questions &amp; drafts follow-ups
+                <ManagedChip keys={settings.managedKeys} k="providerModels" />
+              </span>
               {agent && agent !== DUST_BASE_AGENT_ID && (
                 <button
                   type="button"
                   onClick={() => setBaseAgent(DUST_BASE_AGENT_ID)}
-                  className="no-drag cl-focus rounded px-1 text-[11px] text-[color:var(--cl-primary)] hover:underline"
+                  disabled={agentsLocked}
+                  className="no-drag cl-focus rounded px-1 text-[11px] text-[color:var(--cl-primary)] hover:underline disabled:opacity-50"
                 >
-                  Reset to AskToto
+                  Reset to AskToto default
                 </button>
               )}
             </span>
@@ -2030,11 +2044,12 @@ function DustSetup({
               <select
                 value={agent}
                 onChange={(e) => setBaseAgent(e.target.value)}
-                className={'w-full ' + ctl}
+                disabled={agentsLocked}
+                className={['w-full', ctl, agentsLocked ? 'opacity-60' : ''].join(' ')}
                 aria-label="Base agent"
               >
                 {agent && !agents.some((a) => a.sId === agent) && (
-                  <option value={agent}>{agent} (current)</option>
+                  <option value={agent}>{agent} (not in your workspace)</option>
                 )}
                 {agents.map((a) => (
                   <option key={a.sId} value={a.sId}>
@@ -2047,9 +2062,13 @@ function DustSetup({
               <input
                 value={agent}
                 onChange={(e) => setBaseAgent(e.target.value)}
+                onBlur={(e) => {
+                  if (!e.target.value.trim()) setBaseAgent(DUST_BASE_AGENT_ID)
+                }}
+                disabled={agentsLocked}
                 placeholder="Base agent id (defaults to AskToto)"
                 aria-label="Base agent"
-                className={'w-full ' + ctl}
+                className={['w-full', ctl, agentsLocked ? 'opacity-60' : ''].join(' ')}
               />
             )}
           </div>

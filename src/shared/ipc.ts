@@ -580,7 +580,7 @@ export type SettingsPatch = Partial<
 // AskToto — an empty value always falls back here, and the picker offers a one-click reset. Spotlight
 // Ref stays hard-locked (read-only in Settings); rotating IT without a release: hand-edit
 // userData/managed-config.json with {"providerModelsSpotlightRef":{"dust":"NEW_ID"}}.
-export const DUST_BASE_AGENT_ID = 'vJxYHvTRBT' // Dust agent "AskToto" — the default base agent; also drafts meeting follow-ups (no separate follow-up agent)
+export const DUST_BASE_AGENT_ID = 'vJxYHvTRBT' // Dust agent "AskToto" — default base agent (user-changeable in Settings → AI → Dust); also drafts meeting follow-ups (no separate follow-up agent)
 export const DUST_SPOTLIGHT_REF_AGENT_ID = 'GOr913Zr5V' // Dust agent "Spotlight Ref"
 
 export const DEFAULT_SETTINGS: Settings = {

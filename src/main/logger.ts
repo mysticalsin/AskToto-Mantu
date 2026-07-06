@@ -49,6 +49,8 @@ export type AuditEvent =
   | 'key.removed'
   | 'capture.screen'
   | 'capture.display_mismatch'
+  | 'capture.blocked'
+  | 'capture.failed'
   | 'transcript.saved'
   | 'transcript.deleted'
   | 'transcript.renamed'
