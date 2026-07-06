@@ -2195,13 +2195,26 @@ if (!app.requestSingleInstanceLock()) {
       // starts when a screen video source is attached. We grant one here (gated above on armed +
       // main-frame + origin); the renderer drops the video track instantly, so no frame is rendered,
       // saved, or sent. This is the only way to capture the "them" side of a call on macOS.
-      let sources = await desktopCapturer.getSources({ types: ['screen'] })
-      // getSources can return empty transiently right after a fresh Screen-Recording grant. Retry with a
-      // short backoff (250ms, then 500ms) before giving up — matches captureScreenshot; a single fixed
-      // retry sometimes lost the loopback attach on the first meeting after granting permission.
-      for (let attempt = 0; !sources.length && attempt < 2; attempt++) {
-        await new Promise((r) => setTimeout(r, 250 * (attempt + 1)))
-        sources = await desktopCapturer.getSources({ types: ['screen'] })
+      //
+      // getSources can BOTH return empty transiently (fresh grant) AND reject outright with "Failed to
+      // get sources." (a ScreenCaptureKit hiccup, often right after a content-protection toggle). This
+      // callback is async, so a reject escapes as a fatal unhandledRejection and crashes the app on
+      // Listen start. Guard every path: retry on empty OR throw, then deny gracefully — a callback({})
+      // makes the renderer's getDisplayMedia reject with AbortError, which listen.ts already catches and
+      // surfaces as "couldn't capture system audio" instead of taking the whole app down.
+      let sources: Electron.DesktopCapturerSource[] = []
+      for (let attempt = 0; attempt < 3; attempt++) {
+        if (attempt > 0) await new Promise((r) => setTimeout(r, 250 * attempt))
+        try {
+          sources = await desktopCapturer.getSources({ types: ['screen'] })
+          if (sources.length) break
+        } catch (err) {
+          mainLog.warn(`[display-media] getSources failed (attempt ${attempt + 1}): ${err instanceof Error ? err.message : String(err)}`)
+          sources = []
+        }
+      }
+      if (!sources.length) {
+        auditLog('capture.failed', { reason: 'loopback_no_screen_source', phase: 'listen' })
       }
       const screenSrc = sources[0]
       callback(screenSrc ? { video: screenSrc, audio: 'loopback' } : {})
