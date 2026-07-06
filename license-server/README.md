@@ -54,7 +54,9 @@ Environment variables:
 ## Deploying
 
 The easiest turnkey path (your own server + a domain + automatic HTTPS) is in
-[`deploy/README.md`](deploy/README.md).
+[`deploy/README.md`](deploy/README.md). Hosting temporarily on a workstation
+and planning to move later? [`MIGRATION.md`](MIGRATION.md) is the complete
+take-it-with-you recipe (data export, secrets, re-import, repointing apps).
 
 This is a plain Node HTTP service — any of the following works. Pick
 whichever fits your existing infra; none of this is prescriptive. In all
@@ -388,6 +390,11 @@ attempt. With `LICENSE_WEBHOOK_SECRET` set, each delivery carries
 body — so your receiver can drop forgeries. Point the URL at a Slack/Teams
 relay, n8n, Zapier, or a 20-line endpoint of your own. The expiring-soon
 dedupe state is in-memory, so a server restart may repeat a reminder once.
+
+**Discord works out of the box:** a `https://discord.com/api/webhooks/...`
+URL is detected automatically and events are posted as Discord embeds
+(color-coded by event, company/seats/expiry fields, license key truncated —
+the full key is never posted to a chat channel).
 
 ## Monitoring with Prometheus
 
