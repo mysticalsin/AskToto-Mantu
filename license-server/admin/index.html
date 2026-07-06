@@ -1398,7 +1398,7 @@
   function saveExpiry(key) {
     var input = document.getElementById('expiry-input');
     var raw = input.value;
-    var expiresAt = raw ? new Date(raw + 'T00:00:00Z').getTime() : null;
+    var expiresAt = raw ? new Date(raw + 'T23:59:59.999Z').getTime() : null;
     apiFetch('/admin/licenses/' + encodeURIComponent(key), {
       method: 'PATCH',
       body: JSON.stringify({ expiresAt: expiresAt }),
@@ -1516,7 +1516,7 @@
       nlError.classList.remove('hidden');
       return;
     }
-    var expiresAt = expiryRaw ? new Date(expiryRaw + 'T00:00:00Z').getTime() : null;
+    var expiresAt = expiryRaw ? new Date(expiryRaw + 'T23:59:59.999Z').getTime() : null;
     var contactName = nlContactName.value.trim();
     var contactEmail = nlContactEmail.value.trim();
     var notes = nlNotes.value.trim();
@@ -1612,9 +1612,15 @@
 
   // ---------- init ----------
 
+  // Validate a cached token BEFORE revealing the dashboard: don't flash the full dashboard chrome for
+  // a token that turns out stale (admin rotated the secret, or another tab signed out). Keep the gate
+  // up, in a checking state, until the first authorized load actually succeeds; a 401 inside apiFetch
+  // calls handleUnauthorized() which returns to the gate with a message.
   if (token) {
-    showDashboard();
-    loadLicenses().catch(function () { /* handled via apiFetch already */ });
+    showGate('Checking your saved session...');
+    loadLicenses()
+      .then(function () { showDashboard(); })
+      .catch(function () { /* apiFetch already reverted to the gate on 401; other errors leave it up */ });
   } else {
     showGate();
   }

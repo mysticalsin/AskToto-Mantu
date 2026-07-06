@@ -171,6 +171,23 @@ describe('license.ts — phone-home activation', () => {
       expect(r).toEqual({ allowed: false, reason: 'not_activated' })
     })
 
+    it('a clock set backwards (validation stamped in the future) does NOT grant infinite grace', () => {
+      // The exploit: roll the system clock back so lastValidatedAt is in the future, making age
+      // negative and (before the fix) always < GRACE_MS. Must block, not bypass.
+      testSettings = baseSettings({
+        licenseGateEnabled: true,
+        licenseValid: true,
+        licenseServerUrl: 'https://license.acme.test',
+        licenseKey: 'GOOD-KEY',
+        licenseLastValidatedAt: Date.now() + 400 * DAY
+      })
+      fetchMock.mockResolvedValue(jsonResponse({ ok: false, error: 'revoked' }))
+
+      const r = checkLicenseGrace()
+
+      expect(r).toEqual({ allowed: false, reason: 'expired_grace' })
+    })
+
     it('between 7 and 30 days, fires a background heartbeat but still allows immediately', async () => {
       testSettings = baseSettings({
         licenseGateEnabled: true,
@@ -267,6 +284,36 @@ describe('license.ts — phone-home activation', () => {
       const r = await heartbeat()
 
       expect(r).toEqual({ ok: false, error: 'expired' })
+      expect(testSettings.licenseValid).toBe(false)
+    })
+
+    it('a not_activated response (admin freed this seat) flips licenseValid to false', async () => {
+      testSettings = baseSettings({
+        licenseValid: true,
+        licenseServerUrl: 'https://license.acme.test',
+        licenseKey: 'GOOD-KEY',
+        licenseLastValidatedAt: Date.now() - 10 * DAY
+      })
+      fetchMock.mockResolvedValue(jsonResponse({ ok: false, error: 'not_activated' }))
+
+      const r = await heartbeat()
+
+      expect(r).toEqual({ ok: false, error: 'not_activated' })
+      expect(testSettings.licenseValid).toBe(false)
+    })
+
+    it('an invalid response (license deleted) flips licenseValid to false', async () => {
+      testSettings = baseSettings({
+        licenseValid: true,
+        licenseServerUrl: 'https://license.acme.test',
+        licenseKey: 'GOOD-KEY',
+        licenseLastValidatedAt: Date.now() - 10 * DAY
+      })
+      fetchMock.mockResolvedValue(jsonResponse({ ok: false, error: 'invalid' }))
+
+      const r = await heartbeat()
+
+      expect(r).toEqual({ ok: false, error: 'invalid' })
       expect(testSettings.licenseValid).toBe(false)
     })
   })

@@ -912,7 +912,13 @@ function registerIpc(): void {
     // would additionally protect here.
     const parsed = LicenseActivatePayloadSchema.safeParse(payload)
     if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message || 'Invalid input.' }
-    return activateLicense(parsed.data.serverUrl, parsed.data.licenseKey)
+    // Anti-self-licensing: when an enterprise pins licenseServerUrl via managed-config (locks the key),
+    // ignore any renderer-supplied URL and activate ONLY against the pinned server. Otherwise a customer
+    // could point activation at a fake localhost server that always returns ok:true and self-license.
+    // With the key unlocked (the default / single-operator case) the supplied URL is used as before.
+    const urlLocked = getLockedKeys().includes('licenseServerUrl')
+    const serverUrl = urlLocked ? getSettings().licenseServerUrl || parsed.data.serverUrl : parsed.data.serverUrl
+    return activateLicense(serverUrl, parsed.data.licenseKey)
   })
   // Read-only, local settings only — never touches the network. Mirrors metricsRead's pattern of
   // returning a safe empty/default shape (rather than throwing) when signed out.

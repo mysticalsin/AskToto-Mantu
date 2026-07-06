@@ -31,15 +31,31 @@ export function createAuditLog(dbPath) {
     return writeQueue;
   }
 
-  // Reads and parses every line, newest first, capped at `limit`. A
-  // missing file (nothing logged yet) reads as an empty log, not an error.
+  // How many bytes off the END of the file readLast will look at. The audit log is append-only and
+  // never rotated, so over years it could grow large; reading only the tail bounds memory + latency
+  // regardless of total size (a JSONL line is a few hundred bytes, so this tail always holds far more
+  // than any realistic `limit`). Older entries stay on disk for offline forensics, just not served here.
+  const TAIL_BYTES = 1_000_000;
+
+  // Reads and parses the most recent lines, newest first, capped at `limit`. Only the last TAIL_BYTES
+  // of the file are read. A missing file (nothing logged yet) reads as an empty log, not an error.
   async function readLast(limit) {
+    let handle;
     let raw;
     try {
-      raw = await fs.readFile(auditPath, 'utf8');
+      handle = await fs.open(auditPath, 'r');
+      const { size } = await handle.stat();
+      const start = Math.max(0, size - TAIL_BYTES);
+      const buf = Buffer.alloc(size - start);
+      await handle.read(buf, 0, buf.length, start);
+      raw = buf.toString('utf8');
+      // A non-zero start likely lands mid-line; drop that first partial line so JSON.parse doesn't choke.
+      if (start > 0) raw = raw.slice(raw.indexOf('\n') + 1);
     } catch (err) {
       if (err.code === 'ENOENT') return [];
       throw err;
+    } finally {
+      await handle?.close();
     }
     const entries = [];
     for (const line of raw.split('\n')) {
