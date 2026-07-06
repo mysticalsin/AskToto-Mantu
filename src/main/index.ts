@@ -32,6 +32,7 @@ import {
   McpCrmSaveConnectionPayloadSchema,
   McpCrmPushPayloadSchema,
   NotebookLmAskPayloadSchema,
+  LicenseActivatePayloadSchema,
   SetDealOutcomePayloadSchema,
   RenameMeetingPayloadSchema,
   UpdateRecapPayloadSchema,
@@ -114,6 +115,7 @@ import { importDustCliSession, refreshDustCliSession, setupDustCli } from './dus
 import { detectCli, testCli, setupCli, installCli, loginCli, prewarmCli } from './cli'
 import { connectBidstack, pushToBidstack } from './mcp/bidstackClient'
 import { detectNotebookLmCli, installNotebookLmCli, connectNotebookLm, askNotebookLm } from './mcp/notebooklm'
+import { activateLicense } from './license'
 import {
   setBidstackApiKey,
   getBidstackApiKey,
@@ -867,6 +869,13 @@ function registerIpc(): void {
   ipcMain.handle(IPC.settingsSet, (e, patch) => {
     assertMainWindow(e)
     const p = patch ?? {}
+    // License STATE is server-authoritative: only main's activateLicense/heartbeat (license.ts) may
+    // write it. Without this strip, any renderer code could self-issue an unlimited license with a
+    // plain settings patch ({licenseValid:true, licenseSeatCap:999999}) and defeat the gate once it's
+    // wired. licenseServerUrl + licenseGateEnabled stay writable — those are genuine user inputs.
+    for (const k of ['licenseKey', 'licenseCompanyName', 'licenseSeatCap', 'licenseExpiresAt', 'licenseValid', 'licenseLastValidatedAt']) {
+      if (k in p) delete (p as Record<string, unknown>)[k]
+    }
     const wasEncrypted = getSettings().encryptTranscripts
     const next = setSettings(p)
     auditLog('settings.changed', { keys: Object.keys(p) })
@@ -891,6 +900,41 @@ function registerIpc(): void {
     // Shortcuts may have changed — re-register from the new settings.
     registerShortcuts()
     return publicSettings()
+  })
+
+  // --- Licensing (phone-home activation; see main/license.ts) ---
+  ipcMain.handle(IPC.licenseActivate, async (e, payload: unknown) => {
+    assertMainWindow(e)
+    if (!requireAuth()) return { ok: false, error: 'Sign in with your Mantu account first.' }
+    const parsed = LicenseActivatePayloadSchema.safeParse(payload)
+    if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message || 'Invalid input.' }
+    return activateLicense(parsed.data.serverUrl, parsed.data.licenseKey)
+  })
+  // Read-only, local settings only — never touches the network. Mirrors metricsRead's pattern of
+  // returning a safe empty/default shape (rather than throwing) when signed out.
+  ipcMain.handle(IPC.licenseStatus, (e) => {
+    assertMainWindow(e)
+    if (!requireAuth()) {
+      return {
+        licenseServerUrl: '',
+        licenseCompanyName: '',
+        licenseSeatCap: 0,
+        licenseExpiresAt: null,
+        licenseValid: false,
+        licenseLastValidatedAt: 0,
+        licenseGateEnabled: false
+      }
+    }
+    const s = getSettings()
+    return {
+      licenseServerUrl: s.licenseServerUrl,
+      licenseCompanyName: s.licenseCompanyName,
+      licenseSeatCap: s.licenseSeatCap,
+      licenseExpiresAt: s.licenseExpiresAt,
+      licenseValid: s.licenseValid,
+      licenseLastValidatedAt: s.licenseLastValidatedAt,
+      licenseGateEnabled: s.licenseGateEnabled
+    }
   })
 
   // --- Provider API keys ---

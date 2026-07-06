@@ -1,0 +1,4 @@
+node_modules/
+data/licenses.json
+data/*.tmp
+*.tmp
