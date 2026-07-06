@@ -220,10 +220,13 @@ export function streamDust(opts: StreamOptions): StreamHandle {
         signal: controller.signal
       })
       if (posted.isErr()) {
-        // The cached conversation may have expired/been deleted server-side — fall back to a fresh one
-        // rather than failing the whole ask over a stale cache entry.
-        activeConversation = null
+        // Auth first, WITHOUT dropping the cached conversation: an expired token says nothing about the
+        // conversation's validity, and clearing it here made the auth retry abandon the meeting thread
+        // and open a second Dust conversation (losing all accumulated meeting context).
         if (await retryIfAuth(posted.error)) return
+        // Non-auth failure: the cached conversation may have expired/been deleted server-side — fall
+        // back to a fresh one rather than failing the whole ask over a stale cache entry.
+        activeConversation = null
         return run(creds, allowRetry)
       }
       const fetched = await api.getConversation({ conversationId: reusable.conversationId, signal: controller.signal })
@@ -268,14 +271,32 @@ export function streamDust(opts: StreamOptions): StreamHandle {
       }
       auditLog('dust.conversation', { action: opts.freshConversation ? 'created-isolated' : 'created' })
     }
-    const streamed = await api.streamAgentAnswerEvents({
+    let streamed = await api.streamAgentAnswerEvents({
       conversation,
       userMessageId: messageSId,
       signal: controller.signal
     })
     if (streamed.isErr()) {
-      if (await retryIfAuth(streamed.error)) return
-      return fail(streamed.error.message)
+      // The user message is ALREADY posted by this point — the whole-run retryIfAuth would post it a
+      // second time and the agent would answer twice. On an auth failure, refresh the token and retry
+      // ONLY the stream attach against the same conversation + message.
+      if (allowRetry && !gotToken && opts.refreshDustAuth && isAuthErr(streamed.error)) {
+        const fresh = await opts.refreshDustAuth().catch(() => null)
+        if (fresh) {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const freshApi: any = new DustAPI(
+            { url: fresh.baseURL || 'https://dust.tt' },
+            { workspaceId: fresh.workspaceId || '', apiKey: fresh.apiKey },
+            dustLogger()
+          )
+          streamed = await freshApi.streamAgentAnswerEvents({
+            conversation,
+            userMessageId: messageSId,
+            signal: controller.signal
+          })
+        }
+      }
+      if (streamed.isErr()) return fail(streamed.error.message)
     }
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     for await (const event of streamed.value.eventStream as AsyncIterable<any>) {

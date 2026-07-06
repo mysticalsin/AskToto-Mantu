@@ -519,8 +519,12 @@ async function captureScreenshot(): Promise<{ image: string; width: number; heig
         'Screen Recording permission is off for AskToto. Enable it in System Settings → Privacy & Security → Screen Recording, then quit and reopen AskToto.'
       )
     }
+    // The restart advice is macOS-specific (a fresh TCC grant only applies to a fresh launch) — other
+    // platforms get a neutral message rather than instructions about a System Settings they don't have.
     throw new Error(
-      'No screen source available. If you granted Screen Recording just now, quit and reopen AskToto — macOS only applies the permission to a fresh launch.'
+      process.platform === 'darwin'
+        ? 'No screen source available. If you granted Screen Recording just now, quit and reopen AskToto — macOS only applies the permission to a fresh launch.'
+        : 'No screen source available. Check your system’s screen-capture permissions for AskToto, then try again.'
     )
   }
   let img = src.thumbnail
@@ -551,7 +555,9 @@ async function getScreenshot(phase?: string): Promise<{ image: string; width: nu
   // AUDIT the block: a run of user-invisible capture failures used to leave zero trace in the audit log,
   // which made "couldn't capture my screen" reports undiagnosable after the fact.
   if (privateViewOn()) {
-    auditLog('capture.blocked', { reason: 'private_view', ...(phase ? { phase } : {}) })
+    // Prewarm is an opportunistic cache-fill fired on every ask-input focus — auditing its blocks/
+    // failures would write a log line per focus while Private View is on (pure noise). Real asks audit.
+    if (phase !== 'prewarm') auditLog('capture.blocked', { reason: 'private_view', ...(phase ? { phase } : {}) })
     throw new PrivateViewBlockedError()
   }
   const disp = screen.getDisplayNearestPoint(screen.getCursorScreenPoint())
@@ -563,16 +569,22 @@ async function getScreenshot(phase?: string): Promise<{ image: string; width: nu
   try {
     shot = await captureScreenshot()
   } catch (e) {
-    auditLog('capture.failed', {
-      reason: e instanceof Error ? e.message : String(e),
-      ...(phase ? { phase } : {})
-    })
+    if (phase !== 'prewarm') {
+      auditLog('capture.failed', {
+        reason: e instanceof Error ? e.message : String(e),
+        ...(phase ? { phase } : {})
+      })
+    }
     throw e
   }
   // Re-check after the async capture: Private View could have been toggled ON while getSources()/resize
   // were in flight. Without this second check, a frame grabbed a moment before the toggle would still be
   // cached and sent to the model — breaking the Private View guarantee on a mid-capture toggle.
-  if (privateViewOn()) throw new PrivateViewBlockedError()
+  if (privateViewOn()) {
+    // Audit like the pre-check (this path used to throw traceless); `at` distinguishes the race.
+    if (phase !== 'prewarm') auditLog('capture.blocked', { reason: 'private_view', at: 'post_capture', ...(phase ? { phase } : {}) })
+    throw new PrivateViewBlockedError()
+  }
   const capturedAt = Date.now()
   shotCache = { ...shot, ts: capturedAt }
   auditLog('capture.screen', { width: shot.width, height: shot.height, bytes: shot.image.length, ...(phase ? { phase } : {}) })

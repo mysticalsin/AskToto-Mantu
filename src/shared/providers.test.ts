@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { isDustReady, applyInteractiveGuardrail, PROVIDERS } from './providers'
+import { isDustReady, applyInteractiveGuardrail, parseDustUrl, PROVIDERS } from './providers'
 
 describe('isDustReady', () => {
   it('is true only when the key, workspace, and base agent are all present', () => {
@@ -54,5 +54,22 @@ describe('applyInteractiveGuardrail', () => {
     expect(applyInteractiveGuardrail('openai', 'base', 'gpt-4o-mini')).toBe('gpt-4o-mini')
     expect(applyInteractiveGuardrail('dust', 'think', 'agent_abc')).toBe('agent_abc')
     expect(applyInteractiveGuardrail('codex-cli', 'base', '')).toBe('')
+  })
+})
+
+describe('parseDustUrl agent-id extraction (only unambiguous agent sources)', () => {
+  it('extracts the agent from builder URLs and query params', () => {
+    expect(parseDustUrl('https://dust.tt/w/abc123/builder/agents/vJxYHvTRBT').agentId).toBe('vJxYHvTRBT')
+    expect(parseDustUrl('https://eu.dust.tt/w/abc123/builder/assistants/GOr913Zr5V').agentId).toBe('GOr913Zr5V')
+    expect(parseDustUrl('https://dust.tt/w/abc123/assistant/CONV42?assistant=vJxYHvTRBT').agentId).toBe('vJxYHvTRBT')
+  })
+
+  it('never mistakes a conversation id for an agent id', () => {
+    // A bare /assistant/<id> path is a CONVERSATION on dust.tt — treating it as an agent silently
+    // pointed the base agent at garbage when a user pasted a chat link (2026-07-06 review finding).
+    expect(parseDustUrl('https://dust.tt/w/abc123/assistant/8CzUOZaanQ').agentId).toBeUndefined()
+    expect(parseDustUrl('https://dust.tt/w/abc123/assistant/new').agentId).toBeUndefined()
+    // Workspace/region auto-fill still works on those links.
+    expect(parseDustUrl('https://dust.tt/w/abc123/assistant/8CzUOZaanQ').workspaceId).toBe('abc123')
   })
 })

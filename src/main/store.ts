@@ -3,6 +3,7 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync, rmSync, renameSync,
 import { join } from 'node:path'
 import {
   DEFAULT_SETTINGS,
+  DUST_BASE_AGENT_ID,
   BaseSettingsSchema,
   SettingsSchema,
   type Settings,
@@ -263,6 +264,27 @@ export function getSettings(): Settings {
   // through validKeysOnly() above, via validatedManaged(), so it can't carry a stale provider through.)
   // Any saved key file for that provider is left untouched on disk; it's simply never surfaced again.
   if (raw.provider === 'together' || raw.provider === 'fireworks') raw.provider = DEFAULT_SETTINGS.provider
+  // Migration (2026-07-06, the privateView split): before the split, the bar's eye button wrote
+  // contentProtection=false to UNBLOCK screen capture — with the new semantics that stale false means
+  // "window visible in every screen-share", which is not what the user chose. A user layer with no
+  // privateView key predates the split (privateView is written by every post-split eye/Privacy toggle),
+  // so remap: drop the stale false (restoring the hidden-by-default window) and persist privateView:false
+  // as the durable post-split marker — otherwise a POST-split, deliberate contentProtection=false would
+  // be wrongly re-deleted on the next load. Explicit pre-split true is left alone: the window stays
+  // hidden (matching the old toggle's label) and capture stays allowed (the split's whole point).
+  if (!('privateView' in raw) && raw.contentProtection === false) {
+    delete raw.contentProtection
+    raw.privateView = false
+    try {
+      const p = settingsPath()
+      const tmp = `${p}.tmp`
+      writeFileSync(tmp, serializeUserRaw(raw), { mode: 0o600 })
+      renameSync(tmp, p)
+    } catch (e) {
+      // Read path must never throw over a failed migration persist — worst case it re-runs next load.
+      mainLog.warn('[store] could not persist privateView migration:', e)
+    }
+  }
   // Locked keys are authoritative on READ too, not just on write: a value persisted before a lock (or a
   // hand-edited settings.json) must not override the managed/default value. Strip locked keys from the
   // user layer so org policy always wins.
@@ -303,6 +325,13 @@ export function setSettings(patch: Partial<Settings>): Settings {
       continue
     }
     allowed[k] = v
+  }
+  // Invariant enforced at the persistence boundary (not just in the Settings UI): the Dust base agent
+  // must never persist blank — isDustReady() and every task that cascades into Dust require it. Covers
+  // per-keystroke UI commits, IPC callers, and hand-rolled patches alike.
+  const pm = allowed.providerModels as Record<string, unknown> | undefined
+  if (pm && typeof pm === 'object' && 'dust' in pm && !String(pm.dust ?? '').trim()) {
+    pm.dust = DUST_BASE_AGENT_ID
   }
   const next = { ...readUserRaw(), ...allowed }
   // Atomic write: a crash mid-write must not corrupt settings.json and wipe every setting + context doc.

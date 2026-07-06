@@ -1721,7 +1721,21 @@ function DustSetup({
       })
       return
     }
-    await patch({ provider: 'dust' }) // import set key/workspace/region in main; make Dust active + refresh
+    // Import set key/workspace/region in main; make Dust active + refresh. If the CLI session belongs
+    // to a DIFFERENT workspace than before, a previously-picked base/thinking agent sId is meaningless
+    // there — reset both to the defaults instead of carrying a foreign workspace's agent across.
+    const wsChanged = !!settings.dustWorkspaceId && !!r.workspaceId && settings.dustWorkspaceId !== r.workspaceId
+    if (wsChanged) {
+      const nextThinking = { ...settings.providerModelsThinking }
+      delete nextThinking.dust
+      await patch({
+        provider: 'dust',
+        providerModels: { ...settings.providerModels, dust: DUST_BASE_AGENT_ID },
+        providerModelsThinking: nextThinking
+      })
+    } else {
+      await patch({ provider: 'dust' })
+    }
     setCli({ busy: false, ok: true, msg: `Connected. Workspace ${r.workspaceId}. Loading agents…` })
     await loadAgents()
   }
@@ -1806,14 +1820,14 @@ function DustSetup({
   }, [keySaved, hasWs])
 
   const setThinkAgent = (sId: string): void =>
-    patch({ providerModelsThinking: { ...settings.providerModelsThinking, dust: sId } })
+    patch({ providerModelsThinking: { ...settings.providerModelsThinking, dust: sId.trim() } })
 
   // Commits directly on every change, same as setThinkAgent — the select never offers an empty option,
   // and the text-input fallback's onBlur (below) catches a still-blank field and restores the default
   // there instead of fighting the user's edit on every keystroke. The base agent must never persist
   // blank: isDustReady() (and every task that cascades into Dust) requires providerModels.dust to be set.
   const setBaseAgent = (sId: string): void =>
-    patch({ providerModels: { ...settings.providerModels, dust: sId } })
+    patch({ providerModels: { ...settings.providerModels, dust: sId.trim() } })
 
   const regionBtn = (eu: boolean): string =>
     [
@@ -2080,6 +2094,11 @@ function DustSetup({
           {agents && agents.length > 0 ? (
             <select id={thinkSel} value={thinkAgent} onChange={(e) => setThinkAgent(e.target.value)} className={'w-full ' + ctl}>
               <option value="">Same as base agent</option>
+              {/* Same stale-sId guard as the base picker: a saved agent that no longer exists in this
+                  workspace must render visibly (not as a blank select silently routing to a dead agent). */}
+              {thinkAgent && !agents.some((a) => a.sId === thinkAgent) && (
+                <option value={thinkAgent}>{thinkAgent} (not in your workspace)</option>
+              )}
               {agents.map((a) => (
                 <option key={a.sId} value={a.sId}>
                   {a.name}
