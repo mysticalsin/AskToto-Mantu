@@ -21,6 +21,14 @@ services:
       # This stack puts Caddy in front and never exposes the server directly, so trust the one proxy
       # hop for real client IPs (needed for per-customer rate limiting + admin brute-force lockout).
       TRUST_PROXY: '1'
+      # Optional integrations - set these in deploy/.env (all default to off/24h/30 when empty;
+      # empty strings fall back to the same defaults as unset).
+      LICENSE_WEBHOOK_URL: ${LICENSE_WEBHOOK_URL:-}
+      LICENSE_WEBHOOK_SECRET: ${LICENSE_WEBHOOK_SECRET:-}
+      WEBHOOK_EXPIRY_ALERT_DAYS: ${WEBHOOK_EXPIRY_ALERT_DAYS:-}
+      METRICS_TOKEN: ${METRICS_TOKEN:-}
+      BACKUP_INTERVAL_HOURS: ${BACKUP_INTERVAL_HOURS:-}
+      BACKUP_KEEP: ${BACKUP_KEEP:-}
     volumes:
       - license_data:/app/data
 

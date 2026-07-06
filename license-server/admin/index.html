@@ -496,6 +496,77 @@
     color: var(--warning);
   }
 
+  /* ---------- analytics ---------- */
+
+  .analytics-grid {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }
+
+  .chart-card {
+    background: var(--bg-panel);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    padding: 18px 20px;
+  }
+
+  .chart-card h3 { margin: 0 0 4px; font-size: 13.5px; }
+
+  .chart-card .chart-sub {
+    color: var(--text-faint);
+    font-size: 12px;
+    margin: 0 0 14px;
+  }
+
+  .chart-svg { width: 100%; height: auto; display: block; }
+  .chart-bar { fill: var(--accent); }
+  .chart-bar:hover { fill: var(--accent-hover); }
+  .chart-axis { stroke: var(--border-strong); stroke-width: 1; }
+  .chart-grid-line { stroke: var(--border); stroke-width: 1; }
+  .chart-label { fill: var(--text-faint); font-size: 10px; font-family: inherit; }
+
+  .util-row { display: flex; align-items: center; gap: 12px; padding: 7px 0; }
+  .util-name {
+    width: 160px;
+    flex-shrink: 0;
+    font-size: 12.5px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .util-track {
+    flex: 1;
+    height: 8px;
+    border-radius: 999px;
+    background: var(--bg-input);
+    border: 1px solid var(--border);
+    position: relative;
+    overflow: hidden;
+  }
+  .util-fill {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    border-radius: 999px;
+    background: var(--accent);
+  }
+  .util-fill.util-full { background: var(--warning); }
+  .util-count {
+    width: 64px;
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+    font-size: 12px;
+    color: var(--text-muted);
+    flex-shrink: 0;
+  }
+  .util-footnote { color: var(--text-faint); font-size: 11.5px; margin-top: 10px; }
+
+  .chart-empty { color: var(--text-faint); font-size: 13px; padding: 12px 0; }
+
+  .stat-card .btn { margin-top: 2px; }
+
   /* ---------- overlay ---------- */
 
   .layer-overlay {
@@ -748,6 +819,7 @@
     <main class="content">
       <div class="view-tabs">
         <button id="tab-licenses" class="btn btn-primary btn-sm" data-view="licenses">Licenses</button>
+        <button id="tab-analytics" class="btn btn-ghost btn-sm" data-view="analytics">Analytics</button>
         <button id="tab-audit" class="btn btn-ghost btn-sm" data-view="audit">Audit log</button>
       </div>
 
@@ -778,6 +850,22 @@
           <div id="empty-state" class="empty-state hidden">
             <div>No licenses yet.</div>
             <button id="empty-new-license-btn" class="btn btn-primary">Create your first license</button>
+          </div>
+        </div>
+      </div>
+
+      <div id="analytics-view" class="hidden">
+        <div id="ops-cards" class="stats-cards"></div>
+        <div class="analytics-grid">
+          <div class="chart-card">
+            <h3>Machine activations</h3>
+            <p class="chart-sub">New seat activations per day over the last 30 days (UTC)</p>
+            <div id="activations-chart"></div>
+          </div>
+          <div class="chart-card">
+            <h3>Seat utilization</h3>
+            <p class="chart-sub">Seats in use against each license's cap</p>
+            <div id="utilization-chart"></div>
           </div>
         </div>
       </div>
@@ -903,9 +991,14 @@
   var emptyNewLicenseBtn = document.getElementById('empty-new-license-btn');
 
   var tabLicenses = document.getElementById('tab-licenses');
+  var tabAnalytics = document.getElementById('tab-analytics');
   var tabAudit = document.getElementById('tab-audit');
   var licensesView = document.getElementById('licenses-view');
+  var analyticsView = document.getElementById('analytics-view');
   var auditView = document.getElementById('audit-view');
+  var opsCards = document.getElementById('ops-cards');
+  var activationsChart = document.getElementById('activations-chart');
+  var utilizationChart = document.getElementById('utilization-chart');
   var currentView = 'licenses';
 
   var tbody = document.getElementById('licenses-tbody');
@@ -1391,23 +1484,179 @@
     if (row) openDetail(row.getAttribute('data-key'));
   });
 
-  // ---------- view tabs (licenses / audit log) ----------
+  // ---------- view tabs (licenses / analytics / audit log) ----------
+
+  var VIEWS = [
+    { name: 'licenses', tab: tabLicenses, el: licensesView, load: function () { loadLicenses(); } },
+    { name: 'analytics', tab: tabAnalytics, el: analyticsView, load: function () { loadAnalytics(); } },
+    { name: 'audit', tab: tabAudit, el: auditView, load: function () { loadAudit(); } },
+  ];
 
   function switchView(view) {
     currentView = view;
-    var showAudit = view === 'audit';
-    auditView.classList.toggle('hidden', !showAudit);
-    licensesView.classList.toggle('hidden', showAudit);
-    tabAudit.classList.toggle('btn-primary', showAudit);
-    tabAudit.classList.toggle('btn-ghost', !showAudit);
-    tabLicenses.classList.toggle('btn-primary', !showAudit);
-    tabLicenses.classList.toggle('btn-ghost', showAudit);
-    if (showAudit) loadAudit();
-    else loadLicenses();
+    VIEWS.forEach(function (v) {
+      var active = v.name === view;
+      v.el.classList.toggle('hidden', !active);
+      v.tab.classList.toggle('btn-primary', active);
+      v.tab.classList.toggle('btn-ghost', !active);
+      if (active) v.load();
+    });
   }
 
-  tabLicenses.addEventListener('click', function () { switchView('licenses'); });
-  tabAudit.addEventListener('click', function () { switchView('audit'); });
+  VIEWS.forEach(function (v) {
+    v.tab.addEventListener('click', function () { switchView(v.name); });
+  });
+
+  // ---------- analytics ----------
+
+  function formatUptime(seconds) {
+    var s = Math.floor(seconds || 0);
+    var d = Math.floor(s / 86400);
+    var h = Math.floor((s % 86400) / 3600);
+    var m = Math.floor((s % 3600) / 60);
+    if (d > 0) return d + 'd ' + h + 'h';
+    if (h > 0) return h + 'h ' + m + 'm';
+    return m + 'm';
+  }
+
+  function loadAnalytics() {
+    // /health is public (no bearer needed); the two admin calls carry the token.
+    Promise.all([
+      apiFetch('/admin/analytics'),
+      apiFetch('/admin/backups').catch(function (err) {
+        if (err instanceof ApiError && err.kind === 'unauthorized') throw err;
+        return { status: 0, json: null };
+      }),
+      fetch('/health').then(function (r) { return r.json(); }).catch(function () { return null; }),
+    ]).then(function (results) {
+      var analytics = results[0];
+      var backupsRes = results[1];
+      var health = results[2];
+      if (analytics.status !== 200) {
+        showToast('Could not load analytics.', 'error');
+        return;
+      }
+      renderOpsCards(backupsRes, health);
+      renderActivationsChart(analytics.json.activationsByDay || []);
+      renderUtilizationChart(analytics.json.seatUtilization || []);
+    }).catch(function (err) {
+      if (!(err instanceof ApiError && err.kind === 'unauthorized')) {
+        showToast('Could not load analytics.', 'error');
+      }
+    });
+  }
+
+  function renderOpsCards(backupsRes, health) {
+    var lastBackupHtml;
+    var snapshotCount = '&mdash;';
+    if (backupsRes && backupsRes.status === 200 && backupsRes.json) {
+      var files = backupsRes.json.files || [];
+      snapshotCount = String(files.length);
+      lastBackupHtml = files.length > 0
+        ? '<span title="' + escapeHtml(files[0].name) + '">' + escapeHtml(relativeTime(files[0].mtime)) + '</span>'
+        : 'Never';
+    } else if (backupsRes && backupsRes.status === 503) {
+      lastBackupHtml = '<span class="stat-value-sub">Disabled</span>';
+    } else {
+      lastBackupHtml = '&mdash;';
+    }
+    var serverHtml = health && health.version
+      ? 'v' + escapeHtml(health.version) + ' <span class="stat-value-sub">up ' + escapeHtml(formatUptime(health.uptimeSeconds)) + '</span>'
+      : '&mdash;';
+    opsCards.innerHTML =
+      statCardHtml('Last backup', lastBackupHtml) +
+      statCardHtml('Snapshots kept', snapshotCount) +
+      statCardHtml('Server', serverHtml) +
+      '<div class="stat-card"><div class="stat-label">On-demand</div><button id="btn-backup-now" class="btn btn-primary btn-sm">Back up now</button></div>';
+  }
+
+  opsCards.addEventListener('click', function (e) {
+    if (!e.target.closest('#btn-backup-now')) return;
+    var btn = e.target.closest('#btn-backup-now');
+    btn.disabled = true;
+    apiFetch('/admin/backup', { method: 'POST' }).then(function (result) {
+      if (result.status === 200 && result.json && result.json.ok) {
+        showToast('Backup written: ' + result.json.file, 'success');
+        loadAnalytics();
+      } else if (result.status === 503) {
+        showToast('Backups are disabled on this server.', 'error');
+      } else {
+        showToast('Backup failed. Check the server logs.', 'error');
+      }
+    }).catch(function (err) {
+      if (!(err instanceof ApiError && err.kind === 'unauthorized')) {
+        showToast('Backup failed. Check the server logs.', 'error');
+      }
+    }).finally(function () {
+      btn.disabled = false;
+    });
+  });
+
+  function renderActivationsChart(days) {
+    if (!days.length) {
+      activationsChart.innerHTML = '<div class="chart-empty">No activation data yet.</div>';
+      return;
+    }
+    var W = 640, H = 190, padL = 34, padR = 8, padT = 14, padB = 24;
+    var plotW = W - padL - padR, plotH = H - padT - padB;
+    var max = 0;
+    days.forEach(function (d) { if (d.count > max) max = d.count; });
+    var yMax = Math.max(max, 1);
+    var step = plotW / days.length;
+    var barW = Math.max(step - 2, 1.5);
+    var parts = [];
+
+    var gridVals = [yMax];
+    if (yMax >= 2) gridVals.push(Math.ceil(yMax / 2));
+    gridVals.forEach(function (val) {
+      var y = padT + plotH - (val / yMax) * plotH;
+      parts.push('<line class="chart-grid-line" x1="' + padL + '" x2="' + (W - padR) + '" y1="' + y.toFixed(1) + '" y2="' + y.toFixed(1) + '"/>');
+      parts.push('<text class="chart-label" x="' + (padL - 6) + '" y="' + (y + 3).toFixed(1) + '" text-anchor="end">' + val + '</text>');
+    });
+    parts.push('<line class="chart-axis" x1="' + padL + '" x2="' + (W - padR) + '" y1="' + (padT + plotH) + '" y2="' + (padT + plotH) + '"/>');
+
+    days.forEach(function (d, i) {
+      if (!d.count) return;
+      var h = (d.count / yMax) * plotH;
+      var x = padL + i * step + (step - barW) / 2;
+      var y = padT + plotH - h;
+      parts.push(
+        '<rect class="chart-bar" x="' + x.toFixed(1) + '" y="' + y.toFixed(1) + '" width="' + barW.toFixed(1) + '" height="' + h.toFixed(1) + '" rx="2">' +
+        '<title>' + escapeHtml(d.day) + ': ' + d.count + (d.count === 1 ? ' activation' : ' activations') + '</title></rect>'
+      );
+    });
+
+    parts.push('<text class="chart-label" x="' + padL + '" y="' + (H - 6) + '">' + escapeHtml(days[0].day) + '</text>');
+    parts.push('<text class="chart-label" x="' + (W - padR) + '" y="' + (H - 6) + '" text-anchor="end">' + escapeHtml(days[days.length - 1].day) + '</text>');
+
+    var total = days.reduce(function (sum, d) { return sum + d.count; }, 0);
+    activationsChart.innerHTML = total === 0
+      ? '<div class="chart-empty">No machine activated in the last 30 days.</div>'
+      : '<svg class="chart-svg" viewBox="0 0 ' + W + ' ' + H + '" role="img" aria-label="Machine activations per day, last 30 days">' + parts.join('') + '</svg>';
+  }
+
+  var UTILIZATION_TOP_N = 10;
+
+  function renderUtilizationChart(list) {
+    if (!list.length) {
+      utilizationChart.innerHTML = '<div class="chart-empty">No licenses yet.</div>';
+      return;
+    }
+    var top = list.slice(0, UTILIZATION_TOP_N);
+    var rows = top.map(function (u) {
+      var pct = u.seatCap > 0 ? Math.min(100, (u.seatsUsed / u.seatCap) * 100) : 0;
+      var full = u.seatsUsed >= u.seatCap;
+      return '<div class="util-row">' +
+        '<div class="util-name" title="' + escapeHtml(u.companyName) + '">' + escapeHtml(u.companyName) + '</div>' +
+        '<div class="util-track"><div class="util-fill' + (full ? ' util-full' : '') + '" style="width:' + pct.toFixed(1) + '%"></div></div>' +
+        '<div class="util-count">' + u.seatsUsed + ' / ' + u.seatCap + '</div>' +
+        '</div>';
+    });
+    var footnote = list.length > UTILIZATION_TOP_N
+      ? '<div class="util-footnote">Showing the top ' + UTILIZATION_TOP_N + ' of ' + list.length + ' licenses by seats in use.</div>'
+      : '';
+    utilizationChart.innerHTML = rows.join('') + footnote;
+  }
 
   // ---------- audit log ----------
 
@@ -1883,6 +2132,7 @@
   btnSignOut.addEventListener('click', signOut);
   btnRefresh.addEventListener('click', function () {
     if (currentView === 'audit') loadAudit();
+    else if (currentView === 'analytics') loadAnalytics();
     else loadLicenses();
   });
   btnExportCsv.addEventListener('click', exportCsv);

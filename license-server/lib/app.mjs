@@ -4,7 +4,8 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
-import { generateLicenseKey, licenseStatus, successPayload, adminListView, adminDetailView, computeStats } from './license.mjs';
+import { generateLicenseKey, licenseStatus, successPayload, adminListView, adminDetailView, computeStats, computeAnalytics } from './license.mjs';
+import { licenseEventView } from './webhooks.mjs';
 import { toCsv } from './csv.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -154,10 +155,23 @@ function makeAdminLockout() {
   };
 }
 
+// A webhooks stand-in for when no webhook URL is configured (and for tests that don't care):
+// every emit resolves immediately, nothing is delivered.
+const NOOP_WEBHOOKS = {
+  enabled: false,
+  emit: () => Promise.resolve(),
+  emitSeatLimit: () => Promise.resolve(),
+};
+
 // Builds the Express app around a given store + audit log. Kept as a
 // factory (rather than a module-level singleton) so tests can spin up
 // isolated instances against isolated temp-file stores.
-export function createApp(store, auditLog) {
+//
+// options.webhooks — a createWebhooks() instance (server.mjs wires the real one from env).
+// options.backups — a createBackupManager() instance; without one the backup routes return 503.
+export function createApp(store, auditLog, options = {}) {
+  const webhooks = options.webhooks || NOOP_WEBHOOKS;
+  const backups = options.backups || null;
   const app = express();
   const startedAt = Date.now();
   // Client-IP trust is deliberately OPT-IN via TRUST_PROXY, because the rate limiter and the admin
@@ -204,6 +218,8 @@ export function createApp(store, auditLog) {
     }
 
     if (license.activations.length >= license.seatCap) {
+      // Throttled inside emitSeatLimit — a capped-out fleet retries on every app launch.
+      webhooks.emitSeatLimit(license);
       return res.json({ ok: false, error: 'seat_limit_reached' });
     }
 
@@ -269,14 +285,17 @@ export function createApp(store, auditLog) {
   // timingSafeEqual so response time never leaks how much of the token matched. Both sides are
   // hashed first because timingSafeEqual requires equal-length buffers (a raw length check would
   // itself leak the token's length).
-  function isValidAdminToken(req) {
-    const token = process.env.LICENSE_ADMIN_TOKEN;
+  function bearerMatches(req, token) {
     if (!token) return false;
     const header = req.get('authorization') || '';
     const [scheme, value] = header.split(' ');
     const a = createHash('sha256').update(String(value || '')).digest();
     const b = createHash('sha256').update(token).digest();
     return scheme === 'Bearer' && !!value && timingSafeEqual(a, b);
+  }
+
+  function isValidAdminToken(req) {
+    return bearerMatches(req, process.env.LICENSE_ADMIN_TOKEN);
   }
 
   function requireAdmin(req, res, next) {
@@ -341,6 +360,7 @@ export function createApp(store, auditLog) {
       licenseKey: license.licenseKey,
       details: { companyName, seatCap, expiresAt: license.expiresAt },
     });
+    webhooks.emit('license.created', { license: licenseEventView(license) });
 
     return res.status(201).json({
       licenseKey: license.licenseKey,
@@ -391,6 +411,12 @@ export function createApp(store, auditLog) {
     res.json(computeStats(store.getAll()));
   });
 
+  // Chart-ready aggregates for the dashboard's Analytics tab (activation timeline + seat
+  // utilization) — computed server-side in one pass so the page never needs the raw store.
+  app.get('/admin/analytics', requireAdmin, (req, res) => {
+    res.json(computeAnalytics(store.getAll()));
+  });
+
   app.get('/admin/licenses/:key', requireAdmin, (req, res) => {
     const license = store.findByKey(req.params.key);
     if (!license) return res.status(404).json({ ok: false, error: 'not_found' });
@@ -403,6 +429,7 @@ export function createApp(store, auditLog) {
     license.revoked = true;
     store.persist();
     auditLog.record({ action: 'revoke', licenseKey: license.licenseKey, details: { companyName: license.companyName } });
+    webhooks.emit('license.revoked', { license: licenseEventView(license) });
     return res.json(adminDetailView(license));
   });
 
@@ -412,6 +439,7 @@ export function createApp(store, auditLog) {
     license.revoked = false;
     store.persist();
     auditLog.record({ action: 'unrevoke', licenseKey: license.licenseKey, details: { companyName: license.companyName } });
+    webhooks.emit('license.unrevoked', { license: licenseEventView(license) });
     return res.json(adminDetailView(license));
   });
 
@@ -439,6 +467,7 @@ export function createApp(store, auditLog) {
     const license = store.findByKey(req.params.key);
     if (!license) return res.status(404).json({ ok: false, error: 'not_found' });
     auditLog.record({ action: 'delete', licenseKey: license.licenseKey, details: adminListView(license) });
+    webhooks.emit('license.deleted', { license: licenseEventView(license) });
     store.removeLicense(license.licenseKey);
     return res.json({ ok: true });
   });
@@ -484,7 +513,80 @@ export function createApp(store, auditLog) {
       return res.status(400).json({ ok: false, error: 'invalid_request', message: err.message });
     }
     auditLog.record({ action: 'restore', licenseKey: '(all)', details: { restoredCount: count, snapshot: snapshotPath && path.basename(snapshotPath) } });
+    webhooks.emit('store.restored', { details: { restoredCount: count } });
     return res.json({ ok: true, restoredCount: count, snapshot: snapshotPath && path.basename(snapshotPath) });
+  });
+
+  // ---- server-side backups (see lib/backups.mjs) ----
+  // All three routes 503 when no backup manager was wired in (tests that don't care, or an
+  // embedded use of createApp) — never silently pretend a backup happened.
+
+  app.post('/admin/backup', requireAdmin, async (req, res) => {
+    if (!backups) return res.status(503).json({ ok: false, error: 'backups_disabled' });
+    try {
+      // force: an operator clicking "Back up now" expects a fresh file even if nothing changed.
+      const result = await backups.runBackupNow({ force: true });
+      auditLog.record({ action: 'backup', licenseKey: '(all)', details: { file: result.name, licenseCount: result.count } });
+      return res.json({ ok: true, file: result.name, licenseCount: result.count });
+    } catch (err) {
+      console.error('[license-server] on-demand backup failed:', err);
+      return res.status(500).json({ ok: false, error: 'backup_failed' });
+    }
+  });
+
+  app.get('/admin/backups', requireAdmin, async (req, res) => {
+    if (!backups) return res.status(503).json({ ok: false, error: 'backups_disabled' });
+    try {
+      return res.json({ dir: backups.backupDir, files: await backups.listFiles() });
+    } catch (err) {
+      console.error('[license-server] could not list backups:', err);
+      return res.status(500).json({ ok: false, error: 'internal_error' });
+    }
+  });
+
+  // Download one snapshot. The name must match the exact generated-filename shape — that (plus a
+  // basename identity check) is what makes ../-style path traversal impossible here.
+  app.get('/admin/backups/:name', requireAdmin, (req, res) => {
+    if (!backups) return res.status(503).json({ ok: false, error: 'backups_disabled' });
+    const name = req.params.name;
+    if (!backups.isSafeBackupName(name)) {
+      return res.status(400).json({ ok: false, error: 'invalid_request' });
+    }
+    res.download(path.join(backups.backupDir, name), name, (err) => {
+      if (err && !res.headersSent) {
+        res.status(404).json({ ok: false, error: 'not_found' });
+      }
+    });
+  });
+
+  // Prometheus-style metrics, so an uptime monitor or Grafana can watch the license business
+  // without admin credentials. Deliberately OFF unless METRICS_TOKEN is set (404, same as any
+  // unknown route, so an unconfigured server doesn't even reveal the endpoint exists); when set,
+  // the scraper authenticates with `Authorization: Bearer <METRICS_TOKEN>` — a separate,
+  // lower-privilege secret than the admin token (metrics read aggregate counts, never keys).
+  app.get('/metrics', (req, res) => {
+    const metricsToken = process.env.METRICS_TOKEN;
+    if (!metricsToken) return res.status(404).json({ ok: false, error: 'not_found' });
+    if (!bearerMatches(req, metricsToken)) {
+      return res.status(401).json({ ok: false, error: 'unauthorized' });
+    }
+    const stats = computeStats(store.getAll());
+    const lines = [];
+    const gauge = (metricName, help, value) => {
+      lines.push(`# HELP ${metricName} ${help}`);
+      lines.push(`# TYPE ${metricName} gauge`);
+      lines.push(`${metricName} ${value}`);
+    };
+    gauge('asktoto_uptime_seconds', 'Seconds since the license server started.', (Date.now() - startedAt) / 1000);
+    gauge('asktoto_licenses_total', 'Total licenses in the store.', stats.totalLicenses);
+    gauge('asktoto_licenses_active', 'Licenses that are neither revoked nor expired.', stats.activeLicenses);
+    gauge('asktoto_licenses_revoked', 'Revoked licenses.', stats.revokedLicenses);
+    gauge('asktoto_licenses_expired', 'Licenses past their expiry date.', stats.expiredLicenses);
+    gauge('asktoto_licenses_expiring_soon', 'Active licenses expiring within 30 days.', stats.expiringSoon.length);
+    gauge('asktoto_seat_cap_total', 'Sum of seat caps across all licenses.', stats.totalSeatCap);
+    gauge('asktoto_seats_used_total', 'Sum of activated seats across all licenses.', stats.totalSeatsUsed);
+    gauge('asktoto_seats_active_30d', 'Activated seats seen in the last 30 days.', stats.totalActive30d);
+    res.type('text/plain; version=0.0.4; charset=utf-8').send(`${lines.join('\n')}\n`);
   });
 
   app.get('/health', (req, res) => {

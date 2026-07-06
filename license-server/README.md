@@ -43,6 +43,13 @@ Environment variables:
 | `LICENSE_ADMIN_TOKEN`  | *(unset)*                    | Required for `/admin/*` routes. If unset, those routes return `503`.   |
 | `LICENSE_DB_PATH`      | `license-server/data/licenses.json` | Where the JSON data file lives. Point this at a persistent volume in production. |
 | `TRUST_PROXY`          | *(unset)*                    | Set to `1` ONLY when the server sits behind a reverse proxy (the deploy/ Caddy stack, Fly, nginx, Cloudflare) so per-client rate limiting and the admin lockout key on the real client IP. Leave unset when directly exposed, so a spoofed `X-Forwarded-For` can't be used to dodge those limits. |
+| `BACKUP_INTERVAL_HOURS` | `24`                        | How often the server snapshots its own store into `BACKUP_DIR`. `0` disables the schedule (on-demand backups still work). Effective interval is capped at ~596 hours (Node's max timer delay). |
+| `BACKUP_KEEP`          | `30`                         | How many snapshots to retain; older ones are pruned after each backup. Minimum 1 — the newest snapshot is always kept. |
+| `BACKUP_DIR`           | `<data dir>/backups`         | Where snapshots are written. Defaults to a `backups/` folder next to the data file, i.e. on the same persistent volume. |
+| `LICENSE_WEBHOOK_URL`  | *(unset)*                    | When set, the server POSTs JSON events here (created/revoked/deleted/seat-limit/expiring-soon...). Unset = no webhooks. |
+| `LICENSE_WEBHOOK_SECRET` | *(unset)*                  | When set, each webhook delivery carries `X-AskToto-Signature: sha256=<hex>` (HMAC of the raw body) so the receiver can verify authenticity. |
+| `WEBHOOK_EXPIRY_ALERT_DAYS` | `14`                    | How far ahead the expiring-soon webhook sweep looks.                    |
+| `METRICS_TOKEN`        | *(unset)*                    | Enables `GET /metrics` (Prometheus text format), authenticated with `Authorization: Bearer <METRICS_TOKEN>`. Unset = the endpoint 404s. Use a separate, lower-privilege secret than the admin token. |
 
 ## Deploying
 
@@ -129,8 +136,20 @@ License created successfully.
 
 ## Backups and restore
 
-`data/licenses.json` is the business record. Back it up and restore it through the
-admin API of a running server (no direct volume access needed):
+`data/licenses.json` is the business record. It is protected in two layers:
+
+**Automatic on-server snapshots (built in, on by default).** Every
+`BACKUP_INTERVAL_HOURS` (default 24, plus once at startup) the server writes a full
+snapshot to `BACKUP_DIR` (default `data/backups/`, on the same volume as the db) and
+prunes past `BACKUP_KEEP` (default 30). A snapshot identical to the previous one is
+skipped, so an idle server doesn't churn its disk. Snapshots use the exact
+`/admin/export` wrapper, so any of them can be fed straight to `/admin/restore`.
+The dashboard's Analytics tab shows the last snapshot time and has a "Back up now"
+button; `GET /admin/backups` lists them and `GET /admin/backups/<name>` downloads one.
+
+**Off-box copies (your job).** On-server snapshots don't survive the disk dying.
+Pull a copy off the box through the admin API of a running server (no volume access
+needed):
 
 Back up (one exact `GET /admin/export` call, written to a timestamped file):
 
@@ -183,6 +202,9 @@ From the dashboard you can:
   its contact name/email or notes.
 - Export every license as a CSV file (button in the header) for finance or
   a spreadsheet.
+- Switch to the Analytics tab for the activation timeline (last 30 days),
+  seat utilization per license, server version/uptime, and the last-backup
+  status with a "Back up now" button.
 - Switch to the audit log view to see every admin mutation (create, revoke,
   unrevoke, patch, seat free) with a timestamp and details.
 
@@ -287,7 +309,7 @@ the `activations` array (`machineId`, `machineName`, `activatedAt`, `lastSeenAt`
 ```
 
 `activeLicenses` = not revoked and not expired. `expiredLicenses` = every license whose `expiresAt`
-has passed (`<= now`), regardless of `revoked`. `revokedLicenses` = every revoked license, regardless
+has passed (`< now`, same boundary as the `/activate`/`/heartbeat` gate), regardless of `revoked`. `revokedLicenses` = every revoked license, regardless
 of expiry — so a license that is both revoked and expired counts in both. `totalActive30d` sums, across
 every license, the activations whose `lastSeenAt` falls within the last 30 days (same convention as
 `activeSeats30d` above — it doesn't care whether the license itself is active). `expiringSoon` lists
@@ -303,9 +325,92 @@ not-revoked, not-yet-expired licenses whose `expiresAt` falls within the next 30
 **`GET /admin/audit?limit=200`** → the last `limit` audit entries (default
 200, max 1000), newest first: `{ at, action, licenseKey, details }` where
 `action` is one of `create`, `revoke`, `unrevoke`, `patch`, `deactivate`,
-`deactivate_admin`. Stored as an append-only JSONL file
-(`data/audit.jsonl`) next to `licenses.json`; a write failure here logs a
-warning but never fails the request that triggered it.
+`deactivate_admin`, `delete`, `restore`, `backup`. Stored as an append-only
+JSONL file (`data/audit.jsonl`) next to `licenses.json`; a write failure
+here logs a warning but never fails the request that triggered it.
+
+**`GET /admin/analytics`** → chart-ready aggregates for the dashboard's
+Analytics tab:
+
+```json
+{
+  "activationsByDay": [ { "day": "2026-06-07", "count": 3 }, ... ],
+  "seatUtilization": [ { "licenseKey": "ATK-...", "companyName": "Acme Corp", "seatsUsed": 42, "seatCap": 50, "revoked": false }, ... ]
+}
+```
+
+`activationsByDay` covers the last 30 UTC days (zero-count days included);
+`seatUtilization` lists every license sorted by seats used, then cap.
+
+**`GET /admin/export`** → the exact persisted store, restore-compatible:
+`{ version, exportedAt, licenses: [...] }`.
+
+**`POST /admin/restore`** — `{ licenses: [...] }` (or a raw array) →
+replaces the entire store. Snapshots the current data to
+`licenses.pre-restore-<timestamp>.bak` next to the db first, validates the
+payload before mutating, and audit-logs the restore.
+
+**`DELETE /admin/licenses/:key`** → permanently removes a license
+(mis-mints and test licenses; revoke real customers instead). The audit
+line preserves a snapshot of the deleted record.
+
+**`POST /admin/backup`** → writes an on-demand snapshot (always, even if
+identical to the last one) → `{ ok, file, licenseCount }`.
+
+**`GET /admin/backups`** → `{ dir, files: [ { name, size, mtime } ] }`,
+newest first. **`GET /admin/backups/:name`** downloads one snapshot (the
+name must match the generated `licenses-backup-*.json` shape exactly).
+All three return `503 backups_disabled` if the backup manager isn't wired
+in.
+
+## Webhook notifications
+
+Set `LICENSE_WEBHOOK_URL` and the server POSTs a JSON event there whenever
+the license business needs attention:
+
+| Event                    | When                                                              |
+|--------------------------|-------------------------------------------------------------------|
+| `license.created`        | a license was minted                                              |
+| `license.revoked` / `license.unrevoked` | revocation toggled                                 |
+| `license.deleted`        | a license was permanently removed                                 |
+| `store.restored`         | the store was replaced from a backup                              |
+| `license.seat_limit`     | an `/activate` bounced off the seat cap (throttled: at most once per license per hour) |
+| `license.expiring_soon`  | a license enters the `WEBHOOK_EXPIRY_ALERT_DAYS` window (default 14 days; swept every 12 h; fired once per license per expiry date — extending the license re-arms it) |
+
+Payload shape: `{ event, at, license?: { licenseKey, companyName, seatCap,
+seatsUsed, expiresAt, revoked }, details? }` — `store.restored` is a
+store-level event and carries only `details: { restoredCount }`, no
+`license` field. Deliveries are sent in order,
+never block or fail the request that triggered them, retry twice on network
+errors or 5xx (a 4xx response is terminal), and time out after 5 s per
+attempt. With `LICENSE_WEBHOOK_SECRET` set, each delivery carries
+`X-AskToto-Signature: sha256=<hex>` — the HMAC-SHA256 of the raw request
+body — so your receiver can drop forgeries. Point the URL at a Slack/Teams
+relay, n8n, Zapier, or a 20-line endpoint of your own. The expiring-soon
+dedupe state is in-memory, so a server restart may repeat a reminder once.
+
+## Monitoring with Prometheus
+
+Set `METRICS_TOKEN` to enable `GET /metrics` (Prometheus text exposition
+format, gauge metrics: `asktoto_uptime_seconds`, `asktoto_licenses_total`,
+`asktoto_licenses_active`, `asktoto_licenses_revoked`,
+`asktoto_licenses_expired`, `asktoto_licenses_expiring_soon`,
+`asktoto_seat_cap_total`, `asktoto_seats_used_total`,
+`asktoto_seats_active_30d`). Scrape config:
+
+```yaml
+scrape_configs:
+  - job_name: asktoto-licenses
+    metrics_path: /metrics
+    authorization:
+      type: Bearer
+      credentials: <METRICS_TOKEN>
+    static_configs:
+      - targets: ["your-license-server.example.com"]
+```
+
+Unset, the endpoint returns 404 like any unknown route. For a simple
+up/down check without Prometheus, `GET /health` remains unauthenticated.
 
 ## Tests
 
