@@ -21,7 +21,7 @@ import {
 } from 'lucide-react'
 import type { PublicSettings, Profile, PlatformPermissions } from '@shared/ipc'
 import type { ProviderId } from '@shared/providers'
-import { PROVIDERS } from '@shared/providers'
+import { PROVIDERS, filterAllowedProviders } from '@shared/providers'
 import { MantuLogo } from './MantuLogo'
 import { accelLabel, isWindows } from '../lib/keys'
 
@@ -391,8 +391,8 @@ export function Onboarding({
       // Honor the org data-residency allowlist (null = unrestricted): only offer approved providers, so
       // onboarding can't route a user to a provider every ask would then reject.
       const allow = settings.allowedProviders
-      const featured = FEATURED_API_PROVIDERS.filter((id) => !allow || allow.includes(id))
-      const more = MORE_API_PROVIDERS.filter((id) => !allow || allow.includes(id))
+      const featured = filterAllowedProviders(FEATURED_API_PROVIDERS, allow)
+      const more = filterAllowedProviders(MORE_API_PROVIDERS, allow)
       const noneAllowed = featured.length === 0 && more.length === 0
       return (
         <div className="fade-up flex min-h-[300px] w-full flex-col items-center gap-5 px-4 py-7 text-center">

@@ -1,5 +1,24 @@
 import { describe, it, expect } from 'vitest'
-import { isDustReady, applyInteractiveGuardrail, detectProvider, PROVIDERS } from './providers'
+import { isDustReady, applyInteractiveGuardrail, detectProvider, filterAllowedProviders, PROVIDERS } from './providers'
+
+describe('filterAllowedProviders — org data-residency allowlist', () => {
+  it('returns ids unchanged when the allowlist is null/undefined (unrestricted)', () => {
+    expect(filterAllowedProviders(['anthropic', 'openai', 'grok'], null)).toEqual(['anthropic', 'openai', 'grok'])
+    expect(filterAllowedProviders(['anthropic', 'openai'], undefined)).toEqual(['anthropic', 'openai'])
+  })
+
+  it('keeps only ids present in the allowlist, preserving order', () => {
+    expect(filterAllowedProviders(['anthropic', 'openai', 'grok', 'kimi'], ['grok', 'anthropic'])).toEqual([
+      'anthropic',
+      'grok'
+    ])
+  })
+
+  it('returns empty when the allowlist excludes every candidate', () => {
+    expect(filterAllowedProviders(['anthropic', 'openai'], ['dust'])).toEqual([])
+    expect(filterAllowedProviders(['anthropic', 'openai'], [])).toEqual([])
+  })
+})
 
 describe('isDustReady', () => {
   it('is true only when the key, workspace, and base agent are all present', () => {
