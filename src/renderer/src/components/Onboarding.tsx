@@ -18,6 +18,7 @@ import {
   KeyRound,
   Building2
 } from 'lucide-react'
+import { DEFAULT_SHORTCUTS } from '@shared/ipc'
 import type { PublicSettings, Profile, PlatformPermissions } from '@shared/ipc'
 import type { ProviderId } from '@shared/providers'
 import { PROVIDERS } from '@shared/providers'
@@ -59,6 +60,11 @@ function ActionRow({ icon: Icon, label, hint, keys }: { icon: typeof Mic; label:
   )
 }
 
+// Mirrors Settings.tsx's managedChipCls — same "Managed by your organization" treatment, kept local here
+// since Onboarding doesn't otherwise import from Settings.
+const managedChipCls =
+  'inline-flex items-center gap-1 rounded-full border border-[var(--cl-primary)]/30 bg-[var(--cl-primary-soft)] px-1.5 py-0 text-[10px] font-medium text-[color:var(--color-accent-text)]'
+
 /** One selectable "how to power AskToto" path on the provider-choice slide. A plain-language card the
  *  user taps to route themselves — no jargon, no key required to read it. */
 function ProviderOption({
@@ -66,19 +72,27 @@ function ProviderOption({
   title,
   badge,
   desc,
-  onClick
+  onClick,
+  disabled
 }: {
   icon: typeof Mic
   title: string
   badge?: string
   desc: string
   onClick: () => void
+  /** Disables the tile — either a CLI probe is already in flight, or `provider` is locked by managed
+   *  config (settings.managedKeys), in which case the pick would silently be dropped by main anyway. */
+  disabled?: boolean
 }): JSX.Element {
   return (
     <button
       type="button"
       onClick={onClick}
-      className="no-drag focus-ring group flex items-start gap-3 rounded-xl border border-[var(--color-hair-soft)] bg-white/[0.02] p-3.5 text-left transition-colors hover:border-[var(--color-accent)] hover:bg-white/[0.05]"
+      disabled={disabled}
+      className={[
+        'no-drag focus-ring group flex items-start gap-3 rounded-xl border border-[var(--color-hair-soft)] bg-white/[0.02] p-3.5 text-left transition-colors hover:border-[var(--color-accent)] hover:bg-white/[0.05]',
+        disabled ? 'cursor-not-allowed opacity-50 hover:border-[var(--color-hair-soft)] hover:bg-white/[0.02]' : ''
+      ].join(' ')}
     >
       <div className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-[var(--color-accent-soft)] text-[var(--color-accent)]">
         <Icon size={17} />
@@ -238,6 +252,21 @@ export function Onboarding({
   const [step, setStep] = useState<1 | 2 | 3 | 4 | 5 | 6>(1)
   const [perms, setPerms] = useState<PlatformPermissions | null>(null)
   const headingRef = useRef<HTMLHeadingElement | null>(null)
+  // Step 5's chooseCli (below) awaits cliDetect + cliTest for up to ~45s with no earlier exit. `stepRef`
+  // mirrors the live `step` (not the value closed over when chooseCli was called) and `mountedRef` tracks
+  // whether Onboarding is still mounted, so a late resolution can never silently patch({ provider }) after
+  // the user already left step 5 (Back, Decide later, Get started) or unmounted onboarding entirely.
+  const [cliBusy, setCliBusy] = useState(false)
+  const stepRef = useRef(step)
+  useEffect(() => {
+    stepRef.current = step
+  }, [step])
+  const mountedRef = useRef(true)
+  useEffect(() => {
+    return () => {
+      mountedRef.current = false
+    }
+  }, [])
 
   // Move focus to the new step's heading on every transition so screen readers announce it instead of
   // silently dropping focus to <body>.
@@ -314,7 +343,7 @@ export function Onboarding({
         </div>
         <div className="flex w-full max-w-[460px] flex-col gap-3 rounded-xl border border-[var(--color-hair-soft)] bg-white/[0.02] p-4">
           <ActionRow icon={Sparkles} label="Ask anything" keys={accelLabel('CommandOrControl+Shift+Return')} hint="Type a question, or capture your screen for visual help." />
-          <ActionRow icon={Camera} label="Capture screen" keys={accelLabel('CommandOrControl+Shift+S')} hint="Get instant help with whatever you’re looking at." />
+          <ActionRow icon={Camera} label="Capture screen" keys={accelLabel(settings.shortcuts?.['capture'] ?? DEFAULT_SHORTCUTS.capture)} hint="Get instant help with whatever you’re looking at." />
           <ActionRow icon={Zap} label="Quick actions" hint="One-tap chips: What to say next · Fact-check · Explain · Summarize screen." />
         </div>
         {/* Invisible placeholder matching step 4's caption line, so WalkNav sits at the same height on
@@ -380,6 +409,9 @@ export function Onboarding({
     // Picking a path just sets the active provider (Tony's routing: an API key -> Anthropic/Claude, a
     // Dust team -> Dust, an installed CLI -> Claude Code). "Decide later" is honoured — recording and
     // transcripts never need a key, so nobody is blocked here.
+    // A locked `provider` (Settings' managedKeys) is not user-choosable — main silently drops the pick, so
+    // the tiles must not pretend it's an option here either.
+    const providerLocked = settings.managedKeys.includes('provider')
     const choose = (provider: ProviderId): void => {
       patch({ provider })
       setStep(6)
@@ -388,18 +420,28 @@ export function Onboarding({
     // the machine instead of always assuming Claude Code (otherwise a Codex-only install lands on the
     // wrong provider and the next screen shows it as not connected).
     const chooseCli = async (): Promise<void> => {
-      const claude = await window.toto.cliDetect('claude-cli')
-      if (claude.ok) {
-        // Verify the connection now (mirrors Settings.tsx's connect flow) so providerReady reflects
-        // reality immediately instead of the first Ask silently bouncing off a CLI that's installed but
-        // was never actually confirmed connected. A cliTest failure (installed but not signed in) still
-        // lets onboarding proceed — the readiness checklist on the next slide surfaces the hint.
-        await window.toto.cliTest('claude-cli')
-        return choose('claude-cli')
+      setCliBusy(true)
+      try {
+        const claude = await window.toto.cliDetect('claude-cli')
+        if (claude.ok) {
+          // Verify the connection now (mirrors Settings.tsx's connect flow) so providerReady reflects
+          // reality immediately instead of the first Ask silently bouncing off a CLI that's installed but
+          // was never actually confirmed connected. A cliTest failure (installed but not signed in) still
+          // lets onboarding proceed — the readiness checklist on the next slide surfaces the hint.
+          await window.toto.cliTest('claude-cli')
+          // Bail if the user left step 5 (Back/Decide later/Get started) or unmounted while this awaited —
+          // otherwise this would silently overwrite whatever provider they set in the meantime.
+          if (!mountedRef.current || stepRef.current !== 5) return
+          choose('claude-cli')
+          return
+        }
+        const codex = await window.toto.cliDetect('codex-cli')
+        if (codex.ok) await window.toto.cliTest('codex-cli')
+        if (!mountedRef.current || stepRef.current !== 5) return
+        choose(codex.ok ? 'codex-cli' : 'claude-cli')
+      } finally {
+        if (mountedRef.current) setCliBusy(false)
       }
-      const codex = await window.toto.cliDetect('codex-cli')
-      if (codex.ok) await window.toto.cliTest('codex-cli')
-      choose(codex.ok ? 'codex-cli' : 'claude-cli')
     }
     return (
       <div className="fade-up flex min-h-[300px] w-full flex-col items-center gap-5 px-4 py-7 text-center">
@@ -424,20 +466,24 @@ export function Onboarding({
             badge="No key needed"
             desc="Already use Claude Code or Codex in your terminal? Connect it. Nothing extra to pay, nothing to paste."
             onClick={() => void chooseCli()}
+            disabled={providerLocked || cliBusy}
           />
           <ProviderOption
             icon={KeyRound}
             title="An API key"
-            desc="Claude, GPT, Grok, Gemini, Kimi and more — paste a key on the next screen or in Settings → AI. You pay your provider directly."
+            desc="Claude, GPT, Grok, Gemini, Kimi and more — paste a key in Settings → AI. You pay your provider directly."
             onClick={() => choose('anthropic')}
+            disabled={providerLocked || cliBusy}
           />
           <ProviderOption
             icon={Building2}
             title="Mantu Dust"
             desc="Use Mantu's shared Dust workspace. Best if your team already runs on Dust."
             onClick={() => choose('dust')}
+            disabled={providerLocked || cliBusy}
           />
         </div>
+        {providerLocked && <span className={managedChipCls}>Managed by your organization</span>}
 
         <button
           type="button"

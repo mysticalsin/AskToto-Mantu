@@ -201,8 +201,11 @@ export function useAsk(): {
   // Ids explicitly cancelled by cancel() below — the ONLY reliable signal that an error is a genuine
   // user-initiated abort. Previously onError guessed from the error text (/\babort|\bcancel/i), which
   // silently swallowed any real error whose message happened to contain those words (e.g. a provider
-  // error mentioning "the request was aborted by the remote host"). One-shot: removed once its terminal
-  // event (onDone or onError) is observed, so the set never grows unbounded across a long session.
+  // error mentioning "the request was aborted by the remote host"). Removed on its terminal event
+  // (onDone/onError) when one arrives — but a genuinely cancelled stream never emits either (every
+  // provider strategy + the main askCancel handler suppress them on abort), so cancel() below ALSO
+  // self-evicts the id after a short delay; otherwise the Set would grow by one entry per cancelled
+  // stream for the rest of a long-running session.
   const cancelledIdsRef = useRef<Set<string>>(new Set())
 
   useEffect(() => {
@@ -347,9 +350,14 @@ export function useAsk(): {
 
   const cancel = useCallback((): void => {
     if (idRef.current) {
-      cancelledIdsRef.current.add(idRef.current) // marks the id so onError knows this one's abort is expected
-      void window.toto.cancel(idRef.current)
+      const id = idRef.current
+      cancelledIdsRef.current.add(id) // marks the id so onError knows this one's abort is expected
+      void window.toto.cancel(id)
       setAnswer((a) => (a ? { ...a, streaming: false } : a))
+      // A genuine cancel never gets a terminal onDone/onError to remove this id (see the ref's comment
+      // above), so self-evict after a delay comfortably longer than any straggling late error could take
+      // to arrive — bounds the Set's size instead of leaking one entry per cancelled stream forever.
+      setTimeout(() => cancelledIdsRef.current.delete(id), 30_000)
     }
   }, [])
 
