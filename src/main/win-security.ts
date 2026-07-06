@@ -50,16 +50,21 @@ const ADMIN_OWNER_SIDS = new Set([
   'S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464'
 ])
 
-/** True when a write ACE for this SID means a non-privileged principal could tamper with the file. */
-function isNonAdminWriteSid(sid: string): boolean {
-  if (sid === 'S-1-1-0') return true // Everyone
-  if (sid === 'S-1-5-11') return true // Authenticated Users
-  if (sid === 'S-1-5-4') return true // Interactive
-  if (sid === 'S-1-5-7') return true // Anonymous
-  if (sid === 'S-1-5-32-545') return true // BUILTIN\Users
-  if (sid === 'S-1-5-32-546') return true // Guests
-  if (/^S-1-5-21-\d+-\d+-\d+-(513|514|515|545)$/.test(sid)) return true // Domain Users/Guests/Computers, local Users
-  return false
+// SIDs that may legitimately hold a WRITE ACE on an admin-authored policy file: the admin/SYSTEM owner
+// set, plus CREATOR OWNER / OWNER RIGHTS (these resolve to the file's owner at evaluation time, and the
+// owner is separately pinned to an admin SID). This is a WHITELIST — any Allow-write ACE held by a SID
+// outside it is untrusted. A whitelist (vs the previous group blacklist) also rejects the narrow case of
+// an admin-owned file that grants write to a specific standard-user account (RID >= 1000), which a
+// blacklist of well-known groups would have missed.
+const ADMIN_WRITE_SIDS = new Set([
+  ...ADMIN_OWNER_SIDS,
+  'S-1-3-0', // CREATOR OWNER (resolves to the file owner — already pinned admin by the owner check)
+  'S-1-3-4' // OWNER RIGHTS
+])
+
+/** True when this SID is allowed to hold a write ACE on an admin-authored policy file. */
+function isAdminWriteSid(sid: string): boolean {
+  return ADMIN_WRITE_SIDS.has(sid)
 }
 
 // FileSystemRights bits that let a principal modify/replace/relabel the file (write-data, append,
@@ -72,10 +77,11 @@ export type AclProbe = { owner: string; aces: { sid: string; rights: number; typ
  *  admin/SYSTEM principal AND no broad non-admin principal holds a write ACE. Exported for unit tests. */
 export function evaluateAclTrust(acl: AclProbe): boolean {
   const ownerOk = ADMIN_OWNER_SIDS.has(acl.owner)
-  const hasNonAdminWrite = acl.aces.some(
-    (a) => a.type === 'Allow' && (a.rights & WRITE_MASK) !== 0 && isNonAdminWriteSid(a.sid)
+  // Whitelist: reject if ANY Allow-write ACE is held by a principal outside the admin-write set.
+  const hasUntrustedWrite = acl.aces.some(
+    (a) => a.type === 'Allow' && (a.rights & WRITE_MASK) !== 0 && !isAdminWriteSid(a.sid)
   )
-  return ownerOk && !hasNonAdminWrite
+  return ownerOk && !hasUntrustedWrite
 }
 
 function readAcl(path: string): AclProbe | null {

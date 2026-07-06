@@ -8,11 +8,21 @@ import { trustedAdminManagedPath } from './win-security'
 /** Enterprise governance: IT can freeze the version fleet-wide by deploying an admin managed-config with
  *  `{ "disableAutoUpdate": true }`. Only the ADMIN (machine) policy is honored — and on Windows only via
  *  the ACL-trusted path — so a standard user cannot turn their own updates on or off. */
+/** Pure: does this managed-config JSON text set `disableAutoUpdate: true`? Exported for tests. Any
+ *  non-true value, missing key, or malformed JSON = not disabled (fail-open to updates on garbage). */
+export function configDisablesAutoUpdate(configText: string): boolean {
+  try {
+    return JSON.parse(configText)?.disableAutoUpdate === true
+  } catch {
+    return false
+  }
+}
+
 function autoUpdateDisabledByPolicy(): boolean {
   const p = trustedAdminManagedPath()
   if (!p) return false
   try {
-    return JSON.parse(readFileSync(p, 'utf8'))?.disableAutoUpdate === true
+    return configDisablesAutoUpdate(readFileSync(p, 'utf8'))
   } catch {
     return false
   }
