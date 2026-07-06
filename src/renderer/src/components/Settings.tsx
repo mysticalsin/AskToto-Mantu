@@ -84,9 +84,10 @@ import { displayAccelerator } from '../lib/keys'
 const ctl =
   'no-drag font-body cl-input cl-focus px-3 py-2.5 text-[13px] text-[color:var(--cl-foreground)]'
 
-// Providers excluded from the generic provider tiles grid + generic "key" Section. dust/claude-cli/
-// codex-cli have dedicated cards in CliIntegration; gemini is intentionally hidden from the UI entirely.
-const CLI_PROVIDERS = new Set<ProviderId>(['dust', 'claude-cli', 'codex-cli', 'gemini'])
+// Providers excluded from the generic provider-tiles grid + generic "key" Section because they have
+// their own dedicated cards in CliIntegration (Dust) or connect via a local CLI, not a pasted key.
+// Gemini is NOT excluded — it is a standard API-key provider (AIza key) and belongs in the picker.
+const CLI_PROVIDERS = new Set<ProviderId>(['dust', 'claude-cli', 'codex-cli'])
 
 /**
  * After disconnecting/removing the active provider, pick another provider that is actually ready
@@ -248,44 +249,6 @@ function Section({
         )}
       </div>
       {children}
-    </section>
-  )
-}
-
-/** Like Section, but its body is collapsed behind a details-style toggle — closed on every mount, no
- *  persisted "remember this was open" state. Used for secondary content (e.g. "Experience: more
- *  models") that shouldn't compete with the primary flow for attention. */
-function ExpandableSection({
-  title,
-  desc,
-  children
-}: {
-  title: string
-  desc?: string
-  children: ReactNode
-}): JSX.Element {
-  const [open, setOpen] = useState(false)
-  return (
-    <section className="flex flex-col">
-      <button
-        type="button"
-        onClick={() => setOpen((o) => !o)}
-        aria-expanded={open}
-        className="no-drag cl-focus flex w-full items-center justify-between gap-2 text-left"
-      >
-        <div>
-          <div className="text-[13px] font-semibold leading-snug text-[color:var(--cl-foreground)]">{title}</div>
-          {desc && <div className="mt-1 text-[12px] text-[color:var(--cl-muted-foreground)]">{desc}</div>}
-        </div>
-        <ChevronDown
-          size={14}
-          className={[
-            'mt-0.5 shrink-0 text-[color:var(--cl-muted-foreground)] transition-transform',
-            open ? 'rotate-180' : ''
-          ].join(' ')}
-        />
-      </button>
-      {open && <div className="mt-3 flex flex-col gap-5">{children}</div>}
     </section>
   )
 }
@@ -570,18 +533,18 @@ function AiSection({
 
   const hint = detectHint(key, provider)
   const q = filter.trim().toLowerCase()
-  // Dust + CLI providers have dedicated UI sections; gemini is hidden; Anthropic has its own always-
-  // visible card below — exclude all from the "Experience: more models" tiles grid.
+  // Dust + CLI providers have dedicated UI sections — exclude from the always-visible provider grid.
+  // Every other provider (including Anthropic) appears here so the picker is a real, open choice.
   const shown = PROVIDER_IDS.filter(
-    (id) => !CLI_PROVIDERS.has(id) && id !== 'anthropic' && (!q || PROVIDERS[id].label.toLowerCase().includes(q))
+    (id) => !CLI_PROVIDERS.has(id) && (!q || PROVIDERS[id].label.toLowerCase().includes(q))
   )
   const recommended = recommendedProvider(settings)
 
   const dustSectionRef = useRef<HTMLDivElement>(null)
 
-  // The "{provider} key" card — shown for whichever raw provider is currently active. Rendered at the
-  // top level when that's Anthropic (the primary flow), or inside "Experience: more models" otherwise.
-  // null for CLI providers (Dust/Claude Code/Codex have their own dedicated cards, no generic key box).
+  // The "{provider} key" card — shown for whichever raw provider is currently active, right below the
+  // provider picker. null for CLI providers (Dust/Claude Code/Codex have their own dedicated cards, no
+  // generic key box).
   const keyEntrySection = !CLI_PROVIDERS.has(provider) ? (
     <Section title={`${def.label} key`} desc="Stored encrypted on this device. Never sent anywhere except the provider.">
       <div className="flex items-center gap-2">
@@ -791,6 +754,75 @@ function AiSection({
         dustSectionRef={dustSectionRef}
       />
 
+      {/* Provider picker — always visible, every non-CLI provider (Anthropic included). Pick one,
+          paste its key below; AskToto auto-detects the provider from the key shape as you paste. */}
+      <Section
+        title="Choose your AI provider"
+        desc="Connect a CLI above (no key), or pick any provider here and paste its key — stored encrypted on this device."
+      >
+        {PROVIDER_IDS.length > 8 && (
+          <div className="relative mb-2">
+            <Search
+              size={13}
+              className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-[color:var(--cl-muted-foreground)]"
+            />
+            <input
+              value={filter}
+              onChange={(e) => setFilter(e.target.value)}
+              placeholder="Filter providers…"
+              className={'w-full pl-7 ' + ctl}
+            />
+          </div>
+        )}
+        <div className="grid grid-cols-2 gap-2">
+          {shown.map((id) => {
+            const active = id === provider
+            return (
+              <button
+                key={id}
+                type="button"
+                aria-pressed={active}
+                disabled={locked}
+                onClick={() => patch({ provider: id })}
+                className={[
+                  'no-drag cl-focus flex flex-col items-start gap-0.5 rounded-[10px] border px-2.5 py-2 text-left transition-colors',
+                  active
+                    ? 'border-[var(--cl-primary)] bg-[var(--cl-primary-soft)]'
+                    : 'border-[var(--cl-border)] bg-white/[0.02] hover:bg-white/[0.05]',
+                  locked ? 'opacity-60 cursor-not-allowed' : ''
+                ].join(' ')}
+              >
+                <span className="flex w-full items-center justify-between gap-1.5">
+                  <span className="truncate text-[12px] font-medium text-[color:var(--cl-foreground)]">
+                    {PROVIDERS[id].label}
+                  </span>
+                  <span className="flex shrink-0 items-center gap-1">
+                    {id === recommended && (
+                      <span className="rounded-full bg-[var(--cl-primary-soft)] px-1.5 py-0 text-[10px] font-medium text-[color:var(--cl-primary)]">
+                        Best pick
+                      </span>
+                    )}
+                    {settings.hasKeys[id] && (
+                      <Check size={14} className="shrink-0 text-[color:var(--cl-success)]" />
+                    )}
+                  </span>
+                </span>
+                <span className="text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
+                  {PROVIDERS[id].blurb}
+                </span>
+              </button>
+            )
+          })}
+        </div>
+        {locked && (
+          <div className="mt-2">
+            <span className={managedChipCls}>Managed by your organization</span>
+          </div>
+        )}
+      </Section>
+
+      {keyEntrySection}
+
       {/* Dust — AskToto's primary brain (your Second Brain agents). Always here, not a tile. */}
       <div ref={dustSectionRef}>
         <DustSetup
@@ -801,110 +833,6 @@ function AiSection({
           active={provider === 'dust'}
         />
       </div>
-
-      {/* Anthropic — the primary, recommended provider. Always visible: a compact summary row here,
-          plus its full key card below whenever it's the one currently answering questions. */}
-      <div
-        className={[
-          'flex items-center justify-between gap-2 rounded-[10px] border p-3',
-          provider === 'anthropic'
-            ? 'border-[var(--cl-primary)] bg-[var(--cl-primary-soft)]/40'
-            : 'border-[var(--cl-border)] bg-white/[0.02]'
-        ].join(' ')}
-      >
-        <div className="flex flex-col gap-0.5">
-          <span className="text-[12px] font-medium text-[color:var(--cl-foreground)]">{PROVIDERS.anthropic.label}</span>
-          <span className="text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
-            {PROVIDERS.anthropic.blurb}
-          </span>
-        </div>
-        {provider === 'anthropic' ? (
-          <span className="flex shrink-0 items-center gap-1 rounded-full bg-[var(--cl-primary-soft)] px-2 py-0.5 text-[11px] font-medium text-[color:var(--cl-primary)]">
-            <CircleCheck size={12} /> Active
-          </span>
-        ) : locked ? (
-          <span className={managedChipCls}>Managed by your organization</span>
-        ) : (
-          <button
-            type="button"
-            onClick={() => patch({ provider: 'anthropic' })}
-            className="no-drag cl-focus flex shrink-0 items-center gap-1.5 rounded-[8px] border border-[var(--cl-input)] bg-white/[0.04] px-3 py-1.5 text-[12px] text-[color:var(--cl-foreground)] hover:bg-white/[0.08]"
-          >
-            Use this
-          </button>
-        )}
-      </div>
-
-      {provider === 'anthropic' && keyEntrySection}
-
-      <ExpandableSection
-        title="Experience: more models"
-        desc="Bring your own key from another provider, or try something different. Closed by default; Anthropic above covers most people."
-      >
-        <Section title="Model provider" desc="Prefer a raw model? Pick one, paste a key, and AskToto detects the provider.">
-          {PROVIDER_IDS.length > 8 && (
-            <div className="relative mb-2">
-              <Search
-                size={13}
-                className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-[color:var(--cl-muted-foreground)]"
-              />
-              <input
-                value={filter}
-                onChange={(e) => setFilter(e.target.value)}
-                placeholder="Filter providers…"
-                className={'w-full pl-7 ' + ctl}
-              />
-            </div>
-          )}
-          <div className="grid grid-cols-2 gap-2">
-            {shown.map((id) => {
-              const active = id === provider
-              return (
-                <button
-                  key={id}
-                  type="button"
-                  aria-pressed={active}
-                  disabled={locked}
-                  onClick={() => patch({ provider: id })}
-                  className={[
-                    'no-drag cl-focus flex flex-col items-start gap-0.5 rounded-[10px] border px-2.5 py-2 text-left transition-colors',
-                    active
-                      ? 'border-[var(--cl-primary)] bg-[var(--cl-primary-soft)]'
-                      : 'border-[var(--cl-border)] bg-white/[0.02] hover:bg-white/[0.05]',
-                    locked ? 'opacity-60 cursor-not-allowed' : ''
-                  ].join(' ')}
-                >
-                  <span className="flex w-full items-center justify-between gap-1.5">
-                    <span className="truncate text-[12px] font-medium text-[color:var(--cl-foreground)]">
-                      {PROVIDERS[id].label}
-                    </span>
-                    <span className="flex shrink-0 items-center gap-1">
-                      {id === recommended && (
-                        <span className="rounded-full bg-[var(--cl-primary-soft)] px-1.5 py-0 text-[10px] font-medium text-[color:var(--cl-primary)]">
-                          Best pick
-                        </span>
-                      )}
-                      {settings.hasKeys[id] && (
-                        <Check size={14} className="shrink-0 text-[color:var(--cl-success)]" />
-                      )}
-                    </span>
-                  </span>
-                  <span className="text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
-                    {PROVIDERS[id].blurb}
-                  </span>
-                </button>
-              )
-            })}
-          </div>
-          {locked && (
-            <div className="mt-2">
-              <span className={managedChipCls}>Managed by your organization</span>
-            </div>
-          )}
-        </Section>
-
-        {provider !== 'anthropic' && keyEntrySection}
-      </ExpandableSection>
 
       {/* Thinking mode — applies to whatever's active (raw model tiers, or your two Dust agents) */}
       <Section title="Thinking mode" desc="When to use a fast model vs. a deeper one for harder questions.">

@@ -4,6 +4,7 @@ import type { ProviderId } from './providers'
 export const ProviderIdSchema = z.enum([
   'anthropic',
   'openai',
+  'grok',
   'nvidia',
   'deepseek',
   'qwen',
