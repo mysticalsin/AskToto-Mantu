@@ -67,6 +67,34 @@ describe('evaluateAclTrust — the Windows managed-config trust decision', () =>
     expect(evaluateAclTrust({ owner: ATTACKER, aces: [{ sid: ATTACKER, rights: FULL, type: 'Allow' }] })).toBe(false)
   })
 
+  it('REJECTS an admin-owned file that grants write to a SPECIFIC standard user (RID >= 1000)', () => {
+    // The blacklist of well-known groups missed this; the whitelist rejects any non-admin write principal.
+    expect(
+      evaluateAclTrust({
+        owner: SYSTEM,
+        aces: [
+          { sid: SYSTEM, rights: FULL, type: 'Allow' },
+          { sid: ATTACKER, rights: WRITE, type: 'Allow' } // a specific standard-user account, not a group
+        ]
+      })
+    ).toBe(false)
+  })
+
+  it('allows CREATOR OWNER / OWNER RIGHTS write on an admin-owned file', () => {
+    // These resolve to the file owner, which the owner check already pins to an admin SID.
+    for (const sid of ['S-1-3-0', 'S-1-3-4']) {
+      expect(
+        evaluateAclTrust({
+          owner: ADMINS,
+          aces: [
+            { sid: ADMINS, rights: FULL, type: 'Allow' },
+            { sid, rights: FULL, type: 'Allow' }
+          ]
+        })
+      ).toBe(true)
+    }
+  })
+
   it('ignores Deny ACEs when judging non-admin write', () => {
     expect(
       evaluateAclTrust({
