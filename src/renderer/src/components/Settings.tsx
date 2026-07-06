@@ -43,6 +43,7 @@ import {
   Camera,
   Eye,
   Settings2,
+  Lock,
   type LucideIcon
 } from 'lucide-react'
 import {
@@ -134,8 +135,10 @@ function recommendedProvider(settings: PublicSettings): ProviderId {
  *  user-facing copy — recognized brands by name, everything else as a plain tier word. */
 function prettyModel(m: string, provider: ProviderId, tier: 'base' | 'think' | 'deep'): string {
   if (provider === 'dust') {
-    if (tier === 'deep') return 'your deep agent'
-    return tier === 'think' ? 'your thinking agent' : 'your base agent'
+    // Dust only has a Base agent + an optional Thinking agent — there is no distinct "deep" agent. The
+    // 'deep' tier resolves (resolveModelTier) to the Thinking agent, or Base if none is configured, so
+    // it shares the Thinking agent's caption rather than naming a tier that doesn't exist.
+    return tier === 'base' ? 'your base agent' : 'your thinking agent'
   }
   if (m) {
     if (/haiku/i.test(m)) return 'Haiku'
@@ -490,6 +493,10 @@ function AiSection({
   // show that same guarded result, not the raw tier, or it names a model that never actually answers.
   const guardedBaseModelName = applyInteractiveGuardrail(provider, 'base', baseModelName)
   const guardedDeepModelName = applyInteractiveGuardrail(provider, 'deep', deepModelName)
+  // Only used by the Auto caption below, to name the real middle tier (routeTier's 'think' bucket —
+  // "heavy" but not "hard" prompts) instead of silently collapsing it into the base/deep story.
+  const thinkModelName = resolveModelTier(provider, settings.providerModels, settings.providerModelsThinking, 'think')
+  const guardedThinkModelName = applyInteractiveGuardrail(provider, 'think', thinkModelName)
   const keyInputId = useId()
   const modelInputId = useId()
   const baseUrlInputId = useId()
@@ -933,7 +940,12 @@ function AiSection({
         </div>
         <span className="mt-1.5 block text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
           {settings.thinkingMode === 'auto'
-            ? `Auto: simple questions use ${prettyModel(guardedBaseModelName, provider, 'base')}; coding, engineering & complex go to ${prettyModel(guardedDeepModelName, provider, 'deep')}.`
+            ? // routeTier (shared/routing.ts) actually escalates in 3 steps — base → think ("heavy") → deep
+              // ("hard"). Dust collapses think/deep into the same Thinking agent (see prettyModel), so its
+              // caption only needs two clauses; raw providers have a real, distinct middle tier to name.
+              provider === 'dust'
+              ? `Auto: simple questions use ${prettyModel(guardedBaseModelName, provider, 'base')}; anything harder goes to ${prettyModel(guardedDeepModelName, provider, 'deep')}.`
+              : `Auto: simple questions use ${prettyModel(guardedBaseModelName, provider, 'base')}; heavier ones use ${prettyModel(guardedThinkModelName, provider, 'think')}; coding, engineering & the hardest go to ${prettyModel(guardedDeepModelName, provider, 'deep')}.`
             : settings.thinkingMode === 'always'
               ? `Every answer uses ${prettyModel(guardedDeepModelName, provider, 'deep')} (deep mode).`
               : `Every answer uses ${prettyModel(guardedBaseModelName, provider, 'base')} (fastest & cheapest).`}
@@ -1827,7 +1839,7 @@ function DustSetup({
                     <button
                       type="button"
                       onClick={connectCli}
-                      disabled={cli.busy || locked}
+                      disabled={cli.busy || (locked && active)}
                       title="Re-import a fresh session from the Dust CLI"
                       className="no-drag cl-focus flex items-center gap-1.5 rounded-[8px] bg-[var(--cl-primary)] px-3 py-1.5 text-[12px] font-medium text-white hover:opacity-90 disabled:opacity-50"
                     >
@@ -1851,7 +1863,7 @@ function DustSetup({
                     <button
                       type="button"
                       onClick={connectCli}
-                      disabled={cli.busy || locked}
+                      disabled={cli.busy || (locked && active)}
                       className="no-drag cl-focus flex items-center gap-1.5 rounded-[8px] bg-[var(--cl-primary)] px-3 py-1.5 text-[12px] font-medium text-white hover:opacity-90 disabled:opacity-50"
                     >
                       {cli.busy ? <Loader2 size={13} className="animate-spin" /> : <Link2 size={13} />}
@@ -1983,7 +1995,7 @@ function DustSetup({
               <button
                 type="button"
                 onClick={saveDustKey}
-                disabled={keySaving || !dustKey.trim() || locked}
+                disabled={keySaving || !dustKey.trim() || (locked && active)}
                 className="no-drag cl-focus flex items-center gap-1 rounded-[10px] bg-[var(--cl-primary)] px-3 py-2.5 text-[13px] font-medium text-white hover:opacity-90 disabled:opacity-50"
               >
                 {keySaving ? <Loader2 size={14} className="animate-spin" /> : null} Save
@@ -2035,21 +2047,38 @@ function DustSetup({
             Thinking agent · hard, coding questions · optional
           </label>
           {agents && agents.length > 0 ? (
-            <select id={thinkSel} value={thinkAgent} onChange={(e) => setThinkAgent(e.target.value)} className={'w-full ' + ctl}>
-              <option value="">Same as base agent</option>
-              {agents.map((a) => (
-                <option key={a.sId} value={a.sId}>
-                  {a.name}
-                </option>
-              ))}
-            </select>
+            <div className="flex items-center gap-2">
+              <select
+                id={thinkSel}
+                value={thinkAgent}
+                onChange={(e) => setThinkAgent(e.target.value)}
+                disabled={settings.managedKeys.includes('providerModelsThinking')}
+                className={
+                  'flex-1 min-w-0 ' + ctl + (settings.managedKeys.includes('providerModelsThinking') ? ' opacity-60' : '')
+                }
+              >
+                <option value="">Same as base agent</option>
+                {agents.map((a) => (
+                  <option key={a.sId} value={a.sId}>
+                    {a.name}
+                  </option>
+                ))}
+              </select>
+              <ManagedChip keys={settings.managedKeys} k="providerModelsThinking" />
+            </div>
           ) : (
-            <input
-              value={thinkAgent}
-              onChange={(e) => setThinkAgent(e.target.value)}
-              placeholder="Thinking agent id (optional, defaults to base)"
-              className={'w-full ' + ctl}
-            />
+            <div className="flex items-center gap-2">
+              <input
+                value={thinkAgent}
+                onChange={(e) => setThinkAgent(e.target.value)}
+                placeholder="Thinking agent id (optional, defaults to base)"
+                disabled={settings.managedKeys.includes('providerModelsThinking')}
+                className={
+                  'flex-1 min-w-0 ' + ctl + (settings.managedKeys.includes('providerModelsThinking') ? ' opacity-60' : '')
+                }
+              />
+              <ManagedChip keys={settings.managedKeys} k="providerModelsThinking" />
+            </div>
           )}
 
           {/* Spotlight Ref agent is also hard-locked — not a picker. Same read-only pattern as base. */}
@@ -3932,8 +3961,23 @@ function IntelligenceTab({
                 disabled={!onOpenMeeting}
                 className="no-drag cl-focus cl-card flex items-center gap-2.5 px-3 py-2.5 text-left transition-colors hover:bg-white/[0.06] disabled:opacity-60"
               >
-                <FileText size={14} className="shrink-0 text-[color:var(--color-accent-text)]" />
+                {m.locked ? (
+                  <Lock
+                    size={14}
+                    className="shrink-0 text-[color:var(--cl-muted-foreground)]"
+                    aria-label="Encrypted, can't be opened on this device"
+                  />
+                ) : (
+                  <FileText size={14} className="shrink-0 text-[color:var(--color-accent-text)]" />
+                )}
                 <span className="min-w-0 flex-1 truncate text-[12px] text-[color:var(--cl-foreground)]">{m.title}</span>
+                {/* Locked: a real encrypted meeting that couldn't be decrypted on this device — surface it
+                    here too (matches RecallView's row) so the click isn't a silent dead end with no cue. */}
+                {m.locked && (
+                  <span className="shrink-0 rounded-full bg-white/[0.06] px-2 py-0.5 text-[10px] text-[color:var(--cl-muted-foreground)]">
+                    Locked
+                  </span>
+                )}
                 <span className="shrink-0 text-[11px] text-[color:var(--cl-muted-foreground)]">
                   {shortDate(m.date)}
                   {m.durationMin ? ` · ${m.durationMin} min` : ''}

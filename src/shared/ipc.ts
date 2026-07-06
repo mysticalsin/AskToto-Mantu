@@ -324,6 +324,13 @@ export const AskStartSchema = z.object({
   depth: z.enum(['deeper']).optional(),
   /** 'factcheck' = a verification ask → the router sends it to the strongest model (verifier path). */
   kind: z.enum(['answer', 'factcheck']).optional(),
+  /** When true, main redacts high-confidence secrets (cards, API keys, SSNs, private keys — same
+   *  redactSecrets() used on req.transcript) out of THIS request's `prompt` before it reaches a cloud
+   *  model. For prompts built from auto-captured content (e.g. fact-check's transcript fallback), never
+   *  from the user's own typed text — the "typed questions are never changed" promise depends on this
+   *  staying unset on any typed-claim/typed-question ask. Optional/undefined (not defaulted) like the
+   *  other per-turn flags above so every existing caller is unaffected. */
+  redactPrompt: z.boolean().optional(),
   /** Pins a specific Dust agent sId regardless of tier routing (e.g. Spotlight Ref). Dust-only; ignored by other providers. */
   agentOverride: z.string().optional(),
   /** Forces this one request to a specific provider regardless of the globally active `provider` setting —

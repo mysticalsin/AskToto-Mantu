@@ -64,33 +64,56 @@ function dustLogger(): Console {
   return logger
 }
 
-// One Dust conversation per meeting, not one per request. Fact-check, Explain, Spotlight Ref, and every
-// other Dust-routed quick-action fired during the SAME meeting reuse this conversation, so the agent sees
-// the accumulated back-and-forth instead of a cold start on every call. Reset exactly once, when a NEW
-// meeting/listening session begins (see resetDustConversation, called from IPC.listeningState on `true`)
-// — never on stop, so a follow-up drafted right after the call still shares context with what happened
-// during it. Scoped to (workspaceId, agentId) so switching agents/workspaces mid-session can't leak one
-// agent's conversation into another's. Also time-bounded (DUST_CONVERSATION_TTL_MS): without this, an
-// unrelated ad-hoc question asked hours or days later — with no new meeting having started in between —
-// would silently inherit that old meeting's private conversation history. Module-level state is safe
-// here: AskToto is single-window/single-active-meeting by construction, there is no concurrent-meeting
-// case to isolate against.
+// One Dust conversation per (workspace, agent) per meeting, not one per request. Fact-check, Explain,
+// Spotlight Ref, and every other Dust-routed quick-action fired during the SAME meeting reuse that agent's
+// conversation, so the agent sees the accumulated back-and-forth instead of a cold start on every call.
+// Keyed per agent (see conversationKey) — not a single slot — because auto thinking-mode legitimately
+// alternates between the base and thinking agent within one meeting; a single-slot cache would discard
+// agent A's history the moment agent B ran, then cold-start a THIRD conversation on returning to A. Reset
+// entirely (every agent's entry) exactly once, when a NEW meeting/listening session begins (see
+// resetDustConversation, called from IPC.listeningState on `true`) — never on stop, so a follow-up drafted
+// right after the call still shares context with what happened during it. Also time-bounded (per entry,
+// DUST_CONVERSATION_TTL_MS): without this, an unrelated ad-hoc question asked hours or days later — with
+// no new meeting having started in between — would silently inherit that old meeting's private
+// conversation history. Size-capped (DUST_CONVERSATION_MAX_ENTRIES) so a session that cycles through many
+// distinct agents can't grow this map unbounded — oldest entry is evicted once the cap is exceeded. Module
+// -level state is safe here: AskToto is single-window/single-active-meeting by construction, there is no
+// concurrent-meeting case to isolate against.
 type DustConversationRef = { conversationId: string; workspaceId: string; agentId: string; createdAt: number }
 const DUST_CONVERSATION_TTL_MS = 2 * 60 * 60 * 1000 // 2h — covers a meeting plus an immediate follow-up draft
-let activeConversation: DustConversationRef | null = null
+const DUST_CONVERSATION_MAX_ENTRIES = 8 // generous headroom over base/think/deep/spotlight-ref in one meeting
+// Map preserves insertion order; setActiveConversation below deletes-then-reinserts on every write so the
+// least-recently-used entry is always first, making "evict the first key" an LRU eviction, not just FIFO.
+const activeConversations = new Map<string, DustConversationRef>()
 // Serializes conversation CREATION per (workspaceId, agentId): two Dust requests fired close together
 // (e.g. the auto-recap and a manual "Generate follow-up" click) must not both see no cached conversation
 // and each call createConversation, forking one meeting into two disconnected Dust conversations. Only
 // the create step needs this gate — once a conversation exists, concurrent postUserMessage calls into it
-// are already safe.
+// are already safe. Intentionally global (not per-key): the rare cross-agent overlap just serializes
+// creation briefly rather than racing, which is a fine trade-off for a single-window app.
 let creationInFlight: Promise<void> | null = null
 // Bumped on every reset so an in-flight createConversation that straddles a meeting-boundary reset can
 // detect it happened and skip repopulating the cache with the (now-stale) previous meeting's conversation.
 let conversationEpoch = 0
 
+function conversationKey(workspaceId: string, agentId: string): string {
+  return `${workspaceId}:${agentId}`
+}
+
+/** Insert/refresh a cache entry and enforce the size cap via LRU-style eviction (oldest-inserted first). */
+function setActiveConversation(key: string, ref: DustConversationRef): void {
+  activeConversations.delete(key) // re-insert so this key becomes the most-recently-used for eviction order
+  activeConversations.set(key, ref)
+  while (activeConversations.size > DUST_CONVERSATION_MAX_ENTRIES) {
+    const oldestKey = activeConversations.keys().next().value
+    if (oldestKey === undefined) break
+    activeConversations.delete(oldestKey)
+  }
+}
+
 /** Call when a new meeting/listening session starts — the next Dust request begins a fresh conversation. */
 export function resetDustConversation(): void {
-  activeConversation = null
+  activeConversations.clear()
   conversationEpoch++
 }
 
@@ -172,9 +195,10 @@ export function streamDust(opts: StreamOptions): StreamHandle {
       return true
     }
     const workspaceId = creds.workspaceId || ''
+    const key = conversationKey(workspaceId, opts.model)
     // freshConversation (background jobs like brain ingest): never join OR become the cached meeting
     // conversation — an extraction must not see meeting context, and the meeting must not see it.
-    const isFresh = (c: DustConversationRef | null): c is DustConversationRef =>
+    const isFresh = (c: DustConversationRef | undefined): c is DustConversationRef =>
       !opts.freshConversation &&
       !!c &&
       c.workspaceId === workspaceId &&
@@ -183,9 +207,9 @@ export function streamDust(opts: StreamOptions): StreamHandle {
 
     // If a concurrent request is already creating this meeting's conversation, wait for it instead of
     // racing a second createConversation — see creationInFlight comment above. Fresh-conversation
-    // requests skip the gate entirely: they never touch the shared cache slot.
+    // requests skip the gate entirely: they never touch the shared cache.
     let releaseCreationGate: (() => void) | null = null
-    while (!opts.freshConversation && !isFresh(activeConversation)) {
+    while (!opts.freshConversation && !isFresh(activeConversations.get(key))) {
       if (!creationInFlight) {
         creationInFlight = new Promise((resolve) => {
           releaseCreationGate = resolve
@@ -202,8 +226,9 @@ export function streamDust(opts: StreamOptions): StreamHandle {
     }
     let conversation: unknown
     let messageSId: string
-    if (isFresh(activeConversation)) {
-      const reusable = activeConversation
+    const cached = activeConversations.get(key)
+    if (isFresh(cached)) {
+      const reusable = cached
       // Same meeting, same agent — continue the existing conversation instead of starting cold.
       const posted = await api.postUserMessage({
         conversationId: reusable.conversationId,
@@ -213,13 +238,13 @@ export function streamDust(opts: StreamOptions): StreamHandle {
       if (posted.isErr()) {
         // The cached conversation may have expired/been deleted server-side — fall back to a fresh one
         // rather than failing the whole ask over a stale cache entry.
-        activeConversation = null
+        activeConversations.delete(key)
         if (await retryIfAuth(posted.error)) return
         return run(creds, allowRetry)
       }
       const fetched = await api.getConversation({ conversationId: reusable.conversationId, signal: controller.signal })
       if (fetched.isErr()) {
-        activeConversation = null
+        activeConversations.delete(key)
         return fail(fetched.error.message)
       }
       conversation = fetched.value
@@ -252,11 +277,11 @@ export function streamDust(opts: StreamOptions): StreamHandle {
       messageSId = created.value.message.sId
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const sId = (conversation as any)?.sId
-      // A fresh-conversation request must not hijack the meeting's cache slot with its throwaway thread.
-      // Nor may a request that straddled a meeting-boundary reset (epoch changed while we awaited
+      // A fresh-conversation request must not hijack the meeting's cache with its throwaway thread. Nor
+      // may a request that straddled a meeting-boundary reset (epoch changed while we awaited
       // createConversation) repopulate the cache with the now-stale previous meeting's conversation.
       if (sId && !opts.freshConversation && epochAtStart === conversationEpoch && !controller.signal.aborted) {
-        activeConversation = { conversationId: sId, workspaceId, agentId: opts.model, createdAt: Date.now() }
+        setActiveConversation(key, { conversationId: sId, workspaceId, agentId: opts.model, createdAt: Date.now() })
       }
       auditLog('dust.conversation', { action: opts.freshConversation ? 'created-isolated' : 'created' })
     }
