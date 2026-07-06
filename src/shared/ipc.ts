@@ -474,6 +474,9 @@ export const BaseSettingsSchema = z.object({
   // here instead so it's checkable in Settings after the fact, never shown live. Persists until the user
   // dismisses it (Settings → Speech) — auto-clearing on the next meeting risks it vanishing unseen.
   asrLastFallbackAt: z.number().nullable().default(null),
+  // Same tracking as asrLastFallbackAt, for a WebGPU→CPU (or other backend) ASR fallback — set by the
+  // renderer, surfaced as a Settings → Speech note. Optional: absent on older persisted settings.
+  asrWebgpuFallbackAt: z.number().nullable().optional(),
   // On by default: this reminder is the ONLY consent mechanism AskToto has today — it shows the
   // operator, never the other participants, and is not a substitute for actually telling people
   // they're being recorded. See the Settings copy near this toggle for the honest scope of what it does.
@@ -632,6 +635,7 @@ export const DEFAULT_SETTINGS: Settings = {
   asrQuality: 'fast',
   asrEngine: 'whisper',
   asrLastFallbackAt: null,
+  asrWebgpuFallbackAt: null,
   requireConsentIndicator: true,
   redactSensitive: true,
   lastConsentReminderAt: 0,

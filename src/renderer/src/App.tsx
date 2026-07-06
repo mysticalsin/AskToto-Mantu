@@ -135,6 +135,22 @@ export function App(): JSX.Element {
     settings?.micDeviceId,
     settings?.asrEntityBias ? entityNames : undefined
   )
+  // Surface a WebGPU→WASM ASR downgrade (listen.webgpuUnavailable) to Settings, mirroring the
+  // onEngineFallback → asrLastFallbackAt wiring just above. Patches exactly once per transition to true —
+  // guarded by a ref (not the persisted field) so a user who dismisses the note in Settings mid-session
+  // isn't immediately fought by this effect re-firing off the same still-true state; re-arms once the flag
+  // clears so a later session's fresh downgrade notifies again.
+  const webgpuNotifiedRef = useRef(false)
+  useEffect(() => {
+    if (listen.webgpuUnavailable) {
+      if (!webgpuNotifiedRef.current) {
+        webgpuNotifiedRef.current = true
+        void patch({ asrWebgpuFallbackAt: Date.now() })
+      }
+    } else {
+      webgpuNotifiedRef.current = false
+    }
+  }, [listen.webgpuUnavailable, patch])
 
   const [input, setInput] = useState('')
   // Every view except the idle bar is a lazy chunk. A view switch inside a click handler renders on
@@ -188,6 +204,12 @@ export function App(): JSX.Element {
   // for the entire meeting.
   const [consentReminderOpen, setConsentReminderOpen] = useState(false)
   const [capturing, setCapturing] = useState(false)
+  // Synchronous in-flight guard for askScreen(): capturing (state) only flips true via startTransition, so
+  // two fast triggers (double-click / hotkey-plus-click) both read the OLD `capturing` and both start a
+  // capture before the deferred state update ever commits — mirrors listen.ts's startingRef pattern. Set
+  // at the very top of askScreen, before any `await`; cleared in its `finally`. `capturing` (state) still
+  // drives the UI exactly as before.
+  const capturingRef = useRef(false)
   const [captureError, setCaptureError] = useState<string | null>(null)
   // Set true after consecutive autosave failures during a live meeting (disk full / permissions) so the
   // user is warned before the final recap save can also fail — autosave is best-effort but a sustained
@@ -273,6 +295,15 @@ export function App(): JSX.Element {
   // Idempotence latch for endReview() re-entry — see endReview's own comment for the exact hazard it
   // guards against. Cleared at the start of every fresh session (startListen) so a later stop can fire.
   const stoppingRef = useRef(false)
+  // Mirrors Review's own recapDirty (an in-progress, unsaved recap edit) so the global Escape handler can
+  // gate on the same check Review's in-panel exits (Resume / New meeting / Recent meetings) already use —
+  // Escape used to be the only exit that could silently discard an edit, since its sole guard was
+  // activeElement being an INPUT/TEXTAREA, which misses focus sitting on the Save/Cancel buttons or
+  // elsewhere. Kept in sync by Review via the onReviewDirtyChange callback below.
+  const reviewDirtyRef = useRef(false)
+  const onReviewDirtyChange = useCallback((dirty: boolean): void => {
+    reviewDirtyRef.current = dirty
+  }, [])
 
   // Drives the overlay's glass-background alpha (Settings → Personalize → Appearance). A single CSS
   // variable multiplies every --glass-* alpha channel (see styles.css) — default 1 reproduces today's
@@ -577,7 +608,8 @@ export function App(): JSX.Element {
       opts?: { label?: string; kind?: 'answer' | 'factcheck'; history?: ChatTurn[]; record?: string }
     ): Promise<string | null> => {
       if (!requireProvider()) return null
-      if (capturing) return null
+      if (capturingRef.current) return null
+      capturingRef.current = true
       // Mount the Answer view + the "capturing" busy state as ONE transition. `capturing` (not just
       // `view`) drives the first mount of the lazy <Answer> chunk in the render branch below, and React
       // ALWAYS suspends a lazy component's very first render — so a bare synchronous setCapturing(true)
@@ -631,10 +663,11 @@ export function App(): JSX.Element {
         if (id && opts?.record) pendingUserRef.current = { id, q: opts.record }
         return id
       } finally {
+        capturingRef.current = false
         setCapturing(false)
       }
     },
-    [ask.run, ask.fail, capturing, requireProvider, input, listen.text]
+    [ask.run, ask.fail, requireProvider, input, listen.text]
   )
 
   const assist = useCallback(async (): Promise<void> => {
@@ -770,18 +803,23 @@ export function App(): JSX.Element {
     // most recent thing THEY said → otherwise the last non-empty transcript (covers "just stopped
     // listening", since Stop doesn't clear it).
     if (claim) {
-      ask.run({ mode: 'answer', kind: 'factcheck', label: claim, prompt: buildFactCheckClaimPrompt(claim) })
+      const id = ask.run({ mode: 'answer', kind: 'factcheck', label: claim, prompt: buildFactCheckClaimPrompt(claim) })
+      pendingUserRef.current = { id, q: claim } // record into memory so a follow-up keeps continuity
       setInput('')
       return
     }
     const lastThem = listen.listening ? [...listen.lines].reverse().find((l) => l.speaker === 'them')?.text : undefined
-    const c = lastThem || transcript
-    ask.run({
+    // Bound the pure-transcript fallback to the last ~3000 chars — the same cap withContext/
+    // buildWhatNextPrompt/buildExplainPrompt already apply — so a long-running meeting's full transcript
+    // never gets dumped unbounded into the fact-check prompt. lastThem is a single utterance, never sliced.
+    const c = lastThem || transcript.slice(-3000)
+    const id = ask.run({
       mode: 'answer',
       kind: 'factcheck',
       label: c || 'the conversation so far',
       prompt: buildFactCheckClaimPrompt(c) + GUARD_LINE
     })
+    pendingUserRef.current = { id, q: c || 'the conversation so far' }
     setInput('')
   }, [
     input,
@@ -827,7 +865,8 @@ export function App(): JSX.Element {
     const prompt = typed
       ? `Given this context, give me the exact next words to say:\n"""\n${typed}\n"""`
       : buildWhatNextPrompt(transcript, 'transcript')
-    ask.run({ mode: 'answer', prompt: prompt + GUARD_LINE, history: historyRef.current })
+    const id = ask.run({ mode: 'answer', prompt: prompt + GUARD_LINE, history: historyRef.current })
+    pendingUserRef.current = { id, q: typed || prompt } // record into memory so a follow-up keeps continuity
     setInput('')
   }, [
     input,
@@ -955,7 +994,7 @@ export function App(): JSX.Element {
     patch
   ])
 
-  const endReview = useCallback(() => {
+  const endReview = useCallback(async (): Promise<void> => {
     // Idempotence latch: listen.listening stays true for up to DRAIN_CEILING_MS (4s) after stop() while
     // the audio drain finishes in the background (listen.ts), so toggleListen() can still read "listening"
     // and re-enter endReview() from a second Stop click landing inside that window. Without this guard the
@@ -964,10 +1003,14 @@ export function App(): JSX.Element {
     // UI still looked "live") could cancel/restart the summary indefinitely instead of ever seeing it land.
     if (stoppingRef.current) return
     stoppingRef.current = true
-    const tx = listen.text()
-    listen.stop()
+    // Leave the "live" chrome instantly — the view switch does not wait on the drain below.
     setView('review')
     setCollapsed(false)
+    // Await the drain/teardown BEFORE reading the transcript: reading listen.text() from a pre-stop
+    // snapshot could miss whatever the final flushed audio window committed, so the recap silently
+    // omitted the meeting's last spoken line. listen.stop() now resolves once that flush has landed.
+    await listen.stop()
+    const tx = listen.text()
     if (tx.trim()) {
       // Cascade the recap into Dust whenever it's configured, regardless of the active provider (e.g.
       // Kimi handles everyday chat, Dust still writes the meeting notes) — no agentOverride needed, the
@@ -975,10 +1018,10 @@ export function App(): JSX.Element {
       const dustReady = isDustReady(settings?.hasKeys ?? {}, settings?.dustWorkspaceId ?? '', settings?.providerModels ?? {})
       ask.run({ mode: 'recap', transcript: tx, ...(dustReady ? { providerOverride: 'dust' as const } : {}) })
     } else ask.clear()
-  }, [listen.text, listen.stop, ask.run, ask.clear, settings?.hasKeys, settings?.dustWorkspaceId, settings?.providerModels])
+  }, [listen.stop, listen.text, ask.run, ask.clear, settings?.hasKeys, settings?.dustWorkspaceId, settings?.providerModels])
 
   const toggleListen = useCallback(() => {
-    if (listen.listening) endReview()
+    if (listen.listening) void endReview()
     else startListen()
   }, [listen.listening, endReview, startListen])
 
@@ -1085,7 +1128,7 @@ export function App(): JSX.Element {
     suggest.cancel()
     if (wasListening) {
       void saveMeetingNow(listen.lines, meetingStartRef.current, '') // don't lose a started meeting on reset
-      listen.stop()
+      void listen.stop() // fire-and-forget here — reset doesn't need the final flushed line
       stoppingRef.current = true // mask the up-to-4s drain window, same as endReview's own guard
       meetingStartRef.current = Date.now()
     }
@@ -1207,6 +1250,15 @@ export function App(): JSX.Element {
 
   const handlersRef = useRef<(a: HotkeyAction) => void>(() => {})
   handlersRef.current = (a: HotkeyAction): void => {
+    // Onboarding/sign-in gates block the RENDER tree (see the SignInWall/Onboarding early returns further
+    // down this component), but they never stopped this handler's side effects — capture()/factCheck()/
+    // toggle-listen() etc. can still fire a screen capture, an LLM call, or start a recording session
+    // while the user is stuck on the onboarding/sign-in screen. Mirror those exact two gates here and let
+    // only 'hide' through while gated; every other action either needs the widget (which isn't usably
+    // on-screen yet) or has a capture/LLM/recording side effect.
+    const onboardingGate = !!settings && !settings.onboardingDone && DEMO == null
+    const signInGate = !!(auth.status?.configured || auth.status?.enforced) && !auth.status?.signedIn && DEMO == null
+    if (a !== 'hide' && (onboardingGate || signInGate)) return
     // From the minimized control-pill the Bar is unmounted, so any action that needs the widget (ask /
     // capture / factcheck / settings / toggle-listen) must expand first — otherwise capture/factcheck
     // would fire an LLM request into nothing (invisible work + wasted spend). 'hide' stays as-is.
@@ -1256,6 +1308,13 @@ export function App(): JSX.Element {
       // Leaving the post-meeting Review must not drag the recap into the idle widget answer slot, nor
       // leave a past-meeting snapshot that would later be mistaken for the next live recap.
       if (view === 'review') {
+        // Same gate Review's own in-panel exits (Resume / New meeting / Recent meetings) already run
+        // before navigating away from an unsaved recap edit — Escape was the one exit that could bypass
+        // it, since its only prior guard was activeElement being an INPUT/TEXTAREA (missed focus sitting
+        // on the Save/Cancel buttons, or anywhere else). Bail out and keep Review open if the user cancels.
+        if (reviewDirtyRef.current && !window.confirm('You have unsaved changes to this recap. Discard them?')) {
+          return
+        }
         // Escaping a Review whose recap failed (or was cancelled) previously orphaned the transcript —
         // it existed only in listen state and the next session start wiped it. Rescue it on the way
         // out; idempotent via savedRef when the recap auto-save already landed. Past-meeting Reviews
@@ -1332,7 +1391,8 @@ export function App(): JSX.Element {
         } else {
           setView('answer')
           setCollapsed(false)
-          ask.run({ mode: 'answer', prompt: prompt + GUARD_LINE, history: historyRef.current })
+          const id = ask.run({ mode: 'answer', prompt: prompt + GUARD_LINE, history: historyRef.current })
+          pendingUserRef.current = { id, q: typed || prompt } // record so a follow-up keeps continuity
         }
         if (typed) setInput('')
       } else if (kind === 'summarize') {
@@ -1359,12 +1419,13 @@ export function App(): JSX.Element {
         // Cascade into Dust whenever it's configured, regardless of the active provider — same reasoning
         // as the meeting recap (endReview) above.
         const dustReady = isDustReady(settings?.hasKeys ?? {}, settings?.dustWorkspaceId ?? '', settings?.providerModels ?? {})
-        ask.run({
+        const id = ask.run({
           mode: 'summary',
           transcript,
           history: historyRef.current,
           ...(dustReady ? { providerOverride: 'dust' as const } : {})
         })
+        pendingUserRef.current = { id, q: 'Summarize the conversation so far.' } // record for follow-up continuity
       }
     },
     [
@@ -1496,6 +1557,7 @@ export function App(): JSX.Element {
         onResume={pm ? resumePastMeeting : undefined}
         onOpenPastMeeting={openPastMeeting}
         isPastMeeting={!!pm}
+        onDirtyChange={onReviewDirtyChange}
         onRecapSaved={
           pm
             ? (recap) => setPastMeeting((prev) => (prev ? { ...prev, recap } : prev))
@@ -1511,7 +1573,7 @@ export function App(): JSX.Element {
         }
       />
     )
-  }, [pastMeeting, ask.answer, listen.lines, savedPath, saveError, saveAttempts, settings?.showFullTranscriptInReview, settings?.bidstackConnected, settings?.bidstackTools, followup.answer, generateFollowup, retryAnswer, manualSave, resumePastMeeting, openPastMeeting, reset])
+  }, [pastMeeting, ask.answer, listen.lines, savedPath, saveError, saveAttempts, settings?.showFullTranscriptInReview, settings?.bidstackConnected, settings?.bidstackTools, followup.answer, generateFollowup, retryAnswer, manualSave, resumePastMeeting, openPastMeeting, onReviewDirtyChange, reset])
   const answerBody = useMemo(() => {
     if (!(capturing || captureError || ask.answer)) return null
     // While a new screen capture is in flight (capturing), force the streaming/empty display even when
@@ -1608,7 +1670,15 @@ export function App(): JSX.Element {
     return (
       <div ref={setRoot} {...windowDrag} className="flex w-full flex-col gap-2 p-1.5">
         <Panel>
-          <Onboarding settings={settings} saveKey={saveKey} patch={patch} onOpenAiSettings={() => openSettings('ai')} onDone={() => void refresh()} />
+          <Onboarding
+            settings={settings}
+            saveKey={saveKey}
+            patch={patch}
+            onOpenAiSettings={() => openSettings('ai')}
+            onDone={() => void refresh()}
+            signedIn={auth.status?.signedIn}
+            signedInEmail={auth.status?.email}
+          />
         </Panel>
       </div>
     )

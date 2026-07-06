@@ -9,8 +9,12 @@ import { IPC } from '@shared/ipc'
 const isNotFound = (e: unknown): boolean =>
   (e as { statusCode?: number } | null)?.statusCode === 404 || /\b404\b/.test(String((e as Error)?.message ?? e))
 
-/** Enterprise auto-update. Only runs in the packaged app; needs a real `publish` host (electron-builder.yml). */
-export function initAutoUpdate(win: BrowserWindow | null): void {
+/** Enterprise auto-update. Only runs in the packaged app; needs a real `publish` host (electron-builder.yml).
+ *  Takes a GETTER rather than a captured window reference: if createWindow() threw during boot, the
+ *  captured value would be permanently null even after ensureWindow() later self-heals and reassigns the
+ *  module-level `win` — the update-downloaded toast would then be dead for the rest of the process life.
+ *  Reading through the getter at send time always sees the live window. */
+export function initAutoUpdate(getWin: () => BrowserWindow | null): void {
   if (!app.isPackaged) return
   // Skip if no real update host is configured (placeholder) — avoids failing checks every launch.
   try {
@@ -53,7 +57,7 @@ export function initAutoUpdate(win: BrowserWindow | null): void {
     autoUpdater.on('update-downloaded', (i: { version?: string }) => {
       log.info('[updater] downloaded', i?.version)
       // In-app banner (UpdateReadyToast) alongside the OS notification checkForUpdatesAndNotify already shows.
-      win?.webContents.send(IPC.updateDownloaded, { version: i?.version })
+      getWin()?.webContents.send(IPC.updateDownloaded, { version: i?.version })
     })
     // checkForUpdatesAndNotify shows the OS notification when an update is ready. The 'error' listener
     // above always fires first for the same failure and already logs it (short for 404, full for anything

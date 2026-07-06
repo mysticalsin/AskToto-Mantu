@@ -85,7 +85,7 @@ export const PROVIDERS: Record<ProviderId, ProviderDef> = {
     thinkModel: 'grok-4',
     keyHint: 'xai-…',
     keyPattern: '^xai-',
-    vision: true,
+    vision: false, // default/fast models are text-only (grok-3-mini); grok-4 isn't the resolved model for the vision path
     keyUrl: 'https://console.x.ai/'
   },
   nvidia: {
