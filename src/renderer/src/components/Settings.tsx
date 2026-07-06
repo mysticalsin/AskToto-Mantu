@@ -44,6 +44,7 @@ import {
   Camera,
   Eye,
   Settings2,
+  Lock,
   type LucideIcon
 } from 'lucide-react'
 import {
@@ -160,8 +161,13 @@ function recommendedProvider(settings: PublicSettings): ProviderId {
 
 /** Friendly name for a routed model in the thinking-mode explainer. Keeps raw model ids out of
  *  user-facing copy — recognized brands by name, everything else as a plain tier word. */
-function prettyModel(m: string, provider: ProviderId, tier: 'base' | 'think'): string {
-  if (provider === 'dust') return tier === 'think' ? 'your thinking agent' : 'your base agent'
+function prettyModel(m: string, provider: ProviderId, tier: 'base' | 'think' | 'deep'): string {
+  if (provider === 'dust') {
+    // Dust only has a Base agent + an optional Thinking agent — there is no distinct "deep" agent. The
+    // 'deep' tier resolves (resolveModelTier) to the Thinking agent, or Base if none is configured, so
+    // it shares the Thinking agent's caption rather than naming a tier that doesn't exist.
+    return tier === 'base' ? 'your base agent' : 'your thinking agent'
+  }
   if (m) {
     if (/haiku/i.test(m)) return 'Haiku'
     if (/sonnet/i.test(m)) return 'Sonnet'
@@ -694,11 +700,21 @@ function AiSection({
   const providerRef = useRef(provider)
   providerRef.current = provider
   const baseModelName = resolveModelTier(provider, settings.providerModels, settings.providerModelsThinking, 'base')
-  const thinkModelName = resolveModelTier(provider, settings.providerModels, settings.providerModelsThinking, 'think', settings.providerModelsDeep)
+  // Only used by the Auto caption below, to name the real middle tier (routeTier's 'think' bucket —
+  // "heavy" but not "hard" prompts) instead of silently collapsing it into the base/deep story.
+  const thinkModelName = resolveModelTier(provider, settings.providerModels, settings.providerModelsThinking, 'think')
   // The real ask flow (main/index.ts) always runs the resolved model through applyInteractiveGuardrail
   // before calling the provider — e.g. claude-cli is pinned to Sonnet for every tier. The caption must
   // show that same guarded result, not the raw tier, or it names a model that never actually answers.
   const guardedBaseModelName = applyInteractiveGuardrail(provider, 'base', baseModelName)
+  const deepModelName = resolveModelTier(
+    provider,
+    settings.providerModels,
+    settings.providerModelsThinking,
+    'deep',
+    settings.providerModelsDeep
+  )
+  const guardedDeepModelName = applyInteractiveGuardrail(provider, 'deep', deepModelName)
   const guardedThinkModelName = applyInteractiveGuardrail(provider, 'think', thinkModelName)
   const keyInputId = useId()
   const modelInputId = useId()
@@ -1239,7 +1255,12 @@ function AiSection({
         </div>
         <span className="mt-1.5 block text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
           {settings.thinkingMode === 'auto'
-            ? `Auto: simple questions use ${prettyModel(guardedBaseModelName, provider, 'base')}; coding, engineering & complex go to ${prettyModel(guardedThinkModelName, provider, 'think')}.`
+            ? // routeTier (shared/routing.ts) actually escalates in 3 steps — base → think ("heavy") → deep
+              // ("hard"). Dust collapses think/deep into the same Thinking agent (see prettyModel), so its
+              // caption only needs two clauses; raw providers have a real, distinct middle tier to name.
+              provider === 'dust'
+              ? `Auto: simple questions use ${prettyModel(guardedBaseModelName, provider, 'base')}; anything harder goes to ${prettyModel(guardedDeepModelName, provider, 'deep')}.`
+              : `Auto: simple questions use ${prettyModel(guardedBaseModelName, provider, 'base')}; heavier ones use ${prettyModel(guardedThinkModelName, provider, 'think')}; coding, engineering & the hardest go to ${prettyModel(guardedDeepModelName, provider, 'deep')}.`
             : settings.thinkingMode === 'always'
               ? `Every answer uses ${prettyModel(guardedThinkModelName, provider, 'think')} (deep mode).`
               : `Every answer uses ${prettyModel(guardedBaseModelName, provider, 'base')} (fastest & cheapest).`}
@@ -2806,7 +2827,7 @@ function DustSetup({
               <button
                 type="button"
                 onClick={saveDustKey}
-                disabled={keySaving || !dustKey.trim() || locked}
+                disabled={keySaving || !dustKey.trim() || (locked && active)}
                 className="no-drag cl-focus flex items-center gap-1 rounded-[10px] bg-[var(--cl-primary)] px-3 py-2.5 text-[13px] font-medium text-white hover:opacity-90 disabled:opacity-50"
               >
                 {keySaving ? <Loader2 size={14} className="animate-spin" /> : null} Save
@@ -4953,8 +4974,23 @@ function IntelligenceTab({
                 disabled={!onOpenMeeting}
                 className="no-drag cl-focus cl-card flex items-center gap-2.5 px-3 py-2.5 text-left transition-colors hover:bg-white/[0.06] disabled:opacity-60"
               >
-                <FileText size={14} className="shrink-0 text-[color:var(--cl-primary)]" />
+                {m.locked ? (
+                  <Lock
+                    size={14}
+                    className="shrink-0 text-[color:var(--cl-muted-foreground)]"
+                    aria-label="Encrypted, can't be opened on this device"
+                  />
+                ) : (
+                  <FileText size={14} className="shrink-0 text-[color:var(--color-accent-text)]" />
+                )}
                 <span className="min-w-0 flex-1 truncate text-[12px] text-[color:var(--cl-foreground)]">{m.title}</span>
+                {/* Locked: a real encrypted meeting that couldn't be decrypted on this device — surface it
+                    here too (matches RecallView's row) so the click isn't a silent dead end with no cue. */}
+                {m.locked && (
+                  <span className="shrink-0 rounded-full bg-white/[0.06] px-2 py-0.5 text-[10px] text-[color:var(--cl-muted-foreground)]">
+                    Locked
+                  </span>
+                )}
                 <span className="shrink-0 text-[11px] text-[color:var(--cl-muted-foreground)]">
                   {shortDate(m.date)}
                   {m.durationMin ? ` · ${m.durationMin} min` : ''}
