@@ -1,5 +1,28 @@
 # Signing & credentials — AskToto
 
+## Read this first: what's blocked and why
+
+The build pipeline is **completely wired** for trusted, notarized releases — hardened runtime,
+entitlements, env-driven certificates, notarization on `APPLE_*` env vars (verified against
+electron-builder 25's source), a hard secrets gate in `release.yml` so a release can never ship
+unsigned, and a post-publish `--require-notarized` verification. Nothing in the repo needs to change.
+
+What no code can provide are the **credentials**, which require the owner's accounts:
+
+| Platform | What's needed | Where / cost |
+|---|---|---|
+| macOS | Apple Developer Program membership → a "Developer ID Application" certificate + an app-specific password + Team ID | [developer.apple.com/programs](https://developer.apple.com/programs/) — US$99/year, enrollment takes ~1–2 days |
+| Windows | An Authenticode code-signing certificate | OV cert from Sectigo/DigiCert etc. (~US$100–400/yr), or Azure Trusted Signing (~US$9.99/mo, no cert file to manage) |
+
+**Until then, every build is dev-signed** (self-signed "TotoWhisper Dev"): it runs fine, but
+Gatekeeper shows "unidentified developer" on first open (right-click → Open → Open bypasses it once
+per machine), and Windows SmartScreen shows "unrecognized app". That's a trust-chrome problem, not a
+correctness problem — the app itself is fully signed and integrity-checked by `verify:signing` on
+every local build.
+
+**The 30-minute path once enrolled:** follow the Ship checklist at the bottom — create the cert,
+add 5 repo secrets, push a `v*` tag. CI signs, notarizes, publishes, and installed apps auto-update.
+
 App icon (all platforms): `build/icon.png` (1024² Mantu **M**). electron-builder derives `.icns` (mac)
 and `.ico` (Windows) from it; iOS uses `ios/AskToto/Assets.xcassets/AppIcon.appiconset/icon-1024.png`.
 
@@ -76,6 +99,6 @@ Local signed mac build without CI: `npm run dist:local` with the login Keychain 
 builder's exit code (`codesign --verify --deep --strict` on macOS, `Get-AuthenticodeSignature` on
 Windows, plus a Gatekeeper/`spctl` check). `dist:local` runs it automatically at the end and fails on a
 genuinely broken signature. Run it standalone with `npm run verify:signing [artifactsDir]`. For release
-gating add `--require-notarized`, which also fails when Gatekeeper does not accept the app (not notarized
-/ not a Developer ID cert) — wire `node scripts/verify-signing.mjs --require-notarized` into `release.yml`
-after the build step once you have a Developer ID cert + notarization creds set.
+gating, `--require-notarized` also fails when Gatekeeper does not accept the app (not notarized / not a
+Developer ID cert) — this is already wired into `release.yml` after the publish step, so every tagged
+release is positively verified notarized, not just assumed.
