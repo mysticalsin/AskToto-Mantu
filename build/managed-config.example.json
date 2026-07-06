@@ -1,6 +1,7 @@
 {
-  "_comment": "Enterprise managed config = org DEFAULT values plus an optional top-level 'locked' array. Deploy as 'managed-config.json' to the machine-wide admin path for all users (macOS: /Library/Application Support/AskToto/ ; Windows: %ProgramData%\\AskToto/ ; Linux: /etc/asktoto/), or per-user (app userData dir). Machine path wins over per-user. Any top-level setting key listed in 'locked' cannot be changed in-app by users. Malformed keys are ignored. Remove keys you don't want to preset.",
+  "_comment": "Enterprise managed config = org DEFAULT values plus an optional top-level 'locked' array. Deploy as 'managed-config.json' to the machine-wide admin path for all users (macOS: /Library/Application Support/AskToto/ ; Windows: %ProgramData%\\AskToto/ ; Linux: /etc/asktoto/), or per-user (app userData dir). Machine path wins over per-user. Any top-level setting key listed in 'locked' cannot be changed in-app by users. Malformed keys are ignored. Remove keys you don't want to preset. Governance keys (not user settings): 'allowedProviders' (array — confine LLM egress to approved vendors), 'escrowPubKey' (PEM — transcript escrow), 'disableAutoUpdate' (true — freeze the version fleet-wide for staged rollout). On Windows these are honored only from an admin-owned %ProgramData%\\AskToto path (ACL-verified), never a user-writable one.",
   "locked": ["provider", "customBaseUrl"],
+  "disableAutoUpdate": false,
   "provider": "anthropic",
   "providerModels": { "anthropic": "claude-opus-4-8" },
   "meetingsFolder": "",

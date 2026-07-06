@@ -4,6 +4,20 @@ import { join } from 'node:path'
 import log from 'electron-log'
 import { IPC } from '@shared/ipc'
 import { shouldDisableAutoUpdate } from './cahe-edition'
+import { trustedAdminManagedPath } from './win-security'
+
+/** Enterprise governance: IT can freeze the version fleet-wide by deploying an admin managed-config with
+ *  `{ "disableAutoUpdate": true }`. Only the ADMIN (machine) policy is honored — and on Windows only via
+ *  the ACL-trusted path — so a standard user cannot turn their own updates on or off. */
+function autoUpdateDisabledByPolicy(): boolean {
+  const p = trustedAdminManagedPath()
+  if (!p) return false
+  try {
+    return JSON.parse(readFileSync(p, 'utf8'))?.disableAutoUpdate === true
+  } catch {
+    return false
+  }
+}
 
 /** A 404 means the releases repo/feed doesn't exist (yet) — distinct from a transient network/server
  *  error, which should keep logging normally so a real outage stays visible. */
@@ -29,6 +43,11 @@ export function initAutoUpdate(getWin: () => BrowserWindow | null): void {
   }
   if (!app.isPackaged) return
   if ((process as NodeJS.Process & { mas?: boolean }).mas) return
+  // IT kill-switch: a managed-config policy can freeze the version fleet-wide (staged-rollout control).
+  if (autoUpdateDisabledByPolicy()) {
+    log.info('[updater] auto-update disabled by managed-config policy')
+    return
+  }
   // Skip if no real update host is configured (placeholder) — avoids failing checks every launch.
   try {
     const yml = readFileSync(join(process.resourcesPath, 'app-update.yml'), 'utf8')
