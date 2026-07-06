@@ -17,6 +17,7 @@ import { SignInWall } from './components/SignInWall'
 import { LicenseGate } from './components/LicenseGate'
 import { UpdateReadyToast } from './components/UpdateReadyToast'
 import { NewMeetingToast } from './components/NewMeetingToast'
+import { VisibilityToast, type VisibilityToastState } from './components/VisibilityToast'
 import { RecordingConsentReminder } from './components/RecordingConsentReminder'
 import { QuickActions, type QuickKind } from './components/QuickActions'
 import { useAsk, useAutoResize, useSettings, useAuth } from './state'
@@ -296,6 +297,7 @@ export function App(): JSX.Element {
   const MAX_SAVE_RETRIES = 5
   const [updateReady, setUpdateReady] = useState<{ open: boolean; version?: string }>({ open: false })
   const [newMeetingToast, setNewMeetingToast] = useState(false)
+  const [visibilityToast, setVisibilityToast] = useState<VisibilityToastState>(null)
   // Idempotence latch for endReview() re-entry — see endReview's own comment for the exact hazard it
   // guards against. Cleared at the start of every fresh session (startListen) so a later stop can fire.
   const stoppingRef = useRef(false)
@@ -1202,12 +1204,17 @@ export function App(): JSX.Element {
     setMinimized(true)
     void window.toto.minimize(true) // collapse to the control mini-pill
   }, [])
-  // The bar's eye button is Private View: "AskToto won't look at my screen". It deliberately does NOT
-  // touch contentProtection (window-hidden-from-shares), which stays on by default so the overlay is
-  // invisible in screen-shares whether or not Private View is engaged.
+  // The bar's eye button is the visible/invisible toggle: whether the AskToto window shows up on a
+  // screen you share or record (contentProtection). Hidden by default — the invisible-copilot identity.
+  // This is the intuitive meaning of an eye icon and what users reach for to "make it visible / hide it".
+  // It does NOT touch privateView (whether AskToto captures YOUR screen for screen questions) — that's a
+  // separate, less-frequent switch in Settings → Privacy, kept off the bar to avoid conflating the two.
   const onToggleStealth = useCallback(() => {
-    void patch({ privateView: !(settings?.privateView ?? false) })
-  }, [patch, settings?.privateView])
+    const nextHidden = !(settings?.contentProtection ?? true) // contentProtection true = hidden from shares
+    void patch({ contentProtection: nextHidden })
+    // Hiding from a screen-share is invisible on the user's OWN screen, so confirm the toggle explicitly.
+    setVisibilityToast(nextHidden ? 'hidden' : 'visible')
+  }, [patch, settings?.contentProtection])
   const onTogglePanel = useCallback(() => setCollapsed((c) => !c), [])
 
   // Open a saved meeting from History as a read-only recap (Cluely recap detail) via the recall:read IPC.
@@ -1706,6 +1713,7 @@ export function App(): JSX.Element {
               onDismiss={() => setUpdateReady({ open: false })}
             />
             <NewMeetingToast open={newMeetingToast} onDismiss={() => setNewMeetingToast(false)} />
+            <VisibilityToast state={visibilityToast} onDismiss={() => setVisibilityToast(null)} />
             <RecordingConsentReminder
               listening={showListeningChrome}
               lastReminderAt={settings?.lastConsentReminderAt ?? 0}
@@ -1729,7 +1737,7 @@ export function App(): JSX.Element {
         // unmounts and remounts every toast underneath the instant one flips `open`, restarting its
         // fade-in mid-animation. `contents` keeps the non-widened case layout-equivalent to the old
         // bare-fragment render.
-        const widen = minimized && (updateReady.open || newMeetingToast || consentReminderOpen)
+        const widen = minimized && (updateReady.open || newMeetingToast || consentReminderOpen || !!visibilityToast)
         return (
           <div
             data-hug-width={widen || undefined}
@@ -1795,7 +1803,7 @@ export function App(): JSX.Element {
             onHistory={onBarHistory}
             onSettings={onBarSettings}
             onMinimize={onBarMinimize}
-            stealth={settings?.privateView ?? false}
+            stealth={settings?.contentProtection ?? true}
             onToggleStealth={onToggleStealth}
             startedAt={meetingStartRef.current}
             panelOpen={panelOpen}

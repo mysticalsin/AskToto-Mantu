@@ -350,7 +350,7 @@ export function Onboarding({
         <div className="flex w-full max-w-[460px] flex-col gap-3 rounded-xl border border-[var(--color-hair-soft)] bg-white/[0.02] p-4">
           <ActionRow icon={LayoutGrid} label="Modes" hint="Pick the conversation: Interview, Meeting, Sales, and more." />
           <ActionRow icon={Brain} label="Deep thinking" hint="Force the strongest model. Rainbow ring shows when on." />
-          <ActionRow icon={Eye} label="Private view" hint="AskToto won't look at your screen while it's on. (Your window is hidden from shared screens either way.)" />
+          <ActionRow icon={Eye} label="Show / hide" hint="Toggle whether the AskToto window appears on a screen you share or record. Hidden by default." />
         </div>
         <p className="max-w-[460px] text-[11px] leading-snug text-[color:var(--color-ink-3)]">
           The Mantu logo opens Settings; minimize to a pill or collapse the panel any time.
