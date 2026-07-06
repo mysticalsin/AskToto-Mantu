@@ -35,7 +35,7 @@ function EventRow({ ev }: { ev: CalendarEvent }): JSX.Element {
               href={ev.joinUrl}
               target="_blank"
               rel="noopener noreferrer"
-              className="no-drag inline-flex items-center gap-1 text-[color:var(--color-accent)] hover:underline"
+              className="no-drag inline-flex items-center gap-1 text-[color:var(--color-accent-text)] hover:underline"
             >
               <Video size={11} /> Join <ExternalLink size={9} />
             </a>
@@ -94,7 +94,7 @@ export function AgendaView(): JSX.Element {
   const header = (
     <div className="mb-2 flex items-center justify-between px-0.5">
       <div className="flex items-center gap-2 text-[color:var(--color-ink)]">
-        <Calendar size={15} className="text-[color:var(--color-accent)]" />
+        <Calendar size={15} className="text-[color:var(--color-accent-text)]" />
         <span className="text-[13px] font-semibold">Today’s agenda</span>
       </div>
       <button

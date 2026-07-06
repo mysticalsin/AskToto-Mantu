@@ -240,7 +240,7 @@ function LazyInput({
 }
 
 const managedChipCls =
-  'inline-flex items-center gap-1 rounded-full border border-[var(--cl-primary)]/30 bg-[var(--cl-primary-soft)] px-1.5 py-0 text-[10px] font-medium text-[color:var(--cl-primary)]'
+  'inline-flex items-center gap-1 rounded-full border border-[var(--cl-primary)]/30 bg-[var(--cl-primary-soft)] px-1.5 py-0 text-[10px] font-medium text-[color:var(--color-accent-text)]'
 
 function ManagedChip({ keys, k }: { keys: string[]; k: string }): JSX.Element | null {
   return keys.includes(k) ? <span className={managedChipCls}>Managed by your organization</span> : null
@@ -668,7 +668,7 @@ function AiSection({
           className={[
             'mt-2 flex items-start gap-1.5 text-[12px]',
             hint.kind === 'ok'
-              ? 'text-[color:var(--cl-primary)]'
+              ? 'text-[color:var(--color-accent-text)]'
               : 'text-[color:var(--cl-muted-foreground)]'
           ].join(' ')}
         >
@@ -701,7 +701,7 @@ function AiSection({
             href={def.keyUrl}
             target="_blank"
             rel="noopener noreferrer"
-            className="no-drag inline-flex items-center gap-0.5 text-[color:var(--cl-primary)]"
+            className="no-drag inline-flex items-center gap-0.5 text-[color:var(--color-accent-text)]"
           >
             Get a key <ExternalLink size={11} />
           </a>
@@ -866,7 +866,7 @@ function AiSection({
                   </span>
                   <span className="flex shrink-0 items-center gap-1">
                     {id === recommended && (
-                      <span className="rounded-full bg-[var(--cl-primary-soft)] px-1.5 py-0 text-[10px] font-medium text-[color:var(--cl-primary)]">
+                      <span className="rounded-full bg-[var(--cl-primary-soft)] px-1.5 py-0 text-[10px] font-medium text-[color:var(--color-accent-text)]">
                         Best pick
                       </span>
                     )}
@@ -950,7 +950,7 @@ function StepBadge({ n, done }: { n: number; done?: boolean }): JSX.Element {
         'flex size-5 shrink-0 items-center justify-center rounded-full text-[11px] font-semibold',
         done
           ? 'bg-[var(--cl-success)]/20 text-[color:var(--cl-success)]'
-          : 'bg-[var(--cl-primary-soft)] text-[color:var(--cl-primary)]'
+          : 'bg-[var(--cl-primary-soft)] text-[color:var(--color-accent-text)]'
       ].join(' ')}
     >
       {done ? <CircleCheck size={14} /> : n}
@@ -1106,7 +1106,7 @@ function CliIntegration({
   const secondaryBtn =
     'no-drag cl-focus flex items-center gap-1.5 rounded-[8px] border border-[var(--cl-input)] bg-white/[0.04] px-3 py-1.5 text-[12px] text-[color:var(--cl-foreground)] hover:bg-white/[0.08] disabled:opacity-50'
   const activePill =
-    'flex shrink-0 items-center gap-1 rounded-full bg-[var(--cl-primary-soft)] px-2 py-0.5 text-[11px] font-medium text-[color:var(--cl-primary)]'
+    'flex shrink-0 items-center gap-1 rounded-full bg-[var(--cl-primary-soft)] px-2 py-0.5 text-[11px] font-medium text-[color:var(--color-accent-text)]'
 
   const renderCliCard = (id: 'claude-cli' | 'codex-cli'): JSX.Element => {
     const def = PROVIDERS[id]
@@ -1599,7 +1599,7 @@ const primaryBtnStyle =
 const secondaryBtnStyle =
   'no-drag cl-focus flex items-center gap-1.5 rounded-[8px] border border-[var(--cl-input)] bg-white/[0.04] px-3 py-1.5 text-[12px] text-[color:var(--cl-foreground)] hover:bg-white/[0.08] disabled:opacity-50'
 const activePillStyle =
-  'flex shrink-0 items-center gap-1 rounded-full bg-[var(--cl-primary-soft)] px-2 py-0.5 text-[11px] font-medium text-[color:var(--cl-primary)]'
+  'flex shrink-0 items-center gap-1 rounded-full bg-[var(--cl-primary-soft)] px-2 py-0.5 text-[11px] font-medium text-[color:var(--color-accent-text)]'
 
 function DustSetup({
   settings,
@@ -2036,7 +2036,7 @@ function DustSetup({
               : 'Connect from the Dust CLI above, or finish steps 1–4.'}
           </span>
           {active ? (
-            <span className="flex shrink-0 items-center gap-1 rounded-full bg-[var(--cl-primary-soft)] px-2 py-0.5 text-[11px] font-medium text-[color:var(--cl-primary)]">
+            <span className="flex shrink-0 items-center gap-1 rounded-full bg-[var(--cl-primary-soft)] px-2 py-0.5 text-[11px] font-medium text-[color:var(--color-accent-text)]">
               <CircleCheck size={12} /> Active
             </span>
           ) : locked ? (
@@ -2112,7 +2112,7 @@ function AudioChoices({
               locked ? 'opacity-60 cursor-not-allowed' : ''
             ].join(' ')}
           >
-            <c.icon size={16} className={active ? 'text-[color:var(--cl-primary)]' : 'text-[color:var(--cl-muted-foreground)]'} />
+            <c.icon size={16} className={active ? 'text-[color:var(--color-accent-text)]' : 'text-[color:var(--cl-muted-foreground)]'} />
             <span className="text-[13px] font-medium text-[color:var(--cl-foreground)]">{c.label}</span>
             <span className="text-[11px] text-[color:var(--cl-muted-foreground)]">{c.desc}</span>
             <span className="text-[10px] text-[color:var(--cl-muted-foreground)]">{c.perm}</span>
@@ -2145,6 +2145,7 @@ const MIC_METER_FULL_SCALE = 0.2
 function MicLevelMeter({ deviceId }: { deviceId: string }): JSX.Element {
   const [blocked, setBlocked] = useState(false)
   const barRef = useRef<HTMLDivElement>(null)
+  const meterRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     let cancelled = false
@@ -2198,6 +2199,8 @@ function MicLevelMeter({ deviceId }: { deviceId: string }): JSX.Element {
             barRef.current.style.width = `${level * 100}%`
             barRef.current.style.opacity = String(0.35 + level * 0.65)
           }
+          // Expose the live level to assistive tech (role="meter" needs aria-valuenow to be meaningful).
+          meterRef.current?.setAttribute('aria-valuenow', String(Math.round(level * 100)))
           raf = requestAnimationFrame(tick)
         }
         raf = requestAnimationFrame(tick)
@@ -2226,8 +2229,12 @@ function MicLevelMeter({ deviceId }: { deviceId: string }): JSX.Element {
 
   return (
     <div
+      ref={meterRef}
       role="meter"
       aria-label="Microphone input level"
+      aria-valuemin={0}
+      aria-valuemax={100}
+      aria-valuenow={0}
       className="h-2 w-16 shrink-0 overflow-hidden rounded-full bg-white/10"
     >
       <div
@@ -2302,7 +2309,7 @@ function MicPicker({
         <button
           type="button"
           onClick={() => void unlockLabels()}
-          className="no-drag w-fit text-[11px] text-[color:var(--cl-primary)] hover:underline"
+          className="no-drag w-fit text-[11px] text-[color:var(--color-accent-text)] hover:underline"
         >
           Show device names
         </button>
@@ -2457,7 +2464,7 @@ function ContextDocs({
             : 'border-[var(--cl-input)] bg-white/[0.02] hover:bg-white/[0.04]'
         ].join(' ')}
       >
-        <Upload size={18} className="text-[color:var(--cl-primary)]" />
+        <Upload size={18} className="text-[color:var(--color-accent-text)]" />
         <span className="text-[13px] text-[color:var(--cl-foreground)]">
           Give it more to work with
         </span>
@@ -2472,7 +2479,7 @@ function ContextDocs({
               e.stopPropagation()
               document.getElementById(inputId)?.click()
             }}
-            className="no-drag cl-focus rounded text-[color:var(--cl-primary)] underline-offset-2 hover:underline"
+            className="no-drag cl-focus rounded text-[color:var(--color-accent-text)] underline-offset-2 hover:underline"
           >
             Browse files
           </button>
@@ -2495,7 +2502,7 @@ function ContextDocs({
         <div className="mt-2 flex flex-col gap-1">
           {docs.map((d, i) => (
             <div key={`${d.name}-${i}`} className="cl-card flex items-center gap-2 px-2.5 py-2">
-              <FileText size={14} className="shrink-0 text-[color:var(--cl-primary)]" />
+              <FileText size={14} className="shrink-0 text-[color:var(--color-accent-text)]" />
               <span className="min-w-0 flex-1 truncate text-[12px] text-[color:var(--cl-foreground)]" title={d.name}>
                 {d.name}
               </span>
@@ -2671,7 +2678,7 @@ function PersonalizeModes({
         <span className="min-w-0 flex-1 truncate text-[12px] text-[color:var(--cl-foreground)]">
           {label}
         </span>
-        {isActive && <CircleCheck size={13} className="shrink-0 text-[color:var(--cl-primary)]" />}
+        {isActive && <CircleCheck size={13} className="shrink-0 text-[color:var(--color-accent-text)]" />}
       </button>
     )
   }
@@ -2702,7 +2709,7 @@ function PersonalizeModes({
           <button
             type="button"
             onClick={() => setCreatingNew(true)}
-            className="no-drag cl-focus mb-1.5 flex items-center gap-1.5 rounded-[10px] border border-dashed border-[var(--cl-border)] px-2.5 py-1.5 text-[11px] text-[color:var(--cl-muted-foreground)] hover:border-[var(--cl-primary)]/50 hover:text-[color:var(--cl-primary)] transition-colors"
+            className="no-drag cl-focus mb-1.5 flex items-center gap-1.5 rounded-[10px] border border-dashed border-[var(--cl-border)] px-2.5 py-1.5 text-[11px] text-[color:var(--cl-muted-foreground)] hover:border-[var(--cl-primary)]/50 hover:text-[color:var(--color-accent-text)] transition-colors"
           >
             <Plus size={12} /> New Mode
           </button>
@@ -2761,7 +2768,7 @@ function PersonalizeModes({
           {/* Overflow menu */}
           <div ref={overflowRef} className="relative flex items-center gap-2">
             {active === safeSelected && (
-              <span className="flex shrink-0 items-center gap-1 rounded-full bg-[var(--cl-primary-soft)] px-2.5 py-1 text-[11px] font-medium text-[color:var(--cl-primary)]">
+              <span className="flex shrink-0 items-center gap-1 rounded-full bg-[var(--cl-primary-soft)] px-2.5 py-1 text-[11px] font-medium text-[color:var(--color-accent-text)]">
                 <CircleCheck size={12} /> Active
               </span>
             )}
@@ -2970,7 +2977,7 @@ export function Settings({
         <MantuMark size={18} />
         <span className="font-ui text-[14px] font-semibold tracking-tight">Settings</span>
         {managed && (
-          <span className="ml-2 inline-flex items-center gap-1 rounded-full border border-[var(--cl-primary)]/30 bg-[var(--cl-primary-soft)] px-2 py-0.5 text-[10px] font-medium text-[color:var(--cl-primary)]">
+          <span className="ml-2 inline-flex items-center gap-1 rounded-full border border-[var(--cl-primary)]/30 bg-[var(--cl-primary-soft)] px-2 py-0.5 text-[10px] font-medium text-[color:var(--color-accent-text)]">
             Managed by your organization
           </span>
         )}
@@ -3349,7 +3356,7 @@ export function Settings({
               >
                 <div className="cl-card px-3 py-2.5">
                   <div className="flex items-center gap-2">
-                    <FolderOpen size={15} className="shrink-0 text-[color:var(--cl-primary)]" />
+                    <FolderOpen size={15} className="shrink-0 text-[color:var(--color-accent-text)]" />
                     <span className="min-w-0 flex-1 truncate text-[12px] text-[color:var(--cl-foreground)]" title={settings.resolvedMeetingsFolder}>
                       {settings.resolvedMeetingsFolder}
                     </span>
@@ -3476,7 +3483,7 @@ export function Settings({
                       href="https://www.linkedin.com/in/marc-bisiou-1a79ba78/"
                       target="_blank"
                       rel="noopener noreferrer"
-                      className="no-drag font-medium text-[color:var(--cl-primary)] transition-colors hover:underline"
+                      className="no-drag font-medium text-[color:var(--color-accent-text)] transition-colors hover:underline"
                     >
                       Marc Bisiou
                     </a>
@@ -3801,7 +3808,7 @@ function IntelligenceTab({
                 disabled={!onOpenMeeting}
                 className="no-drag cl-focus cl-card flex items-center gap-2.5 px-3 py-2.5 text-left transition-colors hover:bg-white/[0.06] disabled:opacity-60"
               >
-                <FileText size={14} className="shrink-0 text-[color:var(--cl-primary)]" />
+                <FileText size={14} className="shrink-0 text-[color:var(--color-accent-text)]" />
                 <span className="min-w-0 flex-1 truncate text-[12px] text-[color:var(--cl-foreground)]">{m.title}</span>
                 <span className="shrink-0 text-[11px] text-[color:var(--cl-muted-foreground)]">
                   {shortDate(m.date)}
@@ -3942,7 +3949,7 @@ function NotebookLmCard({
       <div className="cl-card flex items-center gap-2 px-3 py-2.5 text-[12px]">
         <Search
           size={15}
-          className={phase === 'connected' ? 'text-[color:var(--cl-primary)]' : 'text-[color:var(--cl-muted-foreground)]'}
+          className={phase === 'connected' ? 'text-[color:var(--color-accent-text)]' : 'text-[color:var(--cl-muted-foreground)]'}
         />
         {phase === 'checking' && <span className="text-[color:var(--cl-muted-foreground)]">Checking…</span>}
         {phase === 'connecting' && <span className="text-[color:var(--cl-muted-foreground)]">Connecting to NotebookLM…</span>}
@@ -4077,7 +4084,7 @@ function GraphSection({
           <div className="cl-card flex items-center gap-2 px-3 py-2.5 text-[12px]">
             <Network
               size={15}
-              className={status?.installed ? 'text-[color:var(--cl-primary)]' : 'text-[color:var(--cl-muted-foreground)]'}
+              className={status?.installed ? 'text-[color:var(--color-accent-text)]' : 'text-[color:var(--cl-muted-foreground)]'}
             />
             {!status ? (
               'Checking…'
@@ -4361,14 +4368,14 @@ function AccountRow({
   const setupForm = (
     <div className="mt-1 flex flex-col gap-2.5 rounded-[10px] border border-[var(--cl-input)] bg-white/[0.02] p-3">
       <div className="flex items-start gap-2">
-        <ShieldCheck size={14} className="mt-0.5 shrink-0 text-[color:var(--cl-primary)]" />
+        <ShieldCheck size={14} className="mt-0.5 shrink-0 text-[color:var(--color-accent-text)]" />
         <p className="text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
           One-time setup. In{' '}
           <a
             href="https://entra.microsoft.com/#view/Microsoft_AAD_RegisteredApps/ApplicationsListBlade"
             target="_blank"
             rel="noopener noreferrer"
-            className="inline-flex items-center gap-0.5 text-[color:var(--cl-primary)] underline underline-offset-2"
+            className="inline-flex items-center gap-0.5 text-[color:var(--color-accent-text)] underline underline-offset-2"
           >
             Microsoft Entra <ExternalLink size={10} />
           </a>{' '}
@@ -4557,7 +4564,7 @@ function CalendarTab({
   }
 
   const connectedPill = (
-    <span className="flex shrink-0 items-center gap-1 rounded-full bg-[var(--cl-primary-soft)] px-2.5 py-1 text-[11px] font-medium text-[color:var(--cl-primary)]">
+    <span className="flex shrink-0 items-center gap-1 rounded-full bg-[var(--cl-primary-soft)] px-2.5 py-1 text-[11px] font-medium text-[color:var(--color-accent-text)]">
       <CircleCheck size={12} /> Connected
     </span>
   )
@@ -4658,14 +4665,14 @@ function CalendarTab({
           {authStatus !== null && (!authStatus.configured || showOutlookSetup) && (
             <div className="flex flex-col gap-2.5 rounded-[10px] border border-[var(--cl-input)] bg-white/[0.02] p-3">
               <div className="flex items-start gap-2">
-                <ShieldCheck size={14} className="mt-0.5 shrink-0 text-[color:var(--cl-primary)]" />
+                <ShieldCheck size={14} className="mt-0.5 shrink-0 text-[color:var(--color-accent-text)]" />
                 <p className="text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
                   Register an app in{' '}
                   <a
                     href="https://entra.microsoft.com/#view/Microsoft_AAD_RegisteredApps/ApplicationsListBlade"
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="inline-flex items-center gap-0.5 text-[color:var(--cl-primary)] underline underline-offset-2"
+                    className="inline-flex items-center gap-0.5 text-[color:var(--color-accent-text)] underline underline-offset-2"
                   >
                     Microsoft Entra <ExternalLink size={10} />
                   </a>{' '}
@@ -4960,7 +4967,7 @@ function KeyRecorder({
           onBlur={onBlur}
           onKeyDown={onKeyDown}
           title="Press your desired key combination"
-          className="no-drag cl-input font-ui min-w-0 flex-1 cursor-pointer select-none px-2 py-1 text-[12px] border-[var(--cl-primary)] bg-[var(--cl-primary-soft)] text-[color:var(--cl-primary)] outline-none ring-1 ring-[var(--cl-primary)] transition-colors"
+          className="no-drag cl-input font-ui min-w-0 flex-1 cursor-pointer select-none px-2 py-1 text-[12px] border-[var(--cl-primary)] bg-[var(--cl-primary-soft)] text-[color:var(--color-accent-text)] outline-none ring-1 ring-[var(--cl-primary)] transition-colors"
         />
         {conflictMsg && (
           <span className="text-[11px] text-[color:var(--cl-destructive)]">{conflictMsg}</span>
@@ -5044,7 +5051,7 @@ function Shortcuts({
                       <button
                         type="button"
                         onClick={() => reset(action)}
-                        className="no-drag cl-focus rounded-md px-2 py-1 text-[11px] text-[color:var(--cl-primary)] hover:bg-white/[0.06]"
+                        className="no-drag cl-focus rounded-md px-2 py-1 text-[11px] text-[color:var(--color-accent-text)] hover:bg-white/[0.06]"
                       >
                         Reset
                       </button>
@@ -5127,7 +5134,7 @@ function ProfileEditor({
         onCommit={(v) => set('notes', v)}
       />
       <div className="flex items-center gap-1.5 px-1 text-[11px] text-[color:var(--cl-muted-foreground)]">
-        <Sparkles size={11} className="text-[color:var(--cl-primary)]" />
+        <Sparkles size={11} className="text-[color:var(--color-accent-text)]" />
         Paste your résumé and the job post for better interview answers.
       </div>
     </div>

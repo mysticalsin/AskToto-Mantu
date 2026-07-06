@@ -94,7 +94,7 @@ function ProviderOption({
         </div>
         <div className="mt-0.5 text-[11.5px] leading-snug text-[color:var(--color-ink-2)]">{desc}</div>
       </div>
-      <ArrowRight size={15} className="mt-1 shrink-0 text-[color:var(--color-ink-3)] group-hover:text-[color:var(--color-accent)]" />
+      <ArrowRight size={15} className="mt-1 shrink-0 text-[color:var(--color-ink-3)] group-hover:text-[color:var(--color-accent-text)]" />
     </button>
   )
 }
@@ -555,7 +555,7 @@ export function Onboarding({
         </p>
       </div>
 
-      <div className="flex items-center gap-1.5 rounded-lg bg-[var(--color-accent-soft)] px-3 py-2 text-[12px] text-[color:var(--color-accent)]">
+      <div className="flex items-center gap-1.5 rounded-lg bg-[var(--color-accent-soft)] px-3 py-2 text-[12px] text-[color:var(--color-accent-text)]">
         <ShieldCheck size={12} />
         Audio is processed on your {isWindows ? 'computer' : 'Mac'} and never uploaded.
       </div>
@@ -614,7 +614,7 @@ export function Onboarding({
       </div>
 
       <div className="flex items-center gap-1.5 text-[11px] text-[color:var(--color-ink-3)]">
-        <ShieldCheck size={12} className="text-[color:var(--color-accent)]" />
+        <ShieldCheck size={12} className="text-[color:var(--color-accent-text)]" />
         {signedIn
           ? `Signed in${signedInEmail ? ` as ${signedInEmail}` : ''} · permissions are requested the first time you Listen.`
           : 'Restricted to your Mantu Microsoft account · permissions are requested the first time you Listen.'}
