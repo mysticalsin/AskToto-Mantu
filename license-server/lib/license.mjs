@@ -72,3 +72,65 @@ export function adminDetailView(license) {
     activations: license.activations,
   };
 }
+
+// How far ahead "expiring soon" looks, for the /admin/stats dashboard summary.
+const EXPIRING_SOON_WINDOW_MS = THIRTY_DAYS_MS;
+
+// Single-pass aggregate over every license, backing GET /admin/stats. Deliberately one loop (no
+// separate .filter()/.reduce() passes) so the cost stays O(n) over the license list regardless of
+// how many stat fields are derived from it — no N+1 lookups, nothing re-scans the activations array
+// beyond the one countActiveSeats30d() call per license it already needs.
+//
+// Note the three license-status counters are independent predicates, not a 3-way partition:
+// revokedLicenses counts every revoked license (whether or not it's also past its expiry), and
+// expiredLicenses counts every license whose expiresAt has passed (whether or not it's also
+// revoked) — only activeLicenses requires *both* "not revoked" and "not expired". A license that is
+// both revoked and expired is counted in both revokedLicenses and expiredLicenses, but not active.
+export function computeStats(licenses) {
+  const now = Date.now();
+  const soonCutoff = now + EXPIRING_SOON_WINDOW_MS;
+
+  let totalLicenses = 0;
+  let activeLicenses = 0;
+  let revokedLicenses = 0;
+  let expiredLicenses = 0;
+  let totalSeatCap = 0;
+  let totalSeatsUsed = 0;
+  let totalActive30d = 0;
+  const expiringSoon = [];
+
+  for (const license of licenses) {
+    totalLicenses += 1;
+    totalSeatCap += license.seatCap;
+    totalSeatsUsed += license.activations.length;
+    totalActive30d += countActiveSeats30d(license);
+
+    const hasExpiry = license.expiresAt !== null && license.expiresAt !== undefined;
+    const isExpired = hasExpiry && license.expiresAt <= now;
+
+    if (license.revoked) revokedLicenses += 1;
+    if (isExpired) expiredLicenses += 1;
+    if (!license.revoked && !isExpired) activeLicenses += 1;
+
+    if (!license.revoked && !isExpired && hasExpiry && license.expiresAt <= soonCutoff) {
+      expiringSoon.push({
+        licenseKey: license.licenseKey,
+        companyName: license.companyName,
+        expiresAt: license.expiresAt,
+      });
+    }
+  }
+
+  expiringSoon.sort((a, b) => a.expiresAt - b.expiresAt);
+
+  return {
+    totalLicenses,
+    activeLicenses,
+    revokedLicenses,
+    expiredLicenses,
+    totalSeatCap,
+    totalSeatsUsed,
+    totalActive30d,
+    expiringSoon,
+  };
+}

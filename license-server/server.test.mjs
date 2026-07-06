@@ -92,9 +92,14 @@ function adminHeaders(token = ADMIN_TOKEN) {
 }
 
 describe('license-server', () => {
+  let previousTrustProxy;
   beforeEach(async () => {
     previousAdminToken = process.env.LICENSE_ADMIN_TOKEN;
     process.env.LICENSE_ADMIN_TOKEN = ADMIN_TOKEN;
+    // Run the suite in proxy-aware mode so per-IP tests can simulate distinct clients via
+    // X-Forwarded-For (the anti-spoof default, TRUST_PROXY unset, is covered by its own test below).
+    previousTrustProxy = process.env.TRUST_PROXY;
+    process.env.TRUST_PROXY = '1';
     await startServer();
   });
 
@@ -104,6 +109,8 @@ describe('license-server', () => {
     } else {
       process.env.LICENSE_ADMIN_TOKEN = previousAdminToken;
     }
+    if (previousTrustProxy === undefined) delete process.env.TRUST_PROXY;
+    else process.env.TRUST_PROXY = previousTrustProxy;
     await stopServer();
   });
 
@@ -390,5 +397,215 @@ describe('license-server', () => {
 
     const audit = await get('/admin/audit');
     assert.equal(audit.status, 401);
+  });
+
+  it('GET /admin/stats computes every field correctly from a mixed set of licenses', async () => {
+    const now = Date.now();
+    const FIVE_DAYS_MS = 5 * 24 * 60 * 60 * 1000;
+    const TWENTY_DAYS_MS = 20 * 24 * 60 * 60 * 1000;
+
+    // Active, perpetual license with one fresh and one stale activation.
+    seedLicense({
+      licenseKey: 'ATK-STATS-ACTIVE-0000001',
+      companyName: 'Active Co',
+      seatCap: 5,
+      expiresAt: null,
+      revoked: false,
+      activations: [
+        { machineId: 'a1', machineName: '', activatedAt: now, lastSeenAt: now },
+        { machineId: 'a2', machineName: '', activatedAt: now, lastSeenAt: now - THIRTY_ONE_DAYS_MS },
+      ],
+    });
+
+    // Revoked license (not expired) — counts in revokedLicenses, not in activeLicenses or expiredLicenses.
+    seedLicense({
+      licenseKey: 'ATK-STATS-REVOKED-000001',
+      companyName: 'Revoked Co',
+      seatCap: 3,
+      expiresAt: now + TWENTY_DAYS_MS, // would otherwise be "expiring soon" if it weren't revoked
+      revoked: true,
+      activations: [{ machineId: 'r1', machineName: '', activatedAt: now, lastSeenAt: now }],
+    });
+
+    // Expired license (not revoked) — counts in expiredLicenses, not in activeLicenses.
+    seedLicense({
+      licenseKey: 'ATK-STATS-EXPIRED-000001',
+      companyName: 'Expired Co',
+      seatCap: 2,
+      expiresAt: now - 1000,
+      revoked: false,
+      activations: [{ machineId: 'e1', machineName: '', activatedAt: now, lastSeenAt: now }],
+    });
+
+    // Expiring-within-30-days license — active and should appear in expiringSoon.
+    seedLicense({
+      licenseKey: 'ATK-STATS-SOON-A-0000001',
+      companyName: 'Soon Co A',
+      seatCap: 1,
+      expiresAt: now + TWENTY_DAYS_MS,
+      revoked: false,
+      activations: [],
+    });
+
+    // A second, sooner expiring license, to assert ordering (soonest first).
+    seedLicense({
+      licenseKey: 'ATK-STATS-SOON-B-0000001',
+      companyName: 'Soon Co B',
+      seatCap: 1,
+      expiresAt: now + FIVE_DAYS_MS,
+      revoked: false,
+      activations: [],
+    });
+
+    // Active but expiring well beyond the 30-day window — must NOT appear in expiringSoon.
+    seedLicense({
+      licenseKey: 'ATK-STATS-FAR-0000000001',
+      companyName: 'Far Co',
+      seatCap: 4,
+      expiresAt: now + 400 * 24 * 60 * 60 * 1000,
+      revoked: false,
+      activations: [],
+    });
+
+    const { status, json } = await get('/admin/stats', adminHeaders());
+    assert.equal(status, 200);
+
+    assert.equal(json.totalLicenses, 6);
+    // Active: Active Co, Soon Co A, Soon Co B, Far Co = 4 (Revoked Co and Expired Co excluded).
+    assert.equal(json.activeLicenses, 4);
+    assert.equal(json.revokedLicenses, 1);
+    assert.equal(json.expiredLicenses, 1);
+    assert.equal(json.totalSeatCap, 5 + 3 + 2 + 1 + 1 + 4);
+    assert.equal(json.totalSeatsUsed, 2 + 1 + 1 + 0 + 0 + 0);
+    // Sums freshness across every license's activations, not just active ones: Active Co's a1 (a2 is
+    // stale), Revoked Co's r1, and Expired Co's e1 are all within 30 days = 3. Mirrors the existing
+    // per-license activeSeats30d convention (adminListView), which also ignores revoked/expired status.
+    assert.equal(json.totalActive30d, 3);
+
+    assert.equal(json.expiringSoon.length, 2, 'only the two not-revoked, within-30-day licenses qualify');
+    assert.equal(json.expiringSoon[0].licenseKey, 'ATK-STATS-SOON-B-0000001', 'soonest expiry must come first');
+    assert.equal(json.expiringSoon[1].licenseKey, 'ATK-STATS-SOON-A-0000001');
+    assert.deepEqual(Object.keys(json.expiringSoon[0]).sort(), ['companyName', 'expiresAt', 'licenseKey'].sort());
+    assert.equal(json.expiringSoon[0].companyName, 'Soon Co B');
+  });
+
+  it('GET /admin/stats requires the admin token', async () => {
+    const { status } = await get('/admin/stats');
+    assert.equal(status, 401);
+  });
+
+  it('locks out an IP after 10 failed admin auth attempts, even for the correct token, until reset', async () => {
+    const badHeaders = adminHeaders('totally-wrong-token');
+
+    // 10 failed attempts trip the lockout; none of these should themselves see 429 (the limiter only
+    // starts rejecting once the cap is reached, not on the attempt that reaches it).
+    for (let i = 0; i < 10; i++) {
+      const r = await get('/admin/licenses', badHeaders);
+      assert.equal(r.status, 401, `attempt ${i + 1} should still be a plain 401`);
+    }
+
+    // The 11th wrong attempt from the same IP must now be locked out.
+    const eleventh = await get('/admin/licenses', badHeaders);
+    assert.equal(eleventh.status, 429);
+    assert.deepEqual(eleventh.json, { ok: false, error: 'too_many_attempts' });
+
+    // Even the genuinely correct token gets 429 during the cooldown.
+    const correctDuringCooldown = await get('/admin/licenses', adminHeaders());
+    assert.equal(correctDuringCooldown.status, 429);
+    assert.deepEqual(correctDuringCooldown.json, { ok: false, error: 'too_many_attempts' });
+
+    // A different IP (simulated via X-Forwarded-For, since trust proxy is on) is entirely unaffected.
+    const freshIp = await get('/admin/licenses', { ...badHeaders, 'x-forwarded-for': '203.0.113.9' });
+    assert.equal(freshIp.status, 401, 'a fresh IP must not inherit another IP\'s lockout');
+  });
+
+  it('a successful admin auth resets the per-IP failure counter', async () => {
+    const badHeaders = adminHeaders('totally-wrong-token');
+
+    for (let i = 0; i < 5; i++) {
+      const r = await get('/admin/licenses', badHeaders);
+      assert.equal(r.status, 401);
+    }
+
+    const success = await get('/admin/licenses', adminHeaders());
+    assert.equal(success.status, 200);
+
+    // Failure count was reset to 0 by the success above, so 9 more failures (< 10) must not lock us out.
+    for (let i = 0; i < 9; i++) {
+      const r = await get('/admin/licenses', badHeaders);
+      assert.equal(r.status, 401, `post-reset attempt ${i + 1} should still be a plain 401, not locked out`);
+    }
+
+    // A subsequent correct call must still succeed (never locked, and no lingering lockout state).
+    const stillOk = await get('/admin/licenses', adminHeaders());
+    assert.equal(stillOk.status, 200);
+  });
+
+  it('does not count the 503 admin-disabled response as a failed attempt', async () => {
+    delete process.env.LICENSE_ADMIN_TOKEN;
+
+    for (let i = 0; i < 15; i++) {
+      const r = await get('/admin/licenses', adminHeaders('anything'));
+      assert.equal(r.status, 503);
+    }
+
+    process.env.LICENSE_ADMIN_TOKEN = ADMIN_TOKEN;
+    // If those 15 attempts had counted as failures, this correct-token call would now be locked out.
+    const afterReenable = await get('/admin/licenses', adminHeaders());
+    assert.equal(afterReenable.status, 200);
+  });
+
+  it('GET /health returns version, uptimeSeconds, and licenseCount alongside ok:true', async () => {
+    seedLicense({ licenseKey: 'ATK-HEALTH-0000000000001' });
+    seedLicense({ licenseKey: 'ATK-HEALTH-0000000000002' });
+
+    const res = await fetch(`${baseUrl}/health`);
+    assert.equal(res.status, 200);
+    const json = await res.json();
+
+    assert.equal(json.ok, true);
+    assert.equal(typeof json.version, 'string');
+    assert.match(json.version, /^\d+\.\d+\.\d+/);
+    assert.equal(typeof json.uptimeSeconds, 'number');
+    assert.ok(json.uptimeSeconds >= 0);
+    assert.equal(json.licenseCount, 2);
+  });
+
+  it('GET /health requires no auth', async () => {
+    const res = await fetch(`${baseUrl}/health`);
+    assert.equal(res.status, 200);
+  });
+});
+
+// With TRUST_PROXY unset (the safe default for a directly-exposed server), a spoofed X-Forwarded-For
+// must be IGNORED, so an attacker can't rotate it to dodge the admin lockout. Own server, no proxy.
+describe('license-server (trust proxy OFF, anti-spoof)', () => {
+  let prevTok;
+  let prevTp;
+  beforeEach(async () => {
+    prevTok = process.env.LICENSE_ADMIN_TOKEN;
+    prevTp = process.env.TRUST_PROXY;
+    process.env.LICENSE_ADMIN_TOKEN = ADMIN_TOKEN;
+    delete process.env.TRUST_PROXY;
+    await startServer();
+  });
+  afterEach(async () => {
+    if (prevTok === undefined) delete process.env.LICENSE_ADMIN_TOKEN;
+    else process.env.LICENSE_ADMIN_TOKEN = prevTok;
+    if (prevTp === undefined) delete process.env.TRUST_PROXY;
+    else process.env.TRUST_PROXY = prevTp;
+    await stopServer();
+  });
+
+  it('a rotated X-Forwarded-For cannot evade the admin lockout when trust proxy is off', async () => {
+    const bad = adminHeaders('totally-wrong-token');
+    // 10 failures from the real socket IP (127.0.0.1), each with a DIFFERENT spoofed XFF.
+    for (let i = 0; i < 10; i++) {
+      const r = await get('/admin/licenses', { ...bad, 'x-forwarded-for': `203.0.113.${i}` });
+      assert.equal(r.status, 401);
+    }
+    // A brand-new spoofed XFF must still be locked out, because the real socket IP is what counts.
+    const spoofed = await get('/admin/licenses', { ...bad, 'x-forwarded-for': '198.51.100.77' });
+    assert.equal(spoofed.status, 429, 'a spoofed XFF must not bypass the lockout with trust proxy off');
   });
 });

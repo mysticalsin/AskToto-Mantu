@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
-import { generateLicenseKey, licenseStatus, successPayload, adminListView, adminDetailView } from './license.mjs';
+import { generateLicenseKey, licenseStatus, successPayload, adminListView, adminDetailView, computeStats } from './license.mjs';
 import { toCsv } from './csv.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -13,6 +13,9 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // and identical for every request, so there's no reason to hit the
 // filesystem on every GET /admin/ui.
 const ADMIN_UI_HTML = readFileSync(path.join(__dirname, '..', 'admin', 'index.html'), 'utf8');
+
+// Also read once at module load, for GET /health's `version` field — same reasoning as ADMIN_UI_HTML.
+const PACKAGE_VERSION = JSON.parse(readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8')).version;
 
 const MAX_ID_LEN = 200;
 const MAX_NOTES_LEN = 2000;
@@ -104,16 +107,72 @@ function makeRateLimit() {
   };
 }
 
+// Per-IP brute-force lockout for the admin bearer token — which, unlike /activate and /heartbeat, is
+// the *entire* security model for every /admin/* route. Fixed-window counter of failed auth attempts,
+// same shape as makeRateLimit above but a wholly separate closure/Map: different key (IP only, no
+// licenseKey), different trigger (failed auth vs. call volume), different consequence (a hard lockout
+// that a subsequently-correct token cannot buy out of, vs. just throttling). The two limiters never
+// share state and so can never interfere with one another.
+//
+// Once an IP's failure count in the current window reaches ADMIN_LOCKOUT_MAX, every request from that
+// IP gets 429 for the rest of the window — including one that supplies the *correct* token, so a
+// leaked/guessed token doesn't let an attacker who's already tripped the lockout straight back in. A
+// successful auth clears the IP's entry outright, resetting it for next time.
+const ADMIN_LOCKOUT_WINDOW_MS = 15 * 60_000; // 15 minutes
+const ADMIN_LOCKOUT_MAX = 10; // failed attempts from one IP within the window before lockout
+function makeAdminLockout() {
+  const buckets = new Map(); // ip -> { start, count }
+
+  function bucketFor(ip, now) {
+    const b = buckets.get(ip);
+    if (!b || now - b.start >= ADMIN_LOCKOUT_WINDOW_MS) return null;
+    return b;
+  }
+
+  return {
+    isLocked(ip) {
+      const now = Date.now();
+      const b = bucketFor(ip, now);
+      return !!b && b.count >= ADMIN_LOCKOUT_MAX;
+    },
+    recordFailure(ip) {
+      const now = Date.now();
+      let b = bucketFor(ip, now);
+      if (!b) {
+        b = { start: now, count: 0 };
+        buckets.set(ip, b);
+      }
+      b.count += 1;
+      // Opportunistic sweep so the Map can't grow unbounded from unique keys over a long uptime.
+      if (buckets.size > 10_000) {
+        for (const [k, v] of buckets) if (now - v.start >= ADMIN_LOCKOUT_WINDOW_MS) buckets.delete(k);
+      }
+    },
+    recordSuccess(ip) {
+      buckets.delete(ip);
+    },
+  };
+}
+
 // Builds the Express app around a given store + audit log. Kept as a
 // factory (rather than a module-level singleton) so tests can spin up
 // isolated instances against isolated temp-file stores.
 export function createApp(store, auditLog) {
   const app = express();
-  // Behind a reverse proxy (Fly, Railway, Caddy, an nginx/Cloudflare front) the client IP is in
-  // X-Forwarded-For; trust it so the rate limiter keys on the real client, not the proxy's single IP.
-  app.set('trust proxy', true);
+  const startedAt = Date.now();
+  // Client-IP trust is deliberately OPT-IN via TRUST_PROXY, because the rate limiter and the admin
+  // brute-force lockout both key on req.ip. Blanket-trusting X-Forwarded-For lets a DIRECTLY-reachable
+  // server be fooled: an attacker rotates a spoofed XFF header to dodge both limiters. So:
+  //  - Behind a reverse proxy (the deploy/ Caddy stack, Fly, nginx, Cloudflare) the server is NOT
+  //    directly reachable and the proxy sets the real client IP in XFF — set TRUST_PROXY=1 so each
+  //    customer is limited/locked-out independently (one hop; trusting only the nearest proxy).
+  //  - Directly exposed (plain docker run -p, or LAN), leave it unset: req.ip is the real socket IP,
+  //    which a remote client cannot spoof.
+  const trustProxy = process.env.TRUST_PROXY;
+  app.set('trust proxy', trustProxy === '1' || trustProxy === 'true' ? 1 : false);
   app.use(express.json());
   const rateLimit = makeRateLimit();
+  const adminLockout = makeAdminLockout();
 
   // JSON body parse errors land here (thrown by express.json()).
   app.use((err, req, res, next) => {
@@ -222,15 +281,23 @@ export function createApp(store, auditLog) {
 
   function requireAdmin(req, res, next) {
     if (!process.env.LICENSE_ADMIN_TOKEN) {
+      // No token configured means every admin call is rejected regardless of what's presented — that's
+      // a misconfiguration, not an attack, so it must never feed the brute-force lockout counter below.
       return res.status(503).json({
         ok: false,
         error: 'admin_disabled',
         message: 'LICENSE_ADMIN_TOKEN is not set on this server — admin routes are disabled until it is configured.',
       });
     }
+    const ip = req.ip || req.socket?.remoteAddress || 'unknown';
+    if (adminLockout.isLocked(ip)) {
+      return res.status(429).json({ ok: false, error: 'too_many_attempts' });
+    }
     if (!isValidAdminToken(req)) {
+      adminLockout.recordFailure(ip);
       return res.status(401).json({ ok: false, error: 'unauthorized' });
     }
+    adminLockout.recordSuccess(ip);
     return next();
   }
 
@@ -319,6 +386,11 @@ export function createApp(store, auditLog) {
     res.type('csv').send(toCsv([header, ...rows]));
   });
 
+  // Dashboard summary: one cheap pass over the store (see computeStats), no per-license round trips.
+  app.get('/admin/stats', requireAdmin, (req, res) => {
+    res.json(computeStats(store.getAll()));
+  });
+
   app.get('/admin/licenses/:key', requireAdmin, (req, res) => {
     const license = store.findByKey(req.params.key);
     if (!license) return res.status(404).json({ ok: false, error: 'not_found' });
@@ -379,7 +451,12 @@ export function createApp(store, auditLog) {
   });
 
   app.get('/health', (req, res) => {
-    res.json({ ok: true });
+    res.json({
+      ok: true,
+      version: PACKAGE_VERSION,
+      uptimeSeconds: (Date.now() - startedAt) / 1000,
+      licenseCount: store.getAll().length,
+    });
   });
 
   app.use((req, res) => {

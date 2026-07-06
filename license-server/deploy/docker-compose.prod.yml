@@ -18,6 +18,9 @@ services:
     environment:
       PORT: '8420'
       LICENSE_ADMIN_TOKEN: ${LICENSE_ADMIN_TOKEN:?set LICENSE_ADMIN_TOKEN in deploy/.env (e.g. openssl rand -hex 24)}
+      # This stack puts Caddy in front and never exposes the server directly, so trust the one proxy
+      # hop for real client IPs (needed for per-customer rate limiting + admin brute-force lockout).
+      TRUST_PROXY: '1'
     volumes:
       - license_data:/app/data
 
