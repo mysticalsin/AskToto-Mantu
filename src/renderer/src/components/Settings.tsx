@@ -84,9 +84,11 @@ import { displayAccelerator } from '../lib/keys'
 const ctl =
   'no-drag font-body cl-input cl-focus px-3 py-2.5 text-[13px] text-[color:var(--cl-foreground)]'
 
-// Providers excluded from the generic provider tiles grid + generic "key" Section. dust/claude-cli/
-// codex-cli have dedicated cards in CliIntegration; gemini is intentionally hidden from the UI entirely.
-const CLI_PROVIDERS = new Set<ProviderId>(['dust', 'claude-cli', 'codex-cli', 'gemini'])
+// Providers excluded from the generic provider tiles grid + generic "key" Section because they have
+// their OWN dedicated setup card instead (dust → DustSetup, claude-cli/codex-cli → CliIntegration).
+// Gemini used to be listed here too by mistake — it has no dedicated card, so that made it
+// unselectable ANYWHERE in Settings. It's a normal API-key provider like GPT/Grok; removed.
+const CLI_PROVIDERS = new Set<ProviderId>(['dust', 'claude-cli', 'codex-cli'])
 
 /**
  * After disconnecting/removing the active provider, pick another provider that is actually ready
@@ -249,6 +251,55 @@ function Section({
       </div>
       {children}
     </section>
+  )
+}
+
+/** One selectable provider tile — shared by the always-visible "featured" grid and the collapsed
+ *  "Experience: more models" grid, so both stay visually identical. */
+function ProviderTile({
+  id,
+  active,
+  recommended,
+  hasKey,
+  locked,
+  onSelect
+}: {
+  id: ProviderId
+  active: boolean
+  recommended: boolean
+  hasKey: boolean
+  locked: boolean
+  onSelect: () => void
+}): JSX.Element {
+  return (
+    <button
+      type="button"
+      aria-pressed={active}
+      disabled={locked}
+      onClick={onSelect}
+      className={[
+        'no-drag cl-focus flex flex-col items-start gap-0.5 rounded-[10px] border px-2.5 py-2 text-left transition-colors',
+        active
+          ? 'border-[var(--cl-primary)] bg-[var(--cl-primary-soft)]'
+          : 'border-[var(--cl-border)] bg-white/[0.02] hover:bg-white/[0.05]',
+        locked ? 'opacity-60 cursor-not-allowed' : ''
+      ].join(' ')}
+    >
+      <span className="flex w-full items-center justify-between gap-1.5">
+        <span className="truncate text-[12px] font-medium text-[color:var(--cl-foreground)]">
+          {PROVIDERS[id].label}
+        </span>
+        <span className="flex shrink-0 items-center gap-1">
+          {recommended && (
+            <span className="rounded-full bg-[var(--cl-primary-soft)] px-1.5 py-0 text-[10px] font-medium text-[color:var(--cl-primary)]">
+              Best pick
+            </span>
+          )}
+          {hasKey && <Check size={14} className="shrink-0 text-[color:var(--cl-success)]" />}
+        </span>
+      </span>
+      <span className="text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">{PROVIDERS[id].blurb}</span>
+    </button>
   )
 }
 
@@ -570,18 +621,25 @@ function AiSection({
 
   const hint = detectHint(key, provider)
   const q = filter.trim().toLowerCase()
-  // Dust + CLI providers have dedicated UI sections; gemini is hidden; Anthropic has its own always-
-  // visible card below — exclude all from the "Experience: more models" tiles grid.
-  const shown = PROVIDER_IDS.filter(
-    (id) => !CLI_PROVIDERS.has(id) && id !== 'anthropic' && (!q || PROVIDERS[id].label.toLowerCase().includes(q))
+  // Dust + CLI providers have dedicated UI sections; Anthropic has its own always-visible card below —
+  // exclude both from the generic tiles grid. The remainder splits by `tier`: 'featured' (GPT, Grok,
+  // Kimi, Gemini) gets its own always-visible grid right under Anthropic's card, matching the CLI
+  // cards' prominence; 'more' (NVIDIA, DeepSeek, Qwen, MiniMax, OpenRouter, Groq, Mistral, custom)
+  // stays tucked in the collapsed "Experience: more models" section.
+  const selectable = PROVIDER_IDS.filter((id) => !CLI_PROVIDERS.has(id) && id !== 'anthropic')
+  const featured = selectable.filter((id) => PROVIDERS[id].tier === 'featured')
+  const shown = selectable.filter(
+    (id) => PROVIDERS[id].tier === 'more' && (!q || PROVIDERS[id].label.toLowerCase().includes(q))
   )
   const recommended = recommendedProvider(settings)
+  const isFeatured = featured.includes(provider)
 
   const dustSectionRef = useRef<HTMLDivElement>(null)
 
   // The "{provider} key" card — shown for whichever raw provider is currently active. Rendered at the
-  // top level when that's Anthropic (the primary flow), or inside "Experience: more models" otherwise.
-  // null for CLI providers (Dust/Claude Code/Codex have their own dedicated cards, no generic key box).
+  // top level when that's Anthropic or a featured provider (the primary flows), or inside "Experience:
+  // more models" otherwise. null for CLI providers (Dust/Claude Code/Codex have their own dedicated
+  // cards, no generic key box).
   const keyEntrySection = !CLI_PROVIDERS.has(provider) ? (
     <Section title={`${def.label} key`} desc="Stored encrypted on this device. Never sent anywhere except the provider.">
       <div className="flex items-center gap-2">
@@ -837,12 +895,37 @@ function AiSection({
 
       {provider === 'anthropic' && keyEntrySection}
 
+      {/* Featured API providers — same prominence as the CLI cards above, so picking GPT/Grok/Kimi/
+          Gemini doesn't require digging into a collapsed section. */}
+      <Section title="Other providers" desc="Bring your own key from another provider.">
+        <div className="grid grid-cols-2 gap-2">
+          {featured.map((id) => (
+            <ProviderTile
+              key={id}
+              id={id}
+              active={id === provider}
+              recommended={id === recommended}
+              hasKey={!!settings.hasKeys[id]}
+              locked={locked}
+              onSelect={() => patch({ provider: id })}
+            />
+          ))}
+        </div>
+        {locked && (
+          <div className="mt-2">
+            <span className={managedChipCls}>Managed by your organization</span>
+          </div>
+        )}
+      </Section>
+
+      {isFeatured && keyEntrySection}
+
       <ExpandableSection
         title="Experience: more models"
-        desc="Bring your own key from another provider, or try something different. Closed by default; Anthropic above covers most people."
+        desc="More providers, including a raw OpenAI-compatible endpoint. Closed by default; most people find what they need above."
       >
         <Section title="Model provider" desc="Prefer a raw model? Pick one, paste a key, and AskToto detects the provider.">
-          {PROVIDER_IDS.length > 8 && (
+          {shown.length + featured.length > 8 && (
             <div className="relative mb-2">
               <Search
                 size={13}
@@ -857,44 +940,17 @@ function AiSection({
             </div>
           )}
           <div className="grid grid-cols-2 gap-2">
-            {shown.map((id) => {
-              const active = id === provider
-              return (
-                <button
-                  key={id}
-                  type="button"
-                  aria-pressed={active}
-                  disabled={locked}
-                  onClick={() => patch({ provider: id })}
-                  className={[
-                    'no-drag cl-focus flex flex-col items-start gap-0.5 rounded-[10px] border px-2.5 py-2 text-left transition-colors',
-                    active
-                      ? 'border-[var(--cl-primary)] bg-[var(--cl-primary-soft)]'
-                      : 'border-[var(--cl-border)] bg-white/[0.02] hover:bg-white/[0.05]',
-                    locked ? 'opacity-60 cursor-not-allowed' : ''
-                  ].join(' ')}
-                >
-                  <span className="flex w-full items-center justify-between gap-1.5">
-                    <span className="truncate text-[12px] font-medium text-[color:var(--cl-foreground)]">
-                      {PROVIDERS[id].label}
-                    </span>
-                    <span className="flex shrink-0 items-center gap-1">
-                      {id === recommended && (
-                        <span className="rounded-full bg-[var(--cl-primary-soft)] px-1.5 py-0 text-[10px] font-medium text-[color:var(--cl-primary)]">
-                          Best pick
-                        </span>
-                      )}
-                      {settings.hasKeys[id] && (
-                        <Check size={14} className="shrink-0 text-[color:var(--cl-success)]" />
-                      )}
-                    </span>
-                  </span>
-                  <span className="text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
-                    {PROVIDERS[id].blurb}
-                  </span>
-                </button>
-              )
-            })}
+            {shown.map((id) => (
+              <ProviderTile
+                key={id}
+                id={id}
+                active={id === provider}
+                recommended={id === recommended}
+                hasKey={!!settings.hasKeys[id]}
+                locked={locked}
+                onSelect={() => patch({ provider: id })}
+              />
+            ))}
           </div>
           {locked && (
             <div className="mt-2">
@@ -903,7 +959,7 @@ function AiSection({
           )}
         </Section>
 
-        {provider !== 'anthropic' && keyEntrySection}
+        {provider !== 'anthropic' && !isFeatured && keyEntrySection}
       </ExpandableSection>
 
       {/* Thinking mode — applies to whatever's active (raw model tiers, or your two Dust agents) */}
