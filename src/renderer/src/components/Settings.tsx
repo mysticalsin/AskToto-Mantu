@@ -849,8 +849,15 @@ function AiSection({
   // Kimi, Gemini) gets its own always-visible grid right under Anthropic's card, matching the CLI
   // cards' prominence; 'more' (NVIDIA, DeepSeek, Qwen, MiniMax, OpenRouter, Groq, Mistral, custom)
   // stays tucked in the collapsed "Experience: more models" section.
+  // When the org sets a data-residency allowlist, only approved providers are offered — mirroring what
+  // the main process enforces at request time, so the UI can't offer a provider every ask would reject.
+  const orgAllowed = settings.allowedProviders
   const selectable = PROVIDER_IDS.filter(
-    (id) => !CLI_PROVIDERS.has(id) && id !== 'anthropic' && PROVIDERS[id].kind !== 'local'
+    (id) =>
+      !CLI_PROVIDERS.has(id) &&
+      id !== 'anthropic' &&
+      PROVIDERS[id].kind !== 'local' &&
+      (!orgAllowed || orgAllowed.includes(id))
   )
   const featured = selectable.filter((id) => PROVIDERS[id].tier === 'featured')
   const shown = selectable.filter(
@@ -1175,6 +1182,12 @@ function AiSection({
         desc="More providers, including a raw OpenAI-compatible endpoint. Closed by default; most people find what they need above."
       >
         <Section title="Model provider" desc="Prefer a raw model? Pick one, paste a key, and Métis detects the provider.">
+          {orgAllowed && (
+            <div className="mb-2 flex items-center gap-1.5 rounded-lg bg-[var(--cl-primary-soft)] px-2.5 py-1.5 text-[11px] text-[color:var(--cl-muted-foreground)]">
+              <ShieldCheck size={12} className="shrink-0 text-[color:var(--cl-primary)]" />
+              Your organization restricts Métis to approved providers.
+            </div>
+          )}
           {shown.length + featured.length > 8 && (
             <div className="relative mb-2">
               <Search
