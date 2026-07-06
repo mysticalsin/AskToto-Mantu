@@ -1190,7 +1190,15 @@ export function useListen(
     //    mid-decode, and commitLine (gated on liveRef) would drop the last sentence once liveRef flipped
     //    false. liveRef stays TRUE through the drain so that final window still commits. A hard ceiling
     //    guards against a hung/never-returning decode wedging teardown.
-    const DRAIN_CEILING_MS = 4000
+    // Parakeet decodes run in the main process over IPC and race their own PARAKEET_FEED_TIMEOUT_MS
+    // timeout per window (see pump() above). A drain ceiling shorter than that timeout would tear down
+    // (liveRef=false) while the last decode is still in flight — and commitLine drops any line that lands
+    // after liveRef flips false — silently losing the final sentence of a Parakeet session. Give Parakeet
+    // sessions a ceiling that comfortably outlasts their own feed timeout — Apple Speech feeds over the
+    // same IPC path with the same timeout (see its pump above), so it gets the same headroom; Whisper
+    // (in-process, no IPC round trip) keeps the original 4s ceiling.
+    const DRAIN_CEILING_MS =
+      engineRef.current === 'parakeet' || engineRef.current === 'apple' ? PARAKEET_FEED_TIMEOUT_MS + 1000 : 4000
     const startedAt = Date.now()
     const finishTeardown = (): void => {
       // A new start() ran while we were draining — it already owns the session; do not clobber it.

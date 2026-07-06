@@ -525,7 +525,7 @@ export const Review = memo(function Review({
           )}
         </div>
       )}
-      {savedPath && (
+      {savedPath && !meetingMeta && (
         <button
           type="button"
           aria-label="Open saved transcript folder"

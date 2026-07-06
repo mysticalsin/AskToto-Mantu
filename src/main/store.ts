@@ -19,7 +19,7 @@ import {
   type Settings,
   type DustAgentsResponse
 } from '@shared/ipc'
-import { PROVIDERS, PROVIDER_IDS, dustAgentVision, type ProviderId } from '@shared/providers'
+import { PROVIDERS, PROVIDER_IDS, dustAgentVision, resolveModel, type ProviderId } from '@shared/providers'
 import { mainLog } from './logger'
 import { caheEditionPolicy, isCaheEdition } from './cahe-edition'
 import {
@@ -118,7 +118,11 @@ function readManagedFrom(p: string): Record<string, unknown> {
 function readLockedFrom(p: string): string[] {
   try {
     const obj = JSON.parse(readFileSync(p, 'utf8'))
-    const arr: unknown[] = Array.isArray(obj.locked) ? obj.locked : []
+    // Canonical key is `locked`; `lockedKeys` is accepted too — the enterprise doc (docs/asktoto-
+    // architecture.md) previously told IT admins to use `lockedKeys`, and an admin config written
+    // against that name must still lock fields instead of silently locking nothing.
+    const raw = obj.locked ?? obj.lockedKeys
+    const arr: unknown[] = Array.isArray(raw) ? raw : []
     return [...new Set(arr.filter((k): k is string => typeof k === 'string'))]
   } catch {
     return []
@@ -689,8 +693,11 @@ export async function testApiKey(provider: ProviderId, key: string): Promise<Tes
       if (provider === 'custom' && !baseURL) {
         return { ok: false, error: 'Custom provider requires a base URL in Advanced settings.' }
       }
-      // Custom has no built-in model — use the user's chosen model id, or the test is meaningless.
-      const model = def.fastModel || def.defaultModel || settings.providerModels[provider] || ''
+      // Precedence must match the real ask flow (resolveModelTier / resolveModel in providers.ts): a
+      // user's Advanced Base-model override wins over the built-in fastModel, so Test never reports
+      // "valid" on a model the app won't actually use. Custom has no built-in model at all — for it,
+      // this resolves to the user's chosen model id, or '' (the test is meaningless without one).
+      const model = resolveModel(provider, settings.providerModels, true)
       if (!model) {
         return { ok: false, error: 'Set a model id in Advanced first, then test.' }
       }

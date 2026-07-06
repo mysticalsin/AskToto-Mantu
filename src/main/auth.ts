@@ -491,6 +491,17 @@ export function requireAuth(): boolean {
   return !s.configured || s.signedIn
 }
 
+/** Bucket a signIn() failure into a small, fixed category for the audit log — never the raw error
+ *  message, which can carry MSAL/account details (tenant hints, correlation IDs) that don't belong in
+ *  an audit record. */
+function coarseSignInFailure(e: unknown): string {
+  const msg = e instanceof Error ? e.message : String(e)
+  if (/timed out/i.test(msg)) return 'timeout'
+  if (/No authorization code|error_description|access_denied/i.test(msg)) return 'oauth_denied'
+  if (/network|ENOTFOUND|ECONNREFUSED|ETIMEDOUT/i.test(msg)) return 'network'
+  return 'other'
+}
+
 export async function signIn(): Promise<SignInResult> {
   const cfg = readConfig()
   if (!cfg) return { ok: true, configured: false } // not configured — let the user proceed
@@ -518,6 +529,7 @@ export async function signIn(): Promise<SignInResult> {
         }
         // CSRF check: the redirect MUST echo our state nonce. Reject anything else, keep waiting.
         if (url.searchParams.get('state') !== state) {
+          auditLog('auth.state_mismatch', {})
           res.writeHead(400, { 'Content-Type': 'text/plain' })
           res.end('Invalid state.')
           return
@@ -591,12 +603,12 @@ export async function signIn(): Promise<SignInResult> {
 
     if (tid !== cfg.tenantId) {
       await purgeRejected()
-      auditLog('auth.denied', { domain: cfg.allowedDomain })
+      auditLog('auth.denied', { domain: cfg.allowedDomain, attemptedEmail: email, attemptedTenant: tid })
       return { ok: false, configured: true, error: 'That account is outside your organization.' }
     }
     if (!email.endsWith(`@${cfg.allowedDomain.toLowerCase()}`)) {
       await purgeRejected()
-      auditLog('auth.denied', { domain: cfg.allowedDomain })
+      auditLog('auth.denied', { domain: cfg.allowedDomain, attemptedEmail: email, attemptedTenant: tid })
       return { ok: false, configured: true, error: `Use your @${cfg.allowedDomain} account.` }
     }
 
@@ -610,6 +622,7 @@ export async function signIn(): Promise<SignInResult> {
     auditLog('auth.signin', { domain: cfg.allowedDomain })
     return { ok: true, configured: true, email }
   } catch (e) {
+    auditLog('auth.signin_failed', { reason: coarseSignInFailure(e) })
     return { ok: false, configured: true, error: e instanceof Error ? e.message : String(e) }
   }
 }

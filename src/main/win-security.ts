@@ -97,10 +97,15 @@ try {
   }
 }
 
-// Cache the verdict per path, keyed on mtime+size so a legitimately-updated policy is re-checked but we
-// don't spawn PowerShell on every settings read. A mid-session ACL swap by an attacker would itself
-// require the very privilege this check denies, so caching the verdict is safe.
-const trustCache = new Map<string, { key: string; trusted: boolean }>()
+// The ACL verdict is deliberately NOT cached. An earlier version cached it keyed on `${mtimeMs}:${size}`
+// (content metadata) on the theory that "a mid-session ACL swap would itself require the very privilege
+// this check denies." That's false: icacls/Set-Acl changes a file's DACL without touching its content,
+// so mtime+size stays constant across an ACL change — the cache key is blind to the exact thing this
+// function exists to check. A file could be hardened (or loosened) via ACL alone and this function would
+// keep returning the stale verdict from before the change until the content also happened to change.
+// Since the ACL check IS the security gate, and callers do a separate readFileSync for content after
+// calling this, the verdict must be fresh on every call. Perf is fine: callers already sit behind
+// getSettings()'s own mtime-keyed cache (store.ts), so this doesn't run on every settings read.
 let warnedUntrusted = false
 
 /**
@@ -117,16 +122,12 @@ let warnedUntrusted = false
  */
 export function isAdminManagedTrusted(path: string = adminManagedConfigPath()): boolean {
   if (process.platform !== 'win32') return true
-  let key: string
   try {
     const st = statSync(path)
     if (!st.isFile()) return false
-    key = `${st.mtimeMs}:${st.size}`
   } catch {
     return false // absent → no policy to honor; returning true here reopens the stat→read race
   }
-  const cached = trustCache.get(path)
-  if (cached && cached.key === key) return cached.trusted
 
   const acl = readAcl(path)
   const trusted = acl ? evaluateAclTrust(acl) : false
@@ -138,7 +139,6 @@ export function isAdminManagedTrusted(path: string = adminManagedConfigPath()): 
         `SYSTEM/Administrators with no Users-write ACE.`
     )
   }
-  trustCache.set(path, { key, trusted })
   return trusted
 }
 
