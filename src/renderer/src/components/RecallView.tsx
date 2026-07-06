@@ -268,7 +268,7 @@ function Related({
           {data.topics.map((t) => (
             <span
               key={t}
-              className="truncate max-w-full rounded-full bg-[var(--color-accent-soft)] px-2 py-0.5 text-[10px] font-medium text-[var(--color-accent)]"
+              className="truncate max-w-full rounded-full bg-[var(--color-accent-soft)] px-2 py-0.5 text-[10px] font-medium text-[var(--color-accent-2)]"
             >
               {t}
             </span>
@@ -588,7 +588,7 @@ const MeetingRow = memo(function MeetingRow({
           {m.topics.slice(0, 3).map((t, i) => (
             <span
               key={`${t}-${i}`}
-              className="truncate max-w-full rounded-full bg-[var(--color-accent-soft)] px-2 py-0.5 text-[10px] font-medium text-[var(--color-accent)]"
+              className="truncate max-w-full rounded-full bg-[var(--color-accent-soft)] px-2 py-0.5 text-[10px] font-medium text-[var(--color-accent-2)]"
             >
               {t}
             </span>
@@ -1116,7 +1116,7 @@ export function RecallView({
         <div className="flex items-center gap-1.5">
           <TextButton onClick={openSelected} disabled={items.length === 0}>
             Open
-            <kbd className="rounded bg-white/[0.06] px-1 py-0.5 text-[10px] text-[color:var(--color-ink-3)]">↵</kbd>
+            <kbd className="rounded bg-white/[0.06] px-1 py-0.5 text-[10px] text-[color:var(--color-ink-3)]">{accelLabel('Return')}</kbd>
           </TextButton>
           <TextButton icon={FolderOpen} onClick={onOpenFolder}>Open folder</TextButton>
           {onIntelligence && (

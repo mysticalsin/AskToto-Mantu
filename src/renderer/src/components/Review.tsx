@@ -8,6 +8,7 @@ import { Markdown } from './Markdown'
 import { Chip, TextButton, Spinner } from './ui'
 import { ReviewEntityStrip } from './ReviewEntityStrip'
 import { useFlash } from '../lib/useFlash'
+import { accelLabel } from '../lib/keys'
 
 function clock(t: number): string {
   try {
@@ -710,7 +711,7 @@ export const Review = memo(function Review({
             />
             {recapEditError && <div className="text-[11px] text-[var(--color-danger)]">{recapEditError}</div>}
             <div className="text-[11px] text-[color:var(--color-ink-3)]">
-              Markdown supported. Changes are saved to this meeting. Cmd or Ctrl + Enter to save, Esc to cancel.
+              Markdown supported. Changes are saved to this meeting. {accelLabel('CommandOrControl+Return')} to save, Esc to cancel.
             </div>
           </div>
         ) : recap?.error ? (
