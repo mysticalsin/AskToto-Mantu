@@ -990,14 +990,25 @@ function registerIpc(): void {
     assertMainWindow(e)
     return getPlatformPermissions()
   })
-  // Deep-link to the relevant macOS Privacy pane once a permission has been denied — getUserMedia never
-  // re-prompts after a Deny, so without this a denied user has no in-app path back to granting it. The
-  // x-apple.systempreferences scheme only exists on macOS; a no-op elsewhere.
+  // Deep-link to the relevant OS Privacy pane once a permission has been denied — getUserMedia never
+  // re-prompts after a Deny, so without this a denied user has no in-app path back to granting it.
   ipcMain.handle(IPC.permissionsOpenSettings, (e, kind: unknown) => {
     assertMainWindow(e)
-    if (process.platform !== 'darwin') return
-    const pane = kind === 'screenRecording' ? 'Privacy_ScreenCapture' : 'Privacy_Microphone'
-    void shell.openExternal(`x-apple.systempreferences:com.apple.preference.security?${pane}`)
+    if (process.platform === 'darwin') {
+      const pane = kind === 'screenRecording' ? 'Privacy_ScreenCapture' : 'Privacy_Microphone'
+      void shell.openExternal(`x-apple.systempreferences:com.apple.preference.security?${pane}`)
+      return
+    }
+    if (process.platform === 'win32') {
+      // ms-settings: URIs — Windows has no dedicated "Screen Recording" privacy pane like macOS, so
+      // screenRecording falls back to the broad file-system-access pane (the closest analog); microphone
+      // gets its own dedicated pane. Without this the Copilot mic-denied recovery button was a no-op
+      // on Windows (the darwin-only branch below silently returned).
+      const uri =
+        kind === 'screenRecording' ? 'ms-settings:privacy-broadfilesystemaccess' : 'ms-settings:privacy-microphone'
+      void shell.openExternal(uri)
+      return
+    }
   })
   // Front-load the OS permission prompts during onboarding (macOS only) so the first real meeting
   // isn't interrupted by them. Serial, and only for permissions not yet granted: mic has a direct
@@ -1554,6 +1565,11 @@ function registerIpc(): void {
     // before it leaves the device for a cloud model. Only the auto-captured transcript — never the user's
     // own typed prompt, and never the locally-saved meeting file (which keeps the verbatim original).
     if (s.redactSensitive && req.transcript) req.transcript = redactSecrets(req.transcript)
+    // req.redactPrompt is set by callers whose "prompt" is itself transcript-derived rather than user-typed
+    // (e.g. fact-check's transcript-fallback ask, which stuffs the transcript tail into prompt when there's
+    // no typed claim) — redact it the same way so a secret-shaped pattern in that fallback text isn't sent
+    // to the provider. Typed-claim fact-check asks never set this flag, so normal prompts are untouched.
+    if (s.redactSensitive && req.redactPrompt) req.prompt = redactSecrets(req.prompt)
     // Receipt Mode: ground a typed answer in the user's own past meetings. Match the brain against the
     // question (which already carries the live transcript tail via the renderer's withContext) and inject
     // the relevant, meeting-cited slice per-turn. Answer mode only — never the latency-critical spoken
@@ -2223,7 +2239,13 @@ if (!app.requestSingleInstanceLock()) {
   }
   runRetentionSweep()
   setInterval(runRetentionSweep, 6 * 60 * 60 * 1000)
-  if (process.platform === 'darwin') app.dock?.hide()
+  // Guarded like the neighboring dock.setIcon / crash-log pruning below — a throw here must never abort
+  // createTray/registerShortcuts/createWindow further down the boot sequence.
+  if (process.platform === 'darwin') {
+    try {
+      app.dock?.hide()
+    } catch { /* best-effort — never block startup */ }
+  }
 
   // Boot each subsystem in its own try/catch so a failure in one can't silently abort the rest. Defined
   // here (ahead of its call sites) so the display-media/permission/asr-model registrations immediately

@@ -165,6 +165,10 @@ export interface AskRequest {
   prompt?: string
   label?: string
   kind?: 'answer' | 'factcheck'
+  /** When true, main runs secret-redaction over `prompt` (not just `transcript`). Set only when the
+   *  prompt embeds transcript-derived text (e.g. the fact-check transcript fallback) — never on a
+   *  user's typed question, which must never be altered. */
+  redactPrompt?: boolean
   image?: string
   transcript?: string
   history?: ChatTurn[]
@@ -322,6 +326,7 @@ export function useAsk(): {
         transcript: req.transcript,
         depth: req.depth,
         kind: req.kind,
+        redactPrompt: req.redactPrompt,
         agentOverride: req.agentOverride,
         providerOverride: req.providerOverride,
         history: req.history ?? []

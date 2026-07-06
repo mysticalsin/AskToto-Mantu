@@ -582,7 +582,8 @@ export function RecallView({
   onNewChat?: () => void
   /** Optional: open a meeting's recap in-app (Cluely recap detail). Falls back to OS-open when absent.
    *  May return the failure message (e.g. recall:read's 'Could not read the meeting file.') instead of
-   *  void — openMeeting below surfaces it via rowError so a failed open is never silently swallowed. */
+   *  void — openMeeting below surfaces it via that row's rowErrors entry so a failed open is never
+   *  silently swallowed. */
   onOpenMeeting?: (file: string) => void | Promise<string | undefined>
   /** Optional: opens the Mantu Intelligence dashboard (brain view). */
   onIntelligence?: () => void
@@ -608,16 +609,21 @@ export function RecallView({
   const [open, setOpen] = useState<string | null>(null)
   /** Single-click selection for the "Open ↵" footer action. */
   const [selectedFile, setSelectedFile] = useState<string | null>(null)
-  /** File mid-delete — disables its trash button so a slow confirm dialog can't be double-clicked. */
-  const [deleting, setDeleting] = useState<string | null>(null)
+  /** Files mid-delete — disables each row's OWN trash button so a slow confirm dialog can't be
+   *  double-clicked. A Set (not a single file) because starting a delete on row B must not re-enable row
+   *  A's Trash while A's delete — whose blocking native confirm dialog can stay open a long time — is
+   *  still pending: a single slot let a second delete start on A mid-confirm, whose second call then hit
+   *  ENOENT and showed nothing. */
+  const [deletingFiles, setDeletingFiles] = useState<Set<string>>(() => new Set())
   /** File whose inline rename input is open (null = no row is being renamed). */
   const [editingFile, setEditingFile] = useState<string | null>(null)
   /** The open rename input's current value. */
   const [editingValue, setEditingValue] = useState('')
   /** File mid-rename-save — disables its pencil button while the IPC call is in flight. */
   const [renaming, setRenaming] = useState<string | null>(null)
-  /** Most recent rename/delete failure — file + message shown as an inline error under that row. */
-  const [rowError, setRowError] = useState<{ file: string; message: string } | null>(null)
+  /** Most recent rename/delete failure PER FILE, shown as an inline error under that row. Keyed by file
+   *  (not a single {file,message}) so two rows failing close together don't clobber each other's error. */
+  const [rowErrors, setRowErrors] = useState<Record<string, string>>({})
   /** Opt-in past the INITIAL_RENDER_CAP — set once the user clicks "Show all N meetings". */
   const [showAll, setShowAll] = useState(false)
   /** The scrollable meeting-list container — focused before a row unmounts (e.g. on delete) so a
@@ -630,27 +636,45 @@ export function RecallView({
     error: string | null
   }>({ stage: 'idle', pct: 0, error: null })
 
+  // Clear/set one row's rename-or-delete error without touching any other row's — see rowErrors above.
+  const clearRowError = useCallback((file: string): void => {
+    setRowErrors((prev) => {
+      if (!(file in prev)) return prev // bail without a new object identity when there's nothing to clear
+      const next = { ...prev }
+      delete next[file]
+      return next
+    })
+  }, [])
+  const flagRowError = useCallback((file: string, message: string): void => {
+    setRowErrors((prev) => ({ ...prev, [file]: message }))
+  }, [])
+
   // Meetings are always saved; deletion is the user's to undo that. The main process pops a native,
   // unmissable confirm dialog before actually deleting (single click here is unambiguous — no "did that
   // register?" two-click pattern), then removes the .md + its index row.
   const onTrash = useCallback(async (file: string, title: string): Promise<void> => {
-    setDeleting(file)
+    setDeletingFiles((s) => (s.has(file) ? s : new Set(s).add(file)))
     const r = await window.toto
       .recallDelete(file, title)
       .catch((e): { ok: boolean; error?: string } => ({
         ok: false,
         error: e instanceof Error ? e.message : String(e)
       }))
-    setDeleting(null)
+    setDeletingFiles((s) => {
+      if (!s.has(file)) return s
+      const next = new Set(s)
+      next.delete(file)
+      return next
+    })
     if (r.ok) {
       listRef.current?.focus()
       setItems((xs) => xs.filter((x) => x.file !== file))
       setSelectedFile((s) => (s === file ? null : s))
       setOpen((o) => (o === file ? null : o))
     } else if (r.error !== 'cancelled') {
-      setRowError({ file, message: r.error || 'Could not delete meeting.' })
+      flagRowError(file, r.error || 'Could not delete meeting.')
     }
-  }, [])
+  }, [flagRowError])
   // Fire-and-forget wrapper matching MeetingRow's sync onTrash prop — kept stable via useCallback so the
   // memoized row doesn't re-render just because this component re-rendered.
   const trashMeeting = useCallback((file: string, title: string): void => {
@@ -673,8 +697,8 @@ export function RecallView({
     editingRef.current = { file, value: title }
     setEditingFile(file)
     setEditingValue(title)
-    setRowError((e) => (e?.file === file ? null : e))
-  }, [])
+    clearRowError(file)
+  }, [clearRowError])
   const changeEditValue = useCallback((value: string): void => {
     editingRef.current.value = value
     setEditingValue(value)
@@ -683,8 +707,8 @@ export function RecallView({
     const { file } = editingRef.current
     editingRef.current = { file: null, value: '' }
     setEditingFile(null)
-    setRowError((e) => (e?.file === file ? null : e))
-  }, [])
+    if (file) clearRowError(file)
+  }, [clearRowError])
   const commitEdit = useCallback((): void => {
     const { file, value } = editingRef.current
     editingRef.current = { file: null, value: '' }
@@ -698,7 +722,7 @@ export function RecallView({
       .then((r) => {
         if (r.ok) {
           setItems((xs) => xs.map((x) => (x.file === file ? { ...x, title } : x)))
-          setRowError((e) => (e?.file === file ? null : e))
+          clearRowError(file)
         } else {
           // Reopen the input with the attempted title so the user can retry — unless they've since
           // started renaming another row, in which case only surface the error, don't steal the editor.
@@ -707,7 +731,7 @@ export function RecallView({
             setEditingFile(file)
             setEditingValue(title)
           }
-          setRowError({ file, message: r.error || 'Could not rename meeting.' })
+          flagRowError(file, r.error || 'Could not rename meeting.')
         }
       })
       .catch((e) => {
@@ -716,10 +740,10 @@ export function RecallView({
           setEditingFile(file)
           setEditingValue(title)
         }
-        setRowError({ file, message: e instanceof Error ? e.message : 'Could not rename meeting.' })
+        flagRowError(file, e instanceof Error ? e.message : 'Could not rename meeting.')
       })
       .finally(() => setRenaming(null))
-  }, [])
+  }, [clearRowError, flagRowError])
 
   // Re-runs the same list/search fetch the mount effect below uses, so a freshly imported meeting shows
   // up immediately — mirrors how onTrash/commitEdit update `items` after their own mutation. Reads the
@@ -834,7 +858,7 @@ export function RecallView({
 
   /** Open the selected file (or the first item as a fallback) — in-app recap when wired, else OS-open.
    *  onOpenMeeting may resolve to an error message (openPastMeeting's recall:read failed) instead of
-   *  silently doing nothing — show it as this row's inline error, same banner rename/delete already use. */
+   *  silently doing nothing — show it as this row's inline error, same per-file banner rename/delete use. */
   const openMeeting = useCallback(
     (f: string): void => {
       if (onOpenMeeting) {
@@ -842,17 +866,15 @@ export function RecallView({
         if (result instanceof Promise) {
           void result
             .then((err) => {
-              if (err) setRowError({ file: f, message: err })
+              if (err) flagRowError(f, err)
             })
-            .catch((e) =>
-              setRowError({ file: f, message: e instanceof Error ? e.message : 'Could not open this meeting.' })
-            )
+            .catch((e) => flagRowError(f, e instanceof Error ? e.message : 'Could not open this meeting.'))
         }
       } else {
         void window.toto.recallOpen(f)
       }
     },
-    [onOpenMeeting]
+    [onOpenMeeting, flagRowError]
   )
   const openSelected = (): void => {
     const f = selectedFile ?? items[0]?.file
@@ -968,12 +990,12 @@ export function RecallView({
                     meeting={m}
                     isSelected={selectedFile === m.file}
                     isActive={activeFile === m.file}
-                    isDeleting={deleting === m.file}
+                    isDeleting={deletingFiles.has(m.file)}
                     isEditing={editingFile === m.file}
                     editingValue={editingFile === m.file ? editingValue : ''}
                     isRenaming={renaming === m.file}
                     isOpen={open === m.file}
-                    error={rowError?.file === m.file ? rowError.message : null}
+                    error={rowErrors[m.file] ?? null}
                     onSelect={selectFile}
                     onOpen={openMeeting}
                     onToggleConnections={toggleConnections}
