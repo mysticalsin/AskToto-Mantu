@@ -3349,14 +3349,21 @@ export function Settings({
 
             {tab === 'privacy' && (
               <div className="flex flex-col gap-6">
-                <Section title="Screen capture" desc="Whether AskToto can be seen when you share or record your screen.">
+                <Section title="Screen capture" desc="Two separate switches: what others can see of AskToto, and what AskToto can see of your screen.">
                   <ToggleRow
                     label="Hide from screen capture"
-                    desc="Hide the window from screen capture & sharing."
+                    desc="Hide the AskToto window from screen capture & sharing, so people you share with never see it. Doesn't affect screen questions."
                     on={settings.contentProtection}
                     onChange={(v) => patch({ contentProtection: v })}
                     disabled={settings.managedKeys.includes('contentProtection')}
                     icon={Camera}
+                  />
+                  <ToggleRow
+                    label="Private View"
+                    desc="AskToto won't look at or capture your screen while this is on — screen questions answer from context only. Same switch as the eye button on the bar."
+                    on={settings.privateView}
+                    onChange={(v) => patch({ privateView: v })}
+                    disabled={settings.managedKeys.includes('privateView')}
                   />
                 </Section>
                 <Section

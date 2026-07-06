@@ -136,7 +136,8 @@ export interface BarProps {
   onHistory: () => void
   /** Collapse the widget down to the floating control mini-pill. */
   onMinimize: () => void
-  /** When true, activates Private view — notes are excluded from shared screens. */
+  /** When true, Private view is on — AskToto won't look at (or send) the screen. The window itself is
+   *  hidden from screen-shares regardless, via the separate contentProtection setting. */
   stealth: boolean
   onToggleStealth: () => void
   /** Wall-clock start time of the current meeting (Date.now() at startListen) — ElapsedClock derives the
@@ -539,7 +540,7 @@ export const Bar = memo(function Bar(props: BarProps): JSX.Element {
               <Brain size={19} strokeWidth={ICON_STROKE} />
             </IconTool>
             <IconTool
-              title={props.stealth ? 'Private view on' : 'Private view off'}
+              title={props.stealth ? 'Private view on — AskToto won’t look at your screen' : 'Private view off — screen questions allowed'}
               onClick={props.onToggleStealth}
               active={!props.stealth}
               danger

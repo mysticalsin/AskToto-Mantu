@@ -1191,9 +1191,12 @@ export function App(): JSX.Element {
     setMinimized(true)
     void window.toto.minimize(true) // collapse to the control mini-pill
   }, [])
+  // The bar's eye button is Private View: "AskToto won't look at my screen". It deliberately does NOT
+  // touch contentProtection (window-hidden-from-shares), which stays on by default so the overlay is
+  // invisible in screen-shares whether or not Private View is engaged.
   const onToggleStealth = useCallback(() => {
-    void patch({ contentProtection: !(settings?.contentProtection ?? true) })
-  }, [patch, settings?.contentProtection])
+    void patch({ privateView: !(settings?.privateView ?? false) })
+  }, [patch, settings?.privateView])
   const onTogglePanel = useCallback(() => setCollapsed((c) => !c), [])
 
   // Open a saved meeting from History as a read-only recap (Cluely recap detail) via the recall:read IPC.
@@ -1781,7 +1784,7 @@ export function App(): JSX.Element {
             onHistory={onBarHistory}
             onSettings={onBarSettings}
             onMinimize={onBarMinimize}
-            stealth={settings?.contentProtection ?? true}
+            stealth={settings?.privateView ?? false}
             onToggleStealth={onToggleStealth}
             startedAt={meetingStartRef.current}
             panelOpen={panelOpen}
