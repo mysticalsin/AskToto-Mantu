@@ -132,9 +132,41 @@ function ensureQuitHook(): void {
   app.on('will-quit', abandonImportSession)
 }
 
+/** Persist the session's accumulated lines as a normal meeting — shared by the done-chunk save below and
+ *  by a mid-import failure that still has some transcribed lines worth keeping (see handleImportChunk's
+ *  catch block). Chunks normally arrive (and transcribe) strictly in order, but sorts defensively so a
+ *  saved transcript is always chronological even if that ever stops being true. */
+async function saveImportSession(
+  settings: Settings,
+  session: ImportSession,
+  partial: boolean
+): Promise<{ file: string; lines: TranscriptLine[] }> {
+  const sortedLines = [...session.lines].sort((a, b) => a.t - b.t)
+  const meeting: SaveMeeting = {
+    title: session.title,
+    mode: 'meeting',
+    startedAt: session.startedAt,
+    lines: sortedLines,
+    recap: ''
+  }
+  const file = await saveMeeting(settings, meeting)
+  auditLog('transcript.imported', { lines: sortedLines.length, encrypted: !!settings.encryptTranscripts, partial })
+  enqueueIngest(file) // Mantu Intelligence brain — background extraction; never blocks the save
+  return { file, lines: sortedLines }
+}
+
 /** Accumulate + transcribe one chunk; on the final (done) chunk, save the whole thing as a normal
  *  meeting and queue it for brain ingest. `onProgress` is called synchronously before the (possibly
- *  slow) transcription starts, and again just before the save, so the caller can push live progress. */
+ *  slow) transcription starts, and again just before the save, so the caller can push live progress.
+ *
+ *  Always transcribes with Parakeet — the renderer's Whisper worker lives in the live-Listen path and
+ *  isn't reachable from this main-process session, so import can't route through it. Parakeet is
+ *  optimized for major European languages; RecallView's Import button copy carries that caveat rather
+ *  than this module silently mistranscribing a non-European recording with no explanation.
+ *
+ *  A chunk transcription failure no longer discards everything gathered so far via abandonImportSession()
+ *  — whatever transcribed before the failure is saved as a partial meeting first, so a long import never
+ *  loses all its work over one bad ~30s window. */
 export async function handleImportChunk(
   settings: Settings,
   chunk: ImportAudioChunk,
@@ -161,28 +193,33 @@ export async function handleImportChunk(
       if (text.trim()) session.lines.push(chunkToLine(text, chunk.seq, session.startedAt))
     }
   } catch (e) {
+    const errMsg = e instanceof Error ? e.message : String(e)
+    if (session.lines.length > 0) {
+      try {
+        const { file, lines } = await saveImportSession(settings, session, true)
+        abandonImportSession()
+        return {
+          ok: false,
+          error: `Import stopped partway (${errMsg}). Saved the ${lines.length} line(s) transcribed so far to your meetings folder.`,
+          file,
+          title: session.title,
+          lines
+        }
+      } catch {
+        // Partial save also failed — nothing recoverable to point to; fall through to the plain failure
+        // below and surface the ORIGINAL transcription error, not the save error.
+      }
+    }
     abandonImportSession()
-    return { ok: false, error: e instanceof Error ? e.message : String(e) }
+    return { ok: false, error: errMsg }
   }
 
   if (!chunk.done) return { ok: true }
 
   onProgress(100, 'saving')
-  // Chunks normally arrive (and are transcribed) strictly in order, but sort defensively so a saved
-  // transcript is always chronological even if that ever stops being true.
-  const sortedLines = [...session.lines].sort((a, b) => a.t - b.t)
   try {
-    const meeting: SaveMeeting = {
-      title: session.title,
-      mode: 'meeting',
-      startedAt: session.startedAt,
-      lines: sortedLines,
-      recap: ''
-    }
-    const file = await saveMeeting(settings, meeting)
-    auditLog('transcript.imported', { lines: sortedLines.length, encrypted: !!settings.encryptTranscripts })
-    enqueueIngest(file) // Mantu Intelligence brain — background extraction; never blocks the save
-    return { ok: true, file, title: session.title, lines: sortedLines }
+    const { file, lines } = await saveImportSession(settings, session, false)
+    return { ok: true, file, title: session.title, lines }
   } catch (e) {
     return { ok: false, error: e instanceof Error ? e.message : String(e) }
   } finally {

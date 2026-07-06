@@ -121,7 +121,9 @@ export interface ListenApi {
   // instead of the user only ever seeing "best" selected while quietly getting the fast-tier model.
   webgpuUnavailable: boolean
   start: (source: AudioSource, quality?: 'best' | 'fast', engine?: 'whisper' | 'parakeet') => Promise<void>
-  stop: () => void
+  // Resolves once the post-stop drain/teardown actually lands, so a caller that needs the FINAL flushed
+  // transcript (e.g. App.tsx's endReview building the recap) can await it before reading text().
+  stop: () => Promise<void>
   /** Suspend capture without ending the meeting — the transcript, worker, and (on macOS) the fragile
    *  system-audio loopback session all stay warm so resume() picks back up mid-session. */
   pause: () => void
@@ -1054,10 +1056,10 @@ export function useListen(
   const stoppingRef = useRef(false) // double-stop guard
   const drainTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null) // pending initial drain kickoff timer
   const sessionEpochRef = useRef(0) // incremented each start(); drain/finishTeardown bails if epoch changed
-  const stop = useCallback((): void => {
+  const stop = useCallback((): Promise<void> => {
     // crashedRef → the worker onerror handler already ran the full teardown; running it again here would
     // thrash state (re-fire setListeningState(false), wipe the crash error) → the "dead-end" tray mismatch.
-    if (stoppingRef.current || crashedRef.current) return // already stopping or already torn down by a crash
+    if (stoppingRef.current || crashedRef.current) return Promise.resolve() // already stopping/torn down
     stoppingRef.current = true
     const myEpoch = sessionEpochRef.current
 
@@ -1088,47 +1090,60 @@ export function useListen(
     //    mid-decode, and commitLine (gated on liveRef) would drop the last sentence once liveRef flipped
     //    false. liveRef stays TRUE through the drain so that final window still commits. A hard ceiling
     //    guards against a hung/never-returning decode wedging teardown.
+    //
+    // Returns a Promise that resolves once teardown actually lands (or is skipped because a fresher
+    // start() superseded this stop) — App.tsx's endReview awaits this so it reads listen.text() AFTER the
+    // final flushed window has committed, instead of racing the drain with a stale pre-stop snapshot.
     const DRAIN_CEILING_MS = 4000
     const startedAt = Date.now()
-    const finishTeardown = (): void => {
-      // A new start() ran while we were draining — it already owns the session; do not clobber it.
-      // Leave stoppingRef alone: start() already reset it for the new session, so an old-epoch tick
-      // clearing it here would weaken that session's double-stop guard.
-      if (sessionEpochRef.current !== myEpoch) return
-      liveRef.current = false
-      disarmNetworkRetry() // session over — a pending 'online' retry must not fire into the next one
-      queue.current = [] // drop anything still undispatched past the ceiling so it can't leak into the next session
-      themRunRef.current = '' // run after the drain: any final flushed question already fired while liveRef was true
-      closeChannel('you')
-      closeChannel('them')
-      void window.toto.setListeningState(false).catch(() => {})
-      setState((s) => ({ ...s, listening: false, paused: false, loading: false, error: null }))
-      drainTimerRef.current = null
-      stoppingRef.current = false
-      // Release the whisper worker (+ ~21MB ONNX wasm + loaded model) after a few idle minutes so it
-      // does not sit resident for the entire life of an always-on overlay. ensureWorker() recreates it
-      // and start() re-inits the model on the next session; re-arming within the window keeps it warm.
-      if (workerIdleTimer.current) clearTimeout(workerIdleTimer.current)
-      workerIdleTimer.current = setTimeout(() => {
-        workerRef.current?.terminate()
-        workerRef.current = null
-        readyRef.current = false
-        workerIdleTimer.current = null
-      }, WORKER_IDLE_RELEASE_MS)
-    }
-    const waitForDrain = (): void => {
-      // A new start() ran — the previous stop()'s drain must not proceed; the new session owns the state.
-      // (Leave stoppingRef alone, same reason as finishTeardown.)
-      if (sessionEpochRef.current !== myEpoch) return
-      if ((queue.current.length === 0 && !busy.current) || Date.now() - startedAt > DRAIN_CEILING_MS) {
-        finishTeardown()
-        return
+    return new Promise<void>((resolve) => {
+      const finishTeardown = (): void => {
+        // A new start() ran while we were draining — it already owns the session; do not clobber it.
+        // Leave stoppingRef alone: start() already reset it for the new session, so an old-epoch tick
+        // clearing it here would weaken that session's double-stop guard.
+        if (sessionEpochRef.current !== myEpoch) {
+          resolve()
+          return
+        }
+        liveRef.current = false
+        disarmNetworkRetry() // session over — a pending 'online' retry must not fire into the next one
+        queue.current = [] // drop anything still undispatched past the ceiling so it can't leak into the next session
+        themRunRef.current = '' // run after the drain: any final flushed question already fired while liveRef was true
+        closeChannel('you')
+        closeChannel('them')
+        void window.toto.setListeningState(false).catch(() => {})
+        setState((s) => ({ ...s, listening: false, paused: false, loading: false, error: null }))
+        drainTimerRef.current = null
+        stoppingRef.current = false
+        // Release the whisper worker (+ ~21MB ONNX wasm + loaded model) after a few idle minutes so it
+        // does not sit resident for the entire life of an always-on overlay. ensureWorker() recreates it
+        // and start() re-inits the model on the next session; re-arming within the window keeps it warm.
+        if (workerIdleTimer.current) clearTimeout(workerIdleTimer.current)
+        workerIdleTimer.current = setTimeout(() => {
+          workerRef.current?.terminate()
+          workerRef.current = null
+          readyRef.current = false
+          workerIdleTimer.current = null
+        }, WORKER_IDLE_RELEASE_MS)
+        resolve()
       }
-      // Track the re-arm in drainTimerRef so a fresh start() can cancel a still-pending drain tick.
-      drainTimerRef.current = setTimeout(waitForDrain, 60)
-    }
-    // Give the worklet's flush message a tick to post its final window into the queue, then wait for drain.
-    drainTimerRef.current = setTimeout(waitForDrain, 80)
+      const waitForDrain = (): void => {
+        // A new start() ran — the previous stop()'s drain must not proceed; the new session owns the state.
+        // (Leave stoppingRef alone, same reason as finishTeardown.)
+        if (sessionEpochRef.current !== myEpoch) {
+          resolve()
+          return
+        }
+        if ((queue.current.length === 0 && !busy.current) || Date.now() - startedAt > DRAIN_CEILING_MS) {
+          finishTeardown()
+          return
+        }
+        // Track the re-arm in drainTimerRef so a fresh start() can cancel a still-pending drain tick.
+        drainTimerRef.current = setTimeout(waitForDrain, 60)
+      }
+      // Give the worklet's flush message a tick to post its final window into the queue, then wait for drain.
+      drainTimerRef.current = setTimeout(waitForDrain, 80)
+    })
   }, [closeChannel, disarmNetworkRetry])
 
   const clear = useCallback((): void => {

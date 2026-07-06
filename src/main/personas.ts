@@ -101,7 +101,10 @@ export function buildSystem(
   const profileTail = mode === 'general' || mode === 'meeting' ? '' : profileBlock(profile)
   // Grounding rail: cite source / admit uncertainty / ≤1 clarifying question / never describe what it
   // wasn't shown. Only for user-initiated answers (answer, vision) — NOT the proactive spoken suggest
-  // line (a parenthetical source tag would be awkward to say out loud).
-  const rail = req.mode === 'answer' || req.mode === 'vision' ? GROUNDING_RAIL : ''
+  // line (a parenthetical source tag would be awkward to say out loud). Also excluded for fact-check
+  // (mode:'answer', kind:'factcheck'): its contract is a VERDICT-only response, and layering the rail's
+  // "lead with the answer / ask a clarifying question" guidance onto it corrupts the output that
+  // parseVerdict expects (a preamble before "VERDICT:" gets dropped).
+  const rail = (req.mode === 'answer' || req.mode === 'vision') && req.kind !== 'factcheck' ? GROUNDING_RAIL : ''
   return lead + prefix + prompt + profileTail + ctx + rail + lang
 }
