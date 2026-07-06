@@ -7,6 +7,7 @@ import { randomBytes, createCipheriv, createDecipheriv, publicEncrypt, constants
 import type { SaveMeeting, SaveNote, Settings, RecapExport } from '@shared/ipc'
 import { encryptSecret, decryptSecret } from './secrets'
 import { trustedAdminManagedPath, lockPathToCurrentUserWin32 } from './win-security'
+import { mainLog, auditLog } from './logger'
 
 // Optional at-rest encryption for transcripts/notes. Two on-disk formats share one fixed-length
 // `ATKENC<n>\n` magic prefix so detection stays a simple prefix check:
@@ -135,7 +136,10 @@ function encryptEnvelopeV2(content: string): Buffer {
       env.kEscrow = kEscrow.toString('base64')
     } catch {
       // A malformed escrow key must not break saving (no regression): write local-only. Never log key material.
-      console.warn('AskToto: escrow public key configured but unusable; wrote transcript without escrow wrap')
+      // mainLog (not console.warn) so this is visible in packaged builds' rotated log file, plus a
+      // metadata-only audit record (no secrets/PII) so an admin relying on escrow recovery can see the gap.
+      mainLog.warn('AskToto: escrow public key configured but unusable; wrote transcript without escrow wrap')
+      auditLog('transcript.saved', { escrowFailed: true })
     }
   }
   return Buffer.concat([ENC_MARKER_V2, Buffer.from(JSON.stringify(env), 'utf8')])
@@ -415,6 +419,15 @@ function stamp(ms: number): string {
   const d = new Date(ms)
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}_${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`
 }
+/** Non-reversible filename segment used in place of the title slug when encryptTranscripts is on — the
+ *  file CONTENTS are already encrypted, but a readable `-${slug(title)}` in the filename itself leaks the
+ *  plaintext title at rest (e.g. via a OneDrive-synced folder listing). A random token carries no
+ *  relationship to the title (unlike a hash, which a small guessable title space could dictionary-attack).
+ *  Keeps the `stamp(started)-` prefix untouched so recall.ts's STUB_FILENAME_TIMESTAMP/NOTE_FILENAME
+ *  regexes (timestamp-prefix only) still recognize the file as a real meeting/note. */
+function opaqueNamePart(): string {
+  return randomBytes(6).toString('hex')
+}
 const cleanTitle = (s: string): string => {
   // Collapse whitespace, strip control/newline chars, limit length for YAML/frontmatter safety.
   return (s || '')
@@ -431,9 +444,11 @@ export async function saveNote(settings: Settings, n: SaveNote): Promise<string>
   const folder = ensureMeetingsFolder(settings)
   const started = Date.now()
   const title = cleanTitle(n.title || n.question || 'Note') || 'Note'
-  let file = join(folder, `${stamp(started)}-note-${slug(title)}.md`)
+  // Encrypted at rest → the filename must not leak the plaintext title either (see opaqueNamePart above).
+  const namePart = settings.encryptTranscripts ? opaqueNamePart() : slug(title)
+  let file = join(folder, `${stamp(started)}-note-${namePart}.md`)
   for (let i = 2; existsSync(file); i++) {
-    file = join(folder, `${stamp(started)}-note-${slug(title)}-${i}.md`)
+    file = join(folder, `${stamp(started)}-note-${namePart}-${i}.md`)
   }
   const frontmatter = [
     '---',
@@ -480,9 +495,11 @@ export async function saveMeeting(settings: Settings, m: SaveMeeting): Promise<s
   const title = cleanTitle(recapParsed?.title24 || '') || heuristicTitle
   const tags = recapParsed?.tags || []
 
-  let file = join(folder, `${stamp(started)}-${slug(title)}.md`)
+  // Encrypted at rest → the filename must not leak the plaintext title either (see opaqueNamePart above).
+  const namePart = settings.encryptTranscripts ? opaqueNamePart() : slug(title)
+  let file = join(folder, `${stamp(started)}-${namePart}.md`)
   for (let n = 2; existsSync(file); n++) {
-    file = join(folder, `${stamp(started)}-${slug(title)}-${n}.md`)
+    file = join(folder, `${stamp(started)}-${namePart}-${n}.md`)
   }
 
   const last = m.lines.length ? m.lines[m.lines.length - 1].t : started

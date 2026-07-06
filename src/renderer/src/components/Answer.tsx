@@ -51,7 +51,8 @@ export const Answer = memo(function Answer({
   kind,
   usedScreen,
   onRetry,
-  onGoDeeper
+  onGoDeeper,
+  captureAccel
 }: {
   text: string
   streaming: boolean
@@ -68,6 +69,11 @@ export const Answer = memo(function Answer({
   usedScreen?: boolean
   onRetry?: () => void
   onGoDeeper?: () => void
+  /** The LIVE, resolved screen-capture accelerator (settings.shortcuts.capture, or the shipped default),
+   *  passed down from App so this empty-state hint never shows a stale/hardcoded binding once the user
+   *  rebinds or clears it in Settings → Shortcuts. Falls back to the shipped default when omitted (demo
+   *  seeding / callers that don't thread it through). */
+  captureAccel?: string
 }): JSX.Element {
   const [copied, flashCopied] = useFlash(1500)
   const [copyError, setCopyError] = useState<string | null>(null)
@@ -278,7 +284,7 @@ export const Answer = memo(function Answer({
         {header}
         {notice}
         <div className="rounded-lg border border-[var(--color-hair-soft)] bg-white/[0.03] px-3 py-6 text-center text-[13px] text-[color:var(--color-ink-2)]">
-          Ask a question or press {accelLabel('CommandOrControl+Shift+S')} to capture your screen.
+          Ask a question or press {accelLabel(captureAccel ?? 'CommandOrControl+Shift+S')} to capture your screen.
         </div>
       </div>
     )

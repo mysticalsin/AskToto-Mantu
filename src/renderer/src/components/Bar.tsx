@@ -132,6 +132,10 @@ export interface BarProps {
   onTogglePause: () => void
   onCapture: () => void
   capturing: boolean
+  /** The LIVE, resolved screen-capture accelerator (settings.shortcuts.capture, or the shipped default) —
+   *  passed down from App so the Capture tooltip never shows a stale/hardcoded binding once the user
+   *  rebinds or clears it in Settings → Shortcuts. */
+  captureAccel: string
   onSettings: () => void
   onHistory: () => void
   /** Collapse the widget down to the floating control mini-pill. */
@@ -139,6 +143,9 @@ export interface BarProps {
   /** When true, activates Private view — notes are excluded from shared screens. */
   stealth: boolean
   onToggleStealth: () => void
+  /** True when IT has locked `contentProtection` (Settings' managedKeys) — the Private-view icon renders
+   *  inert (disabled + a "managed" tooltip) instead of a click that silently does nothing. */
+  stealthLocked?: boolean
   /** Wall-clock start time of the current meeting (Date.now() at startListen) — ElapsedClock derives the
    *  ticking display from this instead of App owning a 1 Hz `seconds` counter. Ignored while !listening. */
   startedAt: number
@@ -197,6 +204,7 @@ function IconTool({
   ariaExpanded,
   edgeRight,
   edgeLeft,
+  disabled,
   children
 }: {
   title: string
@@ -217,6 +225,10 @@ function IconTool({
   // can run long), so the tooltip anchors from its left side and grows rightward instead of centering
   // off the trigger and getting clipped by the widget's overflow:hidden on the opposite side.
   edgeLeft?: boolean
+  // Locked by managed config (e.g. IT-enforced Private view) — native `disabled` makes the click an inert
+  // no-op; the tooltip (on the surrounding .group div, not the button itself) still shows on hover so the
+  // "managed" reason stays visible instead of the control just silently doing nothing.
+  disabled?: boolean
   children: ReactNode
 }): JSX.Element {
   return (
@@ -226,10 +238,12 @@ function IconTool({
         aria-label={title}
         aria-haspopup={ariaHasPopup ? 'menu' : undefined}
         aria-expanded={ariaExpanded}
+        disabled={disabled}
         onClick={onClick}
         className={[
           'no-drag focus-ring peer grid place-items-center rounded-[10px] p-1 transition-colors duration-[var(--duration-hover)] active:scale-[0.92]',
           rainbow ? 'rainbow-ring' : '',
+          disabled ? 'cursor-not-allowed opacity-40' : '',
           danger && active
             ? 'text-[color:var(--color-danger)]'
             : active
@@ -499,7 +513,10 @@ export const Bar = memo(function Bar(props: BarProps): JSX.Element {
               dragged the whole cluster ~58px left of center). Idle, neither side renders. */}
           <div className="flex min-w-0 items-center justify-center gap-4">
             {props.listening && <span aria-hidden className="w-[100px] flex-none" />}
-            <IconTool title={`Capture screen (${accelLabel('CommandOrControl+Shift+S')})`} onClick={props.onCapture}>
+            <IconTool
+              title={props.captureAccel ? `Capture screen (${accelLabel(props.captureAccel)})` : 'Capture screen'}
+              onClick={props.onCapture}
+            >
               {props.capturing ? <Spinner size={19} /> : <Image size={19} strokeWidth={ICON_STROKE} />}
             </IconTool>
             {/* Spotlight Ref — asks a dedicated Dust agent whether Mantu has relevant sales references
@@ -539,10 +556,17 @@ export const Bar = memo(function Bar(props: BarProps): JSX.Element {
               <Brain size={19} strokeWidth={ICON_STROKE} />
             </IconTool>
             <IconTool
-              title={props.stealth ? 'Private view on' : 'Private view off'}
+              title={
+                props.stealthLocked
+                  ? 'Private view — managed by your organization'
+                  : props.stealth
+                    ? 'Private view on'
+                    : 'Private view off'
+              }
               onClick={props.onToggleStealth}
               active={!props.stealth}
               danger
+              disabled={props.stealthLocked}
             >
               {props.stealth ? <EyeOff size={19} strokeWidth={ICON_STROKE} /> : <Eye size={19} strokeWidth={ICON_STROKE} />}
             </IconTool>
@@ -660,7 +684,7 @@ export const Bar = memo(function Bar(props: BarProps): JSX.Element {
           </div>
         </div>
     ),
-    [props.onSettings, props.listening, props.onCapture, props.capturing, props.spotlightReady, props.onSpotlightRef, props.mode, props.customModes, modeOpen, props.thinkingOn, props.onToggleThinking, props.stealth, props.onToggleStealth, props.onToggleListen, props.paused, props.startedAt, props.onTogglePause, props.onNewMeeting, props.transcriptShown, props.onTranscript, props.onHistory, props.onMinimize, props.canTogglePanel, props.panelOpen, props.onTogglePanel]
+    [props.onSettings, props.listening, props.onCapture, props.capturing, props.captureAccel, props.spotlightReady, props.onSpotlightRef, props.mode, props.customModes, modeOpen, props.thinkingOn, props.onToggleThinking, props.stealth, props.onToggleStealth, props.stealthLocked, props.onToggleListen, props.paused, props.startedAt, props.onTogglePause, props.onNewMeeting, props.transcriptShown, props.onTranscript, props.onHistory, props.onMinimize, props.canTogglePanel, props.panelOpen, props.onTogglePanel]
   )
 
   return (

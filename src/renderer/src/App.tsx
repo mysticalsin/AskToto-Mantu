@@ -22,6 +22,7 @@ import { useAsk, useAutoResize, useSettings, useAuth } from './state'
 import { useWindowDrag } from './lib/window-drag'
 import { useListen, playListenChime } from './lib/listen'
 import { playCue, playClick, setSoundsEnabled } from './lib/sound'
+import { DEFAULT_SHORTCUTS } from '@shared/ipc'
 import type { HotkeyAction, TranscriptLine, ConversationMode, ChatTurn } from '@shared/ipc'
 import { PROVIDERS, isDustReady } from '@shared/providers'
 import { ASSIST_PROMPT, buildNoDecisionPrompt } from '@shared/prompts'
@@ -125,6 +126,14 @@ export function App(): JSX.Element {
   const windowDrag = useWindowDrag(onWindowDragStart, { noTouch: true })
 
   const { settings, patch, saveKey, clearKey, testKey, refresh } = useSettings()
+  // The live, user-rebindable Capture accelerator — Bar/Answer's tooltip must reflect an override or a
+  // clear, not the shipped default, so this resolves it the same way Settings' Shortcuts panel does
+  // (an explicit override, falling back to DEFAULT_SHORTCUTS) instead of a hardcoded literal. Declared
+  // this early (not just above the JSX return) because the answerBody useMemo below also reads it.
+  const captureAccel = settings?.shortcuts?.['capture'] ?? DEFAULT_SHORTCUTS.capture
+  // IT-managed lock on contentProtection (Settings gates the same toggle with this) — Bar's Private-view
+  // icon must go inert rather than silently no-op when clicked under a managed profile.
+  const stealthLocked = settings?.managedKeys?.includes('contentProtection') ?? false
   const auth = useAuth() // Azure AD gate (only enforces when configured)
   const ask = useAsk() // answer view + recap
   const suggest = useAsk() // live copilot card
@@ -636,6 +645,13 @@ export function App(): JSX.Element {
       if (!requireProvider()) return null
       if (capturingRef.current) return null
       capturingRef.current = true
+      // Snapshot BOTH guard signals at entry — not one stale (closed-over `input`) and one live
+      // (`listen.text()` called fresh at catch time). Reading them at two different points in time let a
+      // new transcript line land during the (multi-second) capture await and flip the catch-time guard
+      // false, falling through to resend FACT_CHECK_SCREEN_PROMPT with no image/transcript and rendering a
+      // fabricated-looking VERDICT. Snapshotting both here, at the same instant, closes that race.
+      const hadInputAtEntry = input.trim().length > 0
+      const hadTranscriptAtEntry = transcriptHasContent(listen.text())
       // Mount the Answer view + the "capturing" busy state as ONE transition. `capturing` (not just
       // `view`) drives the first mount of the lazy <Answer> chunk in the render branch below, and React
       // ALWAYS suspends a lazy component's very first render — so a bare synchronous setCapturing(true)
@@ -680,7 +696,7 @@ export function App(): JSX.Element {
         // color-coded verdict chip (Answer renders `kind:'factcheck'` as VERDICT: TRUE/FALSE/... from
         // whatever the model invents). Fail cleanly instead of guessing. Every other kind keeps the
         // existing degraded-but-honest text answer.
-        if (opts?.kind === 'factcheck' && !input.trim() && !transcriptHasContent(listen.text())) {
+        if (opts?.kind === 'factcheck' && !hadInputAtEntry && !hadTranscriptAtEntry) {
           ask.fail(
             'Couldn’t capture your screen, and there’s no claim or transcript to fact-check instead. Type a claim or start Listen and try again.',
             'Fact-check'
@@ -776,6 +792,10 @@ export function App(): JSX.Element {
           history: historyRef.current,
           record: 'Help me with what is on my screen.'
         })
+        // askScreen no-ops (returns null) when a prior capture is still in flight — without this return,
+        // the unconditional setInput('') below would still fire and silently drop whatever the user just
+        // typed, with no feedback that the ask never went out.
+        return
       } else if (priorAnswerOk) {
         // Typed follow-up while an answer is already showing: stay fast — no new capture. The prior
         // turn's text already describes what was on screen, so the model reasons from that; an explicit
@@ -787,6 +807,9 @@ export function App(): JSX.Element {
       } else {
         // First question of this session — screenshot + the question together.
         void askScreen(q, { history: historyRef.current, record: q })
+        // Same reasoning as the blank-Enter branch above: skip the fall-through clear when askScreen may
+        // have no-op'd on an in-flight capture, so a second typed question is never silently dropped.
+        return
       }
     } else {
       if (!q) return
@@ -1703,9 +1726,10 @@ export function App(): JSX.Element {
         usedScreen={ask.answer?.usedScreen}
         onRetry={capturing ? undefined : retryAnswer}
         onGoDeeper={capturing ? undefined : goDeeper}
+        captureAccel={captureAccel}
       />
     )
-  }, [capturing, captureError, ask.answer, retryAnswer, goDeeper])
+  }, [capturing, captureError, ask.answer, retryAnswer, goDeeper, captureAccel])
   // Demo overrides (DEMO is a build/query-time constant, so these memos are inert in real sessions).
   const demoBody = useMemo(() => {
     if (DEMO === 'answer') return <Answer text={DEMO_ANSWER} streaming={false} error={null} />
@@ -1904,6 +1928,7 @@ export function App(): JSX.Element {
             onTogglePause={onTogglePause}
             onCapture={capture}
             capturing={capturing}
+            captureAccel={captureAccel}
             mode={mode}
             onSetMode={onSetMode}
             hasAnswer={hasAnswer}
@@ -1928,6 +1953,7 @@ export function App(): JSX.Element {
             onMinimize={onBarMinimize}
             stealth={settings?.contentProtection ?? true}
             onToggleStealth={onToggleStealth}
+            stealthLocked={stealthLocked}
             startedAt={meetingStartRef.current}
             panelOpen={panelOpen}
             onTogglePanel={onTogglePanel}
