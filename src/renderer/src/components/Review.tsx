@@ -178,6 +178,17 @@ export const Review = memo(function Review({
   }, [savedPath])
   const recapText = editedRecap ?? recap?.text ?? ''
 
+  // True while the recap edit panel is open AND the draft actually differs from the saved/displayed
+  // text — i.e. there is something a navigation would silently throw away. Gated on editingRecap (not
+  // just a draft/text mismatch) because recapDraft is left holding its last value after Cancel/Save, so
+  // comparing the two alone would still read "dirty" once editingRecap is already false.
+  const recapDirty = editingRecap && recapDraft !== recapText
+  // onResume/onDone/"Recent meetings" all navigate away from this screen unconditionally; a reused Review
+  // instance would then reset editingRecap/editedRecap (see the savedPath effect above) with the edit never
+  // saved. Confirm once before discarding; no-op (returns true immediately) when there is nothing to lose.
+  const confirmDiscardRecapEdit = (): boolean =>
+    !recapDirty || window.confirm('You have unsaved changes to this recap. Discard them?')
+
   const startEditRecap = (): void => {
     setRecapDraft(recapText)
     setRecapEditError(null)
@@ -415,13 +426,27 @@ export const Review = memo(function Review({
         </div>
         <div className="flex items-center gap-1.5">
           {onResume && (
-            <Chip icon={Play} onClick={onResume} variant="accent">Resume session</Chip>
+            <Chip
+              icon={Play}
+              onClick={() => {
+                if (confirmDiscardRecapEdit()) onResume()
+              }}
+              variant="accent"
+            >
+              Resume session
+            </Chip>
           )}
           {onSave && (
             <TextButton icon={Save} onClick={onSave} disabled={lines.length === 0 || !!savedPath}>Save</TextButton>
           )}
           {onDone && (
-            <Chip icon={isPastMeeting ? ArrowLeft : RotateCcw} onClick={onDone} variant="accent">
+            <Chip
+              icon={isPastMeeting ? ArrowLeft : RotateCcw}
+              onClick={() => {
+                if (confirmDiscardRecapEdit()) onDone()
+              }}
+              variant="accent"
+            >
               {isPastMeeting ? 'Back to history' : 'New meeting'}
             </Chip>
           )}
@@ -841,7 +866,9 @@ export const Review = memo(function Review({
                   <button
                     key={item.file}
                     type="button"
-                    onClick={() => onOpenPastMeeting?.(item.file)}
+                    onClick={() => {
+                      if (confirmDiscardRecapEdit()) onOpenPastMeeting?.(item.file)
+                    }}
                     className="no-drag focus-ring flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left hover:bg-white/[0.06]"
                   >
                     <span className="min-w-0 flex-1 truncate text-[12px] text-[color:var(--color-ink)]">

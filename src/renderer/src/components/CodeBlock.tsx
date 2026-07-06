@@ -129,10 +129,14 @@ function Block({ code, lang }: { code: string; lang: string }): JSX.Element {
 /* eslint-disable @typescript-eslint/no-explicit-any */
 /** Drop-in for streamdown/markdown `code`: block → shiki, inline → pill. */
 export function CodeBlock(props: any): JSX.Element {
-  const { className, children, inline } = props
+  const { className, children } = props
   const text = String(children ?? '').replace(/\n$/, '')
   const lang = /language-(\w+)/.exec(className || '')?.[1] || ''
-  const isBlock = !inline && (lang !== '' || text.includes('\n'))
+  // A real fenced block is marked by Markdown.tsx's `pre` override stamping `data-block` on this element
+  // (mirroring streamdown's own default `pre`) — checking the prop directly (what streamdown's own `code`
+  // component does) instead of guessing from language/newline is what correctly classifies a single-line,
+  // language-less fenced block (```\nfoo\n```) as a block instead of misreading it as an inline span.
+  const isBlock = 'data-block' in props
   if (!isBlock) {
     return (
       <code className="rounded-[5px] bg-white/[0.09] px-[0.36em] py-[0.1em] text-[0.9em] break-words">

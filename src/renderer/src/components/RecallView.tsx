@@ -567,8 +567,10 @@ export function RecallView({
   activeFile?: string
   /** Optional: called by the "New chat ⌘R" footer button. */
   onNewChat?: () => void
-  /** Optional: open a meeting's recap in-app (Cluely recap detail). Falls back to OS-open when absent. */
-  onOpenMeeting?: (file: string) => void
+  /** Optional: open a meeting's recap in-app (Cluely recap detail). Falls back to OS-open when absent.
+   *  May return the failure message (e.g. recall:read's 'Could not read the meeting file.') instead of
+   *  void — openMeeting below surfaces it via rowError so a failed open is never silently swallowed. */
+  onOpenMeeting?: (file: string) => void | Promise<string | undefined>
   /** Optional: opens the Mantu Intelligence dashboard (brain view). */
   onIntelligence?: () => void
 }): JSX.Element {
@@ -766,6 +768,11 @@ export function RecallView({
         if (!stale) {
           setItems(l)
           setDebouncedQ(q)
+          // The selection can point at a row this new result set no longer contains (e.g. a search that
+          // filters it out) — openSelected()'s `selectedFile ?? items[0]?.file` fallback only kicks in
+          // when selectedFile is null, so a stale-but-set selectedFile would silently open a hidden row.
+          // Clear it here so Enter/Open falls back to the new top visible result instead.
+          setSelectedFile((s) => (s && !l.some((it) => it.file === s) ? null : s))
         }
       })
         .catch(() => {})
@@ -786,11 +793,21 @@ export function RecallView({
     }
   }, [q])
 
-  /** Open the selected file (or the first item as a fallback) — in-app recap when wired, else OS-open. */
+  /** Open the selected file (or the first item as a fallback) — in-app recap when wired, else OS-open.
+   *  onOpenMeeting may resolve to an error message (openPastMeeting's recall:read failed) instead of
+   *  silently doing nothing — show it as this row's inline error, same banner rename/delete already use. */
   const openMeeting = useCallback(
     (f: string): void => {
-      if (onOpenMeeting) onOpenMeeting(f)
-      else void window.toto.recallOpen(f)
+      if (onOpenMeeting) {
+        const result = onOpenMeeting(f)
+        if (result instanceof Promise) {
+          void result.then((err) => {
+            if (err) setRowError({ file: f, message: err })
+          })
+        }
+      } else {
+        void window.toto.recallOpen(f)
+      }
     },
     [onOpenMeeting]
   )

@@ -361,6 +361,21 @@ function createWindow(): void {
   }
 }
 
+/** Self-heal a null `win` (e.g. a one-time createWindow() throw during boot — GPU/compositor hiccup)
+ *  so Show/Settings/Listen and every hotkey don't stay permanently dead for the rest of the process
+ *  lifetime. Callers that previously did `if (!win) return` should call this instead. A repeated
+ *  failure is logged and swallowed — it just leaves win null again, same as the original no-op. */
+function ensureWindow(): BrowserWindow | null {
+  if (win) return win
+  try {
+    createWindow()
+  } catch (e) {
+    mainLog.error('[recover] createWindow retry failed:', e)
+    auditLog('app.crash', { kind: 'boot_step', step: 'createWindow_retry' })
+  }
+  return win
+}
+
 function resizeTo(height: number): void {
   if (!win) return
   // Clamp + reposition against the display the OVERLAY is actually on (not the cursor's). Otherwise, on a
@@ -408,9 +423,10 @@ function setWindowMode(): void {
 }
 
 function sendHotkey(action: HotkeyAction): void {
-  if (!win) return
-  if (!win.isVisible()) win.show()
-  win.webContents.send(IPC.hotkey, action)
+  const w = ensureWindow()
+  if (!w) return
+  if (!w.isVisible()) w.show()
+  w.webContents.send(IPC.hotkey, action)
 }
 
 let fatalHandled = false
@@ -511,30 +527,19 @@ async function captureScreenshot(): Promise<{ image: string; width: number; heig
   return { image: jpeg.toString('base64'), width: size.width, height: size.height, dispId: disp.id }
 }
 
-/** Thrown by getScreenshot() when Private View is on — lets callers show a specific message instead of a
- *  generic capture failure. */
-class PrivateViewBlockedError extends Error {
-  constructor() {
-    super('Private View is on — screen capture is blocked. Turn it off to let AskToto see your screen.')
-    this.name = 'PrivateViewBlockedError'
-  }
-}
-
 async function getScreenshot(phase?: string): Promise<{ image: string; width: number; height: number; capturedAt: number }> {
-  // Private View promises AskToto won't look at (or send) the screen while it's on — that has to mean
-  // this app's own capture pipeline refuses to run, not just that OTHER apps can't screen-share our window
-  // (that's the separate, still-active setContentProtection() call on the BrowserWindow itself).
-  if (contentProtectionOn()) throw new PrivateViewBlockedError()
+  // contentProtection (win.setContentProtection(true), set below and kept in sync on settings changes)
+  // already makes the OS exclude the AskToto overlay from ANY screen capture — including this app's own.
+  // So an explicit, user-initiated capture here is safe with content protection on: the overlay simply
+  // never appears in the shot, and other apps still can't screen-share it either. Capture must NOT be
+  // blocked just because contentProtection is on — contentProtection defaults to true, so that coupling
+  // used to disable the flagship vision feature out of the box.
   const disp = screen.getDisplayNearestPoint(screen.getCursorScreenPoint())
   if (shotCache && Date.now() - shotCache.ts < CAPTURE_TTL_MS && shotCache.dispId === disp.id) {
     const { image, width, height, ts } = shotCache
     return { image, width, height, capturedAt: ts }
   }
   const shot = await captureScreenshot()
-  // Re-check after the async capture: Private View could have been toggled ON while getSources()/resize
-  // were in flight. Without this second check, a frame grabbed a moment before the toggle would still be
-  // cached and sent to the model — breaking the Private View guarantee on a mid-capture toggle.
-  if (contentProtectionOn()) throw new PrivateViewBlockedError()
   const capturedAt = Date.now()
   shotCache = { ...shot, ts: capturedAt }
   auditLog('capture.screen', { width: shot.width, height: shot.height, bytes: shot.image.length, ...(phase ? { phase } : {}) })
@@ -633,11 +638,12 @@ function registerScreenListeners(): void {
 }
 
 function toggleVisible(): void {
-  if (!win) return
-  if (win.isVisible()) win.hide()
+  const w = ensureWindow()
+  if (!w) return
+  if (w.isVisible()) w.hide()
   else {
-    win.show()
-    win.webContents.send(IPC.hotkey, 'ask')
+    w.show()
+    w.webContents.send(IPC.hotkey, 'ask')
   }
 }
 
@@ -1586,8 +1592,15 @@ function registerIpc(): void {
   // --- Audio capture arming ---
   ipcMain.handle(IPC.armAudio, (e, on: boolean) => {
     assertMainWindow(e)
+    // Disarm must always succeed, even if session revalidation cleared auth between arm(true) and the
+    // caller's finally-block disarm(false) — otherwise loopback capture stays armed forever. Only the
+    // arm(true) path is auth-gated.
+    if (!on) {
+      audioArmed = false
+      return
+    }
     if (!requireAuth()) return
-    audioArmed = !!on
+    audioArmed = true
   })
 
   // --- Transcript, notes & feedback persistence ---
@@ -1983,9 +1996,10 @@ if (!app.requestSingleInstanceLock()) {
   app.quit()
 } else {
   app.on('second-instance', () => {
-    if (win) {
-      if (!win.isVisible()) win.show()
-      win.focus()
+    const w = ensureWindow()
+    if (w) {
+      if (!w.isVisible()) w.show()
+      w.focus()
     }
   })
   app.whenReady().then(async () => {
@@ -2192,7 +2206,10 @@ if (!app.requestSingleInstanceLock()) {
     try {
       fn()
     } catch (e) {
-      console.error(`[boot] ${name} failed:`, e)
+      // console.error is a no-op in a packaged GUI build with no console — route to the real sinks so a
+      // boot-step failure (e.g. createWindow) is actually diagnosable and shows up in the audit trail.
+      mainLog.error(`[boot] ${name} failed:`, e)
+      auditLog('app.crash', { kind: 'boot_step', step: name })
     }
   }
   // Eagerly refresh the Dust CLI session at launch (Tony: "always stay connected") rather than waiting

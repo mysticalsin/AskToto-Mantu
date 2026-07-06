@@ -64,17 +64,17 @@ describe('CaptureResultSchema', () => {
 })
 
 describe('SettingsSchema', () => {
-  it('rejects custom provider with an empty base URL', () => {
-    const invalid = {
+  it('accepts custom provider with an empty base URL (not-yet-configured state)', () => {
+    // Picking the Custom tile in the UI sets provider='custom' before a base URL is entered.
+    // That transient state must validate so the choice sticks and the base-URL field appears;
+    // ask-time readiness (providerReady requires https) still blocks actual use until configured.
+    const notYetConfigured = {
       ...DEFAULT_SETTINGS,
       provider: 'custom' as const,
       customBaseUrl: ''
     }
-    const result = SettingsSchema.safeParse(invalid)
-    expect(result.success).toBe(false)
-    if (!result.success) {
-      expect(result.error.issues.some((i) => i.path.includes('customBaseUrl'))).toBe(true)
-    }
+    const result = SettingsSchema.safeParse(notYetConfigured)
+    expect(result.success).toBe(true)
   })
 
   it('rejects custom provider with a non-https base URL', () => {

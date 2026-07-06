@@ -198,6 +198,12 @@ export function useAsk(): {
   // onto it. If the request ends with no real output at all (onDone/onError with zero deltas), the stale
   // text is cleared then instead — so a copy/feedback action can never act on the wrong answer.
   const pendingReplaceRef = useRef(false)
+  // Ids explicitly cancelled by cancel() below — the ONLY reliable signal that an error is a genuine
+  // user-initiated abort. Previously onError guessed from the error text (/\babort|\bcancel/i), which
+  // silently swallowed any real error whose message happened to contain those words (e.g. a provider
+  // error mentioning "the request was aborted by the remote host"). One-shot: removed once its terminal
+  // event (onDone or onError) is observed, so the set never grows unbounded across a long session.
+  const cancelledIdsRef = useRef<Set<string>>(new Set())
 
   useEffect(() => {
     const flush = (): void => {
@@ -227,6 +233,7 @@ export function useAsk(): {
     const offDone = window.toto.onDone((d: StreamDone) => {
       if (d.id !== idRef.current) return
       flush() // drain any buffered tokens before marking done
+      cancelledIdsRef.current.delete(d.id) // terminal event reached — stop tracking this id either way
       // Zero real output ever arrived (e.g. an empty completion) — drop the stale previous-answer text
       // instead of leaving it looking like the result of THIS request.
       const noOutput = pendingReplaceRef.current
@@ -239,7 +246,9 @@ export function useAsk(): {
       // User-initiated aborts/cancels are not failures — never paint them as a red error on screen. A
       // cancel before any output simply reverts to whichever answer was already showing (the persistence
       // contract above); a genuine error clears stale leftover text so Copy/feedback can't act on it.
-      const aborted = /\babort|\bcancel/i.test(e.message || '')
+      // Determined ONLY from cancelledIdsRef (set by cancel() below), never guessed from the error's own
+      // text — a genuine error whose message happens to contain "abort"/"cancel" must still surface.
+      const aborted = cancelledIdsRef.current.delete(e.id)
       const noOutput = pendingReplaceRef.current
       pendingReplaceRef.current = false
       setAnswer((a) =>
@@ -338,6 +347,7 @@ export function useAsk(): {
 
   const cancel = useCallback((): void => {
     if (idRef.current) {
+      cancelledIdsRef.current.add(idRef.current) // marks the id so onError knows this one's abort is expected
       void window.toto.cancel(idRef.current)
       setAnswer((a) => (a ? { ...a, streaming: false } : a))
     }

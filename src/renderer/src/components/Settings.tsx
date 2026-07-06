@@ -121,14 +121,18 @@ function recommendedProvider(settings: PublicSettings): ProviderId {
 
 /** Friendly name for a routed model in the thinking-mode explainer. Keeps raw model ids out of
  *  user-facing copy — recognized brands by name, everything else as a plain tier word. */
-function prettyModel(m: string, provider: ProviderId, tier: 'base' | 'think'): string {
-  if (provider === 'dust') return tier === 'think' ? 'your thinking agent' : 'your base agent'
+function prettyModel(m: string, provider: ProviderId, tier: 'base' | 'think' | 'deep'): string {
+  if (provider === 'dust') {
+    if (tier === 'deep') return 'your deep agent'
+    return tier === 'think' ? 'your thinking agent' : 'your base agent'
+  }
   if (m) {
     if (/haiku/i.test(m)) return 'Haiku'
     if (/sonnet/i.test(m)) return 'Sonnet'
     if (/opus/i.test(m)) return 'Opus'
     if (/gpt-4o|gpt-4\.1|gpt-5/i.test(m)) return 'GPT'
   }
+  if (tier === 'deep') return 'the deepest model'
   return tier === 'think' ? 'the deeper model' : 'the fast model'
 }
 
@@ -455,7 +459,16 @@ function AiSection({
   const [filter, setFilter] = useState('')
   const skipClearRef = useRef(false) // don't wipe a freshly-pasted key when detection switches provider
   const baseModelName = resolveModelTier(provider, settings.providerModels, settings.providerModelsThinking, 'base')
-  const thinkModelName = resolveModelTier(provider, settings.providerModels, settings.providerModelsThinking, 'think')
+  // Complex/always-think prompts route to the 'deep' tier (see providers.ts resolveModelTier +
+  // applyInteractiveGuardrail), which resolves to Opus for Anthropic — NOT the 'think' tier's Sonnet.
+  // The caption below must name the model that actually answers, not the intermediate think tier.
+  const deepModelName = resolveModelTier(
+    provider,
+    settings.providerModels,
+    settings.providerModelsThinking,
+    'deep',
+    settings.providerModelsDeep
+  )
   const keyInputId = useId()
   const modelInputId = useId()
   const baseUrlInputId = useId()
@@ -557,15 +570,18 @@ function AiSection({
           value={key}
           onChange={(e) => onKeyChange(e.target.value)}
           onKeyDown={(e) => e.key === 'Enter' && test.status !== 'loading' && onSave()}
+          disabled={settings.envKeys.includes(provider)}
           placeholder={
-            settings.hasKeys[provider] ? '•••••• saved (paste to replace)' : `Paste your ${def.label} key`
+            settings.envKeys.includes(provider)
+              ? 'Environment variable takes precedence — remove it there to use a saved key'
+              : settings.hasKeys[provider] ? '•••••• saved (paste to replace)' : `Paste your ${def.label} key`
           }
-          className={'flex-1 ' + ctl}
+          className={'flex-1 ' + ctl + (settings.envKeys.includes(provider) ? ' opacity-60' : '')}
         />
         <button
           type="button"
           onClick={onSave}
-          disabled={test.status === 'loading'}
+          disabled={test.status === 'loading' || settings.envKeys.includes(provider)}
           className="no-drag cl-focus flex items-center gap-1 rounded-[10px] bg-[var(--cl-primary)] px-4 py-2.5 text-[13px] font-medium text-white hover:opacity-90 disabled:opacity-50"
         >
           {saved ? <Check size={14} /> : null}
@@ -582,7 +598,7 @@ function AiSection({
         </button>
         {settings.envKeys.includes(provider) ? (
           <span
-            title="This key is set via an environment variable on this machine. Remove it where it was defined; the in-app Remove can't clear it."
+            title="This key is set via an environment variable on this machine and takes precedence over any saved key here. Remove it where it was defined; the in-app Remove can't clear it."
             className="flex items-center rounded-[10px] border border-[var(--cl-input)] bg-white/[0.04] px-3 py-2.5 text-[12px] text-[color:var(--cl-muted-foreground)]"
           >
             Set via environment variable
@@ -865,9 +881,9 @@ function AiSection({
         </div>
         <span className="mt-1.5 block text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
           {settings.thinkingMode === 'auto'
-            ? `Auto: simple questions use ${prettyModel(baseModelName, provider, 'base')}; coding, engineering & complex go to ${prettyModel(thinkModelName, provider, 'think')}.`
+            ? `Auto: simple questions use ${prettyModel(baseModelName, provider, 'base')}; coding, engineering & complex go to ${prettyModel(deepModelName, provider, 'deep')}.`
             : settings.thinkingMode === 'always'
-              ? `Every answer uses ${prettyModel(thinkModelName, provider, 'think')} (deep mode).`
+              ? `Every answer uses ${prettyModel(deepModelName, provider, 'deep')} (deep mode).`
               : `Every answer uses ${prettyModel(baseModelName, provider, 'base')} (fastest & cheapest).`}
         </span>
       </Section>
@@ -1129,7 +1145,7 @@ function CliIntegration({
             <button
               type="button"
               onClick={() => startSetup(id)}
-              disabled={locked}
+              disabled={locked && !isActive}
               className={primaryBtn}
             >
               <Link2 size={12} />
@@ -1156,7 +1172,7 @@ function CliIntegration({
             <button
               type="button"
               onClick={() => void connect(id)}
-              disabled={locked}
+              disabled={locked && !isActive}
               className={primaryBtn}
             >
               <Link2 size={12} />
@@ -1174,7 +1190,7 @@ function CliIntegration({
             <button
               type="button"
               onClick={() => void runInstall(id)}
-              disabled={locked}
+              disabled={locked && !isActive}
               className={primaryBtn}
             >
               <Link2 size={12} />
@@ -1192,7 +1208,7 @@ function CliIntegration({
             <button
               type="button"
               onClick={() => startSetup(id)}
-              disabled={locked}
+              disabled={locked && !isActive}
               className="no-drag cl-focus text-[11px] text-[color:var(--cl-muted-foreground)] hover:text-[color:var(--cl-foreground)] disabled:opacity-50"
             >
               Reconnect
@@ -2973,15 +2989,16 @@ export function Settings({
                   title="Language"
                   desc="Pick the language for live answers, and a separate one for the saved summary (useful when the meeting is in one language but you want notes in another)."
                 >
-                  <label className="mb-1 block text-[11px] font-medium text-[color:var(--cl-muted-foreground)]">
+                  <label className="mb-1 flex items-center gap-2 text-[11px] font-medium text-[color:var(--cl-muted-foreground)]">
                     Answers & live assist
+                    <ManagedChip keys={settings.managedKeys} k="outputLanguage" />
                   </label>
                   <select
                     value={settings.outputLanguage}
                     onChange={(e) => patch({ outputLanguage: e.target.value })}
                     disabled={settings.managedKeys.includes('outputLanguage')}
                     aria-label="Answers and live assist language"
-                    className={'w-full ' + ctl}
+                    className={['w-full', ctl, settings.managedKeys.includes('outputLanguage') ? 'opacity-60' : ''].join(' ')}
                   >
                     <option value="auto">Auto · match the conversation</option>
                     {LANGUAGE_OPTIONS.map((l) => (
@@ -2990,15 +3007,16 @@ export function Settings({
                       </option>
                     ))}
                   </select>
-                  <label className="mb-1 mt-3 block text-[11px] font-medium text-[color:var(--cl-muted-foreground)]">
+                  <label className="mb-1 mt-3 flex items-center gap-2 text-[11px] font-medium text-[color:var(--cl-muted-foreground)]">
                     Summary &amp; recap
+                    <ManagedChip keys={settings.managedKeys} k="summaryLanguage" />
                   </label>
                   <select
                     value={settings.summaryLanguage}
                     onChange={(e) => patch({ summaryLanguage: e.target.value })}
                     disabled={settings.managedKeys.includes('summaryLanguage')}
                     aria-label="Summary and recap language"
-                    className={'w-full ' + ctl}
+                    className={['w-full', ctl, settings.managedKeys.includes('summaryLanguage') ? 'opacity-60' : ''].join(' ')}
                   >
                     <option value="auto">Same as answers</option>
                     {LANGUAGE_OPTIONS.map((l) => (
@@ -3211,7 +3229,8 @@ export function Settings({
                     <div className="mt-1.5 text-[11px] leading-snug text-[color:var(--color-danger)]">
                       This only scrubs text. Screenshots sent for screen-based questions are NOT redacted;
                       anything visible on-screen (passwords, IDs, open documents) goes to the provider as-is.
-                      Turn on Private View before capturing a screen you don't want sent.
+                      Capture (⌘/Ctrl+Shift+S) is always an explicit action — only capture screens you're
+                      comfortable sending.
                     </div>
                   </ToggleRow>
                 </Section>
@@ -3249,12 +3268,8 @@ export function Settings({
                     </button>
                     <button
                       type="button"
-                      disabled={settings.managedKeys.includes('meetingsFolder')}
                       onClick={() => void window.toto.openMeetingsFolder()}
-                      className={[
-                        'no-drag cl-focus flex items-center gap-1 rounded-lg bg-white/[0.05] px-2.5 py-1.5 text-[12px] text-[color:var(--cl-foreground)] hover:bg-white/[0.1]',
-                        settings.managedKeys.includes('meetingsFolder') ? 'opacity-60 cursor-not-allowed' : ''
-                      ].join(' ')}
+                      className="no-drag cl-focus flex items-center gap-1 rounded-lg bg-white/[0.05] px-2.5 py-1.5 text-[12px] text-[color:var(--cl-foreground)] hover:bg-white/[0.1]"
                     >
                       <FolderOpen size={12} /> Open
                     </button>
@@ -3371,7 +3386,7 @@ export function Settings({
                 <div className="flex flex-col items-center gap-2.5 pb-2 pt-4">
                   <MantuLogo size={190} />
                   <div className="text-[13px] font-semibold text-[color:var(--cl-foreground)]">
-                    AskToto 1.0.0 · Mantu
+                    AskToto {settings.version ?? '1.0.0'} · Mantu
                   </div>
                   <div className="flex items-center gap-2 text-[11px] text-[color:var(--cl-muted-foreground)]">
                     <a

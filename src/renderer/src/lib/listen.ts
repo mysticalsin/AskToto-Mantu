@@ -116,6 +116,10 @@ export interface ListenApi {
   lines: TranscriptLine[]
   error: string | null
   loadingPct: number | null // model-download progress (0-100) on first run, else null
+  // True once a 'best'-quality Whisper load has actually resolved to the WASM base model because WebGPU
+  // was unavailable/failed on this machine — so a caller (e.g. Settings) can surface the silent downgrade
+  // instead of the user only ever seeing "best" selected while quietly getting the fast-tier model.
+  webgpuUnavailable: boolean
   start: (source: AudioSource, quality?: 'best' | 'fast', engine?: 'whisper' | 'parakeet') => Promise<void>
   stop: () => void
   /** Suspend capture without ending the meeting — the transcript, worker, and (on macOS) the fragile
@@ -170,12 +174,19 @@ export function useListen(
     ready: false,
     loading: false,
     error: null as string | null,
-    loadingPct: null as number | null
+    loadingPct: null as number | null,
+    webgpuUnavailable: false
   })
   const [lines, setLines] = useState<TranscriptLine[]>([])
 
   const workerRef = useRef<Worker | null>(null)
   const loadedQualityRef = useRef<'best' | 'fast' | null>(null) // quality the warm worker was loaded with
+  // The quality the USER actually asked for when start() was called, captured unconditionally of engine
+  // (parakeet or whisper) and independent of loadedQualityRef (which is null whenever the whisper worker
+  // hasn't loaded yet, e.g. mid-Parakeet-session). fallBackToWhisper and armNetworkRetry's retry() read
+  // this so a mid-session Parakeet→Whisper swap or a network-recovery reload honors the original choice
+  // instead of always defaulting to 'fast'.
+  const requestedQualityRef = useRef<'best' | 'fast'>('fast')
   const engineRef = useRef<'whisper' | 'parakeet'>('whisper') // active ASR engine for this session
   // Cached bundled-model flag: queried once from the main process and reused for every init message.
   // null = not yet fetched; false = absent (dev build / no fetch-models run) → use remote CDN path.
@@ -322,7 +333,14 @@ export function useListen(
     if (workerRef.current) return workerRef.current
     const w = new Worker(new URL('./whisper.worker.ts', import.meta.url), { type: 'module' })
     w.onmessage = (e: MessageEvent): void => {
-      const m = e.data as { type: string; text?: string; speaker?: Speaker; message?: string; engine?: string }
+      const m = e.data as {
+        type: string
+        text?: string
+        speaker?: Speaker
+        message?: string
+        engine?: string
+        requestedBest?: boolean
+      }
       if (m.type === 'log') {
         console.warn('[whisper]', m.message)
       } else if (m.type === 'progress') {
@@ -337,7 +355,11 @@ export function useListen(
           ready: true,
           loading: false,
           loadingPct: null,
-          error: s.error === OFFLINE_MSG || s.error === RECONNECTING_MSG ? null : s.error
+          error: s.error === OFFLINE_MSG || s.error === RECONNECTING_MSG ? null : s.error,
+          // A 'best' request that actually landed on the WASM base model means WebGPU was unavailable (or
+          // failed to init) on this machine — surface that instead of silently degrading. Cleared whenever
+          // a load resolves to webgpu, or wasn't asking for it in the first place (fast tier).
+          webgpuUnavailable: m.requestedBest === true && m.engine === 'wasm'
         }))
         pump() // drain windows captured while the model loaded
       } else if (m.type === 'error') {
@@ -384,8 +406,10 @@ export function useListen(
   }, [pump])
 
   // Repeated Parakeet failures mid-session → permanently switch this session to Whisper so transcription
-  // keeps working (mirrors the init-time fallback in start()). The window that tripped the threshold is
-  // lost, but every subsequent window is transcribed by Whisper once its worker finishes loading.
+  // keeps working, loading it at the quality the user actually asked for at start() (requestedQualityRef),
+  // not whatever loadedQualityRef happens to hold (it's null throughout a Parakeet session — Whisper's
+  // worker was never touched). The window that tripped the threshold is lost, but every subsequent window
+  // is transcribed by Whisper once its worker finishes loading.
   // (ensureWorker/getAsrBundled are stable; referenced from pump above before this line — fine at call time.)
   const fallBackToWhisper = useCallback((): void => {
     if (engineRef.current !== 'parakeet') return // already switched
@@ -399,7 +423,7 @@ export function useListen(
     setState((s) => ({ ...s, loading: true }))
     void getAsrBundled()
       .then((bundled) => {
-        ensureWorker().postMessage({ type: 'init', quality: loadedQualityRef.current ?? 'fast', bundled })
+        ensureWorker().postMessage({ type: 'init', quality: requestedQualityRef.current, bundled })
       })
       .catch(() => {})
   }, [ensureWorker, getAsrBundled])
@@ -438,7 +462,7 @@ export function useListen(
         void getAsrBundled()
           .then((bundled) => {
             if (!liveRef.current || readyRef.current) return
-            ensureWorker().postMessage({ type: 'init', quality: loadedQualityRef.current ?? 'fast', bundled })
+            ensureWorker().postMessage({ type: 'init', quality: requestedQualityRef.current, bundled })
           })
           .catch(() => {})
       }
@@ -707,6 +731,11 @@ export function useListen(
       if (startingRef.current) return
       startingRef.current = true
       try {
+        // Capture the caller's requested quality up front, unconditional of which engine ends up running
+        // this session — fallBackToWhisper and armNetworkRetry's retry() (both able to fire well after this
+        // start() call returns) read requestedQualityRef instead of loadedQualityRef, which stays null for
+        // the whole lifetime of a Parakeet session.
+        requestedQualityRef.current = quality
         if (workerIdleTimer.current) {
           clearTimeout(workerIdleTimer.current) // re-arming before the idle release fires: keep the worker warm
           workerIdleTimer.current = null

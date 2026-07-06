@@ -634,6 +634,12 @@ export async function saveDraftTranscript(settings: Settings, m: SaveMeeting): P
         return `**[${t}] ${l.speaker === 'them' ? 'Them' : 'You'}:** ${l.text}`
       })
       .join('\n\n')
+    // Same duration_min/participants calc as saveMeeting below — without these, a draft promoted by
+    // recoverOrphanDrafts (which only swaps the type:/status: lines, never adds fields) reads back with
+    // durationMin 0 and an empty participants list forever, silently losing that badge on recovery.
+    const last = m.lines.length ? m.lines[m.lines.length - 1].t : started
+    const durMin = m.lines.length ? Math.max(1, Math.round((last - started) / 60000)) : 0
+    const participants = Array.from(new Set(m.lines.map((l) => (l.speaker === 'them' ? 'Them' : 'You'))))
     const frontmatter = [
       '---',
       'type: meeting-transcript-draft',
@@ -641,6 +647,8 @@ export async function saveDraftTranscript(settings: Settings, m: SaveMeeting): P
       `mode: "${yamlSafeTitle(cleanTitle(m.mode))}"`,
       `date: ${new Date(started).toISOString()}`,
       `title: "${yamlSafeTitle(title)}"`,
+      `participants: [${participants.join(', ')}]`,
+      `duration_min: ${durMin}`,
       'status: interrupted',
       '---',
       ''
