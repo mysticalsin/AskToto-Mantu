@@ -422,14 +422,18 @@ describe('recall — undecryptable rows degrade gracefully', () => {
     return path
   }
 
-  it('listMeetings skips a corrupt row instead of throwing, and still returns the good ones', async () => {
+  it('listMeetings surfaces an undecryptable meeting as a locked stub instead of dropping it', async () => {
     const goodFile = await saveMeeting(testSettings, goodMeeting)
     writeCorruptEncryptedFile('2024-01-01_000000-corrupt.md')
 
     const list = await listMeetings()
+    // The readable meeting is present, and the encrypted-but-undecryptable file is now visible as a
+    // locked stub (was silently dropped before — hiding real meetings the user couldn't decrypt).
     expect(list.some((m) => goodFile.endsWith(m.file))).toBe(true)
-    expect(list.some((m) => m.file === '2024-01-01_000000-corrupt.md')).toBe(false)
-    expect(list).toHaveLength(1)
+    const locked = list.find((m) => m.file === '2024-01-01_000000-corrupt.md')
+    expect(locked).toBeDefined()
+    expect(locked?.locked).toBe(true)
+    expect(list).toHaveLength(2)
   })
 
   it('searchMeetings skips a corrupt row instead of throwing, and still finds the good ones', async () => {

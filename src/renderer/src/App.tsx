@@ -45,6 +45,13 @@ const GUARD_LINE =
 const withContext = (q: string, transcript: string): string =>
   `${q}\n\nUse this live conversation transcript as context (THEM = the other person, YOU = me):\n"""\n${transcript.slice(-3000)}\n"""${GUARD_LINE}`
 
+// Soft, dismissible notice text for a multi-monitor screen-capture mismatch (see hasDisplayMismatch below).
+const CAPTURE_DISPLAY_MISMATCH_NOTICE = 'Captured a different monitor than your cursor — that may not be the right screen.'
+// Defensive read of an optional main-process signal: `displayMismatch` isn't declared on CaptureResult yet
+// (shared/ipc.ts), so this is typed as an optional field on a minimal shape rather than asserted directly —
+// reads as `undefined`/falsy with zero changes needed here once main starts sending it.
+const hasDisplayMismatch = (shot: { displayMismatch?: boolean }): boolean => shot.displayMismatch === true
+
 // Character budget for the default meeting title below.
 const TITLE_BUDGET = 50
 // Default meeting title, derived from the first thing the other person said — used by History, Settings'
@@ -627,6 +634,9 @@ export function App(): JSX.Element {
       try {
         const shot = await window.toto.capture()
         setScreenCapturedAt(shot.capturedAt)
+        // T1: surface a multi-monitor capture mismatch as a soft, dismissible notice — the screenshot is
+        // still valid and the answer still runs, this just flags it may be the wrong monitor.
+        if (hasDisplayMismatch(shot)) setCaptureError(CAPTURE_DISPLAY_MISMATCH_NOTICE)
         // Return the run id so callers can track it (Retry/Go-deeper replay the same screenshot via lastReqRef).
         const id = ask.run({
           mode: 'vision',
@@ -691,6 +701,8 @@ export function App(): JSX.Element {
       try {
         const shot = await window.toto.capture()
         setScreenCapturedAt(shot.capturedAt)
+        // T1: same soft mismatch notice as askScreen — see hasDisplayMismatch's own comment above.
+        if (hasDisplayMismatch(shot)) setCaptureError(CAPTURE_DISPLAY_MISMATCH_NOTICE)
         suggest.run({
           mode: 'vision',
           prompt: basePrompt,
@@ -792,7 +804,12 @@ export function App(): JSX.Element {
       return
     }
     if (route.transport === 'screen') {
-      void askScreen(FACT_CHECK_SCREEN_PROMPT, { kind: 'factcheck', label: 'Claims on your screen' })
+      void askScreen(FACT_CHECK_SCREEN_PROMPT, {
+        kind: 'factcheck',
+        label: 'Claims on your screen',
+        history: historyRef.current,
+        record: 'Claims on your screen'
+      })
       return
     }
     // route.transport === 'text' here means chooseQuickActionRoute saw a typed claim OR a non-empty
@@ -819,7 +836,12 @@ export function App(): JSX.Element {
       label: c || 'the conversation so far',
       prompt: buildFactCheckClaimPrompt(c) + GUARD_LINE
     })
-    pendingUserRef.current = { id, q: c || 'the conversation so far' }
+    // Record a short synthetic label, not the (up to ~3000-char) transcript slice `c` itself — otherwise
+    // that whole slice gets pushed into history as a fake "user" turn and replayed verbatim on follow-ups.
+    pendingUserRef.current = {
+      id,
+      q: claim || (lastThem ? `Fact-check: "${lastThem}"` : 'Fact-check the conversation so far')
+    }
     setInput('')
   }, [
     input,
@@ -855,7 +877,11 @@ export function App(): JSX.Element {
       return
     }
     if (route.transport === 'screen') {
-      void askScreen(buildWhatNextPrompt('', 'screen'), { label: 'Viewed screen', history: historyRef.current })
+      void askScreen(buildWhatNextPrompt('', 'screen'), {
+        label: 'Viewed screen',
+        history: historyRef.current,
+        record: typed || 'What should I say next?'
+      })
       return
     }
     if (route.transport === 'suggest') {
@@ -1093,7 +1119,11 @@ export function App(): JSX.Element {
   }, [flushLiveMeeting])
 
   const onStop = useCallback(() => {
-    if (listen.listening) {
+    // Cancel whichever stream is actually ON SCREEN first — matching the `body` render branch below
+    // (view==='copilot' → suggest.answer, else → ask.answer). This used to branch on listen.listening
+    // instead, so e.g. stopping Listen while a background Answer-view follow-up was still streaming during
+    // a live copilot session could cancel the (invisible) copilot stream while the visible one kept going.
+    if (view === 'copilot') {
       if (suggest.answer?.streaming) suggest.cancel()
       else if (ask.answer?.streaming) {
         cancelledRef.current = true
@@ -1105,20 +1135,22 @@ export function App(): JSX.Element {
         ask.cancel()
       } else if (suggest.answer?.streaming) suggest.cancel()
     }
-  }, [listen.listening, ask.answer, ask.cancel, suggest.answer, suggest.cancel])
+  }, [view, ask.answer, ask.cancel, suggest.answer, suggest.cancel])
 
   const retryAnswer = useCallback(() => {
     const p = ask.answer?.prompt
     if (!p) return
     const id = ask.retry() // replays the original request verbatim (keeps the screenshot for vision retries)
-    if (id) pendingUserRef.current = { id, q: p }
+    // Record the clean user-facing label in history, not the raw engineered prompt (format scaffolds,
+    // "Respond in EXACTLY this format..." etc.) — falls back to the prompt only when there's no label.
+    if (id) pendingUserRef.current = { id, q: ask.answer?.label ?? p }
   }, [ask.answer, ask.retry])
 
   const goDeeper = useCallback(() => {
     const p = ask.answer?.prompt
     if (!p) return
     const id = ask.deeper() // replays the request with depth:'deeper' → a fuller answer
-    if (id) pendingUserRef.current = { id, q: p }
+    if (id) pendingUserRef.current = { id, q: ask.answer?.label ?? p }
   }, [ask.answer, ask.deeper])
 
   const reset = useCallback(() => {
@@ -1203,13 +1235,29 @@ export function App(): JSX.Element {
     setCollapsed(false)
   }, [])
   const onBarMinimize = useCallback(() => {
+    // Minimizing unmounts the entire Bar/Panel tree, including an open Review with an in-progress recap
+    // edit — same dirty-guard the global Escape handler already runs before leaving Review (see
+    // reviewDirtyRef's own comment above). Settings' own draft fields (API key / Dust / Bidstack inputs)
+    // have no equivalent dirty signal reachable here yet, so only the recap edit is covered.
+    if (reviewDirtyRef.current && !window.confirm('You have unsaved changes to this recap. Discard them?')) {
+      return
+    }
     setMinimized(true)
     void window.toto.minimize(true) // collapse to the control mini-pill
   }, [])
   const onToggleStealth = useCallback(() => {
     void patch({ contentProtection: !(settings?.contentProtection ?? true) })
   }, [patch, settings?.contentProtection])
-  const onTogglePanel = useCallback(() => setCollapsed((c) => !c), [])
+  const onTogglePanel = useCallback(() => {
+    // Only the COLLAPSE direction (open → closed) can hide an in-progress recap edit — expanding back is
+    // always safe, so only gate when we're currently expanded. Same guard as onBarMinimize/Escape above;
+    // read directly off `collapsed` rather than inside the setCollapsed updater so window.confirm (a
+    // blocking side effect) never risks running twice under React's dev-mode double-invoked updaters.
+    if (!collapsed && reviewDirtyRef.current && !window.confirm('You have unsaved changes to this recap. Discard them?')) {
+      return
+    }
+    setCollapsed((c) => !c)
+  }, [collapsed])
 
   // Open a saved meeting from History as a read-only recap (Cluely recap detail) via the recall:read IPC.
   // Returns the failure message (if any) instead of swallowing it, so callers can surface WHY the read
@@ -1380,7 +1428,11 @@ export function App(): JSX.Element {
           const screenPrompt = transcript.trim()
             ? withContext('Explain what is on my screen in simple terms.', transcript)
             : 'Explain what is on my screen in simple terms.'
-          void askScreen(screenPrompt, { label: 'Viewed screen', history: historyRef.current })
+          void askScreen(screenPrompt, {
+            label: 'Viewed screen',
+            history: historyRef.current,
+            record: typed || 'Explain what is on my screen in simple terms.'
+          })
           return
         }
         const { prompt } = buildExplainPrompt(typed, transcript)
@@ -1413,7 +1465,11 @@ export function App(): JSX.Element {
           const screenPrompt = transcript.trim()
             ? withContext('Summarize what is on my screen.', transcript)
             : 'Summarize what is on my screen.'
-          void askScreen(screenPrompt, { label: 'Viewed screen', history: historyRef.current })
+          void askScreen(screenPrompt, {
+            label: 'Viewed screen',
+            history: historyRef.current,
+            record: input.trim() || 'Summarize what is on my screen.'
+          })
           return
         }
         // Cascade into Dust whenever it's configured, regardless of the active provider — same reasoning
@@ -1764,7 +1820,10 @@ export function App(): JSX.Element {
       {minimized ? (
         <div className="flex w-full justify-center">
           <ControlPill
-            listening={listen.listening}
+            // Gated the same way the Bar's own `listening` prop is (see showListeningChrome's comment
+            // above) — otherwise the pill kept showing "live" chrome for up to DRAIN_CEILING_MS (4s) after
+            // Stop while listen.listening was still draining audio in the background.
+            listening={showListeningChrome}
             paused={listen.paused}
             startedAt={meetingStartRef.current}
             onTogglePause={onTogglePause}

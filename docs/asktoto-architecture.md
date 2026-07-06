@@ -1132,14 +1132,14 @@ Policy keys relevant to privacy/security:
 | Key | Effect | Default |
 |---|---|---|
 | `allowedProviders: string[]` | Org allowlist; blocks all other providers at the `attempt()` call in `index.ts` | null (unrestricted) |
-| `lockedKeys: string[]` | UI settings the user cannot change (e.g. `["provider","redactSensitive"]`) | `[]` |
+| `locked: string[]` (alias: `lockedKeys`) | UI settings the user cannot change (e.g. `["provider","redactSensitive"]`) | `[]` |
 | `redactSensitive: true` | Force redaction on, user cannot toggle off | unset |
 | `encryptTranscripts: true` | Force at-rest encryption, user cannot toggle off | unset |
 | `meetingsFolder: "<path>"` | IT-controlled transcript destination | unset |
 | `escrowPubKey: "<PEM>"` | RSA-OAEP public key for transcript key escrow (`transcripts.ts`) | unset |
 | `autoSaveTranscripts: false` | Disable all transcript saving | unset |
 
-`lockedKeys` values are surfaced in the Settings UI as locked fields (padlock icon, no input). The lock check runs in the renderer via the `managedKeys` array returned by `publicSettings()`, but the enforcement is in the main process — `ipcMain.handle(IPC.setSettings)` validates against `getLockedKeys()` before writing.
+`locked` values are surfaced in the Settings UI as locked fields (padlock icon, no input). The lock check runs in the renderer via the `managedKeys` array returned by `publicSettings()`, but the enforcement is in the main process — `ipcMain.handle(IPC.setSettings)` validates against `getLockedKeys()` before writing. `lockedKeys` is accepted as a backward-compatible alias for `locked` (`store.ts → readLockedFrom()` reads `obj.locked ?? obj.lockedKeys`), so a config written against either name locks fields correctly.
 
 ### I.7 Encryption in transit and at rest
 
