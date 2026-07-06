@@ -88,15 +88,16 @@ async function postJson(url: string, body: unknown): Promise<LicenseActivateResu
  *  failure (rejected by the server, or unreachable) settings are left completely untouched — a failed
  *  re-activation attempt (typo'd key, server hiccup) must never un-license a device that already works. */
 export async function activateLicense(serverUrl: string, licenseKey: string): Promise<LicenseActivateResult> {
-  const r = await postJson(`${serverUrl.replace(/\/+$/, '')}/activate`, {
-    licenseKey,
+  const url = normalizeServerUrl(serverUrl)
+  const r = await postJson(`${url}/activate`, {
+    licenseKey: licenseKey.trim(),
     machineId: getMachineId(),
     machineName: hostname()
   })
   if (r.ok) {
     setSettings({
-      licenseServerUrl: serverUrl,
-      licenseKey,
+      licenseServerUrl: url,
+      licenseKey: licenseKey.trim(),
       licenseCompanyName: r.companyName ?? '',
       licenseSeatCap: r.seatCap ?? 0,
       licenseExpiresAt: r.expiresAt ?? null,
@@ -107,12 +108,23 @@ export async function activateLicense(serverUrl: string, licenseKey: string): Pr
   return r
 }
 
+/** Accept whatever a human types for the server address and turn it into a URL fetch() won't reject.
+ *  A bare `127.0.0.1:8420`, `localhost:8420`, or `licenses.acme.com` has no scheme, so fetch throws
+ *  "Invalid URL" and the activation silently reads as a network failure — the #1 reason a good key
+ *  looks broken. Default to http:// when no scheme is given (plain-LAN/dev is the common no-scheme
+ *  case; a real deployment uses an https:// URL explicitly), and strip trailing slashes. */
+export function normalizeServerUrl(raw: string): string {
+  let u = raw.trim().replace(/\/+$/, '')
+  if (u && !/^https?:\/\//i.test(u)) u = `http://${u}`
+  return u
+}
+
 /** Re-validate the already-saved activation. Called by checkLicenseGrace() in the background once the
  *  7-day soft grace has passed, never awaited by it (a launch must never block on this network call). */
 export async function heartbeat(): Promise<LicenseActivateResult> {
   const s = getSettings()
   if (!s.licenseServerUrl || !s.licenseKey) return { ok: false, error: 'not_activated' }
-  const r = await postJson(`${s.licenseServerUrl.replace(/\/+$/, '')}/heartbeat`, {
+  const r = await postJson(`${normalizeServerUrl(s.licenseServerUrl)}/heartbeat`, {
     licenseKey: s.licenseKey,
     machineId: getMachineId()
   })

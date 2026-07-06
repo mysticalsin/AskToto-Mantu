@@ -19,7 +19,7 @@ vi.mock('./store', () => ({
   setSettings: (patch: Partial<Settings>) => setSettingsSpy(patch)
 }))
 
-import { activateLicense, heartbeat, checkLicenseGrace, getMachineId } from './license'
+import { activateLicense, heartbeat, checkLicenseGrace, getMachineId, normalizeServerUrl } from './license'
 
 const DAY = 24 * 60 * 60 * 1000
 
@@ -68,6 +68,28 @@ describe('license.ts — phone-home activation', () => {
       const second = getMachineId()
       expect(second).toBe(first)
       expect(readFileSync(join(ud, 'machine-id.txt'), 'utf8').trim()).toBe(first)
+    })
+  })
+
+  describe('normalizeServerUrl', () => {
+    it('adds http:// to a scheme-less address so fetch does not reject it', () => {
+      expect(normalizeServerUrl('127.0.0.1:8420')).toBe('http://127.0.0.1:8420')
+      expect(normalizeServerUrl('localhost:8420')).toBe('http://localhost:8420')
+      expect(normalizeServerUrl('192.168.1.50:8420')).toBe('http://192.168.1.50:8420')
+      expect(normalizeServerUrl('licenses.acme.com')).toBe('http://licenses.acme.com')
+    })
+    it('preserves an explicit scheme and strips trailing slashes and whitespace', () => {
+      expect(normalizeServerUrl('https://license.acme.com/')).toBe('https://license.acme.com')
+      expect(normalizeServerUrl('  http://127.0.0.1:8420//  ')).toBe('http://127.0.0.1:8420')
+      expect(normalizeServerUrl('HTTPS://Acme.com')).toBe('HTTPS://Acme.com')
+    })
+    it('activation normalizes a scheme-less URL before fetching AND persists the normalized form', async () => {
+      testSettings = baseSettings()
+      fetchMock.mockResolvedValue(jsonResponse({ ok: true, companyName: 'Acme', seatCap: 5, seatsUsed: 1, expiresAt: null }))
+      await activateLicense('127.0.0.1:8420', ' KEY-123 ')
+      expect(fetchMock).toHaveBeenCalledWith('http://127.0.0.1:8420/activate', expect.anything())
+      expect(testSettings.licenseServerUrl).toBe('http://127.0.0.1:8420')
+      expect(testSettings.licenseKey).toBe('KEY-123') // trimmed
     })
   })
 
