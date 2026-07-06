@@ -465,7 +465,11 @@ export function Onboarding({
             ok={settings.providerReady}
             label={PROVIDERS[settings.provider]?.kind === 'cli' ? `${providerLabel} connected` : `${providerLabel} API key`}
             hint="add it in Settings → AI"
-            onFix={onOpenAiSettings}
+            // Settings can only render once the onboarding gate clears (App returns this panel while
+            // !onboardingDone), so complete onboarding first — otherwise this link is a silent no-op,
+            // a dead end on the one remediation the readiness checklist offers. finish() persists
+            // consent + onboardingDone; on its failure the error banner shows and we stay here.
+            onFix={onOpenAiSettings ? async (): Promise<void> => { await finish(); onOpenAiSettings() } : undefined}
             fixLabel="Open Settings → AI"
           />
           <CheckRow

@@ -1970,7 +1970,12 @@ function registerIpc(): void {
 protocol.registerSchemesAsPrivileged([
   {
     scheme: 'asr-model',
-    privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true }
+    // corsEnabled is required: the packaged renderer runs on file:// (opaque origin), so its fetch()
+    // to asr-model:// is always cross-origin. Without corsEnabled Chromium refuses the request outright
+    // ("TypeError: Failed to fetch") and the bundled weights are unreachable — the worker then either
+    // hard-fails (allowRemoteModels=false) or silently falls back to the CDN, breaking offline Listen.
+    // The handler pairs this with Access-Control-Allow-Origin on every response.
+    privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true, corsEnabled: true }
   }
 ])
 
@@ -2167,9 +2172,11 @@ if (!app.requestSingleInstanceLock()) {
           '.txt': 'text/plain'
         }
         const ct = TYPES[extname(real).toLowerCase()]
-        if (!ct) return resp
         const headers = new Headers(resp.headers)
-        headers.set('Content-Type', ct)
+        // The renderer's origin is opaque (file://), so the CORS check needs an explicit allow. Safe:
+        // this scheme serves only public model weights/WASM under the two whitelisted roots above.
+        headers.set('Access-Control-Allow-Origin', '*')
+        if (ct) headers.set('Content-Type', ct)
         return new Response(resp.body, { status: resp.status, statusText: resp.statusText, headers })
       } catch {
         return new Response(null, { status: 500 })

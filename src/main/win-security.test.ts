@@ -87,11 +87,12 @@ describe('isAdminManagedTrusted / trustedAdminManagedPath — platform gate', ()
     expect(trustedAdminManagedPath()).toBe('/Library/Application Support/AskToto/managed-config.json')
   })
 
-  it('trusts an ABSENT win32 policy file (nothing to distrust; readers get null anyway)', () => {
+  it('does NOT trust an ABSENT win32 policy file (closes the stat→read TOCTOU)', () => {
     setPlatform('win32')
-    // A path that does not exist → statSync throws → treated as absent → trusted, so callers fall through
-    // to the per-user managed file exactly as before.
-    expect(isAdminManagedTrusted('C:\\ProgramData\\AskToto\\__does_not_exist__.json')).toBe(true)
+    // A path that does not exist → statSync throws → untrusted. Readers treat the resulting null
+    // path as no-policy either way; reporting trusted here let a create/delete loop race the
+    // gate's statSync against the caller's readFileSync and get a forged policy honored.
+    expect(isAdminManagedTrusted('C:\\ProgramData\\AskToto\\__does_not_exist__.json')).toBe(false)
   })
 })
 
