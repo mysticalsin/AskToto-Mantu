@@ -386,6 +386,116 @@
   }
   .empty-state .btn-primary { margin-top: 16px; }
 
+  /* ---------- stats cards ---------- */
+
+  .stats-cards {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 12px;
+    margin-bottom: 16px;
+  }
+
+  .stat-card {
+    background: var(--bg-panel);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    padding: 16px 18px;
+  }
+
+  .stat-card .stat-label {
+    font-size: 11.5px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--text-faint);
+    font-weight: 600;
+    margin-bottom: 8px;
+  }
+
+  .stat-card .stat-value {
+    font-size: 22px;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .stat-card .stat-value .stat-value-sub {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-muted);
+  }
+
+  /* ---------- expiring-soon banner ---------- */
+
+  .expiring-banner {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px 10px;
+    background: var(--warning-soft);
+    border: 1px solid rgba(251, 191, 36, 0.3);
+    border-radius: var(--radius);
+    padding: 10px 14px;
+    margin-bottom: 16px;
+    font-size: 12.5px;
+  }
+
+  .expiring-banner-label {
+    font-weight: 600;
+    color: var(--warning);
+    flex-shrink: 0;
+  }
+
+  .expiring-banner-item {
+    background: transparent;
+    border: 1px solid rgba(251, 191, 36, 0.35);
+    color: var(--text);
+    border-radius: 999px;
+    padding: 4px 10px;
+    font-size: 12px;
+    font-weight: 500;
+  }
+  .expiring-banner-item:hover { background: rgba(251, 191, 36, 0.16); }
+
+  /* ---------- table toolbar (search) ---------- */
+
+  .table-toolbar {
+    display: flex;
+    justify-content: flex-end;
+    margin-bottom: 12px;
+  }
+
+  .search-input {
+    width: 100%;
+    max-width: 280px;
+  }
+
+  /* ---------- sortable headers ---------- */
+
+  .licenses-table thead th.sortable {
+    cursor: pointer;
+    user-select: none;
+  }
+  .licenses-table thead th.sortable:hover { color: var(--text-muted); }
+
+  .sort-arrow { margin-left: 4px; font-size: 10px; }
+
+  /* ---------- row flags ---------- */
+
+  .licenses-table tbody tr.row-expiring { background: rgba(251, 191, 36, 0.07); }
+  .licenses-table tbody tr.row-expiring:hover { background: rgba(251, 191, 36, 0.14); }
+
+  .seat-chip-full {
+    display: inline-block;
+    margin-left: 8px;
+    padding: 2px 8px;
+    border-radius: 999px;
+    font-size: 10.5px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    background: var(--warning-soft);
+    color: var(--warning);
+  }
+
   /* ---------- overlay ---------- */
 
   .layer-overlay {
@@ -642,23 +752,29 @@
       </div>
 
       <div id="licenses-view">
+        <div id="stats-cards" class="stats-cards"></div>
+        <div id="expiring-banner" class="expiring-banner hidden"></div>
+        <div class="table-toolbar">
+          <input id="search-input" class="text-input search-input" type="search" placeholder="Search company, key, or contact" autocomplete="off" spellcheck="false" />
+        </div>
         <div class="table-card">
-          <div class="table-scroll">
+          <div id="licenses-table-scroll" class="table-scroll">
             <table class="licenses-table">
               <thead>
                 <tr>
-                  <th>Company</th>
+                  <th class="sortable" data-sort="company"><span class="th-label">Company</span></th>
                   <th>License key</th>
-                  <th>Seats</th>
+                  <th class="sortable" data-sort="seats"><span class="th-label">Seats</span></th>
                   <th>Active 30d</th>
-                  <th>Status</th>
+                  <th class="sortable" data-sort="status"><span class="th-label">Status</span></th>
                   <th>Created</th>
-                  <th>Expires</th>
+                  <th class="sortable" data-sort="expiry"><span class="th-label">Expires</span></th>
                 </tr>
               </thead>
               <tbody id="licenses-tbody"></tbody>
             </table>
           </div>
+          <div id="licenses-loading-state" class="empty-state hidden">Loading licenses…</div>
           <div id="empty-state" class="empty-state hidden">
             <div>No licenses yet.</div>
             <button id="empty-new-license-btn" class="btn btn-primary">Create your first license</button>
@@ -794,6 +910,16 @@
 
   var tbody = document.getElementById('licenses-tbody');
   var emptyState = document.getElementById('empty-state');
+  var licensesLoadingState = document.getElementById('licenses-loading-state');
+  var tableScroll = document.getElementById('licenses-table-scroll');
+  var statsCards = document.getElementById('stats-cards');
+  var expiringBanner = document.getElementById('expiring-banner');
+  var searchInput = document.getElementById('search-input');
+  var sortableHeaders = document.querySelectorAll('#licenses-view th.sortable');
+
+  var allLicenses = [];
+  var licensesLoadedOnce = false;
+  var sortState = { column: null, dir: 'asc' };
 
   var auditTbody = document.getElementById('audit-tbody');
   var auditEmptyState = document.getElementById('audit-empty-state');
@@ -895,6 +1021,68 @@
 
   function pillHtml(state) {
     return '<span class="pill pill-' + state + '">' + stateLabel(state) + '</span>';
+  }
+
+  var DAY_MS = 24 * 60 * 60 * 1000;
+  var THIRTY_DAYS_MS = 30 * DAY_MS;
+
+  function rowIsExpiringSoon(license) {
+    if (license.revoked) return false;
+    if (license.expiresAt === null || license.expiresAt === undefined) return false;
+    var now = Date.now();
+    return license.expiresAt > now && license.expiresAt <= now + THIRTY_DAYS_MS;
+  }
+
+  function daysUntil(ms) {
+    if (ms === null || ms === undefined) return 0;
+    return Math.max(0, Math.ceil((ms - Date.now()) / DAY_MS));
+  }
+
+  function filterLicenses(list, query) {
+    var q = (query || '').trim().toLowerCase();
+    if (!q) return list;
+    return list.filter(function (l) {
+      return (l.companyName || '').toLowerCase().indexOf(q) !== -1 ||
+        (l.licenseKey || '').toLowerCase().indexOf(q) !== -1 ||
+        (l.contactName || '').toLowerCase().indexOf(q) !== -1;
+    });
+  }
+
+  var STATUS_SORT_RANK = { active: 0, expired: 1, revoked: 2 };
+
+  function sortValue(l, column) {
+    if (column === 'company') return (l.companyName || '').toLowerCase();
+    if (column === 'seats') return l.seatsUsed;
+    if (column === 'expiry') return (l.expiresAt === null || l.expiresAt === undefined) ? Infinity : l.expiresAt;
+    if (column === 'status') return STATUS_SORT_RANK[licenseState(l)];
+    return 0;
+  }
+
+  function sortLicenses(list, state) {
+    if (!state.column) return list;
+    var dir = state.dir === 'desc' ? -1 : 1;
+    var copy = list.slice();
+    copy.sort(function (a, b) {
+      var av = sortValue(a, state.column);
+      var bv = sortValue(b, state.column);
+      if (av < bv) return -1 * dir;
+      if (av > bv) return 1 * dir;
+      return 0;
+    });
+    return copy;
+  }
+
+  function updateSortIndicators() {
+    sortableHeaders.forEach(function (th) {
+      var existingArrow = th.querySelector('.sort-arrow');
+      if (existingArrow) existingArrow.remove();
+      if (th.getAttribute('data-sort') === sortState.column) {
+        var arrow = document.createElement('span');
+        arrow.className = 'sort-arrow';
+        arrow.textContent = sortState.dir === 'asc' ? '▲' : '▼';
+        th.appendChild(arrow);
+      }
+    });
   }
 
   function showToast(message, type) {
@@ -1050,6 +1238,11 @@
   // ---------- table rendering ----------
 
   function loadLicenses() {
+    if (!licensesLoadedOnce) {
+      tableScroll.classList.add('hidden');
+      emptyState.classList.add('hidden');
+      licensesLoadingState.classList.remove('hidden');
+    }
     return apiFetch('/admin/licenses').then(function (result) {
       if (result.status !== 200) {
         showToast('Could not load licenses.', 'error');
@@ -1064,6 +1257,10 @@
   }
 
   function renderLicenses(list) {
+    licensesLoadedOnce = true;
+    allLicenses = list;
+    licensesLoadingState.classList.add('hidden');
+
     var totalSeatsUsed = 0;
     list.forEach(function (l) { totalSeatsUsed += l.seatsUsed; });
     summaryText.textContent = list.length + (list.length === 1 ? ' license' : ' licenses') +
@@ -1071,15 +1268,31 @@
 
     if (list.length === 0) {
       tbody.innerHTML = '';
+      tableScroll.classList.add('hidden');
       emptyState.classList.remove('hidden');
+    } else {
+      emptyState.classList.add('hidden');
+      tableScroll.classList.remove('hidden');
+      renderRows();
+    }
+    loadStats();
+  }
+
+  function renderRows() {
+    var filtered = filterLicenses(allLicenses, searchInput.value);
+    var sorted = sortLicenses(filtered, sortState);
+
+    if (sorted.length === 0) {
+      tbody.innerHTML = '<tr><td colspan="7" class="empty-state">No licenses match your search.</td></tr>';
       return;
     }
-    emptyState.classList.add('hidden');
 
-    var rows = list.map(function (l) {
+    var rows = sorted.map(function (l) {
       var state = licenseState(l);
+      var rowClass = rowIsExpiringSoon(l) ? ' class="row-expiring"' : '';
+      var isFull = l.seatsUsed >= l.seatCap;
       return '' +
-        '<tr data-key="' + escapeHtml(l.licenseKey) + '">' +
+        '<tr' + rowClass + ' data-key="' + escapeHtml(l.licenseKey) + '">' +
           '<td class="company-cell">' + escapeHtml(l.companyName) + '</td>' +
           '<td>' +
             '<span class="key-cell">' +
@@ -1090,7 +1303,9 @@
               '</button>' +
             '</span>' +
           '</td>' +
-          '<td class="seats-cell"><strong>' + l.seatsUsed + '</strong> / ' + l.seatCap + '</td>' +
+          '<td class="seats-cell"><strong>' + l.seatsUsed + '</strong> / ' + l.seatCap +
+            (isFull ? ' <span class="seat-chip-full">Full</span>' : '') +
+          '</td>' +
           '<td class="seats-cell">' + l.activeSeats30d + '</td>' +
           '<td>' + pillHtml(state) + '</td>' +
           '<td class="date-cell">' + formatDate(l.createdAt) + '</td>' +
@@ -1099,6 +1314,72 @@
     });
     tbody.innerHTML = rows.join('');
   }
+
+  // ---------- stats cards + expiring-soon banner ----------
+
+  function loadStats() {
+    apiFetch('/admin/stats').then(function (result) {
+      if (result.status !== 200) return;
+      renderStats(result.json);
+    }).catch(function () { /* stat cards are supplementary; fail silently */ });
+  }
+
+  function statCardHtml(label, valueHtml) {
+    return '<div class="stat-card"><div class="stat-label">' + escapeHtml(label) + '</div><div class="stat-value">' + valueHtml + '</div></div>';
+  }
+
+  function renderStats(stats) {
+    if (!stats) return;
+    statsCards.innerHTML =
+      statCardHtml('Total licenses', stats.totalLicenses) +
+      statCardHtml('Seats in use', stats.totalSeatsUsed + ' <span class="stat-value-sub">/ ' + stats.totalSeatCap + '</span>') +
+      statCardHtml('Active in last 30 days', stats.totalActive30d) +
+      statCardHtml('Expiring in 30 days', (stats.expiringSoon || []).length) +
+      statCardHtml('Revoked', stats.revokedLicenses);
+    renderExpiringBanner(stats.expiringSoon || []);
+  }
+
+  function renderExpiringBanner(list) {
+    if (!list || list.length === 0) {
+      expiringBanner.innerHTML = '';
+      expiringBanner.classList.add('hidden');
+      return;
+    }
+    var items = list.map(function (item) {
+      var days = daysUntil(item.expiresAt);
+      var daysLabel = days + (days === 1 ? ' day left' : ' days left');
+      return '<button type="button" class="expiring-banner-item" data-key="' + escapeHtml(item.licenseKey) + '">' +
+        escapeHtml(item.companyName) + ' (' + daysLabel + ')' +
+        '</button>';
+    });
+    expiringBanner.innerHTML = '<span class="expiring-banner-label">Expiring soon</span>' + items.join('');
+    expiringBanner.classList.remove('hidden');
+  }
+
+  expiringBanner.addEventListener('click', function (e) {
+    var btn = e.target.closest('[data-key]');
+    if (!btn) return;
+    openDetail(btn.getAttribute('data-key'));
+  });
+
+  searchInput.addEventListener('input', function () {
+    if (allLicenses.length === 0) return;
+    renderRows();
+  });
+
+  sortableHeaders.forEach(function (th) {
+    th.addEventListener('click', function () {
+      var col = th.getAttribute('data-sort');
+      if (sortState.column === col) {
+        sortState.dir = sortState.dir === 'asc' ? 'desc' : 'asc';
+      } else {
+        sortState.column = col;
+        sortState.dir = 'asc';
+      }
+      updateSortIndicators();
+      if (allLicenses.length > 0) renderRows();
+    });
+  });
 
   tbody.addEventListener('click', function (e) {
     var copyBtn = e.target.closest('[data-copy]');
@@ -1306,6 +1587,7 @@
         activationsHtml +
       '</div>' +
       '<div class="drawer-section drawer-actions">' +
+        '<button class="btn btn-ghost" data-action="copy-setup">Copy setup instructions</button>' +
         revokeAction +
       '</div>';
   }
@@ -1348,8 +1630,23 @@
       openConfirm('Free this seat', 'Free this seat? The machine will need to reactivate to use the app again.', function () {
         freeSeat(key, machineId);
       });
+    } else if (action === 'copy-setup') {
+      copyToClipboard(setupInstructionsText(currentDetail), target);
     }
   });
+
+  function setupInstructionsText(detail) {
+    return [
+      'AskToto setup instructions',
+      '',
+      'Server URL: ' + window.location.origin,
+      'License key: ' + detail.licenseKey,
+      '',
+      '1. Open AskToto.',
+      '2. Go to Settings, then About, then License.',
+      '3. Paste the server URL and license key above, then click Activate.',
+    ].join('\n');
+  }
 
   function setRevoked(key, revoked) {
     var path = '/admin/licenses/' + encodeURIComponent(key) + '/' + (revoked ? 'revoke' : 'unrevoke');
@@ -1596,6 +1893,14 @@
   nlCreateBtn.addEventListener('click', submitNewLicense);
   nlDoneBtn.addEventListener('click', closeNewLicenseModal);
   nlCopyBtn.addEventListener('click', function () { copyToClipboard(nlKeyDisplay.textContent, nlCopyBtn); });
+
+  newLicenseModal.addEventListener('keydown', function (e) {
+    if (e.key !== 'Enter') return;
+    if (nlFormView.classList.contains('hidden')) return;
+    if (e.target.tagName === 'TEXTAREA') return;
+    e.preventDefault();
+    submitNewLicense();
+  });
 
   drawerOverlay.addEventListener('click', closeDrawer);
   modalOverlay.addEventListener('click', function () {

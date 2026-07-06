@@ -42,6 +42,7 @@ Environment variables:
 | `PORT`                | `8420`                       | HTTP port to listen on                                                 |
 | `LICENSE_ADMIN_TOKEN`  | *(unset)*                    | Required for `/admin/*` routes. If unset, those routes return `503`.   |
 | `LICENSE_DB_PATH`      | `license-server/data/licenses.json` | Where the JSON data file lives. Point this at a persistent volume in production. |
+| `TRUST_PROXY`          | *(unset)*                    | Set to `1` ONLY when the server sits behind a reverse proxy (the deploy/ Caddy stack, Fly, nginx, Cloudflare) so per-client rate limiting and the admin lockout key on the real client IP. Leave unset when directly exposed, so a spoofed `X-Forwarded-For` can't be used to dodge those limits. |
 
 ## Deploying
 
@@ -210,11 +211,27 @@ the two apart (see below).
 - `{ ok: true }` on success
 - `{ ok: false, error: "not_found" }` — unknown license key, or machine wasn't activated
 
+**`GET /health`** — unauthenticated, for uptime/monitoring checks.
+
+→ `{ ok: true, version, uptimeSeconds, licenseCount }` — `version` is this
+server's `package.json` version, `uptimeSeconds` is how long this server
+process has been up, `licenseCount` is the total number of licenses in the
+store.
+
 ### Admin endpoints
 
 All require header `Authorization: Bearer <LICENSE_ADMIN_TOKEN>`. If the
 server has no `LICENSE_ADMIN_TOKEN` configured, every admin route returns
 `503` rather than silently allowing or denying.
+
+The bearer token is the entire security model for these routes, so failed
+auth attempts are rate-limited per IP: after 10 failed attempts from one IP
+within 15 minutes, that IP gets `429 { ok: false, error: "too_many_attempts" }`
+for the rest of the window — even if it then supplies the correct token. A
+successful auth from that IP clears its failure count. (The `503`
+admin-disabled response never counts as a failed attempt.) This is separate,
+in-process, per-server-instance state, independent of the `/activate`
+`/heartbeat` rate limiter.
 
 **`POST /admin/licenses`** — `{ companyName, seatCap, expiresAt?, contactName?, contactEmail?, notes? }`
 → `{ licenseKey, companyName, seatCap, expiresAt }`
@@ -230,6 +247,30 @@ the `activations` array (`machineId`, `machineName`, `activatedAt`, `lastSeenAt`
 **`GET /admin/licenses.csv`** → `text/csv`, one row per license:
 `companyName,licenseKey,seatCap,seatsUsed,activeSeats30d,revoked,createdAt,expiresAt,contactName,contactEmail`
 (ISO dates, RFC4180 quoting)
+
+**`GET /admin/stats`** → dashboard summary, computed in a single pass over the store:
+
+```json
+{
+  "totalLicenses": 12,
+  "activeLicenses": 9,
+  "revokedLicenses": 2,
+  "expiredLicenses": 1,
+  "totalSeatCap": 340,
+  "totalSeatsUsed": 118,
+  "totalActive30d": 97,
+  "expiringSoon": [
+    { "licenseKey": "ATK-...", "companyName": "Acme Corp", "expiresAt": 1234567890000 }
+  ]
+}
+```
+
+`activeLicenses` = not revoked and not expired. `expiredLicenses` = every license whose `expiresAt`
+has passed (`<= now`), regardless of `revoked`. `revokedLicenses` = every revoked license, regardless
+of expiry — so a license that is both revoked and expired counts in both. `totalActive30d` sums, across
+every license, the activations whose `lastSeenAt` falls within the last 30 days (same convention as
+`activeSeats30d` above — it doesn't care whether the license itself is active). `expiringSoon` lists
+not-revoked, not-yet-expired licenses whose `expiresAt` falls within the next 30 days, soonest first.
 
 **`POST /admin/licenses/:key/revoke`** → sets `revoked: true`, returns full detail
 

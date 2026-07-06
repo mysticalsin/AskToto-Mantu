@@ -7,6 +7,11 @@ primary_region = 'iad'  # pick the region closest to you or your customers
 
 [build]
 
+[env]
+  # Fly's edge proxy fronts the app and sets the real client IP in X-Forwarded-For; trust it so the
+  # rate limiter + admin brute-force lockout key on each real client, not Fly's single proxy IP.
+  TRUST_PROXY = '1'
+
 [http_service]
   internal_port = 8420 # matches the server's PORT default (server.mjs / Dockerfile)
   force_https = true
