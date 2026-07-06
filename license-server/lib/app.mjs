@@ -1,10 +1,27 @@
 import express from 'express';
 import { createHash, timingSafeEqual } from 'node:crypto';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
 import { generateLicenseKey, licenseStatus, successPayload, adminListView, adminDetailView } from './license.mjs';
+import { toCsv } from './csv.mjs';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+// Read once at startup (module load), not per-request — the page is static
+// and identical for every request, so there's no reason to hit the
+// filesystem on every GET /admin/ui.
+const ADMIN_UI_HTML = readFileSync(path.join(__dirname, '..', 'admin', 'index.html'), 'utf8');
 
 const MAX_ID_LEN = 200;
+const MAX_NOTES_LEN = 2000;
+const AUDIT_DEFAULT_LIMIT = 200;
+const AUDIT_MAX_LIMIT = 1000;
 const idString = z.string().trim().min(1).max(MAX_ID_LEN);
+const contactNameField = z.string().trim().max(MAX_ID_LEN).optional();
+const contactEmailField = z.string().trim().max(MAX_ID_LEN).optional();
+const notesField = z.string().trim().max(MAX_NOTES_LEN).optional();
 
 const activateSchema = z.object({
   licenseKey: idString,
@@ -26,16 +43,28 @@ const adminCreateSchema = z.object({
   companyName: z.string().trim().min(1).max(MAX_ID_LEN),
   seatCap: z.number().int().positive(),
   expiresAt: z.number().int().nonnegative().nullable().optional(),
+  contactName: contactNameField,
+  contactEmail: contactEmailField,
+  notes: notesField,
 });
 
 const adminPatchSchema = z
   .object({
     seatCap: z.number().int().positive().optional(),
     expiresAt: z.number().int().nonnegative().nullable().optional(),
+    contactName: contactNameField,
+    contactEmail: contactEmailField,
+    notes: notesField,
   })
-  .refine((body) => body.seatCap !== undefined || body.expiresAt !== undefined, {
-    message: 'at least one of seatCap or expiresAt must be provided',
-  });
+  .refine(
+    (body) =>
+      body.seatCap !== undefined ||
+      body.expiresAt !== undefined ||
+      body.contactName !== undefined ||
+      body.contactEmail !== undefined ||
+      body.notes !== undefined,
+    { message: 'at least one field must be provided' }
+  );
 
 function badRequest(res, parseResult) {
   return res.status(400).json({
@@ -45,10 +74,10 @@ function badRequest(res, parseResult) {
   });
 }
 
-// Builds the Express app around a given store. Kept as a factory (rather
-// than a module-level singleton) so tests can spin up isolated instances
-// against isolated temp-file stores.
-export function createApp(store) {
+// Builds the Express app around a given store + audit log. Kept as a
+// factory (rather than a module-level singleton) so tests can spin up
+// isolated instances against isolated temp-file stores.
+export function createApp(store, auditLog) {
   const app = express();
   app.use(express.json());
 
@@ -133,35 +162,60 @@ export function createApp(store) {
 
     license.activations.splice(idx, 1);
     store.persist();
+    // /deactivate itself needs no auth (the app frees its own seat), but the
+    // dashboard's "free seat" button calls this same route with the admin
+    // bearer token attached — distinguish the two in the audit trail.
+    auditLog.record({
+      action: isValidAdminToken(req) ? 'deactivate_admin' : 'deactivate',
+      licenseKey,
+      details: { machineId },
+    });
     return res.json({ ok: true });
   });
 
-  function requireAdmin(req, res, next) {
+  // timingSafeEqual so response time never leaks how much of the token matched. Both sides are
+  // hashed first because timingSafeEqual requires equal-length buffers (a raw length check would
+  // itself leak the token's length).
+  function isValidAdminToken(req) {
     const token = process.env.LICENSE_ADMIN_TOKEN;
-    if (!token) {
+    if (!token) return false;
+    const header = req.get('authorization') || '';
+    const [scheme, value] = header.split(' ');
+    const a = createHash('sha256').update(String(value || '')).digest();
+    const b = createHash('sha256').update(token).digest();
+    return scheme === 'Bearer' && !!value && timingSafeEqual(a, b);
+  }
+
+  function requireAdmin(req, res, next) {
+    if (!process.env.LICENSE_ADMIN_TOKEN) {
       return res.status(503).json({
         ok: false,
         error: 'admin_disabled',
         message: 'LICENSE_ADMIN_TOKEN is not set on this server — admin routes are disabled until it is configured.',
       });
     }
-    const header = req.get('authorization') || '';
-    const [scheme, value] = header.split(' ');
-    // timingSafeEqual so response time never leaks how much of the token matched. Both sides are
-    // hashed first because timingSafeEqual requires equal-length buffers (a raw length check would
-    // itself leak the token's length).
-    const a = createHash('sha256').update(String(value || '')).digest();
-    const b = createHash('sha256').update(token).digest();
-    if (scheme !== 'Bearer' || !value || !timingSafeEqual(a, b)) {
+    if (!isValidAdminToken(req)) {
       return res.status(401).json({ ok: false, error: 'unauthorized' });
     }
     return next();
   }
 
+  // Static admin dashboard. The page itself carries no secrets — it's a
+  // token-gated client that prompts for the admin bearer token and calls the
+  // already-gated /admin/* API routes below with it — so serving it needs no
+  // auth of its own.
+  app.get('/admin/ui', (req, res) => {
+    res.type('html').send(ADMIN_UI_HTML);
+  });
+
+  app.get('/admin', (req, res) => {
+    res.redirect('/admin/ui');
+  });
+
   app.post('/admin/licenses', requireAdmin, (req, res) => {
     const parsed = adminCreateSchema.safeParse(req.body);
     if (!parsed.success) return badRequest(res, parsed);
-    const { companyName, seatCap, expiresAt } = parsed.data;
+    const { companyName, seatCap, expiresAt, contactName, contactEmail, notes } = parsed.data;
 
     let licenseKey = generateLicenseKey();
     while (store.findByKey(licenseKey)) {
@@ -176,8 +230,16 @@ export function createApp(store) {
       expiresAt: expiresAt ?? null,
       revoked: false,
       activations: [],
+      contactName: contactName ?? '',
+      contactEmail: contactEmail ?? '',
+      notes: notes ?? '',
     };
     store.addLicense(license);
+    auditLog.record({
+      action: 'create',
+      licenseKey: license.licenseKey,
+      details: { companyName, seatCap, expiresAt: license.expiresAt },
+    });
 
     return res.status(201).json({
       licenseKey: license.licenseKey,
@@ -191,6 +253,38 @@ export function createApp(store) {
     res.json(store.getAll().map(adminListView));
   });
 
+  app.get('/admin/licenses.csv', requireAdmin, (req, res) => {
+    const header = [
+      'companyName',
+      'licenseKey',
+      'seatCap',
+      'seatsUsed',
+      'activeSeats30d',
+      'revoked',
+      'createdAt',
+      'expiresAt',
+      'contactName',
+      'contactEmail',
+    ];
+    const rows = store.getAll().map((license) => {
+      const detail = adminDetailView(license);
+      return [
+        detail.companyName,
+        detail.licenseKey,
+        detail.seatCap,
+        detail.seatsUsed,
+        detail.activeSeats30d,
+        detail.revoked,
+        new Date(detail.createdAt).toISOString(),
+        detail.expiresAt !== null && detail.expiresAt !== undefined ? new Date(detail.expiresAt).toISOString() : '',
+        detail.contactName,
+        detail.contactEmail,
+      ];
+    });
+    res.set('Content-Disposition', 'attachment; filename="licenses.csv"');
+    res.type('csv').send(toCsv([header, ...rows]));
+  });
+
   app.get('/admin/licenses/:key', requireAdmin, (req, res) => {
     const license = store.findByKey(req.params.key);
     if (!license) return res.status(404).json({ ok: false, error: 'not_found' });
@@ -202,6 +296,7 @@ export function createApp(store) {
     if (!license) return res.status(404).json({ ok: false, error: 'not_found' });
     license.revoked = true;
     store.persist();
+    auditLog.record({ action: 'revoke', licenseKey: license.licenseKey, details: { companyName: license.companyName } });
     return res.json(adminDetailView(license));
   });
 
@@ -210,6 +305,7 @@ export function createApp(store) {
     if (!license) return res.status(404).json({ ok: false, error: 'not_found' });
     license.revoked = false;
     store.persist();
+    auditLog.record({ action: 'unrevoke', licenseKey: license.licenseKey, details: { companyName: license.companyName } });
     return res.json(adminDetailView(license));
   });
 
@@ -222,8 +318,30 @@ export function createApp(store) {
 
     if (parsed.data.seatCap !== undefined) license.seatCap = parsed.data.seatCap;
     if (parsed.data.expiresAt !== undefined) license.expiresAt = parsed.data.expiresAt;
+    if (parsed.data.contactName !== undefined) license.contactName = parsed.data.contactName;
+    if (parsed.data.contactEmail !== undefined) license.contactEmail = parsed.data.contactEmail;
+    if (parsed.data.notes !== undefined) license.notes = parsed.data.notes;
     store.persist();
+    auditLog.record({ action: 'patch', licenseKey: license.licenseKey, details: parsed.data });
     return res.json(adminDetailView(license));
+  });
+
+  // Permanent removal — for mis-mints and test licenses only; a real customer offboarding should be
+  // a REVOKE so the record stays visible. The audit line preserves the license snapshot, so even a
+  // delete leaves a durable trace in audit.jsonl.
+  app.delete('/admin/licenses/:key', requireAdmin, (req, res) => {
+    const license = store.findByKey(req.params.key);
+    if (!license) return res.status(404).json({ ok: false, error: 'not_found' });
+    auditLog.record({ action: 'delete', licenseKey: license.licenseKey, details: adminListView(license) });
+    store.removeLicense(license.licenseKey);
+    return res.json({ ok: true });
+  });
+
+  app.get('/admin/audit', requireAdmin, async (req, res) => {
+    const requested = Number(req.query.limit);
+    const limit = Number.isInteger(requested) && requested > 0 ? Math.min(requested, AUDIT_MAX_LIMIT) : AUDIT_DEFAULT_LIMIT;
+    const entries = await auditLog.readLast(limit);
+    res.json(entries);
   });
 
   app.get('/health', (req, res) => {

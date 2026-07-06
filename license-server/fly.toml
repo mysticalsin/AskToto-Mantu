@@ -1,0 +1,30 @@
+# Fly.io app config for the AskToto license server.
+# See README.md "Deploy to Fly.io" for the exact command sequence
+# (fly launch --no-deploy, fly volumes create, fly secrets set, fly deploy).
+
+app = 'asktoto-license' # rename before launch if this name is already taken
+primary_region = 'iad'  # pick the region closest to you or your customers
+
+[build]
+
+[http_service]
+  internal_port = 8420 # matches the server's PORT default (server.mjs / Dockerfile)
+  force_https = true
+  auto_stop_machines = 'off' # stay up: clients heartbeat and activate at arbitrary times
+  auto_start_machines = true
+  min_machines_running = 1
+
+  [[http_service.checks]]
+    interval = '15s'
+    timeout = '5s'
+    grace_period = '5s'
+    method = 'GET'
+    path = '/health'
+
+# Persists data/licenses.json and data/audit.jsonl across deploys and restarts.
+# The server's default LICENSE_DB_PATH resolves to /app/data/licenses.json
+# inside this container (WORKDIR /app in the Dockerfile), which is exactly
+# this mount's destination — so no LICENSE_DB_PATH env var is needed here.
+[[mounts]]
+  source = 'license_data'
+  destination = '/app/data'

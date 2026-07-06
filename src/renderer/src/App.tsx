@@ -14,6 +14,7 @@ const BrainView = lazy(() => import('./components/BrainView').then((m) => ({ def
 const Answer = lazy(() => import('./components/Answer').then((m) => ({ default: m.Answer })))
 const Copilot = lazy(() => import('./components/Copilot').then((m) => ({ default: m.Copilot })))
 import { SignInWall } from './components/SignInWall'
+import { LicenseGate } from './components/LicenseGate'
 import { UpdateReadyToast } from './components/UpdateReadyToast'
 import { NewMeetingToast } from './components/NewMeetingToast'
 import { RecordingConsentReminder } from './components/RecordingConsentReminder'
@@ -22,7 +23,7 @@ import { useAsk, useAutoResize, useSettings, useAuth } from './state'
 import { useWindowDrag } from './lib/window-drag'
 import { useListen, playListenChime } from './lib/listen'
 import { playCue, playClick, setSoundsEnabled } from './lib/sound'
-import type { HotkeyAction, TranscriptLine, ConversationMode, ChatTurn } from '@shared/ipc'
+import type { HotkeyAction, TranscriptLine, ConversationMode, ChatTurn, LicenseGateVerdict } from '@shared/ipc'
 import { PROVIDERS, isDustReady } from '@shared/providers'
 import { ASSIST_PROMPT, buildNoDecisionPrompt } from '@shared/prompts'
 import { detectNoDecisionEnding } from '@shared/wrapup'
@@ -118,6 +119,32 @@ export function App(): JSX.Element {
 
   const { settings, patch, saveKey, clearKey, testKey, refresh } = useSettings()
   const auth = useAuth() // Azure AD gate (only enforces when configured)
+
+  // License gate verdict (main/license.ts checkLicenseGrace(), via the license:gate IPC channel). Only
+  // fetched while settings.licenseGateEnabled is true — the shipped default is false, so this adds zero
+  // extra IPC calls for the overwhelming majority of installs. Re-fetches if the flag flips mid-session.
+  const [licenseGate, setLicenseGate] = useState<LicenseGateVerdict | null>(null)
+  useEffect(() => {
+    if (!settings?.licenseGateEnabled) {
+      setLicenseGate(null)
+      return
+    }
+    let cancelled = false
+    void window.toto.licenseGate().then((v) => {
+      if (!cancelled) setLicenseGate(v)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [settings?.licenseGateEnabled])
+  // Re-fetches the verdict AND the underlying settings (a successful activation changes both
+  // licenseServerUrl and the server-authoritative license fields) — used by LicenseGate's Activate and
+  // Retry actions. The gate drops on its own, once `licenseGate.allowed` flips true, on the next render.
+  const recheckLicenseGate = useCallback(async () => {
+    const [verdict] = await Promise.all([window.toto.licenseGate(), refresh()])
+    setLicenseGate(verdict)
+  }, [refresh])
+
   const ask = useAsk() // answer view + recap
   const suggest = useAsk() // live copilot card
   const followup = useAsk() // Review screen's follow-up draft — must NOT reuse `ask`, which already holds the recap there
@@ -1562,17 +1589,35 @@ export function App(): JSX.Element {
                   ? reviewBody
                   : answerBody
 
+  // A license-gate verdict is only ever pending when the gate itself is on (default off) — and
+  // settings.licenseGateEnabled is already known the moment `settings` resolves, so this adds no extra
+  // wait for the common case of an unlicensed build.
+  const licenseGatePending = settings?.licenseGateEnabled === true && licenseGate == null
+
   // Until settings AND auth resolve, render only a slim loading strip — never an interactive surface.
   // This closes the first-run flash and the auth-gate-fail-open window: the SSO and onboarding gates
   // below are skipped while their state is null, which would otherwise paint a usable bar before sign-in
   // is enforced and before the no-key CTA can render. (DEMO bypasses this so screenshots still work.)
-  if (DEMO == null && (settings == null || auth.status == null)) {
+  if (DEMO == null && (settings == null || auth.status == null || licenseGatePending)) {
     return (
       <div ref={setRoot} {...windowDrag} className="w-full p-1.5">
         <div className="glass flex h-[38px] w-full items-center gap-2.5 rounded-full px-4">
           <span className="h-2 w-2 animate-pulse rounded-full bg-[var(--color-accent)]" />
           <span className="font-ui text-[12px] text-[color:var(--color-ink-3)]">Starting AskToto…</span>
         </div>
+      </div>
+    )
+  }
+
+  // License gate — outranks SSO and onboarding below: a revoked or unlicensed device must learn that
+  // before it ever burns an SSO sign-in round trip (or sits behind onboarding). Only ever renders when
+  // the gate is on (settings.licenseGateEnabled) AND the verdict says this device isn't allowed to run.
+  if (DEMO == null && settings?.licenseGateEnabled && licenseGate && !licenseGate.allowed) {
+    return (
+      <div ref={setRoot} {...windowDrag} className="flex w-full flex-col gap-2 p-1.5">
+        <Panel>
+          <LicenseGate settings={settings} reason={licenseGate.reason} onRecheck={recheckLicenseGate} />
+        </Panel>
       </div>
     )
   }

@@ -10,8 +10,9 @@
   },
   "scripts": {
     "start": "node server.mjs",
-    "test": "node --test server.test.mjs",
-    "generate-license": "node scripts/generate-license.mjs"
+    "test": "node --test",
+    "generate-license": "node scripts/generate-license.mjs",
+    "backup": "node scripts/backup.mjs"
   },
   "dependencies": {
     "express": "^4.21.2",

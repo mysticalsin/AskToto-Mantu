@@ -71,6 +71,15 @@ export function createStore(dbPath) {
     return license;
   }
 
+  function removeLicense(licenseKey) {
+    const all = getAll();
+    const idx = all.findIndex((l) => l.licenseKey === licenseKey);
+    if (idx === -1) return false;
+    all.splice(idx, 1);
+    persist();
+    return true;
+  }
+
   // Resolves once every write enqueued so far has settled. Route handlers
   // don't need this (persist() is intentionally fire-and-forget so requests
   // aren't held open on disk I/O), but graceful shutdown and tests do — both
@@ -85,6 +94,7 @@ export function createStore(dbPath) {
     getAll,
     findByKey,
     addLicense,
+    removeLicense,
     persist,
     idle,
     get dbPath() {

@@ -189,6 +189,41 @@ describe('license.ts — phone-home activation', () => {
     })
   })
 
+  // The license:gate IPC handler (main/index.ts) constructs its verdict as
+  // `{ gateEnabled: getSettings().licenseGateEnabled, ...checkLicenseGrace() }` — deliberately NOT
+  // behind requireAuth(), since it's what App.tsx's boot gate reads before SSO even resolves. These
+  // pin that exact merged shape, since it's the contract LicenseGate.tsx (renderer) depends on.
+  describe('gate verdict shape (mirrors the license:gate IPC handler)', () => {
+    it('gate disabled -> allowed, with gateEnabled:false and no fetch', () => {
+      testSettings = baseSettings({ licenseGateEnabled: false })
+
+      const verdict = { gateEnabled: testSettings.licenseGateEnabled, ...checkLicenseGrace() }
+
+      expect(verdict).toEqual({ gateEnabled: false, allowed: true })
+      expect(fetchMock).not.toHaveBeenCalled()
+    })
+
+    it('gate on, valid within grace -> allowed, with gateEnabled:true', () => {
+      testSettings = baseSettings({
+        licenseGateEnabled: true,
+        licenseValid: true,
+        licenseLastValidatedAt: Date.now() - 1 * DAY
+      })
+
+      const verdict = { gateEnabled: testSettings.licenseGateEnabled, ...checkLicenseGrace() }
+
+      expect(verdict).toEqual({ gateEnabled: true, allowed: true })
+    })
+
+    it('gate on, never activated -> blocked with reason not_activated', () => {
+      testSettings = baseSettings({ licenseGateEnabled: true, licenseValid: false })
+
+      const verdict = { gateEnabled: testSettings.licenseGateEnabled, ...checkLicenseGrace() }
+
+      expect(verdict).toEqual({ gateEnabled: true, allowed: false, reason: 'not_activated' })
+    })
+  })
+
   describe('heartbeat', () => {
     it('a network failure does not flip licenseValid to false', async () => {
       testSettings = baseSettings({

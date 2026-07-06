@@ -115,7 +115,7 @@ import { importDustCliSession, refreshDustCliSession, setupDustCli } from './dus
 import { detectCli, testCli, setupCli, installCli, loginCli, prewarmCli } from './cli'
 import { connectBidstack, pushToBidstack } from './mcp/bidstackClient'
 import { detectNotebookLmCli, installNotebookLmCli, connectNotebookLm, askNotebookLm } from './mcp/notebooklm'
-import { activateLicense } from './license'
+import { activateLicense, checkLicenseGrace, heartbeat } from './license'
 import {
   setBidstackApiKey,
   getBidstackApiKey,
@@ -905,7 +905,11 @@ function registerIpc(): void {
   // --- Licensing (phone-home activation; see main/license.ts) ---
   ipcMain.handle(IPC.licenseActivate, async (e, payload: unknown) => {
     assertMainWindow(e)
-    if (!requireAuth()) return { ok: false, error: 'Sign in with your Mantu account first.' }
+    // No requireAuth() here on purpose: license enforcement outranks SSO (see the boot-gate ordering in
+    // App.tsx). If activation required a signed-in session, a device blocked by the license gate could
+    // never activate before reaching the SSO screen — a sign-in-to-activate / activate-to-sign-in
+    // deadlock. The license key itself is the credential being checked; there's nothing an SSO session
+    // would additionally protect here.
     const parsed = LicenseActivatePayloadSchema.safeParse(payload)
     if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message || 'Invalid input.' }
     return activateLicense(parsed.data.serverUrl, parsed.data.licenseKey)
@@ -935,6 +939,15 @@ function registerIpc(): void {
       licenseLastValidatedAt: s.licenseLastValidatedAt,
       licenseGateEnabled: s.licenseGateEnabled
     }
+  })
+  // Startup-gate verdict for App.tsx's <LicenseGate/>. Deliberately NOT behind requireAuth(): this is
+  // the check that decides whether the app runs at all, so it must be reachable even before an SSO
+  // sign-in — otherwise a revoked/unlicensed customer would be stuck behind (or burn) an SSO round trip
+  // before ever learning why they're blocked. Nothing here is sensitive beyond gateEnabled/allowed/reason.
+  ipcMain.handle(IPC.licenseGate, (e) => {
+    assertMainWindow(e)
+    const verdict = checkLicenseGrace()
+    return { gateEnabled: getSettings().licenseGateEnabled, ...verdict }
   })
 
   // --- Provider API keys ---
@@ -2267,6 +2280,18 @@ if (!app.requestSingleInstanceLock()) {
   // its ~1h life, so it never expires mid-meeting and the user never sees a Dust reconnect. The
   // single-flight guard inside refreshDustCliSession makes this safe alongside the on-401 path.
   setInterval(() => refreshAndPersistDust('interval'), 10 * 60 * 1000)
+
+  // License re-validation, same fire-and-forget lifetime interval as the Dust keep-warm above: skips
+  // entirely unless the gate is actually on and this device is currently activated, so an unlicensed
+  // build (the shipped default) never touches the network here. For an always-on machine that's
+  // offline for days, this is what lands a revocation within half a day instead of waiting for the
+  // renderer's own once-per-launch check (which only runs at the next relaunch).
+  setInterval(
+    () => {
+      if (getSettings().licenseGateEnabled && getSettings().licenseValid) void heartbeat()
+    },
+    12 * 60 * 60 * 1000
+  )
 
   // createTray/registerShortcuts stay ahead of createWindow (see the boot-order comment above) — but
   // registerIpc has no such dependency: every ipcMain.handle closure inside it reads `win`/`tray` lazily

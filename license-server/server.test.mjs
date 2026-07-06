@@ -5,11 +5,14 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { createApp } from './lib/app.mjs';
 import { createStore } from './lib/store.mjs';
+import { createAuditLog } from './lib/audit.mjs';
 
 const ADMIN_TOKEN = 'test-admin-token';
+const THIRTY_ONE_DAYS_MS = 31 * 24 * 60 * 60 * 1000;
 
 let server;
 let store;
+let auditLog;
 let baseUrl;
 let tmpDir;
 let previousAdminToken;
@@ -19,7 +22,8 @@ async function startServer() {
   const dbPath = path.join(tmpDir, 'licenses.json');
   store = createStore(dbPath);
   await store.load();
-  const app = createApp(store);
+  auditLog = createAuditLog(dbPath);
+  const app = createApp(store, auditLog);
   server = app.listen(0);
   await new Promise((resolve) => server.once('listening', resolve));
   const { port } = server.address();
@@ -33,6 +37,7 @@ async function stopServer() {
   // Wait for any writes still in flight before deleting the data directory,
   // otherwise a pending rename() can race the rm() and throw ENOENT/EINVAL.
   await store.idle();
+  await auditLog.idle();
   await rm(tmpDir, { recursive: true, force: true });
 }
 
@@ -72,6 +77,12 @@ async function patch(pathname, body, headers = {}) {
 
 async function get(pathname, headers = {}) {
   const res = await fetch(`${baseUrl}${pathname}`, { headers });
+  const json = await res.json().catch(() => null);
+  return { status: res.status, json };
+}
+
+async function del(pathname, headers = {}) {
+  const res = await fetch(`${baseUrl}${pathname}`, { method: 'DELETE', headers });
   const json = await res.json().catch(() => null);
   return { status: res.status, json };
 }
@@ -166,6 +177,30 @@ describe('license-server', () => {
     assert.deepEqual(heartbeat.json, { ok: false, error: 'revoked' });
   });
 
+  it('delete permanently removes a license, audits a snapshot, and requires the admin token', async () => {
+    seedLicense({ seatCap: 2 });
+
+    const unauthorized = await del('/admin/licenses/ATK-0000000000000000TEST');
+    assert.equal(unauthorized.status, 401);
+
+    const deleted = await del('/admin/licenses/ATK-0000000000000000TEST', adminHeaders());
+    assert.equal(deleted.status, 200);
+    assert.deepEqual(deleted.json, { ok: true });
+
+    const detail = await get('/admin/licenses/ATK-0000000000000000TEST', adminHeaders());
+    assert.equal(detail.status, 404);
+
+    const again = await del('/admin/licenses/ATK-0000000000000000TEST', adminHeaders());
+    assert.equal(again.status, 404);
+
+    const audit = await get('/admin/audit', adminHeaders());
+    assert.equal(audit.status, 200);
+    const entry = audit.json.find((e) => e.action === 'delete');
+    assert.ok(entry, 'delete action is audited');
+    assert.equal(entry.licenseKey, 'ATK-0000000000000000TEST');
+    assert.equal(entry.details.companyName, 'Acme Corp');
+  });
+
   it('deactivate frees a seat for a new activation', async () => {
     seedLicense({ seatCap: 1 });
     await post('/activate', { licenseKey: 'ATK-0000000000000000TEST', machineId: 'machine-1' });
@@ -234,5 +269,115 @@ describe('license-server', () => {
     assert.equal(patched.status, 200);
     assert.equal(patched.json.seatCap, 10);
     assert.ok(Array.isArray(patched.json.activations));
+  });
+
+  it('GET /admin/ui serves the admin dashboard page without requiring auth', async () => {
+    const res = await fetch(`${baseUrl}/admin/ui`);
+    assert.equal(res.status, 200);
+    assert.match(res.headers.get('content-type') || '', /text\/html/);
+    const body = await res.text();
+    assert.match(body, /AskToto licenses/);
+  });
+
+  it('GET /admin redirects to /admin/ui', async () => {
+    const res = await fetch(`${baseUrl}/admin`, { redirect: 'manual' });
+    assert.equal(res.status, 302);
+    assert.equal(res.headers.get('location'), '/admin/ui');
+  });
+
+  it('metadata round-trips through create, detail, list, and patch', async () => {
+    const created = await post(
+      '/admin/licenses',
+      {
+        companyName: 'Meta Co',
+        seatCap: 3,
+        contactName: 'Jane Doe',
+        contactEmail: 'jane@meta.co',
+        notes: 'Signed on the enterprise plan.',
+      },
+      adminHeaders()
+    );
+    assert.equal(created.status, 201);
+
+    const detail = await get(`/admin/licenses/${created.json.licenseKey}`, adminHeaders());
+    assert.equal(detail.json.contactName, 'Jane Doe');
+    assert.equal(detail.json.contactEmail, 'jane@meta.co');
+    assert.equal(detail.json.notes, 'Signed on the enterprise plan.');
+
+    const list = await get('/admin/licenses', adminHeaders());
+    const entry = list.json.find((l) => l.licenseKey === created.json.licenseKey);
+    assert.equal(entry.contactName, 'Jane Doe');
+    assert.equal(entry.notes, undefined, 'list view must not include notes');
+    assert.equal(entry.contactEmail, undefined, 'list view must not include contactEmail');
+
+    const patched = await patch(`/admin/licenses/${created.json.licenseKey}`, { notes: 'Renewed for another year.' }, adminHeaders());
+    assert.equal(patched.status, 200);
+    assert.equal(patched.json.notes, 'Renewed for another year.');
+    assert.equal(patched.json.contactName, 'Jane Doe', 'unrelated metadata fields survive a partial patch');
+  });
+
+  it('defaults missing metadata fields to empty strings for pre-existing licenses', async () => {
+    seedLicense({ seatCap: 1 }); // no contactName/contactEmail/notes on this record at all
+    const detail = await get('/admin/licenses/ATK-0000000000000000TEST', adminHeaders());
+    assert.equal(detail.json.contactName, '');
+    assert.equal(detail.json.contactEmail, '');
+    assert.equal(detail.json.notes, '');
+  });
+
+  it('records an audit entry for create and revoke, newest first', async () => {
+    const created = await post('/admin/licenses', { companyName: 'Audit Co', seatCap: 2 }, adminHeaders());
+    await post(`/admin/licenses/${created.json.licenseKey}/revoke`, {}, adminHeaders());
+    await auditLog.idle();
+
+    const audit = await get('/admin/audit', adminHeaders());
+    assert.equal(audit.status, 200);
+    assert.ok(Array.isArray(audit.json));
+    assert.equal(audit.json[0].action, 'revoke');
+    assert.equal(audit.json[0].licenseKey, created.json.licenseKey);
+    assert.ok(typeof audit.json[0].at === 'number');
+
+    const createEntry = audit.json.find((e) => e.action === 'create' && e.licenseKey === created.json.licenseKey);
+    assert.ok(createEntry, 'create action should be recorded');
+  });
+
+  it('activeSeats30d counts only activations seen within the last 30 days', async () => {
+    const license = seedLicense({
+      seatCap: 2,
+      activations: [
+        { machineId: 'fresh', machineName: 'Fresh', activatedAt: Date.now(), lastSeenAt: Date.now() },
+        { machineId: 'stale', machineName: 'Stale', activatedAt: Date.now(), lastSeenAt: Date.now() },
+      ],
+    });
+    // Backdate one activation's lastSeenAt via the store, past the 30-day window.
+    const stored = store.findByKey(license.licenseKey);
+    stored.activations.find((a) => a.machineId === 'stale').lastSeenAt = Date.now() - THIRTY_ONE_DAYS_MS;
+
+    const list = await get('/admin/licenses', adminHeaders());
+    const entry = list.json.find((l) => l.licenseKey === license.licenseKey);
+    assert.equal(entry.seatsUsed, 2);
+    assert.equal(entry.activeSeats30d, 1);
+  });
+
+  it('CSV export returns a header row and quotes fields that need it', async () => {
+    await post('/admin/licenses', { companyName: 'Comma, Inc.', seatCap: 4 }, adminHeaders());
+
+    const res = await fetch(`${baseUrl}/admin/licenses.csv`, { headers: adminHeaders() });
+    assert.equal(res.status, 200);
+    assert.match(res.headers.get('content-type') || '', /text\/csv/);
+    const body = await res.text();
+    const [header, ...rows] = body.split('\r\n');
+    assert.equal(
+      header,
+      'companyName,licenseKey,seatCap,seatsUsed,activeSeats30d,revoked,createdAt,expiresAt,contactName,contactEmail'
+    );
+    assert.ok(rows.some((row) => row.startsWith('"Comma, Inc."')));
+  });
+
+  it('CSV and audit endpoints require the admin token', async () => {
+    const csv = await get('/admin/licenses.csv');
+    assert.equal(csv.status, 401);
+
+    const audit = await get('/admin/audit');
+    assert.equal(audit.status, 401);
   });
 });
