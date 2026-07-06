@@ -45,6 +45,9 @@ Environment variables:
 
 ## Deploying
 
+The easiest turnkey path (your own server + a domain + automatic HTTPS) is in
+[`deploy/README.md`](deploy/README.md).
+
 This is a plain Node HTTP service — any of the following works. Pick
 whichever fits your existing infra; none of this is prescriptive. In all
 cases: the only thing that must survive restarts/redeploys is the `data/`

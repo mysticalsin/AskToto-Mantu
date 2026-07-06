@@ -1,0 +1,43 @@
+# Production deployment: license-server + Caddy in front of it.
+#
+# Caddy terminates HTTPS for your domain (LICENSE_DOMAIN) and automatically
+# fetches and renews a free Let's Encrypt certificate the first time it
+# starts, as long as DNS for that domain already points at this box and
+# ports 80 + 443 are reachable from the internet. See deploy/README.md for
+# the full walkthrough - the short version is `./run.sh`.
+#
+# license-server itself publishes no host ports here: only Caddy is exposed,
+# and it talks to license-server over the private compose network.
+services:
+  license-server:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    container_name: asktoto-license
+    restart: unless-stopped
+    environment:
+      PORT: '8420'
+      LICENSE_ADMIN_TOKEN: ${LICENSE_ADMIN_TOKEN:?set LICENSE_ADMIN_TOKEN in deploy/.env (e.g. openssl rand -hex 24)}
+    volumes:
+      - license_data:/app/data
+
+  caddy:
+    image: caddy:2-alpine
+    container_name: asktoto-license-caddy
+    restart: unless-stopped
+    depends_on:
+      - license-server
+    ports:
+      - '80:80'
+      - '443:443'
+    environment:
+      LICENSE_DOMAIN: ${LICENSE_DOMAIN:?set LICENSE_DOMAIN in deploy/.env (e.g. licenses.yourcompany.com)}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+
+volumes:
+  license_data:
+  caddy_data:
+  caddy_config:
