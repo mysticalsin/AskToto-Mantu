@@ -221,6 +221,9 @@ describe('license-server', () => {
     const gone = await get('/admin/licenses/ATK-0000000000000000TEST', adminHeaders());
     assert.equal(gone.status, 404); // the original was replaced, not merged
 
+    // record() is fire-and-forget (never blocks the request it logs) — reading the audit trail
+    // deterministically requires draining the append queue first, per audit.mjs's contract.
+    await auditLog.idle();
     const auditRestore = (await get('/admin/audit', adminHeaders())).json.find((e) => e.action === 'restore');
     assert.ok(auditRestore, 'restore is audited');
     assert.equal(auditRestore.details.restoredCount, 2);
@@ -255,6 +258,8 @@ describe('license-server', () => {
     const again = await del('/admin/licenses/ATK-0000000000000000TEST', adminHeaders());
     assert.equal(again.status, 404);
 
+    // Same fire-and-forget contract as above: drain the audit append queue before reading.
+    await auditLog.idle();
     const audit = await get('/admin/audit', adminHeaders());
     assert.equal(audit.status, 200);
     const entry = audit.json.find((e) => e.action === 'delete');
