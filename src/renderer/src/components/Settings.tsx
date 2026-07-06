@@ -577,9 +577,15 @@ function AiSection({
   const q = filter.trim().toLowerCase()
   // Dust + CLI providers have dedicated UI sections; Anthropic has its own always-visible card below —
   // exclude those from the "Experience: more models" tiles grid. Every other real provider (gemini, grok,
-  // etc.) belongs here so it stays reachable.
+  // etc.) belongs here so it stays reachable. When the org sets a data-residency allowlist, only approved
+  // providers are offered — mirroring what the main process enforces at request time.
+  const orgAllowed = settings.allowedProviders
   const shown = PROVIDER_IDS.filter(
-    (id) => !CLI_PROVIDERS.has(id) && id !== 'anthropic' && (!q || PROVIDERS[id].label.toLowerCase().includes(q))
+    (id) =>
+      !CLI_PROVIDERS.has(id) &&
+      id !== 'anthropic' &&
+      (!orgAllowed || orgAllowed.includes(id)) &&
+      (!q || PROVIDERS[id].label.toLowerCase().includes(q))
   )
   const recommended = recommendedProvider(settings)
   // True when the active provider's key field lives inside "Experience: more models" (any provider
@@ -857,6 +863,12 @@ function AiSection({
         defaultOpen={activeProviderInGrid}
       >
         <Section title="Model provider" desc="Prefer a raw model? Pick one, paste a key, and AskToto detects the provider.">
+          {orgAllowed && (
+            <div className="mb-2 flex items-center gap-1.5 rounded-lg bg-[var(--cl-primary-soft)] px-2.5 py-1.5 text-[11px] text-[color:var(--cl-muted-foreground)]">
+              <ShieldCheck size={12} className="shrink-0 text-[color:var(--cl-primary)]" />
+              Your organization restricts AskToto to approved providers.
+            </div>
+          )}
           {PROVIDER_IDS.length > 8 && (
             <div className="relative mb-2">
               <Search
@@ -4679,13 +4691,6 @@ function PermissionsSection(): JSX.Element {
       note: isWin
         ? 'Windows may ask once before capturing system audio.'
         : 'Grant in System Settings → Privacy & Security → Screen Recording.'
-    },
-    {
-      label: 'Auto-start on meeting',
-      status: permissions.accessibility,
-      note: isWin
-        ? 'No extra permission needed on Windows.'
-        : 'Grant Accessibility in System Settings → Privacy & Security.'
     }
   ]
 

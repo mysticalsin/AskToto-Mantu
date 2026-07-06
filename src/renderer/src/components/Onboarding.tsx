@@ -388,6 +388,12 @@ export function Onboarding({
     // Second path: "An API key" opens this chooser instead of hard-wiring Anthropic. CLI stays the
     // primary, first suggestion on the path screen — this is reached only after tapping "An API key".
     if (apiChooser) {
+      // Honor the org data-residency allowlist (null = unrestricted): only offer approved providers, so
+      // onboarding can't route a user to a provider every ask would then reject.
+      const allow = settings.allowedProviders
+      const featured = FEATURED_API_PROVIDERS.filter((id) => !allow || allow.includes(id))
+      const more = MORE_API_PROVIDERS.filter((id) => !allow || allow.includes(id))
+      const noneAllowed = featured.length === 0 && more.length === 0
       return (
         <div className="fade-up flex min-h-[300px] w-full flex-col items-center gap-5 px-4 py-7 text-center">
           <div className="flex flex-col items-center gap-1.5">
@@ -399,39 +405,49 @@ export function Onboarding({
               Pick your API provider
             </div>
             <p className="max-w-[460px] text-[12px] leading-snug text-[color:var(--color-ink-2)]">
-              Paste a key from any of these and AskToto connects to it. You pay your provider directly,
-              and you can switch any time in Settings.
+              {allow
+                ? 'Your organization has approved these providers. Paste a key and AskToto connects to it.'
+                : 'Paste a key from any of these and AskToto connects to it. You pay your provider directly, and you can switch any time in Settings.'}
             </p>
           </div>
 
-          <div className="flex w-full max-w-[460px] flex-col gap-2.5">
-            {FEATURED_API_PROVIDERS.map((id) => (
-              <ProviderOption
-                key={id}
-                icon={KeyRound}
-                title={PROVIDERS[id].label}
-                desc={PROVIDERS[id].blurb}
-                onClick={() => choose(id)}
-              />
-            ))}
-          </div>
+          {noneAllowed ? (
+            <p className="max-w-[460px] rounded-lg bg-[var(--color-warn,#fac775)]/10 px-3 py-2 text-[12px] text-[color:var(--color-ink-2)]">
+              Your organization hasn&apos;t approved any API-key providers. Use a CLI option or Mantu Dust
+              instead, or ask your IT team.
+            </p>
+          ) : (
+            <div className="flex w-full max-w-[460px] flex-col gap-2.5">
+              {featured.map((id) => (
+                <ProviderOption
+                  key={id}
+                  icon={KeyRound}
+                  title={PROVIDERS[id].label}
+                  desc={PROVIDERS[id].blurb}
+                  onClick={() => choose(id)}
+                />
+              ))}
+            </div>
+          )}
 
-          <button
-            type="button"
-            onClick={() => setShowMoreProviders((s) => !s)}
-            aria-expanded={showMoreProviders}
-            className="no-drag focus-ring inline-flex items-center gap-1 text-[12px] text-[color:var(--color-ink-3)] hover:text-[color:var(--color-ink-2)]"
-          >
-            <ChevronDown
-              size={12}
-              className={showMoreProviders ? 'rotate-180 transition-transform' : 'transition-transform'}
-            />
-            {showMoreProviders ? 'Fewer providers' : 'More providers'}
-          </button>
+          {more.length > 0 && (
+            <button
+              type="button"
+              onClick={() => setShowMoreProviders((s) => !s)}
+              aria-expanded={showMoreProviders}
+              className="no-drag focus-ring inline-flex items-center gap-1 text-[12px] text-[color:var(--color-ink-3)] hover:text-[color:var(--color-ink-2)]"
+            >
+              <ChevronDown
+                size={12}
+                className={showMoreProviders ? 'rotate-180 transition-transform' : 'transition-transform'}
+              />
+              {showMoreProviders ? 'Fewer providers' : 'More providers'}
+            </button>
+          )}
 
           {showMoreProviders && (
             <div className="flex w-full max-w-[460px] flex-col gap-2.5">
-              {MORE_API_PROVIDERS.map((id) => (
+              {more.map((id) => (
                 <ProviderOption
                   key={id}
                   icon={KeyRound}

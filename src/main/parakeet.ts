@@ -142,6 +142,17 @@ function download(url: string, dest: string, onProgress?: (pct: number) => void,
   })
 }
 
+/** Windows ships a real bsdtar at System32\tar.exe (10+); prefer its absolute path so a bare 'tar'
+ *  lookup can never be shadowed by a binary planted in the cwd, but some machines only have
+ *  Git-for-Windows' tar (no System32 copy) — fall back to the bare name so extraction still works. */
+function tarBinary(): string {
+  if (process.platform === 'win32') {
+    const sys32Tar = join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'tar.exe')
+    if (existsSync(sys32Tar)) return sys32Tar
+  }
+  return 'tar'
+}
+
 function extractTarBz2(archive: string, dir: string): Promise<void> {
   // `tar` ships on macOS, Linux, and Windows 10+ and handles .tar.bz2 with -xjf.
   // Pass the archive as a RELATIVE name from cwd=dir, never an absolute path: GNU tar (Git-for-Windows /
@@ -149,7 +160,7 @@ function extractTarBz2(archive: string, dir: string): Promise<void> {
   // `host:path` rsh/rmt spec and dies ("Cannot connect to C: resolve failed"). A bare filename has no
   // colon, so both GNU tar and bsdtar extract it. Matches the fetch-models.mjs fix (relative + cwd).
   return new Promise((resolve, reject) => {
-    execFile('tar', ['xjf', basename(archive)], { cwd: dir }, (err) => (err ? reject(err) : resolve()))
+    execFile(tarBinary(), ['xjf', basename(archive)], { cwd: dir }, (err) => (err ? reject(err) : resolve()))
   })
 }
 

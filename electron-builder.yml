@@ -62,7 +62,6 @@ mac:
   extendInfo:
     NSMicrophoneUsageDescription: AskToto transcribes audio on-device to give you live AI suggestions.
     NSScreenCaptureUsageDescription: AskToto captures system audio and your screen so the AI can help.
-    NSAppleEventsUsageDescription: AskToto detects when a meeting starts (Zoom/Teams/Meet) to auto-start.
     LSUIElement: true
 dmg:
   title: AskToto ${version}

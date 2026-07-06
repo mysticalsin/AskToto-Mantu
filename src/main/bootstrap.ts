@@ -1,7 +1,7 @@
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { readFileSync, writeFileSync, existsSync, mkdirSync, renameSync } from 'node:fs'
-import { join, delimiter } from 'node:path'
+import { join, delimiter, isAbsolute } from 'node:path'
 import { homedir } from 'node:os'
 
 /**
@@ -108,6 +108,16 @@ function installEnv(isWin: boolean): NodeJS.ProcessEnv {
 
 const execFileAsync = promisify(execFile)
 
+/** cmd.exe target for the `.cmd`/`.bat` shim route below. Windows CreateProcess resolves a bare
+ *  filename by searching the app's own directory, then the CURRENT WORKING DIRECTORY, before it ever
+ *  consults PATH — so a bare 'cmd.exe' could be shadowed by a binary planted in an attacker-writable
+ *  cwd. Prefer a valid absolute ComSpec (the user's real shell) when one is set, else pin to the known
+ *  System32 binary. Kept local (no import from cli.ts) — this module stays fully self-contained. */
+function comSpecExe(): string {
+  const cs = process.env.ComSpec
+  return cs && isAbsolute(cs) ? cs : join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'cmd.exe')
+}
+
 /** Parse `where <bin>` stdout: the first line that is an actually-launchable binary (.exe/.cmd/.bat).
  *  `where` can list several shadowed matches (e.g. an extension-less shim) — only a launchable file
  *  is useful. Returns null when nothing qualifies (including "not found" / empty output). */
@@ -141,7 +151,7 @@ async function winRun(
   const target = resolved ?? command
   const opts = { timeout: timeoutMs, windowsHide: true, env: installEnv(true) }
   if (resolved && /\.(cmd|bat)$/i.test(resolved)) {
-    return execFileAsync(process.env.ComSpec || 'cmd.exe', ['/d', '/s', '/c', target, ...args], opts)
+    return execFileAsync(comSpecExe(), ['/d', '/s', '/c', target, ...args], opts)
   }
   return execFileAsync(target, args, opts)
 }

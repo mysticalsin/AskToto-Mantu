@@ -169,11 +169,27 @@ describe('isCmdShim / cmdShimSpawn / resolveSpawnTarget — Windows shim launch 
     else process.env.ComSpec = saved
   })
 
-  it('falls back to the literal "cmd.exe" when ComSpec is unset', () => {
-    const saved = process.env.ComSpec
+  it('falls back to an absolute %SystemRoot%\\System32\\cmd.exe (never a bare name) when ComSpec is unset', () => {
+    const savedComSpec = process.env.ComSpec
+    const savedSystemRoot = process.env.SystemRoot
     delete process.env.ComSpec
-    expect(cmdShimSpawn('C:\\npm\\claude.cmd', []).command).toBe('cmd.exe')
-    if (saved !== undefined) process.env.ComSpec = saved
+    process.env.SystemRoot = 'C:\\Windows'
+    expect(cmdShimSpawn('C:\\npm\\claude.cmd', []).command).toBe('C:\\Windows\\System32\\cmd.exe')
+    if (savedComSpec !== undefined) process.env.ComSpec = savedComSpec
+    if (savedSystemRoot === undefined) delete process.env.SystemRoot
+    else process.env.SystemRoot = savedSystemRoot
+  })
+
+  it('falls back to the System32 path when ComSpec is set but not absolute (untrustworthy relative name)', () => {
+    const savedComSpec = process.env.ComSpec
+    const savedSystemRoot = process.env.SystemRoot
+    process.env.ComSpec = 'cmd.exe'
+    process.env.SystemRoot = 'C:\\Windows'
+    expect(cmdShimSpawn('C:\\npm\\claude.cmd', []).command).toBe('C:\\Windows\\System32\\cmd.exe')
+    if (savedComSpec === undefined) delete process.env.ComSpec
+    else process.env.ComSpec = savedComSpec
+    if (savedSystemRoot === undefined) delete process.env.SystemRoot
+    else process.env.SystemRoot = savedSystemRoot
   })
 
   it('rejects an arg containing a double-quote (cmd.exe argv-injection guard)', () => {

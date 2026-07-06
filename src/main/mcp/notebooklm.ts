@@ -31,12 +31,23 @@
 
 import { spawn, execFile } from 'node:child_process'
 import { promisify } from 'node:util'
+import { join, isAbsolute } from 'node:path'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 import { createInterface } from 'node:readline'
 import { mainLog } from '../logger'
 
 const execFileAsync = promisify(execFile)
+
+/** cmd.exe target for the install spawn below. Windows CreateProcess resolves a bare filename by
+ *  searching the app's own directory, then the CURRENT WORKING DIRECTORY, before it ever consults
+ *  PATH — so a bare 'cmd.exe' could be shadowed by a binary planted in an attacker-writable cwd.
+ *  Prefer a valid absolute ComSpec (the user's real shell) when one is set, else pin to the known
+ *  System32 binary. */
+function comSpecExe(): string {
+  const cs = process.env.ComSpec
+  return cs && isAbsolute(cs) ? cs : join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'cmd.exe')
+}
 
 // ─── Timeouts ──────────────────────────────────────────────────────────────────
 const DETECT_TIMEOUT_MS = 10_000
@@ -290,7 +301,7 @@ export async function installNotebookLmCli(onProgress: (line: string) => void): 
     }
 
     const child = isWin
-      ? spawn(process.env.ComSpec || 'cmd.exe', ['/d', '/s', '/c', managerBin!, ...args], {
+      ? spawn(comSpecExe(), ['/d', '/s', '/c', managerBin!, ...args], {
           env: process.env,
           shell: false,
           stdio: ['ignore', 'pipe', 'pipe']
