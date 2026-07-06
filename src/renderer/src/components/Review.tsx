@@ -105,7 +105,8 @@ export const Review = memo(function Review({
   bidstackTools,
   onOpenPastMeeting,
   isPastMeeting,
-  onRecapSaved
+  onRecapSaved,
+  onDirtyChange
 }: {
   recap: AnswerState | null
   lines: TranscriptLine[]
@@ -146,6 +147,9 @@ export const Review = memo(function Review({
   /** Called with the new recap markdown after a successful in-place edit save, so the owner (App) can keep
    *  its own copy (used by Resume + follow-up generation) consistent without a disk re-read. */
   onRecapSaved?: (recap: string) => void
+  /** Mirrors recapDirty (below) up to the owner (App) so its global Escape handler can gate on the same
+   *  unsaved-edit check this component's own in-panel exits already run. Called with `false` on unmount. */
+  onDirtyChange?: (dirty: boolean) => void
 }): JSX.Element {
   const [copied, flashCopied] = useFlash(1500)
   const [notesCopied, flashNotesCopied] = useFlash(1500)
@@ -226,6 +230,14 @@ export const Review = memo(function Review({
   // just a draft/text mismatch) because recapDraft is left holding its last value after Cancel/Save, so
   // comparing the two alone would still read "dirty" once editingRecap is already false.
   const recapDirty = editingRecap && recapDraft !== recapText
+  // Surface the dirty state to the owner (App) — its global Escape handler doesn't render inside this
+  // component's own exit buttons, so it can't call confirmDiscardRecapEdit directly; this keeps App's ref
+  // in sync so Escape can gate on the same check the in-panel exits below already use. Reset on unmount so
+  // a stale "dirty" flag can never survive after Review closes.
+  useEffect(() => {
+    onDirtyChange?.(recapDirty)
+    return () => onDirtyChange?.(false)
+  }, [recapDirty, onDirtyChange])
   // onResume/onDone/"Recent meetings" all navigate away from this screen unconditionally; a reused Review
   // instance would then reset editingRecap/editedRecap (see the savedPath effect above) with the edit never
   // saved. Confirm once before discarding; no-op (returns true immediately) when there is nothing to lose.

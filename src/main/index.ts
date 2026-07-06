@@ -802,7 +802,8 @@ function publicSettings(): PublicSettings {
     resolvedMeetingsFolder: resolveMeetingsFolder(s),
     managedKeys: getLockedKeys(),
     envKeys: getEnvKeyProviders(),
-    loginItemOpenAtLogin
+    loginItemOpenAtLogin,
+    version: app.getVersion()
   }
 }
 
@@ -994,10 +995,26 @@ function setWindowMode(): void {
   win.setBounds({ x, y: b.y, width: currentWidth, height: lastBarHeight }, false)
 }
 
+/** Self-heal a null `win` (e.g. a one-time createWindow() throw during boot) by retrying the window
+ *  creation once at call time, instead of leaving window-dependent hotkeys dead for the process
+ *  lifetime. Callers that previously did `if (!win) return` should call this instead. A repeated
+ *  failure is logged and swallowed — it just leaves win null again, same as the original no-op. */
+function ensureWindow(): BrowserWindow | null {
+  if (win) return win
+  try {
+    createWindow()
+  } catch (e) {
+    mainLog.error('[recover] createWindow retry failed:', e)
+    auditLog('app.crash', { kind: 'boot_step', step: 'createWindow_retry' })
+  }
+  return win
+}
+
 function sendHotkey(action: HotkeyAction): void {
-  if (!win) return
-  if (!win.isVisible()) win.show()
-  win.webContents.send(IPC.hotkey, action)
+  const w = ensureWindow()
+  if (!w) return
+  if (!w.isVisible()) w.show()
+  w.webContents.send(IPC.hotkey, action)
 }
 
 // Tie-breaker for persistCrash's filename: two crashes landing in the same millisecond (e.g. a renderer
@@ -1272,8 +1289,11 @@ function isReachable(x: number, y: number, width: number, height: number): boole
 }
 
 function moveBy(dx: number, dy: number): void {
-  if (!win) return
-  const b = win.getBounds()
+  // Self-heal a null win (e.g. a one-time createWindow() throw during boot) — mirrors sendHotkey/
+  // toggleVisible so scroll/move hotkeys recover instead of staying permanently dead for the process life.
+  const w = ensureWindow()
+  if (!w) return
+  const b = w.getBounds()
   const x = b.x + dx
   const y = b.y + dy
   // Free movement anywhere that keeps the window reachable on SOME display — covers dragging clean
@@ -1282,7 +1302,7 @@ function moveBy(dx: number, dy: number): void {
   // to stick a drag pinned to that display's edge, since the matched display never changed until the
   // window had already fully crossed onto it — which the clamp itself was preventing.
   if (isReachable(x, y, b.width, b.height)) {
-    win.setBounds({ ...b, x, y })
+    w.setBounds({ ...b, x, y })
     return
   }
   // Unreachable (flung past every display): pull back onto the display nearest the ATTEMPTED position,
@@ -1290,7 +1310,7 @@ function moveBy(dx: number, dy: number): void {
   const { workArea } = screen.getDisplayMatching({ x, y, width: b.width, height: b.height })
   const cx = clampAxisMargin(x, b.width, workArea.x, workArea.width, DRAG_VISIBLE_MARGIN)
   const cy = clampAxisMargin(y, b.height, workArea.y, workArea.height, DRAG_VISIBLE_MARGIN)
-  win.setBounds({ ...b, x: cx, y: cy })
+  w.setBounds({ ...b, x: cx, y: cy })
 }
 
 /**
@@ -1466,6 +1486,36 @@ function startMeetingNotifier(): void {
   if (typeof notifTimer.unref === 'function') notifTimer.unref()
 }
 
+/** Builds the tray context menu template, reading shortcuts fresh from settings each call so the
+ *  accelerator labels never go stale — see rebuildTrayMenu(). */
+function buildTrayMenu(): Menu {
+  const user = getSettings().shortcuts ?? {}
+  const winKeys = process.platform === 'win32'
+  const fmtAccel = (a: string): string =>
+    !a ? '' : winKeys
+      ? a.replace(/CommandOrControl|CmdOrCtrl|Control/g, 'Ctrl').replace(/Command|Meta|Super/g, 'Win').replace(/Return/g, 'Enter')
+      : a.replace(/CommandOrControl|CmdOrCtrl|Command|Meta/g, '⌘').replace(/Shift/g, '⇧').replace(/Alt/g, '⌥').replace(/Control/g, 'Ctrl').replace(/Return/g, '↵').replace(/\+/g, '')
+  const label = (base: string, action: HotkeyAction): string => {
+    const k = fmtAccel(resolveShortcut(action, user))
+    return k ? `${base}  (${k})` : base
+  }
+  return Menu.buildFromTemplate([
+    { label: label('Show / Hide', 'hide'), click: toggleVisible },
+    { label: 'Settings…', click: () => {
+      if (win && !win.isVisible()) win.show()
+      sendHotkey('settings')
+    } },
+    { label: label('Listen / Stop listening', 'toggle-listen'), click: () => sendHotkey('toggle-listen') },
+    { label: "Today's agenda", click: () => {
+      if (win && !win.isVisible()) win.show()
+      sendHotkey('agenda')
+    } },
+    { label: label('New', 'reset'), click: () => sendHotkey('reset') },
+    { type: 'separator' },
+    { label: 'Quit Métis', click: () => app.quit() }
+  ])
+}
+
 function createTray(): void {
   try {
     const iconPath = app.isPackaged
@@ -1475,33 +1525,21 @@ function createTray(): void {
     if (!img.isEmpty()) img = img.resize({ width: 18, height: 18 })
     tray = new Tray(img.isEmpty() ? nativeImage.createEmpty() : img)
     if (process.platform === 'darwin' && img.isEmpty()) tray.setTitle(' ◉ Métis')
-    const user = getSettings().shortcuts ?? {}
-    const winKeys = process.platform === 'win32'
-    const fmtAccel = (a: string): string =>
-      !a ? '' : winKeys
-        ? a.replace(/CommandOrControl|CmdOrCtrl|Control/g, 'Ctrl').replace(/Command|Meta|Super/g, 'Win').replace(/Return/g, 'Enter')
-        : a.replace(/CommandOrControl|CmdOrCtrl|Command|Meta/g, '⌘').replace(/Shift/g, '⇧').replace(/Alt/g, '⌥').replace(/Control/g, 'Ctrl').replace(/Return/g, '↵').replace(/\+/g, '')
-    const label = (base: string, action: HotkeyAction): string => {
-      const k = fmtAccel(resolveShortcut(action, user))
-      return k ? `${base}  (${k})` : base
-    }
-    const menu = Menu.buildFromTemplate([
-      { label: label('Show / Hide', 'hide'), click: toggleVisible },
-      { label: 'Settings…', click: () => {
-        if (win && !win.isVisible()) win.show()
-        sendHotkey('settings')
-      } },
-      { label: label('Listen / Stop listening', 'toggle-listen'), click: () => sendHotkey('toggle-listen') },
-      { label: "Today's agenda", click: () => {
-        if (win && !win.isVisible()) win.show()
-        sendHotkey('agenda')
-      } },
-      { label: label('New', 'reset'), click: () => sendHotkey('reset') },
-      { type: 'separator' },
-      { label: 'Quit Métis', click: () => app.quit() }
-    ])
     tray.setToolTip('Métis')
-    tray.setContextMenu(menu)
+    tray.setContextMenu(buildTrayMenu())
+  } catch {
+    /* tray optional */
+  }
+}
+
+/** Rebuild the tray's context menu after a shortcut rebind. createTray() only builds the menu once at
+ *  boot (accelerator strings baked in from settings read at that moment); without this, the tray keeps
+ *  showing stale accelerators for the rest of the process life after settingsSet's registerShortcuts()
+ *  re-registers the new bindings. No-op if the tray was never created (optional feature). */
+function rebuildTrayMenu(): void {
+  if (!tray) return
+  try {
+    tray.setContextMenu(buildTrayMenu())
   } catch {
     /* tray optional */
   }
@@ -1586,7 +1624,19 @@ function registerIpc(): void {
   // --- Settings & permissions ---
   ipcMain.handle(IPC.settingsGet, (e) => {
     assertMainWindow(e)
-    return publicSettings()
+    const s = publicSettings()
+    // Auth is enforced and this caller isn't signed in: don't hard-fail (the renderer needs settings to
+    // render the SignInWall itself), but redact PII an unauthenticated renderer/DevTools caller has no
+    // business reading — the resume/job-description/notes profile fields and any imported per-mode
+    // reference documents (contextDocs), which can contain arbitrary pasted personal/meeting content.
+    if (!requireAuth()) {
+      return {
+        ...s,
+        profile: { ...s.profile, resume: '', jobDescription: '', notes: '' },
+        contextDocs: {}
+      }
+    }
+    return s
   })
   ipcMain.handle(IPC.permissionsGet, (e) => {
     assertMainWindow(e)
@@ -1643,6 +1693,10 @@ function registerIpc(): void {
 
   ipcMain.handle(IPC.settingsSet, async (e, patch) => {
     assertMainWindow(e)
+    // Trust boundary is main, not the renderer's SignInWall — block the mutation for an unauthenticated
+    // caller (DevTools/compromised renderer) when auth is enforced. Return the current (unchanged)
+    // settings so the shape matches the normal success return exactly; nothing is persisted.
+    if (!requireAuth()) return publicSettings()
     const p = patch ?? {}
     // License STATE is server-authoritative: only main's activateLicense/heartbeat (license.ts) may
     // write it. Without this strip, any renderer code could self-issue an unlimited license with a
@@ -1709,8 +1763,10 @@ function registerIpc(): void {
         /* not supported on this platform */
       }
     }
-    // Shortcuts may have changed — re-register from the new settings.
+    // Shortcuts may have changed — re-register from the new settings, then rebuild the tray menu so its
+    // accelerator labels reflect the new bindings instead of the ones baked in at createTray() boot time.
     registerShortcuts()
+    rebuildTrayMenu()
     return publicSettings()
   })
 
@@ -1806,6 +1862,10 @@ function registerIpc(): void {
   // --- Provider API keys ---
   ipcMain.handle(IPC.setApiKey, (e, payload: unknown) => {
     assertMainWindow(e)
+    // Trust boundary is main, not the renderer — block persisting an attacker-supplied credential for an
+    // unauthenticated caller when auth is enforced. Return the current (unchanged) hasKeys map so the
+    // shape matches the normal success return exactly; no key is written.
+    if (!requireAuth()) return { hasKeys: hasKeysMap() }
     const parsed = SetApiKeyPayloadSchema.parse(payload)
     setApiKey(parsed.provider, parsed.key)
     // setApiKey() silently treats an empty/whitespace key as "clear the saved key" (store.ts) — audit the
@@ -1816,6 +1876,7 @@ function registerIpc(): void {
 
   ipcMain.handle(IPC.clearApiKey, (e, payload: unknown) => {
     assertMainWindow(e)
+    if (!requireAuth()) return { hasKeys: hasKeysMap() }
     const parsed = ClearApiKeyPayloadSchema.parse(payload)
     clearApiKey(parsed.provider)
     auditLog('key.removed', { provider: parsed.provider })
@@ -1824,6 +1885,10 @@ function registerIpc(): void {
 
   ipcMain.handle(IPC.testApiKey, (e, payload: unknown) => {
     assertMainWindow(e)
+    // testApiKey() makes an outbound HTTP call to the target provider (SSRF-class surface for an
+    // unauthenticated caller when the provider/base URL is attacker-controlled) — gate it like every
+    // other privileged handler.
+    if (!requireAuth()) return { ok: false, error: 'Sign in with your Mantu account first.' }
     const parsed = TestApiKeyPayloadSchema.parse(payload)
     return testApiKey(parsed.provider, parsed.key)
   })
@@ -3781,7 +3846,7 @@ if (!app.requestSingleInstanceLock()) {
   recoverImports()
   runStep('registerScreenListeners', registerScreenListeners)
   runStep('startMeetingNotifier', startMeetingNotifier)
-  runStep('initAutoUpdate', () => initAutoUpdate(win))
+  runStep('initAutoUpdate', () => initAutoUpdate(() => win))
   // Resume durable live/backfill work and reconcile OneDrive-synced meeting files after first paint.
   // Directory scans, rather than fs.watch, are deliberate: Files On-Demand and Windows sync do not
   // reliably emit every watcher event. A one-minute cadence keeps Intelligence current without

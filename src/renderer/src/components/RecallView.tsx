@@ -622,6 +622,16 @@ export function RecallView({
   onIntelligence?: () => void
 }): JSX.Element {
   const [q, setQ] = useState('')
+  // Always the LATEST typed query, readable from a stable (empty-deps) callback — refreshList (below)
+  // reads this instead of closing over `q` directly, so a call issued from an already-in-flight async
+  // import always searches by what's currently in the box, not whatever was typed when import started.
+  const qRef = useRef(q)
+  qRef.current = q
+  // Monotonic id shared by every recallList/recallSearch fetch (the debounced search effect below AND
+  // refreshList's post-import refresh) — whichever request was issued LAST wins when it resolves, so a
+  // slow earlier response (or an import's refresh landing well after the user kept typing/searching) can
+  // never clobber a fresher result already on screen.
+  const fetchSeqRef = useRef(0)
   // The value actually sent to the IPC search / used for grouping — updates 250ms after `q` settles (same
   // delay the search IPC call itself already waited for below), so every keystroke's re-render groups
   // against this stable value instead of re-running groupByLocalDate synchronously on each keystroke.
@@ -743,11 +753,18 @@ export function RecallView({
   }, [])
 
   // Re-runs the same list/search fetch the mount effect below uses, so a freshly imported meeting shows
-  // up immediately — mirrors how onTrash/commitEdit update `items` after their own mutation.
+  // up immediately — mirrors how onTrash/commitEdit update `items` after their own mutation. Reads the
+  // LIVE query via qRef (not a closed-over `q`) and shares fetchSeqRef's ordering guard with the debounced
+  // search effect below, so an import that finishes well after the user changed/kept typing a search can
+  // neither search on a stale click-time query nor clobber a fresher, already-displayed result.
   const refreshList = useCallback((): void => {
-    const p = q.trim() ? window.toto.recallSearch(q.trim()) : window.toto.recallList()
-    p.then(setItems).catch(() => {})
-  }, [q])
+    const query = qRef.current.trim()
+    const seq = ++fetchSeqRef.current
+    const p = query ? window.toto.recallSearch(query) : window.toto.recallList()
+    p.then((l) => {
+      if (seq === fetchSeqRef.current) setItems(l)
+    }).catch(() => {})
+  }, [])
 
   const upsertImportJob = useCallback((job: ImportJobView): void => {
     setImportJobs((jobs) => [job, ...jobs.filter((existing) => existing.jobId !== job.jobId)])
@@ -821,9 +838,13 @@ export function RecallView({
     let stale = false
     const run = (): void => {
       setLoading(true)
+      const seq = ++fetchSeqRef.current
       const p = q.trim() ? window.toto.recallSearch(q.trim()) : window.toto.recallList()
       p.then((l) => {
-        if (!stale) {
+        // fetchSeqRef guards against refreshList's post-import fetch (or another run of this same effect)
+        // resolving out of order; `stale` additionally covers this effect's own cleanup (q changed again
+        // before this particular run resolved).
+        if (!stale && seq === fetchSeqRef.current) {
           setItems(l)
           setDebouncedQ(q)
         }
