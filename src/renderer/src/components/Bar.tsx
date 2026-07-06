@@ -539,11 +539,13 @@ export const Bar = memo(function Bar(props: BarProps): JSX.Element {
             >
               <Brain size={19} strokeWidth={ICON_STROKE} />
             </IconTool>
+            {/* Polarity: privateView OFF is the everyday default — muted at rest. ON is the deliberate,
+                exceptional state (AskToto blinded), lit accent like the other engaged toggles. The old
+                pre-split calibration (active on OFF + danger) left the eye permanently red at rest. */}
             <IconTool
               title={props.stealth ? 'Private view on — AskToto won’t look at your screen' : 'Private view off — screen questions allowed'}
               onClick={props.onToggleStealth}
-              active={!props.stealth}
-              danger
+              active={props.stealth}
             >
               {props.stealth ? <EyeOff size={19} strokeWidth={ICON_STROKE} /> : <Eye size={19} strokeWidth={ICON_STROKE} />}
             </IconTool>

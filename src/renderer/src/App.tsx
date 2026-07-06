@@ -641,7 +641,12 @@ export function App(): JSX.Element {
         // mode:'answer' run, so the UI never claims to have seen a screen it didn't.
         // IPC flattens the custom PrivateViewBlockedError to a plain message string (its class/name is
         // lost across the boundary), so we match on the message content, not `instanceof`.
-        const raw = e instanceof Error ? e.message : String(e)
+        // Errors cross the IPC boundary wrapped as "Error invoking remote method 'capture:screen': ..."
+        // — strip the plumbing before showing anything to the user.
+        const raw = (e instanceof Error ? e.message : String(e)).replace(
+          /^Error invoking remote method '[^']*':\s*(?:Error:\s*)?/,
+          ''
+        )
         setCaptureError(
           /private view/i.test(raw)
             ? 'Private View is on, so AskToto couldn’t see your screen. Answering from context only. Turn Private View off to include the screen.'
@@ -651,7 +656,10 @@ export function App(): JSX.Element {
                 `${raw} Answering from context only for now.`
               : 'Couldn’t capture your screen. Answering from context only.'
         )
-        const id = ask.run({ mode: 'answer', prompt, label: opts?.label, kind: opts?.kind, history: opts?.history })
+        // The fallback never saw a screen — a screen-asserting label ("Viewed screen") would contradict
+        // the banner above and claim a capture that didn't happen.
+        const fallbackLabel = opts?.label && /screen/i.test(opts.label) ? undefined : opts?.label
+        const id = ask.run({ mode: 'answer', prompt, label: fallbackLabel, kind: opts?.kind, history: opts?.history })
         if (id && opts?.record) pendingUserRef.current = { id, q: opts.record }
         return id
       } finally {
@@ -693,7 +701,10 @@ export function App(): JSX.Element {
       } catch (e) {
         // Surface WHY capture failed (Private View, permission) as a non-terminal notice, then fall
         // through to the transcript-only suggestion — this used to swallow the failure silently.
-        const raw = e instanceof Error ? e.message : String(e)
+        const raw = (e instanceof Error ? e.message : String(e)).replace(
+          /^Error invoking remote method '[^']*':\s*(?:Error:\s*)?/,
+          ''
+        )
         setCaptureError(
           /private view/i.test(raw)
             ? 'Private View is on, so AskToto couldn’t see your screen. Suggesting from the conversation only. Turn Private View off to include the screen.'

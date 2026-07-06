@@ -551,9 +551,11 @@ input::placeholder {
   animation-timing-function: steps(24, end);
 }
 
-/* "Hidden from screen sharing" (stealth ON) indicator — a calm, slow rainbow contour so the user can
-   see at a glance that AskToto is private/hidden. Same masked conic-gradient as the thinking ring, but
-   slower + a touch bolder so the two states stay distinct (fast = working, slow = hidden). */
+/* Private View (stealth ON) indicator — a calm, slow rainbow contour so the user can see at a glance
+   that AskToto won't look at (or capture) their screen. NOT about screen-share hiding: the window is
+   hidden from shares via the separate contentProtection setting, which has no bar indicator. Same
+   masked conic-gradient as the thinking ring, slower + bolder so the two states stay distinct
+   (fast = working, slow = private). */
 .aw-hidden-rainbow {
   position: relative;
 }

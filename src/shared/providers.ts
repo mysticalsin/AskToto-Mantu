@@ -352,7 +352,11 @@ export function parseDustUrl(input: string): {
     else if (/(^|\.)dust\.tt$/i.test(u.host)) out.baseUrl = 'https://dust.tt'
     const w = u.pathname.match(/\/w\/([^/]+)/)
     if (w) out.workspaceId = w[1]
-    const a = u.pathname.match(/\/(?:agents|assistant)\/([^/?#]+)/)
+    // Only unambiguous agent-shaped sources may set agentId. A bare /assistant/<id> path segment on
+    // dust.tt is a CONVERSATION id, not an agent — treating it as one silently pointed the app's base
+    // agent at garbage when a user pasted a chat link. Agent ids appear in the builder path
+    // (/builder/agents|assistants/<sId>) or in the ?assistant=/assistantId=/agentId= query params.
+    const a = u.pathname.match(/\/builder\/(?:agents|assistants)\/([^/?#]+)/)
     const qa =
       u.searchParams.get('assistant') ||
       u.searchParams.get('assistantId') ||
