@@ -77,7 +77,9 @@ async function main() {
 
   let expiresAt = null;
   if (args.expires) {
-    const parsedDate = new Date(`${args.expires}T00:00:00Z`);
+    // End-of-day, matching the dashboard's date picker — "expires 2027-01-01" must mean the
+    // customer keeps their full last day regardless of which tool minted the license.
+    const parsedDate = new Date(`${args.expires}T23:59:59.999Z`);
     if (Number.isNaN(parsedDate.getTime())) {
       console.error(`--expires must be a valid date (YYYY-MM-DD), got: ${args.expires}`);
       process.exit(1);
