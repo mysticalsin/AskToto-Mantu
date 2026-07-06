@@ -838,6 +838,14 @@ function registerIpc(): void {
   // x-apple.systempreferences scheme only exists on macOS; a no-op elsewhere.
   ipcMain.handle(IPC.permissionsOpenSettings, (e, kind: unknown) => {
     assertMainWindow(e)
+    if (process.platform === 'win32') {
+      // Windows gates mic access behind Settings → Privacy → Microphone (enterprise policy can disable
+      // "Let desktop apps access your microphone"). Deep-link straight there so a blocked user can
+      // recover. Windows does not gate screen capture behind a privacy pane, so there is nothing to open
+      // for screenRecording.
+      if (kind === 'microphone') void shell.openExternal('ms-settings:privacy-microphone')
+      return
+    }
     if (process.platform !== 'darwin') return
     const pane = kind === 'screenRecording' ? 'Privacy_ScreenCapture' : 'Privacy_Microphone'
     void shell.openExternal(`x-apple.systempreferences:com.apple.preference.security?${pane}`)
