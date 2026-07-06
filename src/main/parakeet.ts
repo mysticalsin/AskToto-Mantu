@@ -12,7 +12,7 @@
  */
 import { app } from 'electron'
 import { createWriteStream, existsSync, mkdirSync, rmSync } from 'node:fs'
-import { join } from 'node:path'
+import { join, basename } from 'node:path'
 import { get as httpsGet } from 'node:https'
 import { execFile } from 'node:child_process'
 import { mainLog } from './logger'
@@ -144,10 +144,12 @@ function download(url: string, dest: string, onProgress?: (pct: number) => void,
 
 function extractTarBz2(archive: string, dir: string): Promise<void> {
   // `tar` ships on macOS, Linux, and Windows 10+ and handles .tar.bz2 with -xjf.
-  // bsdtar (macOS) does not support --no-absolute-paths; both bsdtar and GNU tar already
-  // strip leading '/' from archive member names by default, so omitting it is safe.
+  // Pass the archive as a RELATIVE name from cwd=dir, never an absolute path: GNU tar (Git-for-Windows /
+  // MSYS, if it shadows System32 bsdtar on PATH) parses a leading `C:\...` drive-colon as a remote
+  // `host:path` rsh/rmt spec and dies ("Cannot connect to C: resolve failed"). A bare filename has no
+  // colon, so both GNU tar and bsdtar extract it. Matches the fetch-models.mjs fix (relative + cwd).
   return new Promise((resolve, reject) => {
-    execFile('tar', ['xjf', archive, '-C', dir], (err) => (err ? reject(err) : resolve()))
+    execFile('tar', ['xjf', basename(archive)], { cwd: dir }, (err) => (err ? reject(err) : resolve()))
   })
 }
 
