@@ -489,7 +489,7 @@ const MeetingRow = memo(function MeetingRow({
 
               {/* Analyzing badge */}
               {isActive && (
-                <span className="shrink-0 rounded-full bg-[var(--color-accent-soft)] px-2 py-0.5 text-[10px] text-[color:var(--color-accent)]">
+                <span className="shrink-0 rounded-full bg-[var(--color-accent-soft)] px-2 py-0.5 text-[10px] text-[color:var(--color-accent-text)]">
                   Just saved
                 </span>
               )}
