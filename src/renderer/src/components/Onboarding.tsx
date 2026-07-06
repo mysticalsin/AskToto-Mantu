@@ -16,13 +16,19 @@ import {
   AlertCircle,
   Terminal,
   KeyRound,
-  Building2
+  Building2,
+  ChevronDown
 } from 'lucide-react'
 import type { PublicSettings, Profile, PlatformPermissions } from '@shared/ipc'
 import type { ProviderId } from '@shared/providers'
 import { PROVIDERS } from '@shared/providers'
 import { MantuLogo } from './MantuLogo'
 import { accelLabel, isWindows } from '../lib/keys'
+
+// The API-key chooser (step 5's second path) features the providers most people actually reach for
+// first, in this order; everything else sits behind "More providers" so the primary list stays short.
+const FEATURED_API_PROVIDERS: ProviderId[] = ['anthropic', 'openai', 'grok', 'kimi', 'gemini', 'groq']
+const MORE_API_PROVIDERS: ProviderId[] = ['deepseek', 'qwen', 'mistral', 'minimax', 'nvidia', 'openrouter', 'custom']
 
 /** Microsoft 4-square glyph (no lucide equivalent). */
 function MsLogo({ size = 16 }: { size?: number }): JSX.Element {
@@ -222,6 +228,9 @@ export function Onboarding({
   const [finishErr, setFinishErr] = useState('')
   const [step, setStep] = useState<1 | 2 | 3 | 4 | 5 | 6>(1)
   const [perms, setPerms] = useState<PlatformPermissions | null>(null)
+  // Step 5's second path: "An API key" opens this in-place chooser instead of hard-wiring Anthropic.
+  const [apiChooser, setApiChooser] = useState(false)
+  const [showMoreProviders, setShowMoreProviders] = useState(false)
   const headingRef = useRef<HTMLHeadingElement | null>(null)
 
   // Move focus to the new step's heading on every transition so screen readers announce it instead of
@@ -359,7 +368,7 @@ export function Onboarding({
 
   if (step === 5) {
     // Route the user to a provider in plain language, then let the readiness step (6) confirm setup.
-    // Picking a path just sets the active provider (Tony's routing: an API key -> Anthropic/Claude, a
+    // Picking a path just sets the active provider (Tony's routing: an API key -> a chosen provider, a
     // Dust team -> Dust, an installed CLI -> Claude Code). "Decide later" is honoured — recording and
     // transcripts never need a key, so nobody is blocked here.
     const choose = (provider: ProviderId): void => {
@@ -375,6 +384,77 @@ export function Onboarding({
       const codex = await window.toto.cliDetect('codex-cli')
       choose(codex.ok ? 'codex-cli' : 'claude-cli')
     }
+
+    // Second path: "An API key" opens this chooser instead of hard-wiring Anthropic. CLI stays the
+    // primary, first suggestion on the path screen — this is reached only after tapping "An API key".
+    if (apiChooser) {
+      return (
+        <div className="fade-up flex min-h-[300px] w-full flex-col items-center gap-5 px-4 py-7 text-center">
+          <div className="flex flex-col items-center gap-1.5">
+            <div
+              ref={headingRef}
+              tabIndex={-1}
+              className="font-ui text-[18px] font-semibold tracking-tight text-[color:var(--color-ink)] outline-none"
+            >
+              Pick your API provider
+            </div>
+            <p className="max-w-[460px] text-[12px] leading-snug text-[color:var(--color-ink-2)]">
+              Paste a key from any of these and AskToto connects to it. You pay your provider directly,
+              and you can switch any time in Settings.
+            </p>
+          </div>
+
+          <div className="flex w-full max-w-[460px] flex-col gap-2.5">
+            {FEATURED_API_PROVIDERS.map((id) => (
+              <ProviderOption
+                key={id}
+                icon={KeyRound}
+                title={PROVIDERS[id].label}
+                desc={PROVIDERS[id].blurb}
+                onClick={() => choose(id)}
+              />
+            ))}
+          </div>
+
+          <button
+            type="button"
+            onClick={() => setShowMoreProviders((s) => !s)}
+            aria-expanded={showMoreProviders}
+            className="no-drag focus-ring inline-flex items-center gap-1 text-[12px] text-[color:var(--color-ink-3)] hover:text-[color:var(--color-ink-2)]"
+          >
+            <ChevronDown
+              size={12}
+              className={showMoreProviders ? 'rotate-180 transition-transform' : 'transition-transform'}
+            />
+            {showMoreProviders ? 'Fewer providers' : 'More providers'}
+          </button>
+
+          {showMoreProviders && (
+            <div className="flex w-full max-w-[460px] flex-col gap-2.5">
+              {MORE_API_PROVIDERS.map((id) => (
+                <ProviderOption
+                  key={id}
+                  icon={KeyRound}
+                  title={PROVIDERS[id].label}
+                  desc={PROVIDERS[id].blurb}
+                  onClick={() => choose(id)}
+                />
+              ))}
+            </div>
+          )}
+
+          <StepDots step={5} />
+          <button
+            type="button"
+            onClick={() => setApiChooser(false)}
+            className="no-drag focus-ring text-[11px] text-[color:var(--color-ink-3)] hover:text-[color:var(--color-ink-2)]"
+          >
+            Back
+          </button>
+        </div>
+      )
+    }
+
     return (
       <div className="fade-up flex min-h-[300px] w-full flex-col items-center gap-5 px-4 py-7 text-center">
         <div className="flex flex-col items-center gap-1.5">
@@ -402,8 +482,8 @@ export function Onboarding({
           <ProviderOption
             icon={KeyRound}
             title="An API key"
-            desc="Have a key from Anthropic (Claude) or another provider? Paste it and you're set. You pay your provider directly."
-            onClick={() => choose('anthropic')}
+            desc="Have a key from Claude, GPT, Grok, or another provider? Paste it and you're set. You pay your provider directly."
+            onClick={() => setApiChooser(true)}
           />
           <ProviderOption
             icon={Building2}

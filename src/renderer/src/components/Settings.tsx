@@ -84,9 +84,10 @@ import { displayAccelerator } from '../lib/keys'
 const ctl =
   'no-drag font-body cl-input cl-focus px-3 py-2.5 text-[13px] text-[color:var(--cl-foreground)]'
 
-// Providers excluded from the generic provider tiles grid + generic "key" Section. dust/claude-cli/
-// codex-cli have dedicated cards in CliIntegration; gemini is intentionally hidden from the UI entirely.
-const CLI_PROVIDERS = new Set<ProviderId>(['dust', 'claude-cli', 'codex-cli', 'gemini'])
+// Providers with a dedicated card in CliIntegration (dust/claude-cli/codex-cli) — excluded from the
+// generic provider tiles grid + generic "key" Section so they aren't offered twice. Every other
+// provider (including gemini and grok) is a plain API-key provider and must stay reachable in the grid.
+const CLI_PROVIDERS = new Set<ProviderId>(['dust', 'claude-cli', 'codex-cli'])
 
 /**
  * After disconnecting/removing the active provider, pick another provider that is actually ready
@@ -252,19 +253,23 @@ function Section({
   )
 }
 
-/** Like Section, but its body is collapsed behind a details-style toggle — closed on every mount, no
- *  persisted "remember this was open" state. Used for secondary content (e.g. "Experience: more
- *  models") that shouldn't compete with the primary flow for attention. */
+/** Like Section, but its body is collapsed behind a details-style toggle — closed on every mount by
+ *  default, no persisted "remember this was open" state. Used for secondary content (e.g. "Experience:
+ *  more models") that shouldn't compete with the primary flow for attention. `defaultOpen` lets a caller
+ *  start it open for one mount — e.g. when the section holds the ACTIVE provider's key field, it
+ *  shouldn't be hidden behind an extra click. */
 function ExpandableSection({
   title,
   desc,
+  defaultOpen = false,
   children
 }: {
   title: string
   desc?: string
+  defaultOpen?: boolean
   children: ReactNode
 }): JSX.Element {
-  const [open, setOpen] = useState(false)
+  const [open, setOpen] = useState(defaultOpen)
   return (
     <section className="flex flex-col">
       <button
@@ -455,7 +460,7 @@ function detectHint(value: string, current: ProviderId): { kind: 'ok' | 'tip'; t
   const id = detectProvider(v)
   if (id) {
     // Only promise an auto-switch when one will actually happen: onKeyChange won't switch to a
-    // CLI_PROVIDERS member (e.g. gemini has no selectable UI), so don't claim it did.
+    // CLI_PROVIDERS member (e.g. dust has no generic key box), so don't claim it did.
     if (id === current || CLI_PROVIDERS.has(id)) return { kind: 'ok', text: `Detected ${PROVIDERS[id].label}.` }
     return { kind: 'ok', text: `Detected ${PROVIDERS[id].label}. Selected automatically.` }
   }
@@ -570,12 +575,17 @@ function AiSection({
 
   const hint = detectHint(key, provider)
   const q = filter.trim().toLowerCase()
-  // Dust + CLI providers have dedicated UI sections; gemini is hidden; Anthropic has its own always-
-  // visible card below — exclude all from the "Experience: more models" tiles grid.
+  // Dust + CLI providers have dedicated UI sections; Anthropic has its own always-visible card below —
+  // exclude those from the "Experience: more models" tiles grid. Every other real provider (gemini, grok,
+  // etc.) belongs here so it stays reachable.
   const shown = PROVIDER_IDS.filter(
     (id) => !CLI_PROVIDERS.has(id) && id !== 'anthropic' && (!q || PROVIDERS[id].label.toLowerCase().includes(q))
   )
   const recommended = recommendedProvider(settings)
+  // True when the active provider's key field lives inside "Experience: more models" (any provider
+  // other than Anthropic or a CLI card) — start that section open so the active key isn't hidden
+  // behind an extra click the first time Settings opens.
+  const activeProviderInGrid = provider !== 'anthropic' && !CLI_PROVIDERS.has(provider)
 
   const dustSectionRef = useRef<HTMLDivElement>(null)
 
@@ -839,7 +849,12 @@ function AiSection({
 
       <ExpandableSection
         title="Experience: more models"
-        desc="Bring your own key from another provider, or try something different. Closed by default; Anthropic above covers most people."
+        desc={
+          activeProviderInGrid
+            ? `${def.label} is your active provider — its key is right below.`
+            : 'Bring your own key from another provider, or try something different. Closed by default; Anthropic above covers most people.'
+        }
+        defaultOpen={activeProviderInGrid}
       >
         <Section title="Model provider" desc="Prefer a raw model? Pick one, paste a key, and AskToto detects the provider.">
           {PROVIDER_IDS.length > 8 && (
