@@ -166,7 +166,9 @@ const api = {
   addTeamTranscriptFolder: (): Promise<PublicSettings> => ipcRenderer.invoke(IPC.addTeamTranscriptFolder),
   removeTeamTranscriptFolder: (folder: string): Promise<PublicSettings> =>
     ipcRenderer.invoke(IPC.removeTeamTranscriptFolder, folder),
-  openMeetingsFolder: (): Promise<void> => ipcRenderer.invoke(IPC.openPath),
+  // shell.openPath resolves to '' on success or a non-empty OS error string on failure — callers need the
+  // string to surface a failure (e.g. a deleted/unmounted meetings folder), not just fire-and-forget it.
+  openMeetingsFolder: (): Promise<string> => ipcRenderer.invoke(IPC.openPath),
   openBrainForClaude: (): Promise<{ ok: boolean; path: string }> => ipcRenderer.invoke(IPC.openBrainForClaude),
   recallList: (): Promise<MeetingSummary[]> => ipcRenderer.invoke(IPC.recallList),
   recallSearch: (q: string): Promise<RecallHit[]> => ipcRenderer.invoke(IPC.recallSearch, q),

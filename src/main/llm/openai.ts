@@ -86,7 +86,7 @@ export function streamOpenAI(opts: StreamOptions): StreamHandle {
     const doStream = async (
       includeUsage: boolean,
       includeEffort: boolean
-    ): Promise<{ inputTokens?: number; outputTokens?: number }> => {
+    ): Promise<{ inputTokens?: number; outputTokens?: number; sawReasoning: boolean; sawContent: boolean }> => {
       const params: any = {
         model: opts.model,
         stream: true,
@@ -122,25 +122,31 @@ export function streamOpenAI(opts: StreamOptions): StreamHandle {
         usage?: { prompt_tokens?: number; completion_tokens?: number }
       }>
       let usage: { prompt_tokens?: number; completion_tokens?: number } | undefined
+      let sawReasoning = false
+      let sawContent = false
       for await (const chunk of stream) {
         const delta = chunk.choices?.[0]?.delta
         // Reasoning-only models (e.g. Kimi Code's kimi-for-coding) stream their thinking as
         // `reasoning_content` BEFORE any answer `content`. Keep the stall-watchdog alive during that phase
         // so it doesn't abort the stream while the model is reasoning; the answer arrives in `content`.
-        if (delta?.reasoning_content) wd.ping()
+        if (delta?.reasoning_content) {
+          wd.ping()
+          sawReasoning = true
+        }
         const d = delta?.content
         if (d) {
           wd.ping()
+          sawContent = true
           opts.handlers.onDelta(d)
         }
         const u = (chunk as { usage?: typeof usage }).usage
         if (u) usage = u
       }
-      return { inputTokens: usage?.prompt_tokens, outputTokens: usage?.completion_tokens }
+      return { inputTokens: usage?.prompt_tokens, outputTokens: usage?.completion_tokens, sawReasoning, sawContent }
     }
 
     try {
-      let usageResult: { inputTokens?: number; outputTokens?: number }
+      let usageResult: { inputTokens?: number; outputTokens?: number; sawReasoning: boolean; sawContent: boolean }
       // Both optional params are sent first; on a param rejection, drop ONLY the one the provider named,
       // then (if the retry trips the other) drop both. Never drop a param the provider actually accepted —
       // that's what silently killed reasoning_effort when only stream_options was rejected. Parameter
@@ -161,8 +167,16 @@ export function streamOpenAI(opts: StreamOptions): StreamHandle {
         }
       }
       wd.clear()
+      // The model spent its whole budget on hidden reasoning and never produced an answer (seen on
+      // Kimi Code's kimi-for-coding under a tight token budget). onDone with empty content would render
+      // as the idle "Ask a question…" placeholder — indistinguishable from never having asked — so
+      // surface it as a real, actionable error instead.
+      if (usageResult.sawReasoning && !usageResult.sawContent) {
+        opts.handlers.onError('The model produced only reasoning and no answer — try again or raise the token budget.')
+        return
+      }
       // Report real usage only if the provider included it; never a fabricated chunk count.
-      opts.handlers.onDone(usageResult)
+      opts.handlers.onDone({ inputTokens: usageResult.inputTokens, outputTokens: usageResult.outputTokens })
     } catch (e) {
       wd.clear()
       if (controller.signal.aborted) return
