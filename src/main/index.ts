@@ -2148,6 +2148,34 @@ if (!app.requestSingleInstanceLock()) {
   // Screenshot capture uses desktopCapturer directly, so no video track is ever returned here.
   session.defaultSession.setDisplayMediaRequestHandler(
     async (request, callback) => {
+      // Electron validates the callback argument against the request: denying a request that asked for
+      // video (our renderer requests a 1fps video track to bootstrap the macOS ScreenCaptureKit session
+      // for audio loopback) with callback({}) makes Electron throw "Video was requested, but no video
+      // stream was provided". Because this handler is async, that throw escapes as an unhandledRejection.
+      // Wrap every callback call: the deny still reaches the renderer (its getDisplayMedia rejects and
+      // listen.ts falls back to mic-only), we just don't let the validation throw crash the main process.
+      const respond = (spec: Parameters<typeof callback>[0]): void => {
+        try {
+          callback(spec)
+        } catch (err) {
+          mainLog.warn(`[display-media] callback rejected: ${err instanceof Error ? err.message : String(err)}`)
+        }
+      }
+      try {
+        await handleDisplayMedia(request, respond)
+      } catch (err) {
+        // Absolute backstop: nothing in the loopback grant path may escape as an unhandledRejection.
+        mainLog.warn(`[display-media] handler error: ${err instanceof Error ? err.message : String(err)}`)
+        respond({})
+      }
+    },
+    { useSystemPicker: false }
+  )
+
+  async function handleDisplayMedia(
+    request: Parameters<NonNullable<Parameters<typeof session.defaultSession.setDisplayMediaRequestHandler>[0]>>[0],
+    callback: Parameters<NonNullable<Parameters<typeof session.defaultSession.setDisplayMediaRequestHandler>[0]>>[1]
+  ): Promise<void> {
       const frame = request.frame
       const mainFrame = win?.webContents.mainFrame
       const origin = request.securityOrigin
@@ -2218,9 +2246,7 @@ if (!app.requestSingleInstanceLock()) {
       }
       const screenSrc = sources[0]
       callback(screenSrc ? { video: screenSrc, audio: 'loopback' } : {})
-    },
-    { useSystemPicker: false }
-  )
+  }
 
   // Deny every web permission by default; only the main window may use audio media (the Listen mic) or
   // write to the system clipboard (Copy Summary / Export JSON / copy-code buttons all need this — it's a

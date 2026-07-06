@@ -136,8 +136,8 @@ export interface BarProps {
   onHistory: () => void
   /** Collapse the widget down to the floating control mini-pill. */
   onMinimize: () => void
-  /** When true, Private view is on — AskToto won't look at (or send) the screen. The window itself is
-   *  hidden from screen-shares regardless, via the separate contentProtection setting. */
+  /** When true, the AskToto window is hidden from screen capture & sharing (contentProtection). The
+   *  eye button toggles this. Separate from Private View (whether AskToto captures the user's screen). */
   stealth: boolean
   onToggleStealth: () => void
   /** Wall-clock start time of the current meeting (Date.now() at startListen) — ElapsedClock derives the
@@ -539,13 +539,16 @@ export const Bar = memo(function Bar(props: BarProps): JSX.Element {
             >
               <Brain size={19} strokeWidth={ICON_STROKE} />
             </IconTool>
-            {/* Polarity: privateView OFF is the everyday default — muted at rest. ON is the deliberate,
-                exceptional state (AskToto blinded), lit accent like the other engaged toggles. The old
-                pre-split calibration (active on OFF + danger) left the eye permanently red at rest. */}
+            {/* Window visibility on a shared/recorded screen (contentProtection). Hidden by default —
+                the invisible-copilot identity — so EyeOff (hidden) is the muted resting state. Eye
+                (visible) is the exceptional, attention-worthy state where others CAN see the overlay, so
+                it lights with danger as an at-a-glance "you're exposed" cue. Separate from Private View
+                (whether AskToto captures YOUR screen), which lives in Settings → Privacy. */}
             <IconTool
-              title={props.stealth ? 'Private view on — AskToto won’t look at your screen' : 'Private view off — screen questions allowed'}
+              title={props.stealth ? 'Hidden on shared screens — click to make visible' : 'Visible on shared screens — click to hide'}
               onClick={props.onToggleStealth}
-              active={props.stealth}
+              active={!props.stealth}
+              danger
             >
               {props.stealth ? <EyeOff size={19} strokeWidth={ICON_STROKE} /> : <Eye size={19} strokeWidth={ICON_STROKE} />}
             </IconTool>
