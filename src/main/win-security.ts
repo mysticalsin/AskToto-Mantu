@@ -21,6 +21,15 @@ import { statSync } from 'node:fs'
 import { join } from 'node:path'
 import log from 'electron-log'
 
+// Invoke Windows system tools by ABSOLUTE %SystemRoot%\System32 path, never bare name. Windows'
+// CreateProcess search order includes the current working directory, so a bare `powershell`/`icacls`
+// could execute an attacker-planted binary if AskToto is ever launched from an attacker-writable cwd —
+// and here that would subvert the very ACL check that decides whether to trust machine policy. An
+// absolute path removes cwd/PATH from the resolution entirely.
+const SYS32 = join(process.env.SystemRoot || process.env.windir || 'C:\\Windows', 'System32')
+const POWERSHELL = join(SYS32, 'WindowsPowerShell', 'v1.0', 'powershell.exe')
+const ICACLS = join(SYS32, 'icacls.exe')
+
 /** Single source of truth for the machine-wide org-policy managed-config path (was duplicated across
  *  store.ts / auth.ts / transcripts.ts). */
 export function adminManagedConfigPath(): string {
@@ -82,7 +91,7 @@ try {
   $out | ConvertTo-Json -Compress -Depth 5
 } catch { '' }`
   try {
-    const out = execFileSync('powershell', ['-NoProfile', '-NonInteractive', '-Command', ps], {
+    const out = execFileSync(POWERSHELL, ['-NoProfile', '-NonInteractive', '-Command', ps], {
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'ignore'],
       timeout: 8000
@@ -155,7 +164,7 @@ export function lockPathToCurrentUserWin32(path: string): void {
   if (process.platform !== 'win32') return
   try {
     // /inheritance:r drops inherited ACEs; grant only the current user + SYSTEM full control.
-    execFileSync('icacls', [path, '/inheritance:r', '/grant:r', '*S-1-5-18:(F)', `${currentUserGrant()}:(F)`], {
+    execFileSync(ICACLS, [path, '/inheritance:r', '/grant:r', '*S-1-5-18:(F)', `${currentUserGrant()}:(F)`], {
       stdio: 'ignore',
       timeout: 8000
     })
