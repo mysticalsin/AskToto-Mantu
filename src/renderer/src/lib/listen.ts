@@ -772,7 +772,10 @@ export function useListen(
   // Settings toggle, Métis picks up system audio on its own. Only runs while listening + system was
   // requested; the getPermissions poll is skipped entirely once 'them' is live.
   useEffect(() => {
-    if (!state.listening || !wantsSystemRef.current) return
+    // win32's getPermissions always reports screenRecording as 'unknown' (no such OS-level permission
+    // concept on Windows) — the poll below can structurally never see 'granted' there, so it would just
+    // burn a 3s interval for the whole meeting with zero chance of firing. Skip it entirely on Windows.
+    if (isWindows || !state.listening || !wantsSystemRef.current) return
     const iv = setInterval(() => {
       if (channels.current.them || sysRecoveringRef.current) return // already have it / mid-recovery
       void window.toto

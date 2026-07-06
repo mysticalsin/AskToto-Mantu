@@ -702,9 +702,13 @@ export async function testApiKey(provider: ProviderId, key: string): Promise<Tes
         return { ok: false, error: 'Set a model id in Advanced first, then test.' }
       }
       const client = new OpenAI({ apiKey: trimmed, baseURL: baseURL || undefined })
+      // OpenAI o-series reasoning models (o1/o3/o4…) reject `max_tokens` — they require
+      // `max_completion_tokens` instead. Mirrors the isOSeries branch in llm/openai.ts's real
+      // streaming path so Test doesn't 400 on a valid key just because the resolved model is o-series.
+      const isOSeries = /(^|\/)o\d/i.test(model)
       await client.chat.completions.create({
         model,
-        max_tokens: 1,
+        ...(isOSeries ? { max_completion_tokens: 1 } : { max_tokens: 1 }),
         messages: [{ role: 'user', content: 'hi' }]
       })
     }
