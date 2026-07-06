@@ -6,7 +6,7 @@ import { join } from 'node:path'
 import type { PublicClientApplication } from '@azure/msal-node'
 import type { AuthStatus, SignInResult } from '@shared/ipc'
 import { getSettings } from './store'
-import { auditLog } from './logger'
+import { auditLog, setAuditActor } from './logger'
 import { useFileBackend, encryptSecret, decryptSecret } from './secrets'
 import { trustedAdminManagedPath } from './win-security'
 
@@ -249,6 +249,11 @@ export async function getGraphToken(scopes: string[]): Promise<string | null> {
 let session: Session | null = null
 let loaded = false
 
+// Thread the signed-in user's identity into every audit record (auth.ts is the source of truth for who's
+// signed in). Registered once at module load; the callback reads the live `session` binding lazily so it
+// always reflects the current signed-in user (or none) at the time each audit line is written.
+setAuditActor(() => session?.email)
+
 /**
  * Max age a locally-cached session is trusted before fresh interactive sign-in is required. The
  * persisted auth-session.bin is a CACHE, not the authority — past this age it's dropped on read.
@@ -443,7 +448,11 @@ export function authStatus(): AuthStatus {
     signedIn: !!session,
     email: session?.email,
     name: session?.name,
-    domain: cfg?.allowedDomain
+    domain: cfg?.allowedDomain,
+    // Lets the renderer gate the SignInWall even when `configured` is false (e.g. sticky-configured
+    // survives a cleared Settings azure block) — mirrors requireAuth()'s own enforcement check exactly,
+    // so the wall and the IPC gate can never disagree about whether sign-in is required.
+    enforced: authEnforced() || isStickyConfigured()
   }
 }
 

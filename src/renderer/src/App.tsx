@@ -41,7 +41,8 @@ import {
   buildSpotlightRefPrompt,
   chooseQuickActionRoute,
   quickActionUnavailableMessage,
-  spotlightRefUnavailableMessage
+  spotlightRefUnavailableMessage,
+  transcriptHasContent
 } from '@shared/quick-actions'
 
 type View = 'answer' | 'copilot' | 'settings' | 'review' | 'history' | 'agenda' | 'brain'
@@ -951,7 +952,17 @@ export function App(): JSX.Element {
     if (claim) {
       ask.run({ mode: 'answer', kind: 'factcheck', label: claim, prompt: buildFactCheckClaimPrompt(claim) })
       setInput('')
+      return
     }
+    const lastThem = listen.listening ? [...listen.lines].reverse().find((l) => l.speaker === 'them')?.text : undefined
+    const c = lastThem || transcript
+    ask.run({
+      mode: 'answer',
+      kind: 'factcheck',
+      label: c || 'the conversation so far',
+      prompt: buildFactCheckClaimPrompt(c) + GUARD_LINE
+    })
+    setInput('')
   }, [
     input,
     listen.text,
@@ -1913,7 +1924,10 @@ export function App(): JSX.Element {
           setCollapsed(false)
         }}
         onNewChat={reset}
-        activeFile={savedPath ?? undefined}
+        // savedPath is the FULL path returned by the save IPC; RecallView's rows compare against the bare
+        // basename (m.file), so passing the full path here never matched and the "Just saved" badge never
+        // showed. Derive the basename (handling both '/' and Windows '\\' separators) before passing it.
+        activeFile={savedPath ? savedPath.split(/[\\/]/).pop() : undefined}
         onOpenMeeting={openPastMeeting}
         onIntelligence={() => {
           brainReturnViewRef.current = 'history'
@@ -2143,8 +2157,12 @@ export function App(): JSX.Element {
     )
   }
 
-  // Azure AD gate — blocks all use when SSO is configured and the user isn't signed in.
-  if (auth.status?.configured && !auth.status.signedIn && DEMO == null) {
+  // Azure AD gate — blocks all use when SSO is configured OR enforced (managed-config/env requireAuth,
+  // sticky-configured — see AuthStatus.enforced) and the user isn't signed in. Gating on `configured`
+  // alone let this wall be skipped whenever auth was enforced but not yet "configured" in the narrow
+  // sense, even though privileged IPC was already blocked underneath — `enforced` is optional and treated
+  // as false until the main process reports it.
+  if ((auth.status?.configured || auth.status?.enforced) && !auth.status?.signedIn && DEMO == null) {
     return (
       <div ref={setRoot} {...windowDrag} className="w-full p-1.5">
         <SignInWall status={auth.status} onSignIn={auth.signIn} />

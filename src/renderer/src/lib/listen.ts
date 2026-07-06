@@ -187,6 +187,11 @@ export function useListen(
 
   const workerRef = useRef<Worker | null>(null)
   const loadedQualityRef = useRef<'best' | 'fast' | null>(null) // quality the warm worker was loaded with
+  // The quality the USER actually asked for when start() was called, captured unconditionally of engine
+  // and independent of loadedQualityRef (which stays null whenever the whisper worker hasn't loaded yet,
+  // e.g. mid-Parakeet/Apple session). fallBackToWhisper and armNetworkRetry's retry() read this so a
+  // mid-session engine swap or a network-recovery reload honors the original choice instead of 'fast'.
+  const requestedQualityRef = useRef<'best' | 'fast'>('fast')
   const engineRef = useRef<'whisper' | 'parakeet' | 'apple'>('whisper') // active ASR engine for this session
   // Cached bundled-model flag: queried once from the main process and reused for every init message.
   // Fail closed on an IPC/preload error: installed builds must never turn a broken capability probe into
@@ -451,8 +456,10 @@ export function useListen(
   }, [pump])
 
   // Repeated Parakeet failures mid-session → permanently switch this session to Whisper so transcription
-  // keeps working (mirrors the init-time fallback in start()). The window that tripped the threshold is
-  // lost, but every subsequent window is transcribed by Whisper once its worker finishes loading.
+  // keeps working, loading it at the quality the user actually asked for at start() (requestedQualityRef),
+  // not whatever loadedQualityRef happens to hold (it's null throughout a Parakeet session — Whisper's
+  // worker was never touched). The window that tripped the threshold is lost, but every subsequent window
+  // is transcribed by Whisper once its worker finishes loading.
   // (ensureWorker/getAsrBundled are stable; referenced from pump above before this line — fine at call time.)
   const fallBackToWhisper = useCallback((): void => {
     if (engineRef.current !== 'parakeet' && engineRef.current !== 'apple') return // already switched
@@ -467,7 +474,7 @@ export function useListen(
     setState((s) => ({ ...s, loading: true }))
     void getAsrBundled()
       .then((bundled) => {
-        ensureWorker().postMessage({ type: 'init', quality: loadedQualityRef.current ?? 'fast', bundled })
+        ensureWorker().postMessage({ type: 'init', quality: requestedQualityRef.current, bundled })
       })
       .catch(() => {})
   }, [ensureWorker, getAsrBundled])
@@ -506,7 +513,7 @@ export function useListen(
         void getAsrBundled()
           .then((bundled) => {
             if (!liveRef.current || readyRef.current) return
-            ensureWorker().postMessage({ type: 'init', quality: loadedQualityRef.current ?? 'fast', bundled })
+            ensureWorker().postMessage({ type: 'init', quality: requestedQualityRef.current, bundled })
           })
           .catch(() => {})
       }
@@ -792,6 +799,11 @@ export function useListen(
       if (startingRef.current) return
       startingRef.current = true
       try {
+        // Capture the caller's requested quality up front, unconditional of which engine ends up running
+        // this session — fallBackToWhisper and armNetworkRetry's retry() (both able to fire well after this
+        // start() call returns) read requestedQualityRef instead of loadedQualityRef, which stays null for
+        // the whole lifetime of a Parakeet session.
+        requestedQualityRef.current = quality
         if (workerIdleTimer.current) {
           clearTimeout(workerIdleTimer.current) // re-arming before the idle release fires: keep the worker warm
           workerIdleTimer.current = null

@@ -159,12 +159,16 @@ function CheckRow({
  *  they're the bookends, not part of the countable sequence). */
 function StepDots({ step }: { step: number }): JSX.Element {
   return (
-    <div className="flex items-center gap-1.5">
+    <div className="flex items-center gap-1.5" role="group" aria-label={`Step ${step} of 5`}>
       {[1, 2, 3, 4, 5].map((n) => (
         <span
           key={n}
+          aria-current={n === step ? 'step' : undefined}
           className={`h-1.5 w-1.5 rounded-full ${n === step ? 'bg-[var(--color-accent)]' : 'bg-white/15'}`}
-        />
+        >
+          {/* Text alternative so the active step isn't conveyed by color alone (WCAG 1.4.1). */}
+          {n === step && <span className="sr-only">{`Step ${n} of 5`}</span>}
+        </span>
       ))}
     </div>
   )
@@ -429,8 +433,16 @@ export function Onboarding({
     // wrong provider and the next screen shows it as not connected).
     const chooseCli = async (): Promise<void> => {
       const claude = await window.toto.cliDetect('claude-cli')
-      if (claude.ok) return choose('claude-cli')
+      if (claude.ok) {
+        // Verify the connection now (mirrors Settings.tsx's connect flow) so providerReady reflects
+        // reality immediately instead of the first Ask silently bouncing off a CLI that's installed but
+        // was never actually confirmed connected. A cliTest failure (installed but not signed in) still
+        // lets onboarding proceed — the readiness checklist on the next slide surfaces the hint.
+        await window.toto.cliTest('claude-cli')
+        return choose('claude-cli')
+      }
       const codex = await window.toto.cliDetect('codex-cli')
+      if (codex.ok) await window.toto.cliTest('codex-cli')
       choose(codex.ok ? 'codex-cli' : 'claude-cli')
     }
     // "Mantu Dust" isn't just a preference — kick off the one-click setup right here so onboarding ends
@@ -563,7 +575,7 @@ export function Onboarding({
           <CheckRow
             ok={settings.providerReady}
             label={PROVIDERS[settings.provider]?.kind === 'cli' ? `${providerLabel} connected` : `${providerLabel} API key`}
-            hint="add it in Settings → AI"
+            hint={PROVIDERS[settings.provider]?.kind === 'cli' ? 'connect it in Settings → AI' : 'add it in Settings → AI'}
             // Settings can only render once the onboarding gate clears (App returns this panel while
             // !onboardingDone), so complete onboarding first — otherwise this link is a silent no-op,
             // a dead end on the one remediation the readiness checklist offers. finish() persists

@@ -503,7 +503,8 @@ export type RecapExport = z.infer<typeof RecapExportSchema>
 
 export const ChatTurnSchema = z.object({
   role: z.enum(['user', 'assistant']),
-  content: z.string()
+  // Bounded for defense-in-depth against a hostile/buggy renderer — same convention as brainContext below.
+  content: z.string().max(100_000)
 })
 export type ChatTurn = z.infer<typeof ChatTurnSchema>
 
@@ -547,7 +548,9 @@ const AskStartBaseSchema = z.object({
    *  conversation tail when a meeting is live). Main-assembled ONLY — cleared after parse and set from the
    *  local cache — so a hostile renderer can't smuggle screen text into the prompt. Capped like brainContext. */
   screenContext: z.string().max(8000).optional(),
-  history: z.array(ChatTurnSchema).default([])
+  // Bounded (defense-in-depth, mirrors brainContext's cap above) — an unbounded array let a hostile/buggy
+  // renderer hand main an ever-growing history to serialize/forward per ask.
+  history: z.array(ChatTurnSchema).max(50).default([])
 })
 export const AskStartSchema = AskStartBaseSchema.superRefine((value, context) => {
   if (value.visionEvidence && value.mode !== 'vision') {
@@ -876,7 +879,10 @@ export const PublicSettingsSchema = BaseSettingsSchema.extend({
   managedKeys: z.array(z.string()).default([]),
   /** Providers whose key is set via an environment variable — in-app Remove is a no-op for these. */
   envKeys: z.array(z.string()).default([]),
-  loginItemOpenAtLogin: z.boolean().default(false)
+  loginItemOpenAtLogin: z.boolean().default(false),
+  /** App version (e.g. from package.json/app.getVersion()), populated by main for the About screen.
+   *  Optional — absent on older callers/tests that construct PublicSettings without it. */
+  version: z.string().optional()
 })
 export type PublicSettings = z.infer<typeof PublicSettingsSchema>
 
@@ -967,7 +973,7 @@ export const DEFAULT_SETTINGS: Settings = {
   overlayOpacity: 1,
   showFullTranscriptInReview: false,
   asrQuality: 'fast',
-  asrEngine: 'parakeet',
+  asrEngine: 'whisper',
   asrLastFallbackAt: null,
   requireConsentIndicator: true,
   redactSensitive: true,
@@ -1136,6 +1142,10 @@ export interface AuthStatus {
   email?: string
   name?: string
   domain?: string
+  /** True when sign-in is actually enforced (env/managed-config requireAuth OR sticky-configured), even
+   *  if `configured` is false. Mirrors main/auth.ts requireAuth()'s own gate so the SignInWall can never
+   *  disagree with what privileged IPC actually blocks. Optional so existing partial consumers still typecheck. */
+  enforced?: boolean
 }
 export interface SignInResult {
   ok: boolean
