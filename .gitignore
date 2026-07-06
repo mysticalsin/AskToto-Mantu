@@ -28,3 +28,6 @@ deep-qa-test.mjs
 issues_to_fix.md
 # Multi-agent handoff scratch (never commit — carries AI-tool session identifiers, not app source)
 Relay Baton/
+.forge/qa/
+.forge/qa-udd-*/
+.forge/qa-appdata/
