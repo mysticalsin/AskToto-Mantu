@@ -109,8 +109,11 @@ let warnedUntrusted = false
  * - win32: yes only if the file is owned by SYSTEM/Administrators/TrustedInstaller AND no broad
  *   non-admin principal (Users, Authenticated Users, Everyone, Domain Users…) has a write ACE.
  *   A file planted by a standard user fails BOTH tests (they own it; it inherits Users:Write).
- * Fails CLOSED to "trusted" only when the file is absent (nothing to read); fails OPEN to "untrusted"
- * when the ACL cannot be read, so an unreadable/oddly-permissioned policy is never silently honored.
+ * Fails to "untrusted" both when the file is absent AND when the ACL cannot be read, so an
+ * unreadable/oddly-permissioned policy is never silently honored. Absent must NOT report trusted:
+ * that opened a stat→read TOCTOU where a standard user create/delete loop on the ProgramData path
+ * could win the race and get a forged policy honored for that read (and cached by mtime upstream).
+ * Legitimate behavior is identical — every reader already treats an absent file as no-policy.
  */
 export function isAdminManagedTrusted(path: string = adminManagedConfigPath()): boolean {
   if (process.platform !== 'win32') return true
@@ -120,7 +123,7 @@ export function isAdminManagedTrusted(path: string = adminManagedConfigPath()): 
     if (!st.isFile()) return false
     key = `${st.mtimeMs}:${st.size}`
   } catch {
-    return true // absent → readers get null anyway; nothing to distrust
+    return false // absent → no policy to honor; returning true here reopens the stat→read race
   }
   const cached = trustCache.get(path)
   if (cached && cached.key === key) return cached.trusted
