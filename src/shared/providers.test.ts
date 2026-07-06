@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { isDustReady, applyInteractiveGuardrail, PROVIDERS } from './providers'
+import { isDustReady, applyInteractiveGuardrail, detectProvider, PROVIDERS } from './providers'
 
 describe('isDustReady', () => {
   it('is true only when the key, workspace, and base agent are all present', () => {
@@ -54,5 +54,24 @@ describe('applyInteractiveGuardrail', () => {
     expect(applyInteractiveGuardrail('openai', 'base', 'gpt-4o-mini')).toBe('gpt-4o-mini')
     expect(applyInteractiveGuardrail('dust', 'think', 'agent_abc')).toBe('agent_abc')
     expect(applyInteractiveGuardrail('codex-cli', 'base', '')).toBe('')
+  })
+})
+
+describe('detectProvider', () => {
+  it('resolves an xai- key to grok (xAI)', () => {
+    expect(detectProvider('xai-abc123DEF456ghi789')).toBe('grok')
+  })
+
+  it('resolves an sk-ant- key to anthropic, beating the generic sk- guess', () => {
+    expect(detectProvider('sk-ant-abc123DEF456ghi789')).toBe('anthropic')
+  })
+
+  it('never guesses on an ambiguous bare sk- key shared by several providers', () => {
+    expect(detectProvider('sk-abc123DEF456ghi789')).toBeNull()
+  })
+
+  it('returns null for an empty or blank key', () => {
+    expect(detectProvider('')).toBeNull()
+    expect(detectProvider('   ')).toBeNull()
   })
 })
