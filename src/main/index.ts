@@ -477,9 +477,17 @@ function onFatal(kind: 'uncaughtException' | 'unhandledRejection', err: unknown)
 // A vision ask issued within CAPTURE_TTL_MS of a (pre-warmed) capture reuses the JPEG instead of paying the
 // ~150-450ms capture cost again. Kept tiny so the screen the model sees is never visibly stale.
 const CAPTURE_TTL_MS = 1500
-let shotCache: { image: string; width: number; height: number; dispId: number; ts: number } | null = null
+let shotCache:
+  | { image: string; width: number; height: number; dispId: number; displayMismatch: boolean; ts: number }
+  | null = null
 
-async function captureScreenshot(): Promise<{ image: string; width: number; height: number; dispId: number }> {
+async function captureScreenshot(): Promise<{
+  image: string
+  width: number
+  height: number
+  dispId: number
+  displayMismatch: boolean
+}> {
   const disp = screen.getDisplayNearestPoint(screen.getCursorScreenPoint())
   const sf = disp.scaleFactor || 1
   // Render the thumbnail already capped at VISION_MAX_EDGE (smaller = faster capture + ~50% smaller upload
@@ -507,7 +515,10 @@ async function captureScreenshot(): Promise<{ image: string; width: number; heig
   // first source — but AUDIT the mismatch so a wrong-monitor capture leaves a trace instead of silently
   // answering about the wrong screen.
   const matched = sources.find((s) => String(s.display_id) === String(disp.id))
-  if (!matched && sources.length > 1) {
+  // Surfaced to the caller (not just audited) so the renderer can show a soft "wrong screen?" notice
+  // instead of silently answering about a monitor the user didn't ask about.
+  const displayMismatch = !matched && sources.length > 1
+  if (displayMismatch) {
     auditLog('capture.display_mismatch', {
       requested: String(disp.id),
       available: sources.map((s) => String(s.display_id)),
@@ -525,10 +536,16 @@ async function captureScreenshot(): Promise<{ image: string; width: number; heig
   }
   const jpeg = img.toJPEG(VISION_JPEG_Q)
   const size = img.getSize()
-  return { image: jpeg.toString('base64'), width: size.width, height: size.height, dispId: disp.id }
+  return { image: jpeg.toString('base64'), width: size.width, height: size.height, dispId: disp.id, displayMismatch }
 }
 
-async function getScreenshot(phase?: string): Promise<{ image: string; width: number; height: number; capturedAt: number }> {
+async function getScreenshot(phase?: string): Promise<{
+  image: string
+  width: number
+  height: number
+  capturedAt: number
+  displayMismatch: boolean
+}> {
   // contentProtection (win.setContentProtection(true), set below and kept in sync on settings changes)
   // already makes the OS exclude the AskToto overlay from ANY screen capture — including this app's own.
   // So an explicit, user-initiated capture here is safe with content protection on: the overlay simply
@@ -537,15 +554,15 @@ async function getScreenshot(phase?: string): Promise<{ image: string; width: nu
   // used to disable the flagship vision feature out of the box.
   const disp = screen.getDisplayNearestPoint(screen.getCursorScreenPoint())
   if (shotCache && Date.now() - shotCache.ts < CAPTURE_TTL_MS && shotCache.dispId === disp.id) {
-    const { image, width, height, ts } = shotCache
-    return { image, width, height, capturedAt: ts }
+    const { image, width, height, ts, displayMismatch } = shotCache
+    return { image, width, height, capturedAt: ts, displayMismatch }
   }
   const shot = await captureScreenshot()
   const capturedAt = Date.now()
   shotCache = { ...shot, ts: capturedAt }
   auditLog('capture.screen', { width: shot.width, height: shot.height, bytes: shot.image.length, ...(phase ? { phase } : {}) })
-  const { image, width, height } = shot
-  return { image, width, height, capturedAt }
+  const { image, width, height, displayMismatch } = shot
+  return { image, width, height, capturedAt, displayMismatch }
 }
 
 /** Fill the cache + warm the OS capture pipeline ahead of a real ask. Fire-and-forget; auth-gated. */
@@ -851,11 +868,35 @@ function setTrayRecording(on: boolean): void {
   }
 }
 
+/** Snapshot of the getSettings()-derived values that drive live side effects OUTSIDE settingsSet (window
+ *  content protection, global shortcuts, tray labels). getSettings() already refreshes live from
+ *  managed-config.json via its own mtime cache (store.ts), but nothing re-ran those side effects when only
+ *  the managed file changed — an admin edit never reached the running window until an unrelated
+ *  settingsSet call or a restart. Compared on every settingsGet (see below) so it does. */
+function managedEffectsSnapshot(): string {
+  const s = getSettings()
+  return JSON.stringify({ contentProtection: s.contentProtection, shortcuts: s.shortcuts })
+}
+let lastAppliedManagedSnapshot: string | null = null
+
 function registerIpc(): void {
   // --- Settings & permissions ---
   ipcMain.handle(IPC.settingsGet, (e) => {
     assertMainWindow(e)
     const s = publicSettings()
+    // Re-apply the live side effects of a managed-config change (content protection / shortcuts / tray)
+    // if the relevant values drifted since we last applied them — but only then, so a plain settings poll
+    // (this handler runs on every renderer settings fetch) stays a cheap no-op. `null` means "just booted,
+    // createWindow/registerShortcuts already applied the current values" — establish the baseline without
+    // re-running them.
+    const managedSnap = managedEffectsSnapshot()
+    if (lastAppliedManagedSnapshot !== null && managedSnap !== lastAppliedManagedSnapshot) {
+      win?.setContentProtection(contentProtectionOn())
+      syncIntelContentProtection() // keep the dashboard window's Private View in lockstep with the overlay
+      registerShortcuts()
+      rebuildTrayMenu()
+    }
+    lastAppliedManagedSnapshot = managedSnap
     // Auth is enforced and this caller isn't signed in: don't hard-fail (the renderer needs settings to
     // render the SignInWall itself), but redact PII an unauthenticated renderer/DevTools caller has no
     // business reading — the resume/job-description/notes profile fields and any imported per-mode
@@ -1441,7 +1482,10 @@ function registerIpc(): void {
     // question (which already carries the live transcript tail via the renderer's withContext) and inject
     // the relevant, meeting-cited slice per-turn. Answer mode only — never the latency-critical spoken
     // suggest line or the screen-only vision turn. Best-effort: a brain read must never block an answer.
-    if (req.mode === 'answer') {
+    // Excludes fact-check (mode:'answer', kind:'factcheck'): personas.ts strips GROUNDING_RAIL for it
+    // (its contract is a VERDICT-only response), so injecting brainContext here would add citable
+    // material with no citation/anti-fabrication guardrail attached — gate identically to the rail.
+    if (req.mode === 'answer' && req.kind !== 'factcheck') {
       try {
         const hit = buildBrainContext(s, `${req.prompt}\n${req.transcript ?? ''}`)
         req.brainContext = hit.block || undefined
@@ -1891,6 +1935,10 @@ function registerIpc(): void {
   // --- Filesystem pickers ---
   ipcMain.handle(IPC.pickFolder, async (e) => {
     assertMainWindow(e)
+    // Trust boundary is main, not the renderer — this persists a settings write (meetingsFolder), so it
+    // must be gated the same as every other settings-writer. Without this, a DevTools/compromised-renderer
+    // caller could silently redirect where transcripts are written even with auth enforced.
+    if (!requireAuth()) return { cancelled: true }
     // Same LSUIElement-accessory-app reasoning as recapPdf above: anchor to `win` so the dialog actually
     // surfaces instead of silently hanging with nothing to attach to.
     const openDialogOpts: Electron.OpenDialogOptions = {
@@ -2291,7 +2339,10 @@ if (!app.requestSingleInstanceLock()) {
         /* best-effort — the lazy on-401 refresh in dust.ts still covers this */
       })
   }
-  refreshAndPersistDust('startup')
+  // Wrapped in runStep: refreshAndPersistDust does synchronous work (getSettings, hasApiKey) before its
+  // async refreshDustCliSession() call, so an unguarded throw here would abort createTray/registerShortcuts/
+  // createWindow below it — a startup Dust-refresh hiccup must never take down window creation.
+  runStep('refreshDustSession', () => refreshAndPersistDust('startup'))
   // Keep the session warm for the app's whole lifetime: re-mint whenever the token passes 45 min of
   // its ~1h life, so it never expires mid-meeting and the user never sees a Dust reconnect. The
   // single-flight guard inside refreshDustCliSession makes this safe alongside the on-401 path.

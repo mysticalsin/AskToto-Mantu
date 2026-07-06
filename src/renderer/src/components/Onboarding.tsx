@@ -154,20 +154,23 @@ function CheckRow({
   )
 }
 
-/** 5-dot progress indicator for the walkthrough + provider-choice slides (2-4 are the toolbar tour,
- *  5 is the provider picker; 1 and 6 are the consent gate and readiness gate, which don't need it since
- *  they're the bookends, not part of the countable sequence). */
+/** 4-dot progress indicator for the walkthrough + provider-choice slides (2-4 are the toolbar tour, 5 is
+ *  the provider picker; 1 and 6 are the consent gate and readiness gate, which don't need it since they're
+ *  the bookends, not part of the countable sequence). Callers pass the RAW slide number (2-5) — normalized
+ *  here to a 1-4 dot index so the first shown slide (step 2) lights dot 1 and announces "Step 1 of 4"
+ *  instead of dot 2 / "Step 2 of 5". */
 function StepDots({ step }: { step: number }): JSX.Element {
+  const dot = step - 1 // raw slide 2-5 -> dot 1-4
   return (
-    <div className="flex items-center gap-1.5" role="group" aria-label={`Step ${step} of 5`}>
-      {[1, 2, 3, 4, 5].map((n) => (
+    <div className="flex items-center gap-1.5" role="group" aria-label={`Step ${dot} of 4`}>
+      {[1, 2, 3, 4].map((n) => (
         <span
           key={n}
-          aria-current={n === step ? 'step' : undefined}
-          className={`h-1.5 w-1.5 rounded-full ${n === step ? 'bg-[var(--color-accent)]' : 'bg-white/15'}`}
+          aria-current={n === dot ? 'step' : undefined}
+          className={`h-1.5 w-1.5 rounded-full ${n === dot ? 'bg-[var(--color-accent)]' : 'bg-white/15'}`}
         >
           {/* Text alternative so the active step isn't conveyed by color alone (WCAG 1.4.1). */}
-          {n === step && <span className="sr-only">{`Step ${n} of 5`}</span>}
+          {n === dot && <span className="sr-only">{`Step ${n} of 4`}</span>}
         </span>
       ))}
     </div>

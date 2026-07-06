@@ -1094,7 +1094,13 @@ export function useListen(
     // Returns a Promise that resolves once teardown actually lands (or is skipped because a fresher
     // start() superseded this stop) — App.tsx's endReview awaits this so it reads listen.text() AFTER the
     // final flushed window has committed, instead of racing the drain with a stale pre-stop snapshot.
-    const DRAIN_CEILING_MS = 4000
+    // Parakeet decodes run in the main process over IPC and race their own PARAKEET_FEED_TIMEOUT_MS
+    // timeout per window (see pump() above). A drain ceiling shorter than that timeout would tear down
+    // (liveRef=false) while the last decode is still in flight — and commitLine drops any line that lands
+    // after liveRef flips false — silently losing the final sentence of a Parakeet session. Give Parakeet
+    // sessions a ceiling that comfortably outlasts their own feed timeout; Whisper (in-process, no IPC
+    // round trip) keeps the original 4s ceiling.
+    const DRAIN_CEILING_MS = engineRef.current === 'parakeet' ? PARAKEET_FEED_TIMEOUT_MS + 1000 : 4000
     const startedAt = Date.now()
     return new Promise<void>((resolve) => {
       const finishTeardown = (): void => {

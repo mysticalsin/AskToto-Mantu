@@ -11,7 +11,8 @@ import {
   Trash2,
   Pencil,
   Brain,
-  Upload
+  Upload,
+  Lock
 } from 'lucide-react'
 import { TextButton } from './ui'
 import { accelLabel } from '../lib/keys'
@@ -443,10 +444,22 @@ const MeetingRow = memo(function MeetingRow({
               onDoubleClick={() => onOpen(m.file)}
               className="no-drag focus-ring flex flex-1 items-center gap-2 rounded-lg px-2 py-1.5 text-left hover:bg-white/[0.06]"
             >
-              <FileText size={12} className="shrink-0 text-[color:var(--color-ink-3)]" />
+              {m.locked ? (
+                <Lock size={12} className="shrink-0 text-[color:var(--color-ink-3)]" aria-label="Encrypted, can't be opened on this device" />
+              ) : (
+                <FileText size={12} className="shrink-0 text-[color:var(--color-ink-3)]" />
+              )}
               <span className="min-w-0 flex-1 truncate text-[12px] font-medium text-[color:var(--color-ink)]">
                 {m.title}
               </span>
+
+              {/* Locked: a real encrypted meeting that couldn't be decrypted on this device. Shown so it
+                  isn't silently missing; opening it surfaces the existing "couldn't be decrypted" error. */}
+              {m.locked && (
+                <span className="shrink-0 rounded-full bg-white/[0.06] px-2 py-0.5 text-[10px] text-[color:var(--color-ink-3)]">
+                  Locked
+                </span>
+              )}
 
               {/* Analyzing badge */}
               {isActive && (
@@ -612,7 +625,7 @@ export function RecallView({
   const listRef = useRef<HTMLDivElement>(null)
   /** "Import audio" button state — idle outside a run; disables the button and drives its label. */
   const [importState, setImportState] = useState<{
-    stage: 'idle' | 'decoding' | 'transcribing' | 'saving'
+    stage: 'idle' | 'decoding' | 'downloading' | 'transcribing' | 'saving'
     pct: number
     error: string | null
   }>({ stage: 'idle', pct: 0, error: null })
@@ -883,7 +896,12 @@ export function RecallView({
             value={q}
             onChange={(e) => setQ(e.target.value)}
             onKeyDown={(e) => {
-              if (e.key === 'Enter' && !e.nativeEvent.isComposing) openSelected()
+              // Ignore Enter while a debounced search (250ms) is still pending — q !== debouncedQ means
+              // `items` (and therefore selectedFile/items[0] below) still reflects the PREVIOUS query, so
+              // resolving "which file to open" now could open a stale-list result instead of what's
+              // actually being typed. debouncedQ is set to the exact `q` a fetch resolved for (see the
+              // search effect above), so this comparison is exact, not just "search settled".
+              if (e.key === 'Enter' && !e.nativeEvent.isComposing && q === debouncedQ) openSelected()
             }}
             placeholder="Ask or search anything"
             spellCheck={false}

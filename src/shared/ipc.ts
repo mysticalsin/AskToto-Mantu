@@ -272,7 +272,7 @@ export interface ImportAudioChunkResult {
 export interface ImportAudioProgress {
   sessionId: string
   pct: number
-  stage: 'transcribing' | 'saving'
+  stage: 'transcribing' | 'saving' | 'downloading'
 }
 
 /** Payload for brain:setDealOutcome — the human marks a deal open/won/lost (see DealEntitySchema.outcome
@@ -728,6 +728,9 @@ export interface MeetingSummary {
   durationMin: number
   participants: string[]
   topics?: string[]
+  /** True for a real encrypted meeting that failed to decrypt on this device — listed as a locked
+   *  stub (no preview) so it's visible with a lock affordance instead of silently vanishing. */
+  locked?: boolean
 }
 export interface RecallHit extends MeetingSummary {
   snippet: string
@@ -944,6 +947,9 @@ export const CaptureResultSchema = z.object({
   width: z.number(),
   height: z.number(),
   /** Epoch ms when the screenshot was captured or cache-filled; used for real freshness UI. */
-  capturedAt: z.number().int().nonnegative()
+  capturedAt: z.number().int().nonnegative(),
+  /** True when the captured monitor didn't match the cursor's display (fell back to sources[0]);
+   *  the renderer surfaces a soft "captured a different monitor" notice. */
+  displayMismatch: z.boolean().optional()
 })
 export type CaptureResult = z.infer<typeof CaptureResultSchema>

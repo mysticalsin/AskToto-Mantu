@@ -170,7 +170,7 @@ async function saveImportSession(
 export async function handleImportChunk(
   settings: Settings,
   chunk: ImportAudioChunk,
-  onProgress: (pct: number, stage: 'transcribing' | 'saving') => void
+  onProgress: (pct: number, stage: 'transcribing' | 'saving' | 'downloading') => void
 ): Promise<ImportAudioChunkResult> {
   ensureQuitHook()
 
@@ -188,7 +188,11 @@ export async function handleImportChunk(
 
   try {
     if (chunk.samples.length > 0) {
-      await ensureParakeetModel()
+      // First-time model download (~487 MB) can take minutes; without forwarding progress here, a
+      // first-run import looked frozen at whatever pct the last 'transcribing' onProgress call reported.
+      // Mirrors the live-Listen path's ensureParakeetModel(progress) wiring (index.ts). A no-op (never
+      // invokes onProgress) once the model is already on disk, so every later import is unaffected.
+      await ensureParakeetModel((pct) => onProgress(pct, 'downloading'))
       const text = await parakeetTranscribe(chunk.samples)
       if (text.trim()) session.lines.push(chunkToLine(text, chunk.seq, session.startedAt))
     }

@@ -87,13 +87,16 @@ export const Copilot = memo(function Copilot({
     return visible.map((l, i) => <TranscriptRow key={`${l.t}-${start + i}`} line={l} />)
   }, [lines])
 
+  // Transcript is hidden during the call; the bar's "Transcript" button drives showTranscript on demand.
+  const showTx = showTranscript
+
+  // The scroller section only mounts while showTx is true — depending on `lines` alone means opening it
+  // mid-call (showTx flipping true with no new line arriving) leaves it scrolled to wherever it happened
+  // to mount instead of the bottom. Re-run on showTx too so opening it always jumps to the latest line.
   useEffect(() => {
     const el = scroller.current
     if (el) el.scrollTop = el.scrollHeight
-  }, [lines])
-
-  // Transcript is hidden during the call; the bar's "Transcript" button drives showTranscript on demand.
-  const showTx = showTranscript
+  }, [lines, showTx])
 
   // Real flag (state.ts AnswerState.usedScreen), not a label string-match — robust even if a future
   // caller passes a different label alongside a screenshot-grounded answer.
