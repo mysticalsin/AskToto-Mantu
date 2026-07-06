@@ -86,6 +86,53 @@ const EXPIRING_SOON_WINDOW_MS = THIRTY_DAYS_MS;
 // expiredLicenses counts every license whose expiresAt has passed (whether or not it's also
 // revoked) — only activeLicenses requires *both* "not revoked" and "not expired". A license that is
 // both revoked and expired is counted in both revokedLicenses and expiredLicenses, but not active.
+// How many trailing UTC days the analytics activation timeline covers.
+const ANALYTICS_DAYS = 30;
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+function utcDayKey(ms) {
+  return new Date(ms).toISOString().slice(0, 10);
+}
+
+// Chart-ready aggregates behind GET /admin/analytics. Two shapes:
+//  - activationsByDay: one entry per UTC day for the last 30 days INCLUDING zero-count days
+//    (a chart with holes where nothing happened reads as broken, not quiet).
+//  - seatUtilization: every license's used/cap pair, sorted by seats used — the dashboard
+//    truncates for display; the API returns all so nothing is silently hidden.
+export function computeAnalytics(licenses, now = Date.now()) {
+  const dayCounts = new Map();
+  const todayStart = Date.parse(`${utcDayKey(now)}T00:00:00.000Z`);
+  for (let i = ANALYTICS_DAYS - 1; i >= 0; i -= 1) {
+    dayCounts.set(utcDayKey(todayStart - i * DAY_MS), 0);
+  }
+
+  const seatUtilization = [];
+  for (const license of licenses) {
+    for (const activation of license.activations) {
+      // store.mjs validates activations is an array, not each entry's fields — a record restored
+      // from an old/foreign backup may lack activatedAt or carry garbage. Number.isFinite alone
+      // isn't enough: a finite ms value beyond ±8.64e15 still makes toISOString() throw.
+      const activatedDate = new Date(activation.activatedAt);
+      if (typeof activation.activatedAt !== 'number' || Number.isNaN(activatedDate.getTime())) continue;
+      const key = activatedDate.toISOString().slice(0, 10);
+      if (dayCounts.has(key)) dayCounts.set(key, dayCounts.get(key) + 1);
+    }
+    seatUtilization.push({
+      licenseKey: license.licenseKey,
+      companyName: license.companyName,
+      seatsUsed: license.activations.length,
+      seatCap: license.seatCap,
+      revoked: license.revoked,
+    });
+  }
+  seatUtilization.sort((a, b) => b.seatsUsed - a.seatsUsed || b.seatCap - a.seatCap);
+
+  return {
+    activationsByDay: Array.from(dayCounts, ([day, count]) => ({ day, count })),
+    seatUtilization,
+  };
+}
+
 export function computeStats(licenses) {
   const now = Date.now();
   const soonCutoff = now + EXPIRING_SOON_WINDOW_MS;

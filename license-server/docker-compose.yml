@@ -16,6 +16,13 @@ services:
     environment:
       PORT: '8420'
       LICENSE_ADMIN_TOKEN: ${LICENSE_ADMIN_TOKEN:?set LICENSE_ADMIN_TOKEN (e.g. openssl rand -hex 24)}
+      # Optional integrations (empty = off / defaults; see README env table).
+      LICENSE_WEBHOOK_URL: ${LICENSE_WEBHOOK_URL:-}
+      LICENSE_WEBHOOK_SECRET: ${LICENSE_WEBHOOK_SECRET:-}
+      WEBHOOK_EXPIRY_ALERT_DAYS: ${WEBHOOK_EXPIRY_ALERT_DAYS:-}
+      METRICS_TOKEN: ${METRICS_TOKEN:-}
+      BACKUP_INTERVAL_HOURS: ${BACKUP_INTERVAL_HOURS:-}
+      BACKUP_KEEP: ${BACKUP_KEEP:-}
     volumes:
       - license_data:/app/data
 
