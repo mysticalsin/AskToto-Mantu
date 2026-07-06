@@ -127,17 +127,38 @@ License created successfully.
     ATK-7QHM2K9X3VBN8ZC1FGJ0
 ```
 
-## Backups
+## Backups and restore
 
-`data/licenses.json` is the business record; back it up with
-`node scripts/backup.mjs --url <server-url> --token <admin-token>` (writes a
-timestamped JSON file into `./backups/`, gitignored, default `--out`).
+`data/licenses.json` is the business record. Back it up and restore it through the
+admin API of a running server (no direct volume access needed):
 
-Crontab example (daily at 2am):
+Back up (one exact `GET /admin/export` call, written to a timestamped file):
+
+```
+node scripts/backup.mjs --url <server-url> --token <admin-token> [--out ./backups]
+```
+
+Restore (REPLACES the entire store from a backup file; the server writes a
+`licenses.pre-restore-<timestamp>.bak` snapshot next to its data file first, so a
+wrong restore can't lose the current licenses):
+
+```
+node scripts/restore.mjs --url <server-url> --token <admin-token> --file ./backups/licenses-backup-....json --yes
+```
+
+Without `--yes`, restore only prints what it would do. Take a fresh backup before
+any restore.
+
+Crontab example (daily backup at 2am):
 
 ```
 0 2 * * * cd /path/to/license-server && node scripts/backup.mjs --url https://your-license-server.example.com --token "$LICENSE_ADMIN_TOKEN" --out /path/to/backups >> /var/log/asktoto-license-backup.log 2>&1
 ```
+
+A partially-corrupt `licenses.json` (valid JSON but a malformed record) has its bad
+entries dropped with a warning on load; a file that isn't parseable JSON at all makes
+the server refuse to start rather than come up with an empty store (which would
+silently un-license every customer).
 
 ## Managing licenses in the browser
 

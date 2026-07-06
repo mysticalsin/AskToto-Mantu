@@ -76,14 +76,11 @@ async function main() {
 
   const url = args.url.replace(/\/+$/, '');
 
-  // The list endpoint omits activations/contactEmail/notes, so fetch each
-  // license's full detail too — a backup is only useful if it's complete.
-  const list = await fetchAdminJson(url, args.token, '/admin/licenses');
-  const licenses = [];
-  for (const entry of list) {
-    const detail = await fetchAdminJson(url, args.token, `/admin/licenses/${encodeURIComponent(entry.licenseKey)}`);
-    licenses.push(detail);
-  }
+  // One call to /admin/export returns the exact persisted store (every field, every activation) - the
+  // authoritative, restore-compatible snapshot. (Older builds without /admin/export can still be backed
+  // up by reconstructing from list + per-license detail, but export is exact and cheaper.)
+  const exported = await fetchAdminJson(url, args.token, '/admin/export');
+  const licenses = exported.licenses || [];
 
   const backup = {
     generatedAt: new Date().toISOString(),

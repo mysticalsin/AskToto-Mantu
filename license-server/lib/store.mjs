@@ -18,15 +18,40 @@ export function createStore(dbPath) {
   let loaded = false;
   let writeQueue = Promise.resolve();
 
+  // A minimally-valid license record. A partially-corrupt data file (valid JSON, but an entry missing
+  // its key or activations) must not be served as-is: a license with no key can never be found/activated
+  // and an activations field that isn't an array crashes seat math. We drop such entries loudly rather
+  // than silently serve garbage. (A file that isn't parseable JSON at all still throws below = fail loud,
+  // never start empty — starting empty would silently un-license every real customer.)
+  function isValidLicense(l) {
+    return (
+      l &&
+      typeof l === 'object' &&
+      typeof l.licenseKey === 'string' &&
+      l.licenseKey.length > 0 &&
+      typeof l.seatCap === 'number' &&
+      Array.isArray(l.activations)
+    );
+  }
+
   async function load() {
     try {
       const raw = await fs.readFile(dbPath, 'utf8');
       const parsed = JSON.parse(raw);
-      licenses = Array.isArray(parsed) ? parsed : [];
+      const arr = Array.isArray(parsed) ? parsed : [];
+      const valid = arr.filter(isValidLicense);
+      if (valid.length !== arr.length) {
+        console.warn(
+          `[license-server] licenses store had ${arr.length - valid.length} malformed record(s); they were dropped on load. Check ${dbPath}.`
+        );
+      }
+      licenses = valid;
     } catch (err) {
       if (err.code === 'ENOENT') {
         licenses = [];
       } else {
+        // Unparseable file (disk corruption, truncated write): fail loud. Do NOT start with an empty
+        // store, which would silently un-license every customer until someone noticed.
         throw err;
       }
     }
@@ -80,6 +105,19 @@ export function createStore(dbPath) {
     return true;
   }
 
+  // Replace the ENTIRE dataset (used by /admin/restore). Rejects a payload that isn't a clean array of
+  // valid licenses BEFORE touching anything, so a bad restore can't wipe or half-apply the store. The
+  // caller is responsible for snapshotting the current data first. Returns the count restored.
+  function replaceAll(nextLicenses) {
+    assertLoaded();
+    if (!Array.isArray(nextLicenses) || !nextLicenses.every(isValidLicense)) {
+      throw new Error('restore payload must be an array of valid license records');
+    }
+    licenses = nextLicenses;
+    persist();
+    return licenses.length;
+  }
+
   // Resolves once every write enqueued so far has settled. Route handlers
   // don't need this (persist() is intentionally fire-and-forget so requests
   // aren't held open on disk I/O), but graceful shutdown and tests do — both
@@ -95,6 +133,7 @@ export function createStore(dbPath) {
     findByKey,
     addLicense,
     removeLicense,
+    replaceAll,
     persist,
     idle,
     get dbPath() {

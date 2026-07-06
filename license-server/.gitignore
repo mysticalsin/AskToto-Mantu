@@ -5,3 +5,5 @@ data/*.tmp
 *.tmp
 backups/
 .env
+*.bak
+data/*.pre-restore-*.bak

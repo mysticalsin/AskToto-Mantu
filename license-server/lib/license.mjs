@@ -106,7 +106,10 @@ export function computeStats(licenses) {
     totalActive30d += countActiveSeats30d(license);
 
     const hasExpiry = license.expiresAt !== null && license.expiresAt !== undefined;
-    const isExpired = hasExpiry && license.expiresAt <= now;
+    // Exclusive (< now), matching licenseStatus() which is the authoritative gate used by /activate and
+    // /heartbeat — otherwise at the exact expiry millisecond the app would still activate while the
+    // dashboard counted the license expired.
+    const isExpired = hasExpiry && license.expiresAt < now;
 
     if (license.revoked) revokedLicenses += 1;
     if (isExpired) expiredLicenses += 1;

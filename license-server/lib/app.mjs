@@ -1,6 +1,6 @@
 import express from 'express';
 import { createHash, timingSafeEqual } from 'node:crypto';
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
@@ -448,6 +448,43 @@ export function createApp(store, auditLog) {
     const limit = Number.isInteger(requested) && requested > 0 ? Math.min(requested, AUDIT_MAX_LIMIT) : AUDIT_DEFAULT_LIMIT;
     const entries = await auditLog.readLast(limit);
     res.json(entries);
+  });
+
+  // Full-fidelity export of the ENTIRE store, exactly as persisted (every field, every activation).
+  // This is the authoritative backup source - one call, exact state - so scripts/backup.mjs doesn't
+  // have to reconstruct it from list+detail.
+  app.get('/admin/export', requireAdmin, (req, res) => {
+    res.json({ version: PACKAGE_VERSION, exportedAt: Date.now(), licenses: store.getAll() });
+  });
+
+  // Replace the entire store from a backup (disaster recovery / migration between servers). Before
+  // touching anything it snapshots the CURRENT data to a timestamped .bak file next to the db, so a
+  // restore can never destroy the existing licenses even if the operator restores the wrong file.
+  // store.replaceAll rejects a malformed payload before mutating, so a bad body is a clean 400.
+  app.post('/admin/restore', requireAdmin, (req, res) => {
+    const body = req.body || {};
+    const incoming = Array.isArray(body) ? body : body.licenses;
+    if (!Array.isArray(incoming)) {
+      return res.status(400).json({ ok: false, error: 'invalid_request', message: 'body must be { licenses: [...] } or a raw array' });
+    }
+    // Snapshot current state first (best-effort but logged) - the safety net for a wrong restore.
+    let snapshotPath = null;
+    try {
+      const stamp = new Date(Date.now()).toISOString().replace(/[:.]/g, '-');
+      snapshotPath = path.join(path.dirname(store.dbPath), `licenses.pre-restore-${stamp}.bak`);
+      writeFileSync(snapshotPath, JSON.stringify(store.getAll(), null, 2), 'utf8');
+    } catch (err) {
+      console.warn('[license-server] could not write pre-restore snapshot:', err);
+      snapshotPath = null;
+    }
+    let count;
+    try {
+      count = store.replaceAll(incoming);
+    } catch (err) {
+      return res.status(400).json({ ok: false, error: 'invalid_request', message: err.message });
+    }
+    auditLog.record({ action: 'restore', licenseKey: '(all)', details: { restoredCount: count, snapshot: snapshotPath && path.basename(snapshotPath) } });
+    return res.json({ ok: true, restoredCount: count, snapshot: snapshotPath && path.basename(snapshotPath) });
   });
 
   app.get('/health', (req, res) => {
