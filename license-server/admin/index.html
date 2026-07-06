@@ -1614,13 +1614,14 @@
 
   // Validate a cached token BEFORE revealing the dashboard: don't flash the full dashboard chrome for
   // a token that turns out stale (admin rotated the secret, or another tab signed out). Keep the gate
-  // up, in a checking state, until the first authorized load actually succeeds; a 401 inside apiFetch
-  // calls handleUnauthorized() which returns to the gate with a message.
+  // up, in a checking state, until the first load actually succeeds. loadLicenses() SWALLOWS a 401 (its
+  // own .catch resolves), and apiFetch's handleUnauthorized() nulls `token` + shows the gate on a 401 —
+  // so only reveal the dashboard when `token` is still set after the load, i.e. auth actually held.
   if (token) {
     showGate('Checking your saved session...');
-    loadLicenses()
-      .then(function () { showDashboard(); })
-      .catch(function () { /* apiFetch already reverted to the gate on 401; other errors leave it up */ });
+    loadLicenses().then(function () {
+      if (token) showDashboard();
+    });
   } else {
     showGate();
   }
