@@ -813,7 +813,8 @@ function publicSettings(): PublicSettings {
     managedKeys: getLockedKeys(),
     envKeys: getEnvKeyProviders(),
     loginItemOpenAtLogin,
-    version: app.getVersion()
+    version: app.getVersion(),
+    allowedProviders: allowed // org allowlist (null = unrestricted); surfaced so the picker matches enforcement
   }
 }
 
@@ -3609,6 +3610,14 @@ if (!app.requestSingleInstanceLock()) {
   // the meeting-reminder toast for portable-build and launch-at-login users (no shortcut in the launch
   // path). Set it to the exact appId, before createTray/createWindow/any Notification.
   if (process.platform === 'win32') app.setAppUserModelId('com.mantu.asktoto')
+  // Windows CreateProcess searches the current working directory for a bare-name child executable
+  // before it searches PATH — if AskToto is ever launched from an attacker-writable cwd, a planted
+  // binary (uv/python/npm/where/tar/cmd, etc.) could get executed by any later spawn. Move cwd to our
+  // own userData dir (always exists at startup; nothing in the app relies on process.cwd()) before any
+  // spawn/createTray/createWindow happens, so that class of attack has nothing left to land in.
+  if (process.platform === 'win32') {
+    try { process.chdir(app.getPath('userData')) } catch { /* best-effort */ }
+  }
   // Unpackaged (dev/QA) runs show Electron's default icon in the Dock — brand them with the Mantu M so
   // a dev window is never mistaken for "the Electron thing". Packaged builds get build/icon.png baked
   // in by electron-builder (mac .icns / win .ico) and don't need this.
