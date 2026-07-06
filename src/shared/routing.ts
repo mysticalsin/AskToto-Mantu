@@ -13,6 +13,14 @@ export type ThinkingMode = 'auto' | 'always' | 'never'
 /** Ask modes the router cares about (AskMode: 'answer' is the normal chat turn). */
 export type RoutableMode = 'answer' | 'vision' | 'suggest' | 'summary' | 'recap' | string
 
+// The renderer's own prompt-builders (withContext/buildWhatNextPrompt/buildExplainPrompt/
+// buildSpotlightRefPrompt in shared/quick-actions.ts + App.tsx) all wrap INJECTED grounding material —
+// the live meeting transcript or on-screen text, up to ~3000 chars — in a `"""..."""` fence. That
+// convention is specific to this app (a bare human question essentially never contains literal `"""`),
+// so stripping it before measuring length lets the length heuristic judge the user's own question
+// instead of whatever context was bolted on for grounding.
+const stripInjectedContext = (t: string): string => t.replace(/"""[\s\S]*?"""/g, ' ').trim()
+
 /**
  * Heuristic: is this a DEEP question — coding / engineering / formal math / explicit "think deeply"?
  * These go to the deepest model (Opus). Deterministic and zero-latency — no extra model call.
@@ -23,7 +31,11 @@ export function isHardQuestion(text: string): boolean {
   if (!t) return false
   // Any fenced code block, or a long multi-part prompt → treat as complex.
   if (/```/.test(t)) return true
-  if (t.length > 600) return true
+  // Length alone escalates to the expensive deep/Opus tier, so judge it on the actual question, not on an
+  // injected transcript/screen-context block riding along with it (see stripInjectedContext above) — else
+  // any ordinary quick action sent with a long meeting transcript for grounding gets silently forced to
+  // the deep tier regardless of how simple the question itself is.
+  if (stripInjectedContext(t).length > 600) return true
 
   const lower = t.toLowerCase()
   // Engineering / coding / technical-depth signals.

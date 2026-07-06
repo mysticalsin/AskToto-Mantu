@@ -1104,6 +1104,9 @@ export interface MeetingSummary {
   /** Task MI-5: frontmatter `confidential: true` — excludes this meeting from every published wiki
    *  surface (note card, entity timelines/current-facts, indexes). Undefined/false = not confidential. */
   confidential?: boolean
+  /** True for a real encrypted meeting that failed to decrypt on this device — listed as a locked
+   *  stub (no preview) so it's visible with a lock affordance instead of silently vanishing. */
+  locked?: boolean
 }
 export interface RecallHit extends MeetingSummary {
   snippet: string
@@ -1437,7 +1440,10 @@ export const CaptureResultSchema = z.object({
   width: z.number(),
   height: z.number(),
   /** Epoch ms when the screenshot was captured or cache-filled; used for real freshness UI. */
-  capturedAt: z.number().int().nonnegative()
+  capturedAt: z.number().int().nonnegative(),
+  /** True when the captured monitor didn't match the cursor's display (fell back to sources[0]);
+   *  the renderer surfaces a soft "captured a different monitor" notice. */
+  displayMismatch: z.boolean().optional()
 })
 export type CaptureResult = z.infer<typeof CaptureResultSchema>
 

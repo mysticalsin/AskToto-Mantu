@@ -1499,7 +1499,10 @@ function CliIntegration({
     const testResult = await window.toto.cliTest(id)
 
     if (testResult.ok) {
-      patch({ provider: id })
+      // Guard against a stale in-flight install/test resolving after the user switched tabs (unmounting
+      // this card) — without this, a late resolution here can re-activate a provider the user already
+      // disconnected in the meantime (see disconnectCli). Mirrors setState's own mountedRef guard.
+      if (mountedRef.current) patch({ provider: id })
       setState(id, { phase: 'done', msg: null, version: testResult.version ?? null })
       return
     }
@@ -1518,7 +1521,8 @@ function CliIntegration({
     setState(id, { phase: 'connecting', msg: 'Connecting…', version: null })
     const r = await window.toto.cliTest(id)
     if (r.ok) {
-      patch({ provider: id })
+      // Same stale-resolution guard as runInstall above.
+      if (mountedRef.current) patch({ provider: id })
       setState(id, { phase: 'done', msg: null, version: r.version ?? null })
     } else {
       setState(id, {
@@ -2926,14 +2930,14 @@ function getAudioChoices(): {
       id: 'both',
       label: 'Both',
       desc: 'You + them',
-      perm: isWin ? 'Needs Mic; Windows prompts for system audio' : 'Needs Mic + Screen Recording',
+      perm: isWin ? 'Needs Mic; captures your speaker output automatically (no prompt)' : 'Needs Mic + Screen Recording',
       icon: Headphones
     },
     {
       id: 'system',
       label: 'Them',
       desc: 'The other person',
-      perm: isWin ? 'Windows prompts for system audio' : 'Needs Screen Recording',
+      perm: isWin ? 'Captures your speaker output automatically (no prompt)' : 'Needs Screen Recording',
       icon: Volume2
     },
     { id: 'mic', label: 'You', desc: 'Your mic only', perm: 'Needs Mic', icon: Mic }
@@ -2997,7 +3001,16 @@ const MIC_METER_FULL_SCALE = 0.2
  *  rAF loop; the effect calls it on every unmount AND every deviceId change (effect cleanup runs
  *  before the next effect body), so switching devices or leaving the Audio tab (this component
  *  unmounts with it — see the `tab === 'audio'` guard around MicPicker) always fully releases the mic. */
-function MicLevelMeter({ deviceId }: { deviceId: string }): JSX.Element {
+function MicLevelMeter({
+  deviceId,
+  permissionNonce
+}: {
+  deviceId: string
+  /** Bumped by MicPicker's unlockLabels() after a fresh mic-permission grant. deviceId alone doesn't
+   *  change when permission is granted in the same panel, so the meter would otherwise stay stuck on
+   *  "No signal" until some unrelated device switch re-ran this effect. */
+  permissionNonce?: number
+}): JSX.Element {
   const [blocked, setBlocked] = useState(false)
   const barRef = useRef<HTMLDivElement>(null)
 
@@ -3067,7 +3080,7 @@ function MicLevelMeter({ deviceId }: { deviceId: string }): JSX.Element {
       cancelled = true
       teardown()
     }
-  }, [deviceId])
+  }, [deviceId, permissionNonce])
 
   if (blocked) {
     return (
@@ -3105,6 +3118,9 @@ function MicPicker({
 }): JSX.Element {
   const [devices, setDevices] = useState<MediaDeviceInfo[]>([])
   const [needsPerm, setNeedsPerm] = useState(false)
+  // Bumped whenever unlockLabels() lands a fresh permission grant — passed to MicLevelMeter so it
+  // re-acquires the stream instead of staying stuck on "No signal" (deviceId alone doesn't change here).
+  const [permNonce, setPermNonce] = useState(0)
 
   const refresh = useCallback(async (): Promise<void> => {
     try {
@@ -3127,6 +3143,7 @@ function MicPicker({
       const s = await navigator.mediaDevices.getUserMedia({ audio: true })
       s.getTracks().forEach((t) => t.stop()) // just needed the grant so labels populate
       await refresh()
+      setPermNonce((n) => n + 1)
     } catch {
       /* denied — leave the generic names in place */
     }
@@ -3151,7 +3168,7 @@ function MicPicker({
             </option>
           ))}
         </select>
-        <MicLevelMeter deviceId={settings.micDeviceId} />
+        <MicLevelMeter deviceId={settings.micDeviceId} permissionNonce={permNonce} />
       </div>
       {needsPerm ? (
         <button
@@ -3719,7 +3736,8 @@ function PersonalizeModes({
 
         {/* Sticky footer: Set active */}
         {active !== safeSelected && (
-          <div className="flex justify-end border-t border-[var(--cl-border)] pt-3">
+          <div className="flex items-center justify-end gap-2 border-t border-[var(--cl-border)] pt-3">
+            {locked && <ManagedChip keys={settings.managedKeys} k="mode" />}
             <button
               type="button"
               disabled={locked}
@@ -5304,10 +5322,24 @@ function CalendarTab({
   // Locked when an org admin manages any of the three Entra IDs — mirrors the disabled+ManagedChip
   // pattern used elsewhere (e.g. temperature/overlayOpacity) so this flow can't falsely claim success
   // while setSettings silently drops the locked keys.
+  //
+  // `managedKeys` only reflects the flat top-level managed-config `locked` array (see main/store.ts
+  // getLockedKeys) — it does NOT cover main/auth.ts's separate nested `{ azure: {...} }` managed-config
+  // block, which readConfig() there resolves with HIGHER precedence than these in-app Settings fields.
+  // When SSO is configured that way, "Change IDs" below would stay editable and saveOutlookIds would
+  // close the form claiming success while readConfig() silently keeps using the managed values. There is
+  // no renderer-visible signal that distinguishes "configured via the nested azure block" from
+  // "configured via this same form" (authStatus only exposes configured/signedIn/enforced), so — once any
+  // SSO config has resolved at all (authStatus.configured) — this form locks rather than risk the
+  // false-success case. Trade-off: a genuinely self-serve (non-managed) org also loses the ability to
+  // edit its own IDs after the first save; a clearly-locked, honest form beats one that sometimes
+  // silently no-ops. The unconfigured first-time setup path is unaffected (configured is false until a
+  // config resolves), so self-serve first setup still works exactly as before.
   const azureLocked =
     settings.managedKeys.includes('azureClientId') ||
     settings.managedKeys.includes('azureTenantId') ||
-    settings.managedKeys.includes('azureAllowedDomain')
+    settings.managedKeys.includes('azureAllowedDomain') ||
+    !!authStatus?.configured
 
   const saveOutlookIds = async (): Promise<void> => {
     if (azureLocked) {
@@ -5355,7 +5387,10 @@ function CalendarTab({
     placeholder: string,
     managedKey: string
   ): JSX.Element => {
-    const fieldLocked = settings.managedKeys.includes(managedKey)
+    // OR in azureLocked (not just this field's own managedKeys entry) so a config resolved via the
+    // nested managed `azure` block — invisible to managedKeys — still disables the input, not just the
+    // Save button below.
+    const fieldLocked = settings.managedKeys.includes(managedKey) || azureLocked
     return (
       <label className="flex flex-col gap-1">
         <span className="flex items-center gap-1.5 text-[11px] font-medium text-[color:var(--cl-muted-foreground)]">
@@ -5459,6 +5494,12 @@ function CalendarTab({
                   These are public IDs. No secret needed.
                 </p>
               </div>
+              {azureLocked && (
+                <p className="flex items-center gap-1.5 text-[11px] leading-snug text-[color:var(--color-accent-text)]">
+                  <ShieldCheck size={11} className="shrink-0" />
+                  Microsoft sign-in is already configured for this app. These IDs are locked here — contact your admin to change them.
+                </p>
+              )}
               {idField('Application (client) ID', clientId, setClientId, '00000000-0000-0000-0000-000000000000', 'azureClientId')}
               {idField('Directory (tenant) ID', tenantId, setTenantId, '00000000-0000-0000-0000-000000000000', 'azureTenantId')}
               {idField('Allowed email domain', domain, setDomain, 'mantu.com', 'azureAllowedDomain')}
