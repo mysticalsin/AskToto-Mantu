@@ -6,7 +6,7 @@ import { join } from 'node:path'
 import type { PublicClientApplication } from '@azure/msal-node'
 import type { AuthStatus, SignInResult } from '@shared/ipc'
 import { getSettings } from './store'
-import { auditLog, setAuditActor } from './logger'
+import { auditLog, mainLog, setAuditActor } from './logger'
 import { useFileBackend, encryptSecret, decryptSecret } from './secrets'
 import { trustedAdminManagedPath } from './win-security'
 
@@ -90,25 +90,25 @@ function readSettingsAzure(): Partial<AzureConfig> {
  * managed-config → in-app Settings. Env/managed win so an org deployment can't be loosened from the UI;
  * the Settings fallback makes SSO self-serve (dummy-proof) when no policy file is deployed.
  *
- * Side-effect: writes the sticky-configured flag on the first successful resolution so that
- * requireAuth() keeps enforcing sign-in even if Settings are later cleared from the renderer.
+ * No side effects here (deliberately): resolving a config value — especially from self-service Settings,
+ * which has NO format validation — does not mean SSO is actually usable. The sticky-configured flag is
+ * only written by signIn() on a genuine successful interactive sign-in (see writeStickyConfigured call
+ * site below); merely typing values into Settings must never trip it, or "Reset SSO" right after would
+ * permanently lock the app with no in-app recovery.
  */
 function readConfig(): AzureConfig | null {
   const clientId = process.env.AZURE_CLIENT_ID
   const tenantId = process.env.AZURE_TENANT_ID
   const allowedDomain = process.env.ASKTOTO_ALLOWED_DOMAIN
   if (clientId && tenantId && allowedDomain) {
-    writeStickyConfigured()
     return { clientId, tenantId, allowedDomain }
   }
   const m = readManagedAzure()
   if (m.clientId && m.tenantId && m.allowedDomain) {
-    writeStickyConfigured()
     return { clientId: m.clientId, tenantId: m.tenantId, allowedDomain: m.allowedDomain }
   }
   const s = readSettingsAzure()
   if (s.clientId && s.tenantId && s.allowedDomain) {
-    writeStickyConfigured()
     return { clientId: s.clientId, tenantId: s.tenantId, allowedDomain: s.allowedDomain }
   }
   return null
@@ -120,7 +120,12 @@ function sessionPath(): string {
 
 // ─── Sticky-configured flag ───────────────────────────────────────────────────
 //
-// Written once the first time readConfig() resolves any SSO config (env, managed, or Settings).
+// Written once — by signIn(), only in its SUCCESS branch — the first time an interactive sign-in
+// actually completes (a real, validated session is established). This deliberately represents
+// "SSO has genuinely been usable", not "some config values were resolved": readConfig() resolving
+// self-service Settings fields (which have NO format validation) must NOT trip this flag, or
+// enabling+then-resetting SSO without ever signing in would permanently lock the app with no
+// in-app recovery.
 // requireAuth() treats this flag as "enforced" even if a compromised renderer later clears the
 // in-app Settings azure fields (which would otherwise flip configured→false, unlocking the gate).
 // Cleared only by a genuine authenticated sign-out (signOut() with a live session).
@@ -422,8 +427,11 @@ function saveSession(s: Session): void {
         ? safeStorage.encryptString(json)
         : null
     if (blob) writeFileSync(sessionPath(), blob, { mode: 0o600 })
-  } catch {
-    /* in-memory only if write fails */
+  } catch (e) {
+    // Session persisted to memory only — sign-in still works for this run, but will silently sign
+    // the user out on next launch with no trace unless we log it. Never log session contents
+    // (email/name/tokens) — reason/class only.
+    mainLog.warn('[auth] failed to persist session to disk (in-memory only this run):', e instanceof Error ? e.message : String(e))
   }
 }
 
@@ -479,10 +487,11 @@ function authEnforced(): boolean {
  * Default: returns true when sign-in isn't enforced (SSO unconfigured) OR the user is signed in.
  * Fail-closed: with ASKTOTO_REQUIRE_AUTH (env or managed-config), require a signed-in session always.
  *
- * Sticky-configured guard: once SSO was configured from ANY source, requireAuth() treats the device
- * as enforced even if the renderer later clears the in-app Settings azure fields (which would
- * otherwise flip configured→false and open the privileged surface). The sticky flag is cleared only
- * by an authenticated signOut() — never by a renderer settings update.
+ * Sticky-configured guard: once a genuine interactive sign-in has succeeded (see writeStickyConfigured
+ * in signIn()), requireAuth() treats the device as enforced even if the renderer later clears the
+ * in-app Settings azure fields (which would otherwise flip configured→false and open the privileged
+ * surface). The sticky flag is cleared only by an authenticated signOut() — never by a renderer
+ * settings update, and never by merely resolving (unvalidated) config without ever signing in.
  */
 export function requireAuth(): boolean {
   const s = authStatus()
@@ -619,6 +628,9 @@ export async function signIn(): Promise<SignInResult> {
       tid,
       at: Date.now()
     })
+    // Only NOW — a real interactive sign-in has actually validated and established a session — does
+    // SSO count as "genuinely usable". See the sticky-configured comment block above readConfig().
+    writeStickyConfigured()
     auditLog('auth.signin', { domain: cfg.allowedDomain })
     return { ok: true, configured: true, email }
   } catch (e) {

@@ -47,7 +47,16 @@ export function SignInWall({
     setErr(null)
     const r = await onSignIn()
     setBusy(false)
-    if (!r.ok) setErr(friendlyAuthError(r.error || 'Sign-in failed.', domainLabel))
+    if (!r.ok) {
+      setErr(friendlyAuthError(r.error || 'Sign-in failed.', domainLabel))
+    } else if (r.configured === false) {
+      // signIn() short-circuited: `ok:true` here means "nothing to do" (SSO isn't actually
+      // configured), NOT "you're signed in" — this wall is only shown because sign-in is still
+      // enforced (e.g. sticky-configured from a genuine prior sign-in, or org policy). Treating this
+      // as success would silently strand the user behind the wall with a stopped spinner and no
+      // feedback or way forward.
+      setErr("Microsoft sign-in isn't configured — set it up in Settings → Account, or contact your admin.")
+    }
   }
   return (
     <div className="cl-root fade-up relative flex min-h-[360px] w-full flex-col items-center justify-center gap-7 overflow-hidden rounded-2xl border border-[var(--cl-border)] p-8 text-center">

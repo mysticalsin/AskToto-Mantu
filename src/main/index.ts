@@ -2537,6 +2537,11 @@ function registerIpc(): void {
     // screenContext is a MAIN-ONLY field (like brainContext): never trust a value the renderer sent. Clear
     // it unconditionally after parse, then set it below strictly from main's own on-device screen cache.
     req.screenContext = undefined
+    // req.redactPrompt is set by callers whose "prompt" is itself transcript-derived rather than user-typed
+    // (e.g. fact-check's transcript-fallback ask, which stuffs the transcript tail into prompt when there's
+    // no typed claim) — redact it the same way so a secret-shaped pattern in that fallback text isn't sent
+    // to the provider. Typed-claim fact-check asks never set this flag, so normal prompts are untouched.
+    if (s.redactSensitive && req.redactPrompt) req.prompt = redactSecrets(req.prompt)
     // Receipt Mode: ground a typed answer in the user's own past meetings. Match the brain against the
     // question (which already carries the live transcript tail via the renderer's withContext) and inject
     // the relevant, meeting-cited slice per-turn. Answer mode only — never the latency-critical spoken
@@ -3649,7 +3654,13 @@ if (!app.requestSingleInstanceLock()) {
   }
   runRetentionSweep()
   setInterval(runRetentionSweep, 6 * 60 * 60 * 1000)
-  if (process.platform === 'darwin') app.dock?.hide()
+  // Guarded like the neighboring dock.setIcon / crash-log pruning below — a throw here must never abort
+  // createTray/registerShortcuts/createWindow further down the boot sequence.
+  if (process.platform === 'darwin') {
+    try {
+      app.dock?.hide()
+    } catch { /* best-effort — never block startup */ }
+  }
 
   // Boot each subsystem in its own try/catch so a failure in one can't silently abort the rest. Defined
   // here (ahead of its call sites) so the display-media/permission/asr-model registrations immediately

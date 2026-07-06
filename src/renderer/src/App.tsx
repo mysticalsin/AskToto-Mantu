@@ -876,9 +876,12 @@ export function App(): JSX.Element {
     // NOT gated on visionReady (the ACTIVE provider's own vision support): askScreen/suggest.run → the
     // main process fails over to a vision-capable provider when the active one can't read images (see the
     // typed screen-ask path). Gating here made Assist silently skip capture whenever a non-vision provider
-    // (e.g. Dust) was active, even with a usable vision key configured. Only screenAsk (the user's toggle)
-    // gates it now.
-    if (settings?.screenAsk ?? true) {
+    // (e.g. Dust) was active, even with a usable vision key configured. Also gated on visionAvailable (SOME
+    // configured provider can read images), mirroring the quick-action handlers below — without it, a fully
+    // vision-incapable setup (no provider anywhere supports images) still attempted a screen capture + vision
+    // ask that main can never route, hard-erroring instead of falling through to the text-only suggestion.
+    const canUseScreen = Boolean((settings?.screenAsk ?? true) && settings?.visionAvailable)
+    if (canUseScreen) {
       try {
         const shot = await window.toto.capture()
         setScreenCapturedAt(shot.capturedAt)
@@ -916,12 +919,13 @@ export function App(): JSX.Element {
       prompt: basePrompt,
       history: copilotHistoryRef.current
     })
-  }, [suggest.run, listen.text, settings?.screenAsk, requireProvider])
+  }, [suggest.run, listen.text, settings?.screenAsk, settings?.visionAvailable, requireProvider])
 
   const submit = useCallback(() => {
     if (!requireProvider()) return
     const q = input.trim()
     setCaptureError(null)
+    const canUseScreen = Boolean((settings?.screenAsk ?? true) && settings?.visionAvailable)
     // Screen-aware router (Cluely "Uses Screen"): in a call → copilot; else screen-ask when enabled +
     // vision-capable (empty input is meaningful — it asks about the screen); else a plain text ask.
     if (listen.listening) {
@@ -936,13 +940,16 @@ export function App(): JSX.Element {
         prompt: withContext(q, listen.text()),
         history: copilotHistoryRef.current
       })
-    } else if (settings?.screenAsk ?? true) {
+    } else if (canUseScreen) {
       // Typed screen-ask: carry conversation memory + record the turn so follow-ups keep continuity.
       // NOT gated on visionReady (the ACTIVE provider's own vision support) — askScreen → ask.run hits the
       // main process, which fails over to a vision-capable provider when the active one can't read images
       // (or returns a clear, actionable error if none is configured). Gating on visionReady here used to
       // make blank Enter ("look at my screen") a silent no-op whenever a non-vision provider (e.g. Dust)
-      // was active, even with a usable vision key sitting right there.
+      // was active, even with a usable vision key sitting right there. Gated on visionAvailable (SOME
+      // configured provider can read images) instead — without it, a fully vision-incapable setup (e.g.
+      // claude-cli/codex-cli/Grok only, all vision:false) hard-errored here instead of falling through to
+      // the plain-text else branch below.
       const priorAnswerOk = !!ask.answer?.text && !ask.answer.error
       if (!q) {
         // Blank Enter always means "look at my screen right now" — a deliberate fresh look, regardless
@@ -985,6 +992,7 @@ export function App(): JSX.Element {
     listen.listening,
     listen.text,
     settings?.screenAsk,
+    settings?.visionAvailable,
     askScreen,
     assist,
     requireProvider
@@ -1031,7 +1039,13 @@ export function App(): JSX.Element {
       return
     }
     if (claim) {
-      const id = ask.run({ mode: 'answer', kind: 'factcheck', label: claim, prompt: buildFactCheckClaimPrompt(claim) })
+      const id = ask.run({
+        mode: 'answer',
+        kind: 'factcheck',
+        label: claim,
+        prompt: buildFactCheckClaimPrompt(claim),
+        history: historyRef.current
+      })
       pendingUserRef.current = { id, q: claim } // record into memory so a follow-up keeps continuity
       setInput('')
       return
@@ -1041,12 +1055,21 @@ export function App(): JSX.Element {
     // buildWhatNextPrompt/buildExplainPrompt already apply — so a long-running meeting's full transcript
     // never gets dumped unbounded into the fact-check prompt. lastThem is a single utterance, never sliced.
     const c = lastThem || transcript.slice(-3000)
-    const id = ask.run({
-      mode: 'answer',
-      kind: 'factcheck',
+    // c is transcript-derived (never the user's own typed claim — that's the `claim` branch above, which
+    // must stay unredacted per "typed questions are never changed"), so this ask is flagged for main to
+    // redact this prompt before it leaves the device (see AskStartSchema.redactPrompt in shared/ipc.ts).
+    // Built as a plain (non-literal) object, not inline, so the extra field survives TS's excess-property
+    // check against ask.run's narrower AskRequest param — state.ts's useAsk().run() still needs a matching
+    // edit to forward redactPrompt through to window.toto.ask() for this flag to actually reach main.
+    const factCheckTranscriptReq = {
+      mode: 'answer' as const,
+      kind: 'factcheck' as const,
       label: c || 'the conversation so far',
-      prompt: buildFactCheckClaimPrompt(c) + GUARD_LINE
-    })
+      prompt: buildFactCheckClaimPrompt(c) + GUARD_LINE,
+      history: historyRef.current,
+      redactPrompt: true
+    }
+    const id = ask.run(factCheckTranscriptReq)
     // Record a short synthetic label, not the (up to ~3000-char) transcript slice `c` itself — otherwise
     // that whole slice gets pushed into history as a fake "user" turn and replayed verbatim on follow-ups.
     pendingUserRef.current = {
@@ -1820,12 +1843,15 @@ export function App(): JSX.Element {
     } else if (a === 'hide') void window.toto.hide()
     else if (a === 'reset') guardReviewNav(reset)
     else if (a === 'toggle-listen') toggleListen()
-    else if (a === 'capture') capture()
-    else if (a === 'factcheck') factCheck()
-    else if (a === 'whatnext') whatNext()
-    else if (a === 'explain') onQuickAction('explain')
-    else if (a === 'summarize') onQuickAction('summarize')
-    else if (a === 'spotlight-ref') spotlightRef()
+    // capture/factcheck/whatnext/explain/summarize/spotlight-ref all navigate the view (setView) just like
+    // 'ask'/'reset' above, so they're wrapped in guardReviewNav too — previously only 'ask'/'reset'/
+    // 'settings'/'agenda' were guarded, letting these six silently discard an unsaved Review recap edit.
+    else if (a === 'capture') guardReviewNav(capture)
+    else if (a === 'factcheck') guardReviewNav(factCheck)
+    else if (a === 'whatnext') guardReviewNav(whatNext)
+    else if (a === 'explain') guardReviewNav(() => onQuickAction('explain'))
+    else if (a === 'summarize') guardReviewNav(() => onQuickAction('summarize'))
+    else if (a === 'spotlight-ref') guardReviewNav(spotlightRef)
     else if (a === 'settings') {
       guardReviewNav(openSettingsDefault)
     } else if (a === 'agenda') {

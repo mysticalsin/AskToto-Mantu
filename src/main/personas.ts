@@ -95,7 +95,12 @@ export function buildSystem(
   if (req.mode === 'summary') return lead + prefix + SUMMARY_PROMPT + ctx + lang
   if (req.mode === 'recap') return lead + prefix + recapPromptFor(mode) + ctx + lang
 
-  const prompt = effectiveModePrompt(mode, modePrompts)
+  // Fact-check (mode:'answer', kind:'factcheck') has a strict "Respond in EXACTLY this format … VERDICT: …"
+  // contract that parseVerdict depends on. The active mode's persona prompt (sales/interview/negotiation/…)
+  // instructs first-person coaching/dialogue that fights that contract, so omit it for fact-check the same
+  // way GROUNDING_RAIL is already excluded below — otherwise the persona can silently corrupt the verdict
+  // format and the verdict chip disappears.
+  const prompt = req.kind === 'factcheck' ? '' : effectiveModePrompt(mode, modePrompts)
   // Modes where the user is performing as themselves benefit from the profile (background/role/company);
   // general and meeting are neutral observers, and recruiting grounds on the candidate (not the
   // interviewer's own resume), so these three skip it.
