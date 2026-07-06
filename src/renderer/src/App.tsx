@@ -645,7 +645,11 @@ export function App(): JSX.Element {
         setCaptureError(
           /private view/i.test(raw)
             ? 'Private View is on, so AskToto couldn’t see your screen. Answering from context only. Turn Private View off to include the screen.'
-            : 'Couldn’t capture your screen. Answering from context only.'
+            : /screen recording|quit and reopen/i.test(raw)
+              ? // Main diagnosed a specific, actionable cause (permission off / restart needed) —
+                // surface it verbatim instead of flattening it into the generic line.
+                `${raw} Answering from context only for now.`
+              : 'Couldn’t capture your screen. Answering from context only.'
         )
         const id = ask.run({ mode: 'answer', prompt, label: opts?.label, kind: opts?.kind, history: opts?.history })
         if (id && opts?.record) pendingUserRef.current = { id, q: opts.record }
@@ -693,7 +697,9 @@ export function App(): JSX.Element {
         setCaptureError(
           /private view/i.test(raw)
             ? 'Private View is on, so AskToto couldn’t see your screen. Suggesting from the conversation only. Turn Private View off to include the screen.'
-            : 'Couldn’t capture your screen. Suggesting from the conversation only.'
+            : /screen recording|quit and reopen/i.test(raw)
+              ? `${raw} Suggesting from the conversation only for now.`
+              : 'Couldn’t capture your screen. Suggesting from the conversation only.'
         )
       }
     }
@@ -899,7 +905,7 @@ export function App(): JSX.Element {
   ])
 
   // Review screen's "Generate follow-up" — there is no separate follow-up agent; the AskToto base Dust
-  // agent (locked, see DUST_BASE_AGENT_ID) drafts follow-ups too. Renders inline on Review (no view
+  // agent (default, see DUST_BASE_AGENT_ID) drafts follow-ups too. Renders inline on Review (no view
   // change, unlike spotlightRef/whatNext). Cascades into Dust whenever Dust is configured, regardless of
   // which provider is active for everyday Q&A (e.g. Kimi) — see isDustReady.
   const generateFollowup = useCallback(() => {
