@@ -444,9 +444,6 @@ export const BaseSettingsSchema = z.object({
   showLiveTranscript: z.boolean().default(false),
   meetingsFolder: z.string().default(''),
   autoSaveTranscripts: z.boolean().default(false),
-  // Gates the (popup-free) meeting watcher. OFF by default per Tony: detection is opt-in — the popup
-  // it once fed was removed as too intrusive; Listen is manual-only (Bar button, ControlPill mic, hotkey).
-  autoStartOnMeeting: z.boolean().default(false),
   launchAtLogin: z.boolean().default(false),
   onboardingDone: z.boolean().default(false),
   // When onboarding finished (ms). Anchors the 10-minute "Add your API key" nudge so it expires on a
@@ -541,7 +538,12 @@ export const PublicSettingsSchema = BaseSettingsSchema.extend({
   managedKeys: z.array(z.string()).default([]),
   /** Providers whose key is set via an environment variable — in-app Remove is a no-op for these. */
   envKeys: z.array(z.string()).default([]),
-  loginItemOpenAtLogin: z.boolean().default(false)
+  loginItemOpenAtLogin: z.boolean().default(false),
+  /** Org data-residency allowlist of provider ids (from managed-config `allowedProviders`). null = no
+   *  restriction. The renderer uses it to filter the provider picker to approved vendors and to badge a
+   *  blocked provider "restricted by your organization" — the SAME source the main process enforces at
+   *  request time, so the UI can't offer a provider that every ask would then reject. */
+  allowedProviders: z.array(z.string()).nullable().default(null)
 })
 export type PublicSettings = z.infer<typeof PublicSettingsSchema>
 
@@ -608,7 +610,6 @@ export const DEFAULT_SETTINGS: Settings = {
   showLiveTranscript: false,
   meetingsFolder: '',
   autoSaveTranscripts: false,
-  autoStartOnMeeting: false, // meeting detection is opt-in (gates the popup-free watcher)
   launchAtLogin: false,
   onboardingDone: false,
   onboardingDoneAt: 0,

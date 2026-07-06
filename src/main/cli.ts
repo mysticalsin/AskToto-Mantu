@@ -15,7 +15,7 @@
 import { spawn, execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { mkdtemp, rm } from 'node:fs/promises'
-import { join } from 'node:path'
+import { join, isAbsolute } from 'node:path'
 import { tmpdir } from 'node:os'
 import { createInterface } from 'node:readline'
 import { app, shell } from 'electron'
@@ -47,6 +47,22 @@ export function idleWatchdog(
       }
     }
   }
+}
+
+// ─── Known Windows system-binary fallbacks, pinned absolute ────────────────────────────────────
+// Windows CreateProcess resolves a bare filename by searching the launching app's own directory, then
+// the CURRENT WORKING DIRECTORY, before it ever consults PATH — so a bare 'cmd.exe'/'where' could be
+// shadowed by a binary planted in an attacker-writable cwd. Pin these known system binaries to their
+// absolute %SystemRoot%\System32 path so that search order can never resolve an impostor.
+function system32(name: string): string {
+  return join(process.env.SystemRoot || 'C:\\Windows', 'System32', name)
+}
+
+/** cmd.exe target for cmdShimSpawn/installCli: prefer a valid absolute ComSpec (the user's real shell)
+ *  when one is set, else pin to the known System32 binary rather than trust a bare 'cmd.exe' name. */
+function comSpecExe(): string {
+  const cs = process.env.ComSpec
+  return cs && isAbsolute(cs) ? cs : system32('cmd.exe')
 }
 
 // ─── Binary resolution: login shell (mac/Linux) or `where` + npm global probe (Windows) ────────
@@ -86,7 +102,7 @@ export async function resolveBin(bin: string): Promise<string | null> {
 
   if (process.platform === 'win32') {
     try {
-      const { stdout } = await execFileAsync('where', [bin])
+      const { stdout } = await execFileAsync(system32('where.exe'), [bin])
       const resolved = parseWhereOutput(stdout)
       if (resolved) {
         binCache.set(bin, resolved)
@@ -178,7 +194,7 @@ export function cmdShimSpawn(bin: string, args: string[]): { command: string; ar
       )
     }
   }
-  return { command: process.env.ComSpec || 'cmd.exe', args: ['/d', '/s', '/c', bin, ...args] }
+  return { command: comSpecExe(), args: ['/d', '/s', '/c', bin, ...args] }
 }
 
 /** Resolve the actual { command, args } to spawn for a CLI binary: direct on macOS/Linux and for
@@ -750,7 +766,7 @@ export async function installCli(
     // pkg is a compile-time constant — no user input is interpolated here.
     const child =
       process.platform === 'win32'
-        ? spawn(process.env.ComSpec || 'cmd.exe', ['/d', '/s', '/c', 'npm', 'i', '-g', pkg], {
+        ? spawn(comSpecExe(), ['/d', '/s', '/c', 'npm', 'i', '-g', pkg], {
             env: process.env,
             shell: false,
             stdio: ['ignore', 'pipe', 'pipe']

@@ -21,11 +21,11 @@
     "dist": "npm run check:main-imports && electron-vite build && electron-builder --mac --publish never",
     "dist:local": "npm run check:main-imports && electron-vite build && electron-builder --mac --publish never -c.directories.output=/Users/tony/AI-Brain-build/asktoto-release -c.mac.identity='TotoWhisper Dev' && node scripts/verify-signing.mjs",
     "predist:win": "node scripts/fetch-models.mjs",
-    "dist:win": "node scripts/fetch-models.mjs && npm run build:intelligence && electron-vite build && electron-builder --win --publish never",
-    "dist:win:appx": "electron-vite build && electron-builder --win appx --publish never",
+    "dist:win": "npm run check:main-imports && node scripts/fetch-models.mjs && npm run build:intelligence && electron-vite build && electron-builder --win --publish never",
+    "dist:win:appx": "npm run check:main-imports && electron-vite build && electron-builder --win appx --publish never",
     "prepack": "node scripts/fetch-models.mjs",
     "release": "npm run check:release && node scripts/fetch-models.mjs && npm run build:intelligence && electron-vite build && electron-builder --mac --publish always",
-    "release:win": "npm run check:release && node scripts/fetch-models.mjs && npm run build:intelligence && electron-vite build && electron-builder --win --publish always"
+    "release:win": "npm run check:release && npm run check:main-imports && node scripts/fetch-models.mjs && npm run build:intelligence && electron-vite build && electron-builder --win --publish always"
   },
   "comment": "Only main-process runtime deps live in 'dependencies' (electron-builder bundles these into the app). All renderer deps are bundled by Vite at build time and kept in devDependencies to keep the package small.",
   "dependencies": {
