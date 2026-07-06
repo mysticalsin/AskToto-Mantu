@@ -55,6 +55,7 @@ import {
   type Profile,
   type TestKeyResponse,
   type DustAgent,
+  DUST_BASE_AGENT_ID,
   type ConversationMode,
   type BuiltinMode,
   type CustomMode,
@@ -1687,9 +1688,9 @@ function DustSetup({
   // fails, so skip straight to the manual key steps instead of showing a dead-end button.
   const isWin = window.navigator.platform.toLowerCase().includes('win')
   const locked = settings.managedKeys.includes('provider')
-  // Base + Spotlight Ref are hard-locked (DUST_BASE_AGENT_ID / DUST_SPOTLIGHT_REF_AGENT_ID in ipc.ts) —
-  // read-only display below, no picker, no setter. The base agent (AskToto) also drafts meeting
-  // follow-ups directly — there is no separate follow-up agent.
+  // Base agent is user-editable (picker below, defaults to the AskToto agent, one-click reset).
+  // Spotlight Ref stays hard-locked (DUST_SPOTLIGHT_REF_AGENT_ID in ipc.ts) — read-only display.
+  // The base agent also drafts meeting follow-ups directly — there is no separate follow-up agent.
   const agent = settings.providerModels['dust'] ?? ''
   const thinkAgent = settings.providerModelsThinking['dust'] ?? ''
   const spotlightAgent = settings.providerModelsSpotlightRef['dust'] ?? ''
@@ -1741,9 +1742,8 @@ function DustSetup({
     await clearKey('dust')
     const nextThinking = { ...settings.providerModelsThinking }
     delete nextThinking.dust
-    // Base + Spotlight Ref are hard-locked app defaults, not user data — leave them untouched so they
-    // resolve back to DUST_BASE_AGENT_ID/DUST_SPOTLIGHT_REF_AGENT_ID on reconnect rather than staying
-    // explicitly emptied in the persisted settings.
+    // Base + Spotlight Ref are left untouched: the base agent is now the user's own choice (worth
+    // preserving across a reconnect), and Spotlight Ref is a hard-locked app default.
     const next: Partial<PublicSettings> = {
       dustWorkspaceId: '',
       dustBaseUrl: 'https://dust.tt',
@@ -1765,14 +1765,15 @@ function DustSetup({
   }
   const useDust = (): void => void patch({ provider: 'dust' })
 
-  // Paste any Dust link → auto-fill workspace + region. The base agent is hard-locked to AskToto, so a
-  // pasted link's agent id (if any) is intentionally ignored rather than silently overriding the lock.
+  // Paste any Dust link → auto-fill workspace + region, and — since the base agent is user-editable —
+  // an assistant link's agent id also becomes the base agent (the most direct "use THIS agent" gesture).
   const onLink = (v: string): void => {
     setLink(v)
     const p = parseDustUrl(v)
     const next: Partial<PublicSettings> = {}
     if (p.workspaceId) next.dustWorkspaceId = p.workspaceId
     if (p.baseUrl) next.dustBaseUrl = p.baseUrl
+    if (p.agentId) next.providerModels = { ...settings.providerModels, dust: p.agentId }
     if (Object.keys(next).length) patch(next)
   }
 
@@ -1800,6 +1801,11 @@ function DustSetup({
 
   const setThinkAgent = (sId: string): void =>
     patch({ providerModelsThinking: { ...settings.providerModelsThinking, dust: sId } })
+
+  // Empty commits fall back to the AskToto default — the base agent must never end up blank, because
+  // isDustReady() (and every task that cascades into Dust) requires providerModels.dust to be set.
+  const setBaseAgent = (sId: string): void =>
+    patch({ providerModels: { ...settings.providerModels, dust: sId.trim() || DUST_BASE_AGENT_ID } })
 
   const regionBtn = (eu: boolean): string =>
     [
@@ -2002,19 +2008,50 @@ function DustSetup({
             </button>
           </div>
 
-          {/* Base agent is hard-locked to AskToto (our own agent, Claude Sonnet-backed) — not a picker.
-              Read-only: resolves to the agent's live name once the agents list loads, else shows the raw
-              sId. It also drafts meeting follow-ups directly — there is no separate follow-up agent.
-              Rotating it needs a code change (DUST_BASE_AGENT_ID in ipc.ts) or, for an urgent rotation
-              without a release, a managed-config.json override. */}
+          {/* Base agent — answers everything by default and drafts meeting follow-ups (no separate
+              follow-up agent). User-editable: a dropdown once the agents list loads (with the current
+              sId kept selectable even if it's not in the list), a bare sId input before that, and a
+              one-click reset back to the AskToto default whenever it's been changed. setBaseAgent
+              treats an empty commit as reset so Dust can never end up with a blank base agent. */}
           <div className="flex flex-col gap-1">
-            <span className="flex items-center gap-1.5 text-[11px] font-medium text-[color:var(--cl-muted-foreground)]">
-              Base agent · AskToto
-              <span className={managedChipCls}>Managed by your organization</span>
+            <span className="flex items-center justify-between text-[11px] font-medium text-[color:var(--cl-muted-foreground)]">
+              <span>Base agent · answers everything by default</span>
+              {agent && agent !== DUST_BASE_AGENT_ID && (
+                <button
+                  type="button"
+                  onClick={() => setBaseAgent(DUST_BASE_AGENT_ID)}
+                  className="no-drag cl-focus rounded px-1 text-[11px] text-[color:var(--cl-primary)] hover:underline"
+                >
+                  Reset to AskToto
+                </button>
+              )}
             </span>
-            <div className={'w-full truncate opacity-60 ' + ctl}>
-              {agent ? agents?.find((a) => a.sId === agent)?.name ?? agent : 'Not configured yet'}
-            </div>
+            {agents && agents.length > 0 ? (
+              <select
+                value={agent}
+                onChange={(e) => setBaseAgent(e.target.value)}
+                className={'w-full ' + ctl}
+                aria-label="Base agent"
+              >
+                {agent && !agents.some((a) => a.sId === agent) && (
+                  <option value={agent}>{agent} (current)</option>
+                )}
+                {agents.map((a) => (
+                  <option key={a.sId} value={a.sId}>
+                    {a.name}
+                    {a.sId === DUST_BASE_AGENT_ID ? ' (default)' : ''}
+                  </option>
+                ))}
+              </select>
+            ) : (
+              <input
+                value={agent}
+                onChange={(e) => setBaseAgent(e.target.value)}
+                placeholder="Base agent id (defaults to AskToto)"
+                aria-label="Base agent"
+                className={'w-full ' + ctl}
+              />
+            )}
           </div>
 
           {/* Thinking agent — used for hard/coding questions & Think mode. Still yours to pick. */}
