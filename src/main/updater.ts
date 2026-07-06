@@ -10,8 +10,12 @@ import { shouldDisableAutoUpdate } from './cahe-edition'
 const isNotFound = (e: unknown): boolean =>
   (e as { statusCode?: number } | null)?.statusCode === 404 || /\b404\b/.test(String((e as Error)?.message ?? e))
 
-/** Enterprise auto-update. Only runs in the packaged app; needs a real `publish` host (electron-builder.yml). */
-export function initAutoUpdate(win: BrowserWindow | null): void {
+/** Enterprise auto-update. Only runs in the packaged app; needs a real `publish` host (electron-builder.yml).
+ *  Takes a GETTER rather than a captured window reference: if createWindow() threw during boot, the
+ *  captured value would be permanently null even after ensureWindow() later self-heals and reassigns the
+ *  module-level `win` — the update-downloaded toast would then be dead for the rest of the process life.
+ *  Reading through the getter at send time always sees the live window. */
+export function initAutoUpdate(getWin: () => BrowserWindow | null): void {
   if (shouldDisableAutoUpdate()) {
     log.info('[updater] Cahê edition uses its own distribution channel, skipping shared auto-update feed')
     return
@@ -77,13 +81,13 @@ export function initAutoUpdate(win: BrowserWindow | null): void {
               ? raw.map((x) => String(x?.note ?? '')).filter(Boolean).join('\n\n').trim() || undefined
               : undefined
         // In-app banner (UpdateReadyToast) alongside the OS notification checkForUpdatesAndNotify already shows.
-        win?.webContents.send(IPC.updateDownloaded, { version: i?.version, notes })
+        getWin()?.webContents.send(IPC.updateDownloaded, { version: i?.version, notes })
       }
     )
     // Stream download progress to the renderer so the update UI can show a "Downloading… X%" state rather
     // than a silent wait before the ready toast appears.
     autoUpdater.on('download-progress', (p: { percent?: number }) => {
-      win?.webContents.send(IPC.updateProgress, { percent: Math.round(p?.percent ?? 0) })
+      getWin()?.webContents.send(IPC.updateProgress, { percent: Math.round(p?.percent ?? 0) })
     })
     // checkForUpdatesAndNotify shows the OS notification when an update is ready; the 'error' listener above
     // already logs any failure (short for 404, full otherwise), so swallow the duplicate rejection here.

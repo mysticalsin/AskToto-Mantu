@@ -209,7 +209,9 @@ export function Onboarding({
   patch,
   recoverEncryptedProfile,
   onDone,
-  onOpenAiSettings
+  onOpenAiSettings,
+  signedIn,
+  signedInEmail
 }: {
   settings: PublicSettings
   saveKey?: (provider: ProviderId, k: string) => Promise<void>
@@ -221,6 +223,12 @@ export function Onboarding({
   /** Optional: opens Settings -> AI in place, wired onto the provider/API-key readiness row. Parent
    *  wiring is added separately; the row simply has no click-through fix when this is left undefined. */
   onOpenAiSettings?: () => void
+  /** Already signed in via Azure AD (App's useAuth) — e.g. Reset-onboarding re-drives this screen for a
+   *  user who never signed out. When true, slide 1 must not offer to launch a fresh interactive OAuth: a
+   *  reset promises "your settings won't change", and re-authenticating could silently switch identity. */
+  signedIn?: boolean
+  /** The signed-in account's email, shown in place of the generic "restricted to your org" caption. */
+  signedInEmail?: string
 }): JSX.Element {
   const [recordingConsent, setRecordingConsent] = useState(settings.recordingConsent)
   const [busy, setBusy] = useState(false)
@@ -295,7 +303,10 @@ export function Onboarding({
     setErr('')
     setBusy(true)
     try {
-      if (viaSso && window.toto.signIn) {
+      // Already signed in (e.g. Reset-onboarding re-drives this screen for a user who never signed out) —
+      // never re-launch an interactive OAuth: it could silently switch the signed-in identity, contradicting
+      // "your settings won't change." The signed-in state is already correct; just continue the walkthrough.
+      if (viaSso && !signedIn && window.toto.signIn) {
         const r = await window.toto.signIn()
         if (!r.ok) {
           setErr(r.error || 'Sign-in failed. Use a Mantu Microsoft account.')
@@ -709,11 +720,26 @@ export function Onboarding({
         >
           Continue without signing in <ArrowRight size={12} />
         </button>
+        {/* "Continue without signing in" only makes sense as a SEPARATE path from the SSO button above —
+            once already signed in there is only one path, so this second button would be a redundant,
+            confusing no-op (advance(false) either way). */}
+        {!signedIn && (
+          <button
+            type="button"
+            disabled={busy || !recordingConsent}
+            onClick={() => advance(false)}
+            className="no-drag focus-ring inline-flex items-center justify-center gap-1 rounded-xl px-4 py-2 text-[12px] text-[color:var(--color-ink-3)] hover:text-[color:var(--color-ink-2)] disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:text-[color:var(--color-ink-3)]"
+          >
+            Continue without signing in <ArrowRight size={12} />
+          </button>
+        )}
       </div>
 
       <div className="flex items-center gap-1.5 text-[11px] text-[color:var(--color-ink-3)]">
         <ShieldCheck size={12} className="text-[color:var(--color-accent)]" />
-        Restricted to your Mantu Microsoft account · permissions are requested the first time you Listen.
+        {signedIn
+          ? `Signed in${signedInEmail ? ` as ${signedInEmail}` : ''} · permissions are requested the first time you Listen.`
+          : 'Restricted to your Mantu Microsoft account · permissions are requested the first time you Listen.'}
       </div>
 
       <div className="text-[10px] text-[color:var(--color-ink-3)]">

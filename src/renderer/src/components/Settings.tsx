@@ -75,6 +75,7 @@ import {
   detectProvider,
   parseDustUrl,
   resolveModelTier,
+  applyInteractiveGuardrail,
   isDustReady,
   dustStoredAgentMissing,
   type ProviderId
@@ -117,6 +118,12 @@ const CLI_PROVIDERS = new Set<ProviderId>(['dust', 'claude-cli', 'codex-cli'])
 // Profile section until we ship licensing. Flip to true to bring the UI back with zero other changes.
 const LICENSE_UI_ENABLED: boolean = false
 
+// asrWebgpuFallbackAt (WebGPU→WASM ASR downgrade marker) is a sibling addition to the settings schema
+// not yet reflected in the shared PublicSettings type this file imports. Read/write it through this
+// local extension — scoped to Settings.tsx only — so today's type still checks and the note below picks
+// up the real field once @shared/ipc catches up, with no edit needed here.
+type SettingsWithAsrWebgpuFallback = PublicSettings & { asrWebgpuFallbackAt?: number | null }
+
 /**
  * After disconnecting/removing the active provider, pick another provider that is actually ready
  * (CLI providers need a live connection; the rest need a saved key) so the user is never left on a
@@ -125,13 +132,15 @@ const LICENSE_UI_ENABLED: boolean = false
 function pickReadyProvider(
   exclude: ProviderId,
   hasKeys: Record<string, boolean>,
-  cliConnected: Record<string, boolean>
+  cliConnected: Record<string, boolean>,
+  dustWorkspaceId: string,
+  providerModels: Partial<Record<string, string>>
 ): ProviderId {
-  const ready = PROVIDER_IDS.find(
-    (p) =>
-      p !== exclude &&
-      (PROVIDERS[p].kind === 'cli' ? !!cliConnected[p] : !!hasKeys[p])
-  )
+  const ready = PROVIDER_IDS.find((p) => {
+    if (p === exclude) return false
+    if (p === 'dust') return isDustReady(hasKeys, dustWorkspaceId, providerModels)
+    return PROVIDERS[p].kind === 'cli' ? !!cliConnected[p] : !!hasKeys[p]
+  })
   return ready ?? 'anthropic'
 }
 
@@ -141,8 +150,10 @@ function pickReadyProvider(
 function recommendedProvider(settings: PublicSettings): ProviderId {
   if (settings.hasKeys['anthropic']) return 'anthropic'
   if (isDustReady(settings.hasKeys, settings.dustWorkspaceId, settings.providerModels)) return 'dust'
+  // Dust was already conclusively ruled out above — exclude it here so a saved-but-unready Dust key
+  // (hasKeys.dust true, workspace/agent not set up) can't fall through and be picked as "ready".
   const ready = PROVIDER_IDS.find((p) =>
-    PROVIDERS[p].kind === 'cli' ? !!settings.cliConnected?.[p] : !!settings.hasKeys[p]
+    p !== 'dust' && (PROVIDERS[p].kind === 'cli' ? !!settings.cliConnected?.[p] : !!settings.hasKeys[p])
   )
   return ready ?? 'anthropic'
 }
@@ -677,8 +688,18 @@ function AiSection({
   const [adv, setAdv] = useState(false)
   const [filter, setFilter] = useState('')
   const skipClearRef = useRef(false) // don't wipe a freshly-pasted key when detection switches provider
+  // Latest `provider` value, readable from inside onSave/onTest's async continuations — those closures
+  // capture the provider a save/test was started for, then compare against this ref once the awaited
+  // call resolves so a mid-flight provider switch can't attribute a stale result to the wrong tile.
+  const providerRef = useRef(provider)
+  providerRef.current = provider
   const baseModelName = resolveModelTier(provider, settings.providerModels, settings.providerModelsThinking, 'base')
-  const thinkModelName = resolveModelTier(provider, settings.providerModels, settings.providerModelsThinking, 'think')
+  const thinkModelName = resolveModelTier(provider, settings.providerModels, settings.providerModelsThinking, 'think', settings.providerModelsDeep)
+  // The real ask flow (main/index.ts) always runs the resolved model through applyInteractiveGuardrail
+  // before calling the provider — e.g. claude-cli is pinned to Sonnet for every tier. The caption must
+  // show that same guarded result, not the raw tier, or it names a model that never actually answers.
+  const guardedBaseModelName = applyInteractiveGuardrail(provider, 'base', baseModelName)
+  const guardedThinkModelName = applyInteractiveGuardrail(provider, 'think', thinkModelName)
   const keyInputId = useId()
   const modelInputId = useId()
   const baseUrlInputId = useId()
@@ -691,6 +712,13 @@ function AiSection({
     }
     setKey('')
     setTest({ status: 'idle' })
+  }, [provider])
+
+  // Custom has nothing to configure without a base URL, and that field lives inside the collapsed
+  // Advanced section — without this, picking Custom shows an empty card until a failed Save surfaces
+  // the requirement. Auto-open Advanced so the base-URL field is visible the moment Custom is chosen.
+  useEffect(() => {
+    if (provider === 'custom') setAdv(true)
   }, [provider])
 
   // Auto-detect provider from the key as the user pastes/types.
@@ -707,6 +735,9 @@ function AiSection({
 
   const onSave = async (): Promise<void> => {
     const trimmed = key.trim()
+    // Capture which provider this save/test run is for — the user can switch provider tiles while the
+    // awaits below are in flight, and a stale resolve must never paint its result on the new tile.
+    const testedProvider = provider
     if (!trimmed) {
       // Empty input must never delete the stored key; removal is the trash-can (onRemove) button only.
       setTest({ status: 'error', message: 'Paste a key above to save it.' })
@@ -717,10 +748,13 @@ function AiSection({
     } catch (e) {
       // e.g. OS encryption unavailable — store.setApiKey throws; don't fail silently.
       const message = e instanceof Error ? e.message : 'Could not save the key.'
-      setTest({ status: 'error', message })
-      setRecoveryAvailable(isProfileUnlockError(message))
+      if (providerRef.current === testedProvider) {
+        setTest({ status: 'error', message })
+        setRecoveryAvailable(isProfileUnlockError(message))
+      }
       return
     }
+    if (providerRef.current !== testedProvider) return // switched away mid-save; key still saved, just no stale UI update
     setRecoveryAvailable(false)
     setRecoveryMessage(null)
     setSaved(true)
@@ -730,10 +764,14 @@ function AiSection({
     setTest({ status: 'loading' })
     try {
       const res = await testKey(provider, trimmed)
+      if (providerRef.current !== testedProvider) return
       if (res.ok) setTest({ status: 'ok', message: 'Key is valid and working.' })
       else setTest({ status: 'error', message: res.error || 'Saved, but the key did not work. Check it and re-save.' })
     } catch (e) {
-      setTest({ status: 'error', message: e instanceof Error ? e.message : 'Saved, but could not verify the key.' })
+      if (providerRef.current === testedProvider) {
+        setTest({ status: 'error', message: e instanceof Error ? e.message : 'Saved, but could not verify the key.' })
+      }
+      return
     }
     setKey('')
   }
@@ -759,12 +797,14 @@ function AiSection({
 
   const onTest = async (): Promise<void> => {
     const trimmed = key.trim()
+    const testedProvider = provider // see onSave — guards against a stale resolve after a provider switch
     if (!trimmed) {
       setTest({ status: 'error', message: 'Paste a key above to test it.' })
       return
     }
     setTest({ status: 'loading' })
     const res = await testKey(provider, trimmed)
+    if (providerRef.current !== testedProvider) return
     if (res.ok) setTest({ status: 'ok', message: 'Key is valid.' })
     else setTest({ status: 'error', message: res.error || 'Key test failed.' })
   }
@@ -774,7 +814,15 @@ function AiSection({
     setKey('')
     setTest({ status: 'idle' })
     // Removed the active provider's key — fall back to one that can still answer.
-    await patch({ provider: pickReadyProvider(provider, settings.hasKeys, settings.cliConnected ?? {}) })
+    await patch({
+      provider: pickReadyProvider(
+        provider,
+        settings.hasKeys,
+        settings.cliConnected ?? {},
+        settings.dustWorkspaceId,
+        settings.providerModels
+      )
+    })
   }
 
   const hint = detectHint(key, provider)
@@ -1191,10 +1239,10 @@ function AiSection({
         </div>
         <span className="mt-1.5 block text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
           {settings.thinkingMode === 'auto'
-            ? `Auto: simple questions use ${prettyModel(baseModelName, provider, 'base')}; coding, engineering & complex go to ${prettyModel(thinkModelName, provider, 'think')}.`
+            ? `Auto: simple questions use ${prettyModel(guardedBaseModelName, provider, 'base')}; coding, engineering & complex go to ${prettyModel(guardedThinkModelName, provider, 'think')}.`
             : settings.thinkingMode === 'always'
-              ? `Every answer uses ${prettyModel(thinkModelName, provider, 'think')} (deep mode).`
-              : `Every answer uses ${prettyModel(baseModelName, provider, 'base')} (fastest & cheapest).`}
+              ? `Every answer uses ${prettyModel(guardedThinkModelName, provider, 'think')} (deep mode).`
+              : `Every answer uses ${prettyModel(guardedBaseModelName, provider, 'base')} (fastest & cheapest).`}
         </span>
       </Section>
     </div>
@@ -1490,7 +1538,14 @@ function CliIntegration({
   const disconnectCli = (id: 'claude-cli' | 'codex-cli'): void => {
     const nextConnected = { ...cliConnected, [id]: false }
     const next: Partial<PublicSettings> = { cliConnected: nextConnected }
-    if (provider === id) next.provider = pickReadyProvider(id, settings.hasKeys, nextConnected)
+    if (provider === id)
+      next.provider = pickReadyProvider(
+        id,
+        settings.hasKeys,
+        nextConnected,
+        settings.dustWorkspaceId,
+        settings.providerModels
+      )
     patch(next)
     setState(id, { phase: 'idle', msg: null, version: null })
   }
@@ -2383,7 +2438,13 @@ function DustSetup({
       dustTokenMintedAt: 0
     }
     if (settings.provider === 'dust')
-      next.provider = pickReadyProvider('dust', settings.hasKeys, settings.cliConnected ?? {})
+      next.provider = pickReadyProvider(
+        'dust',
+        settings.hasKeys,
+        settings.cliConnected ?? {},
+        settings.dustWorkspaceId,
+        settings.providerModels
+      )
     await patch(next)
     setAgents(null)
     setErr(null)
@@ -2394,7 +2455,18 @@ function DustSetup({
   const removeDustKey = async (): Promise<void> => {
     await clearKey('dust')
     if (settings.provider === 'dust')
-      await patch({ provider: pickReadyProvider('dust', settings.hasKeys, settings.cliConnected ?? {}) })
+      await patch({
+        provider: pickReadyProvider(
+          'dust',
+          settings.hasKeys,
+          settings.cliConnected ?? {},
+          settings.dustWorkspaceId,
+          settings.providerModels
+        )
+      })
+    // Mirror disconnectDust's reset: a cleared key means any previously loaded agent list/error is stale.
+    setAgents(null)
+    setErr(null)
   }
   const useDust = (): void => void patch({ provider: 'dust' })
 
@@ -3367,7 +3439,14 @@ function PersonalizeModes({
   }, [overflowOpen, safeSelected])
 
   const createNewMode = (): void => {
-    const label = newLabel.trim() || 'New Mode'
+    const label = newLabel.trim()
+    // Fires on both Enter and the input's onBlur (clicking away) — an empty/whitespace-only label must
+    // cancel instead of silently persisting a junk "New Mode" entry.
+    if (!label) {
+      setCreatingNew(false)
+      setNewLabel('')
+      return
+    }
     const id = `custom-${Date.now()}`
     patch({ customModes: [...customModes, { id, label }] })
     setSelected(id)
@@ -3726,6 +3805,12 @@ export function Settings({
   onLogout?: () => void
 }): JSX.Element {
   const [tab, setTab] = useState<TabId>(initialTab ?? 'personalize')
+  // App reuses the same Settings instance across opens (no remount), so a later requireProvider redirect
+  // that passes a new initialTab (e.g. 'ai') would otherwise leave `tab` stuck on whatever tab was open
+  // before — re-sync whenever the caller hands us a fresh target tab.
+  useEffect(() => {
+    if (initialTab) setTab(initialTab)
+  }, [initialTab])
   const managed = settings.managedKeys.length > 0
   // Switching tabs must land at the top of the new tab's content — the scroll container otherwise
   // keeps whatever scroll position the previous tab was left at. useLayoutEffect (not useEffect) so this
@@ -4029,6 +4114,21 @@ export function Settings({
                         {new Date(settings.asrLastFallbackAt).toLocaleString()}.
                       </span>
                       <TextButton onClick={() => patch({ asrLastFallbackAt: null })}>Dismiss</TextButton>
+                    </div>
+                  )}
+                  {(settings as SettingsWithAsrWebgpuFallback).asrWebgpuFallbackAt != null && (
+                    <div className="-mt-1 flex items-center justify-between gap-2 pl-1 text-[12px] text-[color:var(--color-ink-3)]">
+                      <span>
+                        Best-quality transcription needs a WebGPU-capable GPU; this device fell back to
+                        the fast model.
+                      </span>
+                      <TextButton
+                        onClick={() =>
+                          patch({ asrWebgpuFallbackAt: null } as Partial<SettingsWithAsrWebgpuFallback>)
+                        }
+                      >
+                        Dismiss
+                      </TextButton>
                     </div>
                   )}
                   <ToggleRow
@@ -5201,7 +5301,19 @@ function CalendarTab({
   }
   useEffect(refreshOutlook, [])
 
+  // Locked when an org admin manages any of the three Entra IDs — mirrors the disabled+ManagedChip
+  // pattern used elsewhere (e.g. temperature/overlayOpacity) so this flow can't falsely claim success
+  // while setSettings silently drops the locked keys.
+  const azureLocked =
+    settings.managedKeys.includes('azureClientId') ||
+    settings.managedKeys.includes('azureTenantId') ||
+    settings.managedKeys.includes('azureAllowedDomain')
+
   const saveOutlookIds = async (): Promise<void> => {
+    if (azureLocked) {
+      setOutlookErr('Microsoft sign-in IDs are managed by your organization and cannot be changed here.')
+      return
+    }
     const ci = clientId.trim()
     const ti = tenantId.trim()
     const dom = domain.trim().replace(/^@/, '')
@@ -5240,20 +5352,28 @@ function CalendarTab({
     label: string,
     val: string,
     set: (v: string) => void,
-    placeholder: string
-  ): JSX.Element => (
-    <label className="flex flex-col gap-1">
-      <span className="text-[11px] font-medium text-[color:var(--cl-muted-foreground)]">{label}</span>
-      <input
-        value={val}
-        spellCheck={false}
-        autoComplete="off"
-        placeholder={placeholder}
-        onChange={(e) => set(e.target.value)}
-        className={`${ctl} w-full`}
-      />
-    </label>
-  )
+    placeholder: string,
+    managedKey: string
+  ): JSX.Element => {
+    const fieldLocked = settings.managedKeys.includes(managedKey)
+    return (
+      <label className="flex flex-col gap-1">
+        <span className="flex items-center gap-1.5 text-[11px] font-medium text-[color:var(--cl-muted-foreground)]">
+          {label}
+          <ManagedChip keys={settings.managedKeys} k={managedKey} />
+        </span>
+        <input
+          value={val}
+          spellCheck={false}
+          autoComplete="off"
+          placeholder={placeholder}
+          disabled={fieldLocked}
+          onChange={(e) => set(e.target.value)}
+          className={`${ctl} w-full ${fieldLocked ? 'opacity-60' : ''}`}
+        />
+      </label>
+    )
+  }
 
   const isOutlookConnected = !!authStatus?.signedIn
 
@@ -5339,9 +5459,9 @@ function CalendarTab({
                   These are public IDs. No secret needed.
                 </p>
               </div>
-              {idField('Application (client) ID', clientId, setClientId, '00000000-0000-0000-0000-000000000000')}
-              {idField('Directory (tenant) ID', tenantId, setTenantId, '00000000-0000-0000-0000-000000000000')}
-              {idField('Allowed email domain', domain, setDomain, 'mantu.com')}
+              {idField('Application (client) ID', clientId, setClientId, '00000000-0000-0000-0000-000000000000', 'azureClientId')}
+              {idField('Directory (tenant) ID', tenantId, setTenantId, '00000000-0000-0000-0000-000000000000', 'azureTenantId')}
+              {idField('Allowed email domain', domain, setDomain, 'mantu.com', 'azureAllowedDomain')}
               {outlookErr && (
                 <span className="text-[11px] text-[color:var(--cl-destructive)]">{outlookErr}</span>
               )}
@@ -5349,7 +5469,7 @@ function CalendarTab({
                 <button
                   type="button"
                   onClick={() => void saveOutlookIds()}
-                  disabled={savingOutlook}
+                  disabled={savingOutlook || azureLocked}
                   className="no-drag cl-focus flex items-center gap-1.5 rounded-[8px] bg-[var(--cl-primary)] px-3 py-1.5 text-[12px] font-medium text-white hover:opacity-90 disabled:opacity-50"
                 >
                   {savingOutlook ? <Loader2 size={13} className="animate-spin" /> : null}
