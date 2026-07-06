@@ -12,6 +12,7 @@ const isNotFound = (e: unknown): boolean =>
 /** Enterprise auto-update. Only runs in the packaged app; needs a real `publish` host (electron-builder.yml). */
 export function initAutoUpdate(win: BrowserWindow | null): void {
   if (!app.isPackaged) return
+  if ((process as NodeJS.Process & { mas?: boolean }).mas) return
   // Skip if no real update host is configured (placeholder) — avoids failing checks every launch.
   try {
     const yml = readFileSync(join(process.resourcesPath, 'app-update.yml'), 'utf8')
