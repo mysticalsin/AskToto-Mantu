@@ -85,6 +85,27 @@ function readSettingsAzure(): Partial<AzureConfig> {
   return {}
 }
 
+// A resolved config value must be free of whitespace/control chars AND URL-structural metacharacters.
+// tenantId flows into the MSAL authority URL `https://login.microsoftonline.com/${tenantId}`, and
+// allowedDomain into the `email.endsWith('@'+allowedDomain)` gate — so a value carrying `/ \ ? # @ :`
+// or whitespace could distort the authority path or the domain-suffix check. Legit values never do:
+// clientId is a GUID, tenantId a GUID or dotted domain, allowedDomain a hostname. This is the format
+// validation the self-service Settings path (and the managed/LKG paths) previously lacked.
+function isSafeConfigValue(v: string): boolean {
+  // Positive allowlist: letters, digits, dot, hyphen only. Covers every legit value — clientId
+  // (GUID), tenantId (GUID or dotted domain), allowedDomain (hostname) — while rejecting all
+  // whitespace, control chars, and URL-structural metacharacters (/ \ ? # @ : etc.).
+  return v.length > 0 && v.length <= 253 && /^[A-Za-z0-9.-]+$/.test(v)
+}
+
+/** Reject a resolved config whose fields aren't structurally plausible before they reach the MSAL
+ *  authority / the domain gate. Conservative on purpose (no strict GUID-only rule): tenantId may be a
+ *  GUID OR a verified domain, so we validate character-safety rather than an exact shape — zero legit
+ *  deployments are rejected, while injection-shaped garbage is. */
+function isPlausibleAzureConfig(c: AzureConfig): boolean {
+  return isSafeConfigValue(c.clientId) && isSafeConfigValue(c.tenantId) && isSafeConfigValue(c.allowedDomain)
+}
+
 /**
  * Config resolved by precedence: env (dev) → machine-wide managed-config (IT policy) → per-user
  * managed-config → in-app Settings. Env/managed win so an org deployment can't be loosened from the UI;
@@ -102,26 +123,30 @@ function readSettingsAzure(): Partial<AzureConfig> {
  * is only consulted when sticky is set. See the LKG comment block above.
  */
 function readConfig(): AzureConfig | null {
-  const clientId = process.env.AZURE_CLIENT_ID
-  const tenantId = process.env.AZURE_TENANT_ID
-  const allowedDomain = process.env.ASKTOTO_ALLOWED_DOMAIN
-  if (clientId && tenantId && allowedDomain) {
-    return { clientId, tenantId, allowedDomain }
+  // A tier "counts" only when it supplies all three fields AND they pass format validation — an
+  // implausible/garbage value (whitespace, URL metachars) is treated as "no config from this tier"
+  // and we fall through, rather than building a poisoned MSAL authority or a broken domain gate.
+  const usable = (c: Partial<AzureConfig>): AzureConfig | null => {
+    if (!c.clientId || !c.tenantId || !c.allowedDomain) return null
+    const cfg = { clientId: c.clientId, tenantId: c.tenantId, allowedDomain: c.allowedDomain }
+    return isPlausibleAzureConfig(cfg) ? cfg : null
   }
-  const m = readManagedAzure()
-  if (m.clientId && m.tenantId && m.allowedDomain) {
-    return { clientId: m.clientId, tenantId: m.tenantId, allowedDomain: m.allowedDomain }
-  }
-  const s = readSettingsAzure()
-  if (s.clientId && s.tenantId && s.allowedDomain) {
-    return { clientId: s.clientId, tenantId: s.tenantId, allowedDomain: s.allowedDomain }
-  }
+  const env = usable({
+    clientId: process.env.AZURE_CLIENT_ID,
+    tenantId: process.env.AZURE_TENANT_ID,
+    allowedDomain: process.env.ASKTOTO_ALLOWED_DOMAIN
+  })
+  if (env) return env
+  const m = usable(readManagedAzure())
+  if (m) return m
+  const s = usable(readSettingsAzure())
+  if (s) return s
   // Recovery fallback — only after a genuine prior sign-in (sticky set), and only if nothing above
   // resolved. Makes an enforced-but-Settings-cleared device recoverable instead of a permanent brick.
   if (isStickyConfigured()) {
-    const l = readLkgConfig()
-    if (l.clientId && l.tenantId && l.allowedDomain) {
-      return { clientId: l.clientId, tenantId: l.tenantId, allowedDomain: l.allowedDomain }
+    const l = usable(readLkgConfig())
+    if (l) {
+      return l
     }
   }
   return null
@@ -322,6 +347,13 @@ export async function getGraphToken(scopes: string[]): Promise<string | null> {
 
 let session: Session | null = null
 let loaded = false
+
+// Single-flight guard for interactive sign-in. signIn() binds a loopback HTTP server, opens an external
+// browser, and races to write the session — so concurrent/looping calls (double-clicks, or a misbehaving
+// renderer spamming the IPC) would spawn multiple servers/browser windows and two writers racing on the
+// session file. One interactive flow at a time; extra calls are rejected until it settles. This is the
+// "rate limit auth endpoints" discipline applied at the main-process trust boundary, not the renderer.
+let signInInFlight = false
 
 // Thread the signed-in user's identity into every audit record (auth.ts is the source of truth for who's
 // signed in). Registered once at module load; the callback reads the live `session` binding lazily so it
@@ -584,6 +616,10 @@ export async function signIn(): Promise<SignInResult> {
   const cfg = readConfig()
   if (!cfg) return { ok: true, configured: false } // not configured — let the user proceed
 
+  // Reject a second interactive flow while one is already running (see signInInFlight). Returning
+  // ok:false surfaces a clear message on the wall/Settings rather than silently opening a 2nd browser.
+  if (signInInFlight) return { ok: false, configured: true, error: 'A sign-in is already in progress.' }
+  signInInFlight = true
   try {
     // PCA is wired to the encrypted on-disk token cache (makePca) so the Graph token survives for later
     // calendar reads. (CryptoProvider comes through the lazy msal() accessor — see makePca.)
@@ -708,6 +744,10 @@ export async function signIn(): Promise<SignInResult> {
   } catch (e) {
     auditLog('auth.signin_failed', { reason: coarseSignInFailure(e) })
     return { ok: false, configured: true, error: e instanceof Error ? e.message : String(e) }
+  } finally {
+    // Always release the single-flight latch — success, denial, timeout, or throw — so a failed attempt
+    // never wedges sign-in permanently.
+    signInInFlight = false
   }
 }
 
