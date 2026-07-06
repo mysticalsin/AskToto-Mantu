@@ -95,6 +95,11 @@ function readSettingsAzure(): Partial<AzureConfig> {
  * only written by signIn() on a genuine successful interactive sign-in (see writeStickyConfigured call
  * site below); merely typing values into Settings must never trip it, or "Reset SSO" right after would
  * permanently lock the app with no in-app recovery.
+ *
+ * Lowest-precedence recovery fallback: after a genuine sign-in, the config that actually worked is kept
+ * as an LKG record. If Settings is later cleared while enforcement is sticky, LKG keeps sign-in POSSIBLE
+ * (so the sticky gate is recoverable, not a brick) — env/managed/Settings all still win above it, and it
+ * is only consulted when sticky is set. See the LKG comment block above.
  */
 function readConfig(): AzureConfig | null {
   const clientId = process.env.AZURE_CLIENT_ID
@@ -110,6 +115,14 @@ function readConfig(): AzureConfig | null {
   const s = readSettingsAzure()
   if (s.clientId && s.tenantId && s.allowedDomain) {
     return { clientId: s.clientId, tenantId: s.tenantId, allowedDomain: s.allowedDomain }
+  }
+  // Recovery fallback — only after a genuine prior sign-in (sticky set), and only if nothing above
+  // resolved. Makes an enforced-but-Settings-cleared device recoverable instead of a permanent brick.
+  if (isStickyConfigured()) {
+    const l = readLkgConfig()
+    if (l.clientId && l.tenantId && l.allowedDomain) {
+      return { clientId: l.clientId, tenantId: l.tenantId, allowedDomain: l.allowedDomain }
+    }
   }
   return null
 }
@@ -150,6 +163,62 @@ function clearStickyConfigured(): void {
 
 function isStickyConfigured(): boolean {
   try { return existsSync(stickyConfiguredPath()) } catch { return false }
+}
+
+// ─── Last-known-good (LKG) sign-in config ─────────────────────────────────────
+//
+// The exact Azure config that produced a GENUINE successful interactive sign-in, persisted by signIn()
+// alongside the sticky flag. It is the recovery mechanism that stops the sticky gate from becoming a
+// permanent, unrecoverable brick: if the in-app Settings azure fields are later cleared (self-service
+// "Reset SSO") while enforcement is still sticky, readConfig() falls back to this record so the user can
+// sign in AGAIN and recover — instead of being stranded behind a wall whose only button short-circuits.
+//
+// Security properties (why this is safe):
+//  - Lowest precedence. env → admin-trusted managed → per-user managed → Settings ALL win above it, so an
+//    org tenant lock is never loosened and a fresh Settings config always overrides a stale LKG.
+//  - No new attack surface. readConfig() already trusts a user-writable userData file (per-user
+//    managed-config.json) to define tenant/clientId/domain, at HIGHER precedence than LKG. An attacker
+//    who could forge LKG could already forge that higher-precedence file — LKG grants nothing new.
+//  - Only honored when sticky is set (a real sign-in happened), so a stray/forged LKG on a never-signed-in
+//    install is ignored.
+//  - Public identifiers only (clientId/tenantId/allowedDomain) — never a secret/token.
+// Written on every successful sign-in (latest good config wins); cleared on a genuine authenticated
+// sign-out, in lockstep with the sticky flag.
+//
+function lkgConfigPath(): string {
+  return join(app.getPath('userData'), 'auth-lkg-config.json')
+}
+
+function writeLkgConfig(cfg: AzureConfig): void {
+  try {
+    writeFileSync(
+      lkgConfigPath(),
+      JSON.stringify({ clientId: cfg.clientId, tenantId: cfg.tenantId, allowedDomain: cfg.allowedDomain }),
+      { mode: 0o600 }
+    )
+  } catch {
+    /* best-effort: without it, recovery just falls back to Settings/managed config */
+  }
+}
+
+function readLkgConfig(): Partial<AzureConfig> {
+  try {
+    const j = JSON.parse(readFileSync(lkgConfigPath(), 'utf8'))
+    const clientId = String(j?.clientId || '').trim()
+    const tenantId = String(j?.tenantId || '').trim()
+    const allowedDomain = String(j?.allowedDomain || '').trim().replace(/^@/, '')
+    if (clientId && tenantId && allowedDomain) return { clientId, tenantId, allowedDomain }
+  } catch {
+    /* absent / unreadable / malformed — no recovery config */
+  }
+  return {}
+}
+
+function clearLkgConfig(): void {
+  try {
+    const p = lkgConfigPath()
+    if (existsSync(p)) rmSync(p)
+  } catch { /* best-effort */ }
 }
 
 function msalCachePath(): string {
@@ -630,7 +699,10 @@ export async function signIn(): Promise<SignInResult> {
     })
     // Only NOW — a real interactive sign-in has actually validated and established a session — does
     // SSO count as "genuinely usable". See the sticky-configured comment block above readConfig().
+    // Persist the exact config that worked (LKG) so a later "Reset SSO" leaves the enforced gate
+    // recoverable (sign-in stays possible) rather than an unrecoverable brick.
     writeStickyConfigured()
+    writeLkgConfig(cfg)
     auditLog('auth.signin', { domain: cfg.allowedDomain })
     return { ok: true, configured: true, email }
   } catch (e) {
@@ -641,12 +713,17 @@ export async function signIn(): Promise<SignInResult> {
 
 export function signOut(): void {
   // Load session before clearing so we can detect a genuine (authenticated) sign-out.
-  // The sticky-configured flag is only cleared when there was a real active session —
-  // a bare signOut() call with no session must NOT clear it (prevents an attacker from
-  // calling signOut() to drop the sticky flag and then clearing Settings to bypass auth).
+  // The sticky-configured flag + LKG recovery config are cleared only when there was a real active
+  // session — a bare signOut() call with no session must NOT clear them (prevents an attacker from
+  // calling signOut() to drop the sticky flag/LKG and then clearing Settings to bypass or brick auth).
+  // Cleared in lockstep: enforcement being intentionally lifted means its recovery record goes too;
+  // both are re-established on the next successful sign-in.
   loadSession()
   const wasSignedIn = !!session
   clearSession()
-  if (wasSignedIn) clearStickyConfigured()
+  if (wasSignedIn) {
+    clearStickyConfigured()
+    clearLkgConfig()
+  }
   auditLog('auth.signout')
 }
