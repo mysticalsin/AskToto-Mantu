@@ -1679,10 +1679,17 @@ function DustSetup({
     const k = dustKey.trim()
     if (!k) return
     setKeySaving(true)
-    await saveKey('dust', k)
-    await patch({ provider: 'dust' }) // activate Dust so this key is used + the add-key CTA hides
-    setDustKey('')
-    setKeySaving(false)
+    setErr(null)
+    try {
+      await saveKey('dust', k)
+      await patch({ provider: 'dust' }) // activate Dust so this key is used + the add-key CTA hides
+      setDustKey('')
+    } catch (e) {
+      // e.g. OS encryption unavailable — store.setApiKey throws; don't fail silently (mirrors AiSection.onSave).
+      setErr(e instanceof Error ? e.message : 'Could not save the key.')
+    } finally {
+      setKeySaving(false)
+    }
   }
   // Fully disconnect Dust: clear the saved token/key, drop the workspace + region + the (user-editable)
   // thinking agent, switch off Dust if it's active, and reset the local CLI/agents UI so the card returns
@@ -1765,6 +1772,15 @@ function DustSetup({
     // loadAgents is stable enough for this mount-on-connect check; re-run only when connection state flips.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [keySaved, hasWs])
+
+  // Editing the workspace ID string doesn't flip keySaved/hasWs (both stay true switching workspace A → B),
+  // so the effect above never re-fires — without this, the Thinking-agent dropdown keeps showing workspace
+  // A's stale agents. Invalidate on every edit; the button above ("Load my agents"/"Refresh") reloads.
+  useEffect(() => {
+    setAgents(null)
+    setErr(null)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [settings.dustWorkspaceId])
 
   const setThinkAgent = (sId: string): void =>
     patch({ providerModelsThinking: { ...settings.providerModelsThinking, dust: sId } })
@@ -2156,7 +2172,9 @@ function MicLevelMeter({
    *  "No signal" until some unrelated device switch re-ran this effect. */
   permissionNonce?: number
 }): JSX.Element {
-  const [blocked, setBlocked] = useState(false)
+  // null = not blocked. Otherwise the getUserMedia failure kind, so the hint below can name the actual
+  // cause instead of always saying "allow microphone access" (wrong for a disconnected/OverconstrainedError device).
+  const [blockedReason, setBlockedReason] = useState<'permission' | 'device' | 'other' | null>(null)
   const barRef = useRef<HTMLDivElement>(null)
   const meterRef = useRef<HTMLDivElement>(null)
 
@@ -2197,7 +2215,7 @@ function MicLevelMeter({
         mute.gain.value = 0
         audioCtx.createMediaStreamSource(s).connect(analyser).connect(mute).connect(audioCtx.destination)
         const data = new Float32Array(analyser.fftSize)
-        setBlocked(false)
+        setBlockedReason(null)
 
         const tick = (): void => {
           analyser.getFloatTimeDomainData(data)
@@ -2217,10 +2235,15 @@ function MicLevelMeter({
           raf = requestAnimationFrame(tick)
         }
         raf = requestAnimationFrame(tick)
-      } catch {
-        // Permission denied, no device matched deviceId (e.g. it just disconnected), or no mic at all —
-        // never throw, just show the hint below instead of the bar.
-        if (!cancelled) setBlocked(true)
+      } catch (e) {
+        // Never throw, just show the hint below instead of the bar — but branch the copy on the actual
+        // cause: permission denied vs. a device that vanished (OverconstrainedError from the
+        // {deviceId:{exact}} constraint above, or NotFoundError) vs. anything else.
+        if (cancelled) return
+        const name = e instanceof Error ? e.name : ''
+        if (name === 'NotAllowedError') setBlockedReason('permission')
+        else if (name === 'OverconstrainedError' || name === 'NotFoundError') setBlockedReason('device')
+        else setBlockedReason('other')
       }
     })()
 
@@ -2230,9 +2253,15 @@ function MicLevelMeter({
     }
   }, [deviceId, permissionNonce])
 
-  if (blocked) {
+  if (blockedReason) {
+    const hint =
+      blockedReason === 'permission'
+        ? 'No signal. Allow microphone access to test this device.'
+        : blockedReason === 'device'
+          ? 'Device unavailable — choose another mic, or reconnect it and retry.'
+          : 'No signal from this microphone.'
     return (
-      <FieldHint text="No signal. Allow microphone access to test this device.">
+      <FieldHint text={hint}>
         <span className="flex h-2 w-16 shrink-0 items-center justify-center text-[color:var(--cl-muted-foreground)]">
           <AlertCircle size={12} />
         </span>
@@ -2563,6 +2592,10 @@ function PersonalizeModes({
   const [creatingNew, setCreatingNew] = useState(false)
   const [newLabel, setNewLabel] = useState('')
   const locked = settings.managedKeys.includes('mode')
+  // Gates custom-mode create/rename/delete — distinct from `locked` above (which only gates "Set active").
+  // Without this, the trigger buttons silently no-op (patch() drops locked keys) and deleteCustomMode's
+  // combined patch can partially apply (customModes entry dropped while modePrompts/contextDocs land).
+  const customModesLocked = settings.managedKeys.includes('customModes')
   const overflowRef = useRef<HTMLDivElement>(null)
   // Two-step inline confirm for the overflow menu's destructive actions (mirrors the CLI-install
   // "confirming" phase idiom elsewhere in this file) — first click asks, second click actually deletes.
@@ -2608,6 +2641,7 @@ function PersonalizeModes({
   }, [overflowOpen, safeSelected])
 
   const createNewMode = (): void => {
+    if (customModesLocked) { setCreatingNew(false); setNewLabel(''); return }
     const label = newLabel.trim()
     // Fires on both Enter and the input's onBlur (clicking away) — an empty/whitespace-only label must
     // cancel instead of silently persisting a junk "New Mode" entry.
@@ -2630,6 +2664,7 @@ function PersonalizeModes({
   }
 
   const commitRename = (): void => {
+    if (customModesLocked) { setRenaming(false); return }
     const label = renameValue.trim()
     if (label && !isBuiltinSelected) {
       patch({ customModes: customModes.map((c) => c.id === safeSelected ? { ...c, label } : c) })
@@ -2638,6 +2673,7 @@ function PersonalizeModes({
   }
 
   const deleteCustomMode = (): void => {
+    if (customModesLocked) { setOverflowOpen(false); setConfirmDelete(false); return }
     setOverflowOpen(false)
     const nextModes = customModes.filter((c) => c.id !== safeSelected)
     const nextPrompts = { ...settings.modePrompts }
@@ -2726,7 +2762,8 @@ function PersonalizeModes({
           <button
             type="button"
             onClick={() => setCreatingNew(true)}
-            className="no-drag cl-focus mb-1.5 flex items-center gap-1.5 rounded-[10px] border border-dashed border-[var(--cl-border)] px-2.5 py-1.5 text-[11px] text-[color:var(--cl-muted-foreground)] hover:border-[var(--cl-primary)]/50 hover:text-[color:var(--color-accent-text)] transition-colors"
+            disabled={customModesLocked}
+            className="no-drag cl-focus mb-1.5 flex items-center gap-1.5 rounded-[10px] border border-dashed border-[var(--cl-border)] px-2.5 py-1.5 text-[11px] text-[color:var(--cl-muted-foreground)] hover:border-[var(--cl-primary)]/50 hover:text-[color:var(--color-accent-text)] transition-colors disabled:opacity-50 disabled:hover:border-[var(--cl-border)] disabled:hover:text-[color:var(--cl-muted-foreground)]"
           >
             <Plus size={12} /> New Mode
           </button>
@@ -2806,7 +2843,8 @@ function PersonalizeModes({
                     <button
                       type="button"
                       onClick={resetBuiltinPrompt}
-                      className="no-drag w-full px-3 py-2 text-left text-[12px] text-[color:var(--cl-foreground)] hover:bg-white/[0.05] rounded-t-[10px]"
+                      disabled={settings.managedKeys.includes('modePrompts')}
+                      className="no-drag w-full px-3 py-2 text-left text-[12px] text-[color:var(--cl-foreground)] hover:bg-white/[0.05] rounded-t-[10px] disabled:opacity-50 disabled:hover:bg-transparent"
                     >
                       <RotateCcw size={12} className="mr-2 inline" />
                       Reset prompt to default
@@ -2832,7 +2870,8 @@ function PersonalizeModes({
                       <button
                         type="button"
                         onClick={() => setConfirmClear(true)}
-                        className="no-drag w-full px-3 py-2 text-left text-[12px] text-[color:var(--cl-foreground)] hover:bg-white/[0.05] rounded-b-[10px]"
+                        disabled={settings.managedKeys.includes('contextDocs')}
+                        className="no-drag w-full px-3 py-2 text-left text-[12px] text-[color:var(--cl-foreground)] hover:bg-white/[0.05] rounded-b-[10px] disabled:opacity-50 disabled:hover:bg-transparent"
                       >
                         <Trash size={12} className="mr-2 inline" />
                         Clear context files
@@ -2844,7 +2883,8 @@ function PersonalizeModes({
                     <button
                       type="button"
                       onClick={startRename}
-                      className="no-drag w-full px-3 py-2 text-left text-[12px] text-[color:var(--cl-foreground)] hover:bg-white/[0.05] rounded-t-[10px]"
+                      disabled={customModesLocked}
+                      className="no-drag w-full px-3 py-2 text-left text-[12px] text-[color:var(--cl-foreground)] hover:bg-white/[0.05] rounded-t-[10px] disabled:opacity-50 disabled:hover:bg-transparent"
                     >
                       Rename
                     </button>
@@ -2869,7 +2909,8 @@ function PersonalizeModes({
                       <button
                         type="button"
                         onClick={() => setConfirmDelete(true)}
-                        className="no-drag w-full px-3 py-2 text-left text-[12px] text-[color:var(--cl-destructive)] hover:bg-white/[0.05] rounded-b-[10px]"
+                        disabled={customModesLocked}
+                        className="no-drag w-full px-3 py-2 text-left text-[12px] text-[color:var(--cl-destructive)] hover:bg-white/[0.05] rounded-b-[10px] disabled:opacity-50 disabled:hover:bg-transparent"
                       >
                         <Trash size={12} className="mr-2 inline" />
                         Delete mode
@@ -2973,6 +3014,9 @@ export function Settings({
   onLogout?: () => void
 }): JSX.Element {
   const [tab, setTab] = useState<TabId>(initialTab ?? 'personalize')
+  // openMeetingsFolder resolves a non-empty string on failure (e.g. the folder was deleted/unmounted) —
+  // surface it instead of silently discarding it (was `void window.toto.openMeetingsFolder()`).
+  const [meetingsFolderErr, setMeetingsFolderErr] = useState<string | null>(null)
   // App reuses the same Settings instance across opens (no remount), so a later requireProvider redirect
   // that passes a new initialTab (e.g. 'ai') would otherwise leave `tab` stuck on whatever tab was open
   // before — re-sync whenever the caller hands us a fresh target tab.
@@ -3397,12 +3441,20 @@ export function Settings({
                     </button>
                     <button
                       type="button"
-                      onClick={() => void window.toto.openMeetingsFolder()}
+                      onClick={async () => {
+                        const result = await window.toto.openMeetingsFolder()
+                        setMeetingsFolderErr(result || null)
+                      }}
                       className="no-drag cl-focus flex items-center gap-1 rounded-lg bg-white/[0.05] px-2.5 py-1.5 text-[12px] text-[color:var(--cl-foreground)] hover:bg-white/[0.1]"
                     >
                       <FolderOpen size={12} /> Open
                     </button>
                   </div>
+                  {meetingsFolderErr && (
+                    <div className="mt-1.5 flex items-center gap-1.5 text-[11px] text-[color:var(--cl-destructive)]">
+                      <AlertCircle size={12} className="shrink-0" /> {meetingsFolderErr}
+                    </div>
+                  )}
                 </div>
                 <div className="mt-2">
                   <div className="rounded-lg bg-white/[0.03] px-3 py-2">

@@ -124,9 +124,16 @@ export const Answer = memo(function Answer({
   ) : display ? (
     <div className="rounded-lg border border-[var(--color-hair-soft)] bg-white/[0.03] px-3 py-2 text-[13px] font-medium text-[color:var(--color-ink)] break-words">
       {kind === 'factcheck' && (
-        <div className="mb-1 flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wide text-[color:var(--color-ink-3)]">
-          <ShieldCheck size={11} /> Fact-check
-        </div>
+        <>
+          <div className="mb-1 flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wide text-[color:var(--color-ink-3)]">
+            <ShieldCheck size={11} /> Fact-check
+          </div>
+          {/* Persistent caveat: the app has no web search, so a verdict is the model's parametric
+              knowledge, not a verified lookup — this must not read as "checked against the web". */}
+          <div className="mb-1 text-[10px] font-normal normal-case tracking-normal text-[color:var(--color-ink-3)]">
+            AI-inferred from the model&apos;s knowledge, not a web lookup — verify anything important.
+          </div>
+        </>
       )}
       {usedScreen && (
         <div className="mb-1 flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wide text-[color:var(--color-ink-3)]">

@@ -139,7 +139,9 @@ const api = {
   exportRecapJson: (markdown: string): Promise<RecapExport> =>
     ipcRenderer.invoke(IPC.exportRecapJson, markdown),
   pickFolder: (): Promise<PublicSettings> => ipcRenderer.invoke(IPC.pickFolder),
-  openMeetingsFolder: (): Promise<void> => ipcRenderer.invoke(IPC.openPath),
+  // shell.openPath resolves to '' on success or a non-empty OS error string on failure — callers need the
+  // string to surface a failure (e.g. a deleted/unmounted meetings folder), not just fire-and-forget it.
+  openMeetingsFolder: (): Promise<string> => ipcRenderer.invoke(IPC.openPath),
   recallList: (): Promise<MeetingSummary[]> => ipcRenderer.invoke(IPC.recallList),
   recallSearch: (q: string): Promise<RecallHit[]> => ipcRenderer.invoke(IPC.recallSearch, q),
   recallOpen: (file: string): Promise<string> => ipcRenderer.invoke(IPC.recallOpen, file),

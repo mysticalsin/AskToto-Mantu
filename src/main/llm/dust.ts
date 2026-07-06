@@ -232,7 +232,8 @@ export function streamDust(opts: StreamOptions): StreamHandle {
         created = await api.createConversation({
           title: null,
           visibility: 'unlisted',
-          message: messageBody
+          message: messageBody,
+          signal: controller.signal
         })
       } finally {
         // Release the creation gate no matter how this attempt settles — including a thrown exception,
@@ -254,7 +255,7 @@ export function streamDust(opts: StreamOptions): StreamHandle {
       // A fresh-conversation request must not hijack the meeting's cache slot with its throwaway thread.
       // Nor may a request that straddled a meeting-boundary reset (epoch changed while we awaited
       // createConversation) repopulate the cache with the now-stale previous meeting's conversation.
-      if (sId && !opts.freshConversation && epochAtStart === conversationEpoch) {
+      if (sId && !opts.freshConversation && epochAtStart === conversationEpoch && !controller.signal.aborted) {
         activeConversation = { conversationId: sId, workspaceId, agentId: opts.model, createdAt: Date.now() }
       }
       auditLog('dust.conversation', { action: opts.freshConversation ? 'created-isolated' : 'created' })

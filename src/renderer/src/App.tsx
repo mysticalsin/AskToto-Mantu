@@ -311,6 +311,25 @@ export function App(): JSX.Element {
   const onReviewDirtyChange = useCallback((dirty: boolean): void => {
     reviewDirtyRef.current = dirty
   }, [])
+  // Mirrors `view` for guardReviewNav below via a ref (rather than closing over the `view` state value
+  // directly), so the helper keeps a STABLE identity across renders — required because several callers
+  // (onBarHistory, onBarSettings, and the memoized Bar callbacks) are themselves memoized with empty/near-
+  // empty dep arrays for React.memo(Bar); a guard fn whose identity changed on every view switch would
+  // force those deps to include it and defeat that memoization (see "Stabilized Bar callbacks" below).
+  const viewRef = useRef(view)
+  viewRef.current = view
+
+  // Shared guard for every view-switch path that could otherwise silently discard an in-progress, unsaved
+  // recap edit on Review (see reviewDirtyRef above and its two existing call sites: onBarMinimize,
+  // onTogglePanel). Only fires the confirm when Review is actually open AND dirty; every other view-switch
+  // (History, Settings, and the hotkey dispatch below) used to skip this check entirely and navigate away
+  // ungated, silently dropping the edit.
+  const guardReviewNav = useCallback((proceed: () => void): void => {
+    if (viewRef.current === 'review' && reviewDirtyRef.current && !window.confirm('You have unsaved changes to this recap. Discard them?')) {
+      return
+    }
+    proceed()
+  }, [])
 
   // Drives the overlay's glass-background alpha (Settings → Personalize → Appearance). A single CSS
   // variable multiplies every --glass-* alpha channel (see styles.css) — default 1 reproduces today's
@@ -878,7 +897,7 @@ export function App(): JSX.Element {
     }
     if (route.transport === 'screen') {
       void askScreen(buildWhatNextPrompt('', 'screen'), {
-        label: 'Viewed screen',
+        label: 'What to say next',
         history: historyRef.current,
         record: typed || 'What should I say next?'
       })
@@ -1221,7 +1240,19 @@ export function App(): JSX.Element {
     const now = Date.now()
     if (now - lastHistoryToggleRef.current < 400) return
     lastHistoryToggleRef.current = now
-    setView((v) => (v === 'history' ? 'answer' : 'history'))
+    guardReviewNav(() => {
+      setView((v) => (v === 'history' ? 'answer' : 'history'))
+      setCollapsed(false)
+    })
+  }, [guardReviewNav])
+  // Shared by onBarSettings and the tray/hotkey 'settings' branch below — always resets to the default
+  // tab and clears any leftover programmatic notice, so opening Settings via either entry point never
+  // leaks a stale requireProvider redirect (wrong tab + stale "why am I here" banner) from a previous
+  // openSettings(tab, notice) call.
+  const openSettingsDefault = useCallback((): void => {
+    setSettingsInitialTab(undefined)
+    setSettingsNotice(undefined)
+    setView((v) => (v === 'settings' ? 'answer' : 'settings'))
     setCollapsed(false)
   }, [])
   const lastSettingsToggleRef = useRef(0)
@@ -1229,11 +1260,8 @@ export function App(): JSX.Element {
     const now = Date.now()
     if (now - lastSettingsToggleRef.current < 400) return
     lastSettingsToggleRef.current = now
-    setSettingsInitialTab(undefined) // logo-click opens the default tab, not a leftover programmatic one
-    setSettingsNotice(undefined) // ...and never a leftover "why am I here" banner either
-    setView((v) => (v === 'settings' ? 'answer' : 'settings'))
-    setCollapsed(false)
-  }, [])
+    guardReviewNav(openSettingsDefault)
+  }, [guardReviewNav, openSettingsDefault])
   const onBarMinimize = useCallback(() => {
     // Minimizing unmounts the entire Bar/Panel tree, including an open Review with an in-progress recap
     // edit — same dirty-guard the global Escape handler already runs before leaving Review (see
@@ -1304,19 +1332,28 @@ export function App(): JSX.Element {
     // while the user is stuck on the onboarding/sign-in screen. Mirror those exact two gates here and let
     // only 'hide' through while gated; every other action either needs the widget (which isn't usably
     // on-screen yet) or has a capture/LLM/recording side effect.
-    const onboardingGate = !!settings && !settings.onboardingDone && DEMO == null
-    const signInGate = !!(auth.status?.configured || auth.status?.enforced) && !auth.status?.signedIn && DEMO == null
+    // Both gates must fail CLOSED while their backing state is still loading (before the first
+    // settings/authStatus reply) — otherwise action hotkeys fire during that window even though the
+    // render tree itself fails closed there (see the `settings == null || auth.status == null` loading
+    // return further down). onboardingGate now gates on `settings == null` too; signInGate gates on
+    // `auth.status == null` via authNotReady, same as the render tree's own loading check.
+    const onboardingGate = DEMO == null && (settings == null || !settings.onboardingDone)
+    const authNotReady = auth.status == null
+    const signInGate =
+      DEMO == null && (authNotReady || (!!(auth.status?.configured || auth.status?.enforced) && !auth.status?.signedIn))
     if (a !== 'hide' && (onboardingGate || signInGate)) return
     // From the minimized control-pill the Bar is unmounted, so any action that needs the widget (ask /
     // capture / factcheck / settings / toggle-listen) must expand first — otherwise capture/factcheck
     // would fire an LLM request into nothing (invisible work + wasted spend). 'hide' stays as-is.
     if (a !== 'hide' && minimized) unminimize()
     if (a === 'ask') {
-      setView(listen.listening ? 'copilot' : 'answer')
-      setCollapsed(false)
-      setFocusSignal((x) => x + 1)
+      guardReviewNav(() => {
+        setView(listen.listening ? 'copilot' : 'answer')
+        setCollapsed(false)
+        setFocusSignal((x) => x + 1)
+      })
     } else if (a === 'hide') void window.toto.hide()
-    else if (a === 'reset') reset()
+    else if (a === 'reset') guardReviewNav(reset)
     else if (a === 'toggle-listen') toggleListen()
     else if (a === 'capture') capture()
     else if (a === 'factcheck') factCheck()
@@ -1325,12 +1362,13 @@ export function App(): JSX.Element {
     else if (a === 'summarize') onQuickAction('summarize')
     else if (a === 'spotlight-ref') spotlightRef()
     else if (a === 'settings') {
-      setView((v) => (v === 'settings' ? 'answer' : 'settings'))
-      setCollapsed(false)
+      guardReviewNav(openSettingsDefault)
     } else if (a === 'agenda') {
       // Re-homed from the dropped Bar button to the tray → open the agenda panel.
-      setView('agenda')
-      setCollapsed(false)
+      guardReviewNav(() => {
+        setView('agenda')
+        setCollapsed(false)
+      })
     }
   }
   useEffect(() => window.toto.onHotkey((a) => handlersRef.current(a)), [])
@@ -1429,7 +1467,7 @@ export function App(): JSX.Element {
             ? withContext('Explain what is on my screen in simple terms.', transcript)
             : 'Explain what is on my screen in simple terms.'
           void askScreen(screenPrompt, {
-            label: 'Viewed screen',
+            label: 'Explaining your screen',
             history: historyRef.current,
             record: typed || 'Explain what is on my screen in simple terms.'
           })
@@ -1466,7 +1504,7 @@ export function App(): JSX.Element {
             ? withContext('Summarize what is on my screen.', transcript)
             : 'Summarize what is on my screen.'
           void askScreen(screenPrompt, {
-            label: 'Viewed screen',
+            label: 'Summarizing your screen',
             history: historyRef.current,
             record: input.trim() || 'Summarize what is on my screen.'
           })
@@ -1545,7 +1583,13 @@ export function App(): JSX.Element {
   const historyBody = useMemo(
     () => (
       <RecallView
-        onOpenFolder={() => void window.toto.openMeetingsFolder()}
+        onOpenFolder={async () => {
+          // openMeetingsFolder resolves to a non-empty error string on failure (folder missing/moved,
+          // couldn't launch the OS file browser) instead of throwing — surface it instead of discarding
+          // it, which the old fire-and-forget `void` call used to do silently.
+          const err = await window.toto.openMeetingsFolder()
+          if (err) window.alert(err)
+        }}
         onBack={() => setView('answer')}
         onConnectCalendar={() => {
           setSettingsInitialTab('calendar')
@@ -1608,7 +1652,13 @@ export function App(): JSX.Element {
         onRetryRecap={pm ? undefined : retryAnswer}
         bidstackConnected={settings?.bidstackConnected ?? false}
         bidstackTools={settings?.bidstackTools ?? []}
-        onOpenFolder={() => void window.toto.openMeetingsFolder()}
+        onOpenFolder={async () => {
+          // openMeetingsFolder resolves to a non-empty error string on failure (folder missing/moved,
+          // couldn't launch the OS file browser) instead of throwing — surface it instead of discarding
+          // it, which the old fire-and-forget `void` call used to do silently.
+          const err = await window.toto.openMeetingsFolder()
+          if (err) window.alert(err)
+        }}
         onSave={pm ? undefined : manualSave}
         onResume={pm ? resumePastMeeting : undefined}
         onOpenPastMeeting={openPastMeeting}
