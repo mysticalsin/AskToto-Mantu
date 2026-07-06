@@ -30,4 +30,17 @@ describe('toCsv', () => {
     const csv = toCsv([[null, undefined, 'x']]);
     assert.equal(csv, ',,x');
   });
+
+  it('neutralizes formula-injection leading characters', () => {
+    // Each dangerous leading char gets a ' prefix; the = case also needs no extra quoting,
+    // while -/@ etc. stay unquoted unless they also contain a comma/quote/newline.
+    assert.equal(toCsv([['=1+1']]), "'=1+1");
+    assert.equal(toCsv([['+SUM(A1)']]), "'+SUM(A1)");
+    assert.equal(toCsv([['-2+3']]), "'-2+3");
+    assert.equal(toCsv([['@SUM(A1)']]), "'@SUM(A1)");
+    // A dangerous lead AND a comma: prefixed, then quoted as a whole.
+    assert.equal(toCsv([['=HYPERLINK("x"),y']]), '"\'=HYPERLINK(""x""),y"');
+    // A safe value that merely contains = later is untouched.
+    assert.equal(toCsv([['a=b']]), 'a=b');
+  });
 });

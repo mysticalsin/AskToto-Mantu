@@ -136,6 +136,17 @@ describe('license-server', () => {
     assert.deepEqual(second.json, { ok: false, error: 'seat_limit_reached' });
   });
 
+  it('rate-limits a burst of /activate calls (429 after the window cap)', async () => {
+    seedLicense({ seatCap: 1000 });
+    let sawLimited = false;
+    // The cap is 20/min per IP+key; well past it, we must start getting 429s.
+    for (let i = 0; i < 30; i++) {
+      const r = await post('/activate', { licenseKey: 'ATK-0000000000000000TEST', machineId: 'm-' + i });
+      if (r.status === 429) { sawLimited = true; break; }
+    }
+    assert.equal(sawLimited, true, 'a burst well over the per-minute cap must be rate-limited');
+  });
+
   it('re-activating the same machineId is idempotent and does not consume an extra seat', async () => {
     seedLicense({ seatCap: 1 });
 

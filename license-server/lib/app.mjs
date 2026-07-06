@@ -74,12 +74,46 @@ function badRequest(res, parseResult) {
   });
 }
 
+// Fixed-window rate limiter for the two unauthenticated public endpoints (/activate, /heartbeat).
+// Without it, anyone who learns a licenseKey can spam /activate with fresh random machineIds and burn
+// every seat, locking out the real machines. Keyed on client IP + licenseKey so one noisy caller can't
+// starve a different company's license. In-process (no dependency, no Redis) — correct for the single
+// instance this is designed to run as; a horizontally-scaled deploy would move this to a shared store.
+// Constructed PER app instance (state lives in the closure below), so it's isolated between servers.
+const RL_WINDOW_MS = 60_000;
+const RL_MAX = 20; // 20 activate/heartbeat calls per key+IP per minute — generous for real use, fatal to a seat-flood
+function makeRateLimit() {
+  const buckets = new Map();
+  return function rateLimit(req, res, next) {
+    const ip = req.ip || req.socket?.remoteAddress || 'unknown';
+    const key = `${ip}|${(req.body && req.body.licenseKey) || ''}`;
+    const now = Date.now();
+    const b = buckets.get(key);
+    if (!b || now - b.start >= RL_WINDOW_MS) {
+      buckets.set(key, { start: now, count: 1 });
+    } else if (b.count >= RL_MAX) {
+      return res.status(429).json({ ok: false, error: 'rate_limited' });
+    } else {
+      b.count += 1;
+    }
+    // Opportunistic sweep so the Map can't grow unbounded from unique keys over a long uptime.
+    if (buckets.size > 10_000) {
+      for (const [k, v] of buckets) if (now - v.start >= RL_WINDOW_MS) buckets.delete(k);
+    }
+    return next();
+  };
+}
+
 // Builds the Express app around a given store + audit log. Kept as a
 // factory (rather than a module-level singleton) so tests can spin up
 // isolated instances against isolated temp-file stores.
 export function createApp(store, auditLog) {
   const app = express();
+  // Behind a reverse proxy (Fly, Railway, Caddy, an nginx/Cloudflare front) the client IP is in
+  // X-Forwarded-For; trust it so the rate limiter keys on the real client, not the proxy's single IP.
+  app.set('trust proxy', true);
   app.use(express.json());
+  const rateLimit = makeRateLimit();
 
   // JSON body parse errors land here (thrown by express.json()).
   app.use((err, req, res, next) => {
@@ -89,7 +123,7 @@ export function createApp(store, auditLog) {
     return next(err);
   });
 
-  app.post('/activate', (req, res) => {
+  app.post('/activate', rateLimit, (req, res) => {
     const parsed = activateSchema.safeParse(req.body);
     if (!parsed.success) return badRequest(res, parsed);
     const { licenseKey, machineId, machineName } = parsed.data;
@@ -124,7 +158,7 @@ export function createApp(store, auditLog) {
     return res.json(successPayload(license));
   });
 
-  app.post('/heartbeat', (req, res) => {
+  app.post('/heartbeat', rateLimit, (req, res) => {
     const parsed = heartbeatSchema.safeParse(req.body);
     if (!parsed.success) return badRequest(res, parsed);
     const { licenseKey, machineId } = parsed.data;

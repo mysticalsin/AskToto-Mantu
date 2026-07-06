@@ -124,10 +124,11 @@ export async function heartbeat(): Promise<LicenseActivateResult> {
       licenseValid: true,
       licenseLastValidatedAt: Date.now()
     })
-  } else if (r.error === 'revoked' || r.error === 'expired') {
-    // Only an explicit revoked/expired verdict from the server un-licenses the device. Every other
-    // failure here — network, timeout, malformed response — leaves licenseValid untouched, otherwise a
-    // flaky connection alone would brick a working install.
+  } else if (r.error === 'revoked' || r.error === 'expired' || r.error === 'not_activated' || r.error === 'invalid') {
+    // Any explicit verdict from the server ABOUT THIS MACHINE un-licenses the device: revoked/expired
+    // (license-wide), not_activated (an admin freed this seat in the dashboard), or invalid (the license
+    // was deleted). Only genuine connectivity noise — 'network', timeout, malformed response — leaves
+    // licenseValid untouched, so a flaky connection alone can't brick a working install.
     setSettings({ licenseValid: false })
   }
   return r
@@ -146,6 +147,17 @@ export function checkLicenseGrace(): LicenseGraceResult {
   if (!s.licenseValid) return { allowed: false, reason: 'not_activated' }
 
   const age = Date.now() - s.licenseLastValidatedAt
+
+  // A negative age means the last validation is stamped in the FUTURE — the system clock was set
+  // backwards (or the stored timestamp is corrupt). Local time can't be trusted to bound the offline
+  // grace, so don't grant it: fire a background re-check and require a real server verdict. An online
+  // machine self-heals on the next tick/retry (heartbeat restamps lastValidatedAt to a sane now); an
+  // offline clock-manipulator is blocked instead of getting an indefinite bypass. (The separate 12h
+  // heartbeat interval in index.ts is unaffected by clock skew and still catches revokes independently.)
+  if (age < 0) {
+    void heartbeat()
+    return { allowed: false, reason: 'expired_grace' }
+  }
   if (age < GRACE_MS) return { allowed: true } // soft grace — no network call, so launch never waits on connectivity
 
   if (age < HARD_CAP_MS) {
