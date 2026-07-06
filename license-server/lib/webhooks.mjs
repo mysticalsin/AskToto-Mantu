@@ -27,6 +27,63 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+// Discord webhook URLs speak Discord's own payload schema ({ content | embeds }), not ours — a
+// generic JSON event gets rejected with 400 ("Cannot send an empty message") and dropped as
+// terminal. Detect them and translate each event into a Discord embed, so pointing
+// LICENSE_WEBHOOK_URL straight at a Discord channel just works, no relay needed.
+const DISCORD_WEBHOOK_RE = /^https:\/\/(?:ptb\.|canary\.)?discord(?:app)?\.com\/api\/webhooks\//;
+
+export function isDiscordWebhookUrl(url) {
+  return DISCORD_WEBHOOK_RE.test(String(url || ''));
+}
+
+const DISCORD_EVENT_META = {
+  'license.created': { title: 'License created', color: 0x34d399 },
+  'license.revoked': { title: 'License revoked', color: 0xf87171 },
+  'license.unrevoked': { title: 'License unrevoked', color: 0x34d399 },
+  'license.deleted': { title: 'License deleted', color: 0xf87171 },
+  'license.seat_limit': { title: 'Seat cap reached', color: 0xfbbf24 },
+  'license.expiring_soon': { title: 'License expiring soon', color: 0xfbbf24 },
+  'store.restored': { title: 'Store restored from backup', color: 0x9645d6 },
+};
+
+// A chat channel is a much leakier place than a signed webhook receiver — never post the full
+// license key there. Enough to recognize it in the dashboard, not enough to activate with.
+function truncateKey(key) {
+  if (typeof key !== 'string' || key.length <= 13) return key || '';
+  return `${key.slice(0, 8)}…${key.slice(-4)}`;
+}
+
+export function formatDiscordPayload(event, at, payload) {
+  const meta = DISCORD_EVENT_META[event] || { title: event, color: 0x9645d6 };
+  const license = payload.license;
+  const details = payload.details || {};
+  const fields = [];
+  if (license) {
+    fields.push({ name: 'Company', value: String(license.companyName || '—'), inline: true });
+    fields.push({ name: 'Seats', value: `${license.seatsUsed} / ${license.seatCap}`, inline: true });
+    fields.push({
+      name: 'Expires',
+      value: license.expiresAt ? new Date(license.expiresAt).toISOString().slice(0, 10) : 'Never',
+      inline: true,
+    });
+    fields.push({ name: 'Key', value: truncateKey(license.licenseKey), inline: true });
+  }
+  if (details.daysLeft !== undefined) fields.push({ name: 'Days left', value: String(details.daysLeft), inline: true });
+  if (details.restoredCount !== undefined) fields.push({ name: 'Licenses restored', value: String(details.restoredCount), inline: true });
+  return {
+    username: 'AskToto Licenses',
+    embeds: [
+      {
+        title: license ? `${meta.title} — ${license.companyName}` : meta.title,
+        color: meta.color,
+        fields,
+        timestamp: new Date(at).toISOString(),
+      },
+    ],
+  };
+}
+
 export function licenseEventView(license) {
   return {
     licenseKey: license.licenseKey,
@@ -46,6 +103,7 @@ export function createWebhooks({ url, secret, expiryAlertDays = 14, fetchImpl } 
   const expiryNotified = new Set(); // `${licenseKey}|${expiresAt}`
 
   const enabled = !!url;
+  const discord = isDiscordWebhookUrl(url);
 
   async function deliver(body) {
     const headers = { 'content-type': 'application/json', 'user-agent': 'asktoto-license-server' };
@@ -84,7 +142,10 @@ export function createWebhooks({ url, secret, expiryAlertDays = 14, fetchImpl } 
   // deterministically (mirrors auditLog.record / store.persist).
   function emit(event, payload) {
     if (!enabled) return Promise.resolve();
-    const body = JSON.stringify({ event, at: Date.now(), ...payload });
+    const at = Date.now();
+    const body = discord
+      ? JSON.stringify(formatDiscordPayload(event, at, payload))
+      : JSON.stringify({ event, at, ...payload });
     queue = queue
       .then(
         () => deliver(body),

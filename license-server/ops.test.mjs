@@ -12,7 +12,7 @@ import { createApp } from './lib/app.mjs';
 import { createStore } from './lib/store.mjs';
 import { createAuditLog } from './lib/audit.mjs';
 import { createBackupManager } from './lib/backups.mjs';
-import { createWebhooks } from './lib/webhooks.mjs';
+import { createWebhooks, isDiscordWebhookUrl, formatDiscordPayload } from './lib/webhooks.mjs';
 import { computeAnalytics } from './lib/license.mjs';
 
 const ADMIN_TOKEN = 'test-admin-token';
@@ -271,6 +271,55 @@ describe('ops layer', () => {
     } finally {
       await receiver.close();
     }
+  });
+
+  it('detects Discord webhook URLs and formats events as embeds without the full key', () => {
+    assert.equal(isDiscordWebhookUrl('https://discord.com/api/webhooks/123/abc'), true);
+    assert.equal(isDiscordWebhookUrl('https://discordapp.com/api/webhooks/123/abc'), true);
+    assert.equal(isDiscordWebhookUrl('https://canary.discord.com/api/webhooks/123/abc'), true);
+    assert.equal(isDiscordWebhookUrl('https://evil.com/https://discord.com/api/webhooks/x'), false);
+    assert.equal(isDiscordWebhookUrl('https://hooks.example.com/asktoto'), false);
+
+    const at = Date.UTC(2026, 6, 6, 12, 0, 0);
+    const payload = formatDiscordPayload('license.expiring_soon', at, {
+      license: {
+        licenseKey: 'ATK-HY2JVMZ3P3JF8CGAQWPR',
+        companyName: 'Mantu',
+        seatCap: 50,
+        seatsUsed: 3,
+        expiresAt: at + 7 * DAY_MS,
+        revoked: false,
+      },
+      details: { daysLeft: 7 },
+    });
+    assert.equal(payload.embeds.length, 1);
+    const embed = payload.embeds[0];
+    assert.equal(embed.title, 'License expiring soon — Mantu');
+    assert.equal(embed.timestamp, new Date(at).toISOString());
+    assert.ok(embed.fields.some((f) => f.name === 'Days left' && f.value === '7'));
+    assert.ok(embed.fields.some((f) => f.name === 'Seats' && f.value === '3 / 50'));
+    // A chat channel never gets the full activatable key.
+    assert.ok(!JSON.stringify(payload).includes('ATK-HY2JVMZ3P3JF8CGAQWPR'));
+    assert.ok(embed.fields.some((f) => f.name === 'Key' && f.value === 'ATK-HY2J…QWPR'));
+  });
+
+  it('sends Discord-shaped bodies to Discord URLs and generic JSON elsewhere', async () => {
+    const calls = [];
+    const fakeFetch = async (u, opts) => {
+      calls.push(JSON.parse(opts.body));
+      return { ok: true, status: 204 };
+    };
+    const license = { licenseKey: 'ATK-0000000000000000TEST', companyName: 'Acme', seatCap: 2, seatsUsed: 0, expiresAt: null, revoked: false };
+
+    const discordHooks = createWebhooks({ url: 'https://discord.com/api/webhooks/1/tok', fetchImpl: fakeFetch });
+    await discordHooks.emit('license.created', { license });
+    assert.ok(Array.isArray(calls[0].embeds));
+    assert.equal(calls[0].event, undefined);
+
+    const genericHooks = createWebhooks({ url: 'https://hooks.example.com/asktoto', fetchImpl: fakeFetch });
+    await genericHooks.emit('license.created', { license });
+    assert.equal(calls[1].event, 'license.created');
+    assert.equal(calls[1].embeds, undefined);
   });
 
   it('retries a 429 rate-limit response instead of dropping the event', async () => {
