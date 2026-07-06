@@ -1,0 +1,6 @@
+# Caddy auto-provisions and auto-renews a free HTTPS certificate for this
+# domain the first time it starts, as long as DNS already points here and
+# ports 80+443 are open - no manual cert setup needed.
+{$LICENSE_DOMAIN} {
+	reverse_proxy license-server:8420
+}
