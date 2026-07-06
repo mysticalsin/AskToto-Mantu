@@ -150,7 +150,7 @@ function GraphBar(): JSX.Element | null {
   return (
     <div className="flex items-center justify-between rounded-xl border border-[var(--color-hair-soft)] bg-white/[0.03] px-3 py-2">
       <div className="flex items-center gap-1.5 text-[11px] text-[color:var(--color-ink-2)]">
-        <Network size={12} className="text-[var(--color-accent)]" />
+        <Network size={12} className="text-[var(--color-accent-2)]" />
         {error ? (
           <span className="text-[var(--color-danger)]">{error}</span>
         ) : backfilling ? (
@@ -229,7 +229,7 @@ function Related({
           {data.topics.map((t) => (
             <span
               key={t}
-              className="truncate max-w-full rounded-full bg-[var(--color-accent-soft)] px-2 py-0.5 text-[10px] font-medium text-[var(--color-accent)]"
+              className="truncate max-w-full rounded-full bg-[var(--color-accent-soft)] px-2 py-0.5 text-[10px] font-medium text-[var(--color-accent-2)]"
             >
               {t}
             </span>
@@ -450,7 +450,7 @@ const MeetingRow = memo(function MeetingRow({
 
               {/* Analyzing badge */}
               {isActive && (
-                <span className="shrink-0 rounded-full bg-[var(--color-accent-soft)] px-2 py-0.5 text-[10px] text-[color:var(--color-accent)]">
+                <span className="shrink-0 rounded-full bg-[var(--color-accent-soft)] px-2 py-0.5 text-[10px] text-[color:var(--color-accent-2)]">
                   Just saved
                 </span>
               )}
@@ -527,7 +527,7 @@ const MeetingRow = memo(function MeetingRow({
           {m.topics.slice(0, 3).map((t, i) => (
             <span
               key={`${t}-${i}`}
-              className="truncate max-w-full rounded-full bg-[var(--color-accent-soft)] px-2 py-0.5 text-[10px] font-medium text-[var(--color-accent)]"
+              className="truncate max-w-full rounded-full bg-[var(--color-accent-soft)] px-2 py-0.5 text-[10px] font-medium text-[var(--color-accent-2)]"
             >
               {t}
             </span>
@@ -937,7 +937,7 @@ export function RecallView({
         <div className="flex items-center gap-1.5">
           <TextButton onClick={openSelected} disabled={items.length === 0}>
             Open
-            <kbd className="rounded bg-white/[0.06] px-1 py-0.5 text-[10px] text-[color:var(--color-ink-3)]">↵</kbd>
+            <kbd className="rounded bg-white/[0.06] px-1 py-0.5 text-[10px] text-[color:var(--color-ink-3)]">{accelLabel('Return')}</kbd>
           </TextButton>
           <TextButton icon={FolderOpen} onClick={onOpenFolder}>Open folder</TextButton>
           {onIntelligence && (

@@ -1990,6 +1990,11 @@ if (!app.requestSingleInstanceLock()) {
   })
   app.whenReady().then(async () => {
   initLogging() // route main-process logs to a rotated file before anything else can fail
+  // Windows toast attribution: a process's AppUserModelID must match the installed shortcut's AUMID
+  // (electron-builder sets it to appId) or Windows silently drops native Notifications — which breaks
+  // the meeting-reminder toast for portable-build and launch-at-login users (no shortcut in the launch
+  // path). Set it to the exact appId, before createTray/createWindow/any Notification.
+  if (process.platform === 'win32') app.setAppUserModelId('com.mantu.asktoto')
   // Unpackaged (dev/QA) runs show Electron's default icon in the Dock — brand them with the Mantu M so
   // a dev window is never mistaken for "the Electron thing". Packaged builds get build/icon.png baked
   // in by electron-builder (mac .icns / win .ico) and don't need this.
