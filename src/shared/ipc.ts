@@ -12,6 +12,7 @@ export const ProviderIdSchema = z.enum([
   'openrouter',
   'groq',
   'mistral',
+  'grok',
   'dust',
   'claude-cli',
   'codex-cli',

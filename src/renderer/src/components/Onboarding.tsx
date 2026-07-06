@@ -222,6 +222,9 @@ export function Onboarding({
   const [finishErr, setFinishErr] = useState('')
   const [step, setStep] = useState<1 | 2 | 3 | 4 | 5 | 6>(1)
   const [perms, setPerms] = useState<PlatformPermissions | null>(null)
+  // Step 5's "An API key" card expands in place to name the actual providers instead of assuming
+  // Anthropic — closes again if the user backs out of step 5 entirely.
+  const [showApiPicker, setShowApiPicker] = useState(false)
   const headingRef = useRef<HTMLHeadingElement | null>(null)
 
   // Move focus to the new step's heading on every transition so screen readers announce it instead of
@@ -399,12 +402,42 @@ export function Onboarding({
             desc="Already use Claude Code or Codex in your terminal? Connect it. Nothing extra to pay, nothing to paste."
             onClick={() => void chooseCli()}
           />
-          <ProviderOption
-            icon={KeyRound}
-            title="An API key"
-            desc="Have a key from Anthropic (Claude) or another provider? Paste it and you're set. You pay your provider directly."
-            onClick={() => choose('anthropic')}
-          />
+          {showApiPicker ? (
+            <div className="flex flex-col gap-2 rounded-xl border border-[var(--color-hair-soft)] bg-white/[0.02] p-3.5 text-left">
+              <div className="flex items-center gap-3">
+                <div className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-[var(--color-accent-soft)] text-[var(--color-accent)]">
+                  <KeyRound size={17} />
+                </div>
+                <span className="text-[13.5px] font-medium text-[color:var(--color-ink)]">Which provider?</span>
+              </div>
+              <div className="grid grid-cols-2 gap-1.5">
+                {(['anthropic', 'openai', 'grok', 'kimi'] as const).map((id) => (
+                  <button
+                    key={id}
+                    type="button"
+                    onClick={() => choose(id)}
+                    className="no-drag focus-ring rounded-lg border border-[var(--color-hair-soft)] px-2.5 py-1.5 text-left text-[12.5px] font-medium text-[color:var(--color-ink)] transition-colors hover:border-[var(--color-accent)] hover:bg-white/[0.05]"
+                  >
+                    {PROVIDERS[id].label}
+                  </button>
+                ))}
+              </div>
+              <button
+                type="button"
+                onClick={() => choose('anthropic')}
+                className="no-drag focus-ring text-left text-[11.5px] text-[color:var(--color-ink-3)] hover:text-[color:var(--color-ink-2)]"
+              >
+                Something else (DeepSeek, Qwen, Mistral, and more) — pick it in Settings
+              </button>
+            </div>
+          ) : (
+            <ProviderOption
+              icon={KeyRound}
+              title="An API key"
+              desc="Claude, GPT, Grok, Kimi, and more. Paste your key and you're set — you pay your provider directly."
+              onClick={() => setShowApiPicker(true)}
+            />
+          )}
           <ProviderOption
             icon={Building2}
             title="Mantu Dust"

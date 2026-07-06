@@ -33,6 +33,7 @@ const ENV_VAR: Record<ProviderId, string> = {
   openrouter: 'OPENROUTER_API_KEY',
   groq: 'GROQ_API_KEY',
   mistral: 'MISTRAL_API_KEY',
+  grok: 'XAI_API_KEY',
   dust: 'DUST_API_KEY',
   'claude-cli': '',
   'codex-cli': '',
