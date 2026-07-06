@@ -1,5 +1,10 @@
 # AskToto License Server
 
+> **Running this thing day to day?** Read the
+> [**Operator's Handbook**](HANDBOOK.md) — selling licenses, handling
+> customer calls, backups, alerts, and the checklists. This README is the
+> technical reference underneath it.
+
 A small, standalone phone-home license server for AskToto. It controls
 **whether the app is allowed to run** for a given company — it has nothing to
 do with LLM API keys (those are bring-your-own-key and configured entirely
