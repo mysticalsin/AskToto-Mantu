@@ -301,7 +301,8 @@ export type RecapExport = z.infer<typeof RecapExportSchema>
 
 export const ChatTurnSchema = z.object({
   role: z.enum(['user', 'assistant']),
-  content: z.string()
+  // Bounded for defense-in-depth against a hostile/buggy renderer — same convention as brainContext below.
+  content: z.string().max(100_000)
 })
 export type ChatTurn = z.infer<typeof ChatTurnSchema>
 
@@ -332,7 +333,9 @@ export const AskStartSchema = z.object({
    *  renderer — main overwrites it after parse). Injected per-turn into the user text so it never pollutes
    *  or invalidates the cached system prompt. Capped for defense-in-depth against a hostile renderer. */
   brainContext: z.string().max(8000).optional(),
-  history: z.array(ChatTurnSchema).default([])
+  // Bounded (defense-in-depth, mirrors brainContext's cap above) — an unbounded array let a hostile/buggy
+  // renderer hand main an ever-growing history to serialize/forward per ask.
+  history: z.array(ChatTurnSchema).max(50).default([])
 })
 export type AskStart = z.infer<typeof AskStartSchema>
 
@@ -465,7 +468,7 @@ export const BaseSettingsSchema = z.object({
   overlayOpacity: z.number().min(0.3).max(1.5).default(1),
   showFullTranscriptInReview: z.boolean().default(false), // review = summary-first; transcript opt-in
   asrQuality: z.enum(['best', 'fast']).default('fast'), // fast = small model, ready fast (default); best = large, downloads
-  asrEngine: z.enum(['whisper', 'parakeet']).default('parakeet'), // parakeet = European, fastest (default); whisper = ~99 langs
+  asrEngine: z.enum(['whisper', 'parakeet']).default('whisper'), // whisper = safe multilingual baseline (default, ~99 langs); parakeet = European-only, 25 languages, faster
   // A mid-session Parakeet→Whisper fallback (repeated failures) used to surface as a live error banner
   // during the meeting — distracting for something that's really just a background engine swap. Tracked
   // here instead so it's checkable in Settings after the fact, never shown live. Persists until the user
@@ -514,7 +517,11 @@ export const BaseSettingsSchema = z.object({
 })
 
 export const SettingsSchema = BaseSettingsSchema.refine(
-  (s) => s.provider !== 'custom' || /^https:\/\//i.test(s.customBaseUrl),
+  // Empty customBaseUrl is a valid "Custom selected but not yet configured" state — only a NON-empty
+  // value that isn't https:// is rejected. This lets the Custom provider tile stick (and show its
+  // base-URL field) instead of tripping a schema-parse failure that resets provider back to 'anthropic'.
+  // Actual use is still blocked until configured: providerReady requires an https:// customBaseUrl.
+  (s) => s.provider !== 'custom' || s.customBaseUrl === '' || /^https:\/\//i.test(s.customBaseUrl),
   {
     message: 'Custom provider requires a valid https:// endpoint URL',
     path: ['customBaseUrl']
@@ -541,7 +548,10 @@ export const PublicSettingsSchema = BaseSettingsSchema.extend({
   managedKeys: z.array(z.string()).default([]),
   /** Providers whose key is set via an environment variable — in-app Remove is a no-op for these. */
   envKeys: z.array(z.string()).default([]),
-  loginItemOpenAtLogin: z.boolean().default(false)
+  loginItemOpenAtLogin: z.boolean().default(false),
+  /** App version (e.g. from package.json/app.getVersion()), populated by main for the About screen.
+   *  Optional — absent on older callers/tests that construct PublicSettings without it. */
+  version: z.string().optional()
 })
 export type PublicSettings = z.infer<typeof PublicSettingsSchema>
 
@@ -620,7 +630,7 @@ export const DEFAULT_SETTINGS: Settings = {
   overlayOpacity: 1,
   showFullTranscriptInReview: false,
   asrQuality: 'fast',
-  asrEngine: 'parakeet',
+  asrEngine: 'whisper',
   asrLastFallbackAt: null,
   requireConsentIndicator: true,
   redactSensitive: true,
@@ -746,6 +756,10 @@ export interface AuthStatus {
   email?: string
   name?: string
   domain?: string
+  /** True when sign-in is actually enforced (env/managed-config requireAuth OR sticky-configured), even
+   *  if `configured` is false. Mirrors main/auth.ts requireAuth()'s own gate so the SignInWall can never
+   *  disagree with what privileged IPC actually blocks. Optional so existing partial consumers still typecheck. */
+  enforced?: boolean
 }
 export interface SignInResult {
   ok: boolean

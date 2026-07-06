@@ -101,9 +101,13 @@ self.onmessage = async (e: MessageEvent): Promise<void> => {
       env.allowLocalModels = false // remote models + transformers.js default CDN wasm (proven path)
       // allowRemoteModels stays true (set at module level) — this is the normal dev/remote path.
     }
+    // 'best' (or any unset/other value) requests the WebGPU tier — remembered so the 'ready' post below
+    // can tell the caller a 'best' request actually landed on the WASM base model (WebGPU unavailable or
+    // its pipeline init failed; see load()) instead of that silently reading as an honored 'best' load.
+    const requestedBest = msg.quality !== 'fast'
     try {
-      await load(msg.quality === 'fast' ? 'fast' : 'best')
-      post({ type: 'ready', engine })
+      await load(requestedBest ? 'best' : 'fast')
+      post({ type: 'ready', engine, requestedBest })
     } catch (err) {
       post({ type: 'error', message: err instanceof Error ? err.message : String(err) })
     } finally {

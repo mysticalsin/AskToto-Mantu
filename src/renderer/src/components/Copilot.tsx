@@ -199,9 +199,11 @@ export const Copilot = memo(function Copilot({
         )}
       </section>
 
-      {/* Transcript — hidden during the call; shown only when the user opens it (bar → Transcript). A
-          small loading line appears while the speech model warms up; no live "N captured" footer. */}
-      {error ? (
+      {/* Sticky listen error (silence/mic-lost/offline/reconnecting), the model-loading row, and the
+          transcript are independent siblings, NOT a mutually-exclusive chain — a sticky error or a
+          loading tick must not hide an already-open transcript (matches the captureNotice/autosaveWarning
+          siblings above). Markup for each block is unchanged; only the conditions were decoupled. */}
+      {error && (
         <div className="flex flex-col gap-1.5 text-[13px] text-[var(--color-danger)] break-words">
           <span>{error}</span>
           {/* Make a Screen-Recording error actionable instead of inert text: one tap deep-links to the
@@ -217,12 +219,15 @@ export const Copilot = memo(function Copilot({
             </button>
           )}
         </div>
-      ) : loading ? (
+      )}
+      {loading && (
         <div className="flex items-center gap-2 text-[11px] text-[color:var(--color-ink-3)]">
           <Spinner size={11} />
           {loadingPct != null ? `Loading speech model… ${loadingPct}%` : 'Loading transcription model…'}
         </div>
-      ) : showTx ? (
+      )}
+      {/* Transcript — hidden during the call; shown only when the user opens it (bar → Transcript). */}
+      {showTx && (
         <section>
           <div className="mb-1.5 flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-wide text-[color:var(--color-ink-3)]">
             Transcript
@@ -245,7 +250,7 @@ export const Copilot = memo(function Copilot({
             )}
           </div>
         </section>
-      ) : null}
+      )}
     </div>
   )
 })

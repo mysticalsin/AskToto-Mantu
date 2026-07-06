@@ -34,7 +34,8 @@ import {
   buildSpotlightRefPrompt,
   chooseQuickActionRoute,
   quickActionUnavailableMessage,
-  spotlightRefUnavailableMessage
+  spotlightRefUnavailableMessage,
+  transcriptHasContent
 } from '@shared/quick-actions'
 
 type View = 'answer' | 'copilot' | 'settings' | 'review' | 'history' | 'agenda' | 'brain'
@@ -607,19 +608,25 @@ export function App(): JSX.Element {
         if (id && opts?.record) pendingUserRef.current = { id, q: opts.record }
         return id
       } catch (e) {
-        // Screen capture failed (permission revoked, no display, Private View on, a transient
-        // ScreenCaptureKit hiccup) — fall back to a text-only answer instead of blocking the whole ask,
-        // BUT surface a non-terminal notice so the user knows WHY the screen wasn't seen (this used to
-        // degrade silently: captureError was declared but never set). usedScreen comes back false for a
-        // mode:'answer' run, so the UI never claims to have seen a screen it didn't.
-        // IPC flattens the custom PrivateViewBlockedError to a plain message string (its class/name is
-        // lost across the boundary), so we match on the message content, not `instanceof`.
-        const raw = e instanceof Error ? e.message : String(e)
-        setCaptureError(
-          /private view/i.test(raw)
-            ? 'Private View is on, so AskToto couldn’t see your screen. Answering from context only. Turn Private View off to include the screen.'
-            : 'Couldn’t capture your screen. Answering from context only.'
-        )
+        // Screen capture failed (permission revoked, no display, a transient ScreenCaptureKit hiccup) —
+        // fall back to a text-only answer instead of blocking the whole ask, BUT surface a non-terminal
+        // notice so the user knows WHY the screen wasn't seen (this used to degrade silently). usedScreen
+        // comes back false for a mode:'answer' run, so the UI never claims to have seen a screen it didn't.
+        // Note: Private View (content protection) hides the overlay from OTHER apps' capture and no longer
+        // blocks AskToto's own explicit capture, so it is not a failure cause here.
+        // Fact-check is the one kind where a degraded answer is worse than no answer: with no claim and
+        // no transcript to ground it, resubmitting as a plain text completion would render a fabricated
+        // color-coded verdict chip (Answer renders `kind:'factcheck'` as VERDICT: TRUE/FALSE/... from
+        // whatever the model invents). Fail cleanly instead of guessing. Every other kind keeps the
+        // existing degraded-but-honest text answer.
+        if (opts?.kind === 'factcheck' && !input.trim() && !transcriptHasContent(listen.text())) {
+          ask.fail(
+            'Couldn’t capture your screen, and there’s no claim or transcript to fact-check instead. Type a claim or start Listen and try again.',
+            'Fact-check'
+          )
+          return null
+        }
+        setCaptureError('Couldn’t capture your screen. Answering from context only.')
         const id = ask.run({ mode: 'answer', prompt, label: opts?.label, kind: opts?.kind, history: opts?.history })
         if (id && opts?.record) pendingUserRef.current = { id, q: opts.record }
         return id
@@ -627,7 +634,7 @@ export function App(): JSX.Element {
         setCapturing(false)
       }
     },
-    [ask.run, capturing, requireProvider]
+    [ask.run, ask.fail, capturing, requireProvider, input, listen.text]
   )
 
   const assist = useCallback(async (): Promise<void> => {
@@ -659,15 +666,10 @@ export function App(): JSX.Element {
           history: copilotHistoryRef.current
         })
         return
-      } catch (e) {
-        // Surface WHY capture failed (Private View, permission) as a non-terminal notice, then fall
+      } catch {
+        // Surface that capture failed (permission, no display) as a non-terminal notice, then fall
         // through to the transcript-only suggestion — this used to swallow the failure silently.
-        const raw = e instanceof Error ? e.message : String(e)
-        setCaptureError(
-          /private view/i.test(raw)
-            ? 'Private View is on, so AskToto couldn’t see your screen. Suggesting from the conversation only. Turn Private View off to include the screen.'
-            : 'Couldn’t capture your screen. Suggesting from the conversation only.'
-        )
+        setCaptureError('Couldn’t capture your screen. Suggesting from the conversation only.')
       }
     }
     suggest.run({
@@ -760,24 +762,27 @@ export function App(): JSX.Element {
       void askScreen(FACT_CHECK_SCREEN_PROMPT, { kind: 'factcheck', label: 'Claims on your screen' })
       return
     }
-    // The engineered verdict prompt is the `prompt` (sent to the model, never shown); `label` is the
-    // clean claim the UI displays; `kind:'factcheck'` renders the color-coded verdict card.
-    if (listen.listening) {
-      const lastThem = [...listen.lines].reverse().find((l) => l.speaker === 'them')?.text
-      const c = claim || lastThem || transcript
-      ask.run({
-        mode: 'answer',
-        kind: 'factcheck',
-        label: c || 'the conversation so far',
-        prompt: buildFactCheckClaimPrompt(c || transcript) + GUARD_LINE
-      })
-      setInput('')
-      return
-    }
+    // route.transport === 'text' here means chooseQuickActionRoute saw a typed claim OR a non-empty
+    // transcript — either way there IS context, so this must always fire a real ask, never fall through
+    // as a no-op. (It used to: after Stop, listen.listening is false but the transcript is NOT cleared,
+    // so neither the old "listening" branch nor the old "claim" branch would run.) Priority: typed claim
+    // (never carries the untrusted-transcript guard — the user wrote it directly) → while still live, the
+    // most recent thing THEY said → otherwise the last non-empty transcript (covers "just stopped
+    // listening", since Stop doesn't clear it).
     if (claim) {
       ask.run({ mode: 'answer', kind: 'factcheck', label: claim, prompt: buildFactCheckClaimPrompt(claim) })
       setInput('')
+      return
     }
+    const lastThem = listen.listening ? [...listen.lines].reverse().find((l) => l.speaker === 'them')?.text : undefined
+    const c = lastThem || transcript
+    ask.run({
+      mode: 'answer',
+      kind: 'factcheck',
+      label: c || 'the conversation so far',
+      prompt: buildFactCheckClaimPrompt(c) + GUARD_LINE
+    })
+    setInput('')
   }, [
     input,
     listen.text,
@@ -1164,9 +1169,13 @@ export function App(): JSX.Element {
   const onTogglePanel = useCallback(() => setCollapsed((c) => !c), [])
 
   // Open a saved meeting from History as a read-only recap (Cluely recap detail) via the recall:read IPC.
-  const openPastMeeting = useCallback(async (file: string) => {
+  // Returns the failure message (if any) instead of swallowing it, so callers can surface WHY the read
+  // failed — recallRead returns specific reasons ('Invalid meeting file name.', 'Could not read the
+  // meeting file.', 'Meeting file could not be decrypted on this device.') that a silent no-op used to
+  // discard. RecallView's row-error banner shows this; Settings' caller ignores it via `void`.
+  const openPastMeeting = useCallback(async (file: string): Promise<string | undefined> => {
     const r = await window.toto.recallRead(file)
-    if (!r.ok) return
+    if (!r.ok) return r.error || 'Could not open this meeting.'
     setPastMeeting({
       file,
       title: r.title || 'Meeting',
@@ -1177,6 +1186,7 @@ export function App(): JSX.Element {
     })
     setView('review')
     setCollapsed(false)
+    return undefined
   }, [])
 
   // Cluely "Resume session": re-enter the meeting live, seeding the copilot's multi-turn memory with the
@@ -1427,7 +1437,10 @@ export function App(): JSX.Element {
           setCollapsed(false)
         }}
         onNewChat={reset}
-        activeFile={savedPath ?? undefined}
+        // savedPath is the FULL path returned by the save IPC; RecallView's rows compare against the bare
+        // basename (m.file), so passing the full path here never matched and the "Just saved" badge never
+        // showed. Derive the basename (handling both '/' and Windows '\\' separators) before passing it.
+        activeFile={savedPath ? savedPath.split(/[\\/]/).pop() : undefined}
         onOpenMeeting={openPastMeeting}
         onIntelligence={() => {
           brainReturnViewRef.current = 'history'
@@ -1577,8 +1590,12 @@ export function App(): JSX.Element {
     )
   }
 
-  // Azure AD gate — blocks all use when SSO is configured and the user isn't signed in.
-  if (auth.status?.configured && !auth.status.signedIn && DEMO == null) {
+  // Azure AD gate — blocks all use when SSO is configured OR enforced (managed-config/env requireAuth,
+  // sticky-configured — see AuthStatus.enforced) and the user isn't signed in. Gating on `configured`
+  // alone let this wall be skipped whenever auth was enforced but not yet "configured" in the narrow
+  // sense, even though privileged IPC was already blocked underneath — `enforced` is optional and treated
+  // as false until the main process reports it.
+  if ((auth.status?.configured || auth.status?.enforced) && !auth.status?.signedIn && DEMO == null) {
     return (
       <div ref={setRoot} {...windowDrag} className="w-full p-1.5">
         <SignInWall status={auth.status} onSignIn={auth.signIn} />
