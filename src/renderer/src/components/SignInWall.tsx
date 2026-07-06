@@ -97,7 +97,7 @@ export function SignInWall({
       </div>
 
       <div className="relative flex items-center gap-1.5 text-[11px] text-[color:var(--cl-muted-foreground)]">
-        <ShieldCheck size={12} className="text-[color:var(--cl-primary)]" />
+        <ShieldCheck size={12} className="text-[color:var(--color-accent-text)]" />
         Only your Mantu Microsoft account can sign in. Transcription runs on your device.
       </div>
     </div>

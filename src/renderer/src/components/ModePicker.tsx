@@ -38,7 +38,7 @@ export function ModeIndicator({
   const label = modeLabel(mode, customModes ?? [])
   return (
     <div className="no-drag inline-flex items-center gap-1.5 rounded-full bg-white/[0.05] px-2.5 py-1 text-[11px] font-medium text-[color:var(--color-ink-2)]">
-      <Icon size={13} className="text-[color:var(--color-accent)]" />
+      <Icon size={13} className="text-[color:var(--color-accent-text)]" />
       {label}
       <span className="ml-0.5 inline-flex items-center gap-0.5 text-[10px] text-[color:var(--color-ink-3)]">
         <Settings2 size={10} /> change in Settings
