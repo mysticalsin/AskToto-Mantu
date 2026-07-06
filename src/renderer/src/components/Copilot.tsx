@@ -232,6 +232,18 @@ export const Copilot = memo(function Copilot({
               Open Screen Recording settings
             </button>
           )}
+          {/* Mirrors the Screen-Recording branch above for the mic-denied message (listen.ts's "Couldn't
+              start the microphone…" / "Could not start the microphone…") — window.toto.openPermissionSettings
+              is already wired for 'microphone' (used in Onboarding), it just wasn't reachable from here. */}
+          {/start the microphone/i.test(error) && (
+            <button
+              type="button"
+              onClick={() => void window.toto.openPermissionSettings('microphone')}
+              className="no-drag focus-ring w-fit rounded-full bg-[var(--color-danger)]/15 px-2.5 py-1 text-[11px] font-semibold text-[var(--color-danger)] hover:bg-[var(--color-danger)]/25"
+            >
+              Open Microphone settings
+            </button>
+          )}
         </div>
       )}
       {loading && (

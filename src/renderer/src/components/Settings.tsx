@@ -876,7 +876,7 @@ function AiSection({
         <button
           type="button"
           onClick={onTest}
-          disabled={test.status === 'loading'}
+          disabled={test.status === 'loading' || settings.envKeys.includes(provider)}
           className="no-drag cl-focus flex items-center gap-1 rounded-[10px] border border-[var(--cl-input)] bg-white/[0.04] px-3 py-2.5 text-[13px] text-[color:var(--cl-foreground)] hover:bg-white/[0.08] disabled:opacity-50"
         >
           {test.status === 'loading' ? <Loader2 size={14} className="animate-spin" /> : null}
@@ -1429,6 +1429,12 @@ function CliIntegration({
   const provider = settings.provider
   const cliConnected = settings.cliConnected ?? {}
   const locked = settings.managedKeys.includes('provider')
+  // Latest `settings.provider`, readable from inside runInstall/connect's async continuations — mirrors
+  // AiSection's providerRef guard. Captures the provider when an install/connect starts, then compares
+  // once the awaited call resolves, so a completed CLI install/connect can't silently revert an
+  // in-panel provider switch the user made on the AiSection grid while it was running.
+  const providerRef = useRef(provider)
+  providerRef.current = provider
 
   // Guards every setState below against firing after this component unmounts (e.g. the user closes
   // Settings while runInstall's cliInstall/cliTest awaits are still in flight — those IPC calls keep
@@ -1472,6 +1478,8 @@ function CliIntegration({
 
   // Step 2: user clicks Continue → install silently, then connect
   const runInstall = async (id: 'claude-cli' | 'codex-cli'): Promise<void> => {
+    // Capture which provider was active when this install run started — see the patch() call below.
+    const startProvider = providerRef.current
     setState(id, { phase: 'installing', msg: 'Installing…', version: null })
 
     const installResult = await window.toto.cliInstall(id, (line) => {
@@ -1501,8 +1509,10 @@ function CliIntegration({
     if (testResult.ok) {
       // Guard against a stale in-flight install/test resolving after the user switched tabs (unmounting
       // this card) — without this, a late resolution here can re-activate a provider the user already
-      // disconnected in the meantime (see disconnectCli). Mirrors setState's own mountedRef guard.
-      if (mountedRef.current) patch({ provider: id })
+      // disconnected in the meantime (see disconnectCli). Mirrors setState's own mountedRef guard. Also
+      // skip the patch if the user switched to a different provider tile on the AiSection grid while
+      // this install was running — a finished install must never silently revert that in-panel pick.
+      if (mountedRef.current && providerRef.current === startProvider) patch({ provider: id })
       setState(id, { phase: 'done', msg: null, version: testResult.version ?? null })
       return
     }
@@ -1518,11 +1528,13 @@ function CliIntegration({
 
   // Connect button (setup-opened / error): re-run test only
   const connect = async (id: 'claude-cli' | 'codex-cli'): Promise<void> => {
+    // Capture which provider was active when this connect attempt started — see the patch() call below.
+    const startProvider = providerRef.current
     setState(id, { phase: 'connecting', msg: 'Connecting…', version: null })
     const r = await window.toto.cliTest(id)
     if (r.ok) {
-      // Same stale-resolution guard as runInstall above.
-      if (mountedRef.current) patch({ provider: id })
+      // Same stale-resolution + provider-switch guard as runInstall above.
+      if (mountedRef.current && providerRef.current === startProvider) patch({ provider: id })
       setState(id, { phase: 'done', msg: null, version: r.version ?? null })
     } else {
       setState(id, {
@@ -2728,21 +2740,38 @@ function DustSetup({
           <label htmlFor={wsId} className="sr-only">
             Workspace ID
           </label>
-          <input
-            id={wsId}
-            value={settings.dustWorkspaceId}
-            onChange={(e) => patch({ dustWorkspaceId: e.target.value })}
-            placeholder="Workspace ID (e.g. abc123)"
-            className={'w-full ' + ctl}
-          />
+          <div className="flex items-center gap-2">
+            <input
+              id={wsId}
+              value={settings.dustWorkspaceId}
+              onChange={(e) => patch({ dustWorkspaceId: e.target.value })}
+              placeholder="Workspace ID (e.g. abc123)"
+              disabled={settings.managedKeys.includes('dustWorkspaceId')}
+              className={
+                'flex-1 min-w-0 ' + ctl + (settings.managedKeys.includes('dustWorkspaceId') ? ' opacity-60' : '')
+              }
+            />
+            <ManagedChip keys={settings.managedKeys} k="dustWorkspaceId" />
+          </div>
           <div className="flex gap-2">
-            <button type="button" onClick={() => patch({ dustBaseUrl: 'https://dust.tt' })} className={regionBtn(false)}>
+            <button
+              type="button"
+              onClick={() => patch({ dustBaseUrl: 'https://dust.tt' })}
+              disabled={settings.managedKeys.includes('dustBaseUrl')}
+              className={regionBtn(false) + (settings.managedKeys.includes('dustBaseUrl') ? ' opacity-60 cursor-not-allowed' : '')}
+            >
               US · dust.tt
             </button>
-            <button type="button" onClick={() => patch({ dustBaseUrl: 'https://eu.dust.tt' })} className={regionBtn(true)}>
+            <button
+              type="button"
+              onClick={() => patch({ dustBaseUrl: 'https://eu.dust.tt' })}
+              disabled={settings.managedKeys.includes('dustBaseUrl')}
+              className={regionBtn(true) + (settings.managedKeys.includes('dustBaseUrl') ? ' opacity-60 cursor-not-allowed' : '')}
+            >
               EU · eu.dust.tt
             </button>
           </div>
+          <ManagedChip keys={settings.managedKeys} k="dustBaseUrl" />
         </div>
 
         {/* Step 3 — Dust API key (self-contained — only needed if you didn't use the CLI above) */}
@@ -3433,6 +3462,7 @@ function PersonalizeModes({
   const [renameValue, setRenameValue] = useState('')
   const [creatingNew, setCreatingNew] = useState(false)
   const [newLabel, setNewLabel] = useState('')
+  const [modeErr, setModeErr] = useState<string | null>(null)
   const locked = settings.managedKeys.includes('mode')
   // Gates custom-mode create/rename/delete — distinct from `locked` above (which only gates "Set active").
   // Without this, the trigger buttons silently no-op (patch() drops locked keys) and deleteCustomMode's
@@ -3492,11 +3522,21 @@ function PersonalizeModes({
       setNewLabel('')
       return
     }
+    // Schema cap (ipc.ts customModes .max(40)) — past this, setSettings drops the whole customModes key
+    // and the mode picker silently falls back to General. Stop before that and say why, instead of
+    // letting the create appear to work and then silently reverting.
+    if (customModes.length >= 40) {
+      setModeErr('40-mode limit reached.')
+      setCreatingNew(false)
+      setNewLabel('')
+      return
+    }
     const id = `custom-${Date.now()}`
     patch({ customModes: [...customModes, { id, label }] })
     setSelected(id)
     setCreatingNew(false)
     setNewLabel('')
+    setModeErr(null)
   }
 
   const startRename = (): void => {
@@ -3603,12 +3643,16 @@ function PersonalizeModes({
         ) : (
           <button
             type="button"
-            onClick={() => setCreatingNew(true)}
+            onClick={() => { setCreatingNew(true); setModeErr(null) }}
             disabled={customModesLocked}
             className="no-drag cl-focus mb-1.5 flex items-center gap-1.5 rounded-[10px] border border-dashed border-[var(--cl-border)] px-2.5 py-1.5 text-[11px] text-[color:var(--cl-muted-foreground)] hover:border-[var(--cl-primary)]/50 hover:text-[color:var(--color-accent-text)] transition-colors disabled:opacity-50 disabled:hover:border-[var(--cl-border)] disabled:hover:text-[color:var(--cl-muted-foreground)]"
           >
             <Plus size={12} /> New Mode
           </button>
+        )}
+
+        {modeErr && (
+          <div className="mb-1.5 px-1 text-[11px] text-[color:var(--color-danger)]">{modeErr}</div>
         )}
 
         {/* Built-in groups */}
@@ -4278,6 +4322,16 @@ export function Settings({
                     on={settings.privateView}
                     onChange={(v) => patch({ privateView: v })}
                     disabled={settings.managedKeys.includes('privateView')}
+                  />
+                </Section>
+                <Section title="Screen access" desc="Whether AskToto can see your own screen to answer what's in front of you.">
+                  <ToggleRow
+                    label="Let AskToto see your screen automatically"
+                    desc="When on, quick actions and the first ask capture your screen for a vision model. Turn off to answer from text only."
+                    on={settings.screenAsk}
+                    onChange={(v) => patch({ screenAsk: v })}
+                    disabled={settings.managedKeys.includes('screenAsk')}
+                    icon={Eye}
                   />
                 </Section>
                 <Section
