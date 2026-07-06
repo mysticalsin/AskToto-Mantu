@@ -402,7 +402,7 @@ export function Onboarding({
           <ProviderOption
             icon={KeyRound}
             title="An API key"
-            desc="Have a key from Anthropic (Claude) or another provider? Paste it and you're set. You pay your provider directly."
+            desc="Claude, GPT, Grok, Gemini, Kimi and more — paste a key on the next screen or in Settings → AI. You pay your provider directly."
             onClick={() => choose('anthropic')}
           />
           <ProviderOption

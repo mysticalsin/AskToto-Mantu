@@ -26,6 +26,7 @@ const keyPath = (provider: ProviderId) => join(dir(), `key-${provider}.bin`)
 const ENV_VAR: Record<ProviderId, string> = {
   anthropic: 'ANTHROPIC_API_KEY',
   openai: 'OPENAI_API_KEY',
+  grok: 'XAI_API_KEY',
   nvidia: 'NVIDIA_API_KEY',
   deepseek: 'DEEPSEEK_API_KEY',
   qwen: 'DASHSCOPE_API_KEY',

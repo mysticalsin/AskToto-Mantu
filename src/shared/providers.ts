@@ -1,6 +1,7 @@
 export type ProviderId =
   | 'anthropic'
   | 'openai'
+  | 'grok'
   | 'nvidia'
   | 'deepseek'
   | 'qwen'
@@ -71,6 +72,21 @@ export const PROVIDERS: Record<ProviderId, ProviderDef> = {
     keyPattern: '', // generic sk- is ambiguous (shared by deepseek/qwen/kimi/mistral)
     vision: true,
     keyUrl: 'https://platform.openai.com/api-keys'
+  },
+  grok: {
+    id: 'grok',
+    label: 'Grok · xAI',
+    blurb: 'xAI’s models with strong reasoning and live web/X context.',
+    kind: 'openai',
+    baseUrl: 'https://api.x.ai/v1',
+    models: ['grok-4', 'grok-3', 'grok-3-mini'],
+    defaultModel: 'grok-4',
+    fastModel: 'grok-3-mini',
+    thinkModel: 'grok-4',
+    keyHint: 'xai-…',
+    keyPattern: '^xai-',
+    vision: true,
+    keyUrl: 'https://console.x.ai/'
   },
   nvidia: {
     id: 'nvidia',
