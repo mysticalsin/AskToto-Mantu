@@ -21,7 +21,7 @@ import {
 import { DEFAULT_SHORTCUTS } from '@shared/ipc'
 import type { PublicSettings, Profile, PlatformPermissions, ProfileRecoveryResult } from '@shared/ipc'
 import type { ProviderId } from '@shared/providers'
-import { PROVIDERS } from '@shared/providers'
+import { PROVIDERS, filterAllowedProviders } from '@shared/providers'
 import { MetisMark } from './MetisMark'
 import { accelLabel, isWindows } from '../lib/keys'
 
@@ -545,7 +545,9 @@ export function Onboarding({
                 <span className="text-[13.5px] font-medium text-[color:var(--color-ink)]">Which provider?</span>
               </div>
               <div className="grid grid-cols-2 gap-1.5">
-                {(['anthropic', 'openai', 'nvidia', 'minimax'] as const).map((id) => (
+                {/* Honor the org data-residency allowlist (null = unrestricted) so onboarding never
+                    offers a provider every ask would then reject — same source main enforces. */}
+                {filterAllowedProviders(['anthropic', 'openai', 'nvidia', 'minimax'], settings.allowedProviders).map((id) => (
                   <button
                     key={id}
                     type="button"
