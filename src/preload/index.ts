@@ -40,6 +40,9 @@ import {
   type NotebookLmLoginResult,
   type NotebookLmConnectResult,
   type NotebookLmAskResult,
+  type LicenseActivatePayload,
+  type LicenseActivateResult,
+  type LicenseStatusResult,
   type ImportAudioChunk,
   type ImportAudioPickResult,
   type ImportAudioChunkResult,
@@ -213,7 +216,11 @@ const api = {
   notebookLmLogin: (): Promise<NotebookLmLoginResult> => ipcRenderer.invoke(IPC.notebookLmLogin),
   notebookLmConnect: (): Promise<NotebookLmConnectResult> => ipcRenderer.invoke(IPC.notebookLmConnect),
   notebookLmAsk: (payload: NotebookLmAskPayload): Promise<NotebookLmAskResult> =>
-    ipcRenderer.invoke(IPC.notebookLmAsk, payload)
+    ipcRenderer.invoke(IPC.notebookLmAsk, payload),
+
+  licenseActivate: (payload: LicenseActivatePayload): Promise<LicenseActivateResult> =>
+    ipcRenderer.invoke(IPC.licenseActivate, payload),
+  licenseStatus: (): Promise<LicenseStatusResult> => ipcRenderer.invoke(IPC.licenseStatus)
 }
 
 contextBridge.exposeInMainWorld('toto', api)

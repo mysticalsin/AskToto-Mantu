@@ -121,7 +121,9 @@ export const IPC = {
   notebookLmInstallProgress: 'notebookLm:install:progress',
   notebookLmLogin: 'notebookLm:login',
   notebookLmConnect: 'notebookLm:connect',
-  notebookLmAsk: 'notebookLm:ask'
+  notebookLmAsk: 'notebookLm:ask',
+  licenseActivate: 'license:activate',
+  licenseStatus: 'license:status'
 } as const
 
 /** User's verdict on an answer (metadata only — never the answer text). Feeds the audit log + future evals. */
@@ -510,7 +512,19 @@ export const BaseSettingsSchema = z.object({
   // lives entirely in the nlm CLI's own state under the user's home dir — only connected-status + the
   // tool names discovered at connect time.
   notebookLmConnected: z.boolean().default(false),
-  notebookLmTools: z.array(z.string()).default([])
+  notebookLmTools: z.array(z.string()).default([]),
+  // Phone-home license activation against a self-hosted license server (see main/license.ts). Gate is
+  // OFF by default: Tony has not deployed a server yet, and shipping this on by default would lock him
+  // out of his own app at next launch. checkLicenseGrace() implements the offline-grace logic but is not
+  // wired into a startup gate yet — that's a deliberate follow-up once activation has been tested end to end.
+  licenseServerUrl: z.string().default(''),
+  licenseKey: z.string().default(''),
+  licenseCompanyName: z.string().default(''),
+  licenseSeatCap: z.number().default(0),
+  licenseExpiresAt: z.number().nullable().default(null),
+  licenseValid: z.boolean().default(false),
+  licenseLastValidatedAt: z.number().default(0),
+  licenseGateEnabled: z.boolean().default(false)
 })
 
 export const SettingsSchema = BaseSettingsSchema.refine(
@@ -635,7 +649,15 @@ export const DEFAULT_SETTINGS: Settings = {
   bidstackConnected: false,
   bidstackTools: [],
   notebookLmConnected: false,
-  notebookLmTools: []
+  notebookLmTools: [],
+  licenseServerUrl: '',
+  licenseKey: '',
+  licenseCompanyName: '',
+  licenseSeatCap: 0,
+  licenseExpiresAt: null,
+  licenseValid: false,
+  licenseLastValidatedAt: 0,
+  licenseGateEnabled: false
 }
 
 export const HOTKEY_ACTIONS: HotkeyAction[] = [
@@ -919,6 +941,38 @@ export interface NotebookLmInstallResult { ok: boolean; error?: string; needsTer
 export interface NotebookLmLoginResult { ok: boolean; error?: string }
 export interface NotebookLmConnectResult { ok: boolean; error?: string; tools?: string[]; needsSignIn?: boolean }
 export interface NotebookLmAskResult { ok: boolean; error?: string; text?: string; needsSignIn?: boolean }
+
+// ─── Licensing (phone-home activation against a self-hosted license server; see main/license.ts) ──────
+export const LicenseActivatePayloadSchema = z.object({
+  serverUrl: z.string().min(1, 'Enter the license server URL.'),
+  licenseKey: z.string().min(1, 'Enter a license key.')
+})
+export type LicenseActivatePayload = z.infer<typeof LicenseActivatePayloadSchema>
+
+/** Result of an activate/heartbeat call. `error` carries either the server's own code ('invalid' |
+ *  'revoked' | 'expired' | 'seat_limit_reached') or a client-side code for cases the server never sees:
+ *  'network' (unreachable or a malformed response) and 'not_activated' (heartbeat with no activation on
+ *  file yet). Settings.tsx maps every code to plain-language copy. */
+export interface LicenseActivateResult {
+  ok: boolean
+  error?: string
+  companyName?: string
+  seatCap?: number
+  expiresAt?: number | null
+}
+
+/** Cached license state for display — read straight from settings, no network call (see the
+ *  license:status handler). Deliberately excludes seatsUsed: that's only a point-in-time snapshot from
+ *  the last activate/heartbeat response, not a live count, so the UI shows seatCap only. */
+export interface LicenseStatusResult {
+  licenseServerUrl: string
+  licenseCompanyName: string
+  licenseSeatCap: number
+  licenseExpiresAt: number | null
+  licenseValid: boolean
+  licenseLastValidatedAt: number
+  licenseGateEnabled: boolean
+}
 
 export const CaptureResultSchema = z.object({
   /** base64 JPEG, no data: prefix */

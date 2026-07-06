@@ -3469,6 +3469,9 @@ export function Settings({
                 <Section title="Account" desc="Signing in ties AskToto to your Mantu Microsoft account and Dust.">
                   <AccountRow settings={settings} patch={patch} />
                 </Section>
+                <Section title="License" desc="Activate AskToto against your organization's license server.">
+                  <LicenseSection settings={settings} patch={patch} />
+                </Section>
                 <Section title="Permissions" desc="Status of the OS permissions AskToto needs.">
                   <PermissionsSection />
                 </Section>
@@ -4452,6 +4455,151 @@ function AccountRow({
           {err && <span className="text-[11px] text-[color:var(--cl-destructive)]">{err}</span>}
         </>
       )}
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// License — phone-home activation against a self-hosted license server (Settings → About).
+// Nothing here enforces the result: checkLicenseGrace() (main/license.ts) exists but no startup gate
+// calls it yet, so leaving licenseGateEnabled off is completely safe with no server deployed at all.
+// ---------------------------------------------------------------------------
+
+/** Plain-language copy for every code the license server (or this client) can return. Falls back to the
+ *  raw string for anything unexpected — a validation message, "sign in first" — so nothing is silently
+ *  swallowed. */
+function licenseErrorMessage(code: string | undefined): string {
+  switch (code) {
+    case 'invalid':
+      return 'That license key was not recognized.'
+    case 'revoked':
+      return 'This license has been revoked.'
+    case 'expired':
+      return 'This license has expired.'
+    case 'seat_limit_reached':
+      return 'All seats on this license are in use.'
+    case 'network':
+      return 'Could not reach the license server. Check the server URL and your connection.'
+    default:
+      return code || 'Could not activate this license.'
+  }
+}
+
+function LicenseSection({
+  settings,
+  patch
+}: {
+  settings: PublicSettings
+  patch: (p: Partial<PublicSettings>) => void
+}): JSX.Element {
+  const [serverUrl, setServerUrl] = useState(settings.licenseServerUrl || '')
+  // Never pre-filled from the saved key, same as every other credential input in this file — the field
+  // starts blank even though a key is already active.
+  const [licenseKey, setLicenseKey] = useState('')
+  const [activating, setActivating] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const serverId = useId()
+  const keyId = useId()
+  // Guards state writes after unmount — activation is a real network round trip and the user can switch
+  // Settings tabs before it resolves.
+  const mountedRef = useRef(true)
+  useEffect(() => {
+    return () => {
+      mountedRef.current = false
+    }
+  }, [])
+
+  const activate = async (): Promise<void> => {
+    const url = serverUrl.trim()
+    const key = licenseKey.trim()
+    if (!url || !key) return
+    setActivating(true)
+    setError(null)
+    const r = await window.toto.licenseActivate({ serverUrl: url, licenseKey: key })
+    if (!mountedRef.current) return
+    setActivating(false)
+    if (r.ok) {
+      // The main process already persisted the license state via activateLicense() - and the
+      // settingsSet handler deliberately strips renderer-supplied license-state fields (they're
+      // server-authoritative). Patching just the URL round-trips the handler's returned settings,
+      // which carry the freshly-persisted state, so the UI updates without a full refetch.
+      await patch({ licenseServerUrl: url })
+      setLicenseKey('')
+    } else {
+      setError(licenseErrorMessage(r.error))
+    }
+  }
+
+  return (
+    <div className="flex flex-col gap-3">
+      <div className="flex flex-col gap-2">
+        <label htmlFor={serverId} className="flex flex-col gap-1">
+          <span className="text-[11px] font-medium text-[color:var(--cl-muted-foreground)]">License server URL</span>
+          <input
+            id={serverId}
+            value={serverUrl}
+            spellCheck={false}
+            autoComplete="off"
+            placeholder="https://license.your-company.com"
+            onChange={(e) => {
+              setServerUrl(e.target.value)
+              setError(null)
+            }}
+            className={`${ctl} w-full`}
+          />
+        </label>
+        <label htmlFor={keyId} className="flex flex-col gap-1">
+          <span className="text-[11px] font-medium text-[color:var(--cl-muted-foreground)]">License key</span>
+          <input
+            id={keyId}
+            type="password"
+            value={licenseKey}
+            spellCheck={false}
+            autoComplete="off"
+            placeholder={settings.licenseValid ? '••••••••••••' : 'Paste the license key you were given'}
+            onChange={(e) => {
+              setLicenseKey(e.target.value)
+              setError(null)
+            }}
+            className={`${ctl} w-full`}
+          />
+        </label>
+      </div>
+
+      {error && (
+        <div className="flex items-start gap-1.5 text-[11px] text-[color:var(--cl-destructive)]">
+          <AlertCircle size={13} className="mt-px shrink-0" />
+          <span>{error}</span>
+        </div>
+      )}
+      {!error && settings.licenseValid && (
+        <div className="flex items-start gap-1.5 text-[11px] text-[color:var(--cl-success)]">
+          <CircleCheck size={13} className="mt-px shrink-0" />
+          <span>
+            Active{settings.licenseCompanyName ? ` · ${settings.licenseCompanyName}` : ''}
+            {settings.licenseSeatCap > 0
+              ? ` · up to ${settings.licenseSeatCap} seat${settings.licenseSeatCap === 1 ? '' : 's'}`
+              : ''}
+          </span>
+        </div>
+      )}
+
+      <button
+        type="button"
+        onClick={() => void activate()}
+        disabled={!serverUrl.trim() || !licenseKey.trim() || activating}
+        className={primaryBtnStyle}
+      >
+        {activating ? <Loader2 size={12} className="animate-spin" /> : <Check size={12} />}
+        Activate
+      </button>
+
+      <ToggleRow
+        label="Require a license to run"
+        desc="When on, AskToto requires an active license to run. Leave off until you've deployed a license server and confirmed activation works: turning this on with no valid activation will lock this device out at next launch."
+        on={settings.licenseGateEnabled}
+        onChange={(v) => patch({ licenseGateEnabled: v })}
+      />
     </div>
   )
 }
