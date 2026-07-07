@@ -612,7 +612,7 @@ export const Bar = memo(function Bar(props: BarProps): JSX.Element {
                   type="button"
                   title="Save this meeting and start a fresh one"
                   onClick={props.onNewMeeting}
-                  className="no-drag focus-ring flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full bg-[var(--color-accent-soft)] px-3 py-1.5 text-[13px] font-semibold leading-none text-[color:var(--color-accent)] ring-1 ring-inset ring-[var(--color-accent)]/30 transition-colors duration-[var(--duration-hover)] hover:bg-[var(--color-accent)]/25 hover:ring-[var(--color-accent)]/50"
+                  className="no-drag focus-ring flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full bg-[var(--color-accent-soft)] px-3 py-1.5 text-[13px] font-semibold leading-none text-[color:var(--color-accent-2)] ring-1 ring-inset ring-[var(--color-accent)]/30 transition-colors duration-[var(--duration-hover)] hover:bg-[var(--color-accent)]/25 hover:ring-[var(--color-accent)]/50"
                 >
                   <Plus size={14} strokeWidth={2.5} />
                   New meeting

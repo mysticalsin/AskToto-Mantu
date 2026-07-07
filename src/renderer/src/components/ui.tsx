@@ -28,7 +28,7 @@ export function IconButton({
         solid
           ? 'bg-[var(--color-accent)] text-white shadow-[0_4px_14px_-4px_rgba(127,0,218,0.45)] hover:brightness-110'
           : active
-            ? 'bg-[var(--color-accent-soft)] text-[var(--color-accent)]'
+            ? 'bg-[var(--color-accent-soft)] text-[var(--color-accent-2)]'
             : danger
               ? 'text-[var(--color-danger)] hover:bg-white/10'
               : 'text-[color:var(--color-ink-2)] hover:bg-white/10 hover:text-[color:var(--color-ink)]'
