@@ -149,7 +149,7 @@ AskToto/
 │   │   └── lib/whisper*      on-device Whisper STT (Web Worker)
 │   └── shared/               cross-process contract
 │       ├── ipc.ts            IPC channels + zod schemas + settings schema
-│       ├── providers.ts      16-provider + Dust registry + model-tier routing
+│       ├── providers.ts      15-provider + custom-endpoint registry + model-tier routing
 │       ├── routing.ts        thinking-mode router (base / think / deep tiers)
 │       └── prompts.ts        default mode prompts
 ├── intelligence/             Mantu Intelligence dashboard — separate Vite/React app (its own

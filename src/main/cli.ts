@@ -4,8 +4,10 @@
  * SECURITY INVARIANTS (never relax):
  *   - No shell:true. All spawns pass args as an array. On Windows, a `.cmd` npm shim is launched via
  *     cmd.exe as the *target executable* (see resolveSpawnTarget) — that is not shell:true, and any
- *     arg containing a quote, newline, or a cmd.exe command-separator/expansion metacharacter
- *     (&|^%<>()!) is rejected first (see cmdShimSpawn).
+ *     free-text ARG containing a quote, newline, or a cmd.exe command-separator/expansion
+ *     metacharacter (&|^%<>()!) is rejected first (see cmdShimSpawn). The resolved bin path itself is
+ *     not free text (it comes from resolveBin), so it is only guarded against quote/newline/% and is
+ *     otherwise made safe by explicit quoting + windowsVerbatimArguments (see cmdShimSpawn).
  *   - claude-cli: --allowedTools '' --disallowedTools '*' so the agent can never execute arbitrary tools.
  *   - codex-cli: features.shell_tool=false + runs in a throwaway tmp cwd.
  *   - resolveBin() finds the absolute path via the login shell (mac/Linux) or `where` + an APPDATA
@@ -199,23 +201,49 @@ export function isCmdShim(bin: string): boolean {
  * spawn() call at each site still passes shell:false; cmd.exe here is only the *target executable*,
  * not a shell re-interpreting a joined string. But cmd.exe's own argv parsing (unlike execve) treats
  * '"', newlines, and its own command-separator/escape/redirection metacharacters (& | ^ % < > ( ) !)
- * specially, so any arg containing one of those is rejected before the argv array is built. Node's
- * libuv only quotes an argv element when it contains whitespace or a quote, so a metacharacter with no
- * surrounding space would otherwise reach cmd.exe completely unquoted. Not every arg that reaches this
- * function is a fixed constant: the model id can be free text a user typed into Settings (codex-cli has
- * no fixed model list, and the brain-ingest path can deliver a model string without going through the
- * interactive guardrail) — free-text prompt/system content always goes via stdin, never argv, but the
- * model id does not, which is exactly why this backstop exists.
+ * specially, so any free-text ARG containing one of those is rejected before the command line is
+ * built. Not every arg that reaches this function is a fixed constant: the model id can be free text a
+ * user typed into Settings (codex-cli has no fixed model list, and the brain-ingest path can deliver a
+ * model string without going through the interactive guardrail) — free-text prompt/system content
+ * always goes via stdin, never argv, but the model id does not, which is exactly why this backstop
+ * exists.
+ *
+ * The bin path is different: it is resolveBin's own RESOLVED absolute path, not user-typed text, so a
+ * legitimate install under e.g. `C:\Users\R&D\...\claude.cmd` or `C:\Program Files (x86)\...\claude.cmd`
+ * must still be launchable. We wrap `"${bin}"` plus the (already-guarded) args in one outer quote pair
+ * and pass windowsVerbatimArguments:true so libuv does not re-quote our hand-built line — cmd.exe /s
+ * peels exactly that one outer pair, leaving `"<bin>" <args>` to run correctly even with spaces or
+ * cmd.exe metacharacters in the path. (Plain array-quoting without windowsVerbatimArguments does NOT
+ * work here: libuv would additionally quote a spaced bin itself, and cmd /s's single unwrap does not
+ * undo that nested quoting — confirmed empirically.)
  */
-export function cmdShimSpawn(bin: string, args: string[]): { command: string; args: string[] } {
-  for (const a of [bin, ...args]) {
+export function cmdShimSpawn(
+  bin: string,
+  args: string[]
+): { command: string; args: string[]; windowsVerbatimArguments?: boolean } {
+  for (const a of args) {
     if (/["\r\n&|^%<>()!]/.test(a)) {
       throw new Error(
         'refusing to spawn: an argument contains a quote, newline, or cmd.exe metacharacter (unsafe for cmd.exe)'
       )
     }
   }
-  return { command: comSpecExe(), args: ['/d', '/s', '/c', bin, ...args] }
+  // bin is the RESOLVED absolute .cmd path from resolveBin — never free text — so it only needs
+  // guarding against the characters explicit quoting below cannot neutralize: a quote/newline would
+  // break out of the wrapping quotes, and % triggers cmd.exe %VAR% expansion even inside quotes.
+  // Spaces, &, |, ^, <, >, (, ), ! in bin are all made safe by the explicit outer+inner quoting.
+  if (/["\r\n%]/.test(bin)) {
+    throw new Error(
+      'refusing to spawn: the resolved binary path contains a quote, newline, or % (unsafe for cmd.exe)'
+    )
+  }
+  // Build the full command line ourselves and wrap it in one outer quote pair, then tell libuv not to
+  // re-quote it (windowsVerbatimArguments). cmd.exe /s peels exactly that one outer pair, leaving
+  // `"<bin>" <args>` — which runs correctly even when bin contains spaces/metacharacters, or args is
+  // empty. Without windowsVerbatimArguments, libuv would itself quote the spaced bin, producing a
+  // second, nested quote pair that cmd /s's single unwrap does not fully undo (see file header).
+  const inner = [`"${bin}"`, ...args].join(' ')
+  return { command: comSpecExe(), args: ['/d', '/s', '/c', `"${inner}"`], windowsVerbatimArguments: true }
 }
 
 /** True when `bin` is a managed-CLI entry script installed by cli-installer.ts (one-click onboarding)
@@ -232,7 +260,7 @@ export function isManagedCliEntry(bin: string): boolean {
 export function resolveSpawnTarget(
   bin: string,
   args: string[]
-): { command: string; args: string[]; env?: Record<string, string> } {
+): { command: string; args: string[]; env?: Record<string, string>; windowsVerbatimArguments?: boolean } {
   if (isManagedCliEntry(bin)) {
     return { command: process.execPath, args: [bin, ...args], env: { ELECTRON_RUN_AS_NODE: '1' } }
   }
@@ -386,7 +414,7 @@ export function runCliStream(opts: RunCliStreamOpts): { abort: () => void } {
     }
 
     const args = cfg.buildArgs({ model: opts.model })
-    let spawnTarget: { command: string; args: string[]; env?: Record<string, string> }
+    let spawnTarget: { command: string; args: string[]; env?: Record<string, string>; windowsVerbatimArguments?: boolean }
     try {
       // Windows .cmd shims must go through cmd.exe (see resolveSpawnTarget); everything else spawns
       // directly, byte-identical to before.
@@ -405,6 +433,9 @@ export function runCliStream(opts: RunCliStreamOpts): { abort: () => void } {
       // Every 'Ask' spawns this — without windowsHide a console window flashes on top of the
       // always-on-top overlay (and anything the user is screen-sharing) on every single call.
       windowsHide: true,
+      // Only set for a .cmd-shim target: tells libuv not to re-quote the hand-built cmd.exe command
+      // line (see cmdShimSpawn). undefined for the non-shim branch — unchanged behavior there.
+      windowsVerbatimArguments: spawnTarget.windowsVerbatimArguments,
       // 'pipe' for stdin so we can write prompt + system without exposing them in argv
       stdio: ['pipe', 'pipe', 'pipe']
     })
@@ -494,12 +525,21 @@ export async function detectCli(provider: ProviderId): Promise<CliActionResult> 
   const absBin = await resolveBin(cfg.bin)
   if (!absBin) return { ok: false, error: `${label} not installed` }
 
+  // Windows .cmd shims must go through cmd.exe (see resolveSpawnTarget) — the same EINVAL landmine
+  // as the spawn() call sites below, just reached via execFile here instead. This must be its OWN
+  // try/catch: a resolveSpawnTarget throw (unsafe shim path) is a real failure and must not be
+  // swallowed by the --version catch below, which is only meant for "binary present but --version
+  // errored" and would otherwise misreport a broken CLI as connected.
+  let spawnTarget: { command: string; args: string[]; env?: Record<string, string>; windowsVerbatimArguments?: boolean }
   try {
-    // Windows .cmd shims must go through cmd.exe (see resolveSpawnTarget) — the same EINVAL landmine
-    // as the spawn() call sites below, just reached via execFile here instead.
-    const spawnTarget = resolveSpawnTarget(absBin, ['--version'])
+    spawnTarget = resolveSpawnTarget(absBin, ['--version'])
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : 'refusing unsafe spawn arguments' }
+  }
+  try {
     const { stdout } = await execFileAsync(spawnTarget.command, spawnTarget.args, {
       windowsHide: true,
+      windowsVerbatimArguments: spawnTarget.windowsVerbatimArguments,
       env: { ...process.env, ...spawnTarget.env }
     })
     return { ok: true, version: stdout.trim().slice(0, 40) }
@@ -544,7 +584,7 @@ export async function testCli(provider: ProviderId): Promise<CliActionResult> {
     testArgs = ['exec', '--skip-git-repo-check', '-c', 'features.shell_tool=false']
   }
 
-  let spawnTarget: { command: string; args: string[]; env?: Record<string, string> }
+  let spawnTarget: { command: string; args: string[]; env?: Record<string, string>; windowsVerbatimArguments?: boolean }
   try {
     // Windows .cmd shims must go through cmd.exe (see resolveSpawnTarget); everything else spawns
     // directly, byte-identical to before.
@@ -571,6 +611,8 @@ export async function testCli(provider: ProviderId): Promise<CliActionResult> {
       shell: false,
       // Runs on every Connect/Test-connection click — without this a console window flashes.
       windowsHide: true,
+      // Only set for a .cmd-shim target (see cmdShimSpawn / runCliStream's spawn for the full note).
+      windowsVerbatimArguments: spawnTarget.windowsVerbatimArguments,
       // 'pipe' for stdin so we write the test prompt without it appearing in argv
       stdio: ['pipe', 'pipe', 'pipe']
     })
