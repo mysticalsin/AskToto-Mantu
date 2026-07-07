@@ -403,6 +403,9 @@ export function Onboarding({
     const pathAllow = settings.allowedProviders
     const dustPathAllowed = !pathAllow || pathAllow.includes('dust')
     const cliPathAllowed = !pathAllow || pathAllow.includes('claude-cli') || pathAllow.includes('codex-cli')
+    // The "An API key" tile is allowed if the org approves at least one API-key provider (featured OR more);
+    // otherwise it's chipped/inert like the CLI/Dust tiles instead of routing to an empty chooser.
+    const apiPathAllowed = filterAllowedProviders([...FEATURED_API_PROVIDERS, ...MORE_API_PROVIDERS], pathAllow).length > 0
 
     // Second path: "An API key" opens this chooser instead of hard-wiring Anthropic. CLI stays the
     // primary, first suggestion on the path screen — this is reached only after tapping "An API key".
@@ -527,6 +530,7 @@ export function Onboarding({
             title="An API key"
             desc="Have a key from Claude, GPT, Grok, or another provider? Paste it and you're set. You pay your provider directly."
             onClick={() => setApiChooser(true)}
+            disabled={!apiPathAllowed}
           />
           <ProviderOption
             icon={Building2}

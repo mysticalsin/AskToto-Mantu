@@ -35,8 +35,9 @@ Grab the installer for your OS from the [AskToto-Releases](https://github.com/my
   first launch needs right-click → Open → Open (one time). Auto-update activates once builds
   are signed + notarized.
 - **Windows** — `AskToto-Setup-1.0.0.exe` (installer) or `AskToto-Portable-1.0.0.exe`
-  (no-install). v1.0.0 is not yet Authenticode-signed: SmartScreen will warn — More info →
-  Run anyway.
+  (no-install). Authenticode-signed (`CN=Mantu`, RFC3161-timestamped). For fleet deploy the Mantu
+  signing cert is trusted via GPO/Intune; on an unmanaged machine SmartScreen may still warn until the
+  cert builds reputation (More info → Run anyway) — an EV cert or Azure Trusted Signing removes that.
 
 All transcription runs on-device; models are bundled (no first-run download).
 
