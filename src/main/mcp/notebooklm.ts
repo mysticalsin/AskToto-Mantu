@@ -49,6 +49,12 @@ function comSpecExe(): string {
   return cs && isAbsolute(cs) ? cs : join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'cmd.exe')
 }
 
+/** Absolute path to `where.exe`, same rationale as comSpecExe() above: pin to the known System32
+ *  binary rather than a bare name, for consistency with main/cli.ts's resolveBin. */
+function whereExe(): string {
+  return join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'where.exe')
+}
+
 // ─── Timeouts ──────────────────────────────────────────────────────────────────
 const DETECT_TIMEOUT_MS = 10_000
 const CONNECT_TIMEOUT_MS = 20_000 // a cold Python/CLI start is slower than BidStack's HTTP connect
@@ -77,7 +83,7 @@ export async function resolveBinary(bin: string): Promise<string | null> {
 
   if (process.platform === 'win32') {
     try {
-      const { stdout } = await execFileAsync('where', [bin], { timeout: DETECT_TIMEOUT_MS })
+      const { stdout } = await execFileAsync(whereExe(), [bin], { timeout: DETECT_TIMEOUT_MS })
       const resolved = parseWhereOutput(stdout)
       if (resolved) binCache.set(cacheKey, resolved)
       return resolved

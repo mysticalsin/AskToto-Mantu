@@ -72,19 +72,24 @@ function ProviderOption({
   title,
   badge,
   desc,
-  onClick
+  onClick,
+  disabled
 }: {
   icon: typeof Mic
   title: string
   badge?: string
   desc: string
   onClick: () => void
+  /** Org allowlist excludes this path's provider(s) — render inert instead of routing to a provider
+   *  every ask would then reject. Mirrors the Settings gating for the same allowedProviders check. */
+  disabled?: boolean
 }): JSX.Element {
   return (
     <button
       type="button"
       onClick={onClick}
-      className="no-drag focus-ring group flex items-start gap-3 rounded-xl border border-[var(--color-hair-soft)] bg-white/[0.02] p-3.5 text-left transition-colors hover:border-[var(--color-accent)] hover:bg-white/[0.05]"
+      disabled={disabled}
+      className="no-drag focus-ring group flex items-start gap-3 rounded-xl border border-[var(--color-hair-soft)] bg-white/[0.02] p-3.5 text-left transition-colors hover:border-[var(--color-accent)] hover:bg-white/[0.05] disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:border-[var(--color-hair-soft)] disabled:hover:bg-white/[0.02]"
     >
       <div className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-[var(--color-accent-soft)] text-[var(--color-accent)]">
         <Icon size={17} />
@@ -92,10 +97,16 @@ function ProviderOption({
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2">
           <span className="text-[13.5px] font-medium text-[color:var(--color-ink)]">{title}</span>
-          {badge && (
-            <span className="rounded-full bg-[var(--color-success)]/15 px-1.5 py-0.5 text-[10px] font-medium text-[var(--color-success)]">
-              {badge}
+          {disabled ? (
+            <span className="rounded-full bg-[var(--color-accent-soft)] px-1.5 py-0.5 text-[10px] font-medium text-[var(--color-accent)]">
+              Restricted by your organization
             </span>
+          ) : (
+            badge && (
+              <span className="rounded-full bg-[var(--color-success)]/15 px-1.5 py-0.5 text-[10px] font-medium text-[var(--color-success)]">
+                {badge}
+              </span>
+            )
           )}
         </div>
         <div className="mt-0.5 text-[11.5px] leading-snug text-[color:var(--color-ink-2)]">{desc}</div>
@@ -385,6 +396,14 @@ export function Onboarding({
       choose(codex.ok ? 'codex-cli' : 'claude-cli')
     }
 
+    // Path-screen tiles below route straight to a provider without going through the allow-filtered API
+    // chooser, so they need their own allowlist check — same allowedProviders read as Settings/AiSection.
+    // null = unrestricted. The CLI tile covers both claude-cli and codex-cli (whichever chooseCli detects),
+    // so it's allowed if either is on the list.
+    const pathAllow = settings.allowedProviders
+    const dustPathAllowed = !pathAllow || pathAllow.includes('dust')
+    const cliPathAllowed = !pathAllow || pathAllow.includes('claude-cli') || pathAllow.includes('codex-cli')
+
     // Second path: "An API key" opens this chooser instead of hard-wiring Anthropic. CLI stays the
     // primary, first suggestion on the path screen — this is reached only after tapping "An API key".
     if (apiChooser) {
@@ -394,6 +413,13 @@ export function Onboarding({
       const featured = filterAllowedProviders(FEATURED_API_PROVIDERS, allow)
       const more = filterAllowedProviders(MORE_API_PROVIDERS, allow)
       const noneAllowed = featured.length === 0 && more.length === 0
+      // A realistic allowlist can approve only a "more" provider (e.g. allowedProviders: ['mistral'], the
+      // documented EU-residency pick) with nothing in the featured tier. Don't strand that sole approved
+      // provider behind the collapsed "More providers" toggle — promote it to the primary list. Only show
+      // the disclosure when there's something distinct left to reveal (both tiers non-empty), so `more`
+      // never renders twice.
+      const primary = featured.length ? featured : more
+      const showDisclosure = featured.length > 0 && more.length > 0
       return (
         <div className="fade-up flex min-h-[300px] w-full flex-col items-center gap-5 px-4 py-7 text-center">
           <div className="flex flex-col items-center gap-1.5">
@@ -418,7 +444,7 @@ export function Onboarding({
             </p>
           ) : (
             <div className="flex w-full max-w-[460px] flex-col gap-2.5">
-              {featured.map((id) => (
+              {primary.map((id) => (
                 <ProviderOption
                   key={id}
                   icon={KeyRound}
@@ -430,7 +456,7 @@ export function Onboarding({
             </div>
           )}
 
-          {more.length > 0 && (
+          {showDisclosure && (
             <button
               type="button"
               onClick={() => setShowMoreProviders((s) => !s)}
@@ -445,7 +471,7 @@ export function Onboarding({
             </button>
           )}
 
-          {showMoreProviders && (
+          {showDisclosure && showMoreProviders && (
             <div className="flex w-full max-w-[460px] flex-col gap-2.5">
               {more.map((id) => (
                 <ProviderOption
@@ -494,6 +520,7 @@ export function Onboarding({
             badge="No key needed"
             desc="Already use Claude Code or Codex in your terminal? Connect it. Nothing extra to pay, nothing to paste."
             onClick={() => void chooseCli()}
+            disabled={!cliPathAllowed}
           />
           <ProviderOption
             icon={KeyRound}
@@ -506,6 +533,7 @@ export function Onboarding({
             title="Mantu Dust"
             desc="Use Mantu's shared Dust workspace. Best if your team already runs on Dust."
             onClick={() => choose('dust')}
+            disabled={!dustPathAllowed}
           />
         </div>
 

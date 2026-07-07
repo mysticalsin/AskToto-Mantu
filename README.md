@@ -7,7 +7,7 @@ A frameless, transparent, always-on-top glass overlay for macOS and Windows.
 
 <img src="docs/media/asktoto-hero.png" alt="AskToto overlay — Ask anything bar with a syntax-highlighted answer on frosted purple glass" width="760">
 
-`16 AI providers + Dust` · `thinking-mode routing` · `live transcription` · `knowledge graph` · `encrypted at rest`
+`15 AI providers + your own endpoint` · `thinking-mode routing` · `live transcription` · `knowledge graph` · `encrypted at rest`
 
 Built by **[Tony Walteur](https://www.linkedin.com/in/tonywalteur/)** · Mantu
 
@@ -78,7 +78,7 @@ AskToto/
 │   │   └── lib/whisper*      on-device Whisper STT (Web Worker)
 │   └── shared/              cross-process contract
 │       ├── ipc.ts            IPC channels + zod schemas + settings schema
-│       ├── providers.ts      16-provider + Dust registry + model-tier routing
+│       ├── providers.ts      15-provider + custom-endpoint registry + model-tier routing
 │       ├── routing.ts        thinking-mode router (base / think / deep tiers)
 │       └── prompts.ts        default mode prompts
 ├── resources/graphify_runner.py   graphify pipeline (bundled via extraResources)
@@ -89,10 +89,10 @@ AskToto/
 
 ## Features
 
-- **16 providers + Dust.** Claude, GPT, Gemini, NVIDIA, DeepSeek, Qwen, MiniMax, Kimi, OpenRouter,
-  Groq, Together, Fireworks, Mistral, custom OpenAI-compatible, keyless Claude Code / Codex CLI
-  backends, and **Dust** (your own agents, the primary brain). Keys auto-detected from prefix; each
-  stored encrypted.
+- **15 providers + your own endpoint.** Claude, GPT, Grok, Gemini, NVIDIA, DeepSeek, Qwen, MiniMax,
+  Kimi, OpenRouter, Groq, Mistral, **Dust** (your own agents, the primary brain), and keyless
+  Claude Code / Codex CLI backends — plus any custom OpenAI-compatible endpoint you already run.
+  Keys auto-detected from prefix; each stored encrypted.
 - **Thinking mode.** `auto` routes simple questions to Haiku, heavier analytical questions to Sonnet,
   and coding/engineering/deep reasoning to Opus; the Bar toggle forces Opus. For Dust: a base agent +
   a thinking agent.
