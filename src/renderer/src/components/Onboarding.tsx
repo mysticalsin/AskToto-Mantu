@@ -148,7 +148,7 @@ function CheckRow({
     >
       <span
         className={`mt-0.5 grid h-4 w-4 shrink-0 place-items-center rounded-full ${
-          ok ? 'bg-[var(--color-success)] text-white' : 'bg-[var(--color-warn,#fac775)] text-white'
+          ok ? 'bg-[var(--color-success)] text-white' : 'bg-[var(--color-warn,#fac775)] text-[#3d2c00]'
         }`}
       >
         {ok ? <Check size={11} /> : <AlertCircle size={11} />}
