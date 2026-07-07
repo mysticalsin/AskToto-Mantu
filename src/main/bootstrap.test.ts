@@ -25,6 +25,10 @@ import {
 
 const REAL_PLATFORM = process.platform
 
+// bootstrap.ts pins `where` to its absolute System32 path (defense-in-depth, mirrors cli.ts) —
+// mock calls must match that resolved path, not the bare name.
+const WHERE_EXE = join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'where.exe')
+
 /** process.platform is configurable in Node — flip it for the duration of a platform-specific test. */
 function setPlatform(p: NodeJS.Platform): void {
   Object.defineProperty(process, 'platform', { value: p, configurable: true })
@@ -333,7 +337,7 @@ describe('runFirstRunBootstrap — win32: ComSpec routing for a `.cmd` shim, dir
   it('falls back uv → py → pip, routes the `.cmd`-resolved pip through ComSpec, and confirms via `where`', async () => {
     let installed = false
     h.execFileImpl.mockImplementation((cmd: string, args: string[]) => {
-      if (cmd === 'where') {
+      if (cmd === WHERE_EXE) {
         const target = args[0]
         if (target === 'npm') return Promise.resolve({ stdout: 'C:\\npm\\npm.cmd\n', stderr: '' })
         if (target === 'graphify') {

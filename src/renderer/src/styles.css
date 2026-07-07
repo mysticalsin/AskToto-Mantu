@@ -25,7 +25,9 @@
   --font-body: 'InterVar', -apple-system, system-ui, sans-serif;
   /* Mantu brand purple (Bright Purple #7F00DA / Primary Purple #6600AE). No yellow. */
   --color-accent: #7f00da;
-  --color-accent-2: #a64dff; /* brighter purple — active toolbar icons, input cursor, chevron */
+  --color-accent-2: #b98cff; /* brighter purple — active toolbar icons, input cursor, chevron. Lightened
+    from #a64dff (~4.1:1, failed AA for small accent-2 text on the dark glass) to clear ~6.6:1 for the
+    10-11px "Just saved" badge, topic chips, and "Intelligence" label while staying on-brand purple (~263° hue). */
   --color-accent-soft: rgba(127, 0, 218, 0.18);
   --color-accent-glow: rgba(127, 0, 218, 0.30);
   --color-cyan: #22d3ee; /* Start-listening idle state — a distinct, inviting color from the muted toolbar default */

@@ -23,8 +23,10 @@ const exec = promisify(execFile)
 // macOS/Linux GUI apps launch with a minimal PATH (no ~/.local/bin). Augment it so `graphify`, the
 // resolved python, and `claude` (for the claude-cli backend) are findable in packaged builds too.
 const IS_WIN = process.platform === 'win32'
-/** `where` on Windows, `which` on macOS/Linux. */
-const locateCmd = (): string => (IS_WIN ? 'where' : 'which')
+/** `where` on Windows (absolute %SystemRoot%\System32 path so a planted `where.exe` in the cwd can't be
+ *  hijacked — consistent with cli.ts/bootstrap.ts/notebooklm.ts), `which` on macOS/Linux. */
+const locateCmd = (): string =>
+  IS_WIN ? join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'where.exe') : 'which'
 
 const EXTRA_BINS = IS_WIN
   ? [

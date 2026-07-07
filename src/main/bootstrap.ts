@@ -118,6 +118,13 @@ function comSpecExe(): string {
   return cs && isAbsolute(cs) ? cs : join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'cmd.exe')
 }
 
+/** Absolute path to `where.exe`, same rationale as comSpecExe(): a bare 'where' is resolved by
+ *  CreateProcess against the app's own directory and the cwd before PATH, so pin it to the known
+ *  System32 binary rather than trust name resolution (defense-in-depth alongside cli.ts's resolveBin). */
+function whereExe(): string {
+  return join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'where.exe')
+}
+
 /** Parse `where <bin>` stdout: the first line that is an actually-launchable binary (.exe/.cmd/.bat).
  *  `where` can list several shadowed matches (e.g. an extension-less shim) — only a launchable file
  *  is useful. Returns null when nothing qualifies (including "not found" / empty output). */
@@ -143,7 +150,7 @@ async function winRun(
 ): Promise<{ stdout: string; stderr: string }> {
   let resolved: string | null = null
   try {
-    const { stdout } = await execFileAsync('where', [command], { timeout: PROBE_TIMEOUT_MS, env: installEnv(true) })
+    const { stdout } = await execFileAsync(whereExe(), [command], { timeout: PROBE_TIMEOUT_MS, env: installEnv(true) })
     resolved = parseWhereLines(stdout)
   } catch {
     /* `where` found nothing on PATH — fall through to the bare command below */
@@ -194,7 +201,7 @@ async function detectGraphify(isWin: boolean): Promise<boolean> {
 async function detectNpm(isWin: boolean): Promise<boolean> {
   try {
     if (isWin) {
-      const { stdout } = await execFileAsync('where', ['npm'], { timeout: PROBE_TIMEOUT_MS })
+      const { stdout } = await execFileAsync(whereExe(), ['npm'], { timeout: PROBE_TIMEOUT_MS })
       return !!parseWhereLines(stdout)
     }
     const shell = process.env.SHELL || '/bin/zsh'
