@@ -272,7 +272,7 @@ export interface ImportAudioChunkResult {
 export interface ImportAudioProgress {
   sessionId: string
   pct: number
-  stage: 'transcribing' | 'saving'
+  stage: 'transcribing' | 'saving' | 'summarizing'
 }
 
 /** Payload for brain:setDealOutcome — the human marks a deal open/won/lost (see DealEntitySchema.outcome
@@ -444,6 +444,10 @@ export const BaseSettingsSchema = z.object({
   showLiveTranscript: z.boolean().default(false),
   meetingsFolder: z.string().default(''),
   autoSaveTranscripts: z.boolean().default(false),
+  // After importing an audio file, also generate the AI recap/summary (needs a configured provider —
+  // transcription itself is always free + on-device). On by default so an import behaves like a live
+  // meeting; off = transcript only.
+  summarizeOnImport: z.boolean().default(true),
   launchAtLogin: z.boolean().default(false),
   onboardingDone: z.boolean().default(false),
   // When onboarding finished (ms). Anchors the 10-minute "Add your API key" nudge so it expires on a
@@ -610,6 +614,7 @@ export const DEFAULT_SETTINGS: Settings = {
   showLiveTranscript: false,
   meetingsFolder: '',
   autoSaveTranscripts: false,
+  summarizeOnImport: true,
   launchAtLogin: false,
   onboardingDone: false,
   onboardingDoneAt: 0,

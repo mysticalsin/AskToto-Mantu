@@ -600,7 +600,7 @@ export function RecallView({
   const listRef = useRef<HTMLDivElement>(null)
   /** "Import audio" button state — idle outside a run; disables the button and drives its label. */
   const [importState, setImportState] = useState<{
-    stage: 'idle' | 'decoding' | 'transcribing' | 'saving'
+    stage: 'idle' | 'decoding' | 'transcribing' | 'saving' | 'summarizing'
     pct: number
     error: string | null
   }>({ stage: 'idle', pct: 0, error: null })
@@ -861,7 +861,9 @@ export function RecallView({
               ? 'Decoding…'
               : importState.stage === 'transcribing'
                 ? `Transcribing ${importState.pct}%`
-                : 'Saving…'}
+                : importState.stage === 'summarizing'
+                  ? 'Summarizing…'
+                  : 'Saving…'}
         </TextButton>
       </div>
       {importState.error && (

@@ -16,6 +16,15 @@ vi.mock('./parakeet', () => ({
 const enqueueIngestMock = vi.fn()
 vi.mock('./brain/ingest', () => ({ enqueueIngest: (...args: unknown[]) => enqueueIngestMock(...args) }))
 
+// The post-transcription recap uses the shared main-side completion helper. Mock it so tests control
+// provider availability + the generated recap without touching the network/electron.
+const hasUsableProviderMock = vi.fn(() => false)
+const runCompletionMock = vi.fn(async () => 'MOCK RECAP')
+vi.mock('./llm/complete', () => ({
+  hasUsableProvider: (...args: unknown[]) => hasUsableProviderMock(...args),
+  runCompletion: (...args: unknown[]) => runCompletionMock(...args)
+}))
+
 import {
   humanizeFilename,
   chunkToLine,
@@ -90,6 +99,10 @@ describe('handleImportChunk', () => {
     parakeetTranscribeMock.mockResolvedValue('hello world')
     ensureParakeetModelMock.mockClear()
     enqueueIngestMock.mockClear()
+    hasUsableProviderMock.mockReset()
+    hasUsableProviderMock.mockReturnValue(false)
+    runCompletionMock.mockReset()
+    runCompletionMock.mockResolvedValue('MOCK RECAP')
     abandonImportSession()
   })
 
@@ -111,6 +124,43 @@ describe('handleImportChunk', () => {
     const saved = readSavedFile(result.file!)
     expect(saved).toContain('# Q3 Budget Review')
     expect(saved).toContain('hello world')
+  })
+
+  it('generates + saves the AI recap when summarizeOnImport is on and a provider is usable', async () => {
+    hasUsableProviderMock.mockReturnValue(true)
+    runCompletionMock.mockResolvedValue('Budget approved for Q3.')
+    const progress: { pct: number; stage: string }[] = []
+    const r = await handleImportChunk({ ...settings, summarizeOnImport: true } as Settings, makeChunk(), (pct, stage) =>
+      progress.push({ pct, stage })
+    )
+    expect(r.ok).toBe(true)
+    expect(runCompletionMock).toHaveBeenCalledTimes(1)
+    expect(progress.some((p) => p.stage === 'summarizing')).toBe(true)
+    const saved = readSavedFile(r.file!)
+    expect(saved).toContain('Budget approved for Q3.')
+  })
+
+  it('saves transcript only (no recap, no LLM call) when summarizeOnImport is off', async () => {
+    hasUsableProviderMock.mockReturnValue(true)
+    const r = await handleImportChunk({ ...settings, summarizeOnImport: false } as Settings, makeChunk(), () => {})
+    expect(r.ok).toBe(true)
+    expect(runCompletionMock).not.toHaveBeenCalled()
+  })
+
+  it('saves transcript only when no provider is usable, even with the setting on', async () => {
+    hasUsableProviderMock.mockReturnValue(false)
+    const r = await handleImportChunk({ ...settings, summarizeOnImport: true } as Settings, makeChunk(), () => {})
+    expect(r.ok).toBe(true)
+    expect(runCompletionMock).not.toHaveBeenCalled()
+  })
+
+  it('falls back to a transcript-only save if recap generation throws (never fails the import)', async () => {
+    hasUsableProviderMock.mockReturnValue(true)
+    runCompletionMock.mockRejectedValue(new Error('provider down'))
+    const r = await handleImportChunk({ ...settings, summarizeOnImport: true } as Settings, makeChunk(), () => {})
+    expect(r.ok).toBe(true)
+    const saved = readSavedFile(r.file!)
+    expect(saved).toContain('hello world') // transcript is still saved
   })
 
   it('accumulates lines across multiple chunks in the same session, in chunk order', async () => {

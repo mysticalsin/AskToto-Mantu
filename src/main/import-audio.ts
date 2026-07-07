@@ -19,14 +19,18 @@ import type {
   Settings,
   SaveMeeting,
   TranscriptLine,
+  AskStart,
   ImportAudioChunk,
   ImportAudioPickResult,
   ImportAudioChunkResult
 } from '@shared/ipc'
+import { redactSecrets } from '@shared/redact'
 import { ensureParakeetModel, parakeetTranscribe } from './parakeet'
 import { saveMeeting } from './transcripts'
 import { enqueueIngest } from './brain/ingest'
-import { auditLog } from './logger'
+import { buildSystem } from './personas'
+import { hasUsableProvider, runCompletion } from './llm/complete'
+import { auditLog, mainLog } from './logger'
 
 const AUDIO_EXTENSIONS = ['wav', 'mp3', 'm4a', 'aac', 'ogg', 'flac']
 const MAX_SOURCE_BYTES = 500 * 1024 * 1024 // spec: cap source files at 500 MB, with a clear error
@@ -105,6 +109,28 @@ export function chunkProgressPct(seq: number, totalChunks: number): number {
   return Math.min(100, Math.max(0, Math.round(((seq + 1) / totalChunks) * 100)))
 }
 
+// ── Post-transcription recap ─────────────────────────────────────────────────
+
+/** Generate the AI recap/summary for an imported recording — the same recap the live meeting produces
+ *  (mode:'recap' system prompt + the configured provider), run as a background completion in main.
+ *  Redacts secrets from the copy sent to the model exactly like the live ask + brain-ingest paths. */
+export async function generateImportRecap(settings: Settings, transcriptText: string): Promise<string> {
+  const id = `import-recap-${Date.now()}`
+  const req = { id, mode: 'recap', prompt: transcriptText, history: [] } as AskStart
+  const system = buildSystem(
+    req,
+    'meeting',
+    settings.profile,
+    settings.modePrompts,
+    undefined,
+    settings.outputLanguage,
+    settings.summaryLanguage,
+    settings.systemPrompt
+  )
+  const safe = settings.redactSensitive ? redactSecrets(transcriptText) : transcriptText
+  return runCompletion(settings, system, safe, id)
+}
+
 // ── Session accumulation + save (renderer steps 3-4) ─────────────────────────
 
 interface ImportSession {
@@ -138,7 +164,7 @@ function ensureQuitHook(): void {
 export async function handleImportChunk(
   settings: Settings,
   chunk: ImportAudioChunk,
-  onProgress: (pct: number, stage: 'transcribing' | 'saving') => void
+  onProgress: (pct: number, stage: 'transcribing' | 'saving' | 'summarizing') => void
 ): Promise<ImportAudioChunkResult> {
   ensureQuitHook()
 
@@ -171,13 +197,33 @@ export async function handleImportChunk(
   // Chunks normally arrive (and are transcribed) strictly in order, but sort defensively so a saved
   // transcript is always chronological even if that ever stops being true.
   const sortedLines = [...session.lines].sort((a, b) => a.t - b.t)
+
+  // Generate the AI recap (like a live meeting) so the imported meeting lands WITH its summary — the
+  // feature a user expects: import a recording, get a transcript AND a résumé. Gated on the
+  // summarizeOnImport setting AND a usable provider (transcription itself is always free + on-device;
+  // a recap needs a model). Any failure degrades cleanly to transcript-only and never fails the save.
+  let recap = ''
+  const transcriptText = sortedLines
+    .map((l) => l.text)
+    .join('\n')
+    .trim()
+  if (settings.summarizeOnImport && transcriptText && hasUsableProvider(settings)) {
+    onProgress(100, 'summarizing')
+    try {
+      recap = (await generateImportRecap(settings, transcriptText)).trim()
+    } catch (e) {
+      mainLog.warn('[import] recap generation failed; saving transcript only', e)
+      recap = ''
+    }
+  }
+
   try {
     const meeting: SaveMeeting = {
       title: session.title,
       mode: 'meeting',
       startedAt: session.startedAt,
       lines: sortedLines,
-      recap: ''
+      recap
     }
     const file = await saveMeeting(settings, meeting)
     auditLog('transcript.imported', { lines: sortedLines.length, encrypted: !!settings.encryptTranscripts })
