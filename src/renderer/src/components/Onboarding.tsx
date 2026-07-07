@@ -481,6 +481,9 @@ export function Onboarding({
     const pathAllow = settings.allowedProviders
     const dustPathAllowed = !pathAllow || pathAllow.includes('dust')
     const cliPathAllowed = !pathAllow || pathAllow.includes('claude-cli') || pathAllow.includes('codex-cli')
+    // The "An API key" tile is inert when the org approves no API-key provider at all — otherwise it
+    // would open an empty picker (its own tiles are allow-filtered below).
+    const apiPathAllowed = filterAllowedProviders(['anthropic', 'openai', 'nvidia', 'minimax'], pathAllow).length > 0
     const choose = (provider: ProviderId): void => {
       patch({ provider })
       setStep(6)
@@ -583,7 +586,7 @@ export function Onboarding({
               title="An API key"
               desc="Claude, GPT, Grok, Kimi, and more. Paste your key and you're set. You pay your provider directly."
               onClick={() => setShowApiPicker(true)}
-              disabled={providerLocked || cliBusy}
+              disabled={providerLocked || cliBusy || !apiPathAllowed}
             />
           )}
           <ProviderOption
