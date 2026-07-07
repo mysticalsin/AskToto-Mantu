@@ -47,7 +47,7 @@ function MsLogo({ size = 16 }: { size?: number }): JSX.Element {
 function ActionRow({ icon: Icon, label, hint, keys }: { icon: typeof Mic; label: string; hint: string; keys?: string }): JSX.Element {
   return (
     <div className="flex items-center gap-3">
-      <div className="grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-[var(--color-accent-soft)] text-[var(--color-accent)]">
+      <div className="grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-[var(--color-accent-soft)] text-[var(--color-accent-2)]">
         <Icon size={15} />
       </div>
       <div className="min-w-0 flex-1 text-left">
@@ -91,14 +91,14 @@ function ProviderOption({
       disabled={disabled}
       className="no-drag focus-ring group flex items-start gap-3 rounded-xl border border-[var(--color-hair-soft)] bg-white/[0.02] p-3.5 text-left transition-colors hover:border-[var(--color-accent)] hover:bg-white/[0.05] disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:border-[var(--color-hair-soft)] disabled:hover:bg-white/[0.02]"
     >
-      <div className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-[var(--color-accent-soft)] text-[var(--color-accent)]">
+      <div className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-[var(--color-accent-soft)] text-[var(--color-accent-2)]">
         <Icon size={17} />
       </div>
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2">
           <span className="text-[13.5px] font-medium text-[color:var(--color-ink)]">{title}</span>
           {disabled ? (
-            <span className="rounded-full bg-[var(--color-accent-soft)] px-1.5 py-0.5 text-[10px] font-medium text-[var(--color-accent)]">
+            <span className="rounded-full bg-[var(--color-accent-soft)] px-1.5 py-0.5 text-[10px] font-medium text-[var(--color-accent-2)]">
               Restricted by your organization
             </span>
           ) : (
@@ -111,7 +111,7 @@ function ProviderOption({
         </div>
         <div className="mt-0.5 text-[11.5px] leading-snug text-[color:var(--color-ink-2)]">{desc}</div>
       </div>
-      <ArrowRight size={15} className="mt-1 shrink-0 text-[color:var(--color-ink-3)] group-hover:text-[color:var(--color-accent)]" />
+      <ArrowRight size={15} className="mt-1 shrink-0 text-[color:var(--color-ink-3)] group-hover:text-[color:var(--color-accent-2)]" />
     </button>
   )
 }
@@ -148,7 +148,7 @@ function CheckRow({
     >
       <span
         className={`mt-0.5 grid h-4 w-4 shrink-0 place-items-center rounded-full ${
-          ok ? 'bg-[var(--color-success)] text-white' : 'bg-[var(--color-warn,#fac775)] text-[#3d2c00]'
+          ok ? 'bg-[var(--color-success)] text-[#0d2a18]' : 'bg-[var(--color-warn,#fac775)] text-[#3d2c00]'
         }`}
       >
         {ok ? <Check size={11} /> : <AlertCircle size={11} />}
@@ -656,7 +656,7 @@ export function Onboarding({
         </p>
       </div>
 
-      <div className="flex items-center gap-1.5 rounded-lg bg-[var(--color-accent-soft)] px-3 py-2 text-[12px] text-[color:var(--color-accent)]">
+      <div className="flex items-center gap-1.5 rounded-lg bg-[var(--color-accent-soft)] px-3 py-2 text-[12px] text-[color:var(--color-accent-2)]">
         <ShieldCheck size={12} />
         Audio is processed on your {isWindows ? 'computer' : 'Mac'} and never uploaded.
       </div>
@@ -702,7 +702,7 @@ export function Onboarding({
       </div>
 
       <div className="flex items-center gap-1.5 text-[11px] text-[color:var(--color-ink-3)]">
-        <ShieldCheck size={12} className="text-[color:var(--color-accent)]" />
+        <ShieldCheck size={12} className="text-[color:var(--color-accent-2)]" />
         Restricted to your Mantu Microsoft account · permissions are requested the first time you Listen.
       </div>
 
