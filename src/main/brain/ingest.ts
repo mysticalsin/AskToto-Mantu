@@ -1,7 +1,6 @@
 import { basename, join } from 'node:path'
 import { existsSync, readdirSync, statSync } from 'node:fs'
-import type { Settings, AskStart } from '@shared/ipc'
-import { PROVIDERS, resolveModelTier, type ProviderId } from '@shared/providers'
+import type { Settings } from '@shared/ipc'
 import {
   BRAIN_EXTRACTION_PROMPT,
   MeetingExtractionSchema,
@@ -12,8 +11,8 @@ import {
 } from '@shared/brain'
 import { INJECTION_GUARD } from '@shared/prompts'
 import { redactSecrets } from '@shared/redact'
-import { getSettings, getApiKey } from '../store'
-import { createStream } from '../llm'
+import { getSettings } from '../store'
+import { hasUsableProvider, runCompletion } from '../llm/complete'
 import { readSavedFile, resolveMeetingsFolder } from '../transcripts'
 import { auditLog, mainLog } from '../logger'
 import {
@@ -42,62 +41,8 @@ import {
  */
 
 // ── LLM call ─────────────────────────────────────────────────────────────────
-
-/** Cheap "is any provider usable at all" check — reuses pickProvider's own resolution logic so the two
- *  can never drift out of sync. Used to bail out of backfill work BEFORE burning a queued job (and its
- *  one reinforcement retry) on a call that's guaranteed to reject with "No configured AI provider". */
-function hasUsableProvider(s: Settings): boolean {
-  return pickProvider(s) !== null
-}
-
-/** Pick the first usable text provider: the active one, then any other with credentials + a model. */
-function pickProvider(s: Settings): { provider: ProviderId; model: string; key: string } | null {
-  const order = [s.provider, ...(Object.keys(PROVIDERS) as ProviderId[])]
-  for (const p of order) {
-    const def = PROVIDERS[p]
-    if (!def) continue
-    const key = getApiKey(p)
-    const connected = def.kind === 'cli' ? !!s.cliConnected[p] : key.length > 0
-    if (!connected) continue
-    if (p === 'dust' && !s.dustWorkspaceId) continue
-    const model = resolveModelTier(p, s.providerModels, s.providerModelsThinking, 'deep', s.providerModelsDeep)
-    if (!model) continue
-    return { provider: p, model, key }
-  }
-  return null
-}
-
-/** Run one accumulate-the-stream completion against the picked provider. Rejects on stream error. */
-function runCompletion(s: Settings, system: string, userText: string, id: string): Promise<string> {
-  const picked = pickProvider(s)
-  if (!picked) return Promise.reject(new Error('No configured AI provider for brain ingest.'))
-  const { provider, model, key } = picked
-  const def = PROVIDERS[provider]
-  const req: AskStart = { id, mode: 'answer', prompt: userText, history: [] } as AskStart
-  return new Promise<string>((resolve, reject) => {
-    let out = ''
-    createStream({
-      providerId: provider,
-      kind: def.kind,
-      apiKey: key,
-      baseURL: provider === 'custom' ? s.customBaseUrl : provider === 'dust' ? s.dustBaseUrl : def.baseUrl,
-      workspaceId: s.dustWorkspaceId,
-      model,
-      temperature: 0, // extraction wants determinism, not creativity
-      idleMs: 120_000,
-      freshConversation: true, // Dust: never join/replace the live meeting's cached conversation
-      system,
-      req,
-      handlers: {
-        onDelta: (t) => {
-          out += t
-        },
-        onDone: () => resolve(out),
-        onError: (m) => reject(new Error(m))
-      }
-    })
-  })
-}
+// pickProvider / hasUsableProvider / runCompletion now live in ../llm/complete (shared with import-audio's
+// post-transcription recap) so the provider-resolution rule can never drift between the two background jobs.
 
 /** Strip markdown fences / stray prose around the JSON object a model may still emit. */
 export function extractJsonObject(raw: string): string {

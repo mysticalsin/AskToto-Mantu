@@ -3210,6 +3210,13 @@ export function Settings({
                     disabled={settings.managedKeys.includes('showFullTranscriptInReview')}
                   />
                   <ToggleRow
+                    label="Summarize imported recordings"
+                    desc="After you import an audio file, also generate the AI recap/summary — so an import behaves like a live meeting. Needs a configured provider (transcription itself is always free + on-device). Off = transcript only."
+                    on={settings.summarizeOnImport}
+                    onChange={(v) => patch({ summarizeOnImport: v })}
+                    disabled={settings.managedKeys.includes('summarizeOnImport')}
+                  />
+                  <ToggleRow
                     label="Best transcription quality"
                     desc="On = most accurate, any-language model (larger first-run download, GPU-accelerated). Off = a lighter, faster model with a smaller download."
                     on={settings.asrQuality === 'best'}
