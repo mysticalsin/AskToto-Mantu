@@ -4554,7 +4554,7 @@ export function Settings({
                 <div className="mt-2">
                   <div className="rounded-lg bg-white/[0.03] px-3 py-2">
                     <div className="flex items-center gap-2 text-[13px] font-medium text-[color:var(--cl-foreground)]">
-                      <Check size={14} className="text-[var(--color-accent)]" />
+                      <Check size={14} className="text-[var(--color-accent-text)]" />
                       Meetings are always saved
                     </div>
                     <div className="mt-0.5 text-[12px] leading-snug text-[color:var(--cl-muted-foreground)]">
