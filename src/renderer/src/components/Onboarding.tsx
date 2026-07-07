@@ -100,10 +100,16 @@ function ProviderOption({
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2">
           <span className="text-[13.5px] font-medium text-[color:var(--color-ink)]">{title}</span>
-          {badge && (
-            <span className="rounded-full bg-[var(--color-success)]/15 px-1.5 py-0.5 text-[10px] font-medium text-[var(--color-success)]">
-              {badge}
+          {disabled ? (
+            <span className="rounded-full bg-[var(--color-accent-soft)] px-1.5 py-0.5 text-[10px] font-medium text-[var(--color-accent)]">
+              Restricted by your organization
             </span>
+          ) : (
+            badge && (
+              <span className="rounded-full bg-[var(--color-success)]/15 px-1.5 py-0.5 text-[10px] font-medium text-[var(--color-success)]">
+                {badge}
+              </span>
+            )
           )}
         </div>
         <div className="mt-0.5 text-[11.5px] leading-snug text-[color:var(--color-ink-2)]">{desc}</div>
@@ -470,6 +476,11 @@ export function Onboarding({
     // A locked `provider` (Settings' managedKeys) is not user-choosable — main silently drops the pick, so
     // the tiles must not pretend it's an option here either.
     const providerLocked = settings.managedKeys.includes('provider')
+    // Org data-residency allowlist (null = unrestricted): these path tiles route straight to a provider,
+    // so each needs its own check — the CLI tile covers claude-cli/codex-cli (whichever chooseCli detects).
+    const pathAllow = settings.allowedProviders
+    const dustPathAllowed = !pathAllow || pathAllow.includes('dust')
+    const cliPathAllowed = !pathAllow || pathAllow.includes('claude-cli') || pathAllow.includes('codex-cli')
     const choose = (provider: ProviderId): void => {
       patch({ provider })
       setStep(6)
@@ -534,7 +545,7 @@ export function Onboarding({
             badge="No key needed"
             desc="Already use Claude Code or Codex in your terminal? Connect it. Nothing extra to pay, nothing to paste."
             onClick={() => void chooseCli()}
-            disabled={providerLocked || cliBusy}
+            disabled={providerLocked || cliBusy || !cliPathAllowed}
           />
           {showApiPicker ? (
             <div className="flex flex-col gap-2 rounded-xl border border-[var(--color-hair-soft)] bg-white/[0.02] p-3.5 text-left">
@@ -581,7 +592,7 @@ export function Onboarding({
             badge="One-click setup"
             desc="Use Mantu's shared Dust workspace. Installs and signs you in automatically. No key to paste."
             onClick={() => void chooseDust()}
-            disabled={providerLocked || cliBusy}
+            disabled={providerLocked || cliBusy || !dustPathAllowed}
           />
         </div>
         {providerLocked && <span className={managedChipCls}>Managed by your organization</span>}

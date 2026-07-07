@@ -863,6 +863,10 @@ function AiSection({
   const shown = selectable.filter(
     (id) => PROVIDERS[id].tier === 'more' && (!q || PROVIDERS[id].label.toLowerCase().includes(q))
   )
+  // The always-visible Anthropic quick-select card below isn't covered by the `shown` filter above (it's
+  // excluded from the grid on purpose) — gate it here too so an org allowlist that omits 'anthropic' can't
+  // be bypassed via this separate control. Independent from `locked` (managedKeys.includes('provider')).
+  const anthropicAllowed = !orgAllowed || orgAllowed.includes('anthropic')
   const recommended = recommendedProvider(settings)
   const isFeatured = featured.includes(provider)
 
@@ -1120,7 +1124,9 @@ function AiSection({
           'flex items-center justify-between gap-2 rounded-[10px] border p-3',
           provider === 'anthropic'
             ? 'border-[var(--cl-primary)] bg-[var(--cl-primary-soft)]/40'
-            : 'border-[var(--cl-border)] bg-white/[0.02]'
+            : anthropicAllowed
+              ? 'border-[var(--cl-border)] bg-white/[0.02]'
+              : 'border-[var(--cl-border)] bg-white/[0.02] opacity-60'
         ].join(' ')}
       >
         <div className="flex flex-col gap-0.5">
@@ -1135,6 +1141,8 @@ function AiSection({
           </span>
         ) : locked ? (
           <span className={managedChipCls}>Managed by your organization</span>
+        ) : !anthropicAllowed ? (
+          <span className={managedChipCls}>Restricted by your organization</span>
         ) : (
           <button
             type="button"
@@ -1469,6 +1477,11 @@ function CliIntegration({
   // in-panel provider switch the user made on the AiSection grid while it was running.
   const providerRef = useRef(provider)
   providerRef.current = provider
+  // Independent of `locked`: an org can restrict the data-residency allowlist (settings.allowedProviders)
+  // without also locking the 'provider' managed key. Gate the CLI quick-select cards the same way the
+  // provider tiles are gated, so a disallowed provider can't be activated from here either.
+  const orgAllowed = settings.allowedProviders
+  const isAllowed = (id: ProviderId): boolean => !orgAllowed || orgAllowed.includes(id)
 
   // Guards every setState below against firing after this component unmounts (e.g. the user closes
   // Settings while runInstall's cliInstall/cliTest awaits are still in flight — those IPC calls keep
@@ -1612,6 +1625,8 @@ function CliIntegration({
     const st = getState(id)
     const isActive = provider === id
     const isConnected = !!cliConnected[id]
+    const allowed = isAllowed(id)
+    const cardLocked = locked || !allowed
     const desc =
       id === 'claude-cli'
         ? 'Routes questions through your local Claude Code install. Uses your Pro or Max subscription.'
@@ -1640,8 +1655,10 @@ function CliIntegration({
             <span className={activePill}>
               <CircleCheck size={12} /> Active
             </span>
+          ) : locked ? (
+            <span className={managedChipCls}>Managed by your organization</span>
           ) : (
-            locked && <span className={managedChipCls}>Managed by your organization</span>
+            !allowed && <span className={managedChipCls}>Restricted by your organization</span>
           )}
         </div>
 
@@ -1703,7 +1720,7 @@ function CliIntegration({
             <button
               type="button"
               onClick={() => startSetup(id)}
-              disabled={locked}
+              disabled={cardLocked}
               className={primaryBtn}
             >
               <Link2 size={12} />
@@ -1730,7 +1747,7 @@ function CliIntegration({
             <button
               type="button"
               onClick={() => void connect(id)}
-              disabled={locked}
+              disabled={cardLocked}
               className={primaryBtn}
             >
               <Link2 size={12} />
@@ -1748,7 +1765,7 @@ function CliIntegration({
             <button
               type="button"
               onClick={() => void runInstall(id)}
-              disabled={locked}
+              disabled={cardLocked}
               className={primaryBtn}
             >
               <Link2 size={12} />
@@ -1766,7 +1783,7 @@ function CliIntegration({
             <button
               type="button"
               onClick={() => startSetup(id)}
-              disabled={locked}
+              disabled={cardLocked}
               className="no-drag cl-focus text-[11px] text-[color:var(--cl-muted-foreground)] hover:text-[color:var(--cl-foreground)] disabled:opacity-50"
             >
               Reconnect
@@ -2345,6 +2362,11 @@ function DustSetup({
   // The one-click CLI setup (dustImportCli/dustSetupCli) is cross-platform now (dust-secret-store reads
   // the session on macOS/Windows/Linux), so it's the primary path on every OS — no per-platform gating.
   const locked = settings.managedKeys.includes('provider')
+  // Same independent-key gap as the provider tiles: allowedProviders can restrict Dust without also
+  // locking the 'provider' managed key — badge those controls "Restricted" rather than letting a save
+  // activate a provider every ask would then reject.
+  const orgAllowed = settings.allowedProviders
+  const dustAllowed = !orgAllowed || orgAllowed.includes('dust')
   // Base agent is user-editable (picker below, defaults to the Métis agent, one-click reset) —
   // gated by the same 'providerModels' managed-key as the Advanced base-model field in AiSection, not
   // by the CLI-connection lock above. Spotlight Ref stays hard-locked (DUST_SPOTLIGHT_REF_AGENT_ID in
@@ -2845,7 +2867,11 @@ function DustSetup({
               >
                 {keySaving ? <Loader2 size={14} className="animate-spin" /> : null} Save
               </button>
-              {locked && <span className={managedChipCls}>Managed by your organization</span>}
+              {locked ? (
+                <span className={managedChipCls}>Managed by your organization</span>
+              ) : (
+                !dustAllowed && <span className={managedChipCls}>Restricted by your organization</span>
+              )}
             </div>
           )}
           <span className="pl-7 text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
@@ -2973,6 +2999,8 @@ function DustSetup({
             </span>
           ) : locked ? (
             <span className={managedChipCls}>Managed by your organization</span>
+          ) : !dustAllowed ? (
+            <span className={managedChipCls}>Restricted by your organization</span>
           ) : (
             connected && (
               <button
