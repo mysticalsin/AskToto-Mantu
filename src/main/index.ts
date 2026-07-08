@@ -283,7 +283,17 @@ function publicSettings(): PublicSettings {
  * response resolves null so the caller can treat this as optional. A hard timeout guards against a stuck
  * provider hanging the import indefinitely.
  */
-export async function generateRecapForTranscript(settings: Settings, transcript: string): Promise<string | null> {
+/**
+ * One-shot recap result. `not-configured` (no ready provider / no model / provider disallowed by
+ * policy) is distinct from `provider-error` (the provider WAS called but returned an error, e.g. a
+ * 403 quota wall or 401 bad key) so callers can show the user the RIGHT next step instead of a
+ * blanket "configure a provider" that misdirects them when the provider is already set up.
+ */
+export type RecapResult =
+  | { ok: true; recap: string }
+  | { ok: false; reason: 'not-configured' | 'provider-error' | 'empty'; message?: string }
+
+export async function generateRecapForTranscript(settings: Settings, transcript: string): Promise<RecapResult> {
   const allowed = getAllowedProviders()
   // Parity with the live meeting recap (App.tsx endReview): cascade the recap into Dust whenever it's
   // configured, regardless of the active chat provider (e.g. Kimi handles everyday chat, Dust still
@@ -295,7 +305,7 @@ export async function generateRecapForTranscript(settings: Settings, transcript:
     (!allowed || allowed.includes('dust'))
   const provider = dustReady ? 'dust' : settings.provider
   const def = PROVIDERS[provider]
-  if (allowed && !allowed.includes(provider)) return null
+  if (allowed && !allowed.includes(provider)) return { ok: false, reason: 'not-configured' }
   // Same "is the active provider actually usable" test publicSettings() exposes to the renderer as
   // providerReady — kept in lockstep here so import's best-effort recap is gated identically to every
   // interactive ask (never attempts a call the UI itself would refuse to offer).
@@ -308,7 +318,7 @@ export async function generateRecapForTranscript(settings: Settings, transcript:
           : provider === 'custom'
             ? /^https:\/\//i.test(settings.customBaseUrl) && !!settings.providerModels.custom
             : true)
-  if (!providerReady) return null
+  if (!providerReady) return { ok: false, reason: 'not-configured' }
 
   const req: AskStart = {
     id: randomBytes(8).toString('hex'),
@@ -328,16 +338,16 @@ export async function generateRecapForTranscript(settings: Settings, transcript:
     tier,
     resolveModelTier(provider, settings.providerModels, settings.providerModelsThinking, tier, settings.providerModelsDeep)
   )
-  if (def.kind !== 'cli' && !model) return null
+  if (def.kind !== 'cli' && !model) return { ok: false, reason: 'not-configured' }
   const key = getApiKey(provider)
   const baseURL = provider === 'custom' ? settings.customBaseUrl : provider === 'dust' ? settings.dustBaseUrl : def.baseUrl
 
   auditLog('provider.request', { provider, model, mode: 'recap', phase: 'import-recap' })
 
-  return new Promise<string | null>((resolve) => {
+  return new Promise<RecapResult>((resolve) => {
     let text = ''
     let settled = false
-    const finish = (value: string | null): void => {
+    const finish = (value: RecapResult): void => {
       if (settled) return
       settled = true
       clearTimeout(hardTimeout)
@@ -347,7 +357,7 @@ export async function generateRecapForTranscript(settings: Settings, transcript:
     // provider that keeps trickling tokens without ever calling onDone.
     const hardTimeout = setTimeout(() => {
       handle.abort()
-      finish(null)
+      finish({ ok: false, reason: 'provider-error', message: 'The recap timed out. Try again.' })
     }, 180_000)
     const handle = createStream({
       providerId: provider,
@@ -373,8 +383,11 @@ export async function generateRecapForTranscript(settings: Settings, transcript:
         onDelta: (delta) => {
           text += delta
         },
-        onDone: () => finish(text.trim() || null),
-        onError: () => finish(null)
+        onDone: () => {
+          const recap = text.trim()
+          finish(recap ? { ok: true, recap } : { ok: false, reason: 'empty' })
+        },
+        onError: (message) => finish({ ok: false, reason: 'provider-error', message })
       }
     })
   })
@@ -1557,12 +1570,23 @@ function registerIpc(): void {
       return { ok: false, error: read.error || 'No transcript to summarize.' }
     }
     try {
-      const recap = await generateRecapForTranscript(getSettings(), transcriptLinesToText(read.lines))
-      if (!recap) return { ok: false, error: 'No AI provider is configured. Add one in Settings.' }
-      const saved = await updateMeetingRecap(getSettings(), safeName, recap)
+      const result = await generateRecapForTranscript(getSettings(), transcriptLinesToText(read.lines))
+      if (!result.ok) {
+        // Distinguish "you never set up a provider" from "the provider you set up rejected the call"
+        // (quota/auth/timeout) — the latter must NOT tell the user to go configure a provider they
+        // already have. The provider's own message (e.g. a 403 quota notice) is the actionable signal.
+        const error =
+          result.reason === 'not-configured'
+            ? 'No AI provider is configured. Add one in Settings.'
+            : result.reason === 'empty'
+              ? 'The AI provider returned an empty recap. Try again.'
+              : result.message || 'The AI provider could not generate a recap. Check your plan or API key.'
+        return { ok: false, error }
+      }
+      const saved = await updateMeetingRecap(getSettings(), safeName, result.recap)
       if (!saved.ok) return { ok: false, error: saved.error || 'Could not save the recap.' }
       auditLog('transcript.recap_edited', { file: safeName, generated: true })
-      return { ok: true, recap }
+      return { ok: true, recap: result.recap }
     } catch (err) {
       return { ok: false, error: err instanceof Error ? err.message : 'Could not generate a recap.' }
     }
