@@ -23,8 +23,10 @@ import type {
   ImportAudioPickResult,
   ImportAudioChunkResult
 } from '@shared/ipc'
+import { transcriptLinesToText } from '@shared/ipc'
 import { ensureParakeetModel, parakeetTranscribe } from './parakeet'
 import { saveMeeting } from './transcripts'
+import { updateMeetingRecap } from './recall'
 import { enqueueIngest } from './brain/ingest'
 import { auditLog } from './logger'
 
@@ -132,6 +134,19 @@ function ensureQuitHook(): void {
   app.on('will-quit', abandonImportSession)
 }
 
+// Injected once by main/index.ts at startup (mirrors logger.ts's setAuditActor/actorResolver pattern) —
+// avoids a circular import: index.ts already imports handleImportChunk etc. from this module, so this
+// module reaching back into index.ts for the recap generator would create a cycle. Stays null until
+// index.ts wires it, so this module's own tests (which never call the setter) exercise the exact
+// pre-recap behavior unchanged.
+type RecapGenerator = (settings: Settings, transcript: string) => Promise<string | null>
+let recapGenerator: RecapGenerator | null = null
+
+/** Register the one-shot recap generator (main/index.ts's generateRecapForTranscript). Call once at startup. */
+export function setRecapGenerator(fn: RecapGenerator): void {
+  recapGenerator = fn
+}
+
 /** Persist the session's accumulated lines as a normal meeting — shared by the done-chunk save below and
  *  by a mid-import failure that still has some transcribed lines worth keeping (see handleImportChunk's
  *  catch block). Chunks normally arrive (and transcribe) strictly in order, but sorts defensively so a
@@ -139,7 +154,8 @@ function ensureQuitHook(): void {
 async function saveImportSession(
   settings: Settings,
   session: ImportSession,
-  partial: boolean
+  partial: boolean,
+  onProgress: (pct: number, stage: 'transcribing' | 'saving' | 'downloading' | 'recap') => void
 ): Promise<{ file: string; lines: TranscriptLine[] }> {
   const sortedLines = [...session.lines].sort((a, b) => a.t - b.t)
   const meeting: SaveMeeting = {
@@ -152,6 +168,23 @@ async function saveImportSession(
   const file = await saveMeeting(settings, meeting)
   auditLog('transcript.imported', { lines: sortedLines.length, encrypted: !!settings.encryptTranscripts, partial })
   enqueueIngest(file) // Mantu Intelligence brain — background extraction; never blocks the save
+
+  // Best-effort AI recap — a live meeting gets one via App.tsx's endReview() → ask.run({mode:'recap'});
+  // import had none until now (recap always saved empty). Never blocks or fails the import: the transcript
+  // save above already landed, so no configured provider, a stuck stream, or any thrown error here just
+  // leaves recap empty (today's behavior) — RecallView's "Generate recap" action can retry later.
+  if (sortedLines.length > 0 && recapGenerator) {
+    onProgress(100, 'recap')
+    try {
+      const recap = await recapGenerator(settings, transcriptLinesToText(sortedLines))
+      if (recap) {
+        await updateMeetingRecap(settings, file, recap)
+        auditLog('transcript.recap_edited', { file: basename(file), generated: true })
+      }
+    } catch {
+      // best-effort — the saved transcript above is the guarantee, not the recap
+    }
+  }
   return { file, lines: sortedLines }
 }
 
@@ -170,7 +203,7 @@ async function saveImportSession(
 export async function handleImportChunk(
   settings: Settings,
   chunk: ImportAudioChunk,
-  onProgress: (pct: number, stage: 'transcribing' | 'saving' | 'downloading') => void
+  onProgress: (pct: number, stage: 'transcribing' | 'saving' | 'downloading' | 'recap') => void
 ): Promise<ImportAudioChunkResult> {
   ensureQuitHook()
 
@@ -200,7 +233,7 @@ export async function handleImportChunk(
     const errMsg = e instanceof Error ? e.message : String(e)
     if (session.lines.length > 0) {
       try {
-        const { file, lines } = await saveImportSession(settings, session, true)
+        const { file, lines } = await saveImportSession(settings, session, true, onProgress)
         abandonImportSession()
         return {
           ok: false,
@@ -222,7 +255,7 @@ export async function handleImportChunk(
 
   onProgress(100, 'saving')
   try {
-    const { file, lines } = await saveImportSession(settings, session, false)
+    const { file, lines } = await saveImportSession(settings, session, false, onProgress)
     return { ok: true, file, title: session.title, lines }
   } catch (e) {
     return { ok: false, error: e instanceof Error ? e.message : String(e) }

@@ -43,7 +43,8 @@ import {
   type ImportAudioChunk,
   type ImportAudioPickResult,
   type ImportAudioChunkResult,
-  type ImportAudioProgress
+  type ImportAudioProgress,
+  type RecallGenerateRecapResult
 } from '@shared/ipc'
 import type { ProviderId } from '@shared/providers'
 
@@ -158,6 +159,10 @@ const api = {
   // encrypted/plaintext state.
   recallUpdateRecap: (file: string, recap: string): Promise<{ ok: boolean; error?: string }> =>
     ipcRenderer.invoke(IPC.recallUpdateRecap, { file, recap }),
+  // On-demand AI recap for a saved meeting with none yet (e.g. an import whose best-effort recap was
+  // skipped for lack of a configured provider). Saves through the same path as recallUpdateRecap.
+  recallGenerateRecap: (file: string): Promise<RecallGenerateRecapResult> =>
+    ipcRenderer.invoke(IPC.recallGenerateRecap, file),
   // Delete every saved meeting + the knowledge graph. Main pops its own (extra-emphatic) confirm dialog.
   recallDeleteAll: (): Promise<{ ok: boolean; deleted: number; failed?: string[]; error?: string }> =>
     ipcRenderer.invoke(IPC.recallDeleteAll),
