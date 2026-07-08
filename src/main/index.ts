@@ -40,7 +40,9 @@ import {
   DEFAULT_SHORTCUTS,
   type HotkeyAction,
   type PublicSettings,
-  type CalendarEvent
+  type CalendarEvent,
+  type AskStart,
+  type Settings
 } from '@shared/ipc'
 import {
   getSettings,
@@ -80,7 +82,7 @@ import { initLogging, mainLog, auditLog } from './logger'
 import { authStatus, signIn as authSignIn, signOut as authSignOut, requireAuth } from './auth'
 import { calendarToday } from './calendar'
 import { parakeetModelReady, ensureParakeetModel, parakeetTranscribe, parakeetRelease } from './parakeet'
-import { pickAudioFile, readPickedAudioFile, handleImportChunk, abandonImportSession } from './import-audio'
+import { pickAudioFile, readPickedAudioFile, handleImportChunk, abandonImportSession, setRecapGenerator } from './import-audio'
 import {
   saveMeeting,
   saveNote,
@@ -129,7 +131,7 @@ import {
   purgeGraphArtifacts
 } from './graphify'
 import { runFirstRunBootstrap } from './bootstrap'
-import { SaveMeetingSchema, SaveNoteSchema } from '@shared/ipc'
+import { SaveMeetingSchema, SaveNoteSchema, transcriptLinesToText } from '@shared/ipc'
 import { PROVIDERS, resolveModelTier, applyInteractiveGuardrail, type ProviderId } from '@shared/providers'
 import { routeTier } from '@shared/routing'
 import { redactSecrets } from '@shared/redact'
@@ -271,6 +273,109 @@ function publicSettings(): PublicSettings {
     version: app.getVersion()
   }
 }
+
+/**
+ * Best-effort, one-shot recap for a transcript with no live ask session — used by imported audio (see
+ * main/import-audio.ts), which today saves with recap:'' because the renderer's ask machinery (App.tsx's
+ * endReview → ask.run({mode:'recap'})) never runs for an import. Mirrors the askStart handler's own recap
+ * path (same provider/model/tier resolution, same buildSystem + createStream call) but never streams to
+ * the renderer (no IPC, no `streams` map entry) and never throws: any config gap, stream error, or empty
+ * response resolves null so the caller can treat this as optional. A hard timeout guards against a stuck
+ * provider hanging the import indefinitely.
+ */
+export async function generateRecapForTranscript(settings: Settings, transcript: string): Promise<string | null> {
+  const allowed = getAllowedProviders()
+  // Parity with the live meeting recap (App.tsx endReview): cascade the recap into Dust whenever it's
+  // configured, regardless of the active chat provider (e.g. Kimi handles everyday chat, Dust still
+  // writes the meeting notes) — Dust's own thinking-agent resolution respects the user's pick.
+  const dustReady =
+    hasApiKey('dust') &&
+    !!settings.dustWorkspaceId.trim() &&
+    !!settings.providerModels.dust &&
+    (!allowed || allowed.includes('dust'))
+  const provider = dustReady ? 'dust' : settings.provider
+  const def = PROVIDERS[provider]
+  if (allowed && !allowed.includes(provider)) return null
+  // Same "is the active provider actually usable" test publicSettings() exposes to the renderer as
+  // providerReady — kept in lockstep here so import's best-effort recap is gated identically to every
+  // interactive ask (never attempts a call the UI itself would refuse to offer).
+  const providerReady =
+    def.kind === 'cli'
+      ? !!settings.cliConnected[provider]
+      : hasApiKey(provider) &&
+        (provider === 'dust'
+          ? !!settings.dustWorkspaceId.trim() && !!settings.providerModels.dust
+          : provider === 'custom'
+            ? /^https:\/\//i.test(settings.customBaseUrl) && !!settings.providerModels.custom
+            : true)
+  if (!providerReady) return null
+
+  const req: AskStart = {
+    id: randomBytes(8).toString('hex'),
+    mode: 'recap',
+    prompt: '',
+    transcript,
+    kind: 'answer',
+    history: []
+  }
+  const tier = routeTier(req, settings.thinkingMode)
+  const model = applyInteractiveGuardrail(
+    provider,
+    tier,
+    resolveModelTier(provider, settings.providerModels, settings.providerModelsThinking, tier, settings.providerModelsDeep)
+  )
+  if (def.kind !== 'cli' && !model) return null
+  const key = getApiKey(provider)
+  const baseURL = provider === 'custom' ? settings.customBaseUrl : provider === 'dust' ? settings.dustBaseUrl : def.baseUrl
+
+  auditLog('provider.request', { provider, model, mode: 'recap', phase: 'import-recap' })
+
+  return new Promise<string | null>((resolve) => {
+    let text = ''
+    let settled = false
+    const finish = (value: string | null): void => {
+      if (settled) return
+      settled = true
+      clearTimeout(hardTimeout)
+      resolve(value)
+    }
+    // Belt-and-braces above createStream's own 120s idle watchdog — an import must never hang forever on a
+    // provider that keeps trickling tokens without ever calling onDone.
+    const hardTimeout = setTimeout(() => {
+      handle.abort()
+      finish(null)
+    }, 180_000)
+    const handle = createStream({
+      providerId: provider,
+      kind: def.kind,
+      apiKey: key,
+      baseURL,
+      workspaceId: settings.dustWorkspaceId,
+      model,
+      temperature: settings.temperature,
+      idleMs: 120_000,
+      system: buildSystem(
+        req,
+        settings.mode,
+        settings.profile,
+        settings.modePrompts,
+        settings.contextDocs[settings.mode] || [],
+        settings.outputLanguage,
+        settings.summaryLanguage,
+        settings.systemPrompt
+      ),
+      req,
+      handlers: {
+        onDelta: (delta) => {
+          text += delta
+        },
+        onDone: () => finish(text.trim() || null),
+        onError: () => finish(null)
+      }
+    })
+  })
+}
+setRecapGenerator(generateRecapForTranscript)
 
 function topCenter(width: number, height: number): { x: number; y: number } {
   const { workArea } = screen.getDisplayNearestPoint(screen.getCursorScreenPoint())
@@ -1432,6 +1537,31 @@ function registerIpc(): void {
     const result = await updateMeetingRecap(getSettings(), parsed.data.file, parsed.data.recap)
     if (result.ok) auditLog('transcript.recap_edited', { file: basename(parsed.data.file) })
     return result
+  })
+
+  // Recall generate-recap: on-demand AI recap for a saved meeting with none yet — the manual fallback for
+  // RecallView's "Generate recap" action (e.g. an import whose best-effort recap was skipped because no
+  // provider was configured at the time, or the user just wants a fresh one). Reuses the exact same
+  // one-shot generator import itself uses (generateRecapForTranscript), so it's gated by the same
+  // provider-readiness rules as any other ask, and saves through updateMeetingRecap like a manual edit.
+  ipcMain.handle(IPC.recallGenerateRecap, async (e, file: unknown) => {
+    assertMainWindow(e)
+    if (!requireAuth()) return { ok: false, error: 'Sign in with your Mantu account first.' }
+    const safeName = basename(String(file ?? ''))
+    const read = await recallRead(safeName)
+    if (!read.ok || !read.lines || read.lines.length === 0) {
+      return { ok: false, error: read.error || 'No transcript to summarize.' }
+    }
+    try {
+      const recap = await generateRecapForTranscript(getSettings(), transcriptLinesToText(read.lines))
+      if (!recap) return { ok: false, error: 'No AI provider is configured. Add one in Settings.' }
+      const saved = await updateMeetingRecap(getSettings(), safeName, recap)
+      if (!saved.ok) return { ok: false, error: saved.error || 'Could not save the recap.' }
+      auditLog('transcript.recap_edited', { file: safeName, generated: true })
+      return { ok: true, recap }
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : 'Could not generate a recap.' }
+    }
   })
 
   // 90-Second Debrief (innovation #6): the user's off-record gut-read, appended to the saved meeting.

@@ -83,6 +83,7 @@ export const IPC = {
   recallDelete: 'recall:delete',
   recallRename: 'recall:rename',
   recallUpdateRecap: 'recall:update-recap',
+  recallGenerateRecap: 'recall:generateRecap',
   recallDeleteAll: 'recall:deleteAll',
   debriefSave: 'debrief:save',
   brainCommitmentSettle: 'brain:commitmentSettle',
@@ -204,6 +205,14 @@ export const TranscriptLineSchema = z.object({
 })
 export type TranscriptLine = z.infer<typeof TranscriptLineSchema>
 
+/** Flatten transcript lines into the plain "THEM: .../YOU: ..." text the recap/summary/suggest prompts
+ *  expect (see main/llm/shared.ts's baseUserText and the renderer's own listen.ts text() — same convention,
+ *  kept here so main-process callers that hand a saved/accumulated transcript to a recap generator (see
+ *  main/import-audio.ts and recall:generateRecap in main/index.ts) don't each re-derive the format). */
+export function transcriptLinesToText(lines: TranscriptLine[]): string {
+  return lines.map((l) => `${l.speaker === 'them' ? 'THEM' : 'YOU'}: ${l.text}`).join('\n')
+}
+
 export const SaveMeetingSchema = z.object({
   title: z.string().default(''),
   mode: z.string().default('general'),
@@ -272,7 +281,7 @@ export interface ImportAudioChunkResult {
 export interface ImportAudioProgress {
   sessionId: string
   pct: number
-  stage: 'transcribing' | 'saving' | 'downloading'
+  stage: 'transcribing' | 'saving' | 'downloading' | 'recap'
 }
 
 /** Payload for brain:setDealOutcome — the human marks a deal open/won/lost (see DealEntitySchema.outcome
@@ -834,6 +843,15 @@ export interface RecallReadResult {
   startedAt?: number
   recap?: string
   lines?: TranscriptLine[]
+}
+
+/** Result of recall:generateRecap — an on-demand (or import's own best-effort) AI recap for a saved
+ *  meeting. `ok:false` covers both "no configured provider" and any generation/save failure; `error`
+ *  carries a user-facing reason either way. */
+export interface RecallGenerateRecapResult {
+  ok: boolean
+  recap?: string
+  error?: string
 }
 
 export interface DustAgentsResponse {

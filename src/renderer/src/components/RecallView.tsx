@@ -12,7 +12,8 @@ import {
   Pencil,
   Brain,
   Upload,
-  Lock
+  Lock,
+  Sparkles
 } from 'lucide-react'
 import { TextButton } from './ui'
 import { accelLabel } from '../lib/keys'
@@ -25,7 +26,8 @@ import type {
   GraphRelated,
   CalendarTodayResult,
   CalendarEvent,
-  ImportAudioPickResult
+  ImportAudioPickResult,
+  ImportAudioChunkResult
 } from '@shared/ipc'
 
 // ---------------------------------------------------------------------------
@@ -631,10 +633,21 @@ export function RecallView({
   const listRef = useRef<HTMLDivElement>(null)
   /** "Import audio" button state — idle outside a run; disables the button and drives its label. */
   const [importState, setImportState] = useState<{
-    stage: 'idle' | 'decoding' | 'downloading' | 'transcribing' | 'saving'
+    stage: 'idle' | 'decoding' | 'downloading' | 'transcribing' | 'saving' | 'recap'
     pct: number
     error: string | null
   }>({ stage: 'idle', pct: 0, error: null })
+  /** Offers a manual "Generate recap" action for the meeting an import just finished saving. Import
+   *  already attempts a best-effort AI recap itself (main/import-audio.ts), but MeetingSummary carries no
+   *  recap field, so there's no reliable way to show this as a per-row "recap is empty" affordance for
+   *  every listed meeting — this transient offer (cleared on the next import, or once used) is the
+   *  fallback placement. null = nothing to offer. */
+  const [recapOffer, setRecapOffer] = useState<{
+    file: string
+    title: string
+    busy: boolean
+    error: string | null
+  } | null>(null)
 
   // Clear/set one row's rename-or-delete error without touching any other row's — see rowErrors above.
   const clearRowError = useCallback((file: string): void => {
@@ -764,6 +777,7 @@ export function RecallView({
   // one transcribed on-device before the next is sent. See main/import-audio.ts for the save + ingest.
   const importAudio = useCallback(async (): Promise<void> => {
     setImportState({ stage: 'decoding', pct: 0, error: null })
+    setRecapOffer(null) // a new import supersedes any leftover offer from a previous one
     let picked: ImportAudioPickResult
     try {
       picked = await window.toto.importAudioPick()
@@ -789,7 +803,7 @@ export function RecallView({
         if (d.sessionId !== sessionId) return
         setImportState({ stage: d.stage, pct: d.pct, error: null })
       })
-      let last: { ok: boolean; error?: string } | undefined
+      let last: ImportAudioChunkResult | undefined
       for (let seq = 0; seq < chunks.length; seq++) {
         last = await window.toto.importAudioTranscribe({
           sessionId,
@@ -803,6 +817,10 @@ export function RecallView({
         if (!last?.ok) throw new Error(last?.error || 'Import failed.')
       }
       setImportState({ stage: 'idle', pct: 0, error: null })
+      // Import already tried a best-effort AI recap itself (main/import-audio.ts) — this offer is only the
+      // manual fallback (e.g. no provider was configured at the time), so it never asserts the recap is
+      // actually missing, just that generating/regenerating one is available.
+      if (last?.file) setRecapOffer({ file: last.file, title: last.title || 'this meeting', busy: false, error: null })
       refreshList()
     } catch (e) {
       setImportState({ stage: 'idle', pct: 0, error: e instanceof Error ? e.message : 'Could not import this recording.' })
@@ -815,6 +833,30 @@ export function RecallView({
       unsub?.()
     }
   }, [refreshList])
+
+  // Manual "Generate recap" fallback (see recapOffer above) — calls the same one-shot generator import's
+  // own best-effort attempt uses, so it's gated by the identical provider-readiness rules. Not useCallback:
+  // it isn't passed to a memoized child, just used directly from the button below.
+  const generateRecapNow = async (file: string): Promise<void> => {
+    setRecapOffer((prev) => (prev && prev.file === file ? { ...prev, busy: true, error: null } : prev))
+    try {
+      const r = await window.toto.recallGenerateRecap(file)
+      if (r.ok) {
+        setRecapOffer(null)
+        refreshList()
+      } else {
+        setRecapOffer((prev) =>
+          prev && prev.file === file ? { ...prev, busy: false, error: r.error || 'Could not generate a recap.' } : prev
+        )
+      }
+    } catch (e) {
+      setRecapOffer((prev) =>
+        prev && prev.file === file
+          ? { ...prev, busy: false, error: e instanceof Error ? e.message : 'Could not generate a recap.' }
+          : prev
+      )
+    }
+  }
 
   // Single fetch owner: immediate on mount / empty query, debounced for typed searches.
   // A stale-guard drops out-of-order resolutions so a slow earlier response can't overwrite a newer one.
@@ -950,11 +992,26 @@ export function RecallView({
                 ? `Downloading model ${importState.pct}%`
                 : importState.stage === 'transcribing'
                   ? `Transcribing ${importState.pct}%`
-                  : 'Saving…'}
+                  : importState.stage === 'recap'
+                    ? 'Generating recap…'
+                    : 'Saving…'}
         </TextButton>
       </div>
       {importState.error && (
         <div className="mb-2 px-1 text-[11px] text-[var(--color-danger)]">{importState.error}</div>
+      )}
+      {recapOffer && (
+        <div className="mb-2 flex items-center gap-2 px-1">
+          <TextButton
+            icon={Sparkles}
+            onClick={() => void generateRecapNow(recapOffer.file)}
+            disabled={recapOffer.busy}
+            title={`Generate an AI recap for "${recapOffer.title}"`}
+          >
+            {recapOffer.busy ? 'Generating recap…' : `Generate recap for "${recapOffer.title}"`}
+          </TextButton>
+          {recapOffer.error && <span className="text-[11px] text-[var(--color-danger)]">{recapOffer.error}</span>}
+        </div>
       )}
 
       {/* ── UPCOMING CALENDAR SECTION ───────────────────────────────────── */}
