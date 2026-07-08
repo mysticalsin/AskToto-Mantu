@@ -139,7 +139,10 @@ function ensureQuitHook(): void {
 // module reaching back into index.ts for the recap generator would create a cycle. Stays null until
 // index.ts wires it, so this module's own tests (which never call the setter) exercise the exact
 // pre-recap behavior unchanged.
-type RecapGenerator = (settings: Settings, transcript: string) => Promise<string | null>
+type RecapGenerator = (
+  settings: Settings,
+  transcript: string
+) => Promise<{ ok: true; recap: string } | { ok: false; reason: string; message?: string }>
 let recapGenerator: RecapGenerator | null = null
 
 /** Register the one-shot recap generator (main/index.ts's generateRecapForTranscript). Call once at startup. */
@@ -177,8 +180,8 @@ async function saveImportSession(
     onProgress(100, 'recap')
     try {
       const recap = await recapGenerator(settings, transcriptLinesToText(sortedLines))
-      if (recap) {
-        await updateMeetingRecap(settings, file, recap)
+      if (recap.ok) {
+        await updateMeetingRecap(settings, file, recap.recap)
         auditLog('transcript.recap_edited', { file: basename(file), generated: true })
       }
     } catch {
