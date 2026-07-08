@@ -99,9 +99,13 @@ function isSafeConfigValue(v: string): boolean {
 }
 
 /** Reject a resolved config whose fields aren't structurally plausible before they reach the MSAL
- *  authority / the domain gate. Conservative on purpose (no strict GUID-only rule): tenantId may be a
- *  GUID OR a verified domain, so we validate character-safety rather than an exact shape — zero legit
- *  deployments are rejected, while injection-shaped garbage is. */
+ *  authority / the domain gate. This validator only enforces CHARACTER-safety (no whitespace / URL
+ *  metachars), not an exact shape, so injection-shaped garbage is rejected while GUIDs/domains pass.
+ *  NOTE for the auth owner: although the MSAL authority URL accepts a domain-form tenantId, the runtime
+ *  tenant gate in signIn() compares against the id-token `tid` claim, which Entra always issues as the
+ *  tenant GUID — so a domain-form tenantId would authenticate then be rejected as "outside your
+ *  organization" on every sign-in. In practice tenantId must be the GUID; either enforce that here or
+ *  resolve the domain→GUID before the gate compare. (Fail-closed, so a lockout bug, not a bypass.) */
 function isPlausibleAzureConfig(c: AzureConfig): boolean {
   return isSafeConfigValue(c.clientId) && isSafeConfigValue(c.tenantId) && isSafeConfigValue(c.allowedDomain)
 }
@@ -735,10 +739,13 @@ export async function signIn(): Promise<SignInResult> {
     })
     // Only NOW — a real interactive sign-in has actually validated and established a session — does
     // SSO count as "genuinely usable". See the sticky-configured comment block above readConfig().
-    // Persist the exact config that worked (LKG) so a later "Reset SSO" leaves the enforced gate
-    // recoverable (sign-in stays possible) rather than an unrecoverable brick.
-    writeStickyConfigured()
+    // ORDER MATTERS: write the LKG recovery config BEFORE the sticky flag, so the invariant
+    // "sticky ⟹ a recovery config exists" holds even if the process dies between the two writes.
+    // If the flag were written first and writeLkgConfig then failed/crashed, a later "Reset SSO" +
+    // session-expiry would strand the user behind an enforced wall with no config to sign in against
+    // (unrecoverable brick). LKG-first makes that ordering window safe.
     writeLkgConfig(cfg)
+    writeStickyConfigured()
     auditLog('auth.signin', { domain: cfg.allowedDomain })
     return { ok: true, configured: true, email }
   } catch (e) {
