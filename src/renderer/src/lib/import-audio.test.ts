@@ -41,11 +41,12 @@ describe('chunkAudio', () => {
     ])
   })
 
-  it('chunks are views over the original buffer, not copies (subarray, not slice)', () => {
+  it('chunks are copies with their own backing buffer, not views (slice, not subarray) — each chunk crosses IPC alone, and a shared-buffer view would serialize the whole recording per chunk', () => {
     const samples = new Float32Array(IMPORT_SAMPLE_RATE * 40)
     samples[0] = 42
     const chunks = chunkAudio(samples)
-    expect(chunks[0].buffer).toBe(samples.buffer)
+    expect(chunks[0].buffer).not.toBe(samples.buffer)
+    expect(chunks[0].buffer.byteLength).toBe(chunks[0].length * Float32Array.BYTES_PER_ELEMENT)
     expect(chunks[0][0]).toBe(42)
   })
 })

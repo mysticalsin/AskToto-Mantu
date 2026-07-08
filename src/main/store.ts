@@ -273,17 +273,35 @@ export function getSettings(): Settings {
   if (whole.success) {
     value = whole.data
   } else {
-    // Tolerant migration: base is already valid; keep only the user keys that still validate, then
-    // repair the one cross-field invariant (provider:'custom' needs an https customBaseUrl) so a stale
-    // settings.json can NEVER make getSettings throw and brick every IPC handler that reads it.
+    // Tolerant migration: base is already valid; keep only the user keys that still validate. This can
+    // still fail SettingsSchema's one cross-field refine — provider:'custom' needs an https customBaseUrl
+    // — even though every individual field validates fine on its own. That's a normal, expected
+    // mid-configuration state (user just picked "Custom" and hasn't pasted a base URL yet), not
+    // corruption, so don't punish it by reverting the provider back to Anthropic on every single
+    // getSettings() call (that made Custom impossible to ever configure through the UI — the base-URL
+    // input never got a chance to render before the provider bounced back). Keep provider:'custom' as a
+    // valid-but-not-ready settings object instead: the readiness gate in index.ts/providerReady already
+    // blocks answering until an https customBaseUrl actually exists. Only fall back to full defaults when
+    // the merged settings don't even validate field-by-field — a genuinely stale/hand-edited
+    // settings.json — so getSettings can still never throw/brick the app.
     const merged: Record<string, unknown> = { ...base, ...validKeysOnly(raw) }
-    if (merged.provider === 'custom' && !/^https:\/\//i.test(String(merged.customBaseUrl ?? ''))) {
-      // Reset to a provider-INDEPENDENT safe default — base.provider can itself be the invalid 'custom'
-      // (e.g. from managed-config), which would make the repair a no-op and getSettings throw org-wide.
-      merged.provider = DEFAULT_SETTINGS.provider
+    const repaired = BaseSettingsSchema.safeParse(merged)
+    value = repaired.success ? (repaired.data as Settings) : SettingsSchema.parse(DEFAULT_SETTINGS) // always valid
+  }
+
+  // Org allowlist (data-residency/governance): if the resolved active provider isn't on the approved
+  // list, coerce it to the first approved provider — mirrors the together/fireworks migration above.
+  // Without this, an org policy that restricts providers (e.g. allowedProviders:['mistral']) but never
+  // sets/locks a managed default `provider` leaves a 'Decide later' user dead-ended on the unreachable
+  // DEFAULT_SETTINGS provider ('anthropic') with no in-app path to switch it.
+  const rawAllowed = getAllowedProviders()
+  if (rawAllowed) {
+    const allowedProviders = rawAllowed.filter((p): p is ProviderId =>
+      (PROVIDER_IDS as readonly string[]).includes(p)
+    )
+    if (allowedProviders.length && !allowedProviders.includes(value.provider)) {
+      value = { ...value, provider: allowedProviders[0] }
     }
-    const repaired = SettingsSchema.safeParse(merged)
-    value = repaired.success ? repaired.data : SettingsSchema.parse(DEFAULT_SETTINGS) // always valid
   }
 
   _settingsCache = { value, ...m }

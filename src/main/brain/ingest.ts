@@ -541,7 +541,7 @@ export function resumeBackfillIfPending(): void {
  *  Safe to call again while a backfill is already running (re-clicking "Index meetings",
  *  resumeBackfillIfPending firing mid-session) — it tops up the queue instead of resetting progress,
  *  and skips files already queued or completed so nothing is double-processed. */
-export function startBackfill(): { queued: number } {
+export function startBackfill(): { queued: number; reason?: 'no-provider' } {
   const s = getSettings()
   const idx = readIndex(s)
   if (!idx.backfillRequested) void updateIndex(s, (i) => { i.backfillRequested = true })
@@ -551,7 +551,10 @@ export function startBackfill(): { queued: number } {
   // just above) so resumeBackfillIfPending tries again on a later boot once a provider is configured.
   if (!hasUsableProvider(s)) {
     mainLog.warn('[brain] backfill requested but no configured AI provider — deferring until one is set up')
-    return { queued: 0 }
+    // Surface *why* nothing was queued so callers (the brainBackfill IPC handler, and in turn the
+    // renderer's "Index meetings" buttons in RecallView/BrainView) can tell "no provider configured"
+    // apart from "already fully indexed" instead of both silently returning {queued:0}.
+    return { queued: 0, reason: 'no-provider' }
   }
   const already = new Set(Object.entries(idx.ingested).filter(([, v]) => v.ok).map(([k]) => k))
   // The ingest log is a cache of "already extracted", not the source of truth — if it's ever out of

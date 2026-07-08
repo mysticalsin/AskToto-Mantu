@@ -63,16 +63,22 @@ import { enqueueIngest, startBackfill, brainBackfillProgress, resumeBackfillIfPe
 import { openIntelligenceWindow, isIntelligenceSender, syncIntelContentProtection } from './intelligence'
 import {
   readIndex as readBrainIndex,
+  writeIndex as writeBrainIndex,
   readGraph as readBrainGraph,
+  writeGraph as writeBrainGraph,
   readPerson as readBrainPerson,
+  writePerson as writeBrainPerson,
   readAccount as readBrainAccount,
+  writeAccount as writeBrainAccount,
   readDeal as readBrainDeal,
+  writeDeal as writeBrainDeal,
   listEntities as listBrainEntities,
   listMeetingExtractions as listBrainMeetingExtractions,
   readMeetingExtraction as readBrainMeetingExtraction,
   purgeBrain,
   setDealOutcome,
-  slugify as brainSlugify
+  slugify as brainSlugify,
+  brainDir as brainStoreDir
 } from './brain/store'
 import { buildBrainContext } from './brain/context'
 import { buildSystem } from './personas'
@@ -130,7 +136,7 @@ import {
 } from './graphify'
 import { runFirstRunBootstrap } from './bootstrap'
 import { SaveMeetingSchema, SaveNoteSchema } from '@shared/ipc'
-import { PROVIDERS, resolveModelTier, applyInteractiveGuardrail, type ProviderId } from '@shared/providers'
+import { PROVIDERS, resolveModelTier, applyInteractiveGuardrail, type ProviderId, type ProviderDef } from '@shared/providers'
 import { routeTier } from '@shared/routing'
 import { redactSecrets } from '@shared/redact'
 
@@ -512,11 +518,14 @@ async function captureScreenshot(): Promise<{ image: string; width: number; heig
   return { image: jpeg.toString('base64'), width: size.width, height: size.height, dispId: disp.id }
 }
 
-/** Thrown by getScreenshot() when Private View is on — lets callers show a specific message instead of a
- *  generic capture failure. */
+/** Thrown by getScreenshot() when "Hide from screen capture" is on — lets callers show a specific message
+ *  instead of a generic capture failure. Message text must match the actual Settings > Privacy toggle
+ *  label (it does not say "Private View" anywhere in the UI) so the error's own remedy is findable. */
 class PrivateViewBlockedError extends Error {
   constructor() {
-    super('Private View is on — screen capture is blocked. Turn it off to let AskToto see your screen.')
+    super(
+      "Screen capture is blocked because \"Hide from screen capture\" is on in Settings → Privacy. Turn it off there to let AskToto see your screen."
+    )
     this.name = 'PrivateViewBlockedError'
   }
 }
@@ -656,7 +665,11 @@ const shortcutActions: Record<string, () => void> = {
   'scroll-up': () => moveBy(0, -60),
   'scroll-down': () => moveBy(0, 60),
   'scroll-left': () => moveBy(-60, 0),
-  'scroll-right': () => moveBy(60, 0)
+  'scroll-right': () => moveBy(60, 0),
+  // 'settings' is in HOTKEY_ACTIONS (rebindable in Settings > Shortcuts) but had no handler here, so a
+  // user-assigned global key silently registered to a no-op. sendHotkey already shows the window if
+  // hidden before dispatching, and App.tsx's hotkey switch (view 'settings' case) opens Settings.
+  settings: () => sendHotkey('settings')
 }
 
 function resolveShortcut(action: HotkeyAction, user: Record<string, string>): string {
@@ -735,9 +748,14 @@ function startMeetingNotifier(): void {
         if (notifiedKeys.has(key)) continue
         notifiedKeys.add(key)
         try {
+          // msUntil can be anywhere from -30s (event already started) to +60s here — "starts in 1 minute"
+          // was hardcoded and wrong for the already-started/starting-now end of that range (most visible
+          // right after launch, when the first poll fires immediately for any event already inside the
+          // window). Phrase from the real remaining time instead of a fixed string.
+          const body = msUntil <= 5_000 ? `${ev.subject} is starting now` : `${ev.subject} starts in 1 minute`
           new Notification({
             title: 'Meeting starting soon',
-            body: `${ev.subject} starts in 1 minute`
+            body
           }).show()
         } catch {
           /* notifications may be blocked by the OS */
@@ -801,6 +819,10 @@ function createTray(): void {
 // power-save blocker for the duration of a meeting keeps the process at normal priority regardless of
 // window visibility. Module-level id: only one meeting can be active at a time.
 let recordingPowerSaveBlockerId: number | null = null
+// Guards the before-quit meeting-flush handler below from re-entering when it re-issues app.quit()
+// itself, and lets the IPC.windowQuit handler (whose caller, App.tsx's quitApp(), already AWAITS a
+// flush before invoking it) skip the redundant flush-and-wait entirely.
+let quitFlushDone = false
 function setRecordingPowerSaveBlock(on: boolean): void {
   if (on) {
     if (recordingPowerSaveBlockerId === null || !powerSaveBlocker.isStarted(recordingPowerSaveBlockerId)) {
@@ -821,6 +843,94 @@ function setTrayRecording(on: boolean): void {
   } else {
     tray.setToolTip('AskToto')
     if (process.platform === 'darwin') tray.setTitle(' ◉ Toto')
+  }
+}
+
+/**
+ * Remove one deleted meeting's derived footprint from the `.brain/` knowledge store — called right after
+ * recallDelete removes the transcript itself. deleteMeeting() only unlinks the .md file and its index.md
+ * row; without this, a meeting deleted via "right to erasure" kept living on in Mantu Intelligence
+ * (ingest log, its own extraction file, every person/account/deal entity's MeetingRef + meeting-keyed
+ * quotes/commitments/signals, and the graph's meeting node) — the exact GDPR-adjacent gap "delete this
+ * meeting" is supposed to close. Scoped to one file (unlike purgeBrain's full-store wipe). Best-effort and
+ * fully independent of the transcript delete's own success: never throws, so a locked/corrupt brain file
+ * can't surface as a failed meeting delete.
+ */
+async function purgeMeetingFromBrain(safeName: string): Promise<void> {
+  const s = getSettings()
+  try {
+    const idx = readBrainIndex(s)
+    if (safeName in idx.ingested) {
+      delete idx.ingested[safeName]
+      await writeBrainIndex(s, idx)
+    }
+  } catch (e) {
+    mainLog.warn('[brain] purge: could not update index for', safeName, e)
+  }
+  const fileSlug = brainSlugify(safeName)
+  try {
+    unlinkSync(join(brainStoreDir(s), 'meetings', `${fileSlug}.json`))
+  } catch {
+    /* no extraction was ever ingested for this meeting — nothing to remove */
+  }
+  const meetingId = `meeting:${fileSlug}`
+  const droppedEntityIds = new Set<string>()
+  const stripMeetingKeyed = <T extends { meeting: string }>(arr: T[]): T[] => arr.filter((x) => x.meeting !== safeName)
+  try {
+    for (const slug of listBrainEntities(s, 'person')) {
+      const p = readBrainPerson(s, slug)
+      if (!p || !p.meetings.some((m) => m.file === safeName)) continue
+      p.meetings = p.meetings.filter((m) => m.file !== safeName)
+      p.quotes = stripMeetingKeyed(p.quotes)
+      p.stance_trail = stripMeetingKeyed(p.stance_trail)
+      p.commitments = stripMeetingKeyed(p.commitments)
+      if (p.meetings.length === 0) {
+        unlinkSync(join(brainStoreDir(s), 'entities', 'person', `${slug}.json`))
+        droppedEntityIds.add(`person:${slug}`)
+      } else {
+        await writeBrainPerson(s, slug, p)
+      }
+    }
+    for (const slug of listBrainEntities(s, 'account')) {
+      const a = readBrainAccount(s, slug)
+      if (!a || !a.meetings.some((m) => m.file === safeName)) continue
+      a.meetings = a.meetings.filter((m) => m.file !== safeName)
+      a.win_reasons = stripMeetingKeyed(a.win_reasons)
+      a.loss_reasons = stripMeetingKeyed(a.loss_reasons)
+      if (a.meetings.length === 0) {
+        unlinkSync(join(brainStoreDir(s), 'entities', 'account', `${slug}.json`))
+        droppedEntityIds.add(`account:${slug}`)
+      } else {
+        await writeBrainAccount(s, slug, a)
+      }
+    }
+    for (const slug of listBrainEntities(s, 'deal')) {
+      const d = readBrainDeal(s, slug)
+      if (!d || !d.meetings.some((m) => m.file === safeName)) continue
+      d.meetings = d.meetings.filter((m) => m.file !== safeName)
+      d.signals = stripMeetingKeyed(d.signals)
+      d.missed_signals = stripMeetingKeyed(d.missed_signals)
+      d.commitments = stripMeetingKeyed(d.commitments)
+      d.feedback = stripMeetingKeyed(d.feedback)
+      if (d.meetings.length === 0) {
+        unlinkSync(join(brainStoreDir(s), 'entities', 'deal', `${slug}.json`))
+        droppedEntityIds.add(`deal:${slug}`)
+      } else {
+        await writeBrainDeal(s, slug, d)
+      }
+    }
+  } catch (e) {
+    mainLog.warn('[brain] purge: could not update entities for', safeName, e)
+  }
+  try {
+    const graph = readBrainGraph(s)
+    graph.nodes = graph.nodes.filter((n) => n.id !== meetingId && !droppedEntityIds.has(n.id))
+    graph.edges = graph.edges.filter(
+      (e) => e.from !== meetingId && e.to !== meetingId && !droppedEntityIds.has(e.from) && !droppedEntityIds.has(e.to)
+    )
+    await writeBrainGraph(s, graph)
+  } catch (e) {
+    mainLog.warn('[brain] purge: could not update graph for', safeName, e)
   }
 }
 
@@ -1226,7 +1336,14 @@ function registerIpc(): void {
     const { response } = win ? await dialog.showMessageBox(win, dialogOpts) : await dialog.showMessageBox(dialogOpts)
     if (response !== 0) return { ok: false, error: 'cancelled' }
     const result = await deleteMeeting(safeName)
-    if (result.ok) auditLog('transcript.deleted', { file: safeName })
+    if (result.ok) {
+      auditLog('transcript.deleted', { file: safeName })
+      // Erase the meeting's derived footprint too — otherwise it keeps surfacing in Mantu Intelligence
+      // (ingest count, entity meeting refs, the graph) after the transcript itself is gone. Fire-and-log,
+      // not awaited into the response: a slow/failed brain purge must never make the transcript delete
+      // (which already succeeded) look like it failed to the user.
+      purgeMeetingFromBrain(safeName).catch((e) => mainLog.warn('[brain] purge after delete failed for', safeName, e))
+    }
     return result
   })
 
@@ -1439,12 +1556,27 @@ function registerIpc(): void {
       const def = PROVIDERS[provider]
       if (allowed && !allowed.includes(provider)) {
         auditLog('provider.blocked', { provider })
-        if (attempted.length === 0)
+        if (attempted.length === 0) {
+          // Name an actual next step, not just what's wrong: prefer an approved provider that's already
+          // keyed/CLI-connected (so "switch to X" is immediately actionable), falling back to just naming
+          // the first approved provider when none of them are configured yet.
+          const approvedCandidates = allowed
+            .filter((p) => p !== provider)
+            .map((p) => ({ id: p as ProviderId, def: PROVIDERS[p as ProviderId] as ProviderDef | undefined }))
+            .filter((c): c is { id: ProviderId; def: ProviderDef } => !!c.def)
+          const readyApproved = approvedCandidates.find((c) =>
+            c.def.kind === 'cli' ? !!s.cliConnected[c.id] : getApiKey(c.id).length > 0
+          )
+          const approvedLabel = (readyApproved ?? approvedCandidates[0])?.def.label
           win?.webContents.send(IPC.streamError, {
             id: req.id,
-            message: `${def.label} is not on your organization's approved provider list.`
+            message: approvedLabel
+              ? `${def.label} is not on your organization's approved provider list. Switch to ${approvedLabel} in Settings.`
+              : `${def.label} is not on your organization's approved provider list.`
           })
-        else if (!failover(attempted.concat(provider))) win?.webContents.send(IPC.streamError, { id: req.id, message: 'No approved provider could answer.' })
+        } else if (!failover(attempted.concat(provider))) {
+          win?.webContents.send(IPC.streamError, { id: req.id, message: 'No approved provider could answer.' })
+        }
         return
       }
       const key = getApiKey(provider)
@@ -1486,7 +1618,7 @@ function registerIpc(): void {
       auditLog('provider.request', { provider, model, mode: req.mode, tier, retry: attempted.length > 0 })
       // Per-tier idle budget: a live suggest gives up fast to stay real-time; recaps + deep answers get the
       // full headroom. Bounds time-to-first-token and triggers failover when a provider stalls before a token.
-      const idleMs =
+      const baseIdleMs =
         req.mode === 'suggest'
           ? 15_000
           : req.mode === 'recap' || req.mode === 'summary'
@@ -1498,6 +1630,13 @@ function registerIpc(): void {
                 : req.mode === 'vision'
                   ? 60_000
                   : 45_000
+      // Each failover attempt re-derives a fresh, full idle budget with no shared cross-provider deadline —
+      // on a silent-drop offline network (captive portal / dead-gateway WiFi that accepts the connection
+      // then black-holes packets) that compounds into N x the base budget of blank spinner before the user
+      // sees any error. Retries (attempted.length > 0) get a much shorter cap: a healthy provider still
+      // answers well inside it, while a silent-drop network surfaces the "Connection error." in seconds.
+      const RETRY_IDLE_CAP_MS = 20_000
+      const idleMs = attempted.length > 0 ? Math.min(baseIdleMs, RETRY_IDLE_CAP_MS) : baseIdleMs
       const startedAt = Date.now()
       let gotToken = false
       let ttftMs: number | undefined
@@ -1554,12 +1693,18 @@ function registerIpc(): void {
             auditLog('provider.failed', { provider, gotToken })
             // Fall over only on a PRE-token failure (the user hasn't seen a partial answer yet).
             if (!gotToken && failover(attempted.concat(provider))) return
-            // A Dust auth error here means the token expired AND the silent refresh failed (session
-            // truly gone) — give a clear one-click path instead of a raw API error.
+            // A Dust auth error here means the pre-token auth check failed AND (where applicable) the
+            // silent refresh failed too — give a clear one-click path instead of a raw API error. The CLI
+            // token-refresh path (dustcli.ts) is darwin-only: on every other platform the ONLY way to
+            // connect Dust is pasting an API key, so "session expired / reconnect" is actively misleading
+            // there (there is no session to refresh) — a rejected key needs "paste a valid key", not
+            // "reconnect".
             const friendly =
               provider === 'dust' &&
               /oauth|unauthor|expired|authentication credential|invalid.*(token|credential)/i.test(message)
-                ? 'Your Dust session expired and could not refresh automatically. Open Settings and reconnect Dust once.'
+                ? process.platform === 'darwin'
+                  ? 'Your Dust session expired and could not refresh automatically. Open Settings and reconnect Dust once.'
+                  : 'Your Dust API key was rejected. Open Settings → Dust and paste a valid key.'
                 : message
             win?.webContents.send(IPC.streamError, { id: req.id, message: friendly })
           }
@@ -1940,6 +2085,10 @@ function registerIpc(): void {
   })
   ipcMain.handle(IPC.windowQuit, (e) => {
     assertMainWindow(e)
+    // App.tsx's quitApp() already `await`s flushLiveMeeting() (a best-effort saveTranscript) before
+    // invoking this — the meeting is already on disk by the time we get here, so the before-quit
+    // handler below must not add its own redundant flush-and-wait on top of an already-safe quit.
+    quitFlushDone = true
     app.quit()
   })
   // --- Auto-update ---
@@ -2012,6 +2161,14 @@ if (!app.requestSingleInstanceLock()) {
   if (process.platform === 'win32') {
     try { process.chdir(app.getPath('userData')) } catch { /* best-effort */ }
   }
+  // Reconcile the OS login item with the effective launchAtLogin setting once at boot. Covers two gaps:
+  // a managed-config/default launchAtLogin:true is never registered (setLoginItemSettings only ran on an
+  // explicit user patch), and OS-side drift (Task Manager Startup disable, AV cleanup, profile migration)
+  // silently diverges from the persisted preference. Idempotent — only writes when they actually differ.
+  try {
+    const want = getSettings().launchAtLogin
+    if (app.getLoginItemSettings().openAtLogin !== want) app.setLoginItemSettings({ openAtLogin: want })
+  } catch { /* best-effort — never block startup */ }
   // Unpackaged (dev/QA) runs show Electron's default icon in the Dock — brand them with the Mantu M so
   // a dev window is never mistaken for "the Electron thing". Packaged builds get build/icon.png baked
   // in by electron-builder (mac .icns / win .ico) and don't need this.
@@ -2291,6 +2448,28 @@ if (!app.requestSingleInstanceLock()) {
 
 app.on('window-all-closed', () => {
   // Overlay app: stay alive in tray; quit only via tray/menu.
+})
+
+// Tray "Quit AskToto" (and any other path that calls app.quit() directly, e.g. Cmd+Q on macOS) used to
+// tear the process down with zero drain: the in-progress meeting's transcript lives only in renderer
+// React state, written to disk solely by a 60s autosave interval, so a graceful-looking Quit could lose
+// up to 60s of a meeting or the entire thing for a sub-60s one. The in-app Settings "Quit" button is
+// already safe — App.tsx's quitApp() awaits flushLiveMeeting() before calling window.toto.quit(), which
+// marks quitFlushDone above and lets this handler no-op. For every other quit path, give the renderer one
+// bounded chance to save: recordingPowerSaveBlockerId is non-null for exactly the duration of an active
+// meeting (see setRecordingPowerSaveBlock), so it's a reliable "is a meeting in progress" signal here in
+// main. Reuses the existing 'reset' hotkey, which already runs saveMeetingNow() for a live meeting
+// (App.tsx's reset()) — no new IPC channel needed.
+app.on('before-quit', (e) => {
+  if (quitFlushDone || recordingPowerSaveBlockerId === null || !win || win.isDestroyed()) return
+  e.preventDefault()
+  quitFlushDone = true
+  try {
+    win.webContents.send(IPC.hotkey, 'reset')
+  } catch {
+    /* window may already be gone */
+  }
+  setTimeout(() => app.quit(), 2000)
 })
 
 app.on('will-quit', () => {

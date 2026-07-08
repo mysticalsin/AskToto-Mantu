@@ -129,10 +129,16 @@ function Block({ code, lang }: { code: string; lang: string }): JSX.Element {
 /* eslint-disable @typescript-eslint/no-explicit-any */
 /** Drop-in for streamdown/markdown `code`: block → shiki, inline → pill. */
 export function CodeBlock(props: any): JSX.Element {
-  const { className, children, inline } = props
+  const { className, children, inline, node } = props
   const text = String(children ?? '').replace(/\n$/, '')
   const lang = /language-(\w+)/.exec(className || '')?.[1] || ''
-  const isBlock = !inline && (lang !== '' || text.includes('\n'))
+  // A real fenced ``` block always spans >1 source line — the opening/closing fence lines —
+  // even when its content is a single line (e.g. ```\nnpm install foo\n```), whereas inline
+  // `code` always starts/ends on the same source line. Fall back to this AST position span
+  // (react-markdown's `node` prop) so a single-line, no-language fenced block isn't misread
+  // as inline just because the newline/language heuristic alone can't see it.
+  const spansMultipleLines = node?.position ? node.position.start.line !== node.position.end.line : false
+  const isBlock = !inline && (lang !== '' || text.includes('\n') || spansMultipleLines)
   if (!isBlock) {
     return (
       <code className="rounded-[5px] bg-white/[0.09] px-[0.36em] py-[0.1em] text-[0.9em] break-words">

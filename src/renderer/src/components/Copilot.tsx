@@ -216,6 +216,17 @@ export const Copilot = memo(function Copilot({
               Open Screen Recording settings
             </button>
           )}
+          {/* Same deep-link for a blocked microphone — the IPC already opens the Windows mic-privacy pane
+              (main/index.ts) or the macOS mic pane, previously only wired up in Onboarding. */}
+          {/microphone|mic access/i.test(error) && (
+            <button
+              type="button"
+              onClick={() => void window.toto.openPermissionSettings('microphone')}
+              className="no-drag focus-ring w-fit rounded-full bg-[var(--color-danger)]/15 px-2.5 py-1 text-[11px] font-semibold text-[var(--color-danger)] hover:bg-[var(--color-danger)]/25"
+            >
+              Open Microphone settings
+            </button>
+          )}
         </div>
       ) : loading ? (
         <div className="flex items-center gap-2 text-[11px] text-[color:var(--color-ink-3)]">

@@ -24,7 +24,8 @@ import type {
   GraphRelated,
   CalendarTodayResult,
   CalendarEvent,
-  ImportAudioPickResult
+  ImportAudioPickResult,
+  ImportAudioChunkResult
 } from '@shared/ipc'
 
 // ---------------------------------------------------------------------------
@@ -598,12 +599,15 @@ export function RecallView({
   /** The scrollable meeting-list container — focused before a row unmounts (e.g. on delete) so a
    *  keyboard user's focus doesn't fall through to <body> when the focused Delete button is removed. */
   const listRef = useRef<HTMLDivElement>(null)
-  /** "Import audio" button state — idle outside a run; disables the button and drives its label. */
+  /** "Import audio" button state — idle outside a run; disables the button and drives its label.
+   *  `notice` is a non-error, informational message (e.g. "no speech detected") — kept separate from
+   *  `error` so it doesn't render in the danger color used for actual failures. */
   const [importState, setImportState] = useState<{
     stage: 'idle' | 'decoding' | 'transcribing' | 'saving' | 'summarizing'
     pct: number
     error: string | null
-  }>({ stage: 'idle', pct: 0, error: null })
+    notice: string | null
+  }>({ stage: 'idle', pct: 0, error: null, notice: null })
 
   // Meetings are always saved; deletion is the user's to undo that. The main process pops a native,
   // unmissable confirm dialog before actually deleting (single click here is unambiguous — no "did that
@@ -707,20 +711,25 @@ export function RecallView({
   // lib/import-audio.ts), then stream it to main as ~30s windows, one IPC round trip at a time, each
   // one transcribed on-device before the next is sent. See main/import-audio.ts for the save + ingest.
   const importAudio = useCallback(async (): Promise<void> => {
-    setImportState({ stage: 'decoding', pct: 0, error: null })
+    setImportState({ stage: 'decoding', pct: 0, error: null, notice: null })
     let picked: ImportAudioPickResult
     try {
       picked = await window.toto.importAudioPick()
     } catch (e) {
-      setImportState({ stage: 'idle', pct: 0, error: e instanceof Error ? e.message : 'Could not open the file picker.' })
+      setImportState({
+        stage: 'idle',
+        pct: 0,
+        error: e instanceof Error ? e.message : 'Could not open the file picker.',
+        notice: null
+      })
       return
     }
     if (picked.cancelled) {
-      setImportState({ stage: 'idle', pct: 0, error: null })
+      setImportState({ stage: 'idle', pct: 0, error: null, notice: null })
       return
     }
     if (!picked.path) {
-      setImportState({ stage: 'idle', pct: 0, error: picked.error || 'Could not read the selected file.' })
+      setImportState({ stage: 'idle', pct: 0, error: picked.error || 'Could not read the selected file.', notice: null })
       return
     }
     let unsub: (() => void) | null = null
@@ -731,9 +740,9 @@ export function RecallView({
       const sessionId = uid()
       unsub = window.toto.onImportAudioProgress((d) => {
         if (d.sessionId !== sessionId) return
-        setImportState({ stage: d.stage, pct: d.pct, error: null })
+        setImportState({ stage: d.stage, pct: d.pct, error: null, notice: null })
       })
-      let last: { ok: boolean; error?: string } | undefined
+      let last: ImportAudioChunkResult | undefined
       for (let seq = 0; seq < chunks.length; seq++) {
         last = await window.toto.importAudioTranscribe({
           sessionId,
@@ -746,10 +755,23 @@ export function RecallView({
         })
         if (!last?.ok) throw new Error(last?.error || 'Import failed.')
       }
-      setImportState({ stage: 'idle', pct: 0, error: null })
+      // A silent/near-silent recording saves successfully with zero transcribed lines — that's not an
+      // error, but going fully idle with no feedback leaves a phantom empty meeting the user can't explain.
+      const noSpeech = last?.file != null && (last.lines?.length ?? 0) === 0
+      setImportState({
+        stage: 'idle',
+        pct: 0,
+        error: null,
+        notice: noSpeech ? 'No speech was detected in this recording.' : null
+      })
       refreshList()
     } catch (e) {
-      setImportState({ stage: 'idle', pct: 0, error: e instanceof Error ? e.message : 'Could not import this recording.' })
+      setImportState({
+        stage: 'idle',
+        pct: 0,
+        error: e instanceof Error ? e.message : 'Could not import this recording.',
+        notice: null
+      })
     } finally {
       unsub?.()
     }
@@ -795,6 +817,10 @@ export function RecallView({
     [onOpenMeeting]
   )
   const openSelected = (): void => {
+    // While a debounced search is still in flight, `items` still holds the PREVIOUS query's results —
+    // don't fall back to items[0] until it actually reflects the current query text. An explicit
+    // selectedFile (the user clicked/arrowed onto a row) is still honored regardless.
+    if (!selectedFile && q.trim() !== debouncedQ) return
     const f = selectedFile ?? items[0]?.file
     if (f) openMeeting(f)
   }
@@ -868,6 +894,9 @@ export function RecallView({
       </div>
       {importState.error && (
         <div className="mb-2 px-1 text-[11px] text-[var(--color-danger)]">{importState.error}</div>
+      )}
+      {!importState.error && importState.notice && (
+        <div className="mb-2 px-1 text-[11px] text-[color:var(--color-ink-2)]">{importState.notice}</div>
       )}
 
       {/* ── UPCOMING CALENDAR SECTION ───────────────────────────────────── */}

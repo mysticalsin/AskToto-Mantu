@@ -45,9 +45,19 @@ export function SignInWall({
   const go = async (): Promise<void> => {
     setBusy(true)
     setErr(null)
-    const r = await onSignIn()
+    try {
+      const r = await onSignIn()
+      if (!r.ok) setErr(friendlyAuthError(r.error || 'Sign-in failed.', domainLabel))
+    } catch (e) {
+      setErr(friendlyAuthError(e instanceof Error ? e.message : 'Sign-in failed.', domainLabel))
+    } finally {
+      setBusy(false)
+    }
+  }
+  /** Lets the user bail out of a stuck/abandoned browser sign-in instead of waiting out the full loopback timeout. */
+  const cancel = (): void => {
     setBusy(false)
-    if (!r.ok) setErr(friendlyAuthError(r.error || 'Sign-in failed.', domainLabel))
+    setErr(null)
   }
   return (
     <div className="cl-root fade-up relative flex min-h-[360px] w-full flex-col items-center justify-center gap-7 overflow-hidden rounded-2xl border border-[var(--cl-border)] p-8 text-center">
@@ -82,9 +92,18 @@ export function SignInWall({
           </button>
 
           {busy && (
-            <p className="text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
-              A Microsoft window opened. Finish there, then come back.
-            </p>
+            <>
+              <p className="text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
+                A Microsoft window opened. Finish there, then come back.
+              </p>
+              <button
+                type="button"
+                onClick={cancel}
+                className="no-drag cl-focus text-[11px] font-medium text-[color:var(--cl-muted-foreground)] underline underline-offset-2 transition hover:text-[color:var(--cl-foreground)]"
+              >
+                Cancel and start over
+              </button>
+            </>
           )}
 
           {err && (

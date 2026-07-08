@@ -467,7 +467,7 @@ function detectHint(value: string, current: ProviderId): { kind: 'ok' | 'tip'; t
   if (/^sk-/.test(v)) {
     return {
       kind: 'tip',
-      text: 'This key shape is shared by several providers. Pick the right one above.'
+      text: 'This key shape is shared by several providers. Pick the right one in "Experience: more models".'
     }
   }
   return null
@@ -493,7 +493,13 @@ function AiSection({
   const [test, setTest] = useState<{ status: 'idle' | 'loading' | 'ok' | 'error'; message?: string }>({
     status: 'idle'
   })
-  const [adv, setAdv] = useState(false)
+  // "Custom" has no working provider without a base URL — that field lives inside "Advanced", so
+  // start it open whenever Custom is active (and re-open if the user switches TO Custom later) rather
+  // than leaving the one field Custom actually requires hidden behind a collapsed toggle.
+  const [adv, setAdv] = useState(provider === 'custom')
+  useEffect(() => {
+    if (provider === 'custom') setAdv(true)
+  }, [provider])
   const [filter, setFilter] = useState('')
   const skipClearRef = useRef(false) // don't wipe a freshly-pasted key when detection switches provider
   const baseModelName = resolveModelTier(provider, settings.providerModels, settings.providerModelsThinking, 'base')
@@ -602,6 +608,10 @@ function AiSection({
   // The "{provider} key" card — shown for whichever raw provider is currently active. Rendered at the
   // top level when that's Anthropic (the primary flow), or inside "Experience: more models" otherwise.
   // null for CLI providers (Dust/Claude Code/Codex have their own dedicated cards, no generic key box).
+  // An env-var key always wins over an in-app one (getApiKey() resolves the env value first) — a pasted
+  // key here would silently never be used until the env var is removed. Lock the field instead of letting
+  // Save claim it's "valid and working" for a key that will never actually be read.
+  const envKeyActive = settings.envKeys.includes(provider)
   const keyEntrySection = !CLI_PROVIDERS.has(provider) ? (
     <Section title={`${def.label} key`} desc="Stored encrypted on this device. Never sent anywhere except the provider.">
       <div className="flex items-center gap-2">
@@ -612,17 +622,22 @@ function AiSection({
           id={keyInputId}
           type="password"
           value={key}
+          disabled={envKeyActive}
           onChange={(e) => onKeyChange(e.target.value)}
           onKeyDown={(e) => e.key === 'Enter' && test.status !== 'loading' && onSave()}
           placeholder={
-            settings.hasKeys[provider] ? '•••••• saved (paste to replace)' : `Paste your ${def.label} key`
+            envKeyActive
+              ? 'Set via environment variable — takes precedence over any in-app key'
+              : settings.hasKeys[provider]
+                ? '•••••• saved (paste to replace)'
+                : `Paste your ${def.label} key`
           }
-          className={'flex-1 ' + ctl}
+          className={'flex-1 ' + ctl + (envKeyActive ? ' opacity-60' : '')}
         />
         <button
           type="button"
           onClick={onSave}
-          disabled={test.status === 'loading'}
+          disabled={test.status === 'loading' || envKeyActive}
           className="no-drag cl-focus flex items-center gap-1 rounded-[10px] bg-[var(--cl-primary)] px-4 py-2.5 text-[13px] font-medium text-white hover:opacity-90 disabled:opacity-50"
         >
           {saved ? <Check size={14} /> : null}
@@ -631,13 +646,13 @@ function AiSection({
         <button
           type="button"
           onClick={onTest}
-          disabled={test.status === 'loading'}
+          disabled={test.status === 'loading' || envKeyActive}
           className="no-drag cl-focus flex items-center gap-1 rounded-[10px] border border-[var(--cl-input)] bg-white/[0.04] px-3 py-2.5 text-[13px] text-[color:var(--cl-foreground)] hover:bg-white/[0.08] disabled:opacity-50"
         >
           {test.status === 'loading' ? <Loader2 size={14} className="animate-spin" /> : null}
           Test
         </button>
-        {settings.envKeys.includes(provider) ? (
+        {envKeyActive ? (
           <span
             title="This key is set via an environment variable on this machine. Remove it where it was defined; the in-app Remove can't clear it."
             className="flex items-center rounded-[10px] border border-[var(--cl-input)] bg-white/[0.04] px-3 py-2.5 text-[12px] text-[color:var(--cl-muted-foreground)]"
@@ -840,13 +855,16 @@ function AiSection({
             {PROVIDERS.anthropic.blurb}
           </span>
         </div>
-        {provider === 'anthropic' ? (
+        {provider === 'anthropic' && anthropicAllowed ? (
           <span className="flex shrink-0 items-center gap-1 rounded-full bg-[var(--cl-primary-soft)] px-2 py-0.5 text-[11px] font-medium text-[color:var(--cl-primary)]">
             <CircleCheck size={12} /> Active
           </span>
         ) : locked ? (
           <span className={managedChipCls}>Managed by your organization</span>
         ) : !anthropicAllowed ? (
+          // Also fires when provider === 'anthropic': an allowlist that no longer includes anthropic
+          // (e.g. org tightened it after this was the active default) must not still read "Active" —
+          // the active provider was never reconciled against the allowlist (see store.ts getSettings).
           <span className={managedChipCls}>Restricted by your organization</span>
         ) : (
           <button
@@ -1695,6 +1713,10 @@ function DustSetup({
   const hasWs = !!settings.dustWorkspaceId.trim()
   const connected = keySaved && hasWs && !!agent
   const selectedAgentName = agents?.find((a) => a.sId === agent)?.name
+  // Loaded the workspace's real agent list but the hard-locked base agent isn't in it (wrong workspace,
+  // personal vs. org workspace, or a US/EU region mismatch) — every ask will fail even though `connected`
+  // above is true. Only meaningful once agents actually loaded (agents !== null).
+  const baseAgentMissing = !!agents && agents.length > 0 && !!agent && !agents.some((a) => a.sId === agent)
 
   // Connect locally by importing the Dust CLI session (token + workspace + region) from the keychain.
   // On success: activate Dust + load the agents (proves the token works) so the user just picks them.
@@ -2070,18 +2092,30 @@ function DustSetup({
         <div
           className={[
             'cl-card flex items-center justify-between gap-2 px-3 py-2.5 text-[12px]',
-            connected ? 'text-[color:var(--cl-success)]' : 'text-[color:var(--cl-muted-foreground)]'
+            baseAgentMissing
+              ? 'text-[color:var(--cl-destructive)]'
+              : connected
+                ? 'text-[color:var(--cl-success)]'
+                : 'text-[color:var(--cl-muted-foreground)]'
           ].join(' ')}
         >
           <span className="flex items-center gap-2">
-            {connected ? <CircleCheck size={15} /> : <Info size={15} />}
-            {connected
-              ? `Workspace ${settings.dustWorkspaceId}. Base: ${selectedAgentName || agent}${
-                  thinkAgent ? `, Thinking: ${agents?.find((a) => a.sId === thinkAgent)?.name || thinkAgent}` : ' (thinking → same as base)'
-                }.`
-              : 'Connect from the Dust CLI above, or finish steps 1–4.'}
+            {baseAgentMissing ? (
+              <AlertCircle size={15} />
+            ) : connected ? (
+              <CircleCheck size={15} />
+            ) : (
+              <Info size={15} />
+            )}
+            {baseAgentMissing
+              ? "The managed base agent isn't available in this workspace/region — answers will fail. Check the pasted workspace and US/EU region."
+              : connected
+                ? `Workspace ${settings.dustWorkspaceId}. Base: ${selectedAgentName || agent}${
+                    thinkAgent ? `, Thinking: ${agents?.find((a) => a.sId === thinkAgent)?.name || thinkAgent}` : ' (thinking → same as base)'
+                  }.`
+                : 'Connect from the Dust CLI above, or finish steps 1–4.'}
           </span>
-          {active ? (
+          {baseAgentMissing ? null : active ? (
             <span className="flex shrink-0 items-center gap-1 rounded-full bg-[var(--cl-primary-soft)] px-2 py-0.5 text-[11px] font-medium text-[color:var(--cl-primary)]">
               <CircleCheck size={12} /> Active
             </span>
