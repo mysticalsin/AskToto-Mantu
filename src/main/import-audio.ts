@@ -128,7 +128,7 @@ export async function generateImportRecap(settings: Settings, transcriptText: st
     settings.systemPrompt
   )
   const safe = settings.redactSensitive ? redactSecrets(transcriptText) : transcriptText
-  return runCompletion(settings, system, safe, id)
+  return runCompletion(settings, system, safe, id, 'recap')
 }
 
 // ── Session accumulation + save (renderer steps 3-4) ─────────────────────────

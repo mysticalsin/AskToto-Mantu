@@ -87,17 +87,27 @@ const QWORDS =
 // not a finished one — so we hold off firing the auto-answer and let the coalesced turn accumulate the rest.
 // (Stranded prepositions like "where are you from" are deliberately NOT here — they DO end real questions.)
 const DANGLING = /\b(the|a|an|and|or|but|your|my|our|their|its)$/i
+// Terminal question-mark variants beyond ASCII '?' (U+003F): fullwidth '？' (U+FF1F, CJK) and Arabic '؟'
+// (U+061F) — Whisper transcribes many languages with these, so relying on endsWith('?') alone silently
+// dropped every non-English question from proactive auto-suggest.
+const TERMINAL_Q = /[?？؟]$/
+// QWORDS is a hard-coded English word list — only meaningful for space-delimited Latin-script clauses.
+// Gate the word-count/QWORDS branch on that so it can't misfire on non-Latin text (CJK/Arabic/Cyrillic,
+// which QWORDS wouldn't match anyway and which TERMINAL_Q already handles). Cover the full Latin range,
+// NOT just ASCII: Whisper/entity-casing emit a curly apostrophe (U+2019 in "What's"/"don't"/"L'Oréal")
+// and accented letters (café, naïve) — a pure-ASCII gate silently dropped every such English question.
+const LATIN_CLAUSE = /^[\x00-ɏ‘’“”–—…]*$/
 export function isQuestion(t: string): boolean {
   const s = t.trim()
   if (!s) return false
-  if (s.endsWith('?')) return true // explicit terminal punctuation → complete even when short
+  if (TERMINAL_Q.test(s)) return true // explicit terminal punctuation → complete even when short
   // Evaluate only the run's last clause: an accumulated/long turn may carry a completed leading sentence
   // (e.g. "So we shipped the update. What should we prioritize") -- QWORDS must match that clause's opening
   // word, not the whole run's, or a finished non-question opener permanently blocks every later question
   // in the same 'them' turn.
-  const lastClause = s.split(/(?<=[.!?])\s+/).pop() ?? s
-  if (DANGLING.test(lastClause.replace(/[.,;:!?\s]+$/, ''))) return false // still mid-sentence → not yet a question
-  return lastClause.split(/\s+/).length >= 3 && QWORDS.test(lastClause)
+  const lastClause = s.split(/(?<=[.!?？؟])\s+/).pop() ?? s
+  if (DANGLING.test(lastClause.replace(/[.,;:!?？؟\s]+$/, ''))) return false // still mid-sentence → not yet a question
+  return LATIN_CLAUSE.test(lastClause) && lastClause.split(/\s+/).length >= 3 && QWORDS.test(lastClause)
 }
 
 interface Channel {
@@ -110,6 +120,9 @@ interface Channel {
 
 export interface ListenApi {
   listening: boolean
+  /** True only once capture is actually confirmed (mic and/or system audio channel open) — see the
+   *  `capturing` field on the internal state above for why this must not be conflated with `listening`. */
+  capturing: boolean
   paused: boolean
   ready: boolean
   loading: boolean
@@ -166,6 +179,12 @@ export function useListen(
 ): ListenApi {
   const [state, setState] = useState({
     listening: false,
+    // True only once at least one audio channel (mic or system loopback) has actually opened — distinct
+    // from `listening`, which flips true optimistically at the top of start() before mic/system acquisition
+    // even begins. Consumers that gate a "you are being recorded" consent indicator should read this
+    // instead of `listening`, so the banner can't flash on a start() that ultimately fails to capture
+    // anything (see the both-failed early-return branch below, which never sets this true).
+    capturing: false,
     paused: false,
     ready: false,
     loading: false,
@@ -370,6 +389,7 @@ export function useListen(
         ...s,
         error: err.message || 'transcription worker error',
         listening: false,
+        capturing: false,
         paused: false,
         loading: false
       }))
@@ -399,7 +419,11 @@ export function useListen(
     setState((s) => ({ ...s, loading: true }))
     void getAsrBundled()
       .then((bundled) => {
-        ensureWorker().postMessage({ type: 'init', quality: loadedQualityRef.current ?? 'fast', bundled })
+        // Record the quality the fallback actually loads (it was never set for a Parakeet session — see
+        // the null at start() above) so a later start() with a different quality correctly detects the
+        // mismatch and reloads, instead of silently staying stuck on the base 'fast' model.
+        loadedQualityRef.current = loadedQualityRef.current ?? 'fast'
+        ensureWorker().postMessage({ type: 'init', quality: loadedQualityRef.current, bundled })
       })
       .catch(() => {})
   }, [ensureWorker, getAsrBundled])
@@ -686,7 +710,13 @@ export function useListen(
       void window.toto
         .getPermissions()
         .then((p) => {
-          if (p?.screenRecording === 'granted' && !channels.current.them) void recoverSystemAudioRef.current?.()
+          // Windows never reports 'granted' here (windowsScreenStatus() hard-codes 'unknown' — there is no
+          // OS permission gate to poll), which made this watcher dead code there: a transient start-time
+          // loopback failure was never retried. Drive the retry off actual capture state on Windows instead
+          // of a permission string that will never flip.
+          if ((isWindows || p?.screenRecording === 'granted') && !channels.current.them) {
+            void recoverSystemAudioRef.current?.()
+          }
         })
         .catch(() => {})
     }, 3000)
@@ -903,7 +933,7 @@ export function useListen(
               ? 'Could not start the microphone. Check that Windows microphone access is allowed for AskToto and that a mic is connected.'
               : "Couldn't start the microphone. Check Microphone access in System Settings → Privacy & Security → Microphone."
           }
-          setState((s) => ({ ...s, error: msg, listening: false, loading: false }))
+          setState((s) => ({ ...s, error: msg, listening: false, capturing: false, loading: false }))
           // A failed start shouldn't pin the whisper worker + ~21MB ONNX wasm in memory for the app's life —
           // arm the same idle release stop() uses (ensureWorker recreates it on the next start()).
           if (workerIdleTimer.current) clearTimeout(workerIdleTimer.current)
@@ -927,7 +957,10 @@ export function useListen(
         } else if (source === 'both' && !micOk && sysOk) {
           note = 'Microphone unavailable. Listening to system audio only.'
         }
-        setState((s) => ({ ...s, error: note, listening: true, loading: !readyRef.current }))
+        // At least one channel (mic and/or system loopback) is confirmed open here — this is the point
+        // a consent/recording indicator should key off, not the optimistic `listening: true` set at the
+        // top of start() before any capture was actually acquired.
+        setState((s) => ({ ...s, error: note, listening: true, capturing: true, loading: !readyRef.current }))
       } finally {
         // Every exit path (the several early `return`s above, a thrown error, or the normal fall-through)
         // clears the guard so a later, legitimate start() is never permanently blocked.
@@ -1073,7 +1106,7 @@ export function useListen(
       closeChannel('you')
       closeChannel('them')
       void window.toto.setListeningState(false).catch(() => {})
-      setState((s) => ({ ...s, listening: false, paused: false, loading: false, error: null }))
+      setState((s) => ({ ...s, listening: false, capturing: false, paused: false, loading: false, error: null }))
       drainTimerRef.current = null
       stoppingRef.current = false
       // Release the whisper worker (+ ~21MB ONNX wasm + loaded model) after a few idle minutes so it

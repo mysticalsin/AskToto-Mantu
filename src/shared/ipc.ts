@@ -695,10 +695,13 @@ export const DEFAULT_SHORTCUTS: Record<HotkeyAction, string> = {
   explain: '',
   summarize: '',
   'spotlight-ref': '',
-  'scroll-up': 'CommandOrControl+Alt+Up',
-  'scroll-down': 'CommandOrControl+Alt+Down',
-  'scroll-left': 'CommandOrControl+Alt+Left',
-  'scroll-right': 'CommandOrControl+Alt+Right',
+  // Alt+Arrow alone collides with the Intel Graphics display-rotation hotkey on Windows
+  // (many Intel-iGPU laptops enable it by default), so the overlay-move defaults add Shift
+  // to avoid stealing that combo / silently failing to register.
+  'scroll-up': 'CommandOrControl+Alt+Shift+Up',
+  'scroll-down': 'CommandOrControl+Alt+Shift+Down',
+  'scroll-left': 'CommandOrControl+Alt+Shift+Left',
+  'scroll-right': 'CommandOrControl+Alt+Shift+Right',
   settings: '', // no global shortcut by default; opened from bar or tray
   // Agenda is reached from the tray only (the Cluely bar redesign dropped its toolbar button). Kept out
   // of HOTKEY_ACTIONS so it gets no global key / no Settings row, but typed so the tray can trigger it.

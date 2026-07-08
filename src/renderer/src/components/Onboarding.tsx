@@ -17,7 +17,8 @@ import {
   Terminal,
   KeyRound,
   Building2,
-  ChevronDown
+  ChevronDown,
+  Loader2
 } from 'lucide-react'
 import type { PublicSettings, Profile, PlatformPermissions } from '@shared/ipc'
 import type { ProviderId } from '@shared/providers'
@@ -243,6 +244,10 @@ export function Onboarding({
   const [apiChooser, setApiChooser] = useState(false)
   const [showMoreProviders, setShowMoreProviders] = useState(false)
   const headingRef = useRef<HTMLHeadingElement | null>(null)
+  // Set when the user bypasses an in-flight "Sign in with Microsoft" wait via "Continue without
+  // signing in" — lets the abandoned signIn() promise's eventual resolution no-op instead of
+  // yanking the user back to this step or surfacing a stale error once they've moved on.
+  const abandonedSsoRef = useRef(false)
 
   // Move focus to the new step's heading on every transition so screen readers announce it instead of
   // silently dropping focus to <body>.
@@ -276,10 +281,17 @@ export function Onboarding({
       return
     }
     setErr('')
+    if (!viaSso && busy) {
+      // Bypassing a still-in-flight SSO wait (the loopback OAuth can block up to 5 minutes) —
+      // mark it abandoned so its late resolution doesn't affect us once we've moved on.
+      abandonedSsoRef.current = true
+    }
     setBusy(true)
     try {
       if (viaSso && window.toto.signIn) {
+        abandonedSsoRef.current = false
         const r = await window.toto.signIn()
+        if (abandonedSsoRef.current) return
         if (!r.ok) {
           setErr(r.error || 'Sign-in failed. Use a Mantu Microsoft account.')
           setBusy(false)
@@ -288,7 +300,7 @@ export function Onboarding({
       }
       setStep(2)
     } catch (e) {
-      setErr(e instanceof Error ? e.message : 'Could not continue.')
+      if (!abandonedSsoRef.current) setErr(e instanceof Error ? e.message : 'Could not continue.')
     } finally {
       setBusy(false)
     }
@@ -693,11 +705,17 @@ export function Onboarding({
             busy || !recordingConsent ? 'cursor-not-allowed opacity-50' : ''
           ].join(' ')}
         >
-          <MsLogo size={16} /> Sign in with Microsoft
+          {busy ? <Loader2 size={16} className="animate-spin" /> : <MsLogo size={16} />}
+          {busy ? 'Waiting for your browser…' : 'Sign in with Microsoft'}
         </button>
+        {busy && (
+          <p className="text-[11px] leading-snug text-[color:var(--color-ink-3)]" role="status">
+            A Microsoft window opened. Finish there, or continue without signing in below.
+          </p>
+        )}
         <button
           type="button"
-          disabled={busy || !recordingConsent}
+          disabled={!recordingConsent}
           onClick={() => advance(false)}
           className="no-drag focus-ring inline-flex items-center justify-center gap-1 rounded-xl px-4 py-2 text-[12px] text-[color:var(--color-ink-3)] hover:text-[color:var(--color-ink-2)] disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:text-[color:var(--color-ink-3)]"
         >

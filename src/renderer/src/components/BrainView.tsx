@@ -308,6 +308,10 @@ export function BrainView({ onBack }: { onBack: () => void }): JSX.Element {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [backfilling, setBackfilling] = useState(false)
+  // Whether an AI provider is configured/keyed. Backfill silently no-ops on the main side when this
+  // is false (see src/main/brain/ingest.ts startBackfill), so the button must reflect it instead of
+  // giving zero feedback on click. Defaults true so it never flashes disabled before the first read.
+  const [providerReady, setProviderReady] = useState(true)
   // Guards against overlapping polls during a long backfill: brainRead can take longer than the 4s
   // poll interval as ingestion grows, so without this an older, slower-resolving snapshot can land
   // after a newer one and make the KPI tiles/lists visibly jump backward.
@@ -317,14 +321,16 @@ export function BrainView({ onBack }: { onBack: () => void }): JSX.Element {
     if (refreshingRef.current) return
     refreshingRef.current = true
     try {
-      const [read, st, list] = await Promise.all([
+      const [read, st, list, settings] = await Promise.all([
         window.toto.brainRead(),
         window.toto.brainStatus(),
-        window.toto.recallList()
+        window.toto.recallList(),
+        window.toto.getSettings()
       ])
       setData(read)
       setStatus(st)
       setMeetings(list)
+      setProviderReady(settings.providerReady)
       setError(null)
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
@@ -512,11 +518,16 @@ export function BrainView({ onBack }: { onBack: () => void }): JSX.Element {
           <button
             type="button"
             onClick={() => void startBackfill()}
-            disabled={backfilling || meetings.length === 0}
+            disabled={backfilling || meetings.length === 0 || !providerReady}
             className="no-drag focus-ring rounded-full bg-[var(--color-accent)] px-4 py-1.5 text-[12px] font-semibold text-white hover:bg-[var(--color-accent-2)] disabled:opacity-50"
           >
             {backfilling ? 'Starting…' : 'Ingest my meetings'}
           </button>
+          {!providerReady && meetings.length > 0 && (
+            <div className="text-[11px] text-[color:var(--color-ink-3)]">
+              Connect an AI provider in Settings to build your intelligence.
+            </div>
+          )}
         </div>
       ) : (
         <>
@@ -529,12 +540,13 @@ export function BrainView({ onBack }: { onBack: () => void }): JSX.Element {
             <div className="flex items-center justify-between gap-2 rounded-xl border border-[var(--color-hair-soft)] bg-white/[0.02] px-3 py-1.5 text-[11px] text-[color:var(--color-ink-3)]">
               <span>
                 {notIngested} saved meeting{notIngested === 1 ? '' : 's'} not in the brain yet.
+                {!providerReady && ' Connect an AI provider in Settings to ingest them.'}
               </span>
               <button
                 type="button"
                 onClick={() => void startBackfill()}
-                disabled={backfilling}
-                className="no-drag focus-ring shrink-0 rounded-full bg-white/[0.06] px-2.5 py-1 text-[11px] font-semibold text-[color:var(--color-ink-2)] hover:bg-white/10"
+                disabled={backfilling || !providerReady}
+                className="no-drag focus-ring shrink-0 rounded-full bg-white/[0.06] px-2.5 py-1 text-[11px] font-semibold text-[color:var(--color-ink-2)] hover:bg-white/10 disabled:opacity-50"
               >
                 {backfilling ? 'Starting…' : 'Ingest now'}
               </button>

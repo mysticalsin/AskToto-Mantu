@@ -34,13 +34,31 @@ export function hasUsableProvider(s: Settings): boolean {
 }
 
 /** Run one accumulate-the-stream completion against the picked provider. Rejects on stream error or when
- *  no provider is configured. */
-export function runCompletion(s: Settings, system: string, userText: string, id: string): Promise<string> {
+ *  no provider is configured. `mode` defaults to 'answer' (brain ingest's extraction jobs); pass 'recap'
+ *  so the provider adapters (openai.ts/anthropic.ts) grant the larger 8192-token recap headroom instead
+ *  of the standard 4096 answer budget. */
+export function runCompletion(
+  s: Settings,
+  system: string,
+  userText: string,
+  id: string,
+  mode: AskStart['mode'] = 'answer'
+): Promise<string> {
   const picked = pickProvider(s)
   if (!picked) return Promise.reject(new Error('No configured AI provider.'))
   const { provider, model, key } = picked
   const def = PROVIDERS[provider]
-  const req: AskStart = { id, mode: 'answer', prompt: userText, history: [] } as AskStart
+  // baseUserText (shared.ts) reads a recap/summary transcript from req.transcript, while every other mode
+  // reads req.prompt — so route the caller's text into the field the chosen mode actually consumes.
+  // Otherwise a 'recap' completion would ship an EMPTY transcript to the model (wide 8192 budget, no input).
+  const transcriptMode = mode === 'recap' || mode === 'summary'
+  const req: AskStart = {
+    id,
+    mode,
+    prompt: transcriptMode ? '' : userText,
+    transcript: transcriptMode ? userText : undefined,
+    history: []
+  } as AskStart
   return new Promise<string>((resolve, reject) => {
     let out = ''
     createStream({

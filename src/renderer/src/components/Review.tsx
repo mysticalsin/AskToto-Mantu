@@ -96,7 +96,8 @@ export const Review = memo(function Review({
   bidstackTools,
   onOpenPastMeeting,
   isPastMeeting,
-  onRecapSaved
+  onRecapSaved,
+  recapUnavailable
 }: {
   recap: AnswerState | null
   lines: TranscriptLine[]
@@ -128,6 +129,10 @@ export const Review = memo(function Review({
   /** Called with the new recap markdown after a successful in-place edit save, so the owner (App) can keep
    *  its own copy (used by Resume + follow-up generation) consistent without a disk re-read. */
   onRecapSaved?: (recap: string) => void
+  /** Live session only: the recap was deliberately skipped (no AI provider configured) instead of being
+   *  fired and left to fail with a red error. Shown in place of the "writing detailed notes…" spinner,
+   *  which would otherwise spin forever since no recap request was ever sent. */
+  recapUnavailable?: { message: string; onOpenSettings?: () => void }
 }): JSX.Element {
   const [copied, flashCopied] = useFlash(1500)
   const [notesCopied, flashNotesCopied] = useFlash(1500)
@@ -597,6 +602,20 @@ export const Review = memo(function Review({
         ) : !recap && lines.length === 0 ? (
           <div className="text-[13px] text-[color:var(--color-ink-2)]">
             No speech was captured this session.
+          </div>
+        ) : recapUnavailable ? (
+          // No AI provider configured — the recap was never requested (see App.tsx maybeFireRecap), so
+          // without this branch a transcript with no recap would fall through to the spinner below and
+          // spin forever. Neutral, not an error: transcription/recording still worked.
+          <div className="flex flex-col gap-2">
+            <div className="text-[13px] text-[color:var(--color-ink-2)]">{recapUnavailable.message}</div>
+            {recapUnavailable.onOpenSettings && (
+              <div className="flex items-center gap-1.5">
+                <TextButton onClick={recapUnavailable.onOpenSettings}>
+                  Open Settings
+                </TextButton>
+              </div>
+            )}
           </div>
         ) : (
           <div className="flex items-center gap-2 py-1 text-[13px] text-[color:var(--color-ink-2)]">

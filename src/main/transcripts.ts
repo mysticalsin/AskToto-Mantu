@@ -426,14 +426,31 @@ const cleanTitle = (s: string): string => {
 const yamlSafeTitle = (s: string): string =>
   s.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, ' ')
 
+// In encrypted-at-rest mode, the file CONTENT is ciphertext but a title-bearing filename would still
+// leak it in plaintext on disk — the exact leak that index.md is deliberately skipped for below ("The
+// plaintext index.md would leak titles/dates, defeating encryption"). This opaque token replaces the
+// human-readable slug(title) portion of the filename in that mode; the stamp() date/time prefix is kept
+// so sweepExpiredMeetings' FILENAME_TIMESTAMP-based retention (recall.ts) keeps working.
+const opaqueToken = (): string => randomBytes(6).toString('hex')
+
 /** Save any single Q&A / answer as a Dust-readable markdown note. Returns the file path. */
 export async function saveNote(settings: Settings, n: SaveNote): Promise<string> {
   const folder = ensureMeetingsFolder(settings)
   const started = Date.now()
   const title = cleanTitle(n.title || n.question || 'Note') || 'Note'
-  let file = join(folder, `${stamp(started)}-note-${slug(title)}.md`)
+  let file = join(
+    folder,
+    settings.encryptTranscripts
+      ? `${stamp(started)}-note-${opaqueToken()}.md`
+      : `${stamp(started)}-note-${slug(title)}.md`
+  )
   for (let i = 2; existsSync(file); i++) {
-    file = join(folder, `${stamp(started)}-note-${slug(title)}-${i}.md`)
+    file = join(
+      folder,
+      settings.encryptTranscripts
+        ? `${stamp(started)}-note-${opaqueToken()}.md`
+        : `${stamp(started)}-note-${slug(title)}-${i}.md`
+    )
   }
   const frontmatter = [
     '---',
@@ -480,9 +497,19 @@ export async function saveMeeting(settings: Settings, m: SaveMeeting): Promise<s
   const title = cleanTitle(recapParsed?.title24 || '') || heuristicTitle
   const tags = recapParsed?.tags || []
 
-  let file = join(folder, `${stamp(started)}-${slug(title)}.md`)
+  let file = join(
+    folder,
+    settings.encryptTranscripts
+      ? `${stamp(started)}-${opaqueToken()}.md`
+      : `${stamp(started)}-${slug(title)}.md`
+  )
   for (let n = 2; existsSync(file); n++) {
-    file = join(folder, `${stamp(started)}-${slug(title)}-${n}.md`)
+    file = join(
+      folder,
+      settings.encryptTranscripts
+        ? `${stamp(started)}-${opaqueToken()}.md`
+        : `${stamp(started)}-${slug(title)}-${n}.md`
+    )
   }
 
   const last = m.lines.length ? m.lines[m.lines.length - 1].t : started
