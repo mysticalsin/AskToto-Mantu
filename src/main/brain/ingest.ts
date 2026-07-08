@@ -12,7 +12,7 @@ import {
 } from '@shared/brain'
 import { INJECTION_GUARD } from '@shared/prompts'
 import { redactSecrets } from '@shared/redact'
-import { getSettings, getApiKey } from '../store'
+import { getSettings, getApiKey, getAllowedProviders } from '../store'
 import { createStream } from '../llm'
 import { readSavedFile, resolveMeetingsFolder } from '../transcripts'
 import { auditLog, mainLog } from '../logger'
@@ -50,10 +50,15 @@ function hasUsableProvider(s: Settings): boolean {
   return pickProvider(s) !== null
 }
 
-/** Pick the first usable text provider: the active one, then any other with credentials + a model. */
+/** Pick the first usable text provider: the active one, then any other with credentials + a model.
+ *  Honors the org's allowedProviders policy — this background pipeline streams the full meeting
+ *  transcript to the provider, so an org that pinned e.g. ["dust"] for data residency must not have
+ *  it silently sent to any other keyed provider (the interactive ask path already filters the same way). */
 function pickProvider(s: Settings): { provider: ProviderId; model: string; key: string } | null {
+  const allowed = getAllowedProviders()
   const order = [s.provider, ...(Object.keys(PROVIDERS) as ProviderId[])]
   for (const p of order) {
+    if (allowed && !allowed.includes(p)) continue
     const def = PROVIDERS[p]
     if (!def) continue
     const key = getApiKey(p)
