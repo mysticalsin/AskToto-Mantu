@@ -4,7 +4,7 @@ import { promisify } from 'node:util'
 import { readFileSync, existsSync, statSync, rmSync } from 'node:fs'
 import { join, basename, delimiter } from 'node:path'
 import { homedir } from 'node:os'
-import { getSettings, getApiKey, hasApiKey } from './store'
+import { getSettings, getApiKey, hasApiKey, getAllowedProviders } from './store'
 import { resolveMeetingsFolder } from './transcripts'
 import type { GraphStatus, GraphRelated } from '@shared/ipc'
 
@@ -146,12 +146,16 @@ async function hasClaudeCli(): Promise<boolean> {
 async function pickBackend(): Promise<{ backend: string; apiKey?: string } | null> {
   const s = getSettings()
   const pref = s.graphifyBackend
-  if (pref === 'claude' && hasApiKey('anthropic')) return { backend: 'claude', apiKey: getApiKey('anthropic') }
-  if (pref === 'openai' && hasApiKey('openai')) return { backend: 'openai', apiKey: getApiKey('openai') }
+  // Honor the org allowedProviders policy: graphify streams the full transcript to its backend, so a
+  // pinned data-residency policy must gate the backend choice the same way the interactive ask path does.
+  const allowed = getAllowedProviders()
+  const ok = (pid: string): boolean => !allowed || allowed.includes(pid)
+  if (pref === 'claude' && hasApiKey('anthropic') && ok('anthropic')) return { backend: 'claude', apiKey: getApiKey('anthropic') }
+  if (pref === 'openai' && hasApiKey('openai') && ok('openai')) return { backend: 'openai', apiKey: getApiKey('openai') }
   // auto: local Claude Code → stored Claude key → stored OpenAI key
-  if (await hasClaudeCli()) return { backend: 'claude-cli' }
-  if (hasApiKey('anthropic')) return { backend: 'claude', apiKey: getApiKey('anthropic') }
-  if (hasApiKey('openai')) return { backend: 'openai', apiKey: getApiKey('openai') }
+  if (ok('claude-cli') && (await hasClaudeCli())) return { backend: 'claude-cli' }
+  if (hasApiKey('anthropic') && ok('anthropic')) return { backend: 'claude', apiKey: getApiKey('anthropic') }
+  if (hasApiKey('openai') && ok('openai')) return { backend: 'openai', apiKey: getApiKey('openai') }
   return null
 }
 
