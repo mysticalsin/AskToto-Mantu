@@ -440,9 +440,17 @@ export function getSettings(): Settings {
   if (whole.success) {
     value = whole.data
   } else {
-    // Tolerant migration: base is already valid; keep only the user keys that still validate, then
-    // repair the one cross-field invariant (provider:'custom' needs an https customBaseUrl) so a stale
-    // settings.json can NEVER make getSettings throw and brick every IPC handler that reads it.
+    // Tolerant migration: base is already valid; keep only the user keys that still validate. This can
+    // still fail SettingsSchema's one cross-field refine — provider:'custom' needs an https customBaseUrl
+    // — even though every individual field validates fine on its own. That's a normal, expected
+    // mid-configuration state (user just picked "Custom" and hasn't pasted a base URL yet), not
+    // corruption, so don't punish it by reverting the provider back to Anthropic on every single
+    // getSettings() call (that made Custom impossible to ever configure through the UI — the base-URL
+    // input never got a chance to render before the provider bounced back). Keep provider:'custom' as a
+    // valid-but-not-ready settings object instead: the readiness gate in index.ts/providerReady already
+    // blocks answering until an https customBaseUrl actually exists. Only fall back to full defaults when
+    // the merged settings don't even validate field-by-field — a genuinely stale/hand-edited
+    // settings.json — so getSettings can still never throw/brick the app.
     const merged: Record<string, unknown> = { ...base, ...validKeysOnly(raw) }
     // Only reset `provider` when the provider value itself doesn't validate against the schema's
     // enum — never merely because customBaseUrl is empty/not-yet-https. A user who just picked

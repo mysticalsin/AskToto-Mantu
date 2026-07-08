@@ -70,6 +70,20 @@ function comSpecExe(): string {
   return cs && isAbsolute(cs) ? cs : system32('cmd.exe')
 }
 
+/** On the Windows `.cmd`-shim path the spawned process is cmd.exe, which in turn launches the real
+ *  node/claude (or node/codex) process as a grandchild. Aborting/killing only the immediate child
+ *  (cmd.exe) does not cascade to that grandchild — it keeps running to completion, orphaned. `taskkill
+ *  /T` recurses the whole process tree rooted at pid; `/F` force-terminates. Best-effort: the process
+ *  may have already exited by the time this fires, so failures are swallowed. No-op on non-Windows,
+ *  where the plain child.kill() the caller already does is sufficient (no shim indirection).
+ */
+function killWindowsProcessTree(pid: number | undefined): void {
+  if (!pid || process.platform !== 'win32') return
+  execFile(system32('taskkill.exe'), ['/pid', String(pid), '/T', '/F'], () => {
+    /* best-effort — nothing to do if the tree is already gone */
+  })
+}
+
 // ─── Binary resolution: login shell (mac/Linux) or `where` + npm global probe (Windows) ────────
 const binCache = new Map<string, string | null>()
 
@@ -439,6 +453,10 @@ export function runCliStream(opts: RunCliStreamOpts): { abort: () => void } {
       // 'pipe' for stdin so we can write prompt + system without exposing them in argv
       stdio: ['pipe', 'pipe', 'pipe']
     })
+    // AbortController's own signal-linked kill only terminates this immediate child — on the Windows
+    // .cmd-shim path that's cmd.exe, not the grandchild claude/codex node process (see
+    // killWindowsProcessTree). Cascade the kill so an abort/idle-timeout doesn't orphan it.
+    controller.signal.addEventListener('abort', () => killWindowsProcessTree(child.pid), { once: true })
 
     // Write content to stdin — keeps transcript and system text out of argv (ps -ww / /proc).
     // System text (if any) is prepended so the CLI sees it before the user prompt.
@@ -598,7 +616,14 @@ export async function testCli(provider: ProviderId): Promise<CliActionResult> {
     let timedOut = false
     const timer = setTimeout(() => {
       timedOut = true
-      child.kill('SIGTERM')
+      // On the Windows .cmd-shim path child is cmd.exe, not the real claude/codex process — a bare
+      // SIGTERM only kills cmd.exe and orphans the grandchild (see killWindowsProcessTree). Cascade the
+      // kill on Windows; a plain SIGTERM is sufficient elsewhere (no shim indirection).
+      if (process.platform === 'win32') {
+        killWindowsProcessTree(child.pid)
+      } else {
+        child.kill('SIGTERM')
+      }
       if (tmpDir) rm(tmpDir, { recursive: true, force: true }).catch(() => {})
       resolve({ ok: false, error: 'Timed out after 45 s — are you logged in?' })
     }, TEST_TIMEOUT_MS)
@@ -889,6 +914,7 @@ export async function installCli(
         ? spawn(comSpecExe(), ['/d', '/s', '/c', 'npm', 'i', '-g', pkg], {
             env: process.env,
             shell: false,
+            // Avoid a flashing console window for the cmd.exe install step.
             windowsHide: true,
             stdio: ['ignore', 'pipe', 'pipe']
           })

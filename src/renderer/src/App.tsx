@@ -408,6 +408,18 @@ export function App(): JSX.Element {
     }
     proceed()
   }, [])
+  // Set by endReview() while waiting for listen.stop()'s async drain (up to DRAIN_CEILING_MS) to commit
+  // the final flushed transcript window before the recap is generated — see maybeFireRecap below.
+  const pendingRecapRef = useRef(false)
+  // True for the current live-session Review when the recap was intentionally skipped because no AI
+  // provider is configured (rather than fired and left to fail with a red error) — see maybeFireRecap.
+  const [recapSkipped, setRecapSkipped] = useState(false)
+  // Ephemeral, per-meeting live-transcript visibility — deliberately NOT settings.showLiveTranscript.
+  // That Settings field is a persistent default ("On shows the rolling transcript... off shows replies
+  // only"); this is the in-meeting "Transcript" pill's session-only state, initialized from the default
+  // at each meeting start (see startListen) and never written back to disk, so toggling it live no longer
+  // clobbers the user's saved preference for every future meeting.
+  const [transcriptShown, setTranscriptShown] = useState(false)
 
   // Drives the overlay's glass-background alpha (Settings → Personalize → Appearance). A single CSS
   // variable multiplies every --glass-* alpha channel (see styles.css) — default 1 reproduces today's
@@ -723,7 +735,16 @@ export function App(): JSX.Element {
               ? settings?.localVisionReady
               : false
       if (settings?.providerReady || localReady) return true
-      openSettings('ai', 'Add an API key or connect a provider here to ask questions.')
+      // A keyed API provider can still be !providerReady because the org allowlist excludes it
+      // (settings.allowedProviders) — that user already has a valid key, so "add your API key" is the
+      // wrong remedy; point them at switching providers instead.
+      const blockedByOrg = !!settings?.hasApiKey && !!settings?.provider && PROVIDERS[settings.provider]?.kind !== 'cli'
+      openSettings(
+        'ai',
+        blockedByOrg
+          ? 'Your organization restricts which providers you can use. Switch to an approved provider here.'
+          : 'Add an API key or connect a provider here to ask questions.'
+      )
       return false
     },
     [
@@ -731,6 +752,8 @@ export function App(): JSX.Element {
       settings?.localSuggestReady,
       settings?.localSummaryReady,
       settings?.localVisionReady,
+      settings?.hasApiKey,
+      settings?.provider,
       openSettings
     ]
   )
@@ -1338,6 +1361,11 @@ export function App(): JSX.Element {
 
   const startListen = useCallback(() => {
     stoppingRef.current = false // a fresh session can be stopped again — clear any latch left by the last one
+    // A rapid Stop -> New meeting can start a fresh session while the previous endReview's recap is still
+    // waiting on that old session's drain (pendingRecapRef) — drop it so it can't fire into (or read the
+    // transcript of) the session that's about to start.
+    pendingRecapRef.current = false
+    setRecapSkipped(false)
     // A previous session's transcript can still be sitting unsaved in listen state (ASR crash tore the
     // session down; a failed recap was abandoned). listen.clear() below would wipe it — rescue first.
     // Idempotent via savedRef, so normally-saved meetings never double-save. Ref-indirected because
@@ -1359,11 +1387,10 @@ export function App(): JSX.Element {
     followup.clear() // a new meeting is about to be viewed — a stale draft from whatever was reviewed
     // before must never carry over and render/send as this meeting's follow-up (see followup's own
     // declaration comment above).
-    // A new meeting always starts with the transcript hidden, regardless of whether it was left open
-    // during a previous meeting — "showLiveTranscript" persists across restarts (it's a Settings field,
-    // not per-session state), so without this reset a transcript opened once would stay defaulted-open
-    // for every future meeting until manually toggled off again.
-    if (settings?.showLiveTranscript) void patch({ showLiveTranscript: false })
+    // A new meeting always starts the LIVE transcript panel from the persisted default — this only seeds
+    // the ephemeral per-session state (transcriptShown), it never writes back to settings.showLiveTranscript
+    // (see that state's own comment for why: it's a saved preference, not per-session state).
+    setTranscriptShown(settings?.showLiveTranscript ?? false)
     if (settings?.playListenChime ?? true) playListenChime()
     void listen.start(settings?.audioSource ?? 'both', settings?.asrQuality ?? 'fast', settings?.asrEngine ?? 'whisper')
   }, [
@@ -1377,49 +1404,73 @@ export function App(): JSX.Element {
     settings?.asrQuality,
     settings?.asrEngine,
     settings?.playListenChime,
-    settings?.showLiveTranscript,
-    patch
+    settings?.showLiveTranscript
   ])
 
-  const endReview = useCallback(async (): Promise<void> => {
+  // Fires the deferred post-meeting recap once it's actually safe to — i.e. once listen.listening has
+  // flipped back to false, meaning listen.stop()'s async drain (up to DRAIN_CEILING_MS, see listen.ts)
+  // has committed the final flushed transcript window. Reading listen.text() any earlier (the old
+  // behavior) silently dropped the last sentence the drain machinery exists to preserve. Gated on
+  // pendingRecapRef so it's a no-op on every OTHER listen.listening flip (meeting start, a later
+  // unrelated re-render) — only endReview() arms it.
+  const maybeFireRecap = useCallback(() => {
+    if (!pendingRecapRef.current || listen.listening) return
+    pendingRecapRef.current = false
+    const tx = listen.text()
+    if (!tx.trim()) {
+      setRecapSkipped(false)
+      ask.clear()
+      return
+    }
+    // Transcription is free and works without any AI provider — but the recap is an LLM call. Firing it
+    // anyway here would always dead-end in a red "No API key"-style error on the Review screen, even
+    // though the user was explicitly told during onboarding that deciding on a provider later was fine.
+    // Skip it and let Review show a neutral "connect a provider" affordance instead (recapUnavailable).
+    if (!settings?.providerReady) {
+      setRecapSkipped(true)
+      ask.clear()
+      // No recap means no recap-time auto-save fires — persist the transcript NOW (empty recap) so a
+      // keyless "Done" never discards the meeting. Idempotent via savedRef, so the later leave-Review
+      // rescue won't double-save. (Matches the onboarding promise that transcripts are saved either way.)
+      void saveMeetingNowRef.current?.(listen.lines, meetingStartRef.current, '')
+      return
+    }
+    setRecapSkipped(false)
+    // Cascade the recap into Dust whenever it's configured, regardless of the active provider (e.g.
+    // Kimi handles everyday chat, Dust still writes the meeting notes) — no agentOverride needed, the
+    // normal think-tier resolution inside Dust already respects the user's own Thinking-agent pick.
+    const dustReady = isDustReady(settings?.hasKeys ?? {}, settings?.dustWorkspaceId ?? '', settings?.providerModels ?? {})
+    ask.run({
+      mode: 'recap',
+      transcript: tx,
+      // Inert server-side for mode:'recap' (the transcript alone builds the request) — but keeps
+      // retryAnswer's replay-gate (ask.answer?.prompt) truthy so "Retry summary" works after a failure,
+      // same reasoning as the Summarize quick action above.
+      prompt: 'Summarize this meeting.',
+      ...(dustReady ? { providerOverride: 'dust' as const } : {})
+    })
+  }, [listen.listening, listen.text, listen.lines, ask.run, ask.clear, settings?.providerReady, settings?.hasKeys, settings?.dustWorkspaceId, settings?.providerModels])
+
+  // listen.listening flips true -> false exactly once (the moment the post-stop drain settles), so this
+  // effect is what actually fires a recap armed by endReview below.
+  useEffect(() => {
+    maybeFireRecap()
+  }, [maybeFireRecap])
+
+  const endReview = useCallback(() => {
     // Idempotence latch: listen.listening stays true for up to DRAIN_CEILING_MS (4s) after stop() while
     // the audio drain finishes in the background (listen.ts), so toggleListen() can still read "listening"
     // and re-enter endReview() from a second Stop click landing inside that window. Without this guard the
-    // re-entrant call runs ask.run({mode:'recap', ...}) again, which unconditionally cancels the in-flight
-    // recap stream and restarts it (state.ts run()) — so a user reasonably clicking Stop again (because the
-    // UI still looked "live") could cancel/restart the summary indefinitely instead of ever seeing it land.
+    // re-entrant call re-arms pendingRecapRef and could cancel/restart an already-fired recap stream
+    // indefinitely instead of ever letting it land.
     if (stoppingRef.current) return
     stoppingRef.current = true
+    listen.stop()
     setView('review')
     setCollapsed(false)
-    // Read the transcript AFTER stop()'s drain has fully settled — not before — so the recap is built
-    // from the same complete transcript that gets auto-saved, including a final utterance that was still
-    // mid-flush when Stop was pressed. The Review transition above stays synchronous/instant; only the
-    // recap request itself waits on the drain.
-    const preDrain = listen.text() // snapshot NOW as a fallback (see the guard below)
-    let recapDone = false
-    const runRecap = (tx: string): void => {
-      if (recapDone) return
-      recapDone = true
-      if (tx.trim()) {
-        // Cascade the recap into Dust whenever it's configured, regardless of the active provider (e.g.
-        // Kimi handles everyday chat, Dust still writes the meeting notes) — no agentOverride needed, the
-        // normal think-tier resolution inside Dust already respects the user's own Thinking-agent pick.
-        const dustReady = isDustReady(settings?.hasKeys ?? {}, settings?.dustWorkspaceId ?? '', settings?.providerModels ?? {})
-        ask.run({ mode: 'recap', transcript: tx, ...(dustReady ? { providerOverride: 'dust' as const } : {}) })
-      } else ask.clear()
-    }
-    // Safety net: if a fresh listen.start() preempts this drain, listen.ts bails on its sessionEpoch
-    // mismatch and never invokes onDrained — which would silently drop the recap entirely (no run, no
-    // clear). Guarantee the recap still lands off the pre-drain snapshot after the drain ceiling (~4s)
-    // + margin, so an interrupted stop degrades to "recap minus the final utterance" (the old behaviour)
-    // instead of "no recap at all". Whichever fires first wins via the recapDone latch.
-    const fallback = setTimeout(() => runRecap(preDrain), 6000)
-    listen.stop(() => {
-      clearTimeout(fallback)
-      runRecap(listen.text())
-    })
-  }, [listen.text, listen.stop, ask.run, ask.clear, settings?.hasKeys, settings?.dustWorkspaceId, settings?.providerModels])
+    pendingRecapRef.current = true
+    maybeFireRecap() // covers the rare case where listen.listening is already false (no drain pending)
+  }, [listen.stop, maybeFireRecap])
 
   const toggleListen = useCallback(() => {
     if (listen.listening) void endReview()
@@ -1543,6 +1594,8 @@ export function App(): JSX.Element {
       stoppingRef.current = true // mask the up-to-4s drain window, same as endReview's own guard
       meetingStartRef.current = Date.now()
     }
+    pendingRecapRef.current = false // cancel any recap still waiting on endReview's drain — reset abandons it
+    setRecapSkipped(false)
     ask.clear()
     suggest.clear()
     followup.clear() // whatever was being reviewed is being left — a stale follow-up draft must not
@@ -1596,9 +1649,10 @@ export function App(): JSX.Element {
   }, [ask.clear, suggest.clear, listen.listening])
 
   // The bar/control-pill "Transcript" affordance toggles the live transcript inside the copilot panel.
+  // Session-only (see transcriptShown's own comment) — never patches the persisted Settings default.
   const toggleTranscript = useCallback(() => {
-    void patch({ showLiveTranscript: !(settings?.showLiveTranscript ?? false) })
-  }, [patch, settings?.showLiveTranscript])
+    setTranscriptShown((v) => !v)
+  }, [])
 
   // Stabilized Bar callbacks (previously fresh inline arrow functions on every render) — a prerequisite
   // for React.memo(Bar) to actually skip re-renders; an unstable prop defeats memo's shallow comparison
@@ -1868,6 +1922,14 @@ export function App(): JSX.Element {
   // cancel a live stream → close an open surface → collapse → hide the bar.
   const escapeRef = useRef<() => void>(() => {})
   escapeRef.current = (): void => {
+    // A live stream takes top priority (see the precedence comment above) — checked BEFORE the typing-blur
+    // branch below, because the ask input keeps focus after Enter-submit (submit clears its value but never
+    // blurs). Without this ordering the first Esc during a stream only drops focus/the caret and the answer
+    // keeps streaming; only a second Esc (once focus has moved off the input) would reach onStop().
+    if (ask.answer?.streaming || suggest.answer?.streaming) {
+      onStop()
+      return
+    }
     // While typing, Escape just drops focus from the field — it should never collapse/hide the overlay.
     const el = document.activeElement as HTMLElement | null
     if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA')) {
@@ -1879,9 +1941,7 @@ export function App(): JSX.Element {
       unminimize()
       return
     }
-    if (ask.answer?.streaming || suggest.answer?.streaming) {
-      onStop()
-    } else if (view !== 'answer') {
+    if (view !== 'answer') {
       // Leaving the post-meeting Review must not drag the recap into the idle widget answer slot, nor
       // leave a past-meeting snapshot that would later be mistaken for the next live recap.
       if (view === 'review') {
@@ -2030,6 +2090,11 @@ export function App(): JSX.Element {
           mode: 'summary',
           transcript,
           history: historyRef.current,
+          // `prompt` is inert server-side for mode:'summary' (the transcript alone builds the request), but
+          // goDeeper()/retryAnswer() gate their replay on ask.answer?.prompt being truthy — without it "Go
+          // deeper"/"Retry" are dead buttons on every Summarize answer. Also doubles as the clean label
+          // Answer.tsx falls back to when no explicit `label` is set.
+          prompt: 'Summarize the conversation so far.',
           ...(dustReady && !settings?.localSummaryReady ? { providerOverride: 'dust' as const } : {})
         })
         pendingUserRef.current = { id, q: 'Summarize the conversation so far.' } // record for follow-up continuity
@@ -2145,12 +2210,12 @@ export function App(): JSX.Element {
         error={listen.error}
         captureNotice={captureError}
         autosaveWarning={autosaveWarn}
-        showTranscript={settings?.showLiveTranscript ?? false}
+        showTranscript={transcriptShown}
         onEnd={endReview}
       />
     ),
     // autosaveWarn was MISSING from the old shared dep array — a latent stale-warning bug the split fixes.
-    [listen.lines, suggest.answer, showSpec, speculative.answer, mode, listen.listening, listen.loading, listen.loadingPct, listen.error, captureError, autosaveWarn, settings?.showLiveTranscript, endReview]
+    [listen.lines, suggest.answer, showSpec, speculative.answer, mode, listen.listening, listen.loading, listen.loadingPct, listen.error, captureError, autosaveWarn, settings?.showLiveTranscript, endReview, transcriptShown]
   )
   const reviewBody = useMemo(() => {
     // Two sources: a just-ended live session (ask.answer recap + live lines), or a past meeting opened
@@ -2212,6 +2277,17 @@ export function App(): JSX.Element {
         onOpenPastMeeting={openPastMeeting}
         isPastMeeting={!!pm}
         onDirtyChange={onReviewDirtyChange}
+        // Live-session-only: the recap was intentionally skipped (no AI provider configured) rather than
+        // fired and left to fail with a red error — see maybeFireRecap. Past meetings already have their
+        // own "no notes saved" copy for a keyless failure, so this never applies to them.
+        recapUnavailable={
+          !pm && recapSkipped
+            ? {
+                message: 'Connect a provider to get an AI summary. Your transcript is saved either way.',
+                onOpenSettings: () => openSettings('ai')
+              }
+            : undefined
+        }
         onRecapSaved={
           pm
             ? (recap) => setPastMeeting((prev) => (prev ? { ...prev, recap } : prev))
@@ -2227,7 +2303,7 @@ export function App(): JSX.Element {
         }
       />
     )
-  }, [pastMeeting, recapGenTarget, recapGen.answer, ask.answer, listen.lines, savedPath, saveError, saveAttempts, settings?.showFullTranscriptInReview, settings?.bidstackConnected, settings?.bidstackTools, followup.answer, generateFollowup, requireProvider, generateSavedRecap, retryAnswer, manualSave, discardMeeting, resumePastMeeting, openPastMeeting, reset])
+  }, [pastMeeting, recapGenTarget, recapGen.answer, ask.answer, listen.lines, savedPath, saveError, saveAttempts, settings?.showFullTranscriptInReview, settings?.bidstackConnected, settings?.bidstackTools, followup.answer, generateFollowup, requireProvider, generateSavedRecap, retryAnswer, manualSave, discardMeeting, resumePastMeeting, openPastMeeting, reset, recapSkipped, openSettings])
   const answerBody = useMemo(() => {
     if (!(capturing || captureError || ask.answer)) return null
     // While a new screen capture is in flight (capturing), force the streaming/empty display even when
@@ -2531,7 +2607,7 @@ export function App(): JSX.Element {
             onBack={hasAnswer ? clearAnswer : undefined}
             screenCapturedAt={ctxCapturedAt}
             onTranscript={toggleTranscript}
-            transcriptShown={settings?.showLiveTranscript ?? false}
+            transcriptShown={transcriptShown}
             onNewMeeting={newMeeting}
             customModes={settings?.customModes}
             canPrewarm={!!settings?.visionAvailable && (settings?.screenAsk ?? true)}
@@ -2593,13 +2669,22 @@ export function App(): JSX.Element {
           )}
           {settings && !settings.providerReady && !nudgeExpired && view !== 'settings' && !showListeningChrome && (() => {
             const activeDef = PROVIDERS[settings.provider]
+            // A keyed API provider can still be blocked by the org allowlist (settings.hasApiKey true,
+            // providerReady false) — "add your API key" is the wrong remedy there; the user needs to
+            // switch to an approved provider, not enter a key they already have.
+            const blockedByOrg = settings.hasApiKey && activeDef.kind !== 'cli'
             const cta = activeDef.kind === 'cli'
               ? `Connect ${activeDef.label} in Settings`
-              : `Add your ${activeDef.label} API key`
+              : blockedByOrg
+                ? 'Switch to an approved provider'
+                : `Add your ${activeDef.label} API key`
+            const notice = blockedByOrg
+              ? "Your organization restricts which providers you can use. Switch to an approved provider here."
+              : 'Add an API key or connect a provider here to ask questions.'
             return (
               <button
                 type="button"
-                onClick={() => openSettings('ai', 'Add an API key or connect a provider here to ask questions.')}
+                onClick={() => openSettings('ai', notice)}
                 className="no-drag focus-ring fade-up flex items-center justify-center gap-1.5 whitespace-nowrap rounded-xl border border-[var(--color-accent)]/30 bg-[var(--color-accent)] px-3 py-1.5 text-[11px] font-medium text-white hover:brightness-110"
               >
                 {cta}
