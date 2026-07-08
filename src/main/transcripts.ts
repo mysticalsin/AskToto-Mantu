@@ -611,7 +611,12 @@ export async function appendDebrief(
       updated = md.slice(0, start) + section + (next >= 0 ? md.slice(next + 1) : '')
     }
   }
-  await writeSaved(path, updated, settings.encryptTranscripts)
+  // Preserve the file's ORIGINAL at-rest encryption exactly as found (mirrors updateMeetingRecap /
+  // renameMeeting), NOT the live encryptTranscripts toggle. Otherwise appending a debrief to a file
+  // that was saved while encryption was on would rewrite the whole transcript as plaintext once the
+  // toggle is later turned off — a silent at-rest downgrade of already-recorded third-party speech.
+  const wasEncrypted = isEncryptedFile(path)
+  await writeSaved(path, updated, wasEncrypted)
   return { ok: true }
 }
 
