@@ -68,8 +68,14 @@ function readEscrowFromManaged(p: string): string | null {
 
 /**
  * Org escrow public key (PEM), if configured. Precedence: env ASKTOTO_ESCROW_PUBKEY (dev) → machine-wide
- * managed-config (IT policy) → per-user managed-config. Returns null when unset/unusable, so encryption
- * silently falls back to local-only (no regression). Never throws; never logs key material.
+ * ADMIN-TRUSTED managed-config (IT policy) ONLY. Returns null when unset/unusable, so encryption silently
+ * falls back to local-only (no regression). Never throws; never logs key material.
+ *
+ * SECURITY: escrow decides WHO can decrypt every future transcript, so it must never be honored from a
+ * user-writable source. The per-user `userData/managed-config.json` is writable by the current user (and
+ * anything running as them), so a planted `escrowPubKey` there would silently wrap every transcript to an
+ * attacker key (readable off OneDrive). Escrow is therefore admin-machine-path-only (ACL-gated by
+ * trustedAdminManagedPath) or env (dev) — the per-user tier is deliberately NOT consulted here.
  */
 function readEscrowPubKey(): string | null {
   const fromEnv = resolveEscrowPem(process.env.ASKTOTO_ESCROW_PUBKEY)
@@ -78,12 +84,6 @@ function readEscrowPubKey(): string | null {
     const adminPath = trustedAdminManagedPath() // null on win32 unless admin-owned + not user-writable
     const machine = adminPath ? resolveEscrowPem(readEscrowFromManaged(adminPath)) : null
     if (machine) return machine
-  } catch {
-    /* ignore */
-  }
-  try {
-    const user = resolveEscrowPem(readEscrowFromManaged(join(app.getPath('userData'), 'managed-config.json')))
-    if (user) return user
   } catch {
     /* ignore */
   }
