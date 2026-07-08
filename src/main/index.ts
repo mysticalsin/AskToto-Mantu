@@ -139,16 +139,22 @@ import { computeAttention } from './brain/attention'
 import { openIntelligenceWindow, isIntelligenceSender, syncIntelContentProtection } from './intelligence'
 import {
   readIndex as readBrainIndex,
+  writeIndex as writeBrainIndex,
   readGraph as readBrainGraph,
+  writeGraph as writeBrainGraph,
   readPerson as readBrainPerson,
+  writePerson as writeBrainPerson,
   readAccount as readBrainAccount,
+  writeAccount as writeBrainAccount,
   readDeal as readBrainDeal,
+  writeDeal as writeBrainDeal,
   listEntities as listBrainEntities,
   listMeetingExtractions as listBrainMeetingExtractions,
   readMeetingExtraction as readBrainMeetingExtraction,
   purgeBrain,
   setDealOutcome,
-  slugify as brainSlugify
+  slugify as brainSlugify,
+  brainDir as brainStoreDir
 } from './brain/store'
 import { buildBrainContext } from './brain/context'
 import { buildSystem } from './personas'
@@ -220,7 +226,7 @@ import {
   purgeGraphArtifacts
 } from './graphify'
 import { SaveMeetingSchema, SaveNoteSchema } from '@shared/ipc'
-import { PROVIDERS, resolveModelTier, applyInteractiveGuardrail, type ProviderId } from '@shared/providers'
+import { PROVIDERS, resolveModelTier, applyInteractiveGuardrail, type ProviderId, type ProviderDef } from '@shared/providers'
 import { routeTier } from '@shared/routing'
 import { redactSecrets } from '@shared/redact'
 import { applySpeakerNames } from '@shared/transcript-align'
@@ -1526,9 +1532,14 @@ function startMeetingNotifier(): void {
         if (notifiedKeys.has(key)) continue
         notifiedKeys.add(key)
         try {
+          // msUntil can be anywhere from -30s (event already started) to +60s here — "starts in 1 minute"
+          // was hardcoded and wrong for the already-started/starting-now end of that range (most visible
+          // right after launch, when the first poll fires immediately for any event already inside the
+          // window). Phrase from the real remaining time instead of a fixed string.
+          const body = msUntil <= 5_000 ? `${ev.subject} is starting now` : `${ev.subject} starts in 1 minute`
           new Notification({
             title: 'Meeting starting soon',
-            body: `${ev.subject} starts in 1 minute`
+            body
           }).show()
         } catch {
           /* notifications may be blocked by the OS */
@@ -1610,6 +1621,10 @@ function rebuildTrayMenu(): void {
 // power-save blocker for the duration of a meeting keeps the process at normal priority regardless of
 // window visibility. Module-level id: only one meeting can be active at a time.
 let recordingPowerSaveBlockerId: number | null = null
+// Guards the before-quit meeting-flush handler below from re-entering when it re-issues app.quit()
+// itself, and lets the IPC.windowQuit handler (whose caller, App.tsx's quitApp(), already AWAITS a
+// flush before invoking it) skip the redundant flush-and-wait entirely.
+let quitFlushDone = false
 function setRecordingPowerSaveBlock(on: boolean): void {
   if (on) {
     if (recordingPowerSaveBlockerId === null || !powerSaveBlocker.isStarted(recordingPowerSaveBlockerId)) {
@@ -2646,12 +2661,27 @@ function registerIpc(): void {
       const def = PROVIDERS[provider]
       if (allowed && !allowed.includes(provider)) {
         auditLog('provider.blocked', { provider })
-        if (attempted.length === 0)
+        if (attempted.length === 0) {
+          // Name an actual next step, not just what's wrong: prefer an approved provider that's already
+          // keyed/CLI-connected (so "switch to X" is immediately actionable), falling back to just naming
+          // the first approved provider when none of them are configured yet.
+          const approvedCandidates = allowed
+            .filter((p) => p !== provider)
+            .map((p) => ({ id: p as ProviderId, def: PROVIDERS[p as ProviderId] as ProviderDef | undefined }))
+            .filter((c): c is { id: ProviderId; def: ProviderDef } => !!c.def)
+          const readyApproved = approvedCandidates.find((c) =>
+            c.def.kind === 'cli' ? !!s.cliConnected[c.id] : getApiKey(c.id).length > 0
+          )
+          const approvedLabel = (readyApproved ?? approvedCandidates[0])?.def.label
           win?.webContents.send(IPC.streamError, {
             id: req.id,
-            message: `${def.label} is not on your organization's approved provider list.`
+            message: approvedLabel
+              ? `${def.label} is not on your organization's approved provider list. Switch to ${approvedLabel} in Settings.`
+              : `${def.label} is not on your organization's approved provider list.`
           })
-        else if (!failover(attempted.concat(provider))) win?.webContents.send(IPC.streamError, { id: req.id, message: 'No approved provider could answer.' })
+        } else if (!failover(attempted.concat(provider))) {
+          win?.webContents.send(IPC.streamError, { id: req.id, message: 'No approved provider could answer.' })
+        }
         return
       }
       // Métis Local is keyless: its per-session sidecar key lives only in local-runtime.ts memory, never
@@ -2726,7 +2756,7 @@ function registerIpc(): void {
       win?.webContents.send(IPC.streamMeta, { id: req.id, provider, tier })
       // Per-tier idle budget: a live suggest gives up fast to stay real-time; recaps + deep answers get the
       // full headroom. Bounds time-to-first-token and triggers failover when a provider stalls before a token.
-      const idleMs =
+      const baseIdleMs =
         req.mode === 'suggest'
           ? 15_000
           : req.mode === 'recap' || req.mode === 'summary'
@@ -2738,6 +2768,13 @@ function registerIpc(): void {
                 : req.mode === 'vision'
                   ? 60_000
                   : 45_000
+      // Each failover attempt re-derives a fresh, full idle budget with no shared cross-provider deadline —
+      // on a silent-drop offline network (captive portal / dead-gateway WiFi that accepts the connection
+      // then black-holes packets) that compounds into N x the base budget of blank spinner before the user
+      // sees any error. Retries (attempted.length > 0) get a much shorter cap: a healthy provider still
+      // answers well inside it, while a silent-drop network surfaces the "Connection error." in seconds.
+      const RETRY_IDLE_CAP_MS = 20_000
+      const idleMs = attempted.length > 0 ? Math.min(baseIdleMs, RETRY_IDLE_CAP_MS) : baseIdleMs
       const startedAt = Date.now()
       let gotToken = false
       let ttftMs: number | undefined
@@ -3534,6 +3571,10 @@ function registerIpc(): void {
   })
   ipcMain.handle(IPC.windowQuit, (e) => {
     assertMainWindow(e)
+    // App.tsx's quitApp() already `await`s flushLiveMeeting() (a best-effort saveTranscript) before
+    // invoking this — the meeting is already on disk by the time we get here, so the before-quit
+    // handler below must not add its own redundant flush-and-wait on top of an already-safe quit.
+    quitFlushDone = true
     app.quit()
   })
   // --- Auto-update ---
@@ -3618,6 +3659,14 @@ if (!app.requestSingleInstanceLock()) {
   if (process.platform === 'win32') {
     try { process.chdir(app.getPath('userData')) } catch { /* best-effort */ }
   }
+  // Reconcile the OS login item with the effective launchAtLogin setting once at boot. Covers two gaps:
+  // a managed-config/default launchAtLogin:true is never registered (setLoginItemSettings only ran on an
+  // explicit user patch), and OS-side drift (Task Manager Startup disable, AV cleanup, profile migration)
+  // silently diverges from the persisted preference. Idempotent — only writes when they actually differ.
+  try {
+    const want = getSettings().launchAtLogin
+    if (app.getLoginItemSettings().openAtLogin !== want) app.setLoginItemSettings({ openAtLogin: want })
+  } catch { /* best-effort — never block startup */ }
   // Unpackaged (dev/QA) runs show Electron's default icon in the Dock — brand them with the Mantu M so
   // a dev window is never mistaken for "the Electron thing". Packaged builds get build/icon.png baked
   // in by electron-builder (mac .icns / win .ico) and don't need this.
@@ -4022,6 +4071,28 @@ if (!app.requestSingleInstanceLock()) {
 
 app.on('window-all-closed', () => {
   // Overlay app: stay alive in tray; quit only via tray/menu.
+})
+
+// Tray "Quit AskToto" (and any other path that calls app.quit() directly, e.g. Cmd+Q on macOS) used to
+// tear the process down with zero drain: the in-progress meeting's transcript lives only in renderer
+// React state, written to disk solely by a 60s autosave interval, so a graceful-looking Quit could lose
+// up to 60s of a meeting or the entire thing for a sub-60s one. The in-app Settings "Quit" button is
+// already safe — App.tsx's quitApp() awaits flushLiveMeeting() before calling window.toto.quit(), which
+// marks quitFlushDone above and lets this handler no-op. For every other quit path, give the renderer one
+// bounded chance to save: recordingPowerSaveBlockerId is non-null for exactly the duration of an active
+// meeting (see setRecordingPowerSaveBlock), so it's a reliable "is a meeting in progress" signal here in
+// main. Reuses the existing 'reset' hotkey, which already runs saveMeetingNow() for a live meeting
+// (App.tsx's reset()) — no new IPC channel needed.
+app.on('before-quit', (e) => {
+  if (quitFlushDone || recordingPowerSaveBlockerId === null || !win || win.isDestroyed()) return
+  e.preventDefault()
+  quitFlushDone = true
+  try {
+    win.webContents.send(IPC.hotkey, 'reset')
+  } catch {
+    /* window may already be gone */
+  }
+  setTimeout(() => app.quit(), 2000)
 })
 
 app.on('will-quit', () => {

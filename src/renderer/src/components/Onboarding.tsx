@@ -16,7 +16,9 @@ import {
   AlertCircle,
   Terminal,
   KeyRound,
-  Building2
+  Building2,
+  ChevronDown,
+  Loader2
 } from 'lucide-react'
 import { DEFAULT_SHORTCUTS } from '@shared/ipc'
 import type { PublicSettings, Profile, PlatformPermissions, ProfileRecoveryResult } from '@shared/ipc'
@@ -283,6 +285,10 @@ export function Onboarding({
       mountedRef.current = false
     }
   }, [])
+  // Set when the user bypasses an in-flight "Sign in with Microsoft" wait via "Continue without
+  // signing in" — lets the abandoned signIn() promise's eventual resolution no-op instead of
+  // yanking the user back to this step or surfacing a stale error once they've moved on.
+  const abandonedSsoRef = useRef(false)
 
   // Move focus to the new step's heading on every transition so screen readers announce it instead of
   // silently dropping focus to <body>.
@@ -339,13 +345,20 @@ export function Onboarding({
       return
     }
     setErr('')
+    if (!viaSso && busy) {
+      // Bypassing a still-in-flight SSO wait (the loopback OAuth can block up to 5 minutes) —
+      // mark it abandoned so its late resolution doesn't affect us once we've moved on.
+      abandonedSsoRef.current = true
+    }
     setBusy(true)
     try {
       // Already signed in (e.g. Reset-onboarding re-drives this screen for a user who never signed out) —
       // never re-launch an interactive OAuth: it could silently switch the signed-in identity, contradicting
       // "your settings won't change." The signed-in state is already correct; just continue the walkthrough.
       if (viaSso && !signedIn && window.toto.signIn) {
+        abandonedSsoRef.current = false
         const r = await window.toto.signIn()
+        if (abandonedSsoRef.current) return
         if (!r.ok) {
           setErr(r.error || 'Sign-in failed. Use a Mantu Microsoft account.')
           setBusy(false)
@@ -354,7 +367,7 @@ export function Onboarding({
       }
       setStep(2)
     } catch (e) {
-      setErr(e instanceof Error ? e.message : 'Could not continue.')
+      if (!abandonedSsoRef.current) setErr(e instanceof Error ? e.message : 'Could not continue.')
     } finally {
       setBusy(false)
     }
@@ -775,8 +788,14 @@ export function Onboarding({
             busy ? 'cursor-not-allowed opacity-50' : ''
           ].join(' ')}
         >
-          <MsLogo size={16} /> Sign in with Microsoft
+          {busy ? <Loader2 size={16} className="animate-spin" /> : <MsLogo size={16} />}
+          {busy ? 'Waiting for your browser…' : 'Sign in with Microsoft'}
         </button>
+        {busy && (
+          <p className="text-[11px] leading-snug text-[color:var(--color-ink-3)]" role="status">
+            A Microsoft window opened. Finish there, or continue without signing in below.
+          </p>
+        )}
         <button
           type="button"
           disabled={busy}

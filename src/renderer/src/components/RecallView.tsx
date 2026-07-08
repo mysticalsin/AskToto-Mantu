@@ -920,6 +920,10 @@ export function RecallView({
     [onOpenMeeting, flagRowError]
   )
   const openSelected = (): void => {
+    // While a debounced search is still in flight, `items` still holds the PREVIOUS query's results —
+    // don't fall back to items[0] until it actually reflects the current query text. An explicit
+    // selectedFile (the user clicked/arrowed onto a row) is still honored regardless.
+    if (!selectedFile && q.trim() !== debouncedQ) return
     const f = selectedFile ?? items[0]?.file
     if (f) openMeeting(f)
   }
