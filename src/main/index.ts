@@ -313,8 +313,12 @@ export async function generateRecapForTranscript(settings: Settings, transcript:
   const req: AskStart = {
     id: randomBytes(8).toString('hex'),
     mode: 'recap',
+    // Strip secret-shaped strings (cards/keys/SSNs) from the transcript before it goes to the provider,
+    // exactly as the live recap path does (see the ask handler's `s.redactSensitive && req.transcript`
+    // redaction). Without this, an imported voice message's secrets would reach the cloud unredacted
+    // while the same words spoken live would be stripped — a real at-egress leak.
+    transcript: settings.redactSensitive ? redactSecrets(transcript) : transcript,
     prompt: '',
-    transcript,
     kind: 'answer',
     history: []
   }
