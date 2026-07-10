@@ -1462,7 +1462,7 @@ function registerIpc(): void {
     assertMainWindow(e)
     if (!requireAuth()) return { ok: false, error: 'Sign in with your Mantu account first.' }
     const r = await setupDustCli()
-    if (r.ok && process.platform === 'darwin') {
+    if (r.ok && (process.platform === 'darwin' || process.platform === 'win32')) {
       if (dustSetupPoll) clearInterval(dustSetupPoll)
       const startedAt = Date.now()
       dustSetupPoll = setInterval(() => {
