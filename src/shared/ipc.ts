@@ -928,6 +928,10 @@ export interface DustCliImport {
   workspaceId?: string
   baseUrl?: string
   error?: string
+  /** true when the failure was a BLOCKED keychain read (user hasn't allowed Métis to read the Dust CLI
+   *  item) — as opposed to no session existing at all. Lets the UI prompt to allow access instead of
+   *  wrongly re-running the install/login setup for a session that is actually present. */
+  accessDenied?: boolean
 }
 
 /** Result of kicking off the Dust CLI setup (install + interactive login) when no session exists yet. */

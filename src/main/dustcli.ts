@@ -80,7 +80,7 @@ export async function importDustCliSession(): Promise<DustCliSession> {
   // stack prompts or make a single denial look like a missing Dust CLI session.
   const token = await keychainGet(ACCESS_TOKEN)
   if (token.accessDenied) {
-    return { ok: false, error: 'Allow Métis to access your Dust CLI session in Keychain, then try again.' }
+    return { ok: false, accessDenied: true, error: 'Allow Métis to access your Dust CLI session in Keychain, then try again.' }
   }
   if (!token.value) {
     return {
@@ -91,14 +91,14 @@ export async function importDustCliSession(): Promise<DustCliSession> {
   }
   const workspace = await keychainGet(WORKSPACE)
   if (workspace.accessDenied) {
-    return { ok: false, error: 'Allow Métis to access your Dust CLI workspace in Keychain, then try again.' }
+    return { ok: false, accessDenied: true, error: 'Allow Métis to access your Dust CLI workspace in Keychain, then try again.' }
   }
   if (!workspace.value) {
     return { ok: false, error: 'Your Dust CLI session is incomplete. Run `dust login` again, then return to Métis.' }
   }
   const region = await keychainGet(REGION)
   if (region.accessDenied) {
-    return { ok: false, error: 'Allow Métis to access your Dust CLI region in Keychain, then try again.' }
+    return { ok: false, accessDenied: true, error: 'Allow Métis to access your Dust CLI region in Keychain, then try again.' }
   }
   return { ok: true, token: token.value, workspaceId: workspace.value, baseUrl: regionToBaseUrl(region.value) }
 }

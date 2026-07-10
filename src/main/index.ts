@@ -1457,7 +1457,7 @@ function registerIpc(): void {
     assertMainWindow(e)
     if (!requireAuth()) return { ok: false, error: 'Sign in with your Mantu account first.' }
     const s = await refreshDustCliSession()
-    if (!s.ok || !s.token || !s.workspaceId) return { ok: false, error: s.error }
+    if (!s.ok || !s.token || !s.workspaceId) return { ok: false, error: s.error, accessDenied: s.accessDenied }
     setApiKey('dust', s.token)
     setSettings({ dustWorkspaceId: s.workspaceId, dustBaseUrl: s.baseUrl || 'https://dust.tt', dustTokenMintedAt: Date.now() })
     return { ok: true, workspaceId: s.workspaceId, baseUrl: s.baseUrl }
