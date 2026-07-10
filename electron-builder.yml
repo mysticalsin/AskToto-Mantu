@@ -98,7 +98,9 @@ dmg:
   title: Métis ${version}
 win:
   icon: build/icon.png
-  publisherName: Mantu
+  # electron-builder 26 moved publisher/signing fields under win.signtoolOptions (was win.publisherName).
+  signtoolOptions:
+    publisherName: Mantu
   target:
     - nsis      # → Metis-Setup-<version>.exe (installer)
     - portable  # → Metis-Portable-<version>.exe (no-install single exe)
