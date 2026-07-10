@@ -40,6 +40,7 @@ export const IPC = {
   dustListAgents: 'dust:listAgents',
   dustImportCli: 'dust:importCli',
   dustSetupCli: 'dust:setupCli',
+  dustProbeSession: 'dust:probeSession',
   graphifyStatus: 'graphify:status',
   graphifyRebuild: 'graphify:rebuild',
   graphifyRelated: 'graphify:related',
@@ -938,6 +939,15 @@ export interface DustCliImport {
 export interface DustCliSetup {
   ok: boolean
   error?: string
+}
+
+/** Read-only probe of the local Dust CLI session — booleans only, never the token. Unlike DustCliImport
+ *  this does NOT run `dust status` (no OAuth token rotation) and does NOT persist, so it is safe to call
+ *  on Settings-open alongside a concurrent agent-list load. `ok` means a session is present in the
+ *  keychain (an expired-but-present token still counts — it is refreshable, not a dead session). */
+export interface DustSessionProbe {
+  ok: boolean
+  accessDenied?: boolean
 }
 
 /** Result of a CLI provider detect/test operation (claude-cli, codex-cli). */

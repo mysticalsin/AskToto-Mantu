@@ -2053,8 +2053,9 @@ function DustSetup({
 
   // Live session probe on open. When the SAVED settings already look connected, don't take that at face
   // value — the underlying Dust CLI session can be gone (the user ran `dust logout`, the keychain was
-  // cleared, or the token is unrecoverable). Probe once per mount via dustImportCli (which also refreshes
-  // a live token as a bonus) and act on decideDustLiveCheck:
+  // cleared, or the token is unrecoverable). Probe once per mount with the READ-ONLY dustProbeSession —
+  // NOT dustImportCli, which runs `dust status` and would rotate the OAuth token in a race with the
+  // concurrent loadAgents() above, 401-ing the agent list. Then act on decideDustLiveCheck:
   //   • connected    → nothing to do.
   //   • needs-access → the keychain read was blocked; ask to allow it, DON'T relaunch setup.
   //   • run-setup    → no live session behind the saved connection → auto-run install + `dust login`
@@ -2064,7 +2065,7 @@ function DustSetup({
     if (liveCheckedRef.current || isWin || !keySaved || !hasWs) return
     liveCheckedRef.current = true
     void (async () => {
-      const decision = decideDustLiveCheck(await window.toto.dustImportCli())
+      const decision = decideDustLiveCheck(await window.toto.dustProbeSession())
       if (decision === 'connected') return
       if (decision === 'needs-access') {
         setCli({ busy: false, ok: false, msg: 'Allow Métis to read your Dust CLI session in Keychain, then Reconnect.' })
