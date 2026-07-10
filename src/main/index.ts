@@ -63,9 +63,11 @@ import {
   hasApiKey,
   hasKeysMap,
   encryptionAvailable,
-  listDustAgents
+  listDustAgents,
+  dustSelectedAgentVision
 } from './store'
 import { createStream } from './llm'
+import { isTransient, nextBackoff } from './llm/retry'
 import { resetDustConversation, isDustAuthError } from './llm/dust'
 import { enqueueIngest, startBackfill, brainBackfillProgress, resumeBackfillIfPending, settleCommitment } from './brain/ingest'
 import { openIntelligenceWindow, isIntelligenceSender, syncIntelContentProtection } from './intelligence'
@@ -1940,6 +1942,12 @@ function registerIpc(): void {
     }
     const allowed = getAllowedProviders() // org allowlist (null = unrestricted)
 
+    // Screen-vision capability. Static per provider, EXCEPT Dust: its ability to read a screenshot depends
+    // on the selected agent's underlying model (it uploads the shot as a content fragment), so consult the
+    // per-agent capability instead of the static flag. Everything else uses PROVIDERS[p].vision.
+    const providerVisionOk = (p: ProviderId): boolean =>
+      p === 'dust' ? dustSelectedAgentVision(s.providerModels['dust']) : PROVIDERS[p].vision
+
     // Find the next eligible keyed provider not yet tried — for failover when the primary can't answer.
     const failover = (tried: ProviderId[]): boolean => {
       const tier = routeTier(req, s.thinkingMode)
@@ -1956,7 +1964,7 @@ function registerIpc(): void {
           !tried.includes(p) &&
           (!allowed || allowed.includes(p)) &&
           (PROVIDERS[p].kind === 'cli' ? !!s.cliConnected[p] : getApiKey(p).length > 0) &&
-          (req.mode !== 'vision' || PROVIDERS[p].vision) &&
+          (req.mode !== 'vision' || providerVisionOk(p)) &&
           // CLI providers (e.g. codex-cli) may have no configured model at all — attempt() below
           // already exempts kind==='cli' from the "no model" ineligibility check (the CLI just uses
           // its own default), so a failover candidate must be exempted the same way or a fully
@@ -1969,8 +1977,11 @@ function registerIpc(): void {
       return true
     }
 
-    // Validate a provider, start the stream, and on a PRE-token (TTFT) failure fall over to the next one.
-    const attempt = (provider: ProviderId, attempted: ProviderId[]): void => {
+    // Validate a provider, start the stream, and on a PRE-token (TTFT) failure retry the same provider
+    // (transient errors) then fall over to the next one. `retryCount` tracks same-provider transient
+    // retries; failover resets it (each provider gets its own retry budget).
+    const MAX_TRANSIENT_RETRIES = 3
+    const attempt = (provider: ProviderId, attempted: ProviderId[], retryCount = 0): void => {
       const def = PROVIDERS[provider]
       if (allowed && !allowed.includes(provider)) {
         auditLog('provider.blocked', { provider })
@@ -2000,7 +2011,7 @@ function registerIpc(): void {
           ? provider === 'dust'
             ? `No ${tier === 'think' ? 'thinking' : 'base'} Dust agent set. Open Settings → Connect Dust and pick your agents.`
             : `No model set for ${def.label}. Pick a model in Settings.`
-          : req.mode === 'vision' && !def.vision
+          : req.mode === 'vision' && !providerVisionOk(provider)
             ? `${def.label} can't read screenshots. Switch to Claude or GPT in Settings, or ask without a screen capture.`
             : provider === 'dust' && !s.dustWorkspaceId
               ? 'Add your Dust workspace ID in Settings → AI → Dust setup.'
@@ -2010,7 +2021,7 @@ function registerIpc(): void {
         // over to a configured vision-capable provider (Claude/GPT) so a user who captured their screen
         // still gets an answer — `failover` only picks a provider that has both a key and a model. Surface
         // the error only when NO vision-capable provider is set up.
-        const visionGap = req.mode === 'vision' && !def.vision
+        const visionGap = req.mode === 'vision' && !providerVisionOk(provider)
         if (visionGap && failover(attempted.concat(provider))) return
         if (attempted.length === 0) win?.webContents.send(IPC.streamError, { id: req.id, message: ineligible })
         else if (!failover(attempted.concat(provider))) win?.webContents.send(IPC.streamError, { id: req.id, message: ineligible })
@@ -2086,14 +2097,25 @@ function registerIpc(): void {
           },
           onError: (message) => {
             streams.delete(req.id)
-            auditLog('provider.failed', { provider, gotToken })
-            // Fall over only on a PRE-token failure (the user hasn't seen a partial answer yet).
+            auditLog('provider.failed', { provider, gotToken, retry: retryCount })
+            // Pre-token transient failure (dropped socket, 5xx, 429, DNS blip): retry the SAME provider
+            // with bounded backoff before switching. `gotToken` guards it — once tokens are on the wire
+            // we never re-run. A cancel handle keeps an abort during the backoff wait from firing the retry.
+            if (!gotToken && retryCount < MAX_TRANSIENT_RETRIES && isTransient(message)) {
+              const delayMs = nextBackoff(retryCount)
+              auditLog('provider.retry', { provider, attempt: retryCount + 1, delayMs })
+              const timer = setTimeout(() => attempt(provider, attempted, retryCount + 1), delayMs)
+              streams.set(req.id, { abort: () => clearTimeout(timer) })
+              return
+            }
+            // Retries exhausted or non-transient: fall over to another provider (pre-token only).
             if (!gotToken && failover(attempted.concat(provider))) return
-            // A Dust auth error here means the token expired AND the silent refresh failed (session
-            // truly gone) — give a clear one-click path instead of a raw API error.
-            const friendly =
-              provider === 'dust' &&
-              /oauth|unauthor|expired|authentication credential|invalid.*(token|credential)/i.test(message)
+            // Replace raw client transport strings ("Unexpected network error from DustAPI: fetch failed")
+            // with a clean message; keep the Dust-auth one-click reconnect path; else pass the message.
+            const friendly = isTransient(message)
+              ? "Connection issue — couldn't reach the provider after retrying. Check your network and try again."
+              : provider === 'dust' &&
+                  /oauth|unauthor|expired|authentication credential|invalid.*(token|credential)/i.test(message)
                 ? 'Your Dust session expired and could not refresh automatically. Open Settings and reconnect Dust once.'
                 : message
             win?.webContents.send(IPC.streamError, { id: req.id, message: friendly })

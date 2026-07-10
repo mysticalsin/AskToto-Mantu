@@ -1,5 +1,32 @@
 import { describe, it, expect } from 'vitest'
-import { isDustReady, applyInteractiveGuardrail, parseDustUrl, PROVIDERS } from './providers'
+import { isDustReady, applyInteractiveGuardrail, parseDustUrl, PROVIDERS, dustAgentVision } from './providers'
+
+describe('dustAgentVision', () => {
+  it('treats every Claude (anthropic) agent as vision-capable', () => {
+    expect(dustAgentVision({ modelProviderId: 'anthropic', modelId: 'claude-3-5-sonnet-20241022' })).toBe(true)
+    expect(dustAgentVision({ modelProviderId: 'anthropic', modelId: 'claude-sonnet-4-20250514' })).toBe(true)
+  })
+
+  it('treats modern multimodal OpenAI models as vision, legacy text ones as not', () => {
+    expect(dustAgentVision({ modelProviderId: 'openai', modelId: 'gpt-4o' })).toBe(true)
+    expect(dustAgentVision({ modelProviderId: 'openai', modelId: 'gpt-4.1' })).toBe(true)
+    expect(dustAgentVision({ modelProviderId: 'openai', modelId: 'o3' })).toBe(true)
+    expect(dustAgentVision({ modelProviderId: 'openai', modelId: 'gpt-3.5-turbo' })).toBe(false)
+  })
+
+  it('treats Gemini as vision and honors explicit vl/vision/pixtral hints', () => {
+    expect(dustAgentVision({ modelProviderId: 'google_ai_studio', modelId: 'gemini-1.5-pro' })).toBe(true)
+    expect(dustAgentVision({ modelProviderId: 'mistral', modelId: 'pixtral-large' })).toBe(true)
+    expect(dustAgentVision({ modelProviderId: 'fireworks', modelId: 'qwen-vl-max' })).toBe(true)
+  })
+
+  it('is false for text-only providers/models and missing input', () => {
+    expect(dustAgentVision({ modelProviderId: 'mistral', modelId: 'mistral-large' })).toBe(false)
+    expect(dustAgentVision({ modelProviderId: 'deepseek', modelId: 'deepseek-chat' })).toBe(false)
+    expect(dustAgentVision(null)).toBe(false)
+    expect(dustAgentVision({})).toBe(false)
+  })
+})
 
 describe('isDustReady', () => {
   it('is true only when the key, workspace, and base agent are all present', () => {

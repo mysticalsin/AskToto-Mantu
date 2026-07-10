@@ -64,6 +64,7 @@ export type AuditEvent =
   | 'answer.feedback'
   | 'provider.request'
   | 'provider.failed'
+  | 'provider.retry'
   | 'provider.blocked'
   | 'settings.changed'
   | 'graph.purged'

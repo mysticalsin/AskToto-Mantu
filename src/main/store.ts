@@ -9,7 +9,7 @@ import {
   type Settings,
   type DustAgentsResponse
 } from '@shared/ipc'
-import { PROVIDERS, PROVIDER_IDS, type ProviderId } from '@shared/providers'
+import { PROVIDERS, PROVIDER_IDS, dustAgentVision, type ProviderId } from '@shared/providers'
 import { mainLog } from './logger'
 import { useFileBackend, encryptSecret, decryptSecret } from './secrets'
 // Static (eager) imports — dynamic import() throws under the bytecode-compiled main (electron-vite
@@ -508,10 +508,28 @@ export async function listDustAgents(): Promise<DustAgentsResponse> {
         modelId: a.model?.modelId
       }))
       .sort((x, y) => x.name.localeCompare(y.name))
+    // Cache each agent's vision capability by sId so the ask path can route a Dust screen question
+    // natively (upload the screenshot) only when the SELECTED agent's model can actually read it — no
+    // extra Dust round-trip at ask time (see dustSelectedAgentVision).
+    for (const a of agents) _dustAgentVision.set(a.sId, dustAgentVision(a))
     return { ok: true, agents }
   } catch (e) {
     return { ok: false, error: e instanceof Error ? e.message : String(e) }
   }
+}
+
+// Vision capability per Dust agent sId, populated on every agent list (listDustAgents above).
+const _dustAgentVision = new Map<string, boolean>()
+
+/**
+ * Vision capability of the currently-selected Dust base agent, from the last agent list. Unknown (cache
+ * cold, or the agent was never listed this session) → true: try Dust natively rather than dead-end a
+ * screen question. The native path fails over on any real upload/stream error, so an optimistic default
+ * degrades gracefully in both directions.
+ */
+export function dustSelectedAgentVision(sId: string | undefined): boolean {
+  if (!sId) return true
+  return _dustAgentVision.get(sId) ?? true
 }
 
 export function getApiKey(provider: ProviderId): string {

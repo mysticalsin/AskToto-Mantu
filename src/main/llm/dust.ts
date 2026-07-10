@@ -6,6 +6,7 @@ import { DustAPI } from '@dust-tt/client'
 import { authStatus } from '../auth'
 import { mainLog, auditLog } from '../logger'
 import { type StreamOptions, type StreamHandle, errMsg, idleWatchdog, userText } from './shared'
+import { attachScreenshot, type DustFileContentFragment } from './dust-attachments'
 import { redactSecrets } from '@shared/redact'
 
 /**
@@ -155,6 +156,10 @@ export function streamDust(opts: StreamOptions): StreamHandle {
   // the user configured (mode prompt, profile, imported context documents, and the anti-injection
   // guard) into the message itself — otherwise the model ignores what they sent.
   const preamble = opts.system ? opts.system.trim() + '\n\n— — — — —\n\n' : ''
+  // Screen questions: Dust messages are text-only, so the screenshot rides along as a content fragment
+  // (an uploaded file the agent's model reads). Uploaded once and reused across an auth-refresh replay.
+  const wantsScreenshot = opts.req.mode === 'vision' && !!opts.req.image
+  let screenshotFragment: DustFileContentFragment | null = null
   const run = async (
     creds: { apiKey: string; workspaceId?: string; baseURL?: string },
     allowRetry: boolean
@@ -179,6 +184,17 @@ export function streamDust(opts: StreamOptions): StreamHandle {
       if (!fresh) return false
       await run(fresh, false)
       return true
+    }
+    // Upload the screenshot before touching the conversation so a vision-capable Dust agent can see the
+    // screen. Cached across an auth replay (the fileId is workspace-scoped, valid under the fresh token).
+    // A non-auth upload failure is a pre-token error: return it so the ask fails over to a vision provider.
+    if (wantsScreenshot && !screenshotFragment) {
+      const attached = await attachScreenshot(api, opts.req.image as string)
+      if (!attached.ok) {
+        if (await retryIfAuth(attached.error)) return
+        return fail(errMsg(attached.error))
+      }
+      screenshotFragment = attached.contentFragment
     }
     const workspaceId = creds.workspaceId || ''
     // freshConversation (background jobs like brain ingest): never join OR become the cached meeting
@@ -213,6 +229,21 @@ export function streamDust(opts: StreamOptions): StreamHandle {
     let messageSId: string
     if (isFresh(activeConversation)) {
       const reusable = activeConversation
+      // Screen question on an ongoing conversation: postUserMessage takes no attachment, so the screenshot
+      // is attached to the conversation via its own content fragment first, then the message follows.
+      if (screenshotFragment) {
+        const frag = await api.postContentFragment({
+          conversationId: reusable.conversationId,
+          contentFragment: screenshotFragment,
+          signal: controller.signal
+        })
+        if (frag.isErr()) {
+          if (await retryIfAuth(frag.error)) return
+          // Stale/deleted conversation — fall back to a fresh one (which attaches the fragment at create).
+          activeConversation = null
+          return run(creds, allowRetry)
+        }
+      }
       // Same meeting, same agent — continue the existing conversation instead of starting cold.
       const posted = await api.postUserMessage({
         conversationId: reusable.conversationId,
@@ -244,7 +275,9 @@ export function streamDust(opts: StreamOptions): StreamHandle {
         created = await api.createConversation({
           title: null,
           visibility: 'unlisted',
-          message: messageBody
+          message: messageBody,
+          // Attach the screenshot at creation so it lands with the first user message.
+          ...(screenshotFragment ? { contentFragment: screenshotFragment } : {})
         })
       } finally {
         // Release the creation gate no matter how this attempt settles — including a thrown exception,
