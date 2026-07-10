@@ -12,6 +12,9 @@ import { pipeline, env } from '@huggingface/transformers'
 env.allowRemoteModels = true
 env.useBrowserCache = true
 // env.allowLocalModels and env.localModelPath are set conditionally inside the 'init' handler.
+// Snapshot the library's default WASM location before bundled mode overwrites it, so a bundled-load
+// failure can restore it for the remote retry below.
+const DEFAULT_WASM_PATHS = env.backends?.onnx?.wasm?.wasmPaths
 const MODEL_REVISION = 'main' // pin to a specific commit SHA in production to resist upstream drift/tampering
 
 // Engine tiers, best→fallback. WebGPU runs the large multilingual model at ~real-time on most machines;
@@ -105,13 +108,29 @@ self.onmessage = async (e: MessageEvent): Promise<void> => {
       // Standard installers deliberately ship the compact WASM fallback, not the 1.5 GiB WebGPU
       // model. Avoid a guaranteed missing-model attempt in that offline configuration.
       const requestedQuality = msg.quality === 'fast' ? 'fast' : 'best'
-      await load(requestedQuality, !msg.bundled)
+      try {
+        await load(requestedQuality, !msg.bundled)
+      } catch (err) {
+        // Bundled (offline) load failed — a file the ASR_BUNDLED manifest check couldn't catch is missing
+        // or unreadable through asr-model://. Rather than bricking Listen for the whole session
+        // (allowRemoteModels=false makes this a hard failure), retry ONCE on the proven remote path.
+        if (!msg.bundled) throw err
+        post({ type: 'log', message: `bundled ASR load failed, retrying remote: ${String((err as Error)?.message || err)}` })
+        env.allowLocalModels = false
+        env.allowRemoteModels = true
+        if (env.backends?.onnx?.wasm) env.backends.onnx.wasm.wasmPaths = DEFAULT_WASM_PATHS
+        await load(requestedQuality, false)
+      }
       // Report honestly whenever 'best' was requested but didn't actually land on the WebGPU/large model
       // (no bundled model, no WebGPU adapter, or a WebGPU load failure) — callers must not infer quality
       // from the request alone, since it silently downgrades to WASM/whisper-base in every packaged build.
       post({ type: 'ready', engine, requestedQuality, qualityDegraded: requestedQuality === 'best' && engine !== 'webgpu' })
     } catch (err) {
-      post({ type: 'error', message: err instanceof Error ? err.message : String(err) })
+      // Both paths failed. The raw transformers.js message ("local_files_only=true … file was not found
+      // locally at asr-model://…") is meaningless to a user mid-meeting — surface a human line instead,
+      // and keep the raw detail in a log post for diagnostics.
+      post({ type: 'log', message: `ASR load failed: ${String((err as Error)?.message || err)}` })
+      post({ type: 'error', message: 'Could not load the transcription model. Check your internet connection and try Listen again.' })
     } finally {
       loading = false
     }

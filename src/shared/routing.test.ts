@@ -58,9 +58,10 @@ describe('routeTier', () => {
     expect(routeTier({ mode: 'summary' }, 'auto')).toBe('base')
   })
 
-  it('fact-checks route to the strongest model (verifier path), even on an easy-looking claim', () => {
-    expect(routeTier({ mode: 'answer', kind: 'factcheck', prompt: 'the sky is blue' }, 'auto')).toBe('deep')
-    expect(routeTier({ mode: 'vision', kind: 'factcheck', prompt: 'claims on screen' }, 'auto')).toBe('deep')
+  it('fact-checks route to a strong (think) model — live verdicts must be fast AND reliable', () => {
+    // Not 'deep': that meant 10-15s to a verdict on the Dust deep agent while the user is mid-call.
+    expect(routeTier({ mode: 'answer', kind: 'factcheck', prompt: 'the sky is blue' }, 'auto')).toBe('think')
+    expect(routeTier({ mode: 'vision', kind: 'factcheck', prompt: 'claims on screen' }, 'auto')).toBe('think')
     // fast-only is a hard cost cap — it still wins over the verifier escalation.
     expect(routeTier({ mode: 'answer', kind: 'factcheck', prompt: 'the sky is blue' }, 'never')).toBe('base')
   })

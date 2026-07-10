@@ -16,6 +16,7 @@ import {
   type StreamDelta,
   type StreamDone,
   type StreamError,
+  type StreamMeta,
   type TestKeyResponse,
   type DustAgentsResponse,
   type DustCliImport,
@@ -195,6 +196,7 @@ const api = {
   onDelta: (cb: (d: StreamDelta) => void): Unsub => sub(IPC.streamDelta, cb),
   onDone: (cb: (d: StreamDone) => void): Unsub => sub(IPC.streamDone, cb),
   onError: (cb: (d: StreamError) => void): Unsub => sub(IPC.streamError, cb),
+  onMeta: (cb: (d: StreamMeta) => void): Unsub => sub(IPC.streamMeta, cb),
   onHotkey: (cb: (a: HotkeyAction) => void): Unsub => sub(IPC.hotkey, cb),
 
   onUpdateReady: (cb: (d: { version?: string }) => void): Unsub => sub(IPC.updateDownloaded, cb),

@@ -111,6 +111,58 @@ export function resetDustConversation(): void {
   conversationEpoch++
 }
 
+/**
+ * Pre-create the meeting's Dust conversation BEFORE the first ask so that ask doesn't pay the
+ * createConversation round trip on top of the agent's own time-to-first-token. Called fire-and-forget
+ * from the listeningState handler right after resetDustConversation() — a failure here just means the
+ * first ask creates the conversation itself, exactly as before. Keyed to the INTERACTIVE (base) agent:
+ * quick actions and chat during the meeting are what need the warm start.
+ *
+ * Uses the same creationInFlight gate as streamDust so a prewarm can never race a real ask into forking
+ * the meeting across two conversations, and the same epoch guard so a prewarm that straddles the next
+ * meeting boundary can't cache a stale conversation.
+ */
+export async function prewarmDustConversation(
+  creds: { apiKey: string; workspaceId: string; baseURL?: string },
+  agentId: string
+): Promise<void> {
+  if (!creds.apiKey || !creds.workspaceId || !agentId) return
+  const fresh =
+    activeConversation &&
+    activeConversation.workspaceId === creds.workspaceId &&
+    activeConversation.agentId === agentId &&
+    Date.now() - activeConversation.createdAt < DUST_CONVERSATION_TTL_MS
+  if (fresh || creationInFlight) return // warm already, or a real ask is creating one — don't race it
+  const epochAtStart = conversationEpoch
+  let release: (() => void) | null = null
+  creationInFlight = new Promise((resolve) => {
+    release = resolve
+  })
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const api: any = new DustAPI(
+      { url: creds.baseURL || 'https://dust.tt' },
+      { workspaceId: creds.workspaceId, apiKey: creds.apiKey },
+      dustLogger()
+    )
+    // No message: an empty unlisted conversation. The first real ask lands in it through the normal
+    // reused-conversation path (postUserMessage + stream) instead of paying createConversation.
+    const created = await api.createConversation({ title: null, visibility: 'unlisted' })
+    if (created?.isErr?.()) return
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const sId = (created?.value?.conversation as any)?.sId
+    if (sId && epochAtStart === conversationEpoch) {
+      activeConversation = { conversationId: sId, workspaceId: creds.workspaceId, agentId, createdAt: Date.now() }
+      auditLog('dust.conversation', { action: 'prewarmed' })
+    }
+  } catch {
+    /* best-effort — the first ask simply creates the conversation itself */
+  } finally {
+    ;(release as unknown as () => void)?.()
+    creationInFlight = null
+  }
+}
+
 /** Dust message context tied to the signed-in user, so usage is attributable in the Dust workspace. */
 function dustContext(): Record<string, unknown> {
   let timezone = 'UTC'

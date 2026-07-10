@@ -3640,6 +3640,13 @@ export function Settings({
                     onChange={(v) => patch({ quickActionsRainbow: v })}
                     disabled={settings.managedKeys.includes('quickActionsRainbow')}
                   />
+                  <ToggleRow
+                    label="Instant suggestions"
+                    desc="Pre-generate 'What to say next' while a meeting is live so it appears instantly. Uses more credits during meetings."
+                    on={settings.instantSuggestions}
+                    onChange={(v) => patch({ instantSuggestions: v })}
+                    disabled={settings.managedKeys.includes('instantSuggestions')}
+                  />
                 </Section>
                 <Section title="Vocabulary corrections" desc="Words the transcriber keeps getting wrong. Fix them once, applied to every meeting.">
                   <ToggleRow

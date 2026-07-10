@@ -8,6 +8,7 @@ import type {
   StreamDelta,
   StreamDone,
   StreamError,
+  StreamMeta,
   TestKeyResponse,
   AuthStatus,
   SignInResult
@@ -158,6 +159,10 @@ export interface AnswerState {
   // TTL: user-initiated turns on the same surface (typed questions, Assist, quick actions) must stay
   // until the user acts — auto-wiping them 4-7s after they finish is data loss (and a WCAG 2.2.1 miss).
   ephemeral?: boolean
+  // Who is answering (from streamMeta, sent before any token) — lets the waiting UI name the brain
+  // ("Asking your Dust agent…") instead of an anonymous spinner. Follows the latest retry/failover.
+  provider?: ProviderId
+  tier?: 'base' | 'think' | 'deep'
 }
 
 export interface AskRequest {
@@ -233,6 +238,10 @@ export function useAsk(): {
       pendingReplaceRef.current = false
       setAnswer((a) => (a ? { ...a, streaming: false, text: noOutput ? '' : a.text } : a))
     })
+    const offMeta = window.toto.onMeta((m: StreamMeta) => {
+      if (m.id !== idRef.current) return
+      setAnswer((a) => (a && a.id === m.id ? { ...a, provider: m.provider, tier: m.tier } : a))
+    })
     const offErr = window.toto.onError((e: StreamError) => {
       if (e.id !== idRef.current) return
       flush() // keep any partial answer captured before the error
@@ -253,6 +262,7 @@ export function useAsk(): {
     return () => {
       offDelta()
       offDone()
+      offMeta()
       offErr()
       if (rafRef.current) cancelAnimationFrame(rafRef.current)
     }
