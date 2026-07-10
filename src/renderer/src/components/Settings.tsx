@@ -83,6 +83,12 @@ import { FieldHint, TextButton } from './ui'
 import { AgendaView } from './AgendaView'
 import { usePermissions } from '../state'
 import { displayAccelerator } from '../lib/keys'
+import { decideDustLiveCheck } from '../lib/dust-live-check'
+
+// Guards the AUTOMATIC (non-user-initiated) Dust setup relaunch to at most once per app run. Without it,
+// closing + reopening Settings while a `dust login` is still pending would spawn a fresh Terminal each
+// time. Manual "Connect / Reconnect" clicks are user-explicit and intentionally bypass this.
+let dustAutoSetupLaunched = false
 
 const ctl =
   'no-drag font-body cl-input cl-focus px-3 py-2.5 text-[13px] text-[color:var(--cl-foreground)]'
@@ -2044,6 +2050,46 @@ function DustSetup({
     // loadAgents is stable enough for this mount-on-connect check; re-run only when connection state flips.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [keySaved, hasWs])
+
+  // Live session probe on open. When the SAVED settings already look connected, don't take that at face
+  // value — the underlying Dust CLI session can be gone (the user ran `dust logout`, the keychain was
+  // cleared, or the token is unrecoverable). Probe once per mount via dustImportCli (which also refreshes
+  // a live token as a bonus) and act on decideDustLiveCheck:
+  //   • connected    → nothing to do.
+  //   • needs-access → the keychain read was blocked; ask to allow it, DON'T relaunch setup.
+  //   • run-setup    → no live session behind the saved connection → auto-run install + `dust login`
+  //                    (Terminal), so the user is prompted to reconnect instead of silently assuming done.
+  const liveCheckedRef = useRef(false)
+  useEffect(() => {
+    if (liveCheckedRef.current || isWin || !keySaved || !hasWs) return
+    liveCheckedRef.current = true
+    void (async () => {
+      const decision = decideDustLiveCheck(await window.toto.dustImportCli())
+      if (decision === 'connected') return
+      if (decision === 'needs-access') {
+        setCli({ busy: false, ok: false, msg: 'Allow Métis to read your Dust CLI session in Keychain, then Reconnect.' })
+        return
+      }
+      // decision === 'run-setup' — the saved connection is dead. Auto-run setup, but at most once per app
+      // run (dustAutoSetupLaunched); a reopen mid-login points the user at Reconnect instead of a 2nd window.
+      if (dustAutoSetupLaunched) {
+        setCli({ busy: false, ok: false, msg: 'Dust session ended — Reconnect to finish signing in again.' })
+        return
+      }
+      dustAutoSetupLaunched = true
+      setCli({ busy: true, ok: false, msg: 'Dust session ended — reopening setup in Terminal. Log in to reconnect.' })
+      const s = await window.toto.dustSetupCli()
+      setCli({
+        busy: false,
+        ok: false,
+        msg: s.ok
+          ? 'Setup opened in Terminal. Finish the Dust login there; Métis will reconnect automatically.'
+          : s.error || 'Could not start the Dust CLI setup.'
+      })
+    })()
+    // Probe once on mount for the already-connected case only; connectCli / disconnect handle the rest.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   const setThinkAgent = (sId: string): void =>
     patch({ providerModelsThinking: { ...settings.providerModelsThinking, dust: sId.trim() } })
