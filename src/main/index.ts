@@ -1438,17 +1438,26 @@ function registerIpc(): void {
   ipcMain.handle(IPC.dustListAgents, async (e) => {
     assertMainWindow(e)
     if (!requireAuth()) return { ok: false, error: 'Sign in with your Mantu account first.' }
-    const r = await listDustAgents()
+    // A transient network blip (the raw "Unexpected network error from DustAPI: TypeError: fetch failed"
+    // the user hit while connected) must not surface as a dead end — retry a few times with backoff first.
+    let r = await listDustAgents()
+    for (let i = 0; !r.ok && isTransient(r.error) && i < 3; i++) {
+      await new Promise((res) => setTimeout(res, nextBackoff(i)))
+      r = await listDustAgents()
+    }
     if (r.ok) return r
-    // The agent picker needs the same on-401 self-heal as the ask path: the Dust CLI OAuth token
-    // lasts ~1h, and without a refresh-and-retry here the picker just goes empty whenever it lapses
-    // between sessions — reproducing "my agent list is gone" even with the view:'list' fix in place.
-    if (!isDustAuthError(r.error)) return r
-    const s = await refreshDustCliSession()
-    if (!s.ok || !s.token || !s.workspaceId) return r
-    setApiKey('dust', s.token)
-    setSettings({ dustWorkspaceId: s.workspaceId, dustBaseUrl: s.baseUrl || 'https://dust.tt', dustTokenMintedAt: Date.now() })
-    return await listDustAgents()
+    // On-401 self-heal: the Dust CLI OAuth token lasts ~1h; refresh it once and retry so the picker
+    // doesn't just go empty when the token lapses between sessions.
+    if (isDustAuthError(r.error)) {
+      const s = await refreshDustCliSession()
+      if (!s.ok || !s.token || !s.workspaceId) return r
+      setApiKey('dust', s.token)
+      setSettings({ dustWorkspaceId: s.workspaceId, dustBaseUrl: s.baseUrl || 'https://dust.tt', dustTokenMintedAt: Date.now() })
+      return await listDustAgents()
+    }
+    // Still unreachable after retries → a clean, actionable message instead of the raw fetch error.
+    if (isTransient(r.error)) return { ok: false, error: 'Could not reach Dust. Check your connection and try again.' }
+    return r
   })
 
   // Connect to Dust locally by importing the Dust CLI's keychain session (token + workspace + region).

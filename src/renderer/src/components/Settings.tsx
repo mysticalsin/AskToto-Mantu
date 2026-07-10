@@ -1387,7 +1387,7 @@ function CliIntegration({
           ].join(' ')}
         >
           <div className="flex flex-col gap-0.5">
-            <span className="text-[12px] font-medium text-[color:var(--cl-foreground)]">Dust · your agents</span>
+            <span className="text-[12px] font-medium text-[color:var(--cl-foreground)]">Dust CLI · Your agents</span>
             <span className="text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
               Your Second Brain agents via the Dust platform. Full setup in the section below.
             </span>
@@ -1920,6 +1920,19 @@ function DustSetup({
   // The manual API-key path is collapsed by default so the one-click "Set up Dust automatically" button
   // is the obvious choice; users who already hold an admin key expand it.
   const [showKeyPath, setShowKeyPath] = useState(false)
+  // Elapsed-seconds counter on the connect button: a cold `dust status` refresh can take ~25s, and a bare
+  // spinner reads as "frozen". Ticking a visible timer makes it clear something is happening. Resets when
+  // the connect settles (cli.busy flips false).
+  const [connectSecs, setConnectSecs] = useState(0)
+  useEffect(() => {
+    if (!cli.busy) {
+      setConnectSecs(0)
+      return
+    }
+    setConnectSecs(0)
+    const id = setInterval(() => setConnectSecs((s) => s + 1), 1000)
+    return () => clearInterval(id)
+  }, [cli.busy])
 
   const isEu = /eu\.dust\.tt/i.test(settings.dustBaseUrl)
   // The one-click CLI setup (dustImportCli/dustSetupCli) is cross-platform now (dust-secret-store reads
@@ -2125,7 +2138,7 @@ function DustSetup({
 
   return (
     <Section
-      title={active ? 'Dust · your brain (active)' : 'Dust · your brain'}
+      title={active ? 'Dust CLI · Your agents (active)' : 'Dust CLI · Your agents'}
       desc="Your Dust agents (Second Brain retrieval + tools) power Métis. Connect with the Dust CLI, then pick a thinking agent for hard questions."
     >
       <div className="flex flex-col gap-4">
@@ -2172,10 +2185,12 @@ function DustSetup({
                 className="no-drag cl-focus flex w-full items-center justify-center gap-2 rounded-[10px] bg-[var(--cl-primary)] px-4 py-3 text-[14px] font-semibold text-white hover:opacity-90 disabled:opacity-50"
               >
                 {cli.busy ? <Loader2 size={16} className="animate-spin" /> : <Wand2 size={16} />}
-                Set up Dust automatically
+                {cli.busy ? `Connecting… ${connectSecs}s` : 'Set up Dust automatically'}
               </button>
               <span className="text-center text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
-                Installs the Dust CLI and signs you in — then Métis connects on its own. No key to copy.
+                {cli.busy
+                  ? 'Installing the CLI and signing you in. This can take up to a minute.'
+                  : 'Installs the Dust CLI and signs you in, then Métis connects on its own. No key to copy.'}
                 {locked && <span className={'ml-1 ' + managedChipCls}>Managed by your organization</span>}
               </span>
             </>
@@ -3727,6 +3742,15 @@ export function Settings({
                     </div>
                   </ToggleRow>
                 </Section>
+                <Section title="Permissions" desc="Status of the OS permissions Métis needs.">
+                  <PermissionsSection />
+                </Section>
+                <Section
+                  title="Usage"
+                  desc="On-device performance and quality from your local audit log. Never leaves this device."
+                >
+                  <DiagnosticsSection />
+                </Section>
               </div>
             )}
 
@@ -3858,30 +3882,21 @@ export function Settings({
 
             {tab === 'about' && (
               <div className="flex flex-col gap-6">
-                {/* Microsoft sign-in lives in the Calendar tab (its Outlook connect flow) and the license
-                    lives in Profile — About stays purely informational (permissions, usage, the story). */}
-                <Section title="Permissions" desc="Status of the OS permissions Métis needs.">
-                  <PermissionsSection />
-                </Section>
-                <Section
-                  title="Usage"
-                  desc="On-device performance and quality from your local audit log. Never leaves this device."
-                >
-                  <DiagnosticsSection />
-                </Section>
+                {/* Microsoft sign-in is in Calendar, the license is in Profile, and permissions + usage
+                    moved to Privacy. About is just the story now. */}
                 <Section title="Why “Métis”" desc="The name is the mission.">
-                  <div className="flex justify-center pb-1">
+                  <div className="flex flex-col items-center gap-2 pb-1 text-center">
                     <MetisMark size={76} />
+                    <p className="text-[12px] leading-relaxed text-[color:var(--cl-muted-foreground)]">
+                      Métis is the Greek goddess of cunning, wisdom, and prudence, Zeus&apos;s first
+                      counselor and the mother of Athena. She&apos;s a fascinating figure because she
+                      stands for a very particular kind of intelligence: not just &ldquo;being
+                      intelligent,&rdquo; but knowing how to see what&apos;s coming, adapt, maneuver, and
+                      choose exactly the right moment. That&apos;s the job of this app. It listens with
+                      you, reads the room, and puts the right words within reach at the moment you need
+                      them.
+                    </p>
                   </div>
-                  <p className="text-[12px] leading-relaxed text-[color:var(--cl-muted-foreground)]">
-                    Métis is the Greek goddess of cunning, wisdom, and prudence — Zeus&apos;s first
-                    counselor and the mother of Athena. She&apos;s a fascinating figure because she
-                    stands for a very particular kind of intelligence: not just &ldquo;being
-                    intelligent,&rdquo; but knowing how to see what&apos;s coming, adapt, maneuver, and
-                    choose exactly the right moment. That&apos;s the job of this app — it listens with
-                    you, reads the room, and puts the right words within reach at the moment you need
-                    them.
-                  </p>
                 </Section>
                 <Section title="Thanks" desc="Métis got better because people believed in it early.">
                   <p className="text-[12px] leading-relaxed text-[color:var(--cl-muted-foreground)]">
@@ -4264,207 +4279,6 @@ function IntelligenceTab({
       >
         <BidstackCard settings={settings} patch={patch} />
       </Section>
-
-      <Section
-        title="NotebookLM research"
-        desc="Ask your NotebookLM notebooks research questions during or after a meeting. Connected through your own Google account, all in one place."
-      >
-        <NotebookLmCard settings={settings} patch={patch} />
-      </Section>
-    </div>
-  )
-}
-
-/** NotebookLM research connector (MCP). A small state machine: detect the CLI, install it silently if
- *  missing, sign in with Google (one click, opens a Terminal + browser), connect, then ask notebooks
- *  questions inline. Mirrors the CLI cards' phase flow so it feels native to the rest of Settings. */
-function NotebookLmCard({
-  settings,
-  patch
-}: {
-  settings: PublicSettings
-  patch: (p: Partial<PublicSettings>) => void
-}): JSX.Element {
-  const [phase, setPhase] = useState<
-    'checking' | 'not-installed' | 'installing' | 'connecting' | 'connected' | 'sign-in-needed' | 'error'
-  >('checking')
-  const [status, setStatus] = useState('')
-  const [question, setQuestion] = useState('')
-  const [answer, setAnswer] = useState<{ text?: string; error?: string } | null>(null)
-  const [asking, setAsking] = useState(false)
-
-  const probeConnect = useCallback(async (): Promise<void> => {
-    setPhase('connecting')
-    setStatus('')
-    const r = await window.toto.notebookLmConnect()
-    if (r.ok) {
-      patch({ notebookLmConnected: true, notebookLmTools: r.tools ?? [] })
-      setPhase('connected')
-    } else if (r.needsSignIn) {
-      setPhase('sign-in-needed')
-      setStatus(r.error ?? '')
-    } else {
-      setPhase('error')
-      setStatus(r.error ?? 'Could not connect to NotebookLM.')
-    }
-  }, [patch])
-
-  useEffect(() => {
-    let alive = true
-    // Trust the persisted flag on mount: if NotebookLM was connected in a prior session, show 'connected'
-    // rather than re-running a LIVE detect/connect on every Settings open — a transient network hiccup on
-    // a routine reopen would otherwise flip a working integration to 'sign-in-needed'/'error' for no real
-    // reason. A real failure still surfaces when the user actually asks (notebookLmAsk).
-    if (settings.notebookLmConnected) {
-      setPhase('connected')
-      return () => {
-        alive = false
-      }
-    }
-    void window.toto.notebookLmDetect().then((d) => {
-      if (!alive) return
-      if (d.ok) void probeConnect()
-      else setPhase('not-installed')
-    })
-    return () => {
-      alive = false
-    }
-  }, [probeConnect, settings.notebookLmConnected])
-
-  const install = async (): Promise<void> => {
-    setPhase('installing')
-    setStatus('Getting NotebookLM ready…')
-    const r = await window.toto.notebookLmInstall((line) => setStatus(line))
-    if (r.ok) void probeConnect()
-    else {
-      // Route back to 'not-installed' (not the generic 'error' phase) so the "Set up NotebookLM" button
-      // reappears — 'error' phase's Retry is bound to probeConnect, which would just fail again since
-      // the CLI was never installed, trapping the user in a retry loop.
-      setStatus(r.error || 'Could not set up NotebookLM.')
-      setPhase('not-installed')
-    }
-  }
-
-  const signIn = async (): Promise<void> => {
-    const r = await window.toto.notebookLmLogin()
-    if (!r.ok) {
-      // Same reasoning as install() above — stay on 'sign-in-needed' so "Sign in with Google" stays
-      // reachable, instead of the generic 'error' phase's probeConnect-only Retry.
-      setStatus(r.error || 'Could not open sign-in.')
-      setPhase('sign-in-needed')
-    }
-    // On success the user finishes in the Terminal/browser, then clicks Connect below.
-  }
-
-  const ask = async (): Promise<void> => {
-    const q = question.trim()
-    if (!q || asking) return
-    setAsking(true)
-    setAnswer(null)
-    const r = await window.toto.notebookLmAsk({ question: q })
-    setAnswer(r.ok ? { text: r.text } : { error: r.error || 'No answer.' })
-    setAsking(false)
-  }
-
-  const busy = phase === 'checking' || phase === 'connecting' || phase === 'installing'
-  const primaryBtn =
-    'no-drag cl-focus flex items-center gap-1.5 rounded-[10px] bg-[var(--cl-primary)] px-3 py-2 text-[12px] font-medium text-white hover:opacity-90 disabled:opacity-50'
-  const ghostBtn =
-    'no-drag cl-focus flex items-center gap-1.5 rounded-[10px] border border-[var(--cl-input)] bg-white/[0.04] px-3 py-2 text-[12px] text-[color:var(--cl-foreground)] hover:bg-white/[0.08]'
-
-  return (
-    <div className="flex flex-col gap-2.5">
-      <div className="cl-card flex items-center gap-2 px-3 py-2.5 text-[12px]">
-        <Search
-          size={15}
-          className={phase === 'connected' ? 'text-[color:var(--cl-primary)]' : 'text-[color:var(--cl-muted-foreground)]'}
-        />
-        {phase === 'checking' && <span className="text-[color:var(--cl-muted-foreground)]">Checking…</span>}
-        {phase === 'connecting' && <span className="text-[color:var(--cl-muted-foreground)]">Connecting to NotebookLM…</span>}
-        {phase === 'installing' && (
-          <span className="min-w-0 flex-1 truncate text-[color:var(--cl-muted-foreground)]">{status || 'Setting up…'}</span>
-        )}
-        {phase === 'not-installed' && (
-          <span className="text-[color:var(--cl-muted-foreground)]">{status || 'Not set up yet.'}</span>
-        )}
-        {phase === 'sign-in-needed' && (
-          <span className="text-[color:var(--cl-muted-foreground)]">Sign in with your Google account to connect.</span>
-        )}
-        {phase === 'error' && (
-          <span className="min-w-0 flex-1 break-words text-[color:var(--color-danger)]" title={status}>
-            {status || 'Something went wrong.'}
-          </span>
-        )}
-        {phase === 'connected' && (
-          <span className="text-[color:var(--cl-foreground)]">
-            Connected · {settings.notebookLmTools.length} tool{settings.notebookLmTools.length === 1 ? '' : 's'}
-          </span>
-        )}
-        {busy && <RefreshCw size={12} className="ml-auto animate-spin text-[color:var(--cl-muted-foreground)]" />}
-      </div>
-
-      {phase === 'not-installed' && (
-        <button type="button" onClick={() => void install()} className={primaryBtn + ' w-fit'}>
-          <Search size={13} /> Set up NotebookLM
-        </button>
-      )}
-
-      {phase === 'sign-in-needed' && (
-        <div className="flex flex-col gap-2">
-          <span className="text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
-            A window opens and signs you in through your browser. When it says done, come back and click
-            Connect.
-          </span>
-          <div className="flex gap-2">
-            <button type="button" onClick={() => void signIn()} className={primaryBtn}>
-              <ExternalLink size={13} /> Sign in with Google
-            </button>
-            <button type="button" onClick={() => void probeConnect()} className={ghostBtn}>
-              <RefreshCw size={13} /> Connect
-            </button>
-          </div>
-        </div>
-      )}
-
-      {phase === 'error' && (
-        <button type="button" onClick={() => void probeConnect()} className={ghostBtn + ' w-fit'}>
-          <RefreshCw size={13} /> Retry
-        </button>
-      )}
-
-      {phase === 'connected' && (
-        <div className="flex flex-col gap-2">
-          <div className="flex gap-2">
-            <input
-              value={question}
-              onChange={(e) => setQuestion(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') void ask()
-              }}
-              placeholder="Ask your notebooks a question…"
-              className={'flex-1 ' + ctl}
-            />
-            <button
-              type="button"
-              onClick={() => void ask()}
-              disabled={asking || !question.trim()}
-              className={primaryBtn}
-            >
-              {asking ? <RefreshCw size={13} className="animate-spin" /> : <Sparkles size={13} />} Ask
-            </button>
-          </div>
-          {answer?.text && (
-            <div className="cl-card whitespace-pre-wrap px-3 py-2.5 text-[12px] leading-relaxed text-[color:var(--cl-foreground)]">
-              {answer.text}
-            </div>
-          )}
-          {answer?.error && (
-            <div className="flex items-start gap-1.5 text-[11px] text-[color:var(--color-danger)]">
-              <AlertCircle size={13} className="mt-px shrink-0" /> {answer.error}
-            </div>
-          )}
-        </div>
-      )}
     </div>
   )
 }
