@@ -421,7 +421,7 @@ export function Onboarding({
                 <span className="text-[13.5px] font-medium text-[color:var(--color-ink)]">Which provider?</span>
               </div>
               <div className="grid grid-cols-2 gap-1.5">
-                {(['anthropic', 'openai', 'grok', 'kimi'] as const).map((id) => (
+                {(['anthropic', 'openai', 'nvidia', 'minimax'] as const).map((id) => (
                   <button
                     key={id}
                     type="button"
@@ -437,14 +437,14 @@ export function Onboarding({
                 onClick={() => choose('anthropic')}
                 className="no-drag focus-ring text-left text-[11.5px] text-[color:var(--color-ink-3)] hover:text-[color:var(--color-ink-2)]"
               >
-                Something else (DeepSeek, Qwen, Mistral, and more) — pick it in Settings
+                Something else (DeepSeek, Qwen, Mistral, and more). Pick it in Settings
               </button>
             </div>
           ) : (
             <ProviderOption
               icon={KeyRound}
               title="An API key"
-              desc="Claude, GPT, Grok, Kimi, and more. Paste your key and you're set — you pay your provider directly."
+              desc="Claude, GPT, Grok, Kimi, and more. Paste your key and you're set. You pay your provider directly."
               onClick={() => setShowApiPicker(true)}
             />
           )}
@@ -452,7 +452,7 @@ export function Onboarding({
             icon={Building2}
             title="Mantu Dust"
             badge="One-click setup"
-            desc="Use Mantu's shared Dust workspace. Installs + signs you in automatically — no key to paste."
+            desc="Use Mantu's shared Dust workspace. Installs and signs you in automatically. No key to paste."
             onClick={() => void chooseDust()}
           />
         </div>
@@ -518,7 +518,7 @@ export function Onboarding({
             label="Microphone"
             hint={
               micWinUnknown
-                ? "Windows won't report this until you use it — check now or let Listen ask"
+                ? "Windows won't report this until you use it. Check now, or let Listen ask."
                 : 'grant access when you first press Listen'
             }
             onFix={() => void window.toto.openPermissionSettings('microphone')}
@@ -530,7 +530,7 @@ export function Onboarding({
             label="Screen recording"
             hint={
               screenWinUnknown
-                ? "Windows won't report this until you use it — check now or let Listen ask"
+                ? "Windows won't report this until you use it. Check now, or let Listen ask."
                 : 'needed for the other side of calls + screen capture'
             }
             onFix={() => void window.toto.openPermissionSettings('screenRecording')}
@@ -578,8 +578,8 @@ export function Onboarding({
           your meeting context and cited so you can verify them. Everyone on the call knows it&apos;s there.
         </p>
         <p className="mx-auto max-w-[480px] text-[12px] italic leading-relaxed text-[color:var(--color-ink-3)]">
-          Named for the Greek goddess of cunning wisdom and prudence — the intelligence that doesn&apos;t
-          just know, but sees what&apos;s coming, adapts, and picks the right moment. That&apos;s what
+          Named for the Greek goddess of cunning wisdom and prudence, the intelligence that doesn&apos;t
+          just know but sees what&apos;s coming, adapts, and picks the right moment. That&apos;s what
           Métis does for you, in every conversation.
         </p>
       </div>
