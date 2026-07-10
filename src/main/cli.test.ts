@@ -113,7 +113,17 @@ describe('cliEnv — strips session/proxy vars so the spawned CLI runs clean', (
 })
 
 describe('resolveBin — login-shell lookup with in-process caching', () => {
-  beforeEach(() => h.execFileImpl.mockReset())
+  // This suite exercises the mac/Linux login-shell branch (`sh -lc 'command -v <bin>'`) — pin the
+  // platform so it's deterministic when the test runner itself is Windows. Mirrors the setPlatform
+  // pattern in cli-win.test.ts, which pins 'win32' for the `where`/APPDATA branch's own suite.
+  const REAL_PLATFORM = process.platform
+  beforeEach(() => {
+    h.execFileImpl.mockReset()
+    Object.defineProperty(process, 'platform', { value: 'darwin', configurable: true })
+  })
+  afterEach(() => {
+    Object.defineProperty(process, 'platform', { value: REAL_PLATFORM, configurable: true })
+  })
 
   it('resolves the absolute path and caches it (no second shell spawn)', async () => {
     h.execFileImpl.mockResolvedValue({ stdout: '/usr/local/bin/faketool-cache\n', stderr: '' })
