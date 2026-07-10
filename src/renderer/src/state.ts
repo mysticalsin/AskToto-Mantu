@@ -282,7 +282,7 @@ export function useAsk(): {
       // session (answer flips null -> non-null), in DIRECT response to synchronous input (Enter keydown, a
       // toolbar click). Those are lazy-loaded chunks (App.tsx) with no Suspense boundary around their
       // inline bar-body render slot — if the chunk hasn't resolved yet, an un-transitioned update suspends
-      // mid-synchronous-input and React throws #426 ("AskToto hit a snag"), exactly like the view-switch
+      // mid-synchronous-input and React throws #426 ("Métis hit a snag"), exactly like the view-switch
       // hazard App.tsx's setView already documents and fixes the same way. Reproduced physically via
       // Spotlight Ref's ask.fail() (no provider gate, so it's the very first render in a fresh session) —
       // App.tsx also warms both chunks on mount to shrink the window further, but that alone does not
@@ -471,9 +471,9 @@ type PermissionRefreshEnv = {
 
 /** Keep permission UI live while it is mounted.
  *
- * macOS users often grant Screen Recording / Mic / Accessibility in System Settings while AskToto's
+ * macOS users often grant Screen Recording / Mic / Accessibility in System Settings while Métis's
  * Settings panel stays open. Focus/visibility refreshes catch the common return-to-app path, but they miss
- * the split-view case where System Settings and AskToto are visible at the same time. Polling at the same
+ * the split-view case where System Settings and Métis are visible at the same time. Polling at the same
  * cadence as onboarding (2.5s) keeps the status dots honest without adding meaningful work.
  */
 export function startPermissionRefreshLoop(

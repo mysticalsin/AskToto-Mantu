@@ -1,7 +1,7 @@
-# AskToto — Founding-Architect Design Doc
+# Métis — Founding-Architect Design Doc
 **Real-time, permission-based AI copilot · grounded · provider-agnostic · on-device-first**
 
-_Author: principal RT-AI engineer / product architect. Grounded in the live AskToto codebase (Electron + React + TS); section refs point at real modules. Boundary: transparent, consented copilot — no stealth, no deception, no covert capture._
+_Author: principal RT-AI engineer / product architect. Grounded in the live Métis codebase (Electron + React + TS); section refs point at real modules. Boundary: transparent, consented copilot — no stealth, no deception, no covert capture._
 
 > A Product · B UX · C Architecture · D Latency · E Caching · F Routing · G System prompt · H Accuracy/Eval · I Privacy · J Stack · K Roadmap · L Artifacts · M Taste
 
@@ -9,7 +9,7 @@ _Author: principal RT-AI engineer / product architect. Grounded in the live AskT
 
 ## A. Product definition
 
-**Positioning (one sentence).** AskToto is a permission-based, on-device-first real-time copilot that hears your calls and sees your screen — and hands you a grounded, citable answer in under two seconds — while always showing that it's active and never hiding anything.
+**Positioning (one sentence).** Métis is a permission-based, on-device-first real-time copilot that hears your calls and sees your screen — and hands you a grounded, citable answer in under two seconds — while always showing that it's active and never hiding anything.
 
 **Target users.** People who live inside real-time conversations and screens, where a 10-second pause to "go look it up" costs the moment:
 - Client-facing pros — consultants, pre-sales/SE, account managers, customer success, recruiters, founders in pitches.
@@ -32,7 +32,7 @@ _Author: principal RT-AI engineer / product architect. Grounded in the live AskT
 - **Connect-once enterprise context** — Dust + Claude CLI + Codex CLI bind once via the OS keychain and persist; add/remove API keys freely.
 - **Calm, Mantu-grade UI** — one pinned bar, an answer that grows below it, suggestions that auto-dismiss. It gets out of the way.
 
-**What we will NOT build (trust/safety boundary).** No stealth / "undetectability" / hidden-from-the-room mode; no exam, interview, or meeting deception; no hidden or non-consensual recording; no evading the *other* participants' awareness; no OS/security-control bypass; no engagement dark patterns. AskToto's content-protection only keeps the assistant's private answers out of *your own* outgoing screen-share — it is a privacy feature for the user, never a tool to deceive others. If a feature only makes sense for cheating, it doesn't ship.
+**What we will NOT build (trust/safety boundary).** No stealth / "undetectability" / hidden-from-the-room mode; no exam, interview, or meeting deception; no hidden or non-consensual recording; no evading the *other* participants' awareness; no OS/security-control bypass; no engagement dark patterns. Métis's content-protection only keeps the assistant's private answers out of *your own* outgoing screen-share — it is a privacy feature for the user, never a tool to deceive others. If a feature only makes sense for cheating, it doesn't ship.
 
 ---
 
@@ -42,11 +42,11 @@ _Author: principal RT-AI engineer / product architect. Grounded in the live AskT
 
 ### B.1 First-Run Onboarding & Permissions
 
-AskToto's onboarding is a hard gate: `settings.onboardingDone` is `false` → the full App renders nothing but the `<Onboarding>` component inside a `<Panel>` (App.tsx:779-787). Two steps. No skipping.
+Métis's onboarding is a hard gate: `settings.onboardingDone` is `false` → the full App renders nothing but the `<Onboarding>` component inside a `<Panel>` (App.tsx:779-787). Two steps. No skipping.
 
 **Step 1 — Consent + Identity.** The first screen shows the Mantu logo, a single copy line ("Your invisible meeting assistant"), and a mandatory checkbox:
 
-> "I will inform other participants before recording. AskToto follows my company's policy and the law."
+> "I will inform other participants before recording. Métis follows my company's policy and the law."
 
 The consent checkbox (`settings.recordingConsent`) must be checked before either the "Sign in with Microsoft" button or "Continue without signing in" activates. Disabled state is `opacity-50 cursor-not-allowed` — no hover trick. Sign-in calls `window.toto.signIn()` (MSAL/Azure AD), which persists the token via `auth.ts` + safeStorage. "Continue without signing in" skips SSO but still requires the consent tick. Error copy is explicit: "Sign-in failed. Use a Mantu Microsoft account." (Onboarding.tsx:114).
 
@@ -74,9 +74,9 @@ Meeting mode activates via `useListen.start()` → the app switches `view` to `'
 2. **Secondary action row** — "What to say next" and "Fact-check" as ghost pills. These are always visible; pressing either fires an LLM request immediately using the current transcript.
 3. **Transcript footer** — collapsed by default ("live · N captured" + "View transcript →"). Expanding shows the speaker-bubble view (see B.6).
 
-**Meeting detection auto-start.** `main/index.ts` polls window titles + browser tabs against the calendar (`detectMeeting` + `titleMatchesCalendar`). When `settings.autoStartOnMeeting` is true and a match fires, `onMeetingDetected` IPC pushes to the renderer, which calls `startListen(true /* auto */)` and shows the `<MeetingDetectedToast>` (App.tsx:718-724). The toast has: "Recording started · [app name]", "Meeting detected. AskToto is listening.", a **Stop** button, and an **×** dismiss. A shrinking progress bar auto-dismisses in 6 s (dismiss hides the banner; it does not stop recording). Copy on Stop = "Stop" (not "End") to make it unambiguous.
+**Meeting detection auto-start.** `main/index.ts` polls window titles + browser tabs against the calendar (`detectMeeting` + `titleMatchesCalendar`). When `settings.autoStartOnMeeting` is true and a match fires, `onMeetingDetected` IPC pushes to the renderer, which calls `startListen(true /* auto */)` and shows the `<MeetingDetectedToast>` (App.tsx:718-724). The toast has: "Recording started · [app name]", "Meeting detected. Métis is listening.", a **Stop** button, and an **×** dismiss. A shrinking progress bar auto-dismisses in 6 s (dismiss hides the banner; it does not stop recording). Copy on Stop = "Stop" (not "End") to make it unambiguous.
 
-**RecordingConsentReminder.** Fires on the start of every Listen session (if `shouldShowConsentReminder` passes): a danger-bordered banner — "AskToto is listening / Other participants are being recorded. Make sure everyone has consented." This is the persistent on-screen signal that AI is active. In `requireConsentIndicator` mode (Settings toggle), it stays pinned for the whole session; otherwise it auto-dismisses after `AUTO_DISMISS_MS` and patches `lastConsentReminderAt`.
+**RecordingConsentReminder.** Fires on the start of every Listen session (if `shouldShowConsentReminder` passes): a danger-bordered banner — "Métis is listening / Other participants are being recorded. Make sure everyone has consented." This is the persistent on-screen signal that AI is active. In `requireConsentIndicator` mode (Settings toggle), it stays pinned for the whole session; otherwise it auto-dismisses after `AUTO_DISMISS_MS` and patches `lastConsentReminderAt`.
 
 **End of call.** Pressing the listening red-dot or `⌘⇧L` again calls `endReview()`: `listen.stop()` → `view = 'review'` → fires `ask.run({ mode: 'recap', transcript })` → the `<Review>` surface streams the meeting recap into the Panel. Auto-save to the OneDrive meetings folder triggers once the recap finishes streaming (App.tsx:156-203).
 
@@ -84,7 +84,7 @@ Meeting mode activates via `useListen.start()` → the app switches `view` to `'
 
 ### B.3 Screen-Aware Mode
 
-AskToto prewarns the screen capture the moment the input field gets focus (Bar.tsx:165: `onFocus={() => void window.toto.prewarmCapture()}`). By the time the user presses `⌘⇧↵`, the capture is already mid-flight — the perceived latency drops to near zero.
+Métis prewarns the screen capture the moment the input field gets focus (Bar.tsx:165: `onFocus={() => void window.toto.prewarmCapture()}`). By the time the user presses `⌘⇧↵`, the capture is already mid-flight — the perceived latency drops to near zero.
 
 The routing logic in `submit()` (App.tsx:396-427) has a deterministic decision tree:
 
@@ -114,7 +114,7 @@ Registered shortcuts (main/index.ts via `globalShortcut.register`):
 | `⌘⇧F` | Fact-check (screen or typed claim) | `'factcheck'` |
 | `⌘⇧R` | Reset / new session | `'reset'` |
 
-**Why multi-modifier, not bare `⌘+key`.** Single-modifier shortcuts like `⌘S` or `⌘L` are owned by every app in the system. A transparent always-on overlay registering `⌘S` would intercept save-file in Figma, Chrome, and Excel — globally. Triple-modifier `⌘⇧` is rare enough that collisions in real-world apps are close to zero, while still being quick to press. The Enter key (`⌘⇧↵`) is particularly deliberate: Enter alone submits forms in whatever foreground app the user is in; `⌘⇧↵` has no standard meaning and fires only into AskToto. Users learn the chord once; after that, muscle memory fires it without switching focus.
+**Why multi-modifier, not bare `⌘+key`.** Single-modifier shortcuts like `⌘S` or `⌘L` are owned by every app in the system. A transparent always-on overlay registering `⌘S` would intercept save-file in Figma, Chrome, and Excel — globally. Triple-modifier `⌘⇧` is rare enough that collisions in real-world apps are close to zero, while still being quick to press. The Enter key (`⌘⇧↵`) is particularly deliberate: Enter alone submits forms in whatever foreground app the user is in; `⌘⇧↵` has no standard meaning and fires only into Métis. Users learn the chord once; after that, muscle memory fires it without switching focus.
 
 **Minimized pill safety.** If the overlay is in the `minimized` (`ControlPill`) state, every hotkey action except `'hide'` first calls `unminimize()` (App.tsx:630-632) — expanding the full widget before firing the LLM request. An LLM request fired into an unmounted Bar would produce invisible work and wasted spend. The guard is unconditional.
 
@@ -164,7 +164,7 @@ Shown inside the `<Copilot>` component's third section when `showTranscript` is 
 
 ### B.7 Confidence / Citations UI
 
-AskToto currently surfaces the source of an answer via a single **context chip** in the Bar's input row and the Answer's header. The chip hierarchy:
+Métis currently surfaces the source of an answer via a single **context chip** in the Bar's input row and the Answer's header. The chip hierarchy:
 
 | Source | Bar chip | Answer header |
 |---|---|---|
@@ -204,7 +204,7 @@ Together these enforce a 4–7 s window. A suggestion never lingers past 7 s fro
 
 ### B.9 Failure States
 
-Every failure state in AskToto has three elements: what it shows, the exact copy, and the recovery affordance. The `errorHint()` function in `Answer.tsx:29-38` is the existing implementation for LLM errors.
+Every failure state in Métis has three elements: what it shows, the exact copy, and the recovery affordance. The `errorHint()` function in `Answer.tsx:29-38` is the existing implementation for LLM errors.
 
 | Failure | Where it shows | Copy | Recovery affordance |
 |---|---|---|---|
@@ -240,7 +240,7 @@ The <2 s hotkey→useful-answer target is delivered by a chain of four overlappi
 
 **3. Per-RAF token flushing.** `useAsk` (`state.ts`) batches stream chunks per animation frame via `requestAnimationFrame`, not per-token. This means the first visible text appears as soon as the first RAF fires after the first token arrives — typically within one 16ms frame of the IPC echo. The user sees text starting to type in under 300ms from first token.
 
-**4. Provider routing targets speed at first token.** `shared/routing.ts` selects `tier = 'basic'` in `auto` or `never` thinking mode — the fastest non-reasoning model configured for the provider. Reasoning tiers (think/deep) are opt-in only. The `'basic'` tier is calibrated per-provider so the first token typically lands in 300–700ms. During streaming AskToto shows "Thinking…" + pulse dot (Answer.tsx:243-248) only while `text === ''` — this guards the period before the first token for reasoning models like Kimi that think before responding.
+**4. Provider routing targets speed at first token.** `shared/routing.ts` selects `tier = 'basic'` in `auto` or `never` thinking mode — the fastest non-reasoning model configured for the provider. Reasoning tiers (think/deep) are opt-in only. The `'basic'` tier is calibrated per-provider so the first token typically lands in 300–700ms. During streaming Métis shows "Thinking…" + pulse dot (Answer.tsx:243-248) only while `text === ''` — this guards the period before the first token for reasoning models like Kimi that think before responding.
 
 **5. Sound cue on completion.** `playCue('ready')` fires on the streaming→done edge (App.tsx:262-266), gated by `settings.soundCues`. This tells the user the answer is done without them having to look. For screen questions the answer often finishes in 2–4 s total; the chime lets the user keep their eyes on the other app.
 
@@ -365,7 +365,7 @@ The combined effect: after `⌘⇧↵`, the overlay shows a skeleton in <50ms, f
 
 **Speaker tracking.** Source-based assignment (mic track = `'you'`, system loopback = `'them'`) is cheap and robust for 2-party calls. It breaks only when the remote side has multiple distinct speakers in a group call. When that matters, extend `commitLine()` with a lightweight on-device diarizer: buffer ~25 s of `speaker='them'` audio, run `onnx-community/pyannote-segmentation-3.0` (WASM, ~18 MB) to segment it, then reassign sub-lines as `'them:alice'` / `'them:bob'`. Do not add this now — it adds 200-400 ms of batch latency and the corpus need is not yet established.
 
-**OCR vs cloud vision.** AskToto currently sends the JPEG screenshot directly to the LLM (`provider.vision=true`). This is the correct default — cloud vision understands layouts, charts, code, and diagrams that text-extraction cannot. Local OCR (Tesseract.js WASM, ~2 MB) is only worth adding as a **text pre-extraction shortcut** for dense-text screenshots (terminals, spreadsheets): extract the text on-device in ~150 ms, pass it as context instead of the image, cutting the upload payload by ~70% and saving ~200 ms TTFT on slow connections. Gate it behind `settings.localOcr` (default off). Never use local OCR as a replacement for cloud vision on mixed-content screens.
+**OCR vs cloud vision.** Métis currently sends the JPEG screenshot directly to the LLM (`provider.vision=true`). This is the correct default — cloud vision understands layouts, charts, code, and diagrams that text-extraction cannot. Local OCR (Tesseract.js WASM, ~2 MB) is only worth adding as a **text pre-extraction shortcut** for dense-text screenshots (terminals, spreadsheets): extract the text on-device in ~150 ms, pass it as context instead of the image, cutting the upload payload by ~70% and saving ~200 ms TTFT on slow connections. Gate it behind `settings.localOcr` (default off). Never use local OCR as a replacement for cloud vision on mixed-content screens.
 
 **Verifier/refiner.** `kind='factcheck'` routes via `routeTier → 'deep'` and injects the fact-check template in `buildSystem`. `GROUNDING_RAIL` in `shared/prompts.ts` enforces citation + uncertainty admission for all `answer` and `vision` modes. `useAsk.deeper()` replays `lastReqRef` with `depth:'deeper'` — this is the manual refine path, requiring no second model call in the happy case.
 
@@ -861,7 +861,7 @@ For the **enterprise-context path**, `fallbackChain` is empty — Dust is a deli
 > This is the actual system prompt the in-product assistant runs during a live session. It is the **stable, cacheable** layer (assembled by `buildSystem()` in `main/personas.ts`): the injection guard leads, then this contract, then the mode prompt, profile, and context docs. The per-turn question, transcript window, and screen description are appended as **user** content — never folded back into this system block — so provider prompt-caching stays warm.
 
 ```
-You are AskToto, a real-time copilot running in a glass overlay on the user's screen during a live
+You are Métis, a real-time copilot running in a glass overlay on the user's screen during a live
 session (meeting, call, demo, or screen task). You are visible and consented — the user knows you are on.
 
 YOUR JOB
@@ -947,7 +947,7 @@ Three layers, applied in order:
 
 ### H.3 Confidence scoring
 
-AskToto does not have a confidence-scoring module today. The correct design, buildable without a new model call, is a three-signal composite computed in the renderer after each streamed answer:
+Métis does not have a confidence-scoring module today. The correct design, buildable without a new model call, is a three-signal composite computed in the renderer after each streamed answer:
 
 **Signal 1 — Model self-report.** Parse the model's own hedge language from the streamed text: phrases matching `/I('m| am) (not sure|unsure|uncertain)|I don't (know|have|recall)|this may|this might|I believe|approximately/i` increment a penalty counter. Score: `1 - min(1, hedgeCount × 0.2)`.
 
@@ -1023,7 +1023,7 @@ Two test layers already exist: `npm run typecheck` (TypeScript) and `npm test` (
 
 **Live smoke evals** (on-device, triggered manually from Settings → Diagnostics → Run eval). Send a fixed golden set of 10 transcript + question pairs to the active provider. Score each answer against expected source tags and expected absence of hallucinated claims (keyword block-list). Write pass/fail JSON to `userData/logs/eval-{date}.json`. Surface pass rate in Diagnostics. Not CI — latency and cost make these unsuitable for every commit.
 
-**WER measurement**. Whisper already produces a transcript per session. When `audioSource = 'system'` and the user toggles "Calibrate WER" in Settings, AskToto plays a 30-second reference clip (bundled in assets) through system audio and compares the on-device transcript to the known ground-truth text. Reports character-level WER to Diagnostics. On-device, no content ever sent.
+**WER measurement**. Whisper already produces a transcript per session. When `audioSource = 'system'` and the user toggles "Calibrate WER" in Settings, Métis plays a 30-second reference clip (bundled in assets) through system audio and compares the on-device transcript to the known ground-truth text. Reports character-level WER to Diagnostics. On-device, no content ever sent.
 
 ### H.10 Eval metrics table
 
@@ -1051,12 +1051,12 @@ Two test layers already exist: `npm run typecheck` (TypeScript) and `npm test` (
 
 ### I.1 Transparent-capture model (non-negotiable)
 
-AskToto is a **permission-based, always-visible copilot**. The overlay window is always on screen when active. Every audio and screen capture is:
-- Gated behind an explicit OS permission (granted by the user, not AskToto).
+Métis is a **permission-based, always-visible copilot**. The overlay window is always on screen when active. Every audio and screen capture is:
+- Gated behind an explicit OS permission (granted by the user, not Métis).
 - Visible via a persistent "AI active" status indicator in the top bar.
 - Stopped immediately when the user clicks the stop/pause button or presses the hotkey again.
 
-There is no stealth mode, no background recording, no capture of windows the user has not selected, and no use of Accessibility APIs to read content the user did not share. The "content protection" feature (the private overlay) uses Electron's `setContentProtection(true)` so the user's own AskToto panel is excluded from their outgoing screen-share — this is a **local privacy control for the user**, not a mechanism to deceive other participants.
+There is no stealth mode, no background recording, no capture of windows the user has not selected, and no use of Accessibility APIs to read content the user did not share. The "content protection" feature (the private overlay) uses Electron's `setContentProtection(true)` so the user's own Métis panel is excluded from their outgoing screen-share — this is a **local privacy control for the user**, not a mechanism to deceive other participants.
 
 ### I.2 OS permissions — what we request and why
 
@@ -1125,7 +1125,7 @@ if (s.redactSensitive && req.transcript) req.transcript = redactSecrets(req.tran
 
 ### I.6 Workspace policy controls
 
-AskToto already reads a machine-wide `managed-config.json` (path: `/Library/Application Support/AskToto/managed-config.json` on macOS, `%ProgramData%\AskToto\managed-config.json` on Windows). The `store.ts → readManagedFrom()` path applies it on every `getSettings()` call, with field-level validation via `validKeysOnly()` so a malformed IT-deployed config cannot crash the app.
+Métis already reads a machine-wide `managed-config.json` (path: `/Library/Application Support/Métis/managed-config.json` on macOS, `%ProgramData%\Métis\managed-config.json` on Windows). The `store.ts → readManagedFrom()` path applies it on every `getSettings()` call, with field-level validation via `validKeysOnly()` so a malformed IT-deployed config cannot crash the app.
 
 Policy keys relevant to privacy/security:
 
@@ -1250,11 +1250,11 @@ Stay current on Electron (now 39 — Chromium 142, Node 22; minimum macOS 12). K
 
 **Verdict: TypeScript in the Electron main process. No additional server language.**
 
-AskToto's "backend" is already the main process (`src/main/`). It handles: HTTP streaming to all 16 LLM providers, OS keychain reads/writes, filesystem I/O (transcripts, settings, audit log), meeting detection, calendar OAuth, CLI subprocess spawning. All of this works today in TypeScript with zero server infrastructure.
+Métis's "backend" is already the main process (`src/main/`). It handles: HTTP streaming to all 16 LLM providers, OS keychain reads/writes, filesystem I/O (transcripts, settings, audit log), meeting detection, calendar OAuth, CLI subprocess spawning. All of this works today in TypeScript with zero server infrastructure.
 
 The only plausible reason to add a server is multi-device transcript sync (e.g., a user wants to access their meeting history from a second machine). That is a future feature, not a v1 blocker. If it lands, the right choice is a minimal Node/TypeScript HTTPS endpoint (sharing the existing `shared/` types and `ipc.ts` schemas) — not a Python or Go service. The team already knows the type system and can reuse `zod` schemas, `TranscriptLine`, and `MeetingSummary` interfaces without translation layers.
 
-Python: no. AskToto has no ML training loop, no data pipeline, no Jupyter notebooks. The Parakeet ONNX model runs via `sherpa-onnx-node` (N-API) directly from the main process. Adding Python would introduce a second runtime, a venv, and version management for zero gain.
+Python: no. Métis has no ML training loop, no data pipeline, no Jupyter notebooks. The Parakeet ONNX model runs via `sherpa-onnx-node` (N-API) directly from the main process. Adding Python would introduce a second runtime, a venv, and version management for zero gain.
 
 Go: no. No high-throughput concurrent servers needed on a single-user desktop.
 
@@ -1266,7 +1266,7 @@ Go: no. No high-throughput concurrent servers needed on a single-user desktop.
 
 The existing `streamAnthropic` / `streamOpenAI` strategy modules use the vendor SDKs' streaming helpers over HTTP — first token is already landing well within the 1s target in testing. The Anthropic SDK already applies `cache_control: { type: 'ephemeral' }` to the system prompt block, which meaningfully cuts TTFT on repeated questions.
 
-OpenAI Realtime API is a WebSocket audio-in / audio-out channel designed to replace a human's voice with an AI voice in real time. AskToto's pipeline is `on-device ASR → text → LLM → text display` — the user's voice is transcribed locally (Whisper/Parakeet), never sent raw to a cloud audio endpoint. Wiring OpenAI Realtime would:
+OpenAI Realtime API is a WebSocket audio-in / audio-out channel designed to replace a human's voice with an AI voice in real time. Métis's pipeline is `on-device ASR → text → LLM → text display` — the user's voice is transcribed locally (Whisper/Parakeet), never sent raw to a cloud audio endpoint. Wiring OpenAI Realtime would:
 
 1. Route raw audio to OpenAI's servers, eliminating the on-device privacy guarantee.
 2. Replace the source-based speaker tracking (`mic = 'you'`, `system = 'them'`) with a cloud diarization model — a regression in cost, latency, and privacy simultaneously.
@@ -1280,7 +1280,7 @@ If a voice-output TTS path is ever added (reading answers aloud), revisit a WebS
 
 **Verdict: Electron `ipcMain` / `ipcRenderer` + in-process `EventEmitter`. No BullMQ, no Redis Streams.**
 
-AskToto is a single-user desktop process. There is no fan-out, no background worker pool, no job distribution across machines. The audio pipeline already uses a bounded in-process queue (`MAX_QUEUE = 24` windows in `listen.ts`) to back-pressure the worklet when the model is slow. The LLM streaming chain uses `StreamHandle.cancel()` for cooperative cancellation — no external broker needed.
+Métis is a single-user desktop process. There is no fan-out, no background worker pool, no job distribution across machines. The audio pipeline already uses a bounded in-process queue (`MAX_QUEUE = 24` windows in `listen.ts`) to back-pressure the worklet when the model is slow. The LLM streaming chain uses `StreamHandle.cancel()` for cooperative cancellation — no external broker needed.
 
 Adding a queue broker would introduce a daemon process requirement (Redis), a new port, and startup ordering logic, for zero functional gain on a laptop.
 
@@ -1290,13 +1290,13 @@ Adding a queue broker would introduce a daemon process requirement (Redis), a ne
 
 **Verdict: In-process caching only. No Redis.**
 
-Three things need caching in AskToto:
+Three things need caching in Métis:
 
 | What | Current | Recommendation |
 |---|---|---|
 | Settings | In-memory singleton in `store.ts` | Keep as-is |
 | Screen captures (prewarmed) | `desktopCapturer` result held in renderer state | Keep; add TTL of 5s to prevent stale frames |
-| LLM prompt cache | Handled at provider level (Anthropic ephemeral cache, OpenAI prefix caching) | Keep; no AskToto layer needed |
+| LLM prompt cache | Handled at provider level (Anthropic ephemeral cache, OpenAI prefix caching) | Keep; no Métis layer needed |
 
 A `Map<string, { value: T; expiresAt: number }>` with a TTL sweep is the right tool. Node's `lru-cache` package adds ~3KB and gives a proper LRU eviction policy if the screen-frame cache needs to grow.
 
@@ -1328,7 +1328,7 @@ pgvector requires a running Postgres. Qdrant/Weaviate require a server process. 
 
 **Verdict: Structured JSON audit log (already exists) + OpenTelemetry JS SDK for traces. Axiom or BetterStack for the fleet view.**
 
-AskToto already emits `audit.log` (JSON-lines) with `provider.request`, `provider.failed`, `answer.feedback` events. `aggregateMetrics()` in `metrics.ts` computes p50/p95 TTFT and acceptance rate — on-device. This is the right privacy-first foundation.
+Métis already emits `audit.log` (JSON-lines) with `provider.request`, `provider.failed`, `answer.feedback` events. `aggregateMetrics()` in `metrics.ts` computes p50/p95 TTFT and acceptance rate — on-device. This is the right privacy-first foundation.
 
 What is missing: traces that span the full request lifecycle (hotkey pressed → VAD endpoint → worklet emit → IPC → LLM stream start → first token → render) and a way to see fleet-wide p95 degradations across a beta cohort.
 
@@ -1348,7 +1348,7 @@ Add `@opentelemetry/sdk-node` to the main process. Emit spans with these boundar
 
 **Verdict: `managed-settings.json` mechanism (already scaffolded in `store.ts`) extended with a remote config JSON.**
 
-AskToto's store already reads a `managed-settings.json` and merges it with per-user settings. A remote feature flag system is a versioned JSON file hosted on the update CDN (e.g., `https://updates.asktoto.ai/flags/v1.json`), fetched once at startup with a 24h TTL, stored in `userData/remote-flags.json`. The schema: `{ "audioFlushEnabled": true, "parakeetDefault": false, "vectorSearch": false }`. The main process exposes flags via a new `IPC_GET_FLAGS` channel. No SDK dependency, no network call on the hot path, no GDPR concern.
+Métis's store already reads a `managed-settings.json` and merges it with per-user settings. A remote feature flag system is a versioned JSON file hosted on the update CDN (e.g., `https://updates.asktoto.ai/flags/v1.json`), fetched once at startup with a 24h TTL, stored in `userData/remote-flags.json`. The schema: `{ "audioFlushEnabled": true, "parakeetDefault": false, "vectorSearch": false }`. The main process exposes flags via a new `IPC_GET_FLAGS` channel. No SDK dependency, no network call on the hot path, no GDPR concern.
 
 LaunchDarkly / Statsig are the right tools when you have A/B experiments at scale. For a desktop app in beta, a versioned CDN JSON is sufficient and costs nothing.
 
@@ -1368,9 +1368,9 @@ The only fix needed is wrapping `rmSync` in `clearApiKey` in a `try-catch` (Issu
 
 **Verdict: Apple Vision Framework via a thin Electron native module for macOS. Raw image to LLM vision on Windows. No Tesseract, no cloud OCR.**
 
-AskToto's current vision path sends the downscaled `desktopCapturer` frame directly to the LLM (Claude/GPT-4o/Gemini) as a base64 image. This costs tokens on every screen question — a 1280×800 frame is ~800–1200 tokens with Claude Vision.
+Métis's current vision path sends the downscaled `desktopCapturer` frame directly to the LLM (Claude/GPT-4o/Gemini) as a base64 image. This costs tokens on every screen question — a 1280×800 frame is ~800–1200 tokens with Claude Vision.
 
-Apple Vision (`VNRecognizeTextRequest`) runs on the Neural Engine at ~30–80ms for a full desktop screenshot, entirely on-device, with no tokens spent. Wrapping it as a small Electron native module (`@asktoto/apple-vision`, ~200 lines of Objective-C++ bridged via N-API) lets the main process extract a text layer from the screenshot before the LLM call. The LLM receives: text layer + the image (for UI structure/colour context). Token cost drops by ~60% on text-heavy screens (code editors, document apps). On Windows, skip the OCR step — fall back to image-only (current behaviour). Tesseract.js benchmarks at 600–900ms for a full screenshot on an M-series Mac, which violates the 2.5s first-token budget on screen questions. Reject it. Cloud OCR (Google Vision, AWS Textract) sends the screenshot to a third party and adds 200–600ms network latency — directly opposed to AskToto's privacy posture.
+Apple Vision (`VNRecognizeTextRequest`) runs on the Neural Engine at ~30–80ms for a full desktop screenshot, entirely on-device, with no tokens spent. Wrapping it as a small Electron native module (`@asktoto/apple-vision`, ~200 lines of Objective-C++ bridged via N-API) lets the main process extract a text layer from the screenshot before the LLM call. The LLM receives: text layer + the image (for UI structure/colour context). Token cost drops by ~60% on text-heavy screens (code editors, document apps). On Windows, skip the OCR step — fall back to image-only (current behaviour). Tesseract.js benchmarks at 600–900ms for a full screenshot on an M-series Mac, which violates the 2.5s first-token budget on screen questions. Reject it. Cloud OCR (Google Vision, AWS Textract) sends the screenshot to a third party and adds 200–600ms network latency — directly opposed to Métis's privacy posture.
 
 ---
 
@@ -1378,7 +1378,7 @@ Apple Vision (`VNRecognizeTextRequest`) runs on the Neural Engine at ~30–80ms 
 
 **Verdict: Retain `@anthropic-ai/sdk` and `openai` in main-process dependencies. Pin minor versions. Never expose SDK types past the strategy module.**
 
-AskToto's LLM layer is already correctly structured: `createStream()` in `main/llm.ts` dispatches to four strategy modules (`llm/anthropic.ts`, `llm/openai.ts`, `llm/dust.ts`, `llm/cli.ts`). Each strategy owns exactly one SDK import. The rest of the app only sees `StreamOptions → StreamHandle`.
+Métis's LLM layer is already correctly structured: `createStream()` in `main/llm.ts` dispatches to four strategy modules (`llm/anthropic.ts`, `llm/openai.ts`, `llm/dust.ts`, `llm/cli.ts`). Each strategy owns exactly one SDK import. The rest of the app only sees `StreamOptions → StreamHandle`.
 
 The case for vendor SDKs over hand-rolled HTTP:
 
@@ -1412,7 +1412,7 @@ The risk to manage: `electron-builder` bundles everything in `dependencies` into
 
 ## Section K — Implementation Roadmap
 
-AskToto already ships: the overlay window, on-device ASR (Whisper worklet + Parakeet), multi-provider LLM routing with tiered models, `buildSystem()` prompt assembly, per-mode prompts, contextDocs, profile, meeting detection, Outlook + Google calendar, screen capture prewarming, on-device secret redaction, eval metrics, keychain, auto-update, and fact-check verdict cards. The roadmap below is "what to add and harden from here" — not a rebuild.
+Métis already ships: the overlay window, on-device ASR (Whisper worklet + Parakeet), multi-provider LLM routing with tiered models, `buildSystem()` prompt assembly, per-mode prompts, contextDocs, profile, meeting detection, Outlook + Google calendar, screen capture prewarming, on-device secret redaction, eval metrics, keychain, auto-update, and fact-check verdict cards. The roadmap below is "what to add and harden from here" — not a rebuild.
 
 ---
 
@@ -1439,11 +1439,11 @@ AskToto already ships: the overlay window, on-device ASR (Whisper worklet + Para
 
 **Risks**
 - Audio flush may introduce a duplicate partial window if VAD fires late. Gate the flush on `bufferedSamples > 0` and a minimum of 0.3s of audio.
-- `⌘Q` removal may confuse beta users who used it to quit. Add tray menu "Quit AskToto" with clear label.
+- `⌘Q` removal may confuse beta users who used it to quit. Add tray menu "Quit Métis" with clear label.
 
 **What to test**
 - Record a 30-second spoken question; stop recording mid-sentence; verify the final partial sentence appears in the transcript.
-- Verify `⌘Q` in Chrome while AskToto runs closes Chrome normally.
+- Verify `⌘Q` in Chrome while Métis runs closes Chrome normally.
 - Delete a provider API key from Settings; verify no crash.
 - Run `npm run typecheck && npm test`; zero failures.
 
@@ -1485,7 +1485,7 @@ AskToto already ships: the overlay window, on-device ASR (Whisper worklet + Para
 
 **What to test**
 - Grant accessibility permission while Settings is open; dot updates without reopening.
-- Revoke Outlook token from Entra ID; verify AskToto shows "sign in" within one refresh cycle (≤7 days or next cold start — confirm which).
+- Revoke Outlook token from Entra ID; verify Métis shows "sign in" within one refresh cycle (≤7 days or next cold start — confirm which).
 - Bind a custom shortcut via the capture widget; verify it fires.
 - Crash the renderer process intentionally; verify Sentry receives an event with no transcript content.
 - Windows build: system-audio capture works with the share-audio checkbox.
@@ -1600,7 +1600,7 @@ Complete before any public / general-availability release.
 
 ## L1. Repo Structure
 
-Extending AskToto's real layout. Existing files are shown in **bold**; new modules are plain.
+Extending Métis's real layout. Existing files are shown in **bold**; new modules are plain.
 
 ```
 src/
@@ -2136,7 +2136,7 @@ async function connectDust(): Promise<void> {
     return   // user clicks Connect again after Terminal completes
   }
 
-  // Step 2: persist to AskToto's own keychain slot via safeStorage
+  // Step 2: persist to Métis's own keychain slot via safeStorage
   //   settings.dustApiKey = session.token  (encrypted at rest)
   //   settings.dustWorkspaceId = session.workspaceId
   //   settings.dustBaseUrl = session.baseUrl  (EU or global)

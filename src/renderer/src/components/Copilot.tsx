@@ -25,7 +25,7 @@ const TranscriptRow = memo(function TranscriptRow({ line }: { line: TranscriptLi
         ].join(' ')}
       >
         <span className="mr-1.5 text-[10px] font-semibold uppercase text-[color:var(--color-ink-3)]">
-          {line.speaker === 'you' ? 'You' : 'Them'}
+          {line.speaker === 'you' ? 'You' : line.speaker === 'them' ? 'Them' : 'Speaker'}
         </span>
         {line.text}
       </div>

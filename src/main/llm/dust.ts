@@ -89,7 +89,7 @@ function dustLogger(): Console {
 // agent's conversation into another's. Also time-bounded (DUST_CONVERSATION_TTL_MS): without this, an
 // unrelated ad-hoc question asked hours or days later — with no new meeting having started in between —
 // would silently inherit that old meeting's private conversation history. Module-level state is safe
-// here: AskToto is single-window/single-active-meeting by construction, there is no concurrent-meeting
+// here: Métis is single-window/single-active-meeting by construction, there is no concurrent-meeting
 // case to isolate against.
 type DustConversationRef = { conversationId: string; workspaceId: string; agentId: string; createdAt: number }
 const DUST_CONVERSATION_TTL_MS = 2 * 60 * 60 * 1000 // 2h — covers a meeting plus an immediate follow-up draft

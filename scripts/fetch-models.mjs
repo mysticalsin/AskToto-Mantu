@@ -7,11 +7,12 @@
  *
  * What it downloads / copies:
  *   1. Xenova/whisper-base         → resources/models/Xenova/whisper-base/
- *   2. onnx-community/whisper-large-v3-turbo → resources/models/onnx-community/whisper-large-v3-turbo/
+ *   2. onnx-community/whisper-large-v3-turbo → optional WebGPU benchmark asset (only when
+ *      ASKTOTO_INCLUDE_WEBGPU_ASR=1; excluded from standard installers to keep them releasable)
  *   3. Parakeet TDT 0.6b v3 int8  → resources/asr/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8/
  *   4. ONNX-runtime WASM blobs    → resources/ort/   (copied from node_modules, no network needed)
  *
- * Total download: ~1.3 GB (one-time; subsequent runs skip existing files).
+ * Standard download: ~700 MB (one-time; subsequent runs skip existing files).
  */
 
 import { createWriteStream, existsSync, mkdirSync, statSync, copyFileSync, renameSync, unlinkSync } from 'node:fs'
@@ -280,7 +281,8 @@ async function main() {
   console.log(`Target: ${RES}`)
 
   await fetchWhisperBase()
-  await fetchWhisperLargeV3Turbo()
+  if (process.env.ASKTOTO_INCLUDE_WEBGPU_ASR === '1') await fetchWhisperLargeV3Turbo()
+  else console.log('\n[2/4] WebGPU Whisper large-v3-turbo — skipped (set ASKTOTO_INCLUDE_WEBGPU_ASR=1 to fetch)')
   await fetchParakeet()
   await copyOrtWasm()
 

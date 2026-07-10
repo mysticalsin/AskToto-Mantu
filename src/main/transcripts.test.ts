@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { mkdtempSync, rmSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, rmSync, readFileSync, readdirSync, writeFileSync, renameSync } from 'node:fs'
+import { rename as renameAsync } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { generateKeyPairSync, privateDecrypt, createDecipheriv, constants } from 'node:crypto'
@@ -14,7 +15,8 @@ import {
   clearDraftTranscript,
   appendDebrief,
   DEBRIEF_HEADING,
-  recoverOrphanDrafts
+  recoverOrphanDrafts,
+  writeSaved
 } from './transcripts'
 import type { SaveMeeting, Settings } from '@shared/ipc'
 
@@ -23,6 +25,16 @@ const parseEnvelope = (file: string): Record<string, unknown> =>
   JSON.parse(readFileSync(file).subarray(V2_MARKER.length).toString('utf8'))
 
 vi.mock('electron')
+
+// node:fs/promises.rename is a vi.fn wrapping the real implementation by default (via renameSync,
+// which node:fs is NOT mocked for) so writeSaved's EPERM/EBUSY retry can be exercised deterministically.
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs/promises')>()
+  return {
+    ...actual,
+    rename: vi.fn(async (src: string, dest: string) => renameSync(src, dest))
+  }
+})
 
 const baseSettings = (): Settings =>
   ({
@@ -282,7 +294,7 @@ describe('transcripts', () => {
   })
 })
 
-// Tony reported "if AskToto crashes mid-meeting the whole transcript is gone" — this exercises the
+// Tony reported "if Métis crashes mid-meeting the whole transcript is gone" — this exercises the
 // crash-recovery autosave's real file-IO path end to end against a temp folder.
 describe('appendDebrief (90-second off-record layer)', () => {
   let folder: string
@@ -740,5 +752,45 @@ describe('parseRecapMarkdown', () => {
       { text: 'Schedule the retro', owner: null }
     ])
     expect(r.openQuestions).toEqual(['Do we need legal sign-off on the new terms?'])
+  })
+})
+
+describe('writeSaved', () => {
+  let folder: string
+
+  beforeEach(() => {
+    folder = mkdtempSync(join(tmpdir(), 'asktoto-writesaved-test-'))
+  })
+
+  afterEach(() => {
+    rmSync(folder, { recursive: true, force: true })
+    vi.restoreAllMocks()
+  })
+
+  it('retries a rename that fails once with EPERM (e.g. OneDrive/AV holding the file open)', async () => {
+    const target = join(folder, 'note.md')
+    let calls = 0
+    vi.mocked(renameAsync).mockImplementationOnce(async () => {
+      calls++
+      const err = new Error('EPERM: operation not permitted, rename') as NodeJS.ErrnoException
+      err.code = 'EPERM'
+      throw err
+    })
+
+    await writeSaved(target, 'hello world', false)
+
+    expect(calls).toBe(1) // first rename failed transiently, retry (the default real impl) succeeded
+    expect(readFileSync(target, 'utf8')).toBe('hello world')
+  })
+
+  it('does not retry and rethrows on a non-transient error', async () => {
+    const target = join(folder, 'note.md')
+    vi.mocked(renameAsync).mockImplementation(async () => {
+      const err = new Error('ENOENT: no such file or directory, rename') as NodeJS.ErrnoException
+      err.code = 'ENOENT'
+      throw err
+    })
+
+    await expect(writeSaved(target, 'hello world', false)).rejects.toThrow('ENOENT')
   })
 })

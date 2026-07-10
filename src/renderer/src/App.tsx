@@ -20,9 +20,10 @@ import { NewMeetingToast } from './components/NewMeetingToast'
 import { VisibilityToast, type VisibilityToastState } from './components/VisibilityToast'
 import { RecordingConsentReminder } from './components/RecordingConsentReminder'
 import { QuickActions, type QuickKind } from './components/QuickActions'
-import { useAsk, useAutoResize, useSettings, useAuth } from './state'
+import { useAsk, useAutoResize, useSettings, useAuth, type AnswerState } from './state'
 import { useWindowDrag } from './lib/window-drag'
 import { useListen, playListenChime } from './lib/listen'
+import { transcriptToText, recapPersistAction } from './lib/transcript'
 import { playCue, playClick, setSoundsEnabled } from './lib/sound'
 import type { HotkeyAction, TranscriptLine, ConversationMode, ChatTurn, LicenseGateVerdict } from '@shared/ipc'
 import { PROVIDERS, isDustReady } from '@shared/providers'
@@ -96,7 +97,7 @@ const DEMO_LINES: TranscriptLine[] = [
   { speaker: 'them', text: 'Can you walk me through a time you led a project under a tight deadline?', t: 1 },
   { speaker: 'you', text: 'Sure, happy to.', t: 2 }
 ]
-const DEMO_SUG = `**Say this:** "At Mantu I led the AskToto build — a Cluely-class AI overlay — solo in one sprint. The deadline was hard: we demoed to leadership Friday. I scoped to a thin vertical, parallelized the build, and shipped a working interview copilot that transcribes both sides and drafts answers live. It landed the demo and became the template for our agent tooling."
+const DEMO_SUG = `**Say this:** "At Mantu I led the Métis build — a Cluely-class AI overlay — solo in one sprint. The deadline was hard: we demoed to leadership Friday. I scoped to a thin vertical, parallelized the build, and shipped a working interview copilot that transcribes both sides and drafts answers live. It landed the demo and became the template for our agent tooling."
 
 - Quantify: 1 sprint, solo, live in front of leadership.
 - If pushed: the risk was system-audio capture — de-risked it first.`
@@ -149,6 +150,10 @@ export function App(): JSX.Element {
   const ask = useAsk() // answer view + recap
   const suggest = useAsk() // live copilot card
   const followup = useAsk() // Review screen's follow-up draft — must NOT reuse `ask`, which already holds the recap there
+  // Generates a recap for a SAVED meeting (an import just finished, or the retroactive "Generate recap"
+  // button on a past meeting with none yet) — a separate instance so a background import can never
+  // hijack whatever the user is currently looking at (ask.answer stays untouched).
+  const recapGen = useAsk()
 
   const onQuestionRef = useRef<(l: TranscriptLine) => void>(() => {})
   // Canonical people/account names for the ASR entity-casing bias (see lib/entity-casing.ts). Fetched
@@ -167,7 +172,7 @@ export function App(): JSX.Element {
   // Every view except the idle bar is a lazy chunk. A view switch inside a click handler renders on
   // React 18's synchronous discrete lane — if the target chunk isn't loaded yet the component
   // suspends DURING sync input and React throws #426 ("A component suspended while responding to
-  // synchronous input"), crashing to the error boundary ("AskToto hit a snag") instead of showing
+  // synchronous input"), crashing to the error boundary ("Métis hit a snag") instead of showing
   // the Suspense fallback. Reproduced physically on first "Start listening" (cold Copilot chunk).
   // The documented fix: mark view switches as transitions — the old view stays up for the few ms the
   // chunk needs, then the new one mounts. setView keeps its identity via the useCallback wrapper.
@@ -235,6 +240,9 @@ export function App(): JSX.Element {
     lines: TranscriptLine[]
     startedAt: number
   } | null>(null)
+  // The saved-meeting file an in-flight recapGen run will persist its result to — set by
+  // generateSavedRecap, cleared once the persist-on-settle effect below has written (or given up on) it.
+  const [recapGenTarget, setRecapGenTarget] = useState<{ file: string } | null>(null)
   // Which Settings tab to open on (e.g. the bar's mode icon → 'personalize', calendar CTA → 'calendar').
   const [settingsInitialTab, setSettingsInitialTab] = useState<'personalize' | 'calendar' | 'ai' | undefined>(
     undefined
@@ -651,7 +659,7 @@ export function App(): JSX.Element {
         )
         setCaptureError(
           /private view/i.test(raw)
-            ? 'Private View is on, so AskToto couldn’t see your screen. Answering from context only. Turn Private View off to include the screen.'
+            ? 'Private View is on, so Métis couldn’t see your screen. Answering from context only. Turn Private View off to include the screen.'
             : /screen recording|quit and reopen/i.test(raw)
               ? // Main diagnosed a specific, actionable cause (permission off / restart needed) —
                 // surface it verbatim instead of flattening it into the generic line.
@@ -709,7 +717,7 @@ export function App(): JSX.Element {
         )
         setCaptureError(
           /private view/i.test(raw)
-            ? 'Private View is on, so AskToto couldn’t see your screen. Suggesting from the conversation only. Turn Private View off to include the screen.'
+            ? 'Private View is on, so Métis couldn’t see your screen. Suggesting from the conversation only. Turn Private View off to include the screen.'
             : /screen recording|quit and reopen/i.test(raw)
               ? `${raw} Suggesting from the conversation only for now.`
               : 'Couldn’t capture your screen. Suggesting from the conversation only.'
@@ -917,7 +925,7 @@ export function App(): JSX.Element {
     settings?.providerModelsSpotlightRef
   ])
 
-  // Review screen's "Generate follow-up" — there is no separate follow-up agent; the AskToto base Dust
+  // Review screen's "Generate follow-up" — there is no separate follow-up agent; the Métis base Dust
   // agent (default, see DUST_BASE_AGENT_ID) drafts follow-ups too. Renders inline on Review (no view
   // change, unlike spotlightRef/whatNext). Cascades into Dust whenever Dust is configured, regardless of
   // which provider is active for everyday Q&A (e.g. Kimi) — see isDustReady.
@@ -1204,10 +1212,10 @@ export function App(): JSX.Element {
     setMinimized(true)
     void window.toto.minimize(true) // collapse to the control mini-pill
   }, [])
-  // The bar's eye button is the visible/invisible toggle: whether the AskToto window shows up on a
+  // The bar's eye button is the visible/invisible toggle: whether the Métis window shows up on a
   // screen you share or record (contentProtection). Hidden by default — the invisible-copilot identity.
   // This is the intuitive meaning of an eye icon and what users reach for to "make it visible / hide it".
-  // It does NOT touch privateView (whether AskToto captures YOUR screen for screen questions) — that's a
+  // It does NOT touch privateView (whether Métis captures YOUR screen for screen questions) — that's a
   // separate, less-frequent switch in Settings → Privacy, kept off the bar to avoid conflating the two.
   const onToggleStealth = useCallback(() => {
     const nextHidden = !(settings?.contentProtection ?? true) // contentProtection true = hidden from shares
@@ -1216,6 +1224,98 @@ export function App(): JSX.Element {
     setVisibilityToast(nextHidden ? 'hidden' : 'visible')
   }, [patch, settings?.contentProtection])
   const onTogglePanel = useCallback(() => setCollapsed((c) => !c), [])
+
+  // recapGen.run()'s own state update lands via React's startTransition (state.ts run()), so for one
+  // render it's possible for recapGenTarget to already point at a NEW file while recapGen.answer still
+  // holds a PREVIOUS, already-settled result (e.g. the last retroactive generation). This ref is the
+  // generation TOKEN: set synchronously (no transition) the instant a new run starts, so anything that
+  // needs to know "does this belong to the CURRENT generation, or a stale/superseded one" — the
+  // persist-on-settle effect, reviewBody's render — can compare against it instead of trusting whatever
+  // recapGen.answer happens to hold on a given render.
+  const recapGenRunIdRef = useRef('')
+  // Latest-ref mirror of recapGen.answer (updated every render, like autosaveLinesRef above) — lets
+  // generateSavedRecap read the CURRENT text synchronously without needing recapGen.answer in its own
+  // useCallback deps (which would recreate it, and everything memoized on it, on every streamed token).
+  const recapGenAnswerRef = useRef<AnswerState | null>(null)
+  recapGenAnswerRef.current = recapGen.answer
+  // Snapshot of recapGen's text at the MOMENT a new run starts — see reviewBody's recapGenAwaitingFirstToken
+  // for why: run() deliberately keeps the previous answer's text on screen until its own first real chunk
+  // lands, which is correct for a same-target retry but would flash a DIFFERENT meeting's stale recap here.
+  const recapGenPrevTextRef = useRef('')
+  // Guards the persist write against firing twice for the SAME settled result. Keyed by the run's own id
+  // (not a bare boolean) so a second generation started before the first one's disk write resolves doesn't
+  // get blocked by it — they can legitimately overlap (different target files, no shared resource).
+  const recapPersistingRef = useRef('')
+
+  // Generates + persists a recap for an already-SAVED meeting — either a just-finished import (silent,
+  // called from RecallView) or the retroactive "Generate recap" button on a past meeting with none yet.
+  // Reuses the exact useAsk() machinery live meetings use (recapGen), just targeting a file on disk
+  // instead of the live session's own autosave path.
+  const generateSavedRecap = useCallback(
+    (file: string, lines: TranscriptLine[]) => {
+      const transcript = transcriptToText(lines)
+      if (!transcript) return // nothing to summarize (e.g. a silent recording)
+      // Cascade into Dust whenever it's configured, same as endReview's live recap — no agentOverride
+      // needed, Dust's own think-tier resolution already respects the user's Thinking-agent pick.
+      const dustReady = isDustReady(settings?.hasKeys ?? {}, settings?.dustWorkspaceId ?? '', settings?.providerModels ?? {})
+      // Snapshot BEFORE run() — see recapGenPrevTextRef's comment above.
+      recapGenPrevTextRef.current = recapGenAnswerRef.current?.text ?? ''
+      recapGenRunIdRef.current = recapGen.run({
+        mode: 'recap',
+        transcript,
+        ...(dustReady ? { providerOverride: 'dust' as const } : {})
+      })
+      setRecapGenTarget({ file })
+    },
+    [recapGen.run, settings?.hasKeys, settings?.dustWorkspaceId, settings?.providerModels]
+  )
+
+  // Persist-on-settle effect for recapGen — mirrors the live auto-save effect above, but gated on
+  // recapGenTarget rather than `view`, since this can fire from ANY view (a background import can settle
+  // while History, or even a different live meeting, is showing). Depend on primitives, not the answer
+  // object, so stream deltas don't re-trigger the effect.
+  const recapGenId = recapGen.answer?.id ?? ''
+  const recapGenStreaming = recapGen.answer?.streaming ?? false
+  const recapGenText = recapGen.answer?.text ?? ''
+  const recapGenError = recapGen.answer?.error ?? null
+  useEffect(() => {
+    if (!recapGenTarget) return
+    if (recapGenId !== recapGenRunIdRef.current) return // see recapGenRunIdRef's comment above
+    const action = recapPersistAction(
+      { text: recapGenText, streaming: recapGenStreaming, error: recapGenError },
+      recapGenTarget
+    )
+    if (action) {
+      if (recapPersistingRef.current === recapGenId) return
+      recapPersistingRef.current = recapGenId
+      const owningId = recapGenId // this run's token — only IT may release recapGenTarget below
+      void (async () => {
+        try {
+          await window.toto.recallUpdateRecap(action.file, action.text)
+          // Functional update: read whichever past meeting is open NOW, not whatever was captured when
+          // this effect started — the user may have opened a DIFFERENT one while the write was in flight,
+          // and a stale closure here would paint THIS text onto THAT meeting instead.
+          setPastMeeting((prev) => (prev && prev.file === action.file ? { ...prev, recap: action.text } : prev))
+          // Only release the target if a NEWER generation hasn't already taken it over — that one owns it
+          // now and must not have it wiped out from under it by this older run settling late.
+          if (recapGenRunIdRef.current === owningId) setRecapGenTarget(null)
+        } catch {
+          // Persistence failure is rare. Deliberately do NOT clear recapGenTarget here: doing so would flip
+          // Review's view back to the still-empty saved recap and the freshly generated text — the only
+          // copy of it left — would vanish. Leaving the target set keeps recapGen's generated text on
+          // screen instead; not retried automatically, same contract as the live-session save path.
+        } finally {
+          if (recapPersistingRef.current === owningId) recapPersistingRef.current = ''
+        }
+      })()
+      return
+    }
+    // Settled with an error, or with nothing at all (empty text, no error — a hollow completion): leave
+    // recapGenTarget SET rather than clearing it. Clearing would flip Review back to the still-empty saved
+    // recap and drop the failure on the floor one frame after it appeared; leaving it set keeps Review
+    // reading recapGen's answer (error + the existing Retry affordance) until the user retries or navigates
+    // away. reviewBody synthesizes a readable message for the empty-no-error case (recapGenDisplay below).
+  }, [recapGenTarget, recapGenId, recapGenStreaming, recapGenText, recapGenError])
 
   // Open a saved meeting from History as a read-only recap (Cluely recap detail) via the recall:read IPC.
   const openPastMeeting = useCallback(async (file: string) => {
@@ -1335,7 +1435,7 @@ export function App(): JSX.Element {
   }, [])
 
   // The overlay is always the compact bar — Settings opens as a panel BELOW it (Tony: keep the
-  // AskToto menu at the top, don't take over the window).
+  // Métis menu at the top, don't take over the window).
   useEffect(() => {
     void window.toto.windowMode('bar')
   }, [])
@@ -1516,9 +1616,34 @@ export function App(): JSX.Element {
     // Two sources: a just-ended live session (ask.answer recap + live lines), or a past meeting opened
     // from History (pastMeeting — read-only recap + saved lines + a "Resume session" affordance).
     const pm = pastMeeting
+    // A past meeting mid-generation (button click or an import that just landed) shows recapGen's
+    // streaming answer in place instead of the still-empty static recap — once it settles and persists,
+    // recapGenTarget clears and this falls back to the now-populated pastMeeting.recap on the next render.
+    const generatingThisPm = !!pm && recapGenTarget?.file === pm.file
+    // Trust recapGen.answer only once it demonstrably belongs to the CURRENT generation — both its id
+    // AND its text (run() keeps the PREVIOUS answer's text on screen until its own first real chunk lands,
+    // which for a cross-meeting generation is a DIFFERENT meeting's recap). Until then, render a neutral
+    // pending placeholder instead of flashing stale, wrongly-attributed text.
+    const recapGenIsCurrent = recapGen.answer?.id === recapGenRunIdRef.current
+    const recapGenAwaitingFirstToken =
+      recapGenIsCurrent && !!recapGen.answer?.streaming && recapGen.answer?.text === recapGenPrevTextRef.current
+    const recapGenPending: AnswerState = { id: recapGenRunIdRef.current, text: '', streaming: true, error: null, prompt: '' }
+    const recapGenLive = recapGenIsCurrent && !recapGenAwaitingFirstToken ? recapGen.answer : recapGenPending
+    // A settle with no error and no text (a hollow completion) is functionally a failure — give it the
+    // same readable-message + Retry treatment as a real error instead of leaving a dead spinner up.
+    const recapGenDisplay: AnswerState | null =
+      recapGenLive && !recapGenLive.streaming && !recapGenLive.error && !recapGenLive.text
+        ? { ...recapGenLive, error: 'Recap came back empty — try again.' }
+        : recapGenLive
     return (
       <Review
-        recap={pm ? { id: 'past', text: pm.recap, streaming: false, error: null, prompt: '' } : ask.answer}
+        recap={
+          generatingThisPm
+            ? recapGenDisplay
+            : pm
+              ? { id: 'past', text: pm.recap, streaming: false, error: null, prompt: '' }
+              : ask.answer
+        }
         lines={pm ? pm.lines : listen.lines}
         savedPath={pm ? pm.file : savedPath}
         saveError={pm ? null : saveError}
@@ -1529,7 +1654,8 @@ export function App(): JSX.Element {
         meetingMeta={pm ? { title: pm.title, date: pm.date } : undefined}
         followupDraft={followup.answer}
         onGenerateFollowup={generateFollowup}
-        onRetryRecap={pm ? undefined : retryAnswer}
+        onGenerateRecap={pm ? () => { if (requireProvider()) generateSavedRecap(pm.file, pm.lines) } : undefined}
+        onRetryRecap={pm ? () => { if (requireProvider()) generateSavedRecap(pm.file, pm.lines) } : retryAnswer}
         bidstackConnected={settings?.bidstackConnected ?? false}
         bidstackTools={settings?.bidstackTools ?? []}
         onOpenFolder={() => void window.toto.openMeetingsFolder()}
@@ -1552,7 +1678,7 @@ export function App(): JSX.Element {
         }
       />
     )
-  }, [pastMeeting, ask.answer, listen.lines, savedPath, saveError, saveAttempts, settings?.showFullTranscriptInReview, settings?.bidstackConnected, settings?.bidstackTools, followup.answer, generateFollowup, retryAnswer, manualSave, resumePastMeeting, openPastMeeting, reset])
+  }, [pastMeeting, recapGenTarget, recapGen.answer, ask.answer, listen.lines, savedPath, saveError, saveAttempts, settings?.showFullTranscriptInReview, settings?.bidstackConnected, settings?.bidstackTools, followup.answer, generateFollowup, requireProvider, generateSavedRecap, retryAnswer, manualSave, resumePastMeeting, openPastMeeting, reset])
   const answerBody = useMemo(() => {
     if (!(capturing || captureError || ask.answer)) return null
     // While a new screen capture is in flight (capturing), force the streaming/empty display even when
@@ -1630,7 +1756,7 @@ export function App(): JSX.Element {
       <div ref={setRoot} {...windowDrag} className="w-full p-1.5">
         <div className="glass flex h-[38px] w-full items-center gap-2.5 rounded-full px-4">
           <span className="h-2 w-2 animate-pulse rounded-full bg-[var(--color-accent)]" />
-          <span className="font-ui text-[12px] text-[color:var(--color-ink-3)]">Starting AskToto…</span>
+          <span className="font-ui text-[12px] text-[color:var(--color-ink-3)]">Starting Métis…</span>
         </div>
       </div>
     )
@@ -1658,8 +1784,22 @@ export function App(): JSX.Element {
     )
   }
 
-  // Onboarding gate (first run)
+  // Onboarding gate (first run). Step 6's "Open Settings → AI" fix-link calls onOpenAiSettings, which
+  // just sets `view` to 'settings' — but this whole block is an early return keyed only on
+  // onboardingDone, so once onboarding starts the `view === 'settings'` branch further down that
+  // normally renders <Settings> never runs, and the click did nothing. Handle 'settings' here too so
+  // Settings opens as its own self-contained panel over the gate; closing it (onClose → setView('answer'))
+  // lands back on this same check, which is still true, so it re-renders Onboarding underneath.
   if (settings && !settings.onboardingDone && DEMO == null) {
+    if (view === 'settings') {
+      return (
+        <div ref={setRoot} {...windowDrag} className="flex w-full flex-col gap-2 p-1.5">
+          <Suspense fallback={<div className="cl-root rounded-2xl p-6 text-center text-[12px] text-[color:var(--cl-muted-foreground)]">Loading…</div>}>
+            {settingsBody}
+          </Suspense>
+        </div>
+      )
+    }
     return (
       <div ref={setRoot} {...windowDrag} className="flex w-full flex-col gap-2 p-1.5">
         <Panel>

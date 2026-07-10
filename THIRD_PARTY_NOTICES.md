@@ -1,6 +1,6 @@
 # Third-Party Notices
 
-AskToto bundles the following third-party machine-learning models and runtime binaries directly
+Métis bundles the following third-party machine-learning models and runtime binaries directly
 inside the packaged app (see `scripts/fetch-models.mjs` and `electron-builder.yml`'s `extraResources`
 block) so speech transcription works fully offline, with no first-run download. This file lists them
 and their licenses, as required by the models' own license terms.
@@ -17,7 +17,8 @@ and their licenses, as required by the models' own license terms.
 - **Publisher**: OpenAI (original Whisper model), converted to ONNX by the onnx-community
 - **License**: Apache License 2.0
 - **Used for**: the higher-quality (WebGPU) transcription engine
-- **Bundled at**: `resources/models/onnx-community/whisper-large-v3-turbo/`
+- **Distribution**: optional benchmark asset; excluded from the standard installer to keep release
+  artifacts within the deployment safety limit.
 
 ### Parakeet TDT 0.6B v3 (nvidia/parakeet-tdt-0.6b-v3)
 - **Publisher**: NVIDIA
@@ -31,6 +32,14 @@ and their licenses, as required by the models' own license terms.
 - **Bundled at**: `resources/asr/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8/`
 
 ## Runtime binaries
+
+### FFmpeg 7.1.1
+- **Publisher**: FFmpeg project
+- **License**: GNU Lesser General Public License v2.1 or later (LGPL-2.1-or-later). The bundled binary
+  is self-built with `--disable-gpl --disable-nonfree`; its `ffmpeg -L` output confirms LGPL terms.
+- **Used for**: streaming, bounded-memory decode/resample of imported recordings to 16 kHz mono PCM.
+- **Bundled at**: `resources/ffmpeg/<platform>-<arch>/`; complete license text is included at
+  `resources/ffmpeg/LICENSE.LGPL-2.1.txt`.
 
 ### ONNX Runtime Web (onnxruntime-web / @huggingface/transformers)
 - **Publisher**: Microsoft (ONNX Runtime), Hugging Face (transformers.js bundling)

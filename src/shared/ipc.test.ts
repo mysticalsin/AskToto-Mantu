@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi, afterEach } from 'vitest'
 import {
   AskStartSchema,
   CaptureResultSchema,
@@ -8,6 +8,11 @@ import {
   McpCrmSaveConnectionPayloadSchema,
   McpCrmPushPayloadSchema
 } from './ipc'
+
+/** process.platform is configurable in Node — flip it for the duration of a platform-specific test. */
+function setPlatform(p: NodeJS.Platform): void {
+  Object.defineProperty(process, 'platform', { value: p, configurable: true })
+}
 
 describe('AskStartSchema', () => {
   it('accepts a valid vision payload with a small base64 PNG', () => {
@@ -104,7 +109,7 @@ describe('SettingsSchema', () => {
 
   it('defaults playListenChime, requireConsentIndicator, and lastConsentReminderAt', () => {
     expect(DEFAULT_SETTINGS.playListenChime).toBe(true)
-    // On by default: it's the only consent mechanism AskToto has, so the persistent reminder should be
+    // On by default: it's the only consent mechanism Métis has, so the persistent reminder should be
     // the opt-out, not the opt-in (mirrors the encryptTranscripts default-flip reasoning).
     expect(DEFAULT_SETTINGS.requireConsentIndicator).toBe(true)
     expect(DEFAULT_SETTINGS.lastConsentReminderAt).toBe(0)
@@ -224,5 +229,32 @@ describe('McpCrmPushPayloadSchema', () => {
       args: { title: 'ok', count: 3, active: true, note: null }
     })
     expect(r.success).toBe(true)
+  })
+})
+
+describe('DEFAULT_SHORTCUTS scroll defaults', () => {
+  const REAL_PLATFORM = process.platform
+
+  afterEach(() => {
+    setPlatform(REAL_PLATFORM)
+    vi.resetModules()
+  })
+
+  it('avoids the Ctrl+Alt+Arrow Intel display-rotation collision on Windows', async () => {
+    setPlatform('win32')
+    vi.resetModules() // DEFAULT_SHORTCUTS is computed at module load — needs a fresh import to see the flip
+    const { DEFAULT_SHORTCUTS } = await import('./ipc')
+    expect(DEFAULT_SHORTCUTS['scroll-up']).not.toContain('Alt+Up')
+    expect(DEFAULT_SHORTCUTS['scroll-up']).not.toMatch(/Control.*Alt|Alt.*Control/)
+  })
+
+  it('keeps CommandOrControl+Alt+Arrow on mac', async () => {
+    setPlatform('darwin')
+    vi.resetModules()
+    const { DEFAULT_SHORTCUTS } = await import('./ipc')
+    expect(DEFAULT_SHORTCUTS['scroll-up']).toBe('CommandOrControl+Alt+Up')
+    expect(DEFAULT_SHORTCUTS['scroll-down']).toBe('CommandOrControl+Alt+Down')
+    expect(DEFAULT_SHORTCUTS['scroll-left']).toBe('CommandOrControl+Alt+Left')
+    expect(DEFAULT_SHORTCUTS['scroll-right']).toBe('CommandOrControl+Alt+Right')
   })
 })

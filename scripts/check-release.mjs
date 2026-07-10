@@ -14,14 +14,15 @@
 //
 // Self-test locally: `node scripts/check-release.mjs`
 //
-// Optional artifact-size gate: GitHub hard-caps a single release asset at 2 GiB — an upload past that
-// fails only at the very last step of `electron-builder --publish always`, after the full build +
-// codesign + notarize run has already burned CI time and secrets budget. Set ASKTOTO_ARTIFACTS_DIR to
-// the directory electron-builder wrote its .dmg/.zip/.exe into (e.g. right after `electron-builder`
-// runs, before the publish step) to have this script also stat every such file in that directory and
-// FAIL if any is >= 1.9 GiB (a safety buffer under the 2 GiB limit), WARN if any is >= 1.7 GiB. This
-// check is opt-in and does nothing when the env var is unset — CI can wire it in when ready; it is not
-// currently invoked anywhere in package.json or .github/workflows.
+// Optional artifact-size gate: GitHub hard-caps a single release asset at 2 GiB. Set
+// ASKTOTO_ARTIFACTS_DIR to the directory electron-builder wrote its .dmg/.zip/.exe into (`release/` per
+// electron-builder.yml's directories.output) to have this script also stat every such file in that
+// directory and FAIL if any is >= 1.9 GiB (a safety buffer under the 2 GiB limit), WARN if any is >= 1.7
+// GiB. This check is opt-in and does nothing when the env var is unset. `npm run release` / `release:win`
+// already run this script (without the env var) as an update-channel preflight BEFORE electron-builder
+// has produced any artifacts, so the size gate can't run there too — release.yml instead re-invokes
+// `npm run check:release` with ASKTOTO_ARTIFACTS_DIR set right after the build+publish step, as a
+// post-publish confirmation/alarm (same pattern as verify-signing.mjs below it).
 
 import { readFileSync, readdirSync, statSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'

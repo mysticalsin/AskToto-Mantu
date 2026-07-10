@@ -9,7 +9,7 @@ interface State {
 
 /**
  * Data source, in preference order:
- *  1. Embedded in AskToto (the Mantu Intelligence window): window.intelligence.getData() reads the
+ *  1. Embedded in Métis (the Mantu Intelligence window): window.intelligence.getData() reads the
  *     live brain over IPC (decrypted in the main process) and the adapter reshapes it.
  *  2. Standalone/dev: the generated data.json from /public (placeholder or a manual vault build).
  */

@@ -1,8 +1,11 @@
-import { describe, it, expect, vi } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { mkdtempSync, mkdirSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 
 vi.mock('electron')
 
-import { computeRelated } from './graphify'
+import { computeRelated, windowsPythonDirs } from './graphify'
 
 // Graph shaped like real graphify output: each concept node is owned by ONE note (its source_file),
 // and the other note links to the same concept node cross-file. This is how shared people/topics
@@ -46,5 +49,39 @@ describe('computeRelated', () => {
     expect(r.ok).toBe(true)
     expect(r.notes).toEqual([])
     expect(r.topics).toEqual([])
+  })
+})
+
+describe('windowsPythonDirs — python.org per-user installer PATH fallback', () => {
+  const savedLocalAppData = process.env.LOCALAPPDATA
+  let tmpDir: string
+
+  beforeEach(() => {
+    tmpDir = mkdtempSync(join(tmpdir(), 'asktoto-winpy-'))
+    process.env.LOCALAPPDATA = tmpDir
+  })
+  afterEach(() => {
+    if (savedLocalAppData === undefined) delete process.env.LOCALAPPDATA
+    else process.env.LOCALAPPDATA = savedLocalAppData
+    rmSync(tmpDir, { recursive: true, force: true })
+  })
+
+  it('returns [] when Programs\\Python does not exist', () => {
+    expect(windowsPythonDirs()).toEqual([])
+  })
+
+  it('picks the newest versioned subfolder (not the container dir itself) plus its Scripts dir', () => {
+    const base = join(tmpDir, 'Programs', 'Python')
+    mkdirSync(join(base, 'Python310'), { recursive: true })
+    mkdirSync(join(base, 'Python312'), { recursive: true })
+    mkdirSync(join(base, 'Python311'), { recursive: true })
+    expect(windowsPythonDirs()).toEqual([join(base, 'Python312'), join(base, 'Python312', 'Scripts')])
+  })
+
+  it('ignores non-version-named siblings under Programs\\Python', () => {
+    const base = join(tmpDir, 'Programs', 'Python')
+    mkdirSync(join(base, 'Python39'), { recursive: true })
+    mkdirSync(join(base, 'Launcher'), { recursive: true })
+    expect(windowsPythonDirs()).toEqual([join(base, 'Python39'), join(base, 'Python39', 'Scripts')])
   })
 })

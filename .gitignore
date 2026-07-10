@@ -29,3 +29,16 @@ issues_to_fix.md
 # Multi-agent handoff scratch (never commit — carries AI-tool session identifiers, not app source)
 Relay Baton/
 _agent_state/
+
+# Windows packaging output dirs (electron-builder -c.directories.output overrides) — multi-GB, never commit
+release-win*/
+
+# Personal/scratch content at repo root — not app source
+Video/
+/*.png
+graphify-out/
+docs/superpowers/
+
+# LGPL ffmpeg sidecar binaries: deliberately untracked — CI provisions them from the
+# ffmpeg-sidecar-v1 GitHub release (see docs/ENTERPRISE_RELEASE.md). Manifest hashes pin integrity.
+resources/ffmpeg/

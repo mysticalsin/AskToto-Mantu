@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { mkdtempSync, rmSync, existsSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, rmSync, existsSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -19,6 +19,7 @@ import {
   readBootstrapState,
   parseWhereLines,
   installerStepsForPlatform,
+  windowsPythonDirs,
   MAX_LAUNCH_ATTEMPTS,
   type BootstrapLogger
 } from './bootstrap'
@@ -90,6 +91,40 @@ describe('installerStepsForPlatform — installer order per platform', () => {
       { command: 'py', args: ['-m', 'pip', 'install', 'graphifyy'] },
       { command: 'pip', args: ['install', 'graphifyy'] }
     ])
+  })
+})
+
+describe('windowsPythonDirs — python.org per-user installer PATH fallback (mirrors graphify.test.ts)', () => {
+  const savedLocalAppData = process.env.LOCALAPPDATA
+  let tmpDir: string
+
+  beforeEach(() => {
+    tmpDir = mkdtempSync(join(tmpdir(), 'asktoto-bootstrap-winpy-'))
+    process.env.LOCALAPPDATA = tmpDir
+  })
+  afterEach(() => {
+    if (savedLocalAppData === undefined) delete process.env.LOCALAPPDATA
+    else process.env.LOCALAPPDATA = savedLocalAppData
+    rmSync(tmpDir, { recursive: true, force: true })
+  })
+
+  it('returns [] when Programs\\Python does not exist', () => {
+    expect(windowsPythonDirs()).toEqual([])
+  })
+
+  it('picks the newest versioned subfolder (not the container dir itself) plus its Scripts dir', () => {
+    const base = join(tmpDir, 'Programs', 'Python')
+    mkdirSync(join(base, 'Python310'), { recursive: true })
+    mkdirSync(join(base, 'Python312'), { recursive: true })
+    mkdirSync(join(base, 'Python311'), { recursive: true })
+    expect(windowsPythonDirs()).toEqual([join(base, 'Python312'), join(base, 'Python312', 'Scripts')])
+  })
+
+  it('ignores non-version-named siblings under Programs\\Python', () => {
+    const base = join(tmpDir, 'Programs', 'Python')
+    mkdirSync(join(base, 'Python39'), { recursive: true })
+    mkdirSync(join(base, 'Launcher'), { recursive: true })
+    expect(windowsPythonDirs()).toEqual([join(base, 'Python39'), join(base, 'Python39', 'Scripts')])
   })
 })
 
@@ -372,6 +407,39 @@ describe('runFirstRunBootstrap — win32: ComSpec routing for a `.cmd` shim, dir
     expect(state.graphify).toBe('ok')
     expect(state.npm).toBe('ok')
     expect(state.error).toBeNull()
+  })
+})
+
+describe('runFirstRunBootstrap — win32: `where` probes never flash a console window', () => {
+  let dir: string
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'asktoto-bootstrap-winhide-'))
+    setPlatform('win32')
+    h.execFileImpl.mockReset()
+    // Every probe/install attempt fails — we only care about the options passed to `where` itself.
+    h.execFileImpl.mockImplementation(() => Promise.reject(new Error('not found')))
+  })
+  afterEach(() => {
+    setPlatform(REAL_PLATFORM)
+    rmSync(dir, { recursive: true, force: true })
+  })
+
+  it('detectNpm\'s `where npm` probe sets windowsHide: true', async () => {
+    const log = makeLog()
+    await runFirstRunBootstrap({ userDataDir: dir, log })
+
+    const call = h.execFileImpl.mock.calls.find((c) => c[0] === 'where' && c[1]?.[0] === 'npm')
+    expect(call).toBeTruthy()
+    expect(call![2]).toMatchObject({ windowsHide: true })
+  })
+
+  it('winRun\'s `where <command>` probe (detectGraphify + every install step) sets windowsHide: true', async () => {
+    const log = makeLog()
+    await runFirstRunBootstrap({ userDataDir: dir, log })
+
+    const call = h.execFileImpl.mock.calls.find((c) => c[0] === 'where' && c[1]?.[0] === 'graphify')
+    expect(call).toBeTruthy()
+    expect(call![2]).toMatchObject({ windowsHide: true })
   })
 })
 

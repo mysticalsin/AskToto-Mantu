@@ -11,6 +11,13 @@ const isNotFound = (e: unknown): boolean =>
 
 /** Enterprise auto-update. Only runs in the packaged app; needs a real `publish` host (electron-builder.yml). */
 export function initAutoUpdate(win: BrowserWindow | null): void {
+  // A portable .exe has no fixed install location electron-updater can replace — it's just a file the
+  // user launched directly. Bail before any wiring so we never download an update we can't install and
+  // never show UpdateReadyToast promising an install that will never happen.
+  if (process.platform === 'win32' && process.env.PORTABLE_EXECUTABLE_FILE) {
+    log.info('[updater] portable build — auto-update unavailable, skipping')
+    return
+  }
   if (!app.isPackaged) return
   if ((process as NodeJS.Process & { mas?: boolean }).mas) return
   // Skip if no real update host is configured (placeholder) — avoids failing checks every launch.

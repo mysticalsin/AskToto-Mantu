@@ -10,7 +10,7 @@ export interface VisibilityToastProps {
   onDismiss: () => void
 }
 
-/** Confirms the eye (visible/invisible) toggle actually did something. Hiding AskToto from a screen
+/** Confirms the eye (visible/invisible) toggle actually did something. Hiding Métis from a screen
  *  share has NO effect on the user's own screen — it only changes what others see in Zoom/Teams/a
  *  recording — so without this the click feels broken ("I'm not seeing the screen change"). This is the
  *  moment-of-click confirmation; the bar's calm-rainbow contour is the persistent at-a-glance state. */
@@ -42,8 +42,8 @@ export function VisibilityToast({ state, onDismiss }: VisibilityToastProps): JSX
           </div>
           <div className="truncate text-[11px] leading-snug text-[color:var(--color-ink-2)]">
             {hidden
-              ? 'Others won’t see AskToto when you share or record your screen.'
-              : 'AskToto will now appear if you share or record your screen.'}
+              ? 'Others won’t see Métis when you share or record your screen.'
+              : 'Métis will now appear if you share or record your screen.'}
           </div>
         </div>
       </div>

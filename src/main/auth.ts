@@ -16,7 +16,7 @@ const SIGN_IN_SCOPES = ['User.Read', 'Calendars.Read', 'openid', 'profile', 'ema
 /**
  * Azure AD (Microsoft Entra) sign-in gate.
  *
- * Goal (per Tony): AskToto can only be used by someone signed in with a Mantu Microsoft account, so
+ * Goal (per Tony): Métis can only be used by someone signed in with a Mantu Microsoft account, so
  * usage is attributable and tied to the user's Dust identity. Sign-in is locked to the org tenant AND
  * the allowed email domain.
  *
@@ -45,9 +45,9 @@ interface Session {
 
 /** Machine-wide org-policy file IT can deploy (matches store.ts adminManagedPath). */
 function adminManagedPath(): string {
-  if (process.platform === 'darwin') return '/Library/Application Support/AskToto/managed-config.json'
+  if (process.platform === 'darwin') return '/Library/Application Support/Métis/managed-config.json'
   if (process.platform === 'win32')
-    return join(process.env.ProgramData || 'C:\\ProgramData', 'AskToto', 'managed-config.json')
+    return join(process.env.ProgramData || 'C:\\ProgramData', 'Métis', 'managed-config.json')
   return '/etc/asktoto/managed-config.json'
 }
 
@@ -508,7 +508,7 @@ export async function signIn(): Promise<SignInResult> {
         }
         res.writeHead(200, { 'Content-Type': 'text/html' })
         res.end(
-          `<html><body style="font-family:system-ui;background:#1a0033;color:#fff;display:grid;place-items:center;height:100vh;margin:0"><div style="text-align:center"><h2>AskToto</h2><p>${c ? 'Signed in — you can close this window.' : 'Sign-in failed.'}</p></div></body></html>`
+          `<html><body style="font-family:system-ui;background:#1a0033;color:#fff;display:grid;place-items:center;height:100vh;margin:0"><div style="text-align:center"><h2>Métis</h2><p>${c ? 'Signed in — you can close this window.' : 'Sign-in failed.'}</p></div></body></html>`
         )
         clearTimeout(timer)
         server.close()

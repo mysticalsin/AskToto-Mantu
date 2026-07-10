@@ -89,7 +89,7 @@ export function quickActionUnavailableMessage(kind: QuickActionKind): string {
     return 'Type a claim, start Listen, or switch to a screen-capable provider before fact-checking.'
   }
   if (kind === 'whatnext') {
-    return 'Start Listen, type context, or switch to a screen-capable provider so AskToto has context for the next move.'
+    return 'Start Listen, type context, or switch to a screen-capable provider so Métis has context for the next move.'
   }
   return 'Type context, start Listen, or switch to a screen-capable provider before using this action.'
 }

@@ -1,11 +1,11 @@
 <div align="center">
 
-# AskToto
+# Métis
 
 **The invisible AI copilot for every meeting.**
 A frameless, transparent, always-on-top glass overlay for macOS and Windows.
 
-<img src="docs/media/asktoto-hero.png" alt="AskToto overlay — Ask anything bar with a syntax-highlighted answer on frosted purple glass" width="760">
+<img src="docs/media/asktoto-hero.png" alt="Métis overlay — Ask anything bar with a syntax-highlighted answer on frosted purple glass" width="760">
 
 `16 AI providers + Dust` · `thinking-mode routing` · `live transcription` · `knowledge graph` · `encrypted at rest`
 
@@ -31,14 +31,16 @@ Plus one-click **Fact-check**, **Hide from screen capture**, a visible recording
 
 Grab the installer for your OS from the [AskToto-Releases](https://github.com/mysticalsin/AskToto-Releases/releases) page:
 
-- **macOS** — `AskToto-1.0.0.dmg` (Apple Silicon; macOS 12+). v1.0.0 is not yet notarized:
+- **macOS** — `Metis-1.0.0.dmg` (Apple Silicon; macOS 12+). v1.0.0 is not yet notarized:
   first launch needs right-click → Open → Open (one time). Auto-update activates once builds
   are signed + notarized.
-- **Windows** — `AskToto-Setup-1.0.0.exe` (installer) or `AskToto-Portable-1.0.0.exe`
+- **Windows** — `Metis-Setup-1.0.0.exe` (installer) or `Metis-Portable-1.0.0.exe`
   (no-install). v1.0.0 is not yet Authenticode-signed: SmartScreen will warn — More info →
   Run anyway.
 
 All transcription runs on-device; models are bundled (no first-run download).
+
+Full install instructions: `docs/INSTALL.md`.
 
 ## Quick start (from source)
 
@@ -49,6 +51,7 @@ npm run typecheck    # tsc, both projects
 npm test             # vitest (unit + integration)
 npm run build        # bundle main + preload + renderer → out/
 npm run dist         # package a signed-runtime app → release/ (electron-builder)
+npm run installers   # build the installer for this OS and print the installable files
 ```
 
 Set a provider key in-app: gear → **AI** → paste your key → Save (stored encrypted on-device via
@@ -128,7 +131,9 @@ AskToto/
 ## Docs
 
 - `docs/design/` — design spec
+- `docs/INSTALL.md` — Mac and Windows install instructions
 - `docs/SIGNING.md` — code-signing / notarization setup
+- `docs/ENTERPRISE_RELEASE.md` — enterprise release checklist
 - `docs/asktoto-architecture.md` — architecture reference
 - `docs/asktoto-hardening-backlog.md` — deferred hardening items
 
@@ -136,7 +141,9 @@ AskToto/
 
 - Real answers need a provider key, a connected Claude Code / Codex CLI (keyless), or Dust. A bad key
   returns a clean UI error.
-- Code signing / notarization needs an Apple Developer ID cert; Windows signing needs a Windows runner.
+- Code signing / notarization and Store submission need Tony-owned developer accounts, certificates,
+  provisioning profiles, and GitHub release secrets. The repo now fails tagged releases before publish
+  when required signing inputs are missing.
 - ASR weights (Whisper base + large-v3-turbo + Parakeet) are bundled into the installer by
   `npm run fetch-models` (run automatically by `predist`) and load offline via the `asr-model://`
   protocol — no download on first Listen. Dev builds without fetched models fall back to a one-time

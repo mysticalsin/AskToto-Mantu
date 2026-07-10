@@ -74,7 +74,7 @@ function fx(p: {
 
 /** Minimal transcript markdown carrying the frontmatter production stamps provenance from. */
 const transcriptMd = (daysAgo: number): string =>
-  `---\ntype: meeting-transcript\nsource: AskToto\ndate: ${iso(daysAgo)}\n---\n\n## Full transcript\n\n**[10:00:00] Them:** hello\n`
+  `---\ntype: meeting-transcript\nsource: Métis\ndate: ${iso(daysAgo)}\n---\n\n## Full transcript\n\n**[10:00:00] Them:** hello\n`
 
 // ── GROUND TRUTH ─────────────────────────────────────────────────────────────
 // Acme (banking): 5 meetings. 'migration' discussed in the three old ones, gone recently (dropped
@@ -87,7 +87,7 @@ const transcriptMd = (daysAgo: number): string =>
 const FIXTURES: Fixture[] = [
   fx({ file: 'acme-1.md', daysAgo: 90, account: { name: 'Acme', sector: 'banking' }, title: 'Migration kickoff', topics: ['migration', 'pricing'], people: [{ name: 'Claire Dubois', role: 'CFO' }, { name: 'Tom Reed' }], deal: { name: 'Acme Core Banking', band: 'mixed' } }),
   fx({ file: 'acme-2.md', daysAgo: 75, account: { name: 'Acme', sector: 'banking' }, title: 'Migration security', topics: ['migration', 'security'], people: [{ name: 'Claire Dubois' }], deal: { name: 'Acme Core Banking', band: 'mixed' } }),
-  fx({ file: 'acme-3.md', daysAgo: 60, account: { name: 'Acme', sector: 'banking' }, title: 'Migration plan', topics: ['migration'], people: [{ name: 'Claire Dubois' }, { name: 'Tom Reed' }], deal: { name: 'Acme Core Banking', band: 'mixed' }, commitments: [{ text: 'intro AskToto to the CISO', by: 'Claire Dubois' }] }),
+  fx({ file: 'acme-3.md', daysAgo: 60, account: { name: 'Acme', sector: 'banking' }, title: 'Migration plan', topics: ['migration'], people: [{ name: 'Claire Dubois' }, { name: 'Tom Reed' }], deal: { name: 'Acme Core Banking', band: 'mixed' }, commitments: [{ text: 'intro Métis to the CISO', by: 'Claire Dubois' }] }),
   fx({ file: 'acme-4.md', daysAgo: 3, account: { name: 'Acme', sector: 'banking' }, title: 'Pricing rollout', topics: ['pricing', 'rollout'], people: [{ name: 'Tom Reed' }], deal: { name: 'Acme Core Banking', band: 'good' }, commitments: [{ text: 'send the security pack', by: 'you', due_hint: 'by Friday' }] }),
   fx({ file: 'acme-5.md', daysAgo: 1, account: { name: 'Acme', sector: 'banking' }, title: 'Add-on close', topics: ['rollout'], people: [{ name: 'Tom Reed' }], deal: { name: 'Acme Add-on', band: 'good' }, sentiment: 'good' }),
   fx({ file: 'globex-1.md', daysAgo: 120, account: { name: 'Globex', sector: 'retail' }, title: 'RFP walkthrough', topics: ['rfp'], people: [{ name: 'Maria Silva' }], deal: { name: 'Globex RFP', band: 'mixed' } }),
@@ -128,7 +128,7 @@ describe.each([
     rfp.outcome = 'lost' // lost long ago — must NOT count in this week's Mars
     await writeDeal(s, slugify('Globex RFP'), rfp)
     // Claire delivered her intro — settled through the real settlement path (deal + person mirror).
-    const settled = await settleCommitment(s, slugify('Acme Core Banking'), 'intro AskToto to the CISO', 'kept')
+    const settled = await settleCommitment(s, slugify('Acme Core Banking'), 'intro Métis to the CISO', 'kept')
     if (!settled.ok) throw new Error(settled.error)
 
     // Read everything back OFF DISK through the real readers (what IPC brain:read serves).
@@ -189,7 +189,7 @@ describe.each([
     // so the per-person kept-promise reliability read (kept 1/1) is computable from real data.
     const claire = readPerson(s, 'claire-dubois')!
     expect(claire.commitments.map((c) => ({ text: c.text, status: c.status }))).toEqual([
-      { text: 'intro AskToto to the CISO', status: 'kept' }
+      { text: 'intro Métis to the CISO', status: 'kept' }
     ])
   })
 

@@ -1,5 +1,5 @@
 import { memo, useEffect, useMemo, useRef, useState } from 'react'
-import { Copy, Check, FileText, ListTree, FolderOpen, Save, RotateCcw, Play, ChevronDown, Download, Clock, Mail, Send, AlertCircle, EarOff, ArrowLeft, Pencil, X } from 'lucide-react'
+import { Copy, Check, FileText, ListTree, FolderOpen, Save, RotateCcw, Play, ChevronDown, Download, Clock, Mail, Send, AlertCircle, EarOff, ArrowLeft, Pencil, X, Sparkles } from 'lucide-react'
 import type { TranscriptLine, MeetingSummary } from '@shared/ipc'
 import type { AnswerState } from '../state'
 import { isNonSpeechLine } from '@shared/transcript-filter'
@@ -91,6 +91,7 @@ export const Review = memo(function Review({
   onResume,
   onGenerateFollowup,
   onRetryRecap,
+  onGenerateRecap,
   bidstackConnected,
   bidstackTools,
   onOpenPastMeeting,
@@ -116,6 +117,9 @@ export const Review = memo(function Review({
   /** Replay the recap generation after a failure (transient Dust/rate-limit blip) — without this the
    *  only recovery was "New meeting", which discards the whole saved session. */
   onRetryRecap?: () => void
+  /** Retroactively generate a recap for a past meeting that was saved/imported without one. Only
+   *  rendered as a button when isPastMeeting && the recap is empty. */
+  onGenerateRecap?: () => void
   /** Whether BidStack CRM is connected (Settings → CLI Integration). Gates "Push to CRM". */
   bidstackConnected?: boolean
   /** Tool names discovered from BidStack's MCP server at last connect — populates the tool picker. */
@@ -239,7 +243,7 @@ export const Review = memo(function Review({
   const plain = useMemo(
     () =>
       speechLines
-        .map((l) => `[${clock(l.t)}] ${l.speaker === 'them' ? 'Them' : 'You'}: ${l.text}`)
+        .map((l) => `[${clock(l.t)}] ${l.speaker === 'them' ? 'Them' : l.speaker === 'you' ? 'You' : 'Speaker'}: ${l.text}`)
         .join('\n'),
     [speechLines]
   )
@@ -507,6 +511,16 @@ export const Review = memo(function Review({
             </div>
           ) : (
             <div className="flex items-center gap-1">
+              {/* Retroactive recap generation — a past meeting saved/imported without one (a keyless
+                  import, or one from before this button existed). Hidden once there's a recap OR an error
+                  showing (the error view below already has its own Retry). Disabled mid-stream so a second
+                  click can't self-cancel the in-flight generation. */}
+              {isPastMeeting && !recapText && !recap?.error && onGenerateRecap && (
+                <Chip onClick={onGenerateRecap} variant="accent" disabled={recap?.streaming}>
+                  {recap?.streaming ? <Spinner size={13} /> : <Sparkles size={13} />}
+                  {recap?.streaming ? 'Generating…' : 'Generate recap'}
+                </Chip>
+              )}
               {/* Edit — past meetings only (a live session's recap is still owned by the ask state, and may
                   be streaming/retryable). Available even when the recap is empty, so a meeting saved without
                   one can still be annotated. */}
@@ -587,9 +601,15 @@ export const Review = memo(function Review({
           </div>
         ) : recapText ? (
           <Markdown>{recapText}</Markdown>
+        ) : recap?.streaming ? (
+          // A past meeting's retroactive "Generate recap" (or a just-finished import) is in flight —
+          // recap here is recapGen's live streaming answer, not the static (still-empty) saved recap.
+          <div className="flex items-center gap-2 py-1 text-[13px] text-[color:var(--color-ink-2)]">
+            <Spinner size={13} /> writing detailed notes…
+          </div>
         ) : isPastMeeting ? (
-          // A past meeting saved without a recap (e.g. a keyless summary failure). Not a spinner — the
-          // work is long over; offer to add notes instead.
+          // A past meeting saved without a recap (e.g. a keyless summary failure) and nothing generating
+          // right now. Not a spinner — the work is long over; offer to add notes instead.
           <div className="text-[13px] text-[color:var(--color-ink-2)]">
             No notes saved for this meeting. Select Edit to add some.
           </div>
@@ -815,7 +835,7 @@ export const Review = memo(function Review({
                       : 'text-[color:var(--color-ink-3)]')
                   }
                 >
-                  {l.speaker === 'them' ? 'Them' : 'You'}
+                  {l.speaker === 'them' ? 'Them' : l.speaker === 'you' ? 'You' : 'Speaker'}
                 </span>
                 <span className="min-w-0 flex-1 break-words text-[color:var(--color-ink)]">{l.text}</span>
               </div>

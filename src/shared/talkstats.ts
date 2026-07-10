@@ -39,9 +39,13 @@ export function talkStats(lines: TranscriptLine[]): TalkStats {
       const next = lines[i + 1]
       const end = next ? next.t : l.t
       if (runStart !== null) longestMonologueSec = Math.max(longestMonologueSec, Math.round((end - runStart) / 1000))
-    } else {
+    } else if (l.speaker === 'them') {
       themWords += words(l.text)
       if (l.text.includes('?')) themQuestions++
+      runStart = null
+    } else {
+      // Imported recordings are not diarized. Excluding unknown speakers keeps live talk-ratio metrics
+      // honest rather than treating unidentified speech as the other participant.
       runStart = null
     }
   }

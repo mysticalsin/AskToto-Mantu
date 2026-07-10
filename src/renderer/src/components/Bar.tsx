@@ -19,7 +19,7 @@ import {
   Brain,
   FileSearch
 } from 'lucide-react'
-import { MantuMark } from './MantuMark'
+import { MetisMark } from './MetisMark'
 import { ModePicker } from './ModePicker'
 import { Spinner } from './ui'
 import { modeLabel } from '@shared/ipc'
@@ -136,8 +136,8 @@ export interface BarProps {
   onHistory: () => void
   /** Collapse the widget down to the floating control mini-pill. */
   onMinimize: () => void
-  /** When true, the AskToto window is hidden from screen capture & sharing (contentProtection). The
-   *  eye button toggles this. Separate from Private View (whether AskToto captures the user's screen). */
+  /** When true, the Métis window is hidden from screen capture & sharing (contentProtection). The
+   *  eye button toggles this. Separate from Private View (whether Métis captures the user's screen). */
   stealth: boolean
   onToggleStealth: () => void
   /** Wall-clock start time of the current meeting (Date.now() at startListen) — ElapsedClock derives the
@@ -437,7 +437,7 @@ export const Bar = memo(function Bar(props: BarProps): JSX.Element {
                   : 'Ask anything about your screen'
             }
             spellCheck={false}
-            aria-label="Ask AskToto anything"
+            aria-label="Ask Métis anything"
             className={[
               // Brighter tier + a drop-shadow on the placeholder (same fix already applied to the
               // QuickActions hint) — "Ask anything…" pops clearly over any desktop, light or dark.
@@ -481,7 +481,7 @@ export const Bar = memo(function Bar(props: BarProps): JSX.Element {
   const toolbarRow = useMemo(
     () => (
         <div className="aw-toolbar grid grid-cols-[1fr_auto_1fr] items-center border-t border-[var(--color-hair-soft)] px-5 py-1">
-          {/* The Mantu mark IS the logo → opens Settings. (Quit/Hide live in the tray + hotkeys.) */}
+          {/* The Métis mark IS the logo → opens Settings. (Quit/Hide live in the tray + hotkeys.) */}
           <button
             type="button"
             title="Settings"
@@ -490,7 +490,7 @@ export const Bar = memo(function Bar(props: BarProps): JSX.Element {
             className="no-drag focus-ring block flex-none justify-self-start rounded-[10px]"
           >
             <span className="aw-mark-glow block rounded-[10px]">
-              <MantuMark size={30} />
+              <MetisMark size={30} />
             </span>
           </button>
 
@@ -543,7 +543,7 @@ export const Bar = memo(function Bar(props: BarProps): JSX.Element {
                 the invisible-copilot identity — so EyeOff (hidden) is the muted resting state. Eye
                 (visible) is the exceptional, attention-worthy state where others CAN see the overlay, so
                 it lights with danger as an at-a-glance "you're exposed" cue. Separate from Private View
-                (whether AskToto captures YOUR screen), which lives in Settings → Privacy. */}
+                (whether Métis captures YOUR screen), which lives in Settings → Privacy. */}
             <IconTool
               title={props.stealth ? 'Hidden on shared screens — click to make visible' : 'Visible on shared screens — click to hide'}
               onClick={props.onToggleStealth}

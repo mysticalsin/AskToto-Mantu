@@ -5,7 +5,15 @@ on:
   # (zero matching workflows) reports "failure" rather than skipped — so restricting this to main/master
   # made every push to a feature branch show as a false CI failure with nothing to point to. Matching all
   # branches gives real, meaningful pass/fail feedback everywhere instead of a phantom red X.
+  # tags-ignore excludes v* tag pushes only (branch pushes are unaffected) - those already run the signed,
+  # published pipeline in release.yml, so running this unsigned/unpublished --publish never pipeline too
+  # just doubles CI minutes on every real release with no bearing on whether the release shipped.
   push:
+    tags-ignore:
+      - 'v*'
+      # ffmpeg-sidecar-* tags only carry CI provisioning assets (see docs/ENTERPRISE_RELEASE.md);
+      # building the app on their push would be pure noise.
+      - 'ffmpeg-sidecar-*'
   pull_request:
     branches: [main, master]
   workflow_dispatch:
@@ -73,6 +81,38 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
+      # Restore the reviewed LGPL ffmpeg decoder sidecar (untracked in git - see
+      # resources/ffmpeg/manifest.json) from the ffmpeg-sidecar-v1 release in this repo. Cache first so a
+      # warm runner doesn't hit the GitHub API on every run; fall back to `gh release download` (built-in
+      # GITHUB_TOKEN, read-only, scoped to this repo) on a cache miss. Without this, predist's
+      # check-ffmpeg-sidecar.mjs throws a raw ENOENT before the build even starts.
+      - uses: actions/cache@v4
+        id: ffmpeg-cache
+        with:
+          path: resources/ffmpeg
+          key: ffmpeg-sidecar-v1-darwin-arm64
+      - name: Provision ffmpeg sidecar (darwin-arm64)
+        if: steps.ffmpeg-cache.outputs.cache-hit != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p resources/ffmpeg/darwin-arm64
+          if ! gh release download ffmpeg-sidecar-v1 --repo "$GITHUB_REPOSITORY" \
+               --pattern 'ffmpeg-darwin-arm64' --pattern 'manifest.json' --pattern 'LICENSE.LGPL-2.1.txt' \
+               --dir resources/ffmpeg --clobber; then
+            echo "::warning::Could not download the ffmpeg-sidecar-v1 release assets - falling through to the hard gate below."
+          elif [ -f resources/ffmpeg/ffmpeg-darwin-arm64 ]; then
+            mv resources/ffmpeg/ffmpeg-darwin-arm64 resources/ffmpeg/darwin-arm64/ffmpeg
+            chmod +x resources/ffmpeg/darwin-arm64/ffmpeg
+          fi
+      - name: Require the ffmpeg sidecar to be present
+        run: |
+          if [ ! -f "resources/ffmpeg/darwin-arm64/ffmpeg" ]; then
+            echo "::error::Missing resources/ffmpeg/darwin-arm64/ffmpeg and the ffmpeg-sidecar-v1 release could not provision it."
+            echo "::error::One-time seed (run once locally by a maintainer holding the reviewed binaries in resources/ffmpeg/):"
+            echo "::error::  cp resources/ffmpeg/darwin-arm64/ffmpeg /tmp/ffmpeg-darwin-arm64 && cp resources/ffmpeg/win32-x64/ffmpeg.exe /tmp/ffmpeg-win32-x64.exe && gh release create ffmpeg-sidecar-v1 /tmp/ffmpeg-darwin-arm64 /tmp/ffmpeg-win32-x64.exe resources/ffmpeg/manifest.json resources/ffmpeg/LICENSE.LGPL-2.1.txt --repo $GITHUB_REPOSITORY --title 'ffmpeg sidecar v1' --notes 'Reviewed LGPL-only ffmpeg binaries for CI provisioning (see manifest.json for SHA256s).'"
+            exit 1
+          fi
       - uses: actions/setup-node@v4
         with:
           node-version: 20
@@ -114,6 +154,39 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
+      # Restore the reviewed LGPL ffmpeg decoder sidecar (untracked in git - see
+      # resources/ffmpeg/manifest.json) from the ffmpeg-sidecar-v1 release in this repo. Cache first so a
+      # warm runner doesn't hit the GitHub API on every run; fall back to `gh release download` (built-in
+      # GITHUB_TOKEN, read-only, scoped to this repo) on a cache miss. Without this, predist:win's
+      # check-ffmpeg-sidecar.mjs throws a raw ENOENT before the build even starts.
+      - uses: actions/cache@v4
+        id: ffmpeg-cache
+        with:
+          path: resources/ffmpeg
+          key: ffmpeg-sidecar-v1-win32-x64
+      - name: Provision ffmpeg sidecar (win32-x64)
+        if: steps.ffmpeg-cache.outputs.cache-hit != 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p resources/ffmpeg/win32-x64
+          if ! gh release download ffmpeg-sidecar-v1 --repo "$GITHUB_REPOSITORY" \
+               --pattern 'ffmpeg-win32-x64.exe' --pattern 'manifest.json' --pattern 'LICENSE.LGPL-2.1.txt' \
+               --dir resources/ffmpeg --clobber; then
+            echo "::warning::Could not download the ffmpeg-sidecar-v1 release assets - falling through to the hard gate below."
+          elif [ -f resources/ffmpeg/ffmpeg-win32-x64.exe ]; then
+            mv resources/ffmpeg/ffmpeg-win32-x64.exe resources/ffmpeg/win32-x64/ffmpeg.exe
+          fi
+      - name: Require the ffmpeg sidecar to be present
+        shell: bash
+        run: |
+          if [ ! -f "resources/ffmpeg/win32-x64/ffmpeg.exe" ]; then
+            echo "::error::Missing resources/ffmpeg/win32-x64/ffmpeg.exe and the ffmpeg-sidecar-v1 release could not provision it."
+            echo "::error::One-time seed (run once locally by a maintainer holding the reviewed binaries in resources/ffmpeg/):"
+            echo "::error::  cp resources/ffmpeg/darwin-arm64/ffmpeg /tmp/ffmpeg-darwin-arm64 && cp resources/ffmpeg/win32-x64/ffmpeg.exe /tmp/ffmpeg-win32-x64.exe && gh release create ffmpeg-sidecar-v1 /tmp/ffmpeg-darwin-arm64 /tmp/ffmpeg-win32-x64.exe resources/ffmpeg/manifest.json resources/ffmpeg/LICENSE.LGPL-2.1.txt --repo $GITHUB_REPOSITORY --title 'ffmpeg sidecar v1' --notes 'Reviewed LGPL-only ffmpeg binaries for CI provisioning (see manifest.json for SHA256s).'"
+            exit 1
+          fi
       - uses: actions/setup-node@v4
         with:
           node-version: 20

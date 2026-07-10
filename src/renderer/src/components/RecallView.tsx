@@ -11,12 +11,11 @@ import {
   Trash2,
   Pencil,
   Brain,
-  Upload
+  Upload,
+  X
 } from 'lucide-react'
 import { TextButton } from './ui'
 import { accelLabel } from '../lib/keys'
-import { uid } from '../state'
-import { chunkAudio, decodeAndResampleToMono16k } from '../lib/import-audio'
 import type {
   MeetingSummary,
   RecallHit,
@@ -24,7 +23,8 @@ import type {
   GraphRelated,
   CalendarTodayResult,
   CalendarEvent,
-  ImportAudioPickResult
+  ImportAudioPickResult,
+  ImportJobView
 } from '@shared/ipc'
 
 // ---------------------------------------------------------------------------
@@ -598,12 +598,9 @@ export function RecallView({
   /** The scrollable meeting-list container — focused before a row unmounts (e.g. on delete) so a
    *  keyboard user's focus doesn't fall through to <body> when the focused Delete button is removed. */
   const listRef = useRef<HTMLDivElement>(null)
-  /** "Import audio" button state — idle outside a run; disables the button and drives its label. */
-  const [importState, setImportState] = useState<{
-    stage: 'idle' | 'decoding' | 'transcribing' | 'saving'
-    pct: number
-    error: string | null
-  }>({ stage: 'idle', pct: 0, error: null })
+  /** Main-owned jobs survive navigation and overlay closure; this component only renders their live state. */
+  const [importJobs, setImportJobs] = useState<ImportJobView[]>([])
+  const [importError, setImportError] = useState<string | null>(null)
 
   // Meetings are always saved; deletion is the user's to undo that. The main process pops a native,
   // unmissable confirm dialog before actually deleting (single click here is unambiguous — no "did that
@@ -703,57 +700,71 @@ export function RecallView({
     p.then(setItems).catch(() => {})
   }, [q])
 
-  // Import audio: pick a recording, decode/resample it locally (main has no ffmpeg — see
-  // lib/import-audio.ts), then stream it to main as ~30s windows, one IPC round trip at a time, each
-  // one transcribed on-device before the next is sent. See main/import-audio.ts for the save + ingest.
+  const upsertImportJob = useCallback((job: ImportJobView): void => {
+    setImportJobs((jobs) => [job, ...jobs.filter((existing) => existing.jobId !== job.jobId)])
+  }, [])
+
+  useEffect(() => {
+    let stale = false
+    window.toto.importJobsList().then((jobs) => {
+      if (!stale) setImportJobs(jobs)
+    }).catch(() => {})
+    const unsub = window.toto.onImportAudioProgress(({ job }) => {
+      if (stale) return
+      upsertImportJob(job)
+      if (job.state === 'done') refreshList()
+    })
+    return () => {
+      stale = true
+      unsub()
+    }
+  }, [refreshList, upsertImportJob])
+
+  // Pick only creates a single-use capability. The main process owns decoding, transcription, checkpointing,
+  // saving, and recap generation after this call returns, so the user is free to leave this view immediately.
   const importAudio = useCallback(async (): Promise<void> => {
-    setImportState({ stage: 'decoding', pct: 0, error: null })
+    setImportError(null)
     let picked: ImportAudioPickResult
     try {
       picked = await window.toto.importAudioPick()
     } catch (e) {
-      setImportState({ stage: 'idle', pct: 0, error: e instanceof Error ? e.message : 'Could not open the file picker.' })
+      setImportError(e instanceof Error ? e.message : 'Could not open the file picker.')
       return
     }
-    if (picked.cancelled) {
-      setImportState({ stage: 'idle', pct: 0, error: null })
+    if (picked.cancelled) return
+    if (!picked.token) {
+      setImportError(picked.error || 'Could not prepare the selected recording.')
       return
     }
-    if (!picked.path) {
-      setImportState({ stage: 'idle', pct: 0, error: picked.error || 'Could not read the selected file.' })
-      return
-    }
-    let unsub: (() => void) | null = null
     try {
-      const buf = await window.toto.importAudioRead(picked.path)
-      const samples = await decodeAndResampleToMono16k(buf)
-      const chunks = chunkAudio(samples)
-      const sessionId = uid()
-      unsub = window.toto.onImportAudioProgress((d) => {
-        if (d.sessionId !== sessionId) return
-        setImportState({ stage: d.stage, pct: d.pct, error: null })
-      })
-      let last: { ok: boolean; error?: string } | undefined
-      for (let seq = 0; seq < chunks.length; seq++) {
-        last = await window.toto.importAudioTranscribe({
-          sessionId,
-          seq,
-          totalChunks: chunks.length,
-          done: seq === chunks.length - 1,
-          name: picked.name || 'Imported audio',
-          mtimeMs: picked.mtimeMs ?? Date.now(),
-          samples: chunks[seq]
-        })
-        if (!last?.ok) throw new Error(last?.error || 'Import failed.')
-      }
-      setImportState({ stage: 'idle', pct: 0, error: null })
-      refreshList()
+      upsertImportJob(await window.toto.importAudioStart(picked.token))
     } catch (e) {
-      setImportState({ stage: 'idle', pct: 0, error: e instanceof Error ? e.message : 'Could not import this recording.' })
-    } finally {
-      unsub?.()
+      setImportError(e instanceof Error ? e.message : 'Could not start the import.')
     }
-  }, [refreshList])
+  }, [upsertImportJob])
+
+  const cancelImport = useCallback((jobId: string): void => {
+    void window.toto.importJobCancel(jobId).catch((error) => {
+      setImportError(error instanceof Error ? error.message : 'Could not cancel the import.')
+    })
+  }, [])
+
+  const resumeImport = useCallback((jobId: string): void => {
+    void window.toto.importJobResume(jobId).then(upsertImportJob).catch((error) => {
+      setImportError(error instanceof Error ? error.message : 'Could not resume the import.')
+    })
+  }, [upsertImportJob])
+
+  // Permanently dismisses a failed import. Unlike cancel/resume, there is no further job state to push
+  // back from main (the job is gone), so this is the one action here that updates `importJobs` itself
+  // instead of waiting on onImportAudioProgress.
+  const dismissImport = useCallback((jobId: string): void => {
+    void window.toto.importJobRemove(jobId).then(() => {
+      setImportJobs((jobs) => jobs.filter((job) => job.jobId !== jobId))
+    }).catch((error) => {
+      setImportError(error instanceof Error ? error.message : 'Could not dismiss the import.')
+    })
+  }, [])
 
   // Single fetch owner: immediate on mount / empty query, debounced for typed searches.
   // A stale-guard drops out-of-order resolutions so a slow earlier response can't overwrite a newer one.
@@ -852,21 +863,41 @@ export function RecallView({
         <TextButton
           icon={Upload}
           onClick={() => void importAudio()}
-          disabled={importState.stage !== 'idle'}
-          title="Import an audio recording and transcribe it on-device"
+          title="Import an audio recording. It keeps processing in the background while you navigate."
         >
-          {importState.stage === 'idle'
-            ? 'Import audio'
-            : importState.stage === 'decoding'
-              ? 'Decoding…'
-              : importState.stage === 'transcribing'
-                ? `Transcribing ${importState.pct}%`
-                : 'Saving…'}
+          Import audio
         </TextButton>
       </div>
-      {importState.error && (
-        <div className="mb-2 px-1 text-[11px] text-[var(--color-danger)]">{importState.error}</div>
+      {importError && (
+        <div className="mb-2 px-1 text-[11px] text-[var(--color-danger)]">{importError}</div>
       )}
+      {importJobs.filter((job) => (job.state !== 'done' || !!job.recapError) && job.state !== 'cancelled').map((job) => (
+        <div key={job.jobId} className="mb-2 rounded-xl border border-[var(--color-hair-soft)] bg-white/[0.03] px-3 py-2">
+          <div className="flex items-center gap-2 text-[12px]">
+            <span className="min-w-0 flex-1 truncate font-medium text-[color:var(--color-ink)]">{job.title}</span>
+            <span className="shrink-0 text-[color:var(--color-ink-3)]">
+              {job.state === 'done' && job.recapError ? 'Summary needs attention' : job.state === 'queued' ? 'Queued' : job.state === 'decoding' ? 'Decoding…' : job.state === 'transcribing' ? (job.totalChunks > 0 ? `Transcribing ${job.pct}%` : 'Transcribing…') : job.state === 'saving' ? 'Saving…' : job.state === 'recapping' ? 'Summarizing…' : 'Needs attention'}
+            </span>
+            {job.state === 'failed' ? (
+              <>
+                <TextButton onClick={() => resumeImport(job.jobId)} title="Resume this import from its last saved transcript checkpoint">Resume</TextButton>
+                <TextButton
+                  icon={X}
+                  ariaLabel="Dismiss failed import"
+                  onClick={() => dismissImport(job.jobId)}
+                  title="Dismiss this failed import"
+                />
+              </>
+            ) : job.state === 'done' && job.recapError && job.file ? (
+              <TextButton onClick={() => openMeeting(job.file!)} title="Open this meeting and retry its summary">Open</TextButton>
+            ) : job.state !== 'done' ? (
+              <TextButton onClick={() => cancelImport(job.jobId)} title="Cancel this import">Cancel</TextButton>
+            ) : null}
+          </div>
+          {job.error && <div className="mt-1 text-[11px] text-[var(--color-danger)]">{job.error}</div>}
+          {job.recapError && <div className="mt-1 text-[11px] text-[var(--color-ink-3)]">Transcript saved. Summary can be retried from the meeting.</div>}
+        </div>
+      ))}
 
       {/* ── UPCOMING CALENDAR SECTION ───────────────────────────────────── */}
       <UpcomingSection onConnectCalendar={onConnectCalendar} />

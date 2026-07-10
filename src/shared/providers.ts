@@ -51,7 +51,7 @@ export const PROVIDERS: Record<ProviderId, ProviderDef> = {
   anthropic: {
     id: 'anthropic',
     label: 'Claude · Anthropic',
-    blurb: 'The models AskToto is built and tuned for by default.',
+    blurb: 'The models Métis is built and tuned for by default.',
     kind: 'anthropic',
     tier: 'featured',
     baseUrl: '',

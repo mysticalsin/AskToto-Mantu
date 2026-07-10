@@ -14,6 +14,24 @@
 export const IMPORT_CHUNK_SEC = 30
 export const IMPORT_SAMPLE_RATE = 16000
 
+// This fallback decoder (used only when the bundled ffmpeg sidecar in src/main/ffmpeg-decoder.ts is
+// unavailable) cannot stream: decodeAudioData yields the whole recording's PCM in one buffer, and the
+// mixdown render pass below produces a second full-length buffer. Unlike the ffmpeg path — which never
+// holds more than one 30s chunk regardless of source length — this path's peak memory scales with the
+// entire recording. Bound it to the same order of magnitude as the compressed-source cap (MAX_SOURCE_BYTES
+// in src/main/import-audio.ts) so a long/high-bitrate import is rejected instead of OOMing the renderer.
+export const MAX_DECODED_BYTES = 500 * 1024 * 1024
+
+/** Pure size check, split out from decodeAndResampleToMono16k so it's testable without a DOM AudioContext. */
+export function assertDecodedSizeWithinBound(frameCount: number, channelCount: number): void {
+  const bytes = frameCount * Math.max(1, channelCount) * Float32Array.BYTES_PER_ELEMENT
+  if (bytes > MAX_DECODED_BYTES) {
+    const gotMb = Math.round(bytes / (1024 * 1024))
+    const capMb = Math.round(MAX_DECODED_BYTES / (1024 * 1024))
+    throw new Error(`Recording too large to import without ffmpeg (${gotMb}MB decoded PCM exceeds the ${capMb}MB fallback-decoder bound)`)
+  }
+}
+
 /**
  * Decode + resample to mono 16kHz. `decodeAudioData` resamples to its OWN context's sample rate as
  * part of decoding, so constructing the first OfflineAudioContext at 16000 does the resample for free —
@@ -24,6 +42,8 @@ export const IMPORT_SAMPLE_RATE = 16000
 export async function decodeAndResampleToMono16k(arrayBuffer: ArrayBuffer): Promise<Float32Array<ArrayBuffer>> {
   const decodeCtx = new OfflineAudioContext(1, 1, IMPORT_SAMPLE_RATE)
   const decoded = await decodeCtx.decodeAudioData(arrayBuffer)
+  // Reject before the second (equally large) mixdown buffer is allocated — see MAX_DECODED_BYTES above.
+  assertDecodedSizeWithinBound(decoded.length, decoded.numberOfChannels)
   const mixCtx = new OfflineAudioContext(1, Math.max(1, decoded.length), IMPORT_SAMPLE_RATE)
   const src = mixCtx.createBufferSource()
   src.buffer = decoded
@@ -46,7 +66,9 @@ export function chunkAudio(
   if (samples.length === 0) return [new Float32Array(0)]
   const chunks: Float32Array<ArrayBuffer>[] = []
   for (let i = 0; i < samples.length; i += chunkLen) {
-    chunks.push(samples.subarray(i, Math.min(i + chunkLen, samples.length)))
+    // Own each IPC payload. A subarray retains the full recording's backing buffer, so structured
+    // cloning one 30-second window could serialize the entire source for every chunk.
+    chunks.push(samples.slice(i, Math.min(i + chunkLen, samples.length)))
   }
   return chunks
 }

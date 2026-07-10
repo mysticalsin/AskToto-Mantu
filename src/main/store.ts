@@ -100,9 +100,9 @@ function readAllowedFrom(p: string): string[] | null {
 
 /** Machine-wide org-policy location IT can deploy (admin-only write). */
 function adminManagedPath(): string {
-  if (process.platform === 'darwin') return '/Library/Application Support/AskToto/managed-config.json'
+  if (process.platform === 'darwin') return '/Library/Application Support/Métis/managed-config.json'
   if (process.platform === 'win32')
-    return join(process.env.ProgramData || 'C:\\ProgramData', 'AskToto', 'managed-config.json')
+    return join(process.env.ProgramData || 'C:\\ProgramData', 'Métis', 'managed-config.json')
   return '/etc/asktoto/managed-config.json'
 }
 
@@ -334,7 +334,7 @@ export function setSettings(patch: Partial<Settings>): Settings {
       /* ignore */
     }
     throw new Error(
-      `Couldn't save settings — AskToto can't write to its data folder${
+      `Couldn't save settings — Métis can't write to its data folder${
         e instanceof Error && e.message ? ` (${e.message})` : ''
       }. Check that the disk isn't full and the folder is writable.`
     )
@@ -368,7 +368,7 @@ export function setApiKey(provider: ProviderId, key: string): void {
   } else {
     if (!safeStorage.isEncryptionAvailable()) {
       throw new Error(
-        'Encryption is unavailable on this machine. AskToto cannot safely store your API key. ' +
+        'Encryption is unavailable on this machine. Métis cannot safely store your API key. ' +
           'Grant keychain access or set the key via the environment variable instead.'
       )
     }
@@ -387,7 +387,7 @@ export function setApiKey(provider: ProviderId, key: string): void {
       /* ignore */
     }
     throw new Error(
-      `Couldn't save your API key — AskToto can't write to its data folder${
+      `Couldn't save your API key — Métis can't write to its data folder${
         e instanceof Error && e.message ? ` (${e.message})` : ''
       }. Check that the disk isn't full and the folder is writable.`
     )
@@ -486,9 +486,21 @@ export async function listDustAgents(): Promise<DustAgentsResponse> {
     )
     const r = await api.getAgentConfigurations({})
     if (r.isErr()) return { ok: false, error: r.error.message }
-    const agents = (r.value as { sId?: string; name?: string; description?: string; status?: string }[])
+    const agents = (r.value as {
+      sId?: string
+      name?: string
+      description?: string
+      status?: string
+      model?: { providerId?: string; modelId?: string }
+    }[])
       .filter((a) => a && a.sId && (a.status === undefined || a.status === 'active'))
-      .map((a) => ({ sId: a.sId as string, name: a.name || (a.sId as string), description: a.description || '' }))
+      .map((a) => ({
+        sId: a.sId as string,
+        name: a.name || (a.sId as string),
+        description: a.description || '',
+        modelProviderId: a.model?.providerId,
+        modelId: a.model?.modelId
+      }))
       .sort((x, y) => x.name.localeCompare(y.name))
     return { ok: true, agents }
   } catch (e) {

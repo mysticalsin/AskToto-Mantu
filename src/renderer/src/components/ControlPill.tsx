@@ -1,11 +1,11 @@
 import { X, Mic, Pause, Play, Square } from 'lucide-react'
-import { MantuMark } from './MantuMark'
+import { MetisMark } from './MetisMark'
 import { ElapsedClock } from './Bar'
 import { useWindowDrag } from '../lib/window-drag'
 
 /**
  * Collapsed control mini-pill (Cluely's second window). Shown instead of the full widget when the
- * overlay is minimized: the Mantu mark expands it back, the ghost ✕ fully hides the window (a global
+ * overlay is minimized: the Métis mark expands it back, the ghost ✕ fully hides the window (a global
  * hotkey restores it), and the mic starts Listen. While recording, the pill carries the live timer +
  * pause/stop so the meeting stays controllable — and visibly alive — without expanding. Draggable
  * like the main widget.
@@ -39,13 +39,13 @@ export function ControlPill({
     <div {...drag} data-hug-width className="aw-pill inline-flex items-center gap-2 p-1.5">
       <button
         type="button"
-        title="Expand AskToto"
-        aria-label="Expand AskToto"
+        title="Expand Métis"
+        aria-label="Expand Métis"
         onClick={onExpand}
         className="no-drag focus-ring block shrink-0 rounded-[8px]"
       >
         <span className="aw-mark-glow block rounded-[22%]">
-          <MantuMark size={30} />
+          <MetisMark size={30} />
         </span>
       </button>
       {listening ? (
@@ -93,8 +93,8 @@ export function ControlPill({
       <button
         type="button"
         onClick={onHide}
-        title="Hide AskToto"
-        aria-label="Hide AskToto"
+        title="Hide Métis"
+        aria-label="Hide Métis"
         className="no-drag focus-ring grid h-[26px] w-[26px] shrink-0 place-items-center rounded-full text-[color:var(--color-ink-3)] transition-colors hover:bg-white/10 hover:text-[color:var(--color-ink)]"
       >
         <X size={14} />
