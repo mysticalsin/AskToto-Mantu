@@ -76,7 +76,16 @@ function fakeChild(): { child: EventEmitter & { stdout: PassThrough; stderr: Pas
 
 const tick = (): Promise<void> => new Promise((r) => setImmediate(r))
 
+// Every suite below mocks the mac/Linux login-shell resolution branch (`sh -lc 'command -v <bin>'`)
+// of resolveBinary / detect / install / connect / ask. Pin process.platform to 'darwin' by default so
+// those mocks are deterministic when the test runner itself is Windows (resolveBinary's win32 branch
+// shells out to `where` with a different argv shape, which would cascade every POSIX assertion to null).
+// The nested 'on Windows: `where` parsing' describe re-pins 'win32' locally for its own coverage and
+// restores after; this parent restore runs after that, back to the real OS platform either way.
+const REAL_OS_PLATFORM = process.platform
+
 beforeEach(() => {
+  Object.defineProperty(process, 'platform', { value: 'darwin', configurable: true })
   __resetBinaryCacheForTests()
   h.execFileImpl.mockReset()
   h.spawnImpl.mockReset()
@@ -89,6 +98,7 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  Object.defineProperty(process, 'platform', { value: REAL_OS_PLATFORM, configurable: true })
   vi.useRealTimers()
 })
 
