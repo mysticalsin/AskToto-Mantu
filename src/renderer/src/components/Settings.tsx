@@ -3833,6 +3833,10 @@ export function Settings({
                     disabled={settings.managedKeys.includes('profile')}
                   />
                 </Section>
+                {/* License activation follows the profile — the last setup step once you're set up as you. */}
+                <Section title="License" desc="Activate Métis against your organization's license server.">
+                  <LicenseSection settings={settings} patch={patch} />
+                </Section>
                 {/* Keybinds live with Profile: both are "how Métis is set up for you". */}
                 <Section title="Keyboard shortcuts" desc="Métis works with these easy to remember commands. Click any of the keybinds to edit.">
                   <Shortcuts settings={settings} patch={patch} />
@@ -3842,12 +3846,8 @@ export function Settings({
 
             {tab === 'about' && (
               <div className="flex flex-col gap-6">
-                <Section title="Account" desc="Signing in ties Métis to your Mantu Microsoft account and Dust.">
-                  <AccountRow settings={settings} patch={patch} />
-                </Section>
-                <Section title="License" desc="Activate Métis against your organization's license server.">
-                  <LicenseSection settings={settings} patch={patch} />
-                </Section>
+                {/* Microsoft sign-in lives in the Calendar tab (its Outlook connect flow) and the license
+                    lives in Profile — About stays purely informational (permissions, usage, the story). */}
                 <Section title="Permissions" desc="Status of the OS permissions Métis needs.">
                   <PermissionsSection />
                 </Section>
@@ -4661,217 +4661,9 @@ function DangerZoneSection({
   )
 }
 
-// Last auth status fetched this session — reused on remount so revisiting the About tab shows the
-// prior sign-in state instantly instead of flashing "Checking…" again.
-let lastAuthStatus: AuthStatus | null = null
-
-function AccountRow({
-  settings,
-  patch
-}: {
-  settings: PublicSettings
-  // Real impl (state.ts) returns Promise<void> and awaits disk persistence; typed void to match the
-  // Settings prop contract. `await patch(...)` still waits for the write before we re-read auth status.
-  patch: (p: Partial<PublicSettings>) => void
-}): JSX.Element {
-  const [status, setStatus] = useState<AuthStatus | null>(lastAuthStatus)
-  const [busy, setBusy] = useState(false)
-  const [err, setErr] = useState<string | null>(null)
-  const [showSetup, setShowSetup] = useState(false)
-  const [saving, setSaving] = useState(false)
-  const [clientId, setClientId] = useState(settings.azureClientId || '')
-  const [tenantId, setTenantId] = useState(settings.azureTenantId || '')
-  const [domain, setDomain] = useState(settings.azureAllowedDomain || '')
-  // Guards state writes after unmount — signIn awaits an unbounded OS-level OAuth flow, and the user can
-  // switch to another Settings tab (unmounting this row) before it resolves.
-  const mountedRef = useRef(true)
-  useEffect(() => {
-    return () => {
-      mountedRef.current = false
-    }
-  }, [])
-  const refresh = (): void => {
-    void window.toto.authStatus().then((v) => {
-      if (!mountedRef.current) return
-      setStatus(v)
-      lastAuthStatus = v
-    })
-  }
-  useEffect(refresh, [])
-
-  const signIn = async (): Promise<void> => {
-    setBusy(true)
-    setErr(null)
-    const r = await window.toto.signIn()
-    if (!mountedRef.current) return
-    setBusy(false)
-    if (!r.ok) setErr(r.error || 'Sign-in failed.')
-    refresh()
-  }
-  const signOut = async (): Promise<void> => {
-    await window.toto.signOut()
-    if (!mountedRef.current) return
-    refresh()
-  }
-
-  // Enable Microsoft sign-in in-app: persist the (public, non-secret) Entra IDs, then re-read auth
-  // status — readConfig() picks them up so `configured` flips true and the live sign-in button appears.
-  const enableSso = async (): Promise<void> => {
-    const ci = clientId.trim()
-    const ti = tenantId.trim()
-    const dom = domain.trim().replace(/^@/, '')
-    if (!ci || !ti || !dom) {
-      setErr('Fill in all three fields to enable Microsoft sign-in.')
-      return
-    }
-    setSaving(true)
-    setErr(null)
-    await patch({ azureClientId: ci, azureTenantId: ti, azureAllowedDomain: dom })
-    refresh()
-    setSaving(false)
-    setShowSetup(false)
-  }
-
-  const disableSso = async (): Promise<void> => {
-    await patch({ azureClientId: '', azureTenantId: '', azureAllowedDomain: '' })
-    setClientId('')
-    setTenantId('')
-    setDomain('')
-    refresh()
-  }
-
-  if (!status) return <div className="text-[12px] text-[color:var(--cl-muted-foreground)]">Checking…</div>
-
-  const field = (
-    label: string,
-    val: string,
-    set: (v: string) => void,
-    placeholder: string
-  ): JSX.Element => (
-    <label className="flex flex-col gap-1">
-      <span className="text-[11px] font-medium text-[color:var(--cl-muted-foreground)]">{label}</span>
-      <input
-        value={val}
-        spellCheck={false}
-        autoComplete="off"
-        placeholder={placeholder}
-        onChange={(e) => set(e.target.value)}
-        className={`${ctl} w-full`}
-      />
-    </label>
-  )
-
-  const setupForm = (
-    <div className="mt-1 flex flex-col gap-2.5 rounded-[10px] border border-[var(--cl-input)] bg-white/[0.02] p-3">
-      <div className="flex items-start gap-2">
-        <ShieldCheck size={14} className="mt-0.5 shrink-0 text-[color:var(--cl-primary)]" />
-        <p className="text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
-          One-time setup. In{' '}
-          <a
-            href="https://entra.microsoft.com/#view/Microsoft_AAD_RegisteredApps/ApplicationsListBlade"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="inline-flex items-center gap-0.5 text-[color:var(--cl-primary)] underline underline-offset-2"
-          >
-            Microsoft Entra <ExternalLink size={10} />
-          </a>{' '}
-          register an app (platform <b>Mobile &amp; desktop</b>, redirect{' '}
-          <code className="rounded bg-white/[0.06] px-1">http://localhost</code>), then paste its IDs.
-          These are public identifiers. No secret needed.
-        </p>
-      </div>
-      {field('Application (client) ID', clientId, setClientId, '00000000-0000-0000-0000-000000000000')}
-      {field('Directory (tenant) ID', tenantId, setTenantId, '00000000-0000-0000-0000-000000000000')}
-      {field('Allowed email domain', domain, setDomain, 'mantu.com')}
-      <div className="flex items-center gap-2">
-        <button
-          type="button"
-          onClick={enableSso}
-          disabled={saving}
-          className="no-drag cl-focus flex items-center justify-center gap-2 rounded-[8px] bg-[var(--cl-primary)] px-3 py-1.5 text-[12px] font-medium text-white hover:opacity-90 disabled:opacity-50"
-        >
-          {saving ? <Loader2 size={13} className="animate-spin" /> : null}
-          Enable Microsoft sign-in
-        </button>
-        <button
-          type="button"
-          onClick={() => setShowSetup(false)}
-          className="no-drag cl-focus rounded-[8px] px-2.5 py-1.5 text-[12px] text-[color:var(--cl-muted-foreground)] hover:text-[color:var(--cl-foreground)]"
-        >
-          Cancel
-        </button>
-      </div>
-    </div>
-  )
-
-  return (
-    <div className="cl-card flex flex-col gap-2 px-3 py-2.5">
-      {status.signedIn ? (
-        <div className="flex items-center justify-between gap-2">
-          <div className="flex items-center gap-2">
-            <CircleCheck size={15} className="text-[color:var(--cl-success)]" />
-            <span className="text-[12px] text-[color:var(--cl-foreground)]">
-              Signed in as {status.email}
-            </span>
-          </div>
-          <button
-            type="button"
-            onClick={signOut}
-            className="no-drag cl-focus rounded-[8px] border border-[var(--cl-input)] px-2.5 py-1.5 text-[12px] text-[color:var(--cl-foreground)] hover:bg-white/[0.06]"
-          >
-            Sign out
-          </button>
-        </div>
-      ) : status.configured ? (
-        <>
-          <button
-            type="button"
-            onClick={signIn}
-            disabled={busy}
-            className="no-drag cl-focus flex items-center justify-center gap-2 rounded-[8px] bg-[var(--cl-primary)] px-3 py-2 text-[13px] font-medium text-white hover:opacity-90 disabled:opacity-50"
-          >
-            {busy ? <Loader2 size={14} className="animate-spin" /> : null}
-            Sign in with Microsoft
-          </button>
-          <div className="flex items-center justify-between">
-            <span className="text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
-              Restricted to @{status.domain}. Ties your usage to Dust.
-            </span>
-            <button
-              type="button"
-              onClick={disableSso}
-              className="no-drag cl-focus shrink-0 text-[11px] text-[color:var(--cl-muted-foreground)] underline underline-offset-2 hover:text-[color:var(--cl-foreground)]"
-            >
-              Reset SSO
-            </button>
-          </div>
-          {err && <span className="text-[11px] text-[color:var(--cl-destructive)]">{err}</span>}
-        </>
-      ) : showSetup ? (
-        setupForm
-      ) : (
-        <>
-          <button
-            type="button"
-            onClick={() => setShowSetup(true)}
-            className="no-drag cl-focus flex items-center justify-center gap-2 rounded-[8px] bg-[var(--cl-primary)] px-3 py-2 text-[13px] font-medium text-white hover:opacity-90"
-          >
-            <ShieldCheck size={14} />
-            Set up Microsoft sign-in
-          </button>
-          <span className="text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
-            Enable Microsoft (Entra) sign-in to lock Métis to your Mantu domain and tie usage to Dust.
-            One-time setup.
-          </span>
-          {err && <span className="text-[11px] text-[color:var(--cl-destructive)]">{err}</span>}
-        </>
-      )}
-    </div>
-  )
-}
 
 // ---------------------------------------------------------------------------
-// License — phone-home activation against a self-hosted license server (Settings → About).
+// License — phone-home activation against a self-hosted license server (Settings → Profile).
 // Nothing here enforces the result: checkLicenseGrace() (main/license.ts) exists but no startup gate
 // calls it yet, so leaving licenseGateEnabled off is completely safe with no server deployed at all.
 // ---------------------------------------------------------------------------
