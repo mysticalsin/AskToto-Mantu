@@ -2,6 +2,13 @@
 
 Last verified against primary docs on 2026-07-06.
 
+**Current blocker (as of 2026-07-10): GitHub Actions runners on this repo are billing-blocked.**
+Every CI run — `build.yml` on every push AND `release.yml` on every tag — fails immediately with
+zero steps executed until org billing is fixed. None of the gates below (signing secrets, ffmpeg,
+sherpa, version parity) get a chance to run until that's resolved first. See
+`docs/MANTU-IT-REQUEST.md` for the ask and `docs/ENTERPRISE_RELEASE.md`'s Operator Setup for the
+full checklist this blocks.
+
 Métis has two desktop distribution lanes:
 
 - Direct enterprise distribution: signed installers from GitHub Releases, with Métis-controlled updates through `electron-updater`.
@@ -19,6 +26,12 @@ The repo can enforce build gates and package shapes. It cannot create Tony's cer
 | Microsoft Store | `npm run release:win:store` | AppX package builds locally; Microsoft signs Store-submitted packages after upload |
 
 The tag workflow mirrors the direct-release gates. A missing Windows signing cert now fails the tagged release before publish, not after customers download an unsigned installer.
+
+Every command above also runs two native-binary provisioning gates first: `scripts/check-ffmpeg-sidecar.mjs`
+(the LGPL decoder sidecar) and `scripts/check-sherpa-platform.mjs` (the Parakeet on-device ASR addon for
+the target platform). Both hard-fail the build if their binary is missing and can't be auto-provisioned. See
+`docs/ENTERPRISE_RELEASE.md`'s "ffmpeg Sidecar Provisioning" section for the canonical explanation and setup
+steps.
 
 ## macOS Direct Distribution
 
@@ -136,6 +149,7 @@ Machine-wide policy wins over per-user config.
 
 ## What Remains Owner-Side
 
+- Fix GitHub Actions billing so CI/release runners execute at all (current hard blocker, see top of this doc).
 - Enroll in Apple Developer Program.
 - Create direct and MAS certificates.
 - Create MAS provisioning profile.

@@ -5,6 +5,8 @@ _Author: principal RT-AI engineer / product architect. Grounded in the live Mét
 
 > A Product · B UX · C Architecture · D Latency · E Caching · F Routing · G System prompt · H Accuracy/Eval · I Privacy · J Stack · K Roadmap · L Artifacts · M Taste
 
+> **Doc currency.** Re-verified against the live codebase 2026-07-10 (meeting-detect removal, native-binary provisioning, license gate, brain/Intelligence dashboard, portable-exe auto-update carve-out, the Bar/Panel layout split, and Section K's roadmap status). Sections A–J describe what is actually implemented today to the depth this pass verified — treat any remaining exact line-number citation as approximate and worth a quick re-check before relying on it, since several had already drifted. Section K (Roadmap) is a mix of shipped, superseded, and genuinely-open items from an earlier planning pass — read its status banner before treating anything there as a live TODO, and cross-check `docs/asktoto-hardening-backlog.md` for what has landed since. Sections L (Artifacts) and M (Taste) are forward-looking design pseudocode for not-yet-built extension points, clearly marked `new`/`build target` inline — they are not a description of shipped code.
+
 ---
 
 ## A. Product definition
@@ -42,23 +44,25 @@ _Author: principal RT-AI engineer / product architect. Grounded in the live Mét
 
 ### B.1 First-Run Onboarding & Permissions
 
-Métis's onboarding is a hard gate: `settings.onboardingDone` is `false` → the full App renders nothing but the `<Onboarding>` component inside a `<Panel>` (App.tsx:779-787). Two steps. No skipping.
+Métis's onboarding is a hard gate: `settings.onboardingDone` is `false` → the full App renders nothing but `<Onboarding>` inside a `<Panel>` (`App.tsx`, near the `onboardingDone` check). It has grown from an earlier 2-step design into a **6-step walkthrough** (`Onboarding.tsx`, `step` state 1–6). No skipping — each step's `<WalkNav>` only advances forward from the current step.
 
-**Step 1 — Consent + Identity.** The first screen shows the Mantu logo, a single copy line ("Your invisible meeting assistant"), and a mandatory checkbox:
+**Step 1 — Consent + Identity.** The first screen shows the Mantu logo and a mandatory checkbox:
 
 > "I will inform other participants before recording. Métis follows my company's policy and the law."
 
-The consent checkbox (`settings.recordingConsent`) must be checked before either the "Sign in with Microsoft" button or "Continue without signing in" activates. Disabled state is `opacity-50 cursor-not-allowed` — no hover trick. Sign-in calls `window.toto.signIn()` (MSAL/Azure AD), which persists the token via `auth.ts` + safeStorage. "Continue without signing in" skips SSO but still requires the consent tick. Error copy is explicit: "Sign-in failed. Use a Mantu Microsoft account." (Onboarding.tsx:114).
+The consent checkbox (`settings.recordingConsent`) must be checked before either "Sign in with Microsoft" or "Continue without signing in" activates. Sign-in calls `window.toto.signIn()` (MSAL/Azure AD), which persists the token via `auth.ts` + safeStorage. "Continue without signing in" skips SSO but still requires the consent tick. Error copy is explicit: "Sign-in failed. Use a Mantu Microsoft account."
 
-**Step 2 — Primer + live permission checklist.** Once Step 1 passes, `setStep(2)` renders three `<ActionRow>` cards (Onboarding.tsx:141-143):
+**Step 2 — "Ask + capture" primer.** Three `<ActionRow>` cards: Sparkles/"Ask anything" (`⌘⇧↵`), Camera/"Capture screen" (`⌘⇧S`), Zap/"Quick actions" (the four ghost-pill chips — What to say next, Fact-check, Explain, Summarize screen).
 
-- Sparkles / "Ask anything" / `⌘⇧↵`
-- Mic / "Listen to your call" / no key shown (key is `⌘⇧L`, shown in Bar tooltips; primer intentionally stays simple)
-- Camera / "Capture your screen" / `⌘⇧S`
+**Step 3 — Listen primer.** Three more `<ActionRow>` cards: Mic/"Listen" (transcribes both sides, suggests what to say live), FileText/"Live transcript" (toggle the rolling transcript), Plus/"New meeting" (save the current call, start fresh — see B.2's `<NewMeetingToast>`).
 
-Below the actions: a live "Get ready" checklist polling `window.toto.getPermissions()` every 2,500ms while this screen is open (Onboarding.tsx:85-97). Three rows: API key / CLI connected, Microphone, Screen Recording — each with a green check or an amber `AlertCircle` and a one-line hint. The polling keeps going while the user grants permissions in System Settings, so the dots flip to green live without a reload.
+**Step 4 — Modes & controls primer.** Three more `<ActionRow>` cards: LayoutGrid/"Modes" (Interview, Meeting, Sales, and more), Brain/"Deep thinking" (force the strongest model, rainbow ring when on), Eye/"Show / hide" (toggle whether the window appears on a shared/recorded screen — hidden by default).
 
-"Get started" calls `patch({ onboardingDone: true, recordingConsent })` and invokes `onDone()` → `refresh()` re-reads settings from the main store → the App renders the full Bar.
+**Step 5 — Provider choice.** Routes the user to a provider in plain language: an API key path (Anthropic/Claude by default), a Dust team path, or an installed CLI path (`chooseCli()` detects whether Claude Code or Codex is actually installed on the machine, rather than assuming Claude Code, so a Codex-only install doesn't land on the wrong provider). "Decide later" is honored — recording and transcripts never require a key, so nobody is blocked here. Each choice calls `patch({ provider })` and advances to Step 6.
+
+**Step 6 — Readiness checklist.** A live "Get ready" checklist polling `window.toto.getPermissions()` every 2,500ms while this screen is open. Rows for API key/CLI connected, Microphone, and Screen Recording — each with a green check or an amber `AlertCircle` and a one-line hint. Polling continues while the user grants permissions in System Settings, so the dots flip to green live without a reload. "Get started" calls `patch({ onboardingDone: true, onboardingDoneAt: Date.now(), recordingConsent })` and invokes `onDone()` → the App renders the full Bar.
+
+*(Line-number citations are deliberately omitted above — `Onboarding.tsx` is 631 lines and under active development; re-derive exact locations from the `step === N` blocks and named handlers (`chooseCli`, `finish`) rather than trusting cached line numbers.)*
 
 **Permission request timing.** Neither microphone nor screen-recording is requested at onboarding. Mic is requested the first time the user presses Listen (useListen.start → getUserMedia). Screen Recording on macOS is requested the first time `desktopCapturer` is invoked via `window.toto.capture()`. This deferral is intentional: requesting both at install forces a macOS double-permission prompt before the user has done anything; deferring to first actual use makes the request contextually obvious.
 
@@ -74,7 +78,9 @@ Meeting mode activates via `useListen.start()` → the app switches `view` to `'
 2. **Secondary action row** — "What to say next" and "Fact-check" as ghost pills. These are always visible; pressing either fires an LLM request immediately using the current transcript.
 3. **Transcript footer** — collapsed by default ("live · N captured" + "View transcript →"). Expanding shows the speaker-bubble view (see B.6).
 
-**Meeting detection auto-start.** `main/index.ts` polls window titles + browser tabs against the calendar (`detectMeeting` + `titleMatchesCalendar`). When `settings.autoStartOnMeeting` is true and a match fires, `onMeetingDetected` IPC pushes to the renderer, which calls `startListen(true /* auto */)` and shows the `<MeetingDetectedToast>` (App.tsx:718-724). The toast has: "Recording started · [app name]", "Meeting detected. Métis is listening.", a **Stop** button, and an **×** dismiss. A shrinking progress bar auto-dismisses in 6 s (dismiss hides the banner; it does not stop recording). Copy on Stop = "Stop" (not "End") to make it unambiguous.
+**No automatic meeting-detection start.** Métis does not poll window titles, browser tabs, or the calendar to auto-start Listen. That subsystem (`src/main/meeting-detect/`, `detectMeeting`/`titleMatchesCalendar`, the `onMeetingDetected` IPC push) was removed; `src/main/index.ts` has zero references to it today, and a comment at `index.ts:1301-1302` states the removal explicitly — it's the reason Accessibility permission is no longer requested at all (see I.2). `<MeetingDetectedToast>` still exists as a component file but is not imported anywhere in `App.tsx` — it is dead code, not a live UX path. Listen starts only from a deliberate user action: the `⌘⇧L` hotkey or the Bar's Listen button. `settings.autoStartOnMeeting` survives only as a vestigial zod default (`false`) in `shared/ipc.ts`, with nothing left in the main process that reads it.
+
+**"New meeting" toast (unrelated feature, don't confuse with the above).** Pressing "New meeting" in the Bar saves the in-flight meeting and immediately starts a fresh session at 0:00 — a single click with no other visible change, easy to miss on a misclick mid-call — so `<NewMeetingToast>` (App.tsx `newMeeting()`) confirms it happened: "Previous meeting saved / New session started," auto-dismissing after 3 s. This is a confirmation toast for an explicit user action, not a detection feature.
 
 **RecordingConsentReminder.** Fires on the start of every Listen session (if `shouldShowConsentReminder` passes): a danger-bordered banner — "Métis is listening / Other participants are being recorded. Make sure everyone has consented." This is the persistent on-screen signal that AI is active. In `requireConsentIndicator` mode (Settings toggle), it stays pinned for the whole session; otherwise it auto-dismisses after `AUTO_DISMISS_MS` and patches `lastConsentReminderAt`.
 
@@ -84,16 +90,18 @@ Meeting mode activates via `useListen.start()` → the app switches `view` to `'
 
 ### B.3 Screen-Aware Mode
 
-Métis prewarns the screen capture the moment the input field gets focus (Bar.tsx:165: `onFocus={() => void window.toto.prewarmCapture()}`). By the time the user presses `⌘⇧↵`, the capture is already mid-flight — the perceived latency drops to near zero.
+Métis prewarns the screen capture the moment the input field gets focus (`Bar.tsx`: `onFocus={() => { if (props.canPrewarm) void window.toto.prewarmCapture() }}`, gated on `canPrewarm = visionAvailable && screenAsk`). By the time the user presses `⌘⇧↵`, the capture is already mid-flight — the perceived latency drops to near zero.
 
-The routing logic in `submit()` (App.tsx:396-427) has a deterministic decision tree:
+The routing logic in `submit()` (`App.tsx`) is a deterministic decision tree, gated on `settings.screenAsk` (a user setting, not raw vision-capability — `askScreen()` internally fails over to a vision-capable provider if the active one can't read images, or returns an actionable error if none is configured):
 
 | State | Action |
 |---|---|
 | Listening (call active), empty input | `assist()` — screen + transcript combined |
 | Listening, typed question | `suggest.run` with transcript context |
-| Not listening, vision-capable provider, any input | `askScreen()` — always a vision ask |
-| Not listening, no vision | Plain `ask.run` (typed only) |
+| Not listening, `screenAsk` on, empty input | `askScreen()` — blank Enter always means "look at my screen right now," a deliberate fresh capture |
+| Not listening, `screenAsk` on, typed, an answer is already showing with no error | Plain `ask.run` (**no new capture** — the prior turn's text already describes the screen; a fresh look is one click away via Capture/`⌘⇧S`) |
+| Not listening, `screenAsk` on, typed, first question of the session | `askScreen(q)` — screenshot + question together |
+| Not listening, `screenAsk` off | Plain `ask.run` (typed only, no capture) |
 
 When a screen-ask fires, the Bar shows a `contextLabel` chip ("Viewed screen") — a purple dot + Eye icon + "Viewed screen" text (Bar.tsx:153-159). This chip is a trust signal: the user can see at a glance that the answer was grounded in their screen. The same chip appears in the Answer header when `label === 'Viewed screen'` (Answer.tsx:91-108).
 
@@ -134,17 +142,20 @@ This ladder ensures a panicked Escape-mash always ends at "overlay is hidden" wi
 
 ### B.5 Instant-Answer Overlay
 
-The layout is a Cluely-style pinned-bar + below-panel split. The `<Bar>` is always rendered at the top; `<Panel>` grows downward as content streams in.
+The layout is a pinned-bar surface, but it is **not** a uniform "Bar-on-top, Panel-always-below" split — the current implementation branches on which view is active:
 
-**Idle state.** Bar shows the input row + a 3-column toolbar. `<QuickActions>` renders below: four ghost-pill shortcuts (What to say next, Fact-check, Explain, Summarize screen) with the hint "Screen or typed input". These disappear once `body != null` (an answer is open).
+- **`view === 'answer'`** (a typed/screen ask, not a live meeting): the answer body renders **inside the Bar itself**. `App.tsx` computes `barBody = answerView && !collapsed ? body : undefined` and passes it to `<Bar body={barBody}>`; per `Bar.tsx`'s own doc comment, "when present the bar EXPANDS into one surface: big input on top, this body in the middle, and the toolbar drops to the bottom — no separate panel underneath." There is no separate `<Panel>` for this case.
+- **Every other view with content** (`copilot`, `review`, `settings`, `history`, `agenda`): `isPanelBody = body != null && !answerView` is true, and that content renders in a `<Panel>` rendered below the `<Bar>` — this is the "Bar pinned, Panel grows below it" model.
 
-**Answer streaming (frame 1 → first token).** The moment `ask.run()` fires, `view = 'answer'` and `collapsed = false`. `capturing` is true during the desktopCapturer call: `<Answer text="" streaming error={null} />` renders a skeleton. The three shimmer lines (`shimmer` class) appear immediately — the user gets visual confirmation that work is happening before the first token. On first token, the skeleton is replaced by the live streaming text with a pulsing accent-colored cursor (`animate-pulse` inline block, Answer.tsx:283).
+A `<ControlBar>` component (`components/ControlBar.tsx`) exists in the tree for a "detached session-control pill below the panel" layout, but it is not imported or rendered anywhere in `App.tsx` today — it is dead code from an earlier design, not a live UX path. Don't design around a `detachControls`/`hideToolbar` toggle; neither exists in the current `App.tsx`.
 
-**Panel grows, Bar stays pinned.** `useAutoResize` (`state.ts`) calls `window.toto.setContentSize` on a `ResizeObserver` keyed to the root div. Main clamps height: `Math.min(measured, workArea.height - 48)` and `Math.max(BAR_MIN_HEIGHT, ...)` (main/index.ts). The Bar never moves — it is always the top anchor. The Panel grows below it until the workArea ceiling.
+**Quick actions are listening-only, not an idle-state row.** `<QuickActions>` (four ghost-pill shortcuts: What to say next, Fact-check, Explain, Summarize screen) renders only while `showListeningChrome` is true (`listen.listening && view !== 'review' && !stopping`) — i.e. only during an active meeting. Per the surrounding code comment, this is deliberate: "clean bar with nothing under it at launch and after a meeting ends." There is no idle-state quick-actions row before the user starts Listen or asks a question.
 
-**ControlBar detach condition.** `detachControls = answerView && listen.listening && !!suggest.answer && panelOpen` (App.tsx:917). When this is true, `<Bar hideToolbar={true}` renders only the input row (no three-column toolbar), and `<ControlBar>` is rendered centered below the Panel as a separate glass pill. This keeps the session controls accessible without obscuring the suggestion text. The ControlBar mirrors the four core icons: Capture, Privacy (stealth), Mode, and the REC dot + elapsed timer. When listening ends, `detachControls` goes false and the toolbar reattaches to the Bar.
+**Answer streaming (frame 1 → first token).** The moment `ask.run()` fires, `view = 'answer'` and `collapsed = false`. `capturing` is true during the desktopCapturer call: `<Answer text="" streaming error={null} />` renders a skeleton — three shimmer lines appear immediately, giving visual confirmation before the first token. On first token, the skeleton is replaced by the live streaming text with a pulsing accent-colored cursor.
 
-**Back arrow.** When `hasAnswer` is true and `onBack` is provided, a `ChevronLeft` appears at the far left of the input row (Bar.tsx:140-150). Pressing it calls `clearAnswer()` — clears the answer/suggestion without stopping a live session. In a live session this returns the Copilot to its idle "Press Assist" state; outside a session it resets to the QuickActions idle view.
+**Resize.** `useAutoResize` (`state.ts`) calls `window.toto.setContentSize` on a `ResizeObserver` keyed to the root div. Main clamps height: `Math.max(BAR_MIN_HEIGHT, Math.min(Math.round(height), workArea.height - 48))` (`main/index.ts`), measured against the display the overlay window is actually on (not the cursor's, so a laptop + external-monitor setup of different heights doesn't clamp against the wrong screen). The window position is otherwise fixed — whichever surface is showing (embedded Bar body or separate Panel) grows toward that ceiling.
+
+**Back arrow.** When `hasAnswer` is true and `onBack` is provided, a `ChevronLeft` appears at the far left of the input row. Pressing it calls `clearAnswer()` — clears the answer/suggestion without stopping a live session. In a live session this returns the Copilot to its idle "Press Assist" state; outside a session it resets to the idle Bar with no quick-actions row (see above).
 
 ---
 
@@ -234,7 +245,7 @@ Every failure state in Métis has three elements: what it shows, the exact copy,
 
 The <2 s hotkey→useful-answer target is delivered by a chain of four overlapping UX decisions, not a single optimization:
 
-**1. Prewarm on input focus.** `Bar.tsx:165` calls `window.toto.prewarmCapture()` the moment the input is focused. Main starts `desktopCapturer.getSources()` immediately. By the time `⌘⇧↵` fires, the screenshot is either already in memory or within milliseconds of completion. The user's finger hasn't left the keyboard.
+**1. Prewarm on input focus.** `Bar.tsx`'s input `onFocus` calls `window.toto.prewarmCapture()` the moment the input is focused (gated on `canPrewarm`, i.e. a vision-capable provider and `screenAsk` on — see B.3). Main starts `desktopCapturer.getSources()` immediately. By the time `⌘⇧↵` fires, the screenshot is either already in memory or within milliseconds of completion. The user's finger hasn't left the keyboard.
 
 **2. Immediate skeleton on submit.** `ask.run()` is synchronous on the renderer side (it sends an IPC, then sets local state). `capturing = true` → the Answer skeleton renders on the same frame as the user's keypress. There is zero blank time between action and visual feedback.
 
@@ -300,8 +311,8 @@ The combined effect: after `⌘⇧↵`, the overlay shows a skeleton in <50ms, f
   shotCache TTL=1500ms (reuse if warm)           all async, never blocks main loop
   retry once (250ms) on empty result
 
-  CALENDAR (main/calendar.ts / google-calendar.ts)
-  calendarToday() — MSAL Graph or Google OAuth
+  CALENDAR (main/calendar.ts)
+  calendarToday() — MSAL Graph (Outlook / Microsoft 365)
 
   CONTEXT BUILD  (main/personas.ts buildSystem)
   INJECTION_GUARD (untrusted modes only, leads the prompt)
@@ -370,6 +381,26 @@ The combined effect: after `⌘⇧↵`, the overlay shows a skeleton in <50ms, f
 **Verifier/refiner.** `kind='factcheck'` routes via `routeTier → 'deep'` and injects the fact-check template in `buildSystem`. `GROUNDING_RAIL` in `shared/prompts.ts` enforces citation + uncertainty admission for all `answer` and `vision` modes. `useAsk.deeper()` replays `lastReqRef` with `depth:'deeper'` — this is the manual refine path, requiring no second model call in the happy case.
 
 **Observability.** `auditLog` writes structured NDJSON to `userData/logs/audit.log` synchronously in the main process. `aggregateMetrics()` in `metrics.ts` is a pure function over parsed records — unit-tested, surfaced in Settings → Diagnostics. Content never leaves the device.
+
+### C.3 Native binary provisioning (sherpa-onnx + ffmpeg)
+
+Two native binaries ship inside the packaged app, verified at **build time**, not at runtime:
+
+- **Parakeet ASR addon (`sherpa-onnx-node`).** npm's os/cpu-gated `optionalDependencies` only install the `sherpa-onnx-<platform>-<arch>` package matching the machine running `npm install` — cross-building a different target (e.g. `--win` from this macOS dev machine) silently leaves that platform's native addon missing, and `electron-builder`'s `asarUnpack` glob copies whatever happens to be in `node_modules` regardless of target, so the build exits 0 with no native ASR addon for that platform. `scripts/check-sherpa-platform.mjs` hard-fails cross-platform builds unless the target's addon package is present, first attempting a safe, version-pinned auto-provision (`npm install --no-save --force sherpa-onnx-<platform>-<arch>@<sherpa-onnx-node's own installed version>`) before failing closed. It's wired as a gate into every release/installer/dist npm script (`release`, `release:win`, `release:mas`, `installers*`, `dist:local`, `predist:win`).
+- At runtime, `main/parakeet.ts`'s `probeSherpa()` eagerly `require()`s the native addon on the **first** status-or-transcribe call — not lazily, only after a failed transcribe — and memoizes the result (success or failure) forever. This lets Settings show an accurate "Parakeet unavailable" status immediately instead of only after a live call has already failed; `parakeetAddonError()` exposes the last load failure separate from "model not downloaded yet."
+- **FFmpeg import-decoder sidecar.** A reviewed, LGPL-only FFmpeg binary per platform, deliberately untracked in git (`resources/ffmpeg/` is in `.gitignore`) and restored at CI/release time from a GitHub release plus a hash-pinned `manifest.json`. `scripts/check-ffmpeg-sidecar.mjs` verifies the binary's SHA-256 against the manifest and, when the build host's platform matches the target, spawns it to confirm its license banner reads LGPL-only (an `--enable-gpl` build fails the check). `ffmpeg-decoder.ts`'s `bundledFfmpegPath()` returns `null` when the sidecar is absent, so a fresh dev checkout without the binary still runs `npm run dev` fine — only Import Audio's decode step (C.4) is unavailable until the binary is provisioned.
+
+### C.4 Audio file import
+
+A second path into the same transcription pipeline. `main/import-audio.ts` opens a native file picker (common recording formats — wav/mp3/m4a/aac/ogg/flac/aiff/webm/opus/wma/amr/3gp/mp4 — capped at 500 MB) and hands the picked source to `main/import-jobs.ts`'s `ImportJobManager`, which owns decoding, transcription, checkpointing, saving, and recap generation as a background job queue. Decoding runs through the FFmpeg sidecar (C.3): the source file streams through FFmpeg as 16 kHz mono f32le PCM in 30-second chunks, at most one chunk held in memory at a time, then each chunk is fed through the same Whisper/Parakeet ASR path used for live audio — producing a normal saved meeting with a recap, indistinguishable from a live session's output. The renderer only ever sees the picked file's identity (path/name/size/mtime), never raw bytes; `src/renderer/src/lib/import-audio.ts` is the renderer-side hook that drives it.
+
+### C.5 Brain pipeline (knowledge extraction)
+
+`src/main/brain/{store,ingest,context}.ts` turn saved meeting transcripts into a compounding people/account/deal knowledge graph, backing both the in-app `BrainView.tsx` and the separate Mantu Intelligence dashboard (C.6). `ingest.ts` runs one LLM call per meeting (the active provider) against `BRAIN_EXTRACTION_PROMPT`, through the same `INJECTION_GUARD` and `redactSecrets()` gates as any other cloud call, then merges the structured extraction into per-entity JSON files (`store.ts`: person/account/deal, plus deal outcome tracking) with deterministic merge code and a rule-based lint pass — no second model call for merging. `store.ts` deliberately writes brain files as plain JSON *next to* the transcripts, under `<meetings folder>/.brain/` — inheriting the user's folder choice, OneDrive sync (so Dust agents can read it as vault context), and whichever at-rest encryption setting (`encryptTranscripts`) already applies to the transcripts themselves. Ingest is queued and background: a failed extraction is recorded in `index.json` and retried on the next rebuild, so it can never block or slow a live meeting.
+
+### C.6 Mantu Intelligence dashboard
+
+`intelligence/` is a separate, separately-versioned Vite/React app (`package.json` name `deal-psychology-dashboard`) — not part of the Electron renderer bundle. It ships as its own resizable window (`src/main/intelligence.ts → openIntelligenceWindow()`), loading a static bundle built by `npm run build:intelligence` and packaged into the app via `electron-builder.yml`'s `extraResources` (`intelligence/dist → intelligence`). It talks to the main process through its own minimal preload (`src/preload/intelligence.ts`), exposing only read-only `brain:*` IPC channels, gated by `isIntelligenceSender()` — a document-identity check (window identity *and* the currently-loaded URL matching the bundled document) so a navigation that somehow slipped past the window's `will-navigate` deny still couldn't read the brain. The dashboard mirrors the overlay's Private View behavior: `syncIntelContentProtection()` re-applies `contentProtection` onto the dashboard window whenever the setting flips, since the dashboard aggregates the most sensitive cross-meeting data (people, accounts, deals, quotes, commitments) in one place. If `intelligence/dist` hasn't been built, `bundleIndexHtml()` returns `null` and `openIntelligenceWindow()` fails with a clear "run `npm run build:intelligence`" error — the rest of the app runs fine without it; a developer running only `npm install` + `npm run dev` at the repo root will not have the dashboard's own dependencies installed (`intelligence/` is its own `npm ci`) and won't see it work until that separate build step runs.
 
 ---
 
@@ -600,7 +631,7 @@ let screenCache: ScreenEntry | null = null
 
 ### L3 — Retrieval cache
 
-**What it stores:** results from `recall.ts` (`listMeetings` / `searchMeetings`), `calendar.ts` / `google-calendar.ts`, `graphify.ts` (`relatedNotes`), and workspace-permitted web results.
+**What it stores:** results from `recall.ts` (`listMeetings` / `searchMeetings`), `calendar.ts`, `graphify.ts` (`relatedNotes`), and workspace-permitted web results.
 
 **Home file:** `main/retrieval-cache.ts` — a `Map<string, { value: unknown; expiresAt: number }>`.
 
@@ -609,7 +640,7 @@ let screenCache: ScreenEntry | null = null
 | Source | TTL |
 |---|---|
 | `recall` (local .md files) | 5 min |
-| `calendar` Outlook / Google | 2 min |
+| `calendar` Outlook | 2 min |
 | `graphify` knowledge graph | 10 min |
 | web / external | 30 min |
 
@@ -705,7 +736,7 @@ appendTranscriptLine()
 | Worker | Trigger | Fetches | Cache | Privacy guard |
 |---|---|---|---|---|
 | `recallWorker` | `factual` / participant name detected | `searchMeetings(entity, 3)` | L3, 5 min | local only |
-| `calendarWorker` | `number` or "next week" language | `calendarToday()` / `googleCalendarToday()` | L3, 2 min | local only |
+| `calendarWorker` | `number` or "next week" language | `calendarToday()` | L3, 2 min | local only |
 | `graphWorker` | product / company / acronym entity | `relatedNotes(entity)` from `main/graphify.ts` | L3, 10 min | local only |
 | `embeddingWorker` | any text typed in the prompt bar (≥ 10 chars) | `openai.embeddings.create` on the question | L4 pre-warm | skip if no OpenAI key |
 | `webWorker` | explicit "look this up / search for" + `workspaceAllowWebSearch` | DuckDuckGo top-2 snippets | L3, 30 min | `redactSecrets()` on query; blocked if `redactSensitive` + secret detected |
@@ -1064,8 +1095,9 @@ There is no stealth mode, no background recording, no capture of windows the use
 |---|---|---|---|
 | Microphone | macOS + Windows | `audioSource = mic` or `both` | First session with mic mode |
 | Screen Recording | macOS | `audioSource = system` or `both` (loopback via `getDisplayMedia`) | First session with system audio |
-| Accessibility | macOS | Window-title enumeration for meeting detection | First session; user shown explicit prompt |
-| Calendar (MSAL / Google OAuth) | macOS + Windows | Outlook / Google agenda | Only when user connects calendar in Settings |
+| Calendar (MSAL) | macOS + Windows | Outlook agenda | Only when user connects calendar in Settings |
+
+**Accessibility is not requested — deliberately.** An earlier build requested it for window-title enumeration to power meeting-detect auto-start (B.2). That subsystem was removed; `main/platform-perms.ts → getPlatformPermissions()` (the enforcement point below) checks only `microphone` and `screenRecording` — no Accessibility check exists anywhere in `src/main`. A comment at `main/index.ts:1301-1302` states the reasoning explicitly: nothing in the app needs it, and an unexplained Accessibility prompt is exactly the kind of thing enterprise IT flags. This keeps I.1's "no use of Accessibility APIs" claim literally true, not just aspirational.
 
 **Enforcement point: `main/platform-perms.ts → getPlatformPermissions()`**, called from the main process at startup and before each capture. If `screenRecording ≠ 'granted'` on macOS, `getDisplayMedia` is never called — the system audio path is silently disabled and the UI shows a banner. API keys are stored via `Electron safeStorage` (OS keychain), never in `userData/settings.json`. The renderer never has direct access to any key — it only sends `IPC.ask` to the main process, which reads keys at call time.
 
@@ -1082,13 +1114,13 @@ This indicator is part of the always-on overlay — it cannot be hidden by the u
 
 **Audio source selector** (Settings → Audio): `mic | system | both | off`. `off` stops all capture immediately and removes the worklet from memory. The setting persists to `userData/settings.json` and takes effect on the next session start — no hot-swap (avoids a confused state mid-meeting).
 
-**Window-title exclusion list** (Settings → Privacy → Excluded apps): a user-editable list of app names (`Terminal`, `1Password`, `Keychain Access`, etc.). When the active window matches an excluded app, `desktopCapturer` is not called even if PREWARMED. The exclusion check runs in the main process via the window-title enumeration already present in `main/meeting-detect/`. This is enforced in the main process, not the renderer — the renderer cannot override it.
+**Window-title exclusion list — not implemented.** An earlier draft of this doc described a user-editable "Excluded apps" list gated on window-title enumeration. No such setting, IPC channel, or UI exists anywhere in the codebase today (`excludedApps`/"Excluded apps" returns zero hits repo-wide), and the window-title enumeration it depended on (`main/meeting-detect/`) was removed (B.2). This was aspirational, not shipped — treat it as an open feature idea, not a documented invariant.
 
 **Screen capture toggle**: the vision path (screenshot on hotkey) only fires if `settings.visionReady` is `true` (requires a vision-capable provider) AND the user has not disabled screen capture in Settings. A per-session "pause screen capture" toggle is on the bar; it sets an in-memory flag in the main process that blocks the IPC handler for `IPC.captureScreen`, regardless of what the renderer requests.
 
 ### I.5 Local-first redaction
 
-**Module**: `shared/redact.ts → redactSecrets()`. Applied in the main process at the IPC handler for `IPC.ask`, line 891 of `main/index.ts`:
+**Module**: `shared/redact.ts → redactSecrets()`. Applied in the main process at the IPC handler for `IPC.ask` (`main/index.ts`, inside the `ask:start` handler, right after `AskStartSchema.parse`):
 
 ```ts
 if (s.redactSensitive && req.transcript) req.transcript = redactSecrets(req.transcript)
@@ -1163,7 +1195,7 @@ Policy keys relevant to privacy/security:
 | Decrypted temp files | Deleted on `app.will-quit` | Automatic; no user action needed |
 | API keys | Until user removes in Settings | Settings → AI → Remove key |
 | Graph (`graph.json`) | Until user purges | Settings → Knowledge graph → Purge (calls `auditLog('graph.purged')`) |
-| OAuth tokens (Outlook/Google) | Session-managed + keychain | Disconnect in Settings → Calendar |
+| OAuth tokens (Outlook / Microsoft Graph) | Session-managed + keychain | Disconnect in Settings → Calendar |
 
 **Add in next sprint**: a `retentionDays` setting (managed-config + user-facing). A background job on app start lists `meetingsFolder` files, computes age from the `date:` frontmatter field, and moves files older than `retentionDays` to Trash (macOS `shell.trashItem()`, Windows recycle bin). Default: no expiry (user must opt in). If `encryptTranscripts` is true, the index.md is not written (current behaviour in `saveMeeting()`) — retention purge must therefore read the filename timestamp, not the index.
 
@@ -1187,7 +1219,6 @@ When local-only is on, `auditLog('provider.blocked', { provider, reason: 'local-
 
 ```
 auth.signin | auth.signout | auth.expired | auth.refresh_failed | auth.denied
-google.signin | google.signout | google.calendar.read
 dust.token.refreshed
 key.set | key.removed
 capture.screen | transcript.saved | note.saved
@@ -1213,12 +1244,21 @@ settings.changed | graph.purged | calendar.read | app.crash | meeting.detect.deg
 |---|---|
 | `desktopCapturer` only called when `visionReady` and user has not paused screen capture | `ipcMain.handle(IPC.captureScreen)` — main process check before every call |
 | `getDisplayMedia` only called when `audioSource ∈ {system, both}` and mic permission granted | `useListen` renderer hook; blocked by `getPlatformPermissions()` check on start |
-| Window-title excluded apps are never captured | Main-process exclusion check before `desktopCapturer` call |
+| ~~Window-title excluded apps are never captured~~ | Not implemented — see I.4; no exclusion list exists today |
 | API keys never sent to renderer | `publicSettings()` omits all key material; only `hasApiKey` boolean crosses the bridge |
-| `redactSecrets()` runs before any cloud LLM call | `main/index.ts` line 891, inside the main-process IPC handler — renderer cannot bypass |
+| `redactSecrets()` runs before any cloud LLM call | `main/index.ts`, in the `ask:start` handler right after schema parsing — renderer cannot bypass |
 | Org provider allowlist blocks non-approved providers | `attempt()` in main process; `provider.blocked` audit event on any violation |
 | Decrypted temp files unlinked on quit | `app.on('will-quit')` hook in `transcripts.ts → decryptToTemp()` |
 | No OS/security bypass (no `shell.openExternal` to untrusted URLs, no `nodeIntegration: true`) | `BrowserWindow` created with `nodeIntegration: false`, `contextIsolation: true`; only `contextBridge` methods exposed |
+
+### I.12 License gate & phone-home activation (auth, beyond SSO)
+
+B.1 covers Azure AD SSO — but that is not the whole auth story. Métis also has a second, independent gate: a **seat-capped, phone-home license check** against a self-hosted `license-server/` (a standalone Node service at the repo root, with its own README/Dockerfile/tests and design doc, `docs/license-platform-plan.md`).
+
+- **Off by default.** `settings.licenseGateEnabled` defaults `false` (`shared/ipc.ts`). While off, `main/license.ts` never makes a network call and no blocking screen renders — the entire subsystem is inert.
+- **When on**, `App.tsx` renders three stacked gates in priority order: **License → SSO → Onboarding**. `<LicenseGate>` outranks the Azure AD `<SignInWall>` deliberately — a revoked or unlicensed device should learn that before it burns an SSO round trip or gets as far as onboarding (`App.tsx:1746-1774`).
+- **Mechanics.** `main/license.ts`'s `checkLicenseGrace()` is the boot-time verdict function, called via a `license:gate` IPC handler. It implements a soft grace window (7 days — no network call at all while `licenseValid` and inside it) and a hard cap (30 days — even fully offline, a validated license keeps working this long before the app blocks). A 12-hour background interval re-validates via `heartbeat()` whenever the gate is on and the license is currently valid. Each install gets a stable, hostname-independent machine ID (`getMachineId()`, a random UUID persisted to `userData/machine-id.txt`) so a renamed machine or a different OS login doesn't silently burn a new seat.
+- **Server side** (out of scope for this doc; see `docs/license-platform-plan.md`): seat-capped per-company licenses, an admin dashboard, webhooks, audit log, CSV export, and deploy infra (`fly.toml`, `docker-compose.prod.yml`, `Caddyfile`). None of that is required reading to understand the client-side gate above — the client only ever speaks the server's fixed JSON contract.
 
 ---
 
@@ -1240,6 +1280,10 @@ settings.changed | graph.purged | calendar.read | app.crash | meeting.detect.deg
 
 The AudioWorklet runs inside Electron's Chromium renderer — it is a Web Audio API. There is no equivalent in Tauri's WebView (WKWebView on macOS does not implement `AudioWorklet`). Moving to Tauri means rewriting the entire ASR pipeline in Rust. That is 3–4 months of platform engineering to save ~120 MB of RAM — a bad trade while features remain unshipped.
 
+The `sherpa-onnx-node` row above is about the native-module loading model, not packaging complexity — the actual per-platform provisioning story (cross-build gaps, auto-provision, the eager-probe status check) is real and is documented in C.3, not glossed over here.
+
+**Portable Windows build has no auto-update, permanently.** `electron-builder.yml` ships a `portable` target (`Metis-Portable-<version>.exe`) alongside the installer, because `electron-updater` has no support for updating a portable EXE (there's no fixed install location to replace — it's just a file the user launched directly). `main/updater.ts → initAutoUpdate()` explicitly bails before any wiring when `process.platform === 'win32' && process.env.PORTABLE_EXECUTABLE_FILE`, logging `'portable build — auto-update unavailable, skipping'`. This is a permanent, by-design carve-out, not a bug: users on the portable build must self-update by re-downloading. See K's Phase 4 checklist for the operational implication.
+
 macOS-native is doubly wrong because it eliminates Windows entirely and breaks the cross-platform distribution already working via `electron-builder`.
 
 Stay current on Electron (now 39 — Chromium 142, Node 22; minimum macOS 12). Keep bumping to new stable majors to track Chromium security patches. Adopt `electron-vite`'s native ESM output (already configured) and never deviate from the Chromium + Node version the Electron team ships.
@@ -1250,7 +1294,7 @@ Stay current on Electron (now 39 — Chromium 142, Node 22; minimum macOS 12). K
 
 **Verdict: TypeScript in the Electron main process. No additional server language.**
 
-Métis's "backend" is already the main process (`src/main/`). It handles: HTTP streaming to all 16 LLM providers, OS keychain reads/writes, filesystem I/O (transcripts, settings, audit log), meeting detection, calendar OAuth, CLI subprocess spawning. All of this works today in TypeScript with zero server infrastructure.
+Métis's "backend" is already the main process (`src/main/`). It handles: streaming to all 16 configured providers in `shared/providers.ts`'s `PROVIDERS` registry (13 direct HTTP/SSE providers, plus `dust` over REST, plus `claude-cli`/`codex-cli` as local subprocess spawns via `main/cli.ts` — distinct from the small strategy shim at `main/llm/cli.ts`), OS keychain reads/writes, filesystem I/O (transcripts, settings, audit log), calendar OAuth, CLI subprocess spawning, brain extraction (C.5), and license-gate phone-home checks (I.12). All of this works today in TypeScript with zero server infrastructure.
 
 The only plausible reason to add a server is multi-device transcript sync (e.g., a user wants to access their meeting history from a second machine). That is a future feature, not a v1 blocker. If it lands, the right choice is a minimal Node/TypeScript HTTPS endpoint (sharing the existing `shared/` types and `ipc.ts` schemas) — not a Python or Go service. The team already knows the type system and can reuse `zod` schemas, `TranscriptLine`, and `MeetingSummary` interfaces without translation layers.
 
@@ -1412,18 +1456,20 @@ The risk to manage: `electron-builder` bundles everything in `dependencies` into
 
 ## Section K — Implementation Roadmap
 
-Métis already ships: the overlay window, on-device ASR (Whisper worklet + Parakeet), multi-provider LLM routing with tiered models, `buildSystem()` prompt assembly, per-mode prompts, contextDocs, profile, meeting detection, Outlook + Google calendar, screen capture prewarming, on-device secret redaction, eval metrics, keychain, auto-update, and fact-check verdict cards. The roadmap below is "what to add and harden from here" — not a rebuild.
+> **Status banner.** This roadmap was written against an earlier state of the codebase and was never fully revisited as features shipped. Several items below are already done, one is deliberately superseded (not a bug to fix), and the `issues_to_fix.md` file some tasks cite as their source **does not exist in this repo** — it's a local scratch file, gitignored (`.gitignore:28`), never committed. Treat every task below as **[DONE]**, **[SUPERSEDED]**, or open exactly as marked; don't assume "listed here" means "still to do." For current, continuously-updated status, see `docs/asktoto-hardening-backlog.md`.
+
+Métis already ships: the overlay window, on-device ASR (Whisper worklet + Parakeet, with eager native-addon status probing and per-platform provisioning gates — C.3), multi-provider LLM routing with tiered models across 16 providers, `buildSystem()` prompt assembly, per-mode prompts, contextDocs, profile, Outlook / Microsoft 365 calendar, screen capture prewarming, on-device secret redaction, eval metrics, keychain, auto-update (installer builds only — the portable Windows EXE never auto-updates, by design), fact-check verdict cards, audio-file import (C.4) via the reviewed LGPL FFmpeg sidecar, the brain knowledge-extraction pipeline and Mantu Intelligence dashboard (C.5–C.6), an off-by-default license gate with phone-home activation (I.12), and a `release-verify` CI job that fails a tagged release closed (marks it draft) if either platform's build didn't actually land its assets. Automatic meeting-detection start was shipped, then **removed** — see B.2. The roadmap below is "what to add and harden from here" — not a rebuild.
 
 ---
 
-### Phase 1 — Prototype Hardening (Days 1–7)
+### Phase 1 — Prototype Hardening (Days 1–7) — **[ALL DONE]**
 
 **Goal**: The core audio→ASR→LLM→render pipeline is crash-free and meets latency targets on both macOS and Windows. The known critical bugs are gone.
 
 **Features added in this phase**
-- Audio flush-on-stop (the last partial window is emitted before disconnection, fixing lost final sentences — Issue 5)
-- `⌘Q` hotkey un-hijacked (tray menu / in-window close only — Issue 1)
-- `clearApiKey` wrapped in try-catch to prevent main-process crash (Issue 3)
+- [DONE] Audio flush-on-stop — `whisper-worklet-src.ts` handles a `'flush'` postMessage and emits the partially-filled buffer before disconnect.
+- [SUPERSEDED — not a bug] `⌘Q` no longer quits when the overlay is focused. This was reframed during a later, deliberate Cluely-redesign removal of the ⌘Q hijack (quit remains available via the tray and Settings → Quit) — see `docs/asktoto-hardening-backlog.md`. Don't "fix" this as if it regressed; it didn't.
+- [DONE] `clearApiKey`'s `rmSync` and `getApiKey`'s `safeStorage.decryptString` are both wrapped in try-catch in `src/main/store.ts` — a corrupted/missing key file logs and returns `null` rather than crashing the main process.
 
 **Engineering tasks**
 
@@ -1457,41 +1503,41 @@ Métis already ships: the overlay window, on-device ASR (Whisper worklet + Parak
 **Goal**: All remaining `issues_to_fix.md` medium/high items resolved. Sentry wired. Stable Windows build. First-time onboarding polished enough to hand to a 5-person beta group without hand-holding.
 
 **Features added in this phase**
-- Dynamic permission polling in Settings (Issue 7)
-- Real accessibility permission check via `systemPreferences.isTrustedAccessibilityClient` (Issue 6)
-- AppleScript Chrome detection made dynamic (Issue 2)
-- OAuth silent-refresh revalidation (Issue 4)
-- Keyboard shortcut capture UI (Issue 8) — replace free-text input with a key-capture widget
-- Sentry error monitoring (both processes, source maps, sanitized breadcrumbs)
-- Windows APPX build tested end-to-end (`npm run dist:win:appx`)
+- [DONE] Dynamic permission polling in Settings (Issue 7) — `usePermissions()` in `state.ts` already polls every `PERMISSIONS_POLL_MS` (2.5s) and is used by `Settings.tsx`; it's a generic hook, not onboarding-only.
+- [SUPERSEDED — do not build] Real accessibility permission check via `systemPreferences.isTrustedAccessibilityClient` (Issue 6). This directly contradicts current direction: Accessibility was deliberately removed end-to-end (see I.2), not planned for addition. Adding this check would resurrect a permission the app no longer needs.
+- [MOOT] AppleScript Chrome detection made dynamic (Issue 2) — the meeting-detect subsystem this task lived in (`src/main/meeting-detect/`) no longer exists (B.2). Nothing to make dynamic.
+- [DONE] OAuth silent-refresh revalidation (Issue 4) — `main/auth.ts`'s `revalidateSession()` calls `acquireTokenSilent` and handles `InteractionRequiredAuthError` by clearing the local session.
+- [DONE] Keyboard shortcut capture UI (Issue 8) — `Settings.tsx`'s `keyEventToAccelerator()` + `displayAccelerator()` already implement a key-capture widget, not free text.
+- [OPEN] Sentry error monitoring (both processes, source maps, sanitized breadcrumbs) — `@sentry/electron` is not in `package.json`; this remains genuinely unbuilt.
+- [DONE] Windows CI — `.github/workflows/build.yml` already runs a `windows-latest` job. (APPX-specific end-to-end testing may still be open; the runner itself is not.)
 
-**Engineering tasks**
+**Engineering tasks** — the original plan's task list, kept for history; cross-reference the [DONE]/[SUPERSEDED]/[MOOT]/[OPEN] markers above before picking any of these up.
 
 | Task | File | Notes |
 |---|---|---|
-| Add `setInterval` (2.5s) to `usePermissions` when Settings is mounted | `src/renderer/src/state.ts` | Mirror the onboarding polling frequency; clear on unmount |
-| `systemPreferences.isTrustedAccessibilityClient(false)` in `getPlatformPermissions` | `src/main/platform-perms.ts` | Returns `bool`; map to `'granted'|'denied'` |
-| Dynamic AppleScript Chrome block | `src/main/meeting-detect/mac.ts` | Check `ps aux` or `NSRunningApplication` for Chrome presence before building the script |
-| Silent token refresh in `revalidateSession` | `src/main/auth.ts` | Call `acquireTokenSilent`; on `InteractionRequiredAuthError` clear local session and emit `auth.expired` |
-| Key-capture input component | `src/renderer/src/components/Settings.tsx` | Listen for `keydown`, build accelerator string, write to settings |
-| Install `@sentry/electron` | `package.json` + `src/main/index.ts` + renderer entry | `Sentry.init({ dsn, beforeSend: stripTranscriptContent })` |
-| CI: add Windows runner to GitHub Actions | `.github/workflows/` | Build + typecheck + vitest on `windows-latest` |
-| Onboarding flow smoke test | `deep-qa-test.mjs` or Playwright | Drive the full first-run flow (permission grants → first question → first answer) headlessly |
+| ~~Add `setInterval` (2.5s) to `usePermissions` when Settings is mounted~~ | `src/renderer/src/state.ts` | Done — already implemented as a general-purpose hook |
+| ~~`systemPreferences.isTrustedAccessibilityClient(false)` in `getPlatformPermissions`~~ | `src/main/platform-perms.ts` | Superseded — do not implement; contradicts Accessibility's deliberate removal |
+| ~~Dynamic AppleScript Chrome block~~ | `src/main/meeting-detect/mac.ts` | Moot — this directory no longer exists |
+| ~~Silent token refresh in `revalidateSession`~~ | `src/main/auth.ts` | Done |
+| ~~Key-capture input component~~ | `src/renderer/src/components/Settings.tsx` | Done |
+| Install `@sentry/electron` | `package.json` + `src/main/index.ts` + renderer entry | Still open — `Sentry.init({ dsn, beforeSend: stripTranscriptContent })` |
+| ~~CI: add Windows runner to GitHub Actions~~ | `.github/workflows/` | Done — `windows-latest` job exists in `build.yml` |
+| Onboarding flow smoke test | `deep-qa-test.mjs` or Playwright | Still open — drive the full first-run flow (permission grants → first question → first answer) headlessly |
 
 **Risks**
 - `acquireTokenSilent` can throw on first call if the MSAL cache is cold. Add exponential backoff (3 attempts, 1s/2s/4s) before clearing the session.
 - Windows system-audio loopback via `getDisplayMedia` requires the user to check "Share system audio" in the picker. This cannot be automated — document it in onboarding.
 - Sentry `beforeSend` must be verified to strip LLM response text; add a unit test that feeds a synthetic breadcrumb with answer text and asserts it is absent after sanitization.
 
-**What to test**
-- Grant accessibility permission while Settings is open; dot updates without reopening.
+**What to test** (remaining open items only)
+- ~~Grant accessibility permission while Settings is open; dot updates without reopening.~~ — n/a, Accessibility is deliberately not requested.
 - Revoke Outlook token from Entra ID; verify Métis shows "sign in" within one refresh cycle (≤7 days or next cold start — confirm which).
-- Bind a custom shortcut via the capture widget; verify it fires.
-- Crash the renderer process intentionally; verify Sentry receives an event with no transcript content.
+- ~~Bind a custom shortcut via the capture widget; verify it fires.~~ — the widget exists; re-verify it still fires as a regression check, not new work.
+- Crash the renderer process intentionally; verify Sentry receives an event with no transcript content. (Blocked on Sentry being installed.)
 - Windows build: system-audio capture works with the share-audio checkbox.
 
 **Definition of Done**
-Zero `issues_to_fix.md` high-severity items open. Sentry dashboard shows events from a test machine. Windows APPX installs and launches without UAC elevation. `npm test` green on both macOS and Windows runners.
+Sentry dashboard shows events from a test machine (only remaining hard blocker in this phase — everything else above is already shipped). Windows APPX installs and launches without UAC elevation. `npm test` green on both macOS and Windows runners.
 
 ---
 
@@ -1583,6 +1629,8 @@ Complete before any public / general-availability release.
 - [ ] `npm run check:release` passes with no warnings
 - [ ] Changelog auto-generated from commit messages and attached to GitHub Release
 - [ ] Rollback procedure documented: previous `.dmg` / `.exe` available on release page; `electron-updater` can serve the previous version if `latest.yml` is reverted
+- [x] Portable Windows EXE (`Metis-Portable-<version>.exe`) never auto-updates, by design (`main/updater.ts` bails on `PORTABLE_EXECUTABLE_FILE` — C.3/J). Document this for users on that build: self-update by re-downloading, no in-app prompt will ever appear.
+- [x] `release-verify` CI job (`.github/workflows/release.yml`) confirms both macOS and Windows assets actually landed on a tagged release, marking it draft (never resolved by `electron-updater`) if either platform silently failed.
 
 **Observability**
 - [ ] Sentry source maps uploaded on every release build (CI step)

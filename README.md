@@ -7,7 +7,7 @@ A frameless, transparent, always-on-top glass overlay for macOS and Windows.
 
 <img src="docs/media/asktoto-hero.png" alt="Métis overlay — Ask anything bar with a syntax-highlighted answer on frosted purple glass" width="760">
 
-`16 AI providers + Dust` · `thinking-mode routing` · `live transcription` · `knowledge graph` · `encrypted at rest`
+`16 AI providers (incl. Dust)` · `thinking-mode routing` · `on-device transcription` · `knowledge graph` · `encrypted at rest`
 
 Built by **[Tony Walteur](https://www.linkedin.com/in/tonywalteur/)** · Mantu
 
@@ -15,17 +15,30 @@ Built by **[Tony Walteur](https://www.linkedin.com/in/tonywalteur/)** · Mantu
 
 ---
 
-A macOS and Windows **AI desktop overlay**: a frameless, transparent, always-on-top glass assistant
-that floats over every app. Look and feel modeled on Cluely, rebuilt from scratch with Mantu branding
-and wired to many AI providers (Claude, GPT, Dust, and more).
+## What this is
+
+Métis is an **on-device AI meeting copilot**: a frameless, transparent, always-on-top glass overlay
+that floats over every app on macOS and Windows. Look and feel modeled on Cluely, rebuilt from scratch
+with Mantu branding and wired to 16 AI providers (Claude, GPT, Gemini, and more), including Dust as
+the primary "your own agents" brain.
 
 Three core actions:
 - **Ask** — type a question, get a streamed answer (rich markdown, code, tables).
 - **Capture** — screenshot the screen, send to a vision model.
-- **Listen** — live mic + system-audio transcription (on-device Whisper), real-time suggestions.
+- **Listen** — live mic + system-audio transcription, fully on-device (Whisper / Parakeet), real-time
+  suggestions. Listen is started manually (hotkey or button) — there is no OS-level meeting detection.
 
 Plus one-click **Fact-check**, **Hide from screen capture**, a visible recording indicator, a
-**knowledge graph** of your notes (graphify), and **transcripts encrypted at rest by default**.
+**knowledge graph** of your notes (graphify + the `brain` subsystem, surfaced in-app and in the
+separate Mantu Intelligence dashboard), and **transcripts encrypted at rest by default**.
+
+### Naming: Métis vs. `asktoto`
+
+The product is branded **Métis** everywhere a user sees it (window title, installers, docs). The
+**package name, internal app id, and most internal identifiers stay `asktoto` on purpose** — they
+predate the rebrand and changing them would break macOS TCC permission grants (mic/screen-recording
+consent tied to the bundle id) and the electron-updater continuity for existing installs. Expect to see
+`asktoto` in `package.json`, `userData` paths, log files, and code comments; that is not a rename bug.
 
 ## Install (v1.0.0)
 
@@ -35,19 +48,22 @@ Grab the installer for your OS from the [AskToto-Releases](https://github.com/my
   first launch needs right-click → Open → Open (one time). Auto-update activates once builds
   are signed + notarized.
 - **Windows** — `Metis-Setup-1.0.0.exe` (installer) or `Metis-Portable-1.0.0.exe`
-  (no-install). v1.0.0 is not yet Authenticode-signed: SmartScreen will warn — More info →
-  Run anyway.
+  (no-install; the portable build never auto-updates — electron-updater has no portable-EXE
+  support). v1.0.0 is not yet Authenticode-signed: SmartScreen will warn — More info → Run anyway.
 
 All transcription runs on-device; models are bundled (no first-run download).
 
-Full install instructions: `docs/INSTALL.md`.
+Full install instructions: [`docs/INSTALL.md`](docs/INSTALL.md).
 
 ## Quick start (from source)
+
+Requires **Node 20** (matches CI in `.github/workflows/build.yml`; not yet enforced locally via an
+`engines` field).
 
 ```bash
 npm install
 npm run dev          # launch the overlay (dev)
-npm run typecheck    # tsc, both projects
+npm run typecheck    # tsc, both projects (main + web)
 npm test             # vitest (unit + integration)
 npm run build        # bundle main + preload + renderer → out/
 npm run dist         # package a signed-runtime app → release/ (electron-builder)
@@ -56,6 +72,51 @@ npm run installers   # build the installer for this OS and print the installable
 
 Set a provider key in-app: gear → **AI** → paste your key → Save (stored encrypted on-device via
 Electron `safeStorage`). Or connect **Dust** (your own agents) with one click from the Dust CLI session.
+
+Two things `npm install` at the repo root does **not** cover:
+
+- **Mantu Intelligence dashboard** (`intelligence/`) is a separate Vite/React workspace with its own
+  `package.json`. `npm run dev` still works without it — `openIntelligenceWindow()` returns gracefully
+  if `intelligence/dist` is missing — but to open the dashboard itself, run
+  `npm run build:intelligence` first (this does `cd intelligence && npm ci && npm run build`).
+- **The LGPL ffmpeg sidecar** (`resources/ffmpeg/`) is deliberately git-ignored and not fetched by
+  `npm install`. Its absence doesn't break `npm run dev` — only the "import audio file" feature can't
+  decode without it. See `docs/ENTERPRISE_RELEASE.md`'s ffmpeg sidecar section to provision one locally.
+
+## Script reference
+
+Every script in `package.json`, one line each:
+
+| Script | What it does |
+|---|---|
+| `dev` | Launch the overlay in dev mode (electron-vite dev) |
+| `check:main-imports` | Fail if `src/main/**` uses a dynamic `import()` (breaks under bytecode compilation) |
+| `check:ffmpeg` | Verify/provision the LGPL ffmpeg sidecar binary for the current platform |
+| `check:sherpa` | Verify/provision the native Parakeet (sherpa-onnx) addon for the current platform |
+| `prebuild` | Runs `check:main-imports` automatically before `build` |
+| `build` | Bundle main + preload + renderer (electron-vite build) → `out/` |
+| `preview` / `start` | Preview the built app (electron-vite preview) |
+| `typecheck` | `tsc --noEmit` for both the node (main/preload) and web (renderer) tsconfigs |
+| `test` | Run the vitest suite (`src/**` + `intelligence/src/**`) |
+| `test:smoke:import` | Build, then run the packaged-app audio-import smoke test (Playwright) |
+| `check:xcode` | Verify Xcode command-line tools are present (macOS signing prerequisite) |
+| `check:release-secrets` | Verify required signing secrets/env vars are set for a release target |
+| `check:release` | Pre-release gate (version parity, etc.) |
+| `verify:signing` | Verify a built app's code signature |
+| `fetch-models` | Download bundled ASR model weights (Whisper + Parakeet, ~700MB) |
+| `build:intelligence` | `cd intelligence && npm ci && npm run build` — builds the Mantu Intelligence dashboard bundle |
+| `installers` / `installers:mac` / `installers:win` / `installers:all` | Build installers for the current OS / mac / win / all platforms |
+| `predist` | ffmpeg + sherpa checks (mac) + fetch models + build intelligence, before `dist` |
+| `dist` | Package a signed-runtime macOS app → `release/` (no publish) |
+| `dist:local` | Local mac rebuild with keychain-safe signing into an OneDrive-free output dir, then verify signing |
+| `predist:win` | ffmpeg + sherpa checks (win) + fetch models, before a Windows dist |
+| `dist:win` | Fetch models, build intelligence, then package an unsigned Windows build (no publish) |
+| `dist:win:appx` | ffmpeg + sherpa checks (win), then package a Windows APPX (no publish) |
+| `prepack` | Fetch models (runs automatically before electron-builder packs) |
+| `release` | Full macOS release gate (ffmpeg, sherpa, Xcode, secrets, version check, models, intelligence, build) → publish |
+| `release:win` | Full Windows release gate → publish (fails closed today: no Windows signing secrets provisioned yet) |
+| `release:mas` | Mac App Store build (provisioning profile via `MAS_PROVISIONING_PROFILE`), no publish |
+| `release:win:store` | Windows Store (APPX) build gate, no publish |
 
 ## Repository map
 
@@ -67,44 +128,68 @@ AskToto/
 │   │   ├── index.ts         windows, global hotkeys, IPC handlers (requireAuth + assertMainWindow)
 │   │   ├── store.ts         settings + API keys, encrypted at rest (safeStorage)
 │   │   ├── auth.ts          Azure AD (Entra) SSO, domain-locked; requireAuth() gate
+│   │   ├── license.ts       license-gate phone-home check (off by default; see license-server/)
+│   │   ├── cli.ts           CLI provider spawn/security invariants (Claude Code, Codex CLI)
 │   │   ├── llm/             provider strategies — streaming to Anthropic SDK / OpenAI-compatible
-│   │   │                    (incl. Gemini) / Dust / CLI (Claude Code, Codex); llm.ts is the dispatch shim
+│   │   │                    (incl. Gemini) / Dust / CLI; llm.ts + llm/cli.ts are the dispatch shims
+│   │   ├── brain/           meeting extraction → people/account/deal knowledge graph (store, ingest,
+│   │   │                    context) — backs BrainView and the Mantu Intelligence dashboard
 │   │   ├── personas.ts      mode + language system prompts
 │   │   ├── transcripts.ts   meeting/note markdown, optional at-rest encryption
 │   │   ├── recall.ts        list/search saved meetings (decrypt-aware)
 │   │   ├── graphify.ts      knowledge-graph bridge (spawns the runner)
 │   │   ├── dustcli.ts       import the local Dust CLI keychain session (macOS)
-│   │   └── meeting-detect/  Zoom/Teams/Meet detection (mac.ts / win.ts)
+│   │   └── ffmpeg-decoder.ts on-device decode of imported audio files (LGPL ffmpeg sidecar)
 │   ├── preload/index.ts     contextBridge `window.toto` API (contextIsolation on)
 │   ├── renderer/src/        glass UI (React + Tailwind v4)
-│   │   ├── components/       Bar, Settings, RecallView, Answer, CodeBlock, …
+│   │   ├── components/       Bar, Settings, RecallView, BrainView, Answer, CodeBlock, LicenseGate, …
 │   │   ├── state.ts          hooks (useAsk rAF-batched stream, useSettings, useAuth)
 │   │   └── lib/whisper*      on-device Whisper STT (Web Worker)
-│   └── shared/              cross-process contract
+│   └── shared/               cross-process contract
 │       ├── ipc.ts            IPC channels + zod schemas + settings schema
 │       ├── providers.ts      16-provider + Dust registry + model-tier routing
 │       ├── routing.ts        thinking-mode router (base / think / deep tiers)
 │       └── prompts.ts        default mode prompts
+├── intelligence/             Mantu Intelligence dashboard — separate Vite/React app (its own
+│                             package.json/deps), packaged via electron-builder extraResources,
+│                             opened by src/main/intelligence.ts. Build with `npm run build:intelligence`.
+├── license-server/           self-hosted license/activation service (Node) — dashboard, enforcement
+│                             gate, audit log, CSV export. See docs/license-platform-plan.md.
 ├── resources/graphify_runner.py   graphify pipeline (bundled via extraResources)
-├── build/                   app icon, entitlements, managed-config example
-├── electron-builder.yml     packaging (dmg/zip/nsis/appx), signing via env
-└── docs/                    design spec, architecture, hardening backlog, SIGNING.md
+├── build/                    app icon, entitlements, managed-config example
+├── electron-builder.yml      packaging (dmg/zip/nsis/appx), signing via env
+└── docs/                     design spec, architecture, hardening backlog, SIGNING.md, …
 ```
+
+## Architecture
+
+The main process is the trust boundary: every privileged IPC handler is guarded by
+`requireAuth()`/`assertMainWindow()` (or `assertBrainReader()` for the Intelligence dashboard's
+read-only `brain:*` channels), the renderer runs fully sandboxed
+(`contextIsolation`, `sandbox`, `nodeIntegration: false`), and the main bundle is compiled to V8
+bytecode — which is why `src/main/**` may never use a dynamic `import()` (`check:main-imports` enforces
+this at build time). Audio (mic + system audio) is transcribed on-device via bundled Whisper/Parakeet
+models; LLM calls stream through provider-specific strategies in `src/main/llm/`; meeting transcripts
+feed the `brain/` knowledge-extraction pipeline that backs both the in-app Brain view and the standalone
+Mantu Intelligence dashboard. Full reference, including the audio pipeline diagram, permission model,
+native-binary provisioning (sherpa-onnx, ffmpeg), and the roadmap: **[`docs/asktoto-architecture.md`](docs/asktoto-architecture.md)**.
 
 ## Features
 
-- **16 providers + Dust.** Claude, GPT, Gemini, NVIDIA, DeepSeek, Qwen, MiniMax, Kimi, OpenRouter,
-  Groq, Together, Fireworks, Mistral, custom OpenAI-compatible, keyless Claude Code / Codex CLI
-  backends, and **Dust** (your own agents, the primary brain). Keys auto-detected from prefix; each
-  stored encrypted.
-- **Thinking mode.** `auto` routes simple questions to Haiku, heavier analytical questions to Sonnet,
-  and coding/engineering/deep reasoning to Opus; the Bar toggle forces Opus. For Dust: a base agent +
-  a thinking agent.
+- **16 providers (including Dust).** Claude, GPT, Gemini, NVIDIA, DeepSeek, Qwen, MiniMax, Kimi, OpenRouter,
+  Groq, Mistral, Grok, custom OpenAI-compatible, keyless Claude Code / Codex CLI backends, and
+  **Dust** (your own agents, the primary brain). Keys auto-detected from prefix; each stored encrypted.
+- **Thinking mode.** `auto` routes simple questions to a fast model, heavier analytical questions to a
+  mid-tier model, and coding/engineering/deep reasoning to the deepest model; the Bar toggle forces the
+  deep tier. For Dust: a base agent + a thinking agent.
 - **Knowledge graph.** graphify turns the notes folder into a connected graph; per-note "Related"
   panel + an interactive graph. Reuses your Claude Code (no extra key).
 - **Multilingual.** Transcribes any spoken language, assists in the speaker's language, writes the
   recap in the language you pick (Settings → Personalize → Language).
 - **Azure SSO.** Optional, domain-locked Microsoft sign-in; `requireAuth()` guards every privileged IPC.
+- **License gate (optional, off by default).** `licenseGateEnabled` defaults to `false`; when a company
+  turns it on, the app phones home to a self-hosted `license-server/` instance. See
+  [`docs/license-platform-plan.md`](docs/license-platform-plan.md).
 - **Encryption at rest.** Settings/keys always encrypted (keychain); transcripts envelope-encrypted
   (AES-256-GCM) by default — can be disabled per user or locked on via managed config.
 
@@ -128,14 +213,29 @@ AskToto/
 - **What leaves the device:** prompts go to the provider you choose; transcripts save to your notes
   folder (which may sync to OneDrive — envelope-encrypted by default); Dust/graph read those notes.
 
+## Test / verify
+
+```bash
+npm test              # vitest run — src/shared, src/main, src/renderer/src/lib, intelligence/src
+npm run typecheck     # tsc --noEmit, node + web tsconfigs
+npm run test:smoke:import   # packaged-app smoke test for audio import (builds first)
+```
+
+Coverage is concentrated in `src/shared/**` (pure logic) and `src/main/**` (store, auth, transcripts,
+recall, graphify, brain, mcp, license). Renderer UI coverage is thin — most `components/*.tsx` have no
+tests; there is no Playwright UI/E2E suite, only the single import smoke test above.
+
 ## Docs
 
+- [`docs/INSTALL.md`](docs/INSTALL.md) — Mac and Windows install instructions
+- [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md) — dev-environment setup, gotchas, and internal patterns
+  (IPC contract, state management, native-module packaging, debugging)
+- [`docs/SIGNING.md`](docs/SIGNING.md) — code-signing / notarization setup
+- [`docs/ENTERPRISE_RELEASE.md`](docs/ENTERPRISE_RELEASE.md) — enterprise release checklist
+- [`docs/asktoto-architecture.md`](docs/asktoto-architecture.md) — architecture reference
+- [`docs/asktoto-hardening-backlog.md`](docs/asktoto-hardening-backlog.md) — deferred hardening items
+- [`docs/license-platform-plan.md`](docs/license-platform-plan.md) — license/activation platform design
 - `docs/design/` — design spec
-- `docs/INSTALL.md` — Mac and Windows install instructions
-- `docs/SIGNING.md` — code-signing / notarization setup
-- `docs/ENTERPRISE_RELEASE.md` — enterprise release checklist
-- `docs/asktoto-architecture.md` — architecture reference
-- `docs/asktoto-hardening-backlog.md` — deferred hardening items
 
 ## Known gaps (honest)
 
@@ -143,11 +243,14 @@ AskToto/
   returns a clean UI error.
 - Code signing / notarization and Store submission need Tony-owned developer accounts, certificates,
   provisioning profiles, and GitHub release secrets. The repo now fails tagged releases before publish
-  when required signing inputs are missing.
-- ASR weights (Whisper base + large-v3-turbo + Parakeet) are bundled into the installer by
-  `npm run fetch-models` (run automatically by `predist`) and load offline via the `asr-model://`
-  protocol — no download on first Listen. Dev builds without fetched models fall back to a one-time
-  CDN download.
+  when required signing inputs are missing. Windows signing is deferred beyond v1 scope (see
+  `docs/MANTU-IT-REQUEST.md`); the portable Windows build never auto-updates by design.
+- ASR weights (Whisper base + Parakeet) are bundled into the installer by `npm run fetch-models`
+  (run automatically by `predist`) and load offline via the `asr-model://` protocol — no download on
+  first Listen. `fetch-models` also downloads the large-v3-turbo WebGPU tier to disk, but
+  `electron-builder.yml` deliberately excludes it from the packaged installer (opt-in dev/benchmark
+  asset — Parakeet is the primary on-device engine). Dev builds without fetched models fall back to a
+  one-time CDN download.
 - Git repo with a GitHub remote (mysticalsin/AskToto-Mantu) and CI on every push (typecheck, vitest,
   npm audit, SBOM, secret scan — `.github/workflows/build.yml`); branch protection on `main` is not
   yet configured.
