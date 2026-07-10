@@ -137,7 +137,7 @@ export function AgendaView(): JSX.Element {
     body = (
       <div className="flex flex-col items-center gap-3 px-1 py-5 text-center">
         <p className="text-[12px] leading-relaxed text-[color:var(--color-ink-2)]">
-          Connect your Outlook calendar to see today’s meetings. Read-only: AskToto never changes your calendar.
+          Connect your Outlook calendar to see today’s meetings. Read-only: Métis never changes your calendar.
         </p>
         <button
           type="button"

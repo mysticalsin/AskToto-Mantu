@@ -39,7 +39,7 @@ export function setBidstackApiKey(key: string): void {
   } else {
     if (!safeStorage.isEncryptionAvailable()) {
       throw new Error(
-        'Encryption is unavailable on this machine. AskToto cannot safely store the Polo Pre-Sales API key.'
+        'Encryption is unavailable on this machine. Métis cannot safely store the Polo Pre-Sales API key.'
       )
     }
     blob = safeStorage.encryptString(trimmed)
@@ -48,7 +48,7 @@ export function setBidstackApiKey(key: string): void {
     writeFileSync(p, blob, { mode: 0o600 })
   } catch (e) {
     throw new Error(
-      `Couldn't save the Polo Pre-Sales API key — AskToto can't write to its data folder${
+      `Couldn't save the Polo Pre-Sales API key — Métis can't write to its data folder${
         e instanceof Error && e.message ? ` (${e.message})` : ''
       }.`
     )

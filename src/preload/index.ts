@@ -29,6 +29,7 @@ import {
   type CalendarTodayResult,
   type RecallReadResult,
   type PlatformPermissions,
+  type ShortcutFailure,
   type McpCrmTestConnectionPayload,
   type McpCrmSaveConnectionPayload,
   type McpCrmPushPayload,
@@ -44,10 +45,9 @@ import {
   type LicenseActivateResult,
   type LicenseStatusResult,
   type LicenseGateVerdict,
-  type ImportAudioChunk,
   type ImportAudioPickResult,
-  type ImportAudioChunkResult,
-  type ImportAudioProgress
+  type ImportAudioProgress,
+  type ImportJobView
 } from '@shared/ipc'
 import type { ProviderId } from '@shared/providers'
 
@@ -61,6 +61,7 @@ function sub<T>(channel: string, cb: (payload: T) => void): Unsub {
 const api = {
   getSettings: (): Promise<PublicSettings> => ipcRenderer.invoke(IPC.settingsGet),
   getPermissions: (): Promise<PlatformPermissions> => ipcRenderer.invoke(IPC.permissionsGet),
+  getShortcutFailures: (): Promise<ShortcutFailure[]> => ipcRenderer.invoke(IPC.shortcutFailures),
   openPermissionSettings: (kind: 'microphone' | 'screenRecording'): Promise<void> =>
     ipcRenderer.invoke(IPC.permissionsOpenSettings, kind),
   requestPermissionsUpfront: (): Promise<PlatformPermissions> =>
@@ -112,7 +113,8 @@ const api = {
   signIn: (): Promise<SignInResult> => ipcRenderer.invoke(IPC.authSignIn),
   signOut: (): Promise<void> => ipcRenderer.invoke(IPC.authSignOut),
   calendarToday: (tz: string): Promise<CalendarTodayResult> => ipcRenderer.invoke(IPC.calendarToday, tz),
-  parakeetStatus: (): Promise<{ ready: boolean }> => ipcRenderer.invoke(IPC.parakeetStatus),
+  parakeetStatus: (): Promise<{ ready: boolean; addonError: string | null }> =>
+    ipcRenderer.invoke(IPC.parakeetStatus),
   parakeetEnsure: (): Promise<{ ok: boolean; error?: string }> => ipcRenderer.invoke(IPC.parakeetEnsure),
   parakeetFeed: (samples: Float32Array, speaker: string): Promise<string> =>
     ipcRenderer.invoke(IPC.parakeetFeed, { samples, speaker }),
@@ -132,11 +134,13 @@ const api = {
   // Periodic crash-recovery snapshot of an in-progress meeting — fire-and-forget, best-effort.
   saveDraftTranscript: (m: SaveMeeting): Promise<void> => ipcRenderer.invoke(IPC.saveDraftTranscript, m),
   saveNote: (n: SaveNote): Promise<{ path: string }> => ipcRenderer.invoke(IPC.saveNote, n),
-  // Import audio file: pick → read its bytes once → stream ~30s transcribed windows (see main/import-audio.ts).
+  // Import audio file: pick → hand off to the main-owned background job. The overlay never receives raw audio bytes.
   importAudioPick: (): Promise<ImportAudioPickResult> => ipcRenderer.invoke(IPC.importAudioPick),
-  importAudioRead: (path: string): Promise<ArrayBuffer> => ipcRenderer.invoke(IPC.importAudioRead, path),
-  importAudioTranscribe: (chunk: ImportAudioChunk): Promise<ImportAudioChunkResult> =>
-    ipcRenderer.invoke(IPC.importAudioTranscribe, chunk),
+  importAudioStart: (token: string): Promise<ImportJobView> => ipcRenderer.invoke(IPC.importAudioStart, { token }),
+  importJobsList: (): Promise<ImportJobView[]> => ipcRenderer.invoke(IPC.importJobsList),
+  importJobCancel: (jobId: string): Promise<void> => ipcRenderer.invoke(IPC.importJobCancel, { jobId }),
+  importJobResume: (jobId: string): Promise<ImportJobView> => ipcRenderer.invoke(IPC.importJobResume, { jobId }),
+  importJobRemove: (jobId: string): Promise<void> => ipcRenderer.invoke(IPC.importJobRemove, { jobId }),
   onImportAudioProgress: (cb: (d: ImportAudioProgress) => void): Unsub => sub(IPC.importAudioProgress, cb),
   answerFeedback: (f: AnswerFeedback): Promise<void> => ipcRenderer.invoke(IPC.answerFeedback, f),
   readMetrics: (): Promise<EvalMetrics> => ipcRenderer.invoke(IPC.metricsRead),

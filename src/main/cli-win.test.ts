@@ -2,10 +2,13 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { EventEmitter } from 'node:events'
+import { PassThrough } from 'node:stream'
 
 // Shared, hoisted mock for the promisified execFile so resolveBin can be driven without a real shell
-// or a real Windows `where`. Mirrors the pattern in cli.test.ts.
-const h = vi.hoisted(() => ({ execFileImpl: vi.fn() }))
+// or a real Windows `where`. Mirrors the pattern in cli.test.ts. spawnImpl mirrors notebooklm.test.ts's
+// controllable-per-test spawn mock, needed for the installCli Windows-stderr tests below.
+const h = vi.hoisted(() => ({ execFileImpl: vi.fn(), spawnImpl: vi.fn() }))
 
 vi.mock('electron', () => ({
   app: { getPath: () => '/tmp' },
@@ -16,13 +19,7 @@ vi.mock('node:child_process', async () => {
   const { promisify } = await import('node:util')
   const execFile: unknown = vi.fn()
   ;(execFile as Record<symbol, unknown>)[promisify.custom] = h.execFileImpl
-  const spawn = vi.fn(() => ({
-    stdout: { on: vi.fn() },
-    stderr: { on: vi.fn() },
-    on: vi.fn(),
-    kill: vi.fn()
-  }))
-  return { execFile, spawn }
+  return { execFile, spawn: h.spawnImpl }
 })
 
 import {
@@ -32,7 +29,8 @@ import {
   isCmdShim,
   cmdShimSpawn,
   resolveSpawnTarget,
-  INSTALL_PERMISSION_ERROR_RE
+  INSTALL_PERMISSION_ERROR_RE,
+  installCli
 } from './cli'
 
 const REAL_PLATFORM = process.platform
@@ -41,6 +39,17 @@ const REAL_PLATFORM = process.platform
 function setPlatform(p: NodeJS.Platform): void {
   Object.defineProperty(process, 'platform', { value: p, configurable: true })
 }
+
+/** A fake ChildProcess: real Readable streams (so readline's createInterface behaves exactly as it
+ *  does against a real spawn) wrapped in a real EventEmitter. Mirrors notebooklm.test.ts's fakeChild. */
+function fakeChild(): { child: EventEmitter & { stdout: PassThrough; stderr: PassThrough; kill: ReturnType<typeof vi.fn> }; stdout: PassThrough; stderr: PassThrough } {
+  const stdout = new PassThrough()
+  const stderr = new PassThrough()
+  const child = Object.assign(new EventEmitter(), { stdout, stderr, kill: vi.fn() })
+  return { child, stdout, stderr }
+}
+
+const tick = (): Promise<void> => new Promise((r) => setImmediate(r))
 
 describe('parseWhereOutput — Windows `where` stdout parsing', () => {
   it('returns the first line ending in .cmd', () => {
@@ -237,5 +246,32 @@ describe('INSTALL_PERMISSION_ERROR_RE — routes global-install failures to the 
       INSTALL_PERMISSION_ERROR_RE.test('npm error 404 Not Found - GET https://registry.npmjs.org/@foo%2fbar')
     ).toBe(false)
     expect(INSTALL_PERMISSION_ERROR_RE.test('command not found: npm')).toBe(false)
+  })
+})
+
+describe('installCli — Windows npm-not-found detection (cmd.exe phrasing, not the POSIX shell one)', () => {
+  beforeEach(() => {
+    h.execFileImpl.mockReset()
+    h.spawnImpl.mockReset()
+    setPlatform('win32')
+  })
+  afterEach(() => setPlatform(REAL_PLATFORM))
+
+  it('maps cmd.exe\'s "not recognized as an internal" stderr to the friendly npm/Node message', async () => {
+    // resolveBin('claude'): `where` finds nothing and there's no APPDATA fallback hit, so installCli
+    // proceeds to spawn the installer.
+    h.execFileImpl.mockRejectedValue(new Error('where: no matches found'))
+    const { child, stderr } = fakeChild()
+    h.spawnImpl.mockReturnValue(child)
+
+    const resultPromise = installCli('claude-cli', vi.fn())
+    stderr.write("'npm' is not recognized as an internal or external command,\r\n")
+    stderr.write('operable program or batch file.\r\n')
+    await tick()
+    child.emit('close', 1)
+
+    const r = await resultPromise
+    expect(r.ok).toBe(false)
+    expect(r.error).toMatch(/Node\.js \/ npm not found/i)
   })
 })

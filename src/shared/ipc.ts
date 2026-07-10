@@ -70,9 +70,19 @@ export const IPC = {
   saveDraftTranscript: 'transcript:saveDraft',
   saveNote: 'note:save',
   importAudioPick: 'import-audio:pick',
-  importAudioRead: 'import-audio:read',
-  importAudioTranscribe: 'import-audio:transcribe',
+  importAudioStart: 'import-audio:start',
+  importJobsList: 'import-audio:jobs:list',
+  importJobCancel: 'import-audio:job:cancel',
+  importJobResume: 'import-audio:job:resume',
+  importJobRemove: 'import-audio:job:remove',
   importAudioProgress: 'import-audio:progress',
+  // Private channels used only by the sandboxed hidden decoder window. They are never bridged to the
+  // interactive overlay preload.
+  importDecoderChunk: 'import-decoder:chunk',
+  importDecoderComplete: 'import-decoder:complete',
+  importDecoderFailed: 'import-decoder:failed',
+  importDecoderReady: 'import-decoder:ready',
+  importDecoderSourceAck: 'import-decoder:source-ack',
   exportRecapJson: 'recap:export-json',
   pickFolder: 'folder:pick',
   openPath: 'path:open',
@@ -95,6 +105,7 @@ export const IPC = {
   windowQuit: 'window:quit',
   windowMinimize: 'window:minimize',
   hotkey: 'hotkey',
+  shortcutFailures: 'shortcuts:failures',
   permissionsGet: 'permissions:get',
   permissionsOpenSettings: 'permissions:openSettings',
   permissionsRequestUpfront: 'permissions:requestUpfront',
@@ -201,7 +212,9 @@ export const ProfileSchema = z.object({
 export type Profile = z.infer<typeof ProfileSchema>
 
 export const TranscriptLineSchema = z.object({
-  speaker: z.enum(['them', 'you']),
+  // Imported recordings have speech but no diarization. `unknown` prevents the UI and recap prompt from
+  // inventing that every imported sentence was spoken by the operator.
+  speaker: z.enum(['them', 'you', 'unknown']),
   text: z.string(),
   t: z.number()
 })
@@ -249,16 +262,46 @@ export const ImportAudioChunkSchema = z.object({
 })
 export type ImportAudioChunk = z.infer<typeof ImportAudioChunkSchema>
 
-/** Result of import-audio:pick — the picked file's path/name/size/mtime, `cancelled` if the user
- *  dismissed the dialog, or `error` (e.g. over the 500 MB source-file cap). */
+/** Result of import-audio:pick. `token` is an opaque, single-use main-process capability, never a file path. */
 export interface ImportAudioPickResult {
   cancelled?: boolean
   error?: string
-  path?: string
+  token?: string
   name?: string
   sizeBytes?: number
   mtimeMs?: number
 }
+
+export const ImportAudioStartSchema = z.object({ token: z.string().min(20).max(200) })
+export type ImportAudioStart = z.infer<typeof ImportAudioStartSchema>
+
+export type ImportJobState =
+  | 'queued'
+  | 'decoding'
+  | 'transcribing'
+  | 'saving'
+  | 'recapping'
+  | 'done'
+  | 'failed'
+  | 'cancelled'
+
+/** Sanitised job state exposed to the overlay. Source paths remain main-process-only. */
+export interface ImportJobView {
+  jobId: string
+  title: string
+  state: ImportJobState
+  cursor: number
+  totalChunks: number
+  pct: number
+  error?: string
+  recapError?: string
+  file?: string
+  createdAt: number
+  updatedAt: number
+  queuePosition?: number
+}
+
+export const ImportJobIdSchema = z.object({ jobId: z.string().min(1).max(200) })
 
 /** Result of one import-audio:transcribe call. Only `file`/`title`/`lines` are populated on the final
  *  (done) chunk, once the accumulated transcript has actually been saved. */
@@ -273,10 +316,21 @@ export interface ImportAudioChunkResult {
 /** Pushed via webContents.send while a session is transcribing/saving — drives the "Import audio"
  *  button's progress label in RecallView. */
 export interface ImportAudioProgress {
-  sessionId: string
-  pct: number
-  stage: 'transcribing' | 'saving'
+  job: ImportJobView
 }
+
+/** Main validates every one of these payloads again and accepts them only from the dedicated decoder. */
+export const ImportDecoderChunkSchema = z.object({
+  jobId: z.string().min(1).max(200),
+  seq: z.number().int().nonnegative(),
+  totalChunks: z.number().int().positive().max(20_000),
+  samples: z.instanceof(Float32Array).refine((s) => s.length <= IMPORT_AUDIO_MAX_CHUNK_SAMPLES, 'Audio chunk too large.')
+})
+export const ImportDecoderCompleteSchema = z.object({ jobId: z.string().min(1).max(200) })
+export const ImportDecoderFailedSchema = z.object({
+  jobId: z.string().min(1).max(200),
+  error: z.string().min(1).max(800)
+})
 
 /** Payload for brain:setDealOutcome — the human marks a deal open/won/lost (see DealEntitySchema.outcome
  *  in shared/brain.ts; the LLM never sets it). dealSlug carries the deal's display name, the same
@@ -397,14 +451,14 @@ export const BaseSettingsSchema = z.object({
   graphifyEnabled: z.boolean().default(true),
   graphifyAutoRebuild: z.boolean().default(true),
   graphifyBackend: z.enum(['auto', 'claude', 'openai']).default('auto'),
-  // Multilingual. AskToto transcribes any spoken language and assists in the speaker's language live;
+  // Multilingual. Métis transcribes any spoken language and assists in the speaker's language live;
   // the final recap/summary + answers are written in this language ('auto' = match the conversation).
   outputLanguage: z.string().max(40).default('auto'),
   summaryLanguage: z.string().max(40).default('auto'), // recap/summary language ('auto' = follow outputLanguage)
   // Encrypt saved transcripts/notes at rest (OS keychain). On by default: recorded third-party speech
   // usually lands in a OneDrive-synced folder, so plaintext should be the opt-out, not the opt-in. Turn
-  // this off only if something outside AskToto (a separate Dust/knowledge-graph pipeline pointed directly
-  // at the meetings folder) needs to read the raw markdown — AskToto's own recall/search already decrypts
+  // this off only if something outside Métis (a separate Dust/knowledge-graph pipeline pointed directly
+  // at the meetings folder) needs to read the raw markdown — Métis's own recall/search already decrypts
   // transparently either way. See main/transcripts.ts.
   encryptTranscripts: z.boolean().default(true),
   // Auto-delete saved meetings older than N days (GDPR/CCPA storage-limitation control). 0 = off, keep
@@ -430,10 +484,10 @@ export const BaseSettingsSchema = z.object({
   // Fire a native notification 1 minute before each calendar meeting starts (gated; off by default).
   meetingNotifications: z.boolean().default(false),
   temperature: z.number().min(0).max(1),
-  // Hide the AskToto WINDOW from screen capture & sharing (other apps can't see the overlay).
-  // Purely about the window — it never blocks AskToto's own screen capture.
+  // Hide the Métis WINDOW from screen capture & sharing (other apps can't see the overlay).
+  // Purely about the window — it never blocks Métis's own screen capture.
   contentProtection: z.boolean(),
-  // Private View: AskToto itself won't look at (or send) YOUR screen while this is on — gates the
+  // Private View: Métis itself won't look at (or send) YOUR screen while this is on — gates the
   // whole capture pipeline in main. Split from contentProtection on 2026-07-06: one flag carried both
   // promises, and since contentProtection defaults ON, every fresh install had screen-asks dead on
   // arrival ("Couldn't capture your screen") with nothing in the UI explaining why.
@@ -481,7 +535,7 @@ export const BaseSettingsSchema = z.object({
   // here instead so it's checkable in Settings after the fact, never shown live. Persists until the user
   // dismisses it (Settings → Speech) — auto-clearing on the next meeting risks it vanishing unseen.
   asrLastFallbackAt: z.number().nullable().default(null),
-  // On by default: this reminder is the ONLY consent mechanism AskToto has today — it shows the
+  // On by default: this reminder is the ONLY consent mechanism Métis has today — it shows the
   // operator, never the other participants, and is not a substitute for actually telling people
   // they're being recorded. See the Settings copy near this toggle for the honest scope of what it does.
   requireConsentIndicator: z.boolean().default(true),
@@ -584,10 +638,10 @@ export type SettingsPatch = Partial<
 >
 
 // Dust agent sIds. The BASE agent is a user-editable Settings picker (DustSetup) that DEFAULTS to
-// AskToto — an empty value always falls back here, and the picker offers a one-click reset. Spotlight
+// Métis — an empty value always falls back here, and the picker offers a one-click reset. Spotlight
 // Ref stays hard-locked (read-only in Settings); rotating IT without a release: hand-edit
 // userData/managed-config.json with {"providerModelsSpotlightRef":{"dust":"NEW_ID"}}.
-export const DUST_BASE_AGENT_ID = 'vJxYHvTRBT' // Dust agent "AskToto" — default base agent (user-changeable in Settings → AI → Dust); also drafts meeting follow-ups (no separate follow-up agent)
+export const DUST_BASE_AGENT_ID = 'vJxYHvTRBT' // Dust agent "Métis" — default base agent (user-changeable in Settings → AI → Dust); also drafts meeting follow-ups (no separate follow-up agent)
 export const DUST_SPOTLIGHT_REF_AGENT_ID = 'GOr913Zr5V' // Dust agent "Spotlight Ref"
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -612,7 +666,7 @@ export const DEFAULT_SETTINGS: Settings = {
   encryptTranscripts: true,
   transcriptRetentionDays: 0,
   systemPrompt:
-    'You are AskToto, a fast, sharp desktop assistant living in an always-on overlay. ' +
+    'You are Métis, a fast, sharp desktop assistant living in an always-on overlay. ' +
     'Answer concisely and directly in clean markdown. Lead with the answer. Use code blocks ' +
     'with language tags, KaTeX for math ($...$), and tables when they help. No filler.',
   modePrompts: {},
@@ -709,6 +763,16 @@ export type HotkeyAction =
   | 'settings'
   | 'agenda'
 
+// This file is bundled into main (real Node `process`), preload (same), and the sandboxed renderer
+// (no Node globals — falls back to the `navigator.platform` check already used elsewhere for
+// renderer-side platform branching). `typeof` guards are required: referencing a bare undeclared
+// global throws in the renderer, but `typeof x !== 'undefined'` never does.
+function isWindowsPlatform(): boolean {
+  if (typeof process !== 'undefined' && process.platform) return process.platform === 'win32'
+  if (typeof navigator !== 'undefined' && navigator.platform) return navigator.platform.toLowerCase().includes('win')
+  return false
+}
+
 export const DEFAULT_SHORTCUTS: Record<HotkeyAction, string> = {
   ask: 'CommandOrControl+Shift+Return',
   hide: 'CommandOrControl+\\',
@@ -722,21 +786,29 @@ export const DEFAULT_SHORTCUTS: Record<HotkeyAction, string> = {
   explain: '',
   summarize: '',
   'spotlight-ref': '',
-  'scroll-up': 'CommandOrControl+Alt+Up',
-  'scroll-down': 'CommandOrControl+Alt+Down',
-  'scroll-left': 'CommandOrControl+Alt+Left',
-  'scroll-right': 'CommandOrControl+Alt+Right',
+  // Ctrl+Alt+Arrow is the long-standing Intel iGPU control-panel hotkey for rotating the display on
+  // Windows — Windows gets a different modifier set to avoid that collision; mac/Linux are unaffected
+  // and keep Cmd/Ctrl+Alt+Arrow.
+  'scroll-up': isWindowsPlatform() ? 'Alt+Shift+Up' : 'CommandOrControl+Alt+Up',
+  'scroll-down': isWindowsPlatform() ? 'Alt+Shift+Down' : 'CommandOrControl+Alt+Down',
+  'scroll-left': isWindowsPlatform() ? 'Alt+Shift+Left' : 'CommandOrControl+Alt+Left',
+  'scroll-right': isWindowsPlatform() ? 'Alt+Shift+Right' : 'CommandOrControl+Alt+Right',
   settings: '', // no global shortcut by default; opened from bar or tray
   // Agenda is reached from the tray only (the Cluely bar redesign dropped its toolbar button). Kept out
   // of HOTKEY_ACTIONS so it gets no global key / no Settings row, but typed so the tray can trigger it.
   agenda: ''
 }
 
+/** A hotkey main failed to bind (combo already held by another app, or OS-reserved) — IPC.shortcutFailures. */
+export interface ShortcutFailure {
+  action: string
+  accel: string
+}
+
 export type PermissionStatus = 'granted' | 'denied' | 'unknown' | 'not-required'
 export interface PlatformPermissions {
   microphone: PermissionStatus
   screenRecording: PermissionStatus
-  accessibility: PermissionStatus
 }
 
 export interface MeetingSummary {
@@ -791,6 +863,9 @@ export interface DustAgent {
   sId: string
   name: string
   description: string
+  /** Model metadata reported by Dust for a live agent configuration (never a user-supplied model hint). */
+  modelProviderId?: string
+  modelId?: string
 }
 
 /** A single calendar event for today's agenda (read-only, from Microsoft Graph). */

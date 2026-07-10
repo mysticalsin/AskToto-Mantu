@@ -1,0 +1,72 @@
+import { describe, it, expect } from 'vitest'
+import { transcriptToText, recapPersistAction } from './transcript'
+import type { TranscriptLine } from '@shared/ipc'
+
+function line(speaker: 'them' | 'you', text: string, t = 0): TranscriptLine {
+  return { speaker, text, t }
+}
+
+describe('transcriptToText', () => {
+  it('joins mixed them/you lines as "THEM: "/"YOU: " prefixed lines, one per line', () => {
+    const lines: TranscriptLine[] = [
+      line('them', 'Hi, how are you?'),
+      line('you', "I'm good, thanks."),
+      line('them', "Let's get started.")
+    ]
+    expect(transcriptToText(lines)).toBe(
+      'THEM: Hi, how are you?\nYOU: I\'m good, thanks.\nTHEM: Let\'s get started.'
+    )
+  })
+
+  it('renders an empty-text line as a prefix with nothing after the colon', () => {
+    const lines: TranscriptLine[] = [line('you', '')]
+    expect(transcriptToText(lines)).toBe('YOU: ')
+  })
+
+  it('returns an empty string for an empty array', () => {
+    expect(transcriptToText([])).toBe('')
+  })
+
+  it('uses a neutral label for imported recordings whose speakers are not diarized', () => {
+    const lines = [{ speaker: 'unknown', text: 'Question from the recording.', t: 0 }] as TranscriptLine[]
+    expect(transcriptToText(lines)).toBe('SPEAKER: Question from the recording.')
+  })
+})
+
+describe('recapPersistAction', () => {
+  const target = { file: 'meeting.md' }
+
+  it('returns {file, text} once the answer settles with real text and no error', () => {
+    const answer = { text: 'Notes here.', streaming: false, error: null }
+    expect(recapPersistAction(answer, target)).toEqual({ file: 'meeting.md', text: 'Notes here.' })
+  })
+
+  it('returns null while the answer is still streaming, even with text already buffered', () => {
+    const answer = { text: 'partial notes', streaming: true, error: null }
+    expect(recapPersistAction(answer, target)).toBeNull()
+  })
+
+  it('returns null when the answer settled with an error (recap stays empty)', () => {
+    const answer = { text: '', streaming: false, error: 'No provider configured.' }
+    expect(recapPersistAction(answer, target)).toBeNull()
+  })
+
+  it('returns null when the answer settled with an error even if some text is present', () => {
+    const answer = { text: 'partial', streaming: false, error: 'boom' }
+    expect(recapPersistAction(answer, target)).toBeNull()
+  })
+
+  it('returns null when there is no answer at all', () => {
+    expect(recapPersistAction(null, target)).toBeNull()
+  })
+
+  it('returns null when there is no target, even with a settled successful answer', () => {
+    const answer = { text: 'Notes here.', streaming: false, error: null }
+    expect(recapPersistAction(answer, null)).toBeNull()
+  })
+
+  it('returns null when the answer settled successfully but with empty text', () => {
+    const answer = { text: '', streaming: false, error: null }
+    expect(recapPersistAction(answer, target)).toBeNull()
+  })
+})

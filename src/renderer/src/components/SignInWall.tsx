@@ -61,7 +61,7 @@ export function SignInWall({
         <MantuLogo size={148} />
         <div className="flex flex-col gap-2">
           <div className="font-ui text-[19px] font-semibold tracking-tight text-[color:var(--cl-foreground)]">
-            Sign in to AskToto
+            Sign in to Métis
           </div>
           <p className="max-w-[420px] text-[13px] leading-relaxed text-[color:var(--cl-muted-foreground)]">
             Your real-time meeting copilot. Sign in with your{' '}

@@ -9,21 +9,6 @@ import { startBackfill, brainBackfillProgress, enqueueIngest } from './ingest'
 
 vi.mock('electron')
 
-// ingest.ts also scans a SECOND, hardcoded source — Tony's real confidential-vault folder outside any
-// test tmpdir (VAULT_TRANSCRIPTS in ingest.ts). Left un-stubbed, startBackfill() would pick up whatever
-// real transcripts happen to exist there on this machine, making "queued" counts nondeterministic and,
-// worse, touching real user data from a test. existsSync is mocked (via importOriginal — ESM module
-// namespaces can't be vi.spyOn'd directly) so ONLY that one hardcoded path is hidden; every other path
-// (this test's own tmpdirs) still resolves for real.
-const VAULT_MARKER = 'AI Second Brain/Meetings/Confidential'
-vi.mock('node:fs', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('node:fs')>()
-  return {
-    ...actual,
-    existsSync: (p: unknown) => (String(p).includes(VAULT_MARKER) ? false : actual.existsSync(p as never))
-  }
-})
-
 // Every completion resolves instantly with an empty-but-schema-valid extraction (every
 // MeetingExtractionSchema field has a zod .default()) — the merge/index-write path runs for real,
 // only the network call is faked, matching the ROOT CAUSE under test: queue/progress bookkeeping

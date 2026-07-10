@@ -1,7 +1,7 @@
 import { app } from 'electron'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
-import { readFileSync, existsSync, statSync, rmSync } from 'node:fs'
+import { readFileSync, readdirSync, existsSync, statSync, rmSync } from 'node:fs'
 import { join, basename, delimiter } from 'node:path'
 import { homedir } from 'node:os'
 import { getSettings, getApiKey, hasApiKey } from './store'
@@ -11,7 +11,7 @@ import type { GraphStatus, GraphRelated } from '@shared/ipc'
 const exec = promisify(execFile)
 
 /**
- * Bridge to the external `graphify` knowledge-graph tool. AskToto spawns resources/graphify_runner.py
+ * Bridge to the external `graphify` knowledge-graph tool. Métis spawns resources/graphify_runner.py
  * (with the interpreter that can import graphify) to turn the markdown notes folder into a graph
  * (graph.json + graph.html) under userData/graph. The graph is then surfaced in-app: "Open graph"
  * launches graph.html, and "Related notes" reads graph.json neighbours.
@@ -26,9 +26,29 @@ const IS_WIN = process.platform === 'win32'
 /** `where` on Windows, `which` on macOS/Linux. */
 const locateCmd = (): string => (IS_WIN ? 'where' : 'which')
 
+/** The python.org per-user Windows installer never places python.exe directly in
+ *  %LOCALAPPDATA%\Programs\Python — only in a version-numbered subfolder underneath it (e.g.
+ *  ...\Python\Python312\python.exe). Returns that newest subfolder plus its Scripts dir (where
+ *  pip-installed console scripts land), or [] if the base dir doesn't exist / has no version dirs. */
+// exported for unit tests (graphify.test.ts) — the newest-version-dir selection is a pure function
+export function windowsPythonDirs(): string[] {
+  const base = join(process.env.LOCALAPPDATA || join(homedir(), 'AppData', 'Local'), 'Programs', 'Python')
+  try {
+    const newest = readdirSync(base)
+      .filter((d) => /^Python\d+$/i.test(d))
+      .sort()
+      .reverse()[0]
+    if (!newest) return []
+    const dir = join(base, newest)
+    return [dir, join(dir, 'Scripts')]
+  } catch {
+    return []
+  }
+}
+
 const EXTRA_BINS = IS_WIN
   ? [
-      join(process.env.LOCALAPPDATA || join(homedir(), 'AppData', 'Local'), 'Programs', 'Python'),
+      ...windowsPythonDirs(),
       join(process.env.APPDATA || join(homedir(), 'AppData', 'Roaming'), 'npm'),
       join(homedir(), '.local', 'bin')
     ]
@@ -48,6 +68,15 @@ const spawnEnv = (extra: Record<string, string> = {}): NodeJS.ProcessEnv => ({
   PATH: augmentedPath(),
   ...extra
 })
+/** exec() options merger: always sets windowsHide (a console-subsystem child — `python`, `where`,
+ *  `uv` — would otherwise flash a console window on Windows on every status poll/rebuild) alongside
+ *  the PATH-augmented env from spawnEnv(). */
+function execOpts<T extends Record<string, unknown>>(
+  opts: T,
+  envExtra: Record<string, string> = {}
+): T & { env: NodeJS.ProcessEnv; windowsHide: true } {
+  return { ...opts, env: spawnEnv(envExtra), windowsHide: true }
+}
 
 function runnerPath(): string {
   // Packaged: extraResources copies it next to process.resourcesPath. Dev: <projectRoot>/resources.
@@ -74,7 +103,7 @@ let cachedPython: string | undefined
 
 async function canImport(py: string): Promise<boolean> {
   try {
-    await exec(py, ['-c', 'import graphify'], { env: spawnEnv(), timeout: 15000 })
+    await exec(py, ['-c', 'import graphify'], execOpts({ timeout: 15000 }))
     return true
   } catch {
     return false
@@ -87,7 +116,7 @@ async function detectPython(): Promise<string | null> {
   //    Windows uses a .exe shim with no shebang, so skip straight to interpreter probing there.
   if (!IS_WIN) {
     for (const probe of [
-      () => exec('which', ['graphify'], { env: spawnEnv() }).then((r) => r.stdout.trim().split('\n')[0]),
+      () => exec('which', ['graphify'], execOpts({})).then((r) => r.stdout.trim().split('\n')[0]),
       async () => {
         const direct = join(homedir(), '.local', 'bin', 'graphify')
         return existsSync(direct) ? direct : ''
@@ -107,9 +136,7 @@ async function detectPython(): Promise<string | null> {
   // 2. uv tool interpreter (cross-platform).
   try {
     const py = (
-      await exec('uv', ['tool', 'run', 'graphifyy', 'python', '-c', 'import sys;print(sys.executable)'], {
-        env: spawnEnv()
-      })
+      await exec('uv', ['tool', 'run', 'graphifyy', 'python', '-c', 'import sys;print(sys.executable)'], execOpts({}))
     ).stdout.trim()
     if (py && (await canImport(py))) return (cachedPython = py)
   } catch {
@@ -135,7 +162,7 @@ async function hasClaudeCli(): Promise<boolean> {
     if (p && existsSync(p)) return true
   }
   try {
-    await exec(locateCmd(), ['claude'], { env: spawnEnv() })
+    await exec(locateCmd(), ['claude'], execOpts({}))
     return true
   } catch {
     return false
@@ -226,11 +253,14 @@ export async function buildGraph(incremental = false): Promise<GraphStatus> {
         ...(modelArg ? ['--model', modelArg] : [])
       ]
       if (incremental) args.push('--incremental')
-      const { stdout } = await exec(python, [runnerPath(), ...args], {
-        env: spawnEnv(picked.apiKey ? { GRAPHIFY_API_KEY: picked.apiKey } : {}),
-        timeout: 10 * 60_000,
-        maxBuffer: 16 * 1024 * 1024
-      })
+      const { stdout } = await exec(
+        python,
+        [runnerPath(), ...args],
+        execOpts(
+          { timeout: 10 * 60_000, maxBuffer: 16 * 1024 * 1024 },
+          picked.apiKey ? { GRAPHIFY_API_KEY: picked.apiKey } : {}
+        )
+      )
       const line = stdout.trim().split('\n').filter(Boolean).pop() || '{}'
       const res = JSON.parse(line) as { ok: boolean; error?: string }
       if (!res.ok) lastError = res.error || 'Graph build failed.'
@@ -283,7 +313,7 @@ interface GLink {
 /**
  * For a given note file, surface (a) its topics — concept nodes it contains plus concepts it links to —
  * and (b) related notes — other note files connected through those shared concepts (1- or 2-hop) or by a
- * direct edge. This is what makes the connections between notes legible inside AskToto.
+ * direct edge. This is what makes the connections between notes legible inside Métis.
  *
  * Pure over a parsed graph so it's unit-testable without Electron; `relatedNotes` wraps it with file IO.
  */

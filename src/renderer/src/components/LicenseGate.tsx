@@ -102,7 +102,7 @@ export function LicenseGate({
 
       <div className="flex flex-col gap-2">
         <div className="font-ui text-[20px] font-semibold tracking-tight text-[color:var(--color-ink)]">
-          This copy of AskToto needs an active license
+          This copy of Métis needs an active license
         </div>
         {reason === 'expired_grace' ? (
           <p className="mx-auto max-w-[420px] text-[13px] leading-relaxed text-[color:var(--color-ink-2)]">

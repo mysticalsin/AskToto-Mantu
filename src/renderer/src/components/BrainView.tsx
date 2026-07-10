@@ -506,7 +506,7 @@ export function BrainView({ onBack }: { onBack: () => void }): JSX.Element {
             Build your intelligence from {meetings.length > 0 ? `${meetings.length} saved meeting${meetings.length === 1 ? '' : 's'}` : 'your meetings'}
           </div>
           <div className="max-w-[380px] text-[12px] leading-snug text-[color:var(--color-ink-3)]">
-            AskToto extracts people, accounts, deals, and win/loss signals from every saved transcript into a
+            Métis extracts people, accounts, deals, and win/loss signals from every saved transcript into a
             knowledge store your Dust agents can read. New meetings are ingested automatically.
           </div>
           <button

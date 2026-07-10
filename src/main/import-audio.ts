@@ -1,51 +1,48 @@
 /**
- * Import audio file → full on-device transcription → saved meeting.
+ * Import audio file → single-use file picker capability.
  *
- * The renderer does the work main can't: Chromium's AudioContext decodes every target format
- * (wav/mp3/m4a/aac/ogg/flac) and resamples/mixes down to 16kHz mono — main has no ffmpeg and never
- * will (see src/renderer/src/lib/import-audio.ts). Main's job is narrow: hand back the picked file's
- * bytes exactly once (guarded so only the renderer's own just-picked path can be read back — see
- * pickAudioFile/readPickedAudioFile), then accumulate + transcribe the renderer's ~30s Float32 windows
- * as they arrive and save the result through the same path a live meeting uses.
- *
- * Only the recognized TEXT is retained between chunks (see ImportSession) — the raw PCM for a chunk is
- * used once inside parakeetTranscribe and is then eligible for GC — so a multi-hour import never holds
- * more than one ~30s window of audio in memory at a time, however long the source recording is.
+ * The renderer only needs a picked source's identity (path/name/size/mtime), never its raw bytes —
+ * decoding (ffmpeg-decoder), transcription, checkpointing, saving, and recap generation are all owned
+ * by the main-process import job queue (see ./import-jobs.ts) once consumePickedAudio hands it a
+ * verified ImportJobSource. This module's only remaining job is the native file picker and the
+ * single-use capability token that bridges pickAudioFile → import-jobs, plus the pure filename
+ * humanizer import-jobs' own title derivation is based on.
  */
-import { dialog, app, type BrowserWindow } from 'electron'
-import { statSync, readFileSync } from 'node:fs'
+import { dialog, type BrowserWindow } from 'electron'
+import { statSync } from 'node:fs'
 import { basename } from 'node:path'
-import type {
-  Settings,
-  SaveMeeting,
-  TranscriptLine,
-  ImportAudioChunk,
-  ImportAudioPickResult,
-  ImportAudioChunkResult
-} from '@shared/ipc'
-import { ensureParakeetModel, parakeetTranscribe } from './parakeet'
-import { saveMeeting } from './transcripts'
-import { enqueueIngest } from './brain/ingest'
-import { auditLog } from './logger'
+import { randomBytes } from 'node:crypto'
+import type { ImportAudioPickResult } from '@shared/ipc'
+import type { ImportJobSource } from './import-jobs'
 
-const AUDIO_EXTENSIONS = ['wav', 'mp3', 'm4a', 'aac', 'ogg', 'flac']
+// Chromium's AudioContext does the actual capability check. Keep the picker broad enough for common
+// interview exports (including AIFF, WebM/Opus, WMA, MP4, and 3GP) instead of silently excluding them.
+const AUDIO_EXTENSIONS = ['wav', 'mp3', 'm4a', 'aac', 'ogg', 'flac', 'aiff', 'aif', 'webm', 'opus', 'wma', 'amr', '3gp', 'mp4']
 const MAX_SOURCE_BYTES = 500 * 1024 * 1024 // spec: cap source files at 500 MB, with a clear error
-const CHUNK_SEC = 30 // must match the renderer's own chunk duration (src/renderer/src/lib/import-audio.ts)
 
-// ── File picker (renderer steps 1-2) ─────────────────────────────────────────
+// ── File picker ───────────────────────────────────────────────────────────────
 
-// Security guard: importAudioRead may only ever read back the EXACT path this module just handed out
-// via pickAudioFile — never a renderer-supplied path (path traversal). Cleared the instant it's
-// consumed, so replaying the same read call a second time is refused too.
-let pendingReadPath: string | null = null
+const pendingPicks = new Map<string, ImportJobSource & { pickedAt: number }>()
+const PICK_TOKEN_TTL_MS = 5 * 60_000
+
+function clearExpiredPicks(now = Date.now()): void {
+  for (const [token, pick] of pendingPicks) {
+    if (now - pick.pickedAt > PICK_TOKEN_TTL_MS) pendingPicks.delete(token)
+  }
+}
 
 /** Open a native file picker filtered to audio extensions. Stats the result so the 500 MB source cap
  *  and the mtime the saved meeting will use as startedAt are both known before any bytes are read. */
 export async function pickAudioFile(win: BrowserWindow | null): Promise<ImportAudioPickResult> {
   const opts: Electron.OpenDialogOptions = {
     properties: ['openFile'],
-    filters: [{ name: 'Audio', extensions: AUDIO_EXTENSIONS }],
-    message: 'Choose an audio recording to import'
+    filters: [
+      { name: 'Common audio recordings', extensions: AUDIO_EXTENSIONS },
+      // FFmpeg performs the authoritative format check. Keep an all-files path for recorder exports
+      // with uncommon extensions rather than forcing the user to rename a valid interview recording.
+      { name: 'All files', extensions: ['*'] }
+    ],
+    message: 'Choose an audio or video recording to import'
   }
   // Anchor to `win` when it exists (same LSUIElement-accessory-app reasoning as pickFolder/recapPdf in
   // index.ts) so the dialog actually surfaces instead of silently hanging with nothing to attach to.
@@ -61,19 +58,32 @@ export async function pickAudioFile(win: BrowserWindow | null): Promise<ImportAu
   if (stat.size > MAX_SOURCE_BYTES) {
     return { error: 'That file is larger than 500 MB. Choose a smaller recording.' }
   }
-  pendingReadPath = path
-  return { path, name: basename(path), sizeBytes: stat.size, mtimeMs: stat.mtimeMs }
+  // The interactive renderer receives an opaque, single-use capability instead of a filesystem path.
+  // This lets the main-owned job queue accept several pending imports safely without exposing arbitrary
+  // file reads to the renderer.
+  clearExpiredPicks()
+  const token = randomBytes(24).toString('base64url')
+  const source = { path, name: basename(path), sizeBytes: stat.size, mtimeMs: stat.mtimeMs, pickedAt: Date.now() }
+  pendingPicks.set(token, source)
+  return { token, name: source.name, sizeBytes: source.sizeBytes, mtimeMs: source.mtimeMs }
 }
 
-/** Read back the exact file pickAudioFile just picked. Throws on any other path (defense against a
- *  compromised or buggy renderer supplying its own path). One-time: the guard clears on use. */
-export function readPickedAudioFile(path: string): ArrayBuffer {
-  if (!path || path !== pendingReadPath) {
-    throw new Error('That file was not the one just picked. Choose it again.')
+/** Consume a single-use pick capability and verify the source did not change after selection. */
+export function consumePickedAudio(token: string): ImportJobSource {
+  clearExpiredPicks()
+  const pick = pendingPicks.get(token)
+  pendingPicks.delete(token)
+  if (!pick) throw new Error('That audio selection expired. Choose the recording again.')
+  let stat: ReturnType<typeof statSync>
+  try {
+    stat = statSync(pick.path)
+  } catch {
+    throw new Error('The selected recording is no longer available.')
   }
-  pendingReadPath = null
-  const buf = readFileSync(path)
-  return buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength)
+  if (stat.size !== pick.sizeBytes || stat.mtimeMs !== pick.mtimeMs) {
+    throw new Error('The selected recording changed after it was chosen. Choose it again.')
+  }
+  return { path: pick.path, name: pick.name, sizeBytes: pick.sizeBytes, mtimeMs: pick.mtimeMs }
 }
 
 // ── Pure helpers (testable without Electron) ─────────────────────────────────
@@ -90,102 +100,4 @@ export function humanizeFilename(filename: string): string {
     .split(' ')
     .map((w) => (w ? w[0].toUpperCase() + w.slice(1) : w))
     .join(' ')
-}
-
-/** One transcribed chunk's text → a TranscriptLine, timestamped by its OFFSET within the audio (chunk
- *  index * chunk duration), not wall-clock time — an imported file has no live clock to anchor to. */
-export function chunkToLine(text: string, seq: number, startedAt: number): TranscriptLine {
-  return { speaker: 'you', text, t: startedAt + seq * CHUNK_SEC * 1000 }
-}
-
-/** 0-100 progress from "chunk N of M just started". Clamped defensively even though seq/totalChunks
- *  are already bounded by ImportAudioChunkSchema by the time this runs. */
-export function chunkProgressPct(seq: number, totalChunks: number): number {
-  if (totalChunks <= 0) return 0
-  return Math.min(100, Math.max(0, Math.round(((seq + 1) / totalChunks) * 100)))
-}
-
-// ── Session accumulation + save (renderer steps 3-4) ─────────────────────────
-
-interface ImportSession {
-  sessionId: string
-  startedAt: number
-  title: string
-  lines: TranscriptLine[]
-}
-
-// Cap: exactly one import runs at a time. A chunk for a sessionId other than the one currently
-// accumulating REPLACES it outright, discarding whatever the old one had transcribed so far — this is
-// what "abandoning a session frees its buffers" means in practice (see abandonImportSession below).
-let activeSession: ImportSession | null = null
-
-/** Free whatever is accumulating — a new session starting, an unrecoverable error, or the app quitting.
- *  Safe to call when nothing is active. */
-export function abandonImportSession(): void {
-  activeSession = null
-}
-
-let quitHooked = false
-function ensureQuitHook(): void {
-  if (quitHooked) return
-  quitHooked = true
-  app.on('will-quit', abandonImportSession)
-}
-
-/** Accumulate + transcribe one chunk; on the final (done) chunk, save the whole thing as a normal
- *  meeting and queue it for brain ingest. `onProgress` is called synchronously before the (possibly
- *  slow) transcription starts, and again just before the save, so the caller can push live progress. */
-export async function handleImportChunk(
-  settings: Settings,
-  chunk: ImportAudioChunk,
-  onProgress: (pct: number, stage: 'transcribing' | 'saving') => void
-): Promise<ImportAudioChunkResult> {
-  ensureQuitHook()
-
-  if (!activeSession || activeSession.sessionId !== chunk.sessionId) {
-    activeSession = {
-      sessionId: chunk.sessionId,
-      startedAt: Number.isFinite(chunk.mtimeMs) ? chunk.mtimeMs : Date.now(),
-      title: humanizeFilename(chunk.name || 'Imported audio'),
-      lines: []
-    }
-  }
-  const session = activeSession
-
-  onProgress(chunkProgressPct(chunk.seq, chunk.totalChunks), 'transcribing')
-
-  try {
-    if (chunk.samples.length > 0) {
-      await ensureParakeetModel()
-      const text = await parakeetTranscribe(chunk.samples)
-      if (text.trim()) session.lines.push(chunkToLine(text, chunk.seq, session.startedAt))
-    }
-  } catch (e) {
-    abandonImportSession()
-    return { ok: false, error: e instanceof Error ? e.message : String(e) }
-  }
-
-  if (!chunk.done) return { ok: true }
-
-  onProgress(100, 'saving')
-  // Chunks normally arrive (and are transcribed) strictly in order, but sort defensively so a saved
-  // transcript is always chronological even if that ever stops being true.
-  const sortedLines = [...session.lines].sort((a, b) => a.t - b.t)
-  try {
-    const meeting: SaveMeeting = {
-      title: session.title,
-      mode: 'meeting',
-      startedAt: session.startedAt,
-      lines: sortedLines,
-      recap: ''
-    }
-    const file = await saveMeeting(settings, meeting)
-    auditLog('transcript.imported', { lines: sortedLines.length, encrypted: !!settings.encryptTranscripts })
-    enqueueIngest(file) // Mantu Intelligence brain — background extraction; never blocks the save
-    return { ok: true, file, title: session.title, lines: sortedLines }
-  } catch (e) {
-    return { ok: false, error: e instanceof Error ? e.message : String(e) }
-  } finally {
-    abandonImportSession()
-  }
 }

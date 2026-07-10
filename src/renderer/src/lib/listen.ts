@@ -4,6 +4,7 @@ import { isNonSpeechLine } from '@shared/transcript-filter'
 import { WHISPER_WORKLET_SRC } from './whisper-worklet-src'
 import { isWindows } from './keys'
 import { compileEntityCasingCandidates, applyEntityCasingCompiled } from './entity-casing'
+import { transcriptToText } from './transcript'
 
 const SR = 16000
 
@@ -116,6 +117,11 @@ export interface ListenApi {
   lines: TranscriptLine[]
   error: string | null
   loadingPct: number | null // model-download progress (0-100) on first run, else null
+  // True once the active worker reports that 'best' quality was requested but did NOT get the WebGPU/
+  // large model (no bundled model, no WebGPU adapter, or a WebGPU load failure) — every packaged build
+  // hits this, since the large model is deliberately excluded from release resources. Lets a caller show
+  // an honest "reduced" state instead of the toggle silently always running whisper-base.
+  qualityDegraded: boolean
   start: (source: AudioSource, quality?: 'best' | 'fast', engine?: 'whisper' | 'parakeet') => Promise<void>
   stop: () => void
   /** Suspend capture without ending the meeting — the transcript, worker, and (on macOS) the fragile
@@ -170,7 +176,8 @@ export function useListen(
     ready: false,
     loading: false,
     error: null as string | null,
-    loadingPct: null as number | null
+    loadingPct: null as number | null,
+    qualityDegraded: false
   })
   const [lines, setLines] = useState<TranscriptLine[]>([])
 
@@ -322,7 +329,14 @@ export function useListen(
     if (workerRef.current) return workerRef.current
     const w = new Worker(new URL('./whisper.worker.ts', import.meta.url), { type: 'module' })
     w.onmessage = (e: MessageEvent): void => {
-      const m = e.data as { type: string; text?: string; speaker?: Speaker; message?: string; engine?: string }
+      const m = e.data as {
+        type: string
+        text?: string
+        speaker?: Speaker
+        message?: string
+        engine?: string
+        qualityDegraded?: boolean
+      }
       if (m.type === 'log') {
         console.warn('[whisper]', m.message)
       } else if (m.type === 'progress') {
@@ -337,6 +351,7 @@ export function useListen(
           ready: true,
           loading: false,
           loadingPct: null,
+          qualityDegraded: !!m.qualityDegraded,
           error: s.error === OFFLINE_MSG || s.error === RECONNECTING_MSG ? null : s.error
         }))
         pump() // drain windows captured while the model loaded
@@ -506,7 +521,13 @@ export function useListen(
       const worklet = new AudioWorkletNode(ctx, 'whisper-worklet', {
         numberOfInputs: 1,
         numberOfOutputs: 1,
-        channelCount: 1
+        channelCount: 1,
+        // Default channelCountMode is 'max', which IGNORES channelCount and passes through however many
+        // channels the upstream carries — 'them' (system loopback) is commonly stereo. 'explicit' +
+        // 'speakers' makes the graph itself downmix L+R to mono before process() runs, instead of the
+        // worklet silently reading only input[0] and dropping the right channel.
+        channelCountMode: 'explicit',
+        channelInterpretation: 'speakers'
       })
       // 'them' (system loopback): un-AGC'd call audio is typically 2–4× quieter than mic input and
       // often never crosses the fixed VAD ON/EMIT_RMS thresholds. A GainNode lifts it into the
@@ -633,7 +654,18 @@ export function useListen(
       await window.toto.armAudio(true)
       let sys: MediaStream
       try {
-        sys = await navigator.mediaDevices.getDisplayMedia({ video: { frameRate: 1 }, audio: true })
+        if (isWindows) {
+          // Windows loopback audio doesn't need a bound video stream the way macOS's ScreenCaptureKit
+          // binding does — try audio-only first so a genuine screen source is never grabbed (and no
+          // OS/EDR screen-recording indicator fires) for what the user only intended as system audio.
+          try {
+            sys = await navigator.mediaDevices.getDisplayMedia({ audio: true })
+          } catch {
+            sys = await navigator.mediaDevices.getDisplayMedia({ video: { frameRate: 1 }, audio: true })
+          }
+        } else {
+          sys = await navigator.mediaDevices.getDisplayMedia({ video: { frameRate: 1 }, audio: true })
+        }
       } finally {
         await window.toto.armAudio(false)
       }
@@ -677,7 +709,7 @@ export function useListen(
   // never opened (permission wasn't granted at start, so the user is on the mic-only fallback), poll for
   // the permission flipping to 'granted' and auto-resume the them channel IN PLACE — no destructive
   // "Toggle Listen" restart. This is the "set up automatically" behaviour: after the one unavoidable macOS
-  // Settings toggle, AskToto picks up system audio on its own. Only runs while listening + system was
+  // Settings toggle, Métis picks up system audio on its own. Only runs while listening + system was
   // requested; the getPermissions poll is skipped entirely once 'them' is live.
   useEffect(() => {
     if (!state.listening || !wantsSystemRef.current) return
@@ -831,17 +863,29 @@ export function useListen(
             await window.toto.armAudio(true) // arm the loopback handler only for this request
             let sys: MediaStream
             try {
-              // macOS: system-audio loopback only arrives inside a ScreenCaptureKit screen stream —
-              // getDisplayMedia({ audio: true }) alone fails with "Error starting capture".  We
-              // request a minimal 1fps video track to start the SCKit session.
-              //
-              // IMPORTANT: do NOT call t.stop() on the video track here.  On macOS, the video and
-              // audio loopback share a single ScreenCaptureKit SCStream session.  Stopping the video
-              // track before the audio worklet is connected can terminate that SCStream, leaving the
-              // audio track in readyState='ended' — alive in getAudioTracks() but producing no PCM.
-              // openChannel() stores the full stream (video + audio); closeChannel() calls t.stop()
-              // on every track when Listen ends, releasing the recording indicator cleanly then.
-              sys = await navigator.mediaDevices.getDisplayMedia({ video: { frameRate: 1 }, audio: true })
+              if (isWindows) {
+                // Windows loopback audio doesn't need a bound video stream — try audio-only first so a
+                // genuine screen source is never grabbed (and no OS/EDR screen-recording indicator fires)
+                // for what the user only intended as system-audio capture. Fall back to the video-bound
+                // request below if this Electron/Chromium build still requires a paired video track.
+                try {
+                  sys = await navigator.mediaDevices.getDisplayMedia({ audio: true })
+                } catch {
+                  sys = await navigator.mediaDevices.getDisplayMedia({ video: { frameRate: 1 }, audio: true })
+                }
+              } else {
+                // macOS: system-audio loopback only arrives inside a ScreenCaptureKit screen stream —
+                // getDisplayMedia({ audio: true }) alone fails with "Error starting capture".  We
+                // request a minimal 1fps video track to start the SCKit session.
+                //
+                // IMPORTANT: do NOT call t.stop() on the video track here.  On macOS, the video and
+                // audio loopback share a single ScreenCaptureKit SCStream session.  Stopping the video
+                // track before the audio worklet is connected can terminate that SCStream, leaving the
+                // audio track in readyState='ended' — alive in getAudioTracks() but producing no PCM.
+                // openChannel() stores the full stream (video + audio); closeChannel() calls t.stop()
+                // on every track when Listen ends, releasing the recording indicator cleanly then.
+                sys = await navigator.mediaDevices.getDisplayMedia({ video: { frameRate: 1 }, audio: true })
+              }
             } finally {
               await window.toto.armAudio(false)
             }
@@ -900,7 +944,7 @@ export function useListen(
                 : "Couldn't capture system audio. Grant Screen Recording in System Settings, or switch Listen to your microphone in Settings → Audio."
           } else {
             msg = isWindows
-              ? 'Could not start the microphone. Check that Windows microphone access is allowed for AskToto and that a mic is connected.'
+              ? 'Could not start the microphone. Check that Windows microphone access is allowed for Métis and that a mic is connected.'
               : "Couldn't start the microphone. Check Microphone access in System Settings → Privacy & Security → Microphone."
           }
           setState((s) => ({ ...s, error: msg, listening: false, loading: false }))
@@ -1108,9 +1152,7 @@ export function useListen(
   }, [])
 
   const text = useCallback((): string => {
-    return linesRef.current
-      .map((l) => `${l.speaker === 'them' ? 'THEM' : 'YOU'}: ${l.text}`)
-      .join('\n')
+    return transcriptToText(linesRef.current)
   }, [])
 
   useEffect(() => {

@@ -1,5 +1,5 @@
 ---
-project: AskToto
+project: Métis
 type: design-system-contract
 basis: reverse-engineered Cluely v2.1.19 (see DESIGN-SPEC.md)
 colors:
@@ -12,7 +12,7 @@ colors:
   text-primary: "rgba(255,255,255,0.95)"
   text-secondary: "rgba(255,255,255,0.55)"
   text-muted: "rgba(255,255,255,0.38)"
-  accent: "#7C8CF8"                 # AskToto single accent (indigo) — NOT Cluely's
+  accent: "#7C8CF8"                 # Métis single accent (indigo) — NOT Cluely's
   accent-soft: "rgba(124,140,248,0.16)"
   danger: "#F0717A"
   ok: "#83C092"
@@ -35,12 +35,12 @@ motion:
   reduced-motion: respected
 ---
 
-# AskToto Design Contract
+# Métis Design Contract
 
 ## Surfaces (the ONLY visible elements — page is transparent)
 1. **Pill bar** — centered, docked near top of screen. Height ~38–44px. `radius.pill`.
    Glass fill + `glass-border` hairline + `blur.bar` + `elevation.bar`. Contents L→R:
-   AskToto glasses mark · "Ask anything" input (grows) · **Listen** toggle · **Capture** btn ·
+   Métis constellation mark · "Ask anything" input (grows) · **Listen** toggle · **Capture** btn ·
    timer (when listening) · Settings gear · Hide (chevron). Buttons are `radius.pill` ghost
    pills, hover → `glass-border-soft` fill, active → `accent-soft`.
 2. **Answer / Transcript panel** — drops below the bar, width **690px** (matches Cluely),
@@ -62,5 +62,5 @@ motion:
   no drop-shadow on text, no 6-line text wraps. Match Cluely's restraint.
 
 ## Brand mark
-AskToto = minimalist incognito-glasses glyph (own SVG), single-stroke, `text-primary`.
-NOT Cluely's logo. Wordmark "AskToto" in Geist medium, tracking-tight.
+Métis = five-star constellation-M glyph (own SVG), dots + thin connectors, `text-primary`.
+NOT Cluely's logo. Wordmark "Métis" in Geist medium, tracking-tight.

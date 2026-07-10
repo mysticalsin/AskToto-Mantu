@@ -11,7 +11,7 @@ import { clearApiKey, setSettings } from './store'
 const exec = promisify(execFile)
 
 /**
- * Read the local Dust CLI session so AskToto can connect to Dust without the user copy-pasting a key.
+ * Read the local Dust CLI session so Métis can connect to Dust without the user copy-pasting a key.
  *
  * The official Dust CLI (`@dust-tt/dust-cli`, command `dust login`) stores its session in the OS
  * keychain via keytar under service `dust-cli`, accounts: `access_token`, `workspace_sid`, `region`.
@@ -32,7 +32,19 @@ function service(): string {
   return process.env.DUST_CLI_KEYCHAIN_SERVICE || 'dust-cli'
 }
 
-async function keychainGet(account: string): Promise<string | null> {
+interface KeychainRead {
+  value: string | null
+  accessDenied: boolean
+}
+
+function keychainAccessDenied(error: unknown): boolean {
+  const e = error as { stderr?: string; message?: string }
+  return /user interaction is not allowed|authorization.*denied|errsec(authfailed|interactionnotallowed)|\b-2529[13]\b/i.test(
+    `${e?.stderr || ''}\n${e?.message || ''}`
+  )
+}
+
+async function keychainGet(account: string): Promise<KeychainRead> {
   try {
     const { stdout } = await exec('security', [
       'find-generic-password',
@@ -43,10 +55,9 @@ async function keychainGet(account: string): Promise<string | null> {
       '-w'
     ])
     const v = stdout.trim()
-    return v || null
-  } catch {
-    // Item not present, or the user denied the keychain prompt.
-    return null
+    return { value: v || null, accessDenied: false }
+  } catch (error) {
+    return { value: null, accessDenied: keychainAccessDenied(error) }
   }
 }
 
@@ -65,19 +76,31 @@ export async function importDustCliSession(): Promise<DustCliSession> {
       error: 'On Windows, paste your Dust API key or workspace link instead — Settings → AI → Dust.'
     }
   }
-  const [token, workspaceId, region] = await Promise.all([
-    keychainGet(ACCESS_TOKEN),
-    keychainGet(WORKSPACE),
-    keychainGet(REGION)
-  ])
-  if (!token || !workspaceId) {
+  // Read sequentially: a macOS permission dialog is per lookup, and parallel `security` calls can
+  // stack prompts or make a single denial look like a missing Dust CLI session.
+  const token = await keychainGet(ACCESS_TOKEN)
+  if (token.accessDenied) {
+    return { ok: false, error: 'Allow Métis to access your Dust CLI session in Keychain, then try again.' }
+  }
+  if (!token.value) {
     return {
       ok: false,
       error:
-        'No Dust CLI session found. Run `npm i -g @dust-tt/dust-cli && dust login`, then click Connect again.'
+        'No Dust CLI session found. Run `npm i -g @dust-tt/dust-cli && dust login`; Métis connects automatically after login.'
     }
   }
-  return { ok: true, token, workspaceId, baseUrl: regionToBaseUrl(region) }
+  const workspace = await keychainGet(WORKSPACE)
+  if (workspace.accessDenied) {
+    return { ok: false, error: 'Allow Métis to access your Dust CLI workspace in Keychain, then try again.' }
+  }
+  if (!workspace.value) {
+    return { ok: false, error: 'Your Dust CLI session is incomplete. Run `dust login` again, then return to Métis.' }
+  }
+  const region = await keychainGet(REGION)
+  if (region.accessDenied) {
+    return { ok: false, error: 'Allow Métis to access your Dust CLI region in Keychain, then try again.' }
+  }
+  return { ok: true, token: token.value, workspaceId: workspace.value, baseUrl: regionToBaseUrl(region.value) }
 }
 
 /**
@@ -153,7 +176,7 @@ export async function setupDustCli(): Promise<{ ok: boolean; error?: string }> {
       [
         '#!/bin/bash',
         'clear',
-        'echo "AskToto — Dust CLI setup"',
+        'echo "Métis — Dust CLI setup"',
         'echo "========================"',
         'echo',
         'if ! command -v npm >/dev/null 2>&1; then',
@@ -168,7 +191,7 @@ export async function setupDustCli(): Promise<{ ok: boolean; error?: string }> {
         'fi',
         'echo; echo "Step 2/2  Signing in to Dust (a browser window will open)…"',
         'dust login',
-        'echo; echo "✓ Done. Go back to AskToto and click \\"Connect from Dust CLI\\" again."',
+        'echo; echo "✓ Done. Return to Métis — it will connect automatically after login."',
         'echo "You can close this window."'
       ].join('\n') + '\n'
     const scriptPath = join(app.getPath('temp'), `asktoto-dust-setup-${randomBytes(8).toString('hex')}.command`)

@@ -239,6 +239,24 @@ describe('brain', () => {
     })
   })
 
+  describe('slugify — Windows reserved device names', () => {
+    it('a name that slugifies to a bare reserved word gets a disambiguating suffix', () => {
+      expect(slugify('Aux')).toBe('aux-x')
+      expect(slugify('CON')).toBe('con-x')
+      expect(slugify('com1')).toBe('com1-x')
+      expect(slugify('lpt9')).toBe('lpt9-x')
+    })
+
+    it('is stable across calls (deterministic, not a random suffix)', () => {
+      expect(slugify('aux')).toBe(slugify('aux'))
+    })
+
+    it('does not over-trigger on names that merely contain a reserved word', () => {
+      expect(slugify('Auxiliary Systems')).toBe('auxiliary-systems')
+      expect(slugify('Contoso')).toBe('contoso')
+    })
+  })
+
   describe('commitmentKey', () => {
     it('trailing punctuation does not create a duplicate obligation', () => {
       expect(commitmentKey('Send the deck.')).toBe(commitmentKey('send the deck'))

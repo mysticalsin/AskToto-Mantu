@@ -1,104 +1,146 @@
-# Signing & credentials — AskToto
+# Signing And Store Credentials - Métis
 
-## Read this first: what's blocked and why
+Last verified against primary docs on 2026-07-06.
 
-The build pipeline is **completely wired** for trusted, notarized releases — hardened runtime,
-entitlements, env-driven certificates, notarization on `APPLE_*` env vars (verified against
-electron-builder 25's source), a hard secrets gate in `release.yml` so a release can never ship
-unsigned, and a post-publish `--require-notarized` verification. Nothing in the repo needs to change.
+Métis has two desktop distribution lanes:
 
-What no code can provide are the **credentials**, which require the owner's accounts:
+- Direct enterprise distribution: signed installers from GitHub Releases, with Métis-controlled updates through `electron-updater`.
+- Store distribution: Mac App Store and Microsoft Store packages, with updates handled by the store.
 
-| Platform | What's needed | Where / cost |
+The repo can enforce build gates and package shapes. It cannot create Tony's certificates, App Store Connect account access, Microsoft Partner Center access, or the hosted license-server URL.
+
+## Current Release Gates
+
+| Channel | Command | Hard gates |
 |---|---|---|
-| macOS | Apple Developer Program membership → a "Developer ID Application" certificate + an app-specific password + Team ID | [developer.apple.com/programs](https://developer.apple.com/programs/) — US$99/year, enrollment takes ~1–2 days |
-| Windows | An Authenticode code-signing certificate | OV cert from Sectigo/DigiCert etc. (~US$100–400/yr), or Azure Trusted Signing (~US$9.99/mo, no cert file to manage) |
+| macOS direct | `npm run release` | `GH_TOKEN` or `GITHUB_TOKEN`, `CSC_LINK`, `CSC_KEY_PASSWORD`, `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD`, `APPLE_TEAM_ID` |
+| Windows direct | `npm run release:win` | `GH_TOKEN` or `GITHUB_TOKEN`, `WIN_CSC_LINK`, `WIN_CSC_KEY_PASSWORD` |
+| Mac App Store | `MAS_PROVISIONING_PROFILE=/path/profile.provisionprofile npm run release:mas` | `CSC_LINK`, `CSC_KEY_PASSWORD`, existing `MAS_PROVISIONING_PROFILE` file |
+| Microsoft Store | `npm run release:win:store` | AppX package builds locally; Microsoft signs Store-submitted packages after upload |
 
-**Until then, every build is dev-signed** (self-signed "TotoWhisper Dev"): it runs fine, but
-Gatekeeper shows "unidentified developer" on first open (right-click → Open → Open bypasses it once
-per machine), and Windows SmartScreen shows "unrecognized app". That's a trust-chrome problem, not a
-correctness problem — the app itself is fully signed and integrity-checked by `verify:signing` on
-every local build.
+The tag workflow mirrors the direct-release gates. A missing Windows signing cert now fails the tagged release before publish, not after customers download an unsigned installer.
 
-**The 30-minute path once enrolled:** follow the Ship checklist at the bottom — create the cert,
-add 5 repo secrets, push a `v*` tag. CI signs, notarizes, publishes, and installed apps auto-update.
+## macOS Direct Distribution
 
-App icon (all platforms): `build/icon.png` (1024² Mantu **M**). electron-builder derives `.icns` (mac)
-and `.ico` (Windows) from it; iOS uses `ios/AskToto/Assets.xcassets/AppIcon.appiconset/icon-1024.png`.
+Verified: Apple says software downloaded outside the Mac App Store needs Developer ID signing and notarization so Gatekeeper can verify it. See [Apple Developer ID support](https://developer.apple.com/support/developer-id/) and [macOS distribution](https://developer.apple.com/macos/distribution/).
 
-Nothing below is committed — set them as **environment variables / CI secrets** at build time.
+Needed owner inputs:
 
-## Windows (.exe)
+- Apple Developer Program membership.
+- Developer ID Application certificate exported as `.p12`.
+- App-specific password for notarization.
+- Apple Team ID.
+- GitHub token that can publish to `mysticalsin/AskToto-Releases`.
 
-`npm run dist:win` → `release/AskToto-Setup-<version>.exe` (NSIS installer) + `AskToto-Portable-<version>.exe`.
-
-Authenticode signing (so SmartScreen trusts it) — provide ONE of:
-
-**A. Certificate file (.p12 / .pfx)**
-```bash
-export WIN_CSC_LINK="/secure/path/MantuCodeSigning.pfx"   # or base64 of the file
-export WIN_CSC_KEY_PASSWORD="••••••"
-npm run dist:win
-```
-
-**B. Azure Trusted Signing / EV in a token** — use `signtoolOptions` or a custom `sign` hook in
-`electron-builder.yml`. Recommended for EV/HSM certs (no exportable .pfx).
-
-> Building Windows artifacts **on macOS** needs Wine (electron-builder fetches its own). Easiest is a
-> Windows or CI runner (GitHub Actions `windows-latest`).
-
-## macOS (.dmg / .zip)
-
-`npm run dist` → `release/AskToto-<version>.dmg` + `.zip`. Already hardened-runtime + entitlements.
+Environment:
 
 ```bash
-export CSC_LINK="/secure/path/DeveloperIDApplication.p12"   # "Developer ID Application" cert
-export CSC_KEY_PASSWORD="••••••"
-# Notarization (required for Gatekeeper):
+export GH_TOKEN="..."
+export CSC_LINK="/secure/path/DeveloperIDApplication.p12"
+export CSC_KEY_PASSWORD="..."
 export APPLE_ID="you@mantu.com"
-export APPLE_APP_SPECIFIC_PASSWORD="abcd-efgh-ijkl-mnop"    # appleid.apple.com → App-Specific Passwords
+export APPLE_APP_SPECIFIC_PASSWORD="abcd-efgh-ijkl-mnop"
 export APPLE_TEAM_ID="XXXXXXXXXX"
-npm run dist
+npm run release
 ```
-electron-builder signs with `CSC_LINK` and notarizes automatically when the `APPLE_*` vars are present.
 
-## Auto-update host
-Auto-update is served from the public **AskToto-Releases** GitHub repo (`electron-builder.yml` publish
-block: `provider: github`, `releaseType: release` — enforced by the `npm run check:release` preflight
-gate). `npm run dist` builds without publishing; `npm run release` (needs `GH_TOKEN` with repo scope)
-uploads `latest-mac.yml` + artifacts to that repo's Releases for electron-updater.
+The release pipeline signs, notarizes, publishes to the update feed, then runs:
 
-## Ship checklist (mac + Windows, end to end)
+```bash
+node scripts/verify-signing.mjs --require-notarized
+```
 
-The CI is already wired: `.github/workflows/build.yml` builds, tests, and packages BOTH platforms on
-every push/PR (unsigned unless certs are set); `release.yml` builds, signs, notarizes, and publishes on
-a `v*` tag. Everything below is account setup only the owner can do.
+## Mac App Store
 
-1. **Enable Actions** on `mysticalsin/AskToto-Mantu` (Settings, Actions, General, allow all actions).
-   With nothing else set, one push produces UNSIGNED mac `.dmg`/`.zip` and Windows `.exe`/`.appx` as
-   downloadable run artifacts (3-day retention). Fastest way to get the Windows app in hand.
-2. **Create the public `AskToto-Releases` repo** (empty). It is the auto-update feed target.
-3. **Add repo secrets** (Settings, Secrets and variables, Actions):
-   - `GH_TOKEN`: a PAT with `repo` scope on AskToto-Releases (the publish target).
-   - macOS: `CSC_LINK` (base64 of your Developer ID Application .p12), `CSC_KEY_PASSWORD`, `APPLE_ID`,
-     `APPLE_APP_SPECIFIC_PASSWORD`, `APPLE_TEAM_ID`.
-   - Windows: `WIN_CSC_LINK` (base64 of your Authenticode .pfx), `WIN_CSC_KEY_PASSWORD`.
-   - Base64 a cert: `base64 -i cert.p12 | pbcopy`.
-4. **Get a Developer ID Application cert** (Apple Developer, Certificates) if you lack one, so Gatekeeper
-   accepts the mac build without the "unidentified developer" prompt. The dev-signed local `dist:local`
-   build already runs for you and internal testers via right-click, Open.
-5. **Release**: merge to `main`, then `git tag v1.0.0 && git push origin v1.0.0`. `release.yml` signs,
-   notarizes, and publishes both installers to AskToto-Releases; installed apps auto-update from there.
+Verified: electron-builder's MAS target needs sandbox entitlements and a provisioning profile, and produces a `.pkg` for App Store Connect. See [electron-builder MAS docs](https://www.electron.build/docs/mas/). Apple lists Mac App Store sandboxing as required in its macOS distribution page.
 
-Local signed mac build without CI: `npm run dist:local` with the login Keychain unlocked, dmg lands in
-`~/AI-Brain-build/asktoto-release/` (dev-signed; see the macOS section above for notarized builds).
+Needed owner inputs:
 
-## Signature gate (`verify:signing`)
+- Mac App Distribution certificate.
+- Mac Installer Distribution certificate.
+- Provisioning profile tied to the Métis App ID and the entitlements in `build/entitlements.mas.plist`.
+- App Store Connect app record, metadata, privacy answers, age rating, screenshots, and review submission.
 
-`scripts/verify-signing.mjs` positively verifies a build is validly signed instead of trusting the
-builder's exit code (`codesign --verify --deep --strict` on macOS, `Get-AuthenticodeSignature` on
-Windows, plus a Gatekeeper/`spctl` check). `dist:local` runs it automatically at the end and fails on a
-genuinely broken signature. Run it standalone with `npm run verify:signing [artifactsDir]`. For release
-gating, `--require-notarized` also fails when Gatekeeper does not accept the app (not notarized / not a
-Developer ID cert) — this is already wired into `release.yml` after the publish step, so every tagged
-release is positively verified notarized, not just assumed.
+Build:
+
+```bash
+export CSC_LINK="/secure/path/MAS-certs.p12"
+export CSC_KEY_PASSWORD="..."
+export MAS_PROVISIONING_PROFILE="/secure/path/Métis_AppStore.provisionprofile"
+npm run release:mas
+```
+
+Important: MAS builds run inside Apple's sandbox and do not use the GitHub updater. `src/main/updater.ts` exits early for `process.mas`; Store updates are managed by Apple.
+
+Review risk to test before submission:
+
+- Screen capture and system-audio behavior under App Sandbox.
+- Local CLI providers inside the sandbox.
+- Native ASR model loading from packaged resources.
+- LSUIElement overlay behavior and App Review expectations.
+
+## Windows Direct Distribution
+
+Verified: Microsoft says public Win32 MSI/EXE Store submissions are not re-signed by Microsoft, and direct public installers should be signed by a trusted certificate. See [Microsoft code signing options](https://learn.microsoft.com/en-us/windows/apps/package-and-deploy/code-signing-options).
+
+Needed owner inputs:
+
+- Authenticode `.pfx` certificate from a trusted CA, or a future wired Azure Artifact Signing flow.
+- GitHub token that can publish to `mysticalsin/AskToto-Releases`.
+
+Environment:
+
+```powershell
+$env:GH_TOKEN="..."
+$env:WIN_CSC_LINK="C:\secure\MantuCodeSigning.pfx"
+$env:WIN_CSC_KEY_PASSWORD="..."
+npm run release:win
+```
+
+The Windows tag job now runs:
+
+```bash
+node scripts/verify-signing.mjs
+```
+
+## Microsoft Store
+
+Verified: Microsoft Store MSIX/AppX submissions are re-signed by Microsoft after upload. For Store submission, build:
+
+```bash
+npm run release:win:store
+```
+
+Before upload, make sure `electron-builder.yml` `appx.identityName`, `appx.publisher`, and `appx.publisherDisplayName` match the Partner Center app identity.
+
+## Enterprise Control
+
+Use `build/managed-config.enterprise.example.json` as the operator-owned policy base. It enables and locks:
+
+- Azure SSO.
+- Hosted license server.
+- License gate.
+- Provider policy.
+- Transcript encryption.
+- Redaction.
+- Content protection.
+- Consent indicator.
+- Retention window.
+
+Deploy the filled file as `managed-config.json` to:
+
+- macOS: `/Library/Application Support/Métis/managed-config.json`
+- Windows: `%ProgramData%\Métis\managed-config.json`
+
+Machine-wide policy wins over per-user config.
+
+## What Remains Owner-Side
+
+- Enroll in Apple Developer Program.
+- Create direct and MAS certificates.
+- Create MAS provisioning profile.
+- Create App Store Connect listing.
+- Create Microsoft Partner Center listing if using Microsoft Store.
+- Buy or provision Windows signing.
+- Deploy the license server at a public HTTPS URL.
+- Put release secrets in GitHub Actions.

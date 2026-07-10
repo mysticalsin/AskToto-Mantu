@@ -63,7 +63,8 @@ import {
   type GraphStatus,
   type HotkeyAction,
   type EvalMetrics,
-  type MeetingSummary
+  type MeetingSummary,
+  type ShortcutFailure
 } from '@shared/ipc'
 import {
   PROVIDERS,
@@ -77,6 +78,7 @@ import {
 import { DEFAULT_MODE_PROMPTS } from '@shared/prompts'
 import { MantuLogo } from './MantuLogo'
 import { MantuMark } from './MantuMark'
+import { MetisMark } from './MetisMark'
 import { FieldHint, TextButton } from './ui'
 import { AgendaView } from './AgendaView'
 import { usePermissions } from '../state'
@@ -850,7 +852,7 @@ function AiSection({
         dustSectionRef={dustSectionRef}
       />
 
-      {/* Dust — AskToto's primary brain (your Second Brain agents). Always here, not a tile. */}
+      {/* Dust — Métis's primary brain (your Second Brain agents). Always here, not a tile. */}
       <div ref={dustSectionRef}>
         <DustSetup
           settings={settings}
@@ -925,7 +927,7 @@ function AiSection({
         title="Experience: more models"
         desc="More providers, including a raw OpenAI-compatible endpoint. Closed by default; most people find what they need above."
       >
-        <Section title="Model provider" desc="Prefer a raw model? Pick one, paste a key, and AskToto detects the provider.">
+        <Section title="Model provider" desc="Prefer a raw model? Pick one, paste a key, and Métis detects the provider.">
           {shown.length + featured.length > 8 && (
             <div className="relative mb-2">
               <Search
@@ -1095,7 +1097,7 @@ function CliIntegration({
       window.toto.cliSetup(id)
       setState(id, {
         phase: 'setup-opened',
-        msg: 'Finish setup in the window that opened, then click Connect.',
+        msg: 'Finish the login in the window that opened, then come back and press Connect.',
         version: null
       })
       return
@@ -1120,7 +1122,7 @@ function CliIntegration({
     window.toto.cliLogin(id)
     setState(id, {
       phase: 'setup-opened',
-      msg: 'Installed. Sign in through the window that opened, then click Connect.',
+      msg: 'Installed. Sign in through the window that opened, then come back and press Connect.',
       version: null
     })
   }
@@ -1145,7 +1147,7 @@ function CliIntegration({
     setState(id, { phase: 'idle', msg: null, version: null })
   }
 
-  // Disconnect AskToto from a CLI provider. Clears the connected flag (the global CLI itself is left
+  // Disconnect Métis from a CLI provider. Clears the connected flag (the global CLI itself is left
   // installed — it's the user's own tool) and, if it was the active provider, switches to a ready one.
   const disconnectCli = (id: 'claude-cli' | 'codex-cli'): void => {
     const nextConnected = { ...cliConnected, [id]: false }
@@ -1688,7 +1690,7 @@ function DustSetup({
   // fails, so skip straight to the manual key steps instead of showing a dead-end button.
   const isWin = window.navigator.platform.toLowerCase().includes('win')
   const locked = settings.managedKeys.includes('provider')
-  // Base agent is user-editable (picker below, defaults to the AskToto agent, one-click reset) —
+  // Base agent is user-editable (picker below, defaults to the Métis agent, one-click reset) —
   // gated by the same 'providerModels' managed-key as the Advanced base-model field in AiSection, not
   // by the CLI-connection lock above. Spotlight Ref stays hard-locked (DUST_SPOTLIGHT_REF_AGENT_ID in
   // ipc.ts) — read-only display. The base agent also drafts meeting follow-ups directly — there is no
@@ -1701,6 +1703,8 @@ function DustSetup({
   const hasWs = !!settings.dustWorkspaceId.trim()
   const connected = keySaved && hasWs && !!agent
   const selectedAgentName = agents?.find((a) => a.sId === agent)?.name
+  const selectedAgent = agents?.find((a) => a.sId === agent)
+  const selectedAgentRunsSonnet = !!selectedAgent && selectedAgent.modelProviderId === 'anthropic' && /sonnet/i.test(selectedAgent.modelId || '')
 
   // Connect locally by importing the Dust CLI session (token + workspace + region) from the keychain.
   // On success: activate Dust + load the agents (proves the token works) so the user just picks them.
@@ -1716,7 +1720,7 @@ function DustSetup({
         busy: false,
         ok: false,
         msg: s.ok
-          ? 'Setup opened in Terminal. Finish the Dust login there, then click "Connect from Dust CLI" again.'
+          ? 'Setup opened in Terminal. Finish the Dust login there; Métis will connect automatically.'
           : s.error || r.error || 'Could not start the Dust CLI setup.'
       })
       return
@@ -1752,7 +1756,7 @@ function DustSetup({
     setKeySaving(false)
   }
   // Fully disconnect Dust: clear the saved token/key, drop the workspace + region + the (user-editable)
-  // thinking agent, reset the (also user-editable) base agent back to the AskToto default, switch off
+  // thinking agent, reset the (also user-editable) base agent back to the Métis default, switch off
   // Dust if it's active, and reset the local CLI/agents UI so the card returns to its "connect" state.
   // Used by the CLI card's Disconnect button only — the manual key's Remove uses the narrower
   // removeDustKey below, which doesn't touch workspace/region/base/thinking agent.
@@ -1760,7 +1764,7 @@ function DustSetup({
     await clearKey('dust')
     const nextThinking = { ...settings.providerModelsThinking }
     delete nextThinking.dust
-    // Base is now user-changeable, so disconnect restores it to the AskToto default rather than leaving
+    // Base is now user-changeable, so disconnect restores it to the Métis default rather than leaving
     // a stale custom agent id pointing at a workspace you just disconnected from. Spotlight Ref is left
     // untouched — it's a hard-locked app default, not user data.
     const next: Partial<PublicSettings> = {
@@ -1840,7 +1844,7 @@ function DustSetup({
   return (
     <Section
       title={active ? 'Dust · your brain (active)' : 'Dust · your brain'}
-      desc="Your Dust agents (Second Brain retrieval + tools) power AskToto. Connect with the Dust CLI, then pick a thinking agent for hard questions."
+      desc="Your Dust agents (Second Brain retrieval + tools) power Métis. Connect with the Dust CLI, then pick a thinking agent for hard questions."
     >
       <div className="flex flex-col gap-4">
         {!isWin && (
@@ -1870,7 +1874,7 @@ function DustSetup({
                       type="button"
                       onClick={disconnectDust}
                       disabled={cli.busy || (locked && active)}
-                      title="Disconnect Dust from AskToto"
+                      title="Disconnect Dust from Métis"
                       className="no-drag cl-focus flex items-center gap-1.5 rounded-[8px] border border-[var(--cl-destructive)]/30 bg-[var(--cl-destructive)]/10 px-3 py-1.5 text-[12px] font-medium text-[color:var(--cl-destructive)] hover:bg-[var(--cl-destructive)]/20 disabled:opacity-50"
                     >
                       <X size={13} />
@@ -2033,7 +2037,7 @@ function DustSetup({
           {/* Base agent — answers everyday questions and drafts meeting follow-ups directly (no separate
               follow-up agent). User-editable: a dropdown once the agents list loads (keeping the current
               sId selectable even if it's not in the workspace), a bare sId input before that, and a
-              one-click reset back to the AskToto default whenever it's been changed. The select never
+              one-click reset back to the Métis default whenever it's been changed. The select never
               offers an empty option and the input restores the default on blur if left blank, so the
               base agent can never persist empty. Locked by the same 'providerModels' managed-key as the
               Advanced base-model field in AiSection above. */}
@@ -2050,7 +2054,7 @@ function DustSetup({
                   disabled={agentsLocked}
                   className="no-drag cl-focus rounded px-1 text-[11px] text-[color:var(--cl-primary)] hover:underline disabled:opacity-50"
                 >
-                  Reset to AskToto default
+                  Reset to Métis default
                 </button>
               )}
             </span>
@@ -2080,10 +2084,17 @@ function DustSetup({
                   if (!e.target.value.trim()) setBaseAgent(DUST_BASE_AGENT_ID)
                 }}
                 disabled={agentsLocked}
-                placeholder="Base agent id (defaults to AskToto)"
+                placeholder="Base agent id (defaults to Métis)"
                 aria-label="Base agent"
                 className={['w-full', ctl, agentsLocked ? 'opacity-60' : ''].join(' ')}
               />
+            )}
+            {selectedAgent && (
+              <div className={selectedAgentRunsSonnet ? 'text-[11px] text-[var(--cl-success)]' : 'text-[11px] text-[color:var(--cl-muted-foreground)]'}>
+                {selectedAgentRunsSonnet
+                  ? `Agent reports model: Anthropic ${selectedAgent.modelId}`
+                  : `This agent reports ${selectedAgent.modelProviderId || 'an unknown provider'} ${selectedAgent.modelId || 'with no model id'}, not Anthropic Sonnet. It will still work — replies may just differ in tone or quality.`}
+              </div>
             )}
           </div>
 
@@ -2419,7 +2430,7 @@ function MicPicker({
         </button>
       ) : (
         <span className="text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
-          Choose a specific mic, or keep the system default. If a chosen device disconnects, AskToto falls
+          Choose a specific mic, or keep the system default. If a chosen device disconnects, Métis falls
           back to the default so a meeting never loses its mic.
         </span>
       )}
@@ -3010,7 +3021,7 @@ const TABS: { id: TabId; label: string; icon: LucideIcon | ComponentType<{ size?
   // signals "Mantu"; the tab id stays 'intelligence' so nothing else changes.
   { id: 'intelligence', label: 'Intelligence', icon: MantuMark },
   { id: 'privacy', label: 'Privacy', icon: ShieldCheck },
-  // Profile + Keybinds merged: both are "how AskToto is set up for YOU" (who you are / how you drive it).
+  // Profile + Keybinds merged: both are "how Métis is set up for YOU" (who you are / how you drive it).
   // Labeled just "Profile" so all nine tabs fit one line; keybinds live inside this tab.
   { id: 'profile', label: 'Profile', icon: User },
   { id: 'about', label: 'About', icon: Info }
@@ -3060,12 +3071,38 @@ export function Settings({
   useLayoutEffect(() => {
     if (contentRef.current) contentRef.current.scrollTop = 0
   }, [tab])
+  // Standard installers only bundle the compact WASM model (see whisper.worker.ts) — the GPU-accelerated
+  // large model is never shipped, so "Best transcription quality" is a no-op there. Default to the
+  // no-op copy until the main process confirms otherwise, so a bundled build never overclaims.
+  const [asrBundled, setAsrBundled] = useState(true)
+  useEffect(() => {
+    void window.toto.asrBundled().then(setAsrBundled)
+  }, [])
+  // Parakeet native-addon health. addonError is set when the sherpa-onnx addon itself failed to load
+  // (e.g. a wrong-platform build) — a different failure from "model not downloaded yet", so the Audio
+  // tab can say "engine broken in this build" instead of letting the toggle silently do nothing.
+  // Refetch (not just fetch-once-on-mount) whenever the Audio tab becomes active — an addon failure
+  // discovered mid-session (e.g. a meeting that started on another tab) must show up the moment the
+  // user looks, not only after Settings is fully closed and reopened — and whenever asrEngine changes,
+  // since flipping the toggle can trigger a fresh addon load attempt in main. Guarded to tab === 'audio'
+  // because this row only renders there.
+  const [parakeetAddonError, setParakeetAddonError] = useState<string | null>(null)
+  useEffect(() => {
+    if (tab !== 'audio') return
+    let cancelled = false
+    void window.toto.parakeetStatus().then((st) => {
+      if (!cancelled) setParakeetAddonError(st.addonError)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [tab, settings.asrEngine])
 
   return (
     <div className="cl-root panel-enter flex w-full flex-col overflow-hidden rounded-2xl shadow-[var(--shadow-panel)] text-[color:var(--cl-foreground)]">
-      {/* Draggable header — sits directly under the always-visible AskToto bar */}
+      {/* Draggable header — sits directly under the always-visible Métis bar */}
       <header className="cl-header drag flex h-11 shrink-0 items-center gap-2 rounded-t-2xl px-3.5">
-        <MantuMark size={18} />
+        <MetisMark size={18} />
         <span className="font-ui text-[14px] font-semibold tracking-tight">Settings</span>
         {managed && (
           <span className="ml-2 inline-flex items-center gap-1 rounded-full border border-[var(--cl-primary)]/30 bg-[var(--cl-primary-soft)] px-2 py-0.5 text-[10px] font-medium text-[color:var(--cl-primary)]">
@@ -3228,7 +3265,7 @@ export function Settings({
 
             {tab === 'audio' && (
               <div className="flex flex-col gap-6">
-                <Section title="Listen to" desc="Whose audio AskToto transcribes during a meeting.">
+                <Section title="Listen to" desc="Whose audio Métis transcribes during a meeting.">
                   <div className="mb-2"><ManagedChip keys={settings.managedKeys} k="audioSource" /></div>
                   <AudioChoices settings={settings} patch={patch} />
                   <MicPicker settings={settings} patch={patch} />
@@ -3274,7 +3311,11 @@ export function Settings({
                   />
                   <ToggleRow
                     label="Best transcription quality"
-                    desc="On = most accurate, any-language model (larger first-run download, GPU-accelerated). Off = a lighter, faster model with a smaller download."
+                    desc={
+                      asrBundled
+                        ? "This build doesn't include the larger GPU-accelerated model, so On and Off currently use the same on-device model."
+                        : 'On = most accurate, any-language model (larger first-run download, GPU-accelerated). Off = a lighter, faster model with a smaller download.'
+                    }
                     on={settings.asrQuality === 'best'}
                     onChange={(v) => patch({ asrQuality: v ? 'best' : 'fast' })}
                     disabled={settings.managedKeys.includes('asrQuality')}
@@ -3286,6 +3327,18 @@ export function Settings({
                     onChange={(v) => patch({ asrEngine: v ? 'parakeet' : 'whisper' })}
                     disabled={settings.managedKeys.includes('asrEngine')}
                   />
+                  {/* Engine broken in this build (native addon failed to load) — distinct from "model not
+                      downloaded yet", which resolves itself on first use via the automatic download. */}
+                  {parakeetAddonError != null && (
+                    <div className="-mt-1 flex items-start gap-1.5 pl-1 text-[11px] leading-snug text-[color:var(--cl-destructive)]">
+                      <AlertCircle size={12} className="mt-0.5 shrink-0" />
+                      <span>
+                        The Parakeet engine can&apos;t load in this build: {parakeetAddonError}. This is an
+                        engine problem, not a pending model download — meetings will use Whisper until a
+                        build with a working engine is installed.
+                      </span>
+                    </div>
+                  )}
                   {settings.asrLastFallbackAt != null && (
                     <div className="-mt-1 flex items-center justify-between gap-2 pl-1 text-[12px] text-[color:var(--color-ink-3)]">
                       <span>
@@ -3297,7 +3350,7 @@ export function Settings({
                   )}
                   <ToggleRow
                     label="Start-of-recording chime"
-                    desc="Plays a short tone so everyone knows the moment AskToto starts listening."
+                    desc="Plays a short tone so everyone knows the moment Métis starts listening."
                     on={settings.playListenChime}
                     onChange={(v) => patch({ playListenChime: v })}
                     disabled={settings.managedKeys.includes('playListenChime')}
@@ -3349,7 +3402,7 @@ export function Settings({
                           .slice(0, 100)
                       })
                     }
-                    placeholder={'Toto => AskToto\nMantu => Mantu\nparakeet => Parakeet'}
+                    placeholder={'Metis => Métis\nMantu => Mantu\nparakeet => Parakeet'}
                     rows={3}
                     disabled={settings.managedKeys.includes('asrCorrections')}
                     className={[
@@ -3368,10 +3421,10 @@ export function Settings({
 
             {tab === 'privacy' && (
               <div className="flex flex-col gap-6">
-                <Section title="Screen capture" desc="Two separate switches: what others can see of AskToto, and what AskToto can see of your screen.">
+                <Section title="Screen capture" desc="Two separate switches: what others can see of Métis, and what Métis can see of your screen.">
                   <ToggleRow
                     label="Hide from screen capture"
-                    desc="Hide the AskToto window from screen capture & sharing, so people you share with never see it. Doesn't affect screen questions."
+                    desc="Hide the Métis window from screen capture & sharing, so people you share with never see it. Doesn't affect screen questions."
                     on={settings.contentProtection}
                     onChange={(v) => patch({ contentProtection: v })}
                     disabled={settings.managedKeys.includes('contentProtection')}
@@ -3379,7 +3432,7 @@ export function Settings({
                   />
                   <ToggleRow
                     label="Private View"
-                    desc="AskToto won't look at or capture your screen while this is on — screen questions answer from context only. Same switch as the eye button on the bar."
+                    desc="Métis won't look at or capture your screen while this is on — screen questions answer from context only. Same switch as the eye button on the bar."
                     on={settings.privateView}
                     onChange={(v) => patch({ privateView: v })}
                     disabled={settings.managedKeys.includes('privateView')}
@@ -3387,7 +3440,7 @@ export function Settings({
                 </Section>
                 <Section
                   title="Recording consent"
-                  desc="This reminder is shown to YOU, the operator. It does not notify or ask the other participants. AskToto has no way to show anything to the other people on the call; getting their consent is on you, by whatever means your company policy or local law requires (verbal notice, a calendar invite disclosure, etc.)."
+                  desc="This reminder is shown to YOU, the operator. It does not notify or ask the other participants. Métis has no way to show anything to the other people on the call; getting their consent is on you, by whatever means your company policy or local law requires (verbal notice, a calendar invite disclosure, etc.)."
                 >
                   <ToggleRow
                     label="I will inform participants before recording"
@@ -3490,7 +3543,7 @@ export function Settings({
                   )}
                   <ToggleRow
                     label="Encrypt transcripts at rest"
-                    desc="Locks saved transcripts/notes with your OS keychain so they're unreadable on disk. On by default. AskToto's own History, search, and follow-up drafting still work normally; only a separate tool reading the raw files directly (outside AskToto) would be blocked."
+                    desc="Locks saved transcripts/notes with your OS keychain so they're unreadable on disk. On by default. Métis's own History, search, and follow-up drafting still work normally; only a separate tool reading the raw files directly (outside Métis) would be blocked."
                     on={settings.encryptTranscripts}
                     onChange={(v) => patch({ encryptTranscripts: v })}
                     disabled={settings.managedKeys.includes('encryptTranscripts')}
@@ -3505,7 +3558,7 @@ export function Settings({
                   </ToggleRow>
                   <ToggleRow
                     label="Launch at login"
-                    desc="Open AskToto automatically when you sign in."
+                    desc="Open Métis automatically when you sign in."
                     on={settings.launchAtLogin}
                     onChange={(v) => patch({ launchAtLogin: v })}
                     disabled={settings.managedKeys.includes('launchAtLogin')}
@@ -3539,8 +3592,8 @@ export function Settings({
                     disabled={settings.managedKeys.includes('profile')}
                   />
                 </Section>
-                {/* Keybinds live with Profile: both are "how AskToto is set up for you". */}
-                <Section title="Keyboard shortcuts" desc="AskToto works with these easy to remember commands. Click any of the keybinds to edit.">
+                {/* Keybinds live with Profile: both are "how Métis is set up for you". */}
+                <Section title="Keyboard shortcuts" desc="Métis works with these easy to remember commands. Click any of the keybinds to edit.">
                   <Shortcuts settings={settings} patch={patch} />
                 </Section>
               </div>
@@ -3548,13 +3601,13 @@ export function Settings({
 
             {tab === 'about' && (
               <div className="flex flex-col gap-6">
-                <Section title="Account" desc="Signing in ties AskToto to your Mantu Microsoft account and Dust.">
+                <Section title="Account" desc="Signing in ties Métis to your Mantu Microsoft account and Dust.">
                   <AccountRow settings={settings} patch={patch} />
                 </Section>
-                <Section title="License" desc="Activate AskToto against your organization's license server.">
+                <Section title="License" desc="Activate Métis against your organization's license server.">
                   <LicenseSection settings={settings} patch={patch} />
                 </Section>
-                <Section title="Permissions" desc="Status of the OS permissions AskToto needs.">
+                <Section title="Permissions" desc="Status of the OS permissions Métis needs.">
                   <PermissionsSection />
                 </Section>
                 <Section
@@ -3563,7 +3616,17 @@ export function Settings({
                 >
                   <DiagnosticsSection />
                 </Section>
-                <Section title="Thanks" desc="AskToto got better because someone used it before it was ready.">
+                <Section title="Why “Métis”" desc="The name is the mission.">
+                  <p className="text-[12px] leading-relaxed text-[color:var(--cl-muted-foreground)]">
+                    In Greek myth, Métis is the goddess of cunning wisdom and prudence — Zeus&apos;s first
+                    counselor and the mother of Athena. She stands for a very particular kind of
+                    intelligence: not just knowing things, but seeing what&apos;s coming, adapting in the
+                    moment, and choosing exactly the right time to speak. That&apos;s the job of this app.
+                    It listens with you, reads the room, and puts the right words within reach at the
+                    moment you need them.
+                  </p>
+                </Section>
+                <Section title="Thanks" desc="Métis got better because someone used it before it was ready.">
                   <p className="text-[12px] leading-relaxed text-[color:var(--cl-muted-foreground)]">
                     To{' '}
                     <a
@@ -3584,7 +3647,7 @@ export function Settings({
                 <div className="flex flex-col items-center gap-2.5 pb-2 pt-4">
                   <MantuLogo size={190} />
                   <div className="text-[13px] font-semibold text-[color:var(--cl-foreground)]">
-                    AskToto 1.0.0 · Mantu
+                    Métis 1.0.0 · Mantu
                   </div>
                   <div className="flex items-center gap-2 text-[11px] text-[color:var(--cl-muted-foreground)]">
                     <a
@@ -3613,7 +3676,7 @@ export function Settings({
                     </a>
                     <span aria-hidden>·</span>
                     <a
-                      href="mailto:support@mantu.com?subject=AskToto%20feedback"
+                      href="mailto:support@mantu.com?subject=M%C3%A9tis%20feedback"
                       className="transition-colors hover:text-[color:var(--cl-foreground)]"
                     >
                       Send feedback
@@ -3654,7 +3717,7 @@ export function Settings({
         <button
           type="button"
           onClick={() => {
-            if (window.confirm("Log out of AskToto? You'll need to sign in again to use Dust and your Mantu Microsoft account.")) {
+            if (window.confirm("Log out of Métis? You'll need to sign in again to use Dust and your Mantu Microsoft account.")) {
               onLogout ? onLogout() : void window.toto.signOut()
             }
           }}
@@ -3854,7 +3917,7 @@ function IntelligenceTab({
     <div className="flex flex-col gap-6">
       <Section
         title="Mantu Intelligence"
-        desc="Your meeting brain: dashboards and graphs built from every meeting AskToto has captured, covering pipeline, people, deals going cold, and the week's Mars draft."
+        desc="Your meeting brain: dashboards and graphs built from every meeting Métis has captured, covering pipeline, people, deals going cold, and the week's Mars draft."
       >
         <div className="cl-card flex items-center gap-3 px-3 py-3">
           <MantuMark size={34} />
@@ -4531,7 +4594,7 @@ function AccountRow({
             Set up Microsoft sign-in
           </button>
           <span className="text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
-            Enable Microsoft (Entra) sign-in to lock AskToto to your Mantu domain and tie usage to Dust.
+            Enable Microsoft (Entra) sign-in to lock Métis to your Mantu domain and tie usage to Dust.
             One-time setup.
           </span>
           {err && <span className="text-[11px] text-[color:var(--cl-destructive)]">{err}</span>}
@@ -4678,7 +4741,7 @@ function LicenseSection({
 
       <ToggleRow
         label="Require a license to run"
-        desc="When on, AskToto requires an active license to run. Leave off until you've deployed a license server and confirmed activation works: turning this on with no valid activation will lock this device out at next launch."
+        desc="When on, Métis requires an active license to run. Leave off until you've deployed a license server and confirmed activation works: turning this on with no valid activation will lock this device out at next launch."
         on={settings.licenseGateEnabled}
         onChange={(v) => patch({ licenseGateEnabled: v })}
       />
@@ -4950,13 +5013,6 @@ function PermissionsSection(): JSX.Element {
       note: isWin
         ? 'Windows may ask once before capturing system audio.'
         : 'Grant in System Settings → Privacy & Security → Screen Recording.'
-    },
-    {
-      label: 'Auto-start on meeting',
-      status: permissions.accessibility,
-      note: isWin
-        ? 'No extra permission needed on Windows.'
-        : 'Grant Accessibility in System Settings → Privacy & Security.'
     }
   ]
 
@@ -5188,6 +5244,21 @@ function Shortcuts({
   patch: (p: Partial<PublicSettings>) => void
 }): JSX.Element {
   const user = settings.shortcuts ?? {}
+  // Bindings main could NOT register globally (another app or the OS already owns the combo — Electron
+  // fails silently, so without this the row looks bound but the key does nothing). Keyed on
+  // settings.shortcuts rather than a manual refetch-after-save: patch() only updates settings once the
+  // settingsSet handler has already re-run registerShortcuts(), so this effect fires on mount AND after
+  // every save, always reading the post-registration failure list.
+  const [failures, setFailures] = useState<ShortcutFailure[]>([])
+  useEffect(() => {
+    let cancelled = false
+    void window.toto.getShortcutFailures().then((f) => {
+      if (!cancelled) setFailures(f)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [settings.shortcuts])
   const reset = (action: HotkeyAction): void => {
     const next = { ...user }
     next[action] = DEFAULT_SHORTCUTS[action] ?? ''
@@ -5212,6 +5283,23 @@ function Shortcuts({
 
   return (
     <div className="flex flex-col gap-4">
+      {failures.length > 0 && (
+        <div className="flex flex-col gap-1.5 rounded-lg border border-[var(--cl-destructive)]/30 bg-[var(--cl-destructive)]/5 px-3 py-2.5">
+          <div className="flex items-start gap-1.5 text-[11px] leading-snug text-[color:var(--cl-destructive)]">
+            <AlertCircle size={13} className="mt-px shrink-0" />
+            <span>
+              {failures.length === 1 ? "This shortcut couldn't" : "These shortcuts couldn't"} be
+              registered — another app likely owns the key combo. Rebind {failures.length === 1 ? 'it' : 'them'} below.
+            </span>
+          </div>
+          {failures.map((f) => (
+            <div key={f.action} className="flex items-center gap-2 pl-5 text-[11px] text-[color:var(--cl-muted-foreground)]">
+              <span className="min-w-[110px]">{SHORTCUT_LABELS[f.action as HotkeyAction] ?? f.action}</span>
+              <KeyChips accelerator={f.accel} />
+            </div>
+          ))}
+        </div>
+      )}
       {groups.map((group) => {
         const actions = HOTKEY_ACTIONS.filter((a) => SHORTCUT_GROUPS[a] === group)
         if (actions.length === 0) return null
@@ -5321,7 +5409,7 @@ function ProfileEditor({
         id={notesId}
         disabled={disabled}
         className={inputCls + ' h-12 w-full resize-none'}
-        placeholder="Anything else AskToto should know…"
+        placeholder="Anything else Métis should know…"
         value={profile.notes}
         onCommit={(v) => set('notes', v)}
       />

@@ -52,11 +52,11 @@ function makeProgress(): (p: any) => void {
   }
 }
 
-async function load(quality: 'best' | 'fast'): Promise<void> {
+async function load(quality: 'best' | 'fast', allowWebGpu: boolean): Promise<void> {
   // 'best' prefers WebGPU + the large multilingual model; 'fast' (and any fallback) uses the smaller model
   // so transcription always comes up (a degraded engine beats none) and the download/compute stays light.
   const progress_callback = makeProgress()
-  if (quality !== 'fast' && (await hasWebGPU())) {
+  if (allowWebGpu && quality !== 'fast' && (await hasWebGPU())) {
     try {
       asr = await pipeline('automatic-speech-recognition', WEBGPU_MODEL, {
         device: 'webgpu',
@@ -102,8 +102,14 @@ self.onmessage = async (e: MessageEvent): Promise<void> => {
       // allowRemoteModels stays true (set at module level) — this is the normal dev/remote path.
     }
     try {
-      await load(msg.quality === 'fast' ? 'fast' : 'best')
-      post({ type: 'ready', engine })
+      // Standard installers deliberately ship the compact WASM fallback, not the 1.5 GiB WebGPU
+      // model. Avoid a guaranteed missing-model attempt in that offline configuration.
+      const requestedQuality = msg.quality === 'fast' ? 'fast' : 'best'
+      await load(requestedQuality, !msg.bundled)
+      // Report honestly whenever 'best' was requested but didn't actually land on the WebGPU/large model
+      // (no bundled model, no WebGPU adapter, or a WebGPU load failure) — callers must not infer quality
+      // from the request alone, since it silently downgrades to WASM/whisper-base in every packaged build.
+      post({ type: 'ready', engine, requestedQuality, qualityDegraded: requestedQuality === 'best' && engine !== 'webgpu' })
     } catch (err) {
       post({ type: 'error', message: err instanceof Error ? err.message : String(err) })
     } finally {

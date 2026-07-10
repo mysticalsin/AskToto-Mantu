@@ -1,6 +1,6 @@
-# AskToto — request to Mantu IT (unblocks distribution + Outlook)
+# Métis — request to Mantu IT (unblocks distribution + Outlook)
 
-**From:** Tony Walteur  **Re:** two things needed to ship AskToto (the AI meeting-copilot desktop app) to
+**From:** Tony Walteur  **Re:** two things needed to ship Métis (the AI meeting-copilot desktop app) to
 real users. The app is built and working locally; these are the only blockers to a signed, installable build
 and the Outlook agenda feature. Nothing here exposes secrets in the codebase — all credentials are read from
 environment variables / a managed-config file at build/run time.
@@ -32,7 +32,7 @@ Trusted Signing + a Windows signing runner.)
 
 ## 2. Azure (Microsoft Entra) app registration — for Outlook agenda + sign-in
 
-Needed so AskToto can (a) sign users in with their Mantu Microsoft account and (b) read **today's calendar**
+Needed so Métis can (a) sign users in with their Mantu Microsoft account and (b) read **today's calendar**
 to show their agenda. **Read-only, least-privilege** — no write access to mail or calendar.
 
 Please create an Entra **app registration** with:

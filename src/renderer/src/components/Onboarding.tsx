@@ -21,8 +21,8 @@ import {
 import type { PublicSettings, Profile, PlatformPermissions } from '@shared/ipc'
 import type { ProviderId } from '@shared/providers'
 import { PROVIDERS } from '@shared/providers'
-import { MantuLogo } from './MantuLogo'
-import { accelLabel } from '../lib/keys'
+import { MetisMark } from './MetisMark'
+import { accelLabel, isWindows } from '../lib/keys'
 
 /** Microsoft 4-square glyph (no lucide equivalent). */
 function MsLogo({ size = 16 }: { size?: number }): JSX.Element {
@@ -59,7 +59,7 @@ function ActionRow({ icon: Icon, label, hint, keys }: { icon: typeof Mic; label:
   )
 }
 
-/** One selectable "how to power AskToto" path on the provider-choice slide. A plain-language card the
+/** One selectable "how to power Métis" path on the provider-choice slide. A plain-language card the
  *  user taps to route themselves — no jargon, no key required to read it. */
 function ProviderOption({
   icon: Icon,
@@ -196,7 +196,7 @@ function WalkNav({ onBack, onNext, step }: { onBack: () => void; onNext: () => v
 /**
  * 6-slide onboarding. Slide 1: consent + sign in / continue (the legal + identity gate, required, not
  * skippable). Slides 2-4: a quick tour of every control on the toolbar, grouped by what they're for.
- * Slide 5: pick how AskToto answers (CLI / API key / Dust), part of the same countable sequence as 2-4.
+ * Slide 5: pick how Métis answers (CLI / API key / Dust), part of the same countable sequence as 2-4.
  * Slide 6: a live "get ready" checklist (provider / mic / screen) + Get started (the functional readiness
  * gate). Slides 1 and 6 are load-bearing gates; 2-5 are walkthrough/choice and can be skipped by Back/Next.
  */
@@ -305,7 +305,7 @@ export function Onboarding({
         {/* Invisible placeholder matching step 4's caption line, so WalkNav sits at the same height on
             every slide instead of jumping only when the real caption is present. */}
         <p className="invisible max-w-[460px] text-[11px] leading-snug text-[color:var(--color-ink-3)]" aria-hidden="true">
-          The Mantu logo opens Settings; minimize to a pill or collapse the panel any time.
+          The Métis mark opens Settings; minimize to a pill or collapse the panel any time.
         </p>
         <WalkNav step={2} onBack={() => setStep(1)} onNext={() => setStep(3)} />
       </div>
@@ -330,7 +330,7 @@ export function Onboarding({
         {/* Invisible placeholder matching step 4's caption line, so WalkNav sits at the same height on
             every slide instead of jumping only when the real caption is present. */}
         <p className="invisible max-w-[460px] text-[11px] leading-snug text-[color:var(--color-ink-3)]" aria-hidden="true">
-          The Mantu logo opens Settings; minimize to a pill or collapse the panel any time.
+          The Métis mark opens Settings; minimize to a pill or collapse the panel any time.
         </p>
         <WalkNav step={3} onBack={() => setStep(2)} onNext={() => setStep(4)} />
       </div>
@@ -350,10 +350,10 @@ export function Onboarding({
         <div className="flex w-full max-w-[460px] flex-col gap-3 rounded-xl border border-[var(--color-hair-soft)] bg-white/[0.02] p-4">
           <ActionRow icon={LayoutGrid} label="Modes" hint="Pick the conversation: Interview, Meeting, Sales, and more." />
           <ActionRow icon={Brain} label="Deep thinking" hint="Force the strongest model. Rainbow ring shows when on." />
-          <ActionRow icon={Eye} label="Show / hide" hint="Toggle whether the AskToto window appears on a screen you share or record. Hidden by default." />
+          <ActionRow icon={Eye} label="Show / hide" hint="Toggle whether the Métis window appears on a screen you share or record. Hidden by default." />
         </div>
         <p className="max-w-[460px] text-[11px] leading-snug text-[color:var(--color-ink-3)]">
-          The Mantu logo opens Settings; minimize to a pill or collapse the panel any time.
+          The Métis mark opens Settings; minimize to a pill or collapse the panel any time.
         </p>
         <WalkNav step={4} onBack={() => setStep(3)} onNext={() => setStep(5)} />
       </div>
@@ -386,7 +386,7 @@ export function Onboarding({
             tabIndex={-1}
             className="font-ui text-[18px] font-semibold tracking-tight text-[color:var(--color-ink)] outline-none"
           >
-            How should AskToto answer you?
+            How should Métis answer you?
           </div>
           <p className="max-w-[460px] text-[12px] leading-snug text-[color:var(--color-ink-2)]">
             Transcription is always free and runs on your device. To get live answers, pick one way to
@@ -467,20 +467,20 @@ export function Onboarding({
 
   if (step === 6) {
     const providerLabel = PROVIDERS[settings.provider]?.label ?? 'AI provider'
-    // Windows has no OS-level permission API, so status is always 'unknown' there; treat that as the
-    // expected state instead of a permanent not-granted so the checklist doesn't look broken.
-    const isWindows = window.navigator.platform.includes('Win')
+    // Windows has no OS-level permission API, so status is always 'unknown' there — that's a genuine
+    // "we can't tell", not a granted status, so it must not be faked into `ok`. Surface it as a
+    // not-yet-confirmed row instead, with a working link to the Windows privacy pane as the recovery path.
     const micWinUnknown = isWindows && perms?.microphone === 'unknown'
     const screenWinUnknown = isWindows && perms?.screenRecording === 'unknown'
-    const micOk = perms?.microphone === 'granted' || micWinUnknown
-    const screenOk = perms?.screenRecording === 'granted' || screenWinUnknown
+    const micOk = perms?.microphone === 'granted'
+    const screenOk = perms?.screenRecording === 'granted'
     // The headline only claims completion once every row below actually agrees; otherwise it stays a
     // neutral invitation to check, so it never contradicts a still-unmet item in the list underneath.
     const allReady = settings.providerReady && micOk && screenOk
     return (
       <div className="fade-up flex min-h-[300px] w-full flex-col items-center gap-5 px-4 py-7 text-center">
         <div className="flex flex-col items-center gap-1.5">
-          <MantuLogo size={150} />
+          <MetisMark size={110} />
           <div
             ref={headingRef}
             tabIndex={-1}
@@ -505,17 +505,25 @@ export function Onboarding({
             ok={micOk}
             denied={perms?.microphone === 'denied'}
             label="Microphone"
-            hint="grant access when you first press Listen"
-            note={micWinUnknown ? 'Windows will ask the first time you Listen' : undefined}
+            hint={
+              micWinUnknown
+                ? "Windows won't report this until you use it — check now or let Listen ask"
+                : 'grant access when you first press Listen'
+            }
             onFix={() => void window.toto.openPermissionSettings('microphone')}
+            fixLabel={micWinUnknown ? 'Check Windows Settings' : undefined}
           />
           <CheckRow
             ok={screenOk}
             denied={perms?.screenRecording === 'denied'}
             label="Screen recording"
-            hint="needed for the other side of calls + screen capture"
-            note={screenWinUnknown ? 'Windows will ask the first time you Listen' : undefined}
+            hint={
+              screenWinUnknown
+                ? "Windows won't report this until you use it — check now or let Listen ask"
+                : 'needed for the other side of calls + screen capture'
+            }
             onFix={() => void window.toto.openPermissionSettings('screenRecording')}
+            fixLabel={screenWinUnknown ? 'Check Windows Settings' : undefined}
           />
         </div>
 
@@ -544,7 +552,7 @@ export function Onboarding({
 
   return (
     <div className="fade-up flex min-h-[300px] w-full flex-col items-center justify-center gap-6 px-4 py-8 text-center">
-      <MantuLogo size={210} />
+      <MetisMark size={148} />
 
       <div className="flex flex-col gap-2">
         <div
@@ -552,17 +560,22 @@ export function Onboarding({
           tabIndex={-1}
           className="font-ui text-[24px] font-semibold tracking-tight text-[color:var(--color-ink)] outline-none"
         >
-          Your on-device AI copilot.
+          Métis. Your on-device AI copilot.
         </div>
         <p className="mx-auto max-w-[480px] text-[13.5px] leading-relaxed text-[color:var(--color-ink-2)]">
-          Transcription runs locally on your Mac. Audio never leaves your device. Answers are grounded in
+          Transcription runs locally, never leaving your device. Answers are grounded in
           your meeting context and cited so you can verify them. Everyone on the call knows it&apos;s there.
+        </p>
+        <p className="mx-auto max-w-[480px] text-[12px] italic leading-relaxed text-[color:var(--color-ink-3)]">
+          Named for the Greek goddess of cunning wisdom and prudence — the intelligence that doesn&apos;t
+          just know, but sees what&apos;s coming, adapts, and picks the right moment. That&apos;s what
+          Métis does for you, in every conversation.
         </p>
       </div>
 
       <div className="flex items-center gap-1.5 rounded-lg bg-[var(--color-accent-soft)] px-3 py-2 text-[12px] text-[color:var(--color-accent)]">
         <ShieldCheck size={12} />
-        Audio is processed on your Mac and never uploaded.
+        Audio is processed on your device and never uploaded.
       </div>
 
       <label className="no-drag flex w-full max-w-[460px] cursor-pointer items-start gap-2.5 rounded-xl border border-[var(--color-hair-soft)] bg-white/[0.03] p-3 text-left hover:bg-white/[0.06]">
@@ -611,7 +624,7 @@ export function Onboarding({
       </div>
 
       <div className="text-[10px] text-[color:var(--color-ink-3)]">
-        Mantu · AskToto
+        Mantu · Métis
       </div>
     </div>
   )

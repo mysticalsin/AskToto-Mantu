@@ -2,11 +2,10 @@ name: Release
 
 # Publishes signed builds to the public AskToto-Releases repo on a version tag push (v1.2.3).
 # macOS: electron-builder only WARNS and ships unsigned/non-notarized when the Apple secrets are absent
-# (app-builder-lib only throws for MAS builds — see codeSign/macCodeSign.js reportError()), so the
+# (app-builder-lib only throws for MAS builds - see codeSign/macCodeSign.js reportError()), so the
 # release-macos job hard-fails BEFORE building if those secrets are missing, rather than silently
-# publishing an unsigned build straight to AskToto-Releases. Windows signing is intentionally optional
-# (see scripts/ship-setup.sh) — an unsigned .exe still installs and runs, SmartScreen just warns — so
-# release-windows has no such gate and no-ops safely when WIN_CSC_LINK/WIN_CSC_KEY_PASSWORD are absent.
+# publishing an unsigned build straight to AskToto-Releases. Windows signing is now also required for
+# tagged releases: unsigned public installers break enterprise trust and can be blocked by SmartScreen.
 on:
   push:
     tags:
@@ -16,23 +15,68 @@ jobs:
   release-macos:
     name: macOS release
     runs-on: macos-latest
-    timeout-minutes: 45
+    # Notarization blocks on Apple's queue, which is usually minutes but has had documented multi-hour
+    # degradations; 45 min was tight enough that a slow queue killed the job with no partial-progress
+    # recovery (retry re-downloads/rebuilds from scratch). 90 min gives the notarization wait real room
+    # without materially delaying detection of a genuinely stuck job.
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
+      # First step, before any build work starts: a tag that doesn't match package.json's version would
+      # make electron-builder publish onto/overwrite an existing release instead of creating a new one -
+      # see scripts/check-version-parity.mjs for the full failure mode.
+      - name: Verify tag matches package.json version
+        run: node scripts/check-version-parity.mjs
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+      # Restore the reviewed LGPL ffmpeg decoder sidecar (untracked in git - see
+      # resources/ffmpeg/manifest.json) from the ffmpeg-sidecar-v1 release in this repo. Cache first so a
+      # warm runner doesn't hit the GitHub API on every run; fall back to `gh release download` (built-in
+      # GITHUB_TOKEN, read-only, scoped to this repo) on a cache miss.
+      - uses: actions/cache@v4
+        id: ffmpeg-cache
+        with:
+          path: resources/ffmpeg
+          key: ffmpeg-sidecar-v1-darwin-arm64
+      - name: Provision ffmpeg sidecar (darwin-arm64)
+        if: steps.ffmpeg-cache.outputs.cache-hit != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p resources/ffmpeg/darwin-arm64
+          if ! gh release download ffmpeg-sidecar-v1 --repo "$GITHUB_REPOSITORY" \
+               --pattern 'ffmpeg-darwin-arm64' --pattern 'manifest.json' --pattern 'LICENSE.LGPL-2.1.txt' \
+               --dir resources/ffmpeg --clobber; then
+            echo "::warning::Could not download the ffmpeg-sidecar-v1 release assets - falling through to the hard gate below."
+          elif [ -f resources/ffmpeg/ffmpeg-darwin-arm64 ]; then
+            mv resources/ffmpeg/ffmpeg-darwin-arm64 resources/ffmpeg/darwin-arm64/ffmpeg
+            chmod +x resources/ffmpeg/darwin-arm64/ffmpeg
+          fi
+      # Hard gate: fail loudly with the exact one-time seed command if provisioning above didn't produce a
+      # binary, instead of predist's check-ffmpeg-sidecar.mjs throwing a raw ENOENT deep inside the build.
+      - name: Require the ffmpeg sidecar to be present
+        run: |
+          if [ ! -f "resources/ffmpeg/darwin-arm64/ffmpeg" ]; then
+            echo "::error::Missing resources/ffmpeg/darwin-arm64/ffmpeg and the ffmpeg-sidecar-v1 release could not provision it."
+            echo "::error::One-time seed (run once locally by a maintainer holding the reviewed binaries in resources/ffmpeg/):"
+            echo "::error::  cp resources/ffmpeg/darwin-arm64/ffmpeg /tmp/ffmpeg-darwin-arm64 && cp resources/ffmpeg/win32-x64/ffmpeg.exe /tmp/ffmpeg-win32-x64.exe && gh release create ffmpeg-sidecar-v1 /tmp/ffmpeg-darwin-arm64 /tmp/ffmpeg-win32-x64.exe resources/ffmpeg/manifest.json resources/ffmpeg/LICENSE.LGPL-2.1.txt --repo $GITHUB_REPOSITORY --title 'ffmpeg sidecar v1' --notes 'Reviewed LGPL-only ffmpeg binaries for CI provisioning (see manifest.json for SHA256s).'"
+            exit 1
+          fi
       # Hard gate: a v* tag with these secrets missing must fail the job, not publish an unsigned build.
-      # electron-builder does not throw when it can't find a signing identity for a non-MAS build — it
+      # electron-builder does not throw when it can't find a signing identity for a non-MAS build - it
       # logs "skipped macOS application code signing" and continues (app-builder-lib/codeSign/
       # macCodeSign.js reportError()), and `--publish always` has no idea signing was skipped.
       - name: Require signing secrets before releasing
         run: |
           missing=()
+          [ -z "$GH_TOKEN" ] && missing+=(GH_TOKEN)
           [ -z "$CSC_LINK" ] && missing+=(CSC_LINK)
           [ -z "$CSC_KEY_PASSWORD" ] && missing+=(CSC_KEY_PASSWORD)
           [ -z "$APPLE_ID" ] && missing+=(APPLE_ID)
           [ -z "$APPLE_APP_SPECIFIC_PASSWORD" ] && missing+=(APPLE_APP_SPECIFIC_PASSWORD)
           [ -z "$APPLE_TEAM_ID" ] && missing+=(APPLE_TEAM_ID)
           if [ ${#missing[@]} -gt 0 ]; then
-            echo "::error::Missing release secret(s): ${missing[*]}. See docs/SIGNING.md / scripts/ship-setup.sh — refusing to publish an unsigned macOS release."
+            echo "::error::Missing release secret(s): ${missing[*]}. See docs/SIGNING.md / scripts/ship-setup.sh - refusing to publish an unsigned macOS release."
             exit 1
           fi
         env:
@@ -41,6 +85,7 @@ jobs:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
       - uses: actions/setup-node@v4
         with:
           node-version: 20
@@ -62,9 +107,16 @@ jobs:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      # The 2 GiB-per-asset size gate in check-release.mjs can't run before `npm run release` (it needs
+      # electron-builder's output, which that same command both builds and publishes in one step) - see
+      # the comment above checkArtifactSizes() in check-release.mjs. Runs after publish, so like
+      # verify-signing.mjs below it's a confirmation/alarm, not a preventer.
+      - run: npm run check:release
+        env:
+          ASKTOTO_ARTIFACTS_DIR: release
       # Positively verify the published artifact is actually signed + notarized rather than trusting
       # electron-builder's exit code (scripts/verify-signing.mjs, wired in per docs/SIGNING.md's
-      # "Signature gate" section). Runs after publish, so it's a confirmation/alarm, not a preventer —
+      # "Signature gate" section). Runs after publish, so it's a confirmation/alarm, not a preventer -
       # the secrets gate above is what stops an unsigned build from ever reaching AskToto-Releases.
       - run: node scripts/verify-signing.mjs --require-notarized
 
@@ -74,6 +126,61 @@ jobs:
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
+      - name: Verify tag matches package.json version
+        shell: bash
+        run: node scripts/check-version-parity.mjs
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+      # Restore the reviewed LGPL ffmpeg decoder sidecar (untracked in git - see
+      # resources/ffmpeg/manifest.json) from the ffmpeg-sidecar-v1 release in this repo. Cache first so a
+      # warm runner doesn't hit the GitHub API on every run; fall back to `gh release download` (built-in
+      # GITHUB_TOKEN, read-only, scoped to this repo) on a cache miss.
+      - uses: actions/cache@v4
+        id: ffmpeg-cache
+        with:
+          path: resources/ffmpeg
+          key: ffmpeg-sidecar-v1-win32-x64
+      - name: Provision ffmpeg sidecar (win32-x64)
+        if: steps.ffmpeg-cache.outputs.cache-hit != 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p resources/ffmpeg/win32-x64
+          if ! gh release download ffmpeg-sidecar-v1 --repo "$GITHUB_REPOSITORY" \
+               --pattern 'ffmpeg-win32-x64.exe' --pattern 'manifest.json' --pattern 'LICENSE.LGPL-2.1.txt' \
+               --dir resources/ffmpeg --clobber; then
+            echo "::warning::Could not download the ffmpeg-sidecar-v1 release assets - falling through to the hard gate below."
+          elif [ -f resources/ffmpeg/ffmpeg-win32-x64.exe ]; then
+            mv resources/ffmpeg/ffmpeg-win32-x64.exe resources/ffmpeg/win32-x64/ffmpeg.exe
+          fi
+      # Hard gate: resources/ffmpeg (the LGPL decoder sidecar checked by scripts/check-ffmpeg-sidecar.mjs)
+      # is untracked in git; fail here with the exact one-time seed command, before burning build/signing
+      # time, instead of failing deep inside `npm run release:win`.
+      - name: Require the ffmpeg sidecar to be present
+        shell: bash
+        run: |
+          if [ ! -f "resources/ffmpeg/win32-x64/ffmpeg.exe" ]; then
+            echo "::error::Missing resources/ffmpeg/win32-x64/ffmpeg.exe and the ffmpeg-sidecar-v1 release could not provision it."
+            echo "::error::One-time seed (run once locally by a maintainer holding the reviewed binaries in resources/ffmpeg/):"
+            echo "::error::  cp resources/ffmpeg/darwin-arm64/ffmpeg /tmp/ffmpeg-darwin-arm64 && cp resources/ffmpeg/win32-x64/ffmpeg.exe /tmp/ffmpeg-win32-x64.exe && gh release create ffmpeg-sidecar-v1 /tmp/ffmpeg-darwin-arm64 /tmp/ffmpeg-win32-x64.exe resources/ffmpeg/manifest.json resources/ffmpeg/LICENSE.LGPL-2.1.txt --repo $GITHUB_REPOSITORY --title 'ffmpeg sidecar v1' --notes 'Reviewed LGPL-only ffmpeg binaries for CI provisioning (see manifest.json for SHA256s).'"
+            exit 1
+          fi
+      - name: Require signing secrets before releasing
+        shell: bash
+        run: |
+          missing=()
+          [ -z "$GH_TOKEN" ] && missing+=(GH_TOKEN)
+          [ -z "$WIN_CSC_LINK" ] && missing+=(WIN_CSC_LINK)
+          [ -z "$WIN_CSC_KEY_PASSWORD" ] && missing+=(WIN_CSC_KEY_PASSWORD)
+          if [ ${#missing[@]} -gt 0 ]; then
+            echo "::error::Missing release secret(s): ${missing[*]}. See docs/SIGNING.md - refusing to publish an unsigned Windows release."
+            exit 1
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+          WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
+          WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
       - uses: actions/setup-node@v4
         with:
           node-version: 20
@@ -92,3 +199,67 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
           WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
           WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
+      # Same post-publish size-gate confirmation as release-macos - see the comment there.
+      - run: npm run check:release
+        env:
+          ASKTOTO_ARTIFACTS_DIR: release
+      - run: node scripts/verify-signing.mjs
+
+  # release-macos and release-windows publish to the same non-draft GitHub release independently, with no
+  # `needs:` between them - a tag could previously publish one platform while the other silently failed,
+  # leaving that platform's users stuck on stale software with nothing surfacing the skew. Verify both
+  # platforms' assets actually landed on the release and fail loudly (marking it draft) if not.
+  release-verify:
+    name: Verify both platforms published
+    needs: [release-macos, release-windows]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Resolve publish repo
+        id: publish-repo
+        run: |
+          owner=$(grep -oE '^\s*owner:\s*\S+' electron-builder.yml | awk '{print $2}')
+          repo=$(grep -oE '^\s*repo:\s*\S+' electron-builder.yml | awk '{print $2}')
+          echo "owner=$owner" >> "$GITHUB_OUTPUT"
+          echo "repo=$repo" >> "$GITHUB_OUTPUT"
+      - name: Verify macOS and Windows assets are both on the release
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+        run: |
+          repo="${{ steps.publish-repo.outputs.owner }}/${{ steps.publish-repo.outputs.repo }}"
+          tag="$GITHUB_REF_NAME"
+          mac_result="${{ needs.release-macos.result }}"
+          win_result="${{ needs.release-windows.result }}"
+          echo "release-macos=$mac_result release-windows=$win_result"
+          if ! gh release view "$tag" --repo "$repo" >/dev/null 2>&1; then
+            echo "::error::No release exists for $tag on $repo (release-macos=$mac_result, release-windows=$win_result) - nothing published."
+            exit 1
+          fi
+          assets=""
+          max_attempts=3
+          attempt=1
+          while [ "$attempt" -le "$max_attempts" ]; do
+            if assets=$(gh release view "$tag" --repo "$repo" --json assets --jq '.assets[].name' 2>&1); then
+              break
+            fi
+            echo "::warning::Attempt $attempt/$max_attempts to list assets for $tag on $repo failed: $assets"
+            attempt=$((attempt + 1))
+            [ "$attempt" -le "$max_attempts" ] && sleep 5
+          done
+          if [ "$attempt" -gt "$max_attempts" ]; then
+            echo "::error::Could not reach the GitHub API to list assets for $tag on $repo after $max_attempts attempts (release-macos=$mac_result, release-windows=$win_result) - this is a verify-step API failure, not confirmation that assets are missing."
+            exit 1
+          fi
+          mac_ok=false
+          win_ok=false
+          echo "$assets" | grep -Eq '\.(dmg|zip)$' && echo "$assets" | grep -Fxq 'latest-mac.yml' && mac_ok=true || true
+          echo "$assets" | grep -Eq '\.(exe|appx)$' && echo "$assets" | grep -Fxq 'latest.yml' && win_ok=true || true
+          if [ "$mac_ok" != true ] || [ "$win_ok" != true ]; then
+            echo "::error::Release $tag on $repo is missing platform assets (mac_ok=$mac_ok win_ok=$win_ok, release-macos=$mac_result, release-windows=$win_result)."
+            echo "::error::Marking it draft so electron-updater never resolves an incomplete release."
+            gh release edit "$tag" --repo "$repo" --draft || echo "::warning::Could not mark $tag as draft on $repo."
+            exit 1
+          fi
+          echo "Both platforms verified present on $repo for $tag."

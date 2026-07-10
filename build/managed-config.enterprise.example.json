@@ -1,0 +1,33 @@
+{
+  "_comment": "Enterprise deployment policy. Copy to managed-config.json and deploy machine-wide: macOS /Library/Application Support/AskToto/managed-config.json, Windows %ProgramData%\\AskToto\\managed-config.json. Replace placeholder IDs and URLs before rollout.",
+  "locked": [
+    "azureClientId",
+    "azureTenantId",
+    "azureAllowedDomain",
+    "licenseServerUrl",
+    "licenseGateEnabled",
+    "provider",
+    "customBaseUrl",
+    "encryptTranscripts",
+    "redactSensitive",
+    "contentProtection",
+    "requireConsentIndicator",
+    "autoSaveTranscripts",
+    "transcriptRetentionDays"
+  ],
+  "requireAuth": true,
+  "azureClientId": "REPLACE-WITH-AZURE-APP-CLIENT-ID",
+  "azureTenantId": "REPLACE-WITH-AZURE-TENANT-ID",
+  "azureAllowedDomain": "mantu.com",
+  "licenseServerUrl": "https://licenses.asktoto.example.com",
+  "licenseGateEnabled": true,
+  "allowedProviders": ["dust", "anthropic", "openai"],
+  "provider": "dust",
+  "dustBaseUrl": "https://dust.tt",
+  "encryptTranscripts": true,
+  "redactSensitive": true,
+  "contentProtection": true,
+  "requireConsentIndicator": true,
+  "autoSaveTranscripts": true,
+  "transcriptRetentionDays": 90
+}

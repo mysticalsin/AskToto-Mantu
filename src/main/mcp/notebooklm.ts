@@ -12,7 +12,7 @@
  *
  * Auth is NOT an API key: `nlm login` opens the user's own browser, they sign in to Google, and the
  * CLI extracts + stores session cookies itself (in its own `~/.notebooklm-mcp-cli` state, outside
- * AskToto's control). This module never sees or stores a credential — it only detects whether the
+ * Métis's control). This module never sees or stores a credential — it only detects whether the
  * CLI is present and classifies "not signed in" responses so Settings can prompt the user to
  * (re)connect their Google account. Every user-facing string says "Google account" plainly instead
  * of "credential"/"token" — there is nothing else to be honest about here.
@@ -55,7 +55,9 @@ function parseWhereOutput(stdout: string): string | null {
     .split(/\r?\n/)
     .map((l) => l.trim())
     .filter(Boolean)
-  return lines.find((l) => /\.(cmd|exe)$/i.test(l)) ?? lines[0] ?? null
+  // No fallback to lines[0]: an extension-less shadow PATH entry isn't launchable (mirrors
+  // main/cli.ts's parseWhereOutput).
+  return lines.find((l) => /\.(cmd|exe)$/i.test(l)) ?? null
 }
 
 /** Resolve a binary to its absolute path via the login shell (mac/Linux) or `where` (Windows). Only
@@ -66,7 +68,7 @@ export async function resolveBinary(bin: string): Promise<string | null> {
 
   if (process.platform === 'win32') {
     try {
-      const { stdout } = await execFileAsync('where', [bin], { timeout: DETECT_TIMEOUT_MS })
+      const { stdout } = await execFileAsync('where', [bin], { timeout: DETECT_TIMEOUT_MS, windowsHide: true })
       const resolved = parseWhereOutput(stdout)
       if (resolved) binCache.set(cacheKey, resolved)
       return resolved
@@ -170,7 +172,7 @@ async function withStdioClient<T>(
   // NotebookLM action. The SDK ships a CJS build (dist/cjs), so the static import is bytecode-safe.
   const client = new Client({ name: 'asktoto', version: '1.0.0' }, { capabilities: {} })
   // Fresh client + transport (= fresh spawned process) per call — never reused across calls, same
-  // policy as bidstackClient.ts. `stderr: 'pipe'` so a crash's stderr never leaks to AskToto's own
+  // policy as bidstackClient.ts. `stderr: 'pipe'` so a crash's stderr never leaks to Métis's own
   // stderr/console; we only use it (via the caught error) to classify the failure.
   const transport = new StdioClientTransport({ command, args: [], stderr: 'pipe' })
   const controller = new AbortController()
@@ -204,7 +206,7 @@ export async function detectNotebookLmCli(): Promise<NotebookLmDetectResult> {
   const bin = await resolveBinary('nlm')
   if (!bin) return { ok: false, error: 'NotebookLM CLI is not installed.' }
   try {
-    const { stdout } = await execFileAsync(bin, ['--version'], { timeout: DETECT_TIMEOUT_MS })
+    const { stdout } = await execFileAsync(bin, ['--version'], { timeout: DETECT_TIMEOUT_MS, windowsHide: true })
     return { ok: true, version: stdout.trim().slice(0, 40) || 'installed' }
   } catch {
     // --version failing doesn't mean the binary is missing — we already resolved it above.
@@ -273,7 +275,7 @@ export async function installNotebookLmCli(onProgress: (line: string) => void): 
   if (!manager || !managerBin) {
     return {
       ok: false,
-      error: 'AskToto could not set up NotebookLM automatically on this computer. Your IT team can enable it, or try again later.'
+      error: 'Métis could not set up NotebookLM automatically on this computer. Your IT team can enable it, or try again later.'
     }
   }
 
@@ -293,6 +295,7 @@ export async function installNotebookLmCli(onProgress: (line: string) => void): 
       ? spawn(process.env.ComSpec || 'cmd.exe', ['/d', '/s', '/c', managerBin!, ...args], {
           env: process.env,
           shell: false,
+          windowsHide: true,
           stdio: ['ignore', 'pipe', 'pipe']
         })
       : spawn(process.env.SHELL || '/bin/zsh', ['-lc', [managerBin, ...args].map(shQuote).join(' ')], {
@@ -340,7 +343,7 @@ export async function installNotebookLmCli(onProgress: (line: string) => void): 
         finish({
           ok: false,
           needsTerminal: true,
-          error: 'AskToto does not have permission to finish setting up NotebookLM on this computer. Your IT team can help, or try again later.'
+          error: 'Métis does not have permission to finish setting up NotebookLM on this computer. Your IT team can help, or try again later.'
         })
         return
       }

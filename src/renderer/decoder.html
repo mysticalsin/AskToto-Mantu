@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- Narrower than index.html's CSP on purpose: this hidden page only runs import-decoder.ts, which
+         decodes audio via the browser's native OfflineAudioContext (no wasm, no Worker, no blob: URLs)
+         and talks to main solely through the preload contextBridge (IPC, not subject to connect-src).
+         It never fetches an LLM API or loads an image/font, so none of index.html's provider hosts or
+         blob/data allowances are needed here — keep it 'self'-only. -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; base-uri 'self'; object-src 'none'; form-action 'none'; frame-src 'none'; img-src 'self'; media-src 'self'; connect-src 'self'; script-src 'self'; style-src 'self'; font-src 'self'; worker-src 'self';"
+    />
+    <title>Métis audio decoder</title>
+  </head>
+  <body>
+    <script type="module" src="/src/import-decoder.ts"></script>
+  </body>
+</html>

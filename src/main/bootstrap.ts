@@ -1,13 +1,13 @@
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
-import { readFileSync, writeFileSync, existsSync, mkdirSync, renameSync } from 'node:fs'
+import { readFileSync, writeFileSync, existsSync, mkdirSync, renameSync, readdirSync } from 'node:fs'
 import { join, delimiter } from 'node:path'
 import { homedir } from 'node:os'
 
 /**
  * Invisible first-run dependency bootstrap ("Apple builds this: the user never sees plumbing").
  *
- * Ensures `graphify` (the knowledge-graph CLI AskToto shells out to — see graphify.ts) is installed,
+ * Ensures `graphify` (the knowledge-graph CLI Métis shells out to — see graphify.ts) is installed,
  * entirely in the background, without ever surfacing an error, a terminal window, or a progress bar
  * to the user. Also preflights `npm` availability so the onboarding CLI-connect chooser can pre-warn
  * in plain language before the user picks an option that needs it.
@@ -22,7 +22,7 @@ import { homedir } from 'node:os'
  *   - runFirstRunBootstrap() NEVER rejects and NEVER throws into the caller — every failure path is
  *     swallowed, logged, and recorded in the state file instead. Call it fire-and-forget (`void
  *     runFirstRunBootstrap(...)`) after window creation, at low priority; it never blocks startup.
- *   - Fully self-contained: no imports from any other AskToto module, so it typechecks/tests standalone
+ *   - Fully self-contained: no imports from any other Métis module, so it typechecks/tests standalone
  *     and can't be destabilized by concurrent edits elsewhere (e.g. cli.ts, index.ts).
  *
  * State persists at `<userDataDir>/bootstrap.json` (see BootstrapState) so the retry budget and last
@@ -88,8 +88,30 @@ const POSIX_EXTRA_BINS = [
   '/opt/homebrew/bin',
   '/usr/local/bin'
 ]
+/** The python.org per-user Windows installer never places python.exe directly in
+ *  %LOCALAPPDATA%\Programs\Python — only in a version-numbered subfolder underneath it (e.g.
+ *  ...\Python\Python312\python.exe). Returns that newest subfolder plus its Scripts dir (where
+ *  pip-installed console scripts land), or [] if the base dir doesn't exist / has no version dirs.
+ *  Duplicated from graphify.ts's windowsPythonDirs() rather than imported — this module is
+ *  deliberately self-contained (see module doc) — keep both in sync if the install layout changes.
+ *  Exported for unit tests (bootstrap.test.ts). */
+export function windowsPythonDirs(): string[] {
+  const base = join(process.env.LOCALAPPDATA || join(homedir(), 'AppData', 'Local'), 'Programs', 'Python')
+  try {
+    const newest = readdirSync(base)
+      .filter((d) => /^Python\d+$/i.test(d))
+      .sort()
+      .reverse()[0]
+    if (!newest) return []
+    const dir = join(base, newest)
+    return [dir, join(dir, 'Scripts')]
+  } catch {
+    return []
+  }
+}
+
 const WIN_EXTRA_BINS = [
-  join(process.env.LOCALAPPDATA || join(homedir(), 'AppData', 'Local'), 'Programs', 'Python'),
+  ...windowsPythonDirs(),
   join(process.env.APPDATA || join(homedir(), 'AppData', 'Roaming'), 'npm'),
   join(homedir(), '.local', 'bin')
 ]
@@ -133,7 +155,13 @@ async function winRun(
 ): Promise<{ stdout: string; stderr: string }> {
   let resolved: string | null = null
   try {
-    const { stdout } = await execFileAsync('where', [command], { timeout: PROBE_TIMEOUT_MS, env: installEnv(true) })
+    // windowsHide: `where` is a console-subsystem binary — without this a child console window
+    // flashes on screen even though nothing is printed to it (this probe runs on every Windows launch).
+    const { stdout } = await execFileAsync('where', [command], {
+      timeout: PROBE_TIMEOUT_MS,
+      windowsHide: true,
+      env: installEnv(true)
+    })
     resolved = parseWhereLines(stdout)
   } catch {
     /* `where` found nothing on PATH — fall through to the bare command below */
@@ -184,7 +212,14 @@ async function detectGraphify(isWin: boolean): Promise<boolean> {
 async function detectNpm(isWin: boolean): Promise<boolean> {
   try {
     if (isWin) {
-      const { stdout } = await execFileAsync('where', ['npm'], { timeout: PROBE_TIMEOUT_MS })
+      // windowsHide: `where` is a console-subsystem binary — without this a child console window
+      // flashes on screen even though nothing is printed to it. env: installEnv(true) mirrors winRun's
+      // probe above so this sees the same PATH-augmented view (e.g. a fresh npm install location).
+      const { stdout } = await execFileAsync('where', ['npm'], {
+        timeout: PROBE_TIMEOUT_MS,
+        windowsHide: true,
+        env: installEnv(true)
+      })
       return !!parseWhereLines(stdout)
     }
     const shell = process.env.SHELL || '/bin/zsh'

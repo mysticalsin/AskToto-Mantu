@@ -110,6 +110,22 @@ describe('resolveBinary — login-shell lookup with in-process caching', () => {
     expect(await resolveBinary('missingtool')).toBeNull()
     expect(h.execFileImpl).toHaveBeenCalledTimes(2) // a miss is never cached — a later install must be picked up
   })
+
+  describe('on Windows: `where` parsing never falls back to an unlaunchable shadow entry', () => {
+    const REAL_PLATFORM = process.platform
+    beforeEach(() => Object.defineProperty(process, 'platform', { value: 'win32', configurable: true }))
+    afterEach(() => Object.defineProperty(process, 'platform', { value: REAL_PLATFORM, configurable: true }))
+
+    it('picks the .cmd/.exe hit over an extension-less shadow line', async () => {
+      h.execFileImpl.mockResolvedValue({ stdout: 'C:\\shadow\\nlm\r\nC:\\npm\\nlm.cmd\r\n', stderr: '' })
+      expect(await resolveBinary('nlm')).toBe('C:\\npm\\nlm.cmd')
+    })
+
+    it('returns null (not the shadow entry) when only an extension-less line matches', async () => {
+      h.execFileImpl.mockResolvedValue({ stdout: 'C:\\shadow\\nlm\r\n', stderr: '' })
+      expect(await resolveBinary('nlm')).toBeNull()
+    })
+  })
 })
 
 // ─── detectNotebookLmCli ─────────────────────────────────────────────────────────

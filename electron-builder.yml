@@ -1,10 +1,13 @@
+# appId stays com.mantu.asktoto through the Métis rebrand ON PURPOSE: macOS TCC grants (mic/screen)
+# and updater identity are keyed to it — changing it would reset permissions and orphan existing
+# installs. Everything user-visible says Métis; this internal id is never shown.
 appId: com.mantu.asktoto
-productName: AskToto
+productName: Métis
 # Strip OneDrive/Finder xattrs from the packed app before signing — codesign hard-rejects them
 # ("resource fork … detritus not allowed"); this repo lives in CloudStorage so they're everywhere.
 afterPack: scripts/after-pack.mjs
-copyright: © 2026 Mantu · AskToto — built by Tony Walteur
-# App icon: build/icon.png (1024² Mantu M) → electron-builder derives mac .icns + win .ico automatically.
+copyright: © 2026 Mantu · Métis — built by Tony Walteur
+# App icon: build/icon.png (1024² Métis goddess mark) → electron-builder derives mac .icns + win .ico automatically.
 # Code signing is env-driven (see SIGNING.md):
 #   mac/win:  CSC_LINK (path/base64 of the .p12) + CSC_KEY_PASSWORD
 #   notarize: APPLE_ID + APPLE_APP_SPECIFIC_PASSWORD + APPLE_TEAM_ID
@@ -36,6 +39,8 @@ extraResources:
     to: intelligence
   - from: build/managed-config.example.json
     to: managed-config.example.json
+  - from: build/managed-config.enterprise.example.json
+    to: managed-config.enterprise.example.json
   - from: build/icon.png
     to: icon.png
   - from: resources/graphify_runner.py
@@ -46,12 +51,25 @@ extraResources:
   # Populated by `npm run fetch-models` before packaging.
   - from: resources/models
     to: models
+    # The 1.5 GiB WebGPU Whisper tier is an opt-in development/benchmark asset. Parakeet is the
+    # primary on-device engine and whisper-base remains bundled as an offline fallback; shipping both
+    # models puts a release above the GitHub asset safety gate with no import-path benefit.
+    filter:
+      - '**/*'
+      - '!onnx-community/whisper-large-v3-turbo/**'
   - from: resources/asr
     to: asr
+  # Self-built LGPL FFmpeg sidecar used only for bounded-memory import decode. Target-specific binaries
+  # live under their platform/arch subfolder; runtime never falls back to an arbitrary PATH executable.
+  - from: resources/ffmpeg
+    to: ffmpeg
   - from: resources/ort
     to: ort
 mac:
   category: public.app-category.productivity
+  # ASCII artifact names (see the win note below): the .app displays as Métis, the .dmg/.zip assets
+  # and latest-mac.yml URLs stay accent-free.
+  artifactName: Metis-${version}.${ext}
   target:
     - dmg
     - zip
@@ -60,19 +78,33 @@ mac:
   entitlementsInherit: build/entitlements.mac.plist
   gatekeeperAssess: false
   extendInfo:
-    NSMicrophoneUsageDescription: AskToto transcribes audio on-device to give you live AI suggestions.
-    NSScreenCaptureUsageDescription: AskToto captures system audio and your screen so the AI can help.
-    NSAppleEventsUsageDescription: AskToto detects when a meeting starts (Zoom/Teams/Meet) to auto-start.
+    NSMicrophoneUsageDescription: Métis transcribes audio on-device to give you live AI suggestions.
+    NSScreenCaptureUsageDescription: Métis captures system audio and your screen so the AI can help.
     LSUIElement: true
+mas:
+  # Mac App Store builds are opt-in: run `npm run release:mas`.
+  # The default direct channel stays dmg/zip so enterprise customers keep the full feature set and
+  # electron-updater. App Store builds are sandboxed and get updates through Apple.
+  entitlements: build/entitlements.mas.plist
+  entitlementsInherit: build/entitlements.mas.inherit.plist
+  extendInfo:
+    NSMicrophoneUsageDescription: Métis transcribes audio on-device to give you live AI suggestions.
+    NSScreenCaptureUsageDescription: Métis captures system audio and your screen so the AI can help.
+    LSUIElement: true
+masDev:
+  entitlements: build/entitlements.mas.plist
+  entitlementsInherit: build/entitlements.mas.inherit.plist
 dmg:
-  title: AskToto ${version}
+  title: Métis ${version}
 win:
   icon: build/icon.png
   publisherName: Mantu
   target:
-    - nsis      # → AskToto-Setup-<version>.exe (installer)
-    - portable  # → AskToto-Portable-<version>.exe (no-install single exe)
-  artifactName: AskToto-Setup-${version}.${ext}
+    - nsis      # → Metis-Setup-<version>.exe (installer)
+    - portable  # → Metis-Portable-<version>.exe (no-install single exe)
+  # ASCII artifact/store ids on purpose: é in an .exe filename or AppX identity invites codepage,
+  # globbing, and store-validation trouble. The installed app still displays as Métis (shortcutName).
+  artifactName: Metis-Setup-${version}.${ext}
   # Must stay true: electron-updater checks the downloaded update's Authenticode signature before install.
   # Inert today (no real publish.url is configured), but false would let a compromised release pipeline
   # push an unsigned/mismatched .exe that installs with only a TLS+sha512 check. Flip only if you fully
@@ -85,13 +117,14 @@ nsis:
   perMachine: false
   allowToChangeInstallationDirectory: true
   createDesktopShortcut: true
-  shortcutName: AskToto
+  shortcutName: Métis
 portable:
-  artifactName: AskToto-Portable-${version}.${ext}
+  # electron-updater has no portable-EXE support: this build never auto-updates (see docs/INSTALL.md).
+  artifactName: Metis-Portable-${version}.${ext}
 appx:
-  artifactName: AskToto-${version}.${ext}
-  applicationId: AskToto
-  identityName: Mantu.AskToto
+  artifactName: Metis-${version}.${ext}
+  applicationId: Metis
+  identityName: Mantu.Metis
   publisher: CN=Mantu
   publisherDisplayName: Mantu
   backgroundColor: transparent
@@ -109,6 +142,9 @@ publish:
   # on launch, downloads the new version in the background, and installs it on quit (perfect zero-click UX).
   # To cut a release: create the public repo once (gh repo create mysticalsin/AskToto-Releases --public),
   # set GH_TOKEN (a PAT with `repo` scope), then run `npm run release`.
+  # NOTE (Métis rebrand): the feed repo keeps its old name — every installed app polls THIS repo by name,
+  # so renaming it would strand them. To migrate later: rename the GitHub repo (redirects cover the gap),
+  # then update owner/repo here in the release AFTER the one that ships the rename.
   provider: github
   owner: mysticalsin
   repo: AskToto-Releases

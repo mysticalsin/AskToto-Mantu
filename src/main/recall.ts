@@ -148,7 +148,7 @@ export async function recallRead(file: string): Promise<RecallReadResult> {
   }
 
   // Parse transcript lines from the ## Full transcript section.
-  // Format written by saveMeeting: **[HH:MM:SS] Them:** text  or  **[HH:MM:SS] You:** text
+  // Format written by saveMeeting: **[HH:MM:SS] Them:**, **You:**, or an imported recording's **Speaker:**.
   const lines: TranscriptLine[] = []
   const transcriptMatch = text.match(/^## Full transcript[\r\n]+([\s\S]*)$/m)
   if (transcriptMatch) {
@@ -158,7 +158,7 @@ export async function recallRead(file: string): Promise<RecallReadResult> {
     // anchor (read time) so every line still gets a real, monotonically increasing timestamp instead
     // of collapsing to 0 — the parsed HH:MM:SS is real elapsed-time data even without a calendar date.
     const baseDate = startedAt ? new Date(startedAt) : new Date()
-    const lineRe = /^\*\*\[(\d{2}):(\d{2}):(\d{2})\] (Them|You):\*\* (.+)$/gm
+    const lineRe = /^\*\*\[(\d{2}):(\d{2}):(\d{2})\] (Them|You|Speaker):\*\* (.+)$/gm
     let m: RegExpExecArray | null
     let prevT: number | undefined = startedAt
     while ((m = lineRe.exec(body)) !== null) {
@@ -172,7 +172,7 @@ export async function recallRead(file: string): Promise<RecallReadResult> {
       const t = d.getTime()
       prevT = t
       lines.push({
-        speaker: speakerLabel === 'Them' ? 'them' : 'you',
+        speaker: speakerLabel === 'Them' ? 'them' : speakerLabel === 'You' ? 'you' : 'unknown',
         text: lineText.trim(),
         t
       })
@@ -421,7 +421,7 @@ export async function updateMeetingRecap(
 }
 
 /**
- * Delete every saved meeting + the index — a genuine "delete all my AskToto data" action, for a
+ * Delete every saved meeting + the index — a genuine "delete all my Métis data" action, for a
  * GDPR/CCPA erasure request or a full account wipe. The caller (index.ts) is responsible for also
  * purging the knowledge graph (purgeGraphArtifacts) and prompting for confirmation first; this
  * function does the actual file removal only. Best-effort per file — one failure doesn't abort the

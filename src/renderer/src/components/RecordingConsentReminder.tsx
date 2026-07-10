@@ -60,7 +60,7 @@ export function RecordingConsentReminder({
         </div>
         <div className="min-w-0 flex-1">
           <div className="truncate text-[13px] font-medium text-[color:var(--color-ink)]">
-            AskToto is listening
+            Métis is listening
           </div>
           <div className="text-[11px] leading-snug text-[color:var(--color-ink-2)]">
             You’re recording other participants. Make sure everyone has consented.

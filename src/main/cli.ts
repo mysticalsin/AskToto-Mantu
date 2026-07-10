@@ -86,7 +86,9 @@ export async function resolveBin(bin: string): Promise<string | null> {
 
   if (process.platform === 'win32') {
     try {
-      const { stdout } = await execFileAsync('where', [bin])
+      // windowsHide: `where` is a console-subsystem binary — without this a child console window
+      // flashes on screen even though nothing is printed to it.
+      const { stdout } = await execFileAsync('where', [bin], { windowsHide: true })
       const resolved = parseWhereOutput(stdout)
       if (resolved) {
         binCache.set(bin, resolved)
@@ -121,7 +123,7 @@ export async function resolveBin(bin: string): Promise<string | null> {
 
 /** Env for spawning a CLI. For claude-cli, strip Claude-Code session + proxy vars so the spawned
  *  `claude` runs as a clean standalone invocation against the user's own keychain login (avoids a
- *  hang when AskToto is itself launched from a Claude Code session, and ignores a proxy base URL).
+ *  hang when Métis is itself launched from a Claude Code session, and ignores a proxy base URL).
  *  Also strips ANTHROPIC_API_KEY / ANTHROPIC_AUTH_TOKEN so the spawned `claude -p` uses the
  *  interactive CLI login (honours the "no key required" contract) and not silent API-key billing. */
 export function cliEnv(provider: ProviderId): NodeJS.ProcessEnv {
@@ -350,6 +352,9 @@ export function runCliStream(opts: RunCliStreamOpts): { abort: () => void } {
       // SECURITY: never use shell:true — args are passed as an array. On Windows, cmd.exe may be the
       // spawn target for a .cmd shim (see resolveSpawnTarget) but it is never invoked as a shell here.
       shell: false,
+      // Every 'Ask' spawns this — without windowsHide a console window flashes on top of the
+      // always-on-top overlay (and anything the user is screen-sharing) on every single call.
+      windowsHide: true,
       // 'pipe' for stdin so we can write prompt + system without exposing them in argv
       stdio: ['pipe', 'pipe', 'pipe']
     })
@@ -443,7 +448,7 @@ export async function detectCli(provider: ProviderId): Promise<CliActionResult> 
     // Windows .cmd shims must go through cmd.exe (see resolveSpawnTarget) — the same EINVAL landmine
     // as the spawn() call sites below, just reached via execFile here instead.
     const spawnTarget = resolveSpawnTarget(absBin, ['--version'])
-    const { stdout } = await execFileAsync(spawnTarget.command, spawnTarget.args)
+    const { stdout } = await execFileAsync(spawnTarget.command, spawnTarget.args, { windowsHide: true })
     return { ok: true, version: stdout.trim().slice(0, 40) }
   } catch {
     // --version might fail on some builds; binary is present but couldn't run
@@ -511,6 +516,8 @@ export async function testCli(provider: ProviderId): Promise<CliActionResult> {
       // SECURITY: never use shell:true. cmd.exe may be the spawn target for a Windows .cmd shim (see
       // resolveSpawnTarget) but it is never invoked as a shell here.
       shell: false,
+      // Runs on every Connect/Test-connection click — without this a console window flashes.
+      windowsHide: true,
       // 'pipe' for stdin so we write the test prompt without it appearing in argv
       stdio: ['pipe', 'pipe', 'pipe']
     })
@@ -587,7 +594,7 @@ export async function setupCli(provider: ProviderId): Promise<{ ok: boolean; err
       scriptLines = [
         '@echo off',
         'cls',
-        'echo AskToto - Claude Code CLI setup',
+        'echo Métis - Claude Code CLI setup',
         'echo ================================',
         'echo.',
         'where npm >nul 2>nul',
@@ -611,14 +618,14 @@ export async function setupCli(provider: ProviderId): Promise<{ ok: boolean; err
         'echo ----------------------------------------',
         'call claude',
         'echo.',
-        'echo Done. Go back to AskToto and click Connect again.',
+        'echo Done. Go back to Métis and click Connect again.',
         'pause'
       ]
     } else if (provider === 'codex-cli') {
       scriptLines = [
         '@echo off',
         'cls',
-        'echo AskToto - OpenAI Codex CLI setup',
+        'echo Métis - OpenAI Codex CLI setup',
         'echo =================================',
         'echo.',
         'where npm >nul 2>nul',
@@ -641,7 +648,7 @@ export async function setupCli(provider: ProviderId): Promise<{ ok: boolean; err
         'echo Step 2/2  Signing in to OpenAI Codex...',
         'call codex login',
         'echo.',
-        'echo Done. Go back to AskToto and click Connect again.',
+        'echo Done. Go back to Métis and click Connect again.',
         'pause'
       ]
     } else {
@@ -651,7 +658,7 @@ export async function setupCli(provider: ProviderId): Promise<{ ok: boolean; err
     scriptLines = [
       '#!/bin/bash',
       'clear',
-      'echo "AskToto — Claude Code CLI setup"',
+      'echo "Métis — Claude Code CLI setup"',
       'echo "================================"',
       'echo',
       'if ! command -v npm >/dev/null 2>&1; then',
@@ -667,14 +674,14 @@ export async function setupCli(provider: ProviderId): Promise<{ ok: boolean; err
       'echo; echo "Step 2/2  Signing in to Claude (type /login at the prompt below)…"',
       'echo "────────────────────────────────────────────────"',
       'claude',
-      'echo; echo "✓ Done. Go back to AskToto and click \\"Connect\\" again."',
+      'echo; echo "✓ Done. Go back to Métis and click \\"Connect\\" again."',
       'echo "You can close this window."'
     ]
   } else if (provider === 'codex-cli') {
     scriptLines = [
       '#!/bin/bash',
       'clear',
-      'echo "AskToto — OpenAI Codex CLI setup"',
+      'echo "Métis — OpenAI Codex CLI setup"',
       'echo "================================="',
       'echo',
       'if ! command -v npm >/dev/null 2>&1; then',
@@ -689,7 +696,7 @@ export async function setupCli(provider: ProviderId): Promise<{ ok: boolean; err
       'fi',
       'echo; echo "Step 2/2  Signing in to OpenAI Codex…"',
       'codex login',
-      'echo; echo "✓ Done. Go back to AskToto and click \\"Connect\\" again."',
+      'echo; echo "✓ Done. Go back to Métis and click \\"Connect\\" again."',
       'echo "You can close this window."'
     ]
   } else {
@@ -753,6 +760,7 @@ export async function installCli(
         ? spawn(process.env.ComSpec || 'cmd.exe', ['/d', '/s', '/c', 'npm', 'i', '-g', pkg], {
             env: process.env,
             shell: false,
+            windowsHide: true,
             stdio: ['ignore', 'pipe', 'pipe']
           })
         : spawn(loginShell, ['-lc', `npm i -g ${pkg}`], {
@@ -806,8 +814,10 @@ export async function installCli(
         return
       }
       const stderrText = stderrLines.join('\n')
-      // Detect npm-not-found: npm missing means the shell printed 'command not found'
-      if (/command not found/i.test(stderrText)) {
+      // Detect npm-not-found: the login shell prints 'command not found' (mac/Linux); cmd.exe prints
+      // "'npm' is not recognized as an internal or external command..." (Windows) — same check as
+      // notebooklm.ts's NOT_FOUND_RE.
+      if (/command not found|not recognized as an internal/i.test(stderrText)) {
         resolve({
           ok: false,
           error: 'Node.js / npm not found. Install Node from nodejs.org, then try again.'
@@ -848,28 +858,28 @@ export async function loginCli(provider: ProviderId): Promise<{ ok: boolean; err
       scriptLines = [
         '@echo off',
         'cls',
-        'echo AskToto - Claude Code CLI login',
+        'echo Métis - Claude Code CLI login',
         'echo ================================',
         'echo.',
         'echo Type /login at the prompt below and follow the instructions.',
         'echo ----------------------------------------',
         'call claude',
         'echo.',
-        'echo Done. Go back to AskToto and click Connect again.',
+        'echo Done. Go back to Métis and click Connect again.',
         'pause'
       ]
     } else if (provider === 'codex-cli') {
       scriptLines = [
         '@echo off',
         'cls',
-        'echo AskToto - OpenAI Codex CLI login',
+        'echo Métis - OpenAI Codex CLI login',
         'echo =================================',
         'echo.',
         'echo Follow the instructions below to sign in.',
         'echo ----------------------------------------',
         'call codex login',
         'echo.',
-        'echo Done. Go back to AskToto and click Connect again.',
+        'echo Done. Go back to Métis and click Connect again.',
         'pause'
       ]
     } else {
@@ -879,26 +889,26 @@ export async function loginCli(provider: ProviderId): Promise<{ ok: boolean; err
     scriptLines = [
       '#!/bin/bash',
       'clear',
-      'echo "AskToto — Claude Code CLI login"',
+      'echo "Métis — Claude Code CLI login"',
       'echo "================================"',
       'echo',
       'echo "Type /login at the prompt below and follow the instructions."',
       'echo "────────────────────────────────────────────────"',
       'claude',
-      'echo; echo "✓ Done. Go back to AskToto and click \\"Connect\\" again."',
+      'echo; echo "✓ Done. Go back to Métis and click \\"Connect\\" again."',
       'echo "You can close this window."'
     ]
   } else if (provider === 'codex-cli') {
     scriptLines = [
       '#!/bin/bash',
       'clear',
-      'echo "AskToto — OpenAI Codex CLI login"',
+      'echo "Métis — OpenAI Codex CLI login"',
       'echo "================================="',
       'echo',
       'echo "Follow the instructions below to sign in."',
       'echo "────────────────────────────────────────────────"',
       'codex login',
-      'echo; echo "✓ Done. Go back to AskToto and click \\"Connect\\" again."',
+      'echo; echo "✓ Done. Go back to Métis and click \\"Connect\\" again."',
       'echo "You can close this window."'
     ]
   } else {

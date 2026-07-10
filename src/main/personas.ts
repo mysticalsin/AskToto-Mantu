@@ -40,7 +40,7 @@ function contextBlock(docs: { name: string; text: string }[] | undefined): strin
 }
 
 /**
- * Language policy (multilingual). AskToto transcribes any spoken language; the LLM assists live in the
+ * Language policy (multilingual). Métis transcribes any spoken language; the LLM assists live in the
  * SPEAKER's language, but the end recap/summary + answers are written in the user's selected language.
  *  - suggest (live assist): mirror the other person's language.
  *  - recap / summary / answer / vision: use `outputLanguage` ('auto' = the conversation's language).

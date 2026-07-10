@@ -18,8 +18,8 @@ import {
   powerSaveBlocker,
   systemPreferences
 } from 'electron'
-import { join, basename, resolve, relative, isAbsolute, extname } from 'node:path'
-import { readFileSync, existsSync, writeFileSync, realpathSync, readdirSync, unlinkSync } from 'node:fs'
+import { join, basename, dirname, resolve, relative, isAbsolute, extname } from 'node:path'
+import { readFileSync, existsSync, writeFileSync, realpathSync, readdirSync, unlinkSync, createReadStream, statSync, renameSync, rmdirSync } from 'node:fs'
 import { pathToFileURL } from 'node:url'
 import { randomBytes } from 'node:crypto'
 import {
@@ -36,12 +36,19 @@ import {
   SetDealOutcomePayloadSchema,
   RenameMeetingPayloadSchema,
   UpdateRecapPayloadSchema,
-  ImportAudioChunkSchema,
+  ImportAudioStartSchema,
+  ImportJobIdSchema,
+  ImportDecoderChunkSchema,
+  ImportDecoderCompleteSchema,
+  ImportDecoderFailedSchema,
   ProviderIdSchema,
   DEFAULT_SHORTCUTS,
   type HotkeyAction,
+  type ShortcutFailure,
   type PublicSettings,
-  type CalendarEvent
+  type CalendarEvent,
+  type AskStart,
+  type ImportJobView
 } from '@shared/ipc'
 import {
   getSettings,
@@ -80,8 +87,17 @@ import { buildSystem } from './personas'
 import { initLogging, mainLog, auditLog } from './logger'
 import { authStatus, signIn as authSignIn, signOut as authSignOut, requireAuth } from './auth'
 import { calendarToday } from './calendar'
-import { parakeetModelReady, ensureParakeetModel, parakeetTranscribe, parakeetRelease } from './parakeet'
-import { pickAudioFile, readPickedAudioFile, handleImportChunk, abandonImportSession } from './import-audio'
+import {
+  parakeetModelReady,
+  ensureParakeetModel,
+  parakeetTranscribe,
+  parakeetRelease,
+  parakeetAddonError
+} from './parakeet'
+import { pickAudioFile, consumePickedAudio } from './import-audio'
+import { ImportJobManager, type ImportJob } from './import-jobs'
+import { EncryptedImportJobStore } from './import-job-store'
+import { bundledFfmpegPath, startFfmpegDecode, type FfmpegDecoder } from './ffmpeg-decoder'
 import {
   saveMeeting,
   saveNote,
@@ -153,6 +169,22 @@ if (!app.isPackaged && !process.env.ASKTOTO_USERDATA) {
   app.setPath('userData', `${app.getPath('userData')}-dev`)
 }
 
+// AskToto → Métis rebrand: productName moved the packaged userData dir. Adopt the old profile once so
+// settings, transcripts, and secret-key.bin survive the rename. Must run before anything opens userData.
+if (app.isPackaged && !process.env.ASKTOTO_USERDATA) {
+  try {
+    const ud = app.getPath('userData')
+    const legacy = join(dirname(ud), 'AskToto')
+    if (!existsSync(join(ud, 'settings.json')) && existsSync(join(legacy, 'settings.json'))) {
+      // Electron may have pre-created the new dir empty; clear it so rename can land.
+      if (existsSync(ud)) rmdirSync(ud)
+      renameSync(legacy, ud)
+    }
+  } catch {
+    // Non-fatal: worst case is a fresh profile; never block launch on a migration.
+  }
+}
+
 const BAR_WIDTH = 880
 const BAR_HEIGHT = 84 // initial idle height of the slimmer two-row widget; useAutoResize grows it for answers
 const BAR_MIN_HEIGHT = 44 // floor for the resize clamp so the collapsed control mini-pill can shrink fully
@@ -179,6 +211,15 @@ let audioArmed = false // loopback capture only granted during an explicit user-
 let lastBarHeight = BAR_HEIGHT // remember the bar's content height to restore on settings exit
 let currentWidth = BAR_WIDTH // window width; narrows to PILL_WIDTH while collapsed to the control mini-pill
 const streams = new Map<string, { abort: () => void }>()
+let importJobs: ImportJobManager | null = null
+let decoderWin: BrowserWindow | null = null
+let decoderJobId: string | null = null
+let decoderExpectedUrl = ''
+let closingDecoderJobId: string | null = null
+let sourceAck: { jobId: string; resolve: () => void; reject: (error: Error) => void; timer: NodeJS.Timeout } | null = null
+let decoderReady: { resolve: () => void; reject: (error: Error) => void; timer: NodeJS.Timeout } | null = null
+const ffmpegDecoders = new Map<string, FfmpegDecoder>()
+const notifiedImportJobs = new Set<string>()
 
 /** Security: every privileged IPC handler must come from the main window's top frame.
  *  Compromised subframes, devtools, or unexpected webContents are rejected here. */
@@ -203,6 +244,333 @@ function assertBrainReader(event: Electron.IpcMainInvokeEvent): void {
     return
   }
   assertMainWindow(event)
+}
+
+function importJobView(job: ImportJob): ImportJobView {
+  const pct =
+    job.state === 'done'
+      ? 100
+      : job.totalChunks > 0
+        ? Math.min(99, Math.round((job.cursor / job.totalChunks) * 100))
+        : 0
+  return {
+    jobId: job.jobId,
+    title: job.title,
+    state: job.state,
+    cursor: job.cursor,
+    totalChunks: job.totalChunks,
+    pct,
+    error: job.error,
+    recapError: job.recapError,
+    file: job.file,
+    createdAt: job.createdAt,
+    updatedAt: job.updatedAt
+  }
+}
+
+function publishImportJob(job: ImportJob): void {
+  const view = importJobView(job)
+  if (win && !win.isDestroyed()) win.webContents.send(IPC.importAudioProgress, { job: view })
+  if (job.state === 'done' && !notifiedImportJobs.has(job.jobId) && Notification.isSupported()) {
+    notifiedImportJobs.add(job.jobId)
+    const notification = new Notification({
+      title: 'Import complete',
+      body: job.recapError ? `${job.title} transcript is ready. Summary needs a retry.` : `${job.title} transcript and summary are ready.`
+    })
+    notification.on('click', () => {
+      if (!win || win.isDestroyed()) createWindow()
+      win?.show()
+      win?.focus()
+    })
+    notification.show()
+  }
+}
+
+function assertDecoderSender(event: Electron.IpcMainInvokeEvent | Electron.IpcMainEvent): void {
+  if (!decoderWin || decoderWin.isDestroyed() || event.sender !== decoderWin.webContents) {
+    throw new Error('IPC denied: sender is not the import decoder')
+  }
+  const frame = event.senderFrame
+  if (!frame || frame.parent !== null || !decoderExpectedUrl || frame.url !== decoderExpectedUrl) {
+    throw new Error('IPC denied: import decoder is not its expected main frame')
+  }
+}
+
+// Non-throwing twin of assertDecoderSender, for use inside ipcMain.on listeners. A synchronous throw in an
+// ipcMain.on handler isn't caught by Electron like an ipcMain.handle throw is — it escalates to a
+// main-process uncaughtException, which brings up the app's fatal crash dialog. So .on listeners must
+// reject unauthorized senders by returning, never by throwing.
+function isDecoderSender(event: Electron.IpcMainEvent): boolean {
+  if (!decoderWin || decoderWin.isDestroyed() || event.sender !== decoderWin.webContents) return false
+  const frame = event.senderFrame
+  if (!frame || frame.parent !== null || !decoderExpectedUrl || frame.url !== decoderExpectedUrl) return false
+  return true
+}
+
+function rejectSourceAck(error: Error): void {
+  if (!sourceAck) return
+  clearTimeout(sourceAck.timer)
+  sourceAck.reject(error)
+  sourceAck = null
+}
+
+function rejectDecoderReady(error: Error): void {
+  if (!decoderReady) return
+  clearTimeout(decoderReady.timer)
+  decoderReady.reject(error)
+  decoderReady = null
+}
+
+function waitForDecoderReady(): Promise<void> {
+  return new Promise<void>((resolveReady, rejectReady) => {
+    const timer = setTimeout(() => {
+      decoderReady = null
+      rejectReady(new Error('Import decoder did not start.'))
+    }, 15_000)
+    decoderReady = { resolve: resolveReady, reject: rejectReady, timer }
+  })
+}
+
+async function closeImportDecoder(jobId: string): Promise<void> {
+  const ffmpeg = ffmpegDecoders.get(jobId)
+  if (ffmpeg) {
+    ffmpeg.cancel()
+    await ffmpeg.completed
+    ffmpegDecoders.delete(jobId)
+    return
+  }
+  if (!decoderWin || decoderWin.isDestroyed() || decoderJobId !== jobId) return
+  closingDecoderJobId = jobId
+  rejectSourceAck(new Error('Import decoder closed.'))
+  rejectDecoderReady(new Error('Import decoder closed.'))
+  decoderWin.destroy()
+}
+
+function bundledImportFfmpeg(): string | null {
+  const resourcesDir = app.isPackaged ? process.resourcesPath : join(__dirname, '..', '..', 'resources')
+  return bundledFfmpegPath(resourcesDir)
+}
+
+async function sendSourceChunk(jobId: string, bytes: Uint8Array, done: boolean): Promise<void> {
+  if (!decoderWin || decoderWin.isDestroyed() || decoderJobId !== jobId) throw new Error('Import decoder is unavailable.')
+  await new Promise<void>((resolveAck, rejectAck) => {
+    const timer = setTimeout(() => {
+      if (sourceAck?.jobId === jobId) sourceAck = null
+      rejectAck(new Error('Import decoder did not acknowledge source audio.'))
+    }, 30_000)
+    sourceAck = { jobId, resolve: resolveAck, reject: rejectAck, timer }
+    decoderWin!.webContents.send('import-decoder:source-chunk', { jobId, bytes, done })
+  })
+}
+
+async function streamSourceToDecoder(job: ImportJob): Promise<void> {
+  for await (const chunk of createReadStream(job.sourcePath, { highWaterMark: 1024 * 1024 })) {
+    const bytes = chunk instanceof Uint8Array ? chunk : new Uint8Array(chunk)
+    await sendSourceChunk(job.jobId, bytes, false)
+  }
+  await sendSourceChunk(job.jobId, new Uint8Array(0), true)
+}
+
+async function startImportDecoder(job: ImportJob): Promise<void> {
+  let stat: ReturnType<typeof statSync>
+  try {
+    stat = statSync(job.sourcePath)
+  } catch {
+    throw new Error('The selected recording is no longer available. Choose it again to restart the import.')
+  }
+  if (stat.size !== job.sourceSizeBytes || stat.mtimeMs !== job.sourceMtimeMs) {
+    throw new Error('The selected recording changed after import started. Choose it again to restart.')
+  }
+  const ffmpeg = bundledImportFfmpeg()
+  if (ffmpeg) {
+    // A transcription failure inside acceptDecodedChunk marks the job terminal and pumps the next FIFO
+    // job synchronously (fail() -> pump() -> here), before this decoder's own onError callback — which
+    // normally deletes the map entry — has had a chance to run. Reap any decoder whose job already
+    // finished so it can't block the next job with a false "already active".
+    for (const [id, stale] of ffmpegDecoders) {
+      if (id === job.jobId) continue
+      const staleState = importJobs?.get(id)?.state
+      if (staleState === 'failed' || staleState === 'cancelled' || staleState === 'done' || staleState === undefined) {
+        stale.cancel()
+        ffmpegDecoders.delete(id)
+      }
+    }
+    if (ffmpegDecoders.size) throw new Error('Another audio decoder is already active.')
+    const decoder = startFfmpegDecode(ffmpeg, job.sourcePath, job.cursor, {
+      onChunk: async (seq, samples) => {
+        await importJobs?.acceptDecodedChunk(job.jobId, seq, 0, samples)
+      },
+      onComplete: async (totalChunks) => {
+        // Release the process slot before finishDecoding pumps the next FIFO job.
+        ffmpegDecoders.delete(job.jobId)
+        await importJobs?.finishDecoding(job.jobId, totalChunks)
+      },
+      onError: async (error) => {
+        ffmpegDecoders.delete(job.jobId)
+        await importJobs?.failDecoder(job.jobId, error.message)
+      }
+    })
+    ffmpegDecoders.set(job.jobId, decoder)
+    return
+  }
+  if (decoderWin && !decoderWin.isDestroyed()) throw new Error('Another audio decoder is already active.')
+
+  decoderJobId = job.jobId
+  closingDecoderJobId = null
+  decoderExpectedUrl = ''
+  decoderWin = new BrowserWindow({
+    show: false,
+    skipTaskbar: true,
+    webPreferences: {
+      preload: join(__dirname, '../preload/import-decoder.js'),
+      sandbox: true,
+      contextIsolation: true,
+      nodeIntegration: false,
+      backgroundThrottling: false,
+      webSecurity: true
+    }
+  })
+  const active = decoderWin
+  active.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
+  active.webContents.on('will-navigate', (event) => event.preventDefault())
+  active.on('closed', () => {
+    // A cancelled job can be replaced immediately; a late close from its hidden window must not
+    // tear down or fail the newer decoder that now owns these globals.
+    if (decoderWin !== active || decoderJobId !== job.jobId) return
+    const closedJobId = job.jobId
+    decoderWin = null
+    decoderJobId = null
+    decoderExpectedUrl = ''
+    rejectSourceAck(new Error('Import decoder closed.'))
+    rejectDecoderReady(new Error('Import decoder closed.'))
+    if (closedJobId && closingDecoderJobId !== closedJobId) void importJobs?.failDecoder(closedJobId, 'Audio decoder stopped unexpectedly.')
+    closingDecoderJobId = null
+  })
+  active.webContents.on('render-process-gone', () => {
+    if (decoderWin === active && decoderJobId === job.jobId) {
+      closeImportDecoder(job.jobId)
+      void importJobs?.failDecoder(job.jobId, 'Audio decoder stopped unexpectedly.')
+    }
+  })
+
+  try {
+    const decoderUrl = process.env.ELECTRON_RENDERER_URL
+      ? new URL('/decoder.html', process.env.ELECTRON_RENDERER_URL).toString()
+      : pathToFileURL(join(__dirname, '../renderer/decoder.html')).toString()
+    decoderExpectedUrl = decoderUrl
+    const ready = waitForDecoderReady()
+    // Observe the rejection immediately so a loadURL/loadFile failure below can't surface as an
+    // unhandled rejection before `await ready` runs; the real error still propagates at that await.
+    ready.catch(() => {})
+    if (process.env.ELECTRON_RENDERER_URL) await active.loadURL(decoderUrl)
+    else await active.loadFile(join(__dirname, '../renderer/decoder.html'))
+    if (active.isDestroyed() || decoderWin !== active) throw new Error('Import decoder closed before it started.')
+    await ready
+    active.webContents.send('import-decoder:source-start', { jobId: job.jobId, skipThrough: job.cursor })
+    await streamSourceToDecoder(job)
+  } catch (error) {
+    closeImportDecoder(job.jobId)
+    throw error
+  }
+}
+
+function importedTranscriptText(lines: ImportJob['lines']): string {
+  return lines.map((line) => `SPEAKER: ${line.text}`).join('\n')
+}
+
+async function runImportedRecap(job: ImportJob): Promise<string | undefined> {
+  const settings = getSettings()
+  const allowed = getAllowedProviders()
+  const ordered = [
+    ...(settings.dustWorkspaceId && getApiKey('dust') && settings.providerModels.dust ? (['dust'] as ProviderId[]) : []),
+    settings.provider,
+    ...(Object.keys(PROVIDERS) as ProviderId[])
+  ]
+  const candidates = [...new Set(ordered)].filter((provider) => {
+    const def = PROVIDERS[provider]
+    if (!def || (allowed && !allowed.includes(provider))) return false
+    if (def.kind === 'cli') return !!settings.cliConnected[provider]
+    if (!getApiKey(provider)) return false
+    if (provider === 'dust' && !settings.dustWorkspaceId) return false
+    return !!resolveModelTier(provider, settings.providerModels, settings.providerModelsThinking, 'think', settings.providerModelsDeep)
+  })
+  if (!candidates.length) return undefined
+
+  const transcript = settings.redactSensitive ? redactSecrets(importedTranscriptText(job.lines)) : importedTranscriptText(job.lines)
+  const req: AskStart = { id: `import-recap-${job.jobId}`, mode: 'recap', prompt: '', transcript, history: [] }
+  let lastError: Error | null = null
+  for (const provider of candidates) {
+    const def = PROVIDERS[provider]
+    const key = getApiKey(provider)
+    const rawModel = resolveModelTier(provider, settings.providerModels, settings.providerModelsThinking, 'think', settings.providerModelsDeep)
+    const model = applyInteractiveGuardrail(provider, 'think', rawModel || def.defaultModel)
+    try {
+      const recap = await new Promise<string>((resolveRecap, rejectRecap) => {
+        let text = ''
+        createStream({
+          providerId: provider,
+          kind: def.kind,
+          apiKey: key,
+          baseURL: provider === 'custom' ? settings.customBaseUrl : provider === 'dust' ? settings.dustBaseUrl : def.baseUrl,
+          workspaceId: settings.dustWorkspaceId,
+          refreshDustAuth:
+            provider === 'dust'
+              ? async () => {
+                  const fresh = await refreshDustCliSession()
+                  if (!fresh.ok || !fresh.token || !fresh.workspaceId) return null
+                  setApiKey('dust', fresh.token)
+                  const baseURL = fresh.baseUrl || 'https://dust.tt'
+                  setSettings({ dustWorkspaceId: fresh.workspaceId, dustBaseUrl: baseURL, dustTokenMintedAt: Date.now() })
+                  return { apiKey: fresh.token, workspaceId: fresh.workspaceId, baseURL }
+                }
+              : undefined,
+          model,
+          temperature: settings.temperature,
+          idleMs: 120_000,
+          freshConversation: true,
+          system:
+            buildSystem(req, settings.mode, settings.profile, settings.modePrompts, settings.contextDocs[settings.mode] || [], settings.outputLanguage, settings.summaryLanguage, settings.systemPrompt) +
+            '\n\nThis is an imported recording with no speaker diarization. Do not attribute statements to YOU or THEM.',
+          req,
+          handlers: {
+            onDelta: (delta) => {
+              text += delta
+            },
+            onDone: () => resolveRecap(text),
+            onError: (error) => rejectRecap(new Error(error))
+          }
+        })
+      })
+      if (!recap.trim()) throw new Error('Summary provider returned an empty response.')
+      return recap.trim()
+    } catch (error) {
+      lastError = error instanceof Error ? error : new Error(String(error))
+    }
+  }
+  throw lastError ?? new Error('No configured AI provider could generate the imported summary.')
+}
+
+function initializeImportJobs(): void {
+  if (importJobs) return
+  importJobs = new ImportJobManager({
+    store: new EncryptedImportJobStore(getSettings),
+    decode: startImportDecoder,
+    transcribe: async (samples) => {
+      await ensureParakeetModel()
+      return parakeetTranscribe(samples)
+    },
+    saveMeeting: (meeting) => saveMeeting(getSettings(), meeting),
+    deleteMeeting,
+    enqueueIngest,
+    generateRecap: runImportedRecap,
+    updateRecap: async (file, recap) => {
+      const result = await updateMeetingRecap(getSettings(), file, recap)
+      if (!result.ok) throw new Error(result.error || 'Could not save the imported summary.')
+    },
+    onChange: publishImportJob,
+    onCancel: closeImportDecoder,
+    newId: () => randomBytes(16).toString('hex')
+  })
 }
 
 /** Minimal .env loader (no dep) — dev convenience; prod uses in-app key. */
@@ -310,7 +678,12 @@ function createWindow(): void {
   })
 
   win.setAlwaysOnTop(true, 'screen-saver')
-  win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true })
+  // setVisibleOnAllWorkspaces is a documented no-op on Windows (Electron: "This API does nothing on
+  // Windows") — gate the call so it isn't dead code there. Windows has no public API for pinning a
+  // window across Task View virtual desktops (that needs the native IVirtualDesktopManager COM
+  // interface via a native addon, which this app doesn't ship); on Windows the overlay stays visible
+  // only on the virtual desktop it was created on.
+  if (process.platform !== 'win32') win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true })
   win.setContentProtection(contentProtectionOn())
   win.setHiddenInMissionControl?.(true)
 
@@ -318,7 +691,8 @@ function createWindow(): void {
     // Abort any in-flight LLM streams so their callbacks don't fire against a destroyed window.
     streams.forEach((s) => s.abort())
     streams.clear()
-    abandonImportSession() // the renderer that owned this session is gone — free its accumulated lines
+    // Import jobs belong to main plus the hidden decoder window, so closing the overlay never abandons
+    // a selected recording. Their checkpointed state resumes even if the entire app exits.
     win = null
   })
 
@@ -451,10 +825,10 @@ function onFatal(kind: 'uncaughtException' | 'unhandledRejection', err: unknown)
   try {
     const choice = dialog.showMessageBoxSync({
       type: 'error',
-      title: 'AskToto hit a problem',
-      message: 'AskToto ran into an unexpected error.',
-      detail: 'A crash report was saved to your AskToto data folder. Relaunch now, or keep going.',
-      buttons: ['Relaunch AskToto', 'Continue'],
+      title: 'Métis hit a problem',
+      message: 'Métis ran into an unexpected error.',
+      detail: 'A crash report was saved to your Métis data folder. Relaunch now, or keep going.',
+      buttons: ['Relaunch Métis', 'Continue'],
       defaultId: 1,
       cancelId: 1
     })
@@ -516,15 +890,15 @@ async function captureScreenshot(): Promise<{ image: string; width: number; heig
     const status = process.platform === 'darwin' ? systemPreferences.getMediaAccessStatus('screen') : 'granted'
     if (status !== 'granted') {
       throw new Error(
-        'Screen Recording permission is off for AskToto. Enable it in System Settings → Privacy & Security → Screen Recording, then quit and reopen AskToto.'
+        'Screen Recording permission is off for Métis. Enable it in System Settings → Privacy & Security → Screen Recording, then quit and reopen Métis.'
       )
     }
     // The restart advice is macOS-specific (a fresh TCC grant only applies to a fresh launch) — other
     // platforms get a neutral message rather than instructions about a System Settings they don't have.
     throw new Error(
       process.platform === 'darwin'
-        ? 'No screen source available. If you granted Screen Recording just now, quit and reopen AskToto — macOS only applies the permission to a fresh launch.'
-        : 'No screen source available. Check your system’s screen-capture permissions for AskToto, then try again.'
+        ? 'No screen source available. If you granted Screen Recording just now, quit and reopen Métis — macOS only applies the permission to a fresh launch.'
+        : 'No screen source available. Check your system’s screen-capture permissions for Métis, then try again.'
     )
   }
   let img = src.thumbnail
@@ -543,13 +917,13 @@ async function captureScreenshot(): Promise<{ image: string; width: number; heig
  *  generic capture failure. */
 class PrivateViewBlockedError extends Error {
   constructor() {
-    super('Private View is on — screen capture is blocked. Turn it off to let AskToto see your screen.')
+    super('Private View is on — screen capture is blocked. Turn it off to let Métis see your screen.')
     this.name = 'PrivateViewBlockedError'
   }
 }
 
 async function getScreenshot(phase?: string): Promise<{ image: string; width: number; height: number; capturedAt: number }> {
-  // Private View promises AskToto won't look at (or send) the screen while it's on — that has to mean
+  // Private View promises Métis won't look at (or send) the screen while it's on — that has to mean
   // this app's own capture pipeline refuses to run, not just that OTHER apps can't screen-share our window
   // (that's the separate, still-active setContentProtection() call on the BrowserWindow itself).
   // AUDIT the block: a run of user-invisible capture failures used to leave zero trace in the audit log,
@@ -712,17 +1086,28 @@ function resolveShortcut(action: HotkeyAction, user: Record<string, string>): st
   return user[action] ?? DEFAULT_SHORTCUTS[action] ?? ''
 }
 
+// Populated by registerShortcuts() and read by IPC.shortcutFailures — a register() failure (another
+// app already holds the combo, or an OS-reserved one like Windows' Ctrl+Alt+Arrow display-rotation
+// hotkey) previously only reached mainLog, which end users never see. Reset on every re-register so a
+// later successful bind clears the stale entry instead of leaving a permanent false warning.
+let shortcutFailures: ShortcutFailure[] = []
+
 function registerShortcuts(): void {
   globalShortcut.unregisterAll()
+  shortcutFailures = []
   const user = getSettings().shortcuts ?? {}
   for (const [action, fn] of Object.entries(shortcutActions)) {
     const accel = resolveShortcut(action as HotkeyAction, user)
     if (!accel) continue
     try {
       const ok = globalShortcut.register(accel, fn)
-      if (!ok) mainLog.warn(`[shortcuts] failed to register ${action}: ${accel}`)
+      if (!ok) {
+        mainLog.warn(`[shortcuts] failed to register ${action}: ${accel}`)
+        shortcutFailures.push({ action, accel })
+      }
     } catch (e) {
       mainLog.warn(`[shortcuts] invalid accelerator for ${action}: ${accel}`, e)
+      shortcutFailures.push({ action, accel })
     }
   }
 }
@@ -809,7 +1194,7 @@ function createTray(): void {
     let img = nativeImage.createFromPath(iconPath)
     if (!img.isEmpty()) img = img.resize({ width: 18, height: 18 })
     tray = new Tray(img.isEmpty() ? nativeImage.createEmpty() : img)
-    if (process.platform === 'darwin' && img.isEmpty()) tray.setTitle(' ◉ Toto')
+    if (process.platform === 'darwin' && img.isEmpty()) tray.setTitle(' ◉ Métis')
     const user = getSettings().shortcuts ?? {}
     const winKeys = process.platform === 'win32'
     const fmtAccel = (a: string): string =>
@@ -833,9 +1218,9 @@ function createTray(): void {
       } },
       { label: label('New', 'reset'), click: () => sendHotkey('reset') },
       { type: 'separator' },
-      { label: 'Quit AskToto', click: () => app.quit() }
+      { label: 'Quit Métis', click: () => app.quit() }
     ])
-    tray.setToolTip('AskToto')
+    tray.setToolTip('Métis')
     tray.setContextMenu(menu)
   } catch {
     /* tray optional */
@@ -865,11 +1250,11 @@ function setRecordingPowerSaveBlock(on: boolean): void {
 function setTrayRecording(on: boolean): void {
   if (!tray) return
   if (on) {
-    tray.setToolTip('🔴 AskToto — Recording')
-    if (process.platform === 'darwin') tray.setTitle(' 🔴 Toto')
+    tray.setToolTip('🔴 Métis — Recording')
+    if (process.platform === 'darwin') tray.setTitle(' 🔴 Métis')
   } else {
-    tray.setToolTip('AskToto')
-    if (process.platform === 'darwin') tray.setTitle(' ◉ Toto')
+    tray.setToolTip('Métis')
+    if (process.platform === 'darwin') tray.setTitle(' ◉ Métis')
   }
 }
 
@@ -883,14 +1268,32 @@ function registerIpc(): void {
     assertMainWindow(e)
     return getPlatformPermissions()
   })
+  // A failed globalShortcut.register() (combo already held by another app, or OS-reserved) previously
+  // only reached mainLog — end users never see that. The renderer can poll this after registerShortcuts()
+  // runs (boot, and every settings save) to show the user which binding(s) didn't take.
+  ipcMain.handle(IPC.shortcutFailures, (e) => {
+    assertMainWindow(e)
+    return shortcutFailures
+  })
   // Deep-link to the relevant macOS Privacy pane once a permission has been denied — getUserMedia never
   // re-prompts after a Deny, so without this a denied user has no in-app path back to granting it. The
   // x-apple.systempreferences scheme only exists on macOS; a no-op elsewhere.
   ipcMain.handle(IPC.permissionsOpenSettings, (e, kind: unknown) => {
     assertMainWindow(e)
-    if (process.platform !== 'darwin') return
-    const pane = kind === 'screenRecording' ? 'Privacy_ScreenCapture' : 'Privacy_Microphone'
-    void shell.openExternal(`x-apple.systempreferences:com.apple.preference.security?${pane}`)
+    if (process.platform === 'darwin') {
+      const pane = kind === 'screenRecording' ? 'Privacy_ScreenCapture' : 'Privacy_Microphone'
+      void shell.openExternal(`x-apple.systempreferences:com.apple.preference.security?${pane}`)
+      return
+    }
+    if (process.platform === 'win32') {
+      // Windows has no single TCC-style "Screen Recording" permission like macOS; the closest deep link
+      // is the App graphics capture privacy page (added in the Windows 10 2004 update). Picked over the
+      // generic 'ms-settings:privacy' page because it's the actual per-capability toggle; on Windows
+      // builds that predate it, an unrecognized ms-settings URI opens the Settings home instead of
+      // erroring, so no separate fallback URI is needed here.
+      const uri = kind === 'screenRecording' ? 'ms-settings:privacy-graphicscaptureprogrammatic' : 'ms-settings:privacy-microphone'
+      void shell.openExternal(uri)
+    }
   })
   // Front-load the OS permission prompts during onboarding (macOS only) so the first real meeting
   // isn't interrupted by them. Serial, and only for permissions not yet granted: mic has a direct
@@ -1054,6 +1457,7 @@ function registerIpc(): void {
   // Then poll the keychain until the login lands and import it automatically — one login, zero extra
   // clicks: without this the user had to come back and press "Connect from Dust CLI" a second time.
   let dustSetupPoll: ReturnType<typeof setInterval> | null = null
+  let dustSetupPollInFlight = false
   ipcMain.handle(IPC.dustSetupCli, async (e) => {
     assertMainWindow(e)
     if (!requireAuth()) return { ok: false, error: 'Sign in with your Mantu account first.' }
@@ -1067,6 +1471,8 @@ function registerIpc(): void {
           dustSetupPoll = null
           return
         }
+        if (dustSetupPollInFlight) return
+        dustSetupPollInFlight = true
         void importDustCliSession().then((s) => {
           if (!s.ok || !s.token || !s.workspaceId) return
           if (dustSetupPoll) clearInterval(dustSetupPoll)
@@ -1081,9 +1487,11 @@ function registerIpc(): void {
           if (Notification.isSupported()) {
             new Notification({
               title: 'Dust connected',
-              body: 'AskToto is linked to your Dust workspace.'
+              body: 'Métis is linked to your Dust workspace.'
             }).show()
           }
+        }).finally(() => {
+          dustSetupPollInFlight = false
         })
       }, 5000)
     }
@@ -1225,26 +1633,26 @@ function registerIpc(): void {
         ? [
             '@echo off',
             'cls',
-            'echo AskToto - NotebookLM sign-in',
+            'echo Métis - NotebookLM sign-in',
             'echo ==========================',
             'echo.',
             'echo A browser window will open. Sign in with your Google account.',
             'echo ----------------------------------------',
             'call nlm login',
             'echo.',
-            'echo Done. Go back to AskToto and click Connect.',
+            'echo Done. Go back to Métis and click Connect.',
             'pause'
           ]
         : [
             '#!/bin/bash',
             'clear',
-            'echo "AskToto — NotebookLM sign-in"',
+            'echo "Métis — NotebookLM sign-in"',
             'echo "============================"',
             'echo',
             'echo "A browser window will open. Sign in with your Google account."',
             'echo "────────────────────────────────────────────────"',
             'nlm login',
-            'echo; echo "✓ Done. Go back to AskToto and click \\"Connect\\"."',
+            'echo; echo "✓ Done. Go back to Métis and click \\"Connect\\"."',
             'echo "You can close this window."'
           ]
       const scriptPath = join(app.getPath('temp'), `asktoto-notebooklm-login-${randomBytes(8).toString('hex')}.${isWin ? 'cmd' : 'command'}`)
@@ -1289,8 +1697,9 @@ function registerIpc(): void {
     prewarmCli() // warm the CLI binary cache so the first CLI ask doesn't stall on a login-shell lookup
     return status
   })
-  ipcMain.handle(IPC.authSignOut, (e) => {
+  ipcMain.handle(IPC.authSignOut, async (e) => {
     assertMainWindow(e)
+    await importJobs?.cancelAll()
     return authSignOut()
   })
   // --- Calendar ---
@@ -1408,7 +1817,7 @@ function registerIpc(): void {
     if (meetings.length === 0) return { ok: true, deleted: 0 }
     const dialogOpts = {
       type: 'warning' as const,
-      title: 'Delete all AskToto data',
+      title: 'Delete all Métis data',
       message: `Delete all ${meetings.length} saved meeting${meetings.length === 1 ? '' : 's'}?`,
       detail:
         'This permanently removes every saved transcript, note, and the knowledge graph from this device. This cannot be undone.',
@@ -1435,7 +1844,9 @@ function registerIpc(): void {
   // selects the Parakeet engine. All wrapped so a failure degrades to Whisper rather than breaking Listen.
   ipcMain.handle(IPC.parakeetStatus, (e) => {
     assertMainWindow(e)
-    return { ready: parakeetModelReady() }
+    // addonError surfaces WHY the engine isn't ready (native addon missing for this platform/build) as
+    // distinct from "model not downloaded yet" — Settings reads this to show an actionable message.
+    return { ready: parakeetModelReady(), addonError: parakeetAddonError() }
   })
   ipcMain.handle(IPC.parakeetEnsure, async (e) => {
     assertMainWindow(e)
@@ -1482,7 +1893,7 @@ function registerIpc(): void {
     if (!requireAuth()) {
       win?.webContents.send(IPC.streamError, {
         id,
-        message: 'Sign in with your Mantu account to use AskToto.'
+        message: 'Sign in with your Mantu account to use Métis.'
       })
       return
     }
@@ -1837,25 +2248,101 @@ function registerIpc(): void {
     auditLog('answer.feedback', { rating, kind: typeof r?.kind === 'string' ? r.kind : undefined })
   })
 
-  // --- Import audio file (on-device transcription of a picked recording; see main/import-audio.ts) ---
+  // --- Import audio jobs (main-owned so navigation and overlay closure cannot interrupt them) ---
   ipcMain.handle(IPC.importAudioPick, async (e) => {
     assertMainWindow(e)
     if (!requireAuth()) return { error: 'Not signed in.' }
     return pickAudioFile(win)
   })
-  ipcMain.handle(IPC.importAudioRead, async (e, path: unknown) => {
+  ipcMain.handle(IPC.importAudioStart, async (e, raw) => {
     assertMainWindow(e)
     if (!requireAuth()) throw new Error('Not signed in.')
-    return readPickedAudioFile(typeof path === 'string' ? path : '')
+    const parsed = ImportAudioStartSchema.parse(raw)
+    if (!importJobs) throw new Error('Audio import service is unavailable.')
+    return importJobView(await importJobs.start(consumePickedAudio(parsed.token)))
   })
-  ipcMain.handle(IPC.importAudioTranscribe, async (e, raw) => {
+  ipcMain.handle(IPC.importJobsList, (e) => {
     assertMainWindow(e)
-    if (!requireAuth()) return { ok: false, error: 'Not signed in.' }
-    const parsed = ImportAudioChunkSchema.safeParse(raw)
-    if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message || 'Invalid audio chunk.' }
-    return handleImportChunk(getSettings(), parsed.data, (pct, stage) =>
-      win?.webContents.send(IPC.importAudioProgress, { sessionId: parsed.data.sessionId, pct, stage })
-    )
+    if (!requireAuth() || !importJobs) return []
+    return importJobs.list().map(importJobView)
+  })
+  ipcMain.handle(IPC.importJobCancel, async (e, raw) => {
+    assertMainWindow(e)
+    if (!requireAuth()) throw new Error('Not signed in.')
+    const parsed = ImportJobIdSchema.parse(raw)
+    if (!importJobs) throw new Error('Audio import service is unavailable.')
+    await importJobs.cancel(parsed.jobId)
+  })
+  ipcMain.handle(IPC.importJobResume, async (e, raw) => {
+    assertMainWindow(e)
+    if (!requireAuth()) throw new Error('Not signed in.')
+    const parsed = ImportJobIdSchema.parse(raw)
+    if (!importJobs) throw new Error('Audio import service is unavailable.')
+    return importJobView(await importJobs.resume(parsed.jobId))
+  })
+  ipcMain.handle(IPC.importJobRemove, async (e, raw) => {
+    assertMainWindow(e)
+    if (!requireAuth()) throw new Error('Not signed in.')
+    const parsed = ImportJobIdSchema.parse(raw)
+    if (!importJobs) throw new Error('Audio import service is unavailable.')
+    await importJobs.remove(parsed.jobId)
+  })
+
+  ipcMain.on(IPC.importDecoderReady, (e) => {
+    if (!isDecoderSender(e)) {
+      mainLog.warn('[import-decoder] rejected importDecoderReady from an unauthorized sender')
+      return
+    }
+    if (!decoderReady) return
+    clearTimeout(decoderReady.timer)
+    const ready = decoderReady
+    decoderReady = null
+    ready.resolve()
+  })
+  ipcMain.on(IPC.importDecoderSourceAck, (e, raw: unknown) => {
+    if (!isDecoderSender(e)) {
+      mainLog.warn('[import-decoder] rejected importDecoderSourceAck from an unauthorized sender')
+      return
+    }
+    const parsed = ImportDecoderCompleteSchema.safeParse(raw)
+    if (!parsed.success || !sourceAck || sourceAck.jobId !== parsed.data.jobId) return
+    clearTimeout(sourceAck.timer)
+    const ack = sourceAck
+    sourceAck = null
+    ack.resolve()
+  })
+  ipcMain.handle(IPC.importDecoderChunk, async (e, raw) => {
+    assertDecoderSender(e)
+    const parsed = ImportDecoderChunkSchema.parse(raw)
+    if (parsed.jobId !== decoderJobId || !importJobs) throw new Error('Import decoder job mismatch.')
+    await importJobs.acceptDecodedChunk(parsed.jobId, parsed.seq, parsed.totalChunks, parsed.samples)
+  })
+  ipcMain.handle(IPC.importDecoderComplete, async (e, raw) => {
+    assertDecoderSender(e)
+    const parsed = ImportDecoderCompleteSchema.parse(raw)
+    if (parsed.jobId !== decoderJobId || !importJobs) throw new Error('Import decoder job mismatch.')
+    // Free the decoder window BEFORE finishDecoding can pump the next FIFO job — finishDecoding clears
+    // activeJobId and pumps in its own finally, so a closeImportDecoder left for AFTER it (in this
+    // handler's finally) runs too late and startImportDecoder's "already active" guard cascade-fails
+    // every queued job. Mirrors the ffmpeg onComplete path, which frees its slot first for the same reason.
+    await closeImportDecoder(parsed.jobId)
+    try {
+      await importJobs.finishDecoding(parsed.jobId)
+    } finally {
+      await closeImportDecoder(parsed.jobId)
+    }
+  })
+  ipcMain.handle(IPC.importDecoderFailed, async (e, raw) => {
+    assertDecoderSender(e)
+    const parsed = ImportDecoderFailedSchema.parse(raw)
+    if (parsed.jobId !== decoderJobId || !importJobs) throw new Error('Import decoder job mismatch.')
+    // Same ordering requirement as importDecoderComplete above: free the slot before failDecoder can pump.
+    await closeImportDecoder(parsed.jobId)
+    try {
+      await importJobs.failDecoder(parsed.jobId, parsed.error)
+    } finally {
+      await closeImportDecoder(parsed.jobId)
+    }
   })
 
   // --- Metrics, export & PDF ---
@@ -1884,7 +2371,7 @@ function registerIpc(): void {
     const md = typeof input?.markdown === 'string' ? input.markdown : ''
     if (!md.trim()) throw new Error('No recap to export.')
     const safeName = (input?.title || 'Meeting recap').replace(/[\\/:*?"<>|]/g, '-')
-    // AskToto is an LSUIElement (accessory) app — no Dock icon, not a normal foreground app. A dialog
+    // Métis is an LSUIElement (accessory) app — no Dock icon, not a normal foreground app. A dialog
     // opened with no parent BrowserWindow has nothing to attach its sheet to and no window to activate,
     // so it can silently fail to ever surface on screen: the promise just hangs forever with no error and
     // no visible dialog. Anchoring it to `win` (already on screen) is what every other dialog in this
@@ -1944,7 +2431,7 @@ function registerIpc(): void {
     // surfaces instead of silently hanging with nothing to attach to.
     const openDialogOpts: Electron.OpenDialogOptions = {
       properties: ['openDirectory', 'createDirectory'],
-      message: 'Choose where AskToto saves meeting transcripts'
+      message: 'Choose where Métis saves meeting transcripts'
     }
     const r = win ? await dialog.showOpenDialog(win, openDialogOpts) : await dialog.showOpenDialog(openDialogOpts)
     if (!r.canceled && r.filePaths[0]) setSettings({ meetingsFolder: r.filePaths[0] })
@@ -1969,7 +2456,7 @@ function registerIpc(): void {
     if (!requireAuth()) return ''
     const folder = resolveMeetingsFolder(getSettings())
     const safeName = basename(String(file ?? '')) // basename blocks traversal
-    // Only ever open AskToto's own .md meeting transcripts. The meetings folder is user-chosen
+    // Only ever open Métis's own .md meeting transcripts. The meetings folder is user-chosen
     // (could be Desktop/Downloads), and shell.openPath launches the OS handler for whatever it finds,
     // which would execute a .command/.app/.exe. Mirror deleteMeeting()/debriefSave()'s .md guard.
     if (!safeName.endsWith('.md') || safeName === 'index.md' || safeName === 'README.md') return ''
@@ -2219,6 +2706,17 @@ if (!app.requestSingleInstanceLock()) {
         callback({}) // must be an audio (loopback) request
         return
       }
+      // Windows loopback doesn't bind audio to a video stream the way macOS's ScreenCaptureKit does
+      // (see the comment below) — listen.ts's isWindows branch requests getDisplayMedia({ audio: true })
+      // with no video key at all, so request.videoRequested is false here. Skip desktopCapturer entirely
+      // in that case: no screen source is grabbed for a request that never wanted one.
+      // CAVEAT: Chromium's support for Windows loopback-audio-without-video hasn't been validated on real
+      // hardware yet. If it turns out a bound video track is still required, listen.ts already retries
+      // with { video: { frameRate: 1 }, audio: true }, which falls through to the video path below.
+      if (!request.videoRequested) {
+        callback({ audio: 'loopback' })
+        return
+      }
       // macOS binds system-audio loopback to a ScreenCaptureKit screen stream, so the loopback only
       // starts when a screen video source is attached. We grant one here (gated above on armed +
       // main-frame + origin); the renderer drops the video track instantly, so no frame is rendered,
@@ -2339,7 +2837,7 @@ if (!app.requestSingleInstanceLock()) {
     }
   }
   // Eagerly refresh the Dust CLI session at launch (Tony: "always stay connected") rather than waiting
-  // for a request to 401 first. Reading the Dust CLI's keychain item from AskToto — a different binary
+  // for a request to 401 first. Reading the Dust CLI's keychain item from Métis — a different binary
   // than the `dust`/keytar process that created it — does trigger a one-time macOS "allow access" prompt;
   // on a real (signed or at least stable) install macOS remembers "Always Allow" for that app identity, so
   // this costs one prompt ever, not one per restart. Only bothers if Dust was connected before; best-effort
@@ -2399,7 +2897,18 @@ if (!app.requestSingleInstanceLock()) {
   // before the window depends on the folder existing yet (saveMeeting/saveNote create it themselves on
   // first use), so it no longer sits ahead of createWindow on the boot path.
   runStep('ensureMeetingsFolder', () => ensureMeetingsFolder(getSettings()))
+  runStep('initializeImportJobs', initializeImportJobs)
   runStep('registerIpc', registerIpc)
+  // Import checkpoints are encrypted and main-owned. Resume after IPC registration so the hidden decoder
+  // can safely report chunks as soon as it starts, without delaying first paint.
+  const recoverImports = (): void => {
+    if (!requireAuth()) {
+      setTimeout(recoverImports, 1000)
+      return
+    }
+    void importJobs?.recover().catch((error) => mainLog.warn('[import-jobs] recovery failed:', error))
+  }
+  recoverImports()
   runStep('registerScreenListeners', registerScreenListeners)
   runStep('startMeetingNotifier', startMeetingNotifier)
   runStep('initAutoUpdate', () => initAutoUpdate(win))
@@ -2419,7 +2928,7 @@ if (!app.requestSingleInstanceLock()) {
     if (!win) createWindow()
     else win.show()
   })
-  }).catch((e) => console.error('AskToto startup failed:', e))
+  }).catch((e) => console.error('Métis startup failed:', e))
 }
 
 app.on('window-all-closed', () => {

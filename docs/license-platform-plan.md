@@ -1,8 +1,8 @@
-# AskToto license platform — plan
+# Métis license platform — plan
 
 The goal: Tony mints as many per-company licenses as he wants, controls seats, revokes at will,
 and customers activate with one paste. Companies bring their own LLM API key (BYOK); the license
-only governs whether AskToto runs.
+only governs whether Métis runs.
 
 ## Phase 0 — core licensing (DONE, shipped 2026-07-05, commit 3679594)
 
@@ -44,7 +44,7 @@ The local Docker server only reaches this Mac. Customers need a public URL.
    Cloudflare proxy in front.
 4. Backups: `licenses.json` IS the business record. Cron a daily copy off-box (a private
    GitHub gist, S3, or even a scheduled `fly ssh sftp get`). One file, trivially small.
-5. Point AskToto installs at the public URL instead of 127.0.0.1.
+5. Point Métis installs at the public URL instead of 127.0.0.1.
 
 ## Phase 3 — enforcement (only after Phase 2 is proven)
 

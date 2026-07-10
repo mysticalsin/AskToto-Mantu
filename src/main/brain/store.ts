@@ -31,6 +31,17 @@ export function brainDir(settings: Settings): string {
   return join(resolveMeetingsFolder(settings), '.brain')
 }
 
+// Windows reserved device names — a path whose basename (before the first '.') case-insensitively
+// matches one of these fails to open at all, even for a tmp file, regardless of extension.
+const WIN_RESERVED_NAMES = new Set([
+  'con',
+  'prn',
+  'aux',
+  'nul',
+  'com1', 'com2', 'com3', 'com4', 'com5', 'com6', 'com7', 'com8', 'com9',
+  'lpt1', 'lpt2', 'lpt3', 'lpt4', 'lpt5', 'lpt6', 'lpt7', 'lpt8', 'lpt9'
+])
+
 export function slugify(s: string): string {
   const full = s
     .toLowerCase()
@@ -45,6 +56,10 @@ export function slugify(s: string): string {
     full.length > 60
       ? `${full.slice(0, 51)}-${createHash('sha256').update(full).digest('hex').slice(0, 8)}`
       : full
+  // A slug that's a bare Windows reserved device name (CON, AUX, NUL, COM1-9, LPT1-9) can't be opened
+  // as a file on Windows — not even the intermediate .tmp writeSaved creates, since the reserved check
+  // is on the basename before the first '.'. Suffix deterministically so the slug stays stable.
+  if (base && WIN_RESERVED_NAMES.has(base)) return `${base}-x`
   if (base) return base
   // A name written entirely in a non-Latin script (Chinese, Cyrillic, Arabic, pure emoji) or one
   // that's blank/whitespace-only collapses the ASCII pass above to '' — falling back to a fixed
@@ -175,7 +190,7 @@ export function listMeetingExtractions(s: Settings): string[] {
 /**
  * Erase the entire `.brain/` store — every meeting extraction, entity file, the graph, and the index.
  *
- * Part of "Delete all AskToto data": the brain IS the knowledge graph now (the old userData/graph
+ * Part of "Delete all Métis data": the brain IS the knowledge graph now (the old userData/graph
  * artifacts are legacy), and it holds the most sensitive derived data — named people, verbatim
  * commitment quotes, stance trails. A wipe that leaves it on disk would break the dialog's promise
  * that "every transcript, note, and the knowledge graph" is removed. Best-effort: never throws, so a

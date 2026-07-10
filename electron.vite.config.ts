@@ -26,7 +26,9 @@ export default defineConfig({
         input: {
           index: resolve(__dirname, 'src/preload/index.ts'),
           // Minimal preload for the Mantu Intelligence dashboard window (see src/main/intelligence.ts).
-          intelligence: resolve(__dirname, 'src/preload/intelligence.ts')
+          intelligence: resolve(__dirname, 'src/preload/intelligence.ts'),
+          // Isolated Chromium audio decoder used by main-owned import jobs. It exposes no app APIs.
+          'import-decoder': resolve(__dirname, 'src/preload/import-decoder.ts')
         }
       }
     },
@@ -48,7 +50,12 @@ export default defineConfig({
       // bytes on the entry chunk and on every lazy view's first click). Main stays readable for
       // crash-log stack traces; the renderer is where the cold-start parse cost lives.
       minify: 'esbuild',
-      rollupOptions: { input: { index: resolve(__dirname, 'src/renderer/index.html') } }
+      rollupOptions: {
+        input: {
+          index: resolve(__dirname, 'src/renderer/index.html'),
+          decoder: resolve(__dirname, 'src/renderer/decoder.html')
+        }
+      }
     },
     // transformers.js ships wasm + workers; don't pre-bundle it
     optimizeDeps: { exclude: ['@huggingface/transformers'] },

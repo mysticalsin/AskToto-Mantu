@@ -1,13 +1,13 @@
 ---
-project: AskToto
-goal: A faithful look-and-feel clone of Cluely (AI desktop overlay assistant), rebranded AskToto.
+project: Métis
+goal: A faithful look-and-feel clone of Cluely (AI desktop overlay assistant), rebranded Métis.
 reference: /Users/tony/Downloads/Cluely (New) 2.1.19.dmg  (Cluely v2.1.19, bundle id com.cluely.app.april22)
 extracted_to: $TMPDIR/cluely_asar  (app.asar, read-only analysis)
 status: ground-truth captured — pending scope confirmation, then PLAN -> BUILD loop
 confidence_legend: [V]=verified from binary  [A]=assumed/inferred  [?]=unknown
 ---
 
-# AskToto — Cluely Look-and-Feel Spec (reverse-engineered ground truth)
+# Métis — Cluely Look-and-Feel Spec (reverse-engineered ground truth)
 
 ## 1. What Cluely is (the thing we clone)
 A frameless, transparent, always-on-top **AI overlay** that floats over every app and is
@@ -46,8 +46,8 @@ electron-updater (Squirrel.Mac), electron-log.
 - Layout: a centered horizontal **pill bar** docked near top-of-screen → expandable **answer /
   transcript panel** (690px) drops below it. Buttons: Ask input, Listen, Capture, Settings, Hide.
 
-## 5. AskToto target (our build)
-Recreate §2/§4 pixel-faithfully; rebrand to **AskToto** (own name + own glasses-style mark, NOT
+## 5. Métis target (our build)
+Recreate §2/§4 pixel-faithfully; rebrand to **Métis** (own name + own constellation mark, NOT
 Cluely's logo/trademark/assets). AI = Claude (Anthropic) — "Ask Toto". Scope of v1 decided next.
 
 ## 6. Build approach

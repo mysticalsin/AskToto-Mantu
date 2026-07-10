@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { chunkAudio, IMPORT_CHUNK_SEC, IMPORT_SAMPLE_RATE } from './import-audio'
+import { chunkAudio, IMPORT_CHUNK_SEC, IMPORT_SAMPLE_RATE, MAX_DECODED_BYTES, assertDecodedSizeWithinBound } from './import-audio'
 
 describe('chunkAudio', () => {
   it('splits into fixed ~30s windows with a shorter final chunk', () => {
@@ -41,11 +41,34 @@ describe('chunkAudio', () => {
     ])
   })
 
-  it('chunks are views over the original buffer, not copies (subarray, not slice)', () => {
+  it('chunks own their buffers so IPC does not clone the full recording for every window', () => {
     const samples = new Float32Array(IMPORT_SAMPLE_RATE * 40)
     samples[0] = 42
     const chunks = chunkAudio(samples)
-    expect(chunks[0].buffer).toBe(samples.buffer)
+    expect(chunks[0].buffer).not.toBe(samples.buffer)
     expect(chunks[0][0]).toBe(42)
+  })
+})
+
+describe('assertDecodedSizeWithinBound', () => {
+  it('allows decoded PCM at or under the bound', () => {
+    const framesAtBound = Math.floor(MAX_DECODED_BYTES / Float32Array.BYTES_PER_ELEMENT)
+    expect(() => assertDecodedSizeWithinBound(framesAtBound, 1)).not.toThrow()
+  })
+
+  it('rejects decoded PCM one byte over the bound', () => {
+    const framesOverBound = Math.floor(MAX_DECODED_BYTES / Float32Array.BYTES_PER_ELEMENT) + 1
+    expect(() => assertDecodedSizeWithinBound(framesOverBound, 1)).toThrow(/too large/i)
+  })
+
+  it('accounts for channel count, not just frame count', () => {
+    // A stereo decode with half as many frames still hits the same byte total.
+    const framesAtBoundMono = Math.floor(MAX_DECODED_BYTES / Float32Array.BYTES_PER_ELEMENT)
+    expect(() => assertDecodedSizeWithinBound(Math.floor(framesAtBoundMono / 2) + 1, 2)).toThrow(/too large/i)
+  })
+
+  it('treats a zero/negative channel count as at least one channel', () => {
+    const framesAtBound = Math.floor(MAX_DECODED_BYTES / Float32Array.BYTES_PER_ELEMENT)
+    expect(() => assertDecodedSizeWithinBound(framesAtBound, 0)).not.toThrow()
   })
 })

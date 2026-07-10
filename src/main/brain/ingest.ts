@@ -341,7 +341,7 @@ export async function settleCommitment(
 
 // ── Queue + backfill ─────────────────────────────────────────────────────────
 
-type Job = { file: string; source: 'meetings' | 'vault'; origin: 'live' | 'backfill' }
+type Job = { file: string; source: 'meetings'; origin: 'live' | 'backfill' }
 const queue: Job[] = []
 
 // The network-bound stage (extractMeeting, seconds-to-a-minute per call) is what a 100-meeting backfill
@@ -569,12 +569,6 @@ export function enqueueIngest(file: string): void {
   pump()
 }
 
-/** The vault's historical confidential transcripts (read-only backfill source). */
-const VAULT_TRANSCRIPTS = join(
-  process.env.HOME || '',
-  'Library/CloudStorage/OneDrive-MantuGroup/Documents/AI Second Brain/Meetings/Confidential'
-)
-
 /**
  * Resume an interrupted backfill on app boot: the request flag persists in index.json until the queue
  * fully drains, so a quit/relaunch mid-backfill picks up the remaining transcripts automatically.
@@ -644,11 +638,6 @@ export function startBackfill(): { queued: number } {
       !extractedSlugs.has(slugify(f))
     ) {
       candidates.push({ file: join(folder, f), source: 'meetings', origin: 'backfill' })
-    }
-  }
-  for (const f of existsSync(VAULT_TRANSCRIPTS) ? readdirSync(VAULT_TRANSCRIPTS) : []) {
-    if (f.endsWith('.md') && !already.has(f) && !inFlight.has(f) && !extractedSlugs.has(slugify(f))) {
-      candidates.push({ file: join(VAULT_TRANSCRIPTS, f), source: 'vault', origin: 'backfill' })
     }
   }
   // Accumulate rather than overwrite: a re-entrant call must extend an in-flight backfill's progress

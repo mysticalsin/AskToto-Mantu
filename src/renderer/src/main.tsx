@@ -23,7 +23,7 @@ class ErrorBoundary extends Component<{ children: ReactNode }, { error: Error | 
     return (
       <div className="glass-strong m-1.5 flex flex-col items-center gap-3 rounded-2xl p-6 text-center">
         <div className="font-ui text-[14px] font-semibold text-[color:var(--color-ink)]">
-          AskToto hit a snag
+          Métis hit a snag
         </div>
         <div className="max-w-[420px] text-[12px] text-[color:var(--color-ink-2)]">
           {this.state.error.message || 'Something went wrong rendering the overlay.'}

@@ -4,7 +4,7 @@ import { writeFile, rename, unlink } from 'node:fs/promises'
 import { join, basename } from 'node:path'
 import { homedir } from 'node:os'
 import { randomBytes, createCipheriv, createDecipheriv, publicEncrypt, constants } from 'node:crypto'
-import type { SaveMeeting, SaveNote, Settings, RecapExport } from '@shared/ipc'
+import type { SaveMeeting, SaveNote, Settings, RecapExport, TranscriptLine } from '@shared/ipc'
 import { encryptSecret, decryptSecret } from './secrets'
 
 // Optional at-rest encryption for transcripts/notes. Two on-disk formats share one fixed-length
@@ -29,9 +29,9 @@ type EnvelopeV2 = {
 
 /** Machine-wide org-policy managed-config location IT can deploy (mirrors auth.ts / store.ts). */
 function adminManagedConfigPath(): string {
-  if (process.platform === 'darwin') return '/Library/Application Support/AskToto/managed-config.json'
+  if (process.platform === 'darwin') return '/Library/Application Support/Métis/managed-config.json'
   if (process.platform === 'win32')
-    return join(process.env.ProgramData || 'C:\\ProgramData', 'AskToto', 'managed-config.json')
+    return join(process.env.ProgramData || 'C:\\ProgramData', 'Métis', 'managed-config.json')
   return '/etc/asktoto/managed-config.json'
 }
 
@@ -136,7 +136,7 @@ function encryptEnvelopeV2(content: string): Buffer {
       env.kEscrow = kEscrow.toString('base64')
     } catch {
       // A malformed escrow key must not break saving (no regression): write local-only. Never log key material.
-      console.warn('AskToto: escrow public key configured but unusable; wrote transcript without escrow wrap')
+      console.warn('Métis: escrow public key configured but unusable; wrote transcript without escrow wrap')
     }
   }
   return Buffer.concat([ENC_MARKER_V2, Buffer.from(JSON.stringify(env), 'utf8')])
@@ -204,7 +204,7 @@ export function readSavedFile(path: string): string {
   return decodeSaved(readFileSync(path))
 }
 
-/** True if the file on disk is one of AskToto's encrypted transcripts. */
+/** True if the file on disk is one of Métis's encrypted transcripts. */
 export function isEncryptedFile(path: string): boolean {
   try {
     const head = readFileSync(path).subarray(0, MARKER_LEN)
@@ -231,7 +231,20 @@ export async function writeSaved(file: string, content: string, encrypt: boolean
   const tmp = `${file}.${randomBytes(6).toString('hex')}.tmp`
   try {
     await writeFile(tmp, data, { mode: 0o600 }) // async: off the main-process event loop
-    await rename(tmp, file)
+    // The default meetings folder lives under OneDrive, which routinely holds a just-written file
+    // open (upload hashing) or gets grabbed by AV/EDR real-time scanning — rename() then throws
+    // EPERM/EBUSY on Windows even though nothing is actually wrong. Bounded retry rides out that
+    // transient lock instead of losing the save; any other error (or exhausted retries) still throws.
+    for (let attempt = 0; ; attempt++) {
+      try {
+        await rename(tmp, file)
+        break
+      } catch (e) {
+        const code = (e as NodeJS.ErrnoException).code
+        if ((code !== 'EPERM' && code !== 'EBUSY') || attempt >= 4) throw e
+        await new Promise((r) => setTimeout(r, 40 * 2 ** attempt))
+      }
+    }
   } catch (e) {
     try {
       if (existsSync(tmp)) await unlink(tmp) // don't leave an orphaned .tmp on failure
@@ -306,9 +319,9 @@ export function sweepStaleTempFiles(): void {
   }
 }
 
-const README = `# AskToto — Meeting transcripts
+const README = `# Métis — Meeting transcripts
 
-This folder is created and maintained by **AskToto**. Every meeting you run the copilot in is
+This folder is created and maintained by **Métis**. Every meeting you run the copilot in is
 saved here automatically as one markdown file: AI notes + the full timestamped transcript, with
 frontmatter (\`type: meeting-transcript\`, \`status: ready-for-followup\`).
 
@@ -317,10 +330,10 @@ frontmatter (\`type: meeting-transcript\`, \`status: ready-for-followup\`).
 - Each file is tagged \`status: ready-for-followup\` — generate follow-ups, then update the status.
 - Filenames are \`YYYY-MM-DD_HHMMSS-<slug>.md\`; frontmatter carries date, mode, participants, duration.
 
-Do not rename this folder — AskToto and your agents read from here.
+Do not rename this folder — Métis and your agents read from here.
 `
 
-const INDEX_HEADER = `# AskToto Meetings — Index
+const INDEX_HEADER = `# Métis Meetings — Index
 
 | Date | Title | Mode | Duration | File |
 |------|-------|------|----------|------|
@@ -354,7 +367,7 @@ function appendIndexRow(folder: string, dateStr: string, title: string, mode: st
 }
 
 // detectOneDrive() does a handful of sync fs calls (existsSync/readdirSync) and its answer can't change
-// mid-process (the OneDrive sync root doesn't move while AskToto is running) — resolveMeetingsFolder
+// mid-process (the OneDrive sync root doesn't move while Métis is running) — resolveMeetingsFolder
 // calls it on every settings read, so memoize once per process rather than re-stating the same paths
 // every time.
 let _oneDriveCache: string | undefined
@@ -396,7 +409,7 @@ function detectOneDriveUncached(): string {
 export function resolveMeetingsFolder(settings: Settings): string {
   if (settings.meetingsFolder) return settings.meetingsFolder
   const base = detectOneDrive() || app.getPath('documents')
-  return join(base, 'AskToto Meetings')
+  return join(base, 'Métis Meetings')
 }
 
 const pad = (n: number): string => String(n).padStart(2, '0')
@@ -421,6 +434,8 @@ const cleanTitle = (s: string): string => {
     .trim()
     .slice(0, 100)
 }
+const speakerLabel = (speaker: TranscriptLine['speaker']): 'Them' | 'You' | 'Speaker' =>
+  speaker === 'them' ? 'Them' : speaker === 'you' ? 'You' : 'Speaker'
 const yamlSafeTitle = (s: string): string =>
   s.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, ' ')
 
@@ -436,7 +451,7 @@ export async function saveNote(settings: Settings, n: SaveNote): Promise<string>
   const frontmatter = [
     '---',
     'type: note',
-    'source: AskToto',
+    'source: Métis',
     `mode: "${yamlSafeTitle(cleanTitle(n.mode))}"`,
     `date: ${new Date(started).toISOString()}`,
     `title: "${yamlSafeTitle(title)}"`,
@@ -445,7 +460,7 @@ export async function saveNote(settings: Settings, n: SaveNote): Promise<string>
     ''
   ].join('\n')
   const body =
-    `# ${title}\n\n_${new Date(started).toLocaleString()} · note · AskToto_\n\n` +
+    `# ${title}\n\n_${new Date(started).toLocaleString()} · note · Métis_\n\n` +
     (n.question ? `## Question\n\n${n.question}\n\n` : '') +
     `## Answer\n\n${n.answer}\n`
   // Atomic write (encrypted at rest when enabled).
@@ -485,13 +500,13 @@ export async function saveMeeting(settings: Settings, m: SaveMeeting): Promise<s
 
   const last = m.lines.length ? m.lines[m.lines.length - 1].t : started
   const durMin = m.lines.length ? Math.max(1, Math.round((last - started) / 60000)) : 0
-  const participants = Array.from(new Set(m.lines.map((l) => (l.speaker === 'them' ? 'Them' : 'You'))))
+  const participants = Array.from(new Set(m.lines.map((l) => speakerLabel(l.speaker))))
 
   const transcript = m.lines
     .map((l) => {
       const d = new Date(l.t)
       const t = `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
-      return `**[${t}] ${l.speaker === 'them' ? 'Them' : 'You'}:** ${l.text}`
+      return `**[${t}] ${speakerLabel(l.speaker)}:** ${l.text}`
     })
     .join('\n\n')
 
@@ -499,7 +514,7 @@ export async function saveMeeting(settings: Settings, m: SaveMeeting): Promise<s
     [
       '---',
       'type: meeting-transcript',
-      'source: AskToto',
+      'source: Métis',
       `mode: "${yamlSafeTitle(cleanTitle(m.mode))}"`,
       `date: ${new Date(started).toISOString()}`,
       `title: "${yamlSafeTitle(title)}"`,
@@ -513,7 +528,7 @@ export async function saveMeeting(settings: Settings, m: SaveMeeting): Promise<s
     ].join('\n')
 
   const body =
-    `# ${title}\n\n_${new Date(started).toLocaleString()} · ${m.mode} · ${durMin} min · AskToto_\n\n` +
+    `# ${title}\n\n_${new Date(started).toLocaleString()} · ${m.mode} · ${durMin} min · Métis_\n\n` +
     (m.recap ? `## Notes & follow-ups\n\n${m.recap}\n\n` : '') +
     `## Full transcript\n\n${transcript || '_No speech captured._'}\n`
 
@@ -629,13 +644,13 @@ export async function saveDraftTranscript(settings: Settings, m: SaveMeeting): P
       .map((l) => {
         const d = new Date(l.t)
         const t = `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
-        return `**[${t}] ${l.speaker === 'them' ? 'Them' : 'You'}:** ${l.text}`
+        return `**[${t}] ${speakerLabel(l.speaker)}:** ${l.text}`
       })
       .join('\n\n')
     const frontmatter = [
       '---',
       'type: meeting-transcript-draft',
-      'source: AskToto',
+      'source: Métis',
       `mode: "${yamlSafeTitle(cleanTitle(m.mode))}"`,
       `date: ${new Date(started).toISOString()}`,
       `title: "${yamlSafeTitle(title)}"`,
@@ -646,7 +661,7 @@ export async function saveDraftTranscript(settings: Settings, m: SaveMeeting): P
     const body =
       `# ${title} (in progress — autosaved draft)\n\n` +
       'This is an automatic snapshot of a meeting still in progress, or one that ended without a normal ' +
-      'save (crash / force quit). If AskToto is still running this meeting, ignore this file — the real ' +
+      'save (crash / force quit). If Métis is still running this meeting, ignore this file — the real ' +
       'save replaces it when the meeting ends.\n\n' +
       `## Transcript so far\n\n${transcript || '_No speech captured yet._'}\n`
     await writeSaved(file, frontmatter + body, settings.encryptTranscripts)

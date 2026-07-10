@@ -67,16 +67,40 @@ export function parakeetModelReady(): boolean {
 /* eslint-disable @typescript-eslint/no-explicit-any */
 let recognizer: any = null
 let downloading = false
+// Reason the native addon last failed to load (e.g. a cross-built package missing the platform's
+// sherpa-onnx-<platform>-<arch> binary). Kept so parakeetTranscribe can throw something a caller can
+// actually act on instead of the generic "recognizer unavailable".
+let addonLoadError: string | null = null
+// undefined = not probed yet; null = probed and require() threw; otherwise the loaded module.
+// require() itself does not cache a *failed* load, so without this memo a repeated probe would repeat
+// the native dlopen attempt (cheap, but not free) on every call instead of exactly once.
+let addonModule: any = undefined
 
-/** Lazily load sherpa-onnx-node; returns null (→ Whisper fallback) if the native addon can't load. */
-function loadSherpa(): any | null {
+/** Probe (once, memoized forever — success or failure) whether sherpa-onnx-node's native addon loads.
+ *  Just the require() — never touches model weights and spawns nothing, so it's cheap enough to run
+ *  eagerly on the first status/transcribe call instead of only after a live transcribe has failed. */
+function probeSherpa(): any | null {
+  if (addonModule !== undefined) return addonModule
   try {
     // eslint-disable-next-line @typescript-eslint/no-var-requires
-    return require('sherpa-onnx-node')
+    addonModule = require('sherpa-onnx-node')
+    addonLoadError = null
   } catch (e) {
-    mainLog.error('[parakeet] sherpa-onnx-node failed to load:', (e as Error)?.message)
-    return null
+    addonModule = null
+    addonLoadError = (e as Error)?.message || String(e)
+    mainLog.error('[parakeet] sherpa-onnx-node failed to load:', addonLoadError)
   }
+  return addonModule
+}
+
+/** Last native-addon load failure, if any — lets a caller tell "addon missing for this platform/build"
+ * apart from "model not downloaded yet" when reporting Parakeet engine status. Triggers the memoized
+ * probe on first call (see probeSherpa) so Settings shows an accurate status on mount instead of only
+ * after a live transcribe has already failed — must stay cheap (no model load, no spawn) since it runs
+ * on every parakeetStatus poll. */
+export function parakeetAddonError(): string | null {
+  probeSherpa()
+  return addonLoadError
 }
 
 /** Download + extract the Parakeet model once. Reports 0-100 progress. Throws on failure (caller falls back). */
@@ -147,7 +171,9 @@ function extractTarBz2(archive: string, dir: string): Promise<void> {
   // bsdtar (macOS) does not support --no-absolute-paths; both bsdtar and GNU tar already
   // strip leading '/' from archive member names by default, so omitting it is safe.
   return new Promise((resolve, reject) => {
-    execFile('tar', ['xjf', archive, '-C', dir], (err) => (err ? reject(err) : resolve()))
+    // windowsHide: `tar` is a console-subsystem binary — without this a console window flashes on
+    // screen during this first-run model extract, even though it's launched from the GUI main process.
+    execFile('tar', ['xjf', archive, '-C', dir], { windowsHide: true }, (err) => (err ? reject(err) : resolve()))
   })
 }
 
@@ -155,7 +181,7 @@ function extractTarBz2(archive: string, dir: string): Promise<void> {
 function getRecognizer(): any | null {
   if (recognizer) return recognizer
   if (!parakeetModelReady()) return null
-  const sherpa = loadSherpa()
+  const sherpa = probeSherpa()
   if (!sherpa) return null
   const f = modelFiles()
   try {
@@ -185,7 +211,11 @@ function getRecognizer(): any | null {
  */
 export async function parakeetTranscribe(samples: Float32Array): Promise<string> {
   const rec = getRecognizer()
-  if (!rec) throw new Error('parakeet recognizer unavailable')
+  if (!rec) {
+    throw new Error(
+      addonLoadError ? `parakeet native addon unavailable: ${addonLoadError}` : 'parakeet recognizer unavailable'
+    )
+  }
   try {
     const stream = rec.createStream()
     stream.acceptWaveform({ samples, sampleRate: SAMPLE_RATE })
