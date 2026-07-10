@@ -1,5 +1,5 @@
 import { X, Mic, Pause, Play, Square } from 'lucide-react'
-import { MetisMark } from './MetisMark'
+import { MantuMark } from './MantuMark'
 import { ElapsedClock } from './Bar'
 import { useWindowDrag } from '../lib/window-drag'
 
@@ -45,7 +45,7 @@ export function ControlPill({
         className="no-drag focus-ring block shrink-0 rounded-[8px]"
       >
         <span className="aw-mark-glow block rounded-[22%]">
-          <MetisMark size={30} />
+          <MantuMark size={30} />
         </span>
       </button>
       {listening ? (
