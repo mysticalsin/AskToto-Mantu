@@ -1912,11 +1912,13 @@ function DustSetup({
   const linkId = useId()
   const wsId = useId()
   const thinkSel = useId()
+  // The manual API-key path is collapsed by default so the one-click "Set up Dust automatically" button
+  // is the obvious choice; users who already hold an admin key expand it.
+  const [showKeyPath, setShowKeyPath] = useState(false)
 
   const isEu = /eu\.dust\.tt/i.test(settings.dustBaseUrl)
-  // The CLI connect flow (dustImportCli/dustSetupCli) is darwin-only in main; on Windows it always
-  // fails, so skip straight to the manual key steps instead of showing a dead-end button.
-  const isWin = window.navigator.platform.toLowerCase().includes('win')
+  // The one-click CLI setup (dustImportCli/dustSetupCli) is cross-platform now (dust-secret-store reads
+  // the session on macOS/Windows/Linux), so it's the primary path on every OS — no per-platform gating.
   const locked = settings.managedKeys.includes('provider')
   // Base agent is user-editable (picker below, defaults to the Métis agent, one-click reset) —
   // gated by the same 'providerModels' managed-key as the Advanced base-model field in AiSection, not
@@ -1982,6 +1984,9 @@ function DustSetup({
     await patch({ provider: 'dust' }) // activate Dust so this key is used + the add-key CTA hides
     setDustKey('')
     setKeySaving(false)
+    // Validate immediately: load the agent list so a bad key/workspace surfaces its error here and now
+    // instead of a silent "Saved" green check that only fails later when the user reaches Step 4.
+    if (settings.dustWorkspaceId.trim()) void loadAgents()
   }
   // Fully disconnect Dust: clear the saved token/key, drop the workspace + region + the (user-editable)
   // thinking agent, reset the (also user-editable) base agent back to the Métis default, switch off
@@ -2062,7 +2067,7 @@ function DustSetup({
   //                    (Terminal), so the user is prompted to reconnect instead of silently assuming done.
   const liveCheckedRef = useRef(false)
   useEffect(() => {
-    if (liveCheckedRef.current || isWin || !keySaved || !hasWs) return
+    if (liveCheckedRef.current || !keySaved || !hasWs) return
     liveCheckedRef.current = true
     void (async () => {
       const decision = decideDustLiveCheck(await window.toto.dustProbeSession())
@@ -2116,81 +2121,82 @@ function DustSetup({
       desc="Your Dust agents (Second Brain retrieval + tools) power Métis. Connect with the Dust CLI, then pick a thinking agent for hard questions."
     >
       <div className="flex flex-col gap-4">
-        {!isWin && (
-          <>
-            {/* One-click: import the local Dust CLI session (token + workspace + region) from the keychain */}
-            <div className="flex flex-col gap-1.5 rounded-[10px] border border-[var(--cl-primary)]/30 bg-[var(--cl-primary-soft)]/40 p-3">
-              <div className="flex items-center justify-between gap-2">
-                <span className="text-[12px] font-medium text-[color:var(--cl-foreground)]">
-                  Connect locally with the Dust CLI
-                </span>
-                {keySaved && hasWs ? (
-                  // Already linked → offer Reconnect (re-imports a fresh token, fixing an expired session)
-                  // and Disconnect (full reset back to the connect state).
-                  <div className="flex items-center gap-2">
-                    {locked && <span className={managedChipCls}>Managed by your organization</span>}
-                    <button
-                      type="button"
-                      onClick={connectCli}
-                      disabled={cli.busy || locked}
-                      title="Re-import a fresh session from the Dust CLI"
-                      className="no-drag cl-focus flex items-center gap-1.5 rounded-[8px] bg-[var(--cl-primary)] px-3 py-1.5 text-[12px] font-medium text-white hover:opacity-90 disabled:opacity-50"
-                    >
-                      {cli.busy ? <Loader2 size={13} className="animate-spin" /> : <RefreshCw size={13} />}
-                      Reconnect
-                    </button>
-                    <button
-                      type="button"
-                      onClick={disconnectDust}
-                      disabled={cli.busy || (locked && active)}
-                      title="Disconnect Dust from Métis"
-                      className="no-drag cl-focus flex items-center gap-1.5 rounded-[8px] border border-[var(--cl-destructive)]/30 bg-[var(--cl-destructive)]/10 px-3 py-1.5 text-[12px] font-medium text-[color:var(--cl-destructive)] hover:bg-[var(--cl-destructive)]/20 disabled:opacity-50"
-                    >
-                      <X size={13} />
-                      Disconnect
-                    </button>
-                  </div>
-                ) : (
-                  <div className="flex items-center gap-2">
-                    {locked && <span className={managedChipCls}>Managed by your organization</span>}
-                    <button
-                      type="button"
-                      onClick={connectCli}
-                      disabled={cli.busy || locked}
-                      className="no-drag cl-focus flex items-center gap-1.5 rounded-[8px] bg-[var(--cl-primary)] px-3 py-1.5 text-[12px] font-medium text-white hover:opacity-90 disabled:opacity-50"
-                    >
-                      {cli.busy ? <Loader2 size={13} className="animate-spin" /> : <Link2 size={13} />}
-                      Connect from Dust CLI
-                    </button>
-                  </div>
-                )}
-              </div>
-              <span className="text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
-                Already ran <code className="rounded bg-white/[0.08] px-1">dust login</code>? This reads your
-                session from the keychain. No key to copy. macOS may ask to allow keychain access once.
+        {/* PRIMARY — one click installs the Dust CLI, signs you in, and connects on its own. Same on
+            macOS and Windows: connectCli imports the local session, and if there isn't one it auto-runs
+            the installer + `dust login`; the main-process poll then imports the session automatically. */}
+        <div className="flex flex-col gap-2 rounded-[12px] border border-[var(--cl-primary)]/40 bg-[var(--cl-primary-soft)]/50 p-3.5">
+          {keySaved && hasWs ? (
+            // Already connected → Reconnect (re-imports a fresh session) + Disconnect (full reset).
+            <div className="flex items-center justify-between gap-2">
+              <span className="flex items-center gap-1.5 text-[12px] font-medium text-[color:var(--cl-success)]">
+                <CircleCheck size={14} /> Dust is connected.
               </span>
-              {cli.msg && (
-                <span
-                  className={[
-                    'text-[11px]',
-                    cli.ok ? 'text-[color:var(--cl-success)]' : 'text-[color:var(--cl-destructive)]'
-                  ].join(' ')}
+              <div className="flex items-center gap-2">
+                {locked && <span className={managedChipCls}>Managed by your organization</span>}
+                <button
+                  type="button"
+                  onClick={connectCli}
+                  disabled={cli.busy || locked}
+                  title="Re-import a fresh session from the Dust CLI"
+                  className="no-drag cl-focus flex items-center gap-1.5 rounded-[8px] bg-[var(--cl-primary)] px-3 py-1.5 text-[12px] font-medium text-white hover:opacity-90 disabled:opacity-50"
                 >
-                  {cli.msg}
-                </span>
-              )}
+                  {cli.busy ? <Loader2 size={13} className="animate-spin" /> : <RefreshCw size={13} />}
+                  Reconnect
+                </button>
+                <button
+                  type="button"
+                  onClick={disconnectDust}
+                  disabled={cli.busy || (locked && active)}
+                  title="Disconnect Dust from Métis"
+                  className="no-drag cl-focus flex items-center gap-1.5 rounded-[8px] border border-[var(--cl-destructive)]/30 bg-[var(--cl-destructive)]/10 px-3 py-1.5 text-[12px] font-medium text-[color:var(--cl-destructive)] hover:bg-[var(--cl-destructive)]/20 disabled:opacity-50"
+                >
+                  <X size={13} />
+                  Disconnect
+                </button>
+              </div>
             </div>
-
-            <div className="flex items-center gap-2">
-              <div className="h-px flex-1 bg-[var(--cl-border)]" />
-              <span className="text-[10px] uppercase tracking-wide text-[color:var(--cl-muted-foreground)]">
-                or set up manually
+          ) : (
+            <>
+              <button
+                type="button"
+                onClick={connectCli}
+                disabled={cli.busy || locked}
+                className="no-drag cl-focus flex w-full items-center justify-center gap-2 rounded-[10px] bg-[var(--cl-primary)] px-4 py-3 text-[14px] font-semibold text-white hover:opacity-90 disabled:opacity-50"
+              >
+                {cli.busy ? <Loader2 size={16} className="animate-spin" /> : <Wand2 size={16} />}
+                Set up Dust automatically
+              </button>
+              <span className="text-center text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
+                Installs the Dust CLI and signs you in — then Métis connects on its own. No key to copy.
+                {locked && <span className={'ml-1 ' + managedChipCls}>Managed by your organization</span>}
               </span>
-              <div className="h-px flex-1 bg-[var(--cl-border)]" />
-            </div>
-          </>
-        )}
+            </>
+          )}
+          {cli.msg && (
+            <span
+              className={[
+                'text-center text-[11px]',
+                cli.ok ? 'text-[color:var(--cl-success)]' : 'text-[color:var(--cl-destructive)]'
+              ].join(' ')}
+            >
+              {cli.msg}
+            </span>
+          )}
+        </div>
 
+        {/* Manual alternative — collapsed by default. Everything the automatic setup does, by hand:
+            paste a Dust link (auto-fills workspace + region) or an admin API key. */}
+        <button
+          type="button"
+          onClick={() => setShowKeyPath((v) => !v)}
+          aria-expanded={showKeyPath}
+          className="no-drag cl-focus flex items-center gap-1.5 self-start text-[12px] font-medium text-[color:var(--cl-muted-foreground)] hover:text-[color:var(--cl-foreground)]"
+        >
+          <ChevronDown size={13} className={showKeyPath ? 'transition-transform' : '-rotate-90 transition-transform'} />
+          I already have an API key
+        </button>
+        {showKeyPath && (
+        <div className="flex flex-col gap-4">
         {/* Step 1 — paste a link, everything auto-fills */}
         <div className="flex flex-col gap-1.5">
           <div className="flex items-center gap-2 text-[12px] font-medium text-[color:var(--cl-foreground)]">
@@ -2280,10 +2286,12 @@ function DustSetup({
             </div>
           )}
           <span className="pl-7 text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
-            Get one at dust.tt → Settings → API Keys (admin).
-            {!isWin && ' Or use “Connect from Dust CLI” above.'}
+            Get one at dust.tt → Settings → API Keys (admin). Or use “Set up Dust automatically” above —
+            no key needed.
           </span>
         </div>
+        </div>
+        )}
 
         {/* Step 4 — pick the agent from a live list (no ids to copy) */}
         <div className="flex flex-col gap-1.5">

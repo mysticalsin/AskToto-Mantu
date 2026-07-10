@@ -1486,7 +1486,9 @@ function registerIpc(): void {
     assertMainWindow(e)
     if (!requireAuth()) return { ok: false, error: 'Sign in with your Mantu account first.' }
     const r = await setupDustCli()
-    if (r.ok && process.platform === 'darwin') {
+    // Poll the OS secret store until `dust login` lands, then auto-import — cross-platform now that the
+    // read (importDustCliSession → dust-secret-store) works on every OS.
+    if (r.ok) {
       if (dustSetupPoll) clearInterval(dustSetupPoll)
       const startedAt = Date.now()
       dustSetupPoll = setInterval(() => {
