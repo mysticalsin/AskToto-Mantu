@@ -20,6 +20,7 @@ import {
   type DustAgentsResponse,
   type DustCliImport,
   type DustCliSetup,
+  type DustSessionProbe,
   type CliActionResult,
   type CliInstallResult,
   type GraphStatus,
@@ -77,6 +78,7 @@ const api = {
   dustListAgents: (): Promise<DustAgentsResponse> => ipcRenderer.invoke(IPC.dustListAgents),
   dustImportCli: (): Promise<DustCliImport> => ipcRenderer.invoke(IPC.dustImportCli),
   dustSetupCli: (): Promise<DustCliSetup> => ipcRenderer.invoke(IPC.dustSetupCli),
+  dustProbeSession: (): Promise<DustSessionProbe> => ipcRenderer.invoke(IPC.dustProbeSession),
   cliDetect: (provider: ProviderId): Promise<CliActionResult> =>
     ipcRenderer.invoke(IPC.cliDetect, provider),
   cliSetup: (provider: ProviderId): Promise<{ ok: boolean; error?: string }> =>

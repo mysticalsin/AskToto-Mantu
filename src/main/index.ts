@@ -1463,6 +1463,18 @@ function registerIpc(): void {
     return { ok: true, workspaceId: s.workspaceId, baseUrl: s.baseUrl }
   })
 
+  // Read-only session probe for the Settings-open live check. CRITICALLY this does NOT call
+  // refreshDustCliSession: that runs `dust status`, which rotates the single-use OAuth token, and firing
+  // it on mount races the concurrent agent-list load onto a token the rotation just invalidated (a 401
+  // cascade). importDustCliSession only READS the keychain — no rotation, no persist — and returns
+  // booleans only (the token never crosses to the renderer). A present-but-expired token reports ok:true
+  // (it is refreshable on the ask/list path); only a genuinely absent session reports ok:false.
+  ipcMain.handle(IPC.dustProbeSession, async (e) => {
+    assertMainWindow(e)
+    const s = await importDustCliSession()
+    return { ok: s.ok, accessDenied: s.accessDenied }
+  })
+
   // No CLI session yet → kick off the install + interactive login for the user (opens a Terminal window).
   // Then poll the keychain until the login lands and import it automatically — one login, zero extra
   // clicks: without this the user had to come back and press "Connect from Dust CLI" a second time.
