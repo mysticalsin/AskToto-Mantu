@@ -7,59 +7,26 @@ import { join } from 'node:path'
 import type { DustCliImport } from '@shared/ipc'
 import { resolveBin } from './cli'
 import { clearApiKey, setSettings } from './store'
+import { readDustSecret } from './dust-secret-store'
 
 const exec = promisify(execFile)
 
 /**
  * Read the local Dust CLI session so Métis can connect to Dust without the user copy-pasting a key.
  *
- * The official Dust CLI (`@dust-tt/dust-cli`, command `dust login`) stores its session in the OS
- * keychain via keytar under service `dust-cli`, accounts: `access_token`, `workspace_sid`, `region`.
- * On macOS we read those generic-password items with the built-in `security` tool — no native module,
- * no rebuild. (Reading another app's keychain item triggers a one-time macOS "allow access" prompt.)
+ * The Dust CLI (`@dust-tt/dust-cli`, command `dust login`) stores its session via keytar under service
+ * `dust-cli` (accounts `access_token` / `workspace_sid` / `region`). The per-OS read lives in
+ * dust-secret-store.ts (macOS Keychain, Windows Credential Manager, Linux libsecret) — all
+ * native-module-free shell-outs. This module orchestrates import, refresh, and first-run setup on top,
+ * identically on every platform.
  *
  * The access token is an OAuth token and is short-lived: it works now and survives restarts until it
- * expires, after which the user re-runs the import (the CLI refreshes it on its next use).
+ * expires, after which `dust status` (refreshDustCliSession) re-mints it with no re-login.
  */
 
 const ACCESS_TOKEN = 'access_token'
 const WORKSPACE = 'workspace_sid'
 const REGION = 'region'
-
-/** Service name the Dust CLI (keytar) uses. Overridable only so the integration test can exercise the
- *  real `security` read path against a throwaway entry without touching the user's real Dust session. */
-function service(): string {
-  return process.env.DUST_CLI_KEYCHAIN_SERVICE || 'dust-cli'
-}
-
-interface KeychainRead {
-  value: string | null
-  accessDenied: boolean
-}
-
-function keychainAccessDenied(error: unknown): boolean {
-  const e = error as { stderr?: string; message?: string }
-  return /user interaction is not allowed|authorization.*denied|errsec(authfailed|interactionnotallowed)|\b-2529[13]\b/i.test(
-    `${e?.stderr || ''}\n${e?.message || ''}`
-  )
-}
-
-async function keychainGet(account: string): Promise<KeychainRead> {
-  try {
-    const { stdout } = await exec('security', [
-      'find-generic-password',
-      '-s',
-      service(),
-      '-a',
-      account,
-      '-w'
-    ])
-    const v = stdout.trim()
-    return { value: v || null, accessDenied: false }
-  } catch (error) {
-    return { value: null, accessDenied: keychainAccessDenied(error) }
-  }
-}
 
 /** Dust CLI region id → API base URL. EU workspaces live on eu.dust.tt. */
 function regionToBaseUrl(region: string | null): string {
@@ -70,33 +37,27 @@ function regionToBaseUrl(region: string | null): string {
 export type DustCliSession = DustCliImport & { token?: string }
 
 export async function importDustCliSession(): Promise<DustCliSession> {
-  if (process.platform !== 'darwin') {
-    return {
-      ok: false,
-      error: 'On Windows, paste your Dust API key or workspace link instead — Settings → AI → Dust.'
-    }
-  }
-  // Read sequentially: a macOS permission dialog is per lookup, and parallel `security` calls can
-  // stack prompts or make a single denial look like a missing Dust CLI session.
-  const token = await keychainGet(ACCESS_TOKEN)
+  // Read sequentially: a macOS permission dialog is per lookup, and parallel reads can stack prompts or
+  // make a single denial look like a missing session. (Windows/Linux never prompt or deny — the reads
+  // just resolve.) accessDenied is macOS-only; a genuinely missing session returns the setup prompt.
+  const token = await readDustSecret(ACCESS_TOKEN)
   if (token.accessDenied) {
     return { ok: false, accessDenied: true, error: 'Allow Métis to access your Dust CLI session in Keychain, then try again.' }
   }
   if (!token.value) {
     return {
       ok: false,
-      error:
-        'No Dust CLI session found. Run `npm i -g @dust-tt/dust-cli && dust login`; Métis connects automatically after login.'
+      error: 'No Dust CLI session found. Click “Set up Dust” to install the CLI and sign in.'
     }
   }
-  const workspace = await keychainGet(WORKSPACE)
+  const workspace = await readDustSecret(WORKSPACE)
   if (workspace.accessDenied) {
     return { ok: false, accessDenied: true, error: 'Allow Métis to access your Dust CLI workspace in Keychain, then try again.' }
   }
   if (!workspace.value) {
-    return { ok: false, error: 'Your Dust CLI session is incomplete. Run `dust login` again, then return to Métis.' }
+    return { ok: false, error: 'Your Dust CLI session is incomplete. Run “Set up Dust” again to sign in.' }
   }
-  const region = await keychainGet(REGION)
+  const region = await readDustSecret(REGION)
   if (region.accessDenied) {
     return { ok: false, accessDenied: true, error: 'Allow Métis to access your Dust CLI region in Keychain, then try again.' }
   }
@@ -125,12 +86,6 @@ let lastRefresh: { at: number; session: DustCliSession } | null = null
 const REFRESH_RESULT_TTL_MS = 30_000
 
 export async function refreshDustCliSession(): Promise<DustCliSession> {
-  if (process.platform !== 'darwin') {
-    return {
-      ok: false,
-      error: 'On Windows, paste your Dust API key or workspace link instead — Settings → AI → Dust.'
-    }
-  }
   if (refreshInflight) return refreshInflight
   if (lastRefresh && lastRefresh.session.ok && Date.now() - lastRefresh.at < REFRESH_RESULT_TTL_MS) {
     return lastRefresh.session
@@ -141,9 +96,15 @@ export async function refreshDustCliSession(): Promise<DustCliSession> {
       if (bin) {
         try {
           // CI=1 suppresses the spinner / update-check UI; the timeout bounds the network round-trip.
-          await exec(bin, ['status'], { timeout: 25_000, env: { ...process.env, CI: '1' } })
+          // On Windows the resolved bin is `dust.cmd`, which only runs through a shell — quote the path
+          // for spaces. Best-effort either way: a nonzero exit/timeout is swallowed and we re-read.
+          if (process.platform === 'win32') {
+            await exec(`"${bin}" status`, [], { timeout: 25_000, env: { ...process.env, CI: '1' }, shell: true, windowsHide: true })
+          } else {
+            await exec(bin, ['status'], { timeout: 25_000, env: { ...process.env, CI: '1' } })
+          }
         } catch {
-          // ignore — fall through and re-read the keychain regardless of exit code
+          // ignore — fall through and re-read the session regardless of exit code
         }
       }
       const s = await importDustCliSession()
@@ -156,47 +117,87 @@ export async function refreshDustCliSession(): Promise<DustCliSession> {
   return refreshInflight
 }
 
+// macOS `.command` installer (bash). Opening a `.command` runs it in Terminal with NO Automation
+// permission (unlike osascript). `dust login` needs a browser OAuth, so it must run in a visible window.
+const MAC_SETUP_SCRIPT =
+  [
+    '#!/bin/bash',
+    'clear',
+    'echo "Métis — Dust setup"',
+    'echo "==================="',
+    'echo',
+    'if ! command -v npm >/dev/null 2>&1; then',
+    '  echo "✗ npm / Node.js not found. Install Node from https://nodejs.org, then run this again."',
+    '  echo; echo "Press any key to close."; read -n 1 -s; exit 1',
+    'fi',
+    'echo "Step 1/2  Installing the Dust CLI (npm i -g @dust-tt/dust-cli)…"',
+    'if ! npm i -g @dust-tt/dust-cli; then',
+    '  echo; echo "✗ Install failed (often a permissions issue with global npm)."',
+    '  echo "  Try:  sudo npm i -g @dust-tt/dust-cli   then run this again."',
+    '  echo; echo "Press any key to close."; read -n 1 -s; exit 1',
+    'fi',
+    'echo; echo "Step 2/2  Signing in to Dust (a browser window will open)…"',
+    'dust login',
+    'echo; echo "✓ Done. Return to Métis — it will connect automatically after login."',
+    'echo "You can close this window."'
+  ].join('\n') + '\n'
+
+// Windows `.cmd` installer (batch). Opening a `.cmd` runs it in a console window; `pause` keeps it open.
+// Plain ASCII only — the default console codepage mangles accents/emoji. `^(` escapes parens for echo.
+const WIN_SETUP_SCRIPT =
+  [
+    '@echo off',
+    'title Metis - Dust setup',
+    'cls',
+    'echo Metis - Dust setup',
+    'echo ===================',
+    'echo.',
+    'where npm >nul 2>nul',
+    'if errorlevel 1 (',
+    '  echo npm / Node.js not found. Install Node from https://nodejs.org, then run this again.',
+    '  echo.',
+    '  pause',
+    '  exit /b 1',
+    ')',
+    'echo Step 1/2  Installing the Dust CLI ^(npm i -g @dust-tt/dust-cli^)...',
+    'call npm i -g @dust-tt/dust-cli',
+    'if errorlevel 1 (',
+    '  echo.',
+    '  echo Install failed. Try running this window as Administrator, then run it again.',
+    '  echo.',
+    '  pause',
+    '  exit /b 1',
+    ')',
+    'echo.',
+    'echo Step 2/2  Signing in to Dust ^(a browser window will open^)...',
+    'call dust login',
+    'echo.',
+    'echo Done. Return to Metis - it will connect automatically after login.',
+    'echo You can close this window.',
+    'pause'
+  ].join('\r\n') + '\r\n'
+
 /**
- * Kick off the Dust CLI setup for a user with no session yet. We write a small EXECUTABLE `.command`
- * script (install the CLI, then run the interactive `dust login`) and open it: macOS opens `.command`
- * files in Terminal and runs them directly, so this needs NO Automation permission (unlike telling
- * Terminal what to do via osascript, which silently fails until the user grants Automation access).
- * One click → a Terminal window walks them through it. `dust login` needs a browser OAuth, so it has to
- * run in a visible terminal. macOS only (matches importDustCliSession's keychain read).
+ * Kick off the Dust CLI setup for a user with no session yet: write an installer script (install the
+ * CLI, then run the interactive `dust login`) and open it so a terminal window walks the user through it.
+ * Cross-platform — macOS `.command`, Windows `.cmd`; after login the poll (index.ts) auto-imports on
+ * every platform. Linux terminal-launching is DE-specific, so there we point the user at the two commands.
  */
 export async function setupDustCli(): Promise<{ ok: boolean; error?: string }> {
-  if (process.platform !== 'darwin') {
+  if (process.platform !== 'darwin' && process.platform !== 'win32') {
     return {
       ok: false,
-      error: 'On Windows, paste your Dust API key or workspace link instead — Settings → AI → Dust.'
+      error: 'On Linux, run `npm i -g @dust-tt/dust-cli && dust login` in a terminal, then reopen Métis.'
     }
   }
   try {
-    const script =
-      [
-        '#!/bin/bash',
-        'clear',
-        'echo "Métis — Dust CLI setup"',
-        'echo "========================"',
-        'echo',
-        'if ! command -v npm >/dev/null 2>&1; then',
-        '  echo "✗ npm / Node.js not found. Install Node from https://nodejs.org, then run this again."',
-        '  echo; echo "Press any key to close."; read -n 1 -s; exit 1',
-        'fi',
-        'echo "Step 1/2  Installing the Dust CLI (npm i -g @dust-tt/dust-cli)…"',
-        'if ! npm i -g @dust-tt/dust-cli; then',
-        '  echo; echo "✗ Install failed (often a permissions issue with global npm)."',
-        '  echo "  Try:  sudo npm i -g @dust-tt/dust-cli   then run this again."',
-        '  echo; echo "Press any key to close."; read -n 1 -s; exit 1',
-        'fi',
-        'echo; echo "Step 2/2  Signing in to Dust (a browser window will open)…"',
-        'dust login',
-        'echo; echo "✓ Done. Return to Métis — it will connect automatically after login."',
-        'echo "You can close this window."'
-      ].join('\n') + '\n'
-    const scriptPath = join(app.getPath('temp'), `asktoto-dust-setup-${randomBytes(8).toString('hex')}.command`)
+    const isWin = process.platform === 'win32'
+    const script = isWin ? WIN_SETUP_SCRIPT : MAC_SETUP_SCRIPT
+    const ext = isWin ? 'cmd' : 'command'
+    const scriptPath = join(app.getPath('temp'), `asktoto-dust-setup-${randomBytes(8).toString('hex')}.${ext}`)
+    // 0o755 (exec bit) matters on macOS; Windows ignores mode and runs `.cmd` by extension.
     writeFileSync(scriptPath, script, { mode: 0o755, flag: 'wx' })
-    const err = await shell.openPath(scriptPath) // opens in Terminal and runs it; no Automation permission
+    const err = await shell.openPath(scriptPath) // opens in Terminal/Console and runs it
     if (err) return { ok: false, error: err }
     return { ok: true }
   } catch (e) {

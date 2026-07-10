@@ -378,6 +378,16 @@ export function Onboarding({
       const codex = await window.toto.cliDetect('codex-cli')
       choose(codex.ok ? 'codex-cli' : 'claude-cli')
     }
+    // "Mantu Dust" isn't just a preference — kick off the one-click setup right here so onboarding ends
+    // CONNECTED, not just with Dust selected. Import an existing Dust CLI session, or auto-run the
+    // installer + `dust login` if there's none; the main-process poll then connects on its own and the
+    // readiness step reflects it. Cross-platform. If it can't run, the user still lands on step 6 and can
+    // finish in Settings — no dead-end.
+    const chooseDust = async (): Promise<void> => {
+      choose('dust')
+      const imported = await window.toto.dustImportCli()
+      if (!imported.ok) void window.toto.dustSetupCli()
+    }
     return (
       <div className="fade-up flex min-h-[300px] w-full flex-col items-center gap-5 px-4 py-7 text-center">
         <div className="flex flex-col items-center gap-1.5">
@@ -441,8 +451,9 @@ export function Onboarding({
           <ProviderOption
             icon={Building2}
             title="Mantu Dust"
-            desc="Use Mantu's shared Dust workspace. Best if your team already runs on Dust."
-            onClick={() => choose('dust')}
+            badge="One-click setup"
+            desc="Use Mantu's shared Dust workspace. Installs + signs you in automatically — no key to paste."
+            onClick={() => void chooseDust()}
           />
         </div>
 
