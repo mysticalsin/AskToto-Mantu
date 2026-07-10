@@ -1,5 +1,5 @@
 import { memo, useEffect, useMemo, useRef, useState } from 'react'
-import { Copy, Check, FileText, ListTree, FolderOpen, Save, RotateCcw, Play, ChevronDown, Download, Clock, Mail, Send, AlertCircle, EarOff, ArrowLeft, Pencil, X, Sparkles } from 'lucide-react'
+import { Copy, Check, FileText, ListTree, FolderOpen, Save, RotateCcw, Play, ChevronDown, Download, Clock, Mail, Send, AlertCircle, EarOff, ArrowLeft, Pencil, X, Sparkles, Trash2 } from 'lucide-react'
 import type { TranscriptLine, MeetingSummary } from '@shared/ipc'
 import type { AnswerState } from '../state'
 import { isNonSpeechLine } from '@shared/transcript-filter'
@@ -87,6 +87,7 @@ export const Review = memo(function Review({
   followupDraft,
   onOpenFolder,
   onSave,
+  onDiscard,
   onDone,
   onResume,
   onGenerateFollowup,
@@ -111,6 +112,9 @@ export const Review = memo(function Review({
   followupDraft?: AnswerState | null
   onOpenFolder: () => void
   onSave?: () => void
+  /** Discard this meeting instead of keeping it — deletes the saved file (main pops a native confirm)
+   *  then leaves the review. Sits next to Save so "keep" vs "throw away" is one clear choice. */
+  onDiscard?: () => void
   onDone?: () => void
   onResume?: () => void
   onGenerateFollowup?: () => void
@@ -423,6 +427,9 @@ export const Review = memo(function Review({
           )}
           {onSave && (
             <TextButton icon={Save} onClick={onSave} disabled={lines.length === 0 || !!savedPath}>Save</TextButton>
+          )}
+          {onDiscard && (
+            <TextButton icon={Trash2} onClick={onDiscard} title="Discard this meeting without keeping it">Disregard</TextButton>
           )}
           {onDone && (
             <Chip icon={isPastMeeting ? ArrowLeft : RotateCcw} onClick={onDone} variant="accent">
