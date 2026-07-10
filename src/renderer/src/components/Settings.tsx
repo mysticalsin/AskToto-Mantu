@@ -3803,16 +3803,20 @@ export function Settings({
                   <DiagnosticsSection />
                 </Section>
                 <Section title="Why “Métis”" desc="The name is the mission.">
+                  <div className="flex justify-center pb-1">
+                    <MetisMark size={76} />
+                  </div>
                   <p className="text-[12px] leading-relaxed text-[color:var(--cl-muted-foreground)]">
-                    In Greek myth, Métis is the goddess of cunning wisdom and prudence — Zeus&apos;s first
-                    counselor and the mother of Athena. She stands for a very particular kind of
-                    intelligence: not just knowing things, but seeing what&apos;s coming, adapting in the
-                    moment, and choosing exactly the right time to speak. That&apos;s the job of this app.
-                    It listens with you, reads the room, and puts the right words within reach at the
-                    moment you need them.
+                    Métis is the Greek goddess of cunning, wisdom, and prudence — Zeus&apos;s first
+                    counselor and the mother of Athena. She&apos;s a fascinating figure because she
+                    stands for a very particular kind of intelligence: not just &ldquo;being
+                    intelligent,&rdquo; but knowing how to see what&apos;s coming, adapt, maneuver, and
+                    choose exactly the right moment. That&apos;s the job of this app — it listens with
+                    you, reads the room, and puts the right words within reach at the moment you need
+                    them.
                   </p>
                 </Section>
-                <Section title="Thanks" desc="Métis got better because someone used it before it was ready.">
+                <Section title="Thanks" desc="Métis got better because people believed in it early.">
                   <p className="text-[12px] leading-relaxed text-[color:var(--cl-muted-foreground)]">
                     To{' '}
                     <a
@@ -3823,8 +3827,29 @@ export function Settings({
                     >
                       Marc Bisiou
                     </a>
-                    , patient zero: the first to test every build, and generous with the feedback and support
-                    that shaped this app.
+                    , patient zero: the first to test every build, and generous with the feedback and
+                    support that shaped this app.
+                  </p>
+                  <p className="mt-2.5 text-[12px] leading-relaxed text-[color:var(--cl-muted-foreground)]">
+                    And to{' '}
+                    <a
+                      href="https://www.linkedin.com/in/berichard/"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="no-drag font-medium text-[color:var(--cl-primary)] transition-colors hover:underline"
+                    >
+                      Benjamin Richard
+                    </a>
+                    {' '}and{' '}
+                    <a
+                      href="https://www.linkedin.com/in/yanezsondagur/"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="no-drag font-medium text-[color:var(--cl-primary)] transition-colors hover:underline"
+                    >
+                      Yanez Sondagur
+                    </a>
+                    {' '}— for the support and belief that made this possible.
                   </p>
                 </Section>
                 {/* Model/library license attributions live in THIRD_PARTY_NOTICES.md, shipped in the
