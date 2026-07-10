@@ -32,12 +32,14 @@ function errorBlob(err: unknown): { text: string; status: number | null } {
   return { text: parts.join(' ').toLowerCase(), status }
 }
 
-// Node/undici connection-failure codes + the DustAPI wrapper string ("Unexpected network error from
-// DustAPI: fetch failed"). Bare "timeout" is intentionally omitted so the stream idle-watchdog message
-// ("Timed out — no response from the agent.") is NOT treated as a connection retry — that is a different
-// failure mode already handled by pre-token failover.
+// Node/undici connection-failure codes, the DustAPI wrapper string ("Unexpected network error from
+// DustAPI: fetch failed"), AND the transient shapes that arrive as a MESSAGE STRING from the OpenAI /
+// Anthropic SDKs (onError hands us `err.message`, not the error object, so a `.status` is unavailable —
+// the status code is embedded in the text, e.g. "529 {…overloaded_error…}" / "429 Too Many Requests").
+// Bare "timeout" is intentionally omitted so the stream idle-watchdog message ("Timed out — no response
+// from the agent.") is NOT retried here — that failure mode is handled by pre-token failover.
 const TRANSIENT_PATTERN =
-  /\b(econnreset|etimedout|econnrefused|eai_again|enotfound|epipe|und_err_connect_timeout|und_err_socket|und_err_headers_timeout|und_err_body_timeout)\b|fetch failed|connect timeout|socket hang up|network error|temporarily unavailable|service unavailable|bad gateway|gateway timeout/
+  /\b(econnreset|etimedout|econnrefused|eai_again|enotfound|epipe|und_err_connect_timeout|und_err_socket|und_err_headers_timeout|und_err_body_timeout)\b|fetch failed|connect timeout|socket hang up|network error|temporarily unavailable|service unavailable|internal server error|bad gateway|gateway timeout|overloaded|rate.?limit|too many requests|\b(429|500|502|503|504|529)\b/
 
 const AUTH_PATTERN =
   /\b401\b|oauth|unauthor|expired|invalid.*(token|credential)|authenticat\w*\s+credential|credential.*authenticat/

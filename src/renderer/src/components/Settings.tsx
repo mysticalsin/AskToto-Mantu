@@ -99,6 +99,11 @@ const ctl =
 // unselectable ANYWHERE in Settings. It's a normal API-key provider like GPT/Grok; removed.
 const CLI_PROVIDERS = new Set<ProviderId>(['dust', 'claude-cli', 'codex-cli'])
 
+// Phase 1: license activation is OFF. The LicenseSection component + main-process license code stay in
+// source (nothing enforces a license today — licenseGateEnabled defaults off), so this only hides the
+// Profile section until we ship licensing. Flip to true to bring the UI back with zero other changes.
+const LICENSE_UI_ENABLED: boolean = false
+
 /**
  * After disconnecting/removing the active provider, pick another provider that is actually ready
  * (CLI providers need a live connection; the rest need a saved key) so the user is never left on a
@@ -2056,7 +2061,7 @@ function DustSetup({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [keySaved, hasWs])
 
-  // Live session probe on open. When the SAVED settings already look connected, don't take that at face
+  // Live session probe on open. When the settings look connected VIA THE CLI, don't take that at face
   // value — the underlying Dust CLI session can be gone (the user ran `dust logout`, the keychain was
   // cleared, or the token is unrecoverable). Probe once per mount with the READ-ONLY dustProbeSession —
   // NOT dustImportCli, which runs `dust status` and would rotate the OAuth token in a race with the
@@ -2065,9 +2070,12 @@ function DustSetup({
   //   • needs-access → the keychain read was blocked; ask to allow it, DON'T relaunch setup.
   //   • run-setup    → no live session behind the saved connection → auto-run install + `dust login`
   //                    (Terminal), so the user is prompted to reconnect instead of silently assuming done.
+  // Gated to CLI-origin connections (dustTokenMintedAt, set only by the CLI import/refresh, never by
+  // saveDustKey): a MANUAL API-key connection has keySaved+hasWs but legitimately has NO CLI session, so
+  // probing it would misread as "dead" and wrongly auto-launch the installer for a validly-keyed user.
   const liveCheckedRef = useRef(false)
   useEffect(() => {
-    if (liveCheckedRef.current || !keySaved || !hasWs) return
+    if (liveCheckedRef.current || !keySaved || !hasWs || !settings.dustTokenMintedAt) return
     liveCheckedRef.current = true
     void (async () => {
       const decision = decideDustLiveCheck(await window.toto.dustProbeSession())
@@ -3833,10 +3841,14 @@ export function Settings({
                     disabled={settings.managedKeys.includes('profile')}
                   />
                 </Section>
-                {/* License activation follows the profile — the last setup step once you're set up as you. */}
-                <Section title="License" desc="Activate Métis against your organization's license server.">
-                  <LicenseSection settings={settings} patch={patch} />
-                </Section>
+                {/* License activation follows the profile — the last setup step once you're set up as you.
+                    OFF for phase 1 (LICENSE_UI_ENABLED); the section + LicenseSection component stay in
+                    source and reappear here the moment the flag flips. */}
+                {LICENSE_UI_ENABLED && (
+                  <Section title="License" desc="Activate Métis against your organization's license server.">
+                    <LicenseSection settings={settings} patch={patch} />
+                  </Section>
+                )}
                 {/* Keybinds live with Profile: both are "how Métis is set up for you". */}
                 <Section title="Keyboard shortcuts" desc="Métis works with these easy to remember commands. Click any of the keybinds to edit.">
                   <Shortcuts settings={settings} patch={patch} />
