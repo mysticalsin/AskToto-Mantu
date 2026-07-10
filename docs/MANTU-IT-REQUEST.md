@@ -1,9 +1,13 @@
 # Métis — request to Mantu IT (unblocks distribution + Outlook)
 
-**From:** Tony Walteur  **Re:** two things needed to ship Métis (the AI meeting-copilot desktop app) to
-real users. The app is built and working locally; these are the only blockers to a signed, installable build
-and the Outlook agenda feature. Nothing here exposes secrets in the codebase — all credentials are read from
-environment variables / a managed-config file at build/run time.
+**From:** Tony Walteur  **Re:** what's needed to ship Métis (the AI meeting-copilot desktop app) to
+real users. The app is built and working locally; the items below are the only blockers to a signed,
+installable build and the Outlook agenda feature. Nothing here exposes secrets in the codebase — all
+credentials are read from environment variables / a managed-config file at build/run time.
+
+**Most urgent — GitHub Actions on this repo is currently billing-blocked:** every CI run (build and
+release) fails immediately with zero steps executed, regardless of the signing items below. This needs
+org billing fixed before any of the signing/build work can even run in CI.
 
 ---
 
@@ -27,8 +31,18 @@ These map to the build env vars the release script already reads:
 | App-specific password | `APPLE_APP_SPECIFIC_PASSWORD` |
 | Team ID | `APPLE_TEAM_ID` |
 
-(Windows is out of scope for v1 — macOS first. If/when we ship Windows we'll need Authenticode or Azure
-Trusted Signing + a Windows signing runner.)
+**Windows update:** Windows installers already ship today (unsigned — `Metis-Setup-*.exe` and
+`Metis-Portable-*.exe`), and `docs/SIGNING.md` documents a live `npm run release:win` pipeline gated
+on Windows signing secrets that aren't set yet, so SmartScreen currently warns on every Windows
+install. Please also provide:
+- **Authenticode `.pfx` certificate** from a trusted CA (or a wired Azure Trusted Signing flow) +
+  its password.
+
+These map to:
+| Need | Env var |
+|---|---|
+| Cert (Windows .pfx) | `WIN_CSC_LINK` |
+| Cert password | `WIN_CSC_KEY_PASSWORD` |
 
 ## 2. Azure (Microsoft Entra) app registration — for Outlook agenda + sign-in
 
@@ -56,6 +70,7 @@ other account is rejected and its tokens are purged immediately.
 
 ---
 
-**Impact if not provided:** without #1 the app can't be installed by anyone but me; without #2 the "Connect
-Outlook calendar" button stays in its dormant "needs org sign-in" state. Both are wired and ready — they go
-live the moment these values are set.
+**Impact if not provided:** without the billing fix, no CI build or release can run at all; without #1
+(macOS cert) the app can't be installed by anyone but me; without the Windows cert, Windows installs keep
+triggering SmartScreen warnings; without #2 (Azure) the "Connect Outlook calendar" button stays in its
+dormant "needs org sign-in" state. All are wired and ready — they go live the moment these values are set.

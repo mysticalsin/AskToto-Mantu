@@ -2,6 +2,11 @@
 
 Use this before any customer build or public tag.
 
+**Current blocker (as of 2026-07-10): GitHub Actions runners on this repo are billing-blocked.**
+Every CI run — `build.yml` and `release.yml` — fails immediately with zero steps executed until
+org billing is fixed. None of the gates below (signing, ffmpeg, sherpa, version-parity) get a
+chance to run until that's resolved. See `docs/MANTU-IT-REQUEST.md` for the ask to Mantu IT.
+
 ## Verified In Repo
 
 - Direct macOS updates publish through GitHub Releases in `electron-builder.yml`.
@@ -47,6 +52,17 @@ Re-run this (deleting the old release first, `gh release delete ffmpeg-sidecar-v
 only if the reviewed binaries themselves change — CI's `scripts/check-ffmpeg-sidecar.mjs` verifies the
 downloaded binary's SHA256 against `manifest.json` regardless of how it was provisioned.
 
+## Sherpa (Native ASR) Provisioning
+
+`sherpa-onnx-node` (the native Parakeet on-device ASR addon) ships as per-platform optional npm
+packages (`sherpa-onnx-darwin-arm64`, `-win-x64`, etc.). `scripts/check-sherpa-platform.mjs` is wired
+into every relevant npm script (`release`, `release:win`, `release:mas`, `release:win:store`,
+`installers*`, `dist:local`, `predist:win`) and hard-fails the build if the target platform's addon
+package isn't present, after first attempting an auto-provision (`npm install --force`). If
+auto-provision fails (no network access, or the package genuinely isn't published for that
+platform/arch), build on a native host or CI runner matching the target platform instead — there is
+no manual seeding step for this one, unlike the ffmpeg sidecar above.
+
 ## Release CI Gates
 
 - `scripts/check-version-parity.mjs` runs first in every release job: the pushed tag must equal
@@ -69,6 +85,10 @@ Windows:
 ```bash
 npm run release:win
 ```
+
+Windows signing is deferred per `docs/MANTU-IT-REQUEST.md`'s v1 scope (macOS first) — a
+`release-windows` job failing on missing `WIN_CSC_LINK`/`WIN_CSC_KEY_PASSWORD` today is expected,
+not a bug to chase, until Windows Authenticode credentials are provisioned.
 
 ## Store Release Commands
 

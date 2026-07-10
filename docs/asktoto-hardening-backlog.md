@@ -1,5 +1,11 @@
 # Métis — Enterprise Security & Reliability Hardening Backlog
 
+**Status (2026-07-10): largely shipped.** All P0/P1 items and all but one P2 item below are
+checked off `[x]` — done, verified in code. The remaining open item is the single `[ ]` P2 entry
+(1 fps ScreenCaptureKit stream) plus the three explicitly deferred items at the bottom of this
+file. This doc is kept as a historical record of what was found and fixed, not a live TODO list —
+check the checkboxes, not the section headers, for current status.
+
 Next tier after the completed Apple-grade refinement backlog (27 items, all shipped).
 These are issues a security & reliability audit would flag for production/enterprise deployment, each
 verified in the real code. None duplicate the 27 already-done refinement items.

@@ -47,15 +47,13 @@ npm run installers:win
 npm run installers:all
 ```
 
-Use GitHub Actions for the cleanest two-platform build: macOS runners build the `.dmg`/`.zip`; Windows runners build the setup `.exe`, portable `.exe`, and AppX package.
+Use GitHub Actions for the cleanest two-platform build: macOS runners build the `.dmg`/`.zip`; Windows runners build the setup `.exe`, portable `.exe`, and AppX package. **Currently blocked**: Actions runners on this repo are billing-blocked, so no CI build runs until that's fixed (see `docs/ENTERPRISE_RELEASE.md`). Build locally in the meantime.
 
 ## Publish For Auto-Update
 
-After signing secrets are configured:
-
-```bash
-git tag v1.0.0
-git push origin v1.0.0
-```
+After signing secrets are configured, bump `package.json`'s `version` first, then tag and push
+`v<that version>` exactly — the release workflow's first step rejects any tag that doesn't match
+`package.json` exactly. See `docs/ENTERPRISE_RELEASE.md`'s Operator Setup (step 9) for the full
+release checklist and current CI blockers.
 
 The Release workflow publishes signed installers to `mysticalsin/AskToto-Releases`. Installed direct-release apps then update from that feed — except the Windows portable exe, which has no update mechanism (see above).
