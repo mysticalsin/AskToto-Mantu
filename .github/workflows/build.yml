@@ -1,18 +1,18 @@
 name: Build & Test
 
 on:
-  # No branch filter on push: GitHub creates a check-suite for every push regardless, and an EMPTY one
-  # (zero matching workflows) reports "failure" rather than skipped — so restricting this to main/master
-  # made every push to a feature branch show as a false CI failure with nothing to point to. Matching all
-  # branches gives real, meaningful pass/fail feedback everywhere instead of a phantom red X.
-  # tags-ignore excludes v* tag pushes only (branch pushes are unaffected) - those already run the signed,
-  # published pipeline in release.yml, so running this unsigned/unpublished --publish never pipeline too
-  # just doubles CI minutes on every real release with no bearing on whether the release shipped.
+  # branches: ['**'] is LOAD-BEARING, not decorative: GitHub's documented push-filter semantics say a
+  # push: block defining ONLY tags/tags-ignore never runs for branch pushes at all. Without this line,
+  # branch CI is silently disabled repo-wide (bitten once — a main push produced zero runs). It also
+  # keeps every branch covered: an empty check-suite reports "failure" rather than skipped, so filtering
+  # to main/master would show phantom red X's on feature branches.
+  # tags-ignore: v* tags already run the signed release.yml pipeline (running this unsigned one too just
+  # doubles CI minutes); ffmpeg-sidecar-* tags only carry CI provisioning assets (docs/ENTERPRISE_RELEASE.md).
   push:
+    branches:
+      - '**'
     tags-ignore:
       - 'v*'
-      # ffmpeg-sidecar-* tags only carry CI provisioning assets (see docs/ENTERPRISE_RELEASE.md);
-      # building the app on their push would be pure noise.
       - 'ffmpeg-sidecar-*'
   pull_request:
     branches: [main, master]
