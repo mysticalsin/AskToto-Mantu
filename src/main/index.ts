@@ -87,6 +87,7 @@ import {
 import { buildBrainContext } from './brain/context'
 import { buildSystem } from './personas'
 import { initLogging, mainLog, auditLog } from './logger'
+import { installProxyAwareFetch } from './net/install-proxy'
 import { authStatus, signIn as authSignIn, signOut as authSignOut, requireAuth } from './auth'
 import { calendarToday } from './calendar'
 import {
@@ -1959,8 +1960,10 @@ function registerIpc(): void {
     const providerVisionOk = (p: ProviderId): boolean =>
       p === 'dust' ? dustSelectedAgentVision(s.providerModels['dust']) : PROVIDERS[p].vision
 
-    // Find the next eligible keyed provider not yet tried — for failover when the primary can't answer.
-    const failover = (tried: ProviderId[]): boolean => {
+    // Pick the next eligible keyed provider not yet tried — the waterfall target when the primary (e.g.
+    // Dust) can't answer. Pure (no side effect) so the retry gate can cheaply ask "is there anywhere to
+    // fall over to?" before deciding how long to keep retrying a dead primary.
+    const pickFailover = (tried: ProviderId[]): ProviderId | null => {
       const tier = routeTier(req, s.thinkingMode)
       // Candidate order honors the CLI-vs-API priority: when 'cli', CLI-kind providers sort first so a
       // failover reaches for another local CLI before a metered API. V8's Array.sort is stable, so equal-
@@ -1970,19 +1973,26 @@ function registerIpc(): void {
           ? (PROVIDERS[a].kind === 'cli' ? 0 : 1) - (PROVIDERS[b].kind === 'cli' ? 0 : 1)
           : 0
       )
-      const next = order.find(
-        (p) =>
-          !tried.includes(p) &&
-          (!allowed || allowed.includes(p)) &&
-          (PROVIDERS[p].kind === 'cli' ? !!s.cliConnected[p] : getApiKey(p).length > 0) &&
-          (req.mode !== 'vision' || providerVisionOk(p)) &&
-          // CLI providers (e.g. codex-cli) may have no configured model at all — attempt() below
-          // already exempts kind==='cli' from the "no model" ineligibility check (the CLI just uses
-          // its own default), so a failover candidate must be exempted the same way or a fully
-          // default-configured CLI provider can never be selected.
-          (PROVIDERS[p].kind === 'cli' ||
-            !!resolveModelTier(p, s.providerModels, s.providerModelsThinking, tier, s.providerModelsDeep))
+      return (
+        order.find(
+          (p) =>
+            !tried.includes(p) &&
+            (!allowed || allowed.includes(p)) &&
+            (PROVIDERS[p].kind === 'cli' ? !!s.cliConnected[p] : getApiKey(p).length > 0) &&
+            (req.mode !== 'vision' || providerVisionOk(p)) &&
+            // CLI providers (e.g. codex-cli) may have no configured model at all — attempt() below
+            // already exempts kind==='cli' from the "no model" ineligibility check (the CLI just uses
+            // its own default), so a failover candidate must be exempted the same way or a fully
+            // default-configured CLI provider can never be selected.
+            (PROVIDERS[p].kind === 'cli' ||
+              !!resolveModelTier(p, s.providerModels, s.providerModelsThinking, tier, s.providerModelsDeep))
+        ) ?? null
       )
+    }
+    // Find the next eligible keyed provider not yet tried and start it — for failover when the primary
+    // can't answer (Dust down → your configured Claude/GPT key takes over).
+    const failover = (tried: ProviderId[]): boolean => {
+      const next = pickFailover(tried)
       if (!next) return false
       attempt(next, tried)
       return true
@@ -2112,7 +2122,11 @@ function registerIpc(): void {
             // Pre-token transient failure (dropped socket, 5xx, 429, DNS blip): retry the SAME provider
             // with bounded backoff before switching. `gotToken` guards it — once tokens are on the wire
             // we never re-run. A cancel handle keeps an abort during the backoff wait from firing the retry.
-            if (!gotToken && retryCount < MAX_TRANSIENT_RETRIES && isTransient(message)) {
+            // Waterfall: when another configured provider can take over (e.g. Dust down but a Claude/GPT key
+            // is set), cap same-provider retries at ONE so the API answers in seconds instead of after the
+            // full ~30s of retrying a dead primary. With nowhere to fall over to, keep the full retry budget.
+            const retryBudget = pickFailover(attempted.concat(provider)) ? 1 : MAX_TRANSIENT_RETRIES
+            if (!gotToken && retryCount < retryBudget && isTransient(message)) {
               const delayMs = nextBackoff(retryCount)
               auditLog('provider.retry', { provider, attempt: retryCount + 1, delayMs })
               const timer = setTimeout(() => attempt(provider, attempted, retryCount + 1), delayMs)
@@ -2638,6 +2652,7 @@ if (!app.requestSingleInstanceLock()) {
   })
   app.whenReady().then(async () => {
   initLogging() // route main-process logs to a rotated file before anything else can fail
+  await installProxyAwareFetch() // route provider fetch through the env/OS proxy so Dust etc. work behind a corporate proxy
   // Unpackaged (dev/QA) runs show Electron's default icon in the Dock — brand them with the Mantu M so
   // a dev window is never mistaken for "the Electron thing". Packaged builds get build/icon.png baked
   // in by electron-builder (mac .icns / win .ico) and don't need this.

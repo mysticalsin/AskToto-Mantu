@@ -1161,6 +1161,19 @@ export function App(): JSX.Element {
     saveMeetingNow
   ])
 
+  // Summary "Disregard": throw this meeting away instead of keeping it. By the time the post-meeting
+  // Review shows, the transcript has usually auto-saved to the meetings folder, so discard = delete that
+  // file (main pops its own native confirm) then leave. A session that never saved (no savedPath) has
+  // nothing on disk — just leave. Either way, mark this meeting handled so no exit-path re-persists it.
+  const discardMeeting = useCallback(async (): Promise<void> => {
+    if (savedPath) {
+      const r = await window.toto.recallDelete(savedPath, defaultMeetingTitle(listen.lines, mode))
+      if (!r.ok) return // user cancelled the confirm dialog, or the delete failed → stay on the summary
+    }
+    savedRef.current = String(meetingStartRef.current)
+    reset()
+  }, [savedPath, listen.lines, mode, reset])
+
   // Cluely "← back": dismiss the open answer/suggestion without tearing down a live session.
   const clearAnswer = useCallback(() => {
     ask.clear()
@@ -1660,6 +1673,7 @@ export function App(): JSX.Element {
         bidstackTools={settings?.bidstackTools ?? []}
         onOpenFolder={() => void window.toto.openMeetingsFolder()}
         onSave={pm ? undefined : manualSave}
+        onDiscard={pm ? undefined : discardMeeting}
         onResume={pm ? resumePastMeeting : undefined}
         onOpenPastMeeting={openPastMeeting}
         isPastMeeting={!!pm}
@@ -1678,7 +1692,7 @@ export function App(): JSX.Element {
         }
       />
     )
-  }, [pastMeeting, recapGenTarget, recapGen.answer, ask.answer, listen.lines, savedPath, saveError, saveAttempts, settings?.showFullTranscriptInReview, settings?.bidstackConnected, settings?.bidstackTools, followup.answer, generateFollowup, requireProvider, generateSavedRecap, retryAnswer, manualSave, resumePastMeeting, openPastMeeting, reset])
+  }, [pastMeeting, recapGenTarget, recapGen.answer, ask.answer, listen.lines, savedPath, saveError, saveAttempts, settings?.showFullTranscriptInReview, settings?.bidstackConnected, settings?.bidstackTools, followup.answer, generateFollowup, requireProvider, generateSavedRecap, retryAnswer, manualSave, discardMeeting, resumePastMeeting, openPastMeeting, reset])
   const answerBody = useMemo(() => {
     if (!(capturing || captureError || ask.answer)) return null
     // While a new screen capture is in flight (capturing), force the streaming/empty display even when
