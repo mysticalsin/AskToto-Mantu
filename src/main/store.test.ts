@@ -4,10 +4,24 @@ import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { app, safeStorage } from 'electron'
 import { DEFAULT_SETTINGS } from '@shared/ipc'
-import { getSettings, setSettings, getApiKey } from './store'
+import { getSettings, setSettings, getApiKey, setApiKey, listDustAgents } from './store'
 import { decryptSecret } from './secrets'
 
 vi.mock('electron')
+
+// Mimics the real @dust-tt/client 1.2.6 shape: getAgentConfigurations returns a Result
+// (isErr()/isOk()) whose .value is a direct ARRAY of agent objects — no wrapping envelope.
+// DustAPI must be a real class (not vi.fn().mockImplementation(arrowFn)) — store.ts calls
+// `new DustAPI(...)`, and arrow functions cannot be used as constructors.
+const getAgentConfigurations = vi.fn()
+vi.mock('@dust-tt/client', () => {
+  class DustAPI {
+    getAgentConfigurations(...args: unknown[]): unknown {
+      return getAgentConfigurations(...args)
+    }
+  }
+  return { DustAPI }
+})
 
 // Mirror store.ts at-rest encryption so tests can read what was persisted. Two markers exist: V1 =
 // safeStorage (prod), V2 = AES-GCM file backend (dev / unpackaged — what these tests run under).
@@ -36,6 +50,7 @@ describe('store', () => {
       return join(userData, name)
     })
     vi.spyOn(console, 'warn').mockImplementation(() => {})
+    getAgentConfigurations.mockReset()
   })
 
   afterEach(() => {
@@ -188,5 +203,71 @@ describe('store', () => {
     expect(s.temperature).toBe(DEFAULT_SETTINGS.temperature)
     expect(s.provider).toBe('anthropic')
     expect(s.suggestEverySec).toBe(10)
+  })
+
+  describe('listDustAgents', () => {
+    beforeEach(() => {
+      setSettings({ dustWorkspaceId: 'ws-1' })
+      setApiKey('dust', 'test-dust-key')
+    })
+
+    it('requests view:list and returns only active (and status-undefined) agents, mapped to picker shape', async () => {
+      getAgentConfigurations.mockResolvedValue({
+        isErr: () => false,
+        value: [
+          {
+            sId: 'agent-active',
+            name: 'Active Agent',
+            description: 'An active agent',
+            status: 'active',
+            scope: 'workspace',
+            model: { providerId: 'anthropic', modelId: 'claude-sonnet' }
+          },
+          {
+            sId: 'agent-archived',
+            name: 'Archived Agent',
+            description: 'Should be filtered out',
+            status: 'archived',
+            scope: 'workspace',
+            model: { providerId: 'anthropic', modelId: 'claude-sonnet' }
+          },
+          {
+            sId: 'agent-draft',
+            name: 'Draft Agent',
+            description: 'Should be filtered out',
+            status: 'draft',
+            scope: 'workspace',
+            model: { providerId: 'openai', modelId: 'gpt-4o' }
+          },
+          {
+            sId: 'agent-no-status',
+            name: 'No Status Agent',
+            description: 'Undefined status is treated as active',
+            scope: 'workspace',
+            model: { providerId: 'openai', modelId: 'gpt-4o-mini' }
+          }
+        ]
+      })
+
+      const result = await listDustAgents()
+
+      // (a) the regression fix: view:'list' must be passed, or Dust's endpoint silently
+      // restricts/empties the result set.
+      expect(getAgentConfigurations).toHaveBeenCalledWith({ view: 'list' })
+
+      // (b) only 'active' and status-undefined agents survive the filter.
+      expect(result.ok).toBe(true)
+      expect(result.agents?.map((a) => a.sId).sort()).toEqual(['agent-active', 'agent-no-status'])
+
+      // (c) mapping produces the {sId, name, description, modelProviderId, modelId} picker shape.
+      const active = result.agents?.find((a) => a.sId === 'agent-active')
+      expect(active).toEqual({
+        sId: 'agent-active',
+        name: 'Active Agent',
+        description: 'An active agent',
+        modelProviderId: 'anthropic',
+        modelId: 'claude-sonnet'
+      })
+    })
   })
 })
