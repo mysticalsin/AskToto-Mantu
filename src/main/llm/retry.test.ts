@@ -12,6 +12,20 @@ describe('isTransient', () => {
     expect(isTransient('socket hang up')).toBe(true)
   })
 
+  it('retries real SDK error MESSAGE STRINGS (production path — onError passes a string, not an object)', () => {
+    // Anthropic overloaded (HTTP 529) as the SDK stringifies it.
+    expect(isTransient('529 {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}')).toBe(true)
+    // OpenAI rate limit.
+    expect(isTransient('429 Too Many Requests')).toBe(true)
+    expect(isTransient('Rate limit reached for requests')).toBe(true)
+    // 5xx as a bare status string.
+    expect(isTransient('500 Internal Server Error')).toBe(true)
+    expect(isTransient('503 Service Unavailable')).toBe(true)
+    // Still not fooled by auth or permanent errors arriving as strings.
+    expect(isTransient('401 Unauthorized')).toBe(false)
+    expect(isTransient('400 invalid_request_error: bad model')).toBe(false)
+  })
+
   it('classifies 5xx and 429 as transient, other 4xx as permanent', () => {
     expect(isTransient({ status: 500 })).toBe(true)
     expect(isTransient({ status: 503 })).toBe(true)
