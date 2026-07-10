@@ -434,3 +434,37 @@ export function isDustReady(
 ): boolean {
   return !!hasKeys['dust'] && !!dustWorkspaceId.trim() && !!providerModels['dust']
 }
+
+/**
+ * Whether a Dust agent's underlying model can read images (screenshots). Dust messages are text-only, so
+ * a screenshot is uploaded as a file the AGENT'S model then interprets — which only helps if that model
+ * is multimodal. Unlike a provider's static `vision` flag this is per-agent, derived from the model Dust
+ * reports (`modelProviderId` + `modelId` — the same signal the agent picker uses). It errs toward the
+ * families whose *current* models are multimodal; a rare misclassification degrades gracefully (a
+ * text-only agent gets a best-effort answer, or a vision agent is skipped for another vision provider).
+ */
+export function dustAgentVision(
+  agent: { modelProviderId?: string; modelId?: string } | null | undefined
+): boolean {
+  if (!agent) return false
+  const provider = (agent.modelProviderId || '').toLowerCase()
+  const model = (agent.modelId || '').toLowerCase()
+  // Explicit multimodal hints in the model id win regardless of provider (qwen-vl, pixtral, *-vision).
+  if (/vision|pixtral|(^|[^a-z])vl([^a-z]|$)/.test(model)) return true
+  switch (provider) {
+    case 'anthropic':
+      // Every Claude model Dust exposes (Claude 3 and newer) accepts images.
+      return true
+    case 'openai':
+      // GPT-4o / GPT-4.1 / GPT-4-turbo / GPT-5 and the o-series reasoning models are multimodal; the
+      // legacy gpt-4 text snapshots and gpt-3.5 are not.
+      return /4o|4\.1|4-turbo|gpt-5|(^|[^a-z0-9])o[1-4]([^a-z0-9]|$)/.test(model)
+    case 'google_ai_studio':
+    case 'google':
+    case 'googlevertex':
+      // Gemini 1.5 and 2.x are multimodal.
+      return /gemini/.test(model)
+    default:
+      return false
+  }
+}
