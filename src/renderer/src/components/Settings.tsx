@@ -1847,9 +1847,11 @@ function DustSetup({
       desc="Your Dust agents (Second Brain retrieval + tools) power Métis. Connect with the Dust CLI, then pick a thinking agent for hard questions."
     >
       <div className="flex flex-col gap-4">
-        {!isWin && (
+        {(
           <>
-            {/* One-click: import the local Dust CLI session (token + workspace + region) from the keychain */}
+            {/* One-click: import the local Dust CLI session (token + workspace + region) from the OS
+                credential store — macOS Keychain / Windows Credential Manager. On Windows with no session
+                yet, connectCli auto-runs the installer + `dust login`, then the setup poll connects. */}
             <div className="flex flex-col gap-1.5 rounded-[10px] border border-[var(--cl-primary)]/30 bg-[var(--cl-primary-soft)]/40 p-3">
               <div className="flex items-center justify-between gap-2">
                 <span className="text-[12px] font-medium text-[color:var(--cl-foreground)]">
@@ -1897,8 +1899,19 @@ function DustSetup({
                 )}
               </div>
               <span className="text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
-                Already ran <code className="rounded bg-white/[0.08] px-1">dust login</code>? This reads your
-                session from the keychain. No key to copy. macOS may ask to allow keychain access once.
+                {isWin ? (
+                  <>
+                    No key to copy — this installs the Dust CLI, opens{' '}
+                    <code className="rounded bg-white/[0.08] px-1">dust login</code> in a terminal, then
+                    connects Métis automatically once you finish signing in.
+                  </>
+                ) : (
+                  <>
+                    Already ran <code className="rounded bg-white/[0.08] px-1">dust login</code>? This reads
+                    your session from the keychain. No key to copy. macOS may ask to allow keychain access
+                    once.
+                  </>
+                )}
               </span>
               {cli.msg && (
                 <span
@@ -2012,7 +2025,7 @@ function DustSetup({
           )}
           <span className="pl-7 text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
             Get one at dust.tt → Settings → API Keys (admin).
-            {!isWin && ' Or use “Connect from Dust CLI” above.'}
+            {' Or use “Connect from Dust CLI” above.'}
           </span>
         </div>
 

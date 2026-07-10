@@ -15,8 +15,11 @@ const exec = promisify(execFile)
  *
  * The official Dust CLI (`@dust-tt/dust-cli`, command `dust login`) stores its session in the OS
  * keychain via keytar under service `dust-cli`, accounts: `access_token`, `workspace_sid`, `region`.
- * On macOS we read those generic-password items with the built-in `security` tool — no native module,
- * no rebuild. (Reading another app's keychain item triggers a one-time macOS "allow access" prompt.)
+ *   - macOS: read those generic-password items with the built-in `security` tool.
+ *   - Windows: keytar writes generic credentials whose target name is `<service>/<account>` and whose
+ *     CredentialBlob is the UTF-8 bytes of the value; we read them with a short PowerShell script that
+ *     P/Invokes advapi32 CredReadW. Both paths use a built-in OS tool — no native module, no rebuild.
+ * (On macOS, reading another app's keychain item triggers a one-time "allow access" prompt.)
  *
  * The access token is an OAuth token and is short-lived: it works now and survives restarts until it
  * expires, after which the user re-runs the import (the CLI refreshes it on its next use).
@@ -27,7 +30,7 @@ const WORKSPACE = 'workspace_sid'
 const REGION = 'region'
 
 /** Service name the Dust CLI (keytar) uses. Overridable only so the integration test can exercise the
- *  real `security` read path against a throwaway entry without touching the user's real Dust session. */
+ *  real read path against a throwaway entry without touching the user's real Dust session. */
 function service(): string {
   return process.env.DUST_CLI_KEYCHAIN_SERVICE || 'dust-cli'
 }
@@ -66,14 +69,69 @@ function regionToBaseUrl(region: string | null): string {
   return region && /eu|europe/i.test(region) ? 'https://eu.dust.tt' : 'https://dust.tt'
 }
 
+// ─── Windows credential-manager read (keytar layout) ───────────────────────────────────────────
+// Absolute System32 path for powershell.exe — never trust PATH for a security-sensitive spawn, matching
+// the trust posture in cli.ts (pin Windows system tools to their System32 location).
+function windowsPowershell(): string {
+  const root = process.env.SystemRoot || process.env.windir || 'C:\\Windows'
+  return join(root, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe')
+}
+
+/**
+ * Read the Dust CLI's three keytar credentials from Windows Credential Manager in one PowerShell call.
+ * Returns nulls on ANY failure (no CLI session, blocked, malformed) so callers degrade to the manual
+ * paste-key path exactly as before — this is strictly additive and never throws into the answer path.
+ */
+async function readDustSessionWin(): Promise<{ token: string | null; workspace: string | null; region: string | null }> {
+  const svc = service()
+  // Defensive: the service name is inlined into the PS script; only allow a safe identifier (prod value
+  // is the constant 'dust-cli'; the test override is a throwaway). Anything else → no read.
+  if (!/^[A-Za-z0-9._-]+$/.test(svc)) return { token: null, workspace: null, region: null }
+  const ps = [
+    '$ErrorActionPreference = "SilentlyContinue"',
+    'Add-Type -TypeDefinition @"',
+    'using System;using System.Runtime.InteropServices;using System.Text;',
+    'public class MetisCred{',
+    '[DllImport("advapi32",SetLastError=true,CharSet=CharSet.Unicode)] static extern bool CredReadW(string t,int y,int f,out IntPtr c);',
+    '[DllImport("advapi32")] static extern void CredFree(IntPtr c);',
+    '[StructLayout(LayoutKind.Sequential)] struct CREDENTIAL{public int Flags;public int Type;public IntPtr TargetName;public IntPtr Comment;public long LastWritten;public int BlobSize;public IntPtr Blob;public int Persist;public int AttrCount;public IntPtr Attrs;public IntPtr TargetAlias;public IntPtr UserName;}',
+    'public static string Read(string target){IntPtr p;if(!CredReadW(target,1,0,out p))return null;try{var c=(CREDENTIAL)Marshal.PtrToStructure(p,typeof(CREDENTIAL));if(c.BlobSize==0)return "";byte[] b=new byte[c.BlobSize];Marshal.Copy(c.Blob,b,0,c.BlobSize);return Encoding.UTF8.GetString(b);}finally{CredFree(p);}}}',
+    '"@',
+    `$svc = '${svc}'`,
+    '$o = [ordered]@{ token = [MetisCred]::Read("$svc/' + ACCESS_TOKEN + '"); workspace = [MetisCred]::Read("$svc/' + WORKSPACE + '"); region = [MetisCred]::Read("$svc/' + REGION + '") }',
+    '[Console]::Out.Write(($o | ConvertTo-Json -Compress))'
+  ].join('\n')
+  try {
+    const { stdout } = await exec(windowsPowershell(), ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', ps], {
+      timeout: 20_000,
+      windowsHide: true,
+      maxBuffer: 1024 * 1024
+    })
+    const parsed = JSON.parse(stdout.trim() || '{}') as { token?: string | null; workspace?: string | null; region?: string | null }
+    const norm = (v: string | null | undefined): string | null => (v && String(v).trim()) || null
+    return { token: norm(parsed.token), workspace: norm(parsed.workspace), region: norm(parsed.region) }
+  } catch {
+    return { token: null, workspace: null, region: null }
+  }
+}
+
 /** Imported fields plus the bearer token (kept out of the renderer-facing DustCliImport). */
 export type DustCliSession = DustCliImport & { token?: string }
 
+const WINDOWS_NEEDS_SETUP =
+  'No Dust CLI session found. Use "Connect from Dust CLI" to install it and sign in — Métis connects automatically after login.'
+
 export async function importDustCliSession(): Promise<DustCliSession> {
+  if (process.platform === 'win32') {
+    const s = await readDustSessionWin()
+    if (!s.token) return { ok: false, error: WINDOWS_NEEDS_SETUP }
+    if (!s.workspace) return { ok: false, error: 'Your Dust CLI session is incomplete. Run the Dust login again, then return to Métis.' }
+    return { ok: true, token: s.token, workspaceId: s.workspace, baseUrl: regionToBaseUrl(s.region) }
+  }
   if (process.platform !== 'darwin') {
     return {
       ok: false,
-      error: 'On Windows, paste your Dust API key or workspace link instead — Settings → AI → Dust.'
+      error: 'On this platform, paste your Dust API key or workspace link instead — Settings → AI → Dust.'
     }
   }
   // Read sequentially: a macOS permission dialog is per lookup, and parallel `security` calls can
@@ -110,7 +168,7 @@ export async function importDustCliSession(): Promise<DustCliSession> {
  * refresh token and rotates the access token whenever it talks to the API. Running `dust status`
  * (non-interactive — no browser, no prompt) exercises the CLI so it refreshes the keychain token;
  * we then re-read it. As long as the CLI session itself is valid (the user has not run `dust logout`),
- * this recovers a working token with no re-login. macOS only, matching importDustCliSession.
+ * this recovers a working token with no re-login.
  *
  * Best-effort: a nonzero exit or timeout is swallowed — we always re-read whatever the CLI left in the
  * keychain, which is the freshest token available. A hard timeout keeps a hung CLI off the answer path.
@@ -124,11 +182,34 @@ let refreshInflight: Promise<DustCliSession> | null = null
 let lastRefresh: { at: number; session: DustCliSession } | null = null
 const REFRESH_RESULT_TTL_MS = 30_000
 
+/** Run `dust status` so the CLI rotates its keychain access token. Platform-specific spawn: a Windows
+ *  `dust` is a `.cmd` shim that must be launched through cmd.exe (execFile can't run a batch directly). */
+async function runDustStatusRefresh(): Promise<void> {
+  const bin = await resolveBin('dust')
+  if (!bin) return
+  try {
+    if (process.platform === 'win32') {
+      const comspec = process.env.ComSpec || join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'cmd.exe')
+      // cmd /d /s /c ""<shim>" status" — the doubled outer quotes are cmd's own quoting rule; CI=1 mutes
+      // the CLI's spinner/update UI; windowsHide keeps the console off-screen (this is a background mint).
+      await exec(comspec, ['/d', '/s', '/c', `""${bin}" status"`], {
+        timeout: 25_000,
+        env: { ...process.env, CI: '1' },
+        windowsHide: true
+      })
+    } else {
+      await exec(bin, ['status'], { timeout: 25_000, env: { ...process.env, CI: '1' } })
+    }
+  } catch {
+    // ignore — fall through and re-read whatever the CLI left in the keychain regardless of exit code
+  }
+}
+
 export async function refreshDustCliSession(): Promise<DustCliSession> {
-  if (process.platform !== 'darwin') {
+  if (process.platform !== 'darwin' && process.platform !== 'win32') {
     return {
       ok: false,
-      error: 'On Windows, paste your Dust API key or workspace link instead — Settings → AI → Dust.'
+      error: 'On this platform, paste your Dust API key or workspace link instead — Settings → AI → Dust.'
     }
   }
   if (refreshInflight) return refreshInflight
@@ -137,15 +218,7 @@ export async function refreshDustCliSession(): Promise<DustCliSession> {
   }
   refreshInflight = (async () => {
     try {
-      const bin = await resolveBin('dust')
-      if (bin) {
-        try {
-          // CI=1 suppresses the spinner / update-check UI; the timeout bounds the network round-trip.
-          await exec(bin, ['status'], { timeout: 25_000, env: { ...process.env, CI: '1' } })
-        } catch {
-          // ignore — fall through and re-read the keychain regardless of exit code
-        }
-      }
+      await runDustStatusRefresh()
       const s = await importDustCliSession()
       lastRefresh = { at: Date.now(), session: s }
       return s
@@ -157,21 +230,64 @@ export async function refreshDustCliSession(): Promise<DustCliSession> {
 }
 
 /**
- * Kick off the Dust CLI setup for a user with no session yet. We write a small EXECUTABLE `.command`
- * script (install the CLI, then run the interactive `dust login`) and open it: macOS opens `.command`
- * files in Terminal and runs them directly, so this needs NO Automation permission (unlike telling
- * Terminal what to do via osascript, which silently fails until the user grants Automation access).
- * One click → a Terminal window walks them through it. `dust login` needs a browser OAuth, so it has to
- * run in a visible terminal. macOS only (matches importDustCliSession's keychain read).
+ * Kick off the Dust CLI setup for a user with no session yet: install the CLI, then run the interactive
+ * `dust login`. We write a small EXECUTABLE script and open it — the OS runs it in a visible terminal so
+ * the browser OAuth `dust login` can complete and the user can watch progress:
+ *   - macOS:  a `.command` bash script (Finder opens `.command` in Terminal and runs it — no Automation
+ *             permission needed, unlike driving Terminal via osascript).
+ *   - Windows: a `.cmd` batch script (the shell "open" verb runs a batch in a console window; `pause`
+ *             keeps it up so the user sees the result).
+ * One click → a terminal window walks them through it. After login, the setup poll (index.ts) re-reads
+ * the CLI session and connects Métis automatically.
  */
 export async function setupDustCli(): Promise<{ ok: boolean; error?: string }> {
-  if (process.platform !== 'darwin') {
-    return {
-      ok: false,
-      error: 'On Windows, paste your Dust API key or workspace link instead — Settings → AI → Dust.'
-    }
-  }
   try {
+    if (process.platform === 'win32') {
+      const script =
+        [
+          '@echo off',
+          'setlocal',
+          'title Metis - Dust CLI setup',
+          'echo Metis - Dust CLI setup',
+          'echo ========================',
+          'echo.',
+          'where npm >nul 2>nul',
+          'if errorlevel 1 (',
+          '  echo npm / Node.js not found. Install Node from https://nodejs.org then run this again.',
+          '  echo.',
+          '  pause',
+          '  exit /b 1',
+          ')',
+          'echo Step 1/2  Installing the Dust CLI ^(npm i -g @dust-tt/dust-cli^)...',
+          'call npm i -g @dust-tt/dust-cli',
+          'if errorlevel 1 (',
+          '  echo.',
+          '  echo Install failed ^(often a permissions issue with global npm^).',
+          '  echo Try re-running this as Administrator, then run it again.',
+          '  echo.',
+          '  pause',
+          '  exit /b 1',
+          ')',
+          'echo.',
+          'echo Step 2/2  Signing in to Dust ^(a browser window will open^)...',
+          'call dust login',
+          'echo.',
+          'echo Done. Return to Metis - it will connect automatically after login.',
+          'echo You can close this window.',
+          'pause'
+        ].join('\r\n') + '\r\n'
+      const scriptPath = join(app.getPath('temp'), `asktoto-dust-setup-${randomBytes(8).toString('hex')}.cmd`)
+      writeFileSync(scriptPath, script, { flag: 'wx' })
+      const err = await shell.openPath(scriptPath) // runs the .cmd in a console window (open verb)
+      if (err) return { ok: false, error: err }
+      return { ok: true }
+    }
+    if (process.platform !== 'darwin') {
+      return {
+        ok: false,
+        error: 'On this platform, paste your Dust API key or workspace link instead — Settings → AI → Dust.'
+      }
+    }
     const script =
       [
         '#!/bin/bash',
