@@ -155,7 +155,10 @@ export const Review = memo(function Review({
       setDebriefState('error')
     }
   }
-  const [now, setNow] = useState(Date.now())
+  // Frozen at mount: by the time Review shows, the meeting has ENDED, so its duration is a constant.
+  // A ticking wall-clock here made the Duration chip keep growing after Stop whenever a session ended
+  // with ≤1 transcript line (the wall-clock fallback below) — a stopped meeting must never keep counting.
+  const endedAtRef = useRef(Date.now())
   const [recentMeetings, setRecentMeetings] = useState<MeetingSummary[]>([])
   // Focus anchor for the Summary section — Retry summary moves focus here first, since the button it's
   // clicked on unmounts the instant retry starts (recap.error clears), which would otherwise drop focus to <body>.
@@ -225,16 +228,6 @@ export const Review = memo(function Review({
   }
 
   useEffect(() => {
-    // The live clock only feeds durationSec while a JUST-ENDED session has no real transcript yet
-    // (lines.length <= 1). Once speech is captured the duration is fixed from line timestamps; and a
-    // reopened past meeting must never tick at all — its wall-clock fallback would show time since the
-    // meeting started (file mtime for imports) and grow while you read it.
-    if (lines.length > 1 || isPastMeeting) return
-    const id = setInterval(() => setNow(Date.now()), 1000)
-    return () => clearInterval(id)
-  }, [lines.length, isPastMeeting])
-
-  useEffect(() => {
     // Keyed on savedPath (not just mount): the meeting's own async save lands AFTER this screen mounts,
     // so a mount-only fetch never includes the meeting you just finished. Re-fetch when the save resolves.
     window.toto.recallList().then((list) => setRecentMeetings(list.slice(0, 20))).catch(() => {})
@@ -259,11 +252,12 @@ export const Review = memo(function Review({
     }
     // A saved past meeting with a single line (e.g. a short audio import that fit one transcription
     // window) has no measurable span — the wall-clock fallback below is only for a LIVE just-ended
-    // session whose lines haven't landed yet. 0 hides the Duration chip below.
+    // session whose lines haven't landed yet. 0 hides the Duration chip below. endedAtRef (mount time)
+    // is FIXED — the meeting is over, so its duration must not keep growing while the user reads this.
     if (isPastMeeting) return 0
-    if (startedAt) return Math.floor((now - startedAt) / 1000)
+    if (startedAt) return Math.max(0, Math.floor((endedAtRef.current - startedAt) / 1000))
     return 0
-  }, [lines, startedAt, now, isPastMeeting])
+  }, [lines, startedAt, isPastMeeting])
 
   const participants = useMemo(() => new Set(lines.map((l) => l.speaker)).size, [lines])
 

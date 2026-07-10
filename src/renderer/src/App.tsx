@@ -154,6 +154,16 @@ export function App(): JSX.Element {
   // button on a past meeting with none yet) — a separate instance so a background import can never
   // hijack whatever the user is currently looking at (ask.answer stays untouched).
   const recapGen = useAsk()
+  // Instant suggestions (settings.instantSuggestions): a SHADOW suggest run pre-generated in the
+  // background while a meeting is live, so clicking "What to say next" paints instantly instead of
+  // waiting a full round trip. Its own instance — it must never clobber the visible copilot card.
+  const speculative = useAsk()
+  // True while the copilot card should display the speculative answer (set by whatNext's instant path).
+  // Any REAL suggest run (new suggest.answer id) or the meeting ending switches back automatically.
+  const [showSpec, setShowSpec] = useState(false)
+  // Transcript watermark of the last speculative run — freshness = the conversation hasn't moved on
+  // (≤2 new lines) since the suggestion was generated.
+  const specWatermarkRef = useRef({ lineCount: 0, at: 0 })
 
   const onQuestionRef = useRef<(l: TranscriptLine) => void>(() => {})
   // Canonical people/account names for the ASR entity-casing bias (see lib/entity-casing.ts). Fetched
@@ -852,6 +862,30 @@ export function App(): JSX.Element {
     suggest.run({ mode: 'suggest', transcript: listen.text() })
   }, [suggest.run, listen.text, requireProvider])
 
+  // Instant-suggestion machinery (settings.instantSuggestions, default on):
+  // 1) While a meeting is live, pre-generate a shadow "what to say next" whenever the OTHER side has
+  //    spoken and the last speculative run is ≥15s old — so the button click can paint instantly.
+  //    Never fires while anything visible is streaming (the visible work always wins the bandwidth).
+  useEffect(() => {
+    if (!listen.listening || settings?.instantSuggestions === false || !settings?.providerReady) return
+    const lines = listen.lines
+    if (!lines.length || lines[lines.length - 1].speaker !== 'them') return
+    const w = specWatermarkRef.current
+    if (lines.length === w.lineCount || Date.now() - w.at < 15_000) return
+    if (ask.answer?.streaming || suggest.answer?.streaming || speculative.answer?.streaming) return
+    specWatermarkRef.current = { lineCount: lines.length, at: Date.now() }
+    speculative.run({ mode: 'suggest', transcript: listen.text() })
+  }, [listen.lines, listen.listening, listen.text, settings?.instantSuggestions, settings?.providerReady, ask.answer?.streaming, suggest.answer?.streaming, speculative.answer?.streaming, speculative.run])
+  // 2) Any REAL suggest run replacing the card (new id), or the meeting ending, switches the copilot
+  //    card back off the speculative answer.
+  const liveSuggestId = suggest.answer?.id
+  useEffect(() => {
+    if (liveSuggestId) setShowSpec(false)
+  }, [liveSuggestId])
+  useEffect(() => {
+    if (!listen.listening) setShowSpec(false)
+  }, [listen.listening])
+
   const whatNext = useCallback(() => {
     if (!requireProvider()) return
     const typed = input.trim()
@@ -870,6 +904,19 @@ export function App(): JSX.Element {
       return
     }
     if (route.transport === 'suggest') {
+      // Instant path: a fresh speculative suggestion (conversation moved ≤2 lines since it generated)
+      // paints IMMEDIATELY — no round trip. A stale/absent one falls through to the normal live run.
+      const spec = speculative.answer
+      const fresh =
+        settings?.instantSuggestions !== false &&
+        !!spec?.text &&
+        !spec.streaming &&
+        !spec.error &&
+        listen.lines.length - specWatermarkRef.current.lineCount <= 2
+      if (fresh) {
+        setShowSpec(true)
+        return
+      }
       suggest.run({ mode: 'suggest', transcript, history: copilotHistoryRef.current })
       return
     }
@@ -883,10 +930,13 @@ export function App(): JSX.Element {
     ask.fail,
     ask.run,
     suggest.run,
+    speculative.answer,
     listen.text,
+    listen.lines,
     askScreen,
     settings?.screenAsk,
     settings?.visionAvailable,
+    settings?.instantSuggestions,
     requireProvider
   ])
 
@@ -1610,7 +1660,7 @@ export function App(): JSX.Element {
     () => (
       <Copilot
         lines={listen.lines}
-        suggestion={suggest.answer}
+        suggestion={showSpec && speculative.answer ? speculative.answer : suggest.answer}
         mode={mode}
         listening={listen.listening}
         loading={listen.loading}
@@ -1623,7 +1673,7 @@ export function App(): JSX.Element {
       />
     ),
     // autosaveWarn was MISSING from the old shared dep array — a latent stale-warning bug the split fixes.
-    [listen.lines, suggest.answer, mode, listen.listening, listen.loading, listen.loadingPct, listen.error, captureError, autosaveWarn, settings?.showLiveTranscript, endReview]
+    [listen.lines, suggest.answer, showSpec, speculative.answer, mode, listen.listening, listen.loading, listen.loadingPct, listen.error, captureError, autosaveWarn, settings?.showLiveTranscript, endReview]
   )
   const reviewBody = useMemo(() => {
     // Two sources: a just-ended live session (ask.answer recap + live lines), or a past meeting opened
@@ -1714,6 +1764,7 @@ export function App(): JSX.Element {
         label={ask.answer?.label}
         kind={ask.answer?.kind}
         usedScreen={ask.answer?.usedScreen}
+        provider={ask.answer?.provider}
         onRetry={capturing ? undefined : retryAnswer}
         onGoDeeper={capturing ? undefined : goDeeper}
       />

@@ -1,4 +1,4 @@
-import { EnvHttpProxyAgent, ProxyAgent, setGlobalDispatcher } from 'undici'
+import { Agent, EnvHttpProxyAgent, ProxyAgent, setGlobalDispatcher } from 'undici'
 import { session } from 'electron'
 import { mainLog, auditLog } from '../logger'
 import { detectProxyFromEnv, parseElectronProxy, redactProxyUrl } from './proxy-url'
@@ -49,7 +49,11 @@ export async function installProxyAwareFetch(): Promise<void> {
       return
     }
 
-    mainLog.info('[net] no proxy configured (direct); leaving default dispatcher')
+    // Direct connection: install a keep-alive agent so back-to-back provider asks reuse the TLS
+    // connection. undici's default agent drops idle sockets after ~4s — every ask more than a few
+    // seconds after the last paid DNS + TCP + TLS again (typically 100-300ms of the time-to-first-token).
+    setGlobalDispatcher(new Agent({ keepAliveTimeout: 30_000, keepAliveMaxTimeout: 60_000 }))
+    mainLog.info('[net] no proxy configured (direct); keep-alive fetch agent installed')
   } catch (e) {
     mainLog.warn('[net] could not install proxy-aware fetch; requests stay on the default path', e)
   }

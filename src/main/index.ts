@@ -68,7 +68,7 @@ import {
 } from './store'
 import { createStream } from './llm'
 import { isTransient, nextBackoff } from './llm/retry'
-import { resetDustConversation, isDustAuthError } from './llm/dust'
+import { resetDustConversation, prewarmDustConversation, isDustAuthError } from './llm/dust'
 import { enqueueIngest, startBackfill, brainBackfillProgress, resumeBackfillIfPending, settleCommitment } from './brain/ingest'
 import { openIntelligenceWindow, isIntelligenceSender, syncIntelContentProtection } from './intelligence'
 import {
@@ -131,6 +131,7 @@ import { initAutoUpdate } from './updater'
 import { runSelfTest } from './selftest'
 import { readEvalMetrics, aggregateMetrics } from './metrics'
 import { importDustCliSession, refreshDustCliSession, setupDustCli } from './dustcli'
+import { asrManifestComplete } from './asr-manifest'
 import { detectCli, testCli, setupCli, installCli, loginCli, prewarmCli } from './cli'
 import { connectBidstack, pushToBidstack } from './mcp/bidstackClient'
 import { detectNotebookLmCli, installNotebookLmCli, connectNotebookLm, askNotebookLm } from './mcp/notebooklm'
@@ -2024,6 +2025,17 @@ function registerIpc(): void {
       // regardless of what routeTier or a user's providerModels override picked. Opus stays reachable only
       // through the Graph pipeline (brain/ingest.ts, graphify.ts), which never calls this function.
       model = applyInteractiveGuardrail(provider, tier, model)
+      // Dust interactive speed pin: think/deep Dust AGENTS run server-side orchestration before their
+      // first token (measured 6.6-28.3s TTFT vs ~2.6s for the base agent) — unusable mid-conversation.
+      // Interactive asks (chat/vision/suggest) always use the base agent; recaps, summaries, background
+      // jobs, and explicit agentOverride (Spotlight Ref) keep the think/deep agents where depth > speed.
+      if (
+        provider === 'dust' &&
+        !req.agentOverride &&
+        (req.mode === 'answer' || req.mode === 'vision' || req.mode === 'suggest')
+      ) {
+        model = (s.providerModels['dust'] || '').trim() || model
+      }
       const ineligible = def.kind === 'cli' && !s.cliConnected[provider]
         ? `${def.label} is not connected. Open Settings → CLI Integration to set it up.`
         : def.kind !== 'cli' && !key
@@ -2051,6 +2063,9 @@ function registerIpc(): void {
       const baseURL =
         provider === 'custom' ? s.customBaseUrl : provider === 'dust' ? s.dustBaseUrl : def.baseUrl
       auditLog('provider.request', { provider, model, mode: req.mode, tier, retry: attempted.length > 0 })
+      // Tell the waiting UI WHO is answering ("Asking your Dust agent…") — re-sent on retry/failover so
+      // the display follows the live attempt. Metadata only (provider id + tier), never the model/agent id.
+      win?.webContents.send(IPC.streamMeta, { id: req.id, provider, tier })
       // Per-tier idle budget: a live suggest gives up fast to stay real-time; recaps + deep answers get the
       // full headroom. Bounds time-to-first-token and triggers failover when a provider stalls before a token.
       const idleMs =
@@ -2546,8 +2561,21 @@ function registerIpc(): void {
     // from here until the NEXT meeting starts shares one conversation (see resetDustConversation).
     // It's also the clean boundary to free Parakeet's ~487MB native recognizer between meetings/on idle,
     // instead of leaving it resident in the main process for the rest of the app's life.
-    if (on) resetDustConversation()
-    else parakeetRelease()
+    if (on) {
+      resetDustConversation()
+      // Pre-create the new meeting's conversation in the background (fire-and-forget) so the FIRST
+      // quick action / ask of the meeting doesn't pay the createConversation round trip. Keyed to the
+      // base agent — the interactive speed pin in attempt() routes all mid-meeting asks there.
+      const s = getSettings()
+      const dustKey = getApiKey('dust')
+      const baseAgent = (s.providerModels['dust'] || '').trim()
+      if (dustKey && s.dustWorkspaceId && baseAgent) {
+        void prewarmDustConversation(
+          { apiKey: dustKey, workspaceId: s.dustWorkspaceId, baseURL: s.dustBaseUrl },
+          baseAgent
+        )
+      }
+    } else parakeetRelease()
   })
 
   // --- Window management ---
@@ -2653,6 +2681,14 @@ if (!app.requestSingleInstanceLock()) {
   app.whenReady().then(async () => {
   initLogging() // route main-process logs to a rotated file before anything else can fail
   await installProxyAwareFetch() // route provider fetch through the env/OS proxy so Dust etc. work behind a corporate proxy
+  // Warm the CLI binary cache at boot when a CLI provider is connected, so the session's FIRST CLI ask
+  // doesn't stall on the login-shell PATH lookup (it only ran on sign-in before — i.e. once ever).
+  try {
+    const s0 = getSettings()
+    if (s0.cliConnected['claude-cli'] || s0.cliConnected['codex-cli']) prewarmCli()
+  } catch {
+    /* best-effort warm-up */
+  }
   // Unpackaged (dev/QA) runs show Electron's default icon in the Dock — brand them with the Mantu M so
   // a dev window is never mistaken for "the Electron thing". Packaged builds get build/icon.png baked
   // in by electron-builder (mac .icns / win .ico) and don't need this.
@@ -2839,11 +2875,12 @@ if (!app.requestSingleInstanceLock()) {
       ? process.resourcesPath
       : join(REPO_ROOT, 'resources')
 
-    // Expose whether the bundled ORT + a model file are present so the renderer
-    // only switches to the offline asr-model:// scheme when the assets exist.
-    const ASR_BUNDLED =
-      existsSync(join(RES_BASE, 'ort', 'ort-wasm-simd-threaded.jsep.wasm')) &&
-      existsSync(join(RES_BASE, 'models', 'Xenova', 'whisper-base', 'config.json'))
+    // Expose whether the bundled ORT + model files are present so the renderer only switches to the
+    // offline asr-model:// scheme when the assets exist. Checks the COMPLETE manifest (asr-manifest.ts):
+    // the worker locks allowRemoteModels=false in bundled mode, so a single missing file used to
+    // hard-fail Listen at runtime ("file was not found locally at …tokenizer.json") — an incomplete
+    // bundle must fall back to the proven remote path instead.
+    const ASR_BUNDLED = asrManifestComplete(RES_BASE)
     ipcMain.handle(IPC.asrBundled, (e) => {
       assertMainWindow(e)
       return ASR_BUNDLED

@@ -64,6 +64,7 @@ export const IPC = {
   streamDelta: 'stream:delta',
   streamDone: 'stream:done',
   streamError: 'stream:error',
+  streamMeta: 'stream:meta',
   captureScreen: 'capture:screen',
   prewarmCapture: 'capture:prewarm',
   armAudio: 'audio:arm',
@@ -407,6 +408,16 @@ export type StreamDone = z.infer<typeof StreamDoneSchema>
 export const StreamErrorSchema = z.object({ id: z.string(), message: z.string() })
 export type StreamError = z.infer<typeof StreamErrorSchema>
 
+/** Sent once per provider attempt, before any token, so the waiting UI can say WHO is answering
+ *  ("Asking your Dust agent…") instead of an anonymous spinner. Re-sent on retry/failover — the display
+ *  simply follows the latest attempt. */
+export const StreamMetaSchema = z.object({
+  id: z.string(),
+  provider: ProviderIdSchema,
+  tier: z.enum(['base', 'think', 'deep'])
+})
+export type StreamMeta = z.infer<typeof StreamMetaSchema>
+
 export const BaseSettingsSchema = z.object({
   provider: ProviderIdSchema.default('anthropic'),
   // CLI-vs-API priority. 'api' (default) keeps the explicitly-chosen `provider` as primary. 'cli' makes a
@@ -523,6 +534,10 @@ export const BaseSettingsSchema = z.object({
   soundCues: z.boolean().default(true), // subtle answer-ready / error sound cues
   uiSounds: z.boolean().default(true), // master: soft click feedback on buttons (and gates all UI sounds)
   quickActionsRainbow: z.boolean().default(true), // spinning rainbow border on the quick-action chips
+  /** Pre-generate "What to say next" in the background while a meeting is live, so clicking the button
+   *  paints instantly instead of waiting a full round trip. Costs roughly one extra base-tier call per
+   *  fresh stretch of conversation; the Settings toggle says so ("uses more credits"). */
+  instantSuggestions: z.boolean().default(true),
   // How see-through the overlay's glass background is. A multiplier on the default glass alpha values
   // (see --glass-fill etc. in styles.css) — 1 = today's default look, lower = more transparent (see more
   // of what's behind), higher = more opaque/solid (easier to read over a busy desktop). Values above 1
@@ -697,6 +712,7 @@ export const DEFAULT_SETTINGS: Settings = {
   soundCues: true,
   uiSounds: true,
   quickActionsRainbow: true,
+  instantSuggestions: true,
   overlayOpacity: 1,
   showFullTranscriptInReview: false,
   asrQuality: 'fast',

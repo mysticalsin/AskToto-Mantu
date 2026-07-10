@@ -75,10 +75,10 @@ export function routeTier(
 ): ModelTier {
   // Live suggestions must be instant — never escalate.
   if (req.mode === 'suggest') return 'base'
-  // Fact-checks are a verification action the user explicitly invoked — route them to the strongest
-  // model (the verifier path) so the verdict is as reliable as possible, unless the user has pinned
-  // fast-only mode as a hard cost cap.
-  if (req.kind === 'factcheck') return mode === 'never' ? 'base' : 'deep'
+  // Fact-checks need a STRONG model, not the strongest+slowest: 'deep' meant 10-15s to a verdict on the
+  // Dust deep agent (and interactive Opus on Anthropic). Think-tier (Sonnet-class) verdicts are just as
+  // reliable for claim-checking and land in a fraction of the time — users fact-check LIVE, mid-call.
+  if (req.kind === 'factcheck') return mode === 'never' ? 'base' : 'think'
   if (mode === 'never') return 'base'
   if (mode === 'always') return 'deep' // explicit deep mode → the strongest model
 

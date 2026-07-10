@@ -1,5 +1,6 @@
 import { memo, useEffect, useState } from 'react'
 import { Copy, Check, RefreshCw, FileDown, ShieldCheck, ChevronsDown, ThumbsUp, ThumbsDown, Eye, EyeOff } from 'lucide-react'
+import { PROVIDERS, type ProviderId } from '@shared/providers'
 import { Markdown } from './Markdown'
 import { TextButton } from './ui'
 import { useFlash } from '../lib/useFlash'
@@ -50,6 +51,7 @@ export const Answer = memo(function Answer({
   label,
   kind,
   usedScreen,
+  provider,
   onRetry,
   onGoDeeper
 }: {
@@ -66,6 +68,9 @@ export const Answer = memo(function Answer({
   /** True when this answer was grounded in a screenshot — drives the "Viewed screen" trust chip
    *  independent of the displayed label/question (see state.ts AnswerState.usedScreen). */
   usedScreen?: boolean
+  /** Who is answering (from streamMeta) — names the brain in the waiting state instead of an anonymous
+   *  spinner ("Asking your Dust agent…"). */
+  provider?: ProviderId
   onRetry?: () => void
   onGoDeeper?: () => void
 }): JSX.Element {
@@ -243,8 +248,15 @@ export const Answer = memo(function Answer({
   if (thinking) {
     // Reasoning models (e.g. Kimi Code) think before the first token, and Dust specifically can take
     // ~40-48s to first token — past ~8s, swap the static label for an elapsed-time count so a long wait
-    // still reads as "working" instead of "stuck".
-    const label = thinkingSecs >= 8 ? `Still working… (${thinkingSecs}s)` : 'Thinking…'
+    // still reads as "working" instead of "stuck". Naming the brain ("Asking your Dust agent…") makes the
+    // wait attributable instead of anonymous — users forgive an agent working, not a frozen spinner.
+    const who = provider === 'dust' ? 'your Dust agent' : provider ? PROVIDERS[provider]?.label : undefined
+    const label =
+      thinkingSecs >= 8
+        ? `Still working… (${thinkingSecs}s)${who ? ` — ${who} is on it` : ''}`
+        : who
+          ? `Asking ${who}…`
+          : 'Thinking…'
     return (
       <div className="fade-up mx-auto max-w-[620px] flex flex-col gap-2">
         {header}
