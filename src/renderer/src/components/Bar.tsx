@@ -19,7 +19,7 @@ import {
   Brain,
   FileSearch
 } from 'lucide-react'
-import { MetisMark } from './MetisMark'
+import { MantuMark } from './MantuMark'
 import { ModePicker } from './ModePicker'
 import { Spinner } from './ui'
 import { modeLabel } from '@shared/ipc'
@@ -481,7 +481,7 @@ export const Bar = memo(function Bar(props: BarProps): JSX.Element {
   const toolbarRow = useMemo(
     () => (
         <div className="aw-toolbar grid grid-cols-[1fr_auto_1fr] items-center border-t border-[var(--color-hair-soft)] px-5 py-1">
-          {/* The Métis mark IS the logo → opens Settings. (Quit/Hide live in the tray + hotkeys.) */}
+          {/* The Mantu mark IS the logo → opens Settings. (Quit/Hide live in the tray + hotkeys.) */}
           <button
             type="button"
             title="Settings"
@@ -490,7 +490,7 @@ export const Bar = memo(function Bar(props: BarProps): JSX.Element {
             className="no-drag focus-ring block flex-none justify-self-start rounded-[10px]"
           >
             <span className="aw-mark-glow block rounded-[10px]">
-              <MetisMark size={30} />
+              <MantuMark size={30} />
             </span>
           </button>
 

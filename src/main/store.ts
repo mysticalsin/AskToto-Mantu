@@ -434,6 +434,8 @@ export async function testApiKey(provider: ProviderId, key: string): Promise<Tes
         { workspaceId: settings.dustWorkspaceId, apiKey: trimmed },
         console
       )
+      // No `view` needed here — this call only checks r.isErr() to validate the credentials, it never
+      // reads r.value, so an empty/restricted agent list (the bug fixed in listDustAgents below) is harmless.
       const r = await api.getAgentConfigurations({})
       if (r.isErr()) return { ok: false, error: r.error.message }
     } else if (def.kind === 'anthropic') {
@@ -484,7 +486,11 @@ export async function listDustAgents(): Promise<DustAgentsResponse> {
       { workspaceId: settings.dustWorkspaceId, apiKey: key },
       console
     )
-    const r = await api.getAgentConfigurations({})
+    // `view: 'list'` is REQUIRED — without it @dust-tt/client 1.2.6 only appends `view` to the querystring
+    // when it's a string, and the Dust endpoint then returns a restricted/empty set for no `view` param,
+    // leaving the picker with no agents to show (falls back to a bare text box). 'list' is the "all agents
+    // this user can pick" view (see node_modules/@dust-tt/client/dist/types.d.ts AgentConfigurationViewSchema).
+    const r = await api.getAgentConfigurations({ view: 'list' })
     if (r.isErr()) return { ok: false, error: r.error.message }
     const agents = (r.value as {
       sId?: string

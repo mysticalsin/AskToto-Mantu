@@ -66,7 +66,7 @@ import {
   listDustAgents
 } from './store'
 import { createStream } from './llm'
-import { resetDustConversation } from './llm/dust'
+import { resetDustConversation, isDustAuthError } from './llm/dust'
 import { enqueueIngest, startBackfill, brainBackfillProgress, resumeBackfillIfPending, settleCommitment } from './brain/ingest'
 import { openIntelligenceWindow, isIntelligenceSender, syncIntelContentProtection } from './intelligence'
 import {
@@ -1433,10 +1433,20 @@ function registerIpc(): void {
   })
 
   // --- Dust integration ---
-  ipcMain.handle(IPC.dustListAgents, (e) => {
+  ipcMain.handle(IPC.dustListAgents, async (e) => {
     assertMainWindow(e)
     if (!requireAuth()) return { ok: false, error: 'Sign in with your Mantu account first.' }
-    return listDustAgents()
+    const r = await listDustAgents()
+    if (r.ok) return r
+    // The agent picker needs the same on-401 self-heal as the ask path: the Dust CLI OAuth token
+    // lasts ~1h, and without a refresh-and-retry here the picker just goes empty whenever it lapses
+    // between sessions — reproducing "my agent list is gone" even with the view:'list' fix in place.
+    if (!isDustAuthError(r.error)) return r
+    const s = await refreshDustCliSession()
+    if (!s.ok || !s.token || !s.workspaceId) return r
+    setApiKey('dust', s.token)
+    setSettings({ dustWorkspaceId: s.workspaceId, dustBaseUrl: s.baseUrl || 'https://dust.tt', dustTokenMintedAt: Date.now() })
+    return await listDustAgents()
   })
 
   // Connect to Dust locally by importing the Dust CLI's keychain session (token + workspace + region).
