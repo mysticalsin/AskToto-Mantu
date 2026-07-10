@@ -3881,7 +3881,8 @@ export function Settings({
             )}
 
             {tab === 'about' && (
-              <div className="flex flex-col gap-6">
+              // Everything in About is centered: the story, the thanks, and the footer.
+              <div className="flex flex-col gap-6 text-center">
                 {/* Microsoft sign-in is in Calendar, the license is in Profile, and permissions + usage
                     moved to Privacy. About is just the story now. */}
                 <Section title="Why “Métis”" desc="The name is the mission.">
@@ -3931,7 +3932,7 @@ export function Settings({
                     >
                       Yanez Sondagur
                     </a>
-                    {' '}— for the support and belief that made this possible.
+                    , for the support and belief that made this possible.
                   </p>
                 </Section>
                 {/* Model/library license attributions live in THIRD_PARTY_NOTICES.md, shipped in the
@@ -3985,7 +3986,15 @@ export function Settings({
                     </a>
                   </div>
                   <div className="text-[11px] text-[color:var(--cl-muted-foreground)]">
-                    Built at Mantu · Built by Tony Walteur
+                    Built at Mantu · Built by{' '}
+                    <a
+                      href="https://www.linkedin.com/in/tonywalteur/"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="font-medium text-[color:var(--cl-primary)] transition-colors hover:underline"
+                    >
+                      Tony Walteur
+                    </a>
                   </div>
                 </div>
               </div>

@@ -545,7 +545,7 @@ export const Bar = memo(function Bar(props: BarProps): JSX.Element {
                 it lights with danger as an at-a-glance "you're exposed" cue. Separate from Private View
                 (whether Métis captures YOUR screen), which lives in Settings → Privacy. */}
             <IconTool
-              title={props.stealth ? 'Hidden on shared screens — click to make visible' : 'Visible on shared screens — click to hide'}
+              title={props.stealth ? 'Hidden on shared screens. Click to make visible.' : 'Visible on shared screens. Click to hide.'}
               onClick={props.onToggleStealth}
               active={!props.stealth}
               danger
