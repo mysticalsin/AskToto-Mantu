@@ -1,8 +1,8 @@
 # Level 10 Review — Métis Local build
 
-⚠️ DEGRADED: solo-visionary (Integrator usage limit at ship-audit launch; reset 4:40 AM —
-cross-model diff attack auto-scheduled for after reset; this banner comes off when that
-exact diff passes the Integrator's review)
+(DEGRADED banner removed 2026-07-11 08:30 EDT: the Integrator's cross-model attack ran
+across rounds ship-audit-r2..r7 — see meetings/008 — and the final tree received
+VERDICT: SHIP with zero findings. The condition this banner named is fully discharged.)
 
 Method: co-founder (V: claude · I: codex UNAVAILABLE for this pass) · 2026-07-11 01:40 EDT
 
