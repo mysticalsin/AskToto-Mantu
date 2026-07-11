@@ -31,9 +31,13 @@
 - Create: `src/shared/local-ai.test.ts`
 - Create: `src/shared/brain-analyze.ts`
 - Create: `src/shared/brain-analyze.test.ts`
+- Modify: `src/main/brain/ingest.ts`
+- Modify: `src/main/brain/brain.test.ts`
+- Modify: `src/main/brain/e2e-proof.test.ts`
 - Modify: `src/shared/brain.ts`
 - Modify: `src/shared/ipc.ts`
 - Modify: `src/shared/ipc.test.ts`
+- Modify: `src/shared/providers.ts`
 - Modify: `vitest.config.ts`
 
 **Step 1: Write failing contract tests**
@@ -59,7 +63,11 @@ interface LocalAiStatus {
 }
 ```
 
-Add bounded Zod schemas for local session begin/append/full-resync/end, transcript revisions, local vision evidence, and local stream executor metadata. Exact IPC contracts are: UUID session and immutable line IDs; non-negative signed 32-bit revisions; begin at revision 0; append requires `revision = baseRevision + 1`, at most 64 lines and 64 KiB UTF-8; resync allows at most 20,000 lines and 2 MiB UTF-8; every line uses the existing speaker enum, an integer timestamp, and 1-4,000 characters. A gap acknowledgment includes `expectedRevision` and changes no state; the renderer must resync before another append. Extend `AskStartSchema` with a UUID `localSessionId?` and a 64 KiB `visionEvidence?`.
+Add bounded Zod schemas for local session begin/append/full-resync/end, transcript revisions, local vision evidence, and local stream executor metadata. Exact IPC contracts are: UUID session and immutable line IDs; non-negative signed 32-bit revisions; begin at revision 0; append requires `revision = baseRevision + 1`, at most 64 lines and 64 KiB UTF-8 across the complete IPC payload; resync allows at most 20,000 lines and 2 MiB UTF-8 across the complete IPC payload; every line uses the existing speaker enum, a nonnegative integer timestamp, and 1-4,000 characters. A gap acknowledgment includes `expectedRevision` and changes no state; the renderer must resync before another append. Extend `AskStartSchema` with a UUID `localSessionId?` and a 64 KiB structured `visionEvidence?`. Vision evidence is allowed only with `mode: 'vision'` and is mutually exclusive with raw `image`.
+
+Use these exact exports in `src/shared/local-ai.ts`: `LocalTranscriptLineSchema`, `LocalTranscriptBeginSchema`, `LocalTranscriptAppendSchema`, `LocalTranscriptResyncSchema`, `LocalTranscriptEndSchema`, `LocalTranscriptAckSchema`, `LocalVisionEvidenceSchema`, and `FutureStreamMetaSchema`. Every object/union branch is strict. Shared UTF-8 limits use `TextEncoder`, not Node `Buffer`. Begin accepts at most the append cap. Ack is `{ revision, resyncRequired, expectedRevision? }` and requires `expectedRevision` exactly when resync is true.
+
+Vision evidence is a strict version-1 object with 1-128-character model ID, 64-hex model SHA-256, nonnegative integer capture timestamp, `wasm | webgpu` backend, 1-4 unique capabilities from `caption | text | ocr | regions`, caption capped at 8,000 characters, text capped at 32,000, and at most 200 `{ text, box:[x1,y1,x2,y2] }` regions. Region text is 1-1,000 characters; coordinates are normalized 0..1 with `x2 >= x1` and `y2 >= y1`. The complete JSON payload is at most 64 KiB UTF-8.
 
 Define this future stream shape in `src/shared/local-ai.ts`, but do not replace the existing `StreamMetaSchema` in Task 1 because current renderer consumers require `provider`:
 
@@ -71,9 +79,11 @@ type StreamMeta =
 
 The actual StreamMeta migration and every consumer change happen atomically in Task 6.
 
-Define `BrainAnalyzeRequestSchema` with version `1`, tasks `briefing | account-summary | deal-summary | meeting-summary | question`, typed scope, optional question capped at 500 characters, and language `en | fr`. Define a result schema with `ok | insufficient-evidence | blocked`, the fixed local-AI disclosure, a 4,000-character answer cap, evidence-linked points, immutable model identity, and timing. Evidence records include ID, file, line/offset range, bounded quote, and `grounding: 'transcript' | 'derived'`; only transcript-grounded quotes may be displayed as verbatim.
+Define `BrainAnalyzeRequestSchema` as a strict version-1 union discriminated by `task`: `briefing` requires `{kind:'brain'}`; `account-summary`, `deal-summary`, and `meeting-summary` require their matching `{kind,id}` scope with ID capped at 200; `question` accepts any typed scope and requires 1-500 characters. Every branch requires language `en | fr`.
 
-Add model-independent provenance fields to `MeetingExtractionSchema`: `source_mode: string` and `source_use: 'eligible' | 'employment' | 'unknown'`, both defaulting legacy data to unknown/empty. Ingest maps only the built-in `interview` mode to employment and only the built-in business-mode allowlist (`general`, `meeting`, `sales`, `negotiation`, `presentation`, `support`) to eligible. Every custom/unclassified mode is `unknown`; content never determines provenance.
+Define `BrainAnalyzeResultSchema` with `ok | insufficient-evidence | blocked`, the exact disclosure `Local AI-generated analysis. Verify against cited meetings.`, a 4,000-character answer cap, at most 50 points, at most 100 evidence records, immutable `{id,sha256}` model identity, and nonnegative finite `{loadMs,prefillMs,generateMs,totalMs}`. Point text is 1-1,000 characters with 1-20 unique `evidenceIds`. Evidence/file IDs are lowercase 64-hex hashes/1-300-character paths. Transcript evidence requires positive line range with end >= start and a 1-1,000-character quote. Derived evidence requires null line range, empty quote, and a 1-1,000-character `derivedText`. Every point evidence ID must exist in the result evidence array; duplicate/dangling IDs fail.
+
+Add model-independent provenance fields to `MeetingExtractionSchema`: `source_mode: string` and `source_use: 'eligible' | 'employment' | 'unknown'`, defaulting legacy data to empty/unknown. Export `classifyMeetingSourceUse(mode: string)`: only built-in `interview` maps to employment; only the built-in business-mode allowlist (`general`, `meeting`, `sales`, `negotiation`, `presentation`, `support`) maps to eligible; every custom/unclassified value maps to unknown. At the trusted ingest boundary, overwrite any model-supplied provenance using only a bounded mode from the leading meeting frontmatter. Missing or malformed provenance becomes empty/unknown. Content never determines provenance.
 
 Expand Vitest includes to `scripts/**/*.{test,spec}.{ts,tsx}` and `eval/**/*.{test,spec}.{ts,tsx}` so later test commands are executable.
 
@@ -112,6 +122,8 @@ npx vitest run src/shared
 ```
 
 Expected: all shared tests and typechecks pass.
+
+**Review record (2026-07-11):** RED was observed for missing contracts and again for model-supplied provenance surviving ingest. GREEN proof: 62 test files / 669 tests, Node and web typechecks, production Electron build, and clean independent re-review after both findings were fixed.
 
 ---
 
@@ -247,7 +259,7 @@ Expected: exact hashes pass and all selected assets/licenses exist. Start provis
 
 Test that packaged paths resolve only below `process.resourcesPath/local-ai`, development paths resolve only below the generated payload, and traversal is rejected. `tsconfig.local-ai-worker.json` compiles `.mts` sources to ESM `.mjs` under `out/local-ai-worker/` without bundling dependencies.
 
-The bytecode main never imports node-llama. `worker-controller.ts` forks the unpacked worker entry with `execPath: process.execPath`, `ELECTRON_RUN_AS_NODE=1`, empty `execArgv`, an IPC stdio channel, a random handshake nonce, parent PID, bounded typed messages, and no listening socket. The worker exits on parent disconnect and writes no content logs. Add an app self-test dispatch using `METIS_SELFTEST_KIND=local-ai-native` and absolute `METIS_SELFTEST_OUTPUT`. After `app.whenReady()`, it calls the real controller; the worker loads the selected GGUF from the passed verified absolute path, creates a bounded context, generates five tokens, disposes, and exits before the overlay is created.
+The bytecode main never imports node-llama. `worker-controller.ts` forks the unpacked worker entry with `execPath: process.execPath`, `ELECTRON_RUN_AS_NODE=1`, empty `execArgv`, an IPC stdio channel, a random handshake nonce, parent PID, bounded typed messages, and no listening socket. The worker exits on parent disconnect and writes no content logs. Add an app self-test dispatch using `METIS_SELFTEST_KIND=local-ai-native` and absolute `METIS_SELFTEST_OUTPUT`. After `app.whenReady()`, it calls the real controller; the worker loads the selected GGUF from the passed verified absolute path, creates a bounded context, generates five tokens, is force-killed mid-generation, respawns once, generates again, disposes, and exits before the overlay is created.
 
 `scripts/smoke-packaged-local-ai.mjs --app <absolute-executable> --result <absolute-json>` launches the unpacked/installed Electron executable with those environment variables and isolated `ASKTOTO_USERDATA`; host Node never imports node-llama. It waits with a hard timeout, validates result/model/backend/resources path, and verifies clean exit. The self-test installs a test-only network-deny shim before engine initialization and fails if model code calls `fetch`, `http`, `https`, Electron `net`, or a remote model resolver.
 
@@ -272,6 +284,7 @@ Expected: missing module/path implementation, followed by a missing `node-llama-
 - Package `@node-llama-cpp/mac-arm64-metal@3.19.0` on Mac; package both `@node-llama-cpp/win-x64@3.19.0` and `@node-llama-cpp/win-x64-vulkan@3.19.0` on Windows. Exclude `win-x64-cuda`, `win-x64-cuda-ext`, `win-arm64`, `mac-x64`, Linux, source/build trees, and wrong architecture. Unpack native bins/localBuilds from ASAR and fail after-pack on any forbidden path.
 - Add only `resources/local-ai/payload` to `extraResources`, mapped to packaged `local-ai/`.
 - Verify the Electron `runAsNode` fuse remains enabled. The worker is a normal packaged Node process, not a renderer or undocumented utility process. A development-only result is insufficient.
+- Scan the unpacked worker for prompts, credentials, provider configuration, or secrets imports; it contains only runtime/IPC glue. MAS builds are explicitly local-tier-disabled because App Sandbox/run-as-Node support is outside this release.
 - Add after-pack checks that the selected GGUF, selected vision files, manifest, licenses, and target native addon exist in the packaged resources directory.
 
 **Step 4: Run the hard spike gate**

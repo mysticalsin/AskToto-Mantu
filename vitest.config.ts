@@ -8,7 +8,12 @@ const vitestConfig = defineConfig({
     environment: 'node',
     // Also covers intelligence/ (the standalone dashboard sub-project) — its lib/ files are pure TS
     // with no DOM dependency at module-load time, so the shared node environment above is fine for them.
-    include: ['src/**/*.{test,spec}.{ts,tsx}', 'intelligence/src/**/*.{test,spec}.{ts,tsx}'],
+    include: [
+      'src/**/*.{test,spec}.{ts,tsx}',
+      'intelligence/src/**/*.{test,spec}.{ts,tsx}',
+      'scripts/**/*.{test,spec}.{ts,tsx}',
+      'eval/**/*.{test,spec}.{ts,tsx}'
+    ],
     coverage: {
       provider: 'v8',
       reporter: ['text', 'html'],

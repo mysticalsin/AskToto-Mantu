@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import type { ProviderId } from './providers'
+import { LocalVisionEvidenceSchema } from './local-ai'
 
 export const ProviderIdSchema = z.enum([
   'anthropic',
@@ -137,7 +138,13 @@ export const IPC = {
   notebookLmAsk: 'notebookLm:ask',
   licenseActivate: 'license:activate',
   licenseStatus: 'license:status',
-  licenseGate: 'license:gate'
+  licenseGate: 'license:gate',
+  localAiStatus: 'local-ai:status',
+  localTranscriptBegin: 'local-ai:transcript:begin',
+  localTranscriptAppend: 'local-ai:transcript:append',
+  localTranscriptResync: 'local-ai:transcript:resync',
+  localTranscriptEnd: 'local-ai:transcript:end',
+  brainAnalyze: 'brain:analyze'
 } as const
 
 /** User's verdict on an answer (metadata only — never the answer text). Feeds the audit log + future evals. */
@@ -364,7 +371,7 @@ export const ChatTurnSchema = z.object({
 })
 export type ChatTurn = z.infer<typeof ChatTurnSchema>
 
-export const AskStartSchema = z.object({
+const AskStartBaseSchema = z.object({
   id: z.string(),
   mode: z.enum(['answer', 'vision', 'suggest', 'summary', 'recap']),
   prompt: z.string().default(''),
@@ -376,6 +383,10 @@ export const AskStartSchema = z.object({
       'Image must be a base64 string under 5.5 MB'
     )
     .optional(),
+  /** UUID of the append-only local transcript session used by eligible local asks. */
+  localSessionId: z.string().uuid().optional(),
+  /** Bounded evidence from the packaged local vision worker. */
+  visionEvidence: LocalVisionEvidenceSchema.optional(),
   /** raw transcript text for suggest mode */
   transcript: z.string().optional(),
   /** 'deeper' = the user tapped "Go deeper" → re-ask for a fuller answer (injected per-turn, never cached) */
@@ -392,6 +403,22 @@ export const AskStartSchema = z.object({
    *  or invalidates the cached system prompt. Capped for defense-in-depth against a hostile renderer. */
   brainContext: z.string().max(8000).optional(),
   history: z.array(ChatTurnSchema).default([])
+})
+export const AskStartSchema = AskStartBaseSchema.superRefine((value, context) => {
+  if (value.visionEvidence && value.mode !== 'vision') {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'visionEvidence is allowed only in vision mode.',
+      path: ['visionEvidence']
+    })
+  }
+  if (value.visionEvidence && value.image !== undefined) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'visionEvidence and image are mutually exclusive.',
+      path: ['visionEvidence']
+    })
+  }
 })
 export type AskStart = z.infer<typeof AskStartSchema>
 

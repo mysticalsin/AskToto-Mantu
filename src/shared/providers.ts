@@ -380,7 +380,8 @@ export function resolveModel(
   return chosen || def.defaultModel || ''
 }
 
-export type ModelTier = 'base' | 'think' | 'deep'
+export const MODEL_TIERS = ['base', 'think', 'deep'] as const
+export type ModelTier = (typeof MODEL_TIERS)[number]
 
 /**
  * Resolve the model/agent for a routing tier.

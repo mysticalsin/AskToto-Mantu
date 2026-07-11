@@ -19,6 +19,9 @@ export type Confidence = z.infer<typeof ConfidenceSchema>
 export const BandSchema = z.enum(['good', 'mixed', 'concerning'])
 export type Band = z.infer<typeof BandSchema>
 
+export const SourceUseSchema = z.enum(['eligible', 'employment', 'unknown'])
+export type SourceUse = z.infer<typeof SourceUseSchema>
+
 /** Deal velocity: a hard calendar commitment beats soft organizational intent; absence is a valid answer. */
 export const VelocitySchema = z.object({
   signal: z.enum(['hard-calendar-gate', 'soft-organizational-gate', 'no-hard-date-found']),
@@ -124,6 +127,9 @@ export const MeetingExtractionSchema = z.object({
       items.map((i) => (typeof i === 'string' ? { note: i, quote: '', confidence: 'INFERRED' as const } : i))
     )
     .default([]),
+  // Stamped from the configured conversation mode, never inferred from transcript content.
+  source_mode: z.string().default(''),
+  source_use: SourceUseSchema.default('unknown'),
   // Stamped by the ingest job (not the model): source transcript basename + its ISO date, so consumers
   // (call-grade timelines, meeting feeds) can join extractions back to meetings without re-reading refs.
   source_file: z.string().default(''),
@@ -282,3 +288,19 @@ Hard rules:
 - A "## Debrief (off the record)" section, when present, is the user's own post-meeting gut-read (what was NOT said aloud). Use it for signals, missed_signals, and sentiment — always tagged INFERRED, never quoted as if spoken, and never a source of commitments.
 - feedback / missed_signals confidence: EXTRACTED only when you can quote the exact moment; a judgement without a quotable anchor is INFERRED; a stretch is AMBIGUOUS. Differentiate honestly — do not tag everything the same.
 - Keep every string concise. Reply with the JSON object only.`
+
+const ELIGIBLE_SOURCE_MODES = new Set([
+  'general',
+  'meeting',
+  'sales',
+  'negotiation',
+  'presentation',
+  'support'
+])
+
+/** Classifies configured built-in modes only. Transcript content never affects this result. */
+export function classifyMeetingSourceUse(mode: string): SourceUse {
+  if (mode === 'interview') return 'employment'
+  if (ELIGIBLE_SOURCE_MODES.has(mode)) return 'eligible'
+  return 'unknown'
+}
