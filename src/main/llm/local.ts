@@ -26,13 +26,17 @@ import { type StreamOptions, type StreamHandle, errMsg } from './shared'
  * idempotent per-model — a no-op when this exact model is already running, an in-flight-await when a start
  * is already underway, and a stop-then-restart when a DIFFERENT model is requested — so early-returning on
  * isRunning() here was both redundant and the thing that let a model switch never actually happen).
- * On a COLD start only (state 'stopped' — never on an already-running/starting sidecar, i.e. never on every
- * live-meeting request) re-verifies the model files' sha256 against the manifest (F5 hardening) before
- * starting; a mismatch throws and start() is never reached, so a corrupt file never reaches llama-server.
+ * Re-verifies the model files' sha256 against the manifest (F5 hardening) before starting whenever the
+ * requested GGUF isn't the one already active: either a COLD start (state 'stopped') or a model SWITCH
+ * requested while the runtime is already running/starting (G2 hardening — getState() alone can't see a
+ * switch, since it stays 'running'/'starting' throughout; getActiveModelKey() is what catches the new,
+ * not-yet-verified GGUF). A warm request for the SAME model that's already active/starting skips the
+ * re-hash — never on every live-meeting request against an unchanged model. A mismatch throws and start()
+ * is never reached, so a corrupt file never reaches llama-server.
  */
 export async function ensureLocalRuntimeStarted(modelId: string): Promise<void> {
   const paths = resolveLocalModelPaths(modelId)
-  if (localRuntime.getState() === 'stopped') {
+  if (localRuntime.getState() === 'stopped' || localRuntime.getActiveModelKey() !== paths.gguf) {
     await verifyIntegrity(modelId)
   }
   await localRuntime.start({ gguf: paths.gguf, mmproj: paths.mmproj })

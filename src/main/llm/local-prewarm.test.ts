@@ -92,6 +92,7 @@ describe('localPrewarmEligible', () => {
 const localRuntimeMock = vi.hoisted(() => ({
   isRunning: vi.fn(() => false),
   getState: vi.fn(() => 'stopped' as const),
+  getActiveModelKey: vi.fn((): string | null => null),
   start: vi.fn(async () => {}),
   markActivity: vi.fn(),
   prewarm: vi.fn(),
@@ -118,6 +119,7 @@ beforeEach(() => {
   vi.clearAllMocks()
   localRuntimeMock.isRunning.mockReturnValue(false)
   localRuntimeMock.getState.mockReturnValue('stopped')
+  localRuntimeMock.getActiveModelKey.mockReturnValue(null)
   localRuntimeMock.start.mockResolvedValue(undefined)
   localModelsMock.verifyIntegrity.mockResolvedValue(undefined)
 })
@@ -154,18 +156,47 @@ describe('ensureLocalRuntimeStarted', () => {
   })
 
   // F5 hardening: the integrity re-check only runs once per sidecar spawn (cold start), never on every
-  // request against an already-running or already-starting sidecar.
-  it('F5: skips verifyIntegrity when already running', async () => {
+  // request against an already-running or already-starting sidecar SERVING THE SAME MODEL.
+  it('F5: skips verifyIntegrity when already running the SAME model (a warm request)', async () => {
     localRuntimeMock.getState.mockReturnValue('running')
+    localRuntimeMock.getActiveModelKey.mockReturnValue('/models/qwen3.5-2b/model.gguf')
     await ensureLocalRuntimeStarted('qwen3.5-2b')
     expect(localModelsMock.verifyIntegrity).not.toHaveBeenCalled()
   })
 
-  it('F5: skips verifyIntegrity when already starting', async () => {
+  it('F5: skips verifyIntegrity when already starting the SAME model', async () => {
     localRuntimeMock.getState.mockReturnValue('starting')
+    localRuntimeMock.getActiveModelKey.mockReturnValue('/models/qwen3.5-2b/model.gguf')
     await ensureLocalRuntimeStarted('qwen3.5-2b')
     expect(localModelsMock.verifyIntegrity).not.toHaveBeenCalled()
     expect(localRuntimeMock.start).toHaveBeenCalled()
+  })
+
+  // G2 hardening: getState()==='stopped' alone only catches a cold start — a model SWITCH requested while
+  // the runtime is already running/starting must ALSO re-verify, since it spawns a different, unverified
+  // GGUF. getActiveModelKey() is what lets ensureLocalRuntimeStarted see that the requested model differs
+  // from what's actually loaded, even though getState() stays 'running' throughout the switch.
+  describe('G2: integrity re-verify on model switch', () => {
+    it('switching models while RUNNING (active key differs from the requested model) re-verifies the NEW model even though state is not stopped', async () => {
+      localRuntimeMock.getState.mockReturnValue('running')
+      localRuntimeMock.getActiveModelKey.mockReturnValue('/models/qwen3.5-2b/model.gguf') // A is active
+      await ensureLocalRuntimeStarted('qwen3.5-0.8b') // request switches to B
+      expect(localModelsMock.verifyIntegrity).toHaveBeenCalledWith('qwen3.5-0.8b')
+    })
+
+    it('re-requesting the model that is ALREADY the active/running one does NOT re-verify — no redundant re-hash on warm same-model requests', async () => {
+      localRuntimeMock.getState.mockReturnValue('running')
+      localRuntimeMock.getActiveModelKey.mockReturnValue('/models/qwen3.5-2b/model.gguf') // A is active
+      await ensureLocalRuntimeStarted('qwen3.5-2b') // request for the SAME model A
+      expect(localModelsMock.verifyIntegrity).not.toHaveBeenCalled()
+    })
+
+    it('switching models while STARTING (active key differs) also re-verifies the newly requested model', async () => {
+      localRuntimeMock.getState.mockReturnValue('starting')
+      localRuntimeMock.getActiveModelKey.mockReturnValue('/models/qwen3.5-2b/model.gguf') // A is starting
+      await ensureLocalRuntimeStarted('qwen3.5-0.8b') // request switches to B mid-start
+      expect(localModelsMock.verifyIntegrity).toHaveBeenCalledWith('qwen3.5-0.8b')
+    })
   })
 
   it('F5: a verifyIntegrity failure (corrupt file) propagates and start() is never called', async () => {

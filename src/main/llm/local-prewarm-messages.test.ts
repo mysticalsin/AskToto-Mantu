@@ -1,9 +1,13 @@
 /**
- * prewarm.test.ts — proves F4 (prewarm prefix parity): buildPrewarmMessages() must build the EXACT same
- * [system, user] prefix a real live suggest request sends. Rather than hand-duplicating the expected
+ * prewarm.test.ts — proves F4 (prewarm prefix parity) for the HISTORY-FREE suggest contract:
+ * buildPrewarmMessages() must build the EXACT same [system, user] prefix a real live suggest request sends
+ * when no copilot history exists yet (the instant/proactive suggestion path this pre-warm targets — see
+ * prewarm.ts's doc comment, G3). It does NOT cover — and is not a parity guarantee for — a later suggest
+ * turn that threads copilotHistoryRef.current in ([system, ...history, user]); that case still reuses the
+ * shared system prefix but is out of scope for this suite. Rather than hand-duplicating the expected
  * string, each test builds its expectation from buildSystem()/userText() directly (the same functions the
- * real openai.ts's openaiMessages() calls) — so any future drift between the live suggest path and this
- * helper fails here instead of silently missing the KV cache hit.
+ * real openai.ts's openaiMessages() calls) — so any future drift between the live history-free suggest path
+ * and this helper fails here instead of silently missing the KV cache hit.
  */
 import { describe, it, expect } from 'vitest'
 import { DEFAULT_SETTINGS, type AskStart, type Settings } from '@shared/ipc'
@@ -29,7 +33,7 @@ function expectedMessages(text: string, s: Settings): Array<{ role: 'system' | '
   ]
 }
 
-describe('buildPrewarmMessages — must match the EXACT prefix a real suggest request sends (PLAN.md §4.4, F4)', () => {
+describe('buildPrewarmMessages — must match the EXACT prefix a real HISTORY-FREE suggest request sends (PLAN.md §4.4, F4; history-free contract only, see G3)', () => {
   it('equals [system, user] built directly from buildSystem()+userText() for DEFAULT_SETTINGS', () => {
     const text = 'THEM: what did the client say about pricing?'
     expect(buildPrewarmMessages(text, DEFAULT_SETTINGS)).toEqual(expectedMessages(text, DEFAULT_SETTINGS))

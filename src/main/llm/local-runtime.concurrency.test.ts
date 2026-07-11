@@ -52,6 +52,7 @@ vi.mock('node:child_process', async () => {
 })
 
 import { start, stop, isRunning, baseURL } from './local-runtime'
+import { auditLog } from '../logger'
 
 type FetchImpl = (...args: unknown[]) => Promise<{ status: number }>
 let fetchImpl: FetchImpl = async () => ({ status: 200 })
@@ -199,5 +200,62 @@ describe('F2 — model switch', () => {
     expect(spawnState.calls[1].args).toContain('/m/b.gguf')
     expect(spawnState.procs[0].killed).toBe(true) // A was killed once the switch happened
     expect(isRunning()).toBe(true)
+  })
+})
+
+describe('G1 — exit handler generation guard', () => {
+  it('a stale exit event from the OLD sidecar, arriving AFTER a switch to a NEW one is already healthy, does not clobber the new instance, fire a crash audit, or trigger an auto-restart — and will-quit-style stop() still kills the NEW instance', async () => {
+    const pathsA = { gguf: '/m/a.gguf', mmproj: '/m/a.mmproj' }
+    const pathsB = { gguf: '/m/b.gguf', mmproj: '/m/b.mmproj' }
+
+    const p1 = start(pathsA, 'mac')
+    emitListening(0, 55501)
+    await p1
+    const procA = spawnState.procs[0]
+
+    // Reproduce the real-world race deterministically: the OS-level 'exit' event for a SIGKILL'd process
+    // can land on a LATER tick than the kill() call itself. Override the mock's auto-fire-on-kill so we
+    // control exactly WHEN A's exit event arrives — specifically, after B is already confirmed healthy —
+    // instead of relying on however fast the queued microtask from kill() happens to resolve.
+    procA.kill = vi.fn(() => {
+      procA.killed = true
+    })
+
+    const p2 = start(pathsB, 'mac')
+    await waitUntil(() => spawnState.calls.length === 2)
+    emitListening(1, 55502)
+    await p2
+    expect(isRunning()).toBe(true)
+    expect(baseURL()).toBe('http://127.0.0.1:55502/v1')
+
+    // A's exit event finally arrives, well after the switch to B completed and B is healthy/running.
+    procA.emit('exit', null, 'SIGKILL')
+    await Promise.resolve()
+    await Promise.resolve()
+
+    // FAILS on the old code: the unconditional exit handler would see state === 'running' (true, for B)
+    // and treat A's stale exit as B's crash — nulling child/port (orphaning B, breaking baseURL()),
+    // flipping state to 'stopped', firing a local.runtime.crash audit, and auto-restarting a THIRD sidecar
+    // for a switch that had already succeeded.
+    expect(isRunning()).toBe(true)
+    expect(baseURL()).toBe('http://127.0.0.1:55502/v1') // still B's port — untouched by A's stale exit
+    expect(auditLog).not.toHaveBeenCalledWith('local.runtime.crash', expect.anything())
+    expect(spawnState.calls.length).toBe(2) // no auto-restart spawn triggered by the stale exit
+
+    // will-quit's stop() must still kill the sidecar that's actually running (B), not silently no-op
+    // because A's stale exit nulled the module's `child` reference out from under it.
+    stop()
+    expect(spawnState.procs[1].kill).toHaveBeenCalledWith('SIGKILL')
+  })
+
+  it('a proc that dies BEFORE becoming healthy still rejects start() even though it is (trivially) still the current child — the guard only skips a proc that is no longer current', async () => {
+    const paths = { gguf: '/m/dies-early.gguf', mmproj: '/m/dies-early.mmproj' }
+    const p = start(paths, 'mac')
+    await waitUntil(() => spawnState.calls.length === 1)
+    const proc = spawnState.procs[0]
+    // Never emits a "listening on" line — dies outright before health polling can even begin.
+    proc.emit('exit', 1, null)
+
+    await expect(p).rejects.toThrow(/exited before becoming healthy/)
   })
 })
