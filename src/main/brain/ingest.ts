@@ -26,6 +26,7 @@ import {
   commitmentKey,
   pushUnique,
   pushSuperseded,
+  outranks,
   eqStrict,
   eqVelocity,
   readIndex,
@@ -42,7 +43,13 @@ import {
   listEntities,
   listMeetingExtractions
 } from './store'
-import { applyCorrections, readAliasMap, resolveEntitySlug } from './corrections'
+import {
+  applyCorrections,
+  readEntityAliasMap,
+  aliasMapFromJournal,
+  readCorrectionsJournal,
+  resolveEntitySlug
+} from './corrections'
 
 /**
  * Brain ingest — turns one saved transcript into a structured extraction, then merges it into the
@@ -182,27 +189,10 @@ export { commitmentKey }
 // history entry's metadata can vary, and only in mixed-confidence same-value sets.
 type ProvenantIncoming<T> = { value: T; source_file: string; date: string; quote?: string; confidence: Confidence }
 
-// Date-comparison caveat (applies to `outranks` and store.ts's `laterEntry`): comparison is lexical —
-// correct for same-precision ISO-8601 strings, but a bare date sorts BELOW a full timestamp of the same
-// day ("2026-01-15" < "2026-01-15T10:00:00Z"). ingestExtraction stamps whatever precision the transcript
-// frontmatter carries, so mixed-precision same-day meetings resolve deterministically, though not
-// strictly chronologically within the day.
-//
-// `outranks` is a TOTAL order for every case merge ever hits EXCEPT one: two candidates tied on
-// (confidence tier, date, source_file) but carrying DIFFERENT values. That can only happen via
-// sequential, index-guarded re-ingestion of a changed extraction for the exact same source_file+date
-// (never via shuffled/parallel backfill, which always sees distinct source_file values) — a case this
-// codebase never actually produces, so the tie is unreachable in practice, not merely unhandled.
-function outranks(
-  a: { date: string; source_file: string; confidence: Confidence },
-  b: { date: string; source_file: string; confidence: Confidence }
-): boolean {
-  const at = a.confidence === 'EXTRACTED' ? 1 : 0
-  const bt = b.confidence === 'EXTRACTED' ? 1 : 0
-  if (at !== bt) return at > bt
-  if (a.date !== b.date) return a.date > b.date
-  return a.source_file > b.source_file
-}
+// `outranks` (the deterministic total-order winner selection every rule above refers to) now lives in
+// store.ts beside laterEntry/pushSuperseded: corrections.ts's merge-time provenance fold ranks
+// machine-extracted candidates by the same order and cannot import from this module. Its
+// date-comparison caveat and totality note moved with it.
 
 function mergeProvenant<T>(
   current: ProvenantField<T> | undefined,
@@ -606,16 +596,34 @@ export async function ingestExtraction(s: Settings, x: MeetingExtraction, md: st
   // These are trusted provenance stamps, never model-authored extraction fields.
   x.source_mode = sourceMode
   x.source_use = classifyMeetingSourceUse(sourceMode)
-  // Rewrite renamed/merged entity names through the correction engine's alias map BEFORE merging, so a
-  // meeting that (re)uses a corrected-away name (e.g. "Acme Corp" after a rename to "Acme") lands on the
-  // SAME entity instead of quietly recreating the one a human already fixed. Persisting the rewritten
-  // extraction (not the raw one) keeps the stored meeting file and the merged entities in agreement. The
-  // SAME aliasMap instance is also passed into mergeExtraction below — required (not just cosmetic) so
-  // its own file-routing resolves a renamed entity's immutable id, not slugify(the now-rewritten name).
-  const aliasMap = readAliasMap(s)
-  applyCorrections(x, aliasMap)
+  // Correction-engine wiring — TWO alias maps with deliberately different scopes:
+  //
+  //   1. DISPLAY REWRITE (applyCorrections) uses the ENTITY-FILE-derived map only. On the live path
+  //      that's the full current alias state, so a meeting that (re)uses a corrected-away name (e.g.
+  //      "Acme Corp" after a rename to "Acme") gets its display strings fixed before they bake into
+  //      entity data. During a REBUILD's re-ingest the entity files are freshly recreated and carry no
+  //      aliases yet — so no rewriting happens, exactly like the ORIGINAL live ingest of those same
+  //      pre-correction meetings. That equivalence is what keeps baked display strings (person.account,
+  //      deal.account, account.people) byte-identical between live and rebuild; rewriting them here
+  //      from the journal would bake post-correction names into data the live path baked
+  //      pre-correction, breaking the convergence property outright.
+  //
+  //   2. FILE ROUTING (mergeExtraction) uses the UNION of entity-file aliases and JOURNAL-derived
+  //      aliases (rename chains resolved transitively, merges mapped from → into). The journal overlay
+  //      is what stops a rebuild from forking a duplicate entity: re-ingest runs BEFORE
+  //      replayCorrections, so a post-rename meeting's name ("Acme") has no entity-file alias yet — the
+  //      journal is the only witness that it belongs to the existing id ("acme-corp"). Routing to the
+  //      immutable id is safe in a way display rewriting is not: it decides WHICH file compounds, never
+  //      what any stored string says.
+  //
+  // Persisting the (possibly rewritten) extraction rather than the raw one keeps the stored meeting
+  // file and the merged entities in agreement.
+  const entityAliases = readEntityAliasMap(s)
+  applyCorrections(x, entityAliases)
+  const routingAliases = new Map(entityAliases)
+  for (const [k, v] of aliasMapFromJournal(readCorrectionsJournal(s))) routingAliases.set(k, v)
   await writeMeetingExtraction(s, slugify(key), x)
-  await mergeExtraction(s, x, ref, aliasMap)
+  await mergeExtraction(s, x, ref, routingAliases)
   await updateIndex(s, (idx) => {
     idx.ingested[key] = { at: Date.now(), ok: true }
   })

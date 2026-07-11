@@ -108,6 +108,33 @@ export type SupersededEntry<T> = { value: T; date: string; source_file: string }
 const laterEntry = <T>(a: SupersededEntry<T>, b: SupersededEntry<T>): boolean =>
   a.date > b.date || (a.date === b.date && a.source_file > b.source_file)
 
+// Date-comparison caveat (applies to `outranks` and `laterEntry`): comparison is lexical — correct for
+// same-precision ISO-8601 strings, but a bare date sorts BELOW a full timestamp of the same day
+// ("2026-01-15" < "2026-01-15T10:00:00Z"). ingestExtraction stamps whatever precision the transcript
+// frontmatter carries, so mixed-precision same-day meetings resolve deterministically, though not
+// strictly chronologically within the day.
+//
+// `outranks` is a TOTAL order for every case merge ever hits EXCEPT one: two candidates tied on
+// (confidence tier, date, source_file) but carrying DIFFERENT values. That can only happen via
+// sequential, index-guarded re-ingestion of a changed extraction for the exact same source_file+date
+// (never via shuffled/parallel backfill, which always sees distinct source_file values) — a case this
+// codebase never actually produces, so the tie is unreachable in practice, not merely unhandled.
+//
+// Lives here (with laterEntry/pushSuperseded) rather than in ingest.ts for the same import-cycle reason
+// as everything else in this block: ingest.ts's mergeProvenant AND corrections.ts's merge-time provenance
+// fold both rank machine-extracted candidates by this one order, and corrections.ts cannot import from
+// ingest.ts.
+export function outranks(
+  a: { date: string; source_file: string; confidence: Confidence },
+  b: { date: string; source_file: string; confidence: Confidence }
+): boolean {
+  const at = a.confidence === 'EXTRACTED' ? 1 : 0
+  const bt = b.confidence === 'EXTRACTED' ? 1 : 0
+  if (at !== bt) return at > bt
+  if (a.date !== b.date) return a.date > b.date
+  return a.source_file > b.source_file
+}
+
 /** Append `entry` to a field's superseded history, deduped per value (keeping the max-(date,
  *  source_file) sighting), never containing the current value, sorted by that same key descending and
  *  capped at 10. Used by BOTH ingest.ts's mergeProvenant (rank-gated: the incoming candidate only wins
@@ -353,13 +380,16 @@ export async function setDealOutcome(
   return deal
 }
 
-/** List entity slugs of a kind (file basenames sans .json). */
+/** List entity slugs of a kind (file basenames sans .json). Sorted: readdirSync order is
+ *  platform/filesystem-dependent, and readAliasMap iterates this — a stable order makes alias-key
+ *  collision resolution (last write wins) deterministic across machines and runs. */
 export function listEntities(s: Settings, kind: 'person' | 'account' | 'deal'): string[] {
   const dir = join(brainDir(s), 'entities', kind)
   if (!existsSync(dir)) return []
   return readdirSync(dir)
     .filter((f) => f.endsWith('.json'))
     .map((f) => basename(f, '.json'))
+    .sort()
 }
 
 export function listMeetingExtractions(s: Settings): string[] {

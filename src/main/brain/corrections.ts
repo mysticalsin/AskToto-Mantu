@@ -27,6 +27,7 @@ import {
   commitmentKey,
   pushUnique,
   pushSuperseded,
+  outranks,
   eqStrict,
   eqVelocity,
   readJson,
@@ -151,26 +152,31 @@ function resolveTombstone(s: Settings, kind: EntityKind, id: string): string {
   }
 }
 
+export type AliasEntry = { kind: EntityKind; id: string; displayName: string }
+export type AliasMap = Map<string, AliasEntry>
+
 /**
- * Build the alias map ingest.ts's applyCorrections uses to rewrite a new extraction's names onto
- * already-corrected entities: every entity's `aliases[]` (which already includes an old display name
- * and id once a rename/merge has happened) plus a defensive redirect for each tombstone's own id.
- * Normalization mirrors slugify's own casefold/diacritic-strip, so "L'Oreal" and "L'Oréal" collide onto
- * the same key. Reads raw (see readRawEntityFile's doc comment) rather than through the typed
- * readPerson/readAccount/readDeal — deliberately: this function scans every entity, and ingest calls it
- * immediately before its own typed reads of some of the same files.
+ * Build the alias map from the ENTITY FILES on disk: every entity's `aliases[]` (which already includes
+ * an old display name and id once a rename/merge has happened) plus a defensive redirect for each
+ * tombstone's own id. Normalization mirrors slugify's own casefold/diacritic-strip, so "L'Oreal" and
+ * "L'Oréal" collide onto the same key. Reads raw (see readRawEntityFile's doc comment) rather than
+ * through the typed readPerson/readAccount/readDeal — deliberately: this function scans every entity,
+ * and ingest calls it immediately before its own typed reads of some of the same files.
  *
  * Registers each entity's CURRENT name too, not just its old aliases: `id` is immutable (fixed at
  * creation to slugify(original name)) while mergeExtraction still routes new meetings to a file by
  * re-slugifying whatever name arrives. Once a rename makes `id` diverge from slugify(current name) (e.g.
  * id "acme-corp", renamed to display "Acme"), mergeExtraction MUST resolve through this map — including
  * for the current name itself — or it would silently create a second "acme" file instead of updating the
- * existing one. mergeExtraction accepts this map (see ingestExtraction's threading of it) for exactly
- * this reason.
+ * existing one.
+ *
+ * This is deliberately the map ingest.ts's applyCorrections (display rewriting) uses on its own,
+ * WITHOUT the journal overlay readAliasMap below adds — see the wiring comment in ingestExtraction for
+ * why rewriting display strings from the journal during a rebuild would break byte-convergence.
  */
-export function readAliasMap(s: Settings): Map<string, { kind: EntityKind; id: string; displayName: string }> {
-  const map = new Map<string, { kind: EntityKind; id: string; displayName: string }>()
-  const set = (alias: string, entry: { kind: EntityKind; id: string; displayName: string }): void => {
+export function readEntityAliasMap(s: Settings): AliasMap {
+  const map: AliasMap = new Map()
+  const set = (alias: string, entry: AliasEntry): void => {
     const key = slugify(alias)
     if (key) map.set(key, entry)
   }
@@ -193,6 +199,83 @@ export function readAliasMap(s: Settings): Map<string, { kind: EntityKind; id: s
       for (const alias of aliases) set(alias, { kind, id, displayName: obj.name })
     }
   }
+  return map
+}
+
+/**
+ * Build an alias map from the CORRECTION JOURNAL alone — pure function of the entries, no disk access.
+ *
+ * This exists because a rebuild re-ingests every meeting BEFORE replayCorrections runs: at re-ingest
+ * time the freshly recreated entity files carry no aliases, so a meeting saved AFTER a rename (using
+ * the corrected name, whose slug differs from the entity's immutable id) has no entity-file witness
+ * that it belongs to the existing entity — re-ingest would fork a duplicate. The journal is that
+ * witness. Processed in `seq` order:
+ *   - entity_rename: the old display name (from the entry's snapshot), the entity's immutable id, and
+ *     the new name all map to (id, newName). Chains resolve TRANSITIVELY — A→B then B→C leaves every
+ *     surface form of the entity (A, B, C, id) pointing at displayName C — because each rename first
+ *     repoints every existing map entry carrying this entity's id.
+ *   - entity_merge: all of `from`'s surface forms (display name + aliases from the entry's snapshot,
+ *     plus fromId itself) map to `into`'s canonical (intoId, into's display name as of this point in
+ *     the journal). Existing entries pointing at fromId are repointed too, so rename-then-merge and
+ *     merge-chain histories stay transitive.
+ *   - entity_unmerge ANNULS its target merge: after an unmerge, `from` is a live entity again, so
+ *     routing its surface forms into `into` would corrupt future ingests. Annulled merges are skipped
+ *     entirely (pre-scanned), which also keeps replay-order semantics: renames of either side keyed by
+ *     id still apply.
+ */
+export function aliasMapFromJournal(entries: CorrectionEntry[]): AliasMap {
+  const map: AliasMap = new Map()
+  const set = (alias: string, entry: AliasEntry): void => {
+    const key = slugify(alias)
+    if (key) map.set(key, entry)
+  }
+  /** Repoint every surface form currently resolving to (kind, id) — the transitivity workhorse. */
+  const repoint = (kind: EntityKind, id: string, next: AliasEntry): void => {
+    for (const [k, v] of map) if (v.kind === kind && v.id === id) map.set(k, next)
+  }
+  const annulled = new Set<number>()
+  for (const e of entries) if (e.kind === 'entity_unmerge') annulled.add(e.payload.targetSeq)
+  // Current display name per `${kind}:${id}` as of the entries processed so far.
+  const displayNames = new Map<string, string>()
+  for (const e of [...entries].sort((a, b) => a.seq - b.seq)) {
+    if (e.kind === 'entity_rename') {
+      const { kind, id, newName } = e.payload
+      displayNames.set(`${kind}:${id}`, newName)
+      const entry: AliasEntry = { kind, id, displayName: newName }
+      repoint(kind, id, entry)
+      if (e.snapshot?.oldName) set(e.snapshot.oldName, entry)
+      set(id, entry)
+      set(newName, entry)
+    } else if (e.kind === 'entity_merge' && !annulled.has(e.seq)) {
+      const { kind, fromId, intoId } = e.payload
+      const snapInto = e.snapshot?.intoEntity as { name?: unknown } | null | undefined
+      const displayName =
+        displayNames.get(`${kind}:${intoId}`) ??
+        (snapInto && typeof snapInto.name === 'string' ? snapInto.name : intoId)
+      displayNames.set(`${kind}:${intoId}`, displayName)
+      const entry: AliasEntry = { kind, id: intoId, displayName }
+      repoint(kind, fromId, entry)
+      const snapFrom = e.snapshot?.fromEntity as { name?: unknown; aliases?: unknown } | null | undefined
+      if (snapFrom && typeof snapFrom.name === 'string') set(snapFrom.name, entry)
+      if (snapFrom && Array.isArray(snapFrom.aliases)) {
+        for (const a of snapFrom.aliases) if (typeof a === 'string') set(a, entry)
+      }
+      set(fromId, entry)
+      set(intoId, entry)
+    }
+  }
+  return map
+}
+
+/**
+ * The full alias map: entity-file-derived aliases UNIONED with journal-derived aliases (journal wins on
+ * a key conflict — it is the record of explicit human intent, and overlaying it also closes live-path
+ * ordering holes where an entity file lags the journal). This is the map file ROUTING uses; display
+ * rewriting deliberately uses readEntityAliasMap alone (see ingestExtraction's wiring comment).
+ */
+export function readAliasMap(s: Settings): AliasMap {
+  const map = readEntityAliasMap(s)
+  for (const [k, v] of aliasMapFromJournal(readCorrectionsJournal(s))) map.set(k, v)
   return map
 }
 
@@ -306,23 +389,71 @@ export async function renameEntity(
 
 // ── entity_merge / entity_unmerge ────────────────────────────────────────────
 
+/**
+ * Fold one provenant field at merge time — the deterministic winner between the two sides' candidates
+ * (reviewer IMPORTANT 2: without this, a source-only field like from.role='CFO' silently vanished into
+ * the snapshot). Precedence, in order:
+ *   1. A side with no candidate loses to a side with one (source-only fields survive the merge).
+ *   2. pinned/edited beats extracted/verified — a human's judgement beats the machine's.
+ *   3. BOTH pinned/edited → `into` wins: the human chose the merge direction, so the surviving
+ *      entity's own pin is the one they kept.
+ *   4. Otherwise (both machine): the existing `outranks` total order (confidence tier, date,
+ *      source_file) — the same winner a rebuild's per-meeting mergeProvenant would elect, which is
+ *      what keeps rebuild + replay convergent with a live merge.
+ * The loser's value (when different) and both sides' superseded histories fold into the winner's
+ * `superseded` via pushSuperseded — the existing dedupe/cap/sort semantics, unchanged.
+ */
+function foldProvenant<T>(
+  fromField: ProvenantField<T> | undefined,
+  intoField: ProvenantField<T> | undefined,
+  valuesEqual: (a: T, b: T) => boolean
+): ProvenantField<T> | undefined {
+  if (!fromField) return intoField
+  if (!intoField) return fromField
+  const humanFrom = fromField.state === 'pinned' || fromField.state === 'edited'
+  const humanInto = intoField.state === 'pinned' || intoField.state === 'edited'
+  const intoWins = humanFrom === humanInto ? (humanInto ? true : !outranks(fromField, intoField)) : humanInto
+  const winner = intoWins ? intoField : fromField
+  const loser = intoWins ? fromField : intoField
+  let superseded = winner.superseded
+  for (const e of loser.superseded) superseded = pushSuperseded(superseded, e, winner.value, valuesEqual)
+  if (!valuesEqual(loser.value, winner.value)) {
+    superseded = pushSuperseded(
+      superseded,
+      { value: loser.value, date: loser.date, source_file: loser.source_file },
+      winner.value,
+      valuesEqual
+    )
+  }
+  return { ...winner, superseded }
+}
+
 async function applyMerge(
   s: Settings,
-  payload: { kind: EntityKind; fromId: string; intoId: string }
+  payload: { kind: EntityKind; fromId: string; intoId: string },
+  // Replay-only (see replayCorrections): the journal entry's own pre-merge snapshot. During a rebuild
+  // the journal-derived alias map has already routed every one of `from`'s meetings straight into
+  // `into` at re-ingest, so `from`'s file never exists when the merge replays — the snapshot then
+  // stands in as the source, restoring exactly what the live merge moved (aliases, arrays — deduped
+  // no-ops for whatever re-ingest already routed — the provenance fold, and the tombstone). Never
+  // passed on the live path, so live behavior is unchanged: a genuinely missing source still refuses.
+  snapshotHint?: { fromEntity?: unknown; intoEntity?: unknown }
 ): Promise<{ ok: boolean; error?: string; snapshot?: { fromEntity: unknown; intoEntity: unknown } }> {
   if (payload.fromId === payload.intoId) return { ok: false, error: 'Cannot merge an entity into itself.' }
   // readTypedEntity returns null for a tombstone (fails its strict schema parse) exactly like it does
   // for a genuinely absent file — so both sides are guaranteed LIVE entities once this passes, and a
   // chained re-merge of an already-merged-away id is refused rather than silently walking the chain.
-  const from = readTypedEntity(s, payload.kind, payload.fromId)
+  let from = readTypedEntity(s, payload.kind, payload.fromId)
+  if (!from && snapshotHint) {
+    const parsed = ENTITY_SCHEMA_BY_KIND[payload.kind].safeParse(snapshotHint.fromEntity)
+    if (parsed.success) from = parsed.data
+  }
   const into = readTypedEntity(s, payload.kind, payload.intoId)
   if (!from) return { ok: false, error: 'Source entity not found (already merged or does not exist).' }
   if (!into) return { ok: false, error: 'Target entity not found.' }
 
   // Full pre-merge snapshot of BOTH files, captured before any mutation — unmergeEntities restores from
-  // this. Provenance sidecars (role/org/sector/stage/band/velocity/amount/close_date) are intentionally
-  // NOT folded from `from` into `into` here — only the arrays/aliases explicitly listed below move; the
-  // rest of `from`'s history is preserved solely in this snapshot for reversibility, not merged forward.
+  // this (on the live path; a replay's returned snapshot is never journaled).
   const snapshot = { fromEntity: JSON.parse(JSON.stringify(from)), intoEntity: JSON.parse(JSON.stringify(into)) }
   // Mutate a clone, never `into` itself — see cloneEntity's doc comment (readTypedEntity can return the
   // SAME cached reference as an earlier, unrelated read of this same file).
@@ -337,6 +468,11 @@ async function applyMerge(
     for (const c of f.commitments) pushUnique(t.commitments, c, (x) => commitmentKey(x.text))
     for (const q of f.quotes) pushUnique(t.quotes, q, (x) => `${x.quote}|${x.meeting}`)
     for (const st of f.stance_trail) pushUnique(t.stance_trail, st, (x) => x.meeting + x.statement)
+    // Provenance fold + plain-field mirror (the sidecar sync invariant holds through a merge too).
+    t.role_provenance = foldProvenant(f.role_provenance, t.role_provenance, eqStrict)
+    if (t.role_provenance) t.role = t.role_provenance.value
+    t.org_provenance = foldProvenant(f.org_provenance, t.org_provenance, eqStrict)
+    if (t.org_provenance) t.account = t.org_provenance.value
   } else if (payload.kind === 'account') {
     const f = from as AccountEntity
     const t = target as AccountEntity
@@ -345,6 +481,11 @@ async function applyMerge(
     for (const d of f.deals) pushUnique(t.deals, d, (x) => x)
     for (const w of f.win_reasons) pushUnique(t.win_reasons, w, (x) => x.statement + x.meeting)
     for (const l of f.loss_reasons) pushUnique(t.loss_reasons, l, (x) => x.statement + x.meeting)
+    t.sector_provenance = foldProvenant(f.sector_provenance, t.sector_provenance, eqStrict)
+    if (t.sector_provenance) {
+      t.sector = t.sector_provenance.value
+      t.sector_confidence = t.sector_provenance.confidence
+    }
   } else {
     const f = from as DealEntity
     const t = target as DealEntity
@@ -353,6 +494,21 @@ async function applyMerge(
     for (const sig of f.signals) pushUnique(t.signals, sig, (x) => x.meeting + x.statement)
     for (const ms of f.missed_signals) pushUnique(t.missed_signals, ms, (x) => x.meeting + x.statement)
     for (const fb of f.feedback) pushUnique(t.feedback, fb, (x) => x.meeting + x.note)
+    t.stage_provenance = foldProvenant(f.stage_provenance, t.stage_provenance, eqStrict)
+    if (t.stage_provenance) t.stage = t.stage_provenance.value
+    t.win_likelihood_band_provenance = foldProvenant(
+      f.win_likelihood_band_provenance,
+      t.win_likelihood_band_provenance,
+      eqStrict
+    )
+    if (t.win_likelihood_band_provenance) {
+      t.win_likelihood_band = t.win_likelihood_band_provenance.value
+      t.band_evidence = t.win_likelihood_band_provenance.quote ?? ''
+    }
+    t.velocity_provenance = foldProvenant(f.velocity_provenance, t.velocity_provenance, eqVelocity)
+    if (t.velocity_provenance) t.velocity = t.velocity_provenance.value
+    t.amount = foldProvenant(f.amount, t.amount, eqAmount)
+    t.close_date = foldProvenant(f.close_date, t.close_date, eqStrict)
   }
 
   await writeTypedEntity(s, payload.kind, payload.intoId, target)
@@ -382,8 +538,10 @@ async function applyMerge(
 }
 
 /** Merge `fromId` into `intoId`: unions aliases (adding fromId's old display name + id as new aliases
- *  of intoId), moves meetings/commitments/kind-specific history, rewrites graph edges, and tombstones
- *  the source file so stale references resolve to the target. */
+ *  of intoId), moves meetings/commitments/kind-specific history, folds provenant fields (see
+ *  foldProvenant's precedence — a source-only value like from.role='CFO' survives the merge instead of
+ *  living only in the snapshot), rewrites graph edges, and tombstones the source file so stale
+ *  references resolve to the target. */
 export async function mergeEntities(
   s: Settings,
   payload: { kind: EntityKind; fromId: string; intoId: string }
@@ -423,7 +581,13 @@ async function applyUnmerge(
 /** Restore both entity files from the `entity_merge` journal entry at `targetSeq`, exactly as they were
  *  before that merge — un-tombstoning the source. Refuses (never partially applies) when the target
  *  entry doesn't exist or carries no snapshot. Graph edges rewritten by the original merge are NOT
- *  reverted (out of scope here — a rebuild re-derives a clean graph from the meetings themselves). */
+ *  reverted (out of scope here — a rebuild re-derives a clean graph from the meetings themselves).
+ *
+ *  These are POINT-IN-TIME snapshots: unmerge restores both sides exactly as they were at merge time,
+ *  so any correction applied to EITHER side between the merge and the unmerge (a field pin on the
+ *  target, a rename, meetings ingested into the merged entity) is intentionally discarded by the
+ *  restore — undoing a merge means returning to the world as it was, not surgically extracting one
+ *  entity's rows out of the blended state. */
 export async function unmergeEntities(
   s: Settings,
   payload: { targetSeq: number }
@@ -643,7 +807,9 @@ export async function replayCorrections(s: Settings): Promise<{ applied: number;
           r = await applyRename(s, entry.payload)
           break
         case 'entity_merge':
-          r = await applyMerge(s, entry.payload)
+          // The entry's snapshot stands in for the source when re-ingest already routed it away —
+          // see applyMerge's snapshotHint doc comment.
+          r = await applyMerge(s, entry.payload, entry.snapshot)
           break
         case 'entity_unmerge':
           r = await applyUnmerge(s, entry.payload, journal)
