@@ -967,7 +967,19 @@ function AiSection({
                 recommended={id === recommended}
                 hasKey={!!settings.hasKeys[id]}
                 locked={locked}
-                onSelect={() => patch({ provider: id })}
+                onSelect={() =>
+                  // Custom's SettingsSchema refine requires customBaseUrl to already be a valid https://
+                  // URL whenever provider === 'custom' (shared/ipc.ts); a bare {provider:'custom'} patch
+                  // fails that refine on the full-object re-parse and getSettings()'s repair path silently
+                  // reverts provider back to the default. The Base URL field is itself only rendered once
+                  // provider === 'custom' is already active, so there is no other way to set a valid URL
+                  // first — seed a placeholder together with the provider switch so the write survives.
+                  patch(
+                    id === 'custom' && !/^https:\/\//i.test(settings.customBaseUrl)
+                      ? { provider: id, customBaseUrl: 'https://your-endpoint/v1' }
+                      : { provider: id }
+                  )
+                }
               />
             ))}
           </div>
@@ -1109,6 +1121,9 @@ function LocalAiSection({
   const onDelete = (id: string): void => {
     void window.toto.localModelsDelete(id).then((r) => {
       if (r.ok) loadModels()
+      // Surface an EBUSY/EPERM/EACCES rmSync failure inline, same as the download-failure row below —
+      // otherwise the button silently does nothing and the model card still shows Delete/downloaded.
+      else setDownloadState((s) => ({ ...s, [id]: { phase: 'error', message: r.error || 'Could not delete this model.' } }))
     })
   }
 
@@ -1136,7 +1151,11 @@ function LocalAiSection({
           <Cpu size={13} className="shrink-0" />
           {settings.localRuntimeRunning
             ? `Running — ${activeModel?.label ?? settings.localLlm.modelId}`
-            : 'Stopped — starts automatically on the first live suggestion, summary, or screenshot read.'}
+            : // `localRuntimeRunning` is a plain boolean (see PublicSettingsSchema) — it can't distinguish a
+              // normal idle stop from the sidecar being permanently 'unavailable' for the rest of this
+              // session (local-runtime.ts's restart-budget lockout, only cleared by relaunching the app), so
+              // this copy no longer promises an unconditional restart and instead names the real recovery.
+              "Stopped — restarts automatically on the next live suggestion, summary, or screenshot read. If it doesn't come back, restart Métis."}
         </div>
 
         {models === null ? (
@@ -2200,6 +2219,16 @@ function DustSetup({
     setCli({ busy: true, msg: null, ok: false })
     const r = await window.toto.dustImportCli()
     if (!r.ok) {
+      // Blocked Keychain read, not a missing session — ask to allow access, same as the mount-time live
+      // check below (decideDustLiveCheck), instead of misdirecting into a needless CLI reinstall/re-login.
+      if (r.accessDenied) {
+        setCli({
+          busy: false,
+          ok: false,
+          msg: r.error || 'Allow Métis to access your Dust CLI session in Keychain, then try again.'
+        })
+        return
+      }
       // No CLI session found → automatically kick off the setup (install + interactive login) instead of
       // just printing a command. The login needs a browser OAuth, so it opens in a Terminal window.
       setCli({ busy: true, ok: false, msg: 'No Dust CLI found. Starting setup…' })
@@ -2262,7 +2291,11 @@ function DustSetup({
       dustWorkspaceId: '',
       dustBaseUrl: 'https://dust.tt',
       providerModels: { ...settings.providerModels, dust: DUST_BASE_AGENT_ID },
-      providerModelsThinking: nextThinking
+      providerModelsThinking: nextThinking,
+      // Reset to the "never CLI-connected" default (0) — otherwise a stale CLI-origin timestamp survives
+      // into a later manual-API-key connect and wrongly gates the live-check effect into probing a real
+      // Dust CLI session that was never used for that connection (see the effect's own gating comment).
+      dustTokenMintedAt: 0
     }
     if (settings.provider === 'dust')
       next.provider = pickReadyProvider('dust', settings.hasKeys, settings.cliConnected ?? {})

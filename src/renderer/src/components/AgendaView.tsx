@@ -150,16 +150,31 @@ export function AgendaView(): JSX.Element {
       </div>
     )
   } else {
+    // main's calendar:today handler returns this exact string (no needsConsent) when requireAuth() has
+    // flipped to false — a dropped/expired account session, not a calendar-scope problem. "Try again"
+    // just repeats the identical failed call, so offer the real fix (re-run signIn(), same as `connect`).
+    const notSignedIn = res?.error === 'Sign in with your Mantu account first.'
     body = (
       <div className="flex flex-col items-center gap-3 px-1 py-5 text-center">
         <p className="text-[12px] text-[color:var(--color-danger)]">{res?.error || 'Calendar unavailable.'}</p>
-        <button
-          type="button"
-          onClick={() => void load()}
-          className="no-drag focus-ring inline-flex items-center gap-1.5 rounded-xl px-3 py-1.5 text-[12px] font-medium text-[color:var(--color-ink)] hover:bg-white/10"
-        >
-          <RefreshCw size={13} /> Try again
-        </button>
+        {notSignedIn ? (
+          <button
+            type="button"
+            disabled={connecting}
+            onClick={() => void connect()}
+            className="no-drag focus-ring inline-flex items-center gap-2 rounded-xl bg-[var(--color-accent)] px-4 py-2 text-[13px] font-medium text-white hover:brightness-110 disabled:opacity-50"
+          >
+            {connecting ? <Spinner size={13} /> : <Calendar size={14} />} Sign in
+          </button>
+        ) : (
+          <button
+            type="button"
+            onClick={() => void load()}
+            className="no-drag focus-ring inline-flex items-center gap-1.5 rounded-xl px-3 py-1.5 text-[12px] font-medium text-[color:var(--color-ink)] hover:bg-white/10"
+          >
+            <RefreshCw size={13} /> Try again
+          </button>
+        )}
       </div>
     )
   }

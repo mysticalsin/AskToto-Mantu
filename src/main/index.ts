@@ -431,6 +431,12 @@ async function startImportDecoder(job: ImportJob): Promise<void> {
         await importJobs?.finishDecoding(job.jobId, totalChunks)
       },
       onError: async (error) => {
+        // A transcription failure inside onChunk (acceptDecodedChunk throwing) reaches here via the
+        // decoder's own uncaught-rejection path with the ffmpeg child still alive and blocked on
+        // write() (nothing is reading its stdout anymore) — cancel() sends SIGTERM so it can't leak as
+        // an orphaned OS process. Read from the map rather than closing over `decoder` directly: in the
+        // rare case spawn() itself throws synchronously, onError can fire before `decoder` is assigned.
+        ffmpegDecoders.get(job.jobId)?.cancel()
         ffmpegDecoders.delete(job.jobId)
         await importJobs?.failDecoder(job.jobId, error.message)
       }
@@ -660,10 +666,13 @@ function publicSettings(): PublicSettings {
     // screen-ask/quick-action to capture even when the active provider (e.g. Dust) is text-only, because
     // the main process transparently fails the vision turn over to this provider instead of dead-ending.
     // ORs localVisionReady for the same local-only-setup reason as visionReady above.
+    // Dust's vision capability depends on the selected agent's underlying model, not the static
+    // PROVIDERS.dust.vision flag (same distinction askStart's providerVisionOk makes) — consult
+    // dustSelectedAgentVision for Dust so a vision-capable Dust agent isn't hidden behind a stale flag.
     visionAvailable:
       (Object.keys(PROVIDERS) as ProviderId[]).some(
         (p) =>
-          PROVIDERS[p].vision &&
+          (p === 'dust' ? dustSelectedAgentVision(s.providerModels['dust']) : PROVIDERS[p].vision) &&
           (!allowed || allowed.includes(p)) &&
           (PROVIDERS[p].kind === 'cli' ? !!s.cliConnected[p] : hasApiKey(p))
       ) || localVisionReady,
@@ -754,10 +763,20 @@ function createWindow(): void {
     win.webContents.on('console-message', (_e, level, message, line, sourceId) => {
       if (level >= 2) console.log(`[renderer] ${message}  (${sourceId}:${line})`)
     })
-    win.webContents.on('render-process-gone', (_e, details) => {
-      console.log(`[renderer-gone] reason=${details.reason} exitCode=${details.exitCode}`)
-    })
   }
+  // The BrowserWindow survives a renderer crash (GPU/compositor crash, OOM in the in-renderer ASR
+  // worker) — only its content dies, so `win` stays non-null while hotkeys/tray silently no-op into the
+  // dead renderer and the overlay sits permanently blank. Previously this was only logged via
+  // console.log gated behind ASKTOTO_DEBUG_RENDERER (never in a packaged build, never persisted).
+  // Persist it like onFatal does for a main-process crash, then reload the same content so the overlay
+  // recovers instead of hanging forever.
+  win.webContents.on('render-process-gone', (_e, details) => {
+    mainLog.error(`[renderer-gone] reason=${details.reason} exitCode=${details.exitCode}`)
+    auditLog('app.crash', { kind: 'render-process-gone', reason: details.reason, exitCode: details.exitCode })
+    if (!win || win.isDestroyed()) return
+    if (process.env['ELECTRON_RENDERER_URL']) win.loadURL(process.env['ELECTRON_RENDERER_URL'])
+    else win.loadFile(join(__dirname, '../renderer/index.html'))
+  })
   // Dev-only: screenshot ONLY this window (no desktop) for verification. Privacy-safe.
   if (process.env.ASKTOTO_SHOT) {
     win.webContents.once('did-finish-load', () => {
@@ -1122,7 +1141,12 @@ const shortcutActions: Record<string, () => void> = {
   'scroll-up': () => moveBy(0, -60),
   'scroll-down': () => moveBy(0, 60),
   'scroll-left': () => moveBy(-60, 0),
-  'scroll-right': () => moveBy(60, 0)
+  'scroll-right': () => moveBy(60, 0),
+  // 'settings' is in HOTKEY_ACTIONS (bindable in Settings → Keyboard shortcuts, per DEFAULT_SHORTCUTS'
+  // "no global shortcut by default; opened from bar or tray" comment) but was missing here, so a combo
+  // the user recorded for it was silently never registered with the OS. The tray's own 'Settings…' item
+  // already calls sendHotkey('settings') directly (bypassing globalShortcut) — reuse the same handler.
+  settings: () => sendHotkey('settings')
 }
 
 function resolveShortcut(action: HotkeyAction, user: Record<string, string>): string {
@@ -1139,14 +1163,27 @@ function registerShortcuts(): void {
   globalShortcut.unregisterAll()
   shortcutFailures = []
   const user = getSettings().shortcuts ?? {}
+  // Electron's globalShortcut.register() returns true (success) even when the accelerator is already
+  // claimed by a PREVIOUS action in this same loop — it just silently replaces that action's callback,
+  // which is not a register() failure and so would never reach shortcutFailures below. Track claimed
+  // accelerators ourselves so the second action loses deterministically and visibly instead.
+  const claimedBy = new Map<string, string>()
   for (const [action, fn] of Object.entries(shortcutActions)) {
     const accel = resolveShortcut(action as HotkeyAction, user)
     if (!accel) continue
+    const dupeOf = claimedBy.get(accel)
+    if (dupeOf) {
+      mainLog.warn(`[shortcuts] duplicate accelerator for ${action}: ${accel} (already bound to ${dupeOf})`)
+      shortcutFailures.push({ action, accel })
+      continue
+    }
     try {
       const ok = globalShortcut.register(accel, fn)
       if (!ok) {
         mainLog.warn(`[shortcuts] failed to register ${action}: ${accel}`)
         shortcutFailures.push({ action, accel })
+      } else {
+        claimedBy.set(accel, action)
       }
     } catch (e) {
       mainLog.warn(`[shortcuts] invalid accelerator for ${action}: ${accel}`, e)
@@ -2308,7 +2345,9 @@ function registerIpc(): void {
     // (e.g. cascading a recap/follow-up/Spotlight-Ref request into Dust) regardless of what's globally active.
     const cliPrimary =
       s.providerPriority === 'cli'
-        ? (['claude-cli', 'codex-cli'] as ProviderId[]).find((p) => s.cliConnected[p])
+        ? (['claude-cli', 'codex-cli'] as ProviderId[]).find(
+            (p) => s.cliConnected[p] && (!allowed || allowed.includes(p))
+          )
         : undefined
     // Métis Local outranks cliPrimary (but never providerOverride): an in-scope suggest/summary/vision ask
     // routes to the on-device model first whenever it's eligible right now (PLAN.md §4.3 "Routing

@@ -253,6 +253,11 @@ export function App(): JSX.Element {
     lines: TranscriptLine[]
     startedAt: number
   } | null>(null)
+  // Surfaced when opening a past meeting fails (recallRead ok:false — unreadable/undecrypted file). Every
+  // open path (History row, Settings' Mantu Intelligence list, Review's own Recent-meetings/Related panel)
+  // funnels through openPastMeeting, so a single piece of state here covers all of them. Cleared at the
+  // start of every open attempt so a stale banner never survives a subsequent success.
+  const [openMeetingError, setOpenMeetingError] = useState<string | null>(null)
   // The saved-meeting file an in-flight recapGen run will persist its result to — set by
   // generateSavedRecap, cleared once the persist-on-settle effect below has written (or given up on) it.
   const [recapGenTarget, setRecapGenTarget] = useState<{ file: string } | null>(null)
@@ -403,6 +408,13 @@ export function App(): JSX.Element {
   const answerStreaming = ask.answer?.streaming ?? false
   const answerText = ask.answer?.text ?? ''
   const answerError = ask.answer?.error ?? null
+  // The most recent doSave() call below, so discardMeeting can AWAIT an in-flight autosave before deciding
+  // whether there's a file to delete. Without this, "Disregard" clicked while doSave is still mid IPC round
+  // trip reads savedPath as still-null, skips the delete, and the save that lands moments later persists a
+  // meeting the user explicitly asked NOT to keep, with no further indication it happened. Reset to null in
+  // startListen() for every new meeting, so a stale prior meeting's already-settled promise can never be
+  // read as if it belonged to the current one.
+  const savingPromiseRef = useRef<Promise<string | null> | null>(null)
   useEffect(() => {
     if (view !== 'review') return
     // Persist the meeting once the recap attempt has SETTLED — whether it produced a summary or failed.
@@ -419,7 +431,7 @@ export function App(): JSX.Element {
 
     const title = defaultMeetingTitle(listen.lines, mode)
 
-    const doSave = async (): Promise<void> => {
+    const doSave = async (): Promise<string | null> => {
       // Acquire the in-flight lock only when the save actually starts — never at effect time. On the
       // retry branch the real save is deferred behind a backoff timer; if that timer is cancelled
       // (view change / reset) before it fires, a lock taken early would never release and would wedge
@@ -439,22 +451,26 @@ export function App(): JSX.Element {
         setSavedPath(r.path)
         setSaveError(null)
         setSaveAttempts(0)
+        return r.path
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e)
         setSaveError(msg)
         if (saveAttempts < MAX_SAVE_RETRIES) {
           setSaveAttempts((c) => c + 1)
         }
+        return null
       } finally {
         savingRef.current = false
       }
     }
 
     if (saveAttempts === 0) {
-      void doSave()
+      savingPromiseRef.current = doSave()
     } else {
       const delay = Math.min(1000 * 2 ** (saveAttempts - 1), 30000)
-      const t = setTimeout(() => void doSave(), delay)
+      const t = setTimeout(() => {
+        savingPromiseRef.current = doSave()
+      }, delay)
       return () => clearTimeout(t)
     }
   }, [view, answerStreaming, answerText, answerError, listen.lines, mode, saveAttempts])
@@ -854,7 +870,11 @@ export function App(): JSX.Element {
     }
     // The engineered verdict prompt is the `prompt` (sent to the model, never shown); `label` is the
     // clean claim the UI displays; `kind:'factcheck'` renders the color-coded verdict card.
-    if (listen.listening) {
+    // route.transport is already 'text' here (local-error/screen handled above), which chooseQuickActionRoute
+    // decides from hasInput || hasTranscript — so a leftover transcript from a just-ended meeting (claim
+    // empty, listen.listening already false) must still fire from it instead of falling through both
+    // branches below into a silent no-op.
+    if (listen.listening || (!claim && transcript.trim())) {
       const lastThem = [...listen.lines].reverse().find((l) => l.speaker === 'them')?.text
       const c = claim || lastThem || transcript
       ask.run({
@@ -955,6 +975,22 @@ export function App(): JSX.Element {
   useEffect(() => {
     if (!listen.listening) setShowSpec(false)
   }, [listen.listening])
+  // 3) The speculative suggestion shown via showSpec never touches suggest.answer, so the TTL/MAX-ceiling
+  //    effects above (both keyed on suggest.answer) have nothing to arm a timer on — without this, an
+  //    instant "What to say next" could sit on screen for the rest of the call, contradicting the same
+  //    4s/7s contract documented above. Mirrors that same two-effect shape: TTL arms once the shown answer
+  //    stops streaming, MAX arms the instant showSpec itself flips true (a hard ceiling from when the user
+  //    actually started seeing it, independent of any background regeneration underneath).
+  useEffect(() => {
+    if (!showSpec || !speculative.answer || speculative.answer.streaming) return
+    const t = setTimeout(() => setShowSpec(false), SUGGESTION_TTL_MS)
+    return () => clearTimeout(t)
+  }, [showSpec, speculative.answer])
+  useEffect(() => {
+    if (!showSpec) return
+    const t = setTimeout(() => setShowSpec(false), SUGGESTION_MAX_MS)
+    return () => clearTimeout(t)
+  }, [showSpec])
 
   const whatNext = useCallback(() => {
     // Gate on the suggest task: the dominant live-meeting route (transcript present) fires mode
@@ -1105,10 +1141,15 @@ export function App(): JSX.Element {
     meetingStartRef.current = Date.now()
     savedRef.current = ''
     setSavedPath(null)
+    savingPromiseRef.current = null // this meeting hasn't autosaved yet — don't let a PRIOR meeting's
+    // already-settled save promise be read as if it belonged to this one (see its own declaration comment).
     setSaveError(null)
     setSaveAttempts(0)
     listen.clear()
     suggest.clear()
+    followup.clear() // a new meeting is about to be viewed — a stale draft from whatever was reviewed
+    // before must never carry over and render/send as this meeting's follow-up (see followup's own
+    // declaration comment above).
     // A new meeting always starts with the transcript hidden, regardless of whether it was left open
     // during a previous meeting — "showLiveTranscript" persists across restarts (it's a Settings field,
     // not per-session state), so without this reset a transcript opened once would stay defaulted-open
@@ -1122,6 +1163,7 @@ export function App(): JSX.Element {
     listen.clear,
     listen.start,
     suggest.clear,
+    followup.clear,
     settings?.audioSource,
     settings?.asrQuality,
     settings?.asrEngine,
@@ -1221,8 +1263,12 @@ export function App(): JSX.Element {
 
   const logOut = useCallback(async (): Promise<void> => {
     await flushLiveMeeting()
-    await window.toto.signOut()
-  }, [flushLiveMeeting])
+    // auth.signOut() — not window.toto.signOut() directly — is the only sign-out path that also
+    // refresh()es auth.status afterward, so the SignInWall gate flips the instant this resolves instead of
+    // leaving the renderer stale-signed-in until the next 5-minute poll or a window focus/blur (see
+    // useAuth's own signOut for why; calling the bare IPC method here bypassed that refresh entirely).
+    await auth.signOut()
+  }, [flushLiveMeeting, auth.signOut])
 
   const onStop = useCallback(() => {
     if (listen.listening) {
@@ -1266,6 +1312,8 @@ export function App(): JSX.Element {
     }
     ask.clear()
     suggest.clear()
+    followup.clear() // whatever was being reviewed is being left — a stale follow-up draft must not
+    // survive to attach itself to whatever's reviewed next (see followup's own declaration comment).
     listen.clear()
     historyRef.current = []
     copilotHistoryRef.current = []
@@ -1281,6 +1329,7 @@ export function App(): JSX.Element {
     ask.clear,
     suggest.cancel,
     suggest.clear,
+    followup.clear,
     listen.lines,
     listen.stop,
     listen.clear,
@@ -1292,8 +1341,14 @@ export function App(): JSX.Element {
   // file (main pops its own native confirm) then leave. A session that never saved (no savedPath) has
   // nothing on disk — just leave. Either way, mark this meeting handled so no exit-path re-persists it.
   const discardMeeting = useCallback(async (): Promise<void> => {
-    if (savedPath) {
-      const r = await window.toto.recallDelete(savedPath, defaultMeetingTitle(listen.lines, mode))
+    // An autosave triggered by the recap settling (the effect above) can still be in flight here — there's
+    // no "saving" indicator on screen, so a click landing in that window used to read savedPath as still
+    // null, skip the delete branch entirely, and let the save land moments later anyway. Await it so the
+    // decision below always reads the FINAL outcome instead of a stale null.
+    const inFlightPath = savingPromiseRef.current ? await savingPromiseRef.current : null
+    const path = inFlightPath ?? savedPath
+    if (path) {
+      const r = await window.toto.recallDelete(path, defaultMeetingTitle(listen.lines, mode))
       if (!r.ok) return // user cancelled the confirm dialog, or the delete failed → stay on the summary
     }
     savedRef.current = String(meetingStartRef.current)
@@ -1458,8 +1513,17 @@ export function App(): JSX.Element {
 
   // Open a saved meeting from History as a read-only recap (Cluely recap detail) via the recall:read IPC.
   const openPastMeeting = useCallback(async (file: string) => {
+    setOpenMeetingError(null)
+    followup.clear() // the viewed meeting is about to change — a stale draft from whatever was reviewed
+    // before must never carry over and render/send as THIS meeting's follow-up (see followup's own
+    // declaration comment above; this is the CRITICAL cross-meeting leak's primary repro path).
     const r = await window.toto.recallRead(file)
-    if (!r.ok) return
+    if (!r.ok) {
+      // recallRead has a real, readable error for every failure branch (invalid name / unreadable file /
+      // undecryptable on this device) — surface it instead of leaving the click looking like a no-op.
+      setOpenMeetingError(r.error || 'Could not open that meeting.')
+      return
+    }
     setPastMeeting({
       file,
       title: r.title || 'Meeting',
@@ -1470,7 +1534,7 @@ export function App(): JSX.Element {
     })
     setView('review')
     setCollapsed(false)
-  }, [])
+  }, [followup.clear])
 
   // Cluely "Resume session": re-enter the meeting live, seeding the copilot's multi-turn memory with the
   // prior recap so follow-ups keep continuity. (The live transcript hook owns its own lines, so earlier
@@ -1624,7 +1688,12 @@ export function App(): JSX.Element {
         // ask.run({ mode: 'summary' }) — so a local-summary-only setup must pass this gate too.
         if (!requireProvider('summary')) return
         const transcript = listen.text()
-        const canUseScreen = Boolean((settings?.screenAsk ?? true) && settings?.visionAvailable)
+        // Mirror askScreen's OWN requireProvider('vision') gate (providerReady || localVisionReady) —
+        // not the broader settings.visionAvailable (any provider with a stored key, active or not).
+        // Using the broader flag here could route to 'screen' and then dead-end into Settings via
+        // askScreen's narrower gate, even though the local-summary check one line above already approved
+        // this request.
+        const canUseScreen = Boolean((settings?.screenAsk ?? true) && (settings?.providerReady || settings?.localVisionReady))
         // route.transport is the single source of truth for vision-vs-text — it already prioritizes the
         // screen over a merely-present transcript (see chooseQuickActionRoute); don't re-decide below.
         const route = chooseQuickActionRoute({ kind, input: input.trim(), transcript, canUseScreen })
@@ -1663,6 +1732,8 @@ export function App(): JSX.Element {
       listen.text,
       settings?.screenAsk,
       settings?.visionAvailable,
+      settings?.providerReady,
+      settings?.localVisionReady,
       settings?.hasKeys,
       settings?.dustWorkspaceId,
       settings?.providerModels,
@@ -1848,7 +1919,11 @@ export function App(): JSX.Element {
         kind={ask.answer?.kind}
         usedScreen={ask.answer?.usedScreen}
         provider={ask.answer?.provider}
-        onRetry={capturing ? undefined : retryAnswer}
+        // ask.fail() (the quick-action "unavailable" paths) always sets prompt:'' — there's nothing for
+        // retryAnswer to replay, so the button must not render at all instead of looking clickable and
+        // silently doing nothing (retryAnswer's own `if (!p) return` already knew this; the button just
+        // never checked).
+        onRetry={capturing || !ask.answer?.prompt ? undefined : retryAnswer}
         onGoDeeper={capturing ? undefined : goDeeper}
       />
     )
@@ -2117,6 +2192,22 @@ export function App(): JSX.Element {
           {showListeningChrome && listen.error && view !== 'copilot' && (
             <div title={listen.error ?? undefined} className="fade-up rounded-xl border border-[var(--color-danger)]/30 bg-[var(--color-danger)]/10 px-3 py-1.5 text-[11px] leading-snug text-[var(--color-danger)] line-clamp-2">
               {listen.error}
+            </div>
+          )}
+          {/* Opening a past meeting failed (recallRead ok:false) — shown regardless of view, since the
+              click that triggered it can come from History, Settings' Mantu Intelligence list, or Review's
+              own Recent-meetings/Related panel. Dismissible since it's a one-off, not a recurring status. */}
+          {openMeetingError && (
+            <div className="fade-up flex items-center justify-between gap-2 rounded-xl border border-[var(--color-danger)]/30 bg-[var(--color-danger)]/10 px-3 py-1.5 text-[11px] leading-snug text-[var(--color-danger)]">
+              <span className="line-clamp-2">{openMeetingError}</span>
+              <button
+                type="button"
+                onClick={() => setOpenMeetingError(null)}
+                className="no-drag shrink-0 opacity-70 hover:opacity-100"
+                aria-label="Dismiss"
+              >
+                ×
+              </button>
             </div>
           )}
           {settings && !settings.providerReady && !nudgeExpired && view !== 'settings' && !showListeningChrome && (() => {

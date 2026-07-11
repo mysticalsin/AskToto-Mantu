@@ -141,3 +141,147 @@ describe('QuickActions local reachability (r5/r6)', () => {
     expect(qaSrc).not.toMatch(/a\.kind === 'explain' &&/)
   })
 })
+
+// Returns the source between two anchors (end exclusive), throwing loudly if either anchor has gone
+// missing so a rename/reorder shows up as a broken test rather than a silently-skipped one.
+function blockBetween(startAnchor: string, endAnchor: string): string {
+  const start = source.indexOf(startAnchor)
+  if (start === -1) throw new Error(`App.local-gates.test.ts anchor not found (source moved?): ${startAnchor}`)
+  const end = source.indexOf(endAnchor, start)
+  if (end === -1) throw new Error(`App.local-gates.test.ts end anchor not found after start: ${endAnchor}`)
+  return source.slice(start, end)
+}
+
+// Fix-batch A_App findings (adversarially verified QA sweep, fixspecs/A_App.md). Each block below pins
+// the SOURCE-OBSERVABLE contract of one fix so a future edit can't silently regress it.
+
+describe('CRITICAL: follow-up draft cross-meeting leak (finding 6)', () => {
+  // followup = useAsk() (the Review "Generate follow-up" draft) is a single instance shared across the
+  // whole session. Every place that changes WHICH meeting is being viewed must clear it, or a draft
+  // generated for meeting A can render/send as meeting B's follow-up.
+  const startListenBlock = blockBetween('const startListen = useCallback(', 'const endReview = useCallback(')
+  const resetBlock = blockBetween('const reset = useCallback(', 'const discardMeeting = useCallback(')
+  const openPastMeetingBlock = blockBetween('const openPastMeeting = useCallback(', 'const resumePastMeeting = useCallback(')
+
+  it('startListen (New meeting / toggle-listen / resume) clears followup', () => {
+    expect(startListenBlock).toMatch(/followup\.clear\(\)/)
+  })
+
+  it('reset (hotkey reset / Disregard) clears followup', () => {
+    expect(resetBlock).toMatch(/followup\.clear\(\)/)
+  })
+
+  it('openPastMeeting (History row / Recent-meetings / Related panel / Settings list) clears followup', () => {
+    expect(openPastMeetingBlock).toMatch(/followup\.clear\(\)/)
+  })
+})
+
+describe('Disregard-vs-autosave race (finding 7)', () => {
+  const autosaveBlock = blockBetween('// auto-save the meeting to the OneDrive folder', '// record a completed Ask turn')
+  const discardBlock = blockBetween('const discardMeeting = useCallback(', 'const clearAnswer = useCallback(')
+  const startListenBlock = blockBetween('const startListen = useCallback(', 'const endReview = useCallback(')
+
+  it('doSave records its in-flight promise so a concurrent Discard can await it', () => {
+    expect(autosaveBlock).toMatch(/savingPromiseRef\.current = doSave\(\)/)
+  })
+
+  it('doSave resolves to the saved path (or null) instead of void, so the awaiter learns the outcome', () => {
+    expect(autosaveBlock).toMatch(/const doSave = async \(\): Promise<string \| null> =>/)
+    expect(autosaveBlock).toMatch(/return r\.path/)
+  })
+
+  it('discardMeeting awaits any in-flight save before deciding whether there is a file to delete', () => {
+    expect(discardBlock).toMatch(/savingPromiseRef\.current \? await savingPromiseRef\.current : null/)
+  })
+
+  it('startListen resets savingPromiseRef so a prior meeting\'s settled promise can never leak into the next', () => {
+    expect(startListenBlock).toMatch(/savingPromiseRef\.current = null/)
+  })
+})
+
+describe('Log out refreshes auth.status (finding 8)', () => {
+  const logOutBlock = blockBetween('const logOut = useCallback(', 'const onStop = useCallback(')
+  // Isolate the actual executable lines (drop `//` comments, which legitimately name the bare IPC method
+  // to document why it's no longer called directly) so this tests the code, not the prose.
+  const logOutCode = logOutBlock
+    .split('\n')
+    .filter((l) => !l.trim().startsWith('//'))
+    .join('\n')
+
+  it('logOut calls the refreshing auth.signOut(), not the bare IPC method', () => {
+    expect(logOutCode).toMatch(/await auth\.signOut\(\)/)
+    expect(logOutCode).not.toMatch(/window\.toto\.signOut\(\)/)
+  })
+})
+
+describe('Fact-check leftover-transcript fallthrough (finding 2)', () => {
+  const factCheckBlock = blockBetween('const factCheck = useCallback(', 'const answerNow = useCallback(')
+
+  it('the transcript-fed branch also fires when not listening but a transcript is present with no typed claim', () => {
+    expect(factCheckBlock).toMatch(/if \(listen\.listening \|\| \(!claim && transcript\.trim\(\)\)\) \{/)
+  })
+})
+
+describe('Summarize screen-route mirrors askScreen\'s actual vision gate (finding 3)', () => {
+  // requireProviderArgAfter('summarize') anchors on the literal "kind === 'summarize'" text — reuse the
+  // same anchor here, sliced up to the route computation, to isolate ONLY the summarize branch's
+  // canUseScreen (explain's own separate canUseScreen, asserted below, must keep the broader flag).
+  const summarizeIdx = source.indexOf("kind === 'summarize'")
+  const summarizeCanUseScreenLine = source
+    .slice(summarizeIdx, source.indexOf('const route = chooseQuickActionRoute', summarizeIdx))
+    .split('\n')
+    .find((l) => l.includes('const canUseScreen'))
+
+  const explainIdx = source.indexOf("kind === 'explain'")
+  const explainCanUseScreenLine = source
+    .slice(explainIdx, source.indexOf('const route = chooseQuickActionRoute', explainIdx))
+    .split('\n')
+    .find((l) => l.includes('const canUseScreen'))
+
+  it('summarize\'s canUseScreen requires providerReady || localVisionReady (what askScreen actually gates on)', () => {
+    expect(summarizeCanUseScreenLine).toMatch(/settings\?\.providerReady \|\| settings\?\.localVisionReady/)
+    expect(summarizeCanUseScreenLine).not.toMatch(/settings\?\.visionAvailable/)
+  })
+
+  it('explain\'s canUseScreen is untouched (still the broader settings.visionAvailable)', () => {
+    expect(explainCanUseScreenLine).toMatch(/settings\?\.visionAvailable/)
+  })
+})
+
+describe('Speculative (showSpec) suggestion auto-dismiss (finding 4)', () => {
+  // The two pre-existing dismiss effects key on suggest.answer only; whatNext's instant path can show
+  // speculative.answer via showSpec without ever touching suggest.answer, so a second, mirrored pair keyed
+  // on showSpec itself is required to honor the same SUGGESTION_TTL_MS/SUGGESTION_MAX_MS contract.
+  const machineryBlock = blockBetween(
+    '// Instant-suggestion machinery',
+    'const whatNext = useCallback('
+  )
+
+  it('a TTL effect keyed on showSpec dismisses the speculative suggestion once it stops streaming', () => {
+    expect(machineryBlock).toMatch(/if \(!showSpec \|\| !speculative\.answer \|\| speculative\.answer\.streaming\) return/)
+    expect(machineryBlock).toMatch(/setTimeout\(\(\) => setShowSpec\(false\), SUGGESTION_TTL_MS\)/)
+  })
+
+  it('a hard-ceiling effect keyed on showSpec fires regardless of streaming state', () => {
+    expect(machineryBlock).toMatch(/setTimeout\(\(\) => setShowSpec\(false\), SUGGESTION_MAX_MS\)/)
+  })
+})
+
+describe('Retry button hidden when nothing is retryable (finding 1)', () => {
+  it('onRetry is withheld whenever ask.answer has no replayable prompt (e.g. after ask.fail())', () => {
+    expect(source).toMatch(/onRetry=\{capturing \|\| !ask\.answer\?\.prompt \? undefined : retryAnswer\}/)
+  })
+})
+
+describe('openPastMeeting surfaces recallRead failures instead of a silent dead-end (finding 5)', () => {
+  const openPastMeetingBlock = blockBetween('const openPastMeeting = useCallback(', 'const resumePastMeeting = useCallback(')
+
+  it('a failed recallRead sets a visible error instead of bare-returning', () => {
+    expect(openPastMeetingBlock).toMatch(/if \(!r\.ok\) \{/)
+    expect(openPastMeetingBlock).toMatch(/setOpenMeetingError\(r\.error \|\| 'Could not open that meeting\.'\)/)
+  })
+
+  it('the error banner is rendered from openMeetingError state', () => {
+    expect(source).toMatch(/\{openMeetingError && \(/)
+  })
+})

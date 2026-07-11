@@ -45,6 +45,16 @@ export async function ensureLocalRuntimeStarted(modelId: string): Promise<void> 
 export function streamLocal(opts: StreamOptions): StreamHandle {
   let aborted = false
   let inner: StreamHandle | null = null
+  // Guards localRuntime.beginStream()/endStream() pairing (switch-kill hardening): true from the instant
+  // streamOpenAI() is invoked (the sidecar is now actively serving this request) until exactly one of
+  // onDone/onError/abort releases it. While any stream holds this, local-runtime.ts's start() will defer
+  // rather than SIGKILL the sidecar out from under it on a model switch.
+  let streamActive = false
+  const releaseStream = (): void => {
+    if (!streamActive) return
+    streamActive = false
+    localRuntime.endStream()
+  }
 
   void (async () => {
     try {
@@ -60,6 +70,8 @@ export function streamLocal(opts: StreamOptions): StreamHandle {
           : opts.req.mode === 'summary'
             ? { id_slot: 1, cache_prompt: true }
             : { cache_prompt: true }
+      streamActive = true
+      localRuntime.beginStream()
       inner = streamOpenAI({
         ...opts,
         baseURL: localRuntime.baseURL(),
@@ -71,16 +83,19 @@ export function streamLocal(opts: StreamOptions): StreamHandle {
         handlers: {
           ...opts.handlers,
           onDone: (u) => {
+            releaseStream()
             localRuntime.markActivity()
             opts.handlers.onDone(u)
           },
           onError: (message) => {
+            releaseStream()
             localRuntime.markActivity()
             opts.handlers.onError(message)
           }
         }
       })
     } catch (err) {
+      releaseStream()
       if (!aborted) opts.handlers.onError(errMsg(err))
     }
   })()
@@ -89,6 +104,10 @@ export function streamLocal(opts: StreamOptions): StreamHandle {
     abort: () => {
       aborted = true
       inner?.abort()
+      // openai.ts's onError is suppressed once controller.signal.aborted is true, so it will never call
+      // releaseStream() for us on this path — release here so a Cancel/superseded-ask abort doesn't leave
+      // the sidecar permanently marked busy and block every future model switch.
+      releaseStream()
       // Accepted behavior (audit risk, by design): if the sidecar is still starting when this fires, the
       // in-flight ensureLocalRuntimeStarted()/start() call is NOT cancelled — it runs to completion and the
       // sidecar stays up, reclaimed later by the normal 15-minute idle-stop rather than torn down here.

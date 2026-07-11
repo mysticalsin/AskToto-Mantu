@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { app, safeStorage } from 'electron'
 import { DEFAULT_SETTINGS } from '@shared/ipc'
-import { getSettings, setSettings, getApiKey, setApiKey, listDustAgents } from './store'
+import { getSettings, setSettings, getApiKey, setApiKey, listDustAgents, testApiKey } from './store'
 import { decryptSecret } from './secrets'
 
 vi.mock('electron')
@@ -268,6 +268,42 @@ describe('store', () => {
         modelProviderId: 'anthropic',
         modelId: 'claude-sonnet'
       })
+    })
+  })
+
+  describe('testApiKey org allowlist', () => {
+    it('refuses a provider blocked by managed-config allowedProviders, without making a network call', async () => {
+      const managed = join(userData, 'managed-config.json')
+      writeFileSync(managed, JSON.stringify({ allowedProviders: ['anthropic'] }), 'utf8')
+
+      // 'openai' is deliberately excluded from the allowlist above. If the gate didn't short-circuit,
+      // this would attempt a real OpenAI network call and fail/hang in the sandboxed test environment —
+      // asserting the specific org-policy message (matching attempt()'s wording in index.ts) proves the
+      // allowlist gate fired first, not a network failure.
+      const result = await testApiKey('openai', 'sk-test-0001')
+
+      expect(result.ok).toBe(false)
+      expect(result.error).toBe("GPT · OpenAI is not on your organization's approved provider list.")
+    })
+
+    it('still tests an allowed provider normally (allowlist gate does not block permitted providers)', async () => {
+      const managed = join(userData, 'managed-config.json')
+      writeFileSync(managed, JSON.stringify({ allowedProviders: ['dust'] }), 'utf8')
+      setSettings({ dustWorkspaceId: 'ws-1' })
+      getAgentConfigurations.mockResolvedValue({ isErr: () => false, value: [] })
+
+      const result = await testApiKey('dust', 'test-dust-key')
+
+      expect(result.ok).toBe(true)
+    })
+
+    it('does not gate providers when no allowedProviders policy is set (null = unrestricted)', async () => {
+      setSettings({ dustWorkspaceId: 'ws-1' })
+      getAgentConfigurations.mockResolvedValue({ isErr: () => false, value: [] })
+
+      const result = await testApiKey('dust', 'test-dust-key')
+
+      expect(result.ok).toBe(true)
     })
   })
 })
