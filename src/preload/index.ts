@@ -182,12 +182,14 @@ const api = {
   // Correction engine (Task MI-2): rename/merge/unmerge/field-pin/commitment-reject. All five take
   // entity SLUGS (the immutable join key), never display names — the caller already has them from a
   // brain:read/brainEntityNames response.
+  // asrSkipped/reason: the rename itself succeeded, but the alsoFixAsr pair couldn't be represented as
+  // a live-transcript ASR correction (e.g. a name over the 80-char cap) — surfaced so MI-3's UI can say so.
   brainEntityRename: (
     kind: import('@shared/brain').EntityKind,
     id: string,
     newName: string,
     alsoFixAsr?: boolean
-  ): Promise<{ ok: boolean; error?: string }> =>
+  ): Promise<{ ok: boolean; error?: string; asrSkipped?: boolean; reason?: string }> =>
     ipcRenderer.invoke(IPC.brainEntityRename, { kind, id, newName, alsoFixAsr }),
   brainEntityMerge: (
     kind: import('@shared/brain').EntityKind,

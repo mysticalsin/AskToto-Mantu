@@ -39,6 +39,7 @@ import {
   EntityUnmergePayloadSchema,
   EntityUpdateFieldPayloadSchema,
   CommitmentRejectPayloadSchema,
+  appendAsrCorrection,
   RenameMeetingPayloadSchema,
   UpdateRecapPayloadSchema,
   ImportAudioStartSchema,
@@ -2343,13 +2344,18 @@ function registerIpc(): void {
     // alsoFixAsr composition lives here, not in corrections.ts (that module owns brain-entity
     // mutations only) — appends the {from, to} pair to settings.asrCorrections in the exact shape
     // commitLine's correctionsRef consumer expects (see lib/listen.ts), so the live transcript stops
-    // mishearing the old name going forward. Deduped and bounded to the same 100-entry cap the
-    // asrCorrections schema itself enforces.
+    // mishearing the old name going forward. appendAsrCorrection validates the PAIR before it ever
+    // reaches setSettings: store.ts's validKeysOnly drops the whole asrCorrections array when one
+    // element fails validation (e.g. a name over the 80-char cap), which would silently wipe every
+    // correction the user already had. A skipped pair never blocks the rename itself — the caller
+    // gets { ok: true, asrSkipped: true, reason } and the skip is audit-logged.
     if (alsoFixAsr && oldName && oldName !== newName) {
-      const s = getSettings()
-      const pair = { from: oldName, to: newName }
-      const exists = s.asrCorrections.some((c) => c.from === pair.from && c.to === pair.to)
-      if (!exists) setSettings({ asrCorrections: [...s.asrCorrections, pair].slice(-100) })
+      const composed = appendAsrCorrection(getSettings().asrCorrections, oldName, newName)
+      if (composed.kind === 'append') setSettings({ asrCorrections: composed.pairs })
+      if (composed.kind === 'skipped') {
+        auditLog('brain.entity.renamed', { kind, asrSkipped: true })
+        return { ok: true, asrSkipped: true, reason: composed.reason }
+      }
     }
     auditLog('brain.entity.renamed', { kind })
     return { ok: true }
