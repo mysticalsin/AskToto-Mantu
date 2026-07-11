@@ -42,3 +42,13 @@ docs/superpowers/
 # LGPL ffmpeg sidecar binaries: deliberately untracked — CI provisions them from the
 # ffmpeg-sidecar-v1 GitHub release (see docs/ENTERPRISE_RELEASE.md). Manifest hashes pin integrity.
 resources/ffmpeg/
+
+# Pinned llama.cpp `llama-server` sidecar (Métis Local runtime) — populated by
+# `npm run fetch:llama` / scripts/fetch-llama-server.mjs. Archive sha256 pins integrity; no .gitkeep
+# needed since check-llama-sidecar.mjs hard-fails every packaging path before electron-builder ever
+# reads extraResources if this is missing (same guarantee resources/ffmpeg relies on above).
+resources/llama/
+
+# scripts/prove-local-ttft.mjs's download-fallback cache (only populated when neither
+# ASKTOTO_PROVE_MODEL_DIR nor an existing userData download is found) — sha256-pinned, never commit.
+.cache/

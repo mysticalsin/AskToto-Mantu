@@ -164,6 +164,9 @@ export function App(): JSX.Element {
   // Transcript watermark of the last speculative run — freshness = the conversation hasn't moved on
   // (≤2 new lines) since the suggestion was generated.
   const specWatermarkRef = useRef({ lineCount: 0, at: 0 })
+  // Watermark for the Métis Local pre-warm ping (PLAN.md §4.4) — same {lineCount, at} idiom as
+  // specWatermarkRef above, on its own ~5s cadence independent of the 15s shadow-suggestion one below.
+  const prewarmWatermarkRef = useRef({ lineCount: 0, at: 0 })
 
   const onQuestionRef = useRef<(l: TranscriptLine) => void>(() => {})
   // Canonical people/account names for the ASR entity-casing bias (see lib/entity-casing.ts). Fetched
@@ -556,7 +559,8 @@ export function App(): JSX.Element {
   // auto-answer when the other person asks a question (debounce = suggestEverySec)
   onQuestionRef.current = (_line: TranscriptLine): void => {
     if (!(settings?.autoSuggest ?? true)) return
-    if (!settings?.providerReady) return // no provider → don't auto-fire a request that would just error
+    // no provider → don't auto-fire a request that would just error (a local-only setup counts too)
+    if (!settings?.providerReady && !settings?.localSuggestReady) return
     if (suggest.answer?.streaming) return
     const now = Date.now()
     const everyMs = (settings?.suggestEverySec ?? 15) * 1000
@@ -581,7 +585,7 @@ export function App(): JSX.Element {
   }, [listen.listening])
   useEffect(() => {
     if (!listen.listening || honkedRef.current) return
-    if (!(settings?.autoSuggest ?? true) || !settings?.providerReady) return
+    if (!(settings?.autoSuggest ?? true) || (!settings?.providerReady && !settings?.localSuggestReady)) return
     if (suggest.answer?.streaming) return
     const verdict = detectNoDecisionEnding(listen.lines, meetingStartRef.current, Date.now())
     if (!verdict.honk) return
@@ -604,11 +608,31 @@ export function App(): JSX.Element {
   // Single readiness gate for EVERY user-initiated request entry point (not just submit). When the
   // active provider has no key / no CLI connection, route the user to Settings instead of firing an
   // LLM request that fails reactively with a red stream error. Returns false → the caller must bail.
-  const requireProvider = useCallback((): boolean => {
-    if (settings?.providerReady) return true
-    openSettings('ai', 'Add an API key or connect a provider here to ask questions.')
-    return false
-  }, [settings?.providerReady, openSettings])
+  // `local` names the in-scope Métis Local task this call site is ABOUT to fire (suggest/summary/vision)
+  // so a local-only setup (no cloud provider configured at all) answers instead of bouncing to Settings —
+  // omitted by callers whose request can't route to Métis Local (answer/recap/mixed-mode entry points).
+  const requireProvider = useCallback(
+    (local?: 'suggest' | 'summary' | 'vision'): boolean => {
+      const localReady =
+        local === 'suggest'
+          ? settings?.localSuggestReady
+          : local === 'summary'
+            ? settings?.localSummaryReady
+            : local === 'vision'
+              ? settings?.localVisionReady
+              : false
+      if (settings?.providerReady || localReady) return true
+      openSettings('ai', 'Add an API key or connect a provider here to ask questions.')
+      return false
+    },
+    [
+      settings?.providerReady,
+      settings?.localSuggestReady,
+      settings?.localSummaryReady,
+      settings?.localVisionReady,
+      openSettings
+    ]
+  )
 
   // Expand the floating control mini-pill back to the full widget. Hotkeys/Escape call this before
   // acting so a request can never fire into an unmounted Bar (invisible work / wasted spend).
@@ -622,7 +646,7 @@ export function App(): JSX.Element {
       prompt: string,
       opts?: { label?: string; kind?: 'answer' | 'factcheck'; history?: ChatTurn[]; record?: string }
     ): Promise<string | null> => {
-      if (!requireProvider()) return null
+      if (!requireProvider('vision')) return null
       if (capturing) return null
       // Mount the Answer view + the "capturing" busy state as ONE transition. `capturing` (not just
       // `view`) drives the first mount of the lazy <Answer> chunk in the render branch below, and React
@@ -856,7 +880,7 @@ export function App(): JSX.Element {
   ])
 
   const answerNow = useCallback(() => {
-    if (!requireProvider()) return
+    if (!requireProvider('suggest')) return
     setView('copilot')
     setCollapsed(false)
     suggest.run({ mode: 'suggest', transcript: listen.text() })
@@ -867,7 +891,12 @@ export function App(): JSX.Element {
   //    spoken and the last speculative run is ≥15s old — so the button click can paint instantly.
   //    Never fires while anything visible is streaming (the visible work always wins the bandwidth).
   useEffect(() => {
-    if (!listen.listening || settings?.instantSuggestions === false || !settings?.providerReady) return
+    if (
+      !listen.listening ||
+      settings?.instantSuggestions === false ||
+      (!settings?.providerReady && !settings?.localSuggestReady)
+    )
+      return
     const lines = listen.lines
     if (!lines.length || lines[lines.length - 1].speaker !== 'them') return
     const w = specWatermarkRef.current
@@ -875,7 +904,44 @@ export function App(): JSX.Element {
     if (ask.answer?.streaming || suggest.answer?.streaming || speculative.answer?.streaming) return
     specWatermarkRef.current = { lineCount: lines.length, at: Date.now() }
     speculative.run({ mode: 'suggest', transcript: listen.text() })
-  }, [listen.lines, listen.listening, listen.text, settings?.instantSuggestions, settings?.providerReady, ask.answer?.streaming, suggest.answer?.streaming, speculative.answer?.streaming, speculative.run])
+  }, [
+    listen.lines,
+    listen.listening,
+    listen.text,
+    settings?.instantSuggestions,
+    settings?.providerReady,
+    settings?.localSuggestReady,
+    ask.answer?.streaming,
+    suggest.answer?.streaming,
+    speculative.answer?.streaming,
+    speculative.run
+  ])
+  // 1b) Métis Local pre-warm (PLAN.md §4.4): while a meeting is live and local suggest is ready, send a
+  //     debounced (~5s) transcript tail over local:prewarm so the sidecar's per-slot KV cache stays hot —
+  //     independent of the shadow-suggestion cadence above (fires on ANY new line, not just after "them"
+  //     speaks, and does not require settings.instantSuggestions — prewarming benefits the real suggest
+  //     click either way). Gated on localSuggestReady specifically (NOT providerReady): this only ever
+  //     warms the on-device model, so a cloud-only setup has nothing to warm. Never fires while anything
+  //     visible is streaming — same guard the speculative run above uses. The renderer never learns the
+  //     sidecar's port/key; it only ever sends transcript text.
+  useEffect(() => {
+    if (!listen.listening || !settings?.localSuggestReady) return
+    const lines = listen.lines
+    if (!lines.length) return
+    const w = prewarmWatermarkRef.current
+    if (lines.length === w.lineCount || Date.now() - w.at < 5_000) return
+    if (ask.answer?.streaming || suggest.answer?.streaming || speculative.answer?.streaming) return
+    prewarmWatermarkRef.current = { lineCount: lines.length, at: Date.now() }
+    void window.toto.localPrewarm(listen.text().slice(-6000))
+  }, [
+    listen.lines,
+    listen.listening,
+    listen.text,
+    settings?.localSuggestReady,
+    ask.answer?.streaming,
+    suggest.answer?.streaming,
+    speculative.answer?.streaming
+  ])
   // 2) Any REAL suggest run replacing the card (new id), or the meeting ending, switches the copilot
   //    card back off the speculative answer.
   const liveSuggestId = suggest.answer?.id
@@ -1564,13 +1630,16 @@ export function App(): JSX.Element {
           return
         }
         // Cascade into Dust whenever it's configured, regardless of the active provider — same reasoning
-        // as the meeting recap (endReview) above.
+        // as the meeting recap (endReview) above — UNLESS the user's own local-summary setup is ready:
+        // Métis Local already wins this request at the routing layer (localPrimary outranks cliPrimary),
+        // so forcing providerOverride:'dust' here would silently override that choice with a cloud round
+        // trip the user didn't ask for.
         const dustReady = isDustReady(settings?.hasKeys ?? {}, settings?.dustWorkspaceId ?? '', settings?.providerModels ?? {})
         ask.run({
           mode: 'summary',
           transcript,
           history: historyRef.current,
-          ...(dustReady ? { providerOverride: 'dust' as const } : {})
+          ...(dustReady && !settings?.localSummaryReady ? { providerOverride: 'dust' as const } : {})
         })
       }
     },
@@ -1584,6 +1653,7 @@ export function App(): JSX.Element {
       settings?.hasKeys,
       settings?.dustWorkspaceId,
       settings?.providerModels,
+      settings?.localSummaryReady,
       suggest.run,
       ask.run,
       ask.fail,
