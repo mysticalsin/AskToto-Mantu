@@ -15,7 +15,8 @@ export const QuickActions = memo(function QuickActions({
   hint,
   rainbowRing,
   providerReady = true,
-  localSummaryReady = false
+  localSummaryReady = false,
+  localSuggestReady = false
 }: {
   onAction: (k: QuickKind) => void
   hint?: string
@@ -25,10 +26,13 @@ export const QuickActions = memo(function QuickActions({
   // the user into Settings. Defaults to true so existing callers are unaffected until wired.
   providerReady?: boolean
   // Métis Local can serve the Summarize chip without any cloud provider (its non-vision branch fires
-  // summary mode, which App.tsx gates on requireProvider('summary')). Only that chip qualifies: the
-  // other three all have direct answer-mode branches only cloud serves, so enabling them local-only
-  // would just bounce the user into Settings after the click instead of before it.
+  // summary mode, which App.tsx gates on requireProvider('summary')), and the What-to-say-next chip
+  // (its transcript-backed route fires suggest mode; App.tsx re-gates the rarer no-transcript answer
+  // route bare). Fact-check and Explain stay cloud-gated: their direct branches all fire answer mode,
+  // which the local model never serves — enabling them local-only would just bounce the user into
+  // Settings after the click instead of before it.
   localSummaryReady?: boolean
+  localSuggestReady?: boolean
 }): JSX.Element {
   return (
     // mt-1.5: a touch more breathing room under the bar — its --shadow-bar reaches well past its own
@@ -38,7 +42,10 @@ export const QuickActions = memo(function QuickActions({
     <div className="fade-up mt-1.5 flex flex-col items-center gap-1.5 px-1">
       <div className="flex flex-wrap items-center justify-center gap-1.5">
         {ACTIONS.map((a) => {
-          const enabled = providerReady || (a.kind === 'summarize' && localSummaryReady)
+          const enabled =
+            providerReady ||
+            (a.kind === 'summarize' && localSummaryReady) ||
+            (a.kind === 'whatnext' && localSuggestReady)
           return (
           <button
             key={a.kind}
