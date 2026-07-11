@@ -28,6 +28,7 @@ const localRuntimeMock = vi.hoisted(() => ({
   detectPlatform: vi.fn(() => 'mac' as const),
   isRunning: vi.fn(() => false),
   getState: vi.fn(() => 'stopped' as const),
+  getActiveModelKey: vi.fn((): string | null => null),
   start: vi.fn(async () => {}),
   markActivity: vi.fn(),
   baseURL: vi.fn(() => 'http://127.0.0.1:54321/v1'),
@@ -74,6 +75,7 @@ beforeEach(() => {
   localRuntimeMock.detectPlatform.mockReturnValue('mac')
   localRuntimeMock.isRunning.mockReturnValue(false)
   localRuntimeMock.getState.mockReturnValue('stopped')
+  localRuntimeMock.getActiveModelKey.mockReturnValue(null)
   localRuntimeMock.start.mockResolvedValue(undefined)
   localRuntimeMock.baseURL.mockReturnValue('http://127.0.0.1:54321/v1')
   localRuntimeMock.sessionKey.mockReturnValue('deadbeefsessionkeydeadbeefsessionkeydeadbeefsessionkeydeadbeef')
@@ -301,18 +303,28 @@ describe('streamLocal', () => {
     expect(openaiMock.streamOpenAI).toHaveBeenCalledOnce()
   })
 
-  it('F5: skips verifyIntegrity when the runtime is already running (not a cold start)', async () => {
+  it('F5: skips verifyIntegrity when the runtime is already running the SAME model (not a cold start, not a switch)', async () => {
     localRuntimeMock.getState.mockReturnValue('running')
+    localRuntimeMock.getActiveModelKey.mockReturnValue('/models/qwen3.5-2b/model.gguf') // matches baseOpts's default model
     streamLocal(baseOpts('suggest'))
     await flush()
     expect(localModelsMock.verifyIntegrity).not.toHaveBeenCalled()
   })
 
-  it('F5: skips verifyIntegrity when the runtime is already starting (not a cold start)', async () => {
+  it('F5: skips verifyIntegrity when the runtime is already starting the SAME model (not a cold start, not a switch)', async () => {
     localRuntimeMock.getState.mockReturnValue('starting')
+    localRuntimeMock.getActiveModelKey.mockReturnValue('/models/qwen3.5-2b/model.gguf') // matches baseOpts's default model
     streamLocal(baseOpts('suggest'))
     await flush()
     expect(localModelsMock.verifyIntegrity).not.toHaveBeenCalled()
+  })
+
+  it('G2: re-verifies integrity on a model SWITCH while running — the active model differs from the one requested', async () => {
+    localRuntimeMock.getState.mockReturnValue('running')
+    localRuntimeMock.getActiveModelKey.mockReturnValue('/models/qwen3.5-2b/model.gguf') // A currently active
+    streamLocal(baseOpts('suggest', { model: 'qwen3.5-0.8b' })) // request switches to B
+    await flush()
+    expect(localModelsMock.verifyIntegrity).toHaveBeenCalledWith('qwen3.5-0.8b')
   })
 
   it('F5: a cold start (state stopped) verifies the configured model’s integrity BEFORE starting', async () => {

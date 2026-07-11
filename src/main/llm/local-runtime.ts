@@ -176,6 +176,15 @@ export function getState(): RuntimeState {
   return state
 }
 
+/** The gguf path of the model currently running/starting/loaded, or null when start() has never run this
+ *  session. Exported ONLY for ensureLocalRuntimeStarted's (local.ts) integrity re-check gate (G2
+ *  hardening): getState()==='stopped' alone only catches a COLD start — a model SWITCH requested while the
+ *  runtime is already running/starting also needs its (different, not-yet-verified) GGUF re-hashed before
+ *  it loads, which getState() alone can't distinguish from a warm same-model request. */
+export function getActiveModelKey(): string | null {
+  return lastModelPaths?.gguf ?? null
+}
+
 function clearIdleTimer(): void {
   if (idleTimer) {
     clearTimeout(idleTimer)
@@ -249,6 +258,17 @@ function spawnAndWaitHealthy(binaryPath: string, modelPaths: ModelPaths, platfor
     })
 
     proc.once('exit', (code, signal) => {
+      // G1 guard: this exit event belongs to a proc that is no longer the module's current `child` (a
+      // newer instance already took over — e.g. a model switch mid-flight) AND its own start promise
+      // already settled (it reached healthy at some point, so this is NOT the pre-health rejection path
+      // below). That combination means this exit is stale — a late SIGKILL exit for a sidecar that was
+      // already superseded. Acting on it here would clobber the NEW instance's child/port/state ownership
+      // (orphaning it — will-quit's stop() would then kill nothing) and could fire a spurious crash audit
+      // + auto-restart for a switch that already succeeded. Do nothing and let the new instance's own
+      // lifecycle continue undisturbed. The pre-health case (settled === false) always falls through below
+      // regardless of identity, so a proc that dies before ever becoming healthy still rejects correctly.
+      if (child !== proc && settled) return
+
       const wasRunning = state === 'running'
       child = null
       port = null
