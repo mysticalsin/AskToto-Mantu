@@ -66,11 +66,14 @@ export const CommitmentSchema = z.object({
 })
 export type Commitment = z.infer<typeof CommitmentSchema>
 
-/** A commitment as stored on an entity: carries its source meeting and a settlement status. */
+/** A commitment as stored on an entity: carries its source meeting and a settlement status.
+ *  'rejected' (Task MI-2) is a human override for a misheard/never-actually-made promise — distinct
+ *  from 'broken' (a real promise that wasn't kept). Every existing `status === 'open'` filter (open-
+ *  commitment surfaces in context.ts, BrainView.tsx) already excludes it for free by construction. */
 export const LedgerCommitmentSchema = CommitmentSchema.extend({
   meeting: z.string(),
   date: z.string().default(''), // ISO date of the source meeting — drives aging on the dashboard
-  status: z.enum(['open', 'kept', 'broken']).default('open')
+  status: z.enum(['open', 'kept', 'broken', 'rejected']).default('open')
 })
 export type LedgerCommitment = z.infer<typeof LedgerCommitmentSchema>
 
@@ -195,6 +198,75 @@ export interface ProvenantField<T> {
   state: ProvenanceState
   superseded: Array<{ value: T; date: string; source_file: string }>
 }
+
+/**
+ * Correction journal (Task MI-2) — the on-disk shape of `.brain/corrections.json`, an append-only log
+ * of every human correction (rename/merge/unmerge/field pin/commitment reject). Every entry is applied
+ * through exactly one function in `src/main/brain/corrections.ts`; `brain:rebuildAll`'s replay calls
+ * those SAME functions in `seq` order, never a parallel reimplementation — that single-mutation
+ * invariant is what makes "rebuild + replay" reproduce the live-corrected state byte-for-byte.
+ * `snapshot` carries whatever pre-mutation state its own kind needs for reversibility (e.g. a merge's
+ * `entity_unmerge` restores from the merge entry's `snapshot`); kinds with nothing to restore omit it.
+ */
+export const EntityKindSchema = z.enum(['person', 'account', 'deal'])
+export type EntityKind = z.infer<typeof EntityKindSchema>
+
+const CorrectionRenamePayloadSchema = z.object({ kind: EntityKindSchema, id: z.string(), newName: z.string() })
+const CorrectionMergePayloadSchema = z.object({ kind: EntityKindSchema, fromId: z.string(), intoId: z.string() })
+const CorrectionUnmergePayloadSchema = z.object({ targetSeq: z.number().int().nonnegative() })
+const CorrectionFieldUpdatePayloadSchema = z.object({
+  kind: EntityKindSchema,
+  id: z.string(),
+  field: z.string(),
+  value: z.unknown()
+})
+const CorrectionCommitmentRejectPayloadSchema = z.object({
+  personSlug: z.string(),
+  dealSlug: z.string().optional(),
+  text: z.string()
+})
+
+export const CorrectionEntrySchema = z.discriminatedUnion('kind', [
+  z.object({
+    seq: z.number().int().nonnegative(),
+    at: z.string(),
+    kind: z.literal('entity_rename'),
+    payload: CorrectionRenamePayloadSchema,
+    snapshot: z.object({ oldName: z.string() }).optional()
+  }),
+  z.object({
+    seq: z.number().int().nonnegative(),
+    at: z.string(),
+    kind: z.literal('entity_merge'),
+    payload: CorrectionMergePayloadSchema,
+    // Full pre-merge PersonEntity/AccountEntity/DealEntity for BOTH sides — validated against the
+    // matching schema (by payload.kind) at unmerge time, never trusted blind from disk.
+    snapshot: z.object({ fromEntity: z.unknown(), intoEntity: z.unknown() }).optional()
+  }),
+  z.object({
+    seq: z.number().int().nonnegative(),
+    at: z.string(),
+    kind: z.literal('entity_unmerge'),
+    payload: CorrectionUnmergePayloadSchema,
+    snapshot: z.undefined().optional()
+  }),
+  z.object({
+    seq: z.number().int().nonnegative(),
+    at: z.string(),
+    kind: z.literal('field_update'),
+    payload: CorrectionFieldUpdatePayloadSchema,
+    snapshot: z.object({ oldField: z.unknown() }).optional()
+  }),
+  z.object({
+    seq: z.number().int().nonnegative(),
+    at: z.string(),
+    kind: z.literal('commitment_reject'),
+    payload: CorrectionCommitmentRejectPayloadSchema,
+    snapshot: z.undefined().optional()
+  })
+])
+export type CorrectionEntry = z.infer<typeof CorrectionEntrySchema>
+export const CorrectionsJournalSchema = z.array(CorrectionEntrySchema)
 
 export const PersonEntitySchema = z.object({
   schema_version: z.number().default(BRAIN_SCHEMA_VERSION),

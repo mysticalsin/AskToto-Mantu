@@ -73,6 +73,69 @@ export function slugify(s: string): string {
   return `x-${hash}`
 }
 
+/** Ledger identity for a commitment is its normalized TEXT — a promise re-spoken in a later meeting
+ *  ("I'll send the deck", again) is the same obligation, not a second open row. The earliest-dated
+ *  row wins (pushUnique keeps the first), so aging starts from when the promise was first made.
+ *  Normalizes Unicode form (NFKC, so visually-identical composed/decomposed text matches), strips
+ *  trailing sentence punctuation (a re-spoken "Send the deck." vs "send the deck" is one obligation),
+ *  then case-folds and collapses whitespace. Lives here (beside slugify) rather than in ingest.ts so
+ *  the correction engine (corrections.ts) can match commitments by the same key without a
+ *  corrections.ts <-> ingest.ts import cycle (ingest.ts re-exports it for backward compatibility). */
+export const commitmentKey = (text: string): string =>
+  text
+    .normalize('NFKC')
+    .trim()
+    .replace(/[.!?…]+$/u, '')
+    .toLowerCase()
+    .replace(/\s+/g, ' ')
+    .trim()
+
+/** Push `item` onto `arr` only if no existing element shares its `key` — the de-dup primitive every
+ *  compounding entity array (meetings, commitments, signals, aliases, graph edges...) is built with.
+ *  Exported for the same reason as commitmentKey above: corrections.ts's entity-merge logic reuses the
+ *  exact same de-dup semantics ingest.ts's mergeExtraction uses, instead of a second implementation. */
+export const pushUnique = <T>(arr: T[], item: T, key: (t: T) => string): void => {
+  if (!arr.some((x) => key(x) === key(item))) arr.push(item)
+}
+
+/** One entry in a ProvenantField's `superseded` history — see the ProvenantField doc comment in
+ *  shared/brain.ts. Lives here (not ingest.ts) for the same import-cycle reason as commitmentKey/
+ *  pushUnique above: corrections.ts's human-pin logic needs the identical history bookkeeping
+ *  ingest.ts's mergeProvenant uses, and ingest.ts itself needs applyCorrections/readAliasMap FROM
+ *  corrections.ts — so this shared piece has to sit below both, not inside either. */
+export type SupersededEntry<T> = { value: T; date: string; source_file: string }
+
+const laterEntry = <T>(a: SupersededEntry<T>, b: SupersededEntry<T>): boolean =>
+  a.date > b.date || (a.date === b.date && a.source_file > b.source_file)
+
+/** Append `entry` to a field's superseded history, deduped per value (keeping the max-(date,
+ *  source_file) sighting), never containing the current value, sorted by that same key descending and
+ *  capped at 10. Used by BOTH ingest.ts's mergeProvenant (rank-gated: the incoming candidate only wins
+ *  if it `outranks` what's held) and corrections.ts's field-pin (unconditional: a human pin always
+ *  wins) — the two are genuinely different operations that happen to share this one history primitive. */
+export function pushSuperseded<T>(
+  list: SupersededEntry<T>[],
+  entry: SupersededEntry<T>,
+  currentValue: T,
+  valuesEqual: (a: T, b: T) => boolean
+): SupersededEntry<T>[] {
+  const out: SupersededEntry<T>[] = []
+  for (const e of [...list, entry]) {
+    if (valuesEqual(e.value, currentValue)) continue // superseded holds only values DIFFERENT from current
+    const i = out.findIndex((x) => valuesEqual(x.value, e.value))
+    if (i === -1) out.push(e)
+    else if (laterEntry(e, out[i])) out[i] = e // one entry per value — its most recent sighting
+  }
+  return out.sort((a, b) => (laterEntry(a, b) ? -1 : laterEntry(b, a) ? 1 : 0)).slice(0, 10)
+}
+
+/** Default value-equality for provenant fields whose value is a plain string/enum/nullable-enum
+ *  (role, org, sector, stage, win_likelihood_band, close_date). */
+export const eqStrict = <T>(a: T, b: T): boolean => a === b
+/** Value-equality for the `velocity` provenant field's {signal, evidence} object shape. */
+export const eqVelocity = (a: { signal: string; evidence: string }, b: { signal: string; evidence: string }): boolean =>
+  a.signal === b.signal && a.evidence === b.evidence
+
 function ensureDirs(settings: Settings): string {
   const root = brainDir(settings)
   for (const d of [root, join(root, 'meetings'), join(root, 'entities', 'person'), join(root, 'entities', 'account'), join(root, 'entities', 'deal')]) {
@@ -90,7 +153,11 @@ function ensureDirs(settings: Settings): string {
 const jsonCache = new Map<string, { mtimeMs: number; size: number; value: unknown }>()
 const JSON_CACHE_MAX = 2000 // safety valve — see recall.ts's identical guard
 
-function readJson<T>(settings: Settings, rel: string, parse: (v: unknown) => T): T | null {
+// Exported (unchanged otherwise) so the correction engine (src/main/brain/corrections.ts) can read/write
+// brain-relative JSON that doesn't fit a strict entity schema — a merged-away entity's tombstone
+// ({schema_version, id, merged_into}) and the `.brain/corrections.json` journal itself both go through
+// these, inheriting the exact same cache/encryption semantics as every typed accessor below.
+export function readJson<T>(settings: Settings, rel: string, parse: (v: unknown) => T): T | null {
   const p = join(brainDir(settings), rel)
   let mtimeMs: number
   let size: number
@@ -115,7 +182,7 @@ function readJson<T>(settings: Settings, rel: string, parse: (v: unknown) => T):
   return value
 }
 
-async function writeJson(settings: Settings, rel: string, value: unknown): Promise<void> {
+export async function writeJson(settings: Settings, rel: string, value: unknown): Promise<void> {
   ensureDirs(settings)
   const p = join(brainDir(settings), rel)
   await writeSaved(p, JSON.stringify(value, null, 2), !!settings.encryptTranscripts)
@@ -216,7 +283,10 @@ function brainHasV1Entities(settings: Settings): boolean {
   return false
 }
 
-function ensureV1Backup(settings: Settings): void {
+// Exported so corrections.ts's raw (schema-unchecked) tombstone writes get the same one-time v1 safety
+// copy as writePerson/writeAccount/writeDeal below — a merge can tombstone an entity file in a brain
+// that still has other not-yet-migrated v1 files sitting alongside it.
+export function ensureV1Backup(settings: Settings): void {
   const root = brainDir(settings)
   if (backupHandled.has(root)) return
   backupHandled.add(root)
@@ -308,11 +378,34 @@ export function listMeetingExtractions(s: Settings): string[] {
  * commitment quotes, stance trails. A wipe that leaves it on disk would break the dialog's promise
  * that "every transcript, note, and the knowledge graph" is removed. Best-effort: never throws, so a
  * locked file can't abort the surrounding meeting wipe. Returns whether the directory is gone.
+ *
+ * `preserveCorrections` (Task MI-2): brain:rebuildAll purges the DERIVED store and re-extracts
+ * everything, but the human correction journal (`.brain/corrections.json`) is not derived data — it's
+ * the record of explicit human actions the rebuild's own replayCorrections() step depends on to
+ * reproduce the live-corrected state. A rebuild that let this wipe destroy the journal would replay
+ * nothing and resurrect every misheard/merged-away entity the journal had already fixed — exactly the
+ * divergence the correction engine exists to prevent. recallDeleteAll's full-erasure call site leaves
+ * this false on purpose: that flow's explicit promise is "every transcript, note, and the knowledge
+ * graph" gone, corrections included. Copies the journal's raw on-disk bytes (respects encryption,
+ * mirroring ensureV1Backup's cpSync convention above) rather than decrypting/re-encrypting it.
  */
-export function purgeBrain(settings: Settings): { ok: boolean } {
+export function purgeBrain(settings: Settings, opts: { preserveCorrections?: boolean } = {}): { ok: boolean } {
   const root = brainDir(settings)
+  const journalPath = join(root, 'corrections.json')
+  const preserveTo = `${root}.corrections-preserve.json`
   try {
+    const preserve = !!opts.preserveCorrections && existsSync(journalPath)
+    if (preserve) cpSync(journalPath, preserveTo)
     if (existsSync(root)) rmSync(root, { recursive: true, force: true })
+    if (preserve) {
+      mkdirSync(root, { recursive: true })
+      cpSync(preserveTo, journalPath)
+      rmSync(preserveTo, { force: true })
+      // Everything except the restored journal is confirmed gone; the journal's presence here is
+      // deliberate, not a failed wipe — success means "nothing but the preserved file remains".
+      const remaining = readdirSync(root)
+      return { ok: remaining.length === 1 && remaining[0] === 'corrections.json' }
+    }
     return { ok: !existsSync(root) }
   } catch (e) {
     console.warn('[brain] purgeBrain: could not remove', root, e)
