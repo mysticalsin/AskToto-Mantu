@@ -1,6 +1,7 @@
 import {
   app,
   BrowserWindow,
+  crashReporter,
   globalShortcut,
   ipcMain,
   screen,
@@ -167,6 +168,14 @@ import { SaveMeetingSchema, SaveNoteSchema } from '@shared/ipc'
 import { PROVIDERS, resolveModelTier, applyInteractiveGuardrail, type ProviderId } from '@shared/providers'
 import { routeTier } from '@shared/routing'
 import { redactSecrets } from '@shared/redact'
+
+// LOCAL-ONLY native crash capture (zero telemetry — uploadToServer:false means minidumps land in
+// app.getPath('crashDumps') under userData and are NEVER transmitted anywhere; consistent with the
+// no-crashReporter-upload design note near the uncaught-exception dialog below). Without this, a native
+// Chromium CHECK crash (observed once: Electron 39.8.10 startup thread-pool SIGTRAP on the macOS 27
+// beta, no app frames in the stack) dies invisibly — the OS crash log is the only trace and nothing in
+// the app's own diagnostics can even count it. Must run before app ready.
+crashReporter.start({ uploadToServer: false })
 
 // Belt-and-braces with the per-meeting powerSaveBlocker below: keep Chromium itself from ever
 // deprioritizing the (hidden) renderer that hosts the transcription worker. Must run before app ready.
@@ -3174,9 +3183,25 @@ app.on('window-all-closed', () => {
 })
 
 app.on('will-quit', () => {
-  globalShortcut.unregisterAll()
+  // will-quit can fire BEFORE the app ever finished becoming ready — a quit requested during the async
+  // startup sequence, an automation/Playwright app.close(), or an early abort. Calling globalShortcut in
+  // that window throws "globalShortcut cannot be used before the app is ready" as an UNCAUGHT exception
+  // (the observed crash), and there is nothing registered to unregister anyway — so gate it on isReady().
+  // Each cleanup step is independent (its own try): a throw in one must never skip the sidecar kill
+  // below, because an orphaned llama-server outliving the app the user just quit is the worse failure.
+  if (app.isReady()) {
+    try {
+      globalShortcut.unregisterAll()
+    } catch (e) {
+      mainLog.warn('[will-quit] globalShortcut.unregisterAll failed', e)
+    }
+  }
   if (notifTimer) clearInterval(notifTimer)
   // Kill the llama-server sidecar synchronously (SIGKILL, F3 hardening) — without this an on-device
   // suggest/summary/vision sidecar could outlive the app the user just quit.
-  localRuntime.stop()
+  try {
+    localRuntime.stop()
+  } catch (e) {
+    mainLog.warn('[will-quit] localRuntime.stop failed', e)
+  }
 })
