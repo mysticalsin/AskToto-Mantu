@@ -15,7 +15,7 @@ import { randomBytes } from 'node:crypto'
 import { existsSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { app } from 'electron'
-import { auditLog } from '../logger'
+import { auditLog, mainLog } from '../logger'
 import { errMsg } from './shared'
 
 export type LlamaPlatform = 'mac' | 'win'
@@ -151,6 +151,14 @@ let lastModelPaths: ModelPaths | null = null
 // 'starting' awaits THIS SAME promise instead of racing ahead on its own — so baseURL()/sessionKey() are
 // never reachable by a caller whose await resolved before the sidecar actually finished spawning + health.
 let startPromise: Promise<void> | null = null
+// Count of local HTTP requests currently streaming from the running sidecar (switch-kill hardening): a
+// model switch must never SIGKILL the child out from under a request that has already started receiving
+// tokens from it (no retry exists once tokens have started — index.ts's onError only retries/fails over
+// when the stream hasn't produced any token yet). beginStream()/endStream() bracket exactly the span
+// local.ts's streamLocal() holds an open streamOpenAI() call against this sidecar. drainWaiters holds the
+// resolvers for any start() call currently blocked in waitForDrain() below.
+let activeStreamCount = 0
+let drainWaiters: Array<() => void> = []
 
 /** The per-session sidecar api key. Lives only in this module's memory — never logged, never sent to
  *  the renderer (main injects it directly into the local provider's outbound request). */
@@ -205,6 +213,31 @@ function scheduleIdleStop(): void {
  *  prove the sidecar is in active use for the current meeting. */
 export function markActivity(): void {
   scheduleIdleStop()
+}
+
+/** Mark one local HTTP stream as attached to the running sidecar (switch-kill hardening). Call exactly
+ *  once, immediately before making the real streamOpenAI() request — never during
+ *  ensureLocalRuntimeStarted(), which hasn't touched the wire yet. Paired 1:1 with endStream(). */
+export function beginStream(): void {
+  activeStreamCount++
+}
+
+/** Mark one local HTTP stream as finished — success, error, or abort, exactly once per beginStream()
+ *  call. Wakes any start() call currently blocked in waitForDrain() once the count reaches zero. */
+export function endStream(): void {
+  if (activeStreamCount > 0) activeStreamCount--
+  if (activeStreamCount === 0 && drainWaiters.length > 0) {
+    const waiters = drainWaiters
+    drainWaiters = []
+    for (const resolve of waiters) resolve()
+  }
+}
+
+/** Resolves once activeStreamCount reaches zero (immediately, if it already is). start()'s model-switch
+ *  branch awaits this instead of killing the sidecar out from under an in-flight stream. */
+function waitForDrain(): Promise<void> {
+  if (activeStreamCount === 0) return Promise.resolve()
+  return new Promise((resolve) => drainWaiters.push(resolve))
 }
 
 function spawnAndWaitHealthy(binaryPath: string, modelPaths: ModelPaths, platform: LlamaPlatform): Promise<void> {
@@ -370,6 +403,18 @@ export async function start(modelPaths: ModelPaths, platform: LlamaPlatform = de
   }
   if (state === 'running') {
     if (samePaths(lastModelPaths, modelPaths)) return
+    if (activeStreamCount > 0) {
+      // A different model was requested while >=1 request is actively streaming from the current sidecar
+      // (switch-kill hardening) — killing it now would truncate that response mid-flight with no retry
+      // (index.ts's onError only retries/fails over when the stream hasn't produced a token yet). Defer:
+      // wait for every in-flight stream to finish, then re-evaluate (mirrors the 'starting' branch above)
+      // instead of switching here. A caller for the SAME model that becomes active in the meantime resolves
+      // via the samePaths() check above once this recurses. Diagnostic only (mainLog, not auditLog) — no
+      // security-relevant action has happened yet; the eventual stop/start still audits as it always did.
+      mainLog.info('local runtime: model switch deferred — stream(s) active', { activeStreamCount })
+      await waitForDrain()
+      return start(modelPaths, platform)
+    }
     // Model switch: kill the running sidecar synchronously before spawning the newly requested model.
     clearIdleTimer()
     stopChildProcess()

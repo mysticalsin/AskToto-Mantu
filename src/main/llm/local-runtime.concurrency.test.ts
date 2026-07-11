@@ -51,8 +51,8 @@ vi.mock('node:child_process', async () => {
   return { spawn }
 })
 
-import { start, stop, isRunning, baseURL } from './local-runtime'
-import { auditLog } from '../logger'
+import { start, stop, isRunning, baseURL, beginStream, endStream } from './local-runtime'
+import { auditLog, mainLog } from '../logger'
 
 type FetchImpl = (...args: unknown[]) => Promise<{ status: number }>
 let fetchImpl: FetchImpl = async () => ({ status: 200 })
@@ -199,6 +199,84 @@ describe('F2 — model switch', () => {
 
     expect(spawnState.calls[1].args).toContain('/m/b.gguf')
     expect(spawnState.procs[0].killed).toBe(true) // A was killed once the switch happened
+    expect(isRunning()).toBe(true)
+  })
+})
+
+describe('switch-kill hardening — model switch defers instead of killing an active stream', () => {
+  afterEach(() => {
+    // Drain any stream left open by a test that intentionally never called endStream() — stop()'s own
+    // afterEach hook above doesn't know about activeStreamCount, and a leaked count would spill into the
+    // next test's waitForDrain() as a permanently-blocked switch.
+    endStream()
+  })
+
+  it('does NOT kill the running sidecar while a stream is active — defers until the stream ends, then switches', async () => {
+    const pathsA = { gguf: '/m/a.gguf', mmproj: '/m/a.mmproj' }
+    const pathsB = { gguf: '/m/b.gguf', mmproj: '/m/b.mmproj' }
+
+    const p1 = start(pathsA, 'mac')
+    emitListening(0, 55601)
+    await p1
+    const procA = spawnState.procs[0]
+
+    beginStream() // simulates an in-flight suggest/summary/vision request actively streaming from A
+
+    const p2 = start(pathsB, 'mac') // Settings 'Use this model' -> next local request requests a switch to B
+
+    // Give the deferred branch several microtask turns to (not) act while the stream is still open.
+    for (let i = 0; i < 5; i++) await Promise.resolve()
+    expect(procA.kill).not.toHaveBeenCalled()
+    expect(spawnState.calls.length).toBe(1) // B has not spawned — the switch is deferred, not abandoned
+    expect(isRunning()).toBe(true)
+    expect(baseURL()).toBe('http://127.0.0.1:55601/v1') // still A — the in-flight response can keep streaming
+
+    endStream() // the in-flight request finishes (onDone/onError/abort)
+
+    await waitUntil(() => spawnState.calls.length === 2) // NOW the deferred switch proceeds
+    emitListening(1, 55602)
+    await p2
+
+    expect(procA.kill).toHaveBeenCalledWith('SIGKILL')
+    expect(spawnState.calls[1].args).toContain('/m/b.gguf')
+    expect(isRunning()).toBe(true)
+    expect(baseURL()).toBe('http://127.0.0.1:55602/v1')
+    expect(mainLog.info).toHaveBeenCalledWith(
+      expect.stringMatching(/switch deferred/),
+      expect.objectContaining({ activeStreamCount: 1 })
+    )
+    // The eventual switch itself still fires the same audit event as an unconstrained switch always did.
+    expect(auditLog).toHaveBeenCalledWith('local.runtime.stop', { reason: 'model_switch' })
+  })
+
+  it('a caller re-requesting the SAME (already-running) model while a stream is active resolves immediately — no deferral needed', async () => {
+    const pathsA = { gguf: '/m/a.gguf', mmproj: '/m/a.mmproj' }
+    const p1 = start(pathsA, 'mac')
+    emitListening(0, 55701)
+    await p1
+    const procA = spawnState.procs[0]
+
+    beginStream()
+    await start(pathsA, 'mac') // same model — samePaths() short-circuits before the activeStreamCount check
+    expect(procA.kill).not.toHaveBeenCalled()
+    expect(spawnState.calls.length).toBe(1)
+    endStream()
+  })
+
+  it('switches immediately (baseline unaffected) when no stream is active — activeStreamCount defaults to zero', async () => {
+    const pathsA = { gguf: '/m/a.gguf', mmproj: '/m/a.mmproj' }
+    const pathsB = { gguf: '/m/b.gguf', mmproj: '/m/b.mmproj' }
+    const p1 = start(pathsA, 'mac')
+    emitListening(0, 55801)
+    await p1
+    const procA = spawnState.procs[0]
+
+    const p2 = start(pathsB, 'mac')
+    await waitUntil(() => spawnState.calls.length === 2)
+    emitListening(1, 55802)
+    await p2
+
+    expect(procA.kill).toHaveBeenCalledWith('SIGKILL')
     expect(isRunning()).toBe(true)
   })
 })

@@ -665,9 +665,12 @@ export function BrainView({ onBack }: { onBack: () => void }): JSX.Element {
                 <button
                   type="button"
                   onClick={() => {
-                    void navigator.clipboard.writeText(renderMarsMarkdown(mars)).then(() => {
-                      flashMarsCopied()
-                    })
+                    navigator.clipboard
+                      .writeText(renderMarsMarkdown(mars))
+                      .then(() => {
+                        flashMarsCopied()
+                      })
+                      .catch((e) => setError(`Copy failed: ${e instanceof Error ? e.message : String(e)}`))
                   }}
                   title="Copy the full Mars draft as markdown"
                   className="no-drag focus-ring flex items-center gap-1 rounded-lg px-1.5 py-0.5 text-[10px] font-semibold text-[color:var(--color-ink-3)] hover:text-[color:var(--color-ink)]"

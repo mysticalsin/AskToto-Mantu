@@ -31,6 +31,8 @@ const localRuntimeMock = vi.hoisted(() => ({
   getActiveModelKey: vi.fn((): string | null => null),
   start: vi.fn(async () => {}),
   markActivity: vi.fn(),
+  beginStream: vi.fn(),
+  endStream: vi.fn(),
   baseURL: vi.fn(() => 'http://127.0.0.1:54321/v1'),
   sessionKey: vi.fn(() => 'deadbeefsessionkeydeadbeefsessionkeydeadbeefsessionkeydeadbeef')
 }))
@@ -396,5 +398,58 @@ describe('streamLocal', () => {
     await flush()
     handle.abort()
     expect(innerAbort).toHaveBeenCalledOnce()
+  })
+
+  // ─── switch-kill hardening — beginStream()/endStream() pairing ────────────────────────────────────
+  // local-runtime.ts's start() defers a model switch while activeStreamCount > 0 instead of SIGKILLing the
+  // sidecar out from under an in-flight response. These prove streamLocal holds that count open for exactly
+  // the span it has a live request against the sidecar, and releases it exactly once no matter which
+  // termination path (done, error, or abort) fires — a leaked +1 would permanently block every future switch,
+  // a double-release would let a switch through while a stream is still actually in flight.
+  it('calls localRuntime.beginStream() before invoking streamOpenAI, and does not release it before the stream ends', async () => {
+    streamLocal(baseOpts('suggest'))
+    await flush()
+    expect(localRuntimeMock.beginStream).toHaveBeenCalledOnce()
+    expect(localRuntimeMock.endStream).not.toHaveBeenCalled()
+  })
+
+  it('releases the stream via endStream() exactly once when the inner stream completes (onDone)', async () => {
+    streamLocal(baseOpts('suggest'))
+    await flush()
+    const passed = openaiMock.streamOpenAI.mock.calls[0][0] as StreamOptions
+    passed.handlers.onDone({})
+    expect(localRuntimeMock.endStream).toHaveBeenCalledOnce()
+  })
+
+  it('releases the stream via endStream() exactly once when the inner stream errors (onError)', async () => {
+    streamLocal(baseOpts('suggest'))
+    await flush()
+    const passed = openaiMock.streamOpenAI.mock.calls[0][0] as StreamOptions
+    passed.handlers.onError('boom')
+    expect(localRuntimeMock.endStream).toHaveBeenCalledOnce()
+  })
+
+  it('abort() mid-stream releases the stream immediately, even though the inner onError never fires (mirrors openai.ts suppressing onError once aborted)', async () => {
+    const handle = streamLocal(baseOpts('suggest'))
+    await flush()
+    handle.abort()
+    expect(localRuntimeMock.endStream).toHaveBeenCalledOnce()
+  })
+
+  it('never double-releases when abort() fires after the stream already terminated on its own', async () => {
+    const handle = streamLocal(baseOpts('suggest'))
+    await flush()
+    const passed = openaiMock.streamOpenAI.mock.calls[0][0] as StreamOptions
+    passed.handlers.onError('boom')
+    handle.abort() // late — must be a no-op for the release count
+    expect(localRuntimeMock.endStream).toHaveBeenCalledOnce()
+  })
+
+  it('never calls beginStream()/endStream() when the sidecar never actually started a stream (start() rejected)', async () => {
+    localRuntimeMock.start.mockRejectedValue(new Error('llama-server binary missing'))
+    streamLocal(baseOpts('suggest'))
+    await flush()
+    expect(localRuntimeMock.beginStream).not.toHaveBeenCalled()
+    expect(localRuntimeMock.endStream).not.toHaveBeenCalled()
   })
 })
