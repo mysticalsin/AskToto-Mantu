@@ -170,9 +170,11 @@ export type AliasMap = Map<string, AliasEntry>
  * for the current name itself — or it would silently create a second "acme" file instead of updating the
  * existing one.
  *
- * This is deliberately the map ingest.ts's applyCorrections (display rewriting) uses on its own,
- * WITHOUT the journal overlay readAliasMap below adds — see the wiring comment in ingestExtraction for
- * why rewriting display strings from the journal during a rebuild would break byte-convergence.
+ * Also the base layer readAliasMap below unions with journal-derived aliases. Since the MI-2 review fix,
+ * THAT union map is what both file routing and display rewriting use (see ingestExtraction's wiring
+ * comment) — eagerly rewriting from the journal during a rebuild's re-ingest is safe because applyRename
+ * retroactively repaints every already-baked dependent display string at rename time, live and replay
+ * alike, so the two paths converge regardless of which one baked a given string first.
  */
 export function readEntityAliasMap(s: Settings): AliasMap {
   const map: AliasMap = new Map()
@@ -270,8 +272,9 @@ export function aliasMapFromJournal(entries: CorrectionEntry[]): AliasMap {
 /**
  * The full alias map: entity-file-derived aliases UNIONED with journal-derived aliases (journal wins on
  * a key conflict — it is the record of explicit human intent, and overlaying it also closes live-path
- * ordering holes where an entity file lags the journal). This is the map file ROUTING uses; display
- * rewriting deliberately uses readEntityAliasMap alone (see ingestExtraction's wiring comment).
+ * ordering holes where an entity file lags the journal). Used for BOTH file ROUTING and display
+ * REWRITING (ingestExtraction's applyCorrections call) — see applyRename's own doc comment for the half
+ * of the fix that makes a single union map safe for both.
  */
 export function readAliasMap(s: Settings): AliasMap {
   const map = readEntityAliasMap(s)
@@ -360,17 +363,118 @@ function unionAliases(existing: string[], additions: string[]): string[] {
 
 // ── entity_rename ────────────────────────────────────────────────────────────
 
+/** Normalized "known surface forms" of an entity right before a rename mutates its own aliases: the old
+ *  name plus every alias already on file (itself accumulated from earlier renames/merges). This is the
+ *  match set the retroactive sweep below uses to decide whether an already-baked display string
+ *  elsewhere is "about this entity" — slugify-normalized, matching every other alias lookup in this
+ *  file, so an accented/cased variant still matches. */
+function surfaceFormKeys(oldName: string, priorAliases: string[]): Set<string> {
+  const keys = new Set<string>()
+  for (const name of [oldName, ...priorAliases]) {
+    const key = slugify(name)
+    if (key) keys.add(key)
+  }
+  return keys
+}
+
+/** Account renamed: retroactively repaint every deal/person display string that named it under an old
+ *  surface form (reviewer IMPORTANT: old-name-reuse-after-rename diverges live-vs-rebuild otherwise).
+ *  `deal.account` is a plain (non-provenant) field populated once at deal creation from whatever the
+ *  account was called then — nothing else ever refreshes it, so without this it would cite a pre-rename
+ *  name forever. `person.org_provenance.value` (+ its plain `.account` mirror) is the CURRENT org; its
+ *  `superseded` history is the org's past sightings — both name this same account and get the same
+ *  treatment, via the existing pushSuperseded bookkeeping (dedupe/sort/cap unchanged), so a rebuilt
+ *  history reads exactly like the live one instead of citing a name that exists nowhere else anymore. */
+async function sweepAccountRenameDependents(s: Settings, newName: string, surfaceForms: Set<string>): Promise<void> {
+  for (const slug of listEntities(s, 'deal')) {
+    const deal = readDeal(s, slug)
+    if (!deal || !surfaceForms.has(slugify(deal.account))) continue
+    const working = cloneEntity(deal)
+    working.account = newName
+    await writeDeal(s, slug, working)
+  }
+  for (const slug of listEntities(s, 'person')) {
+    const person = readPerson(s, slug)
+    const prov = person?.org_provenance
+    if (!person || !prov) continue
+    const currentHit = surfaceForms.has(slugify(prov.value))
+    const supersededHit = prov.superseded.some((e) => surfaceForms.has(slugify(e.value)))
+    if (!currentHit && !supersededHit) continue
+    const working = cloneEntity(person)
+    const workingProv = working.org_provenance!
+    if (currentHit) workingProv.value = newName
+    let superseded: typeof workingProv.superseded = []
+    for (const e of workingProv.superseded) {
+      const value = surfaceForms.has(slugify(e.value)) ? newName : e.value
+      superseded = pushSuperseded(superseded, { value, date: e.date, source_file: e.source_file }, workingProv.value, eqStrict)
+    }
+    workingProv.superseded = superseded
+    working.org_provenance = workingProv
+    working.account = workingProv.value
+    await writePerson(s, slug, working)
+  }
+}
+
+/** A person's identity changed (renamed, OR merged into another person — both callers below): retroactively
+ *  repaint the bare display-name strings every account's `.people[]` holds (a plain array of names, not
+ *  slugs — mergeExtraction pushes `p.name` verbatim, so a stale entry never self-corrects). Rewritten
+ *  entries are re-deduped with the same exact-string `pushUnique` key mergeExtraction itself uses for
+ *  this array, so a name change that makes two entries collide collapses them exactly like a fresh
+ *  ingest would. `newName` is the entity's own new name for a rename, or the SURVIVING entity's
+ *  (unchanged) current name for a merge. */
+async function sweepPersonNameDependents(s: Settings, newName: string, surfaceForms: Set<string>): Promise<void> {
+  for (const slug of listEntities(s, 'account')) {
+    const account = readAccount(s, slug)
+    if (!account || !account.people.some((n) => surfaceForms.has(slugify(n)))) continue
+    const working = cloneEntity(account)
+    const deduped: string[] = []
+    for (const n of working.people) pushUnique(deduped, surfaceForms.has(slugify(n)) ? newName : n, (x) => x)
+    working.people = deduped
+    await writeAccount(s, slug, working)
+  }
+}
+
+/** Every renamed entity has ONE graph node (`${kind}:${id}`, id immutable) whose `label` mergeExtraction
+ *  only ever sets on FIRST sight (`addNode` dedupes by id) — so without this the node would go on
+ *  showing the pre-rename name forever even though every other trace of the old name has been repainted. */
+async function sweepGraphNodeLabel(s: Settings, kind: EntityKind, id: string, newName: string): Promise<void> {
+  const graph = readGraph(s)
+  const node = graph.nodes.find((n) => n.id === `${kind}:${id}`)
+  if (!node || node.label === newName) return
+  node.label = newName
+  await writeGraph(s, graph)
+}
+
 async function applyRename(
   s: Settings,
-  payload: { kind: EntityKind; id: string; newName: string }
+  payload: { kind: EntityKind; id: string; newName: string },
+  // Replay-only (mirrors applyMerge's own snapshotHint below): the journal entry's own recorded
+  // pre-rename name. During a rebuild, applyCorrections' union-map display rewrite (readAliasMap) can
+  // have ALREADY baked payload.newName into this very entity at re-ingest time — the journal knows the
+  // rename before replay ever reaches it — so `entity.name` read here may no longer be the TRUE
+  // historical old name. Using the journal's own snapshot instead keeps the alias this rename records
+  // (and the surface-form set the sweep below matches against) correct regardless of what re-ingest
+  // already baked. Never passed on the live path (renameEntity), where `entity.name` is always still
+  // genuinely the old name — so live behavior is unchanged when this is omitted.
+  snapshotHint?: { oldName: string }
 ): Promise<{ ok: boolean; error?: string; snapshot?: { oldName: string } }> {
   const entity = readTypedEntity(s, payload.kind, payload.id)
   if (!entity) return { ok: false, error: 'Entity not found.' }
   const working = cloneEntity(entity)
-  const oldName = working.name
+  const oldName = snapshotHint?.oldName ?? working.name
+  const surfaceForms = surfaceFormKeys(oldName, working.aliases)
   working.aliases = unionAliases(working.aliases, [oldName])
   working.name = payload.newName
   await writeTypedEntity(s, payload.kind, payload.id, working)
+
+  // Retroactive rewrite of every already-baked display string elsewhere that names this entity under an
+  // old surface form. Lives INSIDE applyRename, so it is automatically journaled (the same single
+  // entity_rename entry, nothing new) and automatically replayed (the very same call, live or replay) —
+  // never a second, parallel implementation of the rename.
+  if (payload.kind === 'account') await sweepAccountRenameDependents(s, payload.newName, surfaceForms)
+  else if (payload.kind === 'person') await sweepPersonNameDependents(s, payload.newName, surfaceForms)
+  await sweepGraphNodeLabel(s, payload.kind, payload.id, payload.newName)
+
   return { ok: true, snapshot: { oldName } }
 }
 
@@ -519,6 +623,17 @@ async function applyMerge(
     id: payload.fromId,
     merged_into: payload.intoId
   })
+
+  // A merged-away PERSON's old display name can already be baked into an unrelated account's
+  // `.people[]` (a meeting mentioning them was ingested before this merge ever ran). Display rewrite
+  // now uses the UNION alias map (readAliasMap), which already knows about a merge via the journal — so
+  // a REBUILD's re-ingest of that same meeting bakes the SURVIVING name directly, while the original
+  // live ingest baked the pre-merge name (nothing knew about the merge yet). Without this sweep the two
+  // paths would diverge (live: both old and new names present; rebuild: new name only) — the same
+  // repaint-at-correction-time treatment applyRename gives its dependents, just triggered by a merge.
+  if (payload.kind === 'person') {
+    await sweepPersonNameDependents(s, target.name, surfaceFormKeys(from.name, [...from.aliases, from.id]))
+  }
 
   // Rewrite graph edges fromId -> intoId (never touches nodes — an orphaned fromId node is harmless and
   // out of this task's scope), dropping any resulting self-loop and de-duping exactly like ingest.ts's
@@ -797,6 +912,11 @@ export async function rejectCommitment(
  */
 export async function replayCorrections(s: Settings): Promise<{ applied: number; warnings: string[] }> {
   const journal = readCorrectionsJournal(s)
+  // Built once from the FULL journal (every entry, not just ones already replayed) — a field_update's
+  // target can be merged away by a LATER entry in seq order; resolving through the complete alias/merge
+  // map is what lets a pin-then-merge-away rebuild apply the pin against the surviving entity (see the
+  // field_update case below) instead of spuriously warning "not found".
+  const journalAliases = aliasMapFromJournal(journal)
   const warnings: string[] = []
   let applied = 0
   for (const entry of journal) {
@@ -804,7 +924,9 @@ export async function replayCorrections(s: Settings): Promise<{ applied: number;
       let r: { ok: boolean; error?: string }
       switch (entry.kind) {
         case 'entity_rename':
-          r = await applyRename(s, entry.payload)
+          // The entry's snapshot carries the TRUE pre-rename name — see applyRename's snapshotHint doc
+          // comment for why entity.name alone can no longer be trusted for this during a rebuild.
+          r = await applyRename(s, entry.payload, entry.snapshot)
           break
         case 'entity_merge':
           // The entry's snapshot stands in for the source when re-ingest already routed it away —
@@ -814,9 +936,21 @@ export async function replayCorrections(s: Settings): Promise<{ applied: number;
         case 'entity_unmerge':
           r = await applyUnmerge(s, entry.payload, journal)
           break
-        case 'field_update':
-          r = await applyFieldUpdate(s, entry.payload, entry.at)
+        case 'field_update': {
+          // A rebuild's re-ingest routes a since-merged-away target's meetings straight to the merge
+          // survivor (see readAliasMap's doc comment) — so `entry.payload.id` may never materialize as
+          // its own file during replay, even though the pin it carries genuinely survives: the LATER
+          // entity_merge entry's own replay folds it into the survivor via foldProvenant, from that
+          // entry's own snapshot. Resolving the id through the journal map applies the pin directly
+          // against the survivor instead — matching where it ends up anyway. A target that was only ever
+          // renamed resolves to the SAME id (renames never change id), and a target never touched by any
+          // rename/merge has no hit at all — both fall through to the original id unchanged, so this is
+          // a no-op for every case except the one it exists to fix.
+          const hit = journalAliases.get(slugify(entry.payload.id))
+          const resolvedId = hit && hit.kind === entry.payload.kind ? hit.id : entry.payload.id
+          r = await applyFieldUpdate(s, { ...entry.payload, id: resolvedId }, entry.at)
           break
+        }
         case 'commitment_reject':
           r = await applyRejectCommitment(s, entry.payload)
           break

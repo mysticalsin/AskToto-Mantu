@@ -43,13 +43,7 @@ import {
   listEntities,
   listMeetingExtractions
 } from './store'
-import {
-  applyCorrections,
-  readEntityAliasMap,
-  aliasMapFromJournal,
-  readCorrectionsJournal,
-  resolveEntitySlug
-} from './corrections'
+import { applyCorrections, readAliasMap, resolveEntitySlug } from './corrections'
 
 /**
  * Brain ingest — turns one saved transcript into a structured extraction, then merges it into the
@@ -596,34 +590,40 @@ export async function ingestExtraction(s: Settings, x: MeetingExtraction, md: st
   // These are trusted provenance stamps, never model-authored extraction fields.
   x.source_mode = sourceMode
   x.source_use = classifyMeetingSourceUse(sourceMode)
-  // Correction-engine wiring — TWO alias maps with deliberately different scopes:
+  // Correction-engine wiring: BOTH display rewrite (applyCorrections) and file routing
+  // (mergeExtraction) share the SAME union alias map (readAliasMap — entity-file aliases ∪
+  // journal-derived aliases: rename chains resolved transitively, merges mapped from → into).
   //
-  //   1. DISPLAY REWRITE (applyCorrections) uses the ENTITY-FILE-derived map only. On the live path
-  //      that's the full current alias state, so a meeting that (re)uses a corrected-away name (e.g.
-  //      "Acme Corp" after a rename to "Acme") gets its display strings fixed before they bake into
-  //      entity data. During a REBUILD's re-ingest the entity files are freshly recreated and carry no
-  //      aliases yet — so no rewriting happens, exactly like the ORIGINAL live ingest of those same
-  //      pre-correction meetings. That equivalence is what keeps baked display strings (person.account,
-  //      deal.account, account.people) byte-identical between live and rebuild; rewriting them here
-  //      from the journal would bake post-correction names into data the live path baked
-  //      pre-correction, breaking the convergence property outright.
+  // Before the MI-2 review fix, display rewrite used the entity-file map ALONE: during a rebuild's
+  // re-ingest (which runs BEFORE replayCorrections), entity files carry no aliases yet, so nothing got
+  // rewritten — matching the live path's OWN pre-correction ingests, which also had nothing to rewrite
+  // at that point in real time. That equivalence broke the moment a POST-correction meeting reused an
+  // old surface form (e.g. "Acme Corp" after a rename to "Acme"): live already had the alias by then
+  // (applyCorrections caught it), but a rebuild's re-ingest didn't yet (replay hadn't run) — a
+  // live-vs-rebuilt divergence in deal.account, person.account/org, etc.
   //
-  //   2. FILE ROUTING (mergeExtraction) uses the UNION of entity-file aliases and JOURNAL-derived
-  //      aliases (rename chains resolved transitively, merges mapped from → into). The journal overlay
-  //      is what stops a rebuild from forking a duplicate entity: re-ingest runs BEFORE
-  //      replayCorrections, so a post-rename meeting's name ("Acme") has no entity-file alias yet — the
-  //      journal is the only witness that it belongs to the existing id ("acme-corp"). Routing to the
-  //      immutable id is safe in a way display rewriting is not: it decides WHICH file compounds, never
-  //      what any stored string says.
+  // The fix has two halves that only converge TOGETHER:
+  //   1. applyRename (corrections.ts) now retroactively rewrites every already-baked dependent display
+  //      string (deal.account, person.account + org_provenance.value/superseded, account.people, graph
+  //      node labels) the moment a rename runs — live AND replay, since it's the same function. A
+  //      PRE-correction meeting's baked strings get fixed up right then, regardless of which path baked
+  //      them first.
+  //   2. Display rewrite here switches to the UNION map, so a POST-correction meeting's strings are
+  //      correct from the moment of ingest even during a rebuild's re-ingest (before replay reaches the
+  //      correction) — matching what the live path already had by the time that same meeting was
+  //      originally ingested for real.
+  // Together: pre-correction meetings are fixed up retroactively (by 1), post-correction meetings are
+  // fixed up immediately (by 2) — so live and rebuilt ENTITY files converge regardless of ingest order.
+  // The raw STORED meeting-extraction files under `.brain/meetings/` are a deliberate exception: they
+  // are the as-extracted historical record and are never retroactively rewritten by applyRename's sweep
+  // (only entity files are) — see the MI-2 review report for the convergence check on those files.
   //
   // Persisting the (possibly rewritten) extraction rather than the raw one keeps the stored meeting
   // file and the merged entities in agreement.
-  const entityAliases = readEntityAliasMap(s)
-  applyCorrections(x, entityAliases)
-  const routingAliases = new Map(entityAliases)
-  for (const [k, v] of aliasMapFromJournal(readCorrectionsJournal(s))) routingAliases.set(k, v)
+  const aliasMap = readAliasMap(s)
+  applyCorrections(x, aliasMap)
   await writeMeetingExtraction(s, slugify(key), x)
-  await mergeExtraction(s, x, ref, routingAliases)
+  await mergeExtraction(s, x, ref, aliasMap)
   await updateIndex(s, (idx) => {
     idx.ingested[key] = { at: Date.now(), ok: true }
   })

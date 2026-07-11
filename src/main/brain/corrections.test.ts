@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { mkdtempSync, rmSync, readFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { join, basename } from 'node:path'
 import { tmpdir } from 'node:os'
 import type { Settings } from '@shared/ipc'
 import { MeetingExtractionSchema, type MeetingExtraction, type CorrectionEntry } from '@shared/brain'
@@ -13,6 +13,7 @@ import {
   readPerson,
   readAccount,
   readDeal,
+  readMeetingExtraction,
   listEntities,
   purgeBrain
 } from './store'
@@ -204,6 +205,193 @@ describe('corrections engine', () => {
     expect(replay.warnings).toEqual([])
 
     expect(listEntities(s, 'account')).toEqual([ID]) // transitive: A and B must both resolve to the one entity
+    expect(snapshotEntities(s)).toEqual(liveSnapshot)
+  })
+
+  // ── ★ Rebuild-converges: old-name-reuse-after-rename (FIX 1 — reviewer's exact probe) ───
+  // Root cause under test: applyRename never retroactively rewrote already-baked dependent display
+  // strings (deal.account, person.account/org_provenance.value) elsewhere, AND display rewrite used the
+  // entity-file map alone — so a POST-rename meeting that reuses the OLD name, introducing a NEW deal +
+  // NEW person, baked the OLD name during a rebuild's re-ingest (journal not yet replayed at that point)
+  // while the live path baked the NEW name (entity-file alias already present by then). Divergent.
+  it('rebuild converges when a post-rename meeting reuses the old account name for a NEW deal + person', async () => {
+    const preRename = MeetingExtractionSchema.parse({
+      account: { name: 'Acme Corp', sector: 'banking', confidence: 'EXTRACTED' },
+      people: [{ name: 'Priya Patel', role: null, org: null, confidence: 'EXTRACTED' }],
+      deal: { name: 'Acme Core Banking', stage: 'discovery' }
+    })
+    await ingestExtraction(s, preRename, transcriptMd('2026-06-01'), join(folder, 'g1.md'))
+    const renamed = await renameEntity(s, { kind: 'account', id: ACCOUNT_SLUG, newName: 'Acme' })
+    expect(renamed.ok).toBe(true)
+
+    // Retroactive rewrite (FIX 1a): the PRE-rename person's already-baked org gets repainted too.
+    const PRIYA_SLUG = slugify('Priya Patel')
+    expect(readPerson(s, PRIYA_SLUG)!.org_provenance!.value).toBe('Acme')
+    expect(readPerson(s, PRIYA_SLUG)!.account).toBe('Acme')
+    expect(readDeal(s, DEAL_SLUG)!.account).toBe('Acme')
+
+    // POST-rename meeting REUSES the old name "Acme Corp", introducing a NEW deal + NEW person.
+    const postRenameReuse = MeetingExtractionSchema.parse({
+      account: { name: 'Acme Corp', sector: 'banking', confidence: 'EXTRACTED' },
+      people: [{ name: 'Noah Novak', role: null, org: null, confidence: 'EXTRACTED' }],
+      deal: { name: 'Acme Renewal', stage: 'discovery' }
+    })
+    await ingestExtraction(s, postRenameReuse, transcriptMd('2026-07-01'), join(folder, 'g2.md'))
+    const NEW_DEAL_SLUG = slugify('Acme Renewal')
+    const NOAH_SLUG = slugify('Noah Novak')
+
+    // Reviewer's exact assertions: live already shows the corrected name in all three spots.
+    expect(readDeal(s, NEW_DEAL_SLUG)!.account).toBe('Acme')
+    expect(readPerson(s, NOAH_SLUG)!.account).toBe('Acme')
+    expect(readPerson(s, NOAH_SLUG)!.org_provenance!.value).toBe('Acme')
+    expect(listEntities(s, 'account')).toEqual([ACCOUNT_SLUG]) // no fork
+
+    const liveSnapshot = snapshotEntities(s)
+
+    expect(purgeBrain(s, { preserveCorrections: true }).ok).toBe(true)
+    await ingestExtraction(s, preRename, transcriptMd('2026-06-01'), join(folder, 'g1.md'))
+    await ingestExtraction(s, postRenameReuse, transcriptMd('2026-07-01'), join(folder, 'g2.md'))
+    const replay = await replayCorrections(s)
+    expect(replay.warnings).toEqual([])
+
+    // Reviewer reproduced "Acme Corp" here on all three — must now read "Acme", matching live.
+    expect(readDeal(s, NEW_DEAL_SLUG)!.account).toBe('Acme')
+    expect(readPerson(s, NOAH_SLUG)!.account).toBe('Acme')
+    expect(readPerson(s, NOAH_SLUG)!.org_provenance!.value).toBe('Acme')
+    expect(listEntities(s, 'account')).toEqual([ACCOUNT_SLUG])
+    expect(snapshotEntities(s)).toEqual(liveSnapshot)
+  })
+
+  // ── ★ Rebuild-converges: rename chain A→B→C, each hop reused by a NEW deal + person (FIX 1) ─
+  // Stronger variant of the existing A→B→C fixture above: here every intermediate meeting reuses an
+  // EARLIER surface form (not just the immediately-preceding one) to introduce fresh entities, exercising
+  // the sweep's "known surface forms" set (old name + all prior aliases), not just a single-hop rename.
+  it('rebuild converges across a rename chain A→B→C when intermediate meetings reuse earlier names for new deals/people', async () => {
+    const ID = slugify('Alpha Analytics')
+    const m1 = MeetingExtractionSchema.parse({
+      account: { name: 'Alpha Analytics', sector: 'other', confidence: 'EXTRACTED' },
+      people: [{ name: 'Dana Diaz', role: null, org: null, confidence: 'EXTRACTED' }],
+      deal: { name: 'Alpha Rollout', stage: 'discovery' }
+    })
+    await ingestExtraction(s, m1, transcriptMd('2026-06-01'), join(folder, 'ch1.md'))
+    expect((await renameEntity(s, { kind: 'account', id: ID, newName: 'Beta Analytics' })).ok).toBe(true)
+
+    // Reuses the OLDEST name ("Alpha Analytics") post-first-rename, introducing a new deal + person.
+    const m2 = MeetingExtractionSchema.parse({
+      account: { name: 'Alpha Analytics', sector: 'other', confidence: 'EXTRACTED' },
+      people: [{ name: 'Evan Ellis', role: null, org: null, confidence: 'EXTRACTED' }],
+      deal: { name: 'Alpha Expansion', stage: 'discovery' }
+    })
+    await ingestExtraction(s, m2, transcriptMd('2026-06-02'), join(folder, 'ch2.md'))
+    expect((await renameEntity(s, { kind: 'account', id: ID, newName: 'Gamma Analytics' })).ok).toBe(true)
+
+    // Reuses the MIDDLE name ("Beta Analytics") post-second-rename, introducing another new deal+person.
+    const m3 = MeetingExtractionSchema.parse({
+      account: { name: 'Beta Analytics', sector: 'other', confidence: 'EXTRACTED' },
+      people: [{ name: 'Farah Faris', role: null, org: null, confidence: 'EXTRACTED' }],
+      deal: { name: 'Beta Followup', stage: 'discovery' }
+    })
+    await ingestExtraction(s, m3, transcriptMd('2026-06-03'), join(folder, 'ch3.md'))
+    expect(listEntities(s, 'account')).toEqual([ID]) // never forked across any hop
+
+    const DEAL1 = slugify('Alpha Rollout')
+    const DEAL2 = slugify('Alpha Expansion')
+    const DEAL3 = slugify('Beta Followup')
+    const DANA = slugify('Dana Diaz')
+    const EVAN = slugify('Evan Ellis')
+    const FARAH = slugify('Farah Faris')
+    for (const dealSlug of [DEAL1, DEAL2, DEAL3]) expect(readDeal(s, dealSlug)!.account).toBe('Gamma Analytics')
+    for (const personSlug of [DANA, EVAN, FARAH]) {
+      expect(readPerson(s, personSlug)!.org_provenance!.value).toBe('Gamma Analytics')
+    }
+
+    const liveSnapshot = snapshotEntities(s)
+
+    expect(purgeBrain(s, { preserveCorrections: true }).ok).toBe(true)
+    await ingestExtraction(s, m1, transcriptMd('2026-06-01'), join(folder, 'ch1.md'))
+    await ingestExtraction(s, m2, transcriptMd('2026-06-02'), join(folder, 'ch2.md'))
+    await ingestExtraction(s, m3, transcriptMd('2026-06-03'), join(folder, 'ch3.md'))
+    const replay = await replayCorrections(s)
+    expect(replay.warnings).toEqual([])
+
+    expect(listEntities(s, 'account')).toEqual([ID])
+    for (const dealSlug of [DEAL1, DEAL2, DEAL3]) expect(readDeal(s, dealSlug)!.account).toBe('Gamma Analytics')
+    for (const personSlug of [DANA, EVAN, FARAH]) {
+      expect(readPerson(s, personSlug)!.org_provenance!.value).toBe('Gamma Analytics')
+    }
+    expect(snapshotEntities(s)).toEqual(liveSnapshot)
+  })
+
+  // ── [documented, out of scope] stored meeting-extraction files do NOT converge (feeds MI-4) ──
+  // applyRename's retroactive sweep (FIX 1a) intentionally touches only ENTITY files (deal.account,
+  // person.account/org_provenance, account.people, graph labels) — never the stored
+  // `.brain/meetings/<slug>.json` extraction itself, which is the as-extracted historical record of what
+  // a meeting actually said. A meeting that PREDATES a rename is re-ingested under the UNION alias map
+  // during a rebuild (the journal already knows the rename before replay runs), so its stored extraction
+  // bakes the POST-rename name on rebuild — while the live path's stored extraction, written before the
+  // rename ever happened in real time, keeps the PRE-rename name. This is a deliberate, accepted
+  // asymmetry (entity files are the corrected view; extraction files are the historical record), not a
+  // defect this task fixes — task MI-4 (verified numbers / windowed extraction) should be aware of it.
+  it('[documented] a PRE-rename meeting\'s stored extraction file does NOT converge live vs rebuilt', async () => {
+    const preRename = MeetingExtractionSchema.parse({
+      account: { name: 'Acme Corp', sector: 'banking', confidence: 'EXTRACTED' }
+    })
+    const file = join(folder, 'x1.md')
+    await ingestExtraction(s, preRename, transcriptMd('2026-06-01'), file)
+    expect((await renameEntity(s, { kind: 'account', id: ACCOUNT_SLUG, newName: 'Acme' })).ok).toBe(true)
+
+    const extractionSlug = slugify(basename(file))
+    const liveExtraction = readMeetingExtraction(s, extractionSlug)
+    expect(liveExtraction!.account!.name).toBe('Acme Corp') // written before the rename ever happened
+
+    expect(purgeBrain(s, { preserveCorrections: true }).ok).toBe(true)
+    await ingestExtraction(s, preRename, transcriptMd('2026-06-01'), file)
+    await replayCorrections(s)
+    const rebuiltExtraction = readMeetingExtraction(s, extractionSlug)
+    // Diverges from live ON PURPOSE — see the comment above. This pins the KNOWN asymmetry: if this
+    // assertion ever starts failing because the value flips back to 'Acme Corp', extraction-file
+    // convergence behavior has changed and MI-4 should be told.
+    expect(rebuiltExtraction!.account!.name).toBe('Acme')
+    expect(rebuiltExtraction!.account!.name).not.toBe(liveExtraction!.account!.name)
+  })
+
+  // ── ★ Rebuild-converges: a pin on an entity later merged away (FIX 2) ────────────────────
+  // Root cause under test: replayCorrections applied a field_update against its ORIGINAL id even when a
+  // LATER journal entry merges that id away. During a rebuild, re-ingest routes the merged-away target's
+  // meetings straight to the merge survivor (readAliasMap already knows the merge), so the original id's
+  // file never materializes at replay time — the pin spuriously "fails" (warns "not found", undercounts
+  // applied) even though it genuinely survives via the later merge's own snapshot fold.
+  it('a pin on an entity later merged away replays with zero warnings and applied === entry count', async () => {
+    const alice = MeetingExtractionSchema.parse({
+      people: [{ name: 'Alice Adams', role: 'Analyst', org: null, confidence: 'EXTRACTED' }]
+    })
+    const bob = MeetingExtractionSchema.parse({
+      people: [{ name: 'Bob Baker', role: null, org: null, confidence: 'EXTRACTED' }]
+    })
+    await ingestExtraction(s, alice, transcriptMd('2026-06-01'), join(folder, 'pin1.md'))
+    await ingestExtraction(s, bob, transcriptMd('2026-06-02'), join(folder, 'pin2.md'))
+    const ALICE = slugify('Alice Adams')
+    const BOB = slugify('Bob Baker')
+
+    const pinned = await updateEntityField(s, { kind: 'person', id: ALICE, field: 'role', value: 'Pinned Role' })
+    expect(pinned.ok).toBe(true)
+    const merged = await mergeEntities(s, { kind: 'person', fromId: ALICE, intoId: BOB })
+    expect(merged.ok).toBe(true)
+
+    expect(readPerson(s, BOB)!.role).toBe('Pinned Role')
+    expect(readPerson(s, BOB)!.role_provenance?.state).toBe('pinned')
+
+    expect(readCorrectionsJournal(s)).toHaveLength(2)
+    const liveSnapshot = snapshotEntities(s)
+
+    expect(purgeBrain(s, { preserveCorrections: true }).ok).toBe(true)
+    await ingestExtraction(s, alice, transcriptMd('2026-06-01'), join(folder, 'pin1.md'))
+    await ingestExtraction(s, bob, transcriptMd('2026-06-02'), join(folder, 'pin2.md'))
+    const replay = await replayCorrections(s)
+
+    expect(replay.warnings).toEqual([])
+    expect(replay.applied).toBe(2)
+    expect(readPerson(s, BOB)!.role).toBe('Pinned Role')
     expect(snapshotEntities(s)).toEqual(liveSnapshot)
   })
 
