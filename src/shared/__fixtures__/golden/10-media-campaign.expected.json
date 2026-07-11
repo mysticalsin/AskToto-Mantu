@@ -1,0 +1,32 @@
+{
+  "people": [
+    { "name": "Pauline Vidal", "role": "Head of Brand Partnerships", "org": "Société Générale" },
+    { "name": "Chris Delaney", "role": "Media Buying Manager", "org": "Société Générale" }
+  ],
+  "accounts": [{ "name": "Société Générale", "sector": "banking" }],
+  "deals": [{ "name": "Société Générale Sponsorship Campaign", "account": "Société Générale", "stage": "renewal" }],
+  "numeric_facts": [
+    {
+      "kind": "percent",
+      "value": 22,
+      "unit": "%",
+      "quote": "Societe Generale saw brand awareness climb by 22 percent during the campaign window"
+    },
+    {
+      "kind": "amount",
+      "value": 3200000,
+      "unit": "EUR",
+      "quote": "The media spend for the campaign came in at three point two million EUR across all channels"
+    },
+    {
+      "kind": "amount",
+      "value": 90000000,
+      "unit": null,
+      "quote": "the campaign reached an audience of quatre-vingt-dix million impressions"
+    }
+  ],
+  "commitments": [
+    { "text": "put together the full performance report for Pauline this week", "by": "you" },
+    { "text": "send the raw media delivery data", "by": "Chris Delaney" }
+  ]
+}

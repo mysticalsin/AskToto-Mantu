@@ -1,0 +1,38 @@
+{
+  "people": [
+    { "name": "Isabelle Roche", "role": "Directrice de la Transition Énergétique", "org": "Solenor" },
+    { "name": "Karim Benali", "role": "Coordinateur Technique", "org": "Solenor" }
+  ],
+  "accounts": [{ "name": "Solenor", "sector": "energy" }],
+  "deals": [{ "name": "Solenor Programme de Transition Énergétique", "account": "Solenor", "stage": "en cours" }],
+  "numeric_facts": [
+    {
+      "kind": "headcount",
+      "value": 90,
+      "unit": null,
+      "quote": "Nous avons quatre-vingt-dix employés désormais dédiés au programme de transition"
+    },
+    {
+      "kind": "amount",
+      "value": 1500000,
+      "unit": null,
+      "quote": "le budget total prévu est de un million et demi pour cette première phase"
+    },
+    {
+      "kind": "percent",
+      "value": 40,
+      "unit": "%",
+      "quote": "on vise une réduction de quarante pour cent des émissions d'ici la fin du programme"
+    },
+    {
+      "kind": "date",
+      "value": 2028,
+      "unit": null,
+      "quote": "la première centrale doit être opérationnelle en 2028"
+    }
+  ],
+  "commitments": [
+    { "text": "envoyer un point d'étape trimestriel écrit à partir du prochain trimestre", "by": "you" },
+    { "text": "envoyer le planning détaillé des équipes pour la prochaine phase", "by": "Karim Benali" }
+  ]
+}
