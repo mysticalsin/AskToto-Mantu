@@ -39,6 +39,7 @@ const ENV_VAR: Record<ProviderId, string> = {
   'claude-cli': '',
   'codex-cli': '',
   gemini: 'GEMINI_API_KEY',
+  local: '', // keyless — Métis Local's per-session sidecar key lives only in local-runtime.ts memory
   custom: 'ASKTOTO_CUSTOM_API_KEY'
 }
 

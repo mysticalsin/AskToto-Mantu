@@ -40,6 +40,13 @@ export interface StreamOptions {
   system: string
   req: AskStart
   handlers: StreamHandlers
+  /**
+   * llama-server-only per-slot prompt-cache pinning (PLAN.md §4.3/§4.4). Only main/llm/local.ts ever sets
+   * this; openai.ts copies EXACTLY these two keys into the request params when present (never a generic
+   * spread), so no caller can use it to smuggle extra fields into the request body. Every other provider
+   * leaves it undefined and its request body is byte-identical to before this field existed.
+   */
+  llamaSlotOptions?: { id_slot?: number; cache_prompt?: boolean }
 }
 
 export const errMsg = (e: unknown): string => (e instanceof Error ? e.message : String(e))

@@ -65,6 +65,14 @@ extraResources:
     to: ffmpeg
   - from: resources/ort
     to: ort
+  # Pinned llama.cpp `llama-server` sidecar that powers Métis Local (on-device suggest/summary/vision).
+  # Populated by `npm run fetch:llama` (scripts/fetch-llama-server.mjs) before packaging; local-runtime.ts
+  # resolves it at process.resourcesPath/llama/<platform> in a packaged build. No separate mac signing
+  # entry is needed: hardenedRuntime + entitlements below make electron-builder sign every executable/
+  # dylib it finds inside the packed .app, including this one — the same mechanism that already covers
+  # the ffmpeg sidecar above.
+  - from: resources/llama
+    to: llama
 mac:
   category: public.app-category.productivity
   # ASCII artifact names (see the win note below): the .app displays as Métis, the .dmg/.zip assets

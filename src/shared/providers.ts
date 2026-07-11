@@ -14,8 +14,9 @@ export type ProviderId =
   | 'claude-cli'
   | 'codex-cli'
   | 'gemini'
+  | 'local'
   | 'custom'
-export type ProviderKind = 'anthropic' | 'openai' | 'dust' | 'cli' // wire protocol
+export type ProviderKind = 'anthropic' | 'openai' | 'dust' | 'cli' | 'local' // wire protocol
 
 export interface ProviderDef {
   id: ProviderId
@@ -297,6 +298,23 @@ export const PROVIDERS: Record<ProviderId, ProviderDef> = {
     keyPattern: '^AIza',
     vision: true,
     keyUrl: 'https://aistudio.google.com/apikey'
+  },
+  local: {
+    id: 'local',
+    label: 'Métis Local · on-device',
+    blurb:
+      'Runs a small Qwen model on this machine — instant, free, private; handles live suggestions, summaries and screenshots.',
+    kind: 'local',
+    tier: 'featured',
+    baseUrl: '', // sidecar's baseURL is a per-session ephemeral loopback port — resolved at request time
+    // by main/llm/local.ts (localRuntime.baseURL()), never a fixed constant here.
+    models: ['qwen3.5-0.8b', 'qwen3.5-2b'],
+    defaultModel: 'qwen3.5-2b',
+    fastModel: 'qwen3.5-0.8b',
+    keyHint: '', // keyless — the sidecar's per-session api key is generated and injected in-process
+    keyPattern: '',
+    vision: true, // mmproj ships with every manifest model (main/llm/local-models.ts)
+    keyUrl: ''
   },
   custom: {
     id: 'custom',
