@@ -322,6 +322,102 @@ describe('corrections engine', () => {
     expect(snapshotEntities(s)).toEqual(liveSnapshot)
   })
 
+  // ── ★ Rebuild-converges: account MERGE with a pre-merge meeting naming the loser (round-4 e1) ──
+  // Root cause under test: applyMerge swept only person-kind dependents (account.people). An account
+  // merge leaves deal.account / person.org_provenance.value baked with the LOSING account's name on the
+  // live path, while a rebuild's union-map re-ingest bakes the SURVIVOR's name from the start. Divergent.
+  it('rebuild converges when an account merge follows a meeting naming the merged-away account (e1 probe)', async () => {
+    const m1 = MeetingExtractionSchema.parse({
+      account: { name: 'Acme Corp', sector: 'banking', confidence: 'EXTRACTED' },
+      people: [{ name: 'Rita Rossi', role: null, org: null, confidence: 'EXTRACTED' }],
+      deal: { name: 'Acme Core Banking', stage: 'discovery' }
+    })
+    const m2 = MeetingExtractionSchema.parse({
+      account: { name: 'Acme Holdings', sector: 'banking', confidence: 'EXTRACTED' }
+    })
+    await ingestExtraction(s, m1, transcriptMd('2026-06-01'), join(folder, 'am1.md'))
+    await ingestExtraction(s, m2, transcriptMd('2026-06-02'), join(folder, 'am2.md'))
+    const HOLDINGS = slugify('Acme Holdings')
+    const RITA = slugify('Rita Rossi')
+    expect((await mergeEntities(s, { kind: 'account', fromId: ACCOUNT_SLUG, intoId: HOLDINGS })).ok).toBe(true)
+
+    // Retroactive sweep at merge time: dependents baked with the losing side's name are repainted.
+    expect(readDeal(s, DEAL_SLUG)!.account).toBe('Acme Holdings')
+    expect(readPerson(s, RITA)!.org_provenance!.value).toBe('Acme Holdings')
+    expect(readPerson(s, RITA)!.account).toBe('Acme Holdings')
+
+    const liveSnapshot = snapshotEntities(s)
+
+    expect(purgeBrain(s, { preserveCorrections: true }).ok).toBe(true)
+    await ingestExtraction(s, m1, transcriptMd('2026-06-01'), join(folder, 'am1.md'))
+    await ingestExtraction(s, m2, transcriptMd('2026-06-02'), join(folder, 'am2.md'))
+    const replay = await replayCorrections(s)
+    expect(replay.warnings).toEqual([])
+
+    expect(readDeal(s, DEAL_SLUG)!.account).toBe('Acme Holdings')
+    expect(readPerson(s, RITA)!.org_provenance!.value).toBe('Acme Holdings')
+    expect(snapshotEntities(s)).toEqual(liveSnapshot)
+  })
+
+  // ── ★ Rebuild-converges: deal RENAME repaints account.deals[] (round-4 e2) ──────────────
+  // Root cause under test: account.deals[] holds bare deal display names pushed verbatim at ingest
+  // (mergeExtraction) and never refreshed — a deal rename left the old name baked live, while a
+  // rebuild's union-map re-ingest baked the new name from the start.
+  it('rebuild converges on account.deals[] when a deal is renamed (e2 probe)', async () => {
+    const m1 = MeetingExtractionSchema.parse({
+      account: { name: 'Acme Corp', sector: 'banking', confidence: 'EXTRACTED' },
+      deal: { name: 'Acme Core Banking', stage: 'discovery' }
+    })
+    await ingestExtraction(s, m1, transcriptMd('2026-06-01'), join(folder, 'dr1.md'))
+    expect(readAccount(s, ACCOUNT_SLUG)!.deals).toEqual(['Acme Core Banking'])
+    expect((await renameEntity(s, { kind: 'deal', id: DEAL_SLUG, newName: 'Acme Core Banking 2.0' })).ok).toBe(true)
+
+    // Retroactive sweep: the account's baked deals[] entry is repainted at rename time.
+    expect(readAccount(s, ACCOUNT_SLUG)!.deals).toEqual(['Acme Core Banking 2.0'])
+
+    const liveSnapshot = snapshotEntities(s)
+
+    expect(purgeBrain(s, { preserveCorrections: true }).ok).toBe(true)
+    await ingestExtraction(s, m1, transcriptMd('2026-06-01'), join(folder, 'dr1.md'))
+    const replay = await replayCorrections(s)
+    expect(replay.warnings).toEqual([])
+
+    expect(readAccount(s, ACCOUNT_SLUG)!.deals).toEqual(['Acme Core Banking 2.0'])
+    expect(snapshotEntities(s)).toEqual(liveSnapshot)
+  })
+
+  // ── ★ Rebuild-converges: deal MERGE repaints + collapses account.deals[] (round-4 variant) ──
+  it('rebuild converges on account.deals[] when a deal is merged away (deal-merge variant)', async () => {
+    const m1 = MeetingExtractionSchema.parse({
+      account: { name: 'Acme Corp', sector: 'banking', confidence: 'EXTRACTED' },
+      deal: { name: 'Acme Core Banking', stage: 'discovery' }
+    })
+    const m2 = MeetingExtractionSchema.parse({
+      account: { name: 'Acme Corp', sector: 'banking', confidence: 'EXTRACTED' },
+      deal: { name: 'Acme Banking Program', stage: 'proposal' }
+    })
+    await ingestExtraction(s, m1, transcriptMd('2026-06-01'), join(folder, 'dm1.md'))
+    await ingestExtraction(s, m2, transcriptMd('2026-06-02'), join(folder, 'dm2.md'))
+    const PROGRAM = slugify('Acme Banking Program')
+    expect(readAccount(s, ACCOUNT_SLUG)!.deals).toEqual(['Acme Core Banking', 'Acme Banking Program'])
+    expect((await mergeEntities(s, { kind: 'deal', fromId: DEAL_SLUG, intoId: PROGRAM })).ok).toBe(true)
+
+    // Sweep repaints the losing name to the survivor's and the re-dedupe collapses the collision —
+    // exactly what a fresh ingest under the union alias map produces.
+    expect(readAccount(s, ACCOUNT_SLUG)!.deals).toEqual(['Acme Banking Program'])
+
+    const liveSnapshot = snapshotEntities(s)
+
+    expect(purgeBrain(s, { preserveCorrections: true }).ok).toBe(true)
+    await ingestExtraction(s, m1, transcriptMd('2026-06-01'), join(folder, 'dm1.md'))
+    await ingestExtraction(s, m2, transcriptMd('2026-06-02'), join(folder, 'dm2.md'))
+    const replay = await replayCorrections(s)
+    expect(replay.warnings).toEqual([])
+
+    expect(readAccount(s, ACCOUNT_SLUG)!.deals).toEqual(['Acme Banking Program'])
+    expect(snapshotEntities(s)).toEqual(liveSnapshot)
+  })
+
   // ── [documented, out of scope] stored meeting-extraction files do NOT converge (feeds MI-4) ──
   // applyRename's retroactive sweep (FIX 1a) intentionally touches only ENTITY files (deal.account,
   // person.account/org_provenance, account.people, graph labels) — never the stored

@@ -377,15 +377,18 @@ function surfaceFormKeys(oldName: string, priorAliases: string[]): Set<string> {
   return keys
 }
 
-/** Account renamed: retroactively repaint every deal/person display string that named it under an old
- *  surface form (reviewer IMPORTANT: old-name-reuse-after-rename diverges live-vs-rebuild otherwise).
+/** An account's identity changed (renamed, OR merged into another account — both callers below):
+ *  retroactively repaint every deal/person display string that named it under an old surface form
+ *  (reviewer IMPORTANT: old-name-reuse-after-rename diverges live-vs-rebuild otherwise).
  *  `deal.account` is a plain (non-provenant) field populated once at deal creation from whatever the
- *  account was called then — nothing else ever refreshes it, so without this it would cite a pre-rename
+ *  account was called then — nothing else ever refreshes it, so without this it would cite a stale
  *  name forever. `person.org_provenance.value` (+ its plain `.account` mirror) is the CURRENT org; its
  *  `superseded` history is the org's past sightings — both name this same account and get the same
  *  treatment, via the existing pushSuperseded bookkeeping (dedupe/sort/cap unchanged), so a rebuilt
- *  history reads exactly like the live one instead of citing a name that exists nowhere else anymore. */
-async function sweepAccountRenameDependents(s: Settings, newName: string, surfaceForms: Set<string>): Promise<void> {
+ *  history reads exactly like the live one instead of citing a name that exists nowhere else anymore.
+ *  `newName` is the account's own new name for a rename, or the SURVIVING account's (unchanged) current
+ *  name for a merge. */
+async function sweepAccountNameDependents(s: Settings, newName: string, surfaceForms: Set<string>): Promise<void> {
   for (const slug of listEntities(s, 'deal')) {
     const deal = readDeal(s, slug)
     if (!deal || !surfaceForms.has(slugify(deal.account))) continue
@@ -434,6 +437,23 @@ async function sweepPersonNameDependents(s: Settings, newName: string, surfaceFo
   }
 }
 
+/** A deal's identity changed (renamed, OR merged into another deal — both callers below): retroactively
+ *  repaint the bare display-name strings every account's `.deals[]` holds — the exact mirror of
+ *  sweepPersonNameDependents above for the other verbatim-name array mergeExtraction pushes into
+ *  accounts (`pushUnique(acc.deals, deal.name, ...)`) and never refreshes. Same re-dedupe semantics:
+ *  a repaint that makes two entries collide collapses them exactly like a fresh ingest would. */
+async function sweepDealNameDependents(s: Settings, newName: string, surfaceForms: Set<string>): Promise<void> {
+  for (const slug of listEntities(s, 'account')) {
+    const account = readAccount(s, slug)
+    if (!account || !account.deals.some((n) => surfaceForms.has(slugify(n)))) continue
+    const working = cloneEntity(account)
+    const deduped: string[] = []
+    for (const n of working.deals) pushUnique(deduped, surfaceForms.has(slugify(n)) ? newName : n, (x) => x)
+    working.deals = deduped
+    await writeAccount(s, slug, working)
+  }
+}
+
 /** Every renamed entity has ONE graph node (`${kind}:${id}`, id immutable) whose `label` mergeExtraction
  *  only ever sets on FIRST sight (`addNode` dedupes by id) — so without this the node would go on
  *  showing the pre-rename name forever even though every other trace of the old name has been repainted. */
@@ -471,8 +491,9 @@ async function applyRename(
   // old surface form. Lives INSIDE applyRename, so it is automatically journaled (the same single
   // entity_rename entry, nothing new) and automatically replayed (the very same call, live or replay) —
   // never a second, parallel implementation of the rename.
-  if (payload.kind === 'account') await sweepAccountRenameDependents(s, payload.newName, surfaceForms)
+  if (payload.kind === 'account') await sweepAccountNameDependents(s, payload.newName, surfaceForms)
   else if (payload.kind === 'person') await sweepPersonNameDependents(s, payload.newName, surfaceForms)
+  else await sweepDealNameDependents(s, payload.newName, surfaceForms)
   await sweepGraphNodeLabel(s, payload.kind, payload.id, payload.newName)
 
   return { ok: true, snapshot: { oldName } }
@@ -624,16 +645,19 @@ async function applyMerge(
     merged_into: payload.intoId
   })
 
-  // A merged-away PERSON's old display name can already be baked into an unrelated account's
-  // `.people[]` (a meeting mentioning them was ingested before this merge ever ran). Display rewrite
-  // now uses the UNION alias map (readAliasMap), which already knows about a merge via the journal — so
-  // a REBUILD's re-ingest of that same meeting bakes the SURVIVING name directly, while the original
-  // live ingest baked the pre-merge name (nothing knew about the merge yet). Without this sweep the two
-  // paths would diverge (live: both old and new names present; rebuild: new name only) — the same
-  // repaint-at-correction-time treatment applyRename gives its dependents, just triggered by a merge.
-  if (payload.kind === 'person') {
-    await sweepPersonNameDependents(s, target.name, surfaceFormKeys(from.name, [...from.aliases, from.id]))
-  }
+  // The merged-away entity's old display name can already be baked into OTHER entities' plain display
+  // strings (a meeting naming it was ingested before this merge ever ran): a person's name in
+  // account.people[], an account's name in deal.account / person.org_provenance, a deal's name in
+  // account.deals[]. Display rewrite now uses the UNION alias map (readAliasMap), which already knows
+  // about a merge via the journal — so a REBUILD's re-ingest of that same meeting bakes the SURVIVING
+  // name directly, while the original live ingest baked the pre-merge name (nothing knew about the merge
+  // yet). Without this sweep the two paths would diverge — the same repaint-at-correction-time treatment
+  // applyRename gives its dependents, just triggered by a merge: the FROM side's surface forms repaint
+  // to the surviving entity's (unchanged) current name.
+  const fromSurfaceForms = surfaceFormKeys(from.name, [...from.aliases, from.id])
+  if (payload.kind === 'person') await sweepPersonNameDependents(s, target.name, fromSurfaceForms)
+  else if (payload.kind === 'account') await sweepAccountNameDependents(s, target.name, fromSurfaceForms)
+  else await sweepDealNameDependents(s, target.name, fromSurfaceForms)
 
   // Rewrite graph edges fromId -> intoId (never touches nodes — an orphaned fromId node is harmless and
   // out of this task's scope), dropping any resulting self-loop and de-duping exactly like ingest.ts's
@@ -696,7 +720,12 @@ async function applyUnmerge(
 /** Restore both entity files from the `entity_merge` journal entry at `targetSeq`, exactly as they were
  *  before that merge — un-tombstoning the source. Refuses (never partially applies) when the target
  *  entry doesn't exist or carries no snapshot. Graph edges rewritten by the original merge are NOT
- *  reverted (out of scope here — a rebuild re-derives a clean graph from the meetings themselves).
+ *  reverted, and neither is the merge-time dependents repaint (the sweepXxxNameDependents pass that
+ *  rewrote the FROM side's baked display strings — account.people entries for a person merge,
+ *  deal.account/person.org for an account merge, account.deals for a deal merge — to the survivor's
+ *  name): the restore covers the two merged entity files themselves, nothing else. Both stay converged
+ *  anyway — a rebuild replays the merge (sweeping again) before replaying this unmerge, so live and
+ *  rebuilt dependents end up identically repainted.
  *
  *  These are POINT-IN-TIME snapshots: unmerge restores both sides exactly as they were at merge time,
  *  so any correction applied to EITHER side between the merge and the unmerge (a field pin on the
