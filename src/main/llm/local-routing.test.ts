@@ -27,6 +27,7 @@ const localRuntimeMock = vi.hoisted(() => ({
   resolveBinaryPath: vi.fn(() => [{ path: '/resources/llama/mac/llama-server', variant: 'mac' as const }]),
   detectPlatform: vi.fn(() => 'mac' as const),
   isRunning: vi.fn(() => false),
+  getState: vi.fn(() => 'stopped' as const),
   start: vi.fn(async () => {}),
   markActivity: vi.fn(),
   baseURL: vi.fn(() => 'http://127.0.0.1:54321/v1'),
@@ -40,7 +41,8 @@ const localModelsMock = vi.hoisted(() => ({
     dir: `/models/${id}`,
     gguf: `/models/${id}/model.gguf`,
     mmproj: `/models/${id}/mmproj.gguf`
-  }))
+  })),
+  verifyIntegrity: vi.fn(async () => {})
 }))
 vi.mock('./local-models', () => localModelsMock)
 
@@ -71,10 +73,12 @@ beforeEach(() => {
   localRuntimeMock.resolveBinaryPath.mockReturnValue([{ path: '/resources/llama/mac/llama-server', variant: 'mac' }])
   localRuntimeMock.detectPlatform.mockReturnValue('mac')
   localRuntimeMock.isRunning.mockReturnValue(false)
+  localRuntimeMock.getState.mockReturnValue('stopped')
   localRuntimeMock.start.mockResolvedValue(undefined)
   localRuntimeMock.baseURL.mockReturnValue('http://127.0.0.1:54321/v1')
   localRuntimeMock.sessionKey.mockReturnValue('deadbeefsessionkeydeadbeefsessionkeydeadbeefsessionkeydeadbeef')
   localModelsMock.isDownloaded.mockReturnValue(true)
+  localModelsMock.verifyIntegrity.mockResolvedValue(undefined)
   openaiMock.streamOpenAI.mockReturnValue({ abort: vi.fn() })
 })
 
@@ -286,12 +290,48 @@ describe('streamLocal', () => {
     })
   })
 
-  it('skips start() entirely when the runtime is already running', async () => {
-    localRuntimeMock.isRunning.mockReturnValue(true)
+  it('F2: still calls start() (idempotently) even when the runtime is already running — the running/switch decision is delegated to start() itself, not short-circuited here', async () => {
+    localRuntimeMock.getState.mockReturnValue('running')
     streamLocal(baseOpts('suggest'))
     await flush()
-    expect(localRuntimeMock.start).not.toHaveBeenCalled()
+    expect(localRuntimeMock.start).toHaveBeenCalledWith({
+      gguf: '/models/qwen3.5-2b/model.gguf',
+      mmproj: '/models/qwen3.5-2b/mmproj.gguf'
+    })
     expect(openaiMock.streamOpenAI).toHaveBeenCalledOnce()
+  })
+
+  it('F5: skips verifyIntegrity when the runtime is already running (not a cold start)', async () => {
+    localRuntimeMock.getState.mockReturnValue('running')
+    streamLocal(baseOpts('suggest'))
+    await flush()
+    expect(localModelsMock.verifyIntegrity).not.toHaveBeenCalled()
+  })
+
+  it('F5: skips verifyIntegrity when the runtime is already starting (not a cold start)', async () => {
+    localRuntimeMock.getState.mockReturnValue('starting')
+    streamLocal(baseOpts('suggest'))
+    await flush()
+    expect(localModelsMock.verifyIntegrity).not.toHaveBeenCalled()
+  })
+
+  it('F5: a cold start (state stopped) verifies the configured model’s integrity BEFORE starting', async () => {
+    localRuntimeMock.getState.mockReturnValue('stopped')
+    streamLocal(baseOpts('suggest', { model: 'qwen3.5-0.8b' }))
+    await flush()
+    expect(localModelsMock.verifyIntegrity).toHaveBeenCalledWith('qwen3.5-0.8b')
+    expect(localRuntimeMock.start).toHaveBeenCalled()
+  })
+
+  it('F5: a verifyIntegrity failure on cold start reports onError and never calls start() or streamOpenAI', async () => {
+    localRuntimeMock.getState.mockReturnValue('stopped')
+    localModelsMock.verifyIntegrity.mockRejectedValue(new Error('checksum mismatch'))
+    const hs = handlers()
+    streamLocal(baseOpts('suggest', { handlers: hs }))
+    await flush()
+    expect(hs.onError).toHaveBeenCalledWith(expect.stringContaining('checksum mismatch'))
+    expect(localRuntimeMock.start).not.toHaveBeenCalled()
+    expect(openaiMock.streamOpenAI).not.toHaveBeenCalled()
   })
 
   it('marks activity before delegating to streamOpenAI', async () => {

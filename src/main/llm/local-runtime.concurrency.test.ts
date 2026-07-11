@@ -1,0 +1,203 @@
+/**
+ * local-runtime.concurrency.test.ts — F1 (startup race) + F2 (model switch), proven against a fully faked
+ * `child_process.spawn` + global `fetch` so the timing of "spawn → listening-on log line → health 200" is
+ * fully controllable and deterministic. Lives in its own file (not local-runtime.test.ts) because it mocks
+ * `node:child_process` module-wide, which would otherwise break local-runtime.test.ts's real-binary
+ * integration block.
+ */
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
+
+vi.mock('electron', () => ({ app: { isPackaged: false, getPath: () => '/tmp' } }))
+vi.mock('../logger', () => ({ mainLog: { info: vi.fn(), warn: vi.fn() }, auditLog: vi.fn() }))
+
+// The fake binary must "exist" so start() never short-circuits on the missing-binary path — only the
+// spawn/health timing matters for these tests.
+vi.mock('node:fs', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs')>()
+  return { ...actual, existsSync: () => true }
+})
+
+interface FakeProc {
+  stdout: import('node:events').EventEmitter
+  stderr: import('node:events').EventEmitter
+  killed: boolean
+  kill: ReturnType<typeof vi.fn>
+  emit: (event: string, ...args: unknown[]) => boolean
+  once: (event: string, listener: (...args: unknown[]) => void) => unknown
+  on: (event: string, listener: (...args: unknown[]) => void) => unknown
+}
+
+const spawnState = vi.hoisted(() => ({
+  procs: [] as FakeProc[],
+  calls: [] as { path: string; args: string[] }[]
+}))
+
+vi.mock('node:child_process', async () => {
+  const { EventEmitter } = await import('node:events')
+  const spawn = vi.fn((path: string, args: string[]) => {
+    const proc = new EventEmitter() as unknown as FakeProc
+    proc.stdout = new EventEmitter()
+    proc.stderr = new EventEmitter()
+    proc.killed = false
+    proc.kill = vi.fn(() => {
+      if (proc.killed) return
+      proc.killed = true
+      queueMicrotask(() => proc.emit('exit', null, 'SIGKILL'))
+    })
+    spawnState.procs.push(proc)
+    spawnState.calls.push({ path, args })
+    return proc
+  })
+  return { spawn }
+})
+
+import { start, stop, isRunning, baseURL } from './local-runtime'
+
+type FetchImpl = (...args: unknown[]) => Promise<{ status: number }>
+let fetchImpl: FetchImpl = async () => ({ status: 200 })
+
+beforeEach(() => {
+  vi.clearAllMocks()
+  spawnState.procs = []
+  spawnState.calls = []
+  fetchImpl = async () => ({ status: 200 })
+  vi.stubGlobal('fetch', (...args: unknown[]) => fetchImpl(...args))
+})
+
+afterEach(() => {
+  stop()
+  vi.unstubAllGlobals()
+})
+
+function emitListening(procIndex: number, port: number): void {
+  spawnState.procs[procIndex].stdout.emit('data', Buffer.from(`0.00.787.103 I srv listening on http://127.0.0.1:${port}\n`))
+}
+
+async function waitUntil(cond: () => boolean, timeoutMs = 2000): Promise<void> {
+  const deadline = Date.now() + timeoutMs
+  while (!cond()) {
+    if (Date.now() > deadline) throw new Error('waitUntil timed out')
+    await new Promise((r) => setTimeout(r, 1))
+  }
+}
+
+describe('F1 — concurrent start() calls share one in-flight start', () => {
+  it('a second concurrent start() call for the SAME model spawns only once, and neither caller resolves before health actually completes', async () => {
+    let healthSettled = false
+    fetchImpl = () =>
+      new Promise((resolve) => {
+        setTimeout(() => {
+          healthSettled = true
+          resolve({ status: 200 })
+        }, 15)
+      })
+
+    const paths = { gguf: '/m/a.gguf', mmproj: '/m/a.mmproj' }
+    const p1 = start(paths, 'mac')
+    const p2 = start(paths, 'mac') // second caller arrives while state === 'starting'
+
+    // Only ONE spawn for two concurrent callers targeting the same model — no duplicate process.
+    expect(spawnState.calls.length).toBe(1)
+
+    emitListening(0, 55123) // the sidecar "prints" its listening line so pollHealth can begin
+
+    let p1ResolvedAfterHealth = false
+    let p2ResolvedAfterHealth = false
+    let p2BaseURLReachable = false
+    p1.then(() => {
+      p1ResolvedAfterHealth = healthSettled
+    })
+    p2.then(() => {
+      p2ResolvedAfterHealth = healthSettled
+      try {
+        baseURL()
+        p2BaseURLReachable = true
+      } catch {
+        p2BaseURLReachable = false
+      }
+    })
+
+    await Promise.all([p1, p2])
+
+    // FAILS on the old code: the old start() returned immediately for a caller that saw state==='starting',
+    // so the second caller's promise would resolve on the next microtask — long before this 15ms health
+    // delay settles, and before `port` was ever set (baseURL() would throw).
+    expect(p1ResolvedAfterHealth).toBe(true)
+    expect(p2ResolvedAfterHealth).toBe(true)
+    expect(p2BaseURLReachable).toBe(true)
+    expect(isRunning()).toBe(true)
+    expect(spawnState.calls.length).toBe(1) // still only one spawn
+  })
+})
+
+describe('F2 — model switch', () => {
+  it('starting a DIFFERENT model while one is running stops the old sidecar and spawns the new model', async () => {
+    const pathsA = { gguf: '/m/a.gguf', mmproj: '/m/a.mmproj' }
+    const pathsB = { gguf: '/m/b.gguf', mmproj: '/m/b.mmproj' }
+
+    const p1 = start(pathsA, 'mac')
+    emitListening(0, 55201)
+    await p1
+    expect(isRunning()).toBe(true)
+    const procA = spawnState.procs[0]
+    expect(procA.killed).toBe(false)
+
+    const p2 = start(pathsB, 'mac')
+    await waitUntil(() => spawnState.calls.length === 2)
+    emitListening(1, 55202)
+    await p2
+
+    expect(procA.kill).toHaveBeenCalledWith('SIGKILL')
+    expect(procA.killed).toBe(true)
+    expect(spawnState.calls[1].args).toContain('/m/b.gguf')
+    expect(isRunning()).toBe(true)
+  })
+
+  it('calling start() again with the SAME model while running is a no-op — no restart, no new spawn', async () => {
+    const pathsA = { gguf: '/m/a.gguf', mmproj: '/m/a.mmproj' }
+    const p1 = start(pathsA, 'mac')
+    emitListening(0, 55301)
+    await p1
+    const procA = spawnState.procs[0]
+
+    await start(pathsA, 'mac') // same model, already running
+
+    expect(spawnState.calls.length).toBe(1) // no second spawn
+    expect(procA.kill).not.toHaveBeenCalled()
+    expect(isRunning()).toBe(true)
+  })
+
+  it('a switch requested while the FIRST model is still starting awaits it, then restarts with the new model', async () => {
+    let releaseHealthA: () => void = () => {}
+    fetchImpl = () =>
+      new Promise((resolve) => {
+        releaseHealthA = () => resolve({ status: 200 })
+      })
+
+    const pathsA = { gguf: '/m/a.gguf', mmproj: '/m/a.mmproj' }
+    const pathsB = { gguf: '/m/b.gguf', mmproj: '/m/b.mmproj' }
+
+    const p1 = start(pathsA, 'mac') // still "starting" — health never resolves until released below
+    emitListening(0, 55401)
+
+    const p2 = start(pathsB, 'mac') // wants a DIFFERENT model while the first is still starting
+
+    // p2 must not have spawned B yet — it's awaiting A's in-flight start first.
+    expect(spawnState.calls.length).toBe(1)
+
+    fetchImpl = async () => ({ status: 200 }) // B's own health check, once it spawns, should resolve fast
+    releaseHealthA() // let A's health complete
+    await p1
+    // NOTE: by the time p1 settles, p2's queued continuation (awaiting the SAME in-flight promise) may
+    // already have run too and kicked off the switch to B — so state here can be 'running' (A) or already
+    // 'starting' (B); either is a valid interleaving. What must hold is the end state once p2 also settles.
+
+    await waitUntil(() => spawnState.calls.length === 2) // B's switch-spawn happens once A settles
+    emitListening(1, 55402)
+    await p2
+
+    expect(spawnState.calls[1].args).toContain('/m/b.gguf')
+    expect(spawnState.procs[0].killed).toBe(true) // A was killed once the switch happened
+    expect(isRunning()).toBe(true)
+  })
+})

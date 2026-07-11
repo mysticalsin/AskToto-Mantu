@@ -80,11 +80,14 @@ export function localEligibleFor(
  * warm the sidecar for THIS settings snapshot. Deliberately narrower than localBaseReady/localEligibleFor:
  * prewarm is a best-effort, fire-and-forget cache-warming ping debounced on every live transcript tick,
  * not a real answer path — a runtime/model that isn't actually provisioned yet just makes
- * ensureLocalRuntimeStarted() (local.ts) reject, which the handler already swallows. The two settings
- * checks are the only gate worth paying on every tick; no allowlist/binary/download check needed here.
+ * ensureLocalRuntimeStarted() (local.ts) reject, which the handler already swallows. Binary/download
+ * checks stay excluded for that reason. The org allowlist IS checked (F6 hardening): without it, an org
+ * that excludes 'local' would still have its sidecar spun up and warmed by every prewarm tick even though
+ * no real request could ever route to it — a pointless spawn + standing RAM/CPU cost with no product
+ * benefit, not merely a redundant check.
  */
-export function localPrewarmEligible(s: Pick<Settings, 'localLlm'>): boolean {
-  return s.localLlm.enabled && s.localLlm.useFor.suggest
+export function localPrewarmEligible(s: Pick<Settings, 'localLlm'>, allowed: string[] | null): boolean {
+  return s.localLlm.enabled && s.localLlm.useFor.suggest && (!allowed || allowed.includes('local'))
 }
 
 /**

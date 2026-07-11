@@ -32,6 +32,7 @@ import {
   listModels,
   cancelDownload,
   assertRamOk,
+  verifyIntegrity,
   InsufficientRamError,
   ChecksumMismatchError,
   type LocalModelFile
@@ -294,6 +295,46 @@ describe('local-models', () => {
 
     it('cancelDownload on a model with no in-flight transfer is a harmless no-op', () => {
       expect(() => cancelDownload('qwen3.5-0.8b')).not.toThrow()
+    })
+  })
+
+  // ─── Cold-start integrity check (F5 hardening) ──────────────────────────────────────────────
+  describe('verifyIntegrity — streamed sha256 re-check vs the manifest pin', () => {
+    it('throws when the model has not been downloaded at all (no hashing attempted)', async () => {
+      await expect(verifyIntegrity('qwen3.5-0.8b')).rejects.toThrow(/not downloaded/)
+    })
+
+    it('a tampered/corrupt gguf on disk fails verification against the REAL manifest pin: typed error + the corrupt file is deleted', async () => {
+      const paths = modelPaths('qwen3.5-0.8b')
+      mkdirSync(paths.dir, { recursive: true })
+      // Any content other than the real pinned bytes mismatches the manifest's fixed sha256 — simulating
+      // on-disk corruption (bit rot / a truncated copy) without needing the real multi-hundred-MB file.
+      writeFileSync(paths.gguf, Buffer.from('not the real model bytes — simulates on-disk corruption'))
+      writeFileSync(paths.mmproj, Buffer.from('not the real mmproj bytes either'))
+
+      await expect(verifyIntegrity('qwen3.5-0.8b')).rejects.toBeInstanceOf(ChecksumMismatchError)
+      expect(existsSync(paths.gguf)).toBe(false) // corrupt gguf deleted, mirroring download-time reject+delete
+      expect(existsSync(paths.mmproj)).toBe(true) // mmproj never reached — gguf failed first, checked in order
+    })
+
+    it('the typed error names the exact mismatching file and its expected/actual digests', async () => {
+      const paths = modelPaths('qwen3.5-0.8b')
+      mkdirSync(paths.dir, { recursive: true })
+      writeFileSync(paths.gguf, Buffer.from('corrupt gguf content'))
+      writeFileSync(paths.mmproj, Buffer.from('corrupt mmproj content'))
+
+      let thrown: unknown
+      try {
+        await verifyIntegrity('qwen3.5-0.8b')
+      } catch (e) {
+        thrown = e
+      }
+      expect(thrown).toBeInstanceOf(ChecksumMismatchError)
+      const err = thrown as ChecksumMismatchError
+      expect(err.modelId).toBe('qwen3.5-0.8b')
+      expect(err.file).toBe('gguf') // checked before mmproj — matches the deletion-order assertion above
+      expect(err.expectedSha256).toBe(LOCAL_MODELS.find((m) => m.id === 'qwen3.5-0.8b')!.gguf.sha256)
+      expect(err.actualSha256).toBe(createHash('sha256').update('corrupt gguf content').digest('hex'))
     })
   })
 

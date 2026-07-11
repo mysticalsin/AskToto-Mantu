@@ -1,4 +1,4 @@
-import { modelPaths as resolveLocalModelPaths } from './local-models'
+import { modelPaths as resolveLocalModelPaths, verifyIntegrity } from './local-models'
 import * as localRuntime from './local-runtime'
 import { streamOpenAI } from './openai'
 import { type StreamOptions, type StreamHandle, errMsg } from './shared'
@@ -19,14 +19,22 @@ import { type StreamOptions, type StreamHandle, errMsg } from './shared'
  */
 
 /**
- * Ensure the sidecar is running against `modelId` (a no-op if already running/starting). Extracted out of
- * streamLocal so index.ts's local:prewarm handler (PLAN.md §4.4's pre-warm path, Rock 5) can reach the
- * EXACT same start logic without duplicating it — both callers must resolve the same manifest paths and
- * go through the same local-runtime.ts start() call.
+ * Ensure the sidecar is running against `modelId`. Extracted out of streamLocal so index.ts's local:prewarm
+ * handler (PLAN.md §4.4's pre-warm path, Rock 5) can reach the EXACT same start logic without duplicating
+ * it — both callers must resolve the same manifest paths and go through the same local-runtime.ts start()
+ * call. Always delegates the running/starting/switch decision to start() itself (F2 hardening: start() is
+ * idempotent per-model — a no-op when this exact model is already running, an in-flight-await when a start
+ * is already underway, and a stop-then-restart when a DIFFERENT model is requested — so early-returning on
+ * isRunning() here was both redundant and the thing that let a model switch never actually happen).
+ * On a COLD start only (state 'stopped' — never on an already-running/starting sidecar, i.e. never on every
+ * live-meeting request) re-verifies the model files' sha256 against the manifest (F5 hardening) before
+ * starting; a mismatch throws and start() is never reached, so a corrupt file never reaches llama-server.
  */
 export async function ensureLocalRuntimeStarted(modelId: string): Promise<void> {
-  if (localRuntime.isRunning()) return
   const paths = resolveLocalModelPaths(modelId)
+  if (localRuntime.getState() === 'stopped') {
+    await verifyIntegrity(modelId)
+  }
   await localRuntime.start({ gguf: paths.gguf, mmproj: paths.mmproj })
 }
 
@@ -63,6 +71,11 @@ export function streamLocal(opts: StreamOptions): StreamHandle {
     abort: () => {
       aborted = true
       inner?.abort()
+      // Accepted behavior (audit risk, by design): if the sidecar is still starting when this fires, the
+      // in-flight ensureLocalRuntimeStarted()/start() call is NOT cancelled — it runs to completion and the
+      // sidecar stays up, reclaimed later by the normal 15-minute idle-stop rather than torn down here.
+      // Cancelling a mid-spawn llama-server process isn't worth the complexity for what's already a rare,
+      // best-effort UX cancel (Cancel button / a new ask superseding this one).
     }
   }
 }
