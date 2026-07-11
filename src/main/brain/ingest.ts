@@ -12,7 +12,8 @@ import {
   type BrainGraph,
   type BrainIndex,
   type Confidence,
-  type ProvenantField
+  type ProvenantField,
+  type EntityKind
 } from '@shared/brain'
 import { INJECTION_GUARD } from '@shared/prompts'
 import { redactSecrets } from '@shared/redact'
@@ -22,6 +23,11 @@ import { readSavedFile, resolveMeetingsFolder } from '../transcripts'
 import { auditLog, mainLog } from '../logger'
 import {
   slugify,
+  commitmentKey,
+  pushUnique,
+  pushSuperseded,
+  eqStrict,
+  eqVelocity,
   readIndex,
   writeIndex,
   readGraph,
@@ -36,6 +42,7 @@ import {
   listEntities,
   listMeetingExtractions
 } from './store'
+import { applyCorrections, readAliasMap, resolveEntitySlug } from './corrections'
 
 /**
  * Brain ingest — turns one saved transcript into a structured extraction, then merges it into the
@@ -140,24 +147,10 @@ async function extractMeeting(s: Settings, transcriptMd: string, sourceFile: str
 
 // ── Deterministic merge ──────────────────────────────────────────────────────
 
-const pushUnique = <T>(arr: T[], item: T, key: (t: T) => string): void => {
-  if (!arr.some((x) => key(x) === key(item))) arr.push(item)
-}
-
-/** Ledger identity for a commitment is its normalized TEXT — a promise re-spoken in a later meeting
- *  ("I'll send the deck", again) is the same obligation, not a second open row. The earliest-dated
- *  row wins (pushUnique keeps the first), so aging starts from when the promise was first made.
- *  Normalizes Unicode form (NFKC, so visually-identical composed/decomposed text matches), strips
- *  trailing sentence punctuation (a re-spoken "Send the deck." vs "send the deck" is one obligation),
- *  then case-folds and collapses whitespace. */
-export const commitmentKey = (text: string): string =>
-  text
-    .normalize('NFKC')
-    .trim()
-    .replace(/[.!?…]+$/u, '')
-    .toLowerCase()
-    .replace(/\s+/g, ' ')
-    .trim()
+// commitmentKey/pushUnique now live in store.ts (beside slugify) so the correction engine
+// (corrections.ts) can reuse the exact same normalization/de-dup semantics without a corrections.ts
+// <-> ingest.ts import cycle; re-exported here unchanged for every existing caller/test of this module.
+export { commitmentKey }
 
 // ── Provenant field merge (A1 fix: D1 "latest-INGESTED-wins" → "latest-MEETING-DATE-wins") ──────────
 //
@@ -188,13 +181,18 @@ export const commitmentKey = (text: string): string =>
 // no confidence slot to dedupe on). The winner and its own provenance still converge; only that one
 // history entry's metadata can vary, and only in mixed-confidence same-value sets.
 type ProvenantIncoming<T> = { value: T; source_file: string; date: string; quote?: string; confidence: Confidence }
-type SupersededEntry<T> = { value: T; date: string; source_file: string }
 
-// Date-comparison caveat (applies to `outranks` and `laterEntry`): comparison is lexical — correct
-// for same-precision ISO-8601 strings, but a bare date sorts BELOW a full timestamp of the same day
-// ("2026-01-15" < "2026-01-15T10:00:00Z"). ingestExtraction stamps whatever precision the transcript
+// Date-comparison caveat (applies to `outranks` and store.ts's `laterEntry`): comparison is lexical —
+// correct for same-precision ISO-8601 strings, but a bare date sorts BELOW a full timestamp of the same
+// day ("2026-01-15" < "2026-01-15T10:00:00Z"). ingestExtraction stamps whatever precision the transcript
 // frontmatter carries, so mixed-precision same-day meetings resolve deterministically, though not
 // strictly chronologically within the day.
+//
+// `outranks` is a TOTAL order for every case merge ever hits EXCEPT one: two candidates tied on
+// (confidence tier, date, source_file) but carrying DIFFERENT values. That can only happen via
+// sequential, index-guarded re-ingestion of a changed extraction for the exact same source_file+date
+// (never via shuffled/parallel backfill, which always sees distinct source_file values) — a case this
+// codebase never actually produces, so the tie is unreachable in practice, not merely unhandled.
 function outranks(
   a: { date: string; source_file: string; confidence: Confidence },
   b: { date: string; source_file: string; confidence: Confidence }
@@ -204,25 +202,6 @@ function outranks(
   if (at !== bt) return at > bt
   if (a.date !== b.date) return a.date > b.date
   return a.source_file > b.source_file
-}
-
-const laterEntry = <T>(a: SupersededEntry<T>, b: SupersededEntry<T>): boolean =>
-  a.date > b.date || (a.date === b.date && a.source_file > b.source_file)
-
-function pushSuperseded<T>(
-  list: SupersededEntry<T>[],
-  entry: SupersededEntry<T>,
-  currentValue: T,
-  valuesEqual: (a: T, b: T) => boolean
-): SupersededEntry<T>[] {
-  const out: SupersededEntry<T>[] = []
-  for (const e of [...list, entry]) {
-    if (valuesEqual(e.value, currentValue)) continue // superseded holds only values DIFFERENT from current
-    const i = out.findIndex((x) => valuesEqual(x.value, e.value))
-    if (i === -1) out.push(e)
-    else if (laterEntry(e, out[i])) out[i] = e // one entry per value — its most recent sighting
-  }
-  return out.sort((a, b) => (laterEntry(a, b) ? -1 : laterEntry(b, a) ? 1 : 0)).slice(0, 10)
 }
 
 function mergeProvenant<T>(
@@ -258,15 +237,20 @@ function mergeProvenant<T>(
   return { ...current, superseded: pushSuperseded(current.superseded, { value: incoming.value, date: incoming.date, source_file: incoming.source_file }, current.value, valuesEqual) }
 }
 
-const eqStrict = <T>(a: T, b: T): boolean => a === b
-const eqVelocity = (a: { signal: string; evidence: string }, b: { signal: string; evidence: string }): boolean =>
-  a.signal === b.signal && a.evidence === b.evidence
-
 /** Merge one meeting's extraction into the entity + graph files. Pure data transforms — no LLM here. */
 export async function mergeExtraction(
   s: Settings,
   x: MeetingExtraction,
-  ref: MeetingRef
+  ref: MeetingRef,
+  // Optional (Task MI-2): when supplied, entity file routing resolves through it FIRST (an old alias
+  // OR the entity's own current name — see readAliasMap's doc comment for why the current name is
+  // registered too), falling back to slugify(name) exactly as before when there's no hit. Omitted
+  // entirely, behavior is byte-identical to pre-MI-2 — every existing direct caller/test of this
+  // function is unaffected. ingestExtraction (the production path) always passes the same aliasMap it
+  // already computed for applyCorrections, so a renamed entity's immutable `id` (which can differ from
+  // slugify(its current display name)) still resolves to the right file instead of silently forking a
+  // second one.
+  aliasMap?: Map<string, { kind: EntityKind; id: string; displayName: string }>
 ): Promise<void> {
   const graph = readGraph(s)
   const addNode = (id: string, type: 'account' | 'person' | 'deal' | 'sector' | 'meeting', label: string): void =>
@@ -277,7 +261,7 @@ export async function mergeExtraction(
   const meetingId = `meeting:${slugify(ref.file)}`
   addNode(meetingId, 'meeting', ref.title || ref.file)
 
-  const accountSlug = x.account && x.account.name.trim() ? slugify(x.account.name) : null
+  const accountSlug = x.account && x.account.name.trim() ? resolveEntitySlug(aliasMap, 'account', x.account.name) : null
   if (x.account && accountSlug) {
     const acc = readAccount(s, accountSlug) ?? {
       schema_version: BRAIN_SCHEMA_VERSION,
@@ -317,7 +301,7 @@ export async function mergeExtraction(
 
   for (const p of x.people) {
     if (!p.name.trim()) continue
-    const pslug = slugify(p.name)
+    const pslug = resolveEntitySlug(aliasMap, 'person', p.name)
     const person = readPerson(s, pslug) ?? {
       schema_version: BRAIN_SCHEMA_VERSION,
       id: pslug,
@@ -380,7 +364,7 @@ export async function mergeExtraction(
   }
 
   if (x.deal && (x.deal.name || accountSlug)) {
-    const dslug = slugify(x.deal.name || `${x.account?.name ?? 'unknown'} deal`)
+    const dslug = resolveEntitySlug(aliasMap, 'deal', x.deal.name || `${x.account?.name ?? 'unknown'} deal`)
     const deal = readDeal(s, dslug) ?? {
       schema_version: BRAIN_SCHEMA_VERSION,
       id: dslug,
@@ -622,8 +606,16 @@ export async function ingestExtraction(s: Settings, x: MeetingExtraction, md: st
   // These are trusted provenance stamps, never model-authored extraction fields.
   x.source_mode = sourceMode
   x.source_use = classifyMeetingSourceUse(sourceMode)
+  // Rewrite renamed/merged entity names through the correction engine's alias map BEFORE merging, so a
+  // meeting that (re)uses a corrected-away name (e.g. "Acme Corp" after a rename to "Acme") lands on the
+  // SAME entity instead of quietly recreating the one a human already fixed. Persisting the rewritten
+  // extraction (not the raw one) keeps the stored meeting file and the merged entities in agreement. The
+  // SAME aliasMap instance is also passed into mergeExtraction below — required (not just cosmetic) so
+  // its own file-routing resolves a renamed entity's immutable id, not slugify(the now-rewritten name).
+  const aliasMap = readAliasMap(s)
+  applyCorrections(x, aliasMap)
   await writeMeetingExtraction(s, slugify(key), x)
-  await mergeExtraction(s, x, ref)
+  await mergeExtraction(s, x, ref, aliasMap)
   await updateIndex(s, (idx) => {
     idx.ingested[key] = { at: Date.now(), ok: true }
   })
@@ -690,24 +682,47 @@ let backfillLintPending = false
 // no provider configured would otherwise spam this warning once per queued job.
 let loggedNoProviderStall = false
 
+// brain:rebuildAll needs to run replayCorrections() only once its purge-then-startBackfill re-extraction
+// has FULLY drained — startBackfill() itself only synchronously queues work; completion happens later,
+// across pump()'s async extraction/ingest chain. Callbacks registered here fire the next time the whole
+// queue (not just this one caller's jobs — see registerDrainCallback's doc comment) goes idle.
+const pendingDrainCallbacks: Array<() => void | Promise<void>> = []
+
+/** Registers `cb` to run the next time the queue is fully idle, firing immediately (still async, via
+ *  the idle check below) if it already is. `startBackfill`'s only caller today (brain:rebuildAll) always
+ *  pushes its own candidates onto `queue` before calling this, so "queue idle" can never mean "before my
+ *  jobs were even queued" — by construction the check only ever fires once THIS batch (and anything
+ *  else in flight) has actually finished. */
+function registerDrainCallback(cb?: () => void | Promise<void>): void {
+  if (!cb) return
+  pendingDrainCallbacks.push(cb)
+  maybeFinishDrain()
+}
+
 /** Runs after every state change (a job dequeued, an extraction settled, an ingest completed) to check
  *  for a TRUE drain: queue empty AND nothing extracting AND nothing waiting on/undergoing ingest AND the
  *  whole backfill batch has been accounted for. A stall (jobs stuck in `queue` because no provider is
  *  configured) must never trip this — inFlightJobs and queue both being empty is what makes it "true". */
 function maybeFinishDrain(): void {
-  if (
-    queue.length === 0 &&
-    inFlightJobs.size === 0 &&
-    backfillLintPending &&
-    backfillTotal > 0 &&
-    backfillDone >= backfillTotal
-  ) {
-    backfillLintPending = false
-    const sx = getSettings()
-    void updateIndex(sx, (i) => {
-      i.backfillRequested = false
-      i.warnings = lintBrain(sx)
-    })
+  if (queue.length === 0 && inFlightJobs.size === 0) {
+    if (backfillLintPending && backfillTotal > 0 && backfillDone >= backfillTotal) {
+      backfillLintPending = false
+      const sx = getSettings()
+      void updateIndex(sx, (i) => {
+        i.backfillRequested = false
+        i.warnings = lintBrain(sx)
+      })
+    }
+    if (pendingDrainCallbacks.length > 0) {
+      const cbs = pendingDrainCallbacks.splice(0, pendingDrainCallbacks.length)
+      for (const cb of cbs) {
+        try {
+          void Promise.resolve(cb()).catch((e) => mainLog.error('[brain] onDrained callback failed:', e))
+        } catch (e) {
+          mainLog.error('[brain] onDrained callback threw:', e)
+        }
+      }
+    }
   }
 }
 
@@ -785,8 +800,12 @@ export function resumeBackfillIfPending(): void {
 /** Queue every not-yet-ingested transcript from the meetings folder + the vault. Resumable via index.
  *  Safe to call again while a backfill is already running (re-clicking "Index meetings",
  *  resumeBackfillIfPending firing mid-session) — it tops up the queue instead of resetting progress,
- *  and skips files already queued or completed so nothing is double-processed. */
-export function startBackfill(): { queued: number } {
+ *  and skips files already queued or completed so nothing is double-processed.
+ *
+ *  `onDrained` (Task MI-2, brain:rebuildAll only): fires once every job this call queues — plus
+ *  anything else already in flight — has fully finished (see registerDrainCallback's doc comment).
+ *  Every other caller (the plain "Index meetings" button, resumeBackfillIfPending) omits it. */
+export function startBackfill(onDrained?: () => void | Promise<void>): { queued: number } {
   const s = getSettings()
   const idx = readIndex(s)
   if (!idx.backfillRequested) void updateIndex(s, (i) => { i.backfillRequested = true })
@@ -796,6 +815,7 @@ export function startBackfill(): { queued: number } {
   // just above) so resumeBackfillIfPending tries again on a later boot once a provider is configured.
   if (!hasUsableProvider(s)) {
     mainLog.warn('[brain] backfill requested but no configured AI provider — deferring until one is set up')
+    registerDrainCallback(onDrained) // nothing will ever run — fire (once truly idle) rather than hang
     return { queued: 0 }
   }
   const already = new Set(Object.entries(idx.ingested).filter(([, v]) => v.ok).map(([k]) => k))
@@ -842,5 +862,6 @@ export function startBackfill(): { queued: number } {
   backfillTotal += candidates.length
   queue.push(...candidates)
   pump()
+  registerDrainCallback(onDrained)
   return { queued: candidates.length }
 }
