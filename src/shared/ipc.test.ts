@@ -8,7 +8,12 @@ import {
   McpCrmTestConnectionPayloadSchema,
   McpCrmSaveConnectionPayloadSchema,
   McpCrmPushPayloadSchema,
-  StreamMetaSchema
+  StreamMetaSchema,
+  EntityRenamePayloadSchema,
+  EntityMergePayloadSchema,
+  EntityUnmergePayloadSchema,
+  EntityUpdateFieldPayloadSchema,
+  CommitmentRejectPayloadSchema
 } from './ipc'
 
 /** process.platform is configurable in Node — flip it for the duration of a platform-specific test. */
@@ -293,6 +298,100 @@ describe('McpCrmPushPayloadSchema', () => {
       args: { title: 'ok', count: 3, active: true, note: null }
     })
     expect(r.success).toBe(true)
+  })
+})
+
+// Correction engine (Task MI-2) IPC payload validation — this is what index.ts's five brain:entity*/
+// brain:commitmentReject handlers run every incoming payload through before ever touching the store.
+describe('EntityRenamePayloadSchema', () => {
+  it('accepts a valid rename, with and without alsoFixAsr', () => {
+    expect(EntityRenamePayloadSchema.safeParse({ kind: 'account', id: 'acme-corp', newName: 'Acme' }).success).toBe(true)
+    expect(
+      EntityRenamePayloadSchema.safeParse({ kind: 'person', id: 'm-silva', newName: 'Maria Silva', alsoFixAsr: true })
+        .success
+    ).toBe(true)
+  })
+
+  it('rejects an invalid kind, an empty id/newName, and a non-boolean alsoFixAsr', () => {
+    expect(EntityRenamePayloadSchema.safeParse({ kind: 'meeting', id: 'x', newName: 'Y' }).success).toBe(false)
+    expect(EntityRenamePayloadSchema.safeParse({ kind: 'account', id: '', newName: 'Y' }).success).toBe(false)
+    expect(EntityRenamePayloadSchema.safeParse({ kind: 'account', id: 'x', newName: '' }).success).toBe(false)
+    expect(
+      EntityRenamePayloadSchema.safeParse({ kind: 'account', id: 'x', newName: 'Y', alsoFixAsr: 'yes' }).success
+    ).toBe(false)
+  })
+
+  it('rejects a missing field entirely and a non-object payload', () => {
+    expect(EntityRenamePayloadSchema.safeParse({ id: 'x', newName: 'Y' }).success).toBe(false)
+    expect(EntityRenamePayloadSchema.safeParse(null).success).toBe(false)
+  })
+
+  // The pair alsoFixAsr composes in index.ts must round-trip through the SAME settings.asrCorrections
+  // shape commitLine's consumer expects (lib/listen.ts: c.from / c.to, both plain strings).
+  it('a constructed {from, to} correction pair round-trips through the persisted settings shape', () => {
+    const pair = { from: 'Acme Corp', to: 'Acme' }
+    const parsed = SettingsSchema.safeParse({ ...DEFAULT_SETTINGS, asrCorrections: [pair] })
+    expect(parsed.success).toBe(true)
+    if (parsed.success) expect(parsed.data.asrCorrections).toEqual([pair])
+  })
+})
+
+describe('EntityMergePayloadSchema', () => {
+  it('accepts a valid merge and rejects a missing fromId/intoId or bad kind', () => {
+    expect(EntityMergePayloadSchema.safeParse({ kind: 'deal', fromId: 'a', intoId: 'b' }).success).toBe(true)
+    expect(EntityMergePayloadSchema.safeParse({ kind: 'deal', fromId: '', intoId: 'b' }).success).toBe(false)
+    expect(EntityMergePayloadSchema.safeParse({ kind: 'deal', intoId: 'b' }).success).toBe(false)
+    expect(EntityMergePayloadSchema.safeParse({ kind: 'invalid', fromId: 'a', intoId: 'b' }).success).toBe(false)
+  })
+})
+
+describe('EntityUnmergePayloadSchema', () => {
+  it('accepts a non-negative integer targetSeq and rejects negative/fractional/missing', () => {
+    expect(EntityUnmergePayloadSchema.safeParse({ targetSeq: 0 }).success).toBe(true)
+    expect(EntityUnmergePayloadSchema.safeParse({ targetSeq: 3 }).success).toBe(true)
+    expect(EntityUnmergePayloadSchema.safeParse({ targetSeq: -1 }).success).toBe(false)
+    expect(EntityUnmergePayloadSchema.safeParse({ targetSeq: 1.5 }).success).toBe(false)
+    expect(EntityUnmergePayloadSchema.safeParse({}).success).toBe(false)
+  })
+})
+
+describe('EntityUpdateFieldPayloadSchema', () => {
+  it('accepts any field name + unknown value shape here — corrections.ts validates per (kind, field)', () => {
+    expect(
+      EntityUpdateFieldPayloadSchema.safeParse({ kind: 'deal', id: 'acme-core', field: 'stage', value: 'contract' })
+        .success
+    ).toBe(true)
+    expect(
+      EntityUpdateFieldPayloadSchema.safeParse({
+        kind: 'deal',
+        id: 'acme-core',
+        field: 'velocity',
+        value: { signal: 'hard-calendar-gate', evidence: 'go/no-go June 3' }
+      }).success
+    ).toBe(true)
+  })
+
+  it('rejects an empty id/field and a missing kind', () => {
+    expect(EntityUpdateFieldPayloadSchema.safeParse({ kind: 'deal', id: '', field: 'stage', value: 'x' }).success).toBe(
+      false
+    )
+    expect(EntityUpdateFieldPayloadSchema.safeParse({ kind: 'deal', id: 'x', field: '', value: 'x' }).success).toBe(
+      false
+    )
+    expect(EntityUpdateFieldPayloadSchema.safeParse({ id: 'x', field: 'stage', value: 'x' }).success).toBe(false)
+  })
+})
+
+describe('CommitmentRejectPayloadSchema', () => {
+  it('accepts personSlug + text with dealSlug optional, rejects an empty personSlug/text', () => {
+    expect(CommitmentRejectPayloadSchema.safeParse({ personSlug: 'maria-silva', text: 'send the deck' }).success).toBe(
+      true
+    )
+    expect(
+      CommitmentRejectPayloadSchema.safeParse({ personSlug: 'maria-silva', dealSlug: 'acme-core', text: 'x' }).success
+    ).toBe(true)
+    expect(CommitmentRejectPayloadSchema.safeParse({ personSlug: '', text: 'x' }).success).toBe(false)
+    expect(CommitmentRejectPayloadSchema.safeParse({ personSlug: 'maria-silva', text: '' }).success).toBe(false)
   })
 })
 
