@@ -681,8 +681,11 @@ function publicSettings(): PublicSettings {
     localSummaryReady,
     localVisionReady,
     // Live sidecar process state (distinct from localReady's eligibility check) — drives the Local AI
-    // card's status line only.
+    // card's status line only. localRuntimeState is the precise tri-state (stopped/starting/running/
+    // unavailable) so the card can distinguish a normal idle stop from a session-long 'unavailable'
+    // lockout; localRuntimeRunning is kept for existing boolean consumers.
     localRuntimeRunning: localRuntime.isRunning(),
+    localRuntimeState: localRuntime.getState(),
     hasKeys: hasKeysMap(),
     hasEncryption: encryptionAvailable(),
     resolvedMeetingsFolder: resolveMeetingsFolder(s),

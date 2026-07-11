@@ -675,6 +675,9 @@ export const PublicSettingsSchema = BaseSettingsSchema.extend({
    *  eligibility to route there, not live process state; the sidecar starts lazily on first local request
    *  and idle-stops after 15 min, see local-runtime.ts). Drives the Local AI card's status line only. */
   localRuntimeRunning: z.boolean().default(false),
+  /** Precise sidecar lifecycle state — lets the Local AI card distinguish a normal idle 'stopped' from a
+   *  session-long 'unavailable' lockout (restart-budget exhausted, cleared only by relaunch). */
+  localRuntimeState: z.enum(['stopped', 'starting', 'running', 'unavailable']).default('stopped'),
   hasKeys: z.record(z.string(), z.boolean()),
   hasEncryption: z.boolean(),
   resolvedMeetingsFolder: z.string(),
@@ -696,6 +699,7 @@ export type SettingsPatch = Partial<
     | 'localSummaryReady'
     | 'localVisionReady'
     | 'localRuntimeRunning'
+    | 'localRuntimeState'
     | 'hasKeys'
     | 'hasEncryption'
     | 'resolvedMeetingsFolder'

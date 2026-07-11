@@ -35,8 +35,8 @@ describe('onDelete surfaces a failed local-model delete inline (finding 1)', () 
   })
 })
 
-describe("runtime status line no longer overclaims after 'unavailable' (finding 2)", () => {
-  const block = blockAfter('settings.localRuntimeRunning', '</div>')
+describe("runtime status line reads the true tri-state, not a boolean (finding 2)", () => {
+  const block = blockAfter('settings.localRuntimeState', '</div>')
 
   it('the not-running branch no longer promises an unconditional automatic restart', () => {
     // The old copy asserted "starts automatically" as fact with no hedge or recovery path — that stayed
@@ -44,9 +44,11 @@ describe("runtime status line no longer overclaims after 'unavailable' (finding 
     expect(block).not.toMatch(/starts automatically on the first live suggestion/)
   })
 
-  it('names the actual recovery path (restarting the app) since localRuntimeRunning cannot ' +
-      "distinguish idle-stopped from permanently-'unavailable'", () => {
-    expect(block).toMatch(/restart Métis/)
+  it("distinguishes the 'unavailable' lockout from a normal idle stop and names the app-restart recovery", () => {
+    // The tri-state now has a dedicated 'unavailable' branch (restart-budget lockout, cleared only by
+    // relaunch) that says so honestly, instead of the reassuring idle-stop copy.
+    expect(block).toMatch(/localRuntimeState === 'unavailable'/)
+    expect(block).toMatch(/Restart Métis/)
   })
 })
 
