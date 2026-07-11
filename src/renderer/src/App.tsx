@@ -585,7 +585,11 @@ export function App(): JSX.Element {
   }, [listen.listening])
   useEffect(() => {
     if (!listen.listening || honkedRef.current) return
-    if (!(settings?.autoSuggest ?? true) || (!settings?.providerReady && !settings?.localSuggestReady)) return
+    // providerReady only — NOT localSuggestReady. The honk always fires suggest.run({ mode: 'answer', ... })
+    // (buildNoDecisionPrompt is deliberately answer-shaped, a free-form nudge, not a suggest-card prompt),
+    // and Métis Local never serves 'answer' mode. Gating on localSuggestReady here would let a local-only
+    // setup pass this check and then hit the same provider error the fired request was supposed to avoid.
+    if (!(settings?.autoSuggest ?? true) || !settings?.providerReady) return
     if (suggest.answer?.streaming) return
     const verdict = detectNoDecisionEnding(listen.lines, meetingStartRef.current, Date.now())
     if (!verdict.honk) return
@@ -1609,7 +1613,10 @@ export function App(): JSX.Element {
         }
         if (typed) setInput('')
       } else if (kind === 'summarize') {
-        if (!requireProvider()) return
+        // Fired mode is always 'summary' here: 'local-error' bails with no run, 'screen' routes through
+        // askScreen (its own 'vision' gate), and the remaining branch below always calls
+        // ask.run({ mode: 'summary' }) — so a local-summary-only setup must pass this gate too.
+        if (!requireProvider('summary')) return
         const transcript = listen.text()
         const canUseScreen = Boolean((settings?.screenAsk ?? true) && settings?.visionAvailable)
         // route.transport is the single source of truth for vision-vs-text — it already prioritizes the
