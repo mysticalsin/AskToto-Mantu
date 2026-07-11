@@ -52,3 +52,7 @@ resources/llama/
 # scripts/prove-local-ttft.mjs's download-fallback cache (only populated when neither
 # ASKTOTO_PROVE_MODEL_DIR nor an existing userData download is found) — sha256-pinned, never commit.
 .cache/
+
+# Rocket-fuel / relay engagement working notes (not app source)
+.rocket-fuel/
+_relay/
