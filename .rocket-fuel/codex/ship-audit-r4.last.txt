@@ -1,0 +1,4 @@
+blocker: src/main/llm/local-models.ts:37-65 + src/main/index.ts:1949-1969 + src/renderer/src/components/Settings.tsx:1129-1225 ship Métis Local as a post-install Hugging Face model-download flow; a self-contained/offline DMG/EXE has no usable local model until a networked userData download completes
+blocker: src/renderer/src/App.tsx:717-743,769-807,956-986,1611-1643 still call requireProvider() with no local task before local-capable vision/suggest/summary routes; local-only users get bounced to Settings even though localVisionReady/localSuggestReady/localSummaryReady are true
+blocker: src/renderer/src/App.tsx:588-597 lets localSuggestReady pass the No-Decision Honk gate, then fires mode:'answer'; main deliberately rejects local for answer, so a local-only meeting gets a provider error instead of a valid local suggest path or silence
+VERDICT: REVISE
