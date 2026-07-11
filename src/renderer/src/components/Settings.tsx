@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type ComponentType, type ReactNode, type RefObject } from 'react'
+import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type ComponentType, type ReactNode } from 'react'
 import {
   Check,
   ExternalLink,
@@ -656,8 +656,6 @@ function AiSection({
   const recommended = recommendedProvider(settings)
   const isFeatured = featured.includes(provider)
 
-  const dustSectionRef = useRef<HTMLDivElement>(null)
-
   // The "{provider} key" card — shown for whichever raw provider is currently active. Rendered at the
   // top level when that's Anthropic or a featured provider (the primary flows), or inside "Experience:
   // more models" otherwise. null for CLI providers (Dust/Claude Code/Codex have their own dedicated
@@ -864,23 +862,18 @@ function AiSection({
 
   return (
     <div className="flex flex-col gap-5">
-      {/* CLI Integration — Claude Code CLI, Codex CLI, and the Dust shortcut card */}
-      <CliIntegration
+      {/* CLI Integration — Claude Code CLI and Codex CLI, first so auto-setup is the first thing offered */}
+      <CliIntegration settings={settings} patch={patch} />
+
+      {/* Dust — Métis's primary brain (your Second Brain agents). Always here, not a tile. This is the
+          single, dedicated Dust section — CliIntegration above no longer duplicates it. */}
+      <DustSetup
         settings={settings}
         patch={patch}
-        dustSectionRef={dustSectionRef}
+        saveKey={saveKey}
+        clearKey={clearKey}
+        active={provider === 'dust'}
       />
-
-      {/* Dust — Métis's primary brain (your Second Brain agents). Always here, not a tile. */}
-      <div ref={dustSectionRef}>
-        <DustSetup
-          settings={settings}
-          patch={patch}
-          saveKey={saveKey}
-          clearKey={clearKey}
-          active={provider === 'dust'}
-        />
-      </div>
 
       {/* Anthropic — the primary, recommended provider. Always visible: a compact summary row here,
           plus its full key card below whenever it's the one currently answering questions. */}
@@ -1174,8 +1167,13 @@ function LocalAiSection({
                 >
                   <div className="flex items-center justify-between gap-2">
                     <div className="flex flex-col gap-0.5">
-                      <span className="text-[12px] font-medium text-[color:var(--cl-foreground)]">
+                      <span className="flex items-center gap-1.5 text-[12px] font-medium text-[color:var(--cl-foreground)]">
                         {model.label}
+                        {model.id === 'qwen3.5-2b' && (
+                          <span className="rounded-full bg-[var(--cl-primary-soft)] px-1.5 py-0 text-[10px] font-medium text-[color:var(--cl-primary)]">
+                            Recommended
+                          </span>
+                        )}
                       </span>
                       <span className="text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
                         {formatBytes(model.totalBytes)} download · needs {model.minTotalRamGB} GB RAM
@@ -1252,6 +1250,13 @@ function LocalAiSection({
           </div>
         )}
 
+        {models !== null && models.length > 0 && (
+          <p className="text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
+            Not sure which one? Qwen3.5 2B is the recommended default — the best balance of quality and
+            speed. Pick Qwen3.5 0.8B Lite for the smallest download and the fastest responses.
+          </p>
+        )}
+
         <div className="flex flex-col gap-0.5">
           <span className="text-[12px] font-medium text-[color:var(--cl-foreground)]">Use for</span>
           <ToggleRow
@@ -1311,12 +1316,10 @@ type CliCardState = {
 
 function CliIntegration({
   settings,
-  patch,
-  dustSectionRef
+  patch
 }: {
   settings: PublicSettings
   patch: (p: Partial<PublicSettings>) => void
-  dustSectionRef?: RefObject<HTMLDivElement>
 }): JSX.Element {
   const provider = settings.provider
   const cliConnected = settings.cliConnected ?? {}
@@ -1542,7 +1545,7 @@ function CliIntegration({
               className={primaryBtn}
             >
               <Link2 size={12} />
-              {isConnected ? 'Reconnect' : 'Set up'}
+              {isConnected ? 'Reconnect' : 'Set up automatically'}
             </button>
             {isConnected && (
               <button
@@ -1623,7 +1626,7 @@ function CliIntegration({
   return (
     <Section
       title="CLI Integration"
-      desc="Connect a local CLI tool or your Dust agents. Each option routes through a different backend."
+      desc="Claude Code and Codex route through your own local install of that tool — it has to be on this device. Set up automatically installs it (via npm i -g) if it's missing, or connects straight away if it's already there."
     >
       <div className="flex flex-col gap-3">
 
@@ -1643,36 +1646,6 @@ function CliIntegration({
             </button>
           </div>
         )}
-
-        {/* Dust card — your Second Brain agents (proposed first) */}
-        <div
-          className={[
-            'flex items-center justify-between gap-2 rounded-[10px] border p-3',
-            provider === 'dust'
-              ? 'border-[var(--cl-primary)] bg-[var(--cl-primary-soft)]/40'
-              : 'border-[var(--cl-border)] bg-white/[0.02]'
-          ].join(' ')}
-        >
-          <div className="flex flex-col gap-0.5">
-            <span className="text-[12px] font-medium text-[color:var(--cl-foreground)]">Dust CLI · Your agents</span>
-            <span className="text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
-              Your Second Brain agents via the Dust platform. Full setup in the section below.
-            </span>
-          </div>
-          {provider === 'dust' ? (
-            <span className={activePill}>
-              <CircleCheck size={12} /> Active
-            </span>
-          ) : (
-            <button
-              type="button"
-              onClick={() => dustSectionRef?.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
-              className={primaryBtn}
-            >
-              Set up below
-            </button>
-          )}
-        </div>
 
         {/* Claude Code CLI card */}
         {renderCliCard('claude-cli')}
