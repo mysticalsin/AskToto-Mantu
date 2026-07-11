@@ -13,7 +13,8 @@ import {
   EntityMergePayloadSchema,
   EntityUnmergePayloadSchema,
   EntityUpdateFieldPayloadSchema,
-  CommitmentRejectPayloadSchema
+  CommitmentRejectPayloadSchema,
+  appendAsrCorrection
 } from './ipc'
 
 /** process.platform is configurable in Node — flip it for the duration of a platform-specific test. */
@@ -392,6 +393,50 @@ describe('CommitmentRejectPayloadSchema', () => {
     ).toBe(true)
     expect(CommitmentRejectPayloadSchema.safeParse({ personSlug: '', text: 'x' }).success).toBe(false)
     expect(CommitmentRejectPayloadSchema.safeParse({ personSlug: 'maria-silva', text: '' }).success).toBe(false)
+  })
+})
+
+// alsoFixAsr composition (reviewer IMPORTANT 3): a pair that fails element validation must be SKIPPED
+// (rename still applied) — never appended, because store.ts's validKeysOnly drops the whole
+// asrCorrections array when any one element fails, silently wiping every existing correction.
+describe('appendAsrCorrection (alsoFixAsr composition)', () => {
+  it('appends a valid pair in the exact consumer shape (commitLine correctionsRef: {from, to})', () => {
+    const r = appendAsrCorrection([{ from: 'Old Co', to: 'New Co' }], 'Acme Corp', 'Acme')
+    expect(r.kind).toBe('append')
+    if (r.kind === 'append') {
+      expect(r.pairs).toEqual([
+        { from: 'Old Co', to: 'New Co' },
+        { from: 'Acme Corp', to: 'Acme' }
+      ])
+      // The composed array must round-trip whole-array settings validation.
+      expect(SettingsSchema.safeParse({ ...DEFAULT_SETTINGS, asrCorrections: r.pairs }).success).toBe(true)
+    }
+  })
+
+  it('skips (with a reason) a name over the 80-char cap instead of poisoning whole-array validation', () => {
+    const longName = 'X'.repeat(81)
+    const r = appendAsrCorrection([], longName, 'Acme')
+    expect(r.kind).toBe('skipped')
+    if (r.kind === 'skipped') expect(r.reason).toContain('80')
+    // The failure mode the pre-validation prevents: one bad element fails the ENTIRE array parse,
+    // which is exactly what store.ts's validKeysOnly would then drop wholesale.
+    expect(
+      SettingsSchema.safeParse({ ...DEFAULT_SETTINGS, asrCorrections: [{ from: longName, to: 'Acme' }] }).success
+    ).toBe(false)
+  })
+
+  it('no-ops on a duplicate pair and enforces the 100-entry cap on append', () => {
+    const pair = { from: 'Acme Corp', to: 'Acme' }
+    expect(appendAsrCorrection([pair], 'Acme Corp', 'Acme')).toEqual({ kind: 'noop' })
+
+    const full = Array.from({ length: 100 }, (_, i) => ({ from: `word-${i}`, to: `fix-${i}` }))
+    const r = appendAsrCorrection(full, 'Acme Corp', 'Acme')
+    expect(r.kind).toBe('append')
+    if (r.kind === 'append') {
+      expect(r.pairs).toHaveLength(100) // oldest dropped, cap respected
+      expect(r.pairs[99]).toEqual(pair)
+      expect(SettingsSchema.safeParse({ ...DEFAULT_SETTINGS, asrCorrections: r.pairs }).success).toBe(true)
+    }
   })
 })
 

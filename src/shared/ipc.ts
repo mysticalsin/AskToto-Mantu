@@ -392,6 +392,39 @@ export const CommitmentRejectPayloadSchema = z.object({
   text: z.string().min(1)
 })
 
+/** One settings.asrCorrections entry — the exact shape commitLine's consumer (lib/listen.ts
+ *  correctionsRef) compiles into word-boundary regexes. Extracted from SettingsSchema (which arrays it,
+ *  capped at 100) so a single pair can be validated on its own BEFORE it joins the array: store.ts's
+ *  validKeysOnly drops the ENTIRE asrCorrections array when any one element fails validation, so a
+ *  handler that blindly appends an oversized pair wouldn't just lose that pair — it would silently
+ *  wipe every correction the user already had. */
+export const AsrCorrectionPairSchema = z.object({ from: z.string().min(1).max(80), to: z.string().max(80) })
+
+/** brain:entityRename's `alsoFixAsr` composition (reviewer IMPORTANT 3) — pure so both paths are unit-
+ *  testable. Validates the pair per-element FIRST (see AsrCorrectionPairSchema above for why), dedupes,
+ *  and enforces the array's own 100-entry cap, so the result can NEVER fail whole-array validation:
+ *   - { kind: 'append', pairs } — hand `pairs` to setSettings as the new asrCorrections value
+ *   - { kind: 'noop' }          — pair already present; write nothing
+ *   - { kind: 'skipped', reason } — pair can't be represented (e.g. a name over the 80-char cap);
+ *     the caller performs the rename anyway and surfaces the reason. */
+export function appendAsrCorrection(
+  existing: ReadonlyArray<{ from: string; to: string }>,
+  from: string,
+  to: string
+): { kind: 'append'; pairs: Array<{ from: string; to: string }> } | { kind: 'noop' } | { kind: 'skipped'; reason: string } {
+  const pair = { from, to }
+  const parsed = AsrCorrectionPairSchema.safeParse(pair)
+  if (!parsed.success) {
+    return {
+      kind: 'skipped',
+      reason:
+        'The name pair could not be added as a live-transcript ASR correction (names must be 1-80 characters). The rename itself was applied.'
+    }
+  }
+  if (existing.some((c) => c.from === pair.from && c.to === pair.to)) return { kind: 'noop' }
+  return { kind: 'append', pairs: [...existing, pair].slice(-100) }
+}
+
 /** Structured export of a meeting recap (decisions + action-items-with-owners) for Jira/Asana/Notion etc.
  *  The full original markdown is always included so nothing is lost if a section heading was reworded. */
 export const RecapExportSchema = z.object({
@@ -633,7 +666,7 @@ export const BaseSettingsSchema = z.object({
   // auto-start-on-meeting-detected popup's app-name matching).
   customMeetingApps: z.array(z.string().min(1).max(80)).max(20).default([]),
   // Words the ASR engine consistently mishears, always corrected in the live transcript (commitLine).
-  asrCorrections: z.array(z.object({ from: z.string().min(1).max(80), to: z.string().max(80) })).max(100).default([]),
+  asrCorrections: z.array(AsrCorrectionPairSchema).max(100).default([]),
   // Entity-casing bias (SAFE — exact-match only, never phonetic/fuzzy): spell people/account names the
   // brain already knows with their canonical casing in the live transcript. Names come from
   // brain:entityNames; see main/index.ts and lib/entity-casing.ts. On by default.

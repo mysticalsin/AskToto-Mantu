@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import type { Settings } from '@shared/ipc'
-import { MeetingExtractionSchema, type MeetingExtraction } from '@shared/brain'
+import { MeetingExtractionSchema, type MeetingExtraction, type CorrectionEntry } from '@shared/brain'
 import { ingestExtraction } from './ingest'
 import { buildBrainContext } from './context'
 import {
@@ -24,6 +24,7 @@ import {
   rejectCommitment,
   replayCorrections,
   readAliasMap,
+  aliasMapFromJournal,
   applyCorrections,
   readCorrectionsJournal
 } from './corrections'
@@ -155,6 +156,155 @@ describe('corrections engine', () => {
 
     const rebuiltSnapshot = snapshotEntities(s)
     expect(rebuiltSnapshot).toEqual(liveSnapshot)
+  })
+
+  // ── ★ Rebuild-converges: rename BEFORE later meetings (reviewer's exact repro) ──
+  // Root cause under test: replayCorrections runs only after full re-ingest, so during re-ingest no
+  // entity-file alias exists yet for post-rename names — routing must come from the JOURNAL.
+  const accountOnly = (name: string): MeetingExtraction =>
+    MeetingExtractionSchema.parse({ account: { name, sector: 'banking', confidence: 'EXTRACTED' } })
+
+  it('rebuild does not fork a duplicate when a rename precedes later meetings that use the corrected name', async () => {
+    await ingestExtraction(s, accountOnly('Acme Corp'), transcriptMd('2026-06-01'), join(folder, 'r1.md'))
+    const renamed = await renameEntity(s, { kind: 'account', id: ACCOUNT_SLUG, newName: 'Acme' })
+    expect(renamed.ok).toBe(true)
+    await ingestExtraction(s, accountOnly('Acme'), transcriptMd('2026-06-02'), join(folder, 'r2.md'))
+    expect(listEntities(s, 'account')).toEqual([ACCOUNT_SLUG]) // live path already routes via entity aliases
+
+    const liveSnapshot = snapshotEntities(s)
+
+    expect(purgeBrain(s, { preserveCorrections: true }).ok).toBe(true)
+    await ingestExtraction(s, accountOnly('Acme Corp'), transcriptMd('2026-06-01'), join(folder, 'r1.md'))
+    await ingestExtraction(s, accountOnly('Acme'), transcriptMd('2026-06-02'), join(folder, 'r2.md'))
+    const replay = await replayCorrections(s)
+    expect(replay.warnings).toEqual([])
+
+    // Reviewer reproduced ['acme', 'acme-corp'] here — the second meeting must NOT fork a new entity.
+    expect(listEntities(s, 'account')).toEqual([ACCOUNT_SLUG])
+    expect(snapshotEntities(s)).toEqual(liveSnapshot)
+  })
+
+  it('rebuild converges across a rename chain A→B→C with meetings under all three names', async () => {
+    const ID = slugify('Alpha Analytics')
+    await ingestExtraction(s, accountOnly('Alpha Analytics'), transcriptMd('2026-06-01'), join(folder, 'c1.md'))
+    expect((await renameEntity(s, { kind: 'account', id: ID, newName: 'Beta Analytics' })).ok).toBe(true)
+    await ingestExtraction(s, accountOnly('Beta Analytics'), transcriptMd('2026-06-02'), join(folder, 'c2.md'))
+    expect((await renameEntity(s, { kind: 'account', id: ID, newName: 'Gamma Analytics' })).ok).toBe(true)
+    await ingestExtraction(s, accountOnly('Gamma Analytics'), transcriptMd('2026-06-03'), join(folder, 'c3.md'))
+    expect(listEntities(s, 'account')).toEqual([ID])
+
+    const liveSnapshot = snapshotEntities(s)
+    expect((liveSnapshot[`account/${ID}`] as { name: string; aliases: string[] }).name).toBe('Gamma Analytics')
+
+    expect(purgeBrain(s, { preserveCorrections: true }).ok).toBe(true)
+    await ingestExtraction(s, accountOnly('Alpha Analytics'), transcriptMd('2026-06-01'), join(folder, 'c1.md'))
+    await ingestExtraction(s, accountOnly('Beta Analytics'), transcriptMd('2026-06-02'), join(folder, 'c2.md'))
+    await ingestExtraction(s, accountOnly('Gamma Analytics'), transcriptMd('2026-06-03'), join(folder, 'c3.md'))
+    const replay = await replayCorrections(s)
+    expect(replay.warnings).toEqual([])
+
+    expect(listEntities(s, 'account')).toEqual([ID]) // transitive: A and B must both resolve to the one entity
+    expect(snapshotEntities(s)).toEqual(liveSnapshot)
+  })
+
+  // ── aliasMapFromJournal (pure) ───────────────────────────────────────────
+  it('aliasMapFromJournal resolves rename chains transitively, maps merge surface forms, and honors unmerge annulment', () => {
+    const at = '2026-07-11T00:00:00.000Z'
+    const entries: CorrectionEntry[] = [
+      {
+        seq: 0,
+        at,
+        kind: 'entity_rename',
+        payload: { kind: 'account', id: 'alpha', newName: 'Beta' },
+        snapshot: { oldName: 'Alpha' }
+      },
+      {
+        seq: 1,
+        at,
+        kind: 'entity_rename',
+        payload: { kind: 'account', id: 'alpha', newName: 'Gamma' },
+        snapshot: { oldName: 'Beta' }
+      },
+      {
+        seq: 2,
+        at,
+        kind: 'entity_merge',
+        payload: { kind: 'person', fromId: 'm-silva', intoId: 'maria-silva' },
+        snapshot: {
+          fromEntity: { name: 'M Silva', aliases: ['Silva, M.'] },
+          intoEntity: { name: 'Maria Silva' }
+        }
+      }
+    ]
+    const map = aliasMapFromJournal(entries)
+    // Transitive rename chain: A→B then B→C ⇒ A and B (and C, and the id) all resolve to C.
+    const gamma = { kind: 'account', id: 'alpha', displayName: 'Gamma' }
+    expect(map.get('alpha')).toEqual(gamma)
+    expect(map.get('beta')).toEqual(gamma)
+    expect(map.get('gamma')).toEqual(gamma)
+    // Merge: every surface form of `from` (display name, snapshot aliases, id) → into's canonical.
+    const maria = { kind: 'person', id: 'maria-silva', displayName: 'Maria Silva' }
+    expect(map.get('m-silva')).toEqual(maria)
+    expect(map.get(slugify('Silva, M.'))).toEqual(maria)
+    expect(map.get('maria-silva')).toEqual(maria)
+
+    // An unmerge annuls its target merge: from's surface forms must no longer route into `into`.
+    const withUnmerge: CorrectionEntry[] = [
+      ...entries,
+      { seq: 3, at, kind: 'entity_unmerge', payload: { targetSeq: 2 } }
+    ]
+    const annulledMap = aliasMapFromJournal(withUnmerge)
+    expect(annulledMap.get('m-silva')).toBeUndefined()
+    expect(annulledMap.get('alpha')).toEqual(gamma) // renames unaffected by the unmerge
+  })
+
+  // ── Merge folds provenant fields (reviewer IMPORTANT 2) ──────────────────
+  it('merge folds a source-only provenant field into the target (the CFO case), keeping plain/sidecar in sync', async () => {
+    const withRole = MeetingExtractionSchema.parse({
+      people: [{ name: 'Claire Fontaine', role: 'CFO', org: null, confidence: 'EXTRACTED' }]
+    })
+    const withoutRole = MeetingExtractionSchema.parse({
+      people: [{ name: 'C Fontaine', role: null, org: null, confidence: 'EXTRACTED' }]
+    })
+    await ingestExtraction(s, withRole, transcriptMd('2026-06-01'), join(folder, 'f1.md'))
+    await ingestExtraction(s, withoutRole, transcriptMd('2026-06-02'), join(folder, 'f2.md'))
+
+    const merged = await mergeEntities(s, {
+      kind: 'person',
+      fromId: slugify('Claire Fontaine'),
+      intoId: slugify('C Fontaine')
+    })
+    expect(merged.ok).toBe(true)
+
+    const into = readPerson(s, slugify('C Fontaine'))!
+    // Reviewer reproduced: from.role='CFO', into.role=null → merged role null (CFO only in snapshot).
+    expect(into.role).toBe('CFO')
+    expect(into.role_provenance?.value).toBe('CFO')
+    expect(into.role).toBe(into.role_provenance!.value) // plain/sidecar sync invariant after fold
+  })
+
+  it('merge with BOTH sides pinned keeps the into value (the human chose the merge direction) and records the loser', async () => {
+    const personX = MeetingExtractionSchema.parse({
+      people: [{ name: 'Pat Winner', role: 'analyst', org: null, confidence: 'EXTRACTED' }]
+    })
+    const personY = MeetingExtractionSchema.parse({
+      people: [{ name: 'P Winner', role: 'analyst', org: null, confidence: 'EXTRACTED' }]
+    })
+    await ingestExtraction(s, personX, transcriptMd('2026-06-01'), join(folder, 'p1.md'))
+    await ingestExtraction(s, personY, transcriptMd('2026-06-02'), join(folder, 'p2.md'))
+    const FROM = slugify('Pat Winner')
+    const INTO = slugify('P Winner')
+    expect((await updateEntityField(s, { kind: 'person', id: FROM, field: 'role', value: 'VP Engineering' })).ok).toBe(true)
+    expect((await updateEntityField(s, { kind: 'person', id: INTO, field: 'role', value: 'CTO' })).ok).toBe(true)
+
+    expect((await mergeEntities(s, { kind: 'person', fromId: FROM, intoId: INTO })).ok).toBe(true)
+
+    const into = readPerson(s, INTO)!
+    expect(into.role).toBe('CTO')
+    expect(into.role_provenance?.value).toBe('CTO')
+    expect(into.role_provenance?.state).toBe('pinned')
+    expect(into.role_provenance?.superseded.some((e) => e.value === 'VP Engineering')).toBe(true)
+    expect(into.role).toBe(into.role_provenance!.value) // sidecar sync after a both-pinned fold
   })
 
   // ── ★ applyCorrections rewrites future ingests ──────────────────────────
