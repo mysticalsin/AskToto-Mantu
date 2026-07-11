@@ -34,6 +34,11 @@ import {
   NotebookLmAskPayloadSchema,
   LicenseActivatePayloadSchema,
   SetDealOutcomePayloadSchema,
+  EntityRenamePayloadSchema,
+  EntityMergePayloadSchema,
+  EntityUnmergePayloadSchema,
+  EntityUpdateFieldPayloadSchema,
+  CommitmentRejectPayloadSchema,
   RenameMeetingPayloadSchema,
   UpdateRecapPayloadSchema,
   ImportAudioStartSchema,
@@ -70,6 +75,14 @@ import { createStream } from './llm'
 import { isTransient, nextBackoff } from './llm/retry'
 import { resetDustConversation, prewarmDustConversation, isDustAuthError } from './llm/dust'
 import { enqueueIngest, startBackfill, brainBackfillProgress, resumeBackfillIfPending, settleCommitment } from './brain/ingest'
+import {
+  renameEntity,
+  mergeEntities,
+  unmergeEntities,
+  updateEntityField,
+  rejectCommitment,
+  replayCorrections
+} from './brain/corrections'
 import { openIntelligenceWindow, isIntelligenceSender, syncIntelContentProtection } from './intelligence'
 import {
   readIndex as readBrainIndex,
@@ -2252,8 +2265,14 @@ function registerIpc(): void {
     // never the Mantu Intelligence window's assertBrainReader (that's for the three read-only channels).
     assertMainWindow(e)
     if (!requireAuth()) throw new Error('Not signed in.')
-    purgeBrain(getSettings())
-    const r = startBackfill()
+    // preserveCorrections: true — the human correction journal is not derived data (see purgeBrain's own
+    // doc comment); replayCorrections below depends on it surviving the purge. onDrained fires once the
+    // full re-extraction backfill this triggers has actually finished, replaying every correction back
+    // onto the freshly rebuilt entities so "rebuild + replay" reproduces the live-corrected state.
+    purgeBrain(getSettings(), { preserveCorrections: true })
+    const r = startBackfill(async () => {
+      await replayCorrections(getSettings())
+    })
     auditLog('brain.backfill.start', { queued: r.queued, rebuild: true })
     return r
   })
@@ -2299,6 +2318,77 @@ function registerIpc(): void {
     if (!updated) return { ok: false, error: 'Deal not found.' }
     auditLog('brain.deal.outcome', { outcome: parsed.data.outcome })
     return { ok: true }
+  })
+
+  // Correction engine (Task MI-2): five human-correction channels, each cloned from
+  // brain:setDealOutcome's pattern above — zod safeParse + main-window-only + requireAuth + audit. Every
+  // mutation goes through src/main/brain/corrections.ts so brain:rebuildAll's journal replay (which
+  // calls the exact same functions) can reproduce it deterministically — see corrections.ts's module
+  // doc comment for the single-mutation-implementation invariant.
+  ipcMain.handle(IPC.brainEntityRename, async (e, raw) => {
+    assertMainWindow(e)
+    if (!requireAuth()) return { ok: false, error: 'Sign in with your Mantu account first.' }
+    const parsed = EntityRenamePayloadSchema.safeParse(raw)
+    if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message || 'Invalid rename request.' }
+    const { kind, id, newName, alsoFixAsr } = parsed.data
+    // Captured BEFORE the rename so alsoFixAsr can pair the OLD display name with the new one.
+    const oldName =
+      kind === 'person'
+        ? readBrainPerson(getSettings(), id)?.name
+        : kind === 'account'
+          ? readBrainAccount(getSettings(), id)?.name
+          : readBrainDeal(getSettings(), id)?.name
+    const r = await renameEntity(getSettings(), { kind, id, newName })
+    if (!r.ok) return r
+    // alsoFixAsr composition lives here, not in corrections.ts (that module owns brain-entity
+    // mutations only) — appends the {from, to} pair to settings.asrCorrections in the exact shape
+    // commitLine's correctionsRef consumer expects (see lib/listen.ts), so the live transcript stops
+    // mishearing the old name going forward. Deduped and bounded to the same 100-entry cap the
+    // asrCorrections schema itself enforces.
+    if (alsoFixAsr && oldName && oldName !== newName) {
+      const s = getSettings()
+      const pair = { from: oldName, to: newName }
+      const exists = s.asrCorrections.some((c) => c.from === pair.from && c.to === pair.to)
+      if (!exists) setSettings({ asrCorrections: [...s.asrCorrections, pair].slice(-100) })
+    }
+    auditLog('brain.entity.renamed', { kind })
+    return { ok: true }
+  })
+  ipcMain.handle(IPC.brainEntityMerge, async (e, raw) => {
+    assertMainWindow(e)
+    if (!requireAuth()) return { ok: false, error: 'Sign in with your Mantu account first.' }
+    const parsed = EntityMergePayloadSchema.safeParse(raw)
+    if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message || 'Invalid merge request.' }
+    const r = await mergeEntities(getSettings(), parsed.data)
+    if (r.ok) auditLog('brain.entity.merged', { kind: parsed.data.kind })
+    return r
+  })
+  ipcMain.handle(IPC.brainEntityUnmerge, async (e, raw) => {
+    assertMainWindow(e)
+    if (!requireAuth()) return { ok: false, error: 'Sign in with your Mantu account first.' }
+    const parsed = EntityUnmergePayloadSchema.safeParse(raw)
+    if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message || 'Invalid request.' }
+    const r = await unmergeEntities(getSettings(), parsed.data)
+    if (r.ok) auditLog('brain.entity.unmerged', {})
+    return r
+  })
+  ipcMain.handle(IPC.brainEntityUpdateField, async (e, raw) => {
+    assertMainWindow(e)
+    if (!requireAuth()) return { ok: false, error: 'Sign in with your Mantu account first.' }
+    const parsed = EntityUpdateFieldPayloadSchema.safeParse(raw)
+    if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message || 'Invalid field update.' }
+    const r = await updateEntityField(getSettings(), parsed.data)
+    if (r.ok) auditLog('brain.entity.field_updated', { kind: parsed.data.kind, field: parsed.data.field })
+    return r
+  })
+  ipcMain.handle(IPC.brainCommitmentReject, async (e, raw) => {
+    assertMainWindow(e)
+    if (!requireAuth()) return { ok: false, error: 'Sign in with your Mantu account first.' }
+    const parsed = CommitmentRejectPayloadSchema.safeParse(raw)
+    if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message || 'Invalid commitment.' }
+    const r = await rejectCommitment(getSettings(), parsed.data)
+    if (r.ok) auditLog('brain.commitment.rejected', {})
+    return r
   })
 
   // Periodic best-effort snapshot of an IN-PROGRESS meeting (renderer calls this every ~60s while

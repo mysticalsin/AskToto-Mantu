@@ -1,6 +1,7 @@
 import { z } from 'zod'
 import type { ProviderId } from './providers'
 import { LocalVisionEvidenceSchema } from './local-ai'
+import { EntityKindSchema } from './brain'
 
 export const ProviderIdSchema = z.enum([
   'anthropic',
@@ -100,6 +101,12 @@ export const IPC = {
   debriefSave: 'debrief:save',
   brainCommitmentSettle: 'brain:commitmentSettle',
   brainSetDealOutcome: 'brain:setDealOutcome',
+  // Correction engine (Task MI-2): human fixes for misheard/merged entities and never-made commitments.
+  brainEntityRename: 'brain:entityRename',
+  brainEntityMerge: 'brain:entityMerge',
+  brainEntityUnmerge: 'brain:entityUnmerge',
+  brainEntityUpdateField: 'brain:entityUpdateField',
+  brainCommitmentReject: 'brain:commitmentReject',
   windowResize: 'window:resize',
   windowMode: 'window:mode',
   windowMoveBy: 'window:moveBy',
@@ -347,6 +354,42 @@ export const ImportDecoderFailedSchema = z.object({
 export const SetDealOutcomePayloadSchema = z.object({
   dealSlug: z.string().min(1),
   outcome: z.enum(['open', 'won', 'lost'])
+})
+
+/** Payloads for the five correction-engine channels (Task MI-2) — see src/main/brain/corrections.ts
+ *  for the mutations themselves. `kind`/`id`/`fromId`/`intoId` are entity slugs (immutable, the join
+ *  key), never display names. `field`/`value` on brain:entityUpdateField are validated per (kind, field)
+ *  inside corrections.ts, not here — the zod-valid set differs by kind (deal.velocity is an object,
+ *  account.sector is an enum, everything else is a plain string) and is cheaper to check once, in one
+ *  place, alongside the mutation itself. */
+export const EntityRenamePayloadSchema = z.object({
+  kind: EntityKindSchema,
+  id: z.string().min(1),
+  newName: z.string().min(1).max(200),
+  // Also append oldName -> newName to settings.asrCorrections (main-side composition, see index.ts) so
+  // the live transcript stops mishearing the old name going forward.
+  alsoFixAsr: z.boolean().optional()
+})
+export const EntityMergePayloadSchema = z.object({
+  kind: EntityKindSchema,
+  fromId: z.string().min(1),
+  intoId: z.string().min(1)
+})
+export const EntityUnmergePayloadSchema = z.object({
+  targetSeq: z.number().int().nonnegative()
+})
+export const EntityUpdateFieldPayloadSchema = z.object({
+  kind: EntityKindSchema,
+  id: z.string().min(1),
+  field: z.string().min(1).max(60),
+  value: z.unknown()
+})
+/** `dealSlug` is optional — a commitment spoken in a deal-less meeting (x.deal is null) lives ONLY on
+ *  the named person's own ledger, so there's nothing to also flip on a deal. */
+export const CommitmentRejectPayloadSchema = z.object({
+  personSlug: z.string().min(1),
+  dealSlug: z.string().optional(),
+  text: z.string().min(1)
 })
 
 /** Structured export of a meeting recap (decisions + action-items-with-owners) for Jira/Asana/Notion etc.

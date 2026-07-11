@@ -179,6 +179,32 @@ const api = {
   // Deal outcome: mark a deal open/won/lost (or reopen). dealSlug = display name, slugified in main.
   brainSetDealOutcome: (dealSlug: string, outcome: 'open' | 'won' | 'lost'): Promise<{ ok: boolean; error?: string }> =>
     ipcRenderer.invoke(IPC.brainSetDealOutcome, { dealSlug, outcome }),
+  // Correction engine (Task MI-2): rename/merge/unmerge/field-pin/commitment-reject. All five take
+  // entity SLUGS (the immutable join key), never display names — the caller already has them from a
+  // brain:read/brainEntityNames response.
+  brainEntityRename: (
+    kind: import('@shared/brain').EntityKind,
+    id: string,
+    newName: string,
+    alsoFixAsr?: boolean
+  ): Promise<{ ok: boolean; error?: string }> =>
+    ipcRenderer.invoke(IPC.brainEntityRename, { kind, id, newName, alsoFixAsr }),
+  brainEntityMerge: (
+    kind: import('@shared/brain').EntityKind,
+    fromId: string,
+    intoId: string
+  ): Promise<{ ok: boolean; error?: string }> => ipcRenderer.invoke(IPC.brainEntityMerge, { kind, fromId, intoId }),
+  brainEntityUnmerge: (targetSeq: number): Promise<{ ok: boolean; error?: string }> =>
+    ipcRenderer.invoke(IPC.brainEntityUnmerge, { targetSeq }),
+  brainEntityUpdateField: (
+    kind: import('@shared/brain').EntityKind,
+    id: string,
+    field: string,
+    value: unknown
+  ): Promise<{ ok: boolean; error?: string }> =>
+    ipcRenderer.invoke(IPC.brainEntityUpdateField, { kind, id, field, value }),
+  brainCommitmentReject: (personSlug: string, text: string, dealSlug?: string): Promise<{ ok: boolean; error?: string }> =>
+    ipcRenderer.invoke(IPC.brainCommitmentReject, { personSlug, dealSlug, text }),
   setListeningState: (on: boolean): Promise<void> => ipcRenderer.invoke(IPC.listeningState, on),
   asrBundled: (): Promise<boolean> => ipcRenderer.invoke(IPC.asrBundled),
 
