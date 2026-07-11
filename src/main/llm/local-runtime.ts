@@ -2,7 +2,9 @@
  * local-runtime.ts — lifecycle manager for the `llama-server` sidecar that powers Métis Local (on-device
  * suggest/summary/vision). Owns the child process, the ephemeral loopback port, and a per-app-session
  * api key; none of the three are ever logged or exposed outside this module (the renderer gets only
- * derived readiness booleans — see PLAN.md §4.3/§4.6).
+ * derived readiness booleans — see PLAN.md §4.3/§4.6). The api key is handed to the child via the
+ * LLAMA_API_KEY environment variable (never a `--api-key` argv flag), so it never appears in `ps`/
+ * process-table output visible to other local processes.
  *
  * Module-level state (not a class) matches the rest of src/main (store.ts, parakeet.ts): the app runs at
  * most one sidecar per process, so a singleton closure is simpler than an instance nobody ever
@@ -93,7 +95,6 @@ export function resolveBinaryPath(platform: LlamaPlatform = detectPlatform()): B
 export interface SpawnArgsInput {
   gguf: string
   mmproj: string
-  apiKey: string
 }
 
 /**
@@ -109,7 +110,6 @@ export function buildSpawnArgs(input: SpawnArgsInput): string[] {
     '--mmproj', input.mmproj,
     '--host', '127.0.0.1',
     '--port', '0',
-    '--api-key', input.apiKey,
     '-c', '8192',
     '--parallel', '2',
     '-ngl', '99',
@@ -209,10 +209,16 @@ export function markActivity(): void {
 
 function spawnAndWaitHealthy(binaryPath: string, modelPaths: ModelPaths, platform: LlamaPlatform): Promise<void> {
   return new Promise((resolve, reject) => {
-    const args = buildSpawnArgs({ gguf: modelPaths.gguf, mmproj: modelPaths.mmproj, apiKey })
+    const args = buildSpawnArgs({ gguf: modelPaths.gguf, mmproj: modelPaths.mmproj })
     let proc: ChildProcess
     try {
-      proc = spawn(binaryPath, args, { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true })
+      // The per-session api key travels via env, never argv (see module doc comment) — `ps`/the process
+      // table can see the flag list of every local process but not another process's environment.
+      proc = spawn(binaryPath, args, {
+        stdio: ['ignore', 'pipe', 'pipe'],
+        windowsHide: true,
+        env: { ...process.env, LLAMA_API_KEY: apiKey }
+      })
     } catch (err) {
       reject(err instanceof Error ? err : new Error(String(err)))
       return
@@ -274,7 +280,9 @@ function spawnAndWaitHealthy(binaryPath: string, modelPaths: ModelPaths, platfor
       port = null
       if (!settled) {
         settled = true
-        reject(new Error(`llama-server exited before becoming healthy (code=${code}, signal=${signal})`))
+        const tail = outputBuffer.trim()
+        const detail = tail ? ` — last output: ${tail.slice(-800)}` : ''
+        reject(new Error(`llama-server exited before becoming healthy (code=${code}, signal=${signal})${detail}`))
         return
       }
       if (wasRunning) {
