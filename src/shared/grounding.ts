@@ -29,7 +29,10 @@ export type AlignMatch = { start: number; end: number; score: number }
 
 function tokenizeWords(s: string): { tok: string; start: number; end: number }[] {
   const out: { tok: string; start: number; end: number }[] = []
-  const re = /[\p{L}\p{N}]+/gu
+  // Unit symbols (%, €, $, £) are tokens in their own right: a quote ending in "15%" must produce a
+  // fuzzy window whose span still contains the '%', or the span-side unit check would reject a
+  // genuinely correct fact whose unit symbol trails the last word token.
+  const re = /[\p{L}\p{N}]+|[%€$£]/gu
   let m: RegExpExecArray | null
   while ((m = re.exec(s))) out.push({ tok: m[0], start: m.index, end: m.index + m[0].length })
   return out
@@ -93,11 +96,11 @@ export function alignQuote(quote: string, transcript: string, threshold = 0.85):
 
 export type NumeralHit = { value: number; unit: string | null; raw: string }
 
-/** Parse a digit run (already isolated by NUM_TOKEN_RE) that may use '.', ',' or ' '/NNBSP as a
- *  thousands-group or decimal separator. Never mixes separator kinds — mixed forms are out of the
+/** Parse a digit run (already isolated by NUM_TOKEN_RE) that may use '.', ',' or U+202F (narrow
+ *  no-break space) as a thousands-group or decimal separator. Never mixes separator kinds — mixed forms are out of the
  *  documented scope and return null (fail closed) rather than guessing. */
 function parseDigitGroup(raw: string): number | null {
-  const s = raw.replace(/ /g, ' ')
+  const s = raw.replace(/\u202f/g, ' ')
   const hasDot = s.includes('.')
   const hasComma = s.includes(',')
   const hasSpace = s.includes(' ')
@@ -166,6 +169,11 @@ function endsWithWord(s: string, pos: number, word: string): boolean {
   return before === undefined || !/[a-z]/.test(before)
 }
 
+/** Candidate positions for a suffix continuing at `pos`: directly adjacent, or after ONE space. */
+function suffixSpots(s: string, pos: number): number[] {
+  return s[pos] === ' ' ? [pos, pos + 1] : [pos]
+}
+
 /** Consume an optional magnitude + currency + percent suffix starting at `pos` in folded string `s`.
  *  Returns the new end position and any multiplier/unit found (defaults: magnitude 1, unit null). */
 function consumeSuffix(s: string, pos: number): { end: number; magnitude: number; unit: string | null } {
@@ -193,27 +201,24 @@ function consumeSuffix(s: string, pos: number): { end: number; magnitude: number
     }
   }
 
-  for (const spot2 of [end, s[end] === ' ' ? end + 1 : end]) {
+  currency: for (const spot2 of suffixSpots(s, end)) {
     const sym = s[spot2]
     if (sym && CUR_SYM[sym]) {
       unit = CUR_SYM[sym]
       end = spot2 + 1
       break
     }
-    let hit = false
     for (const [code, iso] of CUR_CODE) {
       if (startsWithWord(s, spot2, code)) {
         unit = iso
         end = spot2 + code.length
-        hit = true
-        break
+        break currency
       }
     }
-    if (hit) break
   }
 
   if (!unit) {
-    for (const spot3 of [end, s[end] === ' ' ? end + 1 : end]) {
+    for (const spot3 of suffixSpots(s, end)) {
       if (s[spot3] === '%') {
         unit = '%'
         end = spot3 + 1
@@ -247,10 +252,11 @@ function consumePrefix(s: string, pos: number): { start: number; unit: string | 
   return { start: pos, unit: null }
 }
 
-// Matches a digit-and-separator run: space/NNBSP-grouped thousands (`\d+(?:[  ]\d{3})+`) tried
-// first since it's the more specific shape, else a run using only '.'/',' separators (grouping and/or
-// decimal — parseDigitGroup does the semantic disambiguation).
-const NUM_TOKEN_RE = /\d+(?:[  ]\d{3})+|\d+(?:[.,]\d+)*/g
+// Matches a digit-and-separator run. Thousands grouping across a space is recognized ONLY for
+// U+202F (narrow no-break space) — the typographic separator actually used for grouping. A bare
+// ASCII space between digit runs is two independent numerals ("20 200" states 20 and 200, never a
+// fabricated 20200 — fail closed). '.'/',' runs go to parseDigitGroup for semantic disambiguation.
+const NUM_TOKEN_RE = /\d+(?:\u202f\d{3})+|\d+(?:[.,]\d+)*/g
 
 const EN_UNITS: Record<string, number> = {
   zero: 0, one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9
@@ -461,10 +467,22 @@ function parseFrenchNumber(tokens: string[], i: number): { value: number; next: 
   return { value, next: j }
 }
 
+/** NFKC folds U+202F down to a plain space, which would erase the ONLY space form we accept for
+ *  thousands grouping (an ASCII space between digit runs is two independent numerals, never a group).
+ *  Re-stamp the original NNBSP positions after folding — NFKC is length-preserving for the supported
+ *  text; if it ever isn't, grouping is simply not recognized there (fail closed, fewer hits). */
+function foldForNumerals(span: string): string {
+  const folded = foldCase(span)
+  if (folded.length !== span.length || !span.includes('\u202f')) return folded
+  let out = ''
+  for (let i = 0; i < folded.length; i++) out += span[i] === '\u202f' ? '\u202f' : folded[i]
+  return out
+}
+
 /** Extract every numeric value expressible in the span, normalized to a plain number.
  *  unit is '%', an ISO-ish currency ('EUR','USD','GBP'), or null. */
 export function extractNumerals(span: string): NumeralHit[] {
-  const s = foldCase(span)
+  const s = foldForNumerals(span)
   const hits: NumeralHit[] = []
   const consumedTo: boolean[] = new Array(s.length + 1).fill(false)
 
@@ -549,12 +567,17 @@ export function numeralDerivable(value: number, span: string, unit?: string): bo
   })
 }
 
-/** 'verified' iff alignQuote(fact.quote, transcript) succeeds AND numeralDerivable(fact.value, matchedSpan, fact.unit). */
 export type NumericFactInput = { value: number; quote: string; unit?: string }
 
+/** 'verified' iff ALL THREE hold: (a) alignQuote(fact.quote, transcript) succeeds,
+ *  (b) numeralDerivable(fact.value, fact.quote, fact.unit) — the value is claimed by the QUOTE itself,
+ *  (c) numeralDerivable(fact.value, matchedSpan, fact.unit) — AND stated in the aligned transcript span.
+ *  (b) stops the fuzzy aligner from sweeping a stray interior transcript numeral into the claim;
+ *  (c) stops a fuzzy match from verifying a quote whose number drifted from what was actually said. */
 export function verifyNumericFact(fact: NumericFactInput, transcript: string): 'verified' | 'unverified' {
   const match = alignQuote(fact.quote, transcript)
   if (!match) return 'unverified'
+  if (!numeralDerivable(fact.value, fact.quote, fact.unit)) return 'unverified'
   const span = transcript.slice(match.start, match.end)
   return numeralDerivable(fact.value, span, fact.unit) ? 'verified' : 'unverified'
 }

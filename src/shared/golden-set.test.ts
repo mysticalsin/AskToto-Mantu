@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { readdirSync, readFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { verifyNumericFact } from './grounding'
+import { alignQuote, verifyNumericFact } from './grounding'
 
 /**
  * Golden set — 12 synthetic meeting transcripts + hand-verified ground truth, under
@@ -102,12 +102,12 @@ function unitSwap(unit: string | null): string | undefined {
   return 'EUR' // null/undefined -> attach a unit where none was verified (must not spuriously match)
 }
 
-describe('golden set — adversarial perturbation (100% flag rate, no exceptions)', () => {
-  const allFacts = slugs.flatMap((slug) => {
-    const { transcript, expected } = loadFixture(slug)
-    return expected.numeric_facts.map((fact) => ({ slug, transcript, fact }))
-  })
+const allFacts = slugs.flatMap((slug) => {
+  const { transcript, expected } = loadFixture(slug)
+  return expected.numeric_facts.map((fact) => ({ slug, transcript, fact }))
+})
 
+describe('golden set — adversarial perturbation (100% flag rate, no exceptions)', () => {
   it('sanity: the golden set has numeric facts to perturb', () => {
     expect(allFacts.length).toBeGreaterThan(0)
   })
@@ -146,4 +146,41 @@ describe('golden set — adversarial perturbation (100% flag rate, no exceptions
     expect(total).toBeGreaterThan(0)
     expect(flagged).toBe(total) // 100% — no sampling, no exceptions
   })
+})
+
+// ── fuzzy-path robustness suite ─────────────────────────────────────────────────────────────────
+// Real quotes arrive with ASR drift, so the guarantee must hold on the FUZZY path too — not just for
+// verbatim quotes. Deterministic noise (no randomness, failures always reproduce): one filler word
+// after the first word plus comma drift — a realistic single-utterance transcription wobble that must
+// stay above the default 0.85 alignment threshold.
+
+function injectAsrNoise(quote: string): string {
+  const words = quote.replace(/,/g, '').split(' ')
+  return [words[0], 'uh', ...words.slice(1)].join(' ')
+}
+
+describe('golden set — fuzzy-path robustness (noisy quotes verify, perturbations still 100% rejected)', () => {
+  it.each(allFacts.map(({ slug, fact }) => `${slug}: ${fact.quote}`))(
+    '%s — noisy quote verifies, all swaps rejected',
+    (label) => {
+      const { transcript, fact } = allFacts.find(({ slug, fact }) => `${slug}: ${fact.quote}` === label)!
+      const noisy = injectAsrNoise(fact.quote)
+
+      const m = alignQuote(noisy, transcript)
+      expect(m, 'noisy quote must still align').not.toBeNull()
+      expect(m!.score, 'noise must force the fuzzy path, not the exact one').toBeLessThan(1)
+
+      const truth = verifyNumericFact({ value: fact.value, quote: noisy, unit: fact.unit ?? undefined }, transcript)
+      expect(truth, 'true value must still verify through the fuzzy path').toBe('verified')
+
+      const neighbor = verifyNumericFact({ value: neighborSwap(fact.value), quote: noisy, unit: fact.unit ?? undefined }, transcript)
+      expect(neighbor, 'fuzzy neighbor-swap must be unverified').toBe('unverified')
+
+      const magnitude = verifyNumericFact({ value: magnitudeSwap(fact.value), quote: noisy, unit: fact.unit ?? undefined }, transcript)
+      expect(magnitude, 'fuzzy magnitude-swap must be unverified').toBe('unverified')
+
+      const unit = verifyNumericFact({ value: fact.value, quote: noisy, unit: unitSwap(fact.unit) }, transcript)
+      expect(unit, 'fuzzy unit-swap must be unverified').toBe('unverified')
+    }
+  )
 })
