@@ -4,6 +4,7 @@ import type { Settings, AskStart } from '@shared/ipc'
 import { PROVIDERS, resolveModelTier, type ProviderId } from '@shared/providers'
 import {
   BRAIN_EXTRACTION_PROMPT,
+  classifyMeetingSourceUse,
   MeetingExtractionSchema,
   type MeetingExtraction,
   type MeetingRef,
@@ -393,6 +394,17 @@ export function brainBackfillProgress(): { total: number; done: number; running:
   return { total: backfillTotal, done: backfillDone, running: queue.length > 0 || inFlightJobs.size > 0 }
 }
 
+/** Reads the app-written meeting mode from the leading YAML frontmatter only. */
+export function readMeetingSourceMode(md: string): string {
+  const frontmatter = md.match(/^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/)?.[1]
+  if (!frontmatter) return ''
+
+  const raw = frontmatter.match(/^mode:\s*(.*?)\s*$/m)?.[1]?.trim() ?? ''
+  const quoted = raw.match(/^(['"])(.*)\1$/)
+  const mode = (quoted ? quoted[2] : raw).trim()
+  return mode.length <= 100 ? mode : ''
+}
+
 /**
  * The full post-extraction ingest: stamp provenance from the transcript's frontmatter (the model
  * can't know its own source file/date), persist the extraction, merge into entities/graph, mark the
@@ -401,6 +413,7 @@ export function brainBackfillProgress(): { total: number; done: number; running:
  */
 export async function ingestExtraction(s: Settings, x: MeetingExtraction, md: string, file: string): Promise<void> {
   const key = basename(file)
+  const sourceMode = readMeetingSourceMode(md)
   // Frontmatter dates aren't always bare tokens: hand-authored or vault-exported files commonly quote
   // the value (`date: "2024-01-15T10:00:00.000Z"`), and a naive \S+ match would keep the quote marks,
   // producing a value that fails Date.parse() downstream and later renders as an obviously broken
@@ -426,6 +439,9 @@ export async function ingestExtraction(s: Settings, x: MeetingExtraction, md: st
   // extractions back to meetings (call-grade timelines, meeting feeds) without re-reading entity refs.
   x.source_file = key
   x.date = ref.date
+  // These are trusted provenance stamps, never model-authored extraction fields.
+  x.source_mode = sourceMode
+  x.source_use = classifyMeetingSourceUse(sourceMode)
   await writeMeetingExtraction(s, slugify(key), x)
   await mergeExtraction(s, x, ref)
   await updateIndex(s, (idx) => {

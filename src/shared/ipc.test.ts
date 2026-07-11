@@ -4,9 +4,11 @@ import {
   CaptureResultSchema,
   SettingsSchema,
   DEFAULT_SETTINGS,
+  IPC,
   McpCrmTestConnectionPayloadSchema,
   McpCrmSaveConnectionPayloadSchema,
-  McpCrmPushPayloadSchema
+  McpCrmPushPayloadSchema,
+  StreamMetaSchema
 } from './ipc'
 
 /** process.platform is configurable in Node — flip it for the duration of a platform-specific test. */
@@ -50,6 +52,68 @@ describe('AskStartSchema', () => {
     }
     const result = AskStartSchema.safeParse(invalid)
     expect(result.success).toBe(false)
+  })
+
+  it('accepts only a UUID localSessionId', () => {
+    const base = { id: 'ask-4', mode: 'answer' as const, history: [] }
+    expect(
+      AskStartSchema.safeParse({ ...base, localSessionId: '123e4567-e89b-12d3-a456-426614174000' }).success
+    ).toBe(true)
+    expect(AskStartSchema.safeParse({ ...base, localSessionId: 'not-a-uuid' }).success).toBe(false)
+  })
+
+  it('accepts bounded structured visionEvidence only for vision mode and without a raw image', () => {
+    const visionEvidence = {
+      version: 1,
+      modelId: 'smolvlm-256m-instruct',
+      modelSha256: 'a'.repeat(64),
+      capturedAt: 1,
+      backend: 'wasm' as const,
+      capabilities: ['caption'] as const,
+      caption: 'A roadmap slide',
+      text: '',
+      regions: []
+    }
+    expect(
+      AskStartSchema.safeParse({ id: 'ask-5', mode: 'vision', visionEvidence, history: [] }).success
+    ).toBe(true)
+    expect(
+      AskStartSchema.safeParse({ id: 'ask-6', mode: 'answer', visionEvidence, history: [] }).success
+    ).toBe(false)
+    expect(
+      AskStartSchema.safeParse({
+        id: 'ask-7',
+        mode: 'vision',
+        visionEvidence,
+        image: Buffer.alloc(100).toString('base64'),
+        history: []
+      }).success
+    ).toBe(false)
+    expect(
+      AskStartSchema.safeParse({
+        id: 'ask-7-empty-image',
+        mode: 'vision',
+        visionEvidence,
+        image: '',
+        history: []
+      }).success
+    ).toBe(false)
+  })
+
+  it('rejects visionEvidence whose complete JSON exceeds 64 KiB UTF-8', () => {
+    const visionEvidence = {
+      version: 1,
+      modelId: 'smolvlm-256m-instruct',
+      modelSha256: 'a'.repeat(64),
+      capturedAt: 1,
+      backend: 'wasm' as const,
+      capabilities: ['regions'] as const,
+      caption: '',
+      text: '',
+      regions: Array.from({ length: 200 }, () => ({ text: 'é'.repeat(400), box: [0, 0, 1, 1] }))
+    }
+    expect(new TextEncoder().encode(JSON.stringify(visionEvidence)).length).toBeGreaterThan(64 * 1024)
+    expect(AskStartSchema.safeParse({ id: 'ask-8', mode: 'vision', visionEvidence, history: [] }).success).toBe(false)
   })
 })
 
@@ -256,5 +320,32 @@ describe('DEFAULT_SHORTCUTS scroll defaults', () => {
     expect(DEFAULT_SHORTCUTS['scroll-down']).toBe('CommandOrControl+Alt+Down')
     expect(DEFAULT_SHORTCUTS['scroll-left']).toBe('CommandOrControl+Alt+Left')
     expect(DEFAULT_SHORTCUTS['scroll-right']).toBe('CommandOrControl+Alt+Right')
+  })
+})
+
+describe('local AI IPC channel constants', () => {
+  it('defines the six exact new channel names without collisions', () => {
+    expect(IPC.localAiStatus).toBe('local-ai:status')
+    expect(IPC.localTranscriptBegin).toBe('local-ai:transcript:begin')
+    expect(IPC.localTranscriptAppend).toBe('local-ai:transcript:append')
+    expect(IPC.localTranscriptResync).toBe('local-ai:transcript:resync')
+    expect(IPC.localTranscriptEnd).toBe('local-ai:transcript:end')
+    expect(IPC.brainAnalyze).toBe('brain:analyze')
+    const values = Object.values(IPC)
+    expect(new Set(values).size).toBe(values.length)
+  })
+})
+
+describe('StreamMetaSchema migration guard', () => {
+  it('still parses the current provider-shaped metadata before Task 6', () => {
+    const current = { id: 'ask-1', provider: 'anthropic' as const, tier: 'base' as const }
+    const parsed = StreamMetaSchema.safeParse(current)
+    expect(parsed.success).toBe(true)
+    if (parsed.success) expect(parsed.data).toEqual(current)
+  })
+
+  it('still requires a provider and valid provider tier', () => {
+    expect(StreamMetaSchema.safeParse({ id: 'ask-1', tier: 'base' }).success).toBe(false)
+    expect(StreamMetaSchema.safeParse({ id: 'ask-1', provider: 'anthropic', tier: 'fast' }).success).toBe(false)
   })
 })

@@ -67,14 +67,17 @@ function fx(p: {
     account: p.account ? { name: p.account.name, sector: p.account.sector, confidence: 'EXTRACTED' } : null,
     people: (p.people ?? []).map((pp) => ({ name: pp.name, role: pp.role ?? null, org: null, confidence: 'EXTRACTED' })),
     deal: p.deal ? { name: p.deal.name, stage: p.deal.stage ?? 'open', win_likelihood_band: p.deal.band ?? null } : null,
-    commitments: (p.commitments ?? []).map((c) => ({ ...c, quote: `"${c.text}"`, confidence: 'EXTRACTED' }))
+    commitments: (p.commitments ?? []).map((c) => ({ ...c, quote: `"${c.text}"`, confidence: 'EXTRACTED' })),
+    // Simulate hostile/malformed model output. Production must ignore both and stamp trusted frontmatter.
+    source_mode: 'interview',
+    source_use: 'employment'
   })
   return { file: p.file, daysAgo: p.daysAgo, x }
 }
 
 /** Minimal transcript markdown carrying the frontmatter production stamps provenance from. */
 const transcriptMd = (daysAgo: number): string =>
-  `---\ntype: meeting-transcript\nsource: Métis\ndate: ${iso(daysAgo)}\n---\n\n## Full transcript\n\n**[10:00:00] Them:** hello\n`
+  `---\ntype: meeting-transcript\nsource: Métis\nmode: "meeting"\ndate: ${iso(daysAgo)}\n---\n\n## Full transcript\n\n**[10:00:00] Them:** hello\n`
 
 // ── GROUND TRUTH ─────────────────────────────────────────────────────────────
 // Acme (banking): 5 meetings. 'migration' discussed in the three old ones, gone recently (dropped
@@ -147,6 +150,8 @@ describe.each([
     const acme4 = readMeetingExtraction(s, slugify('acme-4.md'))!
     expect(acme4.source_file).toBe('acme-4.md')
     expect(acme4.date).toBe(iso(3))
+    expect(acme4.source_mode).toBe('meeting')
+    expect(acme4.source_use).toBe('eligible')
   })
 
   it('entity counts match the planted world exactly', () => {

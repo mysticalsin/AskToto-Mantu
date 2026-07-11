@@ -5,7 +5,15 @@ import { tmpdir } from 'node:os'
 import type { Settings } from '@shared/ipc'
 import { MeetingExtractionSchema, BRAIN_EXTRACTION_PROMPT, type MeetingExtraction } from '@shared/brain'
 import { INJECTION_GUARD } from '@shared/prompts'
-import { extractJsonObject, mergeExtraction, lintBrain, commitmentKey, buildExtractionSystem, updateIndex } from './ingest'
+import {
+  extractJsonObject,
+  mergeExtraction,
+  lintBrain,
+  commitmentKey,
+  buildExtractionSystem,
+  updateIndex,
+  readMeetingSourceMode
+} from './ingest'
 import { buildBrainContext } from './context'
 import {
   brainDir,
@@ -70,6 +78,20 @@ describe('brain', () => {
     })
     it('throws when there is no JSON object at all', () => {
       expect(() => extractJsonObject('no json here')).toThrow()
+    })
+  })
+
+  describe('readMeetingSourceMode', () => {
+    it('reads only a bounded mode from the leading frontmatter block', () => {
+      expect(readMeetingSourceMode('---\nmode: "meeting"\n---\n\nmode: "interview"')).toBe('meeting')
+      expect(readMeetingSourceMode("---\r\nmode: 'interview'\r\n---\r\n")).toBe('interview')
+    })
+
+    it('rejects body-only, malformed, empty, and oversized mode values', () => {
+      expect(readMeetingSourceMode('mode: "sales"')).toBe('')
+      expect(readMeetingSourceMode('---\nmode: "sales"\nno closing delimiter')).toBe('')
+      expect(readMeetingSourceMode('---\nmode: ""\n---\n')).toBe('')
+      expect(readMeetingSourceMode(`---\nmode: "${'x'.repeat(101)}"\n---\n`)).toBe('')
     })
   })
 
