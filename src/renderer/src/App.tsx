@@ -2101,6 +2101,7 @@ export function App(): JSX.Element {
               onAction={onQuickAction}
               rainbowRing={settings?.quickActionsRainbow !== false}
               providerReady={settings?.providerReady ?? false}
+              localSummaryReady={settings?.localSummaryReady ?? false}
             />
           )}
           {/* Listen-engine status (offline/reconnecting/crash notes) — shown regardless of which view is

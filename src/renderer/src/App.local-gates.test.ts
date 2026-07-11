@@ -114,3 +114,19 @@ describe('requireProvider(local?) call-site contract (H1)', () => {
     expect(requireProviderArgAfter('onRetryRecap=')).toBe('')
   })
 })
+
+// r5 closure: the Summarize chip itself must be reachable for a local-only setup — App passes
+// localSummaryReady into QuickActions, and QuickActions enables ONLY the summarize chip on it (the other
+// three chips have direct answer-mode branches that only cloud serves).
+describe('QuickActions local-summary reachability (r5)', () => {
+  const appSrc = readFileSync(join(__dirname, 'App.tsx'), 'utf8')
+  const qaSrc = readFileSync(join(__dirname, 'components', 'QuickActions.tsx'), 'utf8')
+
+  it('App passes localSummaryReady into QuickActions', () => {
+    expect(appSrc).toMatch(/localSummaryReady=\{settings\?\.localSummaryReady \?\? false\}/)
+  })
+
+  it('QuickActions enables only the summarize chip via localSummaryReady', () => {
+    expect(qaSrc).toMatch(/providerReady \|\| \(a\.kind === 'summarize' && localSummaryReady\)/)
+  })
+})

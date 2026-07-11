@@ -1,0 +1,3 @@
+blocker: local-only meeting users still cannot click the Summarize quick action: src/renderer/src/App.tsx:2103 passes QuickActions providerReady={settings?.providerReady ?? false}, and src/renderer/src/components/QuickActions.tsx:40 disables every chip when providerReady is false, so the new requireProvider('summary') path at src/renderer/src/App.tsx:1619 is unreachable without a cloud/CLI provider.
+risk: targeted tests were not independently rerun; `npm test -- src/renderer/src/App.local-gates.test.ts src/main/llm/local-routing.test.ts src/shared/quick-actions.test.ts` failed before importing tests with EPERM creating Vite's temp SSR directory in the read-only sandbox.
+VERDICT: REVISE
