@@ -56,9 +56,18 @@ describe('extractNumerals', () => {
     expect(vals('revenue was 1,500 units')).toContainEqual({ value: 1500, unit: null })
   })
 
-  it('space thousands incl. narrow no-break space', () => {
-    expect(vals('revenue was 1 500 units')).toContainEqual({ value: 1500, unit: null })
-    expect(vals('revenue was 1 500 units')).toContainEqual({ value: 1500, unit: null })
+  it('narrow no-break space (U+202F) thousands grouping', () => {
+    expect(vals('revenue was 1\u202f500 units')).toContainEqual({ value: 1500, unit: null })
+  })
+
+  it('ASCII space between digit runs is NOT grouping: two independent numerals, never a merged value', () => {
+    const hits = vals('we shipped 20 200 units this week')
+    expect(hits).toContainEqual({ value: 20, unit: null })
+    expect(hits).toContainEqual({ value: 200, unit: null })
+    expect(hits.some((h) => h.value === 20200)).toBe(false)
+    expect(numeralDerivable(20200, 'we shipped 20 200 units this week')).toBe(false)
+    // Same rule for the '1 500' form: the merged 1500 is never fabricated from an ASCII space.
+    expect(vals('revenue was 1 500 units').some((h) => h.value === 1500)).toBe(false)
   })
 
   it('dot thousands (French convention, exactly 3 trailing digits)', () => {
@@ -201,5 +210,24 @@ describe('verifyNumericFact', () => {
   it('unverified for a unit swap against the aligned span', () => {
     const fact = { value: 3_500_000, quote: 'The deal is worth about 3.5M EUR', unit: 'USD' }
     expect(verifyNumericFact(fact, transcript)).toBe('unverified')
+  })
+
+  it('unverified: the fuzzy aligner must not sweep an interior stray numeral into the claim', () => {
+    // The transcript really contains "45" INSIDE the fuzzy-aligned window, but the quote never
+    // claims it — a value absent from the quote text itself must never verify (fail closed).
+    const t = 'Them: uh we will, deliver the report 45 by uh Friday for sure.'
+    const quote = 'we will deliver the report by Friday'
+    expect(alignQuote(quote, t)).not.toBeNull() // the quote itself genuinely aligns (fuzzy path)
+    expect(verifyNumericFact({ value: 45, quote }, t)).toBe('unverified')
+  })
+
+  it('unverified: fuzzy match where the transcript states a different value than the quote claims', () => {
+    const t = 'Them: uh the deal is worth about 3.4M EUR for sure.'
+    const quote = 'the deal is worth about 3.5M EUR'
+    const m = alignQuote(quote, t)
+    expect(m).not.toBeNull() // close enough to align via the fuzzy path...
+    expect(m!.score).toBeLessThan(1)
+    // ...but the transcript says 3.4M, so the quoted 3.5M must not verify.
+    expect(verifyNumericFact({ value: 3_500_000, quote, unit: 'EUR' }, t)).toBe('unverified')
   })
 })
