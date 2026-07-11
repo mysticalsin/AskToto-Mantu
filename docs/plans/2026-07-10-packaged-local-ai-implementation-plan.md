@@ -143,6 +143,7 @@ Expected: all shared tests and typechecks pass.
 - Create: `scripts/check-local-ai.mjs`
 - Create: `scripts/stage-local-ai.mjs`
 - Modify: `.gitignore`
+- Modify: `.gitattributes`
 - Modify: `THIRD_PARTY_NOTICES.md`
 - Modify: `package.json`
 
@@ -161,9 +162,20 @@ interface LocalAiCatalog {
     precision: string
     runtime: 'node-llama-cpp' | 'transformers.js'
     componentIds: string[]
+    provenance: {
+      status: 'complete' | 'review-required'
+      noticeIds: string[]
+    }
   }>
   assets: LocalAsset[]
-  licenses: Array<{ id: string; path: string; sha256: string }>
+  licenses: Array<{ id: string; path: string; bytes: number; sha256: string }>
+  notices: Array<{
+    id: string
+    kind: 'provenance' | 'release-exception'
+    path: string
+    bytes: number
+    sha256: string
+  }>
 }
 
 interface LocalAsset {
@@ -190,7 +202,11 @@ interface LocalAsset {
 }
 ```
 
-Tests must reject `main`, branch-like revisions, duplicate destinations, path traversal, absolute destinations, unknown licenses, missing conversion notices, zero sizes, malformed SHA-256, missing license files, missing assets, zero-byte assets, size mismatch, and hash mismatch. They must also reject zero/multiple selected text models, zero/multiple selected vision models, unmanifested staged files, `.part` files in staging, and a selected bundle that contains any unselected candidate. A valid synthetic fixture passes without network access. A one-byte mutation fails.
+Freeze the generated `resources/local-ai/payload/manifest.json` as a deterministic version-1 object with no timestamp: target platform, raw catalog SHA-256, approval, exactly one selected text and one selected vision variant (ID/model/precision/runtime), sorted selected asset records (ID/variant/component/destination/bytes/SHA-256), and only their referenced license/notice records (ID/kind where applicable/destination/bytes/SHA-256). It contains no cache path, download URL, branch/ref, or remote resolver input. The exact staged file set is the manifest plus those recorded assets, licenses, and notices. Two identical stages must produce byte-identical manifests.
+
+Compact third-party conversions use `provenance.status: 'review-required'` and a hashed provenance notice because their conversion recipe is not known. Evaluation may include them. A release selection containing any `review-required` variant fails unless that variant references a separately hashed `release-exception` notice approved in review; a provenance disclosure alone is not an approval.
+
+Tests must reject schema drift/unknown keys, duplicate IDs/components/destinations (including case-fold collisions), `main` or branch-like revisions, non-40-hex commits, path traversal, POSIX/Windows absolute or backslash destinations, unsafe/reserved path segments, unknown license/notice/variant references, incomplete component membership, invalid role/model/runtime combinations, missing conversion notices, empty/duplicate platform arrays, `all` mixed with a target, zero/unsafe sizes, malformed SHA-256, missing/symlinked/zero-byte assets or records, size mismatch, and hash mismatch. They must also reject wrong-role selections, unmanifested staged files, `.part` files, manifest/catalog/platform/approval mismatches, wrong-platform assets, and a selected bundle containing any unselected candidate. A valid synthetic fixture passes without network access, stages byte-identically twice, and fails after any one-byte mutation.
 
 **Step 2: Prove RED**
 
@@ -204,11 +220,11 @@ Expected: module and manifest are absent.
 
 Implement pure exported validation functions in `scripts/local-ai-manifest.mjs`; keep CLI entry points thin. `fetch-local-ai.mjs` stores downloads under `resources/local-ai/cache/<asset-id>/`, downloads to `.part`, supports HTTP range resume, verifies byte count and SHA-256, then atomically renames. Existing files are rehashed. Its default fetches only the selected bundle; `--all-candidates` is explicit for evaluation.
 
-`stage-local-ai.mjs --platform <target>` stages the catalog selection. The optional `--evaluation --text-variant <id> --vision-variant <id>` form is allowed only for candidate evaluation and writes `approval: evaluation` into the runtime manifest. The script deletes/recreates `resources/local-ai/payload/`, copies only the chosen variants' components plus license/provenance records, writes the selected-only `manifest.json`, and rejects any extra file. `electron-builder.yml` packages only `resources/local-ai/payload`, never cache/candidate files. `check-local-ai.mjs --platform <target>` validates the catalog, selected-only payload, target native packages, and license records without network access. Release commands reject any payload whose approval is not `release`.
+`stage-local-ai.mjs --platform <target>` stages the catalog selection. The optional `--evaluation --text-variant <id> --vision-variant <id>` form is allowed only for candidate evaluation and writes `approval: evaluation` into the runtime manifest. The script builds and validates a temporary sibling, copies (never hardlinks) only the chosen variants' components plus referenced license/provenance records, writes the selected-only `manifest.json`, and swaps it into `resources/local-ai/payload/` with rollback. `check-local-ai.mjs --platform <target>` validates catalog plus selected-only payload and license/provenance records without network access; it never fetches. `--require-release` rejects evaluation and any unresolved review-required provenance. Target native-package validation and electron-builder payload mapping begin in Task 3, once those packages and build changes exist.
 
 The tracked catalog includes the pinned Qwen3-1.7B compact candidates, the official Qwen3-0.6B Q8 provenance candidate, SmolVLM Q8, and Florence Q4, using the exact record in `docs/research/2026-07-10-local-ai-model-assets.md`. The initial evaluation selection is official Qwen3-0.6B Q8 plus SmolVLM Q8. Task 12 updates it to `approval: release` only after model selection. The compact Unsloth Qwen assets have an unresolved conversion recipe/upstream revision; they may enter evaluation only with a reviewed exception record and may not be selected for release until that record is complete. Pin every entry to an immutable 40-hex repository commit and LFS SHA-256. No placeholder value is accepted by the schema.
 
-Ignore binary payloads under `resources/local-ai/cache/**` and generated `resources/local-ai/payload/**`; keep candidate metadata and licenses tracked. Package filters must independently exclude `.part`, unselected model IDs, CUDA, wrong-architecture, and non-target native packages.
+Ignore binary payloads under `resources/local-ai/cache/**`, generated `resources/local-ai/payload/**`, and temporary/rollback staging siblings; keep candidate metadata, licenses, and notices tracked. Add path-scoped `.gitattributes` rules that mark exact upstream license bytes `-text` (their pinned hashes include original LF or CRLF endings) while forcing LF for the Métis-authored catalog and provenance notices. Windows checkout settings must not change either class. Package filters added in Task 3 must independently exclude `.part`, unselected model IDs, CUDA, wrong-architecture, and non-target native packages.
 
 Add scripts:
 
@@ -877,4 +893,7 @@ Also rerun both native packaged smoke matrices, scan the packaged app for forbid
 - Runtime architecture evidence: Electron 39.8.10 launched a temporary `.mjs` successfully with `ELECTRON_RUN_AS_NODE=1` under Node 22.22.1. This proves the local development binary supports the required execution mode; the signed packaged Mac and Windows executables still require the Task 3 fuse/native smoke.
 - Plan audit: two independent passes found and then cleared the test-path, StreamMeta sequencing, selected-only staging, ESM/bytecode, KV/BPE, resource-protocol, Intelligence read-only, atomic-release, Windows-blocker, and reference-hardware contradictions. No P0 plan blocker remains.
 - Security follow-up outside source control: rotate the Dust OAuth session whose token appeared in the original local failure output. Do not place that token in this plan, logs, commits, or messages.
-- Implementation tasks 1-14 have not started. Add artifact hashes/sizes, native platform evidence, failures, and owner-controlled gates as each task closes.
+- Task 1 closed in commit `e5cbc65`: the shared local-AI, analyze, IPC, session-reuse, source-provenance, and employment-policy contracts are frozen. Evidence at close: 62 test files / 669 tests, both TypeScript projects, production build, and independent contract review passed.
+- Task 2 supply-chain implementation is complete pending its dedicated commit. The tracked catalog contains five immutable variants / 21 assets; exact upstream license bytes and the conversion-provenance notice are hash-pinned. Build-time fetch is the only network-capable path; staging is selected-only, copy-only, atomic, deterministic, and checked offline for both target platforms.
+- Task 2 final evidence on the uncommitted tree: focused supply-chain tests 51/51; full suite 63 files / 720 tests; both TypeScript projects; production build; current-catalog Windows stage/check; restored Darwin stage/check; and independent re-review all passed. The restored Darwin evaluation payload contains 13 files / 902,913,735 bytes and selects `qwen3-0.6b-q8-0` plus `smolvlm-256m-instruct-q8`. Catalog SHA-256 is `5ba9258faa1188245ead70824394de655566de7e2c0bb650aabd83785f8738b9`; deterministic runtime-manifest SHA-256 is `bd1ebd7b19adbc5fdb054296f09cb88ebef807db0043f7be79a8418c72809ed8`.
+- Tasks 3-14 remain. Add packaged artifact hashes/sizes, native platform evidence, failures, and owner-controlled gates as each later task closes.

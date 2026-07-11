@@ -1,0 +1,7 @@
+# Exact upstream license hashes include their original line endings; never let Git rewrite them.
+resources/local-ai/licenses/*.txt -text
+# This upstream file is intentionally CRLF; Git should treat CR as part of its line ending during whitespace checks.
+resources/local-ai/licenses/Qwen3-0.6B-Apache-2.0.txt whitespace=cr-at-eol
+# Métis-authored catalog and provenance records stay stable across macOS and Windows checkouts.
+resources/local-ai/candidates.json text eol=lf
+resources/local-ai/licenses/*.md text eol=lf
