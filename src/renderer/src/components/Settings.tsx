@@ -1149,13 +1149,15 @@ function LocalAiSection({
 
         <div className="flex items-center gap-2 rounded-[8px] border border-[var(--cl-border)] bg-white/[0.02] px-3 py-2 text-[11px] text-[color:var(--cl-muted-foreground)]">
           <Cpu size={13} className="shrink-0" />
-          {settings.localRuntimeRunning
+          {/* Precise per-state copy off localRuntimeState (tri-state) so 'unavailable' (restart-budget
+              lockout, cleared only by relaunch) reads honestly instead of the reassuring idle-stop text. */}
+          {settings.localRuntimeState === 'running'
             ? `Running — ${activeModel?.label ?? settings.localLlm.modelId}`
-            : // `localRuntimeRunning` is a plain boolean (see PublicSettingsSchema) — it can't distinguish a
-              // normal idle stop from the sidecar being permanently 'unavailable' for the rest of this
-              // session (local-runtime.ts's restart-budget lockout, only cleared by relaunching the app), so
-              // this copy no longer promises an unconditional restart and instead names the real recovery.
-              "Stopped — restarts automatically on the next live suggestion, summary, or screenshot read. If it doesn't come back, restart Métis."}
+            : settings.localRuntimeState === 'starting'
+              ? 'Starting the on-device model…'
+              : settings.localRuntimeState === 'unavailable'
+                ? "Unavailable — the on-device model stopped responding this session. Restart Métis to re-enable it."
+                : 'Stopped — restarts automatically on the next live suggestion, summary, or screenshot read.'}
         </div>
 
         {models === null ? (
