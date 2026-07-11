@@ -64,7 +64,21 @@ export function streamLocal(opts: StreamOptions): StreamHandle {
         ...opts,
         baseURL: localRuntime.baseURL(),
         apiKey: localRuntime.sessionKey(),
-        llamaSlotOptions
+        llamaSlotOptions,
+        // Re-arm the 15-minute idle-stop countdown when this response finishes (success or error), not
+        // just when it starts (markActivity() above) — a long-running stream would otherwise let the
+        // idle timer, armed only at start, fire mid-stream on an unrelated schedule.
+        handlers: {
+          ...opts.handlers,
+          onDone: (u) => {
+            localRuntime.markActivity()
+            opts.handlers.onDone(u)
+          },
+          onError: (message) => {
+            localRuntime.markActivity()
+            opts.handlers.onError(message)
+          }
+        }
       })
     } catch (err) {
       if (!aborted) opts.handlers.onError(errMsg(err))

@@ -7,10 +7,10 @@ import { join } from 'node:path'
  * local-routing.test.ts / crash-capture.test.ts). The observed crash was an UNCAUGHT
  * "globalShortcut cannot be used before the app is ready" thrown from the will-quit handler when the
  * app quit before it ever finished becoming ready (a quit during async startup, an automation
- * app.close(), or an early abort). A self-contained Electron probe
- * (metis-qa/willquit-probe/main.js) confirms the raw invariant: at module scope
- * globalShortcut.unregisterAll() throws that exact string, and the isReady() guard skips it safely.
- * This test pins the guard so a future edit can't silently reintroduce the crash.
+ * app.close(), or an early abort). The raw invariant: at module scope, before the app is ready,
+ * globalShortcut.unregisterAll() throws exactly that string — so the handler must gate the call behind
+ * an app.isReady() check. This test pins that guard so a future edit can't silently reintroduce the
+ * crash.
  */
 describe('will-quit handler crash guard', () => {
   const source = readFileSync(join(__dirname, 'index.ts'), 'utf8')

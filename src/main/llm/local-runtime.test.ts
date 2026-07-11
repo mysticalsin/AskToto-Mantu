@@ -26,13 +26,12 @@ describe('buildSpawnArgs', () => {
   // The spawn contract (PLAN.md §4.4) is IDENTICAL on mac and win — parameterize over both platforms to
   // prove that invariant explicitly rather than assuming it.
   it.each(['mac', 'win'] as const)('produces the exact sidecar flag set on %s', () => {
-    const args = buildSpawnArgs({ gguf: '/models/model.gguf', mmproj: '/models/mmproj.gguf', apiKey: 'deadbeefcafe' })
+    const args = buildSpawnArgs({ gguf: '/models/model.gguf', mmproj: '/models/mmproj.gguf' })
     expect(args).toEqual([
       '-m', '/models/model.gguf',
       '--mmproj', '/models/mmproj.gguf',
       '--host', '127.0.0.1',
       '--port', '0',
-      '--api-key', 'deadbeefcafe',
       '-c', '8192',
       '--parallel', '2',
       '-ngl', '99',
@@ -43,8 +42,15 @@ describe('buildSpawnArgs', () => {
   })
 
   it('never includes --cache-reuse (disabled upstream for multimodal loads — PLAN.md §3)', () => {
-    const args = buildSpawnArgs({ gguf: 'g', mmproj: 'm', apiKey: 'k' })
+    const args = buildSpawnArgs({ gguf: 'g', mmproj: 'm' })
     expect(args).not.toContain('--cache-reuse')
+  })
+
+  it('never puts the api key on argv — it travels via the LLAMA_API_KEY env var instead (ps-visibility fix)', () => {
+    const args = buildSpawnArgs({ gguf: 'g', mmproj: 'm' })
+    expect(args).not.toContain('--api-key')
+    // SpawnArgsInput has no apiKey field at all (enforced at compile time) — the key is only ever
+    // handed to the child via spawn()'s env option (see spawnAndWaitHealthy), never argv.
   })
 })
 
@@ -204,6 +210,25 @@ describe('start() integration — real binary + real Qwen3.5-0.8B model', () => 
         const base = new URL(baseURL())
         const health = await fetch(`${base.protocol}//${base.host}/health`)
         expect(health.status).toBe(200)
+        // Proves the api key actually reached the child via the LLAMA_API_KEY env var (FIX 2): a
+        // request without the key is rejected by /v1/chat/completions (llama-server leaves /v1/models
+        // and /health unauthenticated regardless of --api-key, so those two can't prove this), and the
+        // SAME key sessionKey() hands to real requests is accepted — round-tripping through the real
+        // spawned process, not a mock. max_tokens: 1 mirrors prewarm()'s minimal-cost request shape.
+        const body = JSON.stringify({ model: 'local', messages: [{ role: 'user', content: 'hi' }], max_tokens: 1 })
+        const headers = { 'content-type': 'application/json' }
+        const unauthed = await fetch(`${base.protocol}//${base.host}/v1/chat/completions`, {
+          method: 'POST',
+          headers,
+          body
+        })
+        expect(unauthed.status).toBe(401)
+        const authed = await fetch(`${base.protocol}//${base.host}/v1/chat/completions`, {
+          method: 'POST',
+          headers: { ...headers, authorization: `Bearer ${sessionKey()}` },
+          body
+        })
+        expect(authed.status).toBe(200)
       } finally {
         stop()
       }
