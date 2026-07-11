@@ -17,9 +17,8 @@ const exec = promisify(execFile)
  * "allow access" dialog whose denial we surface as accessDenied so the UI can ask for permission.
  */
 
-/** Service the Dust CLI (keytar) stores under. Overridable only so integration tests can point at a
- *  throwaway entry instead of the user's real session. */
-export const DUST_KEYCHAIN_SERVICE = process.env.DUST_CLI_KEYCHAIN_SERVICE || 'dust-cli'
+/** Service the Dust CLI (keytar) stores under. */
+export const DUST_KEYCHAIN_SERVICE = 'dust-cli'
 
 export interface DustSecretRead {
   value: string | null
@@ -35,12 +34,12 @@ function macAccessDenied(error: unknown): boolean {
   )
 }
 
-async function readMac(account: string): Promise<DustSecretRead> {
+async function readMac(account: string, service: string): Promise<DustSecretRead> {
   try {
     const { stdout } = await exec('security', [
       'find-generic-password',
       '-s',
-      DUST_KEYCHAIN_SERVICE,
+      service,
       '-a',
       account,
       '-w'
@@ -85,8 +84,8 @@ export function winCredReadScript(target: string): string {
   ].join('\n')
 }
 
-async function readWin(account: string): Promise<DustSecretRead> {
-  const script = winCredReadScript(`${DUST_KEYCHAIN_SERVICE}/${account}`)
+async function readWin(account: string, service: string): Promise<DustSecretRead> {
+  const script = winCredReadScript(`${service}/${account}`)
   // -EncodedCommand takes base64 of the UTF-16LE script — sidesteps every cmd/PowerShell quoting hazard.
   const encoded = Buffer.from(script, 'utf16le').toString('base64')
   try {
@@ -102,11 +101,11 @@ async function readWin(account: string): Promise<DustSecretRead> {
   }
 }
 
-async function readLinux(account: string): Promise<DustSecretRead> {
+async function readLinux(account: string, service: string): Promise<DustSecretRead> {
   try {
     const { stdout } = await exec(
       'secret-tool',
-      ['lookup', 'service', DUST_KEYCHAIN_SERVICE, 'account', account],
+      ['lookup', 'service', service, 'account', account],
       { timeout: 15_000 }
     )
     return { value: stdout.trim() || null, accessDenied: false }
@@ -116,13 +115,16 @@ async function readLinux(account: string): Promise<DustSecretRead> {
 }
 
 /** Read one field of the Dust CLI session (access_token / workspace_sid / region) from the OS store. */
-export async function readDustSecret(account: string): Promise<DustSecretRead> {
+export async function readDustSecret(
+  account: string,
+  service: string = DUST_KEYCHAIN_SERVICE
+): Promise<DustSecretRead> {
   switch (process.platform) {
     case 'darwin':
-      return readMac(account)
+      return readMac(account, service)
     case 'win32':
-      return readWin(account)
+      return readWin(account, service)
     default:
-      return readLinux(account)
+      return readLinux(account, service)
   }
 }
