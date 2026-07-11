@@ -1,2 +1,0 @@
-blocker: r5's Summarize path is closed, but local-only meeting users still cannot use the What to say next QuickAction even though it has a valid local-suggest route: src/renderer/src/components/QuickActions.tsx:41 only enables summarize via localSummaryReady, src/renderer/src/App.tsx:959-990 gates whatNext with bare requireProvider() then fires suggest.run({ mode: 'suggest' }), and src/shared/quick-actions.ts:101-103 routes transcript-backed whatnext to transport 'suggest'.
-VERDICT: REVISE
