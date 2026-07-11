@@ -3,7 +3,7 @@
   "gate": "G3",
   "thread_id": "019f4f1c-6bbb-7121-a0c2-e423b53170e6",
   "round": 5,
-  "verdicts": ["REVISE", "REVISE", "ABORTED(usage-limit)", "REVISE", "REVISE", "REVISE(cap→Rule3-adoption)"],
+  "verdicts": ["REVISE", "REVISE", "ABORTED(usage-limit)", "REVISE", "REVISE", "REVISE(cap→Rule3-adoption)", "ship-audit-r1:ABORTED(usage-limit 01:40)", "ship-audit-r2:ABORTED(usage-limit 04:47, next reset 07:06)"],
   "plan_version": 6,
   "notes": "Same Page Meeting closed at MAX_ROUNDS via Rule 3 tie-break: Integrator's final findings adopted in full and closed with artifacts (meetings/006). No APPROVED faked. ROCKS.md locked byte-identical to PLAN v6 §8. Build lane: Sonnet executors per Owner directive; Owner G6 retained. Owner instruction: final changes must land in the OneDrive checkout at ship."
 }

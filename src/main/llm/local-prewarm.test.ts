@@ -7,7 +7,8 @@
  * the handler's exact body from these exported, tested primitives rather than importing index.ts.
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { LocalPrewarmPayloadSchema } from '@shared/ipc'
+import { DEFAULT_SETTINGS, LocalPrewarmPayloadSchema, type Settings } from '@shared/ipc'
+import { buildPrewarmMessages } from './prewarm'
 
 // ─── LocalPrewarmPayloadSchema (shared/ipc.ts) ─────────────────────────────────────────────────────────
 describe('LocalPrewarmPayloadSchema', () => {
@@ -48,10 +49,8 @@ describe('LocalPrewarmPayloadSchema', () => {
 // ─── localPrewarmEligible (local-routing.ts) — the handler's settings gate ────────────────────────────
 import { localPrewarmEligible } from './local-routing'
 
-type LocalLlmSettings = {
-  localLlm: { enabled: boolean; modelId: string; useFor: { suggest: boolean; summary: boolean; vision: boolean } }
-}
-const settingsFor = (overrides: Partial<LocalLlmSettings['localLlm']> = {}): LocalLlmSettings => ({
+const settingsFor = (overrides: Partial<Settings['localLlm']> = {}): Settings => ({
+  ...DEFAULT_SETTINGS,
   localLlm: {
     enabled: true,
     modelId: 'qwen3.5-2b',
@@ -61,28 +60,38 @@ const settingsFor = (overrides: Partial<LocalLlmSettings['localLlm']> = {}): Loc
 })
 
 describe('localPrewarmEligible', () => {
-  it('true when enabled and useFor.suggest is on', () => {
-    expect(localPrewarmEligible(settingsFor())).toBe(true)
+  it('true when enabled and useFor.suggest is on, with no allowlist restriction', () => {
+    expect(localPrewarmEligible(settingsFor(), null)).toBe(true)
   })
 
   it('false when localLlm is disabled, regardless of useFor.suggest', () => {
-    expect(localPrewarmEligible(settingsFor({ enabled: false }))).toBe(false)
+    expect(localPrewarmEligible(settingsFor({ enabled: false }), null)).toBe(false)
   })
 
   it('false when useFor.suggest is off, even though localLlm is enabled', () => {
-    expect(localPrewarmEligible(settingsFor({ useFor: { suggest: false, summary: true, vision: true } }))).toBe(false)
+    expect(localPrewarmEligible(settingsFor({ useFor: { suggest: false, summary: true, vision: true } }), null)).toBe(false)
   })
 
   it('is independent of useFor.summary/useFor.vision — only the suggest toggle gates prewarm', () => {
     expect(
-      localPrewarmEligible(settingsFor({ useFor: { suggest: true, summary: false, vision: false } }))
+      localPrewarmEligible(settingsFor({ useFor: { suggest: true, summary: false, vision: false } }), null)
     ).toBe(true)
+  })
+
+  // F6 hardening: the org allowlist gate.
+  it('false when the org allowlist excludes "local", even though localLlm is fully enabled', () => {
+    expect(localPrewarmEligible(settingsFor(), ['anthropic', 'openai'])).toBe(false)
+  })
+
+  it('true when the org allowlist explicitly includes "local"', () => {
+    expect(localPrewarmEligible(settingsFor(), ['anthropic', 'local'])).toBe(true)
   })
 })
 
 // ─── ensureLocalRuntimeStarted (local.ts) — the handler's start-ensure wiring ──────────────────────────
 const localRuntimeMock = vi.hoisted(() => ({
   isRunning: vi.fn(() => false),
+  getState: vi.fn(() => 'stopped' as const),
   start: vi.fn(async () => {}),
   markActivity: vi.fn(),
   prewarm: vi.fn(),
@@ -96,7 +105,8 @@ const localModelsMock = vi.hoisted(() => ({
     dir: `/models/${id}`,
     gguf: `/models/${id}/model.gguf`,
     mmproj: `/models/${id}/mmproj.gguf`
-  }))
+  })),
+  verifyIntegrity: vi.fn(async () => {})
 }))
 vi.mock('./local-models', () => localModelsMock)
 
@@ -107,22 +117,60 @@ import { ensureLocalRuntimeStarted } from './local'
 beforeEach(() => {
   vi.clearAllMocks()
   localRuntimeMock.isRunning.mockReturnValue(false)
+  localRuntimeMock.getState.mockReturnValue('stopped')
   localRuntimeMock.start.mockResolvedValue(undefined)
+  localModelsMock.verifyIntegrity.mockResolvedValue(undefined)
 })
 
 describe('ensureLocalRuntimeStarted', () => {
-  it('starts the runtime with the configured model’s manifest paths when not already running', async () => {
+  it('cold start (state stopped): verifies integrity BEFORE starting, then starts with the configured model’s manifest paths', async () => {
+    const order: string[] = []
+    localModelsMock.verifyIntegrity.mockImplementation(async () => {
+      order.push('verify')
+    })
+    localRuntimeMock.start.mockImplementation(async () => {
+      order.push('start')
+    })
     await ensureLocalRuntimeStarted('qwen3.5-0.8b')
+    expect(localModelsMock.verifyIntegrity).toHaveBeenCalledWith('qwen3.5-0.8b')
     expect(localModelsMock.modelPaths).toHaveBeenCalledWith('qwen3.5-0.8b')
     expect(localRuntimeMock.start).toHaveBeenCalledWith({
       gguf: '/models/qwen3.5-0.8b/model.gguf',
       mmproj: '/models/qwen3.5-0.8b/mmproj.gguf'
     })
+    expect(order).toEqual(['verify', 'start'])
   })
 
-  it('skips start() entirely when the runtime is already running', async () => {
-    localRuntimeMock.isRunning.mockReturnValue(true)
+  // F2 hardening: ensureLocalRuntimeStarted no longer early-returns on isRunning() — it ALWAYS delegates
+  // to start(), which is now idempotent per-model (a no-op for the same model, a switch for a different
+  // one). Skipping start() here would silently break a model switch requested while "running".
+  it('F2: still calls start() (idempotently) when the runtime is already running — the no-op/switch decision belongs to start() now', async () => {
+    localRuntimeMock.getState.mockReturnValue('running')
     await ensureLocalRuntimeStarted('qwen3.5-2b')
+    expect(localRuntimeMock.start).toHaveBeenCalledWith({
+      gguf: '/models/qwen3.5-2b/model.gguf',
+      mmproj: '/models/qwen3.5-2b/mmproj.gguf'
+    })
+  })
+
+  // F5 hardening: the integrity re-check only runs once per sidecar spawn (cold start), never on every
+  // request against an already-running or already-starting sidecar.
+  it('F5: skips verifyIntegrity when already running', async () => {
+    localRuntimeMock.getState.mockReturnValue('running')
+    await ensureLocalRuntimeStarted('qwen3.5-2b')
+    expect(localModelsMock.verifyIntegrity).not.toHaveBeenCalled()
+  })
+
+  it('F5: skips verifyIntegrity when already starting', async () => {
+    localRuntimeMock.getState.mockReturnValue('starting')
+    await ensureLocalRuntimeStarted('qwen3.5-2b')
+    expect(localModelsMock.verifyIntegrity).not.toHaveBeenCalled()
+    expect(localRuntimeMock.start).toHaveBeenCalled()
+  })
+
+  it('F5: a verifyIntegrity failure (corrupt file) propagates and start() is never called', async () => {
+    localModelsMock.verifyIntegrity.mockRejectedValue(new Error('checksum mismatch'))
+    await expect(ensureLocalRuntimeStarted('qwen3.5-0.8b')).rejects.toThrow('checksum mismatch')
     expect(localRuntimeMock.start).not.toHaveBeenCalled()
   })
 
@@ -136,12 +184,12 @@ describe('ensureLocalRuntimeStarted', () => {
 // Mirrors index.ts's local:prewarm handler EXACTLY (assertMainWindow + zod parse are the only steps not
 // reproduced here — assertMainWindow has its own IPC-sender-boundary test coverage via the existing
 // import-decoder tests, and the zod parse is covered by the LocalPrewarmPayloadSchema suite above).
-async function runPrewarmHandler(s: LocalLlmSettings, text: string): Promise<void> {
-  if (!localPrewarmEligible(s)) return
+async function runPrewarmHandler(s: Settings, allowed: string[] | null, text: string): Promise<void> {
+  if (!localPrewarmEligible(s, allowed)) return
   localRuntimeMock.markActivity()
   try {
     await ensureLocalRuntimeStarted(s.localLlm.modelId)
-    localRuntimeMock.prewarm(text)
+    localRuntimeMock.prewarm(buildPrewarmMessages(text, s))
   } catch {
     /* best-effort — the real handler catches + debug-logs; never throws to the renderer */
   }
@@ -149,7 +197,7 @@ async function runPrewarmHandler(s: LocalLlmSettings, text: string): Promise<voi
 
 describe('local:prewarm handler-gating (composed from the tested primitives above)', () => {
   it('disabled localLlm -> no prewarm call at all (not even markActivity)', async () => {
-    await runPrewarmHandler(settingsFor({ enabled: false }), 'THEM: any transcript tail')
+    await runPrewarmHandler(settingsFor({ enabled: false }), null, 'THEM: any transcript tail')
     expect(localRuntimeMock.markActivity).not.toHaveBeenCalled()
     expect(localRuntimeMock.prewarm).not.toHaveBeenCalled()
   })
@@ -157,29 +205,45 @@ describe('local:prewarm handler-gating (composed from the tested primitives abov
   it('useFor.suggest off -> no prewarm call, even with localLlm enabled', async () => {
     await runPrewarmHandler(
       settingsFor({ useFor: { suggest: false, summary: true, vision: true } }),
+      null,
       'THEM: any transcript tail'
     )
     expect(localRuntimeMock.prewarm).not.toHaveBeenCalled()
   })
 
-  it('enabled + suggest-on -> ensures the runtime is started for the CONFIGURED model, then prewarms with the exact (already renderer-clipped) text', async () => {
-    const clippedTail = 'THEM: '.padEnd(5990, 'x') + ' — what should I say next?'
-    await runPrewarmHandler(settingsFor({ modelId: 'qwen3.5-0.8b' }), clippedTail)
-    expect(localRuntimeMock.markActivity).toHaveBeenCalledOnce()
-    expect(localModelsMock.modelPaths).toHaveBeenCalledWith('qwen3.5-0.8b')
-    expect(localRuntimeMock.prewarm).toHaveBeenCalledWith(clippedTail)
+  // F6 hardening: the allowlist gate, end to end through the composed handler.
+  it('org allowlist excludes "local" -> no prewarm call at all, even with localLlm fully enabled', async () => {
+    await runPrewarmHandler(settingsFor(), ['anthropic'], 'THEM: any transcript tail')
+    expect(localRuntimeMock.markActivity).not.toHaveBeenCalled()
+    expect(localRuntimeMock.prewarm).not.toHaveBeenCalled()
   })
 
-  it('enabled + suggest-on + runtime already running -> skips start(), still prewarms', async () => {
-    localRuntimeMock.isRunning.mockReturnValue(true)
-    await runPrewarmHandler(settingsFor(), 'THEM: hello')
-    expect(localRuntimeMock.start).not.toHaveBeenCalled()
-    expect(localRuntimeMock.prewarm).toHaveBeenCalledWith('THEM: hello')
+  it('enabled + suggest-on -> ensures the runtime is started for the CONFIGURED model, then prewarms with the EXACT live-suggest prefix (F4)', async () => {
+    const s = settingsFor({ modelId: 'qwen3.5-0.8b' })
+    const clippedTail = 'THEM: '.padEnd(5990, 'x') + ' — what should I say next?'
+    await runPrewarmHandler(s, null, clippedTail)
+    expect(localRuntimeMock.markActivity).toHaveBeenCalledOnce()
+    expect(localModelsMock.modelPaths).toHaveBeenCalledWith('qwen3.5-0.8b')
+    expect(localRuntimeMock.prewarm).toHaveBeenCalledWith(buildPrewarmMessages(clippedTail, s))
+  })
+
+  it('enabled + suggest-on + runtime already running -> still calls start() (F2 idempotency) and prewarms', async () => {
+    localRuntimeMock.getState.mockReturnValue('running')
+    const s = settingsFor()
+    await runPrewarmHandler(s, null, 'THEM: hello')
+    expect(localRuntimeMock.start).toHaveBeenCalled()
+    expect(localRuntimeMock.prewarm).toHaveBeenCalledWith(buildPrewarmMessages('THEM: hello', s))
   })
 
   it('a start failure (missing binary/model) is swallowed — never throws, and prewarm is never called', async () => {
     localRuntimeMock.start.mockRejectedValue(new Error('llama-server binary missing'))
-    await expect(runPrewarmHandler(settingsFor(), 'THEM: hello')).resolves.toBeUndefined()
+    await expect(runPrewarmHandler(settingsFor(), null, 'THEM: hello')).resolves.toBeUndefined()
+    expect(localRuntimeMock.prewarm).not.toHaveBeenCalled()
+  })
+
+  it('a verifyIntegrity failure (cold start, corrupt file) is swallowed too — never throws, prewarm never called', async () => {
+    localModelsMock.verifyIntegrity.mockRejectedValue(new Error('checksum mismatch'))
+    await expect(runPrewarmHandler(settingsFor(), null, 'THEM: hello')).resolves.toBeUndefined()
     expect(localRuntimeMock.prewarm).not.toHaveBeenCalled()
   })
 })

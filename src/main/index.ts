@@ -73,6 +73,7 @@ import { isTransient, nextBackoff } from './llm/retry'
 import * as localRuntime from './llm/local-runtime'
 import { localEligibleFor, localBaseReady, localPrewarmEligible, pickPrimaryProvider } from './llm/local-routing'
 import { ensureLocalRuntimeStarted } from './llm/local'
+import { buildPrewarmMessages } from './llm/prewarm'
 import {
   listModels as listLocalModels,
   downloadModel as downloadLocalModel,
@@ -2002,10 +2003,13 @@ function registerIpc(): void {
     const parsed = LocalPrewarmPayloadSchema.safeParse(payload)
     if (!parsed.success) return
     const s = getSettings()
-    if (!localPrewarmEligible(s)) return
+    if (!localPrewarmEligible(s, getAllowedProviders())) return
     localRuntime.markActivity()
     void ensureLocalRuntimeStarted(s.localLlm.modelId)
-      .then(() => localRuntime.prewarm(parsed.data.text))
+      // Warm the EXACT same [system, user] prefix a real suggest request sends (F4 hardening) — built by
+      // the SAME helper (llm/prewarm.ts) a unit test cross-checks against buildSystem()/userText() directly,
+      // so any future drift between the live suggest path and what prewarm warms fails a test.
+      .then(() => localRuntime.prewarm(buildPrewarmMessages(parsed.data.text, s)))
       .catch((err) => mainLog.warn('[local-prewarm] failed', err instanceof Error ? err.message : String(err)))
   })
 
@@ -3172,4 +3176,7 @@ app.on('window-all-closed', () => {
 app.on('will-quit', () => {
   globalShortcut.unregisterAll()
   if (notifTimer) clearInterval(notifTimer)
+  // Kill the llama-server sidecar synchronously (SIGKILL, F3 hardening) — without this an on-device
+  // suggest/summary/vision sidecar could outlive the app the user just quit.
+  localRuntime.stop()
 })

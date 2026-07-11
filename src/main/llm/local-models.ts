@@ -418,3 +418,52 @@ export async function downloadModel(id: string, onProgress?: ProgressCallback): 
 export function cancelDownload(id: string): void {
   activeDownloads.get(id)?.abort()
 }
+
+// ─── Cold-start integrity check (F5 hardening) ────────────────────────────────────────────────────────
+// isDownloaded()'s byte-size check can't see on-disk corruption (bit rot, a truncated OS-level copy that
+// happens to land on the right final size) — verifyIntegrity re-hashes both files against their manifest
+// pins once per sidecar spawn (gated by the caller, local.ts's ensureLocalRuntimeStarted, on a cold start
+// only) so a corrupt file is caught BEFORE llama-server ever loads it.
+
+/** Streamed sha256 of a file already fully written to disk — reuses hashExistingPart, the SAME streaming
+ *  primitive the download path's own resume-hash priming uses, so there is only one implementation of
+ *  "read this file and hash it" in this module. */
+async function hashFile(path: string): Promise<string> {
+  const hash = createHash('sha256')
+  await hashExistingPart(path, hash)
+  return hash.digest('hex')
+}
+
+/**
+ * Verify one on-disk file against its manifest sha256 pin by re-hashing it fresh off disk. On a mismatch,
+ * deletes the corrupt file (mirrors downloadModelFile's own reject+delete behavior — a bad file is never
+ * left in place for a later load to trip over) and throws the SAME typed ChecksumMismatchError the
+ * download path throws, so callers get one error shape for "this file doesn't match its pin" regardless of
+ * when the mismatch was discovered.
+ */
+async function verifyFileChecksum(modelId: string, file: 'gguf' | 'mmproj', path: string, spec: LocalModelFile): Promise<void> {
+  const digest = await hashFile(path)
+  if (digest !== spec.sha256) {
+    safeUnlink(path)
+    localAudit('local.model.checksum_fail', { modelId, file })
+    throw new ChecksumMismatchError(modelId, file, spec.sha256, digest)
+  }
+}
+
+/**
+ * Cold-start integrity check (PLAN.md §5's "Model corrupt on load" risk, hardened): re-hash BOTH of a
+ * model's files against their manifest pins. Called once per sidecar spawn by local.ts's
+ * ensureLocalRuntimeStarted, gated there on the runtime being in a cold ('stopped') state — never on every
+ * request against an already-running/starting sidecar. Deleting a mismatched file (via verifyFileChecksum)
+ * is what "marks the model not-downloaded": a subsequent isDownloaded()/listModels() call sees it's gone
+ * and reflects reality without any separate flag.
+ */
+export async function verifyIntegrity(id: string): Promise<void> {
+  const entry = getModel(id)
+  const paths = modelPaths(id)
+  for (const file of ['gguf', 'mmproj'] as const) {
+    const path = paths[file]
+    if (!existsSync(path)) throw new Error(`Local model "${id}" (${file}) is not downloaded — cannot verify integrity.`)
+    await verifyFileChecksum(id, file, path, entry[file])
+  }
+}

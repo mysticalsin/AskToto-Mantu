@@ -30,7 +30,7 @@ export interface BinaryCandidate {
   variant: BinaryVariant
 }
 
-type RuntimeState = 'stopped' | 'starting' | 'running' | 'unavailable'
+export type RuntimeState = 'stopped' | 'starting' | 'running' | 'unavailable'
 
 // Health budget: Windows Defender's first-run scan of a freshly-unpacked exe can add tens of seconds
 // before the process even starts executing (PLAN.md §7 risk 3) — mac has no such AV tax.
@@ -147,6 +147,10 @@ let state: RuntimeState = 'stopped'
 let idleTimer: NodeJS.Timeout | null = null
 let restartTimestamps: number[] = []
 let lastModelPaths: ModelPaths | null = null
+// The in-flight start() call, if any (F1: startup race). A second concurrent caller while state ===
+// 'starting' awaits THIS SAME promise instead of racing ahead on its own — so baseURL()/sessionKey() are
+// never reachable by a caller whose await resolved before the sidecar actually finished spawning + health.
+let startPromise: Promise<void> | null = null
 
 /** The per-session sidecar api key. Lives only in this module's memory — never logged, never sent to
  *  the renderer (main injects it directly into the local provider's outbound request). */
@@ -162,6 +166,14 @@ export function baseURL(): string {
 
 export function isRunning(): boolean {
   return state === 'running'
+}
+
+/** The raw lifecycle state — exported ONLY for ensureLocalRuntimeStarted's (local.ts) cold-start gate
+ *  (PLAN.md hardening F5): the streamed-sha256 integrity re-check should run once per sidecar spawn
+ *  (state === 'stopped' right before a fresh start), never on every request against an already-running or
+ *  already-starting sidecar. Every other caller keeps using isRunning()/markActivity()/etc. */
+export function getState(): RuntimeState {
+  return state
 }
 
 function clearIdleTimer(): void {
@@ -272,17 +284,18 @@ function maybeAutoRestart(platform: LlamaPlatform): void {
   })
 }
 
-/**
- * Start the sidecar against `modelPaths`. No-op if already running/starting. Throws (does not silently
- * swallow) when the session has been marked unavailable, or when every binary candidate fails — the
- * caller (Rock 3's eligibility check) treats a rejection as "local ineligible right now."
- */
-export async function start(modelPaths: ModelPaths, platform: LlamaPlatform = detectPlatform()): Promise<void> {
-  if (state === 'unavailable') throw new Error('local runtime unavailable for this session (restart budget exhausted)')
-  if (state === 'running' || state === 'starting') return
-  lastModelPaths = modelPaths
-  state = 'starting'
+/** True when `a` (the currently-running/loaded model paths, if any) is the SAME model as `b` (a fresh
+ *  start() request) — the switch/no-op decision (F2) hinges on this. */
+function samePaths(a: ModelPaths | null, b: ModelPaths): boolean {
+  return !!a && a.gguf === b.gguf && a.mmproj === b.mmproj
+}
 
+/**
+ * The candidate-spawn loop for one start attempt — unchanged in substance from before F1/F2, just
+ * extracted so the public start() below can own startPromise/switch bookkeeping around it. Mutates module
+ * state (child/port/state) exactly as it always has.
+ */
+async function spawnCandidates(modelPaths: ModelPaths, platform: LlamaPlatform): Promise<void> {
   const candidates = resolveBinaryPath(platform)
   let lastErr: Error | null = null
   for (let i = 0; i < candidates.length; i++) {
@@ -309,6 +322,42 @@ export async function start(modelPaths: ModelPaths, platform: LlamaPlatform = de
   throw lastErr ?? new Error('llama-server failed to start')
 }
 
+/**
+ * Start the sidecar against `modelPaths`. Idempotent per-model (F2): a caller while the SAME model is
+ * already 'running' resolves immediately with no restart; a caller for a DIFFERENT model while one is
+ * 'running' stops the old sidecar first (two llama-server processes must never race for the same loopback
+ * port/RAM) and starts the new one. Concurrent callers while a start is already 'starting' (F1) await the
+ * SAME in-flight promise instead of racing ahead on their own — baseURL()/sessionKey() are never reachable
+ * by a caller whose await resolved before the sidecar actually finished spawning + health. Once that
+ * in-flight start settles, a caller whose requested model differs from what actually started re-evaluates
+ * (via recursion) and triggers a switch if still needed.
+ * Throws (does not silently swallow) when the session has been marked unavailable, or when every binary
+ * candidate fails — the caller (Rock 3's eligibility check) treats a rejection as "local ineligible now."
+ */
+export async function start(modelPaths: ModelPaths, platform: LlamaPlatform = detectPlatform()): Promise<void> {
+  if (state === 'unavailable') throw new Error('local runtime unavailable for this session (restart budget exhausted)')
+  if (state === 'starting') {
+    await startPromise
+    return start(modelPaths, platform)
+  }
+  if (state === 'running') {
+    if (samePaths(lastModelPaths, modelPaths)) return
+    // Model switch: kill the running sidecar synchronously before spawning the newly requested model.
+    clearIdleTimer()
+    stopChildProcess()
+    auditLog('local.runtime.stop', { reason: 'model_switch' })
+  }
+  lastModelPaths = modelPaths
+  state = 'starting'
+  const p = spawnCandidates(modelPaths, platform)
+  startPromise = p
+  try {
+    await p
+  } finally {
+    startPromise = null
+  }
+}
+
 function stopChildProcess(): void {
   if (child && !child.killed) child.kill('SIGKILL')
   child = null
@@ -325,13 +374,16 @@ export function stop(): void {
 }
 
 /**
- * Fire-and-forget prefill to keep the transcript-prefix KV hot for the next real request (PLAN.md
- * §4.4's pre-warm path). Pins id_slot 0 (the same slot suggest/prewarm always use) and cache_prompt so
- * the server's per-slot cache actually reuses the prefix. Never throws — a failed prewarm just means the
- * next real request pays full cost, which is why it carries its own short timeout independent of any
- * caller's budget.
+ * Fire-and-forget prefill to keep the transcript-prefix KV hot for the next real request (PLAN.md §4.4's
+ * pre-warm path). Posts `messages` VERBATIM — the caller (local.ts's ensureLocalRuntimeStarted callers via
+ * llm/prewarm.ts's buildPrewarmMessages()) is responsible for assembling the EXACT same [system, ...history,
+ * user] shape a real suggest request sends (F4 hardening: a prior version warmed only a bare user message,
+ * so the warmed KV prefix never matched what streamOpenAI actually sends and the cache_prompt hit missed).
+ * Pins id_slot 0 (the same slot suggest/prewarm always use) and cache_prompt so the server's per-slot cache
+ * actually reuses the prefix. Never throws — a failed prewarm just means the next real request pays full
+ * cost, which is why it carries its own short timeout independent of any caller's budget.
  */
-export function prewarm(text: string): void {
+export function prewarm(messages: Array<{ role: string; content: string }>): void {
   if (state !== 'running' || port === null) return
   markActivity()
   const url = `http://127.0.0.1:${port}/v1/chat/completions`
@@ -341,7 +393,7 @@ export function prewarm(text: string): void {
     headers: { 'content-type': 'application/json', authorization: `Bearer ${key}` },
     body: JSON.stringify({
       model: 'local',
-      messages: [{ role: 'user', content: text }],
+      messages,
       max_tokens: 1,
       id_slot: 0,
       cache_prompt: true,
