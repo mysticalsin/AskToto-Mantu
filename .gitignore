@@ -22,6 +22,12 @@ resources/ort/**
 !resources/asr/.gitkeep
 !resources/ort/.gitkeep
 
+# Build-time-only local AI supply chain. Metadata/licenses are tracked; weights and staged payloads are not.
+resources/local-ai/cache/**
+resources/local-ai/payload/**
+resources/local-ai/.payload.staging-*/
+resources/local-ai/.payload.rollback-*/
+
 # Session QA scratch (never commit — 100M+ Electron userData, one-off test artifacts)
 .temp-qa-userdata/
 deep-qa-test.mjs
