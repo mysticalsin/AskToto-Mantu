@@ -10,7 +10,10 @@ import { z } from 'zod'
  * claim must cite transcript evidence — the extraction prompt forbids fabrication outright.
  */
 
-export const BRAIN_SCHEMA_VERSION = 1
+// v2 (Task MI-1): adds per-field provenance (ProvenantField, below) + entity-level schema_version/id/
+// aliases. See the ProvenantField doc comment for why provenance is added as SIDECAR fields rather than
+// replacing the plain role/org/sector/stage/win_likelihood_band/velocity fields in place.
+export const BRAIN_SCHEMA_VERSION = 2
 
 export const ConfidenceSchema = z.enum(['EXTRACTED', 'INFERRED', 'AMBIGUOUS'])
 export type Confidence = z.infer<typeof ConfidenceSchema>
@@ -145,10 +148,67 @@ export const MeetingRefSchema = z.object({
 })
 export type MeetingRef = z.infer<typeof MeetingRefSchema>
 
+/**
+ * v2 provenance (Task MI-1, brain schema foundation) — per-field "who said this, when, how sure were
+ * they" for the handful of entity fields that compound across meetings (role/org, sector, stage,
+ * win_likelihood_band, velocity). `superseded` is the field's history: every prior value it held,
+ * most-recent-first, capped at 10 (oldest dropped) so a long-lived deal's file can't grow unbounded.
+ *
+ * DESIGN NOTE — why this is a SIDECAR (`<field>_provenance`), not a replacement of the plain field:
+ * PersonEntity.role/.account, AccountEntity.sector, and DealEntity.stage/.win_likelihood_band/.velocity
+ * are read as plain strings/enums/objects by code this task must not touch — src/main/brain/context.ts
+ * (buildBrainContext), src/shared/mars.ts, and src/renderer/src/components/BrainView.tsx all do direct
+ * property access (e.g. `deal.velocity.signal`, `BAND_META[deal.win_likelihood_band]`, `[p.role,
+ * p.account].join(...)`) and, for the renderer, render the value as a JSX child. Replacing those fields
+ * with `ProvenantField<T>` in place would break the TypeScript build (direct sub-property access like
+ * `.velocity.signal` has no equivalent on the wrapper) and crash the renderer at runtime (a ProvenantField
+ * object is not a valid React child). Keeping the plain field authoritative for those readers, mirrored
+ * from the provenance sidecar's `.value` on every merge, satisfies every one of those call sites
+ * unmodified while still giving the merge/lint/correction-engine layers full per-field history.
+ */
+export const ProvenanceStateSchema = z.enum(['extracted', 'verified', 'edited', 'pinned'])
+export type ProvenanceState = z.infer<typeof ProvenanceStateSchema>
+
+export function provenantFieldSchema<V extends z.ZodTypeAny>(valueSchema: V) {
+  return z.object({
+    value: valueSchema,
+    source_file: z.string().default(''),
+    date: z.string().default(''),
+    quote: z.string().optional(),
+    confidence: ConfidenceSchema.default('EXTRACTED'),
+    state: ProvenanceStateSchema.default('extracted'),
+    superseded: z
+      .array(z.object({ value: valueSchema, date: z.string(), source_file: z.string() }))
+      .max(10)
+      .default([])
+  })
+}
+/** Hand-written mirror of `z.infer<ReturnType<typeof provenantFieldSchema<...>>>` — kept as a plain
+ *  interface (rather than derived via a generic zod call) so merge code in ingest.ts can name the shape
+ *  directly regardless of which concrete value type T is. */
+export interface ProvenantField<T> {
+  value: T
+  source_file: string
+  date: string
+  quote?: string
+  confidence: Confidence
+  state: ProvenanceState
+  superseded: Array<{ value: T; date: string; source_file: string }>
+}
+
 export const PersonEntitySchema = z.object({
+  schema_version: z.number().default(BRAIN_SCHEMA_VERSION),
+  // The slug this entity is filed under — immutable (rename machinery is a later task). The join key
+  // everywhere; `name` stays a plain, mutable display string.
+  id: z.string().default(''),
+  aliases: z.array(z.string()).default([]),
   name: z.string(),
   role: z.string().nullable().default(null),
   account: z.string().nullable().default(null),
+  role_provenance: provenantFieldSchema(z.string()).optional(),
+  // Provenance for `account` above — named "org" in the MI-1 plan (the person's organizational
+  // affiliation), kept as `org_provenance` so its meaning is clear without renaming the plain field.
+  org_provenance: provenantFieldSchema(z.string()).optional(),
   meetings: z.array(MeetingRefSchema).default([]),
   quotes: z.array(z.object({ quote: z.string(), meeting: z.string() })).default([]),
   stance_trail: z.array(z.object({ meeting: z.string(), kind: z.string(), statement: z.string() })).default([]),
@@ -157,9 +217,13 @@ export const PersonEntitySchema = z.object({
 export type PersonEntity = z.infer<typeof PersonEntitySchema>
 
 export const AccountEntitySchema = z.object({
+  schema_version: z.number().default(BRAIN_SCHEMA_VERSION),
+  id: z.string().default(''),
+  aliases: z.array(z.string()).default([]),
   name: z.string(),
   sector: SectorSchema.default('other'),
   sector_confidence: ConfidenceSchema.default('INFERRED'),
+  sector_provenance: provenantFieldSchema(SectorSchema).optional(),
   strategic: z.boolean().default(false),
   people: z.array(z.string()).default([]),
   deals: z.array(z.string()).default([]),
@@ -169,15 +233,27 @@ export const AccountEntitySchema = z.object({
 })
 export type AccountEntity = z.infer<typeof AccountEntitySchema>
 
+/** DealEntity.amount's value shape — schema only in this task (B1); nothing populates it yet. */
+export const AmountValueSchema = z.object({ value: z.number(), currency: z.string() })
+
 export const DealEntitySchema = z.object({
+  schema_version: z.number().default(BRAIN_SCHEMA_VERSION),
+  id: z.string().default(''),
+  aliases: z.array(z.string()).default([]),
   name: z.string(),
   account: z.string().default(''),
   stage: z.string().default(''),
+  stage_provenance: provenantFieldSchema(z.string()).optional(),
   // Outcome is only ever set by an explicit human action (or future CRM sync) — never by the LLM.
   outcome: z.enum(['open', 'won', 'lost']).default('open'),
   win_likelihood_band: BandSchema.nullable().default(null),
   band_evidence: z.string().default(''),
+  win_likelihood_band_provenance: provenantFieldSchema(BandSchema.nullable()).optional(),
   velocity: VelocitySchema.default({ signal: 'no-hard-date-found', evidence: '' }),
+  velocity_provenance: provenantFieldSchema(VelocitySchema).optional(),
+  // Schema only in this task (B1) — a later task wires extraction/population.
+  amount: provenantFieldSchema(AmountValueSchema).optional(),
+  close_date: provenantFieldSchema(z.string()).optional(),
   meetings: z.array(MeetingRefSchema).default([]),
   signals: z.array(MeetingSignalSchema.extend({ meeting: z.string() })).default([]),
   missed_signals: z

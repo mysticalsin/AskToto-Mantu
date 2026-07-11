@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readdirSync, rmSync, statSync } from 'node:fs'
+import { existsSync, mkdirSync, readdirSync, rmSync, statSync, cpSync } from 'node:fs'
 import { join, basename } from 'node:path'
 import { createHash } from 'node:crypto'
 import type { Settings } from '@shared/ipc'
@@ -14,7 +14,9 @@ import {
   type PersonEntity,
   type AccountEntity,
   type DealEntity,
-  type MeetingExtraction
+  type MeetingExtraction,
+  type Confidence,
+  type ProvenantField
 } from '@shared/brain'
 import { resolveMeetingsFolder, readSavedFile, writeSaved } from '../transcripts'
 
@@ -123,6 +125,111 @@ async function writeJson(settings: Settings, rel: string, value: unknown): Promi
   jsonCache.delete(p)
 }
 
+// ── v1 → v2 lazy migration (B2) ──────────────────────────────────────────────
+//
+// A v1 entity file has role/org/sector/stage/win_likelihood_band/velocity as plain values with zero
+// per-field provenance. Rather than replacing those fields in place (see the ProvenantField doc comment
+// in shared/brain.ts for why that would break buildBrainContext/mars.ts/BrainView.tsx), v2 keeps them
+// exactly as they are and adds a `<field>_provenance` sidecar the first time each file is read. The
+// sidecar is synthesized HONESTLY, never fabricated:
+//   - source_file: '' — we genuinely don't know which meeting first asserted the value; inventing one
+//     would be a fabricated citation, so it stays empty (an honest "unknown" sentinel).
+//   - date: the entity's EARLIEST known meeting date — the best available lower bound for when this
+//     value could first have been true — or '' if the entity has no dated meetings at all.
+//   - confidence: reuses the field's own REAL historical confidence where one already existed on disk
+//     (AccountEntity.sector_confidence); everything else (role/org/stage/band/velocity) never had a
+//     per-field confidence in v1, so it gets 'INFERRED' — honest because we cannot claim EXTRACTED-grade
+//     provenance for a value that was never tagged as such.
+//   - state: 'extracted' — the normal merge/date-gate rules apply to it going forward.
+// Migration never fires for a field whose plain value is absent (null/''/the bland velocity default) —
+// there is nothing to attach honest provenance to.
+
+function earliestDate(meetings: Array<{ date: string }>): string {
+  const dates = meetings.map((m) => m.date).filter(Boolean).sort()
+  return dates[0] ?? ''
+}
+
+function migrateField<T>(
+  value: T,
+  meetings: Array<{ date: string }>,
+  confidence: Confidence = 'INFERRED',
+  quote?: string
+): ProvenantField<T> {
+  return { value, source_file: '', date: earliestDate(meetings), quote, confidence, state: 'extracted', superseded: [] }
+}
+
+function migratePerson(p: PersonEntity, slug: string): PersonEntity {
+  p.id = p.id || slug
+  p.aliases ??= []
+  if (!p.role_provenance && p.role) p.role_provenance = migrateField(p.role, p.meetings)
+  if (!p.org_provenance && p.account) p.org_provenance = migrateField(p.account, p.meetings)
+  return p
+}
+
+function migrateAccount(a: AccountEntity, slug: string): AccountEntity {
+  a.id = a.id || slug
+  a.aliases ??= []
+  if (!a.sector_provenance) a.sector_provenance = migrateField(a.sector, a.meetings, a.sector_confidence)
+  return a
+}
+
+function migrateDeal(d: DealEntity, slug: string): DealEntity {
+  d.id = d.id || slug
+  d.aliases ??= []
+  if (!d.stage_provenance && d.stage) d.stage_provenance = migrateField(d.stage, d.meetings)
+  if (!d.win_likelihood_band_provenance && d.win_likelihood_band) {
+    d.win_likelihood_band_provenance = migrateField(d.win_likelihood_band, d.meetings, 'INFERRED', d.band_evidence || undefined)
+  }
+  if (!d.velocity_provenance && d.velocity.signal !== 'no-hard-date-found') {
+    d.velocity_provenance = migrateField(d.velocity, d.meetings)
+  }
+  return d
+}
+
+// ── One-time backup before the first v2 write into a brain that still has v1 files ──────────────────
+//
+// Belt-and-suspenders for the migration above: before ANY v2-shaped entity file lands in a `.brain/`
+// directory that currently holds v1 files, the whole directory is snapshotted to `.brain.backup-v1`
+// once. Copies files exactly as they sit on disk (respects encryption — an encrypted file's ATKENC
+// envelope is copied verbatim, never decrypted/re-encrypted). Memoized per brainDir so a long backfill
+// (many sequential entity writes) only pays for the existence check once it knows the answer.
+const backupHandled = new Set<string>()
+
+function isV1EntityFile(path: string): boolean {
+  try {
+    const raw = JSON.parse(readSavedFile(path)) as { schema_version?: number }
+    return raw.schema_version !== 2
+  } catch {
+    return true // unreadable/corrupt — can't prove it's v2, so err toward including it in the safety copy
+  }
+}
+
+function brainHasV1Entities(settings: Settings): boolean {
+  const root = brainDir(settings)
+  for (const kind of ['person', 'account', 'deal'] as const) {
+    const dir = join(root, 'entities', kind)
+    if (!existsSync(dir)) continue
+    for (const f of readdirSync(dir)) {
+      if (f.endsWith('.json') && isV1EntityFile(join(dir, f))) return true
+    }
+  }
+  return false
+}
+
+function ensureV1Backup(settings: Settings): void {
+  const root = brainDir(settings)
+  if (backupHandled.has(root)) return
+  backupHandled.add(root)
+  const backup = `${root}.backup-v1`
+  if (existsSync(backup)) return
+  if (!brainHasV1Entities(settings)) return
+  try {
+    cpSync(root, backup, { recursive: true })
+  } catch (e) {
+    console.warn('[brain] could not create .brain.backup-v1 safety copy before v2 migration:', e)
+  }
+}
+
 // ── Typed accessors ──────────────────────────────────────────────────────────
 
 export const readIndex = (s: Settings): BrainIndex =>
@@ -139,19 +246,25 @@ export const writeMeetingExtraction = (s: Settings, fileSlug: string, v: Meeting
   writeJson(s, join('meetings', `${fileSlug}.json`), v)
 
 export const readPerson = (s: Settings, slug: string): PersonEntity | null =>
-  readJson(s, join('entities', 'person', `${slug}.json`), (v) => PersonEntitySchema.parse(v))
-export const writePerson = (s: Settings, slug: string, v: PersonEntity): Promise<void> =>
-  writeJson(s, join('entities', 'person', `${slug}.json`), v)
+  readJson(s, join('entities', 'person', `${slug}.json`), (v) => migratePerson(PersonEntitySchema.parse(v), slug))
+export const writePerson = (s: Settings, slug: string, v: PersonEntity): Promise<void> => {
+  ensureV1Backup(s)
+  return writeJson(s, join('entities', 'person', `${slug}.json`), v)
+}
 
 export const readAccount = (s: Settings, slug: string): AccountEntity | null =>
-  readJson(s, join('entities', 'account', `${slug}.json`), (v) => AccountEntitySchema.parse(v))
-export const writeAccount = (s: Settings, slug: string, v: AccountEntity): Promise<void> =>
-  writeJson(s, join('entities', 'account', `${slug}.json`), v)
+  readJson(s, join('entities', 'account', `${slug}.json`), (v) => migrateAccount(AccountEntitySchema.parse(v), slug))
+export const writeAccount = (s: Settings, slug: string, v: AccountEntity): Promise<void> => {
+  ensureV1Backup(s)
+  return writeJson(s, join('entities', 'account', `${slug}.json`), v)
+}
 
 export const readDeal = (s: Settings, slug: string): DealEntity | null =>
-  readJson(s, join('entities', 'deal', `${slug}.json`), (v) => DealEntitySchema.parse(v))
-export const writeDeal = (s: Settings, slug: string, v: DealEntity): Promise<void> =>
-  writeJson(s, join('entities', 'deal', `${slug}.json`), v)
+  readJson(s, join('entities', 'deal', `${slug}.json`), (v) => migrateDeal(DealEntitySchema.parse(v), slug))
+export const writeDeal = (s: Settings, slug: string, v: DealEntity): Promise<void> => {
+  ensureV1Backup(s)
+  return writeJson(s, join('entities', 'deal', `${slug}.json`), v)
+}
 
 /**
  * Set a deal's outcome (open/won/lost) — the human closes the loop the LLM never may (see the

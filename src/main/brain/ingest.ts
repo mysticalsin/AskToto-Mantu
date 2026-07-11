@@ -4,12 +4,15 @@ import type { Settings, AskStart } from '@shared/ipc'
 import { PROVIDERS, resolveModelTier, type ProviderId } from '@shared/providers'
 import {
   BRAIN_EXTRACTION_PROMPT,
+  BRAIN_SCHEMA_VERSION,
   classifyMeetingSourceUse,
   MeetingExtractionSchema,
   type MeetingExtraction,
   type MeetingRef,
   type BrainGraph,
-  type BrainIndex
+  type BrainIndex,
+  type Confidence,
+  type ProvenantField
 } from '@shared/brain'
 import { INJECTION_GUARD } from '@shared/prompts'
 import { redactSecrets } from '@shared/redact'
@@ -156,6 +159,71 @@ export const commitmentKey = (text: string): string =>
     .replace(/\s+/g, ' ')
     .trim()
 
+// ── Provenant field merge (A1 fix: D1 "latest-INGESTED-wins" → "latest-MEETING-DATE-wins") ──────────
+//
+// Backfill enqueues files in readdirSync order and completes in extraction-COMPLETION order, so a
+// chronologically OLD meeting processed LAST could silently overwrite a NEWER meeting's deal state
+// (defect D1). This is the single implementation every provenant field (role/org, sector, stage,
+// win_likelihood_band, velocity) goes through, so the rule is enforced exactly once, everywhere:
+//
+//   1. A value pinned/edited by a human is NEVER overwritten by merge — but the incoming (rejected)
+//      value is still logged to `superseded` so the full history stays visible even though it lost.
+//   2. EXTRACTED confidence never downgrades to a weaker tier (generalizes the old sector-only rule).
+//   3. Otherwise, whichever of {current, incoming} has the NEWER meeting date wins and becomes/stays
+//      `value`; the OLDER one is recorded into `superseded`. Ties (equal dates) let the incoming value
+//      win, matching the pre-v2 "second meeting compounds" behavior when dates are both unknown ('').
+//   4. A value-identical incoming (same fact re-confirmed by a later meeting) only refreshes metadata
+//      (date/source/quote/confidence) — it is not a new history entry.
+//
+// Because step 3 always sorts `superseded` by date (most-recent-first) after every push rather than
+// simply prepending, the FINAL state (current value + superseded history) is a pure function of the
+// SET of {value, date, source_file} candidates ever merged for that field — independent of the order
+// they were merged in. That is what makes shuffled-order ingestion converge byte-for-byte with
+// chronological-order ingestion (see brain.test.ts's A1 property test).
+type ProvenantIncoming<T> = { value: T; source_file: string; date: string; quote?: string; confidence: Confidence }
+
+function pushSuperseded<T>(
+  list: Array<{ value: T; date: string; source_file: string }>,
+  entry: { value: T; date: string; source_file: string }
+): Array<{ value: T; date: string; source_file: string }> {
+  return [...list, entry].sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0)).slice(0, 10)
+}
+
+function mergeProvenant<T>(
+  current: ProvenantField<T> | undefined,
+  incoming: ProvenantIncoming<T>,
+  valuesEqual: (a: T, b: T) => boolean
+): ProvenantField<T> {
+  if (!current) {
+    return { value: incoming.value, source_file: incoming.source_file, date: incoming.date, quote: incoming.quote, confidence: incoming.confidence, state: 'extracted', superseded: [] }
+  }
+  if (current.state === 'pinned' || current.state === 'edited') {
+    if (valuesEqual(current.value, incoming.value)) return current
+    return { ...current, superseded: pushSuperseded(current.superseded, { value: incoming.value, date: incoming.date, source_file: incoming.source_file }) }
+  }
+  if (current.confidence === 'EXTRACTED' && incoming.confidence !== 'EXTRACTED') return current
+  if (valuesEqual(current.value, incoming.value)) {
+    if (incoming.date < current.date) return current
+    return { ...current, source_file: incoming.source_file, date: incoming.date, quote: incoming.quote ?? current.quote, confidence: incoming.confidence }
+  }
+  if (incoming.date >= current.date) {
+    return {
+      value: incoming.value,
+      source_file: incoming.source_file,
+      date: incoming.date,
+      quote: incoming.quote,
+      confidence: incoming.confidence,
+      state: 'extracted',
+      superseded: pushSuperseded(current.superseded, { value: current.value, date: current.date, source_file: current.source_file })
+    }
+  }
+  return { ...current, superseded: pushSuperseded(current.superseded, { value: incoming.value, date: incoming.date, source_file: incoming.source_file }) }
+}
+
+const eqStrict = <T>(a: T, b: T): boolean => a === b
+const eqVelocity = (a: { signal: string; evidence: string }, b: { signal: string; evidence: string }): boolean =>
+  a.signal === b.signal && a.evidence === b.evidence
+
 /** Merge one meeting's extraction into the entity + graph files. Pure data transforms — no LLM here. */
 export async function mergeExtraction(
   s: Settings,
@@ -174,6 +242,9 @@ export async function mergeExtraction(
   const accountSlug = x.account && x.account.name.trim() ? slugify(x.account.name) : null
   if (x.account && accountSlug) {
     const acc = readAccount(s, accountSlug) ?? {
+      schema_version: BRAIN_SCHEMA_VERSION,
+      id: accountSlug,
+      aliases: [],
       name: x.account.name,
       sector: x.account.sector,
       sector_confidence: x.account.sector_confidence,
@@ -184,11 +255,16 @@ export async function mergeExtraction(
       win_reasons: [],
       loss_reasons: []
     }
-    // A firmer sector classification upgrades a weaker one; never downgrade EXTRACTED to INFERRED.
-    if (acc.sector_confidence !== 'EXTRACTED' || x.account.sector_confidence === 'EXTRACTED') {
-      acc.sector = x.account.sector
-      acc.sector_confidence = x.account.sector_confidence
-    }
+    // A1/B3: latest-MEETING-DATE-wins (not latest-ingested-wins), never downgrade EXTRACTED to INFERRED,
+    // and a human pin/edit is never overwritten — all generalized in mergeProvenant (defect D1 for the
+    // three deal fields below; sector's own "never downgrade" rule folds into the same implementation).
+    acc.sector_provenance = mergeProvenant(
+      acc.sector_provenance,
+      { value: x.account.sector, source_file: ref.file, date: ref.date, confidence: x.account.sector_confidence },
+      eqStrict
+    )
+    acc.sector = acc.sector_provenance.value
+    acc.sector_confidence = acc.sector_provenance.confidence
     pushUnique(acc.meetings, ref, (m) => m.file)
     for (const sig of x.signals) {
       const bucket = sig.kind === 'positive' ? acc.win_reasons : sig.kind === 'objection' ? acc.loss_reasons : null
@@ -204,9 +280,39 @@ export async function mergeExtraction(
   for (const p of x.people) {
     if (!p.name.trim()) continue
     const pslug = slugify(p.name)
-    const person = readPerson(s, pslug) ?? { name: p.name, role: null, account: null, meetings: [], quotes: [], stance_trail: [], commitments: [] }
-    if (p.role && !person.role) person.role = p.role
-    if ((p.org || x.account) && !person.account) person.account = p.org || x.account?.name || null
+    const person = readPerson(s, pslug) ?? {
+      schema_version: BRAIN_SCHEMA_VERSION,
+      id: pslug,
+      aliases: [],
+      name: p.name,
+      role: null,
+      account: null,
+      meetings: [],
+      quotes: [],
+      stance_trail: [],
+      commitments: []
+    }
+    // A2 fix (D8): org is now allowed to CHANGE across meetings (latest-date-wins via mergeProvenant,
+    // same as the deal fields), with the full history in org_provenance.superseded — this is what makes
+    // lintBrain's multi-account detection below possible at all; the old "first-write-wins, never
+    // overwrite" rule meant a person's account froze at whichever meeting mentioned them first.
+    const org = p.org || x.account?.name || null
+    if (org) {
+      person.org_provenance = mergeProvenant(
+        person.org_provenance,
+        { value: org, source_file: ref.file, date: ref.date, confidence: p.confidence },
+        eqStrict
+      )
+      person.account = person.org_provenance.value
+    }
+    if (p.role) {
+      person.role_provenance = mergeProvenant(
+        person.role_provenance,
+        { value: p.role, source_file: ref.file, date: ref.date, confidence: p.confidence },
+        eqStrict
+      )
+      person.role = person.role_provenance.value
+    }
     pushUnique(person.meetings, ref, (m) => m.file)
     for (const sig of x.signals) {
       if (sig.quote) pushUnique(person.stance_trail, { meeting: ref.file, kind: sig.kind, statement: sig.statement }, (t) => t.meeting + t.statement)
@@ -238,6 +344,9 @@ export async function mergeExtraction(
   if (x.deal && (x.deal.name || accountSlug)) {
     const dslug = slugify(x.deal.name || `${x.account?.name ?? 'unknown'} deal`)
     const deal = readDeal(s, dslug) ?? {
+      schema_version: BRAIN_SCHEMA_VERSION,
+      id: dslug,
+      aliases: [],
       name: x.deal.name || `${x.account?.name ?? 'Unknown'} deal`,
       account: x.account?.name ?? '',
       stage: '',
@@ -251,14 +360,33 @@ export async function mergeExtraction(
       commitments: [],
       feedback: []
     }
-    if (x.deal.stage) deal.stage = x.deal.stage
-    // Latest meeting's judgement wins for band + velocity (it has the freshest information).
-    if (x.deal.win_likelihood_band) {
-      deal.win_likelihood_band = x.deal.win_likelihood_band
-      deal.band_evidence = x.deal.band_evidence
+    // A1 fix (D1): latest-MEETING-DATE-wins, not latest-ingested-wins — see mergeProvenant above.
+    if (x.deal.stage) {
+      deal.stage_provenance = mergeProvenant(
+        deal.stage_provenance,
+        { value: x.deal.stage, source_file: ref.file, date: ref.date, confidence: 'EXTRACTED' },
+        eqStrict
+      )
+      deal.stage = deal.stage_provenance.value
     }
-    if (x.deal.velocity.signal !== 'no-hard-date-found' || deal.velocity.signal === 'no-hard-date-found') {
-      deal.velocity = x.deal.velocity
+    if (x.deal.win_likelihood_band) {
+      deal.win_likelihood_band_provenance = mergeProvenant(
+        deal.win_likelihood_band_provenance,
+        { value: x.deal.win_likelihood_band, source_file: ref.file, date: ref.date, quote: x.deal.band_evidence, confidence: 'EXTRACTED' },
+        eqStrict
+      )
+      deal.win_likelihood_band = deal.win_likelihood_band_provenance.value
+      deal.band_evidence = deal.win_likelihood_band_provenance.quote ?? ''
+    }
+    // A bland "no info this meeting" report must never clobber an already-known real signal (and once
+    // ANY provenance exists for velocity, a further bland report is a no-op — it carries nothing new).
+    if (x.deal.velocity.signal !== 'no-hard-date-found' || !deal.velocity_provenance) {
+      deal.velocity_provenance = mergeProvenant(
+        deal.velocity_provenance,
+        { value: x.deal.velocity, source_file: ref.file, date: ref.date, confidence: 'EXTRACTED' },
+        eqVelocity
+      )
+      deal.velocity = deal.velocity_provenance.value
     }
     pushUnique(deal.meetings, ref, (m) => m.file)
     for (const sig of x.signals) pushUnique(deal.signals, { ...sig, meeting: ref.file }, (t) => t.meeting + t.statement)
@@ -296,8 +424,18 @@ export function lintBrain(s: Settings): string[] {
   for (const slug of listEntities(s, 'person')) {
     const p = readPerson(s, slug)
     if (!p) continue
-    const orgs = new Set(p.stance_trail.map(() => p.account).filter(Boolean))
-    if (orgs.size > 1) warnings.push(`Person "${p.name}" is linked to multiple accounts: ${[...orgs].join(', ')}`)
+    // A2 fix (D8): the old check derived "orgs" from the single p.account field mapped once per
+    // stance_trail entry, so it could never produce more than one distinct value — it never fired.
+    // org_provenance's current value + its full superseded history (see mergeExtraction's org merge)
+    // is the actual per-meeting account association record; dedupe by SLUG (not raw text) since two
+    // spellings of the same account name must not falsely count as "multiple accounts".
+    const bySlug = new Map<string, string>() // account slug -> a display value seen for it
+    const consider = (v: string | null | undefined): void => {
+      if (v && !bySlug.has(slugify(v))) bySlug.set(slugify(v), v)
+    }
+    consider(p.org_provenance?.value)
+    for (const prior of p.org_provenance?.superseded ?? []) consider(prior.value)
+    if (bySlug.size > 1) warnings.push(`Person "${p.name}" is linked to multiple accounts: ${[...bySlug.values()].join(', ')}`)
   }
   for (const slug of listEntities(s, 'deal')) {
     const d = readDeal(s, slug)
