@@ -1,0 +1,6 @@
+{"type":"thread.started","thread_id":"019f4f1a-9f80-7413-b1d6-11484b125506"}
+{"type":"item.completed","item":{"id":"item_0","type":"error","message":"Under-development features enabled: chronicle. Under-development features are incomplete and may behave unpredictably. To suppress this warning, set `suppress_unstable_features_warning = true` in /Users/tony/.codex/config.toml."}}
+{"type":"turn.started"}
+{"type":"item.completed","item":{"id":"item_1","type":"error","message":"Skill descriptions were shortened to fit the 2% skills context budget. Codex can still see every skill, but some descriptions are shorter. Disable unused skills or plugins to leave more room for the rest."}}
+{"type":"item.completed","item":{"id":"item_2","type":"agent_message","text":"PROBE-OK"}}
+{"type":"turn.completed","usage":{"input_tokens":26447,"cached_input_tokens":10112,"output_tokens":74,"reasoning_output_tokens":64}}
