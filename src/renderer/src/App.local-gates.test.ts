@@ -105,7 +105,7 @@ describe('requireProvider(local?) call-site contract (H1)', () => {
   it('whatNext re-gates its cloud-only text route bare before firing mode "answer" (r6)', () => {
     // The answer-mode branch must keep a bare provider gate even after the suggest-scoped top gate
     // passed on localSuggestReady alone — the local model never serves answer mode.
-    expect(appSrc).toMatch(/route\.transport === 'text' && !requireProvider\(\)/)
+    expect(source).toMatch(/route\.transport === 'text' && !requireProvider\(\)/)
   })
 
   it("onQuickAction's explain branch only ever fires mode \"answer\" directly -> stays bare", () => {
