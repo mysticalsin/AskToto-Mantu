@@ -1,0 +1,38 @@
+{
+  "people": [
+    { "name": "Elena Kowalski", "role": "COO", "org": "Meridian Logistics" },
+    { "name": "Ben Turner", "role": "Regional Operations Lead", "org": "Meridian Logistics" }
+  ],
+  "accounts": [{ "name": "Meridian Logistics", "sector": "logistics" }],
+  "deals": [{ "name": "Meridian Logistics Warehouse Expansion", "account": "Meridian Logistics", "stage": "execution" }],
+  "numeric_facts": [
+    {
+      "kind": "headcount",
+      "value": 200,
+      "unit": null,
+      "quote": "Elena approved bringing on 200 new warehouse staff across the two new sites"
+    },
+    {
+      "kind": "date",
+      "value": 2026,
+      "unit": null,
+      "quote": "We're aiming to have everyone onboarded before the 2026 peak season"
+    },
+    {
+      "kind": "amount",
+      "value": 4500000,
+      "unit": null,
+      "quote": "the two new sites together are budgeted at 4.5M for build-out and equipment"
+    },
+    {
+      "kind": "percent",
+      "value": 8,
+      "unit": "%",
+      "quote": "on-time delivery has already improved by eight percent since the pilot site opened"
+    }
+  ],
+  "commitments": [
+    { "text": "put together a readiness checklist for both new sites", "by": "you" },
+    { "text": "draft a short summary of the hiring plan for the board deck", "by": "you" }
+  ]
+}

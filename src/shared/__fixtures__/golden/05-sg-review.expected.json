@@ -1,0 +1,38 @@
+{
+  "people": [
+    { "name": "Sophie Marchand", "role": "Directrice des Opérations", "org": "Société Générale" },
+    { "name": "Julien Perrot", "role": "Responsable Conformité", "org": "Société Générale" }
+  ],
+  "accounts": [{ "name": "Société Générale", "sector": "banking" }],
+  "deals": [{ "name": "Société Générale Programme de Conformité", "account": "Société Générale", "stage": "en cours" }],
+  "numeric_facts": [
+    {
+      "kind": "amount",
+      "value": 150000,
+      "unit": null,
+      "quote": "Le budget total pour cette phase s'élève à cent cinquante mille"
+    },
+    {
+      "kind": "percent",
+      "value": 20,
+      "unit": "%",
+      "quote": "vise une amélioration de vingt pour cent sur les délais de traitement"
+    },
+    {
+      "kind": "headcount",
+      "value": 90,
+      "unit": null,
+      "quote": "Nous avons quatre-vingt-dix personnes actuellement mobilisées sur ce projet"
+    },
+    {
+      "kind": "date",
+      "value": 22,
+      "unit": null,
+      "quote": "le comité de conformité se réunit le vingt-deux du mois prochain"
+    }
+  ],
+  "commitments": [
+    { "text": "envoyer un compte-rendu après chaque comité de conformité", "by": "you" },
+    { "text": "envoyer la liste des documents attendus pour le comité", "by": "Julien Perrot" }
+  ]
+}

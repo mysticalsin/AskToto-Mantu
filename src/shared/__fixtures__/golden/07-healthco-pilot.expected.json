@@ -1,0 +1,29 @@
+{
+  "people": [{ "name": "Amara Okafor", "role": "Chief Medical Officer", "org": "MedBridge" }],
+  "accounts": [{ "name": "MedBridge", "sector": "healthcare" }],
+  "deals": [{ "name": "MedBridge Rollout", "account": "MedBridge", "stage": "evaluation" }],
+  "numeric_facts": [
+    {
+      "kind": "percent",
+      "value": 18,
+      "unit": "%",
+      "quote": "readmission rates dropped by 18 percent during the pilot period"
+    },
+    {
+      "kind": "headcount",
+      "value": 60,
+      "unit": null,
+      "quote": "The pilot covered 60 patients across two clinics over ten weeks"
+    },
+    {
+      "kind": "amount",
+      "value": 850000,
+      "unit": null,
+      "quote": "Amara's team estimated the full rollout at 850k for the first year"
+    }
+  ],
+  "commitments": [
+    { "text": "schedule the data governance review with our compliance team this week", "by": "you" },
+    { "text": "send over the full pilot report", "by": "Amara Okafor" }
+  ]
+}

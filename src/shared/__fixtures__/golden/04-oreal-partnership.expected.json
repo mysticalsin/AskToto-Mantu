@@ -1,0 +1,32 @@
+{
+  "people": [
+    { "name": "Camille Rousseau", "role": "Innovation Director", "org": "L'Oréal" },
+    { "name": "Marc Bellamy", "role": "Digital Lead", "org": "L'Oréal" }
+  ],
+  "accounts": [{ "name": "L'Oréal", "sector": "consumer-goods" }],
+  "deals": [{ "name": "L'Oréal Digital Transformation", "account": "L'Oréal", "stage": "discovery" }],
+  "numeric_facts": [
+    {
+      "kind": "amount",
+      "value": 1200000000,
+      "unit": "EUR",
+      "quote": "the transformation budget is roughly €1.2bn over three years"
+    },
+    {
+      "kind": "amount",
+      "value": 90000,
+      "unit": null,
+      "quote": "the innovation lab budget runs at quatre-vingt-dix mille a month"
+    },
+    {
+      "kind": "percent",
+      "value": 9,
+      "unit": "%",
+      "quote": "the pilot showed a 9 percent increase in engagement"
+    }
+  ],
+  "commitments": [
+    { "text": "put together a one-page roadmap view mapped to the €1.2bn envelope", "by": "you" },
+    { "text": "follow-up specifically on the innovation lab number", "by": "Marc Bellamy" }
+  ]
+}

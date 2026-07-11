@@ -1,0 +1,32 @@
+{
+  "people": [
+    { "name": "Priya Anand", "role": "CTO", "org": "NovaPay" },
+    { "name": "Diego Alvarez", "role": "Platform Engineering Lead", "org": "NovaPay" }
+  ],
+  "accounts": [{ "name": "NovaPay", "sector": "technology" }],
+  "deals": [{ "name": "NovaPay Platform Renewal", "account": "NovaPay", "stage": "renewal" }],
+  "numeric_facts": [
+    {
+      "kind": "headcount",
+      "value": 23,
+      "unit": null,
+      "quote": "We have twenty-three engineers now actively building on top of the API"
+    },
+    {
+      "kind": "amount",
+      "value": 1800000,
+      "unit": null,
+      "quote": "we're now processing transactions worth 1.8M every week"
+    },
+    {
+      "kind": "amount",
+      "value": 4,
+      "unit": null,
+      "quote": "we lost about four hours last month to an outage on our side"
+    }
+  ],
+  "commitments": [
+    { "text": "send over three pricing scenarios by Friday", "by": "you" },
+    { "text": "loop in one more engineer for the technical deep dive next time", "by": "Diego Alvarez" }
+  ]
+}
