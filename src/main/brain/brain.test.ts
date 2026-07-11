@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, readFileSync, writeFileSync, mkdirSync, existsSync
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import type { Settings } from '@shared/ipc'
-import { MeetingExtractionSchema, BRAIN_EXTRACTION_PROMPT, type MeetingExtraction } from '@shared/brain'
+import { MeetingExtractionSchema, BRAIN_EXTRACTION_PROMPT, type MeetingExtraction, type DealEntity } from '@shared/brain'
 import { INJECTION_GUARD } from '@shared/prompts'
 import {
   extractJsonObject,
@@ -436,6 +436,149 @@ describe('brain', () => {
         rmSync(folderA, { recursive: true, force: true })
         rmSync(folderB, { recursive: true, force: true })
       }
+    })
+  })
+
+  describe('A1 hardening — deterministic tie-breaking via total order on (date, source_file)', () => {
+    type Row = { file: string; date: string; stage: string; band: 'good' | 'mixed' | 'concerning' }
+
+    const rowExtraction = (r: Row): MeetingExtraction =>
+      MeetingExtractionSchema.parse({
+        account: { name: 'Acme', sector: 'banking', sector_confidence: 'INFERRED', confidence: 'EXTRACTED' },
+        people: [{ name: 'Kim Lee', role: `role-${r.stage}`, org: null, confidence: 'EXTRACTED' }],
+        deal: {
+          name: 'Acme Core',
+          stage: r.stage,
+          win_likelihood_band: r.band,
+          band_evidence: `ev-${r.stage}`,
+          velocity: { signal: 'hard-calendar-gate', evidence: `gate-${r.stage}` }
+        }
+      })
+
+    const permutations = <T,>(items: T[]): T[][] =>
+      items.length <= 1
+        ? [[...items]]
+        : items.flatMap((item, i) =>
+            permutations([...items.slice(0, i), ...items.slice(i + 1)]).map((rest) => [item, ...rest])
+          )
+
+    /** Merge `order` into a fresh brain; return the canonical JSON of the resulting entity files plus
+     *  the raw deal for order-sensitive assertions (canonicalize sorts arrays, erasing superseded order). */
+    const stateAfter = async (order: Row[]): Promise<{ canon: string; deal: DealEntity }> => {
+      const dir = mkdtempSync(join(tmpdir(), 'asktoto-brain-tie-'))
+      try {
+        const sx = settingsFor(dir)
+        for (const r of order) {
+          await mergeExtraction(sx, rowExtraction(r), { file: r.file, date: r.date, title: r.file })
+        }
+        const deal = readDeal(sx, slugify('Acme Core'))!
+        const person = readPerson(sx, slugify('Kim Lee'))!
+        return { canon: JSON.stringify({ deal: canonicalize(deal), person: canonicalize(person) }), deal }
+      } finally {
+        rmSync(dir, { recursive: true, force: true })
+      }
+    }
+
+    it('two same-day meetings (bare dates, the common frontmatter form) converge — source_file breaks the tie', async () => {
+      const rows: Row[] = [
+        { file: 'a.md', date: '2026-01-15', stage: 'alpha', band: 'mixed' },
+        { file: 'b.md', date: '2026-01-15', stage: 'beta', band: 'good' }
+      ]
+      const fwd = await stateAfter(rows)
+      const rev = await stateAfter([...rows].reverse())
+      expect(fwd.canon).toBe(rev.canon)
+      expect(fwd.deal.stage).toBe('beta') // 'b.md' > 'a.md' lexically — a property of the data, not arrival order
+    })
+
+    it('two blank-date meetings (the statSync-failure fallback) converge the same way', async () => {
+      const rows: Row[] = [
+        { file: 'a.md', date: '', stage: 'alpha', band: 'mixed' },
+        { file: 'b.md', date: '', stage: 'beta', band: 'good' }
+      ]
+      const fwd = await stateAfter(rows)
+      const rev = await stateAfter([...rows].reverse())
+      expect(fwd.canon).toBe(rev.canon)
+      expect(fwd.deal.stage).toBe('beta')
+    })
+
+    it('ALL 6 permutations of a 3-extraction set with one tied pair produce byte-identical entity files', async () => {
+      const rows: Row[] = [
+        { file: 'm1.md', date: '2026-01-01', stage: 'discovery', band: 'mixed' },
+        { file: 'm2.md', date: '2026-02-01', stage: 'proposal', band: 'good' },
+        { file: 'm3.md', date: '2026-02-01', stage: 'negotiation', band: 'concerning' } // ties with m2
+      ]
+      const states: Awaited<ReturnType<typeof stateAfter>>[] = []
+      for (const perm of permutations(rows)) states.push(await stateAfter(perm))
+      for (const st of states.slice(1)) expect(st.canon).toBe(states[0].canon)
+
+      const deal = states[0].deal
+      expect(deal.stage).toBe('negotiation') // date tie m2/m3 → 'm3.md' > 'm2.md'
+      expect(deal.win_likelihood_band).toBe('concerning')
+      expect(deal.band_evidence).toBe('ev-negotiation')
+      // History: one entry per losing value, most-recent-first by the same (date, source_file) key.
+      expect(deal.stage_provenance!.superseded.map((e) => e.value)).toEqual(['proposal', 'discovery'])
+    })
+
+    it('an EXTRACTED classification beats a weaker one in BOTH merge orders (never-downgrade, bidirectional)', async () => {
+      const sectorX = (sector: 'banking' | 'technology', conf: 'EXTRACTED' | 'INFERRED'): MeetingExtraction =>
+        MeetingExtractionSchema.parse({
+          account: { name: 'TieCo', sector, sector_confidence: conf, confidence: 'EXTRACTED' }
+        })
+      const firmRef = { file: 'm1.md', date: '2026-01-01', title: 't' }
+      const weakRef = { file: 'm2.md', date: '2026-02-01', title: 't' } // weaker evidence is NEWER — the divergent case
+
+      const run = async (order: Array<[MeetingExtraction, typeof firmRef]>) => {
+        const dir = mkdtempSync(join(tmpdir(), 'asktoto-brain-conf-'))
+        try {
+          const sx = settingsFor(dir)
+          for (const [x, ref] of order) await mergeExtraction(sx, x, ref)
+          const acc = readAccount(sx, slugify('TieCo'))!
+          return { canon: JSON.stringify(canonicalize(acc)), acc }
+        } finally {
+          rmSync(dir, { recursive: true, force: true })
+        }
+      }
+
+      const a = await run([[sectorX('banking', 'EXTRACTED'), firmRef], [sectorX('technology', 'INFERRED'), weakRef]])
+      const b = await run([[sectorX('technology', 'INFERRED'), weakRef], [sectorX('banking', 'EXTRACTED'), firmRef]])
+      expect(a.canon).toBe(b.canon)
+      expect(a.acc.sector).toBe('banking') // the EXTRACTED classification wins in both orders
+      expect(a.acc.sector_confidence).toBe('EXTRACTED')
+    })
+
+    it('a bland velocity report neither clobbers a real calendar signal nor seeds order-dependent history', async () => {
+      const velX = (signal: 'hard-calendar-gate' | 'no-hard-date-found', evidence: string): MeetingExtraction =>
+        MeetingExtractionSchema.parse({
+          account: { name: 'VelCo', sector: 'banking', confidence: 'EXTRACTED' },
+          deal: { name: 'VelCo Deal', stage: 'open', velocity: { signal, evidence } }
+        })
+      const realRef = { file: 'm1.md', date: '2026-01-01', title: 't' }
+      const blandRef = { file: 'm2.md', date: '2026-02-01', title: 't' } // "no info found" is NEWER — the dangerous order
+
+      const run = async (order: Array<[MeetingExtraction, typeof realRef]>) => {
+        const dir = mkdtempSync(join(tmpdir(), 'asktoto-brain-vel-'))
+        try {
+          const sx = settingsFor(dir)
+          for (const [x, ref] of order) await mergeExtraction(sx, x, ref)
+          const deal = readDeal(sx, slugify('VelCo Deal'))!
+          return { canon: JSON.stringify(canonicalize(deal)), deal }
+        } finally {
+          rmSync(dir, { recursive: true, force: true })
+        }
+      }
+
+      const a = await run([
+        [velX('hard-calendar-gate', 'kickoff June 3'), realRef],
+        [velX('no-hard-date-found', ''), blandRef]
+      ])
+      const b = await run([
+        [velX('no-hard-date-found', ''), blandRef],
+        [velX('hard-calendar-gate', 'kickoff June 3'), realRef]
+      ])
+      expect(a.canon).toBe(b.canon)
+      expect(a.deal.velocity).toEqual({ signal: 'hard-calendar-gate', evidence: 'kickoff June 3' })
+      // 'no info found' is the absence of information, not superseded knowledge — it never enters history.
+      expect(a.deal.velocity_provenance!.superseded).toHaveLength(0)
     })
   })
 

@@ -164,29 +164,65 @@ export const commitmentKey = (text: string): string =>
 // Backfill enqueues files in readdirSync order and completes in extraction-COMPLETION order, so a
 // chronologically OLD meeting processed LAST could silently overwrite a NEWER meeting's deal state
 // (defect D1). This is the single implementation every provenant field (role/org, sector, stage,
-// win_likelihood_band, velocity) goes through, so the rule is enforced exactly once, everywhere:
+// win_likelihood_band, velocity) goes through, so the rule is enforced exactly once, everywhere.
 //
+// THE ORDER-INDEPENDENCE GUARANTEE: the final field state (value + provenance + superseded history)
+// is a pure function of the SET of {value, date, source_file, confidence} candidates ever merged —
+// never of their arrival order. Every rule below exists to keep that true:
 //   1. A value pinned/edited by a human is NEVER overwritten by merge — but the incoming (rejected)
 //      value is still logged to `superseded` so the full history stays visible even though it lost.
-//   2. EXTRACTED confidence never downgrades to a weaker tier (generalizes the old sector-only rule).
-//   3. Otherwise, whichever of {current, incoming} has the NEWER meeting date wins and becomes/stays
-//      `value`; the OLDER one is recorded into `superseded`. Ties (equal dates) let the incoming value
-//      win, matching the pre-v2 "second meeting compounds" behavior when dates are both unknown ('').
-//   4. A value-identical incoming (same fact re-confirmed by a later meeting) only refreshes metadata
-//      (date/source/quote/confidence) — it is not a new history entry.
-//
-// Because step 3 always sorts `superseded` by date (most-recent-first) after every push rather than
-// simply prepending, the FINAL state (current value + superseded history) is a pure function of the
-// SET of {value, date, source_file} candidates ever merged for that field — independent of the order
-// they were merged in. That is what makes shuffled-order ingestion converge byte-for-byte with
-// chronological-order ingestion (see brain.test.ts's A1 property test).
+//   2. Winner selection is the deterministic TOTAL order `outranks`: EXTRACTED-grade evidence beats
+//      weaker tiers in BOTH directions (the old sector-only "never downgrade" rule, generalized —
+//      a one-directional guard would let the winner depend on arrival order in mixed-confidence
+//      sets), then meeting date, then source_file as the final tiebreak. Without the source_file
+//      tiebreak, two same-day meetings with bare `date:` frontmatter (common) or two blank-date
+//      meetings (the statSync-failure fallback) would resolve by arrival order — and backfill's
+//      completion order is nondeterministic.
+//   3. A value-identical incoming (same fact re-confirmed) refreshes the field's metadata only when
+//      it OUTRANKS the evidence already held; it is never a superseded push.
+//   4. `superseded` is deduped per value (keeping the max-(date, source_file) sighting), never
+//      contains the current value, and stays sorted by the same (date, source_file) key desc,
+//      capped at 10 — so the history array converges byte-for-byte too.
+// Known bounded exception: two same-value candidates with DIFFERENT confidence tiers can leave a
+// superseded entry citing either one's date/source depending on order (the superseded shape carries
+// no confidence slot to dedupe on). The winner and its own provenance still converge; only that one
+// history entry's metadata can vary, and only in mixed-confidence same-value sets.
 type ProvenantIncoming<T> = { value: T; source_file: string; date: string; quote?: string; confidence: Confidence }
+type SupersededEntry<T> = { value: T; date: string; source_file: string }
+
+// Date-comparison caveat (applies to `outranks` and `laterEntry`): comparison is lexical — correct
+// for same-precision ISO-8601 strings, but a bare date sorts BELOW a full timestamp of the same day
+// ("2026-01-15" < "2026-01-15T10:00:00Z"). ingestExtraction stamps whatever precision the transcript
+// frontmatter carries, so mixed-precision same-day meetings resolve deterministically, though not
+// strictly chronologically within the day.
+function outranks(
+  a: { date: string; source_file: string; confidence: Confidence },
+  b: { date: string; source_file: string; confidence: Confidence }
+): boolean {
+  const at = a.confidence === 'EXTRACTED' ? 1 : 0
+  const bt = b.confidence === 'EXTRACTED' ? 1 : 0
+  if (at !== bt) return at > bt
+  if (a.date !== b.date) return a.date > b.date
+  return a.source_file > b.source_file
+}
+
+const laterEntry = <T>(a: SupersededEntry<T>, b: SupersededEntry<T>): boolean =>
+  a.date > b.date || (a.date === b.date && a.source_file > b.source_file)
 
 function pushSuperseded<T>(
-  list: Array<{ value: T; date: string; source_file: string }>,
-  entry: { value: T; date: string; source_file: string }
-): Array<{ value: T; date: string; source_file: string }> {
-  return [...list, entry].sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0)).slice(0, 10)
+  list: SupersededEntry<T>[],
+  entry: SupersededEntry<T>,
+  currentValue: T,
+  valuesEqual: (a: T, b: T) => boolean
+): SupersededEntry<T>[] {
+  const out: SupersededEntry<T>[] = []
+  for (const e of [...list, entry]) {
+    if (valuesEqual(e.value, currentValue)) continue // superseded holds only values DIFFERENT from current
+    const i = out.findIndex((x) => valuesEqual(x.value, e.value))
+    if (i === -1) out.push(e)
+    else if (laterEntry(e, out[i])) out[i] = e // one entry per value — its most recent sighting
+  }
+  return out.sort((a, b) => (laterEntry(a, b) ? -1 : laterEntry(b, a) ? 1 : 0)).slice(0, 10)
 }
 
 function mergeProvenant<T>(
@@ -199,14 +235,16 @@ function mergeProvenant<T>(
   }
   if (current.state === 'pinned' || current.state === 'edited') {
     if (valuesEqual(current.value, incoming.value)) return current
-    return { ...current, superseded: pushSuperseded(current.superseded, { value: incoming.value, date: incoming.date, source_file: incoming.source_file }) }
+    return { ...current, superseded: pushSuperseded(current.superseded, { value: incoming.value, date: incoming.date, source_file: incoming.source_file }, current.value, valuesEqual) }
   }
-  if (current.confidence === 'EXTRACTED' && incoming.confidence !== 'EXTRACTED') return current
   if (valuesEqual(current.value, incoming.value)) {
-    if (incoming.date < current.date) return current
-    return { ...current, source_file: incoming.source_file, date: incoming.date, quote: incoming.quote ?? current.quote, confidence: incoming.confidence }
+    // Re-confirmation refreshes metadata only when the incoming evidence outranks what we already
+    // hold. Deliberately NO refresh from a weaker-confidence (or older, or tied-but-lower-file)
+    // sighting of the same value: provenance keeps citing the strongest, then most recent, evidence.
+    if (!outranks(incoming, current)) return current
+    return { ...current, source_file: incoming.source_file, date: incoming.date, quote: incoming.quote, confidence: incoming.confidence }
   }
-  if (incoming.date >= current.date) {
+  if (outranks(incoming, current)) {
     return {
       value: incoming.value,
       source_file: incoming.source_file,
@@ -214,10 +252,10 @@ function mergeProvenant<T>(
       quote: incoming.quote,
       confidence: incoming.confidence,
       state: 'extracted',
-      superseded: pushSuperseded(current.superseded, { value: current.value, date: current.date, source_file: current.source_file })
+      superseded: pushSuperseded(current.superseded, { value: current.value, date: current.date, source_file: current.source_file }, incoming.value, valuesEqual)
     }
   }
-  return { ...current, superseded: pushSuperseded(current.superseded, { value: incoming.value, date: incoming.date, source_file: incoming.source_file }) }
+  return { ...current, superseded: pushSuperseded(current.superseded, { value: incoming.value, date: incoming.date, source_file: incoming.source_file }, current.value, valuesEqual) }
 }
 
 const eqStrict = <T>(a: T, b: T): boolean => a === b
@@ -378,9 +416,13 @@ export async function mergeExtraction(
       deal.win_likelihood_band = deal.win_likelihood_band_provenance.value
       deal.band_evidence = deal.win_likelihood_band_provenance.quote ?? ''
     }
-    // A bland "no info this meeting" report must never clobber an already-known real signal (and once
-    // ANY provenance exists for velocity, a further bland report is a no-op — it carries nothing new).
-    if (x.deal.velocity.signal !== 'no-hard-date-found' || !deal.velocity_provenance) {
+    // 'no-hard-date-found' is the ABSENCE of information, not a competing fact: it never enters the
+    // provenance merge at all. Merging it would let a bland report clobber a real calendar signal
+    // (it can carry a newer date), and even just SEEDING provenance with it would leave a bland
+    // "superseded" history entry only in the ingestion orders where it happened to arrive first —
+    // breaking the order-independence guarantee. Deals whose meetings never surface a real signal
+    // simply keep the bland default `velocity` with no provenance, exactly like a v1 file.
+    if (x.deal.velocity.signal !== 'no-hard-date-found') {
       deal.velocity_provenance = mergeProvenant(
         deal.velocity_provenance,
         { value: x.deal.velocity, source_file: ref.file, date: ref.date, confidence: 'EXTRACTED' },
