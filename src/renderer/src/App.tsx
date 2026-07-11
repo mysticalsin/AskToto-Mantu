@@ -957,7 +957,10 @@ export function App(): JSX.Element {
   }, [listen.listening])
 
   const whatNext = useCallback(() => {
-    if (!requireProvider()) return
+    // Gate on the suggest task: the dominant live-meeting route (transcript present) fires mode
+    // 'suggest', which Métis Local serves — a local-only setup must reach it. The rarer no-transcript
+    // text route fires mode 'answer' (cloud-only) and re-gates bare below before it can error out.
+    if (!requireProvider('suggest')) return
     const typed = input.trim()
     const transcript = listen.text()
     const canUseScreen = Boolean((settings?.screenAsk ?? true) && settings?.visionAvailable)
@@ -973,6 +976,9 @@ export function App(): JSX.Element {
       void askScreen(buildWhatNextPrompt('', 'screen'), { label: 'Viewed screen', history: historyRef.current })
       return
     }
+    // Text route fires mode 'answer' — Métis Local never serves it, so this branch needs a cloud
+    // provider even when the suggest gate above passed on localSuggestReady alone.
+    if (route.transport === 'text' && !requireProvider()) return
     if (route.transport === 'suggest') {
       // Instant path: a fresh speculative suggestion (conversation moved ≤2 lines since it generated)
       // paints IMMEDIATELY — no round trip. A stale/absent one falls through to the normal live run.
@@ -2102,6 +2108,7 @@ export function App(): JSX.Element {
               rainbowRing={settings?.quickActionsRainbow !== false}
               providerReady={settings?.providerReady ?? false}
               localSummaryReady={settings?.localSummaryReady ?? false}
+              localSuggestReady={settings?.localSuggestReady ?? false}
             />
           )}
           {/* Listen-engine status (offline/reconnecting/crash notes) — shown regardless of which view is

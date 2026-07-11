@@ -98,8 +98,14 @@ describe('requireProvider(local?) call-site contract (H1)', () => {
     expect(requireProviderArgAfter('const factCheck = useCallback(')).toBe('')
   })
 
-  it('whatNext can fire mode "answer" (no-transcript branch), not just "suggest" -> stays bare', () => {
-    expect(requireProviderArgAfter('const whatNext = useCallback(')).toBe('')
+  it('whatNext gates on suggest (dominant transcript route is local-capable, r6)', () => {
+    expect(requireProviderArgAfter('const whatNext = useCallback(')).toBe("'suggest'")
+  })
+
+  it('whatNext re-gates its cloud-only text route bare before firing mode "answer" (r6)', () => {
+    // The answer-mode branch must keep a bare provider gate even after the suggest-scoped top gate
+    // passed on localSuggestReady alone — the local model never serves answer mode.
+    expect(appSrc).toMatch(/route\.transport === 'text' && !requireProvider\(\)/)
   })
 
   it("onQuickAction's explain branch only ever fires mode \"answer\" directly -> stays bare", () => {
@@ -115,18 +121,23 @@ describe('requireProvider(local?) call-site contract (H1)', () => {
   })
 })
 
-// r5 closure: the Summarize chip itself must be reachable for a local-only setup — App passes
-// localSummaryReady into QuickActions, and QuickActions enables ONLY the summarize chip on it (the other
-// three chips have direct answer-mode branches that only cloud serves).
-describe('QuickActions local-summary reachability (r5)', () => {
+// r5/r6 closure: the local-capable chips must be reachable for a local-only setup — App passes the
+// per-task readiness flags into QuickActions, which enables ONLY the summarize chip (summary mode) and
+// the whatnext chip (transcript route fires suggest mode); fact-check and explain keep the cloud gate
+// because their direct branches all fire answer mode.
+describe('QuickActions local reachability (r5/r6)', () => {
   const appSrc = readFileSync(join(__dirname, 'App.tsx'), 'utf8')
   const qaSrc = readFileSync(join(__dirname, 'components', 'QuickActions.tsx'), 'utf8')
 
-  it('App passes localSummaryReady into QuickActions', () => {
+  it('App passes localSummaryReady and localSuggestReady into QuickActions', () => {
     expect(appSrc).toMatch(/localSummaryReady=\{settings\?\.localSummaryReady \?\? false\}/)
+    expect(appSrc).toMatch(/localSuggestReady=\{settings\?\.localSuggestReady \?\? false\}/)
   })
 
-  it('QuickActions enables only the summarize chip via localSummaryReady', () => {
-    expect(qaSrc).toMatch(/providerReady \|\| \(a\.kind === 'summarize' && localSummaryReady\)/)
+  it('QuickActions enables exactly the summarize and whatnext chips via their local flags', () => {
+    expect(qaSrc).toMatch(/\(a\.kind === 'summarize' && localSummaryReady\)/)
+    expect(qaSrc).toMatch(/\(a\.kind === 'whatnext' && localSuggestReady\)/)
+    expect(qaSrc).not.toMatch(/a\.kind === 'factcheck' &&/)
+    expect(qaSrc).not.toMatch(/a\.kind === 'explain' &&/)
   })
 })
