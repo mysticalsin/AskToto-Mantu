@@ -281,19 +281,11 @@ export function getSettings(): Settings {
   // user layer so org policy always wins.
   const lockedKeys = getLockedKeys()
   if (lockedKeys.length) for (const k of lockedKeys) delete (raw as Record<string, unknown>)[k]
-  // Task MI-5: publishBrainPages's first-run default follows `!encryptTranscripts` — computed ONLY while
-  // the key has never been set on EITHER the user layer or managed/org policy (an explicit choice,
-  // including explicitly re-choosing the same value the derivation would have picked, always wins and is
-  // never recomputed on a later read). A locked key is skipped too, even though managed already covers
-  // that case in practice (a locked key's authoritative value lives in managed, so 'publishBrainPages' in
-  // managed is already true then) — defense in depth against the derivation ever fighting org policy.
-  if (
-    !('publishBrainPages' in raw) &&
-    !('publishBrainPages' in managed) &&
-    !lockedKeys.includes('publishBrainPages')
-  ) {
-    raw.publishBrainPages = !(raw.encryptTranscripts ?? managed.encryptTranscripts ?? DEFAULT_SETTINGS.encryptTranscripts)
-  }
+  // Task MI-5 (hardened — QA #9): publishBrainPages is EXPLICIT opt-in only (schema default false). It is
+  // deliberately NEVER derived from `!encryptTranscripts`. Deriving it meant turning at-rest encryption
+  // OFF (an unrelated action) silently flipped publishing ON and materialized a full Dust-readable wiki
+  // mirror with no consent dialog. Publishing a readable intelligence mirror to OneDrive is its own
+  // decision, made only through the native consent gate in main/index.ts's settings:set handler.
   const whole = SettingsSchema.safeParse({ ...base, ...raw })
   let value: Settings
   if (whole.success) {

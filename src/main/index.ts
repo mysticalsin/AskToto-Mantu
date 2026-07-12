@@ -1510,7 +1510,10 @@ function registerIpc(): void {
     if (cur.publishBrainPages && !next.publishBrainPages) {
       const r = removeWiki(next)
       auditLog('brain.publish.disabled', { ok: r.ok })
-    } else if (!cur.publishBrainPages && next.publishBrainPages) {
+    } else if ('publishBrainPages' in p && next.publishBrainPages && !cur.publishBrainPages) {
+      // Materialize the wiki ONLY when the user EXPLICITLY turned publishing on in THIS patch (it has
+      // already passed the consent gate above). Never fire on a derived/side-effect flip of the value
+      // caused by an unrelated setting change — that was the silent-publish path in QA #9.
       void publishAll(next)
     }
     win?.setContentProtection(contentProtectionOn())
