@@ -1654,7 +1654,10 @@ export function App(): JSX.Element {
     ),
     [reset, savedPath, openPastMeeting]
   )
-  const brainBody = useMemo(() => <BrainView onBack={() => setView(brainReturnViewRef.current)} />, [])
+  const brainBody = useMemo(
+    () => <BrainView onBack={() => setView(brainReturnViewRef.current)} onOpenMeeting={openPastMeeting} />,
+    [openPastMeeting]
+  )
   const agendaBody = useMemo(() => <AgendaView />, [])
   const copilotBody = useMemo(
     () => (

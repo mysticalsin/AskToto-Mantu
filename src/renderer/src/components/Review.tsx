@@ -6,6 +6,7 @@ import { isNonSpeechLine } from '@shared/transcript-filter'
 import { talkStats } from '@shared/talkstats'
 import { Markdown } from './Markdown'
 import { Chip, TextButton, Spinner } from './ui'
+import { ReviewEntityStrip } from './ReviewEntityStrip'
 import { useFlash } from '../lib/useFlash'
 
 function clock(t: number): string {
@@ -457,6 +458,11 @@ export const Review = memo(function Review({
           <span className="font-medium text-[var(--color-success)]">Open</span>
         </button>
       )}
+
+      {/* Entities in this meeting (Task MI-3) — the moment-of-truth correction strip. Renders nothing
+          until the meeting's extraction lands (and never when the brain is off), so it can't shift the
+          layout for anyone else; dismissible; blocks no other Review interaction. */}
+      <ReviewEntityStrip file={savedPath} />
 
       {/* 90-SECOND DEBRIEF — the unsaid, captured while it's still warm. Live reviews only (a past
           meeting's moment has passed). Stored inside the saved meeting file: same encryption, same
