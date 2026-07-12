@@ -2,7 +2,7 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { normalizeKey, scoreCategory, scoreExtraction, formatReport, runEval } from './eval-extraction.mjs'
+import { normalizeKey, scoreCategory, scoreExtraction, formatReport, runEval, toScorable } from './eval-extraction.mjs'
 
 const temporaryRoots: string[] = []
 afterEach(async () => {
@@ -117,8 +117,42 @@ describe('formatReport', () => {
   })
 })
 
+describe('toScorable (Task MI-4 — adapts a real MeetingExtraction into the golden comparison shape)', () => {
+  it('maps the singular nullable account/deal into the golden flat/plural arrays', () => {
+    const extraction = {
+      people: [{ name: 'Sarah Chen', role: 'CFO', org: 'Acme Bank', confidence: 'EXTRACTED' }],
+      account: { name: 'Acme Bank', sector: 'banking', sector_confidence: 'EXTRACTED', confidence: 'EXTRACTED' },
+      deal: { name: 'Acme Core Banking Migration', stage: 'negotiation', win_likelihood_band: null, band_evidence: '', velocity: { signal: 'no-hard-date-found', evidence: '' } },
+      numeric_facts: [{ kind: 'amount', value: 2_400_000, unit: 'EUR', quote: 'the total contract value comes in at 2.4M EUR', confidence: 'EXTRACTED' }],
+      commitments: [{ text: 'send over the updated security pack', by: 'you', due_hint: '', quote: '', confidence: 'EXTRACTED' }]
+    }
+    expect(toScorable(extraction)).toEqual({
+      people: [{ name: 'Sarah Chen', role: 'CFO', org: 'Acme Bank' }],
+      accounts: [{ name: 'Acme Bank', sector: 'banking' }],
+      deals: [{ name: 'Acme Core Banking Migration', account: 'Acme Bank', stage: 'negotiation' }],
+      numeric_facts: [{ kind: 'amount', value: 2_400_000, unit: 'EUR', quote: 'the total contract value comes in at 2.4M EUR' }],
+      commitments: [{ text: 'send over the updated security pack', by: 'you' }]
+    })
+  })
+
+  it('a null account/deal maps to empty arrays, never a fabricated entry', () => {
+    expect(toScorable({ people: [], account: null, deal: null, numeric_facts: [], commitments: [] })).toEqual({
+      people: [],
+      accounts: [],
+      deals: [],
+      numeric_facts: [],
+      commitments: []
+    })
+  })
+
+  it('is defensive against a missing/undefined extraction (matches the pre-existing "no actual file" contract)', () => {
+    expect(toScorable(undefined)).toEqual({ people: [], accounts: [], deals: [], numeric_facts: [], commitments: [] })
+    expect(toScorable({})).toEqual({ people: [], accounts: [], deals: [], numeric_facts: [], commitments: [] })
+  })
+})
+
 describe('runEval (reads real golden + actual directories)', () => {
-  it('scores an actual-dir against a golden-dir on disk, missing actual files count as full misses', async () => {
+  it('scores a REAL MeetingExtraction-shaped actual file (singular account/deal) against a golden-dir on disk, missing actual files count as full misses', async () => {
     const goldenDir = await mkdtemp(join(tmpdir(), 'eval-golden-'))
     const actualDir = await mkdtemp(join(tmpdir(), 'eval-actual-'))
     temporaryRoots.push(goldenDir, actualDir)
@@ -138,7 +172,17 @@ describe('runEval (reads real golden + actual directories)', () => {
       JSON.stringify({ people: [{ name: 'Nobody Here' }], accounts: [], deals: [], numeric_facts: [], commitments: [] })
     )
 
-    await writeFile(join(actualDir, '01-acme.json'), JSON.stringify(expected)) // exact match
+    // The `.brain/meetings/<slug>.json` shape ingestExtraction actually writes — singular nullable
+    // account/deal, not the golden's flat plural arrays — this is the real contract runEval must score.
+    const realExtraction = {
+      schema_version: 2,
+      people: [{ name: 'Sarah Chen', role: 'CFO', org: 'Acme', confidence: 'EXTRACTED' }],
+      account: { name: 'Acme', sector: 'banking', sector_confidence: 'EXTRACTED', confidence: 'EXTRACTED' },
+      deal: null,
+      numeric_facts: [{ kind: 'amount', value: 100, unit: null, quote: 'a hundred units', confidence: 'EXTRACTED' }],
+      commitments: []
+    }
+    await writeFile(join(actualDir, '01-acme.json'), JSON.stringify(realExtraction))
 
     const rows = runEval(actualDir, goldenDir)
     const byCategory = Object.fromEntries(rows.map((r) => [r.category, r]))
