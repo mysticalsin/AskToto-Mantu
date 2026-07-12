@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { safeStorage } from 'electron'
 import { saveMeeting, isEncryptedFile } from './transcripts'
-import { listMeetings, deleteMeeting, recallRead, searchMeetings, deleteAllMeetings, sweepExpiredMeetings, updateMeetingRecap } from './recall'
+import { listMeetings, deleteMeeting, recallRead, searchMeetings, deleteAllMeetings, sweepExpiredMeetings, updateMeetingRecap, renameMeeting } from './recall'
 import type { Settings, SaveMeeting } from '@shared/ipc'
 
 vi.mock('electron')
@@ -385,6 +385,66 @@ describe('recall — updateMeetingRecap', () => {
     const read = await recallRead(file)
     expect(read.ok).toBe(true)
     if (read.ok) expect(read.recap).toBe('Edited while encrypted.')
+  })
+})
+
+describe('recall — renameMeeting', () => {
+  let folder: string
+
+  beforeEach(() => {
+    folder = mkdtempSync(join(tmpdir(), 'asktoto-recall-test-'))
+    testSettings = { meetingsFolder: folder, encryptTranscripts: false } as Settings
+  })
+
+  afterEach(() => {
+    rmSync(folder, { recursive: true, force: true })
+    vi.restoreAllMocks()
+  })
+
+  const meeting: SaveMeeting = {
+    title: 'Q3 planning sync',
+    mode: 'meeting',
+    startedAt: 1_700_000_000_000,
+    lines: [{ speaker: 'them', text: 'Let us lock the roadmap', t: 1_700_000_000_000 }],
+    recap: 'Decided to ship in Q3.'
+  }
+
+  // Regression test: a title containing $-replacement patterns ($&, $1, $`, $$) used to corrupt the
+  // frontmatter and H1 because renameMeeting fed the title as the REPLACEMENT STRING to String.replace,
+  // where $ is special. Fixed by using replacement functions instead, so it must round-trip verbatim.
+  it('rewrites the title verbatim when it contains $-replacement patterns, round-tripping through disk', async () => {
+    const file = await saveMeeting(testSettings, meeting)
+    const title = 'Deal $500 (A&B) $1 win'
+    const r = await renameMeeting(testSettings, file, title)
+    expect(r.ok).toBe(true)
+
+    const raw = readFileSync(file, 'utf8')
+    expect(raw).toContain(`title: "${title}"`)
+    expect(raw).toContain(`# ${title}`)
+    // The frontmatter block must still be well-formed (single quoted title: line, closed by ---).
+    expect(raw.match(/^---\n[\s\S]*?\n---/)?.[0]).toContain(`title: "${title}"`)
+
+    const read = await recallRead(file)
+    expect(read.ok).toBe(true)
+    if (read.ok) expect(read.title).toBe(title)
+  })
+
+  it('handles other $-patterns ($$, $`, $\') without corrupting the file', async () => {
+    const file = await saveMeeting(testSettings, meeting)
+    const title = "cost $$ high $` tail $' end"
+    const r = await renameMeeting(testSettings, file, title)
+    expect(r.ok).toBe(true)
+    const raw = readFileSync(file, 'utf8')
+    expect(raw).toContain(`title: "${title}"`)
+    expect(raw).toContain(`# ${title}`)
+  })
+
+  it('still rewrites a plain title with no special characters', async () => {
+    const file = await saveMeeting(testSettings, meeting)
+    const r = await renameMeeting(testSettings, file, 'Renamed sync')
+    expect(r.ok).toBe(true)
+    const read = await recallRead(file)
+    if (read.ok) expect(read.title).toBe('Renamed sync')
   })
 })
 
