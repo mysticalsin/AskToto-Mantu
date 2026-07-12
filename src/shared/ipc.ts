@@ -167,8 +167,7 @@ export const IPC = {
   localTranscriptBegin: 'local-ai:transcript:begin',
   localTranscriptAppend: 'local-ai:transcript:append',
   localTranscriptResync: 'local-ai:transcript:resync',
-  localTranscriptEnd: 'local-ai:transcript:end',
-  brainAnalyze: 'brain:analyze'
+  localTranscriptEnd: 'local-ai:transcript:end'
 } as const
 
 /** User's verdict on an answer (metadata only — never the answer text). Feeds the audit log + future evals. */

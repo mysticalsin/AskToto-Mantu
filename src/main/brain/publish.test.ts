@@ -273,6 +273,40 @@ describe('publish.ts — Task MI-5 markdown mirror', () => {
     })
 
     it('surface 2b — falls back to "not established" when EVERY sighting of a field is confidential-sourced', async () => {
+      // The entity has a NON-confidential meeting (so it still gets a page — see surface 2c for the
+      // all-confidential case), but the sector's only sighting is the confidential meeting: it must fall
+      // back to "not established", never surfacing the confidential value or the confidential meeting name.
+      writeMeetingFile(folder, 'open.md', { date: '2026-01-02', title: 'Open sync' })
+      writeMeetingFile(folder, 'only-secret.md', { date: '2026-01-01', confidential: true })
+      const account = AccountEntitySchema.parse({
+        id: 'shadow-co',
+        name: 'Shadow Co',
+        aliases: [],
+        meetings: [
+          { file: 'open.md', date: '2026-01-02', title: 'Open sync' },
+          { file: 'only-secret.md', date: '2026-01-01', title: 'Secret meeting' }
+        ],
+        sector_provenance: {
+          value: 'banking',
+          source_file: 'only-secret.md',
+          date: '2026-01-01',
+          confidence: 'EXTRACTED',
+          state: 'extracted',
+          superseded: []
+        }
+      })
+      await writeAccount(s, 'shadow-co', account)
+      await publishEntity(s, 'account', 'shadow-co')
+      const content = readFileSync(join(wikiDir(s), 'accounts', 'shadow-co.md'), 'utf8')
+      expect(content).not.toContain('banking')
+      expect(content).toMatch(/\| Sector \| not established \|/)
+      expect(content).not.toContain('Secret meeting')
+    })
+
+    it('surface 2c — an entity whose EVERY meeting is confidential gets NO page at all (QA #11 — identity not leaked)', async () => {
+      // A page for such an entity would be fully redacted in its body, but its HEADER still prints the
+      // entity's real name + aliases (and the index would list it) — itself a leak of an account that
+      // exists only in confidential meetings. So no page is written, and any stale one is removed.
       writeMeetingFile(folder, 'only-secret.md', { date: '2026-01-01', confidential: true })
       const account = AccountEntitySchema.parse({
         id: 'shadow-co',
@@ -290,10 +324,7 @@ describe('publish.ts — Task MI-5 markdown mirror', () => {
       })
       await writeAccount(s, 'shadow-co', account)
       await publishEntity(s, 'account', 'shadow-co')
-      const content = readFileSync(join(wikiDir(s), 'accounts', 'shadow-co.md'), 'utf8')
-      expect(content).not.toContain('banking')
-      expect(content).toMatch(/\| Sector \| not established \|/)
-      expect(content).not.toContain('Secret meeting')
+      expect(existsSync(join(wikiDir(s), 'accounts', 'shadow-co.md'))).toBe(false)
     })
 
     it('surface 3 — indexes (index.md) exclude confidential meetings from Recent meetings', async () => {

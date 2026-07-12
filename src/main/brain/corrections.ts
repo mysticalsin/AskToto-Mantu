@@ -651,6 +651,13 @@ export function applyCorrections(
     if (p.name.trim()) p.name = rewrite('person', p.name)
     if (p.org && p.org.trim()) p.org = rewrite('account', p.org)
   }
+  // A commitment's `by` is a person name that mergeExtraction later matches against the (already
+  // rewritten) p.name to attach it to that person's ledger (ingest.ts: `c.by === p.name`). Rewrite it
+  // through the SAME alias map here, or a rename would leave `by` on the old name, the name-match would
+  // miss on rebuild, and the commitment would be silently dropped from the person's ledger (data loss).
+  for (const c of x.commitments ?? []) {
+    if (c.by && c.by.trim()) c.by = rewrite('person', c.by)
+  }
   if (x.deal && x.deal.name.trim()) x.deal.name = rewrite('deal', x.deal.name)
 }
 

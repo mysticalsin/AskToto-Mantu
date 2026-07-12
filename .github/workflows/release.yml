@@ -99,18 +99,10 @@ jobs:
             resources/asr
             resources/ort
           key: asr-models-${{ runner.os }}-${{ hashFiles('scripts/fetch-models.mjs') }}
-      - name: Cache immutable local AI assets
-        uses: actions/cache@v4
-        with:
-          path: resources/local-ai/cache
-          key: local-ai-darwin-arm64-${{ hashFiles('resources/local-ai/candidates.json') }}
-      - name: Fetch selected local AI assets
-        run: npm run fetch:local-ai
-      - name: Stage selected local AI payload (darwin-arm64)
-        run: npm run stage:local-ai -- --platform darwin-arm64
-      # Tagged releases stay closed until Task 12 promotes a benchmarked selection to approval=release.
-      - name: Require release-approved local AI payload offline (darwin-arm64)
-        run: npm run check:local-ai -- --platform darwin-arm64 --require-release
+      # Local LLM models are downloaded on-device at runtime (Settings → download model), not bundled at
+      # build. The llama-server sidecar + ASR models are fetched inside `npm run release` itself
+      # (fetch-llama-server.mjs + fetch-models.mjs — see package.json), so no separate local-ai staging
+      # step exists any more (the old fetch/stage/check:local-ai scripts were removed in the one-app merge).
       - run: npm run release -- --arm64
         env:
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
@@ -206,18 +198,10 @@ jobs:
             resources/asr
             resources/ort
           key: asr-models-${{ runner.os }}-${{ hashFiles('scripts/fetch-models.mjs') }}
-      - name: Cache immutable local AI assets
-        uses: actions/cache@v4
-        with:
-          path: resources/local-ai/cache
-          key: local-ai-win32-x64-${{ hashFiles('resources/local-ai/candidates.json') }}
-      - name: Fetch selected local AI assets
-        run: npm run fetch:local-ai
-      - name: Stage selected local AI payload (win32-x64)
-        run: npm run stage:local-ai -- --platform win32-x64
-      # Tagged releases stay closed until Task 12 promotes a benchmarked selection to approval=release.
-      - name: Require release-approved local AI payload offline (win32-x64)
-        run: npm run check:local-ai -- --platform win32-x64 --require-release
+      # Local LLM models are downloaded on-device at runtime (Settings → download model), not bundled at
+      # build. The llama-server sidecar + ASR models are fetched inside `npm run release:win` itself
+      # (fetch-llama-server.mjs + fetch-models.mjs — see package.json), so no separate local-ai staging
+      # step exists any more (the old fetch/stage/check:local-ai scripts were removed in the one-app merge).
       - run: npm run release:win -- --x64
         env:
           GH_TOKEN: ${{ secrets.GH_TOKEN }}

@@ -96,8 +96,9 @@ describe('graphifyRefusalReason / graphifySourceDir (Task MI-5 — graphify inhe
   it('unencrypted: never refuses, always scans the meetings folder directly (unchanged pre-MI-5 behavior)', () => {
     expect(graphifyRefusalReason(s({ encryptTranscripts: false }))).toBeNull()
     expect(graphifySourceDir(s({ encryptTranscripts: false }))).toBe('/meetings')
-    // publishBrainPages being on doesn't change anything while unencrypted — no reason to redirect.
-    expect(graphifySourceDir(s({ encryptTranscripts: false, publishBrainPages: true }))).toBe('/meetings')
+    // QA #10: with publishing ON, the graph is built from the confidential-free wiki mirror even when
+    // unencrypted — the raw meetings folder still contains confidential meetings; the mirror excludes them.
+    expect(graphifySourceDir(s({ encryptTranscripts: false, publishBrainPages: true }))).toBe(join('/meetings', 'wiki'))
   })
 
   it('encrypted + publishBrainPages off: refuses outright (the old deadlock, unchanged)', () => {
