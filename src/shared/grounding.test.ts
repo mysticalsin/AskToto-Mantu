@@ -213,6 +213,42 @@ describe('extractNumerals', () => {
     expect(threeHalfMillion.some((h) => h.value === 2_000_000)).toBe(false)
   })
 
+  it('FIX 4b: a superscript-square unit with an SI PREFIX ("50km²") must not strand the prefix into a fabricated magnitude', () => {
+    // Neutralizing only the '²' would leave "50k", and that 'k' then reads as a ×1000 magnitude
+    // suffix — fabricating 50,000, a WORSE lie than the bare '2' the raw superscript would produce.
+    // The WHOLE unit token (letter-run + superscript) must be blanked: '50km²' -> 50, never 50000.
+    const km2 = vals('50km²')
+    expect(km2).toContainEqual({ value: 50, unit: null })
+    expect(km2.some((h) => h.value === 50_000)).toBe(false)
+
+    // Same for a mega-prefix and a cube: '50Mm²' -> 50 (never 50,000,000), '50km³' -> 50 (never 50,000).
+    expect(vals('50Mm²').some((h) => h.value === 50_000_000)).toBe(false)
+    expect(vals('50Mm²')).toContainEqual({ value: 50, unit: null })
+    expect(vals('50km³').some((h) => h.value === 50_000)).toBe(false)
+    expect(vals('50km³')).toContainEqual({ value: 50, unit: null })
+
+    // The precomposed square-km glyph '㎢' (NFKC -> "km2") is blanked the same way: '50㎢' -> 50.
+    expect(vals('50㎢')).toContainEqual({ value: 50, unit: null })
+    expect(vals('50㎢').some((h) => h.value === 50_000)).toBe(false)
+
+    // Regression guard: a REAL magnitude letter ('k' NOT followed by a superscript) is untouched.
+    expect(vals('50k EUR')).toContainEqual({ value: 50_000, unit: 'EUR' })
+    // And a bare superscript with no preceding letters ('3²') fails closed to just 3, not 9 or 32.
+    const bareSup = vals('3²')
+    expect(bareSup).toContainEqual({ value: 3, unit: null })
+    expect(bareSup.some((h) => h.value === 9 || h.value === 32 || h.value === 2)).toBe(false)
+  })
+
+  it('FIX 4c: enclosed-alphanumerics ("①", "⑴") are list bullets — never fabricate a digit and never skew offsets', () => {
+    // '①' NFKC-folds to '1', '②' to '2' — list markers, not stated numeric values. Fail closed: no hit.
+    const bullets = extractNumerals('grow ① cut ②')
+    expect(bullets.some((h) => h.value === 1)).toBe(false)
+    expect(bullets.some((h) => h.value === 2)).toBe(false)
+    // '⑴' NFKC-decomposes to the 3-char "(1)" — both a fabricated 1 AND a length change that would skew
+    // every downstream offset. Neutralized to a single space BEFORE folding: no hit, no skew.
+    expect(extractNumerals('point ⑴ here').some((h) => h.value === 1)).toBe(false)
+  })
+
   it('is fail-closed on an unsupported grouping (not a clean run of 3-digit groups): no fabricated hit', () => {
     // "12,34,567" is not a valid thousands grouping (middle group is 2 digits, not 3) — out of the
     // documented scope. Must not silently invent 1234567 (or any other value) from it.
@@ -336,6 +372,19 @@ describe('verifyNumericFact', () => {
     expect(verifyNumericFact({ value: 50, quote }, t)).toBe('verified')
     expect(verifyNumericFact({ value: 2, quote }, t)).toBe('unverified')
     expect(verifyNumericFact({ value: 50_000_000, quote }, t)).toBe('unverified')
+  })
+
+  it('FIX 4b: claiming the stranded-SI-prefix fabrication (50000) against "50km²" is unverified; the true 50 verifies', () => {
+    const t = 'Them: The plant sits on 50km² of land near the coast.'
+    const quote = 'The plant sits on 50km² of land'
+    expect(verifyNumericFact({ value: 50, quote }, t)).toBe('verified')
+    expect(verifyNumericFact({ value: 50_000, quote }, t)).toBe('unverified')
+  })
+
+  it('FIX 4c: claiming a bullet-marker value (1) near a "⑴"/"①" enclosed-alphanumeric is unverified', () => {
+    const t = 'Them: Our two priorities are ⑴ grow revenue and ② cut cost this year.'
+    expect(verifyNumericFact({ value: 1, quote: 'Our two priorities are ⑴ grow revenue' }, t)).toBe('unverified')
+    expect(verifyNumericFact({ value: 2, quote: '② cut cost this year' }, t)).toBe('unverified')
   })
 
   it('FIX 5: a ligature/compat char earlier in the transcript must not shift rule (c)\'s span off the true quote', () => {

@@ -14,16 +14,29 @@
 
 /** NFKC compatibility-decomposes several characters into fabricated digit tokens that were never
  *  written as digits in the source: vulgar fractions ('½' -> '1⁄2'), superscript/subscript digits
- *  ('²' -> '2'), and the precomposed area/volume glyphs ('㎡' -> 'm2'). Left alone, these would hand
- *  numeral extraction digits nobody said (e.g. "reduced by ½" fabricating 1 AND 2 as separate hits).
- *  Neutralized to same-length spaces BEFORE NFKC folding — so the special characters are caught before
- *  NFKC collapses them into ordinary-looking digits — so they never contribute a digit token: fail
- *  closed (no hit) rather than fabricate one. 'm²'/'m³' (and their compat glyphs) additionally strip
- *  the 'm' itself: left in place, "50m²" would fold to "50m2" and the bare 'm' magnitude LETTER (for
- *  "million") would misread it as 50 million instead of the area unit it actually is. */
+ *  ('²' -> '2'), the precomposed area/volume glyphs ('㎡' -> 'm2'), and the enclosed-alphanumerics
+ *  ('①' -> '1', '⑴' -> '(1)'). Left alone, these would hand numeral extraction digits nobody said
+ *  (e.g. "reduced by ½" fabricating 1 AND 2 as separate hits). Neutralized to same-length spaces
+ *  BEFORE NFKC folding — caught before NFKC collapses them into ordinary-looking digits — so they
+ *  never contribute a digit token: fail closed (no hit) rather than fabricate one.
+ *
+ *  Area/volume UNIT tokens are blanked WHOLE, not just their superscript: "m²", "km²", "50Mm³", and
+ *  the precomposed ㎡㎢㎥㎦. Blanking only the '²' would strand the SI-prefix letter — '50km²' -> '50k'
+ *  — and that leftover 'k' then reads as a ×1000 magnitude suffix, fabricating 50,000 (a WORSE lie
+ *  than the bare '2' the raw superscript would have produced). So any letter-run immediately followed
+ *  by a square/cube superscript is treated as one unit token and erased. A bare superscript with NO
+ *  preceding letters ('3²') is left to the fraction/superscript pass below — neutralized to nothing,
+ *  never turned into an exponent value. A genuine magnitude ('50k EUR', where 'k' is NOT followed by
+ *  a superscript) is untouched and still parses to 50,000.
+ *
+ *  Enclosed alphanumerics (①⑴⑵… U+2460–U+24FF) are list-bullet markers, never a stated numeric value;
+ *  '⑴' additionally NFKC-decomposes to the 3-char "(1)", which would break foldCase's length-preserving
+ *  assumption and skew every downstream offset. Each is replaced with a single space (length-preserving,
+ *  no fabricated digit). */
 function neutralizeNumericArtifacts(s: string): string {
-  let out = s.replace(/[mM][²³]|[㎡㎥]/g, (m) => ' '.repeat(m.length))
+  let out = s.replace(/\p{L}+[²³]|[㎡㎢㎥㎦]/gu, (m) => ' '.repeat(m.length))
   out = out.replace(/[¼-¾⅐-⅟²³¹⁰-₟]/g, ' ')
+  out = out.replace(/[①-⓿]/g, ' ')
   return out
 }
 
