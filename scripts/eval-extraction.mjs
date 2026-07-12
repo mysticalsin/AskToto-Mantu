@@ -5,10 +5,14 @@
  * prints per-category precision/recall plus totals. Always exits 0 — it reports, it does not gate.
  *
  * Usage: node scripts/eval-extraction.mjs <actual-dir> <golden-dir>
- *   <actual-dir>  holds one `<slug>.json` per scored meeting, in the SAME shape as a golden
- *                 `<slug>.expected.json` (people/accounts/deals/numeric_facts/commitments) — this is
- *                 the ground-truth contract MI-0 defines for what a meeting extraction must produce;
- *                 a later task is what wires the real ingest pipeline to emit it under `.brain/meetings/`.
+ *   <actual-dir>  holds one `<slug>.json` per scored meeting — a REAL MeetingExtraction object, the
+ *                 exact shape ingestExtraction persists to `.brain/meetings/<slug>.json` (schema_version,
+ *                 title24, a singular nullable `account`/`deal`, `people`/`commitments`/`numeric_facts`
+ *                 arrays, etc. — see src/shared/brain.ts's MeetingExtractionSchema). `toScorable()` below
+ *                 adapts that real shape into the golden `expected.json`'s flat, plural comparison shape
+ *                 (people/accounts/deals/numeric_facts/commitments) before scoring — Task MI-4 closed the
+ *                 gap MI-0 left open (this script used to require actual-dir already pre-shaped like a
+ *                 golden file, an interim contract nothing in the real pipeline ever produced).
  *   <golden-dir>  holds `<slug>.md` + `<slug>.expected.json` pairs (see src/shared/golden-set.test.ts).
  *
  * Only golden-labeled slugs are scored — an actual-dir entry with no golden counterpart has nothing
@@ -107,6 +111,23 @@ export function formatReport(rows) {
   return lines.join('\n')
 }
 
+/**
+ * Adapts a real MeetingExtraction object (singular nullable `account`/`deal`) into the golden
+ * `expected.json`'s flat, plural comparison shape (Task MI-4). `confidence` is deliberately dropped —
+ * every `keyFn` in CATEGORIES below already ignores it (numeric_facts scores on kind+value+unit alone),
+ * so keeping the mapping minimal avoids a false sense of a richer comparison than actually happens.
+ */
+export function toScorable(extraction) {
+  const x = extraction ?? {}
+  return {
+    people: (x.people ?? []).map((p) => ({ name: p.name, role: p.role ?? null, org: p.org ?? null })),
+    accounts: x.account ? [{ name: x.account.name, sector: x.account.sector }] : [],
+    deals: x.deal ? [{ name: x.deal.name, account: x.account?.name ?? '', stage: x.deal.stage }] : [],
+    numeric_facts: (x.numeric_facts ?? []).map((f) => ({ kind: f.kind, value: f.value, unit: f.unit ?? null, quote: f.quote })),
+    commitments: (x.commitments ?? []).map((c) => ({ text: c.text, by: c.by }))
+  }
+}
+
 function loadGoldenBySlug(goldenDir) {
   const out = {}
   for (const f of readdirSync(goldenDir)) {
@@ -121,7 +142,7 @@ function loadActualBySlug(actualDir, slugs) {
   const out = {}
   for (const slug of slugs) {
     const file = join(actualDir, `${slug}.json`)
-    out[slug] = existsSync(file) ? JSON.parse(readFileSync(file, 'utf8')) : {}
+    out[slug] = existsSync(file) ? toScorable(JSON.parse(readFileSync(file, 'utf8'))) : {}
   }
   return out
 }
