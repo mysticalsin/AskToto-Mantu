@@ -4379,6 +4379,22 @@ function IntelligenceTab({
       <GraphSection settings={settings} patch={patch} />
 
       <Section
+        title="Published wiki (Dust-readable)"
+        desc="Mirrors your CRM-corrected brain — account/people/deal pages and meeting note cards — as plain markdown under a wiki/ folder next to your meetings, so Dust and other agents can read it."
+      >
+        <ToggleRow
+          label="Publish meeting intelligence"
+          desc={
+            settings.encryptTranscripts
+              ? 'Publishes readable meeting intelligence to your OneDrive folder, even though transcript encryption stays on. Meetings you flag confidential are always excluded. You will be asked to confirm.'
+              : 'Publishes readable meeting intelligence to your OneDrive folder. Meetings you flag confidential are always excluded.'
+          }
+          on={settings.publishBrainPages}
+          onChange={(v) => patch({ publishBrainPages: v })}
+        />
+      </Section>
+
+      <Section
         title="Polo Pre-Sales"
         desc="Push meeting recaps to your pre-sales CRM. Manual and review-first: nothing sends automatically."
       >

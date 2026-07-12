@@ -43,6 +43,7 @@ import {
   appendAsrCorrection,
   RenameMeetingPayloadSchema,
   UpdateRecapPayloadSchema,
+  SetConfidentialPayloadSchema,
   ImportAudioStartSchema,
   ImportJobIdSchema,
   ImportDecoderChunkSchema,
@@ -91,8 +92,10 @@ import {
   updateEntityField,
   rejectCommitment,
   isJournalCorruptionBlocked,
-  clearJournalCorruptionLock
+  clearJournalCorruptionLock,
+  readCorrectionsJournal
 } from './brain/corrections'
+import { publishEntity, removeFromWiki, publishAll, removeWiki } from './brain/publish'
 import { computeAttention } from './brain/attention'
 import { openIntelligenceWindow, isIntelligenceSender, syncIntelContentProtection } from './intelligence'
 import {
@@ -148,6 +151,7 @@ import {
   deleteMeeting,
   renameMeeting,
   updateMeetingRecap,
+  setMeetingConfidential,
   deleteAllMeetings,
   sweepExpiredMeetings
 } from './recall'
@@ -1351,7 +1355,7 @@ function registerIpc(): void {
     return getPlatformPermissions()
   })
 
-  ipcMain.handle(IPC.settingsSet, (e, patch) => {
+  ipcMain.handle(IPC.settingsSet, async (e, patch) => {
     assertMainWindow(e)
     const p = patch ?? {}
     // License STATE is server-authoritative: only main's activateLicense/heartbeat (license.ts) may
@@ -1361,7 +1365,30 @@ function registerIpc(): void {
     for (const k of ['licenseKey', 'licenseCompanyName', 'licenseSeatCap', 'licenseExpiresAt', 'licenseValid', 'licenseLastValidatedAt']) {
       if (k in p) delete (p as Record<string, unknown>)[k]
     }
-    const wasEncrypted = getSettings().encryptTranscripts
+    const cur = getSettings()
+    const wasEncrypted = cur.encryptTranscripts
+    // Task MI-5 consent gate: turning publishBrainPages ON while transcripts stay encrypted writes
+    // readable meeting intelligence outside the encryption boundary — require an explicit, unmissable
+    // confirmation before it takes effect, the same native-dialog-before-mutation pattern recallDelete
+    // uses ("Confirmed with a native, unmissable modal BEFORE deleting"). Declining silently drops just
+    // that one key from the patch; every other setting in the same patch still saves normally.
+    const willEncrypt = 'encryptTranscripts' in p ? !!p.encryptTranscripts : wasEncrypted
+    if ('publishBrainPages' in p && p.publishBrainPages && !cur.publishBrainPages && willEncrypt) {
+      const dialogOpts = {
+        type: 'warning' as const,
+        title: 'Publish meeting intelligence?',
+        message: 'This publishes readable meeting intelligence to your OneDrive folder.',
+        detail:
+          'Plain-text account/people/deal pages and meeting note cards will be written to your meetings folder (wiki/) so Dust and other tools can read them, even though transcript encryption stays on. Meetings flagged confidential are excluded.',
+        buttons: ['Publish', 'Cancel'],
+        defaultId: 1,
+        cancelId: 1
+      }
+      const { response } = win ? await dialog.showMessageBox(win, dialogOpts) : await dialog.showMessageBox(dialogOpts)
+      const granted = response === 0
+      auditLog('brain.publish.consent', { granted })
+      if (!granted) delete (p as Record<string, unknown>).publishBrainPages
+    }
     const next = setSettings(p)
     auditLog('settings.changed', { keys: Object.keys(p) })
     // At-rest encryption just turned on → purge any previously-built CLEARTEXT knowledge graph so it
@@ -1370,6 +1397,14 @@ function registerIpc(): void {
     if (!wasEncrypted && next.encryptTranscripts) {
       purgeGraphArtifacts()
       auditLog('graph.purged', { reason: 'encryption-enabled' })
+    }
+    // publishBrainPages turned off → the wiki mirror is derived-never-canonical, so delete it outright
+    // (audit-logged). Turned on → materialize it right away instead of waiting for the next meeting/merge.
+    if (cur.publishBrainPages && !next.publishBrainPages) {
+      const r = removeWiki(next)
+      auditLog('brain.publish.disabled', { ok: r.ok })
+    } else if (!cur.publishBrainPages && next.publishBrainPages) {
+      void publishAll(next)
     }
     win?.setContentProtection(contentProtectionOn())
     syncIntelContentProtection() // keep the dashboard window's Private View in lockstep with the overlay
@@ -1835,6 +1870,25 @@ function registerIpc(): void {
     if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message || 'Invalid edit request.' }
     const result = await updateMeetingRecap(getSettings(), parsed.data.file, parsed.data.recap)
     if (result.ok) auditLog('transcript.recap_edited', { file: basename(parsed.data.file) })
+    return result
+  })
+
+  // Task MI-5: flag/unflag a saved meeting as confidential — excludes it from every published wiki
+  // surface (note card, entity timelines/current-facts, indexes). Same guard pattern as
+  // recallUpdateRecap; audit-logged. A full republish is the simplest correct way to make the exclusion
+  // (or its reversal) take effect everywhere at once — cheap at this app's single-exec scale, and it's
+  // the exact same idempotent full regen rebuildAll already relies on.
+  ipcMain.handle(IPC.recallSetConfidential, async (e, raw) => {
+    assertMainWindow(e)
+    if (!requireAuth()) return { ok: false, error: 'Sign in with your Mantu account first.' }
+    const parsed = SetConfidentialPayloadSchema.safeParse(raw)
+    if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message || 'Invalid request.' }
+    const s = getSettings()
+    const result = await setMeetingConfidential(s, parsed.data.file, parsed.data.confidential)
+    if (result.ok) {
+      auditLog('transcript.confidential_set', { file: basename(parsed.data.file), confidential: parsed.data.confidential })
+      void publishAll(s)
+    }
     return result
   })
 
@@ -2373,6 +2427,7 @@ function registerIpc(): void {
           : readBrainDeal(getSettings(), id)?.name
     const r = await renameEntity(getSettings(), { kind, id, newName })
     if (!r.ok) return r
+    await publishEntity(getSettings(), kind, id) // Task MI-5: keep the wiki page in sync with the live rename
     // alsoFixAsr composition lives here, not in corrections.ts (that module owns brain-entity
     // mutations only) — appends the {from, to} pair to settings.asrCorrections in the exact shape
     // commitLine's correctionsRef consumer expects (see lib/listen.ts), so the live transcript stops
@@ -2405,7 +2460,13 @@ function registerIpc(): void {
     const parsed = EntityMergePayloadSchema.safeParse(raw)
     if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message || 'Invalid merge request.' }
     const r = await mergeEntities(getSettings(), parsed.data)
-    if (r.ok) auditLog('brain.entity.merged', { kind: parsed.data.kind })
+    if (r.ok) {
+      auditLog('brain.entity.merged', { kind: parsed.data.kind })
+      // Task MI-5: the survivor's page picks up the merged-in data; the source's stale page is removed.
+      const s = getSettings()
+      await publishEntity(s, parsed.data.kind, parsed.data.intoId)
+      await removeFromWiki(s, parsed.data.kind, parsed.data.fromId)
+    }
     return r
   })
   ipcMain.handle(IPC.brainEntityUnmerge, async (e, raw) => {
@@ -2413,8 +2474,20 @@ function registerIpc(): void {
     if (!requireAuth()) return { ok: false, error: 'Sign in with your Mantu account first.' }
     const parsed = EntityUnmergePayloadSchema.safeParse(raw)
     if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message || 'Invalid request.' }
-    const r = await unmergeEntities(getSettings(), parsed.data)
-    if (r.ok) auditLog('brain.entity.unmerged', {})
+    const s = getSettings()
+    // Task MI-5: unmergeEntities' payload is just {targetSeq} — read the journal (read-only, before the
+    // mutation) for the kind/fromId/intoId this hook needs to know which wiki pages to republish once
+    // both entities are restored. unmergeEntities re-derives the same entry internally to do the actual
+    // restore; this is a second, harmless read of the same journal.
+    const journalEntry = readCorrectionsJournal(s).find((en) => en.kind === 'entity_merge' && en.seq === parsed.data.targetSeq)
+    const r = await unmergeEntities(s, parsed.data)
+    if (r.ok) {
+      auditLog('brain.entity.unmerged', {})
+      if (journalEntry && journalEntry.kind === 'entity_merge') {
+        await publishEntity(s, journalEntry.payload.kind, journalEntry.payload.fromId)
+        await publishEntity(s, journalEntry.payload.kind, journalEntry.payload.intoId)
+      }
+    }
     return r
   })
   ipcMain.handle(IPC.brainEntityUpdateField, async (e, raw) => {
@@ -2423,7 +2496,10 @@ function registerIpc(): void {
     const parsed = EntityUpdateFieldPayloadSchema.safeParse(raw)
     if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message || 'Invalid field update.' }
     const r = await updateEntityField(getSettings(), parsed.data)
-    if (r.ok) auditLog('brain.entity.field_updated', { kind: parsed.data.kind, field: parsed.data.field })
+    if (r.ok) {
+      auditLog('brain.entity.field_updated', { kind: parsed.data.kind, field: parsed.data.field })
+      await publishEntity(getSettings(), parsed.data.kind, parsed.data.id)
+    }
     return r
   })
   ipcMain.handle(IPC.brainCommitmentReject, async (e, raw) => {

@@ -12,7 +12,8 @@ import {
   Pencil,
   Brain,
   Upload,
-  X
+  X,
+  Lock
 } from 'lucide-react'
 import { TextButton } from './ui'
 import { accelLabel } from '../lib/keys'
@@ -452,6 +453,16 @@ const MeetingRow = memo(function MeetingRow({
               {isActive && (
                 <span className="shrink-0 rounded-full bg-[var(--color-accent-soft)] px-2 py-0.5 text-[10px] text-[color:var(--color-accent)]">
                   Just saved
+                </span>
+              )}
+
+              {/* Task MI-5 — confidential lock chip: excluded from every published wiki page. */}
+              {m.confidential && (
+                <span
+                  title="Confidential — excluded from published intelligence"
+                  className="flex shrink-0 items-center gap-1 rounded-full bg-[var(--color-danger)]/10 px-2 py-0.5 text-[10px] text-[var(--color-danger)]"
+                >
+                  <Lock size={10} /> Confidential
                 </span>
               )}
 
