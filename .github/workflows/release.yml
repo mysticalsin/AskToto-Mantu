@@ -88,7 +88,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22.22.3
           cache: npm
       - run: npm ci
       # Same model cache as build.yml (~1.3 GB fetched by predist -> scripts/fetch-models.mjs).
@@ -99,7 +99,19 @@ jobs:
             resources/asr
             resources/ort
           key: asr-models-${{ runner.os }}-${{ hashFiles('scripts/fetch-models.mjs') }}
-      - run: npm run release
+      - name: Cache immutable local AI assets
+        uses: actions/cache@v4
+        with:
+          path: resources/local-ai/cache
+          key: local-ai-darwin-arm64-${{ hashFiles('resources/local-ai/candidates.json') }}
+      - name: Fetch selected local AI assets
+        run: npm run fetch:local-ai
+      - name: Stage selected local AI payload (darwin-arm64)
+        run: npm run stage:local-ai -- --platform darwin-arm64
+      # Tagged releases stay closed until Task 12 promotes a benchmarked selection to approval=release.
+      - name: Require release-approved local AI payload offline (darwin-arm64)
+        run: npm run check:local-ai -- --platform darwin-arm64 --require-release
+      - run: npm run release -- --arm64
         env:
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
           CSC_LINK: ${{ secrets.CSC_LINK }}
@@ -183,7 +195,7 @@ jobs:
           WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22.22.3
           cache: npm
       - run: npm ci
       # Same model cache as build.yml / release-macos (~1.3 GB fetched by predist:win -> fetch-models.mjs).
@@ -194,7 +206,19 @@ jobs:
             resources/asr
             resources/ort
           key: asr-models-${{ runner.os }}-${{ hashFiles('scripts/fetch-models.mjs') }}
-      - run: npm run release:win
+      - name: Cache immutable local AI assets
+        uses: actions/cache@v4
+        with:
+          path: resources/local-ai/cache
+          key: local-ai-win32-x64-${{ hashFiles('resources/local-ai/candidates.json') }}
+      - name: Fetch selected local AI assets
+        run: npm run fetch:local-ai
+      - name: Stage selected local AI payload (win32-x64)
+        run: npm run stage:local-ai -- --platform win32-x64
+      # Tagged releases stay closed until Task 12 promotes a benchmarked selection to approval=release.
+      - name: Require release-approved local AI payload offline (win32-x64)
+        run: npm run check:local-ai -- --platform win32-x64 --require-release
+      - run: npm run release:win -- --x64
         env:
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
           WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
