@@ -49,6 +49,7 @@ import {
   purgeBrain
 } from './store'
 import { applyCorrections, readAliasMap, resolveEntitySlug, replayCorrections, readCorrectionsJournalSafe } from './corrections'
+import { publishForExtraction, publishIndexes, publishAll } from './publish'
 
 /**
  * Brain ingest — turns one saved transcript into a structured extraction, then merges it into the
@@ -961,6 +962,11 @@ export async function ingestExtraction(
   applyCorrections(x, aliasMap)
   await writeMeetingExtraction(s, slugify(key), x)
   await mergeExtraction(s, x, ref, aliasMap, preparedText)
+  // Task MI-5: regenerate the touched entity pages + this meeting's note card right after every merge —
+  // live AND backfill alike (index regeneration is throttled separately; see finishJob/maybeFinishDrain
+  // below, which mirrors exactly how lintBrain itself batches). No-ops entirely when publishBrainPages
+  // is off, so this costs nothing when the mirror isn't in use.
+  await publishForExtraction(s, x, ref, aliasMap)
   await updateIndex(s, (idx) => {
     idx.ingested[key] = { at: Date.now(), ok: true }
   })
@@ -1009,6 +1015,9 @@ async function finishJob(result: JobResult): Promise<void> {
     await updateIndex(s, (idx) => {
       idx.warnings = lintBrain(s)
     })
+    // Task MI-5: index regen throttled exactly like lintBrain above — one regen per live ingest, one per
+    // whole backfill drain (see maybeFinishDrain below), never once per meeting during a backfill.
+    await publishIndexes(s)
   }
   // Only a backfill-origin job advances the backfill progress counter — a live (just-saved meeting) job
   // finishing while a backfill happens to be running must never nudge someone else's progress bar (this
@@ -1057,6 +1066,8 @@ function maybeFinishDrain(): void {
         i.backfillRequested = false
         i.warnings = lintBrain(sx)
       })
+      // Task MI-5: one index regen for the whole drained batch, matching the lintBrain call right above.
+      void publishIndexes(sx)
     }
     if (pendingDrainCallbacks.length > 0) {
       const cbs = pendingDrainCallbacks.splice(0, pendingDrainCallbacks.length)
@@ -1162,6 +1173,10 @@ export async function finishRebuildReplay(s: Settings): Promise<void> {
     i.replayError = undefined
     i.warnings = i.warnings.filter((w) => !w.startsWith(REPLAY_FAILED_WARNING_PREFIX))
   })
+  // Task MI-5: rebuildAll's completion is publishAll's entry point — a full, deterministic regeneration
+  // of every wiki page from the now-fully-corrected brain state, catching anything the per-merge/
+  // per-correction hooks above didn't (e.g. a merge tombstone's stale page). No-ops when publishing is off.
+  await publishAll(s)
 }
 
 /**
