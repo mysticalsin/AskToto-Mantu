@@ -26,12 +26,42 @@ files:
   - package.json
   - '!out/**/*.map'
   - '!**/*.d.ts'
-asar: true
+  # IMPORTANT — the `out/**/*` line above is what restricts app.asar to the built app: without a
+  # POSITIVE (allowlist) pattern here, electron-builder walks the whole project root and packs
+  # release/, resources/, src/, etc. into the archive (13+ GB). Any platform-specific `files:` block
+  # (mac/win, below) MUST repeat `out/**/*` + `package.json`, because platform patterns feed a separate
+  # matcher — a platform list of only `!` excludes reverts that matcher to `**/*` and re-bloats the asar.
+  # node-llama JavaScript stays in ASAR. Never ship source/local builds or CUDA/wrong-architecture packages.
+  - '!node_modules/@node-llama-cpp/*-cuda/**'
+  - '!node_modules/@node-llama-cpp/*-cuda-ext/**'
+  - '!node_modules/@node-llama-cpp/linux-*/**'
+  - '!node_modules/@node-llama-cpp/mac-x64/**'
+  - '!node_modules/@node-llama-cpp/win-arm64/**'
+  - '!node_modules/node-llama-cpp/llama/localBuilds/**'
+  # Prebuilt-only runtime: remove compiler inputs while retaining the runtime release metadata,
+  # package metadata, and grammars that node-llama reads from the installed module.
+  - '!node_modules/node-llama-cpp/llama/addon/**'
+  - '!node_modules/node-llama-cpp/llama/cmake/**'
+  - '!node_modules/node-llama-cpp/llama/gpuInfo/**'
+  - '!node_modules/node-llama-cpp/llama/patches/**'
+  - '!node_modules/node-llama-cpp/llama/profiles/**'
+  - '!node_modules/node-llama-cpp/llama/toolchains/**'
+  - '!node_modules/node-llama-cpp/llama/xpack/**'
+  - '!node_modules/node-llama-cpp/llama/gitRelease.bundle'
+  - '!node_modules/node-llama-cpp/llama/CMakeLists.txt'
+  - '!node_modules/node-llama-cpp/llama/.clang-format'
+asar:
+  # Disable package-level preferUnplugged expansion; explicit rules below are the complete native boundary.
+  smartUnpack: false
 # Native addons (.node) must live outside the asar to be loadable at runtime. sherpa-onnx-node (Parakeet
 # engine) + its per-platform binary packages are unpacked here so they ship + load in the installed app.
 asarUnpack:
   - '**/node_modules/sherpa-onnx-node/**'
   - '**/node_modules/sherpa-onnx-*/**'
+  # Keep worker/core ESM in app.asar. node-llama resolves only these reviewed native bins via .unpacked.
+  - '**/node_modules/@node-llama-cpp/mac-arm64-metal/bins/**'
+  - '**/node_modules/@node-llama-cpp/win-x64/bins/**'
+  - '**/node_modules/@node-llama-cpp/win-x64-vulkan/bins/**'
 extraResources:
   # Mantu Intelligence dashboard — static build of the intelligence/ workspace, loaded in its own
   # window (src/main/intelligence.ts). Populated by `npm run build:intelligence` before packaging.
@@ -47,6 +77,9 @@ extraResources:
     to: graphify_runner.py
   - from: THIRD_PARTY_NOTICES.md
     to: THIRD_PARTY_NOTICES.md
+  # Selected-only local text + vision payload. Cache/candidates are never packaged.
+  - from: resources/local-ai/payload
+    to: local-ai
   # Bundled ASR model weights — served via asr-model:// protocol (zero runtime download).
   # Populated by `npm run fetch-models` before packaging.
   - from: resources/models
@@ -66,6 +99,14 @@ extraResources:
   - from: resources/ort
     to: ort
 mac:
+  files:
+    # Repeat the allowlist positives (see top-level files note): platform `files` feed a separate
+    # matcher; a list of only `!` excludes would revert it to `**/*` and pack the whole repo into asar.
+    - out/**/*
+    - package.json
+    - '!node_modules/sherpa-onnx-win-*/**'
+    - '!node_modules/sherpa-onnx-linux-*/**'
+    - '!node_modules/sherpa-onnx-darwin-x64/**'
   category: public.app-category.productivity
   # ASCII artifact names (see the win note below): the .app displays as Métis, the .dmg/.zip assets
   # and latest-mac.yml URLs stay accent-free.
@@ -77,7 +118,16 @@ mac:
   entitlements: build/entitlements.mac.plist
   entitlementsInherit: build/entitlements.mac.plist
   gatekeeperAssess: false
+  # osx-sign otherwise attempts to codesign model/font/archive data after classifying every file.
+  # Keep Mach-O code (.node/.dylib/.so, helpers, frameworks, FFmpeg) outside this data-only list.
+  signIgnore:
+    - "\\.(?:asar|bin|dat|gguf|icns|jpeg|jpg|nib|onnx|pak|png|wasm|wav|woff2)$"
   extendInfo:
+    # APFS stores the Métis executable/helper filenames in NFD. Electron compares helper paths
+    # byte-for-byte before launching GPU/renderer processes, so the internal bundle name must use
+    # that same normalization. CFBundleDisplayName stays NFC and user-visible as "Métis".
+    CFBundleName: "Me\u0301tis"
+    CFBundleDisplayName: "Métis"
     NSMicrophoneUsageDescription: Métis transcribes audio on-device to give you live AI suggestions.
     NSScreenCaptureUsageDescription: Métis captures system audio and your screen so the AI can help.
     LSUIElement: true
@@ -97,6 +147,16 @@ masDev:
 dmg:
   title: Métis ${version}
 win:
+  # Keep internal PE/installation paths ASCII-safe; productName and shortcuts remain user-visible Métis.
+  executableName: Metis
+  files:
+    # Repeat the allowlist positives (see top-level files note) so the platform matcher stays an
+    # allowlist and does not pack the whole repo into asar.
+    - out/**/*
+    - package.json
+    - '!node_modules/sherpa-onnx-darwin-*/**'
+    - '!node_modules/sherpa-onnx-linux-*/**'
+    - '!node_modules/sherpa-onnx-win-ia32/**'
   icon: build/icon.png
   publisherName: Mantu
   target:

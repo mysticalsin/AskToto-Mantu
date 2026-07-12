@@ -4,16 +4,23 @@
   "description": "Métis — AI desktop overlay assistant (package name kept for dev-profile continuity)",
   "author": "Tony Walteur <tony.walteur@gmail.com>",
   "main": "./out/main/index.js",
+  "config": {
+    "nodeLlamaCppPostinstall": "skip"
+  },
+  "engines": {
+    "node": ">=22.12.0"
+  },
   "scripts": {
     "dev": "electron-vite dev",
     "check:main-imports": "node scripts/check-no-dynamic-import.mjs",
+    "build:local-ai-worker": "node scripts/clean-local-ai-worker.mjs && tsc -p tsconfig.local-ai-worker.json",
     "check:ffmpeg": "node scripts/check-ffmpeg-sidecar.mjs",
     "check:sherpa": "node scripts/check-sherpa-platform.mjs",
-    "prebuild": "node scripts/check-no-dynamic-import.mjs",
+    "prebuild": "node scripts/check-no-dynamic-import.mjs && npm run build:local-ai-worker",
     "build": "electron-vite build",
     "preview": "electron-vite preview",
     "start": "electron-vite preview",
-    "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
+    "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json && tsc --noEmit -p tsconfig.local-ai-worker.json",
     "test": "vitest run",
     "test:smoke:import": "npm run build && node scripts/smoke-import.mjs",
     "check:xcode": "node scripts/check-xcode-tools.mjs",
@@ -29,17 +36,19 @@
     "installers:mac": "node scripts/build-installers.mjs mac",
     "installers:win": "node scripts/build-installers.mjs win",
     "installers:all": "node scripts/build-installers.mjs all",
-    "predist": "node scripts/check-ffmpeg-sidecar.mjs mac && node scripts/check-sherpa-platform.mjs mac && node scripts/fetch-models.mjs && npm run build:intelligence",
-    "dist": "npm run check:main-imports && electron-vite build && electron-builder --mac --publish never",
-    "dist:local": "node scripts/check-ffmpeg-sidecar.mjs mac && node scripts/check-sherpa-platform.mjs mac && npm run check:main-imports && electron-vite build && electron-builder --mac --publish never -c.directories.output=/Users/tony/AI-Brain-build/asktoto-release -c.mac.identity='TotoWhisper Dev' && node scripts/verify-signing.mjs",
-    "predist:win": "node scripts/check-ffmpeg-sidecar.mjs win && node scripts/check-sherpa-platform.mjs win && node scripts/fetch-models.mjs",
-    "dist:win": "node scripts/fetch-models.mjs && npm run build:intelligence && electron-vite build && electron-builder --win --x64 --publish never",
-    "dist:win:appx": "node scripts/check-ffmpeg-sidecar.mjs win && node scripts/check-sherpa-platform.mjs win && electron-vite build && electron-builder --win appx --x64 --publish never",
+    "predist": "node scripts/check-ffmpeg-sidecar.mjs mac && node scripts/check-sherpa-platform.mjs mac && node scripts/fetch-models.mjs && npm run check:local-ai -- --platform darwin-arm64 && npm run build:intelligence",
+    "dist": "npm run build && electron-builder --mac --publish never",
+    "dist:local": "node scripts/check-ffmpeg-sidecar.mjs mac && node scripts/check-sherpa-platform.mjs mac && npm run check:local-ai -- --platform darwin-arm64 && npm run build && electron-builder --mac --publish never -c.directories.output=/Users/tony/AI-Brain-build/asktoto-release -c.mac.identity='TotoWhisper Dev' && node scripts/verify-signing.mjs",
+    "dist:unpacked:mac": "node scripts/check-ffmpeg-sidecar.mjs mac && node scripts/check-sherpa-platform.mjs mac && npm run check:local-ai -- --platform darwin-arm64 && npm run build:intelligence && npm run build && electron-builder --mac --arm64 --dir --publish never",
+    "predist:win": "node scripts/check-ffmpeg-sidecar.mjs win && node scripts/check-sherpa-platform.mjs win && node scripts/fetch-models.mjs && npm run check:local-ai -- --platform win32-x64",
+    "dist:win": "node scripts/fetch-models.mjs && npm run build:intelligence && npm run build && electron-builder --win --x64 --publish never",
+    "dist:unpacked:win": "node scripts/check-ffmpeg-sidecar.mjs win && node scripts/check-sherpa-platform.mjs win && npm run check:local-ai -- --platform win32-x64 && npm run build:intelligence && npm run build && electron-builder --win --x64 --dir --publish never",
+    "dist:win:appx": "node scripts/check-ffmpeg-sidecar.mjs win && node scripts/check-sherpa-platform.mjs win && npm run build && electron-builder --win appx --x64 --publish never",
     "prepack": "node scripts/fetch-models.mjs",
-    "release": "node scripts/check-ffmpeg-sidecar.mjs mac && node scripts/check-sherpa-platform.mjs mac && npm run check:xcode && node scripts/check-release-secrets.mjs mac && npm run check:release && node scripts/fetch-models.mjs && npm run build:intelligence && electron-vite build && electron-builder --mac --publish always",
-    "release:win": "node scripts/check-ffmpeg-sidecar.mjs win && node scripts/check-sherpa-platform.mjs win && node scripts/check-release-secrets.mjs win && npm run check:release && node scripts/fetch-models.mjs && npm run build:intelligence && electron-vite build && electron-builder --win --x64 --publish always",
-    "release:mas": "node scripts/check-ffmpeg-sidecar.mjs mac && node scripts/check-sherpa-platform.mjs mac && npm run check:xcode && node scripts/check-release-secrets.mjs mas && node scripts/fetch-models.mjs && npm run build:intelligence && electron-vite build && electron-builder --mac mas --publish never -c.mas.provisioningProfile=\"$MAS_PROVISIONING_PROFILE\"",
-    "release:win:store": "node scripts/check-ffmpeg-sidecar.mjs win && node scripts/check-sherpa-platform.mjs win && node scripts/check-release-secrets.mjs win-store && node scripts/fetch-models.mjs && npm run build:intelligence && electron-vite build && electron-builder --win appx --x64 --publish never"
+    "release": "node scripts/check-ffmpeg-sidecar.mjs mac && node scripts/check-sherpa-platform.mjs mac && npm run check:xcode && node scripts/check-release-secrets.mjs mac && npm run check:release && node scripts/fetch-models.mjs && npm run build:intelligence && npm run build && electron-builder --mac --publish always",
+    "release:win": "node scripts/check-ffmpeg-sidecar.mjs win && node scripts/check-sherpa-platform.mjs win && node scripts/check-release-secrets.mjs win && npm run check:release && node scripts/fetch-models.mjs && npm run build:intelligence && npm run build && electron-builder --win --x64 --publish always",
+    "release:mas": "node scripts/check-ffmpeg-sidecar.mjs mac && node scripts/check-sherpa-platform.mjs mac && npm run check:xcode && node scripts/check-release-secrets.mjs mas && node scripts/fetch-models.mjs && npm run build:intelligence && npm run build && electron-builder --mac mas --publish never -c.mas.provisioningProfile=\"$MAS_PROVISIONING_PROFILE\"",
+    "release:win:store": "node scripts/check-ffmpeg-sidecar.mjs win && node scripts/check-sherpa-platform.mjs win && node scripts/check-release-secrets.mjs win-store && node scripts/fetch-models.mjs && npm run build:intelligence && npm run build && electron-builder --win appx --x64 --publish never"
   },
   "comment": "Only main-process runtime deps live in 'dependencies' (electron-builder bundles these into the app). All renderer deps are bundled by Vite at build time and kept in devDependencies to keep the package small.",
   "dependencies": {
@@ -49,12 +58,15 @@
     "@modelcontextprotocol/sdk": "^1.29.0",
     "electron-log": "^5.4.4",
     "electron-updater": "^6.8.9",
+    "node-llama-cpp": "3.19.0",
     "openai": "^6.45.0",
     "sherpa-onnx-node": "^1.13.3",
     "undici": "^7.28.0",
     "zod": "^3.23.8"
   },
   "devDependencies": {
+    "@electron/asar": "3.4.1",
+    "@electron/fuses": "2.1.3",
     "@huggingface/transformers": "^3.0.0",
     "@tailwindcss/vite": "^4.0.0",
     "@types/node": "^22.5.0",
@@ -75,5 +87,8 @@
     "typescript": "^5.6.3",
     "vite": "^5.4.8",
     "vitest": "^4.1.9"
+  },
+  "overrides": {
+    "isbinaryfile": "5.0.7"
   }
 }

@@ -87,7 +87,7 @@ for (const target of requestedTargets) run('node', ['scripts/check-ffmpeg-sideca
 for (const target of requestedTargets) run('node', ['scripts/check-sherpa-platform.mjs', target])
 run('node', ['scripts/fetch-models.mjs'])
 run('npm', ['run', 'build:intelligence'])
-run('npx', ['electron-vite', 'build'])
+run('npm', ['run', 'build'])
 
 for (const t of requestedTargets) {
   if (t === 'mac') {
