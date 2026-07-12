@@ -30,6 +30,13 @@ export function useAutoResize(): (el: HTMLElement | null) => void {
   const roRef = useRef<ResizeObserver | null>(null)
   const moRef = useRef<MutationObserver | null>(null)
   const rafRef = useRef(0)
+  // Microtask fallback paired with rafRef. A transparent, always-on-top overlay window has its renderer
+  // frozen by the macOS compositor's page-visibility handling ~100-300 ms after load: requestAnimationFrame
+  // AND setTimeout both stop firing (verified — the packaged build's window stayed pinned at bar height and
+  // onboarding/answers were clipped off-screen because the measure was rAF-scheduled and never ran). The
+  // microtask queue keeps draining even while frozen, so we schedule the measure on BOTH — rAF keeps
+  // streaming coalesced when the renderer is live; the microtask lands the measure when it isn't.
+  const microRef = useRef(false)
   const shrinkRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const lastSentRef = useRef(0) // last height pushed to main — dedups so a stream can't pump setBounds
   const lastSentWidthRef = useRef(0) // last reported width — 0 until a [data-hug-width] view reports one
@@ -38,6 +45,9 @@ export function useAutoResize(): (el: HTMLElement | null) => void {
     roRef.current = null
     moRef.current?.disconnect()
     moRef.current = null
+    cancelAnimationFrame(rafRef.current)
+    rafRef.current = 0
+    microRef.current = false
     if (shrinkRef.current) {
       clearTimeout(shrinkRef.current)
       shrinkRef.current = null
@@ -100,33 +110,48 @@ export function useAutoResize(): (el: HTMLElement | null) => void {
         : undefined
       return { height: Math.ceil(bottom - rect.top), width }
     }
-    const send = (): void => {
+    const measureAndPush = (): void => {
+      // A measure just ran, so cancel the sibling scheduler (rAF or the queued microtask) that hasn't.
       cancelAnimationFrame(rafRef.current)
-      rafRef.current = requestAnimationFrame(() => {
-        const m = measure()
-        // Quantize the GROW path to a 24px step so a streaming answer's per-frame growth coalesces into
-        // far fewer resize IPCs instead of one per tiny reflow. The settle-shrink branch below is
-        // untouched and still lands the content's exact final height.
-        const h = Math.ceil((m.height + 2) / 24) * 24
-        if (shrinkRef.current) {
-          clearTimeout(shrinkRef.current)
-          shrinkRef.current = null
-        }
-        if (h >= lastSentRef.current) {
-          push(h, m.width) // GROW immediately — streaming text must never clip behind the window edge
-        } else if (m.width !== undefined) {
-          // A width report comes only from the collapsed control pill (data-hug-width), which is fully
-          // static and has nothing to settle. Push immediately so its measured width lands on the very next
-          // frame after the main-process guess resize, reading as one settle instead of a visible double-snap.
-          push(h, m.width)
-        } else {
-          // SHRINK only after the content settles (~140ms) so a finishing stream doesn't pump the window down
-          shrinkRef.current = setTimeout(() => {
-            const m2 = measure()
-            push(m2.height + 2, m2.width)
-          }, 140)
-        }
-      })
+      rafRef.current = 0
+      microRef.current = false
+      const m = measure()
+      // Quantize the GROW path to a 24px step so a streaming answer's per-frame growth coalesces into
+      // far fewer resize IPCs instead of one per tiny reflow. The settle-shrink branch below is
+      // untouched and still lands the content's exact final height.
+      const h = Math.ceil((m.height + 2) / 24) * 24
+      if (shrinkRef.current) {
+        clearTimeout(shrinkRef.current)
+        shrinkRef.current = null
+      }
+      if (h >= lastSentRef.current) {
+        push(h, m.width) // GROW immediately — streaming text must never clip behind the window edge
+      } else if (m.width !== undefined) {
+        // A width report comes only from the collapsed control pill (data-hug-width), which is fully
+        // static and has nothing to settle. Push immediately so its measured width lands on the very next
+        // frame after the main-process guess resize, reading as one settle instead of a visible double-snap.
+        push(h, m.width)
+      } else {
+        // SHRINK only after the content settles (~140ms) so a finishing stream doesn't pump the window down
+        shrinkRef.current = setTimeout(() => {
+          const m2 = measure()
+          push(m2.height + 2, m2.width)
+        }, 140)
+      }
+    }
+    const send = (): void => {
+      // rAF is the frame-coalesced fast path (smooth resizes while the renderer is live). The microtask is
+      // the frozen-safe fallback: when the overlay's renderer is compositor-frozen, rAF never fires, but the
+      // microtask still drains and runs the measure. It checks rafRef so, when the renderer IS live, rAF has
+      // usually already run and reset rafRef to 0 — then the microtask is a no-op and coalescing is preserved.
+      if (!rafRef.current) rafRef.current = requestAnimationFrame(measureAndPush)
+      if (!microRef.current) {
+        microRef.current = true
+        void Promise.resolve().then(() => {
+          microRef.current = false
+          if (rafRef.current) measureAndPush() // rAF still pending (frozen or not-yet-fired) → land it now
+        })
+      }
     }
     const ro = new ResizeObserver(send)
     ro.observe(el)
