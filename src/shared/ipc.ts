@@ -107,6 +107,10 @@ export const IPC = {
   brainEntityUnmerge: 'brain:entityUnmerge',
   brainEntityUpdateField: 'brain:entityUpdateField',
   brainCommitmentReject: 'brain:commitmentReject',
+  // Task MI-3: read-only channels feeding the CRM record pages, the Review.tsx entity strip, and the
+  // needs-attention queue.
+  brainMeetingExtraction: 'brain:meetingExtraction',
+  brainAttention: 'brain:attention',
   windowResize: 'window:resize',
   windowMode: 'window:mode',
   windowMoveBy: 'window:moveBy',
@@ -391,6 +395,28 @@ export const CommitmentRejectPayloadSchema = z.object({
   dealSlug: z.string().optional(),
   text: z.string().min(1)
 })
+
+/** Payload for brain:meetingExtraction (Task MI-3) — `file` is a saved meeting's path or basename (only
+ *  the basename is used, mirroring brainCommitmentSettle's convention); the handler slugifies it to the
+ *  same key ingestExtraction wrote the extraction under (`.brain/meetings/<slugify(basename(file))>.json`). */
+export const MeetingExtractionQuerySchema = z.object({ file: z.string().min(1) })
+
+/** One needs-attention finding (Task MI-3, `brain:attention`) — surfaced in BrainView's Attention section
+ *  with a jump action to the named entity's record page.
+ *   - 'lint': a lintBrain contradiction (see lintBrainDetailed in main/brain/ingest.ts).
+ *   - 'ambiguous': a provenant field whose confidence is 'AMBIGUOUS'.
+ *   - 'contradicted_pin': a human-pinned/edited field whose superseded history records a value from a
+ *     LATER meeting than the pin itself — recorded (never auto-resolved) per MI-1's supersession rule. */
+export const AttentionItemSchema = z.object({
+  kind: z.enum(['lint', 'ambiguous', 'contradicted_pin']),
+  entityKind: EntityKindSchema,
+  id: z.string().min(1),
+  label: z.string(),
+  detail: z.string()
+})
+export type AttentionItem = z.infer<typeof AttentionItemSchema>
+export const BrainAttentionResultSchema = z.object({ items: z.array(AttentionItemSchema) })
+export type BrainAttentionResult = z.infer<typeof BrainAttentionResultSchema>
 
 /** One settings.asrCorrections entry — the exact shape commitLine's consumer (lib/listen.ts
  *  correctionsRef) compiles into word-boundary regexes. Extracted from SettingsSchema (which arrays it,

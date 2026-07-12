@@ -191,11 +191,14 @@ const api = {
     alsoFixAsr?: boolean
   ): Promise<{ ok: boolean; error?: string; asrSkipped?: boolean; reason?: string }> =>
     ipcRenderer.invoke(IPC.brainEntityRename, { kind, id, newName, alsoFixAsr }),
+  // seq (Task MI-3): the appended entity_merge journal entry's own sequence number, handed straight to
+  // brainEntityUnmerge for the record page's post-merge "Undo" affordance.
   brainEntityMerge: (
     kind: import('@shared/brain').EntityKind,
     fromId: string,
     intoId: string
-  ): Promise<{ ok: boolean; error?: string }> => ipcRenderer.invoke(IPC.brainEntityMerge, { kind, fromId, intoId }),
+  ): Promise<{ ok: boolean; error?: string; seq?: number }> =>
+    ipcRenderer.invoke(IPC.brainEntityMerge, { kind, fromId, intoId }),
   brainEntityUnmerge: (targetSeq: number): Promise<{ ok: boolean; error?: string }> =>
     ipcRenderer.invoke(IPC.brainEntityUnmerge, { targetSeq }),
   brainEntityUpdateField: (
@@ -207,6 +210,13 @@ const api = {
     ipcRenderer.invoke(IPC.brainEntityUpdateField, { kind, id, field, value }),
   brainCommitmentReject: (personSlug: string, text: string, dealSlug?: string): Promise<{ ok: boolean; error?: string }> =>
     ipcRenderer.invoke(IPC.brainCommitmentReject, { personSlug, dealSlug, text }),
+  // Task MI-3: read-only. `file` is a saved meeting's basename — returns the stored MeetingExtraction, or
+  // null when the brain hasn't ingested/extracted that meeting yet (also null while signed out).
+  brainMeetingExtraction: (file: string): Promise<import('@shared/brain').MeetingExtraction | null> =>
+    ipcRenderer.invoke(IPC.brainMeetingExtraction, { file }),
+  // Task MI-3: aggregated needs-attention queue (lint contradictions, AMBIGUOUS fields, contradicted pins).
+  brainAttention: (): Promise<import('@shared/ipc').BrainAttentionResult> =>
+    ipcRenderer.invoke(IPC.brainAttention),
   setListeningState: (on: boolean): Promise<void> => ipcRenderer.invoke(IPC.listeningState, on),
   asrBundled: (): Promise<boolean> => ipcRenderer.invoke(IPC.asrBundled),
 

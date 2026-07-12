@@ -680,16 +680,18 @@ async function applyMerge(
  *  of intoId), moves meetings/commitments/kind-specific history, folds provenant fields (see
  *  foldProvenant's precedence — a source-only value like from.role='CFO' survives the merge instead of
  *  living only in the snapshot), rewrites graph edges, and tombstones the source file so stale
- *  references resolve to the target. */
+ *  references resolve to the target. `seq` (Task MI-3) is the appended journal entry's own sequence
+ *  number — the record page's merge-confirmation UI hands it straight to brain:entityUnmerge for its
+ *  "Undo" affordance, so the caller never has to re-read the journal to find it. */
 export async function mergeEntities(
   s: Settings,
   payload: { kind: EntityKind; fromId: string; intoId: string }
-): Promise<{ ok: boolean; error?: string }> {
+): Promise<{ ok: boolean; error?: string; seq?: number }> {
   const at = new Date().toISOString()
   const r = await applyMerge(s, payload)
   if (!r.ok) return { ok: false, error: r.error }
-  await appendCorrectionEntry(s, { seq: 0, at, kind: 'entity_merge', payload, snapshot: r.snapshot })
-  return { ok: true }
+  const entry = await appendCorrectionEntry(s, { seq: 0, at, kind: 'entity_merge', payload, snapshot: r.snapshot })
+  return { ok: true, seq: entry.seq }
 }
 
 const ENTITY_SCHEMA_BY_KIND = {
