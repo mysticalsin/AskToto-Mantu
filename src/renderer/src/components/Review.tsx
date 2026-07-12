@@ -1,5 +1,5 @@
 import { memo, useEffect, useMemo, useRef, useState } from 'react'
-import { Copy, Check, FileText, ListTree, FolderOpen, Save, RotateCcw, Play, ChevronDown, Download, Clock, Mail, Send, AlertCircle, EarOff, ArrowLeft, Pencil, X, Sparkles, Trash2 } from 'lucide-react'
+import { Copy, Check, FileText, ListTree, FolderOpen, Save, RotateCcw, Play, ChevronDown, Download, Clock, Mail, Send, AlertCircle, EarOff, ArrowLeft, Pencil, X, Sparkles, Trash2, Lock } from 'lucide-react'
 import type { TranscriptLine, MeetingSummary } from '@shared/ipc'
 import type { AnswerState } from '../state'
 import { isNonSpeechLine } from '@shared/transcript-filter'
@@ -85,6 +85,7 @@ export const Review = memo(function Review({
   startedAt,
   showTranscript,
   meetingMeta,
+  confidential,
   followupDraft,
   onOpenFolder,
   onSave,
@@ -109,6 +110,9 @@ export const Review = memo(function Review({
   startedAt?: number
   showTranscript?: boolean // opt-in: auto-expand the full transcript; default summary-only
   meetingMeta?: { title: string; date: string }
+  /** Task MI-5 — this meeting's saved `confidential` frontmatter flag, so the toggle below reflects the
+   *  actual persisted state (a reopened past meeting) instead of always starting unflagged. */
+  confidential?: boolean
   /** Draft follow-up email from the locked follow-up Dust agent — null until Generate is clicked. */
   followupDraft?: AnswerState | null
   onOpenFolder: () => void
@@ -142,6 +146,27 @@ export const Review = memo(function Review({
   const [jsonCopied, flashJsonCopied] = useFlash(1500)
   const [exportError, setExportError] = useState<string | null>(null)
   const [transcriptOpen, setTranscriptOpen] = useState(!!showTranscript)
+  // Task MI-5 — confidential flag: excludes this meeting from every published wiki surface. Local state
+  // seeded from the `confidential` prop (the meeting's actual saved value for a reopened past meeting;
+  // false for a just-ended live one) and updated optimistically on toggle.
+  const [confidentialFlag, setConfidentialFlag] = useState(!!confidential)
+  const [confidentialBusy, setConfidentialBusy] = useState(false)
+  useEffect(() => setConfidentialFlag(!!confidential), [confidential, savedPath])
+  const toggleConfidential = async (): Promise<void> => {
+    if (!savedPath || confidentialBusy) return
+    const file = savedPath.split('/').pop() ?? savedPath
+    const next = !confidentialFlag
+    setConfidentialBusy(true)
+    setConfidentialFlag(next) // optimistic — reverted below on failure
+    try {
+      const r = await window.toto.recallSetConfidential(file, next)
+      if (!r.ok) setConfidentialFlag(!next)
+    } catch {
+      setConfidentialFlag(!next)
+    } finally {
+      setConfidentialBusy(false)
+    }
+  }
   // 90-Second Debrief (innovation #6): the off-record layer — what was NOT said out loud.
   const [debrief, setDebrief] = useState('')
   const [debriefState, setDebriefState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle')
@@ -456,6 +481,34 @@ export const Review = memo(function Review({
             Saved to your meetings folder for Dust follow-up.
           </span>
           <span className="font-medium text-[var(--color-success)]">Open</span>
+        </button>
+      )}
+
+      {/* Task MI-5 — confidential flag: excludes this meeting from every published wiki page (note
+          card, entity timelines/current-facts, indexes). Available for both a just-saved live meeting
+          and a reopened past one — anything with a real savedPath. */}
+      {savedPath && (
+        <button
+          type="button"
+          onClick={() => void toggleConfidential()}
+          disabled={confidentialBusy}
+          aria-pressed={confidentialFlag}
+          className={[
+            'no-drag focus-ring flex items-center gap-2 rounded-xl border px-3 py-2 text-left text-[12px] disabled:opacity-60',
+            confidentialFlag
+              ? 'border-[var(--color-danger)]/30 bg-[var(--color-danger)]/10'
+              : 'border-[var(--color-hair-soft)] bg-white/[0.02] hover:bg-white/[0.05]'
+          ].join(' ')}
+        >
+          <Lock size={13} className={confidentialFlag ? 'text-[var(--color-danger)]' : 'text-[color:var(--color-ink-3)]'} />
+          <span className="flex-1 text-[color:var(--color-ink-2)]">
+            {confidentialFlag
+              ? 'Confidential — excluded from published intelligence.'
+              : 'Confidential — exclude from published intelligence'}
+          </span>
+          <span className={confidentialFlag ? 'font-medium text-[var(--color-danger)]' : 'text-[color:var(--color-ink-3)]'}>
+            {confidentialFlag ? 'On' : 'Off'}
+          </span>
         </button>
       )}
 

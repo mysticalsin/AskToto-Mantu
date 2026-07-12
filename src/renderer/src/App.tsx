@@ -258,6 +258,7 @@ export function App(): JSX.Element {
     recap: string
     lines: TranscriptLine[]
     startedAt: number
+    confidential: boolean
   } | null>(null)
   // The saved-meeting file an in-flight recapGen run will persist its result to — set by
   // generateSavedRecap, cleared once the persist-on-settle effect below has written (or given up on) it.
@@ -1426,7 +1427,8 @@ export function App(): JSX.Element {
       date: r.startedAt ? new Date(r.startedAt).toLocaleString() : '',
       recap: r.recap || '',
       lines: r.lines || [],
-      startedAt: r.startedAt || 0
+      startedAt: r.startedAt || 0,
+      confidential: !!r.confidential
     })
     setView('review')
     setCollapsed(false)
@@ -1754,6 +1756,7 @@ export function App(): JSX.Element {
         startedAt={pm ? pm.startedAt : meetingStartRef.current}
         showTranscript={settings?.showFullTranscriptInReview ?? false}
         meetingMeta={pm ? { title: pm.title, date: pm.date } : undefined}
+        confidential={pm ? pm.confidential : false}
         followupDraft={followup.answer}
         onGenerateFollowup={generateFollowup}
         onGenerateRecap={pm ? () => { if (requireProvider()) generateSavedRecap(pm.file, pm.lines) } : undefined}

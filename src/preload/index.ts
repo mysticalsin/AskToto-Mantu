@@ -173,6 +173,10 @@ const api = {
   // encrypted/plaintext state.
   recallUpdateRecap: (file: string, recap: string): Promise<{ ok: boolean; error?: string }> =>
     ipcRenderer.invoke(IPC.recallUpdateRecap, { file, recap }),
+  // Task MI-5: flag/unflag a saved meeting as confidential — excludes it from every published wiki
+  // surface (main/brain/publish.ts). Rewrites only the frontmatter block; never renames the file.
+  recallSetConfidential: (file: string, confidential: boolean): Promise<{ ok: boolean; error?: string }> =>
+    ipcRenderer.invoke(IPC.recallSetConfidential, { file, confidential }),
   // Delete every saved meeting + the knowledge graph. Main pops its own (extra-emphatic) confirm dialog.
   recallDeleteAll: (): Promise<{ ok: boolean; deleted: number; failed?: string[]; error?: string }> =>
     ipcRenderer.invoke(IPC.recallDeleteAll),
