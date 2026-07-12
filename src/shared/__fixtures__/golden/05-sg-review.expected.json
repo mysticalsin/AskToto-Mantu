@@ -19,6 +19,12 @@
       "quote": "vise une amélioration de vingt pour cent sur les délais de traitement"
     },
     {
+      "kind": "percent",
+      "value": 71,
+      "unit": "%",
+      "quote": "Le taux de résolution au premier contact atteint désormais soixante et onze pour cent"
+    },
+    {
       "kind": "headcount",
       "value": 90,
       "unit": null,

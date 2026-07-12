@@ -6,7 +6,7 @@ date: 2026-04-08T09:30:00.000Z
 title: "Revue trimestrielle Société Générale"
 participants: [You, Them]
 duration_min: 36
-lines: 30
+lines: 32
 topics: [banque, revue, budget]
 status: ready-for-followup
 ---
@@ -36,6 +36,10 @@ _4/8/2026, 9:30:00 AM · meeting · 36 min · Métis_
 **[09:31:40] Them:** Sophie a aussi précisé qu'on vise une amélioration de vingt pour cent sur les délais de traitement.
 
 **[09:31:58] You:** C'est un objectif ambitieux mais atteignable je pense.
+
+**[09:32:02] Them:** Le taux de résolution au premier contact atteint désormais soixante et onze pour cent.
+
+**[09:32:05] You:** C'est une nette amélioration par rapport au trimestre dernier.
 
 **[09:32:08] Them:** Nous avons quatre-vingt-dix personnes actuellement mobilisées sur ce projet.
 

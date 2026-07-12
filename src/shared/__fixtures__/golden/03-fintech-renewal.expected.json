@@ -23,6 +23,12 @@
       "value": 4,
       "unit": null,
       "quote": "we lost about four hours last month to an outage on our side"
+    },
+    {
+      "kind": "amount",
+      "value": 2500,
+      "unit": null,
+      "quote": "the API was handling twenty-five hundred requests per second without breaking a sweat"
     }
   ],
   "commitments": [
