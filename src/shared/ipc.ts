@@ -1,5 +1,7 @@
 import { z } from 'zod'
 import type { ProviderId } from './providers'
+import { LocalVisionEvidenceSchema } from './local-ai'
+import { EntityKindSchema } from './brain'
 
 export const ProviderIdSchema = z.enum([
   'anthropic',
@@ -52,6 +54,7 @@ export const IPC = {
   brainEntityNames: 'brain:entityNames',
   brainOpenDashboard: 'brain:openDashboard',
   brainRebuildAll: 'brain:rebuildAll',
+  brainClearJournalCorruption: 'brain:clearJournalCorruption',
   authStatus: 'auth:status',
   authSignIn: 'auth:signIn',
   authSignOut: 'auth:signOut',
@@ -96,10 +99,21 @@ export const IPC = {
   recallDelete: 'recall:delete',
   recallRename: 'recall:rename',
   recallUpdateRecap: 'recall:update-recap',
+  recallSetConfidential: 'recall:set-confidential',
   recallDeleteAll: 'recall:deleteAll',
   debriefSave: 'debrief:save',
   brainCommitmentSettle: 'brain:commitmentSettle',
   brainSetDealOutcome: 'brain:setDealOutcome',
+  // Correction engine (Task MI-2): human fixes for misheard/merged entities and never-made commitments.
+  brainEntityRename: 'brain:entityRename',
+  brainEntityMerge: 'brain:entityMerge',
+  brainEntityUnmerge: 'brain:entityUnmerge',
+  brainEntityUpdateField: 'brain:entityUpdateField',
+  brainCommitmentReject: 'brain:commitmentReject',
+  // Task MI-3: read-only channels feeding the CRM record pages, the Review.tsx entity strip, and the
+  // needs-attention queue.
+  brainMeetingExtraction: 'brain:meetingExtraction',
+  brainAttention: 'brain:attention',
   windowResize: 'window:resize',
   windowMode: 'window:mode',
   windowMoveBy: 'window:moveBy',
@@ -148,7 +162,13 @@ export const IPC = {
   notebookLmAsk: 'notebookLm:ask',
   licenseActivate: 'license:activate',
   licenseStatus: 'license:status',
-  licenseGate: 'license:gate'
+  licenseGate: 'license:gate',
+  localAiStatus: 'local-ai:status',
+  localTranscriptBegin: 'local-ai:transcript:begin',
+  localTranscriptAppend: 'local-ai:transcript:append',
+  localTranscriptResync: 'local-ai:transcript:resync',
+  localTranscriptEnd: 'local-ai:transcript:end',
+  brainAnalyze: 'brain:analyze'
 } as const
 
 /** User's verdict on an answer (metadata only — never the answer text). Feeds the audit log + future evals. */
@@ -353,6 +373,106 @@ export const SetDealOutcomePayloadSchema = z.object({
   outcome: z.enum(['open', 'won', 'lost'])
 })
 
+/** Every entity id/slug the correction payloads below carry is a canonical slug (store.ts's slugify()
+ *  output: lowercase ascii, digits, and dashes only — see its own doc comment for the two fallback forms,
+ *  `x-<hash>` and `<truncated>-<hash>`, both of which also match this charset). MI-2.5 Fix B, defense in
+ *  depth: corrections.ts re-slugifies every id before it ever reaches a filesystem call regardless (a
+ *  legit slug round-trips unchanged there), but rejecting a non-slug OUTRIGHT here — before the payload
+ *  even reaches the handler — means a path-traversal string like '../../../etc/hosts' never gets this
+ *  far at all, rather than silently collapsing to a slug that simply won't match anything. */
+const SLUG_RE = /^[a-z0-9-]+$/
+
+/** Payloads for the five correction-engine channels (Task MI-2) — see src/main/brain/corrections.ts
+ *  for the mutations themselves. `kind`/`id`/`fromId`/`intoId` are entity slugs (immutable, the join
+ *  key), never display names. `field`/`value` on brain:entityUpdateField are validated per (kind, field)
+ *  inside corrections.ts, not here — the zod-valid set differs by kind (deal.velocity is an object,
+ *  account.sector is an enum, everything else is a plain string) and is cheaper to check once, in one
+ *  place, alongside the mutation itself. */
+export const EntityRenamePayloadSchema = z.object({
+  kind: EntityKindSchema,
+  id: z.string().min(1).max(200).regex(SLUG_RE, 'Invalid entity id.'),
+  newName: z.string().min(1).max(200),
+  // Also append oldName -> newName to settings.asrCorrections (main-side composition, see index.ts) so
+  // the live transcript stops mishearing the old name going forward.
+  alsoFixAsr: z.boolean().optional()
+})
+export const EntityMergePayloadSchema = z.object({
+  kind: EntityKindSchema,
+  fromId: z.string().min(1).max(200).regex(SLUG_RE, 'Invalid entity id.'),
+  intoId: z.string().min(1).max(200).regex(SLUG_RE, 'Invalid entity id.')
+})
+export const EntityUnmergePayloadSchema = z.object({
+  targetSeq: z.number().int().nonnegative()
+})
+export const EntityUpdateFieldPayloadSchema = z.object({
+  kind: EntityKindSchema,
+  id: z.string().min(1).max(200).regex(SLUG_RE, 'Invalid entity id.'),
+  field: z.string().min(1).max(60),
+  value: z.unknown()
+})
+/** `dealSlug` is optional — a commitment spoken in a deal-less meeting (x.deal is null) lives ONLY on
+ *  the named person's own ledger, so there's nothing to also flip on a deal. */
+export const CommitmentRejectPayloadSchema = z.object({
+  personSlug: z.string().min(1).max(200).regex(SLUG_RE, 'Invalid person id.'),
+  dealSlug: z.string().max(200).regex(SLUG_RE, 'Invalid deal id.').optional(),
+  text: z.string().min(1)
+})
+
+/** Payload for brain:meetingExtraction (Task MI-3) — `file` is a saved meeting's path or basename (only
+ *  the basename is used, mirroring brainCommitmentSettle's convention); the handler slugifies it to the
+ *  same key ingestExtraction wrote the extraction under (`.brain/meetings/<slugify(basename(file))>.json`). */
+export const MeetingExtractionQuerySchema = z.object({ file: z.string().min(1) })
+
+/** One needs-attention finding (Task MI-3, `brain:attention`) — surfaced in BrainView's Attention section
+ *  with a jump action to the named entity's record page.
+ *   - 'lint': a lintBrain contradiction (see lintBrainDetailed in main/brain/ingest.ts).
+ *   - 'ambiguous': a provenant field whose confidence is 'AMBIGUOUS'.
+ *   - 'contradicted_pin': a human-pinned/edited field whose superseded history records a value from a
+ *     LATER meeting than the pin itself — recorded (never auto-resolved) per MI-1's supersession rule. */
+export const AttentionItemSchema = z.object({
+  kind: z.enum(['lint', 'ambiguous', 'contradicted_pin']),
+  entityKind: EntityKindSchema,
+  id: z.string().min(1),
+  label: z.string(),
+  detail: z.string()
+})
+export type AttentionItem = z.infer<typeof AttentionItemSchema>
+export const BrainAttentionResultSchema = z.object({ items: z.array(AttentionItemSchema) })
+export type BrainAttentionResult = z.infer<typeof BrainAttentionResultSchema>
+
+/** One settings.asrCorrections entry — the exact shape commitLine's consumer (lib/listen.ts
+ *  correctionsRef) compiles into word-boundary regexes. Extracted from SettingsSchema (which arrays it,
+ *  capped at 100) so a single pair can be validated on its own BEFORE it joins the array: store.ts's
+ *  validKeysOnly drops the ENTIRE asrCorrections array when any one element fails validation, so a
+ *  handler that blindly appends an oversized pair wouldn't just lose that pair — it would silently
+ *  wipe every correction the user already had. */
+export const AsrCorrectionPairSchema = z.object({ from: z.string().min(1).max(80), to: z.string().max(80) })
+
+/** brain:entityRename's `alsoFixAsr` composition (reviewer IMPORTANT 3) — pure so both paths are unit-
+ *  testable. Validates the pair per-element FIRST (see AsrCorrectionPairSchema above for why), dedupes,
+ *  and enforces the array's own 100-entry cap, so the result can NEVER fail whole-array validation:
+ *   - { kind: 'append', pairs } — hand `pairs` to setSettings as the new asrCorrections value
+ *   - { kind: 'noop' }          — pair already present; write nothing
+ *   - { kind: 'skipped', reason } — pair can't be represented (e.g. a name over the 80-char cap);
+ *     the caller performs the rename anyway and surfaces the reason. */
+export function appendAsrCorrection(
+  existing: ReadonlyArray<{ from: string; to: string }>,
+  from: string,
+  to: string
+): { kind: 'append'; pairs: Array<{ from: string; to: string }> } | { kind: 'noop' } | { kind: 'skipped'; reason: string } {
+  const pair = { from, to }
+  const parsed = AsrCorrectionPairSchema.safeParse(pair)
+  if (!parsed.success) {
+    return {
+      kind: 'skipped',
+      reason:
+        'The name pair could not be added as a live-transcript ASR correction (names must be 1-80 characters). The rename itself was applied.'
+    }
+  }
+  if (existing.some((c) => c.from === pair.from && c.to === pair.to)) return { kind: 'noop' }
+  return { kind: 'append', pairs: [...existing, pair].slice(-100) }
+}
+
 /** Structured export of a meeting recap (decisions + action-items-with-owners) for Jira/Asana/Notion etc.
  *  The full original markdown is always included so nothing is lost if a section heading was reworded. */
 export const RecapExportSchema = z.object({
@@ -375,7 +495,7 @@ export const ChatTurnSchema = z.object({
 })
 export type ChatTurn = z.infer<typeof ChatTurnSchema>
 
-export const AskStartSchema = z.object({
+const AskStartBaseSchema = z.object({
   id: z.string(),
   mode: z.enum(['answer', 'vision', 'suggest', 'summary', 'recap']),
   prompt: z.string().default(''),
@@ -387,6 +507,10 @@ export const AskStartSchema = z.object({
       'Image must be a base64 string under 5.5 MB'
     )
     .optional(),
+  /** UUID of the append-only local transcript session used by eligible local asks. */
+  localSessionId: z.string().uuid().optional(),
+  /** Bounded evidence from the packaged local vision worker. */
+  visionEvidence: LocalVisionEvidenceSchema.optional(),
   /** raw transcript text for suggest mode */
   transcript: z.string().optional(),
   /** 'deeper' = the user tapped "Go deeper" → re-ask for a fuller answer (injected per-turn, never cached) */
@@ -403,6 +527,22 @@ export const AskStartSchema = z.object({
    *  or invalidates the cached system prompt. Capped for defense-in-depth against a hostile renderer. */
   brainContext: z.string().max(8000).optional(),
   history: z.array(ChatTurnSchema).default([])
+})
+export const AskStartSchema = AskStartBaseSchema.superRefine((value, context) => {
+  if (value.visionEvidence && value.mode !== 'vision') {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'visionEvidence is allowed only in vision mode.',
+      path: ['visionEvidence']
+    })
+  }
+  if (value.visionEvidence && value.image !== undefined) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'visionEvidence and image are mutually exclusive.',
+      path: ['visionEvidence']
+    })
+  }
 })
 export type AskStart = z.infer<typeof AskStartSchema>
 
@@ -484,6 +624,14 @@ export const BaseSettingsSchema = z.object({
   // at the meetings folder) needs to read the raw markdown — Métis's own recall/search already decrypts
   // transparently either way. See main/transcripts.ts.
   encryptTranscripts: z.boolean().default(true),
+  // Task MI-5 — publish a plaintext markdown mirror (entity pages + per-meeting note cards + an
+  // llms.txt-shaped index) under `<meetingsFolder>/wiki/` so Dust/graphify/any agent can read the
+  // CRM-corrected brain even while encryptTranscripts keeps the raw transcripts locked. First-run
+  // default is derived from `!encryptTranscripts` (see main/store.ts's getSettings — computed once,
+  // only while the key has never been explicitly chosen); the schema default below only matters for a
+  // brand-new BaseSettingsSchema.parse() call site that doesn't go through that derivation (e.g. tests).
+  // Every publish.ts entry point re-checks this flag itself, so it's always safe to leave off.
+  publishBrainPages: z.boolean().default(false),
   // Auto-delete saved meetings older than N days (GDPR/CCPA storage-limitation control). 0 = off, keep
   // forever (the historical default — an explicit choice, not a silent one, since flipping this on is
   // itself destructive). Swept once per app launch; see sweepExpiredMeetings in main/recall.ts.
@@ -574,7 +722,7 @@ export const BaseSettingsSchema = z.object({
   // auto-start-on-meeting-detected popup's app-name matching).
   customMeetingApps: z.array(z.string().min(1).max(80)).max(20).default([]),
   // Words the ASR engine consistently mishears, always corrected in the live transcript (commitLine).
-  asrCorrections: z.array(z.object({ from: z.string().min(1).max(80), to: z.string().max(80) })).max(100).default([]),
+  asrCorrections: z.array(AsrCorrectionPairSchema).max(100).default([]),
   // Entity-casing bias (SAFE — exact-match only, never phonetic/fuzzy): spell people/account names the
   // brain already knows with their canonical casing in the live transcript. Names come from
   // brain:entityNames; see main/index.ts and lib/entity-casing.ts. On by default.
@@ -736,6 +884,7 @@ export const DEFAULT_SETTINGS: Settings = {
   outputLanguage: 'auto',
   summaryLanguage: 'auto',
   encryptTranscripts: true,
+  publishBrainPages: false,
   transcriptRetentionDays: 0,
   systemPrompt:
     'You are Métis, a fast, sharp desktop assistant living in an always-on overlay. ' +
@@ -893,6 +1042,9 @@ export interface MeetingSummary {
   durationMin: number
   participants: string[]
   topics?: string[]
+  /** Task MI-5: frontmatter `confidential: true` — excludes this meeting from every published wiki
+   *  surface (note card, entity timelines/current-facts, indexes). Undefined/false = not confidential. */
+  confidential?: boolean
 }
 export interface RecallHit extends MeetingSummary {
   snippet: string
@@ -979,6 +1131,15 @@ export const UpdateRecapPayloadSchema = z.object({
 })
 export type UpdateRecapPayload = z.infer<typeof UpdateRecapPayloadSchema>
 
+/** Payload for recall:set-confidential (Task MI-5) — flags/unflags a saved meeting so the wiki
+ *  publisher (main/brain/publish.ts) excludes it from every published surface. `file` is a bare
+ *  basename (re-basenamed in main for defense), mirroring RenameMeetingPayloadSchema/UpdateRecapPayloadSchema. */
+export const SetConfidentialPayloadSchema = z.object({
+  file: z.string().min(1, 'Missing meeting file.'),
+  confidential: z.boolean()
+})
+export type SetConfidentialPayload = z.infer<typeof SetConfidentialPayloadSchema>
+
 /** Result of reading a saved meeting back for "Resume session" (decoded transcript + recap). */
 export interface RecallReadResult {
   ok: boolean
@@ -988,6 +1149,9 @@ export interface RecallReadResult {
   startedAt?: number
   recap?: string
   lines?: TranscriptLine[]
+  /** Task MI-5 — frontmatter `confidential: true`, so a reopened past meeting's toggle reflects its
+   *  actual saved state instead of always starting unflagged. */
+  confidential?: boolean
 }
 
 export interface DustAgentsResponse {
@@ -1002,6 +1166,10 @@ export interface DustCliImport {
   workspaceId?: string
   baseUrl?: string
   error?: string
+  /** true when `dust login`'s browser step finished (access_token present) but the separate interactive
+   *  terminal workspace-picker step never did (workspace_sid missing) — the user just needs to finish
+   *  that step, not re-run the whole install + login. Distinguishes this from "no session at all". */
+  incomplete?: boolean
   /** true when the failure was a BLOCKED keychain read (user hasn't allowed Métis to read the Dust CLI
    *  item) — as opposed to no session existing at all. Lets the UI prompt to allow access instead of
    *  wrongly re-running the install/login setup for a session that is actually present. */
@@ -1021,6 +1189,9 @@ export interface DustCliSetup {
 export interface DustSessionProbe {
   ok: boolean
   accessDenied?: boolean
+  /** true when access_token is present but workspace_sid is missing — the user finished the browser
+   *  OAuth step of `dust login` but not the separate terminal workspace-picker step. */
+  incomplete?: boolean
 }
 
 /** Result of a CLI provider detect/test operation (claude-cli, codex-cli). */

@@ -1,4 +1,5 @@
 import type { MeetingExtraction, DealEntity, LedgerCommitment } from './brain'
+import { RENDERABLE_PROVENANCE_STATES } from './brain'
 
 /**
  * Mars week draft — pre-fill for the weekly Mars report (prospection meetings, cold calls, QMs,
@@ -34,6 +35,11 @@ export interface MarsWeek {
   lost: { name: string; account: string }[]
   openFollowups: { text: string; by: string; due_hint: string; deal: string; date: string }[]
   atRisk: { name: string; account: string; evidence: string }[] // concerning band on an open deal
+  // MI-4 — the verified numbers lane. OPEN deals' amounts, summed per currency (no FX conversion), but
+  // ONLY where the amount sidecar's state is verified/pinned/edited (RENDERABLE_PROVENANCE_STATES) — an
+  // 'extracted' (unverified LLM guess) amount must never contribute to a headline pipeline figure. []
+  // when nothing qualifies; renderMarsMarkdown omits the section entirely in that case.
+  pipelineValue: { currency: string; total: number }[]
 }
 
 const isoDay = (t: number): string => new Date(t).toISOString().slice(0, 10)
@@ -101,7 +107,22 @@ export function buildMarsWeek(extractions: MeetingExtraction[], deals: DealEntit
     .sort((a, b) => (a.date || '').localeCompare(b.date || ''))
     .map((c) => ({ text: c.text, by: c.by, due_hint: c.due_hint, deal: c.dealName, date: c.date }))
 
-  return { weekStart: startDay, weekEnd: endDay, meetings, newAccounts, won, lost, openFollowups, atRisk }
+  // MI-4 render gate: whole-portfolio snapshot (like atRisk, not week-scoped) of OPEN deals' amounts,
+  // grouped per currency (no FX conversion — mixing currencies into one number would be a fabricated
+  // figure of its own) — but ONLY the amounts a human has actually verified/pinned/edited. An
+  // 'extracted' (LLM-only) amount contributes nothing here, no matter how confident the extraction.
+  const pipelineByCurrency = new Map<string, number>()
+  for (const d of deals) {
+    if (d.outcome !== 'open' || !d.amount) continue
+    if (!RENDERABLE_PROVENANCE_STATES.has(d.amount.state)) continue
+    const { currency, value } = d.amount.value
+    pipelineByCurrency.set(currency, (pipelineByCurrency.get(currency) ?? 0) + value)
+  }
+  const pipelineValue = [...pipelineByCurrency.entries()]
+    .map(([currency, total]) => ({ currency, total }))
+    .sort((a, b) => a.currency.localeCompare(b.currency))
+
+  return { weekStart: startDay, weekEnd: endDay, meetings, newAccounts, won, lost, openFollowups, atRisk, pipelineValue }
 }
 
 /** Render the week as a paste-ready markdown draft, honest about what the data can and cannot claim. */
@@ -148,6 +169,14 @@ export function renderMarsMarkdown(w: MarsWeek): string {
   if (w.atRisk.length) {
     lines.push(`## At risk (${w.atRisk.length})`)
     for (const d of w.atRisk) lines.push(`- ${d.name}${d.account ? ` (${d.account})` : ''}${d.evidence ? `: ${d.evidence}` : ''}`)
+    lines.push('')
+  }
+
+  // MI-4 render gate: omitted entirely when no deal has a verified/pinned/edited amount — never a
+  // "0 EUR" line, since that would itself misrepresent an empty pipeline as a measured fact.
+  if (w.pipelineValue.length) {
+    lines.push('## Pipeline value (verified, open deals)')
+    for (const p of w.pipelineValue) lines.push(`- ${p.total.toLocaleString()} ${p.currency}`)
     lines.push('')
   }
 

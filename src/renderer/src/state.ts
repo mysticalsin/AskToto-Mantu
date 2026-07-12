@@ -124,13 +124,14 @@ export function useAutoResize(): (el: HTMLElement | null) => void {
         clearTimeout(shrinkRef.current)
         shrinkRef.current = null
       }
-      if (h >= lastSentRef.current) {
-        push(h, m.width) // GROW immediately — streaming text must never clip behind the window edge
-      } else if (m.width !== undefined) {
+      if (m.width !== undefined) {
         // A width report comes only from the collapsed control pill (data-hug-width), which is fully
-        // static and has nothing to settle. Push immediately so its measured width lands on the very next
-        // frame after the main-process guess resize, reading as one settle instead of a visible double-snap.
-        push(h, m.width)
+        // static. Push its EXACT height (not the 24px-quantized grow step `h`): the pill is ~54px, which
+        // `h` rounds up to 72, leaving ~18px of dead space below it. Exact height makes the window hug the
+        // pill; width still lands on the frame after the main-process guess resize, one clean settle.
+        push(m.height + 2, m.width)
+      } else if (h >= lastSentRef.current) {
+        push(h) // GROW immediately — streaming text must never clip behind the window edge
       } else {
         // SHRINK only after the content settles (~140ms) so a finishing stream doesn't pump the window down
         shrinkRef.current = setTimeout(() => {
@@ -406,6 +407,7 @@ export function useAsk(): {
 
 export function useSettings(): {
   settings: PublicSettings | null
+  bootError: string | null
   refresh: () => Promise<void>
   patch: (p: SettingsPatch) => Promise<void>
   saveKey: (provider: ProviderId, k: string) => Promise<void>
@@ -413,16 +415,57 @@ export function useSettings(): {
   testKey: (provider: ProviderId, k: string) => Promise<TestKeyResponse>
 } {
   const [settings, setSettings] = useState<PublicSettings | null>(null)
+  // Non-null once the first-paint load has exhausted its retries without ever getting settings back —
+  // the app then shows an actionable "couldn't start" card instead of the "Starting Métis…" strip
+  // spinning forever (a persistent getSettings failure: broken preload, unreadable settings, etc.).
+  const [bootError, setBootError] = useState<string | null>(null)
   const refresh = useCallback(async () => {
-    setSettings(await window.toto.getSettings())
+    // Swallow post-boot refresh failures (focus/poll): a transient reject must not surface as an
+    // unhandled rejection, and the next trigger retries. The boot load below owns first-paint recovery.
+    try {
+      setSettings(await window.toto.getSettings())
+      // A later focus-refresh that succeeds means settings ARE reachable again — clear a stale
+      // bootError from the earlier retry-exhausted boot failure so the "couldn't start" card doesn't
+      // linger once the underlying problem (e.g. a transient disk/IPC hiccup) has resolved itself.
+      setBootError(null)
+    } catch (e) {
+      console.error('[settings] refresh failed', e)
+    }
   }, [])
   useEffect(() => {
-    void refresh()
+    // First-paint load with retry. getSettings() can reject before the main-process handler is
+    // registered (boot-order race) or on a transient decrypt hiccup; the app renders only the
+    // "Starting Métis…" strip until `settings` is non-null, and the overlay is usually already
+    // focused so the focus-refetch below never fires — without a retry a single boot reject strands
+    // the app on that strip indefinitely. Retry with backoff until it resolves.
+    let cancelled = false
+    void (async () => {
+      for (let attempt = 0; !cancelled; attempt++) {
+        try {
+          const s = await window.toto.getSettings()
+          if (!cancelled) {
+            setSettings(s)
+            setBootError(null)
+          }
+          return
+        } catch (e) {
+          if (attempt >= 20) {
+            console.error('[boot] getSettings failed after retries; app cannot start', e)
+            if (!cancelled) setBootError(e instanceof Error ? e.message : String(e))
+            return
+          }
+          await new Promise((r) => setTimeout(r, Math.min(150 * (attempt + 1), 1500)))
+        }
+      }
+    })()
     // Refetch on focus so settings changed by the MAIN process (e.g. the Dust CLI auto-connect / token
     // refresh on launch) surface in the UI without the user having to do anything.
     const onFocus = (): void => void refresh()
     window.addEventListener('focus', onFocus)
-    return () => window.removeEventListener('focus', onFocus)
+    return () => {
+      cancelled = true
+      window.removeEventListener('focus', onFocus)
+    }
   }, [refresh])
   const patch = useCallback(async (p: Partial<PublicSettings>) => {
     setSettings(await window.toto.setSettings(p))
@@ -444,7 +487,7 @@ export function useSettings(): {
   const testKey = useCallback(async (provider: ProviderId, k: string) => {
     return window.toto.testApiKey(provider, k)
   }, [])
-  return { settings, refresh, patch, saveKey, clearKey, testKey }
+  return { settings, bootError, refresh, patch, saveKey, clearKey, testKey }
 }
 
 /** How often the renderer re-polls auth status while the app is open.
@@ -476,15 +519,52 @@ export function startAuthRefreshLoop(refresh: () => void, env: AuthRefreshEnv = 
 
 export function useAuth(): {
   status: AuthStatus | null
+  bootError: string | null
   signIn: () => Promise<SignInResult>
   signOut: () => Promise<void>
   refresh: () => Promise<void>
 } {
   const [status, setStatus] = useState<AuthStatus | null>(null)
+  const [bootError, setBootError] = useState<string | null>(null)
   const refresh = useCallback(async () => {
-    setStatus(await window.toto.authStatus())
+    // Swallow post-boot poll/focus failures; the boot loader below owns first-paint recovery.
+    try {
+      setStatus(await window.toto.authStatus())
+    } catch (e) {
+      console.error('[auth] refresh failed', e)
+    }
   }, [])
-  useEffect(() => startAuthRefreshLoop(() => void refresh()), [refresh])
+  useEffect(() => {
+    // First-paint load with retry. authStatus() can reject before the main handler is registered
+    // (boot-order race); the ongoing poll only re-fires every AUTH_POLL_MS (5 min), so a single boot
+    // reject would strand the app on the "Starting Métis…" strip (which waits for auth.status != null)
+    // for minutes. Retry fast until it resolves, then hand off to the poll loop for freshness.
+    let cancelled = false
+    void (async () => {
+      for (let attempt = 0; !cancelled; attempt++) {
+        try {
+          const st = await window.toto.authStatus()
+          if (!cancelled) {
+            setStatus(st)
+            setBootError(null)
+          }
+          return
+        } catch (e) {
+          if (attempt >= 20) {
+            console.error('[boot] authStatus failed after retries', e)
+            if (!cancelled) setBootError(e instanceof Error ? e.message : String(e))
+            return
+          }
+          await new Promise((r) => setTimeout(r, Math.min(150 * (attempt + 1), 1500)))
+        }
+      }
+    })()
+    const stop = startAuthRefreshLoop(() => void refresh())
+    return () => {
+      cancelled = true
+      stop()
+    }
+  }, [refresh])
   const signIn = useCallback(async () => {
     const r = await window.toto.signIn()
     await refresh()
@@ -494,7 +574,7 @@ export function useAuth(): {
     await window.toto.signOut()
     await refresh()
   }, [refresh])
-  return { status, signIn, signOut, refresh }
+  return { status, bootError, signIn, signOut, refresh }
 }
 
 export const PERMISSIONS_POLL_MS = 2500

@@ -123,7 +123,10 @@ export interface ListenApi {
   // an honest "reduced" state instead of the toggle silently always running whisper-base.
   qualityDegraded: boolean
   start: (source: AudioSource, quality?: 'best' | 'fast', engine?: 'whisper' | 'parakeet') => Promise<void>
-  stop: () => void
+  /** onDrained (optional) fires once the up-to-DRAIN_CEILING_MS post-stop drain has fully settled — i.e.
+   *  after the final flushed window has committed via commitLine, so `text()` read inside it reflects the
+   *  complete transcript. Skipped if a fresh start() supersedes this session before the drain finishes. */
+  stop: (onDrained?: () => void) => void
   /** Suspend capture without ending the meeting — the transcript, worker, and (on macOS) the fragile
    *  system-audio loopback session all stay warm so resume() picks back up mid-session. */
   pause: () => void
@@ -1069,10 +1072,15 @@ export function useListen(
   const stoppingRef = useRef(false) // double-stop guard
   const drainTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null) // pending initial drain kickoff timer
   const sessionEpochRef = useRef(0) // incremented each start(); drain/finishTeardown bails if epoch changed
-  const stop = useCallback((): void => {
+  const stop = useCallback((onDrained?: () => void): void => {
     // crashedRef → the worker onerror handler already ran the full teardown; running it again here would
     // thrash state (re-fire setListeningState(false), wipe the crash error) → the "dead-end" tray mismatch.
-    if (stoppingRef.current || crashedRef.current) return // already stopping or already torn down by a crash
+    if (stoppingRef.current || crashedRef.current) {
+      // Nothing left to drain (already stopping, or torn down by a crash) — fire the callback right away
+      // so a caller relying on it (e.g. endReview's recap) still runs instead of silently never firing.
+      onDrained?.()
+      return
+    }
     stoppingRef.current = true
     const myEpoch = sessionEpochRef.current
 
@@ -1120,6 +1128,9 @@ export function useListen(
       setState((s) => ({ ...s, listening: false, paused: false, loading: false, error: null }))
       drainTimerRef.current = null
       stoppingRef.current = false
+      // The final flushed window (if any) has now committed via commitLine — text() reflects the
+      // complete post-drain transcript, safe for a caller (e.g. the recap) to read.
+      onDrained?.()
       // Release the whisper worker (+ ~21MB ONNX wasm + loaded model) after a few idle minutes so it
       // does not sit resident for the entire life of an always-on overlay. ensureWorker() recreates it
       // and start() re-inits the model on the next session; re-arming within the window keeps it warm.

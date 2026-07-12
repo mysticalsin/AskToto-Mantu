@@ -84,7 +84,8 @@ async function readMeetingUncached(path: string, file: string): Promise<Read | n
         mode: fm.mode || 'general',
         durationMin: Number(fm.duration_min || 0),
         participants: (fm.participants || '').split(',').map((s) => s.trim()).filter(Boolean),
-        ...(topics.length ? { topics } : {})
+        ...(topics.length ? { topics } : {}),
+        ...(fm.confidential === 'true' ? { confidential: true } : {})
       }
     }
   } catch {
@@ -185,7 +186,8 @@ export async function recallRead(file: string): Promise<RecallReadResult> {
     mode: fm.mode || 'general',
     startedAt,
     recap,
-    lines
+    lines,
+    confidential: fm.confidential === 'true'
   }
 }
 
@@ -284,13 +286,16 @@ export async function renameMeeting(
   const fmMatch = text.match(/^---\n[\s\S]*?\n---/)
   if (!fmMatch) return { ok: false, error: 'Not a meeting transcript.' }
   const escapedTitle = yamlSafeRenameTitle(title)
-  const newFmBlock = fmMatch[0].replace(/^title:\s*"(?:[^"\\]|\\.)*"\s*$/m, `title: "${escapedTitle}"`)
+  // Replacement FUNCTIONS, not template-literal strings: String.replace treats a string replacement's `$`
+  // sequences ($$, $&, $`, $') as special, so a title containing them (e.g. "Deal $&Co") would otherwise
+  // mangle the output (or splice in the old title / whole match) instead of being written verbatim.
+  const newFmBlock = fmMatch[0].replace(/^title:\s*"(?:[^"\\]|\\.)*"\s*$/m, () => `title: "${escapedTitle}"`)
   if (newFmBlock === fmMatch[0]) return { ok: false, error: 'Could not find a title to rename in this file.' }
   let updated = text.slice(0, fmMatch.index!) + newFmBlock + text.slice(fmMatch.index! + fmMatch[0].length)
 
   // Replace the body's first H1 heading (the only "# " line — recap sections use "## "). Best-effort:
   // an old/malformed file missing it still gets the frontmatter update above.
-  updated = updated.replace(/^#(?!#).*$/m, `# ${title}`)
+  updated = updated.replace(/^#(?!#).*$/m, () => `# ${title}`)
 
   try {
     await writeSaved(fullPath, updated, wasEncrypted)
@@ -416,6 +421,62 @@ export async function updateMeetingRecap(
     await writeSaved(fullPath, updated, wasEncrypted)
   } catch {
     return { ok: false, error: 'Could not save your changes.' }
+  }
+  return { ok: true }
+}
+
+/**
+ * Task MI-5 — flag/unflag a saved meeting as confidential (frontmatter `confidential: true`). Read by
+ * main/brain/publish.ts's readConfidentialMeetings: a confidential meeting is excluded from every
+ * published wiki surface (note card, entity timelines/current-facts, indexes). Rewrites only the
+ * frontmatter block in place — the H1, notes, and full transcript are untouched. Same basename guard,
+ * and same "preserve encryption exactly as found" convention, as renameMeeting/updateMeetingRecap.
+ */
+export async function setMeetingConfidential(
+  settings: Settings,
+  file: string,
+  confidential: boolean
+): Promise<{ ok: boolean; error?: string }> {
+  const folder = resolveMeetingsFolder(settings)
+  const safeName = basename(file) // block traversal
+  if (!safeName || !safeName.endsWith('.md') || safeName === 'index.md' || safeName === 'README.md') {
+    return { ok: false, error: 'Invalid meeting file name.' }
+  }
+
+  const fullPath = join(folder, safeName)
+  let raw: Buffer
+  try {
+    raw = await readFile(fullPath)
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code
+    if (code === 'ENOENT') return { ok: false, error: 'Meeting file not found.' }
+    return { ok: false, error: 'Could not read the meeting file.' }
+  }
+
+  const wasEncrypted = isEncryptedFile(fullPath)
+  const text = decodeSaved(raw)
+  if (!text) return { ok: false, error: 'Meeting file could not be decrypted on this device.' }
+
+  const fmMatch = text.match(/^---\n[\s\S]*?\n---/)
+  if (!fmMatch) return { ok: false, error: 'Not a meeting transcript.' }
+  const hasFlag = /^confidential:\s*.*$/m.test(fmMatch[0])
+  let newFmBlock: string
+  if (confidential) {
+    newFmBlock = hasFlag
+      ? fmMatch[0].replace(/^confidential:\s*.*$/m, 'confidential: true')
+      : fmMatch[0].replace(/\n---$/, '\nconfidential: true\n---')
+  } else {
+    // Unflagging removes the line entirely (absence = not confidential, same as a meeting that never
+    // had the flag) rather than writing `confidential: false` — one canonical "no flag present" shape.
+    newFmBlock = fmMatch[0].replace(/^confidential:\s*.*\r?\n/m, '')
+  }
+  if (newFmBlock === fmMatch[0] && confidential === hasFlag) return { ok: true } // already in the requested state
+  const updated = text.slice(0, fmMatch.index!) + newFmBlock + text.slice(fmMatch.index! + fmMatch[0].length)
+
+  try {
+    await writeSaved(fullPath, updated, wasEncrypted)
+  } catch {
+    return { ok: false, error: 'Could not save the confidential flag.' }
   }
   return { ok: true }
 }

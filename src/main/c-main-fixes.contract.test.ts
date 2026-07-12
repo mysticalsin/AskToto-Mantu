@@ -111,6 +111,9 @@ describe('finding 7: brain:rebuildAll stays guarded (assessed, not modified)', (
     const body = source.slice(start, end)
     expect(body).toMatch(/assertMainWindow\(e\)/)
     expect(body).toMatch(/requireAuth\(\)/)
-    expect(body).toMatch(/purgeBrain\(getSettings\(\)\)/)
+    // MI-2.5 superseded the direct purgeBrain(getSettings()) call with ingest.ts's startRebuild, which
+    // still purges (preserveCorrections: true) but adds a corrupt-journal guard and a checked/resumable
+    // corrections replay — same guarantee (guarded, not silently modified), stronger implementation.
+    expect(body).toMatch(/startRebuild\(getSettings\(\)\)/)
   })
 })

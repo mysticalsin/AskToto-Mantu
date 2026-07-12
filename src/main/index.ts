@@ -35,8 +35,16 @@ import {
   NotebookLmAskPayloadSchema,
   LicenseActivatePayloadSchema,
   SetDealOutcomePayloadSchema,
+  EntityRenamePayloadSchema,
+  EntityMergePayloadSchema,
+  EntityUnmergePayloadSchema,
+  EntityUpdateFieldPayloadSchema,
+  CommitmentRejectPayloadSchema,
+  MeetingExtractionQuerySchema,
+  appendAsrCorrection,
   RenameMeetingPayloadSchema,
   UpdateRecapPayloadSchema,
+  SetConfidentialPayloadSchema,
   ImportAudioStartSchema,
   ImportJobIdSchema,
   ImportDecoderChunkSchema,
@@ -82,7 +90,26 @@ import {
   deleteModel as deleteLocalModel
 } from './llm/local-models'
 import { resetDustConversation, prewarmDustConversation, isDustAuthError } from './llm/dust'
-import { enqueueIngest, startBackfill, brainBackfillProgress, resumeBackfillIfPending, settleCommitment } from './brain/ingest'
+import {
+  enqueueIngest,
+  startBackfill,
+  brainBackfillProgress,
+  resumeBackfillIfPending,
+  settleCommitment,
+  startRebuild
+} from './brain/ingest'
+import {
+  renameEntity,
+  mergeEntities,
+  unmergeEntities,
+  updateEntityField,
+  rejectCommitment,
+  isJournalCorruptionBlocked,
+  clearJournalCorruptionLock,
+  readCorrectionsJournal
+} from './brain/corrections'
+import { publishEntity, removeFromWiki, publishAll, removeWiki } from './brain/publish'
+import { computeAttention } from './brain/attention'
 import { openIntelligenceWindow, isIntelligenceSender, syncIntelContentProtection } from './intelligence'
 import {
   readIndex as readBrainIndex,
@@ -137,6 +164,7 @@ import {
   deleteMeeting,
   renameMeeting,
   updateMeetingRecap,
+  setMeetingConfidential,
   deleteAllMeetings,
   sweepExpiredMeetings
 } from './recall'
@@ -1174,15 +1202,16 @@ const shortcutActions: Record<string, () => void> = {
   explain: () => sendHotkey('explain'),
   summarize: () => sendHotkey('summarize'),
   'spotlight-ref': () => sendHotkey('spotlight-ref'),
+  // 'settings' is in HOTKEY_ACTIONS (shared/ipc.ts) so Settings → Shortcuts renders a bindable "Open
+  // settings" row, and the renderer already handles the hotkey action (App.tsx) — this entry was the one
+  // missing piece: without it registerShortcuts() never registered the combo the row recorded, so it was
+  // a silent no-op with no failure banner either. The tray's own Settings item already sends this same
+  // 'settings' hotkey (sendHotkey('settings') above), so this mirrors that.
+  settings: () => sendHotkey('settings'),
   'scroll-up': () => moveBy(0, -60),
   'scroll-down': () => moveBy(0, 60),
   'scroll-left': () => moveBy(-60, 0),
-  'scroll-right': () => moveBy(60, 0),
-  // 'settings' is in HOTKEY_ACTIONS (bindable in Settings → Keyboard shortcuts, per DEFAULT_SHORTCUTS'
-  // "no global shortcut by default; opened from bar or tray" comment) but was missing here, so a combo
-  // the user recorded for it was silently never registered with the OS. The tray's own 'Settings…' item
-  // already calls sendHotkey('settings') directly (bypassing globalShortcut) — reuse the same handler.
-  settings: () => sendHotkey('settings')
+  'scroll-right': () => moveBy(60, 0)
 }
 
 function resolveShortcut(action: HotkeyAction, user: Record<string, string>): string {
@@ -1433,7 +1462,7 @@ function registerIpc(): void {
     return getPlatformPermissions()
   })
 
-  ipcMain.handle(IPC.settingsSet, (e, patch) => {
+  ipcMain.handle(IPC.settingsSet, async (e, patch) => {
     assertMainWindow(e)
     const p = patch ?? {}
     // License STATE is server-authoritative: only main's activateLicense/heartbeat (license.ts) may
@@ -1443,7 +1472,30 @@ function registerIpc(): void {
     for (const k of ['licenseKey', 'licenseCompanyName', 'licenseSeatCap', 'licenseExpiresAt', 'licenseValid', 'licenseLastValidatedAt']) {
       if (k in p) delete (p as Record<string, unknown>)[k]
     }
-    const wasEncrypted = getSettings().encryptTranscripts
+    const cur = getSettings()
+    const wasEncrypted = cur.encryptTranscripts
+    // Task MI-5 consent gate: turning publishBrainPages ON while transcripts stay encrypted writes
+    // readable meeting intelligence outside the encryption boundary — require an explicit, unmissable
+    // confirmation before it takes effect, the same native-dialog-before-mutation pattern recallDelete
+    // uses ("Confirmed with a native, unmissable modal BEFORE deleting"). Declining silently drops just
+    // that one key from the patch; every other setting in the same patch still saves normally.
+    const willEncrypt = 'encryptTranscripts' in p ? !!p.encryptTranscripts : wasEncrypted
+    if ('publishBrainPages' in p && p.publishBrainPages && !cur.publishBrainPages && willEncrypt) {
+      const dialogOpts = {
+        type: 'warning' as const,
+        title: 'Publish meeting intelligence?',
+        message: 'This publishes readable meeting intelligence to your OneDrive folder.',
+        detail:
+          'Plain-text account/people/deal pages and meeting note cards will be written to your meetings folder (wiki/) so Dust and other tools can read them, even though transcript encryption stays on. Meetings flagged confidential are excluded.',
+        buttons: ['Publish', 'Cancel'],
+        defaultId: 1,
+        cancelId: 1
+      }
+      const { response } = win ? await dialog.showMessageBox(win, dialogOpts) : await dialog.showMessageBox(dialogOpts)
+      const granted = response === 0
+      auditLog('brain.publish.consent', { granted })
+      if (!granted) delete (p as Record<string, unknown>).publishBrainPages
+    }
     const next = setSettings(p)
     auditLog('settings.changed', { keys: Object.keys(p) })
     // At-rest encryption just turned on → purge any previously-built CLEARTEXT knowledge graph so it
@@ -1452,6 +1504,14 @@ function registerIpc(): void {
     if (!wasEncrypted && next.encryptTranscripts) {
       purgeGraphArtifacts()
       auditLog('graph.purged', { reason: 'encryption-enabled' })
+    }
+    // publishBrainPages turned off → the wiki mirror is derived-never-canonical, so delete it outright
+    // (audit-logged). Turned on → materialize it right away instead of waiting for the next meeting/merge.
+    if (cur.publishBrainPages && !next.publishBrainPages) {
+      const r = removeWiki(next)
+      auditLog('brain.publish.disabled', { ok: r.ok })
+    } else if (!cur.publishBrainPages && next.publishBrainPages) {
+      void publishAll(next)
     }
     win?.setContentProtection(contentProtectionOn())
     syncIntelContentProtection() // keep the dashboard window's Private View in lockstep with the overlay
@@ -1582,7 +1642,7 @@ function registerIpc(): void {
     assertMainWindow(e)
     if (!requireAuth()) return { ok: false, error: 'Sign in with your Mantu account first.' }
     const s = await refreshDustCliSession()
-    if (!s.ok || !s.token || !s.workspaceId) return { ok: false, error: s.error, accessDenied: s.accessDenied }
+    if (!s.ok || !s.token || !s.workspaceId) return { ok: false, error: s.error, accessDenied: s.accessDenied, incomplete: s.incomplete }
     setApiKey('dust', s.token)
     setSettings({ dustWorkspaceId: s.workspaceId, dustBaseUrl: s.baseUrl || 'https://dust.tt', dustTokenMintedAt: Date.now() })
     return { ok: true, workspaceId: s.workspaceId, baseUrl: s.baseUrl }
@@ -1597,7 +1657,7 @@ function registerIpc(): void {
   ipcMain.handle(IPC.dustProbeSession, async (e) => {
     assertMainWindow(e)
     const s = await importDustCliSession()
-    return { ok: s.ok, accessDenied: s.accessDenied }
+    return { ok: s.ok, accessDenied: s.accessDenied, incomplete: s.incomplete }
   })
 
   // No CLI session yet → kick off the install + interactive login for the user (opens a Terminal window).
@@ -1618,6 +1678,9 @@ function registerIpc(): void {
         if (Date.now() - startedAt > 5 * 60 * 1000) {
           if (dustSetupPoll) clearInterval(dustSetupPoll)
           dustSetupPoll = null
+          // Silent give-up was undiagnosable — this is the only signal that the user never finished
+          // `dust login` (or got stuck on its separate workspace-picker step) within the 5-minute window.
+          auditLog('dust.setup.timeout')
           return
         }
         if (dustSetupPollInFlight) return
@@ -1917,6 +1980,25 @@ function registerIpc(): void {
     if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message || 'Invalid edit request.' }
     const result = await updateMeetingRecap(getSettings(), parsed.data.file, parsed.data.recap)
     if (result.ok) auditLog('transcript.recap_edited', { file: basename(parsed.data.file) })
+    return result
+  })
+
+  // Task MI-5: flag/unflag a saved meeting as confidential — excludes it from every published wiki
+  // surface (note card, entity timelines/current-facts, indexes). Same guard pattern as
+  // recallUpdateRecap; audit-logged. A full republish is the simplest correct way to make the exclusion
+  // (or its reversal) take effect everywhere at once — cheap at this app's single-exec scale, and it's
+  // the exact same idempotent full regen rebuildAll already relies on.
+  ipcMain.handle(IPC.recallSetConfidential, async (e, raw) => {
+    assertMainWindow(e)
+    if (!requireAuth()) return { ok: false, error: 'Sign in with your Mantu account first.' }
+    const parsed = SetConfidentialPayloadSchema.safeParse(raw)
+    if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message || 'Invalid request.' }
+    const s = getSettings()
+    const result = await setMeetingConfidential(s, parsed.data.file, parsed.data.confidential)
+    if (result.ok) {
+      auditLog('transcript.confidential_set', { file: basename(parsed.data.file), confidential: parsed.data.confidential })
+      void publishAll(s)
+    }
     return result
   })
 
@@ -2449,7 +2531,10 @@ function registerIpc(): void {
       nodes: graph.nodes.length,
       edges: graph.edges.length,
       warnings: idx.warnings.length,
-      backfill: brainBackfillProgress()
+      backfill: brainBackfillProgress(),
+      // MI-2.5 review round 3: computed fresh from the on-disk sentinel each poll — lets BrainView offer
+      // the in-app "Reset corrections lock" recovery instead of a hand-deleted hidden .brain file.
+      corruptionBlocked: isJournalCorruptionBlocked(s)
     }
   })
   ipcMain.handle(IPC.brainBackfill, (e) => {
@@ -2462,15 +2547,34 @@ function registerIpc(): void {
   // Full rebuild: wipe the DERIVED store (entities/graph/extractions — never the source transcripts)
   // and re-extract everything with the current schema/prompt. This is the upgrade path for legacy
   // extractions (e.g. untagged feedback that rendered as a flat confidence wall in the dashboard).
-  ipcMain.handle(IPC.brainRebuildAll, (e) => {
+  ipcMain.handle(IPC.brainRebuildAll, async (e) => {
     // Privileged write (purges the derived brain store) — main-window only, like brainCommitmentSettle,
     // never the Mantu Intelligence window's assertBrainReader (that's for the three read-only channels).
     assertMainWindow(e)
     if (!requireAuth()) throw new Error('Not signed in.')
-    purgeBrain(getSettings())
-    const r = startBackfill()
+    // The full orchestration lives in ingest.ts's startRebuild (unit-testable, keeps this handler thin):
+    //  - preserveCorrections purge whose result is CHECKED (MI-2.5 Fix F — abort on a partial wipe);
+    //  - a corrupt/blocked-journal guard (MI-2.5 review Fix 2 — refuse rather than rebuild atop a store
+    //    onto which zero corrections could be replayed, which would silently revert every human fix);
+    //  - the replayPending flag (Fix E) + the onDrained replay that clears it only on a clean replay.
+    const r = await startRebuild(getSettings())
+    if (r.error) {
+      auditLog('brain.rebuild.aborted', {})
+      return r
+    }
     auditLog('brain.backfill.start', { queued: r.queued, rebuild: true })
     return r
+  })
+  // MI-2.5 review round 3: user-invoked recovery from a durable correction-journal corruption lock —
+  // clears the sentinel so corrections resume (the quarantined corrections.corrupt-*.json copy is left
+  // for inspection). Privileged (mutates correction-engine state) — main-window only + requireAuth, same
+  // guards as brainSetDealOutcome. Takes no payload, so there is nothing to zod-validate beyond the guards.
+  ipcMain.handle(IPC.brainClearJournalCorruption, (e) => {
+    assertMainWindow(e)
+    if (!requireAuth()) return { ok: false, error: 'Sign in with your Mantu account first.' }
+    const cleared = clearJournalCorruptionLock(getSettings())
+    auditLog('brain.corrections.lock_cleared', { cleared })
+    return { ok: true, cleared }
   })
   // Full assembled dataset for the Mantu Intelligence dashboard (decrypted in main when needed).
   ipcMain.handle(IPC.brainRead, (e) => {
@@ -2514,6 +2618,126 @@ function registerIpc(): void {
     if (!updated) return { ok: false, error: 'Deal not found.' }
     auditLog('brain.deal.outcome', { outcome: parsed.data.outcome })
     return { ok: true }
+  })
+
+  // Correction engine (Task MI-2): five human-correction channels, each cloned from
+  // brain:setDealOutcome's pattern above — zod safeParse + main-window-only + requireAuth + audit. Every
+  // mutation goes through src/main/brain/corrections.ts so brain:rebuildAll's journal replay (which
+  // calls the exact same functions) can reproduce it deterministically — see corrections.ts's module
+  // doc comment for the single-mutation-implementation invariant.
+  ipcMain.handle(IPC.brainEntityRename, async (e, raw) => {
+    assertMainWindow(e)
+    if (!requireAuth()) return { ok: false, error: 'Sign in with your Mantu account first.' }
+    const parsed = EntityRenamePayloadSchema.safeParse(raw)
+    if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message || 'Invalid rename request.' }
+    const { kind, id, newName, alsoFixAsr } = parsed.data
+    // Captured BEFORE the rename so alsoFixAsr can pair the OLD display name with the new one.
+    const oldName =
+      kind === 'person'
+        ? readBrainPerson(getSettings(), id)?.name
+        : kind === 'account'
+          ? readBrainAccount(getSettings(), id)?.name
+          : readBrainDeal(getSettings(), id)?.name
+    const r = await renameEntity(getSettings(), { kind, id, newName })
+    if (!r.ok) return r
+    await publishEntity(getSettings(), kind, id) // Task MI-5: keep the wiki page in sync with the live rename
+    // alsoFixAsr composition lives here, not in corrections.ts (that module owns brain-entity
+    // mutations only) — appends the {from, to} pair to settings.asrCorrections in the exact shape
+    // commitLine's correctionsRef consumer expects (see lib/listen.ts), so the live transcript stops
+    // mishearing the old name going forward. appendAsrCorrection validates the PAIR before it ever
+    // reaches setSettings: store.ts's validKeysOnly drops the whole asrCorrections array when one
+    // element fails validation (e.g. a name over the 80-char cap), which would silently wipe every
+    // correction the user already had. A skipped pair never blocks the rename itself — the caller
+    // gets { ok: true, asrSkipped: true, reason } and the skip is audit-logged.
+    if (alsoFixAsr && oldName && oldName !== newName) {
+      const composed = appendAsrCorrection(getSettings().asrCorrections, oldName, newName)
+      if (composed.kind === 'append') {
+        setSettings({ asrCorrections: composed.pairs })
+        // MI-2.5 Fix H: a DISTINCT audit event, separate from brain.entity.renamed below — installing an
+        // ASR rewrite rule silently changes how future spoken transcripts get transcribed, a
+        // security-relevant setting mutation that must be visible in the trail on its own, not just
+        // inferable from the rename. (The skipped-pair path already got its own distinct log below.)
+        auditLog('brain.entity.asr_correction_added', { kind })
+      }
+      if (composed.kind === 'skipped') {
+        auditLog('brain.entity.renamed', { kind, asrSkipped: true })
+        return { ok: true, asrSkipped: true, reason: composed.reason }
+      }
+    }
+    auditLog('brain.entity.renamed', { kind })
+    return { ok: true }
+  })
+  ipcMain.handle(IPC.brainEntityMerge, async (e, raw) => {
+    assertMainWindow(e)
+    if (!requireAuth()) return { ok: false, error: 'Sign in with your Mantu account first.' }
+    const parsed = EntityMergePayloadSchema.safeParse(raw)
+    if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message || 'Invalid merge request.' }
+    const r = await mergeEntities(getSettings(), parsed.data)
+    if (r.ok) {
+      auditLog('brain.entity.merged', { kind: parsed.data.kind })
+      // Task MI-5: the survivor's page picks up the merged-in data; the source's stale page is removed.
+      const s = getSettings()
+      await publishEntity(s, parsed.data.kind, parsed.data.intoId)
+      await removeFromWiki(s, parsed.data.kind, parsed.data.fromId)
+    }
+    return r
+  })
+  ipcMain.handle(IPC.brainEntityUnmerge, async (e, raw) => {
+    assertMainWindow(e)
+    if (!requireAuth()) return { ok: false, error: 'Sign in with your Mantu account first.' }
+    const parsed = EntityUnmergePayloadSchema.safeParse(raw)
+    if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message || 'Invalid request.' }
+    const s = getSettings()
+    // Task MI-5: unmergeEntities' payload is just {targetSeq} — read the journal (read-only, before the
+    // mutation) for the kind/fromId/intoId this hook needs to know which wiki pages to republish once
+    // both entities are restored. unmergeEntities re-derives the same entry internally to do the actual
+    // restore; this is a second, harmless read of the same journal.
+    const journalEntry = readCorrectionsJournal(s).find((en) => en.kind === 'entity_merge' && en.seq === parsed.data.targetSeq)
+    const r = await unmergeEntities(s, parsed.data)
+    if (r.ok) {
+      auditLog('brain.entity.unmerged', {})
+      if (journalEntry && journalEntry.kind === 'entity_merge') {
+        await publishEntity(s, journalEntry.payload.kind, journalEntry.payload.fromId)
+        await publishEntity(s, journalEntry.payload.kind, journalEntry.payload.intoId)
+      }
+    }
+    return r
+  })
+  ipcMain.handle(IPC.brainEntityUpdateField, async (e, raw) => {
+    assertMainWindow(e)
+    if (!requireAuth()) return { ok: false, error: 'Sign in with your Mantu account first.' }
+    const parsed = EntityUpdateFieldPayloadSchema.safeParse(raw)
+    if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message || 'Invalid field update.' }
+    const r = await updateEntityField(getSettings(), parsed.data)
+    if (r.ok) {
+      auditLog('brain.entity.field_updated', { kind: parsed.data.kind, field: parsed.data.field })
+      await publishEntity(getSettings(), parsed.data.kind, parsed.data.id)
+    }
+    return r
+  })
+  ipcMain.handle(IPC.brainCommitmentReject, async (e, raw) => {
+    assertMainWindow(e)
+    if (!requireAuth()) return { ok: false, error: 'Sign in with your Mantu account first.' }
+    const parsed = CommitmentRejectPayloadSchema.safeParse(raw)
+    if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message || 'Invalid commitment.' }
+    const r = await rejectCommitment(getSettings(), parsed.data)
+    if (r.ok) auditLog('brain.commitment.rejected', {})
+    return r
+  })
+
+  // Task MI-3: two read-only channels feeding the CRM record pages, the Review.tsx entity strip, and the
+  // needs-attention queue. Same guard pattern as the other brain reads — no audit event (nothing mutates).
+  ipcMain.handle(IPC.brainMeetingExtraction, (e, raw) => {
+    assertMainWindow(e)
+    if (!requireAuth()) return null
+    const parsed = MeetingExtractionQuerySchema.safeParse(raw)
+    if (!parsed.success) return null
+    return readBrainMeetingExtraction(getSettings(), brainSlugify(basename(parsed.data.file)))
+  })
+  ipcMain.handle(IPC.brainAttention, (e) => {
+    assertMainWindow(e)
+    if (!requireAuth()) return { items: [] }
+    return { items: computeAttention(getSettings()) }
   })
 
   // Periodic best-effort snapshot of an IN-PROGRESS meeting (renderer calls this every ~60s while

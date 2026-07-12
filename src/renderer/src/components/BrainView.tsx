@@ -8,6 +8,7 @@ import {
   CalendarClock,
   CalendarX,
   Check,
+  ChevronRight,
   ClipboardList,
   ExternalLink,
   HelpCircle,
@@ -18,13 +19,14 @@ import {
   VolumeX,
   X
 } from 'lucide-react'
-import type { BrainRead, BrainStatus, Band, DealEntity, LedgerCommitment } from '@shared/brain'
-import type { MeetingSummary } from '@shared/ipc'
+import type { BrainRead, BrainStatus, Band, DealEntity, EntityKind, LedgerCommitment } from '@shared/brain'
+import type { AttentionItem, MeetingSummary } from '@shared/ipc'
 import { computeSilence } from '@shared/silence'
 import { buildMarsWeek, renderMarsMarkdown } from '@shared/mars'
 import { MantuMark } from './MantuMark'
 import { Spinner } from './ui'
 import { useFlash } from '../lib/useFlash'
+import { BrainRecordPage, recordKey, sortAttentionItems, type BrainRecordRef, type RecentMerge } from './BrainRecordPage'
 
 /**
  * Mantu Intelligence — the second-brain dashboard over the meeting knowledge store (.brain/).
@@ -210,10 +212,14 @@ function SectorBars({ sectors }: { sectors: { sector: string; n: number }[] }): 
 
 function DealRow({
   deal,
-  onSetOutcome
+  onSetOutcome,
+  onOpenRecord,
+  accountIdByName
 }: {
   deal: DealEntity
   onSetOutcome: (deal: DealEntity, outcome: 'open' | 'won' | 'lost') => void
+  onOpenRecord: (kind: EntityKind, id: string) => void
+  accountIdByName: Map<string, string>
 }): JSX.Element {
   const band = deal.win_likelihood_band ? BAND_META[deal.win_likelihood_band] : null
   const vel = VELOCITY_META[deal.velocity.signal]
@@ -234,8 +240,26 @@ function DealRow({
     >
       <div className="flex items-center gap-2">
         <div className="min-w-0 flex-1 truncate text-[13px] font-semibold text-[color:var(--color-ink)]">
-          {deal.name}
-          {deal.account && <span className="font-normal text-[color:var(--color-ink-3)]"> · {deal.account}</span>}
+          <button
+            type="button"
+            onClick={() => onOpenRecord('deal', deal.id)}
+            className="no-drag focus-ring rounded hover:underline"
+          >
+            {deal.name}
+          </button>
+          {deal.account &&
+            (accountIdByName.has(deal.account) ? (
+              <button
+                type="button"
+                onClick={() => onOpenRecord('account', accountIdByName.get(deal.account)!)}
+                className="no-drag focus-ring rounded font-normal text-[color:var(--color-ink-3)] hover:text-[color:var(--color-ink)] hover:underline"
+              >
+                {' '}
+                · {deal.account}
+              </button>
+            ) : (
+              <span className="font-normal text-[color:var(--color-ink-3)]"> · {deal.account}</span>
+            ))}
         </div>
         {closed ? (
           <>
@@ -300,14 +324,30 @@ function DealRow({
 
 const BAND_ORDER: Record<string, number> = { concerning: 0, mixed: 1, good: 2 }
 
-export function BrainView({ onBack }: { onBack: () => void }): JSX.Element {
+export function BrainView({
+  onBack,
+  onOpenMeeting
+}: {
+  onBack: () => void
+  /** Opens a saved meeting read-only (the same handler History/Settings use) — record pages' provenance
+   *  chips and meeting timelines, and the Attention section's jump action, all resolve through this. */
+  onOpenMeeting?: (file: string) => void
+}): JSX.Element {
   const [data, setData] = useState<BrainRead | null>(null)
   const [marsCopied, flashMarsCopied] = useFlash(2000)
   const [status, setStatus] = useState<BrainStatus | null>(null)
   const [meetings, setMeetings] = useState<MeetingSummary[]>([])
+  const [attention, setAttention] = useState<AttentionItem[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [backfilling, setBackfilling] = useState(false)
+  // Drill-down record page (Task MI-3) — in-component navigation state, matching how this dashboard
+  // already handles internal sections (no router). Cleared implicitly whenever the header's Back arrow
+  // pops it, so returning to the dashboard is always one click regardless of how deep a merge chain went.
+  const [record, setRecord] = useState<BrainRecordRef | null>(null)
+  // Survives ACROSS a post-merge navigation (record changes to the surviving entity) — lifted up here
+  // rather than owned by BrainRecordPage itself, which remounts fresh on every record change.
+  const [recentMerge, setRecentMerge] = useState<RecentMerge | null>(null)
   // Guards against overlapping polls during a long backfill: brainRead can take longer than the 4s
   // poll interval as ingestion grows, so without this an older, slower-resolving snapshot can land
   // after a newer one and make the KPI tiles/lists visibly jump backward.
@@ -317,14 +357,16 @@ export function BrainView({ onBack }: { onBack: () => void }): JSX.Element {
     if (refreshingRef.current) return
     refreshingRef.current = true
     try {
-      const [read, st, list] = await Promise.all([
+      const [read, st, list, att] = await Promise.all([
         window.toto.brainRead(),
         window.toto.brainStatus(),
-        window.toto.recallList()
+        window.toto.recallList(),
+        window.toto.brainAttention()
       ])
       setData(read)
       setStatus(st)
       setMeetings(list)
+      setAttention(att.items)
       setError(null)
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
@@ -335,6 +377,20 @@ export function BrainView({ onBack }: { onBack: () => void }): JSX.Element {
   }, [])
 
   useEffect(() => {
+    void refresh()
+  }, [refresh])
+
+  const openRecord = useCallback((kind: EntityKind, id: string) => setRecord({ kind, id }), [])
+
+  // MI-2.5 review round 3: in-app recovery from a durable correction-journal corruption lock — clears the
+  // sentinel (the quarantined copy is left for inspection) so corrections resume, then re-reads. Without
+  // this the only fix was hand-deleting a hidden .brain/corrections.corruption.lock in the OneDrive folder.
+  const resetCorruptionLock = useCallback(async (): Promise<void> => {
+    try {
+      await window.toto.brainClearJournalCorruption()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    }
     void refresh()
   }, [refresh])
 
@@ -406,6 +462,29 @@ export function BrainView({ onBack }: { onBack: () => void }): JSX.Element {
     }
   }, [refresh])
 
+  // Undo a just-completed merge (the record page's post-merge banner) — restores both sides from the
+  // journal snapshot and lands back on the just-restored (fromId) record.
+  const undoMerge = useCallback(async (): Promise<void> => {
+    if (!recentMerge) return
+    const { seq, kind, fromId } = recentMerge
+    const r = await window.toto.brainEntityUnmerge(seq)
+    if (r.ok) {
+      setRecentMerge(null)
+      await refresh()
+      setRecord({ kind, id: fromId })
+    } else {
+      setError(r.error ?? 'Could not undo the merge.')
+    }
+  }, [recentMerge, refresh])
+
+  // Account name → id, so an account mentioned inline elsewhere (a deal's `.account` string) can jump to
+  // its record page — those call sites only ever hold the display name, not the entity id.
+  const accountIdByName = useMemo(() => {
+    const map = new Map<string, string>()
+    for (const a of data?.accounts ?? []) map.set(a.name, a.id)
+    return map
+  }, [data])
+
   const sectors = useMemo(() => {
     const by = new Map<string, number>()
     for (const a of data?.accounts ?? []) by.set(a.sector, (by.get(a.sector) || 0) + 1)
@@ -464,7 +543,9 @@ export function BrainView({ onBack }: { onBack: () => void }): JSX.Element {
         <button
           type="button"
           aria-label="Back"
-          onClick={onBack}
+          // A record page pops back to the dashboard first; only a second Back leaves Mantu Intelligence
+          // entirely — matching how every other in-component drill-down in this app layers Escape/Back.
+          onClick={() => (record ? setRecord(null) : onBack())}
           className="no-drag focus-ring grid h-7 w-7 shrink-0 place-items-center rounded-lg text-[color:var(--color-ink-3)] hover:text-[color:var(--color-ink)]"
         >
           <ArrowLeft size={15} />
@@ -475,7 +556,7 @@ export function BrainView({ onBack }: { onBack: () => void }): JSX.Element {
             Mantu Intelligence
           </div>
           <div className="text-[11px] text-[color:var(--color-ink-3)]">
-            Your meeting knowledge, compounding. Grounded in transcripts, never invented.
+            {record ? 'Record' : 'Your meeting knowledge, compounding. Grounded in transcripts, never invented.'}
           </div>
         </div>
         <button
@@ -498,6 +579,25 @@ export function BrainView({ onBack }: { onBack: () => void }): JSX.Element {
         <div className="flex items-center justify-center gap-2 py-10 text-[12px] text-[color:var(--color-ink-3)]">
           <Spinner size={14} /> Reading the brain…
         </div>
+      ) : record && data ? (
+        <BrainRecordPage
+          // Force a genuine remount on every record change (incl. direct record→record transitions:
+          // post-merge onOpenRecord to the survivor, post-undo setRecord to the restored source).
+          // Without this React reuses the instance and leftover local edit state (header rename draft,
+          // each FieldCard's editing/draft/pending) would survive the swap and save to the WRONG entity
+          // — a misattribution the whole correction feature exists to prevent. See recordKey's doc.
+          key={recordKey(record)}
+          recordRef={record}
+          data={data}
+          onOpenRecord={openRecord}
+          onOpenMeeting={onOpenMeeting}
+          onRefresh={refresh}
+          onError={setError}
+          onMerged={setRecentMerge}
+          recentMerge={recentMerge}
+          onUndoMerge={() => void undoMerge()}
+          onDismissMerge={() => setRecentMerge(null)}
+        />
       ) : ingested === 0 && !bf?.running ? (
         /* Empty state — the brain has not ingested anything yet. */
         <div className="flex flex-col items-center gap-3 rounded-xl border border-[var(--color-hair-soft)] bg-white/[0.02] px-6 py-8 text-center">
@@ -562,6 +662,44 @@ export function BrainView({ onBack }: { onBack: () => void }): JSX.Element {
                 transcripts are short or don&rsquo;t name clients. Longer, client-facing meetings will fill this in.
               </div>
             )}
+
+          {/* ATTENTION — lint contradictions, AMBIGUOUS fields, and pins a later meeting disputed. Never
+              auto-resolved; each row jumps straight to the entity's record page. Empty state is a single
+              quiet line (not a panel) — an empty queue is good news, not a gap to explain. */}
+          <div>
+            <div className="mb-1.5 flex items-center gap-1.5">
+              <span className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-[color:var(--color-ink-3)]">
+                <AlertTriangle size={11} /> Attention
+              </span>
+              {attention.length > 0 && (
+                <span className="rounded-full bg-white/[0.08] px-1.5 py-px text-[10px] font-semibold text-[color:var(--color-ink-2)]">
+                  {attention.length}
+                </span>
+              )}
+            </div>
+            {attention.length === 0 ? (
+              <div className="text-[12px] text-[color:var(--color-ink-3)]">Nothing needs a look right now.</div>
+            ) : (
+              <div className="flex flex-col gap-1 rounded-xl border border-[var(--color-hair-soft)] bg-white/[0.02] px-3 py-2.5">
+                {sortAttentionItems(attention)
+                  .slice(0, 8)
+                  .map((item, i) => (
+                    <button
+                      key={`${item.kind}:${item.entityKind}:${item.id}:${i}`}
+                      type="button"
+                      onClick={() => openRecord(item.entityKind, item.id)}
+                      className="no-drag focus-ring flex items-center gap-2 rounded-lg px-1.5 py-1 text-left hover:bg-white/[0.06]"
+                    >
+                      <span className="min-w-0 flex-1">
+                        <span className="text-[12px] font-semibold text-[color:var(--color-ink)]">{item.label}</span>
+                        <span className="block truncate text-[11px] text-[color:var(--color-ink-3)]">{item.detail}</span>
+                      </span>
+                      <ChevronRight size={13} className="shrink-0 text-[color:var(--color-ink-3)]" />
+                    </button>
+                  ))}
+              </div>
+            )}
+          </div>
 
           {/* FACTUAL — volume + sectors */}
           <div className="rounded-xl border border-[var(--color-hair-soft)] bg-white/[0.02] px-3 py-2.5">
@@ -820,7 +958,13 @@ export function BrainView({ onBack }: { onBack: () => void }): JSX.Element {
               <SectionTitle>Opportunities: win read &amp; momentum</SectionTitle>
               <div className="flex flex-col gap-1.5">
                 {deals.map((d) => (
-                  <DealRow key={d.name + d.account} deal={d} onSetOutcome={handleSetDealOutcome} />
+                  <DealRow
+                    key={d.name + d.account}
+                    deal={d}
+                    onSetOutcome={handleSetDealOutcome}
+                    onOpenRecord={openRecord}
+                    accountIdByName={accountIdByName}
+                  />
                 ))}
               </div>
             </div>
@@ -837,7 +981,13 @@ export function BrainView({ onBack }: { onBack: () => void }): JSX.Element {
                 {people.map((p) => (
                   <div key={p.name} className="flex items-center gap-2 text-[12px]">
                     <span className="min-w-0 flex-1 truncate text-[color:var(--color-ink-2)]">
-                      <span className="font-semibold text-[color:var(--color-ink)]">{p.name}</span>
+                      <button
+                        type="button"
+                        onClick={() => openRecord('person', p.id)}
+                        className="no-drag focus-ring rounded font-semibold text-[color:var(--color-ink)] hover:underline"
+                      >
+                        {p.name}
+                      </button>
                       {(p.role || p.account) && (
                         <span className="text-[color:var(--color-ink-3)]">
                           {' '}
@@ -873,20 +1023,53 @@ export function BrainView({ onBack }: { onBack: () => void }): JSX.Element {
             </div>
           )}
 
-          {/* Lint warnings — contradictions the ingest refused to auto-resolve */}
-          {(data?.index.warnings.length ?? 0) > 0 && (
-            <div className="rounded-xl border border-[var(--color-danger)]/20 bg-[var(--color-danger)]/5 px-3 py-2">
+          {/* MI-2.5 review round 3: "Corrections paused" — always shown ABOVE the lint list (which is
+              sliced to 5 and could otherwise push this off-screen). Covers a durable corruption lock
+              (status.corruptionBlocked → offer the in-app "Reset corrections lock" recovery) and/or a
+              failed rebuild replay (index.replayError, surfaced distinctly here rather than lost in the
+              lint slice). The replay-failure warning string is filtered out of the lint list below to
+              avoid duplication. */}
+          {(status?.corruptionBlocked || data?.index.replayError) && (
+            <div className="rounded-xl border border-[var(--color-danger)]/40 bg-[var(--color-danger)]/10 px-3 py-2.5">
               <SectionTitle>
                 <AlertTriangle size={11} className="mr-1 inline" />
-                Needs a human read
+                Corrections paused
               </SectionTitle>
-              <ul className="flex list-disc flex-col gap-0.5 pl-4 text-[11px] text-[color:var(--color-ink-3)]">
-                {data!.index.warnings.slice(0, 5).map((w, i) => (
-                  <li key={i}>{w}</li>
-                ))}
-              </ul>
+              <div className="text-[11px] text-[color:var(--color-ink-2)]">
+                {data?.index.replayError
+                  ? `A rebuild could not re-apply your saved corrections: ${data.index.replayError}`
+                  : 'The correction journal on this device was locked after a corruption was detected and preserved. Your prior corrections are safe in a preserved copy.'}
+              </div>
+              {status?.corruptionBlocked && (
+                <button
+                  type="button"
+                  onClick={() => void resetCorruptionLock()}
+                  className="no-drag focus-ring mt-2 rounded-lg border border-[var(--color-hair-soft)] bg-white/[0.04] px-2.5 py-1 text-[11px] font-semibold text-[color:var(--color-ink)] hover:bg-white/[0.08]"
+                >
+                  Reset corrections lock
+                </button>
+              )}
             </div>
           )}
+
+          {/* Lint warnings — contradictions the ingest refused to auto-resolve (the replay-failure notice
+              is shown in the banner above, so it's filtered out here to avoid duplication + being cut off). */}
+          {(() => {
+            const lint = (data?.index.warnings ?? []).filter((w) => !w.includes('re-apply your saved corrections'))
+            return lint.length > 0 ? (
+              <div className="rounded-xl border border-[var(--color-danger)]/20 bg-[var(--color-danger)]/5 px-3 py-2">
+                <SectionTitle>
+                  <AlertTriangle size={11} className="mr-1 inline" />
+                  Needs a human read
+                </SectionTitle>
+                <ul className="flex list-disc flex-col gap-0.5 pl-4 text-[11px] text-[color:var(--color-ink-3)]">
+                  {lint.slice(0, 5).map((w, i) => (
+                    <li key={i}>{w}</li>
+                  ))}
+                </ul>
+              </div>
+            ) : null
+          })()}
 
           {/* Footer: escalate from this in-overlay glance to the full dedicated dashboard window */}
           <button

@@ -1,0 +1,38 @@
+{
+  "people": [
+    { "name": "Nadia Ferrand", "role": "VP Procurement", "org": "RetailCo" },
+    { "name": "Tom Reyes", "role": "Store Ops Director", "org": "RetailCo" }
+  ],
+  "accounts": [{ "name": "RetailCo", "sector": "retail" }],
+  "deals": [{ "name": "RetailCo POS Rollout", "account": "RetailCo", "stage": "proposal" }],
+  "numeric_facts": [
+    {
+      "kind": "percent",
+      "value": 12,
+      "unit": "%",
+      "quote": "We saw a 12 percent lift in checkout speed during the pilot"
+    },
+    {
+      "kind": "amount",
+      "value": 3500000,
+      "unit": "EUR",
+      "quote": "the rollout is valued at three point five million EUR across all stores"
+    },
+    {
+      "kind": "amount",
+      "value": 200000,
+      "unit": null,
+      "quote": "the pilot alone is budgeted at 200k for the first quarter"
+    },
+    {
+      "kind": "headcount",
+      "value": 80,
+      "unit": null,
+      "quote": "that will need to cover 80 store managers nationwide"
+    }
+  ],
+  "commitments": [
+    { "text": "put together a training plan and send it over by next week", "by": "you" },
+    { "text": "review the store rollout order", "by": "Tom Reyes" }
+  ]
+}

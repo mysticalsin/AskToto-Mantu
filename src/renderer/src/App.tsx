@@ -19,6 +19,7 @@ import { UpdateReadyToast } from './components/UpdateReadyToast'
 import { NewMeetingToast } from './components/NewMeetingToast'
 import { VisibilityToast, type VisibilityToastState } from './components/VisibilityToast'
 import { RecordingConsentReminder } from './components/RecordingConsentReminder'
+import { MeetingOpenErrorToast } from './components/MeetingOpenErrorToast'
 import { QuickActions, type QuickKind } from './components/QuickActions'
 import { useAsk, useAutoResize, useSettings, useAuth, type AnswerState } from './state'
 import { useWindowDrag } from './lib/window-drag'
@@ -119,15 +120,23 @@ export function App(): JSX.Element {
   }, [])
   const windowDrag = useWindowDrag(onWindowDragStart, { noTouch: true })
 
-  const { settings, patch, saveKey, clearKey, testKey, refresh } = useSettings()
+  const { settings, bootError: settingsBootError, patch, saveKey, clearKey, testKey, refresh } = useSettings()
   const auth = useAuth() // Azure AD gate (only enforces when configured)
+  const bootError = settingsBootError ?? auth.bootError
+
+  // ── License enforcement master switch ──────────────────────────────────────────────────────────
+  // OFF for now: every copy is treated as valid and the activation gate never renders, regardless of
+  // the stored `licenseGateEnabled` setting. All the licensing code (main/license.ts, the LicenseGate
+  // component, the settings toggle, the heartbeat) is intact — flip this ONE constant to `true` to
+  // restore device licensing exactly as before.
+  const LICENSE_ENFORCEMENT = false
+  const licenseEnforced = LICENSE_ENFORCEMENT && settings?.licenseGateEnabled === true
 
   // License gate verdict (main/license.ts checkLicenseGrace(), via the license:gate IPC channel). Only
-  // fetched while settings.licenseGateEnabled is true — the shipped default is false, so this adds zero
-  // extra IPC calls for the overwhelming majority of installs. Re-fetches if the flag flips mid-session.
+  // fetched while enforcement is on AND settings.licenseGateEnabled is true. Re-fetches if either flips.
   const [licenseGate, setLicenseGate] = useState<LicenseGateVerdict | null>(null)
   useEffect(() => {
-    if (!settings?.licenseGateEnabled) {
+    if (!licenseEnforced) {
       setLicenseGate(null)
       return
     }
@@ -138,7 +147,7 @@ export function App(): JSX.Element {
     return () => {
       cancelled = true
     }
-  }, [settings?.licenseGateEnabled])
+  }, [licenseEnforced])
   // Re-fetches the verdict AND the underlying settings (a successful activation changes both
   // licenseServerUrl and the server-authoritative license fields) — used by LicenseGate's Activate and
   // Retry actions. The gate drops on its own, once `licenseGate.allowed` flips true, on the next render.
@@ -252,6 +261,7 @@ export function App(): JSX.Element {
     recap: string
     lines: TranscriptLine[]
     startedAt: number
+    confidential: boolean
   } | null>(null)
   // Surfaced when opening a past meeting fails (recallRead ok:false — unreadable/undecrypted file). Every
   // open path (History row, Settings' Mantu Intelligence list, Review's own Recent-meetings/Related panel)
@@ -1181,17 +1191,35 @@ export function App(): JSX.Element {
     // UI still looked "live") could cancel/restart the summary indefinitely instead of ever seeing it land.
     if (stoppingRef.current) return
     stoppingRef.current = true
-    const tx = listen.text()
-    listen.stop()
     setView('review')
     setCollapsed(false)
-    if (tx.trim()) {
-      // Cascade the recap into Dust whenever it's configured, regardless of the active provider (e.g.
-      // Kimi handles everyday chat, Dust still writes the meeting notes) — no agentOverride needed, the
-      // normal think-tier resolution inside Dust already respects the user's own Thinking-agent pick.
-      const dustReady = isDustReady(settings?.hasKeys ?? {}, settings?.dustWorkspaceId ?? '', settings?.providerModels ?? {})
-      ask.run({ mode: 'recap', transcript: tx, ...(dustReady ? { providerOverride: 'dust' as const } : {}) })
-    } else ask.clear()
+    // Read the transcript AFTER stop()'s drain has fully settled — not before — so the recap is built
+    // from the same complete transcript that gets auto-saved, including a final utterance that was still
+    // mid-flush when Stop was pressed. The Review transition above stays synchronous/instant; only the
+    // recap request itself waits on the drain.
+    const preDrain = listen.text() // snapshot NOW as a fallback (see the guard below)
+    let recapDone = false
+    const runRecap = (tx: string): void => {
+      if (recapDone) return
+      recapDone = true
+      if (tx.trim()) {
+        // Cascade the recap into Dust whenever it's configured, regardless of the active provider (e.g.
+        // Kimi handles everyday chat, Dust still writes the meeting notes) — no agentOverride needed, the
+        // normal think-tier resolution inside Dust already respects the user's own Thinking-agent pick.
+        const dustReady = isDustReady(settings?.hasKeys ?? {}, settings?.dustWorkspaceId ?? '', settings?.providerModels ?? {})
+        ask.run({ mode: 'recap', transcript: tx, ...(dustReady ? { providerOverride: 'dust' as const } : {}) })
+      } else ask.clear()
+    }
+    // Safety net: if a fresh listen.start() preempts this drain, listen.ts bails on its sessionEpoch
+    // mismatch and never invokes onDrained — which would silently drop the recap entirely (no run, no
+    // clear). Guarantee the recap still lands off the pre-drain snapshot after the drain ceiling (~4s)
+    // + margin, so an interrupted stop degrades to "recap minus the final utterance" (the old behaviour)
+    // instead of "no recap at all". Whichever fires first wins via the recapDone latch.
+    const fallback = setTimeout(() => runRecap(preDrain), 6000)
+    listen.stop(() => {
+      clearTimeout(fallback)
+      runRecap(listen.text())
+    })
   }, [listen.text, listen.stop, ask.run, ask.clear, settings?.hasKeys, settings?.dustWorkspaceId, settings?.providerModels])
 
   const toggleListen = useCallback(() => {
@@ -1519,18 +1547,20 @@ export function App(): JSX.Element {
     // declaration comment above; this is the CRITICAL cross-meeting leak's primary repro path).
     const r = await window.toto.recallRead(file)
     if (!r.ok) {
-      // recallRead has a real, readable error for every failure branch (invalid name / unreadable file /
-      // undecryptable on this device) — surface it instead of leaving the click looking like a no-op.
+      // recallRead already returns an exact, actionable message (not found / undecryptable on this
+      // device / invalid name) — surface it instead of leaving the click looking completely dead.
       setOpenMeetingError(r.error || 'Could not open that meeting.')
       return
     }
+    setOpenMeetingError(null)
     setPastMeeting({
       file,
       title: r.title || 'Meeting',
       date: r.startedAt ? new Date(r.startedAt).toLocaleString() : '',
       recap: r.recap || '',
       lines: r.lines || [],
-      startedAt: r.startedAt || 0
+      startedAt: r.startedAt || 0,
+      confidential: !!r.confidential
     })
     setView('review')
     setCollapsed(false)
@@ -1808,7 +1838,10 @@ export function App(): JSX.Element {
     ),
     [reset, savedPath, openPastMeeting]
   )
-  const brainBody = useMemo(() => <BrainView onBack={() => setView(brainReturnViewRef.current)} />, [])
+  const brainBody = useMemo(
+    () => <BrainView onBack={() => setView(brainReturnViewRef.current)} onOpenMeeting={openPastMeeting} />,
+    [openPastMeeting]
+  )
   const agendaBody = useMemo(() => <AgendaView />, [])
   const copilotBody = useMemo(
     () => (
@@ -1869,6 +1902,7 @@ export function App(): JSX.Element {
         startedAt={pm ? pm.startedAt : meetingStartRef.current}
         showTranscript={settings?.showFullTranscriptInReview ?? false}
         meetingMeta={pm ? { title: pm.title, date: pm.date } : undefined}
+        confidential={pm ? pm.confidential : false}
         followupDraft={followup.answer}
         onGenerateFollowup={generateFollowup}
         onGenerateRecap={pm ? () => { if (requireProvider()) generateSavedRecap(pm.file, pm.lines) } : undefined}
@@ -1968,13 +2002,38 @@ export function App(): JSX.Element {
   // A license-gate verdict is only ever pending when the gate itself is on (default off) — and
   // settings.licenseGateEnabled is already known the moment `settings` resolves, so this adds no extra
   // wait for the common case of an unlicensed build.
-  const licenseGatePending = settings?.licenseGateEnabled === true && licenseGate == null
+  const licenseGatePending = licenseEnforced && licenseGate == null
 
   // Until settings AND auth resolve, render only a slim loading strip — never an interactive surface.
   // This closes the first-run flash and the auth-gate-fail-open window: the SSO and onboarding gates
   // below are skipped while their state is null, which would otherwise paint a usable bar before sign-in
   // is enforced and before the no-key CTA can render. (DEMO bypasses this so screenshots still work.)
   if (DEMO == null && (settings == null || auth.status == null || licenseGatePending)) {
+    // Boot load exhausted its retries without ever resolving (persistent getSettings/authStatus failure).
+    // Show an actionable card with a Reload instead of spinning "Starting Métis…" forever.
+    if (bootError) {
+      return (
+        <div ref={setRoot} {...windowDrag} className="w-full p-1.5">
+          <div className="glass flex w-full flex-col gap-2 rounded-2xl px-4 py-3.5 text-center">
+            <span className="font-ui text-[13px] font-medium text-[color:var(--color-ink)]">
+              Métis couldn’t start
+            </span>
+            <span className="font-ui text-[11.5px] leading-snug text-[color:var(--color-ink-3)]">
+              {/* Attribute to whichever subsystem actually failed — settingsBootError takes priority in
+                  the ?? above, so mirror that same check here instead of hardcoding "settings" copy. */}
+              {settingsBootError ? 'Couldn’t load your settings.' : 'Couldn’t sign you in.'} {bootError}
+            </span>
+            <button
+              type="button"
+              onClick={() => window.location.reload()}
+              className="no-drag focus-ring mx-auto mt-0.5 rounded-lg bg-[var(--color-accent)] px-3.5 py-1.5 text-[12px] font-medium text-white hover:brightness-110"
+            >
+              Reload
+            </button>
+          </div>
+        </div>
+      )
+    }
     return (
       <div ref={setRoot} {...windowDrag} className="w-full p-1.5">
         <div className="glass flex h-[38px] w-full items-center gap-2.5 rounded-full px-4">
@@ -1988,7 +2047,7 @@ export function App(): JSX.Element {
   // License gate — outranks SSO and onboarding below: a revoked or unlicensed device must learn that
   // before it ever burns an SSO sign-in round trip (or sits behind onboarding). Only ever renders when
   // the gate is on (settings.licenseGateEnabled) AND the verdict says this device isn't allowed to run.
-  if (DEMO == null && settings?.licenseGateEnabled && licenseGate && !licenseGate.allowed) {
+  if (DEMO == null && licenseEnforced && licenseGate && !licenseGate.allowed) {
     return (
       <div ref={setRoot} {...windowDrag} className="flex w-full flex-col gap-2 p-1.5">
         <Panel>
@@ -2077,6 +2136,7 @@ export function App(): JSX.Element {
             />
             <NewMeetingToast open={newMeetingToast} onDismiss={() => setNewMeetingToast(false)} />
             <VisibilityToast state={visibilityToast} onDismiss={() => setVisibilityToast(null)} />
+            <MeetingOpenErrorToast message={openMeetingError} onDismiss={() => setOpenMeetingError(null)} />
             <RecordingConsentReminder
               listening={showListeningChrome}
               lastReminderAt={settings?.lastConsentReminderAt ?? 0}
@@ -2100,7 +2160,8 @@ export function App(): JSX.Element {
         // unmounts and remounts every toast underneath the instant one flips `open`, restarting its
         // fade-in mid-animation. `contents` keeps the non-widened case layout-equivalent to the old
         // bare-fragment render.
-        const widen = minimized && (updateReady.open || newMeetingToast || consentReminderOpen || !!visibilityToast)
+        const widen =
+          minimized && (updateReady.open || newMeetingToast || consentReminderOpen || !!visibilityToast || !!openMeetingError)
         return (
           <div
             data-hug-width={widen || undefined}
@@ -2113,7 +2174,11 @@ export function App(): JSX.Element {
       {minimized ? (
         <div className="flex w-full justify-center">
           <ControlPill
-            listening={listen.listening}
+            // Gated the same way as Bar's `listening` below: the raw listen.listening flag stays true for
+            // up to DRAIN_CEILING_MS after Stop while audio finishes draining in the background, which
+            // otherwise left the minimized pill showing the pulsing red dot + a still-counting timer for
+            // several seconds after Stop — reading as "Stop didn't work".
+            listening={showListeningChrome}
             paused={listen.paused}
             startedAt={meetingStartRef.current}
             onTogglePause={onTogglePause}

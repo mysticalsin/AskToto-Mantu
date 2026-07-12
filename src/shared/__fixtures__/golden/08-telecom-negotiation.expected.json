@@ -1,0 +1,38 @@
+{
+  "people": [
+    { "name": "Nathalie Girard", "role": "Directrice Technique", "org": "Vivatel" },
+    { "name": "Thomas Lemaire", "role": "Responsable des Opérations Réseau", "org": "Vivatel" }
+  ],
+  "accounts": [{ "name": "Vivatel", "sector": "telecom" }],
+  "deals": [{ "name": "Vivatel Déploiement Réseau Régional", "account": "Vivatel", "stage": "négociation" }],
+  "numeric_facts": [
+    {
+      "kind": "headcount",
+      "value": 80,
+      "unit": null,
+      "quote": "Nous avons quatre-vingts techniciens mobilisés sur les nouveaux sites cette année"
+    },
+    {
+      "kind": "amount",
+      "value": 2500000,
+      "unit": null,
+      "quote": "le budget global pour cette phase s'élève à deux virgule cinq millions"
+    },
+    {
+      "kind": "percent",
+      "value": 30,
+      "unit": "%",
+      "quote": "on cible une réduction de trente pour cent des délais d'intervention"
+    },
+    {
+      "kind": "date",
+      "value": 2027,
+      "unit": null,
+      "quote": "le premier site pilote doit ouvrir en 2027"
+    }
+  ],
+  "commitments": [
+    { "text": "envoyer un point d'avancement chaque mois à partir du mois prochain", "by": "you" },
+    { "text": "envoyer la liste des sites prioritaires pour la prochaine phase", "by": "Thomas Lemaire" }
+  ]
+}

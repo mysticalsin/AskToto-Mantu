@@ -4,9 +4,20 @@ import {
   CaptureResultSchema,
   SettingsSchema,
   DEFAULT_SETTINGS,
+  IPC,
   McpCrmTestConnectionPayloadSchema,
   McpCrmSaveConnectionPayloadSchema,
-  McpCrmPushPayloadSchema
+  McpCrmPushPayloadSchema,
+  StreamMetaSchema,
+  EntityRenamePayloadSchema,
+  EntityMergePayloadSchema,
+  EntityUnmergePayloadSchema,
+  EntityUpdateFieldPayloadSchema,
+  CommitmentRejectPayloadSchema,
+  MeetingExtractionQuerySchema,
+  AttentionItemSchema,
+  BrainAttentionResultSchema,
+  appendAsrCorrection
 } from './ipc'
 
 /** process.platform is configurable in Node — flip it for the duration of a platform-specific test. */
@@ -50,6 +61,68 @@ describe('AskStartSchema', () => {
     }
     const result = AskStartSchema.safeParse(invalid)
     expect(result.success).toBe(false)
+  })
+
+  it('accepts only a UUID localSessionId', () => {
+    const base = { id: 'ask-4', mode: 'answer' as const, history: [] }
+    expect(
+      AskStartSchema.safeParse({ ...base, localSessionId: '123e4567-e89b-12d3-a456-426614174000' }).success
+    ).toBe(true)
+    expect(AskStartSchema.safeParse({ ...base, localSessionId: 'not-a-uuid' }).success).toBe(false)
+  })
+
+  it('accepts bounded structured visionEvidence only for vision mode and without a raw image', () => {
+    const visionEvidence = {
+      version: 1,
+      modelId: 'smolvlm-256m-instruct',
+      modelSha256: 'a'.repeat(64),
+      capturedAt: 1,
+      backend: 'wasm' as const,
+      capabilities: ['caption'] as const,
+      caption: 'A roadmap slide',
+      text: '',
+      regions: []
+    }
+    expect(
+      AskStartSchema.safeParse({ id: 'ask-5', mode: 'vision', visionEvidence, history: [] }).success
+    ).toBe(true)
+    expect(
+      AskStartSchema.safeParse({ id: 'ask-6', mode: 'answer', visionEvidence, history: [] }).success
+    ).toBe(false)
+    expect(
+      AskStartSchema.safeParse({
+        id: 'ask-7',
+        mode: 'vision',
+        visionEvidence,
+        image: Buffer.alloc(100).toString('base64'),
+        history: []
+      }).success
+    ).toBe(false)
+    expect(
+      AskStartSchema.safeParse({
+        id: 'ask-7-empty-image',
+        mode: 'vision',
+        visionEvidence,
+        image: '',
+        history: []
+      }).success
+    ).toBe(false)
+  })
+
+  it('rejects visionEvidence whose complete JSON exceeds 64 KiB UTF-8', () => {
+    const visionEvidence = {
+      version: 1,
+      modelId: 'smolvlm-256m-instruct',
+      modelSha256: 'a'.repeat(64),
+      capturedAt: 1,
+      backend: 'wasm' as const,
+      capabilities: ['regions'] as const,
+      caption: '',
+      text: '',
+      regions: Array.from({ length: 200 }, () => ({ text: 'é'.repeat(400), box: [0, 0, 1, 1] }))
+    }
+    expect(new TextEncoder().encode(JSON.stringify(visionEvidence)).length).toBeGreaterThan(64 * 1024)
+    expect(AskStartSchema.safeParse({ id: 'ask-8', mode: 'vision', visionEvidence, history: [] }).success).toBe(false)
   })
 })
 
@@ -232,6 +305,218 @@ describe('McpCrmPushPayloadSchema', () => {
   })
 })
 
+// Correction engine (Task MI-2) IPC payload validation — this is what index.ts's five brain:entity*/
+// brain:commitmentReject handlers run every incoming payload through before ever touching the store.
+describe('EntityRenamePayloadSchema', () => {
+  it('accepts a valid rename, with and without alsoFixAsr', () => {
+    expect(EntityRenamePayloadSchema.safeParse({ kind: 'account', id: 'acme-corp', newName: 'Acme' }).success).toBe(true)
+    expect(
+      EntityRenamePayloadSchema.safeParse({ kind: 'person', id: 'm-silva', newName: 'Maria Silva', alsoFixAsr: true })
+        .success
+    ).toBe(true)
+  })
+
+  it('rejects an invalid kind, an empty id/newName, and a non-boolean alsoFixAsr', () => {
+    expect(EntityRenamePayloadSchema.safeParse({ kind: 'meeting', id: 'x', newName: 'Y' }).success).toBe(false)
+    expect(EntityRenamePayloadSchema.safeParse({ kind: 'account', id: '', newName: 'Y' }).success).toBe(false)
+    expect(EntityRenamePayloadSchema.safeParse({ kind: 'account', id: 'x', newName: '' }).success).toBe(false)
+    expect(
+      EntityRenamePayloadSchema.safeParse({ kind: 'account', id: 'x', newName: 'Y', alsoFixAsr: 'yes' }).success
+    ).toBe(false)
+  })
+
+  it('rejects a missing field entirely and a non-object payload', () => {
+    expect(EntityRenamePayloadSchema.safeParse({ id: 'x', newName: 'Y' }).success).toBe(false)
+    expect(EntityRenamePayloadSchema.safeParse(null).success).toBe(false)
+  })
+
+  // MI-2.5 Fix B: a path-traversal/non-slug id is rejected OUTRIGHT here, before the payload ever reaches
+  // the main-process handler — defense in depth alongside corrections.ts's own slugify sanitization.
+  it('rejects a path-traversal or otherwise non-slug id', () => {
+    expect(EntityRenamePayloadSchema.safeParse({ kind: 'account', id: '../../../etc/hosts', newName: 'Y' }).success).toBe(
+      false
+    )
+    expect(EntityRenamePayloadSchema.safeParse({ kind: 'account', id: 'Acme Corp', newName: 'Y' }).success).toBe(false) // spaces/uppercase — not a slug
+    expect(EntityRenamePayloadSchema.safeParse({ kind: 'account', id: 'acme-corp', newName: 'Y' }).success).toBe(true) // a real slug still passes
+  })
+
+  // The pair alsoFixAsr composes in index.ts must round-trip through the SAME settings.asrCorrections
+  // shape commitLine's consumer expects (lib/listen.ts: c.from / c.to, both plain strings).
+  it('a constructed {from, to} correction pair round-trips through the persisted settings shape', () => {
+    const pair = { from: 'Acme Corp', to: 'Acme' }
+    const parsed = SettingsSchema.safeParse({ ...DEFAULT_SETTINGS, asrCorrections: [pair] })
+    expect(parsed.success).toBe(true)
+    if (parsed.success) expect(parsed.data.asrCorrections).toEqual([pair])
+  })
+})
+
+describe('EntityMergePayloadSchema', () => {
+  it('accepts a valid merge and rejects a missing fromId/intoId or bad kind', () => {
+    expect(EntityMergePayloadSchema.safeParse({ kind: 'deal', fromId: 'a', intoId: 'b' }).success).toBe(true)
+    expect(EntityMergePayloadSchema.safeParse({ kind: 'deal', fromId: '', intoId: 'b' }).success).toBe(false)
+    expect(EntityMergePayloadSchema.safeParse({ kind: 'deal', intoId: 'b' }).success).toBe(false)
+    expect(EntityMergePayloadSchema.safeParse({ kind: 'invalid', fromId: 'a', intoId: 'b' }).success).toBe(false)
+  })
+
+  it('rejects a path-traversal fromId/intoId', () => {
+    expect(EntityMergePayloadSchema.safeParse({ kind: 'deal', fromId: '../../secrets', intoId: 'b' }).success).toBe(
+      false
+    )
+    expect(EntityMergePayloadSchema.safeParse({ kind: 'deal', fromId: 'a', intoId: '../../secrets' }).success).toBe(
+      false
+    )
+  })
+})
+
+describe('EntityUnmergePayloadSchema', () => {
+  it('accepts a non-negative integer targetSeq and rejects negative/fractional/missing', () => {
+    expect(EntityUnmergePayloadSchema.safeParse({ targetSeq: 0 }).success).toBe(true)
+    expect(EntityUnmergePayloadSchema.safeParse({ targetSeq: 3 }).success).toBe(true)
+    expect(EntityUnmergePayloadSchema.safeParse({ targetSeq: -1 }).success).toBe(false)
+    expect(EntityUnmergePayloadSchema.safeParse({ targetSeq: 1.5 }).success).toBe(false)
+    expect(EntityUnmergePayloadSchema.safeParse({}).success).toBe(false)
+  })
+})
+
+describe('EntityUpdateFieldPayloadSchema', () => {
+  it('accepts any field name + unknown value shape here — corrections.ts validates per (kind, field)', () => {
+    expect(
+      EntityUpdateFieldPayloadSchema.safeParse({ kind: 'deal', id: 'acme-core', field: 'stage', value: 'contract' })
+        .success
+    ).toBe(true)
+    expect(
+      EntityUpdateFieldPayloadSchema.safeParse({
+        kind: 'deal',
+        id: 'acme-core',
+        field: 'velocity',
+        value: { signal: 'hard-calendar-gate', evidence: 'go/no-go June 3' }
+      }).success
+    ).toBe(true)
+  })
+
+  it('rejects an empty id/field and a missing kind', () => {
+    expect(EntityUpdateFieldPayloadSchema.safeParse({ kind: 'deal', id: '', field: 'stage', value: 'x' }).success).toBe(
+      false
+    )
+    expect(EntityUpdateFieldPayloadSchema.safeParse({ kind: 'deal', id: 'x', field: '', value: 'x' }).success).toBe(
+      false
+    )
+    expect(EntityUpdateFieldPayloadSchema.safeParse({ id: 'x', field: 'stage', value: 'x' }).success).toBe(false)
+  })
+
+  it('rejects a path-traversal id', () => {
+    expect(
+      EntityUpdateFieldPayloadSchema.safeParse({ kind: 'deal', id: '../../secrets', field: 'stage', value: 'x' })
+        .success
+    ).toBe(false)
+  })
+})
+
+describe('CommitmentRejectPayloadSchema', () => {
+  it('accepts personSlug + text with dealSlug optional, rejects an empty personSlug/text', () => {
+    expect(CommitmentRejectPayloadSchema.safeParse({ personSlug: 'maria-silva', text: 'send the deck' }).success).toBe(
+      true
+    )
+    expect(
+      CommitmentRejectPayloadSchema.safeParse({ personSlug: 'maria-silva', dealSlug: 'acme-core', text: 'x' }).success
+    ).toBe(true)
+    expect(CommitmentRejectPayloadSchema.safeParse({ personSlug: '', text: 'x' }).success).toBe(false)
+    expect(CommitmentRejectPayloadSchema.safeParse({ personSlug: 'maria-silva', text: '' }).success).toBe(false)
+  })
+
+  it('rejects a path-traversal personSlug/dealSlug', () => {
+    expect(CommitmentRejectPayloadSchema.safeParse({ personSlug: '../../secrets', text: 'x' }).success).toBe(false)
+    expect(
+      CommitmentRejectPayloadSchema.safeParse({ personSlug: 'maria-silva', dealSlug: '../../secrets', text: 'x' })
+        .success
+    ).toBe(false)
+  })
+})
+
+// Task MI-3 read-only channels: brain:meetingExtraction / brain:attention payload + result shapes.
+describe('MeetingExtractionQuerySchema (brain:meetingExtraction)', () => {
+  it('accepts a file path or basename', () => {
+    expect(MeetingExtractionQuerySchema.safeParse({ file: 'meeting-2026-07-11.md' }).success).toBe(true)
+    expect(MeetingExtractionQuerySchema.safeParse({ file: '/Users/x/Meetings/meeting.md' }).success).toBe(true)
+  })
+
+  it('rejects an empty/missing file and a non-object payload', () => {
+    expect(MeetingExtractionQuerySchema.safeParse({ file: '' }).success).toBe(false)
+    expect(MeetingExtractionQuerySchema.safeParse({}).success).toBe(false)
+    expect(MeetingExtractionQuerySchema.safeParse(null).success).toBe(false)
+    expect(MeetingExtractionQuerySchema.safeParse({ file: 42 }).success).toBe(false)
+  })
+})
+
+describe('AttentionItemSchema / BrainAttentionResultSchema (brain:attention)', () => {
+  const valid = {
+    kind: 'ambiguous',
+    entityKind: 'account',
+    id: 'acme-corp',
+    label: 'Acme Corp',
+    detail: 'Sector: "banking" is unconfirmed (AMBIGUOUS)'
+  }
+
+  it('accepts every item kind and wraps into the {items} result', () => {
+    for (const kind of ['lint', 'ambiguous', 'contradicted_pin']) {
+      expect(AttentionItemSchema.safeParse({ ...valid, kind }).success).toBe(true)
+    }
+    expect(BrainAttentionResultSchema.safeParse({ items: [valid] }).success).toBe(true)
+    expect(BrainAttentionResultSchema.safeParse({ items: [] }).success).toBe(true)
+  })
+
+  it('rejects an unknown kind, a bad entityKind, an empty id, and a missing items array', () => {
+    expect(AttentionItemSchema.safeParse({ ...valid, kind: 'other' }).success).toBe(false)
+    expect(AttentionItemSchema.safeParse({ ...valid, entityKind: 'meeting' }).success).toBe(false)
+    expect(AttentionItemSchema.safeParse({ ...valid, id: '' }).success).toBe(false)
+    expect(BrainAttentionResultSchema.safeParse({}).success).toBe(false)
+  })
+})
+
+// alsoFixAsr composition (reviewer IMPORTANT 3): a pair that fails element validation must be SKIPPED
+// (rename still applied) — never appended, because store.ts's validKeysOnly drops the whole
+// asrCorrections array when any one element fails, silently wiping every existing correction.
+describe('appendAsrCorrection (alsoFixAsr composition)', () => {
+  it('appends a valid pair in the exact consumer shape (commitLine correctionsRef: {from, to})', () => {
+    const r = appendAsrCorrection([{ from: 'Old Co', to: 'New Co' }], 'Acme Corp', 'Acme')
+    expect(r.kind).toBe('append')
+    if (r.kind === 'append') {
+      expect(r.pairs).toEqual([
+        { from: 'Old Co', to: 'New Co' },
+        { from: 'Acme Corp', to: 'Acme' }
+      ])
+      // The composed array must round-trip whole-array settings validation.
+      expect(SettingsSchema.safeParse({ ...DEFAULT_SETTINGS, asrCorrections: r.pairs }).success).toBe(true)
+    }
+  })
+
+  it('skips (with a reason) a name over the 80-char cap instead of poisoning whole-array validation', () => {
+    const longName = 'X'.repeat(81)
+    const r = appendAsrCorrection([], longName, 'Acme')
+    expect(r.kind).toBe('skipped')
+    if (r.kind === 'skipped') expect(r.reason).toContain('80')
+    // The failure mode the pre-validation prevents: one bad element fails the ENTIRE array parse,
+    // which is exactly what store.ts's validKeysOnly would then drop wholesale.
+    expect(
+      SettingsSchema.safeParse({ ...DEFAULT_SETTINGS, asrCorrections: [{ from: longName, to: 'Acme' }] }).success
+    ).toBe(false)
+  })
+
+  it('no-ops on a duplicate pair and enforces the 100-entry cap on append', () => {
+    const pair = { from: 'Acme Corp', to: 'Acme' }
+    expect(appendAsrCorrection([pair], 'Acme Corp', 'Acme')).toEqual({ kind: 'noop' })
+
+    const full = Array.from({ length: 100 }, (_, i) => ({ from: `word-${i}`, to: `fix-${i}` }))
+    const r = appendAsrCorrection(full, 'Acme Corp', 'Acme')
+    expect(r.kind).toBe('append')
+    if (r.kind === 'append') {
+      expect(r.pairs).toHaveLength(100) // oldest dropped, cap respected
+      expect(r.pairs[99]).toEqual(pair)
+      expect(SettingsSchema.safeParse({ ...DEFAULT_SETTINGS, asrCorrections: r.pairs }).success).toBe(true)
+    }
+  })
+})
+
 describe('DEFAULT_SHORTCUTS scroll defaults', () => {
   const REAL_PLATFORM = process.platform
 
@@ -256,5 +541,32 @@ describe('DEFAULT_SHORTCUTS scroll defaults', () => {
     expect(DEFAULT_SHORTCUTS['scroll-down']).toBe('CommandOrControl+Alt+Down')
     expect(DEFAULT_SHORTCUTS['scroll-left']).toBe('CommandOrControl+Alt+Left')
     expect(DEFAULT_SHORTCUTS['scroll-right']).toBe('CommandOrControl+Alt+Right')
+  })
+})
+
+describe('local AI IPC channel constants', () => {
+  it('defines the six exact new channel names without collisions', () => {
+    expect(IPC.localAiStatus).toBe('local-ai:status')
+    expect(IPC.localTranscriptBegin).toBe('local-ai:transcript:begin')
+    expect(IPC.localTranscriptAppend).toBe('local-ai:transcript:append')
+    expect(IPC.localTranscriptResync).toBe('local-ai:transcript:resync')
+    expect(IPC.localTranscriptEnd).toBe('local-ai:transcript:end')
+    expect(IPC.brainAnalyze).toBe('brain:analyze')
+    const values = Object.values(IPC)
+    expect(new Set(values).size).toBe(values.length)
+  })
+})
+
+describe('StreamMetaSchema migration guard', () => {
+  it('still parses the current provider-shaped metadata before Task 6', () => {
+    const current = { id: 'ask-1', provider: 'anthropic' as const, tier: 'base' as const }
+    const parsed = StreamMetaSchema.safeParse(current)
+    expect(parsed.success).toBe(true)
+    if (parsed.success) expect(parsed.data).toEqual(current)
+  })
+
+  it('still requires a provider and valid provider tier', () => {
+    expect(StreamMetaSchema.safeParse({ id: 'ask-1', tier: 'base' }).success).toBe(false)
+    expect(StreamMetaSchema.safeParse({ id: 'ask-1', provider: 'anthropic', tier: 'fast' }).success).toBe(false)
   })
 })

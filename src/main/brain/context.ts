@@ -1,6 +1,7 @@
 import type { Settings } from '@shared/ipc'
-import type { MeetingRef, PersonEntity, AccountEntity, DealEntity } from '@shared/brain'
-import { listEntities, readPerson, readAccount, readDeal } from './store'
+import type { MeetingRef, PersonEntity, AccountEntity, DealEntity, ProvenanceState } from '@shared/brain'
+import { RENDERABLE_PROVENANCE_STATES } from '@shared/brain'
+import { listEntities, readPerson, readAccount, readDeal, slugify } from './store'
 
 /**
  * Receipt Mode (innovation #3) — assemble the slice of the meeting brain that is RELEVANT to the
@@ -45,6 +46,14 @@ function slugInText(slug: string, haystack: string): boolean {
   return haystack.includes(` ${spaced} `)
 }
 
+/** Task MI-5 — an entity matches when its OWN id appears in the question, OR any of its `aliases[]`
+ *  does (a corrected-away surface form — "Acme Corp" after a rename to "Acme" — still hits the
+ *  canonical record, instead of Receipt Mode going silent on a question phrased the old way). */
+function matchesEntity(id: string, aliases: string[], haystack: string): boolean {
+  if (slugInText(id, haystack)) return true
+  return aliases.some((a) => a.trim() && slugInText(slugify(a), haystack))
+}
+
 /** "meeting title" (date) — the human-readable citation the answer is told to echo. */
 function cite(ref: MeetingRef | undefined): string {
   if (!ref) return ''
@@ -84,12 +93,32 @@ function formatAccount(a: AccountEntity): string {
   return parts.join(' ')
 }
 
-function formatDeal(d: DealEntity): string {
+/** Same bracket-citation convention as formatCommitment's `[meeting, date]` — or, for a human
+ *  pinned/edited value (which has no meeting source_file by construction), the same "edited by you"
+ *  wording the renderer's own provenanceChipLabel uses. */
+function citeProvenance(state: ProvenanceState, source_file: string, date: string): string {
+  if (state === 'pinned' || state === 'edited') return ' (edited by you)'
+  return source_file ? ` [${source_file}${date ? `, ${date}` : ''}]` : ''
+}
+
+/** Task MI-4 render gate: an amount/close_date is emitted ONLY once a human has verified/pinned/edited
+ *  it — the same invariant BrainRecordPage's moneyFieldMode and Mars's pipeline-value line enforce. An
+ *  'extracted' (LLM-only) figure must never reach the live-answer context, no matter how confident the
+ *  extraction — this is the one CRM record surface where a fabricated number would leak straight into a
+ *  user-facing reply. */
+export function formatDeal(d: DealEntity): string {
   const recent = latestMeeting(d.meetings)
   const band = d.win_likelihood_band ? `${d.win_likelihood_band} likelihood` : 'likelihood unrated'
   const head = `- Deal "${d.name}"${d.account ? ` (${d.account})` : ''}: ${d.stage || 'stage unknown'}, ${band}`
   const parts = [recent ? `${head}, most recent ${cite(recent)}.` : `${head}.`]
   if (d.velocity?.evidence) parts.push(`Velocity ${d.velocity.signal}: ${d.velocity.evidence}.`)
+  if (d.amount && RENDERABLE_PROVENANCE_STATES.has(d.amount.state)) {
+    const amt = d.amount.value
+    parts.push(`Amount: ${amt.value.toLocaleString()} ${amt.currency}${citeProvenance(d.amount.state, d.amount.source_file, d.amount.date)}.`)
+  }
+  if (d.close_date && RENDERABLE_PROVENANCE_STATES.has(d.close_date.state)) {
+    parts.push(`Close date: ${d.close_date.value}${citeProvenance(d.close_date.state, d.close_date.source_file, d.close_date.date)}.`)
+  }
   const open = d.commitments.filter((c) => c.status === 'open').slice(0, 2)
   for (const c of open) parts.push(formatCommitment(c) + '.')
   return parts.join(' ')
@@ -107,26 +136,23 @@ export function buildBrainContext(s: Settings, text: string): { block: string; m
   const lines: string[] = []
 
   const people = listEntities(s, 'person')
-    .filter((slug) => slugInText(slug, hay))
-    .slice(0, MAX_PEOPLE)
     .map((slug) => readPerson(s, slug))
-    .filter((p): p is PersonEntity => !!p)
+    .filter((p): p is PersonEntity => !!p && matchesEntity(p.id, p.aliases, hay))
+    .slice(0, MAX_PEOPLE)
   for (const p of people) {
     lines.push(formatPersonWithCommitments(p))
   }
 
   const accounts = listEntities(s, 'account')
-    .filter((slug) => slugInText(slug, hay))
-    .slice(0, MAX_ACCOUNTS)
     .map((slug) => readAccount(s, slug))
-    .filter((a): a is AccountEntity => !!a)
+    .filter((a): a is AccountEntity => !!a && matchesEntity(a.id, a.aliases, hay))
+    .slice(0, MAX_ACCOUNTS)
   for (const a of accounts) lines.push(formatAccount(a))
 
   const deals = listEntities(s, 'deal')
-    .filter((slug) => slugInText(slug, hay))
-    .slice(0, MAX_DEALS)
     .map((slug) => readDeal(s, slug))
-    .filter((d): d is DealEntity => !!d)
+    .filter((d): d is DealEntity => !!d && matchesEntity(d.id, d.aliases, hay))
+    .slice(0, MAX_DEALS)
   for (const d of deals) lines.push(formatDeal(d))
 
   if (lines.length === 0) return { block: '', matched: false }
