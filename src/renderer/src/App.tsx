@@ -122,12 +122,19 @@ export function App(): JSX.Element {
   const { settings, patch, saveKey, clearKey, testKey, refresh } = useSettings()
   const auth = useAuth() // Azure AD gate (only enforces when configured)
 
+  // ── License enforcement master switch ──────────────────────────────────────────────────────────
+  // OFF for now: every copy is treated as valid and the activation gate never renders, regardless of
+  // the stored `licenseGateEnabled` setting. All the licensing code (main/license.ts, the LicenseGate
+  // component, the settings toggle, the heartbeat) is intact — flip this ONE constant to `true` to
+  // restore device licensing exactly as before.
+  const LICENSE_ENFORCEMENT = false
+  const licenseEnforced = LICENSE_ENFORCEMENT && settings?.licenseGateEnabled === true
+
   // License gate verdict (main/license.ts checkLicenseGrace(), via the license:gate IPC channel). Only
-  // fetched while settings.licenseGateEnabled is true — the shipped default is false, so this adds zero
-  // extra IPC calls for the overwhelming majority of installs. Re-fetches if the flag flips mid-session.
+  // fetched while enforcement is on AND settings.licenseGateEnabled is true. Re-fetches if either flips.
   const [licenseGate, setLicenseGate] = useState<LicenseGateVerdict | null>(null)
   useEffect(() => {
-    if (!settings?.licenseGateEnabled) {
+    if (!licenseEnforced) {
       setLicenseGate(null)
       return
     }
@@ -138,7 +145,7 @@ export function App(): JSX.Element {
     return () => {
       cancelled = true
     }
-  }, [settings?.licenseGateEnabled])
+  }, [licenseEnforced])
   // Re-fetches the verdict AND the underlying settings (a successful activation changes both
   // licenseServerUrl and the server-authoritative license fields) — used by LicenseGate's Activate and
   // Retry actions. The gate drops on its own, once `licenseGate.allowed` flips true, on the next render.
@@ -1813,7 +1820,7 @@ export function App(): JSX.Element {
   // A license-gate verdict is only ever pending when the gate itself is on (default off) — and
   // settings.licenseGateEnabled is already known the moment `settings` resolves, so this adds no extra
   // wait for the common case of an unlicensed build.
-  const licenseGatePending = settings?.licenseGateEnabled === true && licenseGate == null
+  const licenseGatePending = licenseEnforced && licenseGate == null
 
   // Until settings AND auth resolve, render only a slim loading strip — never an interactive surface.
   // This closes the first-run flash and the auth-gate-fail-open window: the SSO and onboarding gates
@@ -1833,7 +1840,7 @@ export function App(): JSX.Element {
   // License gate — outranks SSO and onboarding below: a revoked or unlicensed device must learn that
   // before it ever burns an SSO sign-in round trip (or sits behind onboarding). Only ever renders when
   // the gate is on (settings.licenseGateEnabled) AND the verdict says this device isn't allowed to run.
-  if (DEMO == null && settings?.licenseGateEnabled && licenseGate && !licenseGate.allowed) {
+  if (DEMO == null && licenseEnforced && licenseGate && !licenseGate.allowed) {
     return (
       <div ref={setRoot} {...windowDrag} className="flex w-full flex-col gap-2 p-1.5">
         <Panel>
