@@ -29,7 +29,7 @@ _3/2/2026, 9:00:00 AM · meeting · 38 min · Métis_
 
 **[09:01:02] You:** Perfect. Can you walk me through the commercial terms you landed on?
 
-**[09:01:10] Them:** Looking at the numbers, the total contract value comes in at €2.4M for the first phase, which is exactly what we modeled.
+**[09:01:10] Them:** Let me pull up the ofﬁcial numbers — looking at the numbers, the total contract value comes in at €2.4M for the first phase, which is exactly what we modeled.
 
 **[09:01:28] You:** That matches what finance approved on our end too.
 

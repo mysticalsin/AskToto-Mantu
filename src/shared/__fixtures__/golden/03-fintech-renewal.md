@@ -6,7 +6,7 @@ date: 2026-03-18T10:30:00.000Z
 title: "NovaPay Renewal Discussion"
 participants: [You, Them]
 duration_min: 40
-lines: 33
+lines: 35
 topics: [fintech, renewal, engineering]
 status: ready-for-followup
 ---
@@ -36,6 +36,10 @@ _3/18/2026, 10:30:00 AM · meeting · 40 min · Métis_
 **[10:31:34] Them:** It has. Usage has grown with it too, we're now processing transactions worth 1.8M every week.
 
 **[10:31:52] You:** That's a strong signal for the renewal conversation.
+
+**[10:31:58] Them:** At peak load last week the API was handling twenty-five hundred requests per second without breaking a sweat.
+
+**[10:32:00] You:** That's a solid ceiling for where you are today.
 
 **[10:32:02] Them:** Agreed. Priya wants to make sure pricing scales sensibly as that keeps growing.
 

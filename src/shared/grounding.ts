@@ -12,11 +12,29 @@
 
 // ── shared normalization ─────────────────────────────────────────────────────────────────────────
 
+/** NFKC compatibility-decomposes several characters into fabricated digit tokens that were never
+ *  written as digits in the source: vulgar fractions ('½' -> '1⁄2'), superscript/subscript digits
+ *  ('²' -> '2'), and the precomposed area/volume glyphs ('㎡' -> 'm2'). Left alone, these would hand
+ *  numeral extraction digits nobody said (e.g. "reduced by ½" fabricating 1 AND 2 as separate hits).
+ *  Neutralized to same-length spaces BEFORE NFKC folding — so the special characters are caught before
+ *  NFKC collapses them into ordinary-looking digits — so they never contribute a digit token: fail
+ *  closed (no hit) rather than fabricate one. 'm²'/'m³' (and their compat glyphs) additionally strip
+ *  the 'm' itself: left in place, "50m²" would fold to "50m2" and the bare 'm' magnitude LETTER (for
+ *  "million") would misread it as 50 million instead of the area unit it actually is. */
+function neutralizeNumericArtifacts(s: string): string {
+  let out = s.replace(/[mM][²³]|[㎡㎥]/g, (m) => ' '.repeat(m.length))
+  out = out.replace(/[¼-¾⅐-⅟²³¹⁰-₟]/g, ' ')
+  return out
+}
+
 // NFKC + casefold. Assumed length/position-preserving for the English/French business text this app
 // handles (composed Latin + accented letters) — good enough to reuse offsets straight into the
 // original string. Decomposed input or exotic scripts are out of scope (see module doc: fail closed).
+// Numeric compatibility artifacts (see neutralizeNumericArtifacts) are stripped BEFORE normalize() so
+// every consumer of this folded text — alignQuote's matcher AND verifyNumericFact's rule (c) span
+// slice AND extractNumerals — shares one consistent, artifact-free index space.
 function foldCase(s: string): string {
-  return s.normalize('NFKC').toLowerCase()
+  return neutralizeNumericArtifacts(s).normalize('NFKC').toLowerCase()
 }
 
 function escapeRegex(s: string): string {
@@ -82,7 +100,13 @@ export function alignQuote(quote: string, transcript: string, threshold = 0.85):
     for (let len = Math.min(queryTokens.length, maxLen); len <= maxLen; len++) {
       const window = transcriptTokens.slice(start, start + len)
       const overlap = lcsLen(queryTokens, window.map((w) => w.tok))
-      const score = overlap / queryTokens.length
+      // Score 1.0 is reserved for a genuine verbatim (post-normalization) contiguous match — the exact
+      // path above already claims those, so anything reaching this fuzzy path is by definition NOT a
+      // literal substring. Dividing by max(queryLen, windowLen) rather than queryLen alone means any
+      // window wider than the query (i.e. one that had to skip/absorb extra transcript tokens to align
+      // — inserted filler, a substituted/rejected number nearby, ASR noise) scores strictly < 1: the
+      // window can only reach the query's own length when it contains nothing but the query's tokens.
+      const score = overlap / Math.max(queryTokens.length, window.length)
       if (!best || score > best.score) {
         best = { start: window[0].start, end: window[window.length - 1].end, score }
       }
@@ -285,9 +309,17 @@ function parseEnglishTensUnits(tokens: string[], i: number): { value: number; ne
 }
 
 function parseEnglishInt(tokens: string[], i: number): { value: number; next: number } | null {
-  if (EN_UNITS[tokens[i]] !== undefined && tokens[i + 1] === 'hundred') {
-    let value = EN_UNITS[tokens[i]] * 100
-    let j = i + 2
+  // Bare "hundred" (no leading multiplicand) = 100.
+  if (tokens[i] === 'hundred') return { value: 100, next: i + 1 }
+
+  // "N hundred" where N is ANY parsed tens/units/teens phrase — a bare unit ("nine hundred") or a full
+  // compound ("twenty-five hundred" = 2500, "fifteen hundred" = 1500). Trying the full tens/units parse
+  // first (rather than only a single unit word) means the leading multiplicand is never emitted as a
+  // standalone hit when it turns out to be part of a "N hundred" multiplier compound.
+  const tu = parseEnglishTensUnits(tokens, i)
+  if (tu && tokens[tu.next] === 'hundred') {
+    let value = tu.value * 100
+    let j = tu.next + 1
     if (tokens[j] === 'and') j++
     const rest = parseEnglishTensUnits(tokens, j)
     if (rest) {
@@ -296,7 +328,7 @@ function parseEnglishInt(tokens: string[], i: number): { value: number; next: nu
     }
     return { value, next: j }
   }
-  return parseEnglishTensUnits(tokens, i)
+  return tu
 }
 
 /** English number-word phrase starting at token `i`: integer (incl. hundred), optional "point" decimal,
@@ -341,6 +373,12 @@ const FR_TENS: Record<string, number> = {
 }
 
 function parseFrenchTensUnits(tokens: string[], i: number): { value: number; next: number } | null {
+  // 71 is the ONE exception in the 70s: "soixante et onze" (60 + "et" + the TEEN onze), not a direct
+  // compound like the rest of the decade — must be intercepted here before the generic tens-branch
+  // below (which only joins "et" to a bare UNIT, not a TEEN) fragments it into 60 + 11.
+  if (tokens[i] === 'soixante' && tokens[i + 1] === 'et' && tokens[i + 2] === 'onze') {
+    return { value: 71, next: i + 3 }
+  }
   // 70-79: soixante + (dix..seize); 77-79 add a further unit token after "dix" (dix-sept = 17, etc).
   if (tokens[i] === 'soixante' && FR_TEENS[tokens[i + 1]] !== undefined) {
     let v = 60 + FR_TEENS[tokens[i + 1]]
@@ -397,7 +435,15 @@ function parseFrenchNumber(tokens: string[], i: number): { value: number; next: 
   let value: number
   let j = i
   let hasCent = false
-  if (FR_UNITS[tokens[j]] !== undefined && tokens[j] !== 'un' && tokens[j] !== 'une' && tokens[j + 1] === 'cent') {
+  if (
+    FR_UNITS[tokens[j]] !== undefined &&
+    tokens[j] !== 'un' &&
+    tokens[j] !== 'une' &&
+    (tokens[j + 1] === 'cent' || tokens[j + 1] === 'cents')
+  ) {
+    // "cents" (plural, no further digits) and "cent" (singular, used when a tens/units group
+    // follows, e.g. "deux cent cinquante") are both accepted here — never emit the bare leading
+    // unit ("deux") as a standalone hit when it forms a "N cent(s)" multiplier compound.
     value = FR_UNITS[tokens[j]] * 100
     j += 2
     hasCent = true
@@ -573,11 +619,24 @@ export type NumericFactInput = { value: number; quote: string; unit?: string }
  *  (b) numeralDerivable(fact.value, fact.quote, fact.unit) — the value is claimed by the QUOTE itself,
  *  (c) numeralDerivable(fact.value, matchedSpan, fact.unit) — AND stated in the aligned transcript span.
  *  (b) stops the fuzzy aligner from sweeping a stray interior transcript numeral into the claim;
- *  (c) stops a fuzzy match from verifying a quote whose number drifted from what was actually said. */
+ *  (c) stops a fuzzy match from verifying a quote whose number drifted from what was actually said.
+ *
+ *  What "verified" asserts — and does NOT assert: this proves the value is stated verbatim in the
+ *  transcript at the aligned quote's location, nothing more. If the same numeral is also said elsewhere
+ *  in a rejected/superseded sense ("approved at 300k, not the 500k we hoped for"), a quote that aligns
+ *  to the 300k region can never verify a claimed 500k — rule (c) only accepts a value derivable from
+ *  that single contiguous aligned span, not the whole transcript. But if a claim's quote itself aligns
+ *  right next to a DIFFERENT number in the same breath, deterministic substring matching cannot tell
+ *  "this is the number that was decided" from "this is a number that was also mentioned nearby" — that
+ *  is a semantic judgment outside this module's scope, not something fail-closed parsing can solve. */
 export function verifyNumericFact(fact: NumericFactInput, transcript: string): 'verified' | 'unverified' {
   const match = alignQuote(fact.quote, transcript)
   if (!match) return 'unverified'
   if (!numeralDerivable(fact.value, fact.quote, fact.unit)) return 'unverified'
-  const span = transcript.slice(match.start, match.end)
+  // Slice the SAME folded string alignQuote computed match.start/end against (both alignQuote's exact
+  // and fuzzy paths operate on `foldCase(transcript)`, never on `transcript` itself). Slicing the raw
+  // transcript here would misalign whenever folding changes length before the match — e.g. a ligature
+  // ('ﬁ' -> 'fi') earlier in the transcript — silently reading the wrong region for rule (c).
+  const span = foldCase(transcript).slice(match.start, match.end)
   return numeralDerivable(fact.value, span, fact.unit) ? 'verified' : 'unverified'
 }

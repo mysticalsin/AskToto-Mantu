@@ -42,6 +42,18 @@ describe('alignQuote', () => {
     // A threshold above the achieved score must reject the same match.
     expect(alignQuote('we will deliver the report by Friday', transcript, m!.score + 0.001)).toBeNull()
   })
+
+  it('FIX 1: score 1.0 is reserved for a genuine verbatim contiguous match — a fuzzy window that had to absorb transcript-side filler scores strictly below 1', () => {
+    // The exact path already claims any truly contiguous (post-normalization) match; reaching the
+    // fuzzy path at all means the window is NOT a literal substring. Filler words interspersed in the
+    // TRANSCRIPT (as opposed to the query) previously scored a false-perfect 1.0 because the old
+    // formula (overlap / queryLength) never charged for extra tokens absorbed into the window.
+    const transcript = 'Them: uh we will, deliver the report by uh Friday for sure.'
+    const m = alignQuote('we will deliver the report by Friday', transcript)
+    expect(m).not.toBeNull()
+    expect(m!.score).toBeLessThan(1)
+    expect(m!.score).toBeGreaterThanOrEqual(0.85)
+  })
 })
 
 describe('extractNumerals', () => {
@@ -106,12 +118,47 @@ describe('extractNumerals', () => {
     expect(vals('a team of two hundred people')).toContainEqual({ value: 200, unit: null })
   })
 
+  it('FIX 3: multiplier compounds ("N hundred"/"N cent(s)") never emit the leading multiplicand as a standalone hit', () => {
+    // English: a full tens/units phrase before "hundred" ("twenty-five hundred" = 2500), not just a
+    // bare unit word — the old parser only recognized "hundred" after a SINGLE unit word.
+    const twentyFiveHundred = vals('twenty-five hundred')
+    expect(twentyFiveHundred).toContainEqual({ value: 2500, unit: null })
+    expect(twentyFiveHundred.some((h) => h.value === 25)).toBe(false)
+    // Bare "hundred" alone = 100.
+    expect(vals('a hundred clients')).toContainEqual({ value: 100, unit: null })
+
+    // French: plural "cents" (used when nothing follows) must trigger the ×100 multiplier just like
+    // singular "cent" already does — the old parser only recognized the singular form.
+    const deuxCents = vals('deux cents')
+    expect(deuxCents).toContainEqual({ value: 200, unit: null })
+    expect(deuxCents.some((h) => h.value === 2)).toBe(false)
+    // "cent"/"cents" chains through to a further magnitude word: "cinq cents mille" = 500,000.
+    const cinqCentsMille = vals('cinq cents mille')
+    expect(cinqCentsMille).toContainEqual({ value: 500_000, unit: null })
+    expect(cinqCentsMille.some((h) => h.value === 5)).toBe(false)
+    expect(cinqCentsMille.some((h) => h.value === 500)).toBe(false)
+  })
+
   it('French number words incl. soixante-dix / quatre-vingt / quatre-vingt-dix', () => {
     expect(vals('nous avons soixante-dix clients')).toContainEqual({ value: 70, unit: null })
     expect(vals('nous avons quatre-vingts clients')).toContainEqual({ value: 80, unit: null })
     expect(vals('nous avons quatre-vingt-dix clients')).toContainEqual({ value: 90, unit: null })
     expect(vals('nous avons soixante-quinze clients')).toContainEqual({ value: 75, unit: null })
     expect(vals('une équipe de cent personnes')).toContainEqual({ value: 100, unit: null })
+  })
+
+  it('FIX 2: French compound numbers never fragment — "soixante et onze" (71) is the sole exception in the 70s needing "et"', () => {
+    // 71 is the ONLY standard written form using "et" in the 70s/80s/90s range — everything else
+    // (72-79, 80-99) compounds directly. Before the fix, "soixante et onze" fragmented into 60 + 11.
+    const hits = vals('soixante et onze pour cent')
+    expect(hits).toContainEqual({ value: 71, unit: '%' })
+    expect(hits.some((h) => h.value === 60)).toBe(false)
+    expect(hits.some((h) => h.value === 11)).toBe(false)
+    // Regression coverage for the rest of the 70-99 family (already correct, must stay correct).
+    expect(vals('quatre-vingt-onze clients')).toContainEqual({ value: 91, unit: null })
+    expect(vals('soixante-douze clients')).toContainEqual({ value: 72, unit: null })
+    expect(vals('quatre-vingt-un clients')).toContainEqual({ value: 81, unit: null })
+    expect(vals('quatre-vingts clients')).toContainEqual({ value: 80, unit: null })
   })
 
   it('French virgule decimals: "trois virgule cinq millions"', () => {
@@ -141,6 +188,29 @@ describe('extractNumerals', () => {
     // "un client important" — "un" here is "a client", not the number 1. Fail closed: no hit.
     expect(vals('un client important nous a contactés')).toEqual([])
     expect(vals('une réunion productive avec une cliente')).toEqual([])
+  })
+
+  it('FIX 4: NFKC compatibility decomposition never fabricates a digit the source did not state', () => {
+    // '½' NFKC-folds to "1⁄2" (digit ONE, fraction slash, digit TWO) — neither digit was ever written
+    // in the source. Fail closed: no hit at all (rather than fabricating 1 and/or 2).
+    const half = extractNumerals('reduced by ½')
+    expect(half.some((h) => h.value === 1)).toBe(false)
+    expect(half.some((h) => h.value === 2)).toBe(false)
+
+    // '²' NFKC-folds to '2', AND the 'm' immediately before it is the area-unit "meters", not the
+    // magnitude LETTER for "million" — must read as bare 50, never fabricate a stray 2, and never
+    // misread "50m²" as 50 million.
+    const m2 = vals('50m²')
+    expect(m2).toContainEqual({ value: 50, unit: null })
+    expect(m2.some((h) => h.value === 2)).toBe(false)
+    expect(m2.some((h) => h.value === 50_000_000)).toBe(false)
+
+    // A fraction glyph sitting between a digit and a magnitude word must not let them combine into a
+    // fabricated product ("3½ million" must never yield 31 or 2,000,000 — the values NFKC-folding
+    // would otherwise manufacture from the exploded fraction).
+    const threeHalfMillion = extractNumerals('3½ million')
+    expect(threeHalfMillion.some((h) => h.value === 31)).toBe(false)
+    expect(threeHalfMillion.some((h) => h.value === 2_000_000)).toBe(false)
   })
 
   it('is fail-closed on an unsupported grouping (not a clean run of 3-digit groups): no fabricated hit', () => {
@@ -229,5 +299,57 @@ describe('verifyNumericFact', () => {
     expect(m!.score).toBeLessThan(1)
     // ...but the transcript says 3.4M, so the quoted 3.5M must not verify.
     expect(verifyNumericFact({ value: 3_500_000, quote, unit: 'EUR' }, t)).toBe('unverified')
+  })
+
+  it('FIX 1 (CRITICAL): a short quote must not achieve a perfect fuzzy score by sweeping in a nearby DIFFERENT number', () => {
+    // The transcript genuinely says 300k, then separately mentions 500k. A quote claiming "the budget
+    // is 500k" is not a verbatim contiguous phrase anywhere in this transcript — before the fix, the
+    // bounded slack still let the fuzzy window stretch just far enough to swallow "300k or" and reach
+    // the literal "500k" token, scoring a false-perfect 1.0 and letting rule (c) trivially pass because
+    // 500k was technically inside the (wrongly widened) span. Must fail closed: unverified.
+    const t = 'Them: The budget is 300k or 500k depending on the scenario.'
+    const quote = 'the budget is 500k'
+    expect(verifyNumericFact({ value: 500_000, quote }, t)).toBe('unverified')
+    // The true, actually-verbatim value for that same quote shape must still verify (regression).
+    const trueT = 'Them: The budget is 300k for this phase, nothing else on the table.'
+    expect(verifyNumericFact({ value: 300_000, quote: 'the budget is 300k' }, trueT)).toBe('verified')
+  })
+
+  it('FIX 2: claiming a French compound fragment (60 or 11) against a transcript stating 71 is unverified', () => {
+    const t = 'Them: Le taux de résolution atteint soixante et onze pour cent ce trimestre.'
+    const quote = 'Le taux de résolution atteint soixante et onze pour cent'
+    expect(verifyNumericFact({ value: 71, quote, unit: '%' }, t)).toBe('verified')
+    expect(verifyNumericFact({ value: 60, quote, unit: '%' }, t)).toBe('unverified')
+    expect(verifyNumericFact({ value: 11, quote, unit: '%' }, t)).toBe('unverified')
+  })
+
+  it('FIX 3: claiming a multiplier-compound fragment (2 instead of 200) against a transcript stating "deux cents" is unverified', () => {
+    const t = 'Them: Nous avons recruté deux cents nouveaux clients ce mois-ci.'
+    const quote = 'Nous avons recruté deux cents nouveaux clients'
+    expect(verifyNumericFact({ value: 200, quote }, t)).toBe('verified')
+    expect(verifyNumericFact({ value: 2, quote }, t)).toBe('unverified')
+  })
+
+  it('FIX 4: claiming a NFKC-fabricated value (2, or 50000000) against a transcript stating "50m²" is unverified', () => {
+    const t = 'Them: The new office covers 50m² on the top floor.'
+    const quote = 'The new office covers 50m²'
+    expect(verifyNumericFact({ value: 50, quote }, t)).toBe('verified')
+    expect(verifyNumericFact({ value: 2, quote }, t)).toBe('unverified')
+    expect(verifyNumericFact({ value: 50_000_000, quote }, t)).toBe('unverified')
+  })
+
+  it('FIX 5: a ligature/compat char earlier in the transcript must not shift rule (c)\'s span off the true quote', () => {
+    // NFKC-decomposing 'ﬁ' -> 'fi' lengthens the FOLDED transcript by 1 char before the quoted region.
+    // Slicing the ORIGINAL transcript at those folded-space indices reads a region shifted 1 char late —
+    // here, dropping the quote's very first character (the leading '3' of "3.5M"), so the correctly
+    // stated fact could no longer be confirmed at all (extractNumerals sees ".5M EUR", no leading
+    // digit before the dot, and finds nothing to match against). Slicing the SAME folded string
+    // alignQuote matched against keeps the span exactly aligned regardless of what precedes it.
+    const t = 'Them: ﬁling complete. 3.5M EUR is the number everyone quoted today.'
+    const fact = { value: 3_500_000, quote: '3.5M EUR', unit: 'EUR' }
+    expect(verifyNumericFact(fact, t)).toBe('verified')
+    // And the swap perturbations must still be correctly rejected on the (correctly sliced) span.
+    expect(verifyNumericFact({ ...fact, value: 3_400_000 }, t)).toBe('unverified')
+    expect(verifyNumericFact({ ...fact, unit: 'USD' }, t)).toBe('unverified')
   })
 })
