@@ -15,6 +15,16 @@ import { lintBrainDetailed } from './ingest'
  *     `superseded` (see shared/brain.ts's ProvenantField doc comment), so it's detectable here without
  *     ever silently resolving it either way.
  * Read-only; never mutates the store.
+ *
+ * MI-4 review fix (numeric leak): `describe` is EITHER a formatter (text fields — role/org/sector/
+ * stage/win-likelihood/velocity, safe to show verbatim so the user can tell what's wrong) OR the
+ * literal `'redact'` sentinel for numeric/money fields (deal amount, close_date). Passing `'redact'`
+ * means `describe` is never invoked and the raw value can never reach `detail` — BrainView renders
+ * `item.detail` verbatim (no gate downstream), so this is the ONLY place that decides whether a number
+ * is fit to render, and an AMBIGUOUS or superseded-but-unverified figure never is. This mirrors the
+ * render-gate invariant in shared/brain.ts's RENDERABLE_PROVENANCE_STATES (verified/pinned/edited only)
+ * but for the ATTENTION surface specifically: even a pinned amount's `detail` never repeats a
+ * *contradicting* value, because that superseded candidate was never itself verified.
  */
 function fieldItems<T>(
   entityKind: 'person' | 'account' | 'deal',
@@ -22,7 +32,7 @@ function fieldItems<T>(
   entityLabel: string,
   fieldName: string,
   field: ProvenantField<T> | undefined,
-  describe: (v: T) => string
+  describe: ((v: T) => string) | 'redact'
 ): AttentionItem[] {
   if (!field) return []
   const items: AttentionItem[] = []
@@ -32,7 +42,10 @@ function fieldItems<T>(
       entityKind,
       id,
       label: entityLabel,
-      detail: `${fieldName}: "${describe(field.value)}" is unconfirmed (AMBIGUOUS)`
+      detail:
+        describe === 'redact'
+          ? `${fieldName} is unconfirmed — open the record to verify.`
+          : `${fieldName}: "${describe(field.value)}" is unconfirmed (AMBIGUOUS)`
     })
   }
   if (field.state === 'pinned' || field.state === 'edited') {
@@ -44,7 +57,10 @@ function fieldItems<T>(
         entityKind,
         id,
         label: entityLabel,
-        detail: `${fieldName} was pinned to "${describe(field.value)}", but a later meeting (${newer.date}) reported "${describe(newer.value)}"`
+        detail:
+          describe === 'redact'
+            ? `A later meeting reported a different ${fieldName.toLowerCase()} than your pinned value — review the record.`
+            : `${fieldName} was pinned to "${describe(field.value)}", but a later meeting (${newer.date}) reported "${describe(newer.value)}"`
       })
     }
   }
@@ -77,8 +93,11 @@ export function computeAttention(s: Settings): AttentionItem[] {
       ...fieldItems('deal', slug, d.name, 'Win likelihood', d.win_likelihood_band_provenance, (v) => v ?? 'no read')
     )
     items.push(...fieldItems('deal', slug, d.name, 'Velocity', d.velocity_provenance, (v) => v.signal))
-    items.push(...fieldItems('deal', slug, d.name, 'Amount', d.amount, (v) => `${v.value} ${v.currency}`))
-    items.push(...fieldItems('deal', slug, d.name, 'Close date', d.close_date, (v) => v))
+    // Amount/close_date are numeric/money fields — MI-4 review fix: NEVER pass a formatter here. The
+    // 'redact' sentinel is structural: it makes leaking the raw figure into `detail` a compile-time
+    // impossibility for these two fields, rather than relying on every caller remembering not to.
+    items.push(...fieldItems('deal', slug, d.name, 'Amount', d.amount, 'redact'))
+    items.push(...fieldItems('deal', slug, d.name, 'Close date', d.close_date, 'redact'))
   }
 
   return items

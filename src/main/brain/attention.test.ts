@@ -3,11 +3,12 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { basename, join } from 'node:path'
 import { tmpdir } from 'node:os'
 import type { Settings } from '@shared/ipc'
-import { MeetingExtractionSchema } from '@shared/brain'
+import { MeetingExtractionSchema, type DealEntity } from '@shared/brain'
 import { ingestExtraction } from './ingest'
 import { updateEntityField } from './corrections'
-import { slugify, setDealOutcome, readMeetingExtraction } from './store'
+import { slugify, setDealOutcome, readMeetingExtraction, readDeal, writeDeal } from './store'
 import { computeAttention } from './attention'
+import { formatDeal } from './context'
 
 vi.mock('electron')
 
@@ -161,5 +162,135 @@ describe('brain:meetingExtraction store contract', () => {
 
   it('returns null for a meeting the brain never ingested', () => {
     expect(readMeetingExtraction(s, slugify('never-ingested.md'))).toBeNull()
+  })
+})
+
+/**
+ * MI-4 adversarial review fix — the headline guarantee ("no unverified numeric value ever reaches a
+ * rendered surface") had a hole: `fieldItems`'s Amount/Close date branches interpolated the RAW field
+ * value into `item.detail` with no gate on confidence/state, and BrainView renders `item.detail`
+ * verbatim. Two reproduced leaks, both fixed by routing amount/close_date through a fixed redacted
+ * phrase (see attention.ts's `'redact'` sentinel):
+ *   - Leak A: an AMBIGUOUS amount rendered its own unconfirmed figure.
+ *   - Leak B (worse): a pinned amount contradicted by a later meeting rendered the NEWER value verbatim
+ *     — and mergeProvenant's pinned branch (store.ts's pushSuperseded call at ingest.ts:415-425) pushes
+ *     any differing incoming value into `superseded` with NO verification gate, so that newer value can
+ *     be a fabricated number the grounding check rejected.
+ * Mirrors verified-numbers.test.ts's render-gate property test: a distinctive value, a digit-substring
+ * (and comma-grouped) containment check, red before the fix / green after.
+ */
+describe('render-gate property — no unverified NUMBER ever reaches the Attention feed (MI-4 review fix)', () => {
+  const AMBIGUOUS_AMOUNT = 7734562
+  const PINNED_AMOUNT = 2_400_000
+  const FABRICATED_SUPERSEDED_AMOUNT = 9_911_223 // the value the grounding check rejected — never verified
+  const CLEAN_VERIFIED_AMOUNT = 3_100_000
+
+  // Checks the raw digit run AND the comma-grouped rendering (toLocaleString, used by formatDeal) so a
+  // reformatted-but-still-present figure can't slip past a naive contiguous-substring check.
+  const containsValue = (text: string, n: number): boolean => text.includes(String(n)) || text.includes(n.toLocaleString())
+
+  const baseDeal = (id: string, name: string, amount: DealEntity['amount']): DealEntity => ({
+    schema_version: 2,
+    id,
+    aliases: [],
+    name,
+    account: 'Attention Gate Co',
+    stage: 'negotiation',
+    outcome: 'open',
+    win_likelihood_band: null,
+    band_evidence: '',
+    velocity: { signal: 'no-hard-date-found', evidence: '' },
+    amount,
+    meetings: [],
+    signals: [],
+    missed_signals: [],
+    commitments: [],
+    feedback: []
+  })
+
+  let folder: string
+  let s: Settings
+  beforeEach(() => {
+    folder = mkdtempSync(join(tmpdir(), 'asktoto-attention-gate-'))
+    s = settingsFor(folder)
+  })
+  afterEach(() => rmSync(folder, { recursive: true, force: true }))
+
+  it('Leak A: an AMBIGUOUS amount never puts its raw figure into the attention detail', async () => {
+    const slug = slugify('Ambiguous Amount Deal')
+    await writeDeal(
+      s,
+      slug,
+      baseDeal(slug, 'Ambiguous Amount Deal', {
+        value: { value: AMBIGUOUS_AMOUNT, currency: 'EUR' },
+        source_file: 'm1.md',
+        date: '2026-01-01',
+        confidence: 'AMBIGUOUS',
+        state: 'extracted',
+        superseded: []
+      })
+    )
+
+    const items = computeAttention(s)
+    const ambiguous = items.find((i) => i.kind === 'ambiguous' && i.entityKind === 'deal' && i.id === slug)
+    expect(ambiguous).toBeDefined()
+    expect(containsValue(ambiguous!.detail, AMBIGUOUS_AMOUNT)).toBe(false)
+    expect(ambiguous!.detail).not.toMatch(/\d/) // no digits at all — the whole figure is withheld
+    expect(ambiguous!.detail).toContain('Amount')
+  })
+
+  it('Leak B: a pinned amount contradicted by a later FABRICATED superseded value never shows either figure', async () => {
+    const slug = slugify('Contradicted Pin Deal')
+    await writeDeal(
+      s,
+      slug,
+      baseDeal(slug, 'Contradicted Pin Deal', {
+        value: { value: PINNED_AMOUNT, currency: 'EUR' },
+        source_file: '',
+        date: '2026-01-01',
+        confidence: 'EXTRACTED',
+        state: 'pinned',
+        superseded: [
+          {
+            value: { value: FABRICATED_SUPERSEDED_AMOUNT, currency: 'EUR' },
+            date: '2030-01-01', // strictly after the pin's date — the newer contradicting sighting
+            source_file: 'm2.md',
+            confidence: 'AMBIGUOUS' // grounding check rejected it — fabricated, never independently verified
+          }
+        ]
+      })
+    )
+
+    const items = computeAttention(s)
+    const contradicted = items.find((i) => i.kind === 'contradicted_pin' && i.entityKind === 'deal' && i.id === slug)
+    expect(contradicted).toBeDefined()
+    expect(containsValue(contradicted!.detail, PINNED_AMOUNT)).toBe(false)
+    expect(containsValue(contradicted!.detail, FABRICATED_SUPERSEDED_AMOUNT)).toBe(false)
+    expect(contradicted!.detail).not.toMatch(/\d/)
+    expect(contradicted!.detail.toLowerCase()).toContain('amount')
+  })
+
+  it('a genuinely verified, uncontradicted pinned amount produces NO attention item — and stays fully intact for legitimate display elsewhere (formatDeal)', async () => {
+    const slug = slugify('Clean Verified Deal')
+    await writeDeal(
+      s,
+      slug,
+      baseDeal(slug, 'Clean Verified Deal', {
+        value: { value: CLEAN_VERIFIED_AMOUNT, currency: 'EUR' },
+        source_file: '',
+        date: '2026-01-01',
+        confidence: 'EXTRACTED',
+        state: 'pinned',
+        superseded: []
+      })
+    )
+
+    const items = computeAttention(s)
+    expect(items.filter((i) => i.entityKind === 'deal' && i.id === slug)).toEqual([]) // nothing contradicts it — not flagged
+
+    // The redaction lives ONLY in the attention feed; every other reader of the record (money card,
+    // Mars, formatDeal) still shows the real, legitimately-verified figure untouched.
+    const stored = readDeal(s, slug)!
+    expect(containsValue(formatDeal(stored), CLEAN_VERIFIED_AMOUNT)).toBe(true)
   })
 })

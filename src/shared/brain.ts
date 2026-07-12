@@ -343,7 +343,8 @@ export const AccountEntitySchema = z.object({
 })
 export type AccountEntity = z.infer<typeof AccountEntitySchema>
 
-/** DealEntity.amount's value shape — schema only in this task (B1); nothing populates it yet. */
+/** DealEntity.amount's value shape — populated by mergeExtraction (Task MI-4), verification-gated via
+ *  verifyExtraction/RENDERABLE_PROVENANCE_STATES (see the ProvenantField doc comment above). */
 export const AmountValueSchema = z.object({ value: z.number(), currency: z.string() })
 
 export const DealEntitySchema = z.object({
@@ -361,7 +362,8 @@ export const DealEntitySchema = z.object({
   win_likelihood_band_provenance: provenantFieldSchema(BandSchema.nullable()).optional(),
   velocity: VelocitySchema.default({ signal: 'no-hard-date-found', evidence: '' }),
   velocity_provenance: provenantFieldSchema(VelocitySchema).optional(),
-  // Schema only in this task (B1) — a later task wires extraction/population.
+  // Populated + verified since Task MI-4 (mergeExtraction writes it; verifyExtraction/the render-gate
+  // control whether it's ever shown — see RENDERABLE_PROVENANCE_STATES and attention.ts's redaction).
   amount: provenantFieldSchema(AmountValueSchema).optional(),
   close_date: provenantFieldSchema(z.string()).optional(),
   meetings: z.array(MeetingRefSchema).default([]),
