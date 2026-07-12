@@ -194,16 +194,24 @@ if (!app.isPackaged && !process.env.ASKTOTO_USERDATA) {
   app.setPath('userData', `${app.getPath('userData')}-dev`)
 }
 
-// AskToto → Métis rebrand: productName moved the packaged userData dir. Adopt the old profile once so
-// settings, transcripts, and secret-key.bin survive the rename. Must run before anything opens userData.
+// Profile-dir migration across product-name changes. userData follows CFBundleName, so each rename
+// moved the packaged dir: "AskToto" → "Métis" (rebrand) → "Metis" (ASCII bundle name — the accented
+// "Métis Helper" child-process bundles crashed Chromium at launch on macOS 26+/Tahoe; see the
+// productName note in electron-builder.yml). Adopt the newest existing prior profile once so settings,
+// transcripts, and secret-key.bin survive the rename. Must run before anything opens userData.
 if (app.isPackaged && !process.env.ASKTOTO_USERDATA) {
   try {
     const ud = app.getPath('userData')
-    const legacy = join(dirname(ud), 'AskToto')
-    if (!existsSync(join(ud, 'settings.json')) && existsSync(join(legacy, 'settings.json'))) {
-      // Electron may have pre-created the new dir empty; clear it so rename can land.
-      if (existsSync(ud)) rmdirSync(ud)
-      renameSync(legacy, ud)
+    if (!existsSync(join(ud, 'settings.json'))) {
+      // Newest-first: adopt the most recent prior name that actually holds a profile.
+      const legacy = ['Métis', 'AskToto']
+        .map((n) => join(dirname(ud), n))
+        .find((p) => existsSync(join(p, 'settings.json')))
+      if (legacy) {
+        // Electron may have pre-created the new dir empty; clear it so rename can land.
+        if (existsSync(ud)) rmdirSync(ud)
+        renameSync(legacy, ud)
+      }
     }
   } catch {
     // Non-fatal: worst case is a fresh profile; never block launch on a migration.
