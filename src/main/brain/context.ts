@@ -1,5 +1,6 @@
 import type { Settings } from '@shared/ipc'
-import type { MeetingRef, PersonEntity, AccountEntity, DealEntity } from '@shared/brain'
+import type { MeetingRef, PersonEntity, AccountEntity, DealEntity, ProvenanceState } from '@shared/brain'
+import { RENDERABLE_PROVENANCE_STATES } from '@shared/brain'
 import { listEntities, readPerson, readAccount, readDeal } from './store'
 
 /**
@@ -84,12 +85,32 @@ function formatAccount(a: AccountEntity): string {
   return parts.join(' ')
 }
 
-function formatDeal(d: DealEntity): string {
+/** Same bracket-citation convention as formatCommitment's `[meeting, date]` — or, for a human
+ *  pinned/edited value (which has no meeting source_file by construction), the same "edited by you"
+ *  wording the renderer's own provenanceChipLabel uses. */
+function citeProvenance(state: ProvenanceState, source_file: string, date: string): string {
+  if (state === 'pinned' || state === 'edited') return ' (edited by you)'
+  return source_file ? ` [${source_file}${date ? `, ${date}` : ''}]` : ''
+}
+
+/** Task MI-4 render gate: an amount/close_date is emitted ONLY once a human has verified/pinned/edited
+ *  it — the same invariant BrainRecordPage's moneyFieldMode and Mars's pipeline-value line enforce. An
+ *  'extracted' (LLM-only) figure must never reach the live-answer context, no matter how confident the
+ *  extraction — this is the one CRM record surface where a fabricated number would leak straight into a
+ *  user-facing reply. */
+export function formatDeal(d: DealEntity): string {
   const recent = latestMeeting(d.meetings)
   const band = d.win_likelihood_band ? `${d.win_likelihood_band} likelihood` : 'likelihood unrated'
   const head = `- Deal "${d.name}"${d.account ? ` (${d.account})` : ''}: ${d.stage || 'stage unknown'}, ${band}`
   const parts = [recent ? `${head}, most recent ${cite(recent)}.` : `${head}.`]
   if (d.velocity?.evidence) parts.push(`Velocity ${d.velocity.signal}: ${d.velocity.evidence}.`)
+  if (d.amount && RENDERABLE_PROVENANCE_STATES.has(d.amount.state)) {
+    const amt = d.amount.value
+    parts.push(`Amount: ${amt.value.toLocaleString()} ${amt.currency}${citeProvenance(d.amount.state, d.amount.source_file, d.amount.date)}.`)
+  }
+  if (d.close_date && RENDERABLE_PROVENANCE_STATES.has(d.close_date.state)) {
+    parts.push(`Close date: ${d.close_date.value}${citeProvenance(d.close_date.state, d.close_date.source_file, d.close_date.date)}.`)
+  }
   const open = d.commitments.filter((c) => c.status === 'open').slice(0, 2)
   for (const c of open) parts.push(formatCommitment(c) + '.')
   return parts.join(' ')
