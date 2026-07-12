@@ -360,6 +360,15 @@ export const SetDealOutcomePayloadSchema = z.object({
   outcome: z.enum(['open', 'won', 'lost'])
 })
 
+/** Every entity id/slug the correction payloads below carry is a canonical slug (store.ts's slugify()
+ *  output: lowercase ascii, digits, and dashes only — see its own doc comment for the two fallback forms,
+ *  `x-<hash>` and `<truncated>-<hash>`, both of which also match this charset). MI-2.5 Fix B, defense in
+ *  depth: corrections.ts re-slugifies every id before it ever reaches a filesystem call regardless (a
+ *  legit slug round-trips unchanged there), but rejecting a non-slug OUTRIGHT here — before the payload
+ *  even reaches the handler — means a path-traversal string like '../../../etc/hosts' never gets this
+ *  far at all, rather than silently collapsing to a slug that simply won't match anything. */
+const SLUG_RE = /^[a-z0-9-]+$/
+
 /** Payloads for the five correction-engine channels (Task MI-2) — see src/main/brain/corrections.ts
  *  for the mutations themselves. `kind`/`id`/`fromId`/`intoId` are entity slugs (immutable, the join
  *  key), never display names. `field`/`value` on brain:entityUpdateField are validated per (kind, field)
@@ -368,7 +377,7 @@ export const SetDealOutcomePayloadSchema = z.object({
  *  place, alongside the mutation itself. */
 export const EntityRenamePayloadSchema = z.object({
   kind: EntityKindSchema,
-  id: z.string().min(1),
+  id: z.string().min(1).max(200).regex(SLUG_RE, 'Invalid entity id.'),
   newName: z.string().min(1).max(200),
   // Also append oldName -> newName to settings.asrCorrections (main-side composition, see index.ts) so
   // the live transcript stops mishearing the old name going forward.
@@ -376,23 +385,23 @@ export const EntityRenamePayloadSchema = z.object({
 })
 export const EntityMergePayloadSchema = z.object({
   kind: EntityKindSchema,
-  fromId: z.string().min(1),
-  intoId: z.string().min(1)
+  fromId: z.string().min(1).max(200).regex(SLUG_RE, 'Invalid entity id.'),
+  intoId: z.string().min(1).max(200).regex(SLUG_RE, 'Invalid entity id.')
 })
 export const EntityUnmergePayloadSchema = z.object({
   targetSeq: z.number().int().nonnegative()
 })
 export const EntityUpdateFieldPayloadSchema = z.object({
   kind: EntityKindSchema,
-  id: z.string().min(1),
+  id: z.string().min(1).max(200).regex(SLUG_RE, 'Invalid entity id.'),
   field: z.string().min(1).max(60),
   value: z.unknown()
 })
 /** `dealSlug` is optional — a commitment spoken in a deal-less meeting (x.deal is null) lives ONLY on
  *  the named person's own ledger, so there's nothing to also flip on a deal. */
 export const CommitmentRejectPayloadSchema = z.object({
-  personSlug: z.string().min(1),
-  dealSlug: z.string().optional(),
+  personSlug: z.string().min(1).max(200).regex(SLUG_RE, 'Invalid person id.'),
+  dealSlug: z.string().max(200).regex(SLUG_RE, 'Invalid deal id.').optional(),
   text: z.string().min(1)
 })
 

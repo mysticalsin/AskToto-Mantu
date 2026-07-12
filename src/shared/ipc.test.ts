@@ -330,6 +330,16 @@ describe('EntityRenamePayloadSchema', () => {
     expect(EntityRenamePayloadSchema.safeParse(null).success).toBe(false)
   })
 
+  // MI-2.5 Fix B: a path-traversal/non-slug id is rejected OUTRIGHT here, before the payload ever reaches
+  // the main-process handler — defense in depth alongside corrections.ts's own slugify sanitization.
+  it('rejects a path-traversal or otherwise non-slug id', () => {
+    expect(EntityRenamePayloadSchema.safeParse({ kind: 'account', id: '../../../etc/hosts', newName: 'Y' }).success).toBe(
+      false
+    )
+    expect(EntityRenamePayloadSchema.safeParse({ kind: 'account', id: 'Acme Corp', newName: 'Y' }).success).toBe(false) // spaces/uppercase — not a slug
+    expect(EntityRenamePayloadSchema.safeParse({ kind: 'account', id: 'acme-corp', newName: 'Y' }).success).toBe(true) // a real slug still passes
+  })
+
   // The pair alsoFixAsr composes in index.ts must round-trip through the SAME settings.asrCorrections
   // shape commitLine's consumer expects (lib/listen.ts: c.from / c.to, both plain strings).
   it('a constructed {from, to} correction pair round-trips through the persisted settings shape', () => {
@@ -346,6 +356,15 @@ describe('EntityMergePayloadSchema', () => {
     expect(EntityMergePayloadSchema.safeParse({ kind: 'deal', fromId: '', intoId: 'b' }).success).toBe(false)
     expect(EntityMergePayloadSchema.safeParse({ kind: 'deal', intoId: 'b' }).success).toBe(false)
     expect(EntityMergePayloadSchema.safeParse({ kind: 'invalid', fromId: 'a', intoId: 'b' }).success).toBe(false)
+  })
+
+  it('rejects a path-traversal fromId/intoId', () => {
+    expect(EntityMergePayloadSchema.safeParse({ kind: 'deal', fromId: '../../secrets', intoId: 'b' }).success).toBe(
+      false
+    )
+    expect(EntityMergePayloadSchema.safeParse({ kind: 'deal', fromId: 'a', intoId: '../../secrets' }).success).toBe(
+      false
+    )
   })
 })
 
@@ -384,6 +403,13 @@ describe('EntityUpdateFieldPayloadSchema', () => {
     )
     expect(EntityUpdateFieldPayloadSchema.safeParse({ id: 'x', field: 'stage', value: 'x' }).success).toBe(false)
   })
+
+  it('rejects a path-traversal id', () => {
+    expect(
+      EntityUpdateFieldPayloadSchema.safeParse({ kind: 'deal', id: '../../secrets', field: 'stage', value: 'x' })
+        .success
+    ).toBe(false)
+  })
 })
 
 describe('CommitmentRejectPayloadSchema', () => {
@@ -396,6 +422,14 @@ describe('CommitmentRejectPayloadSchema', () => {
     ).toBe(true)
     expect(CommitmentRejectPayloadSchema.safeParse({ personSlug: '', text: 'x' }).success).toBe(false)
     expect(CommitmentRejectPayloadSchema.safeParse({ personSlug: 'maria-silva', text: '' }).success).toBe(false)
+  })
+
+  it('rejects a path-traversal personSlug/dealSlug', () => {
+    expect(CommitmentRejectPayloadSchema.safeParse({ personSlug: '../../secrets', text: 'x' }).success).toBe(false)
+    expect(
+      CommitmentRejectPayloadSchema.safeParse({ personSlug: 'maria-silva', dealSlug: '../../secrets', text: 'x' })
+        .success
+    ).toBe(false)
   })
 })
 

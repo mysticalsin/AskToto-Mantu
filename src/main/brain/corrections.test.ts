@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { mkdtempSync, rmSync, readFileSync } from 'node:fs'
+import { mkdtempSync, rmSync, readFileSync, writeFileSync, existsSync, readdirSync } from 'node:fs'
 import { join, basename } from 'node:path'
 import { tmpdir } from 'node:os'
 import type { Settings } from '@shared/ipc'
@@ -15,7 +15,9 @@ import {
   readDeal,
   readMeetingExtraction,
   listEntities,
-  purgeBrain
+  purgeBrain,
+  writeJson,
+  withEntityLock
 } from './store'
 import {
   renameEntity,
@@ -27,7 +29,8 @@ import {
   readAliasMap,
   aliasMapFromJournal,
   applyCorrections,
-  readCorrectionsJournal
+  readCorrectionsJournal,
+  readCorrectionsJournalSafe
 } from './corrections'
 
 vi.mock('electron')
@@ -782,5 +785,308 @@ describe('corrections engine', () => {
     expect(graph.edges.some((e) => e.from === intoNode)).toBe(true)
     const edgeKeys = graph.edges.map((e) => `${e.from}|${e.to}|${e.rel}`)
     expect(new Set(edgeKeys).size).toBe(edgeKeys.length) // no duplicate edges after rewrite
+  })
+
+  // ── MI-2.5 Fix A — corrupt journal is preserved-and-refused, never silently wiped ──────────
+  describe('journal corruption handling (Fix A)', () => {
+    it('preserves a truncated/corrupt journal instead of silently wiping it, and refuses further mutations', async () => {
+      await ingestThreeMeetings(s)
+      const renamed = await renameEntity(s, { kind: 'account', id: ACCOUNT_SLUG, newName: 'Acme' })
+      expect(renamed.ok).toBe(true)
+      expect(readCorrectionsJournal(s)).toHaveLength(1)
+
+      // Simulate a partially-synced/truncated journal (OneDrive) — valid-looking prefix, cut off mid-entry.
+      const journalPath = join(brainDir(s), 'corrections.json')
+      writeFileSync(journalPath, '[{"seq":0,"at":"2026-01-01T00:00:00.000Z","kind":"entity_rena', 'utf8')
+
+      const merged = await mergeEntities(s, { kind: 'person', fromId: M_SILVA_SLUG, intoId: MARIA_SLUG })
+      expect(merged.ok).toBe(false)
+      expect(merged.error).toMatch(/corrupt/i)
+
+      // The original corrupt bytes are preserved verbatim under a corrections.corrupt-*.json sibling —
+      // NEVER silently overwritten with a fresh single-entry journal.
+      const files = readdirSync(brainDir(s))
+      const quarantine = files.find((f) => f.startsWith('corrections.corrupt-'))
+      expect(quarantine).toBeDefined()
+      expect(readFileSync(join(brainDir(s), quarantine!), 'utf8')).toContain('entity_rena')
+      expect(existsSync(journalPath)).toBe(false) // never silently rewritten
+
+      // The refused merge never touched either entity file — no half-applied mutation.
+      const fromRaw = JSON.parse(readFileSync(join(brainDir(s), 'entities', 'person', `${M_SILVA_SLUG}.json`), 'utf8'))
+      expect(fromRaw.merged_into).toBeUndefined()
+    })
+
+    it('tolerates a single unknown-kind entry (version skew) on read — the rest still replay, and further mutations are allowed', async () => {
+      await ingestThreeMeetings(s)
+      const renamed = await renameEntity(s, { kind: 'account', id: ACCOUNT_SLUG, newName: 'Acme' })
+      expect(renamed.ok).toBe(true)
+
+      const journalPath = join(brainDir(s), 'corrections.json')
+      const raw = JSON.parse(readFileSync(journalPath, 'utf8'))
+      raw.push({ seq: 1, at: '2026-06-05T00:00:00.000Z', kind: 'entity_future_kind', payload: { whatever: true } })
+      writeFileSync(journalPath, JSON.stringify(raw), 'utf8')
+
+      const entries = readCorrectionsJournal(s)
+      expect(entries).toHaveLength(1) // the unknown-kind entry is skipped, the valid one survives
+      expect(entries[0].kind).toBe('entity_rename')
+
+      // Tolerated, not corrupt — a further mutation must still be allowed.
+      const pinned = await updateEntityField(s, { kind: 'deal', id: DEAL_SLUG, field: 'stage', value: 'contract' })
+      expect(pinned.ok).toBe(true)
+    })
+
+    it('a valid journal is read back unchanged', async () => {
+      await ingestThreeMeetings(s)
+      await applyAllCorrections(s)
+      const before = readCorrectionsJournal(s)
+      expect(before.length).toBeGreaterThan(0)
+      const gate = await readCorrectionsJournalSafe(s)
+      expect(gate.ok).toBe(true)
+      expect(gate.entries).toEqual(before)
+    })
+  })
+
+  // ── MI-2.5 Fix B — entity ids are sanitized before any fs access ──────────────────────────
+  describe('entity id sanitization (Fix B)', () => {
+    it('neutralizes a path-traversal id before any fs access — cannot read/write outside .brain', async () => {
+      await ingestThreeMeetings(s)
+      // A decoy file sitting one level ABOVE the meetings folder — if slugify() were bypassed, an
+      // unsanitized '../../../evil' id could plausibly resolve to (something like) this path.
+      const decoyPath = join(folder, '..', 'evil.json')
+      writeFileSync(
+        decoyPath,
+        JSON.stringify({ schema_version: 2, id: 'evil', name: 'PWNED', role: null, account: null, meetings: [], quotes: [], stance_trail: [], commitments: [], aliases: [] }),
+        'utf8'
+      )
+      try {
+        const r = await renameEntity(s, { kind: 'person', id: '../../../evil', newName: 'Hacked' })
+        // slugify('../../../evil') -> 'evil', a slug matching no real entity in this brain — a clean
+        // "not found", never a traversal read of the decoy.
+        expect(r.ok).toBe(false)
+        expect(r.error).toBe('Entity not found.')
+        expect(JSON.parse(readFileSync(decoyPath, 'utf8')).name).toBe('PWNED') // decoy untouched
+      } finally {
+        rmSync(decoyPath, { force: true })
+      }
+    })
+
+    it('a legitimate slug still round-trips normally', async () => {
+      await ingestThreeMeetings(s)
+      const r = await renameEntity(s, { kind: 'account', id: ACCOUNT_SLUG, newName: 'Acme' })
+      expect(r.ok).toBe(true)
+      expect(readAccount(s, ACCOUNT_SLUG)?.name).toBe('Acme')
+    })
+  })
+
+  // ── MI-2.5 Fix C — corrections serialize against the same lock ingest.ts's jobs use ───────
+  describe('serialization with the shared entity-mutation lock (Fix C)', () => {
+    it('a correction fired during a simulated in-flight ingest applies AFTER it, against the post-ingest state (no lost update)', async () => {
+      await ingestThreeMeetings(s)
+
+      let releaseIngest: () => void = () => {}
+      const gate = new Promise<void>((resolve) => {
+        releaseIngest = resolve
+      })
+      // Simulate an in-flight backfill job holding the SAME lock corrections.ts's mutations now share.
+      const simulatedIngest = withEntityLock(async () => {
+        await gate
+        const acc = readAccount(s, ACCOUNT_SLUG)!
+        acc.sector = 'other'
+        const { writeAccount } = await import('./store')
+        await writeAccount(s, ACCOUNT_SLUG, acc)
+      })
+
+      const renamePromise = renameEntity(s, { kind: 'account', id: ACCOUNT_SLUG, newName: 'Acme' })
+      await new Promise((r) => setTimeout(r, 20))
+      // The rename must still be queued behind the simulated ingest's lock — not yet applied.
+      expect(readAccount(s, ACCOUNT_SLUG)?.name).not.toBe('Acme')
+
+      releaseIngest()
+      await simulatedIngest
+      const renameResult = await renamePromise
+      expect(renameResult.ok).toBe(true)
+
+      // No lost update: both the concurrent "ingest" mutation AND the rename survive.
+      const finalAccount = readAccount(s, ACCOUNT_SLUG)!
+      expect(finalAccount.name).toBe('Acme')
+      expect(finalAccount.sector).toBe('other')
+    })
+  })
+
+  // ── MI-2.5 Fix D — journal entry commits BEFORE the mutation runs ─────────────────────────
+  describe('journal-first ordering + crash-recovery via replay (Fix D)', () => {
+    it('a journaled-but-not-yet-applied rename (simulating a crash between the journal commit and the sweep) fully converges on replay', async () => {
+      await ingestThreeMeetings(s)
+      // Hand-write the journal entry directly — exactly what renameEntity commits BEFORE running
+      // applyRename — without ever calling renameEntity/applyRename, simulating a crash that landed
+      // right after the journal append but before any entity file was touched.
+      await writeJson(s, 'corrections.json', [
+        {
+          seq: 0,
+          at: '2026-06-10T00:00:00.000Z',
+          kind: 'entity_rename',
+          payload: { kind: 'account', id: ACCOUNT_SLUG, newName: 'Acme' },
+          snapshot: { oldName: 'Acme Corp' }
+        }
+      ])
+      expect(readAccount(s, ACCOUNT_SLUG)?.name).toBe('Acme Corp') // still unrenamed — the "crash" landed here
+
+      const replay = await replayCorrections(s)
+      expect(replay.applied).toBe(1)
+      expect(replay.warnings).toHaveLength(0)
+
+      // Converges to the SAME state a normal, uninterrupted renameEntity call would have produced,
+      // including the full dependents sweep (deal.account is a plain field the sweep repaints).
+      expect(readAccount(s, ACCOUNT_SLUG)?.name).toBe('Acme')
+      expect(readDeal(s, DEAL_SLUG)?.account).toBe('Acme')
+    })
+
+    it('the live rename call itself commits the journal entry before the mutation — a failure mid-sweep still leaves a replayable record', async () => {
+      await ingestThreeMeetings(s)
+      const store = await import('./store')
+      const writeDealSpy = vi.spyOn(store, 'writeDeal').mockImplementationOnce(() => {
+        throw new Error('simulated crash mid-sweep')
+      })
+
+      // A genuine crash (uncaught exception) partway through the sweep — the live call rejects, exactly
+      // like a real process crash would never return a graceful { ok: false } at all.
+      await expect(renameEntity(s, { kind: 'account', id: ACCOUNT_SLUG, newName: 'Acme' })).rejects.toThrow(
+        'simulated crash mid-sweep'
+      )
+
+      // Fix D's core property: despite the failure, the journal entry is ALREADY there.
+      const journal = readCorrectionsJournal(s)
+      expect(journal).toHaveLength(1)
+      expect(journal[0].kind).toBe('entity_rename')
+
+      writeDealSpy.mockRestore()
+
+      // A rebuild's replay picks up the committed-but-incomplete rename and finishes it.
+      const replay = await replayCorrections(s)
+      expect(replay.applied).toBe(1)
+      expect(readAccount(s, ACCOUNT_SLUG)?.name).toBe('Acme')
+      expect(readDeal(s, DEAL_SLUG)?.account).toBe('Acme')
+    })
+  })
+
+  // ── MI-2.5 Fix G — OneDrive conflict-copy detection + merge ───────────────────────────────
+  describe('OneDrive conflict-copy resolution (Fix G)', () => {
+    it('merges overlapping+distinct entries from a sibling conflict copy into one deterministic, resequenced journal', async () => {
+      await ingestThreeMeetings(s)
+      const shared = {
+        seq: 0,
+        at: '2026-06-01T00:00:00.000Z',
+        kind: 'entity_rename',
+        payload: { kind: 'account', id: ACCOUNT_SLUG, newName: 'Acme' },
+        snapshot: { oldName: 'Acme Corp' }
+      }
+      const primaryOnly = {
+        seq: 1,
+        at: '2026-06-02T00:00:00.000Z',
+        kind: 'field_update',
+        payload: { kind: 'deal', id: DEAL_SLUG, field: 'stage', value: 'contract' }
+      }
+      const conflictOnly = {
+        seq: 1,
+        at: '2026-06-03T00:00:00.000Z',
+        kind: 'commitment_reject',
+        payload: { personSlug: MARIA_SLUG, dealSlug: DEAL_SLUG, text: 'intro the CISO' }
+      }
+
+      await writeJson(s, 'corrections.json', [shared, primaryOnly])
+      await writeJson(s, 'corrections-DESKTOP-ABC.json', [shared, conflictOnly])
+
+      const merged = readCorrectionsJournal(s)
+      expect(merged).toHaveLength(3) // the shared entry deduped to one, plus both devices' distinct entries
+      expect(merged.map((e) => e.seq)).toEqual([0, 1, 2]) // re-sequenced, contiguous
+      // Deterministic chronological order: shared (06-01) < primaryOnly (06-02) < conflictOnly (06-03).
+      expect(merged.map((e) => e.kind)).toEqual(['entity_rename', 'field_update', 'commitment_reject'])
+
+      // The write-path gate durably resolves the fork: merged journal persisted, conflict copy renamed away.
+      const gateResult = await readCorrectionsJournalSafe(s)
+      expect(gateResult.ok).toBe(true)
+      expect(gateResult.entries).toHaveLength(3)
+      const files = readdirSync(brainDir(s))
+      expect(files).not.toContain('corrections-DESKTOP-ABC.json') // resolved — renamed out of the way
+      expect(files.some((f) => f.startsWith('corrections-DESKTOP-ABC') && f.includes('.merged-'))).toBe(true)
+      expect(JSON.parse(readFileSync(join(brainDir(s), 'corrections.json'), 'utf8'))).toHaveLength(3)
+    })
+
+    it('remaps an entity_unmerge.targetSeq reference through a conflict-copy merge so it still points at its own merge entry', async () => {
+      await ingestThreeMeetings(s)
+      const pin = {
+        seq: 0,
+        at: '2026-06-01T00:00:00.000Z',
+        kind: 'field_update',
+        payload: { kind: 'deal', id: DEAL_SLUG, field: 'stage', value: 'proposal' }
+      }
+      const merge = {
+        seq: 1,
+        at: '2026-06-02T00:00:00.000Z',
+        kind: 'entity_merge',
+        payload: { kind: 'person', fromId: M_SILVA_SLUG, intoId: MARIA_SLUG },
+        snapshot: { fromEntity: {}, intoEntity: {} }
+      }
+      const unmerge = { seq: 2, at: '2026-06-04T00:00:00.000Z', kind: 'entity_unmerge', payload: { targetSeq: 1 } }
+      await writeJson(s, 'corrections.json', [pin, merge, unmerge])
+
+      // A distinct entry from another device, dated BEFORE the primary's pin — shifts everything later
+      // in the merged chronological order, changing the merge entry's NEW index away from its old seq=1.
+      const conflictEntry = {
+        seq: 0,
+        at: '2026-05-30T00:00:00.000Z',
+        kind: 'field_update',
+        payload: { kind: 'deal', id: DEAL_SLUG, field: 'velocity', value: { signal: 'hard-calendar-gate', evidence: 'x' } }
+      }
+      await writeJson(s, 'corrections-LAPTOP.json', [conflictEntry])
+
+      const merged = readCorrectionsJournal(s)
+      // Order: conflictEntry(05-30), pin(06-01), merge(06-02), unmerge(06-04) — merge is now at index 2.
+      expect(merged.map((e) => e.kind)).toEqual(['field_update', 'field_update', 'entity_merge', 'entity_unmerge'])
+      const remappedUnmerge = merged.find((e) => e.kind === 'entity_unmerge')!
+      expect((remappedUnmerge.payload as { targetSeq: number }).targetSeq).toBe(2) // repointed, not the stale 1
+    })
+  })
+
+  // ── MI-2.5 Fix H — minor bundle ────────────────────────────────────────────────────────────
+  describe('minor hardening bundle (Fix H)', () => {
+    it('a rename to the entity\'s own current name is a no-op — never appends (unbounded-journal guard)', async () => {
+      await ingestThreeMeetings(s)
+      const r1 = await renameEntity(s, { kind: 'account', id: ACCOUNT_SLUG, newName: 'Acme Corp' }) // same as current name
+      expect(r1.ok).toBe(true)
+      expect(readCorrectionsJournal(s)).toHaveLength(0) // nothing appended
+    })
+
+    it('rejects an over-length string value for a human-pinned field before persisting it', async () => {
+      await ingestThreeMeetings(s)
+      const tooLong = 'x'.repeat(2001)
+      const r = await updateEntityField(s, { kind: 'deal', id: DEAL_SLUG, field: 'stage', value: tooLong })
+      expect(r.ok).toBe(false)
+      expect(readDeal(s, DEAL_SLUG)?.stage).not.toBe(tooLong)
+      expect(readCorrectionsJournal(s)).toHaveLength(0) // rejected before any journal write
+    })
+
+    it('accepts a string value right at the length cap', async () => {
+      await ingestThreeMeetings(s)
+      const atCap = 'x'.repeat(2000)
+      const r = await updateEntityField(s, { kind: 'deal', id: DEAL_SLUG, field: 'stage', value: atCap })
+      expect(r.ok).toBe(true)
+      expect(readDeal(s, DEAL_SLUG)?.stage).toBe(atCap)
+    })
+
+    it('aliasMapFromJournal still resolves correctly through a longer rename+merge chain (reverse-index correctness)', () => {
+      const entries: CorrectionEntry[] = [
+        { seq: 0, at: 't0', kind: 'entity_rename', payload: { kind: 'account', id: 'acme', newName: 'Acme One' }, snapshot: { oldName: 'Acme' } },
+        { seq: 1, at: 't1', kind: 'entity_rename', payload: { kind: 'account', id: 'acme', newName: 'Acme Two' }, snapshot: { oldName: 'Acme One' } },
+        { seq: 2, at: 't2', kind: 'entity_rename', payload: { kind: 'account', id: 'acme', newName: 'Acme Three' }, snapshot: { oldName: 'Acme Two' } },
+        { seq: 3, at: 't3', kind: 'entity_rename', payload: { kind: 'person', id: 'bob', newName: 'Bobby' }, snapshot: { oldName: 'Bob' } }
+      ]
+      const map = aliasMapFromJournal(entries)
+      // Every historical surface form of the account resolves to the FINAL name, transitively.
+      for (const name of ['Acme', 'Acme One', 'Acme Two', 'acme']) {
+        expect(map.get(slugify(name))).toMatchObject({ kind: 'account', id: 'acme', displayName: 'Acme Three' })
+      }
+      expect(map.get(slugify('Bob'))).toMatchObject({ kind: 'person', id: 'bob', displayName: 'Bobby' })
+    })
   })
 })
