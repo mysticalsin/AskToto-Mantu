@@ -378,7 +378,13 @@ export const BrainIndexSchema = z.object({
   warnings: z.array(z.string()).default([]),
   // True from "user asked for a backfill" until the queue fully drains — lets a quit/relaunch resume
   // the remaining transcripts automatically instead of stalling until someone re-clicks the button.
-  backfillRequested: z.boolean().default(false)
+  backfillRequested: z.boolean().default(false),
+  // MI-2.5 Fix E: true from "brain:rebuildAll started" until replayCorrections has actually completed —
+  // survives a quit/crash mid-rebuild independently of backfillRequested (which can already be cleared by
+  // the time the crash happens, if the re-extraction backfill itself finished before the replay step
+  // did). resumeBackfillIfPending (ingest.ts) checks this on boot and runs the replay if it's still true,
+  // so an interrupted rebuild always finishes with its corrections re-applied, never silently reverted.
+  replayPending: z.boolean().default(false)
 })
 export type BrainIndex = z.infer<typeof BrainIndexSchema>
 
