@@ -29,14 +29,19 @@
  *  never turned into an exponent value. A genuine magnitude ('50k EUR', where 'k' is NOT followed by
  *  a superscript) is untouched and still parses to 50,000.
  *
- *  Enclosed alphanumerics (①⑴⑵… U+2460–U+24FF) are list-bullet markers, never a stated numeric value;
- *  '⑴' additionally NFKC-decomposes to the 3-char "(1)", which would break foldCase's length-preserving
- *  assumption and skew every downstream offset. Each is replaced with a single space (length-preserving,
- *  no fabricated digit). */
+ *  Enclosed/circled markers (①⑴⑵…, ㉑–㊿, 🄀–🄊) are list-bullet or decorative glyphs, never a stated
+ *  numeric value, yet NFKC folds them to digit strings ('①'->'1', '㊿'->'50', '🄀'->'0.'); '⑴' even
+ *  decomposes to the 3-char "(1)", which would fabricate a digit AND skew every downstream offset.
+ *  The three enclosed blocks — U+2460–U+24FF (Enclosed Alphanumerics), U+3200–U+32FF (Enclosed CJK
+ *  Letters/Months, incl. circled 21–50), U+1F100–U+1F1FF (Enclosed Alphanumeric Supplement) — are each
+ *  replaced with same-length spaces (2 code units for the astral supplement) so no digit is fabricated
+ *  and no offset skews. This deliberately does NOT touch legitimately-authored digit characters:
+ *  fullwidth '０'–'９' (U+FF10–U+FF19) and mathematical bold/double-struck '𝟎'–'𝟿' (U+1D7CE–U+1D7FF)
+ *  are real digits and stay parseable via their normal NFKC fold to ASCII. */
 function neutralizeNumericArtifacts(s: string): string {
   let out = s.replace(/\p{L}+[²³]|[㎡㎢㎥㎦]/gu, (m) => ' '.repeat(m.length))
   out = out.replace(/[¼-¾⅐-⅟²³¹⁰-₟]/g, ' ')
-  out = out.replace(/[①-⓿]/g, ' ')
+  out = out.replace(/[①-⓿㈀-㋿\u{1f100}-\u{1f1ff}]/gu, (m) => ' '.repeat(m.length))
   return out
 }
 

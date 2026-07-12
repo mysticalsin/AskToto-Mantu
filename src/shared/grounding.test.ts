@@ -249,6 +249,23 @@ describe('extractNumerals', () => {
     expect(extractNumerals('point ⑴ here').some((h) => h.value === 1)).toBe(false)
   })
 
+  it('FIX 4d: circled numbers in the SIBLING enclosed blocks (㉑–㊿ CJK, 🄀–🄊 supplement) also fabricate nothing', () => {
+    // U+3200–U+32FF (Enclosed CJK Letters/Months): '㊿' NFKC-folds to "50", '㉑' to "21" — decorative
+    // markers, never a stated numeric value. Fail closed: no hit.
+    expect(extractNumerals('reached ㊿ percent').some((h) => h.value === 50)).toBe(false)
+    expect(vals('reached ㊿ percent')).toEqual([])
+    expect(extractNumerals('item ㉑ on the list').some((h) => h.value === 21)).toBe(false)
+    // U+1F100–U+1F1FF (Enclosed Alphanumeric Supplement, an ASTRAL block): '🄀' folds to "0." — must
+    // not fabricate 0, and its 2-code-unit width must not skew later offsets (blanked to 2 spaces).
+    expect(extractNumerals('bullet 🄀 first').some((h) => h.value === 0)).toBe(false)
+
+    // Regression guard: legitimately-authored digit characters stay parseable.
+    // Fullwidth '５０' (U+FF10–U+FF19) NFKC-folds to ASCII 50 — a real stated value, must survive.
+    expect(vals('sales of ５０ units')).toContainEqual({ value: 50, unit: null })
+    // Mathematical bold '𝟓𝟎' (U+1D7CE–U+1D7FF) likewise folds to 50 and must stay parseable.
+    expect(extractNumerals('sales of 𝟓𝟎 units').some((h) => h.value === 50)).toBe(true)
+  })
+
   it('is fail-closed on an unsupported grouping (not a clean run of 3-digit groups): no fabricated hit', () => {
     // "12,34,567" is not a valid thousands grouping (middle group is 2 digits, not 3) — out of the
     // documented scope. Must not silently invent 1234567 (or any other value) from it.
@@ -385,6 +402,12 @@ describe('verifyNumericFact', () => {
     const t = 'Them: Our two priorities are ⑴ grow revenue and ② cut cost this year.'
     expect(verifyNumericFact({ value: 1, quote: 'Our two priorities are ⑴ grow revenue' }, t)).toBe('unverified')
     expect(verifyNumericFact({ value: 2, quote: '② cut cost this year' }, t)).toBe('unverified')
+  })
+
+  it('FIX 4d: claiming a circled-number value (50) from a "㊿" in a sibling enclosed block is unverified', () => {
+    const t = 'Them: adoption reached ㊿ percent across the pilot cohort.'
+    const quote = 'adoption reached ㊿ percent'
+    expect(verifyNumericFact({ value: 50, quote, unit: '%' }, t)).toBe('unverified')
   })
 
   it('FIX 5: a ligature/compat char earlier in the transcript must not shift rule (c)\'s span off the true quote', () => {
