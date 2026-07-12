@@ -30,7 +30,9 @@ import {
   aliasMapFromJournal,
   applyCorrections,
   readCorrectionsJournal,
-  readCorrectionsJournalSafe
+  readCorrectionsJournalSafe,
+  isJournalCorruptionBlocked,
+  clearJournalCorruptionLock
 } from './corrections'
 
 vi.mock('electron')
@@ -1087,6 +1089,164 @@ describe('corrections engine', () => {
         expect(map.get(slugify(name))).toMatchObject({ kind: 'account', id: 'acme', displayName: 'Acme Three' })
       }
       expect(map.get(slugify('Bob'))).toMatchObject({ kind: 'person', id: 'bob', displayName: 'Bobby' })
+    })
+  })
+
+  // ── MI-2.5 review Fix 1 — corruption block is DURABLE (survives the quarantine rename) ──────
+  describe('durable corruption block (review Fix 1)', () => {
+    it('keeps refusing EVERY subsequent mutation after quarantine (not just the detecting one), then resumes after explicit resolution', async () => {
+      await ingestThreeMeetings(s)
+      expect((await renameEntity(s, { kind: 'account', id: ACCOUNT_SLUG, newName: 'Acme' })).ok).toBe(true)
+
+      // Corrupt the journal, then let the FIRST mutation detect+quarantine it (renaming corrections.json
+      // to a corrections.corrupt-*.json sibling — after which the primary path is 'absent', not 'corrupt').
+      writeFileSync(join(brainDir(s), 'corrections.json'), '{ truncated not an array', 'utf8')
+      const first = await updateEntityField(s, { kind: 'deal', id: DEAL_SLUG, field: 'stage', value: 'contract' })
+      expect(first.ok).toBe(false)
+      expect(isJournalCorruptionBlocked(s)).toBe(true) // durable sentinel written
+
+      // The reviewer's exact bug: WITHOUT the sentinel this second, unrelated mutation would see 'absent'
+      // and silently start a fresh seq:0 journal. It must be REFUSED instead.
+      const second = await rejectCommitment(s, { personSlug: MARIA_SLUG, dealSlug: DEAL_SLUG, text: 'intro the CISO' })
+      expect(second.ok).toBe(false)
+      expect(second.error).toMatch(/paused|corrupt|blocked/i)
+      expect(existsSync(join(brainDir(s), 'corrections.json'))).toBe(false) // never rewritten to seq:0
+
+      // Replay is also blocked (does not silently replay an empty journal).
+      const replay = await replayCorrections(s)
+      expect(replay.error).toBeTruthy()
+      expect(replay.applied).toBe(0)
+
+      // Explicit resolution unblocks — a fresh correction now succeeds and starts a clean journal.
+      expect(clearJournalCorruptionLock(s)).toBe(true)
+      expect(isJournalCorruptionBlocked(s)).toBe(false)
+      const resumed = await updateEntityField(s, { kind: 'deal', id: DEAL_SLUG, field: 'stage', value: 'contract' })
+      expect(resumed.ok).toBe(true)
+      expect(readCorrectionsJournal(s)).toHaveLength(1)
+    })
+  })
+
+  // ── MI-2.5 review Fix 3 — field_update & commitment_reject are journal-first ────────────────
+  describe('journal-first for field_update and commitment_reject (review Fix 3)', () => {
+    it('field_update commits the journal entry BEFORE the entity write — a crashed write still converges on replay, never reverts', async () => {
+      await ingestThreeMeetings(s)
+      const store = await import('./store')
+      const spy = vi.spyOn(store, 'writeDeal').mockImplementationOnce(() => {
+        throw new Error('simulated crash after journal append, before entity write')
+      })
+
+      // The real write throws — but the dry-run precheck + journal append already ran first.
+      await expect(updateEntityField(s, { kind: 'deal', id: DEAL_SLUG, field: 'stage', value: 'contract' })).rejects.toThrow(
+        /simulated crash/
+      )
+      spy.mockRestore()
+
+      // The journal entry IS present (committed before the write) and the entity is NOT yet pinned.
+      const journal = readCorrectionsJournal(s)
+      expect(journal).toHaveLength(1)
+      expect(journal[0].kind).toBe('field_update')
+      expect(readDeal(s, DEAL_SLUG)?.stage_provenance?.state).not.toBe('pinned')
+
+      // Replay finishes the committed-but-unapplied pin — the reviewer's revert-to-'discovery' is gone.
+      const replay = await replayCorrections(s)
+      expect(replay.applied).toBe(1)
+      expect(readDeal(s, DEAL_SLUG)?.stage).toBe('contract')
+      expect(readDeal(s, DEAL_SLUG)?.stage_provenance?.state).toBe('pinned')
+    })
+
+    it('field_update replay after a SUCCESSFUL live pin is idempotent (crash-after-write case)', async () => {
+      await ingestThreeMeetings(s)
+      expect((await updateEntityField(s, { kind: 'deal', id: DEAL_SLUG, field: 'stage', value: 'contract' })).ok).toBe(true)
+      const afterLive = canonicalize(JSON.parse(readFileSync(join(brainDir(s), 'entities', 'deal', `${DEAL_SLUG}.json`), 'utf8')))
+      const replay = await replayCorrections(s)
+      expect(replay.warnings).toHaveLength(0)
+      const afterReplay = canonicalize(JSON.parse(readFileSync(join(brainDir(s), 'entities', 'deal', `${DEAL_SLUG}.json`), 'utf8')))
+      expect(afterReplay).toEqual(afterLive) // byte-equal — replay is a pure no-op over the applied pin
+    })
+
+    it('commitment_reject commits the journal entry BEFORE the ledger write — a crashed write still converges on replay', async () => {
+      await ingestThreeMeetings(s)
+      const store = await import('./store')
+      // Fail the FIRST ledger write of the reject (person OR deal, whichever applyRejectCommitment writes
+      // first) to simulate a crash between the journal append and the entity write completing.
+      const spyP = vi.spyOn(store, 'writePerson').mockImplementationOnce(() => {
+        throw new Error('simulated crash mid-reject')
+      })
+      const spyD = vi.spyOn(store, 'writeDeal').mockImplementationOnce(() => {
+        throw new Error('simulated crash mid-reject')
+      })
+      await expect(
+        rejectCommitment(s, { personSlug: MARIA_SLUG, dealSlug: DEAL_SLUG, text: 'intro the CISO' })
+      ).rejects.toThrow(/simulated crash/)
+      spyP.mockRestore()
+      spyD.mockRestore()
+
+      const journal = readCorrectionsJournal(s)
+      expect(journal).toHaveLength(1)
+      expect(journal[0].kind).toBe('commitment_reject')
+
+      const replay = await replayCorrections(s)
+      expect(replay.applied).toBe(1)
+      // The commitment is rejected on the deal ledger after replay (converged).
+      const dealRow = readDeal(s, DEAL_SLUG)?.commitments.find((c) => c.text.toLowerCase().includes('ciso'))
+      expect(dealRow?.status).toBe('rejected')
+    })
+  })
+
+  // ── MI-2.5 review minors — conflict-copy idempotency + unmerge identity ─────────────────────
+  describe('conflict-copy resolution is idempotent + robust (review minors a/c)', () => {
+    it('resolving a conflict copy is idempotent — a second gate call does not re-detect the renamed .merged- copy', async () => {
+      await ingestThreeMeetings(s)
+      const shared = { seq: 0, at: '2026-06-01T00:00:00.000Z', kind: 'entity_rename', payload: { kind: 'account', id: ACCOUNT_SLUG, newName: 'Acme' }, snapshot: { oldName: 'Acme Corp' } }
+      const conflictOnly = { seq: 1, at: '2026-06-03T00:00:00.000Z', kind: 'field_update', payload: { kind: 'deal', id: DEAL_SLUG, field: 'stage', value: 'contract' } }
+      await writeJson(s, 'corrections.json', [shared])
+      await writeJson(s, 'corrections-DESKTOP.json', [shared, conflictOnly])
+
+      const first = await readCorrectionsJournalSafe(s)
+      expect(first.ok).toBe(true)
+      expect(first.entries).toHaveLength(2)
+      const mergedCopies = () => readdirSync(brainDir(s)).filter((f) => f.includes('.merged-'))
+      expect(mergedCopies()).toHaveLength(1)
+
+      // Second call: the .merged- copy must NOT be treated as a fresh conflict copy (no re-merge, no
+      // second .merged- accumulation).
+      const second = await readCorrectionsJournalSafe(s)
+      expect(second.ok).toBe(true)
+      expect(second.entries).toHaveLength(2)
+      expect(mergedCopies()).toHaveLength(1) // still exactly one — not re-renamed on every call
+    })
+
+    it('sets aside a CORRUPT conflict copy once instead of re-parsing it forever', async () => {
+      await ingestThreeMeetings(s)
+      await writeJson(s, 'corrections.json', [])
+      writeFileSync(join(brainDir(s), 'corrections-LAPTOP.json'), '{ corrupt not array', 'utf8')
+
+      const gate = await readCorrectionsJournalSafe(s)
+      expect(gate.ok).toBe(true) // a corrupt CONFLICT copy never blocks the primary
+      const files = readdirSync(brainDir(s))
+      expect(files).not.toContain('corrections-LAPTOP.json') // set aside
+      expect(files.some((f) => f.includes('.corrupt-') && f.includes('LAPTOP'))).toBe(true)
+    })
+
+    it('two unmerges from different devices with the same at+targetSeq but referencing DIFFERENT merges stay distinct through the conflict merge', async () => {
+      await ingestThreeMeetings(s)
+      // Primary device: merge(person p-a→p-b) at local seq0, then unmerge(targetSeq:0) at 'tX'.
+      await writeJson(s, 'corrections.json', [
+        { seq: 0, at: '2026-06-01T00:00:00.000Z', kind: 'entity_merge', payload: { kind: 'person', fromId: 'p-a', intoId: 'p-b' }, snapshot: { fromEntity: {}, intoEntity: {} } },
+        { seq: 1, at: 'tX', kind: 'entity_unmerge', payload: { targetSeq: 0 } }
+      ])
+      // Conflict device: a DIFFERENT merge (deal d-c→d-d) at local seq0, unmerge with the SAME at+targetSeq.
+      await writeJson(s, 'corrections-DEVICE2.json', [
+        { seq: 0, at: '2026-06-02T00:00:00.000Z', kind: 'entity_merge', payload: { kind: 'deal', fromId: 'd-c', intoId: 'd-d' }, snapshot: { fromEntity: {}, intoEntity: {} } },
+        { seq: 1, at: 'tX', kind: 'entity_unmerge', payload: { targetSeq: 0 } }
+      ])
+
+      const merged = readCorrectionsJournal(s)
+      const unmerges = merged.filter((e) => e.kind === 'entity_unmerge')
+      // WITHOUT the richer identity, the two same-{at,targetSeq} unmerges would dedup to ONE (silently
+      // dropping one device's undo). They must both survive, each remapped to its OWN merge.
+      expect(unmerges).toHaveLength(2)
+      expect(merged.filter((e) => e.kind === 'entity_merge')).toHaveLength(2)
     })
   })
 })

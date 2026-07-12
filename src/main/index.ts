@@ -82,8 +82,7 @@ import {
   brainBackfillProgress,
   resumeBackfillIfPending,
   settleCommitment,
-  updateIndex as updateBrainIndex,
-  finishRebuildReplay
+  startRebuild
 } from './brain/ingest'
 import {
   renameEntity,
@@ -2270,37 +2269,21 @@ function registerIpc(): void {
   // Full rebuild: wipe the DERIVED store (entities/graph/extractions — never the source transcripts)
   // and re-extract everything with the current schema/prompt. This is the upgrade path for legacy
   // extractions (e.g. untagged feedback that rendered as a flat confidence wall in the dashboard).
-  ipcMain.handle(IPC.brainRebuildAll, (e) => {
+  ipcMain.handle(IPC.brainRebuildAll, async (e) => {
     // Privileged write (purges the derived brain store) — main-window only, like brainCommitmentSettle,
     // never the Mantu Intelligence window's assertBrainReader (that's for the three read-only channels).
     assertMainWindow(e)
     if (!requireAuth()) throw new Error('Not signed in.')
-    const s = getSettings()
-    // preserveCorrections: true — the human correction journal is not derived data (see purgeBrain's own
-    // doc comment); the replay below depends on it surviving the purge.
-    //
-    // MI-2.5 Fix F: purgeBrain's result is now CHECKED — a mid-wipe failure (OneDrive/AV holding a file
-    // open) must abort the rebuild rather than proceed with startBackfill over an unverified store. The
-    // journal itself is always recoverable by then (purgeBrain's own catch path restores it from the
-    // escrow copy on failure), so aborting here costs nothing but a re-try.
-    const purge = purgeBrain(s, { preserveCorrections: true })
-    if (!purge.ok) {
-      auditLog('brain.rebuild.purge_failed', {})
-      return {
-        queued: 0,
-        error:
-          'Could not fully reset the brain store before rebuilding — nothing was re-extracted, and your corrections are safe. Try again, or check for files OneDrive/antivirus may be holding open.'
-      }
+    // The full orchestration lives in ingest.ts's startRebuild (unit-testable, keeps this handler thin):
+    //  - preserveCorrections purge whose result is CHECKED (MI-2.5 Fix F — abort on a partial wipe);
+    //  - a corrupt/blocked-journal guard (MI-2.5 review Fix 2 — refuse rather than rebuild atop a store
+    //    onto which zero corrections could be replayed, which would silently revert every human fix);
+    //  - the replayPending flag (Fix E) + the onDrained replay that clears it only on a clean replay.
+    const r = await startRebuild(getSettings())
+    if (r.error) {
+      auditLog('brain.rebuild.aborted', {})
+      return r
     }
-    // MI-2.5 Fix E: `replayPending` survives independently of the backfill's own `backfillRequested` flag
-    // — a quit/crash between the re-extraction backfill draining and this callback's replay actually
-    // running would otherwise leave replayCorrections never having run, with nothing left to resume it
-    // (resumeBackfillIfPending only acts on backfillRequested). finishRebuildReplay clears this flag once
-    // the replay genuinely completes; see ingest.ts's resumeBackfillIfPending for the boot-time resume.
-    void updateBrainIndex(s, (i) => {
-      i.replayPending = true
-    })
-    const r = startBackfill(() => finishRebuildReplay(s))
     auditLog('brain.backfill.start', { queued: r.queued, rebuild: true })
     return r
   })

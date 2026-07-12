@@ -42,9 +42,10 @@ import {
   writeDeal,
   listEntities,
   listMeetingExtractions,
-  withEntityLock
+  withEntityLock,
+  purgeBrain
 } from './store'
-import { applyCorrections, readAliasMap, resolveEntitySlug, replayCorrections } from './corrections'
+import { applyCorrections, readAliasMap, resolveEntitySlug, replayCorrections, readCorrectionsJournalSafe } from './corrections'
 
 /**
  * Brain ingest — turns one saved transcript into a structured extraction, then merges it into the
@@ -823,19 +824,77 @@ export function enqueueIngest(file: string): void {
   pump()
 }
 
+// MI-2.5 review Fix 2: a stable prefix for the human-visible warning finishRebuildReplay pushes into
+// idx.warnings when a rebuild's replay could not run — surfaced by BrainView's "Needs a human read" list.
+// A dedicated prefix lets a later successful replay find and remove exactly its own warning.
+const REPLAY_FAILED_WARNING_PREFIX = 'Rebuild could not re-apply your saved corrections: '
+
 /**
  * Runs the journal replay a rebuild depends on, then clears the `replayPending` flag that survives a
  * quit/crash mid-rebuild (MI-2.5 Fix E) — shared by brain:rebuildAll's own onDrained callback (index.ts)
  * and resumeBackfillIfPending below, so a replay interrupted by a quit still completes exactly the same
  * way a same-session rebuild would. replayCorrections is idempotent (Fix D), so re-running it here even
  * when it partially ran before the crash converges to the same fully-corrected state.
+ *
+ * MI-2.5 review Fix 2: when the replay could not run (a corrupt/blocked journal, or an exception),
+ * `replayPending` is DELIBERATELY left set — a rebuild that replayed zero corrections must never look
+ * finished. The reason is recorded durably (`idx.replayError`) and surfaced to the user (a warning in
+ * the "Needs a human read" list). A later clean replay clears both. A brand-new AttentionItem kind was
+ * intentionally NOT added: the renderer's exhaustive `Record<AttentionItem['kind'], number>` (a file this
+ * task must not touch) would fail typecheck — the warnings list is the existing, renderer-safe surface.
  */
 export async function finishRebuildReplay(s: Settings): Promise<void> {
   const r = await replayCorrections(s)
-  if (r.error) mainLog.error(`[brain] rebuild replay could not run: ${r.error}`)
+  if (r.error) {
+    mainLog.error(`[brain] rebuild replay could not run: ${r.error}`)
+    await updateIndex(s, (i) => {
+      i.replayError = r.error
+      // Leave replayPending TRUE — do not report a rebuild that replayed nothing as finished.
+      if (!i.warnings.some((w) => w.startsWith(REPLAY_FAILED_WARNING_PREFIX))) {
+        i.warnings = [...i.warnings, `${REPLAY_FAILED_WARNING_PREFIX}${r.error}`]
+      }
+    })
+    return
+  }
   await updateIndex(s, (i) => {
     i.replayPending = false
+    i.replayError = undefined
+    i.warnings = i.warnings.filter((w) => !w.startsWith(REPLAY_FAILED_WARNING_PREFIX))
   })
+}
+
+/**
+ * The full brain:rebuildAll orchestration, extracted here (out of the IPC handler) so it is unit-testable
+ * and so index.ts stays thin. Wipes the DERIVED store and re-extracts everything, then replays the
+ * correction journal onto the fresh entities. Refuses up front — WITHOUT purging — when:
+ *   - the correction journal is corrupt/blocked (MI-2.5 review Fix 2): replaying nothing onto a freshly
+ *     wiped store while reporting success is exactly the silent-revert this guards against; and
+ *   - the purge itself cannot fully reset the store (MI-2.5 Fix F): proceeding over a half-wiped store
+ *     would re-ingest atop stale data.
+ * Both return a typed `error` (queued: 0) the handler surfaces to the renderer.
+ */
+export async function startRebuild(s: Settings): Promise<{ queued: number; error?: string }> {
+  // Fix 2 (sync guard): a corrupt/blocked journal fails the gate — refuse before touching the store.
+  const gate = await readCorrectionsJournalSafe(s)
+  if (!gate.ok) return { queued: 0, error: gate.error }
+  // Fix F: preserveCorrections copies the journal to escrow and restores it even if the wipe fails —
+  // check the result and abort (nothing re-extracted, corrections safe) rather than rebuild atop a
+  // half-deleted store.
+  const purge = purgeBrain(s, { preserveCorrections: true })
+  if (!purge.ok) {
+    return {
+      queued: 0,
+      error:
+        'Could not fully reset the brain store before rebuilding — nothing was re-extracted, and your corrections are safe. Try again, or check for files OneDrive/antivirus may be holding open.'
+    }
+  }
+  // Fix E: replayPending survives a crash independently of backfillRequested; clear any stale replayError.
+  await updateIndex(s, (i) => {
+    i.replayPending = true
+    i.replayError = undefined
+  })
+  const r = startBackfill(() => finishRebuildReplay(s))
+  return { queued: r.queued }
 }
 
 /**
