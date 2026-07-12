@@ -12,11 +12,13 @@ import {
   type BrainGraph,
   type BrainIndex,
   type Confidence,
+  type ProvenanceState,
   type ProvenantField,
   type EntityKind
 } from '@shared/brain'
 import { INJECTION_GUARD } from '@shared/prompts'
 import { redactSecrets } from '@shared/redact'
+import { alignQuote, verifyNumericFact, extractNumerals, numeralDerivable } from '@shared/grounding'
 import { getSettings, getApiKey } from '../store'
 import { createStream } from '../llm'
 import { readSavedFile, resolveMeetingsFolder } from '../transcripts'
@@ -29,6 +31,7 @@ import {
   outranks,
   eqStrict,
   eqVelocity,
+  eqAmount,
   readIndex,
   writeIndex,
   readGraph,
@@ -129,23 +132,218 @@ export function extractJsonObject(raw: string): string {
 export const buildExtractionSystem = (extra = ''): string =>
   INJECTION_GUARD.trimStart() + '\n\n' + BRAIN_EXTRACTION_PROMPT + extra
 
-async function extractMeeting(s: Settings, transcriptMd: string, sourceFile: string): Promise<MeetingExtraction> {
+// ── Windowed extraction (Task MI-4, kills D2 — the old hard 24k truncation) ──────────────────────────
+
+// Same size as the old hardcoded `.slice(0, 24000)` — a transcript at or under this length takes the
+// EXACT single-completion-call path it always has (see splitIntoWindows's own byte-identity guarantee).
+const WINDOW_SIZE = 24000
+// ~1k of trailing context carried into the next window so a fact split across a window boundary (a
+// number stated in one line, its supporting clause in the next) still has a chance to align in EITHER
+// window — small relative to WINDOW_SIZE, so it never meaningfully multiplies completion-call volume.
+const WINDOW_OVERLAP = 1000
+
+/** Split `text` into sequential windows of at most `size` chars, cut at line boundaries so a window
+ *  never splits a transcript line, with `overlap` chars of trailing context carried into the next
+ *  window. Returns `[text]` UNCHANGED when `text.length <= size` — the single-window path every
+ *  transcript at or under the threshold takes, byte-identical to pre-MI-4 behavior (a 1-element array's
+ *  `.join()` below reproduces `text` exactly, so no downstream branching is needed for that case). */
+export function splitIntoWindows(text: string, size = WINDOW_SIZE, overlap = WINDOW_OVERLAP): string[] {
+  if (text.length <= size) return [text]
+  const lines = text.split('\n')
+  const windows: string[] = []
+  let cur: string[] = []
+  let curLen = 0
+  let i = 0
+  while (i < lines.length) {
+    const line = lines[i]
+    const lineLen = line.length + 1 // +1 for the '\n' this line will rejoin with
+    if (curLen + lineLen > size && cur.length > 0) {
+      windows.push(cur.join('\n'))
+      // Seed the next window with the last `overlap` chars' worth of lines from the one just closed.
+      const ov: string[] = []
+      let ovLen = 0
+      for (let j = cur.length - 1; j >= 0 && ovLen < overlap; j--) {
+        ov.unshift(cur[j])
+        ovLen += cur[j].length + 1
+      }
+      cur = ov
+      curLen = ovLen
+      continue // re-evaluate this same line against the freshly-seeded (overlap-only) window
+    }
+    cur.push(line)
+    curLen += lineLen
+    i++
+  }
+  if (cur.length > 0) windows.push(cur.join('\n'))
+  return windows
+}
+
+type Deal = NonNullable<MeetingExtraction['deal']>
+type Account = NonNullable<MeetingExtraction['account']>
+
+/** The window whose title/topics/sentiment/account should anchor the combined extraction — these are
+ *  meeting-level descriptive fields that must read as ONE coherent view, not a patchwork of windows. */
+function pickAnchorWindow(windows: MeetingExtraction[]): number {
+  const extractedIdx = windows.findIndex((w) => w.account?.confidence === 'EXTRACTED')
+  if (extractedIdx !== -1) return extractedIdx
+  const nonNullIdx = windows.findIndex((w) => w.account !== null)
+  return nonNullIdx !== -1 ? nonNullIdx : 0
+}
+
+/** Deal combiner: stage/win_likelihood_band(+evidence)/velocity each take the LAST window with a
+ *  non-null value — the meeting's final state on that field, positionally deterministic regardless of
+ *  how many windows actually mention it. `name`/`account` come from the first window that names them
+ *  (identity shouldn't flip mid-combine just because a later window's extraction omitted it). */
+function combineDeal(windows: MeetingExtraction[]): Deal | null {
+  const withDeal = windows.filter((w): w is MeetingExtraction & { deal: Deal } => w.deal !== null)
+  if (withDeal.length === 0) return null
+  const name = withDeal.find((w) => w.deal.name)?.deal.name ?? ''
+  let stage = ''
+  let win_likelihood_band: Deal['win_likelihood_band'] = null
+  let band_evidence = ''
+  let velocity: Deal['velocity'] = { signal: 'no-hard-date-found', evidence: '' }
+  let amount: Deal['amount']
+  let close_date: Deal['close_date']
+  for (const w of withDeal) {
+    if (w.deal.stage) stage = w.deal.stage
+    if (w.deal.win_likelihood_band) {
+      win_likelihood_band = w.deal.win_likelihood_band
+      band_evidence = w.deal.band_evidence
+    }
+    if (w.deal.velocity.signal !== 'no-hard-date-found') velocity = w.deal.velocity
+    if (w.deal.amount) amount = w.deal.amount
+    if (w.deal.close_date) close_date = w.deal.close_date
+  }
+  return { name, stage, win_likelihood_band, band_evidence, velocity, amount, close_date }
+}
+
+/** Deterministically combine one meeting's per-window extractions into a single MeetingExtraction.
+ *  Called only when a transcript needed more than one window — the caller keeps the single-window
+ *  result untouched otherwise, so this function's own quirks can never affect a ≤24k transcript. */
+export function combineWindowExtractions(windows: MeetingExtraction[]): MeetingExtraction {
+  if (windows.length <= 1) return windows[0]
+  const anchor = windows[pickAnchorWindow(windows)]
+
+  const people: MeetingExtraction['people'] = []
+  for (const w of windows) for (const p of w.people) pushUnique(people, p, (x) => slugify(x.name))
+
+  const commitments: MeetingExtraction['commitments'] = []
+  for (const w of windows) for (const c of w.commitments) pushUnique(commitments, c, (x) => commitmentKey(x.text))
+
+  const signals: MeetingExtraction['signals'] = []
+  for (const w of windows) for (const sig of w.signals) pushUnique(signals, sig, (x) => `${x.kind}|${x.statement}`)
+
+  const missed_signals: MeetingExtraction['missed_signals'] = []
+  for (const w of windows) for (const m of w.missed_signals) pushUnique(missed_signals, m, (x) => x.statement)
+
+  const feedback: MeetingExtraction['feedback'] = []
+  for (const w of windows) for (const f of w.feedback) pushUnique(feedback, f, (x) => x.note)
+
+  const numeric_facts: MeetingExtraction['numeric_facts'] = []
+  for (const w of windows) {
+    for (const n of w.numeric_facts) pushUnique(numeric_facts, n, (x) => `${x.kind}|${x.value}|${x.unit ?? ''}|${x.quote}`)
+  }
+
+  return {
+    ...anchor,
+    title24: anchor.title24,
+    topics: anchor.topics,
+    sentiment: anchor.sentiment,
+    account: anchor.account as Account | null,
+    people,
+    deal: combineDeal(windows),
+    signals,
+    missed_signals,
+    commitments,
+    feedback,
+    numeric_facts
+  }
+}
+
+// ── Verification (Task MI-4 — "no unverified figure ever shown") ────────────────────────────────────
+
+/** Every numeric_fact + every commitment quote checked against the EXACT prepared text sent to the
+ *  model (post-redaction, post-window-concatenation) — never the raw transcript (defect D10): a
+ *  redacted-away or fabricated quote must fail verification even if it happens to appear in the
+ *  original file. Demotes confidence to AMBIGUOUS on failure; never strips the item (quarantined, not
+ *  dropped, so a human can still review and pin it). Pure and exported so it is directly unit-testable
+ *  without going through the full createStream/runCompletion machinery. */
+export function verifyExtraction(x: MeetingExtraction, preparedText: string): MeetingExtraction {
+  const numeric_facts = x.numeric_facts.map((f) => {
+    const outcome = verifyNumericFact({ value: f.value, quote: f.quote, unit: f.unit ?? undefined }, preparedText)
+    return outcome === 'verified' ? f : { ...f, confidence: 'AMBIGUOUS' as const }
+  })
+  const commitments = x.commitments.map((c) => {
+    if (!c.quote) return c // '' is the documented "paraphrase-only" case — nothing to verify
+    return alignQuote(c.quote, preparedText) ? c : { ...c, confidence: 'AMBIGUOUS' as const }
+  })
+  return { ...x, numeric_facts, commitments }
+}
+
+/** Deal amount verification: the full three-rule verifyNumericFact guarantee (quote aligns + value
+ *  derivable from the quote + from the aligned span), currency treated as the unit. */
+function verifyDealAmount(amount: Deal['amount'], transcript: string): boolean {
+  if (!amount) return false
+  return verifyNumericFact({ value: amount.value, quote: amount.quote, unit: amount.currency }, transcript) === 'verified'
+}
+
+/** Deal close_date verification: `value` is a free-form date string (not a single scalar+unit), so the
+ *  full verifyNumericFact rule doesn't fit — instead, alignQuote the quote, then require every numeral
+ *  ACTUALLY STATED IN the date value (extractNumerals — e.g. "2026-06-15" -> 2026, 6, 15; "Q3 2026" ->
+ *  3, 2026) to be independently derivable from the quote itself (numeralDerivable, matching
+ *  verifyNumericFact's own rule (b): the value must be claimed by the quote, not just co-located with
+ *  it). Deterministic; fails closed when the date carries no numeral to check at all. */
+function verifyDealCloseDate(closeDate: Deal['close_date'], transcript: string): boolean {
+  if (!closeDate || !closeDate.quote) return false
+  if (!alignQuote(closeDate.quote, transcript)) return false
+  const nums = extractNumerals(closeDate.value)
+  if (nums.length === 0) return false
+  return nums.every((n) => numeralDerivable(n.value, closeDate.quote))
+}
+
+/** Deal band_evidence verification: just alignment (band is a qualitative judgement, not a number) —
+ *  an evidence string that doesn't verbatim appear in the transcript is not real evidence. */
+function verifyBandEvidence(bandEvidence: string, transcript: string): boolean {
+  return !!bandEvidence && !!alignQuote(bandEvidence, transcript)
+}
+
+async function extractMeeting(
+  s: Settings,
+  transcriptMd: string,
+  sourceFile: string
+): Promise<{ extraction: MeetingExtraction; preparedText: string }> {
   // Same redaction discipline as the live ask path (index.ts's askStart handler): the locally-saved
   // transcript file keeps the verbatim original on disk — only the copy sent to the cloud model for
   // extraction is stripped of high-confidence secrets, and only when the user has redaction enabled.
   const safeMd = s.redactSensitive ? redactSecrets(transcriptMd) : transcriptMd
-  const user = `Meeting transcript (file: ${basename(sourceFile)}):\n\n"""\n${safeMd.slice(0, 24000)}\n"""`
-  const attempt = async (extra: string): Promise<MeetingExtraction> => {
-    const raw = await runCompletion(s, buildExtractionSystem(extra), user, `brain-${Date.now()}`)
-    return MeetingExtractionSchema.parse(JSON.parse(extractJsonObject(raw)))
+  const windows = splitIntoWindows(safeMd)
+
+  const runWindow = async (window: string): Promise<MeetingExtraction> => {
+    const user = `Meeting transcript (file: ${basename(sourceFile)}):\n\n"""\n${window}\n"""`
+    const attempt = async (extra: string): Promise<MeetingExtraction> => {
+      const raw = await runCompletion(s, buildExtractionSystem(extra), user, `brain-${Date.now()}`)
+      return MeetingExtractionSchema.parse(JSON.parse(extractJsonObject(raw)))
+    }
+    try {
+      return await attempt('')
+    } catch (e) {
+      // One reinforcement retry — malformed JSON is the dominant failure mode, not content.
+      mainLog.warn('[brain] first extraction attempt failed, retrying once:', e instanceof Error ? e.message : e)
+      return attempt('\n\nREMINDER: your ENTIRE reply must be one valid JSON object. No fences, no prose.')
+    }
   }
-  try {
-    return await attempt('')
-  } catch (e) {
-    // One reinforcement retry — malformed JSON is the dominant failure mode, not content.
-    mainLog.warn('[brain] first extraction attempt failed, retrying once:', e instanceof Error ? e.message : e)
-    return attempt('\n\nREMINDER: your ENTIRE reply must be one valid JSON object. No fences, no prose.')
-  }
+
+  // Sequential, not concurrent — see the module doc / windowing comments: EXTRACT_CONCURRENCY governs
+  // how many DIFFERENT FILES extract at once, never how many windows of the SAME file run at once.
+  const results: MeetingExtraction[] = []
+  for (const w of windows) results.push(await runWindow(w))
+
+  const combined = combineWindowExtractions(results)
+  // For a single window this is `windows[0]` unchanged (Array.prototype.join on a 1-element array
+  // returns that element verbatim, no separator inserted) — the exact text the (sole) completion call
+  // saw, preserving byte-identical single-window verification behavior.
+  const preparedText = windows.join('\n')
+  return { extraction: verifyExtraction(combined, preparedText), preparedText }
 }
 
 // ── Deterministic merge ──────────────────────────────────────────────────────
@@ -176,14 +374,22 @@ export { commitmentKey }
 //      completion order is nondeterministic.
 //   3. A value-identical incoming (same fact re-confirmed) refreshes the field's metadata only when
 //      it OUTRANKS the evidence already held; it is never a superseded push.
-//   4. `superseded` is deduped per value (keeping the max-(date, source_file) sighting), never
-//      contains the current value, and stays sorted by the same (date, source_file) key desc,
-//      capped at 10 — so the history array converges byte-for-byte too.
-// Known bounded exception: two same-value candidates with DIFFERENT confidence tiers can leave a
-// superseded entry citing either one's date/source depending on order (the superseded shape carries
-// no confidence slot to dedupe on). The winner and its own provenance still converge; only that one
-// history entry's metadata can vary, and only in mixed-confidence same-value sets.
-type ProvenantIncoming<T> = { value: T; source_file: string; date: string; quote?: string; confidence: Confidence }
+//   4. `superseded` is deduped per value (keeping the max-(confidence tier, date, source_file)
+//      sighting under the SAME `outranks` order winner selection uses — MI-4 review fix; a stray
+//      superseded entry can no longer disagree with which candidate actually outranks the other),
+//      never contains the current value, and stays sorted by that same key desc, capped at 10 — so
+//      the history array converges byte-for-byte too, even across mixed-confidence same-value sets.
+type ProvenantIncoming<T> = {
+  value: T
+  source_file: string
+  date: string
+  quote?: string
+  confidence: Confidence
+  // MI-4: lets a caller (the amount/close_date merge below) stamp 'verified' directly instead of the
+  // default 'extracted' every other provenant field goes through — omitted, every existing call site
+  // (role/org/sector/stage/band/velocity) is byte-identical to before this field existed.
+  state?: ProvenanceState
+}
 
 // `outranks` (the deterministic total-order winner selection every rule above refers to) now lives in
 // store.ts beside laterEntry/pushSuperseded: corrections.ts's merge-time provenance fold ranks
@@ -196,18 +402,41 @@ function mergeProvenant<T>(
   valuesEqual: (a: T, b: T) => boolean
 ): ProvenantField<T> {
   if (!current) {
-    return { value: incoming.value, source_file: incoming.source_file, date: incoming.date, quote: incoming.quote, confidence: incoming.confidence, state: 'extracted', superseded: [] }
+    return {
+      value: incoming.value,
+      source_file: incoming.source_file,
+      date: incoming.date,
+      quote: incoming.quote,
+      confidence: incoming.confidence,
+      state: incoming.state ?? 'extracted',
+      superseded: []
+    }
   }
   if (current.state === 'pinned' || current.state === 'edited') {
     if (valuesEqual(current.value, incoming.value)) return current
-    return { ...current, superseded: pushSuperseded(current.superseded, { value: incoming.value, date: incoming.date, source_file: incoming.source_file }, current.value, valuesEqual) }
+    return {
+      ...current,
+      superseded: pushSuperseded(
+        current.superseded,
+        { value: incoming.value, date: incoming.date, source_file: incoming.source_file, confidence: incoming.confidence },
+        current.value,
+        valuesEqual
+      )
+    }
   }
   if (valuesEqual(current.value, incoming.value)) {
     // Re-confirmation refreshes metadata only when the incoming evidence outranks what we already
     // hold. Deliberately NO refresh from a weaker-confidence (or older, or tied-but-lower-file)
     // sighting of the same value: provenance keeps citing the strongest, then most recent, evidence.
     if (!outranks(incoming, current)) return current
-    return { ...current, source_file: incoming.source_file, date: incoming.date, quote: incoming.quote, confidence: incoming.confidence }
+    return {
+      ...current,
+      source_file: incoming.source_file,
+      date: incoming.date,
+      quote: incoming.quote,
+      confidence: incoming.confidence,
+      state: incoming.state ?? current.state
+    }
   }
   if (outranks(incoming, current)) {
     return {
@@ -216,11 +445,24 @@ function mergeProvenant<T>(
       date: incoming.date,
       quote: incoming.quote,
       confidence: incoming.confidence,
-      state: 'extracted',
-      superseded: pushSuperseded(current.superseded, { value: current.value, date: current.date, source_file: current.source_file }, incoming.value, valuesEqual)
+      state: incoming.state ?? 'extracted',
+      superseded: pushSuperseded(
+        current.superseded,
+        { value: current.value, date: current.date, source_file: current.source_file, confidence: current.confidence },
+        incoming.value,
+        valuesEqual
+      )
     }
   }
-  return { ...current, superseded: pushSuperseded(current.superseded, { value: incoming.value, date: incoming.date, source_file: incoming.source_file }, current.value, valuesEqual) }
+  return {
+    ...current,
+    superseded: pushSuperseded(
+      current.superseded,
+      { value: incoming.value, date: incoming.date, source_file: incoming.source_file, confidence: incoming.confidence },
+      current.value,
+      valuesEqual
+    )
+  }
 }
 
 /** Merge one meeting's extraction into the entity + graph files. Pure data transforms — no LLM here. */
@@ -236,7 +478,14 @@ export async function mergeExtraction(
   // already computed for applyCorrections, so a renamed entity's immutable `id` (which can differ from
   // slugify(its current display name)) still resolves to the right file instead of silently forking a
   // second one.
-  aliasMap?: Map<string, { kind: EntityKind; id: string; displayName: string }>
+  aliasMap?: Map<string, { kind: EntityKind; id: string; displayName: string }>,
+  // MI-4: the exact prepared text extractMeeting sent the model (post-redaction, post-window-
+  // concatenation) — needed to compute the deal's band/amount/close_date merge confidence below.
+  // Omitted, this function's behavior for every OTHER field is byte-identical to pre-MI-4 (every
+  // existing direct caller/test omits it); band_evidence's confidence keeps its old hardcoded
+  // 'EXTRACTED' default in that case, and amount/close_date simply never populate (their raw
+  // extraction fields don't exist on any pre-MI-4 test fixture either).
+  preparedText?: string
 ): Promise<void> {
   const graph = readGraph(s)
   const addNode = (id: string, type: 'account' | 'person' | 'deal' | 'sector' | 'meeting', label: string): void =>
@@ -378,9 +627,15 @@ export async function mergeExtraction(
       deal.stage = deal.stage_provenance.value
     }
     if (x.deal.win_likelihood_band) {
+      // MI-4: band_evidence is only ever real evidence when it verbatim aligns to the transcript the
+      // model actually saw — a caller that supplies preparedText gets this checked (confidence AMBIGUOUS
+      // on a fabricated/unaligned quote); every pre-MI-4 caller (preparedText omitted) keeps the old
+      // hardcoded EXTRACTED, unchanged.
+      const bandConfidence: Confidence =
+        preparedText === undefined ? 'EXTRACTED' : verifyBandEvidence(x.deal.band_evidence, preparedText) ? 'EXTRACTED' : 'AMBIGUOUS'
       deal.win_likelihood_band_provenance = mergeProvenant(
         deal.win_likelihood_band_provenance,
-        { value: x.deal.win_likelihood_band, source_file: ref.file, date: ref.date, quote: x.deal.band_evidence, confidence: 'EXTRACTED' },
+        { value: x.deal.win_likelihood_band, source_file: ref.file, date: ref.date, quote: x.deal.band_evidence, confidence: bandConfidence },
         eqStrict
       )
       deal.win_likelihood_band = deal.win_likelihood_band_provenance.value
@@ -399,6 +654,43 @@ export async function mergeExtraction(
         eqVelocity
       )
       deal.velocity = deal.velocity_provenance.value
+    }
+    // MI-4 — the verified numbers lane. Only ever merged when the raw extraction actually carries an
+    // amount/close_date (the model is instructed to omit rather than guess); verified against
+    // `preparedText ?? ''` — an omitted preparedText fails closed to AMBIGUOUS/'extracted' rather than
+    // silently trusting an unverified figure. state 'verified' + confidence EXTRACTED only when the
+    // grounding check actually passes; otherwise state stays 'extracted' + confidence AMBIGUOUS — the
+    // money-card render gate (BrainRecordPage's moneyFieldMode / Mars's pipeline-value line /
+    // context.ts's formatDeal) never shows a bare figure for that latter case.
+    if (x.deal.amount) {
+      const verified = verifyDealAmount(x.deal.amount, preparedText ?? '')
+      deal.amount = mergeProvenant(
+        deal.amount,
+        {
+          value: { value: x.deal.amount.value, currency: x.deal.amount.currency },
+          source_file: ref.file,
+          date: ref.date,
+          quote: x.deal.amount.quote,
+          confidence: verified ? 'EXTRACTED' : 'AMBIGUOUS',
+          state: verified ? 'verified' : 'extracted'
+        },
+        eqAmount
+      )
+    }
+    if (x.deal.close_date) {
+      const verified = verifyDealCloseDate(x.deal.close_date, preparedText ?? '')
+      deal.close_date = mergeProvenant(
+        deal.close_date,
+        {
+          value: x.deal.close_date.value,
+          source_file: ref.file,
+          date: ref.date,
+          quote: x.deal.close_date.quote,
+          confidence: verified ? 'EXTRACTED' : 'AMBIGUOUS',
+          state: verified ? 'verified' : 'extracted'
+        },
+        eqStrict
+      )
     }
     pushUnique(deal.meetings, ref, (m) => m.file)
     for (const sig of x.signals) pushUnique(deal.signals, { ...sig, meeting: ref.file }, (t) => t.meeting + t.statement)
@@ -595,7 +887,16 @@ export function readMeetingSourceMode(md: string): string {
  * ingest log, and refresh lint warnings. Exported so the end-to-end proof can drive fixtures through
  * the EXACT production path — the UI's headline "meetings ingested" stat reads the index this writes.
  */
-export async function ingestExtraction(s: Settings, x: MeetingExtraction, md: string, file: string): Promise<void> {
+export async function ingestExtraction(
+  s: Settings,
+  x: MeetingExtraction,
+  md: string,
+  file: string,
+  // MI-4: the exact prepared text extractMeeting sent the model — threaded straight through to
+  // mergeExtraction for the deal band/amount/close_date verification-driven merge. Optional so every
+  // existing direct caller (tests driving fixtures without going through extractMeeting) is unaffected.
+  preparedText?: string
+): Promise<void> {
   const key = basename(file)
   const sourceMode = readMeetingSourceMode(md)
   // Frontmatter dates aren't always bare tokens: hand-authored or vault-exported files commonly quote
@@ -659,7 +960,7 @@ export async function ingestExtraction(s: Settings, x: MeetingExtraction, md: st
   const aliasMap = readAliasMap(s)
   applyCorrections(x, aliasMap)
   await writeMeetingExtraction(s, slugify(key), x)
-  await mergeExtraction(s, x, ref, aliasMap)
+  await mergeExtraction(s, x, ref, aliasMap, preparedText)
   await updateIndex(s, (idx) => {
     idx.ingested[key] = { at: Date.now(), ok: true }
   })
@@ -669,7 +970,7 @@ export async function ingestExtraction(s: Settings, x: MeetingExtraction, md: st
  *  Never rejects — a failure is carried as data (`ok: false`) so the caller can run up to
  *  EXTRACT_CONCURRENCY of these concurrently with Promise machinery, not try/catch across awaits. */
 type JobResult =
-  | { job: Job; s: Settings; ok: true; x: MeetingExtraction; md: string }
+  | { job: Job; s: Settings; ok: true; x: MeetingExtraction; md: string; preparedText: string }
   | { job: Job; s: Settings; ok: false; error: unknown }
 
 async function runExtractionStage(job: Job): Promise<JobResult> {
@@ -679,8 +980,8 @@ async function runExtractionStage(job: Job): Promise<JobResult> {
   const s = getSettings()
   try {
     const md = readSavedFile(job.file)
-    const x = await extractMeeting(s, md, job.file)
-    return { job, s, ok: true, x, md }
+    const { extraction, preparedText } = await extractMeeting(s, md, job.file)
+    return { job, s, ok: true, x: extraction, md, preparedText }
   } catch (error) {
     return { job, s, ok: false, error }
   }
@@ -696,7 +997,7 @@ async function finishJob(result: JobResult): Promise<void> {
   const { job, s } = result
   try {
     if (!result.ok) throw result.error
-    await ingestExtraction(s, result.x, result.md, job.file)
+    await ingestExtraction(s, result.x, result.md, job.file, result.preparedText)
     auditLog('brain.ingest', { ok: true, source: job.source })
   } catch (e) {
     await updateIndex(s, (idx) => {
