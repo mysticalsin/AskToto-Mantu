@@ -126,14 +126,24 @@ function Block({ code, lang }: { code: string; lang: string }): JSX.Element {
   )
 }
 
+/**
+ * Authoritative fenced-vs-inline signal. Streamdown never passes an `inline` boolean prop to `code` —
+ * it distinguishes the two by whether the rendering `pre` wrapper stamped a `data-block` prop onto the
+ * code element (see Markdown.tsx's `pre` override). A genuinely fenced ``` block must always render as
+ * a block regardless of line count or language; only a real single-backtick inline `code` (no enclosing
+ * `pre`, so no `data-block`) gets the pill.
+ */
+export function isFencedBlock(props: Record<string, unknown>): boolean {
+  return 'data-block' in props
+}
+
 /* eslint-disable @typescript-eslint/no-explicit-any */
 /** Drop-in for streamdown/markdown `code`: block → shiki, inline → pill. */
 export function CodeBlock(props: any): JSX.Element {
-  const { className, children, inline } = props
+  const { className, children } = props
   const text = String(children ?? '').replace(/\n$/, '')
   const lang = /language-(\w+)/.exec(className || '')?.[1] || ''
-  const isBlock = !inline && (lang !== '' || text.includes('\n'))
-  if (!isBlock) {
+  if (!isFencedBlock(props)) {
     return (
       <code className="rounded-[5px] bg-white/[0.09] px-[0.36em] py-[0.1em] text-[0.9em] break-words">
         {children}

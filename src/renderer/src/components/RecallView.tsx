@@ -800,8 +800,17 @@ export function RecallView({
   /** Open the selected file (or the first item as a fallback) — in-app recap when wired, else OS-open. */
   const openMeeting = useCallback(
     (f: string): void => {
-      if (onOpenMeeting) onOpenMeeting(f)
-      else void window.toto.recallOpen(f)
+      if (onOpenMeeting) {
+        onOpenMeeting(f)
+        return
+      }
+      // shell.openPath (behind recallOpen) resolves to an empty string on success, or an error message
+      // on failure — that was the only signal a caller could get, and it went un-awaited, so a failure
+      // (missing file, no default handler for .md, etc.) was a silent no-op. Surface it on the row, same
+      // as a rename/delete failure.
+      void window.toto.recallOpen(f).then((err) => {
+        if (err) setRowError({ file: f, message: err })
+      })
     },
     [onOpenMeeting]
   )

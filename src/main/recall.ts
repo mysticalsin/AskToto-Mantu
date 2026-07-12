@@ -284,13 +284,16 @@ export async function renameMeeting(
   const fmMatch = text.match(/^---\n[\s\S]*?\n---/)
   if (!fmMatch) return { ok: false, error: 'Not a meeting transcript.' }
   const escapedTitle = yamlSafeRenameTitle(title)
-  const newFmBlock = fmMatch[0].replace(/^title:\s*"(?:[^"\\]|\\.)*"\s*$/m, `title: "${escapedTitle}"`)
+  // Replacement FUNCTIONS, not template-literal strings: String.replace treats a string replacement's `$`
+  // sequences ($$, $&, $`, $') as special, so a title containing them (e.g. "Deal $&Co") would otherwise
+  // mangle the output (or splice in the old title / whole match) instead of being written verbatim.
+  const newFmBlock = fmMatch[0].replace(/^title:\s*"(?:[^"\\]|\\.)*"\s*$/m, () => `title: "${escapedTitle}"`)
   if (newFmBlock === fmMatch[0]) return { ok: false, error: 'Could not find a title to rename in this file.' }
   let updated = text.slice(0, fmMatch.index!) + newFmBlock + text.slice(fmMatch.index! + fmMatch[0].length)
 
   // Replace the body's first H1 heading (the only "# " line — recap sections use "## "). Best-effort:
   // an old/malformed file missing it still gets the frontmatter update above.
-  updated = updated.replace(/^#(?!#).*$/m, `# ${title}`)
+  updated = updated.replace(/^#(?!#).*$/m, () => `# ${title}`)
 
   try {
     await writeSaved(fullPath, updated, wasEncrypted)

@@ -19,6 +19,7 @@ import { UpdateReadyToast } from './components/UpdateReadyToast'
 import { NewMeetingToast } from './components/NewMeetingToast'
 import { VisibilityToast, type VisibilityToastState } from './components/VisibilityToast'
 import { RecordingConsentReminder } from './components/RecordingConsentReminder'
+import { MeetingOpenErrorToast } from './components/MeetingOpenErrorToast'
 import { QuickActions, type QuickKind } from './components/QuickActions'
 import { useAsk, useAutoResize, useSettings, useAuth, type AnswerState } from './state'
 import { useWindowDrag } from './lib/window-drag'
@@ -324,6 +325,9 @@ export function App(): JSX.Element {
   const [updateReady, setUpdateReady] = useState<{ open: boolean; version?: string }>({ open: false })
   const [newMeetingToast, setNewMeetingToast] = useState(false)
   const [visibilityToast, setVisibilityToast] = useState<VisibilityToastState>(null)
+  // Surfaces a recallRead failure (missing/corrupt/undecryptable file) from openPastMeeting — that used
+  // to be a silent no-op with zero feedback.
+  const [openMeetingError, setOpenMeetingError] = useState<string | null>(null)
   // Idempotence latch for endReview() re-entry — see endReview's own comment for the exact hazard it
   // guards against. Cleared at the start of every fresh session (startListen) so a later stop can fire.
   const stoppingRef = useRef(false)
@@ -1071,17 +1075,22 @@ export function App(): JSX.Element {
     // UI still looked "live") could cancel/restart the summary indefinitely instead of ever seeing it land.
     if (stoppingRef.current) return
     stoppingRef.current = true
-    const tx = listen.text()
-    listen.stop()
     setView('review')
     setCollapsed(false)
-    if (tx.trim()) {
-      // Cascade the recap into Dust whenever it's configured, regardless of the active provider (e.g.
-      // Kimi handles everyday chat, Dust still writes the meeting notes) — no agentOverride needed, the
-      // normal think-tier resolution inside Dust already respects the user's own Thinking-agent pick.
-      const dustReady = isDustReady(settings?.hasKeys ?? {}, settings?.dustWorkspaceId ?? '', settings?.providerModels ?? {})
-      ask.run({ mode: 'recap', transcript: tx, ...(dustReady ? { providerOverride: 'dust' as const } : {}) })
-    } else ask.clear()
+    // Read the transcript AFTER stop()'s drain has fully settled — not before — so the recap is built
+    // from the same complete transcript that gets auto-saved, including a final utterance that was still
+    // mid-flush when Stop was pressed. The Review transition above stays synchronous/instant; only the
+    // recap request itself waits on the drain.
+    listen.stop(() => {
+      const tx = listen.text()
+      if (tx.trim()) {
+        // Cascade the recap into Dust whenever it's configured, regardless of the active provider (e.g.
+        // Kimi handles everyday chat, Dust still writes the meeting notes) — no agentOverride needed, the
+        // normal think-tier resolution inside Dust already respects the user's own Thinking-agent pick.
+        const dustReady = isDustReady(settings?.hasKeys ?? {}, settings?.dustWorkspaceId ?? '', settings?.providerModels ?? {})
+        ask.run({ mode: 'recap', transcript: tx, ...(dustReady ? { providerOverride: 'dust' as const } : {}) })
+      } else ask.clear()
+    })
   }, [listen.text, listen.stop, ask.run, ask.clear, settings?.hasKeys, settings?.dustWorkspaceId, settings?.providerModels])
 
   const toggleListen = useCallback(() => {
@@ -1391,7 +1400,13 @@ export function App(): JSX.Element {
   // Open a saved meeting from History as a read-only recap (Cluely recap detail) via the recall:read IPC.
   const openPastMeeting = useCallback(async (file: string) => {
     const r = await window.toto.recallRead(file)
-    if (!r.ok) return
+    if (!r.ok) {
+      // recallRead already returns an exact, actionable message (not found / undecryptable on this
+      // device / invalid name) — surface it instead of leaving the click looking completely dead.
+      setOpenMeetingError(r.error || 'Could not open this meeting.')
+      return
+    }
+    setOpenMeetingError(null)
     setPastMeeting({
       file,
       title: r.title || 'Meeting',
@@ -1838,7 +1853,9 @@ export function App(): JSX.Element {
               Métis couldn’t start
             </span>
             <span className="font-ui text-[11.5px] leading-snug text-[color:var(--color-ink-3)]">
-              Couldn’t load your settings. {bootError}
+              {/* Attribute to whichever subsystem actually failed — settingsBootError takes priority in
+                  the ?? above, so mirror that same check here instead of hardcoding "settings" copy. */}
+              {settingsBootError ? 'Couldn’t load your settings.' : 'Couldn’t sign you in.'} {bootError}
             </span>
             <button
               type="button"
@@ -1953,6 +1970,7 @@ export function App(): JSX.Element {
             />
             <NewMeetingToast open={newMeetingToast} onDismiss={() => setNewMeetingToast(false)} />
             <VisibilityToast state={visibilityToast} onDismiss={() => setVisibilityToast(null)} />
+            <MeetingOpenErrorToast message={openMeetingError} onDismiss={() => setOpenMeetingError(null)} />
             <RecordingConsentReminder
               listening={showListeningChrome}
               lastReminderAt={settings?.lastConsentReminderAt ?? 0}
@@ -1976,7 +1994,8 @@ export function App(): JSX.Element {
         // unmounts and remounts every toast underneath the instant one flips `open`, restarting its
         // fade-in mid-animation. `contents` keeps the non-widened case layout-equivalent to the old
         // bare-fragment render.
-        const widen = minimized && (updateReady.open || newMeetingToast || consentReminderOpen || !!visibilityToast)
+        const widen =
+          minimized && (updateReady.open || newMeetingToast || consentReminderOpen || !!visibilityToast || !!openMeetingError)
         return (
           <div
             data-hug-width={widen || undefined}
@@ -1989,7 +2008,11 @@ export function App(): JSX.Element {
       {minimized ? (
         <div className="flex w-full justify-center">
           <ControlPill
-            listening={listen.listening}
+            // Gated the same way as Bar's `listening` below: the raw listen.listening flag stays true for
+            // up to DRAIN_CEILING_MS after Stop while audio finishes draining in the background, which
+            // otherwise left the minimized pill showing the pulsing red dot + a still-counting timer for
+            // several seconds after Stop — reading as "Stop didn't work".
+            listening={showListeningChrome}
             paused={listen.paused}
             startedAt={meetingStartRef.current}
             onTogglePause={onTogglePause}

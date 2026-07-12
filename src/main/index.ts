@@ -1104,6 +1104,12 @@ const shortcutActions: Record<string, () => void> = {
   explain: () => sendHotkey('explain'),
   summarize: () => sendHotkey('summarize'),
   'spotlight-ref': () => sendHotkey('spotlight-ref'),
+  // 'settings' is in HOTKEY_ACTIONS (shared/ipc.ts) so Settings → Shortcuts renders a bindable "Open
+  // settings" row, and the renderer already handles the hotkey action (App.tsx) — this entry was the one
+  // missing piece: without it registerShortcuts() never registered the combo the row recorded, so it was
+  // a silent no-op with no failure banner either. The tray's own Settings item already sends this same
+  // 'settings' hotkey (sendHotkey('settings') above), so this mirrors that.
+  settings: () => sendHotkey('settings'),
   'scroll-up': () => moveBy(0, -60),
   'scroll-down': () => moveBy(0, 60),
   'scroll-left': () => moveBy(-60, 0),

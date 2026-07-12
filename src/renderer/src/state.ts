@@ -400,6 +400,10 @@ export function useSettings(): {
     // unhandled rejection, and the next trigger retries. The boot load below owns first-paint recovery.
     try {
       setSettings(await window.toto.getSettings())
+      // A later focus-refresh that succeeds means settings ARE reachable again — clear a stale
+      // bootError from the earlier retry-exhausted boot failure so the "couldn't start" card doesn't
+      // linger once the underlying problem (e.g. a transient disk/IPC hiccup) has resolved itself.
+      setBootError(null)
     } catch (e) {
       console.error('[settings] refresh failed', e)
     }
