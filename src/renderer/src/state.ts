@@ -383,6 +383,7 @@ export function useAsk(): {
 
 export function useSettings(): {
   settings: PublicSettings | null
+  bootError: string | null
   refresh: () => Promise<void>
   patch: (p: SettingsPatch) => Promise<void>
   saveKey: (provider: ProviderId, k: string) => Promise<void>
@@ -390,6 +391,10 @@ export function useSettings(): {
   testKey: (provider: ProviderId, k: string) => Promise<TestKeyResponse>
 } {
   const [settings, setSettings] = useState<PublicSettings | null>(null)
+  // Non-null once the first-paint load has exhausted its retries without ever getting settings back —
+  // the app then shows an actionable "couldn't start" card instead of the "Starting Métis…" strip
+  // spinning forever (a persistent getSettings failure: broken preload, unreadable settings, etc.).
+  const [bootError, setBootError] = useState<string | null>(null)
   const refresh = useCallback(async () => {
     // Swallow post-boot refresh failures (focus/poll): a transient reject must not surface as an
     // unhandled rejection, and the next trigger retries. The boot load below owns first-paint recovery.
@@ -410,11 +415,15 @@ export function useSettings(): {
       for (let attempt = 0; !cancelled; attempt++) {
         try {
           const s = await window.toto.getSettings()
-          if (!cancelled) setSettings(s)
+          if (!cancelled) {
+            setSettings(s)
+            setBootError(null)
+          }
           return
         } catch (e) {
-          if (attempt >= 40) {
+          if (attempt >= 20) {
             console.error('[boot] getSettings failed after retries; app cannot start', e)
+            if (!cancelled) setBootError(e instanceof Error ? e.message : String(e))
             return
           }
           await new Promise((r) => setTimeout(r, Math.min(150 * (attempt + 1), 1500)))
@@ -450,7 +459,7 @@ export function useSettings(): {
   const testKey = useCallback(async (provider: ProviderId, k: string) => {
     return window.toto.testApiKey(provider, k)
   }, [])
-  return { settings, refresh, patch, saveKey, clearKey, testKey }
+  return { settings, bootError, refresh, patch, saveKey, clearKey, testKey }
 }
 
 /** How often the renderer re-polls auth status while the app is open.
@@ -482,11 +491,13 @@ export function startAuthRefreshLoop(refresh: () => void, env: AuthRefreshEnv = 
 
 export function useAuth(): {
   status: AuthStatus | null
+  bootError: string | null
   signIn: () => Promise<SignInResult>
   signOut: () => Promise<void>
   refresh: () => Promise<void>
 } {
   const [status, setStatus] = useState<AuthStatus | null>(null)
+  const [bootError, setBootError] = useState<string | null>(null)
   const refresh = useCallback(async () => {
     // Swallow post-boot poll/focus failures; the boot loader below owns first-paint recovery.
     try {
@@ -505,11 +516,15 @@ export function useAuth(): {
       for (let attempt = 0; !cancelled; attempt++) {
         try {
           const st = await window.toto.authStatus()
-          if (!cancelled) setStatus(st)
+          if (!cancelled) {
+            setStatus(st)
+            setBootError(null)
+          }
           return
         } catch (e) {
-          if (attempt >= 40) {
+          if (attempt >= 20) {
             console.error('[boot] authStatus failed after retries', e)
+            if (!cancelled) setBootError(e instanceof Error ? e.message : String(e))
             return
           }
           await new Promise((r) => setTimeout(r, Math.min(150 * (attempt + 1), 1500)))
@@ -531,7 +546,7 @@ export function useAuth(): {
     await window.toto.signOut()
     await refresh()
   }, [refresh])
-  return { status, signIn, signOut, refresh }
+  return { status, bootError, signIn, signOut, refresh }
 }
 
 export const PERMISSIONS_POLL_MS = 2500

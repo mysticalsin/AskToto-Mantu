@@ -119,8 +119,9 @@ export function App(): JSX.Element {
   }, [])
   const windowDrag = useWindowDrag(onWindowDragStart, { noTouch: true })
 
-  const { settings, patch, saveKey, clearKey, testKey, refresh } = useSettings()
+  const { settings, bootError: settingsBootError, patch, saveKey, clearKey, testKey, refresh } = useSettings()
   const auth = useAuth() // Azure AD gate (only enforces when configured)
+  const bootError = settingsBootError ?? auth.bootError
 
   // ── License enforcement master switch ──────────────────────────────────────────────────────────
   // OFF for now: every copy is treated as valid and the activation gate never renders, regardless of
@@ -1827,6 +1828,29 @@ export function App(): JSX.Element {
   // below are skipped while their state is null, which would otherwise paint a usable bar before sign-in
   // is enforced and before the no-key CTA can render. (DEMO bypasses this so screenshots still work.)
   if (DEMO == null && (settings == null || auth.status == null || licenseGatePending)) {
+    // Boot load exhausted its retries without ever resolving (persistent getSettings/authStatus failure).
+    // Show an actionable card with a Reload instead of spinning "Starting Métis…" forever.
+    if (bootError) {
+      return (
+        <div ref={setRoot} {...windowDrag} className="w-full p-1.5">
+          <div className="glass flex w-full flex-col gap-2 rounded-2xl px-4 py-3.5 text-center">
+            <span className="font-ui text-[13px] font-medium text-[color:var(--color-ink)]">
+              Métis couldn’t start
+            </span>
+            <span className="font-ui text-[11.5px] leading-snug text-[color:var(--color-ink-3)]">
+              Couldn’t load your settings. {bootError}
+            </span>
+            <button
+              type="button"
+              onClick={() => window.location.reload()}
+              className="no-drag focus-ring mx-auto mt-0.5 rounded-lg bg-[var(--color-accent)] px-3.5 py-1.5 text-[12px] font-medium text-white hover:brightness-110"
+            >
+              Reload
+            </button>
+          </div>
+        </div>
+      )
+    }
     return (
       <div ref={setRoot} {...windowDrag} className="w-full p-1.5">
         <div className="glass flex h-[38px] w-full items-center gap-2.5 rounded-full px-4">
