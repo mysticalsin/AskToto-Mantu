@@ -53,6 +53,7 @@ export const IPC = {
   brainEntityNames: 'brain:entityNames',
   brainOpenDashboard: 'brain:openDashboard',
   brainRebuildAll: 'brain:rebuildAll',
+  brainClearJournalCorruption: 'brain:clearJournalCorruption',
   authStatus: 'auth:status',
   authSignIn: 'auth:signIn',
   authSignOut: 'auth:signOut',

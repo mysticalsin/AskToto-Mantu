@@ -382,6 +382,18 @@ export function BrainView({
 
   const openRecord = useCallback((kind: EntityKind, id: string) => setRecord({ kind, id }), [])
 
+  // MI-2.5 review round 3: in-app recovery from a durable correction-journal corruption lock — clears the
+  // sentinel (the quarantined copy is left for inspection) so corrections resume, then re-reads. Without
+  // this the only fix was hand-deleting a hidden .brain/corrections.corruption.lock in the OneDrive folder.
+  const resetCorruptionLock = useCallback(async (): Promise<void> => {
+    try {
+      await window.toto.brainClearJournalCorruption()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    }
+    void refresh()
+  }, [refresh])
+
   // Settling a promise removes its row (and the button that had focus) from "Open promises" — hand
   // focus to the section container so it doesn't fall through to <body>.
   const openPromisesRef = useRef<HTMLDivElement>(null)
@@ -1008,20 +1020,53 @@ export function BrainView({
             </div>
           )}
 
-          {/* Lint warnings — contradictions the ingest refused to auto-resolve */}
-          {(data?.index.warnings.length ?? 0) > 0 && (
-            <div className="rounded-xl border border-[var(--color-danger)]/20 bg-[var(--color-danger)]/5 px-3 py-2">
+          {/* MI-2.5 review round 3: "Corrections paused" — always shown ABOVE the lint list (which is
+              sliced to 5 and could otherwise push this off-screen). Covers a durable corruption lock
+              (status.corruptionBlocked → offer the in-app "Reset corrections lock" recovery) and/or a
+              failed rebuild replay (index.replayError, surfaced distinctly here rather than lost in the
+              lint slice). The replay-failure warning string is filtered out of the lint list below to
+              avoid duplication. */}
+          {(status?.corruptionBlocked || data?.index.replayError) && (
+            <div className="rounded-xl border border-[var(--color-danger)]/40 bg-[var(--color-danger)]/10 px-3 py-2.5">
               <SectionTitle>
                 <AlertTriangle size={11} className="mr-1 inline" />
-                Needs a human read
+                Corrections paused
               </SectionTitle>
-              <ul className="flex list-disc flex-col gap-0.5 pl-4 text-[11px] text-[color:var(--color-ink-3)]">
-                {data!.index.warnings.slice(0, 5).map((w, i) => (
-                  <li key={i}>{w}</li>
-                ))}
-              </ul>
+              <div className="text-[11px] text-[color:var(--color-ink-2)]">
+                {data?.index.replayError
+                  ? `A rebuild could not re-apply your saved corrections: ${data.index.replayError}`
+                  : 'The correction journal on this device was locked after a corruption was detected and preserved. Your prior corrections are safe in a preserved copy.'}
+              </div>
+              {status?.corruptionBlocked && (
+                <button
+                  type="button"
+                  onClick={() => void resetCorruptionLock()}
+                  className="no-drag focus-ring mt-2 rounded-lg border border-[var(--color-hair-soft)] bg-white/[0.04] px-2.5 py-1 text-[11px] font-semibold text-[color:var(--color-ink)] hover:bg-white/[0.08]"
+                >
+                  Reset corrections lock
+                </button>
+              )}
             </div>
           )}
+
+          {/* Lint warnings — contradictions the ingest refused to auto-resolve (the replay-failure notice
+              is shown in the banner above, so it's filtered out here to avoid duplication + being cut off). */}
+          {(() => {
+            const lint = (data?.index.warnings ?? []).filter((w) => !w.includes('re-apply your saved corrections'))
+            return lint.length > 0 ? (
+              <div className="rounded-xl border border-[var(--color-danger)]/20 bg-[var(--color-danger)]/5 px-3 py-2">
+                <SectionTitle>
+                  <AlertTriangle size={11} className="mr-1 inline" />
+                  Needs a human read
+                </SectionTitle>
+                <ul className="flex list-disc flex-col gap-0.5 pl-4 text-[11px] text-[color:var(--color-ink-3)]">
+                  {lint.slice(0, 5).map((w, i) => (
+                    <li key={i}>{w}</li>
+                  ))}
+                </ul>
+              </div>
+            ) : null
+          })()}
 
           {/* Footer: escalate from this in-overlay glance to the full dedicated dashboard window */}
           <button

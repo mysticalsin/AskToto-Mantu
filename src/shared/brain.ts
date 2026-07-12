@@ -418,6 +418,12 @@ export interface BrainStatus {
   edges: number
   warnings: number
   backfill?: { total: number; done: number; running: boolean }
+  // MI-2.5 review round 3: true while the correction journal is durably locked after a genuine
+  // corruption was detected + preserved. Computed fresh each poll from the on-disk sentinel (the lock
+  // file is the source of truth), so BrainView can offer an in-app "Reset corrections lock" affordance
+  // instead of the user having to hand-delete a hidden .brain file. A TRANSIENT unreadable/undecryptable
+  // journal never sets this (it self-heals) — only the durable, human-resolvable case does.
+  corruptionBlocked?: boolean
 }
 
 /**

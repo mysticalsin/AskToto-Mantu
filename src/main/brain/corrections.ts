@@ -1,4 +1,4 @@
-import { existsSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { z } from 'zod'
 import type { Settings } from '@shared/ipc'
@@ -20,7 +20,7 @@ import {
   type MeetingExtraction,
   type ProvenantField
 } from '@shared/brain'
-import { readSavedFile } from '../transcripts'
+import { readSavedFile, decodeSaved } from '../transcripts'
 import { mainLog } from '../logger'
 import {
   brainDir,
@@ -76,6 +76,13 @@ const CORRUPTION_LOCK_REL = 'corrections.corruption.lock'
 const BLOCKED_JOURNAL_ERROR =
   'The correction journal is corrupt and corrections are paused. The prior journal was preserved as a corrections.corrupt-*.json copy; resolve the block (see corrections.corruption.lock) before making further corrections.'
 
+// MI-2.5 review round 3: a TRANSIENT refusal (never a durable lock) for a journal that is present but
+// not readable on this device yet — encrypted under another device's keychain, or a OneDrive dataless
+// placeholder still syncing. Re-checked on every access; recovers on its own once the file is readable
+// here. Distinct from BLOCKED_JOURNAL_ERROR, which is the durable, human-resolvable genuine-corruption case.
+const UNREADABLE_JOURNAL_ERROR =
+  "The correction journal isn't readable on this device yet — it may still be syncing from OneDrive, or was saved encrypted on another device. Corrections are paused until it becomes readable; this usually clears on its own."
+
 function corruptionLockPath(s: Settings): string {
   return join(brainDir(s), CORRUPTION_LOCK_REL)
 }
@@ -118,24 +125,46 @@ export function clearJournalCorruptionLock(s: Settings): boolean {
 
 type ParsedJournalFile =
   | { status: 'absent' }
+  | { status: 'unreadable' }
   | { status: 'corrupt' }
   | { status: 'ok'; entries: CorrectionEntry[] }
 
-/** Parse one on-disk journal file. Tolerant of an individual entry with an unrecognized `kind` or
- *  otherwise-malformed shape (forward-compat: an older build reading a journal a newer build wrote a
- *  not-yet-known correction kind into) — that entry is skipped with a warning, the rest still replay.
- *  NOT tolerant of the file itself being unparsable (truncated/binary/undecryptable) or not a top-level
- *  array — that is what "corrupt" means here (Fix A). Reads raw (readSavedFile, not store.ts's cached
- *  readJson) so absent/corrupt/tolerated-skip stay distinguishable outcomes — readJson's single
- *  catch-all collapses all three into one `null`. */
+/**
+ * Parse one on-disk journal file, classifying its state by the RAW ON-DISK bytes (MI-2.5 review round 3)
+ * — critical because two very different situations decode to an empty string, and only ONE of them is
+ * genuine corruption. Collapsing them (the pre-fix behaviour) armed the DURABLE corruption lock on a mere
+ * empty/undecryptable file and permanently blocked all corrections in the OneDrive/encryption threat model:
+ *   - read throws ENOENT                          → 'absent'      (no file — an empty journal, proceed)
+ *   - read throws anything else / 0 raw bytes     → 'absent'/'unreadable' (never corruption — see below)
+ *   - >0 raw bytes but decode yields ''           → 'unreadable'  (encrypted-undecryptable-on-this-device
+ *                                                    or a OneDrive dataless placeholder: INTACT elsewhere,
+ *                                                    refuse transiently, never quarantine/lock/overwrite)
+ *   - decodes to non-empty text, JSON/array fails → 'corrupt'     (the ONLY genuine-corruption case →
+ *                                                    quarantine + durable lock)
+ *   - decodes and parses as an array              → 'ok'          (individual unknown-kind entries skipped
+ *                                                    for forward-compat, the rest still replay)
+ * Reads the raw buffer directly (not store.ts's cached readJson, whose single catch-all collapses every
+ * outcome to `null`) so absent / unreadable / corrupt / tolerated-skip stay distinguishable.
+ */
 function parseJournalFile(path: string): ParsedJournalFile {
-  let text: string
+  let buf: Buffer
   try {
-    text = readSavedFile(path)
+    buf = readFileSync(path)
   } catch (e) {
     if ((e as NodeJS.ErrnoException)?.code === 'ENOENT') return { status: 'absent' }
-    return { status: 'corrupt' } // unreadable for any other reason — never silently "empty"
+    // Any other read error (a dataless OneDrive placeholder that errors on read, a transient EBUSY/
+    // EACCES): the file may well read fine on a later access or on the owning device — transiently
+    // unreadable, NEVER corruption (which would arm the durable lock and permanently block corrections).
+    return { status: 'unreadable' }
   }
+  // 0 raw bytes on disk: a genuinely empty/torn file has no content to preserve — an empty journal, never
+  // a corruption. (Deliberately distinct from a >0-byte file that merely DECODES to '' just below.)
+  if (buf.length === 0) return { status: 'absent' }
+  const text = decodeSaved(buf)
+  // Present bytes but decode yielded nothing: encrypted-but-undecryptable on THIS device (foreign
+  // keychain), or a placeholder stub. The file is INTACT and will read on the owning device / once
+  // OneDrive hydrates — so this is transiently unreadable, handled WITHOUT quarantine/lock/overwrite.
+  if (text === '') return { status: 'unreadable' }
   let raw: unknown
   try {
     raw = JSON.parse(text)
@@ -295,6 +324,15 @@ export async function readCorrectionsJournalSafe(
   }
 
   const primary = parseJournalFile(path)
+
+  // Round 3: a present-but-unreadable journal (undecryptable on this device / dataless placeholder) is
+  // refused TRANSIENTLY — no quarantine, no durable lock, and critically the file is left untouched (it
+  // is intact, just not readable here). Returning BEFORE the conflict-resolution/overwrite path below is
+  // what preserves it; it recovers on its own once readable. A corrupt-but-decodable file is a different
+  // story (handled next): that IS genuine corruption.
+  if (primary.status === 'unreadable') {
+    return { ok: false, entries: [], error: UNREADABLE_JOURNAL_ERROR }
+  }
 
   if (primary.status === 'corrupt') {
     const quarantinedTo = join(root, `corrections.corrupt-${now().replace(/[:.]/g, '-')}.json`)
