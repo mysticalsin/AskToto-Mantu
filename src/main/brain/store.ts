@@ -1,6 +1,6 @@
-import { existsSync, mkdirSync, readdirSync, rmSync, statSync, cpSync } from 'node:fs'
+import { existsSync, mkdirSync, readdirSync, rmSync, renameSync, statSync, cpSync } from 'node:fs'
 import { join, basename } from 'node:path'
-import { createHash } from 'node:crypto'
+import { createHash, randomBytes } from 'node:crypto'
 import type { Settings } from '@shared/ipc'
 import {
   BrainIndexSchema,
@@ -219,6 +219,28 @@ export async function writeJson(settings: Settings, rel: string, value: unknown)
   jsonCache.delete(p)
 }
 
+// MI-2.5 Fix C: the ONE serialization lane every read-modify-write mutation of `.brain/` entity files
+// (account/person/deal/graph — none of which have their own per-file lock the way index.json has via
+// ingest.ts's own indexLock) must go through. Before this fix, ingest.ts's in-flight backfill/ingest jobs
+// serialized against a PRIVATE module-level `ingestChain` promise that corrections.ts's five correction
+// mutations (rename/merge/unmerge/field-pin/commitment-reject) never joined — a correction running
+// concurrently with an in-flight backfill could lose an update or resurrect a tombstoned entity (a
+// backfill job that captured its alias map before a merge writing the pre-merge entity back over it).
+// Lives here, not in ingest.ts, for the same import-cycle reason as commitmentKey/pushUnique/outranks
+// above: corrections.ts cannot import from ingest.ts (ingest.ts already imports FROM corrections.ts), so
+// the ONE primitive both files' mutations must share has to sit below both, not inside either.
+let entityMutationLock: Promise<void> = Promise.resolve()
+export function withEntityLock<T>(fn: () => Promise<T>): Promise<T> {
+  const run = entityMutationLock.then(fn)
+  // Never let a rejection wedge the lane for the next caller — mirrors ingest.ts's own indexLock
+  // (`indexLock = run.catch(() => {})`), which this replaces as the ingest side's own serialization lane.
+  entityMutationLock = run.then(
+    () => undefined,
+    () => undefined
+  )
+  return run
+}
+
 // ── v1 → v2 lazy migration (B2) ──────────────────────────────────────────────
 //
 // A v1 entity file has role/org/sector/stage/win_likelihood_band/velocity as plain values with zero
@@ -316,14 +338,38 @@ function brainHasV1Entities(settings: Settings): boolean {
 export function ensureV1Backup(settings: Settings): void {
   const root = brainDir(settings)
   if (backupHandled.has(root)) return
-  backupHandled.add(root)
   const backup = `${root}.backup-v1`
-  if (existsSync(backup)) return
-  if (!brainHasV1Entities(settings)) return
+  if (existsSync(backup)) {
+    backupHandled.add(root) // a complete backup already exists (see the atomic tmp+rename below)
+    return
+  }
+  if (!brainHasV1Entities(settings)) {
+    backupHandled.add(root) // nothing to back up — also memoize, so this scan isn't repeated on every write
+    return
+  }
+  // MI-2.5 Fix H: copy to a TEMP sibling dir first, then rename atomically into the final `.backup-v1`
+  // name — mirrors writeSaved's own tmp+rename convention. This is what makes `existsSync(backup)` above
+  // a trustworthy "the backup is complete" signal: a cpSync that throws partway (a dataless OneDrive
+  // Files-On-Demand placeholder, an AV lock) never leaves anything at the FINAL name, so the next write's
+  // retry sees no backup and tries again from scratch — instead of the pre-fix bug, where a half-copied
+  // `.backup-v1` DIRECTORY already existing at the final name was silently treated as "done", hiding an
+  // incomplete safety copy forever (backupHandled was also marked BEFORE the attempt, compounding it).
+  const tmp = `${backup}.tmp-${randomBytes(6).toString('hex')}`
   try {
-    cpSync(root, backup, { recursive: true })
+    cpSync(root, tmp, { recursive: true })
+    renameSync(tmp, backup)
+    backupHandled.add(root) // memoize success only now — never before the backup is verifiably complete
   } catch (e) {
-    console.warn('[brain] could not create .brain.backup-v1 safety copy before v2 migration:', e)
+    try {
+      if (existsSync(tmp)) rmSync(tmp, { recursive: true, force: true }) // no orphaned partial copy left behind
+    } catch {
+      /* best-effort cleanup of the failed partial copy */
+    }
+    console.warn('[brain] could not create .brain.backup-v1 safety copy before v2 migration — will retry on the next write:', e)
+    // Deliberately NOT memoized and NOT re-thrown: a v1 safety net failing must not permanently block
+    // every future correction/entity write until a human intervenes (a hard-refuse would do exactly
+    // that, since OneDrive/AV holds are often transient) — the next write's own ensureV1Backup call
+    // retries the copy from scratch instead.
   }
 }
 
@@ -423,8 +469,9 @@ export function purgeBrain(settings: Settings, opts: { preserveCorrections?: boo
   const root = brainDir(settings)
   const journalPath = join(root, 'corrections.json')
   const preserveTo = `${root}.corrections-preserve.json`
+  let preserve = false
   try {
-    const preserve = !!opts.preserveCorrections && existsSync(journalPath)
+    preserve = !!opts.preserveCorrections && existsSync(journalPath)
     if (preserve) cpSync(journalPath, preserveTo)
     if (existsSync(root)) rmSync(root, { recursive: true, force: true })
     if (preserve) {
@@ -439,6 +486,23 @@ export function purgeBrain(settings: Settings, opts: { preserveCorrections?: boo
     return { ok: !existsSync(root) }
   } catch (e) {
     console.warn('[brain] purgeBrain: could not remove', root, e)
+    // MI-2.5 Fix F: a mid-wipe failure (OneDrive/AV holding a file open partway through the recursive
+    // delete) must never leave the correction journal recoverable ONLY under the escrow sibling name —
+    // restore it into `root` here regardless of how far the failed wipe got (root may be fully gone,
+    // partially emptied, or untouched). Best-effort and never throws out of this already-failing path;
+    // the caller still gets `ok: false` either way and must abort rather than proceed with a rebuild atop
+    // an unverified store.
+    if (preserve) {
+      try {
+        if (existsSync(preserveTo)) {
+          if (!existsSync(root)) mkdirSync(root, { recursive: true })
+          cpSync(preserveTo, journalPath)
+          rmSync(preserveTo, { force: true })
+        }
+      } catch (restoreErr) {
+        console.warn('[brain] purgeBrain: could not restore preserved journal after failed wipe', restoreErr)
+      }
+    }
     return { ok: false }
   }
 }
