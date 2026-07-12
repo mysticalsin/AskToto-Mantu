@@ -68,6 +68,10 @@ export type AuditEvent =
   | 'brain.commitment.rejected'
   | 'brain.rebuild.aborted'
   | 'brain.corrections.lock_cleared'
+  // Task MI-5: the markdown mirror (main/brain/publish.ts).
+  | 'transcript.confidential_set'
+  | 'brain.publish.consent'
+  | 'brain.publish.disabled'
   | 'note.saved'
   | 'answer.feedback'
   | 'provider.request'

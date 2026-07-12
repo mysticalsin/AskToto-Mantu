@@ -98,6 +98,7 @@ export const IPC = {
   recallDelete: 'recall:delete',
   recallRename: 'recall:rename',
   recallUpdateRecap: 'recall:update-recap',
+  recallSetConfidential: 'recall:set-confidential',
   recallDeleteAll: 'recall:deleteAll',
   debriefSave: 'debrief:save',
   brainCommitmentSettle: 'brain:commitmentSettle',
@@ -612,6 +613,14 @@ export const BaseSettingsSchema = z.object({
   // at the meetings folder) needs to read the raw markdown — Métis's own recall/search already decrypts
   // transparently either way. See main/transcripts.ts.
   encryptTranscripts: z.boolean().default(true),
+  // Task MI-5 — publish a plaintext markdown mirror (entity pages + per-meeting note cards + an
+  // llms.txt-shaped index) under `<meetingsFolder>/wiki/` so Dust/graphify/any agent can read the
+  // CRM-corrected brain even while encryptTranscripts keeps the raw transcripts locked. First-run
+  // default is derived from `!encryptTranscripts` (see main/store.ts's getSettings — computed once,
+  // only while the key has never been explicitly chosen); the schema default below only matters for a
+  // brand-new BaseSettingsSchema.parse() call site that doesn't go through that derivation (e.g. tests).
+  // Every publish.ts entry point re-checks this flag itself, so it's always safe to leave off.
+  publishBrainPages: z.boolean().default(false),
   // Auto-delete saved meetings older than N days (GDPR/CCPA storage-limitation control). 0 = off, keep
   // forever (the historical default — an explicit choice, not a silent one, since flipping this on is
   // itself destructive). Swept once per app launch; see sweepExpiredMeetings in main/recall.ts.
@@ -819,6 +828,7 @@ export const DEFAULT_SETTINGS: Settings = {
   outputLanguage: 'auto',
   summaryLanguage: 'auto',
   encryptTranscripts: true,
+  publishBrainPages: false,
   transcriptRetentionDays: 0,
   systemPrompt:
     'You are Métis, a fast, sharp desktop assistant living in an always-on overlay. ' +
@@ -975,6 +985,9 @@ export interface MeetingSummary {
   durationMin: number
   participants: string[]
   topics?: string[]
+  /** Task MI-5: frontmatter `confidential: true` — excludes this meeting from every published wiki
+   *  surface (note card, entity timelines/current-facts, indexes). Undefined/false = not confidential. */
+  confidential?: boolean
 }
 export interface RecallHit extends MeetingSummary {
   snippet: string
@@ -1061,6 +1074,15 @@ export const UpdateRecapPayloadSchema = z.object({
 })
 export type UpdateRecapPayload = z.infer<typeof UpdateRecapPayloadSchema>
 
+/** Payload for recall:set-confidential (Task MI-5) — flags/unflags a saved meeting so the wiki
+ *  publisher (main/brain/publish.ts) excludes it from every published surface. `file` is a bare
+ *  basename (re-basenamed in main for defense), mirroring RenameMeetingPayloadSchema/UpdateRecapPayloadSchema. */
+export const SetConfidentialPayloadSchema = z.object({
+  file: z.string().min(1, 'Missing meeting file.'),
+  confidential: z.boolean()
+})
+export type SetConfidentialPayload = z.infer<typeof SetConfidentialPayloadSchema>
+
 /** Result of reading a saved meeting back for "Resume session" (decoded transcript + recap). */
 export interface RecallReadResult {
   ok: boolean
@@ -1070,6 +1092,9 @@ export interface RecallReadResult {
   startedAt?: number
   recap?: string
   lines?: TranscriptLine[]
+  /** Task MI-5 — frontmatter `confidential: true`, so a reopened past meeting's toggle reflects its
+   *  actual saved state instead of always starting unflagged. */
+  confidential?: boolean
 }
 
 export interface DustAgentsResponse {
