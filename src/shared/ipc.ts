@@ -1109,6 +1109,10 @@ export interface DustCliImport {
   workspaceId?: string
   baseUrl?: string
   error?: string
+  /** true when `dust login`'s browser step finished (access_token present) but the separate interactive
+   *  terminal workspace-picker step never did (workspace_sid missing) — the user just needs to finish
+   *  that step, not re-run the whole install + login. Distinguishes this from "no session at all". */
+  incomplete?: boolean
   /** true when the failure was a BLOCKED keychain read (user hasn't allowed Métis to read the Dust CLI
    *  item) — as opposed to no session existing at all. Lets the UI prompt to allow access instead of
    *  wrongly re-running the install/login setup for a session that is actually present. */
@@ -1128,6 +1132,9 @@ export interface DustCliSetup {
 export interface DustSessionProbe {
   ok: boolean
   accessDenied?: boolean
+  /** true when access_token is present but workspace_sid is missing — the user finished the browser
+   *  OAuth step of `dust login` but not the separate terminal workspace-picker step. */
+  incomplete?: boolean
 }
 
 /** Result of a CLI provider detect/test operation (claude-cli, codex-cli). */

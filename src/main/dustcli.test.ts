@@ -83,4 +83,22 @@ describe.runIf(canKeychain)('importDustCliSession (real keychain)', () => {
     const r = await importDustCliSession(TEST_SERVICE)
     expect(r.ok).toBe(false)
   })
+
+  // `dust login` is a two-step flow: browser OAuth writes access_token first, then a separate
+  // interactive terminal workspace-picker writes workspace_sid. A user who closes the terminal after
+  // the browser step leaves exactly this state — access_token present, workspace_sid missing — which
+  // must be distinguishable from "no session at all" so the UI doesn't relaunch the whole setup.
+  it('flags a token-but-no-workspace session as incomplete, not a bare failure', async () => {
+    await setSession({ access_token: 'tok_only' })
+    const r = await importDustCliSession(TEST_SERVICE)
+    expect(r.ok).toBe(false)
+    expect(r.incomplete).toBe(true)
+  })
+
+  it('does not flag a genuinely empty keychain as incomplete', async () => {
+    await delAll()
+    const r = await importDustCliSession(TEST_SERVICE)
+    expect(r.ok).toBe(false)
+    expect(r.incomplete).toBeFalsy()
+  })
 })

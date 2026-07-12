@@ -22,6 +22,7 @@ import { join, basename, dirname, resolve, relative, isAbsolute, extname } from 
 import { readFileSync, existsSync, writeFileSync, realpathSync, readdirSync, unlinkSync, createReadStream, statSync, renameSync, rmdirSync } from 'node:fs'
 import { pathToFileURL } from 'node:url'
 import { randomBytes } from 'node:crypto'
+import { fork as forkChildProcess, type ForkOptions } from 'node:child_process'
 import {
   IPC,
   AskStartSchema,
@@ -183,6 +184,15 @@ import { SaveMeetingSchema, SaveNoteSchema } from '@shared/ipc'
 import { PROVIDERS, resolveModelTier, applyInteractiveGuardrail, type ProviderId } from '@shared/providers'
 import { routeTier } from '@shared/routing'
 import { redactSecrets } from '@shared/redact'
+import { createWorkerController } from './local-ai/worker-controller'
+import { localAiRoot } from './local-ai/resource-path'
+import { resolveSelectedTextModel } from './local-ai/model-manifest'
+import {
+  isLocalAiNativeSelftest,
+  runPackagedLocalAiSelftest,
+  writePackagedSelftestResult
+} from './local-ai/packaged-selftest'
+import { installNetworkDeny, type NetworkDenyGuard } from '../local-ai-worker/network-deny.mjs'
 
 // Belt-and-braces with the per-meeting powerSaveBlocker below: keep Chromium itself from ever
 // deprioritizing the (hidden) renderer that hosts the transcription worker. Must run before app ready.
@@ -1535,7 +1545,7 @@ function registerIpc(): void {
     assertMainWindow(e)
     if (!requireAuth()) return { ok: false, error: 'Sign in with your Mantu account first.' }
     const s = await refreshDustCliSession()
-    if (!s.ok || !s.token || !s.workspaceId) return { ok: false, error: s.error, accessDenied: s.accessDenied }
+    if (!s.ok || !s.token || !s.workspaceId) return { ok: false, error: s.error, accessDenied: s.accessDenied, incomplete: s.incomplete }
     setApiKey('dust', s.token)
     setSettings({ dustWorkspaceId: s.workspaceId, dustBaseUrl: s.baseUrl || 'https://dust.tt', dustTokenMintedAt: Date.now() })
     return { ok: true, workspaceId: s.workspaceId, baseUrl: s.baseUrl }
@@ -1550,7 +1560,7 @@ function registerIpc(): void {
   ipcMain.handle(IPC.dustProbeSession, async (e) => {
     assertMainWindow(e)
     const s = await importDustCliSession()
-    return { ok: s.ok, accessDenied: s.accessDenied }
+    return { ok: s.ok, accessDenied: s.accessDenied, incomplete: s.incomplete }
   })
 
   // No CLI session yet → kick off the install + interactive login for the user (opens a Terminal window).
@@ -1571,6 +1581,9 @@ function registerIpc(): void {
         if (Date.now() - startedAt > 5 * 60 * 1000) {
           if (dustSetupPoll) clearInterval(dustSetupPoll)
           dustSetupPoll = null
+          // Silent give-up was undiagnosable — this is the only signal that the user never finished
+          // `dust login` (or got stuck on its separate workspace-picker step) within the 5-minute window.
+          auditLog('dust.setup.timeout')
           return
         }
         if (dustSetupPollInFlight) return
@@ -2905,6 +2918,78 @@ if (!app.requestSingleInstanceLock()) {
     }
   })
   app.whenReady().then(async () => {
+  if (isLocalAiNativeSelftest(process.env)) {
+    const appPath = app.getAppPath()
+    const resourcesRoot = localAiRoot({
+      isPackaged: app.isPackaged,
+      resourcesPath: process.resourcesPath,
+      appPath
+    })
+    const workerPath = join(appPath, 'out', 'local-ai-worker', 'index.mjs')
+    const nativePackagesRoot = join(
+      process.resourcesPath,
+      'app.asar.unpacked',
+      'node_modules',
+      '@node-llama-cpp'
+    )
+    let networkGuard: NetworkDenyGuard | undefined
+    let exitCode = 0
+    try {
+      await runPackagedLocalAiSelftest({
+        env: process.env,
+        isPackaged: app.isPackaged,
+        platform: process.platform,
+        arch: process.arch,
+        appResourcesPath: process.resourcesPath,
+        resourcesRoot,
+        workerPath,
+        bindingPath: nativePackagesRoot,
+        installNetworkDeny: () => {
+          networkGuard = installNetworkDeny({ electronNet: net })
+        },
+        getNetworkAttempts: () => networkGuard?.attempts() ?? 0,
+        getWindowCount: () => BrowserWindow.getAllWindows().length,
+        resolveModel: () => {
+          const targetPlatform =
+            process.platform === 'darwin' && process.arch === 'arm64'
+              ? 'darwin-arm64'
+              : process.platform === 'win32' && process.arch === 'x64'
+                ? 'win32-x64'
+                : null
+          if (!targetPlatform) throw new Error('Unsupported local AI self-test platform.')
+          return resolveSelectedTextModel({
+            context: {
+              isPackaged: app.isPackaged,
+              resourcesPath: process.resourcesPath,
+              appPath
+            },
+            targetPlatform
+          })
+        },
+        createController: () =>
+          createWorkerController({
+            workerEntry: workerPath,
+            execPath: process.execPath,
+            parentPid: process.pid,
+            env: { ...process.env, METIS_LOCAL_AI_DENY_NETWORK: '1' },
+            fork: (modulePath, args, options) =>
+              forkChildProcess(modulePath, args, options as ForkOptions),
+            randomBytes,
+            setTimeout,
+            clearTimeout,
+            handshakeTimeoutMs: 30_000
+          }),
+        writeResult: writePackagedSelftestResult,
+        now: () => performance.now()
+      })
+    } catch {
+      exitCode = 1
+    } finally {
+      networkGuard?.restore()
+    }
+    app.exit(exitCode)
+    return
+  }
   initLogging() // route main-process logs to a rotated file before anything else can fail
   await installProxyAwareFetch() // route provider fetch through the env/OS proxy so Dust etc. work behind a corporate proxy
   // Warm the CLI binary cache at boot when a CLI provider is connected, so the session's FIRST CLI ask

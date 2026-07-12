@@ -25,9 +25,11 @@ function macStatus(accessType: 'microphone' | 'camera' | 'screen'): PermissionSt
 }
 
 function windowsMicStatus(): PermissionStatus {
-  // Electron does not expose a Windows mic permission API. We infer from navigator.getUserMedia at runtime
-  // or treat it as unknown. The renderer will prompt via getUserMedia if needed.
-  return 'unknown'
+  // systemPreferences.getMediaAccessStatus('microphone') is supported on win32 as well as darwin
+  // (electron.d.ts marks it `@platform win32,darwin`) — it reads the Windows privacy toggle directly,
+  // mapped the same way as the macOS path (macStatus above). It stays 'not-determined' (-> 'unknown')
+  // until the app has actually attempted a capture once; the renderer probes via getUserMedia for that.
+  return macStatus('microphone')
 }
 
 function windowsScreenStatus(): PermissionStatus {
