@@ -170,7 +170,10 @@ function readUserRaw(): Record<string, unknown> {
 
   // ── Legacy safeStorage format (ATKENC1) — migrate to file backend on next write ──
   if (buf.length >= ENC_MARKER_V1.length && buf.subarray(0, ENC_MARKER_V1.length).equals(ENC_MARKER_V1)) {
-    if (safeStorage.isEncryptionAvailable()) {
+    // Only touch safeStorage (the Keychain) when the file backend is NOT in force. On a keystore-forced
+    // build, reading a legacy V1 blob would re-open the very Keychain prompt we route around at boot — so
+    // treat it as unreadable and fall back to defaults (a one-time re-onboard), never a blocking prompt.
+    if (!useFileBackend() && safeStorage.isEncryptionAvailable()) {
       try {
         const data = JSON.parse(safeStorage.decryptString(buf.subarray(ENC_MARKER_V1.length)))
         // Best-effort migration: write the current backend format so subsequent reads don't need safeStorage.

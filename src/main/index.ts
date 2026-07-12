@@ -181,6 +181,16 @@ crashReporter.start({ uploadToServer: false })
 // deprioritizing the (hidden) renderer that hosts the transcription worker. Must run before app ready.
 app.commandLine.appendSwitch('disable-renderer-backgrounding')
 
+// Self-signed / un-notarized builds: use the AES-256-GCM file keystore instead of the macOS Keychain.
+// An un-notarized app's Keychain ACL is not stably trusted, so safeStorage prompts for the login-keychain
+// password on launch — AND because the first getSettings() decrypt runs synchronously during boot, BEFORE
+// the overlay window paints, that modal prompt blocks the entire UI behind it (the "load forever" / "I only
+// see the keychain box" report). The file backend keeps secrets encrypted at rest (secret-key.bin, mode
+// 0600) with zero OS prompt, so the app boots straight to its UI. Remove/gate this once the app ships
+// signed with an Apple Developer ID + notarization, so it can use the Keychain-backed store again.
+// `??=` leaves QA/integration overrides (which set the var explicitly) untouched.
+process.env.ASKTOTO_LOCAL_KEYSTORE ??= '1'
+
 // QA hook (same family as ASKTOTO_DEMO / ASKTOTO_SHOT): point the app at an isolated profile so
 // physical QA never reads — or refuses to write over — the packaged app's keychain-wrapped real
 // userData. Must run before anything touches app.getPath('userData').
@@ -712,10 +722,25 @@ function topCenter(width: number, height: number): { x: number; y: number } {
 }
 
 function createWindow(): void {
-  const { x, y } = topCenter(BAR_WIDTH, BAR_HEIGHT)
+  // Fresh-install onboarding is a ~640px panel, not the 84px bar. The renderer's content-driven auto-resize
+  // can be starved by the macOS compositor on a just-created transparent, always-on-top overlay (rAF/timers
+  // frozen for a beat after first paint), which would otherwise leave onboarding clipped to bar height with
+  // its "Continue" buttons off-screen. Size the window to fit onboarding up front — deterministic, not
+  // dependent on the renderer — and let auto-resize settle it back to the bar once onboarding is done.
+  // getSettings() is safe to read here (file keystore, no Keychain prompt — see the keystore note at top).
+  let initialHeight = BAR_HEIGHT
+  try {
+    if (!getSettings().onboardingDone) {
+      initialHeight = Math.min(680, screen.getPrimaryDisplay().workArea.height - 48)
+      lastBarHeight = initialHeight // so a later width-only change (mini-pill) doesn't snap it back to 84
+    }
+  } catch {
+    /* getSettings unavailable — keep bar height; auto-resize grows onboarding if the renderer isn't frozen */
+  }
+  const { x, y } = topCenter(BAR_WIDTH, initialHeight)
   win = new BrowserWindow({
     width: BAR_WIDTH,
-    height: BAR_HEIGHT,
+    height: initialHeight,
     x,
     y,
     frame: false,

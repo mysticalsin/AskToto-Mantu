@@ -170,8 +170,10 @@ function makeCachePlugin(): any {
         if (useFileBackend()) {
           try { json = decryptSecret(buf) } catch { /* not AES-GCM format — try safeStorage below */ }
         }
-        // Fallback / migration: try safeStorage (old installs or prod reads on prod path)
-        if (json === null && safeStorage.isEncryptionAvailable()) {
+        // Fallback / migration: try safeStorage (old installs or prod reads on prod path). Skipped when
+        // the file backend is in force, so an old safeStorage-wrapped token can't re-open the Keychain
+        // prompt we route around on an un-notarized build — the user just re-authenticates once instead.
+        if (json === null && !useFileBackend() && safeStorage.isEncryptionAvailable()) {
           try { json = safeStorage.decryptString(buf) } catch { /* not a safeStorage blob either */ }
           // If we read it via safeStorage while in file-backend mode, migrate now (best-effort)
           if (json !== null && useFileBackend()) {
