@@ -112,13 +112,15 @@ export function useAutoResize(): (el: HTMLElement | null) => void {
           clearTimeout(shrinkRef.current)
           shrinkRef.current = null
         }
-        if (h >= lastSentRef.current) {
-          push(h, m.width) // GROW immediately — streaming text must never clip behind the window edge
-        } else if (m.width !== undefined) {
+        if (m.width !== undefined) {
           // A width report comes only from the collapsed control pill (data-hug-width), which is fully
-          // static and has nothing to settle. Push immediately so its measured width lands on the very next
-          // frame after the main-process guess resize, reading as one settle instead of a visible double-snap.
-          push(h, m.width)
+          // static and has nothing to settle. Push its EXACT height (not the 24px-quantized grow step `h`):
+          // the pill is ~54px, which `h` rounds up to 72, leaving ~18px of dead space below the pill so it
+          // floats in a too-tall window. Exact height makes the window hug the pill. Width still lands on
+          // the frame after the main-process guess resize, one clean settle.
+          push(m.height + 2, m.width)
+        } else if (h >= lastSentRef.current) {
+          push(h) // GROW immediately — streaming text must never clip behind the window edge
         } else {
           // SHRINK only after the content settles (~140ms) so a finishing stream doesn't pump the window down
           shrinkRef.current = setTimeout(() => {
