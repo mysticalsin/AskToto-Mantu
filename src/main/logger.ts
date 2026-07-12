@@ -67,6 +67,7 @@ export type AuditEvent =
   | 'brain.entity.asr_correction_added'
   | 'brain.commitment.rejected'
   | 'brain.rebuild.aborted'
+  | 'brain.corrections.lock_cleared'
   | 'note.saved'
   | 'answer.feedback'
   | 'provider.request'

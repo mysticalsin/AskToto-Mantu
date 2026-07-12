@@ -89,7 +89,9 @@ import {
   mergeEntities,
   unmergeEntities,
   updateEntityField,
-  rejectCommitment
+  rejectCommitment,
+  isJournalCorruptionBlocked,
+  clearJournalCorruptionLock
 } from './brain/corrections'
 import { computeAttention } from './brain/attention'
 import { openIntelligenceWindow, isIntelligenceSender, syncIntelContentProtection } from './intelligence'
@@ -2256,7 +2258,10 @@ function registerIpc(): void {
       nodes: graph.nodes.length,
       edges: graph.edges.length,
       warnings: idx.warnings.length,
-      backfill: brainBackfillProgress()
+      backfill: brainBackfillProgress(),
+      // MI-2.5 review round 3: computed fresh from the on-disk sentinel each poll — lets BrainView offer
+      // the in-app "Reset corrections lock" recovery instead of a hand-deleted hidden .brain file.
+      corruptionBlocked: isJournalCorruptionBlocked(s)
     }
   })
   ipcMain.handle(IPC.brainBackfill, (e) => {
@@ -2286,6 +2291,17 @@ function registerIpc(): void {
     }
     auditLog('brain.backfill.start', { queued: r.queued, rebuild: true })
     return r
+  })
+  // MI-2.5 review round 3: user-invoked recovery from a durable correction-journal corruption lock —
+  // clears the sentinel so corrections resume (the quarantined corrections.corrupt-*.json copy is left
+  // for inspection). Privileged (mutates correction-engine state) — main-window only + requireAuth, same
+  // guards as brainSetDealOutcome. Takes no payload, so there is nothing to zod-validate beyond the guards.
+  ipcMain.handle(IPC.brainClearJournalCorruption, (e) => {
+    assertMainWindow(e)
+    if (!requireAuth()) return { ok: false, error: 'Sign in with your Mantu account first.' }
+    const cleared = clearJournalCorruptionLock(getSettings())
+    auditLog('brain.corrections.lock_cleared', { cleared })
+    return { ok: true, cleared }
   })
   // Full assembled dataset for the Mantu Intelligence dashboard (decrypted in main when needed).
   ipcMain.handle(IPC.brainRead, (e) => {

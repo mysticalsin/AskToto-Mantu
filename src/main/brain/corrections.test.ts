@@ -1126,6 +1126,54 @@ describe('corrections engine', () => {
     })
   })
 
+  // ── MI-2.5 review round 3 — three-way classification: only GENUINE corruption arms the durable lock ──
+  describe('three-way journal classification (review round 3)', () => {
+    const journalPath = (): string => join(brainDir(s), 'corrections.json')
+    const quarantineExists = (): boolean => readdirSync(brainDir(s)).some((f) => f.startsWith('corrections.corrupt-'))
+
+    it('a 0-byte / torn journal is treated as ABSENT — the mutation succeeds, nothing is locked or quarantined', async () => {
+      await ingestThreeMeetings(s)
+      writeFileSync(journalPath(), '', 'utf8') // 0 raw bytes on disk
+
+      const r = await updateEntityField(s, { kind: 'deal', id: DEAL_SLUG, field: 'stage', value: 'contract' })
+      expect(r.ok).toBe(true) // proceeds normally — nothing to lose in an empty file
+      expect(isJournalCorruptionBlocked(s)).toBe(false)
+      expect(quarantineExists()).toBe(false)
+      expect(readCorrectionsJournal(s)).toHaveLength(1)
+    })
+
+    it('a present-but-UNDECRYPTABLE journal (bytes on disk, decode yields "") refuses TRANSIENTLY — no lock, file preserved, recovers once readable', async () => {
+      await ingestThreeMeetings(s)
+      // An ATKENC2-marked envelope this device cannot decrypt (foreign keychain) / a dataless placeholder:
+      // >0 raw bytes, but decodeSaved() returns '' — the file is INTACT, just not readable here.
+      const undecryptable = Buffer.concat([Buffer.from('ATKENC2\n', 'utf8'), Buffer.from('not-a-real-envelope')])
+      writeFileSync(journalPath(), undecryptable)
+
+      const r = await updateEntityField(s, { kind: 'deal', id: DEAL_SLUG, field: 'stage', value: 'contract' })
+      expect(r.ok).toBe(false)
+      expect(r.error).toMatch(/readable|syncing|paused/i)
+      expect(isJournalCorruptionBlocked(s)).toBe(false) // NEVER a durable lock (it self-heals)
+      expect(quarantineExists()).toBe(false)
+      // Critically: the intact file is NOT overwritten/quarantined — byte-identical to what we wrote.
+      expect(readFileSync(journalPath()).equals(undecryptable)).toBe(true)
+
+      // Once it becomes readable here (OneDrive hydration / owning device), corrections proceed on their own.
+      writeFileSync(journalPath(), '[]', 'utf8')
+      const recovered = await updateEntityField(s, { kind: 'deal', id: DEAL_SLUG, field: 'stage', value: 'contract' })
+      expect(recovered.ok).toBe(true)
+    })
+
+    it('a genuinely malformed NON-EMPTY journal still quarantines + arms the durable lock', async () => {
+      await ingestThreeMeetings(s)
+      writeFileSync(journalPath(), '{"not":"an array"}', 'utf8') // decodes fine, but not a journal array
+
+      const r = await updateEntityField(s, { kind: 'deal', id: DEAL_SLUG, field: 'stage', value: 'contract' })
+      expect(r.ok).toBe(false)
+      expect(isJournalCorruptionBlocked(s)).toBe(true) // genuine corruption → durable lock armed
+      expect(quarantineExists()).toBe(true)
+    })
+  })
+
   // ── MI-2.5 review Fix 3 — field_update & commitment_reject are journal-first ────────────────
   describe('journal-first for field_update and commitment_reject (review Fix 3)', () => {
     it('field_update commits the journal entry BEFORE the entity write — a crashed write still converges on replay, never reverts', async () => {

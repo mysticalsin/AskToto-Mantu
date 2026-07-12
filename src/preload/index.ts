@@ -109,6 +109,11 @@ const api = {
     ipcRenderer.invoke(IPC.brainOpenDashboard),
   // MI-2.5 Fix F: `error` is set (queued: 0) when a purge failure aborts the rebuild before it starts.
   brainRebuildAll: (): Promise<{ queued: number; error?: string }> => ipcRenderer.invoke(IPC.brainRebuildAll),
+  // MI-2.5 review round 3: user-invoked recovery from a durable correction-journal corruption lock —
+  // clears the sentinel so corrections resume (the quarantined copy is left for inspection). `cleared`
+  // is false when there was no lock to clear.
+  brainClearJournalCorruption: (): Promise<{ ok: boolean; cleared?: boolean; error?: string }> =>
+    ipcRenderer.invoke(IPC.brainClearJournalCorruption),
   brainRead: (): Promise<import('@shared/brain').BrainRead> => ipcRenderer.invoke(IPC.brainRead),
   // Canonical people/account names only — feeds the ASR entity-casing bias (lib/entity-casing.ts).
   brainEntityNames: (): Promise<import('@shared/ipc').BrainEntityNamesResult> =>
