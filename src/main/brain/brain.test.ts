@@ -546,6 +546,51 @@ describe('brain', () => {
       expect(a.acc.sector_confidence).toBe('EXTRACTED')
     })
 
+    it('MI-4: mixed-tier superseded permutation — the reviewer-constructed case converges byte-equal across all 6 orderings', async () => {
+      // Value V ('retail') is sighted TWICE, at different confidence tiers and dates: once weaker but
+      // NEWER (INFERRED, z.md, 2026-03-01), once stronger but OLDER (EXTRACTED, a.md, 2026-01-01). Both
+      // lose to value W ('banking'), the genuine EXTRACTED, most-recent winner (w.md, 2026-06-01). Pre-fix,
+      // pushSuperseded's dedup ordered candidates by (date, source_file) alone — ignoring confidence
+      // entirely — so the two V sightings could collapse onto the WRONG (weaker, merely-newer-dated) one.
+      // Post-fix, the same `outranks` order (confidence tier first) used for winner selection also governs
+      // the superseded dedup, so the kept V entry is deterministically the EXTRACTED sighting regardless
+      // of arrival order.
+      const sectorX = (sector: 'retail' | 'banking', conf: 'EXTRACTED' | 'INFERRED'): MeetingExtraction =>
+        MeetingExtractionSchema.parse({
+          account: { name: 'MixCo', sector, sector_confidence: conf, confidence: 'EXTRACTED' }
+        })
+      const weakerNewerV = { x: sectorX('retail', 'INFERRED'), ref: { file: 'z.md', date: '2026-03-01', title: 't' } }
+      const strongerOlderV = { x: sectorX('retail', 'EXTRACTED'), ref: { file: 'a.md', date: '2026-01-01', title: 't' } }
+      const winnerW = { x: sectorX('banking', 'EXTRACTED'), ref: { file: 'w.md', date: '2026-06-01', title: 't' } }
+      const sightings = [weakerNewerV, strongerOlderV, winnerW]
+
+      const run = async (order: typeof sightings) => {
+        const dir = mkdtempSync(join(tmpdir(), 'asktoto-brain-mixedtier-'))
+        try {
+          const sx = settingsFor(dir)
+          for (const { x, ref } of order) await mergeExtraction(sx, x, ref)
+          const acc = readAccount(sx, slugify('MixCo'))!
+          return { canon: JSON.stringify(canonicalize(acc)), acc }
+        } finally {
+          rmSync(dir, { recursive: true, force: true })
+        }
+      }
+
+      const results: Awaited<ReturnType<typeof run>>[] = []
+      for (const perm of permutations(sightings)) results.push(await run(perm))
+      for (const r of results.slice(1)) expect(r.canon).toBe(results[0].canon)
+
+      const acc = results[0].acc
+      expect(acc.sector).toBe('banking')
+      expect(acc.sector_confidence).toBe('EXTRACTED')
+      // Exactly ONE superseded entry for 'retail' — the two V sightings deduped — and it carries the
+      // metadata of the STRONGER (EXTRACTED, a.md, 2026-01-01) sighting, not the merely-newer-dated
+      // INFERRED one, despite its earlier date.
+      expect(acc.sector_provenance!.superseded).toEqual([
+        { value: 'retail', date: '2026-01-01', source_file: 'a.md', confidence: 'EXTRACTED' }
+      ])
+    })
+
     it('a bland velocity report neither clobbers a real calendar signal nor seeds order-dependent history', async () => {
       const velX = (signal: 'hard-calendar-gate' | 'no-hard-date-found', evidence: string): MeetingExtraction =>
         MeetingExtractionSchema.parse({

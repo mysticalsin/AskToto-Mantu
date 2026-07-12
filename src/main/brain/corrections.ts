@@ -31,6 +31,7 @@ import {
   outranks,
   eqStrict,
   eqVelocity,
+  eqAmount,
   writeJson,
   ensureV1Backup,
   withEntityLock,
@@ -757,7 +758,12 @@ async function sweepAccountNameDependents(s: Settings, newName: string, surfaceF
     let superseded: typeof workingProv.superseded = []
     for (const e of workingProv.superseded) {
       const value = surfaceForms.has(slugify(e.value)) ? newName : e.value
-      superseded = pushSuperseded(superseded, { value, date: e.date, source_file: e.source_file }, workingProv.value, eqStrict)
+      superseded = pushSuperseded(
+        superseded,
+        { value, date: e.date, source_file: e.source_file, confidence: e.confidence },
+        workingProv.value,
+        eqStrict
+      )
     }
     workingProv.superseded = superseded
     working.org_provenance = workingProv
@@ -914,7 +920,7 @@ function foldProvenant<T>(
   if (!valuesEqual(loser.value, winner.value)) {
     superseded = pushSuperseded(
       superseded,
-      { value: loser.value, date: loser.date, source_file: loser.source_file },
+      { value: loser.value, date: loser.date, source_file: loser.source_file, confidence: loser.confidence },
       winner.value,
       valuesEqual
     )
@@ -1175,9 +1181,6 @@ export async function unmergeEntities(
 
 // ── field_update ─────────────────────────────────────────────────────────────
 
-const eqAmount = (a: { value: number; currency: string }, b: { value: number; currency: string }): boolean =>
-  a.value === b.value && a.currency === b.currency
-
 /** Build a "human pin" ProvenantField: unconditionally wins (unlike mergeExtraction's rank-gated
  *  mergeProvenant), always transitions to `state: 'pinned'`, `source_file: ''` (the honest "human-
  *  entered, no meeting source" marker), and the strongest confidence tier. The old value (if any and if
@@ -1189,7 +1192,12 @@ function pinProvenant<T>(
   valuesEqual: (a: T, b: T) => boolean
 ): ProvenantField<T> {
   const superseded = current
-    ? pushSuperseded(current.superseded, { value: current.value, date: current.date, source_file: current.source_file }, value, valuesEqual)
+    ? pushSuperseded(
+        current.superseded,
+        { value: current.value, date: current.date, source_file: current.source_file, confidence: current.confidence },
+        value,
+        valuesEqual
+      )
     : []
   return { value, source_file: '', date: at, quote: undefined, confidence: 'EXTRACTED', state: 'pinned', superseded }
 }
