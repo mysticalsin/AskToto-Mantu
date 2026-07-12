@@ -76,14 +76,21 @@ import {
 import { createStream } from './llm'
 import { isTransient, nextBackoff } from './llm/retry'
 import { resetDustConversation, prewarmDustConversation, isDustAuthError } from './llm/dust'
-import { enqueueIngest, startBackfill, brainBackfillProgress, resumeBackfillIfPending, settleCommitment } from './brain/ingest'
+import {
+  enqueueIngest,
+  startBackfill,
+  brainBackfillProgress,
+  resumeBackfillIfPending,
+  settleCommitment,
+  updateIndex as updateBrainIndex,
+  finishRebuildReplay
+} from './brain/ingest'
 import {
   renameEntity,
   mergeEntities,
   unmergeEntities,
   updateEntityField,
-  rejectCommitment,
-  replayCorrections
+  rejectCommitment
 } from './brain/corrections'
 import { computeAttention } from './brain/attention'
 import { openIntelligenceWindow, isIntelligenceSender, syncIntelContentProtection } from './intelligence'
@@ -2268,14 +2275,32 @@ function registerIpc(): void {
     // never the Mantu Intelligence window's assertBrainReader (that's for the three read-only channels).
     assertMainWindow(e)
     if (!requireAuth()) throw new Error('Not signed in.')
+    const s = getSettings()
     // preserveCorrections: true — the human correction journal is not derived data (see purgeBrain's own
-    // doc comment); replayCorrections below depends on it surviving the purge. onDrained fires once the
-    // full re-extraction backfill this triggers has actually finished, replaying every correction back
-    // onto the freshly rebuilt entities so "rebuild + replay" reproduces the live-corrected state.
-    purgeBrain(getSettings(), { preserveCorrections: true })
-    const r = startBackfill(async () => {
-      await replayCorrections(getSettings())
+    // doc comment); the replay below depends on it surviving the purge.
+    //
+    // MI-2.5 Fix F: purgeBrain's result is now CHECKED — a mid-wipe failure (OneDrive/AV holding a file
+    // open) must abort the rebuild rather than proceed with startBackfill over an unverified store. The
+    // journal itself is always recoverable by then (purgeBrain's own catch path restores it from the
+    // escrow copy on failure), so aborting here costs nothing but a re-try.
+    const purge = purgeBrain(s, { preserveCorrections: true })
+    if (!purge.ok) {
+      auditLog('brain.rebuild.purge_failed', {})
+      return {
+        queued: 0,
+        error:
+          'Could not fully reset the brain store before rebuilding — nothing was re-extracted, and your corrections are safe. Try again, or check for files OneDrive/antivirus may be holding open.'
+      }
+    }
+    // MI-2.5 Fix E: `replayPending` survives independently of the backfill's own `backfillRequested` flag
+    // — a quit/crash between the re-extraction backfill draining and this callback's replay actually
+    // running would otherwise leave replayCorrections never having run, with nothing left to resume it
+    // (resumeBackfillIfPending only acts on backfillRequested). finishRebuildReplay clears this flag once
+    // the replay genuinely completes; see ingest.ts's resumeBackfillIfPending for the boot-time resume.
+    void updateBrainIndex(s, (i) => {
+      i.replayPending = true
     })
+    const r = startBackfill(() => finishRebuildReplay(s))
     auditLog('brain.backfill.start', { queued: r.queued, rebuild: true })
     return r
   })
@@ -2353,7 +2378,14 @@ function registerIpc(): void {
     // gets { ok: true, asrSkipped: true, reason } and the skip is audit-logged.
     if (alsoFixAsr && oldName && oldName !== newName) {
       const composed = appendAsrCorrection(getSettings().asrCorrections, oldName, newName)
-      if (composed.kind === 'append') setSettings({ asrCorrections: composed.pairs })
+      if (composed.kind === 'append') {
+        setSettings({ asrCorrections: composed.pairs })
+        // MI-2.5 Fix H: a DISTINCT audit event, separate from brain.entity.renamed below — installing an
+        // ASR rewrite rule silently changes how future spoken transcripts get transcribed, a
+        // security-relevant setting mutation that must be visible in the trail on its own, not just
+        // inferable from the rename. (The skipped-pair path already got its own distinct log below.)
+        auditLog('brain.entity.asr_correction_added', { kind })
+      }
       if (composed.kind === 'skipped') {
         auditLog('brain.entity.renamed', { kind, asrSkipped: true })
         return { ok: true, asrSkipped: true, reason: composed.reason }

@@ -107,7 +107,8 @@ const api = {
   brainBackfill: (): Promise<{ queued: number }> => ipcRenderer.invoke(IPC.brainBackfill),
   brainOpenDashboard: (): Promise<{ ok: boolean; error?: string }> =>
     ipcRenderer.invoke(IPC.brainOpenDashboard),
-  brainRebuildAll: (): Promise<{ queued: number }> => ipcRenderer.invoke(IPC.brainRebuildAll),
+  // MI-2.5 Fix F: `error` is set (queued: 0) when a purge failure aborts the rebuild before it starts.
+  brainRebuildAll: (): Promise<{ queued: number; error?: string }> => ipcRenderer.invoke(IPC.brainRebuildAll),
   brainRead: (): Promise<import('@shared/brain').BrainRead> => ipcRenderer.invoke(IPC.brainRead),
   // Canonical people/account names only — feeds the ASR entity-casing bias (lib/entity-casing.ts).
   brainEntityNames: (): Promise<import('@shared/ipc').BrainEntityNamesResult> =>

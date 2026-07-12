@@ -41,9 +41,10 @@ import {
   readDeal,
   writeDeal,
   listEntities,
-  listMeetingExtractions
+  listMeetingExtractions,
+  withEntityLock
 } from './store'
-import { applyCorrections, readAliasMap, resolveEntitySlug } from './corrections'
+import { applyCorrections, readAliasMap, resolveEntitySlug, replayCorrections } from './corrections'
 
 /**
  * Brain ingest — turns one saved transcript into a structured extraction, then merges it into the
@@ -525,26 +526,31 @@ const queue: Job[] = []
 // The network-bound stage (extractMeeting, seconds-to-a-minute per call) is what a 100-meeting backfill
 // was burning wall-clock time on serially, so up to EXTRACT_CONCURRENCY of those calls now run at once.
 // The local-mutation stage (ingestExtraction, plus the error-path index write) stays on a single
-// promise chain — ingestChain — so entity files (account/person/deal/graph, none of which have their own
-// read-modify-write lock the way index.json has `indexLock` below) are never read-modify-written by two
-// jobs at the same time. Concurrency lives entirely in "how many extractions can be in flight", not in
-// "how many merges can run at once".
+// serialization lane — store.ts's withEntityLock (MI-2.5 Fix C) — so entity files (account/person/deal/
+// graph, none of which have their own read-modify-write lock the way index.json has `indexLock` below)
+// are never read-modify-written by two jobs (or a job and a human correction) at the same time.
+// Concurrency lives entirely in "how many extractions can be in flight", not in "how many merges can run
+// at once".
 const EXTRACT_CONCURRENCY = 3
 let backfillTotal = 0
 let backfillDone = 0
 // Jobs currently running extractMeeting — bounded to EXTRACT_CONCURRENCY. A job leaves this set the
 // moment its extraction settles (success or failure), immediately freeing a slot for the next one,
-// independent of how long that job's own serial ingest takes to reach the front of ingestChain.
+// independent of how long that job's own serial ingest takes to reach the front of the withEntityLock lane.
 const extracting = new Set<Job>()
 // Every job that's been spliced out of `queue` but hasn't yet finished its FULL lifecycle (extracting,
-// or sitting in/being processed by ingestChain) — a superset of `extracting`. Replaces the old single
+// or sitting in/being processed by the withEntityLock lane). A superset of `extracting`. Replaces the old single
 // `currentJob`: with concurrent extraction, more than one file can be "not in queue, not yet ingested"
 // at a time, so startBackfill()'s in-flight dedup guard (a file being worked on right now must not get
 // queued a second time by a re-click of "Index meetings") needs a set, not a single slot.
 const inFlightJobs = new Set<Job>()
 // Serializes ingestExtraction + the error-path index write, in the order each job's EXTRACTION finished
 // (not the order jobs started) — see the EXTRACT_CONCURRENCY comment above for why this must stay serial.
-let ingestChain: Promise<void> = Promise.resolve()
+// MI-2.5 Fix C: this lane is store.ts's shared `withEntityLock` (not a private variable here anymore) —
+// corrections.ts's five human-correction mutations serialize through the exact same lane, so a rename/
+// merge/field-pin/commitment-reject can never race an in-flight backfill's read-modify-write of the same
+// entity file (the pre-fix gap: a correction running concurrently with a backfill job could lose an
+// update or resurrect a tombstoned entity).
 
 // index.json has several independent writers (each job's own success/failure record, the
 // queue-drained cleanup, and startBackfill's `backfillRequested` flag) that all do a
@@ -684,7 +690,7 @@ async function runExtractionStage(job: Job): Promise<JobResult> {
  *  warnings must refresh right away. `origin: 'backfill'` = a job queued by startBackfill; linting is
  *  deferred to maybeFinishDrain() so a 100+ meeting backfill re-lints the whole brain ONCE, not once per
  *  meeting (lintBrain walks every person + deal entity file — O(entities) work per call). Always called
- *  through `ingestChain` (never directly) so two of these never run concurrently. */
+ *  through store.ts's withEntityLock (never directly) so two of these never run concurrently. */
 async function finishJob(result: JobResult): Promise<void> {
   const { job, s } = result
   try {
@@ -705,8 +711,8 @@ async function finishJob(result: JobResult): Promise<void> {
   // Only a backfill-origin job advances the backfill progress counter — a live (just-saved meeting) job
   // finishing while a backfill happens to be running must never nudge someone else's progress bar (this
   // is also what makes backfillDone/backfillTotal meaningful to reset per-run in startBackfill: they only
-  // ever move in lockstep with backfill-origin work). Bumped here, inside ingestChain, so it advances in
-  // the same strictly-serial order as the ingest/error-record it belongs to.
+  // ever move in lockstep with backfill-origin work). Bumped here, inside the withEntityLock lane, so it
+  // advances in the same strictly-serial order as the ingest/error-record it belongs to.
   if (job.origin === 'backfill') backfillDone = Math.min(backfillTotal, backfillDone + 1)
 }
 
@@ -794,13 +800,13 @@ function pump(): void {
     void runExtractionStage(job).then((result) => {
       extracting.delete(job)
       pump() // a slot just freed — start the next eligible extraction now, without waiting on this job's ingest
-      ingestChain = ingestChain
-        .then(() => finishJob(result))
+      void withEntityLock(() => finishJob(result))
         // Defensive: finishJob catches its own extraction/ingest errors internally and should never
         // reject, but if it somehow did, letting the rejection propagate unhandled would permanently wedge
-        // ingestChain — every later job's `.then()` chained onto a rejected promise skips straight to
+        // the lane — every later caller's `.then()` chained onto a rejected promise skips straight to
         // re-rejecting, so no further job would ever ingest. Swallowing it here (like indexLock does
-        // above) keeps the chain alive for the next job.
+        // above) keeps the lane alive for the next job — withEntityLock itself also guards against this,
+        // this is belt-and-suspenders.
         .catch((e) => mainLog.error('[brain] unexpected error finishing a brain ingest job:', e))
         .finally(() => {
           inFlightJobs.delete(job)
@@ -818,16 +824,43 @@ export function enqueueIngest(file: string): void {
 }
 
 /**
+ * Runs the journal replay a rebuild depends on, then clears the `replayPending` flag that survives a
+ * quit/crash mid-rebuild (MI-2.5 Fix E) — shared by brain:rebuildAll's own onDrained callback (index.ts)
+ * and resumeBackfillIfPending below, so a replay interrupted by a quit still completes exactly the same
+ * way a same-session rebuild would. replayCorrections is idempotent (Fix D), so re-running it here even
+ * when it partially ran before the crash converges to the same fully-corrected state.
+ */
+export async function finishRebuildReplay(s: Settings): Promise<void> {
+  const r = await replayCorrections(s)
+  if (r.error) mainLog.error(`[brain] rebuild replay could not run: ${r.error}`)
+  await updateIndex(s, (i) => {
+    i.replayPending = false
+  })
+}
+
+/**
  * Resume an interrupted backfill on app boot: the request flag persists in index.json until the queue
  * fully drains, so a quit/relaunch mid-backfill picks up the remaining transcripts automatically.
  * Never starts spontaneously — only when a backfill was explicitly requested and left unfinished.
+ *
+ * MI-2.5 Fix E: also resumes an interrupted brain:rebuildAll's journal replay. `replayPending` survives
+ * independently of `backfillRequested` — the re-extraction backfill portion of a rebuild can finish (and
+ * clear backfillRequested) BEFORE a crash interrupts the replay step itself, so checking backfillRequested
+ * alone would miss that window entirely.
  */
 export function resumeBackfillIfPending(): void {
   try {
-    const idx = readIndex(getSettings())
+    const s = getSettings()
+    const idx = readIndex(s)
     if (idx.backfillRequested) {
-      const r = startBackfill()
+      const onDrained = idx.replayPending ? () => finishRebuildReplay(s) : undefined
+      const r = startBackfill(onDrained)
       if (r.queued > 0) mainLog.info(`[brain] resuming interrupted backfill: ${r.queued} transcripts remaining`)
+    } else if (idx.replayPending) {
+      // The backfill portion of an interrupted rebuild already finished (or never had any work) before
+      // the crash, but the journal replay step itself never completed — nothing left to queue, just run
+      // the replay now.
+      void finishRebuildReplay(s)
     }
   } catch {
     /* brain store unreadable — a manual backfill will surface the real error */
@@ -863,7 +896,7 @@ export function startBackfill(onDrained?: () => void | Promise<void>): { queued:
   const extractedSlugs = new Set(listMeetingExtractions(s))
   // pump() has already spliced any currently-extracting-or-ingesting job out of `queue` by the time it's
   // mid-flight — omitting those here would let a re-click of "Index meetings" queue the exact same file
-  // a second time while it's still being extracted (or is sitting in ingestChain). inFlightJobs covers
+  // a second time while it's still being extracted (or is sitting in the withEntityLock lane). inFlightJobs covers
   // both a backfill job and a live job (a live job can never collide with a backfill candidate by
   // content, but checking it unconditionally is simpler than branching on origin and costs nothing).
   const inFlight = new Set(queue.map((j) => basename(j.file)))
