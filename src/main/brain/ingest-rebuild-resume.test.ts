@@ -6,8 +6,15 @@ import { app } from 'electron'
 import type { StreamHandlers, StreamOptions, StreamHandle } from '../llm/shared'
 import { getSettings, setSettings, setApiKey } from '../store'
 import { MeetingExtractionSchema, type MeetingExtraction } from '@shared/brain'
-import { ingestExtraction, startBackfill, brainBackfillProgress, resumeBackfillIfPending } from './ingest'
-import { readIndex, writeIndex, readAccount, writeAccount, slugify } from './store'
+import {
+  ingestExtraction,
+  startBackfill,
+  brainBackfillProgress,
+  resumeBackfillIfPending,
+  startRebuild,
+  finishRebuildReplay
+} from './ingest'
+import { readIndex, writeIndex, readAccount, writeAccount, brainDir, slugify } from './store'
 import { renameEntity } from './corrections'
 
 vi.mock('electron')
@@ -105,5 +112,90 @@ describe('resumeBackfillIfPending resumes an interrupted rebuild replay (Fix E)'
   it('does nothing when neither flag is set', () => {
     expect(() => resumeBackfillIfPending()).not.toThrow()
     expect(brainBackfillProgress().running).toBe(false)
+  })
+})
+
+/**
+ * MI-2.5 review Fix 2 — a rebuild must never report success when the correction journal is corrupt/
+ * blocked (0 corrections replayed): startRebuild refuses up front, and finishRebuildReplay leaves
+ * replayPending set + records the error rather than silently clearing it.
+ */
+describe('rebuild refuses / surfaces a corrupt-journal replay failure (review Fix 2)', () => {
+  let userData: string
+  let meetingsFolder: string
+
+  beforeEach(() => {
+    userData = mkdtempSync(join(tmpdir(), 'asktoto-rebuild-blocked-test-'))
+    meetingsFolder = mkdtempSync(join(tmpdir(), 'asktoto-rebuild-blocked-meetings-'))
+    ;(app.getPath as ReturnType<typeof vi.fn>).mockImplementation((name: string) => {
+      if (name === 'userData') return userData
+      return join(userData, name)
+    })
+    setSettings({ meetingsFolder })
+    setApiKey('anthropic', 'fake-test-key-not-real')
+  })
+  afterEach(() => {
+    rmSync(userData, { recursive: true, force: true })
+    rmSync(meetingsFolder, { recursive: true, force: true })
+    vi.restoreAllMocks()
+  })
+
+  const blockTheJournal = async (): Promise<void> => {
+    const s = getSettings()
+    const md = '---\ntype: meeting-transcript\nmode: "meeting"\ndate: 2026-06-01\n---\n\nhello'
+    await ingestExtraction(s, MeetingExtractionSchema.parse({ account: { name: 'Acme', sector: 'banking', confidence: 'EXTRACTED' } }), md, join(meetingsFolder, 'm1.md'))
+    // Corrupt the journal, then trigger detection+quarantine so the durable block is armed.
+    writeFileSync(join(brainDir(s), 'corrections.json'), '{ corrupt not an array', 'utf8')
+    await renameEntity(s, { kind: 'account', id: slugify('Acme'), newName: 'Acme Two' }).catch(() => undefined)
+  }
+
+  it('startRebuild refuses (queued:0 + error) over a blocked journal, WITHOUT purging or setting replayPending', async () => {
+    await blockTheJournal()
+    const s = getSettings()
+    const before = readAccount(s, slugify('Acme'))
+    expect(before).toBeTruthy() // entities still present — nothing purged yet
+
+    const r = await startRebuild(s)
+    expect(r.queued).toBe(0)
+    expect(r.error).toBeTruthy()
+    expect(readAccount(s, slugify('Acme'))).toBeTruthy() // store NOT purged
+    expect(readIndex(s).replayPending).toBe(false) // never entered the rebuild
+  })
+
+  it('finishRebuildReplay over a blocked journal leaves replayPending SET, records replayError, and pushes a human-visible warning', async () => {
+    await blockTheJournal()
+    const s = getSettings()
+    // Simulate: a rebuild's backfill drained and its onDrained replay callback now runs against a journal
+    // that turned out to be blocked.
+    const idx = readIndex(s)
+    idx.replayPending = true
+    await writeIndex(s, idx)
+
+    await finishRebuildReplay(s)
+
+    const after = readIndex(s)
+    expect(after.replayPending).toBe(true) // NOT cleared — the rebuild is not silently "finished"
+    expect(after.replayError).toBeTruthy()
+    expect(after.warnings.some((w) => /could not re-apply your saved corrections/i.test(w))).toBe(true)
+  })
+
+  it('finishRebuildReplay over a healthy journal clears replayPending, replayError, and its warning', async () => {
+    const s = getSettings()
+    const md = '---\ntype: meeting-transcript\nmode: "meeting"\ndate: 2026-06-01\n---\n\nhello'
+    await ingestExtraction(s, MeetingExtractionSchema.parse({ account: { name: 'Acme', sector: 'banking', confidence: 'EXTRACTED' } }), md, join(meetingsFolder, 'm1.md'))
+    await renameEntity(s, { kind: 'account', id: slugify('Acme'), newName: 'Acme Two' })
+
+    const idx = readIndex(s)
+    idx.replayPending = true
+    idx.replayError = 'stale error'
+    idx.warnings = ['Rebuild could not re-apply your saved corrections: stale error']
+    await writeIndex(s, idx)
+
+    await finishRebuildReplay(s)
+
+    const after = readIndex(s)
+    expect(after.replayPending).toBe(false)
+    expect(after.replayError).toBeUndefined()
+    expect(after.warnings.some((w) => /could not re-apply/i.test(w))).toBe(false)
   })
 })

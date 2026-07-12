@@ -1,4 +1,4 @@
-import { existsSync, readdirSync, renameSync } from 'node:fs'
+import { existsSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { z } from 'zod'
 import type { Settings } from '@shared/ipc'
@@ -64,6 +64,42 @@ import {
 
 const ENTITY_KINDS = ['person', 'account', 'deal'] as const
 const CORRECTIONS_REL = 'corrections.json'
+// MI-2.5 review Fix 1: a durable sentinel written the moment a corrupt journal is detected+quarantined.
+// Its EXISTENCE is what keeps corrections "blocked" across process restarts and across the very next
+// call — the corrupt file itself has already been renamed away by then, so without this marker
+// parseJournalFile would see `absent` and a caller would silently start a fresh seq:0 journal, discarding
+// every prior correction with no signal. NOT a `.json` file, so isConflictCopyName never mistakes it for
+// a journal or a conflict copy. Resolution is an explicit human/dev action: delete this file (or call
+// clearJournalCorruptionLock) once the quarantined `corrections.corrupt-*.json` has been inspected. */
+const CORRUPTION_LOCK_REL = 'corrections.corruption.lock'
+
+const BLOCKED_JOURNAL_ERROR =
+  'The correction journal is corrupt and corrections are paused. The prior journal was preserved as a corrections.corrupt-*.json copy; resolve the block (see corrections.corruption.lock) before making further corrections.'
+
+function corruptionLockPath(s: Settings): string {
+  return join(brainDir(s), CORRUPTION_LOCK_REL)
+}
+
+/** True while corrections are blocked by a previously-detected, not-yet-resolved journal corruption. */
+export function isJournalCorruptionBlocked(s: Settings): boolean {
+  return existsSync(corruptionLockPath(s))
+}
+
+/** Explicit resolution of a corruption block (Fix 1): removes the sentinel so corrections resume. The
+ *  quarantined `corrections.corrupt-*.json` copy is intentionally left in place for inspection/recovery.
+ *  Returns whether a block was actually cleared. */
+export function clearJournalCorruptionLock(s: Settings): boolean {
+  const p = corruptionLockPath(s)
+  if (!existsSync(p)) return false
+  try {
+    rmSync(p, { force: true })
+    mainLog.warn('[brain] corrections corruption block cleared — corrections resume')
+    return true
+  } catch (e) {
+    mainLog.error('[brain] could not clear corrections corruption lock:', e)
+    return false
+  }
+}
 
 // ── Journal ──────────────────────────────────────────────────────────────────
 //
@@ -119,15 +155,18 @@ function parseJournalFile(path: string): ParsedJournalFile {
 /** OneDrive conflict-copy naming (Fix G): any sibling of `corrections.json` that starts with
  *  "corrections" and ends ".json" — covers both the classic `corrections-<hostname>.json` form and
  *  personal OneDrive's `corrections (<user>'s conflicted copy <date>).json` form — EXCLUDING our own
- *  bookkeeping files (`corrections.corrupt-*` quarantine copies, `corrections.merged-*` already-resolved
- *  copies), which must never be re-folded in as if they were live conflicting data. */
+ *  bookkeeping files, matched by the `.corrupt-`/`.merged-` infix rather than a prefix: an already-
+ *  resolved copy is renamed to `<origname>.merged-<ts>.json` (whose ORIGINAL name may itself carry a
+ *  `-<hostname>` segment, so the marker lands mid-name, not at the front), and a set-aside corrupt copy
+ *  to `corrections.corrupt-conflict-<origname>-<ts>.json`. Matching by prefix alone would re-detect (and
+ *  endlessly re-process/re-rename) those on every subsequent call. */
 function isConflictCopyName(f: string): boolean {
   return (
     f !== CORRECTIONS_REL &&
     f.startsWith('corrections') &&
     f.endsWith('.json') &&
-    !f.startsWith('corrections.corrupt-') &&
-    !f.startsWith('corrections.merged-')
+    !f.includes('.corrupt-') &&
+    !f.includes('.merged-')
   )
 }
 
@@ -159,18 +198,32 @@ const journalEntryIdentity = (e: CorrectionEntry): string => JSON.stringify({ ki
  * the final merged order.
  */
 function mergeJournalSources(sources: Array<{ sourceId: string; entries: CorrectionEntry[] }>): CorrectionEntry[] {
+  const entriesBySource = new Map<string, CorrectionEntry[]>()
+  for (const src of sources) entriesBySource.set(src.sourceId, src.entries)
   const tagged: TaggedEntry[] = []
   for (const src of sources) src.entries.forEach((entry, localSeq) => tagged.push({ sourceId: src.sourceId, localSeq, entry }))
 
+  // Minor (c): an entity_unmerge's base identity is just {kind, at, targetSeq}; two unmerges from
+  // different devices that coincidentally share `at` and `targetSeq` but reference DIFFERENT merges would
+  // otherwise dedup to one. Fold the identity of the entry the targetSeq points at (within its OWN source
+  // journal) into the dedup key so distinct unmerges stay distinct, while a genuinely-duplicate synced
+  // unmerge (same referenced merge) still collapses. Non-unmerge entries already embed their entity ids
+  // in `payload`, so their base identity is unambiguous.
+  const dedupKey = (t: TaggedEntry): string => {
+    if (t.entry.kind !== 'entity_unmerge') return journalEntryIdentity(t.entry)
+    const referenced = entriesBySource.get(t.sourceId)?.[t.entry.payload.targetSeq]
+    return `${journalEntryIdentity(t.entry)}|ref=${referenced ? journalEntryIdentity(referenced) : 'none'}`
+  }
+
   const byIdentity = new Map<string, TaggedEntry>()
   for (const t of tagged) {
-    const id = journalEntryIdentity(t.entry)
+    const id = dedupKey(t)
     if (!byIdentity.has(id)) byIdentity.set(id, t)
   }
   const unique = [...byIdentity.values()].sort((a, b) => {
     if (a.entry.at !== b.entry.at) return a.entry.at < b.entry.at ? -1 : 1
-    const ia = journalEntryIdentity(a.entry)
-    const ib = journalEntryIdentity(b.entry)
+    const ia = dedupKey(a)
+    const ib = dedupKey(b)
     return ia < ib ? -1 : ia > ib ? 1 : 0
   })
 
@@ -232,6 +285,15 @@ export async function readCorrectionsJournalSafe(
 ): Promise<CorrectionsJournalGate> {
   const root = brainDir(s)
   const path = join(root, CORRECTIONS_REL)
+
+  // Fix 1 (durable block): a previously-detected corruption stays blocked until explicitly resolved —
+  // checked FIRST, before parseJournalFile, because by now the corrupt file has already been renamed to
+  // a corrections.corrupt-*.json sibling, so the primary would parse as `absent` and (without this gate)
+  // the next append would silently start a fresh seq:0 journal, discarding every prior correction.
+  if (isJournalCorruptionBlocked(s)) {
+    return { ok: false, entries: [], error: BLOCKED_JOURNAL_ERROR }
+  }
+
   const primary = parseJournalFile(path)
 
   if (primary.status === 'corrupt') {
@@ -245,11 +307,18 @@ export async function readCorrectionsJournalSafe(
         error: `Correction journal is corrupt and could not be preserved (${e instanceof Error ? e.message : String(e)}). Corrections are paused until this is resolved.`
       }
     }
-    mainLog.warn(`[brain] corrections journal was corrupt — preserved to ${quarantinedTo}, corrections paused`)
+    // Fix 1: drop the durable sentinel so EVERY subsequent call (this session or after a restart) stays
+    // blocked until a human resolves it — not just the one call that happened to catch the corruption.
+    try {
+      writeFileSync(corruptionLockPath(s), JSON.stringify({ detectedAt: now(), quarantinedTo }), 'utf8')
+    } catch (e) {
+      mainLog.error('[brain] could not write corrections corruption lock — block may not persist:', e)
+    }
+    mainLog.warn(`[brain] corrections journal was corrupt — preserved to ${quarantinedTo}, corrections BLOCKED until resolved`)
     return {
       ok: false,
       entries: [],
-      error: `The correction journal was corrupt and has been preserved at ${quarantinedTo} for inspection. Corrections are paused until this is resolved.`
+      error: `The correction journal was corrupt and has been preserved at ${quarantinedTo} for inspection. ${BLOCKED_JOURNAL_ERROR}`
     }
   }
 
@@ -264,6 +333,16 @@ export async function readCorrectionsJournalSafe(
     if (parsed.status === 'ok') {
       sources.push({ sourceId: name, entries: parsed.entries })
       resolvedCopies.push(name)
+    } else if (parsed.status === 'corrupt') {
+      // Minor (a): a corrupt conflict copy would otherwise be re-parsed (and re-skipped) on EVERY call
+      // forever. Rename it ONCE into the corrupt- namespace (excluded from isConflictCopyName), so it
+      // stops being rechecked while its bytes stay preserved for inspection.
+      try {
+        renameSync(join(root, name), join(root, `corrections.corrupt-conflict-${name.replace(/\.json$/i, '')}-${now().replace(/[:.]/g, '-')}.json`))
+        mainLog.warn(`[brain] a corrupt OneDrive conflict copy (${name}) was preserved and set aside`)
+      } catch (e) {
+        mainLog.warn(`[brain] could not set aside corrupt conflict copy ${name}:`, e)
+      }
     }
   }
   const merged = mergeJournalSources(sources)
@@ -1085,7 +1164,13 @@ const MAX_FIELD_STRING_LEN = 2000
 async function applyFieldUpdate(
   s: Settings,
   payload: { kind: EntityKind; id: string; field: string; value?: unknown },
-  at: string
+  at: string,
+  // MI-2.5 review Fix 3: a `dryRun` runs the SAME read + validation + snapshot computation but skips
+  // every entity write — the read-only precheck updateEntityField uses to validate and capture the
+  // snapshot BEFORE it appends the journal entry (the commit point), so the journal-first ordering
+  // proven for rename/merge now covers field_update too. A crash between the append and the (idempotent)
+  // real write is recovered by replay; a crash after the write is a replay no-op — both converge.
+  opts?: { dryRun?: boolean }
 ): Promise<{ ok: boolean; error?: string; snapshot?: { oldField: unknown } }> {
   if (payload.kind === 'person') {
     const found = readPerson(s, payload.id)
@@ -1097,7 +1182,7 @@ async function applyFieldUpdate(
       const old = person.role_provenance
       person.role_provenance = pinProvenant(old, parsed.data, at, eqStrict)
       person.role = person.role_provenance.value
-      await writePerson(s, payload.id, person)
+      if (!opts?.dryRun) await writePerson(s, payload.id, person)
       return { ok: true, snapshot: { oldField: old } }
     }
     if (payload.field === 'org') {
@@ -1106,7 +1191,7 @@ async function applyFieldUpdate(
       const old = person.org_provenance
       person.org_provenance = pinProvenant(old, parsed.data, at, eqStrict)
       person.account = person.org_provenance.value
-      await writePerson(s, payload.id, person)
+      if (!opts?.dryRun) await writePerson(s, payload.id, person)
       return { ok: true, snapshot: { oldField: old } }
     }
     return { ok: false, error: `Unsupported field "${payload.field}" for person.` }
@@ -1123,7 +1208,7 @@ async function applyFieldUpdate(
       account.sector_provenance = pinProvenant(old, parsed.data, at, eqStrict)
       account.sector = account.sector_provenance.value
       account.sector_confidence = account.sector_provenance.confidence
-      await writeAccount(s, payload.id, account)
+      if (!opts?.dryRun) await writeAccount(s, payload.id, account)
       return { ok: true, snapshot: { oldField: old } }
     }
     return { ok: false, error: `Unsupported field "${payload.field}" for account.` }
@@ -1139,7 +1224,7 @@ async function applyFieldUpdate(
     const old = deal.stage_provenance
     deal.stage_provenance = pinProvenant(old, parsed.data, at, eqStrict)
     deal.stage = deal.stage_provenance.value
-    await writeDeal(s, payload.id, deal)
+    if (!opts?.dryRun) await writeDeal(s, payload.id, deal)
     return { ok: true, snapshot: { oldField: old } }
   }
   if (payload.field === 'win_likelihood_band') {
@@ -1149,7 +1234,7 @@ async function applyFieldUpdate(
     deal.win_likelihood_band_provenance = pinProvenant(old, parsed.data, at, eqStrict)
     deal.win_likelihood_band = deal.win_likelihood_band_provenance.value
     deal.band_evidence = deal.win_likelihood_band_provenance.quote ?? ''
-    await writeDeal(s, payload.id, deal)
+    if (!opts?.dryRun) await writeDeal(s, payload.id, deal)
     return { ok: true, snapshot: { oldField: old } }
   }
   if (payload.field === 'velocity') {
@@ -1158,7 +1243,7 @@ async function applyFieldUpdate(
     const old = deal.velocity_provenance
     deal.velocity_provenance = pinProvenant(old, parsed.data, at, eqVelocity)
     deal.velocity = deal.velocity_provenance.value
-    await writeDeal(s, payload.id, deal)
+    if (!opts?.dryRun) await writeDeal(s, payload.id, deal)
     return { ok: true, snapshot: { oldField: old } }
   }
   if (payload.field === 'amount') {
@@ -1166,7 +1251,7 @@ async function applyFieldUpdate(
     if (!parsed.success) return { ok: false, error: 'Invalid value for amount.' }
     const old = deal.amount
     deal.amount = pinProvenant(old, parsed.data, at, eqAmount)
-    await writeDeal(s, payload.id, deal)
+    if (!opts?.dryRun) await writeDeal(s, payload.id, deal)
     return { ok: true, snapshot: { oldField: old } }
   }
   if (payload.field === 'close_date') {
@@ -1174,7 +1259,7 @@ async function applyFieldUpdate(
     if (!parsed.success) return { ok: false, error: 'Invalid value for close_date.' }
     const old = deal.close_date
     deal.close_date = pinProvenant(old, parsed.data, at, eqStrict)
-    await writeDeal(s, payload.id, deal)
+    if (!opts?.dryRun) await writeDeal(s, payload.id, deal)
     return { ok: true, snapshot: { oldField: old } }
   }
   return { ok: false, error: `Unsupported field "${payload.field}" for deal.` }
@@ -1194,9 +1279,14 @@ export async function updateEntityField(
     const sanitized = { ...payload, id: slugify(payload.id) }
     const gate = await readCorrectionsJournalSafe(s)
     if (!gate.ok) return { ok: false, error: gate.error }
+    // Fix 3: journal-first. Validate + capture the snapshot read-only, append the journal entry (the
+    // commit point), THEN perform the real write — so a crash between the two leaves a replayable record
+    // instead of a durably-pinned entity with no journal trace (which the next rebuild would revert).
+    const pre = await applyFieldUpdate(s, sanitized, at, { dryRun: true })
+    if (!pre.ok) return { ok: false, error: pre.error }
+    await appendCorrectionEntry(s, { seq: 0, at, kind: 'field_update', payload: sanitized, snapshot: pre.snapshot }, gate.entries)
     const r = await applyFieldUpdate(s, sanitized, at)
     if (!r.ok) return { ok: false, error: r.error }
-    await appendCorrectionEntry(s, { seq: 0, at, kind: 'field_update', payload: sanitized, snapshot: r.snapshot }, gate.entries)
     return { ok: true }
   })
 }
@@ -1205,7 +1295,12 @@ export async function updateEntityField(
 
 async function applyRejectCommitment(
   s: Settings,
-  payload: { personSlug: string; dealSlug?: string; text: string }
+  payload: { personSlug: string; dealSlug?: string; text: string },
+  // Fix 3: `dryRun` runs the same match detection without writing — the read-only precheck rejectCommitment
+  // uses before appending the journal entry (see updateEntityField/applyFieldUpdate for the identical
+  // journal-first rationale). Setting status='rejected' is idempotent, so a replay after the live write is
+  // a no-op and a replay after a crash-before-write completes it.
+  opts?: { dryRun?: boolean }
 ): Promise<{ ok: boolean; error?: string }> {
   const key = commitmentKey(payload.text)
   let matched = false
@@ -1216,7 +1311,7 @@ async function applyRejectCommitment(
     const row = person.commitments?.find((c) => commitmentKey(c.text) === key)
     if (row) {
       row.status = 'rejected'
-      await writePerson(s, payload.personSlug, person)
+      if (!opts?.dryRun) await writePerson(s, payload.personSlug, person)
       matched = true
     }
   }
@@ -1228,7 +1323,7 @@ async function applyRejectCommitment(
       const row = deal.commitments.find((c) => commitmentKey(c.text) === key)
       if (row) {
         row.status = 'rejected'
-        await writeDeal(s, payload.dealSlug, deal)
+        if (!opts?.dryRun) await writeDeal(s, payload.dealSlug, deal)
         matched = true
       }
     }
@@ -1255,9 +1350,12 @@ export async function rejectCommitment(
     }
     const gate = await readCorrectionsJournalSafe(s)
     if (!gate.ok) return { ok: false, error: gate.error }
+    // Fix 3: journal-first — precheck read-only, append (commit point), then the real write.
+    const pre = await applyRejectCommitment(s, sanitized, { dryRun: true })
+    if (!pre.ok) return { ok: false, error: pre.error }
+    await appendCorrectionEntry(s, { seq: 0, at, kind: 'commitment_reject', payload: sanitized }, gate.entries)
     const r = await applyRejectCommitment(s, sanitized)
     if (!r.ok) return { ok: false, error: r.error }
-    await appendCorrectionEntry(s, { seq: 0, at, kind: 'commitment_reject', payload: sanitized }, gate.entries)
     return { ok: true }
   })
 }

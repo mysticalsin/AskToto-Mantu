@@ -66,7 +66,7 @@ export type AuditEvent =
   | 'brain.entity.field_updated'
   | 'brain.entity.asr_correction_added'
   | 'brain.commitment.rejected'
-  | 'brain.rebuild.purge_failed'
+  | 'brain.rebuild.aborted'
   | 'note.saved'
   | 'answer.feedback'
   | 'provider.request'

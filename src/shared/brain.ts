@@ -266,7 +266,9 @@ export const CorrectionEntrySchema = z.discriminatedUnion('kind', [
   })
 ])
 export type CorrectionEntry = z.infer<typeof CorrectionEntrySchema>
-export const CorrectionsJournalSchema = z.array(CorrectionEntrySchema)
+// (The on-disk journal is read/validated per-entry in corrections.ts's parseJournalFile — tolerant of a
+//  single forward-compat unknown-kind entry — so there is no whole-array schema; a z.array() gate here
+//  would fail-closed on exactly the version-skew case that must be tolerated.)
 
 export const PersonEntitySchema = z.object({
   schema_version: z.number().default(BRAIN_SCHEMA_VERSION),
@@ -384,7 +386,13 @@ export const BrainIndexSchema = z.object({
   // the time the crash happens, if the re-extraction backfill itself finished before the replay step
   // did). resumeBackfillIfPending (ingest.ts) checks this on boot and runs the replay if it's still true,
   // so an interrupted rebuild always finishes with its corrections re-applied, never silently reverted.
-  replayPending: z.boolean().default(false)
+  replayPending: z.boolean().default(false),
+  // MI-2.5 review Fix 2: the last rebuild replay's failure reason, when it could not run (a corrupt/
+  // blocked journal, or an exception mid-replay). Set by finishRebuildReplay on failure and cleared on a
+  // clean replay; while set, `replayPending` is deliberately NOT cleared, so a rebuild that replayed zero
+  // corrections never reports success — the failure is surfaced (also mirrored into `warnings`) instead
+  // of the pre-fix behaviour of silently clearing the flag and reverting every human correction.
+  replayError: z.string().optional()
 })
 export type BrainIndex = z.infer<typeof BrainIndexSchema>
 
