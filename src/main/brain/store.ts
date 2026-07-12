@@ -103,10 +103,30 @@ export const pushUnique = <T>(arr: T[], item: T, key: (t: T) => string): void =>
  *  pushUnique above: corrections.ts's human-pin logic needs the identical history bookkeeping
  *  ingest.ts's mergeProvenant uses, and ingest.ts itself needs applyCorrections/readAliasMap FROM
  *  corrections.ts — so this shared piece has to sit below both, not inside either. */
-export type SupersededEntry<T> = { value: T; date: string; source_file: string }
+// MI-4 review (mixed-tier superseded permutation): `confidence` is OPTIONAL so every entry ever written
+// to disk before this field existed still parses — see the INFERRED fallback in `confOf` below, not a
+// migration. Threading it through means `laterEntry`'s ordering key can finally match `outranks`'s
+// (confidence tier first, then date, then source_file) instead of silently ignoring confidence — see
+// `laterEntry`'s own doc comment for why the mismatch was a real bug, not just an inconsistency.
+export type SupersededEntry<T> = { value: T; date: string; source_file: string; confidence?: Confidence }
 
+// Legacy entries written before this field existed (and any caller that still omits it) carry no
+// confidence slot at all — treated as the WEAKEST tier (INFERRED) for ordering purposes, never assumed
+// EXTRACTED. This is a read-time interpretation only (no on-disk migration): an old entry simply loses
+// every ordering tie-break to a same-value entry that DOES carry an explicit EXTRACTED confidence, which
+// is the conservative, fail-safe default.
+const confOf = <T>(e: SupersededEntry<T>): Confidence => e.confidence ?? 'INFERRED'
+
+// MI-4 review fix: previously ordered by (date, source_file) ALONE, ignoring confidence entirely — a
+// total order that could disagree with `outranks` (the SAME-named winner-selection order every merge
+// path uses), so a mixed-confidence, same-value superseded set could keep the WRONG (weaker-confidence)
+// sighting depending on which one happened to have a later date. Delegating to `outranks` here makes
+// this the same single ordering key everywhere: confidence tier first, then date, then source_file.
 const laterEntry = <T>(a: SupersededEntry<T>, b: SupersededEntry<T>): boolean =>
-  a.date > b.date || (a.date === b.date && a.source_file > b.source_file)
+  outranks(
+    { date: a.date, source_file: a.source_file, confidence: confOf(a) },
+    { date: b.date, source_file: b.source_file, confidence: confOf(b) }
+  )
 
 // Date-comparison caveat (applies to `outranks` and `laterEntry`): comparison is lexical — correct for
 // same-precision ISO-8601 strings, but a bare date sorts BELOW a full timestamp of the same day
@@ -135,11 +155,12 @@ export function outranks(
   return a.source_file > b.source_file
 }
 
-/** Append `entry` to a field's superseded history, deduped per value (keeping the max-(date,
- *  source_file) sighting), never containing the current value, sorted by that same key descending and
- *  capped at 10. Used by BOTH ingest.ts's mergeProvenant (rank-gated: the incoming candidate only wins
- *  if it `outranks` what's held) and corrections.ts's field-pin (unconditional: a human pin always
- *  wins) — the two are genuinely different operations that happen to share this one history primitive. */
+/** Append `entry` to a field's superseded history, deduped per value (keeping the max-(confidence tier,
+ *  date, source_file) sighting — MI-4: the same `outranks` order winner selection uses, via `laterEntry`
+ *  above), never containing the current value, sorted by that same key descending and capped at 10. Used
+ *  by BOTH ingest.ts's mergeProvenant (rank-gated: the incoming candidate only wins if it `outranks` what's
+ *  held) and corrections.ts's field-pin (unconditional: a human pin always wins) — the two are genuinely
+ *  different operations that happen to share this one history primitive. */
 export function pushSuperseded<T>(
   list: SupersededEntry<T>[],
   entry: SupersededEntry<T>,
@@ -162,6 +183,12 @@ export const eqStrict = <T>(a: T, b: T): boolean => a === b
 /** Value-equality for the `velocity` provenant field's {signal, evidence} object shape. */
 export const eqVelocity = (a: { signal: string; evidence: string }, b: { signal: string; evidence: string }): boolean =>
   a.signal === b.signal && a.evidence === b.evidence
+/** Value-equality for the deal `amount` provenant field's {value, currency} object shape (MI-4). Lives
+ *  here (not duplicated in ingest.ts/corrections.ts) for the same reason eqStrict/eqVelocity do — both
+ *  modules' amount merges (mergeProvenant's extraction-time merge, pinProvenant's human-pin) need the
+ *  identical equality rule so a value-identical re-confirmation is never miscounted as a change. */
+export const eqAmount = (a: { value: number; currency: string }, b: { value: number; currency: string }): boolean =>
+  a.value === b.value && a.currency === b.currency
 
 function ensureDirs(settings: Settings): string {
   const root = brainDir(settings)
