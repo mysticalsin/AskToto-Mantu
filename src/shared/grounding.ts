@@ -538,6 +538,21 @@ function parseFrenchNumber(tokens: string[], i: number): { value: number; next: 
 function foldForNumerals(span: string): string {
   const folded = foldCase(span)
   if (folded.length !== span.length || !span.includes('\u202f')) return folded
+  // NET-ZERO-SHIFT HARDENING (MI-4 review): equal overall length does NOT prove position-for-position
+  // correspondence. A ligature earlier in the span ('\ufb01' -> 'fi', +1 char) and a decomposed accent
+  // later in the SAME span ('e' + combining acute -> '\u00e9', -1 char) can cancel out \u2014 folded.length
+  // ends up equal to span.length by coincidence, while every position between the two shifts is off by
+  // one. Blindly re-stamping by index at that point reads span[i] (a genuine NNBSP) but writes over
+  // folded[i], which \u2014 because of the shift \u2014 is actually a DIGIT there, not the space the NNBSP folded
+  // to, splicing a stray space into the middle of a digit run and fragmenting it (e.g. a real 12500
+  // misread as a bare "1" plus a corrupted remainder \u2014 a fabricated hit that was never written).
+  // Verify EVERY stamped position actually lands on a space in the folded text FIRST; any mismatch means
+  // the length check's equality was coincidental, not real correspondence \u2014 fall back to the un-stamped
+  // folded text entirely (fail closed: the grouping is simply not recognized there, same "fewer hits"
+  // fallback as the length-mismatch case above).
+  for (let i = 0; i < span.length; i++) {
+    if (span[i] === '\u202f' && folded[i] !== ' ') return folded
+  }
   let out = ''
   for (let i = 0; i < folded.length; i++) out += span[i] === '\u202f' ? '\u202f' : folded[i]
   return out
