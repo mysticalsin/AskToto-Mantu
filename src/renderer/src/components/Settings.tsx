@@ -187,7 +187,9 @@ function LazyTextarea({
   className,
   placeholder,
   disabled,
-  id
+  id,
+  rows,
+  spellCheck
 }: {
   value: string
   onCommit: (v: string) => void
@@ -195,6 +197,8 @@ function LazyTextarea({
   placeholder?: string
   disabled?: boolean
   id?: string
+  rows?: number
+  spellCheck?: boolean
 }): JSX.Element {
   const { local, onChange, onBlur } = useLazyText(value, onCommit)
   return (
@@ -206,6 +210,8 @@ function LazyTextarea({
       onChange={(e) => onChange(e.target.value)}
       onBlur={onBlur}
       className={className}
+      rows={rows}
+      spellCheck={spellCheck}
     />
   )
 }
@@ -234,6 +240,99 @@ function LazyInput({
       placeholder={placeholder}
       onChange={(e) => onChange(e.target.value)}
       onBlur={onBlur}
+      className={className}
+    />
+  )
+}
+
+type AsrCorrection = PublicSettings['asrCorrections'][number]
+
+/** One `heard => correct` line per correction, in order. Pure (and lossy by design — a blank line or a
+ *  line with no "=>" or an empty "from" simply isn't a correction yet). Exported for a focused test. */
+export function serializeAsrCorrections(items: AsrCorrection[]): string {
+  return items.map((c) => `${c.from} => ${c.to}`).join('\n')
+}
+
+/** Inverse of serializeAsrCorrections. Pure. Exported for a focused test. */
+export function parseAsrCorrections(raw: string): AsrCorrection[] {
+  return raw
+    .split('\n')
+    .map((line) => {
+      const i = line.indexOf('=>')
+      if (i < 0) return null
+      const from = line.slice(0, i).trim()
+      const to = line.slice(i + 2).trim()
+      return from ? { from, to } : null
+    })
+    .filter((c): c is AsrCorrection => c != null)
+    .slice(0, 100)
+}
+
+/** Value-equality for two correction arrays (order-sensitive — that's how they render as lines). Pure.
+ *  Exported for a focused test. */
+export function sameAsrCorrections(a: AsrCorrection[], b: AsrCorrection[]): boolean {
+  return a.length === b.length && a.every((c, i) => c.from === b[i].from && c.to === b[i].to)
+}
+
+/**
+ * The vocabulary-corrections textarea is a controlled input over a DERIVED, LOSSY value: the array is
+ * serialized to `heard => correct` lines and re-parsed on every change, and the parse silently drops a
+ * blank line (e.g. one just started with Enter, before "=>" exists yet). A plain LazyTextarea isn't
+ * enough here: once the debounced commit round-trips through patch() → new `corrections` prop, that new
+ * prop is the RE-SERIALIZED (blank-line-stripped) array, which — compared naively — looks like a fresh
+ * external edit and would resync `local`, wiping the very newline the user just typed.
+ *
+ * Fix: compare the incoming prop against the last array WE ourselves committed (by value, not by the
+ * serialized string). Only an external change (profile switch, undo, another window) — one that doesn't
+ * match what we just committed — is allowed to overwrite in-progress typing.
+ */
+function VocabCorrectionsTextarea({
+  corrections,
+  onCommit,
+  disabled,
+  placeholder,
+  className
+}: {
+  corrections: AsrCorrection[]
+  onCommit: (next: AsrCorrection[]) => void
+  disabled?: boolean
+  placeholder?: string
+  className?: string
+}): JSX.Element {
+  const [local, setLocal] = useState(() => serializeAsrCorrections(corrections))
+  const lastCommitted = useRef(corrections)
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  useEffect(() => {
+    if (!sameAsrCorrections(corrections, lastCommitted.current)) {
+      lastCommitted.current = corrections
+      setLocal(serializeAsrCorrections(corrections))
+    }
+  }, [corrections])
+
+  const commit = (raw: string): void => {
+    const parsed = parseAsrCorrections(raw)
+    lastCommitted.current = parsed
+    onCommit(parsed)
+  }
+  const onChange = (v: string): void => {
+    setLocal(v)
+    if (timer.current) clearTimeout(timer.current)
+    timer.current = setTimeout(() => commit(v), 350)
+  }
+  const onBlur = (): void => {
+    if (timer.current) clearTimeout(timer.current)
+    commit(local)
+  }
+
+  return (
+    <textarea
+      value={local}
+      disabled={disabled}
+      placeholder={placeholder}
+      onChange={(e) => onChange(e.target.value)}
+      onBlur={onBlur}
+      rows={3}
       className={className}
     />
   )
@@ -771,7 +870,12 @@ function AiSection({
               <input
                 id={modelInputId}
                 list={`m-${provider}`}
-                value={baseModelName}
+                // Bind to the RAW stored value (not baseModelName, which resolves through the provider's
+                // fallback default) — same pattern as the Thinking model field below. baseModelName's
+                // fallback is right for DISPLAY text elsewhere on this page, but here it would make the
+                // field re-populate with the default the instant it's cleared, so backspacing to empty
+                // (→ "use default") was never actually possible.
+                value={settings.providerModels[provider] ?? ''}
                 disabled={provider === 'anthropic' || settings.managedKeys.includes('providerModels')}
                 onChange={(e) =>
                   patch({ providerModels: { ...settings.providerModels, [provider]: e.target.value } })
@@ -3513,9 +3617,9 @@ export function Settings({
                   </select>
                 </Section>
                 <Section title="Custom instructions" desc="Added to every mode's prompt. Leave blank to use the defaults.">
-                  <textarea
+                  <LazyTextarea
                     value={settings.systemPrompt}
-                    onChange={(e) => patch({ systemPrompt: e.target.value })}
+                    onCommit={(v) => patch({ systemPrompt: v })}
                     disabled={settings.managedKeys.includes('systemPrompt')}
                     rows={3}
                     spellCheck={false}
@@ -3656,25 +3760,10 @@ export function Settings({
                     onChange={(v) => patch({ asrEntityBias: v })}
                     disabled={settings.managedKeys.includes('asrEntityBias')}
                   />
-                  <textarea
-                    value={settings.asrCorrections.map((c) => `${c.from} => ${c.to}`).join('\n')}
-                    onChange={(e) =>
-                      patch({
-                        asrCorrections: e.target.value
-                          .split('\n')
-                          .map((line) => {
-                            const i = line.indexOf('=>')
-                            if (i < 0) return null
-                            const from = line.slice(0, i).trim()
-                            const to = line.slice(i + 2).trim()
-                            return from ? { from, to } : null
-                          })
-                          .filter((c): c is { from: string; to: string } => c != null)
-                          .slice(0, 100)
-                      })
-                    }
+                  <VocabCorrectionsTextarea
+                    corrections={settings.asrCorrections}
+                    onCommit={(next) => patch({ asrCorrections: next })}
                     placeholder={'Metis => Métis\nMantu => Mantu\nparakeet => Parakeet'}
-                    rows={3}
                     disabled={settings.managedKeys.includes('asrCorrections')}
                     className={[
                       ctl,
