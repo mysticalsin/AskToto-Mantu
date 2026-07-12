@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, readFileSync, writeFileSync, mkdirSync, existsSync
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import type { Settings } from '@shared/ipc'
-import { MeetingExtractionSchema, BRAIN_EXTRACTION_PROMPT, type MeetingExtraction, type DealEntity } from '@shared/brain'
+import { MeetingExtractionSchema, BRAIN_EXTRACTION_PROMPT, type MeetingExtraction, type DealEntity, type PersonEntity } from '@shared/brain'
 import { INJECTION_GUARD } from '@shared/prompts'
 import {
   extractJsonObject,
@@ -228,6 +228,27 @@ describe('brain', () => {
       x.deal = null
       await mergeExtraction(s, x, { file: 'm1.md', date: '', title: 't' })
       expect(buildBrainContext(s, 'the concerns seem to disappear over time').matched).toBe(false)
+    })
+
+    // Task MI-5 — a question phrased with a corrected-away surface form still hits the canonical
+    // record: token matching now expands to entity aliases[], not just the current id.
+    it('a question using a corrected-away alias still matches the canonical entity', async () => {
+      const person: PersonEntity = {
+        schema_version: 2,
+        id: 'acme-co',
+        aliases: ['Acme Corp'], // the pre-rename surface form
+        name: 'Acme Co',
+        role: 'CFO',
+        account: null,
+        meetings: [{ file: 'm1.md', date: '2026-06-01', title: 'Renewal call' }],
+        quotes: [],
+        stance_trail: [],
+        commitments: []
+      }
+      await writePerson(s, 'acme-co', person)
+      const { block, matched } = buildBrainContext(s, 'what did Acme Corp say on the renewal call?')
+      expect(matched).toBe(true)
+      expect(block).toContain('Acme Co') // the CURRENT canonical name, not the alias itself
     })
   })
 

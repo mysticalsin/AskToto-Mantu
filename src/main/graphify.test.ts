@@ -2,10 +2,11 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { mkdtempSync, mkdirSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import type { Settings } from '@shared/ipc'
 
 vi.mock('electron')
 
-import { computeRelated, windowsPythonDirs } from './graphify'
+import { computeRelated, windowsPythonDirs, graphifyRefusalReason, graphifySourceDir } from './graphify'
 
 // Graph shaped like real graphify output: each concept node is owned by ONE note (its source_file),
 // and the other note links to the same concept node cross-file. This is how shared people/topics
@@ -83,5 +84,33 @@ describe('windowsPythonDirs — python.org per-user installer PATH fallback', ()
     mkdirSync(join(base, 'Python39'), { recursive: true })
     mkdirSync(join(base, 'Launcher'), { recursive: true })
     expect(windowsPythonDirs()).toEqual([join(base, 'Python39'), join(base, 'Python39', 'Scripts')])
+  })
+})
+
+// Task MI-5 — graphify inheritance: the encryption/graph deadlock is removed exactly when the user has
+// consented to publish the plaintext wiki mirror. Pure routing decisions, no child process involved.
+describe('graphifyRefusalReason / graphifySourceDir (Task MI-5 — graphify inheritance)', () => {
+  const s = (overrides: Partial<Settings>): Settings =>
+    ({ meetingsFolder: '/meetings', encryptTranscripts: false, publishBrainPages: false, ...overrides }) as Settings
+
+  it('unencrypted: never refuses, always scans the meetings folder directly (unchanged pre-MI-5 behavior)', () => {
+    expect(graphifyRefusalReason(s({ encryptTranscripts: false }))).toBeNull()
+    expect(graphifySourceDir(s({ encryptTranscripts: false }))).toBe('/meetings')
+    // publishBrainPages being on doesn't change anything while unencrypted — no reason to redirect.
+    expect(graphifySourceDir(s({ encryptTranscripts: false, publishBrainPages: true }))).toBe('/meetings')
+  })
+
+  it('encrypted + publishBrainPages off: refuses outright (the old deadlock, unchanged)', () => {
+    const settings = s({ encryptTranscripts: true, publishBrainPages: false })
+    expect(graphifyRefusalReason(settings)).toMatch(/encrypted/i)
+    // The refusal is checked by buildGraph BEFORE ever calling graphifySourceDir in this branch, but the
+    // pure function itself still degrades to the (unreadable) meetings folder rather than throwing.
+    expect(graphifySourceDir(settings)).toBe('/meetings')
+  })
+
+  it('encrypted + publishBrainPages on: never refuses, routes the build at the plaintext wiki/ mirror', () => {
+    const settings = s({ encryptTranscripts: true, publishBrainPages: true })
+    expect(graphifyRefusalReason(settings)).toBeNull()
+    expect(graphifySourceDir(settings)).toBe(join('/meetings', 'wiki'))
   })
 })

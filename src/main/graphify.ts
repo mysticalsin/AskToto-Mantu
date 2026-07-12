@@ -6,7 +6,7 @@ import { join, basename, delimiter } from 'node:path'
 import { homedir } from 'node:os'
 import { getSettings, getApiKey, hasApiKey } from './store'
 import { resolveMeetingsFolder } from './transcripts'
-import type { GraphStatus, GraphRelated } from '@shared/ipc'
+import type { GraphStatus, GraphRelated, Settings } from '@shared/ipc'
 
 const exec = promisify(execFile)
 
@@ -218,14 +218,38 @@ export async function graphifyStatus(): Promise<GraphStatus> {
   }
 }
 
+/**
+ * Task MI-5 — whether graphify must refuse outright: transcripts are encrypted and there is no readable
+ * plaintext substitute to point it at. When `publishBrainPages` is on, `graphifySourceDir` below routes
+ * the build at the plaintext `wiki/` mirror instead (canonical, CRM-corrected names) and the build
+ * proceeds normally — this is what removes the old encryption/graph deadlock. Pure so the routing
+ * decision is unit-testable without invoking any child process (detectPython/pickBackend do real
+ * subprocess I/O).
+ */
+export function graphifyRefusalReason(s: Settings): string | null {
+  if (s.encryptTranscripts && !s.publishBrainPages) {
+    return 'Knowledge graph is unavailable while at-rest encryption is on (your notes are encrypted on disk). Turn on "Publish meeting intelligence" in Settings to build it from the plaintext wiki mirror instead.'
+  }
+  return null
+}
+
+/** Task MI-5 — the directory graphify should scan: the plaintext `wiki/` mirror when transcripts are
+ *  encrypted AND the user has explicitly consented to publish it (`publishBrainPages`), otherwise the
+ *  meetings folder directly (unchanged pre-MI-5 behavior). Pure, same testability rationale as
+ *  graphifyRefusalReason above. */
+export function graphifySourceDir(s: Settings): string {
+  return s.encryptTranscripts && s.publishBrainPages ? join(resolveMeetingsFolder(s), 'wiki') : resolveMeetingsFolder(s)
+}
+
 /** Build (or incrementally update) the notes graph. Returns the final status. */
 export async function buildGraph(incremental = false): Promise<GraphStatus> {
   if (building) return graphifyStatus()
-  // When at-rest encryption is on, the saved notes are ciphertext that graphify can't read — a manual
-  // Rebuild would produce a garbage graph. scheduleRebuild() already skips for this reason; guard the
-  // shared entrypoint too so the Rebuild button can't bypass it.
-  if (getSettings().encryptTranscripts) {
-    lastError = 'Knowledge graph is unavailable while at-rest encryption is on (your notes are encrypted on disk).'
+  // When at-rest encryption is on with no plaintext substitute available, the saved notes are ciphertext
+  // that graphify can't read — a manual Rebuild would produce a garbage graph. scheduleRebuild() already
+  // skips for this reason; guard the shared entrypoint too so the Rebuild button can't bypass it.
+  const refusal = graphifyRefusalReason(getSettings())
+  if (refusal) {
+    lastError = refusal
     return graphifyStatus()
   }
   // Set the lock SYNCHRONOUSLY before any await — detectPython()/pickBackend() do child-process I/O
@@ -241,7 +265,7 @@ export async function buildGraph(incremental = false): Promise<GraphStatus> {
     } else if (!picked) {
       lastError = 'No extraction backend. Install Claude Code, or add a Claude/OpenAI key in Settings → AI.'
     } else {
-      const notes = resolveMeetingsFolder(getSettings())
+      const notes = graphifySourceDir(getSettings())
       // Graph extraction is explicitly exempt from the CLI/Anthropic interactive guardrail (see
       // shared/providers.ts applyInteractiveGuardrail) — it's a bounded, infrequent background job where
       // extraction quality matters more than per-call cost, so it's allowed to reach for Opus. 'openai'
@@ -281,8 +305,10 @@ const REBUILD_DEBOUNCE_MS = 20_000
 /** Called after a note/meeting is saved. Coalesces a burst of saves into one incremental rebuild. */
 export function scheduleRebuild(): void {
   const s = getSettings()
-  // Encrypted transcripts are unreadable by the graphify runner — skip auto-rebuild in that mode.
-  if (!s.graphifyEnabled || !s.graphifyAutoRebuild || s.encryptTranscripts) return
+  if (!s.graphifyEnabled || !s.graphifyAutoRebuild) return
+  // Encrypted transcripts are unreadable by the graphify runner UNLESS publishBrainPages routes the
+  // build at the plaintext wiki/ mirror instead — see graphifyRefusalReason/graphifySourceDir above.
+  if (graphifyRefusalReason(s)) return
   if (rebuildTimer) clearTimeout(rebuildTimer)
   const fire = (): void => {
     rebuildTimer = null
