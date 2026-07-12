@@ -389,15 +389,44 @@ export function useSettings(): {
 } {
   const [settings, setSettings] = useState<PublicSettings | null>(null)
   const refresh = useCallback(async () => {
-    setSettings(await window.toto.getSettings())
+    // Swallow post-boot refresh failures (focus/poll): a transient reject must not surface as an
+    // unhandled rejection, and the next trigger retries. The boot load below owns first-paint recovery.
+    try {
+      setSettings(await window.toto.getSettings())
+    } catch (e) {
+      console.error('[settings] refresh failed', e)
+    }
   }, [])
   useEffect(() => {
-    void refresh()
+    // First-paint load with retry. getSettings() can reject before the main-process handler is
+    // registered (boot-order race) or on a transient decrypt hiccup; the app renders only the
+    // "Starting Métis…" strip until `settings` is non-null, and the overlay is usually already
+    // focused so the focus-refetch below never fires — without a retry a single boot reject strands
+    // the app on that strip indefinitely. Retry with backoff until it resolves.
+    let cancelled = false
+    void (async () => {
+      for (let attempt = 0; !cancelled; attempt++) {
+        try {
+          const s = await window.toto.getSettings()
+          if (!cancelled) setSettings(s)
+          return
+        } catch (e) {
+          if (attempt >= 40) {
+            console.error('[boot] getSettings failed after retries; app cannot start', e)
+            return
+          }
+          await new Promise((r) => setTimeout(r, Math.min(150 * (attempt + 1), 1500)))
+        }
+      }
+    })()
     // Refetch on focus so settings changed by the MAIN process (e.g. the Dust CLI auto-connect / token
     // refresh on launch) surface in the UI without the user having to do anything.
     const onFocus = (): void => void refresh()
     window.addEventListener('focus', onFocus)
-    return () => window.removeEventListener('focus', onFocus)
+    return () => {
+      cancelled = true
+      window.removeEventListener('focus', onFocus)
+    }
   }, [refresh])
   const patch = useCallback(async (p: Partial<PublicSettings>) => {
     setSettings(await window.toto.setSettings(p))
@@ -457,9 +486,40 @@ export function useAuth(): {
 } {
   const [status, setStatus] = useState<AuthStatus | null>(null)
   const refresh = useCallback(async () => {
-    setStatus(await window.toto.authStatus())
+    // Swallow post-boot poll/focus failures; the boot loader below owns first-paint recovery.
+    try {
+      setStatus(await window.toto.authStatus())
+    } catch (e) {
+      console.error('[auth] refresh failed', e)
+    }
   }, [])
-  useEffect(() => startAuthRefreshLoop(() => void refresh()), [refresh])
+  useEffect(() => {
+    // First-paint load with retry. authStatus() can reject before the main handler is registered
+    // (boot-order race); the ongoing poll only re-fires every AUTH_POLL_MS (5 min), so a single boot
+    // reject would strand the app on the "Starting Métis…" strip (which waits for auth.status != null)
+    // for minutes. Retry fast until it resolves, then hand off to the poll loop for freshness.
+    let cancelled = false
+    void (async () => {
+      for (let attempt = 0; !cancelled; attempt++) {
+        try {
+          const st = await window.toto.authStatus()
+          if (!cancelled) setStatus(st)
+          return
+        } catch (e) {
+          if (attempt >= 40) {
+            console.error('[boot] authStatus failed after retries', e)
+            return
+          }
+          await new Promise((r) => setTimeout(r, Math.min(150 * (attempt + 1), 1500)))
+        }
+      }
+    })()
+    const stop = startAuthRefreshLoop(() => void refresh())
+    return () => {
+      cancelled = true
+      stop()
+    }
+  }, [refresh])
   const signIn = useCallback(async () => {
     const r = await window.toto.signIn()
     await refresh()
