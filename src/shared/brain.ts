@@ -66,6 +66,23 @@ export const CommitmentSchema = z.object({
 })
 export type Commitment = z.infer<typeof CommitmentSchema>
 
+/**
+ * Task MI-4 — a single number actually STATED in the meeting, with the verbatim quote it must be
+ * verified against (src/shared/grounding.ts's verifyNumericFact). `value` is exactly as stated — the
+ * extraction prompt forbids unit conversion or computation, so a "€2.4M" quote yields value 2400000,
+ * never a converted/derived figure. `quote` is `min(1)`: unlike every OTHER quote field in this schema
+ * (which accept '' for a paraphrase-only item), a numeric fact with no quotable evidence is not a fact
+ * worth recording at all — omit it from the array entirely rather than emit an unverifiable one.
+ */
+export const NumericFactSchema = z.object({
+  kind: z.enum(['amount', 'percent', 'date', 'headcount']),
+  value: z.number(),
+  unit: z.string().nullable().default(null),
+  quote: z.string().min(1),
+  confidence: ConfidenceSchema.default('EXTRACTED')
+})
+export type NumericFact = z.infer<typeof NumericFactSchema>
+
 /** A commitment as stored on an entity: carries its source meeting and a settlement status.
  *  'rejected' (Task MI-2) is a human override for a misheard/never-actually-made promise — distinct
  *  from 'broken' (a real promise that wasn't kept). Every existing `status === 'open'` filter (open-
@@ -99,7 +116,12 @@ export const MeetingExtractionSchema = z.object({
       stage: z.string().default(''),
       win_likelihood_band: BandSchema.nullable().default(null),
       band_evidence: z.string().default(''),
-      velocity: VelocitySchema.default({ signal: 'no-hard-date-found', evidence: '' })
+      velocity: VelocitySchema.default({ signal: 'no-hard-date-found', evidence: '' }),
+      // MI-4: only ever set when an amount/close date was EXPLICITLY stated with a quotable moment —
+      // omitted (not a guessed/inferred figure) otherwise. Verified against the transcript by
+      // ingest.ts's verifyExtraction() before it can reach the DealEntity's amount/close_date sidecars.
+      amount: z.object({ value: z.number(), currency: z.string(), quote: z.string().min(1) }).optional(),
+      close_date: z.object({ value: z.string(), quote: z.string().min(1) }).optional()
     })
     .nullable()
     .default(null),
@@ -115,6 +137,11 @@ export const MeetingExtractionSchema = z.object({
     )
     .default([]),
   commitments: z.array(CommitmentSchema).default([]),
+  // MI-4 — the verified numbers lane. Populated ONLY with numbers actually stated aloud, each with a
+  // verbatim supporting quote; ingest.ts's verifyExtraction() re-checks every entry against the exact
+  // (post-redaction, post-window) text the model saw and demotes anything that fails to AMBIGUOUS —
+  // never strips it, so a quarantined figure stays visible to a human reviewer instead of vanishing.
+  numeric_facts: z.array(NumericFactSchema).default([]),
   // Coaching notes. Accepts the legacy plain-string form (early extractions) and normalizes it: an
   // untagged note is by definition the model's inference, so it lands as INFERRED with no quote —
   // that legacy flatness is exactly why every insight once displayed an identical 60% confidence.
@@ -172,6 +199,12 @@ export type MeetingRef = z.infer<typeof MeetingRefSchema>
 export const ProvenanceStateSchema = z.enum(['extracted', 'verified', 'edited', 'pinned'])
 export type ProvenanceState = z.infer<typeof ProvenanceStateSchema>
 
+/** MI-4 render-gate invariant, shared by every numeric surface that reads a provenant field's value
+ *  (Mars's pipeline-value line, context.ts's formatDeal, BrainRecordPage's money card): a bare 'extracted'
+ *  (LLM-only, never independently confirmed) value must NEVER render as a real figure, no matter how
+ *  confident the extraction — only a human-verified/-pinned/-edited value may. */
+export const RENDERABLE_PROVENANCE_STATES: ReadonlySet<ProvenanceState> = new Set(['verified', 'pinned', 'edited'])
+
 export function provenantFieldSchema<V extends z.ZodTypeAny>(valueSchema: V) {
   return z.object({
     value: valueSchema,
@@ -180,8 +213,11 @@ export function provenantFieldSchema<V extends z.ZodTypeAny>(valueSchema: V) {
     quote: z.string().optional(),
     confidence: ConfidenceSchema.default('EXTRACTED'),
     state: ProvenanceStateSchema.default('extracted'),
+    // MI-4: `confidence` is optional so every superseded entry written before this field existed still
+    // parses unchanged (read-time INFERRED-tier fallback in store.ts's `confOf`, not a migration) — see
+    // store.ts's SupersededEntry doc comment for why the ordering key now needs it.
     superseded: z
-      .array(z.object({ value: valueSchema, date: z.string(), source_file: z.string() }))
+      .array(z.object({ value: valueSchema, date: z.string(), source_file: z.string(), confidence: ConfidenceSchema.optional() }))
       .max(10)
       .default([])
   })
@@ -196,7 +232,7 @@ export interface ProvenantField<T> {
   quote?: string
   confidence: Confidence
   state: ProvenanceState
-  superseded: Array<{ value: T; date: string; source_file: string }>
+  superseded: Array<{ value: T; date: string; source_file: string; confidence?: Confidence }>
 }
 
 /**
@@ -438,10 +474,11 @@ export const BRAIN_EXTRACTION_PROMPT = `You are the ingestion step of a meeting 
   "sentiment": "good" | "mixed" | "concerning",
   "account": {"name": "...", "sector": "retail|banking|insurance|pharma|healthcare|automotive|energy|telecom|technology|public-sector|manufacturing|logistics|media|aerospace-defense|consumer-goods|professional-services|other", "sector_confidence": "EXTRACTED|INFERRED|AMBIGUOUS", "confidence": "EXTRACTED|INFERRED|AMBIGUOUS"} or null,
   "people": [{"name": "...", "role": "..." or null, "org": "..." or null, "confidence": "EXTRACTED|INFERRED|AMBIGUOUS"}],
-  "deal": {"name": "...", "stage": "...", "win_likelihood_band": "good|mixed|concerning" or null, "band_evidence": "...", "velocity": {"signal": "hard-calendar-gate|soft-organizational-gate|no-hard-date-found", "evidence": "..."}} or null,
+  "deal": {"name": "...", "stage": "...", "win_likelihood_band": "good|mixed|concerning" or null, "band_evidence": "...", "velocity": {"signal": "hard-calendar-gate|soft-organizational-gate|no-hard-date-found", "evidence": "..."}, "amount": {"value": 2400000, "currency": "EUR", "quote": "verbatim transcript line stating the amount"} (omit entirely unless explicitly stated), "close_date": {"value": "as stated (e.g. '2026-09-30' or 'Q3 2026')", "quote": "verbatim transcript line stating the date"} (omit entirely unless explicitly stated)} or null,
   "signals": [{"kind": "positive|objection|neutral", "statement": "...", "quote": "verbatim transcript line or empty string", "confidence": "EXTRACTED|INFERRED|AMBIGUOUS"}],
   "missed_signals": [{"statement": "an opening or risk the seller did not pursue", "why_it_matters": "...", "quote": "the verbatim moment showing the missed opening, or empty string", "confidence": "EXTRACTED|INFERRED|AMBIGUOUS"}],
   "commitments": [{"text": "what was promised, as a short actionable sentence", "by": "you" | "them" | "Person Name", "due_hint": "verbatim timing words ('by Friday', 'after the board') or empty string", "quote": "verbatim transcript line or empty string", "confidence": "EXTRACTED|INFERRED|AMBIGUOUS"}],
+  "numeric_facts": [{"kind": "amount|percent|date|headcount", "value": 2400000, "unit": "EUR|%|null", "quote": "verbatim transcript line stating this exact number", "confidence": "EXTRACTED|INFERRED|AMBIGUOUS"}],
   "feedback": [{"note": "one short coaching note grounded in this call", "quote": "the verbatim moment the note is anchored to, or empty string", "confidence": "EXTRACTED|INFERRED|AMBIGUOUS"}]
 }
 
@@ -452,6 +489,8 @@ Hard rules:
 - sector is your best classification of the ACCOUNT's industry (e.g. L'Oréal → retail/consumer-goods, a bank → banking); tag it INFERRED unless the sector is stated outright.
 - win_likelihood_band is a qualitative judgement with band_evidence citing why — never output probabilities.
 - velocity: "hard-calendar-gate" only for a concrete date/meeting commitment (quote it); vague intent is "soft-organizational-gate"; otherwise "no-hard-date-found".
+- deal.amount / deal.close_date: include ONLY when explicitly stated with a verbatim quote you can cite — omit the field entirely otherwise (never guess, never estimate, never carry one forward from a different meeting).
+- numeric_facts: every number worth recording (deal amounts, percentages, headcounts, years/dates) that was ACTUALLY STATED, each with its own verbatim supporting quote — value exactly as stated, never converted or computed (a "€2.4M" quote is value 2400000, never a recomputed figure). Omit a number entirely if you cannot quote where it was said; never guess one into existence.
 - commitments: only promises actually SPOKEN and owned ("I'll send the deck", "we'll intro you to Claire", "you'll have the numbers Friday"). "you" = the app's user, "them" = the other side generically, a name when the speaker is clear. Aspirations ("we should...") and process talk are NOT commitments. Quote the line whenever possible.
 - A "## Debrief (off the record)" section, when present, is the user's own post-meeting gut-read (what was NOT said aloud). Use it for signals, missed_signals, and sentiment — always tagged INFERRED, never quoted as if spoken, and never a source of commitments.
 - feedback / missed_signals confidence: EXTRACTED only when you can quote the exact moment; a judgement without a quotable anchor is INFERRED; a stretch is AMBIGUOUS. Differentiate honestly — do not tag everything the same.
