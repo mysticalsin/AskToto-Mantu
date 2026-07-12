@@ -39,6 +39,7 @@ import {
   EntityUnmergePayloadSchema,
   EntityUpdateFieldPayloadSchema,
   CommitmentRejectPayloadSchema,
+  MeetingExtractionQuerySchema,
   appendAsrCorrection,
   RenameMeetingPayloadSchema,
   UpdateRecapPayloadSchema,
@@ -84,6 +85,7 @@ import {
   rejectCommitment,
   replayCorrections
 } from './brain/corrections'
+import { computeAttention } from './brain/attention'
 import { openIntelligenceWindow, isIntelligenceSender, syncIntelContentProtection } from './intelligence'
 import {
   readIndex as readBrainIndex,
@@ -2395,6 +2397,21 @@ function registerIpc(): void {
     const r = await rejectCommitment(getSettings(), parsed.data)
     if (r.ok) auditLog('brain.commitment.rejected', {})
     return r
+  })
+
+  // Task MI-3: two read-only channels feeding the CRM record pages, the Review.tsx entity strip, and the
+  // needs-attention queue. Same guard pattern as the other brain reads — no audit event (nothing mutates).
+  ipcMain.handle(IPC.brainMeetingExtraction, (e, raw) => {
+    assertMainWindow(e)
+    if (!requireAuth()) return null
+    const parsed = MeetingExtractionQuerySchema.safeParse(raw)
+    if (!parsed.success) return null
+    return readBrainMeetingExtraction(getSettings(), brainSlugify(basename(parsed.data.file)))
+  })
+  ipcMain.handle(IPC.brainAttention, (e) => {
+    assertMainWindow(e)
+    if (!requireAuth()) return { items: [] }
+    return { items: computeAttention(getSettings()) }
   })
 
   // Periodic best-effort snapshot of an IN-PROGRESS meeting (renderer calls this every ~60s while

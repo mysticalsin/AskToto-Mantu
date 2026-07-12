@@ -14,6 +14,9 @@ import {
   EntityUnmergePayloadSchema,
   EntityUpdateFieldPayloadSchema,
   CommitmentRejectPayloadSchema,
+  MeetingExtractionQuerySchema,
+  AttentionItemSchema,
+  BrainAttentionResultSchema,
   appendAsrCorrection
 } from './ipc'
 
@@ -393,6 +396,46 @@ describe('CommitmentRejectPayloadSchema', () => {
     ).toBe(true)
     expect(CommitmentRejectPayloadSchema.safeParse({ personSlug: '', text: 'x' }).success).toBe(false)
     expect(CommitmentRejectPayloadSchema.safeParse({ personSlug: 'maria-silva', text: '' }).success).toBe(false)
+  })
+})
+
+// Task MI-3 read-only channels: brain:meetingExtraction / brain:attention payload + result shapes.
+describe('MeetingExtractionQuerySchema (brain:meetingExtraction)', () => {
+  it('accepts a file path or basename', () => {
+    expect(MeetingExtractionQuerySchema.safeParse({ file: 'meeting-2026-07-11.md' }).success).toBe(true)
+    expect(MeetingExtractionQuerySchema.safeParse({ file: '/Users/x/Meetings/meeting.md' }).success).toBe(true)
+  })
+
+  it('rejects an empty/missing file and a non-object payload', () => {
+    expect(MeetingExtractionQuerySchema.safeParse({ file: '' }).success).toBe(false)
+    expect(MeetingExtractionQuerySchema.safeParse({}).success).toBe(false)
+    expect(MeetingExtractionQuerySchema.safeParse(null).success).toBe(false)
+    expect(MeetingExtractionQuerySchema.safeParse({ file: 42 }).success).toBe(false)
+  })
+})
+
+describe('AttentionItemSchema / BrainAttentionResultSchema (brain:attention)', () => {
+  const valid = {
+    kind: 'ambiguous',
+    entityKind: 'account',
+    id: 'acme-corp',
+    label: 'Acme Corp',
+    detail: 'Sector: "banking" is unconfirmed (AMBIGUOUS)'
+  }
+
+  it('accepts every item kind and wraps into the {items} result', () => {
+    for (const kind of ['lint', 'ambiguous', 'contradicted_pin']) {
+      expect(AttentionItemSchema.safeParse({ ...valid, kind }).success).toBe(true)
+    }
+    expect(BrainAttentionResultSchema.safeParse({ items: [valid] }).success).toBe(true)
+    expect(BrainAttentionResultSchema.safeParse({ items: [] }).success).toBe(true)
+  })
+
+  it('rejects an unknown kind, a bad entityKind, an empty id, and a missing items array', () => {
+    expect(AttentionItemSchema.safeParse({ ...valid, kind: 'other' }).success).toBe(false)
+    expect(AttentionItemSchema.safeParse({ ...valid, entityKind: 'meeting' }).success).toBe(false)
+    expect(AttentionItemSchema.safeParse({ ...valid, id: '' }).success).toBe(false)
+    expect(BrainAttentionResultSchema.safeParse({}).success).toBe(false)
   })
 })
 
