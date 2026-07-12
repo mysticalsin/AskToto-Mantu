@@ -1081,8 +1081,11 @@ export function App(): JSX.Element {
     // from the same complete transcript that gets auto-saved, including a final utterance that was still
     // mid-flush when Stop was pressed. The Review transition above stays synchronous/instant; only the
     // recap request itself waits on the drain.
-    listen.stop(() => {
-      const tx = listen.text()
+    const preDrain = listen.text() // snapshot NOW as a fallback (see the guard below)
+    let recapDone = false
+    const runRecap = (tx: string): void => {
+      if (recapDone) return
+      recapDone = true
       if (tx.trim()) {
         // Cascade the recap into Dust whenever it's configured, regardless of the active provider (e.g.
         // Kimi handles everyday chat, Dust still writes the meeting notes) — no agentOverride needed, the
@@ -1090,6 +1093,16 @@ export function App(): JSX.Element {
         const dustReady = isDustReady(settings?.hasKeys ?? {}, settings?.dustWorkspaceId ?? '', settings?.providerModels ?? {})
         ask.run({ mode: 'recap', transcript: tx, ...(dustReady ? { providerOverride: 'dust' as const } : {}) })
       } else ask.clear()
+    }
+    // Safety net: if a fresh listen.start() preempts this drain, listen.ts bails on its sessionEpoch
+    // mismatch and never invokes onDrained — which would silently drop the recap entirely (no run, no
+    // clear). Guarantee the recap still lands off the pre-drain snapshot after the drain ceiling (~4s)
+    // + margin, so an interrupted stop degrades to "recap minus the final utterance" (the old behaviour)
+    // instead of "no recap at all". Whichever fires first wins via the recapDone latch.
+    const fallback = setTimeout(() => runRecap(preDrain), 6000)
+    listen.stop(() => {
+      clearTimeout(fallback)
+      runRecap(listen.text())
     })
   }, [listen.text, listen.stop, ask.run, ask.clear, settings?.hasKeys, settings?.dustWorkspaceId, settings?.providerModels])
 
