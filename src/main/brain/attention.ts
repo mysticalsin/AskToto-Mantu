@@ -1,6 +1,6 @@
 import type { Settings } from '@shared/ipc'
 import type { AttentionItem } from '@shared/ipc'
-import type { EntityKind, ProvenantField } from '@shared/brain'
+import type { ProvenantField } from '@shared/brain'
 import { listEntities, readPerson, readAccount, readDeal } from './store'
 import { lintBrainDetailed } from './ingest'
 
@@ -55,7 +55,7 @@ export function computeAttention(s: Settings): AttentionItem[] {
   const items: AttentionItem[] = []
 
   for (const f of lintBrainDetailed(s)) {
-    items.push({ kind: 'lint', entityKind: f.entityKind as EntityKind, id: f.id, label: f.label, detail: f.detail })
+    items.push({ kind: 'lint', entityKind: f.entityKind, id: f.id, label: f.label, detail: f.detail })
   }
 
   for (const slug of listEntities(s, 'person')) {

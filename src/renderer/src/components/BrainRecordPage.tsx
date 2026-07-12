@@ -23,6 +23,18 @@ export interface BrainRecordRef {
 
 // ─── Pure decision helpers (TDD'd in BrainRecordPage.test.ts) ────────────────────────────────────────
 
+/** The React `key` BrainView stamps on this component's element. Its ONLY job: change whenever the
+ *  displayed record changes, so React genuinely remounts the page (clearing every FieldCard's
+ *  editing/draft/pending and the header rename box) on a direct record→record transition — the
+ *  post-merge navigation to the survivor and the post-undo navigation to the restored source. Without a
+ *  changing key React reuses the instance and a half-typed edit would save against the WRONG entity, the
+ *  one misattribution this whole correction surface exists to prevent. Kept as a single exported helper
+ *  so that invariant is unit-testable (a node harness can't render React to assert the remount directly)
+ *  and there is one source of truth for the key. */
+export function recordKey(ref: BrainRecordRef): string {
+  return `${ref.kind}:${ref.id}`
+}
+
 /** The provenance chip's label. Three surface forms, keyed off `state` only:
  *   - 'pinned' / 'edited' (a human touched this field) → "edited by you"
  *   - 'verified'                                        → "verified"
