@@ -1,32 +1,29 @@
-# React + TypeScript + Vite
+# Mantu Intelligence
 
-This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.
+The read-only analysis dashboard bundled inside Métis. It renders the meeting-intelligence
+"brain" — accounts, deals, people, coaching, and stats derived from recorded meetings — in its
+own Electron window (opened by `src/main/intelligence.ts`).
 
-Currently, two official plugins are available:
+This is a standalone Vite + React + TypeScript workspace so the dashboard can build and iterate
+independently of the main app bundle. Its data is not fetched here: the main process supplies
+facts from `src/main/brain/` over IPC (`brain:analyze` and related read-only channels), and this
+UI only displays them. It never writes to the brain.
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+## Build
 
-## React Compiler
-
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
-
-## Expanding the Oxlint configuration
-
-If you are developing a production application, we recommend enabling type-aware lint rules by installing `oxlint-tsgolint` and editing `.oxlintrc.json`:
-
-```json
-{
-  "$schema": "./node_modules/oxlint/configuration_schema.json",
-  "plugins": ["react", "typescript", "oxc"],
-  "options": {
-    "typeAware": true
-  },
-  "rules": {
-    "react/rules-of-hooks": "error",
-    "react/only-export-components": ["warn", { "allowConstantExport": true }]
-  }
-}
+```bash
+npm run build:intelligence   # from the repo root: npm ci + vite build in this folder
 ```
 
-See the [Oxlint rules documentation](https://oxc.rs/docs/guide/usage/linter/rules) for the full list of rules and categories.
+`electron-builder` ships the resulting `intelligence/dist` into the packaged app under
+`Resources/intelligence` (see `extraResources` in `electron-builder.yml`).
+
+## Develop
+
+```bash
+npm install
+npm run dev      # Vite dev server for isolated UI work
+```
+
+For the full picture of how meetings become brain records, see the root `README.md` and
+`src/main/brain/`.

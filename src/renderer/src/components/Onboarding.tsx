@@ -226,6 +226,9 @@ export function Onboarding({
   // Anthropic — closes again if the user backs out of step 5 entirely.
   const [showApiPicker, setShowApiPicker] = useState(false)
   const headingRef = useRef<HTMLHeadingElement | null>(null)
+  // Windows has no OS consent dialog for desktop apps — the mic toggle only becomes "determined" (from
+  // this app's perspective) after it actually attempts a capture once. Fired at most once per mount.
+  const micProbeFiredRef = useRef(false)
 
   // Move focus to the new step's heading on every transition so screen readers announce it instead of
   // silently dropping focus to <body>.
@@ -240,10 +243,33 @@ export function Onboarding({
   useEffect(() => {
     if (step !== 6) return
     let alive = true
-    const load = (): void => {
-      void window.toto.getPermissions().then((p) => alive && setPerms(p))
+    // Windows never surfaces an OS consent dialog, so getPlatformPermissions() stays 'unknown' forever
+    // unless something actually calls getUserMedia. Do that once here, then let the existing poll below
+    // pick up whatever the OS ends up reporting. A rejection just means blocked — the status/fix-button
+    // flow already handles that — so it's swallowed, never an unhandled rejection.
+    const probeWindowsMicIfNeeded = (p: PlatformPermissions): void => {
+      if (!isWindows || micProbeFiredRef.current || p.microphone !== 'unknown') return
+      micProbeFiredRef.current = true
+      navigator.mediaDevices
+        .getUserMedia({ audio: true })
+        .then((stream) => stream.getTracks().forEach((t) => t.stop()))
+        .catch(() => {})
     }
-    void window.toto.requestPermissionsUpfront().then((p) => alive && setPerms(p)).catch(load)
+    const load = (): void => {
+      void window.toto.getPermissions().then((p) => {
+        if (!alive) return
+        setPerms(p)
+        probeWindowsMicIfNeeded(p)
+      })
+    }
+    void window.toto
+      .requestPermissionsUpfront()
+      .then((p) => {
+        if (!alive) return
+        setPerms(p)
+        probeWindowsMicIfNeeded(p)
+      })
+      .catch(load)
     const id = setInterval(load, 2500)
     return () => {
       alive = false
