@@ -218,12 +218,12 @@ export const Answer = memo(function Answer({
         )}
       </div>
       {saveError && (
-        <div className="rounded-lg border border-[var(--color-danger)]/30 bg-[var(--color-danger)]/10 px-2 py-1 text-[11px] text-[var(--color-danger)]">
+        <div role="alert" className="rounded-lg border border-[var(--color-danger)]/30 bg-[var(--color-danger)]/10 px-2 py-1 text-[11px] text-[var(--color-danger)]">
           {saveError}
         </div>
       )}
       {copyError && (
-        <div className="rounded-lg border border-[var(--color-danger)]/30 bg-[var(--color-danger)]/10 px-2 py-1 text-[11px] text-[var(--color-danger)]">
+        <div role="alert" className="rounded-lg border border-[var(--color-danger)]/30 bg-[var(--color-danger)]/10 px-2 py-1 text-[11px] text-[var(--color-danger)]">
           {copyError}
         </div>
       )}
@@ -235,7 +235,7 @@ export const Answer = memo(function Answer({
     return (
       <div className="fade-up mx-auto max-w-[620px] flex flex-col gap-2">
         {header}
-        <div className="rounded-lg border border-[var(--color-danger)]/30 bg-[var(--color-danger)]/10 px-3 py-2.5 text-[13px] text-[var(--color-danger)] break-words [overflow-wrap:anywhere]">
+        <div role="alert" className="rounded-lg border border-[var(--color-danger)]/30 bg-[var(--color-danger)]/10 px-3 py-2.5 text-[13px] text-[var(--color-danger)] break-words [overflow-wrap:anywhere]">
           {error}
           {hint && (
             <div className="mt-1.5 text-[12px] leading-snug text-[color:var(--color-ink-2)] break-words [overflow-wrap:anywhere]">{hint}</div>

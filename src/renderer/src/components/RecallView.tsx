@@ -12,7 +12,8 @@ import {
   Pencil,
   Brain,
   Upload,
-  X
+  X,
+  Lock
 } from 'lucide-react'
 import { TextButton } from './ui'
 import { accelLabel } from '../lib/keys'
@@ -455,6 +456,16 @@ const MeetingRow = memo(function MeetingRow({
                 </span>
               )}
 
+              {/* Task MI-5 — confidential lock chip: excluded from every published wiki page. */}
+              {m.confidential && (
+                <span
+                  title="Confidential — excluded from published intelligence"
+                  className="flex shrink-0 items-center gap-1 rounded-full bg-[var(--color-danger)]/10 px-2 py-0.5 text-[10px] text-[var(--color-danger)]"
+                >
+                  <Lock size={10} /> Confidential
+                </span>
+              )}
+
               {/* Duration badge + time. durationMin rounds to 0 both for a genuinely empty capture (no
                   speech at all, participants: []) and for an older saved meeting whose real duration
                   was under a minute. participants.length > 0 means at least one line was captured
@@ -800,8 +811,17 @@ export function RecallView({
   /** Open the selected file (or the first item as a fallback) — in-app recap when wired, else OS-open. */
   const openMeeting = useCallback(
     (f: string): void => {
-      if (onOpenMeeting) onOpenMeeting(f)
-      else void window.toto.recallOpen(f)
+      if (onOpenMeeting) {
+        onOpenMeeting(f)
+        return
+      }
+      // shell.openPath (behind recallOpen) resolves to an empty string on success, or an error message
+      // on failure — that was the only signal a caller could get, and it went un-awaited, so a failure
+      // (missing file, no default handler for .md, etc.) was a silent no-op. Surface it on the row, same
+      // as a rename/delete failure.
+      void window.toto.recallOpen(f).then((err) => {
+        if (err) setRowError({ file: f, message: err })
+      })
     },
     [onOpenMeeting]
   )

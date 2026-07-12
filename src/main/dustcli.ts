@@ -7,7 +7,7 @@ import { join } from 'node:path'
 import type { DustCliImport } from '@shared/ipc'
 import { resolveBin } from './cli'
 import { clearApiKey, setSettings } from './store'
-import { readDustSecret } from './dust-secret-store'
+import { DUST_KEYCHAIN_SERVICE, readDustSecret } from './dust-secret-store'
 
 const exec = promisify(execFile)
 
@@ -36,11 +36,11 @@ function regionToBaseUrl(region: string | null): string {
 /** Imported fields plus the bearer token (kept out of the renderer-facing DustCliImport). */
 export type DustCliSession = DustCliImport & { token?: string }
 
-export async function importDustCliSession(): Promise<DustCliSession> {
+export async function importDustCliSession(service: string = DUST_KEYCHAIN_SERVICE): Promise<DustCliSession> {
   // Read sequentially: a macOS permission dialog is per lookup, and parallel reads can stack prompts or
   // make a single denial look like a missing session. (Windows/Linux never prompt or deny — the reads
   // just resolve.) accessDenied is macOS-only; a genuinely missing session returns the setup prompt.
-  const token = await readDustSecret(ACCESS_TOKEN)
+  const token = await readDustSecret(ACCESS_TOKEN, service)
   if (token.accessDenied) {
     return { ok: false, accessDenied: true, error: 'Allow Métis to access your Dust CLI session in Keychain, then try again.' }
   }
@@ -50,14 +50,18 @@ export async function importDustCliSession(): Promise<DustCliSession> {
       error: 'No Dust CLI session found. Click “Set up Dust” to install the CLI and sign in.'
     }
   }
-  const workspace = await readDustSecret(WORKSPACE)
+  const workspace = await readDustSecret(WORKSPACE, service)
   if (workspace.accessDenied) {
     return { ok: false, accessDenied: true, error: 'Allow Métis to access your Dust CLI workspace in Keychain, then try again.' }
   }
   if (!workspace.value) {
-    return { ok: false, error: 'Your Dust CLI session is incomplete. Run “Set up Dust” again to sign in.' }
+    // access_token landed but workspace_sid never did — the browser OAuth step of `dust login` finished
+    // but the separate interactive terminal workspace-picker step didn't. Flagged distinctly from "no
+    // session at all" so callers can point the user back at that already-open terminal instead of
+    // relaunching the whole install + login.
+    return { ok: false, incomplete: true, error: 'Your Dust CLI session is incomplete. Finish picking your workspace in the Terminal window, or run “Set up Dust” again.' }
   }
-  const region = await readDustSecret(REGION)
+  const region = await readDustSecret(REGION, service)
   if (region.accessDenied) {
     return { ok: false, accessDenied: true, error: 'Allow Métis to access your Dust CLI region in Keychain, then try again.' }
   }
@@ -137,6 +141,9 @@ const MAC_SETUP_SCRIPT =
     '  echo; echo "Press any key to close."; read -n 1 -s; exit 1',
     'fi',
     'echo; echo "Step 2/2  Signing in to Dust (a browser window will open)…"',
+    'echo "After the browser sign-in, THIS window will ask you to pick your workspace — use the arrow"',
+    'echo "keys, press Enter, and wait for \\"Authentication and workspace selection complete!\\" before"',
+    'echo "closing this window."',
     'dust login',
     'echo; echo "✓ Done. Return to Métis — it will connect automatically after login."',
     'echo "You can close this window."'
@@ -170,6 +177,9 @@ const WIN_SETUP_SCRIPT =
     ')',
     'echo.',
     'echo Step 2/2  Signing in to Dust ^(a browser window will open^)...',
+    'echo After the browser sign-in, THIS window will ask you to pick your workspace -- use the arrow',
+    'echo keys, press Enter, and wait for "Authentication and workspace selection complete!" before',
+    'echo closing this window.',
     'call dust login',
     'echo.',
     'echo Done. Return to Metis - it will connect automatically after login.',

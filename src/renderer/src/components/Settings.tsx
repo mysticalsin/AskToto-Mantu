@@ -192,7 +192,9 @@ function LazyTextarea({
   className,
   placeholder,
   disabled,
-  id
+  id,
+  rows,
+  spellCheck
 }: {
   value: string
   onCommit: (v: string) => void
@@ -200,6 +202,8 @@ function LazyTextarea({
   placeholder?: string
   disabled?: boolean
   id?: string
+  rows?: number
+  spellCheck?: boolean
 }): JSX.Element {
   const { local, onChange, onBlur } = useLazyText(value, onCommit)
   return (
@@ -211,6 +215,8 @@ function LazyTextarea({
       onChange={(e) => onChange(e.target.value)}
       onBlur={onBlur}
       className={className}
+      rows={rows}
+      spellCheck={spellCheck}
     />
   )
 }
@@ -239,6 +245,99 @@ function LazyInput({
       placeholder={placeholder}
       onChange={(e) => onChange(e.target.value)}
       onBlur={onBlur}
+      className={className}
+    />
+  )
+}
+
+type AsrCorrection = PublicSettings['asrCorrections'][number]
+
+/** One `heard => correct` line per correction, in order. Pure (and lossy by design — a blank line or a
+ *  line with no "=>" or an empty "from" simply isn't a correction yet). Exported for a focused test. */
+export function serializeAsrCorrections(items: AsrCorrection[]): string {
+  return items.map((c) => `${c.from} => ${c.to}`).join('\n')
+}
+
+/** Inverse of serializeAsrCorrections. Pure. Exported for a focused test. */
+export function parseAsrCorrections(raw: string): AsrCorrection[] {
+  return raw
+    .split('\n')
+    .map((line) => {
+      const i = line.indexOf('=>')
+      if (i < 0) return null
+      const from = line.slice(0, i).trim()
+      const to = line.slice(i + 2).trim()
+      return from ? { from, to } : null
+    })
+    .filter((c): c is AsrCorrection => c != null)
+    .slice(0, 100)
+}
+
+/** Value-equality for two correction arrays (order-sensitive — that's how they render as lines). Pure.
+ *  Exported for a focused test. */
+export function sameAsrCorrections(a: AsrCorrection[], b: AsrCorrection[]): boolean {
+  return a.length === b.length && a.every((c, i) => c.from === b[i].from && c.to === b[i].to)
+}
+
+/**
+ * The vocabulary-corrections textarea is a controlled input over a DERIVED, LOSSY value: the array is
+ * serialized to `heard => correct` lines and re-parsed on every change, and the parse silently drops a
+ * blank line (e.g. one just started with Enter, before "=>" exists yet). A plain LazyTextarea isn't
+ * enough here: once the debounced commit round-trips through patch() → new `corrections` prop, that new
+ * prop is the RE-SERIALIZED (blank-line-stripped) array, which — compared naively — looks like a fresh
+ * external edit and would resync `local`, wiping the very newline the user just typed.
+ *
+ * Fix: compare the incoming prop against the last array WE ourselves committed (by value, not by the
+ * serialized string). Only an external change (profile switch, undo, another window) — one that doesn't
+ * match what we just committed — is allowed to overwrite in-progress typing.
+ */
+function VocabCorrectionsTextarea({
+  corrections,
+  onCommit,
+  disabled,
+  placeholder,
+  className
+}: {
+  corrections: AsrCorrection[]
+  onCommit: (next: AsrCorrection[]) => void
+  disabled?: boolean
+  placeholder?: string
+  className?: string
+}): JSX.Element {
+  const [local, setLocal] = useState(() => serializeAsrCorrections(corrections))
+  const lastCommitted = useRef(corrections)
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  useEffect(() => {
+    if (!sameAsrCorrections(corrections, lastCommitted.current)) {
+      lastCommitted.current = corrections
+      setLocal(serializeAsrCorrections(corrections))
+    }
+  }, [corrections])
+
+  const commit = (raw: string): void => {
+    const parsed = parseAsrCorrections(raw)
+    lastCommitted.current = parsed
+    onCommit(parsed)
+  }
+  const onChange = (v: string): void => {
+    setLocal(v)
+    if (timer.current) clearTimeout(timer.current)
+    timer.current = setTimeout(() => commit(v), 350)
+  }
+  const onBlur = (): void => {
+    if (timer.current) clearTimeout(timer.current)
+    commit(local)
+  }
+
+  return (
+    <textarea
+      value={local}
+      disabled={disabled}
+      placeholder={placeholder}
+      onChange={(e) => onChange(e.target.value)}
+      onBlur={onBlur}
+      rows={3}
       className={className}
     />
   )
@@ -777,7 +876,12 @@ function AiSection({
               <input
                 id={modelInputId}
                 list={`m-${provider}`}
-                value={baseModelName}
+                // Bind to the RAW stored value (not baseModelName, which resolves through the provider's
+                // fallback default) — same pattern as the Thinking model field below. baseModelName's
+                // fallback is right for DISPLAY text elsewhere on this page, but here it would make the
+                // field re-populate with the default the instant it's cleared, so backspacing to empty
+                // (→ "use default") was never actually possible.
+                value={settings.providerModels[provider] ?? ''}
                 disabled={provider === 'anthropic' || settings.managedKeys.includes('providerModels')}
                 onChange={(e) =>
                   patch({ providerModels: { ...settings.providerModels, [provider]: e.target.value } })
@@ -2231,6 +2335,17 @@ function DustSetup({
         })
         return
       }
+      if (r.incomplete) {
+        // `dust login`'s browser OAuth step finished but its separate interactive terminal
+        // workspace-picker step never did. Relaunching setup here would pop a SECOND Terminal window
+        // instead of pointing the user back at the one still waiting — just tell them to finish it there.
+        setCli({
+          busy: false,
+          ok: false,
+          msg: 'Almost there — finish picking your workspace in the Terminal window from setup (use the arrow keys, press Enter, then wait for "Authentication and workspace selection complete!"). Then click Connect again.'
+        })
+        return
+      }
       // No CLI session found → automatically kick off the setup (install + interactive login) instead of
       // just printing a command. The login needs a browser OAuth, so it opens in a Terminal window.
       setCli({ busy: true, ok: false, msg: 'No Dust CLI found. Starting setup…' })
@@ -2354,10 +2469,13 @@ function DustSetup({
   // cleared, or the token is unrecoverable). Probe once per mount with the READ-ONLY dustProbeSession —
   // NOT dustImportCli, which runs `dust status` and would rotate the OAuth token in a race with the
   // concurrent loadAgents() above, 401-ing the agent list. Then act on decideDustLiveCheck:
-  //   • connected    → nothing to do.
-  //   • needs-access → the keychain read was blocked; ask to allow it, DON'T relaunch setup.
-  //   • run-setup    → no live session behind the saved connection → auto-run install + `dust login`
-  //                    (Terminal), so the user is prompted to reconnect instead of silently assuming done.
+  //   • connected             → nothing to do.
+  //   • needs-access          → the keychain read was blocked; ask to allow it, DON'T relaunch setup.
+  //   • finish-workspace-pick → the browser OAuth step finished but the separate terminal
+  //                             workspace-picker step didn't; point back at that Terminal, DON'T relaunch.
+  //   • run-setup             → no live session behind the saved connection → auto-run install +
+  //                             `dust login` (Terminal), so the user is prompted to reconnect instead of
+  //                             silently assuming done.
   // Gated to CLI-origin connections (dustTokenMintedAt, set only by the CLI import/refresh, never by
   // saveDustKey): a MANUAL API-key connection has keySaved+hasWs but legitimately has NO CLI session, so
   // probing it would misread as "dead" and wrongly auto-launch the installer for a validly-keyed user.
@@ -2370,6 +2488,14 @@ function DustSetup({
       if (decision === 'connected') return
       if (decision === 'needs-access') {
         setCli({ busy: false, ok: false, msg: 'Allow Métis to read your Dust CLI session in Keychain, then Reconnect.' })
+        return
+      }
+      if (decision === 'finish-workspace-pick') {
+        setCli({
+          busy: false,
+          ok: false,
+          msg: 'Almost there — finish picking your workspace in the Terminal window from setup (arrow keys, then Enter), then Reconnect.'
+        })
         return
       }
       // decision === 'run-setup' — the saved connection is dead. Auto-run setup, but at most once per app
@@ -3120,7 +3246,7 @@ function ContextDocs({
       >
         <Upload size={18} className="text-[color:var(--cl-primary)]" />
         <span className="text-[13px] text-[color:var(--cl-foreground)]">
-          Give it more to work with
+          Add files for context
         </span>
         <span className="text-[12px] text-[color:var(--cl-muted-foreground)]">
           Drag &amp; drop files here to add them, or{' '}
@@ -3788,9 +3914,9 @@ export function Settings({
                   </select>
                 </Section>
                 <Section title="Custom instructions" desc="Added to every mode's prompt. Leave blank to use the defaults.">
-                  <textarea
+                  <LazyTextarea
                     value={settings.systemPrompt}
-                    onChange={(e) => patch({ systemPrompt: e.target.value })}
+                    onCommit={(v) => patch({ systemPrompt: v })}
                     disabled={settings.managedKeys.includes('systemPrompt')}
                     rows={3}
                     spellCheck={false}
@@ -3931,25 +4057,10 @@ export function Settings({
                     onChange={(v) => patch({ asrEntityBias: v })}
                     disabled={settings.managedKeys.includes('asrEntityBias')}
                   />
-                  <textarea
-                    value={settings.asrCorrections.map((c) => `${c.from} => ${c.to}`).join('\n')}
-                    onChange={(e) =>
-                      patch({
-                        asrCorrections: e.target.value
-                          .split('\n')
-                          .map((line) => {
-                            const i = line.indexOf('=>')
-                            if (i < 0) return null
-                            const from = line.slice(0, i).trim()
-                            const to = line.slice(i + 2).trim()
-                            return from ? { from, to } : null
-                          })
-                          .filter((c): c is { from: string; to: string } => c != null)
-                          .slice(0, 100)
-                      })
-                    }
+                  <VocabCorrectionsTextarea
+                    corrections={settings.asrCorrections}
+                    onCommit={(next) => patch({ asrCorrections: next })}
                     placeholder={'Metis => Métis\nMantu => Mantu\nparakeet => Parakeet'}
-                    rows={3}
                     disabled={settings.managedKeys.includes('asrCorrections')}
                     className={[
                       ctl,
@@ -4156,7 +4267,7 @@ export function Settings({
                   </Section>
                 )}
                 {/* Keybinds live with Profile: both are "how Métis is set up for you". */}
-                <Section title="Keyboard shortcuts" desc="Métis works with these easy to remember commands. Click any of the keybinds to edit.">
+                <Section title="Keyboard shortcuts" desc="Click any keybind below to edit it.">
                   <Shortcuts settings={settings} patch={patch} />
                 </Section>
               </div>
@@ -4563,6 +4674,22 @@ function IntelligenceTab({
       </Section>
 
       <GraphSection settings={settings} patch={patch} />
+
+      <Section
+        title="Published wiki (Dust-readable)"
+        desc="Mirrors your CRM-corrected brain — account/people/deal pages and meeting note cards — as plain markdown under a wiki/ folder next to your meetings, so Dust and other agents can read it."
+      >
+        <ToggleRow
+          label="Publish meeting intelligence"
+          desc={
+            settings.encryptTranscripts
+              ? 'Publishes readable meeting intelligence to your OneDrive folder, even though transcript encryption stays on. Meetings you flag confidential are always excluded. You will be asked to confirm.'
+              : 'Publishes readable meeting intelligence to your OneDrive folder. Meetings you flag confidential are always excluded.'
+          }
+          on={settings.publishBrainPages}
+          onChange={(v) => patch({ publishBrainPages: v })}
+        />
+      </Section>
 
       <Section
         title="Polo Pre-Sales"
@@ -5174,39 +5301,59 @@ function PermissionsSection(): JSX.Element {
     return <div className="text-[13px] text-[color:var(--cl-muted-foreground)]">Checking permissions…</div>
   }
 
-  const rows: { label: string; status: string; note: string }[] = [
+  const rows: { label: string; status: string; note: string; kind: 'microphone' | 'screenRecording'; fixLabel?: string }[] = [
     {
       label: 'Microphone',
       status: permissions.microphone,
+      kind: 'microphone',
       note: isWin
         ? 'Windows asks the first time you start Listen.'
-        : 'Grant in System Settings → Privacy & Security → Microphone.'
+        : 'Grant in System Settings → Privacy & Security → Microphone.',
+      fixLabel: isWin ? 'Check Windows Settings' : undefined
     },
     {
       label: 'Screen / system audio',
       status: permissions.screenRecording,
+      kind: 'screenRecording',
       note: isWin
         ? 'Windows may ask once before capturing system audio.'
-        : 'Grant in System Settings → Privacy & Security → Screen Recording.'
+        : 'Grant in System Settings → Privacy & Security → Screen Recording.',
+      fixLabel: isWin ? 'Check Windows Settings' : undefined
     }
   ]
 
   return (
     <div className="flex flex-col gap-2">
-      {rows.map((r) => (
-        <div key={r.label} className="cl-card flex items-start gap-2 px-2.5 py-2">
-          <PermissionDot status={r.status} />
-          <div className="flex-1">
-            <div className="flex items-center justify-between">
-              <span className="text-[13px] font-medium text-[color:var(--cl-foreground)]">{r.label}</span>
-              <span className="text-[11px] capitalize text-[color:var(--cl-muted-foreground)]">
-                {r.status.replace(/-/g, ' ')}
-              </span>
+      {rows.map((r) => {
+        // Mirrors Onboarding's CheckRow: an explicit Deny (macOS) always gets a fix link; on Windows,
+        // which never reports a true Deny, fixLabel unlocks the link instead so there's still a way back
+        // to Settings for a not-yet-granted mic or a screen-capture prompt the user dismissed.
+        const denied = r.status === 'denied'
+        const showFix = denied || (isWin && r.fixLabel)
+        return (
+          <div key={r.label} className="cl-card flex items-start gap-2 px-2.5 py-2">
+            <PermissionDot status={r.status} />
+            <div className="flex-1">
+              <div className="flex items-center justify-between">
+                <span className="text-[13px] font-medium text-[color:var(--cl-foreground)]">{r.label}</span>
+                <span className="text-[11px] capitalize text-[color:var(--cl-muted-foreground)]">
+                  {r.status.replace(/-/g, ' ')}
+                </span>
+              </div>
+              <div className="text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">{r.note}</div>
+              {showFix && (
+                <button
+                  type="button"
+                  onClick={() => void window.toto.openPermissionSettings(r.kind)}
+                  className="no-drag cl-focus mt-0.5 text-[11px] font-medium text-[color:var(--cl-primary)] hover:underline"
+                >
+                  {r.fixLabel ?? 'Open System Settings'}
+                </button>
+              )}
             </div>
-            <div className="text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">{r.note}</div>
           </div>
-        </div>
-      ))}
+        )
+      })}
     </div>
   )
 }

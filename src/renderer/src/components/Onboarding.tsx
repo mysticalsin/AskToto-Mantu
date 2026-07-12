@@ -226,6 +226,9 @@ export function Onboarding({
   // Anthropic — closes again if the user backs out of step 5 entirely.
   const [showApiPicker, setShowApiPicker] = useState(false)
   const headingRef = useRef<HTMLHeadingElement | null>(null)
+  // Windows has no OS consent dialog for desktop apps — the mic toggle only becomes "determined" (from
+  // this app's perspective) after it actually attempts a capture once. Fired at most once per mount.
+  const micProbeFiredRef = useRef(false)
 
   // Move focus to the new step's heading on every transition so screen readers announce it instead of
   // silently dropping focus to <body>.
@@ -240,10 +243,33 @@ export function Onboarding({
   useEffect(() => {
     if (step !== 6) return
     let alive = true
-    const load = (): void => {
-      void window.toto.getPermissions().then((p) => alive && setPerms(p))
+    // Windows never surfaces an OS consent dialog, so getPlatformPermissions() stays 'unknown' forever
+    // unless something actually calls getUserMedia. Do that once here, then let the existing poll below
+    // pick up whatever the OS ends up reporting. A rejection just means blocked — the status/fix-button
+    // flow already handles that — so it's swallowed, never an unhandled rejection.
+    const probeWindowsMicIfNeeded = (p: PlatformPermissions): void => {
+      if (!isWindows || micProbeFiredRef.current || p.microphone !== 'unknown') return
+      micProbeFiredRef.current = true
+      navigator.mediaDevices
+        .getUserMedia({ audio: true })
+        .then((stream) => stream.getTracks().forEach((t) => t.stop()))
+        .catch(() => {})
     }
-    void window.toto.requestPermissionsUpfront().then((p) => alive && setPerms(p)).catch(load)
+    const load = (): void => {
+      void window.toto.getPermissions().then((p) => {
+        if (!alive) return
+        setPerms(p)
+        probeWindowsMicIfNeeded(p)
+      })
+    }
+    void window.toto
+      .requestPermissionsUpfront()
+      .then((p) => {
+        if (!alive) return
+        setPerms(p)
+        probeWindowsMicIfNeeded(p)
+      })
+      .catch(load)
     const id = setInterval(load, 2500)
     return () => {
       alive = false
@@ -610,18 +636,18 @@ export function Onboarding({
       <div className="flex w-full max-w-[460px] flex-col gap-2">
         <button
           type="button"
-          disabled={busy || !recordingConsent}
+          disabled={busy}
           onClick={() => advance(true)}
           className={[
             'no-drag focus-ring flex items-center justify-center gap-2 rounded-xl bg-[var(--color-accent)] px-4 py-2.5 text-[14px] font-medium text-white hover:brightness-110 disabled:hover:brightness-100',
-            busy || !recordingConsent ? 'cursor-not-allowed opacity-50' : ''
+            busy ? 'cursor-not-allowed opacity-50' : ''
           ].join(' ')}
         >
           <MsLogo size={16} /> Sign in with Microsoft
         </button>
         <button
           type="button"
-          disabled={busy || !recordingConsent}
+          disabled={busy}
           onClick={() => advance(false)}
           className="no-drag focus-ring inline-flex items-center justify-center gap-1 rounded-xl px-4 py-2 text-[12px] text-[color:var(--color-ink-3)] hover:text-[color:var(--color-ink-2)] disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:text-[color:var(--color-ink-3)]"
         >

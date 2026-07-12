@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll } from 'vitest'
+import { describe, it, expect, afterAll } from 'vitest'
 import { execFile, execFileSync } from 'node:child_process'
 import { promisify } from 'node:util'
 import { importDustCliSession } from './dustcli'
@@ -51,24 +51,20 @@ async function setSession(fields: Record<string, string>): Promise<void> {
 }
 
 describe.runIf(canKeychain)('importDustCliSession (real keychain)', () => {
-  beforeAll(() => {
-    process.env.DUST_CLI_KEYCHAIN_SERVICE = TEST_SERVICE
-  })
   afterAll(async () => {
     await delAll()
-    delete process.env.DUST_CLI_KEYCHAIN_SERVICE
   })
 
   it('reports no session when the keychain is empty', async () => {
     await delAll()
-    const r = await importDustCliSession()
+    const r = await importDustCliSession(TEST_SERVICE)
     expect(r.ok).toBe(false)
-    expect(r.error).toMatch(/dust login/i)
+    expect(r.error).toMatch(/No Dust CLI session found/i)
   })
 
   it('imports token + workspace and maps EU region to eu.dust.tt', async () => {
     await setSession({ access_token: 'tok_eu_123', workspace_sid: 'ws_eu', region: 'europe-west1' })
-    const r = await importDustCliSession()
+    const r = await importDustCliSession(TEST_SERVICE)
     expect(r.ok).toBe(true)
     expect(r.token).toBe('tok_eu_123')
     expect(r.workspaceId).toBe('ws_eu')
@@ -77,14 +73,32 @@ describe.runIf(canKeychain)('importDustCliSession (real keychain)', () => {
 
   it('maps US region to dust.tt', async () => {
     await setSession({ access_token: 'tok_us_123', workspace_sid: 'ws_us', region: 'us-central1' })
-    const r = await importDustCliSession()
+    const r = await importDustCliSession(TEST_SERVICE)
     expect(r.ok).toBe(true)
     expect(r.baseUrl).toBe('https://dust.tt')
   })
 
   it('fails when only a partial session exists (token but no workspace)', async () => {
     await setSession({ access_token: 'tok_only' })
-    const r = await importDustCliSession()
+    const r = await importDustCliSession(TEST_SERVICE)
     expect(r.ok).toBe(false)
+  })
+
+  // `dust login` is a two-step flow: browser OAuth writes access_token first, then a separate
+  // interactive terminal workspace-picker writes workspace_sid. A user who closes the terminal after
+  // the browser step leaves exactly this state — access_token present, workspace_sid missing — which
+  // must be distinguishable from "no session at all" so the UI doesn't relaunch the whole setup.
+  it('flags a token-but-no-workspace session as incomplete, not a bare failure', async () => {
+    await setSession({ access_token: 'tok_only' })
+    const r = await importDustCliSession(TEST_SERVICE)
+    expect(r.ok).toBe(false)
+    expect(r.incomplete).toBe(true)
+  })
+
+  it('does not flag a genuinely empty keychain as incomplete', async () => {
+    await delAll()
+    const r = await importDustCliSession(TEST_SERVICE)
+    expect(r.ok).toBe(false)
+    expect(r.incomplete).toBeFalsy()
   })
 })

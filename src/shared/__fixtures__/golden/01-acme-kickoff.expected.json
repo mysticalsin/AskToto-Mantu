@@ -1,0 +1,38 @@
+{
+  "people": [
+    { "name": "Sarah Chen", "role": "CFO", "org": "Acme Bank" },
+    { "name": "James Walsh", "role": "Head of IT", "org": "Acme Bank" }
+  ],
+  "accounts": [{ "name": "Acme Bank", "sector": "banking" }],
+  "deals": [{ "name": "Acme Core Banking Migration", "account": "Acme Bank", "stage": "negotiation" }],
+  "numeric_facts": [
+    {
+      "kind": "amount",
+      "value": 2400000,
+      "unit": "EUR",
+      "quote": "the total contract value comes in at €2.4M for the first phase"
+    },
+    {
+      "kind": "headcount",
+      "value": 45,
+      "unit": null,
+      "quote": "we have 45 people on the account team today"
+    },
+    {
+      "kind": "percent",
+      "value": 15,
+      "unit": "%",
+      "quote": "We're expecting margins to improve by 15%"
+    },
+    {
+      "kind": "date",
+      "value": 2026,
+      "unit": null,
+      "quote": "The renewal is locked in for 2026"
+    }
+  ],
+  "commitments": [
+    { "text": "send over the updated security pack", "by": "you" },
+    { "text": "introduce us to the compliance lead", "by": "Sarah Chen" }
+  ]
+}

@@ -109,7 +109,13 @@ const api = {
   brainBackfill: (): Promise<{ queued: number }> => ipcRenderer.invoke(IPC.brainBackfill),
   brainOpenDashboard: (): Promise<{ ok: boolean; error?: string }> =>
     ipcRenderer.invoke(IPC.brainOpenDashboard),
-  brainRebuildAll: (): Promise<{ queued: number }> => ipcRenderer.invoke(IPC.brainRebuildAll),
+  // MI-2.5 Fix F: `error` is set (queued: 0) when a purge failure aborts the rebuild before it starts.
+  brainRebuildAll: (): Promise<{ queued: number; error?: string }> => ipcRenderer.invoke(IPC.brainRebuildAll),
+  // MI-2.5 review round 3: user-invoked recovery from a durable correction-journal corruption lock —
+  // clears the sentinel so corrections resume (the quarantined copy is left for inspection). `cleared`
+  // is false when there was no lock to clear.
+  brainClearJournalCorruption: (): Promise<{ ok: boolean; cleared?: boolean; error?: string }> =>
+    ipcRenderer.invoke(IPC.brainClearJournalCorruption),
   brainRead: (): Promise<import('@shared/brain').BrainRead> => ipcRenderer.invoke(IPC.brainRead),
   // Canonical people/account names only — feeds the ASR entity-casing bias (lib/entity-casing.ts).
   brainEntityNames: (): Promise<import('@shared/ipc').BrainEntityNamesResult> =>
@@ -169,6 +175,10 @@ const api = {
   // encrypted/plaintext state.
   recallUpdateRecap: (file: string, recap: string): Promise<{ ok: boolean; error?: string }> =>
     ipcRenderer.invoke(IPC.recallUpdateRecap, { file, recap }),
+  // Task MI-5: flag/unflag a saved meeting as confidential — excludes it from every published wiki
+  // surface (main/brain/publish.ts). Rewrites only the frontmatter block; never renames the file.
+  recallSetConfidential: (file: string, confidential: boolean): Promise<{ ok: boolean; error?: string }> =>
+    ipcRenderer.invoke(IPC.recallSetConfidential, { file, confidential }),
   // Delete every saved meeting + the knowledge graph. Main pops its own (extra-emphatic) confirm dialog.
   recallDeleteAll: (): Promise<{ ok: boolean; deleted: number; failed?: string[]; error?: string }> =>
     ipcRenderer.invoke(IPC.recallDeleteAll),
@@ -181,6 +191,44 @@ const api = {
   // Deal outcome: mark a deal open/won/lost (or reopen). dealSlug = display name, slugified in main.
   brainSetDealOutcome: (dealSlug: string, outcome: 'open' | 'won' | 'lost'): Promise<{ ok: boolean; error?: string }> =>
     ipcRenderer.invoke(IPC.brainSetDealOutcome, { dealSlug, outcome }),
+  // Correction engine (Task MI-2): rename/merge/unmerge/field-pin/commitment-reject. All five take
+  // entity SLUGS (the immutable join key), never display names — the caller already has them from a
+  // brain:read/brainEntityNames response.
+  // asrSkipped/reason: the rename itself succeeded, but the alsoFixAsr pair couldn't be represented as
+  // a live-transcript ASR correction (e.g. a name over the 80-char cap) — surfaced so MI-3's UI can say so.
+  brainEntityRename: (
+    kind: import('@shared/brain').EntityKind,
+    id: string,
+    newName: string,
+    alsoFixAsr?: boolean
+  ): Promise<{ ok: boolean; error?: string; asrSkipped?: boolean; reason?: string }> =>
+    ipcRenderer.invoke(IPC.brainEntityRename, { kind, id, newName, alsoFixAsr }),
+  // seq (Task MI-3): the appended entity_merge journal entry's own sequence number, handed straight to
+  // brainEntityUnmerge for the record page's post-merge "Undo" affordance.
+  brainEntityMerge: (
+    kind: import('@shared/brain').EntityKind,
+    fromId: string,
+    intoId: string
+  ): Promise<{ ok: boolean; error?: string; seq?: number }> =>
+    ipcRenderer.invoke(IPC.brainEntityMerge, { kind, fromId, intoId }),
+  brainEntityUnmerge: (targetSeq: number): Promise<{ ok: boolean; error?: string }> =>
+    ipcRenderer.invoke(IPC.brainEntityUnmerge, { targetSeq }),
+  brainEntityUpdateField: (
+    kind: import('@shared/brain').EntityKind,
+    id: string,
+    field: string,
+    value: unknown
+  ): Promise<{ ok: boolean; error?: string }> =>
+    ipcRenderer.invoke(IPC.brainEntityUpdateField, { kind, id, field, value }),
+  brainCommitmentReject: (personSlug: string, text: string, dealSlug?: string): Promise<{ ok: boolean; error?: string }> =>
+    ipcRenderer.invoke(IPC.brainCommitmentReject, { personSlug, dealSlug, text }),
+  // Task MI-3: read-only. `file` is a saved meeting's basename — returns the stored MeetingExtraction, or
+  // null when the brain hasn't ingested/extracted that meeting yet (also null while signed out).
+  brainMeetingExtraction: (file: string): Promise<import('@shared/brain').MeetingExtraction | null> =>
+    ipcRenderer.invoke(IPC.brainMeetingExtraction, { file }),
+  // Task MI-3: aggregated needs-attention queue (lint contradictions, AMBIGUOUS fields, contradicted pins).
+  brainAttention: (): Promise<import('@shared/ipc').BrainAttentionResult> =>
+    ipcRenderer.invoke(IPC.brainAttention),
   setListeningState: (on: boolean): Promise<void> => ipcRenderer.invoke(IPC.listeningState, on),
   asrBundled: (): Promise<boolean> => ipcRenderer.invoke(IPC.asrBundled),
 

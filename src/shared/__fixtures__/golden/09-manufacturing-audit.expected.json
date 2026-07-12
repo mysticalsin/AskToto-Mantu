@@ -1,0 +1,32 @@
+{
+  "people": [
+    { "name": "Henrik Nilsson", "role": "Plant Director", "org": "Ironclad Manufacturing" },
+    { "name": "Laura Bianchi", "role": "QA Lead", "org": "Ironclad Manufacturing" }
+  ],
+  "accounts": [{ "name": "Ironclad Manufacturing", "sector": "manufacturing" }],
+  "deals": [{ "name": "Ironclad Manufacturing Remediation Plan", "account": "Ironclad Manufacturing", "stage": "remediation" }],
+  "numeric_facts": [
+    {
+      "kind": "date",
+      "value": 2019,
+      "unit": null,
+      "quote": "Henrik Nilsson is our Plant Director, he's been running point since 2019"
+    },
+    {
+      "kind": "percent",
+      "value": 6,
+      "unit": "%",
+      "quote": "The audit found defect rates down by 6 percent compared to last year's review"
+    },
+    {
+      "kind": "amount",
+      "value": 480000,
+      "unit": "EUR",
+      "quote": "Laura's team also flagged a remediation cost of €480,000 for the two open findings"
+    }
+  ],
+  "commitments": [
+    { "text": "send over the remediation plan for sign-off by Friday", "by": "you" },
+    { "text": "send the full audit report", "by": "Laura Bianchi" }
+  ]
+}

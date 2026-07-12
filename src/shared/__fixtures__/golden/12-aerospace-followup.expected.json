@@ -1,0 +1,26 @@
+{
+  "people": [
+    { "name": "Victoria Hale", "role": "Program Director", "org": "Falconworks" },
+    { "name": "Daniel Osei", "role": "Technical Review Lead", "org": "Falconworks" }
+  ],
+  "accounts": [{ "name": "Falconworks", "sector": "aerospace-defense" }],
+  "deals": [{ "name": "Falconworks Program Contract", "account": "Falconworks", "stage": "sign-off" }],
+  "numeric_facts": [
+    {
+      "kind": "amount",
+      "value": 3000000,
+      "unit": "GBP",
+      "quote": "The final contract value Victoria approved is worth £3M for the initial three-year term"
+    },
+    {
+      "kind": "percent",
+      "value": 5,
+      "unit": "%",
+      "quote": "Daniel's board also flagged a 5 percent contingency reserve for the technical risk items"
+    }
+  ],
+  "commitments": [
+    { "text": "send the signed contract back before the end of the month", "by": "you" },
+    { "text": "send the final technical risk register", "by": "Daniel Osei" }
+  ]
+}
