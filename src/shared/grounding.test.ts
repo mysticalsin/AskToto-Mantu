@@ -272,6 +272,25 @@ describe('extractNumerals', () => {
     const hits = extractNumerals('some odd figure like 12,34,567 shown once')
     expect(hits.some((h) => h.value === 1234567)).toBe(false)
   })
+
+  it('FIX 6: a net-zero-shift (ligature expansion cancelling a decomposed-accent contraction) never fabricates a fragment hit', () => {
+    // 'ﬁ' (U+FB01) NFKC-expands to "fi" (+1 char); the decomposed 'e' + combining acute (U+0301) later
+    // in the SAME string NFKC-recomposes to 'é' (-1 char). The two cancel out: folded.length ends up
+    // EQUAL to span.length even though every position between the two shifts is off by one — the
+    // pre-fix length check alone was fooled by this coincidence and mis-restamped the NNBSP, splicing a
+    // stray space into the middle of "12500" and fabricating a bare "1" (a chopped fragment of "12"
+    // that was never actually written). The reviewer's exact repro:
+    const span = 'ﬁ 12 500 sum' + 'é' // "sumé" written as a decomposed accent
+    const hits = extractNumerals(span)
+    // The one thing that must never happen: a fabricated fragment hit of bare value 1.
+    expect(hits.some((h) => h.value === 1)).toBe(false)
+    // Every acceptable outcome reads the digits as actually written: either the correctly-grouped
+    // 12500, or (fail-closed, since the NNBSP re-stamp bailed) the two bare runs 12 and 500 exactly as
+    // they appear character-for-character — never anything else.
+    const values = hits.map((h) => h.value).sort((a, b) => a - b)
+    const acceptable = [[], [12500], [12, 500]]
+    expect(acceptable.some((a) => a.length === values.length && a.every((v, i) => v === values[i]))).toBe(true)
+  })
 })
 
 describe('numeralDerivable', () => {
