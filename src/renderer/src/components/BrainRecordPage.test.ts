@@ -5,7 +5,8 @@ import {
   sortAttentionItems,
   filterMergeCandidates,
   formatAmount,
-  isMeaningfulRename
+  isMeaningfulRename,
+  recordKey
 } from './BrainRecordPage'
 import type { AttentionItem } from '@shared/ipc'
 
@@ -156,5 +157,34 @@ describe('isMeaningfulRename — gates the "also fix live transcription" checkbo
   it('an unchanged or blank new name is not meaningful', () => {
     expect(isMeaningfulRename('Acme', 'Acme')).toBe(false)
     expect(isMeaningfulRename('Acme', '  ')).toBe(false)
+  })
+})
+
+describe('recordKey — the React key that forces a fresh remount on every record change', () => {
+  // BrainView stamps this as <BrainRecordPage key={recordKey(record)} />. React only remounts (clearing
+  // every in-progress FieldCard/rename draft) when the key CHANGES, so the property that matters is:
+  // a different record ⇒ a different key. The exact failure the reviewer flagged is the direct
+  // record→record transition (post-merge navigate-to-survivor, post-undo navigate-to-restored-source):
+  // same component element, different record — its key must differ so a half-typed edit can't save to
+  // the wrong entity.
+
+  it('a post-merge navigation to the survivor yields a different key (so the page remounts)', () => {
+    // The exact shape of confirmMerge → onOpenRecord(kind, survivorId): same kind, different id.
+    expect(recordKey({ kind: 'account', id: 'acme' })).not.toBe(recordKey({ kind: 'account', id: 'acme-holdings' }))
+  })
+
+  it('a post-undo navigation back to the restored source yields a different key', () => {
+    // undoMerge → setRecord({ kind, id: fromId }) after having landed on the survivor.
+    const survivor = recordKey({ kind: 'person', id: 'maria-silva' })
+    const restoredSource = recordKey({ kind: 'person', id: 'm-silva' })
+    expect(restoredSource).not.toBe(survivor)
+  })
+
+  it('differs when only the kind differs (two entities can share a slug across kinds)', () => {
+    expect(recordKey({ kind: 'account', id: 'acme' })).not.toBe(recordKey({ kind: 'deal', id: 'acme' }))
+  })
+
+  it('is stable for the same record (no gratuitous remount while editing the SAME entity)', () => {
+    expect(recordKey({ kind: 'deal', id: 'acme-core' })).toBe(recordKey({ kind: 'deal', id: 'acme-core' }))
   })
 })

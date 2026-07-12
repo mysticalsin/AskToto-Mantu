@@ -26,7 +26,7 @@ import { buildMarsWeek, renderMarsMarkdown } from '@shared/mars'
 import { MantuMark } from './MantuMark'
 import { Spinner } from './ui'
 import { useFlash } from '../lib/useFlash'
-import { BrainRecordPage, sortAttentionItems, type BrainRecordRef, type RecentMerge } from './BrainRecordPage'
+import { BrainRecordPage, recordKey, sortAttentionItems, type BrainRecordRef, type RecentMerge } from './BrainRecordPage'
 
 /**
  * Mantu Intelligence — the second-brain dashboard over the meeting knowledge store (.brain/).
@@ -569,6 +569,12 @@ export function BrainView({
         </div>
       ) : record && data ? (
         <BrainRecordPage
+          // Force a genuine remount on every record change (incl. direct record→record transitions:
+          // post-merge onOpenRecord to the survivor, post-undo setRecord to the restored source).
+          // Without this React reuses the instance and leftover local edit state (header rename draft,
+          // each FieldCard's editing/draft/pending) would survive the swap and save to the WRONG entity
+          // — a misattribution the whole correction feature exists to prevent. See recordKey's doc.
+          key={recordKey(record)}
           recordRef={record}
           data={data}
           onOpenRecord={openRecord}
