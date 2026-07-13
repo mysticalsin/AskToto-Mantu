@@ -32,6 +32,13 @@ function isStreamOptionsRejection(e: unknown): boolean {
   return body.includes('stream_options') || body.includes('include_usage')
 }
 
+/** Resolve the completion ceiling without changing established cloud-provider budgets. */
+export function outputTokenBudget(model: string, mode: AskStart['mode'], override?: number): number {
+  if (override !== undefined) return override
+  const fixedTemperature = /(^|\/)o\d/i.test(model) || /kimi-for-coding/i.test(model)
+  return fixedTemperature || mode === 'recap' ? 8192 : 4096
+}
+
 /** OpenAI-compatible (GPT, Kimi/Moonshot, custom base URL) — the default for any non-cli/dust/anthropic kind. */
 export function streamOpenAI(opts: StreamOptions): StreamHandle {
   // Guard against silently falling through to the SDK's default baseURL (api.openai.com) when the
@@ -63,7 +70,7 @@ export function streamOpenAI(opts: StreamOptions): StreamHandle {
     // Reasoning-only models (o-series, kimi-for-coding) spend a big chunk of the budget on hidden
     // reasoning BEFORE the answer, so give them more headroom or the answer can come back empty
     // (esp. on vision, where describing the image eats tokens). o-series uses max_completion_tokens.
-    const maxTokens = fixedTemperature || opts.req.mode === 'recap' ? 8192 : 4096
+    const maxTokens = outputTokenBudget(opts.model, opts.req.mode, opts.maxOutputTokens)
 
     // Inner function: build params + run the streaming loop. `includeUsage` controls whether
     // stream_options.include_usage is sent — some providers 400 on it, triggering a retry without it.

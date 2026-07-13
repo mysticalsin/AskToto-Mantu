@@ -98,7 +98,12 @@ export interface SpawnArgsInput {
 }
 
 /**
- * The sidecar spawn contract (PLAN.md §4.4) — EXACT flag set, identical on mac and win. `--cache-reuse`
+ * The sidecar spawn contract (PLAN.md §4.4) — EXACT flag set, identical on mac and win. Two slots share
+ * the total context, so 65536 intentionally yields 32768 tokens per slot: enough for the app's existing
+ * ~30k-token summary input cap plus its bounded local completion. b9957 otherwise permits up to 8192 MiB
+ * of host-memory prompt cache; the explicit 128 MiB ceiling covers the measured two-slot checkpoint
+ * working set (~77 MiB) without letting an optional background feature consume another 8 GiB.
+ * `--cache-reuse`
  * is deliberately absent: the live spike log shows llama.cpp disables it for multimodal loads, so the
  * per-slot `cache_prompt` request field (shared.ts's llamaSlotOptions, set by the future local strategy)
  * is the load-bearing prompt-cache mechanism instead. `--reasoning off` is mandatory — without it Qwen3.5
@@ -110,8 +115,9 @@ export function buildSpawnArgs(input: SpawnArgsInput): string[] {
     '--mmproj', input.mmproj,
     '--host', '127.0.0.1',
     '--port', '0',
-    '-c', '8192',
+    '-c', '65536',
     '--parallel', '2',
+    '--cache-ram', '128',
     '-ngl', '99',
     '--no-ui',
     '--jinja',
@@ -147,6 +153,11 @@ let state: RuntimeState = 'stopped'
 let idleTimer: NodeJS.Timeout | null = null
 let restartTimestamps: number[] = []
 let lastModelPaths: ModelPaths | null = null
+// Monotonic ownership token for start attempts. stop() invalidates the active generation before killing
+// its child, so a Windows Vulkan failure/exit observed during shutdown cannot continue into the CPU
+// fallback after will-quit has already completed. A subsequent start receives a new generation and owns
+// any child it spawns; stale continuations must never mutate that newer child's state.
+let startGeneration = 0
 // The in-flight start() call, if any (F1: startup race). A second concurrent caller while state ===
 // 'starting' awaits THIS SAME promise instead of racing ahead on its own — so baseURL()/sessionKey() are
 // never reachable by a caller whose await resolved before the sidecar actually finished spawning + health.
@@ -240,7 +251,12 @@ function waitForDrain(): Promise<void> {
   return new Promise((resolve) => drainWaiters.push(resolve))
 }
 
-function spawnAndWaitHealthy(binaryPath: string, modelPaths: ModelPaths, platform: LlamaPlatform): Promise<void> {
+function spawnAndWaitHealthy(
+  binaryPath: string,
+  modelPaths: ModelPaths,
+  platform: LlamaPlatform,
+  generation: number
+): Promise<void> {
   return new Promise((resolve, reject) => {
     const args = buildSpawnArgs({ gguf: modelPaths.gguf, mmproj: modelPaths.mmproj })
     let proc: ChildProcess
@@ -270,10 +286,23 @@ function spawnAndWaitHealthy(binaryPath: string, modelPaths: ModelPaths, platfor
       const parsed = parseBoundPort(outputBuffer)
       if (parsed === null) return
       boundPort = parsed
-      port = parsed
+      // Keep the candidate port local until health succeeds. A detached process can flush buffered output
+      // after stop() and even after a newer generation is already healthy; publishing here would redirect
+      // the running app to the killed process's endpoint.
+      if (generation !== startGeneration || child !== proc) {
+        settled = true
+        reject(new StartCancelledError())
+        return
+      }
       pollHealth(parsed, HEALTH_BUDGET_MS[platform]).then(
         () => {
           if (!settled) {
+            if (generation !== startGeneration || child !== proc) {
+              settled = true
+              reject(new StartCancelledError())
+              return
+            }
+            port = parsed
             settled = true
             resolve()
           }
@@ -297,16 +326,18 @@ function spawnAndWaitHealthy(binaryPath: string, modelPaths: ModelPaths, platfor
     })
 
     proc.once('exit', (code, signal) => {
-      // G1 guard: this exit event belongs to a proc that is no longer the module's current `child` (a
-      // newer instance already took over — e.g. a model switch mid-flight) AND its own start promise
-      // already settled (it reached healthy at some point, so this is NOT the pre-health rejection path
-      // below). That combination means this exit is stale — a late SIGKILL exit for a sidecar that was
-      // already superseded. Acting on it here would clobber the NEW instance's child/port/state ownership
-      // (orphaning it — will-quit's stop() would then kill nothing) and could fire a spurious crash audit
-      // + auto-restart for a switch that already succeeded. Do nothing and let the new instance's own
-      // lifecycle continue undisturbed. The pre-health case (settled === false) always falls through below
-      // regardless of identity, so a proc that dies before ever becoming healthy still rejects correctly.
-      if (child !== proc && settled) return
+      // This process is no longer the module's current child: stop() already detached it, or a newer start
+      // owns the global child/port/state. Its own pre-health promise must still reject, but a stale exit must
+      // never clear or restart the newer child. A settled stale process needs no further action at all.
+      if (child !== proc) {
+        if (!settled) {
+          settled = true
+          const tail = outputBuffer.trim()
+          const detail = tail ? ` — last output: ${tail.slice(-800)}` : ''
+          reject(new Error(`llama-server exited before becoming healthy (code=${code}, signal=${signal})${detail}`))
+        }
+        return
+      }
 
       const wasRunning = state === 'running'
       child = null
@@ -356,28 +387,45 @@ function samePaths(a: ModelPaths | null, b: ModelPaths): boolean {
  * extracted so the public start() below can own startPromise/switch bookkeeping around it. Mutates module
  * state (child/port/state) exactly as it always has.
  */
-async function spawnCandidates(modelPaths: ModelPaths, platform: LlamaPlatform): Promise<void> {
+class StartCancelledError extends Error {
+  constructor() {
+    super('local runtime start cancelled')
+    this.name = 'StartCancelledError'
+  }
+}
+
+function assertCurrentGeneration(generation: number): void {
+  if (generation !== startGeneration) throw new StartCancelledError()
+}
+
+async function spawnCandidates(modelPaths: ModelPaths, platform: LlamaPlatform, generation: number): Promise<void> {
   const candidates = resolveBinaryPath(platform)
   let lastErr: Error | null = null
   for (let i = 0; i < candidates.length; i++) {
+    assertCurrentGeneration(generation)
     const candidate = candidates[i]
     if (!existsSync(candidate.path)) {
       lastErr = new Error(`llama-server binary missing at ${candidate.path}`)
       continue
     }
     try {
-      await spawnAndWaitHealthy(candidate.path, modelPaths, platform)
+      await spawnAndWaitHealthy(candidate.path, modelPaths, platform, generation)
+      assertCurrentGeneration(generation)
       state = 'running'
       scheduleIdleStop()
       auditLog('local.runtime.start', { platform, variant: candidate.variant })
       return
     } catch (err) {
       lastErr = err instanceof Error ? err : new Error(String(err))
+      // A cancelled generation was already detached/killed by stop(). Do not touch the module-level child
+      // here: a newer start may already own it by the time this stale continuation resumes.
+      if (generation !== startGeneration || err instanceof StartCancelledError) throw new StartCancelledError()
       stopChildProcess()
       // Windows only: a failed Vulkan spawn/health falls back to the CPU candidate once.
       if (platform !== 'win' || i === candidates.length - 1) break
     }
   }
+  assertCurrentGeneration(generation)
   state = 'stopped'
   auditLog('local.runtime.missing', { platform, error: errMsg(lastErr) })
   throw lastErr ?? new Error('llama-server failed to start')
@@ -422,12 +470,14 @@ export async function start(modelPaths: ModelPaths, platform: LlamaPlatform = de
   }
   lastModelPaths = modelPaths
   state = 'starting'
-  const p = spawnCandidates(modelPaths, platform)
+  const generation = ++startGeneration
+  const p = spawnCandidates(modelPaths, platform, generation)
   startPromise = p
   try {
     await p
   } finally {
-    startPromise = null
+    // A stale start may finish after a newer one has already installed its own shared promise.
+    if (startPromise === p) startPromise = null
   }
 }
 
@@ -441,6 +491,7 @@ function stopChildProcess(): void {
 export function stop(): void {
   clearIdleTimer()
   const wasRunning = state === 'running' || state === 'starting'
+  startGeneration++
   stopChildProcess()
   state = 'stopped'
   if (wasRunning) auditLog('local.runtime.stop', { reason: 'explicit' })

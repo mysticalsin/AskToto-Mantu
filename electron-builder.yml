@@ -55,6 +55,12 @@ extraResources:
     to: graphify_runner.py
   - from: THIRD_PARTY_NOTICES.md
     to: THIRD_PARTY_NOTICES.md
+  # One selected, checksum-pinned Qwen payload is embedded in every installer. Installed application
+  # code has no model downloader and resolves these files only below process.resourcesPath.
+  - from: resources/local-llm/models/qwen3.5-0.8b
+    to: local-llm/models/qwen3.5-0.8b
+  - from: resources/local-llm/LICENSE.QWEN3.5-APACHE-2.0.txt
+    to: local-llm/LICENSE.QWEN3.5-APACHE-2.0.txt
   # Bundled ASR model weights — served via asr-model:// protocol (zero runtime download).
   # Populated by `npm run fetch-models` before packaging.
   - from: resources/models
@@ -73,6 +79,8 @@ extraResources:
     to: ffmpeg
   - from: resources/ort
     to: ort
+  - from: resources/runtime-assets-manifest.json
+    to: runtime-assets-manifest.json
 mac:
   category: public.app-category.productivity
   # ASCII everywhere on disk (see the productName + win notes): the .app bundle is Metis.app, its helper
@@ -125,7 +133,9 @@ dmg:
   title: Métis ${version}
 win:
   icon: build/icon.png
-  publisherName: Mantu
+  # Do not hardcode a guessed publisher name. For signed builds electron-builder derives the exact
+  # common name from the Authenticode certificate and writes it into the updater configuration.
+  # The release workflow independently compares that certificate to WIN_CSC_EXPECTED_SUBJECT.
   target:
     - nsis      # → Metis-Setup-<version>.exe (installer)
     - portable  # → Metis-Portable-<version>.exe (no-install single exe)

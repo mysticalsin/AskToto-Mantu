@@ -2,10 +2,10 @@
 
 Use this before any customer build or public tag.
 
-**Current blocker (as of 2026-07-10): GitHub Actions runners on this repo are billing-blocked.**
-Every CI run — `build.yml` and `release.yml` — fails immediately with zero steps executed until
-org billing is fixed. None of the gates below (signing, ffmpeg, sherpa, version-parity) get a
-chance to run until that's resolved. See `docs/MANTU-IT-REQUEST.md` for the ask to Mantu IT.
+**External-state check required:** a 2026-07-10 observation recorded GitHub Actions runs ending before
+their first step because of an organization billing block. Re-check the current run before naming that
+as today's cause; repository code cannot prove mutable GitHub billing or secret state. If it recurs,
+none of the gates below execute. See `docs/MANTU-IT-REQUEST.md` for the recorded Mantu IT ask.
 
 ## Verified In Repo
 
@@ -33,10 +33,11 @@ chance to run until that's resolved. See `docs/MANTU-IT-REQUEST.md` for the ask 
 
 ## ffmpeg Sidecar Provisioning
 
-`resources/ffmpeg` (the reviewed LGPL-only decoder binaries) is untracked in git and has no other source
-of truth. `.github/workflows/build.yml` and `release.yml` restore it from a GitHub release in this repo
-tagged `ffmpeg-sidecar-v1`, falling back to an `actions/cache` restore. Seed it once, locally, from a
-checkout that already has the reviewed binaries in `resources/ffmpeg/`:
+The reviewed platform binaries under `resources/ffmpeg/` are untracked, but their hash-pinned
+`manifest.json` and LGPL license are tracked in git. `.github/workflows/build.yml` and `release.yml`
+restore the binaries from this repo's `ffmpeg-sidecar-v1` GitHub release, with `actions/cache` as an
+optimization; the tracked manifest remains the verification trust anchor. Seed the release once from a
+checkout that already has the reviewed binaries:
 
 ```bash
 cp resources/ffmpeg/darwin-arm64/ffmpeg /tmp/ffmpeg-darwin-arm64
@@ -86,9 +87,9 @@ Windows:
 npm run release:win
 ```
 
-Windows signing is deferred per `docs/MANTU-IT-REQUEST.md`'s v1 scope (macOS first) — a
-`release-windows` job failing on missing `WIN_CSC_LINK`/`WIN_CSC_KEY_PASSWORD` today is expected,
-not a bug to chase, until Windows Authenticode credentials are provisioned.
+Windows releases are not deferred or allowed to publish unsigned. The tagged workflow fails closed
+unless `WIN_CSC_LINK`, `WIN_CSC_KEY_PASSWORD`, and `WIN_CSC_EXPECTED_SUBJECT` are provisioned, then
+verifies that the Authenticode certificate subject or common name matches that expected value exactly.
 
 ## Store Release Commands
 

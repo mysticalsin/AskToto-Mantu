@@ -54,7 +54,12 @@ const openaiMock = vi.hoisted(() => ({
 }))
 vi.mock('./openai', () => openaiMock)
 
-import { localEligibleFor, localBaseReady, pickPrimaryProvider } from './local-routing'
+import {
+  localEligibleFor,
+  localBaseReady,
+  localVisionPrivacyRequired,
+  pickPrimaryProvider
+} from './local-routing'
 import { streamLocal } from './local'
 
 type LocalLlmSettings = {
@@ -64,7 +69,7 @@ type LocalLlmSettings = {
 const readySettings = (overrides: Partial<LocalLlmSettings['localLlm']> = {}): LocalLlmSettings => ({
   localLlm: {
     enabled: true,
-    modelId: 'qwen3.5-2b',
+    modelId: 'qwen3.5-0.8b',
     useFor: { suggest: true, summary: true, vision: true },
     ...overrides
   }
@@ -103,9 +108,17 @@ describe('localEligibleFor', () => {
   )
 
   it.each(['think', 'deep'] as const)(
-    'is NEVER eligible once the tier escalates off base (tier=%s) — even for suggest',
+    'keeps text tasks off the small local model once the tier escalates (tier=%s)',
     (tier) => {
       expect(localEligibleFor({ mode: 'suggest' }, readySettings(), tier as ModelTier, null)).toBe(false)
+      expect(localEligibleFor({ mode: 'summary' }, readySettings(), tier as ModelTier, null)).toBe(false)
+    }
+  )
+
+  it.each(['think', 'deep'] as const)(
+    'keeps an opted-in screenshot local even when its prompt escalates to %s',
+    (tier) => {
+      expect(localEligibleFor({ mode: 'vision' }, readySettings(), tier as ModelTier, null)).toBe(true)
     }
   )
 
@@ -164,6 +177,21 @@ describe('localEligibleFor', () => {
   })
 })
 
+describe('localVisionPrivacyRequired', () => {
+  it('treats the enabled screenshot toggle as a no-cloud policy, independent of runtime readiness', () => {
+    expect(localVisionPrivacyRequired({ mode: 'vision' }, readySettings())).toBe(true)
+    fsState.binaryExists = false
+    localModelsMock.isDownloaded.mockReturnValue(false)
+    expect(localVisionPrivacyRequired({ mode: 'vision' }, readySettings())).toBe(true)
+  })
+
+  it('does not claim non-vision requests or an explicitly disabled screenshot toggle', () => {
+    expect(localVisionPrivacyRequired({ mode: 'summary' }, readySettings())).toBe(false)
+    const disabled = readySettings({ useFor: { suggest: true, summary: true, vision: false } })
+    expect(localVisionPrivacyRequired({ mode: 'vision' }, disabled)).toBe(false)
+  })
+})
+
 // ─── localBaseReady + the readiness derivation index.ts's settings snapshot performs ──────────────────
 describe('localBaseReady (feeds index.ts localReady, local*Ready, and the visionReady/visionAvailable ORs)', () => {
   it('true when enabled + binary present + model downloaded + allowlist permits it', () => {
@@ -212,6 +240,10 @@ describe('localBaseReady (feeds index.ts localReady, local*Ready, and the vision
 
 // ─── pickPrimaryProvider — first-attempt precedence ────────────────────────────────────────────────────
 describe('pickPrimaryProvider', () => {
+  it('a local-screenshot privacy requirement outranks provider overrides, CLI priority and cloud', () => {
+    expect(pickPrimaryProvider('dust', false, 'claude-cli', 'anthropic', true)).toBe('local')
+  })
+
   it('providerOverride always wins, even when local is eligible', () => {
     expect(pickPrimaryProvider('dust', true, 'claude-cli', 'anthropic')).toBe('dust')
   })
@@ -240,7 +272,7 @@ describe('streamLocal', () => {
     providerId: 'local',
     kind: 'local',
     apiKey: '', // intentionally blank — streamLocal must never rely on this; it derives its own key
-    model: 'qwen3.5-2b',
+    model: 'qwen3.5-0.8b',
     temperature: 0.7,
     system: 'sys',
     req: { id: 'x', mode, prompt: '', history: [] } as AskStart,
@@ -261,6 +293,59 @@ describe('streamLocal', () => {
     expect(openaiMock.streamOpenAI).toHaveBeenCalledOnce()
     const passed = openaiMock.streamOpenAI.mock.calls[0][0] as StreamOptions
     expect(passed.llamaSlotOptions).toEqual(expected)
+  })
+
+  it.each([
+    ['suggest', 96],
+    ['summary', 512],
+    ['vision', 384]
+  ] as const)('bounds local %s generation to %i tokens', async (mode, expected) => {
+    streamLocal(baseOpts(mode))
+    await flush()
+    const passed = openaiMock.streamOpenAI.mock.calls[0][0] as StreamOptions
+    expect(passed.maxOutputTokens).toBe(expected)
+  })
+
+  it('drops generic chat history before an in-scope local request so it cannot consume the bounded slot', async () => {
+    streamLocal(
+      baseOpts('summary', {
+        req: {
+          id: 'summary-with-history',
+          mode: 'summary',
+          prompt: '',
+          transcript: 'Current conversation',
+          history: [{ role: 'assistant', content: 'Stale cloud answer '.repeat(5000) }]
+        } as AskStart
+      })
+    )
+    await flush()
+    const passed = openaiMock.streamOpenAI.mock.calls[0][0] as StreamOptions
+    expect(passed.req.history).toEqual([])
+    expect(passed.req.transcript).toBe('Current conversation')
+  })
+
+  it('bounds local summary system + transcript input while preserving security head and recent transcript tail', async () => {
+    const latest = 'LATEST DECISION: ship Tuesday.'
+    streamLocal(
+      baseOpts('summary', {
+        system: `SECURITY: untrusted transcript.\n${'reference context '.repeat(3000)}\nLANGUAGE: English`,
+        req: {
+          id: 'oversized-local-summary',
+          mode: 'summary',
+          prompt: '',
+          transcript: `${'old transcript '.repeat(7000)}${latest}`,
+          history: []
+        } as AskStart
+      })
+    )
+    await flush()
+    const passed = openaiMock.streamOpenAI.mock.calls[0][0] as StreamOptions
+    expect(passed.system.length).toBeLessThanOrEqual(40_000)
+    expect(passed.system).toMatch(/^SECURITY:/)
+    expect(passed.system).toContain('LANGUAGE: English')
+    expect(passed.req.transcript?.length).toBeLessThanOrEqual(80_000)
+    expect(passed.req.transcript).toContain('[NOTE: local summary input truncated')
+    expect(passed.req.transcript).toMatch(new RegExp(`${latest.replace('.', '\\.')}$`))
   })
 
   it('injects localRuntime.sessionKey() as the apiKey — never the (blank) opts.apiKey it was called with', async () => {
@@ -299,15 +384,15 @@ describe('streamLocal', () => {
     streamLocal(baseOpts('suggest'))
     await flush()
     expect(localRuntimeMock.start).toHaveBeenCalledWith({
-      gguf: '/models/qwen3.5-2b/model.gguf',
-      mmproj: '/models/qwen3.5-2b/mmproj.gguf'
+      gguf: '/models/qwen3.5-0.8b/model.gguf',
+      mmproj: '/models/qwen3.5-0.8b/mmproj.gguf'
     })
     expect(openaiMock.streamOpenAI).toHaveBeenCalledOnce()
   })
 
   it('F5: skips verifyIntegrity when the runtime is already running the SAME model (not a cold start, not a switch)', async () => {
     localRuntimeMock.getState.mockReturnValue('running')
-    localRuntimeMock.getActiveModelKey.mockReturnValue('/models/qwen3.5-2b/model.gguf') // matches baseOpts's default model
+    localRuntimeMock.getActiveModelKey.mockReturnValue('/models/qwen3.5-0.8b/model.gguf') // matches baseOpts's default model
     streamLocal(baseOpts('suggest'))
     await flush()
     expect(localModelsMock.verifyIntegrity).not.toHaveBeenCalled()
@@ -315,7 +400,7 @@ describe('streamLocal', () => {
 
   it('F5: skips verifyIntegrity when the runtime is already starting the SAME model (not a cold start, not a switch)', async () => {
     localRuntimeMock.getState.mockReturnValue('starting')
-    localRuntimeMock.getActiveModelKey.mockReturnValue('/models/qwen3.5-2b/model.gguf') // matches baseOpts's default model
+    localRuntimeMock.getActiveModelKey.mockReturnValue('/models/qwen3.5-0.8b/model.gguf') // matches baseOpts's default model
     streamLocal(baseOpts('suggest'))
     await flush()
     expect(localModelsMock.verifyIntegrity).not.toHaveBeenCalled()
@@ -323,8 +408,8 @@ describe('streamLocal', () => {
 
   it('G2: re-verifies integrity on a model SWITCH while running — the active model differs from the one requested', async () => {
     localRuntimeMock.getState.mockReturnValue('running')
-    localRuntimeMock.getActiveModelKey.mockReturnValue('/models/qwen3.5-2b/model.gguf') // A currently active
-    streamLocal(baseOpts('suggest', { model: 'qwen3.5-0.8b' })) // request switches to B
+    localRuntimeMock.getActiveModelKey.mockReturnValue('/models/stale-model/model.gguf')
+    streamLocal(baseOpts('suggest'))
     await flush()
     expect(localModelsMock.verifyIntegrity).toHaveBeenCalledWith('qwen3.5-0.8b')
   })

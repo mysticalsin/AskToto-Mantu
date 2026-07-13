@@ -46,7 +46,10 @@ switch (mode) {
     break
   case 'win':
     requireAny(['GH_TOKEN', 'GITHUB_TOKEN'], 'GitHub release token')
-    requireAll(['WIN_CSC_LINK', 'WIN_CSC_KEY_PASSWORD'], 'Windows Authenticode release')
+    requireAll(
+      ['WIN_CSC_LINK', 'WIN_CSC_KEY_PASSWORD', 'WIN_CSC_EXPECTED_SUBJECT'],
+      'Windows Authenticode release'
+    )
     break
   case 'mas':
     requireAll(['CSC_LINK', 'CSC_KEY_PASSWORD'], 'Mac App Store app signing')

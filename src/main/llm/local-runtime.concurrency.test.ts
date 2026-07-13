@@ -6,6 +6,7 @@
  * integration block.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
+import { join } from 'node:path'
 
 vi.mock('electron', () => ({ app: { isPackaged: false, getPath: () => '/tmp' } }))
 vi.mock('../logger', () => ({ mainLog: { info: vi.fn(), warn: vi.fn() }, auditLog: vi.fn() }))
@@ -51,7 +52,7 @@ vi.mock('node:child_process', async () => {
   return { spawn }
 })
 
-import { start, stop, isRunning, baseURL, beginStream, endStream } from './local-runtime'
+import { start, stop, isRunning, baseURL, beginStream, endStream, getState } from './local-runtime'
 import { auditLog, mainLog } from '../logger'
 
 type FetchImpl = (...args: unknown[]) => Promise<{ status: number }>
@@ -128,6 +129,73 @@ describe('F1 — concurrent start() calls share one in-flight start', () => {
     expect(p2BaseURLReachable).toBe(true)
     expect(isRunning()).toBe(true)
     expect(spawnState.calls.length).toBe(1) // still only one spawn
+  })
+})
+
+describe('quit cancellation — Windows fallback', () => {
+  it('stop() during the first Windows candidate cancels startup instead of spawning the CPU fallback', async () => {
+    const paths = { gguf: '/m/a.gguf', mmproj: '/m/a.mmproj' }
+    let outcome: 'resolved' | 'rejected' | undefined
+
+    void start(paths, 'win').then(
+      () => {
+        outcome = 'resolved'
+      },
+      () => {
+        outcome = 'rejected'
+      }
+    )
+    expect(spawnState.calls).toHaveLength(1)
+    expect(spawnState.calls[0].path).toContain(join('win', 'vulkan', 'llama-server.exe'))
+
+    // Reproduce app will-quit while Vulkan is still loading. The fake kill emits its exit event on the
+    // next microtask, exactly the window where the old candidate loop mistook shutdown for a Vulkan
+    // startup failure and launched the CPU fallback after stop() had already returned.
+    stop()
+    await waitUntil(() => outcome !== undefined || spawnState.calls.length > 1)
+
+    expect(outcome).toBe('rejected')
+    expect(spawnState.calls).toHaveLength(1)
+    expect(spawnState.procs[0].killed).toBe(true)
+    expect(getState()).toBe('stopped')
+    expect(isRunning()).toBe(false)
+  })
+
+  it('a detached old start cannot overwrite a newer generation port with a delayed listening line', async () => {
+    const pathsA = { gguf: '/m/a.gguf', mmproj: '/m/a.mmproj' }
+    const pathsB = { gguf: '/m/b.gguf', mmproj: '/m/b.mmproj' }
+    let outcomeA: 'resolved' | 'rejected' | undefined
+
+    void start(pathsA, 'mac').then(
+      () => {
+        outcomeA = 'resolved'
+      },
+      () => {
+        outcomeA = 'rejected'
+      }
+    )
+    const procA = spawnState.procs[0]
+    // Hold A's OS exit notification so a new generation can become healthy first, then simulate the
+    // buffered stdout line from A arriving late after it was detached by stop().
+    procA.kill = vi.fn(() => {
+      procA.killed = true
+    })
+    stop()
+
+    const startB = start(pathsB, 'mac')
+    await waitUntil(() => spawnState.calls.length === 2)
+    emitListening(1, 55902)
+    await startB
+    expect(baseURL()).toBe('http://127.0.0.1:55902/v1')
+
+    emitListening(0, 55901)
+    await waitUntil(() => outcomeA !== undefined)
+
+    expect(outcomeA).toBe('rejected')
+    expect(isRunning()).toBe(true)
+    expect(baseURL()).toBe('http://127.0.0.1:55902/v1')
+    stop()
+    expect(spawnState.procs[1].kill).toHaveBeenCalledWith('SIGKILL')
   })
 })
 

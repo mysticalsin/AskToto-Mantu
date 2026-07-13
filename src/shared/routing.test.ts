@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { routeTier, isHardQuestion, isHeavyQuestion } from './routing'
 import { resolveModelTier } from './providers'
+import { LOCAL_SCREEN_SUMMARY_PROMPT } from './quick-actions'
 
 describe('isHardQuestion', () => {
   it('flags coding / engineering / complex prompts', () => {
@@ -56,6 +57,11 @@ describe('routeTier', () => {
   it('auto: recap uses think, summary stays cheap', () => {
     expect(routeTier({ mode: 'recap' }, 'auto')).toBe('think')
     expect(routeTier({ mode: 'summary' }, 'auto')).toBe('base')
+  })
+
+  it('keeps the bundled local screen-summary prompt on the base tier', () => {
+    expect(isHeavyQuestion(LOCAL_SCREEN_SUMMARY_PROMPT)).toBe(false)
+    expect(routeTier({ mode: 'vision', prompt: LOCAL_SCREEN_SUMMARY_PROMPT }, 'auto')).toBe('base')
   })
 
   it('fact-checks route to a strong (think) model — live verdicts must be fast AND reliable', () => {

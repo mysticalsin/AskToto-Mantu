@@ -117,3 +117,12 @@ describe('finding 7: brain:rebuildAll stays guarded (assessed, not modified)', (
     expect(body).toMatch(/startRebuild\(getSettings\(\)\)/)
   })
 })
+
+describe('packaged offline ASR protocol', () => {
+  it('allows renderer and worker fetches through Chromium CORS', () => {
+    const start = source.indexOf("scheme: 'asr-model'")
+    expect(start).toBeGreaterThan(-1)
+    const body = source.slice(start, start + 220)
+    expect(body).toMatch(/corsEnabled:\s*true/)
+  })
+})

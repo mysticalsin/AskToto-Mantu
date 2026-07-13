@@ -169,7 +169,7 @@ Shown inside the `<Copilot>` component's third section when `showTranscript` is 
 
 **Show/hide toggle.** The footer row shows "View transcript →" (chevron-right pill) while hidden; once expanded it shows "Hide transcript ↓". This is intentional: the transcript is secondary information during an active call. The primary surface is the suggestion card. Expanding the transcript is opt-in, not default, so the suggestion is never pushed off screen by a long transcript.
 
-**Model loading state.** While `loading` is true (Whisper/Parakeet model downloading for the first time), the transcript section shows `<Spinner /> downloading speech model… N%` (using `loadingPct` from `useListen`). This is the only offline-model UX: no separate loading screen; it appears inline in the transcript area where the user would already be looking.
+**Model loading state.** While `loading` is true, the transcript section shows `<Spinner /> Loading transcription model…` (and a percentage when the worker reports one). Customer packages load installer-owned Whisper/Parakeet assets only; missing or damaged files fail locally with reinstall guidance and never trigger a model download.
 
 ---
 
@@ -228,7 +228,7 @@ Every failure state in Métis has three elements: what it shows, the exact copy,
 | **Provider can't read screen** | Answer error block | "This provider can't read screens. Switch to Claude or GPT in Settings." | Retry (won't help — copy is honest) + settings |
 | **Screen capture permission denied** | `captureError` state in App → Answer error | "Screen capture permission denied." (raw OS error) | `errorHint()` maps "can't read screen" → settings |
 | **Mic not granted** | `listen.error` → Copilot error zone | "Microphone not available. Grant access in System Settings → Privacy → Microphone." | Copilot error zone; no button (OS settings must be opened manually) |
-| **Model downloading** | Copilot transcript footer | "downloading speech model… N%" | No action needed — progress is shown |
+| **Bundled ASR files missing or damaged** | Copilot error zone | "The bundled transcription files are missing or damaged. Reinstall Métis from a complete installer." | Reinstall from a complete Métis installer; production never downloads a replacement model |
 | **Unclear audio / VAD silence** | Copilot footer when `listening && lines.length === 0` | "Waiting for speech…" | Passive — auto-resolves when audio arrives |
 | **No audio yet (not listening)** | Copilot footer | "not listening" | AudioLines icon in ControlBar is the affordance |
 | **Save to OneDrive failed** | Review surface, `saveError` | `saveError` raw string + retry up to 5×. After max retries: "Couldn't save automatically. Use the Save button to try again." | Manual Save button in Review footer |
@@ -289,7 +289,7 @@ The combined effect: after `⌘⇧↵`, the overlay shows a skeleton in <50ms, f
                     │ engine='whisper'                          │ engine='parakeet'
                     ▼                                           ▼
        [whisper.worker.ts  — Web Worker]          [parakeet.ts  — main process]
-       @huggingface/transformers pipeline          native addon · ~487 MB model
+       @huggingface/transformers pipeline          native addon · bundled Parakeet model
        WebGPU: whisper-large-v3-turbo             IPC window.toto.parakeetFeed()
        WASM:   whisper-base (q8 fallback)         5 s timeout guard
        asr-model:// offline protocol              3 failures → fallBackToWhisper()
@@ -387,8 +387,8 @@ The combined effect: after `⌘⇧↵`, the overlay shows a skeleton in <50ms, f
 Two native binaries ship inside the packaged app, verified at **build time**, not at runtime:
 
 - **Parakeet ASR addon (`sherpa-onnx-node`).** npm's os/cpu-gated `optionalDependencies` only install the `sherpa-onnx-<platform>-<arch>` package matching the machine running `npm install` — cross-building a different target (e.g. `--win` from this macOS dev machine) silently leaves that platform's native addon missing, and `electron-builder`'s `asarUnpack` glob copies whatever happens to be in `node_modules` regardless of target, so the build exits 0 with no native ASR addon for that platform. `scripts/check-sherpa-platform.mjs` hard-fails cross-platform builds unless the target's addon package is present, first attempting a safe, version-pinned auto-provision (`npm install --no-save --force sherpa-onnx-<platform>-<arch>@<sherpa-onnx-node's own installed version>`) before failing closed. It's wired as a gate into every release/installer/dist npm script (`release`, `release:win`, `release:mas`, `installers*`, `dist:local`, `predist:win`).
-- At runtime, `main/parakeet.ts`'s `probeSherpa()` eagerly `require()`s the native addon on the **first** status-or-transcribe call — not lazily, only after a failed transcribe — and memoizes the result (success or failure) forever. This lets Settings show an accurate "Parakeet unavailable" status immediately instead of only after a live call has already failed; `parakeetAddonError()` exposes the last load failure separate from "model not downloaded yet."
-- **FFmpeg import-decoder sidecar.** A reviewed, LGPL-only FFmpeg binary per platform, deliberately untracked in git (`resources/ffmpeg/` is in `.gitignore`) and restored at CI/release time from a GitHub release plus a hash-pinned `manifest.json`. `scripts/check-ffmpeg-sidecar.mjs` verifies the binary's SHA-256 against the manifest and, when the build host's platform matches the target, spawns it to confirm its license banner reads LGPL-only (an `--enable-gpl` build fails the check). `ffmpeg-decoder.ts`'s `bundledFfmpegPath()` returns `null` when the sidecar is absent, so a fresh dev checkout without the binary still runs `npm run dev` fine — only Import Audio's decode step (C.4) is unavailable until the binary is provisioned.
+- At runtime, `main/parakeet.ts`'s `probeSherpa()` eagerly `require()`s the native addon on the **first** status-or-transcribe call — not lazily, only after a failed transcribe — and memoizes the result (success or failure) forever. This lets Settings show an accurate "Parakeet unavailable" status immediately instead of only after a live call has already failed; `parakeetAddonError()` exposes the last load failure separate from missing bundled model assets.
+- **FFmpeg import-decoder sidecar.** A reviewed, LGPL-only FFmpeg binary per platform is deliberately untracked; its hash manifest and LGPL license remain tracked under `resources/ffmpeg/`. CI restores the target binary from a GitHub release/cache, then `scripts/check-ffmpeg-sidecar.mjs` verifies its SHA-256 against that tracked manifest and, when the build host matches the target, confirms the license banner is LGPL-only (an `--enable-gpl` build fails). `ffmpeg-decoder.ts`'s `bundledFfmpegPath()` returns `null` when the binary is absent, so a fresh dev checkout still runs `npm run dev`; only Import Audio's decode step (C.4) is unavailable until provisioning.
 
 ### C.4 Audio file import
 
@@ -1199,19 +1199,13 @@ Policy keys relevant to privacy/security:
 
 **Add in next sprint**: a `retentionDays` setting (managed-config + user-facing). A background job on app start lists `meetingsFolder` files, computes age from the `date:` frontmatter field, and moves files older than `retentionDays` to Trash (macOS `shell.trashItem()`, Windows recycle bin). Default: no expiry (user must opt in). If `encryptTranscripts` is true, the index.md is not written (current behaviour in `saveMeeting()`) — retention purge must therefore read the filename timestamp, not the index.
 
-### I.9 Local-only mode
+### I.9 Local processing
 
-Local-only is achievable today without code changes for the ASR layer — the `asr-model://` protocol + Whisper/Parakeet worklet are already fully on-device. For the LLM layer, the user can:
-1. Connect `claude-cli` or `codex-cli` via Settings → CLI Integration (these spawn local processes; no cloud call if the CLI has a local model backend).
-2. Set `provider = custom` with a `customBaseUrl` pointing to a local Ollama or LM Studio instance.
+The packaged ASR path is fully on-device: Parakeet, Whisper, ONNX Runtime, and FFmpeg are installer-owned assets, and production fails locally if an integrity-checked asset is missing instead of downloading a replacement.
 
-The UI should make this explicit. Add a "Local-only mode" toggle in Settings → Privacy that:
-- Sets `provider = custom` and `customBaseUrl = http://localhost:11434/v1` (Ollama default).
-- Sets `audioSource = mic` (no system audio loopback, which uses `getDisplayMedia`).
-- Sets `redactSensitive = true`.
-- Shows a green "No cloud" badge in the top bar.
+The optional **Métis Local** master switch in Settings → AI is off by default. When enabled, independent toggles let the user process supported live suggestions, summaries, and screen-vision requests with the bundled Qwen3.5 0.8B model through the authenticated loopback-only `llama-server` sidecar. The model, multimodal projector, and native runtime are embedded in the same DMG/EXE; no Ollama, Python, separate service, or post-install model download is required.
 
-When local-only is on, `auditLog('provider.blocked', { provider, reason: 'local-only-policy' })` fires if any cloud provider request is somehow attempted. Enforcement is in `main/index.ts → attempt()`, not the renderer.
+Local scope is enforced in the main process. A request approved for local processing never silently falls through to a cloud provider if the local runtime fails. Modes outside the supported local scope still require an explicitly configured cloud or CLI provider; the renderer exposes readiness per task rather than presenting a misleading global "no cloud" claim.
 
 ### I.10 Audit log (metadata-only)
 
