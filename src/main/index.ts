@@ -923,20 +923,17 @@ function sendHotkey(action: HotkeyAction): void {
   win.webContents.send(IPC.hotkey, action)
 }
 
-let fatalHandled = false
 /**
- * Log + audit + dump any unhandled error. For a fatal exception, offer a ONE-TIME relaunch — but default to
- * "Continue" so a benign async error never kills the overlay. No crashReporter upload by design (zero telemetry).
+ * Log + audit + dump any crash (main-process fatal or a renderer ErrorBoundary catch) to a shared sink.
+ * Redact BEFORE writing to any sink — an error stack/message routinely embeds the data involved in the
+ * failing operation, so mainLog and auditLog (both persistent) must never see the raw value, same as the
+ * crash-*.log dump below. Best-effort: logging must never throw out of a crash handler.
  */
-function onFatal(kind: 'uncaughtException' | 'unhandledRejection', err: unknown): void {
-  const detail = err instanceof Error ? err.stack || err.message : String(err)
+function persistCrash(kind: string, detail: string, shortMessage: string): void {
   try {
-    // Redact BEFORE writing to any sink — an error stack/message routinely embeds the data involved in the
-    // failing operation, so mainLog and auditLog (both persistent) must never see the raw value, same as
-    // the crash-*.log dump below.
     const redactedDetail = redactSecrets(detail)
     mainLog.error(`[${kind}]`, redactedDetail)
-    auditLog('app.crash', { kind, message: redactSecrets(err instanceof Error ? err.message : String(err)) })
+    auditLog('app.crash', { kind, message: redactSecrets(shortMessage) })
     writeFileSync(
       join(app.getPath('userData'), `crash-${Date.now()}.log`),
       `${new Date().toISOString()} ${kind}\n${redactedDetail}\n`,
@@ -945,6 +942,16 @@ function onFatal(kind: 'uncaughtException' | 'unhandledRejection', err: unknown)
   } catch {
     /* logging is best-effort — never throw out of the crash handler */
   }
+}
+
+let fatalHandled = false
+/**
+ * For a fatal exception, offer a ONE-TIME relaunch — but default to "Continue" so a benign async error
+ * never kills the overlay. No crashReporter upload by design (zero telemetry).
+ */
+function onFatal(kind: 'uncaughtException' | 'unhandledRejection', err: unknown): void {
+  const detail = err instanceof Error ? err.stack || err.message : String(err)
+  persistCrash(kind, detail, err instanceof Error ? err.message : String(err))
   if (kind !== 'uncaughtException' || fatalHandled) return
   fatalHandled = true
   try {
@@ -3018,6 +3025,17 @@ function registerIpc(): void {
   ipcMain.handle(IPC.windowMinimize, (e, narrow: unknown) => {
     assertMainWindow(e)
     setMinimizedWidth(!!narrow)
+  })
+  // Renderer ErrorBoundary catch: persist via the same sink as onFatal's main-process crashes, so a
+  // caught render-throw survives to disk instead of only reaching console (gated behind
+  // ASKTOTO_DEBUG_RENDERER, never on in a packaged build).
+  ipcMain.handle(IPC.rendererCrash, (e, raw: unknown) => {
+    assertMainWindow(e)
+    const r = raw as { message?: unknown; stack?: unknown; componentStack?: unknown } | null
+    const message = typeof r?.message === 'string' ? r.message : 'unknown renderer error'
+    const stack = typeof r?.stack === 'string' ? r.stack : ''
+    const componentStack = typeof r?.componentStack === 'string' ? r.componentStack : ''
+    persistCrash('renderer-error-boundary', `${message}\nstack: ${stack}\ncomponentStack: ${componentStack}`, message)
   })
   // Drag the overlay from anywhere on the bar (the renderer's JS drag drives this with screen-pixel deltas).
   ipcMain.handle(IPC.windowMoveBy, (e, d: unknown) => {

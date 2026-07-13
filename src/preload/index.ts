@@ -245,6 +245,10 @@ const api = {
   windowMoveBy: (dx: number, dy: number): Promise<void> =>
     ipcRenderer.invoke(IPC.windowMoveBy, { dx, dy }),
   minimize: (narrow: boolean): Promise<void> => ipcRenderer.invoke(IPC.windowMinimize, narrow),
+  // A caught render-throw (ErrorBoundary) — fire-and-forget, best-effort. Main persists it to disk (same
+  // sink as a main-process crash) so a field report survives without ASKTOTO_DEBUG_RENDERER devtools.
+  reportCrash: (message: string, stack?: string, componentStack?: string): Promise<void> =>
+    ipcRenderer.invoke(IPC.rendererCrash, { message, stack, componentStack }),
   hide: (): Promise<void> => ipcRenderer.invoke(IPC.windowHide),
   toggle: (): Promise<void> => ipcRenderer.invoke(IPC.windowToggle),
   quit: (): Promise<void> => ipcRenderer.invoke(IPC.windowQuit),
