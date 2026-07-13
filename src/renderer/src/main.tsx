@@ -54,11 +54,19 @@ class ErrorBoundary extends Component<{ children: ReactNode }, { error: Error | 
   }
   // Surface the real fault: the on-screen card only shows error.message, but the stack + the React
   // component stack (which component threw) are what actually pin a render crash. console.error is
-  // forwarded to the main-process log when ASKTOTO_DEBUG_RENDERER is set, so a field crash is diagnosable
-  // without the renderer devtools open.
+  // forwarded to the main-process log when ASKTOTO_DEBUG_RENDERER is set (devtools-open diagnosis), and
+  // reportCrash persists the same detail to a crash-*.log unconditionally, so a field report survives
+  // without that flag or the renderer devtools open.
   componentDidCatch(error: Error, info: { componentStack?: string | null }): void {
     // eslint-disable-next-line no-console
     console.error('[error-boundary]', error?.message, '\nstack:', error?.stack, '\ncomponentStack:', info?.componentStack)
+    try {
+      // .catch, not just the surrounding try: window.toto.reportCrash returns a promise (ipcRenderer.invoke) —
+      // a rejection (e.g. the main handler itself throwing) surfaces as an unhandled rejection, not a sync throw.
+      void window.toto.reportCrash(error?.message ?? '', error?.stack ?? '', info?.componentStack ?? '').catch(() => {})
+    } catch {
+      /* preload bridge itself may be what broke — still show the card */
+    }
   }
   render(): ReactNode {
     if (!this.state.error) return this.props.children
