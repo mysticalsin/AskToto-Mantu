@@ -72,12 +72,18 @@ describe('startBackfill with no configured provider', () => {
     expect(brainWarnings.length).toBe(1)
   })
 
-  it('does not scan the meetings folder at all when no provider is configured', () => {
+  it('does not scan the meetings folder at all when no provider is configured', async () => {
     // mkdirSync spy would be overkill; instead assert indirectly via queued===0 AND that a directory
     // that does not exist doesn't throw (readdirSync would only run if the no-provider guard were
     // bypassed) — combined with the above test this is sufficient coverage for the cheap-bailout claim.
     setSettings({ meetingsFolder: join(meetingsFolder, 'does-not-exist') })
-    expect(() => startBackfill()).not.toThrow()
-    expect(startBackfill().queued).toBe(0)
+    const result = startBackfill()
+    expect(result.queued).toBe(0)
+    // The missing meetings folder must not be scanned, but the durable resume flag is still expected
+    // to create `.brain/index.json`. Wait for that intentional fire-and-forget write before afterEach
+    // removes the temporary root, otherwise teardown can race the pending write and fail with ENOTEMPTY.
+    await vi.waitFor(() => {
+      expect(readIndex(getSettings()).backfillRequested).toBe(true)
+    })
   })
 })

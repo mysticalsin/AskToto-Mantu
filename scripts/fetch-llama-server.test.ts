@@ -1,5 +1,6 @@
 import { existsSync, mkdtempSync, rmSync } from 'node:fs'
 import { get as httpGet, createServer, type RequestListener, type Server } from 'node:http'
+import { EventEmitter } from 'node:events'
 import type { Socket } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -34,19 +35,29 @@ function settleDownload(operation: Promise<void>) {
   )
 }
 
+function neverRespondingRequestGet(onAttempt: () => void): typeof httpGet {
+  return (() => {
+    onAttempt()
+    const request = new EventEmitter() as EventEmitter & { destroy(error?: Error): void }
+    request.destroy = (error) => {
+      if (error) request.emit('error', error)
+    }
+    return request
+  }) as unknown as typeof httpGet
+}
+
 describe('llama-server archive download timeouts', () => {
   it('bounds a connection that never sends response headers and retries clearly', async () => {
-    let requests = 0
-    const { server, sockets, url } = await startServer(() => {
-      requests += 1 // Accept the request but never send response headers.
-    })
+    let attempts = 0
+    const requestGet = neverRespondingRequestGet(() => { attempts += 1 })
+    const url = 'http://127.0.0.1/llama.zip'
     const scratch = mkdtempSync(join(tmpdir(), 'metis-llama-request-timeout-'))
     const destination = join(scratch, 'llama.zip')
 
     try {
       const outcome = await settleDownload(
         download(url, destination, {
-          requestGet: httpGet,
+          requestGet,
           requestTimeoutMs: 500,
           responseIdleTimeoutMs: 500,
           maxAttempts: 2,
@@ -56,10 +67,9 @@ describe('llama-server archive download timeouts', () => {
 
       expect(outcome.kind).toBe('rejected')
       expect(outcome.error?.message).toMatch(/request timeout after 500ms/)
-      expect(requests).toBe(2)
+      expect(attempts).toBe(2)
       expect(existsSync(`${destination}.part`)).toBe(false)
     } finally {
-      await stopServer(server, sockets)
       rmSync(scratch, { recursive: true, force: true })
     }
   })
