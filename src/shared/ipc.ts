@@ -121,6 +121,10 @@ export const IPC = {
   windowToggle: 'window:toggle',
   windowQuit: 'window:quit',
   windowMinimize: 'window:minimize',
+  // Renderer ErrorBoundary catch (React render-throw) → persisted crash-*.log, same sink as onFatal's
+  // main-process crashes. Distinct from render-process-gone (whole renderer dies): this is a caught JS
+  // exception the renderer survives, previously visible only via ASKTOTO_DEBUG_RENDERER console mirroring.
+  rendererCrash: 'renderer:crash',
   hotkey: 'hotkey',
   shortcutFailures: 'shortcuts:failures',
   permissionsGet: 'permissions:get',
