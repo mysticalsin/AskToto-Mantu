@@ -1,0 +1,15 @@
+{
+  "version": "7.1.1",
+  "source": "https://ffmpeg.org/releases/ffmpeg-7.1.1.tar.xz",
+  "sourceSha256": "733984395e0dbbe5c046abda2dc49a5544e7e0e1e2366bba849222ae9e3a03b1",
+  "license": "LGPL-2.1-or-later",
+  "configuration": "--disable-gpl --disable-nonfree --disable-debug --disable-doc --disable-ffplay --disable-ffprobe --enable-small --enable-static --disable-shared",
+  "binaries": {
+    "darwin-arm64/ffmpeg": {
+      "sha256": "b15da5a81aaebfe8ab793483bae977b959bd1fba5e4abe220e542e5176ab2551"
+    },
+    "win32-x64/ffmpeg.exe": {
+      "sha256": "6daa6d8e42ff640c560ac550cd1ff955270b3310494a6b0da54f8659961f071f"
+    }
+  }
+}

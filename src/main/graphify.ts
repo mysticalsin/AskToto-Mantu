@@ -134,12 +134,17 @@ async function detectPython(): Promise<string | null> {
       }
     }
   }
-  // 2. uv tool interpreter (cross-platform).
+  // 2. Existing uv tool interpreter (cross-platform). `uv tool run graphifyy ...` is intentionally
+  // forbidden here: uv may provision the package on demand, which would mutate/download dependencies
+  // after Métis is installed. `tool list --offline` is read-only and only exposes an environment that
+  // the user already installed explicitly.
   try {
-    const py = (
-      await exec('uv', ['tool', 'run', 'graphifyy', 'python', '-c', 'import sys;print(sys.executable)'], execOpts({}))
-    ).stdout.trim()
-    if (py && (await canImport(py))) return (cachedPython = py)
+    const listed = await exec('uv', ['tool', 'list', '--show-paths', '--offline', '--no-config'], execOpts({}))
+    const toolDir = listed.stdout.match(/^graphifyy\s+\S+\s+\((.+)\)\s*$/m)?.[1]
+    const py = toolDir
+      ? join(toolDir, IS_WIN ? 'Scripts' : 'bin', IS_WIN ? 'python.exe' : 'python')
+      : ''
+    if (py && existsSync(py) && (await canImport(py))) return (cachedPython = py)
   } catch {
     /* fall through */
   }

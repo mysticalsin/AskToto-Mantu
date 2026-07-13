@@ -43,7 +43,6 @@ import {
   Camera,
   Eye,
   Settings2,
-  Download,
   type LucideIcon
 } from 'lucide-react'
 import {
@@ -1139,22 +1138,9 @@ function AiSection({
 }
 
 // ---------------------------------------------------------------------------
-// Métis Local ("Local AI") — on-device model download/manage card (PLAN.md §4.6). Renders ONLY through
-// this dedicated card: no generic provider tile, no key row, no test-key CTA (see the `kind !== 'local'`
-// exclusions in AiSection above). Every value shown below is renderer-safe metadata (state, byte counts,
-// percentages) — never a path, port, or api key (see LocalModelSummarySchema in shared/ipc.ts).
+// Métis Local is installer-owned. This card can read readiness and enable routing, but it cannot download,
+// replace, or remove the model at runtime.
 // ---------------------------------------------------------------------------
-
-type LocalDownloadState =
-  | { phase: 'downloading'; receivedBytes: number; totalBytes: number }
-  | { phase: 'error'; message: string }
-
-/** "532 MB" / "1.3 GB" — plain, no-decimal-noise formatting for a download-size line. */
-function formatBytes(bytes: number): string {
-  const gb = bytes / 1024 ** 3
-  if (gb >= 1) return `${gb.toFixed(1)} GB`
-  return `${Math.round(bytes / 1024 ** 2)} MB`
-}
 
 function LocalAiSection({
   settings,
@@ -1164,222 +1150,98 @@ function LocalAiSection({
   patch: (p: Partial<PublicSettings>) => void
 }): JSX.Element {
   const [models, setModels] = useState<LocalModelSummary[] | null>(null)
-  const [downloadState, setDownloadState] = useState<Record<string, LocalDownloadState>>({})
-  // Progress ticks only carry the file being fetched right now, not the model's own byte totals — read
-  // those from the latest fetched manifest without re-subscribing the IPC listener on every list refresh.
-  const modelsRef = useRef<LocalModelSummary[] | null>(null)
   useEffect(() => {
-    modelsRef.current = models
-  }, [models])
-
-  const loadModels = useCallback((): void => {
-    void window.toto.localModelsList().then(setModels)
+    let mounted = true
+    void window.toto.localModelsList().then(
+      (list) => {
+        if (mounted) setModels(list)
+      },
+      () => {
+        if (mounted) setModels([])
+      }
+    )
+    return () => {
+      mounted = false
+    }
   }, [])
-  useEffect(() => {
-    loadModels()
-  }, [loadModels])
 
-  useEffect(() => {
-    return window.toto.onLocalModelsProgress((p) => {
-      if ('done' in p) {
-        setDownloadState((s) => {
-          const next = { ...s }
-          delete next[p.modelId]
-          return next
-        })
-        loadModels() // `downloaded` just flipped true — refresh the manifest so the card re-renders
-        return
-      }
-      if ('error' in p) {
-        // cancelDownload() aborts the same in-flight download promise this error event comes from
-        // (local-models.ts) — treat a cancel as a quiet reset, not a scary inline error, matching its own
-        // "cancel is a pause, not a wipe" contract. Any other failure (checksum mismatch, RAM gate,
-        // network) shows main's already user-friendly message inline.
-        const cancelled = /cancel/i.test(p.error)
-        setDownloadState((s) => {
-          const next = { ...s }
-          if (cancelled) delete next[p.modelId]
-          else next[p.modelId] = { phase: 'error', message: p.error }
-          return next
-        })
-        return
-      }
-      // Combined gguf+mmproj progress: downloadModel() always finishes gguf before starting mmproj
-      // (local-models.ts), so once mmproj ticks start, gguf's full size is already "received".
-      const model = modelsRef.current?.find((m) => m.id === p.modelId)
-      const receivedBytes = p.file === 'gguf' ? p.received : (model?.ggufBytes ?? 0) + p.received
-      const totalBytes = model?.totalBytes ?? p.total
-      setDownloadState((s) => ({ ...s, [p.modelId]: { phase: 'downloading', receivedBytes, totalBytes } }))
-    })
-  }, [loadModels])
-
-  const onDownload = (id: string): void => {
-    const model = models?.find((m) => m.id === id)
-    setDownloadState((s) => ({
-      ...s,
-      [id]: { phase: 'downloading', receivedBytes: 0, totalBytes: model?.totalBytes ?? 0 }
-    }))
-    void window.toto.localModelsDownload(id)
-  }
-  const onCancel = (id: string): void => void window.toto.localModelsCancel(id)
-  const onDelete = (id: string): void => {
-    void window.toto.localModelsDelete(id).then((r) => {
-      if (r.ok) loadModels()
-      // Surface an EBUSY/EPERM/EACCES rmSync failure inline, same as the download-failure row below —
-      // otherwise the button silently does nothing and the model card still shows Delete/downloaded.
-      else setDownloadState((s) => ({ ...s, [id]: { phase: 'error', message: r.error || 'Could not delete this model.' } }))
-    })
-  }
-
-  const primaryBtn =
-    'no-drag cl-focus flex items-center gap-1.5 rounded-[8px] bg-[var(--cl-primary)] px-3 py-1.5 text-[12px] font-medium text-white hover:opacity-90 disabled:opacity-50'
-  const secondaryBtn =
-    'no-drag cl-focus flex items-center gap-1.5 rounded-[8px] border border-[var(--cl-input)] bg-white/[0.04] px-3 py-1.5 text-[12px] text-[color:var(--cl-foreground)] hover:bg-white/[0.08] disabled:opacity-50'
-
-  const activeModel = models?.find((m) => m.id === settings.localLlm.modelId)
+  const model = models?.[0]
 
   return (
     <Section
       title="Local AI"
-      desc="Runs a small model on this device — instant, free, private. Handles live suggestions, mid-meeting summaries, and screenshot reads; everything else keeps using your cloud provider."
+      desc="Runs the model included with Métis on this device. Live suggestions, mid-meeting summaries, and screenshot reads stay local."
     >
       <div className="flex flex-col gap-3">
         <ToggleRow
           label="Enable Métis Local"
-          desc="Download a model once, then in-scope requests answer instantly with nothing leaving this device."
+          desc="The model is Included with Métis. There is no separate model download after installation."
           on={settings.localLlm.enabled}
           onChange={(v) => patch({ localLlm: { ...settings.localLlm, enabled: v } })}
         />
 
         <div className="flex items-center gap-2 rounded-[8px] border border-[var(--cl-border)] bg-white/[0.02] px-3 py-2 text-[11px] text-[color:var(--cl-muted-foreground)]">
           <Cpu size={13} className="shrink-0" />
-          {/* Precise per-state copy off localRuntimeState (tri-state) so 'unavailable' (restart-budget
-              lockout, cleared only by relaunch) reads honestly instead of the reassuring idle-stop text. */}
-          {settings.localRuntimeState === 'running'
-            ? `Running — ${activeModel?.label ?? settings.localLlm.modelId}`
-            : settings.localRuntimeState === 'starting'
-              ? 'Starting the on-device model…'
-              : settings.localRuntimeState === 'unavailable'
-                ? "Unavailable — the on-device model stopped responding this session. Restart Métis to re-enable it."
-                : 'Stopped — restarts automatically on the next live suggestion, summary, or screenshot read.'}
+          {models === null
+            ? 'Checking bundled model...'
+            : model?.unavailableReason === 'insufficient-ram'
+              ? `Unavailable: the bundled model needs at least ${model.minTotalRamGB} GB RAM.`
+              : !model?.ready
+                ? 'Unavailable: the bundled model files are missing or incomplete. Reinstall Métis to restore them.'
+              : settings.localRuntimeState === 'running'
+              ? `Running: ${model?.label ?? settings.localLlm.modelId}`
+              : settings.localRuntimeState === 'starting'
+                ? 'Starting the on-device model...'
+                : settings.localRuntimeState === 'unavailable'
+                  ? 'Unavailable: the on-device model stopped responding this session. Restart Métis to re-enable it.'
+                  : 'Ready: starts automatically on the next local request.'}
         </div>
 
         {models === null ? (
           <div className="flex items-center gap-2 text-[11px] text-[color:var(--cl-muted-foreground)]">
-            <Loader2 size={12} className="animate-spin" /> Loading models…
+            <Loader2 size={12} className="animate-spin" /> Checking bundled model...
+          </div>
+        ) : model ? (
+          <div
+            className={[
+              'flex flex-col gap-2 rounded-[10px] border p-3',
+              model.ready
+                ? 'border-[var(--cl-primary)] bg-[var(--cl-primary-soft)]/40'
+                : 'border-[var(--cl-destructive)]/30 bg-[var(--cl-destructive)]/5'
+            ].join(' ')}
+          >
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex flex-col gap-0.5">
+                <span className="text-[12px] font-medium text-[color:var(--cl-foreground)]">{model.label}</span>
+                <span className="text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
+                  Included with Métis. Needs {model.minTotalRamGB} GB RAM.
+                </span>
+              </div>
+              <span
+                className={[
+                  'flex shrink-0 items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium',
+                  model.ready
+                    ? 'bg-[var(--cl-primary-soft)] text-[color:var(--cl-primary)]'
+                    : 'bg-[var(--cl-destructive)]/10 text-[color:var(--cl-destructive)]'
+                ].join(' ')}
+              >
+                {model.ready ? <CircleCheck size={12} /> : <AlertCircle size={12} />}
+                {model.ready ? 'Ready' : 'Unavailable'}
+              </span>
+            </div>
+            {!model.ready && (
+              <p className="text-[11px] leading-snug text-[color:var(--cl-destructive)]">
+                {model.unavailableReason === 'insufficient-ram'
+                  ? `This model needs at least ${model.minTotalRamGB} GB RAM.`
+                  : 'The bundled model files are missing or incomplete. Reinstall Métis to restore them.'}
+              </p>
+            )}
           </div>
         ) : (
-          <div className="flex flex-col gap-2">
-            {models.map((model) => {
-              const dl = downloadState[model.id]
-              const downloading = dl?.phase === 'downloading'
-              const error = dl?.phase === 'error' ? dl.message : null
-              const selected = settings.localLlm.modelId === model.id
-              const pct =
-                downloading && dl.totalBytes > 0
-                  ? Math.min(100, Math.round((dl.receivedBytes / dl.totalBytes) * 100))
-                  : 0
-
-              return (
-                <div
-                  key={model.id}
-                  className={[
-                    'flex flex-col gap-1.5 rounded-[10px] border p-3',
-                    selected && model.downloaded
-                      ? 'border-[var(--cl-primary)] bg-[var(--cl-primary-soft)]/40'
-                      : 'border-[var(--cl-border)] bg-white/[0.02]'
-                  ].join(' ')}
-                >
-                  <div className="flex items-center justify-between gap-2">
-                    <div className="flex flex-col gap-0.5">
-                      <span className="flex items-center gap-1.5 text-[12px] font-medium text-[color:var(--cl-foreground)]">
-                        {model.label}
-                        {model.id === 'qwen3.5-2b' && (
-                          <span className="rounded-full bg-[var(--cl-primary-soft)] px-1.5 py-0 text-[10px] font-medium text-[color:var(--cl-primary)]">
-                            Recommended
-                          </span>
-                        )}
-                      </span>
-                      <span className="text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
-                        {formatBytes(model.totalBytes)} download · needs {model.minTotalRamGB} GB RAM
-                      </span>
-                    </div>
-                    {selected && model.downloaded && (
-                      <span className="flex shrink-0 items-center gap-1 rounded-full bg-[var(--cl-primary-soft)] px-2 py-0.5 text-[11px] font-medium text-[color:var(--cl-primary)]">
-                        <CircleCheck size={12} /> Active
-                      </span>
-                    )}
-                  </div>
-
-                  {downloading && (
-                    <div className="flex flex-col gap-1">
-                      <div className="h-1.5 w-full overflow-hidden rounded-full bg-white/10">
-                        <div
-                          className="h-full rounded-full bg-[var(--cl-primary)] transition-[width]"
-                          style={{ width: `${pct}%` }}
-                        />
-                      </div>
-                      <div className="flex items-center justify-between text-[11px] text-[color:var(--cl-muted-foreground)]">
-                        <span>
-                          {formatBytes(dl.receivedBytes)} of {formatBytes(dl.totalBytes)} ({pct}%)
-                        </span>
-                        <button
-                          type="button"
-                          onClick={() => onCancel(model.id)}
-                          className="no-drag cl-focus text-[color:var(--cl-muted-foreground)] hover:text-[color:var(--cl-destructive)]"
-                        >
-                          Cancel
-                        </button>
-                      </div>
-                    </div>
-                  )}
-
-                  {error && (
-                    <div className="flex items-start gap-1.5 text-[11px] text-[color:var(--cl-destructive)]">
-                      <AlertCircle size={13} className="mt-px shrink-0" />
-                      <span>{error}</span>
-                    </div>
-                  )}
-
-                  {!downloading && !model.downloaded && (
-                    <div>
-                      <button type="button" onClick={() => onDownload(model.id)} className={primaryBtn}>
-                        <Download size={12} /> Download
-                      </button>
-                    </div>
-                  )}
-
-                  {!downloading && model.downloaded && (
-                    <div className="flex gap-2">
-                      {!selected && (
-                        <button
-                          type="button"
-                          onClick={() => patch({ localLlm: { ...settings.localLlm, modelId: model.id } })}
-                          className={secondaryBtn}
-                        >
-                          Use this model
-                        </button>
-                      )}
-                      <button
-                        type="button"
-                        onClick={() => onDelete(model.id)}
-                        className="no-drag cl-focus flex items-center gap-1 rounded-[8px] border border-[var(--cl-destructive)]/30 bg-[var(--cl-destructive)]/10 px-3 py-1.5 text-[12px] text-[color:var(--cl-destructive)] hover:bg-[var(--cl-destructive)]/20"
-                      >
-                        <Trash2 size={12} /> Delete
-                      </button>
-                    </div>
-                  )}
-                </div>
-              )
-            })}
+          <div className="flex items-start gap-1.5 text-[11px] text-[color:var(--cl-destructive)]">
+            <AlertCircle size={13} className="mt-px shrink-0" />
+            <span>Unavailable: Métis could not read the bundled model manifest. Reinstall Métis.</span>
           </div>
-        )}
-
-        {models !== null && models.length > 0 && (
-          <p className="text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
-            Not sure which one? Qwen3.5 2B is the recommended default — the best balance of quality and
-            speed. Pick Qwen3.5 0.8B Lite for the smallest download and the fastest responses.
-          </p>
         )}
 
         <div className="flex flex-col gap-0.5">
@@ -3744,7 +3606,7 @@ export function Settings({
     void window.toto.asrBundled().then(setAsrBundled)
   }, [])
   // Parakeet native-addon health. addonError is set when the sherpa-onnx addon itself failed to load
-  // (e.g. a wrong-platform build) — a different failure from "model not downloaded yet", so the Audio
+  // (e.g. a wrong-platform build) — a different failure from missing bundled assets, so the Audio
   // tab can say "engine broken in this build" instead of letting the toggle silently do nothing.
   // Refetch (not just fetch-once-on-mount) whenever the Audio tab becomes active — an addon failure
   // discovered mid-session (e.g. a meeting that started on another tab) must show up the moment the
@@ -3979,7 +3841,7 @@ export function Settings({
                     desc={
                       asrBundled
                         ? "This build doesn't include the larger GPU-accelerated model, so On and Off currently use the same on-device model."
-                        : 'On = most accurate, any-language model (larger first-run download, GPU-accelerated). Off = a lighter, faster model with a smaller download.'
+                        : 'This development build does not include packaged transcription assets. Provision them before testing offline transcription.'
                     }
                     on={settings.asrQuality === 'best'}
                     onChange={(v) => patch({ asrQuality: v ? 'best' : 'fast' })}
@@ -3987,19 +3849,19 @@ export function Settings({
                   />
                   <ToggleRow
                     label="Use Parakeet engine (fastest · European only)"
-                    desc="On = NVIDIA Parakeet v3, very fast + accurate for 25 European languages (one-time ~487MB download on first use). Off = Whisper, which handles ~99 languages. Use Whisper for non-European speech."
+                    desc="On = bundled NVIDIA Parakeet v3, very fast + accurate for 25 European languages. Off = bundled Whisper, which handles ~99 languages. Use Whisper for non-European speech."
                     on={settings.asrEngine === 'parakeet'}
                     onChange={(v) => patch({ asrEngine: v ? 'parakeet' : 'whisper' })}
                     disabled={settings.managedKeys.includes('asrEngine')}
                   />
-                  {/* Engine broken in this build (native addon failed to load) — distinct from "model not
-                      downloaded yet", which resolves itself on first use via the automatic download. */}
+                  {/* Engine broken in this build (native addon failed to load) — distinct from missing
+                      packaged assets, which require a complete installer. */}
                   {parakeetAddonError != null && (
                     <div className="-mt-1 flex items-start gap-1.5 pl-1 text-[11px] leading-snug text-[color:var(--cl-destructive)]">
                       <AlertCircle size={12} className="mt-0.5 shrink-0" />
                       <span>
                         The Parakeet engine can&apos;t load in this build: {parakeetAddonError}. This is an
-                        engine problem, not a pending model download — meetings will use Whisper until a
+                        engine problem, not a missing model download — meetings will use Whisper until a
                         build with a working engine is installed.
                       </span>
                     </div>
@@ -4750,7 +4612,7 @@ function GraphSection({
               'Checking…'
             ) : !status.installed ? (
               <span className="text-[color:var(--cl-muted-foreground)]">
-                Getting the graph ready. This happens once in the background and can take a minute.
+                The optional knowledge-graph tool is not installed. Install graphifyy explicitly, then reopen Settings.
               </span>
             ) : !status.backend ? (
               <span className="text-[color:var(--cl-muted-foreground)]">
