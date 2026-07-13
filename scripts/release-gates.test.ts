@@ -15,6 +15,19 @@ describe('installer branding', () => {
   it('uses a customer-facing Métis file description without internal migration notes', () => {
     expect(pkg.description).toBe('Métis - AI desktop overlay assistant')
   })
+
+  it('uses an accented Windows display name while keeping executable paths ASCII', () => {
+    const overlay = readFileSync(join(root, 'electron-builder.win.yml'), 'utf8')
+    expect(overlay).toContain('extends: ./electron-builder.yml')
+    expect(overlay).toContain('productName: Métis')
+    expect(overlay).toContain('executableName: Metis')
+
+    for (const script of ['dist:win', 'dist:win:appx', 'release:build:win', 'release:win:store']) {
+      expect(pkg.scripts[script]).toContain('--config electron-builder.win.yml')
+    }
+    const installerBuilder = readFileSync(join(root, 'scripts', 'build-installers.mjs'), 'utf8')
+    expect(installerBuilder).toMatch(/'--config',\s*'electron-builder\.win\.yml'/)
+  })
 })
 
 describe('deterministic packaging toolchain', () => {
