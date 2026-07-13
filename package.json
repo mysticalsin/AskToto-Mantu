@@ -1,7 +1,7 @@
 {
   "name": "asktoto",
   "version": "1.0.2",
-  "description": "Métis — AI desktop overlay assistant (package name kept for dev-profile continuity)",
+  "description": "Métis - AI desktop overlay assistant",
   "author": "Tony Walteur <tony.walteur@gmail.com>",
   "engines": {
     "node": "20.19.2"
