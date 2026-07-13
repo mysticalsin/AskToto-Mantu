@@ -4,10 +4,11 @@
   "description": "Métis - AI desktop overlay assistant",
   "author": "Tony Walteur <tony.walteur@gmail.com>",
   "engines": {
-    "node": "20.19.2"
+    "node": "22.22.3"
   },
   "main": "./out/main/index.js",
   "scripts": {
+    "postinstall": "node scripts/prune-dust-bundle.mjs",
     "dev": "electron-vite dev",
     "check:main-imports": "node scripts/check-no-dynamic-import.mjs",
     "check:offline-package": "node scripts/check-offline-package.mjs",
@@ -67,6 +68,7 @@
     "zod": "^3.23.8"
   },
   "devDependencies": {
+    "@electron/asar": "3.4.1",
     "@huggingface/transformers": "^3.0.0",
     "@tailwindcss/vite": "^4.0.0",
     "@types/node": "^22.5.0",
@@ -74,9 +76,9 @@
     "@types/react-dom": "^18.3.0",
     "@vitejs/plugin-react": "^4.3.1",
     "@vitest/coverage-v8": "^4.1.9",
-    "electron": "^39.8.10",
-    "electron-builder": "^25.1.8",
-    "electron-vite": "^2.3.0",
+    "electron": "39.8.10",
+    "electron-builder": "26.15.3",
+    "electron-vite": "5.0.0",
     "lucide-react": "latest",
     "playwright": "^1.61.1",
     "react": "^18.3.1",
@@ -85,7 +87,7 @@
     "streamdown": "latest",
     "tailwindcss": "^4.0.0",
     "typescript": "^5.6.3",
-    "vite": "^5.4.8",
+    "vite": "7.3.6",
     "vitest": "^4.1.9"
   }
 }

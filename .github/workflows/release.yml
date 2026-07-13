@@ -34,7 +34,7 @@ jobs:
           fi
       - uses: actions/setup-node@v4
         with:
-          node-version: 20.19.2
+          node-version: 22.22.3
           cache: npm
       - run: npm ci
       - run: npm run typecheck
@@ -119,7 +119,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
       - uses: actions/setup-node@v4
         with:
-          node-version: 20.19.2
+          node-version: 22.22.3
           cache: npm
       - run: npm ci
       # Same model cache as build.yml (~1.3 GB fetched by predist -> scripts/fetch-models.mjs).
@@ -226,7 +226,7 @@ jobs:
           WIN_CSC_EXPECTED_SUBJECT: ${{ secrets.WIN_CSC_EXPECTED_SUBJECT }}
       - uses: actions/setup-node@v4
         with:
-          node-version: 20.19.2
+          node-version: 22.22.3
           cache: npm
       - run: npm ci
       # Same model cache as build.yml / release-macos (~1.3 GB fetched by predist:win -> fetch-models.mjs).

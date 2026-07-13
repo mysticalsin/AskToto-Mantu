@@ -12,11 +12,15 @@ Everything user-visible says Métis.
 
 ## 1. Environment setup
 
-**Node version.** Use Node **20.19.2**. CI, `.nvmrc`, `.node-version`, and `package.json#engines`
-all pin the same version because `@dust-tt/client` requires it and native packaging should not drift
-between developer machines and runners. Run `nvm use` (or your version manager's equivalent) before
-installing dependencies; a different major version risks a native-module ABI mismatch with
-`sherpa-onnx-node` (see §4).
+**Node version.** Use Node **22.22.3 LTS**. CI, `.nvmrc`, `.node-version`, and `package.json#engines`
+all pin the same version so native packaging does not drift between developer machines and runners.
+Run `nvm use` (or your version manager's equivalent) before installing dependencies; a different major
+version risks a native-module ABI mismatch with `sherpa-onnx-node` (see §4).
+
+`@dust-tt/client@1.2.6` still declares its publisher's exact Node 20.19.2 build environment, so npm
+prints one upstream `EBADENGINE` warning on install. Métis uses only its compiled `DustAPI` client, which
+runs inside Electron 39's Node 22 runtime. The unused bundled MCP server tree is removed from installers
+and verified from the finished `app.asar` by `scripts/check-packaged-runtime.mjs`.
 
 **Clone and install:**
 
@@ -255,4 +259,4 @@ native addons cannot load from inside an asar.
   before its first step, the repository gates have not executed; use the local verification commands
   above and see `docs/MANTU-IT-REQUEST.md` for the recorded billing ask.
 - **Node is pinned exactly.** `.nvmrc`, `.node-version`, `package.json#engines`, and both workflows use
-  Node 20.19.2 (§1). Run `nvm use` before dependency or native-package work.
+  Node 22.22.3 (§1). Run `nvm use` before dependency or native-package work.
