@@ -58,7 +58,7 @@ describe('startBackfill with no configured provider', () => {
 
     const result = startBackfill()
 
-    expect(result.queued).toBe(0)
+    expect(result).toEqual({ queued: 0, deferred: 'no-provider' })
     // Never touched the queue/progress counters — nothing was actually started.
     expect(brainBackfillProgress()).toEqual({ total: 0, done: 0, running: false })
     // startBackfill's `backfillRequested = true` write is fire-and-forget (updateIndex isn't awaited,

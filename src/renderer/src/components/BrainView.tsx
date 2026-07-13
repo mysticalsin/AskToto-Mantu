@@ -453,7 +453,11 @@ export function BrainView({
   const startBackfill = useCallback(async (): Promise<void> => {
     setBackfilling(true)
     try {
-      await window.toto.brainBackfill()
+      const result = await window.toto.brainBackfill()
+      if (result.deferred === 'no-provider') {
+        setError('Connect an AI provider in Settings → AI before indexing meetings. Métis Local handles suggestions, summaries, and screenshots.')
+        return
+      }
       await refresh()
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
