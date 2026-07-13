@@ -9,9 +9,14 @@ vi.mock('../logger', () => ({ mainLog: { info: vi.fn(), warn: vi.fn() }, auditLo
 const calls = { create: 0, post: 0, get: 0 }
 let convCounter = 0
 let throwOnNextCreate = false // one-shot: simulates createConversation rejecting instead of returning Result.Err
+let streamErrOnce: string | null = null // one-shot: streamAgentAnswerEvents returns Result.Err with this message
 
 function ok<T>(value: T): { isErr: () => false; value: T } {
   return { isErr: () => false, value }
+}
+
+function err(message: string): { isErr: () => true; error: Error } {
+  return { isErr: () => true, error: new Error(message) }
 }
 
 vi.mock('@dust-tt/client', () => {
@@ -34,7 +39,12 @@ vi.mock('@dust-tt/client', () => {
       calls.get++
       return ok({ sId: args.conversationId })
     }
-    async streamAgentAnswerEvents(): Promise<ReturnType<typeof ok>> {
+    async streamAgentAnswerEvents(): Promise<ReturnType<typeof ok> | ReturnType<typeof err>> {
+      if (streamErrOnce) {
+        const m = streamErrOnce
+        streamErrOnce = null
+        return err(m)
+      }
       return ok({
         eventStream: (async function* (): AsyncGenerator<{ type: string }> {
           yield { type: 'agent_message_success' }
@@ -83,6 +93,7 @@ describe('Dust conversation continuity (one conversation per meeting)', () => {
     calls.get = 0
     convCounter = 0
     throwOnNextCreate = false
+    streamErrOnce = null
   })
 
   it('reuses the same conversation for a second sequential message in the same meeting', async () => {
@@ -204,5 +215,41 @@ describe('isDustAuthError — 401 phrasing drift across Dust API versions', asyn
     expect(isDustAuthError({ message: 'agent not found' })).toBe(false)
     expect(isDustAuthError({ message: 'rate limited, retry later' })).toBe(false)
     expect(isDustAuthError({ status: 500, message: 'internal error' })).toBe(false)
+  })
+})
+
+describe('isDustAgentUnavailableError — stale/removed agent sId (distinct from auth)', async () => {
+  const { isDustAgentUnavailableError } = await import('./dust')
+
+  it('recognizes the SDK empty-reply error and the API agent-not-found wordings', () => {
+    // @dust-tt/client returns "Failed to retrieve agent message" when Dust accepts the user message but
+    // creates no agent reply — the signature of a mentioned agent sId gone from the connected workspace.
+    expect(isDustAgentUnavailableError({ message: 'Failed to retrieve agent message' })).toBe(true)
+    expect(isDustAgentUnavailableError({ message: 'agent not found' })).toBe(true)
+    expect(isDustAgentUnavailableError({ message: 'Agent configuration not found' })).toBe(true)
+    expect(isDustAgentUnavailableError({ message: 'No such agent' })).toBe(true)
+  })
+
+  it('does NOT swallow auth errors (own refresh-and-retry self-heal) or generic failures', () => {
+    expect(isDustAgentUnavailableError(null)).toBe(false)
+    expect(isDustAgentUnavailableError({ message: 'The user request does not have a valid authenticated credential.' })).toBe(false)
+    expect(isDustAgentUnavailableError({ status: 401, message: 'Unauthorized' })).toBe(false)
+    expect(isDustAgentUnavailableError({ message: 'rate limited, retry later' })).toBe(false)
+  })
+})
+
+describe('streamDust surfaces a stale-agent error as an actionable re-pick message', () => {
+  it('maps "Failed to retrieve agent message" to a Settings → AI hint, not the raw SDK string', async () => {
+    resetDustConversation()
+    streamErrOnce = 'Failed to retrieve agent message'
+    const opts = baseOpts()
+    streamDust(opts)
+    for (let i = 0; i < 500 && !opts.handlers.onError.mock.calls.length; i++) {
+      await new Promise((r) => setImmediate(r))
+    }
+    expect(opts.handlers.onError).toHaveBeenCalledTimes(1)
+    const msg = String(opts.handlers.onError.mock.calls[0][0])
+    expect(msg).toContain('Settings')
+    expect(msg).not.toContain('Failed to retrieve agent message')
   })
 })

@@ -4,6 +4,7 @@ import {
   buildSpotlightRefPrompt,
   buildWhatNextPrompt,
   chooseQuickActionRoute,
+  dustAgentUnavailableMessage,
   quickActionUnavailableMessage,
   spotlightRefUnavailableMessage,
   transcriptHasContent
@@ -91,5 +92,11 @@ describe('quick action request planning', () => {
   it('spotlight ref unavailable message points at the Settings picker', () => {
     expect(spotlightRefUnavailableMessage()).toContain('Spotlight Ref agent')
     expect(spotlightRefUnavailableMessage()).toContain('Settings')
+  })
+
+  it('dust agent unavailable message names the agent and points at Settings → AI', () => {
+    const msg = dustAgentUnavailableMessage()
+    expect(msg.toLowerCase()).toContain('agent')
+    expect(msg).toContain('Settings')
   })
 })

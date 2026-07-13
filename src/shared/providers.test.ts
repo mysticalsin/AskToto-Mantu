@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { isDustReady, applyInteractiveGuardrail, parseDustUrl, PROVIDERS, dustAgentVision } from './providers'
+import { isDustReady, dustStoredAgentMissing, applyInteractiveGuardrail, parseDustUrl, PROVIDERS, dustAgentVision } from './providers'
 
 describe('dustAgentVision', () => {
   it('treats every Claude (anthropic) agent as vision-capable', () => {
@@ -51,6 +51,30 @@ describe('isDustReady', () => {
   it('is independent of other providers having keys — only dust matters', () => {
     expect(isDustReady({ dust: true, kimi: true, anthropic: true }, 'ws_123', { dust: 'agent_abc' })).toBe(true)
     expect(isDustReady({ kimi: true, anthropic: true }, 'ws_123', { dust: 'agent_abc' })).toBe(false)
+  })
+})
+
+describe('dustStoredAgentMissing', () => {
+  const agents = [{ sId: 'a1' }, { sId: 'a2' }]
+
+  it('true when the stored agent is absent from a loaded, non-empty workspace list', () => {
+    expect(dustStoredAgentMissing('gone', agents)).toBe(true)
+  })
+
+  it('false when the stored agent is present in the workspace', () => {
+    expect(dustStoredAgentMissing('a1', agents)).toBe(false)
+  })
+
+  it('false when no agent is selected', () => {
+    expect(dustStoredAgentMissing('', agents)).toBe(false)
+  })
+
+  it('false before the list has loaded (null) — no false alarm', () => {
+    expect(dustStoredAgentMissing('gone', null)).toBe(false)
+  })
+
+  it('false for an empty list (restricted/failed load is not proof the agent is gone)', () => {
+    expect(dustStoredAgentMissing('gone', [])).toBe(false)
   })
 })
 

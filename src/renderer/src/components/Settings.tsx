@@ -74,6 +74,7 @@ import {
   parseDustUrl,
   resolveModelTier,
   isDustReady,
+  dustStoredAgentMissing,
   type ProviderId
 } from '@shared/providers'
 import { DEFAULT_MODE_PROMPTS } from '@shared/prompts'
@@ -2179,6 +2180,9 @@ function DustSetup({
   const connected = keySaved && hasWs && !!agent
   const selectedAgentName = agents?.find((a) => a.sId === agent)?.name
   const selectedAgent = agents?.find((a) => a.sId === agent)
+  // Loaded the workspace's agents but the saved base agent isn't among them — the root cause of the
+  // "Failed to retrieve agent message" ask failure. Warn + guide a one-click re-pick right at the picker.
+  const storedAgentMissing = dustStoredAgentMissing(agent, agents)
   const selectedAgentRunsSonnet = !!selectedAgent && selectedAgent.modelProviderId === 'anthropic' && /sonnet/i.test(selectedAgent.modelId || '')
 
   // Connect locally by importing the Dust CLI session (token + workspace + region) from the keychain.
@@ -2620,6 +2624,12 @@ function DustSetup({
                 </button>
               )}
             </span>
+            {storedAgentMissing && (
+              <div className="flex items-start gap-1.5 rounded-[8px] border border-[var(--cl-destructive)]/30 bg-[var(--cl-destructive)]/10 px-2.5 py-1.5 text-[11px] leading-snug text-[color:var(--cl-destructive)]">
+                <Info size={13} className="mt-0.5 shrink-0" />
+                <span>Your saved agent is not in this workspace anymore — pick one below so asks and Spotlight Ref work again.</span>
+              </div>
+            )}
             <AgentPicker
               label="Base agent"
               value={agent}
