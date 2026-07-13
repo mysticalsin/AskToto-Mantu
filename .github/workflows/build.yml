@@ -122,13 +122,17 @@ jobs:
       # files on every run unless that script's URLs change — cache them keyed on its hash so PR builds
       # don't re-download ~1.3 GB from HuggingFace/GitHub on every push. fetch-models.mjs already skips
       # any file that's present with non-zero size, so a warm cache makes predist a near no-op.
+      # resources/llama (the pinned llama-server sidecar, ~10 MB, fetched by predist ->
+      # scripts/fetch-llama-server.mjs) rides the same cache step — its own hashFiles() term means a pin
+      # bump in that script busts only this entry, not the unrelated ASR model cache.
       - uses: actions/cache@v4
         with:
           path: |
             resources/models
             resources/asr
             resources/ort
-          key: asr-models-${{ runner.os }}-${{ hashFiles('scripts/fetch-models.mjs') }}
+            resources/llama
+          key: asr-models-${{ runner.os }}-${{ hashFiles('scripts/fetch-models.mjs') }}-${{ hashFiles('scripts/fetch-llama-server.mjs') }}
       - name: Cache immutable local AI assets
         uses: actions/cache@v4
         with:
@@ -206,15 +210,17 @@ jobs:
           node-version: 22.22.3
           cache: npm
       - run: npm ci
-      # Same model cache as the macOS job — see the comment there. Paths are OS-agnostic (plain model
-      # files), keyed by runner.os anyway since GitHub scopes/evicts caches independently per OS.
+      # Same model + llama-server cache as the macOS job — see the comments there. Paths are OS-agnostic
+      # (plain model/binary files), keyed by runner.os anyway since GitHub scopes/evicts caches
+      # independently per OS.
       - uses: actions/cache@v4
         with:
           path: |
             resources/models
             resources/asr
             resources/ort
-          key: asr-models-${{ runner.os }}-${{ hashFiles('scripts/fetch-models.mjs') }}
+            resources/llama
+          key: asr-models-${{ runner.os }}-${{ hashFiles('scripts/fetch-models.mjs') }}-${{ hashFiles('scripts/fetch-llama-server.mjs') }}
       - name: Cache immutable local AI assets
         uses: actions/cache@v4
         with:
@@ -226,7 +232,7 @@ jobs:
         run: npm run stage:local-ai -- --platform win32-x64
       - name: Verify local AI payload offline (win32-x64)
         run: npm run check:local-ai -- --platform win32-x64
-      - run: npm run dist:win -- --x64
+      - run: npm run dist:win
         env:
           METIS_ALLOW_EVALUATION_PAYLOAD: '1'
       # AppX packaging only works on Windows runners (needs the Windows SDK). Signing is skipped on CI

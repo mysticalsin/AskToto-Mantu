@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type ComponentType, type ReactNode, type RefObject } from 'react'
+import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type ComponentType, type ReactNode } from 'react'
 import {
   Check,
   ExternalLink,
@@ -43,6 +43,7 @@ import {
   Camera,
   Eye,
   Settings2,
+  Download,
   type LucideIcon
 } from 'lucide-react'
 import {
@@ -64,7 +65,8 @@ import {
   type HotkeyAction,
   type EvalMetrics,
   type MeetingSummary,
-  type ShortcutFailure
+  type ShortcutFailure,
+  type LocalModelSummary
 } from '@shared/ipc'
 import {
   PROVIDERS,
@@ -97,6 +99,9 @@ const ctl =
 // their OWN dedicated setup card instead (dust → DustSetup, claude-cli/codex-cli → CliIntegration).
 // Gemini used to be listed here too by mistake — it has no dedicated card, so that made it
 // unselectable ANYWHERE in Settings. It's a normal API-key provider like GPT/Grok; removed.
+// Métis Local (kind === 'local') is excluded the same way, below, wherever `selectable`/`keyEntrySection`
+// is computed — it has its own dedicated LocalAiSection card and is keyless, so it must never render a
+// key row or test-key CTA.
 const CLI_PROVIDERS = new Set<ProviderId>(['dust', 'claude-cli', 'codex-cli'])
 
 // Phase 1: license activation is OFF. The LicenseSection component + main-process license code stay in
@@ -734,12 +739,15 @@ function AiSection({
 
   const hint = detectHint(key, provider)
   const q = filter.trim().toLowerCase()
-  // Dust + CLI providers have dedicated UI sections; Anthropic has its own always-visible card below —
-  // exclude both from the generic tiles grid. The remainder splits by `tier`: 'featured' (GPT, Grok,
+  // Dust + CLI providers have dedicated UI sections; Anthropic has its own always-visible card below;
+  // Métis Local (kind === 'local') has its own dedicated LocalAiSection card, rendered separately below —
+  // exclude all three from the generic tiles grid. The remainder splits by `tier`: 'featured' (GPT, Grok,
   // Kimi, Gemini) gets its own always-visible grid right under Anthropic's card, matching the CLI
   // cards' prominence; 'more' (NVIDIA, DeepSeek, Qwen, MiniMax, OpenRouter, Groq, Mistral, custom)
   // stays tucked in the collapsed "Experience: more models" section.
-  const selectable = PROVIDER_IDS.filter((id) => !CLI_PROVIDERS.has(id) && id !== 'anthropic')
+  const selectable = PROVIDER_IDS.filter(
+    (id) => !CLI_PROVIDERS.has(id) && id !== 'anthropic' && PROVIDERS[id].kind !== 'local'
+  )
   const featured = selectable.filter((id) => PROVIDERS[id].tier === 'featured')
   const shown = selectable.filter(
     (id) => PROVIDERS[id].tier === 'more' && (!q || PROVIDERS[id].label.toLowerCase().includes(q))
@@ -747,13 +755,11 @@ function AiSection({
   const recommended = recommendedProvider(settings)
   const isFeatured = featured.includes(provider)
 
-  const dustSectionRef = useRef<HTMLDivElement>(null)
-
   // The "{provider} key" card — shown for whichever raw provider is currently active. Rendered at the
   // top level when that's Anthropic or a featured provider (the primary flows), or inside "Experience:
   // more models" otherwise. null for CLI providers (Dust/Claude Code/Codex have their own dedicated
-  // cards, no generic key box).
-  const keyEntrySection = !CLI_PROVIDERS.has(provider) ? (
+  // cards, no generic key box) and for Métis Local (keyless — its dedicated card never offers one either).
+  const keyEntrySection = !CLI_PROVIDERS.has(provider) && PROVIDERS[provider].kind !== 'local' ? (
     <Section title={`${def.label} key`} desc="Stored encrypted on this device. Never sent anywhere except the provider.">
       <div className="flex items-center gap-2">
         <label htmlFor={keyInputId} className="sr-only">
@@ -960,23 +966,18 @@ function AiSection({
 
   return (
     <div className="flex flex-col gap-5">
-      {/* CLI Integration — Claude Code CLI, Codex CLI, and the Dust shortcut card */}
-      <CliIntegration
+      {/* CLI Integration — Claude Code CLI and Codex CLI, first so auto-setup is the first thing offered */}
+      <CliIntegration settings={settings} patch={patch} />
+
+      {/* Dust — Métis's primary brain (your Second Brain agents). Always here, not a tile. This is the
+          single, dedicated Dust section — CliIntegration above no longer duplicates it. */}
+      <DustSetup
         settings={settings}
         patch={patch}
-        dustSectionRef={dustSectionRef}
+        saveKey={saveKey}
+        clearKey={clearKey}
+        active={provider === 'dust'}
       />
-
-      {/* Dust — Métis's primary brain (your Second Brain agents). Always here, not a tile. */}
-      <div ref={dustSectionRef}>
-        <DustSetup
-          settings={settings}
-          patch={patch}
-          saveKey={saveKey}
-          clearKey={clearKey}
-          active={provider === 'dust'}
-        />
-      </div>
 
       {/* Anthropic — the primary, recommended provider. Always visible: a compact summary row here,
           plus its full key card below whenever it's the one currently answering questions. */}
@@ -1012,6 +1013,10 @@ function AiSection({
       </div>
 
       {provider === 'anthropic' && keyEntrySection}
+
+      {/* Métis Local — on-device, keyless, task-scoped (suggest/summary/vision only). Its own dedicated
+          card, same prominence as Anthropic/CLI above; never appears in the generic tiles below. */}
+      <LocalAiSection settings={settings} patch={patch} />
 
       {/* Featured API providers — same prominence as the CLI cards above, so picking GPT/Grok/Kimi/
           Gemini doesn't require digging into a collapsed section. */}
@@ -1066,7 +1071,19 @@ function AiSection({
                 recommended={id === recommended}
                 hasKey={!!settings.hasKeys[id]}
                 locked={locked}
-                onSelect={() => patch({ provider: id })}
+                onSelect={() =>
+                  // Custom's SettingsSchema refine requires customBaseUrl to already be a valid https://
+                  // URL whenever provider === 'custom' (shared/ipc.ts); a bare {provider:'custom'} patch
+                  // fails that refine on the full-object re-parse and getSettings()'s repair path silently
+                  // reverts provider back to the default. The Base URL field is itself only rendered once
+                  // provider === 'custom' is already active, so there is no other way to set a valid URL
+                  // first — seed a placeholder together with the provider switch so the write survives.
+                  patch(
+                    id === 'custom' && !/^https:\/\//i.test(settings.customBaseUrl)
+                      ? { provider: id, customBaseUrl: 'https://your-endpoint/v1' }
+                      : { provider: id }
+                  )
+                }
               />
             ))}
           </div>
@@ -1121,6 +1138,282 @@ function AiSection({
   )
 }
 
+// ---------------------------------------------------------------------------
+// Métis Local ("Local AI") — on-device model download/manage card (PLAN.md §4.6). Renders ONLY through
+// this dedicated card: no generic provider tile, no key row, no test-key CTA (see the `kind !== 'local'`
+// exclusions in AiSection above). Every value shown below is renderer-safe metadata (state, byte counts,
+// percentages) — never a path, port, or api key (see LocalModelSummarySchema in shared/ipc.ts).
+// ---------------------------------------------------------------------------
+
+type LocalDownloadState =
+  | { phase: 'downloading'; receivedBytes: number; totalBytes: number }
+  | { phase: 'error'; message: string }
+
+/** "532 MB" / "1.3 GB" — plain, no-decimal-noise formatting for a download-size line. */
+function formatBytes(bytes: number): string {
+  const gb = bytes / 1024 ** 3
+  if (gb >= 1) return `${gb.toFixed(1)} GB`
+  return `${Math.round(bytes / 1024 ** 2)} MB`
+}
+
+function LocalAiSection({
+  settings,
+  patch
+}: {
+  settings: PublicSettings
+  patch: (p: Partial<PublicSettings>) => void
+}): JSX.Element {
+  const [models, setModels] = useState<LocalModelSummary[] | null>(null)
+  const [downloadState, setDownloadState] = useState<Record<string, LocalDownloadState>>({})
+  // Progress ticks only carry the file being fetched right now, not the model's own byte totals — read
+  // those from the latest fetched manifest without re-subscribing the IPC listener on every list refresh.
+  const modelsRef = useRef<LocalModelSummary[] | null>(null)
+  useEffect(() => {
+    modelsRef.current = models
+  }, [models])
+
+  const loadModels = useCallback((): void => {
+    void window.toto.localModelsList().then(setModels)
+  }, [])
+  useEffect(() => {
+    loadModels()
+  }, [loadModels])
+
+  useEffect(() => {
+    return window.toto.onLocalModelsProgress((p) => {
+      if ('done' in p) {
+        setDownloadState((s) => {
+          const next = { ...s }
+          delete next[p.modelId]
+          return next
+        })
+        loadModels() // `downloaded` just flipped true — refresh the manifest so the card re-renders
+        return
+      }
+      if ('error' in p) {
+        // cancelDownload() aborts the same in-flight download promise this error event comes from
+        // (local-models.ts) — treat a cancel as a quiet reset, not a scary inline error, matching its own
+        // "cancel is a pause, not a wipe" contract. Any other failure (checksum mismatch, RAM gate,
+        // network) shows main's already user-friendly message inline.
+        const cancelled = /cancel/i.test(p.error)
+        setDownloadState((s) => {
+          const next = { ...s }
+          if (cancelled) delete next[p.modelId]
+          else next[p.modelId] = { phase: 'error', message: p.error }
+          return next
+        })
+        return
+      }
+      // Combined gguf+mmproj progress: downloadModel() always finishes gguf before starting mmproj
+      // (local-models.ts), so once mmproj ticks start, gguf's full size is already "received".
+      const model = modelsRef.current?.find((m) => m.id === p.modelId)
+      const receivedBytes = p.file === 'gguf' ? p.received : (model?.ggufBytes ?? 0) + p.received
+      const totalBytes = model?.totalBytes ?? p.total
+      setDownloadState((s) => ({ ...s, [p.modelId]: { phase: 'downloading', receivedBytes, totalBytes } }))
+    })
+  }, [loadModels])
+
+  const onDownload = (id: string): void => {
+    const model = models?.find((m) => m.id === id)
+    setDownloadState((s) => ({
+      ...s,
+      [id]: { phase: 'downloading', receivedBytes: 0, totalBytes: model?.totalBytes ?? 0 }
+    }))
+    void window.toto.localModelsDownload(id)
+  }
+  const onCancel = (id: string): void => void window.toto.localModelsCancel(id)
+  const onDelete = (id: string): void => {
+    void window.toto.localModelsDelete(id).then((r) => {
+      if (r.ok) loadModels()
+      // Surface an EBUSY/EPERM/EACCES rmSync failure inline, same as the download-failure row below —
+      // otherwise the button silently does nothing and the model card still shows Delete/downloaded.
+      else setDownloadState((s) => ({ ...s, [id]: { phase: 'error', message: r.error || 'Could not delete this model.' } }))
+    })
+  }
+
+  const primaryBtn =
+    'no-drag cl-focus flex items-center gap-1.5 rounded-[8px] bg-[var(--cl-primary)] px-3 py-1.5 text-[12px] font-medium text-white hover:opacity-90 disabled:opacity-50'
+  const secondaryBtn =
+    'no-drag cl-focus flex items-center gap-1.5 rounded-[8px] border border-[var(--cl-input)] bg-white/[0.04] px-3 py-1.5 text-[12px] text-[color:var(--cl-foreground)] hover:bg-white/[0.08] disabled:opacity-50'
+
+  const activeModel = models?.find((m) => m.id === settings.localLlm.modelId)
+
+  return (
+    <Section
+      title="Local AI"
+      desc="Runs a small model on this device — instant, free, private. Handles live suggestions, mid-meeting summaries, and screenshot reads; everything else keeps using your cloud provider."
+    >
+      <div className="flex flex-col gap-3">
+        <ToggleRow
+          label="Enable Métis Local"
+          desc="Download a model once, then in-scope requests answer instantly with nothing leaving this device."
+          on={settings.localLlm.enabled}
+          onChange={(v) => patch({ localLlm: { ...settings.localLlm, enabled: v } })}
+        />
+
+        <div className="flex items-center gap-2 rounded-[8px] border border-[var(--cl-border)] bg-white/[0.02] px-3 py-2 text-[11px] text-[color:var(--cl-muted-foreground)]">
+          <Cpu size={13} className="shrink-0" />
+          {/* Precise per-state copy off localRuntimeState (tri-state) so 'unavailable' (restart-budget
+              lockout, cleared only by relaunch) reads honestly instead of the reassuring idle-stop text. */}
+          {settings.localRuntimeState === 'running'
+            ? `Running — ${activeModel?.label ?? settings.localLlm.modelId}`
+            : settings.localRuntimeState === 'starting'
+              ? 'Starting the on-device model…'
+              : settings.localRuntimeState === 'unavailable'
+                ? "Unavailable — the on-device model stopped responding this session. Restart Métis to re-enable it."
+                : 'Stopped — restarts automatically on the next live suggestion, summary, or screenshot read.'}
+        </div>
+
+        {models === null ? (
+          <div className="flex items-center gap-2 text-[11px] text-[color:var(--cl-muted-foreground)]">
+            <Loader2 size={12} className="animate-spin" /> Loading models…
+          </div>
+        ) : (
+          <div className="flex flex-col gap-2">
+            {models.map((model) => {
+              const dl = downloadState[model.id]
+              const downloading = dl?.phase === 'downloading'
+              const error = dl?.phase === 'error' ? dl.message : null
+              const selected = settings.localLlm.modelId === model.id
+              const pct =
+                downloading && dl.totalBytes > 0
+                  ? Math.min(100, Math.round((dl.receivedBytes / dl.totalBytes) * 100))
+                  : 0
+
+              return (
+                <div
+                  key={model.id}
+                  className={[
+                    'flex flex-col gap-1.5 rounded-[10px] border p-3',
+                    selected && model.downloaded
+                      ? 'border-[var(--cl-primary)] bg-[var(--cl-primary-soft)]/40'
+                      : 'border-[var(--cl-border)] bg-white/[0.02]'
+                  ].join(' ')}
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex flex-col gap-0.5">
+                      <span className="flex items-center gap-1.5 text-[12px] font-medium text-[color:var(--cl-foreground)]">
+                        {model.label}
+                        {model.id === 'qwen3.5-2b' && (
+                          <span className="rounded-full bg-[var(--cl-primary-soft)] px-1.5 py-0 text-[10px] font-medium text-[color:var(--cl-primary)]">
+                            Recommended
+                          </span>
+                        )}
+                      </span>
+                      <span className="text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
+                        {formatBytes(model.totalBytes)} download · needs {model.minTotalRamGB} GB RAM
+                      </span>
+                    </div>
+                    {selected && model.downloaded && (
+                      <span className="flex shrink-0 items-center gap-1 rounded-full bg-[var(--cl-primary-soft)] px-2 py-0.5 text-[11px] font-medium text-[color:var(--cl-primary)]">
+                        <CircleCheck size={12} /> Active
+                      </span>
+                    )}
+                  </div>
+
+                  {downloading && (
+                    <div className="flex flex-col gap-1">
+                      <div className="h-1.5 w-full overflow-hidden rounded-full bg-white/10">
+                        <div
+                          className="h-full rounded-full bg-[var(--cl-primary)] transition-[width]"
+                          style={{ width: `${pct}%` }}
+                        />
+                      </div>
+                      <div className="flex items-center justify-between text-[11px] text-[color:var(--cl-muted-foreground)]">
+                        <span>
+                          {formatBytes(dl.receivedBytes)} of {formatBytes(dl.totalBytes)} ({pct}%)
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => onCancel(model.id)}
+                          className="no-drag cl-focus text-[color:var(--cl-muted-foreground)] hover:text-[color:var(--cl-destructive)]"
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
+                  {error && (
+                    <div className="flex items-start gap-1.5 text-[11px] text-[color:var(--cl-destructive)]">
+                      <AlertCircle size={13} className="mt-px shrink-0" />
+                      <span>{error}</span>
+                    </div>
+                  )}
+
+                  {!downloading && !model.downloaded && (
+                    <div>
+                      <button type="button" onClick={() => onDownload(model.id)} className={primaryBtn}>
+                        <Download size={12} /> Download
+                      </button>
+                    </div>
+                  )}
+
+                  {!downloading && model.downloaded && (
+                    <div className="flex gap-2">
+                      {!selected && (
+                        <button
+                          type="button"
+                          onClick={() => patch({ localLlm: { ...settings.localLlm, modelId: model.id } })}
+                          className={secondaryBtn}
+                        >
+                          Use this model
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => onDelete(model.id)}
+                        className="no-drag cl-focus flex items-center gap-1 rounded-[8px] border border-[var(--cl-destructive)]/30 bg-[var(--cl-destructive)]/10 px-3 py-1.5 text-[12px] text-[color:var(--cl-destructive)] hover:bg-[var(--cl-destructive)]/20"
+                      >
+                        <Trash2 size={12} /> Delete
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )
+            })}
+          </div>
+        )}
+
+        {models !== null && models.length > 0 && (
+          <p className="text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
+            Not sure which one? Qwen3.5 2B is the recommended default — the best balance of quality and
+            speed. Pick Qwen3.5 0.8B Lite for the smallest download and the fastest responses.
+          </p>
+        )}
+
+        <div className="flex flex-col gap-0.5">
+          <span className="text-[12px] font-medium text-[color:var(--cl-foreground)]">Use for</span>
+          <ToggleRow
+            label="Live suggestions"
+            desc="What-to-say-next suggestions during a meeting."
+            on={settings.localLlm.useFor.suggest}
+            onChange={(v) =>
+              patch({ localLlm: { ...settings.localLlm, useFor: { ...settings.localLlm.useFor, suggest: v } } })
+            }
+          />
+          <ToggleRow
+            label="Summaries"
+            desc="Mid-meeting summaries."
+            on={settings.localLlm.useFor.summary}
+            onChange={(v) =>
+              patch({ localLlm: { ...settings.localLlm, useFor: { ...settings.localLlm.useFor, summary: v } } })
+            }
+          />
+          <ToggleRow
+            label="Screenshots"
+            desc="Reading what's on your screen."
+            on={settings.localLlm.useFor.vision}
+            onChange={(v) =>
+              patch({ localLlm: { ...settings.localLlm, useFor: { ...settings.localLlm.useFor, vision: v } } })
+            }
+          />
+        </div>
+      </div>
+    </Section>
+  )
+}
+
 function StepBadge({ n, done }: { n: number; done?: boolean }): JSX.Element {
   return (
     <span
@@ -1148,12 +1441,10 @@ type CliCardState = {
 
 function CliIntegration({
   settings,
-  patch,
-  dustSectionRef
+  patch
 }: {
   settings: PublicSettings
   patch: (p: Partial<PublicSettings>) => void
-  dustSectionRef?: RefObject<HTMLDivElement>
 }): JSX.Element {
   const provider = settings.provider
   const cliConnected = settings.cliConnected ?? {}
@@ -1379,7 +1670,7 @@ function CliIntegration({
               className={primaryBtn}
             >
               <Link2 size={12} />
-              {isConnected ? 'Reconnect' : 'Set up'}
+              {isConnected ? 'Reconnect' : 'Set up automatically'}
             </button>
             {isConnected && (
               <button
@@ -1460,7 +1751,7 @@ function CliIntegration({
   return (
     <Section
       title="CLI Integration"
-      desc="Connect a local CLI tool or your Dust agents. Each option routes through a different backend."
+      desc="Claude Code and Codex route through your own local install of that tool — it has to be on this device. Set up automatically installs it (via npm i -g) if it's missing, or connects straight away if it's already there."
     >
       <div className="flex flex-col gap-3">
 
@@ -1480,36 +1771,6 @@ function CliIntegration({
             </button>
           </div>
         )}
-
-        {/* Dust card — your Second Brain agents (proposed first) */}
-        <div
-          className={[
-            'flex items-center justify-between gap-2 rounded-[10px] border p-3',
-            provider === 'dust'
-              ? 'border-[var(--cl-primary)] bg-[var(--cl-primary-soft)]/40'
-              : 'border-[var(--cl-border)] bg-white/[0.02]'
-          ].join(' ')}
-        >
-          <div className="flex flex-col gap-0.5">
-            <span className="text-[12px] font-medium text-[color:var(--cl-foreground)]">Dust CLI · Your agents</span>
-            <span className="text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
-              Your Second Brain agents via the Dust platform. Full setup in the section below.
-            </span>
-          </div>
-          {provider === 'dust' ? (
-            <span className={activePill}>
-              <CircleCheck size={12} /> Active
-            </span>
-          ) : (
-            <button
-              type="button"
-              onClick={() => dustSectionRef?.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
-              className={primaryBtn}
-            >
-              Set up below
-            </button>
-          )}
-        </div>
 
         {/* Claude Code CLI card */}
         {renderCliCard('claude-cli')}
@@ -2075,6 +2336,16 @@ function DustSetup({
         })
         return
       }
+      // Blocked Keychain read, not a missing session — ask to allow access, same as the mount-time live
+      // check below (decideDustLiveCheck), instead of misdirecting into a needless CLI reinstall/re-login.
+      if (r.accessDenied) {
+        setCli({
+          busy: false,
+          ok: false,
+          msg: r.error || 'Allow Métis to access your Dust CLI session in Keychain, then try again.'
+        })
+        return
+      }
       // No CLI session found → automatically kick off the setup (install + interactive login) instead of
       // just printing a command. The login needs a browser OAuth, so it opens in a Terminal window.
       setCli({ busy: true, ok: false, msg: 'No Dust CLI found. Starting setup…' })
@@ -2137,7 +2408,11 @@ function DustSetup({
       dustWorkspaceId: '',
       dustBaseUrl: 'https://dust.tt',
       providerModels: { ...settings.providerModels, dust: DUST_BASE_AGENT_ID },
-      providerModelsThinking: nextThinking
+      providerModelsThinking: nextThinking,
+      // Reset to the "never CLI-connected" default (0) — otherwise a stale CLI-origin timestamp survives
+      // into a later manual-API-key connect and wrongly gates the live-check effect into probing a real
+      // Dust CLI session that was never used for that connection (see the effect's own gating comment).
+      dustTokenMintedAt: 0
     }
     if (settings.provider === 'dust')
       next.provider = pickReadyProvider('dust', settings.hasKeys, settings.cliConnected ?? {})

@@ -364,6 +364,14 @@ export const Review = memo(function Review({
     phase: 'idle',
     error: null
   })
+  // A different meeting loaded into this reused Review instance → drop any in-progress/finished CRM push
+  // state, mirroring the recap-edit reset above. Without this, navigating from a pushed meeting to an
+  // unpushed one via "Recent meetings" kept showing "Pushed to Polo Pre-Sales." for the wrong meeting.
+  useEffect(() => {
+    setPushOpen(false)
+    setPushTool('')
+    setPushState({ phase: 'idle', error: null })
+  }, [savedPath])
   useEffect(() => {
     if (bidstackTools && bidstackTools.length > 0 && !pushTool) setPushTool(bidstackTools[0])
   }, [bidstackTools, pushTool])
@@ -446,7 +454,15 @@ export const Review = memo(function Review({
             <Chip icon={Play} onClick={onResume} variant="accent">Resume session</Chip>
           )}
           {onSave && (
-            <TextButton icon={Save} onClick={onSave} disabled={lines.length === 0 || !!savedPath}>Save</TextButton>
+            // Mirrors manualSave's own guard (App.tsx) — `!recap || recap.streaming` — so the button can't
+            // be clicked while the recap is still streaming/absent, which used to silently no-op.
+            <TextButton
+              icon={Save}
+              onClick={onSave}
+              disabled={lines.length === 0 || !!savedPath || !recap || recap.streaming}
+            >
+              Save
+            </TextButton>
           )}
           {onDiscard && (
             <TextButton icon={Trash2} onClick={onDiscard} title="Discard this meeting without keeping it">Disregard</TextButton>

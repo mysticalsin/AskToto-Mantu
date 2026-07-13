@@ -3,6 +3,7 @@ import { streamCli } from './llm/cli'
 import { streamDust } from './llm/dust'
 import { streamAnthropic } from './llm/anthropic'
 import { streamOpenAI } from './llm/openai'
+import { streamLocal } from './llm/local'
 
 // Re-export the public types so existing `./llm` importers keep working after the strategy split.
 export type { StreamHandlers, StreamOptions, StreamHandle } from './llm/shared'
@@ -21,6 +22,8 @@ export function createStream(opts: StreamOptions): StreamHandle {
       return streamDust(opts)
     case 'anthropic':
       return streamAnthropic(opts)
+    case 'local':
+      return streamLocal(opts)
     default:
       return streamOpenAI(opts)
   }

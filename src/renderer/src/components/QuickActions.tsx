@@ -14,7 +14,9 @@ export const QuickActions = memo(function QuickActions({
   onAction,
   hint,
   rainbowRing,
-  providerReady = true
+  providerReady = true,
+  localSummaryReady = false,
+  localSuggestReady = false
 }: {
   onAction: (k: QuickKind) => void
   hint?: string
@@ -23,6 +25,14 @@ export const QuickActions = memo(function QuickActions({
   // chevron pattern in Bar.tsx) with a tooltip instead of only surfacing the gate after a click bounces
   // the user into Settings. Defaults to true so existing callers are unaffected until wired.
   providerReady?: boolean
+  // Métis Local can serve the Summarize chip without any cloud provider (its non-vision branch fires
+  // summary mode, which App.tsx gates on requireProvider('summary')), and the What-to-say-next chip
+  // (its transcript-backed route fires suggest mode; App.tsx re-gates the rarer no-transcript answer
+  // route bare). Fact-check and Explain stay cloud-gated: their direct branches all fire answer mode,
+  // which the local model never serves — enabling them local-only would just bounce the user into
+  // Settings after the click instead of before it.
+  localSummaryReady?: boolean
+  localSuggestReady?: boolean
 }): JSX.Element {
   return (
     // mt-1.5: a touch more breathing room under the bar — its --shadow-bar reaches well past its own
@@ -31,25 +41,31 @@ export const QuickActions = memo(function QuickActions({
     // shadow removed below).
     <div className="fade-up mt-1.5 flex flex-col items-center gap-1.5 px-1">
       <div className="flex flex-wrap items-center justify-center gap-1.5">
-        {ACTIONS.map((a) => (
+        {ACTIONS.map((a) => {
+          const enabled =
+            providerReady ||
+            (a.kind === 'summarize' && localSummaryReady) ||
+            (a.kind === 'whatnext' && localSuggestReady)
+          return (
           <button
             key={a.kind}
             type="button"
             aria-label={a.label}
-            title={providerReady ? undefined : 'Connect an AI provider first'}
-            aria-disabled={!providerReady}
-            disabled={!providerReady}
+            title={enabled ? undefined : 'Connect an AI provider first'}
+            aria-disabled={!enabled}
+            disabled={!enabled}
             onClick={() => onAction(a.kind)}
             className={[
               'no-drag focus-ring glass-chip flex items-center gap-1.5 rounded-full px-3 py-1.5 text-[12px] font-semibold text-white transition-[transform,background-color] duration-[var(--duration-hover)] active:scale-[0.96]',
               rainbowRing ? 'rainbow-ring' : '',
-              providerReady ? '' : 'cursor-not-allowed opacity-40'
+              enabled ? '' : 'cursor-not-allowed opacity-40'
             ].join(' ')}
           >
             <a.icon size={13} strokeWidth={2.25} className="text-[var(--color-accent-2)]" />
             {a.label}
           </button>
-        ))}
+          )
+        })}
       </div>
       {/* This hint floats directly on the transparent window with no glass pill behind it (unlike the
           chips above), so --color-ink-3 alone — calibrated for contrast against frosted glass — washed
