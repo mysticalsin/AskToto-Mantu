@@ -110,7 +110,15 @@ for (const t of requestedTargets) {
     run('node', ['scripts/check-update-metadata.mjs', 'release/latest-mac.yml'])
   }
   if (t === 'win') {
-    run('npx', ['electron-builder', '--win', '--x64', '--publish', 'never'])
+    run('npx', [
+      'electron-builder',
+      '--config',
+      'electron-builder.win.yml',
+      '--win',
+      '--x64',
+      '--publish',
+      'never'
+    ])
     run('node', ['scripts/check-packaged-runtime.mjs', 'win', '--post-sign'])
     run('node', ['scripts/check-update-metadata.mjs', 'release/latest.yml'])
   }
