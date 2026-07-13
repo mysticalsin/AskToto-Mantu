@@ -334,9 +334,6 @@ export function App(): JSX.Element {
   const [updateReady, setUpdateReady] = useState<{ open: boolean; version?: string }>({ open: false })
   const [newMeetingToast, setNewMeetingToast] = useState(false)
   const [visibilityToast, setVisibilityToast] = useState<VisibilityToastState>(null)
-  // Surfaces a recallRead failure (missing/corrupt/undecryptable file) from openPastMeeting — that used
-  // to be a silent no-op with zero feedback.
-  const [openMeetingError, setOpenMeetingError] = useState<string | null>(null)
   // Idempotence latch for endReview() re-entry — see endReview's own comment for the exact hazard it
   // guards against. Cleared at the start of every fresh session (startListen) so a later stop can fire.
   const stoppingRef = useRef(false)
@@ -1552,7 +1549,7 @@ export function App(): JSX.Element {
     if (!r.ok) {
       // recallRead already returns an exact, actionable message (not found / undecryptable on this
       // device / invalid name) — surface it instead of leaving the click looking completely dead.
-      setOpenMeetingError(r.error || 'Could not open this meeting.')
+      setOpenMeetingError(r.error || 'Could not open that meeting.')
       return
     }
     setOpenMeetingError(null)

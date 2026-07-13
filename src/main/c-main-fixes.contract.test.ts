@@ -111,6 +111,9 @@ describe('finding 7: brain:rebuildAll stays guarded (assessed, not modified)', (
     const body = source.slice(start, end)
     expect(body).toMatch(/assertMainWindow\(e\)/)
     expect(body).toMatch(/requireAuth\(\)/)
-    expect(body).toMatch(/purgeBrain\(getSettings\(\)\)/)
+    // startRebuild (src/main/brain/ingest.ts) wraps the purge with a checked-result guard, a
+    // corrupt/blocked-journal check, and the replayPending flag — a stricter superset of the direct
+    // purgeBrain(getSettings()) call this test originally pinned; it still calls purgeBrain internally.
+    expect(body).toMatch(/startRebuild\(getSettings\(\)\)/)
   })
 })
