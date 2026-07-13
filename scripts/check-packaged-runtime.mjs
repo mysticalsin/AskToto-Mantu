@@ -8,6 +8,7 @@
  */
 import { createHash } from 'node:crypto'
 import { execFileSync } from 'node:child_process'
+import { extractFile, listPackage } from '@electron/asar'
 import {
   closeSync,
   createReadStream,
@@ -92,6 +93,40 @@ function requireRegularFile(path) {
   if (stat.size <= 0) throw new Error(`Packaged asset is empty: ${path}`)
   return stat
 }
+
+function verifyPackagedDependencyPruning() {
+  const archive = join(resourcesRoot, 'app.asar')
+  requireRegularFile(archive)
+  const entries = listPackage(archive)
+  const forbiddenPrefixes = [
+    '/node_modules/@dust-tt/client/node_modules/@modelcontextprotocol/sdk',
+    '/node_modules/@dust-tt/client/node_modules/express-rate-limit',
+    '/node_modules/@dust-tt/client/node_modules/ip-address'
+  ]
+  for (const prefix of forbiddenPrefixes) {
+    if (entries.some((entry) => entry === prefix || entry.startsWith(`${prefix}/`))) {
+      throw new Error(`Unused Dust MCP server dependency was packaged: ${prefix}`)
+    }
+  }
+
+  // electron-builder flattens production dependencies into app.asar. Compare these two packages with
+  // the reviewed root MCP SDK copies so Dust's stale bundled versions cannot silently replace them.
+  for (const dependency of ['express-rate-limit', 'ip-address']) {
+    const source = JSON.parse(
+      readFileSync(join(REPO_ROOT, 'node_modules', dependency, 'package.json'), 'utf8')
+    )
+    const packaged = JSON.parse(
+      extractFile(archive, `node_modules/${dependency}/package.json`).toString('utf8')
+    )
+    if (packaged.version !== source.version) {
+      throw new Error(
+        `Packaged ${dependency}@${packaged.version} does not match reviewed ${dependency}@${source.version}`
+      )
+    }
+  }
+}
+
+verifyPackagedDependencyPruning()
 
 function inventoryTree(root) {
   requireDirectory(root)

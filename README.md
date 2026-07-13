@@ -59,7 +59,7 @@ Full install instructions: [`docs/INSTALL.md`](docs/INSTALL.md).
 
 ## Quick start (from source)
 
-Requires **Node 20.19.2**, pinned consistently in `.nvmrc`, `.node-version`, `package.json`, and CI.
+Requires **Node 22.22.3 LTS**, pinned consistently in `.nvmrc`, `.node-version`, `package.json`, and CI.
 
 ```bash
 npm install

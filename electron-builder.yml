@@ -29,9 +29,22 @@ copyright: © 2026 Mantu · Métis — built by Tony Walteur
 directories:
   output: release
   buildResources: build
+# electron-builder 26 validates cached Electron archives through @electron/get. Pin the reviewed
+# upstream checksums here so local/offline builds do not need to fetch SHASUMS256.txt before they
+# can reuse the cache. A future Electron bump must update these pins deliberately.
+electronDownload:
+  force: false
+  checksums:
+    electron-v39.8.10-darwin-arm64.zip: f7e3ed2cc34dd2eba3f2a95234b576fe8082d35fb133e482102c08105f298572
+    electron-v39.8.10-win32-x64.zip: 4478410a35a8399b7745085096695a37877f176755182a71e27eddc245cd98d5
 files:
   - out/**/*
   - package.json
+  # Dust 1.2.6 bundles an MCP server SDK that its compiled DustAPI client never imports. Exclude that
+  # unused server-only tree so its stale transitive advisories are not present in either installer.
+  - '!node_modules/@dust-tt/client/node_modules/@modelcontextprotocol/sdk{,/**/*}'
+  - '!node_modules/@dust-tt/client/node_modules/express-rate-limit{,/**/*}'
+  - '!node_modules/@dust-tt/client/node_modules/ip-address{,/**/*}'
   - '!out/**/*.map'
   - '!**/*.d.ts'
 asar: true

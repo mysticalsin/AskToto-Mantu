@@ -27,7 +27,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 20.19.2
+          node-version: 22.22.3
           cache: npm
       - run: npm ci
       - run: npm run typecheck
@@ -42,13 +42,13 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 20.19.2
+          node-version: 22.22.3
           cache: npm
       - run: npm ci
-      # SCA gate: block on CRITICAL. High advisories are reported (not hard-failed) because the current
-      # highs are unreachable transitive deps under @dust-tt/client (express/router/path-to-regexp/qs —
-      # AskToto runs no inbound HTTP/MCP server, so those code paths are never hit; tracked as R-05).
-      # Escalate to --audit-level=high once @dust-tt/client ships a patched express.
+      # SCA gate: block on CRITICAL. npm still reports Dust's bundled MCP SDK metadata even though
+      # postinstall removes that unused server tree and check-packaged-runtime verifies the finished
+      # app.asar contains only the safe root express-rate-limit/ip-address versions. Escalate to high
+      # once @dust-tt/client publishes a package without the stale bundled dependency metadata.
       - name: Dependency audit (block on critical)
         run: npm audit --audit-level=critical
       - name: Dependency audit (report high, non-blocking)
@@ -115,7 +115,7 @@ jobs:
           fi
       - uses: actions/setup-node@v4
         with:
-          node-version: 20.19.2
+          node-version: 22.22.3
           cache: npm
       - run: npm ci
       # Bundled ASR models (~1.3 GB, fetched by predist -> scripts/fetch-models.mjs) are the same set of
@@ -197,7 +197,7 @@ jobs:
           fi
       - uses: actions/setup-node@v4
         with:
-          node-version: 20.19.2
+          node-version: 22.22.3
           cache: npm
       - run: npm ci
       # Same model + llama-server cache as the macOS job — see the comments there. Paths are OS-agnostic
