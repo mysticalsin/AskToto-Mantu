@@ -33,6 +33,11 @@ export const FACT_CHECK_SCREEN_PROMPT =
   `Fact-check the most prominent claim visible on my screen. Respond in EXACTLY this format and nothing else:\n${VERDICT_FORMAT}\n` +
   'then 2-4 short bullet points (each ≤15 words); if a claim is false or misleading, include the correct fact. Be fast and precise.'
 
+// Keep the local screen-summary request intentionally short and free of the generic router's
+// analytical escalation verbs. The screenshot itself is the context; adding a meeting transcript can
+// also push this otherwise fast local vision task onto a cloud-only tier.
+export const LOCAL_SCREEN_SUMMARY_PROMPT = 'Give me the key points visible on my screen.'
+
 export function buildWhatNextPrompt(transcript: string, source: 'transcript' | 'screen'): string {
   if (source === 'screen') {
     return (

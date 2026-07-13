@@ -15,9 +15,11 @@ Related: [`dpia.md`](./dpia.md) §4 (full risk-mapped data flow), [`tenant-check
 - **Speech-to-text.** Both ASR engines run on-device: **Parakeet** (NVIDIA NeMo TDT 0.6B v3, int8-quantized,
   via `sherpa-onnx`) is the default; **Whisper-base** (Xenova ONNX, quantized, via WASM) is the automatic
   fallback. Neither sends audio to a network endpoint to transcribe.
-- **Local LLM summarization/extraction (when configured).** A packaged, on-device LLM (Qwen3, GGUF,
-  quantized, via `node-llama-cpp`) is in active development on this branch (`docs/plans/2026-07-10-packaged-local-ai-implementation-plan.md`) as a no-cloud-egress alternative for base-tier text
-  tasks (summary, answer, title, classify, cleanup). Not yet the default provider.
+- **Local LLM summarization/extraction (when selected).** The macOS arm64 and Windows x64 packages
+  include Qwen3.5 0.8B (quantized GGUF plus its multimodal projector) and the pinned llama.cpp
+  `llama-server` b9957 sidecar. They provide a no-cloud-egress path for supported text and visual-input
+  tasks. The installed app does not download a model or inference runtime. Local inference remains an
+  opt-in provider rather than the default.
 
 ## What lands in the Mantu tenant (OneDrive)
 
@@ -33,6 +35,13 @@ Related: [`dpia.md`](./dpia.md) §4 (full risk-mapped data flow), [`tenant-check
   (default `true`) strips high-confidence secret patterns (card numbers, SSNs, API keys, private keys)
   from that copy — it does **not** strip participant names, company names, or deal content. The on-disk
   transcript always keeps the unredacted original.
+
+## Optional external Graphify integration
+
+Graphify is not part of the Métis package and is never installed automatically. The status and rebuild
+controls are available only for a user who separately installs Python and `graphifyy`, then explicitly
+enables the integration. Métis continues to work without it. Graphify's own backend configuration can
+affect whether its processing stays local, so it is not counted as part of the packaged offline path.
 
 ## Exactly which folders Dust reads
 
@@ -51,8 +60,8 @@ Related: [`dpia.md`](./dpia.md) §4 (full risk-mapped data flow), [`tenant-check
 - **Dust never reads:** raw audio (none exists), the verbatim transcript files, or anything while
   `publishBrainPages` is off — which is the current, default-adjacent state today given
   `encryptTranscripts` defaults on and `graphify.ts` already refuses to run over an encrypted folder
-  (confirmed at `graphify.ts:227`), meaning the corpus is not plaintext-readable by Dust or the local
-  knowledge-graph builder under today's defaults.
+  (confirmed at `graphify.ts:227`), meaning the corpus is not plaintext-readable by Dust or the
+  optional, manually installed Graphify integration under today's defaults.
 
 ## Model provenance
 
@@ -60,9 +69,9 @@ Related: [`dpia.md`](./dpia.md) §4 (full risk-mapped data flow), [`tenant-check
 |---|---|---|---|
 | ASR (default) | Parakeet TDT 0.6B v3 (NVIDIA NeMo), int8 | On-device, via `sherpa-onnx` | 25 European languages, auto-detect |
 | ASR (fallback) | Whisper-base (Xenova, ONNX, quantized) | On-device, via WASM in the renderer | Automatic fallback if Parakeet is unavailable |
-| Text summarization/extraction (local option) | Qwen3 (GGUF, quantized) | On-device, via `node-llama-cpp` | Packaged local AI — in active development, macOS arm64 + Windows x64 initially |
+| Text summarization/extraction (local option) | Qwen3.5 0.8B (UD-Q4_K_XL GGUF + mmproj-F16) | On-device, via bundled llama.cpp `llama-server` b9957 | Bundled in macOS arm64 and Windows x64 packages; no runtime download |
 | Text summarization/extraction (cloud option) | User-selected: Claude (Anthropic), GPT (OpenAI), or one of 12 other providers | Provider's cloud infrastructure | Per-user Settings choice; see [`dpia.md`](./dpia.md) R2 for the transfer implications |
-| Vision (planned) | SmolVLM/Florence (ONNX candidates) | On-device, renderer Web Worker | Per the packaged local AI plan; not part of the meeting-recording flow itself |
+| Vision (local option) | Qwen3.5 0.8B + mmproj-F16 | On-device, via bundled llama.cpp `llama-server` b9957 | Uses the same installer-owned payload for supported screenshot requests; no runtime download |
 
 ## Diagram
 
@@ -72,12 +81,12 @@ flowchart TD
     B --> C[Transcript text]
     C -->|encryptTranscripts=true, default| D[(Local disk: meetingsFolder,\nOneDrive-synced)]
     C --> E{Extraction call}
-    E -->|no egress| F[Local LLM: Qwen3\n in development]
+    E -->|no egress| F[Bundled local LLM:\nQwen3.5 0.8B]
     E -->|user-selected| G[Cloud LLM provider\nredactSensitive strips secrets only]
     F --> H[Brain JSON + recap]
     G --> H
     H --> D
     D -->|planned Phase 5, opt-in,\nconfidential-flag excluded| I[Published plaintext:\nentity pages + note cards]
     I -->|OneDrive connector, pull-only| J[Dust.tt agents]
-    D -.->|blocked while encrypted, D7| K[graphify.ts local knowledge graph]
+    D -.->|manual install + opt-in;\nblocked while encrypted| K[External Graphify integration]
 ```

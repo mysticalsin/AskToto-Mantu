@@ -16,7 +16,8 @@ Métis ships as normal desktop installers:
      electron-updater only supports the NSIS-installed app — so redownload it from the releases
      page for each new version.
 
-The first public builds may show OS trust warnings until Tony's production signing certificates are configured. The release pipeline now refuses tagged direct releases when required signing inputs are missing.
+Verification-only artifacts may show OS trust warnings. Tagged public releases fail closed unless both
+platforms pass their production signing and identity-verification gates.
 
 ## Build Installers Locally
 
@@ -31,7 +32,8 @@ That builds the installer for your current OS and prints the files created in `r
 On macOS, this runs `npm run check:xcode` first and verifies the selected Xcode toolchain,
 macOS SDK, `codesign`, `productbuild`, `notarytool`, and `stapler`.
 
-Local macOS installer builds skip signing by default so they do not hang on keychain prompts:
+Local macOS installer builds use a complete ad-hoc signature by default, avoiding keychain prompts while
+still supporting packaged-runtime launch checks. To use an available Developer ID identity instead:
 
 ```bash
 ASKTOTO_SIGN_INSTALLER=1 npm run installers:mac
@@ -47,7 +49,10 @@ npm run installers:win
 npm run installers:all
 ```
 
-Use GitHub Actions for the cleanest two-platform build: macOS runners build the `.dmg`/`.zip`; Windows runners build the setup `.exe`, portable `.exe`, and AppX package. **Currently blocked**: Actions runners on this repo are billing-blocked, so no CI build runs until that's fixed (see `docs/ENTERPRISE_RELEASE.md`). Build locally in the meantime.
+Use GitHub Actions for the cleanest two-platform build: macOS runners build the `.dmg`/`.zip`; Windows
+runners build the setup `.exe`, portable `.exe`, and AppX package. Actions billing was reported blocked
+on 2026-07-10; verify the current run before treating that mutable external state as today's blocker
+(see `docs/ENTERPRISE_RELEASE.md`).
 
 ## Publish For Auto-Update
 

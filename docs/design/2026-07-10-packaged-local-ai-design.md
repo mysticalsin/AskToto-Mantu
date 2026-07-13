@@ -2,9 +2,15 @@
 
 Date: 2026-07-10
 
-Status: Approved by the user through the explicit "Keep going" instruction and the requirement that all model assets ship inside the Mac and Windows applications
+Status: **Superseded on 2026-07-13. Do not implement this document.** The shipped architecture keeps
+the release branch's external llama.cpp `llama-server` sidecar and bundles one Qwen3.5 0.8B GGUF plus
+multimodal projector. Current sources of truth are `src/main/llm/local-runtime.ts`,
+`src/main/llm/local-models.ts`, `scripts/local-model-assets.mjs`, and `electron-builder.yml`.
 
-Scope: macOS Apple Silicon (`arm64`) DMG/ZIP and Windows (`x64`) NSIS installer
+The remainder is retained only as the historical design that proposed `node-llama-cpp` and separate
+Transformers.js vision candidates. It is not an active release specification.
+
+Historical scope: macOS Apple Silicon (`arm64`) DMG/ZIP and Windows (`x64`) NSIS installer
 
 ## Outcome
 

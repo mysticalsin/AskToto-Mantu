@@ -2,13 +2,15 @@
 
 Date: 2026-07-10
 
-Status: Verified candidate metadata; production selection still requires native evaluation and packaged-size proof
+Status: Historical candidate record. Production selected the checksum-pinned Qwen3.5 0.8B payload in
+`scripts/local-model-assets.mjs` with the external llama.cpp `llama-server` sidecar. Candidate material
+below remains research context, not the current runtime specification.
 
 This record preserves immutable repository revisions, exact file sizes, LFS SHA-256 values, license sources, and known provenance gaps for the Métis packaged-local-AI candidates. It is an input to `resources/local-ai/candidates.json`, not permission to ship a model that has not passed the frozen evaluation.
 
 ## Runtime decision
 
-TheStageAI `edge-lm` is not a cross-platform application runtime. It is Python 3.10+/MLX-oriented and Apple Silicon-specific, with no Node/Electron or Windows backend. Métis uses `node-llama-cpp` 3.19.0 for GGUF text inference and Transformers.js 3.8.1 for packaged ONNX vision.
+TheStageAI `edge-lm` is not a cross-platform application runtime. It is Python 3.10+/MLX-oriented and Apple Silicon-specific, with no Node/Electron or Windows backend. Métis instead packages the same pinned external llama.cpp `llama-server` architecture on macOS arm64 and Windows x64 and loads the bundled Qwen3.5 0.8B GGUF/projector directly from application resources.
 
 ## Text candidates
 

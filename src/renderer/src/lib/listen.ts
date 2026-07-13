@@ -5,6 +5,7 @@ import { WHISPER_WORKLET_SRC } from './whisper-worklet-src'
 import { isWindows } from './keys'
 import { compileEntityCasingCandidates, applyEntityCasingCompiled } from './entity-casing'
 import { transcriptToText } from './transcript'
+import { shouldUseBundledAsr } from './asr-offline'
 
 const SR = 16000
 
@@ -116,7 +117,7 @@ export interface ListenApi {
   loading: boolean
   lines: TranscriptLine[]
   error: string | null
-  loadingPct: number | null // model-download progress (0-100) on first run, else null
+  loadingPct: number | null // model-loading progress when the worker reports it; otherwise null
   // True once the active worker reports that 'best' quality was requested but did NOT get the WebGPU/
   // large model (no bundled model, no WebGPU adapter, or a WebGPU load failure) — every packaged build
   // hits this, since the large model is deliberately excluded from release resources. Lets a caller show
@@ -188,11 +189,14 @@ export function useListen(
   const loadedQualityRef = useRef<'best' | 'fast' | null>(null) // quality the warm worker was loaded with
   const engineRef = useRef<'whisper' | 'parakeet'>('whisper') // active ASR engine for this session
   // Cached bundled-model flag: queried once from the main process and reused for every init message.
-  // null = not yet fetched; false = absent (dev build / no fetch-models run) → use remote CDN path.
+  // Fail closed on an IPC/preload error: installed builds must never turn a broken capability probe into
+  // a remote model fetch. `false` is returned deliberately by the main process only for an unprovisioned
+  // development build.
   const asrBundledRef = useRef<boolean | null>(null)
   const getAsrBundled = useCallback(async (): Promise<boolean> => {
     if (asrBundledRef.current === null) {
-      asrBundledRef.current = await window.toto.asrBundled().catch(() => false)
+      const bundledProbe = await window.toto.asrBundled().catch(() => undefined)
+      asrBundledRef.current = shouldUseBundledAsr(import.meta.env.PROD, bundledProbe)
     }
     return asrBundledRef.current
   }, [])
@@ -778,8 +782,8 @@ export function useListen(
         }
 
         if (engine === 'parakeet') {
-          // Parakeet runs in the MAIN process; free any warm Whisper worker, then ensure the model (a one-time
-          // ~487MB download with progress). ANY failure falls back to Whisper so Listen always works.
+          // Parakeet runs in the MAIN process; free any warm Whisper worker, then require its bundled model.
+          // ANY failure falls back to Whisper so Listen always works.
           if (workerRef.current) {
             workerRef.current.terminate()
             workerRef.current = null
@@ -822,7 +826,7 @@ export function useListen(
           // The worker selects the model: 'best' → WebGPU + whisper-large-v3-turbo (~99 languages); 'fast'
           // (or fallback) → WASM + whisper-base. init is a no-op if a model is already loaded.
           // bundled: true → worker uses the asr-model:// scheme (offline, packaged resources);
-          //          false → worker uses transformers.js defaults (remote HF + CDN wasm, proven fallback).
+          //          false → development-only remote resolver when local assets were not provisioned.
           const bundled = await getAsrBundled()
           if (!bundled && !navigator.onLine && !readyRef.current) {
             // Non-bundled (remote-model) path needs the network to fetch the model and we're offline right
@@ -1186,7 +1190,7 @@ export function useListen(
   }, [closeChannel, disarmNetworkRetry])
 
   // Pre-warm the small default model in the BACKGROUND a few seconds after startup, so the first time the
-  // user presses Listen the model is already loaded (no "downloading speech model…" spinner mid-meeting).
+  // user presses Listen the bundled model is already loaded (no setup pause mid-meeting).
   // Deferred + idle-scheduled so it never competes with the first paint / onboarding interaction.
   useEffect(() => {
     let warmed = false

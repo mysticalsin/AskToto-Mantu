@@ -32,6 +32,7 @@ import { ASSIST_PROMPT, buildNoDecisionPrompt } from '@shared/prompts'
 import { detectNoDecisionEnding } from '@shared/wrapup'
 import {
   FACT_CHECK_SCREEN_PROMPT,
+  LOCAL_SCREEN_SUMMARY_PROMPT,
   buildExplainPrompt,
   buildFactCheckClaimPrompt,
   buildWhatNextPrompt,
@@ -1735,9 +1736,14 @@ export function App(): JSX.Element {
           return
         }
         if (route.transport === 'screen') {
-          const screenPrompt = transcript.trim()
-            ? withContext('Summarize what is on my screen.', transcript)
-            : 'Summarize what is on my screen.'
+          // The bundled local model handles this image directly. Keep its prompt on the base tier and
+          // do not append transcript text that could escalate the request to a cloud-only tier. Cloud
+          // providers retain the richer transcript context they had before.
+          const screenPrompt = settings?.localVisionReady
+            ? LOCAL_SCREEN_SUMMARY_PROMPT
+            : transcript.trim()
+              ? withContext('Summarize what is on my screen.', transcript)
+              : 'Summarize what is on my screen.'
           void askScreen(screenPrompt, { label: 'Viewed screen', history: historyRef.current })
           return
         }

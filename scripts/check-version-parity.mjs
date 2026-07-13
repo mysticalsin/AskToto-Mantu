@@ -13,10 +13,9 @@
 //
 // Self-test locally: GITHUB_REF_NAME=v1.0.0 node scripts/check-version-parity.mjs
 //
-// Optional duplicate-release guard: when a token is available, also fail if a release already exists
-// for the tag on the configured publish repo (owner/repo parsed out of electron-builder.yml, same
-// text-only approach as check-release.mjs — no hardcoded repo here) — a re-run against an
-// already-published tag would otherwise re-upload onto it instead of failing loudly.
+// Optional duplicate-release guard: when a token is available, reject an already-public release but
+// allow the workflow to resume its own incomplete draft. Network/auth failures fail closed; only an
+// explicit GitHub 404 means the tag has no release yet.
 
 import { readFileSync } from 'node:fs'
 import { spawnSync } from 'node:child_process'
@@ -64,13 +63,27 @@ if (!owner || !repo || !token) {
   process.exit(0)
 }
 
-const result = spawnSync('gh', ['release', 'view', ref, '--repo', `${owner}/${repo}`], {
+const result = spawnSync(
+  'gh',
+  ['api', `repos/${owner}/${repo}/releases/tags/${encodeURIComponent(ref)}`, '--jq', '.draft'],
+  {
   encoding: 'utf8',
   env: { ...process.env, GH_TOKEN: token },
-})
+  }
+)
 if (result.status === 0) {
-  console.error(`[check:version-parity] FAIL — a release already exists for tag ${ref} on ${owner}/${repo}.`)
-  console.error('[check:version-parity] Publishing again would overwrite/re-upload its assets. Bump package.json\'s version and tag a new release instead.')
+  if (result.stdout.trim() === 'true') {
+    console.log(`[check:version-parity] OK — resuming the existing draft for ${ref} on ${owner}/${repo}.`)
+    process.exit(0)
+  }
+  console.error(`[check:version-parity] FAIL — a public release already exists for tag ${ref} on ${owner}/${repo}.`)
+  console.error('[check:version-parity] Refusing to overwrite published assets. Bump package.json\'s version and tag a new release instead.')
+  process.exit(1)
+}
+const failure = `${result.stderr || ''}\n${result.stdout || ''}`.trim()
+if (!/HTTP 404/i.test(failure)) {
+  console.error(`[check:version-parity] FAIL — could not verify whether ${ref} already exists on ${owner}/${repo}.`)
+  console.error(`[check:version-parity] ${failure || `gh exited with status ${result.status}`}`)
   process.exit(1)
 }
 console.log(`[check:version-parity] OK — no existing release for ${ref} on ${owner}/${repo}.`)

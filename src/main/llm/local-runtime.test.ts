@@ -32,8 +32,9 @@ describe('buildSpawnArgs', () => {
       '--mmproj', '/models/mmproj.gguf',
       '--host', '127.0.0.1',
       '--port', '0',
-      '-c', '8192',
+      '-c', '65536',
       '--parallel', '2',
+      '--cache-ram', '128',
       '-ngl', '99',
       '--no-ui',
       '--jinja',
@@ -44,6 +45,17 @@ describe('buildSpawnArgs', () => {
   it('never includes --cache-reuse (disabled upstream for multimodal loads — PLAN.md §3)', () => {
     const args = buildSpawnArgs({ gguf: 'g', mmproj: 'm' })
     expect(args).not.toContain('--cache-reuse')
+  })
+
+  it('gives each of the two slots 32768 tokens and caps host prompt-cache RAM at 128 MiB', () => {
+    const args = buildSpawnArgs({ gguf: 'g', mmproj: 'm' })
+    const totalContext = Number(args[args.indexOf('-c') + 1])
+    const slots = Number(args[args.indexOf('--parallel') + 1])
+    expect(totalContext / slots).toBe(32768)
+    expect(args.slice(args.indexOf('--cache-ram'), args.indexOf('--cache-ram') + 2)).toEqual([
+      '--cache-ram',
+      '128'
+    ])
   })
 
   it('never puts the api key on argv — it travels via the LLAMA_API_KEY env var instead (ps-visibility fix)', () => {
@@ -81,7 +93,7 @@ describe('parseBoundPort', () => {
   it('finds the line inside a larger multi-line buffer (real stdout carries model-load logging first)', () => {
     const buffer = [
       '0.00.050.937 I srv    load_model: loading model \'Qwen3.5-0.8B-UD-Q4_K_XL.gguf\'',
-      '0.00.776.143 I srv    load_model: initializing, n_slots = 2, n_ctx_slot = 4096',
+      '0.00.776.143 I srv    load_model: initializing, n_slots = 2, n_ctx_slot = 32768',
       '0.00.787.103 I srv  llama_server: listening on http://127.0.0.1:60310'
     ].join('\n')
     expect(parseBoundPort(buffer)).toBe(60310)
@@ -135,13 +147,22 @@ describe('packaging wiring (mechanical — missing wiring fails this suite)', ()
     'release:win:store'
   ] as const
 
+  function expandScript(key: string, scripts: Record<string, string>, seen = new Set<string>()): string {
+    if (seen.has(key)) throw new Error(`Cyclic npm script alias: ${[...seen, key].join(' -> ')}`)
+    const script = scripts[key]
+    if (!script) return ''
+    const alias = /^npm run ([\w:-]+)$/.exec(script)?.[1]
+    if (!alias) return script
+    return `${script} && ${expandScript(alias, scripts, new Set([...seen, key]))}`
+  }
+
   it('chains fetch-llama-server.mjs + check-llama-sidecar.mjs into every electron-builder script path', () => {
     const pkg = JSON.parse(readFileSync(join(REPO_ROOT, 'package.json'), 'utf8')) as { scripts: Record<string, string> }
     for (const key of REQUIRED_SCRIPT_KEYS) {
-      const script = pkg.scripts[key]
-      expect(script, `package.json scripts.${key} is missing`).toBeTruthy()
-      expect(script, `scripts.${key} does not run fetch-llama-server.mjs`).toContain('fetch-llama-server.mjs')
-      expect(script, `scripts.${key} does not run check-llama-sidecar.mjs`).toContain('check-llama-sidecar.mjs')
+      expect(pkg.scripts[key], `package.json scripts.${key} is missing`).toBeTruthy()
+      const expanded = expandScript(key, pkg.scripts)
+      expect(expanded, `scripts.${key} does not run fetch-llama-server.mjs`).toContain('fetch-llama-server.mjs')
+      expect(expanded, `scripts.${key} does not run check-llama-sidecar.mjs`).toContain('check-llama-sidecar.mjs')
     }
   })
 

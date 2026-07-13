@@ -95,7 +95,15 @@ function getOrCreateKey(): Buffer {
         }
       } else {
         // safeStorage-wrapped key (new format) — unwrap.
-        _key = Buffer.from(safeStorage.decryptString(buf), 'base64')
+        try {
+          const unwrapped = Buffer.from(safeStorage.decryptString(buf), 'base64')
+          // AES-256 requires exactly 32 bytes. A stale, truncated, or foreign wrapped value must
+          // never reach createCipheriv(), where it would crash every encrypted write with the
+          // unhelpful "Invalid key length" error. Treat it as corrupt and regenerate below.
+          if (unwrapped.length === 32) _key = unwrapped
+        } catch {
+          // Corrupt/foreign safeStorage payload — fall through and replace the unusable key.
+        }
       }
     } else {
       // No keychain available now. A raw 32-byte key is usable directly.

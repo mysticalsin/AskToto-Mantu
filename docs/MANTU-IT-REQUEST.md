@@ -5,16 +5,16 @@ real users. The app is built and working locally; the items below are the only b
 installable build and the Outlook agenda feature. Nothing here exposes secrets in the codebase — all
 credentials are read from environment variables / a managed-config file at build/run time.
 
-**Most urgent — GitHub Actions on this repo is currently billing-blocked:** every CI run (build and
-release) fails immediately with zero steps executed, regardless of the signing items below. This needs
-org billing fixed before any of the signing/build work can even run in CI.
+**Most urgent external check:** GitHub Actions billing was reported blocked on 2026-07-10, with build
+and release runs ending before their first step. Please confirm the current organization billing/run
+state; if that failure still reproduces, it must be cleared before any repository gate can execute.
 
 ---
 
 ## 1. Apple Developer ID — code-signing + notarization (macOS)
 
-Needed so the app installs on any Mac without Gatekeeper blocking it ("unidentified developer"). Today the
-build is unsigned and cannot be distributed.
+Needed so the app installs on any Mac without Gatekeeper blocking it ("unidentified developer"). Local
+verification builds are ad-hoc signed, not Developer ID signed/notarized, and are not customer releases.
 
 Please provide / set up:
 - **Apple Developer ID Application certificate** (.p12) + its password — from the Mantu Apple Developer
@@ -31,18 +31,19 @@ These map to the build env vars the release script already reads:
 | App-specific password | `APPLE_APP_SPECIFIC_PASSWORD` |
 | Team ID | `APPLE_TEAM_ID` |
 
-**Windows update:** Windows installers already ship today (unsigned — `Metis-Setup-*.exe` and
-`Metis-Portable-*.exe`), and `docs/SIGNING.md` documents a live `npm run release:win` pipeline gated
-on Windows signing secrets that aren't set yet, so SmartScreen currently warns on every Windows
-install. Please also provide:
+**Windows update:** verification builds can produce unsigned `Metis-Setup-*.exe` and
+`Metis-Portable-*.exe` artifacts, but the public tagged workflow refuses to publish them. Please also
+provide:
 - **Authenticode `.pfx` certificate** from a trusted CA (or a wired Azure Trusted Signing flow) +
   its password.
+- The certificate's exact Subject string or common name for release-time identity verification.
 
 These map to:
 | Need | Env var |
 |---|---|
 | Cert (Windows .pfx) | `WIN_CSC_LINK` |
 | Cert password | `WIN_CSC_KEY_PASSWORD` |
+| Expected exact Subject or common name | `WIN_CSC_EXPECTED_SUBJECT` |
 
 ## 2. Azure (Microsoft Entra) app registration — for Outlook agenda + sign-in
 
@@ -70,7 +71,7 @@ other account is rejected and its tokens are purged immediately.
 
 ---
 
-**Impact if not provided:** without the billing fix, no CI build or release can run at all; without #1
-(macOS cert) the app can't be installed by anyone but me; without the Windows cert, Windows installs keep
-triggering SmartScreen warnings; without #2 (Azure) the "Connect Outlook calendar" button stays in its
-dormant "needs org sign-in" state. All are wired and ready — they go live the moment these values are set.
+**Impact if not provided:** if the recorded billing block still exists, no CI gate can run; without #1
+(macOS cert) there is no customer-distributable notarized Mac build; without the Windows certificate and
+expected subject, the public workflow refuses to publish Windows installers; without #2 (Azure), the
+"Connect Outlook calendar" button stays in its dormant "needs org sign-in" state.

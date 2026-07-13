@@ -31,6 +31,8 @@ export interface StreamOptions {
   temperature: number
   /** Per-tier/mode idle-timeout budget in ms (abort if no token arrives within it). Defaults to 120s. */
   idleMs?: number
+  /** Provider-strategy completion ceiling. Métis Local sets a small per-task bound; cloud defaults remain unchanged. */
+  maxOutputTokens?: number
   /**
    * Dust only: force a brand-new, uncached conversation for this request. Background jobs (brain
    * ingest) must NOT join the live meeting's cached conversation — they'd contaminate the meeting's

@@ -11,8 +11,9 @@
  *   1. ASKTOTO_PROVE_MODEL_DIR env — a directory containing the pinned 0.8B gguf + mmproj (any filenames;
  *      matched by exact pinned byte size, then sha256-verified). Point this at
  *      /Users/tony/AI-Brain-build/llama-spike for the already-downloaded proof run.
- *   2. This machine's userData local-llm dir, if the 0.8B model was already downloaded through the app.
- *   3. Otherwise, downloads the pinned 0.8B gguf + mmproj straight from the manifest URLs (verified
+ *   2. This checkout's build-provisioned `resources/local-llm` payload.
+ *   3. A legacy userData model directory left by an older development build.
+ *   4. Otherwise, this developer proof script downloads the pinned 0.8B gguf + mmproj from the manifest URLs (verified
  *      sha256) into a script-owned cache dir.
  *
  * Usage: node scripts/prove-local-ttft.mjs
@@ -43,12 +44,12 @@ const REPO_ROOT = join(__dirname, '..')
 const MODEL_0_8B = {
   id: 'qwen3.5-0.8b',
   gguf: {
-    url: 'https://huggingface.co/unsloth/Qwen3.5-0.8B-GGUF/resolve/main/Qwen3.5-0.8B-UD-Q4_K_XL.gguf',
+    url: 'https://huggingface.co/unsloth/Qwen3.5-0.8B-GGUF/resolve/6ab461498e2023f6e3c1baea90a8f0fe38ab64d0/Qwen3.5-0.8B-UD-Q4_K_XL.gguf',
     bytes: 558772480,
     sha256: '3177ebd67afe4438374da19e690bc1b98756f7e0fea9240e1be404336156a7b5'
   },
   mmproj: {
-    url: 'https://huggingface.co/unsloth/Qwen3.5-0.8B-GGUF/resolve/main/mmproj-F16.gguf',
+    url: 'https://huggingface.co/unsloth/Qwen3.5-0.8B-GGUF/resolve/6ab461498e2023f6e3c1baea90a8f0fe38ab64d0/mmproj-F16.gguf',
     bytes: 204987232,
     sha256: '56e4c6cfe73b0c82e3e82bc518d7591997e61d81f723fc41a586f4fa69ea2453'
   }
@@ -63,15 +64,15 @@ const HEALTH_BUDGET_MS = 30_000
 const HEALTH_POLL_INTERVAL_MS = 250
 const WARM_TTFT_BUDGET_MS = 1500
 
-function buildSpawnArgs({ gguf, mmproj, apiKey }) {
+function buildSpawnArgs({ gguf, mmproj }) {
   return [
     '-m', gguf,
     '--mmproj', mmproj,
     '--host', '127.0.0.1',
     '--port', '0',
-    '--api-key', apiKey,
-    '-c', '8192',
+    '-c', '65536',
     '--parallel', '2',
+    '--cache-ram', '128',
     '-ngl', '99',
     '--no-ui',
     '--jinja',
@@ -211,7 +212,14 @@ function findUserDataModel() {
   return null
 }
 
-/** HTTPS GET with redirect following (huggingface.co resolve/main URLs 302 to the CDN) — mirrors
+function findBuildProvisionedModel() {
+  const modelDir = join(REPO_ROOT, 'resources', 'local-llm', 'models', MODEL_0_8B.id)
+  const gguf = join(modelDir, 'model.gguf')
+  const mmproj = join(modelDir, 'mmproj.gguf')
+  return existsSync(gguf) && existsSync(mmproj) ? { gguf, mmproj } : null
+}
+
+/** HTTPS GET with redirect following (immutable huggingface.co resolve URLs redirect to the CDN) — mirrors
  *  fetch-llama-server.mjs's fetchStream(). */
 function fetchStream(url) {
   return new Promise((resolve, reject) => {
@@ -283,6 +291,11 @@ async function resolveModelFiles() {
     console.log(`[prove-local-ttft] model source: ASKTOTO_PROVE_MODEL_DIR=${process.env.ASKTOTO_PROVE_MODEL_DIR}`)
     return verifyPinnedPair(resolveFromDir(process.env.ASKTOTO_PROVE_MODEL_DIR))
   }
+  const provisioned = findBuildProvisionedModel()
+  if (provisioned) {
+    console.log(`[prove-local-ttft] model source: build-provisioned resources (${dirname(provisioned.gguf)})`)
+    return verifyPinnedPair(provisioned)
+  }
   const fromUserData = findUserDataModel()
   if (fromUserData) {
     console.log(`[prove-local-ttft] model source: userData (${dirname(fromUserData.gguf)})`)
@@ -334,9 +347,13 @@ async function pollHealth(port) {
   throw new Error(`llama-server did not become healthy within ${HEALTH_BUDGET_MS}ms: ${lastErr?.message ?? lastErr}`)
 }
 
-function spawnAndWaitHealthy(binaryPath, args) {
+function spawnAndWaitHealthy(binaryPath, args, apiKey) {
   return new Promise((resolve, reject) => {
-    const proc = spawn(binaryPath, args, { stdio: ['ignore', 'pipe', 'pipe'] })
+    const proc = spawn(binaryPath, args, {
+      stdio: ['ignore', 'pipe', 'pipe'],
+      windowsHide: true,
+      env: { ...process.env, LLAMA_API_KEY: apiKey }
+    })
     sidecarChild = proc
     let outputBuffer = ''
     let boundPort = null
@@ -417,7 +434,7 @@ async function streamedSuggestCall(baseUrl, apiKey, messages) {
     body: JSON.stringify({
       model: 'local',
       messages,
-      max_tokens: 256,
+      max_tokens: 96,
       temperature: 0.7,
       top_p: 0.8,
       top_k: 20,
@@ -484,13 +501,13 @@ async function main() {
   console.log(`[prove-local-ttft] sidecar binary: ${binaryPath} (platform=${platform})`)
 
   const apiKey = randomBytes(32).toString('hex')
-  const args = buildSpawnArgs({ gguf: modelPaths.gguf, mmproj: modelPaths.mmproj, apiKey })
+  const args = buildSpawnArgs({ gguf: modelPaths.gguf, mmproj: modelPaths.mmproj })
   console.log(`[prove-local-ttft] spawning: ${binaryPath} ${args.join(' ')}`)
 
   let exitCode = 1
   try {
     const t0 = performance.now()
-    const { port } = await spawnAndWaitHealthy(binaryPath, args)
+    const { port } = await spawnAndWaitHealthy(binaryPath, args, apiKey)
     console.log(`[prove-local-ttft] healthy on 127.0.0.1:${port} after ${Math.round(performance.now() - t0)}ms`)
     const baseUrl = `http://127.0.0.1:${port}`
 

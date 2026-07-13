@@ -22,16 +22,26 @@ function blockAfter(startAnchor: string, endMarker: string): string {
   return source.slice(start, end)
 }
 
-describe('onDelete surfaces a failed local-model delete inline (finding 1)', () => {
-  const block = blockAfter('const onDelete = (id: string)', '\n\n  const primaryBtn')
+describe('Local AI is a bundled, read-only capability', () => {
+  const block = blockAfter('function LocalAiSection(', '\nfunction StepBadge(')
 
-  it('branches on r.ok, not just calling loadModels() unconditionally', () => {
-    expect(block).toMatch(/if\s*\(r\.ok\)\s*loadModels\(\)/)
+  it('loads readiness metadata but exposes no runtime model management', () => {
+    expect(block).toMatch(/window\.toto\.localModelsList\(\)/)
+    expect(block).not.toMatch(/localModelsDownload|localModelsCancel|localModelsDelete|onLocalModelsProgress/)
   })
 
-  it('the failure branch writes into downloadState — the same state the download-error row reads', () => {
-    expect(block).toMatch(/else\s+setDownloadState\(/)
-    expect(block).toMatch(/phase:\s*'error'/)
+  it('says the model is included with Métis and renders ready or unavailable state', () => {
+    expect(block).toMatch(/Included with Métis/)
+    expect(block).toMatch(/model\.ready/)
+    expect(block).toMatch(/model\.unavailableReason === 'insufficient-ram'/)
+    expect(block).toMatch(/Ready/)
+    expect(block).toMatch(/Unavailable/)
+  })
+
+  it('contains no model download or delete controls', () => {
+    expect(block).not.toMatch(/>\s*Download\s*</)
+    expect(block).not.toMatch(/>\s*Delete\s*</)
+    expect(block).not.toMatch(/>\s*Cancel\s*</)
   })
 })
 

@@ -78,7 +78,7 @@ consideration; until then, the practical opt-out is "we stop recording for this 
 | Raw audio not persisted to disk | Shipped (architectural — no audio-file write path exists) |
 | Transcripts + brain data encrypted at rest (AES-GCM, device-bound key) | Shipped — `encryptTranscripts`, default **on** |
 | Secret-pattern redaction before any cloud-model call | Shipped — `redactSensitive`, default **on**, strips card/SSN/API-key patterns only (not names/business content) |
-| Local LLM option for summarization (no cloud egress at all) | Partially shipped — packaged local AI (Qwen3, on-device) is in active development on this branch; not yet the default |
+| Local LLM option for summarization (no cloud egress at all) | Packaged as an opt-in provider — bundled Qwen3.5 0.8B through llama.cpp `llama-server` b9957 on macOS arm64 and Windows x64; no post-install model/runtime download |
 | Derived summaries only, never verbatim transcript, published for agent-reading | Planned — Phase 5 of the 100x plan, gated by explicit consent + a per-meeting confidential flag; not yet built |
 
 ### Power imbalance / vulnerability

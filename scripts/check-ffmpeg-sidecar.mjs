@@ -6,7 +6,7 @@ import { readFileSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 
 const target = process.argv[2] || process.platform
-const arch = target === 'win' ? 'x64' : process.arch
+const arch = process.argv[3] || (target === 'win' ? 'x64' : process.arch)
 const platform = target === 'win' ? 'win32' : target === 'mac' ? 'darwin' : process.platform
 const file = join('resources', 'ffmpeg', `${platform}-${arch}`, platform === 'win32' ? 'ffmpeg.exe' : 'ffmpeg')
 const manifest = JSON.parse(readFileSync(join('resources', 'ffmpeg', 'manifest.json'), 'utf8'))
@@ -22,7 +22,7 @@ if (actual !== expected) throw new Error(`${file} hash mismatch: expected ${expe
 // platform matches the actual host — a foreign-platform executable (PE on
 // macOS/Linux, Mach-O on Windows) can't run locally, so cross-verification
 // falls back to the sha256 check above.
-if (platform === process.platform) {
+if (platform === process.platform && arch === process.arch) {
   const result = spawnSync(file, ['-L'], { encoding: 'utf8' })
   const license = `${result.stdout || ''}\n${result.stderr || ''}`
   if (!/GNU Lesser General Public\s+License/i.test(license) || /nonfree parts compiled|--enable-gpl/i.test(license)) {

@@ -3,6 +3,35 @@ import * as localRuntime from './local-runtime'
 import { streamOpenAI } from './openai'
 import { type StreamOptions, type StreamHandle, errMsg } from './shared'
 
+// Local completions are task-shaped, not generic 4k-token chat turns. These bounds preserve the current
+// spoken-suggestion (~15–40 seconds), tight-summary, and screen-help contracts while leaving the 32768-
+// token slot enough room for the existing bounded transcript/system input. Cloud providers keep their
+// established budgets because only this strategy sets StreamOptions.maxOutputTokens.
+export const LOCAL_OUTPUT_TOKEN_BUDGETS = Object.freeze({ suggest: 96, summary: 512, vision: 384 })
+const LOCAL_SYSTEM_CHAR_CAP = 40_000 // matches personas.ts contextBlock's existing imported-context cap
+const LOCAL_SUMMARY_TRANSCRIPT_CHAR_CAP = 80_000 // system + transcript stays within the existing 120k-char envelope
+
+function boundedLocalSystem(system: string): string {
+  if (system.length <= LOCAL_SYSTEM_CHAR_CAP) return system
+  const marker = '\n\n[Local system context truncated to fit the on-device model.]\n\n'
+  const contentBudget = LOCAL_SYSTEM_CHAR_CAP - marker.length
+  const head = Math.ceil(contentBudget / 2)
+  return system.slice(0, head) + marker + system.slice(-(contentBudget - head))
+}
+
+function boundedLocalRequest(req: StreamOptions['req']): StreamOptions['req'] {
+  const withoutHistory = req.history.length > 0 ? { ...req, history: [] } : req
+  if (withoutHistory.mode !== 'summary' || (withoutHistory.transcript?.length ?? 0) <= LOCAL_SUMMARY_TRANSCRIPT_CHAR_CAP) {
+    return withoutHistory
+  }
+  const originalLength = withoutHistory.transcript?.length ?? 0
+  const note = `[NOTE: local summary input truncated to the final ${LOCAL_SUMMARY_TRANSCRIPT_CHAR_CAP} of ${originalLength} characters.]\n`
+  return {
+    ...withoutHistory,
+    transcript: note + (withoutHistory.transcript ?? '').slice(-(LOCAL_SUMMARY_TRANSCRIPT_CHAR_CAP - note.length))
+  }
+}
+
 /**
  * Métis Local provider strategy (PLAN.md §4.2/§4.3) — a thin shim over streamOpenAI: the llama-server
  * sidecar speaks the same OpenAI-compatible /v1/chat/completions surface openai.ts already talks to, so
@@ -70,12 +99,26 @@ export function streamLocal(opts: StreamOptions): StreamHandle {
           : opts.req.mode === 'summary'
             ? { id_slot: 1, cache_prompt: true }
             : { cache_prompt: true }
+      // These local modes carry all current context in transcript/screenshot + prompt. Generic chat history
+      // is unrelated stale input here and is unbounded at the IPC schema, so never let it consume the fixed
+      // sidecar slot. This does not change any cloud request.
+      const localReq = boundedLocalRequest(opts.req)
+      const localSystem = boundedLocalSystem(opts.system)
+      const maxOutputTokens =
+        opts.req.mode === 'suggest'
+          ? LOCAL_OUTPUT_TOKEN_BUDGETS.suggest
+          : opts.req.mode === 'summary'
+            ? LOCAL_OUTPUT_TOKEN_BUDGETS.summary
+            : LOCAL_OUTPUT_TOKEN_BUDGETS.vision
       streamActive = true
       localRuntime.beginStream()
       inner = streamOpenAI({
         ...opts,
         baseURL: localRuntime.baseURL(),
         apiKey: localRuntime.sessionKey(),
+        req: localReq,
+        system: localSystem,
+        maxOutputTokens,
         llamaSlotOptions,
         // Re-arm the 15-minute idle-stop countdown when this response finishes (success or error), not
         // just when it starts (markActivity() above) — a long-running stream would otherwise let the

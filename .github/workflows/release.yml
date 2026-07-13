@@ -11,15 +11,46 @@ on:
     tags:
       - 'v*'
 
+# A retry for the same tag must never race another run while both mutate the same draft release.
+concurrency:
+  group: metis-release-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
+  release-quality:
+    name: Release source gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Require the tagged commit to be current main
+        run: |
+          git fetch --no-tags origin main
+          if [ "$(git rev-parse HEAD)" != "$(git rev-parse origin/main)" ]; then
+            echo "::error::Release tags must point to the current origin/main commit."
+            exit 1
+          fi
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20.19.2
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+      - run: npm audit --audit-level=critical
+
   release-macos:
     name: macOS release
+    needs: release-quality
     runs-on: macos-latest
     # Notarization blocks on Apple's queue, which is usually minutes but has had documented multi-hour
     # degradations; 45 min was tight enough that a slow queue killed the job with no partial-progress
     # recovery (retry re-downloads/rebuilds from scratch). 90 min gives the notarization wait real room
     # without materially delaying detection of a genuinely stuck job.
-    timeout-minutes: 90
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
       # First step, before any build work starts: a tag that doesn't match package.json's version would
@@ -29,15 +60,15 @@ jobs:
         run: node scripts/check-version-parity.mjs
         env:
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
-      # Restore the reviewed LGPL ffmpeg decoder sidecar (untracked in git - see
-      # resources/ffmpeg/manifest.json) from the ffmpeg-sidecar-v1 release in this repo. Cache first so a
+      # Restore the reviewed LGPL ffmpeg decoder binary (the manifest/license stay tracked in git) from
+      # the ffmpeg-sidecar-v1 release in this repo. Cache the target binary directory so a
       # warm runner doesn't hit the GitHub API on every run; fall back to `gh release download` (built-in
       # GITHUB_TOKEN, read-only, scoped to this repo) on a cache miss.
       - uses: actions/cache@v4
         id: ffmpeg-cache
         with:
-          path: resources/ffmpeg
-          key: ffmpeg-sidecar-v1-darwin-arm64
+          path: resources/ffmpeg/darwin-arm64
+          key: ffmpeg-sidecar-v1-darwin-arm64-${{ hashFiles('resources/ffmpeg/manifest.json') }}
       - name: Provision ffmpeg sidecar (darwin-arm64)
         if: steps.ffmpeg-cache.outputs.cache-hit != 'true'
         env:
@@ -45,7 +76,7 @@ jobs:
         run: |
           mkdir -p resources/ffmpeg/darwin-arm64
           if ! gh release download ffmpeg-sidecar-v1 --repo "$GITHUB_REPOSITORY" \
-               --pattern 'ffmpeg-darwin-arm64' --pattern 'manifest.json' --pattern 'LICENSE.LGPL-2.1.txt' \
+               --pattern 'ffmpeg-darwin-arm64' \
                --dir resources/ffmpeg --clobber; then
             echo "::warning::Could not download the ffmpeg-sidecar-v1 release assets - falling through to the hard gate below."
           elif [ -f resources/ffmpeg/ffmpeg-darwin-arm64 ]; then
@@ -59,7 +90,7 @@ jobs:
           if [ ! -f "resources/ffmpeg/darwin-arm64/ffmpeg" ]; then
             echo "::error::Missing resources/ffmpeg/darwin-arm64/ffmpeg and the ffmpeg-sidecar-v1 release could not provision it."
             echo "::error::One-time seed (run once locally by a maintainer holding the reviewed binaries in resources/ffmpeg/):"
-            echo "::error::  cp resources/ffmpeg/darwin-arm64/ffmpeg /tmp/ffmpeg-darwin-arm64 && cp resources/ffmpeg/win32-x64/ffmpeg.exe /tmp/ffmpeg-win32-x64.exe && gh release create ffmpeg-sidecar-v1 /tmp/ffmpeg-darwin-arm64 /tmp/ffmpeg-win32-x64.exe resources/ffmpeg/manifest.json resources/ffmpeg/LICENSE.LGPL-2.1.txt --repo $GITHUB_REPOSITORY --title 'ffmpeg sidecar v1' --notes 'Reviewed LGPL-only ffmpeg binaries for CI provisioning (see manifest.json for SHA256s).'"
+            echo "::error::  cp resources/ffmpeg/darwin-arm64/ffmpeg /tmp/ffmpeg-darwin-arm64 && cp resources/ffmpeg/win32-x64/ffmpeg.exe /tmp/ffmpeg-win32-x64.exe && gh release create ffmpeg-sidecar-v1 /tmp/ffmpeg-darwin-arm64 /tmp/ffmpeg-win32-x64.exe --repo $GITHUB_REPOSITORY --title 'ffmpeg sidecar v1' --notes 'Reviewed LGPL-only ffmpeg binaries for CI provisioning (tracked manifest.json contains SHA256s).'"
             exit 1
           fi
       # Hard gate: a v* tag with these secrets missing must fail the job, not publish an unsigned build.
@@ -88,7 +119,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
       - uses: actions/setup-node@v4
         with:
-          node-version: 22.22.3
+          node-version: 20.19.2
           cache: npm
       - run: npm ci
       # Same model cache as build.yml (~1.3 GB fetched by predist -> scripts/fetch-models.mjs).
@@ -98,20 +129,12 @@ jobs:
             resources/models
             resources/asr
             resources/ort
-          key: asr-models-${{ runner.os }}-${{ hashFiles('scripts/fetch-models.mjs') }}
-      - name: Cache immutable local AI assets
-        uses: actions/cache@v4
-        with:
-          path: resources/local-ai/cache
-          key: local-ai-darwin-arm64-${{ hashFiles('resources/local-ai/candidates.json') }}
-      - name: Fetch selected local AI assets
-        run: npm run fetch:local-ai
-      - name: Stage selected local AI payload (darwin-arm64)
-        run: npm run stage:local-ai -- --platform darwin-arm64
-      # Tagged releases stay closed until Task 12 promotes a benchmarked selection to approval=release.
-      - name: Require release-approved local AI payload offline (darwin-arm64)
-        run: npm run check:local-ai -- --platform darwin-arm64 --require-release
-      - run: npm run release -- --arm64
+            resources/llama
+            resources/local-llm
+          key: runtime-assets-${{ runner.os }}-${{ hashFiles('scripts/fetch-models.mjs', 'resources/runtime-assets-manifest.json') }}-${{ hashFiles('scripts/fetch-llama-server.mjs') }}-${{ hashFiles('scripts/fetch-local-model.mjs', 'scripts/local-model-assets.mjs') }}
+      # Release scripts fetch and verify every runtime asset before packaging. The Qwen payload is embedded
+      # in the installer; installed application code contains no model download path.
+      - run: npm run release:build:mac
         env:
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
           CSC_LINK: ${{ secrets.CSC_LINK }}
@@ -119,23 +142,29 @@ jobs:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-      # The 2 GiB-per-asset size gate in check-release.mjs can't run before `npm run release` (it needs
-      # electron-builder's output, which that same command both builds and publishes in one step) - see
-      # the comment above checkArtifactSizes() in check-release.mjs. Runs after publish, so like
-      # verify-signing.mjs below it's a confirmation/alarm, not a preventer.
+      # Hard size gate before anything is published.
       - run: npm run check:release
         env:
           ASKTOTO_ARTIFACTS_DIR: release
-      # Positively verify the published artifact is actually signed + notarized rather than trusting
-      # electron-builder's exit code (scripts/verify-signing.mjs, wired in per docs/SIGNING.md's
-      # "Signature gate" section). Runs after publish, so it's a confirmation/alarm, not a preventer -
-      # the secrets gate above is what stops an unsigned build from ever reaching AskToto-Releases.
+      # Positively verify the built artifact is signed + notarized before it can reach the publish job.
       - run: node scripts/verify-signing.mjs --require-notarized
+      - uses: actions/upload-artifact@v4
+        with:
+          name: metis-release-macos
+          retention-days: 1
+          if-no-files-found: error
+          compression-level: 0
+          path: |
+            release/*.dmg
+            release/*.zip
+            release/*.blockmap
+            release/latest-mac.yml
 
   release-windows:
     name: Windows release
+    needs: release-quality
     runs-on: windows-latest
-    timeout-minutes: 45
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
       - name: Verify tag matches package.json version
@@ -143,15 +172,15 @@ jobs:
         run: node scripts/check-version-parity.mjs
         env:
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
-      # Restore the reviewed LGPL ffmpeg decoder sidecar (untracked in git - see
-      # resources/ffmpeg/manifest.json) from the ffmpeg-sidecar-v1 release in this repo. Cache first so a
+      # Restore the reviewed LGPL ffmpeg decoder binary (the manifest/license stay tracked in git) from
+      # the ffmpeg-sidecar-v1 release in this repo. Cache the target binary directory so a
       # warm runner doesn't hit the GitHub API on every run; fall back to `gh release download` (built-in
       # GITHUB_TOKEN, read-only, scoped to this repo) on a cache miss.
       - uses: actions/cache@v4
         id: ffmpeg-cache
         with:
-          path: resources/ffmpeg
-          key: ffmpeg-sidecar-v1-win32-x64
+          path: resources/ffmpeg/win32-x64
+          key: ffmpeg-sidecar-v1-win32-x64-${{ hashFiles('resources/ffmpeg/manifest.json') }}
       - name: Provision ffmpeg sidecar (win32-x64)
         if: steps.ffmpeg-cache.outputs.cache-hit != 'true'
         shell: bash
@@ -160,14 +189,14 @@ jobs:
         run: |
           mkdir -p resources/ffmpeg/win32-x64
           if ! gh release download ffmpeg-sidecar-v1 --repo "$GITHUB_REPOSITORY" \
-               --pattern 'ffmpeg-win32-x64.exe' --pattern 'manifest.json' --pattern 'LICENSE.LGPL-2.1.txt' \
+               --pattern 'ffmpeg-win32-x64.exe' \
                --dir resources/ffmpeg --clobber; then
             echo "::warning::Could not download the ffmpeg-sidecar-v1 release assets - falling through to the hard gate below."
           elif [ -f resources/ffmpeg/ffmpeg-win32-x64.exe ]; then
             mv resources/ffmpeg/ffmpeg-win32-x64.exe resources/ffmpeg/win32-x64/ffmpeg.exe
           fi
-      # Hard gate: resources/ffmpeg (the LGPL decoder sidecar checked by scripts/check-ffmpeg-sidecar.mjs)
-      # is untracked in git; fail here with the exact one-time seed command, before burning build/signing
+      # Hard gate: the platform binary remains outside git while its reviewed manifest/license are tracked;
+      # fail here with the exact one-time seed command, before burning build/signing
       # time, instead of failing deep inside `npm run release:win`.
       - name: Require the ffmpeg sidecar to be present
         shell: bash
@@ -175,7 +204,7 @@ jobs:
           if [ ! -f "resources/ffmpeg/win32-x64/ffmpeg.exe" ]; then
             echo "::error::Missing resources/ffmpeg/win32-x64/ffmpeg.exe and the ffmpeg-sidecar-v1 release could not provision it."
             echo "::error::One-time seed (run once locally by a maintainer holding the reviewed binaries in resources/ffmpeg/):"
-            echo "::error::  cp resources/ffmpeg/darwin-arm64/ffmpeg /tmp/ffmpeg-darwin-arm64 && cp resources/ffmpeg/win32-x64/ffmpeg.exe /tmp/ffmpeg-win32-x64.exe && gh release create ffmpeg-sidecar-v1 /tmp/ffmpeg-darwin-arm64 /tmp/ffmpeg-win32-x64.exe resources/ffmpeg/manifest.json resources/ffmpeg/LICENSE.LGPL-2.1.txt --repo $GITHUB_REPOSITORY --title 'ffmpeg sidecar v1' --notes 'Reviewed LGPL-only ffmpeg binaries for CI provisioning (see manifest.json for SHA256s).'"
+            echo "::error::  cp resources/ffmpeg/darwin-arm64/ffmpeg /tmp/ffmpeg-darwin-arm64 && cp resources/ffmpeg/win32-x64/ffmpeg.exe /tmp/ffmpeg-win32-x64.exe && gh release create ffmpeg-sidecar-v1 /tmp/ffmpeg-darwin-arm64 /tmp/ffmpeg-win32-x64.exe --repo $GITHUB_REPOSITORY --title 'ffmpeg sidecar v1' --notes 'Reviewed LGPL-only ffmpeg binaries for CI provisioning (tracked manifest.json contains SHA256s).'"
             exit 1
           fi
       - name: Require signing secrets before releasing
@@ -185,6 +214,7 @@ jobs:
           [ -z "$GH_TOKEN" ] && missing+=(GH_TOKEN)
           [ -z "$WIN_CSC_LINK" ] && missing+=(WIN_CSC_LINK)
           [ -z "$WIN_CSC_KEY_PASSWORD" ] && missing+=(WIN_CSC_KEY_PASSWORD)
+          [ -z "$WIN_CSC_EXPECTED_SUBJECT" ] && missing+=(WIN_CSC_EXPECTED_SUBJECT)
           if [ ${#missing[@]} -gt 0 ]; then
             echo "::error::Missing release secret(s): ${missing[*]}. See docs/SIGNING.md - refusing to publish an unsigned Windows release."
             exit 1
@@ -193,9 +223,10 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
           WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
           WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
+          WIN_CSC_EXPECTED_SUBJECT: ${{ secrets.WIN_CSC_EXPECTED_SUBJECT }}
       - uses: actions/setup-node@v4
         with:
-          node-version: 22.22.3
+          node-version: 20.19.2
           cache: npm
       - run: npm ci
       # Same model cache as build.yml / release-macos (~1.3 GB fetched by predist:win -> fetch-models.mjs).
@@ -205,42 +236,52 @@ jobs:
             resources/models
             resources/asr
             resources/ort
-          key: asr-models-${{ runner.os }}-${{ hashFiles('scripts/fetch-models.mjs') }}
-      - name: Cache immutable local AI assets
-        uses: actions/cache@v4
-        with:
-          path: resources/local-ai/cache
-          key: local-ai-win32-x64-${{ hashFiles('resources/local-ai/candidates.json') }}
-      - name: Fetch selected local AI assets
-        run: npm run fetch:local-ai
-      - name: Stage selected local AI payload (win32-x64)
-        run: npm run stage:local-ai -- --platform win32-x64
-      # Tagged releases stay closed until Task 12 promotes a benchmarked selection to approval=release.
-      - name: Require release-approved local AI payload offline (win32-x64)
-        run: npm run check:local-ai -- --platform win32-x64 --require-release
-      - run: npm run release:win -- --x64
+            resources/llama
+            resources/local-llm
+          key: runtime-assets-${{ runner.os }}-${{ hashFiles('scripts/fetch-models.mjs', 'resources/runtime-assets-manifest.json') }}-${{ hashFiles('scripts/fetch-llama-server.mjs') }}-${{ hashFiles('scripts/fetch-local-model.mjs', 'scripts/local-model-assets.mjs') }}
+      # Release scripts fetch and verify every runtime asset before packaging. The Qwen payload is embedded
+      # in the installer; installed application code contains no model download path.
+      - run: npm run release:build:win
         env:
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
           WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
           WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
-      # Same post-publish size-gate confirmation as release-macos - see the comment there.
+          WIN_CSC_EXPECTED_SUBJECT: ${{ secrets.WIN_CSC_EXPECTED_SUBJECT }}
+      # Same pre-publication size gate as release-macos.
       - run: npm run check:release
         env:
           ASKTOTO_ARTIFACTS_DIR: release
       - run: node scripts/verify-signing.mjs
+        env:
+          WIN_CSC_EXPECTED_SUBJECT: ${{ secrets.WIN_CSC_EXPECTED_SUBJECT }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: metis-release-windows
+          retention-days: 1
+          if-no-files-found: error
+          compression-level: 0
+          path: |
+            release/*.exe
+            release/*.blockmap
+            release/latest.yml
 
-  # release-macos and release-windows publish to the same non-draft GitHub release independently, with no
-  # `needs:` between them - a tag could previously publish one platform while the other silently failed,
-  # leaving that platform's users stuck on stale software with nothing surfacing the skew. Verify both
-  # platforms' assets actually landed on the release and fail loudly (marking it draft) if not.
+  # Publish only after both signed native builds pass. Assets first land on an invisible draft; the draft
+  # becomes public only after the complete Mac + Windows set is verified in that same release.
   release-verify:
-    name: Verify both platforms published
+    name: Publish verified Mac + Windows release
     needs: [release-macos, release-windows]
-    if: always()
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: metis-release-macos
+          path: release-bundle/macos
+      - uses: actions/download-artifact@v4
+        with:
+          name: metis-release-windows
+          path: release-bundle/windows
       - name: Resolve publish repo
         id: publish-repo
         run: |
@@ -248,42 +289,93 @@ jobs:
           repo=$(grep -oE '^\s*repo:\s*\S+' electron-builder.yml | awk '{print $2}')
           echo "owner=$owner" >> "$GITHUB_OUTPUT"
           echo "repo=$repo" >> "$GITHUB_OUTPUT"
-      - name: Verify macOS and Windows assets are both on the release
+      - name: Verify bundle, upload to draft, then publish atomically
         env:
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
         run: |
+          set -euo pipefail
           repo="${{ steps.publish-repo.outputs.owner }}/${{ steps.publish-repo.outputs.repo }}"
           tag="$GITHUB_REF_NAME"
-          mac_result="${{ needs.release-macos.result }}"
-          win_result="${{ needs.release-windows.result }}"
-          echo "release-macos=$mac_result release-windows=$win_result"
-          if ! gh release view "$tag" --repo "$repo" >/dev/null 2>&1; then
-            echo "::error::No release exists for $tag on $repo (release-macos=$mac_result, release-windows=$win_result) - nothing published."
-            exit 1
-          fi
-          assets=""
-          max_attempts=3
-          attempt=1
-          while [ "$attempt" -le "$max_attempts" ]; do
-            if assets=$(gh release view "$tag" --repo "$repo" --json assets --jq '.assets[].name' 2>&1); then
-              break
-            fi
-            echo "::warning::Attempt $attempt/$max_attempts to list assets for $tag on $repo failed: $assets"
-            attempt=$((attempt + 1))
-            [ "$attempt" -le "$max_attempts" ] && sleep 5
+          version="${tag#v}"
+          shopt -s nullglob
+
+          required_files=(
+            "release-bundle/macos/Metis-${version}.dmg"
+            "release-bundle/macos/Metis-${version}.dmg.blockmap"
+            "release-bundle/macos/Metis-${version}.zip"
+            "release-bundle/macos/Metis-${version}.zip.blockmap"
+            "release-bundle/macos/latest-mac.yml"
+            "release-bundle/windows/Metis-Setup-${version}.exe"
+            "release-bundle/windows/Metis-Setup-${version}.exe.blockmap"
+            "release-bundle/windows/Metis-Portable-${version}.exe"
+            "release-bundle/windows/latest.yml"
+          )
+          for file in "${required_files[@]}"; do
+            [ -f "$file" ] || { echo "::error::Missing required release asset: $file"; exit 1; }
           done
-          if [ "$attempt" -gt "$max_attempts" ]; then
-            echo "::error::Could not reach the GitHub API to list assets for $tag on $repo after $max_attempts attempts (release-macos=$mac_result, release-windows=$win_result) - this is a verify-step API failure, not confirmation that assets are missing."
+
+          node scripts/check-update-metadata.mjs \
+            release-bundle/macos/latest-mac.yml \
+            release-bundle/windows/latest.yml
+
+          mapfile -t files < <(
+            find release-bundle/macos release-bundle/windows -mindepth 1 -maxdepth 1 -type f -print | LC_ALL=C sort
+          )
+          [ "${#files[@]}" -eq "${#required_files[@]}" ] || {
+            echo "::error::Release bundle contains missing or unexpected files."
+            printf '  %s\n' "${files[@]}"
+            exit 1
+          }
+          expected_assets=$(printf '%s\n' "${files[@]##*/}" | LC_ALL=C sort)
+          required_assets=$(printf '%s\n' "${required_files[@]##*/}" | LC_ALL=C sort)
+          [ "$expected_assets" = "$required_assets" ] || {
+            echo "::error::Release bundle does not exactly match the allowed asset set for $tag."
+            diff -u <(printf '%s\n' "$required_assets") <(printf '%s\n' "$expected_assets") || true
+            exit 1
+          }
+
+          assert_draft() {
+            local draft
+            draft=$(gh release view "$tag" --repo "$repo" --json isDraft --jq '.isDraft')
+            [ "$draft" = "true" ] || {
+              echo "::error::Refusing to mutate public release $tag on $repo."
+              exit 1
+            }
+          }
+
+          set +e
+          lookup=$(gh api "repos/$repo/releases/tags/$tag" --jq '.draft' 2>&1)
+          lookup_status=$?
+          set -e
+          if [ "$lookup_status" -eq 0 ]; then
+            [ "$lookup" = "true" ] || { echo "::error::Refusing to overwrite public release $tag"; exit 1; }
+            # A failed prior run can leave stale assets in its draft. Delete only the confirmed draft;
+            # retain the tag, then recreate a clean draft so no unreviewed asset can survive a retry.
+            assert_draft
+            gh release delete "$tag" --repo "$repo" --yes
+          elif ! grep -qi 'HTTP 404' <<<"$lookup"; then
+            echo "::error::Could not safely determine whether $tag already exists on $repo."
+            echo "$lookup"
             exit 1
           fi
-          mac_ok=false
-          win_ok=false
-          echo "$assets" | grep -Eq '\.(dmg|zip)$' && echo "$assets" | grep -Fxq 'latest-mac.yml' && mac_ok=true || true
-          echo "$assets" | grep -Eq '\.(exe|appx)$' && echo "$assets" | grep -Fxq 'latest.yml' && win_ok=true || true
-          if [ "$mac_ok" != true ] || [ "$win_ok" != true ]; then
-            echo "::error::Release $tag on $repo is missing platform assets (mac_ok=$mac_ok win_ok=$win_ok, release-macos=$mac_result, release-windows=$win_result)."
-            echo "::error::Marking it draft so electron-updater never resolves an incomplete release."
-            gh release edit "$tag" --repo "$repo" --draft || echo "::warning::Could not mark $tag as draft on $repo."
+
+          gh release create "$tag" --repo "$repo" --draft --title "Métis $tag" \
+            --notes "Signed Métis desktop installers for macOS Apple Silicon and Windows x64."
+
+          # Recheck immediately before both remote mutations. Tag-scoped workflow concurrency prevents
+          # another Actions retry from entering this critical section at the same time.
+          assert_draft
+          gh release upload "$tag" "${files[@]}" --repo "$repo"
+
+          actual_assets=$(gh release view "$tag" --repo "$repo" --json assets --jq '.assets[].name' | LC_ALL=C sort)
+          [ "$actual_assets" = "$expected_assets" ] || {
+            echo "::error::Draft release asset set differs from the reviewed local bundle."
+            diff -u <(printf '%s\n' "$expected_assets") <(printf '%s\n' "$actual_assets") || true
             exit 1
-          fi
-          echo "Both platforms verified present on $repo for $tag."
+          }
+
+          assert_draft
+          gh release edit "$tag" --repo "$repo" --draft=false
+          published=$(gh release view "$tag" --repo "$repo" --json isDraft --jq '.isDraft')
+          [ "$published" = "false" ] || { echo "::error::Release $tag did not become public."; exit 1; }
+          echo "Published complete Mac + Windows release $tag on $repo with an exact ${#files[@]}-asset set."

@@ -6,6 +6,7 @@ import { join, basename, delimiter } from 'node:path'
 import { homedir } from 'node:os'
 import { getSettings, getApiKey, hasApiKey } from './store'
 import { resolveMeetingsFolder } from './transcripts'
+import { readConfidentialMeetings } from './brain/publish'
 import type { GraphStatus, GraphRelated, Settings } from '@shared/ipc'
 
 const exec = promisify(execFile)
@@ -133,12 +134,17 @@ async function detectPython(): Promise<string | null> {
       }
     }
   }
-  // 2. uv tool interpreter (cross-platform).
+  // 2. Existing uv tool interpreter (cross-platform). `uv tool run graphifyy ...` is intentionally
+  // forbidden here: uv may provision the package on demand, which would mutate/download dependencies
+  // after Métis is installed. `tool list --offline` is read-only and only exposes an environment that
+  // the user already installed explicitly.
   try {
-    const py = (
-      await exec('uv', ['tool', 'run', 'graphifyy', 'python', '-c', 'import sys;print(sys.executable)'], execOpts({}))
-    ).stdout.trim()
-    if (py && (await canImport(py))) return (cachedPython = py)
+    const listed = await exec('uv', ['tool', 'list', '--show-paths', '--offline', '--no-config'], execOpts({}))
+    const toolDir = listed.stdout.match(/^graphifyy\s+\S+\s+\((.+)\)\s*$/m)?.[1]
+    const py = toolDir
+      ? join(toolDir, IS_WIN ? 'Scripts' : 'bin', IS_WIN ? 'python.exe' : 'python')
+      : ''
+    if (py && existsSync(py) && (await canImport(py))) return (cachedPython = py)
   } catch {
     /* fall through */
   }
@@ -238,7 +244,23 @@ export function graphifyRefusalReason(s: Settings): string | null {
  *  meetings folder directly (unchanged pre-MI-5 behavior). Pure, same testability rationale as
  *  graphifyRefusalReason above. */
 export function graphifySourceDir(s: Settings): string {
-  return s.encryptTranscripts && s.publishBrainPages ? join(resolveMeetingsFolder(s), 'wiki') : resolveMeetingsFolder(s)
+  // Prefer the plaintext wiki/ mirror whenever publishing is on: it is readable even under at-rest
+  // encryption AND it excludes confidential meetings (the raw folder does neither). Fall back to the raw
+  // meetings folder only when nothing is published — and confidentialGraphRefusal() blocks that fallback
+  // whenever any meeting is confidential, so a confidential note is never fed into the graph. (QA #10)
+  return s.publishBrainPages ? join(resolveMeetingsFolder(s), 'wiki') : resolveMeetingsFolder(s)
+}
+
+/** Non-pure companion to graphifyRefusalReason (it does file I/O, so it cannot live in that pure
+ *  function): refuse to build when a confidential meeting would reach the graph. The published wiki/
+ *  mirror excludes confidential meetings; the raw meetings folder does not. So whenever publishing is OFF
+ *  (source = raw folder) and any meeting is flagged confidential, a build would extract that confidential
+ *  content into the Dust-readable knowledge graph. Refuse until the user turns publishing on (which builds
+ *  from the confidential-free mirror instead). (QA #10) */
+function confidentialGraphRefusal(s: Settings): string | null {
+  if (s.publishBrainPages) return null // source is the wiki mirror, which already excludes confidential
+  if (readConfidentialMeetings(s).size === 0) return null
+  return 'Some meetings are marked confidential, but the knowledge graph is built from your meetings folder, which still includes them. Turn on "Publish meeting intelligence" in Settings so the graph is built from the confidential-free published mirror instead.'
 }
 
 /** Build (or incrementally update) the notes graph. Returns the final status. */
@@ -250,6 +272,12 @@ export async function buildGraph(incremental = false): Promise<GraphStatus> {
   const refusal = graphifyRefusalReason(getSettings())
   if (refusal) {
     lastError = refusal
+    return graphifyStatus()
+  }
+  // Confidentiality fail-closed: never feed a confidential meeting into the graph (QA #10).
+  const confidentialRefusal = confidentialGraphRefusal(getSettings())
+  if (confidentialRefusal) {
+    lastError = confidentialRefusal
     return graphifyStatus()
   }
   // Set the lock SYNCHRONOUSLY before any await — detectPython()/pickBackend() do child-process I/O
@@ -309,6 +337,7 @@ export function scheduleRebuild(): void {
   // Encrypted transcripts are unreadable by the graphify runner UNLESS publishBrainPages routes the
   // build at the plaintext wiki/ mirror instead — see graphifyRefusalReason/graphifySourceDir above.
   if (graphifyRefusalReason(s)) return
+  if (confidentialGraphRefusal(s)) return // don't auto-build a graph that would include a confidential meeting (QA #10)
   if (rebuildTimer) clearTimeout(rebuildTimer)
   const fire = (): void => {
     rebuildTimer = null

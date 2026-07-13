@@ -15,11 +15,10 @@
  * `win` fetches BOTH win assets: local-runtime.ts prefers the Vulkan (GPU) build at spawn time and falls
  * back to the CPU build once if Vulkan fails to start, so both must be present in a Windows package.
  *
- * The archive's sha256 is verified BEFORE extraction — a mismatch deletes the download and throws. A
- * `.sha256` sentinel is written into each destination on success so a re-run skips already-provisioned,
- * still-matching-the-current-pin targets without re-downloading (mirrors fetch-models.mjs's `filePresent`
- * idempotency, but keyed on the verified archive hash rather than file presence alone — that also makes
- * a pin bump in this script self-invalidate any stale extraction from a prior tag).
+ * The archive is retained under ignored resources/llama/.cache, and its hardcoded sha256 is verified
+ * BEFORE extraction on every run. Every packaging run re-extracts from that verified archive; a mutable
+ * marker or stale warm extraction is never trusted. A `.sha256` provenance marker is still included in
+ * each destination, but it is evidence only and never an input to the trust decision.
  */
 
 import { createHash } from 'node:crypto'
@@ -38,6 +37,7 @@ import {
   writeFileSync
 } from 'node:fs'
 import { join, dirname } from 'node:path'
+import { pipeline } from 'node:stream/promises'
 import { get as httpsGet } from 'node:https'
 import { execFileSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
@@ -45,6 +45,11 @@ import { fileURLToPath } from 'node:url'
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const REPO_ROOT = join(__dirname, '..')
 const LLAMA_DIR = join(REPO_ROOT, 'resources', 'llama')
+const ARCHIVE_CACHE_DIR = join(LLAMA_DIR, '.cache')
+const DEFAULT_REQUEST_TIMEOUT_MS = 30_000
+const DEFAULT_RESPONSE_IDLE_TIMEOUT_MS = 30_000
+const DEFAULT_MAX_ATTEMPTS = 3
+const DEFAULT_BACKOFF_BASE_MS = 1_000
 
 // ─── Pins (llama.cpp release b9957 — verified 2026-07-10, PLAN.md §3) ─────────────────────────────────
 const TAG = 'b9957'
@@ -82,14 +87,20 @@ function assetKeysFor(target) {
 
 // ─── Helpers ────────────────────────────────────────────────────────────────────────────────────────
 
-/** HTTPS GET with redirect following (GitHub release assets 302 to objects.githubusercontent.com). */
-function fetchStream(url) {
+/** HTTPS GET with redirect following (GitHub release assets 302 to objects.githubusercontent.com).
+ * The timer covers DNS, TCP/TLS setup, and response headers so a dead route cannot hang packaging. */
+export function fetchStream(
+  url,
+  { requestGet = httpsGet, requestTimeoutMs = DEFAULT_REQUEST_TIMEOUT_MS } = {}
+) {
   return new Promise((resolve, reject) => {
-    const req = httpsGet(url, (res) => {
+    let timeout
+    const req = requestGet(url, (res) => {
+      clearTimeout(timeout)
       if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
         res.resume()
         const next = new URL(res.headers.location, url).toString()
-        fetchStream(next).then(resolve, reject)
+        fetchStream(next, { requestGet, requestTimeoutMs }).then(resolve, reject)
         return
       }
       if (res.statusCode !== 200) {
@@ -99,7 +110,13 @@ function fetchStream(url) {
       }
       resolve(res)
     })
-    req.on('error', reject)
+    timeout = setTimeout(() => {
+      req.destroy(new Error(`request timeout after ${requestTimeoutMs}ms for ${url}`))
+    }, requestTimeoutMs)
+    req.on('error', (error) => {
+      clearTimeout(timeout)
+      reject(error)
+    })
   })
 }
 
@@ -109,39 +126,51 @@ function fetchStream(url) {
  *  idiom) — the sha256 check right after this call in provision() is what actually gates trust, so a
  *  leftover archive from an interrupted prior run (e.g. one that failed during extraction, after the
  *  download itself succeeded) is reused instead of re-fetched. */
-async function download(url, dest) {
+export async function download(
+  url,
+  dest,
+  {
+    requestGet = httpsGet,
+    requestTimeoutMs = DEFAULT_REQUEST_TIMEOUT_MS,
+    responseIdleTimeoutMs = DEFAULT_RESPONSE_IDLE_TIMEOUT_MS,
+    maxAttempts = DEFAULT_MAX_ATTEMPTS,
+    backoffBaseMs = DEFAULT_BACKOFF_BASE_MS
+  } = {}
+) {
   mkdirSync(dirname(dest), { recursive: true })
   if (existsSync(dest) && statSync(dest).size > 0) {
     console.log(`  [skip-fetch] ${dest.replace(REPO_ROOT, '.')} already on disk`)
     return
   }
+  if (existsSync(dest)) unlinkSync(dest)
   console.log(`  [fetch] ${url}`)
   const part = dest + '.part'
-  const MAX_ATTEMPTS = 3
   let lastErr
-  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     try {
-      const res = await fetchStream(url)
+      const res = await fetchStream(url, { requestGet, requestTimeoutMs })
       const total = Number(res.headers['content-length'] || 0)
       let got = 0
       let lastPct = -1
-      await new Promise((resolve, reject) => {
-        const out = createWriteStream(part)
-        res.on('data', (chunk) => {
-          got += chunk.length
-          if (total) {
-            const pct = Math.round((got / total) * 100)
-            if (pct !== lastPct && pct % 10 === 0) {
-              lastPct = pct
-              process.stdout.write(`\r    ${pct}%  (${(got / 1024 / 1024).toFixed(1)} MB)`)
-            }
-          }
-        })
-        res.pipe(out)
-        out.on('finish', () => { process.stdout.write('\n'); out.close(resolve) })
-        out.on('error', reject)
-        res.on('error', reject)
+      const out = createWriteStream(part)
+      res.setTimeout(responseIdleTimeoutMs, () => {
+        res.destroy(
+          new Error(`response idle timeout after ${responseIdleTimeoutMs}ms for ${url}`)
+        )
       })
+      res.on('data', (chunk) => {
+        got += chunk.length
+        if (total) {
+          const pct = Math.round((got / total) * 100)
+          if (pct !== lastPct && pct % 10 === 0) {
+            lastPct = pct
+            process.stdout.write(`\r    ${pct}%  (${(got / 1024 / 1024).toFixed(1)} MB)`)
+          }
+        }
+      })
+      await pipeline(res, out)
+      res.setTimeout(0)
+      process.stdout.write('\n')
       const size = statSync(part).size
       if (total && size !== total) throw new Error(`incomplete download: got ${size} of ${total} bytes`)
       renameSync(part, dest)
@@ -150,9 +179,9 @@ async function download(url, dest) {
       lastErr = err
       try { unlinkSync(part) } catch { /* .part may not exist */ }
       const clientErr = /HTTP 4\d\d/.test(err.message || '')
-      if (attempt < MAX_ATTEMPTS && !clientErr) {
-        const backoffMs = 1000 * 2 ** (attempt - 1)
-        console.log(`  [retry ${attempt}/${MAX_ATTEMPTS - 1}] ${err.message}; waiting ${backoffMs}ms`)
+      if (attempt < maxAttempts && !clientErr) {
+        const backoffMs = backoffBaseMs * 2 ** (attempt - 1)
+        console.log(`  [retry ${attempt}/${maxAttempts - 1}] ${err.message}; waiting ${backoffMs}ms`)
         await new Promise((r) => setTimeout(r, backoffMs))
       } else break
     }
@@ -199,23 +228,13 @@ function extractRuntime(archivePath, destDir, binaryName, keepExt) {
   chmodSync(join(destDir, binaryName), 0o755)
 }
 
-function isProvisioned(asset) {
-  const marker = join(asset.dest, '.sha256')
-  const binaryPath = join(asset.dest, asset.binary)
-  if (!existsSync(binaryPath) || !existsSync(marker)) return false
-  return readFileSync(marker, 'utf8').trim() === asset.sha256
-}
-
 async function provision(key, asset) {
   console.log(`\n[${key}] ${asset.file} -> ${asset.dest.replace(REPO_ROOT, '.')}`)
-  if (isProvisioned(asset)) {
-    console.log(`  [skip] already present + verified (${asset.sha256.slice(0, 12)}…)`)
-    return
-  }
-  const archivePath = join(LLAMA_DIR, asset.file)
+  const archivePath = join(ARCHIVE_CACHE_DIR, asset.file)
   await download(BASE_URL + asset.file, archivePath)
 
-  // Verify BEFORE extraction — never unpack an archive we haven't confirmed the integrity of.
+  // Verify the immutable pin on EVERY run, including a warm cache hit. Extracted files and marker text
+  // are deliberately not trusted because either can be corrupted without changing the other.
   const actual = sha256Of(archivePath)
   if (actual !== asset.sha256) {
     unlinkSync(archivePath)
@@ -223,7 +242,6 @@ async function provision(key, asset) {
   }
 
   extractRuntime(archivePath, asset.dest, asset.binary, asset.keepExt)
-  unlinkSync(archivePath)
 
   if (!existsSync(join(asset.dest, asset.binary))) {
     throw new Error(`${asset.binary} missing from ${asset.dest} after extraction — check the archive contents.`)
@@ -251,7 +269,9 @@ async function main() {
   console.log('\n=== fetch-llama-server complete ===')
 }
 
-main().catch((err) => {
-  console.error('\nfetch-llama-server FAILED:', err.message)
-  process.exit(1)
-})
+if (process.argv[1] === fileURLToPath(import.meta.url)) {
+  main().catch((err) => {
+    console.error('\nfetch-llama-server FAILED:', err.message)
+    process.exit(1)
+  })
+}

@@ -23,7 +23,6 @@ import { join, basename, dirname, resolve, relative, isAbsolute, extname } from 
 import { readFileSync, existsSync, writeFileSync, realpathSync, readdirSync, unlinkSync, createReadStream, statSync, renameSync, rmdirSync } from 'node:fs'
 import { pathToFileURL } from 'node:url'
 import { randomBytes } from 'node:crypto'
-import { fork as forkChildProcess, type ForkOptions } from 'node:child_process'
 import {
   IPC,
   AskStartSchema,
@@ -51,7 +50,6 @@ import {
   ImportDecoderChunkSchema,
   ImportDecoderCompleteSchema,
   ImportDecoderFailedSchema,
-  LocalModelIdPayloadSchema,
   LocalPrewarmPayloadSchema,
   ProviderIdSchema,
   DEFAULT_SHORTCUTS,
@@ -81,15 +79,16 @@ import {
 import { createStream } from './llm'
 import { isTransient, nextBackoff } from './llm/retry'
 import * as localRuntime from './llm/local-runtime'
-import { localEligibleFor, localBaseReady, localPrewarmEligible, pickPrimaryProvider } from './llm/local-routing'
+import {
+  localEligibleFor,
+  localBaseReady,
+  localPrewarmEligible,
+  localVisionPrivacyRequired,
+  pickPrimaryProvider
+} from './llm/local-routing'
 import { ensureLocalRuntimeStarted } from './llm/local'
 import { buildPrewarmMessages } from './llm/prewarm'
-import {
-  listModels as listLocalModels,
-  downloadModel as downloadLocalModel,
-  cancelDownload as cancelLocalModelDownload,
-  deleteModel as deleteLocalModel
-} from './llm/local-models'
+import { listModels as listLocalModels } from './llm/local-models'
 import { resetDustConversation, prewarmDustConversation, isDustAuthError } from './llm/dust'
 import {
   enqueueIngest,
@@ -192,20 +191,10 @@ import {
   scheduleRebuild,
   purgeGraphArtifacts
 } from './graphify'
-import { runFirstRunBootstrap } from './bootstrap'
 import { SaveMeetingSchema, SaveNoteSchema } from '@shared/ipc'
 import { PROVIDERS, resolveModelTier, applyInteractiveGuardrail, type ProviderId } from '@shared/providers'
 import { routeTier } from '@shared/routing'
 import { redactSecrets } from '@shared/redact'
-import { createWorkerController } from './local-ai/worker-controller'
-import { localAiRoot } from './local-ai/resource-path'
-import { resolveSelectedTextModel } from './local-ai/model-manifest'
-import {
-  isLocalAiNativeSelftest,
-  runPackagedLocalAiSelftest,
-  writePackagedSelftestResult
-} from './local-ai/packaged-selftest'
-import { installNetworkDeny, type NetworkDenyGuard } from '../local-ai-worker/network-deny.mjs'
 
 // LOCAL-ONLY native crash capture (zero telemetry — uploadToServer:false means minidumps land in
 // app.getPath('crashDumps') under userData and are NEVER transmitted anywhere; consistent with the
@@ -218,6 +207,16 @@ crashReporter.start({ uploadToServer: false })
 // Belt-and-braces with the per-meeting powerSaveBlocker below: keep Chromium itself from ever
 // deprioritizing the (hidden) renderer that hosts the transcription worker. Must run before app ready.
 app.commandLine.appendSwitch('disable-renderer-backgrounding')
+
+// Self-signed / un-notarized builds: use the AES-256-GCM file keystore instead of the macOS Keychain.
+// An un-notarized app's Keychain ACL is not stably trusted, so safeStorage prompts for the login-keychain
+// password on launch — AND because the first getSettings() decrypt runs synchronously during boot, BEFORE
+// the overlay window paints, that modal prompt blocks the entire UI behind it (the "load forever" / "I only
+// see the keychain box" report). The file backend keeps secrets encrypted at rest (secret-key.bin, mode
+// 0600) with zero OS prompt, so the app boots straight to its UI. Remove/gate this once the app ships
+// signed with an Apple Developer ID + notarization, so it can use the Keychain-backed store again.
+// `??=` leaves QA/integration overrides (which set the var explicitly) untouched.
+process.env.ASKTOTO_LOCAL_KEYSTORE ??= '1'
 
 // QA hook (same family as ASKTOTO_DEMO / ASKTOTO_SHOT): point the app at an isolated profile so
 // physical QA never reads — or refuses to write over — the packaged app's keychain-wrapped real
@@ -232,16 +231,24 @@ if (!app.isPackaged && !process.env.ASKTOTO_USERDATA) {
   app.setPath('userData', `${app.getPath('userData')}-dev`)
 }
 
-// AskToto → Métis rebrand: productName moved the packaged userData dir. Adopt the old profile once so
-// settings, transcripts, and secret-key.bin survive the rename. Must run before anything opens userData.
+// Profile-dir migration across product-name changes. userData follows CFBundleName, so each rename
+// moved the packaged dir: "AskToto" → "Métis" (rebrand) → "Metis" (ASCII bundle name — the accented
+// "Métis Helper" child-process bundles crashed Chromium at launch on macOS 26+/Tahoe; see the
+// productName note in electron-builder.yml). Adopt the newest existing prior profile once so settings,
+// transcripts, and secret-key.bin survive the rename. Must run before anything opens userData.
 if (app.isPackaged && !process.env.ASKTOTO_USERDATA) {
   try {
     const ud = app.getPath('userData')
-    const legacy = join(dirname(ud), 'AskToto')
-    if (!existsSync(join(ud, 'settings.json')) && existsSync(join(legacy, 'settings.json'))) {
-      // Electron may have pre-created the new dir empty; clear it so rename can land.
-      if (existsSync(ud)) rmdirSync(ud)
-      renameSync(legacy, ud)
+    if (!existsSync(join(ud, 'settings.json'))) {
+      // Newest-first: adopt the most recent prior name that actually holds a profile.
+      const legacy = ['Métis', 'AskToto']
+        .map((n) => join(dirname(ud), n))
+        .find((p) => existsSync(join(p, 'settings.json')))
+      if (legacy) {
+        // Electron may have pre-created the new dir empty; clear it so rename can land.
+        if (existsSync(ud)) rmdirSync(ud)
+        renameSync(legacy, ud)
+      }
     }
   } catch {
     // Non-fatal: worst case is a fresh profile; never block launch on a migration.
@@ -742,10 +749,25 @@ function topCenter(width: number, height: number): { x: number; y: number } {
 }
 
 function createWindow(): void {
-  const { x, y } = topCenter(BAR_WIDTH, BAR_HEIGHT)
+  // Fresh-install onboarding is a ~640px panel, not the 84px bar. The renderer's content-driven auto-resize
+  // can be starved by the macOS compositor on a just-created transparent, always-on-top overlay (rAF/timers
+  // frozen for a beat after first paint), which would otherwise leave onboarding clipped to bar height with
+  // its "Continue" buttons off-screen. Size the window to fit onboarding up front — deterministic, not
+  // dependent on the renderer — and let auto-resize settle it back to the bar once onboarding is done.
+  // getSettings() is safe to read here (file keystore, no Keychain prompt — see the keystore note at top).
+  let initialHeight = BAR_HEIGHT
+  try {
+    if (!getSettings().onboardingDone) {
+      initialHeight = Math.min(680, screen.getPrimaryDisplay().workArea.height - 48)
+      lastBarHeight = initialHeight // so a later width-only change (mini-pill) doesn't snap it back to 84
+    }
+  } catch {
+    /* getSettings unavailable — keep bar height; auto-resize grows onboarding if the renderer isn't frozen */
+  }
+  const { x, y } = topCenter(BAR_WIDTH, initialHeight)
   win = new BrowserWindow({
     width: BAR_WIDTH,
-    height: BAR_HEIGHT,
+    height: initialHeight,
     x,
     y,
     frame: false,
@@ -1487,7 +1509,10 @@ function registerIpc(): void {
     if (cur.publishBrainPages && !next.publishBrainPages) {
       const r = removeWiki(next)
       auditLog('brain.publish.disabled', { ok: r.ok })
-    } else if (!cur.publishBrainPages && next.publishBrainPages) {
+    } else if ('publishBrainPages' in p && next.publishBrainPages && !cur.publishBrainPages) {
+      // Materialize the wiki ONLY when the user EXPLICITLY turned publishing on in THIS patch (it has
+      // already passed the consent gate above). Never fire on a derived/side-effect flip of the value
+      // caused by an unrelated setting change — that was the silent-publish path in QA #9.
       void publishAll(next)
     }
     win?.setContentProtection(contentProtectionOn())
@@ -2053,7 +2078,7 @@ function registerIpc(): void {
   ipcMain.handle(IPC.parakeetStatus, (e) => {
     assertMainWindow(e)
     // addonError surfaces WHY the engine isn't ready (native addon missing for this platform/build) as
-    // distinct from "model not downloaded yet" — Settings reads this to show an actionable message.
+    // distinct from "bundled model assets missing" — Settings reads this to show an actionable message.
     return { ready: parakeetModelReady(), addonError: parakeetAddonError() }
   })
   ipcMain.handle(IPC.parakeetEnsure, async (e) => {
@@ -2079,58 +2104,11 @@ function registerIpc(): void {
     return parakeetTranscribe(p.samples)
   })
 
-  // --- Métis Local (on-device LLM): model manifest + download/verify/delete (see llm/local-models.ts) ---
-  // Renderer-safe metadata only — never a path, port, or api key. The sidecar itself is started lazily by
-  // the 'local' provider strategy (llm/local.ts) on first eligible request, not from here.
+  // --- Métis Local (on-device LLM): bundled-model readiness metadata ---
+  // Paths stay in main; the renderer only learns whether the installer-owned files are ready.
   ipcMain.handle(IPC.localModelsList, (e) => {
     assertMainWindow(e)
     return listLocalModels()
-  })
-
-  ipcMain.handle(IPC.localModelsDownload, async (e, payload: unknown) => {
-    assertMainWindow(e)
-    if (!requireAuth()) return { ok: false, error: 'Sign in with your Mantu account first.' }
-    const parsed = LocalModelIdPayloadSchema.safeParse(payload)
-    if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message || 'Invalid model id.' }
-    const { modelId } = parsed.data
-    try {
-      await downloadLocalModel(modelId, (p) => {
-        win?.webContents.send(IPC.localModelsProgress, {
-          modelId: p.modelId,
-          file: p.file,
-          received: p.received,
-          total: p.total
-        })
-      })
-      win?.webContents.send(IPC.localModelsProgress, { modelId, done: true })
-      return { ok: true }
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err)
-      win?.webContents.send(IPC.localModelsProgress, { modelId, error: message })
-      return { ok: false, error: message }
-    }
-  })
-
-  // Cancel is a pause, not a wipe (cancelDownload leaves the partial .part file for a later resume) — see
-  // local-models.ts's own doc comment. The in-flight downloadModel() promise above rejects as a result,
-  // which sends its own progress error event; the renderer distinguishes a user-initiated cancel from a
-  // real failure by message text rather than needing a second event shape here.
-  ipcMain.handle(IPC.localModelsCancel, (e, payload: unknown) => {
-    assertMainWindow(e)
-    const parsed = LocalModelIdPayloadSchema.safeParse(payload)
-    if (parsed.success) cancelLocalModelDownload(parsed.data.modelId)
-  })
-
-  ipcMain.handle(IPC.localModelsDelete, (e, payload: unknown) => {
-    assertMainWindow(e)
-    const parsed = LocalModelIdPayloadSchema.safeParse(payload)
-    if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message || 'Invalid model id.' }
-    try {
-      deleteLocalModel(parsed.data.modelId)
-      return { ok: true }
-    } catch (err) {
-      return { ok: false, error: err instanceof Error ? err.message : String(err) }
-    }
   })
 
   // Live-meeting pre-warm (PLAN.md §4.4): a debounced transcript tail from the renderer's
@@ -2225,7 +2203,7 @@ function registerIpc(): void {
           if (tried.includes(p)) return false
           // Métis Local replaces the generic key/model/vision checks with localEligibleFor — the SAME
           // mode-scope gate the ineligible chain below enforces, so local can never become a failover
-          // target for an out-of-scope mode (answer/recap/think/deep) even though it's a keyless,
+          // target for an out-of-scope mode (answer/recap or escalated text) even though it's a keyless,
           // always-vision-capable entry in PROVIDERS (PLAN.md §4.3: "enforced at BOTH gates").
           if (p === 'local') return localEligibleFor(req, s, tier, allowed)
           return (
@@ -2273,7 +2251,7 @@ function registerIpc(): void {
       const tier = routeTier(req, s.thinkingMode)
       // Métis Local's "model" is the local-models.ts manifest id the sidecar loads — settings.localLlm.
       // modelId, NOT the generic per-provider tier resolution (which would otherwise fall back to
-      // PROVIDERS.local.fastModel regardless of what the user actually configured/downloaded).
+      // PROVIDERS.local.fastModel regardless of the installer-owned model selected in settings).
       let model =
         provider === 'local'
           ? s.localLlm.modelId
@@ -2297,13 +2275,16 @@ function registerIpc(): void {
       }
       // Métis Local replaces the ENTIRE generic key/model/vision chain below with localEligibleFor — the
       // same mode-scope + readiness gate the settings snapshot and pickFailover's candidate filter use, so
-      // an out-of-scope request (answer/recap/think/deep, or a providerOverride:'local' forcing one) can
-      // never actually route to the local provider (PLAN.md §4.3).
+      // an out-of-scope request (answer/recap or escalated text) can never actually route to the local
+      // provider. Opted-in vision deliberately stays local at every tier so prompt complexity cannot
+      // silently turn a screenshot into a cloud upload.
       const ineligible =
         provider === 'local'
           ? localEligibleFor(req, s, tier, allowed)
             ? ''
-            : 'Métis Local handles live suggestions, summaries and screenshots — this request type uses your cloud provider.'
+            : localVisionRequired
+              ? 'Métis Local could not process this screenshot on this device. Nothing was sent to a cloud provider. Restart Métis, or reinstall it if the bundled model is missing.'
+              : 'Métis Local handles live suggestions, summaries and screenshots — this request type uses your cloud provider.'
           : def.kind === 'cli' && !s.cliConnected[provider]
             ? `${def.label} is not connected. Open Settings → CLI Integration to set it up.`
             : def.kind !== 'cli' && !key
@@ -2408,7 +2389,11 @@ function registerIpc(): void {
             // Waterfall: when another configured provider can take over (e.g. Dust down but a Claude/GPT key
             // is set), cap same-provider retries at ONE so the API answers in seconds instead of after the
             // full ~30s of retrying a dead primary. With nowhere to fall over to, keep the full retry budget.
-            const retryBudget = pickFailover(attempted.concat(provider)) ? 1 : MAX_TRANSIENT_RETRIES
+            // A request routed to Métis Local stays on-device. Cloud providers may waterfall into another
+            // configured provider, but a local failure must be surfaced to the user instead of silently
+            // uploading the transcript/screenshot they explicitly chose to process locally.
+            const hasCloudFailover = provider !== 'local' && !!pickFailover(attempted.concat(provider))
+            const retryBudget = hasCloudFailover ? 1 : MAX_TRANSIENT_RETRIES
             if (!gotToken && retryCount < retryBudget && isTransient(message)) {
               const delayMs = nextBackoff(retryCount)
               auditLog('provider.retry', { provider, attempt: retryCount + 1, delayMs })
@@ -2417,7 +2402,7 @@ function registerIpc(): void {
               return
             }
             // Retries exhausted or non-transient: fall over to another provider (pre-token only).
-            if (!gotToken && failover(attempted.concat(provider))) return
+            if (!gotToken && provider !== 'local' && failover(attempted.concat(provider))) return
             // Replace raw client transport strings ("Unexpected network error from DustAPI: fetch failed")
             // with a clean message; keep the Dust-auth one-click reconnect path; else pass the message.
             const friendly = isTransient(message)
@@ -2448,7 +2433,17 @@ function registerIpc(): void {
     // routes to the on-device model first whenever it's eligible right now (PLAN.md §4.3 "Routing
     // precedence, explicit") — see local-routing.ts's pickPrimaryProvider for the exact precedence rule.
     const localPrimaryEligible = localEligibleFor(req, s, routeTier(req, s.thinkingMode), allowed)
-    attempt(pickPrimaryProvider(req.providerOverride, localPrimaryEligible, cliPrimary, s.provider), [])
+    const localVisionRequired = localVisionPrivacyRequired(req, s)
+    attempt(
+      pickPrimaryProvider(
+        req.providerOverride,
+        localPrimaryEligible,
+        cliPrimary,
+        s.provider,
+        localVisionRequired
+      ),
+      []
+    )
     } catch (e) {
       win?.webContents.send(IPC.streamError, {
         id,
@@ -3081,7 +3076,7 @@ function registerIpc(): void {
 protocol.registerSchemesAsPrivileged([
   {
     scheme: 'asr-model',
-    privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true }
+    privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true, stream: true }
   }
 ])
 
@@ -3095,78 +3090,6 @@ if (!app.requestSingleInstanceLock()) {
     }
   })
   app.whenReady().then(async () => {
-  if (isLocalAiNativeSelftest(process.env)) {
-    const appPath = app.getAppPath()
-    const resourcesRoot = localAiRoot({
-      isPackaged: app.isPackaged,
-      resourcesPath: process.resourcesPath,
-      appPath
-    })
-    const workerPath = join(appPath, 'out', 'local-ai-worker', 'index.mjs')
-    const nativePackagesRoot = join(
-      process.resourcesPath,
-      'app.asar.unpacked',
-      'node_modules',
-      '@node-llama-cpp'
-    )
-    let networkGuard: NetworkDenyGuard | undefined
-    let exitCode = 0
-    try {
-      await runPackagedLocalAiSelftest({
-        env: process.env,
-        isPackaged: app.isPackaged,
-        platform: process.platform,
-        arch: process.arch,
-        appResourcesPath: process.resourcesPath,
-        resourcesRoot,
-        workerPath,
-        bindingPath: nativePackagesRoot,
-        installNetworkDeny: () => {
-          networkGuard = installNetworkDeny({ electronNet: net })
-        },
-        getNetworkAttempts: () => networkGuard?.attempts() ?? 0,
-        getWindowCount: () => BrowserWindow.getAllWindows().length,
-        resolveModel: () => {
-          const targetPlatform =
-            process.platform === 'darwin' && process.arch === 'arm64'
-              ? 'darwin-arm64'
-              : process.platform === 'win32' && process.arch === 'x64'
-                ? 'win32-x64'
-                : null
-          if (!targetPlatform) throw new Error('Unsupported local AI self-test platform.')
-          return resolveSelectedTextModel({
-            context: {
-              isPackaged: app.isPackaged,
-              resourcesPath: process.resourcesPath,
-              appPath
-            },
-            targetPlatform
-          })
-        },
-        createController: () =>
-          createWorkerController({
-            workerEntry: workerPath,
-            execPath: process.execPath,
-            parentPid: process.pid,
-            env: { ...process.env, METIS_LOCAL_AI_DENY_NETWORK: '1' },
-            fork: (modulePath, args, options) =>
-              forkChildProcess(modulePath, args, options as ForkOptions),
-            randomBytes,
-            setTimeout,
-            clearTimeout,
-            handshakeTimeoutMs: 30_000
-          }),
-        writeResult: writePackagedSelftestResult,
-        now: () => performance.now()
-      })
-    } catch {
-      exitCode = 1
-    } finally {
-      networkGuard?.restore()
-    }
-    app.exit(exitCode)
-    return
-  }
   initLogging() // route main-process logs to a rotated file before anything else can fail
   await installProxyAwareFetch() // route provider fetch through the env/OS proxy so Dust etc. work behind a corporate proxy
   // Warm the CLI binary cache at boot when a CLI provider is connected, so the session's FIRST CLI ask
@@ -3363,12 +3286,10 @@ if (!app.requestSingleInstanceLock()) {
       ? process.resourcesPath
       : join(REPO_ROOT, 'resources')
 
-    // Expose whether the bundled ORT + model files are present so the renderer only switches to the
-    // offline asr-model:// scheme when the assets exist. Checks the COMPLETE manifest (asr-manifest.ts):
-    // the worker locks allowRemoteModels=false in bundled mode, so a single missing file used to
-    // hard-fail Listen at runtime ("file was not found locally at …tokenizer.json") — an incomplete
-    // bundle must fall back to the proven remote path instead.
-    const ASR_BUNDLED = asrManifestComplete(RES_BASE)
+    // A packaged app is ALWAYS offline-only, even if its installer is corrupt/incomplete. Returning true
+    // keeps the worker's remote resolver disabled so missing assets fail locally with a reinstall message
+    // instead of silently downloading after install. Development may still use its explicit remote path.
+    const ASR_BUNDLED = app.isPackaged || asrManifestComplete(RES_BASE)
     ipcMain.handle(IPC.asrBundled, (e) => {
       assertMainWindow(e)
       return ASR_BUNDLED
@@ -3510,14 +3431,6 @@ if (!app.requestSingleInstanceLock()) {
   // Resume an interrupted brain backfill (flag persists in .brain/index.json until the queue drains).
   // Delayed so the boot path and first paint never compete with background LLM extractions.
   setTimeout(() => resumeBackfillIfPending(), 15_000)
-
-  // First-run bootstrap: silently install the knowledge-graph engine (and preflight npm) in the
-  // background so that feature "just works" without ever asking the user to run a terminal command.
-  // Fire-and-forget, never rejects, self-limits to a few launches. Delayed so it never competes with
-  // boot or first paint. mainLog (electron-log) satisfies the BootstrapLogger info/warn/error shape.
-  setTimeout(() => {
-    void runFirstRunBootstrap({ userDataDir: app.getPath('userData'), log: mainLog })
-  }, 20_000)
 
   app.on('activate', () => {
     if (!win) createWindow()

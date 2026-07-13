@@ -50,8 +50,7 @@ import {
   type ImportAudioPickResult,
   type ImportAudioProgress,
   type ImportJobView,
-  type LocalModelSummary,
-  type LocalModelProgressEvent
+  type LocalModelSummary
 } from '@shared/ipc'
 import type { ProviderId } from '@shared/providers'
 
@@ -232,15 +231,8 @@ const api = {
   setListeningState: (on: boolean): Promise<void> => ipcRenderer.invoke(IPC.listeningState, on),
   asrBundled: (): Promise<boolean> => ipcRenderer.invoke(IPC.asrBundled),
 
-  // Métis Local (on-device LLM) — model manifest/download/delete. Metadata only: main never sends a path,
-  // port, or api key over any of these channels (see LocalModelSummarySchema / LocalModelProgressEvent).
+  // Métis Local (on-device LLM): read-only readiness for the model included in the installer.
   localModelsList: (): Promise<LocalModelSummary[]> => ipcRenderer.invoke(IPC.localModelsList),
-  localModelsDownload: (modelId: string): Promise<{ ok: boolean; error?: string }> =>
-    ipcRenderer.invoke(IPC.localModelsDownload, { modelId }),
-  localModelsCancel: (modelId: string): Promise<void> => ipcRenderer.invoke(IPC.localModelsCancel, { modelId }),
-  localModelsDelete: (modelId: string): Promise<{ ok: boolean; error?: string }> =>
-    ipcRenderer.invoke(IPC.localModelsDelete, { modelId }),
-  onLocalModelsProgress: (cb: (p: LocalModelProgressEvent) => void): Unsub => sub(IPC.localModelsProgress, cb),
   // Fire-and-forget: keep the local sidecar's per-slot KV cache hot while a meeting is live (PLAN.md
   // §4.4's pre-warm path). The renderer never learns the sidecar's port/key — this only ever sends
   // transcript text; main resolves the runtime/model/session key on its own.

@@ -246,6 +246,11 @@ describe('Summarize screen-route mirrors askScreen\'s actual vision gate (findin
   it('explain\'s canUseScreen is untouched (still the broader settings.visionAvailable)', () => {
     expect(explainCanUseScreenLine).toMatch(/settings\?\.visionAvailable/)
   })
+
+  it('keeps the local screen-summary prompt on the base tier without transcript-driven escalation', () => {
+    const summarizeBlock = source.slice(summarizeIdx, source.indexOf("kind === 'summarize'", summarizeIdx + 1))
+    expect(summarizeBlock).toMatch(/settings\?\.localVisionReady\s*\?\s*LOCAL_SCREEN_SUMMARY_PROMPT/)
+  })
 })
 
 describe('Speculative (showSpec) suggestion auto-dismiss (finding 4)', () => {
