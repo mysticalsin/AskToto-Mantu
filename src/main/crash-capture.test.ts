@@ -26,3 +26,15 @@ describe('native crash capture (local-only)', () => {
     expect(start).toBeLessThan(firstSwitch)
   })
 })
+
+describe('crash-*.log filenames are deduped and the prune regex stays in sync', () => {
+  const source = readFileSync(join(__dirname, 'index.ts'), 'utf8')
+
+  it('persistCrash appends a monotonic per-process counter to the timestamp', () => {
+    expect(source).toMatch(/`crash-\$\{Date\.now\(\)\}-\$\{crashSeq\+\+\}\.log`/)
+  })
+
+  it('the startup prune filter matches the crash-<ts>-<seq>.log shape', () => {
+    expect(source).toMatch(/\/\^crash-\\d\+-\\d\+\\\.log\$\/\.test\(f\)/)
+  })
+})
