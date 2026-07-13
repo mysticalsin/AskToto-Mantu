@@ -923,28 +923,41 @@ function sendHotkey(action: HotkeyAction): void {
   win.webContents.send(IPC.hotkey, action)
 }
 
-let fatalHandled = false
+// Tie-breaker for persistCrash's filename: two crashes landing in the same millisecond (e.g. a renderer
+// ErrorBoundary catch and a main-process onFatal firing back-to-back) would otherwise collide on
+// `crash-${Date.now()}.log` and silently clobber one report. Monotonic per-process, resets on relaunch —
+// fine, since it only has to be unique within one run's batch of writes.
+let crashSeq = 0
+
 /**
- * Log + audit + dump any unhandled error. For a fatal exception, offer a ONE-TIME relaunch — but default to
- * "Continue" so a benign async error never kills the overlay. No crashReporter upload by design (zero telemetry).
+ * Log + audit + dump any crash (main-process fatal or a renderer ErrorBoundary catch) to a shared sink.
+ * Redact BEFORE writing to any sink — an error stack/message routinely embeds the data involved in the
+ * failing operation, so mainLog and auditLog (both persistent) must never see the raw value, same as the
+ * crash-*.log dump below. Best-effort: logging must never throw out of a crash handler.
  */
-function onFatal(kind: 'uncaughtException' | 'unhandledRejection', err: unknown): void {
-  const detail = err instanceof Error ? err.stack || err.message : String(err)
+function persistCrash(kind: string, detail: string, shortMessage: string): void {
   try {
-    // Redact BEFORE writing to any sink — an error stack/message routinely embeds the data involved in the
-    // failing operation, so mainLog and auditLog (both persistent) must never see the raw value, same as
-    // the crash-*.log dump below.
     const redactedDetail = redactSecrets(detail)
     mainLog.error(`[${kind}]`, redactedDetail)
-    auditLog('app.crash', { kind, message: redactSecrets(err instanceof Error ? err.message : String(err)) })
+    auditLog('app.crash', { kind, message: redactSecrets(shortMessage) })
     writeFileSync(
-      join(app.getPath('userData'), `crash-${Date.now()}.log`),
+      join(app.getPath('userData'), `crash-${Date.now()}-${crashSeq++}.log`),
       `${new Date().toISOString()} ${kind}\n${redactedDetail}\n`,
       { mode: 0o600 }
     )
   } catch {
     /* logging is best-effort — never throw out of the crash handler */
   }
+}
+
+let fatalHandled = false
+/**
+ * For a fatal exception, offer a ONE-TIME relaunch — but default to "Continue" so a benign async error
+ * never kills the overlay. No crashReporter upload by design (zero telemetry).
+ */
+function onFatal(kind: 'uncaughtException' | 'unhandledRejection', err: unknown): void {
+  const detail = err instanceof Error ? err.stack || err.message : String(err)
+  persistCrash(kind, detail, err instanceof Error ? err.message : String(err))
   if (kind !== 'uncaughtException' || fatalHandled) return
   fatalHandled = true
   try {
@@ -3020,6 +3033,17 @@ function registerIpc(): void {
     assertMainWindow(e)
     setMinimizedWidth(!!narrow)
   })
+  // Renderer ErrorBoundary catch: persist via the same sink as onFatal's main-process crashes, so a
+  // caught render-throw survives to disk instead of only reaching console (gated behind
+  // ASKTOTO_DEBUG_RENDERER, never on in a packaged build).
+  ipcMain.handle(IPC.rendererCrash, (e, raw: unknown) => {
+    assertMainWindow(e)
+    const r = raw as { message?: unknown; stack?: unknown; componentStack?: unknown } | null
+    const message = typeof r?.message === 'string' ? r.message : 'unknown renderer error'
+    const stack = typeof r?.stack === 'string' ? r.stack : ''
+    const componentStack = typeof r?.componentStack === 'string' ? r.componentStack : ''
+    persistCrash('renderer-error-boundary', `${message}\nstack: ${stack}\ncomponentStack: ${componentStack}`, message)
+  })
   // Drag the overlay from anywhere on the bar (the renderer's JS drag drives this with screen-pixel deltas).
   ipcMain.handle(IPC.windowMoveBy, (e, d: unknown) => {
     assertMainWindow(e)
@@ -3107,11 +3131,12 @@ if (!app.requestSingleInstanceLock()) {
   if (process.platform === 'darwin' && !app.isPackaged) {
     try { app.dock?.setIcon(join(__dirname, '../../build/icon.png')) } catch { /* cosmetic only */ }
   }
-  // Prune stale crash logs to the most recent 5 (best-effort; filenames sort lexicographically by ts).
+  // Prune stale crash logs to the most recent 5 (best-effort; filenames sort lexicographically by ts, then
+  // by persistCrash's per-process tie-breaker suffix — both fixed-width-enough within a run to sort right).
   try {
     const ud = app.getPath('userData')
     const crashLogs = readdirSync(ud)
-      .filter((f) => /^crash-\d+\.log$/.test(f))
+      .filter((f) => /^crash-\d+-\d+\.log$/.test(f))
       .sort()
     for (const f of crashLogs.slice(0, Math.max(0, crashLogs.length - 5))) {
       try { unlinkSync(join(ud, f)) } catch { /* ignore */ }
