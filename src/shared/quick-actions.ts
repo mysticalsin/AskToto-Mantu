@@ -86,6 +86,13 @@ export function spotlightRefUnavailableMessage(): string {
   return 'Connect Dust and pick a Spotlight Ref agent in Settings → AI to check for references.'
 }
 
+// Shown when a Dust ask fails because the mentioned agent sId no longer resolves in the connected
+// workspace (Dust accepts the message but returns no agent reply — see isDustAgentUnavailableError).
+// Replaces the raw "Failed to retrieve agent message" SDK string with a plain, actionable next step.
+export function dustAgentUnavailableMessage(): string {
+  return 'Your Dust agent is no longer available in this workspace. Open Settings → AI to pick one.'
+}
+
 export function quickActionUnavailableMessage(kind: QuickActionKind): string {
   if (kind === 'summarize') {
     return 'To summarize, start Listen for a transcript or switch to a screen-capable provider in Settings.'

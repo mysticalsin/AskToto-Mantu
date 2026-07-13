@@ -8,6 +8,7 @@ import { mainLog, auditLog } from '../logger'
 import { type StreamOptions, type StreamHandle, errMsg, idleWatchdog, userText } from './shared'
 import { attachScreenshot, type DustFileContentFragment } from './dust-attachments'
 import { redactSecrets } from '@shared/redact'
+import { dustAgentUnavailableMessage } from '@shared/quick-actions'
 
 /**
  * Logger for the @dust-tt/client. It logs several EXPECTED, already-handled conditions straight to
@@ -37,6 +38,27 @@ export function isDustAuthError(err: any): boolean {
     /oauth|unauthor|expired|invalid.*(token|credential)|authenticat\w*\s+credential|credential.*authenticat/.test(blob)
   )
 }
+
+// The mentioned Dust agent sId no longer resolves in the connected workspace: Dust accepts the user
+// message but creates NO agent reply, so @dust-tt/client returns "Failed to retrieve agent message"
+// (and the API can say "agent (configuration) not found"). Distinct from an auth error — the token is
+// fine, the AGENT is stale/gone (e.g. after reconnecting to a different workspace). Auth is explicitly
+// excluded so this never shadows the 401 refresh-and-retry self-heal (isDustAuthError above).
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function isDustAgentUnavailableError(err: any): boolean {
+  if (!err || isDustAuthError(err)) return false
+  const blob = `${err.type ?? ''} ${err.code ?? ''} ${err.message ?? err}`.toLowerCase()
+  return (
+    /failed to retrieve agent message/.test(blob) ||
+    /agent[ _]?(configuration )?not[ _]?(found|available)/.test(blob) ||
+    /no (such )?agent/.test(blob)
+  )
+}
+
+// Turn a raw Dust error into what the user actually sees: a stale/removed agent becomes a plain
+// "pick one in Settings → AI" step; everything else surfaces its own message unchanged.
+const mapDustError = (e: unknown): string =>
+  isDustAgentUnavailableError(e) ? dustAgentUnavailableMessage() : errMsg(e)
 function dustLogger(): Console {
   const blobOf = (args: unknown[]): string =>
     args
@@ -381,7 +403,7 @@ export function streamDust(opts: StreamOptions): StreamHandle {
           })
         }
       }
-      if (streamed.isErr()) return fail(streamed.error.message)
+      if (streamed.isErr()) return fail(mapDustError(streamed.error))
     }
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     for await (const event of streamed.value.eventStream as AsyncIterable<any>) {
@@ -396,7 +418,7 @@ export function streamDust(opts: StreamOptions): StreamHandle {
           }
         }
       } else if (event.type === 'user_message_error' || event.type === 'agent_error') {
-        return fail(event.error?.message || 'Dust returned an error.')
+        return fail(isDustAgentUnavailableError(event.error) ? dustAgentUnavailableMessage() : (event.error?.message || 'Dust returned an error.'))
       } else if (event.type === 'agent_message_success') {
         if (!settled) {
           settled = true

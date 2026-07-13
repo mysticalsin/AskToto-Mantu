@@ -454,6 +454,20 @@ export function isDustReady(
   return !!hasKeys['dust'] && !!dustWorkspaceId.trim() && !!providerModels['dust']
 }
 
+/** The saved Dust base-agent sId is not among the workspace's currently-loadable agents — e.g. after
+ *  reconnecting to a different workspace, or the agent was deleted. This is the root cause of the raw
+ *  "Failed to retrieve agent message" ask failure. Only conclusive once the list has actually loaded
+ *  with at least one agent: `null` (not loaded yet) and `[]` (empty/restricted load) both return false
+ *  so the UI never raises a false "your agent is gone" alarm before it truly knows. */
+export function dustStoredAgentMissing(
+  agentId: string,
+  agents: readonly { sId: string }[] | null
+): boolean {
+  if (!agentId) return false
+  if (agents === null || agents.length === 0) return false
+  return !agents.some((a) => a.sId === agentId)
+}
+
 /**
  * Whether a Dust agent's underlying model can read images (screenshots). Dust messages are text-only, so
  * a screenshot is uploaded as a file the AGENT'S model then interprets — which only helps if that model
