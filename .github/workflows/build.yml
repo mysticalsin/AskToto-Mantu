@@ -232,7 +232,7 @@ jobs:
         run: npm run stage:local-ai -- --platform win32-x64
       - name: Verify local AI payload offline (win32-x64)
         run: npm run check:local-ai -- --platform win32-x64
-      - run: npm run dist:win
+      - run: npm run dist:win -- --x64
         env:
           METIS_ALLOW_EVALUATION_PAYLOAD: '1'
       # AppX packaging only works on Windows runners (needs the Windows SDK). Signing is skipped on CI

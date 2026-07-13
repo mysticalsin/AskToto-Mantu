@@ -1188,12 +1188,7 @@ const shortcutActions: Record<string, () => void> = {
   'scroll-up': () => moveBy(0, -60),
   'scroll-down': () => moveBy(0, 60),
   'scroll-left': () => moveBy(-60, 0),
-  'scroll-right': () => moveBy(60, 0),
-  // 'settings' is in HOTKEY_ACTIONS (bindable in Settings → Keyboard shortcuts, per DEFAULT_SHORTCUTS'
-  // "no global shortcut by default; opened from bar or tray" comment) but was missing here, so a combo
-  // the user recorded for it was silently never registered with the OS. The tray's own 'Settings…' item
-  // already calls sendHotkey('settings') directly (bypassing globalShortcut) — reuse the same handler.
-  settings: () => sendHotkey('settings')
+  'scroll-right': () => moveBy(60, 0)
 }
 
 function resolveShortcut(action: HotkeyAction, user: Record<string, string>): string {
