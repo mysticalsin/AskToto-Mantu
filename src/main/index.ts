@@ -2521,7 +2521,8 @@ function registerIpc(): void {
   // extractions (e.g. untagged feedback that rendered as a flat confidence wall in the dashboard).
   ipcMain.handle(IPC.brainRebuildAll, async (e) => {
     // Privileged write (purges the derived brain store) — main-window only, like brainCommitmentSettle,
-    // never the Mantu Intelligence window's assertBrainReader (that's for the three read-only channels).
+    // never the Mantu Intelligence window's assertBrainReader (used by its read channels and narrow,
+    // guarded backfill request only).
     assertMainWindow(e)
     if (!requireAuth()) throw new Error('Not signed in.')
     // The full orchestration lives in ingest.ts's startRebuild (unit-testable, keeps this handler thin):

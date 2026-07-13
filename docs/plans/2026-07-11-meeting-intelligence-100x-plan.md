@@ -1,7 +1,9 @@
 # Meeting Intelligence 100x — CRM-First Brain, Verified Numbers, Corrections That Stick, Dust-Readable Corpus
 
 **Date:** 2026-07-11
-**Status:** PROPOSED (awaiting Tony's sign-off before any code)
+**Status:** PARTIALLY IMPLEMENTED — Phases 0–4 are in source. The Phase 5 publisher, consent,
+confidential-meeting, graphify, and alias-retrieval source is landed, but its real OneDrive/Dust
+connector E2E checklist remains open. Phases 6–8 remain roadmap work.
 **Method:** 21-agent deep dive (9 code readers over every meeting-intelligence subsystem, 7 web researchers on 2025–2026 state of the art, 3 rival architectures, 2-judge adversarial panel). Both judges independently selected the CRM-First design (8/10, 8.5/10); this plan is that design plus the grafts both judges demanded and fixes for the blind spots they found in all three designs.
 **Governing rules:** Karpathy guidelines (surgical changes, verifiable success criteria), Tony's builder rules (simplicity first, no new database unless files are proven insufficient — they are not), TDD discipline.
 

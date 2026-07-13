@@ -3,7 +3,7 @@ import type { BrainRead, BrainStatus } from '@shared/brain'
 
 /**
  * Preload for the Mantu Intelligence dashboard window — deliberately tiny. The dashboard is a
- * read-only visualization surface: it may read the brain and ask for a backfill, nothing else.
+ * read-focused visualization surface: it may read the brain and request a guarded backfill, nothing else.
  * None of the overlay's privileged API (capture, keys, settings, transcripts) is exposed here.
  *
  * Channel names are string literals ON PURPOSE (mirroring IPC.brain* in src/shared/ipc.ts): importing
