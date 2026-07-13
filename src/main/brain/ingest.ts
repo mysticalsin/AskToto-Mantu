@@ -1250,7 +1250,9 @@ export function resumeBackfillIfPending(): void {
  *  `onDrained` (Task MI-2, brain:rebuildAll only): fires once every job this call queues — plus
  *  anything else already in flight — has fully finished (see registerDrainCallback's doc comment).
  *  Every other caller (the plain "Index meetings" button, resumeBackfillIfPending) omits it. */
-export function startBackfill(onDrained?: () => void | Promise<void>): { queued: number } {
+export type BackfillStartResult = { queued: number; deferred?: 'no-provider' }
+
+export function startBackfill(onDrained?: () => void | Promise<void>): BackfillStartResult {
   const s = getSettings()
   const idx = readIndex(s)
   if (!idx.backfillRequested) void updateIndex(s, (i) => { i.backfillRequested = true })
@@ -1261,7 +1263,7 @@ export function startBackfill(onDrained?: () => void | Promise<void>): { queued:
   if (!hasUsableProvider(s)) {
     mainLog.warn('[brain] backfill requested but no configured AI provider — deferring until one is set up')
     registerDrainCallback(onDrained) // nothing will ever run — fire (once truly idle) rather than hang
-    return { queued: 0 }
+    return { queued: 0, deferred: 'no-provider' }
   }
   const already = new Set(Object.entries(idx.ingested).filter(([, v]) => v.ok).map(([k]) => k))
   // The ingest log is a cache of "already extracted", not the source of truth — if it's ever out of

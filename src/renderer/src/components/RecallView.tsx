@@ -133,7 +133,11 @@ function GraphBar(): JSX.Element | null {
     setBusy(true)
     setError(null)
     try {
-      await window.toto.brainBackfill()
+      const result = await window.toto.brainBackfill()
+      if (result.deferred === 'no-provider') {
+        setError('Connect an AI provider in Settings → AI before indexing meetings. Métis Local handles suggestions, summaries, and screenshots.')
+        return
+      }
       setBrain(await window.toto.brainStatus())
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
