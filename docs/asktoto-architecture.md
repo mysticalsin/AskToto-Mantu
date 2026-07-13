@@ -147,7 +147,7 @@ The layout is a pinned-bar surface, but it is **not** a uniform "Bar-on-top, Pan
 - **`view === 'answer'`** (a typed/screen ask, not a live meeting): the answer body renders **inside the Bar itself**. `App.tsx` computes `barBody = answerView && !collapsed ? body : undefined` and passes it to `<Bar body={barBody}>`; per `Bar.tsx`'s own doc comment, "when present the bar EXPANDS into one surface: big input on top, this body in the middle, and the toolbar drops to the bottom — no separate panel underneath." There is no separate `<Panel>` for this case.
 - **Every other view with content** (`copilot`, `review`, `settings`, `history`, `agenda`): `isPanelBody = body != null && !answerView` is true, and that content renders in a `<Panel>` rendered below the `<Bar>` — this is the "Bar pinned, Panel grows below it" model.
 
-A `<ControlBar>` component (`components/ControlBar.tsx`) exists in the tree for a "detached session-control pill below the panel" layout, but it is not imported or rendered anywhere in `App.tsx` today — it is dead code from an earlier design, not a live UX path. Don't design around a `detachControls`/`hideToolbar` toggle; neither exists in the current `App.tsx`.
+The session controls live in `Bar.tsx`; there is no detached control pill below the panel. Don't design around a `detachControls`/`hideToolbar` toggle; neither exists in the current `App.tsx`.
 
 **Quick actions are listening-only, not an idle-state row.** `<QuickActions>` (four ghost-pill shortcuts: What to say next, Fact-check, Explain, Summarize screen) renders only while `showListeningChrome` is true (`listen.listening && view !== 'review' && !stopping`) — i.e. only during an active meeting. Per the surrounding code comment, this is deliberate: "clean bar with nothing under it at launch and after a meeting ends." There is no idle-state quick-actions row before the user starts Listen or asks a question.
 
@@ -230,7 +230,7 @@ Every failure state in Métis has three elements: what it shows, the exact copy,
 | **Mic not granted** | `listen.error` → Copilot error zone | "Microphone not available. Grant access in System Settings → Privacy → Microphone." | Copilot error zone; no button (OS settings must be opened manually) |
 | **Bundled ASR files missing or damaged** | Copilot error zone | "The bundled transcription files are missing or damaged. Reinstall Métis from a complete installer." | Reinstall from a complete Métis installer; production never downloads a replacement model |
 | **Unclear audio / VAD silence** | Copilot footer when `listening && lines.length === 0` | "Waiting for speech…" | Passive — auto-resolves when audio arrives |
-| **No audio yet (not listening)** | Copilot footer | "not listening" | AudioLines icon in ControlBar is the affordance |
+| **No audio yet (not listening)** | Copilot footer | "not listening" | AudioLines icon in the Bar toolbar is the affordance |
 | **Save to OneDrive failed** | Review surface, `saveError` | `saveError` raw string + retry up to 5×. After max retries: "Couldn't save automatically. Use the Save button to try again." | Manual Save button in Review footer |
 | **Low confidence / unverifiable** | Fact-check UNVERIFIABLE badge | "Unverifiable" (neutral badge) + bullets explaining why | No recovery needed — verdict is final |
 | **Copilot suggestion streaming stuck** | Auto-dismissed after `SUGGESTION_MAX_MS` = 7 s | Never shown — card silently clears | User can press Assist again |
