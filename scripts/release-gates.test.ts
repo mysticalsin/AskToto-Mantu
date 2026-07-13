@@ -5,8 +5,15 @@ import { describe, expect, it } from 'vitest'
 
 const root = join(__dirname, '..')
 const pkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')) as {
+  description: string
   scripts: Record<string, string>
 }
+
+describe('installer branding', () => {
+  it('uses a customer-facing Métis file description without internal migration notes', () => {
+    expect(pkg.description).toBe('Métis - AI desktop overlay assistant')
+  })
+})
 
 describe('direct release signing gates', () => {
   it('requires an explicit expected Windows signer identity', () => {
