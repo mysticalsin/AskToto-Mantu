@@ -5,7 +5,7 @@ import { join, basename } from 'node:path'
 import { homedir } from 'node:os'
 import { randomBytes, createCipheriv, createDecipheriv, publicEncrypt, constants } from 'node:crypto'
 import type { SaveMeeting, SaveNote, Settings, RecapExport, TranscriptLine } from '@shared/ipc'
-import { encryptSecret, decryptSecret } from './secrets'
+import { encryptSecret, decryptSecret, useFileBackend } from './secrets'
 
 // Optional at-rest encryption for transcripts/notes. Two on-disk formats share one fixed-length
 // `ATKENC<n>\n` magic prefix so detection stays a simple prefix check:
@@ -108,11 +108,12 @@ function encryptEnvelopeV2(content: string): Buffer {
   const cipher = createCipheriv('aes-256-gcm', contentKey, iv)
   const ct = Buffer.concat([cipher.update(content, 'utf8'), cipher.final()])
   const tag = cipher.getAuthTag()
-  // LOCAL wrap: prefer the OS keychain (safeStorage); when unavailable (Linux / CI / no
-  // secret-service) fall back to the AES-GCM file-backend key from secrets.ts. Either way the
-  // content key is always encrypted at rest — never stored in cleartext.
+  // LOCAL wrap: prefer the OS keychain (safeStorage); when the file backend is in force (un-notarized
+  // build — see the keystore note in index.ts) or safeStorage is unavailable (Linux / CI / no
+  // secret-service), wrap with the AES-GCM file-backend key from secrets.ts instead so recording never
+  // triggers a Keychain prompt mid-meeting. Either way the content key is always encrypted at rest.
   let kLocalField: string
-  if (safeStorage.isEncryptionAvailable()) {
+  if (!useFileBackend() && safeStorage.isEncryptionAvailable()) {
     kLocalField = 'S:' + safeStorage.encryptString(contentKey.toString('base64')).toString('base64')
   } else {
     kLocalField = 'F:' + encryptSecret(contentKey.toString('base64')).toString('base64')

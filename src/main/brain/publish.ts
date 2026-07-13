@@ -410,17 +410,24 @@ export async function publishEntity(s: Settings, kind: EntityKind, id: string): 
   ensureWikiDirs(s)
   const confidential = readConfidentialMeetings(s)
   let md: string | null = null
+  let meetings: MeetingRef[] = []
   if (kind === 'person') {
     const p = readPerson(s, id)
-    md = p ? renderPersonPage(p, confidential) : null
+    if (p) { meetings = p.meetings; md = renderPersonPage(p, confidential) }
   } else if (kind === 'account') {
     const a = readAccount(s, id)
-    md = a ? renderAccountPage(a, confidential) : null
+    if (a) { meetings = a.meetings; md = renderAccountPage(a, confidential) }
   } else {
     const d = readDeal(s, id)
-    md = d ? renderDealPage(d, confidential) : null
+    if (d) { meetings = d.meetings; md = renderDealPage(d, confidential) }
   }
-  if (md === null) {
+  // QA #11: an entity whose EVERY meeting is confidential must get NO page. The rendered body is already
+  // fully redacted (timeline/fact/changelog rows all gate on `confidential`), but the page HEADER still
+  // prints the entity's real name + aliases, and the index would list it — leaking the identity of an
+  // entity that appears only in confidential meetings. Skip ONLY that case: a zero-meeting entity carries
+  // no confidential provenance to leak and publishes as before.
+  const confidentialOnly = meetings.length > 0 && !meetings.some((m) => !confidential.has(m.file))
+  if (md === null || confidentialOnly) {
     await removeFromWiki(s, kind, id)
     return
   }
@@ -658,6 +665,10 @@ function topByActivity<T extends { id?: string; name: string; meetings: MeetingR
   limit: number
 ): T[] {
   return [...entities]
+    // QA #11: never list an entity whose every meeting is confidential — it has no page (see
+    // publishEntity) and listing it here would leak its name/identity through the index. (A zero-meeting
+    // entity carries no confidential provenance, so it is still listed, matching publishEntity.)
+    .filter((e) => e.meetings.length === 0 || e.meetings.some((m) => !confidential.has(m.file)))
     .map((e) => ({ e, date: newestDate(e.meetings, confidential) }))
     .sort((a, b) => (a.date === b.date ? a.e.name.localeCompare(b.e.name) : a.date > b.date ? -1 : 1))
     .slice(0, limit)

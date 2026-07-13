@@ -308,8 +308,8 @@ export const PROVIDERS: Record<ProviderId, ProviderDef> = {
     tier: 'featured',
     baseUrl: '', // sidecar's baseURL is a per-session ephemeral loopback port — resolved at request time
     // by main/llm/local.ts (localRuntime.baseURL()), never a fixed constant here.
-    models: ['qwen3.5-0.8b', 'qwen3.5-2b'],
-    defaultModel: 'qwen3.5-2b',
+    models: ['qwen3.5-0.8b'],
+    defaultModel: 'qwen3.5-0.8b',
     fastModel: 'qwen3.5-0.8b',
     keyHint: '', // keyless — the sidecar's per-session api key is generated and injected in-process
     keyPattern: '',

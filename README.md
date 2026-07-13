@@ -40,16 +40,18 @@ predate the rebrand and changing them would break macOS TCC permission grants (m
 consent tied to the bundle id) and the electron-updater continuity for existing installs. Expect to see
 `asktoto` in `package.json`, `userData` paths, log files, and code comments; that is not a rename bug.
 
-## Install (v1.0.0)
+## Install
 
 Grab the installer for your OS from the [AskToto-Releases](https://github.com/mysticalsin/AskToto-Releases/releases) page:
 
-- **macOS** — `Metis-1.0.0.dmg` (Apple Silicon; macOS 12+). v1.0.0 is not yet notarized:
-  first launch needs right-click → Open → Open (one time). Auto-update activates once builds
-  are signed + notarized.
-- **Windows** — `Metis-Setup-1.0.0.exe` (installer) or `Metis-Portable-1.0.0.exe`
-  (no-install; the portable build never auto-updates — electron-updater has no portable-EXE
-  support). v1.0.0 is not yet Authenticode-signed: SmartScreen will warn — More info → Run anyway.
+- **macOS Apple Silicon** — `Metis-<version>.dmg`.
+- **Windows x64** — `Metis-Setup-<version>.exe` (installer) or `Metis-Portable-<version>.exe`
+  (no-install; the portable build never auto-updates because electron-updater has no portable-EXE
+  support).
+
+Tagged public releases are published only after both native builds pass the signing, package-integrity,
+and size gates. If no current release is listed, the external signing/release gates have not completed;
+do not substitute an unsigned local build for customer distribution.
 
 All transcription runs on-device; models are bundled (no first-run download).
 
@@ -57,8 +59,7 @@ Full install instructions: [`docs/INSTALL.md`](docs/INSTALL.md).
 
 ## Quick start (from source)
 
-Requires **Node 20** (matches CI in `.github/workflows/build.yml`; not yet enforced locally via an
-`engines` field).
+Requires **Node 20.19.2**, pinned consistently in `.nvmrc`, `.node-version`, `package.json`, and CI.
 
 ```bash
 npm install
@@ -79,9 +80,10 @@ Two things `npm install` at the repo root does **not** cover:
   `package.json`. `npm run dev` still works without it — `openIntelligenceWindow()` returns gracefully
   if `intelligence/dist` is missing — but to open the dashboard itself, run
   `npm run build:intelligence` first (this does `cd intelligence && npm ci && npm run build`).
-- **The LGPL ffmpeg sidecar** (`resources/ffmpeg/`) is deliberately git-ignored and not fetched by
-  `npm install`. Its absence doesn't break `npm run dev` — only the "import audio file" feature can't
-  decode without it. See `docs/ENTERPRISE_RELEASE.md`'s ffmpeg sidecar section to provision one locally.
+- **The LGPL ffmpeg sidecar binaries** under `resources/ffmpeg/<platform>-<arch>/` are deliberately
+  git-ignored and not fetched by `npm install`; the reviewed hash manifest and LGPL license in the
+  directory are tracked. Missing binaries don't break `npm run dev` — only "import audio file" cannot
+  decode. See `docs/ENTERPRISE_RELEASE.md`'s ffmpeg sidecar section to provision them locally.
 
 ## Script reference
 
@@ -91,7 +93,7 @@ Every script in `package.json`, one line each:
 |---|---|
 | `dev` | Launch the overlay in dev mode (electron-vite dev) |
 | `check:main-imports` | Fail if `src/main/**` uses a dynamic `import()` (breaks under bytecode compilation) |
-| `check:ffmpeg` | Verify/provision the LGPL ffmpeg sidecar binary for the current platform |
+| `check:ffmpeg` | Verify the reviewed LGPL ffmpeg sidecar binary for the current platform |
 | `check:sherpa` | Verify/provision the native Parakeet (sherpa-onnx) addon for the current platform |
 | `prebuild` | Runs `check:main-imports` automatically before `build` |
 | `build` | Bundle main + preload + renderer (electron-vite build) → `out/` |
@@ -107,14 +109,14 @@ Every script in `package.json`, one line each:
 | `build:intelligence` | `cd intelligence && npm ci && npm run build` — builds the Mantu Intelligence dashboard bundle |
 | `installers` / `installers:mac` / `installers:win` / `installers:all` | Build installers for the current OS / mac / win / all platforms |
 | `predist` | ffmpeg + sherpa checks (mac) + fetch models + build intelligence, before `dist` |
-| `dist` | Package a signed-runtime macOS app → `release/` (no publish) |
-| `dist:local` | Local mac rebuild with keychain-safe signing into an OneDrive-free output dir, then verify signing |
+| `dist` | Package an ad-hoc-signed local macOS app → `release/` (not notarized; no publish) |
+| `dist:local` | Local Mac rebuild with ad-hoc signing into an OneDrive-free output dir, then verify it |
 | `predist:win` | ffmpeg + sherpa checks (win) + fetch models, before a Windows dist |
 | `dist:win` | Fetch models, build intelligence, then package an unsigned Windows build (no publish) |
 | `dist:win:appx` | ffmpeg + sherpa checks (win), then package a Windows APPX (no publish) |
 | `prepack` | Fetch models (runs automatically before electron-builder packs) |
-| `release` | Full macOS release gate (ffmpeg, sherpa, Xcode, secrets, version check, models, intelligence, build) → publish |
-| `release:win` | Full Windows release gate → publish (fails closed today: no Windows signing secrets provisioned yet) |
+| `release` | Build signed/notarized macOS release artifacts (no independent publish; tag CI performs final verification) |
+| `release:win` | Build Windows release artifacts after credential/package gates (no independent publish; tag CI verifies the signer) |
 | `release:mas` | Mac App Store build (provisioning profile via `MAS_PROVISIONING_PROFILE`), no publish |
 | `release:win:store` | Windows Store (APPX) build gate, no publish |
 
@@ -242,9 +244,9 @@ tests; there is no Playwright UI/E2E suite, only the single import smoke test ab
 - Real answers need a provider key, a connected Claude Code / Codex CLI (keyless), or Dust. A bad key
   returns a clean UI error.
 - Code signing / notarization and Store submission need Tony-owned developer accounts, certificates,
-  provisioning profiles, and GitHub release secrets. The repo now fails tagged releases before publish
-  when required signing inputs are missing. Windows signing is deferred beyond v1 scope (see
-  `docs/MANTU-IT-REQUEST.md`); the portable Windows build never auto-updates by design.
+  provisioning profiles, and GitHub release secrets. Tagged releases fail closed before publish when
+  either platform's signing inputs are missing; Windows also requires an exact expected certificate
+  subject for identity verification. The portable Windows build never auto-updates by design.
 - ASR weights (Whisper base + Parakeet) are bundled into the installer by `npm run fetch-models`
   (run automatically by `predist`) and load offline via the `asr-model://` protocol — no download on
   first Listen. `fetch-models` also downloads the large-v3-turbo WebGPU tier to disk, but

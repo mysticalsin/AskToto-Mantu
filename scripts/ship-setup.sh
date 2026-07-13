@@ -29,6 +29,7 @@ APPLE_TEAM_ID_VALUE=""    # 10-char Team ID
 # Windows Authenticode signing (.pfx). Optional — unsigned .exe still builds + runs (SmartScreen warns).
 WIN_CERT_PFX=""           # path to your Authenticode .pfx
 WIN_CERT_PASSWORD=""
+WIN_CERT_EXPECTED_SUBJECT="" # exact certificate Subject or common name; never guess this value
 # ─────────────────────────────────────────────────────────────────────────────
 
 echo "▸ Checking gh auth…"; gh auth status >/dev/null || { echo "Run 'gh auth login' first."; exit 1; }
@@ -45,7 +46,7 @@ set_secret_file() { # name path  — base64s a cert file into a secret
 
 echo "▸ 1/4  Enabling Actions on $REPO…"
 gh api -X PUT "repos/$REPO/actions/permissions" -F enabled=true -f allowed_actions=all \
-  && echo "  ✓ Actions enabled — a push now builds unsigned mac + Windows installers as run artifacts."
+  && echo "  ✓ Actions enabled — pushes build verification-only Mac + Windows run artifacts."
 
 echo "▸ 2/4  Ensuring the public releases repo $RELEASES_REPO exists…"
 if gh repo view "$RELEASES_REPO" >/dev/null 2>&1; then
@@ -64,13 +65,15 @@ set_secret      APPLE_APP_SPECIFIC_PASSWORD "$APPLE_APP_PASSWORD"
 set_secret      APPLE_TEAM_ID               "$APPLE_TEAM_ID_VALUE"
 set_secret_file WIN_CSC_LINK                "$WIN_CERT_PFX"
 set_secret      WIN_CSC_KEY_PASSWORD        "$WIN_CERT_PASSWORD"
+set_secret      WIN_CSC_EXPECTED_SUBJECT     "$WIN_CERT_EXPECTED_SUBJECT"
 
 echo "▸ 4/4  Next steps (manual, when you're ready to cut a release):"
 cat <<'NEXT'
-  • Fast path (unsigned installers now): just push any commit — the Build & Test workflow
-    uploads mac .dmg/.zip and Windows .exe/.appx as run artifacts (Actions tab → latest run).
+  • Verification artifacts: push any commit — Build & Test uploads ad-hoc-signed Mac .dmg/.zip
+    and unsigned Windows .exe/.appx artifacts. These are not customer releases.
   • Signed public release: merge to main, then
-        git tag v1.0.0 && git push origin v1.0.0
+        version=$(node -p "require('./package.json').version")
+        git tag "v$version" && git push origin "v$version"
     → the Release workflow signs, notarizes, and publishes both installers to the releases repo;
       installed apps auto-update from there.
   • Verify a mac build's signature: codesign --verify --deep --strict --verbose=2 <AskToto.app>

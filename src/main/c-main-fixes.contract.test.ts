@@ -111,9 +111,18 @@ describe('finding 7: brain:rebuildAll stays guarded (assessed, not modified)', (
     const body = source.slice(start, end)
     expect(body).toMatch(/assertMainWindow\(e\)/)
     expect(body).toMatch(/requireAuth\(\)/)
-    // startRebuild (src/main/brain/ingest.ts) wraps the purge with a checked-result guard, a
-    // corrupt/blocked-journal check, and the replayPending flag — a stricter superset of the direct
-    // purgeBrain(getSettings()) call this test originally pinned; it still calls purgeBrain internally.
+    // MI-2.5 superseded the direct purgeBrain(getSettings()) call with ingest.ts's startRebuild, which
+    // still purges (preserveCorrections: true) but adds a corrupt-journal guard and a checked/resumable
+    // corrections replay — same guarantee (guarded, not silently modified), stronger implementation.
     expect(body).toMatch(/startRebuild\(getSettings\(\)\)/)
+  })
+})
+
+describe('packaged offline ASR protocol', () => {
+  it('allows renderer and worker fetches through Chromium CORS', () => {
+    const start = source.indexOf("scheme: 'asr-model'")
+    expect(start).toBeGreaterThan(-1)
+    const body = source.slice(start, start + 220)
+    expect(body).toMatch(/corsEnabled:\s*true/)
   })
 })

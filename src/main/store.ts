@@ -170,7 +170,10 @@ function readUserRaw(): Record<string, unknown> {
 
   // ── Legacy safeStorage format (ATKENC1) — migrate to file backend on next write ──
   if (buf.length >= ENC_MARKER_V1.length && buf.subarray(0, ENC_MARKER_V1.length).equals(ENC_MARKER_V1)) {
-    if (safeStorage.isEncryptionAvailable()) {
+    // Only touch safeStorage (the Keychain) when the file backend is NOT in force. On a keystore-forced
+    // build, reading a legacy V1 blob would re-open the very Keychain prompt we route around at boot — so
+    // treat it as unreadable and fall back to defaults (a one-time re-onboard), never a blocking prompt.
+    if (!useFileBackend() && safeStorage.isEncryptionAvailable()) {
       try {
         const data = JSON.parse(safeStorage.decryptString(buf.subarray(ENC_MARKER_V1.length)))
         // Best-effort migration: write the current backend format so subsequent reads don't need safeStorage.
@@ -278,19 +281,11 @@ export function getSettings(): Settings {
   // user layer so org policy always wins.
   const lockedKeys = getLockedKeys()
   if (lockedKeys.length) for (const k of lockedKeys) delete (raw as Record<string, unknown>)[k]
-  // Task MI-5: publishBrainPages's first-run default follows `!encryptTranscripts` — computed ONLY while
-  // the key has never been set on EITHER the user layer or managed/org policy (an explicit choice,
-  // including explicitly re-choosing the same value the derivation would have picked, always wins and is
-  // never recomputed on a later read). A locked key is skipped too, even though managed already covers
-  // that case in practice (a locked key's authoritative value lives in managed, so 'publishBrainPages' in
-  // managed is already true then) — defense in depth against the derivation ever fighting org policy.
-  if (
-    !('publishBrainPages' in raw) &&
-    !('publishBrainPages' in managed) &&
-    !lockedKeys.includes('publishBrainPages')
-  ) {
-    raw.publishBrainPages = !(raw.encryptTranscripts ?? managed.encryptTranscripts ?? DEFAULT_SETTINGS.encryptTranscripts)
-  }
+  // Task MI-5 (hardened — QA #9): publishBrainPages is EXPLICIT opt-in only (schema default false). It is
+  // deliberately NEVER derived from `!encryptTranscripts`. Deriving it meant turning at-rest encryption
+  // OFF (an unrelated action) silently flipped publishing ON and materialized a full Dust-readable wiki
+  // mirror with no consent dialog. Publishing a readable intelligence mirror to OneDrive is its own
+  // decision, made only through the native consent gate in main/index.ts's settings:set handler.
   const whole = SettingsSchema.safeParse({ ...base, ...raw })
   let value: Settings
   if (whole.success) {

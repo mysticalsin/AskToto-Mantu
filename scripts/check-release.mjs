@@ -20,9 +20,8 @@
 // directory and FAIL if any is >= 1.9 GiB (a safety buffer under the 2 GiB limit), WARN if any is >= 1.7
 // GiB. This check is opt-in and does nothing when the env var is unset. `npm run release` / `release:win`
 // already run this script (without the env var) as an update-channel preflight BEFORE electron-builder
-// has produced any artifacts, so the size gate can't run there too — release.yml instead re-invokes
-// `npm run check:release` with ASKTOTO_ARTIFACTS_DIR set right after the build+publish step, as a
-// post-publish confirmation/alarm (same pattern as verify-signing.mjs below it).
+// has produced any artifacts. release.yml re-invokes it with ASKTOTO_ARTIFACTS_DIR after each native
+// build but before artifact upload or publication, making size a hard pre-publication gate.
 
 import { readFileSync, readdirSync, statSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'

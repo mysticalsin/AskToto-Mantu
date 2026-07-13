@@ -9,11 +9,12 @@
 //   node scripts/verify-signing.mjs --require-notarized   (also FAIL if not Gatekeeper-accepted)
 //
 // macOS: codesign --verify --deep --strict on the .app; spctl assessment (notarization).
-// Windows: Get-AuthenticodeSignature on the .exe (Status must be Valid).
+// Windows: Get-AuthenticodeSignature on the .exe (Status Valid and subject/CN exactly matches the
+// required WIN_CSC_EXPECTED_SUBJECT release input; no legal certificate identity is guessed in code).
 // A platform can only verify its own artifacts, so on macOS the Windows .exe check is skipped (noted),
 // and vice-versa. Exits non-zero on a genuine signature failure.
 
-import { execFileSync } from 'node:child_process'
+import { spawnSync } from 'node:child_process'
 import { existsSync, readdirSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { homedir, platform } from 'node:os'
@@ -33,10 +34,16 @@ function findDir() {
   return null
 }
 function sh(cmd, args) {
-  try {
-    return { ok: true, out: execFileSync(cmd, args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }) }
-  } catch (e) {
-    return { ok: false, out: (e.stdout || '') + (e.stderr || '') + (e.message || '') }
+  const result = spawnSync(cmd, args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
+  const stdout = result.stdout || ''
+  const stderr = result.stderr || ''
+  const error = result.error?.message || ''
+  return {
+    ok: result.status === 0 && !result.error,
+    stdout,
+    stderr,
+    // codesign/spctl write their successful diagnostics to stderr; always retain both streams.
+    out: [stdout, stderr, error].filter(Boolean).join('\n')
   }
 }
 function walk(dir, test, depth = 4) {
@@ -71,7 +78,7 @@ console.log(`[verify:signing] artifacts dir: ${dir}`)
 const apps = walk(dir, (n, s) => n.endsWith('.app') && s.isDirectory(), 3)
 const dmgs = walk(dir, (n) => n.endsWith('.dmg'), 2)
 if (platform() === 'darwin') {
-  if (!apps.length && !dmgs.length) notes.push('no .app/.dmg found to verify on this macOS run')
+  if (!apps.length) fails.push('no .app found to verify on this macOS run')
   for (const app of apps) {
     const v = sh('codesign', ['--verify', '--deep', '--strict', '--verbose=2', app])
     if (v.ok) console.log(`  ✓ codesign valid: ${app}`)
@@ -80,10 +87,11 @@ if (platform() === 'darwin') {
     const auth = (id.out.match(/Authority=(.+)/) || [])[1]
     if (auth) console.log(`    identity: ${auth}`)
     const gate = sh('spctl', ['-a', '-vvv', '-t', 'exec', app])
-    const accepted = /accepted/i.test(gate.out)
+    const accepted = gate.ok
     if (accepted) console.log('    Gatekeeper: accepted (Developer ID + notarized)')
     else {
-      const msg = `    Gatekeeper: NOT accepted (dev-signed / not notarized) - ${app}`
+      const detail = gate.out.trim() ? `\n${gate.out.trim()}` : ''
+      const msg = `    Gatekeeper: NOT accepted (dev-signed / not notarized) - ${app}${detail}`
       if (REQUIRE_NOTARIZED) { fails.push(msg.trim()); console.error('  ✗' + msg) }
       else { notes.push(msg.trim()); console.log('    Gatekeeper: not notarized (ok for a local/dev build; use --require-notarized for release gating)') }
     }
@@ -99,13 +107,36 @@ if (platform() === 'darwin') {
 
 // ── Windows ──────────────────────────────────────────────────────────────────
 if (platform() === 'win32') {
+  const expectedSigner = String(process.env.WIN_CSC_EXPECTED_SUBJECT || '').trim()
+  if (!expectedSigner) {
+    fails.push('WIN_CSC_EXPECTED_SUBJECT is required and must exactly match the release certificate subject or common name')
+  }
   const exes = walk(dir, (n) => n.endsWith('.exe'), 2)
-  if (!exes.length) notes.push('no .exe found to verify on this Windows run')
+  if (!exes.length) fails.push('no .exe found to verify on this Windows run')
   for (const exe of exes) {
-    const r = sh('powershell', ['-NoProfile', '-Command', `(Get-AuthenticodeSignature '${exe}').Status`])
-    const status = (r.out || '').trim()
-    if (/^Valid$/i.test(status)) console.log(`  ✓ Authenticode Valid: ${exe}`)
-    else { fails.push(`Authenticode ${status || 'UNSIGNED'}: ${exe}`); console.error(`  ✗ Authenticode ${status || 'UNSIGNED'}: ${exe}`) }
+    const quotedExe = exe.replace(/'/g, "''")
+    const command = `[Console]::OutputEncoding=[System.Text.Encoding]::UTF8; $s=Get-AuthenticodeSignature -LiteralPath '${quotedExe}'; $cn=''; if ($s.SignerCertificate) { $cn=$s.SignerCertificate.GetNameInfo([System.Security.Cryptography.X509Certificates.X509NameType]::SimpleName,$false) }; [PSCustomObject]@{Status=[string]$s.Status;Subject=[string]$s.SignerCertificate.Subject;CommonName=[string]$cn} | ConvertTo-Json -Compress`
+    const r = sh('powershell', ['-NoProfile', '-Command', command])
+    let signature = {}
+    try {
+      signature = JSON.parse(r.stdout.trim())
+    } catch {
+      // The status check below reports the command/output as a signing failure.
+    }
+    const status = String(signature.Status || '')
+    const subject = String(signature.Subject || '').trim()
+    const commonName = String(signature.CommonName || '').trim()
+    if (!r.ok || !/^Valid$/i.test(status)) {
+      fails.push(`Authenticode ${status || 'UNSIGNED'}: ${exe}`)
+      console.error(`  ✗ Authenticode ${status || 'UNSIGNED'}: ${exe}`)
+      if (r.out.trim()) console.error(`    ${r.out.trim()}`)
+    } else if (!expectedSigner || (subject !== expectedSigner && commonName !== expectedSigner)) {
+      fails.push(`Authenticode signer does not exactly match WIN_CSC_EXPECTED_SUBJECT: ${exe} (subject=${subject || 'none'}, CN=${commonName || 'none'})`)
+      console.error(`  ✗ unexpected Authenticode signer: ${exe}`)
+    } else {
+      console.log(`  ✓ Authenticode Valid: ${exe}`)
+      console.log(`    identity: ${subject} (CN=${commonName})`)
+    }
   }
   if (apps.length || dmgs.length) notes.push('skipped macOS artifacts (codesign can only be checked on macOS)')
 }

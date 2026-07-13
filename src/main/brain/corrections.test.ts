@@ -496,6 +496,36 @@ describe('corrections engine', () => {
     expect(snapshotEntities(s)).toEqual(liveSnapshot)
   })
 
+  // ── ★ Rename preserves a person's commitments across a rebuild (QA #6) ────────────────────
+  // Root cause under test: applyCorrections rewrote x.people[].name through the alias map but NOT
+  // x.commitments[].by. mergeExtraction attaches a commitment to a person only when c.by === p.name, so a
+  // rebuild's re-ingest matched the RENAMED p.name against the STALE c.by, missed, and silently dropped the
+  // commitment from that person's ledger — permanent, invisible data loss on every rebuild after a rename.
+  it('a renamed person keeps their commitments across a full rebuild (commitment.by is rewritten — QA #6)', async () => {
+    const m = MeetingExtractionSchema.parse({
+      people: [{ name: 'Alice Adams', role: 'Analyst', org: null, confidence: 'EXTRACTED' }],
+      commitments: [{ text: 'send the deck', by: 'Alice Adams', quote: '"send the deck"', confidence: 'EXTRACTED' }]
+    })
+    const file = join(folder, 'commit1.md')
+    await ingestExtraction(s, m, transcriptMd('2026-06-01'), file)
+    const ALICE = slugify('Alice Adams')
+    const hasCommitment = (id: string): boolean =>
+      !!readPerson(s, id)?.commitments?.some((c) => c.text === 'send the deck')
+    expect(hasCommitment(ALICE)).toBe(true) // live: on Alice's personal ledger
+
+    expect((await renameEntity(s, { kind: 'person', id: ALICE, newName: 'Alicia' })).ok).toBe(true)
+    expect(readPerson(s, ALICE)!.name).toBe('Alicia')
+
+    // The load-bearing assertion: a full rebuild re-ingests the ORIGINAL extraction (c.by === 'Alice
+    // Adams') under the rename. Without the commitment.by rewrite the name-match misses and the commitment
+    // vanishes; with it, the ledger survives byte-for-byte.
+    expect(purgeBrain(s, { preserveCorrections: true }).ok).toBe(true)
+    await ingestExtraction(s, m, transcriptMd('2026-06-01'), file)
+    await replayCorrections(s)
+    expect(readPerson(s, ALICE)!.name).toBe('Alicia')
+    expect(hasCommitment(ALICE)).toBe(true)
+  })
+
   // ── aliasMapFromJournal (pure) ───────────────────────────────────────────
   it('aliasMapFromJournal resolves rename chains transitively, maps merge surface forms, and honors unmerge annulment', () => {
     const at = '2026-07-11T00:00:00.000Z'

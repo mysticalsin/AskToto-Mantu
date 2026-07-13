@@ -1,0 +1,106 @@
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { createServer, get as httpGet, type RequestListener, type Server } from 'node:http'
+import type { Socket } from 'node:net'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { describe, expect, it } from 'vitest'
+
+import { download } from './fetch-models.mjs'
+
+async function startServer(listener: RequestListener) {
+  const sockets = new Set<Socket>()
+  const server = createServer(listener)
+  server.on('connection', (socket) => {
+    sockets.add(socket)
+    socket.on('close', () => sockets.delete(socket))
+  })
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+  const address = server.address()
+  if (!address || typeof address === 'string') throw new Error('Test server did not bind a TCP port')
+  return { server, sockets, url: `http://127.0.0.1:${address.port}/model.onnx` }
+}
+
+async function stopServer(server: Server, sockets: Set<Socket>) {
+  for (const socket of sockets) socket.destroy()
+  await new Promise<void>((resolve, reject) =>
+    server.close((error) => (error ? reject(error) : resolve()))
+  )
+}
+
+function settleDownload(operation: Promise<void>) {
+  return operation.then(
+    () => ({ kind: 'resolved' as const, error: null }),
+    (error: Error) => ({ kind: 'rejected' as const, error })
+  )
+}
+
+describe('ASR model downloader', () => {
+  it('can be imported for focused network-failure tests without running the provisioning entrypoint', () => {
+    const source = readFileSync(new URL('./fetch-models.mjs', import.meta.url), 'utf8')
+
+    expect(source).toMatch(/export function fetchStream/)
+    expect(source).toMatch(/export async function download/)
+    expect(source).toMatch(/if \(process\.argv\[1\] === fileURLToPath\(import\.meta\.url\)\)/)
+  })
+
+  it('bounds a connection that never sends response headers and retries clearly', async () => {
+    let requests = 0
+    const { server, sockets, url } = await startServer(() => {
+      requests += 1 // Accept the request but never send response headers.
+    })
+    const scratch = mkdtempSync(join(tmpdir(), 'metis-asr-request-timeout-'))
+    const destination = join(scratch, 'model.onnx')
+
+    try {
+      const outcome = await settleDownload(
+        download(url, destination, {
+          requestGet: httpGet,
+          requestTimeoutMs: 500,
+          responseIdleTimeoutMs: 500,
+          maxAttempts: 2,
+          backoffBaseMs: 1
+        })
+      )
+
+      expect(outcome.kind).toBe('rejected')
+      expect(outcome.error?.message).toMatch(/request timeout after 500ms/)
+      expect(requests).toBe(2)
+      expect(existsSync(`${destination}.part`)).toBe(false)
+    } finally {
+      await stopServer(server, sockets)
+      rmSync(scratch, { recursive: true, force: true })
+    }
+  })
+
+  it('bounds a response body that starts and then stalls, without confusing it for header timeout', async () => {
+    let requests = 0
+    const { server, sockets, url } = await startServer((_request, response) => {
+      requests += 1
+      response.writeHead(200, { 'content-length': '2' })
+      response.flushHeaders()
+      response.write('x') // Start the model, then leave it incomplete and idle.
+    })
+    const scratch = mkdtempSync(join(tmpdir(), 'metis-asr-idle-timeout-'))
+    const destination = join(scratch, 'model.onnx')
+
+    try {
+      const outcome = await settleDownload(
+        download(url, destination, {
+          requestGet: httpGet,
+          requestTimeoutMs: 5_000,
+          responseIdleTimeoutMs: 500,
+          maxAttempts: 2,
+          backoffBaseMs: 1
+        })
+      )
+
+      expect(outcome.kind).toBe('rejected')
+      expect(outcome.error?.message).toMatch(/response idle timeout after 500ms/)
+      expect(requests).toBe(2)
+      expect(existsSync(`${destination}.part`)).toBe(false)
+    } finally {
+      await stopServer(server, sockets)
+      rmSync(scratch, { recursive: true, force: true })
+    }
+  })
+})

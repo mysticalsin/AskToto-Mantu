@@ -1,9 +1,9 @@
 # Third-Party Notices
 
 Métis bundles the following third-party machine-learning models and runtime binaries directly
-inside the packaged app (see `scripts/fetch-models.mjs` and `electron-builder.yml`'s `extraResources`
-block) so speech transcription works fully offline, with no first-run download. This file lists them
-and their licenses, as required by the models' own license terms.
+inside each packaged app. Release builds provision and verify those assets before packaging; the
+installed app never downloads a model or inference runtime. This file lists the bundled components
+and their licenses.
 
 ## Speech-to-text models
 
@@ -47,27 +47,17 @@ and their licenses, as required by the models' own license terms.
 - **Used for**: running the Whisper models above on-device (WASM/WebGPU execution)
 - **Bundled at**: `resources/ort/`
 
-### node-llama-cpp 3.19.0
+### ggml-org/llama.cpp `llama-server` b9957
 
-- **Publisher**: Gilad S. / withcatai.
-- **License**: MIT License; `node_modules/node-llama-cpp/LICENSE` contains the complete terms and
-  `Copyright (c) 2023 Gilad S.`
-- **Used for**: loading and running the selected GGUF text model entirely on-device.
-- **Bundled at**: JavaScript runtime under `app.asar/node_modules/node-llama-cpp/`.
-
-### @node-llama-cpp platform binaries 3.19.0
-
-- **Publisher**: Gilad S. / withcatai; the installed build metadata records
-  ggml-org/llama.cpp release `b9842`.
-- **License**: MIT License; every platform package includes its complete `LICENSE` with
-  `Copyright (c) 2024 Gilad S.`
-- **Used for**: the reviewed native CPU, Metal, or Vulkan backend selected for the target installer.
-- **Bundled at**: target-specific binaries under
-  `app.asar.unpacked/node_modules/@node-llama-cpp/<target>/bins/`.
-
-### ggml-org/llama.cpp b9842
-
-The native packages above embed ggml-org/llama.cpp release `b9842`.
+- **Publisher**: ggml-org / the llama.cpp contributors.
+- **License**: MIT License.
+- **Used for**: serving the bundled Qwen3.5 model to Métis over an authenticated loopback-only
+  endpoint for on-device text and vision inference.
+- **Bundled at**: `resources/llama/mac/` in the macOS arm64 app and
+  `resources/llama/win/{vulkan,cpu}/` in the Windows x64 app. Windows includes a Vulkan build and a
+  CPU fallback; macOS uses the Metal-capable arm64 build.
+- **Pinned release**: llama.cpp `b9957`. The release archive is fetched and hash-verified during the
+  build, never by the installed app.
 
 MIT License
 
@@ -91,36 +81,19 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
-## Packaged local text and vision models
+## Packaged local text and vision model
 
-Each build contains exactly the text and vision variants recorded in its packaged
-`local-ai/manifest.json`. The tracked candidate catalog is an evaluation inventory, not a statement
-that every candidate is bundled. Model files are fetched only at build time from immutable commits,
-verified by size and SHA-256, and copied into the installer. Métis never downloads them after install.
+### Qwen3.5 0.8B (UD-Q4_K_XL GGUF + mmproj-F16)
 
-### Qwen3 text candidates
-
-- **Publisher**: Qwen / Alibaba Cloud; compact evaluation conversions may be sourced from Unsloth.
+- **Publisher**: Qwen / Alibaba Cloud; GGUF conversion published by Unsloth.
 - **License**: Apache License 2.0.
-- **Used for**: lightweight on-device text tasks when the selected variant passes release gates.
-- **Provenance**: compact third-party conversions remain evaluation-only unless the packaged manifest
-  references a separately reviewed release-exception notice. See
-  `resources/local-ai/licenses/model-conversion-notices.md`.
-
-### SmolVLM-256M-Instruct vision candidate
-
-- **Publisher**: Hugging Face.
-- **License**: Apache License 2.0.
-- **Used for**: on-device screenshot captioning and text extraction when selected.
-
-### Florence-2-base-ft vision candidate
-
-- **Publisher**: Microsoft; ONNX conversion published by onnx-community.
-- **License**: MIT License.
-- **Used for**: the evaluated structured OCR/region alternative when selected.
+- **Used for**: supported on-device suggestions, summaries, and visual-input tasks through the bundled
+  llama.cpp runtime.
+- **Distribution**: the text weights and multimodal projector are pinned by byte size and SHA-256,
+  fetched only during the release build, and copied into both the macOS arm64 and Windows x64
+  packages. Métis does not acquire or replace them after installation.
 
 ---
 
-This file accompanies the packaged app and must stay in sync with `scripts/fetch-models.mjs`,
-`resources/local-ai/candidates.json`, and the packaged local-AI runtime manifest. Exact model license
-bytes are included under `resources/local-ai/licenses/`.
+This file accompanies the packaged app and must stay in sync with the build-time asset pins,
+provisioning checks, and platform-specific `electron-builder.yml` resource mappings.

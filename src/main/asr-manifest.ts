@@ -28,8 +28,8 @@ export const ASR_REQUIRED_FILES: readonly string[][] = [
 /**
  * True only when every bundled ASR file exists AND is non-empty under `base` (resourcesPath in packaged
  * builds, <repo>/resources in dev). A missing or zero-byte file (interrupted fetch-models run, incomplete
- * installer, cloud-placeholder weirdness) → false, so the worker uses the proven remote path instead of
- * bricking transcription mid-meeting.
+ * installer, cloud-placeholder weirdness) → false. Packaging gates must reject that state; packaged
+ * runtime still stays offline and reports missing assets rather than downloading replacements.
  */
 export function asrManifestComplete(base: string): boolean {
   for (const parts of ASR_REQUIRED_FILES) {

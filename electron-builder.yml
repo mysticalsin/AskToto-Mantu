@@ -2,7 +2,15 @@
 # and updater identity are keyed to it — changing it would reset permissions and orphan existing
 # installs. Everything user-visible says Métis; this internal id is never shown.
 appId: com.mantu.asktoto
-productName: Métis
+# productName MUST stay ASCII "Metis". On macOS, electron-builder derives the child-process HELPER
+# bundle names from it — "<productName> Helper (GPU/Renderer/Plugin).app". The é in "Métis Helper" is
+# stored NFD-decomposed on disk while Chromium builds the helper path NFC-composed, so on the macOS 26+
+# (Tahoe) betas the browser process cannot launch its own GPU/renderer helper and dies at startup with
+# EXC_BREAKPOINT/SIGTRAP (~85-100% of launches; intermittent, packaged-only, no launch flag mitigates).
+# The app still displays as "Métis" everywhere via mac.extendInfo.CFBundleDisplayName below — same
+# pattern already used for the Windows shortcutName. Verified 2026-07-11: ASCII "Metis Helper" → 10/10
+# clean launches on this machine; "Métis Helper" → 0/10. Do NOT revert this to "Métis".
+productName: Metis
 # Strip OneDrive/Finder xattrs from the packed app before signing — codesign hard-rejects them
 # ("resource fork … detritus not allowed"); this repo lives in CloudStorage so they're everywhere.
 afterPack: scripts/after-pack.mjs
@@ -26,42 +34,12 @@ files:
   - package.json
   - '!out/**/*.map'
   - '!**/*.d.ts'
-  # IMPORTANT — the `out/**/*` line above is what restricts app.asar to the built app: without a
-  # POSITIVE (allowlist) pattern here, electron-builder walks the whole project root and packs
-  # release/, resources/, src/, etc. into the archive (13+ GB). Any platform-specific `files:` block
-  # (mac/win, below) MUST repeat `out/**/*` + `package.json`, because platform patterns feed a separate
-  # matcher — a platform list of only `!` excludes reverts that matcher to `**/*` and re-bloats the asar.
-  # node-llama JavaScript stays in ASAR. Never ship source/local builds or CUDA/wrong-architecture packages.
-  - '!node_modules/@node-llama-cpp/*-cuda/**'
-  - '!node_modules/@node-llama-cpp/*-cuda-ext/**'
-  - '!node_modules/@node-llama-cpp/linux-*/**'
-  - '!node_modules/@node-llama-cpp/mac-x64/**'
-  - '!node_modules/@node-llama-cpp/win-arm64/**'
-  - '!node_modules/node-llama-cpp/llama/localBuilds/**'
-  # Prebuilt-only runtime: remove compiler inputs while retaining the runtime release metadata,
-  # package metadata, and grammars that node-llama reads from the installed module.
-  - '!node_modules/node-llama-cpp/llama/addon/**'
-  - '!node_modules/node-llama-cpp/llama/cmake/**'
-  - '!node_modules/node-llama-cpp/llama/gpuInfo/**'
-  - '!node_modules/node-llama-cpp/llama/patches/**'
-  - '!node_modules/node-llama-cpp/llama/profiles/**'
-  - '!node_modules/node-llama-cpp/llama/toolchains/**'
-  - '!node_modules/node-llama-cpp/llama/xpack/**'
-  - '!node_modules/node-llama-cpp/llama/gitRelease.bundle'
-  - '!node_modules/node-llama-cpp/llama/CMakeLists.txt'
-  - '!node_modules/node-llama-cpp/llama/.clang-format'
-asar:
-  # Disable package-level preferUnplugged expansion; explicit rules below are the complete native boundary.
-  smartUnpack: false
+asar: true
 # Native addons (.node) must live outside the asar to be loadable at runtime. sherpa-onnx-node (Parakeet
 # engine) + its per-platform binary packages are unpacked here so they ship + load in the installed app.
 asarUnpack:
   - '**/node_modules/sherpa-onnx-node/**'
   - '**/node_modules/sherpa-onnx-*/**'
-  # Keep worker/core ESM in app.asar. node-llama resolves only these reviewed native bins via .unpacked.
-  - '**/node_modules/@node-llama-cpp/mac-arm64-metal/bins/**'
-  - '**/node_modules/@node-llama-cpp/win-x64/bins/**'
-  - '**/node_modules/@node-llama-cpp/win-x64-vulkan/bins/**'
 extraResources:
   # Mantu Intelligence dashboard — static build of the intelligence/ workspace, loaded in its own
   # window (src/main/intelligence.ts). Populated by `npm run build:intelligence` before packaging.
@@ -77,9 +55,12 @@ extraResources:
     to: graphify_runner.py
   - from: THIRD_PARTY_NOTICES.md
     to: THIRD_PARTY_NOTICES.md
-  # Selected-only local text + vision payload. Cache/candidates are never packaged.
-  - from: resources/local-ai/payload
-    to: local-ai
+  # One selected, checksum-pinned Qwen payload is embedded in every installer. Installed application
+  # code has no model downloader and resolves these files only below process.resourcesPath.
+  - from: resources/local-llm/models/qwen3.5-0.8b
+    to: local-llm/models/qwen3.5-0.8b
+  - from: resources/local-llm/LICENSE.QWEN3.5-APACHE-2.0.txt
+    to: local-llm/LICENSE.QWEN3.5-APACHE-2.0.txt
   # Bundled ASR model weights — served via asr-model:// protocol (zero runtime download).
   # Populated by `npm run fetch-models` before packaging.
   - from: resources/models
@@ -98,18 +79,13 @@ extraResources:
     to: ffmpeg
   - from: resources/ort
     to: ort
+  - from: resources/runtime-assets-manifest.json
+    to: runtime-assets-manifest.json
 mac:
-  files:
-    # Repeat the allowlist positives (see top-level files note): platform `files` feed a separate
-    # matcher; a list of only `!` excludes would revert it to `**/*` and pack the whole repo into asar.
-    - out/**/*
-    - package.json
-    - '!node_modules/sherpa-onnx-win-*/**'
-    - '!node_modules/sherpa-onnx-linux-*/**'
-    - '!node_modules/sherpa-onnx-darwin-x64/**'
   category: public.app-category.productivity
-  # ASCII artifact names (see the win note below): the .app displays as Métis, the .dmg/.zip assets
-  # and latest-mac.yml URLs stay accent-free.
+  # ASCII everywhere on disk (see the productName + win notes): the .app bundle is Metis.app, its helper
+  # bundles are "Metis Helper*.app" (required — see productName), and the .dmg/.zip assets + latest-mac.yml
+  # URLs stay accent-free. The app still DISPLAYS as Métis via extendInfo.CFBundleDisplayName.
   artifactName: Metis-${version}.${ext}
   target:
     - dmg
@@ -129,16 +105,12 @@ mac:
   entitlements: build/entitlements.mac.plist
   entitlementsInherit: build/entitlements.mac.plist
   gatekeeperAssess: false
-  # osx-sign otherwise attempts to codesign model/font/archive data after classifying every file.
-  # Keep Mach-O code (.node/.dylib/.so, helpers, frameworks, FFmpeg) outside this data-only list.
-  signIgnore:
-    - "\\.(?:asar|bin|dat|gguf|icns|jpeg|jpg|nib|onnx|pak|png|wasm|wav|woff2)$"
   extendInfo:
-    # APFS stores the Métis executable/helper filenames in NFD. Electron compares helper paths
-    # byte-for-byte before launching GPU/renderer processes, so the internal bundle name must use
-    # that same normalization. CFBundleDisplayName stays NFC and user-visible as "Métis".
-    CFBundleName: "Me\u0301tis"
-    CFBundleDisplayName: "Métis"
+    # Keep the é in the DISPLAY name only — menu bar, dock, About and Finder all show "Métis" while the
+    # on-disk bundle + helper dirs stay ASCII "Metis" (set from productName). Do NOT add CFBundleName
+    # here: Electron resolves the helper bundle path from CFBundleName at runtime, so it must match the
+    # ASCII "Metis Helper" dirs electron-builder creates. See the productName note at the top of this file.
+    CFBundleDisplayName: Métis
     NSMicrophoneUsageDescription: Métis transcribes audio on-device to give you live AI suggestions.
     NSScreenCaptureUsageDescription: Métis captures system audio and your screen so the AI can help.
     LSUIElement: true
@@ -149,6 +121,8 @@ mas:
   entitlements: build/entitlements.mas.plist
   entitlementsInherit: build/entitlements.mas.inherit.plist
   extendInfo:
+    # See mac.extendInfo above: ASCII bundle/helper names, accented display name only.
+    CFBundleDisplayName: Métis
     NSMicrophoneUsageDescription: Métis transcribes audio on-device to give you live AI suggestions.
     NSScreenCaptureUsageDescription: Métis captures system audio and your screen so the AI can help.
     LSUIElement: true
@@ -158,18 +132,10 @@ masDev:
 dmg:
   title: Métis ${version}
 win:
-  # Keep internal PE/installation paths ASCII-safe; productName and shortcuts remain user-visible Métis.
-  executableName: Metis
-  files:
-    # Repeat the allowlist positives (see top-level files note) so the platform matcher stays an
-    # allowlist and does not pack the whole repo into asar.
-    - out/**/*
-    - package.json
-    - '!node_modules/sherpa-onnx-darwin-*/**'
-    - '!node_modules/sherpa-onnx-linux-*/**'
-    - '!node_modules/sherpa-onnx-win-ia32/**'
   icon: build/icon.png
-  publisherName: Mantu
+  # Do not hardcode a guessed publisher name. For signed builds electron-builder derives the exact
+  # common name from the Authenticode certificate and writes it into the updater configuration.
+  # The release workflow independently compares that certificate to WIN_CSC_EXPECTED_SUBJECT.
   target:
     - nsis      # → Metis-Setup-<version>.exe (installer)
     - portable  # → Metis-Portable-<version>.exe (no-install single exe)

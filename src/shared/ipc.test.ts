@@ -545,13 +545,12 @@ describe('DEFAULT_SHORTCUTS scroll defaults', () => {
 })
 
 describe('local AI IPC channel constants', () => {
-  it('defines the six exact new channel names without collisions', () => {
+  it('defines the five exact on-device local-AI channel names without collisions', () => {
     expect(IPC.localAiStatus).toBe('local-ai:status')
     expect(IPC.localTranscriptBegin).toBe('local-ai:transcript:begin')
     expect(IPC.localTranscriptAppend).toBe('local-ai:transcript:append')
     expect(IPC.localTranscriptResync).toBe('local-ai:transcript:resync')
     expect(IPC.localTranscriptEnd).toBe('local-ai:transcript:end')
-    expect(IPC.brainAnalyze).toBe('brain:analyze')
     const values = Object.values(IPC)
     expect(new Set(values).size).toBe(values.length)
   })

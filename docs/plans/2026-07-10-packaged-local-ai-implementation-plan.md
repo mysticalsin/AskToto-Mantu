@@ -1,6 +1,14 @@
 # Métis Packaged Local AI Implementation Plan
 
-> **For implementation:** execute this plan task by task with `superpowers:executing-plans`. For every behavior change, write and run the focused failing test before asking Claude Sonnet to write production code. Codex reviews every Sonnet patch, applies only the scoped diff, and reruns the focused and regression gates.
+> **Superseded 2026-07-13 — do not execute.** The accepted implementation keeps the shipped external
+> llama.cpp `llama-server`, bundles Qwen3.5 0.8B and its projector, supports DMG/ZIP plus NSIS and
+> portable EXE, and keeps ASCII `productName: Metis` with `CFBundleDisplayName: Métis`. See
+> `src/main/llm/local-runtime.ts`, `src/main/llm/local-models.ts`, `scripts/local-model-assets.mjs`, and
+> `electron-builder.yml`. The task list below is retained as historical context for the abandoned
+> `node-llama-cpp`/separate-vision-worker direction.
+
+> **Historical instruction (no longer active):** this plan originally called for task-by-task execution
+> with tests and reviews. It must not be resumed now that the runtime decision has been superseded.
 
 **Goal:** Ship Métis as a self-contained macOS Apple Silicon DMG/ZIP and Windows x64 NSIS application with bundled text, vision, ASR, and native runtime assets; low-latency local meeting assistance; and read-only, cited Mantu Intelligence analysis. Installed builds must never download model/runtime assets or silently upload local data after a local failure.
 

@@ -1,5 +1,6 @@
 /// <reference lib="webworker" />
 import { pipeline, env } from '@huggingface/transformers'
+import { shouldUseBundledAsr } from './asr-offline'
 
 // Model source + offline behavior.
 // Configured per-init based on whether bundled resources are present (reported by the main process).
@@ -9,12 +10,11 @@ import { pipeline, env } from '@huggingface/transformers'
 //                scheme authority is never touched. Verified against transformers.js@3.x source.
 // bundled=false: use transformers.js defaults — remote HF hub + cdn.jsdelivr.net WASM (proven path).
 //                This is the safe fallback for dev builds without running fetch-models.
-env.allowRemoteModels = true
+// A production worker starts fail-closed even before its first init message. Development can still use
+// the explicit remote fallback when the main process reports that local assets were not provisioned.
+env.allowRemoteModels = import.meta.env.DEV
 env.useBrowserCache = true
 // env.allowLocalModels and env.localModelPath are set conditionally inside the 'init' handler.
-// Snapshot the library's default WASM location before bundled mode overwrites it, so a bundled-load
-// failure can restore it for the remote retry below.
-const DEFAULT_WASM_PATHS = env.backends?.onnx?.wasm?.wasmPaths
 const MODEL_REVISION = 'main' // pin to a specific commit SHA in production to resist upstream drift/tampering
 
 // Engine tiers, best→fallback. WebGPU runs the large multilingual model at ~real-time on most machines;
@@ -40,8 +40,7 @@ async function hasWebGPU(): Promise<boolean> {
   }
 }
 
-// Report model-download progress to the UI so a ~800MB first-run fetch doesn't look frozen. The callback
-// fires per file; we surface the largest in-flight file's percentage (the dominant wait).
+// Development-only remote model progress. Packaged builds load local files and do not download models.
 function makeProgress(): (p: any) => void {
   let lastPct = -1
   return (p: any): void => {
@@ -57,7 +56,7 @@ function makeProgress(): (p: any) => void {
 
 async function load(quality: 'best' | 'fast', allowWebGpu: boolean): Promise<void> {
   // 'best' prefers WebGPU + the large multilingual model; 'fast' (and any fallback) uses the smaller model
-  // so transcription always comes up (a degraded engine beats none) and the download/compute stays light.
+  // so transcription always comes up (a degraded engine beats none) and compute stays light.
   const progress_callback = makeProgress()
   if (allowWebGpu && quality !== 'fast' && (await hasWebGPU())) {
     try {
@@ -88,9 +87,10 @@ self.onmessage = async (e: MessageEvent): Promise<void> => {
   if (msg.type === 'init') {
     if (asr || loading) return
     loading = true
+    const bundled = shouldUseBundledAsr(import.meta.env.PROD, msg.bundled)
     // Configure the model source based on whether bundled resources are present.
     // Must run before load() so the pipeline() call picks up the correct paths.
-    if (msg.bundled) {
+    if (bundled) {
       env.allowLocalModels = true
       env.localModelPath = 'asr-model://models'
       // Zero-download guarantee: forbid any fallback fetch to the HF CDN when a bundled model file is
@@ -102,25 +102,13 @@ self.onmessage = async (e: MessageEvent): Promise<void> => {
       if (env.backends?.onnx?.wasm) env.backends.onnx.wasm.wasmPaths = 'asr-model://ort/'
     } else {
       env.allowLocalModels = false // remote models + transformers.js default CDN wasm (proven path)
-      // allowRemoteModels stays true (set at module level) — this is the normal dev/remote path.
+      env.allowRemoteModels = true // this branch is reachable only in development (see bundled above)
     }
     try {
       // Standard installers deliberately ship the compact WASM fallback, not the 1.5 GiB WebGPU
       // model. Avoid a guaranteed missing-model attempt in that offline configuration.
       const requestedQuality = msg.quality === 'fast' ? 'fast' : 'best'
-      try {
-        await load(requestedQuality, !msg.bundled)
-      } catch (err) {
-        // Bundled (offline) load failed — a file the ASR_BUNDLED manifest check couldn't catch is missing
-        // or unreadable through asr-model://. Rather than bricking Listen for the whole session
-        // (allowRemoteModels=false makes this a hard failure), retry ONCE on the proven remote path.
-        if (!msg.bundled) throw err
-        post({ type: 'log', message: `bundled ASR load failed, retrying remote: ${String((err as Error)?.message || err)}` })
-        env.allowLocalModels = false
-        env.allowRemoteModels = true
-        if (env.backends?.onnx?.wasm) env.backends.onnx.wasm.wasmPaths = DEFAULT_WASM_PATHS
-        await load(requestedQuality, false)
-      }
+      await load(requestedQuality, !bundled)
       // Report honestly whenever 'best' was requested but didn't actually land on the WebGPU/large model
       // (no bundled model, no WebGPU adapter, or a WebGPU load failure) — callers must not infer quality
       // from the request alone, since it silently downgrades to WASM/whisper-base in every packaged build.
@@ -130,7 +118,12 @@ self.onmessage = async (e: MessageEvent): Promise<void> => {
       // locally at asr-model://…") is meaningless to a user mid-meeting — surface a human line instead,
       // and keep the raw detail in a log post for diagnostics.
       post({ type: 'log', message: `ASR load failed: ${String((err as Error)?.message || err)}` })
-      post({ type: 'error', message: 'Could not load the transcription model. Check your internet connection and try Listen again.' })
+      post({
+        type: 'error',
+        message: bundled
+          ? 'The bundled transcription files are missing or damaged. Reinstall Métis from a complete installer.'
+          : 'Could not load the transcription model. Check your internet connection and try Listen again.'
+      })
     } finally {
       loading = false
     }

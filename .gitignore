@@ -45,15 +45,22 @@ Video/
 graphify-out/
 docs/superpowers/
 
-# LGPL ffmpeg sidecar binaries: deliberately untracked — CI provisions them from the
-# ffmpeg-sidecar-v1 GitHub release (see docs/ENTERPRISE_RELEASE.md). Manifest hashes pin integrity.
-resources/ffmpeg/
+# LGPL FFmpeg sidecar binaries are provisioned by CI, but their reviewed manifest and license are
+# tracked here so a mutable GitHub release can never replace both a binary and its trust anchor.
+resources/ffmpeg/*
+!resources/ffmpeg/manifest.json
+!resources/ffmpeg/LICENSE.LGPL-2.1.txt
 
 # Pinned llama.cpp `llama-server` sidecar (Métis Local runtime) — populated by
 # `npm run fetch:llama` / scripts/fetch-llama-server.mjs. Archive sha256 pins integrity; no .gitkeep
 # needed since check-llama-sidecar.mjs hard-fails every packaging path before electron-builder ever
 # reads extraResources if this is missing (same guarantee resources/ffmpeg relies on above).
 resources/llama/
+
+# Qwen model payload bundled into every installer. Build scripts fetch and SHA-256 verify these files;
+# Git tracks only the directory marker and notices, never the ~764 MB weights themselves.
+resources/local-llm/models/
+resources/local-llm/**/*.part
 
 # scripts/prove-local-ttft.mjs's download-fallback cache (only populated when neither
 # ASKTOTO_PROVE_MODEL_DIR nor an existing userData download is found) — sha256-pinned, never commit.

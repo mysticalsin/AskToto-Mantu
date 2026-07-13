@@ -2,12 +2,10 @@
 
 Last verified against primary docs on 2026-07-06.
 
-**Current blocker (as of 2026-07-10): GitHub Actions runners on this repo are billing-blocked.**
-Every CI run — `build.yml` on every push AND `release.yml` on every tag — fails immediately with
-zero steps executed until org billing is fixed. None of the gates below (signing secrets, ffmpeg,
-sherpa, version parity) get a chance to run until that's resolved first. See
-`docs/MANTU-IT-REQUEST.md` for the ask and `docs/ENTERPRISE_RELEASE.md`'s Operator Setup for the
-full checklist this blocks.
+**External-state check required:** GitHub Actions billing was reported blocked on 2026-07-10, with
+runs ending before their first step. Re-check the current run before naming that as today's cause;
+repository code cannot prove mutable GitHub billing or secret state. See `docs/MANTU-IT-REQUEST.md`
+for the recorded ask and `docs/ENTERPRISE_RELEASE.md` for the operator checklist.
 
 Métis has two desktop distribution lanes:
 
@@ -21,7 +19,7 @@ The repo can enforce build gates and package shapes. It cannot create Tony's cer
 | Channel | Command | Hard gates |
 |---|---|---|
 | macOS direct | `npm run release` | `GH_TOKEN` or `GITHUB_TOKEN`, `CSC_LINK`, `CSC_KEY_PASSWORD`, `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD`, `APPLE_TEAM_ID` |
-| Windows direct | `npm run release:win` | `GH_TOKEN` or `GITHUB_TOKEN`, `WIN_CSC_LINK`, `WIN_CSC_KEY_PASSWORD` |
+| Windows direct | `npm run release:win` | `GH_TOKEN` or `GITHUB_TOKEN`, `WIN_CSC_LINK`, `WIN_CSC_KEY_PASSWORD`, `WIN_CSC_EXPECTED_SUBJECT` |
 | Mac App Store | `MAS_PROVISIONING_PROFILE=/path/profile.provisionprofile npm run release:mas` | `CSC_LINK`, `CSC_KEY_PASSWORD`, existing `MAS_PROVISIONING_PROFILE` file |
 | Microsoft Store | `npm run release:win:store` | AppX package builds locally; Microsoft signs Store-submitted packages after upload |
 
@@ -107,6 +105,7 @@ Environment:
 $env:GH_TOKEN="..."
 $env:WIN_CSC_LINK="C:\secure\MantuCodeSigning.pfx"
 $env:WIN_CSC_KEY_PASSWORD="..."
+$env:WIN_CSC_EXPECTED_SUBJECT="<exact certificate Subject or common name>"
 npm run release:win
 ```
 

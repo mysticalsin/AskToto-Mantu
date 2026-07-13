@@ -60,8 +60,8 @@ function printInstallHelp(files) {
   if (hasWin) console.log('  Windows: run Metis-Setup-*.exe. Use Metis-Portable-*.exe for no-install testing.')
   if (hasStore) console.log('  Store package: upload the .pkg/.appx/.msix through the relevant store dashboard.')
   if (hasMac && process.env.ASKTOTO_SIGN_INSTALLER !== '1') {
-    console.log('\nNote: local macOS installers are unsigned by default to avoid keychain prompts.')
-    console.log('Set ASKTOTO_SIGN_INSTALLER=1 or use npm run release for signed/notarized customer builds.')
+    console.log('\nNote: local macOS installers use a complete ad-hoc signature, not Developer ID/notarization.')
+    console.log('Set ASKTOTO_SIGN_INSTALLER=1 with signing inputs, or use the tagged release workflow for customer builds.')
   }
 }
 
@@ -83,21 +83,37 @@ if (existsSync(outDir)) rmSync(outDir, { recursive: true, force: true })
 
 run('node', ['scripts/check-no-dynamic-import.mjs'])
 if (requestedTargets.includes('mac')) run('node', ['scripts/check-xcode-tools.mjs'])
-for (const target of requestedTargets) run('node', ['scripts/check-ffmpeg-sidecar.mjs', target])
-for (const target of requestedTargets) run('node', ['scripts/check-sherpa-platform.mjs', target])
+for (const target of requestedTargets) {
+  run('node', ['scripts/check-ffmpeg-sidecar.mjs', target, target === 'mac' ? 'arm64' : 'x64'])
+}
+for (const target of requestedTargets) {
+  run('node', ['scripts/check-sherpa-platform.mjs', target, target === 'mac' ? 'arm64' : 'x64'])
+}
 for (const target of requestedTargets) run('node', ['scripts/fetch-llama-server.mjs', target])
 for (const target of requestedTargets) run('node', ['scripts/check-llama-sidecar.mjs', target])
+run('node', ['scripts/fetch-local-model.mjs'])
+run('node', ['scripts/check-local-model.mjs'])
 run('node', ['scripts/fetch-models.mjs'])
 run('npm', ['run', 'build:intelligence'])
 run('npm', ['run', 'build'])
 
 for (const t of requestedTargets) {
   if (t === 'mac') {
-    const args = ['electron-builder', '--mac', '--publish', 'never']
-    if (process.env.ASKTOTO_SIGN_INSTALLER !== '1') args.push('-c.mac.identity=null')
-    run('npx', args)
+    const args = ['electron-builder', '--mac', '--arm64', '--publish', 'never']
+    const options = {}
+    if (process.env.ASKTOTO_SIGN_INSTALLER !== '1') {
+      args.push('-c.mac.identity=null')
+      options.env = { ...process.env, ASKTOTO_ADHOC_SIGN: '1' }
+    }
+    run('npx', args, options)
+    run('node', ['scripts/check-packaged-runtime.mjs', 'mac', '--post-sign'])
+    run('node', ['scripts/check-update-metadata.mjs', 'release/latest-mac.yml'])
   }
-  if (t === 'win') run('npx', ['electron-builder', '--win', '--x64', '--publish', 'never'])
+  if (t === 'win') {
+    run('npx', ['electron-builder', '--win', '--x64', '--publish', 'never'])
+    run('node', ['scripts/check-packaged-runtime.mjs', 'win', '--post-sign'])
+    run('node', ['scripts/check-update-metadata.mjs', 'release/latest.yml'])
+  }
 }
 
 printInstallHelp(artifactFiles())

@@ -53,7 +53,7 @@ const settingsFor = (overrides: Partial<Settings['localLlm']> = {}): Settings =>
   ...DEFAULT_SETTINGS,
   localLlm: {
     enabled: true,
-    modelId: 'qwen3.5-2b',
+    modelId: 'qwen3.5-0.8b',
     useFor: { suggest: true, summary: true, vision: true },
     ...overrides
   }
@@ -148,10 +148,10 @@ describe('ensureLocalRuntimeStarted', () => {
   // one). Skipping start() here would silently break a model switch requested while "running".
   it('F2: still calls start() (idempotently) when the runtime is already running — the no-op/switch decision belongs to start() now', async () => {
     localRuntimeMock.getState.mockReturnValue('running')
-    await ensureLocalRuntimeStarted('qwen3.5-2b')
+    await ensureLocalRuntimeStarted('qwen3.5-0.8b')
     expect(localRuntimeMock.start).toHaveBeenCalledWith({
-      gguf: '/models/qwen3.5-2b/model.gguf',
-      mmproj: '/models/qwen3.5-2b/mmproj.gguf'
+      gguf: '/models/qwen3.5-0.8b/model.gguf',
+      mmproj: '/models/qwen3.5-0.8b/mmproj.gguf'
     })
   })
 
@@ -159,15 +159,15 @@ describe('ensureLocalRuntimeStarted', () => {
   // request against an already-running or already-starting sidecar SERVING THE SAME MODEL.
   it('F5: skips verifyIntegrity when already running the SAME model (a warm request)', async () => {
     localRuntimeMock.getState.mockReturnValue('running')
-    localRuntimeMock.getActiveModelKey.mockReturnValue('/models/qwen3.5-2b/model.gguf')
-    await ensureLocalRuntimeStarted('qwen3.5-2b')
+    localRuntimeMock.getActiveModelKey.mockReturnValue('/models/qwen3.5-0.8b/model.gguf')
+    await ensureLocalRuntimeStarted('qwen3.5-0.8b')
     expect(localModelsMock.verifyIntegrity).not.toHaveBeenCalled()
   })
 
   it('F5: skips verifyIntegrity when already starting the SAME model', async () => {
     localRuntimeMock.getState.mockReturnValue('starting')
-    localRuntimeMock.getActiveModelKey.mockReturnValue('/models/qwen3.5-2b/model.gguf')
-    await ensureLocalRuntimeStarted('qwen3.5-2b')
+    localRuntimeMock.getActiveModelKey.mockReturnValue('/models/qwen3.5-0.8b/model.gguf')
+    await ensureLocalRuntimeStarted('qwen3.5-0.8b')
     expect(localModelsMock.verifyIntegrity).not.toHaveBeenCalled()
     expect(localRuntimeMock.start).toHaveBeenCalled()
   })
@@ -179,22 +179,22 @@ describe('ensureLocalRuntimeStarted', () => {
   describe('G2: integrity re-verify on model switch', () => {
     it('switching models while RUNNING (active key differs from the requested model) re-verifies the NEW model even though state is not stopped', async () => {
       localRuntimeMock.getState.mockReturnValue('running')
-      localRuntimeMock.getActiveModelKey.mockReturnValue('/models/qwen3.5-2b/model.gguf') // A is active
-      await ensureLocalRuntimeStarted('qwen3.5-0.8b') // request switches to B
+      localRuntimeMock.getActiveModelKey.mockReturnValue('/models/stale-model/model.gguf')
+      await ensureLocalRuntimeStarted('qwen3.5-0.8b')
       expect(localModelsMock.verifyIntegrity).toHaveBeenCalledWith('qwen3.5-0.8b')
     })
 
     it('re-requesting the model that is ALREADY the active/running one does NOT re-verify — no redundant re-hash on warm same-model requests', async () => {
       localRuntimeMock.getState.mockReturnValue('running')
-      localRuntimeMock.getActiveModelKey.mockReturnValue('/models/qwen3.5-2b/model.gguf') // A is active
-      await ensureLocalRuntimeStarted('qwen3.5-2b') // request for the SAME model A
+      localRuntimeMock.getActiveModelKey.mockReturnValue('/models/qwen3.5-0.8b/model.gguf')
+      await ensureLocalRuntimeStarted('qwen3.5-0.8b')
       expect(localModelsMock.verifyIntegrity).not.toHaveBeenCalled()
     })
 
     it('switching models while STARTING (active key differs) also re-verifies the newly requested model', async () => {
       localRuntimeMock.getState.mockReturnValue('starting')
-      localRuntimeMock.getActiveModelKey.mockReturnValue('/models/qwen3.5-2b/model.gguf') // A is starting
-      await ensureLocalRuntimeStarted('qwen3.5-0.8b') // request switches to B mid-start
+      localRuntimeMock.getActiveModelKey.mockReturnValue('/models/stale-model/model.gguf')
+      await ensureLocalRuntimeStarted('qwen3.5-0.8b')
       expect(localModelsMock.verifyIntegrity).toHaveBeenCalledWith('qwen3.5-0.8b')
     })
   })

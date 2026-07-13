@@ -12,10 +12,11 @@ Everything user-visible says Métis.
 
 ## 1. Environment setup
 
-**Node version.** CI pins Node 20 (`.github/workflows/build.yml`, `actions/setup-node@v4` with
-`node-version: 20`). `package.json` has no `engines` field and the repo has no `.nvmrc`/`.node-version`
-— nothing enforces this locally. Use Node 20; a different major version risks a native-module ABI
-mismatch with `sherpa-onnx-node` (see §4).
+**Node version.** Use Node **20.19.2**. CI, `.nvmrc`, `.node-version`, and `package.json#engines`
+all pin the same version because `@dust-tt/client` requires it and native packaging should not drift
+between developer machines and runners. Run `nvm use` (or your version manager's equivalent) before
+installing dependencies; a different major version risks a native-module ABI mismatch with
+`sherpa-onnx-node` (see §4).
 
 **Clone and install:**
 
@@ -36,9 +37,9 @@ to work, each with a graceful fallback — know about them so you're not surpris
    Run `npm run build:intelligence` once if you want the "Mantu Intelligence" dashboard window to open
    in a dev run.
 
-2. **`resources/ffmpeg/` (the LGPL ffmpeg sidecar) is untracked** (`.gitignore`: `resources/ffmpeg/`
-   — "deliberately untracked... CI provisions them from the ffmpeg-sidecar-v1 GitHub release"). A fresh
-   clone has no ffmpeg binary at all. `bundledFfmpegPath()` (`src/main/ffmpeg-decoder.ts`) returns
+2. **The FFmpeg sidecar binaries are untracked.** `.gitignore` excludes the platform binaries below
+   `resources/ffmpeg/` while preserving the tracked `manifest.json` trust anchor and LGPL license. A
+   fresh clone has no FFmpeg binary. `bundledFfmpegPath()` (`src/main/ffmpeg-decoder.ts`) returns
    `null` when the platform/arch binary is missing — the app still runs; only the **import an audio
    file** feature silently can't decode. To get a binary locally for testing, see
    `docs/ENTERPRISE_RELEASE.md` → "ffmpeg Sidecar Provisioning", or copy one from a teammate's
@@ -47,12 +48,14 @@ to work, each with a graceful fallback — know about them so you're not surpris
    **only** invoked from `predist`/`dist`/`release*` scripts, never from `npm run dev` — dev never hard-fails
    on a missing sidecar.
 
-3. **ASR models are not fetched by `npm install`.** `npm run fetch-models` (`scripts/fetch-models.mjs`)
-   downloads ~700 MB of on-device transcription models (Whisper base + Parakeet TDT + ONNX runtime WASM)
+3. **Runtime models are not fetched by `npm install`.** `npm run fetch-models` (`scripts/fetch-models.mjs`)
+   provisions the reviewed on-device transcription payload (Whisper base + Parakeet TDT + ONNX runtime WASM)
    into `resources/models/`, `resources/asr/`, `resources/ort/`. It's idempotent (skips files already
-   present with non-zero size) and wired as `predist`/`prepack` so packaging always has them. Without
+   present before the final hash gate) and wired as `predist`/`prepack` so packaging always has them. Without
    running it, Listen still works in dev via a one-time CDN model download at runtime (see README's
-   "Known gaps"); run `npm run fetch-models` once if you want the bundled-model path locally.
+   "Known gaps"); run `npm run fetch-models` once if you want the bundled-model path locally. The
+   separate `npm run fetch:local-model` provisions the checksum-pinned Qwen3.5 0.8B payload used by
+   llama-server. Both are build-time operations; installed applications have no model downloader.
 
 **Secrets/config in dev vs. prod** (`src/main/secrets.ts`): in dev (`!app.isPackaged`) or when
 `ASKTOTO_LOCAL_KEYSTORE` is set, secrets use a FILE backend — a per-install AES-256-GCM key persisted to
@@ -183,7 +186,7 @@ workspace.
 
 - **Heaviest coverage:** `src/shared/**` (pure logic — `routing`, `redact`, `prompts`, `providers`,
   `quick-actions`, `wrapup`, `talkstats`, `transcript-filter`, `mars`, `perception`, `silence`, `ipc`)
-  and `src/main/**` (`store`, `auth`, `bootstrap`, `transcripts`, `recall`, `graphify`, `dustcli`,
+  and `src/main/**` (`store`, `auth`, `transcripts`, `recall`, `graphify`, `dustcli`,
   `license`, `metrics`, `ffmpeg-decoder`, `import-jobs`, `import-audio`, `cli`/`cli-win`, `llm/*`,
   `brain/*`, `mcp/*`).
 - **Renderer coverage is thin:** only `state.test.ts`, `components/RecallView.test.ts`, and a handful of
@@ -213,11 +216,15 @@ and **`docs/SIGNING.md`**. This section is only the map of what exists.
 
 ```bash
 npm run installers        # build the installer for this OS, print the installable files
-npm run dist               # macOS package (unsigned unless CSC_LINK/CSC_KEY_PASSWORD are set)
+npm run dist               # local macOS package (ad-hoc signed, not Developer ID/notarized)
 npm run dist:win            # Windows package (unsigned unless WIN_CSC_LINK/WIN_CSC_KEY_PASSWORD are set)
-npm run release             # macOS: full release pipeline incl. code-signing checks, tag-triggered in CI
-npm run release:win          # Windows: same, for the nsis + portable targets
+npm run release             # signed macOS build only; does not publish independently
+npm run release:win          # signed Windows build only; does not publish independently
 ```
+
+Only the `v<package-version>` tag workflow publishes. It waits for both native signed builds, verifies
+their final packaged runtime payloads, uploads them to one draft, and makes that release public only
+after the complete Mac + Windows asset set is present.
 
 Every `predist*`/`dist*`/`release*` script chains `check-ffmpeg-sidecar.mjs` and
 `check-sherpa-platform.mjs` before touching electron-builder — see §4 for what each checks.
@@ -243,12 +250,9 @@ native addons cannot load from inside an asar.
 - **`bidstackClient.test.ts` binds a real local TCP port** and will fail under network-sandboxed
   CI/agent environments that block socket binds (see §6). If `npm test` fails only on this file in such
   an environment, that's expected — it is not evidence of a regression.
-- **GitHub Actions is currently billing-blocked for this repo/org.** Every CI run (`build.yml` **and**
-  `release.yml`) fails immediately with zero steps executed until the org's Actions billing is fixed —
-  this sits upstream of every other CI gate described in this doc (typecheck/test/build, ffmpeg/sherpa
-  provisioning, signing-secret checks, version-parity, release-verify). None of those gates currently
-  get a chance to run at all. Run `npm run typecheck && npm test && npm run build` locally in the
-  meantime — see `docs/MANTU-IT-REQUEST.md` for the org-billing ask.
-- **No `engines` field / no `.nvmrc`.** CI hard-pins Node 20; nothing local enforces it (§1). A
-  different local Node major version can produce a native-module ABI mismatch with `sherpa-onnx-node`
-  with no clear error pointing at the version mismatch as the cause.
+- **GitHub Actions billing was reported blocked on 2026-07-10.** That is mutable external state, so
+  verify the current run before treating billing as the active cause of a failure. If a run still ends
+  before its first step, the repository gates have not executed; use the local verification commands
+  above and see `docs/MANTU-IT-REQUEST.md` for the recorded billing ask.
+- **Node is pinned exactly.** `.nvmrc`, `.node-version`, `package.json#engines`, and both workflows use
+  Node 20.19.2 (§1). Run `nvm use` before dependency or native-package work.
