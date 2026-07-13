@@ -19,6 +19,7 @@ export const ProviderIdSchema = z.enum([
   'claude-cli',
   'codex-cli',
   'gemini',
+  'local',
   'custom'
 ])
 
@@ -127,6 +128,16 @@ export const IPC = {
   permissionsRequestUpfront: 'permissions:requestUpfront',
   listeningState: 'listening:state',
   asrBundled: 'asr:bundled',
+  // Métis Local (on-device LLM) — model manifest/download/delete + a progress push event, mirroring the
+  // parakeetProgress/cliInstallProgress push-event shape. Metadata only — see LocalModelSummarySchema.
+  localModelsList: 'localModels:list',
+  localModelsDownload: 'localModels:download',
+  localModelsCancel: 'localModels:cancel',
+  localModelsDelete: 'localModels:delete',
+  localModelsProgress: 'localModels:progress',
+  // Live-meeting pre-warm (PLAN.md §4.4): a debounced transcript tail, fire-and-forget, so the sidecar's
+  // per-slot KV cache stays hot between real suggest requests. See LocalPrewarmPayloadSchema.
+  localPrewarm: 'local:prewarm',
   cliDetect: 'cli:detect',
   cliSetup: 'cli:setup',
   cliTest: 'cli:test',
@@ -739,6 +750,27 @@ export const BaseSettingsSchema = z.object({
   // tool names discovered at connect time.
   notebookLmConnected: z.boolean().default(false),
   notebookLmTools: z.array(z.string()).default([]),
+  // Métis Local — on-device LLM (llama-server sidecar; see main/llm/local-runtime.ts + local-models.ts).
+  // Off by default: it only helps once a multi-hundred-MB model is downloaded. `modelId` is one of
+  // LOCAL_MODELS' ids (main/llm/local-models.ts) — that manifest, not this schema, is the source of truth
+  // for which ids are valid; an unpinned/removed id here just degrades to "not ready" (see
+  // main/llm/local-routing.ts's safeIsDownloaded). `useFor` gates which in-scope task types (live
+  // suggestions / mid-meeting summaries / screenshot reads — the only modes Métis Local ever serves, see
+  // PLAN.md §4.3) actually route to it; all three default on so enabling the feature does something
+  // immediately.
+  localLlm: z
+    .object({
+      enabled: z.boolean().default(false),
+      modelId: z.string().default('qwen3.5-2b'),
+      useFor: z
+        .object({
+          suggest: z.boolean().default(true),
+          summary: z.boolean().default(true),
+          vision: z.boolean().default(true)
+        })
+        .default({ suggest: true, summary: true, vision: true })
+    })
+    .default({ enabled: false, modelId: 'qwen3.5-2b', useFor: { suggest: true, summary: true, vision: true } }),
   // Phone-home license activation against a self-hosted license server (see main/license.ts). Gate is
   // OFF by default: Tony has not deployed a server yet, and shipping this on by default would lock him
   // out of his own app at next launch. checkLicenseGrace() IS wired into a real startup gate (App.tsx's
@@ -776,6 +808,24 @@ export const PublicSettingsSchema = BaseSettingsSchema.extend({
    *  action routes to capture when this is true even if the active provider is text-only (e.g. Dust) —
    *  the main process fails over to the vision provider. Prevents the Dust-active screenshot dead-end. */
   visionAvailable: z.boolean().default(false),
+  /** Métis Local is enabled, the runtime binary is provisioned, the configured model is fully downloaded,
+   *  and the org allowlist (if any) permits 'local' — independent of any specific task. Derived by
+   *  main/llm/local-routing.ts's localBaseReady(), the single source of truth this mirrors (see also
+   *  localEligibleFor, which layers the per-request mode-scope check on top for live routing). */
+  localReady: z.boolean().default(false),
+  /** localReady AND the user's "Live suggestions" use-for toggle is on. */
+  localSuggestReady: z.boolean().default(false),
+  /** localReady AND the user's "Summaries" use-for toggle is on. */
+  localSummaryReady: z.boolean().default(false),
+  /** localReady AND the user's "Screenshots" use-for toggle is on. */
+  localVisionReady: z.boolean().default(false),
+  /** Whether the llama-server sidecar process is running RIGHT NOW — distinct from `localReady` (which is
+   *  eligibility to route there, not live process state; the sidecar starts lazily on first local request
+   *  and idle-stops after 15 min, see local-runtime.ts). Drives the Local AI card's status line only. */
+  localRuntimeRunning: z.boolean().default(false),
+  /** Precise sidecar lifecycle state — lets the Local AI card distinguish a normal idle 'stopped' from a
+   *  session-long 'unavailable' lockout (restart-budget exhausted, cleared only by relaunch). */
+  localRuntimeState: z.enum(['stopped', 'starting', 'running', 'unavailable']).default('stopped'),
   hasKeys: z.record(z.string(), z.boolean()),
   hasEncryption: z.boolean(),
   resolvedMeetingsFolder: z.string(),
@@ -792,6 +842,12 @@ export type SettingsPatch = Partial<
     PublicSettings,
     | 'hasApiKey'
     | 'providerReady'
+    | 'localReady'
+    | 'localSuggestReady'
+    | 'localSummaryReady'
+    | 'localVisionReady'
+    | 'localRuntimeRunning'
+    | 'localRuntimeState'
     | 'hasKeys'
     | 'hasEncryption'
     | 'resolvedMeetingsFolder'
@@ -881,6 +937,7 @@ export const DEFAULT_SETTINGS: Settings = {
   bidstackTools: [],
   notebookLmConnected: false,
   notebookLmTools: [],
+  localLlm: { enabled: false, modelId: 'qwen3.5-2b', useFor: { suggest: true, summary: true, vision: true } },
   licenseServerUrl: '',
   licenseKey: '',
   licenseCompanyName: '',
@@ -1228,6 +1285,64 @@ export interface NotebookLmInstallResult { ok: boolean; error?: string; needsTer
 export interface NotebookLmLoginResult { ok: boolean; error?: string }
 export interface NotebookLmConnectResult { ok: boolean; error?: string; tools?: string[]; needsSignIn?: boolean }
 export interface NotebookLmAskResult { ok: boolean; error?: string; text?: string; needsSignIn?: boolean }
+
+// ─── Métis Local (on-device LLM) — model manifest/download/delete (see main/llm/local-models.ts) ───────
+// ipc.ts is bundled into the renderer too, so it cannot import local-models.ts (touches node:fs/electron
+// at module scope) — these structurally mirror its exported shapes instead, same reasoning as the
+// NotebookLM mirror above. `.strict()` on the two OUTBOUND (main→renderer) schemas below is deliberate and
+// unlike every payload schema elsewhere in this file: those parse renderer→main input, where an unknown
+// extra key is harmless noise; these describe what main is ALLOWED to hand back to the renderer, so a
+// stray extra field (e.g. a future `path`/`port`/`apiKey` added to LocalModelSummary upstream) fails loud
+// here instead of silently crossing the IPC boundary. See ipc.local-models.test.ts's "no-leak" case.
+
+/** Renderer-safe manifest entry — never a path, port, or api key (main/llm/local-models.ts's manifest
+ *  law's public surface). Returned as an array by localModels:list. */
+export const LocalModelSummarySchema = z
+  .object({
+    id: z.string(),
+    label: z.string(),
+    minTotalRamGB: z.number(),
+    ggufBytes: z.number(),
+    mmprojBytes: z.number(),
+    totalBytes: z.number(),
+    downloaded: z.boolean()
+  })
+  .strict()
+export type LocalModelSummary = z.infer<typeof LocalModelSummarySchema>
+
+/** Payload for localModels:download / localModels:cancel / localModels:delete. */
+export const LocalModelIdPayloadSchema = z.object({ modelId: z.string().min(1).max(100) })
+export type LocalModelIdPayload = z.infer<typeof LocalModelIdPayloadSchema>
+
+/** Payload for local:prewarm — a debounced live-meeting transcript tail (PLAN.md §4.4's pre-warm path),
+ *  sent fire-and-forget from the renderer's instant-suggestions effect so the sidecar's per-slot KV cache
+ *  stays hot between real suggest requests. The renderer already clips this to the same ~6000-char tail
+ *  the suggest mode itself sends (llm/shared.ts's `.slice(-6000)`) before it ever reaches IPC; the 24000
+ *  cap here is defense-in-depth against a compromised/malfunctioning renderer, not the real bound. */
+export const LocalPrewarmPayloadSchema = z.object({ text: z.string().min(1).max(24_000) })
+export type LocalPrewarmPayload = z.infer<typeof LocalPrewarmPayloadSchema>
+
+/** Pushed via webContents.send while a download is in flight (localModels:progress), mirroring the
+ *  streamDelta/streamDone/streamError push-event pattern. Exactly one terminal shape (done or error) ends
+ *  a given modelId's download; any number of the tick shape may precede it. A discriminated union isn't
+ *  used because the three shapes share no common literal field — zod tries each member in turn, and since
+ *  their required fields never overlap the match is always unambiguous. */
+const LocalModelProgressDoneSchema = z.object({ modelId: z.string(), done: z.literal(true) }).strict()
+const LocalModelProgressErrorSchema = z.object({ modelId: z.string(), error: z.string().min(1) }).strict()
+const LocalModelProgressTickSchema = z
+  .object({
+    modelId: z.string(),
+    file: z.enum(['gguf', 'mmproj']),
+    received: z.number().nonnegative(),
+    total: z.number().positive()
+  })
+  .strict()
+export const LocalModelProgressEventSchema = z.union([
+  LocalModelProgressDoneSchema,
+  LocalModelProgressErrorSchema,
+  LocalModelProgressTickSchema
+])
+export type LocalModelProgressEvent = z.infer<typeof LocalModelProgressEventSchema>
 
 // ─── Licensing (phone-home activation against a self-hosted license server; see main/license.ts) ──────
 export const LicenseActivatePayloadSchema = z.object({

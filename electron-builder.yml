@@ -114,6 +114,17 @@ mac:
   target:
     - dmg
     - zip
+  # Pinned llama.cpp `llama-server` sidecar that powers Métis Local (on-device suggest/summary/vision) —
+  # mac binary only (win ships its own build below via win.extraResources), so a mac package never
+  # carries the other platform's ~150 MB of dead-weight binaries. Populated by `npm run fetch:llama`
+  # (scripts/fetch-llama-server.mjs) before packaging; local-runtime.ts resolves it at
+  # process.resourcesPath/llama/mac in a packaged build. No separate mac signing entry is needed:
+  # hardenedRuntime + entitlements below make electron-builder sign every executable/dylib it finds
+  # inside the packed .app, including this one — the same mechanism that already covers the ffmpeg
+  # sidecar above. electron-builder merges this list with the top-level extraResources.
+  extraResources:
+    - from: resources/llama/mac
+      to: llama/mac
   hardenedRuntime: true
   entitlements: build/entitlements.mac.plist
   entitlementsInherit: build/entitlements.mac.plist
@@ -162,6 +173,13 @@ win:
   target:
     - nsis      # → Metis-Setup-<version>.exe (installer)
     - portable  # → Metis-Portable-<version>.exe (no-install single exe)
+  # Pinned llama.cpp `llama-server` sidecar (win build only — vulkan + cpu variants; see mac.extraResources
+  # for why this is platform-scoped). Populated by `npm run fetch:llama` before packaging; local-runtime.ts
+  # resolves it at process.resourcesPath/llama/win/<vulkan|cpu> in a packaged build. electron-builder merges
+  # this list with the top-level extraResources.
+  extraResources:
+    - from: resources/llama/win
+      to: llama/win
   # ASCII artifact/store ids on purpose: é in an .exe filename or AppX identity invites codepage,
   # globbing, and store-validation trouble. The installed app still displays as Métis (shortcutName).
   artifactName: Metis-Setup-${version}.${ext}

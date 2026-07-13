@@ -1,6 +1,7 @@
 import {
   app,
   BrowserWindow,
+  crashReporter,
   globalShortcut,
   ipcMain,
   screen,
@@ -50,6 +51,8 @@ import {
   ImportDecoderChunkSchema,
   ImportDecoderCompleteSchema,
   ImportDecoderFailedSchema,
+  LocalModelIdPayloadSchema,
+  LocalPrewarmPayloadSchema,
   ProviderIdSchema,
   DEFAULT_SHORTCUTS,
   type HotkeyAction,
@@ -77,6 +80,16 @@ import {
 } from './store'
 import { createStream } from './llm'
 import { isTransient, nextBackoff } from './llm/retry'
+import * as localRuntime from './llm/local-runtime'
+import { localEligibleFor, localBaseReady, localPrewarmEligible, pickPrimaryProvider } from './llm/local-routing'
+import { ensureLocalRuntimeStarted } from './llm/local'
+import { buildPrewarmMessages } from './llm/prewarm'
+import {
+  listModels as listLocalModels,
+  downloadModel as downloadLocalModel,
+  cancelDownload as cancelLocalModelDownload,
+  deleteModel as deleteLocalModel
+} from './llm/local-models'
 import { resetDustConversation, prewarmDustConversation, isDustAuthError } from './llm/dust'
 import {
   enqueueIngest,
@@ -193,6 +206,14 @@ import {
   writePackagedSelftestResult
 } from './local-ai/packaged-selftest'
 import { installNetworkDeny, type NetworkDenyGuard } from '../local-ai-worker/network-deny.mjs'
+
+// LOCAL-ONLY native crash capture (zero telemetry — uploadToServer:false means minidumps land in
+// app.getPath('crashDumps') under userData and are NEVER transmitted anywhere; consistent with the
+// no-crashReporter-upload design note near the uncaught-exception dialog below). Without this, a native
+// Chromium CHECK crash (observed once: Electron 39.8.10 startup thread-pool SIGTRAP on the macOS 27
+// beta, no app frames in the stack) dies invisibly — the OS crash log is the only trace and nothing in
+// the app's own diagnostics can even count it. Must run before app ready.
+crashReporter.start({ uploadToServer: false })
 
 // Belt-and-braces with the per-meeting powerSaveBlocker below: keep Chromium itself from ever
 // deprioritizing the (hidden) renderer that hosts the transcription worker. Must run before app ready.
@@ -448,6 +469,12 @@ async function startImportDecoder(job: ImportJob): Promise<void> {
         await importJobs?.finishDecoding(job.jobId, totalChunks)
       },
       onError: async (error) => {
+        // A transcription failure inside onChunk (acceptDecodedChunk throwing) reaches here via the
+        // decoder's own uncaught-rejection path with the ffmpeg child still alive and blocked on
+        // write() (nothing is reading its stdout anymore) — cancel() sends SIGTERM so it can't leak as
+        // an orphaned OS process. Read from the map rather than closing over `decoder` directly: in the
+        // rare case spawn() itself throws synchronously, onError can fire before `decoder` is assigned.
+        ffmpegDecoders.get(job.jobId)?.cancel()
         ffmpegDecoders.delete(job.jobId)
         await importJobs?.failDecoder(job.jobId, error.message)
       }
@@ -658,21 +685,45 @@ function publicSettings(): PublicSettings {
           : s.provider === 'custom'
             ? /^https:\/\//i.test(s.customBaseUrl) && !!s.providerModels.custom
             : true))
+  // Métis Local readiness (PLAN.md §4.3) — task-independent base, then one per in-scope task. Derived by
+  // local-routing.ts's localBaseReady() so this snapshot and the live routing decision (attempt()/
+  // pickFailover below) can never drift apart.
+  const localReady = localBaseReady(s, allowed)
+  const localSuggestReady = localReady && s.localLlm.useFor.suggest
+  const localSummaryReady = localReady && s.localLlm.useFor.summary
+  const localVisionReady = localReady && s.localLlm.useFor.vision
   return {
     ...s,
     hasApiKey: hasApiKey(s.provider),
     providerReady,
-    visionReady: providerReady && activeDef.vision, // gates screen-ask so shots never hit a non-vision model
+    // gates screen-ask so shots never hit a non-vision model — ORs localVisionReady so a local-only setup
+    // (no cloud provider configured at all) still counts as vision-ready.
+    visionReady: (providerReady && activeDef.vision) || localVisionReady,
     // "Some configured provider can read images" — not necessarily the ACTIVE one. Mirrors the failover
     // candidate test (~1287): a keyed/CLI-connected provider with vision. Lets the renderer route a
     // screen-ask/quick-action to capture even when the active provider (e.g. Dust) is text-only, because
     // the main process transparently fails the vision turn over to this provider instead of dead-ending.
-    visionAvailable: (Object.keys(PROVIDERS) as ProviderId[]).some(
-      (p) =>
-        PROVIDERS[p].vision &&
-        (!allowed || allowed.includes(p)) &&
-        (PROVIDERS[p].kind === 'cli' ? !!s.cliConnected[p] : hasApiKey(p))
-    ),
+    // ORs localVisionReady for the same local-only-setup reason as visionReady above.
+    // Dust's vision capability depends on the selected agent's underlying model, not the static
+    // PROVIDERS.dust.vision flag (same distinction askStart's providerVisionOk makes) — consult
+    // dustSelectedAgentVision for Dust so a vision-capable Dust agent isn't hidden behind a stale flag.
+    visionAvailable:
+      (Object.keys(PROVIDERS) as ProviderId[]).some(
+        (p) =>
+          (p === 'dust' ? dustSelectedAgentVision(s.providerModels['dust']) : PROVIDERS[p].vision) &&
+          (!allowed || allowed.includes(p)) &&
+          (PROVIDERS[p].kind === 'cli' ? !!s.cliConnected[p] : hasApiKey(p))
+      ) || localVisionReady,
+    localReady,
+    localSuggestReady,
+    localSummaryReady,
+    localVisionReady,
+    // Live sidecar process state (distinct from localReady's eligibility check) — drives the Local AI
+    // card's status line only. localRuntimeState is the precise tri-state (stopped/starting/running/
+    // unavailable) so the card can distinguish a normal idle stop from a session-long 'unavailable'
+    // lockout; localRuntimeRunning is kept for existing boolean consumers.
+    localRuntimeRunning: localRuntime.isRunning(),
+    localRuntimeState: localRuntime.getState(),
     hasKeys: hasKeysMap(),
     hasEncryption: encryptionAvailable(),
     resolvedMeetingsFolder: resolveMeetingsFolder(s),
@@ -753,10 +804,20 @@ function createWindow(): void {
     win.webContents.on('console-message', (_e, level, message, line, sourceId) => {
       if (level >= 2) console.log(`[renderer] ${message}  (${sourceId}:${line})`)
     })
-    win.webContents.on('render-process-gone', (_e, details) => {
-      console.log(`[renderer-gone] reason=${details.reason} exitCode=${details.exitCode}`)
-    })
   }
+  // The BrowserWindow survives a renderer crash (GPU/compositor crash, OOM in the in-renderer ASR
+  // worker) — only its content dies, so `win` stays non-null while hotkeys/tray silently no-op into the
+  // dead renderer and the overlay sits permanently blank. Previously this was only logged via
+  // console.log gated behind ASKTOTO_DEBUG_RENDERER (never in a packaged build, never persisted).
+  // Persist it like onFatal does for a main-process crash, then reload the same content so the overlay
+  // recovers instead of hanging forever.
+  win.webContents.on('render-process-gone', (_e, details) => {
+    mainLog.error(`[renderer-gone] reason=${details.reason} exitCode=${details.exitCode}`)
+    auditLog('app.crash', { kind: 'render-process-gone', reason: details.reason, exitCode: details.exitCode })
+    if (!win || win.isDestroyed()) return
+    if (process.env['ELECTRON_RENDERER_URL']) win.loadURL(process.env['ELECTRON_RENDERER_URL'])
+    else win.loadFile(join(__dirname, '../renderer/index.html'))
+  })
   // Dev-only: screenshot ONLY this window (no desktop) for verification. Privacy-safe.
   if (process.env.ASKTOTO_SHOT) {
     win.webContents.once('did-finish-load', () => {
@@ -1127,7 +1188,12 @@ const shortcutActions: Record<string, () => void> = {
   'scroll-up': () => moveBy(0, -60),
   'scroll-down': () => moveBy(0, 60),
   'scroll-left': () => moveBy(-60, 0),
-  'scroll-right': () => moveBy(60, 0)
+  'scroll-right': () => moveBy(60, 0),
+  // 'settings' is in HOTKEY_ACTIONS (bindable in Settings → Keyboard shortcuts, per DEFAULT_SHORTCUTS'
+  // "no global shortcut by default; opened from bar or tray" comment) but was missing here, so a combo
+  // the user recorded for it was silently never registered with the OS. The tray's own 'Settings…' item
+  // already calls sendHotkey('settings') directly (bypassing globalShortcut) — reuse the same handler.
+  settings: () => sendHotkey('settings')
 }
 
 function resolveShortcut(action: HotkeyAction, user: Record<string, string>): string {
@@ -1144,14 +1210,27 @@ function registerShortcuts(): void {
   globalShortcut.unregisterAll()
   shortcutFailures = []
   const user = getSettings().shortcuts ?? {}
+  // Electron's globalShortcut.register() returns true (success) even when the accelerator is already
+  // claimed by a PREVIOUS action in this same loop — it just silently replaces that action's callback,
+  // which is not a register() failure and so would never reach shortcutFailures below. Track claimed
+  // accelerators ourselves so the second action loses deterministically and visibly instead.
+  const claimedBy = new Map<string, string>()
   for (const [action, fn] of Object.entries(shortcutActions)) {
     const accel = resolveShortcut(action as HotkeyAction, user)
     if (!accel) continue
+    const dupeOf = claimedBy.get(accel)
+    if (dupeOf) {
+      mainLog.warn(`[shortcuts] duplicate accelerator for ${action}: ${accel} (already bound to ${dupeOf})`)
+      shortcutFailures.push({ action, accel })
+      continue
+    }
     try {
       const ok = globalShortcut.register(accel, fn)
       if (!ok) {
         mainLog.warn(`[shortcuts] failed to register ${action}: ${accel}`)
         shortcutFailures.push({ action, accel })
+      } else {
+        claimedBy.set(accel, action)
       }
     } catch (e) {
       mainLog.warn(`[shortcuts] invalid accelerator for ${action}: ${accel}`, e)
@@ -2005,6 +2084,81 @@ function registerIpc(): void {
     return parakeetTranscribe(p.samples)
   })
 
+  // --- Métis Local (on-device LLM): model manifest + download/verify/delete (see llm/local-models.ts) ---
+  // Renderer-safe metadata only — never a path, port, or api key. The sidecar itself is started lazily by
+  // the 'local' provider strategy (llm/local.ts) on first eligible request, not from here.
+  ipcMain.handle(IPC.localModelsList, (e) => {
+    assertMainWindow(e)
+    return listLocalModels()
+  })
+
+  ipcMain.handle(IPC.localModelsDownload, async (e, payload: unknown) => {
+    assertMainWindow(e)
+    if (!requireAuth()) return { ok: false, error: 'Sign in with your Mantu account first.' }
+    const parsed = LocalModelIdPayloadSchema.safeParse(payload)
+    if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message || 'Invalid model id.' }
+    const { modelId } = parsed.data
+    try {
+      await downloadLocalModel(modelId, (p) => {
+        win?.webContents.send(IPC.localModelsProgress, {
+          modelId: p.modelId,
+          file: p.file,
+          received: p.received,
+          total: p.total
+        })
+      })
+      win?.webContents.send(IPC.localModelsProgress, { modelId, done: true })
+      return { ok: true }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      win?.webContents.send(IPC.localModelsProgress, { modelId, error: message })
+      return { ok: false, error: message }
+    }
+  })
+
+  // Cancel is a pause, not a wipe (cancelDownload leaves the partial .part file for a later resume) — see
+  // local-models.ts's own doc comment. The in-flight downloadModel() promise above rejects as a result,
+  // which sends its own progress error event; the renderer distinguishes a user-initiated cancel from a
+  // real failure by message text rather than needing a second event shape here.
+  ipcMain.handle(IPC.localModelsCancel, (e, payload: unknown) => {
+    assertMainWindow(e)
+    const parsed = LocalModelIdPayloadSchema.safeParse(payload)
+    if (parsed.success) cancelLocalModelDownload(parsed.data.modelId)
+  })
+
+  ipcMain.handle(IPC.localModelsDelete, (e, payload: unknown) => {
+    assertMainWindow(e)
+    const parsed = LocalModelIdPayloadSchema.safeParse(payload)
+    if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message || 'Invalid model id.' }
+    try {
+      deleteLocalModel(parsed.data.modelId)
+      return { ok: true }
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) }
+    }
+  })
+
+  // Live-meeting pre-warm (PLAN.md §4.4): a debounced transcript tail from the renderer's
+  // instant-suggestions effect, fire-and-forget, so the sidecar's per-slot KV cache stays hot between
+  // real suggest requests. Best-effort by design — NEVER throws to the renderer; a failed prewarm just
+  // means the next real suggest pays full cost (same fallback local-runtime.ts's own prewarm() already
+  // assumes). No audit event: this isn't a new lifecycle transition, and ensureLocalRuntimeStarted already
+  // routes through local-runtime.ts's own start()/audit calls when it actually spins the sidecar up.
+  ipcMain.handle(IPC.localPrewarm, (e, payload: unknown) => {
+    assertMainWindow(e)
+    const parsed = LocalPrewarmPayloadSchema.safeParse(payload)
+    if (!parsed.success) return
+    const s = getSettings()
+    if (!localPrewarmEligible(s, getAllowedProviders())) return
+    localRuntime.markActivity()
+    void ensureLocalRuntimeStarted(s.localLlm.modelId)
+      // Warm the EXACT same [system, user] prefix a real suggest request sends (F4 hardening) — built by
+      // the SAME helper (llm/prewarm.ts) a unit test cross-checks against buildSystem()/userText() directly,
+      // so any future drift between the live suggest path and what prewarm warms fails a test.
+      .then(() => localRuntime.prewarm(buildPrewarmMessages(parsed.data.text, s)))
+      .catch((err) => mainLog.warn('[local-prewarm] failed', err instanceof Error ? err.message : String(err)))
+  })
+
   // --- Screen capture ---
   ipcMain.handle(IPC.captureScreen, async (event) => {
     assertMainWindow(event)
@@ -2072,9 +2226,14 @@ function registerIpc(): void {
           : 0
       )
       return (
-        order.find(
-          (p) =>
-            !tried.includes(p) &&
+        order.find((p) => {
+          if (tried.includes(p)) return false
+          // Métis Local replaces the generic key/model/vision checks with localEligibleFor — the SAME
+          // mode-scope gate the ineligible chain below enforces, so local can never become a failover
+          // target for an out-of-scope mode (answer/recap/think/deep) even though it's a keyless,
+          // always-vision-capable entry in PROVIDERS (PLAN.md §4.3: "enforced at BOTH gates").
+          if (p === 'local') return localEligibleFor(req, s, tier, allowed)
+          return (
             (!allowed || allowed.includes(p)) &&
             (PROVIDERS[p].kind === 'cli' ? !!s.cliConnected[p] : getApiKey(p).length > 0) &&
             (req.mode !== 'vision' || providerVisionOk(p)) &&
@@ -2084,7 +2243,8 @@ function registerIpc(): void {
             // default-configured CLI provider can never be selected.
             (PROVIDERS[p].kind === 'cli' ||
               !!resolveModelTier(p, s.providerModels, s.providerModelsThinking, tier, s.providerModelsDeep))
-        ) ?? null
+          )
+        }) ?? null
       )
     }
     // Find the next eligible keyed provider not yet tried and start it — for failover when the primary
@@ -2112,12 +2272,19 @@ function registerIpc(): void {
         else if (!failover(attempted.concat(provider))) win?.webContents.send(IPC.streamError, { id: req.id, message: 'No approved provider could answer.' })
         return
       }
-      const key = getApiKey(provider)
+      // Métis Local is keyless: its per-session sidecar key lives only in local-runtime.ts memory, never
+      // on disk (getApiKey('local') always resolves empty, by design — see store.ts's ENV_VAR entry).
+      const key = provider === 'local' ? localRuntime.sessionKey() : getApiKey(provider)
       const tier = routeTier(req, s.thinkingMode)
+      // Métis Local's "model" is the local-models.ts manifest id the sidecar loads — settings.localLlm.
+      // modelId, NOT the generic per-provider tier resolution (which would otherwise fall back to
+      // PROVIDERS.local.fastModel regardless of what the user actually configured/downloaded).
       let model =
-        req.agentOverride && provider === 'dust'
-          ? req.agentOverride
-          : resolveModelTier(provider, s.providerModels, s.providerModelsThinking, tier, s.providerModelsDeep)
+        provider === 'local'
+          ? s.localLlm.modelId
+          : req.agentOverride && provider === 'dust'
+            ? req.agentOverride
+            : resolveModelTier(provider, s.providerModels, s.providerModelsThinking, tier, s.providerModelsDeep)
       // Guardrail (per Tony): CLI is Sonnet-only, Anthropic base/think are pinned to Haiku/Sonnet — both
       // regardless of what routeTier or a user's providerModels override picked. Opus stays reachable only
       // through the Graph pipeline (brain/ingest.ts, graphify.ts), which never calls this function.
@@ -2133,19 +2300,28 @@ function registerIpc(): void {
       ) {
         model = (s.providerModels['dust'] || '').trim() || model
       }
-      const ineligible = def.kind === 'cli' && !s.cliConnected[provider]
-        ? `${def.label} is not connected. Open Settings → CLI Integration to set it up.`
-        : def.kind !== 'cli' && !key
-        ? `No API key for ${def.label}. Open Settings (gear) and add it.`
-        : def.kind !== 'cli' && !model
-          ? provider === 'dust'
-            ? `No ${tier === 'think' ? 'thinking' : 'base'} Dust agent set. Open Settings → Connect Dust and pick your agents.`
-            : `No model set for ${def.label}. Pick a model in Settings.`
-          : req.mode === 'vision' && !providerVisionOk(provider)
-            ? `${def.label} can't read screenshots. Switch to Claude or GPT in Settings, or ask without a screen capture.`
-            : provider === 'dust' && !s.dustWorkspaceId
-              ? 'Add your Dust workspace ID in Settings → AI → Dust setup.'
-              : ''
+      // Métis Local replaces the ENTIRE generic key/model/vision chain below with localEligibleFor — the
+      // same mode-scope + readiness gate the settings snapshot and pickFailover's candidate filter use, so
+      // an out-of-scope request (answer/recap/think/deep, or a providerOverride:'local' forcing one) can
+      // never actually route to the local provider (PLAN.md §4.3).
+      const ineligible =
+        provider === 'local'
+          ? localEligibleFor(req, s, tier, allowed)
+            ? ''
+            : 'Métis Local handles live suggestions, summaries and screenshots — this request type uses your cloud provider.'
+          : def.kind === 'cli' && !s.cliConnected[provider]
+            ? `${def.label} is not connected. Open Settings → CLI Integration to set it up.`
+            : def.kind !== 'cli' && !key
+              ? `No API key for ${def.label}. Open Settings (gear) and add it.`
+              : def.kind !== 'cli' && !model
+                ? provider === 'dust'
+                  ? `No ${tier === 'think' ? 'thinking' : 'base'} Dust agent set. Open Settings → Connect Dust and pick your agents.`
+                  : `No model set for ${def.label}. Pick a model in Settings.`
+                : req.mode === 'vision' && !providerVisionOk(provider)
+                  ? `${def.label} can't read screenshots. Switch to Claude or GPT in Settings, or ask without a screen capture.`
+                  : provider === 'dust' && !s.dustWorkspaceId
+                    ? 'Add your Dust workspace ID in Settings → AI → Dust setup.'
+                    : ''
       if (ineligible) {
         // Vision turn, but the active provider can't read images (e.g. Dust agents). Transparently fail
         // over to a configured vision-capable provider (Claude/GPT) so a user who captured their screen
@@ -2269,9 +2445,15 @@ function registerIpc(): void {
     // (e.g. cascading a recap/follow-up/Spotlight-Ref request into Dust) regardless of what's globally active.
     const cliPrimary =
       s.providerPriority === 'cli'
-        ? (['claude-cli', 'codex-cli'] as ProviderId[]).find((p) => s.cliConnected[p])
+        ? (['claude-cli', 'codex-cli'] as ProviderId[]).find(
+            (p) => s.cliConnected[p] && (!allowed || allowed.includes(p))
+          )
         : undefined
-    attempt(req.providerOverride ?? cliPrimary ?? s.provider, [])
+    // Métis Local outranks cliPrimary (but never providerOverride): an in-scope suggest/summary/vision ask
+    // routes to the on-device model first whenever it's eligible right now (PLAN.md §4.3 "Routing
+    // precedence, explicit") — see local-routing.ts's pickPrimaryProvider for the exact precedence rule.
+    const localPrimaryEligible = localEligibleFor(req, s, routeTier(req, s.thinkingMode), allowed)
+    attempt(pickPrimaryProvider(req.providerOverride, localPrimaryEligible, cliPrimary, s.provider), [])
     } catch (e) {
       win?.webContents.send(IPC.streamError, {
         id,
@@ -3354,6 +3536,25 @@ app.on('window-all-closed', () => {
 })
 
 app.on('will-quit', () => {
-  globalShortcut.unregisterAll()
+  // will-quit can fire BEFORE the app ever finished becoming ready — a quit requested during the async
+  // startup sequence, an automation/Playwright app.close(), or an early abort. Calling globalShortcut in
+  // that window throws "globalShortcut cannot be used before the app is ready" as an UNCAUGHT exception
+  // (the observed crash), and there is nothing registered to unregister anyway — so gate it on isReady().
+  // Each cleanup step is independent (its own try): a throw in one must never skip the sidecar kill
+  // below, because an orphaned llama-server outliving the app the user just quit is the worse failure.
+  if (app.isReady()) {
+    try {
+      globalShortcut.unregisterAll()
+    } catch (e) {
+      mainLog.warn('[will-quit] globalShortcut.unregisterAll failed', e)
+    }
+  }
   if (notifTimer) clearInterval(notifTimer)
+  // Kill the llama-server sidecar synchronously (SIGKILL, F3 hardening) — without this an on-device
+  // suggest/summary/vision sidecar could outlive the app the user just quit.
+  try {
+    localRuntime.stop()
+  } catch (e) {
+    mainLog.warn('[will-quit] localRuntime.stop failed', e)
+  }
 })

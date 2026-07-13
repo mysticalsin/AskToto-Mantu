@@ -82,6 +82,14 @@ export function streamOpenAI(opts: StreamOptions): StreamHandle {
         params.max_tokens = maxTokens
       }
       if (!fixedTemperature) params.temperature = opts.temperature
+      // llama-server per-slot prompt-cache pinning (PLAN.md §4.3) — an explicit two-key copy, never a
+      // spread, so this narrow carrier can never smuggle extra fields (messages/model/stream) through it.
+      // Only main/llm/local.ts ever sets llamaSlotOptions; every other caller leaves it undefined, so this
+      // is a no-op and their request bodies stay byte-identical to before this field existed.
+      if (opts.llamaSlotOptions) {
+        if (opts.llamaSlotOptions.id_slot !== undefined) params.id_slot = opts.llamaSlotOptions.id_slot
+        if (opts.llamaSlotOptions.cache_prompt !== undefined) params.cache_prompt = opts.llamaSlotOptions.cache_prompt
+      }
 
       const stream = (await client.chat.completions.create(params, {
         signal: controller.signal

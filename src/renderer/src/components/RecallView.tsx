@@ -909,7 +909,15 @@ export function RecallView({
                 />
               </>
             ) : job.state === 'done' && job.recapError && job.file ? (
-              <TextButton onClick={() => openMeeting(job.file!)} title="Open this meeting and retry its summary">Open</TextButton>
+              <>
+                <TextButton onClick={() => openMeeting(job.file!)} title="Open this meeting and retry its summary">Open</TextButton>
+                <TextButton
+                  icon={X}
+                  ariaLabel="Dismiss this summary notice"
+                  onClick={() => dismissImport(job.jobId)}
+                  title="Dismiss — the transcript is already saved"
+                />
+              </>
             ) : job.state !== 'done' ? (
               <TextButton onClick={() => cancelImport(job.jobId)} title="Cancel this import">Cancel</TextButton>
             ) : null}

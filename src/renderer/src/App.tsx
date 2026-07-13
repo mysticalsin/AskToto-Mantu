@@ -173,6 +173,9 @@ export function App(): JSX.Element {
   // Transcript watermark of the last speculative run — freshness = the conversation hasn't moved on
   // (≤2 new lines) since the suggestion was generated.
   const specWatermarkRef = useRef({ lineCount: 0, at: 0 })
+  // Watermark for the Métis Local pre-warm ping (PLAN.md §4.4) — same {lineCount, at} idiom as
+  // specWatermarkRef above, on its own ~5s cadence independent of the 15s shadow-suggestion one below.
+  const prewarmWatermarkRef = useRef({ lineCount: 0, at: 0 })
 
   const onQuestionRef = useRef<(l: TranscriptLine) => void>(() => {})
   // Canonical people/account names for the ASR entity-casing bias (see lib/entity-casing.ts). Fetched
@@ -260,6 +263,11 @@ export function App(): JSX.Element {
     startedAt: number
     confidential: boolean
   } | null>(null)
+  // Surfaced when opening a past meeting fails (recallRead ok:false — unreadable/undecrypted file). Every
+  // open path (History row, Settings' Mantu Intelligence list, Review's own Recent-meetings/Related panel)
+  // funnels through openPastMeeting, so a single piece of state here covers all of them. Cleared at the
+  // start of every open attempt so a stale banner never survives a subsequent success.
+  const [openMeetingError, setOpenMeetingError] = useState<string | null>(null)
   // The saved-meeting file an in-flight recapGen run will persist its result to — set by
   // generateSavedRecap, cleared once the persist-on-settle effect below has written (or given up on) it.
   const [recapGenTarget, setRecapGenTarget] = useState<{ file: string } | null>(null)
@@ -413,6 +421,13 @@ export function App(): JSX.Element {
   const answerStreaming = ask.answer?.streaming ?? false
   const answerText = ask.answer?.text ?? ''
   const answerError = ask.answer?.error ?? null
+  // The most recent doSave() call below, so discardMeeting can AWAIT an in-flight autosave before deciding
+  // whether there's a file to delete. Without this, "Disregard" clicked while doSave is still mid IPC round
+  // trip reads savedPath as still-null, skips the delete, and the save that lands moments later persists a
+  // meeting the user explicitly asked NOT to keep, with no further indication it happened. Reset to null in
+  // startListen() for every new meeting, so a stale prior meeting's already-settled promise can never be
+  // read as if it belonged to the current one.
+  const savingPromiseRef = useRef<Promise<string | null> | null>(null)
   useEffect(() => {
     if (view !== 'review') return
     // Persist the meeting once the recap attempt has SETTLED — whether it produced a summary or failed.
@@ -429,7 +444,7 @@ export function App(): JSX.Element {
 
     const title = defaultMeetingTitle(listen.lines, mode)
 
-    const doSave = async (): Promise<void> => {
+    const doSave = async (): Promise<string | null> => {
       // Acquire the in-flight lock only when the save actually starts — never at effect time. On the
       // retry branch the real save is deferred behind a backoff timer; if that timer is cancelled
       // (view change / reset) before it fires, a lock taken early would never release and would wedge
@@ -449,22 +464,26 @@ export function App(): JSX.Element {
         setSavedPath(r.path)
         setSaveError(null)
         setSaveAttempts(0)
+        return r.path
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e)
         setSaveError(msg)
         if (saveAttempts < MAX_SAVE_RETRIES) {
           setSaveAttempts((c) => c + 1)
         }
+        return null
       } finally {
         savingRef.current = false
       }
     }
 
     if (saveAttempts === 0) {
-      void doSave()
+      savingPromiseRef.current = doSave()
     } else {
       const delay = Math.min(1000 * 2 ** (saveAttempts - 1), 30000)
-      const t = setTimeout(() => void doSave(), delay)
+      const t = setTimeout(() => {
+        savingPromiseRef.current = doSave()
+      }, delay)
       return () => clearTimeout(t)
     }
   }, [view, answerStreaming, answerText, answerError, listen.lines, mode, saveAttempts])
@@ -569,7 +588,8 @@ export function App(): JSX.Element {
   // auto-answer when the other person asks a question (debounce = suggestEverySec)
   onQuestionRef.current = (_line: TranscriptLine): void => {
     if (!(settings?.autoSuggest ?? true)) return
-    if (!settings?.providerReady) return // no provider → don't auto-fire a request that would just error
+    // no provider → don't auto-fire a request that would just error (a local-only setup counts too)
+    if (!settings?.providerReady && !settings?.localSuggestReady) return
     if (suggest.answer?.streaming) return
     const now = Date.now()
     const everyMs = (settings?.suggestEverySec ?? 15) * 1000
@@ -594,6 +614,10 @@ export function App(): JSX.Element {
   }, [listen.listening])
   useEffect(() => {
     if (!listen.listening || honkedRef.current) return
+    // providerReady only — NOT localSuggestReady. The honk always fires suggest.run({ mode: 'answer', ... })
+    // (buildNoDecisionPrompt is deliberately answer-shaped, a free-form nudge, not a suggest-card prompt),
+    // and Métis Local never serves 'answer' mode. Gating on localSuggestReady here would let a local-only
+    // setup pass this check and then hit the same provider error the fired request was supposed to avoid.
     if (!(settings?.autoSuggest ?? true) || !settings?.providerReady) return
     if (suggest.answer?.streaming) return
     const verdict = detectNoDecisionEnding(listen.lines, meetingStartRef.current, Date.now())
@@ -617,11 +641,31 @@ export function App(): JSX.Element {
   // Single readiness gate for EVERY user-initiated request entry point (not just submit). When the
   // active provider has no key / no CLI connection, route the user to Settings instead of firing an
   // LLM request that fails reactively with a red stream error. Returns false → the caller must bail.
-  const requireProvider = useCallback((): boolean => {
-    if (settings?.providerReady) return true
-    openSettings('ai', 'Add an API key or connect a provider here to ask questions.')
-    return false
-  }, [settings?.providerReady, openSettings])
+  // `local` names the in-scope Métis Local task this call site is ABOUT to fire (suggest/summary/vision)
+  // so a local-only setup (no cloud provider configured at all) answers instead of bouncing to Settings —
+  // omitted by callers whose request can't route to Métis Local (answer/recap/mixed-mode entry points).
+  const requireProvider = useCallback(
+    (local?: 'suggest' | 'summary' | 'vision'): boolean => {
+      const localReady =
+        local === 'suggest'
+          ? settings?.localSuggestReady
+          : local === 'summary'
+            ? settings?.localSummaryReady
+            : local === 'vision'
+              ? settings?.localVisionReady
+              : false
+      if (settings?.providerReady || localReady) return true
+      openSettings('ai', 'Add an API key or connect a provider here to ask questions.')
+      return false
+    },
+    [
+      settings?.providerReady,
+      settings?.localSuggestReady,
+      settings?.localSummaryReady,
+      settings?.localVisionReady,
+      openSettings
+    ]
+  )
 
   // Expand the floating control mini-pill back to the full widget. Hotkeys/Escape call this before
   // acting so a request can never fire into an unmounted Bar (invisible work / wasted spend).
@@ -635,7 +679,7 @@ export function App(): JSX.Element {
       prompt: string,
       opts?: { label?: string; kind?: 'answer' | 'factcheck'; history?: ChatTurn[]; record?: string }
     ): Promise<string | null> => {
-      if (!requireProvider()) return null
+      if (!requireProvider('vision')) return null
       if (capturing) return null
       // Mount the Answer view + the "capturing" busy state as ONE transition. `capturing` (not just
       // `view`) drives the first mount of the lazy <Answer> chunk in the render branch below, and React
@@ -839,7 +883,11 @@ export function App(): JSX.Element {
     }
     // The engineered verdict prompt is the `prompt` (sent to the model, never shown); `label` is the
     // clean claim the UI displays; `kind:'factcheck'` renders the color-coded verdict card.
-    if (listen.listening) {
+    // route.transport is already 'text' here (local-error/screen handled above), which chooseQuickActionRoute
+    // decides from hasInput || hasTranscript — so a leftover transcript from a just-ended meeting (claim
+    // empty, listen.listening already false) must still fire from it instead of falling through both
+    // branches below into a silent no-op.
+    if (listen.listening || (!claim && transcript.trim())) {
       const lastThem = [...listen.lines].reverse().find((l) => l.speaker === 'them')?.text
       const c = claim || lastThem || transcript
       ask.run({
@@ -869,7 +917,7 @@ export function App(): JSX.Element {
   ])
 
   const answerNow = useCallback(() => {
-    if (!requireProvider()) return
+    if (!requireProvider('suggest')) return
     setView('copilot')
     setCollapsed(false)
     suggest.run({ mode: 'suggest', transcript: listen.text() })
@@ -880,7 +928,12 @@ export function App(): JSX.Element {
   //    spoken and the last speculative run is ≥15s old — so the button click can paint instantly.
   //    Never fires while anything visible is streaming (the visible work always wins the bandwidth).
   useEffect(() => {
-    if (!listen.listening || settings?.instantSuggestions === false || !settings?.providerReady) return
+    if (
+      !listen.listening ||
+      settings?.instantSuggestions === false ||
+      (!settings?.providerReady && !settings?.localSuggestReady)
+    )
+      return
     const lines = listen.lines
     if (!lines.length || lines[lines.length - 1].speaker !== 'them') return
     const w = specWatermarkRef.current
@@ -888,7 +941,44 @@ export function App(): JSX.Element {
     if (ask.answer?.streaming || suggest.answer?.streaming || speculative.answer?.streaming) return
     specWatermarkRef.current = { lineCount: lines.length, at: Date.now() }
     speculative.run({ mode: 'suggest', transcript: listen.text() })
-  }, [listen.lines, listen.listening, listen.text, settings?.instantSuggestions, settings?.providerReady, ask.answer?.streaming, suggest.answer?.streaming, speculative.answer?.streaming, speculative.run])
+  }, [
+    listen.lines,
+    listen.listening,
+    listen.text,
+    settings?.instantSuggestions,
+    settings?.providerReady,
+    settings?.localSuggestReady,
+    ask.answer?.streaming,
+    suggest.answer?.streaming,
+    speculative.answer?.streaming,
+    speculative.run
+  ])
+  // 1b) Métis Local pre-warm (PLAN.md §4.4): while a meeting is live and local suggest is ready, send a
+  //     debounced (~5s) transcript tail over local:prewarm so the sidecar's per-slot KV cache stays hot —
+  //     independent of the shadow-suggestion cadence above (fires on ANY new line, not just after "them"
+  //     speaks, and does not require settings.instantSuggestions — prewarming benefits the real suggest
+  //     click either way). Gated on localSuggestReady specifically (NOT providerReady): this only ever
+  //     warms the on-device model, so a cloud-only setup has nothing to warm. Never fires while anything
+  //     visible is streaming — same guard the speculative run above uses. The renderer never learns the
+  //     sidecar's port/key; it only ever sends transcript text.
+  useEffect(() => {
+    if (!listen.listening || !settings?.localSuggestReady) return
+    const lines = listen.lines
+    if (!lines.length) return
+    const w = prewarmWatermarkRef.current
+    if (lines.length === w.lineCount || Date.now() - w.at < 5_000) return
+    if (ask.answer?.streaming || suggest.answer?.streaming || speculative.answer?.streaming) return
+    prewarmWatermarkRef.current = { lineCount: lines.length, at: Date.now() }
+    void window.toto.localPrewarm(listen.text().slice(-6000))
+  }, [
+    listen.lines,
+    listen.listening,
+    listen.text,
+    settings?.localSuggestReady,
+    ask.answer?.streaming,
+    suggest.answer?.streaming,
+    speculative.answer?.streaming
+  ])
   // 2) Any REAL suggest run replacing the card (new id), or the meeting ending, switches the copilot
   //    card back off the speculative answer.
   const liveSuggestId = suggest.answer?.id
@@ -898,9 +988,28 @@ export function App(): JSX.Element {
   useEffect(() => {
     if (!listen.listening) setShowSpec(false)
   }, [listen.listening])
+  // 3) The speculative suggestion shown via showSpec never touches suggest.answer, so the TTL/MAX-ceiling
+  //    effects above (both keyed on suggest.answer) have nothing to arm a timer on — without this, an
+  //    instant "What to say next" could sit on screen for the rest of the call, contradicting the same
+  //    4s/7s contract documented above. Mirrors that same two-effect shape: TTL arms once the shown answer
+  //    stops streaming, MAX arms the instant showSpec itself flips true (a hard ceiling from when the user
+  //    actually started seeing it, independent of any background regeneration underneath).
+  useEffect(() => {
+    if (!showSpec || !speculative.answer || speculative.answer.streaming) return
+    const t = setTimeout(() => setShowSpec(false), SUGGESTION_TTL_MS)
+    return () => clearTimeout(t)
+  }, [showSpec, speculative.answer])
+  useEffect(() => {
+    if (!showSpec) return
+    const t = setTimeout(() => setShowSpec(false), SUGGESTION_MAX_MS)
+    return () => clearTimeout(t)
+  }, [showSpec])
 
   const whatNext = useCallback(() => {
-    if (!requireProvider()) return
+    // Gate on the suggest task: the dominant live-meeting route (transcript present) fires mode
+    // 'suggest', which Métis Local serves — a local-only setup must reach it. The rarer no-transcript
+    // text route fires mode 'answer' (cloud-only) and re-gates bare below before it can error out.
+    if (!requireProvider('suggest')) return
     const typed = input.trim()
     const transcript = listen.text()
     const canUseScreen = Boolean((settings?.screenAsk ?? true) && settings?.visionAvailable)
@@ -916,6 +1025,9 @@ export function App(): JSX.Element {
       void askScreen(buildWhatNextPrompt('', 'screen'), { label: 'Viewed screen', history: historyRef.current })
       return
     }
+    // Text route fires mode 'answer' — Métis Local never serves it, so this branch needs a cloud
+    // provider even when the suggest gate above passed on localSuggestReady alone.
+    if (route.transport === 'text' && !requireProvider()) return
     if (route.transport === 'suggest') {
       // Instant path: a fresh speculative suggestion (conversation moved ≤2 lines since it generated)
       // paints IMMEDIATELY — no round trip. A stale/absent one falls through to the normal live run.
@@ -1042,10 +1154,15 @@ export function App(): JSX.Element {
     meetingStartRef.current = Date.now()
     savedRef.current = ''
     setSavedPath(null)
+    savingPromiseRef.current = null // this meeting hasn't autosaved yet — don't let a PRIOR meeting's
+    // already-settled save promise be read as if it belonged to this one (see its own declaration comment).
     setSaveError(null)
     setSaveAttempts(0)
     listen.clear()
     suggest.clear()
+    followup.clear() // a new meeting is about to be viewed — a stale draft from whatever was reviewed
+    // before must never carry over and render/send as this meeting's follow-up (see followup's own
+    // declaration comment above).
     // A new meeting always starts with the transcript hidden, regardless of whether it was left open
     // during a previous meeting — "showLiveTranscript" persists across restarts (it's a Settings field,
     // not per-session state), so without this reset a transcript opened once would stay defaulted-open
@@ -1059,6 +1176,7 @@ export function App(): JSX.Element {
     listen.clear,
     listen.start,
     suggest.clear,
+    followup.clear,
     settings?.audioSource,
     settings?.asrQuality,
     settings?.asrEngine,
@@ -1176,8 +1294,12 @@ export function App(): JSX.Element {
 
   const logOut = useCallback(async (): Promise<void> => {
     await flushLiveMeeting()
-    await window.toto.signOut()
-  }, [flushLiveMeeting])
+    // auth.signOut() — not window.toto.signOut() directly — is the only sign-out path that also
+    // refresh()es auth.status afterward, so the SignInWall gate flips the instant this resolves instead of
+    // leaving the renderer stale-signed-in until the next 5-minute poll or a window focus/blur (see
+    // useAuth's own signOut for why; calling the bare IPC method here bypassed that refresh entirely).
+    await auth.signOut()
+  }, [flushLiveMeeting, auth.signOut])
 
   const onStop = useCallback(() => {
     if (listen.listening) {
@@ -1221,6 +1343,8 @@ export function App(): JSX.Element {
     }
     ask.clear()
     suggest.clear()
+    followup.clear() // whatever was being reviewed is being left — a stale follow-up draft must not
+    // survive to attach itself to whatever's reviewed next (see followup's own declaration comment).
     listen.clear()
     historyRef.current = []
     copilotHistoryRef.current = []
@@ -1236,6 +1360,7 @@ export function App(): JSX.Element {
     ask.clear,
     suggest.cancel,
     suggest.clear,
+    followup.clear,
     listen.lines,
     listen.stop,
     listen.clear,
@@ -1247,8 +1372,14 @@ export function App(): JSX.Element {
   // file (main pops its own native confirm) then leave. A session that never saved (no savedPath) has
   // nothing on disk — just leave. Either way, mark this meeting handled so no exit-path re-persists it.
   const discardMeeting = useCallback(async (): Promise<void> => {
-    if (savedPath) {
-      const r = await window.toto.recallDelete(savedPath, defaultMeetingTitle(listen.lines, mode))
+    // An autosave triggered by the recap settling (the effect above) can still be in flight here — there's
+    // no "saving" indicator on screen, so a click landing in that window used to read savedPath as still
+    // null, skip the delete branch entirely, and let the save land moments later anyway. Await it so the
+    // decision below always reads the FINAL outcome instead of a stale null.
+    const inFlightPath = savingPromiseRef.current ? await savingPromiseRef.current : null
+    const path = inFlightPath ?? savedPath
+    if (path) {
+      const r = await window.toto.recallDelete(path, defaultMeetingTitle(listen.lines, mode))
       if (!r.ok) return // user cancelled the confirm dialog, or the delete failed → stay on the summary
     }
     savedRef.current = String(meetingStartRef.current)
@@ -1413,6 +1544,10 @@ export function App(): JSX.Element {
 
   // Open a saved meeting from History as a read-only recap (Cluely recap detail) via the recall:read IPC.
   const openPastMeeting = useCallback(async (file: string) => {
+    setOpenMeetingError(null)
+    followup.clear() // the viewed meeting is about to change — a stale draft from whatever was reviewed
+    // before must never carry over and render/send as THIS meeting's follow-up (see followup's own
+    // declaration comment above; this is the CRITICAL cross-meeting leak's primary repro path).
     const r = await window.toto.recallRead(file)
     if (!r.ok) {
       // recallRead already returns an exact, actionable message (not found / undecryptable on this
@@ -1432,7 +1567,7 @@ export function App(): JSX.Element {
     })
     setView('review')
     setCollapsed(false)
-  }, [])
+  }, [followup.clear])
 
   // Cluely "Resume session": re-enter the meeting live, seeding the copilot's multi-turn memory with the
   // prior recap so follow-ups keep continuity. (The live transcript hook owns its own lines, so earlier
@@ -1581,9 +1716,17 @@ export function App(): JSX.Element {
         }
         if (typed) setInput('')
       } else if (kind === 'summarize') {
-        if (!requireProvider()) return
+        // Fired mode is always 'summary' here: 'local-error' bails with no run, 'screen' routes through
+        // askScreen (its own 'vision' gate), and the remaining branch below always calls
+        // ask.run({ mode: 'summary' }) — so a local-summary-only setup must pass this gate too.
+        if (!requireProvider('summary')) return
         const transcript = listen.text()
-        const canUseScreen = Boolean((settings?.screenAsk ?? true) && settings?.visionAvailable)
+        // Mirror askScreen's OWN requireProvider('vision') gate (providerReady || localVisionReady) —
+        // not the broader settings.visionAvailable (any provider with a stored key, active or not).
+        // Using the broader flag here could route to 'screen' and then dead-end into Settings via
+        // askScreen's narrower gate, even though the local-summary check one line above already approved
+        // this request.
+        const canUseScreen = Boolean((settings?.screenAsk ?? true) && (settings?.providerReady || settings?.localVisionReady))
         // route.transport is the single source of truth for vision-vs-text — it already prioritizes the
         // screen over a merely-present transcript (see chooseQuickActionRoute); don't re-decide below.
         const route = chooseQuickActionRoute({ kind, input: input.trim(), transcript, canUseScreen })
@@ -1602,13 +1745,16 @@ export function App(): JSX.Element {
           return
         }
         // Cascade into Dust whenever it's configured, regardless of the active provider — same reasoning
-        // as the meeting recap (endReview) above.
+        // as the meeting recap (endReview) above — UNLESS the user's own local-summary setup is ready:
+        // Métis Local already wins this request at the routing layer (localPrimary outranks cliPrimary),
+        // so forcing providerOverride:'dust' here would silently override that choice with a cloud round
+        // trip the user didn't ask for.
         const dustReady = isDustReady(settings?.hasKeys ?? {}, settings?.dustWorkspaceId ?? '', settings?.providerModels ?? {})
         ask.run({
           mode: 'summary',
           transcript,
           history: historyRef.current,
-          ...(dustReady ? { providerOverride: 'dust' as const } : {})
+          ...(dustReady && !settings?.localSummaryReady ? { providerOverride: 'dust' as const } : {})
         })
       }
     },
@@ -1619,9 +1765,12 @@ export function App(): JSX.Element {
       listen.text,
       settings?.screenAsk,
       settings?.visionAvailable,
+      settings?.providerReady,
+      settings?.localVisionReady,
       settings?.hasKeys,
       settings?.dustWorkspaceId,
       settings?.providerModels,
+      settings?.localSummaryReady,
       suggest.run,
       ask.run,
       ask.fail,
@@ -1807,7 +1956,11 @@ export function App(): JSX.Element {
         kind={ask.answer?.kind}
         usedScreen={ask.answer?.usedScreen}
         provider={ask.answer?.provider}
-        onRetry={capturing ? undefined : retryAnswer}
+        // ask.fail() (the quick-action "unavailable" paths) always sets prompt:'' — there's nothing for
+        // retryAnswer to replay, so the button must not render at all instead of looking clickable and
+        // silently doing nothing (retryAnswer's own `if (!p) return` already knew this; the button just
+        // never checked).
+        onRetry={capturing || !ask.answer?.prompt ? undefined : retryAnswer}
         onGoDeeper={capturing ? undefined : goDeeper}
       />
     )
@@ -2097,6 +2250,8 @@ export function App(): JSX.Element {
               onAction={onQuickAction}
               rainbowRing={settings?.quickActionsRainbow !== false}
               providerReady={settings?.providerReady ?? false}
+              localSummaryReady={settings?.localSummaryReady ?? false}
+              localSuggestReady={settings?.localSuggestReady ?? false}
             />
           )}
           {/* Listen-engine status (offline/reconnecting/crash notes) — shown regardless of which view is
@@ -2105,6 +2260,22 @@ export function App(): JSX.Element {
           {showListeningChrome && listen.error && view !== 'copilot' && (
             <div title={listen.error ?? undefined} className="fade-up rounded-xl border border-[var(--color-danger)]/30 bg-[var(--color-danger)]/10 px-3 py-1.5 text-[11px] leading-snug text-[var(--color-danger)] line-clamp-2">
               {listen.error}
+            </div>
+          )}
+          {/* Opening a past meeting failed (recallRead ok:false) — shown regardless of view, since the
+              click that triggered it can come from History, Settings' Mantu Intelligence list, or Review's
+              own Recent-meetings/Related panel. Dismissible since it's a one-off, not a recurring status. */}
+          {openMeetingError && (
+            <div className="fade-up flex items-center justify-between gap-2 rounded-xl border border-[var(--color-danger)]/30 bg-[var(--color-danger)]/10 px-3 py-1.5 text-[11px] leading-snug text-[var(--color-danger)]">
+              <span className="line-clamp-2">{openMeetingError}</span>
+              <button
+                type="button"
+                onClick={() => setOpenMeetingError(null)}
+                className="no-drag shrink-0 opacity-70 hover:opacity-100"
+                aria-label="Dismiss"
+              >
+                ×
+              </button>
             </div>
           )}
           {settings && !settings.providerReady && !nudgeExpired && view !== 'settings' && !showListeningChrome && (() => {

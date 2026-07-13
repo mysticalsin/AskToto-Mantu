@@ -96,6 +96,14 @@ export type AuditEvent =
   | 'dust.conversation'
   | 'brain.ingest'
   | 'brain.backfill.start'
+  | 'local.runtime.start'
+  | 'local.runtime.stop'
+  | 'local.runtime.crash'
+  | 'local.runtime.restart'
+  | 'local.runtime.missing'
+  | 'local.model.download'
+  | 'local.model.checksum_fail'
+  | 'local.model.delete'
 
 /**
  * Append a structured audit record. NEVER pass secrets or message/transcript CONTENT — metadata only

@@ -39,6 +39,7 @@ const ENV_VAR: Record<ProviderId, string> = {
   'claude-cli': '',
   'codex-cli': '',
   gemini: 'GEMINI_API_KEY',
+  local: '', // keyless — Métis Local's per-session sidecar key lives only in local-runtime.ts memory
   custom: 'ASKTOTO_CUSTOM_API_KEY'
 }
 
@@ -437,6 +438,13 @@ export async function testApiKey(provider: ProviderId, key: string): Promise<Tes
     }
 
   const def = PROVIDERS[provider]
+  // Org allowlist (data-residency / governance policy) — the SAME gate attempt() enforces at ask time
+  // (index.ts). Without this, a genuinely valid key for a blocked provider passed the live network call
+  // below and showed "Key is valid and working." in Settings, only to be refused at chat time.
+  const allowed = getAllowedProviders()
+  if (allowed && !allowed.includes(provider)) {
+    return { ok: false, error: `${def.label} is not on your organization's approved provider list.` }
+  }
   const settings = getSettings()
   try {
     if (def.kind === 'dust') {
