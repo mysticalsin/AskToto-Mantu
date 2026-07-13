@@ -1,7 +1,7 @@
 /**
  * Inlined AudioWorklet processor source for live transcription, loaded at runtime via a Blob URL.
  *
- * Why a string + Blob instead of `new URL('./whisper-worklet.ts', import.meta.url)`: that pattern is
+ * Why a string + Blob instead of a separate worklet module loaded with `new URL(...)`: that pattern is
  * transpiled by the Vite dev server but is NOT emitted as a fetchable asset in the packaged Electron
  * build, so `audioWorklet.addModule()` failed in production with "The user aborted a request." and the
  * microphone never captured. A Blob URL works identically in dev and prod, and `blob:` is allowed by the

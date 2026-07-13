@@ -1,6 +1,6 @@
 /**
  * Ambient types for the AudioWorklet global scope, which is NOT part of the default DOM lib.
- * Used by whisper-worklet.ts (runs on the audio rendering thread). Keeps `tsc` honest without
+ * Used by the processor emitted from whisper-worklet-src.ts on the audio rendering thread. Keeps `tsc` honest without
  * pulling in the full @types/audioworklet package.
  */
 declare abstract class AudioWorkletProcessor {
