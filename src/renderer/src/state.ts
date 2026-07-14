@@ -10,6 +10,7 @@ import type {
   StreamError,
   StreamMeta,
   TestKeyResponse,
+  ProfileRecoveryResult,
   AuthStatus,
   SignInResult
 } from '@shared/ipc'
@@ -411,6 +412,7 @@ export function useSettings(): {
   refresh: () => Promise<void>
   patch: (p: SettingsPatch) => Promise<void>
   saveKey: (provider: ProviderId, k: string) => Promise<void>
+  recoverEncryptedProfile: () => Promise<ProfileRecoveryResult>
   clearKey: (provider: ProviderId) => Promise<void>
   testKey: (provider: ProviderId, k: string) => Promise<TestKeyResponse>
 } {
@@ -477,6 +479,11 @@ export function useSettings(): {
     },
     [refresh]
   )
+  const recoverEncryptedProfile = useCallback(async (): Promise<ProfileRecoveryResult> => {
+    const result = await window.toto.recoverEncryptedProfile()
+    if (result.ok) await refresh()
+    return result
+  }, [refresh])
   const clearKey = useCallback(
     async (provider: ProviderId) => {
       await window.toto.clearApiKey(provider)
@@ -487,7 +494,7 @@ export function useSettings(): {
   const testKey = useCallback(async (provider: ProviderId, k: string) => {
     return window.toto.testApiKey(provider, k)
   }, [])
-  return { settings, bootError, refresh, patch, saveKey, clearKey, testKey }
+  return { settings, bootError, refresh, patch, saveKey, recoverEncryptedProfile, clearKey, testKey }
 }
 
 /** How often the renderer re-polls auth status while the app is open.

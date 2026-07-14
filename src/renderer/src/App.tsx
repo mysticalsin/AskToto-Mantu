@@ -121,7 +121,7 @@ export function App(): JSX.Element {
   }, [])
   const windowDrag = useWindowDrag(onWindowDragStart, { noTouch: true })
 
-  const { settings, bootError: settingsBootError, patch, saveKey, clearKey, testKey, refresh } = useSettings()
+  const { settings, bootError: settingsBootError, patch, saveKey, recoverEncryptedProfile, clearKey, testKey, refresh } = useSettings()
   const auth = useAuth() // Azure AD gate (only enforces when configured)
   const bootError = settingsBootError ?? auth.bootError
 
@@ -1806,6 +1806,7 @@ export function App(): JSX.Element {
         settings={settings}
         patch={patch}
         saveKey={saveKey}
+        recoverEncryptedProfile={recoverEncryptedProfile}
         clearKey={clearKey}
         testKey={testKey}
         initialTab={settingsInitialTab}
@@ -1821,7 +1822,7 @@ export function App(): JSX.Element {
         onOpenMeeting={(file) => void openPastMeeting(file)}
       />
     )
-  }, [settings, patch, saveKey, clearKey, testKey, settingsInitialTab, settingsNotice, quitApp, logOut, openPastMeeting])
+  }, [settings, patch, saveKey, recoverEncryptedProfile, clearKey, testKey, settingsInitialTab, settingsNotice, quitApp, logOut, openPastMeeting])
   const historyBody = useMemo(
     () => (
       <RecallView
@@ -2091,7 +2092,14 @@ export function App(): JSX.Element {
     return (
       <div ref={setRoot} {...windowDrag} className="flex w-full flex-col gap-2 p-1.5">
         <Panel>
-          <Onboarding settings={settings} saveKey={saveKey} patch={patch} onOpenAiSettings={() => openSettings('ai')} onDone={() => void refresh()} />
+          <Onboarding
+            settings={settings}
+            saveKey={saveKey}
+            recoverEncryptedProfile={recoverEncryptedProfile}
+            patch={patch}
+            onOpenAiSettings={() => openSettings('ai')}
+            onDone={() => void refresh()}
+          />
         </Panel>
       </div>
     )

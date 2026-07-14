@@ -37,6 +37,7 @@ void _providerIdParity
 export const IPC = {
   settingsGet: 'settings:get',
   settingsSet: 'settings:set',
+  settingsRecoverProfile: 'settings:recoverProfile',
   setApiKey: 'settings:setApiKey',
   clearApiKey: 'settings:clearApiKey',
   testApiKey: 'settings:testApiKey',
@@ -1075,6 +1076,16 @@ export const TestApiKeyPayloadSchema = z.object({
 export interface TestKeyResponse {
   ok: boolean
   error?: string
+}
+
+/** Result of the explicit "create a new local profile" recovery action. */
+export interface ProfileRecoveryResult {
+  ok: boolean
+  canceled?: boolean
+  error?: string
+  /** Hidden archive directory name under Métis's userData folder (never a provider credential). */
+  backupName?: string
+  movedFiles?: number
 }
 
 /** Azure AD (Entra) sign-in. Restricts the app to the org's Microsoft domain and ties users to Dust. */
