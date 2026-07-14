@@ -74,7 +74,7 @@ Physical testing uses the final packaged Apple Silicon macOS app with synthetic 
 ### Remaining external gates
 
 - Native Windows execution still requires a Windows x64 device or a working CI runner.
-- GitHub Actions run `29347116698` for commit `b579732` was not started: both required jobs were rejected by the repository Actions budget before any step ran. This is an infrastructure/billing gate, not a source-test failure; the same gates passed locally on the exact commit.
+- GitHub Actions run `29355952492` for commit `6e7edf7` was not started: both required jobs were rejected by the repository Actions budget before any step ran, and package jobs were skipped. This is an infrastructure/billing gate, not a source-test failure; the same gates passed locally on the exact pushed source state.
 - Developer ID signing/notarization and trusted Windows Authenticode certificate validation require release credentials. The current macOS artifact is ad-hoc signed for local QA.
 - Authenticated Anthropic/Claude and Dust success paths require user-controlled credentials; only safe missing-provider and managed-agent recovery paths were exercised here.
 - Screen and microphone positive permission paths require a human to approve the OS prompts; prompts were intentionally not accepted during this QA run.
