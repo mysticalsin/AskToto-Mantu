@@ -73,6 +73,7 @@ import {
   hasApiKey,
   hasKeysMap,
   encryptionAvailable,
+  archiveEncryptedProfile,
   listDustAgents,
   dustSelectedAgentVision
 } from './store'
@@ -196,18 +197,6 @@ import { PROVIDERS, resolveModelTier, applyInteractiveGuardrail, type ProviderId
 import { routeTier } from '@shared/routing'
 import { redactSecrets } from '@shared/redact'
 
-// LOCAL-ONLY native crash capture (zero telemetry — uploadToServer:false means minidumps land in
-// app.getPath('crashDumps') under userData and are NEVER transmitted anywhere; consistent with the
-// no-crashReporter-upload design note near the uncaught-exception dialog below). Without this, a native
-// Chromium CHECK crash (observed once: Electron 39.8.10 startup thread-pool SIGTRAP on the macOS 27
-// beta, no app frames in the stack) dies invisibly — the OS crash log is the only trace and nothing in
-// the app's own diagnostics can even count it. Must run before app ready.
-crashReporter.start({ uploadToServer: false })
-
-// Belt-and-braces with the per-meeting powerSaveBlocker below: keep Chromium itself from ever
-// deprioritizing the (hidden) renderer that hosts the transcription worker. Must run before app ready.
-app.commandLine.appendSwitch('disable-renderer-backgrounding')
-
 // Self-signed / un-notarized builds: use the AES-256-GCM file keystore instead of the macOS Keychain.
 // An un-notarized app's Keychain ACL is not stably trusted, so safeStorage prompts for the login-keychain
 // password on launch — AND because the first getSettings() decrypt runs synchronously during boot, BEFORE
@@ -218,9 +207,8 @@ app.commandLine.appendSwitch('disable-renderer-backgrounding')
 // `??=` leaves QA/integration overrides (which set the var explicitly) untouched.
 process.env.ASKTOTO_LOCAL_KEYSTORE ??= '1'
 
-// QA hook (same family as ASKTOTO_DEMO / ASKTOTO_SHOT): point the app at an isolated profile so
-// physical QA never reads — or refuses to write over — the packaged app's keychain-wrapped real
-// userData. Must run before anything touches app.getPath('userData').
+// Select the final user-data profile before crashReporter (or any other Electron service) can resolve
+// a default path. In particular, ASKTOTO_USERDATA must isolate physical QA from a real encrypted profile.
 if (process.env.ASKTOTO_USERDATA) app.setPath('userData', process.env.ASKTOTO_USERDATA)
 
 // Unpackaged (npm run dev / QA) runs must never share the packaged app's userData: its settings.json
@@ -254,6 +242,18 @@ if (app.isPackaged && !process.env.ASKTOTO_USERDATA) {
     // Non-fatal: worst case is a fresh profile; never block launch on a migration.
   }
 }
+
+// LOCAL-ONLY native crash capture (zero telemetry — uploadToServer:false means minidumps land in
+// app.getPath('crashDumps') under userData and are NEVER transmitted anywhere; consistent with the
+// no-crashReporter-upload design note near the uncaught-exception dialog below). Without this, a native
+// Chromium CHECK crash (observed once: Electron 39.8.10 startup thread-pool SIGTRAP on the macOS 27
+// beta, no app frames in the stack) dies invisibly — the OS crash log is the only trace and nothing in
+// the app's own diagnostics can even count it. Must run before app ready.
+crashReporter.start({ uploadToServer: false })
+
+// Belt-and-braces with the per-meeting powerSaveBlocker below: keep Chromium itself from ever
+// deprioritizing the (hidden) renderer that hosts the transcription worker. Must run before app ready.
+app.commandLine.appendSwitch('disable-renderer-backgrounding')
 
 const BAR_WIDTH = 880
 const BAR_HEIGHT = 84 // initial idle height of the slimmer two-row widget; useAutoResize grows it for answers
@@ -1542,6 +1542,41 @@ function registerIpc(): void {
     // Shortcuts may have changed — re-register from the new settings.
     registerShortcuts()
     return publicSettings()
+  })
+
+  // Explicit recovery for an existing file-backend profile whose key is still wrapped by a Keychain
+  // this build cannot unlock. The native confirmation is deliberately before any filesystem mutation;
+  // archiveEncryptedProfile() moves the encrypted files into a hidden, reversible recovery folder.
+  ipcMain.handle(IPC.settingsRecoverProfile, async (e) => {
+    assertMainWindow(e)
+    const dialogOpts = {
+      type: 'warning' as const,
+      title: 'Create a new local profile?',
+      message: 'Métis cannot unlock your existing encrypted profile.',
+      detail:
+        'Métis will preserve the existing encrypted settings, API keys, and sign-in cache in a hidden recovery folder inside its data folder, then start a fresh local profile. Nothing is deleted. Restore Keychain access later and the archived files can be put back to recover the old profile.',
+      buttons: ['Create new local profile', 'Cancel'],
+      defaultId: 1,
+      cancelId: 1
+    }
+    const { response } = win
+      ? await dialog.showMessageBox(win, dialogOpts)
+      : await dialog.showMessageBox(dialogOpts)
+    if (response !== 0) return { ok: false, canceled: true }
+    try {
+      const archive = archiveEncryptedProfile()
+      auditLog('settings.profile_recovered', { movedFiles: archive.files.length })
+      return {
+        ok: true,
+        backupName: archive.backupDir.split(/[\\/]/).pop(),
+        movedFiles: archive.files.length
+      }
+    } catch (error) {
+      return {
+        ok: false,
+        error: error instanceof Error ? error.message : 'Could not create a recovery archive.'
+      }
+    }
   })
 
   // --- Licensing (phone-home activation; see main/license.ts) ---

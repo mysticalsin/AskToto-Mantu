@@ -50,7 +50,8 @@ import {
   type ImportAudioPickResult,
   type ImportAudioProgress,
   type ImportJobView,
-  type LocalModelSummary
+  type LocalModelSummary,
+  type ProfileRecoveryResult
 } from '@shared/ipc'
 import type { ProviderId } from '@shared/providers'
 
@@ -71,6 +72,7 @@ const api = {
     ipcRenderer.invoke(IPC.permissionsRequestUpfront),
   setSettings: (patch: Partial<Settings> | import('@shared/ipc').SettingsPatch): Promise<PublicSettings> =>
     ipcRenderer.invoke(IPC.settingsSet, patch),
+  recoverEncryptedProfile: (): Promise<ProfileRecoveryResult> => ipcRenderer.invoke(IPC.settingsRecoverProfile),
   setApiKey: (provider: ProviderId, key: string): Promise<{ hasKeys: Record<string, boolean> }> =>
     ipcRenderer.invoke(IPC.setApiKey, { provider, key }),
   clearApiKey: (provider: ProviderId): Promise<{ hasKeys: Record<string, boolean> }> =>

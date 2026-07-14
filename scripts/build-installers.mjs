@@ -8,7 +8,7 @@
 import { spawnSync } from 'node:child_process'
 import { existsSync, readdirSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
-import { platform } from 'node:os'
+import { platform, tmpdir } from 'node:os'
 
 const VALID = new Set(['current', 'mac', 'win', 'all'])
 const target = process.argv[2] || 'current'
@@ -17,7 +17,16 @@ if (!VALID.has(target)) {
   process.exit(2)
 }
 
-const outDir = 'release'
+function isCloudSyncedWorkspace(path) {
+  return /(?:^|[\\/])Library[\\/]CloudStorage(?:[\\/]|$)|(?:^|[\\/])OneDrive(?:[\\/]|$)/i.test(path)
+}
+
+// Finder/OneDrive metadata can be reapplied between afterPack's xattr cleanup
+// and codesign verification. Package in a local filesystem for cloud-synced
+// checkouts; CI and ordinary local repos retain the canonical release/ output.
+const outDir = process.env.ASKTOTO_INSTALLER_OUTPUT_DIR || (
+  isCloudSyncedWorkspace(process.cwd()) ? join(tmpdir(), 'metis-installers') : 'release'
+)
 
 function run(cmd, args, opts = {}) {
   console.log(`\n> ${[cmd, ...args].join(' ')}`)
@@ -43,6 +52,10 @@ function artifactFiles() {
     .sort()
 }
 
+function withOutputDir(args) {
+  return outDir === 'release' ? args : [...args, `-c.directories.output=${outDir}`]
+}
+
 function printInstallHelp(files) {
   const installers = files.filter((name) => /\.(dmg|exe|appx|msix|pkg)$/i.test(name))
   console.log('\nInstallers created:')
@@ -50,7 +63,7 @@ function printInstallHelp(files) {
     console.log('  No installable artifacts found in release/. Check the electron-builder output above.')
     return
   }
-  for (const name of installers) console.log(`  release/${name}`)
+  for (const name of installers) console.log(`  ${join(outDir, name)}`)
 
   const hasMac = installers.some((name) => /\.dmg$/i.test(name))
   const hasWin = installers.some((name) => /\.exe$/i.test(name))
@@ -99,18 +112,18 @@ run('npm', ['run', 'build'])
 
 for (const t of requestedTargets) {
   if (t === 'mac') {
-    const args = ['electron-builder', '--mac', '--arm64', '--publish', 'never']
+    const args = withOutputDir(['electron-builder', '--mac', '--arm64', '--publish', 'never'])
     const options = {}
     if (process.env.ASKTOTO_SIGN_INSTALLER !== '1') {
       args.push('-c.mac.identity=null')
       options.env = { ...process.env, ASKTOTO_ADHOC_SIGN: '1' }
     }
     run('npx', args, options)
-    run('node', ['scripts/check-packaged-runtime.mjs', 'mac', '--post-sign'])
-    run('node', ['scripts/check-update-metadata.mjs', 'release/latest-mac.yml'])
+    run('node', ['scripts/check-packaged-runtime.mjs', 'mac', join(outDir, 'mac-arm64', 'Metis.app', 'Contents', 'Resources'), '--post-sign'])
+    run('node', ['scripts/check-update-metadata.mjs', join(outDir, 'latest-mac.yml')])
   }
   if (t === 'win') {
-    run('npx', [
+    run('npx', withOutputDir([
       'electron-builder',
       '--config',
       'electron-builder.win.yml',
@@ -118,9 +131,9 @@ for (const t of requestedTargets) {
       '--x64',
       '--publish',
       'never'
-    ])
-    run('node', ['scripts/check-packaged-runtime.mjs', 'win', '--post-sign'])
-    run('node', ['scripts/check-update-metadata.mjs', 'release/latest.yml'])
+    ]))
+    run('node', ['scripts/check-packaged-runtime.mjs', 'win', join(outDir, 'win-unpacked', 'resources'), '--post-sign'])
+    run('node', ['scripts/check-update-metadata.mjs', join(outDir, 'latest.yml')])
   }
 }
 

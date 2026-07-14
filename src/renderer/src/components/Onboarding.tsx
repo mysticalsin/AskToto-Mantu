@@ -18,7 +18,7 @@ import {
   KeyRound,
   Building2
 } from 'lucide-react'
-import type { PublicSettings, Profile, PlatformPermissions } from '@shared/ipc'
+import type { PublicSettings, Profile, PlatformPermissions, ProfileRecoveryResult } from '@shared/ipc'
 import type { ProviderId } from '@shared/providers'
 import { PROVIDERS } from '@shared/providers'
 import { MetisMark } from './MetisMark'
@@ -203,11 +203,13 @@ function WalkNav({ onBack, onNext, step }: { onBack: () => void; onNext: () => v
 export function Onboarding({
   settings,
   patch,
+  recoverEncryptedProfile,
   onDone,
   onOpenAiSettings
 }: {
   settings: PublicSettings
   saveKey?: (provider: ProviderId, k: string) => Promise<void>
+  recoverEncryptedProfile?: () => Promise<ProfileRecoveryResult>
   // Real impl (state.ts) returns Promise<void> and awaits disk persistence; typed void to match the
   // Settings prop contract. `await patch(...)` still waits for the write before finish() calls onDone.
   patch: (p: Partial<PublicSettings>) => void
@@ -220,6 +222,8 @@ export function Onboarding({
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
   const [finishErr, setFinishErr] = useState('')
+  const [recoveryAvailable, setRecoveryAvailable] = useState(false)
+  const [recoveryBusy, setRecoveryBusy] = useState(false)
   const [step, setStep] = useState<1 | 2 | 3 | 4 | 5 | 6>(1)
   const [perms, setPerms] = useState<PlatformPermissions | null>(null)
   // Step 5's "An API key" card expands in place to name the actual providers instead of assuming
@@ -305,11 +309,36 @@ export function Onboarding({
 
   const finish = async (): Promise<void> => {
     setFinishErr('')
+    setRecoveryAvailable(false)
     try {
       await patch({ onboardingDone: true, onboardingDoneAt: Date.now(), recordingConsent })
       onDone()
     } catch (e) {
-      setFinishErr(`Couldn't save your setup. ${e instanceof Error ? e.message : String(e)}`)
+      const message = e instanceof Error ? e.message : String(e)
+      setFinishErr(`Couldn't save your setup. ${message}`)
+      setRecoveryAvailable(!!recoverEncryptedProfile && /keychain|encrypted profile|secret.?key/i.test(message))
+    }
+  }
+
+  const recoverProfileAndRetry = async (): Promise<void> => {
+    if (!recoverEncryptedProfile) return
+    setRecoveryBusy(true)
+    setFinishErr('Creating a fresh local profile while preserving your encrypted data…')
+    try {
+      const result = await recoverEncryptedProfile()
+      if (!result.ok) {
+        setFinishErr(result.canceled ? 'Recovery canceled. Your encrypted profile was not changed.' : result.error || 'Could not create a new local profile.')
+        return
+      }
+      setRecoveryAvailable(false)
+      await patch({ onboardingDone: true, onboardingDoneAt: Date.now(), recordingConsent })
+      onDone()
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e)
+      setFinishErr(`Couldn't save your setup. ${message}`)
+      setRecoveryAvailable(/keychain|encrypted profile|secret.?key/i.test(message))
+    } finally {
+      setRecoveryBusy(false)
     }
   }
 
@@ -575,6 +604,17 @@ export function Onboarding({
           <div role="alert" className="text-[12px] text-[color:var(--color-danger)]">
             {finishErr}
           </div>
+        )}
+        {recoveryAvailable && (
+          <button
+            type="button"
+            onClick={() => void recoverProfileAndRetry()}
+            disabled={recoveryBusy}
+            className="no-drag focus-ring inline-flex items-center gap-1.5 rounded-xl border border-[var(--color-accent)]/40 bg-[var(--color-accent-soft)] px-4 py-2 text-[12px] font-medium text-[color:var(--color-accent)] hover:brightness-110 disabled:opacity-50"
+          >
+            {recoveryBusy ? <KeyRound size={13} className="animate-pulse" /> : <KeyRound size={13} />}
+            {recoveryBusy ? 'Creating new local profile…' : 'Create new local profile & retry'}
+          </button>
         )}
         <button
           type="button"

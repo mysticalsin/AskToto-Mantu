@@ -1,5 +1,15 @@
 import { app, safeStorage } from 'electron'
-import { readFileSync, writeFileSync, existsSync, mkdirSync, rmSync, renameSync, statSync } from 'node:fs'
+import {
+  readFileSync,
+  writeFileSync,
+  existsSync,
+  mkdirSync,
+  rmSync,
+  renameSync,
+  statSync,
+  readdirSync,
+  mkdtempSync
+} from 'node:fs'
 import { join } from 'node:path'
 import {
   DEFAULT_SETTINGS,
@@ -11,7 +21,14 @@ import {
 } from '@shared/ipc'
 import { PROVIDERS, PROVIDER_IDS, dustAgentVision, type ProviderId } from '@shared/providers'
 import { mainLog } from './logger'
-import { useFileBackend, encryptSecret, decryptSecret } from './secrets'
+import {
+  KeychainKeyRecoveryError,
+  decryptSecret,
+  encryptSecret,
+  prepareFileKeyForWrite,
+  resetSecretKeyCache,
+  useFileBackend
+} from './secrets'
 // Static (eager) imports — dynamic import() throws under the bytecode-compiled main (electron-vite
 // bytecodePlugin). These SDKs are already eager-loaded by the streaming modules (llm/anthropic|dust|openai),
 // so this adds no startup cost; it just makes the key-test + Dust-agent-list paths bytecode-safe.
@@ -22,6 +39,28 @@ import OpenAI from 'openai'
 const dir = () => app.getPath('userData')
 const settingsPath = () => join(dir(), 'settings.json')
 const keyPath = (provider: ProviderId) => join(dir(), `key-${provider}.bin`)
+
+const PROFILE_RECOVERY_FIXED_FILES = new Set([
+  'secret-key.bin',
+  'secret-key.bin.migrate.tmp',
+  'settings.json',
+  'settings.json.tmp',
+  'auth-session.bin',
+  'auth-configured.flag',
+  'msal-cache.bin',
+  'google-session.bin'
+])
+
+function encryptedProfileFiles(): string[] {
+  const d = dir()
+  if (!existsSync(d)) return []
+  return readdirSync(d, { withFileTypes: true })
+    .filter((entry) => {
+      if (!entry.isFile()) return false
+      return PROFILE_RECOVERY_FIXED_FILES.has(entry.name) || /^key-.+\.bin(?:\.tmp)?$/.test(entry.name)
+    })
+    .map((entry) => entry.name)
+}
 
 const ENV_VAR: Record<ProviderId, string> = {
   anthropic: 'ANTHROPIC_API_KEY',
@@ -310,6 +349,19 @@ export function getSettings(): Settings {
 
 export function setSettings(patch: Partial<Settings>): Settings {
   ensureDir()
+  // A user-initiated save is the safe time to recover a legacy Keychain-wrapped
+  // file key. This happens before readUserRaw() so an existing encrypted
+  // profile is merged rather than silently replaced with onboarding defaults.
+  try {
+    prepareFileKeyForWrite()
+  } catch (e) {
+    if (e instanceof KeychainKeyRecoveryError) throw e
+    throw new Error(
+      `Couldn't save settings — Métis can't write to its data folder${
+        e instanceof Error && e.message ? ` (${e.message})` : ''
+      }. Check that the disk isn't full and the folder is writable.`
+    )
+  }
   // Validate the incoming patch (drop malformed keys), then persist ONLY user overrides (sparse)
   // so managed-config stays a live default layer.
   const clean = validKeysOnly((patch ?? {}) as Record<string, unknown>)
@@ -362,6 +414,64 @@ const AES_KEY_MARKER = Buffer.from('ATKAES1\n')
 // setApiKey / clearApiKey so a rotation is always reflected immediately.
 const _apiKeyCache = new Map<ProviderId, string>()
 
+export interface EncryptedProfileArchive {
+  backupDir: string
+  files: string[]
+}
+
+/**
+ * Archive the current encrypted profile before starting a fresh local profile.
+ *
+ * This is intentionally explicit and reversible: the old key, settings, provider keys, and auth
+ * caches are moved (never deleted or overwritten) into a hidden directory under userData. Meeting
+ * files remain where they are so they can be read again if the original Keychain access is restored
+ * and the archived files are put back in the root.
+ */
+export function archiveEncryptedProfile(): EncryptedProfileArchive {
+  ensureDir()
+  const d = dir()
+  const files = encryptedProfileFiles()
+  if (!files.length) {
+    throw new Error('No encrypted profile files were found to archive.')
+  }
+
+  const backupDir = mkdtempSync(join(d, '.metis-recovery-'))
+  const moved: string[] = []
+  try {
+    for (const name of files) {
+      renameSync(join(d, name), join(backupDir, name))
+      moved.push(name)
+    }
+  } catch (error) {
+    let rollbackFailed = false
+    for (const name of [...moved].reverse()) {
+      try {
+        renameSync(join(backupDir, name), join(d, name))
+      } catch {
+        rollbackFailed = true
+      }
+    }
+    if (!rollbackFailed) {
+      try {
+        rmSync(backupDir, { recursive: false, force: true })
+      } catch {
+        /* best-effort cleanup; no profile file was intentionally discarded */
+      }
+    }
+    if (rollbackFailed) {
+      throw new Error(
+        `Could not finish the profile archive. The partial recovery copy was left at ${backupDir}; no files were deleted.`
+      )
+    }
+    throw error
+  }
+
+  resetSecretKeyCache()
+  _settingsCache = null
+  _apiKeyCache.clear()
+  return { backupDir, files: moved }
+}
+
 export function setApiKey(provider: ProviderId, key: string): void {
   ensureDir()
   const trimmed = key.trim()
@@ -374,6 +484,7 @@ export function setApiKey(provider: ProviderId, key: string): void {
   let blob: Buffer
   if (useFileBackend()) {
     // AES-GCM file backend — always available, never touches the keychain.
+    prepareFileKeyForWrite()
     blob = Buffer.concat([AES_KEY_MARKER, encryptSecret(trimmed)])
   } else {
     if (!safeStorage.isEncryptionAvailable()) {

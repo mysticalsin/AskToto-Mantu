@@ -81,6 +81,7 @@ export type AuditEvent =
   | 'provider.blocked'
   | 'net.proxy'
   | 'settings.changed'
+  | 'settings.profile_recovered'
   | 'graph.purged'
   | 'calendar.read'
   | 'app.crash'

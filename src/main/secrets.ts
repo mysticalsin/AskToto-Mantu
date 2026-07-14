@@ -34,7 +34,7 @@
  */
 
 import { app, safeStorage } from 'electron'
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto'
 
@@ -44,6 +44,27 @@ const ALG = 'aes-256-gcm' as const
 /** Byte lengths for the [IV][tag][ciphertext] wire format. */
 const IV_LEN = 12
 const TAG_LEN = 16
+
+/**
+ * An older packaged build may have wrapped this file-backend key with macOS
+ * Keychain. The current unsigned/file-keystore build must never replace that
+ * key until the original Keychain has unlocked it, or existing encrypted data
+ * would become irrecoverable.
+ */
+export class KeychainKeyRecoveryError extends Error {
+  constructor() {
+    const credentialStore =
+      process.platform === 'win32'
+        ? 'the Windows credential store'
+        : process.platform === 'darwin'
+          ? 'the original macOS Keychain'
+          : 'the original system credential store'
+    super(
+      `Métis could not unlock the existing encrypted profile. Unlock or grant access to ${credentialStore}, then try again. No data was changed.`
+    )
+    this.name = 'KeychainKeyRecoveryError'
+  }
+}
 
 /** Cached per-install key — module-level singleton, never re-read after first load. */
 let _key: Buffer | null = null
@@ -76,14 +97,42 @@ export function useFileBackend(): boolean {
  *   migrated to the wrapped format in-place.
  *   When safeStorage is unavailable (Linux / CI), the raw key is written as before.
  */
-function getOrCreateKey(): Buffer {
+function isKeychainAvailable(): boolean {
+  try {
+    return safeStorage.isEncryptionAvailable()
+  } catch {
+    return false
+  }
+}
+
+/** Replace a recovered wrapped key only after the Keychain returned a valid AES key. */
+function persistRawKeyAtomically(p: string, key: Buffer): void {
+  const tmp = `${p}.migrate.tmp`
+  try {
+    writeFileSync(tmp, key, { mode: 0o600 })
+    renameSync(tmp, p)
+  } finally {
+    try {
+      if (existsSync(tmp)) rmSync(tmp)
+    } catch {
+      /* best-effort cleanup; the original key remains intact if rename failed */
+    }
+  }
+}
+
+function getOrCreateKey(allowKeychainMigration = false): Buffer {
   if (_key) return _key
 
   const p = join(app.getPath('userData'), KEY_FILE)
   // `ASKTOTO_LOCAL_KEYSTORE` is an explicit opt-out of macOS Keychain / Windows DPAPI. It is used
   // for isolated packaged QA and recovery environments specifically so first-run settings writes
   // cannot trigger a platform credential prompt. Availability alone is not consent to use it.
-  const canWrap = !process.env.ASKTOTO_LOCAL_KEYSTORE && safeStorage.isEncryptionAvailable()
+  const localKeystoreForced = !!process.env.ASKTOTO_LOCAL_KEYSTORE
+  const keychainAvailable = isKeychainAvailable()
+  // The file backend is the default for unpackaged/dev runs. Never create a Keychain-wrapped key in
+  // that mode: a later test/build or a different unsigned binary must remain able to use the raw local
+  // keystore without inheriting a signature-bound credential it cannot unlock.
+  const canWrap = app.isPackaged && !localKeystoreForced && keychainAvailable
 
   if (existsSync(p)) {
     const buf = readFileSync(p)
@@ -97,30 +146,46 @@ function getOrCreateKey(): Buffer {
           // Migration is best-effort; the raw key is still usable this session.
         }
       } else {
-        // safeStorage-wrapped key (new format) — unwrap.
+        // safeStorage-wrapped key (new format) — unwrap. A non-empty key file is always treated as
+        // valuable encrypted profile state: if the Keychain cannot unlock it, fail closed instead of
+        // regenerating a key and making every existing ciphertext permanently unreadable.
         try {
           const unwrapped = Buffer.from(safeStorage.decryptString(buf), 'base64')
           // AES-256 requires exactly 32 bytes. A stale, truncated, or foreign wrapped value must
           // never reach createCipheriv(), where it would crash every encrypted write with the
-          // unhelpful "Invalid key length" error. Treat it as corrupt and regenerate below.
+          // unhelpful "Invalid key length" error.
           if (unwrapped.length === 32) _key = unwrapped
-        } catch {
-          // Corrupt/foreign safeStorage payload — fall through and replace the unusable key.
+          else throw new KeychainKeyRecoveryError()
+        } catch (e) {
+          if (e instanceof KeychainKeyRecoveryError) throw e
+          throw new KeychainKeyRecoveryError()
         }
       }
     } else {
       // No keychain available now. A raw 32-byte key is usable directly.
       if (buf.length === 32) {
         _key = buf
+      } else if (allowKeychainMigration && buf.length > 0) {
+        // An old signed build may have Keychain-wrapped the same file key. Try the original
+        // safeStorage decrypt during an explicit user write even when availability is reporting false:
+        // macOS can briefly report stale availability while the Keychain is still able to answer, and
+        // this recovery attempt never generates or overwrites a key unless decrypt succeeds.
+        try {
+          const unwrapped = Buffer.from(safeStorage.decryptString(buf), 'base64')
+          if (unwrapped.length !== 32) throw new KeychainKeyRecoveryError()
+          persistRawKeyAtomically(p, unwrapped)
+          _key = unwrapped
+        } catch (e) {
+          if (e instanceof KeychainKeyRecoveryError) throw e
+          throw new KeychainKeyRecoveryError()
+        }
       } else if (buf.length > 0) {
         // Non-empty but not a raw key — almost certainly a safeStorage-WRAPPED key written
         // when the keychain WAS available (availability has since flipped to false). Regenerating
         // here would silently destroy every existing encrypted secret, session, and transcript
         // content-key. Fail-closed: refuse to overwrite so the data stays recoverable once the
         // keychain returns. (A genuinely zero-byte file falls through to regeneration below.)
-        throw new Error(
-          'secrets: key file is keychain-wrapped but the keychain is unavailable; refusing to regenerate (would lose existing encrypted data)'
-        )
+        throw new KeychainKeyRecoveryError()
       }
       // else (empty file): fall through to regenerate.
     }
@@ -137,6 +202,20 @@ function getOrCreateKey(): Buffer {
     writeFileSync(p, _key, { mode: 0o600 })
   }
   return _key
+}
+
+/** Clear the in-memory key after an explicit profile archive so the next write creates a fresh key. */
+export function resetSecretKeyCache(): void {
+  _key = null
+}
+
+/**
+ * Prepare the file keystore for an explicit user-initiated write. This is the
+ * only path allowed to ask the original Keychain to unlock and migrate a
+ * legacy wrapped file key; ordinary reads remain prompt-free and fail closed.
+ */
+export function prepareFileKeyForWrite(): void {
+  if (useFileBackend()) getOrCreateKey(true)
 }
 
 /**

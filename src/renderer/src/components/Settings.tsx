@@ -55,6 +55,7 @@ import {
   type PublicSettings,
   type Profile,
   type TestKeyResponse,
+  type ProfileRecoveryResult,
   type DustAgent,
   DUST_BASE_AGENT_ID,
   type ConversationMode,
@@ -638,16 +639,22 @@ function detectHint(value: string, current: ProviderId): { kind: 'ok' | 'tip'; t
   return null
 }
 
+function isProfileUnlockError(message: string): boolean {
+  return /keychain|encrypted profile|secret.?key/i.test(message)
+}
+
 function AiSection({
   settings,
   patch,
   saveKey,
+  recoverEncryptedProfile,
   clearKey,
   testKey
 }: {
   settings: PublicSettings
   patch: (p: Partial<PublicSettings>) => void
   saveKey: (provider: ProviderId, k: string) => Promise<void>
+  recoverEncryptedProfile: () => Promise<ProfileRecoveryResult>
   clearKey: (provider: ProviderId) => Promise<void>
   testKey: (provider: ProviderId, k: string) => Promise<TestKeyResponse>
 }): JSX.Element {
@@ -655,6 +662,9 @@ function AiSection({
   const def = PROVIDERS[provider]
   const [key, setKey] = useState('')
   const [saved, setSaved] = useState(false)
+  const [recoveryBusy, setRecoveryBusy] = useState(false)
+  const [recoveryAvailable, setRecoveryAvailable] = useState(false)
+  const [recoveryMessage, setRecoveryMessage] = useState<string | null>(null)
   const [test, setTest] = useState<{ status: 'idle' | 'loading' | 'ok' | 'error'; message?: string }>({
     status: 'idle'
   })
@@ -700,9 +710,13 @@ function AiSection({
       await saveKey(provider, trimmed)
     } catch (e) {
       // e.g. OS encryption unavailable — store.setApiKey throws; don't fail silently.
-      setTest({ status: 'error', message: e instanceof Error ? e.message : 'Could not save the key.' })
+      const message = e instanceof Error ? e.message : 'Could not save the key.'
+      setTest({ status: 'error', message })
+      setRecoveryAvailable(isProfileUnlockError(message))
       return
     }
+    setRecoveryAvailable(false)
+    setRecoveryMessage(null)
     setSaved(true)
     setTimeout(() => setSaved(false), 1600)
     // Auto-verify the key right after saving so the user immediately sees whether it actually works —
@@ -716,6 +730,25 @@ function AiSection({
       setTest({ status: 'error', message: e instanceof Error ? e.message : 'Saved, but could not verify the key.' })
     }
     setKey('')
+  }
+
+  const recoverProfileAndRetry = async (): Promise<void> => {
+    setRecoveryBusy(true)
+    setRecoveryMessage(null)
+    try {
+      const result = await recoverEncryptedProfile()
+      if (!result.ok) {
+        setRecoveryMessage(result.canceled ? 'Recovery canceled. Your encrypted profile was not changed.' : result.error || 'Could not create a new local profile.')
+        return
+      }
+      setRecoveryAvailable(false)
+      setTest({ status: 'idle' })
+      await onSave()
+    } catch (e) {
+      setRecoveryMessage(e instanceof Error ? e.message : 'Could not create a new local profile.')
+    } finally {
+      setRecoveryBusy(false)
+    }
   }
 
   const onTest = async (): Promise<void> => {
@@ -838,6 +871,28 @@ function AiSection({
         >
           {test.status === 'ok' ? <Check size={13} /> : <AlertCircle size={13} />}
           {test.message}
+        </div>
+      )}
+
+      {recoveryAvailable && (
+        <div className="mt-2 flex flex-col gap-2 rounded-[10px] border border-[var(--cl-primary)]/35 bg-[var(--cl-primary-soft)]/40 p-3 text-[12px]">
+          <div className="flex items-start gap-1.5 text-[color:var(--cl-foreground)]">
+            <ShieldCheck size={13} className="mt-0.5 shrink-0 text-[color:var(--cl-primary)]" />
+            <span>
+              This install cannot unlock the existing encrypted profile. You can restore Keychain access and
+              try again, or create a fresh local profile while Métis preserves the old encrypted data.
+            </span>
+          </div>
+          <button
+            type="button"
+            onClick={() => void recoverProfileAndRetry()}
+            disabled={recoveryBusy}
+            className="no-drag cl-focus inline-flex w-fit items-center gap-1.5 rounded-[8px] bg-[var(--cl-primary)] px-3 py-1.5 text-[11px] font-medium text-white hover:opacity-90 disabled:opacity-50"
+          >
+            {recoveryBusy ? <Loader2 size={13} className="animate-spin" /> : <RotateCcw size={13} />}
+            {recoveryBusy ? 'Creating new profile…' : 'Create new local profile & retry'}
+          </button>
+          {recoveryMessage && <div className="text-[11px] text-[color:var(--cl-muted-foreground)]">{recoveryMessage}</div>}
         </div>
       )}
 
@@ -976,6 +1031,7 @@ function AiSection({
         settings={settings}
         patch={patch}
         saveKey={saveKey}
+        recoverEncryptedProfile={recoverEncryptedProfile}
         clearKey={clearKey}
         active={provider === 'dust'}
       />
@@ -2123,18 +2179,23 @@ function DustSetup({
   settings,
   patch,
   saveKey,
+  recoverEncryptedProfile,
   clearKey,
   active
 }: {
   settings: PublicSettings
   patch: (p: Partial<PublicSettings>) => void
   saveKey: (provider: ProviderId, k: string) => Promise<void>
+  recoverEncryptedProfile: () => Promise<ProfileRecoveryResult>
   clearKey: (provider: ProviderId) => Promise<void>
   active: boolean
 }): JSX.Element {
   const [link, setLink] = useState('')
   const [dustKey, setDustKey] = useState('')
   const [keySaving, setKeySaving] = useState(false)
+  const [recoveryBusy, setRecoveryBusy] = useState(false)
+  const [recoveryAvailable, setRecoveryAvailable] = useState(false)
+  const [recoveryMessage, setRecoveryMessage] = useState<string | null>(null)
   const [agents, setAgents] = useState<DustAgent[] | null>(null)
   const [loading, setLoading] = useState(false)
   const [err, setErr] = useState<string | null>(null)
@@ -2251,13 +2312,41 @@ function DustSetup({
     const k = dustKey.trim()
     if (!k) return
     setKeySaving(true)
-    await saveKey('dust', k)
-    await patch({ provider: 'dust' }) // activate Dust so this key is used + the add-key CTA hides
-    setDustKey('')
-    setKeySaving(false)
+    setRecoveryMessage(null)
+    try {
+      await saveKey('dust', k)
+      await patch({ provider: 'dust' }) // activate Dust so this key is used + the add-key CTA hides
+      setDustKey('')
+      setRecoveryAvailable(false)
+    } catch (e) {
+      const message = e instanceof Error ? e.message : 'Could not save the Dust API key.'
+      setErr(message)
+      setRecoveryAvailable(isProfileUnlockError(message))
+    } finally {
+      setKeySaving(false)
+    }
     // Validate immediately: load the agent list so a bad key/workspace surfaces its error here and now
     // instead of a silent "Saved" green check that only fails later when the user reaches Step 4.
     if (settings.dustWorkspaceId.trim()) void loadAgents()
+  }
+
+  const recoverProfileAndRetryDustKey = async (): Promise<void> => {
+    setRecoveryBusy(true)
+    setRecoveryMessage(null)
+    try {
+      const result = await recoverEncryptedProfile()
+      if (!result.ok) {
+        setRecoveryMessage(result.canceled ? 'Recovery canceled. Your encrypted profile was not changed.' : result.error || 'Could not create a new local profile.')
+        return
+      }
+      setRecoveryAvailable(false)
+      setErr(null)
+      await saveDustKey()
+    } catch (e) {
+      setRecoveryMessage(e instanceof Error ? e.message : 'Could not create a new local profile.')
+    } finally {
+      setRecoveryBusy(false)
+    }
   }
   // Fully disconnect Dust: clear the saved token/key, drop the workspace + region + the (user-editable)
   // thinking agent, reset the (also user-editable) base agent back to the Métis default, switch off
@@ -2474,6 +2563,28 @@ function DustSetup({
             </span>
           )}
         </div>
+
+        {recoveryAvailable && (
+          <div className="flex flex-col gap-2 rounded-[10px] border border-[var(--cl-primary)]/35 bg-[var(--cl-primary-soft)]/40 p-3 text-[12px]">
+            <div className="flex items-start gap-1.5 text-[color:var(--cl-foreground)]">
+              <ShieldCheck size={13} className="mt-0.5 shrink-0 text-[color:var(--cl-primary)]" />
+              <span>
+                Métis cannot unlock the existing encrypted profile. Restore Keychain access and retry, or
+                create a fresh local profile while the old encrypted data is preserved.
+              </span>
+            </div>
+            <button
+              type="button"
+              onClick={() => void recoverProfileAndRetryDustKey()}
+              disabled={recoveryBusy}
+              className="no-drag cl-focus inline-flex w-fit items-center gap-1.5 rounded-[8px] bg-[var(--cl-primary)] px-3 py-1.5 text-[11px] font-medium text-white hover:opacity-90 disabled:opacity-50"
+            >
+              {recoveryBusy ? <Loader2 size={13} className="animate-spin" /> : <RotateCcw size={13} />}
+              {recoveryBusy ? 'Creating new profile…' : 'Create new local profile & retry'}
+            </button>
+            {recoveryMessage && <div className="text-[11px] text-[color:var(--cl-muted-foreground)]">{recoveryMessage}</div>}
+          </div>
+        )}
 
         {/* Manual alternative — collapsed by default. Everything the automatic setup does, by hand:
             paste a Dust link (auto-fills workspace + region) or an admin API key. */}
@@ -3569,6 +3680,7 @@ export function Settings({
   settings,
   patch,
   saveKey,
+  recoverEncryptedProfile,
   clearKey,
   testKey,
   onClose,
@@ -3583,6 +3695,7 @@ export function Settings({
   settings: PublicSettings
   patch: (p: Partial<PublicSettings>) => void
   saveKey: (provider: ProviderId, k: string) => Promise<void>
+  recoverEncryptedProfile: () => Promise<ProfileRecoveryResult>
   clearKey: (provider: ProviderId) => Promise<void>
   testKey: (provider: ProviderId, k: string) => Promise<TestKeyResponse>
   onClose?: () => void
@@ -3717,7 +3830,14 @@ export function Settings({
       >
         <div className="flex flex-col gap-6 px-5 pt-5 pb-16">
             {tab === 'ai' && (
-              <AiSection settings={settings} patch={patch} saveKey={saveKey} clearKey={clearKey} testKey={testKey} />
+              <AiSection
+                settings={settings}
+                patch={patch}
+                saveKey={saveKey}
+                recoverEncryptedProfile={recoverEncryptedProfile}
+                clearKey={clearKey}
+                testKey={testKey}
+              />
             )}
 
             {tab === 'personalize' && (
