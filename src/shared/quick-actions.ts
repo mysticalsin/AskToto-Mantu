@@ -83,7 +83,7 @@ export function buildSpotlightRefPrompt(transcript: string, typed: string): stri
 }
 
 export function spotlightRefUnavailableMessage(): string {
-  return 'Connect Dust and pick a Spotlight Ref agent in Settings → AI to check for references.'
+  return 'The Spotlight Ref agent is managed. Connect or reconnect Dust in Settings → AI to the workspace that has it.'
 }
 
 // Shown when a Dust ask fails because the mentioned agent sId no longer resolves in the connected

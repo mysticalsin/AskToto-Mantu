@@ -8,7 +8,7 @@
  */
 import { createHash } from 'node:crypto'
 import { execFileSync } from 'node:child_process'
-import { extractFile, listPackage } from '@electron/asar'
+import { extractFile, getRawHeader, listPackage } from '@electron/asar'
 import {
   closeSync,
   createReadStream,
@@ -127,6 +127,38 @@ function verifyPackagedDependencyPruning() {
 }
 
 verifyPackagedDependencyPruning()
+
+function verifyAsarUnpackedReferences() {
+  const archive = join(resourcesRoot, 'app.asar')
+  const unpackedRoot = join(resourcesRoot, 'app.asar.unpacked')
+  requireRegularFile(archive)
+  const { header } = getRawHeader(archive)
+  const missing = []
+  function visit(node, prefix = '') {
+    for (const [name, entry] of Object.entries(node.files || {})) {
+      const path = `${prefix}/${name}`
+      if (entry.files) {
+        visit(entry, path)
+      } else if (entry.unpacked) {
+        const unpackedPath = join(unpackedRoot, ...path.split('/').filter(Boolean))
+        try {
+          lstatSync(unpackedPath)
+        } catch {
+          missing.push(path)
+        }
+      }
+    }
+  }
+  visit(header)
+  if (missing.length) {
+    throw new Error(
+      `app.asar has ${missing.length} dangling unpacked reference(s); the platform package cannot be extracted:\n` +
+        missing.slice(0, 20).join('\n')
+    )
+  }
+}
+
+verifyAsarUnpackedReferences()
 
 function inventoryTree(root) {
   requireDirectory(root)

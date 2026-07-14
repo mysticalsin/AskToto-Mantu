@@ -96,6 +96,18 @@ extraResources:
     to: runtime-assets-manifest.json
 mac:
   category: public.app-category.productivity
+  # electron-builder treats a target-specific `files` override as the complete app allowlist. Keep the
+  # same minimal source set here while excluding the Windows Sherpa package before the asar header is
+  # written; otherwise a shared checkout can pull in ignored worktrees and leave dangling references.
+  files:
+    - out/**/*
+    - package.json
+    - '!node_modules/@dust-tt/client/node_modules/@modelcontextprotocol/sdk{,/**/*}'
+    - '!node_modules/@dust-tt/client/node_modules/express-rate-limit{,/**/*}'
+    - '!node_modules/@dust-tt/client/node_modules/ip-address{,/**/*}'
+    - '!node_modules/sherpa-onnx-win-*{,/**/*}'
+    - '!out/**/*.map'
+    - '!**/*.d.ts'
   # ASCII everywhere on disk (see the productName + win notes): the .app bundle is Metis.app, its helper
   # bundles are "Metis Helper*.app" (required — see productName), and the .dmg/.zip assets + latest-mac.yml
   # URLs stay accent-free. The app still DISPLAYS as Métis via extendInfo.CFBundleDisplayName.

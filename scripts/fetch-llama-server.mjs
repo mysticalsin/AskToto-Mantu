@@ -169,7 +169,10 @@ export async function download(
         }
       })
       await pipeline(res, out)
-      res.setTimeout(0)
+      // IncomingMessage.setTimeout delegates to the underlying socket. After a normal response
+      // finishes Node may detach that socket, so calling it here can throw while the archive is
+      // already complete. The idle timer is only needed while the body is flowing; once pipeline
+      // resolves the stream has ended and no timer needs clearing.
       process.stdout.write('\n')
       const size = statSync(part).size
       if (total && size !== total) throw new Error(`incomplete download: got ${size} of ${total} bytes`)
