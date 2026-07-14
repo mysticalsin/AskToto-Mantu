@@ -14,7 +14,7 @@ import type { BrainRead, BrainStatus } from '@shared/brain'
 const api = {
   getData: (): Promise<BrainRead> => ipcRenderer.invoke('brain:read'),
   getStatus: (): Promise<BrainStatus | null> => ipcRenderer.invoke('brain:status'),
-  backfill: (): Promise<{ queued: number }> => ipcRenderer.invoke('brain:backfill')
+  backfill: (): Promise<{ queued: number; deferred?: 'no-provider'; preparing?: boolean }> => ipcRenderer.invoke('brain:backfill')
 }
 
 contextBridge.exposeInMainWorld('intelligence', api)

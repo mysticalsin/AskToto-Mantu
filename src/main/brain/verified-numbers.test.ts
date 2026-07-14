@@ -13,8 +13,7 @@ import {
   combineWindowExtractions,
   verifyExtraction,
   mergeExtraction,
-  enqueueIngest,
-  brainBackfillProgress
+  enqueueIngest
 } from './ingest'
 import { readDeal, readMeetingExtraction, slugify } from './store'
 import { formatDeal } from './context'
@@ -265,9 +264,9 @@ describe('windowed extraction end-to-end (Task MI-4, kills D2 — mocked createS
   let userData: string
   let meetingsFolder: string
 
-  const waitForIdle = async (): Promise<void> => {
+  const waitForStoredExtraction = async (file: string): Promise<void> => {
     await vi.waitFor(() => {
-      expect(brainBackfillProgress().running).toBe(false)
+      expect(readMeetingExtraction({ meetingsFolder } as Settings, slugify(basename(file)))).not.toBeNull()
     })
   }
 
@@ -324,10 +323,11 @@ describe('windowed extraction end-to-end (Task MI-4, kills D2 — mocked createS
 
     const file = join(meetingsFolder, 'big-meeting.md')
     writeFileSync(file, transcript, 'utf8')
+    const callsBefore = vi.mocked(createStream).mock.calls.length
     enqueueIngest(file)
-    await waitForIdle()
+    await waitForStoredExtraction(file)
 
-    expect(vi.mocked(createStream).mock.calls.length).toBeGreaterThan(1) // proves windowing actually ran multiple completion calls
+    expect(vi.mocked(createStream).mock.calls.length - callsBefore).toBeGreaterThan(1) // proves windowing actually ran multiple completion calls
 
     const stored = readMeetingExtraction({ meetingsFolder } as Settings, slugify(basename(file)))
     expect(stored).not.toBeNull()
@@ -352,7 +352,7 @@ describe('windowed extraction end-to-end (Task MI-4, kills D2 — mocked createS
     const file = join(meetingsFolder, 'short-meeting.md')
     writeFileSync(file, transcript, 'utf8')
     enqueueIngest(file)
-    await waitForIdle()
+    await waitForStoredExtraction(file)
 
     expect(seenPrompts).toHaveLength(1) // exactly one completion call — no windowing overhead below the threshold
     const expectedPrompt = `Meeting transcript (file: ${basename(file)}):\n\n"""\n${transcript}\n"""`

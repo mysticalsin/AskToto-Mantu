@@ -326,6 +326,61 @@ html.shot-bg-light #root {
   animation: panel-enter var(--duration-panel) var(--ease-spring);
 }
 
+/* Long-running background work gets a truthful progress track. The filled portion always reflects a
+   main-process checkpoint or completed meeting count; the moving highlight only says that work is alive.
+   This keeps the feedback useful under real ASR/indexing latency without inventing intermediate progress. */
+.work-progress {
+  position: relative;
+  isolation: isolate;
+  height: 5px;
+  overflow: hidden;
+  border-radius: var(--radius-pill);
+  background: rgba(255, 255, 255, 0.09);
+}
+.work-progress__value {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  transform-origin: left center;
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--color-accent), var(--color-accent-2));
+  transition: transform 220ms var(--ease-spring), opacity 150ms var(--ease-spring);
+}
+.work-progress__pulse {
+  position: absolute;
+  inset-block: 0;
+  left: 0;
+  z-index: 2;
+  width: 24%;
+  border-radius: inherit;
+  background: rgba(255, 255, 255, 0.5);
+  transform: translateX(-140%);
+  animation: work-progress-pulse 1.2s linear infinite;
+}
+@keyframes work-progress-pulse {
+  0% {
+    opacity: 0;
+    transform: translateX(-140%);
+  }
+  18%,
+  82% {
+    opacity: 0.72;
+  }
+  100% {
+    opacity: 0;
+    transform: translateX(520%);
+  }
+}
+@keyframes work-progress-reduced-pulse {
+  0%,
+  100% {
+    opacity: 0.4;
+  }
+  50% {
+    opacity: 0.75;
+  }
+}
+
 .scroll-thin {
   scrollbar-width: thin;
   scrollbar-color: var(--color-hair-strong) transparent;
@@ -749,5 +804,13 @@ input::placeholder {
   .rainbow-ring::before {
     animation: asktoto-loading-pulse 1.6s ease-in-out infinite !important;
     animation-duration: 1.6s !important;
+  }
+  .work-progress__value {
+    transition: opacity 150ms var(--ease-spring);
+  }
+  .work-progress__pulse {
+    transform: translateX(0);
+    animation: work-progress-reduced-pulse 1.2s var(--ease-spring) infinite !important;
+    animation-duration: 1.2s !important;
   }
 }

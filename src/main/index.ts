@@ -92,7 +92,7 @@ import { listModels as listLocalModels } from './llm/local-models'
 import { resetDustConversation, prewarmDustConversation, isDustAuthError } from './llm/dust'
 import {
   enqueueIngest,
-  startBackfill,
+  requestBackfill,
   brainBackfillProgress,
   resumeBackfillIfPending,
   settleCommitment,
@@ -2511,7 +2511,7 @@ function registerIpc(): void {
         const saved = await listMeetings()
         const ingestedFiles = new Set(Object.entries(idx.ingested).filter(([, v]) => v.ok).map(([file]) => file))
         if (!saved.some(({ file }) => !ingestedFiles.has(file))) return
-        const r = startBackfill()
+        const r = requestBackfill()
         auditLog('brain.backfill.start', { queued: r.queued, deferred: r.deferred, automatic: true })
       } catch (err) {
         mainLog.warn('[brain] automatic dashboard backfill check failed:', err)
@@ -2543,7 +2543,7 @@ function registerIpc(): void {
   ipcMain.handle(IPC.brainBackfill, (e) => {
     assertBrainReader(e)
     if (!requireAuth()) throw new Error('Not signed in.')
-    const r = startBackfill()
+    const r = requestBackfill()
     auditLog('brain.backfill.start', { queued: r.queued })
     return r
   })

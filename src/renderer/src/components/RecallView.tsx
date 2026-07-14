@@ -16,6 +16,8 @@ import {
   Lock
 } from 'lucide-react'
 import { TextButton } from './ui'
+import { WorkProgressMeter } from './WorkProgressMeter'
+import { describeImportProgress, describeMeetingIndexProgress } from './work-progress'
 import { accelLabel } from '../lib/keys'
 import type {
   MeetingSummary,
@@ -125,7 +127,7 @@ function GraphBar(): JSX.Element | null {
     if (!backfillRunning) return
     const iv = setInterval(() => {
       void window.toto.brainStatus().then(setBrain).catch(() => {})
-    }, 3000)
+    }, 1000)
     return () => clearInterval(iv)
   }, [backfillRunning])
 
@@ -152,34 +154,54 @@ function GraphBar(): JSX.Element | null {
   }
 
   const backfilling = !!brain?.backfill?.running
+  const backfillFailed = brain?.backfill?.failed ?? 0
+  const indexProgress = brain?.backfill ? describeMeetingIndexProgress(brain.backfill) : null
   return (
-    <div className="flex items-center justify-between rounded-xl border border-[var(--color-hair-soft)] bg-white/[0.03] px-3 py-2">
-      <div className="flex items-center gap-1.5 text-[11px] text-[color:var(--color-ink-2)]">
-        <Network size={12} className="text-[var(--color-accent)]" />
-        {error ? (
-          <span className="text-[var(--color-danger)]">{error}</span>
-        ) : backfilling ? (
-          <>Building your brain… {brain?.backfill?.done ?? 0}/{brain?.backfill?.total ?? 0} meetings</>
-        ) : brain && brain.meetings > 0 ? (
-          <>
-            Intelligence · {brain.meetings} meetings · {brain.people} people · {brain.accounts} accounts
-            {brain.deals > 0 ? ` · ${brain.deals} deals` : ''}
-          </>
-        ) : (
-          'Mantu Intelligence: build a brain from your meetings.'
-        )}
-      </div>
-      <div className="flex items-center gap-1">
-        <TextButton
-          onClick={() => void backfill()}
-          disabled={busy || backfilling}
-          title="Index every meeting (past + vault) into the brain"
-        >
-          <RefreshCw size={11} className={busy || backfilling ? 'animate-spin' : ''} /> Index meetings
-        </TextButton>
-        <TextButton onClick={() => void openDashboard()} title="Open the Mantu Intelligence dashboard">
-          <ExternalLink size={11} /> Mantu Intelligence
-        </TextButton>
+    <div className="rounded-xl border border-[var(--color-hair-soft)] bg-white/[0.03] px-3 py-2">
+      <div className="flex items-center justify-between gap-2">
+        <div className="min-w-0 flex-1 text-[11px] text-[color:var(--color-ink-2)]">
+          <div className="flex items-center gap-1.5">
+            <Network size={12} className="shrink-0 text-[var(--color-accent)]" />
+            {error ? (
+              <span className="text-[var(--color-danger)]">{error}</span>
+            ) : backfilling && indexProgress ? (
+              <span aria-atomic="true" aria-live="polite">{indexProgress.label}</span>
+            ) : backfillFailed > 0 && indexProgress ? (
+              <span className="text-[var(--color-danger)]" role="alert">
+                {indexProgress.label}. Retry Index meetings after checking AI settings.
+              </span>
+            ) : brain && brain.meetings > 0 ? (
+              <>
+                Intelligence · {brain.meetings} meetings · {brain.people} people · {brain.accounts} accounts
+                {brain.deals > 0 ? ` · ${brain.deals} deals` : ''}
+              </>
+            ) : (
+              'Mantu Intelligence: build a brain from your meetings.'
+            )}
+          </div>
+          {backfilling && indexProgress && (
+            <WorkProgressMeter
+              active
+              ariaLabel="Mantu Intelligence meeting index progress"
+              className="mt-1.5"
+              percent={indexProgress.percent}
+              valueText={indexProgress.valueText}
+            />
+          )}
+        </div>
+        <div className="flex shrink-0 items-center gap-1">
+          <TextButton
+            onClick={() => void backfill()}
+            disabled={busy || backfilling}
+            title="Index every meeting (past + vault) into the brain"
+          >
+            <RefreshCw size={11} className={busy || backfilling ? 'loading-spinner animate-spin' : ''} />
+            {backfilling ? 'Mapping…' : busy ? 'Starting…' : 'Index meetings'}
+          </TextButton>
+          <TextButton onClick={() => void openDashboard()} title="Open the Mantu Intelligence dashboard">
+            <ExternalLink size={11} /> Mantu Intelligence
+          </TextButton>
+        </div>
       </div>
     </div>
   )
@@ -895,13 +917,19 @@ export function RecallView({
       {importError && (
         <div className="mb-2 px-1 text-[11px] text-[var(--color-danger)]">{importError}</div>
       )}
-      {importJobs.filter((job) => (job.state !== 'done' || !!job.recapError) && job.state !== 'cancelled').map((job) => (
-        <div key={job.jobId} className="mb-2 rounded-xl border border-[var(--color-hair-soft)] bg-white/[0.03] px-3 py-2">
+      {importJobs
+        .filter((job) => (job.state !== 'done' || !!job.recapError) && job.state !== 'cancelled')
+        .map((job) => {
+          const progress = describeImportProgress(job)
+          return (
+            <div
+              key={job.jobId}
+              aria-busy={progress.active || undefined}
+              className="mb-2 rounded-xl border border-[var(--color-hair-soft)] bg-white/[0.03] px-3 py-2"
+            >
           <div className="flex items-center gap-2 text-[12px]">
             <span className="min-w-0 flex-1 truncate font-medium text-[color:var(--color-ink)]">{job.title}</span>
-            <span className="shrink-0 text-[color:var(--color-ink-3)]">
-              {job.state === 'done' && job.recapError ? 'Summary needs attention' : job.state === 'queued' ? 'Queued' : job.state === 'decoding' ? 'Decoding…' : job.state === 'transcribing' ? (job.totalChunks > 0 ? `Transcribing ${job.pct}%` : 'Transcribing…') : job.state === 'saving' ? 'Saving…' : job.state === 'recapping' ? 'Summarizing…' : 'Needs attention'}
-            </span>
+            <span className="shrink-0 text-[color:var(--color-ink-3)]">{progress.label}</span>
             {job.state === 'failed' ? (
               <>
                 <TextButton onClick={() => resumeImport(job.jobId)} title="Resume this import from its last saved transcript checkpoint">Resume</TextButton>
@@ -914,7 +942,7 @@ export function RecallView({
               </>
             ) : job.state === 'done' && job.recapError && job.file ? (
               <>
-                <TextButton onClick={() => openMeeting(job.file!)} title="Open this meeting and retry its summary">Open</TextButton>
+                <TextButton onClick={() => openMeeting(job.file!)} title="Open this meeting and retry its summary">Open meeting</TextButton>
                 <TextButton
                   icon={X}
                   ariaLabel="Dismiss this summary notice"
@@ -926,10 +954,24 @@ export function RecallView({
               <TextButton onClick={() => cancelImport(job.jobId)} title="Cancel this import">Cancel</TextButton>
             ) : null}
           </div>
+          {(progress.active || progress.percent !== null) && (
+            <div className="mt-1.5">
+              <div aria-atomic="true" aria-live="polite" className="text-[11px] text-[color:var(--color-ink-3)]">
+                {progress.detail}
+              </div>
+              <WorkProgressMeter
+                active={progress.active}
+                ariaLabel={`${job.title} import progress`}
+                className="mt-1"
+                percent={progress.percent}
+                valueText={progress.valueText}
+              />
+            </div>
+          )}
           {job.error && <div className="mt-1 text-[11px] text-[var(--color-danger)]">{job.error}</div>}
-          {job.recapError && <div className="mt-1 text-[11px] text-[var(--color-ink-3)]">Transcript saved. Summary can be retried from the meeting.</div>}
-        </div>
-      ))}
+            </div>
+          )
+        })}
 
       {/* ── UPCOMING CALENDAR SECTION ───────────────────────────────────── */}
       <UpcomingSection onConnectCalendar={onConnectCalendar} />

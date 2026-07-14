@@ -484,7 +484,9 @@ export interface BrainStatus {
   nodes: number
   edges: number
   warnings: number
-  backfill?: { total: number; done: number; running: boolean }
+  /** `done` is every settled queue job; `failed`, when nonzero, identifies settled jobs that were not
+   * successfully mapped and need a retry rather than being counted as completed intelligence. */
+  backfill?: { total: number; done: number; failed?: number; preparing?: boolean; running: boolean }
   // MI-2.5 review round 3: true while the correction journal is durably locked after a genuine
   // corruption was detected + preserved. Computed fresh each poll from the on-disk sentinel (the lock
   // file is the source of truth), so BrainView can offer an in-app "Reset corrections lock" affordance
