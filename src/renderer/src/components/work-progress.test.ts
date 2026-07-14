@@ -58,9 +58,26 @@ describe('audio import progress presentation', () => {
     ).toEqual({
       active: true,
       detail: '25% transcribed · chunk 2 of 4',
-      label: 'Transcribing audio',
+      label: 'Transcribing audio · 25%',
       percent: 25,
       valueText: '25% transcribed'
+    })
+  })
+
+  it('keeps a numeric transcription signal even before a total chunk count is known', () => {
+    expect(
+      describeImportProgress({
+        state: 'transcribing',
+        cursor: 0,
+        totalChunks: 0,
+        pct: 42
+      })
+    ).toEqual({
+      active: true,
+      detail: '42% transcribed',
+      label: 'Transcribing audio · 42%',
+      percent: 42,
+      valueText: '42% transcribed'
     })
   })
 
@@ -70,7 +87,7 @@ describe('audio import progress presentation', () => {
         state: 'decoding',
         cursor: 0,
         totalChunks: 0,
-        pct: 0
+        pct: null
       })
     ).toEqual({
       active: true,

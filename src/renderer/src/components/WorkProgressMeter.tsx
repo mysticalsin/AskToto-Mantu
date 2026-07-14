@@ -22,11 +22,13 @@ export function WorkProgressMeter({
       aria-valuemin={determinate ? 0 : undefined}
       aria-valuenow={determinate ? percent : undefined}
       aria-valuetext={valueText}
-      className={`work-progress ${className}`}
+      className={`work-progress ${determinate ? 'work-progress--determinate' : 'work-progress--indeterminate'} ${className}`}
       role="progressbar"
     >
       <span aria-hidden="true" className="work-progress__value" style={{ transform: `scaleX(${scale})` }} />
-      {active && <span aria-hidden="true" className="work-progress__pulse" />}
+      {/* A moving pulse is useful only while the denominator is unknown. Once a percentage is available,
+          the filled track itself animates to each checkpoint so the UI never appears to jump backwards. */}
+      {active && !determinate && <span aria-hidden="true" className="work-progress__pulse" />}
     </div>
   )
 }

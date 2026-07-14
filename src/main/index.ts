@@ -317,12 +317,10 @@ function assertBrainReader(event: Electron.IpcMainInvokeEvent): void {
 }
 
 function importJobView(job: ImportJob): ImportJobView {
-  const pct =
-    job.state === 'done'
-      ? 100
-      : job.totalChunks > 0
-        ? Math.min(99, Math.round((job.cursor / job.totalChunks) * 100))
-        : 0
+  let pct: number | null = null
+  if (job.state === 'done') pct = 100
+  else if (job.progressPct !== undefined) pct = Math.min(99, Math.max(0, Math.round(job.progressPct)))
+  else if (job.totalChunks > 0) pct = Math.min(99, Math.round((job.cursor / job.totalChunks) * 100))
   return {
     jobId: job.jobId,
     title: job.title,
@@ -470,6 +468,9 @@ async function startImportDecoder(job: ImportJob): Promise<void> {
       onChunk: async (seq, samples) => {
         await importJobs?.acceptDecodedChunk(job.jobId, seq, 0, samples)
       },
+      onProgress: async (pct) => {
+        await importJobs?.reportProgress(job.jobId, pct)
+      },
       onComplete: async (totalChunks) => {
         // Release the process slot before finishDecoding pumps the next FIFO job.
         ffmpegDecoders.delete(job.jobId)
@@ -557,7 +558,12 @@ function importedTranscriptText(lines: ImportJob['lines']): string {
 async function runImportedRecap(job: ImportJob): Promise<string | undefined> {
   const settings = getSettings()
   const allowed = getAllowedProviders()
-  const ordered = [
+  // An imported recording is a summary task. If the user opted into Métis Local summaries and its
+  // installer-owned runtime is ready, try it first so the transcript stays on-device. Cloud providers
+  // remain the explicit fallback when local is disabled or unavailable.
+  const localSummaryReady = localEligibleFor({ mode: 'summary' }, settings, 'base', allowed)
+  const ordered: ProviderId[] = [
+    ...(localSummaryReady ? (['local'] as ProviderId[]) : []),
     ...(settings.dustWorkspaceId && getApiKey('dust') && settings.providerModels.dust ? (['dust'] as ProviderId[]) : []),
     settings.provider,
     ...(Object.keys(PROVIDERS) as ProviderId[])
@@ -565,6 +571,7 @@ async function runImportedRecap(job: ImportJob): Promise<string | undefined> {
   const candidates = [...new Set(ordered)].filter((provider) => {
     const def = PROVIDERS[provider]
     if (!def || (allowed && !allowed.includes(provider))) return false
+    if (provider === 'local') return localSummaryReady
     if (def.kind === 'cli') return !!settings.cliConnected[provider]
     if (!getApiKey(provider)) return false
     if (provider === 'dust' && !settings.dustWorkspaceId) return false
@@ -573,13 +580,16 @@ async function runImportedRecap(job: ImportJob): Promise<string | undefined> {
   if (!candidates.length) return undefined
 
   const transcript = settings.redactSensitive ? redactSecrets(importedTranscriptText(job.lines)) : importedTranscriptText(job.lines)
-  const req: AskStart = { id: `import-recap-${job.jobId}`, mode: 'recap', prompt: '', transcript, history: [] }
   let lastError: Error | null = null
   for (const provider of candidates) {
     const def = PROVIDERS[provider]
-    const key = getApiKey(provider)
-    const rawModel = resolveModelTier(provider, settings.providerModels, settings.providerModelsThinking, 'think', settings.providerModelsDeep)
-    const model = applyInteractiveGuardrail(provider, 'think', rawModel || def.defaultModel)
+    const local = provider === 'local'
+    const req: AskStart = { id: `import-recap-${job.jobId}`, mode: local ? 'summary' : 'recap', prompt: '', transcript, history: [] }
+    const key = local ? '' : getApiKey(provider)
+    const rawModel = local
+      ? settings.localLlm.modelId
+      : resolveModelTier(provider, settings.providerModels, settings.providerModelsThinking, 'think', settings.providerModelsDeep)
+    const model = local ? rawModel : applyInteractiveGuardrail(provider, 'think', rawModel || def.defaultModel)
     try {
       const recap = await new Promise<string>((resolveRecap, rejectRecap) => {
         let text = ''
@@ -587,7 +597,7 @@ async function runImportedRecap(job: ImportJob): Promise<string | undefined> {
           providerId: provider,
           kind: def.kind,
           apiKey: key,
-          baseURL: provider === 'custom' ? settings.customBaseUrl : provider === 'dust' ? settings.dustBaseUrl : def.baseUrl,
+          baseURL: local ? undefined : provider === 'custom' ? settings.customBaseUrl : provider === 'dust' ? settings.dustBaseUrl : def.baseUrl,
           workspaceId: settings.dustWorkspaceId,
           refreshDustAuth:
             provider === 'dust'

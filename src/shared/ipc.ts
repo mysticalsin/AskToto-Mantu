@@ -324,7 +324,8 @@ export interface ImportJobView {
   state: ImportJobState
   cursor: number
   totalChunks: number
-  pct: number
+  /** Null means the decoder has not supplied a trustworthy denominator yet. */
+  pct: number | null
   error?: string
   recapError?: string
   file?: string
