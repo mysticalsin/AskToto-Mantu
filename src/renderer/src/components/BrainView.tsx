@@ -27,6 +27,7 @@ import { MantuMark } from './MantuMark'
 import { Spinner } from './ui'
 import { useFlash } from '../lib/useFlash'
 import { BrainRecordPage, recordKey, sortAttentionItems, type BrainRecordRef, type RecentMerge } from './BrainRecordPage'
+import { shouldAutoBackfill } from './brain-auto'
 
 /**
  * Mantu Intelligence — the second-brain dashboard over the meeting knowledge store (.brain/).
@@ -352,6 +353,9 @@ export function BrainView({
   // poll interval as ingestion grows, so without this an older, slower-resolving snapshot can land
   // after a newer one and make the KPI tiles/lists visibly jump backward.
   const refreshingRef = useRef(false)
+  // Opening Mantu Intelligence is an explicit request for current knowledge. Start one automatic pass
+  // for saved transcripts that predate the brain, without re-triggering it on each progress poll.
+  const autoBackfillAttemptedRef = useRef(false)
 
   const refresh = useCallback(async (): Promise<void> => {
     if (refreshingRef.current) return
@@ -455,7 +459,7 @@ export function BrainView({
     try {
       const result = await window.toto.brainBackfill()
       if (result.deferred === 'no-provider') {
-        setError('Connect an AI provider in Settings → AI before indexing meetings. Métis Local handles suggestions, summaries, and screenshots.')
+        setError('Connect an AI provider in Settings → AI, or enable Métis Local there to index meetings on this device.')
         return
       }
       await refresh()
@@ -465,6 +469,27 @@ export function BrainView({
       setBackfilling(false)
     }
   }, [refresh])
+
+  // Existing meetings used to wait indefinitely for a manual "Index meetings" click. New saves already
+  // enqueue themselves in the main process; this covers the backlog when the in-app Intelligence view is
+  // opened and keeps the manual button as an explicit retry/recovery path.
+  useEffect(() => {
+    if (!status) return
+    if (
+      shouldAutoBackfill({
+        attempted: autoBackfillAttemptedRef.current,
+        loading,
+        running: backfillRunning,
+        savedMeetings: meetings.length,
+        ingestedMeetings: status.meetings,
+        savedMeetingFiles: meetings.map(({ file }) => file),
+        ingestedFiles: status.ingestedFiles
+      })
+    ) {
+      autoBackfillAttemptedRef.current = true
+      void startBackfill()
+    }
+  }, [backfillRunning, loading, meetings.length, startBackfill, status])
 
   // Undo a just-completed merge (the record page's post-merge banner) — restores both sides from the
   // journal snapshot and lands back on the just-restored (fromId) record.
@@ -611,7 +636,8 @@ export function BrainView({
           </div>
           <div className="max-w-[380px] text-[12px] leading-snug text-[color:var(--color-ink-3)]">
             Métis extracts people, accounts, deals, and win/loss signals from every saved transcript into a
-            knowledge store your Dust agents can read. New meetings are ingested automatically.
+            knowledge store your Dust agents can read. New meetings are ingested automatically, and existing
+            saved meetings start indexing when Mantu Intelligence opens.
           </div>
           <button
             type="button"

@@ -135,7 +135,7 @@ function GraphBar(): JSX.Element | null {
     try {
       const result = await window.toto.brainBackfill()
       if (result.deferred === 'no-provider') {
-        setError('Connect an AI provider in Settings → AI before indexing meetings. Métis Local handles suggestions, summaries, and screenshots.')
+        setError('Connect an AI provider in Settings → AI, or enable Métis Local there to index meetings on this device.')
         return
       }
       setBrain(await window.toto.brainStatus())
