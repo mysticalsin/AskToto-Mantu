@@ -105,11 +105,12 @@ export function streamLocal(opts: StreamOptions): StreamHandle {
       const localReq = boundedLocalRequest(opts.req)
       const localSystem = boundedLocalSystem(opts.system)
       const maxOutputTokens =
-        opts.req.mode === 'suggest'
+        opts.maxOutputTokens ??
+        (opts.req.mode === 'suggest'
           ? LOCAL_OUTPUT_TOKEN_BUDGETS.suggest
           : opts.req.mode === 'summary'
             ? LOCAL_OUTPUT_TOKEN_BUDGETS.summary
-            : LOCAL_OUTPUT_TOKEN_BUDGETS.vision
+            : LOCAL_OUTPUT_TOKEN_BUDGETS.vision)
       streamActive = true
       localRuntime.beginStream()
       inner = streamOpenAI({

@@ -306,6 +306,13 @@ describe('streamLocal', () => {
     expect(passed.maxOutputTokens).toBe(expected)
   })
 
+  it('honors an explicit caller budget for structured brain extraction', async () => {
+    streamLocal(baseOpts('summary', { maxOutputTokens: 1536 }))
+    await flush()
+    const passed = openaiMock.streamOpenAI.mock.calls[0][0] as StreamOptions
+    expect(passed.maxOutputTokens).toBe(1536)
+  })
+
   it('drops generic chat history before an in-scope local request so it cannot consume the bounded slot', async () => {
     streamLocal(
       baseOpts('summary', {

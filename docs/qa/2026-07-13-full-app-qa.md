@@ -4,7 +4,7 @@
 
 ## Test boundary
 
-Physical testing uses the final packaged Apple Silicon macOS app with synthetic data and an isolated profile. The final DMG, ZIP, and app are under `/private/tmp/metis-release-final-20260714-mac`. Windows x64 Setup and Portable EXEs are under `/private/tmp/metis-release-final-20260714-win`; they pass payload, ASAR extraction, architecture, and runtime checks, but there is no Windows device or runner available for native execution. Provider-authenticated paths and OS permission approval are intentionally not performed with real credentials or captured user content.
+Physical testing uses the final packaged Apple Silicon macOS app with synthetic data and isolated profiles. The current corrected DMG, ZIP, and app are under `/private/tmp/metis-release-brain-auto-20260714-mac`; Windows x64 Setup and Portable EXEs are under `/private/tmp/metis-release-brain-auto-20260714-win`. They pass payload, ASAR extraction, architecture, and runtime checks, but there is no Windows device or runner available for native execution. Provider-authenticated paths and OS permission approval are intentionally not performed with real credentials or captured user content.
 
 ## Workflow matrix
 
@@ -15,8 +15,8 @@ Physical testing uses the final packaged Apple Silicon macOS app with synthetic 
 | WF-03 | Settings persistence and privacy controls | Final packaged app: mode persisted as Interview after relaunch; Privacy and AI tabs; About shows `Métis 1.0.2 · Mantu` | Passed |
 | WF-04 | Offline audio import and transcription | Final packaged app native picker selected `en.wav`; UI showed `Transcribing`, then `Summary needs attention` and saved transcript; smoke import also passed | Passed |
 | WF-05 | Saved meeting, history, recall, and recovery | Synthetic six-line meeting opened from History with transcript; imported meeting produced a recoverable summary notice and Open action | Passed |
-| WF-06 | Métis Local text routing, summary, vision, warm restart | AI tab showed bundled Qwen3.5 0.8B and enabled local features; model hashes and packaged warm-suggest proof passed; denied screen permission exercised safe fallback | Passed |
-| WF-07 | Mantu Intelligence, indexing, read views, and guarded backfill | Intelligence screen showed saved-meeting count; Index meetings displayed the no-provider recovery guard; dashboard/read views navigated without a crash | Passed |
+| WF-06 | Métis Local text routing, summary, vision, warm restart, and brain extraction | AI tab showed bundled Qwen3.5 0.8B and enabled local features; model hashes and packaged warm-suggest proof passed; clean-profile Index extraction completed locally with `ok: true` | Passed |
+| WF-07 | Mantu Intelligence, manual indexing, automatic backlog, read views, and guarded backfill | Manual Index completed one saved meeting; a separate clean profile opened Mantu Intelligence without pressing Index and automatically completed the backlog; dashboard showed the resulting meeting and intelligence | Passed |
 | WF-08 | Permissions, capture, error states, and safe recovery | Privacy statuses inspected without accepting OS prompts; screen capture showed the safe notice together with provider error; Spotlight Ref recovery path verified | Passed |
 | WF-09 | Windows installer and portable payload | Final Setup and Portable EXEs passed post-sign runtime checks, ASAR extraction, exact platform inventory, and SHA-256 capture | Passed structurally; native Windows execution external |
 
@@ -32,16 +32,19 @@ Physical testing uses the final packaged Apple Silicon macOS app with synthetic 
 | QA-006 | High | A Windows build could leave Darwin Sherpa entries marked `unpacked` in `app.asar` after `afterPack` removed the foreign files. | The child config's target-specific file override fell back to a broad source selection, so the ASAR header and unpacked tree diverged. | Add an explicit Windows allowlist, exclude foreign Sherpa before ASAR creation, and fail the runtime check on any dangling unpacked reference. | Fixed; fresh Windows package passes post-sign runtime check and `asar extract OK true`. |
 | QA-007 | High | The same Windows configuration pulled ignored worktrees, video files, and local model caches into `app.asar`, producing an approximately 9.7 GB unusable package. | The target-specific file override did not preserve the base allowlist. | Add complete allowlists to both the Windows child and macOS target config. | Fixed; final app.asar is 61 MB, resources are approximately 1.7 GB, and final DMG/ZIP/EXE artifacts are approximately 1.3 GB each. |
 | QA-008 | Medium | A normal completed llama-server archive response could fail after the bytes were written with `Cannot read properties of null (reading 'setTimeout')`. | The downloader cleared an idle timer through `IncomingMessage.setTimeout(0)` after Node had detached the response socket. | Remove the post-pipeline socket call and add a completed-response regression test. | Fixed; `scripts/fetch-llama-server.test.ts` passes all 3 tests and both platform sidecars provision/check cleanly. |
+| QA-009 | High | In a clean Local-only profile, click **Index meetings** or open Mantu Intelligence with a saved meeting. The sidecar ran, but the meeting initially remained absent or failed in `.brain/index.json`. | Brain backfill only considered credentialed cloud/CLI providers, and the automatic dashboard trigger was not wired to the saved-meeting/index count. | Route brain extraction to the bundled local model when opted in, use the structured summary path with a larger output budget, trigger backlog processing from both Intelligence entry points, and expose progress/retry state in the UI. | Fixed and physically verified on the corrected packaged Mac app: manual Index and automatic dashboard-open each persisted one `ok: true` meeting and refreshed Mantu Intelligence. |
+| QA-010 | High | Qwen3.5 returned a valid first JSON object followed by a second fragment, then returned null-valued optional deal sidecars; extraction was marked failed. | JSON extraction used the last closing brace, and the schema rejected the small model's semantically empty optional sidecars. | Parse the first balanced JSON object, normalize all-null amount/close-date sidecars to `null`, and add direct schema/parser regressions. | Fixed; full suite passes and the latest clean-profile automatic run completed with no index warnings. |
+| QA-011 | Low | Backfill treated the meetings-folder README as a transcript candidate. | The candidate filter accepted every non-hidden `.md` except `index.md`. | Exclude `README.md` from brain backfill candidates. | Fixed; clean-profile runs indexed only the synthetic meeting, with no README entry. |
 
 ## Verification record
 
 ### Source and build gates
 
-- `npm test`: **101 test files, 1,284 tests passed**.
+- `npm test`: **103 test files, 1,298 tests passed**.
 - `npm run typecheck`: **passed** for both Node and web projects.
 - `npm run build:intelligence`: **passed**.
 - `npm run build`: **passed**, including offline-package and bytecode checks.
-- Targeted regressions for Spotlight Ref, Answer notice handling, Settings version, Dust messaging, and LLM behavior: **5 files, 39 tests passed**.
+- Targeted regressions for Spotlight Ref, Answer notice handling, Settings version, Dust messaging, LLM behavior, local routing, brain extraction, schema normalization, and automatic-backfill gating all passed.
 - `npx vitest run scripts/fetch-llama-server.test.ts`: **3 tests passed**.
 
 ### Runtime and artifact gates
@@ -52,10 +55,15 @@ Physical testing uses the final packaged Apple Silicon macOS app with synthetic 
 - macOS `check-packaged-runtime.mjs ... --post-sign`: **passed**; deep strict codesign verification passed.
 - Windows `check-packaged-runtime.mjs ... --post-sign`: **passed** for the final unpacked payload.
 - ASAR extraction passed for both final platform payloads. The Windows Setup and Portable SHA-256 values are recorded in the release handoff:
-  - Setup: `d6a4def7bd5e29d291d32416714466e1015a9b26a40f6ab1f821e78734854031`
-  - Portable: `03a97b5762b586e5fbbb981d7be358c19f4095fa3759d30f95a62550329d5fc6`
+  - Setup: `f5e2269449fcf7ccb976423253b53067a09ea771a30530be397a568ee81237f4`
+  - Portable: `8358c09b943b55fd7519d2b05d33c14932ebe21ba4fb84fb97e827d1477df98a`
+- Final macOS artifact SHA-256 values:
+  - DMG: `a72d8852717c6e05f6fabfc44a7a7e60b02a0b520a2e4b6e60a2d80a8dbb77bb`
+  - ZIP: `1867e75ae74e9acacb02215df35197ad8a32bbb4af134f5e103311d804a918d6`
 - Exact final macOS bundled-model warm-suggest proof passed: sidecar healthy after 2,432 ms, warm TTFT 1,311 ms, decode 26.2 tok/s. The command exited 0; timing is machine-load dependent.
 - Exact final macOS smoke import passed with one transcript line saved.
+- Latest physical brain proof profile `/private/tmp/metis-physical-qa-brain-auto3-20260714`: clicking **Index meetings** showed `Building your brain… 0 / 1 meetings`; the persisted index then contained one `ok: true` meeting and History showed `Intelligence · 1 meetings · 2 people · 1 accounts · 1 deals`; Mantu Intelligence → Meetings showed the meeting.
+- Latest automatic-backfill proof profile `/private/tmp/metis-physical-qa-brain-auto6-20260714`: opening the Mantu Intelligence dashboard without clicking Index emitted `brain.backfill.start` with `automatic:true`, then one local `brain.ingest ok:true` entry; after refresh, Today showed one open deal and Meetings showed `1 total` with the extracted meeting.
 
 ### Physical evidence
 

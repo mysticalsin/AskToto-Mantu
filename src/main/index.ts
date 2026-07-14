@@ -2500,7 +2500,24 @@ function registerIpc(): void {
   ipcMain.handle(IPC.brainOpenDashboard, (e) => {
     assertMainWindow(e)
     if (!requireAuth()) throw new Error('Not signed in.')
-    return openIntelligenceWindow()
+    const result = openIntelligenceWindow()
+    // Opening the full dashboard is an explicit request for current meeting knowledge. Kick off one
+    // backlog pass for saved transcripts that predate the brain; new saves already call enqueueIngest.
+    // This is deliberately fire-and-forget so a slow OneDrive listing never delays the window itself.
+    void (async () => {
+      try {
+        const s = getSettings()
+        const idx = readBrainIndex(s)
+        const saved = await listMeetings()
+        const ingestedFiles = new Set(Object.entries(idx.ingested).filter(([, v]) => v.ok).map(([file]) => file))
+        if (!saved.some(({ file }) => !ingestedFiles.has(file))) return
+        const r = startBackfill()
+        auditLog('brain.backfill.start', { queued: r.queued, deferred: r.deferred, automatic: true })
+      } catch (err) {
+        mainLog.warn('[brain] automatic dashboard backfill check failed:', err)
+      }
+    })()
+    return result
   })
   ipcMain.handle(IPC.brainStatus, (e) => {
     assertBrainReader(e)
@@ -2510,6 +2527,7 @@ function registerIpc(): void {
     const graph = readBrainGraph(s)
     return {
       meetings: Object.values(idx.ingested).filter((v) => v.ok).length,
+      ingestedFiles: Object.entries(idx.ingested).filter(([, v]) => v.ok).map(([file]) => file),
       people: listBrainEntities(s, 'person').length,
       accounts: listBrainEntities(s, 'account').length,
       deals: listBrainEntities(s, 'deal').length,

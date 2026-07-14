@@ -19,8 +19,9 @@ import {
 import { INJECTION_GUARD } from '@shared/prompts'
 import { redactSecrets } from '@shared/redact'
 import { alignQuote, verifyNumericFact, extractNumerals, numeralDerivable } from '@shared/grounding'
-import { getSettings, getApiKey } from '../store'
+import { getSettings, getApiKey, getAllowedProviders } from '../store'
 import { createStream } from '../llm'
+import { localBaseReady } from '../llm/local-routing'
 import { readSavedFile, resolveMeetingsFolder } from '../transcripts'
 import { auditLog, mainLog } from '../logger'
 import {
@@ -72,6 +73,9 @@ function hasUsableProvider(s: Settings): boolean {
 function pickProvider(s: Settings): { provider: ProviderId; model: string; key: string } | null {
   const order = [s.provider, ...(Object.keys(PROVIDERS) as ProviderId[])]
   for (const p of order) {
+    // The bundled local model has no API key and is considered below as an explicit brain fallback.
+    // Keeping it out of this credential loop preserves the existing cloud/CLI precedence order.
+    if (p === 'local') continue
     const def = PROVIDERS[p]
     if (!def) continue
     const key = getApiKey(p)
@@ -82,6 +86,13 @@ function pickProvider(s: Settings): { provider: ProviderId; model: string; key: 
     if (!model) continue
     return { provider: p, model, key }
   }
+  // A Local-only profile must still be able to build Mantu Intelligence. The live local router keeps
+  // answer/recap out of scope, but brain extraction is a structured summary task and uses the same
+  // bundled runtime/model without sending the transcript off-device. Cloud providers remain preferred
+  // when configured, so enabling Local does not silently change an existing cloud workflow.
+  if (s.localLlm.useFor.summary && localBaseReady(s, getAllowedProviders())) {
+    return { provider: 'local', model: s.localLlm.modelId, key: '' }
+  }
   return null
 }
 
@@ -91,7 +102,10 @@ function runCompletion(s: Settings, system: string, userText: string, id: string
   if (!picked) return Promise.reject(new Error('No configured AI provider for brain ingest.'))
   const { provider, model, key } = picked
   const def = PROVIDERS[provider]
-  const req: AskStart = { id, mode: 'answer', prompt: userText, history: [] } as AskStart
+  const isLocal = provider === 'local'
+  const req: AskStart = isLocal
+    ? ({ id, mode: 'summary', prompt: '', transcript: userText, history: [] } as AskStart)
+    : ({ id, mode: 'answer', prompt: userText, history: [] } as AskStart)
   return new Promise<string>((resolve, reject) => {
     let out = ''
     createStream({
@@ -103,6 +117,7 @@ function runCompletion(s: Settings, system: string, userText: string, id: string
       model,
       temperature: 0, // extraction wants determinism, not creativity
       idleMs: 120_000,
+      maxOutputTokens: isLocal ? 1536 : undefined,
       freshConversation: true, // Dust: never join/replace the live meeting's cached conversation
       system,
       req,
@@ -122,9 +137,33 @@ export function extractJsonObject(raw: string): string {
   const fenced = raw.match(/```(?:json)?\s*([\s\S]*?)```/)
   const body = fenced ? fenced[1] : raw
   const start = body.indexOf('{')
-  const end = body.lastIndexOf('}')
-  if (start === -1 || end === -1 || end <= start) throw new Error('No JSON object in model output')
-  return body.slice(start, end + 1)
+  if (start === -1) throw new Error('No JSON object in model output')
+
+  // Small on-device models occasionally append a second JSON fragment or a prose note after the
+  // requested object. `lastIndexOf('}')` made the whole concatenation invalid JSON; scan for the first
+  // balanced object instead, respecting braces and escapes inside JSON strings.
+  let depth = 0
+  let inString = false
+  let escaped = false
+  for (let i = start; i < body.length; i++) {
+    const ch = body[i]
+    if (inString) {
+      if (escaped) escaped = false
+      else if (ch === '\\') escaped = true
+      else if (ch === '"') inString = false
+      continue
+    }
+    if (ch === '"') {
+      inString = true
+      continue
+    }
+    if (ch === '{') depth++
+    else if (ch === '}') {
+      depth--
+      if (depth === 0) return body.slice(start, i + 1)
+    }
+  }
+  throw new Error('No complete JSON object in model output')
 }
 
 /** Lead with the injection guard, exactly like personas.ts's buildSystem does for its other untrusted-
@@ -1296,6 +1335,7 @@ export function startBackfill(onDrained?: () => void | Promise<void>): BackfillS
       f.endsWith('.md') &&
       !f.startsWith('.') &&
       f !== 'index.md' &&
+      f !== 'README.md' &&
       !already.has(f) &&
       !inFlight.has(f) &&
       !extractedSlugs.has(slugify(f))

@@ -1172,7 +1172,7 @@ function LocalAiSection({
   return (
     <Section
       title="Local AI"
-      desc="Runs the model included with Métis on this device. Live suggestions, mid-meeting summaries, and screenshot reads stay local."
+      desc="Runs the model included with Métis on this device. Live suggestions, summaries, Mantu Intelligence extraction, and screenshot reads stay local."
     >
       <div className="flex flex-col gap-3">
         <ToggleRow
@@ -1258,7 +1258,7 @@ function LocalAiSection({
           />
           <ToggleRow
             label="Summaries"
-            desc="Mid-meeting summaries."
+            desc="Mid-meeting summaries and Mantu Intelligence extraction."
             on={settings.localLlm.useFor.summary}
             onChange={(v) =>
               patch({ localLlm: { ...settings.localLlm, useFor: { ...settings.localLlm.useFor, summary: v } } })

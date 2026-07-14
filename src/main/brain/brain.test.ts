@@ -99,9 +99,29 @@ describe('brain', () => {
     it('recovers the outermost object from leading/trailing junk without fences', () => {
       expect(JSON.parse(extractJsonObject('noise {"x":[1,2]} trailing'))).toEqual({ x: [1, 2] })
     })
+    it('keeps the first complete object when a small local model appends another JSON fragment', () => {
+      expect(JSON.parse(extractJsonObject('{"x":1}\n{"extra":"commentary"}'))).toEqual({ x: 1 })
+    })
     it('throws when there is no JSON object at all', () => {
       expect(() => extractJsonObject('no json here')).toThrow()
     })
+  })
+
+  it('accepts null optional deal sidecars emitted by the bundled local model', () => {
+    const extraction = MeetingExtractionSchema.parse({ deal: { amount: null, close_date: null } })
+    expect(extraction.deal?.amount).toBeNull()
+    expect(extraction.deal?.close_date).toBeNull()
+  })
+
+  it('normalizes all-null optional deal sidecars emitted by small local models', () => {
+    const extraction = MeetingExtractionSchema.parse({
+      deal: {
+        amount: { value: null, currency: null, quote: null },
+        close_date: { value: null, quote: null }
+      }
+    })
+    expect(extraction.deal?.amount).toBeNull()
+    expect(extraction.deal?.close_date).toBeNull()
   })
 
   describe('readMeetingSourceMode', () => {

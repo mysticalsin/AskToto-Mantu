@@ -94,6 +94,33 @@ export const LedgerCommitmentSchema = CommitmentSchema.extend({
 })
 export type LedgerCommitment = z.infer<typeof LedgerCommitmentSchema>
 
+/**
+ * Small local models sometimes emit an optional deal sidecar as an object whose fields are all null
+ * instead of omitting the sidecar. Treat that representation as the documented "not stated" value
+ * while keeping the validated extraction type strict for every real amount/date that reaches merge code.
+ */
+const OptionalDealAmountSchema = z.preprocess(
+  (value) => {
+    if (value && typeof value === 'object') {
+      const record = value as Record<string, unknown>
+      if (record.value == null || record.currency == null || record.quote == null) return null
+    }
+    return value
+  },
+  z.object({ value: z.number(), currency: z.string(), quote: z.string().min(1) }).nullable().optional()
+)
+
+const OptionalDealCloseDateSchema = z.preprocess(
+  (value) => {
+    if (value && typeof value === 'object') {
+      const record = value as Record<string, unknown>
+      if (record.value == null || record.quote == null) return null
+    }
+    return value
+  },
+  z.object({ value: z.string(), quote: z.string().min(1) }).nullable().optional()
+)
+
 /** One meeting's structured extraction — the unit the ingest LLM call must return as pure JSON. */
 export const MeetingExtractionSchema = z.object({
   schema_version: z.number().default(BRAIN_SCHEMA_VERSION),
@@ -120,8 +147,8 @@ export const MeetingExtractionSchema = z.object({
       // MI-4: only ever set when an amount/close date was EXPLICITLY stated with a quotable moment —
       // omitted (not a guessed/inferred figure) otherwise. Verified against the transcript by
       // ingest.ts's verifyExtraction() before it can reach the DealEntity's amount/close_date sidecars.
-      amount: z.object({ value: z.number(), currency: z.string(), quote: z.string().min(1) }).optional(),
-      close_date: z.object({ value: z.string(), quote: z.string().min(1) }).optional()
+      amount: OptionalDealAmountSchema,
+      close_date: OptionalDealCloseDateSchema
     })
     .nullable()
     .default(null),
@@ -449,6 +476,8 @@ export interface BrainRead {
 /** Renderer/dashboard-facing status summary. */
 export interface BrainStatus {
   meetings: number
+  /** Successful source filenames, used to detect a newly saved meeting even when totals match. */
+  ingestedFiles: string[]
   people: number
   accounts: number
   deals: number
