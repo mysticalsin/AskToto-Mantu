@@ -33,6 +33,10 @@ export interface ImportJob {
   cursor: number
   /** 0 while a streaming decoder is still discovering the recording length. */
   totalChunks: number
+  /** Decoder-reported transcription progress. Kept separate from totalChunks because FFmpeg may learn the
+   * exact duration only after it has started streaming PCM. This value is monotonic and capped at 99 until
+   * the import reaches its terminal done state. */
+  progressPct?: number
   lines: TranscriptLine[]
   file?: string
   error?: string
@@ -157,6 +161,17 @@ export class ImportJobManager {
     return job ? copy(job) : undefined
   }
 
+  /** Persist a decoder progress signal without pretending that 100% means the summary is ready. */
+  async reportProgress(jobId: string, pct: number): Promise<void> {
+    const job = this.requireJob(jobId)
+    if (terminal(job.state)) return
+    const normalized = Number.isFinite(pct) ? Math.max(0, Math.min(99, Math.round(pct))) : 0
+    const next = Math.max(job.progressPct ?? 0, normalized)
+    if (job.progressPct !== undefined && next === job.progressPct) return
+    job.progressPct = next
+    await this.persist(job)
+  }
+
   async resume(jobId: string): Promise<ImportJob> {
     const job = this.requireJob(jobId)
     if (job.state !== 'failed') throw new Error('Only a failed import can be resumed.')
@@ -276,6 +291,10 @@ export class ImportJobManager {
     }
 
     try {
+      // A completed transcript is intentionally 99% until the automatic summary has been attempted and
+      // persisted. The renderer can therefore transition cleanly from transcription to "Creating summary"
+      // instead of flashing 100% before the meeting is actually ready.
+      job.progressPct = Math.max(job.progressPct ?? 0, 99)
       job.state = 'saving'
       await this.persist(job)
       const file = await this.deps.saveMeeting({
@@ -313,6 +332,7 @@ export class ImportJobManager {
       if (this.isCancelled(job)) return
       this.deps.enqueueIngest(file)
 
+      job.progressPct = 100
       job.state = 'done'
       await this.persist(job)
       await this.removeCheckpoint(job.jobId)

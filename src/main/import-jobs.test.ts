@@ -68,6 +68,19 @@ describe('ImportJobManager', () => {
     ])
   })
 
+  it('persists decoder progress and reserves 100% for the completed summary handoff', async () => {
+    const { manager, store } = createManager()
+    await manager.start(source)
+
+    await manager.reportProgress('job-1', 97.6)
+    expect(manager.get('job-1')?.progressPct).toBe(98)
+    expect(store.jobs.get('job-1')?.progressPct).toBe(98)
+
+    await manager.reportProgress('job-1', 100)
+    expect(manager.get('job-1')?.progressPct).toBe(99)
+    expect(store.jobs.get('job-1')?.progressPct).toBe(99)
+  })
+
   it('retries one failed transcription before checkpointing the chunk', async () => {
     const transcribe = vi.fn().mockRejectedValueOnce(new Error('temporary ASR error')).mockResolvedValueOnce('recovered')
     const { manager } = createManager({ transcribe })
@@ -124,6 +137,22 @@ describe('ImportJobManager', () => {
     expect(generateRecap).toHaveBeenCalledWith(expect.objectContaining({ file: 'saved-import.md' }))
     expect(updateRecap).toHaveBeenCalledWith('saved-import.md', '## Overview\n\nImported summary')
     expect(manager.get('job-1')?.state).toBe('done')
+  })
+
+  it('holds at 99% while the automatic summary is running and reaches 100% only after it is saved', async () => {
+    let resolveRecap!: (text: string) => void
+    const generateRecap = vi.fn(() => new Promise<string>((resolve) => { resolveRecap = resolve }))
+    const { manager } = createManager({ generateRecap })
+    await manager.start(source)
+    await manager.acceptDecodedChunk('job-1', 0, 1, new Float32Array([1]))
+
+    const finishing = manager.finishDecoding('job-1')
+    for (let i = 0; i < 10 && !resolveRecap; i++) await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(manager.get('job-1')).toMatchObject({ state: 'recapping', progressPct: 99 })
+
+    resolveRecap('## Overview\n\nImported summary')
+    await finishing
+    expect(manager.get('job-1')).toMatchObject({ state: 'done', progressPct: 100 })
   })
 
   it('marks a recap failure visibly while preserving the saved transcript as done', async () => {

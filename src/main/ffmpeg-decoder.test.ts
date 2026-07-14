@@ -29,9 +29,11 @@ afterEach(() => {
 describe.runIf(gateOk)('bundled FFmpeg import decoder', () => {
   it('streams a WAV to owned 16 kHz mono PCM windows', async () => {
     const chunks: Float32Array[] = []
+    const progress: number[] = []
     let failure: Error | null = null
     const decoder = startFfmpegDecode(ffmpeg!, wav, 0, {
       onChunk: async (_seq, samples) => { chunks.push(samples) },
+      onProgress: async (pct) => { progress.push(pct) },
       onComplete: async () => {},
       onError: async (error) => { failure = error }
     })
@@ -40,6 +42,9 @@ describe.runIf(gateOk)('bundled FFmpeg import decoder', () => {
     expect(failure).toBeNull()
     expect(chunks.length).toBeGreaterThan(0)
     expect(chunks.every((chunk) => chunk.length > 0 && chunk.length <= FFMPEG_CHUNK_SAMPLES)).toBe(true)
+    expect(progress.length).toBeGreaterThan(0)
+    expect(progress.at(-1)).toBe(99)
+    expect(progress.every((pct, index) => index === 0 || pct >= progress[index - 1])).toBe(true)
   })
 
   it('accepts a compressed M4A recording and resumes from a checkpoint boundary', async () => {

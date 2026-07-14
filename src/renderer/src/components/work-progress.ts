@@ -87,8 +87,12 @@ export function describeMeetingIndexProgress(snapshot: MeetingIndexSnapshot): Wo
 export function describeImportProgress(job: ImportProgressSnapshot): ImportProgressDescription {
   const totalChunks = wholeNumber(job.totalChunks)
   const completedChunks = Math.min(totalChunks, wholeNumber(job.cursor))
-  const percent = totalChunks > 0 ? percentage(job.pct) : null
-  const chunkDetail = percent === null ? null : `chunk ${Math.min(totalChunks, completedChunks + 1)} of ${totalChunks}`
+  const reportedPercent = job.pct === null ? null : percentage(job.pct)
+  // Main can report a duration-based percentage before FFmpeg knows its authoritative chunk count. A zero
+  // value with no total is still genuinely indeterminate; any positive value is a real transcription signal.
+  const hasNumericProgress = totalChunks > 0 || reportedPercent !== null || job.state === 'saving' || job.state === 'recapping' || job.state === 'done'
+  const percent = hasNumericProgress ? (reportedPercent ?? 0) : null
+  const chunkDetail = percent === null || totalChunks === 0 ? null : `chunk ${Math.min(totalChunks, completedChunks + 1)} of ${totalChunks}`
   const transcribed = percent === null ? null : `${percent}% transcribed`
 
   switch (job.state) {
@@ -111,10 +115,10 @@ export function describeImportProgress(job: ImportProgressSnapshot): ImportProgr
     case 'transcribing':
       return {
         active: true,
-        detail: transcribed && chunkDetail ? `${transcribed} · ${chunkDetail}` : 'Listening for speech',
-        label: 'Transcribing audio',
+        detail: transcribed ? `${transcribed}${chunkDetail ? ` · ${chunkDetail}` : ''}` : 'Transcribing speech',
+        label: transcribed ? `Transcribing audio · ${percent}%` : 'Transcribing audio',
         percent,
-        valueText: transcribed ?? 'Listening for speech'
+        valueText: transcribed ?? 'Transcribing speech'
       }
     case 'saving':
       return {

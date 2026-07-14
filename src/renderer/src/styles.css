@@ -344,7 +344,11 @@ html.shot-bg-light #root {
   transform-origin: left center;
   border-radius: inherit;
   background: linear-gradient(90deg, var(--color-accent), var(--color-accent-2));
-  transition: transform 220ms var(--ease-spring), opacity 150ms var(--ease-spring);
+  will-change: transform;
+  transition: transform 360ms var(--ease-spring), opacity 150ms var(--ease-spring);
+}
+.work-progress--determinate .work-progress__value {
+  transition-timing-function: cubic-bezier(0.22, 1, 0.36, 1);
 }
 .work-progress__pulse {
   position: absolute;
