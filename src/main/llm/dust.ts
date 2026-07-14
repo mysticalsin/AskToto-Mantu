@@ -9,6 +9,7 @@ import { type StreamOptions, type StreamHandle, errMsg, idleWatchdog, userText }
 import { attachScreenshot, type DustFileContentFragment } from './dust-attachments'
 import { redactSecrets } from '@shared/redact'
 import { dustAgentUnavailableMessage } from '@shared/quick-actions'
+import { DUST_SPOTLIGHT_REF_AGENT_ID } from '@shared/ipc'
 
 /**
  * Logger for the @dust-tt/client. It logs several EXPECTED, already-handled conditions straight to
@@ -56,9 +57,10 @@ export function isDustAgentUnavailableError(err: any): boolean {
 }
 
 // Turn a raw Dust error into what the user actually sees: a stale/removed agent becomes a plain
-// "pick one in Settings → AI" step; everything else surfaces its own message unchanged.
-const mapDustError = (e: unknown): string =>
-  isDustAgentUnavailableError(e) ? dustAgentUnavailableMessage() : errMsg(e)
+// re-pick step (Spotlight-specific when the mentioned agent is the hard-locked Spotlight Ref one);
+// everything else surfaces its own message unchanged.
+const mapDustError = (e: unknown, spotlight: boolean): string =>
+  isDustAgentUnavailableError(e) ? dustAgentUnavailableMessage(spotlight) : errMsg(e)
 function dustLogger(): Console {
   const blobOf = (args: unknown[]): string =>
     args
@@ -403,7 +405,7 @@ export function streamDust(opts: StreamOptions): StreamHandle {
           })
         }
       }
-      if (streamed.isErr()) return fail(mapDustError(streamed.error))
+      if (streamed.isErr()) return fail(mapDustError(streamed.error, opts.model === DUST_SPOTLIGHT_REF_AGENT_ID))
     }
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     for await (const event of streamed.value.eventStream as AsyncIterable<any>) {
@@ -418,7 +420,7 @@ export function streamDust(opts: StreamOptions): StreamHandle {
           }
         }
       } else if (event.type === 'user_message_error' || event.type === 'agent_error') {
-        return fail(isDustAgentUnavailableError(event.error) ? dustAgentUnavailableMessage() : (event.error?.message || 'Dust returned an error.'))
+        return fail(isDustAgentUnavailableError(event.error) ? dustAgentUnavailableMessage(opts.model === DUST_SPOTLIGHT_REF_AGENT_ID) : (event.error?.message || 'Dust returned an error.'))
       } else if (event.type === 'agent_message_success') {
         if (!settled) {
           settled = true
