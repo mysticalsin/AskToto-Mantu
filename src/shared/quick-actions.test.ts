@@ -89,9 +89,12 @@ describe('quick action request planning', () => {
     expect(fromTranscript).toContain('THEM: we need SOC2')
   })
 
-  it('spotlight ref unavailable message points at the Settings picker', () => {
-    expect(spotlightRefUnavailableMessage()).toContain('Spotlight Ref agent')
-    expect(spotlightRefUnavailableMessage()).toContain('Settings')
+  it('spotlight ref unavailable message gives the reachable managed-agent remedy', () => {
+    const msg = spotlightRefUnavailableMessage()
+    expect(msg).toContain('Spotlight Ref agent')
+    expect(msg).toContain('Settings')
+    expect(msg.toLowerCase()).toContain('reconnect')
+    expect(msg.toLowerCase()).not.toContain('pick')
   })
 
   it('dust agent unavailable message names the agent and points at Settings → AI', () => {

@@ -3,5 +3,18 @@
 # ASCII for filesystem, updater, and enterprise-deployment compatibility.
 extends: ./electron-builder.yml
 productName: Métis
+# Keep the Windows app directory allowlist explicit in the child config. electron-builder treats a
+# nested `win.files` override as a target-only pattern and can otherwise fall back to `**/*`, pulling
+# OneDrive worktrees, video files, and ignored local model caches into app.asar. The foreign Darwin
+# Sherpa package is excluded before the asar header is written; afterPack then verifies the target.
+files:
+  - out/**/*
+  - package.json
+  - '!node_modules/@dust-tt/client/node_modules/@modelcontextprotocol/sdk{,/**/*}'
+  - '!node_modules/@dust-tt/client/node_modules/express-rate-limit{,/**/*}'
+  - '!node_modules/@dust-tt/client/node_modules/ip-address{,/**/*}'
+  - '!node_modules/sherpa-onnx-darwin-*{,/**/*}'
+  - '!out/**/*.map'
+  - '!**/*.d.ts'
 win:
   executableName: Metis

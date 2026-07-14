@@ -47,6 +47,33 @@ function neverRespondingRequestGet(onAttempt: () => void): typeof httpGet {
 }
 
 describe('llama-server archive download timeouts', () => {
+  it('resolves a normal completed response after the socket has closed', async () => {
+    const payload = Buffer.from('llama archive fixture')
+    const { server, sockets, url } = await startServer((_request, response) => {
+      response.writeHead(200, { 'content-length': String(payload.length) })
+      response.end(payload)
+    })
+    const scratch = mkdtempSync(join(tmpdir(), 'metis-llama-complete-download-'))
+    const destination = join(scratch, 'llama.zip')
+
+    try {
+      const outcome = await settleDownload(
+        download(url, destination, {
+          requestGet: httpGet,
+          requestTimeoutMs: 5_000,
+          responseIdleTimeoutMs: 500,
+          maxAttempts: 1
+        })
+      )
+
+      expect(outcome.kind).toBe('resolved')
+      expect(existsSync(destination)).toBe(true)
+    } finally {
+      await stopServer(server, sockets)
+      rmSync(scratch, { recursive: true, force: true })
+    }
+  })
+
   it('bounds a connection that never sends response headers and retries clearly', async () => {
     let attempts = 0
     const requestGet = neverRespondingRequestGet(() => { attempts += 1 })

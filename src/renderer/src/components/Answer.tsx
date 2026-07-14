@@ -235,6 +235,7 @@ export const Answer = memo(function Answer({
     return (
       <div className="fade-up mx-auto max-w-[620px] flex flex-col gap-2">
         {header}
+        {notice}
         <div role="alert" className="rounded-lg border border-[var(--color-danger)]/30 bg-[var(--color-danger)]/10 px-3 py-2.5 text-[13px] text-[var(--color-danger)] break-words [overflow-wrap:anywhere]">
           {error}
           {hint && (

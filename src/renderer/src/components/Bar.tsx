@@ -177,8 +177,8 @@ export interface BarProps {
   onToggleThinking?: () => void
   /** Spotlight Ref — checks a dedicated Dust agent for sales references on the current use case. */
   onSpotlightRef?: () => void
-  /** True only when the Spotlight Ref Dust agent is configured — gates the toolbar icon so non-Dust
-   *  users don't hit a guaranteed dead-end. */
+  /** True only when the Spotlight Ref Dust agent is configured. The control stays visible when false
+   *  so the feature remains discoverable; its label and existing unavailable path explain setup. */
   spotlightReady?: boolean
 }
 
@@ -503,15 +503,14 @@ export const Bar = memo(function Bar(props: BarProps): JSX.Element {
             <IconTool title={`Capture screen (${accelLabel('CommandOrControl+Shift+S')})`} onClick={props.onCapture}>
               {props.capturing ? <Spinner size={19} /> : <Image size={19} strokeWidth={ICON_STROKE} />}
             </IconTool>
-            {/* Spotlight Ref — asks a dedicated Dust agent whether Mantu has relevant sales references
-                for the use case currently being discussed. Answer renders in the normal Answer panel.
-                Only shown when its Dust agent is actually configured — otherwise it's a guaranteed
-                dead-end (opaque error on click) for every non-Dust user. */}
-            {props.spotlightReady && (
-              <IconTool title="Spotlight Ref" onClick={() => props.onSpotlightRef?.()}>
-                <FileSearch size={19} strokeWidth={ICON_STROKE} />
-              </IconTool>
-            )}
+            {/* Spotlight Ref stays visible so users can discover it before configuring Dust. The
+                unavailable click path names the required setup instead of silently hiding the tool. */}
+            <IconTool
+              title={props.spotlightReady ? 'Spotlight Ref' : 'Spotlight Ref · Connect Dust in Settings'}
+              onClick={() => props.onSpotlightRef?.()}
+            >
+              <FileSearch size={19} strokeWidth={ICON_STROKE} />
+            </IconTool>
             {/* Mode — click opens a popover (ModePicker) to switch directly, Cluely-style. The popover
                 itself renders OUTSIDE .aw-widget (see below `.aw-widget`'s closing tag) because this
                 widget has overflow:hidden for its rounded-corner blur backdrop, which would otherwise

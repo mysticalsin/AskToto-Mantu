@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type ComponentType, type ReactNode } from 'react'
+import appPackage from '../../../../package.json'
 import {
   Check,
   ExternalLink,
@@ -4206,7 +4207,7 @@ export function Settings({
                 <div className="flex flex-col items-center gap-2.5 pb-2 pt-4">
                   <MantuLogo size={190} />
                   <div className="text-[13px] font-semibold text-[color:var(--cl-foreground)]">
-                    Métis 1.0.0 · Mantu
+                    Métis {appPackage.version} · Mantu
                   </div>
                   <div className="flex items-center gap-2 text-[11px] text-[color:var(--cl-muted-foreground)]">
                     <a
