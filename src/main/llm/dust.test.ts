@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import type { AskStart } from '@shared/ipc'
+import { type AskStart, DUST_SPOTLIGHT_REF_AGENT_ID } from '@shared/ipc'
 import { streamDust, resetDustConversation } from './dust'
 
 vi.mock('electron', () => ({ app: { getPath: () => '/tmp' } }))
@@ -250,6 +250,23 @@ describe('streamDust surfaces a stale-agent error as an actionable re-pick messa
     expect(opts.handlers.onError).toHaveBeenCalledTimes(1)
     const msg = String(opts.handlers.onError.mock.calls[0][0])
     expect(msg).toContain('Settings')
+    expect(msg).not.toContain('Failed to retrieve agent message')
+  })
+
+  it('maps a stale SPOTLIGHT agent to a Spotlight-specific remedy, not the base picker hint', async () => {
+    // Spotlight Ref asks mention the hard-locked DUST_SPOTLIGHT_REF_AGENT_ID; if that agent is gone from
+    // the workspace, "pick one in Settings" is a dead end (it isn't user-pickable). streamDust knows the
+    // mentioned agent via opts.model, so it can route to the Spotlight-specific message.
+    resetDustConversation()
+    streamErrOnce = 'Failed to retrieve agent message'
+    const opts = baseOpts({ model: DUST_SPOTLIGHT_REF_AGENT_ID })
+    streamDust(opts)
+    for (let i = 0; i < 500 && !opts.handlers.onError.mock.calls.length; i++) {
+      await new Promise((r) => setImmediate(r))
+    }
+    expect(opts.handlers.onError).toHaveBeenCalledTimes(1)
+    const msg = String(opts.handlers.onError.mock.calls[0][0])
+    expect(msg).toContain('Spotlight Ref')
     expect(msg).not.toContain('Failed to retrieve agent message')
   })
 })

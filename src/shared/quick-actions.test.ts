@@ -98,5 +98,16 @@ describe('quick action request planning', () => {
     const msg = dustAgentUnavailableMessage()
     expect(msg.toLowerCase()).toContain('agent')
     expect(msg).toContain('Settings')
+    expect(msg.toLowerCase()).toContain('pick one') // base agent IS user-pickable
+  })
+
+  it('spotlight variant names Spotlight Ref and gives a reachable remedy, not the dead-end "pick one"', () => {
+    // Spotlight Ref's agent is hard-locked (DUST_SPOTLIGHT_REF_AGENT_ID) — the user cannot repick it in
+    // the UI, so "pick one in Settings" is dead-end advice. The real remedy is to reconnect Dust to the
+    // workspace that actually has the Spotlight Ref agent.
+    const msg = dustAgentUnavailableMessage(true)
+    expect(msg).toContain('Spotlight Ref')
+    expect(msg).toContain('Settings')
+    expect(msg.toLowerCase()).not.toContain('pick one')
   })
 })
