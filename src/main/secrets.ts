@@ -80,7 +80,10 @@ function getOrCreateKey(): Buffer {
   if (_key) return _key
 
   const p = join(app.getPath('userData'), KEY_FILE)
-  const canWrap = safeStorage.isEncryptionAvailable()
+  // `ASKTOTO_LOCAL_KEYSTORE` is an explicit opt-out of macOS Keychain / Windows DPAPI. It is used
+  // for isolated packaged QA and recovery environments specifically so first-run settings writes
+  // cannot trigger a platform credential prompt. Availability alone is not consent to use it.
+  const canWrap = !process.env.ASKTOTO_LOCAL_KEYSTORE && safeStorage.isEncryptionAvailable()
 
   if (existsSync(p)) {
     const buf = readFileSync(p)

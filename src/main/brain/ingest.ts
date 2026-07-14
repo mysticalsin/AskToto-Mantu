@@ -69,12 +69,20 @@ function hasUsableProvider(s: Settings): boolean {
   return pickProvider(s) !== null
 }
 
-/** Pick the first usable text provider: the active one, then any other with credentials + a model. */
+/** Pick the first usable text provider. An enabled Métis Local summary setting is an explicit privacy
+ * choice for brain extraction, so it takes precedence over every connected cloud/CLI provider. */
 function pickProvider(s: Settings): { provider: ProviderId; model: string; key: string } | null {
+  // Brain extraction is a structured summary task. Match the normal request router: when the bundled
+  // runtime is ready and the user opted into Local summaries, keep the transcript on-device. In
+  // particular, do not silently route to an unrelated connected cloud provider if local processing
+  // later fails — the user can turn Local summaries off to deliberately choose their cloud provider.
+  if (s.localLlm.useFor.summary && localBaseReady(s, getAllowedProviders())) {
+    return { provider: 'local', model: s.localLlm.modelId, key: '' }
+  }
+
   const order = [s.provider, ...(Object.keys(PROVIDERS) as ProviderId[])]
   for (const p of order) {
-    // The bundled local model has no API key and is considered below as an explicit brain fallback.
-    // Keeping it out of this credential loop preserves the existing cloud/CLI precedence order.
+    // Local is handled above because it has no API key and follows a different opt-in policy.
     if (p === 'local') continue
     const def = PROVIDERS[p]
     if (!def) continue
@@ -85,13 +93,6 @@ function pickProvider(s: Settings): { provider: ProviderId; model: string; key: 
     const model = resolveModelTier(p, s.providerModels, s.providerModelsThinking, 'deep', s.providerModelsDeep)
     if (!model) continue
     return { provider: p, model, key }
-  }
-  // A Local-only profile must still be able to build Mantu Intelligence. The live local router keeps
-  // answer/recap out of scope, but brain extraction is a structured summary task and uses the same
-  // bundled runtime/model without sending the transcript off-device. Cloud providers remain preferred
-  // when configured, so enabling Local does not silently change an existing cloud workflow.
-  if (s.localLlm.useFor.summary && localBaseReady(s, getAllowedProviders())) {
-    return { provider: 'local', model: s.localLlm.modelId, key: '' }
   }
   return null
 }
@@ -347,6 +348,30 @@ function verifyBandEvidence(bandEvidence: string, transcript: string): boolean {
   return !!bandEvidence && !!alignQuote(bandEvidence, transcript)
 }
 
+/**
+ * Local models occasionally emit `null` for an optional numeric fact instead of omitting the fact.
+ * A numeric fact without a numeric value cannot be verified or safely shown, but it must not reject
+ * the rest of a valid meeting extraction. Preserve the strict persisted schema by removing only those
+ * malformed optional entries before validation.
+ */
+function parseExtractionPayload(raw: string): MeetingExtraction {
+  const payload: unknown = JSON.parse(extractJsonObject(raw))
+  if (payload && typeof payload === 'object' && !Array.isArray(payload)) {
+    const extraction = payload as Record<string, unknown>
+    if ('numeric_facts' in extraction) {
+      const numericFacts = extraction.numeric_facts
+      extraction.numeric_facts = Array.isArray(numericFacts)
+        ? numericFacts.filter((fact) => {
+            if (!fact || typeof fact !== 'object' || Array.isArray(fact)) return false
+            const value = (fact as Record<string, unknown>).value
+            return typeof value === 'number' && Number.isFinite(value)
+          })
+        : []
+    }
+  }
+  return MeetingExtractionSchema.parse(payload)
+}
+
 async function extractMeeting(
   s: Settings,
   transcriptMd: string,
@@ -362,7 +387,7 @@ async function extractMeeting(
     const user = `Meeting transcript (file: ${basename(sourceFile)}):\n\n"""\n${window}\n"""`
     const attempt = async (extra: string): Promise<MeetingExtraction> => {
       const raw = await runCompletion(s, buildExtractionSystem(extra), user, `brain-${Date.now()}`)
-      return MeetingExtractionSchema.parse(JSON.parse(extractJsonObject(raw)))
+      return parseExtractionPayload(raw)
     }
     try {
       return await attempt('')
@@ -867,6 +892,13 @@ const queue: Job[] = []
 const EXTRACT_CONCURRENCY = 3
 let backfillTotal = 0
 let backfillDone = 0
+// A renderer-originated Index request defers the potentially slow OneDrive folder scan to the next main
+// process turn. This lets the renderer immediately show an honest preparation state instead of appearing
+// frozen until readdirSync returns.
+let backfillPreparing = false
+// `done` is a terminal queue count, not a successful-ingest count. Keep failures separately so the
+// renderer can show honest progress instead of saying every settled job was mapped successfully.
+let backfillFailed = 0
 // Jobs currently running extractMeeting — bounded to EXTRACT_CONCURRENCY. A job leaves this set the
 // moment its extraction settles (success or failure), immediately freeing a slot for the next one,
 // independent of how long that job's own serial ingest takes to reach the front of the withEntityLock lane.
@@ -904,10 +936,23 @@ export function updateIndex(s: Settings, mutate: (idx: BrainIndex) => void): Pro
   return run
 }
 
-export function brainBackfillProgress(): { total: number; done: number; running: boolean } {
-  // "running" while anything is queued, extracting, or waiting on/undergoing its serial ingest —
-  // inFlightJobs alone already covers both the extracting and the ingesting stage (see its declaration).
-  return { total: backfillTotal, done: backfillDone, running: queue.length > 0 || inFlightJobs.size > 0 }
+/** True only while a user-requested historical index batch still has work to do.
+ * Live ingestion shares the worker queue, but it must never make the Index meetings control look busy. */
+function hasActiveBackfill(): boolean {
+  return queue.some((job) => job.origin === 'backfill') || [...inFlightJobs].some((job) => job.origin === 'backfill')
+}
+
+export function brainBackfillProgress(): { total: number; done: number; failed?: number; preparing?: boolean; running: boolean } {
+  // A background ingest for a newly saved/imported meeting is intentionally excluded. It has its own
+  // meeting-level status; presenting it as an Index batch leaves the historical-index control stuck at
+  // “Mapping meetings…” when that batch actually has zero candidates.
+  return {
+    total: backfillTotal,
+    done: backfillDone,
+    ...(backfillFailed > 0 ? { failed: backfillFailed } : {}),
+    ...(backfillPreparing ? { preparing: true } : {}),
+    running: backfillPreparing || hasActiveBackfill() || backfillLintPending
+  }
 }
 
 /** Reads the app-written meeting mode from the leading YAML frontmatter only. */
@@ -1040,11 +1085,13 @@ async function runExtractionStage(job: Job): Promise<JobResult> {
  *  through store.ts's withEntityLock (never directly) so two of these never run concurrently. */
 async function finishJob(result: JobResult): Promise<void> {
   const { job, s } = result
+  let failed = false
   try {
     if (!result.ok) throw result.error
     await ingestExtraction(s, result.x, result.md, job.file, result.preparedText)
     auditLog('brain.ingest', { ok: true, source: job.source })
   } catch (e) {
+    failed = true
     await updateIndex(s, (idx) => {
       idx.ingested[basename(job.file)] = { at: Date.now(), ok: false, error: e instanceof Error ? e.message : String(e) }
     })
@@ -1063,7 +1110,10 @@ async function finishJob(result: JobResult): Promise<void> {
   // is also what makes backfillDone/backfillTotal meaningful to reset per-run in startBackfill: they only
   // ever move in lockstep with backfill-origin work). Bumped here, inside the withEntityLock lane, so it
   // advances in the same strictly-serial order as the ingest/error-record it belongs to.
-  if (job.origin === 'backfill') backfillDone = Math.min(backfillTotal, backfillDone + 1)
+  if (job.origin === 'backfill') {
+    backfillDone = Math.min(backfillTotal, backfillDone + 1)
+    if (failed) backfillFailed = Math.min(backfillDone, backfillFailed + 1)
+  }
 }
 
 // Set true while a backfill's jobs are still queued/extracting/ingesting; cleared (with its one lint
@@ -1092,22 +1142,26 @@ function registerDrainCallback(cb?: () => void | Promise<void>): void {
   maybeFinishDrain()
 }
 
+/** Finishes historical indexing once its own work has drained, independent of live meeting ingestion. */
+function maybeFinishBackfill(): void {
+  if (!hasActiveBackfill() && backfillLintPending && backfillTotal > 0 && backfillDone >= backfillTotal) {
+    backfillLintPending = false
+    const sx = getSettings()
+    void updateIndex(sx, (i) => {
+      i.backfillRequested = false
+      i.warnings = lintBrain(sx)
+    })
+    // Task MI-5: one index regen for the whole drained batch, matching the lintBrain call right above.
+    void publishIndexes(sx)
+  }
+}
+
 /** Runs after every state change (a job dequeued, an extraction settled, an ingest completed) to check
- *  for a TRUE drain: queue empty AND nothing extracting AND nothing waiting on/undergoing ingest AND the
- *  whole backfill batch has been accounted for. A stall (jobs stuck in `queue` because no provider is
- *  configured) must never trip this — inFlightJobs and queue both being empty is what makes it "true". */
+ *  for a TRUE worker drain. A stall (jobs stuck in `queue` because no provider is configured) must never
+ *  trip this — inFlightJobs and queue both being empty is what makes it "true". */
 function maybeFinishDrain(): void {
+  maybeFinishBackfill()
   if (queue.length === 0 && inFlightJobs.size === 0) {
-    if (backfillLintPending && backfillTotal > 0 && backfillDone >= backfillTotal) {
-      backfillLintPending = false
-      const sx = getSettings()
-      void updateIndex(sx, (i) => {
-        i.backfillRequested = false
-        i.warnings = lintBrain(sx)
-      })
-      // Task MI-5: one index regen for the whole drained batch, matching the lintBrain call right above.
-      void publishIndexes(sx)
-    }
     if (pendingDrainCallbacks.length > 0) {
       const cbs = pendingDrainCallbacks.splice(0, pendingDrainCallbacks.length)
       for (const cb of cbs) {
@@ -1289,7 +1343,7 @@ export function resumeBackfillIfPending(): void {
  *  `onDrained` (Task MI-2, brain:rebuildAll only): fires once every job this call queues — plus
  *  anything else already in flight — has fully finished (see registerDrainCallback's doc comment).
  *  Every other caller (the plain "Index meetings" button, resumeBackfillIfPending) omits it. */
-export type BackfillStartResult = { queued: number; deferred?: 'no-provider' }
+export type BackfillStartResult = { queued: number; deferred?: 'no-provider'; preparing?: boolean }
 
 export function startBackfill(onDrained?: () => void | Promise<void>): BackfillStartResult {
   const s = getSettings()
@@ -1322,11 +1376,11 @@ export function startBackfill(onDrained?: () => void | Promise<void>): BackfillS
   // live meeting save processed after backfill #1 finished (which left backfillTotal > 0 behind) would
   // still pass the old `if (backfillTotal > 0)` check and corrupt backfill #2's freshly-started progress
   // readout with counts left over from a completed, unrelated run.
-  const backfillInFlight =
-    queue.some((j) => j.origin === 'backfill') || [...inFlightJobs].some((j) => j.origin === 'backfill')
+  const backfillInFlight = hasActiveBackfill()
   if (!backfillInFlight) {
     backfillTotal = 0
     backfillDone = 0
+    backfillFailed = 0
   }
   const candidates: Job[] = []
   const folder = resolveMeetingsFolder(s)
@@ -1349,6 +1403,47 @@ export function startBackfill(onDrained?: () => void | Promise<void>): BackfillS
   backfillTotal += candidates.length
   queue.push(...candidates)
   pump()
+  // There is nothing to resume when every historical meeting was already indexed, or when the only
+  // matching meeting is currently being handled by automatic live ingestion. The request flag was set
+  // above before scanning, so clear it again through the same serialized index lane.
+  if (candidates.length === 0 && !backfillInFlight) {
+    void updateIndex(s, (i) => {
+      i.backfillRequested = false
+    })
+  }
   registerDrainCallback(onDrained)
   return { queued: candidates.length }
+}
+
+/**
+ * Schedules the historical-meeting scan after the current IPC turn so an Index click renders its
+ * preparation feedback immediately, even when OneDrive takes time to enumerate a large folder.
+ * Rebuild/resume paths keep using startBackfill() directly because they need the actual queued count
+ * synchronously for their durable journal semantics.
+ */
+export function requestBackfill(): BackfillStartResult {
+  const s = getSettings()
+  // Preserve the existing synchronous no-provider contract so the renderer can show the actionable
+  // setup guidance immediately, while retaining the durable resume flag.
+  if (!hasUsableProvider(s)) return startBackfill()
+  if (backfillPreparing) return { queued: 0, preparing: true }
+  // A control cannot normally be clicked during an active run, but keep this guard authoritative for
+  // re-entrant IPC callers too. There is already a real batch whose progress will be reported.
+  if (hasActiveBackfill() || backfillLintPending) return { queued: 0 }
+
+  backfillPreparing = true
+  const idx = readIndex(s)
+  if (!idx.backfillRequested) void updateIndex(s, (i) => { i.backfillRequested = true })
+  setImmediate(() => {
+    try {
+      startBackfill()
+    } catch (error) {
+      // Keep the durable request flag intact so a temporary OneDrive/filesystem failure can resume on
+      // the next app launch. The source error is still logged rather than silently discarded.
+      mainLog.error('[brain] deferred backfill scan failed:', error)
+    } finally {
+      backfillPreparing = false
+    }
+  })
+  return { queued: 0, preparing: true }
 }

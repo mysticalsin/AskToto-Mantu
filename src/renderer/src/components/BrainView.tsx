@@ -25,9 +25,11 @@ import { computeSilence } from '@shared/silence'
 import { buildMarsWeek, renderMarsMarkdown } from '@shared/mars'
 import { MantuMark } from './MantuMark'
 import { Spinner } from './ui'
+import { WorkProgressMeter } from './WorkProgressMeter'
 import { useFlash } from '../lib/useFlash'
 import { BrainRecordPage, recordKey, sortAttentionItems, type BrainRecordRef, type RecentMerge } from './BrainRecordPage'
 import { shouldAutoBackfill } from './brain-auto'
+import { describeMeetingIndexProgress } from './work-progress'
 
 /**
  * Mantu Intelligence — the second-brain dashboard over the meeting knowledge store (.brain/).
@@ -353,6 +355,9 @@ export function BrainView({
   // poll interval as ingestion grows, so without this an older, slower-resolving snapshot can land
   // after a newer one and make the KPI tiles/lists visibly jump backward.
   const refreshingRef = useRef(false)
+  // A full dashboard refresh reads every entity and meeting. During indexing, poll only the small status
+  // payload for responsive progress, then hydrate the complete dashboard once the batch settles.
+  const statusWasBackfillingRef = useRef(false)
   // Opening Mantu Intelligence is an explicit request for current knowledge. Start one automatic pass
   // for saved transcripts that predate the brain, without re-triggering it on each progress poll.
   const autoBackfillAttemptedRef = useRef(false)
@@ -377,6 +382,14 @@ export function BrainView({
     } finally {
       setLoading(false)
       refreshingRef.current = false
+    }
+  }, [])
+
+  const refreshStatus = useCallback(async (): Promise<void> => {
+    try {
+      setStatus(await window.toto.brainStatus())
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
     }
   }, [])
 
@@ -446,13 +459,23 @@ export function BrainView({
     []
   )
 
-  // While a backfill is running, poll so the dashboard fills in live as extractions land.
+  // While a backfill is running, poll the compact status channel once per second. The old full-dashboard
+  // refresh re-read all entities, meetings, and attention data every four seconds, competing with the
+  // same OneDrive work the index needs to complete. One final full refresh lands when the batch settles.
   const backfillRunning = !!status?.backfill?.running
   useEffect(() => {
-    if (!backfillRunning) return
-    const t = setInterval(() => void refresh(), 4000)
+    if (!backfillRunning) {
+      if (statusWasBackfillingRef.current) {
+        statusWasBackfillingRef.current = false
+        void refresh()
+      }
+      return
+    }
+    statusWasBackfillingRef.current = true
+    void refreshStatus()
+    const t = setInterval(() => void refreshStatus(), 1000)
     return () => clearInterval(t)
-  }, [backfillRunning, refresh])
+  }, [backfillRunning, refresh, refreshStatus])
 
   const startBackfill = useCallback(async (): Promise<void> => {
     setBackfilling(true)
@@ -564,6 +587,8 @@ export function BrainView({
   const ingested = status?.meetings ?? 0
   const notIngested = Math.max(0, meetings.length - ingested)
   const bf = status?.backfill
+  const backfillFailed = bf?.failed ?? 0
+  const indexProgress = bf ? describeMeetingIndexProgress(bf) : null
 
   return (
     <div className="fade-up flex flex-col gap-3 px-1 py-1">
@@ -601,6 +626,26 @@ export function BrainView({
       {error && (
         <div className="rounded-xl border border-[var(--color-danger)]/30 bg-[var(--color-danger)]/10 px-3 py-1.5 text-[11px] text-[var(--color-danger)]">
           {error}
+        </div>
+      )}
+
+      {backfillFailed > 0 && !bf?.running && (
+        <div
+          className="flex items-center justify-between gap-2 rounded-xl border border-[var(--color-danger)]/30 bg-[var(--color-danger)]/10 px-3 py-2 text-[11px] text-[var(--color-danger)]"
+          role="alert"
+        >
+          <div className="flex min-w-0 items-center gap-1.5">
+            <AlertTriangle size={13} className="shrink-0" />
+            <span>{indexProgress?.label ?? 'Some meetings need attention.'}</span>
+          </div>
+          <button
+            type="button"
+            onClick={() => void startBackfill()}
+            disabled={backfilling}
+            className="no-drag focus-ring shrink-0 rounded-full bg-white/[0.08] px-2.5 py-1 text-[11px] font-semibold text-[color:var(--color-ink)] hover:bg-white/[0.14] disabled:opacity-50"
+          >
+            Retry index
+          </button>
         </div>
       )}
 
@@ -652,8 +697,18 @@ export function BrainView({
         <>
           {/* Backfill progress + drift note */}
           {bf?.running ? (
-            <div className="flex items-center gap-2 rounded-xl border border-[var(--color-hair-soft)] bg-[var(--color-accent-soft)] px-3 py-1.5 text-[11px] text-[color:var(--color-ink-2)]">
-              <Spinner size={12} /> Ingesting {bf.done}/{bf.total} meetings…
+            <div className="rounded-xl border border-[var(--color-hair-soft)] bg-[var(--color-accent-soft)] px-3 py-2 text-[11px] text-[color:var(--color-ink-2)]">
+              <div className="flex items-center gap-2">
+                <Spinner size={12} />
+                <span aria-atomic="true" aria-live="polite">{indexProgress?.label ?? 'Mapping meetings…'}</span>
+              </div>
+              <WorkProgressMeter
+                active
+                ariaLabel="Mantu Intelligence meeting index progress"
+                className="mt-1.5"
+                percent={indexProgress?.percent ?? null}
+                valueText={indexProgress?.valueText ?? 'Mapping meetings'}
+              />
             </div>
           ) : notIngested > 0 ? (
             <div className="flex items-center justify-between gap-2 rounded-xl border border-[var(--color-hair-soft)] bg-white/[0.02] px-3 py-1.5 text-[11px] text-[color:var(--color-ink-3)]">

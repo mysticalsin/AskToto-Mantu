@@ -5,9 +5,9 @@ import { tmpdir } from 'node:os'
 import { app } from 'electron'
 import { PROVIDER_IDS } from '@shared/providers'
 import type { StreamHandlers, StreamOptions, StreamHandle } from '../llm/shared'
-import { clearApiKey, getSettings, setSettings } from '../store'
+import { clearApiKey, getSettings, setApiKey, setSettings } from '../store'
 import { brainBackfillProgress, enqueueIngest, startBackfill } from './ingest'
-import { readIndex } from './store'
+import { readIndex, readMeetingExtraction } from './store'
 
 vi.mock('electron')
 
@@ -102,6 +102,47 @@ describe('automatic brain ingest with Métis Local', () => {
     expect(request.maxOutputTokens).toBe(1536)
     expect(request.req.mode).toBe('summary')
     expect(request.req.transcript).toContain('Customer asked for an offline follow-up')
+  })
+
+  it('keeps a meeting when the local model emits a null optional numeric fact', async () => {
+    createStreamMock.mockImplementationOnce((opts: StreamOptions & { handlers: StreamHandlers }): StreamHandle => {
+      queueMicrotask(() => {
+        opts.handlers.onDelta(JSON.stringify({
+          title24: 'Offline follow-up',
+          numeric_facts: [
+            { kind: 'date', value: null, unit: null, quote: 'next Tuesday' },
+            { kind: 'headcount', value: 1, unit: null, quote: 'one follow-up' }
+          ]
+        }))
+        opts.handlers.onDone({})
+      })
+      return { abort: () => {} }
+    })
+
+    expect(startBackfill()).toEqual({ queued: 1 })
+    await vi.waitFor(() => {
+      expect(readIndex(getSettings()).ingested['local-only.md']?.ok).toBe(true)
+    })
+
+    expect(readMeetingExtraction(getSettings(), 'local-only-md')?.numeric_facts).toEqual([
+      expect.objectContaining({ kind: 'headcount', value: 1 })
+    ])
+  })
+
+  it('keeps opted-in summary extraction local even when a cloud provider is connected', async () => {
+    // Regression for the packaged-app failure: the profile had Métis Local enabled for summaries, but
+    // a connected Dust provider still won brain extraction and returned HTTP 404. Local selection is an
+    // explicit privacy choice, so a cloud credential must not silently override it for this workload.
+    setSettings({ provider: 'dust', dustWorkspaceId: 'test-workspace' })
+    setApiKey('dust', 'test-dust-key')
+
+    expect(startBackfill()).toEqual({ queued: 1 })
+    await vi.waitFor(() => {
+      expect(brainBackfillProgress().running).toBe(false)
+    })
+
+    expect(readIndex(getSettings()).ingested['local-only.md']?.ok).toBe(true)
+    expect(createStreamMock.mock.calls[0][0].providerId).toBe('local')
   })
 
   it('does not treat the meetings README as a transcript candidate', async () => {

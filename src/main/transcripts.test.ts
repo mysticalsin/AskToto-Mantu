@@ -16,7 +16,8 @@ import {
   appendDebrief,
   DEBRIEF_HEADING,
   recoverOrphanDrafts,
-  writeSaved
+  writeSaved,
+  resolveMeetingsFolder
 } from './transcripts'
 import type { SaveMeeting, Settings } from '@shared/ipc'
 
@@ -54,8 +55,16 @@ describe('transcripts', () => {
 
   afterEach(() => {
     delete process.env.ASKTOTO_ESCROW_PUBKEY
+    delete process.env.ASKTOTO_USERDATA
     rmSync(folder, { recursive: true, force: true })
     vi.restoreAllMocks()
+  })
+
+  it('keeps a QA profile’s implicit meeting store inside its isolated user-data root', () => {
+    const qaRoot = join(folder, 'isolated-profile')
+    process.env.ASKTOTO_USERDATA = qaRoot
+
+    expect(resolveMeetingsFolder({ ...settings, meetingsFolder: '' })).toBe(join(qaRoot, 'Métis Meetings'))
   })
 
   it('encrypts the transcript at rest when enabled and round-trips via readSavedFile', async () => {

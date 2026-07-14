@@ -105,7 +105,7 @@ const api = {
   graphifyOpenGraph: (): Promise<string> => ipcRenderer.invoke(IPC.graphifyOpenGraph),
   brainStatus: (): Promise<import('@shared/brain').BrainStatus | null> =>
     ipcRenderer.invoke(IPC.brainStatus),
-  brainBackfill: (): Promise<{ queued: number; deferred?: 'no-provider' }> => ipcRenderer.invoke(IPC.brainBackfill),
+  brainBackfill: (): Promise<{ queued: number; deferred?: 'no-provider'; preparing?: boolean }> => ipcRenderer.invoke(IPC.brainBackfill),
   brainOpenDashboard: (): Promise<{ ok: boolean; error?: string }> =>
     ipcRenderer.invoke(IPC.brainOpenDashboard),
   // MI-2.5 Fix F: `error` is set (queued: 0) when a purge failure aborts the rebuild before it starts.

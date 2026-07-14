@@ -409,6 +409,11 @@ function detectOneDriveUncached(): string {
 /** The folder transcripts are written to (explicit setting, else OneDrive, else Documents). */
 export function resolveMeetingsFolder(settings: Settings): string {
   if (settings.meetingsFolder) return settings.meetingsFolder
+  // `ASKTOTO_USERDATA` is the packaged-app physical-QA hook. Keep its implicit meeting store under
+  // that temporary profile too: otherwise the normal OneDrive fallback would make an apparently
+  // isolated test read and write the operator's real meeting data.
+  const qaUserData = process.env.ASKTOTO_USERDATA?.trim()
+  if (qaUserData) return join(qaUserData, 'Métis Meetings')
   const base = detectOneDrive() || app.getPath('documents')
   return join(base, 'Métis Meetings')
 }
