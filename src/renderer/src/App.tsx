@@ -676,7 +676,17 @@ export function App(): JSX.Element {
   const askScreen = useCallback(
     async (
       prompt: string,
-      opts?: { label?: string; kind?: 'answer' | 'factcheck'; history?: ChatTurn[]; record?: string }
+      opts?: {
+        label?: string
+        kind?: 'answer' | 'factcheck'
+        history?: ChatTurn[]
+        record?: string
+        // The caller carries explicit user-typed content that stands on its own without the screen (a chat
+        // question, not a blank "look at my screen"). On a denied Screen Recording grant, answer it as a
+        // text-only ask WITH the capture notice still shown — so the user is never blocked out of chat by a
+        // permission they declined, and the degrade is announced (non-silent), not a hidden substitution.
+        allowTextFallback?: boolean
+      }
     ): Promise<string | null> => {
       if (!requireProvider('vision')) return null
       if (capturing) return null
@@ -733,9 +743,13 @@ export function App(): JSX.Element {
                 raw
               : 'Couldn’t capture your screen. Answering from context only.'
         )
-        // A denied Screen Recording grant means the requested screen must not silently become a cloud
-        // text request. Show the exact recovery path and wait for the user to retry after permission.
-        if (needsScreenPermission) return null
+        // A denied Screen Recording grant must not SILENTLY become a cloud text request. For a bare
+        // "look at my screen" ask (no allowTextFallback) there is nothing to answer without the screen, so
+        // stop here and show the recovery path. But a typed chat question stands on its own — blocking it
+        // would lock the user out of chat over a screen permission they declined. With allowTextFallback we
+        // fall through to the text-only ask below; the captureError notice stays visible, so the missing
+        // screen is announced, not hidden.
+        if (needsScreenPermission && !opts?.allowTextFallback) return null
         // The fallback never saw a screen — a screen-asserting label ("Viewed screen") would contradict
         // the banner above and claim a capture that didn't happen.
         const fallbackLabel = opts?.label && /screen/i.test(opts.label) ? undefined : opts?.label
@@ -846,8 +860,10 @@ export function App(): JSX.Element {
         const id = ask.run({ mode: 'answer', prompt: q, history: historyRef.current })
         pendingUserRef.current = { id, q }
       } else {
-        // First question of this session — screenshot + the question together.
-        void askScreen(q, { history: historyRef.current, record: q })
+        // First question of this session — screenshot + the question together. allowTextFallback: the
+        // user typed a real question, so if Screen Recording is off it must still get a text answer (with
+        // the "screen is off" notice) instead of being swallowed — chat must work without screen access.
+        void askScreen(q, { history: historyRef.current, record: q, allowTextFallback: true })
       }
     } else {
       if (!q) return
@@ -1970,6 +1986,7 @@ export function App(): JSX.Element {
         streaming={capturing || (ask.answer?.streaming ?? false)}
         error={ask.answer?.error ?? null}
         captureNotice={captureError}
+        onDismissNotice={() => setCaptureError(null)}
         prompt={ask.answer?.prompt ?? ''}
         label={ask.answer?.label}
         kind={ask.answer?.kind}

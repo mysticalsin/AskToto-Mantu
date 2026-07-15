@@ -1,5 +1,5 @@
 import { memo, useEffect, useState } from 'react'
-import { Copy, Check, RefreshCw, FileDown, ShieldCheck, ChevronsDown, ThumbsUp, ThumbsDown, Eye, EyeOff } from 'lucide-react'
+import { Copy, Check, RefreshCw, FileDown, ShieldCheck, ChevronsDown, ThumbsUp, ThumbsDown, Eye, EyeOff, X } from 'lucide-react'
 import { PROVIDERS, type ProviderId } from '@shared/providers'
 import { isScreenCapturePermissionError } from '@shared/screen-capture'
 import { Markdown } from './Markdown'
@@ -48,6 +48,7 @@ export const Answer = memo(function Answer({
   streaming,
   error,
   captureNotice,
+  onDismissNotice,
   prompt,
   label,
   kind,
@@ -60,9 +61,11 @@ export const Answer = memo(function Answer({
   streaming: boolean
   error: string | null
   /** Non-terminal notice that screen capture failed. Private View and transient capture failures may
-   *  still have a text/context answer below; a denied screen permission instead waits for the user to
-   *  grant access and retry. */
+   *  still have a text/context answer below; a denied screen permission still lets a typed question be
+   *  answered as text (with this notice shown). Always dismissible via onDismissNotice. */
   captureNotice?: string | null
+  /** Clears the capture notice so the user can dismiss it and keep using chat without Screen Recording. */
+  onDismissNotice?: () => void
   prompt?: string
   label?: string
   kind?: 'answer' | 'factcheck'
@@ -148,7 +151,7 @@ export const Answer = memo(function Answer({
   const notice = captureNotice ? (
     <div
       role="status"
-      className="flex flex-col items-start gap-1.5 rounded-lg border border-[var(--color-warn,#fac775)]/30 bg-[var(--color-warn,#fac775)]/10 px-3 py-2 text-[12px] leading-snug text-[color:var(--color-ink-2)] break-words [overflow-wrap:anywhere]"
+      className="relative flex flex-col items-start gap-1.5 rounded-lg border border-[var(--color-warn,#fac775)]/30 bg-[var(--color-warn,#fac775)]/10 px-3 py-2 pr-8 text-[12px] leading-snug text-[color:var(--color-ink-2)] break-words [overflow-wrap:anywhere]"
     >
       <div className="flex items-start gap-1.5">
         <EyeOff size={13} className="mt-0.5 shrink-0 text-[color:var(--color-warn,#fac775)]" />
@@ -161,6 +164,18 @@ export const Answer = memo(function Answer({
           className="no-drag focus-ring rounded-full bg-[var(--color-warn,#fac775)]/15 px-2.5 py-1 text-[11px] font-semibold text-[color:var(--color-ink)] hover:bg-[var(--color-warn,#fac775)]/25"
         >
           Open Screen Recording settings
+        </button>
+      )}
+      {onDismissNotice && (
+        // Dismiss so a declined Screen Recording grant never wedges the UI — the user can close this and
+        // keep asking text questions (chat works without screen access).
+        <button
+          type="button"
+          aria-label="Dismiss"
+          onClick={onDismissNotice}
+          className="no-drag focus-ring absolute right-1.5 top-1.5 rounded-md p-1 text-[color:var(--color-ink-3)] hover:bg-white/10 hover:text-[color:var(--color-ink)]"
+        >
+          <X size={12} />
         </button>
       )}
     </div>
