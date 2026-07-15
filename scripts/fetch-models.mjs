@@ -127,7 +127,9 @@ export async function download(
         }
       })
       await pipeline(res, out)
-      res.setTimeout(0)
+      // res.socket can already be null here (Node releases/detaches the socket once the
+      // response has fully ended), and IncomingMessage#setTimeout dereferences it unguarded.
+      if (res.socket) res.setTimeout(0)
       process.stdout.write('\n')
       // Integrity: a truncated download (connection dropped mid-stream) would otherwise rename a partial
       // file into place and read back later as a corrupt model. Verify the byte count against Content-Length.
