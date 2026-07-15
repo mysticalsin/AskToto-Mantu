@@ -1,0 +1,61 @@
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
+import { describe, expect, it } from 'vitest'
+
+// Source-contract lock for Tony's 2026-07-15 requirement: the Spotlight Ref button must ALWAYS route to
+// the managed Dust agent and must NEVER be answered by whatever generic provider (e.g. Kimi) happens to be
+// active. index.ts's attempt()/pickFailover are nested closures over the per-request IPC handler and are
+// never unit-tested directly (there is no index.test.ts anywhere in this repo — same rationale that split
+// out local-routing.ts and local-cloud-boundary.contract.test.ts), so the invariant is pinned here against
+// the actual source. The behavioral half lives in local-routing.test.ts (allowCrossProviderFailover). This
+// file guarantees index.ts is still WIRED to that predicate, and that the renderer still pins Spotlight Ref
+// while leaving the generic follow-up cascade able to fail over — on every version.
+const indexSrc = readFileSync(join(__dirname, 'index.ts'), 'utf8')
+const appSrc = readFileSync(join(__dirname, '..', 'renderer', 'src', 'App.tsx'), 'utf8')
+
+/** Slice from `marker` up to and including the first `followup.run(...)` / `ask.run(...)` call. */
+function sliceCall(source: string, marker: string, call: string): string {
+  const start = source.indexOf(marker)
+  expect(start, `marker not found: ${marker}`).toBeGreaterThan(-1)
+  const callStart = source.indexOf(call, start)
+  expect(callStart, `call not found after ${marker}: ${call}`).toBeGreaterThan(-1)
+  const end = source.indexOf(')', callStart)
+  return source.slice(callStart, end + 1)
+}
+
+describe('pinned Dust-agent requests never fail over to a generic provider', () => {
+  it('index.ts imports the failover-suppression predicate', () => {
+    expect(indexSrc).toMatch(/import\s*\{[\s\S]*allowCrossProviderFailover[\s\S]*\}\s*from '\.\/llm\/local-routing'/)
+  })
+
+  it('pickFailover early-returns null for a pinned (agentOverride) request', () => {
+    const start = indexSrc.indexOf('const pickFailover = (tried: ProviderId[]): ProviderId | null => {')
+    expect(start).toBeGreaterThan(-1)
+    const body = indexSrc.slice(start, start + 900)
+    // The guard must come first — before any tier/candidate work — so BOTH seams that consult pickFailover
+    // (the retry-budget sizing at hasCloudFailover and the pre-token failover line) are covered at once.
+    expect(body).toMatch(/if \(!allowCrossProviderFailover\(req\)\) return null/)
+  })
+
+  it('both failover seams still route through pickFailover (retry budget + pre-token hand-off)', () => {
+    // hasCloudFailover sizes the transient-retry budget from pickFailover; the pre-token failover line does
+    // the actual hand-off. Both consult pickFailover, so a pinned request is suppressed at both without the
+    // two being able to drift apart.
+    expect(indexSrc).toMatch(/hasCloudFailover = provider !== 'local' && !!pickFailover\(attempted\.concat\(provider\)\)/)
+    expect(indexSrc).toMatch(/provider !== 'local' && failover\(attempted\.concat\(provider\)\)/)
+  })
+})
+
+describe('renderer pins Spotlight Ref to Dust but lets the generic follow-up cascade fail over', () => {
+  it('spotlightRef forces BOTH the locked agent and the Dust provider', () => {
+    const call = sliceCall(appSrc, 'const spotlightRef = useCallback', 'ask.run(')
+    expect(call).toMatch(/agentOverride: refAgent/)
+    expect(call).toMatch(/providerOverride: 'dust'/)
+  })
+
+  it('generateFollowup forces Dust but carries NO agentOverride (so it keeps Dust-down failover)', () => {
+    const call = sliceCall(appSrc, 'const generateFollowup = useCallback', 'followup.run(')
+    expect(call).toMatch(/providerOverride: 'dust'/)
+    expect(call).not.toMatch(/agentOverride/)
+  })
+})

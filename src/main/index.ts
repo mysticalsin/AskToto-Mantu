@@ -85,7 +85,8 @@ import {
   localBaseReady,
   localPrewarmEligible,
   localVisionPrivacyRequired,
-  pickPrimaryProvider
+  pickPrimaryProvider,
+  allowCrossProviderFailover
 } from './llm/local-routing'
 import { ensureLocalRuntimeStarted } from './llm/local'
 import { buildPrewarmMessages } from './llm/prewarm'
@@ -2295,6 +2296,12 @@ function registerIpc(): void {
     // Dust) can't answer. Pure (no side effect) so the retry gate can cheaply ask "is there anywhere to
     // fall over to?" before deciding how long to keep retrying a dead primary.
     const pickFailover = (tried: ProviderId[]): ProviderId | null => {
+      // A request pinned to a specific Dust agent (Spotlight Ref) has NO valid failover target — no other
+      // provider hosts that managed agent, so falling over would silently answer from the active generic
+      // provider (e.g. Kimi) with a reply that never touched the agent. Returning null here suppresses
+      // failover at BOTH seams that consult pickFailover (the retry-budget sizing and the pre-token
+      // failover line), letting the flow fall through to the reconnect-Dust message instead.
+      if (!allowCrossProviderFailover(req)) return null
       const tier = routeTier(req, s.thinkingMode)
       // Candidate order honors the CLI-vs-API priority: when 'cli', CLI-kind providers sort first so a
       // failover reaches for another local CLI before a metered API. V8's Array.sort is stable, so equal-
