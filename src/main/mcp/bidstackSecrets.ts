@@ -68,7 +68,7 @@ export function getBidstackApiKey(): string {
       } catch {
         key = '' // corrupt or key rotated
       }
-    } else if (safeStorage.isEncryptionAvailable()) {
+    } else if (!process.env.ASKTOTO_LOCAL_KEYSTORE && safeStorage.isEncryptionAvailable()) {
       try {
         key = safeStorage.decryptString(buf)
       } catch {

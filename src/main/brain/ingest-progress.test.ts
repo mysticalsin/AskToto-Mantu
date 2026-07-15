@@ -1,12 +1,21 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, rmSync, writeFileSync, unlinkSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { app } from 'electron'
 import type { StreamHandlers, StreamOptions, StreamHandle } from '../llm/shared'
 import { getSettings, setSettings, setApiKey } from '../store'
-import { startBackfill, requestBackfill, brainBackfillProgress, enqueueIngest } from './ingest'
-import { readIndex } from './store'
+import {
+  startBackfill,
+  requestBackfill,
+  brainBackfillProgress,
+  brainLiveIngestProgress,
+  enqueueIngest,
+  reconcileMeetingsInBackground,
+  ingestExtraction
+} from './ingest'
+import { MeetingExtractionSchema } from '@shared/brain'
+import { readAccount, readIndex, slugify, writeMeetingExtraction } from './store'
 
 vi.mock('electron')
 
@@ -143,7 +152,7 @@ describe('backfill progress bookkeeping across runs', () => {
       return { abort: () => {} }
     })
 
-    enqueueIngest(liveFile)
+    await enqueueIngest(liveFile)
     await vi.waitFor(() => {
       expect(liveExtractionStarted).toBe(true)
     })
@@ -152,13 +161,75 @@ describe('backfill progress bookkeeping across runs', () => {
     expect(brainBackfillProgress().running).toBe(false)
     expect(startBackfill()).toEqual({ queued: 0 })
     expect(brainBackfillProgress()).toEqual({ total: 0, done: 0, running: false })
-    await vi.waitFor(() => {
-      expect(readIndex(getSettings()).backfillRequested).toBe(false)
-    })
+    // The in-flight save is durably marked so quitting at this exact point resumes it on next launch.
+    expect(readIndex(getSettings()).backfillRequested).toBe(true)
 
     releaseLive()
     await vi.waitFor(() => {
       expect(readIndex(getSettings()).ingested['live-only.md']?.ok).toBe(true)
+    })
+  })
+
+  it('persists a live meeting as pending background work, then clears that state only after it is indexed', async () => {
+    const liveFile = join(meetingsFolder, 'durable-live.md')
+    writeFileSync(liveFile, '---\ndate: 2026-01-04\n---\nkeep this meeting current after a restart', 'utf8')
+
+    let releaseLive: () => void = () => {}
+    const gate = new Promise<void>((resolve) => {
+      releaseLive = resolve
+    })
+    const { createStream } = await import('../llm')
+    vi.mocked(createStream).mockImplementationOnce((opts) => {
+      void gate.then(() => {
+        opts.handlers.onDelta('{}')
+        opts.handlers.onDone({})
+      })
+      return { abort: () => {} }
+    })
+
+    await enqueueIngest(liveFile)
+    await vi.waitFor(() => {
+      expect(readIndex(getSettings()).backfillRequested).toBe(true)
+      expect(brainLiveIngestProgress()).toEqual({ pending: 1, running: true })
+    })
+
+    releaseLive()
+    await vi.waitFor(() => {
+      expect(readIndex(getSettings()).ingested['durable-live.md']?.ok).toBe(true)
+      expect(brainLiveIngestProgress()).toEqual({ pending: 0, running: false })
+      expect(readIndex(getSettings()).backfillRequested).toBe(false)
+    })
+  })
+
+  it('reconciles a saved extraction with no successful ingest record instead of making Index meetings a no-op', async () => {
+    const file = 'partial-after-write.md'
+    writeFileSync(join(meetingsFolder, file), '---\ndate: 2026-01-05\n---\nAcme asked for a follow-up.', 'utf8')
+    await writeMeetingExtraction(
+      getSettings(),
+      slugify(file),
+      MeetingExtractionSchema.parse({
+        title24: 'Acme follow-up',
+        account: { name: 'Acme', sector: 'technology', confidence: 'EXTRACTED' }
+      })
+    )
+
+    // This models a crash or OneDrive error after extraction.json was saved but before entity merge +
+    // index.json could record success. It must re-merge the saved extraction without calling the model.
+    expect(startBackfill()).toEqual({ queued: 1 })
+    await waitForIdle()
+
+    expect(readIndex(getSettings()).ingested[file]?.ok).toBe(true)
+    expect(readAccount(getSettings(), slugify('Acme'))?.meetings.map((m) => m.file)).toContain(file)
+  })
+
+  it('reconciles the meeting folder in the background without waiting for someone to open Intelligence', async () => {
+    const file = 'background-scan.md'
+    writeFileSync(join(meetingsFolder, file), '---\ndate: 2026-01-06\n---\nA synced meeting should be indexed automatically.', 'utf8')
+
+    reconcileMeetingsInBackground()
+
+    await vi.waitFor(() => {
+      expect(readIndex(getSettings()).ingested[file]?.ok).toBe(true)
     })
   })
 
@@ -198,6 +269,59 @@ describe('backfill progress bookkeeping across runs', () => {
       done: 1,
       failed: 1,
       running: false
+    })
+  })
+
+  it('rebuilds changed indexed sources so facts removed from a meeting cannot remain in Intelligence', async () => {
+    const file = 'source-edited.md'
+    const path = join(meetingsFolder, file)
+    const original = '---\ndate: 2026-01-07\n---\nAcme discussed the original scope.'
+    writeFileSync(path, original, 'utf8')
+    await ingestExtraction(
+      getSettings(),
+      MeetingExtractionSchema.parse({ account: { name: 'Acme', sector: 'technology', confidence: 'EXTRACTED' } }),
+      original,
+      path,
+      original
+    )
+    expect(readAccount(getSettings(), slugify('Acme'))).not.toBeNull()
+
+    // Same filename, materially different source. A normal incremental merge cannot remove Acme's old
+    // entity, so the background scan must perform a clean rebuild before presenting current Intelligence.
+    writeFileSync(path, '---\ndate: 2026-01-07\n---\nA different topic replaced the original scope entirely.', 'utf8')
+    reconcileMeetingsInBackground()
+
+    await vi.waitFor(() => {
+      const idx = readIndex(getSettings())
+      expect(idx.sourceRefreshRequested).toBe(false)
+      expect(idx.ingested[file]?.ok).toBe(true)
+      expect(readAccount(getSettings(), slugify('Acme'))).toBeNull()
+      expect(idx.revision).toBeGreaterThan(1)
+    })
+  })
+
+  it('removes derived facts when an indexed source is deleted by sync or retention', async () => {
+    const file = 'source-deleted.md'
+    const path = join(meetingsFolder, file)
+    const source = '---\ndate: 2026-01-08\n---\nGlobex discussed a renewal.'
+    writeFileSync(path, source, 'utf8')
+    await ingestExtraction(
+      getSettings(),
+      MeetingExtractionSchema.parse({ account: { name: 'Globex', sector: 'technology', confidence: 'EXTRACTED' } }),
+      source,
+      path,
+      source
+    )
+    expect(readAccount(getSettings(), slugify('Globex'))).not.toBeNull()
+
+    unlinkSync(path)
+    reconcileMeetingsInBackground()
+
+    await vi.waitFor(() => {
+      const idx = readIndex(getSettings())
+      expect(idx.sourceRefreshRequested).toBe(false)
+      expect(idx.ingested[file]).toBeUndefined()
+      expect(readAccount(getSettings(), slugify('Globex'))).toBeNull()
     })
   })
 })

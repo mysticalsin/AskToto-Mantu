@@ -4,7 +4,7 @@
 #
 # The CI is already built: .github/workflows/build.yml packages both platforms on every push;
 # release.yml signs + notarizes + publishes on a v* tag. This script only does the account
-# steps: enable Actions, create the releases repo, set the signing/notarization secrets.
+# steps: enable Actions, verify the releases page, set the signing/notarization secrets.
 #
 # Prereqs: `gh auth login` done (GitHub CLI authenticated as the repo owner), run from repo root.
 # Usage:   1) fill in the CONFIG block below   2) `bash scripts/ship-setup.sh`
@@ -13,8 +13,8 @@
 set -euo pipefail
 
 # ── CONFIG — fill these in (leave blank to skip a piece) ─────────────────────
-REPO="mysticalsin/AskToto-Mantu"            # the private source repo
-RELEASES_REPO="mysticalsin/AskToto-Releases" # public repo the app auto-updates from
+REPO="mysticalsin/AskToto-Mantu" # source repo and public GitHub Releases feed
+RELEASES_REPO="$REPO"
 
 # GitHub token with `repo` scope on the RELEASES repo (create at github.com/settings/tokens):
 GH_TOKEN_VALUE=""
@@ -44,19 +44,15 @@ set_secret_file() { # name path  — base64s a cert file into a secret
   base64 -i "$2" | gh secret set "$1" --repo "$REPO" && echo "  ✓ set $1 (base64 of $2)"
 }
 
-echo "▸ 1/4  Enabling Actions on $REPO…"
+echo "▸ 1/3  Enabling Actions on $REPO…"
 gh api -X PUT "repos/$REPO/actions/permissions" -F enabled=true -f allowed_actions=all \
   && echo "  ✓ Actions enabled — pushes build verification-only Mac + Windows run artifacts."
 
-echo "▸ 2/4  Ensuring the public releases repo $RELEASES_REPO exists…"
-if gh repo view "$RELEASES_REPO" >/dev/null 2>&1; then
-  echo "  · already exists"
-else
-  gh repo create "$RELEASES_REPO" --public --description "AskToto release binaries + auto-update feed" \
-    && echo "  ✓ created $RELEASES_REPO"
-fi
+echo "▸ 2/3  Verifying the public release page $RELEASES_REPO…"
+gh repo view "$RELEASES_REPO" >/dev/null \
+  && echo "  ✓ release page is available"
 
-echo "▸ 3/4  Setting signing / notarization secrets on $REPO…"
+echo "▸ 3/3  Setting signing / notarization secrets on $REPO…"
 set_secret      GH_TOKEN                    "$GH_TOKEN_VALUE"
 set_secret_file CSC_LINK                    "$MAC_CERT_P12"
 set_secret      CSC_KEY_PASSWORD            "$MAC_CERT_PASSWORD"
@@ -67,7 +63,7 @@ set_secret_file WIN_CSC_LINK                "$WIN_CERT_PFX"
 set_secret      WIN_CSC_KEY_PASSWORD        "$WIN_CERT_PASSWORD"
 set_secret      WIN_CSC_EXPECTED_SUBJECT     "$WIN_CERT_EXPECTED_SUBJECT"
 
-echo "▸ 4/4  Next steps (manual, when you're ready to cut a release):"
+echo "▸ Next steps (manual, when you're ready to cut a release):"
 cat <<'NEXT'
   • Verification artifacts: push any commit — Build & Test uploads ad-hoc-signed Mac .dmg/.zip
     and unsigned Windows .exe/.appx artifacts. These are not customer releases.

@@ -688,7 +688,7 @@ export function getApiKey(provider: ProviderId): string {
         mainLog.warn('[store] key file undecryptable for', provider, e)
         key = '' // Corrupt or key rotated
       }
-    } else if (safeStorage.isEncryptionAvailable()) {
+    } else if (!process.env.ASKTOTO_LOCAL_KEYSTORE && safeStorage.isEncryptionAvailable()) {
       // ── Legacy safeStorage blob (no marker) — migrate to current backend ────
       try {
         const plain = safeStorage.decryptString(buf)

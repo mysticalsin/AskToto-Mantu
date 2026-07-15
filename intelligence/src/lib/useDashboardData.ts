@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import type { DashboardData } from '../types/data'
+import { brainStatusIsWorking, shouldReloadForBrainStatus } from './status-refresh'
 
 interface State {
   data: DashboardData | null
@@ -63,7 +64,8 @@ export function useDashboardData(): State {
     // Live mode only: while a backfill is ingesting meetings in the host app, refresh so the dashboard
     // fills in as the brain grows instead of freezing at whatever existed when the window opened.
     // Cheap status poll gates the full re-read for the life of the mount (see STALE_REFRESH_MS below).
-    let lastCount = -1
+    let lastRevision: number | undefined
+    let wasWorking = false
     // A persistently-null status (e.g. auth expired) must stop the poll, since nothing else here
     // ever clears it, and without this it would poll the dead IPC forever. A transient null (one
     // hiccup) must NOT stop it, so only consecutive nulls count; any real response resets the streak.
@@ -74,28 +76,31 @@ export function useDashboardData(): State {
     // once this much time has passed. Comfortably below FRESH_DAYS (14 days) so a tier change is
     // never missed. The poll itself is never self-cleared anymore (see below) so this keeps firing
     // for the life of the mount, not just until the first quiet tick.
-    const STALE_REFRESH_MS = 30 * 60 * 1000
     const iv = window.intelligence
       ? setInterval(async () => {
-          try {
-            const st = (await window.intelligence!.getStatus()) as { meetings?: number; backfill?: { running?: boolean } } | null
+        try {
+            const st = (await window.intelligence!.getStatus()) as {
+              revision?: number
+              backfill?: { running?: boolean }
+              live?: { running?: boolean }
+            } | null
             if (!st) {
               consecutiveNulls += 1
               if (consecutiveNulls >= MAX_CONSECUTIVE_NULLS) clearInterval(iv!)
               return
             }
             consecutiveNulls = 0
-            const changed = typeof st.meetings === 'number' && st.meetings !== lastCount
-            const stale = Date.now() - lastLoadAt >= STALE_REFRESH_MS
-            if (changed || stale) load()
-            if (typeof st.meetings === 'number') lastCount = st.meetings
+            const now = Date.now()
+            if (shouldReloadForBrainStatus({ status: st, previousRevision: lastRevision, wasWorking, lastLoadAt, now })) load()
+            if (typeof st.revision === 'number') lastRevision = st.revision
+            wasWorking = brainStatusIsWorking(st)
             // No self-clear here: the poll is a cheap IPC status call gated by `changed`/`stale`
             // before doing the expensive load(), so there's no cost to leaving it alive for the
             // life of the mount. The only termination path is the consecutive-null check above.
           } catch {
             /* transient IPC hiccup, next tick retries */
           }
-        }, 10_000)
+        }, 2_000)
       : null
     return () => {
       cancelled = true

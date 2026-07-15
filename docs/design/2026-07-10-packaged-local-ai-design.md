@@ -204,11 +204,11 @@ All gates apply to packaged applications, not development mode:
 - Offline: packaged smoke proves zero model-network access.
 - Integrity: a one-byte model mutation makes the packaged smoke fail before inference.
 - Platform: macOS arm64 and Windows x64 native runners both load models, run fixed text/vision fixtures, and close cleanly.
-- Identity: product remains Métis while `com.mantu.asktoto`, keychain/userData paths, and `AskToto-Releases` continuity remain unchanged.
+- Identity: product remains Métis while `com.mantu.asktoto` and keychain/userData paths remain unchanged; release continuity uses the active `AskToto-Mantu` GitHub Releases feed.
 
 Reference hardware is fixed for reproducibility: MacBook Air M1 (2020), 8 GB, macOS 14.6+ arm64; Windows 11 23H2 x64 on Ryzen 5 5600U (6C/12T AVX2) or a slower/equivalent published CPU benchmark, 16 GB RAM. Windows CPU/WASM is mandatory. Vulkan is a separate physical Radeon-iGPU gate and is not inferred from a hosted Windows runner. Whole-app memory is sampled from the OS process tree; main-process `process.memoryUsage()` alone is not evidence.
 
-Release publication is atomic. Native Mac and Windows jobs build with `--publish never`, sign, inspect, install-smoke, hash, and upload workflow artifacts. One final job downloads both verified sets, creates an invisible draft in `AskToto-Releases`, uploads without rebuilding, verifies the complete DMG/ZIP/EXE/update-metadata set, then publishes the draft. A failure never exposes a one-platform release.
+Release publication is atomic. Native Mac and Windows jobs build with `--publish never`, sign, inspect, install-smoke, hash, and upload workflow artifacts. One final job downloads both verified sets, creates an invisible draft in `AskToto-Mantu`, uploads without rebuilding, verifies the complete DMG/ZIP/EXE/update-metadata set, then publishes the draft. A failure never exposes a one-platform release.
 
 ## Failure and rollback
 

@@ -81,7 +81,11 @@ interface BrainPerson {
   commitments?: BrainCommitment[]
 }
 export interface BrainRead {
-  index: { warnings: string[]; ingested: Record<string, { at: number; ok: boolean; error?: string }> }
+  index: {
+    warnings: string[]
+    revision?: number
+    ingested: Record<string, { at: number; ok: boolean; error?: string; sourceVersion?: string; attempts?: number; retryAfter?: number }>
+  }
   graph: { nodes: Array<{ id: string; type: string; label: string }>; edges: Array<{ from: string; to: string; rel: string; confidence: Conf }> }
   people: BrainPerson[]
   accounts: BrainAccount[]
@@ -373,7 +377,10 @@ export function brainToDashboard(b: BrainRead): DashboardData {
   const personBySlug = new Map(b.people.map((p) => [slug(p.name), p]))
   const dealBySlug = new Map(b.deals.map((d) => [slug(d.name), d]))
 
-  const meetingsByFile = new Map((b.meetings ?? []).map((m) => [m.source_file, m]))
+  // Raw extraction files can survive a crash before their entity merge/index success. They are a local
+  // checkpoint, not visible Intelligence until index.json says the source completed successfully.
+  const indexedMeetings = (b.meetings ?? []).filter((m) => b.index.ingested[m.source_file]?.ok)
+  const meetingsByFile = new Map(indexedMeetings.map((m) => [m.source_file, m]))
   const deals = b.deals.map((d) => toDeal(d, accountBySlug, meetingsByFile))
   const insights = toInsights(b.deals)
 
@@ -483,7 +490,7 @@ export function brainToDashboard(b: BrainRead): DashboardData {
   }))
 
   // Newest first — a feed reads top-down by recency, same convention as an inbox.
-  const meetingsFeed: MeetingFeedRow[] = [...(b.meetings ?? [])]
+  const meetingsFeed: MeetingFeedRow[] = [...indexedMeetings]
     .sort((a, b2) => (b2.date || '').localeCompare(a.date || ''))
     .map((m) => ({
       slug: slug(m.source_file),
@@ -499,7 +506,7 @@ export function brainToDashboard(b: BrainRead): DashboardData {
     .map(([file, v]) => ({ file, error: v.error ?? '' }))
 
   const status: StatusCounts = {
-    meetings: Object.values(b.index.ingested ?? {}).filter((v) => v.ok).length,
+    meetings: indexedMeetings.length,
     people: b.people.length,
     accounts: b.accounts.length,
     deals: b.deals.length,

@@ -7,7 +7,7 @@ Métis ships as normal desktop installers:
 
 ## Download And Install
 
-1. Open the [AskToto releases page](https://github.com/mysticalsin/AskToto-Releases/releases).
+1. Open the [Métis releases page](https://github.com/mysticalsin/AskToto-Mantu/releases).
 2. Download the latest file for your OS.
 3. Install:
    - macOS: open the `.dmg`, drag Métis to Applications, then open Métis.
@@ -61,4 +61,4 @@ After signing secrets are configured, bump `package.json`'s `version` first, the
 `package.json` exactly. See `docs/ENTERPRISE_RELEASE.md`'s Operator Setup (step 9) for the full
 release checklist and current CI blockers.
 
-The Release workflow publishes signed installers to `mysticalsin/AskToto-Releases`. Installed direct-release apps then update from that feed — except the Windows portable exe, which has no update mechanism (see above).
+The Release workflow publishes signed installers to `mysticalsin/AskToto-Mantu`. Installed direct-release apps then update from that feed — except the Windows portable exe, which has no update mechanism (see above).
