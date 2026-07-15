@@ -354,6 +354,21 @@ describe('brainToDashboard — meetings feed', () => {
     expect(first.topics).toEqual(['contract', 'pricing'])
     expect(first.slug).toBe(slug('m2.md'))
   })
+
+  it('does not present a persisted-but-unmapped extraction as an indexed meeting', () => {
+    const partial = {
+      source_file: 'm5-corrupt.md',
+      date: '2026-02-10',
+      title24: 'Interrupted extraction',
+      sentiment: 'mixed' as const,
+      topics: ['partial'],
+      account: null
+    }
+    const data = brainToDashboard({ ...FIXTURE, meetings: [...(FIXTURE.meetings ?? []), partial] })
+
+    expect(data.meetings_feed.map((meeting) => meeting.slug)).not.toContain(slug('m5-corrupt.md'))
+    expect(data.status.meetings).toBe(data.meetings_feed.length)
+  })
 })
 
 describe('brainToDashboard — warnings, ingest errors, status', () => {

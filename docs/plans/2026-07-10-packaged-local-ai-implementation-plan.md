@@ -20,7 +20,7 @@
 
 **Non-negotiable invariants:**
 
-- Keep `productName: Métis`, `appId: com.mantu.asktoto`, existing keychain/userData identity, and the `AskToto-Releases` update feed.
+- Keep `productName: Métis`, `appId: com.mantu.asktoto`, and existing keychain/userData identity; use the active `AskToto-Mantu` update feed.
 - No production URL, Hugging Face resolver, downloader, Ollama dependency, Python sidecar, or remote retry in the model execution path.
 - Build-time downloads use immutable revisions, exact byte sizes, SHA-256, and reviewed license files.
 - No silent local-to-cloud fallback. Cloud execution requires an already explicit cloud route or a user action.
@@ -825,7 +825,7 @@ npx vitest run scripts/local-ai-manifest.test.ts scripts/check-release.test.ts
 - PR build jobs run typecheck, unit tests, quick eval, unpacked/package smoke, package inspection, offline smoke, mutation failure, and artifact-size checks.
 - `local-ai-soak.yml` runs full/soak evaluation with 240-minute timeouts on labeled reference runners (`self-hosted,metis-reference,macos,m1-8gb` and `self-hosted,metis-reference,windows,ryzen-5600u-16gb`) and uploads a signed result manifest tied to commit, model hash, measured hardware, OS, backend, and power state. If reference runners are unavailable, separately attested native results from the same commit/model are accepted only when they contain the same measurements. `check-soak-proof.mjs` validates the hardware policy and signatures, not just commit/model strings. Hosted runners prove compatibility only, never the performance budget. Soak does not run inside the short package jobs.
 - Native release build jobs use `--publish never`, sign/notarize, verify, perform clean installed-package smokes, and upload workflow artifacts plus `{name,size,sha256,signature,modelHash}` manifests.
-- A single `publish-release` job needs both native jobs, downloads their exact artifacts, rehashes/validates the expected set, creates an invisible draft in `mysticalsin/AskToto-Releases`, uploads DMG/ZIP/EXE/blockmaps/latest YAML without rebuilding, verifies completeness, then runs `gh release edit "$GITHUB_REF_NAME" --repo mysticalsin/AskToto-Releases --draft=false`. Any failure leaves only a draft. No platform job publishes independently.
+- A single `publish-release` job needs both native jobs, downloads their exact artifacts, rehashes/validates the expected set, creates an invisible draft in `mysticalsin/AskToto-Mantu`, uploads DMG/ZIP/EXE/blockmaps/latest YAML without rebuilding, verifies completeness, then runs `gh release edit "$GITHUB_REF_NAME" --repo mysticalsin/AskToto-Mantu --draft=false`. Any failure leaves only a draft. No platform job publishes independently.
 - Native macOS and Windows runners each load text and vision, run one EN and one FR fixture, cancel generation, run Parakeet concurrently, analyze a synthetic brain fixture read-only, and close cleanly with network access blocked for model requests.
 - Installed Mac smoke mounts the DMG, copies Métis to a temporary Applications directory, verifies `codesign`, `spctl`, and stapling, runs all packaged self-tests, checks the updater ZIP, and unmounts. Installed Windows smoke silently installs NSIS into a fresh temp profile, verifies Authenticode, display name and shortcut, runs all self-tests, silently uninstalls, and verifies cleanup.
 

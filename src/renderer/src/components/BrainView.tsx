@@ -29,6 +29,7 @@ import { WorkProgressMeter } from './WorkProgressMeter'
 import { useFlash } from '../lib/useFlash'
 import { BrainRecordPage, recordKey, sortAttentionItems, type BrainRecordRef, type RecentMerge } from './BrainRecordPage'
 import { shouldAutoBackfill } from './brain-auto'
+import { brainStatusPollInterval, shouldRefreshAfterBrainStatus } from './brain-status-refresh'
 import { describeMeetingIndexProgress } from './work-progress'
 
 /**
@@ -357,7 +358,8 @@ export function BrainView({
   const refreshingRef = useRef(false)
   // A full dashboard refresh reads every entity and meeting. During indexing, poll only the small status
   // payload for responsive progress, then hydrate the complete dashboard once the batch settles.
-  const statusWasBackfillingRef = useRef(false)
+  const statusWasWorkingRef = useRef(false)
+  const statusRevisionRef = useRef<number | undefined>(undefined)
   // Opening Mantu Intelligence is an explicit request for current knowledge. Start one automatic pass
   // for saved transcripts that predate the brain, without re-triggering it on each progress poll.
   const autoBackfillAttemptedRef = useRef(false)
@@ -459,23 +461,29 @@ export function BrainView({
     []
   )
 
-  // While a backfill is running, poll the compact status channel once per second. The old full-dashboard
-  // refresh re-read all entities, meetings, and attention data every four seconds, competing with the
-  // same OneDrive work the index needs to complete. One final full refresh lands when the batch settles.
+  // Keep compact status polling alive even while idle. A new live ingest can begin after this view mounts;
+  // a full read is only needed when work settles, so this stays responsive without re-reading the brain.
   const backfillRunning = !!status?.backfill?.running
+  const liveRunning = !!status?.live?.running
+  const statusWorking = backfillRunning || liveRunning
   useEffect(() => {
-    if (!backfillRunning) {
-      if (statusWasBackfillingRef.current) {
-        statusWasBackfillingRef.current = false
-        void refresh()
-      }
-      return
-    }
-    statusWasBackfillingRef.current = true
     void refreshStatus()
-    const t = setInterval(() => void refreshStatus(), 1000)
+    const t = setInterval(() => void refreshStatus(), brainStatusPollInterval(statusWorking))
     return () => clearInterval(t)
-  }, [backfillRunning, refresh, refreshStatus])
+  }, [statusWorking, refreshStatus])
+
+  useEffect(() => {
+    const revision = status?.revision
+    const shouldRefresh = shouldRefreshAfterBrainStatus({
+      previousRevision: statusRevisionRef.current,
+      revision,
+      wasWorking: statusWasWorkingRef.current,
+      isWorking: statusWorking
+    })
+    if (typeof revision === 'number') statusRevisionRef.current = revision
+    statusWasWorkingRef.current = statusWorking
+    if (shouldRefresh) void refresh()
+  }, [status?.revision, statusWorking, refresh])
 
   const startBackfill = useCallback(async (): Promise<void> => {
     setBackfilling(true)
@@ -502,7 +510,7 @@ export function BrainView({
       shouldAutoBackfill({
         attempted: autoBackfillAttemptedRef.current,
         loading,
-        running: backfillRunning,
+        running: statusWorking,
         savedMeetings: meetings.length,
         ingestedMeetings: status.meetings,
         savedMeetingFiles: meetings.map(({ file }) => file),
@@ -512,7 +520,7 @@ export function BrainView({
       autoBackfillAttemptedRef.current = true
       void startBackfill()
     }
-  }, [backfillRunning, loading, meetings.length, startBackfill, status])
+  }, [statusWorking, loading, meetings.length, startBackfill, status])
 
   // Undo a just-completed merge (the record page's post-merge banner) — restores both sides from the
   // journal snapshot and lands back on the just-restored (fromId) record.
@@ -587,6 +595,7 @@ export function BrainView({
   const ingested = status?.meetings ?? 0
   const notIngested = Math.max(0, meetings.length - ingested)
   const bf = status?.backfill
+  const live = status?.live
   const backfillFailed = bf?.failed ?? 0
   const indexProgress = bf ? describeMeetingIndexProgress(bf) : null
 
@@ -672,7 +681,7 @@ export function BrainView({
           onUndoMerge={() => void undoMerge()}
           onDismissMerge={() => setRecentMerge(null)}
         />
-      ) : ingested === 0 && !bf?.running ? (
+      ) : ingested === 0 && !bf?.running && !live?.running ? (
         /* Empty state — the brain has not ingested anything yet. */
         <div className="flex flex-col items-center gap-3 rounded-xl border border-[var(--color-hair-soft)] bg-white/[0.02] px-6 py-8 text-center">
           <Brain size={28} className="text-[color:var(--color-accent-2)]" />
@@ -709,6 +718,15 @@ export function BrainView({
                 percent={indexProgress?.percent ?? null}
                 valueText={indexProgress?.valueText ?? 'Mapping meetings'}
               />
+            </div>
+          ) : live?.running ? (
+            <div className="rounded-xl border border-[var(--color-hair-soft)] bg-[var(--color-accent-soft)] px-3 py-2 text-[11px] text-[color:var(--color-ink-2)]">
+              <div className="flex items-center gap-2">
+                <Spinner size={12} />
+                <span aria-atomic="true" aria-live="polite">
+                  Updating Intelligence from {live.pending} new meeting{live.pending === 1 ? '' : 's'}…
+                </span>
+              </div>
             </div>
           ) : notIngested > 0 ? (
             <div className="flex items-center justify-between gap-2 rounded-xl border border-[var(--color-hair-soft)] bg-white/[0.02] px-3 py-1.5 text-[11px] text-[color:var(--color-ink-3)]">

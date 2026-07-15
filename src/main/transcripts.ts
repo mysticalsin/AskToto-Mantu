@@ -154,6 +154,9 @@ function decryptEnvelopeV2(buf: Buffer): string {
     contentKeyB64 = decryptSecret(Buffer.from(env.kLocal.slice(2), 'base64'))
   } else {
     // safeStorage path: 'S:' prefix (new) or legacy bare base64 (no prefix, backward compat).
+    if (process.env.ASKTOTO_LOCAL_KEYSTORE) {
+      throw new Error('Keychain-wrapped transcript is unavailable while the local keystore is active')
+    }
     const raw = env.kLocal.startsWith('S:') ? env.kLocal.slice(2) : env.kLocal
     contentKeyB64 = safeStorage.decryptString(Buffer.from(raw, 'base64'))
   }
@@ -185,6 +188,7 @@ function tryDecodeSaved(buf: Buffer): string | null {
   }
   // v1 (legacy): safeStorage-direct. Kept for full backward compatibility with existing transcripts.
   if (buf.length >= ENC_MARKER.length && buf.subarray(0, ENC_MARKER.length).equals(ENC_MARKER)) {
+    if (process.env.ASKTOTO_LOCAL_KEYSTORE) return null
     try {
       return safeStorage.decryptString(buf.subarray(ENC_MARKER.length))
     } catch {

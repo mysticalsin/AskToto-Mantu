@@ -128,7 +128,10 @@ function getOrCreateKey(allowKeychainMigration = false): Buffer {
   // for isolated packaged QA and recovery environments specifically so first-run settings writes
   // cannot trigger a platform credential prompt. Availability alone is not consent to use it.
   const localKeystoreForced = !!process.env.ASKTOTO_LOCAL_KEYSTORE
-  const keychainAvailable = isKeychainAvailable()
+  // Do not even probe Keychain when the file backend is forced. On macOS that synchronous probe can
+  // display a credential dialog behind onboarding and block the first settings save before the UI can
+  // explain what happened. The forced local keystore is deliberately independent of that OS service.
+  const keychainAvailable = !localKeystoreForced && isKeychainAvailable()
   // The file backend is the default for unpackaged/dev runs. Never create a Keychain-wrapped key in
   // that mode: a later test/build or a different unsigned binary must remain able to use the raw local
   // keystore without inheriting a signature-bound credential it cannot unlock.
@@ -165,11 +168,13 @@ function getOrCreateKey(allowKeychainMigration = false): Buffer {
       // No keychain available now. A raw 32-byte key is usable directly.
       if (buf.length === 32) {
         _key = buf
-      } else if (allowKeychainMigration && buf.length > 0) {
+      } else if (allowKeychainMigration && !localKeystoreForced && buf.length > 0) {
         // An old signed build may have Keychain-wrapped the same file key. Try the original
         // safeStorage decrypt during an explicit user write even when availability is reporting false:
         // macOS can briefly report stale availability while the Keychain is still able to answer, and
-        // this recovery attempt never generates or overwrites a key unless decrypt succeeds.
+        // this recovery attempt never generates or overwrites a key unless decrypt succeeds. A forced
+        // local keystore never reaches this branch: it surfaces the recovery action instead of hiding
+        // a Keychain prompt behind onboarding.
         try {
           const unwrapped = Buffer.from(safeStorage.decryptString(buf), 'base64')
           if (unwrapped.length !== 32) throw new KeychainKeyRecoveryError()

@@ -1,10 +1,10 @@
 name: Release
 
-# Publishes signed builds to the public AskToto-Releases repo on a version tag push (v1.2.3).
+# Publishes signed builds to this repository's public GitHub Releases page on a version tag push (v1.2.3).
 # macOS: electron-builder only WARNS and ships unsigned/non-notarized when the Apple secrets are absent
 # (app-builder-lib only throws for MAS builds - see codeSign/macCodeSign.js reportError()), so the
 # release-macos job hard-fails BEFORE building if those secrets are missing, rather than silently
-# publishing an unsigned build straight to AskToto-Releases. Windows signing is now also required for
+# publishing an unsigned build. Windows signing is now also required for
 # tagged releases: unsigned public installers break enterprise trust and can be blocked by SmartScreen.
 on:
   push:

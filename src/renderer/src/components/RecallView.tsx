@@ -118,18 +118,18 @@ function GraphBar(): JSX.Element | null {
     void window.toto.brainStatus().then(setBrain).catch(() => {})
   }, [])
 
-  // Backfill runs in the main process over minutes (one Dust call per meeting) — a single post-click
-  // fetch froze this bar on "Building your brain… 0/X" forever, since nothing ever asked again. Poll
-  // while a backfill is actually running; stop as soon as it isn't (self-clears via the effect re-run
-  // when brain.backfill.running flips false — same pattern as the dashboard's own auto-refresh).
+  // Historical batches and newly saved/imported meetings both update in main. Keep a lightweight status
+  // poll alive while this panel is visible: a live job can start after this component mounted, and a
+  // permanent 5s idle poll is cheaper and more reliable than a filesystem watcher over OneDrive.
   const backfillRunning = !!brain?.backfill?.running
+  const liveRunning = !!brain?.live?.running
+  const brainWorking = backfillRunning || liveRunning
   useEffect(() => {
-    if (!backfillRunning) return
     const iv = setInterval(() => {
       void window.toto.brainStatus().then(setBrain).catch(() => {})
-    }, 1000)
+    }, brainWorking ? 1000 : 5000)
     return () => clearInterval(iv)
-  }, [backfillRunning])
+  }, [brainWorking])
 
   const backfill = async (): Promise<void> => {
     setBusy(true)
@@ -154,6 +154,7 @@ function GraphBar(): JSX.Element | null {
   }
 
   const backfilling = !!brain?.backfill?.running
+  const livePending = brain?.live?.pending ?? 0
   const backfillFailed = brain?.backfill?.failed ?? 0
   const indexProgress = brain?.backfill ? describeMeetingIndexProgress(brain.backfill) : null
   return (
@@ -166,6 +167,10 @@ function GraphBar(): JSX.Element | null {
               <span className="text-[var(--color-danger)]">{error}</span>
             ) : backfilling && indexProgress ? (
               <span aria-atomic="true" aria-live="polite">{indexProgress.label}</span>
+            ) : liveRunning ? (
+              <span aria-atomic="true" aria-live="polite">
+                Updating Intelligence from {livePending} new meeting{livePending === 1 ? '' : 's'}…
+              </span>
             ) : backfillFailed > 0 && indexProgress ? (
               <span className="text-[var(--color-danger)]" role="alert">
                 {indexProgress.label}. Retry Index meetings after checking AI settings.

@@ -59,7 +59,8 @@ export interface ImportJobManagerDeps {
   saveMeeting: (meeting: SaveMeeting) => Promise<string>
   /** Best-effort cleanup for a meeting file that finished saving after its job was already cancelled. */
   deleteMeeting?: (file: string) => Promise<unknown>
-  enqueueIngest: (file: string) => void
+  /** Persists the background-intelligence intent before extraction starts; may resolve after local I/O. */
+  enqueueIngest: (file: string) => void | Promise<void>
   /** Returns a persisted-meeting recap or undefined when no provider is configured. */
   generateRecap: (job: ImportJob) => Promise<string | undefined>
   updateRecap: (file: string, recap: string) => Promise<void>
@@ -330,7 +331,7 @@ export class ImportJobManager {
 
       // Queue after the recap stage so Mantu Intelligence sees the durable transcript and summary together.
       if (this.isCancelled(job)) return
-      this.deps.enqueueIngest(file)
+      await this.deps.enqueueIngest(file)
 
       job.progressPct = 100
       job.state = 'done'

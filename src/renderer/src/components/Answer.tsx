@@ -1,6 +1,7 @@
 import { memo, useEffect, useState } from 'react'
 import { Copy, Check, RefreshCw, FileDown, ShieldCheck, ChevronsDown, ThumbsUp, ThumbsDown, Eye, EyeOff } from 'lucide-react'
 import { PROVIDERS, type ProviderId } from '@shared/providers'
+import { isScreenCapturePermissionError } from '@shared/screen-capture'
 import { Markdown } from './Markdown'
 import { TextButton } from './ui'
 import { useFlash } from '../lib/useFlash'
@@ -58,9 +59,9 @@ export const Answer = memo(function Answer({
   text: string
   streaming: boolean
   error: string | null
-  /** Non-terminal notice that screen capture failed (e.g. Private View on, permission revoked) while the
-   *  answer STILL streams from text/context. Shown as a small banner above the body — never replaces the
-   *  answer the way `error` (a terminal provider failure) does. */
+  /** Non-terminal notice that screen capture failed. Private View and transient capture failures may
+   *  still have a text/context answer below; a denied screen permission instead waits for the user to
+   *  grant access and retry. */
   captureNotice?: string | null
   prompt?: string
   label?: string
@@ -142,16 +143,26 @@ export const Answer = memo(function Answer({
     </div>
   ) : null
 
-  // Non-terminal capture-failure banner: the answer below still streams from text/context, so this sits
-  // as a small warning strip above it (amber, not the red terminal-error treatment) telling the user WHY
-  // the screen wasn't seen — instead of silently degrading to a text-only answer with no signal.
+  // Capture-failure banner. It is amber because it reports a recoverable access/capture condition rather
+  // than a model failure. Permission-denied visual asks intentionally stop here until the user retries.
   const notice = captureNotice ? (
     <div
       role="status"
-      className="flex items-start gap-1.5 rounded-lg border border-[var(--color-warn,#fac775)]/30 bg-[var(--color-warn,#fac775)]/10 px-3 py-2 text-[12px] leading-snug text-[color:var(--color-ink-2)] break-words [overflow-wrap:anywhere]"
+      className="flex flex-col items-start gap-1.5 rounded-lg border border-[var(--color-warn,#fac775)]/30 bg-[var(--color-warn,#fac775)]/10 px-3 py-2 text-[12px] leading-snug text-[color:var(--color-ink-2)] break-words [overflow-wrap:anywhere]"
     >
-      <EyeOff size={13} className="mt-0.5 shrink-0 text-[color:var(--color-warn,#fac775)]" />
-      <span>{captureNotice}</span>
+      <div className="flex items-start gap-1.5">
+        <EyeOff size={13} className="mt-0.5 shrink-0 text-[color:var(--color-warn,#fac775)]" />
+        <span>{captureNotice}</span>
+      </div>
+      {isScreenCapturePermissionError(captureNotice) && (
+        <button
+          type="button"
+          onClick={() => void window.toto.openPermissionSettings('screenRecording')}
+          className="no-drag focus-ring rounded-full bg-[var(--color-warn,#fac775)]/15 px-2.5 py-1 text-[11px] font-semibold text-[color:var(--color-ink)] hover:bg-[var(--color-warn,#fac775)]/25"
+        >
+          Open Screen Recording settings
+        </button>
+      )}
     </div>
   ) : null
 

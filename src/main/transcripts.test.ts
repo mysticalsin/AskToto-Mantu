@@ -49,12 +49,14 @@ describe('transcripts', () => {
 
   beforeEach(() => {
     delete process.env.ASKTOTO_ESCROW_PUBKEY // isolate escrow tests from each other and the host env
+    delete process.env.ASKTOTO_LOCAL_KEYSTORE
     folder = mkdtempSync(join(tmpdir(), 'asktoto-transcripts-test-'))
     settings = { ...baseSettings(), meetingsFolder: folder }
   })
 
   afterEach(() => {
     delete process.env.ASKTOTO_ESCROW_PUBKEY
+    delete process.env.ASKTOTO_LOCAL_KEYSTORE
     delete process.env.ASKTOTO_USERDATA
     rmSync(folder, { recursive: true, force: true })
     vi.restoreAllMocks()
@@ -159,6 +161,16 @@ describe('transcripts', () => {
     writeFileSync(file, v1)
     expect(isEncryptedFile(file)).toBe(true)
     expect(readSavedFile(file)).toBe(plain)
+  })
+
+  it('does not query Keychain for a legacy transcript while the local keystore is forced', () => {
+    process.env.ASKTOTO_LOCAL_KEYSTORE = '1'
+    ;(safeStorage.decryptString as ReturnType<typeof vi.fn>).mockClear()
+    const file = join(folder, 'legacy-local-keystore.md')
+    writeFileSync(file, Buffer.concat([Buffer.from('ATKENC1\n'), Buffer.from('legacy-keychain-payload')]))
+
+    expect(readSavedFile(file)).toBe('')
+    expect(safeStorage.decryptString).not.toHaveBeenCalled()
   })
 
   it('writes plaintext + index when encryption is off (unchanged default)', async () => {
