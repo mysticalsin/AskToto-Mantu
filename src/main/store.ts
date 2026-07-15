@@ -21,6 +21,7 @@ import {
 } from '@shared/ipc'
 import { PROVIDERS, PROVIDER_IDS, dustAgentVision, type ProviderId } from '@shared/providers'
 import { mainLog } from './logger'
+import { caheEditionPolicy, isCaheEdition } from './cahe-edition'
 import {
   KeychainKeyRecoveryError,
   decryptSecret,
@@ -150,7 +151,8 @@ function adminManagedPath(): string {
 export function validatedManaged(): Record<string, unknown> {
   return {
     ...readManagedFrom(join(dir(), 'managed-config.json')),
-    ...readManagedFrom(adminManagedPath()) // machine policy wins over the per-user file
+    ...readManagedFrom(adminManagedPath()), // machine policy wins over the per-user file
+    ...caheEditionPolicy().managedDefaults
   }
 }
 
@@ -158,7 +160,7 @@ export function validatedManaged(): Record<string, unknown> {
 export function getLockedKeys(): string[] {
   const user = readLockedFrom(join(dir(), 'managed-config.json'))
   const machine = readLockedFrom(adminManagedPath())
-  return [...new Set([...user, ...machine])]
+  return [...new Set([...user, ...machine, ...caheEditionPolicy().lockedKeys])]
 }
 
 /**
@@ -169,7 +171,12 @@ export function getLockedKeys(): string[] {
 export function getAllowedProviders(): string[] | null {
   // Machine (admin) policy wins over the per-user managed file, mirroring validatedManaged() precedence.
   // Read from the raw JSON because `allowedProviders` is a policy key, not a settings-schema key.
-  return readAllowedFrom(adminManagedPath()) ?? readAllowedFrom(join(dir(), 'managed-config.json'))
+  const configured = readAllowedFrom(adminManagedPath()) ?? readAllowedFrom(join(dir(), 'managed-config.json'))
+  const edition = caheEditionPolicy().allowedProviders
+  if (!edition) return configured
+  // Cahê narrows the package surface to Kimi and Dust. An IT allowlist is still authoritative: intersect
+  // rather than widening it, so an org that disallows Kimi fails closed before any cloud egress.
+  return configured ? configured.filter((provider) => edition.includes(provider)) : edition
 }
 
 /** Providers whose key currently comes from an environment variable — for those, in-app 'Remove' is a
@@ -276,14 +283,16 @@ interface SettingsCache {
   userMtime: number
   managedMtime: number
   adminMtime: number
+  caheEdition: boolean
 }
 let _settingsCache: SettingsCache | null = null
 
-function currentSettingsMtimes(): Pick<SettingsCache, 'userMtime' | 'managedMtime' | 'adminMtime'> {
+function currentSettingsMtimes(): Pick<SettingsCache, 'userMtime' | 'managedMtime' | 'adminMtime' | 'caheEdition'> {
   return {
     userMtime: safeMtime(settingsPath()),
     managedMtime: safeMtime(join(dir(), 'managed-config.json')),
-    adminMtime: safeMtime(adminManagedPath())
+    adminMtime: safeMtime(adminManagedPath()),
+    caheEdition: isCaheEdition()
   }
 }
 
@@ -293,7 +302,8 @@ export function getSettings(): Settings {
     _settingsCache &&
     _settingsCache.userMtime === m.userMtime &&
     _settingsCache.managedMtime === m.managedMtime &&
-    _settingsCache.adminMtime === m.adminMtime
+    _settingsCache.adminMtime === m.adminMtime &&
+    _settingsCache.caheEdition === m.caheEdition
   ) {
     return _settingsCache.value
   }

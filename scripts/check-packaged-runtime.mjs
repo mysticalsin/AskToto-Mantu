@@ -25,9 +25,15 @@ const argv = process.argv.slice(2)
 const target = argv.shift()
 let resourcesArgument
 let postSign = false
+let executableName
 for (const argument of argv) {
   if (argument === '--post-sign') {
     postSign = true
+  } else if (argument.startsWith('--executable=')) {
+    executableName = argument.slice('--executable='.length)
+    if (!executableName || basename(executableName) !== executableName) {
+      throw new Error(`Executable name must be a filename, got: ${argument}`)
+    }
   } else if (argument.startsWith('--')) {
     throw new Error(`Unknown option: ${argument}`)
   } else if (!resourcesArgument) {
@@ -508,7 +514,7 @@ if (target === 'mac') {
     execFileSync('codesign', ['--verify', '--deep', '--strict', '--verbose=2', appRoot], { stdio: 'inherit' })
   }
 } else {
-  verifyPeX64(join(resourcesRoot, '..', 'Metis.exe'))
+  verifyPeX64(join(resourcesRoot, '..', executableName || 'Metis.exe'))
 }
 
 console.log(

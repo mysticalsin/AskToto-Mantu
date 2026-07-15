@@ -1,0 +1,12 @@
+# Cahê is a Windows-only pilot edition. It inherits the reviewed Windows payload, but has its own
+# application identity and installer name so it cannot reuse standard Métis state or releases.
+extends: ./electron-builder.win.yml
+appId: com.mantu.metis.windows-cahe
+productName: Metis Windows Cahe
+win:
+  executableName: Metis-Windows-Cahe
+  target:
+    - nsis
+  artifactName: Metis-Windows-Cahe-Setup-${version}.${ext}
+nsis:
+  shortcutName: Metis Windows Cahe

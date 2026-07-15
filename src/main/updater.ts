@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import log from 'electron-log'
 import { IPC } from '@shared/ipc'
+import { shouldDisableAutoUpdate } from './cahe-edition'
 
 /** A 404 means the releases repo/feed doesn't exist (yet) — distinct from a transient network/server
  *  error, which should keep logging normally so a real outage stays visible. */
@@ -11,6 +12,10 @@ const isNotFound = (e: unknown): boolean =>
 
 /** Enterprise auto-update. Only runs in the packaged app; needs a real `publish` host (electron-builder.yml). */
 export function initAutoUpdate(win: BrowserWindow | null): void {
+  if (shouldDisableAutoUpdate()) {
+    log.info('[updater] Cahê edition uses its own distribution channel, skipping shared auto-update feed')
+    return
+  }
   // A portable .exe has no fixed install location electron-updater can replace — it's just a file the
   // user launched directly. Bail before any wiring so we never download an update we can't install and
   // never show UpdateReadyToast promising an install that will never happen.
