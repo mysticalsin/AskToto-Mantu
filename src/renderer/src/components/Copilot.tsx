@@ -1,6 +1,7 @@
 import { memo, useEffect, useMemo, useRef, useState } from 'react'
 import { Eye, EyeOff, AudioLines, Copy, Check, AlertTriangle } from 'lucide-react'
 import type { TranscriptLine } from '@shared/ipc'
+import { isScreenCapturePermissionError } from '@shared/screen-capture'
 import type { AnswerState } from '../state'
 import { Markdown } from './Markdown'
 import { TextButton, Spinner } from './ui'
@@ -114,15 +115,26 @@ export const Copilot = memo(function Copilot({
 
   return (
     <div className="flex flex-col gap-3">
-      {/* Non-terminal capture-failure strip: the suggestion below still streams from the transcript, so
-          this only tells the user WHY the screen wasn't seen (amber, not the red error card). */}
+      {/* Capture-failure strip. Transcript-only suggestions remain available for transient failures, but
+          a screen-permission denial stops the visual request until the user grants access and retries. */}
       {captureNotice && (
         <div
           role="status"
-          className="flex items-start gap-1.5 rounded-lg border border-[var(--color-warn,#fac775)]/30 bg-[var(--color-warn,#fac775)]/10 px-3 py-2 text-[12px] leading-snug text-[color:var(--color-ink-2)] break-words [overflow-wrap:anywhere]"
+          className="flex flex-col items-start gap-1.5 rounded-lg border border-[var(--color-warn,#fac775)]/30 bg-[var(--color-warn,#fac775)]/10 px-3 py-2 text-[12px] leading-snug text-[color:var(--color-ink-2)] break-words [overflow-wrap:anywhere]"
         >
-          <EyeOff size={13} className="mt-0.5 shrink-0 text-[color:var(--color-warn,#fac775)]" />
-          <span>{captureNotice}</span>
+          <div className="flex items-start gap-1.5">
+            <EyeOff size={13} className="mt-0.5 shrink-0 text-[color:var(--color-warn,#fac775)]" />
+            <span>{captureNotice}</span>
+          </div>
+          {isScreenCapturePermissionError(captureNotice) && (
+            <button
+              type="button"
+              onClick={() => void window.toto.openPermissionSettings('screenRecording')}
+              className="no-drag focus-ring rounded-full bg-[var(--color-warn,#fac775)]/15 px-2.5 py-1 text-[11px] font-semibold text-[color:var(--color-ink)] hover:bg-[var(--color-warn,#fac775)]/25"
+            >
+              Open Screen Recording settings
+            </button>
+          )}
         </div>
       )}
       {/* Autosave data-loss warning — stronger (danger) treatment than the capture notice; the meeting is
@@ -204,10 +216,9 @@ export const Copilot = memo(function Copilot({
       {error ? (
         <div className="flex flex-col gap-1.5 text-[13px] text-[var(--color-danger)] break-words">
           <span>{error}</span>
-          {/* Make a Screen-Recording error actionable instead of inert text: one tap deep-links to the
-              exact macOS pane (the IPC already exists, previously only used in Onboarding). Once granted,
-              the live permission watcher auto-resumes the 'them' channel — no Listen restart needed. */}
-          {/screen recording/i.test(error) && (
+          {/* Make a screen-capture permission error actionable. On macOS the IPC opens the System
+              Settings pane; on Windows it opens the relevant system privacy settings. */}
+          {isScreenCapturePermissionError(error) && (
             <button
               type="button"
               onClick={() => void window.toto.openPermissionSettings('screenRecording')}

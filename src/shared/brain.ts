@@ -440,7 +440,17 @@ export type BrainGraph = z.infer<typeof BrainGraphSchema>
 export const BrainIndexSchema = z.object({
   schema_version: z.number().default(BRAIN_SCHEMA_VERSION),
   // Ingest log keyed by source file basename — makes rebuilds/backfills resumable and idempotent.
-  ingested: z.record(z.string(), z.object({ at: z.number(), ok: z.boolean(), error: z.string().optional() })).default({}),
+  ingested: z.record(z.string(), z.object({
+    at: z.number(),
+    ok: z.boolean(),
+    error: z.string().optional(),
+    /** mtime/size snapshot of the source consumed by this record. Missing means a legacy record. */
+    sourceVersion: z.string().optional(),
+    /** Consecutive failed extraction attempts for persisted retry pacing. */
+    attempts: z.number().int().nonnegative().optional(),
+    /** Earliest time an automatic background scan may retry this unchanged failed source. */
+    retryAfter: z.number().optional()
+  })).default({}),
   // Lint findings (contradictions/staleness). Surfaced in the dashboard; never auto-resolved.
   warnings: z.array(z.string()).default([]),
   // True from "user asked for a backfill" until the queue fully drains — lets a quit/relaunch resume
@@ -457,7 +467,11 @@ export const BrainIndexSchema = z.object({
   // clean replay; while set, `replayPending` is deliberately NOT cleared, so a rebuild that replayed zero
   // corrections never reports success — the failure is surfaced (also mirrored into `warnings`) instead
   // of the pre-fix behaviour of silently clearing the flag and reverting every human correction.
-  replayError: z.string().optional()
+  replayError: z.string().optional(),
+  /** Monotonic state revision. Dashboard status polling uses this to refresh same-count changes. */
+  revision: z.number().int().nonnegative().default(0),
+  /** A source edit/delete requires a clean derived-brain rebuild, not an incremental merge. */
+  sourceRefreshRequested: z.boolean().default(false)
 })
 export type BrainIndex = z.infer<typeof BrainIndexSchema>
 
@@ -484,9 +498,13 @@ export interface BrainStatus {
   nodes: number
   edges: number
   warnings: number
+  /** Monotonic persisted state version, including same-count repairs and corrections. */
+  revision: number
   /** `done` is every settled queue job; `failed`, when nonzero, identifies settled jobs that were not
    * successfully mapped and need a retry rather than being counted as completed intelligence. */
   backfill?: { total: number; done: number; failed?: number; preparing?: boolean; running: boolean }
+  /** Newly saved/imported meetings map in the background independently of a historical Index batch. */
+  live?: { pending: number; running: boolean }
   // MI-2.5 review round 3: true while the correction journal is durably locked after a genuine
   // corruption was detected + preserved. Computed fresh each poll from the on-disk sentinel (the lock
   // file is the source of truth), so BrainView can offer an in-app "Reset corrections lock" affordance

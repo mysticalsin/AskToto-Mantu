@@ -42,7 +42,7 @@ consent tied to the bundle id) and the electron-updater continuity for existing 
 
 ## Install
 
-Grab the installer for your OS from the [AskToto-Releases](https://github.com/mysticalsin/AskToto-Releases/releases) page:
+Grab the installer for your OS from the [Métis releases page](https://github.com/mysticalsin/AskToto-Mantu/releases):
 
 - **macOS Apple Silicon** — `Metis-<version>.dmg`.
 - **Windows x64** — `Metis-Setup-<version>.exe` (installer) or `Metis-Portable-<version>.exe`

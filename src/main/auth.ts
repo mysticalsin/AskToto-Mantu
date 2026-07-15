@@ -382,8 +382,10 @@ function loadSession(): void {
     if (useFileBackend()) {
       try { json = decryptSecret(buf) } catch { /* not AES-GCM format — try safeStorage below */ }
     }
-    // Fallback / migration: try safeStorage (old prod installs or prod reads on the safeStorage path).
-    if (json === null && safeStorage.isEncryptionAvailable()) {
+    // Fallback / migration: try safeStorage only when this build did not explicitly opt out of
+    // Keychain. The unsigned package sets ASKTOTO_LOCAL_KEYSTORE so an old auth-session.bin can never
+    // place a hidden Keychain dialog in front of onboarding; it is treated as an expired local cache.
+    if (json === null && !process.env.ASKTOTO_LOCAL_KEYSTORE && safeStorage.isEncryptionAvailable()) {
       try { json = safeStorage.decryptString(buf) } catch { /* not a safeStorage blob */ }
       // Migrate to file backend if we're now in file-backend mode (best-effort).
       if (json !== null && useFileBackend()) {

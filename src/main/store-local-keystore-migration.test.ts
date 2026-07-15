@@ -53,27 +53,30 @@ describe('store local-keystore migration', () => {
     vi.restoreAllMocks()
   })
 
-  it('preserves an existing encrypted profile when a user save migrates its Keychain-wrapped file key', async () => {
+  it('preserves an existing encrypted profile without probing Keychain when the local keystore is forced', async () => {
     const originalKey = randomBytes(32)
     writeFileSync(
       join(userData, 'secret-key.bin'),
       Buffer.from(`wrapped:${originalKey.toString('base64')}`, 'utf8'),
       { mode: 0o600 }
     )
+    const settings = encryptExistingSettings(originalKey, { provider: 'openai', temperature: 0.42 })
     writeFileSync(
       join(userData, 'settings.json'),
-      encryptExistingSettings(originalKey, { provider: 'openai', temperature: 0.42 }),
+      settings,
       { mode: 0o600 }
     )
 
     const { setSettings } = await import('./store')
-    const saved = setSettings({ recordingConsent: true })
-
-    expect(saved.provider).toBe('openai')
-    expect(saved.temperature).toBe(0.42)
-    expect(saved.recordingConsent).toBe(true)
-    expect(readFileSync(join(userData, 'secret-key.bin'))).toEqual(originalKey)
-    expect(safeStorage.decryptString).toHaveBeenCalledTimes(1)
+    expect(() => setSettings({ recordingConsent: true })).toThrow(
+      'Métis could not unlock the existing encrypted profile'
+    )
+    expect(readFileSync(join(userData, 'secret-key.bin'))).toEqual(
+      Buffer.from(`wrapped:${originalKey.toString('base64')}`, 'utf8')
+    )
+    expect(readFileSync(join(userData, 'settings.json'))).toEqual(settings)
+    expect(safeStorage.isEncryptionAvailable).not.toHaveBeenCalled()
+    expect(safeStorage.decryptString).not.toHaveBeenCalled()
   })
 
   it('leaves the encrypted profile untouched when the original Keychain cannot unlock its file key', async () => {

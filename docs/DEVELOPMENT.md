@@ -6,8 +6,8 @@ this doc stops at a quick reference and points to `docs/ENTERPRISE_RELEASE.md` a
 for the full runbook.
 
 Internal note: the package name (`asktoto`), the `com.mantu.asktoto` app id, and the
-`AskToto-Releases` update feed repo all stay as-is through the Métis rebrand on purpose — macOS TCC
-grants and the auto-updater are keyed to them, and renaming would reset permissions / orphan installs.
+release feed all stay stable through the Métis rebrand on purpose — macOS TCC grants and the
+auto-updater are keyed to them. The active feed is this repository's `AskToto-Mantu` GitHub Releases page.
 Everything user-visible says Métis.
 
 ## 1. Environment setup
