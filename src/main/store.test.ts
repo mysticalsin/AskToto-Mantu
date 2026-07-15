@@ -4,7 +4,16 @@ import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { app, safeStorage } from 'electron'
 import { DEFAULT_SETTINGS } from '@shared/ipc'
-import { getSettings, setSettings, getApiKey, setApiKey, listDustAgents, testApiKey } from './store'
+import {
+  getSettings,
+  setSettings,
+  getApiKey,
+  setApiKey,
+  listDustAgents,
+  testApiKey,
+  getAllowedProviders,
+  getLockedKeys
+} from './store'
 import { decryptSecret } from './secrets'
 
 vi.mock('electron')
@@ -304,6 +313,46 @@ describe('store', () => {
       const result = await testApiKey('dust', 'test-dust-key')
 
       expect(result.ok).toBe(true)
+    })
+  })
+
+  describe('Cahê Windows edition policy', () => {
+    const caheFlag = 'METIS_CAHE_EDITION'
+    let previousCaheFlag: string | undefined
+
+    beforeEach(() => {
+      previousCaheFlag = process.env[caheFlag]
+      process.env[caheFlag] = '1'
+    })
+
+    afterEach(() => {
+      if (previousCaheFlag === undefined) delete process.env[caheFlag]
+      else process.env[caheFlag] = previousCaheFlag
+    })
+
+    it('keeps Kimi active while preserving Dust workspace and agent settings', () => {
+      const result = setSettings({
+        provider: 'dust',
+        providerPriority: 'local',
+        dustWorkspaceId: 'cahe-workspace',
+        providerModels: { ...DEFAULT_SETTINGS.providerModels, dust: 'cahe-dust-agent' }
+      })
+
+      expect(result.provider).toBe('kimi')
+      expect(result.providerPriority).toBe('api')
+      expect(result.dustWorkspaceId).toBe('cahe-workspace')
+      expect(result.providerModels.dust).toBe('cahe-dust-agent')
+      expect(getAllowedProviders()).toEqual(['kimi', 'dust'])
+      expect(getLockedKeys()).toEqual(expect.arrayContaining(['provider', 'providerPriority']))
+    })
+
+    it('stores a Cahê Kimi key encrypted in the isolated local profile', () => {
+      const key = 'sk-kimi-local-test-key'
+      setApiKey('kimi', key)
+
+      const persisted = readFileSync(join(userData, 'key-kimi.bin')).toString('utf8')
+      expect(getApiKey('kimi')).toBe(key)
+      expect(persisted).not.toContain(key)
     })
   })
 })

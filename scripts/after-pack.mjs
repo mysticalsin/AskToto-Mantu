@@ -73,9 +73,18 @@ export default async function afterPack(context) {
   // This is the only point where the final unpacked resource tree exists but platform signing has not
   // yet changed Mach-O/PE bytes. Verify every reviewed native payload now; the later CLI invocation uses
   // --post-sign and verifies inventory, immutable assets, architecture, and signatures instead.
+  const runtimeCheckArgs = [
+    join(SCRIPTS_DIR, 'check-packaged-runtime.mjs'),
+    isMac ? 'mac' : 'win',
+    resourceDir
+  ]
+  // electron-builder derives the Windows executable from appInfo.productFilename, which may differ from
+  // the standard Metis.exe in an edition-specific config. Pass that same resolved filename into the
+  // verifier so afterPack checks the binary electron-builder actually produced.
+  if (isWin) runtimeCheckArgs.push(`--executable=${context.packager.appInfo.productFilename}.exe`)
   execFileSync(
     process.execPath,
-    [join(SCRIPTS_DIR, 'check-packaged-runtime.mjs'), isMac ? 'mac' : 'win', resourceDir],
+    runtimeCheckArgs,
     { cwd: REPO_ROOT, stdio: 'inherit' }
   )
 
