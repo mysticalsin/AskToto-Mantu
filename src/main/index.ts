@@ -206,6 +206,7 @@ import { SaveMeetingSchema, SaveNoteSchema } from '@shared/ipc'
 import { PROVIDERS, resolveModelTier, applyInteractiveGuardrail, type ProviderId } from '@shared/providers'
 import { routeTier } from '@shared/routing'
 import { redactSecrets } from '@shared/redact'
+import { initializeCaheEditionIdentity, isCaheEdition } from './cahe-edition'
 
 // Self-signed / un-notarized builds: use the AES-256-GCM file keystore instead of the macOS Keychain.
 // An un-notarized app's Keychain ACL is not stably trusted, so safeStorage prompts for the login-keychain
@@ -215,6 +216,7 @@ import { redactSecrets } from '@shared/redact'
 // 0600) with zero OS prompt, so the app boots straight to its UI. Remove/gate this once the app ships
 // signed with an Apple Developer ID + notarization, so it can use the Keychain-backed store again.
 // `??=` leaves QA/integration overrides (which set the var explicitly) untouched.
+initializeCaheEditionIdentity()
 process.env.ASKTOTO_LOCAL_KEYSTORE ??= '1'
 
 // Select the final user-data profile before crashReporter (or any other Electron service) can resolve
@@ -234,7 +236,7 @@ if (!app.isPackaged && !process.env.ASKTOTO_USERDATA) {
 // "Métis Helper" child-process bundles crashed Chromium at launch on macOS 26+/Tahoe; see the
 // productName note in electron-builder.yml). Adopt the newest existing prior profile once so settings,
 // transcripts, and secret-key.bin survive the rename. Must run before anything opens userData.
-if (app.isPackaged && !process.env.ASKTOTO_USERDATA) {
+if (app.isPackaged && !process.env.ASKTOTO_USERDATA && !isCaheEdition()) {
   try {
     const ud = app.getPath('userData')
     if (!existsSync(join(ud, 'settings.json'))) {
