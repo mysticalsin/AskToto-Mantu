@@ -58,7 +58,8 @@ import {
   localEligibleFor,
   localBaseReady,
   localVisionPrivacyRequired,
-  pickPrimaryProvider
+  pickPrimaryProvider,
+  allowCrossProviderFailover
 } from './local-routing'
 import { streamLocal } from './local'
 
@@ -262,6 +263,31 @@ describe('pickPrimaryProvider', () => {
 
   it('local still wins over the active provider even with no cliPrimary in play', () => {
     expect(pickPrimaryProvider(undefined, true, undefined, 'anthropic')).toBe('local')
+  })
+})
+
+// ─── allowCrossProviderFailover — pinned-agent requests must never fail over ───────────────────────────
+// Regression lock (Tony, 2026-07-15): Spotlight Ref forces providerOverride:'dust' + agentOverride:<agent>.
+// When the locked Dust agent could not answer, the generic failover waterfall used to hand the request to
+// the active provider (e.g. Kimi), silently answering the sales-reference prompt from a model that never
+// touched the managed agent. pickFailover now returns null for an agentOverride-pinned request via this
+// predicate, so the reconnect-Dust message surfaces instead. This behavior MUST hold on every version.
+describe('allowCrossProviderFailover', () => {
+  it('a request pinned to a specific Dust agent (Spotlight Ref) has NO valid failover target', () => {
+    expect(allowCrossProviderFailover({ agentOverride: 'GOr913Zr5V' })).toBe(false)
+  })
+
+  it('any non-empty agentOverride suppresses failover regardless of the exact agent id', () => {
+    expect(allowCrossProviderFailover({ agentOverride: 'some-base-agent-sId' })).toBe(false)
+  })
+
+  it('a generic providerOverride cascade WITHOUT agentOverride (recap/summary) keeps the failover waterfall', () => {
+    expect(allowCrossProviderFailover({})).toBe(true)
+    expect(allowCrossProviderFailover({ agentOverride: undefined })).toBe(true)
+  })
+
+  it('an empty-string agentOverride is not a pin (falsy), so failover stays allowed', () => {
+    expect(allowCrossProviderFailover({ agentOverride: '' })).toBe(true)
   })
 })
 

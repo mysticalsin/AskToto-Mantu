@@ -125,3 +125,22 @@ export function pickPrimaryProvider(
   if (cliPrimary) return cliPrimary
   return activeProvider
 }
+
+/**
+ * Whether a request may fail over to a DIFFERENT provider when its primary can't answer.
+ *
+ * A request pinned to a specific Dust agent (`agentOverride` — e.g. the hard-locked Spotlight Ref sales-
+ * reference agent) has NO valid cross-provider failover target: that managed agent lives only in Dust, so
+ * answering from the active generic provider (e.g. Kimi/Anthropic) would silently return a reply that never
+ * touched the agent. When the pinned agent can't answer, the honest outcome is the reconnect-Dust message,
+ * not a substitute answer. `agentOverride` is Dust-only by construction (ipc.ts AskStart, index.ts's
+ * `agentOverride && provider === 'dust'` model gate), so this is exactly the "pinned to one managed agent"
+ * signal. A plain `providerOverride: 'dust'` cascade WITHOUT agentOverride (recap/summary) is NOT pinned and
+ * still fails over — the designed "Dust down → your configured cloud provider takes over" waterfall.
+ *
+ * index.ts consults this at both failover seams (the retry-budget sizing and the pre-token failover), via
+ * pickFailover, so the two can never drift apart (same rationale that extracted this whole module).
+ */
+export function allowCrossProviderFailover(req: { agentOverride?: string }): boolean {
+  return !req.agentOverride
+}

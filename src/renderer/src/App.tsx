@@ -1110,6 +1110,13 @@ export function App(): JSX.Element {
   // agent (default, see DUST_BASE_AGENT_ID) drafts follow-ups too. Renders inline on Review (no view
   // change, unlike spotlightRef/whatNext). Cascades into Dust whenever Dust is configured, regardless of
   // which provider is active for everyday Q&A (e.g. Kimi) — see isDustReady.
+  //
+  // Deliberately NO agentOverride: unlike Spotlight Ref (which is pinned to a specialized managed agent
+  // that only Dust hosts), a follow-up is generic email drafting that the interactive speed pin already
+  // routes to the base Dust agent for a mode-'answer' ask with no agentOverride (index.ts's
+  // "provider === 'dust' && !req.agentOverride" model gate) — identical agent, but WITHOUT the agentOverride
+  // pin this keeps the designed Dust-down failover (allowCrossProviderFailover): if Dust is unreachable, a
+  // configured cloud provider can still draft the email rather than dead-ending on a reconnect message.
   const generateFollowup = useCallback(() => {
     const recapText = (pastMeeting ? pastMeeting.recap : ask.answer?.text) ?? ''
     if (!recapText.trim()) return
@@ -1127,7 +1134,7 @@ export function App(): JSX.Element {
       'the entire email in the SAME LANGUAGE as the summary below — do not translate it.' +
       (title ? `\n\nMeeting title: ${title}` : '') +
       `\n\nSummary:\n${recapText}`
-    followup.run({ mode: 'answer', prompt, agentOverride: refAgent, providerOverride: 'dust' })
+    followup.run({ mode: 'answer', prompt, providerOverride: 'dust' })
   }, [
     pastMeeting,
     ask.answer,
