@@ -138,6 +138,7 @@ mac:
     CFBundleDisplayName: Métis
     NSMicrophoneUsageDescription: Métis transcribes audio on-device to give you live AI suggestions.
     NSScreenCaptureUsageDescription: Métis captures system audio and your screen so the AI can help.
+    NSAudioCaptureUsageDescription: Métis captures meeting audio from your screen so it can transcribe the other side of a call.
     LSUIElement: true
 mas:
   # Mac App Store builds are opt-in: run `npm run release:mas`.
@@ -150,6 +151,7 @@ mas:
     CFBundleDisplayName: Métis
     NSMicrophoneUsageDescription: Métis transcribes audio on-device to give you live AI suggestions.
     NSScreenCaptureUsageDescription: Métis captures system audio and your screen so the AI can help.
+    NSAudioCaptureUsageDescription: Métis captures meeting audio from your screen so it can transcribe the other side of a call.
     LSUIElement: true
 masDev:
   entitlements: build/entitlements.mas.plist
@@ -198,7 +200,7 @@ appx:
   publisherDisplayName: Mantu
   backgroundColor: transparent
 # ─── Auto-update feed (electron-updater is wired in src/main/updater.ts) ───────────────────
-# FLOW: push a v* tag → CI (release.yml) builds + publishes to the public AskToto-Releases repo →
+# FLOW: push a v* tag → CI (release.yml) builds + publishes to this public GitHub Releases page →
 # every installed app finds the new version on launch, downloads in the background, installs on quit.
 # CODE SIGNING is required for the updater to trust artifacts (see SIGNING.md):
 #   mac/win      → CSC_LINK (path or base64 of the .p12) + CSC_KEY_PASSWORD
@@ -206,17 +208,12 @@ appx:
 #   mac notarize → APPLE_ID + APPLE_APP_SPECIFIC_PASSWORD + APPLE_TEAM_ID
 # Unsigned macOS zip updates will be rejected by Gatekeeper on install.
 publish:
-  # Updates are served from the PUBLIC AskToto-Releases repo's GitHub Releases — the app *code* repo stays
-  # private, only the built binaries + latest-mac.yml are published there. The installed app checks this repo
-  # on launch, downloads the new version in the background, and installs it on quit (perfect zero-click UX).
-  # To cut a release: create the public repo once (gh repo create mysticalsin/AskToto-Releases --public),
-  # set GH_TOKEN (a PAT with `repo` scope), then run `npm run release`.
-  # NOTE (Métis rebrand): the feed repo keeps its old name — every installed app polls THIS repo by name,
-  # so renaming it would strand them. To migrate later: rename the GitHub repo (redirects cover the gap),
-  # then update owner/repo here in the release AFTER the one that ships the rename.
+  # Releases are served from this app repository. The previous AskToto-Releases feed was verified absent
+  # on 2026-07-14; pointing the updater at it made every update check fail. Keep this value aligned with
+  # the public GitHub Releases page where the installer assets are actually published.
   provider: github
   owner: mysticalsin
-  repo: AskToto-Releases
+  repo: AskToto-Mantu
   # Without this line electron-builder creates DRAFT releases — and electron-updater resolves versions
   # from the public releases feed, which never contains drafts: every install would poll forever and
   # find nothing. `release` publishes the moment CI finishes; the v* tag push is the human approval gate.

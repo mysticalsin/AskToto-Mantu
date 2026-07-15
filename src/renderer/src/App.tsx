@@ -29,6 +29,7 @@ import { playCue, playClick, setSoundsEnabled } from './lib/sound'
 import type { HotkeyAction, TranscriptLine, ConversationMode, ChatTurn, LicenseGateVerdict } from '@shared/ipc'
 import { PROVIDERS, isDustReady } from '@shared/providers'
 import { ASSIST_PROMPT, buildNoDecisionPrompt } from '@shared/prompts'
+import { isScreenCapturePermissionError } from '@shared/screen-capture'
 import { detectNoDecisionEnding } from '@shared/wrapup'
 import {
   FACT_CHECK_SCREEN_PROMPT,
@@ -722,15 +723,19 @@ export function App(): JSX.Element {
           /^Error invoking remote method '[^']*':\s*(?:Error:\s*)?/,
           ''
         )
+        const needsScreenPermission = isScreenCapturePermissionError(raw)
         setCaptureError(
           /private view/i.test(raw)
-            ? 'Private View is on, so Métis couldn’t see your screen. Answering from context only. Turn Private View off to include the screen.'
-            : /screen recording|quit and reopen/i.test(raw)
+            ? 'Private View is on, so Métis couldn’t see your screen. Turn Private View off to include the screen.'
+            : needsScreenPermission
               ? // Main diagnosed a specific, actionable cause (permission off / restart needed) —
                 // surface it verbatim instead of flattening it into the generic line.
-                `${raw} Answering from context only for now.`
+                raw
               : 'Couldn’t capture your screen. Answering from context only.'
         )
+        // A denied Screen Recording grant means the requested screen must not silently become a cloud
+        // text request. Show the exact recovery path and wait for the user to retry after permission.
+        if (needsScreenPermission) return null
         // The fallback never saw a screen — a screen-asserting label ("Viewed screen") would contradict
         // the banner above and claim a capture that didn't happen.
         const fallbackLabel = opts?.label && /screen/i.test(opts.label) ? undefined : opts?.label
@@ -774,19 +779,22 @@ export function App(): JSX.Element {
         })
         return
       } catch (e) {
-        // Surface WHY capture failed (Private View, permission) as a non-terminal notice, then fall
-        // through to the transcript-only suggestion — this used to swallow the failure silently.
+        // Private View and transient capture failures can use the transcript-only suggestion. A denied
+        // screen permission cannot: that would turn a requested visual ask into an unannounced provider
+        // request without the screen the user selected.
         const raw = (e instanceof Error ? e.message : String(e)).replace(
           /^Error invoking remote method '[^']*':\s*(?:Error:\s*)?/,
           ''
         )
+        const needsScreenPermission = isScreenCapturePermissionError(raw)
         setCaptureError(
           /private view/i.test(raw)
             ? 'Private View is on, so Métis couldn’t see your screen. Suggesting from the conversation only. Turn Private View off to include the screen.'
-            : /screen recording|quit and reopen/i.test(raw)
-              ? `${raw} Suggesting from the conversation only for now.`
+            : needsScreenPermission
+              ? raw
               : 'Couldn’t capture your screen. Suggesting from the conversation only.'
         )
+        if (needsScreenPermission) return
       }
     }
     suggest.run({

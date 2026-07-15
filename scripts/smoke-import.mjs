@@ -23,7 +23,16 @@ const meetingsFolder = join(userData, 'meetings')
 // Electron does not honor --user-data-dir for app.getPath('userData'); the app's real isolation hook is
 // the ASKTOTO_USERDATA env var (src/main/index.ts), so isolate the smoke test's profile through that
 // instead of the flag, which would otherwise silently run against the developer's real profile.
-const env = { ...process.env, ELECTRON_DISABLE_SECURITY_WARNINGS: 'true', ASKTOTO_USERDATA: userData }
+// Force the app-managed file keystore in this disposable profile. A packaged production build normally
+// uses the OS credential store, which is intentionally tied to the installed app identity. This smoke
+// profile is deleted after the run and must not open a Keychain prompt or depend on the developer's
+// credential-store state.
+const env = {
+  ...process.env,
+  ELECTRON_DISABLE_SECURITY_WARNINGS: 'true',
+  ASKTOTO_USERDATA: userData,
+  ASKTOTO_LOCAL_KEYSTORE: '1'
+}
 let app
 const rendererDiagnostics = []
 const watchedPages = new WeakSet()
@@ -119,6 +128,10 @@ try {
   if (!meeting?.ok || !meeting.lines?.length) throw new Error('The imported meeting was not saved with transcript lines.')
   console.log(`[smoke-import] PASS ${job.file} (${meeting.lines.length} transcript lines)`)
 } finally {
+  // Métis keeps the process alive after its last window closes so background meeting reconciliation
+  // continues for real users. Explicitly exit this disposable test process instead of leaving the
+  // Playwright runner waiting on that deliberate production behavior.
+  await app?.evaluate(({ app: electronApp }) => electronApp.exit(0)).catch(() => {})
   await app?.close().catch(() => {})
   rmSync(userData, { recursive: true, force: true })
 }

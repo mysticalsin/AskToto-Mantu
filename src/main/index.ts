@@ -92,10 +92,20 @@ import { buildPrewarmMessages } from './llm/prewarm'
 import { listModels as listLocalModels } from './llm/local-models'
 import { resetDustConversation, prewarmDustConversation, isDustAuthError } from './llm/dust'
 import {
+  createKeyedSingleFlight,
+  getScreenSourcesWithRetry,
+  isUsableScreenSource,
+  screenCaptureUnavailableMessage
+} from './screen-capture'
+import {
   enqueueIngest,
+  markBrainChanged,
   requestBackfill,
+  requestSourceRefresh,
   brainBackfillProgress,
+  brainLiveIngestProgress,
   resumeBackfillIfPending,
+  reconcileMeetingsInBackground,
   settleCommitment,
   startRebuild
 } from './brain/ingest'
@@ -290,6 +300,27 @@ let sourceAck: { jobId: string; resolve: () => void; reject: (error: Error) => v
 let decoderReady: { resolve: () => void; reject: (error: Error) => void; timer: NodeJS.Timeout } | null = null
 const ffmpegDecoders = new Map<string, FfmpegDecoder>()
 const notifiedImportJobs = new Set<string>()
+
+type BrainStatusCounts = { people: number; accounts: number; deals: number; nodes: number; edges: number }
+let brainStatusCountsCache: { folder: string; revision: number; counts: BrainStatusCounts } | null = null
+
+/** Status is polled frequently by two windows. Re-scan graph/entity directories only after a revision change. */
+function brainStatusCounts(s: ReturnType<typeof getSettings>, revision: number): BrainStatusCounts {
+  const folder = resolveMeetingsFolder(s)
+  if (brainStatusCountsCache?.folder === folder && brainStatusCountsCache.revision === revision) {
+    return brainStatusCountsCache.counts
+  }
+  const graph = readBrainGraph(s)
+  const counts = {
+    people: listBrainEntities(s, 'person').length,
+    accounts: listBrainEntities(s, 'account').length,
+    deals: listBrainEntities(s, 'deal').length,
+    nodes: graph.nodes.length,
+    edges: graph.edges.length
+  }
+  brainStatusCountsCache = { folder, revision, counts }
+  return counts
+}
 
 /** Security: every privileged IPC handler must come from the main window's top frame.
  *  Compromised subframes, devtools, or unexpected webContents are rejected here. */
@@ -994,9 +1025,11 @@ function onFatal(kind: 'uncaughtException' | 'unhandledRejection', err: unknown)
 // ~150-450ms capture cost again. Kept tiny so the screen the model sees is never visibly stale.
 const CAPTURE_TTL_MS = 1500
 let shotCache: { image: string; width: number; height: number; dispId: number; ts: number } | null = null
+type CapturedScreen = { image: string; width: number; height: number; dispId: number }
 
-async function captureScreenshot(): Promise<{ image: string; width: number; height: number; dispId: number }> {
-  const disp = screen.getDisplayNearestPoint(screen.getCursorScreenPoint())
+async function captureScreenshotOnce(displayId: number): Promise<CapturedScreen> {
+  const disp = screen.getAllDisplays().find(({ id }) => id === displayId)
+  if (!disp) throw new Error('The selected display changed before Métis could capture it. Try again.')
   const sf = disp.scaleFactor || 1
   // Render the thumbnail already capped at VISION_MAX_EDGE (smaller = faster capture + ~50% smaller upload
   // + ~33% less model prefill). 1280px keeps dense on-screen text legible; q72 JPEG.
@@ -1009,26 +1042,31 @@ async function captureScreenshot(): Promise<{ image: string; width: number; heig
     width: Math.max(1, Math.round(fullW * capScale)),
     height: Math.max(1, Math.round(fullH * capScale))
   }
-  let sources = await desktopCapturer.getSources({ types: ['screen'], thumbnailSize })
-  // getSources can return empty transiently (right after launch or a fresh Screen-Recording grant). A
-  // fresh macOS permission grant can take longer than a single tick to propagate to ScreenCaptureKit, so
-  // retry with a short backoff (250ms, then 500ms) before giving up — a single fixed 250ms retry sometimes
-  // fired the spurious "No screen source available" right after the user granted permission.
-  for (let attempt = 0; !sources.length && attempt < 2; attempt++) {
-    await new Promise((r) => setTimeout(r, 250 * (attempt + 1)))
-    sources = await desktopCapturer.getSources({ types: ['screen'], thumbnailSize })
+  // `not-determined` must still reach desktopCapturer: on macOS the tiny ScreenCaptureKit probe is what
+  // registers this app with TCC and lets the system show its first permission prompt. A known denial,
+  // however, cannot recover by retrying and must never fall through to a text-only vision answer.
+  const accessStatus = process.platform === 'darwin' ? systemPreferences.getMediaAccessStatus('screen') : 'granted'
+  if (process.platform === 'darwin' && accessStatus !== 'granted' && accessStatus !== 'not-determined') {
+    throw new Error(screenCaptureUnavailableMessage(process.platform, accessStatus))
   }
-  // Match the source to the display under the cursor. When no source reports a matching display_id (empty
-  // display_id on some platforms, or a stale topology after a monitor change/unplug), fall back to the
-  // first source — but AUDIT the mismatch so a wrong-monitor capture leaves a trace instead of silently
-  // answering about the wrong screen.
+  const sources = await getScreenSourcesWithRetry(
+    () => desktopCapturer.getSources({ types: ['screen'], thumbnailSize }),
+    isUsableScreenSource,
+    {
+      onError: (error, attempt) =>
+        mainLog.warn(`[capture] getSources failed (attempt ${attempt}): ${error instanceof Error ? error.message : String(error)}`)
+    }
+  )
+  // Match the source to the display under the cursor. With one available source it is necessarily the
+  // requested display. With several, never fall back to an arbitrary one: sending another monitor to a
+  // provider is worse than asking the user to retry after a display-topology change.
   const matched = sources.find((s) => String(s.display_id) === String(disp.id))
   if (!matched && sources.length > 1) {
     auditLog('capture.display_mismatch', {
       requested: String(disp.id),
-      available: sources.map((s) => String(s.display_id)),
-      using: sources[0] ? String(sources[0].display_id) : 'none'
+      available: sources.map((s) => String(s.display_id))
     })
+    throw new Error('Métis could not identify the selected display. Check your display connection and try again.')
   }
   const src = matched ?? sources[0]
   if (!src) {
@@ -1036,18 +1074,7 @@ async function captureScreenshot(): Promise<{ image: string; width: number; heig
     // cause, and it needs a specific, actionable message (macOS also requires an app RESTART after
     // granting — a fresh grant doesn't reach an already-running ScreenCaptureKit session).
     const status = process.platform === 'darwin' ? systemPreferences.getMediaAccessStatus('screen') : 'granted'
-    if (status !== 'granted') {
-      throw new Error(
-        'Screen Recording permission is off for Métis. Enable it in System Settings → Privacy & Security → Screen Recording, then quit and reopen Métis.'
-      )
-    }
-    // The restart advice is macOS-specific (a fresh TCC grant only applies to a fresh launch) — other
-    // platforms get a neutral message rather than instructions about a System Settings they don't have.
-    throw new Error(
-      process.platform === 'darwin'
-        ? 'No screen source available. If you granted Screen Recording just now, quit and reopen Métis — macOS only applies the permission to a fresh launch.'
-        : 'No screen source available. Check your system’s screen-capture permissions for Métis, then try again.'
-    )
+    throw new Error(screenCaptureUnavailableMessage(process.platform, status))
   }
   let img = src.thumbnail
   const sz = img.getSize()
@@ -1058,8 +1085,14 @@ async function captureScreenshot(): Promise<{ image: string; width: number; heig
   }
   const jpeg = img.toJPEG(VISION_JPEG_Q)
   const size = img.getSize()
+  if (size.width < 1 || size.height < 1 || jpeg.length < 1) {
+    throw new Error('Screen capture returned an empty image. Try again in a moment.')
+  }
   return { image: jpeg.toString('base64'), width: size.width, height: size.height, dispId: disp.id }
 }
+
+/** Share a native capture only between pre-warm and click requests for the same display. */
+const captureScreenshot = createKeyedSingleFlight<number, CapturedScreen>(captureScreenshotOnce)
 
 /** Thrown by getScreenshot() when Private View is on — lets callers show a specific message instead of a
  *  generic capture failure. */
@@ -1087,9 +1120,9 @@ async function getScreenshot(phase?: string): Promise<{ image: string; width: nu
     const { image, width, height, ts } = shotCache
     return { image, width, height, capturedAt: ts }
   }
-  let shot: Awaited<ReturnType<typeof captureScreenshot>>
+  let shot: CapturedScreen
   try {
-    shot = await captureScreenshot()
+    shot = await captureScreenshot(disp.id)
   } catch (e) {
     if (phase !== 'prewarm') {
       auditLog('capture.failed', {
@@ -1099,6 +1132,7 @@ async function getScreenshot(phase?: string): Promise<{ image: string; width: nu
     }
     throw e
   }
+  if (shot.dispId !== disp.id) throw new Error('Métis captured a different display than requested. Try again.')
   // Re-check after the async capture: Private View could have been toggled ON while getSources()/resize
   // were in flight. Without this second check, a frame grabbed a moment before the toggle would still be
   // cached and sent to the model — breaking the Private View guarantee on a mid-capture toggle.
@@ -2009,7 +2043,10 @@ function registerIpc(): void {
     const { response } = win ? await dialog.showMessageBox(win, dialogOpts) : await dialog.showMessageBox(dialogOpts)
     if (response !== 0) return { ok: false, error: 'cancelled' }
     const result = await deleteMeeting(safeName)
-    if (result.ok) auditLog('transcript.deleted', { file: safeName })
+    if (result.ok) {
+      auditLog('transcript.deleted', { file: safeName })
+      await requestSourceRefresh(getSettings())
+    }
     return result
   })
 
@@ -2024,7 +2061,10 @@ function registerIpc(): void {
     const parsed = RenameMeetingPayloadSchema.safeParse(raw)
     if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message || 'Invalid rename request.' }
     const result = await renameMeeting(getSettings(), parsed.data.file, parsed.data.title)
-    if (result.ok) auditLog('transcript.renamed', { file: basename(parsed.data.file) })
+    if (result.ok) {
+      auditLog('transcript.renamed', { file: basename(parsed.data.file) })
+      await enqueueIngest(join(resolveMeetingsFolder(getSettings()), basename(parsed.data.file)), { force: true })
+    }
     return result
   })
 
@@ -2039,7 +2079,10 @@ function registerIpc(): void {
     const parsed = UpdateRecapPayloadSchema.safeParse(raw)
     if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message || 'Invalid edit request.' }
     const result = await updateMeetingRecap(getSettings(), parsed.data.file, parsed.data.recap)
-    if (result.ok) auditLog('transcript.recap_edited', { file: basename(parsed.data.file) })
+    if (result.ok) {
+      auditLog('transcript.recap_edited', { file: basename(parsed.data.file) })
+      await enqueueIngest(join(resolveMeetingsFolder(getSettings()), basename(parsed.data.file)), { force: true })
+    }
     return result
   })
 
@@ -2076,7 +2119,7 @@ function registerIpc(): void {
     const result = await appendDebrief(s, safeName, text)
     if (result.ok) {
       auditLog('transcript.debrief', { file: safeName })
-      enqueueIngest(join(resolveMeetingsFolder(s), safeName)) // fold the unsaid layer into the brain
+      await enqueueIngest(join(resolveMeetingsFolder(s), safeName), { force: true }) // fold the unsaid layer into the brain
     }
     return result
   })
@@ -2093,7 +2136,10 @@ function registerIpc(): void {
     const text = String(p?.text ?? '')
     if (!deal || !text) return { ok: false, error: 'Missing commitment.' }
     const r = await settleCommitment(getSettings(), brainSlugify(deal), text, status as 'open' | 'kept' | 'broken')
-    if (r.ok) auditLog('brain.commitment.settled', { status })
+    if (r.ok) {
+      await markBrainChanged(getSettings())
+      auditLog('brain.commitment.settled', { status })
+    }
     return r
   })
 
@@ -2537,7 +2583,9 @@ function registerIpc(): void {
       encrypted: !!getSettings().encryptTranscripts
     })
     scheduleRebuild() // refresh the knowledge graph with the new note (debounced; no-op if disabled)
-    enqueueIngest(r.path) // Mantu Intelligence brain — background extraction; never blocks the save
+    // Persist the small background-work marker before confirming the transcript save. The actual LLM
+    // extraction remains asynchronous, but a quit immediately after Save can now resume it.
+    await enqueueIngest(r.path)
     return r
   })
 
@@ -2551,11 +2599,8 @@ function registerIpc(): void {
     // This is deliberately fire-and-forget so a slow OneDrive listing never delays the window itself.
     void (async () => {
       try {
-        const s = getSettings()
-        const idx = readBrainIndex(s)
-        const saved = await listMeetings()
-        const ingestedFiles = new Set(Object.entries(idx.ingested).filter(([, v]) => v.ok).map(([file]) => file))
-        if (!saved.some(({ file }) => !ingestedFiles.has(file))) return
+        // Source versions, not only a count of successful filenames, decide whether Intelligence is
+        // current. requestBackfill detects changed/deleted sources and schedules the clean rebuild.
         const r = requestBackfill()
         auditLog('brain.backfill.start', { queued: r.queued, deferred: r.deferred, automatic: true })
       } catch (err) {
@@ -2569,17 +2614,15 @@ function registerIpc(): void {
     if (!requireAuth()) return null
     const s = getSettings()
     const idx = readBrainIndex(s)
-    const graph = readBrainGraph(s)
+    const counts = brainStatusCounts(s, idx.revision)
     return {
       meetings: Object.values(idx.ingested).filter((v) => v.ok).length,
       ingestedFiles: Object.entries(idx.ingested).filter(([, v]) => v.ok).map(([file]) => file),
-      people: listBrainEntities(s, 'person').length,
-      accounts: listBrainEntities(s, 'account').length,
-      deals: listBrainEntities(s, 'deal').length,
-      nodes: graph.nodes.length,
-      edges: graph.edges.length,
+      ...counts,
       warnings: idx.warnings.length,
+      revision: idx.revision,
       backfill: brainBackfillProgress(),
+      live: brainLiveIngestProgress(),
       // MI-2.5 review round 3: computed fresh from the on-disk sentinel each poll — lets BrainView offer
       // the in-app "Reset corrections lock" recovery instead of a hand-deleted hidden .brain file.
       corruptionBlocked: isJournalCorruptionBlocked(s)
@@ -2630,13 +2673,16 @@ function registerIpc(): void {
     assertBrainReader(e)
     if (!requireAuth()) throw new Error('Not signed in.')
     const s = getSettings()
+    const index = readBrainIndex(s)
     return {
-      index: readBrainIndex(s),
+      index,
       graph: readBrainGraph(s),
       people: listBrainEntities(s, 'person').map((slug) => readBrainPerson(s, slug)).filter(Boolean),
       accounts: listBrainEntities(s, 'account').map((slug) => readBrainAccount(s, slug)).filter(Boolean),
       deals: listBrainEntities(s, 'deal').map((slug) => readBrainDeal(s, slug)).filter(Boolean),
-      meetings: listBrainMeetingExtractions(s).map((slug) => readBrainMeetingExtraction(s, slug)).filter(Boolean)
+      meetings: listBrainMeetingExtractions(s)
+        .map((slug) => readBrainMeetingExtraction(s, slug))
+        .filter((meeting): meeting is NonNullable<typeof meeting> => !!meeting && !!index.ingested[meeting.source_file]?.ok)
     }
   })
   // Canonical people/account NAMES ONLY (never quotes, roles, deals, or any other entity field) — feeds
@@ -2665,6 +2711,7 @@ function registerIpc(): void {
     if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message || 'Invalid input.' }
     const updated = await setDealOutcome(getSettings(), brainSlugify(parsed.data.dealSlug), parsed.data.outcome)
     if (!updated) return { ok: false, error: 'Deal not found.' }
+    await markBrainChanged(getSettings())
     auditLog('brain.deal.outcome', { outcome: parsed.data.outcome })
     return { ok: true }
   })
@@ -2689,6 +2736,7 @@ function registerIpc(): void {
           : readBrainDeal(getSettings(), id)?.name
     const r = await renameEntity(getSettings(), { kind, id, newName })
     if (!r.ok) return r
+    await markBrainChanged(getSettings())
     await publishEntity(getSettings(), kind, id) // Task MI-5: keep the wiki page in sync with the live rename
     // alsoFixAsr composition lives here, not in corrections.ts (that module owns brain-entity
     // mutations only) — appends the {from, to} pair to settings.asrCorrections in the exact shape
@@ -2723,6 +2771,7 @@ function registerIpc(): void {
     if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message || 'Invalid merge request.' }
     const r = await mergeEntities(getSettings(), parsed.data)
     if (r.ok) {
+      await markBrainChanged(getSettings())
       auditLog('brain.entity.merged', { kind: parsed.data.kind })
       // Task MI-5: the survivor's page picks up the merged-in data; the source's stale page is removed.
       const s = getSettings()
@@ -2744,6 +2793,7 @@ function registerIpc(): void {
     const journalEntry = readCorrectionsJournal(s).find((en) => en.kind === 'entity_merge' && en.seq === parsed.data.targetSeq)
     const r = await unmergeEntities(s, parsed.data)
     if (r.ok) {
+      await markBrainChanged(s)
       auditLog('brain.entity.unmerged', {})
       if (journalEntry && journalEntry.kind === 'entity_merge') {
         await publishEntity(s, journalEntry.payload.kind, journalEntry.payload.fromId)
@@ -2759,6 +2809,7 @@ function registerIpc(): void {
     if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message || 'Invalid field update.' }
     const r = await updateEntityField(getSettings(), parsed.data)
     if (r.ok) {
+      await markBrainChanged(getSettings())
       auditLog('brain.entity.field_updated', { kind: parsed.data.kind, field: parsed.data.field })
       await publishEntity(getSettings(), parsed.data.kind, parsed.data.id)
     }
@@ -2770,7 +2821,10 @@ function registerIpc(): void {
     const parsed = CommitmentRejectPayloadSchema.safeParse(raw)
     if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message || 'Invalid commitment.' }
     const r = await rejectCommitment(getSettings(), parsed.data)
-    if (r.ok) auditLog('brain.commitment.rejected', {})
+    if (r.ok) {
+      await markBrainChanged(getSettings())
+      auditLog('brain.commitment.rejected', {})
+    }
     return r
   })
 
@@ -3230,7 +3284,10 @@ if (!app.requestSingleInstanceLock()) {
   // sweep silently stopped enforcing retention the day after boot (storage-limitation promise broken).
   const runRetentionSweep = (): void => {
     sweepExpiredMeetings(getSettings().transcriptRetentionDays).then((r) => {
-      if (r.deleted > 0) auditLog('transcript.deleted', { bulk: true, expired: true, deleted: r.deleted })
+      if (r.deleted > 0) {
+        auditLog('transcript.deleted', { bulk: true, expired: true, deleted: r.deleted })
+        void requestSourceRefresh(getSettings())
+      }
     }).catch(() => { /* best-effort — never block startup or the interval */ })
   }
   runRetentionSweep()
@@ -3334,17 +3391,14 @@ if (!app.requestSingleInstanceLock()) {
       // Listen start. Guard every path: retry on empty OR throw, then deny gracefully — a callback({})
       // makes the renderer's getDisplayMedia reject with AbortError, which listen.ts already catches and
       // surfaces as "couldn't capture system audio" instead of taking the whole app down.
-      let sources: Electron.DesktopCapturerSource[] = []
-      for (let attempt = 0; attempt < 3; attempt++) {
-        if (attempt > 0) await new Promise((r) => setTimeout(r, 250 * attempt))
-        try {
-          sources = await desktopCapturer.getSources({ types: ['screen'] })
-          if (sources.length) break
-        } catch (err) {
-          mainLog.warn(`[display-media] getSources failed (attempt ${attempt + 1}): ${err instanceof Error ? err.message : String(err)}`)
-          sources = []
+      const sources: Electron.DesktopCapturerSource[] = await getScreenSourcesWithRetry(
+        () => desktopCapturer.getSources({ types: ['screen'] }),
+        isUsableScreenSource,
+        {
+          onError: (error, attempt) =>
+            mainLog.warn(`[display-media] getSources failed (attempt ${attempt}): ${error instanceof Error ? error.message : String(error)}`)
         }
-      }
+      )
       if (!sources.length) {
         auditLog('capture.failed', { reason: 'loopback_no_screen_source', phase: 'listen' })
       }
@@ -3517,9 +3571,16 @@ if (!app.requestSingleInstanceLock()) {
   runStep('registerScreenListeners', registerScreenListeners)
   runStep('startMeetingNotifier', startMeetingNotifier)
   runStep('initAutoUpdate', () => initAutoUpdate(win))
-  // Resume an interrupted brain backfill (flag persists in .brain/index.json until the queue drains).
-  // Delayed so the boot path and first paint never compete with background LLM extractions.
-  setTimeout(() => resumeBackfillIfPending(), 15_000)
+  // Resume durable live/backfill work and reconcile OneDrive-synced meeting files after first paint.
+  // Directory scans, rather than fs.watch, are deliberate: Files On-Demand and Windows sync do not
+  // reliably emit every watcher event. A one-minute cadence keeps Intelligence current without
+  // depending on cloud-sync events; provider-free runs only repair already-saved local extractions.
+  const BRAIN_RECONCILE_MS = 60 * 1000
+  setTimeout(() => {
+    resumeBackfillIfPending()
+    reconcileMeetingsInBackground()
+  }, 15_000)
+  setInterval(reconcileMeetingsInBackground, BRAIN_RECONCILE_MS)
 
   app.on('activate', () => {
     if (!win) createWindow()
