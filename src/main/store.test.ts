@@ -330,20 +330,24 @@ describe('store', () => {
       else process.env[caheFlag] = previousCaheFlag
     })
 
-    it('keeps Kimi active while preserving Dust workspace and agent settings', () => {
+    it('lets the user switch away from Kimi to any other provider — no edition-level lock', () => {
+      // Cahê's implicit policy is now identical to a non-Cahê build: no allowlist, no locked keys, no
+      // forced managed defaults. Kimi is only the pilot's OUT-OF-BOX default (seeded once by
+      // cahe-embedded-key.ts), not a standing lock — a real switch to Dust (or Claude CLI/Codex CLI/any
+      // API-key provider) must persist exactly like it would outside the Cahê edition.
       const result = setSettings({
         provider: 'dust',
-        providerPriority: 'local',
+        providerPriority: 'cli',
         dustWorkspaceId: 'cahe-workspace',
         providerModels: { ...DEFAULT_SETTINGS.providerModels, dust: 'cahe-dust-agent' }
       })
 
-      expect(result.provider).toBe('kimi')
-      expect(result.providerPriority).toBe('api')
+      expect(result.provider).toBe('dust')
+      expect(result.providerPriority).toBe('cli')
       expect(result.dustWorkspaceId).toBe('cahe-workspace')
       expect(result.providerModels.dust).toBe('cahe-dust-agent')
-      expect(getAllowedProviders()).toEqual(['kimi', 'dust'])
-      expect(getLockedKeys()).toEqual(expect.arrayContaining(['provider', 'providerPriority']))
+      expect(getAllowedProviders()).toBeNull()
+      expect(getLockedKeys()).toEqual([])
     })
 
     it('stores a Cahê Kimi key encrypted in the isolated local profile', () => {
