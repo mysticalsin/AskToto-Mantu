@@ -156,12 +156,6 @@ export const IPC = {
   mcpCrmSaveConnection: 'mcpCrm:saveConnection',
   mcpCrmDisconnect: 'mcpCrm:disconnect',
   mcpCrmPush: 'mcpCrm:push',
-  notebookLmDetect: 'notebookLm:detect',
-  notebookLmInstall: 'notebookLm:install',
-  notebookLmInstallProgress: 'notebookLm:install:progress',
-  notebookLmLogin: 'notebookLm:login',
-  notebookLmConnect: 'notebookLm:connect',
-  notebookLmAsk: 'notebookLm:ask',
   licenseActivate: 'license:activate',
   licenseStatus: 'license:status',
   licenseGate: 'license:gate',
@@ -774,11 +768,6 @@ export const BaseSettingsSchema = z.object({
   // Tool names BidStack's MCP discovery returned at the last successful connect/save — populates the
   // "Push to CRM" tool picker in Review.tsx so we never guess/hardcode BidStack's tool names.
   bidstackTools: z.array(z.string()).default([]),
-  // NotebookLM research (MCP, stdio; Settings → Mantu Intelligence). No endpoint or key to persist — auth
-  // lives entirely in the nlm CLI's own state under the user's home dir — only connected-status + the
-  // tool names discovered at connect time.
-  notebookLmConnected: z.boolean().default(false),
-  notebookLmTools: z.array(z.string()).default([]),
   // Métis Local uses the single model bundled in every installer. The preprocess is a persisted-settings
   // migration for releases that offered qwen3.5-2b; unknown ids fail validation and fall back safely in
   // main/store.ts instead of pointing llama-server at a file that can never exist.
@@ -967,8 +956,6 @@ export const DEFAULT_SETTINGS: Settings = {
   bidstackEndpointUrl: '',
   bidstackConnected: false,
   bidstackTools: [],
-  notebookLmConnected: false,
-  notebookLmTools: [],
   localLlm: {
     enabled: false,
     modelId: BUNDLED_LOCAL_MODEL_ID,
@@ -1334,20 +1321,6 @@ export interface McpCrmPushResult {
   error?: string
   result?: unknown
 }
-
-// --- NotebookLM research (MCP, stdio) --- ipc.ts cannot import from main/mcp/*, so these structurally
-// mirror notebooklm.ts's own exported shapes rather than reuse them.
-export const NotebookLmAskPayloadSchema = z.object({
-  question: z.string().min(1, 'Enter a question for NotebookLM first.').max(4_000),
-  notebookId: z.string().max(200).optional()
-})
-export type NotebookLmAskPayload = z.infer<typeof NotebookLmAskPayloadSchema>
-
-export interface NotebookLmDetectResult { ok: boolean; version?: string; error?: string }
-export interface NotebookLmInstallResult { ok: boolean; error?: string; needsTerminal?: boolean }
-export interface NotebookLmLoginResult { ok: boolean; error?: string }
-export interface NotebookLmConnectResult { ok: boolean; error?: string; tools?: string[]; needsSignIn?: boolean }
-export interface NotebookLmAskResult { ok: boolean; error?: string; text?: string; needsSignIn?: boolean }
 
 // ─── Métis Local (on-device LLM) — bundled model readiness (see main/llm/local-models.ts) ─────────────
 // ipc.ts is bundled into the renderer too, so it cannot import local-models.ts (touches node:fs/electron

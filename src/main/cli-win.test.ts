@@ -6,8 +6,8 @@ import { EventEmitter } from 'node:events'
 import { PassThrough } from 'node:stream'
 
 // Shared, hoisted mock for the promisified execFile so resolveBin can be driven without a real shell
-// or a real Windows `where`. Mirrors the pattern in cli.test.ts. spawnImpl mirrors notebooklm.test.ts's
-// controllable-per-test spawn mock, needed for the installCli Windows-stderr tests below.
+// or a real Windows `where`. Mirrors the pattern in cli.test.ts; spawnImpl is a controllable-per-test
+// spawn mock, needed for the installCli Windows-stderr tests below.
 const h = vi.hoisted(() => ({ execFileImpl: vi.fn(), spawnImpl: vi.fn() }))
 
 vi.mock('electron', () => ({
@@ -41,7 +41,7 @@ function setPlatform(p: NodeJS.Platform): void {
 }
 
 /** A fake ChildProcess: real Readable streams (so readline's createInterface behaves exactly as it
- *  does against a real spawn) wrapped in a real EventEmitter. Mirrors notebooklm.test.ts's fakeChild. */
+ *  does against a real spawn) wrapped in a real EventEmitter. */
 function fakeChild(): { child: EventEmitter & { stdout: PassThrough; stderr: PassThrough; kill: ReturnType<typeof vi.fn> }; stdout: PassThrough; stderr: PassThrough } {
   const stdout = new PassThrough()
   const stderr = new PassThrough()

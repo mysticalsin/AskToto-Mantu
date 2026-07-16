@@ -815,8 +815,7 @@ export async function installCli(
       }
       const stderrText = stderrLines.join('\n')
       // Detect npm-not-found: the login shell prints 'command not found' (mac/Linux); cmd.exe prints
-      // "'npm' is not recognized as an internal or external command..." (Windows) — same check as
-      // notebooklm.ts's NOT_FOUND_RE.
+      // "'npm' is not recognized as an internal or external command..." (Windows).
       if (/command not found|not recognized as an internal/i.test(stderrText)) {
         resolve({
           ok: false,
