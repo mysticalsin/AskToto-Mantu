@@ -2,8 +2,10 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 
-const app = readFileSync(join(__dirname, 'App.tsx'), 'utf8')
-const answer = readFileSync(join(__dirname, 'components', 'Answer.tsx'), 'utf8')
+// Normalize CRLF → LF: on a Windows checkout these files have \r\n endings, and an anchor whose
+// newline sits mid-string (e.g. "suggest.run({\n      mode: 'answer'") would never match "…({\r\n…".
+const app = readFileSync(join(__dirname, 'App.tsx'), 'utf8').replace(/\r\n/g, '\n')
+const answer = readFileSync(join(__dirname, 'components', 'Answer.tsx'), 'utf8').replace(/\r\n/g, '\n')
 
 describe('screen-capture permission recovery', () => {
   it('does not SILENTLY turn a bare (no-text) denied Screen Recording request into a text-only ask', () => {
