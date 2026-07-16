@@ -6,6 +6,7 @@ import {
   type Settings,
   type HotkeyAction,
   type CaptureResult,
+  type ScreenContextResult,
   type SaveMeeting,
   type SaveNote,
   type RecapExport,
@@ -141,6 +142,9 @@ const api = {
   cancel: (id: string): Promise<void> => ipcRenderer.invoke(IPC.askCancel, id),
   capture: (): Promise<CaptureResult> => ipcRenderer.invoke(IPC.captureScreen),
   prewarmCapture: (): Promise<void> => ipcRenderer.invoke(IPC.prewarmCapture),
+  // Fast-path for a screen-ask: ask main whether it already has a fresh, on-device description of the
+  // current screen. Non-null → skip the capture and let main inject that context into a mode:'answer' ask.
+  screenContext: (): Promise<ScreenContextResult> => ipcRenderer.invoke(IPC.screenContext),
   armAudio: (on: boolean): Promise<void> => ipcRenderer.invoke(IPC.armAudio, on),
   saveTranscript: (m: SaveMeeting): Promise<{ path: string }> =>
     ipcRenderer.invoke(IPC.saveTranscript, m),

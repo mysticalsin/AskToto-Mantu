@@ -240,6 +240,9 @@ export interface AskRequest {
   depth?: 'deeper' // set by "Go deeper" → ask for a fuller answer than the brief default
   agentOverride?: string // pins a specific Dust agent sId regardless of tier routing (e.g. Spotlight Ref)
   providerOverride?: ProviderId // forces this one request to a provider regardless of the active `provider` setting
+  // Screen fast-path: answer using main's pre-analyzed, on-device screen context instead of a fresh capture.
+  // A boolean intent only — main injects the actual description from its own cache (see screen-preprocess.ts).
+  wantsScreenContext?: boolean
 }
 
 /** Owns the streaming answer lifecycle over IPC. */
@@ -372,7 +375,7 @@ export function useAsk(): {
           prompt: req.prompt ?? '',
           label: req.label,
           kind: req.kind,
-          usedScreen: req.mode === 'vision',
+          usedScreen: req.mode === 'vision' || !!req.wantsScreenContext,
           ephemeral: req.mode === 'suggest'
         }))
       })
@@ -386,6 +389,7 @@ export function useAsk(): {
         kind: req.kind,
         agentOverride: req.agentOverride,
         providerOverride: req.providerOverride,
+        wantsScreenContext: req.wantsScreenContext,
         history: req.history ?? []
       })
       return id

@@ -244,6 +244,12 @@ export function endStream(): void {
   }
 }
 
+/** How many local streams are currently attached to the sidecar. The background screen-preprocess describe
+ *  reads this to yield to real user-facing streams (live suggest/summary) rather than compete for a slot. */
+export function activeStreams(): number {
+  return activeStreamCount
+}
+
 /** Resolves once activeStreamCount reaches zero (immediately, if it already is). start()'s model-switch
  *  branch awaits this instead of killing the sidecar out from under an in-flight stream. */
 function waitForDrain(): Promise<void> {

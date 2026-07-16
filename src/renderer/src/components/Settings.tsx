@@ -4041,6 +4041,17 @@ export function Settings({
                     onChange={(v) => patch({ instantSuggestions: v })}
                     disabled={settings.managedKeys.includes('instantSuggestions')}
                   />
+                  <ToggleRow
+                    label="Preload screen context (on-device)"
+                    desc={
+                      settings.backgroundScreenReady || !settings.backgroundScreenContext
+                        ? "When you switch windows, Métis quietly reads your screen with the on-device model so 'What's on my screen' answers instantly. Stays on your device — nothing extra is sent to the cloud, and Private View turns it off."
+                        : 'Enable Local AI (below) to use this — the background reader runs entirely on the on-device model.'
+                    }
+                    on={settings.backgroundScreenContext}
+                    onChange={(v) => patch({ backgroundScreenContext: v })}
+                    disabled={settings.managedKeys.includes('backgroundScreenContext')}
+                  />
                 </Section>
                 <Section title="Vocabulary corrections" desc="Words the transcriber keeps getting wrong. Fix them once, applied to every meeting.">
                   <ToggleRow

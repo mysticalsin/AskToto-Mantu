@@ -72,6 +72,7 @@ export const IPC = {
   streamMeta: 'stream:meta',
   captureScreen: 'capture:screen',
   prewarmCapture: 'capture:prewarm',
+  screenContext: 'capture:context',
   armAudio: 'audio:arm',
   saveTranscript: 'transcript:save',
   saveDraftTranscript: 'transcript:saveDraft',
@@ -533,6 +534,15 @@ const AskStartBaseSchema = z.object({
    *  renderer — main overwrites it after parse). Injected per-turn into the user text so it never pollutes
    *  or invalidates the cached system prompt. Capped for defense-in-depth against a hostile renderer. */
   brainContext: z.string().max(8000).optional(),
+  /** Renderer INTENT flag for a screen-ask fast-path: "answer this using the pre-analyzed screen context you
+   *  have cached, instead of me capturing + uploading a fresh image." A boolean only — the renderer never
+   *  supplies the description itself. main clears `screenContext` after parse and injects it from its OWN
+   *  on-device cache (screen-preprocess.ts) when this is set, exactly like brainContext. */
+  wantsScreenContext: z.boolean().optional(),
+  /** Pre-analyzed, on-device description of what's currently on the user's screen (plus a short recent-
+   *  conversation tail when a meeting is live). Main-assembled ONLY — cleared after parse and set from the
+   *  local cache — so a hostile renderer can't smuggle screen text into the prompt. Capped like brainContext. */
+  screenContext: z.string().max(8000).optional(),
   history: z.array(ChatTurnSchema).default([])
 })
 export const AskStartSchema = AskStartBaseSchema.superRefine((value, context) => {
@@ -710,6 +720,12 @@ export const BaseSettingsSchema = z.object({
    *  paints instantly instead of waiting a full round trip. Costs roughly one extra base-tier call per
    *  fresh stretch of conversation; the Settings toggle says so ("uses more credits"). */
   instantSuggestions: z.boolean().default(true),
+  /** Background screen preprocessing: when the foreground window changes, quietly analyze the screen with
+   *  the ON-DEVICE model and cache the description, so "What's on my screen" answers from pre-computed text
+   *  instead of a cold capture + full-image round trip. On-device only — nothing extra is sent to the cloud;
+   *  Private View hard-blocks it. Inert unless localLlm is enabled + provisioned (see backgroundScreenReady).
+   *  Default on, but only DOES anything once a local model is available. */
+  backgroundScreenContext: z.boolean().default(true),
   // How see-through the overlay's glass background is. A multiplier on the default glass alpha values
   // (see --glass-fill etc. in styles.css) — 1 = today's default look, lower = more transparent (see more
   // of what's behind), higher = more opaque/solid (easier to read over a busy desktop). Values above 1
@@ -831,6 +847,9 @@ export const PublicSettingsSchema = BaseSettingsSchema.extend({
   localSummaryReady: z.boolean().default(false),
   /** localReady AND the user's "Screenshots" use-for toggle is on. */
   localVisionReady: z.boolean().default(false),
+  /** The `backgroundScreenContext` setting is on AND localReady — i.e. background on-device screen
+   *  pre-analysis can actually run. Lets Settings show "on" vs "enable Local AI to use this". */
+  backgroundScreenReady: z.boolean().default(false),
   /** Whether the llama-server sidecar process is running RIGHT NOW — distinct from `localReady` (which is
    *  eligibility to route there, not live process state; the sidecar starts lazily on first local request
    *  and idle-stops after 15 min, see local-runtime.ts). Drives the Local AI card's status line only. */
@@ -930,6 +949,7 @@ export const DEFAULT_SETTINGS: Settings = {
   uiSounds: true,
   quickActionsRainbow: true,
   instantSuggestions: true,
+  backgroundScreenContext: true,
   overlayOpacity: 1,
   showFullTranscriptInReview: false,
   asrQuality: 'fast',
@@ -1407,3 +1427,14 @@ export const CaptureResultSchema = z.object({
   capturedAt: z.number().int().nonnegative()
 })
 export type CaptureResult = z.infer<typeof CaptureResultSchema>
+
+/** Result of the screen:context IPC — a pre-analyzed, on-device description of the current screen, or null
+ *  when none is fresh (window changed / too old / feature off). The renderer uses a non-null result to take
+ *  the no-capture fast-path; the description text itself is only ever re-derived by main at ask time. */
+export const ScreenContextResultSchema = z
+  .object({
+    description: z.string(),
+    capturedAt: z.number().int().nonnegative()
+  })
+  .nullable()
+export type ScreenContextResult = z.infer<typeof ScreenContextResultSchema>
