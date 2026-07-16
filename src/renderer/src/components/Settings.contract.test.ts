@@ -11,7 +11,10 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, it, expect } from 'vitest'
 
-const source = readFileSync(join(__dirname, 'Settings.tsx'), 'utf8')
+// Normalize CRLF → LF: on a Windows checkout Settings.tsx has \r\n line endings, and a marker whose
+// newline sits mid-string (e.g. finding 5's '))}\n          </div>') would never match '))}\r\n...'.
+// Normalizing keeps every anchor line-ending-independent without weakening what each one pins.
+const source = readFileSync(join(__dirname, 'Settings.tsx'), 'utf8').replace(/\r\n/g, '\n')
 
 // Returns the source slice from `startAnchor` up to (not including) the first `endMarker` found after it.
 function blockAfter(startAnchor: string, endMarker: string): string {

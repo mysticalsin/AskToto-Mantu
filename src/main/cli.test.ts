@@ -113,7 +113,15 @@ describe('cliEnv — strips session/proxy vars so the spawned CLI runs clean', (
 })
 
 describe('resolveBin — login-shell lookup with in-process caching', () => {
-  beforeEach(() => h.execFileImpl.mockReset())
+  // These cases stub POSIX-style absolute paths (/usr/local/bin/…). resolveBin's win32 branch parses
+  // `where` output and only accepts .cmd/.exe hits, so on a Windows host it would reject the stub and
+  // fall through to null. Pin a POSIX platform so the lookup is host-independent.
+  const REAL_PLATFORM = process.platform
+  beforeEach(() => {
+    Object.defineProperty(process, 'platform', { value: 'darwin', configurable: true })
+    h.execFileImpl.mockReset()
+  })
+  afterEach(() => Object.defineProperty(process, 'platform', { value: REAL_PLATFORM, configurable: true }))
 
   it('resolves the absolute path and caches it (no second shell spawn)', async () => {
     h.execFileImpl.mockResolvedValue({ stdout: '/usr/local/bin/faketool-cache\n', stderr: '' })
