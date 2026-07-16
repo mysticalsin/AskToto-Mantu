@@ -1,6 +1,6 @@
 import { readFile, readdir, stat, unlink, writeFile } from 'node:fs/promises'
 import { join, basename } from 'node:path'
-import { resolveMeetingsFolder, decodeSaved, isEncryptedFile, writeSaved } from './transcripts'
+import { resolveMeetingsFolder, decodeSaved, isEncryptedFile, writeSaved, formatTranscript, DEBRIEF_HEADING } from './transcripts'
 import { getSettings } from './store'
 import type { MeetingSummary, RecallHit, RecallReadResult, Settings, TranscriptLine } from '@shared/ipc'
 
@@ -159,11 +159,14 @@ export async function recallRead(file: string): Promise<RecallReadResult> {
     // anchor (read time) so every line still gets a real, monotonically increasing timestamp instead
     // of collapsing to 0 — the parsed HH:MM:SS is real elapsed-time data even without a calendar date.
     const baseDate = startedAt ? new Date(startedAt) : new Date()
-    const lineRe = /^\*\*\[(\d{2}):(\d{2}):(\d{2})\] (Them|You|Speaker):\*\* (.+)$/gm
+    // Optional group 5 captures a Speaker Intelligence display name — "Them (Jane Doe):**" — written by
+    // transcripts.ts's formatTranscriptLine once one has been resolved; absent on every meeting saved
+    // before that feature existed, and on any line no name was ever resolved for.
+    const lineRe = /^\*\*\[(\d{2}):(\d{2}):(\d{2})\] (Them|You|Speaker)(?: \(([^)]*)\))?:\*\* (.+)$/gm
     let m: RegExpExecArray | null
     let prevT: number | undefined = startedAt
     while ((m = lineRe.exec(body)) !== null) {
-      const [, hh, mm, ss, speakerLabel, lineText] = m
+      const [, hh, mm, ss, speakerLabel, name, lineText] = m
       const d = new Date(baseDate)
       d.setHours(Number(hh), Number(mm), Number(ss), 0)
       // If the reconstructed time is before the previous line's timestamp (midnight crossing), push
@@ -172,11 +175,13 @@ export async function recallRead(file: string): Promise<RecallReadResult> {
       if (prevT !== undefined && d.getTime() < prevT) d.setDate(d.getDate() + 1)
       const t = d.getTime()
       prevT = t
-      lines.push({
+      const line: TranscriptLine = {
         speaker: speakerLabel === 'Them' ? 'them' : speakerLabel === 'You' ? 'you' : 'unknown',
         text: lineText.trim(),
         t
-      })
+      }
+      if (name) line.name = name.trim()
+      lines.push(line)
     }
   }
 
@@ -421,6 +426,63 @@ export async function updateMeetingRecap(
     await writeSaved(fullPath, updated, wasEncrypted)
   } catch {
     return { ok: false, error: 'Could not save your changes.' }
+  }
+  return { ok: true }
+}
+
+/**
+ * Speaker Intelligence backfill (Phase A) — rewrite ONLY the "## Full transcript" section of a saved
+ * meeting with freshly-resolved speaker names (see main/graph-transcript.ts + shared/transcript-align.ts),
+ * once a Teams transcript for the same meeting has been matched after the fact. Re-renders `lines`
+ * through transcripts.ts's own formatTranscript — the exact shape this module's lineRe (in recallRead)
+ * parses back — leaving the frontmatter, the H1/meta line, and any "## Notes & follow-ups" section
+ * untouched. Same basename guard + "preserve encryption exactly as found" convention as
+ * renameMeeting/updateMeetingRecap/setMeetingConfidential.
+ */
+export async function updateMeetingTranscript(
+  settings: Settings,
+  file: string,
+  lines: TranscriptLine[]
+): Promise<{ ok: boolean; error?: string }> {
+  const folder = resolveMeetingsFolder(settings)
+  const safeName = basename(file) // block traversal
+  if (!safeName || !safeName.endsWith('.md') || safeName === 'index.md' || safeName === 'README.md') {
+    return { ok: false, error: 'Invalid meeting file name.' }
+  }
+
+  const fullPath = join(folder, safeName)
+  let raw: Buffer
+  try {
+    raw = await readFile(fullPath)
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code
+    if (code === 'ENOENT') return { ok: false, error: 'Meeting file not found.' }
+    return { ok: false, error: 'Could not read the meeting file.' }
+  }
+
+  const wasEncrypted = isEncryptedFile(fullPath)
+  const text = decodeSaved(raw)
+  if (!text) return { ok: false, error: 'Meeting file could not be decrypted on this device.' }
+
+  const startMatch = text.match(/^## Full transcript[\r\n]+/m)
+  if (!startMatch) return { ok: false, error: 'This does not look like a meeting file.' }
+
+  // A debrief section (see transcripts.ts's appendDebrief) is always appended strictly AFTER "## Full
+  // transcript" — preserve it exactly, mirroring updateMeetingRecap's own head/tail split against its
+  // sibling "## Full transcript" boundary above.
+  const bodyStart = startMatch.index! + startMatch[0].length
+  const afterStart = text.slice(bodyStart)
+  const debriefRe = new RegExp('^' + DEBRIEF_HEADING.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'm')
+  const debriefIdx = afterStart.search(debriefRe)
+  const tail = debriefIdx === -1 ? '' : afterStart.slice(debriefIdx)
+  const head = text.slice(0, bodyStart)
+  const rendered = formatTranscript(lines) || '_No speech captured._'
+  const updated = tail ? `${head}${rendered}\n\n${tail}` : `${head}${rendered}\n`
+
+  try {
+    await writeSaved(fullPath, updated, wasEncrypted)
+  } catch {
+    return { ok: false, error: 'Could not save the updated transcript.' }
   }
   return { ok: true }
 }

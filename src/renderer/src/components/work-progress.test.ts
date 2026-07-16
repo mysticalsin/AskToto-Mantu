@@ -47,71 +47,149 @@ describe('meeting index progress presentation', () => {
 })
 
 describe('audio import progress presentation', () => {
-  it('shows the backend-reported transcription percentage and active chunk', () => {
-    expect(
-      describeImportProgress({
-        state: 'transcribing',
-        cursor: 1,
-        totalChunks: 4,
-        pct: 25
+  describe('phase 1: warm-up (queued, or decoding/transcribing before a real checkpoint)', () => {
+    it('shows the queue phase as indeterminate with the existing queued copy', () => {
+      expect(
+        describeImportProgress({ state: 'queued', cursor: 0, totalChunks: 0, pct: null })
+      ).toEqual({
+        active: true,
+        detail: 'Waiting for the import queue',
+        label: 'Queued to import',
+        percent: null,
+        valueText: 'Waiting for the import queue',
+        pulseAtFull: false
       })
-    ).toEqual({
-      active: true,
-      detail: '25% transcribed · chunk 2 of 4',
-      label: 'Transcribing audio · 25%',
-      percent: 25,
-      valueText: '25% transcribed'
+    })
+
+    it('treats decoding with no percent yet as an indeterminate engine warm-up', () => {
+      expect(
+        describeImportProgress({ state: 'decoding', cursor: 0, totalChunks: 0, pct: null })
+      ).toEqual({
+        active: true,
+        detail: 'Loading the transcription engine — this can take a moment.',
+        label: 'Preparing on-device engine…',
+        percent: null,
+        valueText: 'Preparing on-device engine',
+        pulseAtFull: false
+      })
+    })
+
+    // A literal 0% (the decoder's first duration-based tick) is indistinguishable from "no checkpoint
+    // yet" without a new IPC signal, so it is conservatively folded into the same warm-up state instead
+    // of rendering a determinate bar frozen at a dead-looking 0%.
+    it('treats a literal 0% during decoding as the same warm-up state, not a dead determinate bar', () => {
+      expect(
+        describeImportProgress({ state: 'decoding', cursor: 0, totalChunks: 0, pct: 0 })
+      ).toEqual({
+        active: true,
+        detail: 'Loading the transcription engine — this can take a moment.',
+        label: 'Preparing on-device engine…',
+        percent: null,
+        valueText: 'Preparing on-device engine',
+        pulseAtFull: false
+      })
+    })
+
+    it('treats a literal 0% right as transcribing begins as warm-up too', () => {
+      expect(
+        describeImportProgress({ state: 'transcribing', cursor: 0, totalChunks: 0, pct: 0 })
+      ).toEqual({
+        active: true,
+        detail: 'Loading the transcription engine — this can take a moment.',
+        label: 'Preparing on-device engine…',
+        percent: null,
+        valueText: 'Preparing on-device engine',
+        pulseAtFull: false
+      })
     })
   })
 
-  it('keeps a numeric transcription signal even before a total chunk count is known', () => {
-    expect(
-      describeImportProgress({
-        state: 'transcribing',
-        cursor: 0,
-        totalChunks: 0,
-        pct: 42
+  describe('phase 2: transcribing — a determinate 0–100% bar with one progress text', () => {
+    it('shows the backend-reported transcription percentage and active chunk, without repeating the percent in the header label', () => {
+      expect(
+        describeImportProgress({
+          state: 'transcribing',
+          cursor: 1,
+          totalChunks: 4,
+          pct: 25
+        })
+      ).toEqual({
+        active: true,
+        detail: '25% transcribed · chunk 2 of 4',
+        label: 'Transcribing audio',
+        percent: 25,
+        valueText: '25% transcribed',
+        pulseAtFull: false
       })
-    ).toEqual({
-      active: true,
-      detail: '42% transcribed',
-      label: 'Transcribing audio · 42%',
-      percent: 42,
-      valueText: '42% transcribed'
+    })
+
+    it('keeps a numeric transcription signal even before a total chunk count is known', () => {
+      expect(
+        describeImportProgress({
+          state: 'transcribing',
+          cursor: 0,
+          totalChunks: 0,
+          pct: 42
+        })
+      ).toEqual({
+        active: true,
+        detail: '42% transcribed',
+        label: 'Transcribing audio',
+        percent: 42,
+        valueText: '42% transcribed',
+        pulseAtFull: false
+      })
+    })
+
+    it('shows real decoding progress once the decoder has produced a checkpoint', () => {
+      expect(
+        describeImportProgress({ state: 'decoding', cursor: 2, totalChunks: 5, pct: 40 })
+      ).toEqual({
+        active: true,
+        detail: '40% transcribed · preparing the next audio segment',
+        label: 'Decoding audio',
+        percent: 40,
+        valueText: '40% transcribed',
+        pulseAtFull: false
+      })
     })
   })
 
-  it('keeps early decoding indeterminate until the decoder knows the recording length', () => {
-    expect(
-      describeImportProgress({
-        state: 'decoding',
-        cursor: 0,
-        totalChunks: 0,
-        pct: null
+  describe('phase 3: wrapping up (saving, then recapping) — full bar + pulseAtFull, never a frozen 99%', () => {
+    it('renders saving as a full, pulsing bar instead of freezing at its last transcription checkpoint', () => {
+      expect(
+        describeImportProgress({
+          state: 'saving',
+          cursor: 4,
+          totalChunks: 4,
+          pct: 99
+        })
+      ).toEqual({
+        active: true,
+        detail: 'Finalizing your meeting…',
+        label: 'Saving transcript…',
+        percent: 100,
+        valueText: 'Finalizing your meeting',
+        pulseAtFull: true
       })
-    ).toEqual({
-      active: true,
-      detail: 'Preparing audio for transcription',
-      label: 'Decoding audio',
-      percent: null,
-      valueText: 'Preparing audio for transcription'
     })
-  })
 
-  it('does not call a still-finalizing import complete', () => {
-    expect(
-      describeImportProgress({
-        state: 'saving',
-        cursor: 4,
-        totalChunks: 4,
-        pct: 99
+    it('renders the summary phase as a full, pulsing bar labeled "Creating summary…" for the whole recap call', () => {
+      expect(
+        describeImportProgress({
+          state: 'recapping',
+          cursor: 4,
+          totalChunks: 4,
+          pct: 99
+        })
+      ).toEqual({
+        active: true,
+        detail: 'Writing an AI summary of your meeting…',
+        label: 'Creating summary…',
+        percent: 100,
+        valueText: 'Creating summary',
+        pulseAtFull: true
       })
-    ).toEqual({
-      active: true,
-      detail: '99% transcribed · finalizing your meeting',
-      label: 'Saving transcript',
-      percent: 99,
-      valueText: '99% transcribed'
     })
   })
 
@@ -129,7 +207,8 @@ describe('audio import progress presentation', () => {
       detail: 'Transcript saved. Open the meeting to retry the summary.',
       label: 'Summary needs attention',
       percent: 100,
-      valueText: 'Transcript saved; summary needs attention'
+      valueText: 'Transcript saved; summary needs attention',
+      pulseAtFull: false
     })
   })
 })

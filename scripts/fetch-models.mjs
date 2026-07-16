@@ -22,6 +22,7 @@ import { execFile } from 'node:child_process'
 import { pipeline } from 'node:stream/promises'
 import { fileURLToPath } from 'node:url'
 import { promisify } from 'node:util'
+import { extractTarBz2Windows } from './tar-bz2-extract.mjs'
 
 const execFileAsync = promisify(execFile)
 const __dirname = dirname(fileURLToPath(import.meta.url))
@@ -173,6 +174,28 @@ async function downloadHfFiles(repo, requiredFiles, optionalFiles, destDir) {
   }
 }
 
+/** Extract a .tar.bz2 archive into destDir, cross-platform.
+ *
+ *  macOS/Linux: shell out to the system `tar`, unchanged.
+ *
+ *  Windows: NEVER shells out to tar at all. Spawning an external `tar xjf` is unreliable there in two
+ *  distinct, machine-dependent ways — GNU tar (only reachable from a Git-Bash-flavored PATH) misparses
+ *  an absolute `C:\...` path as `[user@]host:path` remote-tape syntax, while bsdtar (System32's tar.exe,
+ *  the ONLY `tar` reachable from a plain terminal — i.e. what a fresh machine resolves by default) has
+ *  no bzip2 codec linked in and shells out to an external bzip2.exe filter subprocess that can deadlock
+ *  under Node's child_process on Windows pipe/handle inheritance. Both failure modes were reproduced by
+ *  hand during development (see scripts/tar-bz2-extract.mjs's module docstring for the full writeup);
+ *  the second one hangs forever with zero bytes written on anything past a trivially small archive,
+ *  which is exactly what blocked this script on Windows. extractTarBz2Windows decompresses bzip2 and
+ *  unpacks the ustar container entirely in-process instead, using only Node builtins. */
+async function extractTarBz2(archive, destDir) {
+  if (process.platform === 'win32') {
+    extractTarBz2Windows(archive, destDir)
+    return
+  }
+  await execFileAsync('tar', ['xjf', archive, '-C', destDir])
+}
+
 // ─── 1. Xenova/whisper-base (WASM fallback, q8 quantized) ────────────────────
 async function fetchWhisperBase() {
   console.log('\n[1/4] Xenova/whisper-base (WASM fallback, q8)')
@@ -243,8 +266,8 @@ async function fetchParakeet() {
   ensureDir(destDir)
   const archive = join(destDir, `${MODEL_NAME}.tar.bz2`)
   await download(MODEL_URL, archive)
-  console.log('  [extract] tar xjf ...')
-  await execFileAsync('tar', ['xjf', archive, '-C', destDir])
+  console.log(`  [extract] ${process.platform === 'win32' ? 'in-process bzip2+tar (win32)' : 'tar xjf'} ...`)
+  await extractTarBz2(archive, destDir)
   // Clean up archive
   try { unlinkSync(archive) } catch { /* ignore */ }
   if (!requiredFiles.every(filePresent)) {

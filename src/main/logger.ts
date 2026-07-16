@@ -59,6 +59,8 @@ export type AuditEvent =
   | 'transcript.recovered'
   | 'transcript.debrief'
   | 'transcript.imported'
+  // Speaker Intelligence (Phases A/B): a Teams-transcript name backfill actually resolved >=1 name.
+  | 'transcript.speakers_backfilled'
   | 'brain.commitment.settled'
   | 'brain.deal.outcome'
   | 'brain.entity.renamed'

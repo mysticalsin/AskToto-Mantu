@@ -45,6 +45,7 @@ import {
   RenameMeetingPayloadSchema,
   UpdateRecapPayloadSchema,
   SetConfidentialPayloadSchema,
+  RecallBackfillSpeakersPayloadSchema,
   ImportAudioStartSchema,
   ImportJobIdSchema,
   ImportDecoderChunkSchema,
@@ -142,6 +143,7 @@ import { initLogging, mainLog, auditLog } from './logger'
 import { installProxyAwareFetch } from './net/install-proxy'
 import { authStatus, signIn as authSignIn, signOut as authSignOut, requireAuth } from './auth'
 import { calendarToday } from './calendar'
+import { fetchTeamsTranscriptForMeeting } from './graph-transcript'
 import {
   parakeetModelReady,
   ensureParakeetModel,
@@ -176,6 +178,7 @@ import {
   deleteMeeting,
   renameMeeting,
   updateMeetingRecap,
+  updateMeetingTranscript,
   setMeetingConfidential,
   deleteAllMeetings,
   sweepExpiredMeetings
@@ -207,6 +210,7 @@ import { SaveMeetingSchema, SaveNoteSchema } from '@shared/ipc'
 import { PROVIDERS, resolveModelTier, applyInteractiveGuardrail, type ProviderId } from '@shared/providers'
 import { routeTier } from '@shared/routing'
 import { redactSecrets } from '@shared/redact'
+import { applySpeakerNames } from '@shared/transcript-align'
 import { initializeCaheEditionIdentity, isCaheEdition } from './cahe-edition'
 import { importEmbeddedCaheKey } from './cahe-embedded-key'
 
@@ -1463,6 +1467,50 @@ function setTrayRecording(on: boolean): void {
   }
 }
 
+/**
+ * Speaker Intelligence (Phases A/B) — best-effort backfill of resolved human names onto a saved
+ * meeting's transcript lines, from the Microsoft Teams transcript of the SAME online meeting (when one
+ * exists — see graph-transcript.ts's own doc comment for the tenant prerequisites). Runs fire-and-forget
+ * right after a live meeting's normal save (IPC.saveTranscript below), and is also reachable directly via
+ * recall:backfillSpeakers so a past meeting can be retried manually from Review — the Teams transcript
+ * can take a few minutes to finish processing after the meeting itself ends, so the very first attempt
+ * often legitimately finds nothing yet.
+ *
+ * Every failure path degrades to a quiet, non-throwing result: a missing Graph permission, a meeting with
+ * no Teams transcript, no text/time overlap, or being signed out must never surface as an error to the
+ * user or touch the saved file. `named: 0` is a normal outcome, not a failure.
+ */
+async function backfillSpeakerNames(file: string): Promise<{ ok: boolean; named?: number; error?: string }> {
+  if (!requireAuth()) return { ok: false, error: 'Sign in with your Mantu account first.' }
+  try {
+    const settings = getSettings()
+    const safeName = basename(file)
+    const read = await recallRead(safeName)
+    if (!read.ok || !read.lines) return { ok: false, error: read.error || 'Meeting file not found.' }
+    if (!read.startedAt) return { ok: false, error: 'This meeting has no recorded start time.' }
+
+    const endedAt = read.lines.length ? read.lines[read.lines.length - 1].t : read.startedAt
+    const fetched = await fetchTeamsTranscriptForMeeting({ startedAt: read.startedAt, endedAt })
+    if (!fetched) return { ok: true, named: 0 } // no Teams transcript available yet — quiet no-op
+
+    const operatorName = authStatus().name
+    const { lines, named } = applySpeakerNames(read.lines, fetched.entries, { operatorName })
+    if (named === 0) return { ok: true, named: 0 }
+
+    const result = await updateMeetingTranscript(settings, safeName, lines)
+    if (!result.ok) return { ok: false, error: result.error }
+
+    auditLog('transcript.speakers_backfilled', { named })
+    // Re-run extraction now that the saved transcript names real speakers — the brain prompt already
+    // attributes commitments to "you"/"them"/a name when the speaker is clear (see shared/brain.ts).
+    await enqueueIngest(join(resolveMeetingsFolder(settings), safeName), { force: true })
+    return { ok: true, named }
+  } catch (e) {
+    mainLog.warn('[speaker-backfill] failed:', e instanceof Error ? e.message : String(e))
+    return { ok: false, error: 'Could not backfill speaker names.' }
+  }
+}
+
 function registerIpc(): void {
   // --- Settings & permissions ---
   ipcMain.handle(IPC.settingsGet, (e) => {
@@ -2109,6 +2157,18 @@ function registerIpc(): void {
     return result
   })
 
+  // Speaker Intelligence: manual (re)trigger of the Teams-transcript speaker-name backfill for a past
+  // meeting — Review's automatic post-save attempt may have found nothing yet (the Teams transcript can
+  // take a few minutes to finish processing after the meeting ends). Same guard pattern as the other
+  // recall writes; the actual work is shared with the automatic post-save path (see backfillSpeakerNames).
+  ipcMain.handle(IPC.recallBackfillSpeakers, async (e, raw) => {
+    assertMainWindow(e)
+    if (!requireAuth()) return { ok: false, error: 'Sign in with your Mantu account first.' }
+    const parsed = RecallBackfillSpeakersPayloadSchema.safeParse(raw)
+    if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message || 'Invalid request.' }
+    return backfillSpeakerNames(parsed.data.file)
+  })
+
   // 90-Second Debrief (innovation #6): the user's off-record gut-read, appended to the saved meeting.
   // Same file → inherits encryption/retention/deletion, and the brain re-ingest below folds the unsaid
   // observations into signals on the next extraction pass.
@@ -2596,6 +2656,10 @@ function registerIpc(): void {
     // Persist the small background-work marker before confirming the transcript save. The actual LLM
     // extraction remains asynchronous, but a quit immediately after Save can now resume it.
     await enqueueIngest(r.path)
+    // Speaker Intelligence (Phases A/B): best-effort, fire-and-forget backfill of resolved names from the
+    // meeting's own Teams transcript (if one exists yet). Never awaited — must never delay or fail the
+    // save response itself; see backfillSpeakerNames's own doc comment for the full quiet-no-op contract.
+    void backfillSpeakerNames(r.path).catch(() => {})
     return r
   })
 
@@ -3454,11 +3518,24 @@ if (!app.requestSingleInstanceLock()) {
     })
 
     protocol.handle('asr-model', async (req) => {
+      // The renderer/worker that calls fetch() here is loaded over file:// (a distinct origin from
+      // asr-model://), so this is a cross-origin request. registerSchemesAsPrivileged's corsEnabled just
+      // ADMITS the scheme to Chromium's CORS protocol — it does not exempt its responses from the CORS
+      // response check the way, say, a plain `file:` fetch is exempt. Every response below (success or
+      // error) carries an explicit Access-Control-Allow-Origin so a future CORS-sensitive caller of this
+      // scheme can't hit the same generic "TypeError: Failed to fetch" this app's real root cause (a
+      // corrupted default User-Agent — see cahe-edition.ts's initializeCaheEditionIdentity) was originally
+      // mistaken for.
+      const respond = (body: ConstructorParameters<typeof Response>[0], init: ResponseInit = {}): Response => {
+        const headers = new Headers(init.headers)
+        headers.set('Access-Control-Allow-Origin', '*')
+        return new Response(body, { ...init, headers })
+      }
       try {
         const url = new URL(req.url)
         // Restrict to the two roots this protocol is meant to serve. Without this, app.asar and other
         // resourcesPath siblings resolve inside RES_BASE too and would be served as raw source bytes.
-        if (url.host !== 'models' && url.host !== 'ort') return new Response(null, { status: 403 })
+        if (url.host !== 'models' && url.host !== 'ort') return respond(null, { status: 403 })
         // url.host = e.g. "models" or "ort"; url.pathname = e.g. "/Xenova/whisper-base/config.json"
         const rel = decodeURIComponent(url.host + url.pathname)
         const abs = resolve(RES_BASE, rel)
@@ -3469,7 +3546,7 @@ if (!app.requestSingleInstanceLock()) {
           real = realpathSync(abs)
         } catch (e: unknown) {
           if ((e as NodeJS.ErrnoException).code === 'ENOENT') {
-            return new Response(null, { status: 404 })
+            return respond(null, { status: 404 })
           }
           throw e
         }
@@ -3477,7 +3554,7 @@ if (!app.requestSingleInstanceLock()) {
         // Run the check against the real (symlink-resolved) path, not the raw abs path.
         const relCheck = relative(RES_BASE, real)
         if (relCheck.startsWith('..') || isAbsolute(relCheck)) {
-          return new Response(null, { status: 403 })
+          return respond(null, { status: 403 })
         }
         const resp = await net.fetch(pathToFileURL(real).toString())
         const TYPES: Record<string, string> = {
@@ -3489,12 +3566,22 @@ if (!app.requestSingleInstanceLock()) {
           '.txt': 'text/plain'
         }
         const ct = TYPES[extname(real).toLowerCase()]
-        if (!ct) return resp
         const headers = new Headers(resp.headers)
-        headers.set('Content-Type', ct)
-        return new Response(resp.body, { status: resp.status, statusText: resp.statusText, headers })
+        if (ct) headers.set('Content-Type', ct)
+        // net.fetch() against a file:// URL doesn't itself supply Content-Length, which makes
+        // transformers.js fall back to a growable buffer with a "Will expand buffer when needed" console
+        // warning on every load. RES_BASE files are trusted, already-realpath-resolved local disk reads —
+        // statSync here is cheap and lets the caller size its buffer up front.
+        if (!headers.has('Content-Length')) {
+          try {
+            headers.set('Content-Length', String(statSync(real).size))
+          } catch {
+            /* best-effort — a missing Content-Length just re-enables the growable-buffer path */
+          }
+        }
+        return respond(resp.body, { status: resp.status, statusText: resp.statusText, headers })
       } catch {
-        return new Response(null, { status: 500 })
+        return respond(null, { status: 500 })
       }
     })
   }
