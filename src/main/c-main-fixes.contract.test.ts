@@ -125,4 +125,28 @@ describe('packaged offline ASR protocol', () => {
     const body = source.slice(start, start + 220)
     expect(body).toMatch(/corsEnabled:\s*true/)
   })
+
+  // Regression coverage: registerSchemesAsPrivileged's corsEnabled admits the scheme to Chromium's CORS
+  // protocol but does not exempt its responses from the CORS response check — the file://-loaded
+  // renderer/worker fetching a different (asr-model://) scheme is a cross-origin request, so every
+  // response (success AND error) needs an explicit Access-Control-Allow-Origin or fetch() rejects with a
+  // generic "TypeError: Failed to fetch" before the caller ever sees the real status — reproduced even on
+  // the trivial "unknown host" 403 branch, not just a real file read.
+  it("every protocol.handle('asr-model', …) response carries Access-Control-Allow-Origin, not just the success path", () => {
+    const start = source.indexOf("protocol.handle('asr-model'")
+    expect(start).toBeGreaterThan(-1)
+    const end = source.indexOf('\n    })', start)
+    const body = source.slice(start, end)
+    expect(body).toMatch(/Access-Control-Allow-Origin/)
+    // Exactly one `new Response(` construction should exist in this whole handler: inside the CORS-header
+    // helper itself. Every exit path (403 unknown-host, 404 ENOENT, 403 traversal, the success path, and
+    // the catch-all 500) must go through that helper instead of a bare `new Response(...)` that would skip
+    // the header — so a second bare construction here would mean some branch bypassed the fix.
+    const responseConstructions = body.match(/new Response\(/g) ?? []
+    expect(responseConstructions.length).toBe(1)
+    const statusBranches = ['403', '404', '403', '500']
+    for (const status of statusBranches) {
+      expect(body).toMatch(new RegExp(`respond\\(null, \\{ status: ${status} \\}\\)`))
+    }
+  })
 })

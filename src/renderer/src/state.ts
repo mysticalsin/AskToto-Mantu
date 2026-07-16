@@ -20,6 +20,31 @@ export function uid(): string {
   return Math.random().toString(36).slice(2) + Date.now().toString(36)
 }
 
+// SHRINK is committed in two stages (see measureAndPush's shrink branch) — both cancelled the same
+// way by the unconditional clearTimeout at the top of measureAndPush, so neither stage adds latency
+// to a stream that's still actively producing content; they only delay commitment while it might be.
+//
+// Stage 1 (SHRINK_SETTLE_MS): after the window has been quiet for this long, commit a shrink
+// QUANTIZED to the same 24px grid GROW uses (not the exact measured height). Streamed markdown
+// reflows transiently — an incomplete bold/list/link token resolving, a code block's async syntax
+// highlighting mounting — and for a beat the measured height can dip even though more (taller)
+// content is still arriving a moment later. Measured directly during the jank investigation: a 140ms
+// settle let one of these dips commit an EXACT shrink (312px -> 266px), and the very next streamed
+// token grew straight back past it (266 -> 288 -> 312, round-tripped within ~230ms) — a visible
+// shrink-then-grow "twitch". Bumping the settle to 300ms alone cut that (measured across 27 trials:
+// 3/10 streamed answers showing a reversal before, 2/17 after) but couldn't fully close it — an EXACT
+// shrink commit almost never lands exactly on grow's 24px grid, so the instant more content arrives,
+// grow's own comparison (`h >= lastSentRef`) is essentially guaranteed to fire, turning every
+// shrink-then-recover into a SECOND, visible correction. Quantizing stage 1 the same way GROW is
+// quantized means the next tick is either a no-op (already matches) or one small step, not a 46-66px
+// round trip.
+const SHRINK_SETTLE_MS = 300
+// Stage 2: once stage 1's quantized shrink has ALSO been quiet for this long, commit the exact
+// measured height for a snug final resting size (the window hugging its content tightly once truly
+// idle is worth keeping — it's what the original single-stage code did). Short, because by this point
+// stage 1 already confirmed the quiet; this is only insurance against one more late-arriving tick.
+const SHRINK_HUG_MS = 200
+
 /**
  * Reports content height to the main process so the transparent window hugs the UI.
  * Returns a CALLBACK ref so it always tracks the live element — the overlay's root alternates
@@ -118,8 +143,8 @@ export function useAutoResize(): (el: HTMLElement | null) => void {
       microRef.current = false
       const m = measure()
       // Quantize the GROW path to a 24px step so a streaming answer's per-frame growth coalesces into
-      // far fewer resize IPCs instead of one per tiny reflow. The settle-shrink branch below is
-      // untouched and still lands the content's exact final height.
+      // far fewer resize IPCs instead of one per tiny reflow. The shrink branch below stages onto the
+      // SAME grid first (see SHRINK_SETTLE_MS/SHRINK_HUG_MS) before it ever lands the exact final height.
       const h = Math.ceil((m.height + 2) / 24) * 24
       if (shrinkRef.current) {
         clearTimeout(shrinkRef.current)
@@ -134,11 +159,23 @@ export function useAutoResize(): (el: HTMLElement | null) => void {
       } else if (h >= lastSentRef.current) {
         push(h) // GROW immediately — streaming text must never clip behind the window edge
       } else {
-        // SHRINK only after the content settles (~140ms) so a finishing stream doesn't pump the window down
+        // SHRINK: two-stage commit — see SHRINK_SETTLE_MS/SHRINK_HUG_MS's own comments for the
+        // measured shrink/grow whiplash this guards against and why quantizing stage 1 is what
+        // actually closes it (a plain longer debounce only reduces how often the race is lost).
         shrinkRef.current = setTimeout(() => {
+          shrinkRef.current = null
           const m2 = measure()
-          push(m2.height + 2, m2.width)
-        }, 140)
+          const h2 = Math.ceil((m2.height + 2) / 24) * 24
+          if (h2 >= lastSentRef.current) return // content recovered before stage 1 committed — no-op
+          push(h2, m2.width)
+          // Stage 2: only reached once stage 1's OWN commit has also gone quiet for SHRINK_HUG_MS
+          // (any new measureAndPush in the meantime cancels this exactly like it cancels stage 1).
+          shrinkRef.current = setTimeout(() => {
+            shrinkRef.current = null
+            const m3 = measure()
+            push(m3.height + 2, m3.width) // exact tight hug, now that nothing has re-triggered a measure
+          }, SHRINK_HUG_MS)
+        }, SHRINK_SETTLE_MS)
       }
     }
     const send = (): void => {

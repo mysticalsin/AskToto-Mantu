@@ -17,6 +17,12 @@ function clock(t: number): string {
   }
 }
 
+/** Display label for a transcript line's speaker: the resolved name once Speaker Intelligence has one
+ *  (see @shared/transcript-align.ts), else the generic Them/You/Speaker side label. */
+function speakerDisplay(l: TranscriptLine): string {
+  return l.name || (l.speaker === 'them' ? 'Them' : l.speaker === 'you' ? 'You' : 'Speaker')
+}
+
 function formatDuration(sec: number): string {
   const m = Math.floor(sec / 60)
   const s = Math.floor(sec % 60)
@@ -264,10 +270,7 @@ export const Review = memo(function Review({
   const speechLines = useMemo(() => lines.filter((l) => !isNonSpeechLine(l.text)), [lines])
 
   const plain = useMemo(
-    () =>
-      speechLines
-        .map((l) => `[${clock(l.t)}] ${l.speaker === 'them' ? 'Them' : l.speaker === 'you' ? 'You' : 'Speaker'}: ${l.text}`)
-        .join('\n'),
+    () => speechLines.map((l) => `[${clock(l.t)}] ${speakerDisplay(l)}: ${l.text}`).join('\n'),
     [speechLines]
   )
 
@@ -911,7 +914,7 @@ export const Review = memo(function Review({
                       : 'text-[color:var(--color-ink-3)]')
                   }
                 >
-                  {l.speaker === 'them' ? 'Them' : l.speaker === 'you' ? 'You' : 'Speaker'}
+                  {speakerDisplay(l)}
                 </span>
                 <span className="min-w-0 flex-1 break-words text-[color:var(--color-ink)]">{l.text}</span>
               </div>

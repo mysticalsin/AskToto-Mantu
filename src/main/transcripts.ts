@@ -449,6 +449,39 @@ const speakerLabel = (speaker: TranscriptLine['speaker']): 'Them' | 'You' | 'Spe
 const yamlSafeTitle = (s: string): string =>
   s.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, ' ')
 
+// Speaker Intelligence: `name` can come from a THIRD PARTY (a Teams VTT transcript — see
+// main/graph-transcript.ts), not just the trusted signed-in account, so it must be sanitized before it
+// ever reaches the saved markdown. Strips control/newline characters (would break the single-line
+// "**[HH:MM:SS] Label (Name):**" shape below) and parentheses specifically — they're the round-trip
+// delimiter recall.ts's parser depends on, so a name containing one would corrupt the parse — then caps
+// length in line with the other name-shaped fields in this codebase (see ipc.ts's AsrCorrectionPairSchema).
+function sanitizeSpeakerName(name: string | undefined): string {
+  if (!name) return ''
+  return name
+    .replace(/[\r\n\x00-\x08\x0b\x0c\x0e-\x1f]/g, ' ')
+    .replace(/[()]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 80)
+}
+
+/** Render one transcript line in the fixed on-disk shape recall.ts's parser reads back:
+ *  `**[HH:MM:SS] Label:** text`, or `**[HH:MM:SS] Label (Name):** text` once Speaker Intelligence has
+ *  resolved a display name for that line (see shared/transcript-align.ts). */
+function formatTranscriptLine(l: TranscriptLine): string {
+  const d = new Date(l.t)
+  const t = `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
+  const name = sanitizeSpeakerName(l.name)
+  const label = name ? `${speakerLabel(l.speaker)} (${name})` : speakerLabel(l.speaker)
+  return `**[${t}] ${label}:** ${l.text}`
+}
+
+/** Render a full transcript body. saveMeeting and saveDraftTranscript share this exact shape so a
+ *  promoted draft (see recoverOrphanDrafts) parses identically to a normally-saved meeting. */
+export function formatTranscript(lines: TranscriptLine[]): string {
+  return lines.map(formatTranscriptLine).join('\n\n')
+}
+
 /** Save any single Q&A / answer as a Dust-readable markdown note. Returns the file path. */
 export async function saveNote(settings: Settings, n: SaveNote): Promise<string> {
   const folder = ensureMeetingsFolder(settings)
@@ -512,13 +545,7 @@ export async function saveMeeting(settings: Settings, m: SaveMeeting): Promise<s
   const durMin = m.lines.length ? Math.max(1, Math.round((last - started) / 60000)) : 0
   const participants = Array.from(new Set(m.lines.map((l) => speakerLabel(l.speaker))))
 
-  const transcript = m.lines
-    .map((l) => {
-      const d = new Date(l.t)
-      const t = `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
-      return `**[${t}] ${speakerLabel(l.speaker)}:** ${l.text}`
-    })
-    .join('\n\n')
+  const transcript = formatTranscript(m.lines)
 
   const frontmatter =
     [
@@ -650,13 +677,7 @@ export async function saveDraftTranscript(settings: Settings, m: SaveMeeting): P
     const started = m.startedAt || Date.now()
     const file = join(folder, draftFilename(started))
     const title = cleanTitle(m.title) || `${m.mode} meeting`
-    const transcript = m.lines
-      .map((l) => {
-        const d = new Date(l.t)
-        const t = `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
-        return `**[${t}] ${speakerLabel(l.speaker)}:** ${l.text}`
-      })
-      .join('\n\n')
+    const transcript = formatTranscript(m.lines)
     const frontmatter = [
       '---',
       'type: meeting-transcript-draft',

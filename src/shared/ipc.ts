@@ -101,6 +101,7 @@ export const IPC = {
   recallRename: 'recall:rename',
   recallUpdateRecap: 'recall:update-recap',
   recallSetConfidential: 'recall:set-confidential',
+  recallBackfillSpeakers: 'recall:backfillSpeakers',
   recallDeleteAll: 'recall:deleteAll',
   debriefSave: 'debrief:save',
   brainCommitmentSettle: 'brain:commitmentSettle',
@@ -248,7 +249,13 @@ export const TranscriptLineSchema = z.object({
   // inventing that every imported sentence was spoken by the operator.
   speaker: z.enum(['them', 'you', 'unknown']),
   text: z.string(),
-  t: z.number()
+  t: z.number(),
+  // Speaker Intelligence (Phase A) — the resolved human display name for this line's speaker, backfilled
+  // best-effort from the meeting's own Microsoft Teams transcript after the meeting ends (see
+  // main/graph-transcript.ts + shared/transcript-align.ts). Additive only: the SIDE (`speaker` — them/
+  // you/unknown) is never inferred or changed by this. Optional so every previously saved meeting, and
+  // any line no name was ever resolved for, still parses unchanged.
+  name: z.string().optional()
 })
 export type TranscriptLine = z.infer<typeof TranscriptLineSchema>
 
@@ -1159,6 +1166,14 @@ export const SetConfidentialPayloadSchema = z.object({
 })
 export type SetConfidentialPayload = z.infer<typeof SetConfidentialPayloadSchema>
 
+/** Payload for recall:backfillSpeakers (Speaker Intelligence) — manually (re)trigger the Teams-transcript
+ *  speaker-name backfill for a past meeting (see main/graph-transcript.ts + shared/transcript-align.ts).
+ *  `file` is a bare basename (re-basenamed in main for defense), mirroring the other recall:* payloads. */
+export const RecallBackfillSpeakersPayloadSchema = z.object({
+  file: z.string().min(1, 'Missing meeting file.')
+})
+export type RecallBackfillSpeakersPayload = z.infer<typeof RecallBackfillSpeakersPayloadSchema>
+
 /** Result of reading a saved meeting back for "Resume session" (decoded transcript + recap). */
 export interface RecallReadResult {
   ok: boolean
@@ -1171,6 +1186,15 @@ export interface RecallReadResult {
   /** Task MI-5 — frontmatter `confidential: true`, so a reopened past meeting's toggle reflects its
    *  actual saved state instead of always starting unflagged. */
   confidential?: boolean
+}
+
+/** Result of recall:backfillSpeakers (Speaker Intelligence) — `named` is how many transcript lines
+ *  received a resolved display name; 0 is a normal, non-error outcome (no Teams transcript existed for
+ *  this meeting yet, or nothing in it matched). */
+export interface RecallBackfillSpeakersResult {
+  ok: boolean
+  error?: string
+  named?: number
 }
 
 export interface DustAgentsResponse {

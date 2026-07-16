@@ -104,6 +104,12 @@ function fmtTime(iso: string): string {
   return d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
 }
 
+/** "1 meeting" / "2 meetings" (or an irregular plural like "person" → "people") — the Intelligence strip's
+ *  counts below used to always render the plural noun, reading as "1 meetings · 1 people · 0 accounts". */
+function countLabel(count: number, singular: string, plural = `${singular}s`): string {
+  return `${count} ${count === 1 ? singular : plural}`
+}
+
 // ---------------------------------------------------------------------------
 // Knowledge-graph status bar — unchanged from original
 // ---------------------------------------------------------------------------
@@ -177,8 +183,9 @@ function GraphBar(): JSX.Element | null {
               </span>
             ) : brain && brain.meetings > 0 ? (
               <>
-                Intelligence · {brain.meetings} meetings · {brain.people} people · {brain.accounts} accounts
-                {brain.deals > 0 ? ` · ${brain.deals} deals` : ''}
+                Intelligence · {countLabel(brain.meetings, 'meeting')} · {countLabel(brain.people, 'person', 'people')} ·{' '}
+                {countLabel(brain.accounts, 'account')}
+                {brain.deals > 0 ? ` · ${countLabel(brain.deals, 'deal')}` : ''}
               </>
             ) : (
               'Mantu Intelligence: build a brain from your meetings.'
@@ -891,7 +898,7 @@ export function RecallView({
           <button
             type="button"
             onClick={onBack}
-            aria-label="Go back"
+            aria-label="Back"
             className="no-drag focus-ring grid h-7 w-7 shrink-0 place-items-center rounded-full text-[color:var(--color-ink-2)] hover:bg-white/10 hover:text-[color:var(--color-ink)]"
           >
             <ChevronLeft size={16} />
@@ -969,6 +976,7 @@ export function RecallView({
                 ariaLabel={`${job.title} import progress`}
                 className="mt-1"
                 percent={progress.percent}
+                pulseAtFull={progress.pulseAtFull}
                 valueText={progress.valueText}
               />
             </div>

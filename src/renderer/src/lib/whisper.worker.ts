@@ -13,8 +13,8 @@ import { shouldUseBundledAsr } from './asr-offline'
 // A production worker starts fail-closed even before its first init message. Development can still use
 // the explicit remote fallback when the main process reports that local assets were not provisioned.
 env.allowRemoteModels = import.meta.env.DEV
-env.useBrowserCache = true
-// env.allowLocalModels and env.localModelPath are set conditionally inside the 'init' handler.
+// env.allowLocalModels, env.localModelPath, and env.useBrowserCache are set conditionally inside the
+// 'init' handler, based on whether bundled resources are present — see the bundled/else branches below.
 const MODEL_REVISION = 'main' // pin to a specific commit SHA in production to resist upstream drift/tampering
 
 // Engine tiers, best→fallback. WebGPU runs the large multilingual model at ~real-time on most machines;
@@ -100,9 +100,20 @@ self.onmessage = async (e: MessageEvent): Promise<void> => {
       // env.backends.onnx.wasm is typed as potentially undefined; guard before writing.
       // Overrides the cdn.jsdelivr.net default so WASM blobs load from bundled resources/ort/.
       if (env.backends?.onnx?.wasm) env.backends.onnx.wasm.wasmPaths = 'asr-model://ort/'
+      // The bundled path serves every file instantly from local disk through the custom asr-model://
+      // protocol, so persisting it in the browser's Cache Storage API buys nothing — and Chromium's
+      // CacheStorage only recognizes http(s) requests, so transformers.js's getModelFile() cache lookup
+      // (cache.match against the asr-model:// URL, tried before the real fetch) is rejected outright on
+      // every single load ("Request scheme 'asr-model' is unsupported" console spam, on top of the
+      // "Unable to load from local path" warning transformers.js logs once it falls through to the real
+      // fetch). Disabling the browser cache for this path removes that dead, noisy lookup entirely.
+      env.useBrowserCache = false
     } else {
       env.allowLocalModels = false // remote models + transformers.js default CDN wasm (proven path)
       env.allowRemoteModels = true // this branch is reachable only in development (see bundled above)
+      // Remote (dev-only) models are fetched from the real HF CDN over https, where the browser cache is
+      // both supported and worth having — it saves re-downloading ~150MB of weights on every worker restart.
+      env.useBrowserCache = true
     }
     try {
       // Standard installers deliberately ship the compact WASM fallback, not the 1.5 GiB WebGPU

@@ -113,7 +113,10 @@ const ScreenFreshnessChip = memo(function ScreenFreshnessChip({
     <span className="flex flex-none items-center gap-1 rounded-full bg-white/[0.05] px-2 py-0.5 text-[11px] text-[color:var(--color-ink-2)]">
       <span className="h-[6px] w-[6px] rounded-full bg-[var(--color-accent)]" />
       <Eye size={11} strokeWidth={ICON_STROKE} />
-      {formatScreenFreshness(capturedAt)}
+      {/* tabular-nums + a min-width reserve enough stable space for the widest state ("Seen 0.3s ago") so
+          the once-a-second re-render (now/0.3s/59s ago, etc.) never nudges this chip's width and causes
+          the toolbar around it to micro-reflow. */}
+      <span className="inline-block min-w-[13ch] tabular-nums">{formatScreenFreshness(capturedAt)}</span>
     </span>
   )
 })
@@ -681,10 +684,18 @@ export const Bar = memo(function Bar(props: BarProps): JSX.Element {
         {/* Row 1 — hero input + ↵ submit (memoized element above). */}
         {inputRow}
 
-        {/* Body — CSS grid-rows 0fr→1fr animates height; opacity fades in sync. Always rendered so
-            the transition runs on mount rather than snapping on conditional mount/unmount. */}
+        {/* Body — grid-rows 0fr<->1fr switches INSTANTLY (not transitioned); only opacity animates.
+            Always rendered so the fade runs on mount rather than snapping on conditional mount/unmount.
+            grid-template-rows used to be in the transitioned-properties list too, animating height over
+            var(--duration-panel) on EVERY answer/suggestion mount — a layout property, not transform/
+            opacity, so Chromium re-lays-out this box on every animation frame of that transition, and
+            each of those frames is a real ResizeObserver tick that pushed an immediate (unthrottled,
+            un-quantized-away) native window resize the whole time the panel was opening. Jumping the
+            grid track straight to its final size turns that into the single instantaneous step the rest
+            of the app already treats content changes as, while the opacity fade (GPU/compositor-only,
+            no further layout work) keeps the same visual reveal. */}
         <div
-          className="grid overflow-hidden transition-[grid-template-rows,opacity] duration-[var(--duration-panel)] ease-[var(--ease-spring)]"
+          className="grid overflow-hidden transition-opacity duration-[var(--duration-panel)] ease-[var(--ease-spring)]"
           style={{
             gridTemplateRows: props.body ? '1fr' : '0fr',
             opacity: props.body ? 1 : 0

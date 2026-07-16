@@ -49,6 +49,20 @@ export function initializeCaheEditionIdentity(): void {
   // Isolate the profile explicitly by PATH rather than via the app name, so the user-facing name can
   // stay "Métis" while the pilot's settings/transcripts/keystore live in their own dedicated folder.
   const isolatedUserData = join(app.getPath('appData'), CAHE_APP_NAME)
+  // Freeze Electron's auto-generated default User-Agent BEFORE renaming the app. Electron derives that
+  // default from app.getName(), and app.getName() is about to become the accented "Métis" — reading
+  // userAgentFallback's getter after that rename embeds the 'é' in the UA string every future request
+  // uses. That single non-ASCII byte then corrupts the Request/Headers object Electron's own
+  // protocol.handle bridge builds for EVERY fetch() in the whole app (not just this scheme): the bridge's
+  // internal reconstruction of the request headers mis-decodes that one byte as an incomplete UTF-8
+  // sequence, producing a literal U+FFFD, which fails Node's ByteString validation deep inside Electron's
+  // bundled code — before any registered protocol.handle callback ever runs, and with no exception surfaced
+  // to app code to catch. The visible symptom was every asr-model:// fetch (and in fact every fetch in the
+  // app) rejecting with a generic "TypeError: Failed to fetch". Reading the getter now, while
+  // app.getName() is still the packaged ASCII product name, and writing it straight back turns it into a
+  // fixed override that setName() below can no longer influence — the accented taskbar/window branding is
+  // unaffected; only the invisible, purely informational UA header stays ASCII.
+  app.userAgentFallback = app.userAgentFallback
   app.setName(CAHE_DISPLAY_NAME)
   app.setPath('userData', isolatedUserData)
 }

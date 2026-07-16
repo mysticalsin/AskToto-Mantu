@@ -30,6 +30,7 @@ import {
   type SignInResult,
   type CalendarTodayResult,
   type RecallReadResult,
+  type RecallBackfillSpeakersResult,
   type PlatformPermissions,
   type ShortcutFailure,
   type McpCrmTestConnectionPayload,
@@ -180,6 +181,11 @@ const api = {
   // surface (main/brain/publish.ts). Rewrites only the frontmatter block; never renames the file.
   recallSetConfidential: (file: string, confidential: boolean): Promise<{ ok: boolean; error?: string }> =>
     ipcRenderer.invoke(IPC.recallSetConfidential, { file, confidential }),
+  // Speaker Intelligence: manually (re)trigger the Teams-transcript speaker-name backfill for a past
+  // meeting (see main/graph-transcript.ts). `named` is how many lines got a resolved name; 0 is a normal
+  // non-error outcome (no Teams transcript existed/matched yet).
+  recallBackfillSpeakers: (file: string): Promise<RecallBackfillSpeakersResult> =>
+    ipcRenderer.invoke(IPC.recallBackfillSpeakers, { file }),
   // Delete every saved meeting + the knowledge graph. Main pops its own (extra-emphatic) confirm dialog.
   recallDeleteAll: (): Promise<{ ok: boolean; deleted: number; failed?: string[]; error?: string }> =>
     ipcRenderer.invoke(IPC.recallDeleteAll),

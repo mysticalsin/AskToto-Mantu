@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { mkdtempSync, rmSync, readFileSync, writeFileSync, existsSync } from 'node:fs'
-import { join } from 'node:path'
+import { join, basename } from 'node:path'
 import { tmpdir } from 'node:os'
 import { safeStorage } from 'electron'
 import { saveMeeting, isEncryptedFile } from './transcripts'
@@ -48,12 +48,14 @@ describe('recall — deleteMeeting', () => {
 
     const indexPath = join(folder, 'index.md')
     expect(existsSync(indexPath)).toBe(true)
-    expect(readFileSync(indexPath, 'utf8')).toContain(file.split('/').pop()!)
+    // basename(), not a POSIX-only '/' split — `file` is a platform-native absolute path (backslashes on
+    // Windows), and index.md's row links only ever carry the bare filename (see appendIndexRow).
+    expect(readFileSync(indexPath, 'utf8')).toContain(basename(file))
 
     const r = await deleteMeeting(file)
     expect(r.ok).toBe(true)
     expect(existsSync(file)).toBe(false)
-    expect(readFileSync(indexPath, 'utf8')).not.toContain(file.split('/').pop()!)
+    expect(readFileSync(indexPath, 'utf8')).not.toContain(basename(file))
 
     const after = await listMeetings()
     expect(after.some((m) => file.endsWith(m.file))).toBe(false)
@@ -61,8 +63,8 @@ describe('recall — deleteMeeting', () => {
 
   it('accepts a bare basename (what the renderer sends) as well as a full path', async () => {
     const file = await saveMeeting(testSettings, meeting)
-    const basename = file.split('/').pop()!
-    const r = await deleteMeeting(basename)
+    const bareName = basename(file)
+    const r = await deleteMeeting(bareName)
     expect(r.ok).toBe(true)
     expect(existsSync(file)).toBe(false)
   })
@@ -308,7 +310,7 @@ describe('recall — updateMeetingRecap', () => {
 
   it('accepts a bare basename (what the renderer sends)', async () => {
     const file = await saveMeeting(testSettings, meeting)
-    const base = file.split('/').pop()!
+    const base = basename(file)
     const r = await updateMeetingRecap(testSettings, base, 'New notes.')
     expect(r.ok).toBe(true)
     const read = await recallRead(file)
