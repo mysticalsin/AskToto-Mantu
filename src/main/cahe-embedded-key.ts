@@ -1,7 +1,7 @@
 import { app } from 'electron'
 import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { getApiKey, setApiKey } from './store'
+import { getApiKey, setApiKey, setSettings } from './store'
 import { isCaheEdition } from './cahe-edition'
 import { mainLog, auditLog } from './logger'
 
@@ -32,9 +32,15 @@ function seededMarkerPath(): string {
  * EXACTLY ONCE per profile, tracked by a marker file in userData. Once that one seed attempt has run —
  * successful or not — this is permanently a no-op for the life of the profile, so a pilot user who later
  * changes or clears the Kimi key in Settings has that decision stick across every future launch; we never
- * come back and silently re-overwrite it. `provider` itself doesn't need setting here: caheEditionPolicy
- * already forces it to 'kimi' as a managed default and locks it, so getSettings().provider is always
- * 'kimi' in this edition regardless of this module.
+ * come back and silently re-overwrite it.
+ *
+ * `provider` DOES need setting here (unlike before): caheEditionPolicy() no longer locks or force-defaults
+ * it — Cahê's implicit policy is now identical to a non-Cahê build (no allowlist, no locked keys, no
+ * managed defaults), specifically so the pilot user can freely connect/switch to Claude Code CLI, Codex
+ * CLI, Dust, or any API-key provider. "Kimi works out of the box" therefore has to come from an ordinary
+ * one-time user-layer write via store.ts's setSettings — gated by the exact same marker as the key import
+ * above — rather than from a policy override. Because it shares the marker, it also only ever runs once:
+ * a later user switch to another provider persists across restarts exactly like a key change does.
  *
  * Best-effort only — never throws, and never logs the key value itself.
  */
@@ -70,16 +76,27 @@ export function importEmbeddedCaheKey(): void {
   } catch (e) {
     // Best-effort — a missing/corrupt/malformed bundle must never block startup.
     mainLog.warn('[cahe-embedded-key] embedded key import failed', e)
-  } finally {
-    // Written unconditionally once we get here — whether the key was already present, the bundle was
-    // missing/malformed, or an error was thrown above. This is a ONE-TIME seed attempt, not an ongoing
-    // sync: writing the marker regardless of outcome is what lets a user's later "change the key" or
-    // "remove the key" action stick — without it we'd re-seed the embedded key back in on every launch
-    // and silently undo their choice.
-    try {
-      writeFileSync(marker, new Date().toISOString(), { mode: 0o600 })
-    } catch (e) {
-      mainLog.warn('[cahe-embedded-key] could not write the seed marker', e)
-    }
+  }
+
+  // Out-of-box default: activate Kimi as the current provider, once. setSettings persists this into the
+  // user's own settings.json layer (no lock stands in the way anymore), so it reads back on every future
+  // getSettings() call — and a user who later picks Claude CLI/Codex CLI/Dust/another key simply
+  // overwrites this same layer, which the marker below ensures we never come back and clobber again.
+  try {
+    setSettings({ provider: 'kimi' })
+  } catch (e) {
+    // Best-effort — e.g. disk full or encryption unavailable must never block startup.
+    mainLog.warn('[cahe-embedded-key] could not seed the default Kimi provider', e)
+  }
+
+  // Written unconditionally once we get here — whether the key/provider seed above succeeded, partially
+  // failed, or threw. This is a ONE-TIME seed attempt, not an ongoing sync: writing the marker regardless
+  // of outcome is what lets a user's later "change the key", "switch provider", or "remove the key" action
+  // stick — without it we'd re-seed both the embedded key and the default provider back in on every
+  // launch and silently undo their choice.
+  try {
+    writeFileSync(marker, new Date().toISOString(), { mode: 0o600 })
+  } catch (e) {
+    mainLog.warn('[cahe-embedded-key] could not write the seed marker', e)
   }
 }

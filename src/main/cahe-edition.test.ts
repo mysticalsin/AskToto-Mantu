@@ -49,11 +49,16 @@ describe('Cahê Windows edition', () => {
     ).toBe(true)
   })
 
-  it('keeps Kimi active while allowing the Dust connection workflow', () => {
+  it('imposes no allowlist, locked keys, or managed defaults — same policy as a non-Cahê build', () => {
+    // Kimi is still the out-of-box default (seeded once by cahe-embedded-key.ts's marker-gated first-run
+    // seed via setSettings), but that is a plain user-layer default, not an edition-level lock: the pilot
+    // user must be free to connect/switch to Claude Code CLI, Codex CLI, Dust, or any API-key provider,
+    // and have that choice persist. A real IT-deployed managed-config.json is a separate mechanism
+    // (validatedManaged()/getLockedKeys() in store.ts) and is untouched by this policy.
     expect(caheEditionPolicy(true)).toEqual({
-      allowedProviders: ['kimi', 'dust'],
-      lockedKeys: ['provider', 'providerPriority'],
-      managedDefaults: { provider: 'kimi', providerPriority: 'api' }
+      allowedProviders: null,
+      lockedKeys: [],
+      managedDefaults: {}
     })
     expect(caheEditionPolicy(false)).toEqual({
       allowedProviders: null,

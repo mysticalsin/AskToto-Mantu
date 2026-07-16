@@ -1,5 +1,5 @@
 import { renderToStaticMarkup } from 'react-dom/server'
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { Bar, type BarProps } from './Bar'
 
 function props(overrides: Partial<BarProps> = {}): BarProps {
@@ -43,5 +43,39 @@ describe('Bar Spotlight Ref control', () => {
     const html = renderToStaticMarkup(<Bar {...props({ spotlightReady: true })} />)
 
     expect(html).toContain('aria-label="Spotlight Ref"')
+  })
+})
+
+describe('Bar screen-freshness chip', () => {
+  // The chip derives its age from capturedAt + Date.now() at render time (no fake-timer tick needed
+  // for a static render) — vi.setSystemTime just pins "now" so elapsed is deterministic here.
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('is visible under 60s', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(1_000_000)
+    const html = renderToStaticMarkup(<Bar {...props({ screenCapturedAt: 1_000_000 - 59_000 })} />)
+
+    expect(html).toContain('Seen 59s ago')
+  })
+
+  it('is gone once the capture is older than 60s', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(1_000_000)
+    const html = renderToStaticMarkup(<Bar {...props({ screenCapturedAt: 1_000_000 - 61_000 })} />)
+
+    expect(html).not.toContain('Seen')
+  })
+
+  it('returns the instant a fresh capture lands', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(1_000_000)
+    const stale = renderToStaticMarkup(<Bar {...props({ screenCapturedAt: 1_000_000 - 61_000 })} />)
+    expect(stale).not.toContain('Seen')
+
+    const fresh = renderToStaticMarkup(<Bar {...props({ screenCapturedAt: 1_000_000 })} />)
+    expect(fresh).toContain('Seen now')
   })
 })

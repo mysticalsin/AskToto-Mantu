@@ -68,16 +68,17 @@ export function initializeCaheEditionIdentity(): void {
 }
 
 /**
- * Cahê keeps Kimi as the active cloud provider for live questions and screenshot analysis. Dust stays
- * allowed so its CLI session and agent configuration can be connected without replacing Kimi.
+ * Cahê ships with Kimi pre-configured out-of-the-box (embedded key + active-provider seed, both applied
+ * once by cahe-embedded-key.ts on first run) so the pilot works with zero setup. That is a DEFAULT, not a
+ * lock: the pilot user must be free to connect and switch to any other provider — Claude Code CLI, Codex
+ * CLI, Dust (including picking its base/thinking agent), or a pasted API key — exactly like the
+ * non-Cahê build, and have that choice persist across restarts. So the edition itself imposes no
+ * allowlist, no locked keys, and no forced managed defaults; it is policy-identical to a non-Cahê build.
+ * A real IT-deployed managed-config.json can still lock things down — that mechanism is untouched and
+ * layers on top of this via getLockedKeys()/validatedManaged() in store.ts.
  */
-export function caheEditionPolicy(active = isCaheEdition()): CaheEditionPolicy {
-  if (!active) return { allowedProviders: null, lockedKeys: [], managedDefaults: {} }
-  return {
-    allowedProviders: ['kimi', 'dust'],
-    lockedKeys: ['provider', 'providerPriority'],
-    managedDefaults: { provider: 'kimi', providerPriority: 'api' }
-  }
+export function caheEditionPolicy(_active = isCaheEdition()): CaheEditionPolicy {
+  return { allowedProviders: null, lockedKeys: [], managedDefaults: {} }
 }
 
 /** Cahê is an isolated pilot package and must never consume the shared Métis release feed. */

@@ -91,24 +91,35 @@ export const ElapsedClock = memo(function ElapsedClock({
   )
 })
 
+/** A capture this old is no longer "fresh" enough to vouch for — past this, the chip hides itself
+ *  rather than sit there reading "Seen 300s ago" for the rest of the meeting. */
+const SCREEN_FRESHNESS_MAX_AGE_MS = 60_000
+
 /** Screen-capture freshness chip ("Seen 0.3s ago") — owns its own 500ms tick, same pattern as
  *  ElapsedClock above. Previously this ticked via App-level state (setInterval + setState in App.tsx),
  *  which re-rendered the ENTIRE App tree (including Bar's ~500-line JSX and whichever body was mounted)
  *  every half second for as long as a screen-grounded answer was showing. Isolating the tick here means
  *  it only ever re-renders this one chip. Renders nothing when capturedAt is null/undefined (no
- *  screen-grounded answer active right now). */
+ *  screen-grounded answer active right now) OR once the capture has aged past SCREEN_FRESHNESS_MAX_AGE_MS
+ *  — it reappears the instant a NEW capture lands, since `stale` is re-derived from the fresh capturedAt
+ *  prop + Date.now() on every render, not counted up independently. */
 const ScreenFreshnessChip = memo(function ScreenFreshnessChip({
   capturedAt
 }: {
   capturedAt?: number | null
 }): JSX.Element | null {
   const [, setTick] = useState(0)
+  const stale = capturedAt == null || Date.now() - capturedAt > SCREEN_FRESHNESS_MAX_AGE_MS
   useEffect(() => {
     if (capturedAt == null) return
+    // Once stale, further ticking would only ever re-confirm "still nothing to show" — the chip is
+    // already unmounted below — so the interval stops here instead of ticking uselessly for the rest
+    // of the meeting. A fresh capturedAt (new capture) re-runs this effect and starts a new interval.
+    if (stale) return
     const iv = setInterval(() => setTick((t) => t + 1), 500)
     return () => clearInterval(iv)
-  }, [capturedAt])
-  if (capturedAt == null) return null
+  }, [capturedAt, stale])
+  if (stale) return null
   return (
     <span className="flex flex-none items-center gap-1 rounded-full bg-white/[0.05] px-2 py-0.5 text-[11px] text-[color:var(--color-ink-2)]">
       <span className="h-[6px] w-[6px] rounded-full bg-[var(--color-accent)]" />
