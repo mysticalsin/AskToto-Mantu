@@ -57,6 +57,28 @@ if (sha256(packagedMainBytecode) !== sha256(sourceMainBytecode)) {
 }
 
 const kimiKeyPattern = /sk-kimi-[A-Za-z0-9_-]{16,}/
+
+// EXPLICIT, DOCUMENTED EXCEPTION — not a loophole: the Cahê pilot intentionally embeds a Kimi API key
+// (src/main/cahe-embedded-key.ts + electron-builder.cahe.win.yml's extraResources) so the pilot works
+// with zero setup. This gate stays a hard refusal by default; METIS_CAHE_EMBED_KEY=1 is the one,
+// deliberate way to acknowledge the trade-off for a build that is meant to ship the key. Leaving the
+// flag unset keeps the original "never allow an embedded Kimi key" behavior byte-for-byte.
+const ALLOW_EMBEDDED_KIMI_KEY = process.env.METIS_CAHE_EMBED_KEY === '1'
+let embeddedKeyFound = false
+
+function warnEmbeddedKimiKey(path) {
+  embeddedKeyFound = true
+  console.log(`
+⚠️ ⚠️ ⚠️ ⚠️ ⚠️ ⚠️ ⚠️ ⚠️ ⚠️ ⚠️ ⚠️ ⚠️ ⚠️ ⚠️ ⚠️ ⚠️ ⚠️ ⚠️ ⚠️ ⚠️ ⚠️ ⚠️ ⚠️ ⚠️ ⚠️ ⚠️ ⚠️ ⚠️ ⚠️ ⚠️
+⚠️  Cahê build intentionally embeds a Kimi API key — it is EXTRACTABLE from the installer;
+⚠️  scope/rotate that key. This is expected ONLY because METIS_CAHE_EMBED_KEY=1 was set.
+⚠️  Found in: ${basename(path)}
+⚠️  Do not reuse a key that guards anything beyond this pilot's minimum plan/quota, and be
+⚠️  ready to rotate or revoke it — packaging it does not keep it secret once it ships.
+⚠️ ⚠️ ⚠️ ⚠️ ⚠️ ⚠️ ⚠️ ⚠️ ⚠️ ⚠️ ⚠️ ⚠️ ⚠️ ⚠️ ⚠️ ⚠️ ⚠️ ⚠️ ⚠️ ⚠️ ⚠️ ⚠️ ⚠️ ⚠️ ⚠️ ⚠️ ⚠️ ⚠️ ⚠️ ⚠️
+`)
+}
+
 async function assertNoEmbeddedKimiKey(path) {
   await new Promise((resolvePromise, rejectPromise) => {
     let carry = ''
@@ -64,6 +86,12 @@ async function assertNoEmbeddedKimiKey(path) {
     stream.on('data', (chunk) => {
       const text = carry + chunk.toString('latin1')
       if (kimiKeyPattern.test(text)) {
+        if (ALLOW_EMBEDDED_KIMI_KEY) {
+          warnEmbeddedKimiKey(path)
+          resolvePromise()
+          stream.destroy()
+          return
+        }
         stream.destroy(new Error(`Refusing Cahê package with an embedded Kimi API key: ${basename(path)}`))
         return
       }
@@ -76,4 +104,8 @@ async function assertNoEmbeddedKimiKey(path) {
 
 await assertNoEmbeddedKimiKey(appAsar)
 await assertNoEmbeddedKimiKey(installer)
-console.log(`[check:cahe-package] OK ${installers[0]} — current bytecode, distinct identity, no embedded Kimi key`)
+console.log(
+  embeddedKeyFound
+    ? `[check:cahe-package] OK ${installers[0]} — current bytecode, distinct identity, embedded Kimi key explicitly allowed (METIS_CAHE_EMBED_KEY=1)`
+    : `[check:cahe-package] OK ${installers[0]} — current bytecode, distinct identity, no embedded Kimi key`
+)

@@ -9,4 +9,13 @@ win:
     - nsis
   artifactName: Metis-Windows-Cahe-Setup-${version}.${ext}
 nsis:
-  shortcutName: Metis Windows Cahe
+  shortcutName: Métis
+# Intentional, disclosed pilot convenience — NOT part of the standard electron-builder.win.yml, so a
+# normal Métis build never bundles this. build/cahe-kimi.local.json is a local, gitignored file the
+# operator provides (see .gitignore + src/main/cahe-embedded-key.ts, which seeds this into the app's
+# normal encrypted keystore once per profile and never fights a later user change/removal). The key IS
+# extractable from the installer by anyone who has it; scripts/check-cahe-package.mjs's packaging-time
+# scan only allows it through with METIS_CAHE_EMBED_KEY=1 set, printing a loud warning when it does.
+extraResources:
+  - from: build/cahe-kimi.local.json
+    to: cahe/kimi.json

@@ -6,6 +6,13 @@ release/
 .env
 .env.local
 .DS_Store
+
+# Cahê pilot's local Kimi API key input for electron-builder.cahe.win.yml's extraResources (never
+# commit the real key; scripts/check-cahe-package.mjs only lets the packaged copy through when
+# METIS_CAHE_EMBED_KEY=1 is set). The packaged cahe/kimi.json under release/ is already covered by
+# the release/ ignore above.
+build/cahe-kimi.local.json
+build/make-cahe.ps1
 .vite/
 coverage/
 *.tsbuildinfo

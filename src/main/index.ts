@@ -208,6 +208,7 @@ import { PROVIDERS, resolveModelTier, applyInteractiveGuardrail, type ProviderId
 import { routeTier } from '@shared/routing'
 import { redactSecrets } from '@shared/redact'
 import { initializeCaheEditionIdentity, isCaheEdition } from './cahe-edition'
+import { importEmbeddedCaheKey } from './cahe-embedded-key'
 
 // Self-signed / un-notarized builds: use the AES-256-GCM file keystore instead of the macOS Keychain.
 // An un-notarized app's Keychain ACL is not stably trusted, so safeStorage prompts for the login-keychain
@@ -3251,6 +3252,11 @@ if (!app.requestSingleInstanceLock()) {
   } catch {
     /* best-effort warm-up */
   }
+  // Cahê pilot only (a no-op everywhere else): seed the installer-embedded Kimi key into the normal
+  // encrypted keystore, exactly once per profile. Settings/the keystore are safe to touch here — same
+  // phase as the first getSettings() read just above. See cahe-embedded-key.ts for the one-time-seed
+  // design that lets a user's later key change/removal stick.
+  importEmbeddedCaheKey()
   // Unpackaged (dev/QA) runs show Electron's default icon in the Dock — brand them with the Mantu M so
   // a dev window is never mistaken for "the Electron thing". Packaged builds get build/icon.png baked
   // in by electron-builder (mac .icns / win .ico) and don't need this.

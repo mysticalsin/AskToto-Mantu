@@ -1,6 +1,12 @@
 import { app } from 'electron'
+import { join } from 'node:path'
 
+// The pilot shows the standard Métis brand to the user (window, taskbar, shortcut) but keeps a fully
+// isolated profile, updater identity, and executable name so it can never share state with — or
+// overwrite — a normal Métis install. CAHE_APP_NAME is retained only as the isolated userData folder
+// name (ASCII, never shown); CAHE_DISPLAY_NAME is what the user actually sees.
 export const CAHE_APP_NAME = 'Metis Windows Cahe'
+export const CAHE_DISPLAY_NAME = 'Métis'
 export const CAHE_EXECUTABLE_NAME = 'Metis-Windows-Cahe.exe'
 
 type Environment = Readonly<Record<string, string | undefined>>
@@ -39,7 +45,12 @@ export function isCaheEdition(): boolean {
 
 /** Must run before the first app.getPath('userData') call so Cahê receives an isolated profile. */
 export function initializeCaheEditionIdentity(): void {
-  if (isCaheEdition()) app.setName(CAHE_APP_NAME)
+  if (!isCaheEdition()) return
+  // Isolate the profile explicitly by PATH rather than via the app name, so the user-facing name can
+  // stay "Métis" while the pilot's settings/transcripts/keystore live in their own dedicated folder.
+  const isolatedUserData = join(app.getPath('appData'), CAHE_APP_NAME)
+  app.setName(CAHE_DISPLAY_NAME)
+  app.setPath('userData', isolatedUserData)
 }
 
 /**
