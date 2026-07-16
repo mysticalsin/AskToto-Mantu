@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { extractFile } from '@electron/asar'
+import { extractFile, listPackage } from '@electron/asar'
 import { createHash } from 'node:crypto'
 import { createReadStream, existsSync, readFileSync, readdirSync, statSync } from 'node:fs'
 import { basename, dirname, join, resolve } from 'node:path'
@@ -32,8 +32,18 @@ if (!existsSync(executable) || statSync(executable).size === 0) {
 const appAsar = join(outputRoot, 'win-unpacked', 'resources', 'app.asar')
 const sourceMainLoader = readFileSync(join(repositoryRoot, 'out/main/index.js'))
 const sourceMainBytecode = readFileSync(join(repositoryRoot, 'out/main/index.jsc'))
-const packagedMainLoader = extractFile(appAsar, 'out/main/index.js')
-const packagedMainBytecode = extractFile(appAsar, 'out/main/index.jsc')
+// @electron/asar keys entries with the packing host's separator (backslash on Windows). Resolve each
+// reviewed POSIX path back to the archive's native key so extraction works regardless of build OS.
+const extractPackaged = (posixPath) => {
+  const wanted = `/${posixPath.replace(/^\/+/, '')}`
+  const rawKey = listPackage(appAsar).find(
+    (entry) => `/${entry.split('\\').join('/').replace(/^\/+/, '')}` === wanted
+  )
+  if (!rawKey) throw new Error(`Cahê package is missing ${posixPath}`)
+  return extractFile(appAsar, rawKey.replace(/^[\\/]+/, ''))
+}
+const packagedMainLoader = extractPackaged('out/main/index.js')
+const packagedMainBytecode = extractPackaged('out/main/index.jsc')
 
 if (!packagedMainLoader.toString('utf8').includes('require("./index.jsc")')) {
   throw new Error('Cahê package does not contain the bytecode main-process loader')
