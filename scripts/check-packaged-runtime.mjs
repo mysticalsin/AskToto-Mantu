@@ -103,14 +103,21 @@ function requireRegularFile(path) {
 function verifyPackagedDependencyPruning() {
   const archive = join(resourcesRoot, 'app.asar')
   requireRegularFile(archive)
-  const entries = listPackage(archive)
+  // @electron/asar lists entries using the packing host's path separator — backslash on Windows,
+  // forward slash on macOS/Linux — each with a leading separator. Normalize to a leading-slash POSIX
+  // form so the reviewed prefix comparisons hold regardless of which OS produced the archive, and keep
+  // a map back to each raw key for extractFile (which needs the archive's native-separator key with no
+  // leading separator). Without this, a Windows-packed archive silently fails every check here.
+  const rawEntries = listPackage(archive)
+  const toPosix = (entry) => `/${entry.split('\\').join('/').replace(/^\/+/, '')}`
+  const rawByPosix = new Map(rawEntries.map((entry) => [toPosix(entry), entry]))
   const forbiddenPrefixes = [
     '/node_modules/@dust-tt/client/node_modules/@modelcontextprotocol/sdk',
     '/node_modules/@dust-tt/client/node_modules/express-rate-limit',
     '/node_modules/@dust-tt/client/node_modules/ip-address'
   ]
   for (const prefix of forbiddenPrefixes) {
-    if (entries.some((entry) => entry === prefix || entry.startsWith(`${prefix}/`))) {
+    if ([...rawByPosix.keys()].some((entry) => entry === prefix || entry.startsWith(`${prefix}/`))) {
       throw new Error(`Unused Dust MCP server dependency was packaged: ${prefix}`)
     }
   }
@@ -121,8 +128,12 @@ function verifyPackagedDependencyPruning() {
     const source = JSON.parse(
       readFileSync(join(REPO_ROOT, 'node_modules', dependency, 'package.json'), 'utf8')
     )
+    const rawKey = rawByPosix.get(`/node_modules/${dependency}/package.json`)
+    if (!rawKey) {
+      throw new Error(`Packaged ${dependency}/package.json is missing from app.asar`)
+    }
     const packaged = JSON.parse(
-      extractFile(archive, `node_modules/${dependency}/package.json`).toString('utf8')
+      extractFile(archive, rawKey.replace(/^[\\/]+/, '')).toString('utf8')
     )
     if (packaged.version !== source.version) {
       throw new Error(
