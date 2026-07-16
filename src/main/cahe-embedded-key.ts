@@ -1,7 +1,7 @@
 import { app } from 'electron'
 import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { getApiKey, setApiKey, setSettings } from './store'
+import { getApiKey, getSettings, setApiKey, setSettings } from './store'
 import { isCaheEdition } from './cahe-edition'
 import { mainLog, auditLog } from './logger'
 
@@ -17,6 +17,52 @@ interface CaheKeyBundle {
 /** Per-profile marker recording that the one-time embedded-key seed has already run (see below). */
 function seededMarkerPath(): string {
   return join(app.getPath('userData'), '.cahe-key-seeded')
+}
+
+/** Separate one-time marker for the background-screen-context Local-AI seed (M13). Deliberately NOT the
+ *  same marker as the key seed: an existing pilot profile (upgraded from 1.0.7, whose key marker already
+ *  exists) must still receive this migration exactly once, so the background reader turns on for them too. */
+function localAiSeededMarkerPath(): string {
+  return join(app.getPath('userData'), '.cahe-localai-seeded')
+}
+
+/**
+ * Cahê M13: enable the bundled ON-DEVICE model so background screen preprocessing works out of the box —
+ * it pre-analyzes the screen locally so "What's on my screen" answers fast. Runs ONCE per profile (its own
+ * marker), independent of the key seed, so both fresh installs AND 1.0.7→ upgrades get it.
+ *
+ * Deliberately sets localLlm.useFor.{suggest,summary,vision} = false: enabling the local model must NOT
+ * silently reroute live suggestions/summaries/vision answers off Kimi (quality) onto the small on-device
+ * model. The local model is here ONLY to power the silent background screen reader; the user can still flip
+ * any use-for toggle on in Settings afterward, and — sharing the one-time marker — that choice sticks.
+ * Best-effort; never throws.
+ */
+export function seedCaheLocalAiForBackgroundScreen(): void {
+  if (!isCaheEdition()) return
+  let marker: string
+  try {
+    marker = localAiSeededMarkerPath()
+    if (existsSync(marker)) return
+  } catch (e) {
+    mainLog.warn('[cahe-embedded-key] could not check the local-ai seed marker; skipping', e)
+    return
+  }
+  try {
+    const cur = getSettings()
+    setSettings({
+      localLlm: { ...cur.localLlm, enabled: true, useFor: { suggest: false, summary: false, vision: false } },
+      backgroundScreenContext: true
+    })
+    auditLog('cahe.localai.seeded', {})
+    mainLog.info('[cahe-embedded-key] enabled on-device model for background screen context (Cahê pilot)')
+  } catch (e) {
+    mainLog.warn('[cahe-embedded-key] could not seed Local AI for background screen context', e)
+  }
+  try {
+    writeFileSync(marker, new Date().toISOString(), { mode: 0o600 })
+  } catch (e) {
+    mainLog.warn('[cahe-embedded-key] could not write the local-ai seed marker', e)
+  }
 }
 
 /**

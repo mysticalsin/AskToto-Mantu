@@ -705,6 +705,31 @@ export function App(): JSX.Element {
         setCapturing(true)
       })
       try {
+        // Fast-path (M13): if background preprocessing already has a fresh, on-device description of the
+        // current window, answer from it WITHOUT capturing or uploading an image — main injects the cached
+        // description (+ recent audio) into a mode:'answer' ask. Needs an answer-capable provider, since
+        // mode:'answer' isn't local-scoped; a local-only setup falls through to the live vision path below.
+        if ((settings?.backgroundScreenContext ?? false) && settings?.providerReady) {
+          try {
+            const ctx = await window.toto.screenContext()
+            if (ctx) {
+              setScreenCapturedAt(ctx.capturedAt)
+              const id = ask.run({
+                mode: 'answer',
+                prompt,
+                label: opts?.label,
+                kind: opts?.kind,
+                history: opts?.history,
+                transcript: listen.text(), // fuse recent spoken context alongside the screen
+                wantsScreenContext: true
+              })
+              if (id && opts?.record) pendingUserRef.current = { id, q: opts.record }
+              return id
+            }
+          } catch {
+            /* screen-context probe failed — fall through to a live capture below */
+          }
+        }
         const shot = await window.toto.capture()
         setScreenCapturedAt(shot.capturedAt)
         // Return the run id so callers can track it (Retry/Go-deeper replay the same screenshot via lastReqRef).
@@ -760,7 +785,7 @@ export function App(): JSX.Element {
         setCapturing(false)
       }
     },
-    [ask.run, capturing, requireProvider]
+    [ask.run, capturing, requireProvider, settings?.backgroundScreenContext, settings?.providerReady, listen]
   )
 
   const assist = useCallback(async (): Promise<void> => {

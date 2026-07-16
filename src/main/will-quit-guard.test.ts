@@ -17,8 +17,9 @@ describe('will-quit handler crash guard', () => {
   const handler = (() => {
     const start = source.indexOf("app.on('will-quit'")
     expect(start).toBeGreaterThan(-1)
-    // Grab a generous slice of the handler body.
-    return source.slice(start, start + 1200)
+    // Grab a generous slice of the handler body (wide enough to include every independent cleanup step,
+    // e.g. the background-screen-preprocess watcher stop that precedes the sidecar kill).
+    return source.slice(start, start + 2000)
   })()
 
   it('gates globalShortcut on app.isReady() (never calls it before ready)', () => {

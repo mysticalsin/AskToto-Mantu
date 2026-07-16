@@ -105,6 +105,8 @@ export type AuditEvent =
   | 'local.runtime.restart'
   | 'local.runtime.missing'
   | 'local.model.checksum_fail'
+  | 'screen.preprocess.describe'
+  | 'cahe.localai.seeded'
 
 /**
  * Append a structured audit record. NEVER pass secrets or message/transcript CONTENT — metadata only

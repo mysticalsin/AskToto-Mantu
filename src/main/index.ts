@@ -59,7 +59,8 @@ import {
   type PublicSettings,
   type CalendarEvent,
   type AskStart,
-  type ImportJobView
+  type ImportJobView,
+  type ScreenContextResult
 } from '@shared/ipc'
 import {
   getSettings,
@@ -92,6 +93,8 @@ import {
 import { ensureLocalRuntimeStarted } from './llm/local'
 import { buildPrewarmMessages } from './llm/prewarm'
 import { listModels as listLocalModels } from './llm/local-models'
+import { createScreenPreprocess, type ScreenPreprocess } from './screen-preprocess'
+import { startForegroundWatcher } from './foreground-watcher'
 import { resetDustConversation, prewarmDustConversation, isDustAuthError } from './llm/dust'
 import {
   createKeyedSingleFlight,
@@ -212,7 +215,7 @@ import { routeTier } from '@shared/routing'
 import { redactSecrets } from '@shared/redact'
 import { applySpeakerNames } from '@shared/transcript-align'
 import { initializeCaheEditionIdentity, isCaheEdition } from './cahe-edition'
-import { importEmbeddedCaheKey } from './cahe-embedded-key'
+import { importEmbeddedCaheKey, seedCaheLocalAiForBackgroundScreen } from './cahe-embedded-key'
 
 // Self-signed / un-notarized builds: use the AES-256-GCM file keystore instead of the macOS Keychain.
 // An un-notarized app's Keychain ACL is not stably trusted, so safeStorage prompts for the login-keychain
@@ -774,6 +777,8 @@ function publicSettings(): PublicSettings {
     localSuggestReady,
     localSummaryReady,
     localVisionReady,
+    // Background on-device screen pre-analysis can actually run (toggle on AND the local model is ready).
+    backgroundScreenReady: s.backgroundScreenContext && localReady,
     // Live sidecar process state (distinct from localReady's eligibility check) — drives the Local AI
     // card's status line only. localRuntimeState is the precise tri-state (stopped/starting/running/
     // unavailable) so the card can distinguish a normal idle stop from a session-long 'unavailable'
@@ -1162,6 +1167,45 @@ function prewarmCapture(): void {
   getScreenshot('prewarm').catch(() => {
     /* best-effort warm */
   })
+}
+
+// --- Background screen preprocessing (M13) ---------------------------------------------------------------
+// On-device pre-analysis of the screen on window/content change, so a "what's on my screen" ask answers from
+// a pre-computed description instead of a cold capture + image round trip. All the privacy/cost guardrails
+// live in screen-preprocess.ts; this just wires it to the app's real capture, settings, and local runtime.
+const screenPreprocess: ScreenPreprocess = createScreenPreprocess({
+  getScreenshot,
+  getSettings: () => {
+    const s = getSettings()
+    return { backgroundScreenContext: s.backgroundScreenContext, localLlm: s.localLlm }
+  },
+  localReady: () => localBaseReady(getSettings(), getAllowedProviders()),
+  privateViewOn,
+  ensureLocalRuntimeStarted,
+  runtime: {
+    baseURL: () => localRuntime.baseURL(),
+    sessionKey: () => localRuntime.sessionKey(),
+    markActivity: () => localRuntime.markActivity(),
+    beginStream: () => localRuntime.beginStream(),
+    endStream: () => localRuntime.endStream(),
+    activeStreams: () => localRuntime.activeStreams()
+  },
+  startWatcher: (onChange) =>
+    startForegroundWatcher(onChange, {
+      onError: (message) => mainLog.warn(`[screen-preprocess] watcher: ${message}`)
+    }),
+  log: (level, message) => (level === 'warn' ? mainLog.warn(message) : mainLog.info(message)),
+  audit: (event, data) => auditLog(event as Parameters<typeof auditLog>[0], data)
+})
+
+/** (Re)start or stop background screen preprocessing to match current auth + settings eligibility. Safe to
+ *  call repeatedly — it's a no-op when the running state already matches. */
+function refreshScreenPreprocess(): void {
+  if (!requireAuth()) {
+    screenPreprocess.stop()
+    return
+  }
+  screenPreprocess.refresh()
 }
 
 /** Clamp a single axis (pos/size) into a work-area span, without inverting when the window is bigger
@@ -1606,6 +1650,9 @@ function registerIpc(): void {
     }
     const next = setSettings(p)
     auditLog('settings.changed', { keys: Object.keys(p) })
+    // Start/stop background screen pre-analysis to match the new settings (backgroundScreenContext toggle,
+    // or Local AI being enabled/disabled/provisioned) — takes effect immediately, no relaunch.
+    refreshScreenPreprocess()
     // At-rest encryption just turned on → purge any previously-built CLEARTEXT knowledge graph so it
     // can't leak meeting topics/entities the encryption is meant to protect. (Builds are already
     // blocked while encryption is on, so no graph will be regenerated until it's turned back off.)
@@ -2053,6 +2100,7 @@ function registerIpc(): void {
     const status = await authSignIn()
     prewarmCapture() // warm the cold capture pipeline now that we're signed in (no-op if not authed)
     prewarmCli() // warm the CLI binary cache so the first CLI ask doesn't stall on a login-shell lookup
+    refreshScreenPreprocess() // start background screen pre-analysis if eligible now that we're signed in
     return status
   })
   ipcMain.handle(IPC.authSignOut, async (e) => {
@@ -2311,6 +2359,14 @@ function registerIpc(): void {
     assertMainWindow(e)
     prewarmCapture()
   })
+  // Screen-ask fast-path: hand the renderer the freshest on-device screen description (or null). Non-null
+  // lets askScreen skip the capture entirely and route a mode:'answer' ask that main grounds from its OWN
+  // cache. The description text is re-derived by main at ask time — the renderer only learns it exists.
+  ipcMain.handle(IPC.screenContext, (e): ScreenContextResult => {
+    assertMainWindow(e)
+    if (!requireAuth()) return null
+    return screenPreprocess.currentFreshContext()
+  })
 
   // --- Ask / LLM streaming ---
   ipcMain.handle(IPC.askStart, (e, raw) => {
@@ -2333,6 +2389,9 @@ function registerIpc(): void {
     // before it leaves the device for a cloud model. Only the auto-captured transcript — never the user's
     // own typed prompt, and never the locally-saved meeting file (which keeps the verbatim original).
     if (s.redactSensitive && req.transcript) req.transcript = redactSecrets(req.transcript)
+    // screenContext is a MAIN-ONLY field (like brainContext): never trust a value the renderer sent. Clear
+    // it unconditionally after parse, then set it below strictly from main's own on-device screen cache.
+    req.screenContext = undefined
     // Receipt Mode: ground a typed answer in the user's own past meetings. Match the brain against the
     // question (which already carries the live transcript tail via the renderer's withContext) and inject
     // the relevant, meeting-cited slice per-turn. Answer mode only — never the latency-critical spoken
@@ -2343,6 +2402,23 @@ function registerIpc(): void {
         req.brainContext = hit.block || undefined
       } catch (err) {
         console.warn('[brain] context assembly failed', err)
+      }
+      // Screen fast-path (M13): the renderer asked to answer from the pre-analyzed on-device screen context.
+      // Inject main's OWN cached description (re-validated for freshness/window match), plus a short recent-
+      // conversation tail so the answer fuses what's on screen with what's being said. Best-effort: if the
+      // cache went stale between the renderer's screen:context probe and now, answer from the prompt alone.
+      if (req.wantsScreenContext) {
+        try {
+          const ctx = screenPreprocess.currentFreshContext()
+          if (ctx?.description) {
+            const tail = (req.transcript ?? '').slice(-1500).trim()
+            req.screenContext = tail
+              ? `${ctx.description}\n\nRecent conversation (most recent speech):\n${tail}`
+              : ctx.description
+          }
+        } catch (err) {
+          mainLog.warn(`[screen-preprocess] context injection failed: ${err instanceof Error ? err.message : String(err)}`)
+        }
       }
     }
     const allowed = getAllowedProviders() // org allowlist (null = unrestricted)
@@ -3321,6 +3397,9 @@ if (!app.requestSingleInstanceLock()) {
   // phase as the first getSettings() read just above. See cahe-embedded-key.ts for the one-time-seed
   // design that lets a user's later key change/removal stick.
   importEmbeddedCaheKey()
+  // Cahê M13: one-time enable of the on-device model so the background screen reader works out of the box
+  // (own marker → also migrates existing pilot profiles upgraded from 1.0.7). See cahe-embedded-key.ts.
+  seedCaheLocalAiForBackgroundScreen()
   // Unpackaged (dev/QA) runs show Electron's default icon in the Dock — brand them with the Mantu M so
   // a dev window is never mistaken for "the Electron thing". Packaged builds get build/icon.png baked
   // in by electron-builder (mac .icns / win .ico) and don't need this.
@@ -3710,6 +3789,13 @@ app.on('will-quit', () => {
     }
   }
   if (notifTimer) clearInterval(notifTimer)
+  // Stop the background screen-preprocess watcher (kills its long-lived powershell child) before the
+  // sidecar kill — an orphaned watcher process outliving the app would keep polling the foreground window.
+  try {
+    screenPreprocess.stop()
+  } catch (e) {
+    mainLog.warn('[will-quit] screenPreprocess.stop failed', e)
+  }
   // Kill the llama-server sidecar synchronously (SIGKILL, F3 hardening) — without this an on-device
   // suggest/summary/vision sidecar could outlive the app the user just quit.
   try {

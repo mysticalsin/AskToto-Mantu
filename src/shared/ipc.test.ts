@@ -2,6 +2,7 @@ import { describe, it, expect, vi, afterEach } from 'vitest'
 import {
   AskStartSchema,
   CaptureResultSchema,
+  ScreenContextResultSchema,
   SettingsSchema,
   DEFAULT_SETTINGS,
   IPC,
@@ -141,7 +142,48 @@ describe('CaptureResultSchema', () => {
   })
 })
 
+describe('ScreenContextResultSchema (M13 screen fast-path)', () => {
+  it('accepts a description + capturedAt, or null', () => {
+    expect(ScreenContextResultSchema.safeParse({ description: 'a code editor', capturedAt: 1_700_000_000_000 }).success).toBe(true)
+    expect(ScreenContextResultSchema.safeParse(null).success).toBe(true)
+    expect(ScreenContextResultSchema.safeParse({ description: 'x', capturedAt: -1 }).success).toBe(false)
+  })
+})
+
+describe('AskStart screen fast-path fields (M13)', () => {
+  it('accepts the wantsScreenContext intent flag and a main-injected screenContext', () => {
+    const parsed = AskStartSchema.safeParse({
+      id: 'ask-sc',
+      mode: 'answer',
+      prompt: 'what am I looking at?',
+      wantsScreenContext: true,
+      screenContext: 'A spreadsheet with quarterly figures.',
+      history: []
+    })
+    expect(parsed.success).toBe(true)
+    if (parsed.success) {
+      expect(parsed.data.wantsScreenContext).toBe(true)
+      expect(parsed.data.screenContext).toContain('spreadsheet')
+    }
+  })
+
+  it('caps screenContext length (defense against a hostile renderer)', () => {
+    const parsed = AskStartSchema.safeParse({
+      id: 'ask-big',
+      mode: 'answer',
+      prompt: 'q',
+      screenContext: 'x'.repeat(8001),
+      history: []
+    })
+    expect(parsed.success).toBe(false)
+  })
+})
+
 describe('SettingsSchema', () => {
+  it('defaults backgroundScreenContext on (inert until Local AI is enabled)', () => {
+    expect(DEFAULT_SETTINGS.backgroundScreenContext).toBe(true)
+  })
+
   it('rejects custom provider with an empty base URL', () => {
     const invalid = {
       ...DEFAULT_SETTINGS,
