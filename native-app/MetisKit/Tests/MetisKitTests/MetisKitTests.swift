@@ -1,0 +1,47 @@
+import XCTest
+@testable import MetisKit
+
+final class MetisKitTests: XCTestCase {
+    func testTranscriptTailBoundsAndLabels() {
+        var m = Meeting(title: "Q3 review", startedAt: Date())
+        m.lines = [
+            TranscriptLine(speaker: .them, name: "Jane", text: "Can you send the DPO note?", at: Date()),
+            TranscriptLine(speaker: .me, text: "Yes, by Friday.", at: Date()),
+            TranscriptLine(speaker: .them, text: "And the Mac rollout timeline?", at: Date())
+        ]
+        let tail = m.transcriptTail(maxChars: 6000)
+        XCTAssertTrue(tail.contains("Jane: Can you send"))
+        XCTAssertTrue(tail.contains("You: Yes, by Friday"))
+        XCTAssertTrue(tail.contains("Them: And the Mac rollout"))
+    }
+
+    func testTranscriptTailTruncatesToLastChars() {
+        var m = Meeting(title: "long", startedAt: Date())
+        m.lines = (0..<500).map { TranscriptLine(speaker: .them, text: "line number \($0) with some content", at: Date()) }
+        XCTAssertLessThanOrEqual(m.transcriptTail(maxChars: 1000).count, 1000)
+    }
+
+    func testHeuristicIntelligenceNeverThrowsAndIsUnavailable() async throws {
+        let intel = HeuristicIntelligence()
+        if case .available = intel.availability { XCTFail("heuristic must report unavailable") }
+        let s = try await intel.suggest(transcriptTail: "Them: what's the status?")
+        XCTAssertFalse(s.isEmpty)
+        let empty = try await intel.suggest(transcriptTail: "")
+        XCTAssertFalse(empty.isEmpty)
+        let sum = try await intel.summarize(transcriptTail: "Them: hi")
+        XCTAssertFalse(sum.headline.isEmpty)
+    }
+
+    func testHeuristicStreamYieldsOneshot() async throws {
+        var out = ""
+        for try await chunk in HeuristicIntelligence().suggestStream(transcriptTail: "Them: hello") { out += chunk }
+        XCTAssertFalse(out.isEmpty)
+    }
+
+    func testMakeMeetingIntelligenceResolves() {
+        // On CI/simulator without the model this returns the heuristic; on an Apple-Intelligence device
+        // it returns the Foundation Model impl. Either way it must resolve to a working instance.
+        let intel = makeMeetingIntelligence()
+        _ = intel.availability // must not crash
+    }
+}
