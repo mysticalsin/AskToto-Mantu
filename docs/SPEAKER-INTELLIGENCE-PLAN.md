@@ -1,6 +1,6 @@
 # Métis Speaker Intelligence — Dual-Platform Design
 
-**Date:** 2026-07-16 · **Status:** design approved for build (research verified, 107-agent adversarial pass)
+**Date:** 2026-07-16 · **Status:** P1 SHIPPED (commit 5c90844) — live session labels + persistent voiceprints behind Settings → Local AI → "Speaker identification (beta)". Shipped: speaker-cluster.ts (pure online clustering), speaker-id.ts (sherpa extractor + voiceprint store + enroll/delete), parakeet:feed label ride-along into the transcript `name` field, CAM++ en model provisioning (fetch-speaker-model.mjs, all 8 packaging chains, both platforms), real-model integration test. P2 next: enrollment UI, Teams-VTT auto-enrollment flywheel, echo defense, offline refinement pass.
 **Goal:** live "who's speaking" in every meeting — Teams-grade attribution without platform audio access — plus a voice memory that trains itself. One source tree, macOS + Windows identical (all sherpa-onnx CPU).
 
 ---
