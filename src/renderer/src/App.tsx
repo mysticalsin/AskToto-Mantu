@@ -31,6 +31,7 @@ import { PROVIDERS, isDustReady } from '@shared/providers'
 import { ASSIST_PROMPT, buildNoDecisionPrompt } from '@shared/prompts'
 import { isScreenCapturePermissionError } from '@shared/screen-capture'
 import { detectNoDecisionEnding } from '@shared/wrapup'
+import { transcriptStateKey } from '@shared/hash'
 import {
   FACT_CHECK_SCREEN_PROMPT,
   LOCAL_SCREEN_SUMMARY_PROMPT,
@@ -172,9 +173,10 @@ export function App(): JSX.Element {
   // True while the copilot card should display the speculative answer (set by whatNext's instant path).
   // Any REAL suggest run (new suggest.answer id) or the meeting ending switches back automatically.
   const [showSpec, setShowSpec] = useState(false)
-  // Transcript watermark of the last speculative run — freshness = the conversation hasn't moved on
-  // (≤2 new lines) since the suggestion was generated.
-  const specWatermarkRef = useRef({ lineCount: 0, at: 0 })
+  // Transcript watermark of the last speculative run. `key` is a content hash of the exact transcript
+  // tail the shadow suggestion was generated from — freshness = the CONVERSATION STATE still matches
+  // (precise), not merely "≤2 new lines" (which could adopt a stale answer or miss a fresh one).
+  const specWatermarkRef = useRef({ lineCount: 0, at: 0, key: 0 })
   // Watermark for the Métis Local pre-warm ping (PLAN.md §4.4) — same {lineCount, at} idiom as
   // specWatermarkRef above, on its own ~5s cadence independent of the 15s shadow-suggestion one below.
   const prewarmWatermarkRef = useRef({ lineCount: 0, at: 0 })
@@ -963,12 +965,32 @@ export function App(): JSX.Element {
     requireProvider
   ])
 
+  // Adopt the pre-generated shadow suggestion INSTANTLY — no round trip — when it exists, isn't
+  // streaming/errored, and was generated from the SAME conversation state we're in now (content-hash
+  // match, not a line-count guess). Returns true when it painted the spec. Single source of truth for
+  // every "what to say next" entry point so the adopt rule can't drift between them.
+  const tryAdoptSpeculative = useCallback((): boolean => {
+    const spec = speculative.answer
+    if (
+      settings?.instantSuggestions === false ||
+      !spec?.text ||
+      spec.streaming ||
+      spec.error ||
+      transcriptStateKey(listen.text()) !== specWatermarkRef.current.key
+    ) {
+      return false
+    }
+    setShowSpec(true)
+    return true
+  }, [speculative.answer, settings?.instantSuggestions, listen.text])
+
   const answerNow = useCallback(() => {
     if (!requireProvider('suggest')) return
     setView('copilot')
     setCollapsed(false)
+    if (tryAdoptSpeculative()) return // pre-generated answer already ready — paint it with no round trip
     suggest.run({ mode: 'suggest', transcript: listen.text() })
-  }, [suggest.run, listen.text, requireProvider])
+  }, [suggest.run, listen.text, requireProvider, tryAdoptSpeculative])
 
   // Instant-suggestion machinery (settings.instantSuggestions, default on):
   // 1) While a meeting is live, pre-generate a shadow "what to say next" whenever the OTHER side has
@@ -986,8 +1008,9 @@ export function App(): JSX.Element {
     const w = specWatermarkRef.current
     if (lines.length === w.lineCount || Date.now() - w.at < 15_000) return
     if (ask.answer?.streaming || suggest.answer?.streaming || speculative.answer?.streaming) return
-    specWatermarkRef.current = { lineCount: lines.length, at: Date.now() }
-    speculative.run({ mode: 'suggest', transcript: listen.text() })
+    const transcript = listen.text()
+    specWatermarkRef.current = { lineCount: lines.length, at: Date.now(), key: transcriptStateKey(transcript) }
+    speculative.run({ mode: 'suggest', transcript })
   }, [
     listen.lines,
     listen.listening,
@@ -1076,19 +1099,10 @@ export function App(): JSX.Element {
     // provider even when the suggest gate above passed on localSuggestReady alone.
     if (route.transport === 'text' && !requireProvider()) return
     if (route.transport === 'suggest') {
-      // Instant path: a fresh speculative suggestion (conversation moved ≤2 lines since it generated)
-      // paints IMMEDIATELY — no round trip. A stale/absent one falls through to the normal live run.
-      const spec = speculative.answer
-      const fresh =
-        settings?.instantSuggestions !== false &&
-        !!spec?.text &&
-        !spec.streaming &&
-        !spec.error &&
-        listen.lines.length - specWatermarkRef.current.lineCount <= 2
-      if (fresh) {
-        setShowSpec(true)
-        return
-      }
+      // Instant path: a fresh speculative suggestion generated from the SAME conversation state paints
+      // IMMEDIATELY — no round trip. A stale/absent one falls through to the normal live run. Shared
+      // adopt rule (content-hash match) with answerNow via tryAdoptSpeculative.
+      if (tryAdoptSpeculative()) return
       suggest.run({ mode: 'suggest', transcript, history: copilotHistoryRef.current })
       return
     }
@@ -1102,14 +1116,12 @@ export function App(): JSX.Element {
     ask.fail,
     ask.run,
     suggest.run,
-    speculative.answer,
     listen.text,
-    listen.lines,
     askScreen,
     settings?.screenAsk,
     settings?.visionAvailable,
-    settings?.instantSuggestions,
-    requireProvider
+    requireProvider,
+    tryAdoptSpeculative
   ])
 
   // Spotlight Ref only ever uses the locked Dust agent — never the globally active provider — so its
