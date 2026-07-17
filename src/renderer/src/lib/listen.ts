@@ -123,7 +123,7 @@ export interface ListenApi {
   // hits this, since the large model is deliberately excluded from release resources. Lets a caller show
   // an honest "reduced" state instead of the toggle silently always running whisper-base.
   qualityDegraded: boolean
-  start: (source: AudioSource, quality?: 'best' | 'fast', engine?: 'whisper' | 'parakeet') => Promise<void>
+  start: (source: AudioSource, quality?: 'best' | 'fast', engine?: 'whisper' | 'parakeet' | 'apple') => Promise<void>
   /** onDrained (optional) fires once the up-to-DRAIN_CEILING_MS post-stop drain has fully settled — i.e.
    *  after the final flushed window has committed via commitLine, so `text()` read inside it reflects the
    *  complete transcript. Skipped if a fresh start() supersedes this session before the drain finishes. */
@@ -187,7 +187,7 @@ export function useListen(
 
   const workerRef = useRef<Worker | null>(null)
   const loadedQualityRef = useRef<'best' | 'fast' | null>(null) // quality the warm worker was loaded with
-  const engineRef = useRef<'whisper' | 'parakeet'>('whisper') // active ASR engine for this session
+  const engineRef = useRef<'whisper' | 'parakeet' | 'apple'>('whisper') // active ASR engine for this session
   // Cached bundled-model flag: queried once from the main process and reused for every init message.
   // Fail closed on an IPC/preload error: installed builds must never turn a broken capability probe into
   // a remote model fetch. `false` is returned deliberately by the main process only for an unprovisioned
@@ -328,6 +328,45 @@ export function useListen(
         })
       return
     }
+    if (engineRef.current === 'apple') {
+      // Apple Speech (SFSpeechRecognizer, on-device) also runs in the MAIN process via the mac-helper
+      // sidecar — same batch-per-window IPC contract as Parakeet above, just a different engine and IPC
+      // channel. Reuses the exact same race-against-timeout / failure-count / empty-run / fallback-to-
+      // Whisper logic (the two engines are mutually exclusive per session, so sharing the counters is safe).
+      const feed = window.toto.appleSpeechFeed(job.audio, job.speaker)
+      const timeout = new Promise<string>((_, reject) =>
+        setTimeout(() => reject(new Error('apple speech feed timed out')), PARAKEET_FEED_TIMEOUT_MS)
+      )
+      void Promise.race([feed, timeout])
+        .then((res) => {
+          const text = typeof res === 'string' ? res : res.text
+          const speakerName = typeof res === 'string' ? undefined : res.name
+          parakeetFailures.current = 0 // success (even empty) resets the IPC-failure streak
+          if (text === '') {
+            parakeetEmptyRunRef.current += 1
+            if (parakeetEmptyRunRef.current >= PARAKEET_EMPTY_RUN_MAX) {
+              console.warn('[listen] apple speech returning empty every window — falling back to Whisper')
+              fallBackToWhisper()
+            }
+          } else {
+            parakeetEmptyRunRef.current = 0
+            commitLine(text, job.speaker, speakerName)
+          }
+        })
+        .catch((err) => {
+          parakeetFailures.current += 1
+          console.warn(
+            `[listen] apple speech window failed (${parakeetFailures.current}/${PARAKEET_MAX_FAILURES}):`,
+            (err as Error)?.message
+          )
+          if (parakeetFailures.current >= PARAKEET_MAX_FAILURES) fallBackToWhisper()
+        })
+        .finally(() => {
+          busy.current = false
+          pump()
+        })
+      return
+    }
     if (!workerRef.current) {
       busy.current = false
       return
@@ -416,12 +455,13 @@ export function useListen(
   // lost, but every subsequent window is transcribed by Whisper once its worker finishes loading.
   // (ensureWorker/getAsrBundled are stable; referenced from pump above before this line — fine at call time.)
   const fallBackToWhisper = useCallback((): void => {
-    if (engineRef.current !== 'parakeet') return // already switched
-    console.warn('[listen] parakeet failing repeatedly — switching to Whisper for the rest of this session')
+    if (engineRef.current !== 'parakeet' && engineRef.current !== 'apple') return // already switched
+    const failedEngine = engineRef.current
+    console.warn(`[listen] ${failedEngine} failing repeatedly — switching to Whisper for the rest of this session`)
     engineRef.current = 'whisper'
     readyRef.current = false
     parakeetFailures.current = 0
-    onFallbackRef.current?.('Parakeet failed repeatedly')
+    onFallbackRef.current?.(`${failedEngine === 'apple' ? 'Apple Speech' : 'Parakeet'} failed repeatedly`)
     // loading only — no live `error` banner. The engine swap happens silently; onEngineFallback records
     // it somewhere checkable (Settings) instead of interrupting the meeting.
     setState((s) => ({ ...s, loading: true }))
@@ -742,7 +782,7 @@ export function useListen(
     async (
       source: AudioSource,
       quality: 'best' | 'fast' = 'best',
-      engine: 'whisper' | 'parakeet' = 'whisper'
+      engine: 'whisper' | 'parakeet' | 'apple' = 'whisper'
     ): Promise<void> => {
       // Re-entrancy guard: a rapid double-click/double-hotkey calls start() twice before React re-renders
       // listen.listening to true (that state flip is async), so this MUST be a synchronous ref check right
@@ -815,6 +855,23 @@ export function useListen(
             console.warn('[listen] parakeet unavailable, using whisper:', (e as Error)?.message)
             engineRef.current = 'whisper'
           }
+        }
+
+        if (engine === 'apple') {
+          // Apple Speech also runs in the MAIN process via the mac-helper sidecar, but — unlike
+          // Parakeet — ships no bundled model to check/download: availability (macOS + helper present +
+          // on-device authorization) is resolved lazily inside appleSpeechTranscribe. A genuinely
+          // unavailable engine (non-mac, helper missing, authorization denied) simply returns '' for
+          // every window, which the empty-run fallback in pump() above already catches — so there is no
+          // separate status/ensure round trip to make here.
+          if (workerRef.current) {
+            workerRef.current.terminate()
+            workerRef.current = null
+          }
+          loadedQualityRef.current = null
+          readyRef.current = true
+          setState((s) => ({ ...s, ready: true, loading: false, loadingPct: null }))
+          pump()
         }
 
         if (!liveRef.current) return

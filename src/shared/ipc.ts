@@ -64,6 +64,10 @@ export const IPC = {
   parakeetEnsure: 'parakeet:ensure',
   parakeetFeed: 'parakeet:feed',
   parakeetProgress: 'parakeet:progress',
+  // Apple Speech (SFSpeechRecognizer, on-device via the mac-helper sidecar) — opt-in third ASR engine.
+  // No status/ensure/progress channels: unlike Parakeet there is no bundled model to download: the
+  // helper binary either transcribes or the call resolves to '' (see main/apple-speech.ts).
+  appleSpeechFeed: 'apple-speech:feed',
   askStart: 'ask:start',
   askCancel: 'ask:cancel',
   streamDelta: 'stream:delta',
@@ -727,7 +731,9 @@ export const BaseSettingsSchema = z.object({
   overlayOpacity: z.number().min(0.3).max(1.5).default(1),
   showFullTranscriptInReview: z.boolean().default(false), // review = summary-first; transcript opt-in
   asrQuality: z.enum(['best', 'fast']).default('fast'), // packaged builds use the bundled compact model for both modes
-  asrEngine: z.enum(['whisper', 'parakeet']).default('parakeet'), // parakeet = European, fastest (default); whisper = ~99 langs
+  // parakeet = European, fastest (default); whisper = ~99 langs; apple = on-device Apple Speech
+  // (SFSpeechRecognizer via the mac-helper sidecar), opt-in, macOS 13+ only — see main/apple-speech.ts.
+  asrEngine: z.enum(['whisper', 'parakeet', 'apple']).default('parakeet'),
   // A mid-session Parakeet→Whisper fallback (repeated failures) used to surface as a live error banner
   // during the meeting — distracting for something that's really just a background engine swap. Tracked
   // here instead so it's checkable in Settings after the fact, never shown live. Persists until the user
