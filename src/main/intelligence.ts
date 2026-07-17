@@ -64,6 +64,10 @@ export function openIntelligenceWindow(): { ok: boolean; error?: string } {
     minHeight: 600,
     title: 'Mantu Intelligence',
     backgroundColor: '#120022',
+    // Métis never shows in the Windows taskbar (Tony, 2026-07-16) — this was the only visible window
+    // without the flag, so it alone created a taskbar entry. Alt-Tab still reaches it; the tray is the
+    // app's persistent affordance.
+    skipTaskbar: true,
     webPreferences: {
       preload: join(__dirname, '../preload/intelligence.js'),
       sandbox: true,
