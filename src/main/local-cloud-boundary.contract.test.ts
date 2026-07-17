@@ -25,4 +25,23 @@ describe('local processing privacy boundary', () => {
     const body = source.slice(start, start + 2_600)
     expect(body).toMatch(/provider !== 'local' && failover\(attempted\.concat\(provider\)\)/)
   })
+
+  it('redacts the screen description before it crosses to a cloud provider (redactSensitive)', () => {
+    // On macOS the pre-analyzed screen context can be a VERBATIM OCR extract (open password manager,
+    // terminal with an API key). The injection into req.screenContext — which flows to whatever answer
+    // provider is active, cloud included — must be built from the redacted local, never the raw field.
+    const start = source.indexOf('if (req.wantsScreenContext) {')
+    expect(start).toBeGreaterThan(-1)
+    const end = source.indexOf('} catch (err) {', start)
+    expect(end).toBeGreaterThan(start)
+    const body = source.slice(start, end)
+    expect(body).toMatch(
+      /const description = s\.redactSensitive \? redactSecrets\(ctx\.description\) : ctx\.description/
+    )
+    // From the assignment onward, only the redacted `description` local may be referenced — a future
+    // edit reintroducing raw ctx.description into the assembled context must fail here.
+    const assignIdx = body.indexOf('req.screenContext =')
+    expect(assignIdx).toBeGreaterThan(-1)
+    expect(body.slice(assignIdx)).not.toMatch(/ctx\.description/)
+  })
 })

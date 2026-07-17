@@ -50,4 +50,18 @@ describe('will-quit handler crash guard', () => {
     const stopSeg = handler.slice(guardBlockEnd, stopIdx + 40)
     expect(stopSeg).toMatch(/try\s*\{[\s\S]*localRuntime\.stop\(\)/)
   })
+
+  it('kills the Apple fm-serve sidecar too, in its OWN try (an orphaned unauthenticated loopback server is worse)', () => {
+    // Same F3 contract as llama-server: fmRuntime.stop() must sit in the handler, AFTER
+    // localRuntime.stop(), inside its own independent try/catch — a throw from the llama kill must
+    // never skip the fm kill.
+    const llamaStopIdx = handler.indexOf('localRuntime.stop()')
+    const fmStopIdx = handler.indexOf('fmRuntime.stop()')
+    expect(fmStopIdx).toBeGreaterThan(llamaStopIdx)
+    const between = handler.slice(llamaStopIdx, fmStopIdx)
+    // The llama try-block closes (its catch appears) before the fm call starts — independence proven
+    // by the catch boundary between the two stop calls.
+    expect(between).toMatch(/catch/)
+    expect(between).toMatch(/try\s*\{\s*$/m)
+  })
 })
