@@ -212,9 +212,12 @@ describe('ensureLocalRuntimeStarted', () => {
 })
 
 // ─── The handler's full body, composed from the primitives above ──────────────────────────────────────
-// Mirrors index.ts's local:prewarm handler EXACTLY (assertMainWindow + zod parse are the only steps not
-// reproduced here — assertMainWindow has its own IPC-sender-boundary test coverage via the existing
-// import-decoder tests, and the zod parse is covered by the LocalPrewarmPayloadSchema suite above).
+// Mirrors the LLAMA branch of index.ts's local:prewarm handler (assertMainWindow + zod parse are the only
+// steps not reproduced here — assertMainWindow has its own IPC-sender-boundary test coverage via the
+// existing import-decoder tests, and the zod parse is covered by the LocalPrewarmPayloadSchema suite
+// above). Since the Apple fm-serve engine landed, the real handler routes through local.ts's
+// engine-aware prewarmLocal(); the markActivity → ensure → prewarm sequence below is exactly its llama
+// branch, and the engine dispatch itself (apple vs llama) is proven in local.engine.test.ts.
 async function runPrewarmHandler(s: Settings, allowed: string[] | null, text: string): Promise<void> {
   if (!localPrewarmEligible(s, allowed)) return
   localRuntimeMock.markActivity()

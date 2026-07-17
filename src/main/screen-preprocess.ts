@@ -58,6 +58,11 @@ export interface ScreenPreprocessDeps {
   }
   /** Construct the foreground watcher (injected so tests supply a fake that drives onChange). */
   startWatcher: (onChange: (info: ForegroundInfo) => void) => ForegroundWatcher
+  /** Optional structured OCR (mac-helper.ts's extractScreenText on macOS; undefined on Windows).
+   *  When present it is tried FIRST: a Vision-framework text extract is faster (~no model inference) and
+   *  more factual than a VLM caption for text-bearing screens. A null result (text-poor screen, helper
+   *  missing/failed) falls back to the VLM describe — the pre-OCR behavior, unchanged. */
+  extractScreenText?: (imageB64: string) => Promise<string | null>
   fetchImpl?: typeof fetch
   now?: () => number
   log?: (level: 'warn' | 'info', message: string) => void
@@ -201,14 +206,33 @@ export function createScreenPreprocess(deps: ScreenPreprocessDeps): ScreenPrepro
         cache = { ...cache, capturedAt: now() }
         return
       }
-      const text = await describeOnce(shot.image)
+      // OCR-first when the platform provides it (macOS Vision helper): no model inference, structured
+      // text, same cache/injection surface. Text-poor screens (or any OCR failure) fall through to the
+      // VLM caption — exactly the pre-OCR path. Both engines stay strictly on-device.
+      let mode: 'ocr' | 'vlm' = 'vlm'
+      let text = ''
+      if (deps.extractScreenText) {
+        const extracted = await deps.extractScreenText(shot.image).catch(() => null)
+        if (extracted) {
+          text = extracted
+          mode = 'ocr'
+        }
+      }
+      if (!text) text = await describeOnce(shot.image)
       if (!text) return
       // Commit only if the user hasn't switched away mid-describe (else we'd cache the wrong window's text
       // under the new window's focus). If the watcher can't report a window, trust forWindowId.
       const stillHere = activeWindowId() === null || activeWindowId() === forWindowId
       if (!stillHere) return
       cache = { description: text, capturedAt: now(), windowId: forWindowId, screenHash: hash }
-      deps.audit?.('screen.preprocess.describe', { windowId: forWindowId, chars: text.length })
+      // `mode` is only meaningful (and only emitted) where an OCR engine exists — keeps the Windows
+      // audit-log record byte-identical to pre-OCR builds (review finding).
+      deps.audit?.(
+        'screen.preprocess.describe',
+        deps.extractScreenText
+          ? { windowId: forWindowId, chars: text.length, mode }
+          : { windowId: forWindowId, chars: text.length }
+      )
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e)
       if (/private view/i.test(msg)) {

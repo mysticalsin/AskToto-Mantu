@@ -126,6 +126,12 @@ mac:
   extraResources:
     - from: resources/llama/mac
       to: llama/mac
+    # metis-mac-helper Swift sidecar (Vision OCR + NSWorkspace frontmost watcher for background screen
+    # context) — built by scripts/build-mac-helper.mjs, guarded by scripts/check-mac-helper.mjs in every
+    # mac packaging chain. mac-helper.ts resolves it at process.resourcesPath/mac-helper. Signed by the
+    # same hardenedRuntime pass that covers llama-server/ffmpeg. The mas target inherits this list.
+    - from: resources/mac-helper
+      to: mac-helper
   hardenedRuntime: true
   entitlements: build/entitlements.mac.plist
   entitlementsInherit: build/entitlements.mac.plist

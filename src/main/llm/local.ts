@@ -1,5 +1,8 @@
+import type { AskMode } from '@shared/ipc'
+import { mainLog } from '../logger'
 import { modelPaths as resolveLocalModelPaths, verifyIntegrity } from './local-models'
 import * as localRuntime from './local-runtime'
+import * as fmRuntime from './fm-runtime'
 import { streamOpenAI } from './openai'
 import { type StreamOptions, type StreamHandle, errMsg } from './shared'
 
@@ -71,73 +74,157 @@ export async function ensureLocalRuntimeStarted(modelId: string): Promise<void> 
   await localRuntime.start({ gguf: paths.gguf, mmproj: paths.mmproj })
 }
 
+export type LocalEngine = 'llama' | 'apple'
+
+/**
+ * Which engine serves THIS local request. The Apple Foundation Models engine (fm-runtime.ts, macOS 27+)
+ * takes text modes (suggest/summary) whenever Apple Intelligence is live on the machine — better model
+ * than the bundled Qwen, zero extra RAM, no weights to load. Vision stays on llama-server's mmproj until
+ * `fm serve` image input is verified end-to-end (fm respond documents --image; the serve surface is
+ * unproven — flip vision over only behind that proof). Every "no" answer — wrong platform, no binary,
+ * Apple Intelligence off, crash budget exhausted, METIS_DISABLE_APPLE_FM=1 — lands on 'llama', so
+ * Windows and macOS 26 behavior is byte-identical to before this engine existed.
+ */
+export async function pickLocalEngine(mode: AskMode): Promise<LocalEngine> {
+  if (mode === 'vision') return 'llama'
+  if (fmRuntime.disabledByEnv() || !fmRuntime.supported()) return 'llama'
+  if (fmRuntime.getState() === 'unavailable') return 'llama'
+  const availability = await fmRuntime.probeAvailability()
+  return availability.available ? 'apple' : 'llama'
+}
+
+/**
+ * Engine-aware prewarm used by index.ts's local:prewarm handler. Apple engine: model residency is
+ * OS-managed, so the win is just having `fm serve` up + the model mapped before the first real suggest —
+ * no per-slot KV pinning exists to warm. Llama engine: the original path, verbatim (markActivity before
+ * ensure, then the slot-0 cache_prompt prefill).
+ */
+export async function prewarmLocal(
+  modelId: string,
+  messages: Array<{ role: string; content: string }>
+): Promise<void> {
+  if ((await pickLocalEngine('suggest')) === 'apple') {
+    await fmRuntime.start()
+    fmRuntime.markActivity()
+    fmRuntime.prewarm(messages)
+    return
+  }
+  localRuntime.markActivity()
+  await ensureLocalRuntimeStarted(modelId)
+  localRuntime.prewarm(messages)
+}
+
 export function streamLocal(opts: StreamOptions): StreamHandle {
   let aborted = false
   let inner: StreamHandle | null = null
-  // Guards localRuntime.beginStream()/endStream() pairing (switch-kill hardening): true from the instant
-  // streamOpenAI() is invoked (the sidecar is now actively serving this request) until exactly one of
-  // onDone/onError/abort releases it. While any stream holds this, local-runtime.ts's start() will defer
-  // rather than SIGKILL the sidecar out from under it on a model switch.
-  let streamActive = false
+  // Engine-owned release for the beginStream()/endStream() pairing (switch-kill hardening on llama;
+  // idle/teardown accounting on fm). Set by whichever engine actually attaches a stream, fired exactly
+  // once by onDone/onError/abort. While llama holds this, local-runtime.ts's start() defers rather than
+  // SIGKILL the sidecar out from under the request on a model switch.
+  let release: (() => void) | null = null
   const releaseStream = (): void => {
-    if (!streamActive) return
-    streamActive = false
-    localRuntime.endStream()
+    if (!release) return
+    const r = release
+    release = null
+    r()
+  }
+
+  // These local modes carry all current context in transcript/screenshot + prompt. Generic chat history
+  // is unrelated stale input here and is unbounded at the IPC schema, so never let it consume the fixed
+  // context budget — identical bounds on both engines so an engine hop never changes what the model sees.
+  const localReq = boundedLocalRequest(opts.req)
+  const localSystem = boundedLocalSystem(opts.system)
+  const maxOutputTokens =
+    opts.maxOutputTokens ??
+    (opts.req.mode === 'suggest'
+      ? LOCAL_OUTPUT_TOKEN_BUDGETS.suggest
+      : opts.req.mode === 'summary'
+        ? LOCAL_OUTPUT_TOKEN_BUDGETS.summary
+        : LOCAL_OUTPUT_TOKEN_BUDGETS.vision)
+
+  // Re-arm the engine's 15-minute idle-stop countdown when the response finishes (success or error), not
+  // just when it starts — a long-running stream would otherwise let the idle timer, armed only at start,
+  // fire mid-stream on an unrelated schedule.
+  const wrapHandlers = (markActivity: () => void): StreamOptions['handlers'] => ({
+    ...opts.handlers,
+    onDone: (u) => {
+      releaseStream()
+      markActivity()
+      opts.handlers.onDone(u)
+    },
+    onError: (message) => {
+      releaseStream()
+      markActivity()
+      opts.handlers.onError(message)
+    }
+  })
+
+  const runLlama = async (): Promise<void> => {
+    await ensureLocalRuntimeStarted(opts.model)
+    if (aborted) return // caller aborted while the sidecar was still starting — never start a stream
+    localRuntime.markActivity()
+    // Suggest and summary pin the SAME slots the pre-warm path (Rock 5) targets, so cache_prompt
+    // actually hits on the real request. Vision (and any other in-scope mode) still asks for
+    // cache_prompt without pinning a slot — a screenshot turn has no reusable transcript prefix.
+    const llamaSlotOptions =
+      opts.req.mode === 'suggest'
+        ? { id_slot: 0, cache_prompt: true }
+        : opts.req.mode === 'summary'
+          ? { id_slot: 1, cache_prompt: true }
+          : { cache_prompt: true }
+    localRuntime.beginStream()
+    release = () => localRuntime.endStream()
+    inner = streamOpenAI({
+      ...opts,
+      baseURL: localRuntime.baseURL(),
+      apiKey: localRuntime.sessionKey(),
+      req: localReq,
+      system: localSystem,
+      maxOutputTokens,
+      llamaSlotOptions,
+      handlers: wrapHandlers(() => localRuntime.markActivity())
+    })
+  }
+
+  const runApple = async (): Promise<void> => {
+    await fmRuntime.start()
+    if (aborted) return
+    fmRuntime.markActivity()
+    fmRuntime.beginStream()
+    release = () => fmRuntime.endStream()
+    inner = streamOpenAI({
+      ...opts,
+      baseURL: fmRuntime.baseURL(),
+      // `fm serve` has no auth surface (see fm-runtime.ts module doc) — the SDK requires a non-empty
+      // string, and this placeholder never leaves the loopback interface.
+      apiKey: 'fm-loopback',
+      model: fmRuntime.FM_SYSTEM_MODEL,
+      req: localReq,
+      system: localSystem,
+      maxOutputTokens,
+      // llama-server-specific cache pinning must never reach fm serve — unknown body fields are the
+      // classic strict-parser 400.
+      llamaSlotOptions: undefined,
+      handlers: wrapHandlers(() => fmRuntime.markActivity())
+    })
   }
 
   void (async () => {
     try {
-      await ensureLocalRuntimeStarted(opts.model)
-      if (aborted) return // caller aborted while the sidecar was still starting — never start a stream
-      localRuntime.markActivity()
-      // Suggest and summary pin the SAME slots the pre-warm path (Rock 5) targets, so cache_prompt
-      // actually hits on the real request. Vision (and any other in-scope mode) still asks for
-      // cache_prompt without pinning a slot — a screenshot turn has no reusable transcript prefix.
-      const llamaSlotOptions =
-        opts.req.mode === 'suggest'
-          ? { id_slot: 0, cache_prompt: true }
-          : opts.req.mode === 'summary'
-            ? { id_slot: 1, cache_prompt: true }
-            : { cache_prompt: true }
-      // These local modes carry all current context in transcript/screenshot + prompt. Generic chat history
-      // is unrelated stale input here and is unbounded at the IPC schema, so never let it consume the fixed
-      // sidecar slot. This does not change any cloud request.
-      const localReq = boundedLocalRequest(opts.req)
-      const localSystem = boundedLocalSystem(opts.system)
-      const maxOutputTokens =
-        opts.maxOutputTokens ??
-        (opts.req.mode === 'suggest'
-          ? LOCAL_OUTPUT_TOKEN_BUDGETS.suggest
-          : opts.req.mode === 'summary'
-            ? LOCAL_OUTPUT_TOKEN_BUDGETS.summary
-            : LOCAL_OUTPUT_TOKEN_BUDGETS.vision)
-      streamActive = true
-      localRuntime.beginStream()
-      inner = streamOpenAI({
-        ...opts,
-        baseURL: localRuntime.baseURL(),
-        apiKey: localRuntime.sessionKey(),
-        req: localReq,
-        system: localSystem,
-        maxOutputTokens,
-        llamaSlotOptions,
-        // Re-arm the 15-minute idle-stop countdown when this response finishes (success or error), not
-        // just when it starts (markActivity() above) — a long-running stream would otherwise let the
-        // idle timer, armed only at start, fire mid-stream on an unrelated schedule.
-        handlers: {
-          ...opts.handlers,
-          onDone: (u) => {
-            releaseStream()
-            localRuntime.markActivity()
-            opts.handlers.onDone(u)
-          },
-          onError: (message) => {
-            releaseStream()
-            localRuntime.markActivity()
-            opts.handlers.onError(message)
-          }
+      if ((await pickLocalEngine(opts.req.mode)) === 'apple') {
+        try {
+          await runApple()
+          return
+        } catch (err) {
+          // The Apple engine failed to START (stream errors after start report via handlers, never throw
+          // here) — no tokens were sent, so falling back to llama-server is lossless. probeAvailability's
+          // cache said yes but the live spawn said no (e.g. Apple Intelligence toggled off mid-session).
+          if (aborted) return
+          releaseStream()
+          mainLog.warn('[local] apple engine failed to start — falling back to llama-server', errMsg(err))
         }
-      })
+      }
+      await runLlama()
     } catch (err) {
       releaseStream()
       if (!aborted) opts.handlers.onError(errMsg(err))
