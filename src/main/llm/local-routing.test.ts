@@ -54,6 +54,27 @@ const openaiMock = vi.hoisted(() => ({
 }))
 vi.mock('./openai', () => openaiMock)
 
+// This suite proves the LLAMA-engine contract (slot pinning, key injection, budgets). The Apple fm-serve
+// engine must stay out of the picture entirely — the node:fs mock above would otherwise make
+// fm-runtime.supported() see /usr/bin/fm as present and streamLocal's dispatch would spawn a REAL
+// `fm available` probe mid-test. Engine-dispatch behavior has its own suite: local.engine.test.ts.
+const fmRuntimeMock = vi.hoisted(() => ({
+  FM_SYSTEM_MODEL: 'system',
+  disabledByEnv: vi.fn(() => false),
+  supported: vi.fn(() => false),
+  getState: vi.fn(() => 'stopped' as const),
+  probeAvailability: vi.fn(async () => ({ available: false, reason: 'binary-missing' })),
+  start: vi.fn(async () => {}),
+  baseURL: vi.fn(() => 'http://127.0.0.1:9999/v1'),
+  markActivity: vi.fn(),
+  beginStream: vi.fn(),
+  endStream: vi.fn(),
+  activeStreams: vi.fn(() => 0),
+  prewarm: vi.fn(),
+  stop: vi.fn()
+}))
+vi.mock('./fm-runtime', () => fmRuntimeMock)
+
 import {
   localEligibleFor,
   localBaseReady,

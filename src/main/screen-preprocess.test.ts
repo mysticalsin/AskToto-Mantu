@@ -9,6 +9,8 @@ function makeHarness(init?: {
   localReady?: boolean
   privateView?: boolean
   activeStreams?: number
+  /** Inject the optional OCR dep (mac path). ocrText/ocrThrow on state drive its behavior per test. */
+  withOcr?: boolean
 }) {
   let clock = 1_000_000
   const state = {
@@ -17,8 +19,11 @@ function makeHarness(init?: {
     privateView: init?.privateView ?? false,
     activeStreams: init?.activeStreams ?? 0,
     image: 'IMG_A',
-    describeBody: 'A code editor with an error panel.' as string | null
+    describeBody: 'A code editor with an error panel.' as string | null,
+    ocrText: null as string | null,
+    ocrThrow: false
   }
+  let ocrCalls = 0
   let currentWin: ForegroundInfo | null = null
   let watcher: ForegroundWatcher | null = null
   let fetchCalls = 0
@@ -55,6 +60,13 @@ function makeHarness(init?: {
       watcher = { stop: vi.fn(), current: () => currentWin }
       return watcher
     },
+    extractScreenText: init?.withOcr
+      ? async () => {
+          ocrCalls++
+          if (state.ocrThrow) throw new Error('helper died')
+          return state.ocrText
+        }
+      : undefined,
     fetchImpl,
     now: () => clock,
     log: () => {}
@@ -72,6 +84,7 @@ function makeHarness(init?: {
       currentWin = { windowId, pid: 1, title: 't' }
     },
     fetchCalls: () => fetchCalls,
+    ocrCalls: () => ocrCalls,
     peek: () => sp._test.peekCache()
   }
 }
@@ -199,5 +212,61 @@ describe('createScreenPreprocess — window change invalidation', () => {
     h.sp._test.handleWindowChange({ windowId: 'w2', pid: 2, title: 'other' })
     expect(h.peek()).toBeNull() // cache dropped synchronously on the change
     h.sp.stop() // clear the debounce timer the change scheduled
+  })
+})
+
+describe('createScreenPreprocess — OCR-first hybrid (mac Vision helper)', () => {
+  it('uses the OCR extract when present: no VLM call, no llama runtime spin-up', async () => {
+    const h = makeHarness({ withOcr: true })
+    h.state.ocrText = "Text visible on the user's screen (OCR extract, top to bottom):\nQ3 pipeline review"
+    h.sp.refresh()
+    h.setWindow('w1')
+    await h.sp._test.describeForWindow('w1')
+    expect(h.peek()?.description).toContain('Q3 pipeline review')
+    expect(h.ocrCalls()).toBe(1)
+    expect(h.fetchCalls()).toBe(0) // VLM describe never ran
+    expect(h.ensureStarted).not.toHaveBeenCalled() // OCR path never touches llama-server
+  })
+
+  it('falls back to the VLM caption when OCR returns null (text-poor screen)', async () => {
+    const h = makeHarness({ withOcr: true })
+    h.state.ocrText = null
+    h.sp.refresh()
+    h.setWindow('w1')
+    await h.sp._test.describeForWindow('w1')
+    expect(h.ocrCalls()).toBe(1)
+    expect(h.fetchCalls()).toBe(1)
+    expect(h.peek()?.description).toBe('A code editor with an error panel.')
+  })
+
+  it('falls back to the VLM caption when the OCR helper throws', async () => {
+    const h = makeHarness({ withOcr: true })
+    h.state.ocrThrow = true
+    h.sp.refresh()
+    h.setWindow('w1')
+    await h.sp._test.describeForWindow('w1')
+    expect(h.fetchCalls()).toBe(1)
+    expect(h.peek()?.description).toBe('A code editor with an error panel.')
+  })
+
+  it('without the OCR dep (Windows), behavior is byte-identical to before: VLM only', async () => {
+    const h = makeHarness()
+    h.sp.refresh()
+    h.setWindow('w1')
+    await h.sp._test.describeForWindow('w1')
+    expect(h.fetchCalls()).toBe(1)
+    expect(h.peek()?.description).toBe('A code editor with an error panel.')
+  })
+
+  it('OCR results still respect the screen-hash dedupe (unchanged screen re-uses the extract)', async () => {
+    const h = makeHarness({ withOcr: true })
+    h.state.ocrText = "Text visible on the user's screen (OCR extract, top to bottom):\nSame content"
+    h.sp.refresh()
+    h.setWindow('w1')
+    await h.sp._test.describeForWindow('w1')
+    expect(h.ocrCalls()).toBe(1)
+    h.advance(3000)
+    await h.sp._test.describeForWindow('w1')
+    expect(h.ocrCalls()).toBe(1) // unchanged hash: stamp refreshed, no second OCR
   })
 })

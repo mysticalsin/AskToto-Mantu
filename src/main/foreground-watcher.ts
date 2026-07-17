@@ -8,18 +8,26 @@
  * when the window changes — so main reads a trickle of change events, not a poll-per-second spawn storm
  * (each powershell.exe cold start is ~100-300ms; spawning one every second would dwarf the work it does).
  *
- * The watcher is Windows-only by design (the whole background-screen-preprocess feature targets the Windows
- * pilot). On other platforms startForegroundWatcher() returns an inert handle that never fires — callers
- * degrade to their existing behavior (no pre-describe), never crash.
+ * macOS uses the same protocol from a different producer: the bundled `metis-mac-helper watch-frontmost`
+ * Swift sidecar prints one identical `windowId \t pid \t title` line per NSWorkspace app activation
+ * (windowId = bundle id; app-level granularity — intra-app window/tab switches are covered by
+ * screen-preprocess's periodic content re-check, so no Accessibility permission is needed). Everything
+ * downstream of the spawn — parsing, dedupe, restart budget, stop() — is shared between the platforms.
+ *
+ * On platforms with no producer (linux, or a mac install missing the helper binary)
+ * startForegroundWatcher() returns an inert handle that never fires — callers degrade to their existing
+ * behavior (no event-driven pre-describe), never crash.
  */
 import { spawn, type ChildProcess } from 'node:child_process'
+import { macWatcherSpawnSpec } from './mac-helper'
 
 export interface ForegroundInfo {
-  /** Win32 HWND as a decimal string — stable per top-level window for its lifetime. */
+  /** Windows: Win32 HWND as a decimal string — stable per top-level window for its lifetime.
+   *  macOS: the frontmost app's bundle id (e.g. com.apple.finder) — app-level granularity. */
   windowId: string
   /** Owning process id (distinguishes two windows of different apps that reuse an HWND value over time). */
   pid: number
-  /** Window title (control chars stripped); may be '' for untitled/secure windows. */
+  /** Windows: window title. macOS: localized app name. Control chars/tabs stripped; may be ''. */
   title: string
 }
 
@@ -112,10 +120,28 @@ export function startForegroundWatcher(
   let restarts = 0
   let restartTimer: NodeJS.Timeout | null = null
 
-  if (platform !== 'win32') {
-    // Inert handle on non-Windows: the feature simply never pre-describes there.
+  // Resolve the per-platform producer command up front. No producer → inert handle: the feature simply
+  // never pre-describes event-driven on that platform (mac additionally requires the bundled helper).
+  let spawnSpec: { command: string; args: string[] } | null = null
+  if (platform === 'win32') {
+    spawnSpec = {
+      command: 'powershell.exe',
+      args: [
+        '-NoProfile',
+        '-NonInteractive',
+        '-ExecutionPolicy',
+        'Bypass',
+        '-EncodedCommand',
+        Buffer.from(WATCHER_PS, 'utf16le').toString('base64')
+      ]
+    }
+  } else if (platform === 'darwin') {
+    spawnSpec = macWatcherSpawnSpec()
+  }
+  if (!spawnSpec) {
     return { stop: () => {}, current: () => null }
   }
+  const { command, args } = spawnSpec
 
   const emit = (info: ForegroundInfo): void => {
     // Defensive re-dedupe (the script already dedupes) so a restart that re-emits the current window
@@ -127,14 +153,9 @@ export function startForegroundWatcher(
 
   const spawnOnce = (): void => {
     if (stopped) return
-    const encoded = Buffer.from(WATCHER_PS, 'utf16le').toString('base64')
     let proc: ChildProcess
     try {
-      proc = spawn(
-        'powershell.exe',
-        ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', encoded],
-        { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] }
-      )
+      proc = spawn(command, args, { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] })
     } catch (e) {
       opts.onError?.(e instanceof Error ? e.message : String(e))
       return

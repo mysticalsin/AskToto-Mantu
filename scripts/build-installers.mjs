@@ -104,6 +104,12 @@ for (const target of requestedTargets) {
 }
 for (const target of requestedTargets) run('node', ['scripts/fetch-llama-server.mjs', target])
 for (const target of requestedTargets) run('node', ['scripts/check-llama-sidecar.mjs', target])
+// metis-mac-helper Swift sidecar — must exist before a mac package or electron-builder only WARNS about
+// the missing extraResources dir and ships a silently degraded app (no Vision OCR, no frontmost watcher).
+if (requestedTargets.includes('mac')) {
+  run('node', ['scripts/build-mac-helper.mjs'])
+  run('node', ['scripts/check-mac-helper.mjs', 'mac'])
+}
 run('node', ['scripts/fetch-local-model.mjs'])
 run('node', ['scripts/check-local-model.mjs'])
 run('node', ['scripts/fetch-models.mjs'])

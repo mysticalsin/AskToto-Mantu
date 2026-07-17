@@ -89,7 +89,9 @@ import {
   pickPrimaryProvider,
   allowCrossProviderFailover
 } from './llm/local-routing'
-import { ensureLocalRuntimeStarted } from './llm/local'
+import { ensureLocalRuntimeStarted, prewarmLocal } from './llm/local'
+import * as fmRuntime from './llm/fm-runtime'
+import { extractScreenText } from './mac-helper'
 import { buildPrewarmMessages } from './llm/prewarm'
 import { listModels as listLocalModels } from './llm/local-models'
 import { createScreenPreprocess, type ScreenPreprocess } from './screen-preprocess'
@@ -853,6 +855,17 @@ function createWindow(): void {
   if (process.platform !== 'win32') win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true })
   win.setContentProtection(contentProtectionOn())
   win.setHiddenInMissionControl?.(true)
+  // Windows: the constructor's skipTaskbar:true is not durable — Electron/Windows re-adds the taskbar
+  // button after certain show/restore/focus transitions (long-standing upstream quirk). Re-assert on
+  // every transition that can resurrect it so the overlay NEVER appears in the taskbar (Tony, 2026-07-16:
+  // an overlay in the taskbar is pointless). Tray remains the discoverable affordance.
+  if (process.platform === 'win32') {
+    const overlay = win // capture THIS instance — the module-level `win` binding is reassignable
+    const reassertSkipTaskbar = (): void => overlay.setSkipTaskbar(true)
+    overlay.on('show', reassertSkipTaskbar)
+    overlay.on('restore', reassertSkipTaskbar)
+    overlay.on('focus', reassertSkipTaskbar)
+  }
 
   win.on('closed', () => {
     // Abort any in-flight LLM streams so their callbacks don't fire against a destroyed window.
@@ -1192,6 +1205,10 @@ const screenPreprocess: ScreenPreprocess = createScreenPreprocess({
     startForegroundWatcher(onChange, {
       onError: (message) => mainLog.warn(`[screen-preprocess] watcher: ${message}`)
     }),
+  // macOS: Vision-framework OCR via the bundled metis-mac-helper — tried before the VLM caption.
+  // Windows keeps the VLM-only path (extractScreenText returns null without a helper anyway, but gating
+  // here keeps the win32 wiring visibly identical to before).
+  extractScreenText: process.platform === 'darwin' ? extractScreenText : undefined,
   log: (level, message) => (level === 'warn' ? mainLog.warn(message) : mainLog.info(message)),
   audit: (event, data) => auditLog(event as Parameters<typeof auditLog>[0], data)
 })
@@ -2257,12 +2274,12 @@ function registerIpc(): void {
     if (!parsed.success) return
     const s = getSettings()
     if (!localPrewarmEligible(s, getAllowedProviders())) return
-    localRuntime.markActivity()
-    void ensureLocalRuntimeStarted(s.localLlm.modelId)
-      // Warm the EXACT same [system, user] prefix a real suggest request sends (F4 hardening) — built by
-      // the SAME helper (llm/prewarm.ts) a unit test cross-checks against buildSystem()/userText() directly,
-      // so any future drift between the live suggest path and what prewarm warms fails a test.
-      .then(() => localRuntime.prewarm(buildPrewarmMessages(parsed.data.text, s)))
+    // Warm the EXACT same [system, user] prefix a real suggest request sends (F4 hardening) — built by
+    // the SAME helper (llm/prewarm.ts) a unit test cross-checks against buildSystem()/userText() directly,
+    // so any future drift between the live suggest path and what prewarm warms fails a test.
+    // prewarmLocal (llm/local.ts) is engine-aware: it warms whichever engine pickLocalEngine would give
+    // the next real suggest — fm serve on macOS 27+ with Apple Intelligence live, llama-server otherwise.
+    void prewarmLocal(s.localLlm.modelId, buildPrewarmMessages(parsed.data.text, s))
       .catch((err) => mainLog.warn('[local-prewarm] failed', err instanceof Error ? err.message : String(err)))
   })
 
@@ -2329,10 +2346,15 @@ function registerIpc(): void {
         try {
           const ctx = screenPreprocess.currentFreshContext()
           if (ctx?.description) {
+            // Same local-first redaction contract as the transcript above (review finding): on macOS the
+            // description can be a VERBATIM OCR extract of the screen — an open password manager or API
+            // key must be stripped before this text reaches a cloud answer provider. The tail is already
+            // redacted (req.transcript was, at parse time).
+            const description = s.redactSensitive ? redactSecrets(ctx.description) : ctx.description
             const tail = (req.transcript ?? '').slice(-1500).trim()
             req.screenContext = tail
-              ? `${ctx.description}\n\nRecent conversation (most recent speech):\n${tail}`
-              : ctx.description
+              ? `${description}\n\nRecent conversation (most recent speech):\n${tail}`
+              : description
           }
         } catch (err) {
           mainLog.warn(`[screen-preprocess] context injection failed: ${err instanceof Error ? err.message : String(err)}`)
@@ -3720,5 +3742,12 @@ app.on('will-quit', () => {
     localRuntime.stop()
   } catch (e) {
     mainLog.warn('[will-quit] localRuntime.stop failed', e)
+  }
+  // Same F3 contract for the Apple fm-serve sidecar (macOS 27+ text engine) — an orphaned unauthenticated
+  // loopback server outliving the app is strictly worse than an orphaned llama-server.
+  try {
+    fmRuntime.stop()
+  } catch (e) {
+    mainLog.warn('[will-quit] fmRuntime.stop failed', e)
   }
 })
