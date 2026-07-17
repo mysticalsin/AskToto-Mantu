@@ -22,6 +22,19 @@ vi.mock('node:child_process', async () => {
   return { execFile, spawn: h.spawnImpl }
 })
 
+// The self-contained installer (cli-installer.ts) — the fallback the npm-failure paths now route to
+// instead of telling the user to install Node (one-click onboarding, 2026-07-16).
+const managedMock = vi.hoisted(() => ({
+  managedCliEntry: vi.fn((): { entry: string; version: string } | null => null),
+  installManagedCli: vi.fn(
+    async (_id: string, onProgress: (p: { phase: string }) => void): Promise<{ entry: string; version: string }> => {
+      onProgress({ phase: 'downloading' })
+      return { entry: '/managed/cli.js', version: '9.9.9' }
+    }
+  )
+}))
+vi.mock('./cli-installer', () => managedMock)
+
 import {
   resolveBin,
   parseWhereOutput,
@@ -257,10 +270,31 @@ describe('installCli — Windows npm-not-found detection (cmd.exe phrasing, not 
   })
   afterEach(() => setPlatform(REAL_PLATFORM))
 
-  it('maps cmd.exe\'s "not recognized as an internal" stderr to the friendly npm/Node message', async () => {
-    // resolveBin('claude'): `where` finds nothing and there's no APPDATA fallback hit, so installCli
-    // proceeds to spawn the installer.
+  it('no npm on the machine: skips the shell entirely and self-installs on embedded Node (one-click)', async () => {
+    // resolveBin('claude') misses AND resolveBin('npm') misses — the pre-2026-07-16 behavior was a
+    // dead-end error telling the user to install Node from nodejs.org; now it must go straight to the
+    // managed installer without ever spawning cmd.exe.
+    managedMock.installManagedCli.mockClear()
     h.execFileImpl.mockRejectedValue(new Error('where: no matches found'))
+
+    const progress = vi.fn()
+    const r = await installCli('claude-cli', progress)
+
+    expect(r.ok).toBe(true)
+    expect(managedMock.installManagedCli).toHaveBeenCalledWith('claude', expect.any(Function))
+    expect(h.spawnImpl).not.toHaveBeenCalled() // no npm shell attempt — nothing to fail
+    expect(progress.mock.calls.some(([line]) => /self-contained|no Node\.js required/i.test(String(line)))).toBe(true)
+  })
+
+  it('npm resolved but dies with cmd.exe\'s "not recognized" stderr: falls back to the managed install', async () => {
+    managedMock.installManagedCli.mockClear()
+    // resolveBin('claude') misses; resolveBin('npm') HITS (so the npm spawn happens), then the spawned
+    // installer emits the cmd.exe not-recognized phrasing and exits 1.
+    h.execFileImpl.mockImplementation(async (_cmd: string, args: string[]) => {
+      if (args.includes('claude')) throw new Error('where: no matches found')
+      if (args.includes('npm')) return { stdout: 'C:\\Program Files\\nodejs\\npm.cmd\r\n', stderr: '' }
+      throw new Error('where: no matches found')
+    })
     const { child, stderr } = fakeChild()
     h.spawnImpl.mockReturnValue(child)
 
@@ -271,7 +305,7 @@ describe('installCli — Windows npm-not-found detection (cmd.exe phrasing, not 
     child.emit('close', 1)
 
     const r = await resultPromise
-    expect(r.ok).toBe(false)
-    expect(r.error).toMatch(/Node\.js \/ npm not found/i)
+    expect(r.ok).toBe(true) // the managed fallback rescued the install
+    expect(managedMock.installManagedCli).toHaveBeenCalledWith('claude', expect.any(Function))
   })
 })
