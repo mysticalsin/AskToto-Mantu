@@ -1328,6 +1328,12 @@ function LocalAiSection({
               patch({ localLlm: { ...settings.localLlm, useFor: { ...settings.localLlm.useFor, vision: v } } })
             }
           />
+          <ToggleRow
+            label="Speaker identification (beta)"
+            desc="Label who's speaking in meetings using on-device voice recognition. Voice data never leaves this device."
+            on={settings.speakerId.enabled}
+            onChange={(v) => patch({ speakerId: { enabled: v } })}
+          />
         </div>
       </div>
     </Section>

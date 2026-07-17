@@ -124,7 +124,9 @@ const api = {
   parakeetStatus: (): Promise<{ ready: boolean; addonError: string | null }> =>
     ipcRenderer.invoke(IPC.parakeetStatus),
   parakeetEnsure: (): Promise<{ ok: boolean; error?: string }> => ipcRenderer.invoke(IPC.parakeetEnsure),
-  parakeetFeed: (samples: Float32Array, speaker: string): Promise<string> =>
+  // Returns {text, name?} — name is the Speaker Intelligence label for THEM windows when enabled
+  // (older shape was a bare string; the renderer normalizes both while the contract settles).
+  parakeetFeed: (samples: Float32Array, speaker: string): Promise<string | { text: string; name?: string }> =>
     ipcRenderer.invoke(IPC.parakeetFeed, { samples, speaker }),
   onParakeetProgress: (cb: (pct: number) => void): (() => void) => {
     const h = (_e: unknown, d: { pct: number }): void => cb(d.pct)

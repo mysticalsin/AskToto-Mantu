@@ -788,6 +788,12 @@ export const BaseSettingsSchema = z.object({
       modelId: BUNDLED_LOCAL_MODEL_ID,
       useFor: { suggest: true, summary: true, vision: true }
     }),
+  // Speaker Intelligence (docs/SPEAKER-INTELLIGENCE-PLAN.md): live "who's speaking" labels on THEM
+  // transcript lines via on-device voice embeddings (sherpa-onnx, same addon as Parakeet). Off by
+  // default — it's a beta and the embedding model must be provisioned (fetch-speaker-model.mjs).
+  speakerId: z
+    .object({ enabled: z.boolean().default(false) })
+    .default({ enabled: false }),
   // Phone-home license activation against a self-hosted license server (see main/license.ts). Gate is
   // OFF by default: Tony has not deployed a server yet, and shipping this on by default would lock him
   // out of his own app at next launch. checkLicenseGrace() IS wired into a real startup gate (App.tsx's
@@ -961,6 +967,7 @@ export const DEFAULT_SETTINGS: Settings = {
     modelId: BUNDLED_LOCAL_MODEL_ID,
     useFor: { suggest: true, summary: true, vision: true }
   },
+  speakerId: { enabled: false },
   licenseServerUrl: '',
   licenseKey: '',
   licenseCompanyName: '',

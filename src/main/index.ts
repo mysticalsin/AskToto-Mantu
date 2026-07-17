@@ -92,6 +92,15 @@ import {
 import { ensureLocalRuntimeStarted, prewarmLocal } from './llm/local'
 import * as fmRuntime from './llm/fm-runtime'
 import { extractScreenText } from './mac-helper'
+import { createSpeakerId, type SpeakerId } from './speaker-id'
+
+// Lazy Speaker Intelligence singleton — building it probes the sherpa addon + embedding model, so defer
+// until the first THEM window with the feature enabled (never on the startup path).
+let speakerIdInstance: SpeakerId | null = null
+function getSpeakerId(): SpeakerId {
+  if (!speakerIdInstance) speakerIdInstance = createSpeakerId()
+  return speakerIdInstance
+}
 import { buildPrewarmMessages } from './llm/prewarm'
 import { listModels as listLocalModels } from './llm/local-models'
 import { createScreenPreprocess, type ScreenPreprocess } from './screen-preprocess'
@@ -2245,14 +2254,27 @@ function registerIpc(): void {
   ipcMain.handle(IPC.parakeetFeed, async (e, payload: unknown) => {
     assertMainWindow(e)
     if (!requireAuth()) return ''
-    const p = payload as { samples?: unknown }
+    const p = payload as { samples?: unknown; speaker?: unknown }
     if (!(p?.samples instanceof Float32Array)) return ''
     // Cap a single feed chunk generously above the renderer's real ~6s windows (WINDOW_SEC in listen.ts) at
     // 16kHz mono — every other renderer-supplied blob in this file is bounded the same way (debriefSave,
     // openMailDraft, McpCrmArgValueSchema); without this a malicious/malfunctioning renderer could force a
     // synchronous decode of an arbitrarily large buffer and hang or OOM the whole app.
     if (p.samples.length > 16_000 * 30) return ''
-    return parakeetTranscribe(p.samples)
+    const text = await parakeetTranscribe(p.samples)
+    // Speaker Intelligence (SPEAKER-INTELLIGENCE-PLAN §3): label THEM windows with a voice-derived name
+    // ("Jane Doe" from an enrolled profile, else a stable "Speaker N" session label). Same PCM buffer the
+    // ASR just consumed — no extra capture. Strictly additive and best-effort: any failure or the feature
+    // being off/unprovisioned attaches no name and the line renders exactly as before.
+    if (text && p.speaker === 'them' && getSettings().speakerId.enabled) {
+      try {
+        const label = getSpeakerId().labelWindow(p.samples)
+        if (label) return { text, name: label.name }
+      } catch (err) {
+        mainLog.warn('[speaker-id] labeling failed', err instanceof Error ? err.message : String(err))
+      }
+    }
+    return { text }
   })
 
   // --- Métis Local (on-device LLM): bundled-model readiness metadata ---
