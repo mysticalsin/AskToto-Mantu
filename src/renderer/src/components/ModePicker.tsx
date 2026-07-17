@@ -1,5 +1,6 @@
 import {
   GraduationCap,
+  UserSearch,
   Users,
   TrendingUp,
   MessageSquare,
@@ -17,6 +18,7 @@ const MODES: { id: string; label: string; icon: typeof Users }[] = [
   { id: 'meeting', label: 'Meeting', icon: Users },
   { id: 'sales', label: 'Sales', icon: TrendingUp },
   { id: 'interview', label: 'Interview', icon: GraduationCap },
+  { id: 'recruiting', label: 'Recruiting', icon: UserSearch },
   { id: 'negotiation', label: 'Negotiation', icon: Handshake },
   { id: 'presentation', label: 'Presentation', icon: Presentation },
   { id: 'support', label: 'Support', icon: Headset }

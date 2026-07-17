@@ -192,6 +192,7 @@ export type AskMode = 'answer' | 'vision' | 'suggest' | 'summary' | 'recap'
 
 export const CONVERSATION_MODES = [
   'interview',
+  'recruiting',
   'meeting',
   'sales',
   'negotiation',
@@ -209,6 +210,7 @@ export type ConversationMode = BuiltinMode | (string & {})
 export const BUILTIN_MODE_LABELS: Record<BuiltinMode, string> = {
   general: 'General',
   interview: 'Interview',
+  recruiting: 'Recruiting',
   meeting: 'Meeting',
   sales: 'Sales',
   negotiation: 'Negotiation',
@@ -223,7 +225,7 @@ export interface CustomMode { id: string; label: string }
 /** Cluely-style ordered groups for the modes list (built-ins). Custom modes render under their own group in the UI. */
 export const MODE_GROUPS: { label: string; modes: BuiltinMode[] }[] = [
   { label: 'General', modes: ['general'] },
-  { label: 'Live assist', modes: ['interview', 'sales', 'negotiation', 'presentation', 'support'] },
+  { label: 'Live assist', modes: ['interview', 'recruiting', 'sales', 'negotiation', 'presentation', 'support'] },
   { label: 'Meetings', modes: ['meeting'] }
 ]
 
