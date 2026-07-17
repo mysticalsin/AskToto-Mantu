@@ -270,3 +270,52 @@ describe('createScreenPreprocess — OCR-first hybrid (mac Vision helper)', () =
     expect(h.ocrCalls()).toBe(1) // unchanged hash: stamp refreshed, no second OCR
   })
 })
+
+describe('createScreenPreprocess — OCR available without the local LLM (Qwen not enabled/provisioned)', () => {
+  it('localReady=false + OCR present + OCR returns text: engine is eligible, caches the OCR extract, ' +
+    'never calls the VLM endpoint or spins up the local runtime', async () => {
+    const h = makeHarness({ withOcr: true, localReady: false })
+    h.state.ocrText = "Text visible on the user's screen (OCR extract, top to bottom):\nQ3 pipeline review"
+    h.sp.refresh()
+    expect(h.sp.isActive()).toBe(true) // eligible on OCR alone, despite localReady=false
+    h.setWindow('w1')
+    await h.sp._test.describeForWindow('w1')
+    expect(h.ocrCalls()).toBe(1)
+    expect(h.peek()?.description).toContain('Q3 pipeline review')
+    expect(h.fetchCalls()).toBe(0) // VLM never called
+    expect(h.ensureStarted).not.toHaveBeenCalled() // local runtime never spun up
+  })
+
+  it('localReady=false + OCR present + OCR returns null: caches nothing, no fetch, no crash', async () => {
+    const h = makeHarness({ withOcr: true, localReady: false })
+    h.state.ocrText = null
+    h.sp.refresh()
+    h.setWindow('w1')
+    await expect(h.sp._test.describeForWindow('w1')).resolves.toBeUndefined()
+    expect(h.ocrCalls()).toBe(1)
+    expect(h.peek()).toBeNull() // nothing cached
+    expect(h.fetchCalls()).toBe(0) // no VLM fallback attempted
+    expect(h.ensureStarted).not.toHaveBeenCalled()
+  })
+
+  it('localReady=false + no OCR dep (Windows): engine stays ineligible, does nothing', async () => {
+    const h = makeHarness({ localReady: false }) // withOcr omitted → extractScreenText undefined
+    h.sp.refresh()
+    expect(h.sp.isActive()).toBe(false)
+    h.setWindow('w1')
+    await h.sp._test.describeForWindow('w1')
+    expect(h.fetchCalls()).toBe(0)
+    expect(h.peek()).toBeNull()
+  })
+
+  it('localReady=true + OCR present: unchanged OCR-first-then-VLM behavior still holds', async () => {
+    const h = makeHarness({ withOcr: true, localReady: true })
+    h.state.ocrText = null // text-poor screen → falls through to VLM
+    h.sp.refresh()
+    h.setWindow('w1')
+    await h.sp._test.describeForWindow('w1')
+    expect(h.ocrCalls()).toBe(1)
+    expect(h.fetchCalls()).toBe(1) // VLM fallback still runs when the runtime is ready
+    expect(h.peek()?.description).toBe('A code editor with an error panel.')
+  })
+})
