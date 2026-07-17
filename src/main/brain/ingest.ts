@@ -890,14 +890,25 @@ export async function settleCommitment(
 
 type Job = {
   file: string
-  source: 'meetings'
+  source: 'meetings' | 'team'
   origin: 'live' | 'backfill'
+  /** Ingest-index identity. Undefined for the user's own meetings → basename(file), UNCHANGED. A team job
+   *  (source: 'team') sets a folder-namespaced key ("team/<owner>/<file>") so a shared-folder transcript
+   *  never collides in idx.ingested with an own meeting — or another member's file — of the same basename. */
+  key?: string
+  /** Attribution for a team transcript: the shared folder's own name, stamped onto the extraction as
+   *  source_team so team-contributed knowledge stays distinguishable. Undefined for the user's own meetings. */
+  label?: string
   /** mtime/size snapshot at queue time; a later edit must not be merged incrementally. */
   sourceVersion?: string
   /** Re-merge a durable extraction left behind by a crash after extraction but before index success. */
   strategy?: 'reconcile'
 }
 const queue: Job[] = []
+
+/** Ingest-index identity for a job: the user's own meetings key by basename (unchanged); team jobs carry
+ *  an explicit folder-namespaced key so they never collide with a same-named own meeting or member file. */
+const jobKey = (j: Job): string => j.key ?? basename(j.file)
 
 // The network-bound stage (extractMeeting, seconds-to-a-minute per call) is what a 100-meeting backfill
 // was burning wall-clock time on serially, so up to EXTRACT_CONCURRENCY of those calls now run at once.
@@ -1034,12 +1045,16 @@ export async function ingestExtraction(
   // mergeExtraction for the deal band/amount/close_date verification-driven merge. Optional so every
   // existing direct caller (tests driving fixtures without going through extractMeeting) is unaffected.
   preparedText?: string,
-  sourceVersion?: string
+  sourceVersion?: string,
+  // Ingest-index identity + team attribution for a shared-folder transcript. Both undefined for the user's
+  // own meetings (key → basename, source_team → ''), so every existing direct caller (incl. tests) is unaffected.
+  indexKey?: string,
+  sourceTeam?: string
 ): Promise<void> {
   // A persisted checkpoint can predate verification plumbing. Re-run deterministic verification before
   // its merge so every recovered amount, date, commitment, and band uses the same grounding rules.
   x = preparedText === undefined ? x : verifyExtraction(x, preparedText)
-  const key = basename(file)
+  const key = indexKey ?? basename(file)
   const sourceMode = readMeetingSourceMode(md)
   // Frontmatter dates aren't always bare tokens: hand-authored or vault-exported files commonly quote
   // the value (`date: "2024-01-15T10:00:00.000Z"`), and a naive \S+ match would keep the quote marks,
@@ -1069,6 +1084,10 @@ export async function ingestExtraction(
   // These are trusted provenance stamps, never model-authored extraction fields.
   x.source_mode = sourceMode
   x.source_use = classifyMeetingSourceUse(sourceMode)
+  // Team attribution: the shared folder's owner label for a transcript ingested from a team folder, '' for
+  // the user's own meetings. source_mode/source_use still come from the transcript's OWN frontmatter, so a
+  // teammate's meeting keeps its real mode — source_team only records WHOSE folder it arrived from.
+  x.source_team = sourceTeam ?? ''
   // Correction-engine wiring: BOTH display rewrite (applyCorrections) and file routing
   // (mergeExtraction) share the SAME union alias map (readAliasMap — entity-file aliases ∪
   // journal-derived aliases: rename chains resolved transitively, merges mapped from → into).
@@ -1134,7 +1153,7 @@ async function runExtractionStage(job: Job): Promise<JobResult> {
       // JSON alongside an `ok:false` (or absent) index entry. Re-use that exact deterministic result:
       // no second LLM call, no cloud cost, and mergeExtraction's per-meeting de-dup makes the repair
       // safe even if a previous attempt wrote some entities before it was interrupted.
-      const savedExtraction = readMeetingExtraction(s, slugify(basename(job.file)))
+      const savedExtraction = readMeetingExtraction(s, slugify(jobKey(job)))
       if (savedExtraction) return { job, s, ok: true, x: savedExtraction, md, preparedText: prepareMeetingText(s, md) }
     }
     const { extraction, preparedText } = await extractMeeting(s, md, job.file)
@@ -1155,12 +1174,12 @@ async function finishJob(result: JobResult): Promise<void> {
   let failed = false
   try {
     if (!result.ok) throw result.error
-    await ingestExtraction(s, result.x, result.md, job.file, result.preparedText, job.sourceVersion)
+    await ingestExtraction(s, result.x, result.md, job.file, result.preparedText, job.sourceVersion, job.key, job.label)
     auditLog('brain.ingest', { ok: true, source: job.source })
   } catch (e) {
     failed = true
     await updateIndex(s, (idx) => {
-      const key = basename(job.file)
+      const key = jobKey(job)
       const attempts = (idx.ingested[key]?.attempts ?? 0) + 1
       const version = job.sourceVersion ?? meetingSourceVersion(job.file)
       idx.ingested[key] = {
@@ -1271,6 +1290,11 @@ function hasMeetingSourceDrift(s: Settings, idx: BrainIndex): boolean {
   if (!current) return false
   for (const [file, record] of Object.entries(idx.ingested)) {
     if (!record.ok) continue
+    // Skip namespaced team-transcript keys ("team/<owner>/<file>"): they don't live in the meetings folder,
+    // so currentMeetingSourceVersions (keyed by basename) never has them — treating that absence as a
+    // deletion would falsely trip a full rebuild on every reconcile. Own-meeting keys are bare basenames and
+    // never contain '/'. A changed team file re-ingests via its own sourceVersion check in the team scan.
+    if (file.includes('/')) continue
     const version = current.get(file)
     if (!version || !record.sourceVersion || record.sourceVersion !== version) return true
   }
@@ -1619,8 +1643,8 @@ export function startBackfill(onDrained?: () => void | Promise<void>, options: B
   // a second time while it's still being extracted (or is sitting in the withEntityLock lane). inFlightJobs covers
   // both a backfill job and a live job (a live job can never collide with a backfill candidate by
   // content, but checking it unconditionally is simpler than branching on origin and costs nothing).
-  const inFlight = new Set(queue.map((j) => basename(j.file)))
-  for (const j of inFlightJobs) inFlight.add(basename(j.file))
+  const inFlight = new Set(queue.map(jobKey))
+  for (const j of inFlightJobs) inFlight.add(jobKey(j))
   // A fresh run: no backfill-origin work left queued or in flight from a previous batch. Reset the
   // progress counters here rather than accumulate onto a finished run's stale total/done — otherwise a
   // live meeting save processed after backfill #1 finished (which left backfillTotal > 0 behind) would
@@ -1666,6 +1690,48 @@ export function startBackfill(onDrained?: () => void | Promise<void>, options: B
       } else {
         // Leave the durable request flag in place. The source still needs a first extraction, but
         // queueing it now would only generate a guaranteed provider error (and its retry).
+        deferredByProvider = true
+      }
+    }
+  }
+  // Team transcripts (settings.teamTranscriptFolders): the same OneDrive-friendly scan, extended to each
+  // configured shared folder. Deliberately PARALLELS the own-meetings loop above rather than refactoring it,
+  // so the own path stays byte-identical. Team files are namespaced in the index ("team/<owner>/<file>") so
+  // they never collide with the user's own meetings — or another member's same-named file — and carry the
+  // folder's name as source_team attribution. `already`/`inFlight` already hold namespaced keys, so a team
+  // file is deduped independently of any own meeting.
+  for (const teamFolder of s.teamTranscriptFolders ?? []) {
+    if (!teamFolder) continue
+    const owner = basename(teamFolder) || 'team'
+    for (const f of existsSync(teamFolder) ? readdirSync(teamFolder) : []) {
+      if (!isMeetingTranscriptFile(f)) continue
+      const key = `team/${owner}/${f}`
+      if (already.has(key) || inFlight.has(key)) continue
+      const file = join(teamFolder, f)
+      const record = idx.ingested[key]
+      const sourceVersion = meetingSourceVersion(file)
+      if (
+        options.respectRetryBackoff &&
+        record &&
+        !record.ok &&
+        sourceVersion &&
+        record.sourceVersion === sourceVersion &&
+        (record.retryAfter ?? 0) > now
+      ) {
+        continue
+      }
+      const strategy = extractedSlugs.has(slugify(key)) ? ('reconcile' as const) : undefined
+      if (providerAvailable || strategy === 'reconcile') {
+        candidates.push({
+          file,
+          source: 'team',
+          origin: 'backfill',
+          key,
+          label: owner,
+          ...(sourceVersion ? { sourceVersion } : {}),
+          ...(strategy ? { strategy } : {})
+        })
+      } else {
         deferredByProvider = true
       }
     }
