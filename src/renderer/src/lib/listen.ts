@@ -246,7 +246,9 @@ export function useListen(
   const themRunRef = useRef('')
 
   // Add a transcribed line + fire the auto-answer hook. Shared by the Whisper worker and Parakeet paths.
-  const commitLine = useCallback((text: string, speaker: Speaker): void => {
+  // `name` is the optional Speaker Intelligence label (main-side voice embedding on THEM windows) — the
+  // same additive field the Teams-VTT backfill writes, so render/save paths need no change.
+  const commitLine = useCallback((text: string, speaker: Speaker, name?: string): void => {
     // Drop phantom/hallucinated lines + non-speech sound-event captions ("[BELL RINGS]", "(applause)",
     // "♪♪♪") before touching state — so they never display live, never reach the recap, never get saved.
     // Single chokepoint for both the Whisper worker and Parakeet paths.
@@ -256,7 +258,7 @@ export function useListen(
     // Entity-casing bias runs AFTER corrections so an explicit user correction always wins.
     if (entityCasingRef.current.length) corrected = applyEntityCasingCompiled(entityCasingRef.current, corrected)
     if (corrected && liveRef.current) {
-      const line: TranscriptLine = { speaker: speaker || 'you', text: corrected, t: Date.now() }
+      const line: TranscriptLine = { speaker: speaker || 'you', text: corrected, t: Date.now(), ...(name ? { name } : {}) }
       // Update the ref synchronously BEFORE firing onQ, so text() (read inside the handler) already
       // includes the line that triggered the auto-answer.
       const next = [...linesRef.current, line]
@@ -292,7 +294,11 @@ export function useListen(
         setTimeout(() => reject(new Error('parakeet feed timed out')), PARAKEET_FEED_TIMEOUT_MS)
       )
       void Promise.race([feed, timeout])
-        .then((text) => {
+        .then((res) => {
+          // Normalize both feed shapes: bare string (legacy/error paths) and {text, name?} (Speaker
+          // Intelligence labels THEM windows main-side — see SPEAKER-INTELLIGENCE-PLAN §3).
+          const text = typeof res === 'string' ? res : res.text
+          const speakerName = typeof res === 'string' ? undefined : res.name
           parakeetFailures.current = 0 // success (even empty) resets the IPC-failure streak
           if (text === '') {
             // Empty but technically successful: the window passed EMIT_RMS so audio WAS flowing — the
@@ -305,7 +311,7 @@ export function useListen(
             }
           } else {
             parakeetEmptyRunRef.current = 0
-            commitLine(text, job.speaker)
+            commitLine(text, job.speaker, speakerName)
           }
         })
         .catch((err) => {
