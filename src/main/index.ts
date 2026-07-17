@@ -164,6 +164,7 @@ import {
   parakeetRelease,
   parakeetAddonError
 } from './parakeet'
+import { appleSpeechTranscribe } from './apple-speech'
 import { pickAudioFile, consumePickedAudio } from './import-audio'
 import { ImportJobManager, type ImportJob } from './import-jobs'
 import { EncryptedImportJobStore } from './import-job-store'
@@ -2266,6 +2267,29 @@ function registerIpc(): void {
     // ("Jane Doe" from an enrolled profile, else a stable "Speaker N" session label). Same PCM buffer the
     // ASR just consumed — no extra capture. Strictly additive and best-effort: any failure or the feature
     // being off/unprovisioned attaches no name and the line renders exactly as before.
+    if (text && p.speaker === 'them' && getSettings().speakerId.enabled) {
+      try {
+        const label = getSpeakerId().labelWindow(p.samples)
+        if (label) return { text, name: label.name }
+      } catch (err) {
+        mainLog.warn('[speaker-id] labeling failed', err instanceof Error ? err.message : String(err))
+      }
+    }
+    return { text }
+  })
+
+  // --- Apple Speech ASR engine (on-device via the mac-helper sidecar, opt-in, macOS only) ---
+  // Mirrors the parakeet:feed handler exactly (same auth gate, same Float32 check, same cap, same
+  // Speaker Intelligence ride-along) — appleSpeechTranscribe never throws (resolves '' on any failure),
+  // so unlike parakeetTranscribe this needs no try/catch around the call itself.
+  ipcMain.handle(IPC.appleSpeechFeed, async (e, payload: unknown) => {
+    assertMainWindow(e)
+    if (!requireAuth()) return ''
+    const p = payload as { samples?: unknown; speaker?: unknown }
+    if (!(p?.samples instanceof Float32Array)) return ''
+    // Same defensive cap as parakeetFeed — see its own comment for why.
+    if (p.samples.length > 16_000 * 30) return ''
+    const text = await appleSpeechTranscribe(p.samples)
     if (text && p.speaker === 'them' && getSettings().speakerId.enabled) {
       try {
         const label = getSpeakerId().labelWindow(p.samples)

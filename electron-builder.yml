@@ -145,6 +145,10 @@ mac:
     NSMicrophoneUsageDescription: Métis transcribes audio on-device to give you live AI suggestions.
     NSScreenCaptureUsageDescription: Métis captures system audio and your screen so the AI can help.
     NSAudioCaptureUsageDescription: Métis captures meeting audio from your screen so it can transcribe the other side of a call.
+    # Apple Speech ASR engine (opt-in, on-device via SFSpeechRecognizer) — required or the OS kills the
+    # app the moment the mac-helper sidecar calls requestAuthorization. Only shown if the user picks
+    # "Apple Speech" in Settings → Audio; Parakeet/Whisper never touch this permission.
+    NSSpeechRecognitionUsageDescription: Métis transcribes meeting audio on-device using Apple Speech so it can caption who said what.
     LSUIElement: true
 mas:
   # Mac App Store builds are opt-in: run `npm run release:mas`.
@@ -158,6 +162,7 @@ mas:
     NSMicrophoneUsageDescription: Métis transcribes audio on-device to give you live AI suggestions.
     NSScreenCaptureUsageDescription: Métis captures system audio and your screen so the AI can help.
     NSAudioCaptureUsageDescription: Métis captures meeting audio from your screen so it can transcribe the other side of a call.
+    NSSpeechRecognitionUsageDescription: Métis transcribes meeting audio on-device using Apple Speech so it can caption who said what.
     LSUIElement: true
 masDev:
   entitlements: build/entitlements.mas.plist

@@ -133,6 +133,9 @@ const api = {
     ipcRenderer.on(IPC.parakeetProgress, h)
     return () => ipcRenderer.removeListener(IPC.parakeetProgress, h)
   },
+  // Apple Speech (on-device, macOS only) — same {text, name?} shape and speaker ride-along as parakeetFeed.
+  appleSpeechFeed: (samples: Float32Array, speaker: string): Promise<string | { text: string; name?: string }> =>
+    ipcRenderer.invoke(IPC.appleSpeechFeed, { samples, speaker }),
 
   ask: (req: AskStart): Promise<void> => ipcRenderer.invoke(IPC.askStart, req),
   cancel: (id: string): Promise<void> => ipcRenderer.invoke(IPC.askCancel, id),

@@ -86,7 +86,7 @@ import { MetisMark } from './MetisMark'
 import { FieldHint, TextButton } from './ui'
 import { AgendaView } from './AgendaView'
 import { usePermissions } from '../state'
-import { displayAccelerator } from '../lib/keys'
+import { displayAccelerator, isWindows } from '../lib/keys'
 import { decideDustLiveCheck } from '../lib/dust-live-check'
 
 // Guards the AUTOMATIC (non-user-initiated) Dust setup relaunch to at most once per app run. Without it,
@@ -3984,13 +3984,26 @@ export function Settings({
                     onChange={(v) => patch({ asrQuality: v ? 'best' : 'fast' })}
                     disabled={settings.managedKeys.includes('asrQuality')}
                   />
-                  <ToggleRow
-                    label="Use Parakeet engine (fastest · European only)"
-                    desc="On = bundled NVIDIA Parakeet v3, very fast + accurate for 25 European languages. Off = bundled Whisper, which handles ~99 languages. Use Whisper for non-European speech."
-                    on={settings.asrEngine === 'parakeet'}
-                    onChange={(v) => patch({ asrEngine: v ? 'parakeet' : 'whisper' })}
-                    disabled={settings.managedKeys.includes('asrEngine')}
-                  />
+                  <div className="flex flex-col gap-1.5 px-1 py-1">
+                    <label className="flex items-center gap-2 text-[13px] text-[color:var(--cl-foreground)]">
+                      Transcription engine
+                      <FieldHint text="Parakeet: bundled NVIDIA Parakeet v3, very fast + accurate for 25 European languages. Whisper: bundled, handles ~99 languages — use it for non-European speech. Apple Speech: Apple's own on-device engine (SFSpeechRecognizer); no extra download, macOS 13+ only.">
+                        <Info size={12} className="shrink-0 text-[color:var(--cl-muted-foreground)] hover:text-[color:var(--cl-foreground)]" />
+                      </FieldHint>
+                      <ManagedChip keys={settings.managedKeys} k="asrEngine" />
+                    </label>
+                    <select
+                      value={settings.asrEngine}
+                      onChange={(e) => patch({ asrEngine: e.target.value as 'parakeet' | 'whisper' | 'apple' })}
+                      disabled={settings.managedKeys.includes('asrEngine')}
+                      aria-label="Transcription engine"
+                      className={'w-full ' + ctl}
+                    >
+                      <option value="parakeet">Parakeet · fastest, European languages</option>
+                      <option value="whisper">Whisper · ~99 languages</option>
+                      <option value="apple">Apple Speech · on-device{isWindows ? ' (macOS only)' : ''}</option>
+                    </select>
+                  </div>
                   {/* Engine broken in this build (native addon failed to load) — distinct from missing
                       packaged assets, which require a complete installer. */}
                   {parakeetAddonError != null && (
