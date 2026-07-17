@@ -17,8 +17,9 @@
  *  - Screen-hash dedupe: an unchanged screen re-uses the existing description (only its freshness stamp is
  *    bumped) — a static screen costs a capture + hash, never a re-inference.
  *  - Throttled + single-flight: at most one describe at a time, no more often than MIN_DESCRIBE_INTERVAL_MS.
- *  - Gated: runs only when the `backgroundScreenContext` setting is on AND the local model is actually ready
- *    (enabled, provisioned, org-allowed). Off → the module is inert and screen-asks use today's live path.
+ *  - Gated: runs only when the `backgroundScreenContext` setting is on AND either the local model is ready
+ *    (enabled, provisioned, org-allowed) or on-device OCR is available (macOS Vision helper — needs no LLM
+ *    at all). Neither → the module is inert and screen-asks use today's live path.
  *
  * Dependency-injected so the whole engine (eligibility, freshness/window matching, hash dedupe, the describe
  * request) is unit-testable with no Electron, no real sidecar, and no timers.
@@ -61,7 +62,9 @@ export interface ScreenPreprocessDeps {
   /** Optional structured OCR (mac-helper.ts's extractScreenText on macOS; undefined on Windows).
    *  When present it is tried FIRST: a Vision-framework text extract is faster (~no model inference) and
    *  more factual than a VLM caption for text-bearing screens. A null result (text-poor screen, helper
-   *  missing/failed) falls back to the VLM describe — the pre-OCR behavior, unchanged. */
+   *  missing/failed) falls back to the VLM describe — the pre-OCR behavior, unchanged. Exception: when the
+   *  local LLM isn't ready, OCR is the whole engine (it needs no LLM) — a null OCR result yields no
+   *  description rather than falling back, since the VLM fallback itself requires the local runtime. */
   extractScreenText?: (imageB64: string) => Promise<string | null>
   fetchImpl?: typeof fetch
   now?: () => number
@@ -138,7 +141,12 @@ export function createScreenPreprocess(deps: ScreenPreprocessDeps): ScreenPrepro
   let debounceTimer: NodeJS.Timeout | null = null
   let refreshTimer: NodeJS.Timeout | null = null
 
-  const eligible = (): boolean => deps.getSettings().backgroundScreenContext === true && deps.localReady()
+  // The dep is only ever wired on macOS (index.ts passes extractScreenText iff process.platform === 'darwin');
+  // its presence IS the "OCR available" signal — no separate platform check needed here.
+  const ocrAvailable = (): boolean => !!deps.extractScreenText
+
+  const eligible = (): boolean =>
+    deps.getSettings().backgroundScreenContext === true && (deps.localReady() || ocrAvailable())
 
   const activeWindowId = (): string | null => watcher?.current()?.windowId ?? currentWindowId
 
@@ -218,7 +226,14 @@ export function createScreenPreprocess(deps: ScreenPreprocessDeps): ScreenPrepro
           mode = 'ocr'
         }
       }
-      if (!text) text = await describeOnce(shot.image)
+      if (!text) {
+        // The VLM fallback needs the local runtime (describeOnce calls ensureLocalRuntimeStarted + the
+        // llama endpoint). If it isn't ready, eligible() only let us in here because OCR is available —
+        // OCR just came back text-poor, so there is nothing more this pass can produce. Don't call
+        // describeOnce() without a ready runtime; skip this cycle instead (no cache, no crash).
+        if (!deps.localReady()) return
+        text = await describeOnce(shot.image)
+      }
       if (!text) return
       // Commit only if the user hasn't switched away mid-describe (else we'd cache the wrong window's text
       // under the new window's focus). If the watcher can't report a window, trust forWindowId.
