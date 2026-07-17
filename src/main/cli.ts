@@ -24,6 +24,7 @@ import { randomBytes } from 'node:crypto'
 import type { ProviderId } from '@shared/providers'
 import { PROVIDERS } from '@shared/providers'
 import type { CliActionResult, CliInstallResult } from '@shared/ipc'
+import { managedCliEntry, installManagedCli } from './cli-installer'
 
 const execFileAsync = promisify(execFile)
 
@@ -105,7 +106,7 @@ export async function resolveBin(bin: string): Promise<string | null> {
     }
     // Not caching the miss mirrors the mac/Linux branch below — a subsequent in-app install must be
     // picked up immediately without requiring an app restart.
-    return null
+    return managedBinFallback(bin)
   }
 
   const shell = process.env.SHELL || '/bin/zsh'
@@ -115,7 +116,22 @@ export async function resolveBin(bin: string): Promise<string | null> {
     // Only cache positive hits; null (not-found) must not be cached so that a subsequent
     // in-app install is picked up immediately without requiring an app restart.
     if (resolved !== null) binCache.set(bin, resolved)
-    return resolved
+    if (resolved !== null) return resolved
+  } catch {
+    /* fall through to the managed-CLI probe */
+  }
+  return managedBinFallback(bin)
+}
+
+/** Last-resort resolution: the in-app one-click install (cli-installer.ts). Returns the managed entry
+ *  script path — resolveSpawnTarget() recognizes it and runs it on Electron's embedded Node. Never
+ *  cached, so an install completing mid-session is picked up on the next ask; a system install appearing
+ *  later still wins (probed first). */
+function managedBinFallback(bin: string): string | null {
+  const id = bin === 'claude' ? 'claude' : bin === 'codex' ? 'codex' : null
+  if (!id) return null
+  try {
+    return managedCliEntry(id)?.entry ?? null
   } catch {
     return null
   }
@@ -183,9 +199,24 @@ export function cmdShimSpawn(bin: string, args: string[]): { command: string; ar
   return { command: process.env.ComSpec || 'cmd.exe', args: ['/d', '/s', '/c', bin, ...args] }
 }
 
-/** Resolve the actual { command, args } to spawn for a CLI binary: direct on macOS/Linux and for
- *  Windows .exe binaries; routed through cmd.exe for Windows .cmd shims (see cmdShimSpawn above). */
-export function resolveSpawnTarget(bin: string, args: string[]): { command: string; args: string[] } {
+/** True when `bin` is a managed-CLI entry script installed by cli-installer.ts (one-click onboarding)
+ *  rather than a system binary — those run on Electron's embedded Node, not directly. */
+export function isManagedCliEntry(bin: string): boolean {
+  return /[/\\]managed-cli[/\\].*\.[cm]?js$/.test(bin)
+}
+
+/** Resolve the actual { command, args, env? } to spawn for a CLI binary: direct on macOS/Linux and for
+ *  Windows .exe binaries; routed through cmd.exe for Windows .cmd shims (see cmdShimSpawn above);
+ *  managed-CLI entry scripts (in-app one-click install) run under process.execPath with
+ *  ELECTRON_RUN_AS_NODE=1 — Electron's own binary as a plain Node runtime, so the user never installs
+ *  Node. The env additions are merged over cliEnv() by the spawn sites. */
+export function resolveSpawnTarget(
+  bin: string,
+  args: string[]
+): { command: string; args: string[]; env?: Record<string, string> } {
+  if (isManagedCliEntry(bin)) {
+    return { command: process.execPath, args: [bin, ...args], env: { ELECTRON_RUN_AS_NODE: '1' } }
+  }
   return isCmdShim(bin) ? cmdShimSpawn(bin, args) : { command: bin, args }
 }
 
@@ -336,7 +367,7 @@ export function runCliStream(opts: RunCliStreamOpts): { abort: () => void } {
     }
 
     const args = cfg.buildArgs({ model: opts.model })
-    let spawnTarget: { command: string; args: string[] }
+    let spawnTarget: { command: string; args: string[]; env?: Record<string, string> }
     try {
       // Windows .cmd shims must go through cmd.exe (see resolveSpawnTarget); everything else spawns
       // directly, byte-identical to before.
@@ -348,7 +379,7 @@ export function runCliStream(opts: RunCliStreamOpts): { abort: () => void } {
     const child = spawn(spawnTarget.command, spawnTarget.args, {
       cwd,
       signal: controller.signal,
-      env: cliEnv(opts.providerId),
+      env: { ...cliEnv(opts.providerId), ...spawnTarget.env },
       // SECURITY: never use shell:true — args are passed as an array. On Windows, cmd.exe may be the
       // spawn target for a .cmd shim (see resolveSpawnTarget) but it is never invoked as a shell here.
       shell: false,
@@ -448,7 +479,10 @@ export async function detectCli(provider: ProviderId): Promise<CliActionResult> 
     // Windows .cmd shims must go through cmd.exe (see resolveSpawnTarget) — the same EINVAL landmine
     // as the spawn() call sites below, just reached via execFile here instead.
     const spawnTarget = resolveSpawnTarget(absBin, ['--version'])
-    const { stdout } = await execFileAsync(spawnTarget.command, spawnTarget.args, { windowsHide: true })
+    const { stdout } = await execFileAsync(spawnTarget.command, spawnTarget.args, {
+      windowsHide: true,
+      env: { ...process.env, ...spawnTarget.env }
+    })
     return { ok: true, version: stdout.trim().slice(0, 40) }
   } catch {
     // --version might fail on some builds; binary is present but couldn't run
@@ -491,7 +525,7 @@ export async function testCli(provider: ProviderId): Promise<CliActionResult> {
     testArgs = ['exec', '--skip-git-repo-check', '-c', 'features.shell_tool=false']
   }
 
-  let spawnTarget: { command: string; args: string[] }
+  let spawnTarget: { command: string; args: string[]; env?: Record<string, string> }
   try {
     // Windows .cmd shims must go through cmd.exe (see resolveSpawnTarget); everything else spawns
     // directly, byte-identical to before.
@@ -512,7 +546,7 @@ export async function testCli(provider: ProviderId): Promise<CliActionResult> {
 
     const child = spawn(spawnTarget.command, spawnTarget.args, {
       cwd: testCwd,
-      env: cliEnv(provider),
+      env: { ...cliEnv(provider), ...spawnTarget.env },
       // SECURITY: never use shell:true. cmd.exe may be the spawn target for a Windows .cmd shim (see
       // resolveSpawnTarget) but it is never invoked as a shell here.
       shell: false,
@@ -728,6 +762,33 @@ export const INSTALL_PERMISSION_ERROR_RE = /EACCES|EPERM|permission denied|not p
  * are on PATH. Progress lines are streamed to onProgress as they arrive.
  * Returns {ok:true} on success; {needsTerminal:true} on EACCES/EPERM; {ok:false, error} otherwise.
  */
+/** One-click self-contained install (cli-installer.ts): downloads the CLI package straight from the
+ *  npm registry and runs it on Electron's embedded Node — the user needs NO Node.js, NO npm, nothing.
+ *  Progress (with percent + ETA) is rendered through the same line stream the npm path uses, so the
+ *  existing Settings/onboarding UI shows it without any renderer change. */
+async function managedInstall(
+  provider: ProviderId,
+  onProgress: (line: string) => void
+): Promise<CliInstallResult> {
+  const id = provider === 'claude-cli' ? ('claude' as const) : provider === 'codex-cli' ? ('codex' as const) : null
+  if (!id) return { ok: false, error: 'No installer for this provider.' }
+  try {
+    const result = await installManagedCli(id, (p) => {
+      if (p.phase === 'downloading' && p.totalBytes) {
+        const pct = Math.floor(((p.receivedBytes ?? 0) / p.totalBytes) * 100)
+        const eta = p.etaMs != null ? ` — about ${Math.max(1, Math.round(p.etaMs / 1000))}s left` : ''
+        onProgress(`Downloading… ${pct}%${eta}`)
+      } else if (p.phase === 'resolving') onProgress('Finding the latest version…')
+      else if (p.phase === 'verifying') onProgress('Verifying download integrity…')
+      else if (p.phase === 'extracting') onProgress('Installing…')
+    })
+    onProgress(`Installed v${result.version} (self-contained — no Node.js required).`)
+    return { ok: true }
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : String(e) }
+  }
+}
+
 export async function installCli(
   provider: ProviderId,
   onProgress: (line: string) => void
@@ -739,6 +800,13 @@ export async function installCli(
   if (existing) {
     onProgress('Already installed.')
     return { ok: true }
+  }
+
+  // No system npm → skip the shell entirely and self-install on Electron's embedded Node. This is the
+  // one-click path for machines without a dev toolchain — the old behavior told the user to go install
+  // Node from nodejs.org, which is exactly the onboarding wall this removes.
+  if ((await resolveBin('npm')) === null) {
+    return managedInstall(provider, onProgress)
   }
 
   const pkg =
@@ -817,19 +885,23 @@ export async function installCli(
       // Detect npm-not-found: the login shell prints 'command not found' (mac/Linux); cmd.exe prints
       // "'npm' is not recognized as an internal or external command..." (Windows).
       if (/command not found|not recognized as an internal/i.test(stderrText)) {
-        resolve({
-          ok: false,
-          error: 'Node.js / npm not found. Install Node from nodejs.org, then try again.'
-        })
+        // npm existed at probe time but vanished/misfired — self-contained install instead of telling
+        // the user to go install Node.
+        void managedInstall(provider, onProgress).then(resolve)
         return
       }
-      // Detect permission error → caller should offer the Terminal fallback
+      // Permission error: the global npm prefix needs admin. The managed install needs NO permissions
+      // (it lives in userData) — try it before surfacing the Terminal fallback.
       if (INSTALL_PERMISSION_ERROR_RE.test(stderrText)) {
-        resolve({ ok: false, needsTerminal: true, error: 'Global install needs admin permission.' })
+        onProgress('Global npm install needs admin — switching to the self-contained install…')
+        void managedInstall(provider, onProgress).then((res) =>
+          resolve(res.ok ? res : { ok: false, needsTerminal: true, error: 'Global install needs admin permission.' })
+        )
         return
       }
       const tail = stderrText.slice(-300) || `Install failed (exit ${code}).`
-      resolve({ ok: false, error: tail })
+      // Any other npm failure: the self-contained path is independent of whatever broke npm — last try.
+      void managedInstall(provider, onProgress).then((res) => resolve(res.ok ? res : { ok: false, error: tail }))
     })
   })
 }
