@@ -81,3 +81,7 @@ _relay/
 # native/mac-helper/main.swift by scripts/build-mac-helper.mjs in every mac packaging chain;
 # check-mac-helper.mjs hard-fails packaging if it's missing, so the binary never needs committing.
 resources/mac-helper/
+
+# Native app build artifacts
+native-app/MetisKit/.build/
+native-app/**/*.xcodeproj/xcuserdata/
