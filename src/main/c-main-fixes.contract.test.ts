@@ -150,3 +150,27 @@ describe('packaged offline ASR protocol', () => {
     }
   })
 })
+
+describe('Windows taskbar policy: Métis has zero taskbar presence (Tony, 2026-07-16)', () => {
+  it('the overlay constructs with skipTaskbar and re-asserts it on win32 show/restore/focus', () => {
+    // Constructor flag alone is not durable on Windows (Electron re-adds the taskbar button after
+    // certain show/focus transitions) — both layers must stay.
+    expect(source).toMatch(/skipTaskbar: true/)
+    const reassertIdx = source.indexOf('const reassertSkipTaskbar')
+    expect(reassertIdx).toBeGreaterThan(-1)
+    const block = source.slice(reassertIdx - 200, reassertIdx + 400)
+    expect(block).toMatch(/process\.platform === 'win32'/)
+    expect(block).toMatch(/setSkipTaskbar\(true\)/)
+    for (const event of ['show', 'restore', 'focus']) {
+      expect(block).toContain(`'${event}', reassertSkipTaskbar`)
+    }
+  })
+
+  it('the Intelligence dashboard window constructs with skipTaskbar (the one former taskbar culprit)', () => {
+    const intel = readFileSync(join(__dirname, 'intelligence.ts'), 'utf8')
+    const winIdx = intel.indexOf('new BrowserWindow(')
+    expect(winIdx).toBeGreaterThan(-1)
+    const options = intel.slice(winIdx, intel.indexOf('})', winIdx))
+    expect(options).toMatch(/skipTaskbar: true/)
+  })
+})

@@ -207,3 +207,33 @@ describe('prewarmLocal — engine-aware', () => {
     expect(fm.prewarm).not.toHaveBeenCalled()
   })
 })
+
+describe('streamLocal — failure-path completeness (Sonnet audit locks)', () => {
+  it('double failure (apple start rejects, llama fallback also fails) surfaces exactly ONE onError', async () => {
+    fm.start.mockRejectedValue(new Error('fm spawn failed'))
+    llama.start.mockRejectedValue(new Error('llama binary missing'))
+    const opts = makeOpts('suggest')
+    streamLocal(opts)
+    await vi.waitFor(() => expect(opts.handlers.onError).toHaveBeenCalledTimes(1))
+    expect(String(vi.mocked(opts.handlers.onError).mock.calls[0][0])).toContain('llama binary missing')
+    expect(streamOpenAIMock).not.toHaveBeenCalled()
+    // Both engines' stream accounting stays balanced — nothing was ever attached.
+    expect(fm.endStream).not.toHaveBeenCalled()
+    expect(llama.endStream).not.toHaveBeenCalled()
+  })
+
+  it('a mid-generation error on the APPLE stream releases the FM accounting exactly once (no llama retry)', async () => {
+    const opts = makeOpts('summary')
+    streamLocal(opts)
+    const sent = await waitForStream()
+    expect(sent.baseURL).toBe('http://127.0.0.1:9999/v1')
+    sent.handlers.onError('model overloaded mid-stream')
+    expect(fm.endStream).toHaveBeenCalledTimes(1)
+    expect(opts.handlers.onError).toHaveBeenCalledWith('model overloaded mid-stream')
+    // Post-start stream errors report via handlers — never a second silent engine hop that would
+    // desync the renderer's stream state.
+    expect(llama.start).not.toHaveBeenCalled()
+    // A late abort after the error must not double-release.
+    expect(fm.endStream).toHaveBeenCalledTimes(1)
+  })
+})

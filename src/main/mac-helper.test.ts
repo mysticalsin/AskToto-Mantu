@@ -139,3 +139,22 @@ describe('extractScreenText — real helper integration (soft-skip when not buil
     30_000
   )
 })
+
+describe('packaging locks from the Sonnet audit (source-scan)', () => {
+  it('build-mac-helper.mjs pins an explicit deployment target so macOS 26 users can load the helper', () => {
+    // Without -target, swiftc stamps the BUILD machine's OS (a macOS 27 beta box) as the binary's
+    // minimum and dyld on user machines refuses to load it — silent screen-context degradation.
+    const script = readFileSync(join(REPO_ROOT, 'scripts', 'build-mac-helper.mjs'), 'utf8')
+    expect(script).toMatch(/'-target',\s*'arm64-apple-macos13\.0'/)
+  })
+
+  it('build-installers.mjs builds + guards the mac helper before its electron-builder --mac invocation', () => {
+    const script = readFileSync(join(REPO_ROOT, 'scripts', 'build-installers.mjs'), 'utf8')
+    const buildIdx = script.indexOf('build-mac-helper.mjs')
+    const checkIdx = script.indexOf('check-mac-helper.mjs')
+    const ebIdx = script.indexOf("'electron-builder', '--mac'")
+    expect(buildIdx).toBeGreaterThan(-1)
+    expect(checkIdx).toBeGreaterThan(buildIdx)
+    expect(ebIdx).toBeGreaterThan(checkIdx)
+  })
+})
