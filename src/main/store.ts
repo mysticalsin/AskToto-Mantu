@@ -192,8 +192,86 @@ export function getEnvKeyProviders(): string[] {
 //   ATKENC2\n + AES-GCM blob  — written by the file backend (dev / ASKTOTO_LOCAL_KEYSTORE / no keychain)
 //   ATKENC1\n + safeStorage   — legacy prod format; migrated to ATKENC2 on next read/write in file-backend
 //   raw JSON                  — legacy plaintext; migrated to ATKENC2 on next write
+//
+// settings.json.recovered — NOT a format, a last-resort backup. Whenever settings.json exists but can't
+// be decoded in any of the three formats above, its original bytes are copied here (preserveUnreadableSettings)
+// before the caller falls back to {}, so a subsequent settings write doesn't permanently destroy the only
+// copy. readUserRaw() consults it only when the live file is missing or unreadable (see tryRecoveredSettings).
 const ENC_MARKER_V1 = Buffer.from('ATKENC1\n') // legacy: safeStorage (prod)
 const ENC_MARKER_V2 = Buffer.from('ATKENC2\n') // new: AES-GCM file backend
+
+/**
+ * Decode a settings buffer through the three known on-disk formats (V2 AES-GCM → legacy V1 safeStorage →
+ * legacy plaintext JSON), auto-detecting by marker. Returns the parsed object, or null if none of them can
+ * read it under the CURRENT backend (undecryptable ciphertext, safeStorage forced off or unavailable, or
+ * malformed JSON). Pure — no disk writes, no logging — so it's safe to call speculatively (e.g. against a
+ * `.recovered` file that may itself turn out to be unreadable). Shared by readUserRaw's live-file path and
+ * tryRecoveredSettings' `.recovered` path so both decode through exactly one cascade.
+ */
+function tryParseSettingsBuffer(buf: Buffer): Record<string, unknown> | null {
+  if (buf.length >= ENC_MARKER_V2.length && buf.subarray(0, ENC_MARKER_V2.length).equals(ENC_MARKER_V2)) {
+    try {
+      return JSON.parse(decryptSecret(buf.subarray(ENC_MARKER_V2.length)))
+    } catch {
+      return null
+    }
+  }
+  if (buf.length >= ENC_MARKER_V1.length && buf.subarray(0, ENC_MARKER_V1.length).equals(ENC_MARKER_V1)) {
+    // Only touch safeStorage (the Keychain) when the file backend is NOT in force — see readUserRaw's
+    // comment for why a keystore-forced build must never probe it here.
+    if (useFileBackend() || !safeStorage.isEncryptionAvailable()) return null
+    try {
+      return JSON.parse(safeStorage.decryptString(buf.subarray(ENC_MARKER_V1.length)))
+    } catch {
+      return null
+    }
+  }
+  try {
+    return JSON.parse(buf.toString('utf8'))
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Last-resort backup: preserve the original UNREADABLE settings buffer verbatim to a single, stable
+ * `.recovered` sibling (always overwritten, never timestamped, so repeated failures can't accumulate
+ * unbounded files) before the caller discards it and falls back to {}. Without this, the very next
+ * settings write would permanently overwrite the only copy of the user's settings — this is the one
+ * chance to save them. Best-effort: wrapped in try/catch so a write failure here (e.g. disk full) can
+ * never block the fallback-to-defaults path.
+ */
+function preserveUnreadableSettings(buf: Buffer, reason: string): void {
+  const recoveredPath = `${settingsPath()}.recovered`
+  try {
+    writeFileSync(recoveredPath, buf, { mode: 0o600 })
+  } catch {
+    /* best-effort — if we can't even write the backup, there's nothing more we can do here */
+  }
+  mainLog.warn(`[store] ${reason}; preserved the unreadable settings file to ${recoveredPath}`)
+}
+
+/**
+ * Try a `.recovered` sibling left behind by a previous preserveUnreadableSettings() call. Only consulted
+ * when the live settings.json is missing or unreadable — a readable live file always wins and this is
+ * never even looked at. Returns null when there's nothing usable there (absent, or itself unreadable
+ * under the current backend), so callers can tell "recovered {}" apart from "no recovery available" and
+ * decide whether to fall through to preserving the CURRENT unreadable buffer. Never deletes `.recovered`
+ * on success: the next successful setSettings() write replaces settings.json with fresh data and makes
+ * the backup moot on its own.
+ */
+function tryRecoveredSettings(): Record<string, unknown> | null {
+  let buf: Buffer
+  try {
+    buf = readFileSync(`${settingsPath()}.recovered`)
+  } catch {
+    return null // no recovered file either
+  }
+  const recovered = tryParseSettingsBuffer(buf)
+  if (!recovered) return null
+  mainLog.warn(`[store] settings.json was unreadable; using previously recovered settings from ${settingsPath()}.recovered`)
+  return recovered
+}
 
 /** Sparse user overrides (only keys the user actually changed). Decrypts at-rest encryption. */
 function readUserRaw(): Record<string, unknown> {
@@ -201,17 +279,22 @@ function readUserRaw(): Record<string, unknown> {
   try {
     buf = readFileSync(settingsPath())
   } catch {
-    return {} // no file yet
+    // No live file — nothing to preserve, but a previous unreadable-settings event may have already left
+    // a `.recovered` sibling behind (e.g. an update wiped settings.json outright). Try it before giving up.
+    return tryRecoveredSettings() ?? {}
   }
 
   // ── New AES-GCM format (file backend) ────────────────────────────────────────
   if (buf.length >= ENC_MARKER_V2.length && buf.subarray(0, ENC_MARKER_V2.length).equals(ENC_MARKER_V2)) {
-    try {
-      return JSON.parse(decryptSecret(buf.subarray(ENC_MARKER_V2.length)))
-    } catch (e) {
-      mainLog.warn('[store] settings.json undecryptable (AES-GCM); falling back to defaults', e)
-      return {} // Corrupt or key rotated — don't brick the app
-    }
+    const parsed = tryParseSettingsBuffer(buf)
+    if (parsed) return parsed
+    // Corrupt or key rotated — don't brick the app. Try `.recovered` BEFORE overwriting it: a `.recovered`
+    // file from an earlier, unrelated incident may still be readable, and clobbering it with today's dead
+    // bytes first would destroy that chance before we ever look at it.
+    const recovered = tryRecoveredSettings()
+    if (recovered) return recovered
+    preserveUnreadableSettings(buf, 'settings.json (V2 AES-GCM) is undecryptable')
+    return {}
   }
 
   // ── Legacy safeStorage format (ATKENC1) — migrate to file backend on next write ──
@@ -219,32 +302,45 @@ function readUserRaw(): Record<string, unknown> {
     // Only touch safeStorage (the Keychain) when the file backend is NOT in force. On a keystore-forced
     // build, reading a legacy V1 blob would re-open the very Keychain prompt we route around at boot — so
     // treat it as unreadable and fall back to defaults (a one-time re-onboard), never a blocking prompt.
-    if (!useFileBackend() && safeStorage.isEncryptionAvailable()) {
-      try {
-        const data = JSON.parse(safeStorage.decryptString(buf.subarray(ENC_MARKER_V1.length)))
-        // Best-effort migration: write the current backend format so subsequent reads don't need safeStorage.
-        if (useFileBackend()) {
-          try {
-            const p = settingsPath()
-            const tmp = `${p}.tmp`
-            writeFileSync(tmp, serializeUserRaw(data), { mode: 0o600 })
-            renameSync(tmp, p)
-          } catch { /* migration is best-effort; old format still works */ }
-        }
-        return data
-      } catch {
-        return {} // Undecryptable (keychain/OS user changed) — fall back to defaults
-      }
+    if (useFileBackend()) {
+      const recovered = tryRecoveredSettings()
+      if (recovered) return recovered
+      preserveUnreadableSettings(buf, 'settings.json (legacy V1) is unreadable — file backend is forced, so the Keychain is not probed')
+      return {}
     }
-    return {} // safeStorage unavailable + V1 file = unreadable; fall back to defaults
+    if (!safeStorage.isEncryptionAvailable()) {
+      const recovered = tryRecoveredSettings()
+      if (recovered) return recovered
+      preserveUnreadableSettings(buf, 'settings.json (legacy V1) is unreadable — safeStorage is unavailable on this machine')
+      return {}
+    }
+    const parsed = tryParseSettingsBuffer(buf)
+    if (parsed) {
+      // Best-effort migration: write the current backend format so subsequent reads don't need safeStorage.
+      if (useFileBackend()) {
+        try {
+          const p = settingsPath()
+          const tmp = `${p}.tmp`
+          writeFileSync(tmp, serializeUserRaw(parsed), { mode: 0o600 })
+          renameSync(tmp, p)
+        } catch { /* migration is best-effort; old format still works */ }
+      }
+      return parsed
+    }
+    // Undecryptable (keychain/OS user changed) — fall back to defaults, but try `.recovered` first.
+    const recoveredV1 = tryRecoveredSettings()
+    if (recoveredV1) return recoveredV1
+    preserveUnreadableSettings(buf, 'settings.json (legacy V1) is undecryptable — Keychain access lost or the OS user changed')
+    return {}
   }
 
   // ── Legacy plaintext ─────────────────────────────────────────────────────────
-  try {
-    return JSON.parse(buf.toString('utf8'))
-  } catch {
-    return {}
-  }
+  const parsed = tryParseSettingsBuffer(buf)
+  if (parsed) return parsed
+  const recoveredPlain = tryRecoveredSettings()
+  if (recoveredPlain) return recoveredPlain
+  preserveUnreadableSettings(buf, 'settings.json is present but not valid JSON')
+  return {}
 }
 
 /** Serialize user overrides, encrypted at rest. */

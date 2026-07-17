@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync, readFileSync } from 'node:fs'
+import { mkdtempSync, rmSync, writeFileSync, mkdirSync, readFileSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { app, safeStorage } from 'electron'
@@ -212,6 +212,46 @@ describe('store', () => {
     expect(s.temperature).toBe(DEFAULT_SETTINGS.temperature)
     expect(s.provider).toBe('anthropic')
     expect(s.suggestEverySec).toBe(10)
+  })
+
+  describe('settings.json.recovered (survive an unreadable settings.json)', () => {
+    it('preserves an undecryptable V2 settings file to .recovered and falls back to defaults', () => {
+      const settingsFile = join(userData, 'settings.json')
+      // A well-formed V2 marker followed by bytes that are not a valid AES-GCM envelope for this
+      // install's key — decryptSecret must throw, exactly like a corrupted file or a rotated key.
+      const garbage = Buffer.concat([ENC_V2, Buffer.from('not-a-valid-aes-gcm-ciphertext')])
+      writeFileSync(settingsFile, garbage)
+
+      const s = getSettings()
+      // Falls back to defaults rather than throwing or bricking the app.
+      expect(s.provider).toBe(DEFAULT_SETTINGS.provider)
+
+      // The original undecryptable buffer was preserved verbatim before being discarded.
+      const recoveredPath = `${settingsFile}.recovered`
+      expect(existsSync(recoveredPath)).toBe(true)
+      expect(readFileSync(recoveredPath)).toEqual(garbage)
+    })
+
+    it('returns a readable .recovered file\'s content when the main settings.json is corrupt', () => {
+      const settingsFile = join(userData, 'settings.json')
+      const garbage = Buffer.concat([ENC_V2, Buffer.from('another-invalid-ciphertext-blob')])
+      writeFileSync(settingsFile, garbage)
+      // A previously-preserved recovery copy, in the legacy plaintext format — readable regardless of
+      // which encryption backend is active for this test run.
+      writeFileSync(`${settingsFile}.recovered`, JSON.stringify({ provider: 'openai', temperature: 0.42 }), 'utf8')
+
+      const s = getSettings()
+      expect(s.provider).toBe('openai')
+      expect(s.temperature).toBe(0.42)
+    })
+
+    it('preserves nothing and creates no .recovered file when settings.json has never existed', () => {
+      const settingsFile = join(userData, 'settings.json')
+      // userData is a fresh temp dir — settings.json was never written, so readUserRaw hits ENOENT.
+      const s = getSettings()
+      expect(s.provider).toBe(DEFAULT_SETTINGS.provider)
+      expect(existsSync(`${settingsFile}.recovered`)).toBe(false)
+    })
   })
 
   describe('listDustAgents', () => {
