@@ -98,6 +98,7 @@ export const IPC = {
   exportRecapJson: 'recap:export-json',
   pickFolder: 'folder:pick',
   openPath: 'path:open',
+  openBrainForClaude: 'brain:open-for-claude',
   recallList: 'recall:list',
   recallSearch: 'recall:search',
   recallOpen: 'recall:open',
