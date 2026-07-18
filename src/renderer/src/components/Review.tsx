@@ -615,6 +615,23 @@ export const Review = memo(function Review({
                     {notesCopied ? <Check size={13} className="text-white" /> : <Copy size={13} />}
                     {notesCopied ? 'Copied' : 'Copy Summary'}
                   </Chip>
+                  {/* Regenerate — re-run the recap from the same transcript when the generated summary is wrong
+                      or thin. Same handler as the error-state Retry (onRetryRecap): a live meeting re-runs its
+                      recap, a past meeting regenerates + overwrites the saved one. Focus the section first
+                      because this button unmounts the instant regeneration clears recapText (mirrors Retry). */}
+                  {onRetryRecap && (
+                    <TextButton
+                      onClick={() => {
+                        summaryRef.current?.focus()
+                        onRetryRecap?.()
+                      }}
+                      disabled={recap?.streaming}
+                      title="Regenerate this summary from the transcript"
+                    >
+                      {recap?.streaming ? <Spinner size={11} /> : <RotateCcw size={11} />}
+                      {recap?.streaming ? 'Regenerating' : 'Regenerate'}
+                    </TextButton>
+                  )}
                   <TextButton onClick={exportJson} title="Copy structured JSON (decisions + action items) for Jira/Asana/Notion">
                     {jsonCopied ? <Check size={11} className="text-[var(--color-success)]" /> : <Download size={11} />}
                     {jsonCopied ? 'Copied' : 'Export JSON'}
