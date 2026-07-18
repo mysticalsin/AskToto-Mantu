@@ -80,13 +80,21 @@ export function initAutoUpdate(win: BrowserWindow | null): void {
         win?.webContents.send(IPC.updateDownloaded, { version: i?.version, notes })
       }
     )
-    // checkForUpdatesAndNotify shows the OS notification when an update is ready. The 'error' listener
-    // above always fires first for the same failure and already logs it (short for 404, full for anything
-    // else) — swallow it here silently rather than logging the identical failure a second time. Cadence
-    // is untouched: this runs once per app launch, no interval.
-    void autoUpdater.checkForUpdatesAndNotify().catch(() => {
-      /* already logged by the 'error' listener above */
+    // Stream download progress to the renderer so the update UI can show a "Downloading… X%" state rather
+    // than a silent wait before the ready toast appears.
+    autoUpdater.on('download-progress', (p: { percent?: number }) => {
+      win?.webContents.send(IPC.updateProgress, { percent: Math.round(p?.percent ?? 0) })
     })
+    // checkForUpdatesAndNotify shows the OS notification when an update is ready; the 'error' listener above
+    // already logs any failure (short for 404, full otherwise), so swallow the duplicate rejection here.
+    const check = (): void => {
+      void autoUpdater.checkForUpdatesAndNotify().catch(() => {
+        /* already logged by the 'error' listener above */
+      })
+    }
+    check()
+    // Re-check every 6h so a long-running app picks up a release the SAME day, not only at the next launch.
+    setInterval(check, 6 * 60 * 60 * 1000)
   } catch (e) {
     log.warn('[updater] init failed', e)
   }
