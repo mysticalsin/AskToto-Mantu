@@ -1,11 +1,13 @@
 # Métis Native — Apple flagship (macOS · iPadOS · iOS)
 
-**Status:** roadmap step 1 in progress. `MetisKit` builds + **8 tests green** (Swift 6.3, macOS 26 SDK):
+**Status:** roadmap steps 1–2 in progress. `MetisKit` builds + **9 tests green** (Swift 6.3, macOS 26 SDK):
 the shared core now includes the on-device intelligence, typed `@Generable` results (summary, suggestion,
-**next steps**), App Intents, and a platform-neutral **`MeetingController`** (owns the live meeting + drives
-the intents seam — the app's logic, unit-tested here rather than only at app-build time). The SwiftUI app
-target (`App/` + `project.yml`) is scaffolded — `xcodegen generate` + Xcode to run it on-device. This is a
-**new native product**, not an Electron conversion — it exists to use
+**next steps**), App Intents, a platform-neutral **`MeetingController`** (owns the live meeting, the App
+Intents seam, AND a live-transcript consumer — the app's logic, unit-tested here), and **`SpeechTranscription`**
+— the on-device `SpeechAnalyzer`/`SpeechTranscriber` (macOS/iOS 26) Speech→text mapping, **shape-verified to
+compile against the SDK** here. The SwiftUI app target (`App/` + `project.yml`) is scaffolded, including mic
+capture wired to the transcriber; `xcodegen generate` + Xcode to run it on-device. This is a **new native
+product**, not an Electron conversion — it exists to use
 Apple Intelligence, App Intents/Siri, and (on the 27 SDK) Private Cloud Compute *natively*, which the
 notarized Electron app structurally cannot. The Electron app remains the **Windows / cross-platform** path.
 

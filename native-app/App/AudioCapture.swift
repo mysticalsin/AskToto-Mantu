@@ -1,31 +1,55 @@
 import Foundation
+import AVFAudio
 import MetisKit
+#if canImport(Speech)
+import Speech
+#endif
 
-/// Wires platform audio capture into the controller. This is the ONE deeply platform-conditional piece
-/// (native-app/README.md): macOS gets ScreenCaptureKit loopback (THEM) + AVAudioEngine mic (ME); iOS /
-/// iPadOS get mic only — there is no loopback API on iOS, which is why iOS is the in-person / one-room
-/// companion, not a two-sided copilot.
+/// Wires platform audio capture into the controller — roadmap step 2. The MIC path (ME) is the same on
+/// macOS and iOS: AVAudioEngine mic tap → `AnalyzerInput` → `SpeechTranscription` (MetisKit, SDK-shape
+/// verified) → `controller.beginTranscription`. The REMOTE side (THEM) needs macOS system-audio loopback
+/// (ScreenCaptureKit) — the TODO below; iOS has no loopback API (Apple-forbidden), which is exactly why iOS
+/// is the in-person companion. macOS therefore becomes the two-sided copilot once the loopback tap lands.
 ///
-/// Roadmap step 2 fills in the real capture and feeds `SpeechTranscriber` lines into
-/// `controller.append(TranscriptLine(...))`. For now this installs no-op start/stop hooks so recording
-/// STATE and the App Intents "Toggle Recording" work end-to-end (verified in MeetingControllerTests) while
-/// the capture backend lands — no frames are captured yet.
+/// This file builds with Xcode (it needs AVAudioEngine + Speech + the mic entitlement + a device), NOT
+/// `swift build` — the transcription core it drives is what MetisKit build-verifies. Concurrency
+/// annotations around the non-Sendable AVAudioEngine may need tightening at first on-device build.
 enum AudioCapture {
     @MainActor static func wire(into controller: MeetingController) {
-        #if os(macOS)
-        controller.audioStart = {
-            // TODO (roadmap 2, macOS): SCStream system-audio loopback (THEM) + AVAudioEngine mic (ME) →
-            // SpeechTranscriber → controller.append(TranscriptLine(speaker:...)). Requires the
-            // com.apple.security.device.audio-input entitlement + Screen Recording permission.
+        let engine = AVAudioEngine()
+
+        controller.audioStart = { @MainActor in
+            #if canImport(Speech)
+            if #available(macOS 26.0, iOS 26.0, *) {
+                // Mic buffers → AnalyzerInput stream (AnalyzerInput is @unchecked Sendable, so the non-
+                // Sendable AVAudioPCMBuffer is wrapped on the capture thread and never crosses a boundary).
+                let (inputs, inputCont) = AsyncStream<AnalyzerInput>.makeStream()
+                let node = engine.inputNode
+                let format = node.outputFormat(forBus: 0)
+                node.installTap(onBus: 0, bufferSize: 4096, format: format) { buffer, _ in
+                    inputCont.yield(AnalyzerInput(buffer: buffer))
+                }
+                engine.prepare()
+                try engine.start()
+
+                // Bridge the transcription's throwing line stream into the controller's (non-throwing) one.
+                let lines = SpeechTranscription().transcribe(input: inputs, speaker: .me)
+                let (out, outCont) = AsyncStream<TranscriptLine>.makeStream()
+                Task {
+                    do { for try await line in lines { outCont.yield(line) } } catch { /* end on error */ }
+                    outCont.finish()
+                }
+                controller.beginTranscription(out)
+
+                // TODO (roadmap 2b, macOS only): a second SCStream system-audio tap → AnalyzerInput stream →
+                // SpeechTranscription(speaker: .them), merged so the mac build is the two-sided copilot.
+            }
+            #endif
         }
-        #else
-        controller.audioStart = {
-            // TODO (roadmap 2, iOS/iPadOS): AVAudioEngine mic only (in-person mode) → SpeechTranscriber →
-            // controller.append(...). Requires NSMicrophoneUsageDescription; no loopback (Apple-forbidden).
-        }
-        #endif
-        controller.audioStop = {
-            // TODO (roadmap 2): tear down the capture graph + finalize the transcript.
+
+        controller.audioStop = { @MainActor in
+            engine.inputNode.removeTap(onBus: 0)
+            engine.stop()
         }
     }
 }

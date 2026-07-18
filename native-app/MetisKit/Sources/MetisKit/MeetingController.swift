@@ -21,6 +21,9 @@ public final class MeetingController: MeetingActions {
     public var audioStart: (@Sendable () async throws -> Void)?
     public var audioStop: (@Sendable () async throws -> Void)?
 
+    /// The task draining a live transcript stream into the meeting; cancelled on stop or replace.
+    private var transcriptionTask: Task<Void, Never>?
+
     public init(
         intelligence: MeetingIntelligence = makeMeetingIntelligence(),
         meeting: Meeting = Meeting(title: "Meeting", startedAt: Date())
@@ -39,6 +42,25 @@ public final class MeetingController: MeetingActions {
     // MARK: Transcript
     public func append(_ line: TranscriptLine) { meeting.lines.append(line) }
     public func reset(title: String = "Meeting") { meeting = Meeting(title: title, startedAt: Date()) }
+
+    /// Start draining a live transcript stream — each recognized line is appended on the main actor.
+    /// Cancels any prior stream. The app calls this from its audio start with the real SpeechTranscriber's
+    /// output (App/SpeechTranscription.swift); tests pass a fake `AsyncStream`. Platform-neutral: no audio
+    /// or Speech types cross into MetisKit, so this stays testable + shared across all three platforms.
+    public func beginTranscription(_ stream: AsyncStream<TranscriptLine>) {
+        transcriptionTask?.cancel()
+        transcriptionTask = Task { [weak self] in
+            for await line in stream {
+                if Task.isCancelled { break }
+                self?.append(line)
+            }
+        }
+    }
+    /// Stop draining the live transcript (idempotent).
+    public func endTranscription() {
+        transcriptionTask?.cancel()
+        transcriptionTask = nil
+    }
 
     // MARK: Intelligence (bounded transcript-tail window, same strategy as the Electron app)
     public func suggestion() async throws -> String {
@@ -61,6 +83,7 @@ public final class MeetingController: MeetingActions {
     public func stopRecording() async throws {
         if !isRecording { return }
         try await audioStop?()
+        endTranscription()
         isRecording = false
         meeting.endedAt = Date()
     }
