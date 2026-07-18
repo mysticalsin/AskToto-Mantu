@@ -314,7 +314,9 @@ export function OnboardingV2({
   recoverEncryptedProfile,
   patch,
   onOpenAiSettings,
-  onDone
+  onDone,
+  signedIn,
+  signedInEmail
 }: {
   settings: PublicSettings
   saveKey?: (provider: ProviderId, k: string) => Promise<void>
@@ -322,6 +324,8 @@ export function OnboardingV2({
   patch: (p: Partial<PublicSettings>) => void
   onOpenAiSettings?: () => void
   onDone: () => void
+  signedIn?: boolean
+  signedInEmail?: string
 }): JSX.Element {
   const [phase, setPhase] = useState<'experience' | 'provider'>('experience')
   if (phase === 'experience') {
@@ -343,6 +347,8 @@ export function OnboardingV2({
       patch={patch}
       onOpenAiSettings={onOpenAiSettings}
       onDone={onDone}
+      signedIn={signedIn}
+      signedInEmail={signedInEmail}
       initialStep={5}
     />
   )
