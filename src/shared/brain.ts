@@ -193,6 +193,10 @@ export const MeetingExtractionSchema = z.object({
   // Stamped by the ingest job (not the model): source transcript basename + its ISO date, so consumers
   // (call-grade timelines, meeting feeds) can join extractions back to meetings without re-reading refs.
   source_file: z.string().default(''),
+  // Stamped by the ingest job when a transcript came from a shared TEAM folder (settings.teamTranscriptFolders):
+  // the folder's own name, so team-contributed knowledge is attributable and distinguishable from the
+  // user's own meetings. Empty ('') for the user's own meetings.
+  source_team: z.string().default(''),
   date: z.string().default('')
 })
 export type MeetingExtraction = z.infer<typeof MeetingExtractionSchema>

@@ -3205,6 +3205,31 @@ function registerIpc(): void {
     return publicSettings()
   })
 
+  // Team transcripts: pick a shared folder whose meeting transcripts are ALSO ingested into this brain
+  // (settings.teamTranscriptFolders). Appended (deduped) rather than replacing meetingsFolder — this
+  // never touches where the user's OWN meetings are saved.
+  ipcMain.handle(IPC.addTeamTranscriptFolder, async (e) => {
+    assertMainWindow(e)
+    const openDialogOpts: Electron.OpenDialogOptions = {
+      properties: ['openDirectory'],
+      message: "Choose a shared folder whose transcripts feed this brain (e.g. a teammate's meetings folder)"
+    }
+    const r = win ? await dialog.showOpenDialog(win, openDialogOpts) : await dialog.showOpenDialog(openDialogOpts)
+    if (!r.canceled && r.filePaths[0]) {
+      const picked = r.filePaths[0]
+      const current = getSettings().teamTranscriptFolders ?? []
+      if (!current.includes(picked)) setSettings({ teamTranscriptFolders: [...current, picked] })
+    }
+    return publicSettings()
+  })
+  ipcMain.handle(IPC.removeTeamTranscriptFolder, async (e, folder: unknown) => {
+    assertMainWindow(e)
+    const target = typeof folder === 'string' ? folder : ''
+    const current = getSettings().teamTranscriptFolders ?? []
+    setSettings({ teamTranscriptFolders: current.filter((f) => f !== target) })
+    return publicSettings()
+  })
+
   ipcMain.handle(IPC.openPath, (e) => {
     assertMainWindow(e)
     return requireAuth() ? shell.openPath(resolveMeetingsFolder(getSettings())) : ''

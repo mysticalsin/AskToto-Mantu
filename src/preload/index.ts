@@ -163,6 +163,9 @@ const api = {
   exportRecapJson: (markdown: string): Promise<RecapExport> =>
     ipcRenderer.invoke(IPC.exportRecapJson, markdown),
   pickFolder: (): Promise<PublicSettings> => ipcRenderer.invoke(IPC.pickFolder),
+  addTeamTranscriptFolder: (): Promise<PublicSettings> => ipcRenderer.invoke(IPC.addTeamTranscriptFolder),
+  removeTeamTranscriptFolder: (folder: string): Promise<PublicSettings> =>
+    ipcRenderer.invoke(IPC.removeTeamTranscriptFolder, folder),
   openMeetingsFolder: (): Promise<void> => ipcRenderer.invoke(IPC.openPath),
   openBrainForClaude: (): Promise<{ ok: boolean; path: string }> => ipcRenderer.invoke(IPC.openBrainForClaude),
   recallList: (): Promise<MeetingSummary[]> => ipcRenderer.invoke(IPC.recallList),
