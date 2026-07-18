@@ -624,7 +624,7 @@ export function Onboarding({
         >
           Decide later; recording and transcripts still work <ArrowRight size={11} />
         </button>
-        <StepDots step={5} />
+        {(initialStep ?? 1) < 5 && <StepDots step={5} />}
         <button
           type="button"
           onClick={() => setStep(4)}
@@ -668,7 +668,7 @@ export function Onboarding({
           <CheckRow
             ok={settings.providerReady}
             label={PROVIDERS[settings.provider]?.kind === 'cli' ? `${providerLabel} connected` : `${providerLabel} API key`}
-            hint={PROVIDERS[settings.provider]?.kind === 'cli' ? 'connect it in Settings → AI' : 'add it in Settings → AI'}
+            hint={PROVIDERS[settings.provider]?.kind === 'cli' ? 'connect it to get live answers' : 'add your key to get live answers'}
             // Settings can only render once the onboarding gate clears (App returns this panel while
             // !onboardingDone), so complete onboarding first — otherwise this link is a silent no-op,
             // a dead end on the one remediation the readiness checklist offers. finish() persists
