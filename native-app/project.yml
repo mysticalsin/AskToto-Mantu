@@ -1,0 +1,41 @@
+# xcodegen spec for the Métis native app — roadmap step 1 (native-app/README.md).
+#
+# Generate + open the Xcode project:
+#     brew install xcodegen        # not on this machine yet
+#     cd native-app && xcodegen generate
+#     open Metis.xcodeproj         # run on a Mac, or an iOS/iPad simulator/device
+#
+# One multiplatform app target depends on the local MetisKit package; only App/ (audio + windowing) is
+# platform-conditional. The app's LOGIC (MeetingController, Intelligence, App Intents) lives in MetisKit
+# and is covered by `swift test` — this target adds the SwiftUI shell + audio. If the installed xcodegen
+# predates `supportedDestinations`, split into per-platform targets or add the target in Xcode directly.
+name: Metis
+options:
+  bundleIdPrefix: com.mantu.metis
+  createIntermediateGroups: true
+  deploymentTarget:
+    macOS: "14.0"
+    iOS: "17.0"
+packages:
+  MetisKit:
+    path: MetisKit
+targets:
+  Metis:
+    type: application
+    supportedDestinations: [macOS, iOS]   # iPad is an iOS destination — a single multiplatform target
+    sources:
+      - App
+    dependencies:
+      - package: MetisKit
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.mantu.metis.native
+        MARKETING_VERSION: "0.1.0"
+        CURRENT_PROJECT_VERSION: "1"
+        SWIFT_VERSION: "6.0"
+        SWIFT_STRICT_CONCURRENCY: complete
+        CODE_SIGN_STYLE: Automatic
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_CFBundleDisplayName: "Métis"
+        INFOPLIST_KEY_LSApplicationCategoryType: "public.app-category.productivity"
+        INFOPLIST_KEY_NSMicrophoneUsageDescription: "Métis transcribes meeting audio on-device to give you live suggestions and summaries."
