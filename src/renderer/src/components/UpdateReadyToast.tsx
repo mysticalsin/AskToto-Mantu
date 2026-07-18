@@ -69,7 +69,7 @@ export function UpdateReadyToast({
             Update ready{version ? ` · v${version}` : ''}
           </div>
           <div className="flex items-center gap-1.5 text-[11px] leading-snug text-[color:var(--color-ink-2)]">
-            <span className="truncate">Your meetings are kept — restart to apply.</span>
+            <span className="truncate">Your meetings are kept, restart to apply.</span>
             {trimmed && (
               <button
                 type="button"

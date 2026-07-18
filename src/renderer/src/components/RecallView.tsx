@@ -509,7 +509,7 @@ const MeetingRow = memo(function MeetingRow({
               {/* Task MI-5 — confidential lock chip: excluded from every published wiki page. */}
               {m.confidential && (
                 <span
-                  title="Confidential — excluded from published intelligence"
+                  title="Confidential: excluded from published intelligence"
                   className="flex shrink-0 items-center gap-1 rounded-full bg-[var(--color-danger)]/10 px-2 py-0.5 text-[10px] text-[var(--color-danger)]"
                 >
                   <Lock size={10} /> Confidential
@@ -1024,7 +1024,7 @@ export function RecallView({
                   icon={X}
                   ariaLabel="Dismiss this summary notice"
                   onClick={() => dismissImport(job.jobId)}
-                  title="Dismiss — the transcript is already saved"
+                  title="Dismiss, the transcript is already saved"
                 />
               </>
             ) : job.state !== 'done' ? (

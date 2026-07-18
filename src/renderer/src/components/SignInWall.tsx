@@ -55,7 +55,7 @@ export function SignInWall({
         // enforced (e.g. sticky-configured from a genuine prior sign-in, or org policy). Treating this
         // as success would silently strand the user behind the wall with a stopped spinner and no
         // feedback or way forward.
-        setErr("Microsoft sign-in isn't configured — set it up in Settings → Account, or contact your admin.")
+        setErr("Microsoft sign-in isn't configured. Set it up in Settings → Account, or contact your admin.")
       }
     } catch (e) {
       setErr(friendlyAuthError(e instanceof Error ? e.message : 'Sign-in failed.', domainLabel))
