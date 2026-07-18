@@ -664,6 +664,8 @@ async function runImportedRecap(job: ImportJob): Promise<string | undefined> {
               : undefined,
           model,
           temperature: settings.temperature,
+          // Same Kimi reasoning gate as the live stream: light by default, heavy only when thinking is on.
+          reasoningEffort: provider === 'kimi' ? (settings.thinkingMode === 'always' ? 'high' : 'low') : undefined,
           idleMs: 120_000,
           freshConversation: true,
           system:
@@ -2591,6 +2593,9 @@ function registerIpc(): void {
             : undefined,
         model,
         temperature: s.temperature,
+        // Kimi's kimi-for-coding always reasons (burning tokens). Default it to LOW effort and only go HIGH
+        // when the user turns Métis thinking on (thinkingMode 'always'); undefined for every other provider.
+        reasoningEffort: provider === 'kimi' ? (s.thinkingMode === 'always' ? 'high' : 'low') : undefined,
         idleMs,
         system: buildSystem(req, s.mode, s.profile, s.modePrompts, s.contextDocs[s.mode] || [], s.outputLanguage, s.summaryLanguage, s.systemPrompt),
         req,
