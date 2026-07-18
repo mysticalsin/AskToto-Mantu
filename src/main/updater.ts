@@ -63,11 +63,23 @@ export function initAutoUpdate(win: BrowserWindow | null): void {
       log.warn('[updater] error', e?.stack || e?.message || e)
     })
     autoUpdater.on('update-available', (i: { version?: string }) => log.info('[updater] update-available', i?.version))
-    autoUpdater.on('update-downloaded', (i: { version?: string }) => {
-      log.info('[updater] downloaded', i?.version)
-      // In-app banner (UpdateReadyToast) alongside the OS notification checkForUpdatesAndNotify already shows.
-      win?.webContents.send(IPC.updateDownloaded, { version: i?.version })
-    })
+    autoUpdater.on(
+      'update-downloaded',
+      (i: { version?: string; releaseNotes?: string | Array<{ note?: string | null }> | null }) => {
+        log.info('[updater] downloaded', i?.version)
+        // Ship the release notes (the GitHub release body) with the version so the in-app UpdateReadyToast
+        // can show a "What's new" panel — the user sees what changed before choosing to restart & apply.
+        const raw = i?.releaseNotes
+        const notes =
+          typeof raw === 'string'
+            ? raw.trim() || undefined
+            : Array.isArray(raw)
+              ? raw.map((x) => String(x?.note ?? '')).filter(Boolean).join('\n\n').trim() || undefined
+              : undefined
+        // In-app banner (UpdateReadyToast) alongside the OS notification checkForUpdatesAndNotify already shows.
+        win?.webContents.send(IPC.updateDownloaded, { version: i?.version, notes })
+      }
+    )
     // checkForUpdatesAndNotify shows the OS notification when an update is ready. The 'error' listener
     // above always fires first for the same failure and already logs it (short for 404, full for anything
     // else) — swallow it here silently rather than logging the identical failure a second time. Cadence

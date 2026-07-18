@@ -1,14 +1,19 @@
-import { Download, X } from 'lucide-react'
+import { useState } from 'react'
+import { Download, X, ChevronDown } from 'lucide-react'
 
 export interface UpdateReadyToastProps {
   open: boolean
   version?: string
+  /** Release notes for the downloaded version (the GitHub release body) — shown in the "What's new" panel. */
+  notes?: string
   onRestart: () => void
   onDismiss: () => void
 }
 
-export function UpdateReadyToast({ open, version, onRestart, onDismiss }: UpdateReadyToastProps): JSX.Element | null {
+export function UpdateReadyToast({ open, version, notes, onRestart, onDismiss }: UpdateReadyToastProps): JSX.Element | null {
+  const [showNotes, setShowNotes] = useState(false)
   if (!open) return null
+  const trimmed = notes?.trim()
 
   return (
     <div role="alert" aria-live="polite" className="fade-up glass-strong rounded-[14px] px-3.5 py-2.5">
@@ -20,7 +25,20 @@ export function UpdateReadyToast({ open, version, onRestart, onDismiss }: Update
           <div className="truncate text-[13px] font-medium text-[color:var(--color-ink)]">
             Update ready{version ? ` · v${version}` : ''}
           </div>
-          <div className="truncate text-[11px] leading-snug text-[color:var(--color-ink-2)]">Restart to apply it.</div>
+          <div className="flex items-center gap-1.5 text-[11px] leading-snug text-[color:var(--color-ink-2)]">
+            <span className="truncate">Your meetings are kept — restart to apply.</span>
+            {trimmed && (
+              <button
+                type="button"
+                onClick={() => setShowNotes((v) => !v)}
+                aria-expanded={showNotes}
+                className="no-drag focus-ring inline-flex shrink-0 items-center gap-0.5 rounded-full px-1.5 py-0.5 font-medium text-[color:var(--color-accent-2)] hover:bg-white/10"
+              >
+                What&apos;s new
+                <ChevronDown size={11} className={showNotes ? 'rotate-180' : ''} />
+              </button>
+            )}
+          </div>
         </div>
         <div className="flex shrink-0 items-center gap-1">
           <button
@@ -40,6 +58,11 @@ export function UpdateReadyToast({ open, version, onRestart, onDismiss }: Update
           </button>
         </div>
       </div>
+      {trimmed && showNotes && (
+        <div className="scroll-thin mt-2 max-h-40 overflow-y-auto whitespace-pre-wrap rounded-[10px] border border-white/10 bg-white/[0.03] px-3 py-2 text-[11px] leading-relaxed text-[color:var(--color-ink-2)]">
+          {trimmed}
+        </div>
+      )}
     </div>
   )
 }
