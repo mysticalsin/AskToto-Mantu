@@ -17,7 +17,7 @@
 // Both shell out to built-in Windows tools (powershell / icacls); everything is a no-op off win32.
 
 import { execFileSync } from 'node:child_process'
-import { statSync } from 'node:fs'
+import { closeSync, fstatSync, openSync, readFileSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import log from 'electron-log'
 
@@ -123,6 +123,16 @@ try {
 // getSettings()'s own mtime-keyed cache (store.ts), so this doesn't run on every settings read.
 let warnedUntrusted = false
 
+function warnUntrusted(path: string): void {
+  if (warnedUntrusted) return
+  warnedUntrusted = true
+  log.warn(
+    `[win-security] ignoring machine managed-config at ${path}: not admin-owned or writable by ` +
+      `non-privileged users. Deploy it via an elevated installer/GPO so it is owned by ` +
+      `SYSTEM/Administrators with no Users-write ACE.`
+  )
+}
+
 /**
  * Is the machine managed-config file safe to honor as ADMIN-authored policy?
  * - Non-win32: yes — the parent dir is root-owned, the OS already enforces it.
@@ -134,6 +144,11 @@ let warnedUntrusted = false
  * that opened a stat→read TOCTOU where a standard user create/delete loop on the ProgramData path
  * could win the race and get a forged policy honored for that read (and cached by mtime upstream).
  * Legitimate behavior is identical — every reader already treats an absent file as no-policy.
+ *
+ * NOTE: this function alone is NOT enough to safely read the file's content — a caller that does
+ * `if (isAdminManagedTrusted(p)) readFileSync(p)` reopens a TOCTOU between this check and that read
+ * (the file can be swapped in between). Use readTrustedAdminManaged() below for the actual content;
+ * this export remains for the boolean question and is what the unit tests exercise directly.
  */
 export function isAdminManagedTrusted(path: string = adminManagedConfigPath()): boolean {
   if (process.platform !== 'win32') return true
@@ -146,22 +161,84 @@ export function isAdminManagedTrusted(path: string = adminManagedConfigPath()): 
 
   const acl = readAcl(path)
   const trusted = acl ? evaluateAclTrust(acl) : false
-  if (!trusted && !warnedUntrusted) {
-    warnedUntrusted = true
-    log.warn(
-      `[win-security] ignoring machine managed-config at ${path}: not admin-owned or writable by ` +
-        `non-privileged users. Deploy it via an elevated installer/GPO so it is owned by ` +
-        `SYSTEM/Administrators with no Users-write ACE.`
-    )
-  }
+  if (!trusted) warnUntrusted(path)
   return trusted
 }
 
-/** The machine managed-config path, or null on win32 when it is not admin-trusted (see above). Callers
- *  use this instead of the raw path so a forged ProgramData policy is never read. */
+/** The machine managed-config path, or null on win32 when it is not admin-trusted (see above).
+ *  Path-only — safe for cache keys/mtime/display, but reading content by this path afterward reopens
+ *  the check→read TOCTOU (see readTrustedAdminManaged). No current caller does that; content readers
+ *  all use readTrustedAdminManaged() instead. */
 export function trustedAdminManagedPath(): string | null {
   const p = adminManagedConfigPath()
   return isAdminManagedTrusted(p) ? p : null
+}
+
+/**
+ * Read the machine managed-config file's content IFF it is admin-trusted — closing the TOCTOU that
+ * `isAdminManagedTrusted(p) ? readFileSync(p) : ...` leaves open: a standard user with create/delete
+ * rights on the ProgramData dir can swap a forged file in between that check and that read, so the
+ * content actually read never matches what was ACL-verified.
+ *
+ * Fix: open the file ONCE and keep the fd for both the trust decision and the read.
+ * - The fd is opened before anything else, so its content is fixed at open time regardless of what
+ *   later happens at that path.
+ * - `Get-Acl` only takes a path (no Win32 API here operates on a Node fd without a native addon), so
+ *   after the ACL check we re-stat the path and require it still resolve to the SAME file (matching
+ *   device+inode) our fd holds. If an attacker swapped the path mid-ACL-check, the identity no longer
+ *   matches and the read is refused — the trust decision and the fd's content are provably about the
+ *   same on-disk file, not just "some file that was at this path at some point".
+ * - The content is then read from the held fd, never re-opened by path, so nothing can be substituted
+ *   after the identity check passes.
+ *
+ * Non-win32: the parent dir is root-owned, so a plain readFileSync is already safe (matches
+ * isAdminManagedTrusted's platform gate). Returns null when absent, unreadable, untrusted, or the
+ * path was swapped mid-check.
+ */
+export function readTrustedAdminManaged(path: string = adminManagedConfigPath()): string | null {
+  if (process.platform !== 'win32') {
+    try {
+      return readFileSync(path, 'utf8')
+    } catch {
+      return null
+    }
+  }
+
+  let fd: number
+  try {
+    fd = openSync(path, 'r')
+  } catch {
+    return null // absent/unreadable → no policy to honor
+  }
+  try {
+    const st = fstatSync(fd)
+    if (!st.isFile()) return null
+
+    const acl = readAcl(path)
+    const trusted = acl ? evaluateAclTrust(acl) : false
+    if (!trusted) {
+      warnUntrusted(path)
+      return null
+    }
+
+    // Defend the Get-Acl-by-path step above: confirm the path still resolves to the exact file our fd
+    // holds before trusting its content. A swap during the ACL check (this file's window is now the
+    // ACL-check's PowerShell round-trip, not "until the caller gets around to reading it") would change
+    // dev/ino here.
+    let st2: ReturnType<typeof statSync>
+    try {
+      st2 = statSync(path)
+    } catch {
+      return null
+    }
+    if (st2.dev !== st.dev || st2.ino !== st.ino) return null
+
+    return readFileSync(fd, 'utf8')
+  } catch {
+    return null
+  } finally {
+    closeSync(fd)
+  }
 }
 
 /** Apply an owner-only DACL (current user + SYSTEM, inheritance removed) to a file on win32, where
