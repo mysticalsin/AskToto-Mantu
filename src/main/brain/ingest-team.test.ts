@@ -6,8 +6,8 @@ import { app } from 'electron'
 import { PROVIDER_IDS } from '@shared/providers'
 import { MeetingExtractionSchema } from '@shared/brain'
 import { getSettings, setSettings } from '../store'
-import { startBackfill } from './ingest'
-import { readIndex, readMeetingExtraction, slugify, writeMeetingExtraction } from './store'
+import { extractionSlug, startBackfill } from './ingest'
+import { readIndex, readMeetingExtraction, writeMeetingExtraction } from './store'
 
 vi.mock('electron')
 
@@ -61,7 +61,7 @@ describe('team-transcript ingest', () => {
     setSettings({ meetingsFolder, teamTranscriptFolders: [teamFolder] })
     // Pre-write the saved extraction under the NAMESPACED slug so startBackfill merges it locally (no LLM).
     const key = `team/alice/${file}`
-    await writeMeetingExtraction(getSettings(), slugify(key), MeetingExtractionSchema.parse({ title24: 'Alice sync' }))
+    await writeMeetingExtraction(getSettings(), extractionSlug(key), MeetingExtractionSchema.parse({ title24: 'Alice sync' }))
 
     startBackfill()
 
@@ -71,7 +71,7 @@ describe('team-transcript ingest', () => {
     })
     expect(readIndex(getSettings()).ingested[file]).toBeUndefined()
     // Attribution: the ingest job re-stamps the stored extraction with the folder owner.
-    expect(readMeetingExtraction(getSettings(), slugify(key))?.source_team).toBe('alice')
+    expect(readMeetingExtraction(getSettings(), extractionSlug(key))?.source_team).toBe('alice')
   })
 
   it('does not collide a team file with an own meeting of the same basename — both ingest independently', async () => {
@@ -82,8 +82,8 @@ describe('team-transcript ingest', () => {
     writeFileSync(join(meetingsFolder, file), '---\ndate: 2026-02-02\n---\nMy own standup.', 'utf8')
     writeFileSync(join(teamFolder, file), '---\ndate: 2026-02-02\n---\nBob standup.', 'utf8')
     setSettings({ meetingsFolder, teamTranscriptFolders: [teamFolder] })
-    await writeMeetingExtraction(getSettings(), slugify(file), MeetingExtractionSchema.parse({ title24: 'My standup' }))
-    await writeMeetingExtraction(getSettings(), slugify(`team/bob/${file}`), MeetingExtractionSchema.parse({ title24: 'Bob standup' }))
+    await writeMeetingExtraction(getSettings(), extractionSlug(file), MeetingExtractionSchema.parse({ title24: 'My standup' }))
+    await writeMeetingExtraction(getSettings(), extractionSlug(`team/bob/${file}`), MeetingExtractionSchema.parse({ title24: 'Bob standup' }))
 
     startBackfill()
 
@@ -93,8 +93,8 @@ describe('team-transcript ingest', () => {
       expect(idx.ingested[`team/bob/${file}`]?.ok).toBe(true) // team file, namespaced — no collision
     })
     // The own meeting carries no team tag; only the shared-folder file is attributed to bob.
-    expect(readMeetingExtraction(getSettings(), slugify(file))?.source_team).toBe('')
-    expect(readMeetingExtraction(getSettings(), slugify(`team/bob/${file}`))?.source_team).toBe('bob')
+    expect(readMeetingExtraction(getSettings(), extractionSlug(file))?.source_team).toBe('')
+    expect(readMeetingExtraction(getSettings(), extractionSlug(`team/bob/${file}`))?.source_team).toBe('bob')
   })
 
   it('ignores an unavailable team folder without failing the own-meeting scan', () => {
