@@ -1,7 +1,14 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { evaluateAclTrust, isAdminManagedTrusted, trustedAdminManagedPath, type AclProbe } from './win-security'
+import { tmpdir } from 'node:os'
+import {
+  evaluateAclTrust,
+  isAdminManagedTrusted,
+  readTrustedAdminManaged,
+  trustedAdminManagedPath,
+  type AclProbe
+} from './win-security'
 
 const REAL_PLATFORM = process.platform
 function setPlatform(p: NodeJS.Platform): void {
@@ -124,6 +131,35 @@ describe('isAdminManagedTrusted / trustedAdminManagedPath — platform gate', ()
   })
 })
 
+describe('readTrustedAdminManaged — content read tied to the trust decision', () => {
+  const tmpDir = join(tmpdir(), `wsec-readtrust-${process.pid}`)
+  const file = join(tmpDir, 'managed-config.json')
+  afterEach(() => {
+    try {
+      if (existsSync(tmpDir)) rmSync(tmpDir, { recursive: true, force: true })
+    } catch {
+      /* best-effort */
+    }
+  })
+
+  it('off-win32: reads the real file content straight through (root-owned dir already enforces trust)', () => {
+    setPlatform('darwin')
+    mkdirSync(tmpDir, { recursive: true })
+    writeFileSync(file, JSON.stringify({ requireAuth: true }))
+    expect(readTrustedAdminManaged(file)).toBe(JSON.stringify({ requireAuth: true }))
+  })
+
+  it('off-win32: returns null for an absent file', () => {
+    setPlatform('darwin')
+    expect(readTrustedAdminManaged(join(tmpDir, '__does_not_exist__.json'))).toBeNull()
+  })
+
+  it('win32: returns null for an absent file (no fd to open, no policy to honor)', () => {
+    setPlatform('win32')
+    expect(readTrustedAdminManaged('C:\\ProgramData\\Métis\\__does_not_exist__.json')).toBeNull()
+  })
+})
+
 // Live end-to-end proof through the real PowerShell Get-Acl reader: a file a standard (non-elevated)
 // user can create under %ProgramData% must NOT be honored as admin policy. Windows-only; self-cleaning.
 describe.runIf(process.platform === 'win32')('isAdminManagedTrusted — real ProgramData ACL (win32)', () => {
@@ -142,5 +178,13 @@ describe.runIf(process.platform === 'win32')('isAdminManagedTrusted — real Pro
     writeFileSync(file, JSON.stringify({ escrowPubKey: 'ATTACKER', requireAuth: true }))
     // The file exists and parses, but the ACL reader sees a non-admin owner + inherited Users write.
     expect(isAdminManagedTrusted(file)).toBe(false)
+  })
+
+  it('readTrustedAdminManaged never returns content for that same untrusted file', () => {
+    mkdirSync(dir, { recursive: true })
+    writeFileSync(file, JSON.stringify({ escrowPubKey: 'ATTACKER', requireAuth: true }))
+    // Content must not leak even though the file exists and parses — the ACL is untrusted, so the
+    // held-fd read is refused before ever handing the caller a string to JSON.parse.
+    expect(readTrustedAdminManaged(file)).toBeNull()
   })
 })
