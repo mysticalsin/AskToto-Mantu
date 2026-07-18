@@ -158,6 +158,7 @@ export function TapControlCard({
     <Section
       title="Desk Tap Control"
       desc="Tap the desk near your Mac to trigger an action — recognized on-device from the tap's sound. Pick two spots that sound different to the mic (one close, one at arm's length works best)."
+      icon={Fingerprint}
     >
       <ToggleRow
         label="Enable tap control"
