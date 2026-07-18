@@ -4,6 +4,7 @@ import {
   getScreenSourcesWithRetry,
   isScreenCapturePermissionError,
   isUsableScreenSource,
+  needsAppRelaunchForScreenCapture,
   screenCaptureUnavailableMessage
 } from './screen-capture'
 
@@ -67,5 +68,16 @@ describe('screen capture source recovery', () => {
     expect(isScreenCapturePermissionError(screenCaptureUnavailableMessage('darwin', 'denied'))).toBe(true)
     expect(isScreenCapturePermissionError(screenCaptureUnavailableMessage('win32', 'denied'))).toBe(true)
     expect(isScreenCapturePermissionError('Screen capture returned an empty image. Try again in a moment.')).toBe(false)
+  })
+
+  it('distinguishes a granted-but-not-yet-active grant (needs a relaunch) from an off/denied grant (needs System Settings)', () => {
+    const grantedJustNow = screenCaptureUnavailableMessage('darwin', 'granted')
+    const off = screenCaptureUnavailableMessage('darwin', 'denied')
+
+    expect(isScreenCapturePermissionError(grantedJustNow)).toBe(true)
+    expect(needsAppRelaunchForScreenCapture(grantedJustNow)).toBe(true)
+
+    expect(isScreenCapturePermissionError(off)).toBe(true)
+    expect(needsAppRelaunchForScreenCapture(off)).toBe(false)
   })
 })

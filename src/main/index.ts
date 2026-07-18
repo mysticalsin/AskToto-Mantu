@@ -3588,6 +3588,15 @@ function registerIpc(): void {
     quitFlushDone = true
     app.quit()
   })
+  // A fresh Screen Recording grant only takes effect for a NEW launch (macOS applies TCC changes to the
+  // next process, not the already-running one) — this is the one-click recovery for that dead end, wired
+  // to the Restart button the renderer shows once it detects the permission flipped mid-session. Leaves
+  // quitFlushDone unset so the normal before-quit handler still flushes a live meeting first.
+  ipcMain.handle(IPC.windowRelaunch, (e) => {
+    assertMainWindow(e)
+    app.relaunch()
+    app.quit()
+  })
   // --- Auto-update ---
   ipcMain.handle(IPC.updateInstall, (e) => {
     assertMainWindow(e)
