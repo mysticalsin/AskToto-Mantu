@@ -22,14 +22,15 @@ function openaiMessages(req: AskStart, system: string): any[] {
 }
 
 /**
- * Some OpenAI-compatible provider endpoints (local models, certain proxies) reject
- * `stream_options.include_usage` with a 400 or 422. Detect that so we can retry without it.
+ * Some OpenAI-compatible provider endpoints (local models, certain proxies) reject an optional param —
+ * `stream_options.include_usage`, or `reasoning_effort` — with a 400 or 422. Detect that so we can retry
+ * once without the optional params (both ride the same retry: see doStream's `includeUsage` gate).
  */
 function isStreamOptionsRejection(e: unknown): boolean {
   if (!(e instanceof OpenAI.APIError)) return false
   if (e.status !== 400 && e.status !== 422) return false
   const body = (String(e.message ?? '') + JSON.stringify((e as any).error ?? '')).toLowerCase()
-  return body.includes('stream_options') || body.includes('include_usage')
+  return body.includes('stream_options') || body.includes('include_usage') || body.includes('reasoning_effort')
 }
 
 /** Resolve the completion ceiling without changing established cloud-provider budgets. */
@@ -83,6 +84,11 @@ export function streamOpenAI(opts: StreamOptions): StreamHandle {
       // Ask the provider to include token usage in the final stream chunk (else onDone reports blank).
       // Omitted on retry when the provider rejected it (isStreamOptionsRejection).
       if (includeUsage) params.stream_options = { include_usage: true }
+      // reasoning_effort rides the same optional flag: sent on the first attempt, dropped on the retry if
+      // the provider 400s on it. Only Kimi sets opts.reasoningEffort (see StreamOptions), so every other
+      // provider's body is unchanged. This is how "Kimi = light thinking by default, heavy only when Métis
+      // thinking is on" reaches the wire.
+      if (includeUsage && opts.reasoningEffort) params.reasoning_effort = opts.reasoningEffort
       if (isOSeries) {
         params.max_completion_tokens = maxTokens
       } else {
