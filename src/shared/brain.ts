@@ -558,7 +558,7 @@ const ELIGIBLE_SOURCE_MODES = new Set([
 
 /** Classifies configured built-in modes only. Transcript content never affects this result. */
 export function classifyMeetingSourceUse(mode: string): SourceUse {
-  if (mode === 'interview') return 'employment'
+  if (mode === 'interview' || mode === 'recruiting') return 'employment'
   if (ELIGIBLE_SOURCE_MODES.has(mode)) return 'eligible'
   return 'unknown'
 }
