@@ -565,8 +565,8 @@ export const Review = memo(function Review({
           <Lock size={13} className={confidentialFlag ? 'text-[var(--color-danger)]' : 'text-[color:var(--color-ink-3)]'} />
           <span className="flex-1 text-[color:var(--color-ink-2)]">
             {confidentialFlag
-              ? 'Confidential — excluded from published intelligence.'
-              : 'Confidential — exclude from published intelligence'}
+              ? 'Confidential: excluded from published intelligence.'
+              : 'Confidential: exclude from published intelligence'}
           </span>
           <span className={confidentialFlag ? 'font-medium text-[var(--color-danger)]' : 'text-[color:var(--color-ink-3)]'}>
             {confidentialFlag ? 'On' : 'Off'}

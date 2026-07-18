@@ -928,7 +928,7 @@ function AiSection({
           onKeyDown={(e) => e.key === 'Enter' && test.status !== 'loading' && onSave()}
           placeholder={
             envKeyActive
-              ? 'Set via environment variable — takes precedence over any in-app key'
+              ? 'Set via environment variable, takes precedence over any in-app key'
               : settings.hasKeys[provider]
                 ? '•••••• saved (paste to replace)'
                 : `Paste your ${def.label} key`
@@ -1853,7 +1853,7 @@ function CliIntegration({
   return (
     <Section
       title="CLI Integration"
-      desc="Claude Code and Codex route through your own local install of that tool — it has to be on this device. Set up automatically installs it (via npm i -g) if it's missing, or connects straight away if it's already there."
+      desc="Claude Code and Codex route through your own local install of that tool. It has to be on this device. Set up automatically installs it (via npm i -g) if it's missing, or connects straight away if it's already there."
       icon={Link2}
     >
       <div className="flex flex-col gap-3">
@@ -2458,7 +2458,7 @@ function DustSetup({
         setCli({
           busy: false,
           ok: false,
-          msg: 'Almost there — finish picking your workspace in the Terminal window from setup (use the arrow keys, press Enter, then wait for "Authentication and workspace selection complete!"). Then click Connect again.'
+          msg: 'Almost there. Finish picking your workspace in the Terminal window from setup (use the arrow keys, press Enter, then wait for "Authentication and workspace selection complete!"). Then click Connect again.'
         })
         return
       }
@@ -2656,18 +2656,18 @@ function DustSetup({
         setCli({
           busy: false,
           ok: false,
-          msg: 'Almost there — finish picking your workspace in the Terminal window from setup (arrow keys, then Enter), then Reconnect.'
+          msg: 'Almost there. Finish picking your workspace in the Terminal window from setup (arrow keys, then Enter), then Reconnect.'
         })
         return
       }
       // decision === 'run-setup' — the saved connection is dead. Auto-run setup, but at most once per app
       // run (dustAutoSetupLaunched); a reopen mid-login points the user at Reconnect instead of a 2nd window.
       if (dustAutoSetupLaunched) {
-        setCli({ busy: false, ok: false, msg: 'Dust session ended — Reconnect to finish signing in again.' })
+        setCli({ busy: false, ok: false, msg: 'Dust session ended, Reconnect to finish signing in again.' })
         return
       }
       dustAutoSetupLaunched = true
-      setCli({ busy: true, ok: false, msg: 'Dust session ended — reopening setup in Terminal. Log in to reconnect.' })
+      setCli({ busy: true, ok: false, msg: 'Dust session ended, reopening setup in Terminal. Log in to reconnect.' })
       const s = await window.toto.dustSetupCli()
       setCli({
         busy: false,
@@ -2925,7 +2925,7 @@ function DustSetup({
             </div>
           )}
           <span className="pl-7 text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
-            Get one at dust.tt → Settings → API Keys (admin). Or use “Set up Dust automatically” above —
+            Get one at dust.tt → Settings → API Keys (admin). Or use “Set up Dust automatically” above,
             no key needed.
           </span>
         </div>
@@ -2976,7 +2976,7 @@ function DustSetup({
             {storedAgentMissing && (
               <div className="flex items-start gap-1.5 rounded-[8px] border border-[var(--cl-destructive)]/30 bg-[var(--cl-destructive)]/10 px-2.5 py-1.5 text-[11px] leading-snug text-[color:var(--cl-destructive)]">
                 <Info size={13} className="mt-0.5 shrink-0" />
-                <span>Your saved agent is not in this workspace anymore — pick one below so asks and Spotlight Ref work again.</span>
+                <span>Your saved agent is not in this workspace anymore. Pick one below so asks and Spotlight Ref work again.</span>
               </div>
             )}
             <AgentPicker
@@ -2995,7 +2995,7 @@ function DustSetup({
               <div className={selectedAgentRunsSonnet ? 'text-[11px] text-[var(--cl-success)]' : 'text-[11px] text-[color:var(--cl-muted-foreground)]'}>
                 {selectedAgentRunsSonnet
                   ? `Agent reports model: Anthropic ${selectedAgent.modelId}`
-                  : `This agent reports ${selectedAgent.modelProviderId || 'an unknown provider'} ${selectedAgent.modelId || 'with no model id'}, not Anthropic Sonnet. It will still work — replies may just differ in tone or quality.`}
+                  : `This agent reports ${selectedAgent.modelProviderId || 'an unknown provider'} ${selectedAgent.modelId || 'with no model id'}, not Anthropic Sonnet. It will still work, replies may just differ in tone or quality.`}
               </div>
             )}
           </div>
@@ -3048,7 +3048,7 @@ function DustSetup({
               <Info size={15} />
             )}
             {storedAgentMissing
-              ? "The managed base agent isn't available in this workspace/region — answers will fail. Check the pasted workspace and US/EU region."
+              ? "The managed base agent isn't available in this workspace/region. Answers will fail. Check the pasted workspace and US/EU region."
               : connected
                 ? `Workspace ${settings.dustWorkspaceId}. Base: ${selectedAgentName || agent}${
                     thinkAgent ? `, Thinking: ${agents?.find((a) => a.sId === thinkAgent)?.name || thinkAgent}` : ' (thinking → same as base)'
@@ -3257,7 +3257,7 @@ function MicLevelMeter({
       blockedReason === 'permission'
         ? 'No signal. Allow microphone access to test this device.'
         : blockedReason === 'device'
-          ? 'Device unavailable — choose another mic, or reconnect it and retry.'
+          ? 'Device unavailable, choose another mic, or reconnect it and retry.'
           : 'No signal from this microphone.'
     return (
       <FieldHint text={hint}>
@@ -4023,7 +4023,7 @@ const TABS: {
     id: 'intelligence',
     label: 'Intelligence',
     icon: MantuMark,
-    desc: 'Your second brain — meetings, wiki, CRM, knowledge graph.',
+    desc: 'Your second brain: meetings, wiki, CRM, knowledge graph.',
     keywords: ['mantu intelligence', 'meetings & follow-up', 'published wiki', 'polo pre-sales', 'crm', 'knowledge graph']
   },
   {
@@ -4447,7 +4447,7 @@ export function Settings({
                   <div className="flex flex-col gap-1.5 px-1 py-1">
                     <label className="flex items-center gap-2 text-[13px] text-[color:var(--cl-foreground)]">
                       Transcription engine
-                      <FieldHint text="Parakeet: bundled NVIDIA Parakeet v3, very fast + accurate for 25 European languages. Whisper: bundled, handles ~99 languages — use it for non-European speech. Apple Speech: Apple's own on-device engine (SFSpeechRecognizer); no extra download, macOS 13+ only.">
+                      <FieldHint text="Parakeet: bundled NVIDIA Parakeet v3, very fast + accurate for 25 European languages. Whisper: bundled, handles ~99 languages, use it for non-European speech. Apple Speech: Apple's own on-device engine (SFSpeechRecognizer); no extra download, macOS 13+ only.">
                         <Info size={12} className="shrink-0 text-[color:var(--cl-muted-foreground)] hover:text-[color:var(--cl-foreground)]" />
                       </FieldHint>
                       <ManagedChip keys={settings.managedKeys} k="asrEngine" />
@@ -4471,7 +4471,7 @@ export function Settings({
                       <AlertCircle size={12} className="mt-0.5 shrink-0" />
                       <span>
                         The Parakeet engine can&apos;t load in this build: {parakeetAddonError}. This is an
-                        engine problem, not a missing model download — meetings will use Whisper until a
+                        engine problem, not a missing model download. Meetings will use Whisper until a
                         build with a working engine is installed.
                       </span>
                     </div>
@@ -4539,8 +4539,8 @@ export function Settings({
                     label="Preload screen context (on-device)"
                     desc={
                       settings.backgroundScreenReady || !settings.backgroundScreenContext
-                        ? "When you switch windows, Métis quietly reads your screen with the on-device model so 'What's on my screen' answers instantly. Stays on your device — nothing extra is sent to the cloud, and Private View turns it off."
-                        : 'Enable Local AI (below) to use this — the background reader runs entirely on the on-device model.'
+                        ? "When you switch windows, Métis quietly reads your screen with the on-device model so 'What's on my screen' answers instantly. Stays on your device, nothing extra is sent to the cloud, and Private View turns it off."
+                        : 'Enable Local AI (below) to use this. The background reader runs entirely on the on-device model.'
                     }
                     on={settings.backgroundScreenContext}
                     onChange={(v) => patch({ backgroundScreenContext: v })}
@@ -4587,7 +4587,7 @@ export function Settings({
                   />
                   <ToggleRow
                     label="Private View"
-                    desc="Métis won't look at or capture your screen while this is on — screen questions answer from context only. Same switch as the eye button on the bar."
+                    desc="Métis won't look at or capture your screen while this is on. Screen questions answer from context only. Same switch as the eye button on the bar."
                     on={settings.privateView}
                     onChange={(v) => patch({ privateView: v })}
                     disabled={settings.managedKeys.includes('privateView')}
@@ -5266,7 +5266,7 @@ function IntelligenceTab({
 
       <Section
         title="Published wiki (Dust-readable)"
-        desc="Mirrors your CRM-corrected brain — account/people/deal pages and meeting note cards — as plain markdown under a wiki/ folder next to your meetings, so Dust and other agents can read it."
+        desc="Mirrors your CRM-corrected brain (account/people/deal pages and meeting note cards) as plain markdown under a wiki/ folder next to your meetings, so Dust and other agents can read it."
         icon={FileText}
       >
         <ToggleRow
@@ -5286,7 +5286,7 @@ function IntelligenceTab({
               <span className="min-w-0 flex-1 text-[12px] text-[color:var(--cl-foreground)]">Give Claude your second brain</span>
             </div>
             <p className="mt-1 text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
-              The published folder includes a <span className="font-medium text-[color:var(--cl-foreground)]">CLAUDE.md</span> entry doc that orients Claude. Point Claude at this folder — add it to a Claude Project, open it in Claude Desktop, or sync it via a connector — and Claude reads your meetings, people, and deals directly and surfaces your next steps. Nothing here is a raw transcript.
+              The published folder includes a <span className="font-medium text-[color:var(--cl-foreground)]">CLAUDE.md</span> entry doc that orients Claude. Point Claude at this folder (add it to a Claude Project, open it in Claude Desktop, or sync it via a connector) and Claude reads your meetings, people, and deals directly and surfaces your next steps. Nothing here is a raw transcript.
             </p>
             <div className="mt-2">
               <button
@@ -5890,7 +5890,7 @@ function CalendarTab({
               {azureLocked && (
                 <p className="flex items-center gap-1.5 text-[11px] leading-snug text-[color:var(--color-accent-text)]">
                   <ShieldCheck size={11} className="shrink-0" />
-                  Microsoft sign-in is already configured for this app. These IDs are locked here — contact your admin to change them.
+                  Microsoft sign-in is already configured for this app. These IDs are locked here. Contact your admin to change them.
                 </p>
               )}
               {idField('Application (client) ID', clientId, setClientId, '00000000-0000-0000-0000-000000000000', 'azureClientId')}
@@ -6267,7 +6267,7 @@ function Shortcuts({
             <AlertCircle size={13} className="mt-px shrink-0" />
             <span>
               {failures.length === 1 ? "This shortcut couldn't" : "These shortcuts couldn't"} be
-              registered — another app likely owns the key combo. Rebind {failures.length === 1 ? 'it' : 'them'} below.
+              registered. Another app likely owns the key combo. Rebind {failures.length === 1 ? 'it' : 'them'} below.
             </span>
           </div>
           {failures.map((f) => (

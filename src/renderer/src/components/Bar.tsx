@@ -577,7 +577,7 @@ export const Bar = memo(function Bar(props: BarProps): JSX.Element {
             <IconTool
               title={
                 props.stealthLocked
-                  ? 'Private view — managed by your organization'
+                  ? 'Private view: managed by your organization'
                   : props.stealth
                     ? 'Private view on'
                     : 'Private view off'

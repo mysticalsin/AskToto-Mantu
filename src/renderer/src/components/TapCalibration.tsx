@@ -29,11 +29,11 @@ const ZONE_ACTIONS: Array<{ value: HotkeyAction; label: string }> = [
 
 const HINT_COPY: Record<Exclude<CalibFeedback, { accepted: true }>['hint'], string> = {
   'too-weak': 'Tap a bit harder.',
-  clipped: 'A bit softer — that one clipped.',
+  clipped: 'A bit softer, that one clipped.',
   'double-hit': 'One single clean tap.',
-  'rang-on': "That rang on — tap, don't slide.",
-  'too-different': 'That one sounded different — same spot as before?',
-  'not-a-tap': "Didn't catch that as a tap — try again."
+  'rang-on': "That rang on. Tap, don't slide.",
+  'too-different': 'That one sounded different. Same spot as before?',
+  'not-a-tap': "Didn't catch that as a tap. Try again."
 }
 
 type Flow =
@@ -157,7 +157,7 @@ export function TapControlCard({
   return (
     <Section
       title="Desk Tap Control"
-      desc="Tap the desk near your Mac to trigger an action — recognized on-device from the tap's sound. Pick two spots that sound different to the mic (one close, one at arm's length works best)."
+      desc="Tap the desk near your Mac to trigger an action. Recognized on-device from the tap's sound. Pick two spots that sound different to the mic (one close, one at arm's length works best)."
       icon={Fingerprint}
     >
       <ToggleRow
@@ -172,7 +172,7 @@ export function TapControlCard({
         <>
           <ToggleRow
             label="Only while listening"
-            desc="On: taps work only during a live meeting session. Off: Métis keeps the mic open whenever the app runs, so a tap can also START a session — the macOS mic indicator stays on."
+            desc="On: taps work only during a live meeting session. Off: Métis keeps the mic open whenever the app runs, so a tap can also START a session. The macOS mic indicator stays on."
             on={tc.armOnlyWhileListening}
             onChange={(v) => patchTap({ armOnlyWhileListening: v })}
             disabled={locked}
@@ -243,7 +243,7 @@ export function TapControlCard({
           {flow.step === 'calibrating' && (
             <div className="flex flex-col gap-1 rounded-[10px] border border-white/10 bg-white/[0.03] px-3 py-2.5">
               <div className="text-[13px] font-medium text-[color:var(--cl-foreground)]">
-                Zone {flow.zone + 1} of {zoneCount} — tap your spot firmly · {flow.accepted}/{CALIB_N}
+                Zone {flow.zone + 1} of {zoneCount}: tap your spot firmly · {flow.accepted}/{CALIB_N}
               </div>
               <div className="text-[12px] text-[color:var(--cl-muted-foreground)]">
                 {flow.hint ?? 'Same spot each time, one clean tap, brief pause between taps.'}
@@ -275,7 +275,7 @@ export function TapControlCard({
                 Teach it what to ignore · {flow.collected} captured
               </div>
               <div className="text-[12px] text-[color:var(--cl-muted-foreground)]">
-                Type a sentence and click your mouse a few times — Métis learns YOUR keyboard so typing never
+                Type a sentence and click your mouse a few times. Métis learns YOUR keyboard so typing never
                 triggers actions.
               </div>
               <button type="button" onClick={finishCalibration} className={ctl + ' no-drag mt-1 w-24'}>
@@ -288,7 +288,7 @@ export function TapControlCard({
             (flow.result.separable ? (
               <div className="flex flex-col gap-1 rounded-[10px] border border-white/10 bg-white/[0.03] px-3 py-2.5">
                 <div className="text-[13px] font-medium text-[color:var(--cl-foreground)]">
-                  Calibration looks good — zones are clearly distinguishable.
+                  Calibration looks good. Zones are clearly distinguishable.
                 </div>
                 <button type="button" onClick={() => saveProfile(flow.result)} className={ctl + ' no-drag mt-1 w-24'}>
                   Save
@@ -300,8 +300,8 @@ export function TapControlCard({
                   Those spots sound too similar to the mic.
                 </div>
                 <div className="text-[12px] text-[color:var(--cl-muted-foreground)]">
-                  Pick spots that differ more — one close to the Mac and one at arm's length, or two different
-                  surfaces — then recalibrate.
+                  Pick spots that differ more: one close to the Mac and one at arm's length, or two different
+                  surfaces. Then recalibrate.
                 </div>
                 <button type="button" onClick={() => void beginCalibration()} className={ctl + ' no-drag mt-1 w-32'}>
                   Recalibrate
@@ -312,7 +312,7 @@ export function TapControlCard({
           {flow.step === 'testing' && (
             <div className="flex flex-col gap-1 rounded-[10px] border border-white/10 bg-white/[0.03] px-3 py-2.5">
               <div className="flex items-center gap-2 text-[13px] font-medium text-[color:var(--cl-foreground)]">
-                <Radio size={13} className="text-[var(--cl-primary)]" /> Test mode — tap your zones
+                <Radio size={13} className="text-[var(--cl-primary)]" /> Test mode: tap your zones
               </div>
               <div className="text-[12px] text-[color:var(--cl-muted-foreground)]">
                 {flow.lastZone != null ? `Recognized: ${zoneNames[flow.lastZone] ?? `Zone ${flow.lastZone + 1}`}` : 'Listening…'}

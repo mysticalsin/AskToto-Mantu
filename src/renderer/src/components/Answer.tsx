@@ -146,7 +146,7 @@ export const Answer = memo(function Answer({
           {/* Persistent caveat: the app has no web search, so a verdict is the model's parametric
               knowledge, not a verified lookup — this must not read as "checked against the web". */}
           <div className="mb-1 text-[10px] font-normal normal-case tracking-normal text-[color:var(--color-ink-3)]">
-            AI-inferred from the model&apos;s knowledge, not a web lookup — verify anything important.
+            AI-inferred from the model&apos;s knowledge, not a web lookup. Verify anything important.
           </div>
         </>
       )}
@@ -301,7 +301,7 @@ export const Answer = memo(function Answer({
     const who = provider === 'dust' ? 'your Dust agent' : provider ? PROVIDERS[provider]?.label : undefined
     const label =
       thinkingSecs >= 8
-        ? `Still working… (${thinkingSecs}s)${who ? ` — ${who} is on it` : ''}`
+        ? `Still working… (${thinkingSecs}s)${who ? `, ${who} is on it` : ''}`
         : who
           ? `Asking ${who}…`
           : 'Thinking…'
