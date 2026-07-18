@@ -164,6 +164,7 @@ const api = {
     ipcRenderer.invoke(IPC.exportRecapJson, markdown),
   pickFolder: (): Promise<PublicSettings> => ipcRenderer.invoke(IPC.pickFolder),
   openMeetingsFolder: (): Promise<void> => ipcRenderer.invoke(IPC.openPath),
+  openBrainForClaude: (): Promise<{ ok: boolean; path: string }> => ipcRenderer.invoke(IPC.openBrainForClaude),
   recallList: (): Promise<MeetingSummary[]> => ipcRenderer.invoke(IPC.recallList),
   recallSearch: (q: string): Promise<RecallHit[]> => ipcRenderer.invoke(IPC.recallSearch, q),
   recallOpen: (file: string): Promise<string> => ipcRenderer.invoke(IPC.recallOpen, file),
