@@ -25,7 +25,11 @@ export function MantuLogo({
         <img
           src={logoUrl}
           alt="Mantu"
-          style={{ width: size, height: 'auto' }}
+          // The raster's wordmark is the brand's DARK purple — on this app's always-dark background it
+          // was effectively invisible ("the logo doesn't appear"). White it out for guaranteed
+          // contrast: brightness(0) flattens the letterforms to black, invert(1) lifts them to white —
+          // exact brand shapes, always readable on the dark theme.
+          style={{ width: size, height: 'auto', filter: 'brightness(0) invert(1)', opacity: 0.92 }}
           draggable={false}
         />
       </div>
