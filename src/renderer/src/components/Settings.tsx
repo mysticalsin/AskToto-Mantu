@@ -4218,6 +4218,59 @@ export function Settings({
                     </button>
                   </div>
                 </div>
+                {/* Team transcripts — shared folders whose meetings are ALSO ingested into this brain,
+                    attributed by folder name (settings.teamTranscriptFolders). Centralizes the team's calls
+                    without touching where the user's OWN meetings are saved. */}
+                <div className="cl-card mt-2 px-3 py-2.5">
+                  <div className="flex items-center gap-2">
+                    <FolderOpen size={15} className="shrink-0 text-[color:var(--cl-primary)]" />
+                    <span className="min-w-0 flex-1 text-[12px] text-[color:var(--cl-foreground)]">Team transcripts</span>
+                    <ManagedChip keys={settings.managedKeys} k="teamTranscriptFolders" />
+                  </div>
+                  <p className="mt-1 text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
+                    Shared folders whose meeting transcripts also feed this brain, attributed by folder name. Point one at a teammate&apos;s synced meetings folder to centralize the team&apos;s calls automatically.
+                  </p>
+                  {(settings.teamTranscriptFolders ?? []).length > 0 && (
+                    <div className="mt-2 flex flex-col gap-1">
+                      {(settings.teamTranscriptFolders ?? []).map((folder) => (
+                        <div key={folder} className="flex items-center gap-2 rounded-lg bg-white/[0.04] px-2 py-1.5">
+                          <FolderOpen size={12} className="shrink-0 text-[color:var(--cl-muted-foreground)]" />
+                          <span className="min-w-0 flex-1 truncate text-[12px] text-[color:var(--cl-foreground)]" title={folder}>
+                            {folder}
+                          </span>
+                          <button
+                            type="button"
+                            disabled={settings.managedKeys.includes('teamTranscriptFolders')}
+                            onClick={async () => {
+                              await window.toto.removeTeamTranscriptFolder(folder)
+                              void patch({})
+                            }}
+                            title="Stop ingesting this folder"
+                            className="no-drag cl-focus rounded-md p-1 text-[color:var(--cl-muted-foreground)] hover:bg-white/[0.08] hover:text-[color:var(--cl-foreground)] disabled:opacity-60"
+                          >
+                            <X size={12} />
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  <div className="mt-2">
+                    <button
+                      type="button"
+                      disabled={settings.managedKeys.includes('teamTranscriptFolders')}
+                      onClick={async () => {
+                        await window.toto.addTeamTranscriptFolder()
+                        void patch({})
+                      }}
+                      className={[
+                        'no-drag cl-focus flex items-center gap-1 rounded-lg bg-white/[0.05] px-2.5 py-1.5 text-[12px] text-[color:var(--cl-foreground)] hover:bg-white/[0.1]',
+                        settings.managedKeys.includes('teamTranscriptFolders') ? 'opacity-60 cursor-not-allowed' : ''
+                      ].join(' ')}
+                    >
+                      <FolderCog size={12} /> Add shared folder
+                    </button>
+                  </div>
+                </div>
                 <div className="mt-2">
                   <div className="rounded-lg bg-white/[0.03] px-3 py-2">
                     <div className="flex items-center gap-2 text-[13px] font-medium text-[color:var(--cl-foreground)]">

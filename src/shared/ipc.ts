@@ -97,6 +97,8 @@ export const IPC = {
   importDecoderSourceAck: 'import-decoder:source-ack',
   exportRecapJson: 'recap:export-json',
   pickFolder: 'folder:pick',
+  addTeamTranscriptFolder: 'team-folder:add',
+  removeTeamTranscriptFolder: 'team-folder:remove',
   openPath: 'path:open',
   openBrainForClaude: 'brain:open-for-claude',
   recallList: 'recall:list',
@@ -703,6 +705,12 @@ export const BaseSettingsSchema = z.object({
   screenAsk: z.boolean().default(true),
   showLiveTranscript: z.boolean().default(false),
   meetingsFolder: z.string().default(''),
+  // Shared folders (e.g. a team OneDrive folder each member's Métis saves into) whose meeting transcripts
+  // are ALSO auto-ingested into this brain, attributed by the folder's own name. Centralizes the team's
+  // transcripts without touching the user's own meetings folder. Scanned by the same OneDrive-friendly
+  // backfill/reconciliation loop; team files are namespaced in the ingest index so they never collide with
+  // the user's own meetings (or another member's file of the same name).
+  teamTranscriptFolders: z.array(z.string()).default([]),
   autoSaveTranscripts: z.boolean().default(false),
   // Gates the (popup-free) meeting watcher. OFF by default per Tony: detection is opt-in — the popup
   // it once fed was removed as too intrusive; Listen is manual-only (Bar button, ControlPill mic, hotkey).
@@ -943,6 +951,7 @@ export const DEFAULT_SETTINGS: Settings = {
   screenAsk: true,
   showLiveTranscript: false,
   meetingsFolder: '',
+  teamTranscriptFolders: [],
   autoSaveTranscripts: false,
   autoStartOnMeeting: false, // meeting detection is opt-in (gates the popup-free watcher)
   launchAtLogin: false,
