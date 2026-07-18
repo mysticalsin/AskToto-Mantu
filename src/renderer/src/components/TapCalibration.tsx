@@ -50,7 +50,20 @@ export function TapControlCard({
   settings: PublicSettings
   patch: (p: SettingsPatch) => void
 }): JSX.Element {
-  const tc = settings.tapControl
+  // Local mirror of tapControl so rapid multi-field edits (toggle → toggle → slider → per-zone selects)
+  // accumulate instead of racing: each patch replaces the WHOLE tapControl object, so building every
+  // patch from the possibly-stale `settings.tapControl` prop let a later edit clobber an earlier one
+  // that hadn't round-tripped yet (audit finding #2). patchTap merges onto the local copy and adopts
+  // external changes (e.g. calibration writing a profile) via the effect below.
+  const [tc, setTc] = useState(settings.tapControl)
+  useEffect(() => setTc(settings.tapControl), [settings.tapControl])
+  const patchTap = (delta: Partial<PublicSettings['tapControl']>): void => {
+    setTc((prev) => {
+      const next = { ...prev, ...delta }
+      patch({ tapControl: next })
+      return next
+    })
+  }
   const locked = settings.managedKeys.includes('tapControl')
   const [flow, setFlow] = useState<Flow>({ step: 'idle' })
   const [zoneCount, setZoneCount] = useState(2)
@@ -116,7 +129,7 @@ export function TapControlCard({
     const zones = result.profile.zones
     // Preserve any existing action mapping by index; default new zones to visual-only ('' = no action).
     const zoneActions = zones.map((_, i) => tc.zoneActions[i] ?? '')
-    patch({ tapControl: { ...tc, profile: result.profile, zoneActions } })
+    patchTap({ profile: result.profile, zoneActions })
     sessionRef.current = null
     setFlow({ step: 'idle' })
   }
@@ -150,7 +163,7 @@ export function TapControlCard({
         label="Enable tap control"
         desc={tc.profile ? 'Calibrated and ready.' : 'Needs a one-time calibration for your desk + mic.'}
         on={tc.enabled}
-        onChange={(v) => patch({ tapControl: { ...tc, enabled: v } })}
+        onChange={(v) => patchTap({ enabled: v })}
         disabled={locked}
         icon={Fingerprint}
       />
@@ -160,7 +173,7 @@ export function TapControlCard({
             label="Only while listening"
             desc="On: taps work only during a live meeting session. Off: Métis keeps the mic open whenever the app runs, so a tap can also START a session — the macOS mic indicator stays on."
             on={tc.armOnlyWhileListening}
-            onChange={(v) => patch({ tapControl: { ...tc, armOnlyWhileListening: v } })}
+            onChange={(v) => patchTap({ armOnlyWhileListening: v })}
             disabled={locked}
           />
           <label className="flex items-center justify-between gap-3 px-1 py-2 text-[12px] text-[color:var(--cl-muted-foreground)]">
@@ -172,7 +185,7 @@ export function TapControlCard({
               step={0.05}
               value={tc.sensitivity}
               disabled={locked}
-              onChange={(e) => patch({ tapControl: { ...tc, sensitivity: Number(e.target.value) } })}
+              onChange={(e) => patchTap({ sensitivity: Number(e.target.value) })}
               className="no-drag accent-[var(--cl-primary)]"
             />
           </label>
@@ -189,7 +202,7 @@ export function TapControlCard({
                     const zoneActions = [...tc.zoneActions]
                     while (zoneActions.length <= i) zoneActions.push('')
                     zoneActions[i] = e.target.value
-                    patch({ tapControl: { ...tc, zoneActions } })
+                    patchTap({ zoneActions })
                   }}
                   className={'w-56 ' + ctl}
                 >

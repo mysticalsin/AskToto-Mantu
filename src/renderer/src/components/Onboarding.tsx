@@ -237,7 +237,8 @@ export function Onboarding({
   onOpenAiSettings,
   signedIn,
   signedInEmail,
-  initialStep
+  initialStep,
+  initialConsent
 }: {
   settings: PublicSettings
   saveKey?: (provider: ProviderId, k: string) => Promise<void>
@@ -258,8 +259,15 @@ export function Onboarding({
   /** Start at a later step — OnboardingV2 runs the narrative experience first, then enters here at the
    *  provider step (5) so key setup + the final consent/permissions checklist stay this component's job. */
   initialStep?: 1 | 2 | 3 | 4 | 5 | 6
+  /** Consent already affirmed upstream (OnboardingV2's checkbox). Seeds recordingConsent at mount so a
+   *  not-yet-propagated patch can't make finish() re-persist `false`. Undefined = read from settings. */
+  initialConsent?: boolean
 }): JSX.Element {
-  const [recordingConsent, setRecordingConsent] = useState(settings.recordingConsent)
+  // initialConsent overrides the persisted value at mount: OnboardingV2 enters this component at the
+  // provider step AFTER its own required consent checkbox, but the patch({recordingConsent:true}) it
+  // issues may not have propagated into `settings` yet — reading settings.recordingConsent here would
+  // re-derive `false` and finish() would clobber the user's just-given consent (the CRITICAL audit bug).
+  const [recordingConsent, setRecordingConsent] = useState(initialConsent ?? settings.recordingConsent)
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
   const [finishErr, setFinishErr] = useState('')

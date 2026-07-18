@@ -374,6 +374,10 @@ export function OnboardingV2({
       signedIn={signedIn}
       signedInEmail={signedInEmail}
       initialStep={phase === 'legacy-full' ? 1 : 5}
+      // Provider phase = the experience's required consent checkbox was already ticked. Seed it so a
+      // still-in-flight patch can't let the legacy finish() re-persist false. legacy-full = the Skip
+      // path, which hits the real consent slide 1, so leave it to read from settings.
+      initialConsent={phase === 'provider' ? true : undefined}
     />
   )
 }
