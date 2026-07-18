@@ -23,7 +23,7 @@ export interface OnboardingExperienceProps {
   onSkip?: () => void
 }
 
-const REVEAL: string[] = ['Grounded in your meeting, in your words.', 'On your device — never uploaded.']
+const REVEAL: string[] = ['Grounded in your meeting, in your words.', 'On your device. Nothing uploaded.']
 
 type Scene = 'hero' | 'reveal' | 'setup' | 'personalize'
 
@@ -103,7 +103,7 @@ export function OnboardingExperience({ onDone, onSkip }: OnboardingExperiencePro
       set(
         'screen',
         perms?.screenRecording === 'granted' ? 'ready' : 'action',
-        perms?.screenRecording === 'granted' ? 'granted' : 'optional — grant when you first capture'
+        perms?.screenRecording === 'granted' ? 'granted' : 'grant it when you first capture'
       )
     })()
     return () => {
@@ -146,10 +146,10 @@ export function OnboardingExperience({ onDone, onSkip }: OnboardingExperiencePro
           </span>
           <div>
             <h1 className="text-[28px] font-semibold text-[color:var(--color-ink)]">
-              Métis. <span className="text-[color:var(--color-ink-2)]">The wisdom before the moment.</span>
+              Métis. <span className="text-[color:var(--color-ink-2)]">Your on-device meeting copilot.</span>
             </h1>
             <div className="mt-4 flex flex-col gap-1.5 text-[13px] text-[color:var(--color-ink-2)]">
-              {['Answers grounded in your meeting', 'Everything on-device — never uploaded', "You're in control — recording always asks first"].map((t, i) => (
+              {['Answers grounded in your own meeting', 'Runs on your device. Nothing is uploaded.', 'Recording always asks first, so you stay in control.'].map((t, i) => (
                 <p key={t} className="fade-up m-0" style={{ animationDelay: `${300 + i * 220}ms` }}>
                   {t}
                 </p>
@@ -186,7 +186,7 @@ export function OnboardingExperience({ onDone, onSkip }: OnboardingExperiencePro
               <p className="m-0 text-[12px] leading-relaxed text-[color:var(--color-ink-2)]">
                 <Sparkles size={12} className="mr-1 inline text-[var(--color-accent-2)]" />
                 Three things were agreed last call: the revised timeline, the security review, and the intro to
-                their CTO — all three are done. Lead with that.
+                their CTO. All three are done, so lead with that.
               </p>
             </div>
           </div>
@@ -269,7 +269,7 @@ export function OnboardingExperience({ onDone, onSkip }: OnboardingExperiencePro
               [
                 { id: 'general', label: 'General', desc: 'Every meeting, every topic' },
                 { id: 'sales', label: 'Sales', desc: 'Deals, objections, next steps' },
-                { id: 'recruiting', label: 'Recruiting', desc: 'You interview — STAR probes, challenges' }
+                { id: 'recruiting', label: 'Recruiting', desc: 'You interview: STAR probes, challenges' }
               ] as Array<{ id: ConversationMode; label: string; desc: string }>
             ).map((m) => (
               <button
