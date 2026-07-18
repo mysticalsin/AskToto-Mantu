@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type ComponentType, type ReactNode } from 'react'
 import appPackage from '../../../../package.json'
+import { TapControlCard } from './TapCalibration'
 import {
   Check,
   ExternalLink,
@@ -102,7 +103,7 @@ let dustAutoSetupLaunched = false
 // Windows, and the `[&>option]:…` rules give the dropdown options an explicit dark background + light text
 // (Windows renders <option> from its OWN colors, defaulting to white — the app's bg/text don't cascade in).
 // The `option` selector only matches <select> children, so plain inputs sharing this class are unaffected.
-const ctl =
+export const ctl =
   'no-drag font-body cl-input cl-focus px-3 py-2.5 text-[13px] text-[color:var(--cl-foreground)] [color-scheme:dark] [&>option]:bg-[#1A0033] [&>option]:text-white'
 
 // Providers excluded from the generic provider tiles grid + generic "key" Section because they have
@@ -375,7 +376,7 @@ function ManagedChip({ keys, k }: { keys: string[]; k: string }): JSX.Element | 
   return keys.includes(k) ? <span className={managedChipCls}>Managed by your organization</span> : null
 }
 
-function Section({
+export function Section({
   title,
   desc,
   children
@@ -526,7 +527,7 @@ function Toggle({
   )
 }
 
-function ToggleRow({
+export function ToggleRow({
   label,
   desc,
   on,
@@ -4217,6 +4218,7 @@ export function Settings({
                   <AudioChoices settings={settings} patch={patch} />
                   <MicPicker settings={settings} patch={patch} />
                 </Section>
+                <TapControlCard settings={settings} patch={patch} />
                 <Section title="In meetings">
                   <ToggleRow
                     label="Auto-answer"

@@ -1,0 +1,75 @@
+# Métis Onboarding — "An Experience" (VibeIsland-grade)
+
+Tony's brief: rebuild Métis onboarding to feel like Vibe Island's ("this was an experience").
+Reference extracted 2026-07-18 from Vibe Island 1.0.42's Localizable.strings + live run.
+
+## Why Vibe Island's onboarding works (the anatomy)
+
+Their flow is a **five-act narrative**, not a settings wizard:
+
+1. **Hero** — one line of identity ("A Dynamic Island for your AI coding tools"), three crisp
+   feature bullets, a single CTA ("Get Started"). No form fields on screen one, ever.
+2. **Problem story, staged** — escalating lines revealed one at a time with motion:
+   "Context switches" → "You have 4 agents running." → "One of them has been waiting for you."
+   → "That's 15 hours a week." You *feel* the pain before the pitch.
+3. **Solution reveal** — three punchy parallel statements: "Everything. One glance." /
+   "Approve without switching." / "Jump to the exact tab."
+4. **The magic moment** — "Your Environment": a LIVE scan of the user's real machine, rows
+   animating to "detected", closing with "Everything's configured. No action needed." The app
+   does the setup work *in front of you*. This is the moment that converts.
+5. **Personalization + themed landing** — "Choose your vibe" (mascot/theme pick), launch-at-login,
+   then "Ready to land?" → "Welcome aboard" → "Start Vibing". Playful thematic language end-to-end.
+
+## The Métis translation (goddess motif, meeting copilot)
+
+Five scenes, full-window, keyboard/click to advance, ~40s total, skippable at every step.
+
+### Scene 1 — Hero
+Constellation animation: the Métis goddess mark draws itself from star-points (SVG stroke
+animation over the existing icon). Then:
+> **Métis.** The wisdom before the moment.
+Three bullets (fade in sequence): "Answers grounded in YOUR meeting" · "Everything on-device —
+never uploaded" · "Visible to everyone on the call". CTA: **Begin**.
+
+### Scene 2 — Problem story (staged lines, one at a time, dark screen, large type)
+> "You're in the meeting."
+> "The question lands on you."
+> "You know that you know it."
+> "…and the moment passes."
+Timing: ~1.2s per line, ease-in, previous lines dim to 40%. This is the emotional core — do not
+rush it, do not add UI.
+
+### Scene 3 — Reveal (the turn)
+The Métis bar slides up from the bottom (the REAL Bar component, live), a simulated transcript
+line appears, a suggestion materializes in the answer panel:
+> **Métis sees it coming.**
+> "The answer, before you need it." / "In your voice, from your meetings." / "On your device."
+
+### Scene 4 — "Your setup" (the magic moment — live, real checks)
+Rows animate from spinner → state, using REAL signals (all already exposed via IPC):
+- Apple Silicon acceleration — ✓ detected
+- On-device transcription (Parakeet + Whisper) — ✓ bundled, ready
+- Local meeting brain — ✓ initialized
+- Microphone — request inline (platform-perms) → ✓
+- Screen context — request inline → ✓ (or "later" without blocking)
+- Calendar (optional) — connect or skip
+Close: **"Everything's ready. Nothing to configure."** (only show rows that are actually true —
+never fake a check.)
+
+### Scene 5 — Personalization + landing
+"How will you use Métis?" → mode cards: General / Sales / Recruiting (sets `settings.mode`).
+Language pick (existing selector). Then:
+> **Ready when you are.** — CTA: **Start listening** (or "Explore first")
+Consent line (the existing record-consent copy) sits HERE, as the last gate before finish.
+
+## Implementation notes
+- New `src/renderer/src/components/OnboardingExperience.tsx`; replaces the current tour when
+  `onboardingDoneAt` is unset. Keep the old component behind a flag for one release.
+- Motion: CSS keyframes + transition-delay staging (the app already uses fade-up etc. in
+  index.css). No animation libraries — stay dependency-free.
+- Scene 3 reuses the real `Bar` + answer-panel components in a sandbox container (no live mic) —
+  authenticity beats a mockup.
+- Scene 4 wires: `platform-perms` IPC for mic/screen status+request, `asrBundled` flags,
+  brain-init status. Every row must reflect reality — the honesty rule.
+- Sign-in (Microsoft/local) stays BEFORE the experience (it gates data), but restyle to match.
+- All copy through the i18n path like the rest of the renderer.
