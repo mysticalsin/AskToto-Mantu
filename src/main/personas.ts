@@ -97,8 +97,10 @@ export function buildSystem(
 
   const prompt = effectiveModePrompt(mode, modePrompts)
   // Modes where the user is performing as themselves benefit from the profile (background/role/company);
-  // general and meeting are neutral observers, so they skip it.
-  const profileTail = mode === 'general' || mode === 'meeting' ? '' : profileBlock(profile)
+  // general and meeting are neutral observers, and recruiting grounds on the candidate (not the
+  // interviewer's own resume), so these three skip it.
+  const profileTail =
+    mode === 'general' || mode === 'meeting' || mode === 'recruiting' ? '' : profileBlock(profile)
   // Grounding rail: cite source / admit uncertainty / ≤1 clarifying question / never describe what it
   // wasn't shown. Only for user-initiated answers (answer, vision) — NOT the proactive spoken suggest
   // line (a parenthetical source tag would be awkward to say out loud).
