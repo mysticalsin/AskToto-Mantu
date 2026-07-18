@@ -205,7 +205,8 @@ export function Onboarding({
   patch,
   recoverEncryptedProfile,
   onDone,
-  onOpenAiSettings
+  onOpenAiSettings,
+  initialStep
 }: {
   settings: PublicSettings
   saveKey?: (provider: ProviderId, k: string) => Promise<void>
@@ -217,6 +218,9 @@ export function Onboarding({
   /** Optional: opens Settings -> AI in place, wired onto the provider/API-key readiness row. Parent
    *  wiring is added separately; the row simply has no click-through fix when this is left undefined. */
   onOpenAiSettings?: () => void
+  /** Start at a later step — OnboardingV2 runs the narrative experience first, then enters here at the
+   *  provider step (5) so key setup + the final consent/permissions checklist stay this component's job. */
+  initialStep?: 1 | 2 | 3 | 4 | 5 | 6
 }): JSX.Element {
   const [recordingConsent, setRecordingConsent] = useState(settings.recordingConsent)
   const [busy, setBusy] = useState(false)
@@ -224,7 +228,7 @@ export function Onboarding({
   const [finishErr, setFinishErr] = useState('')
   const [recoveryAvailable, setRecoveryAvailable] = useState(false)
   const [recoveryBusy, setRecoveryBusy] = useState(false)
-  const [step, setStep] = useState<1 | 2 | 3 | 4 | 5 | 6>(1)
+  const [step, setStep] = useState<1 | 2 | 3 | 4 | 5 | 6>(initialStep ?? 1)
   const [perms, setPerms] = useState<PlatformPermissions | null>(null)
   // Step 5's "An API key" card expands in place to name the actual providers instead of assuming
   // Anthropic — closes again if the user backs out of step 5 entirely.
