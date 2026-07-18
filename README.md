@@ -2,7 +2,7 @@
 
 # Métis
 
-**The invisible AI copilot for every meeting.**
+**The wisdom before the moment — your on-device AI meeting copilot.**
 A frameless, transparent, always-on-top glass overlay for macOS and Windows.
 
 <img src="docs/media/asktoto-hero.png" alt="Métis overlay — Ask anything bar with a syntax-highlighted answer on frosted purple glass" width="760">
