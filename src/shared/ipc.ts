@@ -154,6 +154,7 @@ export const IPC = {
   answerFeedback: 'answer:feedback',
   metricsRead: 'metrics:read',
   updateDownloaded: 'update:downloaded',
+  updateProgress: 'update:progress',
   updateInstall: 'update:install',
   recapPdf: 'recap:pdf',
   openMailDraft: 'mail:openDraft',

@@ -271,7 +271,8 @@ const api = {
   onMeta: (cb: (d: StreamMeta) => void): Unsub => sub(IPC.streamMeta, cb),
   onHotkey: (cb: (a: HotkeyAction) => void): Unsub => sub(IPC.hotkey, cb),
 
-  onUpdateReady: (cb: (d: { version?: string }) => void): Unsub => sub(IPC.updateDownloaded, cb),
+  onUpdateReady: (cb: (d: { version?: string; notes?: string }) => void): Unsub => sub(IPC.updateDownloaded, cb),
+  onUpdateProgress: (cb: (d: { percent?: number }) => void): Unsub => sub(IPC.updateProgress, cb),
   installUpdate: (): Promise<void> => ipcRenderer.invoke(IPC.updateInstall),
 
   openMailDraft: (input: { subject: string; body: string }): Promise<{ truncated: boolean }> =>
