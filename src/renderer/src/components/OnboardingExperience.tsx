@@ -18,7 +18,7 @@ import { MetisMark } from './MetisMark'
 import { Onboarding } from './Onboarding'
 
 export interface OnboardingExperienceProps {
-  onDone: (result: { mode: ConversationMode }) => void
+  onDone: (result: { mode: ConversationMode; recordingConsent: boolean }) => void
   /** Optional escape hatch to the old flow while this one beds in. */
   onSkip?: () => void
 }
@@ -52,6 +52,10 @@ export function OnboardingExperience({ onDone, onSkip }: OnboardingExperiencePro
   const [storyLine, setStoryLine] = useState(0)
   const [rows, setRows] = useState<SetupRow[]>([])
   const [mode, setMode] = useState<ConversationMode>('general')
+  // Recording-consent gate. Entering the legacy flow at its provider step skips legacy slide 1 — the
+  // ONLY place the consent checkbox lived — which silently persisted recordingConsent:false for every
+  // new-flow user (CMO-QA finding #1). The checkbox is therefore a REQUIRED gate here, before Start.
+  const [consent, setConsent] = useState(false)
   const doneRef = useRef(false)
 
   // --- Scene 2 pacing: one line every ~1.4s; hold the last line, then advance on click/auto.
@@ -117,9 +121,9 @@ export function OnboardingExperience({ onDone, onSkip }: OnboardingExperiencePro
   }
 
   const finish = (): void => {
-    if (doneRef.current) return
+    if (doneRef.current || !consent) return
     doneRef.current = true
-    onDone({ mode })
+    onDone({ mode, recordingConsent: true })
   }
 
   const allReady = rows.length > 0 && rows.every((r) => r.state === 'ready' || r.state === 'skipped')
@@ -135,7 +139,7 @@ export function OnboardingExperience({ onDone, onSkip }: OnboardingExperiencePro
               Métis. <span className="text-[color:var(--color-ink-2)]">The wisdom before the moment.</span>
             </h1>
             <div className="mt-4 flex flex-col gap-1.5 text-[13px] text-[color:var(--color-ink-2)]">
-              {['Answers grounded in your meeting', 'Everything on-device — never uploaded', 'Visible to everyone on the call'].map((t, i) => (
+              {['Answers grounded in your meeting', 'Everything on-device — never uploaded', 'You stay in control — consent reminders built in'].map((t, i) => (
                 <p key={t} className="fade-up m-0" style={{ animationDelay: `${300 + i * 220}ms` }}>
                   {t}
                 </p>
@@ -154,6 +158,7 @@ export function OnboardingExperience({ onDone, onSkip }: OnboardingExperiencePro
               Skip the tour
             </button>
           )}
+          <p className="m-0 text-[10px] tracking-wide text-[color:var(--color-ink-3)]">Mantu · Métis</p>
         </>
       )}
 
@@ -185,13 +190,13 @@ export function OnboardingExperience({ onDone, onSkip }: OnboardingExperiencePro
           <h2 className="m-0 text-[24px] font-semibold text-[color:var(--color-ink)]">Métis sees it coming.</h2>
           {/* Representation of the live bar — a real transcript line + a materializing answer. */}
           <div className="glass-strong fade-up w-full max-w-[520px] rounded-[16px] px-4 py-3 text-left">
-            <p className="m-0 text-[12px] text-[color:var(--color-ink-3)]">THEM · just now</p>
-            <p className="m-0 mt-0.5 text-[13px] text-[color:var(--color-ink)]">“Can you walk us through the pricing again?”</p>
+            <p className="m-0 text-[12px] text-[color:var(--color-ink-3)]">Example · THEM · just now</p>
+            <p className="m-0 mt-0.5 text-[13px] text-[color:var(--color-ink)]">“Can you recap where we left things last time?”</p>
             <div className="mt-2 rounded-[10px] border border-white/10 bg-white/[0.04] px-3 py-2">
               <p className="m-0 text-[12px] leading-relaxed text-[color:var(--color-ink-2)]">
                 <Sparkles size={12} className="mr-1 inline text-[var(--color-accent-2)]" />
-                Anchor on the annual plan first — it’s 20% under their current spend, and renewal was their main
-                concern last call.
+                Three things were agreed last call: the revised timeline, the security review, and the intro to
+                their CTO — all three are done. Lead with that.
               </p>
             </div>
           </div>
@@ -287,12 +292,29 @@ export function OnboardingExperience({ onDone, onSkip }: OnboardingExperiencePro
               </button>
             ))}
           </div>
-          <div className="flex flex-col items-center gap-2">
+          <div className="flex flex-col items-center gap-3">
+            <label className="flex max-w-[420px] cursor-pointer items-start gap-2.5 rounded-[12px] border border-white/10 bg-white/[0.03] px-3.5 py-2.5 text-left">
+              <input
+                type="checkbox"
+                checked={consent}
+                onChange={(e) => setConsent(e.target.checked)}
+                className="no-drag mt-0.5 accent-[var(--color-accent)]"
+              />
+              <span className="text-[12px] leading-snug text-[color:var(--color-ink-2)]">
+                I’ll tell everyone on the call before I record, and follow my company’s policy and the law.
+              </span>
+            </label>
             <p className="m-0 text-[15px] font-medium text-[color:var(--color-ink)]">Ready when you are.</p>
             <button
               type="button"
               onClick={finish}
-              className="no-drag focus-ring h-10 rounded-full bg-[var(--color-accent)] px-7 text-[13px] font-semibold text-white shadow-[0_2px_16px_var(--color-accent-glow)] hover:brightness-110"
+              disabled={!consent}
+              className={
+                'no-drag focus-ring h-10 rounded-full px-7 text-[13px] font-semibold text-white ' +
+                (consent
+                  ? 'bg-[var(--color-accent)] shadow-[0_2px_16px_var(--color-accent-glow)] hover:brightness-110'
+                  : 'cursor-not-allowed bg-white/10 opacity-60')
+              }
             >
               Start
             </button>
@@ -327,15 +349,17 @@ export function OnboardingV2({
   signedIn?: boolean
   signedInEmail?: string
 }): JSX.Element {
-  const [phase, setPhase] = useState<'experience' | 'provider'>('experience')
+  // 'legacy-full' = the Skip path: the user opted out of the narrative, so they get the ENTIRE legacy
+  // flow from slide 1 — its consent gate included. Skipping must never skip consent (CMO-QA #1).
+  const [phase, setPhase] = useState<'experience' | 'provider' | 'legacy-full'>('experience')
   if (phase === 'experience') {
     return (
       <OnboardingExperience
-        onDone={({ mode }) => {
-          patch({ mode })
+        onDone={({ mode, recordingConsent }) => {
+          patch({ mode, recordingConsent })
           setPhase('provider')
         }}
-        onSkip={() => setPhase('provider')}
+        onSkip={() => setPhase('legacy-full')}
       />
     )
   }
@@ -349,7 +373,7 @@ export function OnboardingV2({
       onDone={onDone}
       signedIn={signedIn}
       signedInEmail={signedInEmail}
-      initialStep={5}
+      initialStep={phase === 'legacy-full' ? 1 : 5}
     />
   )
 }

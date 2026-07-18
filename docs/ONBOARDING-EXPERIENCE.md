@@ -52,7 +52,7 @@ Rows animate from spinner → state, using REAL signals (all already exposed via
 - Local meeting brain — ✓ initialized
 - Microphone — request inline (platform-perms) → ✓
 - Screen context — request inline → ✓ (or "later" without blocking)
-- Calendar (optional) — connect or skip
+- (cut from v1: calendar connect — revisit once calendar has an onboarding-safe connect flow)
 Close: **"Everything's ready. Nothing to configure."** (only show rows that are actually true —
 never fake a check.)
 
@@ -73,3 +73,10 @@ Consent line (the existing record-consent copy) sits HERE, as the last gate befo
   brain-init status. Every row must reflect reality — the honesty rule.
 - Sign-in (Microsoft/local) stays BEFORE the experience (it gates data), but restyle to match.
 - All copy through the i18n path like the rest of the renderer.
+
+
+## Implementation status (2026-07-18)
+Shipped as OnboardingExperience.tsx + OnboardingV2 wrapper (legacy entered at provider step).
+Consent is a REQUIRED checkbox gating Start in Scene 5 (per spec; restored after CMO-QA finding #1 —
+the Skip path routes through the full legacy flow so it hits legacy slide 1's consent instead).
+Calendar row cut from Scene 4. Demo transcript is mode-agnostic with an explicit Example label.
