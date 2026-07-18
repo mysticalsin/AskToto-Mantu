@@ -1,7 +1,13 @@
 # Métis Native — Apple flagship (macOS · iPadOS · iOS)
 
-**Status:** foundation scaffolded and compiling (`MetisKit` Swift package builds + 5 tests green on the
-macOS 26 SDK, Swift 6.3). This is a **new native product**, not an Electron conversion — it exists to use
+**Status:** roadmap steps 1–2 in progress. `MetisKit` builds + **9 tests green** (Swift 6.3, macOS 26 SDK):
+the shared core now includes the on-device intelligence, typed `@Generable` results (summary, suggestion,
+**next steps**), App Intents, a platform-neutral **`MeetingController`** (owns the live meeting, the App
+Intents seam, AND a live-transcript consumer — the app's logic, unit-tested here), and **`SpeechTranscription`**
+— the on-device `SpeechAnalyzer`/`SpeechTranscriber` (macOS/iOS 26) Speech→text mapping, **shape-verified to
+compile against the SDK** here. The SwiftUI app target (`App/` + `project.yml`) is scaffolded, including mic
+capture wired to the transcriber; `xcodegen generate` + Xcode to run it on-device. This is a **new native
+product**, not an Electron conversion — it exists to use
 Apple Intelligence, App Intents/Siri, and (on the 27 SDK) Private Cloud Compute *natively*, which the
 notarized Electron app structurally cannot. The Electron app remains the **Windows / cross-platform** path.
 
@@ -50,7 +56,11 @@ native-app/
       MeetingModels.swift           Meeting/TranscriptLine + @Generable typed results
       MeetingIntents.swift          App Intents (in-process) + AppShortcutsProvider + MeetingActions seam
     Tests/MetisKitTests/            5 tests green (swift test)
-  App/            (next)            one SwiftUI multiplatform app target depending on MetisKit
+  App/            (scaffolded)      one SwiftUI multiplatform app target depending on MetisKit
+    MetisApp.swift                  @main App: installs MeetingController into the intents registry + UI
+    ContentView.swift               meeting screen — transcript, say-next / summarize / next-steps
+    AudioCapture.swift              platform audio hook (#if os) — no-op today; roadmap 2 fills capture in
+    project.yml                     xcodegen spec (macOS + iOS destinations) — `xcodegen generate`
     Audio/         macOS: ScreenCaptureKit loopback + mic   iOS: mic (AVAudioEngine) only  (#if os)
     Transcription/ SpeechAnalyzer / SpeechTranscriber (iOS 26, on-device, word timestamps)
     Speaker/       CoreML/ONNX embedding (reuse the CAM++ model the Electron app ships) + clustering
