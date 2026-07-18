@@ -917,7 +917,7 @@ const jobKey = (j: Job): string => j.key ?? basename(j.file)
  *  short content hash of the full key, because slugify() collapses every "/" to "-" — without the hash a
  *  team key would slugify to the same string as an own file literally named "team-<owner>-<file>.md" and
  *  the two extractions would overwrite each other on disk (silent cross-meeting misattribution). */
-const extractionSlug = (key: string): string =>
+export const extractionSlug = (key: string): string =>
   key.includes('/') ? `${slugify(key)}-${fnv1a(key).toString(16)}` : slugify(key)
 
 // The network-bound stage (extractMeeting, seconds-to-a-minute per call) is what a 100-meeting backfill
