@@ -11,7 +11,7 @@
  *   needs comes back through onDone.
  */
 import { useEffect, useRef, useState } from 'react'
-import { Check, ChevronRight, Cpu, FolderLock, Mic, MonitorUp, Sparkles } from 'lucide-react'
+import { Check, Cpu, FolderLock, Mic, MonitorUp, Sparkles } from 'lucide-react'
 import type { ConversationMode, ProfileRecoveryResult, PublicSettings } from '@shared/ipc'
 import type { ProviderId } from '@shared/providers'
 import { MetisMark } from './MetisMark'
@@ -23,26 +23,13 @@ export interface OnboardingExperienceProps {
   onSkip?: () => void
 }
 
-/** One staged line of the problem story — revealed sequentially, then dimmed as the next lands. */
-const STORY: string[] = [
-  'You’re in the meeting.',
-  'The question lands on you.',
-  'You know that you know it.',
-  '…and the moment passes.'
-]
+const REVEAL: string[] = ['Grounded in your meeting, in your words.', 'On your device — never uploaded.']
 
-const REVEAL: string[] = [
-  'The answer, before you need it.',
-  'In your voice, from your meetings.',
-  'On your device. Never uploaded.'
-]
+type Scene = 'hero' | 'reveal' | 'setup' | 'personalize'
 
-type Scene = 'hero' | 'story' | 'reveal' | 'setup' | 'personalize'
-
-// Hero is the welcome beat, not a "step" — the dots only track the four guided acts after it, so the
-// indicator appears the moment the user is actually inside the flow instead of before they've chosen to
-// begin.
-const GUIDED_SCENES: Scene[] = ['story', 'reveal', 'setup', 'personalize']
+// Hero is the welcome beat, not a "step" — the dots only track the guided acts after it, so the
+// indicator appears the moment the user is actually inside the flow instead of before they've begun.
+const GUIDED_SCENES: Scene[] = ['reveal', 'setup', 'personalize']
 
 // Lives in its own reserved-height row above the scene content (see the render below) rather than an
 // absolute overlay — an overlay collided with scene headings that sit close to the top on taller scenes
@@ -75,7 +62,6 @@ interface SetupRow {
 
 export function OnboardingExperience({ onDone, onSkip }: OnboardingExperienceProps): JSX.Element {
   const [scene, setScene] = useState<Scene>('hero')
-  const [storyLine, setStoryLine] = useState(0)
   const [rows, setRows] = useState<SetupRow[]>([])
   const [mode, setMode] = useState<ConversationMode>('general')
   // Recording-consent gate. Entering the legacy flow at its provider step skips legacy slide 1 — the
@@ -84,15 +70,7 @@ export function OnboardingExperience({ onDone, onSkip }: OnboardingExperiencePro
   const [consent, setConsent] = useState(false)
   const doneRef = useRef(false)
 
-  // --- Scene 2 pacing: one line every ~1.4s; hold the last line, then advance on click/auto.
-  useEffect(() => {
-    if (scene !== 'story') return
-    if (storyLine >= STORY.length) return
-    const t = setTimeout(() => setStoryLine((n) => n + 1), storyLine === 0 ? 400 : 1400)
-    return () => clearTimeout(t)
-  }, [scene, storyLine])
-
-  // --- Scene 4: run the REAL checks the moment the scene mounts.
+  // --- Setup scene: run the REAL checks the moment the scene mounts.
   useEffect(() => {
     if (scene !== 'setup') return
     let live = true
@@ -180,7 +158,7 @@ export function OnboardingExperience({ onDone, onSkip }: OnboardingExperiencePro
           </div>
           <button
             type="button"
-            onClick={() => setScene('story')}
+            onClick={() => setScene('reveal')}
             className="no-drag focus-ring h-10 rounded-full bg-[var(--color-accent)] px-6 text-[13px] font-semibold text-white shadow-[0_2px_16px_var(--color-accent-glow)] hover:brightness-110"
           >
             Begin
@@ -194,36 +172,9 @@ export function OnboardingExperience({ onDone, onSkip }: OnboardingExperiencePro
         </div>
       )}
 
-      {scene === 'story' && (
-        <div
-          key="story"
-          className="scene-enter flex min-h-[220px] flex-col items-center justify-center gap-3"
-          onClick={() => (storyLine >= STORY.length ? setScene('reveal') : setStoryLine(STORY.length))}
-        >
-          {STORY.slice(0, storyLine).map((line, i) => (
-            <p
-              key={line}
-              className="fade-up m-0 text-[22px] font-medium transition-opacity duration-700"
-              style={{ opacity: i === storyLine - 1 ? 1 : 0.35, color: 'var(--color-ink)' }}
-            >
-              {line}
-            </p>
-          ))}
-          {storyLine >= STORY.length && (
-            <button
-              type="button"
-              onClick={() => setScene('reveal')}
-              className="no-drag focus-ring fade-up mt-4 inline-flex items-center gap-1 rounded-full px-4 py-2 text-[13px] font-medium text-[color:var(--color-accent-2)] hover:bg-white/10"
-            >
-              Métis sees it coming <ChevronRight size={14} />
-            </button>
-          )}
-        </div>
-      )}
-
       {scene === 'reveal' && (
         <div key="reveal" className="scene-enter flex flex-col items-center gap-6">
-          <h2 className="m-0 text-[24px] font-semibold text-[color:var(--color-ink)]">Métis sees it coming.</h2>
+          <h2 className="m-0 text-[24px] font-semibold text-[color:var(--color-ink)]">Here’s what that looks like.</h2>
           {/* Representation of the live bar — a real transcript line, then the answer MATERIALIZES through
               the glass (develop-in — the same blur-to-sharp idiom the real first-answer moment uses in
               styles.css) after a beat, instead of appearing instantly. That beat is the whole point: it's
