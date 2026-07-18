@@ -1,4 +1,16 @@
-import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type ComponentType, type ReactNode } from 'react'
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useId,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ComponentType,
+  type ReactNode
+} from 'react'
 import appPackage from '../../../../package.json'
 import { TapControlCard } from './TapCalibration'
 import {
@@ -376,22 +388,38 @@ function ManagedChip({ keys, k }: { keys: string[]; k: string }): JSX.Element | 
   return keys.includes(k) ? <span className={managedChipCls}>Managed by your organization</span> : null
 }
 
+// Lets a Section pick up its enclosing tab's icon automatically (Settings wraps each tab's content in a
+// Provider) so most cards get sensible iconography for free; an explicit `icon` prop on a Section still
+// wins, for the cards that want a more specific glyph than their tab's.
+const TabIconContext = createContext<LucideIcon | ComponentType<{ size?: number }> | undefined>(undefined)
+
 export function Section({
   title,
   desc,
+  icon,
   children
 }: {
   title: string
   desc?: string
+  icon?: LucideIcon | ComponentType<{ size?: number }>
   children: ReactNode
 }): JSX.Element {
+  const tabIcon = useContext(TabIconContext)
+  const Icon = icon ?? tabIcon
   return (
-    <section className="flex flex-col">
-      <div className="mb-3">
-        <div className="text-[13px] font-semibold leading-snug text-[color:var(--cl-foreground)]">{title}</div>
-        {desc && (
-          <div className="mt-1 text-[12px] text-[color:var(--cl-muted-foreground)]">{desc}</div>
+    <section className="cl-card flex flex-col gap-0 px-4 py-4">
+      <div className="mb-3 flex items-start gap-2.5">
+        {Icon && (
+          <span className="mt-0.5 flex size-6 shrink-0 items-center justify-center rounded-full bg-[var(--cl-primary-soft)] text-[color:var(--cl-primary)]">
+            <Icon size={13} />
+          </span>
         )}
+        <div className="min-w-0 flex-1">
+          <div className="text-[13px] font-semibold leading-snug text-[color:var(--cl-foreground)]">{title}</div>
+          {desc && (
+            <div className="mt-1 text-[12px] text-[color:var(--cl-muted-foreground)]">{desc}</div>
+          )}
+        </div>
       </div>
       {children}
     </section>
@@ -461,7 +489,7 @@ function ExpandableSection({
 }): JSX.Element {
   const [open, setOpen] = useState(false)
   return (
-    <section className="flex flex-col">
+    <section className="flex flex-col rounded-[14px] border border-dashed border-[var(--cl-border)] px-4 py-3 transition-colors hover:border-[var(--cl-input)]">
       <button
         type="button"
         onClick={() => setOpen((o) => !o)}
@@ -480,7 +508,7 @@ function ExpandableSection({
           ].join(' ')}
         />
       </button>
-      {open && <div className="mt-3 flex flex-col gap-5">{children}</div>}
+      {open && <div className="fade-up mt-3 flex flex-col gap-5">{children}</div>}
     </section>
   )
 }
@@ -886,7 +914,7 @@ function AiSection({
   // Save claim it's "valid and working" for a key that will never actually be read.
   const envKeyActive = settings.envKeys.includes(provider)
   const keyEntrySection = !CLI_PROVIDERS.has(provider) && PROVIDERS[provider].kind !== 'local' ? (
-    <Section title={`${def.label} key`} desc="Stored encrypted on this device. Never sent anywhere except the provider.">
+    <Section title={`${def.label} key`} desc="Stored encrypted on this device. Never sent anywhere except the provider." icon={Lock}>
       <div className="flex items-center gap-2">
         <label htmlFor={keyInputId} className="sr-only">
           {def.label} API key
@@ -1181,7 +1209,7 @@ function AiSection({
 
       {/* Featured API providers — same prominence as the CLI cards above, so picking GPT/Grok/Kimi/
           Gemini doesn't require digging into a collapsed section. */}
-      <Section title="Other providers" desc="Bring your own key from another provider.">
+      <Section title="Other providers" desc="Bring your own key from another provider." icon={Network}>
         <div className="grid grid-cols-2 gap-2">
           {featured.map((id) => (
             <ProviderTile
@@ -1208,7 +1236,7 @@ function AiSection({
         title="Experience: more models"
         desc="More providers, including a raw OpenAI-compatible endpoint. Closed by default; most people find what they need above."
       >
-        <Section title="Model provider" desc="Prefer a raw model? Pick one, paste a key, and Métis detects the provider.">
+        <Section title="Model provider" desc="Prefer a raw model? Pick one, paste a key, and Métis detects the provider." icon={Cpu}>
           {orgAllowed && (
             <div className="mb-2 flex items-center gap-1.5 rounded-lg bg-[var(--cl-primary-soft)] px-2.5 py-1.5 text-[11px] text-[color:var(--cl-muted-foreground)]">
               <ShieldCheck size={12} className="shrink-0 text-[color:var(--cl-primary)]" />
@@ -1265,7 +1293,7 @@ function AiSection({
       </ExpandableSection>
 
       {/* Thinking mode — applies to whatever's active (raw model tiers, or your two Dust agents) */}
-      <Section title="Thinking mode" desc="When to use a fast model vs. a deeper one for harder questions.">
+      <Section title="Thinking mode" desc="When to use a fast model vs. a deeper one for harder questions." icon={Lightbulb}>
         <div className="flex gap-1.5">
           {(
             [
@@ -1344,6 +1372,7 @@ function LocalAiSection({
     <Section
       title="Local AI"
       desc="Runs the model included with Métis on this device. Live suggestions, summaries, Mantu Intelligence extraction, and screenshot reads stay local."
+      icon={Cpu}
     >
       <div className="flex flex-col gap-3">
         <ToggleRow
@@ -1825,6 +1854,7 @@ function CliIntegration({
     <Section
       title="CLI Integration"
       desc="Claude Code and Codex route through your own local install of that tool — it has to be on this device. Set up automatically installs it (via npm i -g) if it's missing, or connects straight away if it's already there."
+      icon={Link2}
     >
       <div className="flex flex-col gap-3">
 
@@ -2682,6 +2712,7 @@ function DustSetup({
     <Section
       title={active ? 'Dust CLI · Your agents (active)' : 'Dust CLI · Your agents'}
       desc="Your Dust agents (Second Brain retrieval + tools) power Métis. Connect with the Dust CLI, then pick a thinking agent for hard questions."
+      icon={Link2}
     >
       <div className="flex flex-col gap-4">
         {/* PRIMARY — one click installs the Dust CLI, signs you in, and connects on its own. Same on
@@ -3938,24 +3969,93 @@ type TabId =
 
 // Icons are Lucide components except Mantu Intelligence, which carries the official Mantu "M" mark —
 // both render through the same `<t.icon size={14} />` call, so the type is the shared size-taking shape.
-const TABS: { id: TabId; label: string; icon: LucideIcon | ComponentType<{ size?: number }> }[] = [
+// `desc` is the short section intro shown under the tab bar; `keywords` seed the search field below —
+// each list is the REAL card titles living under that tab (see the `<Section title=...>` calls), so a
+// search never promises a match that isn't actually there.
+const TABS: {
+  id: TabId
+  label: string
+  icon: LucideIcon | ComponentType<{ size?: number }>
+  desc: string
+  keywords: string[]
+}[] = [
   // Tab id stays 'personalize' (nothing keys off the label) — labeled to cover BOTH children rendered
   // under it: the transparency/appearance slider AND the Modes editor. A plain rename to just "Appearance"
   // would hide Modes (which onboarding explicitly teaches by that name) behind an unrelated-looking tab.
-  { id: 'personalize', label: 'Modes & Display', icon: Wand2 },
-  { id: 'ai', label: 'AI', icon: Cpu },
-  { id: 'audio', label: 'Audio', icon: Mic },
-  { id: 'calendar', label: 'Calendar', icon: Calendar },
-  { id: 'meetings', label: 'Meetings', icon: FolderOpen },
+  {
+    id: 'personalize',
+    label: 'Modes & Display',
+    icon: Wand2,
+    desc: 'How Métis looks, and what each mode says.',
+    keywords: ['appearance', 'transparency', 'opacity', 'glass', 'modes', 'language', 'custom instructions', 'prompt']
+  },
+  {
+    id: 'ai',
+    label: 'AI',
+    icon: Cpu,
+    desc: 'Provider, API keys, local model, and thinking mode.',
+    keywords: ['provider', 'api key', 'anthropic', 'openai', 'dust', 'claude code', 'codex', 'local ai', 'thinking mode', 'model']
+  },
+  {
+    id: 'audio',
+    label: 'Audio',
+    icon: Mic,
+    desc: 'What Métis listens to, and how it hears you.',
+    keywords: ['microphone', 'listen to', 'in meetings', 'vocabulary corrections', 'transcription', 'asr']
+  },
+  {
+    id: 'calendar',
+    label: 'Calendar',
+    icon: Calendar,
+    desc: "Connect Outlook and see today's agenda.",
+    keywords: ['notifications', 'microsoft', 'outlook', "today's agenda", 'calendar', 'sign in']
+  },
+  {
+    id: 'meetings',
+    label: 'Meetings',
+    icon: FolderOpen,
+    desc: 'Where meetings are saved, and how long they stay.',
+    keywords: ['meetings & transcripts', 'folder', 'retention', 'danger zone', 'delete', 'ingest']
+  },
   // Label shortened to keep all nine tabs on ONE line at the overlay's width — the MantuMark icon already
   // signals "Mantu"; the tab id stays 'intelligence' so nothing else changes.
-  { id: 'intelligence', label: 'Intelligence', icon: MantuMark },
-  { id: 'privacy', label: 'Privacy', icon: ShieldCheck },
+  {
+    id: 'intelligence',
+    label: 'Intelligence',
+    icon: MantuMark,
+    desc: 'Your second brain — meetings, wiki, CRM, knowledge graph.',
+    keywords: ['mantu intelligence', 'meetings & follow-up', 'published wiki', 'polo pre-sales', 'crm', 'knowledge graph']
+  },
+  {
+    id: 'privacy',
+    label: 'Privacy',
+    icon: ShieldCheck,
+    desc: 'What Métis can see, record, and send.',
+    keywords: ['screen capture', 'screen access', 'recording consent', 'sensitive data', 'redact', 'permissions', 'usage']
+  },
   // Profile + Keybinds merged: both are "how Métis is set up for YOU" (who you are / how you drive it).
   // Labeled just "Profile" so all nine tabs fit one line; keybinds live inside this tab.
-  { id: 'profile', label: 'Profile', icon: User },
-  { id: 'about', label: 'About', icon: Info }
+  {
+    id: 'profile',
+    label: 'Profile',
+    icon: User,
+    desc: 'Who you are, your license, and your keybinds.',
+    keywords: ['about you', 'license', 'keyboard shortcuts', 'hotkeys', 'tap control']
+  },
+  {
+    id: 'about',
+    label: 'About',
+    icon: Info,
+    desc: 'The story, the thanks, and the version.',
+    keywords: ['why métis', 'thanks', 'version', 'credits']
+  }
 ]
+
+/** Case/diacritic-insensitive substring test — lets "metis" match "Métis" in search. */
+function fuzzyIncludes(haystack: string, needle: string): boolean {
+  const norm = (s: string): string => s.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase()
+  return norm(haystack).includes(norm(needle))
+}
 
 export function Settings({
   settings,
@@ -3995,6 +4095,24 @@ export function Settings({
   onLogout?: () => void
 }): JSX.Element {
   const [tab, setTab] = useState<TabId>(initialTab ?? 'personalize')
+  // Guided search — jumps between sections instead of the old dig-through-nine-tabs pattern. Matches the
+  // tab label plus its real card keywords (see TABS above), so a hit always points at something that
+  // actually exists on that tab.
+  const [query, setQuery] = useState('')
+  const searchMatches = useMemo(() => {
+    const q = query.trim()
+    if (!q) return []
+    return TABS.filter(
+      (t) => fuzzyIncludes(t.label, q) || t.keywords.some((k) => fuzzyIncludes(k, q))
+    ).map((t) => ({
+      ...t,
+      matchedKeyword: t.keywords.find((k) => fuzzyIncludes(k, q))
+    }))
+  }, [query])
+  const jumpTo = (id: TabId): void => {
+    setTab(id)
+    setQuery('')
+  }
   // openMeetingsFolder resolves a non-empty string on failure (e.g. the folder was deleted/unmounted) —
   // surface it instead of silently discarding it (was `void window.toto.openMeetingsFolder()`).
   const [meetingsFolderErr, setMeetingsFolderErr] = useState<string | null>(null)
@@ -4050,11 +4168,25 @@ export function Settings({
             Managed by your organization
           </span>
         )}
+        <div className="relative ml-auto w-[168px]">
+          <Search size={12} className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-[color:var(--cl-muted-foreground)]" />
+          <input
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && searchMatches.length > 0) jumpTo(searchMatches[0].id)
+              if (e.key === 'Escape') setQuery('')
+            }}
+            placeholder="Search settings…"
+            aria-label="Search settings"
+            className="no-drag cl-focus h-7 w-full rounded-full border border-[var(--cl-input)] bg-white/[0.04] pl-7 pr-2.5 text-[11px] text-[color:var(--cl-foreground)] placeholder:text-[color:var(--cl-muted-foreground)]"
+          />
+        </div>
         <button
           type="button"
           onClick={onClose}
           aria-label="Close settings"
-          className="no-drag cl-focus ml-auto flex size-7 items-center justify-center rounded-md text-[color:var(--cl-muted-foreground)] hover:bg-white/[0.06] hover:text-[color:var(--cl-foreground)]"
+          className="no-drag cl-focus flex size-7 shrink-0 items-center justify-center rounded-md text-[color:var(--cl-muted-foreground)] hover:bg-white/[0.06] hover:text-[color:var(--cl-foreground)]"
         >
           <X size={16} />
         </button>
@@ -4077,6 +4209,7 @@ export function Settings({
       >
         {TABS.map((t, i) => {
           const active = t.id === tab
+          const matched = query.trim() !== '' && searchMatches.some((m) => m.id === t.id)
           // Roving tabindex per the APG tabs pattern: only the active tab is Tab-reachable; arrow keys
           // move focus and activation between the rest.
           return (
@@ -4088,7 +4221,7 @@ export function Settings({
               aria-selected={active}
               aria-controls="settings-panel"
               tabIndex={active ? 0 : -1}
-              onClick={() => setTab(t.id)}
+              onClick={() => jumpTo(t.id)}
               onKeyDown={(e) => {
                 if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return
                 e.preventDefault()
@@ -4101,7 +4234,11 @@ export function Settings({
                 'cl-focus flex shrink-0 items-center gap-1.5 rounded-full px-2.5 py-1.5 text-[12px] font-medium transition-colors',
                 active
                   ? 'bg-[var(--cl-primary)] text-white'
-                  : 'text-[color:var(--cl-muted-foreground)] hover:bg-white/[0.06] hover:text-[color:var(--cl-foreground)]'
+                  : matched
+                    ? 'text-[color:var(--cl-foreground)] ring-1 ring-inset ring-[var(--cl-primary)]/60'
+                    : query.trim() !== ''
+                      ? 'text-[color:var(--cl-muted-foreground)] opacity-40'
+                      : 'text-[color:var(--cl-muted-foreground)] hover:bg-white/[0.06] hover:text-[color:var(--cl-foreground)]'
               ].join(' ')}
             >
               <t.icon size={14} />
@@ -4111,6 +4248,35 @@ export function Settings({
         })}
       </nav>
 
+      {/* Active tab's short intro — one line, so a dense nine-tab bar still reads as a guided flow rather
+          than a wall of pill buttons. Swaps for the search results list while a query is live. */}
+      {query.trim() === '' ? (
+        <p className="m-0 border-b border-[var(--cl-border)] px-3.5 py-2 text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
+          {TABS.find((t) => t.id === tab)?.desc}
+        </p>
+      ) : (
+        <div className="flex flex-col gap-0.5 border-b border-[var(--cl-border)] px-2 py-1.5">
+          {searchMatches.length === 0 ? (
+            <p className="m-0 px-1.5 py-1 text-[11px] text-[color:var(--cl-muted-foreground)]">No matching settings.</p>
+          ) : (
+            searchMatches.map((m) => (
+              <button
+                key={m.id}
+                type="button"
+                onClick={() => jumpTo(m.id)}
+                className="no-drag cl-focus flex items-center gap-2 rounded-[8px] px-1.5 py-1 text-left text-[11px] text-[color:var(--cl-foreground)] hover:bg-white/[0.06]"
+              >
+                <m.icon size={12} className="shrink-0 text-[color:var(--cl-primary)]" />
+                <span className="font-medium">{m.label}</span>
+                {m.matchedKeyword && (
+                  <span className="truncate text-[color:var(--cl-muted-foreground)]">· {m.matchedKeyword}</span>
+                )}
+              </button>
+            ))
+          )}
+        </div>
+      )}
+
       <main
         ref={contentRef}
         role="tabpanel"
@@ -4118,6 +4284,7 @@ export function Settings({
         aria-labelledby={`settings-tab-${tab}`}
         className="cl-content scroll-thin max-h-[480px] overflow-y-auto"
       >
+        <TabIconContext.Provider value={TABS.find((t) => t.id === tab)?.icon}>
         <div className="flex flex-col gap-6 px-5 pt-5 pb-16">
             {tab === 'ai' && (
               <AiSection
@@ -4132,7 +4299,7 @@ export function Settings({
 
             {tab === 'personalize' && (
               <div className="flex flex-col gap-6">
-                <Section title="Appearance" desc="How see-through the overlay's background is. Default matches what you see today.">
+                <Section title="Appearance" desc="How see-through the overlay's background is. Default matches what you see today." icon={Sparkles}>
                   <label className="flex items-center justify-between gap-3 px-1 py-2 text-[12px] text-[color:var(--cl-muted-foreground)]">
                     <span className="flex items-center gap-2">
                       {settings.overlayOpacity < 0.9
@@ -4153,13 +4320,21 @@ export function Settings({
                       className={['no-drag accent-[var(--cl-primary)]', settings.managedKeys.includes('overlayOpacity') ? 'opacity-60' : ''].join(' ')}
                     />
                   </label>
+                  {/* Live preview: --overlay-opacity-scale is set on <html> by App.tsx the instant patch()
+                      round-trips, and .glass-strong already reads that var — so this swatch reflects the
+                      slider with zero extra plumbing, not a simulated approximation. */}
+                  <div className="glass-strong mt-1 flex items-center gap-2 rounded-[12px] px-3 py-2.5">
+                    <MetisMark size={16} />
+                    <span className="text-[12px] text-[color:var(--color-ink)]">This is how the overlay bar will look.</span>
+                  </div>
                 </Section>
-                <Section title="Modes" desc="Edit each mode's prompt and the files it can see, then set the one you want active.">
+                <Section title="Modes" desc="Edit each mode's prompt and the files it can see, then set the one you want active." icon={Wand2}>
                   <PersonalizeModes settings={settings} patch={patch} />
                 </Section>
                 <Section
                   title="Language"
                   desc="Pick the language for live answers, and a separate one for the saved summary (useful when the meeting is in one language but you want notes in another)."
+                  icon={MessageSquare}
                 >
                   <label className="mb-1 block text-[11px] font-medium text-[color:var(--cl-muted-foreground)]">
                     Answers & live assist
@@ -4196,7 +4371,7 @@ export function Settings({
                     ))}
                   </select>
                 </Section>
-                <Section title="Custom instructions" desc="Added to every mode's prompt. Leave blank to use the defaults.">
+                <Section title="Custom instructions" desc="Added to every mode's prompt. Leave blank to use the defaults." icon={AlignLeft}>
                   <LazyTextarea
                     value={settings.systemPrompt}
                     onCommit={(v) => patch({ systemPrompt: v })}
@@ -4213,13 +4388,13 @@ export function Settings({
 
             {tab === 'audio' && (
               <div className="flex flex-col gap-6">
-                <Section title="Listen to" desc="Whose audio Métis transcribes during a meeting.">
+                <Section title="Listen to" desc="Whose audio Métis transcribes during a meeting." icon={Mic}>
                   <div className="mb-2"><ManagedChip keys={settings.managedKeys} k="audioSource" /></div>
                   <AudioChoices settings={settings} patch={patch} />
                   <MicPicker settings={settings} patch={patch} />
                 </Section>
                 <TapControlCard settings={settings} patch={patch} />
-                <Section title="In meetings">
+                <Section title="In meetings" icon={Headphones}>
                   <ToggleRow
                     label="Auto-answer"
                     desc="Draft a reply the moment they ask a question."
@@ -4372,7 +4547,7 @@ export function Settings({
                     disabled={settings.managedKeys.includes('backgroundScreenContext')}
                   />
                 </Section>
-                <Section title="Vocabulary corrections" desc="Words the transcriber keeps getting wrong. Fix them once, applied to every meeting.">
+                <Section title="Vocabulary corrections" desc="Words the transcriber keeps getting wrong. Fix them once, applied to every meeting." icon={MessageSquareQuote}>
                   <ToggleRow
                     label="Spell known names correctly"
                     desc="Spell names from your meeting history correctly in transcripts (people and accounts your brain already knows)."
@@ -4401,7 +4576,7 @@ export function Settings({
 
             {tab === 'privacy' && (
               <div className="flex flex-col gap-6">
-                <Section title="Screen capture" desc="Two separate switches: what others can see of Métis, and what Métis can see of your screen.">
+                <Section title="Screen capture" desc="Two separate switches: what others can see of Métis, and what Métis can see of your screen." icon={Camera}>
                   <ToggleRow
                     label="Hide from screen capture"
                     desc="Hide the Métis window from screen capture & sharing, so people you share with never see it. Doesn't affect screen questions."
@@ -4418,7 +4593,7 @@ export function Settings({
                     disabled={settings.managedKeys.includes('privateView')}
                   />
                 </Section>
-                <Section title="Screen access" desc="Whether Métis can see your own screen to answer what's in front of you.">
+                <Section title="Screen access" desc="Whether Métis can see your own screen to answer what's in front of you." icon={Eye}>
                   <ToggleRow
                     label="Let Métis see your screen automatically"
                     desc="When on, quick actions and the first ask capture your screen for a vision model. Turn off to answer from text only."
@@ -4431,6 +4606,7 @@ export function Settings({
                 <Section
                   title="Recording consent"
                   desc="This reminder is shown to YOU, the operator. It does not notify or ask the other participants. Métis has no way to show anything to the other people on the call; getting their consent is on you, by whatever means your company policy or local law requires (verbal notice, a calendar invite disclosure, etc.)."
+                  icon={ShieldCheck}
                 >
                   <ToggleRow
                     label="I will inform participants before recording"
@@ -4453,7 +4629,7 @@ export function Settings({
                     </div>
                   </ToggleRow>
                 </Section>
-                <Section title="Sensitive data" desc="Keep secrets out of what's sent to AI providers.">
+                <Section title="Sensitive data" desc="Keep secrets out of what's sent to AI providers." icon={Lock}>
                   <ToggleRow
                     label="Redact secrets before sending to AI"
                     desc="Strips credit-card numbers, API keys, SSNs, and private keys from the captured transcript before it goes to a cloud model. Your typed questions and the saved transcript are never changed."
@@ -4468,12 +4644,13 @@ export function Settings({
                     </div>
                   </ToggleRow>
                 </Section>
-                <Section title="Permissions" desc="Status of the OS permissions Métis needs.">
+                <Section title="Permissions" desc="Status of the OS permissions Métis needs." icon={ShieldCheck}>
                   <PermissionsSection />
                 </Section>
                 <Section
                   title="Usage"
                   desc="On-device performance and quality from your local audit log. Never leaves this device."
+                  icon={FileSearch}
                 >
                   <DiagnosticsSection />
                 </Section>
@@ -4485,6 +4662,7 @@ export function Settings({
               <Section
                 title="Meetings & transcripts"
                 desc="Meetings are saved here as notes your Dust agents can read."
+                icon={FolderOpen}
               >
                 <div className="cl-card px-3 py-2.5">
                   <div className="flex items-center gap-2">
@@ -4645,7 +4823,7 @@ export function Settings({
 
             {tab === 'profile' && (
               <div className="flex flex-col gap-6">
-                <Section title="About you" desc="Used for interview and sales modes. The more detail, the better the answers.">
+                <Section title="About you" desc="Used for interview and sales modes. The more detail, the better the answers." icon={User}>
                   <ProfileEditor
                     profile={settings.profile}
                     onChange={(p) => patch({ profile: p })}
@@ -4656,12 +4834,12 @@ export function Settings({
                     OFF for phase 1 (LICENSE_UI_ENABLED); the section + LicenseSection component stay in
                     source and reappear here the moment the flag flips. */}
                 {LICENSE_UI_ENABLED && (
-                  <Section title="License" desc="Activate Métis against your organization's license server.">
+                  <Section title="License" desc="Activate Métis against your organization's license server." icon={ShieldCheck}>
                     <LicenseSection settings={settings} patch={patch} />
                   </Section>
                 )}
                 {/* Keybinds live with Profile: both are "how Métis is set up for you". */}
-                <Section title="Keyboard shortcuts" desc="Click any keybind below to edit it.">
+                <Section title="Keyboard shortcuts" desc="Click any keybind below to edit it." icon={Settings2}>
                   <Shortcuts settings={settings} patch={patch} />
                 </Section>
               </div>
@@ -4672,7 +4850,7 @@ export function Settings({
               <div className="flex flex-col gap-6 text-center">
                 {/* Microsoft sign-in is in Calendar, the license is in Profile, and permissions + usage
                     moved to Privacy. About is just the story now. */}
-                <Section title="Why “Métis”" desc="The name is the mission.">
+                <Section title="Why “Métis”" desc="The name is the mission." icon={Sparkles}>
                   <div className="flex flex-col items-center gap-2 pb-1 text-center">
                     <MetisMark size={76} />
                     <p className="text-[12px] leading-relaxed text-[color:var(--cl-muted-foreground)]">
@@ -4686,7 +4864,7 @@ export function Settings({
                     </p>
                   </div>
                 </Section>
-                <Section title="Thanks" desc="Métis got better because people believed in it early.">
+                <Section title="Thanks" desc="Métis got better because people believed in it early." icon={CircleCheck}>
                   <p className="text-[12px] leading-relaxed text-[color:var(--cl-muted-foreground)]">
                     To{' '}
                     <a
@@ -4787,6 +4965,7 @@ export function Settings({
               </div>
             )}
         </div>
+        </TabIconContext.Provider>
       </main>
 
       {/* Footer — secondary actions left, Done right */}
@@ -5030,6 +5209,7 @@ function IntelligenceTab({
       <Section
         title="Meetings & follow-up"
         desc="Recent meeting history. Open one to review its recap, transcript, and generate a follow-up."
+        icon={FolderOpen}
       >
         <div className="flex flex-col gap-1.5">
           {meetings === null ? (
@@ -5087,6 +5267,7 @@ function IntelligenceTab({
       <Section
         title="Published wiki (Dust-readable)"
         desc="Mirrors your CRM-corrected brain — account/people/deal pages and meeting note cards — as plain markdown under a wiki/ folder next to your meetings, so Dust and other agents can read it."
+        icon={FileText}
       >
         <ToggleRow
           label="Publish meeting intelligence"
@@ -5123,6 +5304,7 @@ function IntelligenceTab({
       <Section
         title="Polo Pre-Sales"
         desc="Push meeting recaps to your pre-sales CRM. Manual and review-first: nothing sends automatically."
+        icon={MessageSquare}
       >
         <BidstackCard settings={settings} patch={patch} />
       </Section>
@@ -5161,6 +5343,7 @@ function GraphSection({
     <Section
       title="Knowledge graph"
       desc="See how your meetings, people, and topics connect. Uses your existing Claude or Claude Code sign-in, so there is no extra key to add."
+      icon={Network}
     >
       <ToggleRow
         label="Build a knowledge graph of my notes"
@@ -5279,6 +5462,7 @@ function DangerZoneSection({
     <Section
       title="Danger zone"
       desc="Meeting recordings capture other people's speech too, not just yours, so these controls bound or fully erase what's stored on this device."
+      icon={AlertCircle}
     >
       <label className="mb-1 block text-[11px] font-medium text-[color:var(--cl-muted-foreground)]">
         Auto-delete meetings older than
@@ -5625,7 +5809,7 @@ function CalendarTab({
     <div className="flex flex-col gap-6">
 
       {/* Notifications — merged from former Notifications tab */}
-      <Section title="Notifications">
+      <Section title="Notifications" icon={Bell}>
         <ToggleRow
           label="Meeting alerts"
           desc="Notify 1 minute before a scheduled meeting starts."
@@ -5636,7 +5820,7 @@ function CalendarTab({
       </Section>
 
       {/* Microsoft / Outlook */}
-      <Section title="Microsoft / Outlook" desc="Connect your work Microsoft account to see Outlook calendar events.">
+      <Section title="Microsoft / Outlook" desc="Connect your work Microsoft account to see Outlook calendar events." icon={Calendar}>
         <div className="flex flex-col gap-2">
           {authStatus === null && (
             <Loader2 size={14} className="animate-spin text-[color:var(--cl-muted-foreground)]" />
@@ -5747,7 +5931,7 @@ function CalendarTab({
 
       {/* Agenda preview — shown once the Outlook calendar is connected */}
       {isOutlookConnected && (
-        <Section title="Today's agenda" desc="Preview from your Outlook calendar.">
+        <Section title="Today's agenda" desc="Preview from your Outlook calendar." icon={Calendar}>
           <AgendaView />
         </Section>
       )}
