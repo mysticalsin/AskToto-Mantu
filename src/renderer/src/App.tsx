@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, lazy, Suspense, star
 import { Bar } from './components/Bar'
 import { ControlPill } from './components/ControlPill'
 import { Panel } from './components/Panel'
-import { Onboarding } from './components/Onboarding'
+import { OnboardingV2 } from './components/OnboardingExperience'
 // Heavy, rarely-first views are code-split so they don't weigh down the overlay's startup. Answer and
 // Copilot pull in Markdown.tsx -> streamdown + shiki/core, which have no reason to parse/execute before
 // the user has asked anything — deferring them keeps that weight out of the eager boot chunk.
@@ -2194,7 +2194,7 @@ export function App(): JSX.Element {
     return (
       <div ref={setRoot} {...windowDrag} className="flex w-full flex-col gap-2 p-1.5">
         <Panel>
-          <Onboarding
+          <OnboardingV2
             settings={settings}
             saveKey={saveKey}
             recoverEncryptedProfile={recoverEncryptedProfile}

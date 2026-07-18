@@ -12,8 +12,10 @@
  */
 import { useEffect, useRef, useState } from 'react'
 import { Check, ChevronRight, Cpu, FolderLock, Mic, MonitorUp, Sparkles } from 'lucide-react'
-import type { ConversationMode } from '@shared/ipc'
+import type { ConversationMode, ProfileRecoveryResult, PublicSettings } from '@shared/ipc'
+import type { ProviderId } from '@shared/providers'
 import { MetisMark } from './MetisMark'
+import { Onboarding } from './Onboarding'
 
 export interface OnboardingExperienceProps {
   onDone: (result: { mode: ConversationMode }) => void
@@ -298,5 +300,50 @@ export function OnboardingExperience({ onDone, onSkip }: OnboardingExperiencePro
         </>
       )}
     </div>
+  )
+}
+
+/**
+ * The full first-run flow: the five-act experience above, then the legacy component entered at its
+ * PROVIDER step (5) so API-key setup + the final consent/permissions checklist keep their proven
+ * implementation. Mode from the personalize scene is persisted before the handoff.
+ */
+export function OnboardingV2({
+  settings,
+  saveKey,
+  recoverEncryptedProfile,
+  patch,
+  onOpenAiSettings,
+  onDone
+}: {
+  settings: PublicSettings
+  saveKey?: (provider: ProviderId, k: string) => Promise<void>
+  recoverEncryptedProfile?: () => Promise<ProfileRecoveryResult>
+  patch: (p: Partial<PublicSettings>) => void
+  onOpenAiSettings?: () => void
+  onDone: () => void
+}): JSX.Element {
+  const [phase, setPhase] = useState<'experience' | 'provider'>('experience')
+  if (phase === 'experience') {
+    return (
+      <OnboardingExperience
+        onDone={({ mode }) => {
+          patch({ mode })
+          setPhase('provider')
+        }}
+        onSkip={() => setPhase('provider')}
+      />
+    )
+  }
+  return (
+    <Onboarding
+      settings={settings}
+      saveKey={saveKey}
+      recoverEncryptedProfile={recoverEncryptedProfile}
+      patch={patch}
+      onOpenAiSettings={onOpenAiSettings}
+      onDone={onDone}
+      initialStep={5}
+    />
   )
 }
