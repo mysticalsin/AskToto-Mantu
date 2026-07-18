@@ -812,6 +812,44 @@ export const BaseSettingsSchema = z.object({
   speakerId: z
     .object({ enabled: z.boolean().default(false) })
     .default({ enabled: false }),
+  // Desk Tap Control (src/renderer/src/lib/tap/): tap the desk near the laptop to fire an app action —
+  // on-device DSP on a raw (EC/NS/AGC-off) mic stream, calibrated per desk/mic. `profile` is the
+  // calibration output (normalization stats, zone centroids, negative examples, data-derived OOD cap);
+  // it is a few KB of floats and nullable — null means "not calibrated yet", which keeps the feature
+  // inert even when enabled. zoneActions holds one HotkeyAction string per zone index; dispatch
+  // validates against HOTKEY_ACTIONS at fire time so a stale/unknown action is a no-op, never a crash.
+  tapControl: z
+    .object({
+      enabled: z.boolean().default(false),
+      // Default true: the tap mic then only runs while a listen session is already live, so the OS
+      // mic indicator carries no NEW meaning. "Always armed" (false) is the explicit opt-in that
+      // keeps the mic hot to START a session by tap — Settings copy owns that disclosure.
+      armOnlyWhileListening: z.boolean().default(true),
+      sensitivity: z.number().min(0).max(1).default(0.5),
+      zoneActions: z.array(z.string()).max(4).default([]),
+      profile: z
+        .object({
+          version: z.literal(1),
+          sampleRate: z.number(),
+          micDeviceId: z.string(),
+          mean: z.array(z.number()),
+          std: z.array(z.number()),
+          zones: z.array(z.object({ name: z.string(), centroid: z.array(z.number()) })).min(1).max(4),
+          negatives: z.array(z.array(z.number())).max(24),
+          dAccept: z.number(),
+          levelRange: z.object({ min: z.number(), max: z.number() }),
+          createdAt: z.number()
+        })
+        .nullable()
+        .default(null)
+    })
+    .default({
+      enabled: false,
+      armOnlyWhileListening: true,
+      sensitivity: 0.5,
+      zoneActions: [],
+      profile: null
+    }),
   // Phone-home license activation against a self-hosted license server (see main/license.ts). Gate is
   // OFF by default: Tony has not deployed a server yet, and shipping this on by default would lock him
   // out of his own app at next launch. checkLicenseGrace() IS wired into a real startup gate (App.tsx's
@@ -987,6 +1025,13 @@ export const DEFAULT_SETTINGS: Settings = {
     useFor: { suggest: true, summary: true, vision: true }
   },
   speakerId: { enabled: false },
+  tapControl: {
+    enabled: false,
+    armOnlyWhileListening: true,
+    sensitivity: 0.5,
+    zoneActions: [],
+    profile: null
+  },
   licenseServerUrl: '',
   licenseKey: '',
   licenseCompanyName: '',

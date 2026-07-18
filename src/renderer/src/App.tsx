@@ -27,6 +27,9 @@ import { useListen, playListenChime } from './lib/listen'
 import { transcriptToText, recapPersistAction } from './lib/transcript'
 import { playCue, playClick, setSoundsEnabled } from './lib/sound'
 import type { HotkeyAction, TranscriptLine, ConversationMode, ChatTurn, LicenseGateVerdict } from '@shared/ipc'
+import { HOTKEY_ACTIONS } from '@shared/ipc'
+import { useTapControl } from './lib/tap/tap-control'
+import type { TapProfile } from './lib/tap/classify'
 import { PROVIDERS, isDustReady } from '@shared/providers'
 import { ASSIST_PROMPT, buildNoDecisionPrompt } from '@shared/prompts'
 import { isScreenCapturePermissionError } from '@shared/screen-capture'
@@ -1680,6 +1683,26 @@ export function App(): JSX.Element {
     }
   }
   useEffect(() => window.toto.onHotkey((a) => handlersRef.current(a)), [])
+
+  // Desk Tap Control: a recognized desk tap dispatches through the exact same router as the global
+  // hotkeys — zero new dispatch surface, every existing gate applies. Armed while enabled+calibrated,
+  // narrowed to live sessions when armOnlyWhileListening (the default — no idle mic).
+  const tapCfg = settings?.tapControl
+  useTapControl({
+    active: Boolean(
+      tapCfg?.enabled && tapCfg.profile && (!tapCfg.armOnlyWhileListening || listen.listening)
+    ),
+    profile: (tapCfg?.profile as TapProfile | null) ?? null,
+    micDeviceId: settings?.micDeviceId || undefined,
+    sensitivity: tapCfg?.sensitivity ?? 0.5,
+    onZone: (zone) => {
+      const action = tapCfg?.zoneActions?.[zone]
+      // Unknown/empty action = visual-only zone; validate against the real action set at fire time.
+      if (action && (HOTKEY_ACTIONS as string[]).includes(action)) {
+        handlersRef.current(action as HotkeyAction)
+      }
+    }
+  })
 
   // Global Escape — the most-expected key on an overlay. Precedence, least to most destructive:
   // cancel a live stream → close an open surface → collapse → hide the bar.
