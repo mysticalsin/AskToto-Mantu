@@ -48,8 +48,10 @@ describe('startBackfill with no configured provider', () => {
   })
 
   afterEach(() => {
-    rmSync(userData, { recursive: true, force: true })
-    rmSync(meetingsFolder, { recursive: true, force: true })
+    // maxRetries: a background reconcile timer can still be writing into .brain when teardown fires,
+    // making a bare rmSync race it to ENOTEMPTY under full-suite parallelism (flaked ~1/full-run).
+    rmSync(userData, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
+    rmSync(meetingsFolder, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
     vi.unstubAllEnvs()
     vi.restoreAllMocks()
   })
