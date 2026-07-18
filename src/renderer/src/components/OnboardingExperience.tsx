@@ -39,6 +39,29 @@ const REVEAL: string[] = [
 
 type Scene = 'hero' | 'story' | 'reveal' | 'setup' | 'personalize'
 
+// Hero is the welcome beat, not a "step" — the dots only track the four guided acts after it, so the
+// indicator appears the moment the user is actually inside the flow instead of before they've chosen to
+// begin.
+const GUIDED_SCENES: Scene[] = ['story', 'reveal', 'setup', 'personalize']
+
+function ActProgress({ scene }: { scene: Scene }): JSX.Element | null {
+  const idx = GUIDED_SCENES.indexOf(scene)
+  if (idx < 0) return null
+  return (
+    <div className="fade-up absolute left-1/2 top-5 flex -translate-x-1/2 items-center gap-1.5" aria-hidden="true">
+      {GUIDED_SCENES.map((s, i) => (
+        <span
+          key={s}
+          className={
+            'h-1.5 rounded-full transition-all duration-300 ' +
+            (i === idx ? 'w-5 bg-[var(--color-accent)]' : i < idx ? 'w-1.5 bg-[var(--color-accent)]/50' : 'w-1.5 bg-white/15')
+          }
+        />
+      ))}
+    </div>
+  )
+}
+
 interface SetupRow {
   key: string
   label: string
@@ -130,16 +153,19 @@ export function OnboardingExperience({ onDone, onSkip }: OnboardingExperiencePro
   const needsPerms = rows.some((r) => (r.key === 'mic' || r.key === 'screen') && r.state === 'action')
 
   return (
-    <div className="fade-up flex h-full w-full select-none flex-col items-center justify-center gap-6 px-10 text-center">
+    <div className="relative flex h-full w-full select-none flex-col items-center justify-center gap-6 px-10 text-center">
+      <ActProgress scene={scene} />
       {scene === 'hero' && (
-        <>
-          <MetisMark size={92} />
+        <div key="hero" className="scene-enter flex flex-col items-center gap-6">
+          <span className="mark-halo">
+            <MetisMark size={92} />
+          </span>
           <div>
             <h1 className="text-[28px] font-semibold text-[color:var(--color-ink)]">
               Métis. <span className="text-[color:var(--color-ink-2)]">The wisdom before the moment.</span>
             </h1>
             <div className="mt-4 flex flex-col gap-1.5 text-[13px] text-[color:var(--color-ink-2)]">
-              {['Answers grounded in your meeting', 'Everything on-device — never uploaded', 'You stay in control — consent reminders built in'].map((t, i) => (
+              {['Answers grounded in your meeting', 'Everything on-device — never uploaded', "You're in control — recording always asks first"].map((t, i) => (
                 <p key={t} className="fade-up m-0" style={{ animationDelay: `${300 + i * 220}ms` }}>
                   {t}
                 </p>
@@ -159,11 +185,15 @@ export function OnboardingExperience({ onDone, onSkip }: OnboardingExperiencePro
             </button>
           )}
           <p className="m-0 text-[10px] tracking-wide text-[color:var(--color-ink-3)]">Mantu · Métis</p>
-        </>
+        </div>
       )}
 
       {scene === 'story' && (
-        <div className="flex min-h-[220px] flex-col items-center justify-center gap-3" onClick={() => (storyLine >= STORY.length ? setScene('reveal') : setStoryLine(STORY.length))}>
+        <div
+          key="story"
+          className="scene-enter flex min-h-[220px] flex-col items-center justify-center gap-3"
+          onClick={() => (storyLine >= STORY.length ? setScene('reveal') : setStoryLine(STORY.length))}
+        >
           {STORY.slice(0, storyLine).map((line, i) => (
             <p
               key={line}
@@ -186,13 +216,16 @@ export function OnboardingExperience({ onDone, onSkip }: OnboardingExperiencePro
       )}
 
       {scene === 'reveal' && (
-        <>
+        <div key="reveal" className="scene-enter flex flex-col items-center gap-6">
           <h2 className="m-0 text-[24px] font-semibold text-[color:var(--color-ink)]">Métis sees it coming.</h2>
-          {/* Representation of the live bar — a real transcript line + a materializing answer. */}
+          {/* Representation of the live bar — a real transcript line, then the answer MATERIALIZES through
+              the glass (develop-in — the same blur-to-sharp idiom the real first-answer moment uses in
+              styles.css) after a beat, instead of appearing instantly. That beat is the whole point: it's
+              the one place in onboarding that should feel like it's actually thinking. */}
           <div className="glass-strong fade-up w-full max-w-[520px] rounded-[16px] px-4 py-3 text-left">
             <p className="m-0 text-[12px] text-[color:var(--color-ink-3)]">Example · THEM · just now</p>
             <p className="m-0 mt-0.5 text-[13px] text-[color:var(--color-ink)]">“Can you recap where we left things last time?”</p>
-            <div className="mt-2 rounded-[10px] border border-white/10 bg-white/[0.04] px-3 py-2">
+            <div className="develop-in mt-2 rounded-[10px] border border-white/10 bg-white/[0.04] px-3 py-2" style={{ animationDelay: '650ms', animationFillMode: 'backwards' }}>
               <p className="m-0 text-[12px] leading-relaxed text-[color:var(--color-ink-2)]">
                 <Sparkles size={12} className="mr-1 inline text-[var(--color-accent-2)]" />
                 Three things were agreed last call: the revised timeline, the security review, and the intro to
@@ -202,7 +235,7 @@ export function OnboardingExperience({ onDone, onSkip }: OnboardingExperiencePro
           </div>
           <div className="flex flex-col gap-1 text-[13px] text-[color:var(--color-ink-2)]">
             {REVEAL.map((t, i) => (
-              <p key={t} className="fade-up m-0" style={{ animationDelay: `${400 + i * 240}ms` }}>
+              <p key={t} className="fade-up m-0" style={{ animationDelay: `${900 + i * 240}ms`, animationFillMode: 'backwards' }}>
                 {t}
               </p>
             ))}
@@ -214,15 +247,19 @@ export function OnboardingExperience({ onDone, onSkip }: OnboardingExperiencePro
           >
             Set me up
           </button>
-        </>
+        </div>
       )}
 
       {scene === 'setup' && (
-        <>
+        <div key="setup" className="scene-enter flex flex-col items-center gap-6">
           <h2 className="m-0 text-[22px] font-semibold text-[color:var(--color-ink)]">Your setup</h2>
           <div className="flex w-full max-w-[440px] flex-col gap-2">
-            {rows.map((r) => (
-              <div key={r.key} className="glass-strong flex items-center gap-3 rounded-[12px] px-3.5 py-2.5 text-left">
+            {rows.map((r, i) => (
+              <div
+                key={r.key}
+                className="glass-strong fade-up flex items-center gap-3 rounded-[12px] px-3.5 py-2.5 text-left"
+                style={{ animationDelay: `${i * 70}ms`, animationFillMode: 'backwards' }}
+              >
                 <r.icon size={16} className="shrink-0 text-[color:var(--color-ink-2)]" />
                 <div className="min-w-0 flex-1">
                   <p className="m-0 truncate text-[13px] text-[color:var(--color-ink)]">{r.label}</p>
@@ -264,11 +301,11 @@ export function OnboardingExperience({ onDone, onSkip }: OnboardingExperiencePro
               Continue
             </button>
           </div>
-        </>
+        </div>
       )}
 
       {scene === 'personalize' && (
-        <>
+        <div key="personalize" className="scene-enter flex flex-col items-center gap-6">
           <h2 className="m-0 text-[22px] font-semibold text-[color:var(--color-ink)]">How will you use Métis?</h2>
           <div className="flex gap-3">
             {(
@@ -283,8 +320,10 @@ export function OnboardingExperience({ onDone, onSkip }: OnboardingExperiencePro
                 type="button"
                 onClick={() => setMode(m.id)}
                 className={
-                  'no-drag focus-ring w-[150px] rounded-[14px] border px-4 py-3 text-left transition-colors ' +
-                  (mode === m.id ? 'border-[var(--color-accent)] bg-[var(--color-accent-soft)]' : 'border-white/10 bg-white/[0.03] hover:bg-white/[0.06]')
+                  'no-drag focus-ring w-[150px] rounded-[14px] border px-4 py-3 text-left transition-all duration-150 ' +
+                  (mode === m.id
+                    ? 'scale-[1.03] border-[var(--color-accent)] bg-[var(--color-accent-soft)] shadow-[0_2px_14px_var(--color-accent-glow)]'
+                    : 'border-white/10 bg-white/[0.03] hover:bg-white/[0.06]')
                 }
               >
                 <p className="m-0 text-[13px] font-semibold text-[color:var(--color-ink)]">{m.label}</p>
@@ -319,7 +358,7 @@ export function OnboardingExperience({ onDone, onSkip }: OnboardingExperiencePro
               Start
             </button>
           </div>
-        </>
+        </div>
       )}
     </div>
   )
