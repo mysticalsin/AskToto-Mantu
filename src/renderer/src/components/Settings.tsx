@@ -4718,6 +4718,26 @@ function IntelligenceTab({
           on={settings.publishBrainPages}
           onChange={(v) => patch({ publishBrainPages: v })}
         />
+        {settings.publishBrainPages && (
+          <div className="cl-card mt-2 px-3 py-2.5">
+            <div className="flex items-center gap-2">
+              <FolderOpen size={15} className="shrink-0 text-[color:var(--cl-primary)]" />
+              <span className="min-w-0 flex-1 text-[12px] text-[color:var(--cl-foreground)]">Give Claude your second brain</span>
+            </div>
+            <p className="mt-1 text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
+              The published folder includes a <span className="font-medium text-[color:var(--cl-foreground)]">CLAUDE.md</span> entry doc that orients Claude. Point Claude at this folder — add it to a Claude Project, open it in Claude Desktop, or sync it via a connector — and Claude reads your meetings, people, and deals directly and surfaces your next steps. Nothing here is a raw transcript.
+            </p>
+            <div className="mt-2">
+              <button
+                type="button"
+                onClick={() => void window.toto.openBrainForClaude()}
+                className="no-drag cl-focus flex items-center gap-1 rounded-lg bg-white/[0.05] px-2.5 py-1.5 text-[12px] text-[color:var(--cl-foreground)] hover:bg-white/[0.1]"
+              >
+                <FolderOpen size={12} /> Open the folder for Claude
+              </button>
+            </div>
+          </div>
+        )}
       </Section>
 
       <Section

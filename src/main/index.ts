@@ -134,7 +134,7 @@ import {
   clearJournalCorruptionLock,
   readCorrectionsJournal
 } from './brain/corrections'
-import { publishEntity, removeFromWiki, publishAll, removeWiki } from './brain/publish'
+import { publishEntity, removeFromWiki, publishAll, removeWiki, wikiDir } from './brain/publish'
 import { computeAttention } from './brain/attention'
 import { openIntelligenceWindow, isIntelligenceSender, syncIntelContentProtection } from './intelligence'
 import {
@@ -3233,6 +3233,20 @@ function registerIpc(): void {
     // Encrypted transcripts are unreadable in an editor — open a decrypted temp copy instead.
     if (encrypted) return shell.openPath(decryptToTemp(path))
     return shell.openPath(path)
+  })
+
+  // "Open brain folder for Claude" (the handshake): reveal the published wiki — a plaintext, self-describing
+  // mirror with a CLAUDE.md entry doc — so the user can point Claude at it (a Claude Project, Claude Desktop,
+  // or a synced-folder connector). Gated on publishBrainPages in the UI; when publishing is on the folder
+  // exists (settingsSet fires publishAll on enable). Returns the path so the renderer can show/copy it.
+  ipcMain.handle(IPC.openBrainForClaude, async (e) => {
+    assertMainWindow(e)
+    if (!requireAuth()) return { ok: false, path: '' }
+    const s = getSettings()
+    const dir = wikiDir(s)
+    if (!s.publishBrainPages || !existsSync(dir)) return { ok: false, path: dir }
+    await shell.openPath(dir)
+    return { ok: true, path: dir }
   })
 
   // --- Listening state (tray icon + Dust conversation reset + power-save block) ---
