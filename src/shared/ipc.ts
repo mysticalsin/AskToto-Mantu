@@ -130,6 +130,7 @@ export const IPC = {
   windowHide: 'window:hide',
   windowToggle: 'window:toggle',
   windowQuit: 'window:quit',
+  windowRelaunch: 'window:relaunch',
   windowMinimize: 'window:minimize',
   // Renderer ErrorBoundary catch (React render-throw) → persisted crash-*.log, same sink as onFatal's
   // main-process crashes. Distinct from render-process-gone (whole renderer dies): this is a caught JS

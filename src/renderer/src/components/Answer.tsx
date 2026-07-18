@@ -1,7 +1,7 @@
 import { memo, useEffect, useState } from 'react'
 import { Copy, Check, RefreshCw, FileDown, ShieldCheck, ChevronsDown, ThumbsUp, ThumbsDown, Eye, EyeOff, X } from 'lucide-react'
 import { PROVIDERS, type ProviderId } from '@shared/providers'
-import { isScreenCapturePermissionError } from '@shared/screen-capture'
+import { isScreenCapturePermissionError, needsAppRelaunchForScreenCapture } from '@shared/screen-capture'
 import { Markdown } from './Markdown'
 import { TextButton } from './ui'
 import { useFlash } from '../lib/useFlash'
@@ -170,15 +170,24 @@ export const Answer = memo(function Answer({
         <EyeOff size={13} className="mt-0.5 shrink-0 text-[color:var(--color-warn,#fac775)]" />
         <span>{captureNotice}</span>
       </div>
-      {isScreenCapturePermissionError(captureNotice) && (
-        <button
-          type="button"
-          onClick={() => void window.toto.openPermissionSettings('screenRecording')}
-          className="no-drag focus-ring rounded-full bg-[var(--color-warn,#fac775)]/15 px-2.5 py-1 text-[11px] font-semibold text-[color:var(--color-ink)] hover:bg-[var(--color-warn,#fac775)]/25"
-        >
-          Open Screen Recording settings
-        </button>
-      )}
+      {isScreenCapturePermissionError(captureNotice) &&
+        (needsAppRelaunchForScreenCapture(captureNotice) ? (
+          <button
+            type="button"
+            onClick={() => void window.toto.relaunch()}
+            className="no-drag focus-ring rounded-full bg-[var(--color-warn,#fac775)]/15 px-2.5 py-1 text-[11px] font-semibold text-[color:var(--color-ink)] hover:bg-[var(--color-warn,#fac775)]/25"
+          >
+            Restart Métis
+          </button>
+        ) : (
+          <button
+            type="button"
+            onClick={() => void window.toto.openPermissionSettings('screenRecording')}
+            className="no-drag focus-ring rounded-full bg-[var(--color-warn,#fac775)]/15 px-2.5 py-1 text-[11px] font-semibold text-[color:var(--color-ink)] hover:bg-[var(--color-warn,#fac775)]/25"
+          >
+            Open Screen Recording settings
+          </button>
+        ))}
       {onDismissNotice && (
         // Dismiss so a declined Screen Recording grant never wedges the UI — the user can close this and
         // keep asking text questions (chat works without screen access).

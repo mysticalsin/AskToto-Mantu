@@ -269,6 +269,7 @@ const api = {
   hide: (): Promise<void> => ipcRenderer.invoke(IPC.windowHide),
   toggle: (): Promise<void> => ipcRenderer.invoke(IPC.windowToggle),
   quit: (): Promise<void> => ipcRenderer.invoke(IPC.windowQuit),
+  relaunch: (): Promise<void> => ipcRenderer.invoke(IPC.windowRelaunch),
 
   onDelta: (cb: (d: StreamDelta) => void): Unsub => sub(IPC.streamDelta, cb),
   onDone: (cb: (d: StreamDone) => void): Unsub => sub(IPC.streamDone, cb),

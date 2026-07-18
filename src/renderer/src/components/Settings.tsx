@@ -81,7 +81,8 @@ import {
   type EvalMetrics,
   type MeetingSummary,
   type ShortcutFailure,
-  type LocalModelSummary
+  type LocalModelSummary,
+  type PlatformPermissions
 } from '@shared/ipc'
 import {
   PROVIDERS,
@@ -5949,9 +5950,44 @@ function PermissionDot({ status }: { status: string }): JSX.Element {
   return <span className={`inline-block h-2 w-2 rounded-full ${color}`} aria-hidden="true" />
 }
 
+/**
+ * True exactly on the rising edge: screen recording just flipped to 'granted' after this component had
+ * already observed it as something else. `prev === null` means "first observation since mount" and must
+ * never count. On this exact edge, macOS's TCC grant exists but this already-running process's
+ * ScreenCaptureKit session never saw it: it needs a relaunch, not another trip to System Settings.
+ */
+export function screenRecordingJustGranted(
+  prev: PlatformPermissions['screenRecording'] | null,
+  current: PlatformPermissions['screenRecording'],
+  isWin: boolean
+): boolean {
+  return !isWin && prev !== null && prev !== 'granted' && current === 'granted'
+}
+
 function PermissionsSection(): JSX.Element {
   const { permissions } = usePermissions()
   const isWin = window.navigator.platform.toLowerCase().includes('win')
+  // A grant that flips to 'granted' WHILE this panel is open (not one already granted when it first
+  // mounted) means this running process's ScreenCaptureKit session never saw it: macOS only applies a
+  // fresh Screen Recording grant to the next launch. usePermissions already live-polls (state.ts,
+  // PERMISSIONS_POLL_MS) so this only has to watch for the rising edge and offer the one-click fix
+  // instead of the old dead end (a status dot that just quietly turns green with no capture that works).
+  const prevScreenStatus = useRef<PlatformPermissions['screenRecording'] | null>(null)
+  const [needsRestart, setNeedsRestart] = useState(false)
+  const [restarting, setRestarting] = useState(false)
+
+  useEffect(() => {
+    if (!permissions) return
+    if (screenRecordingJustGranted(prevScreenStatus.current, permissions.screenRecording, isWin)) {
+      setNeedsRestart(true)
+    }
+    prevScreenStatus.current = permissions.screenRecording
+  }, [permissions, isWin])
+
+  const restart = (): void => {
+    setRestarting(true)
+    void window.toto.relaunch().catch(() => setRestarting(false))
+  }
 
   if (!permissions) {
     return <div className="text-[13px] text-[color:var(--cl-muted-foreground)]">Checking permissions…</div>
@@ -5964,7 +6000,7 @@ function PermissionsSection(): JSX.Element {
       kind: 'microphone',
       note: isWin
         ? 'Windows asks the first time you start Listen.'
-        : 'Grant in System Settings → Privacy & Security → Microphone.',
+        : 'Needed to hear your calls. Grant in System Settings → Privacy & Security → Microphone.',
       fixLabel: isWin ? 'Check Windows Settings' : undefined
     },
     {
@@ -5973,7 +6009,7 @@ function PermissionsSection(): JSX.Element {
       kind: 'screenRecording',
       note: isWin
         ? 'Windows may ask once before capturing system audio.'
-        : 'Grant in System Settings → Privacy & Security → Screen Recording.',
+        : "Needed so Métis can answer questions about your screen and capture system audio. Grant in System Settings → Privacy & Security → Screen Recording.",
       fixLabel: isWin ? 'Check Windows Settings' : undefined
     }
   ]
@@ -5986,6 +6022,7 @@ function PermissionsSection(): JSX.Element {
         // to Settings for a not-yet-granted mic or a screen-capture prompt the user dismissed.
         const denied = r.status === 'denied'
         const showFix = denied || (isWin && r.fixLabel)
+        const showRestart = r.kind === 'screenRecording' && needsRestart
         return (
           <div key={r.label} className="cl-card flex items-start gap-2 px-2.5 py-2">
             <PermissionDot status={r.status} />
@@ -5997,14 +6034,30 @@ function PermissionsSection(): JSX.Element {
                 </span>
               </div>
               <div className="text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">{r.note}</div>
-              {showFix && (
-                <button
-                  type="button"
-                  onClick={() => void window.toto.openPermissionSettings(r.kind)}
-                  className="no-drag cl-focus mt-0.5 text-[11px] font-medium text-[color:var(--cl-primary)] hover:underline"
-                >
-                  {r.fixLabel ?? 'Open System Settings'}
-                </button>
+              {showRestart ? (
+                <div className="mt-1 flex items-center gap-2">
+                  <span className="text-[11px] leading-snug text-[color:var(--cl-primary)]">
+                    Granted. Restart Métis to finish enabling it.
+                  </span>
+                  <button
+                    type="button"
+                    onClick={restart}
+                    disabled={restarting}
+                    className="no-drag cl-focus rounded-full bg-[var(--cl-primary)]/15 px-2.5 py-1 text-[11px] font-semibold text-[color:var(--cl-primary)] hover:bg-[var(--cl-primary)]/25 disabled:opacity-60"
+                  >
+                    {restarting ? 'Restarting…' : 'Restart Métis'}
+                  </button>
+                </div>
+              ) : (
+                showFix && (
+                  <button
+                    type="button"
+                    onClick={() => void window.toto.openPermissionSettings(r.kind)}
+                    className="no-drag cl-focus mt-0.5 text-[11px] font-medium text-[color:var(--cl-primary)] hover:underline"
+                  >
+                    {r.fixLabel ?? 'Open System Settings'}
+                  </button>
+                )
               )}
             </div>
           </div>

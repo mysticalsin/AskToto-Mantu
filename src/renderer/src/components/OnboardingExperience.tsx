@@ -235,6 +235,12 @@ export function OnboardingExperience({ onDone, onSkip }: OnboardingExperiencePro
               Everything’s ready. Nothing to configure.
             </p>
           )}
+          {needsPerms && (
+            <p className="fade-up m-0 max-w-[380px] text-[12px] leading-snug text-[color:var(--color-ink-3)]">
+              Mic lets Métis hear your call. Screen access lets it answer questions about what's on your
+              screen. Both only capture while you're in a meeting.
+            </p>
+          )}
           <div className="flex items-center gap-2">
             {needsPerms && (
               <button

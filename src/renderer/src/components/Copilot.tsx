@@ -1,7 +1,7 @@
 import { memo, useEffect, useMemo, useRef, useState } from 'react'
 import { Eye, EyeOff, AudioLines, Copy, Check, AlertTriangle } from 'lucide-react'
 import type { TranscriptLine } from '@shared/ipc'
-import { isScreenCapturePermissionError } from '@shared/screen-capture'
+import { isScreenCapturePermissionError, needsAppRelaunchForScreenCapture } from '@shared/screen-capture'
 import type { AnswerState } from '../state'
 import { Markdown } from './Markdown'
 import { TextButton, Spinner } from './ui'
@@ -129,15 +129,24 @@ export const Copilot = memo(function Copilot({
             <EyeOff size={13} className="mt-0.5 shrink-0 text-[color:var(--color-warn,#fac775)]" />
             <span>{captureNotice}</span>
           </div>
-          {isScreenCapturePermissionError(captureNotice) && (
-            <button
-              type="button"
-              onClick={() => void window.toto.openPermissionSettings('screenRecording')}
-              className="no-drag focus-ring rounded-full bg-[var(--color-warn,#fac775)]/15 px-2.5 py-1 text-[11px] font-semibold text-[color:var(--color-ink)] hover:bg-[var(--color-warn,#fac775)]/25"
-            >
-              Open Screen Recording settings
-            </button>
-          )}
+          {isScreenCapturePermissionError(captureNotice) &&
+            (needsAppRelaunchForScreenCapture(captureNotice) ? (
+              <button
+                type="button"
+                onClick={() => void window.toto.relaunch()}
+                className="no-drag focus-ring rounded-full bg-[var(--color-warn,#fac775)]/15 px-2.5 py-1 text-[11px] font-semibold text-[color:var(--color-ink)] hover:bg-[var(--color-warn,#fac775)]/25"
+              >
+                Restart Métis
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={() => void window.toto.openPermissionSettings('screenRecording')}
+                className="no-drag focus-ring rounded-full bg-[var(--color-warn,#fac775)]/15 px-2.5 py-1 text-[11px] font-semibold text-[color:var(--color-ink)] hover:bg-[var(--color-warn,#fac775)]/25"
+              >
+                Open Screen Recording settings
+              </button>
+            ))}
         </div>
       )}
       {/* Autosave data-loss warning — stronger (danger) treatment than the capture notice; the meeting is
@@ -223,15 +232,24 @@ export const Copilot = memo(function Copilot({
           <span>{error}</span>
           {/* Make a screen-capture permission error actionable. On macOS the IPC opens the System
               Settings pane; on Windows it opens the relevant system privacy settings. */}
-          {isScreenCapturePermissionError(error) && (
-            <button
-              type="button"
-              onClick={() => void window.toto.openPermissionSettings('screenRecording')}
-              className="no-drag focus-ring w-fit rounded-full bg-[var(--color-danger)]/15 px-2.5 py-1 text-[11px] font-semibold text-[var(--color-danger)] hover:bg-[var(--color-danger)]/25"
-            >
-              Open Screen Recording settings
-            </button>
-          )}
+          {isScreenCapturePermissionError(error) &&
+            (needsAppRelaunchForScreenCapture(error) ? (
+              <button
+                type="button"
+                onClick={() => void window.toto.relaunch()}
+                className="no-drag focus-ring w-fit rounded-full bg-[var(--color-danger)]/15 px-2.5 py-1 text-[11px] font-semibold text-[var(--color-danger)] hover:bg-[var(--color-danger)]/25"
+              >
+                Restart Métis
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={() => void window.toto.openPermissionSettings('screenRecording')}
+                className="no-drag focus-ring w-fit rounded-full bg-[var(--color-danger)]/15 px-2.5 py-1 text-[11px] font-semibold text-[var(--color-danger)] hover:bg-[var(--color-danger)]/25"
+              >
+                Open Screen Recording settings
+              </button>
+            ))}
           {/* Mirrors the Screen-Recording branch above for the mic-denied message (listen.ts's "Couldn't
               start the microphone…" / "Could not start the microphone…" / "mic access") —
               window.toto.openPermissionSettings is already wired for 'microphone' (used in Onboarding). */}
