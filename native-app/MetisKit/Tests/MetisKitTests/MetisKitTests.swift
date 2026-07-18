@@ -78,4 +78,20 @@ final class MetisKitTests: XCTestCase {
         XCTAssertFalse(steps.isEmpty)
         XCTAssertFalse(c.intelligenceAvailable) // heuristic → not the on-device model
     }
+
+    @MainActor
+    func testBeginTranscriptionAppendsStreamedLines() async throws {
+        let c = MeetingController(intelligence: HeuristicIntelligence())
+        let stream = AsyncStream<TranscriptLine> { cont in
+            cont.yield(TranscriptLine(speaker: .them, text: "Hello", at: Date()))
+            cont.yield(TranscriptLine(speaker: .me, text: "Hi there", at: Date()))
+            cont.finish()
+        }
+        c.beginTranscription(stream)
+        // Let the draining task run (the stream is already fully buffered + finished).
+        try await Task.sleep(nanoseconds: 100_000_000)
+        XCTAssertEqual(c.meeting.lines.count, 2)
+        XCTAssertEqual(c.meeting.lines.first?.text, "Hello")
+        c.endTranscription() // idempotent, must not crash
+    }
 }
