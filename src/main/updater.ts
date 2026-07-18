@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import log from 'electron-log'
 import { IPC } from '@shared/ipc'
 import { shouldDisableAutoUpdate } from './cahe-edition'
-import { trustedAdminManagedPath } from './win-security'
+import { readTrustedAdminManaged } from './win-security'
 
 /** Enterprise governance: IT can freeze the version fleet-wide by deploying an admin managed-config with
  *  `{ "disableAutoUpdate": true }`. Only the ADMIN (machine) policy is honored — and on Windows only via
@@ -20,13 +20,11 @@ export function configDisablesAutoUpdate(configText: string): boolean {
 }
 
 function autoUpdateDisabledByPolicy(): boolean {
-  const p = trustedAdminManagedPath()
-  if (!p) return false
-  try {
-    return configDisablesAutoUpdate(readFileSync(p, 'utf8'))
-  } catch {
-    return false
-  }
+  // readTrustedAdminManaged() reads through the same held fd that verified win32 admin-trust, closing
+  // the check-path/read-path TOCTOU a `trustedAdminManagedPath() ? readFileSync(path) : ...` pattern
+  // would reopen.
+  const content = readTrustedAdminManaged()
+  return content ? configDisablesAutoUpdate(content) : false
 }
 
 /** A 404 means the releases repo/feed doesn't exist (yet) — distinct from a transient network/server

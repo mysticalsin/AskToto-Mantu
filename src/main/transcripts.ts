@@ -6,7 +6,7 @@ import { homedir } from 'node:os'
 import { randomBytes, createCipheriv, createDecipheriv, publicEncrypt, constants } from 'node:crypto'
 import type { SaveMeeting, SaveNote, Settings, RecapExport, TranscriptLine } from '@shared/ipc'
 import { encryptSecret, decryptSecret, useFileBackend } from './secrets'
-import { trustedAdminManagedPath, lockPathToCurrentUserWin32 } from './win-security'
+import { readTrustedAdminManaged, lockPathToCurrentUserWin32 } from './win-security'
 import { mainLog, auditLog } from './logger'
 
 // Optional at-rest encryption for transcripts/notes. Two on-disk formats share one fixed-length
@@ -56,10 +56,10 @@ function resolveEscrowPem(raw: string | null | undefined): string | null {
   return null
 }
 
-/** Raw-read an `escrowPubKey` string from a managed-config.json (escrow isn't a Settings schema key). */
-function readEscrowFromManaged(p: string): string | null {
+/** Raw-parse an `escrowPubKey` string out of managed-config.json text (escrow isn't a Settings schema key). */
+function escrowFromManagedContent(raw: string): string | null {
   try {
-    const obj = JSON.parse(readFileSync(p, 'utf8'))
+    const obj = JSON.parse(raw)
     return typeof obj?.escrowPubKey === 'string' ? obj.escrowPubKey : null
   } catch {
     return null
@@ -81,8 +81,10 @@ function readEscrowPubKey(): string | null {
   const fromEnv = resolveEscrowPem(process.env.ASKTOTO_ESCROW_PUBKEY)
   if (fromEnv) return fromEnv
   try {
-    const adminPath = trustedAdminManagedPath() // null on win32 unless admin-owned + not user-writable
-    const machine = adminPath ? resolveEscrowPem(readEscrowFromManaged(adminPath)) : null
+    // readTrustedAdminManaged() is null on win32 unless admin-owned + not user-writable, and reads
+    // through the same held fd that verified that trust (closes the check-path/read-path TOCTOU).
+    const admin = readTrustedAdminManaged()
+    const machine = admin ? resolveEscrowPem(escrowFromManagedContent(admin)) : null
     if (machine) return machine
   } catch {
     /* ignore */

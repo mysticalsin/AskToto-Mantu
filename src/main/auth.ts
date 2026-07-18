@@ -8,7 +8,7 @@ import type { AuthStatus, SignInResult } from '@shared/ipc'
 import { getSettings } from './store'
 import { auditLog, mainLog, setAuditActor } from './logger'
 import { useFileBackend, encryptSecret, decryptSecret } from './secrets'
-import { trustedAdminManagedPath } from './win-security'
+import { readTrustedAdminManaged } from './win-security'
 
 // Scopes requested at sign-in: identity + read-only calendar (so the agenda can be pulled later with no
 // extra consent prompt). Least privilege — Calendars.Read, never ReadWrite.
@@ -49,22 +49,33 @@ interface Session {
 // cannot redirect SSO to an attacker tenant or force-lock the app.
 
 /** Read an { azure: { clientId, tenantId, allowedDomain } } block from managed-config (admin or per-user). */
-function readManagedAzure(): Partial<AzureConfig> {
-  // Admin/machine policy FIRST so a user-writable per-user file can't override the org tenant lock.
-  const paths = [trustedAdminManagedPath(), join(app.getPath('userData'), 'managed-config.json')].filter(
-    (p): p is string => !!p
-  )
-  for (const p of paths) {
-    try {
-      const az = JSON.parse(readFileSync(p, 'utf8'))?.azure
-      if (az?.clientId && az?.tenantId && az?.allowedDomain) {
-        return { clientId: az.clientId, tenantId: az.tenantId, allowedDomain: az.allowedDomain }
-      }
-    } catch {
-      /* not present / unreadable */
+function azureFromManagedContent(raw: string): Partial<AzureConfig> {
+  try {
+    const az = JSON.parse(raw)?.azure
+    if (az?.clientId && az?.tenantId && az?.allowedDomain) {
+      return { clientId: az.clientId, tenantId: az.tenantId, allowedDomain: az.allowedDomain }
     }
+  } catch {
+    /* not present / unreadable */
   }
   return {}
+}
+
+function readManagedAzure(): Partial<AzureConfig> {
+  // Admin/machine policy FIRST so a user-writable per-user file can't override the org tenant lock.
+  // readTrustedAdminManaged() reads through the SAME held fd that verified win32 admin-trust, so the
+  // content read here can't be swapped in after the trust check (see win-security.ts).
+  const admin = readTrustedAdminManaged()
+  if (admin) {
+    const az = azureFromManagedContent(admin)
+    if (az.clientId) return az
+  }
+  try {
+    const raw = readFileSync(join(app.getPath('userData'), 'managed-config.json'), 'utf8')
+    return azureFromManagedContent(raw)
+  } catch {
+    return {}
+  }
 }
 
 /**
@@ -572,16 +583,21 @@ export function authStatus(): AuthStatus {
 /** Org override: when set, privileged IPC is blocked until the user signs in, even if SSO is unconfigured. */
 function authEnforced(): boolean {
   if (/^(1|true|yes)$/i.test(process.env.ASKTOTO_REQUIRE_AUTH || '')) return true
-  // Machine-wide managed-config can also force it: { "requireAuth": true }.
-  const paths = [trustedAdminManagedPath(), join(app.getPath('userData'), 'managed-config.json')].filter(
-    (p): p is string => !!p
-  )
-  for (const p of paths) {
-    try {
-      if (JSON.parse(readFileSync(p, 'utf8'))?.requireAuth === true) return true
-    } catch {
-      /* not present */
+  // Machine-wide managed-config can also force it: { "requireAuth": true }. Admin content comes from
+  // readTrustedAdminManaged() (same held-fd read as the trust check — see win-security.ts); the
+  // per-user file is read by path since it carries no win32 trust boundary.
+  try {
+    const admin = readTrustedAdminManaged()
+    if (admin && JSON.parse(admin)?.requireAuth === true) return true
+  } catch {
+    /* malformed admin content */
+  }
+  try {
+    if (JSON.parse(readFileSync(join(app.getPath('userData'), 'managed-config.json'), 'utf8'))?.requireAuth === true) {
+      return true
     }
+  } catch {
+    /* not present */
   }
   return false
 }

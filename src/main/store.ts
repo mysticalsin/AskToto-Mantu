@@ -30,7 +30,7 @@ import {
   resetSecretKeyCache,
   useFileBackend
 } from './secrets'
-import { adminManagedConfigPath, trustedAdminManagedPath } from './win-security'
+import { adminManagedConfigPath, readTrustedAdminManaged } from './win-security'
 // Static (eager) imports — dynamic import() throws under the bytecode-compiled main (electron-vite
 // bytecodePlugin). These SDKs are already eager-loaded by the streaming modules (llm/anthropic|dust|openai),
 // so this adds no startup cost; it just makes the key-test + Dust-agent-list paths bytecode-safe.
@@ -104,9 +104,9 @@ function validKeysOnly(obj: Record<string, unknown>): Record<string, unknown> {
   return out
 }
 
-function readManagedFrom(p: string): Record<string, unknown> {
+function parseManagedContent(raw: string): Record<string, unknown> {
   try {
-    const obj = JSON.parse(readFileSync(p, 'utf8'))
+    const obj = JSON.parse(raw)
     const clean: Record<string, unknown> = {}
     for (const [k, v] of Object.entries(obj)) if (!k.startsWith('_')) clean[k] = v
     return validKeysOnly(clean) // drop malformed keys so a typo can't brick the app
@@ -115,45 +115,71 @@ function readManagedFrom(p: string): Record<string, unknown> {
   }
 }
 
-function readLockedFrom(p: string): string[] {
+function readManagedFrom(p: string): Record<string, unknown> {
   try {
-    const obj = JSON.parse(readFileSync(p, 'utf8'))
+    return parseManagedContent(readFileSync(p, 'utf8'))
+  } catch {
+    return {}
+  }
+}
+
+function parseLockedContent(raw: string): string[] {
+  try {
+    const obj = JSON.parse(raw)
     // Canonical key is `locked`; `lockedKeys` is accepted too — the enterprise doc (docs/asktoto-
     // architecture.md) previously told IT admins to use `lockedKeys`, and an admin config written
     // against that name must still lock fields instead of silently locking nothing.
-    const raw = obj.locked ?? obj.lockedKeys
-    const arr: unknown[] = Array.isArray(raw) ? raw : []
+    const raw2 = obj.locked ?? obj.lockedKeys
+    const arr: unknown[] = Array.isArray(raw2) ? raw2 : []
     return [...new Set(arr.filter((k): k is string => typeof k === 'string'))]
   } catch {
     return []
   }
 }
 
-/** Read the `allowedProviders` policy array straight from a raw managed-config file. It is NOT a settings
- *  key, so it must be read here rather than via validatedManaged() (which drops non-schema keys). */
-function readAllowedFrom(p: string): string[] | null {
+function readLockedFrom(p: string): string[] {
   try {
-    const obj = JSON.parse(readFileSync(p, 'utf8'))
-    const raw = obj?.allowedProviders
+    return parseLockedContent(readFileSync(p, 'utf8'))
+  } catch {
+    return []
+  }
+}
+
+/** Read the `allowedProviders` policy array out of raw managed-config JSON text. It is NOT a settings
+ *  key, so it must be parsed here rather than via validatedManaged() (which drops non-schema keys). */
+function parseAllowedContent(raw: string): string[] | null {
+  try {
+    const obj = JSON.parse(raw)
+    const list = obj?.allowedProviders
     // An explicit empty array is a real deny-all policy, not "no policy" — only an absent/non-array
     // key means null (no restriction). Collapsing the two let `"allowedProviders": []` fail open.
-    if (!Array.isArray(raw)) return null
-    return [...new Set(raw.filter((x): x is string => typeof x === 'string'))]
+    if (!Array.isArray(list)) return null
+    return [...new Set(list.filter((x): x is string => typeof x === 'string'))]
+  } catch {
+    return null
+  }
+}
+
+function readAllowedFrom(p: string): string[] | null {
+  try {
+    return parseAllowedContent(readFileSync(p, 'utf8'))
   } catch {
     return null
   }
 }
 
 // The machine-wide org-policy path lives in win-security.ts (single source of truth). On Windows it is
-// only honored when admin-owned + not user-writable (trustedAdminManagedPath); on macOS/Linux the
-// root-owned parent dir already enforces that, so the trusted path == the real path.
+// only honored when admin-owned + not user-writable, and readTrustedAdminManaged() reads its content
+// through the SAME held fd that verified that trust (closes the check-path/read-path TOCTOU a plain
+// `trustedAdminManagedPath() ? readFileSync(path) : ...` pattern would reopen). On macOS/Linux the
+// root-owned parent dir already enforces the trust boundary, so it's a plain read there.
 
 /** Enterprise managed defaults: per-user (userData) overlaid by machine-wide admin policy. Validated. */
 export function validatedManaged(): Record<string, unknown> {
-  const admin = trustedAdminManagedPath()
+  const admin = readTrustedAdminManaged()
   return {
     ...readManagedFrom(join(dir(), 'managed-config.json')),
-    ...(admin ? readManagedFrom(admin) : {}), // machine policy wins over the per-user file (win32: only if admin-trusted)
+    ...(admin ? parseManagedContent(admin) : {}), // machine policy wins over the per-user file (win32: only if admin-trusted)
     ...caheEditionPolicy().managedDefaults
   }
 }
@@ -161,8 +187,8 @@ export function validatedManaged(): Record<string, unknown> {
 /** Keys that IT has locked; user edits to these are silently dropped. */
 export function getLockedKeys(): string[] {
   const user = readLockedFrom(join(dir(), 'managed-config.json'))
-  const admin = trustedAdminManagedPath()
-  const machine = admin ? readLockedFrom(admin) : []
+  const admin = readTrustedAdminManaged()
+  const machine = admin ? parseLockedContent(admin) : []
   return [...new Set([...user, ...machine, ...caheEditionPolicy().lockedKeys])]
 }
 
@@ -174,8 +200,8 @@ export function getLockedKeys(): string[] {
 export function getAllowedProviders(): string[] | null {
   // Machine (admin) policy wins over the per-user managed file, mirroring validatedManaged() precedence.
   // Read from the raw JSON because `allowedProviders` is a policy key, not a settings-schema key.
-  const admin = trustedAdminManagedPath()
-  const configured = (admin ? readAllowedFrom(admin) : null) ?? readAllowedFrom(join(dir(), 'managed-config.json'))
+  const admin = readTrustedAdminManaged()
+  const configured = (admin ? parseAllowedContent(admin) : null) ?? readAllowedFrom(join(dir(), 'managed-config.json'))
   const edition = caheEditionPolicy().allowedProviders
   if (!edition) return configured
   // Cahê narrows the package surface to Kimi and Dust. An IT allowlist is still authoritative: intersect
