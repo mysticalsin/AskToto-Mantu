@@ -67,4 +67,13 @@ public struct SuggestionResult {
     @Guide(description: "Confidence from 0 to 1 that this is well-grounded in the transcript.")
     public var confidence: Double
 }
+
+/// Prioritized next steps the model derives from the meeting — the "what do I do now" a user wants after
+/// a call. Ordered most-important first, generated directly via guided generation (no JSON parsing).
+@available(macOS 26.0, iOS 26.0, *)
+@Generable
+public struct NextStepsResult {
+    @Guide(description: "The 3 to 5 most important next steps after this meeting, most important first, each a short imperative phrase grounded in what was actually said.")
+    public var steps: [String]
+}
 #endif

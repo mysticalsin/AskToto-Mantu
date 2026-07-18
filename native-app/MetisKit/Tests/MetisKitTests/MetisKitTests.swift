@@ -44,4 +44,38 @@ final class MetisKitTests: XCTestCase {
         let intel = makeMeetingIntelligence()
         _ = intel.availability // must not crash
     }
+
+    func testHeuristicNextSteps() async throws {
+        let intel = HeuristicIntelligence()
+        let empty = try await intel.nextSteps(transcriptTail: "")
+        XCTAssertTrue(empty.isEmpty, "no transcript → no invented next steps")
+        let steps = try await intel.nextSteps(transcriptTail: "Them: can you send the deck by Friday?")
+        XCTAssertFalse(steps.isEmpty)
+    }
+
+    @MainActor
+    func testMeetingControllerRecordingTogglesIdempotently() async throws {
+        let c = MeetingController(intelligence: HeuristicIntelligence())
+        XCTAssertFalse(c.isRecording)
+        try await c.startRecording()
+        XCTAssertTrue(c.isRecording)
+        try await c.startRecording() // a second Siri "start" must not restart
+        XCTAssertTrue(c.isRecording)
+        try await c.stopRecording()
+        XCTAssertFalse(c.isRecording)
+        XCTAssertNotNil(c.meeting.endedAt)
+    }
+
+    @MainActor
+    func testMeetingControllerLastSaidAndNextSteps() async throws {
+        let c = MeetingController(intelligence: HeuristicIntelligence())
+        c.append(TranscriptLine(speaker: .me, text: "Hi", at: Date()))
+        c.append(TranscriptLine(speaker: .them, name: "Jane", text: "Send the deck by Friday.", at: Date()))
+        c.append(TranscriptLine(speaker: .me, text: "Will do", at: Date()))
+        let last = try await c.lastThingSaid()
+        XCTAssertEqual(last, "Send the deck by Friday.") // the last THEM line, not the last line overall
+        let steps = try await c.nextSteps()
+        XCTAssertFalse(steps.isEmpty)
+        XCTAssertFalse(c.intelligenceAvailable) // heuristic → not the on-device model
+    }
 }
