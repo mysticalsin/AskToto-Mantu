@@ -333,7 +333,7 @@ export function App(): JSX.Element {
   const [saveError, setSaveError] = useState<string | null>(null)
   const [saveAttempts, setSaveAttempts] = useState(0)
   const MAX_SAVE_RETRIES = 5
-  const [updateReady, setUpdateReady] = useState<{ open: boolean; version?: string; notes?: string }>({ open: false })
+  const [updateReady, setUpdateReady] = useState<{ open: boolean; version?: string; notes?: string; percent?: number }>({ open: false })
   const [newMeetingToast, setNewMeetingToast] = useState(false)
   const [visibilityToast, setVisibilityToast] = useState<VisibilityToastState>(null)
   // Idempotence latch for endReview() re-entry — see endReview's own comment for the exact hazard it
@@ -1730,7 +1730,17 @@ export function App(): JSX.Element {
     void window.toto.windowMode('bar')
   }, [])
 
-  useEffect(() => window.toto.onUpdateReady((d) => setUpdateReady({ open: true, version: d?.version, notes: d?.notes })), [])
+  useEffect(() => {
+    const offReady = window.toto.onUpdateReady((d) => setUpdateReady({ open: true, version: d?.version, notes: d?.notes }))
+    // Show a "Downloading… X%" state while the update downloads; once it's ready (version set), keep that.
+    const offProgress = window.toto.onUpdateProgress((d) =>
+      setUpdateReady((prev) => (prev.version ? prev : { open: true, percent: d?.percent }))
+    )
+    return () => {
+      offReady()
+      offProgress()
+    }
+  }, [])
 
   // Every hook must run before the early returns below (sign-in wall / onboarding gates). This
   // useCallback used to sit at the bottom of the component, so once a gate fired the hook count
@@ -2203,6 +2213,7 @@ export function App(): JSX.Element {
               open={updateReady.open}
               version={updateReady.version}
               notes={updateReady.notes}
+              percent={updateReady.percent}
               onRestart={() => void window.toto.installUpdate()}
               onDismiss={() => setUpdateReady({ open: false })}
             />
