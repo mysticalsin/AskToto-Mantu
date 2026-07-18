@@ -68,13 +68,16 @@ function spectralCentroidHz(spec: Float64Array, sampleRate: number): number {
   return den > 0 ? num / den : 0
 }
 
-function frameAt(pcm: Float32Array, start: number): Float32Array {
-  // Copy (never window the caller's buffer in place) and zero-pad the final frame if the window is
-  // slightly shorter than start+FFT_N — exact at 48 kHz, ~3 ms short at 44.1 kHz.
+function frameAt(pcm: Float32Array, start: number, frameLen: number): Float32Array {
+  // Window ONLY the real samples (a Hann taper over the whole FFT_N would distort a short frame that's
+  // mostly zero-pad), then place them at the head of a zero-padded FFT_N buffer so bin resolution stays
+  // constant regardless of frame length.
   const f = new Float32Array(FFT_N)
-  const m = Math.min(FFT_N, pcm.length - start)
-  for (let i = 0; i < m; i++) f[i] = pcm[start + i]
-  hannWindow(f)
+  const m = Math.max(0, Math.min(frameLen, pcm.length - start))
+  const w = new Float32Array(m)
+  for (let i = 0; i < m; i++) w[i] = pcm[start + i]
+  hannWindow(w)
+  f.set(w, 0)
   return f
 }
 
@@ -99,10 +102,14 @@ function rmsOf(pcm: Float32Array, from: number, to: number): number {
  */
 export function extractFeatures(pcm: Float32Array, sampleRate: number): Float64Array {
   const f = new Float64Array(FEATURE_DIM)
-  // Frame starts: 0, hop, 2·hop with hop derived from the actual window length so three frames always
-  // tile the available samples (hop = 1024 at 48 kHz / 90 ms).
-  const hop = Math.max(1, Math.floor(Math.max(0, pcm.length - FFT_N) / 2))
-  const specs = [0, 1, 2].map((i) => powerSpectrum(frameAt(pcm, i * hop), FFT_N))
+  // Adaptive frame length: the largest power of two that fits the window, capped at FFT_N. At ≥48 kHz
+  // the 90 ms window exceeds FFT_N so frameLen = FFT_N (unchanged behavior). Below ~22.75 kHz (BT/HFP
+  // mics) the window is shorter than FFT_N — a fixed FFT_N frame made `hop` collapse to 1, so all three
+  // frames started at samples 0/1/2 (identical), zeroing the temporal decay feature f[13]. Shrinking the
+  // frame to fit lets the three frames actually tile the short window and keep f[13] discriminative.
+  const frameLen = Math.min(FFT_N, 1 << Math.floor(Math.log2(Math.max(2, pcm.length))))
+  const hop = Math.max(1, Math.floor((pcm.length - frameLen) / 2))
+  const specs = [0, 1, 2].map((i) => powerSpectrum(frameAt(pcm, i * hop, frameLen), FFT_N))
 
   // Hop-averaged spectrum → 12 log band energies, mean-subtracted.
   const avg = new Float64Array(specs[0].length)

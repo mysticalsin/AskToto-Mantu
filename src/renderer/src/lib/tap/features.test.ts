@@ -44,6 +44,24 @@ describe('tap features', () => {
     expect(Math.sqrt(s)).toBeGreaterThan(0.5)
   })
 
+  it('keeps frames temporally distinct on low-rate mics (window shorter than FFT_N)', () => {
+    // 16 kHz BT/HFP mic: a 90ms window = 1440 samples < FFT_N(2048). The old fixed-frame path collapsed
+    // hop to 1 → frames at 0/1/2 (identical), so f[13] (centroid drop, frame0→frame2) was ~0 for every
+    // input regardless of real spectral change. A rising chirp is the direct probe: its early frame is
+    // low-centroid and its late frame high-centroid, so f[13] MUST be strongly non-zero once the frames
+    // actually tile the window. On the old code this collapsed to ~0.
+    const sr = 16000
+    const n = Math.round(0.09 * sr)
+    const chirp = new Float32Array(n)
+    for (let i = 0; i < n; i++) {
+      const t = i / sr
+      const f0 = 200 + ((3000 - 200) * i) / n // 200 Hz → 3 kHz sweep across the window
+      chirp[i] = Math.sin(2 * Math.PI * f0 * t)
+    }
+    const feat = extractFeatures(chirp, sr)
+    expect(Math.abs(feat[13])).toBeGreaterThan(0.2)
+  })
+
   it('cross-rate drift (44.1k vs 48k) stays small relative to class separation', () => {
     // The REAL requirement is not bit-identical features across rates (empty bands are leakage-skirt
     // noise; log of a tiny number is jittery) — it's that a rate change moves a tap LESS than the

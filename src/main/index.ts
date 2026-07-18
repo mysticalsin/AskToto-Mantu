@@ -1477,6 +1477,17 @@ function registerShortcuts(): void {
 
 let notifTimer: ReturnType<typeof setInterval> | null = null
 let notifPrevPollMs = 0 // wall time of the previous notifier poll — used for edge-trigger logic
+
+// Long-lived background intervals (Dust token refresh, license heartbeat, brain reconcile, retention
+// sweep) each do network/DNS or disk work on a timer. If one fires exactly as the process is torn down
+// — an OS quit, or an abrupt kill of a dev/driven instance — a resolve-in-flight can trip a SIGTRAP on
+// a blocking-pool thread (the shutdown-race crash class). Tracked here so will-quit cancels them ALL
+// before the rest of teardown, closing that race for good.
+const backgroundTimers: ReturnType<typeof setInterval>[] = []
+const trackTimer = (t: ReturnType<typeof setInterval>): ReturnType<typeof setInterval> => {
+  backgroundTimers.push(t)
+  return t
+}
 const notifiedKeys = new Set<string>() // keys of events already notified this session
 
 // Cache today's agenda (~30s) so startMeetingNotifier can cross-reference upcoming events against real
@@ -3716,7 +3727,7 @@ if (!app.requestSingleInstanceLock()) {
     }).catch(() => { /* best-effort — never block startup or the interval */ })
   }
   runRetentionSweep()
-  setInterval(runRetentionSweep, 6 * 60 * 60 * 1000)
+  trackTimer(setInterval(runRetentionSweep, 6 * 60 * 60 * 1000))
   // Guarded like the neighboring dock.setIcon / crash-log pruning below — a throw here must never abort
   // createTray/registerShortcuts/createWindow further down the boot sequence.
   if (process.platform === 'darwin') {
@@ -4000,18 +4011,20 @@ if (!app.requestSingleInstanceLock()) {
   // Keep the session warm for the app's whole lifetime: re-mint whenever the token passes 45 min of
   // its ~1h life, so it never expires mid-meeting and the user never sees a Dust reconnect. The
   // single-flight guard inside refreshDustCliSession makes this safe alongside the on-401 path.
-  setInterval(() => refreshAndPersistDust('interval'), 10 * 60 * 1000)
+  trackTimer(setInterval(() => refreshAndPersistDust('interval'), 10 * 60 * 1000))
 
   // License re-validation, same fire-and-forget lifetime interval as the Dust keep-warm above: skips
   // entirely unless the gate is actually on and this device is currently activated, so an unlicensed
   // build (the shipped default) never touches the network here. For an always-on machine that's
   // offline for days, this is what lands a revocation within half a day instead of waiting for the
   // renderer's own once-per-launch check (which only runs at the next relaunch).
-  setInterval(
-    () => {
-      if (getSettings().licenseGateEnabled && getSettings().licenseValid) void heartbeat()
-    },
-    12 * 60 * 60 * 1000
+  trackTimer(
+    setInterval(
+      () => {
+        if (getSettings().licenseGateEnabled && getSettings().licenseValid) void heartbeat()
+      },
+      12 * 60 * 60 * 1000
+    )
   )
 
   // Catch the case where encryption was already on (managed-config or a previous run) with a stale
@@ -4054,7 +4067,7 @@ if (!app.requestSingleInstanceLock()) {
     resumeBackfillIfPending()
     reconcileMeetingsInBackground()
   }, 15_000)
-  setInterval(reconcileMeetingsInBackground, BRAIN_RECONCILE_MS)
+  trackTimer(setInterval(reconcileMeetingsInBackground, BRAIN_RECONCILE_MS))
 
   app.on('activate', () => {
     if (!win) createWindow()
@@ -4110,6 +4123,16 @@ app.on('will-quit', () => {
     }
   }
   if (notifTimer) clearInterval(notifTimer)
+  // Cancel every tracked background poller FIRST, before the network stack is torn down — a Dust-refresh
+  // or reconcile interval firing a resolve mid-teardown is the shutdown-race SIGTRAP class.
+  for (const t of backgroundTimers) {
+    try {
+      clearInterval(t)
+    } catch {
+      /* already cleared */
+    }
+  }
+  backgroundTimers.length = 0
   // Stop the background screen-preprocess watcher (kills its long-lived powershell child) before the
   // sidecar kill — an orphaned watcher process outliving the app would keep polling the foreground window.
   try {

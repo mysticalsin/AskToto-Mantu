@@ -127,7 +127,10 @@ export function initAutoUpdate(getWin: () => BrowserWindow | null): void {
     }
     check()
     // Re-check every 6h so a long-running app picks up a release the SAME day, not only at the next launch.
-    setInterval(check, 6 * 60 * 60 * 1000)
+    // Cleared on will-quit: an update check resolving over the network mid-teardown is exactly the
+    // shutdown-race that can SIGTRAP a killed/driven process (see backgroundTimers in index.ts).
+    const recheck = setInterval(check, 6 * 60 * 60 * 1000)
+    app.on('will-quit', () => clearInterval(recheck))
   } catch (e) {
     log.warn('[updater] init failed', e)
   }
