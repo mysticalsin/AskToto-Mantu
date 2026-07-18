@@ -44,11 +44,14 @@ type Scene = 'hero' | 'story' | 'reveal' | 'setup' | 'personalize'
 // begin.
 const GUIDED_SCENES: Scene[] = ['story', 'reveal', 'setup', 'personalize']
 
+// Lives in its own reserved-height row above the scene content (see the render below) rather than an
+// absolute overlay — an overlay collided with scene headings that sit close to the top on taller scenes
+// (e.g. "Your setup"'s 5 rows push the h2 up into where an absolutely-positioned dot row would sit).
 function ActProgress({ scene }: { scene: Scene }): JSX.Element | null {
   const idx = GUIDED_SCENES.indexOf(scene)
   if (idx < 0) return null
   return (
-    <div className="fade-up absolute left-1/2 top-5 flex -translate-x-1/2 items-center gap-1.5" aria-hidden="true">
+    <div className="fade-up flex items-center gap-1.5" aria-hidden="true">
       {GUIDED_SCENES.map((s, i) => (
         <span
           key={s}
@@ -153,8 +156,11 @@ export function OnboardingExperience({ onDone, onSkip }: OnboardingExperiencePro
   const needsPerms = rows.some((r) => (r.key === 'mic' || r.key === 'screen') && r.state === 'action')
 
   return (
-    <div className="relative flex h-full w-full select-none flex-col items-center justify-center gap-6 px-10 text-center">
-      <ActProgress scene={scene} />
+    <div className="flex h-full w-full select-none flex-col items-center px-10 text-center">
+      <div className="flex h-9 shrink-0 items-center justify-center pt-3">
+        <ActProgress scene={scene} />
+      </div>
+      <div className="flex w-full flex-1 flex-col items-center justify-center gap-6">
       {scene === 'hero' && (
         <div key="hero" className="scene-enter flex flex-col items-center gap-6">
           <span className="mark-halo">
@@ -360,6 +366,7 @@ export function OnboardingExperience({ onDone, onSkip }: OnboardingExperiencePro
           </div>
         </div>
       )}
+      </div>
     </div>
   )
 }
