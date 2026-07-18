@@ -4418,9 +4418,9 @@ export function Settings({
                     disabled={settings.managedKeys.includes('privateView')}
                   />
                 </Section>
-                <Section title="Screen access" desc="Whether AskToto can see your own screen to answer what's in front of you.">
+                <Section title="Screen access" desc="Whether Métis can see your own screen to answer what's in front of you.">
                   <ToggleRow
-                    label="Let AskToto see your screen automatically"
+                    label="Let Métis see your screen automatically"
                     desc="When on, quick actions and the first ask capture your screen for a vision model. Turn off to answer from text only."
                     on={settings.screenAsk}
                     onChange={(v) => patch({ screenAsk: v })}
