@@ -117,26 +117,41 @@ describe('Cahê embedded Kimi key seed', () => {
     expect(existsSync(markerPath())).toBe(true)
   })
 
-  it('does not throw when the embedded bundle file is missing, still seeds the provider default, and still writes the marker', () => {
+  it('missing bundle: leaves normal onboarding in place — no keyless kimi default, and NO marker so a corrected build can still seed later', () => {
     expect(existsSync(bundlePath())).toBe(false)
 
     expect(() => importEmbeddedCaheKey()).not.toThrow()
 
     expect(setApiKey).not.toHaveBeenCalled()
+    // A build that shipped no key must NOT strand the user on a keyless "kimi" provider…
+    expect(setSettings).not.toHaveBeenCalled()
     expect(mainLog.warn).toHaveBeenCalled()
-    expect(setSettings).toHaveBeenCalledWith({ provider: 'kimi' })
-    expect(existsSync(markerPath())).toBe(true)
+    // …and must NOT burn the one-time marker, so a later keyed build (or a bundle that appears on a
+    // subsequent launch) still gets a chance to seed rather than being disabled forever by one bad launch.
+    expect(existsSync(markerPath())).toBe(false)
   })
 
-  it('does not throw when the embedded bundle is malformed JSON, still seeds the provider default, and still writes the marker', () => {
+  it('malformed-JSON bundle: leaves normal onboarding in place — no keyless kimi default, and no marker', () => {
     writeBundle('{ this is not valid JSON')
 
     expect(() => importEmbeddedCaheKey()).not.toThrow()
 
     expect(setApiKey).not.toHaveBeenCalled()
+    expect(setSettings).not.toHaveBeenCalled()
     expect(mainLog.warn).toHaveBeenCalledWith('[cahe-embedded-key] embedded key import failed', expect.anything())
-    expect(setSettings).toHaveBeenCalledWith({ provider: 'kimi' })
-    expect(existsSync(markerPath())).toBe(true)
+    expect(existsSync(markerPath())).toBe(false)
+  })
+
+  it('placeholder / wrong-format key (no sk-kimi- token): leaves normal onboarding in place — no keyless kimi default, and no marker', () => {
+    // The real-world failure: an installer built from a placeholder key file. Extraction finds nothing, so
+    // the app must fall through to normal onboarding, not sit on Kimi with no working key.
+    writeBundle(JSON.stringify({ kimiApiKey: 'REPLACE_ME' }))
+
+    expect(() => importEmbeddedCaheKey()).not.toThrow()
+
+    expect(setApiKey).not.toHaveBeenCalled()
+    expect(setSettings).not.toHaveBeenCalled()
+    expect(existsSync(markerPath())).toBe(false)
   })
 
   it('does not throw and still writes the marker when setSettings itself fails', () => {
