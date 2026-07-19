@@ -648,7 +648,7 @@ export function useAuth(): {
   return { status, bootError, signIn, signOut, refresh }
 }
 
-export const PERMISSIONS_POLL_MS = 2500
+export const PERMISSIONS_POLL_MS = 1000
 
 type PermissionRefreshEnv = {
   window: Pick<Window, 'addEventListener' | 'removeEventListener'>
@@ -657,10 +657,11 @@ type PermissionRefreshEnv = {
 
 /** Keep permission UI live while it is mounted.
  *
- * macOS users often grant Screen Recording / Mic / Accessibility in System Settings while Métis's
- * Settings panel stays open. Focus/visibility refreshes catch the common return-to-app path, but they miss
- * the split-view case where System Settings and Métis are visible at the same time. Polling at the same
- * cadence as onboarding (2.5s) keeps the status dots honest without adding meaningful work.
+ * macOS users often grant Screen Recording / Mic in System Settings while Métis's Settings panel or the
+ * onboarding setup scene stays open in the split-view alongside it. Focus/visibility refreshes catch the
+ * common return-to-app path, but they miss that split-view case entirely (Métis never loses focus).
+ * Polling at ~1s keeps the status dots honest and flips them the instant the user toggles the switch,
+ * without adding meaningful work.
  */
 export function startPermissionRefreshLoop(
   refresh: () => void,
