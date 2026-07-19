@@ -4302,6 +4302,9 @@ export function Settings({
 
             {tab === 'personalize' && (
               <div className="flex flex-col gap-6">
+                <Section title="Modes" desc="Edit each mode's prompt and the files it can see, then set the one you want active." icon={Wand2}>
+                  <PersonalizeModes settings={settings} patch={patch} />
+                </Section>
                 <Section title="Appearance" desc="How see-through the overlay's background is. Default matches what you see today." icon={Sparkles}>
                   <label className="flex items-center justify-between gap-3 px-1 py-2 text-[12px] text-[color:var(--cl-muted-foreground)]">
                     <span className="flex items-center gap-2">
@@ -4330,9 +4333,6 @@ export function Settings({
                     <MetisMark size={16} />
                     <span className="text-[12px] text-[color:var(--color-ink)]">This is how the overlay bar will look.</span>
                   </div>
-                </Section>
-                <Section title="Modes" desc="Edit each mode's prompt and the files it can see, then set the one you want active." icon={Wand2}>
-                  <PersonalizeModes settings={settings} patch={patch} />
                 </Section>
                 <Section
                   title="Language"
