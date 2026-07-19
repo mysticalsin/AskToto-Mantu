@@ -14,6 +14,7 @@ import { useEffect, useRef, useState } from 'react'
 import { Check, Cpu, FolderLock, Mic, MonitorUp, Sparkles } from 'lucide-react'
 import type { ConversationMode, ProfileRecoveryResult, PublicSettings } from '@shared/ipc'
 import type { ProviderId } from '@shared/providers'
+import { PERMISSIONS_POLL_MS } from '../state'
 import { MetisMark } from './MetisMark'
 import { Onboarding } from './Onboarding'
 
@@ -56,7 +57,9 @@ interface SetupRow {
   key: string
   label: string
   icon: typeof Cpu
-  state: 'checking' | 'ready' | 'action' | 'skipped'
+  // 'restart' = permission is actually granted, but this same-session ScreenCaptureKit handle never saw it
+  // (macOS only applies a fresh Screen Recording grant to the NEXT launch) — needs a relaunch, not a prompt.
+  state: 'checking' | 'ready' | 'action' | 'restart' | 'skipped'
   detail?: string
 }
 
@@ -69,6 +72,11 @@ export function OnboardingExperience({ onDone, onSkip }: OnboardingExperiencePro
   // new-flow user (CMO-QA finding #1). The checkbox is therefore a REQUIRED gate here, before Start.
   const [consent, setConsent] = useState(false)
   const doneRef = useRef(false)
+  // Tracks the last-seen screenRecording status across polls so a false→true flip mid-scene (the user
+  // just toggled it on in System Settings) can be told apart from "was already granted on mount" — only
+  // the former needs a restart, since this process's ScreenCaptureKit handle never saw the earlier one.
+  const screenGrantedRef = useRef<boolean | null>(null)
+  const [restarting, setRestarting] = useState(false)
 
   // --- Setup scene: run the REAL checks the moment the scene mounts.
   useEffect(() => {
@@ -82,6 +90,7 @@ export function OnboardingExperience({ onDone, onSkip }: OnboardingExperiencePro
       { key: 'screen', label: 'Screen context', icon: MonitorUp, state: 'checking' }
     ]
     setRows(base)
+    screenGrantedRef.current = null
     const set = (key: string, state: SetupRow['state'], detail?: string): void => {
       if (!live) return
       setRows((rs) => rs.map((r) => (r.key === key ? { ...r, state, detail } : r)))
@@ -100,28 +109,60 @@ export function OnboardingExperience({ onDone, onSkip }: OnboardingExperiencePro
       const perms = await window.toto.getPermissions().catch(() => null)
       set('mic', perms?.microphone === 'granted' ? 'ready' : 'action', perms?.microphone === 'granted' ? 'granted' : 'needs permission')
       await delay(350)
-      set(
-        'screen',
-        perms?.screenRecording === 'granted' ? 'ready' : 'action',
-        perms?.screenRecording === 'granted' ? 'granted' : 'grant it when you first capture'
-      )
+      const screenGranted = perms?.screenRecording === 'granted'
+      screenGrantedRef.current = screenGranted
+      set('screen', screenGranted ? 'ready' : 'action', screenGranted ? 'granted' : 'needs permission')
     })()
     return () => {
       live = false
     }
   }, [scene])
 
-  const requestPerms = async (): Promise<void> => {
-    const perms = await window.toto.requestPermissionsUpfront().catch(() => null)
-    setRows((rs) =>
-      rs.map((r) =>
-        r.key === 'mic'
-          ? { ...r, state: perms?.microphone === 'granted' ? 'ready' : 'action', detail: perms?.microphone === 'granted' ? 'granted' : 'needs permission' }
-          : r.key === 'screen'
-            ? { ...r, state: perms?.screenRecording === 'granted' ? 'ready' : 'action', detail: perms?.screenRecording === 'granted' ? 'granted' : 'optional' }
-            : r
+  // --- Live-poll while the scene stays mounted, so a grant flipped in System Settings (possibly in a
+  // split view right next to this window) is reflected without the user coming back to click anything.
+  useEffect(() => {
+    if (scene !== 'setup') return
+    let live = true
+    const poll = async (): Promise<void> => {
+      const perms = await window.toto.getPermissions().catch(() => null)
+      if (!live || !perms) return
+      setRows((rs) =>
+        rs.map((r) => {
+          if (r.key === 'mic') {
+            const granted = perms.microphone === 'granted'
+            return { ...r, state: granted ? 'ready' : 'action', detail: granted ? 'granted' : 'needs permission' }
+          }
+          if (r.key === 'screen') {
+            const granted = perms.screenRecording === 'granted'
+            const justGranted = screenGrantedRef.current === false && granted
+            screenGrantedRef.current = granted
+            const needsRestart = justGranted || r.state === 'restart'
+            return {
+              ...r,
+              state: needsRestart ? 'restart' : granted ? 'ready' : 'action',
+              detail: needsRestart ? 'granted' : granted ? 'granted' : 'needs permission'
+            }
+          }
+          return r
+        })
       )
-    )
+    }
+    const interval = setInterval(() => void poll(), PERMISSIONS_POLL_MS)
+    return () => {
+      live = false
+      clearInterval(interval)
+    }
+  }, [scene])
+
+  const requestMic = async (): Promise<void> => {
+    const perms = await window.toto.requestPermissionsUpfront().catch(() => null)
+    const granted = perms?.microphone === 'granted'
+    setRows((rs) => rs.map((r) => (r.key === 'mic' ? { ...r, state: granted ? 'ready' : 'action', detail: granted ? 'granted' : 'needs permission' } : r)))
+  }
+
+  const restartApp = (): void => {
+    setRestarting(true)
+    void window.toto.relaunch().catch(() => setRestarting(false))
   }
 
   const finish = (): void => {
@@ -131,7 +172,7 @@ export function OnboardingExperience({ onDone, onSkip }: OnboardingExperiencePro
   }
 
   const allReady = rows.length > 0 && rows.every((r) => r.state === 'ready' || r.state === 'skipped')
-  const needsPerms = rows.some((r) => (r.key === 'mic' || r.key === 'screen') && r.state === 'action')
+  const needsPerms = rows.some((r) => (r.key === 'mic' || r.key === 'screen') && (r.state === 'action' || r.state === 'restart'))
 
   return (
     <div className="flex h-full w-full select-none flex-col items-center px-10 text-center">
@@ -214,19 +255,67 @@ export function OnboardingExperience({ onDone, onSkip }: OnboardingExperiencePro
             {rows.map((r, i) => (
               <div
                 key={r.key}
-                className="glass-strong fade-up flex items-center gap-3 rounded-[12px] px-3.5 py-2.5 text-left"
+                className="glass-strong fade-up flex items-start gap-3 rounded-[12px] px-3.5 py-2.5 text-left"
                 style={{ animationDelay: `${i * 70}ms`, animationFillMode: 'backwards' }}
               >
-                <r.icon size={16} className="shrink-0 text-[color:var(--color-ink-2)]" />
+                <r.icon size={16} className="mt-0.5 shrink-0 text-[color:var(--color-ink-2)]" />
                 <div className="min-w-0 flex-1">
                   <p className="m-0 truncate text-[13px] text-[color:var(--color-ink)]">{r.label}</p>
                   {r.detail && <p className="m-0 text-[11px] text-[color:var(--color-ink-3)]">{r.detail}</p>}
+                  {/* Why-before-prompt: shown before the button that triggers the OS dialog / deep link, not
+                      after — so the user knows what they're being asked for before they're asked. */}
+                  {r.key === 'mic' && r.state === 'action' && (
+                    <div className="mt-1.5 flex flex-wrap items-center gap-2">
+                      <span className="text-[11px] leading-snug text-[color:var(--color-ink-3)]">
+                        Lets Métis hear your side of the call.
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => void requestMic()}
+                        className="no-drag focus-ring rounded-full bg-[var(--color-accent)]/15 px-2.5 py-1 text-[11px] font-semibold text-[color:var(--color-accent-2)] hover:bg-[var(--color-accent)]/25"
+                      >
+                        Allow Microphone
+                      </button>
+                    </div>
+                  )}
+                  {r.key === 'screen' && r.state === 'action' && (
+                    <div className="mt-1.5 flex flex-wrap items-center gap-2">
+                      <span className="text-[11px] leading-snug text-[color:var(--color-ink-3)]">
+                        Lets Métis answer questions about what's on your screen.
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => void window.toto.openPermissionSettings('screenRecording')}
+                        className="no-drag focus-ring rounded-full bg-[var(--color-accent)]/15 px-2.5 py-1 text-[11px] font-semibold text-[color:var(--color-accent-2)] hover:bg-[var(--color-accent)]/25"
+                      >
+                        Open Screen Recording Settings
+                      </button>
+                    </div>
+                  )}
+                  {r.key === 'screen' && r.state === 'restart' && (
+                    <div className="mt-1.5 flex flex-wrap items-center gap-2">
+                      <span className="text-[11px] leading-snug text-[color:var(--color-accent-2)]">
+                        Granted. Restart Métis to finish enabling it.
+                      </span>
+                      <button
+                        type="button"
+                        onClick={restartApp}
+                        disabled={restarting}
+                        className="no-drag focus-ring rounded-full bg-[var(--color-accent)] px-2.5 py-1 text-[11px] font-semibold text-white hover:brightness-110 disabled:opacity-60"
+                      >
+                        {restarting ? 'Restarting…' : 'Restart Métis'}
+                      </button>
+                    </div>
+                  )}
                 </div>
                 {r.state === 'checking' && (
-                  <span className="h-3.5 w-3.5 shrink-0 animate-spin rounded-full border-2 border-white/20 border-t-[var(--color-accent-2)]" />
+                  <span className="mt-0.5 h-3.5 w-3.5 shrink-0 animate-spin rounded-full border-2 border-white/20 border-t-[var(--color-accent-2)]" />
                 )}
-                {r.state === 'ready' && <Check size={16} className="shrink-0 text-[var(--color-accent-2)]" />}
-                {r.state === 'action' && <span className="shrink-0 text-[11px] font-medium text-[color:var(--color-ink-2)]">needed</span>}
+                {r.state === 'ready' && <Check size={16} className="mt-0.5 shrink-0 text-[var(--color-accent-2)]" />}
+                {r.state === 'action' && <span className="mt-0.5 shrink-0 text-[11px] font-medium text-[color:var(--color-ink-2)]">needed</span>}
+                {r.state === 'restart' && (
+                  <span className="mt-0.5 shrink-0 text-[11px] font-medium text-[color:var(--color-accent-2)]">restart</span>
+                )}
               </div>
             ))}
           </div>
@@ -235,22 +324,7 @@ export function OnboardingExperience({ onDone, onSkip }: OnboardingExperiencePro
               Everything’s ready. Nothing to configure.
             </p>
           )}
-          {needsPerms && (
-            <p className="fade-up m-0 max-w-[380px] text-[12px] leading-snug text-[color:var(--color-ink-3)]">
-              Mic lets Métis hear your call. Screen access lets it answer questions about what's on your
-              screen. Both only capture while you're in a meeting.
-            </p>
-          )}
           <div className="flex items-center gap-2">
-            {needsPerms && (
-              <button
-                type="button"
-                onClick={() => void requestPerms()}
-                className="no-drag focus-ring h-10 rounded-full bg-[var(--color-accent)] px-5 text-[13px] font-semibold text-white hover:brightness-110"
-              >
-                Grant access
-              </button>
-            )}
             <button
               type="button"
               onClick={() => setScene('personalize')}
