@@ -17,6 +17,7 @@ import type { ProviderId } from '@shared/providers'
 import { PERMISSIONS_POLL_MS } from '../state'
 import { MetisMark } from './MetisMark'
 import { Onboarding } from './Onboarding'
+import { isWindows } from '../lib/keys'
 
 export interface OnboardingExperienceProps {
   onDone: (result: { mode: ConversationMode; recordingConsent: boolean }) => void
@@ -83,7 +84,7 @@ export function OnboardingExperience({ onDone, onSkip }: OnboardingExperiencePro
     if (scene !== 'setup') return
     let live = true
     const base: SetupRow[] = [
-      { key: 'silicon', label: 'Apple Silicon acceleration', icon: Cpu, state: 'checking' },
+      { key: 'silicon', label: isWindows ? 'Hardware acceleration' : 'Apple Silicon acceleration', icon: Cpu, state: 'checking' },
       { key: 'asr', label: 'On-device transcription', icon: Sparkles, state: 'checking' },
       { key: 'brain', label: 'Private meeting brain', icon: FolderLock, state: 'checking' },
       { key: 'mic', label: 'Microphone', icon: Mic, state: 'checking' },
@@ -104,14 +105,17 @@ export function OnboardingExperience({ onDone, onSkip }: OnboardingExperiencePro
       const bundled = await window.toto.asrBundled().catch(() => false)
       set('asr', bundled ? 'ready' : 'action', bundled ? 'Parakeet + Whisper bundled' : 'models missing in this build')
       await delay(450)
-      set('brain', 'ready', 'stays on this Mac')
+      set('brain', 'ready', isWindows ? 'stays on this PC' : 'stays on this Mac')
       await delay(450)
       const perms = await window.toto.getPermissions().catch(() => null)
       set('mic', perms?.microphone === 'granted' ? 'ready' : 'action', perms?.microphone === 'granted' ? 'granted' : 'needs permission')
       await delay(350)
-      const screenGranted = perms?.screenRecording === 'granted'
+      // Windows has no per-app Screen Recording permission — desktopCapturer captures without one, so the
+      // status stays 'unknown' forever there. Treat isWindows as screen-available (matches Onboarding.tsx
+      // and listen.ts) so the scene never demands a grant the OS can't give and can actually reach "ready".
+      const screenGranted = isWindows || perms?.screenRecording === 'granted'
       screenGrantedRef.current = screenGranted
-      set('screen', screenGranted ? 'ready' : 'action', screenGranted ? 'granted' : 'needs permission')
+      set('screen', screenGranted ? 'ready' : 'action', isWindows ? 'available' : screenGranted ? 'granted' : 'needs permission')
     })()
     return () => {
       live = false
@@ -133,14 +137,16 @@ export function OnboardingExperience({ onDone, onSkip }: OnboardingExperiencePro
             return { ...r, state: granted ? 'ready' : 'action', detail: granted ? 'granted' : 'needs permission' }
           }
           if (r.key === 'screen') {
-            const granted = perms.screenRecording === 'granted'
-            const justGranted = screenGrantedRef.current === false && granted
+            // On Windows screen capture needs no grant (see mount effect) — always available, never a
+            // restart. The false→true "just granted, needs restart" dance is macOS ScreenCaptureKit only.
+            const granted = isWindows || perms.screenRecording === 'granted'
+            const justGranted = !isWindows && screenGrantedRef.current === false && granted
             screenGrantedRef.current = granted
-            const needsRestart = justGranted || r.state === 'restart'
+            const needsRestart = justGranted || (!isWindows && r.state === 'restart')
             return {
               ...r,
               state: needsRestart ? 'restart' : granted ? 'ready' : 'action',
-              detail: needsRestart ? 'granted' : granted ? 'granted' : 'needs permission'
+              detail: needsRestart ? 'granted' : isWindows ? 'available' : granted ? 'granted' : 'needs permission'
             }
           }
           return r
