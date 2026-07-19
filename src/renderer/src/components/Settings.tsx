@@ -3745,8 +3745,10 @@ function PersonalizeModes({
 
   return (
     <div className="grid grid-cols-[176px_1fr] gap-4">
-      {/* Left — mode list grouped by MODE_GROUPS + Custom */}
-      <div className="scroll-thin flex max-h-[360px] flex-col gap-0.5 overflow-y-auto">
+      {/* Left — mode list grouped by MODE_GROUPS + Custom. No inner scroll cap: the panel already has
+          room for every built-in mode, and the tab's own outer scroll (<main> above) handles overflow
+          on the rare account with enough custom modes to actually need it. */}
+      <div className="flex flex-col gap-0.5">
         {/* + New Mode button */}
         {creatingNew ? (
           <div className="mb-1 flex items-center gap-1">

@@ -6,7 +6,8 @@
  * and screen recording is per-capture via desktopCapturer (user must approve each app in Settings → Privacy).
  */
 
-import { systemPreferences } from 'electron'
+import { app, systemPreferences } from 'electron'
+import { readFileSync } from 'node:fs'
 
 export type PermissionStatus = 'granted' | 'denied' | 'unknown' | 'not-required'
 
@@ -15,7 +16,26 @@ export interface PlatformPermissions {
   screenRecording: PermissionStatus
 }
 
+// TEMP QA SCAFFOLDING — DO NOT SHIP. Real Screen Recording TCC state can't be flipped from a headless
+// test run, so this file-based override lets a Playwright driver simulate the user toggling System
+// Settings mid-session (rewrite the file; the live-poll picks it up). Dev-only (!app.isPackaged).
+function qaForcedScreenStatus(): PermissionStatus | null {
+  if (app.isPackaged) return null
+  const file = process.env.ASKTOTO_QA_FORCE_SCREEN_STATUS_FILE
+  if (!file) return null
+  try {
+    const v = readFileSync(file, 'utf8').trim()
+    return v === 'granted' || v === 'denied' || v === 'unknown' ? v : null
+  } catch {
+    return null
+  }
+}
+
 function macStatus(accessType: 'microphone' | 'camera' | 'screen'): PermissionStatus {
+  if (accessType === 'screen') {
+    const forced = qaForcedScreenStatus()
+    if (forced) return forced
+  }
   if (systemPreferences.getMediaAccessStatus) {
     const s = systemPreferences.getMediaAccessStatus(accessType)
     if (s === 'granted') return 'granted'
