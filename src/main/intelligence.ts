@@ -6,8 +6,11 @@ import { getSettings } from './store'
 
 /** Private View (content protection) for the dashboard — mirrors the overlay's contentProtectionOn().
  *  The dashboard aggregates the most sensitive cross-meeting data (people/accounts/deals/quotes/
- *  commitments), so it must be excluded from screen capture/share whenever the overlay is. */
-const intelCpOn = (): boolean => !process.env.ASKTOTO_DISABLE_CP && getSettings().contentProtection
+ *  commitments), so it must be excluded from screen capture/share whenever the overlay is.
+ *  The env escape hatch is dev/screenshot-only — gated to unpackaged builds so a packaged process can
+ *  never have capture protection stripped by `setx ASKTOTO_DISABLE_CP 1` + relaunch. */
+const intelCpOn = (): boolean =>
+  (app.isPackaged || !process.env.ASKTOTO_DISABLE_CP) && getSettings().contentProtection
 
 /** Re-apply Private View to the (open) dashboard window — called from settingsSet when the toggle flips,
  *  same as the overlay's win.setContentProtection() re-apply. */

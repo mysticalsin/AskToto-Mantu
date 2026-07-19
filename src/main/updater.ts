@@ -4,14 +4,40 @@ import { join } from 'node:path'
 import log from 'electron-log'
 import { IPC } from '@shared/ipc'
 import { shouldDisableAutoUpdate } from './cahe-edition'
+import { readTrustedAdminManaged } from './win-security'
+
+/** Enterprise governance: IT can freeze the version fleet-wide by deploying an admin managed-config with
+ *  `{ "disableAutoUpdate": true }`. Only the ADMIN (machine) policy is honored — and on Windows only via
+ *  the ACL-trusted path — so a standard user cannot turn their own updates on or off. */
+/** Pure: does this managed-config JSON text set `disableAutoUpdate: true`? Exported for tests. Any
+ *  non-true value, missing key, or malformed JSON = not disabled (fail-open to updates on garbage). */
+export function configDisablesAutoUpdate(configText: string): boolean {
+  try {
+    return JSON.parse(configText)?.disableAutoUpdate === true
+  } catch {
+    return false
+  }
+}
+
+function autoUpdateDisabledByPolicy(): boolean {
+  // readTrustedAdminManaged() reads through the same held fd that verified win32 admin-trust, closing
+  // the check-path/read-path TOCTOU a `trustedAdminManagedPath() ? readFileSync(path) : ...` pattern
+  // would reopen.
+  const content = readTrustedAdminManaged()
+  return content ? configDisablesAutoUpdate(content) : false
+}
 
 /** A 404 means the releases repo/feed doesn't exist (yet) — distinct from a transient network/server
  *  error, which should keep logging normally so a real outage stays visible. */
 const isNotFound = (e: unknown): boolean =>
   (e as { statusCode?: number } | null)?.statusCode === 404 || /\b404\b/.test(String((e as Error)?.message ?? e))
 
-/** Enterprise auto-update. Only runs in the packaged app; needs a real `publish` host (electron-builder.yml). */
-export function initAutoUpdate(win: BrowserWindow | null): void {
+/** Enterprise auto-update. Only runs in the packaged app; needs a real `publish` host (electron-builder.yml).
+ *  Takes a GETTER rather than a captured window reference: if createWindow() threw during boot, the
+ *  captured value would be permanently null even after ensureWindow() later self-heals and reassigns the
+ *  module-level `win` — the update-downloaded toast would then be dead for the rest of the process life.
+ *  Reading through the getter at send time always sees the live window. */
+export function initAutoUpdate(getWin: () => BrowserWindow | null): void {
   if (shouldDisableAutoUpdate()) {
     log.info('[updater] Cahê edition uses its own distribution channel, skipping shared auto-update feed')
     return
@@ -25,6 +51,11 @@ export function initAutoUpdate(win: BrowserWindow | null): void {
   }
   if (!app.isPackaged) return
   if ((process as NodeJS.Process & { mas?: boolean }).mas) return
+  // IT kill-switch: a managed-config policy can freeze the version fleet-wide (staged-rollout control).
+  if (autoUpdateDisabledByPolicy()) {
+    log.info('[updater] auto-update disabled by managed-config policy')
+    return
+  }
   // Skip if no real update host is configured (placeholder) — avoids failing checks every launch.
   try {
     const yml = readFileSync(join(process.resourcesPath, 'app-update.yml'), 'utf8')
@@ -63,18 +94,41 @@ export function initAutoUpdate(win: BrowserWindow | null): void {
       log.warn('[updater] error', e?.stack || e?.message || e)
     })
     autoUpdater.on('update-available', (i: { version?: string }) => log.info('[updater] update-available', i?.version))
-    autoUpdater.on('update-downloaded', (i: { version?: string }) => {
-      log.info('[updater] downloaded', i?.version)
-      // In-app banner (UpdateReadyToast) alongside the OS notification checkForUpdatesAndNotify already shows.
-      win?.webContents.send(IPC.updateDownloaded, { version: i?.version })
+    autoUpdater.on(
+      'update-downloaded',
+      (i: { version?: string; releaseNotes?: string | Array<{ note?: string | null }> | null }) => {
+        log.info('[updater] downloaded', i?.version)
+        // Ship the release notes (the GitHub release body) with the version so the in-app UpdateReadyToast
+        // can show a "What's new" panel — the user sees what changed before choosing to restart & apply.
+        const raw = i?.releaseNotes
+        const notes =
+          typeof raw === 'string'
+            ? raw.trim() || undefined
+            : Array.isArray(raw)
+              ? raw.map((x) => String(x?.note ?? '')).filter(Boolean).join('\n\n').trim() || undefined
+              : undefined
+        // In-app banner (UpdateReadyToast) alongside the OS notification checkForUpdatesAndNotify already shows.
+        getWin()?.webContents.send(IPC.updateDownloaded, { version: i?.version, notes })
+      }
+    )
+    // Stream download progress to the renderer so the update UI can show a "Downloading… X%" state rather
+    // than a silent wait before the ready toast appears.
+    autoUpdater.on('download-progress', (p: { percent?: number }) => {
+      getWin()?.webContents.send(IPC.updateProgress, { percent: Math.round(p?.percent ?? 0) })
     })
-    // checkForUpdatesAndNotify shows the OS notification when an update is ready. The 'error' listener
-    // above always fires first for the same failure and already logs it (short for 404, full for anything
-    // else) — swallow it here silently rather than logging the identical failure a second time. Cadence
-    // is untouched: this runs once per app launch, no interval.
-    void autoUpdater.checkForUpdatesAndNotify().catch(() => {
-      /* already logged by the 'error' listener above */
-    })
+    // checkForUpdatesAndNotify shows the OS notification when an update is ready; the 'error' listener above
+    // already logs any failure (short for 404, full otherwise), so swallow the duplicate rejection here.
+    const check = (): void => {
+      void autoUpdater.checkForUpdatesAndNotify().catch(() => {
+        /* already logged by the 'error' listener above */
+      })
+    }
+    check()
+    // Re-check every 6h so a long-running app picks up a release the SAME day, not only at the next launch.
+    // Cleared on will-quit: an update check resolving over the network mid-teardown is exactly the
+    // shutdown-race that can SIGTRAP a killed/driven process (see backgroundTimers in index.ts).
+    const recheck = setInterval(check, 6 * 60 * 60 * 1000)
+    app.on('will-quit', () => clearInterval(recheck))
   } catch (e) {
     log.warn('[updater] init failed', e)
   }

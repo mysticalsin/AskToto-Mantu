@@ -20,6 +20,7 @@
     "resources/models/Xenova/whisper-base/tokenizer.json": { "bytes": 2480466, "sha256": "27fc476bfe7f17299480be2273fc0608e4d5a99aba2ab5dec5374b4482d1a566" },
     "resources/models/Xenova/whisper-base/tokenizer_config.json": { "bytes": 282683, "sha256": "2a4c4281cf9f51ac6ccc406fdc711a087afe6530f671fa7b80953edc498275ce" },
     "resources/models/Xenova/whisper-base/vocab.json": { "bytes": 1036584, "sha256": "50d6a919f0a0601d56a04eb583c780d18553aa388254ba3158eb6a00f13e2c1a" },
+    "resources/models/speaker/embedding.onnx": { "bytes": 29596978, "sha256": "357a834f702b80161e5b981182c038e18553c1f2ca752ed6cec2052365d4129b" },
     "resources/ort/ort-wasm-simd-threaded.jsep.mjs": { "bytes": 44484, "sha256": "08fb86ec433c78bfb032c5d84a68b8e8e5a8d81268fa39e24314179a5767a5b9" },
     "resources/ort/ort-wasm-simd-threaded.jsep.wasm": { "bytes": 21596019, "sha256": "c46655e8a94afc45338d4cb2b840475f88e5012d524509916e505079c00bfa39" }
   }

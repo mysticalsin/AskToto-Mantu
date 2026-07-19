@@ -5,7 +5,7 @@ import { writeFileSync } from 'node:fs'
 import { randomBytes } from 'node:crypto'
 import { join } from 'node:path'
 import type { DustCliImport } from '@shared/ipc'
-import { resolveBin } from './cli'
+import { resolveBin, resolveSpawnTarget } from './cli'
 import { clearApiKey, setSettings } from './store'
 import { DUST_KEYCHAIN_SERVICE, readDustSecret } from './dust-secret-store'
 
@@ -100,13 +100,18 @@ export async function refreshDustCliSession(): Promise<DustCliSession> {
       if (bin) {
         try {
           // CI=1 suppresses the spinner / update-check UI; the timeout bounds the network round-trip.
-          // On Windows the resolved bin is `dust.cmd`, which only runs through a shell — quote the path
-          // for spaces. Best-effort either way: a nonzero exit/timeout is swallowed and we re-read.
-          if (process.platform === 'win32') {
-            await exec(`"${bin}" status`, [], { timeout: 25_000, env: { ...process.env, CI: '1' }, shell: true, windowsHide: true })
-          } else {
-            await exec(bin, ['status'], { timeout: 25_000, env: { ...process.env, CI: '1' } })
-          }
+          // On Windows the resolved bin is `dust.cmd`, a shim that can't be exec'd directly (SECURITY:
+          // never use shell:true — resolveSpawnTarget routes a .cmd shim through cmd.exe as the target
+          // *executable*, args stay an array, cmd.exe never re-interprets a joined string). Best-effort
+          // either way: a nonzero exit/timeout is swallowed and we re-read.
+          const spawnTarget = resolveSpawnTarget(bin, ['status'])
+          await exec(spawnTarget.command, spawnTarget.args, {
+            timeout: 25_000,
+            env: { ...process.env, CI: '1', ...spawnTarget.env },
+            shell: false,
+            windowsHide: true,
+            windowsVerbatimArguments: spawnTarget.windowsVerbatimArguments
+          })
         } catch {
           // ignore — fall through and re-read the session regardless of exit code
         }

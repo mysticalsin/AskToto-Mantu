@@ -95,13 +95,23 @@ export function buildSystem(
   if (req.mode === 'summary') return lead + prefix + SUMMARY_PROMPT + ctx + lang
   if (req.mode === 'recap') return lead + prefix + recapPromptFor(mode) + ctx + lang
 
-  const prompt = effectiveModePrompt(mode, modePrompts)
+  // Fact-check (mode:'answer', kind:'factcheck') has a strict "Respond in EXACTLY this format … VERDICT: …"
+  // contract that parseVerdict depends on. The active mode's persona prompt (sales/interview/negotiation/…)
+  // instructs first-person coaching/dialogue that fights that contract, so omit it for fact-check the same
+  // way GROUNDING_RAIL is already excluded below — otherwise the persona can silently corrupt the verdict
+  // format and the verdict chip disappears.
+  const prompt = req.kind === 'factcheck' ? '' : effectiveModePrompt(mode, modePrompts)
   // Modes where the user is performing as themselves benefit from the profile (background/role/company);
-  // general and meeting are neutral observers, so they skip it.
-  const profileTail = mode === 'general' || mode === 'meeting' ? '' : profileBlock(profile)
+  // general and meeting are neutral observers, and recruiting grounds on the candidate (not the
+  // interviewer's own resume), so these three skip it.
+  const profileTail =
+    mode === 'general' || mode === 'meeting' || mode === 'recruiting' ? '' : profileBlock(profile)
   // Grounding rail: cite source / admit uncertainty / ≤1 clarifying question / never describe what it
   // wasn't shown. Only for user-initiated answers (answer, vision) — NOT the proactive spoken suggest
-  // line (a parenthetical source tag would be awkward to say out loud).
-  const rail = req.mode === 'answer' || req.mode === 'vision' ? GROUNDING_RAIL : ''
+  // line (a parenthetical source tag would be awkward to say out loud). Also excluded for fact-check
+  // (mode:'answer', kind:'factcheck'): its contract is a VERDICT-only response, and layering the rail's
+  // "lead with the answer / ask a clarifying question" guidance onto it corrupts the output that
+  // parseVerdict expects (a preamble before "VERDICT:" gets dropped).
+  const rail = (req.mode === 'answer' || req.mode === 'vision') && req.kind !== 'factcheck' ? GROUNDING_RAIL : ''
   return lead + prefix + prompt + profileTail + ctx + rail + lang
 }

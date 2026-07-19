@@ -268,7 +268,7 @@ function Related({
           {data.topics.map((t) => (
             <span
               key={t}
-              className="truncate max-w-full rounded-full bg-[var(--color-accent-soft)] px-2 py-0.5 text-[10px] font-medium text-[var(--color-accent)]"
+              className="truncate max-w-full rounded-full bg-[var(--color-accent-soft)] px-2 py-0.5 text-[10px] font-medium text-[var(--color-accent-2)]"
             >
               {t}
             </span>
@@ -482,14 +482,26 @@ const MeetingRow = memo(function MeetingRow({
               onDoubleClick={() => onOpen(m.file)}
               className="no-drag focus-ring flex flex-1 items-center gap-2 rounded-lg px-2 py-1.5 text-left hover:bg-white/[0.06]"
             >
-              <FileText size={12} className="shrink-0 text-[color:var(--color-ink-3)]" />
+              {m.locked ? (
+                <Lock size={12} className="shrink-0 text-[color:var(--color-ink-3)]" aria-label="Encrypted, can't be opened on this device" />
+              ) : (
+                <FileText size={12} className="shrink-0 text-[color:var(--color-ink-3)]" />
+              )}
               <span className="min-w-0 flex-1 truncate text-[12px] font-medium text-[color:var(--color-ink)]">
                 {m.title}
               </span>
 
+              {/* Locked: a real encrypted meeting that couldn't be decrypted on this device. Shown so it
+                  isn't silently missing; opening it surfaces the existing "couldn't be decrypted" error. */}
+              {m.locked && (
+                <span className="shrink-0 rounded-full bg-white/[0.06] px-2 py-0.5 text-[10px] text-[color:var(--color-ink-3)]">
+                  Locked
+                </span>
+              )}
+
               {/* Analyzing badge */}
               {isActive && (
-                <span className="shrink-0 rounded-full bg-[var(--color-accent-soft)] px-2 py-0.5 text-[10px] text-[color:var(--color-accent)]">
+                <span className="shrink-0 rounded-full bg-[var(--color-accent-soft)] px-2 py-0.5 text-[10px] text-[color:var(--color-accent-text)]">
                   Just saved
                 </span>
               )}
@@ -497,7 +509,7 @@ const MeetingRow = memo(function MeetingRow({
               {/* Task MI-5 — confidential lock chip: excluded from every published wiki page. */}
               {m.confidential && (
                 <span
-                  title="Confidential — excluded from published intelligence"
+                  title="Confidential: excluded from published intelligence"
                   className="flex shrink-0 items-center gap-1 rounded-full bg-[var(--color-danger)]/10 px-2 py-0.5 text-[10px] text-[var(--color-danger)]"
                 >
                   <Lock size={10} /> Confidential
@@ -576,7 +588,7 @@ const MeetingRow = memo(function MeetingRow({
           {m.topics.slice(0, 3).map((t, i) => (
             <span
               key={`${t}-${i}`}
-              className="truncate max-w-full rounded-full bg-[var(--color-accent-soft)] px-2 py-0.5 text-[10px] font-medium text-[var(--color-accent)]"
+              className="truncate max-w-full rounded-full bg-[var(--color-accent-soft)] px-2 py-0.5 text-[10px] font-medium text-[var(--color-accent-2)]"
             >
               {t}
             </span>
@@ -622,6 +634,16 @@ export function RecallView({
   onIntelligence?: () => void
 }): JSX.Element {
   const [q, setQ] = useState('')
+  // Always the LATEST typed query, readable from a stable (empty-deps) callback — refreshList (below)
+  // reads this instead of closing over `q` directly, so a call issued from an already-in-flight async
+  // import always searches by what's currently in the box, not whatever was typed when import started.
+  const qRef = useRef(q)
+  qRef.current = q
+  // Monotonic id shared by every recallList/recallSearch fetch (the debounced search effect below AND
+  // refreshList's post-import refresh) — whichever request was issued LAST wins when it resolves, so a
+  // slow earlier response (or an import's refresh landing well after the user kept typing/searching) can
+  // never clobber a fresher result already on screen.
+  const fetchSeqRef = useRef(0)
   // The value actually sent to the IPC search / used for grouping — updates 250ms after `q` settles (same
   // delay the search IPC call itself already waited for below), so every keystroke's re-render groups
   // against this stable value instead of re-running groupByLocalDate synchronously on each keystroke.
@@ -632,16 +654,21 @@ export function RecallView({
   const [open, setOpen] = useState<string | null>(null)
   /** Single-click selection for the "Open ↵" footer action. */
   const [selectedFile, setSelectedFile] = useState<string | null>(null)
-  /** File mid-delete — disables its trash button so a slow confirm dialog can't be double-clicked. */
-  const [deleting, setDeleting] = useState<string | null>(null)
+  /** Files mid-delete — disables each row's OWN trash button so a slow confirm dialog can't be
+   *  double-clicked. A Set (not a single file) because starting a delete on row B must not re-enable row
+   *  A's Trash while A's delete — whose blocking native confirm dialog can stay open a long time — is
+   *  still pending: a single slot let a second delete start on A mid-confirm, whose second call then hit
+   *  ENOENT and showed nothing. */
+  const [deletingFiles, setDeletingFiles] = useState<Set<string>>(() => new Set())
   /** File whose inline rename input is open (null = no row is being renamed). */
   const [editingFile, setEditingFile] = useState<string | null>(null)
   /** The open rename input's current value. */
   const [editingValue, setEditingValue] = useState('')
   /** File mid-rename-save — disables its pencil button while the IPC call is in flight. */
   const [renaming, setRenaming] = useState<string | null>(null)
-  /** Most recent rename/delete failure — file + message shown as an inline error under that row. */
-  const [rowError, setRowError] = useState<{ file: string; message: string } | null>(null)
+  /** Most recent rename/delete failure PER FILE, shown as an inline error under that row. Keyed by file
+   *  (not a single {file,message}) so two rows failing close together don't clobber each other's error. */
+  const [rowErrors, setRowErrors] = useState<Record<string, string>>({})
   /** Opt-in past the INITIAL_RENDER_CAP — set once the user clicks "Show all N meetings". */
   const [showAll, setShowAll] = useState(false)
   /** The scrollable meeting-list container — focused before a row unmounts (e.g. on delete) so a
@@ -651,27 +678,45 @@ export function RecallView({
   const [importJobs, setImportJobs] = useState<ImportJobView[]>([])
   const [importError, setImportError] = useState<string | null>(null)
 
+  // Clear/set one row's rename-or-delete error without touching any other row's — see rowErrors above.
+  const clearRowError = useCallback((file: string): void => {
+    setRowErrors((prev) => {
+      if (!(file in prev)) return prev // bail without a new object identity when there's nothing to clear
+      const next = { ...prev }
+      delete next[file]
+      return next
+    })
+  }, [])
+  const flagRowError = useCallback((file: string, message: string): void => {
+    setRowErrors((prev) => ({ ...prev, [file]: message }))
+  }, [])
+
   // Meetings are always saved; deletion is the user's to undo that. The main process pops a native,
   // unmissable confirm dialog before actually deleting (single click here is unambiguous — no "did that
   // register?" two-click pattern), then removes the .md + its index row.
   const onTrash = useCallback(async (file: string, title: string): Promise<void> => {
-    setDeleting(file)
+    setDeletingFiles((s) => (s.has(file) ? s : new Set(s).add(file)))
     const r = await window.toto
       .recallDelete(file, title)
       .catch((e): { ok: boolean; error?: string } => ({
         ok: false,
         error: e instanceof Error ? e.message : String(e)
       }))
-    setDeleting(null)
+    setDeletingFiles((s) => {
+      if (!s.has(file)) return s
+      const next = new Set(s)
+      next.delete(file)
+      return next
+    })
     if (r.ok) {
       listRef.current?.focus()
       setItems((xs) => xs.filter((x) => x.file !== file))
       setSelectedFile((s) => (s === file ? null : s))
       setOpen((o) => (o === file ? null : o))
     } else if (r.error !== 'cancelled') {
-      setRowError({ file, message: r.error || 'Could not delete meeting.' })
+      flagRowError(file, r.error || 'Could not delete meeting.')
     }
-  }, [])
+  }, [flagRowError])
   // Fire-and-forget wrapper matching MeetingRow's sync onTrash prop — kept stable via useCallback so the
   // memoized row doesn't re-render just because this component re-rendered.
   const trashMeeting = useCallback((file: string, title: string): void => {
@@ -694,8 +739,8 @@ export function RecallView({
     editingRef.current = { file, value: title }
     setEditingFile(file)
     setEditingValue(title)
-    setRowError((e) => (e?.file === file ? null : e))
-  }, [])
+    clearRowError(file)
+  }, [clearRowError])
   const changeEditValue = useCallback((value: string): void => {
     editingRef.current.value = value
     setEditingValue(value)
@@ -704,8 +749,8 @@ export function RecallView({
     const { file } = editingRef.current
     editingRef.current = { file: null, value: '' }
     setEditingFile(null)
-    setRowError((e) => (e?.file === file ? null : e))
-  }, [])
+    if (file) clearRowError(file)
+  }, [clearRowError])
   const commitEdit = useCallback((): void => {
     const { file, value } = editingRef.current
     editingRef.current = { file: null, value: '' }
@@ -719,7 +764,7 @@ export function RecallView({
       .then((r) => {
         if (r.ok) {
           setItems((xs) => xs.map((x) => (x.file === file ? { ...x, title } : x)))
-          setRowError((e) => (e?.file === file ? null : e))
+          clearRowError(file)
         } else {
           // Reopen the input with the attempted title so the user can retry — unless they've since
           // started renaming another row, in which case only surface the error, don't steal the editor.
@@ -728,7 +773,7 @@ export function RecallView({
             setEditingFile(file)
             setEditingValue(title)
           }
-          setRowError({ file, message: r.error || 'Could not rename meeting.' })
+          flagRowError(file, r.error || 'Could not rename meeting.')
         }
       })
       .catch((e) => {
@@ -737,17 +782,24 @@ export function RecallView({
           setEditingFile(file)
           setEditingValue(title)
         }
-        setRowError({ file, message: e instanceof Error ? e.message : 'Could not rename meeting.' })
+        flagRowError(file, e instanceof Error ? e.message : 'Could not rename meeting.')
       })
       .finally(() => setRenaming(null))
-  }, [])
+  }, [clearRowError, flagRowError])
 
   // Re-runs the same list/search fetch the mount effect below uses, so a freshly imported meeting shows
-  // up immediately — mirrors how onTrash/commitEdit update `items` after their own mutation.
+  // up immediately — mirrors how onTrash/commitEdit update `items` after their own mutation. Reads the
+  // LIVE query via qRef (not a closed-over `q`) and shares fetchSeqRef's ordering guard with the debounced
+  // search effect below, so an import that finishes well after the user changed/kept typing a search can
+  // neither search on a stale click-time query nor clobber a fresher, already-displayed result.
   const refreshList = useCallback((): void => {
-    const p = q.trim() ? window.toto.recallSearch(q.trim()) : window.toto.recallList()
-    p.then(setItems).catch(() => {})
-  }, [q])
+    const query = qRef.current.trim()
+    const seq = ++fetchSeqRef.current
+    const p = query ? window.toto.recallSearch(query) : window.toto.recallList()
+    p.then((l) => {
+      if (seq === fetchSeqRef.current) setItems(l)
+    }).catch(() => {})
+  }, [])
 
   const upsertImportJob = useCallback((job: ImportJobView): void => {
     setImportJobs((jobs) => [job, ...jobs.filter((existing) => existing.jobId !== job.jobId)])
@@ -821,9 +873,13 @@ export function RecallView({
     let stale = false
     const run = (): void => {
       setLoading(true)
+      const seq = ++fetchSeqRef.current
       const p = q.trim() ? window.toto.recallSearch(q.trim()) : window.toto.recallList()
       p.then((l) => {
-        if (!stale) {
+        // fetchSeqRef guards against refreshList's post-import fetch (or another run of this same effect)
+        // resolving out of order; `stale` additionally covers this effect's own cleanup (q changed again
+        // before this particular run resolved).
+        if (!stale && seq === fetchSeqRef.current) {
           setItems(l)
           setDebouncedQ(q)
         }
@@ -858,12 +914,16 @@ export function RecallView({
       // (missing file, no default handler for .md, etc.) was a silent no-op. Surface it on the row, same
       // as a rename/delete failure.
       void window.toto.recallOpen(f).then((err) => {
-        if (err) setRowError({ file: f, message: err })
+        if (err) flagRowError(f, err)
       })
     },
-    [onOpenMeeting]
+    [onOpenMeeting, flagRowError]
   )
   const openSelected = (): void => {
+    // While a debounced search is still in flight, `items` still holds the PREVIOUS query's results —
+    // don't fall back to items[0] until it actually reflects the current query text. An explicit
+    // selectedFile (the user clicked/arrowed onto a row) is still honored regardless.
+    if (!selectedFile && q.trim() !== debouncedQ) return
     const f = selectedFile ?? items[0]?.file
     if (f) openMeeting(f)
   }
@@ -909,7 +969,12 @@ export function RecallView({
             value={q}
             onChange={(e) => setQ(e.target.value)}
             onKeyDown={(e) => {
-              if (e.key === 'Enter' && !e.nativeEvent.isComposing) openSelected()
+              // Ignore Enter while a debounced search (250ms) is still pending — q !== debouncedQ means
+              // `items` (and therefore selectedFile/items[0] below) still reflects the PREVIOUS query, so
+              // resolving "which file to open" now could open a stale-list result instead of what's
+              // actually being typed. debouncedQ is set to the exact `q` a fetch resolved for (see the
+              // search effect above), so this comparison is exact, not just "search settled".
+              if (e.key === 'Enter' && !e.nativeEvent.isComposing && q === debouncedQ) openSelected()
             }}
             placeholder="Ask or search anything"
             spellCheck={false}
@@ -959,7 +1024,7 @@ export function RecallView({
                   icon={X}
                   ariaLabel="Dismiss this summary notice"
                   onClick={() => dismissImport(job.jobId)}
-                  title="Dismiss — the transcript is already saved"
+                  title="Dismiss, the transcript is already saved"
                 />
               </>
             ) : job.state !== 'done' ? (
@@ -1019,12 +1084,12 @@ export function RecallView({
                     meeting={m}
                     isSelected={selectedFile === m.file}
                     isActive={activeFile === m.file}
-                    isDeleting={deleting === m.file}
+                    isDeleting={deletingFiles.has(m.file)}
                     isEditing={editingFile === m.file}
                     editingValue={editingFile === m.file ? editingValue : ''}
                     isRenaming={renaming === m.file}
                     isOpen={open === m.file}
-                    error={rowError?.file === m.file ? rowError.message : null}
+                    error={rowErrors[m.file] ?? null}
                     onSelect={selectFile}
                     onOpen={openMeeting}
                     onToggleConnections={toggleConnections}
@@ -1055,7 +1120,7 @@ export function RecallView({
         <div className="flex items-center gap-1.5">
           <TextButton onClick={openSelected} disabled={items.length === 0}>
             Open
-            <kbd className="rounded bg-white/[0.06] px-1 py-0.5 text-[10px] text-[color:var(--color-ink-3)]">↵</kbd>
+            <kbd className="rounded bg-white/[0.06] px-1 py-0.5 text-[10px] text-[color:var(--color-ink-3)]">{accelLabel('Return')}</kbd>
           </TextButton>
           <TextButton icon={FolderOpen} onClick={onOpenFolder}>Open folder</TextButton>
           {onIntelligence && (

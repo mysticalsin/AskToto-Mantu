@@ -50,12 +50,21 @@ export async function decodeAndResampleToMono16k(arrayBuffer: ArrayBuffer): Prom
   src.connect(mixCtx.destination)
   src.start(0)
   const rendered = await mixCtx.startRendering()
-  return rendered.getChannelData(0).slice()
+  // No defensive .slice() here: chunkAudio below now copies each ~30s window with its own slice(), so
+  // nothing downstream holds a view chained to this AudioBuffer's internal storage — an extra full-file
+  // copy here would just be one more redundant peak-memory allocation.
+  return rendered.getChannelData(0)
 }
 
 /**
  * Split mono samples into fixed-size ~30s windows (the last one shorter). Always returns at least one
  * chunk, even for empty audio (a zero-length one), so a session always gets exactly one done:true call.
+ *
+ * Uses `slice()` (a copy with its OWN backing ArrayBuffer), never `subarray()` (a view sharing the
+ * source's ArrayBuffer). Each chunk crosses an Electron IPC boundary via `importAudioTranscribe`, and
+ * structured-clone serializes a TypedArray's ENTIRE backing buffer, not just the view's range — a
+ * subarray view would re-serialize the whole multi-hundred-MB decoded recording on every one of the
+ * ~240 chunk calls a long import makes. slice() bounds each IPC payload to one ~30s window.
  */
 export function chunkAudio(
   samples: Float32Array<ArrayBuffer>,

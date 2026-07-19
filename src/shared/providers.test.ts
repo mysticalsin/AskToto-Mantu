@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { isDustReady, dustStoredAgentMissing, applyInteractiveGuardrail, parseDustUrl, PROVIDERS, dustAgentVision } from './providers'
+import { isDustReady, dustStoredAgentMissing, applyInteractiveGuardrail, parseDustUrl, detectProvider, filterAllowedProviders, PROVIDERS, dustAgentVision } from './providers'
 
 describe('dustAgentVision', () => {
   it('treats every Claude (anthropic) agent as vision-capable', () => {
@@ -122,5 +122,43 @@ describe('parseDustUrl agent-id extraction (only unambiguous agent sources)', ()
     expect(parseDustUrl('https://dust.tt/w/abc123/assistant/new').agentId).toBeUndefined()
     // Workspace/region auto-fill still works on those links.
     expect(parseDustUrl('https://dust.tt/w/abc123/assistant/8CzUOZaanQ').workspaceId).toBe('abc123')
+  })
+})
+
+describe('detectProvider', () => {
+  it('resolves an xai- key to grok (xAI)', () => {
+    expect(detectProvider('xai-abc123DEF456ghi789')).toBe('grok')
+  })
+
+  it('resolves an sk-ant- key to anthropic, beating the generic sk- guess', () => {
+    expect(detectProvider('sk-ant-abc123DEF456ghi789')).toBe('anthropic')
+  })
+
+  it('never guesses on an ambiguous bare sk- key shared by several providers', () => {
+    expect(detectProvider('sk-abc123DEF456ghi789')).toBeNull()
+  })
+
+  it('returns null for an empty or blank key', () => {
+    expect(detectProvider('')).toBeNull()
+    expect(detectProvider('   ')).toBeNull()
+  })
+})
+
+describe('filterAllowedProviders — org data-residency allowlist', () => {
+  it('returns ids unchanged when the allowlist is null/undefined (unrestricted)', () => {
+    expect(filterAllowedProviders(['anthropic', 'openai', 'grok'], null)).toEqual(['anthropic', 'openai', 'grok'])
+    expect(filterAllowedProviders(['anthropic', 'openai'], undefined)).toEqual(['anthropic', 'openai'])
+  })
+
+  it('keeps only ids present in the allowlist, preserving order', () => {
+    expect(filterAllowedProviders(['anthropic', 'openai', 'grok', 'kimi'], ['grok', 'anthropic'])).toEqual([
+      'anthropic',
+      'grok'
+    ])
+  })
+
+  it('returns empty when the allowlist excludes every candidate', () => {
+    expect(filterAllowedProviders(['anthropic', 'openai'], ['dust'])).toEqual([])
+    expect(filterAllowedProviders(['anthropic', 'openai'], [])).toEqual([])
   })
 })

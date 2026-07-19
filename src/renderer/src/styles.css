@@ -26,6 +26,10 @@
   /* Mantu brand purple (Bright Purple #7F00DA / Primary Purple #6600AE). No yellow. */
   --color-accent: #7f00da;
   --color-accent-2: #a64dff; /* brighter purple — active toolbar icons, input cursor, chevron */
+  /* Accent used as TEXT/icon on the dark glass. #7f00da is a fill color (~2.7:1) and fails WCAG AA as
+     text; this lighter purple clears the 4.5:1 body / 3:1 large-and-graphical floors on every glass tint
+     (same hue family as --color-focus, which the codebase already documents as AA-clear). */
+  --color-accent-text: #b388f0;
   --color-accent-soft: rgba(127, 0, 218, 0.18);
   --color-accent-glow: rgba(127, 0, 218, 0.30);
   --color-cyan: #22d3ee; /* Start-listening idle state — a distinct, inviting color from the muted toolbar default */
@@ -43,6 +47,9 @@
   --color-danger-soft: rgba(240, 113, 122, 0.14);
   --color-success: #83c092;
   --color-success-soft: rgba(131, 192, 146, 0.12);
+  /* Was consumed in 5 components only via an inline var(--color-warn, #fac775) fallback — the token
+     itself was never declared. One source of truth here; the inline fallbacks can now be dropped. */
+  --color-warn: #fac775;
 
   /* Glass surfaces — neutral dark gray with a faint Mantu-purple undertone (desaturated so the bar reads
      clearly over any desktop), still translucent but opaque enough to stay legible. Accents stay purple.
@@ -499,6 +506,51 @@ input::placeholder {
 }
 .fade-up {
   animation: fade-up 180ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+/* Onboarding act transition — each of the five scenes mounts keyed by its own name (see
+   OnboardingExperience.tsx), so React remounts the whole scene on every advance and this fires fresh
+   every time, unlike .fade-up alone (which only ever plays once, on the component's first mount). A
+   touch heavier than .fade-up — the extra scale + longer duration reads as one act closing before the
+   next opens, without needing an actual exit animation on the outgoing scene. */
+@keyframes scene-enter {
+  from {
+    opacity: 0;
+    transform: translateY(14px) scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+.scene-enter {
+  animation: scene-enter 420ms var(--ease-spring);
+}
+
+/* Onboarding hero — a slow breathing halo behind the Métis mark. Purple-only (no yellow, per brand),
+   restrained enough to read as "alive" rather than a loading spinner. */
+@keyframes mark-breathe {
+  0%,
+  100% {
+    opacity: 0.35;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.75;
+    transform: scale(1.12);
+  }
+}
+.mark-halo {
+  position: relative;
+}
+.mark-halo::before {
+  content: '';
+  position: absolute;
+  inset: -20px;
+  z-index: -1;
+  border-radius: 50%;
+  background: radial-gradient(circle, var(--color-accent-glow), transparent 70%);
+  animation: mark-breathe 3.2s ease-in-out infinite;
 }
 
 /* "Develops like film" — the signature first-answer moment. When the streamed answer's first content
