@@ -33,6 +33,11 @@ export interface StreamOptions {
   idleMs?: number
   /** Provider-strategy completion ceiling. Métis Local sets a small per-task bound; cloud defaults remain unchanged. */
   maxOutputTokens?: number
+  /** OpenAI-compatible reasoning control (`reasoning_effort`). Set to 'low' by default for Kimi so
+   *  kimi-for-coding stops burning tokens on hidden reasoning, and to 'high' when the user turns Métis
+   *  thinking on (thinkingMode 'always'). Only ever set for Kimi — undefined for every other provider, so
+   *  their request bodies stay byte-identical; dropped on the same param-rejection retry as stream_options. */
+  reasoningEffort?: 'low' | 'medium' | 'high'
   /**
    * Dust only: force a brand-new, uncached conversation for this request. Background jobs (brain
    * ingest) must NOT join the live meeting's cached conversation — they'd contaminate the meeting's

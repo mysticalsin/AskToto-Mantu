@@ -179,23 +179,40 @@ describe('isCmdShim / cmdShimSpawn / resolveSpawnTarget — Windows shim launch 
     expect(isCmdShim('/usr/local/bin/claude')).toBe(false)
   })
 
-  it('cmdShimSpawn routes through ComSpec/cmd.exe with /d /s /c and preserves arg order', () => {
+  it('cmdShimSpawn routes through ComSpec/cmd.exe with /d /s /c, an outer-quoted command line, and verbatim args', () => {
     const saved = process.env.ComSpec
     process.env.ComSpec = 'C:\\Windows\\System32\\cmd.exe'
     const r = cmdShimSpawn('C:\\npm\\claude.cmd', ['-p', '--model', 'sonnet'])
     expect(r).toEqual({
       command: 'C:\\Windows\\System32\\cmd.exe',
-      args: ['/d', '/s', '/c', 'C:\\npm\\claude.cmd', '-p', '--model', 'sonnet']
+      args: ['/d', '/s', '/c', '""C:\\npm\\claude.cmd" -p --model sonnet"'],
+      windowsVerbatimArguments: true
     })
     if (saved === undefined) delete process.env.ComSpec
     else process.env.ComSpec = saved
   })
 
-  it('falls back to the literal "cmd.exe" when ComSpec is unset', () => {
-    const saved = process.env.ComSpec
+  it('falls back to an absolute %SystemRoot%\\System32\\cmd.exe (never a bare name) when ComSpec is unset', () => {
+    const savedComSpec = process.env.ComSpec
+    const savedSystemRoot = process.env.SystemRoot
     delete process.env.ComSpec
-    expect(cmdShimSpawn('C:\\npm\\claude.cmd', []).command).toBe('cmd.exe')
-    if (saved !== undefined) process.env.ComSpec = saved
+    process.env.SystemRoot = 'C:\\Windows'
+    expect(cmdShimSpawn('C:\\npm\\claude.cmd', []).command).toBe('C:\\Windows\\System32\\cmd.exe')
+    if (savedComSpec !== undefined) process.env.ComSpec = savedComSpec
+    if (savedSystemRoot === undefined) delete process.env.SystemRoot
+    else process.env.SystemRoot = savedSystemRoot
+  })
+
+  it('falls back to the System32 path when ComSpec is set but not absolute (untrustworthy relative name)', () => {
+    const savedComSpec = process.env.ComSpec
+    const savedSystemRoot = process.env.SystemRoot
+    process.env.ComSpec = 'cmd.exe'
+    process.env.SystemRoot = 'C:\\Windows'
+    expect(cmdShimSpawn('C:\\npm\\claude.cmd', []).command).toBe('C:\\Windows\\System32\\cmd.exe')
+    if (savedComSpec === undefined) delete process.env.ComSpec
+    else process.env.ComSpec = savedComSpec
+    if (savedSystemRoot === undefined) delete process.env.SystemRoot
+    else process.env.SystemRoot = savedSystemRoot
   })
 
   it('rejects an arg containing a double-quote (cmd.exe argv-injection guard)', () => {
@@ -210,26 +227,60 @@ describe('isCmdShim / cmdShimSpawn / resolveSpawnTarget — Windows shim launch 
     expect(() => cmdShimSpawn('C:\\npm\\claude.cmd', ['--model', 'line1\rline2'])).toThrow()
   })
 
-  it('rejects when the bin path itself is unsafe', () => {
+  it('rejects an arg containing a cmd.exe metacharacter (&|^%<>()!)', () => {
+    expect(() => cmdShimSpawn('C:\\npm\\claude.cmd', ['--model', 'foo&bar'])).toThrow()
+    expect(() => cmdShimSpawn('C:\\npm\\claude.cmd', ['--model', 'foo|bar'])).toThrow()
+    expect(() => cmdShimSpawn('C:\\npm\\claude.cmd', ['--model', 'foo%bar%'])).toThrow()
+  })
+
+  it('succeeds when the bin path contains spaces, parens, or an ampersand — quoted, not rejected', () => {
+    // The resolved bin path is never free text (it comes from resolveBin), so a legitimate install
+    // location like "Program Files (x86)" or a "R&D" account profile must still be launchable.
+    expect(() =>
+      cmdShimSpawn('C:\\Program Files (x86)\\nodejs\\claude.cmd', ['-p'])
+    ).not.toThrow()
+    expect(() => cmdShimSpawn('C:\\Users\\R&D\\AppData\\Roaming\\npm\\claude.cmd', [])).not.toThrow()
+    const r = cmdShimSpawn('C:\\Users\\Smith (IT)\\AppData\\Roaming\\npm\\claude.cmd', ['-p'])
+    expect(r.args[3]).toBe('""C:\\Users\\Smith (IT)\\AppData\\Roaming\\npm\\claude.cmd" -p"')
+    expect(r.windowsVerbatimArguments).toBe(true)
+  })
+
+  it('rejects when the bin path itself contains a quote, newline, or %', () => {
     expect(() => cmdShimSpawn('C:\\npm\\cla"ude.cmd', [])).toThrow()
+    expect(() => cmdShimSpawn('C:\\npm\\cla\nude.cmd', [])).toThrow()
+    expect(() => cmdShimSpawn('C:\\npm\\cla%ude.cmd', [])).toThrow()
   })
 
-  it('accepts a normal, fully-vocabulary arg list untouched', () => {
+  it('accepts a normal, fully-vocabulary arg list and produces the quoted, verbatim command line', () => {
     const r = cmdShimSpawn('C:\\npm\\claude.cmd', ['-p', '--allowedTools', '', '--disallowedTools', '*'])
-    expect(r.args).toEqual(['/d', '/s', '/c', 'C:\\npm\\claude.cmd', '-p', '--allowedTools', '', '--disallowedTools', '*'])
+    expect(r.args).toEqual([
+      '/d',
+      '/s',
+      '/c',
+      '""C:\\npm\\claude.cmd" -p --allowedTools  --disallowedTools *"'
+    ])
+    expect(r.windowsVerbatimArguments).toBe(true)
   })
 
-  it('resolveSpawnTarget spawns a .exe directly (no cmd.exe wrapping)', () => {
+  it('resolveSpawnTarget spawns a .exe directly (no cmd.exe wrapping, verbatim undefined)', () => {
     expect(resolveSpawnTarget('C:\\Program Files\\codex\\codex.exe', ['exec'])).toEqual({
       command: 'C:\\Program Files\\codex\\codex.exe',
       args: ['exec']
     })
   })
 
-  it('resolveSpawnTarget spawns a .cmd through the cmd.exe shim', () => {
+  it('resolveSpawnTarget spawns a .cmd through the cmd.exe shim (pinned System32 fallback)', () => {
+    const savedComSpec = process.env.ComSpec
+    const savedSystemRoot = process.env.SystemRoot
+    delete process.env.ComSpec
+    process.env.SystemRoot = 'C:\\Windows'
     const shim = resolveSpawnTarget('C:\\npm\\claude.cmd', ['-p'])
-    expect(shim.command).toBe(process.env.ComSpec || 'cmd.exe')
-    expect(shim.args).toEqual(['/d', '/s', '/c', 'C:\\npm\\claude.cmd', '-p'])
+    expect(shim.command).toBe('C:\\Windows\\System32\\cmd.exe')
+    expect(shim.args).toEqual(['/d', '/s', '/c', '""C:\\npm\\claude.cmd" -p"'])
+    expect(shim.windowsVerbatimArguments).toBe(true)
+    if (savedComSpec !== undefined) process.env.ComSpec = savedComSpec
+    if (savedSystemRoot === undefined) delete process.env.SystemRoot
+    else process.env.SystemRoot = savedSystemRoot
   })
 
   it('resolveSpawnTarget leaves a plain unix bin untouched (mac/Linux path stays byte-identical)', () => {

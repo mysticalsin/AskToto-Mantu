@@ -17,6 +17,12 @@ describe('isQuestion — auto-answer turn detection', () => {
     expect(isQuestion('You sure?')).toBe(true)
   })
 
+  it('fires on Latin questions with typographic apostrophes/accents (ASR emits curly quotes)', () => {
+    expect(isQuestion('What’s the timeline for this')).toBe(true) // U+2019 curly apostrophe
+    expect(isQuestion('How do we handle L’Oréal’s account')).toBe(true) // curly apostrophe + accent
+    expect(isQuestion('Can you describe the naïve approach')).toBe(true) // accented Latin
+  })
+
   it('keeps stranded-preposition questions (they DO end real questions)', () => {
     expect(isQuestion('Where are you from')).toBe(true)
     expect(isQuestion('What are you looking at')).toBe(true)

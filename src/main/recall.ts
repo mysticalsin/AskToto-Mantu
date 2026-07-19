@@ -35,6 +35,47 @@ interface Read {
   text: string
 }
 
+/** A MeetingSummary stub for a REAL encrypted meeting that failed to decrypt on this device (foreign
+ *  keychain — see transcripts.ts's UNDECRYPTABLE_MSG), kept in list/search results instead of dropped,
+ *  with `locked: true` as the affordance signal. NOTE: `locked` is not yet declared on the shared
+ *  MeetingSummary type (src/shared/ipc.ts, outside this file's scope) — it still flows through at
+ *  runtime (see lockedStub/readMeetingUncached below) since it's a real own property on the object, not
+ *  a type-only annotation. A renderer that wants to show a lock icon needs a `'locked' in m` runtime
+ *  check today, or `locked?: boolean` added to MeetingSummary itself as a follow-up. */
+interface LockedMeetingSummary extends MeetingSummary {
+  locked: true
+}
+
+// Métis's own filenames are always `YYYY-MM-DD_HHMMSS-<slug>.md` (see stamp()/slug() in transcripts.ts).
+// These two patterns are the only signal left to tell a real meeting from a non-meeting file once
+// decryption has failed — its `type:` frontmatter can't be read — so lockedStub() below uses them to
+// keep genuinely non-meeting files dropped, same as the decryptable path already does via fm.type.
+const DRAFT_FILENAME = /^\.autosave-draft-/ // saveDraftTranscript's in-progress autosave — never a real meeting
+const NOTE_FILENAME = /^\d{4}-\d{2}-\d{2}_\d{6}-note-/ // saveNote always inserts this literal segment
+// Deliberately a separate copy of sweepExpiredMeetings' own FILENAME_TIMESTAMP regex further down this
+// file, rather than hoisting one shared const above both — keeps this change scoped to the read path
+// without reordering unrelated retention-sweep code.
+const STUB_FILENAME_TIMESTAMP = /^(\d{4})-(\d{2})-(\d{2})_(\d{2})(\d{2})(\d{2})-/
+
+/** Best-effort display stub for an undecryptable-but-real meeting file, so it stays visible (instead of
+ *  silently vanishing) with a lock affordance. Returns null for the one case a filename alone can still
+ *  rule out as NOT a meeting: a draft autosave or a quick note (see DRAFT_FILENAME/NOTE_FILENAME). */
+function lockedStub(file: string): LockedMeetingSummary | null {
+  if (DRAFT_FILENAME.test(file) || NOTE_FILENAME.test(file)) return null
+  const m = file.match(STUB_FILENAME_TIMESTAMP)
+  const date = m ? new Date(`${m[1]}-${m[2]}-${m[3]}T${m[4]}:${m[5]}:${m[6]}`) : null
+  const slugPart = file.replace(/\.md$/, '').replace(STUB_FILENAME_TIMESTAMP, '').replace(/-/g, ' ').trim()
+  return {
+    file,
+    title: `Locked — ${slugPart || file}`,
+    date: date && !isNaN(date.getTime()) ? date.toISOString() : '',
+    mode: 'general',
+    durationMin: 0,
+    participants: [],
+    locked: true
+  }
+}
+
 // Per-file read cache validated by (mtimeMs, size) on every use. List and search previously re-read
 // AND re-decrypted every meeting file on every call — per keystroke while searching — the one path
 // that degrades linearly as the library grows, with decryption work on the main process. A stat()
@@ -71,7 +112,15 @@ async function readMeeting(folder: string, file: string): Promise<Read | null> {
 async function readMeetingUncached(path: string, file: string): Promise<Read | null> {
   try {
     const text = decodeSaved(await readFile(path))
-    if (!text) return null
+    if (!text) {
+      // decodeSaved returns '' both for "not a meeting file" and for a REAL meeting encrypted at rest
+      // that this device's keychain can't decrypt (a different machine/user — see transcripts.ts's
+      // UNDECRYPTABLE_MSG). Only the latter should still show up, as a locked stub, so it never just
+      // vanishes; a file that isn't one of Métis's encrypted saves at all stays dropped.
+      if (!isEncryptedFile(path)) return null
+      const stub = lockedStub(file)
+      return stub ? { text: '', sum: stub } : null
+    }
     const fm = frontmatter(text)
     if (fm.type && fm.type !== 'meeting-transcript') return null
     const topics = (fm.topics || '').split(',').map((s) => s.trim()).filter(Boolean)

@@ -6,6 +6,8 @@ import { homedir } from 'node:os'
 import { randomBytes, createCipheriv, createDecipheriv, publicEncrypt, constants } from 'node:crypto'
 import type { SaveMeeting, SaveNote, Settings, RecapExport, TranscriptLine } from '@shared/ipc'
 import { encryptSecret, decryptSecret, useFileBackend } from './secrets'
+import { readTrustedAdminManaged, lockPathToCurrentUserWin32 } from './win-security'
+import { mainLog, auditLog } from './logger'
 
 // Optional at-rest encryption for transcripts/notes. Two on-disk formats share one fixed-length
 // `ATKENC<n>\n` magic prefix so detection stays a simple prefix check:
@@ -27,13 +29,10 @@ type EnvelopeV2 = {
   kEscrow?: string // base64, RSA-OAEP(content key) under the org escrow public key — written, never read here
 }
 
-/** Machine-wide org-policy managed-config location IT can deploy (mirrors auth.ts / store.ts). */
-function adminManagedConfigPath(): string {
-  if (process.platform === 'darwin') return '/Library/Application Support/Métis/managed-config.json'
-  if (process.platform === 'win32')
-    return join(process.env.ProgramData || 'C:\\ProgramData', 'Métis', 'managed-config.json')
-  return '/etc/asktoto/managed-config.json'
-}
+// The machine-wide managed-config path + its win32 admin-trust gate live in win-security.ts. This
+// matters most here: a forged, user-writable %ProgramData%\Métis\managed-config.json could set
+// `escrowPubKey` to an attacker key and silently escrow every future transcript to them. The trust gate
+// (admin-owned + no Users-write ACE) blocks that on Windows; root-owned dirs enforce it on macOS/Linux.
 
 /** Resolve a configured value to a PEM public key: inline PEM, a file path to one, or base64-wrapped PEM. */
 function resolveEscrowPem(raw: string | null | undefined): string | null {
@@ -57,10 +56,10 @@ function resolveEscrowPem(raw: string | null | undefined): string | null {
   return null
 }
 
-/** Raw-read an `escrowPubKey` string from a managed-config.json (escrow isn't a Settings schema key). */
-function readEscrowFromManaged(p: string): string | null {
+/** Raw-parse an `escrowPubKey` string out of managed-config.json text (escrow isn't a Settings schema key). */
+function escrowFromManagedContent(raw: string): string | null {
   try {
-    const obj = JSON.parse(readFileSync(p, 'utf8'))
+    const obj = JSON.parse(raw)
     return typeof obj?.escrowPubKey === 'string' ? obj.escrowPubKey : null
   } catch {
     return null
@@ -69,21 +68,24 @@ function readEscrowFromManaged(p: string): string | null {
 
 /**
  * Org escrow public key (PEM), if configured. Precedence: env ASKTOTO_ESCROW_PUBKEY (dev) → machine-wide
- * managed-config (IT policy) → per-user managed-config. Returns null when unset/unusable, so encryption
- * silently falls back to local-only (no regression). Never throws; never logs key material.
+ * ADMIN-TRUSTED managed-config (IT policy) ONLY. Returns null when unset/unusable, so encryption silently
+ * falls back to local-only (no regression). Never throws; never logs key material.
+ *
+ * SECURITY: escrow decides WHO can decrypt every future transcript, so it must never be honored from a
+ * user-writable source. The per-user `userData/managed-config.json` is writable by the current user (and
+ * anything running as them), so a planted `escrowPubKey` there would silently wrap every transcript to an
+ * attacker key (readable off OneDrive). Escrow is therefore admin-machine-path-only (ACL-gated by
+ * trustedAdminManagedPath) or env (dev) — the per-user tier is deliberately NOT consulted here.
  */
 function readEscrowPubKey(): string | null {
   const fromEnv = resolveEscrowPem(process.env.ASKTOTO_ESCROW_PUBKEY)
   if (fromEnv) return fromEnv
   try {
-    const machine = resolveEscrowPem(readEscrowFromManaged(adminManagedConfigPath()))
+    // readTrustedAdminManaged() is null on win32 unless admin-owned + not user-writable, and reads
+    // through the same held fd that verified that trust (closes the check-path/read-path TOCTOU).
+    const admin = readTrustedAdminManaged()
+    const machine = admin ? resolveEscrowPem(escrowFromManagedContent(admin)) : null
     if (machine) return machine
-  } catch {
-    /* ignore */
-  }
-  try {
-    const user = resolveEscrowPem(readEscrowFromManaged(join(app.getPath('userData'), 'managed-config.json')))
-    if (user) return user
   } catch {
     /* ignore */
   }
@@ -137,7 +139,10 @@ function encryptEnvelopeV2(content: string): Buffer {
       env.kEscrow = kEscrow.toString('base64')
     } catch {
       // A malformed escrow key must not break saving (no regression): write local-only. Never log key material.
-      console.warn('Métis: escrow public key configured but unusable; wrote transcript without escrow wrap')
+      // mainLog (not console.warn) so this is visible in packaged builds' rotated log file, plus a
+      // metadata-only audit record (no secrets/PII) so an admin relying on escrow recovery can see the gap.
+      mainLog.warn('Métis: escrow public key configured but unusable; wrote transcript without escrow wrap')
+      auditLog('transcript.saved', { escrowFailed: true })
     }
   }
   return Buffer.concat([ENC_MARKER_V2, Buffer.from(JSON.stringify(env), 'utf8')])
@@ -265,8 +270,10 @@ export async function writeSaved(file: string, content: string, encrypt: boolean
 const decryptedTemps = new Set<string>()
 let tempCleanupHooked = false
 
-/** Decrypt an encrypted transcript to a temp plaintext file so it can be opened in an editor.
- *  Owner-only (0o600), randomized name, and unlinked on app quit. */
+/** Decrypt an encrypted transcript to a temp plaintext file so it can be opened in an editor. The file
+ *  lives under the per-user temp dir (user-scoped ACL), has a randomized name, and is unlinked on app
+ *  quit. Confidentiality: POSIX `mode: 0o600` on the write below (owner-only on macOS/Linux) is a no-op
+ *  on Windows, so on win32 we additionally apply an explicit owner-only DACL via lockPathToCurrentUserWin32. */
 export function decryptToTemp(path: string): string {
   // Read + decrypt defensively: a foreign-keychain file yields the notice instead of throwing and
   // leaving the user with a dead "Open" click.
@@ -281,6 +288,7 @@ export function decryptToTemp(path: string): string {
     `asktoto-${randomBytes(6).toString('hex')}-${basename(path).replace(/\.md$/, '')}.md`
   )
   writeFileSync(tmp, content, { encoding: 'utf8', mode: 0o600 })
+  lockPathToCurrentUserWin32(tmp) // mode bits are ignored on Windows; enforce owner-only via DACL
   decryptedTemps.add(tmp)
   if (!tempCleanupHooked) {
     tempCleanupHooked = true
@@ -436,6 +444,15 @@ function stamp(ms: number): string {
   const d = new Date(ms)
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}_${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`
 }
+/** Non-reversible filename segment used in place of the title slug when encryptTranscripts is on — the
+ *  file CONTENTS are already encrypted, but a readable `-${slug(title)}` in the filename itself leaks the
+ *  plaintext title at rest (e.g. via a OneDrive-synced folder listing). A random token carries no
+ *  relationship to the title (unlike a hash, which a small guessable title space could dictionary-attack).
+ *  Keeps the `stamp(started)-` prefix untouched so recall.ts's STUB_FILENAME_TIMESTAMP/NOTE_FILENAME
+ *  regexes (timestamp-prefix only) still recognize the file as a real meeting/note. */
+function opaqueNamePart(): string {
+  return randomBytes(6).toString('hex')
+}
 const cleanTitle = (s: string): string => {
   // Collapse whitespace, strip control/newline chars, limit length for YAML/frontmatter safety.
   return (s || '')
@@ -487,9 +504,11 @@ export async function saveNote(settings: Settings, n: SaveNote): Promise<string>
   const folder = ensureMeetingsFolder(settings)
   const started = Date.now()
   const title = cleanTitle(n.title || n.question || 'Note') || 'Note'
-  let file = join(folder, `${stamp(started)}-note-${slug(title)}.md`)
+  // Encrypted at rest → the filename must not leak the plaintext title either (see opaqueNamePart above).
+  const namePart = settings.encryptTranscripts ? opaqueNamePart() : slug(title)
+  let file = join(folder, `${stamp(started)}-note-${namePart}.md`)
   for (let i = 2; existsSync(file); i++) {
-    file = join(folder, `${stamp(started)}-note-${slug(title)}-${i}.md`)
+    file = join(folder, `${stamp(started)}-note-${namePart}-${i}.md`)
   }
   const frontmatter = [
     '---',
@@ -536,9 +555,11 @@ export async function saveMeeting(settings: Settings, m: SaveMeeting): Promise<s
   const title = cleanTitle(recapParsed?.title24 || '') || heuristicTitle
   const tags = recapParsed?.tags || []
 
-  let file = join(folder, `${stamp(started)}-${slug(title)}.md`)
+  // Encrypted at rest → the filename must not leak the plaintext title either (see opaqueNamePart above).
+  const namePart = settings.encryptTranscripts ? opaqueNamePart() : slug(title)
+  let file = join(folder, `${stamp(started)}-${namePart}.md`)
   for (let n = 2; existsSync(file); n++) {
-    file = join(folder, `${stamp(started)}-${slug(title)}-${n}.md`)
+    file = join(folder, `${stamp(started)}-${namePart}-${n}.md`)
   }
 
   const last = m.lines.length ? m.lines[m.lines.length - 1].t : started
@@ -644,7 +665,12 @@ export async function appendDebrief(
       updated = md.slice(0, start) + section + (next >= 0 ? md.slice(next + 1) : '')
     }
   }
-  await writeSaved(path, updated, settings.encryptTranscripts)
+  // Preserve the file's ORIGINAL at-rest encryption exactly as found (mirrors updateMeetingRecap /
+  // renameMeeting), NOT the live encryptTranscripts toggle. Otherwise appending a debrief to a file
+  // that was saved while encryption was on would rewrite the whole transcript as plaintext once the
+  // toggle is later turned off — a silent at-rest downgrade of already-recorded third-party speech.
+  const wasEncrypted = isEncryptedFile(path)
+  await writeSaved(path, updated, wasEncrypted)
   return { ok: true }
 }
 
@@ -677,7 +703,13 @@ export async function saveDraftTranscript(settings: Settings, m: SaveMeeting): P
     const started = m.startedAt || Date.now()
     const file = join(folder, draftFilename(started))
     const title = cleanTitle(m.title) || `${m.mode} meeting`
-    const transcript = formatTranscript(m.lines)
+const transcript = formatTranscript(m.lines)
+    // Same duration_min/participants calc as saveMeeting above — without these, a draft promoted by
+    // recoverOrphanDrafts (which only swaps the type:/status: lines, never adds fields) reads back with
+    // durationMin 0 and an empty participants list forever, silently losing that badge on recovery.
+    const last = m.lines.length ? m.lines[m.lines.length - 1].t : started
+    const durMin = m.lines.length ? Math.max(1, Math.round((last - started) / 60000)) : 0
+    const participants = Array.from(new Set(m.lines.map((l) => speakerLabel(l.speaker))))
     const frontmatter = [
       '---',
       'type: meeting-transcript-draft',
@@ -685,6 +717,8 @@ export async function saveDraftTranscript(settings: Settings, m: SaveMeeting): P
       `mode: "${yamlSafeTitle(cleanTitle(m.mode))}"`,
       `date: ${new Date(started).toISOString()}`,
       `title: "${yamlSafeTitle(title)}"`,
+      `participants: [${participants.join(', ')}]`,
+      `duration_min: ${durMin}`,
       'status: interrupted',
       '---',
       ''

@@ -21,16 +21,16 @@ describe('provenanceChipLabel', () => {
 
   it('extracted with a quote cites the quote and the source meeting', () => {
     expect(provenanceChipLabel(field('extracted', 'we need this by Q3', 'call-1.md'))).toBe(
-      'extracted — "we need this by Q3" — call-1.md'
+      'extracted: "we need this by Q3" (call-1.md)'
     )
   })
 
   it('extracted with no quote still cites the source meeting', () => {
-    expect(provenanceChipLabel(field('extracted', undefined, 'call-1.md'))).toBe('extracted — call-1.md')
+    expect(provenanceChipLabel(field('extracted', undefined, 'call-1.md'))).toBe('extracted (call-1.md)')
   })
 
   it('extracted with no source_file falls back to "unknown meeting"', () => {
-    expect(provenanceChipLabel(field('extracted', undefined, ''))).toBe('extracted — unknown meeting')
+    expect(provenanceChipLabel(field('extracted', undefined, ''))).toBe('extracted (unknown meeting)')
   })
 
   it('verified state renders as "verified"', () => {
@@ -59,7 +59,7 @@ describe('moneyFieldMode — the money-card invariant: the unverified case must 
   it('extracted (unverified) field renders the pin-to-confirm message, never the raw number', () => {
     const mode = moneyFieldMode({ state: 'extracted', value: { value: 250_000, currency: 'EUR' } }, fmt)
     expect(mode.kind).toBe('unverified')
-    expect(mode.text).toBe('Stated but unverified — pin to confirm')
+    expect(mode.text).toBe('Stated but unverified, pin to confirm')
     expect(mode.text).not.toMatch(/\d/)
     expect(mode.text).not.toContain('250')
   })

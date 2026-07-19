@@ -1,6 +1,6 @@
-import { isScreenCapturePermissionError } from '@shared/screen-capture'
+import { isScreenCapturePermissionError, needsAppRelaunchForScreenCapture } from '@shared/screen-capture'
 
-export { isScreenCapturePermissionError }
+export { isScreenCapturePermissionError, needsAppRelaunchForScreenCapture }
 
 /**
  * Shared screen-source recovery for visual screen asks and macOS system-audio loopback.
@@ -73,9 +73,9 @@ export function createKeyedSingleFlight<Key, Value>(
 /** User-facing recovery copy that only names macOS TCC when that is actually the platform in use. */
 export function screenCaptureUnavailableMessage(platform: NodeJS.Platform | string, accessStatus: string): string {
   if (platform === 'darwin' && accessStatus !== 'granted') {
-    return 'Screen Recording permission is off for Métis. Enable it in System Settings → Privacy & Security → Screen Recording, then quit and reopen Métis.'
+    return 'Screen Recording permission is off for Métis. Enable it in System Settings → Privacy & Security → Screen Recording, then restart Métis.'
   }
   return platform === 'darwin'
-    ? 'No screen source available. If you granted Screen Recording just now, quit and reopen Métis — macOS only applies the permission to a fresh launch.'
+    ? 'No screen source available. If you granted Screen Recording just now, restart Métis to finish enabling it: macOS only applies a fresh grant to the next launch.'
     : 'No screen source available. Check your system’s screen-capture permissions for Métis, then try again.'
 }

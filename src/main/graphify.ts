@@ -4,7 +4,7 @@ import { promisify } from 'node:util'
 import { readFileSync, readdirSync, existsSync, statSync, rmSync } from 'node:fs'
 import { join, basename, delimiter } from 'node:path'
 import { homedir } from 'node:os'
-import { getSettings, getApiKey, hasApiKey } from './store'
+import { getSettings, getApiKey, hasApiKey, getAllowedProviders } from './store'
 import { resolveMeetingsFolder } from './transcripts'
 import { readConfidentialMeetings } from './brain/publish'
 import type { GraphStatus, GraphRelated, Settings } from '@shared/ipc'
@@ -24,8 +24,10 @@ const exec = promisify(execFile)
 // macOS/Linux GUI apps launch with a minimal PATH (no ~/.local/bin). Augment it so `graphify`, the
 // resolved python, and `claude` (for the claude-cli backend) are findable in packaged builds too.
 const IS_WIN = process.platform === 'win32'
-/** `where` on Windows, `which` on macOS/Linux. */
-const locateCmd = (): string => (IS_WIN ? 'where' : 'which')
+/** `where` on Windows (absolute %SystemRoot%\System32 path so a planted `where.exe` in the cwd can't be
+ *  hijacked — consistent with cli.ts/bootstrap.ts/notebooklm.ts), `which` on macOS/Linux. */
+const locateCmd = (): string =>
+  IS_WIN ? join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'where.exe') : 'which'
 
 /** The python.org per-user Windows installer never places python.exe directly in
  *  %LOCALAPPDATA%\Programs\Python — only in a version-numbered subfolder underneath it (e.g.
@@ -179,12 +181,16 @@ async function hasClaudeCli(): Promise<boolean> {
 async function pickBackend(): Promise<{ backend: string; apiKey?: string } | null> {
   const s = getSettings()
   const pref = s.graphifyBackend
-  if (pref === 'claude' && hasApiKey('anthropic')) return { backend: 'claude', apiKey: getApiKey('anthropic') }
-  if (pref === 'openai' && hasApiKey('openai')) return { backend: 'openai', apiKey: getApiKey('openai') }
+  // Honor the org allowedProviders policy: graphify streams the full transcript to its backend, so a
+  // pinned data-residency policy must gate the backend choice the same way the interactive ask path does.
+  const allowed = getAllowedProviders()
+  const ok = (pid: string): boolean => !allowed || allowed.includes(pid)
+  if (pref === 'claude' && hasApiKey('anthropic') && ok('anthropic')) return { backend: 'claude', apiKey: getApiKey('anthropic') }
+  if (pref === 'openai' && hasApiKey('openai') && ok('openai')) return { backend: 'openai', apiKey: getApiKey('openai') }
   // auto: local Claude Code → stored Claude key → stored OpenAI key
-  if (await hasClaudeCli()) return { backend: 'claude-cli' }
-  if (hasApiKey('anthropic')) return { backend: 'claude', apiKey: getApiKey('anthropic') }
-  if (hasApiKey('openai')) return { backend: 'openai', apiKey: getApiKey('openai') }
+  if (ok('claude-cli') && (await hasClaudeCli())) return { backend: 'claude-cli' }
+  if (hasApiKey('anthropic') && ok('anthropic')) return { backend: 'claude', apiKey: getApiKey('anthropic') }
+  if (hasApiKey('openai') && ok('openai')) return { backend: 'openai', apiKey: getApiKey('openai') }
   return null
 }
 

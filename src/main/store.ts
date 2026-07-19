@@ -19,7 +19,7 @@ import {
   type Settings,
   type DustAgentsResponse
 } from '@shared/ipc'
-import { PROVIDERS, PROVIDER_IDS, dustAgentVision, type ProviderId } from '@shared/providers'
+import { PROVIDERS, PROVIDER_IDS, dustAgentVision, resolveModel, type ProviderId } from '@shared/providers'
 import { mainLog } from './logger'
 import { caheEditionPolicy, isCaheEdition } from './cahe-edition'
 import {
@@ -30,6 +30,7 @@ import {
   resetSecretKeyCache,
   useFileBackend
 } from './secrets'
+import { adminManagedConfigPath, readTrustedAdminManaged } from './win-security'
 // Static (eager) imports — dynamic import() throws under the bytecode-compiled main (electron-vite
 // bytecodePlugin). These SDKs are already eager-loaded by the streaming modules (llm/anthropic|dust|openai),
 // so this adds no startup cost; it just makes the key-test + Dust-agent-list paths bytecode-safe.
@@ -70,7 +71,7 @@ const ENV_VAR: Record<ProviderId, string> = {
   deepseek: 'DEEPSEEK_API_KEY',
   qwen: 'DASHSCOPE_API_KEY',
   minimax: 'MINIMAX_API_KEY',
-  kimi: 'MOONSHOT_API_KEY',
+  kimi: 'KIMI_API_KEY',
   openrouter: 'OPENROUTER_API_KEY',
   groq: 'GROQ_API_KEY',
   mistral: 'MISTRAL_API_KEY',
@@ -103,9 +104,9 @@ function validKeysOnly(obj: Record<string, unknown>): Record<string, unknown> {
   return out
 }
 
-function readManagedFrom(p: string): Record<string, unknown> {
+function parseManagedContent(raw: string): Record<string, unknown> {
   try {
-    const obj = JSON.parse(readFileSync(p, 'utf8'))
+    const obj = JSON.parse(raw)
     const clean: Record<string, unknown> = {}
     for (const [k, v] of Object.entries(obj)) if (!k.startsWith('_')) clean[k] = v
     return validKeysOnly(clean) // drop malformed keys so a typo can't brick the app
@@ -114,44 +115,71 @@ function readManagedFrom(p: string): Record<string, unknown> {
   }
 }
 
-function readLockedFrom(p: string): string[] {
+function readManagedFrom(p: string): Record<string, unknown> {
   try {
-    const obj = JSON.parse(readFileSync(p, 'utf8'))
-    const arr: unknown[] = Array.isArray(obj.locked) ? obj.locked : []
+    return parseManagedContent(readFileSync(p, 'utf8'))
+  } catch {
+    return {}
+  }
+}
+
+function parseLockedContent(raw: string): string[] {
+  try {
+    const obj = JSON.parse(raw)
+    // Canonical key is `locked`; `lockedKeys` is accepted too — the enterprise doc (docs/asktoto-
+    // architecture.md) previously told IT admins to use `lockedKeys`, and an admin config written
+    // against that name must still lock fields instead of silently locking nothing.
+    const raw2 = obj.locked ?? obj.lockedKeys
+    const arr: unknown[] = Array.isArray(raw2) ? raw2 : []
     return [...new Set(arr.filter((k): k is string => typeof k === 'string'))]
   } catch {
     return []
   }
 }
 
-/** Read the `allowedProviders` policy array straight from a raw managed-config file. It is NOT a settings
- *  key, so it must be read here rather than via validatedManaged() (which drops non-schema keys). */
-function readAllowedFrom(p: string): string[] | null {
+function readLockedFrom(p: string): string[] {
   try {
-    const obj = JSON.parse(readFileSync(p, 'utf8'))
-    const raw = obj?.allowedProviders
+    return parseLockedContent(readFileSync(p, 'utf8'))
+  } catch {
+    return []
+  }
+}
+
+/** Read the `allowedProviders` policy array out of raw managed-config JSON text. It is NOT a settings
+ *  key, so it must be parsed here rather than via validatedManaged() (which drops non-schema keys). */
+function parseAllowedContent(raw: string): string[] | null {
+  try {
+    const obj = JSON.parse(raw)
+    const list = obj?.allowedProviders
     // An explicit empty array is a real deny-all policy, not "no policy" — only an absent/non-array
     // key means null (no restriction). Collapsing the two let `"allowedProviders": []` fail open.
-    if (!Array.isArray(raw)) return null
-    return [...new Set(raw.filter((x): x is string => typeof x === 'string'))]
+    if (!Array.isArray(list)) return null
+    return [...new Set(list.filter((x): x is string => typeof x === 'string'))]
   } catch {
     return null
   }
 }
 
-/** Machine-wide org-policy location IT can deploy (admin-only write). */
-function adminManagedPath(): string {
-  if (process.platform === 'darwin') return '/Library/Application Support/Métis/managed-config.json'
-  if (process.platform === 'win32')
-    return join(process.env.ProgramData || 'C:\\ProgramData', 'Métis', 'managed-config.json')
-  return '/etc/asktoto/managed-config.json'
+function readAllowedFrom(p: string): string[] | null {
+  try {
+    return parseAllowedContent(readFileSync(p, 'utf8'))
+  } catch {
+    return null
+  }
 }
+
+// The machine-wide org-policy path lives in win-security.ts (single source of truth). On Windows it is
+// only honored when admin-owned + not user-writable, and readTrustedAdminManaged() reads its content
+// through the SAME held fd that verified that trust (closes the check-path/read-path TOCTOU a plain
+// `trustedAdminManagedPath() ? readFileSync(path) : ...` pattern would reopen). On macOS/Linux the
+// root-owned parent dir already enforces the trust boundary, so it's a plain read there.
 
 /** Enterprise managed defaults: per-user (userData) overlaid by machine-wide admin policy. Validated. */
 export function validatedManaged(): Record<string, unknown> {
+  const admin = readTrustedAdminManaged()
   return {
     ...readManagedFrom(join(dir(), 'managed-config.json')),
-    ...readManagedFrom(adminManagedPath()), // machine policy wins over the per-user file
+    ...(admin ? parseManagedContent(admin) : {}), // machine policy wins over the per-user file (win32: only if admin-trusted)
     ...caheEditionPolicy().managedDefaults
   }
 }
@@ -159,7 +187,8 @@ export function validatedManaged(): Record<string, unknown> {
 /** Keys that IT has locked; user edits to these are silently dropped. */
 export function getLockedKeys(): string[] {
   const user = readLockedFrom(join(dir(), 'managed-config.json'))
-  const machine = readLockedFrom(adminManagedPath())
+  const admin = readTrustedAdminManaged()
+  const machine = admin ? parseLockedContent(admin) : []
   return [...new Set([...user, ...machine, ...caheEditionPolicy().lockedKeys])]
 }
 
@@ -171,7 +200,8 @@ export function getLockedKeys(): string[] {
 export function getAllowedProviders(): string[] | null {
   // Machine (admin) policy wins over the per-user managed file, mirroring validatedManaged() precedence.
   // Read from the raw JSON because `allowedProviders` is a policy key, not a settings-schema key.
-  const configured = readAllowedFrom(adminManagedPath()) ?? readAllowedFrom(join(dir(), 'managed-config.json'))
+  const admin = readTrustedAdminManaged()
+  const configured = (admin ? parseAllowedContent(admin) : null) ?? readAllowedFrom(join(dir(), 'managed-config.json'))
   const edition = caheEditionPolicy().allowedProviders
   if (!edition) return configured
   // Cahê narrows the package surface to Kimi and Dust. An IT allowlist is still authoritative: intersect
@@ -387,7 +417,7 @@ function currentSettingsMtimes(): Pick<SettingsCache, 'userMtime' | 'managedMtim
   return {
     userMtime: safeMtime(settingsPath()),
     managedMtime: safeMtime(join(dir(), 'managed-config.json')),
-    adminMtime: safeMtime(adminManagedPath()),
+    adminMtime: safeMtime(adminManagedConfigPath()),
     caheEdition: isCaheEdition()
   }
 }
@@ -436,12 +466,25 @@ export function getSettings(): Settings {
   if (whole.success) {
     value = whole.data
   } else {
-    // Tolerant migration: base is already valid; keep only the user keys that still validate, then
-    // repair the one cross-field invariant (provider:'custom' needs an https customBaseUrl) so a stale
-    // settings.json can NEVER make getSettings throw and brick every IPC handler that reads it.
+    // Tolerant migration: base is already valid; keep only the user keys that still validate. This can
+    // still fail SettingsSchema's one cross-field refine — provider:'custom' needs an https customBaseUrl
+    // — even though every individual field validates fine on its own. That's a normal, expected
+    // mid-configuration state (user just picked "Custom" and hasn't pasted a base URL yet), not
+    // corruption, so don't punish it by reverting the provider back to Anthropic on every single
+    // getSettings() call (that made Custom impossible to ever configure through the UI — the base-URL
+    // input never got a chance to render before the provider bounced back). Keep provider:'custom' as a
+    // valid-but-not-ready settings object instead: the readiness gate in index.ts/providerReady already
+    // blocks answering until an https customBaseUrl actually exists. Only fall back to full defaults when
+    // the merged settings don't even validate field-by-field — a genuinely stale/hand-edited
+    // settings.json — so getSettings can still never throw/brick the app.
     const merged: Record<string, unknown> = { ...base, ...validKeysOnly(raw) }
-    if (merged.provider === 'custom' && !/^https:\/\//i.test(String(merged.customBaseUrl ?? ''))) {
-      // Reset to a provider-INDEPENDENT safe default — base.provider can itself be the invalid 'custom'
+    // Only reset `provider` when the provider value itself doesn't validate against the schema's
+    // enum — never merely because customBaseUrl is empty/not-yet-https. A user who just picked
+    // Custom (customBaseUrl: '') has a perfectly valid provider choice; clobbering it here reverts
+    // the UI silently back to the default provider before they ever get to type a base URL.
+    const providerCheck = shape().provider.safeParse(merged.provider)
+    if (!providerCheck.success) {
+      // Reset to a provider-INDEPENDENT safe default — base.provider can itself be the invalid value
       // (e.g. from managed-config), which would make the repair a no-op and getSettings throw org-wide.
       merged.provider = DEFAULT_SETTINGS.provider
     }
@@ -684,15 +727,22 @@ export async function testApiKey(provider: ProviderId, key: string): Promise<Tes
       if (provider === 'custom' && !baseURL) {
         return { ok: false, error: 'Custom provider requires a base URL in Advanced settings.' }
       }
-      // Custom has no built-in model — use the user's chosen model id, or the test is meaningless.
-      const model = def.fastModel || def.defaultModel || settings.providerModels[provider] || ''
+      // Precedence must match the real ask flow (resolveModelTier / resolveModel in providers.ts): a
+      // user's Advanced Base-model override wins over the built-in fastModel, so Test never reports
+      // "valid" on a model the app won't actually use. Custom has no built-in model at all — for it,
+      // this resolves to the user's chosen model id, or '' (the test is meaningless without one).
+      const model = resolveModel(provider, settings.providerModels, true)
       if (!model) {
         return { ok: false, error: 'Set a model id in Advanced first, then test.' }
       }
       const client = new OpenAI({ apiKey: trimmed, baseURL: baseURL || undefined })
+      // OpenAI o-series reasoning models (o1/o3/o4…) reject `max_tokens` — they require
+      // `max_completion_tokens` instead. Mirrors the isOSeries branch in llm/openai.ts's real
+      // streaming path so Test doesn't 400 on a valid key just because the resolved model is o-series.
+      const isOSeries = /(^|\/)o\d/i.test(model)
       await client.chat.completions.create({
         model,
-        max_tokens: 1,
+        ...(isOSeries ? { max_completion_tokens: 1 } : { max_tokens: 1 }),
         messages: [{ role: 'user', content: 'hi' }]
       })
     }

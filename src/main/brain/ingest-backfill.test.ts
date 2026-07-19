@@ -33,9 +33,9 @@ describe('startBackfill with no configured provider', () => {
     // the on-disk key — a real ANTHROPIC_API_KEY etc. in the test runner's shell would silently make a
     // provider resolve and defeat the whole point of this test. Clear every provider's env var.
     for (const p of PROVIDER_IDS) {
-      const envVar = { anthropic: 'ANTHROPIC_API_KEY', openai: 'OPENAI_API_KEY', nvidia: 'NVIDIA_API_KEY',
+      const envVar = { anthropic: 'ANTHROPIC_API_KEY', openai: 'OPENAI_API_KEY', grok: 'XAI_API_KEY', nvidia: 'NVIDIA_API_KEY',
         deepseek: 'DEEPSEEK_API_KEY', qwen: 'DASHSCOPE_API_KEY', minimax: 'MINIMAX_API_KEY',
-        kimi: 'MOONSHOT_API_KEY', openrouter: 'OPENROUTER_API_KEY', groq: 'GROQ_API_KEY',
+        kimi: 'KIMI_API_KEY', openrouter: 'OPENROUTER_API_KEY', groq: 'GROQ_API_KEY',
         together: 'TOGETHER_API_KEY', fireworks: 'FIREWORKS_API_KEY', mistral: 'MISTRAL_API_KEY',
         dust: 'DUST_API_KEY', 'claude-cli': '', 'codex-cli': '', gemini: 'GEMINI_API_KEY',
         custom: 'ASKTOTO_CUSTOM_API_KEY' }[p]
@@ -48,8 +48,10 @@ describe('startBackfill with no configured provider', () => {
   })
 
   afterEach(() => {
-    rmSync(userData, { recursive: true, force: true })
-    rmSync(meetingsFolder, { recursive: true, force: true })
+    // maxRetries: a background reconcile timer can still be writing into .brain when teardown fires,
+    // making a bare rmSync race it to ENOTEMPTY under full-suite parallelism (flaked ~1/full-run).
+    rmSync(userData, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
+    rmSync(meetingsFolder, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
     vi.unstubAllEnvs()
     vi.restoreAllMocks()
   })

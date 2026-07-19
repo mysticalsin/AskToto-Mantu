@@ -44,6 +44,8 @@ export type AuditEvent =
   | 'auth.expired'
   | 'auth.refresh_failed'
   | 'auth.denied'
+  | 'auth.state_mismatch'
+  | 'auth.signin_failed'
   | 'dust.token.refreshed'
   | 'dust.setup.timeout'
   | 'key.set'
@@ -104,13 +106,29 @@ export type AuditEvent =
   | 'screen.preprocess.describe'
   | 'cahe.localai.seeded'
 
+// Lazy actor resolver — set once by the main process (wired to authStatus().email) so every audit
+// record can carry the signed-in identity without logger.ts importing auth.ts (which would be
+// circular: auth.ts already imports mainLog/auditLog from here).
+let actorResolver: (() => string | undefined) | null = null
+
+/** Register how to resolve the current actor's identity for audit records. Call once at startup. */
+export function setAuditActor(fn: () => string | undefined): void {
+  actorResolver = fn
+}
+
 /**
  * Append a structured audit record. NEVER pass secrets or message/transcript CONTENT — metadata only
  * (provider id, mode, outcome, byte counts, domain, event type). Best-effort; never throws.
  */
 export function auditLog(event: AuditEvent, detail: Record<string, unknown> = {}): void {
   try {
-    audit.info(JSON.stringify({ ts: new Date().toISOString(), event, ...detail }))
+    let actor: string | undefined
+    try {
+      actor = actorResolver?.()
+    } catch {
+      /* a broken resolver must never block the audit write */
+    }
+    audit.info(JSON.stringify({ ts: new Date().toISOString(), event, ...(actor ? { actor } : {}), ...detail }))
   } catch {
     /* never let auditing break the app */
   }

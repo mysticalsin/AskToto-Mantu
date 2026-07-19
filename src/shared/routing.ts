@@ -13,6 +13,14 @@ export type ThinkingMode = 'auto' | 'always' | 'never'
 /** Ask modes the router cares about (AskMode: 'answer' is the normal chat turn). */
 export type RoutableMode = 'answer' | 'vision' | 'suggest' | 'summary' | 'recap' | string
 
+// The renderer's own prompt-builders (withContext/buildWhatNextPrompt/buildExplainPrompt/
+// buildSpotlightRefPrompt in shared/quick-actions.ts + App.tsx) all wrap INJECTED grounding material —
+// the live meeting transcript or on-screen text, up to ~3000 chars — in a `"""..."""` fence. That
+// convention is specific to this app (a bare human question essentially never contains literal `"""`),
+// so stripping it before measuring length lets the length heuristic judge the user's own question
+// instead of whatever context was bolted on for grounding.
+const stripInjectedContext = (t: string): string => t.replace(/"""[\s\S]*?"""/g, ' ').trim()
+
 /**
  * Heuristic: is this a DEEP question — coding / engineering / formal math / explicit "think deeply"?
  * These go to the deepest model (Opus). Deterministic and zero-latency — no extra model call.
@@ -21,11 +29,18 @@ export type RoutableMode = 'answer' | 'vision' | 'suggest' | 'summary' | 'recap'
 export function isHardQuestion(text: string): boolean {
   const t = (text || '').trim()
   if (!t) return false
+  // Strip injected context ONCE, up front, and judge every check below — fenced-code, length,
+  // technical/math regexes, "think harder" cues — against the user's own question only (see
+  // stripInjectedContext above). Else an injected transcript/screen-context block riding along with an
+  // ordinary quick action can itself contain backticks, jargon, or "walk me through" phrasing and get a
+  // trivial question silently forced to the deep/Opus tier regardless of how simple it actually is.
+  const stripped = stripInjectedContext(t)
   // Any fenced code block, or a long multi-part prompt → treat as complex.
-  if (/```/.test(t)) return true
-  if (t.length > 600) return true
+  if (/```/.test(stripped)) return true
+  // Length alone escalates to the expensive deep/Opus tier.
+  if (stripped.length > 600) return true
 
-  const lower = t.toLowerCase()
+  const lower = stripped.toLowerCase()
   // Engineering / coding / technical-depth signals.
   const technical =
     /\b(code|coding|program(?:ming)?|function|method|class\b|algorithm|complexity|big-?o|refactor|debug(?:ging)?|stack ?trace|exception|compiler?|build error|architecture|design pattern|data ?structure|regex|sql|query|schema|database|index(?:ing)?|api\b|endpoint|typescript|javascript|python|java\b|kotlin|swift|rust|golang|c\+\+|c#|ruby|php|kubernetes|docker|terraform|ci\/cd|deploy(?:ment)?|infra(?:structure)?|concurren\w+|async|thread(?:ing)?|race condition|memory leak|optimi[sz]e|performance|latency|throughput|benchmark|cryptograph|webpack|compile|runtime error|null pointer|segfault)\b/
@@ -52,15 +67,20 @@ export function isHardQuestion(text: string): boolean {
 export function isHeavyQuestion(text: string): boolean {
   const t = (text || '').trim()
   if (!t) return false
-  if (t.length > 220) return true // a long-ish prose question deserves more than the fast model
-  const lower = t.toLowerCase()
+  // Strip injected context first (mirrors isHardQuestion above) — the length, analytical-verb, and
+  // sentence-count checks below must judge the user's own question, not an injected transcript/
+  // screen-context block (e.g. withContext's ~214-char boilerplate + a long meeting transcript) riding
+  // along with it. Otherwise even a trivial question sent with grounding context exceeds every threshold.
+  const stripped = stripInjectedContext(t)
+  if (stripped.length > 220) return true // a long-ish prose question deserves more than the fast model
+  const lower = stripped.toLowerCase()
   // Analytical / open-ended verbs that signal real reasoning or drafting work (non-technical).
   const analytical =
     /\b(explain|compare|comparison|contrast|why\b|how (?:do|does|can|should|would|might)|summari[sz]e|draft|write|compose|rewrite|outline|plan\b|strategy|strategi[sz]e|recommend|suggest|evaluate|assess|review|critique|brainstorm|pros and cons|trade-?offs?|differen(?:ce|ces|tiate)|implication|should i\b|what'?s the best|best way|help me (?:write|plan|think|decide|figure)|weigh)\b/
   if (analytical.test(lower)) return true
   // Multi-sentence and not trivially short → likely a layered ask.
-  const sentences = (t.match(/[.!?]+/g) || []).length
-  if (sentences >= 2 && t.length > 80) return true
+  const sentences = (stripped.match(/[.!?]+/g) || []).length
+  if (sentences >= 2 && stripped.length > 80) return true
   return false
 }
 
