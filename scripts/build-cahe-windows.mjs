@@ -57,7 +57,11 @@ const environment = {
 }
 function run(command, args) {
   console.log(`\n$ ${command} ${args.join(' ')}`)
-  execFileSync(command, args, { cwd: process.cwd(), env: environment, stdio: 'inherit' })
+  // On Windows npm/npx are .cmd shims. execFileSync can't resolve them by bare name, and Node's
+  // CVE-2024-27980 mitigation refuses to spawn a .cmd/.bat without shell:true (EINVAL) — so a Cahê
+  // build from a Windows host previously died at the first `npm run` step. Route those through a shell.
+  const useShell = process.platform === 'win32' && (command === 'npm' || command === 'npx')
+  execFileSync(command, args, { cwd: process.cwd(), env: environment, stdio: 'inherit', shell: useShell })
 }
 
 run('node', ['scripts/check-no-dynamic-import.mjs'])
