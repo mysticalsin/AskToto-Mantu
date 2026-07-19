@@ -1,0 +1,494 @@
+{
+  "schemaVersion": 1,
+  "selected": {
+    "textVariant": "qwen3-0.6b-q8-0",
+    "visionVariant": "smolvlm-256m-instruct-q8",
+    "approval": "evaluation"
+  },
+  "variants": [
+    {
+      "id": "qwen3-1.7b-iq4-xs",
+      "role": "text",
+      "model": "qwen3-1.7b",
+      "precision": "IQ4_XS",
+      "runtime": "node-llama-cpp",
+      "componentIds": [
+        "weights"
+      ],
+      "provenance": {
+        "status": "review-required",
+        "noticeIds": [
+          "compact-qwen-conversion"
+        ]
+      }
+    },
+    {
+      "id": "qwen3-1.7b-q4-k-m",
+      "role": "text",
+      "model": "qwen3-1.7b",
+      "precision": "Q4_K_M",
+      "runtime": "node-llama-cpp",
+      "componentIds": [
+        "weights"
+      ],
+      "provenance": {
+        "status": "review-required",
+        "noticeIds": [
+          "compact-qwen-conversion"
+        ]
+      }
+    },
+    {
+      "id": "qwen3-0.6b-q8-0",
+      "role": "text",
+      "model": "qwen3-0.6b",
+      "precision": "Q8_0",
+      "runtime": "node-llama-cpp",
+      "componentIds": [
+        "weights"
+      ],
+      "provenance": {
+        "status": "complete",
+        "noticeIds": []
+      }
+    },
+    {
+      "id": "smolvlm-256m-instruct-q8",
+      "role": "vision",
+      "model": "smolvlm-256m-instruct",
+      "precision": "Q8",
+      "runtime": "transformers.js",
+      "componentIds": [
+        "embed-tokens",
+        "vision-encoder",
+        "decoder-model",
+        "config",
+        "generation-config",
+        "preprocessor-config",
+        "processor-config",
+        "tokenizer",
+        "tokenizer-config"
+      ],
+      "provenance": {
+        "status": "complete",
+        "noticeIds": []
+      }
+    },
+    {
+      "id": "florence-2-base-ft-q4",
+      "role": "vision",
+      "model": "florence-2-base-ft",
+      "precision": "q4",
+      "runtime": "transformers.js",
+      "componentIds": [
+        "embed-tokens",
+        "vision-encoder",
+        "encoder-model",
+        "decoder-model",
+        "config",
+        "generation-config",
+        "preprocessor-config",
+        "tokenizer",
+        "tokenizer-config"
+      ],
+      "provenance": {
+        "status": "complete",
+        "noticeIds": []
+      }
+    }
+  ],
+  "assets": [
+    {
+      "id": "qwen3-1.7b-iq4-xs-weights",
+      "variantId": "qwen3-1.7b-iq4-xs",
+      "component": "weights",
+      "source": {
+        "repo": "unsloth/Qwen3-1.7B-GGUF",
+        "commit": "d7f544eead698dbd1f15126ef60b45a1e1933222",
+        "path": "Qwen3-1.7B-IQ4_XS.gguf",
+        "bytes": 1010383424,
+        "sha256": "a02e41d3208e97a7cb224297e8d3abb22e5bb8d664362c6be4f48948a3797eec",
+        "licenseId": "qwen3-1.7b-apache-2.0"
+      },
+      "destination": "text/qwen3-1.7b-iq4-xs/Qwen3-1.7B-IQ4_XS.gguf",
+      "platforms": [
+        "all"
+      ]
+    },
+    {
+      "id": "qwen3-1.7b-q4-k-m-weights",
+      "variantId": "qwen3-1.7b-q4-k-m",
+      "component": "weights",
+      "source": {
+        "repo": "unsloth/Qwen3-1.7B-GGUF",
+        "commit": "d7f544eead698dbd1f15126ef60b45a1e1933222",
+        "path": "Qwen3-1.7B-Q4_K_M.gguf",
+        "bytes": 1107409472,
+        "sha256": "b139949c5bd74937ad8ed8c8cf3d9ffb1e99c866c823204dc42c0d91fa181897",
+        "licenseId": "qwen3-1.7b-apache-2.0"
+      },
+      "destination": "text/qwen3-1.7b-q4-k-m/Qwen3-1.7B-Q4_K_M.gguf",
+      "platforms": [
+        "all"
+      ]
+    },
+    {
+      "id": "qwen3-0.6b-q8-0-weights",
+      "variantId": "qwen3-0.6b-q8-0",
+      "component": "weights",
+      "source": {
+        "repo": "Qwen/Qwen3-0.6B-GGUF",
+        "commit": "23749fefcc72300e3a2ad315e1317431b06b590a",
+        "path": "Qwen3-0.6B-Q8_0.gguf",
+        "bytes": 639446688,
+        "sha256": "9465e63a22add5354d9bb4b99e90117043c7124007664907259bd16d043bb031",
+        "licenseId": "qwen3-0.6b-apache-2.0"
+      },
+      "destination": "text/qwen3-0.6b-q8-0/Qwen3-0.6B-Q8_0.gguf",
+      "platforms": [
+        "all"
+      ]
+    },
+    {
+      "id": "smolvlm-embed-tokens",
+      "variantId": "smolvlm-256m-instruct-q8",
+      "component": "embed-tokens",
+      "source": {
+        "repo": "HuggingFaceTB/SmolVLM-256M-Instruct",
+        "commit": "7e3e67edbbed1bf9888184d9df282b700a323964",
+        "path": "onnx/embed_tokens_quantized.onnx",
+        "bytes": 28385824,
+        "sha256": "4b919b829fe2bf225e42431230c56891116f0149e5170e36c99bcc0cfae0d2ef",
+        "licenseId": "smolvlm-apache-2.0"
+      },
+      "destination": "vision/smolvlm-256m-instruct-q8/onnx/embed_tokens_quantized.onnx",
+      "platforms": [
+        "all"
+      ]
+    },
+    {
+      "id": "smolvlm-vision-encoder",
+      "variantId": "smolvlm-256m-instruct-q8",
+      "component": "vision-encoder",
+      "source": {
+        "repo": "HuggingFaceTB/SmolVLM-256M-Instruct",
+        "commit": "7e3e67edbbed1bf9888184d9df282b700a323964",
+        "path": "onnx/vision_encoder_quantized.onnx",
+        "bytes": 94247969,
+        "sha256": "f82adc84246fbfe8651038470166385452682cc889538f5106544e622e5f1595",
+        "licenseId": "smolvlm-apache-2.0"
+      },
+      "destination": "vision/smolvlm-256m-instruct-q8/onnx/vision_encoder_quantized.onnx",
+      "platforms": [
+        "all"
+      ]
+    },
+    {
+      "id": "smolvlm-decoder-model",
+      "variantId": "smolvlm-256m-instruct-q8",
+      "component": "decoder-model",
+      "source": {
+        "repo": "HuggingFaceTB/SmolVLM-256M-Instruct",
+        "commit": "7e3e67edbbed1bf9888184d9df282b700a323964",
+        "path": "onnx/decoder_model_merged_quantized.onnx",
+        "bytes": 137221644,
+        "sha256": "33f14f3bca52699d733d86fcc9c5a0ec6f57afffa1dc9596abde53cde9df81aa",
+        "licenseId": "smolvlm-apache-2.0"
+      },
+      "destination": "vision/smolvlm-256m-instruct-q8/onnx/decoder_model_merged_quantized.onnx",
+      "platforms": [
+        "all"
+      ]
+    },
+    {
+      "id": "smolvlm-config",
+      "variantId": "smolvlm-256m-instruct-q8",
+      "component": "config",
+      "source": {
+        "repo": "HuggingFaceTB/SmolVLM-256M-Instruct",
+        "commit": "7e3e67edbbed1bf9888184d9df282b700a323964",
+        "path": "config.json",
+        "bytes": 7353,
+        "sha256": "b70fb4bfde88df9eeebc9d8ff523733b8bf70d6c9b06c610325960e06ae9db52",
+        "licenseId": "smolvlm-apache-2.0"
+      },
+      "destination": "vision/smolvlm-256m-instruct-q8/config.json",
+      "platforms": [
+        "all"
+      ]
+    },
+    {
+      "id": "smolvlm-generation-config",
+      "variantId": "smolvlm-256m-instruct-q8",
+      "component": "generation-config",
+      "source": {
+        "repo": "HuggingFaceTB/SmolVLM-256M-Instruct",
+        "commit": "7e3e67edbbed1bf9888184d9df282b700a323964",
+        "path": "generation_config.json",
+        "bytes": 136,
+        "sha256": "067a2a54e5f87162ecac6e0e911cc4665fc8f7f3324794ecbac0f76badb56636",
+        "licenseId": "smolvlm-apache-2.0"
+      },
+      "destination": "vision/smolvlm-256m-instruct-q8/generation_config.json",
+      "platforms": [
+        "all"
+      ]
+    },
+    {
+      "id": "smolvlm-preprocessor-config",
+      "variantId": "smolvlm-256m-instruct-q8",
+      "component": "preprocessor-config",
+      "source": {
+        "repo": "HuggingFaceTB/SmolVLM-256M-Instruct",
+        "commit": "7e3e67edbbed1bf9888184d9df282b700a323964",
+        "path": "preprocessor_config.json",
+        "bytes": 486,
+        "sha256": "6cb6e36d6fcb88ca1502c4a26750715dc3e7dedddc9a8f17b27d8d167d1457e7",
+        "licenseId": "smolvlm-apache-2.0"
+      },
+      "destination": "vision/smolvlm-256m-instruct-q8/preprocessor_config.json",
+      "platforms": [
+        "all"
+      ]
+    },
+    {
+      "id": "smolvlm-processor-config",
+      "variantId": "smolvlm-256m-instruct-q8",
+      "component": "processor-config",
+      "source": {
+        "repo": "HuggingFaceTB/SmolVLM-256M-Instruct",
+        "commit": "7e3e67edbbed1bf9888184d9df282b700a323964",
+        "path": "processor_config.json",
+        "bytes": 68,
+        "sha256": "e7bff42da73ae9eec9042ef20e066e11f1ee20f025358ff79131e3c0fb549b46",
+        "licenseId": "smolvlm-apache-2.0"
+      },
+      "destination": "vision/smolvlm-256m-instruct-q8/processor_config.json",
+      "platforms": [
+        "all"
+      ]
+    },
+    {
+      "id": "smolvlm-tokenizer",
+      "variantId": "smolvlm-256m-instruct-q8",
+      "component": "tokenizer",
+      "source": {
+        "repo": "HuggingFaceTB/SmolVLM-256M-Instruct",
+        "commit": "7e3e67edbbed1bf9888184d9df282b700a323964",
+        "path": "tokenizer.json",
+        "bytes": 3548256,
+        "sha256": "5ece781dc8d2b2f3e2f289ca0ae50b17cfc27dd27bfe7971bb8241e0b964331a",
+        "licenseId": "smolvlm-apache-2.0"
+      },
+      "destination": "vision/smolvlm-256m-instruct-q8/tokenizer.json",
+      "platforms": [
+        "all"
+      ]
+    },
+    {
+      "id": "smolvlm-tokenizer-config",
+      "variantId": "smolvlm-256m-instruct-q8",
+      "component": "tokenizer-config",
+      "source": {
+        "repo": "HuggingFaceTB/SmolVLM-256M-Instruct",
+        "commit": "7e3e67edbbed1bf9888184d9df282b700a323964",
+        "path": "tokenizer_config.json",
+        "bytes": 28249,
+        "sha256": "36c6fd44d07d10fd8180ee6b46dcccf69fb7c06753968ff0d7e17b8bfe17b777",
+        "licenseId": "smolvlm-apache-2.0"
+      },
+      "destination": "vision/smolvlm-256m-instruct-q8/tokenizer_config.json",
+      "platforms": [
+        "all"
+      ]
+    },
+    {
+      "id": "florence-embed-tokens",
+      "variantId": "florence-2-base-ft-q4",
+      "component": "embed-tokens",
+      "source": {
+        "repo": "onnx-community/Florence-2-base-ft",
+        "commit": "e88a44eaf3791a35eae0c5a47b3dbcd36e67eb6f",
+        "path": "onnx/embed_tokens_q4.onnx",
+        "bytes": 157560063,
+        "sha256": "f972f338dedea6b67e10e87aacc0dfd4e247f1e18c60d3911af9e6b9edb68f32",
+        "licenseId": "florence-2-mit"
+      },
+      "destination": "vision/florence-2-base-ft-q4/onnx/embed_tokens_q4.onnx",
+      "platforms": [
+        "all"
+      ]
+    },
+    {
+      "id": "florence-vision-encoder",
+      "variantId": "florence-2-base-ft-q4",
+      "component": "vision-encoder",
+      "source": {
+        "repo": "onnx-community/Florence-2-base-ft",
+        "commit": "e88a44eaf3791a35eae0c5a47b3dbcd36e67eb6f",
+        "path": "onnx/vision_encoder_q4.onnx",
+        "bytes": 81236858,
+        "sha256": "8f211dfc176996d14e24d551f8e02530de781dd8b30d9e7d35b69b7c2d0340ce",
+        "licenseId": "florence-2-mit"
+      },
+      "destination": "vision/florence-2-base-ft-q4/onnx/vision_encoder_q4.onnx",
+      "platforms": [
+        "all"
+      ]
+    },
+    {
+      "id": "florence-encoder-model",
+      "variantId": "florence-2-base-ft-q4",
+      "component": "encoder-model",
+      "source": {
+        "repo": "onnx-community/Florence-2-base-ft",
+        "commit": "e88a44eaf3791a35eae0c5a47b3dbcd36e67eb6f",
+        "path": "onnx/encoder_model_q4.onnx",
+        "bytes": 30058778,
+        "sha256": "34b17bcf191dacb79bd482b94bad5cf1ba39bc770f6a4c9ae26f28b89c235e4b",
+        "licenseId": "florence-2-mit"
+      },
+      "destination": "vision/florence-2-base-ft-q4/onnx/encoder_model_q4.onnx",
+      "platforms": [
+        "all"
+      ]
+    },
+    {
+      "id": "florence-decoder-model",
+      "variantId": "florence-2-base-ft-q4",
+      "component": "decoder-model",
+      "source": {
+        "repo": "onnx-community/Florence-2-base-ft",
+        "commit": "e88a44eaf3791a35eae0c5a47b3dbcd36e67eb6f",
+        "path": "onnx/decoder_model_merged_q4.onnx",
+        "bytes": 64393474,
+        "sha256": "be7a2f33e65f8d65538024772fda4d1c5a7752d60a7159aadf53f9f4798b90fa",
+        "licenseId": "florence-2-mit"
+      },
+      "destination": "vision/florence-2-base-ft-q4/onnx/decoder_model_merged_q4.onnx",
+      "platforms": [
+        "all"
+      ]
+    },
+    {
+      "id": "florence-config",
+      "variantId": "florence-2-base-ft-q4",
+      "component": "config",
+      "source": {
+        "repo": "onnx-community/Florence-2-base-ft",
+        "commit": "e88a44eaf3791a35eae0c5a47b3dbcd36e67eb6f",
+        "path": "config.json",
+        "bytes": 5432,
+        "sha256": "d90c22ed72eb55291f183fcd9b98ebd3bd3d92bfcffb6c7f6e1606085e793525",
+        "licenseId": "florence-2-mit"
+      },
+      "destination": "vision/florence-2-base-ft-q4/config.json",
+      "platforms": [
+        "all"
+      ]
+    },
+    {
+      "id": "florence-generation-config",
+      "variantId": "florence-2-base-ft-q4",
+      "component": "generation-config",
+      "source": {
+        "repo": "onnx-community/Florence-2-base-ft",
+        "commit": "e88a44eaf3791a35eae0c5a47b3dbcd36e67eb6f",
+        "path": "generation_config.json",
+        "bytes": 292,
+        "sha256": "7b8eb17bbd6cf8a07f619ad83ae03881eff05b6b9237bab89005b40e77783c29",
+        "licenseId": "florence-2-mit"
+      },
+      "destination": "vision/florence-2-base-ft-q4/generation_config.json",
+      "platforms": [
+        "all"
+      ]
+    },
+    {
+      "id": "florence-preprocessor-config",
+      "variantId": "florence-2-base-ft-q4",
+      "component": "preprocessor-config",
+      "source": {
+        "repo": "onnx-community/Florence-2-base-ft",
+        "commit": "e88a44eaf3791a35eae0c5a47b3dbcd36e67eb6f",
+        "path": "preprocessor_config.json",
+        "bytes": 2673,
+        "sha256": "c892857e34a7082284983a7717717d39c9bf7e574f1f41d80d4c918c97502efa",
+        "licenseId": "florence-2-mit"
+      },
+      "destination": "vision/florence-2-base-ft-q4/preprocessor_config.json",
+      "platforms": [
+        "all"
+      ]
+    },
+    {
+      "id": "florence-tokenizer",
+      "variantId": "florence-2-base-ft-q4",
+      "component": "tokenizer",
+      "source": {
+        "repo": "onnx-community/Florence-2-base-ft",
+        "commit": "e88a44eaf3791a35eae0c5a47b3dbcd36e67eb6f",
+        "path": "tokenizer.json",
+        "bytes": 2297961,
+        "sha256": "d69dcdb2323e124ac4f800cb9863ddccea0d7bb11e16125e8df3bd60f2f8aeac",
+        "licenseId": "florence-2-mit"
+      },
+      "destination": "vision/florence-2-base-ft-q4/tokenizer.json",
+      "platforms": [
+        "all"
+      ]
+    },
+    {
+      "id": "florence-tokenizer-config",
+      "variantId": "florence-2-base-ft-q4",
+      "component": "tokenizer-config",
+      "source": {
+        "repo": "onnx-community/Florence-2-base-ft",
+        "commit": "e88a44eaf3791a35eae0c5a47b3dbcd36e67eb6f",
+        "path": "tokenizer_config.json",
+        "bytes": 197658,
+        "sha256": "d8e64607233cb53b619fb46664f6cad08176c26e0e8735b2d30d888364f19600",
+        "licenseId": "florence-2-mit"
+      },
+      "destination": "vision/florence-2-base-ft-q4/tokenizer_config.json",
+      "platforms": [
+        "all"
+      ]
+    }
+  ],
+  "licenses": [
+    {
+      "id": "qwen3-1.7b-apache-2.0",
+      "path": "resources/local-ai/licenses/Qwen3-1.7B-Apache-2.0.txt",
+      "bytes": 11343,
+      "sha256": "832dd9e00a68dd83b3c3fb9f5588dad7dcf337a0db50f7d9483f310cd292e92e"
+    },
+    {
+      "id": "qwen3-0.6b-apache-2.0",
+      "path": "resources/local-ai/licenses/Qwen3-0.6B-Apache-2.0.txt",
+      "bytes": 11544,
+      "sha256": "5de36594c10839788a8c589443a8ef9d8b8d17c65a1b5807206ae037fc36c6bd"
+    },
+    {
+      "id": "smolvlm-apache-2.0",
+      "path": "resources/local-ai/licenses/SmolVLM-Apache-2.0.txt",
+      "bytes": 11357,
+      "sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4"
+    },
+    {
+      "id": "florence-2-mit",
+      "path": "resources/local-ai/licenses/Florence-2-MIT.txt",
+      "bytes": 1141,
+      "sha256": "c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383"
+    }
+  ],
+  "notices": [
+    {
+      "id": "compact-qwen-conversion",
+      "kind": "provenance",
+      "path": "resources/local-ai/licenses/model-conversion-notices.md",
+      "bytes": 1014,
+      "sha256": "ba587cfe328b25e793a56d78a370e3fdc73dd0682a87c7294e5fe8e58c4c627c"
+    }
+  ]
+}
