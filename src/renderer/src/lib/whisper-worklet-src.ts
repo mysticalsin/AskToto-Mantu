@@ -11,18 +11,21 @@
  * ScriptProcessorNode). It buffers PCM and emits a window at END-OF-TURN (a short trailing silence after
  * speech) rather than on a fixed clock, so a spoken question reaches the model ~1s after the speaker stops
  * instead of whenever a 6s boundary happens to land — much lower turn-detection latency. A 6s hard cap
- * still force-emits during long monologues, and near-silent windows are dropped (ASR hallucinates on them).
+ * still force-emits during long monologues, and near-silent windows are dropped (ASR hallucinates on them),
+ * as are steady non-speech windows — boosted loopback background (hold music, fans) that rides above the
+ * VAD floor but has none of speech's syllabic envelope modulation (see isSpeechLikeWindow in ./vad).
  *
  * The endpoint decision (speech-onset hysteresis + transient rejection) is the `makeVad` factory from
  * ./vad — embedded here via `.toString()` so the unit-tested logic and the realtime logic are ONE source.
  */
-import { makeVad } from './vad'
+import { makeVad, isSpeechLikeWindow } from './vad'
 
 export const WHISPER_WORKLET_SRC = `
 const SAMPLE_RATE = 16000
 const MAX_SAMPLES = SAMPLE_RATE * 6   // hard cap per window (long monologue → forced cut)
 const EMIT_RMS = 0.005                // whole-window energy below this → drop (silence; ASR hallucinates on it)
 const makeVad = ${makeVad.toString()}
+const isSpeechLikeWindow = ${isSpeechLikeWindow.toString()}
 class WhisperWorklet extends AudioWorkletProcessor {
   constructor() {
     super()
@@ -44,6 +47,10 @@ class WhisperWorklet extends AudioWorkletProcessor {
     let s = 0
     for (let i = 0; i < n; i++) { const v = this.buf[i]; s += v * v }
     if (Math.sqrt(s / n) < EMIT_RMS) return
+    // Drop steady non-speech windows (hold music / fan / street noise the 'them' 3.0x boost lifts over the
+    // VAD floor — during quiet stretches these force-emit every 6s and Whisper hallucinates on each one).
+    // Envelope-spread gate from ./vad; scale-invariant, fail-open. See isSpeechLikeWindow for the why.
+    if (!isSpeechLikeWindow(this.buf, n)) return
     const chunk = this.buf.slice(0, n)
     this.port.postMessage({ audio: chunk }, [chunk.buffer])
   }
