@@ -163,7 +163,13 @@ const api = {
   exportRecapJson: (markdown: string): Promise<RecapExport> =>
     ipcRenderer.invoke(IPC.exportRecapJson, markdown),
   pickFolder: (): Promise<PublicSettings> => ipcRenderer.invoke(IPC.pickFolder),
-  openMeetingsFolder: (): Promise<void> => ipcRenderer.invoke(IPC.openPath),
+  addTeamTranscriptFolder: (): Promise<PublicSettings> => ipcRenderer.invoke(IPC.addTeamTranscriptFolder),
+  removeTeamTranscriptFolder: (folder: string): Promise<PublicSettings> =>
+    ipcRenderer.invoke(IPC.removeTeamTranscriptFolder, folder),
+  // shell.openPath resolves to '' on success or a non-empty OS error string on failure — callers need the
+  // string to surface a failure (e.g. a deleted/unmounted meetings folder), not just fire-and-forget it.
+  openMeetingsFolder: (): Promise<string> => ipcRenderer.invoke(IPC.openPath),
+  openBrainForClaude: (): Promise<{ ok: boolean; path: string }> => ipcRenderer.invoke(IPC.openBrainForClaude),
   recallList: (): Promise<MeetingSummary[]> => ipcRenderer.invoke(IPC.recallList),
   recallSearch: (q: string): Promise<RecallHit[]> => ipcRenderer.invoke(IPC.recallSearch, q),
   recallOpen: (file: string): Promise<string> => ipcRenderer.invoke(IPC.recallOpen, file),
@@ -263,6 +269,7 @@ const api = {
   hide: (): Promise<void> => ipcRenderer.invoke(IPC.windowHide),
   toggle: (): Promise<void> => ipcRenderer.invoke(IPC.windowToggle),
   quit: (): Promise<void> => ipcRenderer.invoke(IPC.windowQuit),
+  relaunch: (): Promise<void> => ipcRenderer.invoke(IPC.windowRelaunch),
 
   onDelta: (cb: (d: StreamDelta) => void): Unsub => sub(IPC.streamDelta, cb),
   onDone: (cb: (d: StreamDone) => void): Unsub => sub(IPC.streamDone, cb),

@@ -23,6 +23,8 @@ public protocol MeetingIntelligence: Sendable {
     func suggest(transcriptTail: String) async throws -> String
     /// Typed meeting summary via guided generation.
     func summarize(transcriptTail: String) async throws -> MeetingSummaryText
+    /// The prioritized next steps after the meeting — the "what do I do now" the UI surfaces proactively.
+    func nextSteps(transcriptTail: String) async throws -> [String]
 }
 
 /// Plain, framework-free carrier so callers/tests don't need FoundationModels types.
@@ -105,6 +107,13 @@ public struct FoundationModelIntelligence: MeetingIntelligence {
         )
     }
 
+    public func nextSteps(transcriptTail: String) async throws -> [String] {
+        guard case .available = availability else { throw IntelligenceError.unavailable("on-device model unavailable") }
+        let prompt = "From this meeting transcript, list my most important next steps, most important first:\n\(transcriptTail)"
+        let r = try await newSession().respond(to: prompt, generating: NextStepsResult.self)
+        return r.content.steps
+    }
+
     // PRIVATE CLOUD COMPUTE (the free 2M-downloads tier): the type `PrivateCloudComputeLanguageModel`
     // ships in the iOS/macOS 27 SDK (beta at time of writing) — it is NOT in the macOS 26 SDK this builds
     // against, so it is intentionally absent here rather than stubbed. When the app moves to the 27 SDK,
@@ -131,6 +140,9 @@ public struct HeuristicIntelligence: MeetingIntelligence {
     public func suggest(transcriptTail: String) async throws -> String { fallbackSuggestion(transcriptTail) }
     public func summarize(transcriptTail: String) async throws -> MeetingSummaryText {
         MeetingSummaryText(headline: "Summary unavailable on this device.", decisions: [], actionItems: [], openQuestions: [])
+    }
+    public func nextSteps(transcriptTail: String) async throws -> [String] {
+        transcriptTail.isEmpty ? [] : ["Confirm the owners and dates for anything promised in the meeting."]
     }
     private func fallbackSuggestion(_ tail: String) -> String {
         tail.isEmpty ? "Ask an open question to move the conversation forward."

@@ -48,7 +48,7 @@ export function provenanceChipLabel(
   if (field.state === 'pinned' || field.state === 'edited') return 'edited by you'
   if (field.state === 'verified') return 'verified'
   const meeting = field.source_file || 'unknown meeting'
-  return field.quote ? `extracted — "${field.quote}" — ${meeting}` : `extracted — ${meeting}`
+  return field.quote ? `extracted: "${field.quote}" (${meeting})` : `extracted (${meeting})`
 }
 
 export type MoneyFieldMode =
@@ -68,7 +68,7 @@ export function moneyFieldMode<T>(
   if (field.state === 'verified' || field.state === 'pinned' || field.state === 'edited') {
     return { kind: 'verified', text: formatValue(field.value) }
   }
-  return { kind: 'unverified', text: 'Stated but unverified — pin to confirm' }
+  return { kind: 'unverified', text: 'Stated but unverified, pin to confirm' }
 }
 
 export function formatAmount(v: { value: number; currency: string }): string {
@@ -365,7 +365,7 @@ export function BrainRecordPage({
   if (!entity) {
     return (
       <div className="flex flex-col items-center gap-2 rounded-xl border border-[var(--color-hair-soft)] bg-white/[0.02] px-4 py-8 text-center text-[12px] text-[color:var(--color-ink-3)]">
-        This record no longer exists — it may have been merged into another entity.
+        This record no longer exists. It may have been merged into another entity.
       </div>
     )
   }
@@ -641,7 +641,7 @@ export function BrainRecordPage({
             label="Velocity"
             field={deal.velocity_provenance}
             defaultValue={deal.velocity}
-            formatValue={(v) => `${v.signal.replace(/-/g, ' ')}${v.evidence ? ` — ${v.evidence}` : ''}`}
+            formatValue={(v) => `${v.signal.replace(/-/g, ' ')}${v.evidence ? ` (${v.evidence})` : ''}`}
             onOpenMeeting={onOpenMeeting}
             onSave={(v) => saveField('velocity', v)}
             renderEditor={(v, onChange) => (

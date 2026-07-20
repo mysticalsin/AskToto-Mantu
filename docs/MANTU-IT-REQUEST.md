@@ -45,6 +45,13 @@ These map to:
 | Cert password | `WIN_CSC_KEY_PASSWORD` |
 | Expected exact Subject or common name | `WIN_CSC_EXPECTED_SUBJECT` |
 
+**Interim option — internal trust (no purchase):** Windows builds can be Authenticode-signed with an
+internal self-signed certificate (`CN=Mantu`, SHA-256, RFC 3161 timestamped). Installers then verify as
+**Valid** on any machine that trusts the certificate; distribute the public `.cer` (never the `.pfx`)
+via GPO or Intune to **Trusted Root Certification Authorities** and **Trusted Publishers** on managed
+machines. Full steps: `docs/ENTERPRISE-DEPLOY-WINDOWS.md`. Public trust (the table above, or Azure
+Trusted Signing) remains the recommended path for wider distribution and SmartScreen reputation.
+
 ## 2. Azure (Microsoft Entra) app registration — for Outlook agenda + sign-in
 
 Needed so Métis can (a) sign users in with their Mantu Microsoft account and (b) read **today's calendar**

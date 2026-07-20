@@ -1,7 +1,7 @@
 import { memo, useEffect, useState } from 'react'
 import { Copy, Check, RefreshCw, FileDown, ShieldCheck, ChevronsDown, ThumbsUp, ThumbsDown, Eye, EyeOff, X } from 'lucide-react'
 import { PROVIDERS, type ProviderId } from '@shared/providers'
-import { isScreenCapturePermissionError } from '@shared/screen-capture'
+import { isScreenCapturePermissionError, needsAppRelaunchForScreenCapture } from '@shared/screen-capture'
 import { Markdown } from './Markdown'
 import { TextButton } from './ui'
 import { useFlash } from '../lib/useFlash'
@@ -55,7 +55,8 @@ export const Answer = memo(function Answer({
   usedScreen,
   provider,
   onRetry,
-  onGoDeeper
+  onGoDeeper,
+  captureAccel
 }: {
   text: string
   streaming: boolean
@@ -77,6 +78,11 @@ export const Answer = memo(function Answer({
   provider?: ProviderId
   onRetry?: () => void
   onGoDeeper?: () => void
+  /** The LIVE, resolved screen-capture accelerator (settings.shortcuts.capture, or the shipped default),
+   *  passed down from App so this empty-state hint never shows a stale/hardcoded binding once the user
+   *  rebinds or clears it in Settings → Shortcuts. Falls back to the shipped default when omitted (demo
+   *  seeding / callers that don't thread it through). */
+  captureAccel?: string
 }): JSX.Element {
   const [copied, flashCopied] = useFlash(1500)
   const [copyError, setCopyError] = useState<string | null>(null)
@@ -133,9 +139,16 @@ export const Answer = memo(function Answer({
   ) : display ? (
     <div className="rounded-lg border border-[var(--color-hair-soft)] bg-white/[0.03] px-3 py-2 text-[13px] font-medium text-[color:var(--color-ink)] break-words">
       {kind === 'factcheck' && (
-        <div className="mb-1 flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wide text-[color:var(--color-ink-3)]">
-          <ShieldCheck size={11} /> Fact-check
-        </div>
+        <>
+          <div className="mb-1 flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wide text-[color:var(--color-ink-3)]">
+            <ShieldCheck size={11} /> Fact-check
+          </div>
+          {/* Persistent caveat: the app has no web search, so a verdict is the model's parametric
+              knowledge, not a verified lookup — this must not read as "checked against the web". */}
+          <div className="mb-1 text-[10px] font-normal normal-case tracking-normal text-[color:var(--color-ink-3)]">
+            AI-inferred from the model&apos;s knowledge, not a web lookup. Verify anything important.
+          </div>
+        </>
       )}
       {usedScreen && (
         <div className="mb-1 flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wide text-[color:var(--color-ink-3)]">
@@ -157,15 +170,24 @@ export const Answer = memo(function Answer({
         <EyeOff size={13} className="mt-0.5 shrink-0 text-[color:var(--color-warn,#fac775)]" />
         <span>{captureNotice}</span>
       </div>
-      {isScreenCapturePermissionError(captureNotice) && (
-        <button
-          type="button"
-          onClick={() => void window.toto.openPermissionSettings('screenRecording')}
-          className="no-drag focus-ring rounded-full bg-[var(--color-warn,#fac775)]/15 px-2.5 py-1 text-[11px] font-semibold text-[color:var(--color-ink)] hover:bg-[var(--color-warn,#fac775)]/25"
-        >
-          Open Screen Recording settings
-        </button>
-      )}
+      {isScreenCapturePermissionError(captureNotice) &&
+        (needsAppRelaunchForScreenCapture(captureNotice) ? (
+          <button
+            type="button"
+            onClick={() => void window.toto.relaunch()}
+            className="no-drag focus-ring rounded-full bg-[var(--color-warn,#fac775)]/15 px-2.5 py-1 text-[11px] font-semibold text-[color:var(--color-ink)] hover:bg-[var(--color-warn,#fac775)]/25"
+          >
+            Restart Métis
+          </button>
+        ) : (
+          <button
+            type="button"
+            onClick={() => void window.toto.openPermissionSettings('screenRecording')}
+            className="no-drag focus-ring rounded-full bg-[var(--color-warn,#fac775)]/15 px-2.5 py-1 text-[11px] font-semibold text-[color:var(--color-ink)] hover:bg-[var(--color-warn,#fac775)]/25"
+          >
+            Open Screen Recording settings
+          </button>
+        ))}
       {onDismissNotice && (
         // Dismiss so a declined Screen Recording grant never wedges the UI — the user can close this and
         // keep asking text questions (chat works without screen access).
@@ -262,6 +284,14 @@ export const Answer = memo(function Answer({
       <div className="fade-up mx-auto max-w-[620px] flex flex-col gap-2">
         {header}
         {notice}
+        {/* state.ts preserves any partial answer captured before the error — show it (same markdown
+            rendering as the normal path) so the user isn't left staring at a red box that hides real,
+            already-streamed content the footer's Copy button can still copy. */}
+        {text && (
+          <div aria-live="polite" aria-atomic="false">
+            <Markdown>{text}</Markdown>
+          </div>
+        )}
         <div role="alert" className="rounded-lg border border-[var(--color-danger)]/30 bg-[var(--color-danger)]/10 px-3 py-2.5 text-[13px] text-[var(--color-danger)] break-words [overflow-wrap:anywhere]">
           {error}
           {hint && (
@@ -280,7 +310,7 @@ export const Answer = memo(function Answer({
     const who = provider === 'dust' ? 'your Dust agent' : provider ? PROVIDERS[provider]?.label : undefined
     const label =
       thinkingSecs >= 8
-        ? `Still working… (${thinkingSecs}s)${who ? ` — ${who} is on it` : ''}`
+        ? `Still working… (${thinkingSecs}s)${who ? `, ${who} is on it` : ''}`
         : who
           ? `Asking ${who}…`
           : 'Thinking…'
@@ -302,7 +332,7 @@ export const Answer = memo(function Answer({
         {header}
         {notice}
         <div className="rounded-lg border border-[var(--color-hair-soft)] bg-white/[0.03] px-3 py-6 text-center text-[13px] text-[color:var(--color-ink-2)]">
-          Ask a question or press {accelLabel('CommandOrControl+Shift+S')} to capture your screen.
+          Ask a question or press {accelLabel(captureAccel ?? 'CommandOrControl+Shift+S')} to capture your screen.
         </div>
       </div>
     )

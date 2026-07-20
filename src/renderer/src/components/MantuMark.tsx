@@ -1,14 +1,13 @@
-import markUrl from '../assets/mantu-mark.jpg'
+import markUrl from '../assets/mantu-mark-tile.png'
 
 /**
- * Official Mantu "M" mark.
+ * Official Mantu "M" mark — the REAL brand glyph.
  *
- * The source asset (617x324) is a wide banner, not a square — the M glyph itself sits at
- * roughly x=333.5 of that 617px width, not the geometric center (x=308.5). object-cover's
- * default 50% object-position crops the square symmetrically around the image's center, which
- * left the glyph pushed off-balance (~75px of empty background on one side, ~25px on the
- * other). object-position is set to the glyph's measured center so the square crop stays
- * balanced regardless of render size.
+ * mantu-mark-tile.png is the actual M lifted pixel-for-pixel from the brand banner (its true gradient
+ * and shading preserved via a min-channel alpha key that drops the banner's purple background + streaks),
+ * then composited centered — equal margins by construction — on the uniform brand purple. Using the
+ * authentic asset rather than a vector redraw, cropped square once so nothing is re-cropped or seamed at
+ * render time at any size.
  */
 export function MantuMark({ size = 20, round = false }: { size?: number; round?: boolean }): JSX.Element {
   return (
@@ -16,8 +15,8 @@ export function MantuMark({ size = 20, round = false }: { size?: number; round?:
       src={markUrl}
       alt=""
       aria-hidden="true"
-      className={`select-none object-cover ${round ? 'rounded-full' : 'rounded-[22%]'}`}
-      style={{ width: size, height: size, objectPosition: '58.5% center' }}
+      className={`block select-none ${round ? 'rounded-full' : 'rounded-[22%]'}`}
+      style={{ width: size, height: size }}
       draggable={false}
     />
   )

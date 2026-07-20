@@ -6,8 +6,9 @@ import { join } from 'node:path'
 import type { PublicClientApplication } from '@azure/msal-node'
 import type { AuthStatus, SignInResult } from '@shared/ipc'
 import { getSettings } from './store'
-import { auditLog } from './logger'
+import { auditLog, mainLog, setAuditActor } from './logger'
 import { useFileBackend, encryptSecret, decryptSecret } from './secrets'
+import { readTrustedAdminManaged } from './win-security'
 
 // Scopes requested at sign-in: identity + read-only calendar (so the agenda can be pulled later with no
 // extra consent prompt). Least privilege — Calendars.Read, never ReadWrite.
@@ -43,28 +44,38 @@ interface Session {
   at: number
 }
 
-/** Machine-wide org-policy file IT can deploy (matches store.ts adminManagedPath). */
-function adminManagedPath(): string {
-  if (process.platform === 'darwin') return '/Library/Application Support/Métis/managed-config.json'
-  if (process.platform === 'win32')
-    return join(process.env.ProgramData || 'C:\\ProgramData', 'Métis', 'managed-config.json')
-  return '/etc/asktoto/managed-config.json'
-}
+// The machine-wide org-policy path + its win32 admin-trust gate live in win-security.ts. On Windows a
+// forged %ProgramData%\Métis\managed-config.json (user-writable by default) is NOT honored, so it
+// cannot redirect SSO to an attacker tenant or force-lock the app.
 
 /** Read an { azure: { clientId, tenantId, allowedDomain } } block from managed-config (admin or per-user). */
-function readManagedAzure(): Partial<AzureConfig> {
-  // Admin/machine policy FIRST so a user-writable per-user file can't override the org tenant lock.
-  for (const p of [adminManagedPath(), join(app.getPath('userData'), 'managed-config.json')]) {
-    try {
-      const az = JSON.parse(readFileSync(p, 'utf8'))?.azure
-      if (az?.clientId && az?.tenantId && az?.allowedDomain) {
-        return { clientId: az.clientId, tenantId: az.tenantId, allowedDomain: az.allowedDomain }
-      }
-    } catch {
-      /* not present / unreadable */
+function azureFromManagedContent(raw: string): Partial<AzureConfig> {
+  try {
+    const az = JSON.parse(raw)?.azure
+    if (az?.clientId && az?.tenantId && az?.allowedDomain) {
+      return { clientId: az.clientId, tenantId: az.tenantId, allowedDomain: az.allowedDomain }
     }
+  } catch {
+    /* not present / unreadable */
   }
   return {}
+}
+
+function readManagedAzure(): Partial<AzureConfig> {
+  // Admin/machine policy FIRST so a user-writable per-user file can't override the org tenant lock.
+  // readTrustedAdminManaged() reads through the SAME held fd that verified win32 admin-trust, so the
+  // content read here can't be swapped in after the trust check (see win-security.ts).
+  const admin = readTrustedAdminManaged()
+  if (admin) {
+    const az = azureFromManagedContent(admin)
+    if (az.clientId) return az
+  }
+  try {
+    const raw = readFileSync(join(app.getPath('userData'), 'managed-config.json'), 'utf8')
+    return azureFromManagedContent(raw)
+  } catch {
+    return {}
+  }
 }
 
 /**
@@ -85,31 +96,73 @@ function readSettingsAzure(): Partial<AzureConfig> {
   return {}
 }
 
+// A resolved config value must be free of whitespace/control chars AND URL-structural metacharacters.
+// tenantId flows into the MSAL authority URL `https://login.microsoftonline.com/${tenantId}`, and
+// allowedDomain into the `email.endsWith('@'+allowedDomain)` gate — so a value carrying `/ \ ? # @ :`
+// or whitespace could distort the authority path or the domain-suffix check. Legit values never do:
+// clientId is a GUID, tenantId a GUID or dotted domain, allowedDomain a hostname. This is the format
+// validation the self-service Settings path (and the managed/LKG paths) previously lacked.
+function isSafeConfigValue(v: string): boolean {
+  // Positive allowlist: letters, digits, dot, hyphen only. Covers every legit value — clientId
+  // (GUID), tenantId (GUID or dotted domain), allowedDomain (hostname) — while rejecting all
+  // whitespace, control chars, and URL-structural metacharacters (/ \ ? # @ : etc.).
+  return v.length > 0 && v.length <= 253 && /^[A-Za-z0-9.-]+$/.test(v)
+}
+
+/** Reject a resolved config whose fields aren't structurally plausible before they reach the MSAL
+ *  authority / the domain gate. This validator only enforces CHARACTER-safety (no whitespace / URL
+ *  metachars), not an exact shape, so injection-shaped garbage is rejected while GUIDs/domains pass.
+ *  NOTE for the auth owner: although the MSAL authority URL accepts a domain-form tenantId, the runtime
+ *  tenant gate in signIn() compares against the id-token `tid` claim, which Entra always issues as the
+ *  tenant GUID — so a domain-form tenantId would authenticate then be rejected as "outside your
+ *  organization" on every sign-in. In practice tenantId must be the GUID; either enforce that here or
+ *  resolve the domain→GUID before the gate compare. (Fail-closed, so a lockout bug, not a bypass.) */
+function isPlausibleAzureConfig(c: AzureConfig): boolean {
+  return isSafeConfigValue(c.clientId) && isSafeConfigValue(c.tenantId) && isSafeConfigValue(c.allowedDomain)
+}
+
 /**
  * Config resolved by precedence: env (dev) → machine-wide managed-config (IT policy) → per-user
  * managed-config → in-app Settings. Env/managed win so an org deployment can't be loosened from the UI;
  * the Settings fallback makes SSO self-serve (dummy-proof) when no policy file is deployed.
  *
- * Side-effect: writes the sticky-configured flag on the first successful resolution so that
- * requireAuth() keeps enforcing sign-in even if Settings are later cleared from the renderer.
+ * No side effects here (deliberately): resolving a config value — especially from self-service Settings,
+ * which has NO format validation — does not mean SSO is actually usable. The sticky-configured flag is
+ * only written by signIn() on a genuine successful interactive sign-in (see writeStickyConfigured call
+ * site below); merely typing values into Settings must never trip it, or "Reset SSO" right after would
+ * permanently lock the app with no in-app recovery.
+ *
+ * Lowest-precedence recovery fallback: after a genuine sign-in, the config that actually worked is kept
+ * as an LKG record. If Settings is later cleared while enforcement is sticky, LKG keeps sign-in POSSIBLE
+ * (so the sticky gate is recoverable, not a brick) — env/managed/Settings all still win above it, and it
+ * is only consulted when sticky is set. See the LKG comment block above.
  */
 function readConfig(): AzureConfig | null {
-  const clientId = process.env.AZURE_CLIENT_ID
-  const tenantId = process.env.AZURE_TENANT_ID
-  const allowedDomain = process.env.ASKTOTO_ALLOWED_DOMAIN
-  if (clientId && tenantId && allowedDomain) {
-    writeStickyConfigured()
-    return { clientId, tenantId, allowedDomain }
+  // A tier "counts" only when it supplies all three fields AND they pass format validation — an
+  // implausible/garbage value (whitespace, URL metachars) is treated as "no config from this tier"
+  // and we fall through, rather than building a poisoned MSAL authority or a broken domain gate.
+  const usable = (c: Partial<AzureConfig>): AzureConfig | null => {
+    if (!c.clientId || !c.tenantId || !c.allowedDomain) return null
+    const cfg = { clientId: c.clientId, tenantId: c.tenantId, allowedDomain: c.allowedDomain }
+    return isPlausibleAzureConfig(cfg) ? cfg : null
   }
-  const m = readManagedAzure()
-  if (m.clientId && m.tenantId && m.allowedDomain) {
-    writeStickyConfigured()
-    return { clientId: m.clientId, tenantId: m.tenantId, allowedDomain: m.allowedDomain }
-  }
-  const s = readSettingsAzure()
-  if (s.clientId && s.tenantId && s.allowedDomain) {
-    writeStickyConfigured()
-    return { clientId: s.clientId, tenantId: s.tenantId, allowedDomain: s.allowedDomain }
+  const env = usable({
+    clientId: process.env.AZURE_CLIENT_ID,
+    tenantId: process.env.AZURE_TENANT_ID,
+    allowedDomain: process.env.ASKTOTO_ALLOWED_DOMAIN
+  })
+  if (env) return env
+  const m = usable(readManagedAzure())
+  if (m) return m
+  const s = usable(readSettingsAzure())
+  if (s) return s
+  // Recovery fallback — only after a genuine prior sign-in (sticky set), and only if nothing above
+  // resolved. Makes an enforced-but-Settings-cleared device recoverable instead of a permanent brick.
+  if (isStickyConfigured()) {
+    const l = usable(readLkgConfig())
+    if (l) {
+      return l
+    }
   }
   return null
 }
@@ -120,7 +173,12 @@ function sessionPath(): string {
 
 // ─── Sticky-configured flag ───────────────────────────────────────────────────
 //
-// Written once the first time readConfig() resolves any SSO config (env, managed, or Settings).
+// Written once — by signIn(), only in its SUCCESS branch — the first time an interactive sign-in
+// actually completes (a real, validated session is established). This deliberately represents
+// "SSO has genuinely been usable", not "some config values were resolved": readConfig() resolving
+// self-service Settings fields (which have NO format validation) must NOT trip this flag, or
+// enabling+then-resetting SSO without ever signing in would permanently lock the app with no
+// in-app recovery.
 // requireAuth() treats this flag as "enforced" even if a compromised renderer later clears the
 // in-app Settings azure fields (which would otherwise flip configured→false, unlocking the gate).
 // Cleared only by a genuine authenticated sign-out (signOut() with a live session).
@@ -145,6 +203,62 @@ function clearStickyConfigured(): void {
 
 function isStickyConfigured(): boolean {
   try { return existsSync(stickyConfiguredPath()) } catch { return false }
+}
+
+// ─── Last-known-good (LKG) sign-in config ─────────────────────────────────────
+//
+// The exact Azure config that produced a GENUINE successful interactive sign-in, persisted by signIn()
+// alongside the sticky flag. It is the recovery mechanism that stops the sticky gate from becoming a
+// permanent, unrecoverable brick: if the in-app Settings azure fields are later cleared (self-service
+// "Reset SSO") while enforcement is still sticky, readConfig() falls back to this record so the user can
+// sign in AGAIN and recover — instead of being stranded behind a wall whose only button short-circuits.
+//
+// Security properties (why this is safe):
+//  - Lowest precedence. env → admin-trusted managed → per-user managed → Settings ALL win above it, so an
+//    org tenant lock is never loosened and a fresh Settings config always overrides a stale LKG.
+//  - No new attack surface. readConfig() already trusts a user-writable userData file (per-user
+//    managed-config.json) to define tenant/clientId/domain, at HIGHER precedence than LKG. An attacker
+//    who could forge LKG could already forge that higher-precedence file — LKG grants nothing new.
+//  - Only honored when sticky is set (a real sign-in happened), so a stray/forged LKG on a never-signed-in
+//    install is ignored.
+//  - Public identifiers only (clientId/tenantId/allowedDomain) — never a secret/token.
+// Written on every successful sign-in (latest good config wins); cleared on a genuine authenticated
+// sign-out, in lockstep with the sticky flag.
+//
+function lkgConfigPath(): string {
+  return join(app.getPath('userData'), 'auth-lkg-config.json')
+}
+
+function writeLkgConfig(cfg: AzureConfig): void {
+  try {
+    writeFileSync(
+      lkgConfigPath(),
+      JSON.stringify({ clientId: cfg.clientId, tenantId: cfg.tenantId, allowedDomain: cfg.allowedDomain }),
+      { mode: 0o600 }
+    )
+  } catch {
+    /* best-effort: without it, recovery just falls back to Settings/managed config */
+  }
+}
+
+function readLkgConfig(): Partial<AzureConfig> {
+  try {
+    const j = JSON.parse(readFileSync(lkgConfigPath(), 'utf8'))
+    const clientId = String(j?.clientId || '').trim()
+    const tenantId = String(j?.tenantId || '').trim()
+    const allowedDomain = String(j?.allowedDomain || '').trim().replace(/^@/, '')
+    if (clientId && tenantId && allowedDomain) return { clientId, tenantId, allowedDomain }
+  } catch {
+    /* absent / unreadable / malformed — no recovery config */
+  }
+  return {}
+}
+
+function clearLkgConfig(): void {
+  try {
+    const p = lkgConfigPath()
+    if (existsSync(p)) rmSync(p)
+  } catch { /* best-effort */ }
 }
 
 function msalCachePath(): string {
@@ -248,6 +362,18 @@ export async function getGraphToken(scopes: string[]): Promise<string | null> {
 
 let session: Session | null = null
 let loaded = false
+
+// Single-flight guard for interactive sign-in. signIn() binds a loopback HTTP server, opens an external
+// browser, and races to write the session — so concurrent/looping calls (double-clicks, or a misbehaving
+// renderer spamming the IPC) would spawn multiple servers/browser windows and two writers racing on the
+// session file. One interactive flow at a time; extra calls are rejected until it settles. This is the
+// "rate limit auth endpoints" discipline applied at the main-process trust boundary, not the renderer.
+let signInInFlight = false
+
+// Thread the signed-in user's identity into every audit record (auth.ts is the source of truth for who's
+// signed in). Registered once at module load; the callback reads the live `session` binding lazily so it
+// always reflects the current signed-in user (or none) at the time each audit line is written.
+setAuditActor(() => session?.email)
 
 /**
  * Max age a locally-cached session is trusted before fresh interactive sign-in is required. The
@@ -417,8 +543,11 @@ function saveSession(s: Session): void {
         ? safeStorage.encryptString(json)
         : null
     if (blob) writeFileSync(sessionPath(), blob, { mode: 0o600 })
-  } catch {
-    /* in-memory only if write fails */
+  } catch (e) {
+    // Session persisted to memory only — sign-in still works for this run, but will silently sign
+    // the user out on next launch with no trace unless we log it. Never log session contents
+    // (email/name/tokens) — reason/class only.
+    mainLog.warn('[auth] failed to persist session to disk (in-memory only this run):', e instanceof Error ? e.message : String(e))
   }
 }
 
@@ -443,20 +572,32 @@ export function authStatus(): AuthStatus {
     signedIn: !!session,
     email: session?.email,
     name: session?.name,
-    domain: cfg?.allowedDomain
+    domain: cfg?.allowedDomain,
+    // Lets the renderer gate the SignInWall even when `configured` is false (e.g. sticky-configured
+    // survives a cleared Settings azure block) — mirrors requireAuth()'s own enforcement check exactly,
+    // so the wall and the IPC gate can never disagree about whether sign-in is required.
+    enforced: authEnforced() || isStickyConfigured()
   }
 }
 
 /** Org override: when set, privileged IPC is blocked until the user signs in, even if SSO is unconfigured. */
 function authEnforced(): boolean {
   if (/^(1|true|yes)$/i.test(process.env.ASKTOTO_REQUIRE_AUTH || '')) return true
-  // Machine-wide managed-config can also force it: { "requireAuth": true }.
-  for (const p of [adminManagedPath(), join(app.getPath('userData'), 'managed-config.json')]) {
-    try {
-      if (JSON.parse(readFileSync(p, 'utf8'))?.requireAuth === true) return true
-    } catch {
-      /* not present */
+  // Machine-wide managed-config can also force it: { "requireAuth": true }. Admin content comes from
+  // readTrustedAdminManaged() (same held-fd read as the trust check — see win-security.ts); the
+  // per-user file is read by path since it carries no win32 trust boundary.
+  try {
+    const admin = readTrustedAdminManaged()
+    if (admin && JSON.parse(admin)?.requireAuth === true) return true
+  } catch {
+    /* malformed admin content */
+  }
+  try {
+    if (JSON.parse(readFileSync(join(app.getPath('userData'), 'managed-config.json'), 'utf8'))?.requireAuth === true) {
+      return true
     }
+  } catch {
+    /* not present */
   }
   return false
 }
@@ -467,10 +608,11 @@ function authEnforced(): boolean {
  * Default: returns true when sign-in isn't enforced (SSO unconfigured) OR the user is signed in.
  * Fail-closed: with ASKTOTO_REQUIRE_AUTH (env or managed-config), require a signed-in session always.
  *
- * Sticky-configured guard: once SSO was configured from ANY source, requireAuth() treats the device
- * as enforced even if the renderer later clears the in-app Settings azure fields (which would
- * otherwise flip configured→false and open the privileged surface). The sticky flag is cleared only
- * by an authenticated signOut() — never by a renderer settings update.
+ * Sticky-configured guard: once a genuine interactive sign-in has succeeded (see writeStickyConfigured
+ * in signIn()), requireAuth() treats the device as enforced even if the renderer later clears the
+ * in-app Settings azure fields (which would otherwise flip configured→false and open the privileged
+ * surface). The sticky flag is cleared only by an authenticated signOut() — never by a renderer
+ * settings update, and never by merely resolving (unvalidated) config without ever signing in.
  */
 export function requireAuth(): boolean {
   const s = authStatus()
@@ -479,10 +621,25 @@ export function requireAuth(): boolean {
   return !s.configured || s.signedIn
 }
 
+/** Bucket a signIn() failure into a small, fixed category for the audit log — never the raw error
+ *  message, which can carry MSAL/account details (tenant hints, correlation IDs) that don't belong in
+ *  an audit record. */
+function coarseSignInFailure(e: unknown): string {
+  const msg = e instanceof Error ? e.message : String(e)
+  if (/timed out/i.test(msg)) return 'timeout'
+  if (/No authorization code|error_description|access_denied/i.test(msg)) return 'oauth_denied'
+  if (/network|ENOTFOUND|ECONNREFUSED|ETIMEDOUT/i.test(msg)) return 'network'
+  return 'other'
+}
+
 export async function signIn(): Promise<SignInResult> {
   const cfg = readConfig()
   if (!cfg) return { ok: true, configured: false } // not configured — let the user proceed
 
+  // Reject a second interactive flow while one is already running (see signInInFlight). Returning
+  // ok:false surfaces a clear message on the wall/Settings rather than silently opening a 2nd browser.
+  if (signInInFlight) return { ok: false, configured: true, error: 'A sign-in is already in progress.' }
+  signInInFlight = true
   try {
     // PCA is wired to the encrypted on-disk token cache (makePca) so the Graph token survives for later
     // calendar reads. (CryptoProvider comes through the lazy msal() accessor — see makePca.)
@@ -506,6 +663,7 @@ export async function signIn(): Promise<SignInResult> {
         }
         // CSRF check: the redirect MUST echo our state nonce. Reject anything else, keep waiting.
         if (url.searchParams.get('state') !== state) {
+          auditLog('auth.state_mismatch', {})
           res.writeHead(400, { 'Content-Type': 'text/plain' })
           res.end('Invalid state.')
           return
@@ -527,7 +685,11 @@ export async function signIn(): Promise<SignInResult> {
       server.listen(0, '127.0.0.1', async () => {
         const addr = server.address()
         const port = typeof addr === 'object' && addr ? addr.port : 0
-        redirectUri = `http://localhost:${port}`
+        // Match the literal bind address (127.0.0.1), NOT `localhost`: on Windows `localhost` resolves to
+        // ::1 first, and the browser's callback to an IPv6 address the server never listens on can stall
+        // or drop the OAuth code. Entra's loopback handling accepts http://127.0.0.1 on any port for the
+        // "Mobile and desktop applications" platform exactly like http://localhost.
+        redirectUri = `http://127.0.0.1:${port}`
         try {
           const authUrl = await pca.getAuthCodeUrl({
             scopes: SIGN_IN_SCOPES,
@@ -575,12 +737,12 @@ export async function signIn(): Promise<SignInResult> {
 
     if (tid !== cfg.tenantId) {
       await purgeRejected()
-      auditLog('auth.denied', { domain: cfg.allowedDomain })
+      auditLog('auth.denied', { domain: cfg.allowedDomain, attemptedEmail: email, attemptedTenant: tid })
       return { ok: false, configured: true, error: 'That account is outside your organization.' }
     }
     if (!email.endsWith(`@${cfg.allowedDomain.toLowerCase()}`)) {
       await purgeRejected()
-      auditLog('auth.denied', { domain: cfg.allowedDomain })
+      auditLog('auth.denied', { domain: cfg.allowedDomain, attemptedEmail: email, attemptedTenant: tid })
       return { ok: false, configured: true, error: `Use your @${cfg.allowedDomain} account.` }
     }
 
@@ -591,21 +753,40 @@ export async function signIn(): Promise<SignInResult> {
       tid,
       at: Date.now()
     })
+    // Only NOW — a real interactive sign-in has actually validated and established a session — does
+    // SSO count as "genuinely usable". See the sticky-configured comment block above readConfig().
+    // ORDER MATTERS: write the LKG recovery config BEFORE the sticky flag, so the invariant
+    // "sticky ⟹ a recovery config exists" holds even if the process dies between the two writes.
+    // If the flag were written first and writeLkgConfig then failed/crashed, a later "Reset SSO" +
+    // session-expiry would strand the user behind an enforced wall with no config to sign in against
+    // (unrecoverable brick). LKG-first makes that ordering window safe.
+    writeLkgConfig(cfg)
+    writeStickyConfigured()
     auditLog('auth.signin', { domain: cfg.allowedDomain })
     return { ok: true, configured: true, email }
   } catch (e) {
+    auditLog('auth.signin_failed', { reason: coarseSignInFailure(e) })
     return { ok: false, configured: true, error: e instanceof Error ? e.message : String(e) }
+  } finally {
+    // Always release the single-flight latch — success, denial, timeout, or throw — so a failed attempt
+    // never wedges sign-in permanently.
+    signInInFlight = false
   }
 }
 
 export function signOut(): void {
   // Load session before clearing so we can detect a genuine (authenticated) sign-out.
-  // The sticky-configured flag is only cleared when there was a real active session —
-  // a bare signOut() call with no session must NOT clear it (prevents an attacker from
-  // calling signOut() to drop the sticky flag and then clearing Settings to bypass auth).
+  // The sticky-configured flag + LKG recovery config are cleared only when there was a real active
+  // session — a bare signOut() call with no session must NOT clear them (prevents an attacker from
+  // calling signOut() to drop the sticky flag/LKG and then clearing Settings to bypass or brick auth).
+  // Cleared in lockstep: enforcement being intentionally lifted means its recovery record goes too;
+  // both are re-established on the next successful sign-in.
   loadSession()
   const wasSignedIn = !!session
   clearSession()
-  if (wasSignedIn) clearStickyConfigured()
+  if (wasSignedIn) {
+    clearStickyConfigured()
+    clearLkgConfig()
+  }
   auditLog('auth.signout')
 }

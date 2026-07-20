@@ -20,18 +20,26 @@ export function transcriptHasContent(transcript: string): boolean {
   return /\S/.test(transcript)
 }
 
+// No web search backs this — verdicts come only from the model's own training knowledge. Both prompts
+// below must tell it to admit that limit rather than confidently guess, or a fluent-sounding but
+// fabricated verdict is indistinguishable from a grounded one.
+const EPISTEMIC_HUMILITY_LINE =
+  'You have no web access and must judge only from your own training knowledge — if you cannot verify or refute the claim with real confidence, respond VERDICT: UNVERIFIABLE instead of guessing, and never invent specific facts, numbers, dates, or sources.'
+
 export function buildFactCheckClaimPrompt(claim: string): string {
   const clean = claim.trim()
   return (
     `Fact-check the following claim. Respond in EXACTLY this format and nothing else:\n${VERDICT_FORMAT}\n` +
-    'then 2-4 short bullet points (each ≤15 words) explaining why; if it is false or misleading, include the correct fact. Be fast and precise.\n\n' +
+    'then 2-4 short bullet points (each ≤15 words) explaining why; if it is false or misleading, include the correct fact. Be fast and precise.\n' +
+    `${EPISTEMIC_HUMILITY_LINE}\n\n` +
     `Claim: "${clean}"`
   )
 }
 
 export const FACT_CHECK_SCREEN_PROMPT =
   `Fact-check the most prominent claim visible on my screen. Respond in EXACTLY this format and nothing else:\n${VERDICT_FORMAT}\n` +
-  'then 2-4 short bullet points (each ≤15 words); if a claim is false or misleading, include the correct fact. Be fast and precise.'
+  'then 2-4 short bullet points (each ≤15 words); if a claim is false or misleading, include the correct fact. Be fast and precise.\n' +
+  `${EPISTEMIC_HUMILITY_LINE}`
 
 // Keep the local screen-summary request intentionally short and free of the generic router's
 // analytical escalation verbs. The screenshot itself is the context; adding a meeting transcript can

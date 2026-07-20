@@ -1,5 +1,6 @@
 import {
   GraduationCap,
+  UserSearch,
   Users,
   TrendingUp,
   MessageSquare,
@@ -17,6 +18,7 @@ const MODES: { id: string; label: string; icon: typeof Users }[] = [
   { id: 'meeting', label: 'Meeting', icon: Users },
   { id: 'sales', label: 'Sales', icon: TrendingUp },
   { id: 'interview', label: 'Interview', icon: GraduationCap },
+  { id: 'recruiting', label: 'Recruiting', icon: UserSearch },
   { id: 'negotiation', label: 'Negotiation', icon: Handshake },
   { id: 'presentation', label: 'Presentation', icon: Presentation },
   { id: 'support', label: 'Support', icon: Headset }
@@ -38,7 +40,7 @@ export function ModeIndicator({
   const label = modeLabel(mode, customModes ?? [])
   return (
     <div className="no-drag inline-flex items-center gap-1.5 rounded-full bg-white/[0.05] px-2.5 py-1 text-[11px] font-medium text-[color:var(--color-ink-2)]">
-      <Icon size={13} className="text-[color:var(--color-accent)]" />
+      <Icon size={13} className="text-[color:var(--color-accent-text)]" />
       {label}
       <span className="ml-0.5 inline-flex items-center gap-0.5 text-[10px] text-[color:var(--color-ink-3)]">
         <Settings2 size={10} /> change in Settings
