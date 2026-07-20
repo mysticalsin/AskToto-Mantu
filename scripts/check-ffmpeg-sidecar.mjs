@@ -24,6 +24,25 @@ if (actual !== expected) throw new Error(`${file} hash mismatch: expected ${expe
 // falls back to the sha256 check above.
 if (platform === process.platform && arch === process.arch) {
   const result = spawnSync(file, ['-L'], { encoding: 'utf8' })
+  // The sha256 above already proved these are the reviewed bytes, so a failure to
+  // RUN the binary is an execution problem — quarantine, a missing exec bit, a
+  // foreign arch — not a licensing one. Surface that directly: an unreported
+  // spawn failure leaves the banner empty, which then fails the LGPL test below
+  // and reports a licence violation for a binary whose licence was never read.
+  if (result.error) {
+    throw new Error(
+      `${file} matched the reviewed sha256 but could not be executed: ${result.error.message}. ` +
+        `This is not a licensing failure — check quarantine (xattr -l '${file}') and the exec bit.`
+    )
+  }
+  if (result.status !== 0) {
+    const stderr = (result.stderr || '').trim().slice(0, 300) || '(no stderr)'
+    throw new Error(
+      `${file} matched the reviewed sha256 but exited ${result.status}` +
+        `${result.signal ? ` on signal ${result.signal}` : ''} running -L, so its licence banner ` +
+        `could not be read. This is not a licensing failure. stderr: ${stderr}`
+    )
+  }
   const license = `${result.stdout || ''}\n${result.stderr || ''}`
   if (!/GNU Lesser General Public\s+License/i.test(license) || /nonfree parts compiled|--enable-gpl/i.test(license)) {
     throw new Error(`${file} is not the reviewed LGPL-only decoder binary.`)
