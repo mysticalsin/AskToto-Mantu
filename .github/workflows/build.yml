@@ -104,6 +104,13 @@ jobs:
           elif [ -f resources/ffmpeg/ffmpeg-darwin-arm64 ]; then
             mv resources/ffmpeg/ffmpeg-darwin-arm64 resources/ffmpeg/darwin-arm64/ffmpeg
             chmod +x resources/ffmpeg/darwin-arm64/ffmpeg
+            # A freshly downloaded, unsigned Mach-O is quarantined by the OS, and
+            # Gatekeeper then kills it on exec. check-ffmpeg-sidecar.mjs runs the
+            # binary to read its licence banner, so a quarantined sidecar fails the
+            # gate. Stripping the attribute here is safe: the same script verifies
+            # the file against the reviewed sha256 in resources/ffmpeg/manifest.json
+            # before it is ever executed, so trust comes from the hash, not the OS.
+            xattr -d com.apple.quarantine resources/ffmpeg/darwin-arm64/ffmpeg 2>/dev/null || true
           fi
       - name: Require the ffmpeg sidecar to be present
         run: |
