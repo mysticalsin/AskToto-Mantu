@@ -97,7 +97,10 @@ export const IPC = {
   importDecoderSourceAck: 'import-decoder:source-ack',
   exportRecapJson: 'recap:export-json',
   pickFolder: 'folder:pick',
+  addTeamTranscriptFolder: 'team-folder:add',
+  removeTeamTranscriptFolder: 'team-folder:remove',
   openPath: 'path:open',
+  openBrainForClaude: 'brain:open-for-claude',
   recallList: 'recall:list',
   recallSearch: 'recall:search',
   recallOpen: 'recall:open',
@@ -127,6 +130,7 @@ export const IPC = {
   windowHide: 'window:hide',
   windowToggle: 'window:toggle',
   windowQuit: 'window:quit',
+  windowRelaunch: 'window:relaunch',
   windowMinimize: 'window:minimize',
   // Renderer ErrorBoundary catch (React render-throw) → persisted crash-*.log, same sink as onFatal's
   // main-process crashes. Distinct from render-process-gone (whole renderer dies): this is a caught JS
@@ -193,6 +197,7 @@ export type AskMode = 'answer' | 'vision' | 'suggest' | 'summary' | 'recap'
 
 export const CONVERSATION_MODES = [
   'interview',
+  'recruiting',
   'meeting',
   'sales',
   'negotiation',
@@ -210,6 +215,7 @@ export type ConversationMode = BuiltinMode | (string & {})
 export const BUILTIN_MODE_LABELS: Record<BuiltinMode, string> = {
   general: 'General',
   interview: 'Interview',
+  recruiting: 'Recruiting',
   meeting: 'Meeting',
   sales: 'Sales',
   negotiation: 'Negotiation',
@@ -224,7 +230,7 @@ export interface CustomMode { id: string; label: string }
 /** Cluely-style ordered groups for the modes list (built-ins). Custom modes render under their own group in the UI. */
 export const MODE_GROUPS: { label: string; modes: BuiltinMode[] }[] = [
   { label: 'General', modes: ['general'] },
-  { label: 'Live assist', modes: ['interview', 'sales', 'negotiation', 'presentation', 'support'] },
+  { label: 'Live assist', modes: ['interview', 'recruiting', 'sales', 'negotiation', 'presentation', 'support'] },
   { label: 'Meetings', modes: ['meeting'] }
 ]
 
@@ -498,7 +504,8 @@ export type RecapExport = z.infer<typeof RecapExportSchema>
 
 export const ChatTurnSchema = z.object({
   role: z.enum(['user', 'assistant']),
-  content: z.string()
+  // Bounded for defense-in-depth against a hostile/buggy renderer — same convention as brainContext below.
+  content: z.string().max(100_000)
 })
 export type ChatTurn = z.infer<typeof ChatTurnSchema>
 
@@ -524,6 +531,13 @@ const AskStartBaseSchema = z.object({
   depth: z.enum(['deeper']).optional(),
   /** 'factcheck' = a verification ask → the router sends it to the strongest model (verifier path). */
   kind: z.enum(['answer', 'factcheck']).optional(),
+  /** When true, main redacts high-confidence secrets (cards, API keys, SSNs, private keys — same
+   *  redactSecrets() used on req.transcript) out of THIS request's `prompt` before it reaches a cloud
+   *  model. For prompts built from auto-captured content (e.g. fact-check's transcript fallback), never
+   *  from the user's own typed text — the "typed questions are never changed" promise depends on this
+   *  staying unset on any typed-claim/typed-question ask. Optional/undefined (not defaulted) like the
+   *  other per-turn flags above so every existing caller is unaffected. */
+  redactPrompt: z.boolean().optional(),
   /** Pins a specific Dust agent sId regardless of tier routing (e.g. Spotlight Ref). Dust-only; ignored by other providers. */
   agentOverride: z.string().optional(),
   /** Forces this one request to a specific provider regardless of the globally active `provider` setting —
@@ -542,7 +556,9 @@ const AskStartBaseSchema = z.object({
    *  conversation tail when a meeting is live). Main-assembled ONLY — cleared after parse and set from the
    *  local cache — so a hostile renderer can't smuggle screen text into the prompt. Capped like brainContext. */
   screenContext: z.string().max(8000).optional(),
-  history: z.array(ChatTurnSchema).default([])
+  // Bounded (defense-in-depth, mirrors brainContext's cap above) — an unbounded array let a hostile/buggy
+  // renderer hand main an ever-growing history to serialize/forward per ask.
+  history: z.array(ChatTurnSchema).max(50).default([])
 })
 export const AskStartSchema = AskStartBaseSchema.superRefine((value, context) => {
   if (value.visionEvidence && value.mode !== 'vision') {
@@ -700,10 +716,13 @@ export const BaseSettingsSchema = z.object({
   screenAsk: z.boolean().default(true),
   showLiveTranscript: z.boolean().default(false),
   meetingsFolder: z.string().default(''),
+  // Shared folders (e.g. a team OneDrive folder each member's Métis saves into) whose meeting transcripts
+  // are ALSO auto-ingested into this brain, attributed by the folder's own name. Centralizes the team's
+  // transcripts without touching the user's own meetings folder. Scanned by the same OneDrive-friendly
+  // backfill/reconciliation loop; team files are namespaced in the ingest index so they never collide with
+  // the user's own meetings (or another member's file of the same name).
+  teamTranscriptFolders: z.array(z.string()).default([]),
   autoSaveTranscripts: z.boolean().default(false),
-  // Gates the (popup-free) meeting watcher. OFF by default per Tony: detection is opt-in — the popup
-  // it once fed was removed as too intrusive; Listen is manual-only (Bar button, ControlPill mic, hotkey).
-  autoStartOnMeeting: z.boolean().default(false),
   launchAtLogin: z.boolean().default(false),
   onboardingDone: z.boolean().default(false),
   // When onboarding finished (ms). Anchors the 10-minute "Add your API key" nudge so it expires on a
@@ -740,6 +759,9 @@ export const BaseSettingsSchema = z.object({
   // here instead so it's checkable in Settings after the fact, never shown live. Persists until the user
   // dismisses it (Settings → Speech) — auto-clearing on the next meeting risks it vanishing unseen.
   asrLastFallbackAt: z.number().nullable().default(null),
+  // Same tracking as asrLastFallbackAt, for a WebGPU→CPU (or other backend) ASR fallback — set by the
+  // renderer, surfaced as a Settings → Speech note. Optional: absent on older persisted settings.
+  asrWebgpuFallbackAt: z.number().nullable().optional(),
   // On by default: this reminder is the ONLY consent mechanism Métis has today — it shows the
   // operator, never the other participants, and is not a substitute for actually telling people
   // they're being recorded. See the Settings copy near this toggle for the honest scope of what it does.
@@ -801,6 +823,44 @@ export const BaseSettingsSchema = z.object({
   speakerId: z
     .object({ enabled: z.boolean().default(false) })
     .default({ enabled: false }),
+  // Desk Tap Control (src/renderer/src/lib/tap/): tap the desk near the laptop to fire an app action —
+  // on-device DSP on a raw (EC/NS/AGC-off) mic stream, calibrated per desk/mic. `profile` is the
+  // calibration output (normalization stats, zone centroids, negative examples, data-derived OOD cap);
+  // it is a few KB of floats and nullable — null means "not calibrated yet", which keeps the feature
+  // inert even when enabled. zoneActions holds one HotkeyAction string per zone index; dispatch
+  // validates against HOTKEY_ACTIONS at fire time so a stale/unknown action is a no-op, never a crash.
+  tapControl: z
+    .object({
+      enabled: z.boolean().default(false),
+      // Default true: the tap mic then only runs while a listen session is already live, so the OS
+      // mic indicator carries no NEW meaning. "Always armed" (false) is the explicit opt-in that
+      // keeps the mic hot to START a session by tap — Settings copy owns that disclosure.
+      armOnlyWhileListening: z.boolean().default(true),
+      sensitivity: z.number().min(0).max(1).default(0.5),
+      zoneActions: z.array(z.string()).max(4).default([]),
+      profile: z
+        .object({
+          version: z.literal(1),
+          sampleRate: z.number(),
+          micDeviceId: z.string(),
+          mean: z.array(z.number()),
+          std: z.array(z.number()),
+          zones: z.array(z.object({ name: z.string(), centroid: z.array(z.number()) })).min(1).max(4),
+          negatives: z.array(z.array(z.number())).max(24),
+          dAccept: z.number(),
+          levelRange: z.object({ min: z.number(), max: z.number() }),
+          createdAt: z.number()
+        })
+        .nullable()
+        .default(null)
+    })
+    .default({
+      enabled: false,
+      armOnlyWhileListening: true,
+      sensitivity: 0.5,
+      zoneActions: [],
+      profile: null
+    }),
   // Phone-home license activation against a self-hosted license server (see main/license.ts). Gate is
   // OFF by default: Tony has not deployed a server yet, and shipping this on by default would lock him
   // out of his own app at next launch. checkLicenseGrace() IS wired into a real startup gate (App.tsx's
@@ -865,7 +925,15 @@ export const PublicSettingsSchema = BaseSettingsSchema.extend({
   managedKeys: z.array(z.string()).default([]),
   /** Providers whose key is set via an environment variable — in-app Remove is a no-op for these. */
   envKeys: z.array(z.string()).default([]),
-  loginItemOpenAtLogin: z.boolean().default(false)
+  loginItemOpenAtLogin: z.boolean().default(false),
+  /** App version (e.g. from package.json/app.getVersion()), populated by main for the About screen.
+   *  Optional — absent on older callers/tests that construct PublicSettings without it. */
+  version: z.string().optional(),
+  /** Org data-residency allowlist of provider ids (from managed-config `allowedProviders`). null = no
+   *  restriction. The renderer uses it to filter the provider picker to approved vendors and to badge a
+   *  blocked provider "restricted by your organization" — the SAME source the main process enforces at
+   *  request time, so the UI can't offer a provider that every ask would then reject. */
+  allowedProviders: z.array(z.string()).nullable().default(null)
 })
 export type PublicSettings = z.infer<typeof PublicSettingsSchema>
 
@@ -940,8 +1008,8 @@ export const DEFAULT_SETTINGS: Settings = {
   screenAsk: true,
   showLiveTranscript: false,
   meetingsFolder: '',
+  teamTranscriptFolders: [],
   autoSaveTranscripts: false,
-  autoStartOnMeeting: false, // meeting detection is opt-in (gates the popup-free watcher)
   launchAtLogin: false,
   onboardingDone: false,
   onboardingDoneAt: 0,
@@ -955,8 +1023,9 @@ export const DEFAULT_SETTINGS: Settings = {
   overlayOpacity: 1,
   showFullTranscriptInReview: false,
   asrQuality: 'fast',
-  asrEngine: 'parakeet',
+  asrEngine: 'whisper',
   asrLastFallbackAt: null,
+  asrWebgpuFallbackAt: null,
   requireConsentIndicator: true,
   redactSensitive: true,
   lastConsentReminderAt: 0,
@@ -975,6 +1044,13 @@ export const DEFAULT_SETTINGS: Settings = {
     useFor: { suggest: true, summary: true, vision: true }
   },
   speakerId: { enabled: false },
+  tapControl: {
+    enabled: false,
+    armOnlyWhileListening: true,
+    sensitivity: 0.5,
+    zoneActions: [],
+    profile: null
+  },
   licenseServerUrl: '',
   licenseKey: '',
   licenseCompanyName: '',
@@ -1082,6 +1158,9 @@ export interface MeetingSummary {
   /** Task MI-5: frontmatter `confidential: true` — excludes this meeting from every published wiki
    *  surface (note card, entity timelines/current-facts, indexes). Undefined/false = not confidential. */
   confidential?: boolean
+  /** True for a real encrypted meeting that failed to decrypt on this device — listed as a locked
+   *  stub (no preview) so it's visible with a lock affordance instead of silently vanishing. */
+  locked?: boolean
 }
 export interface RecallHit extends MeetingSummary {
   snippet: string
@@ -1124,6 +1203,10 @@ export interface AuthStatus {
   email?: string
   name?: string
   domain?: string
+  /** True when sign-in is actually enforced (env/managed-config requireAuth OR sticky-configured), even
+   *  if `configured` is false. Mirrors main/auth.ts requireAuth()'s own gate so the SignInWall can never
+   *  disagree with what privileged IPC actually blocks. Optional so existing partial consumers still typecheck. */
+  enforced?: boolean
 }
 export interface SignInResult {
   ok: boolean
@@ -1411,7 +1494,10 @@ export const CaptureResultSchema = z.object({
   width: z.number(),
   height: z.number(),
   /** Epoch ms when the screenshot was captured or cache-filled; used for real freshness UI. */
-  capturedAt: z.number().int().nonnegative()
+  capturedAt: z.number().int().nonnegative(),
+  /** True when the captured monitor didn't match the cursor's display (fell back to sources[0]);
+   *  the renderer surfaces a soft "captured a different monitor" notice. */
+  displayMismatch: z.boolean().optional()
 })
 export type CaptureResult = z.infer<typeof CaptureResultSchema>
 

@@ -335,6 +335,17 @@ export const PROVIDERS: Record<ProviderId, ProviderDef> = {
 
 export const PROVIDER_IDS = Object.keys(PROVIDERS) as ProviderId[]
 
+/** Filter provider ids to an org data-residency allowlist. A null/undefined allowlist = unrestricted
+ *  (ids returned unchanged); otherwise only ids present in the allowlist survive. Used by the onboarding
+ *  picker + Settings grid so the UI offers only what the main process will actually let answer. */
+export function filterAllowedProviders(
+  ids: ProviderId[],
+  allowed: string[] | null | undefined
+): ProviderId[] {
+  if (!allowed) return ids
+  return ids.filter((id) => allowed.includes(id))
+}
+
 /**
  * Auto-detect the provider from a pasted key by its unambiguous prefix.
  * Returns null when the key shape is shared by several providers (bare `sk-…`) so the

@@ -8,6 +8,7 @@ import { Markdown } from './Markdown'
 import { Chip, TextButton, Spinner } from './ui'
 import { ReviewEntityStrip } from './ReviewEntityStrip'
 import { useFlash } from '../lib/useFlash'
+import { accelLabel } from '../lib/keys'
 
 function clock(t: number): string {
   try {
@@ -105,7 +106,9 @@ export const Review = memo(function Review({
   bidstackTools,
   onOpenPastMeeting,
   isPastMeeting,
-  onRecapSaved
+  onRecapSaved,
+  onDirtyChange,
+  recapUnavailable
 }: {
   recap: AnswerState | null
   lines: TranscriptLine[]
@@ -146,6 +149,13 @@ export const Review = memo(function Review({
   /** Called with the new recap markdown after a successful in-place edit save, so the owner (App) can keep
    *  its own copy (used by Resume + follow-up generation) consistent without a disk re-read. */
   onRecapSaved?: (recap: string) => void
+  /** Mirrors recapDirty (below) up to the owner (App) so its global Escape handler can gate on the same
+   *  unsaved-edit check this component's own in-panel exits already run. Called with `false` on unmount. */
+  onDirtyChange?: (dirty: boolean) => void
+  /** Live session only: the recap was deliberately skipped (no AI provider configured) instead of being
+   *  fired and left to fail with a red error. Shown in place of the "writing detailed notes…" spinner,
+   *  which would otherwise spin forever since no recap request was ever sent. */
+  recapUnavailable?: { message: string; onOpenSettings?: () => void }
 }): JSX.Element {
   const [copied, flashCopied] = useFlash(1500)
   const [notesCopied, flashNotesCopied] = useFlash(1500)
@@ -220,6 +230,25 @@ export const Review = memo(function Review({
     savedPathRef.current = savedPath
   }, [savedPath])
   const recapText = editedRecap ?? recap?.text ?? ''
+
+  // True while the recap edit panel is open AND the draft actually differs from the saved/displayed
+  // text — i.e. there is something a navigation would silently throw away. Gated on editingRecap (not
+  // just a draft/text mismatch) because recapDraft is left holding its last value after Cancel/Save, so
+  // comparing the two alone would still read "dirty" once editingRecap is already false.
+  const recapDirty = editingRecap && recapDraft !== recapText
+  // Surface the dirty state to the owner (App) — its global Escape handler doesn't render inside this
+  // component's own exit buttons, so it can't call confirmDiscardRecapEdit directly; this keeps App's ref
+  // in sync so Escape can gate on the same check the in-panel exits below already use. Reset on unmount so
+  // a stale "dirty" flag can never survive after Review closes.
+  useEffect(() => {
+    onDirtyChange?.(recapDirty)
+    return () => onDirtyChange?.(false)
+  }, [recapDirty, onDirtyChange])
+  // onResume/onDone/"Recent meetings" all navigate away from this screen unconditionally; a reused Review
+  // instance would then reset editingRecap/editedRecap (see the savedPath effect above) with the edit never
+  // saved. Confirm once before discarding; no-op (returns true immediately) when there is nothing to lose.
+  const confirmDiscardRecapEdit = (): boolean =>
+    !recapDirty || window.confirm('You have unsaved changes to this recap. Discard them?')
 
   const startEditRecap = (): void => {
     setRecapDraft(recapText)
@@ -454,7 +483,15 @@ export const Review = memo(function Review({
         </div>
         <div className="flex items-center gap-1.5">
           {onResume && (
-            <Chip icon={Play} onClick={onResume} variant="accent">Resume session</Chip>
+            <Chip
+              icon={Play}
+              onClick={() => {
+                if (confirmDiscardRecapEdit()) onResume()
+              }}
+              variant="accent"
+            >
+              Resume session
+            </Chip>
           )}
           {onSave && (
             // Mirrors manualSave's own guard (App.tsx) — `!recap || recap.streaming` — so the button can't
@@ -471,7 +508,13 @@ export const Review = memo(function Review({
             <TextButton icon={Trash2} onClick={onDiscard} title="Discard this meeting without keeping it">Disregard</TextButton>
           )}
           {onDone && (
-            <Chip icon={isPastMeeting ? ArrowLeft : RotateCcw} onClick={onDone} variant="accent">
+            <Chip
+              icon={isPastMeeting ? ArrowLeft : RotateCcw}
+              onClick={() => {
+                if (confirmDiscardRecapEdit()) onDone()
+              }}
+              variant="accent"
+            >
               {isPastMeeting ? 'Back to history' : 'New meeting'}
             </Chip>
           )}
@@ -488,7 +531,7 @@ export const Review = memo(function Review({
           )}
         </div>
       )}
-      {savedPath && (
+      {savedPath && !meetingMeta && (
         <button
           type="button"
           aria-label="Open saved transcript folder"
@@ -522,8 +565,8 @@ export const Review = memo(function Review({
           <Lock size={13} className={confidentialFlag ? 'text-[var(--color-danger)]' : 'text-[color:var(--color-ink-3)]'} />
           <span className="flex-1 text-[color:var(--color-ink-2)]">
             {confidentialFlag
-              ? 'Confidential — excluded from published intelligence.'
-              : 'Confidential — exclude from published intelligence'}
+              ? 'Confidential: excluded from published intelligence.'
+              : 'Confidential: exclude from published intelligence'}
           </span>
           <span className={confidentialFlag ? 'font-medium text-[var(--color-danger)]' : 'text-[color:var(--color-ink-3)]'}>
             {confidentialFlag ? 'On' : 'Off'}
@@ -615,6 +658,23 @@ export const Review = memo(function Review({
                     {notesCopied ? <Check size={13} className="text-white" /> : <Copy size={13} />}
                     {notesCopied ? 'Copied' : 'Copy Summary'}
                   </Chip>
+                  {/* Regenerate — re-run the recap from the same transcript when the generated summary is wrong
+                      or thin. Same handler as the error-state Retry (onRetryRecap): a live meeting re-runs its
+                      recap, a past meeting regenerates + overwrites the saved one. Focus the section first
+                      because this button unmounts the instant regeneration clears recapText (mirrors Retry). */}
+                  {onRetryRecap && (
+                    <TextButton
+                      onClick={() => {
+                        summaryRef.current?.focus()
+                        onRetryRecap?.()
+                      }}
+                      disabled={recap?.streaming}
+                      title="Regenerate this summary from the transcript"
+                    >
+                      {recap?.streaming ? <Spinner size={11} /> : <RotateCcw size={11} />}
+                      {recap?.streaming ? 'Regenerating' : 'Regenerate'}
+                    </TextButton>
+                  )}
                   <TextButton onClick={exportJson} title="Copy structured JSON (decisions + action items) for Jira/Asana/Notion">
                     {jsonCopied ? <Check size={11} className="text-[var(--color-success)]" /> : <Download size={11} />}
                     {jsonCopied ? 'Copied' : 'Export JSON'}
@@ -656,7 +716,7 @@ export const Review = memo(function Review({
             />
             {recapEditError && <div className="text-[11px] text-[var(--color-danger)]">{recapEditError}</div>}
             <div className="text-[11px] text-[color:var(--color-ink-3)]">
-              Markdown supported. Changes are saved to this meeting. Cmd or Ctrl + Enter to save, Esc to cancel.
+              Markdown supported. Changes are saved to this meeting. {accelLabel('CommandOrControl+Return')} to save, Esc to cancel.
             </div>
           </div>
         ) : recap?.error ? (
@@ -695,6 +755,20 @@ export const Review = memo(function Review({
         ) : !recap && lines.length === 0 ? (
           <div className="text-[13px] text-[color:var(--color-ink-2)]">
             No speech was captured this session.
+          </div>
+        ) : recapUnavailable ? (
+          // No AI provider configured — the recap was never requested (see App.tsx maybeFireRecap), so
+          // without this branch a transcript with no recap would fall through to the spinner below and
+          // spin forever. Neutral, not an error: transcription/recording still worked.
+          <div className="flex flex-col gap-2">
+            <div className="text-[13px] text-[color:var(--color-ink-2)]">{recapUnavailable.message}</div>
+            {recapUnavailable.onOpenSettings && (
+              <div className="flex items-center gap-1.5">
+                <TextButton onClick={recapUnavailable.onOpenSettings}>
+                  Open Settings
+                </TextButton>
+              </div>
+            )}
           </div>
         ) : (
           <div className="flex items-center gap-2 py-1 text-[13px] text-[color:var(--color-ink-2)]">
@@ -940,7 +1014,9 @@ export const Review = memo(function Review({
                   <button
                     key={item.file}
                     type="button"
-                    onClick={() => onOpenPastMeeting?.(item.file)}
+                    onClick={() => {
+                      if (confirmDiscardRecapEdit()) onOpenPastMeeting?.(item.file)
+                    }}
                     className="no-drag focus-ring flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left hover:bg-white/[0.06]"
                   >
                     <span className="min-w-0 flex-1 truncate text-[12px] text-[color:var(--color-ink)]">

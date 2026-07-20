@@ -1,0 +1,118 @@
+name: Cahê Windows
+
+# Manual, controlled-channel build of the Cahê Windows pilot edition (embedded Kimi key). Deliberately kept
+# OUT of the main Release workflow's strict exact-asset-set publish gate — Cahê is a separate, controlled
+# build uploaded to an existing release on demand.
+#
+# Prerequisites (one-time, by a maintainer):
+#   1. Seed the ffmpeg-sidecar-v1 release with the reviewed win32-x64 binary (see .github/workflows/release.yml's
+#      "Require the ffmpeg sidecar" step for the exact `gh release create` command).
+#   2. Add repo secrets: CAHE_KIMI_JSON (the contents of build/cahe-kimi.local.json, i.e. {"kimiApiKey":"sk-kimi-…"}),
+#      plus the standard Windows signing secrets WIN_CSC_LINK / WIN_CSC_KEY_PASSWORD / WIN_CSC_EXPECTED_SUBJECT and GH_TOKEN.
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: 'Existing release tag to upload the Cahê installer to (e.g. v1.0.9)'
+        required: true
+
+concurrency:
+  group: cahe-windows-${{ github.event.inputs.release_tag }}
+  cancel-in-progress: false
+
+jobs:
+  cahe-windows:
+    name: Build + upload Cahê Windows
+    runs-on: windows-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      # ── ffmpeg sidecar (same provisioning as release-windows) ───────────────────────────────────────
+      - uses: actions/cache@v4
+        id: ffmpeg-cache
+        with:
+          path: resources/ffmpeg/win32-x64
+          key: ffmpeg-sidecar-v1-win32-x64-${{ hashFiles('resources/ffmpeg/manifest.json') }}
+      - name: Provision ffmpeg sidecar (win32-x64)
+        if: steps.ffmpeg-cache.outputs.cache-hit != 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p resources/ffmpeg/win32-x64
+          if ! gh release download ffmpeg-sidecar-v1 --repo "$GITHUB_REPOSITORY" \
+               --pattern 'ffmpeg-win32-x64.exe' --dir resources/ffmpeg --clobber; then
+            echo "::warning::Could not download ffmpeg-sidecar-v1 assets — falling through to the hard gate below."
+          elif [ -f resources/ffmpeg/ffmpeg-win32-x64.exe ]; then
+            mv resources/ffmpeg/ffmpeg-win32-x64.exe resources/ffmpeg/win32-x64/ffmpeg.exe
+          fi
+      - name: Require the ffmpeg sidecar to be present
+        shell: bash
+        run: |
+          if [ ! -f "resources/ffmpeg/win32-x64/ffmpeg.exe" ]; then
+            echo "::error::Missing resources/ffmpeg/win32-x64/ffmpeg.exe. Seed the ffmpeg-sidecar-v1 release first (see release.yml)."
+            exit 1
+          fi
+
+      # ── Required secrets (signing + the embedded Cahê key) ──────────────────────────────────────────
+      - name: Require signing + Cahê key secrets
+        shell: bash
+        env:
+          WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
+          WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
+          WIN_CSC_EXPECTED_SUBJECT: ${{ secrets.WIN_CSC_EXPECTED_SUBJECT }}
+          CAHE_KIMI_JSON: ${{ secrets.CAHE_KIMI_JSON }}
+        run: |
+          missing=()
+          [ -z "$WIN_CSC_LINK" ] && missing+=(WIN_CSC_LINK)
+          [ -z "$WIN_CSC_KEY_PASSWORD" ] && missing+=(WIN_CSC_KEY_PASSWORD)
+          [ -z "$WIN_CSC_EXPECTED_SUBJECT" ] && missing+=(WIN_CSC_EXPECTED_SUBJECT)
+          [ -z "$CAHE_KIMI_JSON" ] && missing+=(CAHE_KIMI_JSON)
+          if [ ${#missing[@]} -gt 0 ]; then
+            echo "::error::Missing secret(s): ${missing[*]}. CAHE_KIMI_JSON must be the contents of build/cahe-kimi.local.json."
+            exit 1
+          fi
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.22.3
+          cache: npm
+      - run: npm ci
+      - uses: actions/cache@v4
+        with:
+          path: |
+            resources/models
+            resources/asr
+            resources/ort
+            resources/llama
+            resources/local-llm
+          key: runtime-assets-${{ runner.os }}-${{ hashFiles('scripts/fetch-models.mjs', 'resources/runtime-assets-manifest.json') }}-${{ hashFiles('scripts/fetch-llama-server.mjs') }}-${{ hashFiles('scripts/fetch-local-model.mjs', 'scripts/local-model-assets.mjs') }}
+
+      # ── Build the keyed Cahê installer ──────────────────────────────────────────────────────────────
+      - name: Write the embedded Cahê key
+        shell: bash
+        env:
+          CAHE_KIMI_JSON: ${{ secrets.CAHE_KIMI_JSON }}
+        run: printf '%s' "$CAHE_KIMI_JSON" > build/cahe-kimi.local.json
+      - name: Build the Cahê installer
+        shell: bash
+        env:
+          # build-cahe-windows.mjs validates the key file, then embeds it because this flag is set (its
+          # preflight fails loudly if the key is missing — see scripts/build-cahe-windows.mjs).
+          METIS_CAHE_EMBED_KEY: '1'
+          WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
+          WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
+          WIN_CSC_EXPECTED_SUBJECT: ${{ secrets.WIN_CSC_EXPECTED_SUBJECT }}
+        run: npm run installers:win:cahe
+      - name: Upload the Cahê installer to the release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+        run: |
+          tag='${{ github.event.inputs.release_tag }}'
+          gh release upload "$tag" release/cahe-win/Metis-Windows-Cahe-Setup-*.exe --repo "$GITHUB_REPOSITORY" --clobber
+      - name: Wipe the key file
+        if: always()
+        shell: bash
+        run: rm -f build/cahe-kimi.local.json

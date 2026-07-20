@@ -659,6 +659,34 @@ Nothing in this folder is a verbatim transcript. Meetings flagged confidential i
 from every page here.
 `
 
+// The "handshake" a user hands to Claude (or any assistant): a single, self-contained entry doc addressed
+// to the assistant that says what this folder is, how it is organized, and how to USE it as the user's
+// second brain — including proactively surfacing next steps. Point Claude at this folder (a Claude Project,
+// Claude Desktop, or a synced-folder connector) and this file orients it in one read.
+const CLAUDE_MD = `# CLAUDE.md — read this folder as my second brain
+
+${AI_NOTICE}
+Hi Claude. This folder is my **Métis second brain**: a plaintext, always-current mirror of my meeting
+intelligence — the people I meet, the accounts and deals I am working, the commitments made, and a note
+card for every meeting. It is published here so you can read it directly and act as my second brain.
+
+## Start here
+- \`index.md\` — the entrypoint: recent meetings plus the most active people, accounts, and deals.
+- \`AGENTS.md\` — the full file schema, provenance rules, and navigation rules. Read it once.
+- \`meetings/<slug>.md\` — one note card per meeting (TL;DR, decisions, action items, linked entities).
+- \`people/<id>.md\`, \`accounts/<id>.md\`, \`deals/<id>.md\` — one page per entity, with a timeline, open
+  commitments, and a changelog of prior values.
+
+## How to help me
+Use this corpus to answer questions about my meetings, relationships, and deals, and — proactively — to
+surface **next steps**: open commitments that are aging, deals that have gone quiet, follow-ups I promised,
+and the single most useful thing to do next. Ground every claim in the specific meeting or entity page it
+came from (cite the file). Anything marked "not established" is not yet a fact — flag it, never guess a
+number. Nothing here is a raw transcript; every value is derived and carries its source, so treat these
+pages as summaries to verify against the linked records, not the source of record. Meetings I flagged
+confidential are already excluded from this folder.
+`
+
 function topByActivity<T extends { id?: string; name: string; meetings: MeetingRef[] }>(
   entities: T[],
   confidential: Set<string>,
@@ -739,6 +767,7 @@ export async function publishIndexes(s: Settings): Promise<void> {
   await writeWikiFile(join(wikiDir(s), 'index.md'), body)
   await writeWikiFile(join(wikiDir(s), 'AGENTS.md'), AGENTS_MD)
   await writeWikiFile(join(wikiDir(s), 'README.md'), README_MD)
+  await writeWikiFile(join(wikiDir(s), 'CLAUDE.md'), CLAUDE_MD)
 }
 
 // ── Hooks: per-merge entity+card publish, full rebuild ───────────────────────────────────────────────

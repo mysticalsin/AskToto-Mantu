@@ -1,8 +1,9 @@
 {
   "name": "asktoto",
-  "version": "1.0.9",
+  "version": "1.2.0",
   "description": "Métis - AI desktop overlay assistant",
   "author": "Tony Walteur <tony.walteur@gmail.com>",
+  "license": "MIT",
   "engines": {
     "node": "22.22.3"
   },

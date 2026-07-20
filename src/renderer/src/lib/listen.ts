@@ -89,17 +89,27 @@ const QWORDS =
 // not a finished one — so we hold off firing the auto-answer and let the coalesced turn accumulate the rest.
 // (Stranded prepositions like "where are you from" are deliberately NOT here — they DO end real questions.)
 const DANGLING = /\b(the|a|an|and|or|but|your|my|our|their|its)$/i
+// Terminal question-mark variants beyond ASCII '?' (U+003F): fullwidth '？' (U+FF1F, CJK) and Arabic '؟'
+// (U+061F) — Whisper transcribes many languages with these, so relying on endsWith('?') alone silently
+// dropped every non-English question from proactive auto-suggest.
+const TERMINAL_Q = /[?？؟]$/
+// QWORDS is a hard-coded English word list — only meaningful for space-delimited Latin-script clauses.
+// Gate the word-count/QWORDS branch on that so it can't misfire on non-Latin text (CJK/Arabic/Cyrillic,
+// which QWORDS wouldn't match anyway and which TERMINAL_Q already handles). Cover the full Latin range,
+// NOT just ASCII: Whisper/entity-casing emit a curly apostrophe (U+2019 in "What's"/"don't"/"L'Oréal")
+// and accented letters (café, naïve) — a pure-ASCII gate silently dropped every such English question.
+const LATIN_CLAUSE = /^[\x00-ɏ‘’“”–—…]*$/
 export function isQuestion(t: string): boolean {
   const s = t.trim()
   if (!s) return false
-  if (s.endsWith('?')) return true // explicit terminal punctuation → complete even when short
+  if (TERMINAL_Q.test(s)) return true // explicit terminal punctuation → complete even when short
   // Evaluate only the run's last clause: an accumulated/long turn may carry a completed leading sentence
   // (e.g. "So we shipped the update. What should we prioritize") -- QWORDS must match that clause's opening
   // word, not the whole run's, or a finished non-question opener permanently blocks every later question
   // in the same 'them' turn.
-  const lastClause = s.split(/(?<=[.!?])\s+/).pop() ?? s
-  if (DANGLING.test(lastClause.replace(/[.,;:!?\s]+$/, ''))) return false // still mid-sentence → not yet a question
-  return lastClause.split(/\s+/).length >= 3 && QWORDS.test(lastClause)
+  const lastClause = s.split(/(?<=[.!?？؟])\s+/).pop() ?? s
+  if (DANGLING.test(lastClause.replace(/[.,;:!?？؟\s]+$/, ''))) return false // still mid-sentence → not yet a question
+  return LATIN_CLAUSE.test(lastClause) && lastClause.split(/\s+/).length >= 3 && QWORDS.test(lastClause)
 }
 
 interface Channel {
@@ -112,6 +122,9 @@ interface Channel {
 
 export interface ListenApi {
   listening: boolean
+  /** True only once capture is actually confirmed (mic and/or system audio channel open) — see the
+   *  `capturing` field on the internal state above for why this must not be conflated with `listening`. */
+  capturing: boolean
   paused: boolean
   ready: boolean
   loading: boolean
@@ -176,6 +189,12 @@ export function useListen(
 ): ListenApi {
   const [state, setState] = useState({
     listening: false,
+    // True only once at least one audio channel (mic or system loopback) has actually opened — distinct
+    // from `listening`, which flips true optimistically at the top of start() before mic/system acquisition
+    // even begins. Consumers that gate a "you are being recorded" consent indicator should read this
+    // instead of `listening`, so the banner can't flash on a start() that ultimately fails to capture
+    // anything (see the both-failed early-return branch below, which never sets this true).
+    capturing: false,
     paused: false,
     ready: false,
     loading: false,
@@ -187,6 +206,11 @@ export function useListen(
 
   const workerRef = useRef<Worker | null>(null)
   const loadedQualityRef = useRef<'best' | 'fast' | null>(null) // quality the warm worker was loaded with
+  // The quality the USER actually asked for when start() was called, captured unconditionally of engine
+  // and independent of loadedQualityRef (which stays null whenever the whisper worker hasn't loaded yet,
+  // e.g. mid-Parakeet/Apple session). fallBackToWhisper and armNetworkRetry's retry() read this so a
+  // mid-session engine swap or a network-recovery reload honors the original choice instead of 'fast'.
+  const requestedQualityRef = useRef<'best' | 'fast'>('fast')
   const engineRef = useRef<'whisper' | 'parakeet' | 'apple'>('whisper') // active ASR engine for this session
   // Cached bundled-model flag: queried once from the main process and reused for every init message.
   // Fail closed on an IPC/preload error: installed builds must never turn a broken capability probe into
@@ -437,6 +461,7 @@ export function useListen(
         ...s,
         error: err.message || 'transcription worker error',
         listening: false,
+        capturing: false,
         paused: false,
         loading: false
       }))
@@ -451,8 +476,10 @@ export function useListen(
   }, [pump])
 
   // Repeated Parakeet failures mid-session → permanently switch this session to Whisper so transcription
-  // keeps working (mirrors the init-time fallback in start()). The window that tripped the threshold is
-  // lost, but every subsequent window is transcribed by Whisper once its worker finishes loading.
+  // keeps working, loading it at the quality the user actually asked for at start() (requestedQualityRef),
+  // not whatever loadedQualityRef happens to hold (it's null throughout a Parakeet session — Whisper's
+  // worker was never touched). The window that tripped the threshold is lost, but every subsequent window
+  // is transcribed by Whisper once its worker finishes loading.
   // (ensureWorker/getAsrBundled are stable; referenced from pump above before this line — fine at call time.)
   const fallBackToWhisper = useCallback((): void => {
     if (engineRef.current !== 'parakeet' && engineRef.current !== 'apple') return // already switched
@@ -467,7 +494,7 @@ export function useListen(
     setState((s) => ({ ...s, loading: true }))
     void getAsrBundled()
       .then((bundled) => {
-        ensureWorker().postMessage({ type: 'init', quality: loadedQualityRef.current ?? 'fast', bundled })
+        ensureWorker().postMessage({ type: 'init', quality: requestedQualityRef.current, bundled })
       })
       .catch(() => {})
   }, [ensureWorker, getAsrBundled])
@@ -506,7 +533,7 @@ export function useListen(
         void getAsrBundled()
           .then((bundled) => {
             if (!liveRef.current || readyRef.current) return
-            ensureWorker().postMessage({ type: 'init', quality: loadedQualityRef.current ?? 'fast', bundled })
+            ensureWorker().postMessage({ type: 'init', quality: requestedQualityRef.current, bundled })
           })
           .catch(() => {})
       }
@@ -765,13 +792,22 @@ export function useListen(
   // Settings toggle, Métis picks up system audio on its own. Only runs while listening + system was
   // requested; the getPermissions poll is skipped entirely once 'them' is live.
   useEffect(() => {
-    if (!state.listening || !wantsSystemRef.current) return
+    // win32's getPermissions always reports screenRecording as 'unknown' (no such OS-level permission
+    // concept on Windows) — the poll below can structurally never see 'granted' there, so it would just
+    // burn a 3s interval for the whole meeting with zero chance of firing. Skip it entirely on Windows.
+    if (isWindows || !state.listening || !wantsSystemRef.current) return
     const iv = setInterval(() => {
       if (channels.current.them || sysRecoveringRef.current) return // already have it / mid-recovery
       void window.toto
         .getPermissions()
         .then((p) => {
-          if (p?.screenRecording === 'granted' && !channels.current.them) void recoverSystemAudioRef.current?.()
+          // Windows never reports 'granted' here (windowsScreenStatus() hard-codes 'unknown' — there is no
+          // OS permission gate to poll), which made this watcher dead code there: a transient start-time
+          // loopback failure was never retried. Drive the retry off actual capture state on Windows instead
+          // of a permission string that will never flip.
+          if ((isWindows || p?.screenRecording === 'granted') && !channels.current.them) {
+            void recoverSystemAudioRef.current?.()
+          }
         })
         .catch(() => {})
     }, 3000)
@@ -792,6 +828,11 @@ export function useListen(
       if (startingRef.current) return
       startingRef.current = true
       try {
+        // Capture the caller's requested quality up front, unconditional of which engine ends up running
+        // this session — fallBackToWhisper and armNetworkRetry's retry() (both able to fire well after this
+        // start() call returns) read requestedQualityRef instead of loadedQualityRef, which stays null for
+        // the whole lifetime of a Parakeet session.
+        requestedQualityRef.current = quality
         if (workerIdleTimer.current) {
           clearTimeout(workerIdleTimer.current) // re-arming before the idle release fires: keep the worker warm
           workerIdleTimer.current = null
@@ -1017,7 +1058,7 @@ export function useListen(
               ? 'Could not start the microphone. Check that Windows microphone access is allowed for Métis and that a mic is connected.'
               : "Couldn't start the microphone. Check Microphone access in System Settings → Privacy & Security → Microphone."
           }
-          setState((s) => ({ ...s, error: msg, listening: false, loading: false }))
+          setState((s) => ({ ...s, error: msg, listening: false, capturing: false, loading: false }))
           // A failed start shouldn't pin the whisper worker + ~21MB ONNX wasm in memory for the app's life —
           // arm the same idle release stop() uses (ensureWorker recreates it on the next start()).
           if (workerIdleTimer.current) clearTimeout(workerIdleTimer.current)
@@ -1041,7 +1082,10 @@ export function useListen(
         } else if (source === 'both' && !micOk && sysOk) {
           note = 'Microphone unavailable. Listening to system audio only.'
         }
-        setState((s) => ({ ...s, error: note, listening: true, loading: !readyRef.current }))
+        // At least one channel (mic and/or system loopback) is confirmed open here — this is the point
+        // a consent/recording indicator should key off, not the optimistic `listening: true` set at the
+        // top of start() before any capture was actually acquired.
+        setState((s) => ({ ...s, error: note, listening: true, capturing: true, loading: !readyRef.current }))
       } finally {
         // Every exit path (the several early `return`s above, a thrown error, or the normal fall-through)
         // clears the guard so a later, legitimate start() is never permanently blocked.
@@ -1178,7 +1222,15 @@ export function useListen(
     //    mid-decode, and commitLine (gated on liveRef) would drop the last sentence once liveRef flipped
     //    false. liveRef stays TRUE through the drain so that final window still commits. A hard ceiling
     //    guards against a hung/never-returning decode wedging teardown.
-    const DRAIN_CEILING_MS = 4000
+    // Parakeet decodes run in the main process over IPC and race their own PARAKEET_FEED_TIMEOUT_MS
+    // timeout per window (see pump() above). A drain ceiling shorter than that timeout would tear down
+    // (liveRef=false) while the last decode is still in flight — and commitLine drops any line that lands
+    // after liveRef flips false — silently losing the final sentence of a Parakeet session. Give Parakeet
+    // sessions a ceiling that comfortably outlasts their own feed timeout — Apple Speech feeds over the
+    // same IPC path with the same timeout (see its pump above), so it gets the same headroom; Whisper
+    // (in-process, no IPC round trip) keeps the original 4s ceiling.
+    const DRAIN_CEILING_MS =
+      engineRef.current === 'parakeet' || engineRef.current === 'apple' ? PARAKEET_FEED_TIMEOUT_MS + 1000 : 4000
     const startedAt = Date.now()
     const finishTeardown = (): void => {
       // A new start() ran while we were draining — it already owns the session; do not clobber it.
@@ -1192,7 +1244,7 @@ export function useListen(
       closeChannel('you')
       closeChannel('them')
       void window.toto.setListeningState(false).catch(() => {})
-      setState((s) => ({ ...s, listening: false, paused: false, loading: false, error: null }))
+      setState((s) => ({ ...s, listening: false, capturing: false, paused: false, loading: false, error: null }))
       drainTimerRef.current = null
       stoppingRef.current = false
       // The final flushed window (if any) has now committed via commitLine — text() reflects the

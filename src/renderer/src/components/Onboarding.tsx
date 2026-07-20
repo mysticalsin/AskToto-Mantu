@@ -16,11 +16,14 @@ import {
   AlertCircle,
   Terminal,
   KeyRound,
-  Building2
+  Building2,
+  ChevronDown,
+  Loader2
 } from 'lucide-react'
+import { DEFAULT_SHORTCUTS } from '@shared/ipc'
 import type { PublicSettings, Profile, PlatformPermissions, ProfileRecoveryResult } from '@shared/ipc'
 import type { ProviderId } from '@shared/providers'
-import { PROVIDERS } from '@shared/providers'
+import { PROVIDERS, filterAllowedProviders } from '@shared/providers'
 import { MetisMark } from './MetisMark'
 import { accelLabel, isWindows } from '../lib/keys'
 
@@ -59,6 +62,11 @@ function ActionRow({ icon: Icon, label, hint, keys }: { icon: typeof Mic; label:
   )
 }
 
+// Mirrors Settings.tsx's managedChipCls — same "Managed by your organization" treatment, kept local here
+// since Onboarding doesn't otherwise import from Settings.
+const managedChipCls =
+  'inline-flex items-center gap-1 rounded-full border border-[var(--cl-primary)]/30 bg-[var(--cl-primary-soft)] px-1.5 py-0 text-[10px] font-medium text-[color:var(--color-accent-text)]'
+
 /** One selectable "how to power Métis" path on the provider-choice slide. A plain-language card the
  *  user taps to route themselves — no jargon, no key required to read it. */
 function ProviderOption({
@@ -66,19 +74,27 @@ function ProviderOption({
   title,
   badge,
   desc,
-  onClick
+  onClick,
+  disabled
 }: {
   icon: typeof Mic
   title: string
   badge?: string
   desc: string
   onClick: () => void
+  /** Disables the tile — either a CLI probe is already in flight, or `provider` is locked by managed
+   *  config (settings.managedKeys), in which case the pick would silently be dropped by main anyway. */
+  disabled?: boolean
 }): JSX.Element {
   return (
     <button
       type="button"
       onClick={onClick}
-      className="no-drag focus-ring group flex items-start gap-3 rounded-xl border border-[var(--color-hair-soft)] bg-white/[0.02] p-3.5 text-left transition-colors hover:border-[var(--color-accent)] hover:bg-white/[0.05]"
+      disabled={disabled}
+      className={[
+        'no-drag focus-ring group flex items-start gap-3 rounded-xl border border-[var(--color-hair-soft)] bg-white/[0.02] p-3.5 text-left transition-colors hover:border-[var(--color-accent)] hover:bg-white/[0.05]',
+        disabled ? 'cursor-not-allowed opacity-50 hover:border-[var(--color-hair-soft)] hover:bg-white/[0.02]' : ''
+      ].join(' ')}
     >
       <div className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-[var(--color-accent-soft)] text-[var(--color-accent)]">
         <Icon size={17} />
@@ -86,15 +102,21 @@ function ProviderOption({
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2">
           <span className="text-[13.5px] font-medium text-[color:var(--color-ink)]">{title}</span>
-          {badge && (
-            <span className="rounded-full bg-[var(--color-success)]/15 px-1.5 py-0.5 text-[10px] font-medium text-[var(--color-success)]">
-              {badge}
+          {disabled ? (
+            <span className="rounded-full bg-[var(--color-accent-soft)] px-1.5 py-0.5 text-[10px] font-medium text-[var(--color-accent)]">
+              Restricted by your organization
             </span>
+          ) : (
+            badge && (
+              <span className="rounded-full bg-[var(--color-success)]/15 px-1.5 py-0.5 text-[10px] font-medium text-[var(--color-success)]">
+                {badge}
+              </span>
+            )
           )}
         </div>
         <div className="mt-0.5 text-[11.5px] leading-snug text-[color:var(--color-ink-2)]">{desc}</div>
       </div>
-      <ArrowRight size={15} className="mt-1 shrink-0 text-[color:var(--color-ink-3)] group-hover:text-[color:var(--color-accent)]" />
+      <ArrowRight size={15} className="mt-1 shrink-0 text-[color:var(--color-ink-3)] group-hover:text-[color:var(--color-accent-text)]" />
     </button>
   )
 }
@@ -131,7 +153,7 @@ function CheckRow({
     >
       <span
         className={`mt-0.5 grid h-4 w-4 shrink-0 place-items-center rounded-full ${
-          ok ? 'bg-[var(--color-success)] text-white' : 'bg-[var(--color-warn,#fac775)] text-white'
+          ok ? 'bg-[var(--color-success)] text-white' : 'bg-[var(--color-warn,#fac775)] text-[#3d2c00]'
         }`}
       >
         {ok ? <Check size={11} /> : <AlertCircle size={11} />}
@@ -154,17 +176,24 @@ function CheckRow({
   )
 }
 
-/** 5-dot progress indicator for the walkthrough + provider-choice slides (2-4 are the toolbar tour,
- *  5 is the provider picker; 1 and 6 are the consent gate and readiness gate, which don't need it since
- *  they're the bookends, not part of the countable sequence). */
+/** 4-dot progress indicator for the walkthrough + provider-choice slides (2-4 are the toolbar tour, 5 is
+ *  the provider picker; 1 and 6 are the consent gate and readiness gate, which don't need it since they're
+ *  the bookends, not part of the countable sequence). Callers pass the RAW slide number (2-5) — normalized
+ *  here to a 1-4 dot index so the first shown slide (step 2) lights dot 1 and announces "Step 1 of 4"
+ *  instead of dot 2 / "Step 2 of 5". */
 function StepDots({ step }: { step: number }): JSX.Element {
+  const dot = step - 1 // raw slide 2-5 -> dot 1-4
   return (
-    <div className="flex items-center gap-1.5">
-      {[1, 2, 3, 4, 5].map((n) => (
+    <div className="flex items-center gap-1.5" role="group" aria-label={`Step ${dot} of 4`}>
+      {[1, 2, 3, 4].map((n) => (
         <span
           key={n}
-          className={`h-1.5 w-1.5 rounded-full ${n === step ? 'bg-[var(--color-accent)]' : 'bg-white/15'}`}
-        />
+          aria-current={n === dot ? 'step' : undefined}
+          className={`h-1.5 w-1.5 rounded-full ${n === dot ? 'bg-[var(--color-accent)]' : 'bg-white/15'}`}
+        >
+          {/* Text alternative so the active step isn't conveyed by color alone (WCAG 1.4.1). */}
+          {n === dot && <span className="sr-only">{`Step ${n} of 4`}</span>}
+        </span>
       ))}
     </div>
   )
@@ -205,7 +234,11 @@ export function Onboarding({
   patch,
   recoverEncryptedProfile,
   onDone,
-  onOpenAiSettings
+  onOpenAiSettings,
+  signedIn,
+  signedInEmail,
+  initialStep,
+  initialConsent
 }: {
   settings: PublicSettings
   saveKey?: (provider: ProviderId, k: string) => Promise<void>
@@ -217,14 +250,30 @@ export function Onboarding({
   /** Optional: opens Settings -> AI in place, wired onto the provider/API-key readiness row. Parent
    *  wiring is added separately; the row simply has no click-through fix when this is left undefined. */
   onOpenAiSettings?: () => void
+  /** Already signed in via Azure AD (App's useAuth) — e.g. Reset-onboarding re-drives this screen for a
+   *  user who never signed out. When true, slide 1 must not offer to launch a fresh interactive OAuth: a
+   *  reset promises "your settings won't change", and re-authenticating could silently switch identity. */
+  signedIn?: boolean
+  /** The signed-in account's email, shown in place of the generic "restricted to your org" caption. */
+  signedInEmail?: string
+  /** Start at a later step — OnboardingV2 runs the narrative experience first, then enters here at the
+   *  provider step (5) so key setup + the final consent/permissions checklist stay this component's job. */
+  initialStep?: 1 | 2 | 3 | 4 | 5 | 6
+  /** Consent already affirmed upstream (OnboardingV2's checkbox). Seeds recordingConsent at mount so a
+   *  not-yet-propagated patch can't make finish() re-persist `false`. Undefined = read from settings. */
+  initialConsent?: boolean
 }): JSX.Element {
-  const [recordingConsent, setRecordingConsent] = useState(settings.recordingConsent)
+  // initialConsent overrides the persisted value at mount: OnboardingV2 enters this component at the
+  // provider step AFTER its own required consent checkbox, but the patch({recordingConsent:true}) it
+  // issues may not have propagated into `settings` yet — reading settings.recordingConsent here would
+  // re-derive `false` and finish() would clobber the user's just-given consent (the CRITICAL audit bug).
+  const [recordingConsent, setRecordingConsent] = useState(initialConsent ?? settings.recordingConsent)
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
   const [finishErr, setFinishErr] = useState('')
   const [recoveryAvailable, setRecoveryAvailable] = useState(false)
   const [recoveryBusy, setRecoveryBusy] = useState(false)
-  const [step, setStep] = useState<1 | 2 | 3 | 4 | 5 | 6>(1)
+  const [step, setStep] = useState<1 | 2 | 3 | 4 | 5 | 6>(initialStep ?? 1)
   const [perms, setPerms] = useState<PlatformPermissions | null>(null)
   // Step 5's "An API key" card expands in place to name the actual providers instead of assuming
   // Anthropic — closes again if the user backs out of step 5 entirely.
@@ -233,6 +282,25 @@ export function Onboarding({
   // Windows has no OS consent dialog for desktop apps — the mic toggle only becomes "determined" (from
   // this app's perspective) after it actually attempts a capture once. Fired at most once per mount.
   const micProbeFiredRef = useRef(false)
+  // Step 5's chooseCli (below) awaits cliDetect + cliTest for up to ~45s with no earlier exit. `stepRef`
+  // mirrors the live `step` (not the value closed over when chooseCli was called) and `mountedRef` tracks
+  // whether Onboarding is still mounted, so a late resolution can never silently patch({ provider }) after
+  // the user already left step 5 (Back, Decide later, Get started) or unmounted onboarding entirely.
+  const [cliBusy, setCliBusy] = useState(false)
+  const stepRef = useRef(step)
+  useEffect(() => {
+    stepRef.current = step
+  }, [step])
+  const mountedRef = useRef(true)
+  useEffect(() => {
+    return () => {
+      mountedRef.current = false
+    }
+  }, [])
+  // Set when the user bypasses an in-flight "Sign in with Microsoft" wait via "Continue without
+  // signing in" — lets the abandoned signIn() promise's eventual resolution no-op instead of
+  // yanking the user back to this step or surfacing a stale error once they've moved on.
+  const abandonedSsoRef = useRef(false)
 
   // Move focus to the new step's heading on every transition so screen readers announce it instead of
   // silently dropping focus to <body>.
@@ -289,10 +357,20 @@ export function Onboarding({
       return
     }
     setErr('')
+    if (!viaSso && busy) {
+      // Bypassing a still-in-flight SSO wait (the loopback OAuth can block up to 5 minutes) —
+      // mark it abandoned so its late resolution doesn't affect us once we've moved on.
+      abandonedSsoRef.current = true
+    }
     setBusy(true)
     try {
-      if (viaSso && window.toto.signIn) {
+      // Already signed in (e.g. Reset-onboarding re-drives this screen for a user who never signed out) —
+      // never re-launch an interactive OAuth: it could silently switch the signed-in identity, contradicting
+      // "your settings won't change." The signed-in state is already correct; just continue the walkthrough.
+      if (viaSso && !signedIn && window.toto.signIn) {
+        abandonedSsoRef.current = false
         const r = await window.toto.signIn()
+        if (abandonedSsoRef.current) return
         if (!r.ok) {
           setErr(r.error || 'Sign-in failed. Use a Mantu Microsoft account.')
           setBusy(false)
@@ -301,7 +379,7 @@ export function Onboarding({
       }
       setStep(2)
     } catch (e) {
-      setErr(e instanceof Error ? e.message : 'Could not continue.')
+      if (!abandonedSsoRef.current) setErr(e instanceof Error ? e.message : 'Could not continue.')
     } finally {
       setBusy(false)
     }
@@ -354,7 +432,7 @@ export function Onboarding({
         </div>
         <div className="flex w-full max-w-[460px] flex-col gap-3 rounded-xl border border-[var(--color-hair-soft)] bg-white/[0.02] p-4">
           <ActionRow icon={Sparkles} label="Ask anything" keys={accelLabel('CommandOrControl+Shift+Return')} hint="Type a question, or capture your screen for visual help." />
-          <ActionRow icon={Camera} label="Capture screen" keys={accelLabel('CommandOrControl+Shift+S')} hint="Get instant help with whatever you’re looking at." />
+          <ActionRow icon={Camera} label="Capture screen" keys={accelLabel(settings.shortcuts?.['capture'] ?? DEFAULT_SHORTCUTS.capture)} hint="Get instant help with whatever you’re looking at." />
           <ActionRow icon={Zap} label="Quick actions" hint="One-tap chips: What to say next · Fact-check · Explain · Summarize screen." />
         </div>
         {/* Invisible placeholder matching step 4's caption line, so WalkNav sits at the same height on
@@ -420,6 +498,17 @@ export function Onboarding({
     // Picking a path just sets the active provider (Tony's routing: an API key -> Anthropic/Claude, a
     // Dust team -> Dust, an installed CLI -> Claude Code). "Decide later" is honoured — recording and
     // transcripts never need a key, so nobody is blocked here.
+    // A locked `provider` (Settings' managedKeys) is not user-choosable — main silently drops the pick, so
+    // the tiles must not pretend it's an option here either.
+    const providerLocked = settings.managedKeys.includes('provider')
+    // Org data-residency allowlist (null = unrestricted): these path tiles route straight to a provider,
+    // so each needs its own check — the CLI tile covers claude-cli/codex-cli (whichever chooseCli detects).
+    const pathAllow = settings.allowedProviders
+    const dustPathAllowed = !pathAllow || pathAllow.includes('dust')
+    const cliPathAllowed = !pathAllow || pathAllow.includes('claude-cli') || pathAllow.includes('codex-cli')
+    // The "An API key" tile is inert when the org approves no API-key provider at all — otherwise it
+    // would open an empty picker (its own tiles are allow-filtered below).
+    const apiPathAllowed = filterAllowedProviders(['anthropic', 'openai', 'nvidia', 'minimax'], pathAllow).length > 0
     const choose = (provider: ProviderId): void => {
       patch({ provider })
       setStep(6)
@@ -428,10 +517,28 @@ export function Onboarding({
     // the machine instead of always assuming Claude Code (otherwise a Codex-only install lands on the
     // wrong provider and the next screen shows it as not connected).
     const chooseCli = async (): Promise<void> => {
-      const claude = await window.toto.cliDetect('claude-cli')
-      if (claude.ok) return choose('claude-cli')
-      const codex = await window.toto.cliDetect('codex-cli')
-      choose(codex.ok ? 'codex-cli' : 'claude-cli')
+      setCliBusy(true)
+      try {
+        const claude = await window.toto.cliDetect('claude-cli')
+        if (claude.ok) {
+          // Verify the connection now (mirrors Settings.tsx's connect flow) so providerReady reflects
+          // reality immediately instead of the first Ask silently bouncing off a CLI that's installed but
+          // was never actually confirmed connected. A cliTest failure (installed but not signed in) still
+          // lets onboarding proceed — the readiness checklist on the next slide surfaces the hint.
+          await window.toto.cliTest('claude-cli')
+          // Bail if the user left step 5 (Back/Decide later/Get started) or unmounted while this awaited —
+          // otherwise this would silently overwrite whatever provider they set in the meantime.
+          if (!mountedRef.current || stepRef.current !== 5) return
+          choose('claude-cli')
+          return
+        }
+        const codex = await window.toto.cliDetect('codex-cli')
+        if (codex.ok) await window.toto.cliTest('codex-cli')
+        if (!mountedRef.current || stepRef.current !== 5) return
+        choose(codex.ok ? 'codex-cli' : 'claude-cli')
+      } finally {
+        if (mountedRef.current) setCliBusy(false)
+      }
     }
     // "Mantu Dust" isn't just a preference — kick off the one-click setup right here so onboarding ends
     // CONNECTED, not just with Dust selected. Import an existing Dust CLI session, or auto-run the
@@ -466,6 +573,7 @@ export function Onboarding({
             badge="No key needed"
             desc="Already use Claude Code or Codex in your terminal? Connect it. Nothing extra to pay, nothing to paste."
             onClick={() => void chooseCli()}
+            disabled={providerLocked || cliBusy || !cliPathAllowed}
           />
           {showApiPicker ? (
             <div className="flex flex-col gap-2 rounded-xl border border-[var(--color-hair-soft)] bg-white/[0.02] p-3.5 text-left">
@@ -476,7 +584,9 @@ export function Onboarding({
                 <span className="text-[13.5px] font-medium text-[color:var(--color-ink)]">Which provider?</span>
               </div>
               <div className="grid grid-cols-2 gap-1.5">
-                {(['anthropic', 'openai', 'nvidia', 'minimax'] as const).map((id) => (
+                {/* Honor the org data-residency allowlist (null = unrestricted) so onboarding never
+                    offers a provider every ask would then reject — same source main enforces. */}
+                {filterAllowedProviders(['anthropic', 'openai', 'nvidia', 'minimax'], settings.allowedProviders).map((id) => (
                   <button
                     key={id}
                     type="button"
@@ -501,6 +611,7 @@ export function Onboarding({
               title="An API key"
               desc="Claude, GPT, Grok, Kimi, and more. Paste your key and you're set. You pay your provider directly."
               onClick={() => setShowApiPicker(true)}
+              disabled={providerLocked || cliBusy || !apiPathAllowed}
             />
           )}
           <ProviderOption
@@ -509,8 +620,10 @@ export function Onboarding({
             badge="One-click setup"
             desc="Use Mantu's shared Dust workspace. Installs and signs you in automatically. No key to paste."
             onClick={() => void chooseDust()}
+            disabled={providerLocked || cliBusy || !dustPathAllowed}
           />
         </div>
+        {providerLocked && <span className={managedChipCls}>Managed by your organization</span>}
 
         <button
           type="button"
@@ -519,7 +632,7 @@ export function Onboarding({
         >
           Decide later; recording and transcripts still work <ArrowRight size={11} />
         </button>
-        <StepDots step={5} />
+        {(initialStep ?? 1) < 5 && <StepDots step={5} />}
         <button
           type="button"
           onClick={() => setStep(4)}
@@ -563,8 +676,12 @@ export function Onboarding({
           <CheckRow
             ok={settings.providerReady}
             label={PROVIDERS[settings.provider]?.kind === 'cli' ? `${providerLabel} connected` : `${providerLabel} API key`}
-            hint="add it in Settings → AI"
-            onFix={onOpenAiSettings}
+            hint={PROVIDERS[settings.provider]?.kind === 'cli' ? 'connect it to get live answers' : 'add your key to get live answers'}
+            // Settings can only render once the onboarding gate clears (App returns this panel while
+            // !onboardingDone), so complete onboarding first — otherwise this link is a silent no-op,
+            // a dead end on the one remediation the readiness checklist offers. finish() persists
+            // consent + onboardingDone; on its failure the error banner shows and we stay here.
+            onFix={onOpenAiSettings ? async (): Promise<void> => { await finish(); onOpenAiSettings() } : undefined}
             fixLabel="Open Settings → AI"
           />
           <CheckRow
@@ -628,7 +745,7 @@ export function Onboarding({
   }
 
   return (
-    <div className="fade-up flex min-h-[300px] w-full flex-col items-center justify-center gap-6 px-4 py-8 text-center">
+    <div className="fade-up flex min-h-[300px] w-full flex-col items-center justify-center gap-6 rounded-3xl border border-white/10 bg-[linear-gradient(165deg,#3A0B6B_0%,#22084A_45%,#160030_100%)] px-6 py-10 text-center shadow-[0_24px_80px_rgba(0,0,0,0.55)]">
       <MetisMark size={148} />
 
       <div className="flex flex-col gap-2">
@@ -650,7 +767,7 @@ export function Onboarding({
         </p>
       </div>
 
-      <div className="flex items-center gap-1.5 rounded-lg bg-[var(--color-accent-soft)] px-3 py-2 text-[12px] text-[color:var(--color-accent)]">
+      <div className="flex items-center gap-1.5 rounded-lg bg-[var(--color-accent-soft)] px-3 py-2 text-[12px] text-[color:var(--color-accent-text)]">
         <ShieldCheck size={12} />
         Audio is processed on your device and never uploaded.
       </div>
@@ -679,12 +796,18 @@ export function Onboarding({
           disabled={busy}
           onClick={() => advance(true)}
           className={[
-            'no-drag focus-ring flex items-center justify-center gap-2 rounded-xl bg-[var(--color-accent)] px-4 py-2.5 text-[14px] font-medium text-white hover:brightness-110 disabled:hover:brightness-100',
+            'no-drag focus-ring flex items-center justify-center gap-2 rounded-xl bg-[linear-gradient(180deg,#9A2BF0_0%,#7F00DA_100%)] px-4 py-2.5 text-[14px] font-semibold text-white shadow-[0_8px_24px_rgba(127,0,218,0.45)] hover:brightness-110 disabled:hover:brightness-100',
             busy ? 'cursor-not-allowed opacity-50' : ''
           ].join(' ')}
         >
-          <MsLogo size={16} /> Sign in with Microsoft
+          {busy ? <Loader2 size={16} className="animate-spin" /> : <MsLogo size={16} />}
+          {busy ? 'Waiting for your browser…' : 'Sign in with Microsoft'}
         </button>
+        {busy && (
+          <p className="text-[11px] leading-snug text-[color:var(--color-ink-3)]" role="status">
+            A Microsoft window opened. Finish there, or continue without signing in below.
+          </p>
+        )}
         <button
           type="button"
           disabled={busy}
@@ -693,11 +816,26 @@ export function Onboarding({
         >
           Continue without signing in <ArrowRight size={12} />
         </button>
+        {/* "Continue without signing in" only makes sense as a SEPARATE path from the SSO button above —
+            once already signed in there is only one path, so this second button would be a redundant,
+            confusing no-op (advance(false) either way). */}
+        {!signedIn && (
+          <button
+            type="button"
+            disabled={busy || !recordingConsent}
+            onClick={() => advance(false)}
+            className="no-drag focus-ring inline-flex items-center justify-center gap-1 rounded-xl px-4 py-2 text-[12px] text-[color:var(--color-ink-3)] hover:text-[color:var(--color-ink-2)] disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:text-[color:var(--color-ink-3)]"
+          >
+            Continue without signing in <ArrowRight size={12} />
+          </button>
+        )}
       </div>
 
       <div className="flex items-center gap-1.5 text-[11px] text-[color:var(--color-ink-3)]">
-        <ShieldCheck size={12} className="text-[color:var(--color-accent)]" />
-        Restricted to your Mantu Microsoft account · permissions are requested the first time you Listen.
+        <ShieldCheck size={12} className="text-[color:var(--color-accent-text)]" />
+        {signedIn
+          ? `Signed in${signedInEmail ? ` as ${signedInEmail}` : ''} · permissions are requested the first time you Listen.`
+          : 'Restricted to your Mantu Microsoft account · permissions are requested the first time you Listen.'}
       </div>
 
       <div className="text-[10px] text-[color:var(--color-ink-3)]">

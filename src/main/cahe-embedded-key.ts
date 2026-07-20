@@ -102,32 +102,49 @@ export function importEmbeddedCaheKey(): void {
     return
   }
 
+  // Only default the provider to Kimi and burn the one-time marker once we ACTUALLY have a Kimi key —
+  // seeded from the bundle here, or already present from a previous run / a manual import. A build that
+  // shipped no key (or a malformed bundle) must NOT strand the pilot user on a keyless "kimi" provider,
+  // and must NOT write the marker: leaving it unwritten lets a corrected build (or a bundle that only
+  // appears on a later launch) still seed, instead of one broken first launch disabling the seed forever.
+  let haveKey = false
   try {
-    if (!getApiKey('kimi')) {
+    if (getApiKey('kimi')) {
+      haveKey = true // user already has a Kimi key (e.g. a manual import) — respect it, nothing to seed
+    } else {
       const bundlePath = join(process.resourcesPath, 'cahe', 'kimi.json')
       if (!existsSync(bundlePath)) {
-        mainLog.warn(`[cahe-embedded-key] no embedded Kimi key bundle found at ${bundlePath}`)
+        // Keyless build: no bundle to seed. Leave the app unconfigured for normal onboarding (do NOT force
+        // provider:'kimi' with no key) and leave the marker unwritten so a later keyed build can still seed.
+        mainLog.warn(`[cahe-embedded-key] no embedded Kimi key bundle at ${bundlePath}; leaving normal onboarding in place`)
+        return
+      }
+      const bundle = JSON.parse(readFileSync(bundlePath, 'utf8')) as CaheKeyBundle
+      const extracted = bundle.kimiApiKey?.match(KIMI_KEY_PATTERN)?.[0]
+      if (extracted) {
+        setApiKey('kimi', extracted)
+        auditLog('key.set', { provider: 'kimi', source: 'cahe-embedded' })
+        mainLog.info('[cahe-embedded-key] seeded the embedded Kimi API key for the Cahê pilot')
+        haveKey = true
       } else {
-        const bundle = JSON.parse(readFileSync(bundlePath, 'utf8')) as CaheKeyBundle
-        const extracted = bundle.kimiApiKey?.match(KIMI_KEY_PATTERN)?.[0]
-        if (extracted) {
-          setApiKey('kimi', extracted)
-          auditLog('key.set', { provider: 'kimi', source: 'cahe-embedded' })
-          mainLog.info('[cahe-embedded-key] seeded the embedded Kimi API key for the Cahê pilot')
-        } else {
-          mainLog.warn('[cahe-embedded-key] embedded Kimi key bundle is missing a valid kimiApiKey')
-        }
+        // Malformed bundle (placeholder/wrong-format key): a corrected build should still get a chance, so
+        // return without writing the marker or forcing a keyless Kimi provider.
+        mainLog.warn('[cahe-embedded-key] embedded Kimi key bundle is missing a valid kimiApiKey; leaving normal onboarding in place')
+        return
       }
     }
   } catch (e) {
-    // Best-effort — a missing/corrupt/malformed bundle must never block startup.
+    // Best-effort — a corrupt bundle or keystore error must never block startup, and must not burn the
+    // marker (so the next launch can retry a corrected build).
     mainLog.warn('[cahe-embedded-key] embedded key import failed', e)
+    return
   }
 
-  // Out-of-box default: activate Kimi as the current provider, once. setSettings persists this into the
-  // user's own settings.json layer (no lock stands in the way anymore), so it reads back on every future
-  // getSettings() call — and a user who later picks Claude CLI/Codex CLI/Dust/another key simply
-  // overwrites this same layer, which the marker below ensures we never come back and clobber again.
+  if (!haveKey) return
+
+  // We have a Kimi key. Default the provider to Kimi ONCE — setSettings persists into the user's own
+  // settings.json layer, so a user who later picks Claude CLI/Codex CLI/Dust/another key overwrites it,
+  // and the marker below guarantees we never come back and clobber that choice.
   try {
     setSettings({ provider: 'kimi' })
   } catch (e) {
@@ -135,11 +152,8 @@ export function importEmbeddedCaheKey(): void {
     mainLog.warn('[cahe-embedded-key] could not seed the default Kimi provider', e)
   }
 
-  // Written unconditionally once we get here — whether the key/provider seed above succeeded, partially
-  // failed, or threw. This is a ONE-TIME seed attempt, not an ongoing sync: writing the marker regardless
-  // of outcome is what lets a user's later "change the key", "switch provider", or "remove the key" action
-  // stick — without it we'd re-seed both the embedded key and the default provider back in on every
-  // launch and silently undo their choice.
+  // Marker written now that a key is in place: this is a ONE-TIME seed. A later "change the key", "switch
+  // provider", or "remove the key" then sticks — the guard at the top skips this whole function next launch.
   try {
     writeFileSync(marker, new Date().toISOString(), { mode: 0o600 })
   } catch (e) {

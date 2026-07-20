@@ -21,15 +21,24 @@ function openaiMessages(req: AskStart, system: string): any[] {
   return msgs
 }
 
+/** The 400/422 error body (lowercased) if this is an OpenAI-compatible param rejection, else null. */
+function rejectionBody(e: unknown): string | null {
+  if (!(e instanceof OpenAI.APIError)) return null
+  if (e.status !== 400 && e.status !== 422) return null
+  return (String(e.message ?? '') + JSON.stringify((e as any).error ?? '')).toLowerCase()
+}
 /**
- * Some OpenAI-compatible provider endpoints (local models, certain proxies) reject
- * `stream_options.include_usage` with a 400 or 422. Detect that so we can retry without it.
+ * Two OPTIONAL params can each be rejected independently by some endpoints (local models, certain proxies):
+ * `stream_options.include_usage` (usage reporting) and `reasoning_effort` (Kimi effort control). They are
+ * detected separately so a rejection of ONE never causes the other to be silently dropped on retry.
  */
 function isStreamOptionsRejection(e: unknown): boolean {
-  if (!(e instanceof OpenAI.APIError)) return false
-  if (e.status !== 400 && e.status !== 422) return false
-  const body = (String(e.message ?? '') + JSON.stringify((e as any).error ?? '')).toLowerCase()
-  return body.includes('stream_options') || body.includes('include_usage')
+  const body = rejectionBody(e)
+  return !!body && (body.includes('stream_options') || body.includes('include_usage'))
+}
+function isReasoningEffortRejection(e: unknown): boolean {
+  const body = rejectionBody(e)
+  return !!body && body.includes('reasoning_effort')
 }
 
 /** Resolve the completion ceiling without changing established cloud-provider budgets. */
@@ -67,14 +76,23 @@ export function streamOpenAI(opts: StreamOptions): StreamHandle {
     // any other value 400s. OpenAI o-series and Kimi Code's kimi-for-coding both behave this way, so we
     // omit `temperature` entirely for them (and let the provider use its required default).
     const fixedTemperature = isOSeries || /kimi-for-coding/i.test(opts.model)
-    // Reasoning-only models (o-series, kimi-for-coding) spend a big chunk of the budget on hidden
+    // Hidden-reasoning models that DO accept a custom temperature (e.g. Grok's grok-4, which is both
+    // the provider default and the think/deep tier model — see shared/providers.ts) still burn a big
+    // chunk of the token budget on reasoning before the visible answer, same as the fixedTemperature
+    // models below. Without the wider headroom these can hit max_tokens mid-reasoning and stream back
+    // an empty/truncated answer with no error.
+    const isHiddenReasoning = fixedTemperature || /(^|\/)grok-4/i.test(opts.model)
+    // Reasoning-only models (o-series, kimi-for-coding, grok-4) spend a big chunk of the budget on hidden
     // reasoning BEFORE the answer, so give them more headroom or the answer can come back empty
     // (esp. on vision, where describing the image eats tokens). o-series uses max_completion_tokens.
     const maxTokens = outputTokenBudget(opts.model, opts.req.mode, opts.maxOutputTokens)
 
     // Inner function: build params + run the streaming loop. `includeUsage` controls whether
     // stream_options.include_usage is sent — some providers 400 on it, triggering a retry without it.
-    const doStream = async (includeUsage: boolean): Promise<{ inputTokens?: number; outputTokens?: number }> => {
+    const doStream = async (
+      includeUsage: boolean,
+      includeEffort: boolean
+    ): Promise<{ inputTokens?: number; outputTokens?: number; sawReasoning: boolean; sawContent: boolean }> => {
       const params: any = {
         model: opts.model,
         stream: true,
@@ -83,6 +101,11 @@ export function streamOpenAI(opts: StreamOptions): StreamHandle {
       // Ask the provider to include token usage in the final stream chunk (else onDone reports blank).
       // Omitted on retry when the provider rejected it (isStreamOptionsRejection).
       if (includeUsage) params.stream_options = { include_usage: true }
+      // reasoning_effort has its OWN flag (independent of stream_options) so a rejection of one never drops
+      // the other. Only Kimi sets opts.reasoningEffort (see StreamOptions), so every other provider's body
+      // is unchanged. This is how "Kimi = light thinking by default, heavy only when Métis thinking is on"
+      // reaches the wire.
+      if (includeEffort && opts.reasoningEffort) params.reasoning_effort = opts.reasoningEffort
       if (isOSeries) {
         params.max_completion_tokens = maxTokens
       } else {
@@ -105,36 +128,61 @@ export function streamOpenAI(opts: StreamOptions): StreamHandle {
         usage?: { prompt_tokens?: number; completion_tokens?: number }
       }>
       let usage: { prompt_tokens?: number; completion_tokens?: number } | undefined
+      let sawReasoning = false
+      let sawContent = false
       for await (const chunk of stream) {
         const delta = chunk.choices?.[0]?.delta
         // Reasoning-only models (e.g. Kimi Code's kimi-for-coding) stream their thinking as
         // `reasoning_content` BEFORE any answer `content`. Keep the stall-watchdog alive during that phase
         // so it doesn't abort the stream while the model is reasoning; the answer arrives in `content`.
-        if (delta?.reasoning_content) wd.ping()
+        if (delta?.reasoning_content) {
+          wd.ping()
+          sawReasoning = true
+        }
         const d = delta?.content
         if (d) {
           wd.ping()
+          sawContent = true
           opts.handlers.onDelta(d)
         }
         const u = (chunk as { usage?: typeof usage }).usage
         if (u) usage = u
       }
-      return { inputTokens: usage?.prompt_tokens, outputTokens: usage?.completion_tokens }
+      return { inputTokens: usage?.prompt_tokens, outputTokens: usage?.completion_tokens, sawReasoning, sawContent }
     }
 
     try {
-      let usageResult: { inputTokens?: number; outputTokens?: number }
+      let usageResult: { inputTokens?: number; outputTokens?: number; sawReasoning: boolean; sawContent: boolean }
+      // Both optional params are sent first; on a param rejection, drop ONLY the one the provider named,
+      // then (if the retry trips the other) drop both. Never drop a param the provider actually accepted —
+      // that's what silently killed reasoning_effort when only stream_options was rejected. Parameter
+      // rejections arrive before any content, so re-running the stream can't duplicate output.
       try {
-        usageResult = await doStream(true)
-      } catch (firstErr) {
-        // Retry once without stream_options for providers that reject the usage param.
-        // Parameter rejections arrive before any content, so no partial-output concern.
-        if (!isStreamOptionsRejection(firstErr) || controller.signal.aborted) throw firstErr
-        usageResult = await doStream(false)
+        usageResult = await doStream(true, true)
+      } catch (e1) {
+        if (controller.signal.aborted) throw e1
+        const dropUsage = isStreamOptionsRejection(e1)
+        const dropEffort = isReasoningEffortRejection(e1)
+        if (!dropUsage && !dropEffort) throw e1
+        try {
+          usageResult = await doStream(!dropUsage, !dropEffort)
+        } catch (e2) {
+          if (controller.signal.aborted) throw e2
+          if (!isStreamOptionsRejection(e2) && !isReasoningEffortRejection(e2)) throw e2
+          usageResult = await doStream(false, false)
+        }
       }
       wd.clear()
+      // The model spent its whole budget on hidden reasoning and never produced an answer (seen on
+      // Kimi Code's kimi-for-coding under a tight token budget). onDone with empty content would render
+      // as the idle "Ask a question…" placeholder — indistinguishable from never having asked — so
+      // surface it as a real, actionable error instead.
+      if (usageResult.sawReasoning && !usageResult.sawContent) {
+        opts.handlers.onError('The model produced only reasoning and no answer — try again or raise the token budget.')
+        return
+      }
       // Report real usage only if the provider included it; never a fabricated chunk count.
-      opts.handlers.onDone(usageResult)
+      opts.handlers.onDone({ inputTokens: usageResult.inputTokens, outputTokens: usageResult.outputTokens })
     } catch (e) {
       wd.clear()
       if (controller.signal.aborted) return

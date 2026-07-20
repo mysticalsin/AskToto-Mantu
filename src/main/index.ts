@@ -134,21 +134,27 @@ import {
   clearJournalCorruptionLock,
   readCorrectionsJournal
 } from './brain/corrections'
-import { publishEntity, removeFromWiki, publishAll, removeWiki } from './brain/publish'
+import { publishEntity, removeFromWiki, publishAll, removeWiki, wikiDir } from './brain/publish'
 import { computeAttention } from './brain/attention'
 import { openIntelligenceWindow, isIntelligenceSender, syncIntelContentProtection } from './intelligence'
 import {
   readIndex as readBrainIndex,
+  writeIndex as writeBrainIndex,
   readGraph as readBrainGraph,
+  writeGraph as writeBrainGraph,
   readPerson as readBrainPerson,
+  writePerson as writeBrainPerson,
   readAccount as readBrainAccount,
+  writeAccount as writeBrainAccount,
   readDeal as readBrainDeal,
+  writeDeal as writeBrainDeal,
   listEntities as listBrainEntities,
   listMeetingExtractions as listBrainMeetingExtractions,
   readMeetingExtraction as readBrainMeetingExtraction,
   purgeBrain,
   setDealOutcome,
-  slugify as brainSlugify
+  slugify as brainSlugify,
+  brainDir as brainStoreDir
 } from './brain/store'
 import { buildBrainContext } from './brain/context'
 import { buildSystem } from './personas'
@@ -220,7 +226,7 @@ import {
   purgeGraphArtifacts
 } from './graphify'
 import { SaveMeetingSchema, SaveNoteSchema } from '@shared/ipc'
-import { PROVIDERS, resolveModelTier, applyInteractiveGuardrail, type ProviderId } from '@shared/providers'
+import { PROVIDERS, resolveModelTier, applyInteractiveGuardrail, type ProviderId, type ProviderDef } from '@shared/providers'
 import { routeTier } from '@shared/routing'
 import { redactSecrets } from '@shared/redact'
 import { applySpeakerNames } from '@shared/transcript-align'
@@ -291,9 +297,11 @@ const BAR_HEIGHT = 84 // initial idle height of the slimmer two-row widget; useA
 const BAR_MIN_HEIGHT = 44 // floor for the resize clamp so the collapsed control mini-pill can shrink fully
 const PILL_WIDTH = 220 // narrow width for the collapsed control mini-pill (so it isn't a wide click-trap)
 
-/** Content protection hides the window from screen capture. Disable via env for dev/screenshots. */
+/** Content protection hides the window from screen capture. Disable via env for dev/screenshots ONLY —
+ *  gated to unpackaged builds so a packaged process can never have capture protection stripped by
+ *  `setx ASKTOTO_DISABLE_CP 1` + relaunch (mirrors the safeStorage backend gate in secrets.ts). */
 function contentProtectionOn(): boolean {
-  if (process.env.ASKTOTO_DISABLE_CP) return false
+  if (!app.isPackaged && process.env.ASKTOTO_DISABLE_CP) return false
   return getSettings().contentProtection
 }
 
@@ -311,6 +319,10 @@ let tray: Tray | null = null
 let audioArmed = false // loopback capture only granted during an explicit user-initiated Listen
 let lastBarHeight = BAR_HEIGHT // remember the bar's content height to restore on settings exit
 let currentWidth = BAR_WIDTH // window width; narrows to PILL_WIDTH while collapsed to the control mini-pill
+// True while collapsed to the control mini-pill. Guards lastBarHeight below: the pill's own (much shorter)
+// content height must never overwrite the remembered full-bar height, or expanding back out would apply
+// the tiny pill height first and squish/flash before the renderer's next resize report corrects it.
+let isMinimized = false
 const streams = new Map<string, { abort: () => void }>()
 let importJobs: ImportJobManager | null = null
 let decoderWin: BrowserWindow | null = null
@@ -664,6 +676,8 @@ async function runImportedRecap(job: ImportJob): Promise<string | undefined> {
               : undefined,
           model,
           temperature: settings.temperature,
+          // Same Kimi reasoning gate as the live stream: light by default, heavy only when thinking is on.
+          reasoningEffort: provider === 'kimi' ? (settings.thinkingMode === 'always' ? 'high' : 'low') : undefined,
           idleMs: 120_000,
           freshConversation: true,
           system:
@@ -764,6 +778,10 @@ function publicSettings(): PublicSettings {
   return {
     ...s,
     hasApiKey: hasApiKey(s.provider),
+    // Reflect the value actually applied to the window, not the raw stored setting — otherwise a dev
+    // process running with ASKTOTO_DISABLE_CP would show "Content protection: On" in Settings while
+    // capture protection is really off.
+    contentProtection: contentProtectionOn(),
     providerReady,
     // gates screen-ask so shots never hit a non-vision model — ORs localVisionReady so a local-only setup
     // (no cloud provider configured at all) still counts as vision-ready.
@@ -800,7 +818,9 @@ function publicSettings(): PublicSettings {
     resolvedMeetingsFolder: resolveMeetingsFolder(s),
     managedKeys: getLockedKeys(),
     envKeys: getEnvKeyProviders(),
-    loginItemOpenAtLogin
+    loginItemOpenAtLogin,
+    version: app.getVersion(),
+    allowedProviders: allowed // org allowlist (null = unrestricted); surfaced so the picker matches enforcement
   }
 }
 
@@ -813,6 +833,14 @@ function topCenter(width: number, height: number): { x: number; y: number } {
 }
 
 function createWindow(): void {
+  // Crash/recovery guard: render-process-gone recovery and the boot-retry path both rebuild the window
+  // from scratch, but isMinimized/currentWidth are module-level state that otherwise survives from before
+  // the crash. If the overlay had been collapsed to the mini-pill (currentWidth === PILL_WIDTH) at the
+  // moment it died, the freshly-recreated full-size window's mount effect calls setWindowMode() ->
+  // setBounds({ width: currentWidth }), squeezing the recovered Bar down to the 220px pill width — with
+  // resizable:false blocking any manual fix. Reset both so a recovered window always starts full-size.
+  isMinimized = false
+  currentWidth = BAR_WIDTH
   // Fresh-install onboarding is a ~640px panel, not the 84px bar. The renderer's content-driven auto-resize
   // can be starved by the macOS compositor on a just-created transparent, always-on-top overlay (rAF/timers
   // frozen for a beat after first paint), which would otherwise leave onboarding clipped to bar height with
@@ -856,6 +884,7 @@ function createWindow(): void {
     }
   })
 
+  try {
   win.setAlwaysOnTop(true, 'screen-saver')
   // setVisibleOnAllWorkspaces is a documented no-op on Windows (Electron: "This API does nothing on
   // Windows") — gate the call so it isn't dead code there. Windows has no public API for pinning a
@@ -876,7 +905,26 @@ function createWindow(): void {
     overlay.on('restore', reassertSkipTaskbar)
     overlay.on('focus', reassertSkipTaskbar)
   }
+  } catch (e) {
+    // A throw here (rare GPU/compositor-specific native call failure) previously left `win` pointing at a
+    // half-configured, never-loaded BrowserWindow that ensureWindow() would treat as healthy forever — it
+    // only checks `win && !win.isDestroyed()`, with no load-state check. Destroy the partial window and
+    // null the module ref before rethrowing so the caller (the boot runStep's catch, or ensureWindow's own
+    // try/catch on recovery) can cleanly recreate on its next attempt instead of reusing a broken window.
+    mainLog.error('[createWindow] post-construction setup failed, discarding partial window:', e)
+    try {
+      win?.destroy()
+    } catch {
+      /* already gone */
+    }
+    win = null
+    throw e
+  }
 
+  // Capture THIS window instance so a late 'closed' from a crashed/replaced window can't null out a
+  // freshly-recreated one (render-process-gone recovery reassigns `win` before the old one's 'closed'
+  // may fire). Only clear the module ref when it still points at the window that closed.
+  const self = win
   win.on('closed', () => {
     // Abort any in-flight LLM streams so their callbacks don't fire against a destroyed window.
     streams.forEach((s) => s.abort())
@@ -895,11 +943,13 @@ function createWindow(): void {
   win.webContents.on('will-navigate', (e, url) => {
     if (url !== win?.webContents.getURL()) e.preventDefault()
   })
-  // Debug aid (opt-in via ASKTOTO_DEBUG_RENDERER): mirror renderer warnings/errors into the main-process
-  // log so a crash-to-error-boundary can be diagnosed without opening the renderer devtools.
+  // Debug aid (opt-in via ASKTOTO_DEBUG_RENDERER): mirror renderer console warnings/errors into the
+  // main-process log so a crash-to-error-boundary can be diagnosed without opening the renderer devtools.
   if (process.env.ASKTOTO_DEBUG_RENDERER) {
     win.webContents.on('console-message', (_e, level, message, line, sourceId) => {
-      if (level >= 2) console.log(`[renderer] ${message}  (${sourceId}:${line})`)
+      // console.* is a no-op in a packaged GUI build with no console — route to the real sink so this
+      // debug mirror actually produces diagnosable output.
+      if (level >= 2) mainLog.info(`[renderer] ${message}  (${sourceId}:${line})`)
     })
   }
   // The BrowserWindow survives a renderer crash (GPU/compositor crash, OOM in the in-renderer ASR
@@ -955,10 +1005,12 @@ function resizeTo(height: number): void {
   const h = Math.max(BAR_MIN_HEIGHT, Math.min(Math.round(height), workArea.height - 48))
   const b = win.getBounds()
   if (h === b.height && currentWidth === b.width) {
-    lastBarHeight = h
+    // Only remember this height for restore-on-expand when it's the real bar, not the mini-pill's
+    // much shorter content — see isMinimized comment above.
+    if (!isMinimized) lastBarHeight = h
     return // idempotent — skip a no-op setBounds (belt-and-braces with the renderer-side resize dedup)
   }
-  lastBarHeight = h
+  if (!isMinimized) lastBarHeight = h
   // Keep the panel fully on-screen; if it would grow below the work area, slide it up.
   const maxY = workArea.y + workArea.height - h - 8
   const y = Math.min(b.y, maxY)
@@ -972,6 +1024,9 @@ function resizeTo(height: number): void {
 /** Collapse to / expand from the control mini-pill by switching the window width; the renderer's
  *  auto-resize then settles the height to whichever surface is shown. */
 function setMinimizedWidth(narrow: boolean): void {
+  // Flip BEFORE resizeTo so the pill's own resize reports (while narrow) never clobber lastBarHeight,
+  // and so expanding restores the last real bar height instead of the pill's tiny one.
+  isMinimized = narrow
   currentWidth = narrow ? PILL_WIDTH : BAR_WIDTH
   resizeTo(lastBarHeight) // re-apply immediately so width + recenter land before the renderer re-measures
 }
@@ -992,10 +1047,27 @@ function setWindowMode(): void {
   win.setBounds({ x, y: b.y, width: currentWidth, height: lastBarHeight }, false)
 }
 
+/** Self-heal a null `win` (e.g. a one-time createWindow() throw during boot) by retrying the window
+ *  creation once at call time, instead of leaving window-dependent hotkeys dead for the process
+ *  lifetime. Callers that previously did `if (!win) return` should call this instead. A repeated
+ *  failure is logged and swallowed — it just leaves win null again, same as the original no-op. */
+function ensureWindow(): BrowserWindow | null {
+  if (win && !win.isDestroyed()) return win
+  win = null // a destroyed-but-non-null win is just as dead as null — treat it the same before recreating
+  try {
+    createWindow()
+  } catch (e) {
+    mainLog.error('[recover] createWindow retry failed:', e)
+    auditLog('app.crash', { kind: 'boot_step', step: 'createWindow_retry' })
+  }
+  return win
+}
+
 function sendHotkey(action: HotkeyAction): void {
-  if (!win) return
-  if (!win.isVisible()) win.show()
-  win.webContents.send(IPC.hotkey, action)
+  const w = ensureWindow()
+  if (!w) return
+  if (!w.isVisible()) w.show()
+  w.webContents.send(IPC.hotkey, action)
 }
 
 // Tie-breaker for persistCrash's filename: two crashes landing in the same millisecond (e.g. a renderer
@@ -1095,7 +1167,10 @@ async function captureScreenshotOnce(displayId: number): Promise<CapturedScreen>
   // requested display. With several, never fall back to an arbitrary one: sending another monitor to a
   // provider is worse than asking the user to retry after a display-topology change.
   const matched = sources.find((s) => String(s.display_id) === String(disp.id))
-  if (!matched && sources.length > 1) {
+  // Surfaced to the caller (not just audited) so the renderer can show a soft "wrong screen?" notice
+  // instead of silently answering about a monitor the user didn't ask about.
+  const displayMismatch = !matched && sources.length > 1
+  if (displayMismatch) {
     auditLog('capture.display_mismatch', {
       requested: String(disp.id),
       available: sources.map((s) => String(s.display_id))
@@ -1270,8 +1345,11 @@ function isReachable(x: number, y: number, width: number, height: number): boole
 }
 
 function moveBy(dx: number, dy: number): void {
-  if (!win) return
-  const b = win.getBounds()
+  // Self-heal a null win (e.g. a one-time createWindow() throw during boot) — mirrors sendHotkey/
+  // toggleVisible so scroll/move hotkeys recover instead of staying permanently dead for the process life.
+  const w = ensureWindow()
+  if (!w) return
+  const b = w.getBounds()
   const x = b.x + dx
   const y = b.y + dy
   // Free movement anywhere that keeps the window reachable on SOME display — covers dragging clean
@@ -1280,7 +1358,7 @@ function moveBy(dx: number, dy: number): void {
   // to stick a drag pinned to that display's edge, since the matched display never changed until the
   // window had already fully crossed onto it — which the clamp itself was preventing.
   if (isReachable(x, y, b.width, b.height)) {
-    win.setBounds({ ...b, x, y })
+    w.setBounds({ ...b, x, y })
     return
   }
   // Unreachable (flung past every display): pull back onto the display nearest the ATTEMPTED position,
@@ -1288,7 +1366,7 @@ function moveBy(dx: number, dy: number): void {
   const { workArea } = screen.getDisplayMatching({ x, y, width: b.width, height: b.height })
   const cx = clampAxisMargin(x, b.width, workArea.x, workArea.width, DRAG_VISIBLE_MARGIN)
   const cy = clampAxisMargin(y, b.height, workArea.y, workArea.height, DRAG_VISIBLE_MARGIN)
-  win.setBounds({ ...b, x: cx, y: cy })
+  w.setBounds({ ...b, x: cx, y: cy })
 }
 
 /**
@@ -1316,11 +1394,18 @@ function registerScreenListeners(): void {
 }
 
 function toggleVisible(): void {
-  if (!win) return
-  if (win.isVisible()) win.hide()
+  // ensureWindow() silently CREATES a new window when `win` is null/destroyed (e.g. after a boot-time
+  // createWindow() failure) — and a freshly created window starts visible. Without this check, the
+  // isVisible() branch below would immediately re-hide the just-recovered window, so the first Ctrl+\
+  // after such a failure looked like a no-op and the user had to press it twice.
+  const hadNoWindow = !win || win.isDestroyed()
+  const w = ensureWindow()
+  if (!w) return
+  if (!hadNoWindow && w.isVisible()) w.hide()
   else {
-    win.show()
-    win.webContents.send(IPC.hotkey, 'ask')
+    w.show()
+    w.focus()
+    w.webContents.send(IPC.hotkey, 'ask')
   }
 }
 
@@ -1392,6 +1477,17 @@ function registerShortcuts(): void {
 
 let notifTimer: ReturnType<typeof setInterval> | null = null
 let notifPrevPollMs = 0 // wall time of the previous notifier poll — used for edge-trigger logic
+
+// Long-lived background intervals (Dust token refresh, license heartbeat, brain reconcile, retention
+// sweep) each do network/DNS or disk work on a timer. If one fires exactly as the process is torn down
+// — an OS quit, or an abrupt kill of a dev/driven instance — a resolve-in-flight can trip a SIGTRAP on
+// a blocking-pool thread (the shutdown-race crash class). Tracked here so will-quit cancels them ALL
+// before the rest of teardown, closing that race for good.
+const backgroundTimers: ReturnType<typeof setInterval>[] = []
+const trackTimer = (t: ReturnType<typeof setInterval>): ReturnType<typeof setInterval> => {
+  backgroundTimers.push(t)
+  return t
+}
 const notifiedKeys = new Set<string>() // keys of events already notified this session
 
 // Cache today's agenda (~30s) so startMeetingNotifier can cross-reference upcoming events against real
@@ -1447,9 +1543,14 @@ function startMeetingNotifier(): void {
         if (notifiedKeys.has(key)) continue
         notifiedKeys.add(key)
         try {
+          // msUntil can be anywhere from -30s (event already started) to +60s here — "starts in 1 minute"
+          // was hardcoded and wrong for the already-started/starting-now end of that range (most visible
+          // right after launch, when the first poll fires immediately for any event already inside the
+          // window). Phrase from the real remaining time instead of a fixed string.
+          const body = msUntil <= 5_000 ? `${ev.subject} is starting now` : `${ev.subject} starts in 1 minute`
           new Notification({
             title: 'Meeting starting soon',
-            body: `${ev.subject} starts in 1 minute`
+            body
           }).show()
         } catch {
           /* notifications may be blocked by the OS */
@@ -1464,6 +1565,36 @@ function startMeetingNotifier(): void {
   if (typeof notifTimer.unref === 'function') notifTimer.unref()
 }
 
+/** Builds the tray context menu template, reading shortcuts fresh from settings each call so the
+ *  accelerator labels never go stale — see rebuildTrayMenu(). */
+function buildTrayMenu(): Menu {
+  const user = getSettings().shortcuts ?? {}
+  const winKeys = process.platform === 'win32'
+  const fmtAccel = (a: string): string =>
+    !a ? '' : winKeys
+      ? a.replace(/CommandOrControl|CmdOrCtrl|Control/g, 'Ctrl').replace(/Command|Meta|Super/g, 'Win').replace(/Return/g, 'Enter')
+      : a.replace(/CommandOrControl|CmdOrCtrl|Command|Meta/g, '⌘').replace(/Shift/g, '⇧').replace(/Alt/g, '⌥').replace(/Control/g, 'Ctrl').replace(/Return/g, '↵').replace(/\+/g, '')
+  const label = (base: string, action: HotkeyAction): string => {
+    const k = fmtAccel(resolveShortcut(action, user))
+    return k ? `${base}  (${k})` : base
+  }
+  return Menu.buildFromTemplate([
+    { label: label('Show / Hide', 'hide'), click: toggleVisible },
+    { label: 'Settings…', click: () => {
+      if (win && !win.isVisible()) win.show()
+      sendHotkey('settings')
+    } },
+    { label: label('Listen / Stop listening', 'toggle-listen'), click: () => sendHotkey('toggle-listen') },
+    { label: "Today's agenda", click: () => {
+      if (win && !win.isVisible()) win.show()
+      sendHotkey('agenda')
+    } },
+    { label: label('New', 'reset'), click: () => sendHotkey('reset') },
+    { type: 'separator' },
+    { label: 'Quit Métis', click: () => app.quit() }
+  ])
+}
+
 function createTray(): void {
   try {
     const iconPath = app.isPackaged
@@ -1473,33 +1604,21 @@ function createTray(): void {
     if (!img.isEmpty()) img = img.resize({ width: 18, height: 18 })
     tray = new Tray(img.isEmpty() ? nativeImage.createEmpty() : img)
     if (process.platform === 'darwin' && img.isEmpty()) tray.setTitle(' ◉ Métis')
-    const user = getSettings().shortcuts ?? {}
-    const winKeys = process.platform === 'win32'
-    const fmtAccel = (a: string): string =>
-      !a ? '' : winKeys
-        ? a.replace(/CommandOrControl|CmdOrCtrl|Control/g, 'Ctrl').replace(/Command|Meta|Super/g, 'Win').replace(/Return/g, 'Enter')
-        : a.replace(/CommandOrControl|CmdOrCtrl|Command|Meta/g, '⌘').replace(/Shift/g, '⇧').replace(/Alt/g, '⌥').replace(/Control/g, 'Ctrl').replace(/Return/g, '↵').replace(/\+/g, '')
-    const label = (base: string, action: HotkeyAction): string => {
-      const k = fmtAccel(resolveShortcut(action, user))
-      return k ? `${base}  (${k})` : base
-    }
-    const menu = Menu.buildFromTemplate([
-      { label: label('Show / Hide', 'hide'), click: toggleVisible },
-      { label: 'Settings…', click: () => {
-        if (win && !win.isVisible()) win.show()
-        sendHotkey('settings')
-      } },
-      { label: label('Listen / Stop listening', 'toggle-listen'), click: () => sendHotkey('toggle-listen') },
-      { label: "Today's agenda", click: () => {
-        if (win && !win.isVisible()) win.show()
-        sendHotkey('agenda')
-      } },
-      { label: label('New', 'reset'), click: () => sendHotkey('reset') },
-      { type: 'separator' },
-      { label: 'Quit Métis', click: () => app.quit() }
-    ])
     tray.setToolTip('Métis')
-    tray.setContextMenu(menu)
+    tray.setContextMenu(buildTrayMenu())
+  } catch {
+    /* tray optional */
+  }
+}
+
+/** Rebuild the tray's context menu after a shortcut rebind. createTray() only builds the menu once at
+ *  boot (accelerator strings baked in from settings read at that moment); without this, the tray keeps
+ *  showing stale accelerators for the rest of the process life after settingsSet's registerShortcuts()
+ *  re-registers the new bindings. No-op if the tray was never created (optional feature). */
+function rebuildTrayMenu(): void {
+  if (!tray) return
+  try {
+    tray.setContextMenu(buildTrayMenu())
   } catch {
     /* tray optional */
   }
@@ -1513,6 +1632,10 @@ function createTray(): void {
 // power-save blocker for the duration of a meeting keeps the process at normal priority regardless of
 // window visibility. Module-level id: only one meeting can be active at a time.
 let recordingPowerSaveBlockerId: number | null = null
+// Guards the before-quit meeting-flush handler below from re-entering when it re-issues app.quit()
+// itself, and lets the IPC.windowQuit handler (whose caller, App.tsx's quitApp(), already AWAITS a
+// flush before invoking it) skip the redundant flush-and-wait entirely.
+let quitFlushDone = false
 function setRecordingPowerSaveBlock(on: boolean): void {
   if (on) {
     if (recordingPowerSaveBlockerId === null || !powerSaveBlocker.isStarted(recordingPowerSaveBlockerId)) {
@@ -1580,11 +1703,64 @@ async function backfillSpeakerNames(file: string): Promise<{ ok: boolean; named?
   }
 }
 
+/** Snapshot of the getSettings()-derived values that drive live side effects OUTSIDE settingsSet (window
+ *  content protection, global shortcuts, tray labels). getSettings() already refreshes live from
+ *  managed-config.json via its own mtime cache (store.ts), but nothing re-ran those side effects when only
+ *  the managed file changed — an admin edit never reached the running window until an unrelated
+ *  settingsSet call or a restart. Compared on every settingsGet (see below) so it does. */
+function managedEffectsSnapshot(): string {
+  const s = getSettings()
+  return JSON.stringify({ contentProtection: s.contentProtection, shortcuts: s.shortcuts })
+}
+
+/** Best-effort, idempotent cleanup: delete any lingering CLEARTEXT knowledge-graph artifacts whenever
+ *  at-rest encryption is effectively ON. Exists because a managed-config/admin `encryptTranscripts:true`
+ *  never goes through settingsSet (it's picked up live by getSettings()'s mtime cache, and a locked key
+ *  is dropped from every settingsSet patch besides), so the settingsSet-time purge below never fires for
+ *  it — graph.json/graph.html would otherwise linger forever, undeletable in-app, defeating the org
+ *  encryption guarantee. Safe to call on every settingsGet poll and at boot: graphHtml() is a single
+ *  existsSync, and purgeGraphArtifacts() itself no-ops once the files are gone. */
+function purgeGraphIfEncryptedAndStale(reason: string): void {
+  if (getSettings().encryptTranscripts && graphHtml()) {
+    purgeGraphArtifacts()
+    auditLog('graph.purged', { reason })
+  }
+}
+let lastAppliedManagedSnapshot: string | null = null
+
 function registerIpc(): void {
   // --- Settings & permissions ---
   ipcMain.handle(IPC.settingsGet, (e) => {
     assertMainWindow(e)
-    return publicSettings()
+    const s = publicSettings()
+    // Re-apply the live side effects of a managed-config change (content protection / shortcuts / tray)
+    // if the relevant values drifted since we last applied them — but only then, so a plain settings poll
+    // (this handler runs on every renderer settings fetch) stays a cheap no-op. `null` means "just booted,
+    // createWindow/registerShortcuts already applied the current values" — establish the baseline without
+    // re-running them.
+    const managedSnap = managedEffectsSnapshot()
+    if (lastAppliedManagedSnapshot !== null && managedSnap !== lastAppliedManagedSnapshot) {
+      win?.setContentProtection(contentProtectionOn())
+      syncIntelContentProtection() // keep the dashboard window's Private View in lockstep with the overlay
+      registerShortcuts()
+      rebuildTrayMenu()
+    }
+    lastAppliedManagedSnapshot = managedSnap
+    // Close the managed-config gap described above — runs on every poll, not just on detected drift,
+    // so it also catches encryption enabled at boot with a stale plaintext graph already on disk.
+    purgeGraphIfEncryptedAndStale('encryption-active')
+    // Auth is enforced and this caller isn't signed in: don't hard-fail (the renderer needs settings to
+    // render the SignInWall itself), but redact PII an unauthenticated renderer/DevTools caller has no
+    // business reading — the resume/job-description/notes profile fields and any imported per-mode
+    // reference documents (contextDocs), which can contain arbitrary pasted personal/meeting content.
+    if (!requireAuth()) {
+      return {
+        ...s,
+        profile: { ...s.profile, resume: '', jobDescription: '', notes: '' },
+        contextDocs: {}
+      }
+    }
+    return s
   })
   ipcMain.handle(IPC.permissionsGet, (e) => {
     assertMainWindow(e)
@@ -1641,6 +1817,10 @@ function registerIpc(): void {
 
   ipcMain.handle(IPC.settingsSet, async (e, patch) => {
     assertMainWindow(e)
+    // Trust boundary is main, not the renderer's SignInWall — block the mutation for an unauthenticated
+    // caller (DevTools/compromised renderer) when auth is enforced. Return the current (unchanged)
+    // settings so the shape matches the normal success return exactly; nothing is persisted.
+    if (!requireAuth()) return publicSettings()
     const p = patch ?? {}
     // License STATE is server-authoritative: only main's activateLicense/heartbeat (license.ts) may
     // write it. Without this strip, any renderer code could self-issue an unlimited license with a
@@ -1707,8 +1887,10 @@ function registerIpc(): void {
         /* not supported on this platform */
       }
     }
-    // Shortcuts may have changed — re-register from the new settings.
+    // Shortcuts may have changed — re-register from the new settings, then rebuild the tray menu so its
+    // accelerator labels reflect the new bindings instead of the ones baked in at createTray() boot time.
     registerShortcuts()
+    rebuildTrayMenu()
     return publicSettings()
   })
 
@@ -1804,6 +1986,10 @@ function registerIpc(): void {
   // --- Provider API keys ---
   ipcMain.handle(IPC.setApiKey, (e, payload: unknown) => {
     assertMainWindow(e)
+    // Trust boundary is main, not the renderer — block persisting an attacker-supplied credential for an
+    // unauthenticated caller when auth is enforced. Return the current (unchanged) hasKeys map so the
+    // shape matches the normal success return exactly; no key is written.
+    if (!requireAuth()) return { hasKeys: hasKeysMap() }
     const parsed = SetApiKeyPayloadSchema.parse(payload)
     setApiKey(parsed.provider, parsed.key)
     // setApiKey() silently treats an empty/whitespace key as "clear the saved key" (store.ts) — audit the
@@ -1814,6 +2000,7 @@ function registerIpc(): void {
 
   ipcMain.handle(IPC.clearApiKey, (e, payload: unknown) => {
     assertMainWindow(e)
+    if (!requireAuth()) return { hasKeys: hasKeysMap() }
     const parsed = ClearApiKeyPayloadSchema.parse(payload)
     clearApiKey(parsed.provider)
     auditLog('key.removed', { provider: parsed.provider })
@@ -1822,6 +2009,10 @@ function registerIpc(): void {
 
   ipcMain.handle(IPC.testApiKey, (e, payload: unknown) => {
     assertMainWindow(e)
+    // testApiKey() makes an outbound HTTP call to the target provider (SSRF-class surface for an
+    // unauthenticated caller when the provider/base URL is attacker-controlled) — gate it like every
+    // other privileged handler.
+    if (!requireAuth()) return { ok: false, error: 'Sign in with your Mantu account first.' }
     const parsed = TestApiKeyPayloadSchema.parse(payload)
     return testApiKey(parsed.provider, parsed.key)
   })
@@ -2373,11 +2564,19 @@ function registerIpc(): void {
     // screenContext is a MAIN-ONLY field (like brainContext): never trust a value the renderer sent. Clear
     // it unconditionally after parse, then set it below strictly from main's own on-device screen cache.
     req.screenContext = undefined
+    // req.redactPrompt is set by callers whose "prompt" is itself transcript-derived rather than user-typed
+    // (e.g. fact-check's transcript-fallback ask, which stuffs the transcript tail into prompt when there's
+    // no typed claim) — redact it the same way so a secret-shaped pattern in that fallback text isn't sent
+    // to the provider. Typed-claim fact-check asks never set this flag, so normal prompts are untouched.
+    if (s.redactSensitive && req.redactPrompt) req.prompt = redactSecrets(req.prompt)
     // Receipt Mode: ground a typed answer in the user's own past meetings. Match the brain against the
     // question (which already carries the live transcript tail via the renderer's withContext) and inject
     // the relevant, meeting-cited slice per-turn. Answer mode only — never the latency-critical spoken
     // suggest line or the screen-only vision turn. Best-effort: a brain read must never block an answer.
-    if (req.mode === 'answer') {
+    // Excludes fact-check (mode:'answer', kind:'factcheck'): personas.ts strips GROUNDING_RAIL for it
+    // (its contract is a VERDICT-only response), so injecting brainContext here would add citable
+    // material with no citation/anti-fabrication guardrail attached — gate identically to the rail.
+    if (req.mode === 'answer' && req.kind !== 'factcheck') {
       try {
         const hit = buildBrainContext(s, `${req.prompt}\n${req.transcript ?? ''}`)
         req.brainContext = hit.block || undefined
@@ -2473,12 +2672,27 @@ function registerIpc(): void {
       const def = PROVIDERS[provider]
       if (allowed && !allowed.includes(provider)) {
         auditLog('provider.blocked', { provider })
-        if (attempted.length === 0)
+        if (attempted.length === 0) {
+          // Name an actual next step, not just what's wrong: prefer an approved provider that's already
+          // keyed/CLI-connected (so "switch to X" is immediately actionable), falling back to just naming
+          // the first approved provider when none of them are configured yet.
+          const approvedCandidates = allowed
+            .filter((p) => p !== provider)
+            .map((p) => ({ id: p as ProviderId, def: PROVIDERS[p as ProviderId] as ProviderDef | undefined }))
+            .filter((c): c is { id: ProviderId; def: ProviderDef } => !!c.def)
+          const readyApproved = approvedCandidates.find((c) =>
+            c.def.kind === 'cli' ? !!s.cliConnected[c.id] : getApiKey(c.id).length > 0
+          )
+          const approvedLabel = (readyApproved ?? approvedCandidates[0])?.def.label
           win?.webContents.send(IPC.streamError, {
             id: req.id,
-            message: `${def.label} is not on your organization's approved provider list.`
+            message: approvedLabel
+              ? `${def.label} is not on your organization's approved provider list. Switch to ${approvedLabel} in Settings.`
+              : `${def.label} is not on your organization's approved provider list.`
           })
-        else if (!failover(attempted.concat(provider))) win?.webContents.send(IPC.streamError, { id: req.id, message: 'No approved provider could answer.' })
+        } else if (!failover(attempted.concat(provider))) {
+          win?.webContents.send(IPC.streamError, { id: req.id, message: 'No approved provider could answer.' })
+        }
         return
       }
       // Métis Local is keyless: its per-session sidecar key lives only in local-runtime.ts memory, never
@@ -2553,7 +2767,7 @@ function registerIpc(): void {
       win?.webContents.send(IPC.streamMeta, { id: req.id, provider, tier })
       // Per-tier idle budget: a live suggest gives up fast to stay real-time; recaps + deep answers get the
       // full headroom. Bounds time-to-first-token and triggers failover when a provider stalls before a token.
-      const idleMs =
+      const baseIdleMs =
         req.mode === 'suggest'
           ? 15_000
           : req.mode === 'recap' || req.mode === 'summary'
@@ -2565,6 +2779,13 @@ function registerIpc(): void {
                 : req.mode === 'vision'
                   ? 60_000
                   : 45_000
+      // Each failover attempt re-derives a fresh, full idle budget with no shared cross-provider deadline —
+      // on a silent-drop offline network (captive portal / dead-gateway WiFi that accepts the connection
+      // then black-holes packets) that compounds into N x the base budget of blank spinner before the user
+      // sees any error. Retries (attempted.length > 0) get a much shorter cap: a healthy provider still
+      // answers well inside it, while a silent-drop network surfaces the "Connection error." in seconds.
+      const RETRY_IDLE_CAP_MS = 20_000
+      const idleMs = attempted.length > 0 ? Math.min(baseIdleMs, RETRY_IDLE_CAP_MS) : baseIdleMs
       const startedAt = Date.now()
       let gotToken = false
       let ttftMs: number | undefined
@@ -2591,6 +2812,9 @@ function registerIpc(): void {
             : undefined,
         model,
         temperature: s.temperature,
+        // Kimi's kimi-for-coding always reasons (burning tokens). Default it to LOW effort and only go HIGH
+        // when the user turns Métis thinking on (thinkingMode 'always'); undefined for every other provider.
+        reasoningEffort: provider === 'kimi' ? (s.thinkingMode === 'always' ? 'high' : 'low') : undefined,
         idleMs,
         system: buildSystem(req, s.mode, s.profile, s.modePrompts, s.contextDocs[s.mode] || [], s.outputLanguage, s.summaryLanguage, s.systemPrompt),
         req,
@@ -3189,6 +3413,10 @@ function registerIpc(): void {
   // --- Filesystem pickers ---
   ipcMain.handle(IPC.pickFolder, async (e) => {
     assertMainWindow(e)
+    // Trust boundary is main, not the renderer — this persists a settings write (meetingsFolder), so it
+    // must be gated the same as every other settings-writer. Without this, a DevTools/compromised-renderer
+    // caller could silently redirect where transcripts are written even with auth enforced.
+    if (!requireAuth()) return { cancelled: true }
     // Same LSUIElement-accessory-app reasoning as recapPdf above: anchor to `win` so the dialog actually
     // surfaces instead of silently hanging with nothing to attach to.
     const openDialogOpts: Electron.OpenDialogOptions = {
@@ -3197,6 +3425,31 @@ function registerIpc(): void {
     }
     const r = win ? await dialog.showOpenDialog(win, openDialogOpts) : await dialog.showOpenDialog(openDialogOpts)
     if (!r.canceled && r.filePaths[0]) setSettings({ meetingsFolder: r.filePaths[0] })
+    return publicSettings()
+  })
+
+  // Team transcripts: pick a shared folder whose meeting transcripts are ALSO ingested into this brain
+  // (settings.teamTranscriptFolders). Appended (deduped) rather than replacing meetingsFolder — this
+  // never touches where the user's OWN meetings are saved.
+  ipcMain.handle(IPC.addTeamTranscriptFolder, async (e) => {
+    assertMainWindow(e)
+    const openDialogOpts: Electron.OpenDialogOptions = {
+      properties: ['openDirectory'],
+      message: "Choose a shared folder whose transcripts feed this brain (e.g. a teammate's meetings folder)"
+    }
+    const r = win ? await dialog.showOpenDialog(win, openDialogOpts) : await dialog.showOpenDialog(openDialogOpts)
+    if (!r.canceled && r.filePaths[0]) {
+      const picked = r.filePaths[0]
+      const current = getSettings().teamTranscriptFolders ?? []
+      if (!current.includes(picked)) setSettings({ teamTranscriptFolders: [...current, picked] })
+    }
+    return publicSettings()
+  })
+  ipcMain.handle(IPC.removeTeamTranscriptFolder, async (e, folder: unknown) => {
+    assertMainWindow(e)
+    const target = typeof folder === 'string' ? folder : ''
+    const current = getSettings().teamTranscriptFolders ?? []
+    setSettings({ teamTranscriptFolders: current.filter((f) => f !== target) })
     return publicSettings()
   })
 
@@ -3228,6 +3481,20 @@ function registerIpc(): void {
     // Encrypted transcripts are unreadable in an editor — open a decrypted temp copy instead.
     if (encrypted) return shell.openPath(decryptToTemp(path))
     return shell.openPath(path)
+  })
+
+  // "Open brain folder for Claude" (the handshake): reveal the published wiki — a plaintext, self-describing
+  // mirror with a CLAUDE.md entry doc — so the user can point Claude at it (a Claude Project, Claude Desktop,
+  // or a synced-folder connector). Gated on publishBrainPages in the UI; when publishing is on the folder
+  // exists (settingsSet fires publishAll on enable). Returns the path so the renderer can show/copy it.
+  ipcMain.handle(IPC.openBrainForClaude, async (e) => {
+    assertMainWindow(e)
+    if (!requireAuth()) return { ok: false, path: '' }
+    const s = getSettings()
+    const dir = wikiDir(s)
+    if (!s.publishBrainPages || !existsSync(dir)) return { ok: false, path: dir }
+    await shell.openPath(dir)
+    return { ok: true, path: dir }
   })
 
   // --- Listening state (tray icon + Dust conversation reset + power-save block) ---
@@ -3315,6 +3582,19 @@ function registerIpc(): void {
   })
   ipcMain.handle(IPC.windowQuit, (e) => {
     assertMainWindow(e)
+    // App.tsx's quitApp() already `await`s flushLiveMeeting() (a best-effort saveTranscript) before
+    // invoking this — the meeting is already on disk by the time we get here, so the before-quit
+    // handler below must not add its own redundant flush-and-wait on top of an already-safe quit.
+    quitFlushDone = true
+    app.quit()
+  })
+  // A fresh Screen Recording grant only takes effect for a NEW launch (macOS applies TCC changes to the
+  // next process, not the already-running one) — this is the one-click recovery for that dead end, wired
+  // to the Restart button the renderer shows once it detects the permission flipped mid-session. Leaves
+  // quitFlushDone unset so the normal before-quit handler still flushes a live meeting first.
+  ipcMain.handle(IPC.windowRelaunch, (e) => {
+    assertMainWindow(e)
+    app.relaunch()
     app.quit()
   })
   // --- Auto-update ---
@@ -3386,6 +3666,27 @@ if (!app.requestSingleInstanceLock()) {
   // Cahê M13: one-time enable of the on-device model so the background screen reader works out of the box
   // (own marker → also migrates existing pilot profiles upgraded from 1.0.7). See cahe-embedded-key.ts.
   seedCaheLocalAiForBackgroundScreen()
+  // Windows toast attribution: a process's AppUserModelID must match the installed shortcut's AUMID
+  // (electron-builder sets it to appId) or Windows silently drops native Notifications — which breaks
+  // the meeting-reminder toast for portable-build and launch-at-login users (no shortcut in the launch
+  // path). Set it to the exact appId, before createTray/createWindow/any Notification.
+  if (process.platform === 'win32') app.setAppUserModelId('com.mantu.asktoto')
+  // Windows CreateProcess searches the current working directory for a bare-name child executable
+  // before it searches PATH — if AskToto is ever launched from an attacker-writable cwd, a planted
+  // binary (uv/python/npm/where/tar/cmd, etc.) could get executed by any later spawn. Move cwd to our
+  // own userData dir (always exists at startup; nothing in the app relies on process.cwd()) before any
+  // spawn/createTray/createWindow happens, so that class of attack has nothing left to land in.
+  if (process.platform === 'win32') {
+    try { process.chdir(app.getPath('userData')) } catch { /* best-effort */ }
+  }
+  // Reconcile the OS login item with the effective launchAtLogin setting once at boot. Covers two gaps:
+  // a managed-config/default launchAtLogin:true is never registered (setLoginItemSettings only ran on an
+  // explicit user patch), and OS-side drift (Task Manager Startup disable, AV cleanup, profile migration)
+  // silently diverges from the persisted preference. Idempotent — only writes when they actually differ.
+  try {
+    const want = getSettings().launchAtLogin
+    if (app.getLoginItemSettings().openAtLogin !== want) app.setLoginItemSettings({ openAtLogin: want })
+  } catch { /* best-effort — never block startup */ }
   // Unpackaged (dev/QA) runs show Electron's default icon in the Dock — brand them with the Mantu M so
   // a dev window is never mistaken for "the Electron thing". Packaged builds get build/icon.png baked
   // in by electron-builder (mac .icns / win .ico) and don't need this.
@@ -3435,11 +3736,34 @@ if (!app.requestSingleInstanceLock()) {
     }).catch(() => { /* best-effort — never block startup or the interval */ })
   }
   runRetentionSweep()
-  setInterval(runRetentionSweep, 6 * 60 * 60 * 1000)
-  if (process.platform === 'darwin') app.dock?.hide()
+  trackTimer(setInterval(runRetentionSweep, 6 * 60 * 60 * 1000))
+  // Guarded like the neighboring dock.setIcon / crash-log pruning below — a throw here must never abort
+  // createTray/registerShortcuts/createWindow further down the boot sequence.
+  if (process.platform === 'darwin') {
+    try {
+      app.dock?.hide()
+    } catch { /* best-effort — never block startup */ }
+  }
+
+  // Boot each subsystem in its own try/catch so a failure in one can't silently abort the rest. Defined
+  // here (ahead of its call sites) so the display-media/permission/asr-model registrations immediately
+  // below — previously registered unguarded — run inside it too: a throw during any of those must not
+  // take out createTray/registerShortcuts/createWindow further down the boot sequence.
+  const runStep = (name: string, fn: () => void): void => {
+    try {
+      fn()
+    } catch (e) {
+      // console.error is a no-op in a packaged GUI build with no console — route to the real sinks so a
+      // boot-step failure is actually diagnosable and shows up in the audit trail.
+      mainLog.error(`[boot] ${name} failed:`, e)
+      auditLog('app.crash', { kind: 'boot_step', step: name })
+    }
+  }
+
   // System-audio loopback: when the renderer calls getDisplayMedia for audio,
   // hand back the system audio loopback device (the "Them" channel) only.
   // Screenshot capture uses desktopCapturer directly, so no video track is ever returned here.
+  runStep('setDisplayMediaHandler', () => {
   session.defaultSession.setDisplayMediaRequestHandler(
     async (request, callback) => {
       // Electron validates the callback argument against the request: denying a request that asked for
@@ -3549,25 +3873,28 @@ if (!app.requestSingleInstanceLock()) {
       const screenSrc = sources[0]
       callback(screenSrc ? { video: screenSrc, audio: 'loopback' } : {})
   }
+  })
 
   // Deny every web permission by default; only the main window may use audio media (the Listen mic) or
   // write to the system clipboard (Copy Summary / Export JSON / copy-code buttons all need this — it's a
   // one-way, user-initiated write of text the app itself built, not a snooping vector). clipboard-READ
   // (reading arbitrary external clipboard content) stays denied along with geolocation, notifications,
   // camera, USB, MIDI, etc.
-  const allowPermission = (wc: Electron.WebContents | null, permission: string): boolean =>
-    (permission === 'media' || permission === 'clipboard-sanitized-write') && !!win && wc === win.webContents
-  session.defaultSession.setPermissionRequestHandler((wc, permission, callback) =>
-    callback(allowPermission(wc, permission))
-  )
-  session.defaultSession.setPermissionCheckHandler((wc, permission) => allowPermission(wc, permission))
+  runStep('permissionHandlers', () => {
+    const allowPermission = (wc: Electron.WebContents | null, permission: string): boolean =>
+      (permission === 'media' || permission === 'clipboard-sanitized-write') && !!win && wc === win.webContents
+    session.defaultSession.setPermissionRequestHandler((wc, permission, callback) =>
+      callback(allowPermission(wc, permission))
+    )
+    session.defaultSession.setPermissionCheckHandler((wc, permission) => allowPermission(wc, permission))
+  })
 
   // ─── asr-model:// protocol handler ───────────────────────────────────────
   // Maps asr-model://<host>/<pathname> → RES_BASE/<host>/<pathname> on disk.
   // This lets the Whisper worker (served over file://) use fetch() to load
   // bundled ONNX model weights and WASM blobs with zero network access.
   // Path-traversal guard: relative() must stay within RES_BASE (separator-safe on Windows).
-  {
+  runStep('asrModelProtocol', () => {
     const REPO_ROOT = join(__dirname, '..', '..')
     const RES_BASE = app.isPackaged
       ? process.resourcesPath
@@ -3649,19 +3976,13 @@ if (!app.requestSingleInstanceLock()) {
         return respond(null, { status: 500 })
       }
     })
-  }
+  })
 
-  // Boot each subsystem in its own try/catch so one failure can't abort the rest, and stand up the
-  // tray + global shortcuts BEFORE the window. If createWindow() ever throws (transparent / always-on-top
-  // windows can fail on some GPU/compositor configs), the user still keeps a Show/Quit path instead of a
-  // hidden, unkillable process — the dock is already hidden and the taskbar is skipped.
-  const runStep = (name: string, fn: () => void): void => {
-    try {
-      fn()
-    } catch (e) {
-      console.error(`[boot] ${name} failed:`, e)
-    }
-  }
+  // runStep is defined above (ahead of the display-media/permission/asr-model registrations so they can
+  // use it too). From here: stand up the tray + global shortcuts BEFORE the window. If createWindow() ever
+  // throws (transparent / always-on-top windows can fail on some GPU/compositor configs), the user still
+  // keeps a Show/Quit path instead of a hidden, unkillable process — the dock is already hidden and the
+  // taskbar is skipped.
   // Eagerly refresh the Dust CLI session at launch (Tony: "always stay connected") rather than waiting
   // for a request to 401 first. Reading the Dust CLI's keychain item from Métis — a different binary
   // than the `dust`/keytar process that created it — does trigger a one-time macOS "allow access" prompt;
@@ -3692,24 +4013,32 @@ if (!app.requestSingleInstanceLock()) {
         /* best-effort — the lazy on-401 refresh in dust.ts still covers this */
       })
   }
-  refreshAndPersistDust('startup')
+  // Wrapped in runStep: refreshAndPersistDust does synchronous work (getSettings, hasApiKey) before its
+  // async refreshDustCliSession() call, so an unguarded throw here would abort createTray/registerShortcuts/
+  // createWindow below it — a startup Dust-refresh hiccup must never take down window creation.
+  runStep('refreshDustSession', () => refreshAndPersistDust('startup'))
   // Keep the session warm for the app's whole lifetime: re-mint whenever the token passes 45 min of
   // its ~1h life, so it never expires mid-meeting and the user never sees a Dust reconnect. The
   // single-flight guard inside refreshDustCliSession makes this safe alongside the on-401 path.
-  setInterval(() => refreshAndPersistDust('interval'), 10 * 60 * 1000)
+  trackTimer(setInterval(() => refreshAndPersistDust('interval'), 10 * 60 * 1000))
 
   // License re-validation, same fire-and-forget lifetime interval as the Dust keep-warm above: skips
   // entirely unless the gate is actually on and this device is currently activated, so an unlicensed
   // build (the shipped default) never touches the network here. For an always-on machine that's
   // offline for days, this is what lands a revocation within half a day instead of waiting for the
   // renderer's own once-per-launch check (which only runs at the next relaunch).
-  setInterval(
-    () => {
-      if (getSettings().licenseGateEnabled && getSettings().licenseValid) void heartbeat()
-    },
-    12 * 60 * 60 * 1000
+  trackTimer(
+    setInterval(
+      () => {
+        if (getSettings().licenseGateEnabled && getSettings().licenseValid) void heartbeat()
+      },
+      12 * 60 * 60 * 1000
+    )
   )
 
+  // Catch the case where encryption was already on (managed-config or a previous run) with a stale
+  // plaintext graph sitting on disk since before the first settingsGet poll from the renderer.
+  runStep('purgeGraphIfEncryptedAndStale', () => purgeGraphIfEncryptedAndStale('encryption-active-boot'))
   // createTray/registerShortcuts stay ahead of createWindow (see the boot-order comment above) — but
   // registerIpc has no such dependency: every ipcMain.handle closure inside it reads `win`/`tray` lazily
   // at INVOCATION time (assertMainWindow etc.), never at registration time, and the renderer can't issue
@@ -3737,7 +4066,7 @@ if (!app.requestSingleInstanceLock()) {
   recoverImports()
   runStep('registerScreenListeners', registerScreenListeners)
   runStep('startMeetingNotifier', startMeetingNotifier)
-  runStep('initAutoUpdate', () => initAutoUpdate(win))
+  runStep('initAutoUpdate', () => initAutoUpdate(() => win))
   // Resume durable live/backfill work and reconcile OneDrive-synced meeting files after first paint.
   // Directory scans, rather than fs.watch, are deliberate: Files On-Demand and Windows sync do not
   // reliably emit every watcher event. A one-minute cadence keeps Intelligence current without
@@ -3747,17 +4076,45 @@ if (!app.requestSingleInstanceLock()) {
     resumeBackfillIfPending()
     reconcileMeetingsInBackground()
   }, 15_000)
-  setInterval(reconcileMeetingsInBackground, BRAIN_RECONCILE_MS)
+  trackTimer(setInterval(reconcileMeetingsInBackground, BRAIN_RECONCILE_MS))
 
   app.on('activate', () => {
     if (!win) createWindow()
     else win.show()
   })
-  }).catch((e) => console.error('Métis startup failed:', e))
+  }).catch((e) => {
+    // console.error is a no-op in a packaged GUI build with no console — route to the real sinks (same
+    // redact-before-log discipline as onFatal) so a boot failure is actually diagnosable and audited.
+    const detail = e instanceof Error ? e.stack || e.message : String(e)
+    mainLog.error('[boot] Métis startup failed:', redactSecrets(detail))
+    auditLog('app.crash', { kind: 'boot', message: redactSecrets(e instanceof Error ? e.message : String(e)) })
+  })
 }
 
 app.on('window-all-closed', () => {
   // Overlay app: stay alive in tray; quit only via tray/menu.
+})
+
+// Tray "Quit AskToto" (and any other path that calls app.quit() directly, e.g. Cmd+Q on macOS) used to
+// tear the process down with zero drain: the in-progress meeting's transcript lives only in renderer
+// React state, written to disk solely by a 60s autosave interval, so a graceful-looking Quit could lose
+// up to 60s of a meeting or the entire thing for a sub-60s one. The in-app Settings "Quit" button is
+// already safe — App.tsx's quitApp() awaits flushLiveMeeting() before calling window.toto.quit(), which
+// marks quitFlushDone above and lets this handler no-op. For every other quit path, give the renderer one
+// bounded chance to save: recordingPowerSaveBlockerId is non-null for exactly the duration of an active
+// meeting (see setRecordingPowerSaveBlock), so it's a reliable "is a meeting in progress" signal here in
+// main. Reuses the existing 'reset' hotkey, which already runs saveMeetingNow() for a live meeting
+// (App.tsx's reset()) — no new IPC channel needed.
+app.on('before-quit', (e) => {
+  if (quitFlushDone || recordingPowerSaveBlockerId === null || !win || win.isDestroyed()) return
+  e.preventDefault()
+  quitFlushDone = true
+  try {
+    win.webContents.send(IPC.hotkey, 'reset')
+  } catch {
+    /* window may already be gone */
+  }
+  setTimeout(() => app.quit(), 2000)
 })
 
 app.on('will-quit', () => {
@@ -3775,6 +4132,16 @@ app.on('will-quit', () => {
     }
   }
   if (notifTimer) clearInterval(notifTimer)
+  // Cancel every tracked background poller FIRST, before the network stack is torn down — a Dust-refresh
+  // or reconcile interval firing a resolve mid-teardown is the shutdown-race SIGTRAP class.
+  for (const t of backgroundTimers) {
+    try {
+      clearInterval(t)
+    } catch {
+      /* already cleared */
+    }
+  }
+  backgroundTimers.length = 0
   // Stop the background screen-preprocess watcher (kills its long-lived powershell child) before the
   // sidecar kill — an orphaned watcher process outliving the app would keep polling the foreground window.
   try {

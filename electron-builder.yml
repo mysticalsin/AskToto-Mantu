@@ -219,12 +219,13 @@ appx:
 #   mac notarize → APPLE_ID + APPLE_APP_SPECIFIC_PASSWORD + APPLE_TEAM_ID
 # Unsigned macOS zip updates will be rejected by Gatekeeper on install.
 publish:
-  # Releases are served from this app repository. The previous AskToto-Releases feed was verified absent
-  # on 2026-07-14; pointing the updater at it made every update check fail. Keep this value aligned with
-  # the public GitHub Releases page where the installer assets are actually published.
+  # Releases are served from the PUBLIC Metis-Releases feed so the app can auto-update anonymously while
+  # the AskToto-Mantu SOURCE repo stays private. electron-updater bakes this owner/repo into app-update.yml
+  # and fetches the latest.yml/latest-mac.yml + installers from it — that repo must be public and must be
+  # where release.yml (or a manual `gh release`) uploads the signed assets.
   provider: github
   owner: mysticalsin
-  repo: AskToto-Mantu
+  repo: Metis-Releases
   # Without this line electron-builder creates DRAFT releases — and electron-updater resolves versions
   # from the public releases feed, which never contains drafts: every install would poll forever and
   # find nothing. `release` publishes the moment CI finishes; the v* tag push is the human approval gate.

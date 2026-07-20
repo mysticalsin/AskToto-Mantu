@@ -1,5 +1,18 @@
-import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type ComponentType, type ReactNode } from 'react'
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useId,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ComponentType,
+  type ReactNode
+} from 'react'
 import appPackage from '../../../../package.json'
+import { TapControlCard } from './TapCalibration'
 import {
   Check,
   ExternalLink,
@@ -44,6 +57,7 @@ import {
   Camera,
   Eye,
   Settings2,
+  Lock,
   type LucideIcon
 } from 'lucide-react'
 import {
@@ -67,7 +81,8 @@ import {
   type EvalMetrics,
   type MeetingSummary,
   type ShortcutFailure,
-  type LocalModelSummary
+  type LocalModelSummary,
+  type PlatformPermissions
 } from '@shared/ipc'
 import {
   PROVIDERS,
@@ -75,6 +90,7 @@ import {
   detectProvider,
   parseDustUrl,
   resolveModelTier,
+  applyInteractiveGuardrail,
   isDustReady,
   dustStoredAgentMissing,
   type ProviderId
@@ -94,8 +110,14 @@ import { decideDustLiveCheck } from '../lib/dust-live-check'
 // time. Manual "Connect / Reconnect" clicks are user-explicit and intentionally bypass this.
 let dustAutoSetupLaunched = false
 
-const ctl =
-  'no-drag font-body cl-input cl-focus px-3 py-2.5 text-[13px] text-[color:var(--cl-foreground)]'
+// Shared control class for inputs + native <select>s. The trailing bits fix a Windows-only bug where a
+// native <select> rendered as a blank white box (white text on a white native control) until you clicked
+// it to open the popup: `[color-scheme:dark]` makes Chromium paint the native select control dark on
+// Windows, and the `[&>option]:…` rules give the dropdown options an explicit dark background + light text
+// (Windows renders <option> from its OWN colors, defaulting to white — the app's bg/text don't cascade in).
+// The `option` selector only matches <select> children, so plain inputs sharing this class are unaffected.
+export const ctl =
+  'no-drag font-body cl-input cl-focus px-3 py-2.5 text-[13px] text-[color:var(--cl-foreground)] [color-scheme:dark] [&>option]:bg-[#1A0033] [&>option]:text-white'
 
 // Providers excluded from the generic provider tiles grid + generic "key" Section because they have
 // their OWN dedicated setup card instead (dust → DustSetup, claude-cli/codex-cli → CliIntegration).
@@ -111,6 +133,12 @@ const CLI_PROVIDERS = new Set<ProviderId>(['dust', 'claude-cli', 'codex-cli'])
 // Profile section until we ship licensing. Flip to true to bring the UI back with zero other changes.
 const LICENSE_UI_ENABLED: boolean = false
 
+// asrWebgpuFallbackAt (WebGPU→WASM ASR downgrade marker) is a sibling addition to the settings schema
+// not yet reflected in the shared PublicSettings type this file imports. Read/write it through this
+// local extension — scoped to Settings.tsx only — so today's type still checks and the note below picks
+// up the real field once @shared/ipc catches up, with no edit needed here.
+type SettingsWithAsrWebgpuFallback = PublicSettings & { asrWebgpuFallbackAt?: number | null }
+
 /**
  * After disconnecting/removing the active provider, pick another provider that is actually ready
  * (CLI providers need a live connection; the rest need a saved key) so the user is never left on a
@@ -119,13 +147,15 @@ const LICENSE_UI_ENABLED: boolean = false
 function pickReadyProvider(
   exclude: ProviderId,
   hasKeys: Record<string, boolean>,
-  cliConnected: Record<string, boolean>
+  cliConnected: Record<string, boolean>,
+  dustWorkspaceId: string,
+  providerModels: Partial<Record<string, string>>
 ): ProviderId {
-  const ready = PROVIDER_IDS.find(
-    (p) =>
-      p !== exclude &&
-      (PROVIDERS[p].kind === 'cli' ? !!cliConnected[p] : !!hasKeys[p])
-  )
+  const ready = PROVIDER_IDS.find((p) => {
+    if (p === exclude) return false
+    if (p === 'dust') return isDustReady(hasKeys, dustWorkspaceId, providerModels)
+    return PROVIDERS[p].kind === 'cli' ? !!cliConnected[p] : !!hasKeys[p]
+  })
   return ready ?? 'anthropic'
 }
 
@@ -135,16 +165,23 @@ function pickReadyProvider(
 function recommendedProvider(settings: PublicSettings): ProviderId {
   if (settings.hasKeys['anthropic']) return 'anthropic'
   if (isDustReady(settings.hasKeys, settings.dustWorkspaceId, settings.providerModels)) return 'dust'
+  // Dust was already conclusively ruled out above — exclude it here so a saved-but-unready Dust key
+  // (hasKeys.dust true, workspace/agent not set up) can't fall through and be picked as "ready".
   const ready = PROVIDER_IDS.find((p) =>
-    PROVIDERS[p].kind === 'cli' ? !!settings.cliConnected?.[p] : !!settings.hasKeys[p]
+    p !== 'dust' && (PROVIDERS[p].kind === 'cli' ? !!settings.cliConnected?.[p] : !!settings.hasKeys[p])
   )
   return ready ?? 'anthropic'
 }
 
 /** Friendly name for a routed model in the thinking-mode explainer. Keeps raw model ids out of
  *  user-facing copy — recognized brands by name, everything else as a plain tier word. */
-function prettyModel(m: string, provider: ProviderId, tier: 'base' | 'think'): string {
-  if (provider === 'dust') return tier === 'think' ? 'your thinking agent' : 'your base agent'
+function prettyModel(m: string, provider: ProviderId, tier: 'base' | 'think' | 'deep'): string {
+  if (provider === 'dust') {
+    // Dust only has a Base agent + an optional Thinking agent — there is no distinct "deep" agent. The
+    // 'deep' tier resolves (resolveModelTier) to the Thinking agent, or Base if none is configured, so
+    // it shares the Thinking agent's caption rather than naming a tier that doesn't exist.
+    return tier === 'base' ? 'your base agent' : 'your thinking agent'
+  }
   if (m) {
     if (/haiku/i.test(m)) return 'Haiku'
     if (/sonnet/i.test(m)) return 'Sonnet'
@@ -352,22 +389,38 @@ function ManagedChip({ keys, k }: { keys: string[]; k: string }): JSX.Element | 
   return keys.includes(k) ? <span className={managedChipCls}>Managed by your organization</span> : null
 }
 
-function Section({
+// Lets a Section pick up its enclosing tab's icon automatically (Settings wraps each tab's content in a
+// Provider) so most cards get sensible iconography for free; an explicit `icon` prop on a Section still
+// wins, for the cards that want a more specific glyph than their tab's.
+const TabIconContext = createContext<LucideIcon | ComponentType<{ size?: number }> | undefined>(undefined)
+
+export function Section({
   title,
   desc,
+  icon,
   children
 }: {
   title: string
   desc?: string
+  icon?: LucideIcon | ComponentType<{ size?: number }>
   children: ReactNode
 }): JSX.Element {
+  const tabIcon = useContext(TabIconContext)
+  const Icon = icon ?? tabIcon
   return (
-    <section className="flex flex-col">
-      <div className="mb-3">
-        <div className="text-[13px] font-semibold leading-snug text-[color:var(--cl-foreground)]">{title}</div>
-        {desc && (
-          <div className="mt-1 text-[12px] text-[color:var(--cl-muted-foreground)]">{desc}</div>
+    <section className="cl-card flex flex-col gap-0 px-4 py-4">
+      <div className="mb-3 flex items-start gap-2.5">
+        {Icon && (
+          <span className="mt-0.5 flex size-6 shrink-0 items-center justify-center rounded-full bg-[var(--cl-primary-soft)] text-[color:var(--cl-primary)]">
+            <Icon size={13} />
+          </span>
         )}
+        <div className="min-w-0 flex-1">
+          <div className="text-[13px] font-semibold leading-snug text-[color:var(--cl-foreground)]">{title}</div>
+          {desc && (
+            <div className="mt-1 text-[12px] text-[color:var(--cl-muted-foreground)]">{desc}</div>
+          )}
+        </div>
       </div>
       {children}
     </section>
@@ -437,7 +490,7 @@ function ExpandableSection({
 }): JSX.Element {
   const [open, setOpen] = useState(false)
   return (
-    <section className="flex flex-col">
+    <section className="flex flex-col rounded-[14px] border border-dashed border-[var(--cl-border)] px-4 py-3 transition-colors hover:border-[var(--cl-input)]">
       <button
         type="button"
         onClick={() => setOpen((o) => !o)}
@@ -456,7 +509,7 @@ function ExpandableSection({
           ].join(' ')}
         />
       </button>
-      {open && <div className="mt-3 flex flex-col gap-5">{children}</div>}
+      {open && <div className="fade-up mt-3 flex flex-col gap-5">{children}</div>}
     </section>
   )
 }
@@ -503,7 +556,7 @@ function Toggle({
   )
 }
 
-function ToggleRow({
+export function ToggleRow({
   label,
   desc,
   on,
@@ -633,7 +686,7 @@ function detectHint(value: string, current: ProviderId): { kind: 'ok' | 'tip'; t
   if (/^sk-/.test(v)) {
     return {
       kind: 'tip',
-      text: 'This key shape is shared by several providers. Pick the right one above.'
+      text: 'This key shape is shared by several providers. Pick the right one in "Experience: more models".'
     }
   }
   return null
@@ -668,11 +721,37 @@ function AiSection({
   const [test, setTest] = useState<{ status: 'idle' | 'loading' | 'ok' | 'error'; message?: string }>({
     status: 'idle'
   })
-  const [adv, setAdv] = useState(false)
+  // "Custom" has no working provider without a base URL — that field lives inside "Advanced", so
+  // start it open whenever Custom is active (and re-open if the user switches TO Custom later) rather
+  // than leaving the one field Custom actually requires hidden behind a collapsed toggle.
+  const [adv, setAdv] = useState(provider === 'custom')
+  useEffect(() => {
+    if (provider === 'custom') setAdv(true)
+  }, [provider])
   const [filter, setFilter] = useState('')
   const skipClearRef = useRef(false) // don't wipe a freshly-pasted key when detection switches provider
+  // Latest `provider` value, readable from inside onSave/onTest's async continuations — those closures
+  // capture the provider a save/test was started for, then compare against this ref once the awaited
+  // call resolves so a mid-flight provider switch can't attribute a stale result to the wrong tile.
+  const providerRef = useRef(provider)
+  providerRef.current = provider
   const baseModelName = resolveModelTier(provider, settings.providerModels, settings.providerModelsThinking, 'base')
+  // Only used by the Auto caption below, to name the real middle tier (routeTier's 'think' bucket —
+  // "heavy" but not "hard" prompts) instead of silently collapsing it into the base/deep story.
   const thinkModelName = resolveModelTier(provider, settings.providerModels, settings.providerModelsThinking, 'think')
+  // The real ask flow (main/index.ts) always runs the resolved model through applyInteractiveGuardrail
+  // before calling the provider — e.g. claude-cli is pinned to Sonnet for every tier. The caption must
+  // show that same guarded result, not the raw tier, or it names a model that never actually answers.
+  const guardedBaseModelName = applyInteractiveGuardrail(provider, 'base', baseModelName)
+  const deepModelName = resolveModelTier(
+    provider,
+    settings.providerModels,
+    settings.providerModelsThinking,
+    'deep',
+    settings.providerModelsDeep
+  )
+  const guardedDeepModelName = applyInteractiveGuardrail(provider, 'deep', deepModelName)
+  const guardedThinkModelName = applyInteractiveGuardrail(provider, 'think', thinkModelName)
   const keyInputId = useId()
   const modelInputId = useId()
   const baseUrlInputId = useId()
@@ -685,6 +764,13 @@ function AiSection({
     }
     setKey('')
     setTest({ status: 'idle' })
+  }, [provider])
+
+  // Custom has nothing to configure without a base URL, and that field lives inside the collapsed
+  // Advanced section — without this, picking Custom shows an empty card until a failed Save surfaces
+  // the requirement. Auto-open Advanced so the base-URL field is visible the moment Custom is chosen.
+  useEffect(() => {
+    if (provider === 'custom') setAdv(true)
   }, [provider])
 
   // Auto-detect provider from the key as the user pastes/types.
@@ -701,6 +787,9 @@ function AiSection({
 
   const onSave = async (): Promise<void> => {
     const trimmed = key.trim()
+    // Capture which provider this save/test run is for — the user can switch provider tiles while the
+    // awaits below are in flight, and a stale resolve must never paint its result on the new tile.
+    const testedProvider = provider
     if (!trimmed) {
       // Empty input must never delete the stored key; removal is the trash-can (onRemove) button only.
       setTest({ status: 'error', message: 'Paste a key above to save it.' })
@@ -711,10 +800,13 @@ function AiSection({
     } catch (e) {
       // e.g. OS encryption unavailable — store.setApiKey throws; don't fail silently.
       const message = e instanceof Error ? e.message : 'Could not save the key.'
-      setTest({ status: 'error', message })
-      setRecoveryAvailable(isProfileUnlockError(message))
+      if (providerRef.current === testedProvider) {
+        setTest({ status: 'error', message })
+        setRecoveryAvailable(isProfileUnlockError(message))
+      }
       return
     }
+    if (providerRef.current !== testedProvider) return // switched away mid-save; key still saved, just no stale UI update
     setRecoveryAvailable(false)
     setRecoveryMessage(null)
     setSaved(true)
@@ -724,10 +816,14 @@ function AiSection({
     setTest({ status: 'loading' })
     try {
       const res = await testKey(provider, trimmed)
+      if (providerRef.current !== testedProvider) return
       if (res.ok) setTest({ status: 'ok', message: 'Key is valid and working.' })
       else setTest({ status: 'error', message: res.error || 'Saved, but the key did not work. Check it and re-save.' })
     } catch (e) {
-      setTest({ status: 'error', message: e instanceof Error ? e.message : 'Saved, but could not verify the key.' })
+      if (providerRef.current === testedProvider) {
+        setTest({ status: 'error', message: e instanceof Error ? e.message : 'Saved, but could not verify the key.' })
+      }
+      return
     }
     setKey('')
   }
@@ -753,12 +849,14 @@ function AiSection({
 
   const onTest = async (): Promise<void> => {
     const trimmed = key.trim()
+    const testedProvider = provider // see onSave — guards against a stale resolve after a provider switch
     if (!trimmed) {
       setTest({ status: 'error', message: 'Paste a key above to test it.' })
       return
     }
     setTest({ status: 'loading' })
     const res = await testKey(provider, trimmed)
+    if (providerRef.current !== testedProvider) return
     if (res.ok) setTest({ status: 'ok', message: 'Key is valid.' })
     else setTest({ status: 'error', message: res.error || 'Key test failed.' })
   }
@@ -768,7 +866,15 @@ function AiSection({
     setKey('')
     setTest({ status: 'idle' })
     // Removed the active provider's key — fall back to one that can still answer.
-    await patch({ provider: pickReadyProvider(provider, settings.hasKeys, settings.cliConnected ?? {}) })
+    await patch({
+      provider: pickReadyProvider(
+        provider,
+        settings.hasKeys,
+        settings.cliConnected ?? {},
+        settings.dustWorkspaceId,
+        settings.providerModels
+      )
+    })
   }
 
   const hint = detectHint(key, provider)
@@ -779,13 +885,24 @@ function AiSection({
   // Kimi, Gemini) gets its own always-visible grid right under Anthropic's card, matching the CLI
   // cards' prominence; 'more' (NVIDIA, DeepSeek, Qwen, MiniMax, OpenRouter, Groq, Mistral, custom)
   // stays tucked in the collapsed "Experience: more models" section.
+  // When the org sets a data-residency allowlist, only approved providers are offered — mirroring what
+  // the main process enforces at request time, so the UI can't offer a provider every ask would reject.
+  const orgAllowed = settings.allowedProviders
   const selectable = PROVIDER_IDS.filter(
-    (id) => !CLI_PROVIDERS.has(id) && id !== 'anthropic' && PROVIDERS[id].kind !== 'local'
+    (id) =>
+      !CLI_PROVIDERS.has(id) &&
+      id !== 'anthropic' &&
+      PROVIDERS[id].kind !== 'local' &&
+      (!orgAllowed || orgAllowed.includes(id))
   )
   const featured = selectable.filter((id) => PROVIDERS[id].tier === 'featured')
   const shown = selectable.filter(
     (id) => PROVIDERS[id].tier === 'more' && (!q || PROVIDERS[id].label.toLowerCase().includes(q))
   )
+  // The always-visible Anthropic quick-select card below isn't covered by the `shown` filter above (it's
+  // excluded from the grid on purpose) — gate it here too so an org allowlist that omits 'anthropic' can't
+  // be bypassed via this separate control. Independent from `locked` (managedKeys.includes('provider')).
+  const anthropicAllowed = !orgAllowed || orgAllowed.includes('anthropic')
   const recommended = recommendedProvider(settings)
   const isFeatured = featured.includes(provider)
 
@@ -793,8 +910,12 @@ function AiSection({
   // top level when that's Anthropic or a featured provider (the primary flows), or inside "Experience:
   // more models" otherwise. null for CLI providers (Dust/Claude Code/Codex have their own dedicated
   // cards, no generic key box) and for Métis Local (keyless — its dedicated card never offers one either).
+  // An env-var key always wins over an in-app one (getApiKey() resolves the env value first) — a pasted
+  // key here would silently never be used until the env var is removed. Lock the field instead of letting
+  // Save claim it's "valid and working" for a key that will never actually be read.
+  const envKeyActive = settings.envKeys.includes(provider)
   const keyEntrySection = !CLI_PROVIDERS.has(provider) && PROVIDERS[provider].kind !== 'local' ? (
-    <Section title={`${def.label} key`} desc="Stored encrypted on this device. Never sent anywhere except the provider.">
+    <Section title={`${def.label} key`} desc="Stored encrypted on this device. Never sent anywhere except the provider." icon={Lock}>
       <div className="flex items-center gap-2">
         <label htmlFor={keyInputId} className="sr-only">
           {def.label} API key
@@ -803,17 +924,22 @@ function AiSection({
           id={keyInputId}
           type="password"
           value={key}
+          disabled={envKeyActive}
           onChange={(e) => onKeyChange(e.target.value)}
           onKeyDown={(e) => e.key === 'Enter' && test.status !== 'loading' && onSave()}
           placeholder={
-            settings.hasKeys[provider] ? '•••••• saved (paste to replace)' : `Paste your ${def.label} key`
+            envKeyActive
+              ? 'Set via environment variable, takes precedence over any in-app key'
+              : settings.hasKeys[provider]
+                ? '•••••• saved (paste to replace)'
+                : `Paste your ${def.label} key`
           }
-          className={'flex-1 ' + ctl}
+          className={'flex-1 ' + ctl + (envKeyActive ? ' opacity-60' : '')}
         />
         <button
           type="button"
           onClick={onSave}
-          disabled={test.status === 'loading'}
+          disabled={test.status === 'loading' || envKeyActive}
           className="no-drag cl-focus flex items-center gap-1 rounded-[10px] bg-[var(--cl-primary)] px-4 py-2.5 text-[13px] font-medium text-white hover:opacity-90 disabled:opacity-50"
         >
           {saved ? <Check size={14} /> : null}
@@ -822,13 +948,13 @@ function AiSection({
         <button
           type="button"
           onClick={onTest}
-          disabled={test.status === 'loading'}
+          disabled={test.status === 'loading' || envKeyActive}
           className="no-drag cl-focus flex items-center gap-1 rounded-[10px] border border-[var(--cl-input)] bg-white/[0.04] px-3 py-2.5 text-[13px] text-[color:var(--cl-foreground)] hover:bg-white/[0.08] disabled:opacity-50"
         >
           {test.status === 'loading' ? <Loader2 size={14} className="animate-spin" /> : null}
           Test
         </button>
-        {settings.envKeys.includes(provider) ? (
+        {envKeyActive ? (
           <span
             title="This key is set via an environment variable on this machine. Remove it where it was defined; the in-app Remove can't clear it."
             className="flex items-center rounded-[10px] border border-[var(--cl-input)] bg-white/[0.04] px-3 py-2.5 text-[12px] text-[color:var(--cl-muted-foreground)]"
@@ -1043,7 +1169,9 @@ function AiSection({
           'flex items-center justify-between gap-2 rounded-[10px] border p-3',
           provider === 'anthropic'
             ? 'border-[var(--cl-primary)] bg-[var(--cl-primary-soft)]/40'
-            : 'border-[var(--cl-border)] bg-white/[0.02]'
+            : anthropicAllowed
+              ? 'border-[var(--cl-border)] bg-white/[0.02]'
+              : 'border-[var(--cl-border)] bg-white/[0.02] opacity-60'
         ].join(' ')}
       >
         <div className="flex flex-col gap-0.5">
@@ -1052,12 +1180,17 @@ function AiSection({
             {PROVIDERS.anthropic.blurb}
           </span>
         </div>
-        {provider === 'anthropic' ? (
+        {provider === 'anthropic' && anthropicAllowed ? (
           <span className="flex shrink-0 items-center gap-1 rounded-full bg-[var(--cl-primary-soft)] px-2 py-0.5 text-[11px] font-medium text-[color:var(--cl-primary)]">
             <CircleCheck size={12} /> Active
           </span>
         ) : locked ? (
           <span className={managedChipCls}>Managed by your organization</span>
+        ) : !anthropicAllowed ? (
+          // Also fires when provider === 'anthropic': an allowlist that no longer includes anthropic
+          // (e.g. org tightened it after this was the active default) must not still read "Active" —
+          // the active provider was never reconciled against the allowlist (see store.ts getSettings).
+          <span className={managedChipCls}>Restricted by your organization</span>
         ) : (
           <button
             type="button"
@@ -1077,7 +1210,7 @@ function AiSection({
 
       {/* Featured API providers — same prominence as the CLI cards above, so picking GPT/Grok/Kimi/
           Gemini doesn't require digging into a collapsed section. */}
-      <Section title="Other providers" desc="Bring your own key from another provider.">
+      <Section title="Other providers" desc="Bring your own key from another provider." icon={Network}>
         <div className="grid grid-cols-2 gap-2">
           {featured.map((id) => (
             <ProviderTile
@@ -1104,7 +1237,13 @@ function AiSection({
         title="Experience: more models"
         desc="More providers, including a raw OpenAI-compatible endpoint. Closed by default; most people find what they need above."
       >
-        <Section title="Model provider" desc="Prefer a raw model? Pick one, paste a key, and Métis detects the provider.">
+        <Section title="Model provider" desc="Prefer a raw model? Pick one, paste a key, and Métis detects the provider." icon={Cpu}>
+          {orgAllowed && (
+            <div className="mb-2 flex items-center gap-1.5 rounded-lg bg-[var(--cl-primary-soft)] px-2.5 py-1.5 text-[11px] text-[color:var(--cl-muted-foreground)]">
+              <ShieldCheck size={12} className="shrink-0 text-[color:var(--cl-primary)]" />
+              Your organization restricts Métis to approved providers.
+            </div>
+          )}
           {shown.length + featured.length > 8 && (
             <div className="relative mb-2">
               <Search
@@ -1155,7 +1294,7 @@ function AiSection({
       </ExpandableSection>
 
       {/* Thinking mode — applies to whatever's active (raw model tiers, or your two Dust agents) */}
-      <Section title="Thinking mode" desc="When to use a fast model vs. a deeper one for harder questions.">
+      <Section title="Thinking mode" desc="When to use a fast model vs. a deeper one for harder questions." icon={Lightbulb}>
         <div className="flex gap-1.5">
           {(
             [
@@ -1185,10 +1324,15 @@ function AiSection({
         </div>
         <span className="mt-1.5 block text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
           {settings.thinkingMode === 'auto'
-            ? `Auto: simple questions use ${prettyModel(baseModelName, provider, 'base')}; coding, engineering & complex go to ${prettyModel(thinkModelName, provider, 'think')}.`
+            ? // routeTier (shared/routing.ts) actually escalates in 3 steps — base → think ("heavy") → deep
+              // ("hard"). Dust collapses think/deep into the same Thinking agent (see prettyModel), so its
+              // caption only needs two clauses; raw providers have a real, distinct middle tier to name.
+              provider === 'dust'
+              ? `Auto: simple questions use ${prettyModel(guardedBaseModelName, provider, 'base')}; anything harder goes to ${prettyModel(guardedDeepModelName, provider, 'deep')}.`
+              : `Auto: simple questions use ${prettyModel(guardedBaseModelName, provider, 'base')}; heavier ones use ${prettyModel(guardedThinkModelName, provider, 'think')}; coding, engineering & the hardest go to ${prettyModel(guardedDeepModelName, provider, 'deep')}.`
             : settings.thinkingMode === 'always'
-              ? `Every answer uses ${prettyModel(thinkModelName, provider, 'think')} (deep mode).`
-              : `Every answer uses ${prettyModel(baseModelName, provider, 'base')} (fastest & cheapest).`}
+              ? `Every answer uses ${prettyModel(guardedThinkModelName, provider, 'think')} (deep mode).`
+              : `Every answer uses ${prettyModel(guardedBaseModelName, provider, 'base')} (fastest & cheapest).`}
         </span>
       </Section>
     </div>
@@ -1229,6 +1373,7 @@ function LocalAiSection({
     <Section
       title="Local AI"
       desc="Runs the model included with Métis on this device. Live suggestions, summaries, Mantu Intelligence extraction, and screenshot reads stay local."
+      icon={Cpu}
     >
       <div className="flex flex-col gap-3">
         <ToggleRow
@@ -1375,6 +1520,17 @@ function CliIntegration({
   const provider = settings.provider
   const cliConnected = settings.cliConnected ?? {}
   const locked = settings.managedKeys.includes('provider')
+  // Latest `settings.provider`, readable from inside runInstall/connect's async continuations — mirrors
+  // AiSection's providerRef guard. Captures the provider when an install/connect starts, then compares
+  // once the awaited call resolves, so a completed CLI install/connect can't silently revert an
+  // in-panel provider switch the user made on the AiSection grid while it was running.
+  const providerRef = useRef(provider)
+  providerRef.current = provider
+  // Independent of `locked`: an org can restrict the data-residency allowlist (settings.allowedProviders)
+  // without also locking the 'provider' managed key. Gate the CLI quick-select cards the same way the
+  // provider tiles are gated, so a disallowed provider can't be activated from here either.
+  const orgAllowed = settings.allowedProviders
+  const isAllowed = (id: ProviderId): boolean => !orgAllowed || orgAllowed.includes(id)
 
   // Guards every setState below against firing after this component unmounts (e.g. the user closes
   // Settings while runInstall's cliInstall/cliTest awaits are still in flight — those IPC calls keep
@@ -1418,6 +1574,8 @@ function CliIntegration({
 
   // Step 2: user clicks Continue → install silently, then connect
   const runInstall = async (id: 'claude-cli' | 'codex-cli'): Promise<void> => {
+    // Capture which provider was active when this install run started — see the patch() call below.
+    const startProvider = providerRef.current
     setState(id, { phase: 'installing', msg: 'Installing…', version: null })
 
     const installResult = await window.toto.cliInstall(id, (line) => {
@@ -1445,7 +1603,12 @@ function CliIntegration({
     const testResult = await window.toto.cliTest(id)
 
     if (testResult.ok) {
-      patch({ provider: id })
+      // Guard against a stale in-flight install/test resolving after the user switched tabs (unmounting
+      // this card) — without this, a late resolution here can re-activate a provider the user already
+      // disconnected in the meantime (see disconnectCli). Mirrors setState's own mountedRef guard. Also
+      // skip the patch if the user switched to a different provider tile on the AiSection grid while
+      // this install was running — a finished install must never silently revert that in-panel pick.
+      if (mountedRef.current && providerRef.current === startProvider) patch({ provider: id })
       setState(id, { phase: 'done', msg: null, version: testResult.version ?? null })
       return
     }
@@ -1461,10 +1624,13 @@ function CliIntegration({
 
   // Connect button (setup-opened / error): re-run test only
   const connect = async (id: 'claude-cli' | 'codex-cli'): Promise<void> => {
+    // Capture which provider was active when this connect attempt started — see the patch() call below.
+    const startProvider = providerRef.current
     setState(id, { phase: 'connecting', msg: 'Connecting…', version: null })
     const r = await window.toto.cliTest(id)
     if (r.ok) {
-      patch({ provider: id })
+      // Same stale-resolution + provider-switch guard as runInstall above.
+      if (mountedRef.current && providerRef.current === startProvider) patch({ provider: id })
       setState(id, { phase: 'done', msg: null, version: r.version ?? null })
     } else {
       setState(id, {
@@ -1484,7 +1650,14 @@ function CliIntegration({
   const disconnectCli = (id: 'claude-cli' | 'codex-cli'): void => {
     const nextConnected = { ...cliConnected, [id]: false }
     const next: Partial<PublicSettings> = { cliConnected: nextConnected }
-    if (provider === id) next.provider = pickReadyProvider(id, settings.hasKeys, nextConnected)
+    if (provider === id)
+      next.provider = pickReadyProvider(
+        id,
+        settings.hasKeys,
+        nextConnected,
+        settings.dustWorkspaceId,
+        settings.providerModels
+      )
     patch(next)
     setState(id, { phase: 'idle', msg: null, version: null })
   }
@@ -1501,6 +1674,8 @@ function CliIntegration({
     const st = getState(id)
     const isActive = provider === id
     const isConnected = !!cliConnected[id]
+    const allowed = isAllowed(id)
+    const cardLocked = locked || !allowed
     const desc =
       id === 'claude-cli'
         ? 'Routes questions through your local Claude Code install. Uses your Pro or Max subscription.'
@@ -1529,8 +1704,10 @@ function CliIntegration({
             <span className={activePill}>
               <CircleCheck size={12} /> Active
             </span>
+          ) : locked ? (
+            <span className={managedChipCls}>Managed by your organization</span>
           ) : (
-            locked && <span className={managedChipCls}>Managed by your organization</span>
+            !allowed && <span className={managedChipCls}>Restricted by your organization</span>
           )}
         </div>
 
@@ -1592,7 +1769,7 @@ function CliIntegration({
             <button
               type="button"
               onClick={() => startSetup(id)}
-              disabled={locked}
+              disabled={cardLocked}
               className={primaryBtn}
             >
               <Link2 size={12} />
@@ -1619,7 +1796,7 @@ function CliIntegration({
             <button
               type="button"
               onClick={() => void connect(id)}
-              disabled={locked}
+              disabled={cardLocked}
               className={primaryBtn}
             >
               <Link2 size={12} />
@@ -1637,7 +1814,7 @@ function CliIntegration({
             <button
               type="button"
               onClick={() => void runInstall(id)}
-              disabled={locked}
+              disabled={cardLocked}
               className={primaryBtn}
             >
               <Link2 size={12} />
@@ -1655,7 +1832,7 @@ function CliIntegration({
             <button
               type="button"
               onClick={() => startSetup(id)}
-              disabled={locked}
+              disabled={cardLocked}
               className="no-drag cl-focus text-[11px] text-[color:var(--cl-muted-foreground)] hover:text-[color:var(--cl-foreground)] disabled:opacity-50"
             >
               Reconnect
@@ -1677,7 +1854,8 @@ function CliIntegration({
   return (
     <Section
       title="CLI Integration"
-      desc="Claude Code and Codex route through your own local install of that tool — it has to be on this device. Set up automatically installs it (via npm i -g) if it's missing, or connects straight away if it's already there."
+      desc="Claude Code and Codex route through your own local install of that tool. It has to be on this device. Set up automatically installs it (via npm i -g) if it's missing, or connects straight away if it's already there."
+      icon={Link2}
     >
       <div className="flex flex-col gap-3">
 
@@ -2234,6 +2412,11 @@ function DustSetup({
   // The one-click CLI setup (dustImportCli/dustSetupCli) is cross-platform now (dust-secret-store reads
   // the session on macOS/Windows/Linux), so it's the primary path on every OS — no per-platform gating.
   const locked = settings.managedKeys.includes('provider')
+  // Same independent-key gap as the provider tiles: allowedProviders can restrict Dust without also
+  // locking the 'provider' managed key — badge those controls "Restricted" rather than letting a save
+  // activate a provider every ask would then reject.
+  const orgAllowed = settings.allowedProviders
+  const dustAllowed = !orgAllowed || orgAllowed.includes('dust')
   // Base agent is user-editable (picker below, defaults to the Métis agent, one-click reset) —
   // gated by the same 'providerModels' managed-key as the Advanced base-model field in AiSection, not
   // by the CLI-connection lock above. Spotlight Ref stays hard-locked (DUST_SPOTLIGHT_REF_AGENT_ID in
@@ -2276,7 +2459,7 @@ function DustSetup({
         setCli({
           busy: false,
           ok: false,
-          msg: 'Almost there — finish picking your workspace in the Terminal window from setup (use the arrow keys, press Enter, then wait for "Authentication and workspace selection complete!"). Then click Connect again.'
+          msg: 'Almost there. Finish picking your workspace in the Terminal window from setup (use the arrow keys, press Enter, then wait for "Authentication and workspace selection complete!"). Then click Connect again.'
         })
         return
       }
@@ -2318,6 +2501,7 @@ function DustSetup({
     const k = dustKey.trim()
     if (!k) return
     setKeySaving(true)
+    setErr(null)
     setRecoveryMessage(null)
     try {
       await saveKey('dust', k)
@@ -2377,7 +2561,13 @@ function DustSetup({
       dustTokenMintedAt: 0
     }
     if (settings.provider === 'dust')
-      next.provider = pickReadyProvider('dust', settings.hasKeys, settings.cliConnected ?? {})
+      next.provider = pickReadyProvider(
+        'dust',
+        settings.hasKeys,
+        settings.cliConnected ?? {},
+        settings.dustWorkspaceId,
+        settings.providerModels
+      )
     await patch(next)
     setAgents(null)
     setErr(null)
@@ -2388,7 +2578,18 @@ function DustSetup({
   const removeDustKey = async (): Promise<void> => {
     await clearKey('dust')
     if (settings.provider === 'dust')
-      await patch({ provider: pickReadyProvider('dust', settings.hasKeys, settings.cliConnected ?? {}) })
+      await patch({
+        provider: pickReadyProvider(
+          'dust',
+          settings.hasKeys,
+          settings.cliConnected ?? {},
+          settings.dustWorkspaceId,
+          settings.providerModels
+        )
+      })
+    // Mirror disconnectDust's reset: a cleared key means any previously loaded agent list/error is stale.
+    setAgents(null)
+    setErr(null)
   }
   const useDust = (): void => void patch({ provider: 'dust' })
 
@@ -2456,18 +2657,18 @@ function DustSetup({
         setCli({
           busy: false,
           ok: false,
-          msg: 'Almost there — finish picking your workspace in the Terminal window from setup (arrow keys, then Enter), then Reconnect.'
+          msg: 'Almost there. Finish picking your workspace in the Terminal window from setup (arrow keys, then Enter), then Reconnect.'
         })
         return
       }
       // decision === 'run-setup' — the saved connection is dead. Auto-run setup, but at most once per app
       // run (dustAutoSetupLaunched); a reopen mid-login points the user at Reconnect instead of a 2nd window.
       if (dustAutoSetupLaunched) {
-        setCli({ busy: false, ok: false, msg: 'Dust session ended — Reconnect to finish signing in again.' })
+        setCli({ busy: false, ok: false, msg: 'Dust session ended, Reconnect to finish signing in again.' })
         return
       }
       dustAutoSetupLaunched = true
-      setCli({ busy: true, ok: false, msg: 'Dust session ended — reopening setup in Terminal. Log in to reconnect.' })
+      setCli({ busy: true, ok: false, msg: 'Dust session ended, reopening setup in Terminal. Log in to reconnect.' })
       const s = await window.toto.dustSetupCli()
       setCli({
         busy: false,
@@ -2480,6 +2681,15 @@ function DustSetup({
     // Probe once on mount for the already-connected case only; connectCli / disconnect handle the rest.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+
+  // Editing the workspace ID string doesn't flip keySaved/hasWs (both stay true switching workspace A → B),
+  // so the effect above never re-fires — without this, the Thinking-agent dropdown keeps showing workspace
+  // A's stale agents. Invalidate on every edit; the button above ("Load my agents"/"Refresh") reloads.
+  useEffect(() => {
+    setAgents(null)
+    setErr(null)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [settings.dustWorkspaceId])
 
   const setThinkAgent = (sId: string): void =>
     patch({ providerModelsThinking: { ...settings.providerModelsThinking, dust: sId.trim() } })
@@ -2503,6 +2713,7 @@ function DustSetup({
     <Section
       title={active ? 'Dust CLI · Your agents (active)' : 'Dust CLI · Your agents'}
       desc="Your Dust agents (Second Brain retrieval + tools) power Métis. Connect with the Dust CLI, then pick a thinking agent for hard questions."
+      icon={Link2}
     >
       <div className="flex flex-col gap-4">
         {/* PRIMARY — one click installs the Dust CLI, signs you in, and connects on its own. Same on
@@ -2636,21 +2847,38 @@ function DustSetup({
           <label htmlFor={wsId} className="sr-only">
             Workspace ID
           </label>
-          <input
-            id={wsId}
-            value={settings.dustWorkspaceId}
-            onChange={(e) => patch({ dustWorkspaceId: e.target.value })}
-            placeholder="Workspace ID (e.g. abc123)"
-            className={'w-full ' + ctl}
-          />
+          <div className="flex items-center gap-2">
+            <input
+              id={wsId}
+              value={settings.dustWorkspaceId}
+              onChange={(e) => patch({ dustWorkspaceId: e.target.value })}
+              placeholder="Workspace ID (e.g. abc123)"
+              disabled={settings.managedKeys.includes('dustWorkspaceId')}
+              className={
+                'flex-1 min-w-0 ' + ctl + (settings.managedKeys.includes('dustWorkspaceId') ? ' opacity-60' : '')
+              }
+            />
+            <ManagedChip keys={settings.managedKeys} k="dustWorkspaceId" />
+          </div>
           <div className="flex gap-2">
-            <button type="button" onClick={() => patch({ dustBaseUrl: 'https://dust.tt' })} className={regionBtn(false)}>
+            <button
+              type="button"
+              onClick={() => patch({ dustBaseUrl: 'https://dust.tt' })}
+              disabled={settings.managedKeys.includes('dustBaseUrl')}
+              className={regionBtn(false) + (settings.managedKeys.includes('dustBaseUrl') ? ' opacity-60 cursor-not-allowed' : '')}
+            >
               US · dust.tt
             </button>
-            <button type="button" onClick={() => patch({ dustBaseUrl: 'https://eu.dust.tt' })} className={regionBtn(true)}>
+            <button
+              type="button"
+              onClick={() => patch({ dustBaseUrl: 'https://eu.dust.tt' })}
+              disabled={settings.managedKeys.includes('dustBaseUrl')}
+              className={regionBtn(true) + (settings.managedKeys.includes('dustBaseUrl') ? ' opacity-60 cursor-not-allowed' : '')}
+            >
               EU · eu.dust.tt
             </button>
           </div>
+          <ManagedChip keys={settings.managedKeys} k="dustBaseUrl" />
         </div>
 
         {/* Step 3 — Dust API key (self-contained — only needed if you didn't use the CLI above) */}
@@ -2685,16 +2913,20 @@ function DustSetup({
               <button
                 type="button"
                 onClick={saveDustKey}
-                disabled={keySaving || !dustKey.trim() || locked}
+                disabled={keySaving || !dustKey.trim() || (locked && active)}
                 className="no-drag cl-focus flex items-center gap-1 rounded-[10px] bg-[var(--cl-primary)] px-3 py-2.5 text-[13px] font-medium text-white hover:opacity-90 disabled:opacity-50"
               >
                 {keySaving ? <Loader2 size={14} className="animate-spin" /> : null} Save
               </button>
-              {locked && <span className={managedChipCls}>Managed by your organization</span>}
+              {locked ? (
+                <span className={managedChipCls}>Managed by your organization</span>
+              ) : (
+                !dustAllowed && <span className={managedChipCls}>Restricted by your organization</span>
+              )}
             </div>
           )}
           <span className="pl-7 text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
-            Get one at dust.tt → Settings → API Keys (admin). Or use “Set up Dust automatically” above —
+            Get one at dust.tt → Settings → API Keys (admin). Or use “Set up Dust automatically” above,
             no key needed.
           </span>
         </div>
@@ -2745,7 +2977,7 @@ function DustSetup({
             {storedAgentMissing && (
               <div className="flex items-start gap-1.5 rounded-[8px] border border-[var(--cl-destructive)]/30 bg-[var(--cl-destructive)]/10 px-2.5 py-1.5 text-[11px] leading-snug text-[color:var(--cl-destructive)]">
                 <Info size={13} className="mt-0.5 shrink-0" />
-                <span>Your saved agent is not in this workspace anymore — pick one below so asks and Spotlight Ref work again.</span>
+                <span>Your saved agent is not in this workspace anymore. Pick one below so asks and Spotlight Ref work again.</span>
               </div>
             )}
             <AgentPicker
@@ -2764,7 +2996,7 @@ function DustSetup({
               <div className={selectedAgentRunsSonnet ? 'text-[11px] text-[var(--cl-success)]' : 'text-[11px] text-[color:var(--cl-muted-foreground)]'}>
                 {selectedAgentRunsSonnet
                   ? `Agent reports model: Anthropic ${selectedAgent.modelId}`
-                  : `This agent reports ${selectedAgent.modelProviderId || 'an unknown provider'} ${selectedAgent.modelId || 'with no model id'}, not Anthropic Sonnet. It will still work — replies may just differ in tone or quality.`}
+                  : `This agent reports ${selectedAgent.modelProviderId || 'an unknown provider'} ${selectedAgent.modelId || 'with no model id'}, not Anthropic Sonnet. It will still work, replies may just differ in tone or quality.`}
               </div>
             )}
           </div>
@@ -2801,23 +3033,37 @@ function DustSetup({
         <div
           className={[
             'cl-card flex items-center justify-between gap-2 px-3 py-2.5 text-[12px]',
-            connected ? 'text-[color:var(--cl-success)]' : 'text-[color:var(--cl-muted-foreground)]'
+            storedAgentMissing
+              ? 'text-[color:var(--cl-destructive)]'
+              : connected
+                ? 'text-[color:var(--cl-success)]'
+                : 'text-[color:var(--cl-muted-foreground)]'
           ].join(' ')}
         >
           <span className="flex items-center gap-2">
-            {connected ? <CircleCheck size={15} /> : <Info size={15} />}
-            {connected
-              ? `Workspace ${settings.dustWorkspaceId}. Base: ${selectedAgentName || agent}${
-                  thinkAgent ? `, Thinking: ${agents?.find((a) => a.sId === thinkAgent)?.name || thinkAgent}` : ' (thinking → same as base)'
-                }.`
-              : 'Connect from the Dust CLI above, or finish steps 1–4.'}
+            {storedAgentMissing ? (
+              <AlertCircle size={15} />
+            ) : connected ? (
+              <CircleCheck size={15} />
+            ) : (
+              <Info size={15} />
+            )}
+            {storedAgentMissing
+              ? "The managed base agent isn't available in this workspace/region. Answers will fail. Check the pasted workspace and US/EU region."
+              : connected
+                ? `Workspace ${settings.dustWorkspaceId}. Base: ${selectedAgentName || agent}${
+                    thinkAgent ? `, Thinking: ${agents?.find((a) => a.sId === thinkAgent)?.name || thinkAgent}` : ' (thinking → same as base)'
+                  }.`
+                : 'Connect from the Dust CLI above, or finish steps 1–4.'}
           </span>
-          {active ? (
+          {storedAgentMissing ? null : active ? (
             <span className="flex shrink-0 items-center gap-1 rounded-full bg-[var(--cl-primary-soft)] px-2 py-0.5 text-[11px] font-medium text-[color:var(--cl-primary)]">
               <CircleCheck size={12} /> Active
             </span>
           ) : locked ? (
             <span className={managedChipCls}>Managed by your organization</span>
+          ) : !dustAllowed ? (
+            <span className={managedChipCls}>Restricted by your organization</span>
           ) : (
             connected && (
               <button
@@ -2848,14 +3094,14 @@ function getAudioChoices(): {
       id: 'both',
       label: 'Both',
       desc: 'You + them',
-      perm: isWin ? 'Needs Mic; Windows prompts for system audio' : 'Needs Mic + Screen Recording',
+      perm: isWin ? 'Needs Mic; captures your speaker output automatically (no prompt)' : 'Needs Mic + Screen Recording',
       icon: Headphones
     },
     {
       id: 'system',
       label: 'Them',
       desc: 'The other person',
-      perm: isWin ? 'Windows prompts for system audio' : 'Needs Screen Recording',
+      perm: isWin ? 'Captures your speaker output automatically (no prompt)' : 'Needs Screen Recording',
       icon: Volume2
     },
     { id: 'mic', label: 'You', desc: 'Your mic only', perm: 'Needs Mic', icon: Mic }
@@ -2919,8 +3165,19 @@ const MIC_METER_FULL_SCALE = 0.2
  *  rAF loop; the effect calls it on every unmount AND every deviceId change (effect cleanup runs
  *  before the next effect body), so switching devices or leaving the Audio tab (this component
  *  unmounts with it — see the `tab === 'audio'` guard around MicPicker) always fully releases the mic. */
-function MicLevelMeter({ deviceId }: { deviceId: string }): JSX.Element {
-  const [blocked, setBlocked] = useState(false)
+function MicLevelMeter({
+  deviceId,
+  permissionNonce
+}: {
+  deviceId: string
+  /** Bumped by MicPicker's unlockLabels() after a fresh mic-permission grant. deviceId alone doesn't
+   *  change when permission is granted in the same panel, so the meter would otherwise stay stuck on
+   *  "No signal" until some unrelated device switch re-ran this effect. */
+  permissionNonce?: number
+}): JSX.Element {
+  // null = not blocked. Otherwise the getUserMedia failure kind, so the hint below can name the actual
+  // cause instead of always saying "allow microphone access" (wrong for a disconnected/OverconstrainedError device).
+  const [blockedReason, setBlockedReason] = useState<'permission' | 'device' | 'other' | null>(null)
   const barRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -2960,7 +3217,7 @@ function MicLevelMeter({ deviceId }: { deviceId: string }): JSX.Element {
         mute.gain.value = 0
         audioCtx.createMediaStreamSource(s).connect(analyser).connect(mute).connect(audioCtx.destination)
         const data = new Float32Array(analyser.fftSize)
-        setBlocked(false)
+        setBlockedReason(null)
 
         const tick = (): void => {
           analyser.getFloatTimeDomainData(data)
@@ -2978,10 +3235,15 @@ function MicLevelMeter({ deviceId }: { deviceId: string }): JSX.Element {
           raf = requestAnimationFrame(tick)
         }
         raf = requestAnimationFrame(tick)
-      } catch {
-        // Permission denied, no device matched deviceId (e.g. it just disconnected), or no mic at all —
-        // never throw, just show the hint below instead of the bar.
-        if (!cancelled) setBlocked(true)
+      } catch (e) {
+        // Never throw, just show the hint below instead of the bar — but branch the copy on the actual
+        // cause: permission denied vs. a device that vanished (OverconstrainedError from the
+        // {deviceId:{exact}} constraint above, or NotFoundError) vs. anything else.
+        if (cancelled) return
+        const name = e instanceof Error ? e.name : ''
+        if (name === 'NotAllowedError') setBlockedReason('permission')
+        else if (name === 'OverconstrainedError' || name === 'NotFoundError') setBlockedReason('device')
+        else setBlockedReason('other')
       }
     })()
 
@@ -2989,11 +3251,17 @@ function MicLevelMeter({ deviceId }: { deviceId: string }): JSX.Element {
       cancelled = true
       teardown()
     }
-  }, [deviceId])
+  }, [deviceId, permissionNonce])
 
-  if (blocked) {
+  if (blockedReason) {
+    const hint =
+      blockedReason === 'permission'
+        ? 'No signal. Allow microphone access to test this device.'
+        : blockedReason === 'device'
+          ? 'Device unavailable, choose another mic, or reconnect it and retry.'
+          : 'No signal from this microphone.'
     return (
-      <FieldHint text="No signal. Allow microphone access to test this device.">
+      <FieldHint text={hint}>
         <span className="flex h-2 w-16 shrink-0 items-center justify-center text-[color:var(--cl-muted-foreground)]">
           <AlertCircle size={12} />
         </span>
@@ -3027,6 +3295,9 @@ function MicPicker({
 }): JSX.Element {
   const [devices, setDevices] = useState<MediaDeviceInfo[]>([])
   const [needsPerm, setNeedsPerm] = useState(false)
+  // Bumped whenever unlockLabels() lands a fresh permission grant — passed to MicLevelMeter so it
+  // re-acquires the stream instead of staying stuck on "No signal" (deviceId alone doesn't change here).
+  const [permNonce, setPermNonce] = useState(0)
 
   const refresh = useCallback(async (): Promise<void> => {
     try {
@@ -3049,6 +3320,7 @@ function MicPicker({
       const s = await navigator.mediaDevices.getUserMedia({ audio: true })
       s.getTracks().forEach((t) => t.stop()) // just needed the grant so labels populate
       await refresh()
+      setPermNonce((n) => n + 1)
     } catch {
       /* denied — leave the generic names in place */
     }
@@ -3073,7 +3345,7 @@ function MicPicker({
             </option>
           ))}
         </select>
-        <MicLevelMeter deviceId={settings.micDeviceId} />
+        <MicLevelMeter deviceId={settings.micDeviceId} permissionNonce={permNonce} />
       </div>
       {needsPerm ? (
         <button
@@ -3315,7 +3587,12 @@ function PersonalizeModes({
   const [renameValue, setRenameValue] = useState('')
   const [creatingNew, setCreatingNew] = useState(false)
   const [newLabel, setNewLabel] = useState('')
+  const [modeErr, setModeErr] = useState<string | null>(null)
   const locked = settings.managedKeys.includes('mode')
+  // Gates custom-mode create/rename/delete — distinct from `locked` above (which only gates "Set active").
+  // Without this, the trigger buttons silently no-op (patch() drops locked keys) and deleteCustomMode's
+  // combined patch can partially apply (customModes entry dropped while modePrompts/contextDocs land).
+  const customModesLocked = settings.managedKeys.includes('customModes')
   const overflowRef = useRef<HTMLDivElement>(null)
   // Two-step inline confirm for the overflow menu's destructive actions (mirrors the CLI-install
   // "confirming" phase idiom elsewhere in this file) — first click asks, second click actually deletes.
@@ -3361,12 +3638,30 @@ function PersonalizeModes({
   }, [overflowOpen, safeSelected])
 
   const createNewMode = (): void => {
-    const label = newLabel.trim() || 'New Mode'
+    if (customModesLocked) { setCreatingNew(false); setNewLabel(''); return }
+    const label = newLabel.trim()
+    // Fires on both Enter and the input's onBlur (clicking away) — an empty/whitespace-only label must
+    // cancel instead of silently persisting a junk "New Mode" entry.
+    if (!label) {
+      setCreatingNew(false)
+      setNewLabel('')
+      return
+    }
+    // Schema cap (ipc.ts customModes .max(40)) — past this, setSettings drops the whole customModes key
+    // and the mode picker silently falls back to General. Stop before that and say why, instead of
+    // letting the create appear to work and then silently reverting.
+    if (customModes.length >= 40) {
+      setModeErr('40-mode limit reached.')
+      setCreatingNew(false)
+      setNewLabel('')
+      return
+    }
     const id = `custom-${Date.now()}`
     patch({ customModes: [...customModes, { id, label }] })
     setSelected(id)
     setCreatingNew(false)
     setNewLabel('')
+    setModeErr(null)
   }
 
   const startRename = (): void => {
@@ -3376,6 +3671,7 @@ function PersonalizeModes({
   }
 
   const commitRename = (): void => {
+    if (customModesLocked) { setRenaming(false); return }
     const label = renameValue.trim()
     if (label && !isBuiltinSelected) {
       patch({ customModes: customModes.map((c) => c.id === safeSelected ? { ...c, label } : c) })
@@ -3384,6 +3680,7 @@ function PersonalizeModes({
   }
 
   const deleteCustomMode = (): void => {
+    if (customModesLocked) { setOverflowOpen(false); setConfirmDelete(false); return }
     setOverflowOpen(false)
     const nextModes = customModes.filter((c) => c.id !== safeSelected)
     const nextPrompts = { ...settings.modePrompts }
@@ -3448,8 +3745,10 @@ function PersonalizeModes({
 
   return (
     <div className="grid grid-cols-[176px_1fr] gap-4">
-      {/* Left — mode list grouped by MODE_GROUPS + Custom */}
-      <div className="scroll-thin flex max-h-[360px] flex-col gap-0.5 overflow-y-auto">
+      {/* Left — mode list grouped by MODE_GROUPS + Custom. No inner scroll cap: the panel already has
+          room for every built-in mode, and the tab's own outer scroll (<main> above) handles overflow
+          on the rare account with enough custom modes to actually need it. */}
+      <div className="flex flex-col gap-0.5">
         {/* + New Mode button */}
         {creatingNew ? (
           <div className="mb-1 flex items-center gap-1">
@@ -3471,11 +3770,16 @@ function PersonalizeModes({
         ) : (
           <button
             type="button"
-            onClick={() => setCreatingNew(true)}
-            className="no-drag cl-focus mb-1.5 flex items-center gap-1.5 rounded-[10px] border border-dashed border-[var(--cl-border)] px-2.5 py-1.5 text-[11px] text-[color:var(--cl-muted-foreground)] hover:border-[var(--cl-primary)]/50 hover:text-[color:var(--cl-primary)] transition-colors"
+            onClick={() => { setCreatingNew(true); setModeErr(null) }}
+            disabled={customModesLocked}
+            className="no-drag cl-focus mb-1.5 flex items-center gap-1.5 rounded-[10px] border border-dashed border-[var(--cl-border)] px-2.5 py-1.5 text-[11px] text-[color:var(--cl-muted-foreground)] hover:border-[var(--cl-primary)]/50 hover:text-[color:var(--color-accent-text)] transition-colors disabled:opacity-50 disabled:hover:border-[var(--cl-border)] disabled:hover:text-[color:var(--cl-muted-foreground)]"
           >
             <Plus size={12} /> New Mode
           </button>
+        )}
+
+        {modeErr && (
+          <div className="mb-1.5 px-1 text-[11px] text-[color:var(--color-danger)]">{modeErr}</div>
         )}
 
         {/* Built-in groups */}
@@ -3552,7 +3856,8 @@ function PersonalizeModes({
                     <button
                       type="button"
                       onClick={resetBuiltinPrompt}
-                      className="no-drag w-full px-3 py-2 text-left text-[12px] text-[color:var(--cl-foreground)] hover:bg-white/[0.05] rounded-t-[10px]"
+                      disabled={settings.managedKeys.includes('modePrompts')}
+                      className="no-drag w-full px-3 py-2 text-left text-[12px] text-[color:var(--cl-foreground)] hover:bg-white/[0.05] rounded-t-[10px] disabled:opacity-50 disabled:hover:bg-transparent"
                     >
                       <RotateCcw size={12} className="mr-2 inline" />
                       Reset prompt to default
@@ -3578,7 +3883,8 @@ function PersonalizeModes({
                       <button
                         type="button"
                         onClick={() => setConfirmClear(true)}
-                        className="no-drag w-full px-3 py-2 text-left text-[12px] text-[color:var(--cl-foreground)] hover:bg-white/[0.05] rounded-b-[10px]"
+                        disabled={settings.managedKeys.includes('contextDocs')}
+                        className="no-drag w-full px-3 py-2 text-left text-[12px] text-[color:var(--cl-foreground)] hover:bg-white/[0.05] rounded-b-[10px] disabled:opacity-50 disabled:hover:bg-transparent"
                       >
                         <Trash size={12} className="mr-2 inline" />
                         Clear context files
@@ -3590,7 +3896,8 @@ function PersonalizeModes({
                     <button
                       type="button"
                       onClick={startRename}
-                      className="no-drag w-full px-3 py-2 text-left text-[12px] text-[color:var(--cl-foreground)] hover:bg-white/[0.05] rounded-t-[10px]"
+                      disabled={customModesLocked}
+                      className="no-drag w-full px-3 py-2 text-left text-[12px] text-[color:var(--cl-foreground)] hover:bg-white/[0.05] rounded-t-[10px] disabled:opacity-50 disabled:hover:bg-transparent"
                     >
                       Rename
                     </button>
@@ -3615,7 +3922,8 @@ function PersonalizeModes({
                       <button
                         type="button"
                         onClick={() => setConfirmDelete(true)}
-                        className="no-drag w-full px-3 py-2 text-left text-[12px] text-[color:var(--cl-destructive)] hover:bg-white/[0.05] rounded-b-[10px]"
+                        disabled={customModesLocked}
+                        className="no-drag w-full px-3 py-2 text-left text-[12px] text-[color:var(--cl-destructive)] hover:bg-white/[0.05] rounded-b-[10px] disabled:opacity-50 disabled:hover:bg-transparent"
                       >
                         <Trash size={12} className="mr-2 inline" />
                         Delete mode
@@ -3634,7 +3942,8 @@ function PersonalizeModes({
 
         {/* Sticky footer: Set active */}
         {active !== safeSelected && (
-          <div className="flex justify-end border-t border-[var(--cl-border)] pt-3">
+          <div className="flex items-center justify-end gap-2 border-t border-[var(--cl-border)] pt-3">
+            {locked && <ManagedChip keys={settings.managedKeys} k="mode" />}
             <button
               type="button"
               disabled={locked}
@@ -3663,24 +3972,93 @@ type TabId =
 
 // Icons are Lucide components except Mantu Intelligence, which carries the official Mantu "M" mark —
 // both render through the same `<t.icon size={14} />` call, so the type is the shared size-taking shape.
-const TABS: { id: TabId; label: string; icon: LucideIcon | ComponentType<{ size?: number }> }[] = [
+// `desc` is the short section intro shown under the tab bar; `keywords` seed the search field below —
+// each list is the REAL card titles living under that tab (see the `<Section title=...>` calls), so a
+// search never promises a match that isn't actually there.
+const TABS: {
+  id: TabId
+  label: string
+  icon: LucideIcon | ComponentType<{ size?: number }>
+  desc: string
+  keywords: string[]
+}[] = [
   // Tab id stays 'personalize' (nothing keys off the label) — labeled to cover BOTH children rendered
   // under it: the transparency/appearance slider AND the Modes editor. A plain rename to just "Appearance"
   // would hide Modes (which onboarding explicitly teaches by that name) behind an unrelated-looking tab.
-  { id: 'personalize', label: 'Modes & Display', icon: Wand2 },
-  { id: 'ai', label: 'AI', icon: Cpu },
-  { id: 'audio', label: 'Audio', icon: Mic },
-  { id: 'calendar', label: 'Calendar', icon: Calendar },
-  { id: 'meetings', label: 'Meetings', icon: FolderOpen },
+  {
+    id: 'personalize',
+    label: 'Modes & Display',
+    icon: Wand2,
+    desc: 'How Métis looks, and what each mode says.',
+    keywords: ['appearance', 'transparency', 'opacity', 'glass', 'modes', 'language', 'custom instructions', 'prompt']
+  },
+  {
+    id: 'ai',
+    label: 'AI',
+    icon: Cpu,
+    desc: 'Provider, API keys, local model, and thinking mode.',
+    keywords: ['provider', 'api key', 'anthropic', 'openai', 'dust', 'claude code', 'codex', 'local ai', 'thinking mode', 'model']
+  },
+  {
+    id: 'audio',
+    label: 'Audio',
+    icon: Mic,
+    desc: 'What Métis listens to, and how it hears you.',
+    keywords: ['microphone', 'listen to', 'in meetings', 'vocabulary corrections', 'transcription', 'asr']
+  },
+  {
+    id: 'calendar',
+    label: 'Calendar',
+    icon: Calendar,
+    desc: "Connect Outlook and see today's agenda.",
+    keywords: ['notifications', 'microsoft', 'outlook', "today's agenda", 'calendar', 'sign in']
+  },
+  {
+    id: 'meetings',
+    label: 'Meetings',
+    icon: FolderOpen,
+    desc: 'Where meetings are saved, and how long they stay.',
+    keywords: ['meetings & transcripts', 'folder', 'retention', 'danger zone', 'delete', 'ingest']
+  },
   // Label shortened to keep all nine tabs on ONE line at the overlay's width — the MantuMark icon already
   // signals "Mantu"; the tab id stays 'intelligence' so nothing else changes.
-  { id: 'intelligence', label: 'Intelligence', icon: MantuMark },
-  { id: 'privacy', label: 'Privacy', icon: ShieldCheck },
+  {
+    id: 'intelligence',
+    label: 'Intelligence',
+    icon: MantuMark,
+    desc: 'Your second brain: meetings, wiki, CRM, knowledge graph.',
+    keywords: ['mantu intelligence', 'meetings & follow-up', 'published wiki', 'polo pre-sales', 'crm', 'knowledge graph']
+  },
+  {
+    id: 'privacy',
+    label: 'Privacy',
+    icon: ShieldCheck,
+    desc: 'What Métis can see, record, and send.',
+    keywords: ['screen capture', 'screen access', 'recording consent', 'sensitive data', 'redact', 'permissions', 'usage']
+  },
   // Profile + Keybinds merged: both are "how Métis is set up for YOU" (who you are / how you drive it).
   // Labeled just "Profile" so all nine tabs fit one line; keybinds live inside this tab.
-  { id: 'profile', label: 'Profile', icon: User },
-  { id: 'about', label: 'About', icon: Info }
+  {
+    id: 'profile',
+    label: 'Profile',
+    icon: User,
+    desc: 'Who you are, your license, and your keybinds.',
+    keywords: ['about you', 'license', 'keyboard shortcuts', 'hotkeys', 'tap control']
+  },
+  {
+    id: 'about',
+    label: 'About',
+    icon: Info,
+    desc: 'The story, the thanks, and the version.',
+    keywords: ['why métis', 'thanks', 'version', 'credits']
+  }
 ]
+
+/** Case/diacritic-insensitive substring test — lets "metis" match "Métis" in search. */
+function fuzzyIncludes(haystack: string, needle: string): boolean {
+  const norm = (s: string): string => s.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase()
+  return norm(haystack).includes(norm(needle))
+}
 
 export function Settings({
   settings,
@@ -3720,6 +4098,33 @@ export function Settings({
   onLogout?: () => void
 }): JSX.Element {
   const [tab, setTab] = useState<TabId>(initialTab ?? 'personalize')
+  // Guided search — jumps between sections instead of the old dig-through-nine-tabs pattern. Matches the
+  // tab label plus its real card keywords (see TABS above), so a hit always points at something that
+  // actually exists on that tab.
+  const [query, setQuery] = useState('')
+  const searchMatches = useMemo(() => {
+    const q = query.trim()
+    if (!q) return []
+    return TABS.filter(
+      (t) => fuzzyIncludes(t.label, q) || t.keywords.some((k) => fuzzyIncludes(k, q))
+    ).map((t) => ({
+      ...t,
+      matchedKeyword: t.keywords.find((k) => fuzzyIncludes(k, q))
+    }))
+  }, [query])
+  const jumpTo = (id: TabId): void => {
+    setTab(id)
+    setQuery('')
+  }
+  // openMeetingsFolder resolves a non-empty string on failure (e.g. the folder was deleted/unmounted) —
+  // surface it instead of silently discarding it (was `void window.toto.openMeetingsFolder()`).
+  const [meetingsFolderErr, setMeetingsFolderErr] = useState<string | null>(null)
+  // App reuses the same Settings instance across opens (no remount), so a later requireProvider redirect
+  // that passes a new initialTab (e.g. 'ai') would otherwise leave `tab` stuck on whatever tab was open
+  // before — re-sync whenever the caller hands us a fresh target tab.
+  useEffect(() => {
+    if (initialTab) setTab(initialTab)
+  }, [initialTab])
   const managed = settings.managedKeys.length > 0
   // Switching tabs must land at the top of the new tab's content — the scroll container otherwise
   // keeps whatever scroll position the previous tab was left at. useLayoutEffect (not useEffect) so this
@@ -3766,11 +4171,25 @@ export function Settings({
             Managed by your organization
           </span>
         )}
+        <div className="relative ml-auto w-[168px]">
+          <Search size={12} className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-[color:var(--cl-muted-foreground)]" />
+          <input
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && searchMatches.length > 0) jumpTo(searchMatches[0].id)
+              if (e.key === 'Escape') setQuery('')
+            }}
+            placeholder="Search settings…"
+            aria-label="Search settings"
+            className="no-drag cl-focus h-7 w-full rounded-full border border-[var(--cl-input)] bg-white/[0.04] pl-7 pr-2.5 text-[11px] text-[color:var(--cl-foreground)] placeholder:text-[color:var(--cl-muted-foreground)]"
+          />
+        </div>
         <button
           type="button"
           onClick={onClose}
           aria-label="Close settings"
-          className="no-drag cl-focus ml-auto flex size-7 items-center justify-center rounded-md text-[color:var(--cl-muted-foreground)] hover:bg-white/[0.06] hover:text-[color:var(--cl-foreground)]"
+          className="no-drag cl-focus flex size-7 shrink-0 items-center justify-center rounded-md text-[color:var(--cl-muted-foreground)] hover:bg-white/[0.06] hover:text-[color:var(--cl-foreground)]"
         >
           <X size={16} />
         </button>
@@ -3793,6 +4212,7 @@ export function Settings({
       >
         {TABS.map((t, i) => {
           const active = t.id === tab
+          const matched = query.trim() !== '' && searchMatches.some((m) => m.id === t.id)
           // Roving tabindex per the APG tabs pattern: only the active tab is Tab-reachable; arrow keys
           // move focus and activation between the rest.
           return (
@@ -3804,7 +4224,7 @@ export function Settings({
               aria-selected={active}
               aria-controls="settings-panel"
               tabIndex={active ? 0 : -1}
-              onClick={() => setTab(t.id)}
+              onClick={() => jumpTo(t.id)}
               onKeyDown={(e) => {
                 if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return
                 e.preventDefault()
@@ -3817,7 +4237,11 @@ export function Settings({
                 'cl-focus flex shrink-0 items-center gap-1.5 rounded-full px-2.5 py-1.5 text-[12px] font-medium transition-colors',
                 active
                   ? 'bg-[var(--cl-primary)] text-white'
-                  : 'text-[color:var(--cl-muted-foreground)] hover:bg-white/[0.06] hover:text-[color:var(--cl-foreground)]'
+                  : matched
+                    ? 'text-[color:var(--cl-foreground)] ring-1 ring-inset ring-[var(--cl-primary)]/60'
+                    : query.trim() !== ''
+                      ? 'text-[color:var(--cl-muted-foreground)] opacity-40'
+                      : 'text-[color:var(--cl-muted-foreground)] hover:bg-white/[0.06] hover:text-[color:var(--cl-foreground)]'
               ].join(' ')}
             >
               <t.icon size={14} />
@@ -3827,6 +4251,35 @@ export function Settings({
         })}
       </nav>
 
+      {/* Active tab's short intro — one line, so a dense nine-tab bar still reads as a guided flow rather
+          than a wall of pill buttons. Swaps for the search results list while a query is live. */}
+      {query.trim() === '' ? (
+        <p className="m-0 border-b border-[var(--cl-border)] px-3.5 py-2 text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
+          {TABS.find((t) => t.id === tab)?.desc}
+        </p>
+      ) : (
+        <div className="flex flex-col gap-0.5 border-b border-[var(--cl-border)] px-2 py-1.5">
+          {searchMatches.length === 0 ? (
+            <p className="m-0 px-1.5 py-1 text-[11px] text-[color:var(--cl-muted-foreground)]">No matching settings.</p>
+          ) : (
+            searchMatches.map((m) => (
+              <button
+                key={m.id}
+                type="button"
+                onClick={() => jumpTo(m.id)}
+                className="no-drag cl-focus flex items-center gap-2 rounded-[8px] px-1.5 py-1 text-left text-[11px] text-[color:var(--cl-foreground)] hover:bg-white/[0.06]"
+              >
+                <m.icon size={12} className="shrink-0 text-[color:var(--cl-primary)]" />
+                <span className="font-medium">{m.label}</span>
+                {m.matchedKeyword && (
+                  <span className="truncate text-[color:var(--cl-muted-foreground)]">· {m.matchedKeyword}</span>
+                )}
+              </button>
+            ))
+          )}
+        </div>
+      )}
+
       <main
         ref={contentRef}
         role="tabpanel"
@@ -3834,6 +4287,7 @@ export function Settings({
         aria-labelledby={`settings-tab-${tab}`}
         className="cl-content scroll-thin max-h-[480px] overflow-y-auto"
       >
+        <TabIconContext.Provider value={TABS.find((t) => t.id === tab)?.icon}>
         <div className="flex flex-col gap-6 px-5 pt-5 pb-16">
             {tab === 'ai' && (
               <AiSection
@@ -3848,7 +4302,10 @@ export function Settings({
 
             {tab === 'personalize' && (
               <div className="flex flex-col gap-6">
-                <Section title="Appearance" desc="How see-through the overlay's background is. Default matches what you see today.">
+                <Section title="Modes" desc="Edit each mode's prompt and the files it can see, then set the one you want active." icon={Wand2}>
+                  <PersonalizeModes settings={settings} patch={patch} />
+                </Section>
+                <Section title="Appearance" desc="How see-through the overlay's background is. Default matches what you see today." icon={Sparkles}>
                   <label className="flex items-center justify-between gap-3 px-1 py-2 text-[12px] text-[color:var(--cl-muted-foreground)]">
                     <span className="flex items-center gap-2">
                       {settings.overlayOpacity < 0.9
@@ -3869,13 +4326,18 @@ export function Settings({
                       className={['no-drag accent-[var(--cl-primary)]', settings.managedKeys.includes('overlayOpacity') ? 'opacity-60' : ''].join(' ')}
                     />
                   </label>
-                </Section>
-                <Section title="Modes" desc="Edit each mode's prompt and the files it can see, then set the one you want active.">
-                  <PersonalizeModes settings={settings} patch={patch} />
+                  {/* Live preview: --overlay-opacity-scale is set on <html> by App.tsx the instant patch()
+                      round-trips, and .glass-strong already reads that var — so this swatch reflects the
+                      slider with zero extra plumbing, not a simulated approximation. */}
+                  <div className="glass-strong mt-1 flex items-center gap-2 rounded-[12px] px-3 py-2.5">
+                    <MetisMark size={16} />
+                    <span className="text-[12px] text-[color:var(--color-ink)]">This is how the overlay bar will look.</span>
+                  </div>
                 </Section>
                 <Section
                   title="Language"
                   desc="Pick the language for live answers, and a separate one for the saved summary (useful when the meeting is in one language but you want notes in another)."
+                  icon={MessageSquare}
                 >
                   <label className="mb-1 block text-[11px] font-medium text-[color:var(--cl-muted-foreground)]">
                     Answers & live assist
@@ -3912,7 +4374,7 @@ export function Settings({
                     ))}
                   </select>
                 </Section>
-                <Section title="Custom instructions" desc="Added to every mode's prompt. Leave blank to use the defaults.">
+                <Section title="Custom instructions" desc="Added to every mode's prompt. Leave blank to use the defaults." icon={AlignLeft}>
                   <LazyTextarea
                     value={settings.systemPrompt}
                     onCommit={(v) => patch({ systemPrompt: v })}
@@ -3929,12 +4391,13 @@ export function Settings({
 
             {tab === 'audio' && (
               <div className="flex flex-col gap-6">
-                <Section title="Listen to" desc="Whose audio Métis transcribes during a meeting.">
+                <Section title="Listen to" desc="Whose audio Métis transcribes during a meeting." icon={Mic}>
                   <div className="mb-2"><ManagedChip keys={settings.managedKeys} k="audioSource" /></div>
                   <AudioChoices settings={settings} patch={patch} />
                   <MicPicker settings={settings} patch={patch} />
                 </Section>
-                <Section title="In meetings">
+                <TapControlCard settings={settings} patch={patch} />
+                <Section title="In meetings" icon={Headphones}>
                   <ToggleRow
                     label="Auto-answer"
                     desc="Draft a reply the moment they ask a question."
@@ -3987,7 +4450,7 @@ export function Settings({
                   <div className="flex flex-col gap-1.5 px-1 py-1">
                     <label className="flex items-center gap-2 text-[13px] text-[color:var(--cl-foreground)]">
                       Transcription engine
-                      <FieldHint text="Parakeet: bundled NVIDIA Parakeet v3, very fast + accurate for 25 European languages. Whisper: bundled, handles ~99 languages — use it for non-European speech. Apple Speech: Apple's own on-device engine (SFSpeechRecognizer); no extra download, macOS 13+ only.">
+                      <FieldHint text="Parakeet: bundled NVIDIA Parakeet v3, very fast + accurate for 25 European languages. Whisper: bundled, handles ~99 languages, use it for non-European speech. Apple Speech: Apple's own on-device engine (SFSpeechRecognizer); no extra download, macOS 13+ only.">
                         <Info size={12} className="shrink-0 text-[color:var(--cl-muted-foreground)] hover:text-[color:var(--cl-foreground)]" />
                       </FieldHint>
                       <ManagedChip keys={settings.managedKeys} k="asrEngine" />
@@ -4011,7 +4474,7 @@ export function Settings({
                       <AlertCircle size={12} className="mt-0.5 shrink-0" />
                       <span>
                         The Parakeet engine can&apos;t load in this build: {parakeetAddonError}. This is an
-                        engine problem, not a missing model download — meetings will use Whisper until a
+                        engine problem, not a missing model download. Meetings will use Whisper until a
                         build with a working engine is installed.
                       </span>
                     </div>
@@ -4023,6 +4486,21 @@ export function Settings({
                         {new Date(settings.asrLastFallbackAt).toLocaleString()}.
                       </span>
                       <TextButton onClick={() => patch({ asrLastFallbackAt: null })}>Dismiss</TextButton>
+                    </div>
+                  )}
+                  {(settings as SettingsWithAsrWebgpuFallback).asrWebgpuFallbackAt != null && (
+                    <div className="-mt-1 flex items-center justify-between gap-2 pl-1 text-[12px] text-[color:var(--color-ink-3)]">
+                      <span>
+                        Best-quality transcription needs a WebGPU-capable GPU; this device fell back to
+                        the fast model.
+                      </span>
+                      <TextButton
+                        onClick={() =>
+                          patch({ asrWebgpuFallbackAt: null } as Partial<SettingsWithAsrWebgpuFallback>)
+                        }
+                      >
+                        Dismiss
+                      </TextButton>
                     </div>
                   )}
                   <ToggleRow
@@ -4064,15 +4542,15 @@ export function Settings({
                     label="Preload screen context (on-device)"
                     desc={
                       settings.backgroundScreenReady || !settings.backgroundScreenContext
-                        ? "When you switch windows, Métis quietly reads your screen with the on-device model so 'What's on my screen' answers instantly. Stays on your device — nothing extra is sent to the cloud, and Private View turns it off."
-                        : 'Enable Local AI (below) to use this — the background reader runs entirely on the on-device model.'
+                        ? "When you switch windows, Métis quietly reads your screen with the on-device model so 'What's on my screen' answers instantly. Stays on your device, nothing extra is sent to the cloud, and Private View turns it off."
+                        : 'Enable Local AI (below) to use this. The background reader runs entirely on the on-device model.'
                     }
                     on={settings.backgroundScreenContext}
                     onChange={(v) => patch({ backgroundScreenContext: v })}
                     disabled={settings.managedKeys.includes('backgroundScreenContext')}
                   />
                 </Section>
-                <Section title="Vocabulary corrections" desc="Words the transcriber keeps getting wrong. Fix them once, applied to every meeting.">
+                <Section title="Vocabulary corrections" desc="Words the transcriber keeps getting wrong. Fix them once, applied to every meeting." icon={MessageSquareQuote}>
                   <ToggleRow
                     label="Spell known names correctly"
                     desc="Spell names from your meeting history correctly in transcripts (people and accounts your brain already knows)."
@@ -4101,7 +4579,7 @@ export function Settings({
 
             {tab === 'privacy' && (
               <div className="flex flex-col gap-6">
-                <Section title="Screen capture" desc="Two separate switches: what others can see of Métis, and what Métis can see of your screen.">
+                <Section title="Screen capture" desc="Two separate switches: what others can see of Métis, and what Métis can see of your screen." icon={Camera}>
                   <ToggleRow
                     label="Hide from screen capture"
                     desc="Hide the Métis window from screen capture & sharing, so people you share with never see it. Doesn't affect screen questions."
@@ -4112,15 +4590,26 @@ export function Settings({
                   />
                   <ToggleRow
                     label="Private View"
-                    desc="Métis won't look at or capture your screen while this is on — screen questions answer from context only. Same switch as the eye button on the bar."
+                    desc="Métis won't look at or capture your screen while this is on. Screen questions answer from context only. Same switch as the eye button on the bar."
                     on={settings.privateView}
                     onChange={(v) => patch({ privateView: v })}
                     disabled={settings.managedKeys.includes('privateView')}
                   />
                 </Section>
+                <Section title="Screen access" desc="Whether Métis can see your own screen to answer what's in front of you." icon={Eye}>
+                  <ToggleRow
+                    label="Let Métis see your screen automatically"
+                    desc="When on, quick actions and the first ask capture your screen for a vision model. Turn off to answer from text only."
+                    on={settings.screenAsk}
+                    onChange={(v) => patch({ screenAsk: v })}
+                    disabled={settings.managedKeys.includes('screenAsk')}
+                    icon={Eye}
+                  />
+                </Section>
                 <Section
                   title="Recording consent"
                   desc="This reminder is shown to YOU, the operator. It does not notify or ask the other participants. Métis has no way to show anything to the other people on the call; getting their consent is on you, by whatever means your company policy or local law requires (verbal notice, a calendar invite disclosure, etc.)."
+                  icon={ShieldCheck}
                 >
                   <ToggleRow
                     label="I will inform participants before recording"
@@ -4143,7 +4632,7 @@ export function Settings({
                     </div>
                   </ToggleRow>
                 </Section>
-                <Section title="Sensitive data" desc="Keep secrets out of what's sent to AI providers.">
+                <Section title="Sensitive data" desc="Keep secrets out of what's sent to AI providers." icon={Lock}>
                   <ToggleRow
                     label="Redact secrets before sending to AI"
                     desc="Strips credit-card numbers, API keys, SSNs, and private keys from the captured transcript before it goes to a cloud model. Your typed questions and the saved transcript are never changed."
@@ -4158,12 +4647,13 @@ export function Settings({
                     </div>
                   </ToggleRow>
                 </Section>
-                <Section title="Permissions" desc="Status of the OS permissions Métis needs.">
+                <Section title="Permissions" desc="Status of the OS permissions Métis needs." icon={ShieldCheck}>
                   <PermissionsSection />
                 </Section>
                 <Section
                   title="Usage"
                   desc="On-device performance and quality from your local audit log. Never leaves this device."
+                  icon={FileSearch}
                 >
                   <DiagnosticsSection />
                 </Section>
@@ -4175,6 +4665,7 @@ export function Settings({
               <Section
                 title="Meetings & transcripts"
                 desc="Meetings are saved here as notes your Dust agents can read."
+                icon={FolderOpen}
               >
                 <div className="cl-card px-3 py-2.5">
                   <div className="flex items-center gap-2">
@@ -4202,7 +4693,10 @@ export function Settings({
                     <button
                       type="button"
                       disabled={settings.managedKeys.includes('meetingsFolder')}
-                      onClick={() => void window.toto.openMeetingsFolder()}
+                      onClick={async () => {
+                        const result = await window.toto.openMeetingsFolder()
+                        setMeetingsFolderErr(result || null)
+                      }}
                       className={[
                         'no-drag cl-focus flex items-center gap-1 rounded-lg bg-white/[0.05] px-2.5 py-1.5 text-[12px] text-[color:var(--cl-foreground)] hover:bg-white/[0.1]',
                         settings.managedKeys.includes('meetingsFolder') ? 'opacity-60 cursor-not-allowed' : ''
@@ -4211,11 +4705,69 @@ export function Settings({
                       <FolderOpen size={12} /> Open
                     </button>
                   </div>
+                  {meetingsFolderErr && (
+                    <div className="mt-1.5 flex items-center gap-1.5 text-[11px] text-[color:var(--cl-destructive)]">
+                      <AlertCircle size={12} className="shrink-0" /> {meetingsFolderErr}
+                    </div>
+                  )}
+                </div>
+                {/* Team transcripts — shared folders whose meetings are ALSO ingested into this brain,
+                    attributed by folder name (settings.teamTranscriptFolders). Centralizes the team's calls
+                    without touching where the user's OWN meetings are saved. */}
+                <div className="cl-card mt-2 px-3 py-2.5">
+                  <div className="flex items-center gap-2">
+                    <FolderOpen size={15} className="shrink-0 text-[color:var(--cl-primary)]" />
+                    <span className="min-w-0 flex-1 text-[12px] text-[color:var(--cl-foreground)]">Team transcripts</span>
+                    <ManagedChip keys={settings.managedKeys} k="teamTranscriptFolders" />
+                  </div>
+                  <p className="mt-1 text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
+                    Shared folders whose meeting transcripts also feed this brain, attributed by folder name. Point one at a teammate&apos;s synced meetings folder to centralize the team&apos;s calls automatically.
+                  </p>
+                  {(settings.teamTranscriptFolders ?? []).length > 0 && (
+                    <div className="mt-2 flex flex-col gap-1">
+                      {(settings.teamTranscriptFolders ?? []).map((folder) => (
+                        <div key={folder} className="flex items-center gap-2 rounded-lg bg-white/[0.04] px-2 py-1.5">
+                          <FolderOpen size={12} className="shrink-0 text-[color:var(--cl-muted-foreground)]" />
+                          <span className="min-w-0 flex-1 truncate text-[12px] text-[color:var(--cl-foreground)]" title={folder}>
+                            {folder}
+                          </span>
+                          <button
+                            type="button"
+                            disabled={settings.managedKeys.includes('teamTranscriptFolders')}
+                            onClick={async () => {
+                              await window.toto.removeTeamTranscriptFolder(folder)
+                              void patch({})
+                            }}
+                            title="Stop ingesting this folder"
+                            className="no-drag cl-focus rounded-md p-1 text-[color:var(--cl-muted-foreground)] hover:bg-white/[0.08] hover:text-[color:var(--cl-foreground)] disabled:opacity-60"
+                          >
+                            <X size={12} />
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  <div className="mt-2">
+                    <button
+                      type="button"
+                      disabled={settings.managedKeys.includes('teamTranscriptFolders')}
+                      onClick={async () => {
+                        await window.toto.addTeamTranscriptFolder()
+                        void patch({})
+                      }}
+                      className={[
+                        'no-drag cl-focus flex items-center gap-1 rounded-lg bg-white/[0.05] px-2.5 py-1.5 text-[12px] text-[color:var(--cl-foreground)] hover:bg-white/[0.1]',
+                        settings.managedKeys.includes('teamTranscriptFolders') ? 'opacity-60 cursor-not-allowed' : ''
+                      ].join(' ')}
+                    >
+                      <FolderCog size={12} /> Add shared folder
+                    </button>
+                  </div>
                 </div>
                 <div className="mt-2">
                   <div className="rounded-lg bg-white/[0.03] px-3 py-2">
                     <div className="flex items-center gap-2 text-[13px] font-medium text-[color:var(--cl-foreground)]">
-                      <Check size={14} className="text-[var(--color-accent)]" />
+                      <Check size={14} className="text-[var(--color-accent-text)]" />
                       Meetings are always saved
                     </div>
                     <div className="mt-0.5 text-[12px] leading-snug text-[color:var(--cl-muted-foreground)]">
@@ -4274,7 +4826,7 @@ export function Settings({
 
             {tab === 'profile' && (
               <div className="flex flex-col gap-6">
-                <Section title="About you" desc="Used for interview and sales modes. The more detail, the better the answers.">
+                <Section title="About you" desc="Used for interview and sales modes. The more detail, the better the answers." icon={User}>
                   <ProfileEditor
                     profile={settings.profile}
                     onChange={(p) => patch({ profile: p })}
@@ -4285,12 +4837,12 @@ export function Settings({
                     OFF for phase 1 (LICENSE_UI_ENABLED); the section + LicenseSection component stay in
                     source and reappear here the moment the flag flips. */}
                 {LICENSE_UI_ENABLED && (
-                  <Section title="License" desc="Activate Métis against your organization's license server.">
+                  <Section title="License" desc="Activate Métis against your organization's license server." icon={ShieldCheck}>
                     <LicenseSection settings={settings} patch={patch} />
                   </Section>
                 )}
                 {/* Keybinds live with Profile: both are "how Métis is set up for you". */}
-                <Section title="Keyboard shortcuts" desc="Click any keybind below to edit it.">
+                <Section title="Keyboard shortcuts" desc="Click any keybind below to edit it." icon={Settings2}>
                   <Shortcuts settings={settings} patch={patch} />
                 </Section>
               </div>
@@ -4301,7 +4853,7 @@ export function Settings({
               <div className="flex flex-col gap-6 text-center">
                 {/* Microsoft sign-in is in Calendar, the license is in Profile, and permissions + usage
                     moved to Privacy. About is just the story now. */}
-                <Section title="Why “Métis”" desc="The name is the mission.">
+                <Section title="Why “Métis”" desc="The name is the mission." icon={Sparkles}>
                   <div className="flex flex-col items-center gap-2 pb-1 text-center">
                     <MetisMark size={76} />
                     <p className="text-[12px] leading-relaxed text-[color:var(--cl-muted-foreground)]">
@@ -4315,7 +4867,7 @@ export function Settings({
                     </p>
                   </div>
                 </Section>
-                <Section title="Thanks" desc="Métis got better because people believed in it early.">
+                <Section title="Thanks" desc="Métis got better because people believed in it early." icon={CircleCheck}>
                   <p className="text-[12px] leading-relaxed text-[color:var(--cl-muted-foreground)]">
                     To{' '}
                     <a
@@ -4416,6 +4968,7 @@ export function Settings({
               </div>
             )}
         </div>
+        </TabIconContext.Provider>
       </main>
 
       {/* Footer — secondary actions left, Done right */}
@@ -4659,6 +5212,7 @@ function IntelligenceTab({
       <Section
         title="Meetings & follow-up"
         desc="Recent meeting history. Open one to review its recap, transcript, and generate a follow-up."
+        icon={FolderOpen}
       >
         <div className="flex flex-col gap-1.5">
           {meetings === null ? (
@@ -4676,8 +5230,23 @@ function IntelligenceTab({
                 disabled={!onOpenMeeting}
                 className="no-drag cl-focus cl-card flex items-center gap-2.5 px-3 py-2.5 text-left transition-colors hover:bg-white/[0.06] disabled:opacity-60"
               >
-                <FileText size={14} className="shrink-0 text-[color:var(--cl-primary)]" />
+                {m.locked ? (
+                  <Lock
+                    size={14}
+                    className="shrink-0 text-[color:var(--cl-muted-foreground)]"
+                    aria-label="Encrypted, can't be opened on this device"
+                  />
+                ) : (
+                  <FileText size={14} className="shrink-0 text-[color:var(--color-accent-text)]" />
+                )}
                 <span className="min-w-0 flex-1 truncate text-[12px] text-[color:var(--cl-foreground)]">{m.title}</span>
+                {/* Locked: a real encrypted meeting that couldn't be decrypted on this device — surface it
+                    here too (matches RecallView's row) so the click isn't a silent dead end with no cue. */}
+                {m.locked && (
+                  <span className="shrink-0 rounded-full bg-white/[0.06] px-2 py-0.5 text-[10px] text-[color:var(--cl-muted-foreground)]">
+                    Locked
+                  </span>
+                )}
                 <span className="shrink-0 text-[11px] text-[color:var(--cl-muted-foreground)]">
                   {shortDate(m.date)}
                   {m.durationMin ? ` · ${m.durationMin} min` : ''}
@@ -4700,7 +5269,8 @@ function IntelligenceTab({
 
       <Section
         title="Published wiki (Dust-readable)"
-        desc="Mirrors your CRM-corrected brain — account/people/deal pages and meeting note cards — as plain markdown under a wiki/ folder next to your meetings, so Dust and other agents can read it."
+        desc="Mirrors your CRM-corrected brain (account/people/deal pages and meeting note cards) as plain markdown under a wiki/ folder next to your meetings, so Dust and other agents can read it."
+        icon={FileText}
       >
         <ToggleRow
           label="Publish meeting intelligence"
@@ -4712,11 +5282,32 @@ function IntelligenceTab({
           on={settings.publishBrainPages}
           onChange={(v) => patch({ publishBrainPages: v })}
         />
+        {settings.publishBrainPages && (
+          <div className="cl-card mt-2 px-3 py-2.5">
+            <div className="flex items-center gap-2">
+              <FolderOpen size={15} className="shrink-0 text-[color:var(--cl-primary)]" />
+              <span className="min-w-0 flex-1 text-[12px] text-[color:var(--cl-foreground)]">Give Claude your second brain</span>
+            </div>
+            <p className="mt-1 text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
+              The published folder includes a <span className="font-medium text-[color:var(--cl-foreground)]">CLAUDE.md</span> entry doc that orients Claude. Point Claude at this folder (add it to a Claude Project, open it in Claude Desktop, or sync it via a connector) and Claude reads your meetings, people, and deals directly and surfaces your next steps. Nothing here is a raw transcript.
+            </p>
+            <div className="mt-2">
+              <button
+                type="button"
+                onClick={() => void window.toto.openBrainForClaude()}
+                className="no-drag cl-focus flex items-center gap-1 rounded-lg bg-white/[0.05] px-2.5 py-1.5 text-[12px] text-[color:var(--cl-foreground)] hover:bg-white/[0.1]"
+              >
+                <FolderOpen size={12} /> Open the folder for Claude
+              </button>
+            </div>
+          </div>
+        )}
       </Section>
 
       <Section
         title="Polo Pre-Sales"
         desc="Push meeting recaps to your pre-sales CRM. Manual and review-first: nothing sends automatically."
+        icon={MessageSquare}
       >
         <BidstackCard settings={settings} patch={patch} />
       </Section>
@@ -4755,6 +5346,7 @@ function GraphSection({
     <Section
       title="Knowledge graph"
       desc="See how your meetings, people, and topics connect. Uses your existing Claude or Claude Code sign-in, so there is no extra key to add."
+      icon={Network}
     >
       <ToggleRow
         label="Build a knowledge graph of my notes"
@@ -4873,6 +5465,7 @@ function DangerZoneSection({
     <Section
       title="Danger zone"
       desc="Meeting recordings capture other people's speech too, not just yours, so these controls bound or fully erase what's stored on this device."
+      icon={AlertCircle}
     >
       <label className="mb-1 block text-[11px] font-medium text-[color:var(--cl-muted-foreground)]">
         Auto-delete meetings older than
@@ -5122,7 +5715,33 @@ function CalendarTab({
   }
   useEffect(refreshOutlook, [])
 
+  // Locked when an org admin manages any of the three Entra IDs — mirrors the disabled+ManagedChip
+  // pattern used elsewhere (e.g. temperature/overlayOpacity) so this flow can't falsely claim success
+  // while setSettings silently drops the locked keys.
+  //
+  // `managedKeys` only reflects the flat top-level managed-config `locked` array (see main/store.ts
+  // getLockedKeys) — it does NOT cover main/auth.ts's separate nested `{ azure: {...} }` managed-config
+  // block, which readConfig() there resolves with HIGHER precedence than these in-app Settings fields.
+  // When SSO is configured that way, "Change IDs" below would stay editable and saveOutlookIds would
+  // close the form claiming success while readConfig() silently keeps using the managed values. There is
+  // no renderer-visible signal that distinguishes "configured via the nested azure block" from
+  // "configured via this same form" (authStatus only exposes configured/signedIn/enforced), so — once any
+  // SSO config has resolved at all (authStatus.configured) — this form locks rather than risk the
+  // false-success case. Trade-off: a genuinely self-serve (non-managed) org also loses the ability to
+  // edit its own IDs after the first save; a clearly-locked, honest form beats one that sometimes
+  // silently no-ops. The unconfigured first-time setup path is unaffected (configured is false until a
+  // config resolves), so self-serve first setup still works exactly as before.
+  const azureLocked =
+    settings.managedKeys.includes('azureClientId') ||
+    settings.managedKeys.includes('azureTenantId') ||
+    settings.managedKeys.includes('azureAllowedDomain') ||
+    !!authStatus?.configured
+
   const saveOutlookIds = async (): Promise<void> => {
+    if (azureLocked) {
+      setOutlookErr('Microsoft sign-in IDs are managed by your organization and cannot be changed here.')
+      return
+    }
     const ci = clientId.trim()
     const ti = tenantId.trim()
     const dom = domain.trim().replace(/^@/, '')
@@ -5161,20 +5780,31 @@ function CalendarTab({
     label: string,
     val: string,
     set: (v: string) => void,
-    placeholder: string
-  ): JSX.Element => (
-    <label className="flex flex-col gap-1">
-      <span className="text-[11px] font-medium text-[color:var(--cl-muted-foreground)]">{label}</span>
-      <input
-        value={val}
-        spellCheck={false}
-        autoComplete="off"
-        placeholder={placeholder}
-        onChange={(e) => set(e.target.value)}
-        className={`${ctl} w-full`}
-      />
-    </label>
-  )
+    placeholder: string,
+    managedKey: string
+  ): JSX.Element => {
+    // OR in azureLocked (not just this field's own managedKeys entry) so a config resolved via the
+    // nested managed `azure` block — invisible to managedKeys — still disables the input, not just the
+    // Save button below.
+    const fieldLocked = settings.managedKeys.includes(managedKey) || azureLocked
+    return (
+      <label className="flex flex-col gap-1">
+        <span className="flex items-center gap-1.5 text-[11px] font-medium text-[color:var(--cl-muted-foreground)]">
+          {label}
+          <ManagedChip keys={settings.managedKeys} k={managedKey} />
+        </span>
+        <input
+          value={val}
+          spellCheck={false}
+          autoComplete="off"
+          placeholder={placeholder}
+          disabled={fieldLocked}
+          onChange={(e) => set(e.target.value)}
+          className={`${ctl} w-full ${fieldLocked ? 'opacity-60' : ''}`}
+        />
+      </label>
+    )
+  }
 
   const isOutlookConnected = !!authStatus?.signedIn
 
@@ -5182,7 +5812,7 @@ function CalendarTab({
     <div className="flex flex-col gap-6">
 
       {/* Notifications — merged from former Notifications tab */}
-      <Section title="Notifications">
+      <Section title="Notifications" icon={Bell}>
         <ToggleRow
           label="Meeting alerts"
           desc="Notify 1 minute before a scheduled meeting starts."
@@ -5193,7 +5823,7 @@ function CalendarTab({
       </Section>
 
       {/* Microsoft / Outlook */}
-      <Section title="Microsoft / Outlook" desc="Connect your work Microsoft account to see Outlook calendar events.">
+      <Section title="Microsoft / Outlook" desc="Connect your work Microsoft account to see Outlook calendar events." icon={Calendar}>
         <div className="flex flex-col gap-2">
           {authStatus === null && (
             <Loader2 size={14} className="animate-spin text-[color:var(--cl-muted-foreground)]" />
@@ -5260,9 +5890,15 @@ function CalendarTab({
                   These are public IDs. No secret needed.
                 </p>
               </div>
-              {idField('Application (client) ID', clientId, setClientId, '00000000-0000-0000-0000-000000000000')}
-              {idField('Directory (tenant) ID', tenantId, setTenantId, '00000000-0000-0000-0000-000000000000')}
-              {idField('Allowed email domain', domain, setDomain, 'mantu.com')}
+              {azureLocked && (
+                <p className="flex items-center gap-1.5 text-[11px] leading-snug text-[color:var(--color-accent-text)]">
+                  <ShieldCheck size={11} className="shrink-0" />
+                  Microsoft sign-in is already configured for this app. These IDs are locked here. Contact your admin to change them.
+                </p>
+              )}
+              {idField('Application (client) ID', clientId, setClientId, '00000000-0000-0000-0000-000000000000', 'azureClientId')}
+              {idField('Directory (tenant) ID', tenantId, setTenantId, '00000000-0000-0000-0000-000000000000', 'azureTenantId')}
+              {idField('Allowed email domain', domain, setDomain, 'mantu.com', 'azureAllowedDomain')}
               {outlookErr && (
                 <span className="text-[11px] text-[color:var(--cl-destructive)]">{outlookErr}</span>
               )}
@@ -5270,7 +5906,7 @@ function CalendarTab({
                 <button
                   type="button"
                   onClick={() => void saveOutlookIds()}
-                  disabled={savingOutlook}
+                  disabled={savingOutlook || azureLocked}
                   className="no-drag cl-focus flex items-center gap-1.5 rounded-[8px] bg-[var(--cl-primary)] px-3 py-1.5 text-[12px] font-medium text-white hover:opacity-90 disabled:opacity-50"
                 >
                   {savingOutlook ? <Loader2 size={13} className="animate-spin" /> : null}
@@ -5298,7 +5934,7 @@ function CalendarTab({
 
       {/* Agenda preview — shown once the Outlook calendar is connected */}
       {isOutlookConnected && (
-        <Section title="Today's agenda" desc="Preview from your Outlook calendar.">
+        <Section title="Today's agenda" desc="Preview from your Outlook calendar." icon={Calendar}>
           <AgendaView />
         </Section>
       )}
@@ -5316,9 +5952,44 @@ function PermissionDot({ status }: { status: string }): JSX.Element {
   return <span className={`inline-block h-2 w-2 rounded-full ${color}`} aria-hidden="true" />
 }
 
+/**
+ * True exactly on the rising edge: screen recording just flipped to 'granted' after this component had
+ * already observed it as something else. `prev === null` means "first observation since mount" and must
+ * never count. On this exact edge, macOS's TCC grant exists but this already-running process's
+ * ScreenCaptureKit session never saw it: it needs a relaunch, not another trip to System Settings.
+ */
+export function screenRecordingJustGranted(
+  prev: PlatformPermissions['screenRecording'] | null,
+  current: PlatformPermissions['screenRecording'],
+  isWin: boolean
+): boolean {
+  return !isWin && prev !== null && prev !== 'granted' && current === 'granted'
+}
+
 function PermissionsSection(): JSX.Element {
   const { permissions } = usePermissions()
   const isWin = window.navigator.platform.toLowerCase().includes('win')
+  // A grant that flips to 'granted' WHILE this panel is open (not one already granted when it first
+  // mounted) means this running process's ScreenCaptureKit session never saw it: macOS only applies a
+  // fresh Screen Recording grant to the next launch. usePermissions already live-polls (state.ts,
+  // PERMISSIONS_POLL_MS) so this only has to watch for the rising edge and offer the one-click fix
+  // instead of the old dead end (a status dot that just quietly turns green with no capture that works).
+  const prevScreenStatus = useRef<PlatformPermissions['screenRecording'] | null>(null)
+  const [needsRestart, setNeedsRestart] = useState(false)
+  const [restarting, setRestarting] = useState(false)
+
+  useEffect(() => {
+    if (!permissions) return
+    if (screenRecordingJustGranted(prevScreenStatus.current, permissions.screenRecording, isWin)) {
+      setNeedsRestart(true)
+    }
+    prevScreenStatus.current = permissions.screenRecording
+  }, [permissions, isWin])
+
+  const restart = (): void => {
+    setRestarting(true)
+    void window.toto.relaunch().catch(() => setRestarting(false))
+  }
 
   if (!permissions) {
     return <div className="text-[13px] text-[color:var(--cl-muted-foreground)]">Checking permissions…</div>
@@ -5331,7 +6002,7 @@ function PermissionsSection(): JSX.Element {
       kind: 'microphone',
       note: isWin
         ? 'Windows asks the first time you start Listen.'
-        : 'Grant in System Settings → Privacy & Security → Microphone.',
+        : 'Needed to hear your calls. Grant in System Settings → Privacy & Security → Microphone.',
       fixLabel: isWin ? 'Check Windows Settings' : undefined
     },
     {
@@ -5340,7 +6011,7 @@ function PermissionsSection(): JSX.Element {
       kind: 'screenRecording',
       note: isWin
         ? 'Windows may ask once before capturing system audio.'
-        : 'Grant in System Settings → Privacy & Security → Screen Recording.',
+        : "Needed so Métis can answer questions about your screen and capture system audio. Grant in System Settings → Privacy & Security → Screen Recording.",
       fixLabel: isWin ? 'Check Windows Settings' : undefined
     }
   ]
@@ -5353,6 +6024,7 @@ function PermissionsSection(): JSX.Element {
         // to Settings for a not-yet-granted mic or a screen-capture prompt the user dismissed.
         const denied = r.status === 'denied'
         const showFix = denied || (isWin && r.fixLabel)
+        const showRestart = r.kind === 'screenRecording' && needsRestart
         return (
           <div key={r.label} className="cl-card flex items-start gap-2 px-2.5 py-2">
             <PermissionDot status={r.status} />
@@ -5364,14 +6036,30 @@ function PermissionsSection(): JSX.Element {
                 </span>
               </div>
               <div className="text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">{r.note}</div>
-              {showFix && (
-                <button
-                  type="button"
-                  onClick={() => void window.toto.openPermissionSettings(r.kind)}
-                  className="no-drag cl-focus mt-0.5 text-[11px] font-medium text-[color:var(--cl-primary)] hover:underline"
-                >
-                  {r.fixLabel ?? 'Open System Settings'}
-                </button>
+              {showRestart ? (
+                <div className="mt-1 flex items-center gap-2">
+                  <span className="text-[11px] leading-snug text-[color:var(--cl-primary)]">
+                    Granted. Restart Métis to finish enabling it.
+                  </span>
+                  <button
+                    type="button"
+                    onClick={restart}
+                    disabled={restarting}
+                    className="no-drag cl-focus rounded-full bg-[var(--cl-primary)]/15 px-2.5 py-1 text-[11px] font-semibold text-[color:var(--cl-primary)] hover:bg-[var(--cl-primary)]/25 disabled:opacity-60"
+                  >
+                    {restarting ? 'Restarting…' : 'Restart Métis'}
+                  </button>
+                </div>
+              ) : (
+                showFix && (
+                  <button
+                    type="button"
+                    onClick={() => void window.toto.openPermissionSettings(r.kind)}
+                    className="no-drag cl-focus mt-0.5 text-[11px] font-medium text-[color:var(--cl-primary)] hover:underline"
+                  >
+                    {r.fixLabel ?? 'Open System Settings'}
+                  </button>
+                )
               )}
             </div>
           </div>
@@ -5634,7 +6322,7 @@ function Shortcuts({
             <AlertCircle size={13} className="mt-px shrink-0" />
             <span>
               {failures.length === 1 ? "This shortcut couldn't" : "These shortcuts couldn't"} be
-              registered — another app likely owns the key combo. Rebind {failures.length === 1 ? 'it' : 'them'} below.
+              registered. Another app likely owns the key combo. Rebind {failures.length === 1 ? 'it' : 'them'} below.
             </span>
           </div>
           {failures.map((f) => (

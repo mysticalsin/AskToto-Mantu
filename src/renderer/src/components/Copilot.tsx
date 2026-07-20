@@ -1,7 +1,7 @@
 import { memo, useEffect, useMemo, useRef, useState } from 'react'
 import { Eye, EyeOff, AudioLines, Copy, Check, AlertTriangle } from 'lucide-react'
 import type { TranscriptLine } from '@shared/ipc'
-import { isScreenCapturePermissionError } from '@shared/screen-capture'
+import { isScreenCapturePermissionError, needsAppRelaunchForScreenCapture } from '@shared/screen-capture'
 import type { AnswerState } from '../state'
 import { Markdown } from './Markdown'
 import { TextButton, Spinner } from './ui'
@@ -88,13 +88,16 @@ export const Copilot = memo(function Copilot({
     return visible.map((l, i) => <TranscriptRow key={`${l.t}-${start + i}`} line={l} />)
   }, [lines])
 
+  // Transcript is hidden during the call; the bar's "Transcript" button drives showTranscript on demand.
+  const showTx = showTranscript
+
+  // The scroller section only mounts while showTx is true — depending on `lines` alone means opening it
+  // mid-call (showTx flipping true with no new line arriving) leaves it scrolled to wherever it happened
+  // to mount instead of the bottom. Re-run on showTx too so opening it always jumps to the latest line.
   useEffect(() => {
     const el = scroller.current
     if (el) el.scrollTop = el.scrollHeight
-  }, [lines])
-
-  // Transcript is hidden during the call; the bar's "Transcript" button drives showTranscript on demand.
-  const showTx = showTranscript
+  }, [lines, showTx])
 
   // Real flag (state.ts AnswerState.usedScreen), not a label string-match — robust even if a future
   // caller passes a different label alongside a screenshot-grounded answer.
@@ -126,15 +129,24 @@ export const Copilot = memo(function Copilot({
             <EyeOff size={13} className="mt-0.5 shrink-0 text-[color:var(--color-warn,#fac775)]" />
             <span>{captureNotice}</span>
           </div>
-          {isScreenCapturePermissionError(captureNotice) && (
-            <button
-              type="button"
-              onClick={() => void window.toto.openPermissionSettings('screenRecording')}
-              className="no-drag focus-ring rounded-full bg-[var(--color-warn,#fac775)]/15 px-2.5 py-1 text-[11px] font-semibold text-[color:var(--color-ink)] hover:bg-[var(--color-warn,#fac775)]/25"
-            >
-              Open Screen Recording settings
-            </button>
-          )}
+          {isScreenCapturePermissionError(captureNotice) &&
+            (needsAppRelaunchForScreenCapture(captureNotice) ? (
+              <button
+                type="button"
+                onClick={() => void window.toto.relaunch()}
+                className="no-drag focus-ring rounded-full bg-[var(--color-warn,#fac775)]/15 px-2.5 py-1 text-[11px] font-semibold text-[color:var(--color-ink)] hover:bg-[var(--color-warn,#fac775)]/25"
+              >
+                Restart Métis
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={() => void window.toto.openPermissionSettings('screenRecording')}
+                className="no-drag focus-ring rounded-full bg-[var(--color-warn,#fac775)]/15 px-2.5 py-1 text-[11px] font-semibold text-[color:var(--color-ink)] hover:bg-[var(--color-warn,#fac775)]/25"
+              >
+                Open Screen Recording settings
+              </button>
+            ))}
         </div>
       )}
       {/* Autosave data-loss warning — stronger (danger) treatment than the capture notice; the meeting is
@@ -211,29 +223,55 @@ export const Copilot = memo(function Copilot({
         )}
       </section>
 
-      {/* Transcript — hidden during the call; shown only when the user opens it (bar → Transcript). A
-          small loading line appears while the speech model warms up; no live "N captured" footer. */}
-      {error ? (
+      {/* Sticky listen error (silence/mic-lost/offline/reconnecting), the model-loading row, and the
+          transcript are independent siblings, NOT a mutually-exclusive chain — a sticky error or a
+          loading tick must not hide an already-open transcript (matches the captureNotice/autosaveWarning
+          siblings above). Markup for each block is unchanged; only the conditions were decoupled. */}
+      {error && (
         <div className="flex flex-col gap-1.5 text-[13px] text-[var(--color-danger)] break-words">
           <span>{error}</span>
           {/* Make a screen-capture permission error actionable. On macOS the IPC opens the System
               Settings pane; on Windows it opens the relevant system privacy settings. */}
-          {isScreenCapturePermissionError(error) && (
+          {isScreenCapturePermissionError(error) &&
+            (needsAppRelaunchForScreenCapture(error) ? (
+              <button
+                type="button"
+                onClick={() => void window.toto.relaunch()}
+                className="no-drag focus-ring w-fit rounded-full bg-[var(--color-danger)]/15 px-2.5 py-1 text-[11px] font-semibold text-[var(--color-danger)] hover:bg-[var(--color-danger)]/25"
+              >
+                Restart Métis
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={() => void window.toto.openPermissionSettings('screenRecording')}
+                className="no-drag focus-ring w-fit rounded-full bg-[var(--color-danger)]/15 px-2.5 py-1 text-[11px] font-semibold text-[var(--color-danger)] hover:bg-[var(--color-danger)]/25"
+              >
+                Open Screen Recording settings
+              </button>
+            ))}
+          {/* Mirrors the Screen-Recording branch above for the mic-denied message (listen.ts's "Couldn't
+              start the microphone…" / "Could not start the microphone…" / "mic access") —
+              window.toto.openPermissionSettings is already wired for 'microphone' (used in Onboarding). */}
+          {/start the microphone|microphone|mic access/i.test(error) && (
             <button
               type="button"
-              onClick={() => void window.toto.openPermissionSettings('screenRecording')}
+              onClick={() => void window.toto.openPermissionSettings('microphone')}
               className="no-drag focus-ring w-fit rounded-full bg-[var(--color-danger)]/15 px-2.5 py-1 text-[11px] font-semibold text-[var(--color-danger)] hover:bg-[var(--color-danger)]/25"
             >
-              Open Screen Recording settings
+              Open Microphone settings
             </button>
           )}
         </div>
-      ) : loading ? (
+      )}
+      {loading && (
         <div className="flex items-center gap-2 text-[11px] text-[color:var(--color-ink-3)]">
           <Spinner size={11} />
           {loadingPct != null ? `Loading speech model… ${loadingPct}%` : 'Loading transcription model…'}
         </div>
-      ) : showTx ? (
+      )}
+      {/* Transcript — hidden during the call; shown only when the user opens it (bar → Transcript). */}
+      {showTx && (
         <section>
           <div className="mb-1.5 flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-wide text-[color:var(--color-ink-3)]">
             Transcript
@@ -256,7 +294,7 @@ export const Copilot = memo(function Copilot({
             )}
           </div>
         </section>
-      ) : null}
+      )}
     </div>
   )
 })

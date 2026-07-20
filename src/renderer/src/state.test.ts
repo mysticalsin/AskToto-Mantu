@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { AUTH_POLL_MS, PERMISSIONS_POLL_MS, startAuthRefreshLoop, startPermissionRefreshLoop } from './state'
 
 describe('startPermissionRefreshLoop', () => {
-  it('refreshes immediately, polls every 2.5s, refreshes on focus/visibility, and cleans up', () => {
+  it('refreshes immediately, polls every PERMISSIONS_POLL_MS, refreshes on focus/visibility, and cleans up', () => {
     vi.useFakeTimers()
     try {
       const refresh = vi.fn()
