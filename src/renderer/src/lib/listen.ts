@@ -612,6 +612,8 @@ export function useListen(
       // 'them' (system loopback): un-AGC'd call audio is typically 2–4× quieter than mic input and
       // often never crosses the fixed VAD ON/EMIT_RMS thresholds. A GainNode lifts it into the
       // detectable range without altering the mic channel or the VAD thresholds themselves.
+      // The boost also lifts steady background (hold music, fans) over those thresholds; the worklet's
+      // emit-time envelope-spread gate (isSpeechLikeWindow in ./vad) drops those windows before the ASR.
       const gain = sp === 'them' ? ctx.createGain() : null
       if (gain) gain.gain.value = 3.0 // ~10 dB boost; safe headroom before digital clip at 1.0
 
