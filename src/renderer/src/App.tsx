@@ -229,6 +229,23 @@ export function App(): JSX.Element {
       webgpuNotifiedRef.current = false
     }
   }, [listen.qualityDegraded, patch])
+  // Persist a mic-only stretch (system audio requested but not captured — Screen Recording off, loopback
+  // failure) to Settings → Audio, same checkable-after-the-fact contract as asrLastFallbackAt. This is the
+  // durable trace behind the live Bar-chip/pill state: a meeting can end (or the widget stay minimized)
+  // without the user ever seeing the live cue, and the Settings note is what explains the one-sided
+  // transcript afterwards. Ref-guarded per degraded stretch — a Dismiss in Settings mid-meeting must not
+  // be immediately re-patched by the same still-true state (see webgpuNotifiedRef above).
+  const micOnlyNotifiedRef = useRef(false)
+  useEffect(() => {
+    if (listen.captureDegraded?.side === 'them') {
+      if (!micOnlyNotifiedRef.current) {
+        micOnlyNotifiedRef.current = true
+        void patch({ micOnlyFallbackAt: Date.now() })
+      }
+    } else {
+      micOnlyNotifiedRef.current = false
+    }
+  }, [listen.captureDegraded, patch])
 
   const [input, setInput] = useState('')
   // Every view except the idle bar is a lazy chunk. A view switch inside a click handler renders on
@@ -2606,6 +2623,10 @@ export function App(): JSX.Element {
             // several seconds after Stop — reading as "Stop didn't work".
             listening={showListeningChrome}
             paused={listen.paused}
+            // The minimized pill was the LAST place a capture degradation was visible — the pulsing red
+            // dot claimed "recording fine" while a whole side of the meeting was missing. Amber dot +
+            // tooltip; the note text carries the platform-specific cause.
+            degradedNote={listen.captureDegraded?.note ?? null}
             startedAt={meetingStartRef.current}
             onTogglePause={onTogglePause}
             onToggleListen={toggleListen}
@@ -2632,6 +2653,7 @@ export function App(): JSX.Element {
             listening={showListeningChrome}
             onToggleListen={toggleListen}
             paused={listen.paused}
+            captureDegraded={listen.captureDegraded}
             onTogglePause={onTogglePause}
             onCapture={capture}
             capturing={capturing}

@@ -125,6 +125,21 @@ interface Channel {
   gain?: GainNode // present on 'them' only: boosts quiet system-loopback above the VAD floor
 }
 
+/** A capture side the session REQUESTED but is NOT currently hearing, while Listen stays active
+ *  ('them' = system-audio loopback / the remote side, 'you' = the microphone). Exposed as its own
+ *  structured field — separate from the sticky `error` note, which only renders inside the Copilot
+ *  body and later transient notes may overwrite — so persistent chrome (the Bar's "Heard live" chip,
+ *  the minimized control pill) can show a truthful degraded state for the entire mic-only stretch.
+ *  Tony sat through a whole meeting on 2026-07-20 with Screen Recording off and only found out from
+ *  the unusable transcript: the red rec-dot and "Heard live" chip kept claiming everything was fine. */
+export interface CaptureDegraded {
+  side: 'you' | 'them'
+  /** Full platform-aware explanation (used as tooltip copy) — the note text shown when the state was set. */
+  note: string
+  /** True when the cause is the macOS Screen Recording permission ('them' only). */
+  permission: boolean
+}
+
 export interface ListenApi {
   listening: boolean
   /** True only once capture is actually confirmed (mic and/or system audio channel open) — see the
@@ -141,6 +156,8 @@ export interface ListenApi {
   // hits this, since the large model is deliberately excluded from release resources. Lets a caller show
   // an honest "reduced" state instead of the toggle silently always running whisper-base.
   qualityDegraded: boolean
+  /** Non-null while a requested capture side isn't being heard (see CaptureDegraded above). */
+  captureDegraded: CaptureDegraded | null
   start: (
     source: AudioSource,
     quality?: 'best' | 'fast',
@@ -214,7 +231,8 @@ export function useListen(
     loading: false,
     error: null as string | null,
     loadingPct: null as number | null,
-    qualityDegraded: false
+    qualityDegraded: false,
+    captureDegraded: null as CaptureDegraded | null
   })
   const [lines, setLines] = useState<TranscriptLine[]>([])
 
@@ -703,10 +721,10 @@ export function useListen(
           console.warn(`[listen] ${sp} audio track ended unexpectedly (device change / sleep)`)
           closeChannel(sp)
           if (sp === 'you') {
-            setState((s) => ({ ...s, error: MIC_LOST_MSG }))
+            setState((s) => ({ ...s, error: MIC_LOST_MSG, captureDegraded: { side: 'you', note: MIC_LOST_MSG, permission: false } }))
             void recoverMicRef.current?.()
           } else {
-            setState((s) => ({ ...s, error: THEM_LOST_MSG }))
+            setState((s) => ({ ...s, error: THEM_LOST_MSG, captureDegraded: { side: 'them', note: THEM_LOST_MSG, permission: false } }))
             void recoverSystemAudioRef.current?.()
           }
         }
@@ -748,11 +766,15 @@ export function useListen(
         return
       }
       await openChannel('you', mic)
-      setState((s) => (s.error === MIC_LOST_MSG ? { ...s, error: null } : s))
+      setState((s) => ({
+        ...s,
+        error: s.error === MIC_LOST_MSG ? null : s.error,
+        captureDegraded: s.captureDegraded?.side === 'you' ? null : s.captureDegraded
+      }))
     } catch {
       // Nothing to acquire (no mic connected) — the sticky MIC_LOST_MSG stays until a device change
       // retriggers recovery or the user restarts Listen.
-      setState((s) => ({ ...s, error: MIC_LOST_MSG }))
+      setState((s) => ({ ...s, error: MIC_LOST_MSG, captureDegraded: { side: 'you', note: MIC_LOST_MSG, permission: false } }))
     } finally {
       micRecoveringRef.current = false
     }
@@ -799,11 +821,27 @@ export function useListen(
         return
       }
       await openChannel('them', sys)
-      setState((s) => (s.error === THEM_LOST_MSG ? { ...s, error: null } : s))
+      setState((s) => ({
+        ...s,
+        // Clear the mid-session loss note AND the start-time mic-only note (held in captureDegraded.note):
+        // the permission-watcher path used to match only THEM_LOST_MSG here, leaving "System audio needs
+        // Screen Recording permission…" stuck for the rest of the session after a successful mid-meeting
+        // grant + recovery.
+        error:
+          s.error === THEM_LOST_MSG || (s.captureDegraded?.side === 'them' && s.error === s.captureDegraded.note)
+            ? null
+            : s.error,
+        captureDegraded: s.captureDegraded?.side === 'them' ? null : s.captureDegraded
+      }))
     } catch {
       // Couldn't re-acquire (permission genuinely revoked, or no loopback available) — leave the sticky
-      // note so the live permission watcher / a devicechange can retrigger recovery later.
-      setState((s) => (s.error === null ? { ...s, error: THEM_LOST_MSG } : s))
+      // note so the live permission watcher / a devicechange can retrigger recovery later. Keep an existing
+      // captureDegraded (it carries the more specific start-time cause, e.g. the permission note).
+      setState((s) => ({
+        ...s,
+        error: s.error === null ? THEM_LOST_MSG : s.error,
+        captureDegraded: s.captureDegraded ?? { side: 'them', note: THEM_LOST_MSG, permission: false }
+      }))
     } finally {
       sysRecoveringRef.current = false
     }
@@ -908,7 +946,7 @@ export function useListen(
         engineRef.current = engine
         themRunRef.current = '' // fresh session → no carried-over 'them' question turn
         repeatRunRef.current = { key: '', speaker: '', count: 0 } // fresh session → no carried-over dupe run
-        setState((s) => ({ ...s, error: null, listening: true, paused: false }))
+        setState((s) => ({ ...s, error: null, captureDegraded: null, listening: true, paused: false }))
         try {
           await window.toto.setListeningState(true)
         } catch {
@@ -1131,10 +1169,18 @@ export function useListen(
         } else if (source === 'both' && !micOk && sysOk) {
           note = 'Microphone unavailable. Listening to system audio only.'
         }
+        // Mirror the soft note into the structured captureDegraded state: `micOk` discriminates the side
+        // (note is only non-null on source==='both' with exactly one side up). The persistent chrome (Bar
+        // chip / minimized pill) reads this instead of `error`, which only renders inside the Copilot body
+        // and is invisible with the panel collapsed or the widget minimized — exactly how a whole meeting
+        // ran mic-only unnoticed on 2026-07-20.
+        const captureDegraded: CaptureDegraded | null = note
+          ? { side: micOk ? 'them' : 'you', note, permission: micOk && isSysPermDenied }
+          : null
         // At least one channel (mic and/or system loopback) is confirmed open here — this is the point
         // a consent/recording indicator should key off, not the optimistic `listening: true` set at the
         // top of start() before any capture was actually acquired.
-        setState((s) => ({ ...s, error: note, listening: true, capturing: true, loading: !readyRef.current }))
+        setState((s) => ({ ...s, error: note, captureDegraded, listening: true, capturing: true, loading: !readyRef.current }))
       } finally {
         // Every exit path (the several early `return`s above, a thrown error, or the normal fall-through)
         // clears the guard so a later, legitimate start() is never permanently blocked.
@@ -1293,7 +1339,7 @@ export function useListen(
       closeChannel('you')
       closeChannel('them')
       void window.toto.setListeningState(false).catch(() => {})
-      setState((s) => ({ ...s, listening: false, capturing: false, paused: false, loading: false, error: null }))
+      setState((s) => ({ ...s, listening: false, capturing: false, paused: false, loading: false, error: null, captureDegraded: null }))
       drainTimerRef.current = null
       stoppingRef.current = false
       // The final flushed window (if any) has now committed via commitLine — text() reflects the

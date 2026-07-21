@@ -777,6 +777,12 @@ export const BaseSettingsSchema = z.object({
   // Same tracking as asrLastFallbackAt, for a WebGPU→CPU (or other backend) ASR fallback — set by the
   // renderer, surfaced as a Settings → Speech note. Optional: absent on older persisted settings.
   asrWebgpuFallbackAt: z.number().nullable().optional(),
+  // Same checkable-in-Settings contract as the two ASR notes above, for a CAPTURE degradation: a session
+  // that requested system audio ran (in whole or in part) with the microphone only — most commonly the
+  // macOS Screen Recording permission being off. Set by the renderer the moment the degraded stretch
+  // starts (App.tsx's micOnlyNotifiedRef effect); surfaced in Settings → Audio until dismissed. Optional:
+  // absent on older persisted settings.
+  micOnlyFallbackAt: z.number().nullable().optional(),
   // On by default: this reminder is the ONLY consent mechanism Métis has today — it shows the
   // operator, never the other participants, and is not a substitute for actually telling people
   // they're being recorded. See the Settings copy near this toggle for the honest scope of what it does.
@@ -1042,6 +1048,7 @@ export const DEFAULT_SETTINGS: Settings = {
   asrLanguage: 'auto',
   asrLastFallbackAt: null,
   asrWebgpuFallbackAt: null,
+  micOnlyFallbackAt: null,
   requireConsentIndicator: true,
   redactSensitive: true,
   lastConsentReminderAt: 0,
