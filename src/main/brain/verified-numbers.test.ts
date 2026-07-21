@@ -178,6 +178,21 @@ describe('verifyExtraction — fabricated-quote demotion (TDD: red against pre-v
     expect(verified.commitments[1].confidence).toBe('EXTRACTED')
     expect(verified.commitments[2].confidence).toBe('INFERRED') // untouched — nothing to verify
   })
+
+  it('never verifies a quote against a language-switch marker (renderer prose, not speech)', () => {
+    const marked = 'Them: Vamos fechar o contrato.\n_[conversation switches to English]_\nThem: About the budget.'
+    const x = MeetingExtractionSchema.parse({
+      commitments: [
+        // Quote lifted verbatim from the marker paragraph — grounding must refuse it.
+        { text: 'switch languages', by: 'them', quote: 'conversation switches to English', confidence: 'EXTRACTED' },
+        // A genuine spoken quote from the same transcript still verifies.
+        { text: 'close the contract', by: 'them', quote: 'Vamos fechar o contrato', confidence: 'EXTRACTED' }
+      ]
+    })
+    const verified = verifyExtraction(x, marked)
+    expect(verified.commitments[0].confidence).toBe('AMBIGUOUS')
+    expect(verified.commitments[1].confidence).toBe('EXTRACTED')
+  })
 })
 
 describe('mergeExtraction — deal amount/close_date/band, verification-gated (Task MI-4)', () => {
@@ -239,6 +254,23 @@ describe('mergeExtraction — deal amount/close_date/band, verification-gated (T
     } finally {
       rmSync(folder2, { recursive: true, force: true })
     }
+  })
+
+  it('band_evidence and close_date never verify against a language-switch marker (renderer prose)', async () => {
+    // The saved-transcript marker paragraph, verbatim — the grounding reference must refuse alignment
+    // against it in EVERY check, not only verifyExtraction/verifyDealAmount (re-review finding).
+    const transcript =
+      'Them: Vamos fechar em setembro.\n\n_[conversation switches to English]_\n\n**[09:00:02] Them:** ok.'
+    const x = dealExtraction({
+      win_likelihood_band: 'good',
+      band_evidence: 'conversation switches to English',
+      close_date: { value: '2026-09-30', quote: 'conversation switches to English' }
+    })
+    await mergeExtraction(s, x, { file: 'm1.md', date: '2026-01-01', title: 't' }, undefined, transcript)
+    const deal = readDeal(s, slugify('Acme Core Banking'))!
+    expect(deal.win_likelihood_band_provenance?.confidence).toBe('AMBIGUOUS')
+    expect(deal.close_date?.state).toBe('extracted')
+    expect(deal.close_date?.confidence).toBe('AMBIGUOUS')
   })
 
   it('band_evidence confidence is computed from alignment when preparedText is supplied, and stays the old hardcoded EXTRACTED when omitted (backward compat)', async () => {

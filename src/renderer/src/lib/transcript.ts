@@ -4,10 +4,21 @@ import type { TranscriptLine } from '@shared/ipc'
 // generateSavedRecap, fed either an import's returned lines or a reopened past meeting's lines) — one
 // joiner so the recap prompt always sees the identical THEM/YOU transcript format no matter which lines
 // array it was built from.
+//
+// Mixed-language meetings: when the tagged language changes between lines (see TranscriptLine.lang,
+// tagged conservatively by commitLine), a "[conversation switches to …]" marker line is emitted so the
+// LLM knows a real language switch happened — without it, a Portuguese call with an English segment
+// reads like transcription noise and the recap's "respond in the main language" directive has nothing
+// to anchor on. Untagged lines (detection not confident, older saved meetings) never emit markers.
 export function transcriptToText(lines: TranscriptLine[]): string {
-  return lines
-    .map((l) => `${l.speaker === 'them' ? 'THEM' : l.speaker === 'you' ? 'YOU' : 'SPEAKER'}: ${l.text}`)
-    .join('\n')
+  const out: string[] = []
+  let prevLang: string | undefined
+  for (const l of lines) {
+    if (l.lang && prevLang && l.lang !== prevLang) out.push(`[conversation switches to ${l.lang}]`)
+    if (l.lang) prevLang = l.lang
+    out.push(`${l.speaker === 'them' ? 'THEM' : l.speaker === 'you' ? 'YOU' : 'SPEAKER'}: ${l.text}`)
+  }
+  return out.join('\n')
 }
 
 // Persist-on-settle decision for the App-level recap generator (recapGen): returns the {file, text} to
