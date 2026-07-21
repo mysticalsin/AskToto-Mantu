@@ -26,6 +26,7 @@ import { modeLabel } from '@shared/ipc'
 import type { ConversationMode, CustomMode } from '@shared/ipc'
 import { formatScreenFreshness } from '@shared/perception'
 import { accelLabel } from '../lib/keys'
+import type { CaptureDegraded } from '../lib/listen'
 
 /** Single source of truth for toolbar icon stroke — prevents per-icon drift. */
 const ICON_STROKE = 1.85
@@ -142,6 +143,10 @@ export interface BarProps {
   onToggleListen: () => void
   /** True while a listening session is suspended mid-meeting (audio capture paused, nothing torn down). */
   paused: boolean
+  /** Non-null while a requested capture side isn't being heard (mic-only / no-mic session) — flips the
+   *  "Heard live" chip to an amber "Mic only"/"No mic" state so the degradation stays visible in the
+   *  persistent chrome instead of only inside the (collapsible) Copilot body. See lib/listen.ts. */
+  captureDegraded?: CaptureDegraded | null
   /** Pause suspends capture without ending the meeting; Stop (onToggleListen) ends it. Distinct actions. */
   onTogglePause: () => void
   onCapture: () => void
@@ -426,11 +431,29 @@ export const Bar = memo(function Bar(props: BarProps): JSX.Element {
               contextLabel because the two facts are independent: a screen can be stale while audio is
               live, or vice versa — a single chip could only ever show one of them at a time. */}
           {props.listening && (
-            <span className="flex flex-none items-center gap-1 rounded-full bg-white/[0.05] px-2 py-0.5 text-[11px] text-[color:var(--color-ink-2)]">
+            <span
+              // Degraded capture (mic-only / no-mic) turns the chip amber with the honest label — the
+              // deliberate no-live-banner design stays (nothing new appears, nothing interrupts), but the
+              // one piece of persistent chrome that said "Heard live" stops claiming a side it isn't
+              // capturing. Tooltip carries the full platform-aware cause + fix (e.g. Screen Recording).
+              title={!props.paused ? props.captureDegraded?.note : undefined}
+              className={[
+                'flex flex-none items-center gap-1 rounded-full bg-white/[0.05] px-2 py-0.5 text-[11px]',
+                !props.paused && props.captureDegraded
+                  ? 'text-[color:var(--color-warn,#fac775)]'
+                  : 'text-[color:var(--color-ink-2)]'
+              ].join(' ')}
+            >
               {props.paused ? (
                 <>
                   <Pause size={11} strokeWidth={ICON_STROKE} className="text-[color:var(--color-warn,#fac775)]" />
                   Paused
+                </>
+              ) : props.captureDegraded ? (
+                <>
+                  <span className="h-[6px] w-[6px] rounded-full bg-[color:var(--color-warn,#fac775)]" />
+                  <AudioLines size={11} strokeWidth={ICON_STROKE} />
+                  {props.captureDegraded.side === 'them' ? 'Mic only' : 'No mic'}
                 </>
               ) : (
                 <>
@@ -503,7 +526,7 @@ export const Bar = memo(function Bar(props: BarProps): JSX.Element {
           )}
         </div>
     ),
-    [expanded, hasAnswer, props.onBack, props.screenCapturedAt, props.listening, props.paused, props.value, props.onChange, props.canPrewarm, props.onSubmit, props.busy, props.onToggleListen, props.onStop]
+    [expanded, hasAnswer, props.onBack, props.screenCapturedAt, props.listening, props.paused, props.captureDegraded, props.value, props.onChange, props.canPrewarm, props.onSubmit, props.busy, props.onToggleListen, props.onStop]
   )
 
   const toolbarRow = useMemo(

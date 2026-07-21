@@ -4395,6 +4395,29 @@ export function Settings({
                   <div className="mb-2"><ManagedChip keys={settings.managedKeys} k="audioSource" /></div>
                   <AudioChoices settings={settings} patch={patch} />
                   <MicPicker settings={settings} patch={patch} />
+                  {/* Mic-only capture trace — same after-the-fact contract as asrLastFallbackAt in the
+                      Speech tab: a meeting that requested system audio ran with the microphone only, so
+                      the other side's speech is missing from the transcript. Persists until dismissed. */}
+                  {settings.micOnlyFallbackAt != null && (
+                    <div className="mt-1 flex items-center justify-between gap-2 pl-1 text-[12px] text-[color:var(--color-ink-3)]">
+                      <span>
+                        A recent meeting captured your microphone only — the other side&apos;s audio was not
+                        recorded
+                        {isWindows
+                          ? ' (check that the call plays through your default output device)'
+                          : ' (usually the Screen Recording permission)'}
+                        . {new Date(settings.micOnlyFallbackAt).toLocaleString()}.
+                      </span>
+                      <span className="flex shrink-0 items-center gap-2">
+                        {!isWindows && (
+                          <TextButton onClick={() => void window.toto.openPermissionSettings('screenRecording')}>
+                            Open Screen Recording settings
+                          </TextButton>
+                        )}
+                        <TextButton onClick={() => patch({ micOnlyFallbackAt: null })}>Dismiss</TextButton>
+                      </span>
+                    </div>
+                  )}
                 </Section>
                 <TapControlCard settings={settings} patch={patch} />
                 <Section title="In meetings" icon={Headphones}>
