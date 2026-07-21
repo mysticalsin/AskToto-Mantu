@@ -16,6 +16,49 @@ vi.mock('electron')
 let testSettings: Settings
 vi.mock('./store', () => ({ getSettings: () => testSettings }))
 
+// Language-switch markers must survive the save → reparse → rewrite round trip: recall's line regex
+// rightly skips marker PROSE, so lang tags are re-derived per line via detectLanguage — without that,
+// a Speaker Intelligence backfill (updateMeetingNames → formatTranscript over reparsed lines) silently
+// stripped every marker, and a retroactive recap saw no switches (4-agent review, regression hunter).
+describe('recall — language tags round-trip through save → recallRead', () => {
+  let folder: string
+
+  beforeEach(() => {
+    folder = mkdtempSync(join(tmpdir(), 'asktoto-recall-lang-'))
+    testSettings = { meetingsFolder: folder, encryptTranscripts: false } as Settings
+  })
+
+  afterEach(() => {
+    rmSync(folder, { recursive: true, force: true })
+    vi.restoreAllMocks()
+  })
+
+  it('re-derives lang on reparse so formatTranscript re-emits the same switch markers', async () => {
+    const t0 = 1_700_000_000_000
+    const meeting: SaveMeeting = {
+      title: 'WUM Brazil',
+      mode: 'meeting',
+      startedAt: t0,
+      lines: [
+        { speaker: 'them', text: 'Então vamos ver isso com você, não é, para o contrato.', t: t0, lang: 'Portuguese' },
+        { speaker: 'you', text: 'So we are going to talk about the budget and the plan for the team.', t: t0 + 60_000, lang: 'English' }
+      ],
+      recap: ''
+    }
+    const file = await saveMeeting(testSettings, meeting)
+    const saved = readFileSync(file, 'utf8')
+    expect(saved).toContain('_[conversation switches to English]_')
+
+    const r = await recallRead(basename(file))
+    expect(r.ok).toBe(true)
+    expect(r.lines?.map((l) => l.lang)).toEqual(['Portuguese', 'English'])
+
+    // The exact rewrite the Speaker Intelligence backfill performs: formatTranscript over reparsed lines.
+    const { formatTranscript } = await import('./transcripts')
+    expect(formatTranscript(r.lines ?? [])).toContain('_[conversation switches to English]_')
+  })
+})
+
 // Tony reported "delete doesn't delete" on a saved meeting in History. This exercises the real file-IO
 // path end to end (save → list → delete → list again) against a temp folder, the same way the app does.
 describe('recall — deleteMeeting', () => {

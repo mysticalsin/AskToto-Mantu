@@ -1,6 +1,6 @@
 /**
  * Apple Speech ASR engine (SFSpeechRecognizer, fully on-device) — the opt-in THIRD live-transcription
- * engine alongside Parakeet (default) and Whisper. Unlike Parakeet/Whisper, it needs no bundled model:
+ * engine alongside Whisper (default) and Parakeet. Unlike Parakeet/Whisper, it needs no bundled model:
  * it runs through the metis-mac-helper Swift sidecar (native/mac-helper/main.swift's `transcribe`
  * subcommand), which forces requiresOnDeviceRecognition — audio never leaves the Mac, and no Apple
  * Intelligence toggle is required (SFSpeechRecognizer has shipped on-device dictation since macOS 13).
@@ -26,6 +26,35 @@ const TRANSCRIBE_TIMEOUT_MS = 15_000
  *  Parakeet's model-readiness check is separate from whether decoding actually succeeds. */
 export function appleSpeechAvailable(): boolean {
   return process.platform === 'darwin' && macHelperPresent()
+}
+
+/** Settings' asrLanguage display names → the BCP-47 locale SFSpeechRecognizer expects. One pragmatic
+ *  regional pick per language (SFSpeechRecognizer has no region-less recognizers); the Swift helper
+ *  still falls back to Locale.current → en-US when a Mac lacks the on-device model for the identifier.
+ *  Kept in sync with Settings.tsx's LANGUAGE_OPTIONS. */
+const APPLE_LOCALES: Record<string, string> = {
+  English: 'en-US',
+  French: 'fr-FR',
+  Spanish: 'es-ES',
+  German: 'de-DE',
+  Italian: 'it-IT',
+  Portuguese: 'pt-BR',
+  Dutch: 'nl-NL',
+  Polish: 'pl-PL',
+  Arabic: 'ar-SA',
+  Chinese: 'zh-CN',
+  Japanese: 'ja-JP',
+  Korean: 'ko-KR',
+  Hindi: 'hi-IN',
+  Russian: 'ru-RU',
+  Turkish: 'tr-TR'
+}
+
+/** Map the asrLanguage setting to a recognizer locale, or undefined for 'auto'/unknown values (the
+ *  helper then uses the Mac's system locale — the pre-existing behavior). */
+export function appleSpeechLocale(asrLanguage: string | undefined): string | undefined {
+  if (!asrLanguage || asrLanguage === 'auto') return undefined
+  return APPLE_LOCALES[asrLanguage]
 }
 
 /** Encode one mono Float32 PCM window as a 44-byte-header 16-bit PCM WAV buffer (16kHz, matching the
@@ -71,7 +100,7 @@ export function encodeWav16kMono(samples: Float32Array): Buffer {
  * distinguish (Apple Speech has no bundled-model gate to fail loudly on, so there is no separate
  * "broken vs silent" signal to preserve here).
  */
-export async function appleSpeechTranscribe(samples: Float32Array): Promise<string> {
+export async function appleSpeechTranscribe(samples: Float32Array, locale?: string): Promise<string> {
   if (!appleSpeechAvailable()) return ''
 
   const tmpPath = join(tmpdir(), `metis-apple-speech-${randomUUID()}.wav`)
@@ -86,7 +115,10 @@ export async function appleSpeechTranscribe(samples: Float32Array): Promise<stri
     return await new Promise<string>((resolve) => {
       let proc: ReturnType<typeof spawn>
       try {
-        proc = spawn(macHelperPath(), ['transcribe', tmpPath], { stdio: ['ignore', 'pipe', 'pipe'] })
+        // The optional trailing locale pins the recognizer's language (see main.swift's runTranscribe);
+        // omitted → the helper keeps its original system-locale behavior.
+        const args = locale ? ['transcribe', tmpPath, locale] : ['transcribe', tmpPath]
+        proc = spawn(macHelperPath(), args, { stdio: ['ignore', 'pipe', 'pipe'] })
       } catch (e) {
         mainLog.warn('[apple-speech] spawn failed', e instanceof Error ? e.message : String(e))
         resolve('')

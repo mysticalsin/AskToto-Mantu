@@ -1362,6 +1362,13 @@ export function App(): JSX.Element {
     if (ok) setInput('')
   }, [askScreen, input])
 
+  // Changing the spoken language in Settings applies to the RUNNING session — listen.setLanguage is a
+  // no-op when the value didn't change or nothing is live, so this never restarts capture.
+  useEffect(() => {
+    if (!listen.listening) return
+    void listen.setLanguage(settings?.asrLanguage ?? 'auto')
+  }, [listen.listening, listen.setLanguage, settings?.asrLanguage])
+
   const startListen = useCallback(() => {
     stoppingRef.current = false // a fresh session can be stopped again — clear any latch left by the last one
     // A rapid Stop -> New meeting can start a fresh session while the previous endReview's recap is still
@@ -1395,7 +1402,12 @@ export function App(): JSX.Element {
     // (see that state's own comment for why: it's a saved preference, not per-session state).
     setTranscriptShown(settings?.showLiveTranscript ?? false)
     if (settings?.playListenChime ?? true) playListenChime()
-    void listen.start(settings?.audioSource ?? 'both', settings?.asrQuality ?? 'fast', settings?.asrEngine ?? 'whisper')
+    void listen.start(
+      settings?.audioSource ?? 'both',
+      settings?.asrQuality ?? 'fast',
+      settings?.asrEngine ?? 'whisper',
+      settings?.asrLanguage ?? 'auto'
+    )
   }, [
     listen.listening,
     listen.lines,
@@ -1406,6 +1418,7 @@ export function App(): JSX.Element {
     settings?.audioSource,
     settings?.asrQuality,
     settings?.asrEngine,
+    settings?.asrLanguage,
     settings?.playListenChime,
     settings?.showLiveTranscript
   ])

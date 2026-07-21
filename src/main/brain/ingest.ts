@@ -316,14 +316,27 @@ export function combineWindowExtractions(windows: MeetingExtraction[]): MeetingE
  *  original file. Demotes confidence to AMBIGUOUS on failure; never strips the item (quarantined, not
  *  dropped, so a human can still review and pin it). Pure and exported so it is directly unit-testable
  *  without going through the full createStream/runCompletion machinery. */
+/** Language-switch markers ("_[conversation switches to X]_", written by transcripts.ts's
+ *  formatTranscript) are renderer-injected prose, not speech — a quote must never VERIFY against one.
+ *  Applied to the grounding reference in EVERY alignment check in this module (verifyExtraction,
+ *  verifyDealAmount, verifyDealCloseDate, verifyBandEvidence), never to the text sent to the model.
+ *  D10 note: for alignQuote's exact-substring path this is strictly conservative (whatever aligns
+ *  post-strip aligned pre-strip); the fuzzy/LCS path's slack window can in principle shift by the few
+ *  removed marker tokens, but a quote exploiting that would need ~23+ verbatim tokens stitched across
+ *  a switch boundary — accepted as out of threat model, same as fuzzy matching's other tolerances. */
+function stripLanguageMarkers(text: string): string {
+  return text.replace(/^_?\[conversation switches to [^\]]+\]_?$/gm, '')
+}
+
 export function verifyExtraction(x: MeetingExtraction, preparedText: string): MeetingExtraction {
+  const grounding = stripLanguageMarkers(preparedText)
   const numeric_facts = x.numeric_facts.map((f) => {
-    const outcome = verifyNumericFact({ value: f.value, quote: f.quote, unit: f.unit ?? undefined }, preparedText)
+    const outcome = verifyNumericFact({ value: f.value, quote: f.quote, unit: f.unit ?? undefined }, grounding)
     return outcome === 'verified' ? f : { ...f, confidence: 'AMBIGUOUS' as const }
   })
   const commitments = x.commitments.map((c) => {
     if (!c.quote) return c // '' is the documented "paraphrase-only" case — nothing to verify
-    return alignQuote(c.quote, preparedText) ? c : { ...c, confidence: 'AMBIGUOUS' as const }
+    return alignQuote(c.quote, grounding) ? c : { ...c, confidence: 'AMBIGUOUS' as const }
   })
   return { ...x, numeric_facts, commitments }
 }
@@ -332,7 +345,12 @@ export function verifyExtraction(x: MeetingExtraction, preparedText: string): Me
  *  derivable from the quote + from the aligned span), currency treated as the unit. */
 function verifyDealAmount(amount: Deal['amount'], transcript: string): boolean {
   if (!amount) return false
-  return verifyNumericFact({ value: amount.value, quote: amount.quote, unit: amount.currency }, transcript) === 'verified'
+  return (
+    verifyNumericFact(
+      { value: amount.value, quote: amount.quote, unit: amount.currency },
+      stripLanguageMarkers(transcript)
+    ) === 'verified'
+  )
 }
 
 /** Deal close_date verification: `value` is a free-form date string (not a single scalar+unit), so the
@@ -343,7 +361,7 @@ function verifyDealAmount(amount: Deal['amount'], transcript: string): boolean {
  *  it). Deterministic; fails closed when the date carries no numeral to check at all. */
 function verifyDealCloseDate(closeDate: Deal['close_date'], transcript: string): boolean {
   if (!closeDate || !closeDate.quote) return false
-  if (!alignQuote(closeDate.quote, transcript)) return false
+  if (!alignQuote(closeDate.quote, stripLanguageMarkers(transcript))) return false
   const nums = extractNumerals(closeDate.value)
   if (nums.length === 0) return false
   return nums.every((n) => numeralDerivable(n.value, closeDate.quote))
@@ -352,7 +370,7 @@ function verifyDealCloseDate(closeDate: Deal['close_date'], transcript: string):
 /** Deal band_evidence verification: just alignment (band is a qualitative judgement, not a number) —
  *  an evidence string that doesn't verbatim appear in the transcript is not real evidence. */
 function verifyBandEvidence(bandEvidence: string, transcript: string): boolean {
-  return !!bandEvidence && !!alignQuote(bandEvidence, transcript)
+  return !!bandEvidence && !!alignQuote(bandEvidence, stripLanguageMarkers(transcript))
 }
 
 /**

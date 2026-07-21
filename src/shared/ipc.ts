@@ -105,6 +105,7 @@ export const IPC = {
   recallSearch: 'recall:search',
   recallOpen: 'recall:open',
   recallRead: 'recall:read',
+  recallExportPlain: 'recall:export-plain', // user-initiated decrypted md copy of ONE meeting
   recallDelete: 'recall:delete',
   recallRename: 'recall:rename',
   recallUpdateRecap: 'recall:update-recap',
@@ -159,6 +160,7 @@ export const IPC = {
   updateDownloaded: 'update:downloaded',
   updateProgress: 'update:progress',
   updateInstall: 'update:install',
+  updateCheck: 'update:check', // manual Settings-driven check against the public releases feed
   recapPdf: 'recap:pdf',
   openMailDraft: 'mail:openDraft',
   mcpCrmTestConnection: 'mcpCrm:testConnection',
@@ -261,7 +263,12 @@ export const TranscriptLineSchema = z.object({
   // main/graph-transcript.ts + shared/transcript-align.ts). Additive only: the SIDE (`speaker` — them/
   // you/unknown) is never inferred or changed by this. Optional so every previously saved meeting, and
   // any line no name was ever resolved for, still parses unchanged.
-  name: z.string().optional()
+  name: z.string().optional(),
+  // Detected spoken language of this line (shared/lang-id.ts display name, e.g. 'Portuguese') — tagged
+  // by commitLine so mixed-language meetings render "[conversation switches to …]" markers in the recap
+  // prompt and the saved transcript (the LLM otherwise has no way to know a switch happened). Absent
+  // when detection wasn't confident, and on every line saved before this field existed.
+  lang: z.string().optional()
 })
 export type TranscriptLine = z.infer<typeof TranscriptLineSchema>
 
@@ -751,9 +758,17 @@ export const BaseSettingsSchema = z.object({
   overlayOpacity: z.number().min(0.3).max(1.5).default(1),
   showFullTranscriptInReview: z.boolean().default(false), // review = summary-first; transcript opt-in
   asrQuality: z.enum(['best', 'fast']).default('fast'), // packaged builds use the bundled compact model for both modes
-  // parakeet = European, fastest (default); whisper = ~99 langs; apple = on-device Apple Speech
+  // whisper = ~99 langs (default — safe for any locale; parakeet is European-only, which is why 1fa4d76
+  // moved the default off it); parakeet = 25 European languages, fastest; apple = on-device Apple Speech
   // (SFSpeechRecognizer via the mac-helper sidecar), opt-in, macOS 13+ only — see main/apple-speech.ts.
-  asrEngine: z.enum(['whisper', 'parakeet', 'apple']).default('parakeet'),
+  // NOTE: this zod default is effectively dead — store.ts layers DEFAULT_SETTINGS under the user file
+  // before parsing, so the key is always present. Keep both declarations identical so neither lies.
+  asrEngine: z.enum(['whisper', 'parakeet', 'apple']).default('whisper'),
+  // Spoken-language hint for transcription: 'auto' (per-window detect) or a language display name from
+  // Settings' LANGUAGE_OPTIONS ('Portuguese', …). Pins Whisper's decoder and Apple Speech's recognizer
+  // locale; Parakeet always auto-detects. Exists because per-window auto-detect on the compact bundled
+  // Whisper model routinely misreads short non-English windows and emits English-ish hallucinations.
+  asrLanguage: z.string().max(40).default('auto'),
   // A mid-session Parakeet→Whisper fallback (repeated failures) used to surface as a live error banner
   // during the meeting — distracting for something that's really just a background engine swap. Tracked
   // here instead so it's checkable in Settings after the fact, never shown live. Persists until the user
@@ -1024,6 +1039,7 @@ export const DEFAULT_SETTINGS: Settings = {
   showFullTranscriptInReview: false,
   asrQuality: 'fast',
   asrEngine: 'whisper',
+  asrLanguage: 'auto',
   asrLastFallbackAt: null,
   asrWebgpuFallbackAt: null,
   requireConsentIndicator: true,
@@ -1290,6 +1306,31 @@ export interface RecallReadResult {
   /** Task MI-5 — frontmatter `confidential: true`, so a reopened past meeting's toggle reflects its
    *  actual saved state instead of always starting unflagged. */
   confidential?: boolean
+}
+
+/** Result of update:check — the manual Settings-driven check against the public releases feed. Exists
+ *  alongside electron-updater's silent flow because unsigned macOS builds can't auto-install; the user
+ *  still deserves to SEE a newer version was published (Settings → About → Updates). */
+export interface UpdateCheckResult {
+  ok: boolean
+  /** The running app's version (app.getVersion()), always present so the row can show it. */
+  current: string
+  latest?: string
+  available?: boolean
+  /** https release page to download from — feed-provided html_url, or the fixed releases page. */
+  url?: string
+  error?: string
+}
+
+/** Result of recall:export-plain — a user-initiated decrypted markdown copy of one saved meeting, so
+ *  external tools (Claude local ingesting into the second brain, an email, an archive) can read it even
+ *  when at-rest encryption is on. Always explicit per meeting; never a bulk decrypt. */
+export interface RecallExportPlainResult {
+  ok: boolean
+  /** Absolute path the copy was written to (absent when the user cancelled the save dialog). */
+  path?: string
+  cancelled?: boolean
+  error?: string
 }
 
 /** Result of recall:backfillSpeakers (Speaker Intelligence) — `named` is how many transcript lines

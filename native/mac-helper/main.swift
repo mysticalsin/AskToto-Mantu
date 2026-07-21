@@ -16,8 +16,10 @@
 //                     sorts top-to-bottom. Spawn-per-call: OCR is throttled upstream (≥2.5s between
 //                     describes), so a ~100ms process start is cheaper than keeping a server alive.
 //
-//   transcribe <wav>  One-shot. Runs Apple's Speech framework (SFSpeechRecognizer) fully on-device over
-//                     a 16kHz mono WAV file and prints the plain-text transcription to stdout. No Apple
+//   transcribe <wav> [locale]  One-shot. Runs Apple's Speech framework (SFSpeechRecognizer) fully
+//                     on-device over a 16kHz mono WAV file and prints the plain-text transcription to
+//                     stdout. The optional locale (BCP-47, e.g. pt-BR) pins the recognizer's language
+//                     — the app's spoken-language setting — falling back to the system locale. No Apple
 //                     Intelligence toggle required — SFSpeechRecognizer has shipped on-device dictation
 //                     since macOS 13. Mirrors the batch-per-window contract the Parakeet ASR engine
 //                     already uses (see main/apple-speech.ts): one call in, one text result out.
@@ -129,15 +131,17 @@ func runOcr(inputPath: String) -> Never {
 /// it never silently falls back to Apple's cloud recognizer. Any failure (missing file, no on-device
 /// model for this locale, authorization denied, timeout) prints to stderr and exits non-zero; the TS
 /// caller (apple-speech.ts) treats that as "no result" and the app falls back to another ASR engine.
-func runTranscribe(path: String) -> Never {
+func runTranscribe(path: String, localeIdentifier: String?) -> Never {
     guard FileManager.default.fileExists(atPath: path) else {
         fail("transcribe: file not found at \(path)")
     }
 
-    // Prefer the user's current locale; SFSpeechRecognizer returns nil for a locale it has no model
-    // for, so fall back to en-US (always available) instead of failing outright on non-English machines
-    // whose region simply lacks a dedicated speech model.
-    guard let recognizer = SFSpeechRecognizer(locale: Locale.current) ?? SFSpeechRecognizer(locale: Locale(identifier: "en-US")) else {
+    // Locale precedence: the caller's explicit identifier (the app's spoken-language setting — a system
+    // locale says nothing about what language a meeting is held in) → the user's current locale → en-US
+    // (always available). SFSpeechRecognizer returns nil for a locale it has no model for, so each step
+    // falls through instead of failing outright.
+    let requested = localeIdentifier.flatMap { SFSpeechRecognizer(locale: Locale(identifier: $0)) }
+    guard let recognizer = requested ?? SFSpeechRecognizer(locale: Locale.current) ?? SFSpeechRecognizer(locale: Locale(identifier: "en-US")) else {
         fail("transcribe: no speech recognizer available for this Mac")
     }
     guard recognizer.supportsOnDeviceRecognition else {
@@ -212,9 +216,9 @@ case "ocr":
     runOcr(inputPath: arguments.count >= 3 ? arguments[2] : "-")
 case "transcribe":
     guard arguments.count >= 3 else {
-        fail("usage: metis-mac-helper transcribe <wav-path>")
+        fail("usage: metis-mac-helper transcribe <wav-path> [locale]")
     }
-    runTranscribe(path: arguments[2])
+    runTranscribe(path: arguments[2], localeIdentifier: arguments.count >= 4 ? arguments[3] : nil)
 default:
     fail("unknown command: \(arguments[1])")
 }

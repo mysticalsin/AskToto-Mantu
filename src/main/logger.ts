@@ -91,6 +91,7 @@ export type AuditEvent =
   | 'app.crash'
   | 'meeting.detect.degraded'
   | 'recall.open'
+  | 'recall.export' // user-initiated decrypted md copy of one meeting (recall:export-plain)
   | 'bidstack.connected'
   | 'bidstack.disconnected'
   | 'bidstack.push'

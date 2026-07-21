@@ -2,6 +2,7 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   Search,
   FolderOpen,
+  FileDown,
   FileText,
   Network,
   RefreshCw,
@@ -412,6 +413,7 @@ const MeetingRow = memo(function MeetingRow({
   onOpen,
   onToggleConnections,
   onTrash,
+  onExport,
   onStartEdit,
   onEditingChange,
   onCommitEdit,
@@ -435,6 +437,8 @@ const MeetingRow = memo(function MeetingRow({
   onOpen: (file: string) => void
   onToggleConnections: (file: string) => void
   onTrash: (file: string, title: string) => void
+  /** Export a decrypted .md copy via a native save dialog (main process) — see recallExportPlain. */
+  onExport: (file: string) => void
   onStartEdit: (file: string, title: string) => void
   onEditingChange: (value: string) => void
   onCommitEdit: () => void
@@ -555,6 +559,18 @@ const MeetingRow = memo(function MeetingRow({
               className="no-drag focus-ring grid h-7 w-7 shrink-0 place-items-center rounded-full text-[color:var(--color-ink-3)] transition-colors hover:bg-white/[0.06] hover:text-[color:var(--color-ink)]"
             >
               <Network size={12} />
+            </button>
+
+            {/* Export a decrypted markdown copy (native save dialog) — the hand-off for external tools
+                like Claude local ingesting this meeting into the second brain. */}
+            <button
+              type="button"
+              aria-label="Export meeting copy"
+              title="Export copy (.md)"
+              onClick={() => onExport(m.file)}
+              className="no-drag focus-ring grid h-7 w-7 shrink-0 place-items-center rounded-full text-[color:var(--color-ink-3)] transition-colors hover:bg-white/[0.06] hover:text-[color:var(--color-ink)]"
+            >
+              <FileDown size={12} />
             </button>
 
             {/* Delete — single click opens a native confirm dialog (main process); see onTrash. */}
@@ -722,6 +738,16 @@ export function RecallView({
   const trashMeeting = useCallback((file: string, title: string): void => {
     void onTrash(file, title)
   }, [onTrash])
+  // Export a decrypted .md copy: the save dialog in main IS the interaction — only a real failure needs
+  // inline surfacing here (a cancelled dialog is a non-event, same contract as recallDelete's confirm).
+  const exportMeeting = useCallback((file: string): void => {
+    void window.toto
+      .recallExportPlain(file)
+      .then((r) => {
+        if (!r.ok && !r.cancelled) flagRowError(file, r.error || 'Could not export the meeting.')
+      })
+      .catch((e) => flagRowError(file, e instanceof Error ? e.message : String(e)))
+  }, [flagRowError])
   const selectFile = useCallback((file: string): void => setSelectedFile(file), [])
   const toggleConnections = useCallback(
     (file: string): void => setOpen((o) => (o === file ? null : file)),
@@ -1094,6 +1120,7 @@ export function RecallView({
                     onOpen={openMeeting}
                     onToggleConnections={toggleConnections}
                     onTrash={trashMeeting}
+                    onExport={exportMeeting}
                     onStartEdit={startEdit}
                     onEditingChange={changeEditValue}
                     onCommitEdit={commitEdit}
