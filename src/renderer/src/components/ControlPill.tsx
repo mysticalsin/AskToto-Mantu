@@ -17,6 +17,7 @@ export function ControlPill({
   onTogglePause,
   listening,
   paused,
+  degradedNote,
   startedAt
 }: {
   onExpand: () => void
@@ -25,6 +26,11 @@ export function ControlPill({
   onTogglePause: () => void
   listening: boolean
   paused: boolean
+  /** Non-null while a requested capture side isn't being heard (e.g. mic-only because Screen Recording is
+   *  off) — turns the rec-dot amber with this text as its tooltip. The minimized pill is otherwise the one
+   *  surface with NO path to the Copilot note, so a whole meeting could run mic-only behind a confident
+   *  red "recording" dot (2026-07-20). */
+  degradedNote?: string | null
   startedAt: number
 }): JSX.Element {
   // The pill is a row of buttons with only slivers of padding — with the default "never arm on
@@ -51,11 +57,14 @@ export function ControlPill({
       {listening ? (
         <>
           <span
+            title={!paused && degradedNote ? degradedNote : undefined}
             className={[
               'h-[9px] w-[9px] shrink-0 rounded-full rec-dot',
               paused
                 ? 'bg-[color:var(--color-ink-3)] [animation-play-state:paused]'
-                : 'bg-[var(--color-danger)] shadow-[0_0_8px_var(--color-danger)]'
+                : degradedNote
+                  ? 'bg-[color:var(--color-warn,#fac775)] shadow-[0_0_8px_var(--color-warn,#fac775)]'
+                  : 'bg-[var(--color-danger)] shadow-[0_0_8px_var(--color-danger)]'
             ].join(' ')}
           />
           <ElapsedClock startedAt={startedAt} paused={paused} />
