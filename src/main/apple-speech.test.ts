@@ -5,7 +5,7 @@ import { join } from 'node:path'
 vi.mock('electron', () => ({ app: { isPackaged: false, getPath: () => '/tmp' } }))
 vi.mock('./logger', () => ({ mainLog: { info: vi.fn(), warn: vi.fn(), error: vi.fn() }, auditLog: vi.fn() }))
 
-import { encodeWav16kMono, appleSpeechAvailable, appleSpeechTranscribe } from './apple-speech'
+import { encodeWav16kMono, appleSpeechAvailable, appleSpeechLocale, appleSpeechTranscribe } from './apple-speech'
 
 const REPO_ROOT = process.cwd()
 
@@ -74,6 +74,27 @@ describe('appleSpeechAvailable', () => {
     // asserting a specific boolean, which would be flaky across machines.
     const helperBuilt = existsSync(join(REPO_ROOT, 'resources', 'mac-helper', 'metis-mac-helper'))
     expect(appleSpeechAvailable()).toBe(helperBuilt)
+  })
+})
+
+describe('appleSpeechLocale', () => {
+  it('maps every Settings language display name to a BCP-47 recognizer locale', () => {
+    // Mirrors Settings.tsx's LANGUAGE_OPTIONS — a name missing here would silently fall back to the
+    // system locale, exactly the mismatch the spoken-language setting exists to prevent.
+    const names = [
+      'English', 'French', 'Spanish', 'German', 'Italian', 'Portuguese', 'Dutch',
+      'Polish', 'Arabic', 'Chinese', 'Japanese', 'Korean', 'Hindi', 'Russian', 'Turkish'
+    ]
+    for (const name of names) {
+      expect(appleSpeechLocale(name), name).toMatch(/^[a-z]{2}-[A-Z]{2}$/)
+    }
+    expect(appleSpeechLocale('Portuguese')).toBe('pt-BR')
+  })
+
+  it("returns undefined for 'auto', unknown values, and undefined (system-locale behavior)", () => {
+    expect(appleSpeechLocale('auto')).toBeUndefined()
+    expect(appleSpeechLocale(undefined)).toBeUndefined()
+    expect(appleSpeechLocale('Klingon')).toBeUndefined()
   })
 })
 

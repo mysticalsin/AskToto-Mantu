@@ -59,7 +59,8 @@ import {
   type CalendarEvent,
   type AskStart,
   type ImportJobView,
-  type ScreenContextResult
+  type ScreenContextResult,
+  type RecallExportPlainResult
 } from '@shared/ipc'
 import {
   getSettings,
@@ -170,7 +171,7 @@ import {
   parakeetRelease,
   parakeetAddonError
 } from './parakeet'
-import { appleSpeechTranscribe } from './apple-speech'
+import { appleSpeechLocale, appleSpeechTranscribe } from './apple-speech'
 import { pickAudioFile, consumePickedAudio } from './import-audio'
 import { ImportJobManager, type ImportJob } from './import-jobs'
 import { EncryptedImportJobStore } from './import-job-store'
@@ -188,7 +189,8 @@ import {
   ensureMeetingsFolder,
   isEncryptedFile,
   decryptToTemp,
-  sweepStaleTempFiles
+  sweepStaleTempFiles,
+  readSavedFile
 } from './transcripts'
 import { getPlatformPermissions } from './platform-perms'
 import {
@@ -203,7 +205,7 @@ import {
   deleteAllMeetings,
   sweepExpiredMeetings
 } from './recall'
-import { initAutoUpdate } from './updater'
+import { initAutoUpdate, checkForUpdateNow } from './updater'
 import { runSelfTest } from './selftest'
 import { readEvalMetrics, aggregateMetrics } from './metrics'
 import { importDustCliSession, refreshDustCliSession, setupDustCli } from './dustcli'
@@ -2259,6 +2261,41 @@ function registerIpc(): void {
     return recallRead(String(file ?? ''))
   })
 
+  // Recall export: a user-initiated DECRYPTED markdown copy of ONE saved meeting, so an external tool —
+  // Claude local ingesting it into the second brain, an email, an archive — can read it even when
+  // at-rest encryption is on. Deliberately per-meeting and behind a native save dialog: never a bulk
+  // decrypt, and the plaintext lands only where the user explicitly pointed. Audited.
+  ipcMain.handle(IPC.recallExportPlain, async (e, file: unknown): Promise<RecallExportPlainResult> => {
+    assertMainWindow(e)
+    if (!requireAuth()) return { ok: false, error: 'Sign in with your Mantu account first.' }
+    const safeName = basename(String(file ?? ''))
+    // Same guard set as every recall.ts sibling: only meeting .md files, never the plaintext index/README.
+    if (!safeName.endsWith('.md') || safeName === 'index.md' || safeName === 'README.md') {
+      return { ok: false, error: 'Not a saved meeting file.' }
+    }
+    try {
+      const source = join(resolveMeetingsFolder(getSettings()), safeName)
+      const text = readSavedFile(source) // decodes the ATKENC2 envelope when the file is encrypted
+      // readSavedFile returns '' (never throws) when the envelope can't be decrypted on this device —
+      // without this guard the export would "succeed" as a 0-byte file (adversarial review finding).
+      if (!text) return { ok: false, error: 'Meeting file could not be decrypted on this device.' }
+      const dialogOpts = {
+        title: 'Export meeting copy',
+        defaultPath: join(app.getPath('downloads'), safeName),
+        filters: [{ name: 'Markdown', extensions: ['md'] }]
+      }
+      const res = win ? await dialog.showSaveDialog(win, dialogOpts) : await dialog.showSaveDialog(dialogOpts)
+      if (res.canceled || !res.filePath) return { ok: false, cancelled: true }
+      writeFileSync(res.filePath, text, 'utf8')
+      auditLog('recall.export', { file: safeName })
+      return { ok: true, path: res.filePath }
+    } catch (err) {
+      // Sanitized like recall.ts's siblings — never the raw err.message (it can carry absolute paths).
+      const code = (err as NodeJS.ErrnoException | null)?.code
+      return { ok: false, error: code === 'ENOENT' ? 'Meeting file not found.' : 'Could not export the meeting file.' }
+    }
+  })
+
   // Recall delete: GDPR right-to-erasure for a saved meeting — removes the file + its index row.
   // Confirmed with a native, unmissable modal BEFORE deleting (sync — blocks until the user answers) so a
   // single click is unambiguous: no "did that register?" two-click pattern that's easy to misread as broken.
@@ -2480,7 +2517,8 @@ function registerIpc(): void {
     if (!(p?.samples instanceof Float32Array)) return ''
     // Same defensive cap as parakeetFeed — see its own comment for why.
     if (p.samples.length > 16_000 * 30) return ''
-    const text = await appleSpeechTranscribe(p.samples)
+    // Spoken-language hint (Settings → Audio) pins the recognizer locale; 'auto' keeps system locale.
+    const text = await appleSpeechTranscribe(p.samples, appleSpeechLocale(getSettings().asrLanguage))
     if (text && p.speaker === 'them' && getSettings().speakerId.enabled) {
       try {
         const label = getSpeakerId().labelWindow(p.samples)
@@ -3598,6 +3636,13 @@ function registerIpc(): void {
     app.quit()
   })
   // --- Auto-update ---
+  // Manual check for Settings → About → Updates. Exists alongside electron-updater's silent flow so
+  // builds that cannot auto-install (unsigned macOS) still let the user DISCOVER a newer version and
+  // reach the download page. Never throws — failures come back as a short human-readable error.
+  ipcMain.handle(IPC.updateCheck, (e) => {
+    assertMainWindow(e)
+    return checkForUpdateNow()
+  })
   ipcMain.handle(IPC.updateInstall, (e) => {
     assertMainWindow(e)
     // Lazy-required (same pattern + rationale as updater.ts): a static import here put

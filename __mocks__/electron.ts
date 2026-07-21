@@ -26,6 +26,12 @@ export const desktopCapturer = {
   getSources: vi.fn(() => Promise.resolve([]))
 }
 
+// Proxy-aware main-process fetch (updater's release-feed check). Tests stub per-call via
+// vi.mocked(net.fetch).mockResolvedValue(...).
+export const net = {
+  fetch: vi.fn(() => Promise.reject(new Error('net.fetch not stubbed in this test')))
+}
+
 export const ipcMain = {
   on: vi.fn(),
   handle: vi.fn()

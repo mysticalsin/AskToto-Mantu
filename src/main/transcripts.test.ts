@@ -17,7 +17,8 @@ import {
   DEBRIEF_HEADING,
   recoverOrphanDrafts,
   writeSaved,
-  resolveMeetingsFolder
+  resolveMeetingsFolder,
+  formatTranscript
 } from './transcripts'
 import type { SaveMeeting, Settings } from '@shared/ipc'
 
@@ -42,6 +43,42 @@ const baseSettings = (): Settings =>
     meetingsFolder: '',
     autoSaveTranscripts: true
   } as Settings)
+
+describe('formatTranscript language-switch markers', () => {
+  it('inserts an italic marker paragraph where the tagged language changes, and nowhere else', () => {
+    const t = Date.UTC(2026, 6, 20, 9, 0, 0)
+    const body = formatTranscript([
+      { speaker: 'them', text: 'Então vamos ver o contrato.', t, lang: 'Portuguese' },
+      { speaker: 'you', text: 'Sim, perfeito.', t: t + 1000, lang: 'Portuguese' },
+      { speaker: 'them', text: 'So, about the budget.', t: t + 2000, lang: 'English' },
+      { speaker: 'you', text: 'Hmm.', t: t + 3000 }, // untagged — no marker, no language change
+      { speaker: 'them', text: 'De volta ao contrato então.', t: t + 4000, lang: 'Portuguese' }
+    ])
+    const markers = body.match(/_\[conversation switches to [^\]]+\]_/g)
+    expect(markers).toEqual(['_[conversation switches to English]_', '_[conversation switches to Portuguese]_'])
+    // Marker sits as its own paragraph immediately before the line that switched.
+    expect(body).toContain('_[conversation switches to English]_\n\n**')
+    // The marker must NOT match the `**[HH:MM:SS] Label:**` shape recall.ts parses back — a re-parsed
+    // meeting simply skips it (same regex as recall.ts's lineRe).
+    const lineRe = /^\*\*\[(\d{2}):(\d{2}):(\d{2})\] (Them|You|Speaker)(?: \(([^)]*)\))?:\*\* (.+)$/gm
+    const parsed = [...body.matchAll(lineRe)]
+    expect(parsed).toHaveLength(5)
+  })
+
+  it('emits no markers for a single-language or untagged transcript (unchanged legacy shape)', () => {
+    const t = Date.UTC(2026, 6, 20, 9, 0, 0)
+    const tagged = formatTranscript([
+      { speaker: 'them', text: 'Olá.', t, lang: 'Portuguese' },
+      { speaker: 'you', text: 'Tudo bem.', t: t + 1000, lang: 'Portuguese' }
+    ])
+    const untagged = formatTranscript([
+      { speaker: 'them', text: 'Olá.', t },
+      { speaker: 'you', text: 'Tudo bem.', t: t + 1000 }
+    ])
+    expect(tagged).not.toContain('conversation switches')
+    expect(untagged).not.toContain('conversation switches')
+  })
+})
 
 describe('transcripts', () => {
   let folder: string

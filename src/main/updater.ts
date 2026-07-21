@@ -1,8 +1,8 @@
-import { app, type BrowserWindow } from 'electron'
+import { app, net, type BrowserWindow } from 'electron'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import log from 'electron-log'
-import { IPC } from '@shared/ipc'
+import { IPC, type UpdateCheckResult } from '@shared/ipc'
 import { shouldDisableAutoUpdate } from './cahe-edition'
 import { readTrustedAdminManaged } from './win-security'
 
@@ -25,6 +25,74 @@ function autoUpdateDisabledByPolicy(): boolean {
   // would reopen.
   const content = readTrustedAdminManaged()
   return content ? configDisablesAutoUpdate(content) : false
+}
+
+// ── Manual "Check for updates" (Settings → About) ────────────────────────────────────────────────
+// electron-updater's silent flow above covers signed builds; this explicit check exists so EVERY build
+// — including unsigned macOS ones, where electron-updater cannot install — can still tell the user a
+// newer version was published and point them at the download page. Keep owner/repo in sync with
+// electron-builder.yml's `publish` block (the public Metis-Releases feed).
+const RELEASES_API = 'https://api.github.com/repos/mysticalsin/Metis-Releases/releases/latest'
+const RELEASES_PAGE = 'https://github.com/mysticalsin/Metis-Releases/releases/latest'
+const CHECK_TIMEOUT_MS = 8000
+
+/** Plain numeric semver compare ('1.10.0' > '1.9.2'), leading 'v' tolerated, missing parts = 0.
+ *  Prerelease suffixes are ignored on purpose — the releases feed only ever carries plain x.y.z tags. */
+export function isNewerVersion(latest: string, current: string): boolean {
+  const norm = (v: string): number[] =>
+    v.trim().replace(/^v/i, '').split('.').map((p) => Number.parseInt(p, 10) || 0)
+  const a = norm(latest)
+  const b = norm(current)
+  for (let i = 0; i < Math.max(a.length, b.length); i++) {
+    const d = (a[i] ?? 0) - (b[i] ?? 0)
+    if (d !== 0) return d > 0
+  }
+  return false
+}
+
+/** Pure: turn a GitHub "latest release" API payload into an UpdateCheckResult. Exported for tests. */
+export function parseLatestRelease(payload: unknown, current: string): UpdateCheckResult {
+  const tag = (payload as { tag_name?: unknown } | null)?.tag_name
+  const htmlUrl = (payload as { html_url?: unknown } | null)?.html_url
+  if (typeof tag !== 'string' || !tag.trim()) {
+    return { ok: false, current, error: 'The release feed returned no version tag.' }
+  }
+  const latest = tag.trim().replace(/^v/i, '')
+  return {
+    ok: true,
+    current,
+    latest,
+    available: isNewerVersion(latest, current),
+    // Only ever open an https URL the feed itself provided; anything else falls back to the fixed page.
+    url: typeof htmlUrl === 'string' && /^https:\/\//i.test(htmlUrl) ? htmlUrl : RELEASES_PAGE
+  }
+}
+
+/** One on-demand check against the public releases feed. Never throws — every failure comes back as a
+ *  short human-readable `error` for the Settings row. Uses Electron's net.fetch (honors the system
+ *  proxy/PAC; plain fetch() in the main process does not — the exact bug behind commit 2a565de). */
+export async function checkForUpdateNow(): Promise<UpdateCheckResult> {
+  const current = app.getVersion()
+  const ctrl = new AbortController()
+  const timer = setTimeout(() => ctrl.abort(), CHECK_TIMEOUT_MS)
+  try {
+    const resp = await net.fetch(RELEASES_API, {
+      headers: { Accept: 'application/vnd.github+json' },
+      signal: ctrl.signal
+    })
+    if (!resp.ok) {
+      return {
+        ok: false,
+        current,
+        error: resp.status === 404 ? 'No published release found yet.' : `The release feed answered HTTP ${resp.status}.`
+      }
+    }
+    return parseLatestRelease(await resp.json(), current)
+  } catch {
+    return { ok: false, current, error: 'Could not reach the update feed. Check your connection and try again.' }
+  } finally {
+    clearTimeout(timer)
+  }
 }
 
 /** A 404 means the releases repo/feed doesn't exist (yet) — distinct from a transient network/server

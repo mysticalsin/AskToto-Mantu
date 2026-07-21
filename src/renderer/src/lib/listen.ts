@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { TranscriptLine } from '@shared/ipc'
-import { isNonSpeechLine } from '@shared/transcript-filter'
+import { collapseRepeatedPhrase, isNonSpeechLine, repeatKey } from '@shared/transcript-filter'
+import { detectLanguage } from '@shared/lang-id'
 import { WHISPER_WORKLET_SRC } from './whisper-worklet-src'
 import { isWindows } from './keys'
 import { compileEntityCasingCandidates, applyEntityCasingCompiled } from './entity-casing'
@@ -21,6 +22,10 @@ function whisperWorkletUrl(): string {
 const WINDOW_SEC = 6
 const MAX_QUEUE = 24 // ~2.4 min of audio; drop oldest if the model is slow/failed to load
 const PARAKEET_FEED_TIMEOUT_MS = 5000 // a single Parakeet window shouldn't take longer than this to transcribe
+// Cross-line half of the repetition-loop guard (intra-line half = collapseRepeatedPhrase): a looping
+// decoder returns the identical line for window after window; real speech repeats the same normalized
+// line at most once. Two consecutive copies stay, the rest of the run is dropped.
+const MAX_CONSECUTIVE_DUPES = 2
 const PARAKEET_MAX_FAILURES = 3 // consecutive Parakeet failures → fall back to Whisper for the rest of the session
 const PARAKEET_EMPTY_RUN_MAX = 5 // consecutive '' returns on flowing audio → treat as engine stall, fall back to Whisper
 const THEM_WATCHDOG_MS = 20_000 // 20 s with the 'them' channel open but no window emitted → surface soft note
@@ -136,7 +141,12 @@ export interface ListenApi {
   // hits this, since the large model is deliberately excluded from release resources. Lets a caller show
   // an honest "reduced" state instead of the toggle silently always running whisper-base.
   qualityDegraded: boolean
-  start: (source: AudioSource, quality?: 'best' | 'fast', engine?: 'whisper' | 'parakeet' | 'apple') => Promise<void>
+  start: (
+    source: AudioSource,
+    quality?: 'best' | 'fast',
+    engine?: 'whisper' | 'parakeet' | 'apple',
+    language?: string
+  ) => Promise<void>
   /** onDrained (optional) fires once the up-to-DRAIN_CEILING_MS post-stop drain has fully settled — i.e.
    *  after the final flushed window has committed via commitLine, so `text()` read inside it reflects the
    *  complete transcript. Skipped if a fresh start() supersedes this session before the drain finishes. */
@@ -147,6 +157,10 @@ export interface ListenApi {
   resume: () => void
   clear: () => void
   text: () => string
+  /** Apply a changed spoken-language setting to the RUNNING session (no capture restart): Whisper gets
+   *  a warm re-init (the worker updates its language-follow seed before the already-loaded early
+   *  return), Apple Speech reads settings per window main-side, Parakeet always auto-detects. */
+  setLanguage: (language: string) => Promise<void>
 }
 
 const WORKER_IDLE_RELEASE_MS = 180_000 // 3 min: free the whisper worker + ONNX wasm after Listen goes idle
@@ -211,6 +225,10 @@ export function useListen(
   // e.g. mid-Parakeet/Apple session). fallBackToWhisper and armNetworkRetry's retry() read this so a
   // mid-session engine swap or a network-recovery reload honors the original choice instead of 'fast'.
   const requestedQualityRef = useRef<'best' | 'fast'>('fast')
+  // Spoken-language hint from settings ('auto' or a language display name, e.g. 'Portuguese'). Read
+  // through a ref for the same reason as requestedQualityRef: fallback/retry re-inits fire long after
+  // start() returned and must re-send the language the session was started with.
+  const asrLanguageRef = useRef<string>('auto')
   const engineRef = useRef<'whisper' | 'parakeet' | 'apple'>('whisper') // active ASR engine for this session
   // Cached bundled-model flag: queried once from the main process and reused for every init message.
   // Fail closed on an IPC/preload error: installed builds must never turn a broken capability probe into
@@ -268,6 +286,10 @@ export function useListen(
   // fires once and complete — instead of firing on the truncated first fragment and then being locked out
   // by the App-level suggest throttle. Reset on a 'you' line, on fire, and on start()/clear().
   const themRunRef = useRef('')
+  // Trailing run of consecutive committed lines with the same normalized text + speaker — the state for
+  // the MAX_CONSECUTIVE_DUPES guard. Reset on start() so a phrase legitimately reopening a new meeting
+  // is never suppressed by the previous session's tail.
+  const repeatRunRef = useRef<{ key: string; speaker: string; count: number }>({ key: '', speaker: '', count: 0 })
 
   // Add a transcribed line + fire the auto-answer hook. Shared by the Whisper worker and Parakeet paths.
   // `name` is the optional Speaker Intelligence label (main-side voice embedding on THEM windows) — the
@@ -277,12 +299,32 @@ export function useListen(
     // "♪♪♪") before touching state — so they never display live, never reach the recap, never get saved.
     // Single chokepoint for both the Whisper worker and Parakeet paths.
     if (isNonSpeechLine(text)) return
-    let corrected = text
+    // Collapse an intra-line decoder loop BEFORE corrections/casing so those run on the short form.
+    let corrected = collapseRepeatedPhrase(text)
     for (const { re, to } of correctionsRef.current) corrected = corrected.replace(re, to)
     // Entity-casing bias runs AFTER corrections so an explicit user correction always wins.
     if (entityCasingRef.current.length) corrected = applyEntityCasingCompiled(entityCasingRef.current, corrected)
     if (corrected && liveRef.current) {
-      const line: TranscriptLine = { speaker: speaker || 'you', text: corrected, t: Date.now(), ...(name ? { name } : {}) }
+      // Cross-line repetition-loop guard: same normalized line, same speaker, window after window.
+      const key = repeatKey(corrected)
+      const run = repeatRunRef.current
+      if (key && run.key === key && run.speaker === (speaker || 'you')) {
+        run.count += 1
+        if (run.count > MAX_CONSECUTIVE_DUPES) return // keep counting so the whole run stays suppressed
+      } else {
+        repeatRunRef.current = { key, speaker: speaker || 'you', count: 1 }
+      }
+      // Tag the line's spoken language (conservative: undefined unless confident) so mixed-language
+      // meetings can render switch markers for the recap LLM and the saved transcript. Computed here —
+      // the single chokepoint — so Parakeet and Apple Speech lines get tagged exactly like Whisper's.
+      const lang = detectLanguage(corrected).lang ?? undefined
+      const line: TranscriptLine = {
+        speaker: speaker || 'you',
+        text: corrected,
+        t: Date.now(),
+        ...(name ? { name } : {}),
+        ...(lang ? { lang } : {})
+      }
       // Update the ref synchronously BEFORE firing onQ, so text() (read inside the handler) already
       // includes the line that triggered the auto-answer.
       const next = [...linesRef.current, line]
@@ -494,7 +536,7 @@ export function useListen(
     setState((s) => ({ ...s, loading: true }))
     void getAsrBundled()
       .then((bundled) => {
-        ensureWorker().postMessage({ type: 'init', quality: requestedQualityRef.current, bundled })
+        ensureWorker().postMessage({ type: 'init', quality: requestedQualityRef.current, bundled, language: asrLanguageRef.current })
       })
       .catch(() => {})
   }, [ensureWorker, getAsrBundled])
@@ -533,7 +575,7 @@ export function useListen(
         void getAsrBundled()
           .then((bundled) => {
             if (!liveRef.current || readyRef.current) return
-            ensureWorker().postMessage({ type: 'init', quality: requestedQualityRef.current, bundled })
+            ensureWorker().postMessage({ type: 'init', quality: requestedQualityRef.current, bundled, language: asrLanguageRef.current })
           })
           .catch(() => {})
       }
@@ -818,7 +860,8 @@ export function useListen(
     async (
       source: AudioSource,
       quality: 'best' | 'fast' = 'best',
-      engine: 'whisper' | 'parakeet' | 'apple' = 'whisper'
+      engine: 'whisper' | 'parakeet' | 'apple' = 'whisper',
+      language: string = 'auto'
     ): Promise<void> => {
       // Re-entrancy guard: a rapid double-click/double-hotkey calls start() twice before React re-renders
       // listen.listening to true (that state flip is async), so this MUST be a synchronous ref check right
@@ -833,6 +876,7 @@ export function useListen(
         // start() call returns) read requestedQualityRef instead of loadedQualityRef, which stays null for
         // the whole lifetime of a Parakeet session.
         requestedQualityRef.current = quality
+        asrLanguageRef.current = language
         if (workerIdleTimer.current) {
           clearTimeout(workerIdleTimer.current) // re-arming before the idle release fires: keep the worker warm
           workerIdleTimer.current = null
@@ -861,6 +905,7 @@ export function useListen(
         parakeetEmptyRunRef.current = 0 // clear the empty-window run counter for a fresh session
         engineRef.current = engine
         themRunRef.current = '' // fresh session → no carried-over 'them' question turn
+        repeatRunRef.current = { key: '', speaker: '', count: 0 } // fresh session → no carried-over dupe run
         setState((s) => ({ ...s, error: null, listening: true, paused: false }))
         try {
           await window.toto.setListeningState(true)
@@ -938,7 +983,9 @@ export function useListen(
             // instead of surfacing a raw, confusing fetch error. armNetworkRetry arms the auto-restart.
             armNetworkRetry('offline')
           } else {
-            ensureWorker().postMessage({ type: 'init', quality, bundled })
+            // resetFollow: a fresh session must never inherit the previous meeting's converged
+            // language-follow state from a warm worker (see whisper.worker.ts's init handler).
+            ensureWorker().postMessage({ type: 'init', quality, bundled, language: asrLanguageRef.current, resetFollow: true })
           }
           if (readyRef.current) pump() // warm worker already ready → drain immediately
         }
@@ -1314,6 +1361,8 @@ export function useListen(
       warmed = true
       try {
         const bundled = await getAsrBundled()
+        // Prewarm carries no language: the setting is only known per-session at start(), whose init
+        // message updates the (already warm) worker's language before the first audio window.
         ensureWorker().postMessage({ type: 'init', quality: 'fast', bundled })
         loadedQualityRef.current = 'fast'
       } catch {
@@ -1324,11 +1373,29 @@ export function useListen(
     return () => clearTimeout(t)
   }, [ensureWorker, getAsrBundled])
 
+  // Mid-session spoken-language change (Settings → Audio while listening). The ref update covers every
+  // engine's future reads; only a live Whisper worker needs an explicit nudge — a warm re-init whose
+  // language lands before the worker's already-loaded early return (see whisper.worker.ts).
+  const setLanguage = useCallback(
+    async (language: string): Promise<void> => {
+      if (asrLanguageRef.current === language) return
+      asrLanguageRef.current = language
+      if (engineRef.current !== 'whisper' || !workerRef.current || !liveRef.current) return
+      try {
+        const bundled = await getAsrBundled()
+        workerRef.current.postMessage({ type: 'init', quality: requestedQualityRef.current, bundled, language })
+      } catch {
+        /* best-effort: the next session's start() re-sends the language anyway */
+      }
+    },
+    [getAsrBundled]
+  )
+
   // Memoized so consumers (App.tsx passes this whole object around as a dependency) only see a new
   // identity when a real piece of it changes — start/stop/pause/resume/clear/text are already
   // useCallback-stable, so without this the returned object was a fresh literal on every render.
   return useMemo(
-    () => ({ ...state, lines, start, stop, pause, resume, clear, text }),
-    [state, lines, start, stop, pause, resume, clear, text]
+    () => ({ ...state, lines, start, stop, pause, resume, clear, text, setLanguage }),
+    [state, lines, start, stop, pause, resume, clear, text, setLanguage]
   )
 }
