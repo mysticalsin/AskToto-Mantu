@@ -82,7 +82,8 @@ import {
   type MeetingSummary,
   type ShortcutFailure,
   type LocalModelSummary,
-  type PlatformPermissions
+  type PlatformPermissions,
+  type UpdateCheckResult
 } from '@shared/ipc'
 import {
   PROVIDERS,
@@ -3370,6 +3371,55 @@ const LANGUAGE_OPTIONS = [
   'Polish', 'Arabic', 'Chinese', 'Japanese', 'Korean', 'Hindi', 'Russian', 'Turkish'
 ]
 
+/** Settings → About → Updates. electron-updater's silent flow still auto-installs where the platform
+ *  supports it (it then shows the UpdateReadyToast); this row exists so EVERY build — including
+ *  unsigned macOS ones that cannot auto-install — can still DISCOVER that a newer version was
+ *  published and reach the download page. Auto-checks once when the section mounts (i.e. when the
+ *  user opens About), manual re-check any time. */
+function UpdatesSection(): JSX.Element {
+  const [checking, setChecking] = useState(false)
+  const [result, setResult] = useState<UpdateCheckResult | null>(null)
+  const check = useCallback((): void => {
+    setChecking(true)
+    void window.toto
+      .checkForUpdate()
+      .then(setResult)
+      .catch((e) => setResult({ ok: false, current: '', error: e instanceof Error ? e.message : String(e) }))
+      .finally(() => setChecking(false))
+  }, [])
+  useEffect(() => {
+    check()
+  }, [check])
+  return (
+    <Section title="Updates" desc="Métis installs updates automatically where the platform allows. Check here any time." icon={RefreshCw}>
+      <div className="flex flex-col items-center gap-2">
+        {result?.current ? (
+          <span className="text-[12px] text-[color:var(--cl-muted-foreground)]">
+            Installed version: {result.current}
+          </span>
+        ) : null}
+        {result?.ok && result.available && (
+          <a
+            href={result.url}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="no-drag focus-ring rounded-full bg-[color:var(--cl-primary)]/15 px-3 py-1.5 text-[12px] font-medium text-[color:var(--cl-primary)] transition-colors hover:bg-[color:var(--cl-primary)]/25"
+          >
+            Version {result.latest} is available — open the download page
+          </a>
+        )}
+        {result?.ok && !result.available && (
+          <span className="text-[12px] text-[color:var(--cl-muted-foreground)]">You&apos;re on the latest version.</span>
+        )}
+        {result && !result.ok && <span className="text-[12px] text-[var(--color-danger)]">{result.error}</span>}
+        <TextButton onClick={check} disabled={checking}>
+          {checking ? 'Checking…' : 'Check for updates'}
+        </TextButton>
+      </div>
+    </Section>
+  )
+}
+
 /** Editable, pre-filled system prompt for the selected default mode. Plug-and-play with reset. */
 function ModePromptEditor({
   settings,
@@ -4467,6 +4517,29 @@ export function Settings({
                       <option value="apple">Apple Speech · on-device{isWindows ? ' (macOS only)' : ''}</option>
                     </select>
                   </div>
+                  <div className="flex flex-col gap-1.5 px-1 py-1">
+                    <label className="flex items-center gap-2 text-[13px] text-[color:var(--cl-foreground)]">
+                      Spoken language
+                      <FieldHint text="The language your meetings usually start in. Whisper decodes in this language and follows automatically if the conversation switches mid-meeting; Apple Speech uses it as its recognizer language; Parakeet always auto-detects. Applies immediately, even during a live meeting. Auto = detect from speech.">
+                        <Info size={12} className="shrink-0 text-[color:var(--cl-muted-foreground)] hover:text-[color:var(--cl-foreground)]" />
+                      </FieldHint>
+                      <ManagedChip keys={settings.managedKeys} k="asrLanguage" />
+                    </label>
+                    <select
+                      value={settings.asrLanguage}
+                      onChange={(e) => patch({ asrLanguage: e.target.value })}
+                      disabled={settings.managedKeys.includes('asrLanguage')}
+                      aria-label="Spoken language"
+                      className={'w-full ' + ctl}
+                    >
+                      <option value="auto">Auto · detect per phrase</option>
+                      {LANGUAGE_OPTIONS.map((l) => (
+                        <option key={l} value={l}>
+                          {l}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
                   {/* Engine broken in this build (native addon failed to load) — distinct from missing
                       packaged assets, which require a complete installer. */}
                   {parakeetAddonError != null && (
@@ -4852,7 +4925,9 @@ export function Settings({
               // Everything in About is centered: the story, the thanks, and the footer.
               <div className="flex flex-col gap-6 text-center">
                 {/* Microsoft sign-in is in Calendar, the license is in Profile, and permissions + usage
-                    moved to Privacy. About is just the story now. */}
+                    moved to Privacy. About is the story — plus the update check, which lives here so
+                    every build (including ones that can't auto-install) can still discover a release. */}
+                <UpdatesSection />
                 <Section title="Why “Métis”" desc="The name is the mission." icon={Sparkles}>
                   <div className="flex flex-col items-center gap-2 pb-1 text-center">
                     <MetisMark size={76} />

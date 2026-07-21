@@ -494,9 +494,21 @@ function formatTranscriptLine(l: TranscriptLine): string {
 }
 
 /** Render a full transcript body. saveMeeting and saveDraftTranscript share this exact shape so a
- *  promoted draft (see recoverOrphanDrafts) parses identically to a normally-saved meeting. */
+ *  promoted draft (see recoverOrphanDrafts) parses identically to a normally-saved meeting.
+ *
+ *  Mixed-language meetings get an italic `_[conversation switches to …]_` marker paragraph wherever the
+ *  tagged line language changes (TranscriptLine.lang — absent on untagged/older lines, so those never
+ *  emit markers). The marker deliberately does NOT match recall.ts's `**[HH:MM:SS] Label:**` line regex:
+ *  re-parsing a saved meeting simply skips it, same as any other non-line prose. */
 export function formatTranscript(lines: TranscriptLine[]): string {
-  return lines.map(formatTranscriptLine).join('\n\n')
+  const parts: string[] = []
+  let prevLang: string | undefined
+  for (const l of lines) {
+    if (l.lang && prevLang && l.lang !== prevLang) parts.push(`_[conversation switches to ${l.lang}]_`)
+    if (l.lang) prevLang = l.lang
+    parts.push(formatTranscriptLine(l))
+  }
+  return parts.join('\n\n')
 }
 
 /** Save any single Q&A / answer as a Dust-readable markdown note. Returns the file path. */

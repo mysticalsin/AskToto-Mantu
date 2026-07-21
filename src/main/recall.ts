@@ -2,6 +2,7 @@ import { readFile, readdir, stat, unlink, writeFile } from 'node:fs/promises'
 import { join, basename } from 'node:path'
 import { resolveMeetingsFolder, decodeSaved, isEncryptedFile, writeSaved, formatTranscript, DEBRIEF_HEADING } from './transcripts'
 import { getSettings } from './store'
+import { detectLanguage } from '@shared/lang-id'
 import type { MeetingSummary, RecallHit, RecallReadResult, Settings, TranscriptLine } from '@shared/ipc'
 
 // Independent meeting-history backend (own implementation, no third-party source). Reads the saved
@@ -230,6 +231,13 @@ export async function recallRead(file: string): Promise<RecallReadResult> {
         t
       }
       if (name) line.name = name.trim()
+      // Re-derive the spoken-language tag the same way the live path does (commitLine). The saved file
+      // carries language only as "_[conversation switches to …]_" marker PROSE, which this line regex
+      // rightly skips — without re-tagging, a Speaker Intelligence backfill rewrite (updateMeetingNames
+      // → formatTranscript over these reparsed lines) would silently strip every marker, and a
+      // retroactive "Generate recap" on a reopened meeting would see no switches at all.
+      const lang = detectLanguage(line.text).lang
+      if (lang) line.lang = lang
       lines.push(line)
     }
   }

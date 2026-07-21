@@ -31,6 +31,34 @@ describe('transcriptToText', () => {
     const lines = [{ speaker: 'unknown', text: 'Question from the recording.', t: 0 }] as TranscriptLine[]
     expect(transcriptToText(lines)).toBe('SPEAKER: Question from the recording.')
   })
+
+  it('emits a "[conversation switches to …]" marker where the tagged language changes', () => {
+    const lines: TranscriptLine[] = [
+      { speaker: 'them', text: 'Então vamos ver o contrato.', t: 0, lang: 'Portuguese' },
+      { speaker: 'you', text: 'Sim, perfeito.', t: 1, lang: 'Portuguese' },
+      { speaker: 'them', text: 'So, about the budget for next year.', t: 2, lang: 'English' },
+      { speaker: 'you', text: 'Yes, we can cover that now.', t: 3, lang: 'English' }
+    ]
+    expect(transcriptToText(lines)).toBe(
+      'THEM: Então vamos ver o contrato.\n' +
+        'YOU: Sim, perfeito.\n' +
+        '[conversation switches to English]\n' +
+        'THEM: So, about the budget for next year.\n' +
+        'YOU: Yes, we can cover that now.'
+    )
+  })
+
+  it('never emits markers for untagged lines (older meetings, unconfident detection) or before the first tag', () => {
+    const lines: TranscriptLine[] = [
+      { speaker: 'them', text: 'Hmm.', t: 0 }, // untagged
+      { speaker: 'you', text: 'Então vamos ver isso.', t: 1, lang: 'Portuguese' }, // first tag — no marker
+      { speaker: 'them', text: 'Ok.', t: 2 }, // untagged gap — carries no language change
+      { speaker: 'you', text: 'Vamos fechar assim.', t: 3, lang: 'Portuguese' } // same language — no marker
+    ]
+    expect(transcriptToText(lines)).toBe(
+      'THEM: Hmm.\nYOU: Então vamos ver isso.\nTHEM: Ok.\nYOU: Vamos fechar assim.'
+    )
+  })
 })
 
 describe('recapPersistAction', () => {

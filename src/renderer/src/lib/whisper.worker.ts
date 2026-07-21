@@ -1,6 +1,7 @@
 /// <reference lib="webworker" />
 import { pipeline, env } from '@huggingface/transformers'
 import { shouldUseBundledAsr } from './asr-offline'
+import { detectLanguage, LANGUAGE_NAMES } from '@shared/lang-id'
 
 // Model source + offline behavior.
 // Configured per-init based on whether bundled resources are present (reported by the main process).
@@ -28,6 +29,93 @@ let asr: any = null
 let loading = false
 let engine: 'webgpu' | 'wasm' | null = null
 const post = (m: unknown): void => (self as unknown as Worker).postMessage(m)
+
+// ── Language follow ─────────────────────────────────────────────────────────────────────────────
+// The user's spoken-language setting seeds which language we DECODE in, but meetings switch languages
+// mid-conversation (Portuguese call, English segment, back). A hard pin would transcribe the English
+// segment as Portuguese-shaped garbage; pure per-window auto-detect is exactly what made the compact
+// model hallucinate in the first place. So: adaptive pin with an escape hatch.
+//
+//   - activeLang: the language windows are currently decoded in (null = per-window auto-detect).
+//     Seeded from the init message's language ('auto' → null), applied per decode call, NOT at model
+//     load — a warm worker picks up a changed setting from the next init without reloading weights.
+//   - Probe: every PROBE_EVERY-th window decodes WITHOUT the pin, so a real mid-meeting language
+//     switch produces natural text in the new language at most ~3 windows (≈18s) late. Probing is how
+//     switches get noticed at all: a pinned decode of switched speech yields pinned-language-shaped
+//     text that language-ID can't flag.
+//   - Follow: text-side language ID (shared/lang-id.ts, deliberately conservative — null on doubt)
+//     runs on every decoded window. SWITCH_AFTER consecutive confident detections of the same OTHER
+//     language re-pin activeLang; while a switch is suspected (switchRun set) every window decodes
+//     un-pinned so confirmation doesn't wait for the next probe. In 'auto' mode the same machinery
+//     CONVERGES onto the conversation's language, giving pin-quality decoding without a setting.
+//
+// Every LANGUAGE_NAMES entry lowercased is a valid Whisper language token (lang-id.ts's contract).
+// Unknown init values (stale/managed garbage) safely mean 'auto' instead of throwing mid-meeting.
+const PROBE_EVERY = 4
+const SWITCH_AFTER = 2
+// A suspected switch gets this many windows (from first suspicion) to confirm; then it's abandoned and
+// decoding returns to the pin, with the periodic probe still watching. Bounds two failure modes: a
+// single null/ambiguous detection can no longer cancel a genuine switch mid-confirmation, and noisy
+// alternating detections (Spanish, German, Spanish…) can no longer hold the decoder un-pinned forever.
+// TUNING INVARIANTS (from the adversarial re-review's window-by-window trace): keep
+// PROBE_PATIENCE % PROBE_EVERY === 0 — a run always starts on a probe-aligned window, so this is what
+// makes an abandoned-but-genuine switch get re-caught by the VERY NEXT window (itself a probe) with
+// zero wasted pinned windows — and keep SWITCH_AFTER <= PROBE_PATIENCE or confirmation becomes
+// permanently unreachable (every run would age out before reaching the required count).
+const PROBE_PATIENCE = 4
+let userLanguage = 'auto'
+let activeLang: string | null = null
+let switchRun: { lang: string; count: number; age: number } | null = null
+let windowCount = 0
+
+/** Hard reset of the follow machine, re-seeded from the given setting value. */
+function resetLanguageFollow(next: string): void {
+  userLanguage = next
+  activeLang = (LANGUAGE_NAMES as readonly string[]).includes(next) ? next : null
+  switchRun = null
+  windowCount = 0
+}
+
+/** Delta update (mid-session setLanguage): only a CHANGED value re-seeds, so an unchanged setting
+ *  leaves an in-progress follow (converged pin, suspected switch) untouched. Session starts must use
+ *  the init message's `resetFollow` flag instead — module state survives on a warm worker, and without
+ *  the hard reset a new meeting would inherit the previous meeting's converged language (the
+ *  cross-session leak the 4-agent review demonstrated). */
+function applyInitLanguage(next: string): void {
+  if (next === userLanguage) return
+  resetLanguageFollow(next)
+}
+
+function followLanguage(text: string): void {
+  const detected = detectLanguage(text).lang
+  if (switchRun) {
+    switchRun.age += 1
+    if (detected && detected === switchRun.lang) {
+      switchRun.count += 1
+      if (switchRun.count >= SWITCH_AFTER) {
+        post({ type: 'log', message: `language follow: ${activeLang ?? 'auto'} → ${detected}` })
+        activeLang = detected
+        switchRun = null
+        return
+      }
+    } else if (detected && detected === activeLang) {
+      switchRun = null // the current pin re-confirmed — false alarm, back to pinned decoding
+      return
+    } else if (detected) {
+      // Different candidate than the one being confirmed: restart the count but keep the age budget —
+      // unstable detections must run the budget down, not extend it.
+      switchRun = { lang: detected, count: 1, age: switchRun.age }
+    }
+    // Null detections keep the run alive (a short utterance mid-switch must not cancel confirmation)
+    // but still consume budget via the age increment above.
+    if (switchRun && switchRun.age >= PROBE_PATIENCE) switchRun = null
+    return
+  }
+  if (!detected || detected === activeLang) return
+  switchRun = { lang: detected, count: 1, age: 1 }
+  // In 'auto' mode (activeLang null) this same run is the convergence path: SWITCH_AFTER confident
+  // detections of the conversation's language turn auto-decode into a quality-stabilizing pin.
+}
 
 async function hasWebGPU(): Promise<boolean> {
   try {
@@ -82,9 +170,24 @@ async function load(quality: 'best' | 'fast', allowWebGpu: boolean): Promise<voi
 }
 
 self.onmessage = async (e: MessageEvent): Promise<void> => {
-  const msg = e.data as { type: string; quality?: 'best' | 'fast'; audio?: Float32Array; speaker?: string; bundled?: boolean }
+  const msg = e.data as {
+    type: string
+    quality?: 'best' | 'fast'
+    audio?: Float32Array
+    speaker?: string
+    bundled?: boolean
+    language?: string
+    resetFollow?: boolean
+  }
 
   if (msg.type === 'init') {
+    // Update the language BEFORE the already-loaded early return: a warm (prewarmed or reused) worker
+    // must still honor the session's language even though it skips the model load below. Session starts
+    // set resetFollow so a NEW meeting never inherits the previous meeting's converged follow state
+    // (the same 'auto' value would otherwise no-op the delta path and leak activeLang across sessions);
+    // mid-session re-inits (setLanguage, engine fallback, network retry) omit it and take the delta path.
+    if (msg.resetFollow) resetLanguageFollow(typeof msg.language === 'string' && msg.language ? msg.language : 'auto')
+    else if (typeof msg.language === 'string' && msg.language) applyInitLanguage(msg.language)
     if (asr || loading) return
     loading = true
     const bundled = shouldUseBundledAsr(import.meta.env.PROD, msg.bundled)
@@ -149,14 +252,23 @@ self.onmessage = async (e: MessageEvent): Promise<void> => {
       return
     }
     try {
-      // No `language` set → Whisper auto-detects the spoken language per window (keeps full multilingual
-      // coverage). Live windows are short (≤6s, VAD-endpointed) and always fit Whisper's native 30s context,
-      // so we decode the whole clip in ONE pass: no `chunk_length_s` stitching and `return_timestamps:false`
-      // so the decoder never spends generation steps emitting <|t|> timestamp tokens we don't use. Both cut
-      // per-window decode latency with zero accuracy cost — chunking only ever mattered for long files we
-      // never produce here.
-      const out: any = await asr(msg.audio, { return_timestamps: false })
+      // Decode language comes from the language-follow machine (see its block comment above): pinned to
+      // activeLang (`language` + task 'transcribe', never 'translate') except on probe windows and while
+      // a switch is being confirmed, which decode with per-window auto-detect. Live windows are short
+      // (≤6s, VAD-endpointed) and always fit Whisper's native 30s context, so we decode the whole clip in
+      // ONE pass: no `chunk_length_s` stitching and `return_timestamps:false` so the decoder never spends
+      // generation steps emitting <|t|> timestamp tokens we don't use. Both cut per-window decode latency
+      // with zero accuracy cost — chunking only ever mattered for long files we never produce here.
+      windowCount += 1
+      const probing = switchRun !== null || (activeLang !== null && windowCount % PROBE_EVERY === 0)
+      const opts: { return_timestamps: boolean; language?: string; task?: string } = { return_timestamps: false }
+      if (activeLang && !probing) {
+        opts.language = activeLang.toLowerCase()
+        opts.task = 'transcribe'
+      }
+      const out: any = await asr(msg.audio, opts)
       const text = (Array.isArray(out) ? out.map((o) => o.text).join(' ') : out?.text || '').trim()
+      if (text) followLanguage(text)
       post({ type: 'text', text, speaker })
     } catch (err) {
       post({ type: 'error', message: err instanceof Error ? err.message : String(err), speaker })

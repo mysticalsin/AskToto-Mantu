@@ -31,6 +31,8 @@ import {
   type SignInResult,
   type CalendarTodayResult,
   type RecallReadResult,
+  type RecallExportPlainResult,
+  type UpdateCheckResult,
   type RecallBackfillSpeakersResult,
   type PlatformPermissions,
   type ShortcutFailure,
@@ -174,6 +176,11 @@ const api = {
   recallSearch: (q: string): Promise<RecallHit[]> => ipcRenderer.invoke(IPC.recallSearch, q),
   recallOpen: (file: string): Promise<string> => ipcRenderer.invoke(IPC.recallOpen, file),
   recallRead: (file: string): Promise<RecallReadResult> => ipcRenderer.invoke(IPC.recallRead, file),
+  // User-initiated decrypted markdown copy of ONE saved meeting (native save dialog in main). Exists so
+  // external tools (e.g. Claude local ingesting into the second brain) can read a meeting even when
+  // at-rest encryption is on.
+  recallExportPlain: (file: string): Promise<RecallExportPlainResult> =>
+    ipcRenderer.invoke(IPC.recallExportPlain, file),
   // title is shown in the native confirm dialog the main process pops up before deleting; optional.
   recallDelete: (file: string, title?: string): Promise<{ ok: boolean; error?: string }> =>
     ipcRenderer.invoke(IPC.recallDelete, file, title),
@@ -280,6 +287,8 @@ const api = {
   onUpdateReady: (cb: (d: { version?: string; notes?: string }) => void): Unsub => sub(IPC.updateDownloaded, cb),
   onUpdateProgress: (cb: (d: { percent?: number }) => void): Unsub => sub(IPC.updateProgress, cb),
   installUpdate: (): Promise<void> => ipcRenderer.invoke(IPC.updateInstall),
+  // Manual releases-feed check for Settings → About → Updates (works on every build, incl. unsigned mac).
+  checkForUpdate: (): Promise<UpdateCheckResult> => ipcRenderer.invoke(IPC.updateCheck),
 
   openMailDraft: (input: { subject: string; body: string }): Promise<{ truncated: boolean }> =>
     ipcRenderer.invoke(IPC.openMailDraft, input),
