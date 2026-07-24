@@ -85,7 +85,7 @@ async function verifyFile(directory, entry, label) {
   }
 }
 
-export async function verifyUpdateMetadata(metadataPath, expectedVersion) {
+export async function verifyUpdateMetadata(metadataPath, expectedVersion, artifactPrefix = 'Metis') {
   const absoluteMetadata = resolve(metadataPath)
   const metadataStat = requireRegularFile(absoluteMetadata)
   if (metadataStat.size <= 0) throw new Error(`Update metadata is empty: ${absoluteMetadata}`)
@@ -94,11 +94,13 @@ export async function verifyUpdateMetadata(metadataPath, expectedVersion) {
     throw new Error(`Update metadata version mismatch: expected ${expectedVersion}, got ${top.version || '<empty>'}`)
   }
   const metadataName = basename(absoluteMetadata)
+  // artifactPrefix defaults to full-Métis's "Metis"; Light builds pass "Metis-Light" so the expected
+  // top-level artifact matches electron-builder.light*.yml's Metis-Light-<version> naming.
   const expectedTopArtifact =
     metadataName === 'latest-mac.yml'
-      ? `Metis-${expectedVersion}.zip`
+      ? `${artifactPrefix}-${expectedVersion}.zip`
       : metadataName === 'latest.yml'
-        ? `Metis-Setup-${expectedVersion}.exe`
+        ? `${artifactPrefix}-Setup-${expectedVersion}.exe`
         : null
   if (!expectedTopArtifact) throw new Error(`Unsupported update metadata filename: ${metadataName}`)
   requirePlainArtifactName(top.path, `${metadataName} top-level path`)
@@ -120,13 +122,28 @@ export async function verifyUpdateMetadata(metadataPath, expectedVersion) {
 }
 
 async function main() {
-  const metadataFiles = process.argv.slice(2)
+  let artifactPrefix = 'Metis'
+  const metadataFiles = []
+  for (const argument of process.argv.slice(2)) {
+    if (argument.startsWith('--artifact-prefix=')) {
+      artifactPrefix = argument.slice('--artifact-prefix='.length)
+      if (!artifactPrefix || /[\\/]/.test(artifactPrefix)) {
+        throw new Error(`Artifact prefix must be a non-empty filename component, got: ${argument}`)
+      }
+    } else if (argument.startsWith('--')) {
+      throw new Error(`Unknown option: ${argument}`)
+    } else {
+      metadataFiles.push(argument)
+    }
+  }
   if (!metadataFiles.length) {
-    throw new Error('Usage: node scripts/check-update-metadata.mjs <latest-mac.yml|latest.yml> [...]')
+    throw new Error(
+      'Usage: node scripts/check-update-metadata.mjs [--artifact-prefix=<prefix>] <latest-mac.yml|latest.yml> [...]'
+    )
   }
   const version = JSON.parse(readFileSync(join(REPO_ROOT, 'package.json'), 'utf8')).version
   for (const metadata of metadataFiles) {
-    const result = await verifyUpdateMetadata(metadata, version)
+    const result = await verifyUpdateMetadata(metadata, version, artifactPrefix)
     console.log(
       `[check:update-metadata] OK ${basename(metadata)} — ${result.artifact} and ${result.files.length} file hash(es)`
     )

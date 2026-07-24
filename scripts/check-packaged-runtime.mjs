@@ -518,8 +518,11 @@ if (target === 'mac') {
   const contentsDir = dirname(resourcesRoot)
   const appRoot = dirname(contentsDir)
   const macOsDir = join(contentsDir, 'MacOS')
-  requireExactInventory(macOsDir, ['Metis'], 'macOS executable directory')
-  verifyMachOArm64(join(macOsDir, 'Metis'))
+  // Métis Light's productName is "Metis Light", so its executable lives at Contents/MacOS/Metis Light.
+  // Accept the same --executable= override the win branch uses; default to full-Métis's "Metis".
+  const macExecutable = executableName || 'Metis'
+  requireExactInventory(macOsDir, [macExecutable], 'macOS executable directory')
+  verifyMachOArm64(join(macOsDir, macExecutable))
   if (postSign) {
     if (process.platform !== 'darwin') throw new Error('macOS post-sign verification must run on macOS')
     execFileSync('codesign', ['--verify', '--deep', '--strict', '--verbose=2', appRoot], { stdio: 'inherit' })
