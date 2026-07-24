@@ -45,4 +45,17 @@ describe('verifyUpdateMetadata', () => {
     const { metadata } = fixture({ path: '../Metis-1.0.2.zip' })
     await expect(verifyUpdateMetadata(metadata, '1.0.2')).rejects.toThrow('plain artifact filename')
   })
+
+  it('accepts a Light build artifact when the matching artifact prefix is supplied', async () => {
+    const { metadata } = fixture({ path: 'Metis-Light-1.0.2.zip' })
+    await expect(verifyUpdateMetadata(metadata, '1.0.2', 'Metis-Light')).resolves.toMatchObject({
+      version: '1.0.2',
+      artifact: 'Metis-Light-1.0.2.zip'
+    })
+  })
+
+  it('rejects a Light artifact name under the default Metis prefix', async () => {
+    const { metadata } = fixture({ path: 'Metis-Light-1.0.2.zip' })
+    await expect(verifyUpdateMetadata(metadata, '1.0.2')).rejects.toThrow('path mismatch')
+  })
 })
