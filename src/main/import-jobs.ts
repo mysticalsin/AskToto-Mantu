@@ -41,6 +41,10 @@ export interface ImportJob {
   file?: string
   error?: string
   recapError?: string
+  /** Persona (settings.mode) captured at import start. The recap step runs later, queue-ordered — without
+   * this pin a persona switch mid-queue would shape an unrelated import's summary. Absent on jobs
+   * checkpointed by older builds; consumers fall back to the live mode. */
+  mode?: string
   createdAt: number
   updatedAt: number
 }
@@ -67,6 +71,8 @@ export interface ImportJobManagerDeps {
   onChange?: (job: ImportJob) => void
   /** Resolve only after the owned decoder has stopped, preventing overlapping FIFO jobs. */
   onCancel?: (jobId: string) => void | Promise<void>
+  /** Current persona (settings.mode), snapshotted into the job at start() — see ImportJob.mode. */
+  personaMode?: () => string
   now?: () => number
   newId?: () => string
 }
@@ -114,6 +120,7 @@ export class ImportJobManager {
       cursor: 0,
       totalChunks: 0,
       lines: [],
+      ...(this.deps.personaMode ? { mode: this.deps.personaMode() } : {}),
       createdAt: now,
       updatedAt: now
     }

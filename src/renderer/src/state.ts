@@ -452,10 +452,13 @@ export function useAsk(): {
 
   // Replay the last request EXACTLY (same mode + screenshot + prompt) so retrying a vision answer re-sends
   // the image instead of silently re-asking text-only and getting a blind "I can't see your screen" answer.
+  // One deliberate exception to "exactly": main's fresh-question boundary (IPC.askStart) re-evaluates at
+  // replay time, so a replay outside a meeting with follow-up memory off (the default) — or past the idle
+  // window — answers fresh, same as any other plain ask. Contamination-free beats replay-continuity.
   const retry = useCallback((): string => (lastReqRef.current ? run(lastReqRef.current) : ''), [run])
 
-  // "Go deeper": replay the last request (mode + image + transcript + history preserved exactly, like retry)
-  // with the depth flag set, so the model expands its usually-brief answer.
+  // "Go deeper": replay the last request (mode + image + transcript + history — subject to the same
+  // fresh-question boundary as retry above) with the depth flag set, so the model expands its answer.
   const deeper = useCallback(
     (): string => (lastReqRef.current ? run({ ...lastReqRef.current, depth: 'deeper' }) : ''),
     [run]

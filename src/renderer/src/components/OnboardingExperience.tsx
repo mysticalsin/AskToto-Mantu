@@ -116,6 +116,22 @@ export function OnboardingExperience({ onDone, onSkip }: OnboardingExperiencePro
       const screenGranted = isWindows || perms?.screenRecording === 'granted'
       screenGrantedRef.current = screenGranted
       set('screen', screenGranted ? 'ready' : 'action', isWindows ? 'available' : screenGranted ? 'granted' : 'needs permission')
+      // Proactively trigger the real OS consent flow the moment setup lands, instead of waiting for a
+      // button press: macOS pops the mic prompt and registers Métis in the Screen Recording TCC list
+      // (the pane doesn't even list an app until it has probed once); Windows resolves mic consent via a
+      // one-shot getUserMedia probe (there is no main-process ask API — requestPermissionsUpfront is a
+      // darwin no-op, which is why the old mic button never did anything on Windows). Fire-and-forget:
+      // the live poll below reflects the outcome, and macOS never re-prompts after an explicit Deny, so
+      // repeats are safe.
+      if (isWindows && perms?.microphone !== 'granted') {
+        void navigator.mediaDevices
+          .getUserMedia({ audio: true })
+          .then((stream) => stream.getTracks().forEach((t) => t.stop()))
+          .catch(() => {})
+      }
+      if (!isWindows && perms && (perms.microphone !== 'granted' || perms.screenRecording !== 'granted')) {
+        void window.toto.requestPermissionsUpfront().catch(() => null)
+      }
     })()
     return () => {
       live = false
@@ -161,6 +177,15 @@ export function OnboardingExperience({ onDone, onSkip }: OnboardingExperiencePro
   }, [scene])
 
   const requestMic = async (): Promise<void> => {
+    // Windows: main's requestPermissionsUpfront is a darwin no-op — the only thing that resolves mic
+    // consent there is an actual getUserMedia call from the renderer (same probe the legacy onboarding
+    // used). A rejection just means blocked; the status poll + fix link handle that.
+    if (isWindows) {
+      await navigator.mediaDevices
+        .getUserMedia({ audio: true })
+        .then((stream) => stream.getTracks().forEach((t) => t.stop()))
+        .catch(() => {})
+    }
     const perms = await window.toto.requestPermissionsUpfront().catch(() => null)
     const granted = perms?.microphone === 'granted'
     setRows((rs) => rs.map((r) => (r.key === 'mic' ? { ...r, state: granted ? 'ready' : 'action', detail: granted ? 'granted' : 'needs permission' } : r)))

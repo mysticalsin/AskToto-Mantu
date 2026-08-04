@@ -49,6 +49,24 @@ const source = {
 }
 
 describe('ImportJobManager', () => {
+  it('pins the persona active at start() into the job so a mid-queue persona switch cannot reshape the recap', async () => {
+    let liveMode = 'sales'
+    const { manager, store } = createManager({ personaMode: () => liveMode })
+
+    const job = await manager.start(source)
+    expect(job.mode).toBe('sales')
+
+    liveMode = 'general' // user switches persona while the import sits in the queue
+    expect(manager.get('job-1')?.mode).toBe('sales')
+    expect(store.jobs.get('job-1')?.mode).toBe('sales') // survives a restart via the checkpoint
+  })
+
+  it('leaves the persona pin absent when no personaMode dep is wired (older-build checkpoints fall back to live mode)', async () => {
+    const { manager } = createManager()
+    const job = await manager.start(source)
+    expect(job.mode).toBeUndefined()
+  })
+
   it('starts one main-owned decode job and checkpoints each recognized chunk as an unlabeled speaker', async () => {
     const { manager, store, decode, transcribe } = createManager()
 

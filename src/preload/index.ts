@@ -141,6 +141,9 @@ const api = {
 
   ask: (req: AskStart): Promise<void> => ipcRenderer.invoke(IPC.askStart, req),
   cancel: (id: string): Promise<void> => ipcRenderer.invoke(IPC.askCancel, id),
+  // "New chat": resets main-owned conversation state (server-side Dust conversation + follow-up-memory
+  // idle clock). Callers clear the renderer-side history refs themselves.
+  resetAskContext: (): Promise<void> => ipcRenderer.invoke(IPC.askResetContext),
   capture: (): Promise<CaptureResult> => ipcRenderer.invoke(IPC.captureScreen),
   prewarmCapture: (): Promise<void> => ipcRenderer.invoke(IPC.prewarmCapture),
   // Fast-path for a screen-ask: ask main whether it already has a fresh, on-device description of the
