@@ -53,6 +53,7 @@ import {
   LocalPrewarmPayloadSchema,
   ProviderIdSchema,
   DEFAULT_SHORTCUTS,
+  ASK_MEMORY_IDLE_MS,
   type HotkeyAction,
   type ShortcutFailure,
   type PublicSettings,
@@ -646,6 +647,9 @@ async function runImportedRecap(job: ImportJob): Promise<string | undefined> {
   if (!candidates.length) return undefined
 
   const transcript = settings.redactSensitive ? redactSecrets(importedTranscriptText(job.lines)) : importedTranscriptText(job.lines)
+  // Persona pinned at import start (ImportJob.mode) — NOT the live settings.mode, which may have been
+  // switched while this job sat in the queue. Older checkpoints have no pin; they keep the live mode.
+  const personaMode = job.mode || settings.mode
   let lastError: Error | null = null
   for (const provider of candidates) {
     const def = PROVIDERS[provider]
@@ -683,7 +687,7 @@ async function runImportedRecap(job: ImportJob): Promise<string | undefined> {
           idleMs: 120_000,
           freshConversation: true,
           system:
-            buildSystem(req, settings.mode, settings.profile, settings.modePrompts, settings.contextDocs[settings.mode] || [], settings.outputLanguage, settings.summaryLanguage, settings.systemPrompt) +
+            buildSystem(req, personaMode, settings.profile, settings.modePrompts, settings.contextDocs[personaMode] || [], settings.outputLanguage, settings.summaryLanguage, settings.systemPrompt) +
             '\n\nThis is an imported recording with no speaker diarization. Do not attribute statements to YOU or THEM.',
           req,
           handlers: {
@@ -723,6 +727,7 @@ function initializeImportJobs(): void {
     },
     onChange: publishImportJob,
     onCancel: closeImportDecoder,
+    personaMode: () => getSettings().mode,
     newId: () => randomBytes(16).toString('hex')
   })
 }
@@ -1857,6 +1862,15 @@ function registerIpc(): void {
     }
     const next = setSettings(p)
     auditLog('settings.changed', { keys: Object.keys(p) })
+    // Flipping follow-up memory is itself a conversation boundary. Without this, turning it ON would
+    // retroactively inherit the Q&A recorded — and the Dust conversation created — while the user was
+    // being told each question "starts completely fresh" (review finding, 2026-08-04). Zeroing the idle
+    // clock makes the gate's staleness check trip on the very next plain ask, clearing both carriers;
+    // the renderer clears its own history refs on the same transition (App.tsx effect).
+    if ('askFollowUpMemory' in p && next.askFollowUpMemory !== cur.askFollowUpMemory) {
+      resetDustConversation()
+      lastPlainAskAt = 0
+    }
     // Start/stop background screen pre-analysis to match the new settings (backgroundScreenContext toggle,
     // or Local AI being enabled/disabled/provisioned) — takes effect immediately, no relaunch.
     refreshScreenPreprocess()
@@ -2579,6 +2593,14 @@ function registerIpc(): void {
   })
 
   // --- Ask / LLM streaming ---
+  // Fresh-question boundary state (shared with IPC.listeningState / IPC.askResetContext below). A plain
+  // typed/screen question OUTSIDE a live meeting must not inherit the previous question's Q&A: prior
+  // answers rode along in TWO independent carriers — the renderer's history array (replayed verbatim into
+  // the model's message list) and the server-side Dust conversation (reused for up to 2h regardless of
+  // topic) — and clearing only one leaks through the other. Enforced at main's single ask choke point so
+  // every renderer surface (typed ask, screen ask, fact-check) gets the same rule.
+  let listeningActive = false
+  let lastPlainAskAt = 0 // 0 = no live follow-up window; the next plain ask always starts clean
   ipcMain.handle(IPC.askStart, (e, raw) => {
     assertMainWindow(e)
     const id =
@@ -2595,6 +2617,23 @@ function registerIpc(): void {
     try {
     const req = AskStartSchema.parse(raw)
     const s = getSettings()
+    // Fresh-question boundary (see the state block above): a plain interactive ask outside a live meeting
+    // starts clean unless the user opted into follow-up memory — and even then the memory expires after
+    // ASK_MEMORY_IDLE_MS of inactivity. Pinned/cascaded requests (agentOverride / providerOverride —
+    // Spotlight Ref, follow-up drafting, recap cascades) and mid-meeting asks keep their deliberate
+    // continuity; recap/suggest/summary modes never carried ad-hoc chat history to begin with.
+    if (
+      (req.mode === 'answer' || req.mode === 'vision') &&
+      !req.agentOverride &&
+      !req.providerOverride &&
+      !listeningActive
+    ) {
+      if (!s.askFollowUpMemory || Date.now() - lastPlainAskAt > ASK_MEMORY_IDLE_MS) {
+        req.history = []
+        resetDustConversation()
+      }
+      lastPlainAskAt = Date.now()
+    }
     // Local-first redaction (brief section I): strip high-confidence secrets from the captured transcript
     // before it leaves the device for a cloud model. Only the auto-captured transcript — never the user's
     // own typed prompt, and never the locally-saved meeting file (which keeps the verbatim original).
@@ -2954,6 +2993,16 @@ function registerIpc(): void {
     assertMainWindow(e)
     streams.get(id)?.abort()
     streams.delete(id)
+  })
+
+  // Explicit "New chat" from the renderer (History screen button / Cmd+Shift+R). The renderer clears its
+  // own history refs; this clears the main-owned carriers — the server-side Dust conversation (previously
+  // NOT reset here, so "New chat" was a no-op against Dust's accumulated thread) and the follow-up-memory
+  // idle clock.
+  ipcMain.handle(IPC.askResetContext, (e) => {
+    assertMainWindow(e)
+    resetDustConversation()
+    lastPlainAskAt = 0
   })
 
   // --- Audio capture arming ---
@@ -3538,6 +3587,7 @@ function registerIpc(): void {
   // --- Listening state (tray icon + Dust conversation reset + power-save block) ---
   ipcMain.handle(IPC.listeningState, (e, on: unknown) => {
     assertMainWindow(e)
+    listeningActive = !!on // fresh-question boundary (askStart) is suspended while a meeting is live
     setTrayRecording(!!on)
     setRecordingPowerSaveBlock(!!on)
     // A new meeting starting is the one clean boundary for Dust conversation continuity — everything

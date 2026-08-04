@@ -26,7 +26,7 @@ import { useWindowDrag } from './lib/window-drag'
 import { useListen, playListenChime } from './lib/listen'
 import { transcriptToText, recapPersistAction } from './lib/transcript'
 import { playCue, playClick, setSoundsEnabled } from './lib/sound'
-import { DEFAULT_SHORTCUTS } from '@shared/ipc'
+import { DEFAULT_SHORTCUTS, ASK_MEMORY_IDLE_MS } from '@shared/ipc'
 import type { HotkeyAction, TranscriptLine, ConversationMode, ChatTurn, LicenseGateVerdict } from '@shared/ipc'
 import { HOTKEY_ACTIONS } from '@shared/ipc'
 import { useTapControl } from './lib/tap/tap-control'
@@ -371,6 +371,10 @@ export function App(): JSX.Element {
   const lastSuggestRef = useRef(0)
   const historyRef = useRef<ChatTurn[]>([]) // multi-turn memory for plain Ask follow-ups
   const copilotHistoryRef = useRef<ChatTurn[]>([]) // multi-turn memory for Copilot follow-ups during Listen
+  // When the last Ask turn completed — the renderer half of main's fresh-question staleness check. The
+  // screen-ask fast path (submit's priorAnswerOk branch) relies on history carrying the prior screen
+  // description; once main would wipe that history as stale, the fast path must re-capture instead.
+  const lastTurnAtRef = useRef(0)
   const pendingUserRef = useRef<{ id: string; q: string } | null>(null)
   const meetingStartRef = useRef(0)
   const savedRef = useRef('')
@@ -602,7 +606,18 @@ export function App(): JSX.Element {
       { role: 'assistant', content: a.text }
     ]
     historyRef.current = next.slice(-12)
+    lastTurnAtRef.current = Date.now()
   }, [ask.answer])
+
+  // Flipping follow-up memory is itself a conversation boundary: Q&A recorded while the toggle was OFF
+  // (this effect's refs accumulate regardless of the setting) must never surface once it's turned ON.
+  // Main resets its own carriers on the same transition (IPC.settingsSet); this clears the renderer's.
+  // Also runs on mount/settings-load, where the refs are empty — harmless.
+  useEffect(() => {
+    historyRef.current = []
+    copilotHistoryRef.current = []
+    lastTurnAtRef.current = 0
+  }, [settings?.askFollowUpMemory])
 
   // record completed Copilot suggestions into memory (for in-conversation follow-ups)
   useEffect(() => {
@@ -993,7 +1008,14 @@ export function App(): JSX.Element {
       // configured provider can read images) instead — without it, a fully vision-incapable setup (e.g.
       // claude-cli/codex-cli/Grok only, all vision:false) hard-errored here instead of falling through to
       // the plain-text else branch below.
-      const priorAnswerOk = !!ask.answer?.text && !ask.answer.error
+      // The stay-fast branch below answers a typed follow-up from HISTORY (no fresh capture) — the prior
+      // turn's text describes what was on screen. That premise only holds while follow-up memory is ON
+      // and main's fresh-question gate would still let the history through (same idle window). With
+      // memory off (the default) or the window expired, main wipes the history, which used to leave this
+      // branch answering with zero context (review blocker, 2026-08-04) — re-capture instead.
+      const memoryLive =
+        (settings?.askFollowUpMemory ?? false) && Date.now() - lastTurnAtRef.current <= ASK_MEMORY_IDLE_MS
+      const priorAnswerOk = !!ask.answer?.text && !ask.answer.error && memoryLive
       if (!q) {
         // Blank Enter always means "look at my screen right now" — a deliberate fresh look, regardless
         // of whether an answer is already showing.
@@ -1036,6 +1058,7 @@ export function App(): JSX.Element {
     listen.text,
     settings?.screenAsk,
     settings?.visionAvailable,
+    settings?.askFollowUpMemory,
     askScreen,
     assist,
     requireProvider
@@ -1414,6 +1437,12 @@ export function App(): JSX.Element {
     followup.clear() // a new meeting is about to be viewed — a stale draft from whatever was reviewed
     // before must never carry over and render/send as this meeting's follow-up (see followup's own
     // declaration comment above).
+    // A new meeting is the natural conversation boundary (main resets the Dust conversation on
+    // listening:on for the same reason) — ad-hoc Q&A from before the meeting must not ride into
+    // mid-meeting asks/fact-checks via these refs.
+    historyRef.current = []
+    copilotHistoryRef.current = []
+    pendingUserRef.current = null
     // A new meeting always starts the LIVE transcript panel from the persisted default — this only seeds
     // the ephemeral per-session state (transcriptShown), it never writes back to settings.showLiveTranscript
     // (see that state's own comment for why: it's a saved preference, not per-session state).
@@ -1637,6 +1666,10 @@ export function App(): JSX.Element {
     historyRef.current = []
     copilotHistoryRef.current = []
     pendingUserRef.current = null
+    // Clearing the local refs above is only half of "New chat": the Dust provider's conversation lives
+    // server-side (main/llm/dust.ts) and used to survive this reset, silently carrying the old thread
+    // into the next question. Best-effort — a failed IPC just leaves the old behavior.
+    void window.toto.resetAskContext().catch(() => {})
     setInput('')
     setCaptureError(null)
     setPastMeeting(null) // a hotkey reset from a past-meeting Review must not poison the next live recap

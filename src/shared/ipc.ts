@@ -70,6 +70,10 @@ export const IPC = {
   appleSpeechFeed: 'apple-speech:feed',
   askStart: 'ask:start',
   askCancel: 'ask:cancel',
+  // Explicit "new chat" boundary: clears the main-owned carriers of cross-question state (the server-side
+  // Dust conversation + the follow-up-memory idle clock). The renderer clears its own history refs; without
+  // this channel that clear was a no-op for Dust users (the contamination lived server-side).
+  askResetContext: 'ask:resetContext',
   streamDelta: 'stream:delta',
   streamDone: 'stream:done',
   streamError: 'stream:error',
@@ -509,6 +513,11 @@ export const RecapExportSchema = z.object({
 })
 export type RecapExport = z.infer<typeof RecapExportSchema>
 
+/** Opted-in follow-up memory expires after this much ask inactivity. Shared so the renderer's screen-ask
+ *  fast path (which relies on history carrying the prior screen description) and main's fresh-question
+ *  gate (which wipes stale history) can never disagree about what "still fresh" means. */
+export const ASK_MEMORY_IDLE_MS = 10 * 60 * 1000
+
 export const ChatTurnSchema = z.object({
   role: z.enum(['user', 'assistant']),
   // Bounded for defense-in-depth against a hostile/buggy renderer — same convention as brainContext below.
@@ -639,6 +648,11 @@ export const BaseSettingsSchema = z.object({
   providerModelsSpotlightRef: z.record(z.string(), z.string()).default({}),
   // Routing policy: 'auto' = Haiku basic / Sonnet heavier / Opus coding+deep; 'always' = always Opus; 'never' = always Haiku.
   thinkingMode: z.enum(['auto', 'always', 'never']).default('auto'),
+  // Carry recent Q&A into the next typed/screen question OUTSIDE a live meeting. Off by default: each
+  // fresh question answers on its own, with no contamination from the previous one (main enforces this at
+  // the ask choke point AND resets the server-side Dust conversation in the same breath — see IPC.askStart
+  // in main/index.ts). Mid-meeting continuity (Copilot, fact-check during Listen) is unaffected either way.
+  askFollowUpMemory: z.boolean().default(false),
   // Dust provider config (workspace id + region base; the agent sId lives in providerModels.dust)
   dustWorkspaceId: z.string().default(''),
   dustBaseUrl: z
@@ -994,6 +1008,7 @@ export const DEFAULT_SETTINGS: Settings = {
   providerModelsDeep: {},
   providerModelsSpotlightRef: DUST_SPOTLIGHT_REF_AGENT_ID ? { dust: DUST_SPOTLIGHT_REF_AGENT_ID } : {},
   thinkingMode: 'auto',
+  askFollowUpMemory: false,
   customBaseUrl: '',
   dustWorkspaceId: '',
   dustBaseUrl: 'https://dust.tt',

@@ -4703,6 +4703,19 @@ export function Settings({
                   />
                 </Section>
                 <Section
+                  title="Conversation memory"
+                  desc="Whether a new question you type remembers the previous questions and answers."
+                  icon={MessageSquare}
+                >
+                  <ToggleRow
+                    label="Carry context into follow-up questions"
+                    desc="When on, the next question can refer back to the last few answers (expires after 10 idle minutes). When off (default), every question outside a meeting starts completely fresh — nothing from the previous question leaks into the next answer. During a live meeting, Copilot always keeps the meeting's context either way."
+                    on={settings.askFollowUpMemory}
+                    onChange={(v) => patch({ askFollowUpMemory: v })}
+                    disabled={settings.managedKeys.includes('askFollowUpMemory')}
+                  />
+                </Section>
+                <Section
                   title="Recording consent"
                   desc="This reminder is shown to YOU, the operator. It does not notify or ask the other participants. Métis has no way to show anything to the other people on the call; getting their consent is on you, by whatever means your company policy or local law requires (verbal notice, a calendar invite disclosure, etc.)."
                   icon={ShieldCheck}
@@ -6121,7 +6134,13 @@ function PermissionsSection(): JSX.Element {
         // which never reports a true Deny, fixLabel unlocks the link instead so there's still a way back
         // to Settings for a not-yet-granted mic or a screen-capture prompt the user dismissed.
         const denied = r.status === 'denied'
-        const showFix = denied || (isWin && r.fixLabel)
+        // macOS 'not-determined'/'unknown' used to render NO control at all — a user who skipped
+        // onboarding had no in-app path to trigger the mic prompt or register Métis with TCC (Screen
+        // Recording's pane doesn't even list an app until it has probed once). Requesting is safe:
+        // askForMediaAccess never re-prompts after an explicit Deny, and the screen probe is a 1×1
+        // registration capture.
+        const notYetAsked = !isWin && (r.status === 'not-determined' || r.status === 'unknown')
+        const showFix = denied || notYetAsked || (isWin && r.fixLabel)
         const showRestart = r.kind === 'screenRecording' && needsRestart
         return (
           <div key={r.label} className="cl-card flex items-start gap-2 px-2.5 py-2">
@@ -6152,10 +6171,14 @@ function PermissionsSection(): JSX.Element {
                 showFix && (
                   <button
                     type="button"
-                    onClick={() => void window.toto.openPermissionSettings(r.kind)}
+                    onClick={() =>
+                      void (notYetAsked
+                        ? window.toto.requestPermissionsUpfront().catch(() => null)
+                        : window.toto.openPermissionSettings(r.kind))
+                    }
                     className="no-drag cl-focus mt-0.5 text-[11px] font-medium text-[color:var(--cl-primary)] hover:underline"
                   >
-                    {r.fixLabel ?? 'Open System Settings'}
+                    {notYetAsked ? 'Request permission' : (r.fixLabel ?? 'Open System Settings')}
                   </button>
                 )
               )}
