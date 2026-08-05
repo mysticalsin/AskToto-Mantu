@@ -20,9 +20,19 @@ on:
 
 jobs:
   quality:
-    name: Quality checks
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # Matrix over both host platforms is LOAD-BEARING. This job was ubuntu-only for the app's whole
+    # history, so every Windows-gated test was a silent false-pass: nothing ever executed the win32
+    # branches of the suite, and three POSIX-only assertions in check-ffmpeg-sidecar.test.ts sat broken
+    # on main undetected because the only Windows job (build-windows) packages without running tests.
+    # A Windows runner here is the gate that keeps win32 test breakage from reaching main again.
+    name: Quality checks (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    # Windows runners are consistently slower at npm ci + the Electron build than ubuntu.
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
