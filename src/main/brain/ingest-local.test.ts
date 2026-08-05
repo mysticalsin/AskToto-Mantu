@@ -6,7 +6,7 @@ import { app } from 'electron'
 import { PROVIDER_IDS } from '@shared/providers'
 import type { StreamHandlers, StreamOptions, StreamHandle } from '../llm/shared'
 import { clearApiKey, getSettings, setApiKey, setSettings } from '../store'
-import { brainBackfillProgress, enqueueIngest, startBackfill } from './ingest'
+import { brainBackfillProgress, enqueueIngest, startBackfill, whenIndexWritesSettle } from './ingest'
 import { readIndex, readMeetingExtraction } from './store'
 
 vi.mock('electron')
@@ -37,28 +37,15 @@ describe('automatic brain ingest with Métis Local', () => {
       return join(userData, name)
     })
 
-    // Make the test explicitly local-only. A shell API key must never make the cloud path win here.
-    const envVars: Partial<Record<(typeof PROVIDER_IDS)[number], string>> = {
-      anthropic: 'ANTHROPIC_API_KEY',
-      openai: 'OPENAI_API_KEY',
-      nvidia: 'NVIDIA_API_KEY',
-      deepseek: 'DEEPSEEK_API_KEY',
-      qwen: 'DASHSCOPE_API_KEY',
-      minimax: 'MINIMAX_API_KEY',
-      kimi: 'MOONSHOT_API_KEY',
-      openrouter: 'OPENROUTER_API_KEY',
-      groq: 'GROQ_API_KEY',
-      together: 'TOGETHER_API_KEY',
-      fireworks: 'FIREWORKS_API_KEY',
-      mistral: 'MISTRAL_API_KEY',
-      dust: 'DUST_API_KEY',
-      gemini: 'GEMINI_API_KEY',
-      custom: 'ASKTOTO_CUSTOM_API_KEY'
-    }
-    for (const provider of PROVIDER_IDS) {
-      clearApiKey(provider)
-      const envVar = envVars[provider]
-      if (envVar) vi.stubEnv(envVar, '')
+    // Make the test explicitly local-only. getApiKey() short-circuits on a provider's env var BEFORE it
+    // reads the temp profile, so a developer's real shell key would make the cloud path win here. Sweep
+    // by SUFFIX rather than a hand-copied provider->env-var map: that map drifts silently (this one still
+    // said MOONSHOT_API_KEY long after store.ts moved kimi to KIMI_API_KEY, and never listed grok's
+    // XAI_API_KEY at all), and the drift only shows up as a confusing failure on a machine that happens
+    // to export the missing name. Every name in store.ts's ENV_VAR map ends in `_API_KEY`.
+    for (const provider of PROVIDER_IDS) clearApiKey(provider)
+    for (const name of Object.keys(process.env)) {
+      if (name.endsWith('_API_KEY')) vi.stubEnv(name, undefined)
     }
 
     setSettings({
@@ -79,7 +66,12 @@ describe('automatic brain ingest with Métis Local', () => {
     localBaseReadyMock.mockReturnValue(true)
   })
 
-  afterEach(() => {
+  afterEach(async () => {
+    // running=false only means the queue drained; the last job's index.json record is still on the
+    // serialized write lane. Removing the profile under that in-flight tmp+rename both raises an
+    // unhandled rejection and lets the stale write land during the NEXT test, where startBackfill()
+    // then reports queued:0 because the index it reads is not the one this test just seeded.
+    await whenIndexWritesSettle()
     rmSync(userData, { recursive: true, force: true })
     rmSync(meetingsFolder, { recursive: true, force: true })
     vi.unstubAllEnvs()
