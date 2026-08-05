@@ -20,6 +20,7 @@
  */
 import { spawn, type ChildProcess } from 'node:child_process'
 import { macWatcherSpawnSpec } from './mac-helper'
+import { WINDOWS_POWERSHELL } from './win-security'
 
 export interface ForegroundInfo {
   /** Windows: Win32 HWND as a decimal string — stable per top-level window for its lifetime.
@@ -94,6 +95,27 @@ while ($true) {
 }
 `.trim()
 
+/**
+ * The Windows producer's spawn spec — mirrors macWatcherSpawnSpec() for the other platform. Exported so
+ * a unit test can assert the command without spawning a real powershell. The command is the pinned
+ * absolute System32 path, never a bare `powershell.exe`: Windows' CreateProcess search order consults the
+ * current working directory before PATH, so a bare name lets an attacker-planted binary in an
+ * attacker-writable cwd run instead (see win-security.ts).
+ */
+export function winWatcherSpawnSpec(): { command: string; args: string[] } {
+  return {
+    command: WINDOWS_POWERSHELL,
+    args: [
+      '-NoProfile',
+      '-NonInteractive',
+      '-ExecutionPolicy',
+      'Bypass',
+      '-EncodedCommand',
+      Buffer.from(WATCHER_PS, 'utf16le').toString('base64')
+    ]
+  }
+}
+
 interface WatcherOpts {
   /** Injected for tests / non-standard platforms. Defaults to process.platform. */
   platform?: NodeJS.Platform
@@ -124,17 +146,7 @@ export function startForegroundWatcher(
   // never pre-describes event-driven on that platform (mac additionally requires the bundled helper).
   let spawnSpec: { command: string; args: string[] } | null = null
   if (platform === 'win32') {
-    spawnSpec = {
-      command: 'powershell.exe',
-      args: [
-        '-NoProfile',
-        '-NonInteractive',
-        '-ExecutionPolicy',
-        'Bypass',
-        '-EncodedCommand',
-        Buffer.from(WATCHER_PS, 'utf16le').toString('base64')
-      ]
-    }
+    spawnSpec = winWatcherSpawnSpec()
   } else if (platform === 'darwin') {
     spawnSpec = macWatcherSpawnSpec()
   }

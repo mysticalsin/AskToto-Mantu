@@ -27,7 +27,10 @@ import log from 'electron-log'
 // and here that would subvert the very ACL check that decides whether to trust machine policy. An
 // absolute path removes cwd/PATH from the resolution entirely.
 const SYS32 = join(process.env.SystemRoot || process.env.windir || 'C:\\Windows', 'System32')
-const POWERSHELL = join(SYS32, 'WindowsPowerShell', 'v1.0', 'powershell.exe')
+/** The ONE name any main-process module may use for powershell. Exported (rather than each caller
+ *  re-deriving or, worse, spelling a bare 'powershell.exe') so the invariant above holds repo-wide:
+ *  foreground-watcher.ts and dust-secret-store.ts spawn this exact pinned binary. */
+export const WINDOWS_POWERSHELL = join(SYS32, 'WindowsPowerShell', 'v1.0', 'powershell.exe')
 const ICACLS = join(SYS32, 'icacls.exe')
 
 /** Single source of truth for the machine-wide org-policy managed-config path (was duplicated across
@@ -97,7 +100,7 @@ try {
   $out | ConvertTo-Json -Compress -Depth 5
 } catch { '' }`
   try {
-    const out = execFileSync(POWERSHELL, ['-NoProfile', '-NonInteractive', '-Command', ps], {
+    const out = execFileSync(WINDOWS_POWERSHELL, ['-NoProfile', '-NonInteractive', '-Command', ps], {
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'ignore'],
       timeout: 8000
