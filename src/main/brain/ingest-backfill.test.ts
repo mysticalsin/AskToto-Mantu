@@ -136,10 +136,20 @@ describe('startBackfill with no configured provider', () => {
 
     reconcileMeetingsInBackground()
 
-    await vi.waitFor(() => {
-      expect(readIndex(getSettings()).ingested[file]?.ok).toBe(true)
-    })
-  })
+    // Explicit timeout: this is the only assertion here waiting on the BACKGROUND reconciliation loop
+    // rather than on work started synchronously by the test, so it pays that loop's own scheduling delay
+    // on top of the extraction. vi.waitFor's 1000ms default is enough on an idle machine but not while
+    // the full suite runs its workers in parallel — which made this the last intermittent failure in the
+    // suite. The assertion is unchanged; only the patience is.
+    await vi.waitFor(
+      () => {
+        expect(readIndex(getSettings()).ingested[file]?.ok).toBe(true)
+      },
+      { timeout: 15_000 }
+    )
+    // The per-test budget has to clear the waitFor above too: vitest's 5s default would abort the test
+    // before that 15s ever elapsed, turning a slow-but-correct run into a failure at the it() line.
+  }, 20_000)
 
   it('marks a changed successfully indexed source for a clean rebuild instead of silently keeping stale intelligence', async () => {
     const file = 'meeting-1.md'
