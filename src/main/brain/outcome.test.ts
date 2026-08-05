@@ -25,7 +25,7 @@ describe.each([
     folder = mkdtempSync(join(tmpdir(), 'asktoto-outcome-test-'))
     s = { meetingsFolder: folder, encryptTranscripts: encrypt } as Settings
   })
-  afterEach(() => rmSync(folder, { recursive: true, force: true }))
+  afterEach(() => rmSync(folder, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }))
 
   const DEAL_SLUG = 'acme-core-banking'
 

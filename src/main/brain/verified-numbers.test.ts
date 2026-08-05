@@ -202,7 +202,7 @@ describe('mergeExtraction — deal amount/close_date/band, verification-gated (T
     folder = mkdtempSync(join(tmpdir(), 'asktoto-verified-numbers-'))
     s = { meetingsFolder: folder } as Settings
   })
-  afterEach(() => rmSync(folder, { recursive: true, force: true }))
+  afterEach(() => rmSync(folder, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }))
 
   const dealExtraction = (overrides: Partial<NonNullable<MeetingExtraction['deal']>>): MeetingExtraction =>
     MeetingExtractionSchema.parse({
@@ -252,7 +252,7 @@ describe('mergeExtraction — deal amount/close_date/band, verification-gated (T
       expect(dealBad.close_date?.state).toBe('extracted')
       expect(dealBad.close_date?.confidence).toBe('AMBIGUOUS')
     } finally {
-      rmSync(folder2, { recursive: true, force: true })
+      rmSync(folder2, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
     }
   })
 
@@ -287,7 +287,7 @@ describe('mergeExtraction — deal amount/close_date/band, verification-gated (T
       const deal2 = readDeal(s2, slugify('Acme Core Banking'))!
       expect(deal2.win_likelihood_band_provenance?.confidence).toBe('EXTRACTED')
     } finally {
-      rmSync(folder2, { recursive: true, force: true })
+      rmSync(folder2, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
     }
   })
 })
@@ -314,8 +314,8 @@ describe('windowed extraction end-to-end (Task MI-4, kills D2 — mocked createS
   })
 
   afterEach(() => {
-    rmSync(userData, { recursive: true, force: true })
-    rmSync(meetingsFolder, { recursive: true, force: true })
+    rmSync(userData, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
+    rmSync(meetingsFolder, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
     vi.restoreAllMocks()
   })
 

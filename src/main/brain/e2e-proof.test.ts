@@ -139,7 +139,7 @@ describe.each([
       .map((slug) => readMeetingExtraction(s, slug))
       .filter((x): x is MeetingExtraction => !!x)
   })
-  afterAll(() => rmSync(folder, { recursive: true, force: true }))
+  afterAll(() => rmSync(folder, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }))
 
   it('the UI headline "meetings ingested" number — the ingest-log index — records all 8, ok, stamped', () => {
     const idx = readIndex(s)

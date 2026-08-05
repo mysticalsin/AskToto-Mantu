@@ -190,7 +190,10 @@ describe.runIf(process.platform === 'win32')('isAdminManagedTrusted — real Pro
     writeFileSync(file, JSON.stringify({ escrowPubKey: 'ATTACKER', requireAuth: true }))
     // The file exists and parses, but the ACL reader sees a non-admin owner + inherited Users write.
     expect(isAdminManagedTrusted(file)).toBe(false)
-  })
+    // Budget must clear the code's OWN limit: the ACL read spawns System32 powershell.exe with an
+    // 8s execFileSync timeout, which already exceeds vitest's 5s per-test default — so on a cold CI
+    // runner, where PowerShell start-up is the slow part, this failed as a timeout rather than a verdict.
+  }, 20_000)
 
   it('readTrustedAdminManaged never returns content for that same untrusted file', () => {
     mkdirSync(dir, { recursive: true })
@@ -198,5 +201,6 @@ describe.runIf(process.platform === 'win32')('isAdminManagedTrusted — real Pro
     // Content must not leak even though the file exists and parses — the ACL is untrusted, so the
     // held-fd read is refused before ever handing the caller a string to JSON.parse.
     expect(readTrustedAdminManaged(file)).toBeNull()
-  })
+    // Same 8s-PowerShell-vs-5s-budget reason as the case above.
+  }, 20_000)
 })

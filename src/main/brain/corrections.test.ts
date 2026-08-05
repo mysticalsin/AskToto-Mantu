@@ -87,7 +87,7 @@ describe('corrections engine', () => {
     folder = mkdtempSync(join(tmpdir(), 'asktoto-corrections-test-'))
     s = settingsFor(folder)
   })
-  afterEach(() => rmSync(folder, { recursive: true, force: true }))
+  afterEach(() => rmSync(folder, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }))
 
   // Three synthetic meetings — planted directly through ingestExtraction (the exact production path
   // minus the LLM call, mirroring e2e-proof.test.ts's convention), then corrected by hand.

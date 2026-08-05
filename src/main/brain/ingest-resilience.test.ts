@@ -7,7 +7,7 @@ import { PROVIDER_IDS } from '@shared/providers'
 import { BrainIndexSchema } from '@shared/brain'
 import type { StreamHandlers, StreamOptions, StreamHandle } from '../llm/shared'
 import { clearApiKey, getSettings, setApiKey, setSettings } from '../store'
-import { brainBackfillProgress, ingestFailureCounts, startBackfill, MAX_INGEST_ATTEMPTS } from './ingest'
+import { brainBackfillProgress, ingestFailureCounts, startBackfill, MAX_INGEST_ATTEMPTS, whenIndexWritesSettle } from './ingest'
 import { readIndex } from './store'
 
 vi.mock('electron')
@@ -66,9 +66,13 @@ describe('brain ingest resilience (T6 6a/6b)', () => {
     createStreamMock.mockReset()
   })
 
-  afterEach(() => {
-    rmSync(userData, { recursive: true, force: true })
-    rmSync(meetingsFolder, { recursive: true, force: true })
+  afterEach(async () => {
+    // The queue draining is not the same as the writes landing: the last job’s index.json record is
+    // still on ingest.ts’s serialized lane at that moment. Await it, or the stale write lands during
+    // the NEXT test (and races this rmSync — ENOTEMPTY on the Windows CI runner).
+    await whenIndexWritesSettle()
+    rmSync(userData, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
+    rmSync(meetingsFolder, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
     vi.unstubAllEnvs()
     vi.restoreAllMocks()
   })
