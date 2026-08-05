@@ -35,7 +35,15 @@ const provisionArgs = ['install', '--no-save', '--force', `${pkgName}@${sherpaNo
 const provisionCmd = `npm ${provisionArgs.join(' ')}`
 
 console.warn(`[check:sherpa] ${pkgName} missing — attempting auto-provision: ${provisionCmd}`)
-const result = spawnSync('npm', provisionArgs, { stdio: 'inherit', timeout: 120_000 })
+// On Windows npm is a .cmd shim: spawnSync can't resolve it by bare name, and Node's CVE-2024-27980
+// mitigation refuses to spawn a .cmd/.bat without shell:true — so this auto-provision silently ENOENT'd
+// on every Windows host and always fell through to the throw below. Same shim routing as
+// build-cahe-windows.mjs; provisionArgs is built from package-internal values, never operator input.
+const result = spawnSync('npm', provisionArgs, {
+  stdio: 'inherit',
+  timeout: 120_000,
+  shell: process.platform === 'win32'
+})
 
 if (result.status === 0 && existsSync(addonPath)) {
   console.log(`[check:sherpa] OK — ${pkgName} (auto-provisioned)`)

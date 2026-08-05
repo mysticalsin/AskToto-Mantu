@@ -41,6 +41,7 @@ import { pipeline } from 'node:stream/promises'
 import { get as httpsGet } from 'node:https'
 import { execFileSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
+import { extractZip } from './zip-extract.mjs'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const REPO_ROOT = join(__dirname, '..')
@@ -50,6 +51,18 @@ const DEFAULT_REQUEST_TIMEOUT_MS = 30_000
 const DEFAULT_RESPONSE_IDLE_TIMEOUT_MS = 30_000
 const DEFAULT_MAX_ATTEMPTS = 3
 const DEFAULT_BACKOFF_BASE_MS = 1_000
+
+// Invoke Windows system tools by ABSOLUTE %SystemRoot%\System32 path, never bare name — same invariant
+// src/main/win-security.ts holds for powershell/icacls. Node resolves a bare name through PATH only
+// (libuv does not fall back to System32), so `tar` means System32's bsdtar on a plain terminal but GNU
+// tar 1.35 under any Git-for-Windows PATH — and GNU tar reads the leading `D:` of an absolute archive
+// path as a remote host ("tar: Cannot connect to D: resolve failed"). Whether packaging worked was
+// decided by the operator's PATH order.
+const WINDOWS_SYSTEM_TAR = join(
+  process.env.SystemRoot || process.env.windir || 'C:\\Windows',
+  'System32',
+  'tar.exe'
+)
 
 // ─── Pins (llama.cpp release b9957 — verified 2026-07-10, PLAN.md §3) ─────────────────────────────────
 const TAG = 'b9957'
@@ -211,15 +224,31 @@ function findDirContaining(root, filename, depth = 3) {
   return null
 }
 
-/** Extract archivePath (tar.gz OR zip — bsdtar, the `tar` shipped on macOS and on Windows 10+/Server
- *  2019+ runners, auto-detects both container formats from an -xf invocation) and copy only the runtime
- *  binary plus its shared libraries into destDir. Everything else in the release (llama-cli, llama-bench,
- *  the other example binaries) is intentionally discarded — Métis only ever spawns llama-server. */
+/** Unpack archivePath (tar.gz OR zip) into destDir without ever resolving an extraction tool through
+ *  PATH on Windows: the win assets are .zip and are inflated in-process (zip-extract.mjs — no subprocess
+ *  at all), and the mac .tar.gz, only reachable from a Windows host via the `all` target, goes to the
+ *  absolute System32 bsdtar, which has zlib linked in and needs no external filter process.
+ *  macOS/Linux keep the system `tar`, which auto-detects both containers from an -xf invocation. */
+export function extractArchive(archivePath, destDir) {
+  if (process.platform !== 'win32') {
+    execFileSync('tar', ['-xf', archivePath, '-C', destDir], { stdio: 'inherit' })
+    return
+  }
+  if (archivePath.toLowerCase().endsWith('.zip')) {
+    extractZip(archivePath, destDir)
+    return
+  }
+  execFileSync(WINDOWS_SYSTEM_TAR, ['-xf', archivePath, '-C', destDir], { stdio: 'inherit' })
+}
+
+/** Extract archivePath and copy only the runtime binary plus its shared libraries into destDir.
+ *  Everything else in the release (llama-cli, llama-bench, the other example binaries) is intentionally
+ *  discarded — Métis only ever spawns llama-server. */
 function extractRuntime(archivePath, destDir, binaryName, keepExt) {
   const tmpDir = `${destDir}.extract-tmp`
   rmSync(tmpDir, { recursive: true, force: true })
   mkdirSync(tmpDir, { recursive: true })
-  execFileSync('tar', ['-xf', archivePath, '-C', tmpDir], { stdio: 'inherit' })
+  extractArchive(archivePath, tmpDir)
   const sourceDir = findDirContaining(tmpDir, binaryName)
   if (!sourceDir) throw new Error(`${binaryName} not found anywhere under the extracted archive ${archivePath}.`)
   rmSync(destDir, { recursive: true, force: true })
