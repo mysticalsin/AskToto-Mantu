@@ -174,6 +174,7 @@ import {
   parakeetAddonError
 } from './parakeet'
 import { appleSpeechLocale, appleSpeechTranscribe } from './apple-speech'
+import { resetLanguageFollow as resetImportLanguageFollow, whisperImportTranscribe } from './whisper-import'
 import { pickAudioFile, consumePickedAudio } from './import-audio'
 import { ImportJobManager, type ImportJob } from './import-jobs'
 import { EncryptedImportJobStore } from './import-job-store'
@@ -727,10 +728,24 @@ function initializeImportJobs(): void {
   if (importJobs) return
   importJobs = new ImportJobManager({
     store: new EncryptedImportJobStore(getSettings),
-    decode: startImportDecoder,
+    decode: (job) => {
+      // One reset per job, at decode start — a new import must never inherit the previous one's
+      // converged language (same reasoning as the live worker's session-start resetFollow).
+      resetImportLanguageFollow(getSettings().asrLanguage)
+      return startImportDecoder(job)
+    },
     transcribe: async (samples) => {
-      await ensureParakeetModel()
-      return parakeetTranscribe(samples)
+      const engine = getSettings().asrEngine
+      if (engine === 'parakeet') {
+        await ensureParakeetModel()
+        return parakeetTranscribe(samples)
+      }
+      // 'whisper' and 'apple' both route to the bundled Whisper transcriber for imports. Apple's
+      // SFSpeechRecognizer sidecar (apple-speech.ts) is a per-call, lazily-spawned, macOS-only process
+      // built for live Listen's streaming windows, not a batch decoder — using Whisper for imports on
+      // every platform (including when the live engine is 'apple') is the honest cross-platform choice
+      // rather than making imports mac-only or silently changing accuracy profile by OS.
+      return whisperImportTranscribe(samples, getSettings().asrLanguage)
     },
     saveMeeting: (meeting) => saveMeeting(getSettings(), meeting),
     deleteMeeting,

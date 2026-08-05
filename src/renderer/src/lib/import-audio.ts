@@ -11,15 +11,21 @@
  * ImportAudioChunk's samples field (main never receives a SharedArrayBuffer-backed view here anyway).
  */
 
-export const IMPORT_CHUNK_SEC = 30
+import { IMPORT_CHUNK_SECONDS } from '@shared/ipc'
+
+// Same window main's ffmpeg sidecar decodes at (shared/ipc.ts's IMPORT_CHUNK_SECONDS) — kept as its own
+// export here (rather than importing the shared constant by its main-process name at every call site)
+// since this file predates the shared constant and other modules already import IMPORT_CHUNK_SEC from it.
+export const IMPORT_CHUNK_SEC = IMPORT_CHUNK_SECONDS
 export const IMPORT_SAMPLE_RATE = 16000
 
 // This fallback decoder (used only when the bundled ffmpeg sidecar in src/main/ffmpeg-decoder.ts is
 // unavailable) cannot stream: decodeAudioData yields the whole recording's PCM in one buffer, and the
 // mixdown render pass below produces a second full-length buffer. Unlike the ffmpeg path — which never
-// holds more than one 30s chunk regardless of source length — this path's peak memory scales with the
-// entire recording. Bound it to the same order of magnitude as the compressed-source cap (MAX_SOURCE_BYTES
-// in src/main/import-audio.ts) so a long/high-bitrate import is rejected instead of OOMing the renderer.
+// holds more than one IMPORT_CHUNK_SEC chunk regardless of source length — this path's peak memory scales
+// with the entire recording. Bound it to the same order of magnitude as the compressed-source cap
+// (MAX_SOURCE_BYTES in src/main/import-audio.ts) so a long/high-bitrate import is rejected instead of
+// OOMing the renderer.
 export const MAX_DECODED_BYTES = 500 * 1024 * 1024
 
 /** Pure size check, split out from decodeAndResampleToMono16k so it's testable without a DOM AudioContext. */

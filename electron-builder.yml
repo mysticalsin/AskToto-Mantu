@@ -50,9 +50,14 @@ files:
 asar: true
 # Native addons (.node) must live outside the asar to be loadable at runtime. sherpa-onnx-node (Parakeet
 # engine) + its per-platform binary packages are unpacked here so they ship + load in the installed app.
+# onnxruntime-node + sharp are @huggingface/transformers' own Node-backend native deps (main/whisper-import.ts,
+# imported recordings' Whisper engine) — same requirement, same fix.
 asarUnpack:
   - '**/node_modules/sherpa-onnx-node/**'
   - '**/node_modules/sherpa-onnx-*/**'
+  - '**/node_modules/onnxruntime-node/**'
+  - '**/node_modules/sharp/**'
+  - '**/node_modules/@img/**'
 extraResources:
   # Mantu Intelligence dashboard — static build of the intelligence/ workspace, loaded in its own
   # window (src/main/intelligence.ts). Populated by `npm run build:intelligence` before packaging.

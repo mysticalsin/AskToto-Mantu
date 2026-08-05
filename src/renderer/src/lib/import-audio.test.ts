@@ -2,13 +2,16 @@ import { describe, it, expect } from 'vitest'
 import { chunkAudio, IMPORT_CHUNK_SEC, IMPORT_SAMPLE_RATE, MAX_DECODED_BYTES, assertDecodedSizeWithinBound } from './import-audio'
 
 describe('chunkAudio', () => {
-  it('splits into fixed ~30s windows with a shorter final chunk', () => {
-    const samples = new Float32Array(IMPORT_SAMPLE_RATE * 75) // 30s, 30s, 15s
+  it('splits into fixed windows with a shorter final chunk', () => {
+    // Derived from IMPORT_CHUNK_SEC (not a hardcoded duration) so this stays correct if the shared
+    // decode-window constant ever changes again. tailSec < IMPORT_CHUNK_SEC keeps the last chunk short.
+    const tailSec = Math.max(1, Math.floor(IMPORT_CHUNK_SEC / 2))
+    const samples = new Float32Array(IMPORT_SAMPLE_RATE * (IMPORT_CHUNK_SEC * 2 + tailSec))
     const chunks = chunkAudio(samples)
     expect(chunks.length).toBe(3)
     expect(chunks[0].length).toBe(IMPORT_SAMPLE_RATE * IMPORT_CHUNK_SEC)
     expect(chunks[1].length).toBe(IMPORT_SAMPLE_RATE * IMPORT_CHUNK_SEC)
-    expect(chunks[2].length).toBe(IMPORT_SAMPLE_RATE * 15)
+    expect(chunks[2].length).toBe(IMPORT_SAMPLE_RATE * tailSec)
   })
 
   it('returns exactly one chunk when the audio is shorter than one window', () => {
@@ -25,7 +28,7 @@ describe('chunkAudio', () => {
   })
 
   it('produces exact-multiple windows without a trailing empty chunk', () => {
-    const samples = new Float32Array(IMPORT_SAMPLE_RATE * 60) // exactly 2 windows
+    const samples = new Float32Array(IMPORT_SAMPLE_RATE * IMPORT_CHUNK_SEC * 2) // exactly 2 windows
     const chunks = chunkAudio(samples)
     expect(chunks.length).toBe(2)
     expect(chunks.every((c) => c.length === IMPORT_SAMPLE_RATE * IMPORT_CHUNK_SEC)).toBe(true)
