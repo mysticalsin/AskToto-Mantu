@@ -746,7 +746,15 @@ function initializeImportJobs(): void {
       // every platform (including when the live engine is 'apple') is the honest cross-platform choice
       // rather than making imports mac-only or silently changing accuracy profile by OS.
       try {
-        return await whisperImportTranscribe(samples, getSettings().asrLanguage)
+        // Probe hook: whisperImportTranscribe calls this at most once per job (auto language, window 1
+        // only — see probeLanguage in whisper-import.ts) to pin the recording's language off a Parakeet
+        // decode of that same first window, before whisper-base's own unreliable per-window auto-detect
+        // gets a chance to hallucinate a wrong one. Wired here rather than inside whisper-import.ts so
+        // that module stays decoupled from parakeet.ts — a plain callback, easy to fake in tests.
+        return await whisperImportTranscribe(samples, getSettings().asrLanguage, async (probeSamples) => {
+          await ensureParakeetModel()
+          return parakeetTranscribe(probeSamples)
+        })
       } catch (err) {
         // An engine choice must never fail an import (T14 guardrail). Whisper's Node runtime can be
         // unavailable for packaging reasons on a given platform (its transformers backend needs native
