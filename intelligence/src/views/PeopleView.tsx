@@ -6,6 +6,7 @@ import { freshnessColor, freshnessLabel } from '../lib/format'
 import { ledgerTotals } from '../lib/ledgerstats'
 import { slug } from '../lib/slug'
 import { Timeline } from '../components/Timeline'
+import { AcceptSuggestion } from '../components/AcceptSuggestion'
 
 interface Props {
   data: DashboardData
@@ -120,12 +121,25 @@ export function PeopleView({ data }: Props) {
             <div className="rounded-xl border border-[var(--color-mantu-border)] bg-[var(--color-mantu-surface)] p-5">
               <h2 className="text-lg font-semibold text-white/90">{person.name}</h2>
               <dl className="mt-3 space-y-2 text-sm">
-                <Row label="Role" value={person.role ?? 'Unknown'} />
+                <Row
+                  label="Role"
+                  value={person.role ?? 'Unknown'}
+                  extra={
+                    person.field_state?.role === 'extracted' && (
+                      <AcceptSuggestion entityKind="person" entityId={person.slug} field="role" />
+                    )
+                  }
+                />
                 <Row
                   label="Account"
                   value={person.account ?? 'Unmapped'}
                   linkTo={accountIsLinkable ? `/accounts?acct=${accountSlug}` : undefined}
                   linkTitle={person.account ? `Open ${person.account} in Accounts` : undefined}
+                  extra={
+                    person.field_state?.org === 'extracted' && (
+                      <AcceptSuggestion entityKind="person" entityId={person.slug} field="org" />
+                    )
+                  }
                 />
                 {node?.freshness && (
                   <Row
@@ -212,6 +226,7 @@ function Row({
   title,
   linkTo,
   linkTitle,
+  extra,
 }: {
   label: string
   value: string
@@ -219,6 +234,8 @@ function Row({
   title?: string
   linkTo?: string
   linkTitle?: string
+  // Rendered after the value — the dashboard's Accept-suggestion affordance, when a caller has one.
+  extra?: React.ReactNode
 }) {
   return (
     <div className="flex items-center justify-between border-b border-white/5 pb-1.5">
@@ -232,6 +249,7 @@ function Row({
         ) : (
           value
         )}
+        {extra}
       </dd>
     </div>
   )

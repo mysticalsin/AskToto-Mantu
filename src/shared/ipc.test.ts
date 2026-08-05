@@ -14,6 +14,7 @@ import {
   EntityMergePayloadSchema,
   EntityUnmergePayloadSchema,
   EntityUpdateFieldPayloadSchema,
+  FieldDecisionPayloadSchema,
   CommitmentRejectPayloadSchema,
   MeetingExtractionQuerySchema,
   AttentionItemSchema,
@@ -451,6 +452,59 @@ describe('EntityUpdateFieldPayloadSchema', () => {
       EntityUpdateFieldPayloadSchema.safeParse({ kind: 'deal', id: '../../secrets', field: 'stage', value: 'x' })
         .success
     ).toBe(false)
+  })
+})
+
+describe('FieldDecisionPayloadSchema (brain:field-decision — dashboard suggestion accept/dismiss)', () => {
+  it('accepts a valid accept/dismiss decision for any entity kind', () => {
+    expect(
+      FieldDecisionPayloadSchema.safeParse({ entityKind: 'deal', entityId: 'acme-core', field: 'stage', decision: 'accept' })
+        .success
+    ).toBe(true)
+    expect(
+      FieldDecisionPayloadSchema.safeParse({ entityKind: 'person', entityId: 'maria-silva', field: 'role', decision: 'dismiss' })
+        .success
+    ).toBe(true)
+    expect(
+      FieldDecisionPayloadSchema.safeParse({ entityKind: 'account', entityId: 'acme-corp', field: 'sector', decision: 'accept' })
+        .success
+    ).toBe(true)
+  })
+
+  it('rejects an invalid kind/decision and an empty entityId/field', () => {
+    expect(
+      FieldDecisionPayloadSchema.safeParse({ entityKind: 'meeting', entityId: 'x', field: 'stage', decision: 'accept' })
+        .success
+    ).toBe(false)
+    expect(
+      FieldDecisionPayloadSchema.safeParse({ entityKind: 'deal', entityId: 'x', field: 'stage', decision: 'maybe' }).success
+    ).toBe(false)
+    expect(
+      FieldDecisionPayloadSchema.safeParse({ entityKind: 'deal', entityId: '', field: 'stage', decision: 'accept' }).success
+    ).toBe(false)
+    expect(
+      FieldDecisionPayloadSchema.safeParse({ entityKind: 'deal', entityId: 'x', field: '', decision: 'accept' }).success
+    ).toBe(false)
+  })
+
+  it('rejects a missing field entirely and a non-object payload', () => {
+    expect(FieldDecisionPayloadSchema.safeParse({ entityId: 'x', field: 'stage', decision: 'accept' }).success).toBe(false)
+    expect(FieldDecisionPayloadSchema.safeParse(null).success).toBe(false)
+  })
+
+  // Same defense-in-depth as EntityUpdateFieldPayloadSchema's id: a path-traversal/non-slug entityId is
+  // rejected outright here, before the payload ever reaches the main-process handler.
+  it('rejects a path-traversal or otherwise non-slug entityId', () => {
+    expect(
+      FieldDecisionPayloadSchema.safeParse({ entityKind: 'deal', entityId: '../../../etc/hosts', field: 'stage', decision: 'accept' })
+        .success
+    ).toBe(false)
+    expect(
+      FieldDecisionPayloadSchema.safeParse({ entityKind: 'deal', entityId: 'Acme Corp', field: 'stage', decision: 'accept' }).success
+    ).toBe(false) // spaces/uppercase — not a slug
+    expect(
+      FieldDecisionPayloadSchema.safeParse({ entityKind: 'deal', entityId: 'acme-core', field: 'stage', decision: 'accept' }).success
+    ).toBe(true) // a real slug still passes
   })
 })
 

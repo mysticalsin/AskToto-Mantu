@@ -65,6 +65,10 @@ const FIXTURE: BrainRead = {
       name: 'Jane Doe',
       role: 'VP Engineering',
       account: 'Acme Corp',
+      // MI-2.5 Fix C fixture: role is a pending suggestion (state 'extracted'), org has no sidecar at
+      // all — proves field_state carries the former and honestly omits the latter (never an implicit
+      // 'extracted').
+      role_provenance: { state: 'extracted' },
       meetings: [
         { file: 'm1.md', date: '2026-01-10', title: 'Acme Kickoff Call' },
         { file: 'm2.md', date: '2026-02-01', title: 'Acme SOW Review' }
@@ -99,6 +103,9 @@ const FIXTURE: BrainRead = {
       name: 'Acme Corp',
       sector: 'technology',
       strategic: true,
+      // MI-2.5 Fix C fixture: a human already confirmed this one — proves field_state carries states
+      // other than 'extracted' through untouched, not just the pending-review case.
+      sector_provenance: { state: 'verified' },
       people: ['jane-doe', 'john-smith'],
       deals: ['acme-platform-deal', 'acme-expansion'],
       meetings: [
@@ -129,6 +136,10 @@ const FIXTURE: BrainRead = {
       win_likelihood_band: 'good',
       band_evidence: 'Legal signed off and budget is confirmed',
       velocity: { signal: 'hard-calendar-gate', evidence: 'must sign before Q1 close (March 31)' },
+      // MI-2.5 Fix C fixture: stage already human-pinned, win_likelihood_band still a pending
+      // suggestion, velocity has no sidecar at all — exercises all three field_state outcomes on one deal.
+      stage_provenance: { state: 'pinned' },
+      win_likelihood_band_provenance: { state: 'extracted' },
       meetings: [
         { file: 'm1.md', date: '2026-01-10', title: 'Acme Kickoff Call' },
         { file: 'm2.md', date: '2026-02-01', title: 'Acme SOW Review' }
@@ -340,6 +351,29 @@ describe('brainToDashboard — entity carry-through (accounts/people)', () => {
     ])
     const ravi = dashboard.people.find((p) => p.name === 'Ravi Patel')!
     expect(ravi.stance_trail).toEqual([{ meeting: 'm4.md', kind: 'objection', statement: 'Flagged the price increase to his boss' }])
+  })
+
+  // ── MI-2.5 Fix C: field_state (dashboard suggestion accept/dismiss, deferred CRM pattern 3) ────
+  it('carries each provenance sidecar\'s state into field_state, keyed by field name', () => {
+    const jane = dashboard.people.find((p) => p.name === 'Jane Doe')!
+    expect(jane.field_state).toEqual({ role: 'extracted' }) // org has no sidecar — honestly omitted
+
+    const acme = dashboard.accounts.find((a) => a.name === 'Acme Corp')!
+    expect(acme.field_state).toEqual({ sector: 'verified' }) // carries states other than 'extracted' too
+
+    const won = dashboard.deals.find((d) => d.display_name === 'Acme Platform Deal')!
+    expect(won.field_state).toEqual({ stage: 'pinned', win_likelihood_band: 'extracted' }) // velocity omitted
+  })
+
+  it('omits field_state entirely for an entity with no provenance sidecars at all', () => {
+    const ravi = dashboard.people.find((p) => p.name === 'Ravi Patel')!
+    expect(ravi.field_state).toBeUndefined()
+
+    const globex = dashboard.accounts.find((a) => a.name === 'Globex Inc')!
+    expect(globex.field_state).toBeUndefined()
+
+    const renewal = dashboard.deals.find((d) => d.display_name === 'Globex Renewal')!
+    expect(renewal.field_state).toBeUndefined()
   })
 })
 

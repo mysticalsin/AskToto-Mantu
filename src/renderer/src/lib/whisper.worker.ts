@@ -44,10 +44,28 @@ const post = (m: unknown): void => (self as unknown as Worker).postMessage(m)
 //     switches get noticed at all: a pinned decode of switched speech yields pinned-language-shaped
 //     text that language-ID can't flag.
 //   - Follow: text-side language ID (shared/lang-id.ts, deliberately conservative — null on doubt)
-//     runs on every decoded window. SWITCH_AFTER consecutive confident detections of the same OTHER
-//     language re-pin activeLang; while a switch is suspected (switchRun set) every window decodes
-//     un-pinned so confirmation doesn't wait for the next probe. In 'auto' mode the same machinery
-//     CONVERGES onto the conversation's language, giving pin-quality decoding without a setting.
+//     runs on every decoded window while still un-pinned. SWITCH_AFTER consecutive confident detections
+//     of the same OTHER language re-pin activeLang; while a switch is suspected (switchRun set) every
+//     window decodes un-pinned so confirmation doesn't wait for the next probe. In 'auto' mode the same
+//     machinery CONVERGES onto the conversation's language, giving pin-quality decoding without a setting.
+//
+// PROVEN FACT (2026-08-05, direct probe): transformers.js's whisper NEVER auto-detects on an un-pinned
+// call — it logs "No language specified - defaulting to English" and decodes ENGLISH regardless of what
+// was actually spoken. Two consequences, fixed here the same way whisper-import.ts's ported copy of this
+// machinery was fixed first: (1) an explicit user language must decode EVERY window pinned — the old
+// "probe every 4th window un-pinned" escape hatch just fed English junk into followLanguage() and could
+// mis-switch a correctly-pinned session; (2) once a language is known from ANY source — an explicit
+// setting, or an external 'pinLanguage' message (see below) — this worker never decodes un-pinned again.
+// Only the probe-less 'auto' path (no external pin yet) still runs the old un-pinned converge/follow
+// machinery as a fallback, exactly as before.
+//
+// External pin (renderer main thread, listen.ts): Whisper itself cannot tell what language a clip is
+// without decoding it in every candidate language, but Parakeet takes no `language` option — its output
+// is a steadier signal. listen.ts feeds early/periodic windows to window.toto.parakeetFeed() alongside the
+// whisper decode (fire-and-forget, never blocking) and posts { type: 'pinLanguage', language } once
+// shared/lang-id.ts confidently identifies the audio. Mirrors whisper-import.ts's probeLanguage /
+// reprobeForSwitch pair, just driven from the renderer instead of from inside this worker (a Web Worker
+// has no IPC access to call Parakeet itself).
 //
 // Every LANGUAGE_NAMES entry lowercased is a valid Whisper language token (lang-id.ts's contract).
 // Unknown init values (stale/managed garbage) safely mean 'auto' instead of throwing mid-meeting.
@@ -67,6 +85,10 @@ let userLanguage = 'auto'
 let activeLang: string | null = null
 let switchRun: { lang: string; count: number; age: number } | null = null
 let windowCount = 0
+// True once an external 'pinLanguage' message (see self.onmessage below) has confirmed the language —
+// from that point on this worker never decodes un-pinned again, for the rest of the session (see
+// nextDecodeOptions-equivalent logic in the audio handler below and followLanguage's guard).
+let probePinned = false
 
 /** Hard reset of the follow machine, re-seeded from the given setting value. */
 function resetLanguageFollow(next: string): void {
@@ -74,6 +96,7 @@ function resetLanguageFollow(next: string): void {
   activeLang = (LANGUAGE_NAMES as readonly string[]).includes(next) ? next : null
   switchRun = null
   windowCount = 0
+  probePinned = false
 }
 
 /** Delta update (mid-session setLanguage): only a CHANGED value re-seeds, so an unchanged setting
@@ -87,6 +110,11 @@ function applyInitLanguage(next: string): void {
 }
 
 function followLanguage(text: string): void {
+  // Text-side following only ever steers the probe-less 'auto' path: an explicit user language must
+  // never be second-guessed from decoded text, and once an external 'pinLanguage' message owns the pin
+  // every window is pinned-language-shaped by construction — text signals from either state can only be
+  // false (see whisper-import.ts's followLanguage, which carries the identical guard).
+  if (userLanguage !== 'auto' || probePinned) return
   const detected = detectLanguage(text).lang
   if (switchRun) {
     switchRun.age += 1
@@ -244,6 +272,24 @@ self.onmessage = async (e: MessageEvent): Promise<void> => {
     return
   }
 
+  if (msg.type === 'pinLanguage') {
+    // External confirmation from listen.ts's main-thread Parakeet probe (see the block comment above) —
+    // only meaningful while still in 'auto' mode: an explicit user language is never second-guessed by a
+    // probe, mirroring whisper-import.ts's probeLanguage guard. Once applied, probePinned latches true for
+    // the rest of the session (resetLanguageFollow is the only way back to false) — a later switch is
+    // communicated by another 'pinLanguage' message with the new language, never by un-pinning.
+    if (
+      userLanguage === 'auto' &&
+      typeof msg.language === 'string' &&
+      (LANGUAGE_NAMES as readonly string[]).includes(msg.language)
+    ) {
+      activeLang = msg.language
+      probePinned = true
+      switchRun = null
+    }
+    return
+  }
+
   if (msg.type === 'audio') {
     const speaker = msg.speaker
     // Always emit exactly one terminal reply so the renderer queue never wedges.
@@ -259,8 +305,15 @@ self.onmessage = async (e: MessageEvent): Promise<void> => {
       // ONE pass: no `chunk_length_s` stitching and `return_timestamps:false` so the decoder never spends
       // generation steps emitting <|t|> timestamp tokens we don't use. Both cut per-window decode latency
       // with zero accuracy cost — chunking only ever mattered for long files we never produce here.
+      // `probing` (un-pinned decode) is now reachable ONLY while still un-pinned AND in 'auto' mode —
+      // once probePinned (an external 'pinLanguage' message) or an explicit user language applies,
+      // transformers.js's real "always defaults to English on an un-pinned call" behavior (see the block
+      // comment above) makes periodic un-pinned probing actively harmful, not just unnecessary.
       windowCount += 1
-      const probing = switchRun !== null || (activeLang !== null && windowCount % PROBE_EVERY === 0)
+      const probing =
+        !probePinned &&
+        userLanguage === 'auto' &&
+        (switchRun !== null || (activeLang !== null && windowCount % PROBE_EVERY === 0))
       const opts: { return_timestamps: boolean; language?: string; task?: string } = { return_timestamps: false }
       if (activeLang && !probing) {
         opts.language = activeLang.toLowerCase()

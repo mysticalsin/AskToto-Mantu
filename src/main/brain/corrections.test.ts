@@ -24,6 +24,7 @@ import {
   mergeEntities,
   unmergeEntities,
   updateEntityField,
+  readFieldProvenance,
   rejectCommitment,
   replayCorrections,
   readAliasMap,
@@ -726,6 +727,39 @@ describe('corrections engine', () => {
     expect(deal.stage_provenance!.value).toBe('contract')
     expect(deal.stage_provenance!.state).toBe('pinned')
     expect(deal.stage_provenance!.superseded.some((e) => e.value === 'lost-to-competitor')).toBe(true)
+  })
+
+  // ── ★ readFieldProvenance + dashboard accept (brain:field-decision's server-side leg) ────
+  describe('readFieldProvenance (dashboard suggestion accept/dismiss, deferred CRM pattern 3)', () => {
+    it('reports state "extracted" for a freshly-ingested field, and its exact current value', async () => {
+      await ingestThreeMeetings(s)
+      const p = readFieldProvenance(s, { kind: 'deal', id: DEAL_SLUG, field: 'stage' })
+      expect(p?.state).toBe('extracted')
+      expect(p?.value).toBe(readDeal(s, DEAL_SLUG)!.stage)
+    })
+
+    it('returns undefined for an unsupported field and for a non-existent entity', async () => {
+      await ingestThreeMeetings(s)
+      expect(readFieldProvenance(s, { kind: 'deal', id: DEAL_SLUG, field: 'not_a_real_field' })).toBeUndefined()
+      expect(readFieldProvenance(s, { kind: 'deal', id: 'no-such-deal', field: 'stage' })).toBeUndefined()
+    })
+
+    // The dashboard's "Accept" action has exactly one legal expression through updateEntityField: re-pin
+    // the field's OWN current value. That moves it out of 'extracted' (never renders as fact — see
+    // RENDERABLE_PROVENANCE_STATES) into 'pinned' (does) — there is no field_update variant that sets
+    // 'verified' from a human action (only ingest.ts's grounding check ever does, for amount/close_date).
+    it('accepting an extracted field re-pins its OWN value and promotes state extracted -> pinned', async () => {
+      await ingestThreeMeetings(s)
+      const before = readFieldProvenance(s, { kind: 'deal', id: DEAL_SLUG, field: 'stage' })!
+      expect(before.state).toBe('extracted')
+
+      const r = await updateEntityField(s, { kind: 'deal', id: DEAL_SLUG, field: 'stage', value: before.value })
+      expect(r.ok).toBe(true)
+
+      const after = readFieldProvenance(s, { kind: 'deal', id: DEAL_SLUG, field: 'stage' })!
+      expect(after.state).toBe('pinned')
+      expect(after.value).toBe(before.value) // accept never changes the value, only its review state
+    })
   })
 
   // ── rejectCommitment excludes it from open-commitment surfaces ──────────
