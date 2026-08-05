@@ -290,12 +290,21 @@ export function useAsk(): {
       const chunk = pendingRef.current
       if (!chunk) return
       pendingRef.current = ''
+      // Capture BEFORE enqueuing the state update, not after: React 18 batches this setAnswer call, so
+      // the updater below runs later (during the batched re-render), not synchronously on this line. The
+      // old code reset pendingReplaceRef.current = false right after calling setAnswer and read the LIVE
+      // ref from inside the updater — by the time the updater actually ran, the ref had already flipped to
+      // false, so the "replace" branch was unreachable and every post-reset flush silently appended onto
+      // the stale previous answer instead of replacing it (turn 2 rendered as turn1Text + turn2Text). Match
+      // onDone/onError's existing capture-then-reset idiom, which reads a plain captured boolean inside the
+      // updater instead of the ref itself.
+      const replace = pendingReplaceRef.current
+      pendingReplaceRef.current = false
       setAnswer((a) => {
         if (!a) return a
-        const text = pendingReplaceRef.current ? chunk : a.text + chunk
+        const text = replace ? chunk : a.text + chunk
         return { ...a, text }
       })
-      pendingReplaceRef.current = false
     }
     const offDelta = window.toto.onDelta((d: StreamDelta) => {
       if (d.id !== idRef.current) return

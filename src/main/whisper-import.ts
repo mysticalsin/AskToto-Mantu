@@ -19,6 +19,7 @@
 import { app } from 'electron'
 import { join } from 'node:path'
 import { detectLanguage, LANGUAGE_NAMES } from '@shared/lang-id'
+import { collapseRepeatedPhrase } from '@shared/transcript-filter'
 import { mainLog } from './logger'
 
 const MODEL_ID = 'Xenova/whisper-base' // same bundled multilingual model the renderer's WASM fallback uses
@@ -167,18 +168,62 @@ export function nextDecodeOptions(): { return_timestamps: boolean; language?: st
   return opts
 }
 
+// ── Initial-pin probe (whisper-base's per-window audio auto-detect is unreliable, esp. on a compact
+// model decoding a 12s import slab with no VAD trim — see whisper-import.test.ts's probe suite for the
+// exact field failure) ──────────────────────────────────────────────────────────────────────────────────
+// A confidently-wrong FIRST window is worse than an unpinned one: text-side followLanguage() then reads
+// that hallucinated decode and (mis)pins the whole recording to it — a death spiral live Listen never
+// sees because its 6s VAD windows and repetition guards keep whisper-base's per-window guess honest.
+// Parakeet has no per-window audio-language guess to get wrong (it decodes all 25 of its languages the
+// same way, no `language` option exists), so probing it once — for the FIRST window of a job, only while
+// still in 'auto' — and running the SAME text language-ID the follow machine already trusts over its
+// output is a steadier signal than whisper-base's own first guess. The probe only ever gains a pin; an
+// unsure identification or a failed probe (model missing, native addon absent, a language outside
+// Parakeet's set) leaves 'auto' exactly as before.
+export type LanguageProbe = (samples: Float32Array) => Promise<string>
+
+/** Runs once per job, immediately before window 1 would decode. Caller (index.ts) supplies `probe` —
+ *  whisper-import.ts stays decoupled from parakeet.ts; the probe is wired in as a plain callback, so this
+ *  is testable with a fake probe instead of a loaded Parakeet model. */
+export async function probeLanguage(samples: Float32Array, probe?: LanguageProbe): Promise<void> {
+  if (!probe || userLanguage !== 'auto' || windowCount !== 0) return
+  let text: string
+  try {
+    text = await probe(samples)
+  } catch (e) {
+    mainLog.warn(`[whisper-import] language probe failed, keeping auto: ${e instanceof Error ? e.message : String(e)}`)
+    return
+  }
+  const detected = detectLanguage(text).lang
+  if (detected) activeLang = detected // pin immediately: window 1 already decodes with the right language
+}
+
+/** Collapses an intra-window decoder loop (the same runaway-repeat guard live Listen's worker applies —
+ *  shared/transcript-filter.ts, added after the Portuguese RCA) before the text reaches followLanguage or
+ *  the saved transcript, then advances the follow machine on the CLEANED text. Imports decode 12s slabs
+ *  with no VAD trim and no live repetition guard, so a stuck decoder can loop far longer than the ~6s live
+ *  windows ever allow — this is what stands between that loop and a transcript line repeated 100+ times.
+ *  A standalone export for the same reason nextDecodeOptions/followLanguage are: testable without a
+ *  loaded model. */
+export function finalizeDecodedText(rawText: string): string {
+  const text = collapseRepeatedPhrase(rawText.trim())
+  if (text) followLanguage(text)
+  return text
+}
+
 /**
  * Transcribes one already-decoded 16kHz mono PCM window of an import job. `language` is the current
  * settings.asrLanguage value ('auto' or a Whisper language name) — the caller reads it fresh on every
  * chunk (see index.ts's initializeImportJobs) so a mid-import Settings change is honored without
- * discarding an in-progress follow.
+ * discarding an in-progress follow. `probe`, when the caller supplies one, is given one shot at pinning
+ * the recording's language before window 1 decodes (see probeLanguage above).
  */
-export async function whisperImportTranscribe(samples: Float32Array, language: string): Promise<string> {
+export async function whisperImportTranscribe(samples: Float32Array, language: string, probe?: LanguageProbe): Promise<string> {
   applyInitLanguage(language)
+  await probeLanguage(samples, probe)
   const model = await ensureAsr()
   const opts = nextDecodeOptions()
   const out: any = await model(samples, opts)
-  const text = (Array.isArray(out) ? out.map((o: any) => o.text).join(' ') : out?.text || '').trim()
-  if (text) followLanguage(text)
-  return text
+  const rawText = Array.isArray(out) ? out.map((o: any) => o.text).join(' ') : out?.text || ''
+  return finalizeDecodedText(rawText)
 }

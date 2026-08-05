@@ -4,15 +4,17 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 const electron = vi.hoisted(() => ({ app: { isPackaged: true } }))
-const logger = vi.hoisted(() => ({ mainLog: { error: vi.fn() } }))
+const logger = vi.hoisted(() => ({ mainLog: { error: vi.fn(), warn: vi.fn() } }))
 
 vi.mock('electron', () => electron)
 vi.mock('./logger', () => logger)
 
 import {
   applyInitLanguage,
+  finalizeDecodedText,
   followLanguage,
   nextDecodeOptions,
+  probeLanguage,
   resetLanguageFollow,
   whisperImportTranscribe
 } from './whisper-import'
@@ -131,6 +133,87 @@ describe('whisper-import language follow', () => {
     const langs = decodeOptionLanguages([noise, noise, noise, es, de, fr, noise, noise, noise])
     expect(langs.slice(0, 3)).toEqual(['portuguese', 'portuguese', 'portuguese'])
     expect(langs[8]).toBe('portuguese')
+  })
+})
+
+// Field failure (2026-08-04, real French import, asrLanguage 'auto'): whisper-base hallucinated garbled
+// ENGLISH on the first windows, and the text-based follow above then read that hallucination and pinned
+// English for the whole recording. These drive probeLanguage() directly — the caller-supplied probe is a
+// plain fake function, so this covers the pin/unsure/failure decisions without a loaded Parakeet model.
+describe('whisper-import language probe (initial pin off a Parakeet decode of window 1)', () => {
+  beforeEach(() => {
+    resetLanguageFollow('auto')
+  })
+
+  it('pins the follow machine to a confidently-identified probe result before window 1 decodes', async () => {
+    const pt = 'a gente vai ver isso com você, não é, para o contrato'
+    const probe = vi.fn().mockResolvedValue(pt)
+    await probeLanguage(new Float32Array(16), probe)
+    expect(probe).toHaveBeenCalledTimes(1)
+    // Pinned on window 1 itself — not the two-window convergence auto mode otherwise needs.
+    expect(nextDecodeOptions()).toEqual({ return_timestamps: false, language: 'portuguese', task: 'transcribe' })
+  })
+
+  it('leaves auto untouched when the probe text carries no confident language signal', async () => {
+    const probe = vi.fn().mockResolvedValue('hmm hmm okay')
+    await probeLanguage(new Float32Array(16), probe)
+    expect(nextDecodeOptions().language).toBeUndefined()
+  })
+
+  it('leaves auto untouched when the probe itself fails (Parakeet unavailable)', async () => {
+    const probe = vi.fn().mockRejectedValue(new Error('Bundled Parakeet model assets are missing.'))
+    await expect(probeLanguage(new Float32Array(16), probe)).resolves.toBeUndefined()
+    expect(nextDecodeOptions().language).toBeUndefined()
+  })
+
+  it('never probes when no probe hook is supplied', async () => {
+    await expect(probeLanguage(new Float32Array(16))).resolves.toBeUndefined()
+    expect(nextDecodeOptions().language).toBeUndefined()
+  })
+
+  it('never probes once the effective language is explicitly pinned by settings, not auto', async () => {
+    resetLanguageFollow('Portuguese')
+    const probe = vi.fn()
+    await probeLanguage(new Float32Array(16), probe)
+    expect(probe).not.toHaveBeenCalled()
+  })
+
+  it('only probes the FIRST window of a job, never a later one', async () => {
+    nextDecodeOptions() // window 1 already decoded
+    const probe = vi.fn().mockResolvedValue('a gente vai ver isso com você, não é, para o contrato')
+    await probeLanguage(new Float32Array(16), probe)
+    expect(probe).not.toHaveBeenCalled()
+  })
+})
+
+// Field failure (same import): a runaway whisper-base decode loop emitted a single transcript line
+// repeating a short phrase 100+ times ("series of series" ×103, "the area of" ×111). Imports decode 12s
+// slabs with no VAD trim and no live repetition guard, so this drives finalizeDecodedText() — the pure
+// collapse (shared/transcript-filter.ts, ported from live Listen) plus the follow advance — directly,
+// the same way nextDecodeOptions/followLanguage above are tested without a loaded model.
+describe('whisper-import runaway-decode-loop guard (finalizeDecodedText)', () => {
+  beforeEach(() => {
+    resetLanguageFollow('auto')
+  })
+
+  it('collapses a pathological intra-window repeat before it can reach the saved transcript', () => {
+    const looped = Array(111).fill('the area of').join(' ')
+    expect(finalizeDecodedText(looped)).toBe('the area of the area of')
+  })
+
+  it('leaves normal prose completely untouched', () => {
+    const prose = 'we should close the budget review by Friday and confirm the rollout plan'
+    expect(finalizeDecodedText(prose)).toBe(prose)
+  })
+
+  it('still advances the language follow machine on the (collapsed) text', () => {
+    const pt = 'a gente vai ver isso com você, não é, para o contrato'
+    const looped = Array(40).fill(pt).join(' ') // pathological, but still Portuguese-shaped
+    finalizeDecodedText(looped)
+    finalizeDecodedText(looped)
+    // Two confident windows converge auto onto Portuguese, exactly like the non-looped fixture elsewhere
+    // in this file — proving the loop guard collapses the text without breaking language identification.
+    expect(nextDecodeOptions().language).toBe('portuguese')
   })
 })
 
