@@ -1,5 +1,6 @@
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
+import { WINDOWS_POWERSHELL } from './win-security'
 
 const exec = promisify(execFile)
 
@@ -84,16 +85,26 @@ export function winCredReadScript(target: string): string {
   ].join('\n')
 }
 
-async function readWin(account: string, service: string): Promise<DustSecretRead> {
-  const script = winCredReadScript(`${service}/${account}`)
+/**
+ * Spawn spec for the Credential-Manager read. Exported so a unit test can assert the command without a
+ * Windows host. The command is the pinned absolute System32 path, never a bare `powershell.exe`: Windows'
+ * CreateProcess search order consults the current working directory before PATH, so a bare name lets an
+ * attacker-planted binary in an attacker-writable cwd read the user's stored OAuth token instead (see
+ * win-security.ts).
+ */
+export function winCredReadSpawnSpec(target: string): { command: string; args: string[] } {
   // -EncodedCommand takes base64 of the UTF-16LE script — sidesteps every cmd/PowerShell quoting hazard.
-  const encoded = Buffer.from(script, 'utf16le').toString('base64')
+  const encoded = Buffer.from(winCredReadScript(target), 'utf16le').toString('base64')
+  return {
+    command: WINDOWS_POWERSHELL,
+    args: ['-NoProfile', '-NonInteractive', '-EncodedCommand', encoded]
+  }
+}
+
+async function readWin(account: string, service: string): Promise<DustSecretRead> {
+  const { command, args } = winCredReadSpawnSpec(`${service}/${account}`)
   try {
-    const { stdout } = await exec(
-      'powershell.exe',
-      ['-NoProfile', '-NonInteractive', '-EncodedCommand', encoded],
-      { windowsHide: true, timeout: 15_000 }
-    )
+    const { stdout } = await exec(command, args, { windowsHide: true, timeout: 15_000 })
     return { value: stdout.trim() || null, accessDenied: false }
   } catch {
     // Exit 2 = credential not present; any other failure → treat as no session (fall back to API key).

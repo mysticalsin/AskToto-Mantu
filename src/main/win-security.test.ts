@@ -7,6 +7,7 @@ import {
   isAdminManagedTrusted,
   readTrustedAdminManaged,
   trustedAdminManagedPath,
+  WINDOWS_POWERSHELL,
   type AclProbe
 } from './win-security'
 
@@ -27,6 +28,17 @@ const USERS = 'S-1-5-32-545'
 const AUTH_USERS = 'S-1-5-11'
 const EVERYONE = 'S-1-1-0'
 const ATTACKER = 'S-1-5-21-111-222-333-1005' // a normal domain/local user RID
+
+describe('WINDOWS_POWERSHELL — the shared pinned interpreter path', () => {
+  // Every main-process powershell spawn resolves through this constant, so pin its shape here once:
+  // a bare name would let CreateProcess's cwd-before-PATH search order pick up a planted binary.
+  it('is an absolute %SystemRoot%\\System32 path, never a bare name', () => {
+    expect(WINDOWS_POWERSHELL).toMatch(
+      /^[A-Za-z]:[\\/](.+[\\/])?System32[\\/]WindowsPowerShell[\\/]v1\.0[\\/]powershell\.exe$/i
+    )
+    expect(WINDOWS_POWERSHELL).not.toBe('powershell.exe')
+  })
+})
 
 describe('evaluateAclTrust — the Windows managed-config trust decision', () => {
   it('trusts a SYSTEM-owned policy whose only write ACEs are admin principals', () => {
