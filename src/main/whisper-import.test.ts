@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 const electron = vi.hoisted(() => ({ app: { isPackaged: true } }))
-const logger = vi.hoisted(() => ({ mainLog: { error: vi.fn(), warn: vi.fn() } }))
+const logger = vi.hoisted(() => ({ mainLog: { error: vi.fn(), warn: vi.fn(), info: vi.fn() } }))
 
 vi.mock('electron', () => electron)
 vi.mock('./logger', () => logger)
@@ -178,11 +178,36 @@ describe('whisper-import language probe (initial pin off a Parakeet decode of wi
     expect(probe).not.toHaveBeenCalled()
   })
 
-  it('only probes the FIRST window of a job, never a later one', async () => {
-    nextDecodeOptions() // window 1 already decoded
-    const probe = vi.fn().mockResolvedValue('a gente vai ver isso com você, não é, para o contrato')
+  it('skips a low-information window (call-join "Hello") and pins off the first substantive one', async () => {
+    // Field failure #2 (2026-08-05): window 0 was silence + an English greeting — a single window-0 probe
+    // pinned ENGLISH and whisper then silently TRANSLATED the whole French call. The probe must wait for
+    // real speech.
+    const probe = vi
+      .fn()
+      .mockResolvedValueOnce('Hello') // window 0: greeting only — must not pin English
+      .mockResolvedValueOnce('avec tout ce qu’on met en place au niveau du groupe pour la transformation')
     await probeLanguage(new Float32Array(16), probe)
-    expect(probe).not.toHaveBeenCalled()
+    expect(nextDecodeOptions().language).toBeUndefined() // window 0 decoded un-pinned
+    await probeLanguage(new Float32Array(16), probe)
+    expect(nextDecodeOptions().language).toBe('french') // pinned at window 1
+  })
+
+  it('stops probing once pinned', async () => {
+    const probe = vi.fn().mockResolvedValue('a gente vai ver isso com você, não é, para o contrato agora')
+    await probeLanguage(new Float32Array(16), probe)
+    nextDecodeOptions()
+    await probeLanguage(new Float32Array(16), probe)
+    expect(probe).toHaveBeenCalledTimes(1)
+  })
+
+  it('gives up after the probe window budget and leaves auto in place', async () => {
+    const probe = vi.fn().mockResolvedValue('Hello') // never substantive
+    for (let i = 0; i < 7; i++) {
+      await probeLanguage(new Float32Array(16), probe)
+      nextDecodeOptions()
+    }
+    expect(probe).toHaveBeenCalledTimes(5) // PROBE_WINDOW_BUDGET
+    expect(nextDecodeOptions().language).toBeUndefined()
   })
 })
 
