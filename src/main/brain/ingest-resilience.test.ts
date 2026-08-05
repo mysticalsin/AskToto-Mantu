@@ -51,29 +51,16 @@ describe('brain ingest resilience (T6 6a/6b)', () => {
     })
     // A real provider env var in the test runner's own shell must never leak an extra eligible
     // candidate into these tests — clear every provider's key so only the ones a test explicitly
-    // setApiKey()s are "connected" (mirrors ingest-backfill.test.ts / ingest-local.test.ts).
+    // setApiKey()s are "connected".
     for (const p of PROVIDER_IDS) clearApiKey(p)
-    const envVars: Partial<Record<(typeof PROVIDER_IDS)[number], string>> = {
-      anthropic: 'ANTHROPIC_API_KEY',
-      openai: 'OPENAI_API_KEY',
-      grok: 'XAI_API_KEY',
-      nvidia: 'NVIDIA_API_KEY',
-      deepseek: 'DEEPSEEK_API_KEY',
-      qwen: 'DASHSCOPE_API_KEY',
-      minimax: 'MINIMAX_API_KEY',
-      kimi: 'MOONSHOT_API_KEY',
-      openrouter: 'OPENROUTER_API_KEY',
-      groq: 'GROQ_API_KEY',
-      together: 'TOGETHER_API_KEY',
-      fireworks: 'FIREWORKS_API_KEY',
-      mistral: 'MISTRAL_API_KEY',
-      dust: 'DUST_API_KEY',
-      gemini: 'GEMINI_API_KEY',
-      custom: 'ASKTOTO_CUSTOM_API_KEY'
-    }
-    for (const provider of PROVIDER_IDS) {
-      const envVar = envVars[provider]
-      if (envVar) vi.stubEnv(envVar, '')
+    // getApiKey() short-circuits on the provider's env var before it reads the temp profile, so a
+    // machine exporting a real KIMI_API_KEY / NVIDIA_API_KEY / … silently adds candidates to the
+    // failover walk. Sweep by suffix rather than a hand-copied provider→env-var map: the copy drifts
+    // (this one still said MOONSHOT_API_KEY long after store.ts moved kimi to KIMI_API_KEY) and the
+    // drift is invisible until it changes a walk. Same sweep store.test.ts uses; every name in
+    // store.ts's ENV_VAR map ends in `_API_KEY`, so it stays correct as providers are added.
+    for (const name of Object.keys(process.env)) {
+      if (name.endsWith('_API_KEY')) vi.stubEnv(name, undefined)
     }
     setSettings({ meetingsFolder })
     createStreamMock.mockReset()
