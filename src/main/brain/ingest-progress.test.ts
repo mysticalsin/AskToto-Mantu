@@ -12,8 +12,7 @@ import {
   brainLiveIngestProgress,
   enqueueIngest,
   reconcileMeetingsInBackground,
-  ingestExtraction
-} from './ingest'
+  ingestExtraction, whenIndexWritesSettle } from './ingest'
 import { MeetingExtractionSchema } from '@shared/brain'
 import { readAccount, readIndex, slugify, writeMeetingExtraction } from './store'
 
@@ -71,9 +70,13 @@ describe('backfill progress bookkeeping across runs', () => {
     setApiKey('anthropic', 'fake-test-key-not-real')
   })
 
-  afterEach(() => {
-    rmSync(userData, { recursive: true, force: true })
-    rmSync(meetingsFolder, { recursive: true, force: true })
+  afterEach(async () => {
+    // The queue draining is not the same as the writes landing: the last job’s index.json record is
+    // still on ingest.ts’s serialized lane at that moment. Await it, or the stale write lands during
+    // the NEXT test (and races this rmSync — ENOTEMPTY on the Windows CI runner).
+    await whenIndexWritesSettle()
+    rmSync(userData, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
+    rmSync(meetingsFolder, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
     vi.unstubAllEnvs()
     vi.restoreAllMocks()
   })

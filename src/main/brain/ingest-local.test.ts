@@ -72,8 +72,8 @@ describe('automatic brain ingest with Métis Local', () => {
     // unhandled rejection and lets the stale write land during the NEXT test, where startBackfill()
     // then reports queued:0 because the index it reads is not the one this test just seeded.
     await whenIndexWritesSettle()
-    rmSync(userData, { recursive: true, force: true })
-    rmSync(meetingsFolder, { recursive: true, force: true })
+    rmSync(userData, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
+    rmSync(meetingsFolder, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
     vi.unstubAllEnvs()
     vi.restoreAllMocks()
   })

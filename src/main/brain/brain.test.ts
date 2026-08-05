@@ -64,7 +64,7 @@ describe('brain', () => {
     folder = mkdtempSync(join(tmpdir(), 'asktoto-brain-test-'))
     s = settingsFor(folder)
   })
-  afterEach(() => rmSync(folder, { recursive: true, force: true }))
+  afterEach(() => rmSync(folder, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }))
 
   const sampleExtraction = (): MeetingExtraction =>
     MeetingExtractionSchema.parse({
@@ -474,8 +474,8 @@ describe('brain', () => {
         expect(dealA.win_likelihood_band).toBe('concerning')
         expect(dealA.velocity.evidence).toBe('gate-closing')
       } finally {
-        rmSync(folderA, { recursive: true, force: true })
-        rmSync(folderB, { recursive: true, force: true })
+        rmSync(folderA, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
+        rmSync(folderB, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
       }
     })
   })
@@ -516,7 +516,7 @@ describe('brain', () => {
         const person = readPerson(sx, slugify('Kim Lee'))!
         return { canon: JSON.stringify({ deal: canonicalize(deal), person: canonicalize(person) }), deal }
       } finally {
-        rmSync(dir, { recursive: true, force: true })
+        rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
       }
     }
 
@@ -580,7 +580,7 @@ describe('brain', () => {
           const acc = readAccount(sx, slugify('TieCo'))!
           return { canon: JSON.stringify(canonicalize(acc)), acc }
         } finally {
-          rmSync(dir, { recursive: true, force: true })
+          rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
         }
       }
 
@@ -617,7 +617,7 @@ describe('brain', () => {
           const acc = readAccount(sx, slugify('MixCo'))!
           return { canon: JSON.stringify(canonicalize(acc)), acc }
         } finally {
-          rmSync(dir, { recursive: true, force: true })
+          rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
         }
       }
 
@@ -653,7 +653,7 @@ describe('brain', () => {
           const deal = readDeal(sx, slugify('VelCo Deal'))!
           return { canon: JSON.stringify(canonicalize(deal)), deal }
         } finally {
-          rmSync(dir, { recursive: true, force: true })
+          rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
         }
       }
 

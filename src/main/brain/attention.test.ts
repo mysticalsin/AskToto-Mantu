@@ -25,7 +25,7 @@ describe('computeAttention (Task MI-3 needs-attention aggregation)', () => {
     folder = mkdtempSync(join(tmpdir(), 'asktoto-attention-test-'))
     s = settingsFor(folder)
   })
-  afterEach(() => rmSync(folder, { recursive: true, force: true }))
+  afterEach(() => rmSync(folder, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }))
 
   it('a clean brain (no entities) produces no items', () => {
     expect(computeAttention(s)).toEqual([])
@@ -142,7 +142,7 @@ describe('brain:meetingExtraction store contract', () => {
     folder = mkdtempSync(join(tmpdir(), 'asktoto-meeting-extraction-test-'))
     s = settingsFor(folder)
   })
-  afterEach(() => rmSync(folder, { recursive: true, force: true }))
+  afterEach(() => rmSync(folder, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }))
 
   it('returns the stored extraction for an ingested meeting, keyed by slugify(basename(file))', async () => {
     const x = MeetingExtractionSchema.parse({
@@ -214,7 +214,7 @@ describe('render-gate property — no unverified NUMBER ever reaches the Attenti
     folder = mkdtempSync(join(tmpdir(), 'asktoto-attention-gate-'))
     s = settingsFor(folder)
   })
-  afterEach(() => rmSync(folder, { recursive: true, force: true }))
+  afterEach(() => rmSync(folder, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }))
 
   it('Leak A: an AMBIGUOUS amount never puts its raw figure into the attention detail', async () => {
     const slug = slugify('Ambiguous Amount Deal')

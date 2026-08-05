@@ -37,11 +37,11 @@ const key = `${platform}-${arch}/${binaryName}`
 let cwd: string
 
 /** Lay down resources/ffmpeg/<platform>-<arch>/<binary> plus a manifest pinning its real hash. */
-function seed(content: string | Buffer, mode = 0o755): void {
+function seed(content: string | Buffer): void {
   const dir = join(cwd, 'resources', 'ffmpeg', `${platform}-${arch}`)
   mkdirSync(dir, { recursive: true })
   const file = join(dir, binaryName)
-  writeFileSync(file, content, { mode })
+  writeFileSync(file, content, { mode: 0o755 })
   const sha256 = createHash('sha256').update(content).digest('hex')
   writeFileSync(
     join(cwd, 'resources', 'ffmpeg', 'manifest.json'),
@@ -99,13 +99,16 @@ describe('check-ffmpeg-sidecar licence gate', () => {
   })
 
   it('reports an unexecutable binary as an execution failure, not a licence failure', () => {
-    // Seeded WITHOUT the execute bit, which is the only fixture that fails to spawn on all three hosts.
-    // A non-image payload alone is not enough on Linux: execvp() falls back to /bin/sh when execve
-    // returns ENOEXEC, so dash interprets the bytes and the gate sees a normal exit 127 ("1: ^A^B: not
-    // found") instead of a spawn error — that is why this case failed every ubuntu CI run on main.
-    // EACCES has no such fallback, so POSIX reports a real spawn error; Windows ignores the mode but
-    // rejects the non-PE payload anyway (UNKNOWN). All three therefore reach the same branch under test.
-    seed('\x00\x01\x02 definitely not an executable\n', 0o644)
+    // A shebang naming an interpreter that does not exist. Getting this to fail the SAME way on all
+    // three hosts is fiddlier than it looks:
+    //   - a raw non-image payload is not enough on Linux, because execvp() falls back to /bin/sh when
+    //     execve returns ENOEXEC, so dash interprets the bytes and the gate sees a normal exit 127
+    //     ("1: ^A^B: not found"). That is what failed every ubuntu CI run on main.
+    //   - dropping the execute bit does not work either: the gate's own exec-bit guard
+    //     (check-ffmpeg-sidecar.mjs:18) throws "is not executable" before it ever spawns.
+    // A missing interpreter makes execve return ENOENT, which has no shell fallback, so POSIX reports a
+    // real spawn error; Windows rejects the non-PE payload anyway (UNKNOWN). Same branch on all three.
+    seed('#!/nonexistent-interpreter-for-this-test\n')
     const { status, output } = run()
     expect(status).not.toBe(0)
     expect(output).toContain('could not be executed')

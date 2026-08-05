@@ -73,8 +73,8 @@ describe('resumeBackfillIfPending resumes an interrupted rebuild replay (Fix E)'
 
   afterEach(async () => {
     await waitForIdle()
-    rmSync(userData, { recursive: true, force: true })
-    rmSync(meetingsFolder, { recursive: true, force: true })
+    rmSync(userData, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
+    rmSync(meetingsFolder, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
     vi.restoreAllMocks()
   })
 
@@ -155,8 +155,8 @@ describe('rebuild refuses / surfaces a corrupt-journal replay failure (review Fi
   })
   afterEach(async () => {
     await waitForIdle()
-    rmSync(userData, { recursive: true, force: true })
-    rmSync(meetingsFolder, { recursive: true, force: true })
+    rmSync(userData, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
+    rmSync(meetingsFolder, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
     vi.restoreAllMocks()
   })
 
