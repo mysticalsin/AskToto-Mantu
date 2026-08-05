@@ -19,7 +19,7 @@ import {
   powerSaveBlocker,
   systemPreferences
 } from 'electron'
-import { join, basename, dirname, resolve, relative, isAbsolute, extname } from 'node:path'
+import { join, basename, dirname, resolve, extname } from 'node:path'
 import { readFileSync, existsSync, writeFileSync, realpathSync, readdirSync, unlinkSync, createReadStream, statSync, renameSync, rmdirSync } from 'node:fs'
 import { pathToFileURL } from 'node:url'
 import { randomBytes } from 'node:crypto'
@@ -213,6 +213,7 @@ import { runSelfTest } from './selftest'
 import { readEvalMetrics, aggregateMetrics } from './metrics'
 import { importDustCliSession, refreshDustCliSession, setupDustCli } from './dustcli'
 import { asrManifestComplete } from './asr-manifest'
+import { isInsideResourceBase, realResourceBase } from './asr-model-path'
 import { detectCli, testCli, setupCli, installCli, loginCli, prewarmCli } from './cli'
 import { connectBidstack, pushToBidstack } from './mcp/bidstackClient'
 import { activateLicense, checkLicenseGrace, heartbeat } from './license'
@@ -4048,12 +4049,16 @@ if (!app.requestSingleInstanceLock()) {
   // Maps asr-model://<host>/<pathname> → RES_BASE/<host>/<pathname> on disk.
   // This lets the Whisper worker (served over file://) use fetch() to load
   // bundled ONNX model weights and WASM blobs with zero network access.
-  // Path-traversal guard: relative() must stay within RES_BASE (separator-safe on Windows).
+  // Path-traversal guard: the resolved target must stay within RES_BASE (separator-safe on Windows).
   runStep('asrModelProtocol', () => {
     const REPO_ROOT = join(__dirname, '..', '..')
     const RES_BASE = app.isPackaged
       ? process.resourcesPath
       : join(REPO_ROOT, 'resources')
+    // The traversal check below compares against the REAL base: request targets are realpath-resolved
+    // (symlink-escape guard), so an unresolved base would describe the same directory in different words
+    // and 403 every asset — see realResourceBase for the Windows-junction case this broke.
+    const RES_BASE_REAL = realResourceBase(RES_BASE)
 
     // A packaged app is ALWAYS offline-only, even if its installer is corrupt/incomplete. Returning true
     // keeps the worker's remote resolver disabled so missing assets fail locally with a reinstall message
@@ -4098,9 +4103,8 @@ if (!app.requestSingleInstanceLock()) {
           throw e
         }
         // Path-traversal guard (separator-safe on Windows): reject any path that escapes RES_BASE.
-        // Run the check against the real (symlink-resolved) path, not the raw abs path.
-        const relCheck = relative(RES_BASE, real)
-        if (relCheck.startsWith('..') || isAbsolute(relCheck)) {
+        // Run the check against the real (symlink-resolved) path on BOTH sides, not the raw abs path.
+        if (!isInsideResourceBase(RES_BASE_REAL, real)) {
           return respond(null, { status: 403 })
         }
         const resp = await net.fetch(pathToFileURL(real).toString())
