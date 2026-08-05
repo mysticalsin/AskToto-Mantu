@@ -18,6 +18,14 @@ export type Category =
 
 export type DealOutcome = 'won' | 'lost' | 'open'
 
+/** Mirrors the host's ProvenanceState (src/shared/brain.ts) for exactly the provenance-bearing fields
+ *  Deal/Account/Person carry — keyed by the SAME field name brain:field-decision/brain:entityUpdateField
+ *  use ('stage'/'win_likelihood_band'/'velocity' for Deal, 'sector' for Account, 'role'/'org' for
+ *  Person). A field absent from the map has no provenance sidecar at all (legacy data, or the
+ *  standalone data.json build, which never carries provenance) — views must treat a missing entry as
+ *  "nothing to review", never as an implicit 'extracted'. */
+export type FieldState = Partial<Record<string, 'extracted' | 'verified' | 'edited' | 'pinned'>>
+
 /** Layer 1 — a single atomic, cited claim extracted from one deal's sources. */
 export interface Claim {
   claim_id: string
@@ -121,6 +129,8 @@ export interface Deal {
   // Every meeting ref this deal was tagged in, including ones extraction hasn't landed for yet — a
   // superset of call_grades (which only shows refs already joined to a landed extraction).
   meetings: MeetingRef[]
+  // See FieldState's doc comment above. Absent entirely for the standalone data.json build.
+  field_state?: FieldState
 }
 
 /** account_graph node/edge shape for the relationship-graph view. */
@@ -210,6 +220,8 @@ export interface Account {
   win_reasons: Reason[]
   loss_reasons: Reason[]
   meetings: MeetingRef[]
+  // See FieldState's doc comment above. Absent entirely for the standalone data.json build.
+  field_state?: FieldState
 }
 
 export interface StanceTrailEntry {
@@ -228,6 +240,8 @@ export interface Person {
   stance_trail: StanceTrailEntry[]
   commitments: Commitment[]
   meetings: MeetingRef[]
+  // See FieldState's doc comment above. Absent entirely for the standalone data.json build.
+  field_state?: FieldState
 }
 
 /** One row of the meetings feed — every ingested meeting, newest first. */

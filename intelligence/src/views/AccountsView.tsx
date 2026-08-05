@@ -5,6 +5,7 @@ import type { DashboardData } from '../types/data'
 import { freshnessColor, freshnessLabel } from '../lib/format'
 import { slug } from '../lib/slug'
 import { Timeline } from '../components/Timeline'
+import { AcceptSuggestion } from '../components/AcceptSuggestion'
 
 interface Props {
   data: DashboardData
@@ -104,7 +105,15 @@ export function AccountsView({ data }: Props) {
             <div className="rounded-xl border border-[var(--color-mantu-border)] bg-[var(--color-mantu-surface)] p-5">
               <h2 className="text-lg font-semibold text-white/90">{account.name}</h2>
               <dl className="mt-3 space-y-2 text-sm">
-                <Row label="Sector" value={account.sector} />
+                <Row
+                  label="Sector"
+                  value={account.sector}
+                  extra={
+                    account.field_state?.sector === 'extracted' && (
+                      <AcceptSuggestion entityKind="account" entityId={account.slug} field="sector" />
+                    )
+                  }
+                />
                 <Row label="Strategic account" value={account.strategic ? 'Yes' : 'No'} />
                 <Row label="Deals" value={String(dealsHere.length)} />
                 <Row label="People mapped" value={String(peopleHere.length)} />
@@ -217,11 +226,14 @@ function Row({
   value,
   dot,
   title,
+  extra,
 }: {
   label: string
   value: string
   dot?: string
   title?: string
+  // Rendered after the value — the dashboard's Accept-suggestion affordance, when a caller has one.
+  extra?: React.ReactNode
 }) {
   return (
     <div className="flex items-center justify-between border-b border-white/5 pb-1.5">
@@ -229,6 +241,7 @@ function Row({
       <dd className="flex items-center gap-1.5 font-medium text-white/85" title={title}>
         {dot && <span className="h-2 w-2 rounded-full" style={{ background: dot }} />}
         {value}
+        {extra}
       </dd>
     </div>
   )

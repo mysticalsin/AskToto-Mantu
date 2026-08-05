@@ -13,6 +13,7 @@ import {
 import { ledgerTotals } from '../lib/ledgerstats'
 import { slug } from '../lib/slug'
 import { Timeline } from '../components/Timeline'
+import { AcceptSuggestion } from '../components/AcceptSuggestion'
 
 interface Props {
   data: DashboardData
@@ -213,12 +214,25 @@ export function DealView({ data }: Props) {
                 />
                 {deal.strategic_group && <Row label="Strategic group" value={deal.strategic_group} />}
                 <Row label="Sector" value={deal.sector} />
-                <Row label="Stage" value={deal.stage} />
+                <Row
+                  label="Stage"
+                  value={deal.stage}
+                  extra={
+                    deal.field_state?.stage === 'extracted' && (
+                      <AcceptSuggestion entityKind="deal" entityId={deal.bid_id} field="stage" />
+                    )
+                  }
+                />
                 <Row label="Outcome" value={outcomeLabel[deal.outcome]} />
                 <Row
                   label="Win likelihood"
                   value={deal.win_likelihood_band ? bandLabel[deal.win_likelihood_band] : 'Ungraded (no cited evidence)'}
                   dot={deal.win_likelihood_band ? bandColor[deal.win_likelihood_band] : 'rgba(255,255,255,0.28)'}
+                  extra={
+                    deal.field_state?.win_likelihood_band === 'extracted' && (
+                      <AcceptSuggestion entityKind="deal" entityId={deal.bid_id} field="win_likelihood_band" />
+                    )
+                  }
                 />
                 {deal.band_evidence && (
                   <div className="border-b border-white/5 pb-1.5 text-[11px] italic text-white/40">
@@ -231,6 +245,11 @@ export function DealView({ data }: Props) {
                       label="Velocity"
                       value={velocityLabel[deal.velocity.signal] ?? deal.velocity.signal}
                       title={deal.velocity.evidence || undefined}
+                      extra={
+                        deal.field_state?.velocity === 'extracted' && (
+                          <AcceptSuggestion entityKind="deal" entityId={deal.bid_id} field="velocity" />
+                        )
+                      }
                     />
                     {deal.velocity.evidence && (
                       <div className="text-[11px] text-white/40">{deal.velocity.evidence}</div>
@@ -418,6 +437,7 @@ function Row({
   title,
   linkTo,
   linkTitle,
+  extra,
 }: {
   label: string
   value: string
@@ -425,6 +445,8 @@ function Row({
   title?: string
   linkTo?: string
   linkTitle?: string
+  // Rendered after the value — the dashboard's Accept-suggestion affordance, when a caller has one.
+  extra?: React.ReactNode
 }) {
   return (
     <div className="flex items-center justify-between border-b border-white/5 pb-1.5">
@@ -438,6 +460,7 @@ function Row({
         ) : (
           value
         )}
+        {extra}
       </dd>
     </div>
   )

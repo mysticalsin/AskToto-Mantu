@@ -22,6 +22,19 @@ function whisperWorkletUrl(): string {
 const WINDOW_SEC = 6
 const MAX_QUEUE = 24 // ~2.4 min of audio; drop oldest if the model is slow/failed to load
 const PARAKEET_FEED_TIMEOUT_MS = 5000 // a single Parakeet window shouldn't take longer than this to transcribe
+// ── Whisper 'auto' language probe (PROVEN FACT 2026-08-05, direct probe): transformers.js's whisper NEVER
+// auto-detects on an un-pinned decode — it logs "No language specified - defaulting to English" and
+// decodes ENGLISH regardless of what was actually spoken. So asrLanguage:'auto' needs a language-agnostic
+// signal to pin off, exactly like the import path (main/whisper-import.ts) was just fixed to use: Parakeet
+// takes no `language` option, so its output reflects what was actually said. Probe early/periodic 'them'
+// or 'you' windows through window.toto.parakeetFeed (main-side, bundled on both platforms) alongside the
+// whisper decode — fire-and-forget, never blocking — and once shared/lang-id.ts confidently identifies the
+// audio, post the worker a 'pinLanguage' message (see whisper.worker.ts's block comment for the invariants
+// that message latches: never un-pin once pinned; explicit settings languages are never probed at all).
+const PROBE_WINDOW_BUDGET = 5 // give up pinning off the opening windows after this many and stay 'auto'
+const PROBE_MIN_WORDS = 8 // a near-empty window ("Hello") can only mislead — wait for real substance
+const PROBE_EVERY = 4 // once pinned, re-probe on this cadence to catch a genuine mid-meeting switch
+const SWITCH_AFTER = 2 // consecutive confirming re-probes required before actually re-pinning
 // Cross-line half of the repetition-loop guard (intra-line half = collapseRepeatedPhrase): a looping
 // decoder returns the identical line for window after window; real speech repeats the same normalized
 // line at most once. Two consecutive copies stay, the rest of the run is dropped.
@@ -308,6 +321,14 @@ export function useListen(
   // the MAX_CONSECUTIVE_DUPES guard. Reset on start() so a phrase legitimately reopening a new meeting
   // is never suppressed by the previous session's tail.
   const repeatRunRef = useRef<{ key: string; speaker: string; count: number }>({ key: '', speaker: '', count: 0 })
+  // Whisper 'auto' language probe state (see PROBE_EVERY's block comment above) — mirrors
+  // whisper-import.ts's module-level probePinned/activeLang/switchRun, scoped per session via refs since
+  // this hook only ever runs one live session at a time (liveRef). Reset on every start() and on a real
+  // setLanguage() change so a new/changed session never inherits a previous pin.
+  const probePinnedRef = useRef(false)
+  const pinnedLangRef = useRef<string | null>(null)
+  const probeWindowCountRef = useRef(0)
+  const probeSwitchRunRef = useRef<{ lang: string; count: number } | null>(null)
 
   // Add a transcribed line + fire the auto-answer hook. Shared by the Whisper worker and Parakeet paths.
   // `name` is the optional Speaker Intelligence label (main-side voice embedding on THEM windows) — the
@@ -362,6 +383,59 @@ export function useListen(
         themRunRef.current = ''
       }
     }
+  }, [])
+
+  // Probes ONE window through Parakeet (main-side IPC, language-agnostic) to pin/re-pin the live Whisper
+  // worker's decode language — see PROBE_EVERY's block comment above and whisper.worker.ts's for the full
+  // design. Fire-and-forget by construction: called from pump() alongside (never blocking) the whisper
+  // decode, and a probe failure — Parakeet released between meetings (parakeetRelease), a flaky IPC round
+  // trip, the model simply not being bundled on this platform — must never disturb whisper transcription,
+  // so every exit here is silent. Mirrors whisper-import.ts's probeLanguage + reprobeForSwitch, merged into
+  // one function since listen.ts (unlike the import job) drives its own single probe cadence in pump().
+  const probeLanguageWindow = useCallback((audio: Float32Array, speaker: Speaker): void => {
+    window.toto
+      .parakeetFeed(audio, speaker)
+      .then((res) => {
+        // The session may have moved on (stopped, switched engine, or the user set an explicit language)
+        // by the time this async round trip resolves — a stale probe must not touch the current state.
+        if (!liveRef.current || engineRef.current !== 'whisper' || asrLanguageRef.current !== 'auto') return
+        const text = typeof res === 'string' ? res : res.text
+        // A near-empty window ("Hello") can only mislead — wait for a window with real substance.
+        if (text.trim().split(/\s+/).filter(Boolean).length < PROBE_MIN_WORDS) return
+        const detected = detectLanguage(text).lang
+        if (!detected) return
+        if (!probePinnedRef.current) {
+          // First confident identification pins the worker immediately — no SWITCH_AFTER convergence
+          // wait for the INITIAL pin, same as whisper-import.ts's probeLanguage.
+          probePinnedRef.current = true
+          pinnedLangRef.current = detected
+          probeSwitchRunRef.current = null
+          workerRef.current?.postMessage({ type: 'pinLanguage', language: detected })
+          return
+        }
+        if (detected === pinnedLangRef.current) {
+          probeSwitchRunRef.current = null // the current pin re-confirmed — false alarm
+          return
+        }
+        const run = probeSwitchRunRef.current
+        if (run && run.lang === detected) {
+          run.count += 1
+          if (run.count >= SWITCH_AFTER) {
+            pinnedLangRef.current = detected
+            probeSwitchRunRef.current = null
+            workerRef.current?.postMessage({ type: 'pinLanguage', language: detected })
+          }
+        } else {
+          // Different candidate than the one being confirmed: restart the count (no age/patience budget
+          // here — unlike the worker's OWN un-pinned switchRun, this only ticks on probe-cadence windows,
+          // which are already PROBE_EVERY apart, so there is no "stuck holding un-pinned" failure mode to
+          // bound against).
+          probeSwitchRunRef.current = { lang: detected, count: 1 }
+        }
+      })
+      .catch(() => {
+        /* silently non-fatal — see block comment above */
+      })
   }, [])
 
   const pump = useCallback((): void => {
@@ -451,6 +525,18 @@ export function useListen(
         })
       return
     }
+    // Only the whisper engine falls through to here (parakeet/apple both returned above). In 'auto' mode
+    // Whisper cannot tell what language this window is on its own (see PROBE_EVERY's block comment) — feed
+    // it to Parakeet on the probe cadence too, BEFORE the audio buffer is transferred to the worker below
+    // (postMessage's transfer list detaches job.audio.buffer synchronously; probeLanguageWindow must read it
+    // first). Fire-and-forget: its own .then/.catch never touches busy/queue, so it cannot affect the pump
+    // loop's timing or backpressure.
+    if (asrLanguageRef.current === 'auto') {
+      probeWindowCountRef.current += 1
+      const n = probeWindowCountRef.current
+      const due = probePinnedRef.current ? n % PROBE_EVERY === 0 : n <= PROBE_WINDOW_BUDGET
+      if (due) probeLanguageWindow(job.audio, job.speaker)
+    }
     if (!workerRef.current) {
       busy.current = false
       return
@@ -459,7 +545,7 @@ export function useListen(
     // fallBackToWhisper (called in the parakeet .catch above) is forward-declared below and intentionally
     // omitted from deps: pump → fallBackToWhisper → ensureWorker → pump is a cycle, so listing it would TDZ
     // at render. All four callbacks are stable (created once), so pump's captured reference never goes stale.
-  }, [commitLine])
+  }, [commitLine, probeLanguageWindow])
 
   const ensureWorker = useCallback((): Worker => {
     if (workerRef.current) return workerRef.current
@@ -946,6 +1032,12 @@ export function useListen(
         engineRef.current = engine
         themRunRef.current = '' // fresh session → no carried-over 'them' question turn
         repeatRunRef.current = { key: '', speaker: '', count: 0 } // fresh session → no carried-over dupe run
+        // Fresh session → no carried-over Parakeet language pin (mirrors whisper.worker.ts's own
+        // resetFollow, sent further below as part of the 'init' message for the exact same reason).
+        probePinnedRef.current = false
+        pinnedLangRef.current = null
+        probeWindowCountRef.current = 0
+        probeSwitchRunRef.current = null
         setState((s) => ({ ...s, error: null, captureDegraded: null, listening: true, paused: false }))
         try {
           await window.toto.setListeningState(true)
@@ -1428,6 +1520,15 @@ export function useListen(
     async (language: string): Promise<void> => {
       if (asrLanguageRef.current === language) return
       asrLanguageRef.current = language
+      // A real language change abandons any in-progress Parakeet probe/pin from the previous setting —
+      // mirrors whisper-import.ts's applyInitLanguage delta-reset (and whisper.worker.ts's own
+      // resetLanguageFollow, triggered below by the 'init' message reaching an unchanged-quality warm
+      // worker through its delta path). Applies whether the OLD or the NEW value was 'auto': a real
+      // language change either way must never inherit a stale pin.
+      probePinnedRef.current = false
+      pinnedLangRef.current = null
+      probeWindowCountRef.current = 0
+      probeSwitchRunRef.current = null
       if (engineRef.current !== 'whisper' || !workerRef.current || !liveRef.current) return
       try {
         const bundled = await getAsrBundled()

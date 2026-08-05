@@ -38,6 +38,7 @@ import {
   EntityMergePayloadSchema,
   EntityUnmergePayloadSchema,
   EntityUpdateFieldPayloadSchema,
+  FieldDecisionPayloadSchema,
   CommitmentRejectPayloadSchema,
   MeetingExtractionQuerySchema,
   appendAsrCorrection,
@@ -132,6 +133,7 @@ import {
   mergeEntities,
   unmergeEntities,
   updateEntityField,
+  readFieldProvenance,
   rejectCommitment,
   isJournalCorruptionBlocked,
   clearJournalCorruptionLock,
@@ -373,9 +375,10 @@ function assertMainWindow(event: Electron.IpcMainInvokeEvent): void {
   }
 }
 
-/** The three read-only brain channels are ALSO callable from the Mantu Intelligence window's top frame
- *  (its preload exposes nothing else — see src/preload/intelligence.ts). Everything privileged stays
- *  main-window-only via assertMainWindow. */
+/** brain:status/brain:read (pure reads) and brain:backfill/brain:field-decision (narrow, guarded writes —
+ *  a backfill request, and promoting one already-`extracted` field the human reviewed) are ALSO callable
+ *  from the Mantu Intelligence window's top frame; that preload exposes nothing beyond these four (see
+ *  src/preload/intelligence.ts). Every other privileged write stays main-window-only via assertMainWindow. */
 function assertBrainReader(event: Electron.IpcMainInvokeEvent): void {
   const frame = event.senderFrame
   if (isIntelligenceSender(event.sender)) {
@@ -3331,6 +3334,39 @@ function registerIpc(): void {
     if (r.ok) {
       await markBrainChanged(getSettings())
       auditLog('brain.commitment.rejected', {})
+    }
+    return r
+  })
+  // Dashboard suggestion accept/dismiss (deferred CRM pattern 3) — the one privileged write the Mantu
+  // Intelligence window gets (assertBrainReader, not assertMainWindow), because it's exactly as narrow as
+  // brain:backfill already was: promote ONE already-`extracted` field the human just reviewed, nothing more.
+  ipcMain.handle(IPC.brainFieldDecision, async (e, raw) => {
+    assertBrainReader(e)
+    if (!requireAuth()) return { ok: false, error: 'Sign in with your Mantu account first.' }
+    const parsed = FieldDecisionPayloadSchema.safeParse(raw)
+    if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message || 'Invalid request.' }
+    const { entityKind, entityId, field, decision } = parsed.data
+    if (decision === 'dismiss') {
+      // No legal expression exists yet: updateEntityField only ever pins a NEW human value (always ->
+      // state 'pinned') — there is no field_update variant that clears/reverts one, and some fields
+      // (account.sector's enum, deal.amount's {value, currency}) have no null/empty value to revert to
+      // even if there were. Refused honestly rather than silently no-opping.
+      return { ok: false, error: 'Dismissing a suggestion is not supported yet.' }
+    }
+    const s = getSettings()
+    const provenance = readFieldProvenance(s, { kind: entityKind, id: entityId, field })
+    if (!provenance) return { ok: false, error: `"${field}" has no pending suggestion to accept.` }
+    if (provenance.state !== 'extracted') return { ok: false, error: 'This field is not pending review.' }
+    // "Accept" = the human confirms the extracted value is correct, so it's re-pinned UNCHANGED. This
+    // moves it from 'extracted' (never renders as fact — see RENDERABLE_PROVENANCE_STATES) to 'pinned'
+    // (does), the same outcome an in-place edit-then-save-with-no-changes would produce today — there is
+    // no separate "verify without editing" mutation, so this is the correction engine's exact legal
+    // expression of "accept".
+    const r = await updateEntityField(s, { kind: entityKind, id: entityId, field, value: provenance.value })
+    if (r.ok) {
+      await markBrainChanged(s)
+      auditLog('brain.entity.field_decision', { kind: entityKind, field, decision })
+      await publishEntity(s, entityKind, entityId)
     }
     return r
   })
