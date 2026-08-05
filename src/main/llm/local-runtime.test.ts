@@ -1,8 +1,9 @@
-import { describe, it, expect, vi } from 'vitest'
+import { describe, it, expect, afterEach, vi } from 'vitest'
 import { readFileSync, existsSync, mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { spawnSync } from 'node:child_process'
+import type { EventEmitter } from 'node:events'
 
 // local-runtime.ts imports auditLog from ../logger, which imports `app` from electron — mock both so the
 // module loads under plain Node (mirrors dust.test.ts's mocking style for the same import chain).
@@ -257,4 +258,183 @@ describe('start() integration — real binary + real Qwen3.5-0.8B model', () => 
     },
     60_000
   )
+})
+
+// ─── Startup hardening (faked child process) ──────────────────────────────────────────────────────────
+// The two blocks below need a faked `node:child_process` + `fetch` so the "spawn -> listening line ->
+// health" timing is controllable. The real-binary integration block above must keep the REAL spawn, and
+// vi.mock() is file-scoped + hoisted — so load a private, freshly-registered copy of local-runtime via
+// vi.resetModules() + vi.doMock() instead (the same fake-proc shape local-runtime.concurrency.test.ts
+// uses). Each load also yields pristine module-level state — the sticky CPU pin and the restart budget
+// both live for the life of the module, and these tests depend on starting from zero.
+
+interface FakeProc {
+  stdout: EventEmitter
+  stderr: EventEmitter
+  killed: boolean
+  kill: ReturnType<typeof vi.fn>
+  emit: (event: string, ...args: unknown[]) => boolean
+}
+
+interface Harness {
+  runtime: typeof import('./local-runtime')
+  logger: typeof import('../logger')
+  procs: FakeProc[]
+  calls: Array<{ path: string; args: string[] }>
+}
+
+async function loadIsolatedRuntime(): Promise<Harness> {
+  vi.resetModules()
+  const procs: FakeProc[] = []
+  const calls: Array<{ path: string; args: string[] }> = []
+  vi.doMock('node:child_process', async () => {
+    const { EventEmitter: EE } = await import('node:events')
+    const spawn = vi.fn((path: string, args: string[]) => {
+      const proc = new EE() as unknown as FakeProc
+      proc.stdout = new EE()
+      proc.stderr = new EE()
+      proc.killed = false
+      proc.kill = vi.fn(() => {
+        if (proc.killed) return
+        proc.killed = true
+        queueMicrotask(() => proc.emit('exit', null, 'SIGKILL'))
+      })
+      procs.push(proc)
+      calls.push({ path, args })
+      return proc
+    })
+    return { spawn }
+  })
+  // Every candidate binary must "exist" so the loop never short-circuits on the missing-binary path —
+  // only spawn/health timing matters here. The integration block above resolved node:fs at file load,
+  // so its real existsSync is unaffected.
+  vi.doMock('node:fs', async (importOriginal) => {
+    const actual = await importOriginal<typeof import('node:fs')>()
+    return { ...actual, existsSync: () => true }
+  })
+  // Imported from the freshly-reset registry so both objects are the ones the isolated runtime actually
+  // holds — the module-level vi.mock factories re-run on reset and hand out new vi.fn()s.
+  const runtime = await import('./local-runtime')
+  const logger = await import('../logger')
+  return { runtime, logger, procs, calls }
+}
+
+function emitListening(h: Harness, procIndex: number, port: number): void {
+  h.procs[procIndex].stdout.emit(
+    'data',
+    Buffer.from(`0.00.787.103 I srv llama_server: listening on http://127.0.0.1:${port}\n`)
+  )
+}
+
+async function waitUntil(cond: () => boolean, timeoutMs = 2000): Promise<void> {
+  const deadline = Date.now() + timeoutMs
+  while (!cond()) {
+    if (Date.now() > deadline) throw new Error('waitUntil timed out')
+    await new Promise((r) => setTimeout(r, 1))
+  }
+}
+
+describe('port-line timeout — a sidecar that starts but never reports a listening port', () => {
+  afterEach(() => {
+    vi.useRealTimers()
+    vi.unstubAllGlobals()
+  })
+
+  it('rejects once the port-line budget expires instead of waiting forever, and kills the child', async () => {
+    const h = await loadIsolatedRuntime()
+    vi.stubGlobal('fetch', async () => ({ status: 200 }))
+    // Only the timers are faked: pollHealth's Date.now() and the fake proc's queueMicrotask must stay real.
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+
+    let outcome: 'resolved' | 'rejected' | undefined
+    let err: unknown
+    void h.runtime.start({ gguf: '/m/a.gguf', mmproj: '/m/a.mmproj' }, 'mac').then(
+      () => {
+        outcome = 'resolved'
+      },
+      (e) => {
+        outcome = 'rejected'
+        err = e
+      }
+    )
+
+    // The child spawned fine — it just never prints "listening on http://127.0.0.1:<port>" (wrong build,
+    // GPU driver stall, a llama.cpp log-format change). Nothing else settles this promise: the
+    // HEALTH_BUDGET_MS deadline only starts counting once that line has been parsed.
+    expect(h.calls).toHaveLength(1)
+    h.procs[0].stdout.emit('data', Buffer.from('0.00.050.937 I srv load_model: loading model\n'))
+
+    // A slow-but-healthy cold start (Defender scan + GGUF read off a cold disk) must NOT be cut off: the
+    // budget is deliberately generous, so nothing may settle before it elapses.
+    await vi.advanceTimersByTimeAsync(59_000)
+    expect(outcome).toBeUndefined()
+
+    await vi.advanceTimersByTimeAsync(2_000)
+    for (let i = 0; i < 5; i++) await Promise.resolve()
+
+    // FAILS before the fix: with no port-line timeout `outcome` is still undefined here — start() stays
+    // pending forever and Métis Local is permanently wedged with no error surfaced to the user.
+    expect(outcome).toBe('rejected')
+    expect(String(err)).toMatch(/never reported a listening port within 60000ms/)
+    expect(String(err)).toMatch(/load_model: loading model/) // the tail is carried for diagnosis
+    // Killed AND reaped — no orphan llama-server survives the timeout holding the model's RAM.
+    expect(h.procs[0].kill).toHaveBeenCalledWith('SIGKILL')
+    expect(h.procs[0].killed).toBe(true)
+    expect(h.calls).toHaveLength(1)
+    expect(h.runtime.getState()).toBe('stopped')
+    expect(h.runtime.isRunning()).toBe(false)
+  })
+})
+
+describe('sticky CPU fallback — a Vulkan sidecar that crashes AFTER reaching running', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('pins the CPU build for the rest of the session instead of auto-restarting Vulkan into a crash loop', async () => {
+    const h = await loadIsolatedRuntime()
+    vi.stubGlobal('fetch', async () => ({ status: 200 }))
+    const paths = { gguf: '/m/a.gguf', mmproj: '/m/a.mmproj' }
+
+    const p = h.runtime.start(paths, 'win')
+    expect(h.calls[0].path).toContain(join('win', 'vulkan', 'llama-server.exe'))
+    emitListening(h, 0, 55901)
+    await p
+    expect(h.runtime.isRunning()).toBe(true)
+
+    // Vulkan initialized fine, served for a while, then died mid-inference — the older-Intel-iGPU failure
+    // mode. 0xC0000005 (access violation) is what those drivers actually surface as the child's exit code.
+    h.procs[0].emit('exit', 3221225477, null)
+    await waitUntil(() => h.calls.length === 2)
+
+    // FAILS before the fix: maybeAutoRestart() re-spawned resolveBinaryPath()'s FIRST candidate, so
+    // calls[1] was the same Vulkan build — which crashes again, exhausts the restart budget, and strands
+    // the session 'unavailable' without ever trying the bundled CPU build.
+    expect(h.calls[1].path).toContain(join('win', 'cpu', 'llama-server.exe'))
+    emitListening(h, 1, 55902)
+    await waitUntil(() => h.runtime.isRunning())
+    expect(h.runtime.baseURL()).toBe('http://127.0.0.1:55902/v1')
+    expect(h.logger.mainLog.warn).toHaveBeenCalledWith(
+      expect.stringMatching(/pinning CPU sidecar/),
+      expect.objectContaining({ code: 3221225477 })
+    )
+    h.runtime.stop()
+  })
+
+  it('leaves the Vulkan-first order intact when no Vulkan crash has happened this session', async () => {
+    const h = await loadIsolatedRuntime()
+    vi.stubGlobal('fetch', async () => ({ status: 200 }))
+    const paths = { gguf: '/m/a.gguf', mmproj: '/m/a.mmproj' }
+
+    const p = h.runtime.start(paths, 'win')
+    emitListening(h, 0, 56001)
+    await p
+    // A model SWITCH is not a crash — the GPU build must still be preferred.
+    const p2 = h.runtime.start({ gguf: '/m/b.gguf', mmproj: '/m/b.mmproj' }, 'win')
+    await waitUntil(() => h.calls.length === 2)
+    expect(h.calls[1].path).toContain(join('win', 'vulkan', 'llama-server.exe'))
+    emitListening(h, 1, 56002)
+    await p2
+    h.runtime.stop()
+  })
 })
