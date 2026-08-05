@@ -15,6 +15,7 @@ import {
   followLanguage,
   nextDecodeOptions,
   probeLanguage,
+  reprobeForSwitch,
   resetLanguageFollow,
   whisperImportTranscribe
 } from './whisper-import'
@@ -51,23 +52,23 @@ describe('whisper-import language follow', () => {
     expect(nextDecodeOptions()).toEqual({ return_timestamps: false })
   })
 
-  it('probes without the pin every 4th window so a real language switch can be noticed', () => {
+  it('an explicit settings language pins EVERY window — un-pinned probe windows are retired', () => {
+    // Design change (2026-08-05): transformers.js's whisper decodes un-pinned calls as ENGLISH (it does
+    // not auto-detect), so the worker-style "probe without the pin every 4th window" wrote English junk
+    // into real transcripts. A user's explicit language now decodes pinned on every window; switching is
+    // the Parakeet re-probe's job (auto mode) or the user's (explicit mode).
     resetLanguageFollow('Portuguese')
-    // Ambiguous text carries no confident language signal, so the follow machine must not move — the
-    // cadence observed below is purely PROBE_EVERY, not a side effect of a detected switch.
     const langs = decodeOptionLanguages(Array(5).fill('hmm hmm okay'))
-    expect(langs).toEqual(['portuguese', 'portuguese', 'portuguese', undefined, 'portuguese'])
+    expect(langs).toEqual(['portuguese', 'portuguese', 'portuguese', 'portuguese', 'portuguese'])
   })
 
-  it('follows a mid-recording language switch: probe detects it, one confirmation re-pins the decoder', () => {
+  it('an explicit settings language is never overridden by text-shaped switch signals', () => {
     resetLanguageFollow('Portuguese')
-    const pt = 'então vamos ver isso com você, não é, para fechar o contrato'
     const en = 'so we are going to talk about the budget and the plan for the team'
-    // Windows 1-3: Portuguese speech. Window 4 (probe, un-pinned): the recording has switched to English
-    // and the auto decode surfaces it. Window 5 (confirmation, un-pinned): English again → re-pin.
-    // Window 6: decoded pinned to English.
-    const langs = decodeOptionLanguages([pt, pt, pt, en, en, en])
-    expect(langs).toEqual(['portuguese', 'portuguese', 'portuguese', undefined, undefined, 'english'])
+    // Even English-looking decoded text (which pinned decoding of switched speech can produce) must not
+    // move an explicit pin — the user said Portuguese; honoring that beats guessing.
+    const langs = decodeOptionLanguages([en, en, en, en, en, en])
+    expect(langs).toEqual(Array(6).fill('portuguese'))
   })
 
   it("converges onto the recording's language in 'auto' mode after two confident detections", () => {
@@ -208,6 +209,73 @@ describe('whisper-import language probe (initial pin off a Parakeet decode of wi
     }
     expect(probe).toHaveBeenCalledTimes(5) // PROBE_WINDOW_BUDGET
     expect(nextDecodeOptions().language).toBeUndefined()
+  })
+})
+
+// transformers.js's whisper does NOT auto-detect on an un-pinned call — it defaults to ENGLISH (verified
+// live 2026-08-05: the worker-style "un-pinned probe window" decoded English junk, text lang-id read it
+// as a genuine switch, and a French recording re-pinned to English by window ~6 despite a correct probe
+// pin at window 3). Once the probe owns the pin, whisper must NEVER decode un-pinned; switches are
+// detected by re-running the Parakeet probe instead.
+describe('whisper-import probe-owned pin (no un-pinned windows, Parakeet-driven switching)', () => {
+  const fr = 'avec tout ce qu’on met en place au niveau du groupe pour la transformation des équipes'
+  const en = 'we are going to switch to english now for the rest of this meeting with the whole team'
+
+  beforeEach(() => {
+    resetLanguageFollow('auto')
+  })
+
+  it('a probe-owned pin survives every PROBE_EVERY-th window (never decodes un-pinned)', async () => {
+    const probe = vi.fn().mockResolvedValue(fr)
+    await probeLanguage(new Float32Array(16), probe)
+    for (let w = 1; w <= 9; w++) {
+      expect(nextDecodeOptions().language).toBe('french')
+    }
+  })
+
+  it('an explicit settings language also never decodes un-pinned', () => {
+    resetLanguageFollow('Portuguese')
+    for (let w = 1; w <= 9; w++) {
+      expect(nextDecodeOptions().language).toBe('portuguese')
+    }
+  })
+
+  it('re-pins after SWITCH_AFTER consecutive Parakeet detections of a different language', async () => {
+    const probe = vi.fn().mockResolvedValue(fr)
+    await probeLanguage(new Float32Array(16), probe) // pin french at window 0
+    probe.mockResolvedValue(en)
+    for (let w = 1; w <= 4; w++) nextDecodeOptions() // windowCount reaches the PROBE_EVERY cadence
+    await reprobeForSwitch(new Float32Array(16), probe) // first english detection
+    for (let w = 5; w <= 8; w++) nextDecodeOptions()
+    await reprobeForSwitch(new Float32Array(16), probe) // second consecutive english detection → switch
+    expect(nextDecodeOptions().language).toBe('english')
+  })
+
+  it('a single divergent detection does not switch; the pin re-confirming clears the run', async () => {
+    const probe = vi.fn().mockResolvedValue(fr)
+    await probeLanguage(new Float32Array(16), probe)
+    for (let w = 1; w <= 4; w++) nextDecodeOptions()
+    probe.mockResolvedValueOnce(en)
+    await reprobeForSwitch(new Float32Array(16), probe) // english once
+    expect(nextDecodeOptions().language).toBe('french') // still pinned
+    for (let w = 6; w <= 8; w++) nextDecodeOptions()
+    probe.mockResolvedValueOnce(fr)
+    await reprobeForSwitch(new Float32Array(16), probe) // french re-confirms → run cleared
+    probe.mockResolvedValueOnce(en)
+    for (let w = 9; w <= 12; w++) nextDecodeOptions()
+    await reprobeForSwitch(new Float32Array(16), probe) // english again — count restarts at 1
+    expect(nextDecodeOptions().language).toBe('french') // one detection after a reset must not switch
+  })
+
+  it('a failed or thin re-probe never disturbs a working pin', async () => {
+    const probe = vi.fn().mockResolvedValue(fr)
+    await probeLanguage(new Float32Array(16), probe)
+    for (let w = 1; w <= 4; w++) nextDecodeOptions()
+    probe.mockRejectedValueOnce(new Error('sherpa hiccup'))
+    await expect(reprobeForSwitch(new Float32Array(16), probe)).resolves.toBeUndefined()
+    probe.mockResolvedValueOnce('Hello')
+    await reprobeForSwitch(new Float32Array(16), probe)
+    expect(nextDecodeOptions().language).toBe('french')
   })
 })
 
