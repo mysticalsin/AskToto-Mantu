@@ -338,10 +338,17 @@ export const CLI_CONFIGS: Partial<Record<ProviderId, CliConfig>> = {
         return null
       }
     },
-    // Schema verified live: the terminal stream-json line for a claude-cli run carries type:'result'.
+    // End-of-answer detection, verified against live streams twice (2026-08-05): when the user's global
+    // Claude Code hooks linger, the terminal type:'result' line is NOT flushed until teardown completes
+    // — it arrives ~60-75s after the answer, i.e. AFTER the idle watchdog has already fired. The marker
+    // that reliably arrives the moment the answer finishes is the message_stop stream event. With this
+    // invocation locked to --max-turns 1 and all tools disallowed there is exactly one assistant message
+    // per run, so message_stop IS end-of-answer. type:'result' is kept as a fallback for configs whose
+    // hooks don't linger (it then arrives promptly and first).
     isResultLine(line) {
       try {
-        return JSON.parse(line).type === 'result'
+        const obj = JSON.parse(line)
+        return obj.type === 'result' || (obj.type === 'stream_event' && obj.event?.type === 'message_stop')
       } catch {
         return false
       }

@@ -215,11 +215,23 @@ describe('runCliStream — contract', () => {
 })
 
 describe('isResultLine — claude-cli terminal marker (kill-on-result)', () => {
-  it('matches a type:"result" line and rejects stream_event/garbage', () => {
+  it('matches a type:"result" line and rejects non-terminal stream_events/garbage', () => {
     const cfg = CLI_CONFIGS['claude-cli']!
     expect(cfg.isResultLine?.(JSON.stringify({ type: 'result', subtype: 'success' }))).toBe(true)
     expect(cfg.isResultLine?.(JSON.stringify({ type: 'stream_event', event: {} }))).toBe(false)
+    expect(cfg.isResultLine?.(JSON.stringify({ type: 'stream_event', event: { type: 'text_delta', text: 'hi' } }))).toBe(false)
     expect(cfg.isResultLine?.('not json at all')).toBe(false)
+  })
+
+  it('matches message_stop — the marker that actually arrives when lingering hooks hold the result line back', () => {
+    // Verified live 2026-08-05: with global Claude Code hooks installed, the type:'result' line is not
+    // flushed until process teardown (~60-75s after the answer); message_stop arrives immediately after
+    // the final text delta. --max-turns 1 + fully disallowed tools = exactly one assistant message per
+    // run, so message_stop is end-of-answer for this invocation.
+    const cfg = CLI_CONFIGS['claude-cli']!
+    expect(
+      cfg.isResultLine?.(JSON.stringify({ type: 'stream_event', event: { type: 'message_stop' }, session_id: 'x' }))
+    ).toBe(true)
   })
 
   it('codex-cli has no isResultLine matcher — its terminal marker is unverified, left byte-identical', () => {
