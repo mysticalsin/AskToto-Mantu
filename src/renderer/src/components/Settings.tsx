@@ -4033,6 +4033,12 @@ type TabId =
 // `desc` is the short section intro shown under the tab bar; `keywords` seed the search field below —
 // each list is the REAL card titles living under that tab (see the `<Section title=...>` calls), so a
 // search never promises a match that isn't actually there.
+//
+// INVARIANT: fuzzyIncludes(keyword, query) matches when a KEYWORD contains the typed query as a
+// substring — so a Section's exact title is only findable if some keyword in its tab's list is at
+// least that long and contains it verbatim. Whenever a `<Section title="...">` is added or renamed
+// under a tab, add that exact title text to this tab's `keywords` too (case/diacritic-insensitive —
+// no need to match punctuation exactly, but don't rely on a shorter substring standing in for it).
 const TABS: {
   id: TabId
   label: string
@@ -4055,7 +4061,10 @@ const TABS: {
     label: 'AI',
     icon: Cpu,
     desc: 'Provider, API keys, local model, and thinking mode.',
-    keywords: ['provider', 'api key', 'anthropic', 'openai', 'dust', 'claude code', 'codex', 'local ai', 'thinking mode', 'model']
+    keywords: [
+      'provider', 'api key', 'anthropic', 'openai', 'dust', 'claude code', 'codex', 'local ai',
+      'thinking mode', 'model', 'other providers', 'model provider', 'cli integration'
+    ]
   },
   {
     id: 'audio',
@@ -4069,7 +4078,7 @@ const TABS: {
     label: 'Calendar',
     icon: Calendar,
     desc: "Connect Outlook and see today's agenda.",
-    keywords: ['notifications', 'microsoft', 'outlook', "today's agenda", 'calendar', 'sign in']
+    keywords: ['notifications', 'microsoft', 'outlook', 'microsoft / outlook', "today's agenda", 'calendar', 'sign in']
   },
   {
     id: 'meetings',
@@ -4092,7 +4101,10 @@ const TABS: {
     label: 'Privacy',
     icon: ShieldCheck,
     desc: 'What Métis can see, record, and send.',
-    keywords: ['screen capture', 'screen access', 'recording consent', 'sensitive data', 'redact', 'permissions', 'usage']
+    keywords: [
+      'screen capture', 'screen access', 'conversation memory', 'follow-up', 'memory',
+      'recording consent', 'sensitive data', 'redact', 'permissions', 'usage'
+    ]
   },
   // Profile + Keybinds merged: both are "how Métis is set up for YOU" (who you are / how you drive it).
   // Labeled just "Profile" so all nine tabs fit one line; keybinds live inside this tab.
@@ -4108,7 +4120,7 @@ const TABS: {
     label: 'About',
     icon: Info,
     desc: 'The story, the thanks, and the version.',
-    keywords: ['why métis', 'thanks', 'version', 'credits']
+    keywords: ['why métis', 'thanks', 'version', 'credits', 'updates']
   }
 ]
 
@@ -4116,6 +4128,23 @@ const TABS: {
 function fuzzyIncludes(haystack: string, needle: string): boolean {
   const norm = (s: string): string => s.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase()
   return norm(haystack).includes(norm(needle))
+}
+
+/**
+ * Pure search over TABS, extracted out of the component so it is unit-testable without a render
+ * harness (Settings.tsx has none — see Settings.contract.test.ts header note). Matches a tab's
+ * label plus its keywords (see the INVARIANT comment above TABS): every real Section title in a
+ * tab must appear in that tab's keywords, so a search for it here is a real proof, not a hope.
+ */
+export function searchSettingsTabs(query: string): ((typeof TABS)[number] & { matchedKeyword?: string })[] {
+  const q = query.trim()
+  if (!q) return []
+  return TABS.filter(
+    (t) => fuzzyIncludes(t.label, q) || t.keywords.some((k) => fuzzyIncludes(k, q))
+  ).map((t) => ({
+    ...t,
+    matchedKeyword: t.keywords.find((k) => fuzzyIncludes(k, q))
+  }))
 }
 
 export function Settings({
@@ -4160,16 +4189,7 @@ export function Settings({
   // tab label plus its real card keywords (see TABS above), so a hit always points at something that
   // actually exists on that tab.
   const [query, setQuery] = useState('')
-  const searchMatches = useMemo(() => {
-    const q = query.trim()
-    if (!q) return []
-    return TABS.filter(
-      (t) => fuzzyIncludes(t.label, q) || t.keywords.some((k) => fuzzyIncludes(k, q))
-    ).map((t) => ({
-      ...t,
-      matchedKeyword: t.keywords.find((k) => fuzzyIncludes(k, q))
-    }))
-  }, [query])
+  const searchMatches = useMemo(() => searchSettingsTabs(query), [query])
   const jumpTo = (id: TabId): void => {
     setTab(id)
     setQuery('')

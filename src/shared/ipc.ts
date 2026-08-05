@@ -125,6 +125,10 @@ export const IPC = {
   brainEntityUnmerge: 'brain:entityUnmerge',
   brainEntityUpdateField: 'brain:entityUpdateField',
   brainCommitmentReject: 'brain:commitmentReject',
+  // Dashboard suggestion accept/dismiss (deferred CRM pattern 3): callable from the Mantu Intelligence
+  // window (see assertBrainReader in main/index.ts), not just the main window — the one privileged
+  // write that surface gets, narrowly scoped to promoting a single already-extracted field.
+  brainFieldDecision: 'brain:field-decision',
   // Task MI-3: read-only channels feeding the CRM record pages, the Review.tsx entity strip, and the
   // needs-attention queue.
   brainMeetingExtraction: 'brain:meetingExtraction',
@@ -443,6 +447,20 @@ export const EntityUpdateFieldPayloadSchema = z.object({
   field: z.string().min(1).max(60),
   value: z.unknown()
 })
+/** Payload for brain:field-decision (dashboard suggestion accept/dismiss, deferred CRM pattern 3) — the
+ *  human reviews one provenance-bearing field (see ProvenantField/RENDERABLE_PROVENANCE_STATES in
+ *  shared/brain.ts) and either accepts or dismisses the extraction. `field` is bounded the same way
+ *  brain:entityUpdateField's is; the legal (kind, field) set is validated in corrections.ts, not here.
+ *  `decision: 'dismiss'` is accepted by this schema but currently always refused by the handler — there
+ *  is no correction-engine mutation that clears/reverts a field's value, only ones that pin a NEW one
+ *  (see readFieldProvenance's doc comment in corrections.ts). */
+export const FieldDecisionPayloadSchema = z.object({
+  entityKind: EntityKindSchema,
+  entityId: z.string().min(1).max(200).regex(SLUG_RE, 'Invalid entity id.'),
+  field: z.string().min(1).max(60),
+  decision: z.enum(['accept', 'dismiss'])
+})
+
 /** `dealSlug` is optional — a commitment spoken in a deal-less meeting (x.deal is null) lives ONLY on
  *  the named person's own ledger, so there's nothing to also flip on a deal. */
 export const CommitmentRejectPayloadSchema = z.object({

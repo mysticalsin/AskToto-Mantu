@@ -162,14 +162,17 @@ describe('Whisper worker bundled mode', () => {
     )
   })
 
-  it('probes without the pin every 4th window so a real language switch can be noticed', async () => {
+  it('an explicit settings language pins EVERY window — the old un-pinned probe cadence is retired', async () => {
+    // Design change (2026-08-05, direct probe): transformers.js's whisper decodes an un-pinned call as
+    // ENGLISH — it never actually auto-detects — so the old "probe without the pin every 4th window"
+    // cadence just fed English junk into followLanguage() for an explicit user language. Mirrors
+    // whisper-import.ts's identical fix (see its "explicit settings language pins EVERY window" test).
     const worker = {
       navigator: {},
       postMessage: vi.fn(),
       onmessage: undefined as ((event: MessageEvent) => Promise<void>) | undefined
     }
     vi.stubGlobal('self', worker)
-    // Text with no confident language signal: the follow machine must not move, so the cadence is pure.
     const asrFn = vi.fn().mockResolvedValue({ text: 'hmm hmm okay' })
     transformers.pipeline.mockResolvedValueOnce(asrFn)
 
@@ -182,23 +185,22 @@ describe('Whisper worker bundled mode', () => {
     }
 
     const langs = asrFn.mock.calls.map((c) => c[1].language)
-    expect(langs).toEqual(['portuguese', 'portuguese', 'portuguese', undefined, 'portuguese'])
+    expect(langs).toEqual(Array(5).fill('portuguese'))
   })
 
-  it('follows a mid-meeting language switch: probe detects it, one confirmation re-pins the decoder', async () => {
+  it('an explicit settings language is never overridden by text-shaped switch signals', async () => {
     const worker = {
       navigator: {},
       postMessage: vi.fn(),
       onmessage: undefined as ((event: MessageEvent) => Promise<void>) | undefined
     }
     vi.stubGlobal('self', worker)
-    const pt = 'então vamos ver isso com você, não é, para fechar o contrato'
     const en = 'so we are going to talk about the budget and the plan for the team'
-    const asrFn = vi.fn()
-    // Windows 1-3: Portuguese speech. Window 4 (probe, un-pinned): the conversation has switched to
-    // English and the auto decode surfaces it. Window 5 (confirmation, un-pinned): English again →
-    // re-pin. Window 6: decoded pinned to English.
-    for (const text of [pt, pt, pt, en, en, en]) asrFn.mockResolvedValueOnce({ text })
+    // Even English-looking decoded text (which a pinned decode of genuinely-switched speech can produce)
+    // must not move an explicit pin — the user said Portuguese; honoring that beats guessing. There is no
+    // more un-pinned probe window to surface a real switch either: an explicit pin is now for the user
+    // (via Settings) to change, not the follow machine.
+    const asrFn = vi.fn().mockResolvedValue({ text: en })
     transformers.pipeline.mockResolvedValueOnce(asrFn)
 
     await import('./whisper.worker')
@@ -210,10 +212,7 @@ describe('Whisper worker bundled mode', () => {
     }
 
     const langs = asrFn.mock.calls.map((c) => c[1].language)
-    expect(langs).toEqual(['portuguese', 'portuguese', 'portuguese', undefined, undefined, 'english'])
-    expect(worker.postMessage).toHaveBeenCalledWith(
-      expect.objectContaining({ type: 'log', message: expect.stringContaining('Portuguese → English') })
-    )
+    expect(langs).toEqual(Array(6).fill('portuguese'))
   })
 
   it("converges onto the conversation's language in 'auto' mode after two confident detections", async () => {
@@ -295,36 +294,155 @@ describe('Whisper worker bundled mode', () => {
     expect(asrFn.mock.calls[3][1].language).toBeUndefined() // fresh session decodes auto, no inherited pin
   })
 
-  it('abandons an unconfirmed switch after its patience budget instead of probing forever', async () => {
+  it("abandons an unconfirmed switch after its patience budget in 'auto' mode instead of probing forever", async () => {
+    // The switchRun/PROBE_PATIENCE escape hatch is now reachable ONLY in 'auto' mode with no external pin
+    // yet (an explicit language never builds a switchRun at all — see the two tests above), so this drives
+    // the same scenario the retired explicit-language test used to, but through the still-alive path.
     const worker = {
       navigator: {},
       postMessage: vi.fn(),
       onmessage: undefined as ((event: MessageEvent) => Promise<void>) | undefined
     }
     vi.stubGlobal('self', worker)
+    const pt = 'a gente vai ver isso com você, não é, para o contrato'
     const es = 'entonces vamos a ver esto con usted, pero no es para hoy'
     const de = 'wir haben das nicht mit der neuen Version gemacht, aber das ist gut'
     const fr = "alors nous allons voir ça avec vous, mais pas pour aujourd'hui"
-    const noise = 'hmm hmm okay'
+    const noise = 'hmm hmm okay' // no confident language signal — required so the run dies from AGE
+    // alone (PROBE_PATIENCE), not from a lucky re-confirmation of the pin.
     const asrFn = vi.fn()
-    // Windows 1-3 pinned-Portuguese noise; window 4 probes and detections then ALTERNATE languages
-    // (Spanish → German → French → noise): no candidate ever confirms, so after PROBE_PATIENCE the run
-    // must die. Window 8 is a regular periodic probe (8 % PROBE_EVERY === 0); window 9 must be pinned
-    // to Portuguese again — not left un-pinned for the session.
-    for (const text of [noise, noise, noise, es, de, fr, noise, noise, noise]) asrFn.mockResolvedValueOnce({ text })
+    // Windows 1-2 converge auto onto Portuguese (windows 1-2 decode un-pinned while gathering evidence).
+    // Window 3 decodes pinned and starts a switch suspicion (Spanish); windows 4-5 ALTERNATE the candidate
+    // (German, French) — no candidate ever confirms — then windows 6-7 carry no signal at all, so the run
+    // ages out at PROBE_PATIENCE and window 7 decodes pinned to Portuguese again.
+    for (const text of [pt, pt, es, de, fr, noise, noise]) asrFn.mockResolvedValueOnce({ text })
     transformers.pipeline.mockResolvedValueOnce(asrFn)
 
     await import('./whisper.worker')
-    await worker.onmessage?.({
-      data: { type: 'init', quality: 'fast', bundled: false, language: 'Portuguese', resetFollow: true }
-    } as MessageEvent)
-    for (let i = 0; i < 9; i++) {
+    await worker.onmessage?.({ data: { type: 'init', quality: 'fast', bundled: false, language: 'auto' } } as MessageEvent)
+    for (let i = 0; i < 7; i++) {
       await worker.onmessage?.({ data: { type: 'audio', audio: new Float32Array(16), speaker: 'them' } } as MessageEvent)
     }
 
     const langs = asrFn.mock.calls.map((c) => c[1].language)
-    expect(langs[8]).toBe('portuguese') // back to the pin — probing did not become permanent
-    expect(langs.slice(0, 3)).toEqual(['portuguese', 'portuguese', 'portuguese']) // and was pinned before
+    expect(langs[2]).toBe('portuguese') // converged and pinned before the switch attempt began
+    expect(langs[6]).toBe('portuguese') // back to the pin — the unconfirmed switch aged out, not re-confirmed
+  })
+
+  // ── External pin ('pinLanguage' message from listen.ts's main-thread Parakeet probe) ──────────────────
+  it("pins immediately on a 'pinLanguage' message while in 'auto' mode, with no convergence wait", async () => {
+    const worker = {
+      navigator: {},
+      postMessage: vi.fn(),
+      onmessage: undefined as ((event: MessageEvent) => Promise<void>) | undefined
+    }
+    vi.stubGlobal('self', worker)
+    const asrFn = vi.fn().mockResolvedValue({ text: 'hmm hmm okay' }) // no text-side signal at all
+    transformers.pipeline.mockResolvedValueOnce(asrFn)
+
+    await import('./whisper.worker')
+    await worker.onmessage?.({ data: { type: 'init', quality: 'fast', bundled: false, language: 'auto' } } as MessageEvent)
+    await worker.onmessage?.({ data: { type: 'pinLanguage', language: 'French' } } as MessageEvent)
+    await worker.onmessage?.({ data: { type: 'audio', audio: new Float32Array(16), speaker: 'you' } } as MessageEvent)
+
+    expect(asrFn.mock.calls[0][1]).toEqual(
+      expect.objectContaining({ language: 'french', task: 'transcribe' })
+    )
+  })
+
+  it('never un-pins once externally pinned, even under hostile text-shaped switch signals', async () => {
+    const worker = {
+      navigator: {},
+      postMessage: vi.fn(),
+      onmessage: undefined as ((event: MessageEvent) => Promise<void>) | undefined
+    }
+    vi.stubGlobal('self', worker)
+    const en = 'so we are going to talk about the budget and the plan for the team' // English-shaped junk
+    const asrFn = vi.fn().mockResolvedValue({ text: en })
+    transformers.pipeline.mockResolvedValueOnce(asrFn)
+
+    await import('./whisper.worker')
+    await worker.onmessage?.({ data: { type: 'init', quality: 'fast', bundled: false, language: 'auto' } } as MessageEvent)
+    await worker.onmessage?.({ data: { type: 'pinLanguage', language: 'French' } } as MessageEvent)
+    for (let i = 0; i < 9; i++) {
+      await worker.onmessage?.({ data: { type: 'audio', audio: new Float32Array(16), speaker: 'them' } } as MessageEvent)
+    }
+
+    // No un-pinned (undefined) window anywhere, including at what would have been the old periodic-probe
+    // cadence (every 4th window) — an external pin is authoritative until another 'pinLanguage' replaces it.
+    const langs = asrFn.mock.calls.map((c) => c[1].language)
+    expect(langs).toEqual(Array(9).fill('french'))
+  })
+
+  it("a later 'pinLanguage' message re-pins to a genuine confirmed switch", async () => {
+    const worker = {
+      navigator: {},
+      postMessage: vi.fn(),
+      onmessage: undefined as ((event: MessageEvent) => Promise<void>) | undefined
+    }
+    vi.stubGlobal('self', worker)
+    const asrFn = vi.fn().mockResolvedValue({ text: 'hmm hmm okay' })
+    transformers.pipeline.mockResolvedValueOnce(asrFn)
+
+    await import('./whisper.worker')
+    await worker.onmessage?.({ data: { type: 'init', quality: 'fast', bundled: false, language: 'auto' } } as MessageEvent)
+    await worker.onmessage?.({ data: { type: 'pinLanguage', language: 'French' } } as MessageEvent)
+    await worker.onmessage?.({ data: { type: 'audio', audio: new Float32Array(16), speaker: 'you' } } as MessageEvent)
+    // listen.ts's own reprobe (Parakeet, main-side) confirmed a genuine switch — re-pin to English.
+    await worker.onmessage?.({ data: { type: 'pinLanguage', language: 'English' } } as MessageEvent)
+    await worker.onmessage?.({ data: { type: 'audio', audio: new Float32Array(16), speaker: 'you' } } as MessageEvent)
+
+    const langs = asrFn.mock.calls.map((c) => c[1].language)
+    expect(langs).toEqual(['french', 'english'])
+  })
+
+  it("ignores a 'pinLanguage' message while an explicit user language is set", async () => {
+    const worker = {
+      navigator: {},
+      postMessage: vi.fn(),
+      onmessage: undefined as ((event: MessageEvent) => Promise<void>) | undefined
+    }
+    vi.stubGlobal('self', worker)
+    const asrFn = vi.fn().mockResolvedValue({ text: 'hmm hmm okay' })
+    transformers.pipeline.mockResolvedValueOnce(asrFn)
+
+    await import('./whisper.worker')
+    await worker.onmessage?.({
+      data: { type: 'init', quality: 'fast', bundled: false, language: 'Portuguese' }
+    } as MessageEvent)
+    // A stray/late probe result must never override the user's explicit setting.
+    await worker.onmessage?.({ data: { type: 'pinLanguage', language: 'French' } } as MessageEvent)
+    await worker.onmessage?.({ data: { type: 'audio', audio: new Float32Array(16), speaker: 'you' } } as MessageEvent)
+
+    expect(asrFn.mock.calls[0][1].language).toBe('portuguese')
+  })
+
+  it('a fresh session (resetFollow) clears a previous session\'s external pin', async () => {
+    const worker = {
+      navigator: {},
+      postMessage: vi.fn(),
+      onmessage: undefined as ((event: MessageEvent) => Promise<void>) | undefined
+    }
+    vi.stubGlobal('self', worker)
+    const asrFn = vi.fn().mockResolvedValue({ text: 'hmm hmm okay' })
+    transformers.pipeline.mockResolvedValueOnce(asrFn)
+
+    await import('./whisper.worker')
+    await worker.onmessage?.({
+      data: { type: 'init', quality: 'fast', bundled: false, language: 'auto', resetFollow: true }
+    } as MessageEvent)
+    await worker.onmessage?.({ data: { type: 'pinLanguage', language: 'French' } } as MessageEvent)
+    await worker.onmessage?.({ data: { type: 'audio', audio: new Float32Array(16), speaker: 'you' } } as MessageEvent)
+    expect(asrFn.mock.calls[0][1].language).toBe('french') // session 1 externally pinned
+
+    // Session 2 starts 'auto' on the same warm worker, same as the cross-session leak test above — without
+    // resetFollow clearing probePinned this window would stay wrongly pinned to French.
+    await worker.onmessage?.({
+      data: { type: 'init', quality: 'fast', bundled: false, language: 'auto', resetFollow: true }
+    } as MessageEvent)
+    await worker.onmessage?.({ data: { type: 'audio', audio: new Float32Array(16), speaker: 'you' } } as MessageEvent)
+
+    expect(asrFn.mock.calls[1][1].language).toBeUndefined()
   })
 
   it('only enables the browser cache for the dev-only remote fallback (never the bundled path)', async () => {

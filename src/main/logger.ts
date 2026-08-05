@@ -66,6 +66,7 @@ export type AuditEvent =
   | 'brain.commitment.settled'
   | 'brain.deal.outcome'
   | 'brain.entity.renamed'
+  | 'brain.entity.field_decision'
   | 'brain.entity.merged'
   | 'brain.entity.unmerged'
   | 'brain.entity.field_updated'

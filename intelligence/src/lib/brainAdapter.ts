@@ -12,6 +12,7 @@ import type {
   Commitment,
   Account,
   Person,
+  FieldState,
   MeetingFeedRow,
   IngestError,
   StatusCounts
@@ -40,6 +41,10 @@ import { slug } from './slug.ts'
 type Conf = 'EXTRACTED' | 'INFERRED' | 'AMBIGUOUS'
 interface BrainSignal { kind: 'positive' | 'objection' | 'neutral'; statement: string; quote: string; confidence: Conf; meeting: string }
 interface BrainCommitment { text: string; by: string; status: string; due_hint?: string; quote?: string; confidence?: Conf; meeting?: string; date?: string }
+// MI-2.5 Fix C: only the `.state` of a ProvenantField sidecar is needed client-side (to decide whether
+// the dashboard's Accept affordance shows) — the value/quote/source_file/superseded history stay
+// server-side, read fresh by the brain:field-decision handler itself when a decision comes in.
+interface BrainProvenance { state?: string }
 interface BrainDeal {
   name: string
   account: string
@@ -53,6 +58,9 @@ interface BrainDeal {
   missed_signals: Array<{ statement: string; why_it_matters: string; quote?: string; confidence?: Conf; meeting: string }>
   feedback: Array<{ note: string; quote?: string; confidence?: Conf; meeting: string }>
   commitments?: BrainCommitment[]
+  stage_provenance?: BrainProvenance
+  win_likelihood_band_provenance?: BrainProvenance
+  velocity_provenance?: BrainProvenance
 }
 interface BrainMeeting {
   source_file: string
@@ -71,6 +79,7 @@ interface BrainAccount {
   meetings: Array<{ file: string; date: string; title: string }>
   win_reasons: Array<{ statement: string; quote: string; meeting: string }>
   loss_reasons: Array<{ statement: string; quote: string; meeting: string }>
+  sector_provenance?: BrainProvenance
 }
 interface BrainPerson {
   name: string
@@ -79,6 +88,23 @@ interface BrainPerson {
   meetings?: Array<{ file: string; date: string; title: string }>
   stance_trail?: Array<{ meeting: string; kind: string; statement: string }>
   commitments?: BrainCommitment[]
+  role_provenance?: BrainProvenance
+  org_provenance?: BrainProvenance
+}
+
+/** Builds a Deal/Account/Person's `field_state` map from its raw provenance sidecars — only the four
+ *  ProvenanceState values are ever carried through (see FieldState's doc comment); anything else
+ *  (absent sidecar, a schema-drifted/legacy value) is dropped rather than guessed at. Returns undefined
+ *  (not `{}`) when nothing qualifies, so a view's `data.field_state?.stage` check stays a clean absence. */
+function fieldState(entries: Array<[string, BrainProvenance | undefined]>): FieldState | undefined {
+  type State = 'extracted' | 'verified' | 'edited' | 'pinned'
+  const known: readonly State[] = ['extracted', 'verified', 'edited', 'pinned']
+  const out: FieldState = {}
+  for (const [field, p] of entries) {
+    const match = known.find((k) => k === p?.state)
+    if (match) out[field] = match
+  }
+  return Object.keys(out).length ? out : undefined
 }
 export interface BrainRead {
   index: {
@@ -99,6 +125,14 @@ declare global {
       getData: () => Promise<BrainRead>
       getStatus: () => Promise<unknown>
       backfill: () => Promise<{ queued: number }>
+      // Dashboard suggestion accept/dismiss (deferred CRM pattern 3) — see src/preload/intelligence.ts
+      // in the host app for the real signature this mirrors.
+      fieldDecision: (payload: {
+        entityKind: 'person' | 'account' | 'deal'
+        entityId: string
+        field: string
+        decision: 'accept' | 'dismiss'
+      }) => Promise<{ ok: boolean; error?: string }>
     }
   }
 }
@@ -177,7 +211,12 @@ function toDeal(d: BrainDeal, accountBySlug: Map<string, BrainAccount>, meetings
     claims,
     call_grades,
     commitments: (d.commitments ?? []).map(toCommitment),
-    meetings: d.meetings
+    meetings: d.meetings,
+    field_state: fieldState([
+      ['stage', d.stage_provenance],
+      ['win_likelihood_band', d.win_likelihood_band_provenance],
+      ['velocity', d.velocity_provenance]
+    ])
   }
 }
 
@@ -479,7 +518,8 @@ export function brainToDashboard(b: BrainRead): DashboardData {
     strategic: a.strategic,
     win_reasons: a.win_reasons ?? [],
     loss_reasons: a.loss_reasons ?? [],
-    meetings: a.meetings ?? []
+    meetings: a.meetings ?? [],
+    field_state: fieldState([['sector', a.sector_provenance]])
   }))
 
   const peopleOut: Person[] = b.people.map((p) => ({
@@ -489,7 +529,11 @@ export function brainToDashboard(b: BrainRead): DashboardData {
     account: p.account,
     stance_trail: p.stance_trail ?? [],
     commitments: (p.commitments ?? []).map(toCommitment),
-    meetings: p.meetings ?? []
+    meetings: p.meetings ?? [],
+    field_state: fieldState([
+      ['role', p.role_provenance],
+      ['org', p.org_provenance]
+    ])
   }))
 
   // Newest first — a feed reads top-down by recency, same convention as an inbox.
