@@ -4,6 +4,8 @@ const links = [
   { to: '/', label: 'Today', end: true },
   { to: '/coaching', label: 'Coaching' },
   { to: '/deals', label: 'Deals' },
+  { to: '/accounts', label: 'Accounts' },
+  { to: '/people', label: 'People' },
   { to: '/stats', label: 'Stats' },
   { to: '/graph', label: 'Relationships' },
   { to: '/meetings', label: 'Meetings' },

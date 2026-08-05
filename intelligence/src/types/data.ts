@@ -76,6 +76,14 @@ export interface Commitment {
   meeting: string
 }
 
+/** A meeting ref an entity was mapped to — same 3-field shape as the brain's own MeetingRef schema
+ *  (src/shared/brain.ts). Feeds the shared Timeline component across Deal/Account/Person detail panes. */
+export interface MeetingRef {
+  file: string
+  date: string
+  title: string
+}
+
 export interface Deal {
   bid_id: string
   account: string
@@ -110,6 +118,9 @@ export interface Deal {
     is_client_facing: boolean
   }>
   commitments: Commitment[]
+  // Every meeting ref this deal was tagged in, including ones extraction hasn't landed for yet — a
+  // superset of call_grades (which only shows refs already joined to a landed extraction).
+  meetings: MeetingRef[]
 }
 
 /** account_graph node/edge shape for the relationship-graph view. */
@@ -198,6 +209,7 @@ export interface Account {
   strategic: boolean
   win_reasons: Reason[]
   loss_reasons: Reason[]
+  meetings: MeetingRef[]
 }
 
 export interface StanceTrailEntry {
@@ -215,6 +227,7 @@ export interface Person {
   account: string | null
   stance_trail: StanceTrailEntry[]
   commitments: Commitment[]
+  meetings: MeetingRef[]
 }
 
 /** One row of the meetings feed — every ingested meeting, newest first. */

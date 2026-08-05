@@ -7,6 +7,8 @@ import { useDashboardData } from './lib/useDashboardData'
 import { BriefingView } from './views/BriefingView'
 import { CoachingView } from './views/CoachingView'
 import { DealView } from './views/DealView'
+import { AccountsView } from './views/AccountsView'
+import { PeopleView } from './views/PeopleView'
 import { StatsView } from './views/StatsView'
 import { MeetingsView } from './views/MeetingsView'
 import { EmbedView } from './views/EmbedView'
@@ -59,6 +61,8 @@ function DashboardRoutes() {
             <Route path="/" element={<BriefingView data={data} />} />
             <Route path="/coaching" element={<CoachingView data={data} />} />
             <Route path="/deals" element={<DealView data={data} />} />
+            <Route path="/accounts" element={<AccountsView data={data} />} />
+            <Route path="/people" element={<PeopleView data={data} />} />
             <Route path="/stats" element={<StatsView data={data} />} />
             <Route
               path="/graph"

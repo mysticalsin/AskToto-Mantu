@@ -111,6 +111,22 @@ function countLabel(count: number, singular: string, plural = `${singular}s`): s
   return `${count} ${count === 1 ? singular : plural}`
 }
 
+// T6 6d — per-meeting Mantu Intelligence status: the smallest-possible dot+tooltip on each row.
+export type MeetingIndexStatus = 'indexed' | 'pending' | 'failed'
+
+/** indexed (in the brain, ok) / failed (last extraction returned ok:false) / pending (a backfill/live
+ *  ingest was requested but this file hasn't settled either way yet) / null (no ingest signal at all —
+ *  brain status hasn't loaded yet, or a backfill was never requested). Exported for unit testing. */
+export function meetingIndexStatus(
+  file: string,
+  ingest: { indexed: ReadonlySet<string>; failed: ReadonlySet<string>; backfillRequested: boolean } | null
+): MeetingIndexStatus | null {
+  if (!ingest) return null
+  if (ingest.indexed.has(file)) return 'indexed'
+  if (ingest.failed.has(file)) return 'failed'
+  return ingest.backfillRequested ? 'pending' : null
+}
+
 // ---------------------------------------------------------------------------
 // Knowledge-graph status bar — unchanged from original
 // ---------------------------------------------------------------------------
@@ -409,6 +425,7 @@ const MeetingRow = memo(function MeetingRow({
   isRenaming,
   isOpen,
   error,
+  indexStatus,
   onSelect,
   onOpen,
   onToggleConnections,
@@ -433,6 +450,8 @@ const MeetingRow = memo(function MeetingRow({
   isOpen: boolean
   /** Most recent rename/delete failure for this row, or null — see onTrash/commitEdit. */
   error: string | null
+  /** T6 6d: Mantu Intelligence status dot — null renders nothing (no ingest signal yet). */
+  indexStatus: MeetingIndexStatus | null
   onSelect: (file: string) => void
   onOpen: (file: string) => void
   onToggleConnections: (file: string) => void
@@ -490,6 +509,27 @@ const MeetingRow = memo(function MeetingRow({
                 <Lock size={12} className="shrink-0 text-[color:var(--color-ink-3)]" aria-label="Encrypted, can't be opened on this device" />
               ) : (
                 <FileText size={12} className="shrink-0 text-[color:var(--color-ink-3)]" />
+              )}
+              {/* T6 6d: smallest-possible Mantu Intelligence indicator — a dot, color is state (never
+                  color alone; the title attribute carries the same info as text). */}
+              {indexStatus && (
+                <span
+                  aria-hidden="true"
+                  title={
+                    indexStatus === 'indexed'
+                      ? 'Indexed in Mantu Intelligence'
+                      : indexStatus === 'failed'
+                        ? 'Intelligence extraction failed — retry from Mantu Intelligence'
+                        : 'Queued for Mantu Intelligence indexing'
+                  }
+                  className={`h-1.5 w-1.5 shrink-0 rounded-full ${
+                    indexStatus === 'indexed'
+                      ? 'bg-[var(--color-success)]'
+                      : indexStatus === 'failed'
+                        ? 'bg-[var(--color-danger)]'
+                        : 'bg-[color:var(--color-ink-3)]'
+                  }`}
+                />
               )}
               <span className="min-w-0 flex-1 truncate text-[12px] font-medium text-[color:var(--color-ink)]">
                 {m.title}
@@ -693,6 +733,37 @@ export function RecallView({
   /** Main-owned jobs survive navigation and overlay closure; this component only renders their live state. */
   const [importJobs, setImportJobs] = useState<ImportJobView[]>([])
   const [importError, setImportError] = useState<string | null>(null)
+  /** T6 6d: per-meeting Mantu Intelligence status feed — indexed/failed filename sets plus whether a
+   *  backfill is currently requested, everything meetingIndexStatus needs for the row dot. A separate
+   *  poll from GraphBar's own brainStatus fetch below (that bar's busy/error/backfill-run state is local
+   *  to it and needs a tighter cadence while a batch is running); this one only needs the plain sets. */
+  const [ingestStatus, setIngestStatus] = useState<{
+    indexed: ReadonlySet<string>
+    failed: ReadonlySet<string>
+    backfillRequested: boolean
+  } | null>(null)
+  useEffect(() => {
+    let stale = false
+    const poll = (): void => {
+      void window.toto
+        .brainStatus()
+        .then((b) => {
+          if (stale || !b) return
+          setIngestStatus({
+            indexed: new Set(b.ingestedFiles ?? []),
+            failed: new Set(b.failedFiles ?? []),
+            backfillRequested: !!b.backfillRequested
+          })
+        })
+        .catch(() => {})
+    }
+    poll()
+    const iv = setInterval(poll, 5000)
+    return () => {
+      stale = true
+      clearInterval(iv)
+    }
+  }, [])
 
   // Clear/set one row's rename-or-delete error without touching any other row's — see rowErrors above.
   const clearRowError = useCallback((file: string): void => {
@@ -1116,6 +1187,7 @@ export function RecallView({
                     isRenaming={renaming === m.file}
                     isOpen={open === m.file}
                     error={rowErrors[m.file] ?? null}
+                    indexStatus={meetingIndexStatus(m.file, ingestStatus)}
                     onSelect={selectFile}
                     onOpen={openMeeting}
                     onToggleConnections={toggleConnections}

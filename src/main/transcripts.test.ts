@@ -1,10 +1,19 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { mkdtempSync, rmSync, readFileSync, readdirSync, writeFileSync, renameSync } from 'node:fs'
+import {
+  mkdtempSync,
+  rmSync,
+  readFileSync,
+  readdirSync,
+  writeFileSync,
+  renameSync,
+  mkdirSync,
+  existsSync
+} from 'node:fs'
 import { rename as renameAsync } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { generateKeyPairSync, privateDecrypt, createDecipheriv, constants } from 'node:crypto'
-import { safeStorage } from 'electron'
+import { app, safeStorage } from 'electron'
 import {
   saveMeeting,
   readSavedFile,
@@ -18,7 +27,8 @@ import {
   recoverOrphanDrafts,
   writeSaved,
   resolveMeetingsFolder,
-  formatTranscript
+  formatTranscript,
+  decryptToTemp
 } from './transcripts'
 import type { SaveMeeting, Settings } from '@shared/ipc'
 
@@ -850,5 +860,150 @@ describe('writeSaved', () => {
     })
 
     await expect(writeSaved(target, 'hello world', false)).rejects.toThrow('ENOENT')
+  })
+})
+
+// T7 7a/7b: old meetings encrypted before commit 486227d forced the local keystore wrapped their
+// content key directly with safeStorage ('S:'). The forced keystore then made decryptEnvelopeV2 refuse
+// those envelopes on every read, even though this device's own Keychain item can still unwrap them.
+describe('old-meeting Keychain recovery (T7): allowKeychainRecovery + self-healing rewrap', () => {
+  let folder: string
+  let tempDir: string
+  let settings: Settings
+
+  beforeEach(() => {
+    folder = mkdtempSync(join(tmpdir(), 'asktoto-recovery-test-'))
+    tempDir = mkdtempSync(join(tmpdir(), 'asktoto-recovery-temp-'))
+    settings = { ...baseSettings(), meetingsFolder: folder }
+    // The 'writeSaved' suite above leaves a permanent ENOENT mockImplementation on the shared
+    // node:fs/promises.rename mock (vi.restoreAllMocks() doesn't undo .mockImplementation() on a
+    // factory-vended vi.fn() — only on a real vi.spyOn) — re-establish the real-rename default so
+    // saveMeeting below isn't sabotaged by a prior test's leftover override.
+    vi.mocked(renameAsync).mockImplementation(async (src: string, dest: string) => renameSync(src, dest))
+    // decryptToTemp writes its plaintext copy under app.getPath('temp') — route that to a real,
+    // per-test directory instead of the shared default mock path, which nothing here creates on disk.
+    ;(app.getPath as ReturnType<typeof vi.fn>).mockImplementation((name: string) => {
+      if (name === 'temp') return tempDir
+      if (name === 'userData') return '/tmp/asktoto-test-userdata'
+      if (name === 'documents') return '/tmp/asktoto-test-documents'
+      return `/tmp/asktoto-${name}`
+    })
+  })
+
+  afterEach(() => {
+    delete process.env.ASKTOTO_LOCAL_KEYSTORE
+    rmSync(folder, { recursive: true, force: true })
+    rmSync(tempDir, { recursive: true, force: true })
+    vi.restoreAllMocks()
+  })
+
+  // Writes a v2 envelope the way a packaged build wrapped it BEFORE 486227d forced the local keystore —
+  // kLocal 'S:' (safeStorage-direct), no forced-keystore env yet. This is the exact on-disk shape of a
+  // real pre-486227d meeting sitting on a user's disk today.
+  const writeOldKeychainMeeting = async (): Promise<string> => {
+    ;(app as unknown as { isPackaged: boolean }).isPackaged = true
+    const enc = { ...settings, encryptTranscripts: true } as Settings
+    const file = await saveMeeting(enc, {
+      title: 'Pre-486227d board meeting',
+      mode: 'meeting',
+      startedAt: 1_700_000_000_000,
+      lines: [{ speaker: 'them', text: 'OLD-KEYCHAIN-SECRET', t: 1_700_000_000_000 }],
+      recap: ''
+    })
+    ;(app as unknown as { isPackaged: boolean }).isPackaged = false
+    expect((parseEnvelope(file).kLocal as string).startsWith('S:')).toBe(true) // sanity: real 'S:' envelope
+    return file
+  }
+
+  it('recovery flag off: an old "S:" meeting still fails to decrypt while the local keystore is forced (unchanged bulk-read behavior)', async () => {
+    const file = await writeOldKeychainMeeting()
+    process.env.ASKTOTO_LOCAL_KEYSTORE = '1'
+    // readSavedFile -> decodeSaved never sets allowKeychainRecovery — the bulk list/search path stays
+    // exactly as fail-closed as it is today; 486227d's boot-prompt fix is untouched.
+    expect(readSavedFile(file)).toBe('')
+  })
+
+  it('recovery flag on + safeStorage available: the explicit single-file Open path recovers the same meeting', async () => {
+    const file = await writeOldKeychainMeeting()
+    process.env.ASKTOTO_LOCAL_KEYSTORE = '1'
+    const tmp = decryptToTemp(file) // the only caller that opts into allowKeychainRecovery
+    expect(readFileSync(tmp, 'utf8')).toContain('OLD-KEYCHAIN-SECRET')
+  })
+
+  it('a successful recovery rewraps kLocal to "F:" in place, leaving iv/tag/ct byte-identical', async () => {
+    const file = await writeOldKeychainMeeting()
+    const before = parseEnvelope(file)
+    process.env.ASKTOTO_LOCAL_KEYSTORE = '1'
+    decryptToTemp(file)
+    const after = parseEnvelope(file)
+    expect((before.kLocal as string).startsWith('S:')).toBe(true)
+    expect((after.kLocal as string).startsWith('F:')).toBe(true)
+    expect(after.iv).toBe(before.iv)
+    expect(after.tag).toBe(before.tag)
+    expect(after.ct).toBe(before.ct)
+    // Converged: a later BULK read (allowKeychainRecovery=false) now succeeds without touching the Keychain.
+    expect(readSavedFile(file)).toContain('OLD-KEYCHAIN-SECRET')
+  })
+})
+
+// T7 7c: the pre-rebrand "AskToto Meetings" folder sits next to wherever the resolved folder lives
+// today, and is never scanned by the normal Recall/list paths — copyForwardLegacyMeetingsOnce pulls its
+// files in exactly once, additively, without ever touching the original.
+describe('copy-forward: pre-rebrand "AskToto Meetings" sibling folder (T7 7c)', () => {
+  let base: string
+  let userDataDir: string
+  let folder: string
+  let legacy: string
+  let settings: Settings
+
+  beforeEach(() => {
+    base = mkdtempSync(join(tmpdir(), 'asktoto-copyfwd-base-'))
+    userDataDir = mkdtempSync(join(tmpdir(), 'asktoto-copyfwd-userdata-'))
+    folder = join(base, 'Métis Meetings')
+    legacy = join(base, 'AskToto Meetings')
+    mkdirSync(legacy, { recursive: true })
+    settings = { ...baseSettings(), meetingsFolder: folder }
+    // Route the run-once marker to a per-test userData dir so this suite's marker can never leak into
+    // (or be polluted by) any other test's use of the default mocked userData path.
+    ;(app.getPath as ReturnType<typeof vi.fn>).mockImplementation((name: string) =>
+      name === 'userData' ? userDataDir : `/tmp/asktoto-${name}`
+    )
+  })
+
+  afterEach(() => {
+    rmSync(base, { recursive: true, force: true })
+    rmSync(userDataDir, { recursive: true, force: true })
+    vi.restoreAllMocks()
+  })
+
+  it('copies only files missing at the destination, never overwrites, and never touches the legacy source', () => {
+    writeFileSync(join(legacy, 'kept-meeting.md'), 'LEGACY-CONTENT-A')
+    writeFileSync(join(legacy, 'already-there.md'), 'LEGACY-CONTENT-B')
+    writeFileSync(join(legacy, 'README.md'), 'legacy readme — bookkeeping, never copied')
+    writeFileSync(join(legacy, 'index.md'), 'legacy index — bookkeeping, never copied')
+    mkdirSync(folder, { recursive: true })
+    writeFileSync(join(folder, 'already-there.md'), 'CURRENT-CONTENT') // pre-existing at the destination
+
+    expect(resolveMeetingsFolder(settings)).toBe(folder)
+
+    expect(readFileSync(join(folder, 'kept-meeting.md'), 'utf8')).toBe('LEGACY-CONTENT-A') // copied in
+    expect(readFileSync(join(folder, 'already-there.md'), 'utf8')).toBe('CURRENT-CONTENT') // NOT overwritten
+    expect(existsSync(join(folder, 'README.md'))).toBe(false) // bookkeeping files never copied
+    expect(existsSync(join(folder, 'index.md'))).toBe(false)
+    // Source untouched — copy-forward never deletes or modifies the original.
+    expect(readdirSync(legacy).sort()).toEqual(
+      ['README.md', 'already-there.md', 'index.md', 'kept-meeting.md'].sort()
+    )
+    expect(readFileSync(join(legacy, 'kept-meeting.md'), 'utf8')).toBe('LEGACY-CONTENT-A')
+  })
+
+  it('runs only once: a file added to the legacy folder after the run-once marker is written is never pulled in', () => {
+    writeFileSync(join(legacy, 'first.md'), 'FIRST')
+    resolveMeetingsFolder(settings) // first call: copies first.md, writes the marker
+    expect(readFileSync(join(folder, 'first.md'), 'utf8')).toBe('FIRST')
+
+    writeFileSync(join(legacy, 'second.md'), 'SECOND')
+    resolveMeetingsFolder(settings) // marker already present — must be a no-op
+    expect(existsSync(join(folder, 'second.md'))).toBe(false)
   })
 })

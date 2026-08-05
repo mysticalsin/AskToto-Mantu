@@ -1,7 +1,11 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
+import { EventEmitter } from 'node:events'
+import { PassThrough } from 'node:stream'
 
 // Shared, hoisted mock for the promisified execFile so resolveBin can be driven without a real shell.
-const h = vi.hoisted(() => ({ execFileImpl: vi.fn() }))
+// spawnImpl is a controllable-per-test spawn mock (mirrors cli-win.test.ts), needed for the
+// kill-on-result tests below — every other test in this file fails before reaching spawn.
+const h = vi.hoisted(() => ({ execFileImpl: vi.fn(), spawnImpl: vi.fn() }))
 
 vi.mock('electron', () => ({
   app: { getPath: () => '/tmp' },
@@ -13,16 +17,35 @@ vi.mock('node:child_process', async () => {
   // execFileAsync = promisify(execFile); wiring the custom symbol lets us resolve {stdout} deterministically.
   const execFile: unknown = vi.fn()
   ;(execFile as Record<symbol, unknown>)[promisify.custom] = h.execFileImpl
-  const spawn = vi.fn(() => ({
+  h.spawnImpl.mockImplementation(() => ({
     stdout: { on: vi.fn() },
     stderr: { on: vi.fn() },
     on: vi.fn(),
     kill: vi.fn()
   }))
-  return { execFile, spawn }
+  return { execFile, spawn: h.spawnImpl }
 })
 
 import { CLI_CONFIGS, cliEnv, resolveBin, idleWatchdog, runCliStream } from './cli'
+
+/** A fake ChildProcess: real Readable streams (so readline's createInterface behaves exactly as it
+ *  does against a real spawn) wrapped in a real EventEmitter. Mirrors cli-win.test.ts's fakeChild. */
+function fakeChild(): {
+  child: EventEmitter & { stdin: { on: ReturnType<typeof vi.fn>; write: ReturnType<typeof vi.fn>; end: ReturnType<typeof vi.fn> }; stdout: PassThrough; stderr: PassThrough; pid: number; kill: ReturnType<typeof vi.fn> }
+  stdout: PassThrough
+  stderr: PassThrough
+} {
+  const stdout = new PassThrough()
+  const stderr = new PassThrough()
+  const child = Object.assign(new EventEmitter(), {
+    stdin: { on: vi.fn(), write: vi.fn(), end: vi.fn() },
+    stdout,
+    stderr,
+    pid: 4242,
+    kill: vi.fn()
+  })
+  return { child, stdout, stderr }
+}
 
 describe('CLI_CONFIGS — security-critical arg arrays (must never relax)', () => {
   it('claude-cli locks tools fully down: --allowedTools "" and --disallowedTools "*", single turn', () => {
@@ -35,14 +58,16 @@ describe('CLI_CONFIGS — security-critical arg arrays (must never relax)', () =
     expect(args[di + 1]).toBe('*') // every tool blocked
     expect(args[args.indexOf('--max-turns') + 1]).toBe('1')
     expect(args).toContain('stream-json')
+    expect(args[args.indexOf('--model') + 1]).toBe('opus') // a real model passes through unchanged
   })
 
-  it('claude-cli sends the prompt via stdin (never argv) and omits model/system flags when empty', () => {
+  it('claude-cli sends the prompt via stdin (never argv) and floors an empty model to "sonnet"', () => {
     const args = CLI_CONFIGS['claude-cli']!.buildArgs({ model: '', system: '', prompt: 'hello' })
     expect(args[0]).toBe('-p') // print/non-interactive mode; the prompt is read from stdin
     expect(args).not.toContain('hello') // confidential content must NEVER appear in argv (ps-visible)
-    expect(args).not.toContain('--model')
     expect(args).not.toContain('--append-system-prompt')
+    // cheap-by-default invariant: an empty model must never silently inherit the user's own CLI default
+    expect(args[args.indexOf('--model') + 1]).toBe('sonnet')
     // even with no model/system the lockdown flags are still present
     expect(args).toContain('--allowedTools')
     expect(args).toContain('--disallowedTools')
@@ -186,5 +211,85 @@ describe('runCliStream — contract', () => {
     })
     expect(typeof r.abort).toBe('function')
     r.abort() // clears the watchdog; no open handle left behind
+  })
+})
+
+describe('isResultLine — claude-cli terminal marker (kill-on-result)', () => {
+  it('matches a type:"result" line and rejects stream_event/garbage', () => {
+    const cfg = CLI_CONFIGS['claude-cli']!
+    expect(cfg.isResultLine?.(JSON.stringify({ type: 'result', subtype: 'success' }))).toBe(true)
+    expect(cfg.isResultLine?.(JSON.stringify({ type: 'stream_event', event: {} }))).toBe(false)
+    expect(cfg.isResultLine?.('not json at all')).toBe(false)
+  })
+
+  it('codex-cli has no isResultLine matcher — its terminal marker is unverified, left byte-identical', () => {
+    expect(CLI_CONFIGS['codex-cli']!.isResultLine).toBeUndefined()
+  })
+})
+
+describe('runCliStream — kill-on-result settles without waiting for child exit (claude-cli)', () => {
+  // Pin darwin: resolveBin's win32 branch parses `where` output for a .cmd/.exe hit and would reject
+  // this POSIX-style stub, making the test host-dependent (same rationale as the resolveBin block above).
+  const REAL_PLATFORM = process.platform
+  beforeEach(() => {
+    Object.defineProperty(process, 'platform', { value: 'darwin', configurable: true })
+    h.execFileImpl.mockReset()
+    h.spawnImpl.mockReset()
+  })
+  afterEach(() => Object.defineProperty(process, 'platform', { value: REAL_PLATFORM, configurable: true }))
+
+  it('a type:"result" line calls onDone and aborts the spawn signal immediately', async () => {
+    h.execFileImpl.mockResolvedValue({ stdout: '/usr/local/bin/claude\n', stderr: '' })
+    const { child, stdout } = fakeChild()
+    h.spawnImpl.mockReturnValue(child)
+
+    const onDone = vi.fn()
+    const onError = vi.fn()
+    runCliStream({
+      providerId: 'claude-cli',
+      model: 'opus',
+      system: '',
+      prompt: 'hi',
+      handlers: { onDelta: vi.fn(), onDone, onError }
+    })
+
+    await vi.waitFor(() => expect(h.spawnImpl).toHaveBeenCalled())
+    const spawnOpts = h.spawnImpl.mock.calls[0][2] as { signal: AbortSignal }
+    expect(spawnOpts.signal.aborted).toBe(false) // not yet — the result line hasn't arrived
+
+    stdout.write(`${JSON.stringify({ type: 'result', subtype: 'success' })}\n`)
+    await vi.waitFor(() => expect(onDone).toHaveBeenCalledTimes(1))
+
+    expect(onDone).toHaveBeenCalledWith({})
+    expect(onError).not.toHaveBeenCalled()
+    // No 'close' was ever emitted on the child — onDone fired from the result line, not from process
+    // exit — and the same signal spawn() was given is now aborted, which is what tears the child down
+    // (reuses the existing abort-listener → killWindowsProcessTree plumbing).
+    expect(spawnOpts.signal.aborted).toBe(true)
+  })
+
+  it('a late close after the result line does not double-settle onDone/onError', async () => {
+    h.execFileImpl.mockResolvedValue({ stdout: '/usr/local/bin/claude\n', stderr: '' })
+    const { child, stdout } = fakeChild()
+    h.spawnImpl.mockReturnValue(child)
+
+    const onDone = vi.fn()
+    const onError = vi.fn()
+    runCliStream({
+      providerId: 'claude-cli',
+      model: 'opus',
+      system: '',
+      prompt: 'hi',
+      handlers: { onDelta: vi.fn(), onDone, onError }
+    })
+
+    await vi.waitFor(() => expect(h.spawnImpl).toHaveBeenCalled())
+    stdout.write(`${JSON.stringify({ type: 'result' })}\n`)
+    await vi.waitFor(() => expect(onDone).toHaveBeenCalledTimes(1))
+
+    // Simulates the owner's global-hook linger: the child finally exits well after the result line.
+    child.emit('close', 1)
+    expect(onDone).toHaveBeenCalledTimes(1)
+    expect(onError).not.toHaveBeenCalled()
   })
 })

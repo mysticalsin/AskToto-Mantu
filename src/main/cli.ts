@@ -289,6 +289,12 @@ interface CliConfig {
   // args — prevents transcript/system text from appearing in `ps -ww` / /proc/<pid>/cmdline.
   buildArgs(opts: { model: string }): string[]
   parseLine(line: string): string | null
+  /** True when `line` is the stream's own verified terminal marker. Optional — only implemented where
+   *  the terminal-line schema is confirmed (claude-cli's `type:'result'`); left unset for providers
+   *  whose terminal marker is unverified. When it matches, runCliStream settles + aborts immediately
+   *  instead of waiting for process exit — claude-cli's own global hooks can keep the child alive well
+   *  past the result line, which would otherwise trip the idle watchdog into a false timeout. */
+  isResultLine?(line: string): boolean
   /** codex runs in a throwaway temp cwd so it never touches the user's project. */
   useTmpCwd: boolean
 }
@@ -300,6 +306,8 @@ export const CLI_CONFIGS: Partial<Record<ProviderId, CliConfig>> = {
     buildArgs({ model }) {
       // '-p' with no positional arg puts claude in print/non-interactive mode reading from stdin.
       // system + prompt are written to child.stdin after spawn — never exposed in argv.
+      // '--model' is unconditional: an empty model must never silently inherit the user's own CLI
+      // default (which can be a premium model) — floor to the cheapest current model instead.
       return [
         '-p',
         '--output-format',
@@ -312,7 +320,8 @@ export const CLI_CONFIGS: Partial<Record<ProviderId, CliConfig>> = {
         '',
         '--disallowedTools',
         '*',
-        ...(model ? ['--model', model] : [])
+        '--model',
+        model || 'sonnet'
       ]
     },
     parseLine(line) {
@@ -327,6 +336,14 @@ export const CLI_CONFIGS: Partial<Record<ProviderId, CliConfig>> = {
         return null
       } catch {
         return null
+      }
+    },
+    // Schema verified live: the terminal stream-json line for a claude-cli run carries type:'result'.
+    isResultLine(line) {
+      try {
+        return JSON.parse(line).type === 'result'
+      } catch {
+        return false
       }
     },
     useTmpCwd: false
@@ -487,6 +504,16 @@ export function runCliStream(opts: RunCliStreamOpts): { abort: () => void } {
         }
       } catch {
         // Non-JSON lines (e.g. status messages) are silently ignored
+      }
+      // Settle on the stream's own terminal marker rather than waiting for process exit: claude-cli's
+      // own global hooks can keep the child alive well after this line ships, which would otherwise
+      // trip the idle watchdog into a false 'stream timed out' error. Abort reuses the existing
+      // signal-linked kill plumbing (incl. killWindowsProcessTree) to tear the child down now.
+      if (!settled && !controller.signal.aborted && cfg.isResultLine?.(line)) {
+        settled = true
+        wd.clear()
+        opts.handlers.onDone({})
+        controller.abort()
       }
     })
 
