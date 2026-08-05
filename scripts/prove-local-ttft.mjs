@@ -317,7 +317,9 @@ function resolveBinary() {
   let found = candidates.find((p) => existsSync(p))
   if (!found) {
     console.log(`[prove-local-ttft] llama-server binary missing — running fetch-llama-server.mjs ${platform}...`)
-    execFileSync('node', [join(REPO_ROOT, 'scripts', 'fetch-llama-server.mjs'), platform], {
+    // process.execPath, not a bare `node`: bare names resolve through PATH only, so this would either
+    // ENOENT or re-enter a DIFFERENT Node than the one running this bench.
+    execFileSync(process.execPath, [join(REPO_ROOT, 'scripts', 'fetch-llama-server.mjs'), platform], {
       cwd: REPO_ROOT,
       stdio: 'inherit'
     })
