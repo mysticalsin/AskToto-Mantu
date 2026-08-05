@@ -558,7 +558,11 @@ describe('brain', () => {
       expect(deal.band_evidence).toBe('ev-negotiation')
       // History: one entry per losing value, most-recent-first by the same (date, source_file) key.
       expect(deal.stage_provenance!.superseded.map((e) => e.value)).toEqual(['proposal', 'discovery'])
-    })
+      // Explicit budget: this case ingests 3 extractions through the real store for each of 6
+      // permutations — 18 full write/read round trips against a temp profile, by far the heaviest test
+      // in the file. vitest's 5s default is comfortable on an idle machine and not on a loaded CI runner,
+      // where it aborts mid-permutation and reports a timeout that looks like a determinism failure.
+    }, 30_000)
 
     it('an EXTRACTED classification beats a weaker one in BOTH merge orders (never-downgrade, bidirectional)', async () => {
       const sectorX = (sector: 'banking' | 'technology', conf: 'EXTRACTED' | 'INFERRED'): MeetingExtraction =>
