@@ -15,7 +15,7 @@
 import { app, safeStorage } from 'electron'
 import { existsSync, readFileSync, writeFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
-import { useFileBackend, encryptSecret, decryptSecret } from '../secrets'
+import { useFileBackend, encryptSecret, decryptSecret, prepareFileKeyForWrite } from '../secrets'
 import { mainLog } from '../logger'
 
 const KEY_FILE = 'key-bidstack.bin'
@@ -33,6 +33,10 @@ export function setBidstackApiKey(key: string): void {
     clearBidstackApiKey()
     return
   }
+  // Fail closed before overwriting: an existing ATKBID1 blob may be encrypted under a file key this
+  // machine can no longer unwrap (Windows DPAPI bound to another account), and those bytes are the
+  // only copy. No-op on a profile that has no file key. Mirrors store.ts's setApiKey.
+  prepareFileKeyForWrite()
   let blob: Buffer
   if (useFileBackend()) {
     blob = Buffer.concat([AES_KEY_MARKER, encryptSecret(trimmed)])

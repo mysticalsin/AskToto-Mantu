@@ -192,7 +192,10 @@ function CheckRow({
             onClick={onFix}
             className="no-drag focus-ring ml-1.5 text-[11px] font-medium text-[color:var(--color-accent-2)] hover:underline"
           >
-            {fixLabel ?? 'Open System Settings'}
+            {/* Callers pass fixLabel for the Windows "status unknown" case, but a Windows user who
+                explicitly DENIED the permission has a real 'denied' status, so fixLabel is undefined and
+                this fallback shows — it must not name a macOS-only app. */}
+            {fixLabel ?? (isWindows ? 'Open Windows Settings' : 'Open System Settings')}
           </button>
         )}
       </div>

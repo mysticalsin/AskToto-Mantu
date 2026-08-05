@@ -259,12 +259,24 @@ async function fetchParakeet() {
     join(modelDir, 'joiner.int8.onnx'),
     join(modelDir, 'tokens.txt')
   ]
+  const archive = join(destDir, `${MODEL_NAME}.tar.bz2`)
   if (requiredFiles.every(filePresent)) {
+    // Sweep a stranded archive on the skip path too, not just after a fresh extract below. The download
+    // and the unlink are separate steps, so any run that extracted but did not reach the unlink — a crash,
+    // a Ctrl-C, or the hand-extraction workaround docs/WINDOWS.md used to prescribe — leaves 464 MB behind
+    // that every later run skips straight past. It is not inert: resources/asr ships in the package, so the
+    // leftover both bloats the installer and hard-fails check-packaged-runtime.mjs's exact-inventory gate
+    // with "asr runtime inventory mismatch / Unexpected: <archive>".
+    if (filePresent(archive)) {
+      try {
+        unlinkSync(archive)
+        console.log('  [clean] removed a stale parakeet archive left by an earlier run')
+      } catch { /* best effort — a locked file must not fail provisioning */ }
+    }
     console.log('  [skip] all parakeet model files present')
     return
   }
   ensureDir(destDir)
-  const archive = join(destDir, `${MODEL_NAME}.tar.bz2`)
   await download(MODEL_URL, archive)
   console.log(`  [extract] ${process.platform === 'win32' ? 'in-process bzip2+tar (win32)' : 'tar xjf'} ...`)
   await extractTarBz2(archive, destDir)

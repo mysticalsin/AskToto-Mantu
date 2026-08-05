@@ -8,7 +8,11 @@ const macHelperMock = vi.hoisted(() => ({
 }))
 vi.mock('./mac-helper', () => macHelperMock)
 
-import { parseForegroundLine, startForegroundWatcher } from './foreground-watcher'
+import { parseForegroundLine, startForegroundWatcher, winWatcherSpawnSpec } from './foreground-watcher'
+
+// Accepts either separator so the assertion holds when a non-Windows host resolves the pinned path.
+const ABSOLUTE_SYSTEM32_POWERSHELL =
+  /^[A-Za-z]:[\\/](.+[\\/])?System32[\\/]WindowsPowerShell[\\/]v1\.0[\\/]powershell\.exe$/i
 
 beforeEach(() => {
   macHelperMock.macWatcherSpawnSpec.mockReturnValue(null)
@@ -50,6 +54,30 @@ describe('parseForegroundLine', () => {
     expect(parseForegroundLine('no-tabs-here')).toBeNull()
     expect(parseForegroundLine('12345\tNaNpid\ttitle')).toBeNull()
     expect(parseForegroundLine('\t5\ttitle')).toBeNull() // empty hwnd
+  })
+})
+
+describe('winWatcherSpawnSpec — powershell is pinned to System32', () => {
+  // Regression: the watcher used to spawn a bare 'powershell.exe'. Windows' CreateProcess searches the
+  // current working directory before PATH, so a bare name runs an attacker-planted powershell.exe if the
+  // app is ever launched from an attacker-writable cwd (win-security.ts states the invariant).
+  it('spawns the absolute %SystemRoot%\\System32 powershell, never a bare name', () => {
+    const spec = winWatcherSpawnSpec()
+    expect(spec.command).toMatch(ABSOLUTE_SYSTEM32_POWERSHELL)
+    expect(spec.command).not.toBe('powershell.exe')
+    expect(spec.command).not.toBe('powershell')
+  })
+
+  it('still passes the encoded watcher script (the pinning did not change the payload)', () => {
+    const spec = winWatcherSpawnSpec()
+    expect(spec.args.slice(0, 5)).toEqual([
+      '-NoProfile',
+      '-NonInteractive',
+      '-ExecutionPolicy',
+      'Bypass',
+      '-EncodedCommand'
+    ])
+    expect(Buffer.from(spec.args[5], 'base64').toString('utf16le')).toContain('GetForegroundWindow')
   })
 })
 

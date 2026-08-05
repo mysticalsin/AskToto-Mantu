@@ -37,6 +37,17 @@ export type RuntimeState = 'stopped' | 'starting' | 'running' | 'unavailable'
 // Health budget: Windows Defender's first-run scan of a freshly-unpacked exe can add tens of seconds
 // before the process even starts executing (PLAN.md §7 risk 3) — mac has no such AV tax.
 const HEALTH_BUDGET_MS: Record<LlamaPlatform, number> = { mac: 30_000, win: 60_000 }
+// Port-line budget: bounds the wait for the `listening on http://127.0.0.1:<port>` line, which is what
+// GATES the health poll — HEALTH_BUDGET_MS only starts counting after that line is parsed. Without this
+// budget a child that starts but never prints the line (wrong build, GPU driver stall, a changed log
+// format in a future llama.cpp release) leaves start() pending forever with nothing surfaced to the user.
+// Deliberately DOUBLE the health budget rather than equal to it: this is a hang-breaker, not a
+// performance SLA, and a false timeout is the worse failure (it would silently disable Métis Local on
+// slow-but-healthy hardware). Everything expensive about a cold start lands in THIS phase, not the health
+// phase — Defender's first-run scan of the freshly-unpacked exe, plus the full GGUF+mmproj read off a
+// cold disk, which the live spike log shows completing BEFORE the listening line is printed. In the
+// healthy case the line arrives in well under a second, so the headroom costs nothing.
+const PORT_LINE_BUDGET_MS: Record<LlamaPlatform, number> = { mac: 60_000, win: 120_000 }
 const HEALTH_POLL_INTERVAL_MS = 250
 const IDLE_STOP_MS = 15 * 60_000
 const RESTART_WINDOW_MS = 10 * 60_000
@@ -170,6 +181,14 @@ let startPromise: Promise<void> | null = null
 // resolvers for any start() call currently blocked in waitForDrain() below.
 let activeStreamCount = 0
 let drainWaiters: Array<() => void> = []
+// Sticky Windows CPU fallback. spawnCandidates' Vulkan->CPU fallback only covers a candidate that never
+// reached 'running'; a Vulkan build that initializes fine and then crashes DURING INFERENCE (common on
+// older Intel iGPU drivers) exits via maybeAutoRestart(), which re-spawned the same Vulkan build and
+// crash-looped. Once set, the Vulkan candidate is dropped for the rest of the app session. The threshold
+// is ONE such crash, not more, because maybeAutoRestart's own budget permits exactly one restart per
+// RESTART_WINDOW_MS before the session is marked 'unavailable' — a higher threshold could never be
+// reached, so the fallback would never actually run.
+let cpuPinned = false
 
 /** The per-session sidecar api key. Lives only in this module's memory — never logged, never sent to
  *  the renderer (main injects it directly into the local provider's outbound request). */
@@ -261,7 +280,8 @@ function spawnAndWaitHealthy(
   binaryPath: string,
   modelPaths: ModelPaths,
   platform: LlamaPlatform,
-  generation: number
+  generation: number,
+  variant: BinaryVariant
 ): Promise<void> {
   return new Promise((resolve, reject) => {
     const args = buildSpawnArgs({ gguf: modelPaths.gguf, mmproj: modelPaths.mmproj })
@@ -286,12 +306,39 @@ function spawnAndWaitHealthy(
     // in isolation, or a mid-line split silently loses the port and the health poll never starts.
     let outputBuffer = ''
 
+    let portLineTimer: NodeJS.Timeout | null = setTimeout(() => {
+      portLineTimer = null
+      if (settled) return
+      settled = true
+      // Kill + reap before rejecting. The candidate loop's stopChildProcess() only kills a child that is
+      // still the module's CURRENT one, so a superseded/cancelled attempt would otherwise leave a live
+      // llama-server.exe behind holding the model's RAM. The 'exit' handler below clears child/port once
+      // the kill lands; a stale proc's exit is already ignored by its `child !== proc` guard.
+      if (!proc.killed) proc.kill('SIGKILL')
+      const tail = outputBuffer.trim()
+      const detail = tail ? ` — last output: ${tail.slice(-800)}` : ''
+      mainLog.warn('local runtime: sidecar never reported a listening port', { platform, variant })
+      reject(
+        new Error(
+          `llama-server started but never reported a listening port within ${PORT_LINE_BUDGET_MS[platform]}ms (${binaryPath})${detail}`
+        )
+      )
+    }, PORT_LINE_BUDGET_MS[platform])
+    const clearPortLineTimer = (): void => {
+      if (portLineTimer) {
+        clearTimeout(portLineTimer)
+        portLineTimer = null
+      }
+    }
+
     const onOutput = (chunk: Buffer): void => {
       if (boundPort !== null) return
       outputBuffer += chunk.toString('utf8')
       const parsed = parseBoundPort(outputBuffer)
       if (parsed === null) return
       boundPort = parsed
+      // The port line arrived — from here HEALTH_BUDGET_MS owns the deadline.
+      clearPortLineTimer()
       // Keep the candidate port local until health succeeds. A detached process can flush buffered output
       // after stop() and even after a newer generation is already healthy; publishing here would redirect
       // the running app to the killed process's endpoint.
@@ -325,6 +372,7 @@ function spawnAndWaitHealthy(
     proc.stderr?.on('data', onOutput)
 
     proc.once('error', (err) => {
+      clearPortLineTimer()
       if (!settled) {
         settled = true
         reject(err)
@@ -332,6 +380,7 @@ function spawnAndWaitHealthy(
     })
 
     proc.once('exit', (code, signal) => {
+      clearPortLineTimer()
       // This process is no longer the module's current child: stop() already detached it, or a newer start
       // owns the global child/port/state. Its own pre-health promise must still reject, but a stale exit must
       // never clear or restart the newer child. A settled stale process needs no further action at all.
@@ -357,7 +406,14 @@ function spawnAndWaitHealthy(
       }
       if (wasRunning) {
         state = 'stopped'
-        auditLog('local.runtime.crash', { platform, code, signal })
+        auditLog('local.runtime.crash', { platform, code, signal, variant })
+        // Vulkan initialized well enough to reach 'running' and then died — restarting the same GPU build
+        // would crash-loop (see cpuPinned). Pin CPU BEFORE maybeAutoRestart so the restart it triggers
+        // already skips the Vulkan candidate.
+        if (variant === 'vulkan' && !cpuPinned) {
+          cpuPinned = true
+          mainLog.warn('local runtime: pinning CPU sidecar for this session after a Vulkan crash', { code, signal })
+        }
         maybeAutoRestart(platform)
       }
     })
@@ -405,7 +461,9 @@ function assertCurrentGeneration(generation: number): void {
 }
 
 async function spawnCandidates(modelPaths: ModelPaths, platform: LlamaPlatform, generation: number): Promise<void> {
-  const candidates = resolveBinaryPath(platform)
+  // cpuPinned drops the Vulkan candidate for the rest of the session (no-op on mac, which has no Vulkan
+  // candidate). Filtered here rather than in resolveBinaryPath() so that stays a pure path resolver.
+  const candidates = resolveBinaryPath(platform).filter((c) => !(cpuPinned && c.variant === 'vulkan'))
   let lastErr: Error | null = null
   for (let i = 0; i < candidates.length; i++) {
     assertCurrentGeneration(generation)
@@ -415,7 +473,7 @@ async function spawnCandidates(modelPaths: ModelPaths, platform: LlamaPlatform, 
       continue
     }
     try {
-      await spawnAndWaitHealthy(candidate.path, modelPaths, platform, generation)
+      await spawnAndWaitHealthy(candidate.path, modelPaths, platform, generation, candidate.variant)
       assertCurrentGeneration(generation)
       state = 'running'
       scheduleIdleStop()

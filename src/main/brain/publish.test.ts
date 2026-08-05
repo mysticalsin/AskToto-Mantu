@@ -105,7 +105,7 @@ describe('publish.ts — Task MI-5 markdown mirror', () => {
     folder = mkdtempSync(join(tmpdir(), 'asktoto-publish-test-'))
     s = settingsFor(folder)
   })
-  afterEach(() => rmSync(folder, { recursive: true, force: true }))
+  afterEach(() => rmSync(folder, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }))
 
   // ── 1. Render gate — the LOAD-BEARING guarantee, extended from MI-4 to the wiki ────────────────────
 

@@ -19,7 +19,7 @@ import {
   powerSaveBlocker,
   systemPreferences
 } from 'electron'
-import { join, basename, dirname, resolve, relative, isAbsolute, extname } from 'node:path'
+import { join, basename, dirname, resolve, extname } from 'node:path'
 import { readFileSync, existsSync, writeFileSync, realpathSync, readdirSync, unlinkSync, createReadStream, statSync, renameSync, rmdirSync } from 'node:fs'
 import { pathToFileURL } from 'node:url'
 import { randomBytes } from 'node:crypto'
@@ -215,6 +215,7 @@ import { runSelfTest } from './selftest'
 import { readEvalMetrics, aggregateMetrics } from './metrics'
 import { importDustCliSession, refreshDustCliSession, setupDustCli } from './dustcli'
 import { asrManifestComplete } from './asr-manifest'
+import { isInsideResourceBase, realResourceBase } from './asr-model-path'
 import { detectCli, testCli, setupCli, installCli, loginCli, prewarmCli } from './cli'
 import { connectBidstack, pushToBidstack } from './mcp/bidstackClient'
 import { activateLicense, checkLicenseGrace, heartbeat } from './license'
@@ -240,16 +241,29 @@ import { applySpeakerNames } from '@shared/transcript-align'
 import { initializeCaheEditionIdentity, isCaheEdition } from './cahe-edition'
 import { importEmbeddedCaheKey, seedCaheLocalAiForBackgroundScreen } from './cahe-embedded-key'
 
-// Self-signed / un-notarized builds: use the AES-256-GCM file keystore instead of the macOS Keychain.
-// An un-notarized app's Keychain ACL is not stably trusted, so safeStorage prompts for the login-keychain
-// password on launch — AND because the first getSettings() decrypt runs synchronously during boot, BEFORE
-// the overlay window paints, that modal prompt blocks the entire UI behind it (the "load forever" / "I only
-// see the keychain box" report). The file backend keeps secrets encrypted at rest (secret-key.bin, mode
-// 0600) with zero OS prompt, so the app boots straight to its UI. Remove/gate this once the app ships
-// signed with an Apple Developer ID + notarization, so it can use the Keychain-backed store again.
-// `??=` leaves QA/integration overrides (which set the var explicitly) untouched.
+// KEYSTORE BACKEND — the default is PLATFORM-SPECIFIC, not global.
+//
+// macOS (forced file keystore): on a self-signed / un-notarized build the Keychain ACL is not stably
+// trusted, so safeStorage prompts for the login-keychain password on launch — AND because the first
+// getSettings() decrypt runs synchronously during boot, BEFORE the overlay window paints, that modal
+// prompt blocks the entire UI behind it (the "load forever" / "I only see the keychain box" report).
+// The AES-256-GCM file backend keeps secrets encrypted at rest (secret-key.bin, mode 0600) with zero
+// OS prompt, so the app boots straight to its UI. Remove this once the app ships signed with an Apple
+// Developer ID + notarization, so it can use the Keychain-backed store again.
+//
+// Windows (NOT forced): none of the above applies. safeStorage there is DPAPI-backed, tied to the
+// signed-in Windows account rather than to the binary's code signature, and never shows a prompt.
+// Forcing the file keystore anyway made useFileBackend() permanently true, which made canWrap
+// permanently false (secrets.ts) — so the AES-256 master key was written to secret-key.bin as 32 RAW
+// bytes sitting next to the ciphertext it protects. Leaving the var unset lets DPAPI wrap that key
+// (and lets settings/API keys/transcript content keys use safeStorage directly), so a bare copy of
+// the userData folder is no longer decryptable. TRADEOFF: the profile becomes bound to this Windows
+// user account — see the DPAPI note in secrets.ts and the recoverEncryptedProfile IPC.
+//
+// `??=` on BOTH platforms leaves an explicit QA/operator override (ASKTOTO_LOCAL_KEYSTORE already set
+// in the environment) untouched — including forcing the file keystore on Windows for isolated QA.
 initializeCaheEditionIdentity()
-process.env.ASKTOTO_LOCAL_KEYSTORE ??= '1'
+if (process.platform === 'darwin') process.env.ASKTOTO_LOCAL_KEYSTORE ??= '1'
 
 // Select the final user-data profile before crashReporter (or any other Electron service) can resolve
 // a default path. In particular, ASKTOTO_USERDATA must isolate physical QA from a real encrypted profile.
@@ -4084,12 +4098,16 @@ if (!app.requestSingleInstanceLock()) {
   // Maps asr-model://<host>/<pathname> → RES_BASE/<host>/<pathname> on disk.
   // This lets the Whisper worker (served over file://) use fetch() to load
   // bundled ONNX model weights and WASM blobs with zero network access.
-  // Path-traversal guard: relative() must stay within RES_BASE (separator-safe on Windows).
+  // Path-traversal guard: the resolved target must stay within RES_BASE (separator-safe on Windows).
   runStep('asrModelProtocol', () => {
     const REPO_ROOT = join(__dirname, '..', '..')
     const RES_BASE = app.isPackaged
       ? process.resourcesPath
       : join(REPO_ROOT, 'resources')
+    // The traversal check below compares against the REAL base: request targets are realpath-resolved
+    // (symlink-escape guard), so an unresolved base would describe the same directory in different words
+    // and 403 every asset — see realResourceBase for the Windows-junction case this broke.
+    const RES_BASE_REAL = realResourceBase(RES_BASE)
 
     // A packaged app is ALWAYS offline-only, even if its installer is corrupt/incomplete. Returning true
     // keeps the worker's remote resolver disabled so missing assets fail locally with a reinstall message
@@ -4134,9 +4152,8 @@ if (!app.requestSingleInstanceLock()) {
           throw e
         }
         // Path-traversal guard (separator-safe on Windows): reject any path that escapes RES_BASE.
-        // Run the check against the real (symlink-resolved) path, not the raw abs path.
-        const relCheck = relative(RES_BASE, real)
-        if (relCheck.startsWith('..') || isAbsolute(relCheck)) {
+        // Run the check against the real (symlink-resolved) path on BOTH sides, not the raw abs path.
+        if (!isInsideResourceBase(RES_BASE_REAL, real)) {
           return respond(null, { status: 403 })
         }
         const resp = await net.fetch(pathToFileURL(real).toString())

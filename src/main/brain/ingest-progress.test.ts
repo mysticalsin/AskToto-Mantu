@@ -12,8 +12,7 @@ import {
   brainLiveIngestProgress,
   enqueueIngest,
   reconcileMeetingsInBackground,
-  ingestExtraction
-} from './ingest'
+  ingestExtraction, whenIndexWritesSettle } from './ingest'
 import { MeetingExtractionSchema } from '@shared/brain'
 import { readAccount, readIndex, slugify, writeMeetingExtraction } from './store'
 
@@ -59,13 +58,26 @@ describe('backfill progress bookkeeping across runs', () => {
       if (name === 'userData') return userData
       return join(userData, name)
     })
+    // getApiKey() short-circuits on the provider's env var before it reads the temp profile, so a
+    // machine exporting a real KIMI_API_KEY / NVIDIA_API_KEY / … makes extra providers eligible and
+    // the extraction failover walk longer than the mocks these tests queue. Sweep every provider key
+    // var so anthropic below is the ONLY eligible candidate (same sweep store.test.ts uses; every name
+    // in store.ts's ENV_VAR map ends in `_API_KEY`).
+    for (const name of Object.keys(process.env)) {
+      if (name.endsWith('_API_KEY')) vi.stubEnv(name, undefined)
+    }
     setSettings({ meetingsFolder })
     setApiKey('anthropic', 'fake-test-key-not-real')
   })
 
-  afterEach(() => {
-    rmSync(userData, { recursive: true, force: true })
-    rmSync(meetingsFolder, { recursive: true, force: true })
+  afterEach(async () => {
+    // The queue draining is not the same as the writes landing: the last job’s index.json record is
+    // still on ingest.ts’s serialized lane at that moment. Await it, or the stale write lands during
+    // the NEXT test (and races this rmSync — ENOTEMPTY on the Windows CI runner).
+    await whenIndexWritesSettle()
+    rmSync(userData, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
+    rmSync(meetingsFolder, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
+    vi.unstubAllEnvs()
     vi.restoreAllMocks()
   })
 
@@ -231,6 +243,9 @@ describe('backfill progress bookkeeping across runs', () => {
     await vi.waitFor(() => {
       expect(readIndex(getSettings()).ingested[file]?.ok).toBe(true)
     })
+    // The index write lands before the queue drains — leaving the pump running would let this test's
+    // backfill spill into the NEXT test's temp profile and eat its mockImplementationOnce responses.
+    await waitForIdle()
   })
 
   it('returns a preparing state before scanning a historical meeting folder', async () => {
@@ -243,6 +258,7 @@ describe('backfill progress bookkeeping across runs', () => {
     await vi.waitFor(() => {
       expect(readIndex(getSettings()).ingested['queued-from-ui.md']?.ok).toBe(true)
     })
+    await waitForIdle() // same reason: don't hand a still-running pump to the next test
   })
 
   it('counts a failed extraction separately so completed queue work is not presented as mapped', async () => {
@@ -298,6 +314,7 @@ describe('backfill progress bookkeeping across runs', () => {
       expect(readAccount(getSettings(), slugify('Acme'))).toBeNull()
       expect(idx.revision).toBeGreaterThan(1)
     })
+    await waitForIdle() // same reason: don't hand a still-running pump to the next test
   })
 
   it('removes derived facts when an indexed source is deleted by sync or retention', async () => {

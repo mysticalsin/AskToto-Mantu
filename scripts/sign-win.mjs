@@ -22,6 +22,19 @@ import { existsSync, readdirSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { homedir, platform } from 'node:os'
 
+// Invoke Windows system tools by ABSOLUTE %SystemRoot%\System32 path, never bare name — the same
+// invariant src/main/win-security.ts holds. Node resolves a bare name through PATH only (libuv does not
+// fall back to System32), so a bare `powershell` fails outright on a PATH that omits System32 (e.g. a
+// Git-Bash-flavored build shell) and would otherwise run whatever powershell.exe PATH reaches first —
+// here, the process that decides whether an artifact counts as validly signed.
+const POWERSHELL = join(
+  process.env.SystemRoot || process.env.windir || 'C:\\Windows',
+  'System32',
+  'WindowsPowerShell',
+  'v1.0',
+  'powershell.exe'
+)
+
 if (platform() !== 'win32') {
   console.error('[sign-win] not on Windows — nothing to do')
   process.exit(0)
@@ -111,7 +124,7 @@ for (const exe of targets) {
     )
     // Positively verify the signature landed (don't trust signtool's exit code alone).
     const status = execFileSync(
-      'powershell',
+      POWERSHELL,
       ['-NoProfile', '-NonInteractive', '-Command', `(Get-AuthenticodeSignature '${exe}').Status`],
       { encoding: 'utf8' }
     ).trim()
