@@ -745,7 +745,18 @@ function initializeImportJobs(): void {
       // built for live Listen's streaming windows, not a batch decoder — using Whisper for imports on
       // every platform (including when the live engine is 'apple') is the honest cross-platform choice
       // rather than making imports mac-only or silently changing accuracy profile by OS.
-      return whisperImportTranscribe(samples, getSettings().asrLanguage)
+      try {
+        return await whisperImportTranscribe(samples, getSettings().asrLanguage)
+      } catch (err) {
+        // An engine choice must never fail an import (T14 guardrail). Whisper's Node runtime can be
+        // unavailable for packaging reasons on a given platform (its transformers backend needs native
+        // addons — e.g. sharp ships per-OS binaries); Parakeet's sherpa addon is provisioned per target
+        // by the build gates, so it is the reliable floor. One warn, then degrade — worse language
+        // routing beats a dead import.
+        mainLog.warn(`[import] whisper transcriber unavailable, falling back to Parakeet: ${err instanceof Error ? err.message : String(err)}`)
+        await ensureParakeetModel()
+        return parakeetTranscribe(samples)
+      }
     },
     saveMeeting: (meeting) => saveMeeting(getSettings(), meeting),
     deleteMeeting,
