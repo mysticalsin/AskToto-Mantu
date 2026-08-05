@@ -106,6 +106,14 @@ import { usePermissions } from '../state'
 import { displayAccelerator, isWindows } from '../lib/keys'
 import { decideDustLiveCheck } from '../lib/dust-live-check'
 
+// Name the OS credential facility the way the user's own OS names it — "Keychain" is macOS-only, and
+// telling a Windows user to "restore Keychain access" names something their machine does not have. Two
+// constants, not one, because these are genuinely different facilities on Windows: the Dust CLI session
+// is read out of Credential Manager (dust-secret-store.ts CredReadW), while the encrypted profile's key
+// is wrapped by DPAPI via safeStorage. The profile wording matches main's KeychainKeyRecoveryError.
+const DUST_CREDENTIAL_STORE = isWindows ? 'Windows Credential Manager' : 'Keychain'
+const PROFILE_CREDENTIAL_STORE = isWindows ? 'Windows credential store' : 'Keychain'
+
 // Guards the AUTOMATIC (non-user-initiated) Dust setup relaunch to at most once per app run. Without it,
 // closing + reopening Settings while a `dust login` is still pending would spawn a fresh Terminal each
 // time. Manual "Connect / Reconnect" clicks are user-explicit and intentionally bypass this.
@@ -1006,8 +1014,8 @@ function AiSection({
           <div className="flex items-start gap-1.5 text-[color:var(--cl-foreground)]">
             <ShieldCheck size={13} className="mt-0.5 shrink-0 text-[color:var(--cl-primary)]" />
             <span>
-              This install cannot unlock the existing encrypted profile. You can restore Keychain access and
-              try again, or create a fresh local profile while Métis preserves the old encrypted data.
+              This install cannot unlock the existing encrypted profile. You can restore {PROFILE_CREDENTIAL_STORE} access
+              and try again, or create a fresh local profile while Métis preserves the old encrypted data.
             </span>
           </div>
           <button
@@ -2449,7 +2457,7 @@ function DustSetup({
         setCli({
           busy: false,
           ok: false,
-          msg: r.error || 'Allow Métis to access your Dust CLI session in Keychain, then try again.'
+          msg: r.error || `Allow Métis to access your Dust CLI session in ${DUST_CREDENTIAL_STORE}, then try again.`
         })
         return
       }
@@ -2651,7 +2659,7 @@ function DustSetup({
       const decision = decideDustLiveCheck(await window.toto.dustProbeSession())
       if (decision === 'connected') return
       if (decision === 'needs-access') {
-        setCli({ busy: false, ok: false, msg: 'Allow Métis to read your Dust CLI session in Keychain, then Reconnect.' })
+        setCli({ busy: false, ok: false, msg: `Allow Métis to read your Dust CLI session in ${DUST_CREDENTIAL_STORE}, then Reconnect.` })
         return
       }
       if (decision === 'finish-workspace-pick') {
@@ -2787,8 +2795,8 @@ function DustSetup({
             <div className="flex items-start gap-1.5 text-[color:var(--cl-foreground)]">
               <ShieldCheck size={13} className="mt-0.5 shrink-0 text-[color:var(--cl-primary)]" />
               <span>
-                Métis cannot unlock the existing encrypted profile. Restore Keychain access and retry, or
-                create a fresh local profile while the old encrypted data is preserved.
+                Métis cannot unlock the existing encrypted profile. Restore {PROFILE_CREDENTIAL_STORE} access and
+                retry, or create a fresh local profile while the old encrypted data is preserved.
               </span>
             </div>
             <button
@@ -4893,7 +4901,7 @@ export function Settings({
                   )}
                   <ToggleRow
                     label="Encrypt transcripts at rest"
-                    desc="Locks saved transcripts/notes with your OS keychain so they're unreadable on disk. On by default. Métis's own History, search, and follow-up drafting still work normally; only a separate tool reading the raw files directly (outside Métis) would be blocked."
+                    desc={`Locks saved transcripts/notes with ${isWindows ? 'the Windows credential store' : 'your macOS Keychain'} so they're unreadable on disk. On by default. Métis's own History, search, and follow-up drafting still work normally; only a separate tool reading the raw files directly (outside Métis) would be blocked.`}
                     on={settings.encryptTranscripts}
                     onChange={(v) => patch({ encryptTranscripts: v })}
                     disabled={settings.managedKeys.includes('encryptTranscripts')}
@@ -6178,7 +6186,9 @@ function PermissionsSection(): JSX.Element {
                     }
                     className="no-drag cl-focus mt-0.5 text-[11px] font-medium text-[color:var(--cl-primary)] hover:underline"
                   >
-                    {notYetAsked ? 'Request permission' : (r.fixLabel ?? 'Open System Settings')}
+                    {notYetAsked
+                      ? 'Request permission'
+                      : (r.fixLabel ?? (isWindows ? 'Open Windows Settings' : 'Open System Settings'))}
                   </button>
                 )
               )}
