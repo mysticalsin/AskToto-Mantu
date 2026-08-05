@@ -602,8 +602,12 @@ export function BrainView({
   const notIngested = Math.max(0, meetings.length - ingested)
   const bf = status?.backfill
   const live = status?.live
-  const backfillFailed = bf?.failed ?? 0
   const indexProgress = bf ? describeMeetingIndexProgress(bf) : null
+  // T6 6c: durable counts (status.failed/exhausted), not the ephemeral bf.failed above — a fixed-then-
+  // reopened dashboard must still show the banner while any source has ok:false, even across a reconcile
+  // tick that reset the per-run counter to 0 in between.
+  const durableFailed = (status?.failed ?? 0) + (status?.exhausted ?? 0)
+  const topError = status?.topError
 
   return (
     <div className="fade-up flex flex-col gap-3 px-1 py-1">
@@ -644,14 +648,18 @@ export function BrainView({
         </div>
       )}
 
-      {backfillFailed > 0 && !bf?.running && (
+      {durableFailed > 0 && !bf?.running && (
         <div
           className="flex items-center justify-between gap-2 rounded-xl border border-[var(--color-danger)]/30 bg-[var(--color-danger)]/10 px-3 py-2 text-[11px] text-[var(--color-danger)]"
           role="alert"
         >
           <div className="flex min-w-0 items-center gap-1.5">
             <AlertTriangle size={13} className="shrink-0" />
-            <span>{indexProgress?.label ?? 'Some meetings need attention.'}</span>
+            <span>
+              {topError
+                ? `Your AI provider is failing: ${topError} — check Settings → AI`
+                : indexProgress?.label ?? 'Some meetings need attention.'}
+            </span>
           </div>
           <button
             type="button"

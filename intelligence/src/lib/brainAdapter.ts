@@ -176,7 +176,8 @@ function toDeal(d: BrainDeal, accountBySlug: Map<string, BrainAccount>, meetings
     velocity: d.velocity,
     claims,
     call_grades,
-    commitments: (d.commitments ?? []).map(toCommitment)
+    commitments: (d.commitments ?? []).map(toCommitment),
+    meetings: d.meetings
   }
 }
 
@@ -477,7 +478,8 @@ export function brainToDashboard(b: BrainRead): DashboardData {
     sector: a.sector,
     strategic: a.strategic,
     win_reasons: a.win_reasons ?? [],
-    loss_reasons: a.loss_reasons ?? []
+    loss_reasons: a.loss_reasons ?? [],
+    meetings: a.meetings ?? []
   }))
 
   const peopleOut: Person[] = b.people.map((p) => ({
@@ -486,7 +488,8 @@ export function brainToDashboard(b: BrainRead): DashboardData {
     role: p.role,
     account: p.account,
     stance_trail: p.stance_trail ?? [],
-    commitments: (p.commitments ?? []).map(toCommitment)
+    commitments: (p.commitments ?? []).map(toCommitment),
+    meetings: p.meetings ?? []
   }))
 
   // Newest first — a feed reads top-down by recency, same convention as an inbox.

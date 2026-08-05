@@ -22,6 +22,7 @@ import { fnv1a } from '@shared/hash'
 import { alignQuote, verifyNumericFact, extractNumerals, numeralDerivable } from '@shared/grounding'
 import { getSettings, getApiKey, getAllowedProviders } from '../store'
 import { createStream } from '../llm'
+import { isTransient } from '../llm/retry'
 import { localBaseReady } from '../llm/local-routing'
 import { readSavedFile, resolveMeetingsFolder } from '../transcripts'
 import { auditLog, mainLog } from '../logger'
@@ -71,15 +72,16 @@ function hasUsableProvider(s: Settings): boolean {
   return pickProvider(s) !== null
 }
 
-/** Pick the first usable text provider. An enabled Métis Local summary setting is an explicit privacy
- * choice for brain extraction, so it takes precedence over every connected cloud/CLI provider. */
-function pickProvider(s: Settings): { provider: ProviderId; model: string; key: string } | null {
-  // Brain extraction is a structured summary task. Match the normal request router: when the bundled
-  // runtime is ready and the user opted into Local summaries, keep the transcript on-device. In
-  // particular, do not silently route to an unrelated connected cloud provider if local processing
-  // later fails — the user can turn Local summaries off to deliberately choose their cloud provider.
+/** Ordered eligible candidates for brain extraction — the SAME eligibility checks pickProvider always
+ *  ran (org allowedProviders, local-summary opt-in, connected/keyed, model resolved), but returns the
+ *  full waterfall instead of stopping at the first hit, so a transport failure on one provider can fail
+ *  over to the next WITHOUT ever reaching a provider these gates would have excluded. An enabled Métis
+ *  Local summary setting is an explicit privacy choice: it is the ONLY candidate whenever active — never
+ *  waterfalls into a cloud provider, since that would silently upload a transcript the user chose to
+ *  keep on-device. */
+function pickProviderCandidates(s: Settings): { provider: ProviderId; model: string; key: string }[] {
   if (s.localLlm.useFor.summary && localBaseReady(s, getAllowedProviders())) {
-    return { provider: 'local', model: s.localLlm.modelId, key: '' }
+    return [{ provider: 'local', model: s.localLlm.modelId, key: '' }]
   }
 
   // Honor the org's allowedProviders policy — this background pipeline streams the full meeting
@@ -87,9 +89,12 @@ function pickProvider(s: Settings): { provider: ProviderId; model: string; key: 
   // it silently sent to any other keyed provider (the interactive ask path already filters the same way).
   const allowed = getAllowedProviders()
   const order = [s.provider, ...(Object.keys(PROVIDERS) as ProviderId[])]
+  const seen = new Set<ProviderId>()
+  const candidates: { provider: ProviderId; model: string; key: string }[] = []
   for (const p of order) {
     // Local is handled above because it has no API key and follows a different opt-in policy.
-    if (p === 'local') continue
+    if (p === 'local' || seen.has(p)) continue
+    seen.add(p)
     if (allowed && !allowed.includes(p)) continue
     const def = PROVIDERS[p]
     if (!def) continue
@@ -99,15 +104,40 @@ function pickProvider(s: Settings): { provider: ProviderId; model: string; key: 
     if (p === 'dust' && !s.dustWorkspaceId) continue
     const model = resolveModelTier(p, s.providerModels, s.providerModelsThinking, 'deep', s.providerModelsDeep)
     if (!model) continue
-    return { provider: p, model, key }
+    candidates.push({ provider: p, model, key })
   }
-  return null
+  return candidates
 }
 
-/** Run one accumulate-the-stream completion against the picked provider. Rejects on stream error. */
-function runCompletion(s: Settings, system: string, userText: string, id: string): Promise<string> {
-  const picked = pickProvider(s)
-  if (!picked) return Promise.reject(new Error('No configured AI provider for brain ingest.'))
+/** Pick the first usable text provider — kept for callers that only need a yes/no or a single candidate
+ *  (hasUsableProvider); the extraction path itself now walks pickProviderCandidates. */
+function pickProvider(s: Settings): { provider: ProviderId; model: string; key: string } | null {
+  return pickProviderCandidates(s)[0] ?? null
+}
+
+/** Transport-failure gate for the extraction failover walk (network/4xx/5xx/timeout). Deliberately
+ *  BROADER than the interactive ask path's isTransient: that gate treats a non-429 4xx (bad model, dead
+ *  endpoint) and an idle-stream timeout as PERMANENT because its fix is "stop hammering the SAME
+ *  provider, surface the error" — but this pipeline's known failure mode (a provider consistently
+ *  returning e.g. HTTP 404 for a misconfigured/retired model) is exactly that kind of permanent-looking
+ *  4xx, and a DIFFERENT eligible provider can still serve the request. Anything that isn't a deliberate
+ *  cancel is worth one hop to the next candidate; MAX_INGEST_ATTEMPTS is what stops a transcript with
+ *  every provider down from retrying forever, not this gate. */
+function isIngestTransportFailure(err: unknown): boolean {
+  const message = err instanceof Error ? err.message : typeof err === 'string' ? err : ''
+  if (/\babort(ed)?\b/i.test(message)) return false
+  if (isTransient(err)) return true
+  return /timed out|\b4\d\d\b/i.test(message)
+}
+
+/** Run one accumulate-the-stream completion against a SPECIFIC candidate. Rejects on stream error. */
+function runCompletionOnce(
+  s: Settings,
+  picked: { provider: ProviderId; model: string; key: string },
+  system: string,
+  userText: string,
+  id: string
+): Promise<string> {
   const { provider, model, key } = picked
   const def = PROVIDERS[provider]
   const isLocal = provider === 'local'
@@ -138,6 +168,39 @@ function runCompletion(s: Settings, system: string, userText: string, id: string
       }
     })
   })
+}
+
+/** Run one extraction completion, walking the ordered eligible candidates (pickProviderCandidates) on a
+ *  transport failure (isIngestTransportFailure) so one dead provider can never stall the whole backfill
+ *  queue. Eligibility is fixed once by pickProviderCandidates — a failover can never reach a provider
+ *  the org allowlist / local opt-in gates would have excluded. `onlyProvider`, when given, restricts the
+ *  attempt to that ONE already-eligible candidate — used to pin the JSON-reminder retry (see
+ *  extractMeeting) to the SAME provider that produced the malformed output, rather than restarting the
+ *  waterfall. Returns the provider that actually served the completion. */
+async function runCompletion(
+  s: Settings,
+  system: string,
+  userText: string,
+  id: string,
+  onlyProvider?: ProviderId
+): Promise<{ text: string; provider: ProviderId }> {
+  const candidates = pickProviderCandidates(s)
+  const pool = onlyProvider ? candidates.filter((c) => c.provider === onlyProvider) : candidates
+  if (pool.length === 0) throw new Error('No configured AI provider for brain ingest.')
+  for (let i = 0; i < pool.length; i++) {
+    const picked = pool[i]
+    try {
+      const text = await runCompletionOnce(s, picked, system, userText, id)
+      return { text, provider: picked.provider }
+    } catch (e) {
+      const hasNext = i < pool.length - 1
+      if (!hasNext || !isIngestTransportFailure(e)) throw e
+      mainLog.warn(`[brain] ${picked.provider} transport failure during extraction, failing over:`, e instanceof Error ? e.message : e)
+    }
+  }
+  // Unreachable — the loop above always either returns or throws — but keeps the function's return type
+  // honest for TypeScript's control-flow analysis.
+  throw new Error('No configured AI provider for brain ingest.')
 }
 
 /** Strip markdown fences / stray prose around the JSON object a model may still emit. */
@@ -409,16 +472,26 @@ async function extractMeeting(
 
   const runWindow = async (window: string): Promise<MeetingExtraction> => {
     const user = `Meeting transcript (file: ${basename(sourceFile)}):\n\n"""\n${window}\n"""`
-    const attempt = async (extra: string): Promise<MeetingExtraction> => {
-      const raw = await runCompletion(s, buildExtractionSystem(extra), user, `brain-${Date.now()}`)
-      return parseExtractionPayload(raw)
+    // Set by attempt() the moment runCompletion returns text, independent of whether that text then
+    // parses — so a parse failure's reinforcement retry (below) can pin itself to the SAME provider that
+    // produced the bad output. Stays undefined only when runCompletion itself never got any text back
+    // (every eligible candidate failed on transport), in which case the retry falls through to a fresh
+    // failover walk instead — same as a first attempt.
+    let servedBy: ProviderId | undefined
+    const attempt = async (extra: string, pin?: ProviderId): Promise<MeetingExtraction> => {
+      const { text, provider } = await runCompletion(s, buildExtractionSystem(extra), user, `brain-${Date.now()}`, pin)
+      servedBy = provider
+      return parseExtractionPayload(text)
     }
     try {
       return await attempt('')
     } catch (e) {
-      // One reinforcement retry — malformed JSON is the dominant failure mode, not content.
+      // One reinforcement retry — malformed JSON is the dominant failure mode, not content. Cross-
+      // provider failover for TRANSPORT failures already happened inside runCompletion; this retry is
+      // deliberately same-provider (servedBy) so a parse-failure reminder never turns into an accidental
+      // provider switch — that's the failover walk's job, not this one's.
       mainLog.warn('[brain] first extraction attempt failed, retrying once:', e instanceof Error ? e.message : e)
-      return attempt('\n\nREMINDER: your ENTIRE reply must be one valid JSON object. No fences, no prose.')
+      return attempt('\n\nREMINDER: your ENTIRE reply must be one valid JSON object. No fences, no prose.', servedBy)
     }
   }
 
@@ -1037,6 +1110,39 @@ export function brainBackfillProgress(): { total: number; done: number; failed?:
   }
 }
 
+/**
+ * Durable failure counts computed fresh from idx.ingested — unlike brainBackfillProgress's `failed`
+ * above (an EPHEMERAL per-run counter that resets to 0 the moment a new backfill starts), a record with
+ * ok:false stays that way until it either succeeds or is deleted, so this never under-reports a failure
+ * just because no batch happens to be running right now. No separate storage: every ok:false record IS a
+ * currently live, unresolved failure (a fixed source overwrites its record with ok:true), so there is
+ * nothing stale to filter by a time window. `failed` and `exhausted` are DISJOINT (a record is one or the
+ * other, never both) — `failed + exhausted` is the total count of currently-failing sources. `topError`
+ * names the most common error string across BOTH, but only once it is shared by at least
+ * `minTopErrorCount` records — a one-off error naming itself as "the" provider problem would be
+ * misleading noise, not signal.
+ */
+export function ingestFailureCounts(idx: BrainIndex, minTopErrorCount = 3): { failed: number; exhausted: number; topError?: string } {
+  let failed = 0
+  let exhausted = 0
+  const byError = new Map<string, number>()
+  for (const record of Object.values(idx.ingested)) {
+    if (record.ok) continue
+    if (record.exhausted) exhausted++
+    else failed++
+    if (record.error) byError.set(record.error, (byError.get(record.error) ?? 0) + 1)
+  }
+  let topError: string | undefined
+  let topCount = 0
+  for (const [error, count] of byError) {
+    if (count > topCount) {
+      topError = error
+      topCount = count
+    }
+  }
+  return { failed, exhausted, ...(topError && topCount >= minTopErrorCount ? { topError } : {}) }
+}
+
 /** Reads the app-written meeting mode from the leading YAML frontmatter only. */
 export function readMeetingSourceMode(md: string): string {
   const frontmatter = md.match(/^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/)?.[1]
@@ -1062,6 +1168,13 @@ function meetingSourceVersion(file: string): string | undefined {
 }
 
 const retryDelayMs = (attempts: number): number => Math.min(30 * 60_000, 60_000 * 2 ** Math.max(0, attempts - 1))
+
+/** Consecutive-failure ceiling per source. Crossing it marks the record `exhausted` (finishJob) — a
+ *  terminal state the automatic reconcile tick (startBackfill's respectRetryBackoff scans) stops
+ *  requeuing, so a permanently dead provider/model can't spin the queue on the same doomed transcript
+ *  forever. Any OTHER caller (Index/Retry button, dashboard-open check, boot resume, rebuild) already
+ *  ignores retryAfter backoff the same way it ignores this cap — see the two scan loops below. */
+export const MAX_INGEST_ATTEMPTS = 6
 
 /**
  * The full post-extraction ingest: stamp provenance from the transcript's frontmatter (the model
@@ -1221,7 +1334,8 @@ async function finishJob(result: JobResult): Promise<void> {
         error: e instanceof Error ? e.message : String(e),
         ...(version ? { sourceVersion: version } : {}),
         attempts,
-        retryAfter: Date.now() + retryDelayMs(attempts)
+        retryAfter: Date.now() + retryDelayMs(attempts),
+        ...(attempts >= MAX_INGEST_ATTEMPTS ? { exhausted: true } : {})
       }
       idx.revision += 1
     })
@@ -1708,6 +1822,11 @@ export function startBackfill(onDrained?: () => void | Promise<void>, options: B
   let deferredByProvider = false
   const folder = resolveMeetingsFolder(s)
   const now = Date.now()
+  // MAX_INGEST_ATTEMPTS: keys whose exhausted record is being requeued this call — only ever populated
+  // when respectRetryBackoff is FALSE (i.e. every caller other than the automatic reconcile tick: the
+  // Index/Retry button, the dashboard-open check, boot resume, a rebuild). Cleared durably below so a
+  // later automatic tick doesn't immediately re-skip a source this call just gave a fresh attempts budget.
+  const toUnexhaust: string[] = []
   for (const f of existsSync(folder) ? readdirSync(folder) : []) {
     if (isMeetingTranscriptFile(f) && !already.has(f) && !inFlight.has(f)) {
       const file = join(folder, f)
@@ -1722,6 +1841,15 @@ export function startBackfill(onDrained?: () => void | Promise<void>, options: B
         (record.retryAfter ?? 0) > now
       ) {
         continue
+      }
+      // A record that hit MAX_INGEST_ATTEMPTS stops the automatic reconcile tick from ever requeuing it
+      // again (a dead provider/model must not spin the queue on the same doomed transcript forever).
+      // Every other caller already ignores the retryAfter backoff above the same way — that's the
+      // deliberate "try again" path, so give it back a fresh attempts budget instead of re-exhausting
+      // after a single extra try.
+      if (record?.exhausted) {
+        if (options.respectRetryBackoff) continue
+        toUnexhaust.push(f)
       }
       // A saved extraction proves the LLM phase completed, not that the entity merge and durable
       // `ingested[file].ok` write completed. Requeue it through the deterministic merge path rather
@@ -1768,6 +1896,11 @@ export function startBackfill(onDrained?: () => void | Promise<void>, options: B
       ) {
         continue
       }
+      // Same MAX_INGEST_ATTEMPTS gate as the own-meetings loop above — see its comment.
+      if (record?.exhausted) {
+        if (options.respectRetryBackoff) continue
+        toUnexhaust.push(key)
+      }
       const strategy = extractedSlugs.has(extractionSlug(key)) ? ('reconcile' as const) : undefined
       if (providerAvailable || strategy === 'reconcile') {
         candidates.push({
@@ -1786,6 +1919,19 @@ export function startBackfill(onDrained?: () => void | Promise<void>, options: B
   }
   if (deferredByProvider) {
     mainLog.warn('[brain] backfill has meetings awaiting a configured AI provider; locally saved extractions will still be repaired')
+  }
+  // Durably clear the exhausted state for everything toUnexhaust just gave back a fresh attempts budget
+  // to — same serialized index lane as every other index.json write (see updateIndex's doc comment).
+  if (toUnexhaust.length > 0) {
+    void updateIndex(s, (i) => {
+      for (const k of toUnexhaust) {
+        if (i.ingested[k]) {
+          i.ingested[k].exhausted = false
+          i.ingested[k].attempts = 0
+        }
+      }
+      i.revision += 1
+    })
   }
   // Accumulate rather than overwrite: a re-entrant call must extend an in-flight backfill's progress
   // tracking, not reset it out from under the jobs already queued.

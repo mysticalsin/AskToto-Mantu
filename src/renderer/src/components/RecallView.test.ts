@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach, vi } from 'vitest'
-import { localDateKey, groupByLocalDate, friendlyDate } from './RecallView'
+import { localDateKey, groupByLocalDate, friendlyDate, meetingIndexStatus } from './RecallView'
 import type { MeetingSummary } from '@shared/ipc'
 
 function meeting(date: string, file = 'm.md'): MeetingSummary {
@@ -90,5 +90,34 @@ describe('local date grouping (RecallView)', () => {
 
     const key = localDateKey(now.toISOString())
     expect(friendlyDate(key)).toBe('Today')
+  })
+})
+
+// T6 6d: per-meeting Mantu Intelligence status dot.
+describe('meetingIndexStatus (RecallView)', () => {
+  it('returns null with no ingest signal at all (brain status not loaded yet)', () => {
+    expect(meetingIndexStatus('a.md', null)).toBeNull()
+  })
+
+  it('prefers indexed over failed/pending when a file is in both the indexed and failed sets', () => {
+    // Not a real reachable state (a file is either ok:true or ok:false, never both), but indexed
+    // taking precedence is the safe default if it ever were.
+    const ingest = { indexed: new Set(['a.md']), failed: new Set(['a.md']), backfillRequested: true }
+    expect(meetingIndexStatus('a.md', ingest)).toBe('indexed')
+  })
+
+  it('returns failed for a file in the failed set', () => {
+    const ingest = { indexed: new Set<string>(), failed: new Set(['b.md']), backfillRequested: true }
+    expect(meetingIndexStatus('b.md', ingest)).toBe('failed')
+  })
+
+  it('returns pending for a file in neither set while a backfill has been requested', () => {
+    const ingest = { indexed: new Set<string>(), failed: new Set<string>(), backfillRequested: true }
+    expect(meetingIndexStatus('c.md', ingest)).toBe('pending')
+  })
+
+  it('returns null for a file in neither set when no backfill has ever been requested', () => {
+    const ingest = { indexed: new Set<string>(), failed: new Set<string>(), backfillRequested: false }
+    expect(meetingIndexStatus('d.md', ingest)).toBeNull()
   })
 })

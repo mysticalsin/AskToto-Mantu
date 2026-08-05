@@ -453,7 +453,11 @@ export const BrainIndexSchema = z.object({
     /** Consecutive failed extraction attempts for persisted retry pacing. */
     attempts: z.number().int().nonnegative().optional(),
     /** Earliest time an automatic background scan may retry this unchanged failed source. */
-    retryAfter: z.number().optional()
+    retryAfter: z.number().optional(),
+    /** True once `attempts` crosses MAX_INGEST_ATTEMPTS (ingest.ts) — a terminal state distinct from an
+     *  ordinary transient failure: the automatic reconcile tick stops requeuing it so a permanently dead
+     *  provider/model can't spin the queue forever. Only an explicit manual retry clears it. */
+    exhausted: z.boolean().optional()
   })).default({}),
   // Lint findings (contradictions/staleness). Surfaced in the dashboard; never auto-resolved.
   warnings: z.array(z.string()).default([]),
@@ -515,6 +519,26 @@ export interface BrainStatus {
   // instead of the user having to hand-delete a hidden .brain file. A TRANSIENT unreadable/undecryptable
   // journal never sets this (it self-heals) — only the durable, human-resolvable case does.
   corruptionBlocked?: boolean
+  /** Durable (index-derived) count of sources still being retried — computed fresh from idx.ingested
+   *  every poll, unlike the ephemeral `backfill.failed` run counter above, which resets whenever a new
+   *  backfill run starts. DISJOINT from `exhausted`: `failed + exhausted` is every currently-failing
+   *  source, and stays nonzero (keeping the BrainView banner up) for as long as any of them do,
+   *  regardless of whether a backfill happens to be running right now. */
+  failed?: number
+  /** Count of sources that hit MAX_INGEST_ATTEMPTS and stopped being auto-retried by the reconcile
+   *  tick — a manual retry (Retry index) is required to clear it. Disjoint from `failed` above. */
+  exhausted?: number
+  /** The most common error string among current failures, only when at least 3 failing sources share it
+   *  — lets the dashboard name the actual blocker ("Your AI provider is failing: <topError>") instead of
+   *  a generic "some meetings failed" once a pattern (not a one-off) is evident. */
+  topError?: string
+  /** Failing (ok:false) source filenames — the failed-side counterpart to `ingestedFiles`, so a per-
+   *  meeting indicator (indexed/pending/failed) can be derived without a second, heavier IPC round trip. */
+  failedFiles?: string[]
+  /** True from "a backfill was requested" until the queue fully drains (see ingest.ts's `backfillRequested`
+   *  index flag) — lets a per-meeting indicator distinguish "queued, not yet attempted" (pending) from a
+   *  source with no ingest activity at all. */
+  backfillRequested?: boolean
 }
 
 /**

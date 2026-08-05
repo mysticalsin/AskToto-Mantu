@@ -121,6 +121,7 @@ import {
   requestSourceRefresh,
   brainBackfillProgress,
   brainLiveIngestProgress,
+  ingestFailureCounts,
   resumeBackfillIfPending,
   reconcileMeetingsInBackground,
   settleCommitment,
@@ -3076,14 +3077,25 @@ function registerIpc(): void {
     const s = getSettings()
     const idx = readBrainIndex(s)
     const counts = brainStatusCounts(s, idx.revision)
+    // T6 6c: durable failure counts read straight from the index — unlike backfill.failed below (an
+    // ephemeral per-run counter), these stay visible for as long as a source has ok:false, independent
+    // of whether a backfill run happens to be active right now.
+    const failure = ingestFailureCounts(idx)
     return {
       meetings: Object.values(idx.ingested).filter((v) => v.ok).length,
       ingestedFiles: Object.entries(idx.ingested).filter(([, v]) => v.ok).map(([file]) => file),
+      // 6d: failing-source filenames, the failed-side counterpart to ingestedFiles above — lets a
+      // per-meeting indicator (indexed/pending/failed) be derived without a second, heavier IPC call.
+      failedFiles: Object.entries(idx.ingested).filter(([, v]) => !v.ok).map(([file]) => file),
+      backfillRequested: idx.backfillRequested,
       ...counts,
       warnings: idx.warnings.length,
       revision: idx.revision,
       backfill: brainBackfillProgress(),
       live: brainLiveIngestProgress(),
+      failed: failure.failed,
+      exhausted: failure.exhausted,
+      ...(failure.topError ? { topError: failure.topError } : {}),
       // MI-2.5 review round 3: computed fresh from the on-disk sentinel each poll — lets BrainView offer
       // the in-app "Reset corrections lock" recovery instead of a hand-deleted hidden .brain file.
       corruptionBlocked: isJournalCorruptionBlocked(s)

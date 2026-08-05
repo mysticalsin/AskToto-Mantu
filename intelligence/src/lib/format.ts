@@ -1,4 +1,4 @@
-import type { Category, DealOutcome, Grounding, WinLikelihoodBand } from '../types/data'
+import type { Category, DealOutcome, GraphNode, Grounding, WinLikelihoodBand } from '../types/data'
 
 export const bandColor: Record<WinLikelihoodBand, string> = {
   good: '#35c98f',
@@ -38,6 +38,19 @@ export const groundingColor: Record<Grounding, string> = {
   verified: '#35c98f',
   assumed: '#e0a836',
   unknown: '#8b7a99',
+}
+
+// Same going-cold palette GraphView's node-info panel already uses (grey when unknown — never default
+// to "fresh", which would fabricate a healthy signal the data never carried).
+export function freshnessColor(f: GraphNode['freshness']): string {
+  if (f === 'cold') return '#f7768e'
+  if (f === 'cooling') return '#e0af68'
+  if (f === 'fresh') return '#9ece6a'
+  return 'rgba(255,255,255,0.28)'
+}
+
+export function freshnessLabel(f: GraphNode['freshness']): string {
+  return f ?? 'unknown'
 }
 
 /** Simple, transparent "impact" proxy: deciding-factor claims are higher impact;

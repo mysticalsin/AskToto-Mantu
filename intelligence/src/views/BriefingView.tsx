@@ -162,6 +162,22 @@ export function BriefingView({ data }: Props) {
 
   return (
     <div className="mx-auto max-w-7xl px-6 py-8">
+      {data.ingest_errors.length > 0 && (
+        <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="mb-6">
+          <Link
+            to="/stats"
+            role="status"
+            className="flex items-center gap-2 rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-sm text-amber-300 transition-colors hover:bg-amber-500/15"
+          >
+            <span aria-hidden="true">⚠</span>
+            <span>
+              {data.ingest_errors.length} meeting{data.ingest_errors.length === 1 ? '' : 's'} failed to index —
+              see details
+            </span>
+          </Link>
+        </motion.div>
+      )}
+
       <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="mb-6">
         <h1 className="text-2xl font-semibold text-white/95">Today</h1>
         <p className="mt-1 text-sm text-white/50">

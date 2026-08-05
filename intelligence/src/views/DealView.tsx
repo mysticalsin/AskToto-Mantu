@@ -12,6 +12,7 @@ import {
 } from '../lib/format'
 import { ledgerTotals } from '../lib/ledgerstats'
 import { slug } from '../lib/slug'
+import { Timeline } from '../components/Timeline'
 
 interface Props {
   data: DashboardData
@@ -237,6 +238,13 @@ export function DealView({ data }: Props) {
                   </>
                 )}
               </dl>
+            </div>
+
+            <div className="rounded-xl border border-[var(--color-mantu-border)] bg-[var(--color-mantu-surface)] p-5">
+              <h3 className="mb-3 text-sm font-semibold uppercase tracking-wide text-white/60">
+                Meeting history
+              </h3>
+              <Timeline meetings={deal.meetings ?? []} emptyText="No meetings mapped to this deal yet." />
             </div>
 
             <div className="rounded-xl border border-[var(--color-mantu-border)] bg-[var(--color-mantu-surface)] p-5">

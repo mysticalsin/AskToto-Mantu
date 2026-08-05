@@ -1,7 +1,17 @@
 import { app, safeStorage } from 'electron'
-import { readdirSync, readFileSync, existsSync, mkdirSync, writeFileSync, appendFileSync, unlinkSync } from 'node:fs'
+import {
+  readdirSync,
+  readFileSync,
+  existsSync,
+  mkdirSync,
+  writeFileSync,
+  appendFileSync,
+  unlinkSync,
+  renameSync,
+  copyFileSync
+} from 'node:fs'
 import { writeFile, rename, unlink } from 'node:fs/promises'
-import { join, basename } from 'node:path'
+import { join, basename, dirname } from 'node:path'
 import { homedir } from 'node:os'
 import { randomBytes, createCipheriv, createDecipheriv, publicEncrypt, constants } from 'node:crypto'
 import type { SaveMeeting, SaveNote, Settings, RecapExport, TranscriptLine } from '@shared/ipc'
@@ -150,8 +160,15 @@ function encryptEnvelopeV2(content: string): Buffer {
 
 /** Decrypt a v2 envelope. Handles the 'S:' (safeStorage), 'F:' (file-backend), and legacy (bare
  *  base64) kLocal encodings. Throws on malformed/foreign-keychain input so tryDecodeSaved degrades
- *  to the UNDECRYPTABLE path instead of crashing a read. */
-function decryptEnvelopeV2(buf: Buffer): string {
+ *  to the UNDECRYPTABLE path instead of crashing a read.
+ *
+ *  `allowKeychainRecovery` (default false, the boot/bulk-read behavior — see index.ts's forced local
+ *  keystore note) lets an explicit single-file user read reach an 'S:'-wrapped envelope anyway when this
+ *  device's Keychain can still unwrap it: the forced keystore stops the boot-time Keychain PROMPT, but the
+ *  'asktoto Safe Storage' Keychain item itself still exists on a device that recorded before the forced
+ *  keystore shipped, so refusing the read there was throwing away recoverable meetings, not protecting them.
+ *  `filePath`, when given, lets a successful recovery self-heal (see the rewrap below). */
+function decryptEnvelopeV2(buf: Buffer, allowKeychainRecovery = false, filePath?: string): string {
   const env = JSON.parse(buf.subarray(MARKER_LEN).toString('utf8')) as EnvelopeV2
   let contentKeyB64: string
   if (env.kLocal.startsWith('F:')) {
@@ -159,11 +176,32 @@ function decryptEnvelopeV2(buf: Buffer): string {
     contentKeyB64 = decryptSecret(Buffer.from(env.kLocal.slice(2), 'base64'))
   } else {
     // safeStorage path: 'S:' prefix (new) or legacy bare base64 (no prefix, backward compat).
-    if (process.env.ASKTOTO_LOCAL_KEYSTORE) {
+    const canRecover = allowKeychainRecovery && safeStorage.isEncryptionAvailable()
+    if (process.env.ASKTOTO_LOCAL_KEYSTORE && !canRecover) {
       throw new Error('Keychain-wrapped transcript is unavailable while the local keystore is active')
     }
     const raw = env.kLocal.startsWith('S:') ? env.kLocal.slice(2) : env.kLocal
     contentKeyB64 = safeStorage.decryptString(Buffer.from(raw, 'base64'))
+    // Self-healing: this device's Keychain just proved it can still unwrap the SAME content key —
+    // rewrap it under the current file-backend key so every later read (bulk list/search included)
+    // converges to 'F:' without ever touching the Keychain again. iv/tag/ct are untouched; only kLocal
+    // changes. Atomic tmp+rename (mirrors writeSaved above), done synchronously like store.ts's own
+    // legacy-format migration since this runs inside an otherwise-synchronous read. Best-effort: a
+    // rewrap failure must never fail this read — the caller already has the decrypted content either way.
+    if (canRecover && filePath) {
+      const tmp = `${filePath}.${randomBytes(6).toString('hex')}.tmp`
+      try {
+        const updated: EnvelopeV2 = { ...env, kLocal: 'F:' + encryptSecret(contentKeyB64).toString('base64') }
+        writeFileSync(tmp, Buffer.concat([ENC_MARKER_V2, Buffer.from(JSON.stringify(updated), 'utf8')]), { mode: 0o600 })
+        renameSync(tmp, filePath)
+      } catch {
+        try {
+          if (existsSync(tmp)) unlinkSync(tmp) // don't leave an orphaned .tmp behind on a failed rewrap
+        } catch {
+          /* best-effort cleanup */
+        }
+      }
+    }
   }
   const contentKey = Buffer.from(contentKeyB64, 'base64')
   const decipher = createDecipheriv('aes-256-gcm', contentKey, Buffer.from(env.iv, 'base64'))
@@ -181,19 +219,22 @@ const UNDECRYPTABLE_MSG =
   'before saving if you need transcripts portable across devices.\n'
 
 /** Decode saved bytes, decrypting if the at-rest marker is present. Returns null when an encrypted file
- *  can't be decrypted on this machine (foreign keychain), so callers degrade instead of throwing. */
-function tryDecodeSaved(buf: Buffer): string | null {
+ *  can't be decrypted on this machine (foreign keychain), so callers degrade instead of throwing.
+ *  `allowKeychainRecovery`/`filePath` are forwarded to decryptEnvelopeV2 — see its doc comment; the v1
+ *  legacy branch below gets the same recovery bypass but never self-heals (no envelope kLocal to rewrap). */
+function tryDecodeSaved(buf: Buffer, allowKeychainRecovery = false, filePath?: string): string | null {
   // v2 envelope: AES-256-GCM content key wrapped by safeStorage (+ optional org escrow).
   if (buf.length >= MARKER_LEN && buf.subarray(0, MARKER_LEN).equals(ENC_MARKER_V2)) {
     try {
-      return decryptEnvelopeV2(buf)
+      return decryptEnvelopeV2(buf, allowKeychainRecovery, filePath)
     } catch {
       return null // malformed or foreign-keychain — never throw out of a read path
     }
   }
   // v1 (legacy): safeStorage-direct. Kept for full backward compatibility with existing transcripts.
   if (buf.length >= ENC_MARKER.length && buf.subarray(0, ENC_MARKER.length).equals(ENC_MARKER)) {
-    if (process.env.ASKTOTO_LOCAL_KEYSTORE) return null
+    const canRecover = allowKeychainRecovery && safeStorage.isEncryptionAvailable()
+    if (process.env.ASKTOTO_LOCAL_KEYSTORE && !canRecover) return null
     try {
       return safeStorage.decryptString(buf.subarray(ENC_MARKER.length))
     } catch {
@@ -273,13 +314,18 @@ let tempCleanupHooked = false
 /** Decrypt an encrypted transcript to a temp plaintext file so it can be opened in an editor. The file
  *  lives under the per-user temp dir (user-scoped ACL), has a randomized name, and is unlinked on app
  *  quit. Confidentiality: POSIX `mode: 0o600` on the write below (owner-only on macOS/Linux) is a no-op
- *  on Windows, so on win32 we additionally apply an explicit owner-only DACL via lockPathToCurrentUserWin32. */
+ *  on Windows, so on win32 we additionally apply an explicit owner-only DACL via lockPathToCurrentUserWin32.
+ *
+ *  This is an explicit single-file user read (the only caller is recallOpen's "Open" click), so it opts
+ *  into Keychain recovery for an old 'S:'-wrapped meeting despite the forced local keystore — see
+ *  decryptEnvelopeV2's doc comment. Bulk list/search paths (recall.ts) go through decodeSaved instead and
+ *  never set this, so they stay exactly as boot-prompt-free as commit 486227d intended. */
 export function decryptToTemp(path: string): string {
   // Read + decrypt defensively: a foreign-keychain file yields the notice instead of throwing and
   // leaving the user with a dead "Open" click.
   let content: string
   try {
-    content = tryDecodeSaved(readFileSync(path)) ?? UNDECRYPTABLE_MSG
+    content = tryDecodeSaved(readFileSync(path), true, path) ?? UNDECRYPTABLE_MSG
   } catch {
     content = UNDECRYPTABLE_MSG
   }
@@ -418,16 +464,62 @@ function detectOneDriveUncached(): string {
   return existsSync(alt) ? alt : ''
 }
 
+// Pre-rebrand sibling folder: before "AskToto" became "Métis" the app wrote transcripts to a folder
+// literally named "AskToto Meetings" next to wherever this file resolves today — the userData
+// profile-dir migration (index.ts, on the app-name rename) moved settings.json/secret-key.bin, but
+// never this folder, so those meetings simply stopped showing up in Recall even though they're still
+// sitting on disk. This copy is ONE-TIME and PURELY ADDITIVE: only files absent at the destination are
+// copied in, and the source folder is never written to or deleted — a failed/partial run always leaves
+// the original fully recoverable. Copied 'S:'-wrapped meetings converge to this device's file-backend
+// key the first time they're opened (see decryptEnvelopeV2's self-healing rewrap).
+const COPY_FORWARD_MARKER = '.copied-legacy-asktoto-meetings'
+
+function copyForwardLegacyMeetingsOnce(folder: string): void {
+  try {
+    const userDataDir = app.getPath('userData')
+    if (!userDataDir) return // app not ready (test environment) — never block a read on this
+    const marker = join(userDataDir, COPY_FORWARD_MARKER)
+    if (existsSync(marker)) return // already ran (this launch or a previous one) — marker is the single source of truth
+    // Sibling of the RESOLVED folder (not a fixed path): the legacy folder sat next to whichever
+    // location — OneDrive root, Documents, or an explicit user folder — was in force at the time.
+    const legacy = join(dirname(folder), 'AskToto Meetings')
+    if (existsSync(legacy)) {
+      if (!existsSync(folder)) mkdirSync(folder, { recursive: true })
+      for (const dirent of readdirSync(legacy, { withFileTypes: true })) {
+        // README.md/index.md are bookkeeping this folder regenerates itself (ensureMeetingsFolder) —
+        // only real meeting/note files need copying forward. Never follow a symlink planted with a
+        // meeting-shaped name (mirrors recoverOrphanDrafts' same guard).
+        if (!dirent.isFile() || !dirent.name.endsWith('.md')) continue
+        if (dirent.name === 'README.md' || dirent.name === 'index.md') continue
+        const dest = join(folder, dirent.name)
+        if (!existsSync(dest)) copyFileSync(join(legacy, dirent.name), dest) // additive only — never overwrite
+      }
+    }
+    // Written whether or not a legacy folder was found, so a device that never had one doesn't pay
+    // this existsSync/readdirSync cost again on every future launch either.
+    writeFileSync(marker, new Date().toISOString(), 'utf8')
+  } catch {
+    // Non-fatal, mirrors index.ts's profile-dir migration idiom: worst case the copy-forward retries
+    // next launch (the marker write below was never reached) — never block a read on it.
+  }
+}
+
 /** The folder transcripts are written to (explicit setting, else OneDrive, else Documents). */
 export function resolveMeetingsFolder(settings: Settings): string {
-  if (settings.meetingsFolder) return settings.meetingsFolder
+  if (settings.meetingsFolder) {
+    copyForwardLegacyMeetingsOnce(settings.meetingsFolder)
+    return settings.meetingsFolder
+  }
   // `ASKTOTO_USERDATA` is the packaged-app physical-QA hook. Keep its implicit meeting store under
   // that temporary profile too: otherwise the normal OneDrive fallback would make an apparently
-  // isolated test read and write the operator's real meeting data.
+  // isolated test read and write the operator's real meeting data. No copy-forward here either — an
+  // isolated QA profile must never pull in the operator's real legacy meetings.
   const qaUserData = process.env.ASKTOTO_USERDATA?.trim()
   if (qaUserData) return join(qaUserData, 'Métis Meetings')
   const base = detectOneDrive() || app.getPath('documents')
-  return join(base, 'Métis Meetings')
+  const folder = join(base, 'Métis Meetings')
+  copyForwardLegacyMeetingsOnce(folder)
+  return folder
 }
 
 const pad = (n: number): string => String(n).padStart(2, '0')
