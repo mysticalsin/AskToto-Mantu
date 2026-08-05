@@ -78,7 +78,13 @@ jobs:
       # SBOM (CycloneDX) for the supply-chain evidence package.
       - name: Generate SBOM
         run: npx --yes @cyclonedx/cyclonedx-npm --output-file sbom.json || echo "SBOM step skipped"
+      # Best-effort, like the two SBOM steps above it (`|| true`, `|| echo skipped`, if-no-files-found:
+      # ignore). Without continue-on-error a GitHub *billing* condition fails the whole security job:
+      # "Artifact storage quota has been hit" took this job red on main for multiple releases even though
+      # the gates that actually matter — the critical-severity audit and the secret scan — both passed.
+      # The SBOM is supply-chain EVIDENCE, not a gate; losing an upload must not mask the real verdict.
       - uses: actions/upload-artifact@v4
+        continue-on-error: true
         with:
           name: sbom
           path: sbom.json
