@@ -294,6 +294,12 @@ function makeCachePlugin(): any {
             try { writeFileSync(msalCachePath(), encryptSecret(json), { mode: 0o600 }) } catch { /* best-effort */ }
           }
         }
+        // Reverse migration (mirrors loadSession): the cache may have been written by a build that
+        // FORCED the file keystore on a platform that no longer does. Without this the Graph token
+        // cache is dropped on upgrade and the user must re-authenticate interactively.
+        if (json === null && !useFileBackend()) {
+          try { json = decryptSecret(buf) } catch { /* not AES-GCM either, or the file key is unrecoverable */ }
+        }
         if (json !== null) ctx.tokenCache.deserialize(json)
       } catch {
         /* no cache yet — start empty */
@@ -516,6 +522,16 @@ function loadSession(): void {
       // Migrate to file backend if we're now in file-backend mode (best-effort).
       if (json !== null && useFileBackend()) {
         try { writeFileSync(sessionPath(), encryptSecret(json), { mode: 0o600 }) } catch { /* best-effort */ }
+      }
+    }
+    // Reverse migration: this file may have been written by a build that FORCED the file keystore on a
+    // platform that no longer does (Windows, once the forced local keystore became darwin-only). Without
+    // this the AES-GCM blob is never even tried and every upgrading user is silently signed out. Only
+    // runs when the file backend is off, so a keystore-forced build still never probes the Keychain here.
+    if (json === null && !useFileBackend()) {
+      try { json = decryptSecret(buf) } catch { /* not AES-GCM either, or the file key is unrecoverable */ }
+      if (json !== null && safeStorage.isEncryptionAvailable()) {
+        try { writeFileSync(sessionPath(), safeStorage.encryptString(json), { mode: 0o600 }) } catch { /* best-effort */ }
       }
     }
     session = json !== null ? (JSON.parse(json) as Session) : null

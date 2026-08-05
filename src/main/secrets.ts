@@ -96,6 +96,16 @@ export function useFileBackend(): boolean {
  *   Legacy files (exactly 32 raw bytes, written before this change) are detected on read and
  *   migrated to the wrapped format in-place.
  *   When safeStorage is unavailable (Linux / CI), the raw key is written as before.
+ *
+ * WINDOWS / DPAPI BINDING (the cost of wrapping):
+ *   safeStorage on Windows is DPAPI, scoped to the signed-in Windows USER. Once secret-key.bin is
+ *   wrapped, the profile folder stops being portable: a different Windows account, a reimaged
+ *   machine, or a roaming profile restored elsewhere cannot unwrap it. That is the intended
+ *   trade for not leaving a raw AES key next to its own ciphertext — but it means the failure is
+ *   permanent for anyone without a key escrow. We fail CLOSED there (KeychainKeyRecoveryError, never
+ *   a silent regenerate) so the encrypted files stay byte-intact and recoverable if the original
+ *   Windows account comes back; settings > Recovery (settings:recoverProfile) is the escape hatch
+ *   that archives them and starts a fresh local profile without deleting anything.
  */
 function isKeychainAvailable(): boolean {
   try {
@@ -105,8 +115,18 @@ function isKeychainAvailable(): boolean {
   }
 }
 
-/** Replace a recovered wrapped key only after the Keychain returned a valid AES key. */
-function persistRawKeyAtomically(p: string, key: Buffer): void {
+/**
+ * Replace secret-key.bin via tmp+rename, never in place.
+ *
+ * Used for BOTH migration directions, and that is load-bearing for the forward (raw -> wrapped) one:
+ * it runs on the boot READ path, synchronously inside the first getSettings(), for every upgrading
+ * Windows user. A plain writeFileSync truncates before it writes, so a crash, an EDR/AV handle denial
+ * or ENOSPC in that window leaves a 0-byte or partial key file — and because this file is the only
+ * copy of the KEK, every existing ciphertext becomes permanently unreadable while looking intact.
+ * rename() is atomic, so the old key survives any failure before it. Callers swallow the error: the
+ * in-memory key still works for the session, and the migration simply retries on the next launch.
+ */
+function persistKeyFileAtomically(p: string, key: Buffer): void {
   const tmp = `${p}.migrate.tmp`
   try {
     writeFileSync(tmp, key, { mode: 0o600 })
@@ -141,12 +161,14 @@ function getOrCreateKey(allowKeychainMigration = false): Buffer {
     const buf = readFileSync(p)
     if (canWrap) {
       if (buf.length === 32) {
-        // Legacy raw key written before KEK support — migrate to wrapped format now.
+        // Legacy raw key written before KEK support — migrate to wrapped format now. Atomic, because
+        // this fires on the boot read path for every upgrading Windows user and the file is the only
+        // copy of the KEK (see persistKeyFileAtomically).
         _key = buf
         try {
-          writeFileSync(p, safeStorage.encryptString(buf.toString('base64')), { mode: 0o600 })
+          persistKeyFileAtomically(p, safeStorage.encryptString(buf.toString('base64')))
         } catch {
-          // Migration is best-effort; the raw key is still usable this session.
+          // Migration is best-effort; the raw key is still usable this session and retried next launch.
         }
       } else {
         // safeStorage-wrapped key (new format) — unwrap. A non-empty key file is always treated as
@@ -178,7 +200,7 @@ function getOrCreateKey(allowKeychainMigration = false): Buffer {
         try {
           const unwrapped = Buffer.from(safeStorage.decryptString(buf), 'base64')
           if (unwrapped.length !== 32) throw new KeychainKeyRecoveryError()
-          persistRawKeyAtomically(p, unwrapped)
+          persistKeyFileAtomically(p, unwrapped)
           _key = unwrapped
         } catch (e) {
           if (e instanceof KeychainKeyRecoveryError) throw e
@@ -214,13 +236,29 @@ export function resetSecretKeyCache(): void {
   _key = null
 }
 
+/** True when this profile already holds a file key — i.e. there is existing state to protect. */
+function fileKeyExists(): boolean {
+  try {
+    return existsSync(join(app.getPath('userData'), KEY_FILE))
+  } catch {
+    return false
+  }
+}
+
 /**
  * Prepare the file keystore for an explicit user-initiated write. This is the
  * only path allowed to ask the original Keychain to unlock and migrate a
  * legacy wrapped file key; ordinary reads remain prompt-free and fail closed.
+ *
+ * It runs even when the file backend is NOT the active backend, provided this profile already has a
+ * secret-key.bin. That is the Windows-after-DPAPI case: settings.json (ATKENC2), key-<provider>.bin
+ * (ATKAES1) and transcript 'F:' content keys written by an earlier forced-local-keystore build are
+ * still encrypted under that file key, so a write must fail closed here rather than quietly replace
+ * them with fresh safeStorage-backed state. A profile with no key file (fresh install) is untouched —
+ * this never CREATES a key for a backend that would not otherwise use one.
  */
 export function prepareFileKeyForWrite(): void {
-  if (useFileBackend()) getOrCreateKey(true)
+  if (useFileBackend() || fileKeyExists()) getOrCreateKey(true)
 }
 
 /**
