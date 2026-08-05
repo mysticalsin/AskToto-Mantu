@@ -695,7 +695,21 @@ async function runImportedRecap(job: ImportJob): Promise<string | undefined> {
               text += delta
             },
             onDone: () => resolveRecap(text),
-            onError: (error) => rejectRecap(new Error(error))
+            onError: (error) => {
+              // A trailing stream error AFTER the summary has streamed must not discard the summary.
+              // Seen live (2026-08-04) importing a real recording with the claude-cli provider: the CLI
+              // lingers after its final token, the idle watchdog then fires, and a complete recap was
+              // thrown away — transcript saved, Notes empty, recapError set. An idle timeout by
+              // definition means the model stopped producing long ago, so substantial accumulated text
+              // is a finished (or effectively finished) summary — keep it. Early/pre-token failures
+              // (no meaningful text yet) still reject into the provider waterfall exactly as before.
+              if (text.trim().length >= 200) {
+                mainLog.warn(`[import-recap] keeping ${text.trim().length}-char summary despite trailing stream error: ${error}`)
+                resolveRecap(text)
+                return
+              }
+              rejectRecap(new Error(error))
+            }
           }
         })
       })

@@ -808,17 +808,11 @@ export function Onboarding({
             A Microsoft window opened. Finish there, or continue without signing in below.
           </p>
         )}
-        <button
-          type="button"
-          disabled={busy}
-          onClick={() => advance(false)}
-          className="no-drag focus-ring inline-flex items-center justify-center gap-1 rounded-xl px-4 py-2 text-[12px] text-[color:var(--color-ink-3)] hover:text-[color:var(--color-ink-2)] disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:text-[color:var(--color-ink-3)]"
-        >
-          Continue without signing in <ArrowRight size={12} />
-        </button>
-        {/* "Continue without signing in" only makes sense as a SEPARATE path from the SSO button above —
-            once already signed in there is only one path, so this second button would be a redundant,
-            confusing no-op (advance(false) either way). */}
+        {/* The skip-sign-in path only makes sense as a SEPARATE option next to the SSO button above —
+            once already signed in there is only one path, so the button would be a redundant, confusing
+            no-op (advance(false) either way). Exactly ONE skip button renders: 6b75daf added this gated
+            version but left the old unconditional copy above it, so first-run users saw it twice
+            (reported + fixed 2026-08-04; pinned by onboarding-dedup.contract.test.ts). */}
         {!signedIn && (
           <button
             type="button"

@@ -17,7 +17,10 @@ import type { ImportJobSource } from './import-jobs'
 
 // Chromium's AudioContext does the actual capability check. Keep the picker broad enough for common
 // interview exports (including AIFF, WebM/Opus, WMA, MP4, and 3GP) instead of silently excluding them.
-const AUDIO_EXTENSIONS = ['wav', 'mp3', 'm4a', 'aac', 'ogg', 'flac', 'aiff', 'aif', 'webm', 'opus', 'wma', 'amr', '3gp', 'mp4']
+// mov/m4v/mkv: QuickTime is macOS's built-in recorder and OBS defaults to mkv — both were invisible in
+// the picker (ffmpeg decodes all three fine; the "All files" escape hatch proved it, but nobody finds
+// that). Reported while importing real Downloads recordings, 2026-08-04.
+export const AUDIO_EXTENSIONS = ['wav', 'mp3', 'm4a', 'aac', 'ogg', 'flac', 'aiff', 'aif', 'webm', 'opus', 'wma', 'amr', '3gp', 'mp4', 'mov', 'm4v', 'mkv']
 const MAX_SOURCE_BYTES = 500 * 1024 * 1024 // spec: cap source files at 500 MB, with a clear error
 
 // ── File picker ───────────────────────────────────────────────────────────────
