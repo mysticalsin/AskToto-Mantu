@@ -166,7 +166,12 @@ jobs:
       # single run's artifact to ~6 GB and repeated runs blew the org's Actions storage quota, which
       # then failed every packaging job at the upload step. Installers + update metadata are all a PR
       # reviewer needs; 3-day retention because these are PR-verification builds, not releases.
+      # continue-on-error for the same reason as the Windows job: the comment above records that the
+      # quota "then failed every packaging job at the upload step", i.e. this has already bitten once.
+      # The verification (predist gates -> build -> electron-builder -> check-packaged-runtime) is done
+      # before this step; if-no-files-found: error still fails a build that produced no installer.
       - uses: actions/upload-artifact@v4
+        continue-on-error: true
         with:
           name: metis-macos
           retention-days: 3
@@ -240,7 +245,15 @@ jobs:
       # no Windows certificate, so its EXE/AppX artifacts are unsigned and are not customer releases.
       - run: npm run dist:win:appx
       # Installers only, same rationale as the macOS job (win-unpacked/ was ~7.5 GB per run).
+      # continue-on-error is about WHAT THIS JOB PROVES. Everything that verifies the package — the
+      # predist asset gates, the build, electron-builder, check-packaged-runtime and
+      # check-update-metadata — has already run and passed by the time we get here; the upload is
+      # convenience distribution with a 3-day retention. A repo-wide "Artifact storage quota has been
+      # hit" (a GitHub billing state that recalculates every 6-12h) would otherwise red-line this job,
+      # and every future PR, for a reason that has nothing to do with the code. if-no-files-found: error
+      # is deliberately KEPT, so a build that genuinely produced no installer still fails the job.
       - uses: actions/upload-artifact@v4
+        continue-on-error: true
         with:
           name: metis-windows
           retention-days: 3
