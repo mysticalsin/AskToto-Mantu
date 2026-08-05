@@ -12,7 +12,8 @@ import {
   brainBackfillProgress,
   resumeBackfillIfPending,
   startRebuild,
-  finishRebuildReplay
+  finishRebuildReplay,
+  whenIndexWritesSettle
 } from './ingest'
 import { readIndex, writeIndex, readAccount, writeAccount, brainDir, slugify } from './store'
 import { renameEntity } from './corrections'
@@ -38,6 +39,23 @@ vi.mock('../llm', () => ({
  * survive a quit/crash independently of `backfillRequested`, and resumeBackfillIfPending (ingest.ts) must
  * consume it on the next boot regardless of which flag combination survived.
  */
+/**
+ * Backfill work continues on the queue after the assertions return, and its final writeJson lands via
+ * transcripts.ts's tmp+rename. Deleting the temp profile while that rename is still in flight makes it
+ * reject with ENOENT on a thread nobody is awaiting — an UNHANDLED REJECTION that fails the whole vitest
+ * run (exit 1) while every test still reports green, and only sometimes, which is the worst shape for
+ * CI. Drain before teardown; same helper ingest-progress.test.ts already uses.
+ */
+const waitForIdle = async (): Promise<void> => {
+  await vi.waitFor(() => {
+    expect(brainBackfillProgress().running).toBe(false)
+  })
+  // running=false only means the QUEUE drained — the last job's own index.json record is still sitting
+  // on the serialized write lane at that instant. resumeBackfillIfPending() is deliberately not awaited
+  // by these tests, so that trailing write is exactly what races rmSync.
+  await whenIndexWritesSettle()
+}
+
 describe('resumeBackfillIfPending resumes an interrupted rebuild replay (Fix E)', () => {
   let userData: string
   let meetingsFolder: string
@@ -53,7 +71,8 @@ describe('resumeBackfillIfPending resumes an interrupted rebuild replay (Fix E)'
     setApiKey('anthropic', 'fake-test-key-not-real')
   })
 
-  afterEach(() => {
+  afterEach(async () => {
+    await waitForIdle()
     rmSync(userData, { recursive: true, force: true })
     rmSync(meetingsFolder, { recursive: true, force: true })
     vi.restoreAllMocks()
@@ -134,7 +153,8 @@ describe('rebuild refuses / surfaces a corrupt-journal replay failure (review Fi
     setSettings({ meetingsFolder })
     setApiKey('anthropic', 'fake-test-key-not-real')
   })
-  afterEach(() => {
+  afterEach(async () => {
+    await waitForIdle()
     rmSync(userData, { recursive: true, force: true })
     rmSync(meetingsFolder, { recursive: true, force: true })
     vi.restoreAllMocks()
