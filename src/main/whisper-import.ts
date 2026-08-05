@@ -112,6 +112,7 @@ export function resetLanguageFollow(next: string): void {
   activeLang = (LANGUAGE_NAMES as readonly string[]).includes(next) ? next : null
   switchRun = null
   windowCount = 0
+  probePinned = false
 }
 
 /** Delta update: only a CHANGED value re-seeds, so re-reading the same setting on every chunk (the common
@@ -182,11 +183,20 @@ export function nextDecodeOptions(): { return_timestamps: boolean; language?: st
 // Parakeet's set) leaves 'auto' exactly as before.
 export type LanguageProbe = (samples: Float32Array) => Promise<string>
 
-/** Runs once per job, immediately before window 1 would decode. Caller (index.ts) supplies `probe` —
- *  whisper-import.ts stays decoupled from parakeet.ts; the probe is wired in as a plain callback, so this
- *  is testable with a fake probe instead of a loaded Parakeet model. */
+/** A recording's opening windows are routinely silence, hold music, or one-word greetings — probing
+ *  only window 0 pinned a real French meeting to ENGLISH off its "Hello" call-join chunk (whisper then
+ *  quietly TRANSLATED the whole call, field evidence 2026-08-05). Keep probing early windows until one
+ *  contains enough real speech for the text language-id to mean something, then pin; give up after
+ *  PROBE_WINDOW_BUDGET windows and leave 'auto' (the follow machine's own probes still apply later). */
+const PROBE_WINDOW_BUDGET = 5
+const PROBE_MIN_WORDS = 8
+let probePinned = false
+
+/** Runs before each early window decodes. Caller (index.ts) supplies `probe` — whisper-import.ts stays
+ *  decoupled from parakeet.ts; the probe is wired in as a plain callback, so this is testable with a
+ *  fake probe instead of a loaded Parakeet model. */
 export async function probeLanguage(samples: Float32Array, probe?: LanguageProbe): Promise<void> {
-  if (!probe || userLanguage !== 'auto' || windowCount !== 0) return
+  if (!probe || userLanguage !== 'auto' || probePinned || windowCount >= PROBE_WINDOW_BUDGET) return
   let text: string
   try {
     text = await probe(samples)
@@ -194,8 +204,15 @@ export async function probeLanguage(samples: Float32Array, probe?: LanguageProbe
     mainLog.warn(`[whisper-import] language probe failed, keeping auto: ${e instanceof Error ? e.message : String(e)}`)
     return
   }
+  // A near-empty window can only mislead: "Hello" alone reads as English regardless of the meeting's
+  // real language. Wait for a window with substance before trusting the detection.
+  if (text.trim().split(/\s+/).filter(Boolean).length < PROBE_MIN_WORDS) return
   const detected = detectLanguage(text).lang
-  if (detected) activeLang = detected // pin immediately: window 1 already decodes with the right language
+  if (detected) {
+    activeLang = detected // pin immediately: this window already decodes with the right language
+    probePinned = true
+    mainLog.info(`[whisper-import] language probe pinned '${detected}' at window ${windowCount}`)
+  }
 }
 
 /** Collapses an intra-window decoder loop (the same runaway-repeat guard live Listen's worker applies —
