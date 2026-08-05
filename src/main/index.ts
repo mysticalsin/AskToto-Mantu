@@ -239,16 +239,29 @@ import { applySpeakerNames } from '@shared/transcript-align'
 import { initializeCaheEditionIdentity, isCaheEdition } from './cahe-edition'
 import { importEmbeddedCaheKey, seedCaheLocalAiForBackgroundScreen } from './cahe-embedded-key'
 
-// Self-signed / un-notarized builds: use the AES-256-GCM file keystore instead of the macOS Keychain.
-// An un-notarized app's Keychain ACL is not stably trusted, so safeStorage prompts for the login-keychain
-// password on launch — AND because the first getSettings() decrypt runs synchronously during boot, BEFORE
-// the overlay window paints, that modal prompt blocks the entire UI behind it (the "load forever" / "I only
-// see the keychain box" report). The file backend keeps secrets encrypted at rest (secret-key.bin, mode
-// 0600) with zero OS prompt, so the app boots straight to its UI. Remove/gate this once the app ships
-// signed with an Apple Developer ID + notarization, so it can use the Keychain-backed store again.
-// `??=` leaves QA/integration overrides (which set the var explicitly) untouched.
+// KEYSTORE BACKEND — the default is PLATFORM-SPECIFIC, not global.
+//
+// macOS (forced file keystore): on a self-signed / un-notarized build the Keychain ACL is not stably
+// trusted, so safeStorage prompts for the login-keychain password on launch — AND because the first
+// getSettings() decrypt runs synchronously during boot, BEFORE the overlay window paints, that modal
+// prompt blocks the entire UI behind it (the "load forever" / "I only see the keychain box" report).
+// The AES-256-GCM file backend keeps secrets encrypted at rest (secret-key.bin, mode 0600) with zero
+// OS prompt, so the app boots straight to its UI. Remove this once the app ships signed with an Apple
+// Developer ID + notarization, so it can use the Keychain-backed store again.
+//
+// Windows (NOT forced): none of the above applies. safeStorage there is DPAPI-backed, tied to the
+// signed-in Windows account rather than to the binary's code signature, and never shows a prompt.
+// Forcing the file keystore anyway made useFileBackend() permanently true, which made canWrap
+// permanently false (secrets.ts) — so the AES-256 master key was written to secret-key.bin as 32 RAW
+// bytes sitting next to the ciphertext it protects. Leaving the var unset lets DPAPI wrap that key
+// (and lets settings/API keys/transcript content keys use safeStorage directly), so a bare copy of
+// the userData folder is no longer decryptable. TRADEOFF: the profile becomes bound to this Windows
+// user account — see the DPAPI note in secrets.ts and the recoverEncryptedProfile IPC.
+//
+// `??=` on BOTH platforms leaves an explicit QA/operator override (ASKTOTO_LOCAL_KEYSTORE already set
+// in the environment) untouched — including forcing the file keystore on Windows for isolated QA.
 initializeCaheEditionIdentity()
-process.env.ASKTOTO_LOCAL_KEYSTORE ??= '1'
+if (process.platform === 'darwin') process.env.ASKTOTO_LOCAL_KEYSTORE ??= '1'
 
 // Select the final user-data profile before crashReporter (or any other Electron service) can resolve
 // a default path. In particular, ASKTOTO_USERDATA must isolate physical QA from a real encrypted profile.

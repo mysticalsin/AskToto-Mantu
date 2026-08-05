@@ -636,6 +636,12 @@ export function setApiKey(provider: ProviderId, key: string): void {
     prepareFileKeyForWrite()
     blob = Buffer.concat([AES_KEY_MARKER, encryptSecret(trimmed)])
   } else {
+    // Same fail-closed check as the file-backend branch. An existing key-<provider>.bin may be an
+    // ATKAES1 blob written under a file key this machine can no longer unwrap; overwriting it with a
+    // fresh safeStorage blob would destroy the only copy of the previous secret, which is still
+    // recoverable while the bytes survive. prepareFileKeyForWrite() is a no-op on a profile that has
+    // no file key at all (fresh install), so this costs a packaged Windows install nothing.
+    prepareFileKeyForWrite()
     if (!safeStorage.isEncryptionAvailable()) {
       throw new Error(
         'Encryption is unavailable on this machine. Métis cannot safely store your API key. ' +
