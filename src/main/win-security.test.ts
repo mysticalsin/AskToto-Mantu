@@ -7,6 +7,7 @@ import {
   isAdminManagedTrusted,
   readTrustedAdminManaged,
   trustedAdminManagedPath,
+  WINDOWS_POWERSHELL,
   type AclProbe
 } from './win-security'
 
@@ -27,6 +28,17 @@ const USERS = 'S-1-5-32-545'
 const AUTH_USERS = 'S-1-5-11'
 const EVERYONE = 'S-1-1-0'
 const ATTACKER = 'S-1-5-21-111-222-333-1005' // a normal domain/local user RID
+
+describe('WINDOWS_POWERSHELL — the shared pinned interpreter path', () => {
+  // Every main-process powershell spawn resolves through this constant, so pin its shape here once:
+  // a bare name would let CreateProcess's cwd-before-PATH search order pick up a planted binary.
+  it('is an absolute %SystemRoot%\\System32 path, never a bare name', () => {
+    expect(WINDOWS_POWERSHELL).toMatch(
+      /^[A-Za-z]:[\\/](.+[\\/])?System32[\\/]WindowsPowerShell[\\/]v1\.0[\\/]powershell\.exe$/i
+    )
+    expect(WINDOWS_POWERSHELL).not.toBe('powershell.exe')
+  })
+})
 
 describe('evaluateAclTrust — the Windows managed-config trust decision', () => {
   it('trusts a SYSTEM-owned policy whose only write ACEs are admin principals', () => {
@@ -178,7 +190,10 @@ describe.runIf(process.platform === 'win32')('isAdminManagedTrusted — real Pro
     writeFileSync(file, JSON.stringify({ escrowPubKey: 'ATTACKER', requireAuth: true }))
     // The file exists and parses, but the ACL reader sees a non-admin owner + inherited Users write.
     expect(isAdminManagedTrusted(file)).toBe(false)
-  })
+    // Budget must clear the code's OWN limit: the ACL read spawns System32 powershell.exe with an
+    // 8s execFileSync timeout, which already exceeds vitest's 5s per-test default — so on a cold CI
+    // runner, where PowerShell start-up is the slow part, this failed as a timeout rather than a verdict.
+  }, 20_000)
 
   it('readTrustedAdminManaged never returns content for that same untrusted file', () => {
     mkdirSync(dir, { recursive: true })
@@ -186,5 +201,6 @@ describe.runIf(process.platform === 'win32')('isAdminManagedTrusted — real Pro
     // Content must not leak even though the file exists and parses — the ACL is untrusted, so the
     // held-fd read is refused before ever handing the caller a string to JSON.parse.
     expect(readTrustedAdminManaged(file)).toBeNull()
-  })
+    // Same 8s-PowerShell-vs-5s-budget reason as the case above.
+  }, 20_000)
 })

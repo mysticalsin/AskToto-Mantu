@@ -64,7 +64,7 @@ describe('brain', () => {
     folder = mkdtempSync(join(tmpdir(), 'asktoto-brain-test-'))
     s = settingsFor(folder)
   })
-  afterEach(() => rmSync(folder, { recursive: true, force: true }))
+  afterEach(() => rmSync(folder, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }))
 
   const sampleExtraction = (): MeetingExtraction =>
     MeetingExtractionSchema.parse({
@@ -474,8 +474,8 @@ describe('brain', () => {
         expect(dealA.win_likelihood_band).toBe('concerning')
         expect(dealA.velocity.evidence).toBe('gate-closing')
       } finally {
-        rmSync(folderA, { recursive: true, force: true })
-        rmSync(folderB, { recursive: true, force: true })
+        rmSync(folderA, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
+        rmSync(folderB, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
       }
     })
   })
@@ -516,7 +516,7 @@ describe('brain', () => {
         const person = readPerson(sx, slugify('Kim Lee'))!
         return { canon: JSON.stringify({ deal: canonicalize(deal), person: canonicalize(person) }), deal }
       } finally {
-        rmSync(dir, { recursive: true, force: true })
+        rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
       }
     }
 
@@ -558,7 +558,11 @@ describe('brain', () => {
       expect(deal.band_evidence).toBe('ev-negotiation')
       // History: one entry per losing value, most-recent-first by the same (date, source_file) key.
       expect(deal.stage_provenance!.superseded.map((e) => e.value)).toEqual(['proposal', 'discovery'])
-    })
+      // Explicit budget: this case ingests 3 extractions through the real store for each of 6
+      // permutations — 18 full write/read round trips against a temp profile, by far the heaviest test
+      // in the file. vitest's 5s default is comfortable on an idle machine and not on a loaded CI runner,
+      // where it aborts mid-permutation and reports a timeout that looks like a determinism failure.
+    }, 30_000)
 
     it('an EXTRACTED classification beats a weaker one in BOTH merge orders (never-downgrade, bidirectional)', async () => {
       const sectorX = (sector: 'banking' | 'technology', conf: 'EXTRACTED' | 'INFERRED'): MeetingExtraction =>
@@ -576,7 +580,7 @@ describe('brain', () => {
           const acc = readAccount(sx, slugify('TieCo'))!
           return { canon: JSON.stringify(canonicalize(acc)), acc }
         } finally {
-          rmSync(dir, { recursive: true, force: true })
+          rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
         }
       }
 
@@ -613,7 +617,7 @@ describe('brain', () => {
           const acc = readAccount(sx, slugify('MixCo'))!
           return { canon: JSON.stringify(canonicalize(acc)), acc }
         } finally {
-          rmSync(dir, { recursive: true, force: true })
+          rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
         }
       }
 
@@ -649,7 +653,7 @@ describe('brain', () => {
           const deal = readDeal(sx, slugify('VelCo Deal'))!
           return { canon: JSON.stringify(canonicalize(deal)), deal }
         } finally {
-          rmSync(dir, { recursive: true, force: true })
+          rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
         }
       }
 

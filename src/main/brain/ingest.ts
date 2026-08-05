@@ -1074,6 +1074,35 @@ export function updateIndex(s: Settings, mutate: (idx: BrainIndex) => void): Pro
   return run
 }
 
+/**
+ * Fire-and-forget index mutation for callers that have already returned their result to the user.
+ *
+ * `updateIndexDetached(...)` reads as "deliberately not awaited", but `void` does NOT attach a rejection
+ * handler — only the internal `indexLock` chain above is caught, and the promise handed back to the
+ * caller still rejects. A profile folder deleted mid-write (test teardown) or any transient fs error
+ * therefore surfaced as an UnhandledPromiseRejection: it fails an entire vitest run while every test
+ * still reports green, and Node's default for unhandled rejections is to terminate the process — which
+ * in main would take the app down long after the operation stopped mattering. Log and swallow instead.
+ */
+function updateIndexDetached(s: Settings, mutate: (idx: BrainIndex) => void): void {
+  updateIndex(s, mutate).catch((e) => mainLog.warn('[brain] detached index update failed:', e))
+}
+
+/**
+ * Resolve once every queued index.json mutation has settled, successfully or not.
+ *
+ * `brainBackfillProgress().running` going false is NOT the same as "all writes are done": the last
+ * job's own index record is still queued on the serialized lane above at that moment. Anything that
+ * tears down or moves the profile — app shutdown, a test's teardown — needs this instead, or it deletes
+ * the directory out from under an in-flight tmp+rename.
+ */
+export function whenIndexWritesSettle(): Promise<void> {
+  return indexLock.then(
+    () => {},
+    () => {}
+  )
+}
+
 /** Record any derived-brain mutation so both Intelligence surfaces can refresh same-count changes. */
 export function markBrainChanged(s: Settings = getSettings()): Promise<void> {
   return updateIndex(s, (idx) => {
@@ -1391,7 +1420,7 @@ function maybeFinishBackfill(): void {
   if (!hasActiveBackfill() && backfillLintPending && backfillTotal > 0 && backfillDone >= backfillTotal) {
     backfillLintPending = false
     const sx = getSettings()
-    void updateIndex(sx, (i) => {
+    updateIndexDetached(sx, (i) => {
       // A batch can contain local checkpoint repairs while other sources still await their first
       // provider-backed extraction. Do not let completion of the repair subset erase that durable
       // pending state, or those meetings would never be retried after the provider returns.
@@ -1499,7 +1528,7 @@ function maybeFinishDrain(): void {
     // the persisted records remain failed/pending. A failed job therefore survives restart and the next
     // automatic reconciliation retries it instead of silently disappearing.
     const s = getSettings()
-    void updateIndex(s, (idx) => {
+    updateIndexDetached(s, (idx) => {
       if (!idx.backfillRequested || Object.values(idx.ingested).some((entry) => !entry.ok) || hasIncompleteMeetingSource(s, idx)) return
       idx.backfillRequested = false
     })
@@ -1794,7 +1823,7 @@ export function startBackfill(onDrained?: () => void | Promise<void>, options: B
     void requestSourceRefresh(s)
     return providerAvailable ? { queued: 0 } : { queued: 0, deferred: 'no-provider' }
   }
-  if (!idx.backfillRequested) void updateIndex(s, (i) => { i.backfillRequested = true })
+  if (!idx.backfillRequested) updateIndexDetached(s, (i) => { i.backfillRequested = true })
   const already = new Set(Object.entries(idx.ingested).filter(([, v]) => v.ok).map(([k]) => k))
   // An extraction file is a resumable checkpoint, not proof of a successful ingest: a crash can land
   // between writeMeetingExtraction and the entity merge/index update. Those entries are re-merged from
@@ -1923,7 +1952,7 @@ export function startBackfill(onDrained?: () => void | Promise<void>, options: B
   // Durably clear the exhausted state for everything toUnexhaust just gave back a fresh attempts budget
   // to — same serialized index lane as every other index.json write (see updateIndex's doc comment).
   if (toUnexhaust.length > 0) {
-    void updateIndex(s, (i) => {
+    updateIndexDetached(s, (i) => {
       for (const k of toUnexhaust) {
         if (i.ingested[k]) {
           i.ingested[k].exhausted = false
@@ -1943,7 +1972,7 @@ export function startBackfill(onDrained?: () => void | Promise<void>, options: B
   // matching meeting is currently being handled by automatic live ingestion. The request flag was set
   // above before scanning, so clear it again through the same serialized index lane.
   if (providerAvailable && candidates.length === 0 && !backfillInFlight && !hasActiveLiveIngest()) {
-    void updateIndex(s, (i) => {
+    updateIndexDetached(s, (i) => {
       if (!hasIncompleteMeetingSource(s, i)) i.backfillRequested = false
     })
   }
@@ -1969,7 +1998,7 @@ export function requestBackfill(options: BackfillStartOptions = {}): BackfillSta
 
   backfillPreparing = true
   const idx = readIndex(s)
-  if (!idx.backfillRequested) void updateIndex(s, (i) => { i.backfillRequested = true })
+  if (!idx.backfillRequested) updateIndexDetached(s, (i) => { i.backfillRequested = true })
   setImmediate(() => {
     try {
       startBackfill(undefined, options)

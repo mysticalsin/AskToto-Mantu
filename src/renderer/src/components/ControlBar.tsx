@@ -8,6 +8,7 @@ import {
   Pause
 } from 'lucide-react'
 import { Spinner } from './ui'
+import { accelLabel } from '../lib/keys'
 
 function clock(s: number): string {
   const m = Math.floor(s / 60)
@@ -61,7 +62,7 @@ export function ControlBar(props: ControlBarProps): JSX.Element {
       {/* Capture */}
       <button
         type="button"
-        title="Capture screen  (⌘⇧S)"
+        title={`Capture screen  (${accelLabel('CommandOrControl+Shift+S')})`}
         aria-label="Capture screen"
         onClick={onCapture}
         className="no-drag focus-ring grid place-items-center rounded-lg p-1 text-[color:var(--color-ink-3)] transition-colors duration-[var(--duration-hover)] hover:text-[color:var(--color-ink)]"

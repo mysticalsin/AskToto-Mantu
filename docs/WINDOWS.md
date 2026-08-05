@@ -211,14 +211,9 @@ the full credential list and the store-signing (Microsoft Store) path.
 |---|---|---|
 | `app.asar` entries keyed with backslashes | An archive packed on Windows keys its entries with `\` instead of `/`. `check-packaged-runtime.mjs` and `check-cahe-package.mjs` used to look entries up with a hardcoded forward-slash path, so a Windows-packed archive failed dependency-pruning checks that a macOS-packed archive passed — per commit `cc99f8d`, the packaged-runtime gate threw `express-rate-limit/package.json not found` and the Cahê package check failed the same way, even though the archive was fine. | **Fixed** (commit `cc99f8d`) — both scripts now normalize `\` to `/` before lookup; still correct on macOS. |
 | `.gitattributes` didn't cover the moved license path | The Qwen model license moved from `resources/local-ai/licenses/` to `resources/local-llm/`, but `.gitattributes` still only pinned the old path. On a Windows checkout, `core.autocrlf` rewrote the license LF→CRLF, so it failed its exact byte-size/hash pin in `check-local-model.mjs`. | **Fixed** (commit `cc99f8d`) — added a `resources/local-llm/*.txt -text` rule. |
-| `fetch-models.mjs`'s Parakeet `.tar.bz2` extraction | `fetchParakeet()` shells out to plain `tar xjf`. Windows ships its own `tar.exe` (bsdtar, under `System32`), separate from Git for Windows' GNU tar under `Git\usr\bin`; depending on which one resolves first on `PATH` in the shell that invokes `npm run fetch-models`, extracting this bzip2-compressed archive can fail. | **Open** — being fixed in `fetch-models.mjs` by another workstream. Workaround below. |
+| `fetch-models.mjs`'s Parakeet `.tar.bz2` extraction | `fetchParakeet()` used to shell out to plain `tar xjf`. Windows ships its own `tar.exe` (bsdtar, under `System32`), separate from Git for Windows' GNU tar under `Git\usr\bin`; whichever resolves first on `PATH` decided whether extraction worked. | **Fixed** — `scripts/tar-bz2-extract.mjs` inflates the archive in-process on Windows, so no external `tar` is involved. |
+| `fetch-llama-server.mjs`'s llama runtime `.zip` extraction | Same class, different container: `extractRuntime()` ran `execFileSync('tar', ['-xf', <archive>, …])` with a drive-letter path. GNU tar cannot read a `.zip` at all **and** parses the leading `D:` as `[user@]host:path` remote-tape syntax, failing with `tar: Cannot connect to D`. Node's spawn resolves a bare command name through `PATH` only — it does **not** fall back to `System32` — so the build was a coin flip decided by the operator's shell. | **Fixed** — `scripts/zip-extract.mjs` inflates the zip in-process with `node:zlib`; no external binary, no `PATH` dependency. |
 
-Workaround for the Parakeet extraction failure — extract with Python's stdlib instead of `tar` (the
-download itself already completed and was byte/length-verified by `fetch-models.mjs`; only the
-extraction step needs replacing), then re-run `fetch-models.mjs`, which skips any file already present
-on disk:
-
-```bash
-python -c "import tarfile; tarfile.open(r'resources/asr/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8.tar.bz2').extractall(r'resources/asr')"
-node scripts/fetch-models.mjs
-```
+Both extractors are pure-Node and add no dependencies. If you are chasing a *new* extraction failure,
+check that you are not reintroducing a bare `tar`/external-tool spawn: `scripts/` is expected to stay
+free of `PATH`-resolved archive tools on Windows.

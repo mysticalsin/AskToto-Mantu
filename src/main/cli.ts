@@ -743,12 +743,14 @@ export async function setupCli(provider: ProviderId): Promise<{ ok: boolean; err
   const isWin = process.platform === 'win32'
   let scriptLines: string[]
 
+  // Windows batch bodies: plain ASCII only — the default console codepage mangles accents/emoji —
+  // and `^(` escapes parens for echo. Mirrors WIN_SETUP_SCRIPT in dustcli.ts.
   if (isWin) {
     if (provider === 'claude-cli') {
       scriptLines = [
         '@echo off',
         'cls',
-        'echo Métis - Claude Code CLI setup',
+        'echo Metis - Claude Code CLI setup',
         'echo ================================',
         'echo.',
         'where npm >nul 2>nul',
@@ -758,7 +760,7 @@ export async function setupCli(provider: ProviderId): Promise<{ ok: boolean; err
         '  pause',
         '  exit /b 1',
         ')',
-        'echo Step 1/2  Installing Claude Code CLI (npm i -g @anthropic-ai/claude-code)...',
+        'echo Step 1/2  Installing Claude Code CLI ^(npm i -g @anthropic-ai/claude-code^)...',
         'call npm i -g @anthropic-ai/claude-code',
         'if errorlevel 1 (',
         '  echo.',
@@ -768,18 +770,18 @@ export async function setupCli(provider: ProviderId): Promise<{ ok: boolean; err
         '  exit /b 1',
         ')',
         'echo.',
-        'echo Step 2/2  Signing in to Claude (type /login at the prompt below)...',
+        'echo Step 2/2  Signing in to Claude ^(type /login at the prompt below^)...',
         'echo ----------------------------------------',
         'call claude',
         'echo.',
-        'echo Done. Go back to Métis and click Connect again.',
+        'echo Done. Go back to Metis and click Connect again.',
         'pause'
       ]
     } else if (provider === 'codex-cli') {
       scriptLines = [
         '@echo off',
         'cls',
-        'echo Métis - OpenAI Codex CLI setup',
+        'echo Metis - OpenAI Codex CLI setup',
         'echo =================================',
         'echo.',
         'where npm >nul 2>nul',
@@ -789,7 +791,7 @@ export async function setupCli(provider: ProviderId): Promise<{ ok: boolean; err
         '  pause',
         '  exit /b 1',
         ')',
-        'echo Step 1/2  Installing OpenAI Codex CLI (npm i -g @openai/codex)...',
+        'echo Step 1/2  Installing OpenAI Codex CLI ^(npm i -g @openai/codex^)...',
         'call npm i -g @openai/codex',
         'if errorlevel 1 (',
         '  echo.',
@@ -802,7 +804,7 @@ export async function setupCli(provider: ProviderId): Promise<{ ok: boolean; err
         'echo Step 2/2  Signing in to OpenAI Codex...',
         'call codex login',
         'echo.',
-        'echo Done. Go back to Métis and click Connect again.',
+        'echo Done. Go back to Metis and click Connect again.',
         'pause'
       ]
     } else {
@@ -858,7 +860,10 @@ export async function setupCli(provider: ProviderId): Promise<{ ok: boolean; err
   }
 
   try {
-    const script = scriptLines.join('\n') + '\n'
+    // cmd.exe needs CRLF: an LF-only .cmd misparses multi-line `if errorlevel 1 ( … )` blocks and
+    // silently drops trailing commands. Bash is fine with LF, so only the Windows path changes.
+    const eol = isWin ? '\r\n' : '\n'
+    const script = scriptLines.join(eol) + eol
     const scriptPath = join(app.getPath('temp'), `asktoto-${provider}-setup-${randomBytes(8).toString('hex')}.${isWin ? 'cmd' : 'command'}`)
     writeFileSync(scriptPath, script, { mode: 0o755, flag: 'wx' })
     const err = await shell.openPath(scriptPath)
@@ -1045,33 +1050,34 @@ export async function loginCli(provider: ProviderId): Promise<{ ok: boolean; err
   const isWin = process.platform === 'win32'
   let scriptLines: string[]
 
+  // Plain ASCII only in the batch body — the console codepage mangles accents (see setupCli).
   if (isWin) {
     if (provider === 'claude-cli') {
       scriptLines = [
         '@echo off',
         'cls',
-        'echo Métis - Claude Code CLI login',
+        'echo Metis - Claude Code CLI login',
         'echo ================================',
         'echo.',
         'echo Type /login at the prompt below and follow the instructions.',
         'echo ----------------------------------------',
         'call claude',
         'echo.',
-        'echo Done. Go back to Métis and click Connect again.',
+        'echo Done. Go back to Metis and click Connect again.',
         'pause'
       ]
     } else if (provider === 'codex-cli') {
       scriptLines = [
         '@echo off',
         'cls',
-        'echo Métis - OpenAI Codex CLI login',
+        'echo Metis - OpenAI Codex CLI login',
         'echo =================================',
         'echo.',
         'echo Follow the instructions below to sign in.',
         'echo ----------------------------------------',
         'call codex login',
         'echo.',
-        'echo Done. Go back to Métis and click Connect again.',
+        'echo Done. Go back to Metis and click Connect again.',
         'pause'
       ]
     } else {
@@ -1108,7 +1114,9 @@ export async function loginCli(provider: ProviderId): Promise<{ ok: boolean; err
   }
 
   try {
-    const script = scriptLines.join('\n') + '\n'
+    // CRLF for cmd.exe (see setupCli) — LF-only batch files misparse; POSIX keeps LF.
+    const eol = isWin ? '\r\n' : '\n'
+    const script = scriptLines.join(eol) + eol
     const scriptPath = join(app.getPath('temp'), `asktoto-${provider}-login-${randomBytes(8).toString('hex')}.${isWin ? 'cmd' : 'command'}`)
     writeFileSync(scriptPath, script, { mode: 0o755, flag: 'wx' })
     const err = await shell.openPath(scriptPath)

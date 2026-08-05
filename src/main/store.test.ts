@@ -54,6 +54,17 @@ describe('store', () => {
 
   beforeEach(() => {
     userData = mkdtempSync(join(tmpdir(), 'asktoto-store-test-'))
+    // store.ts's getApiKey() short-circuits on the provider's env var BEFORE it ever touches the
+    // profile on disk (`const env = process.env[ENV_VAR[provider]]; if (env) return env`). That is
+    // intended product behaviour, but it makes these tests read the developer's ambient shell instead
+    // of the isolated temp profile: a machine exporting a real KIMI_API_KEY / OPENAI_API_KEY / … fails
+    // the key assertions AND makes Vitest print that live credential in the diff. Clear every provider
+    // key var so this suite only ever observes what it wrote itself. Every name in store.ts's ENV_VAR
+    // map ends in `_API_KEY`, so the sweep stays correct as providers are added — if a future provider
+    // env var breaks that convention, add it here explicitly.
+    for (const name of Object.keys(process.env)) {
+      if (name.endsWith('_API_KEY')) vi.stubEnv(name, undefined)
+    }
     mockAppGetPath.mockImplementation((name: string) => {
       if (name === 'userData') return userData
       return join(userData, name)
@@ -64,6 +75,7 @@ describe('store', () => {
 
   afterEach(() => {
     rmSync(userData, { recursive: true, force: true })
+    vi.unstubAllEnvs()
     vi.restoreAllMocks()
   })
 

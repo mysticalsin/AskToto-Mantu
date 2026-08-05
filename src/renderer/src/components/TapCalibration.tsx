@@ -12,6 +12,7 @@ import { useEffect, useRef, useState } from 'react'
 import { Fingerprint, Radio } from 'lucide-react'
 import type { HotkeyAction, PublicSettings, SettingsPatch } from '@shared/ipc'
 import { Section, ToggleRow, ctl } from './Settings'
+import { isWindows } from '../lib/keys'
 import { makeCalibration, CALIB_N, type CalibrationSession, type CalibFeedback } from '../lib/tap/calibrate'
 import { startTapCapture, startTapControl, type TapCaptureSession, type TapControlSession } from '../lib/tap/tap-control'
 import type { BuildResult } from '../lib/tap/classify'
@@ -157,7 +158,9 @@ export function TapControlCard({
   return (
     <Section
       title="Desk Tap Control"
-      desc="Tap the desk near your Mac to trigger an action. Recognized on-device from the tap's sound. Pick two spots that sound different to the mic (one close, one at arm's length works best)."
+      // The feature is enabled on Windows too, so the device noun has to follow the host — this card
+      // read "near your Mac" on a Windows PC.
+      desc={`Tap the desk near your ${isWindows ? 'PC' : 'Mac'} to trigger an action. Recognized on-device from the tap's sound. Pick two spots that sound different to the mic (one close, one at arm's length works best).`}
       icon={Fingerprint}
     >
       <ToggleRow

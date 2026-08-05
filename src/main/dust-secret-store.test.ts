@@ -1,5 +1,9 @@
 import { describe, it, expect } from 'vitest'
-import { winCredReadScript, DUST_KEYCHAIN_SERVICE } from './dust-secret-store'
+import { winCredReadScript, winCredReadSpawnSpec, DUST_KEYCHAIN_SERVICE } from './dust-secret-store'
+
+// Accepts either separator so the assertion holds when a non-Windows host resolves the pinned path.
+const ABSOLUTE_SYSTEM32_POWERSHELL =
+  /^[A-Za-z]:[\\/](.+[\\/])?System32[\\/]WindowsPowerShell[\\/]v1\.0[\\/]powershell\.exe$/i
 
 // The Windows read path can't run on this host — these guard the generated PowerShell against silent
 // drift (wrong target, missing CredRead/CredFree, wrong not-found exit code) that would break Windows.
@@ -19,5 +23,25 @@ describe('winCredReadScript', () => {
 
   it('exits 2 when the credential is absent (→ read returns null, not an error)', () => {
     expect(winCredReadScript('dust-cli/region')).toContain('exit 2')
+  })
+})
+
+describe('winCredReadSpawnSpec — powershell is pinned to System32', () => {
+  // Regression: this read used to spawn a bare 'powershell.exe'. Windows' CreateProcess searches the
+  // current working directory before PATH, so a bare name hands the user's stored OAuth token to an
+  // attacker-planted powershell.exe (win-security.ts states the invariant).
+  it('spawns the absolute %SystemRoot%\\System32 powershell, never a bare name', () => {
+    const spec = winCredReadSpawnSpec('dust-cli/access_token')
+    expect(spec.command).toMatch(ABSOLUTE_SYSTEM32_POWERSHELL)
+    expect(spec.command).not.toBe('powershell.exe')
+    expect(spec.command).not.toBe('powershell')
+  })
+
+  it('still passes the encoded CredRead script (the pinning did not change the payload)', () => {
+    const spec = winCredReadSpawnSpec('dust-cli/access_token')
+    expect(spec.args.slice(0, 3)).toEqual(['-NoProfile', '-NonInteractive', '-EncodedCommand'])
+    expect(Buffer.from(spec.args[3], 'base64').toString('utf16le')).toBe(
+      winCredReadScript('dust-cli/access_token')
+    )
   })
 })

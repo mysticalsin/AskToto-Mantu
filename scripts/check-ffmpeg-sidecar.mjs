@@ -30,9 +30,16 @@ if (platform === process.platform && arch === process.arch) {
   // spawn failure leaves the banner empty, which then fails the LGPL test below
   // and reports a licence violation for a binary whose licence was never read.
   if (result.error) {
+    // Remediation differs per host, and pointing a Windows operator at xattr/chmod just wastes their
+    // time: neither exists there, and the real causes are Mark-of-the-Web (the file came from a
+    // download and is still marked), AV quarantine, or a payload that is not a loadable PE image.
+    const remedy =
+      process.platform === 'win32'
+        ? `check Mark-of-the-Web (Unblock-File '${file}'), AV quarantine, and that the file is a valid PE image.`
+        : `check quarantine (xattr -l '${file}') and the exec bit.`
     throw new Error(
       `${file} matched the reviewed sha256 but could not be executed: ${result.error.message}. ` +
-        `This is not a licensing failure — check quarantine (xattr -l '${file}') and the exec bit.`
+        `This is not a licensing failure — ${remedy}`
     )
   }
   if (result.status !== 0) {

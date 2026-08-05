@@ -20,9 +20,19 @@ on:
 
 jobs:
   quality:
-    name: Quality checks
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # Matrix over both host platforms is LOAD-BEARING. This job was ubuntu-only for the app's whole
+    # history, so every Windows-gated test was a silent false-pass: nothing ever executed the win32
+    # branches of the suite, and three POSIX-only assertions in check-ffmpeg-sidecar.test.ts sat broken
+    # on main undetected because the only Windows job (build-windows) packages without running tests.
+    # A Windows runner here is the gate that keeps win32 test breakage from reaching main again.
+    name: Quality checks (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    # Windows runners are consistently slower at npm ci + the Electron build than ubuntu.
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -68,7 +78,13 @@ jobs:
       # SBOM (CycloneDX) for the supply-chain evidence package.
       - name: Generate SBOM
         run: npx --yes @cyclonedx/cyclonedx-npm --output-file sbom.json || echo "SBOM step skipped"
+      # Best-effort, like the two SBOM steps above it (`|| true`, `|| echo skipped`, if-no-files-found:
+      # ignore). Without continue-on-error a GitHub *billing* condition fails the whole security job:
+      # "Artifact storage quota has been hit" took this job red on main for multiple releases even though
+      # the gates that actually matter — the critical-severity audit and the secret scan — both passed.
+      # The SBOM is supply-chain EVIDENCE, not a gate; losing an upload must not mask the real verdict.
       - uses: actions/upload-artifact@v4
+        continue-on-error: true
         with:
           name: sbom
           path: sbom.json
@@ -150,7 +166,12 @@ jobs:
       # single run's artifact to ~6 GB and repeated runs blew the org's Actions storage quota, which
       # then failed every packaging job at the upload step. Installers + update metadata are all a PR
       # reviewer needs; 3-day retention because these are PR-verification builds, not releases.
+      # continue-on-error for the same reason as the Windows job: the comment above records that the
+      # quota "then failed every packaging job at the upload step", i.e. this has already bitten once.
+      # The verification (predist gates -> build -> electron-builder -> check-packaged-runtime) is done
+      # before this step; if-no-files-found: error still fails a build that produced no installer.
       - uses: actions/upload-artifact@v4
+        continue-on-error: true
         with:
           name: metis-macos
           retention-days: 3
@@ -224,7 +245,15 @@ jobs:
       # no Windows certificate, so its EXE/AppX artifacts are unsigned and are not customer releases.
       - run: npm run dist:win:appx
       # Installers only, same rationale as the macOS job (win-unpacked/ was ~7.5 GB per run).
+      # continue-on-error is about WHAT THIS JOB PROVES. Everything that verifies the package — the
+      # predist asset gates, the build, electron-builder, check-packaged-runtime and
+      # check-update-metadata — has already run and passed by the time we get here; the upload is
+      # convenience distribution with a 3-day retention. A repo-wide "Artifact storage quota has been
+      # hit" (a GitHub billing state that recalculates every 6-12h) would otherwise red-line this job,
+      # and every future PR, for a reason that has nothing to do with the code. if-no-files-found: error
+      # is deliberately KEPT, so a build that genuinely produced no installer still fails the job.
       - uses: actions/upload-artifact@v4
+        continue-on-error: true
         with:
           name: metis-windows
           retention-days: 3

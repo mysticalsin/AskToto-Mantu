@@ -7,7 +7,7 @@ import { PROVIDER_IDS } from '@shared/providers'
 import { MeetingExtractionSchema } from '@shared/brain'
 import { getSettings, setSettings } from '../store'
 import { mainLog } from '../logger'
-import { startBackfill, brainBackfillProgress, reconcileMeetingsInBackground } from './ingest'
+import { startBackfill, brainBackfillProgress, reconcileMeetingsInBackground, whenIndexWritesSettle } from './ingest'
 import { readAccount, readDeal, readIndex, slugify, writeIndex, writeMeetingExtraction } from './store'
 
 vi.mock('electron')
@@ -21,6 +21,19 @@ vi.mock('electron')
 describe('startBackfill with no configured provider', () => {
   let userData: string
   let meetingsFolder: string
+
+  /** Module is fully quiet: queue drained, no deferred scan pending, and every index write landed. */
+  const waitForBrainIdle = async (): Promise<void> => {
+    await vi.waitFor(
+      () => {
+        const p = brainBackfillProgress()
+        expect(p.running).toBe(false)
+        expect(p.preparing).toBeFalsy()
+      },
+      { timeout: 15_000 }
+    )
+    await whenIndexWritesSettle()
+  }
 
   beforeEach(() => {
     userData = mkdtempSync(join(tmpdir(), 'asktoto-backfill-test-'))
@@ -47,9 +60,15 @@ describe('startBackfill with no configured provider', () => {
     writeFileSync(join(meetingsFolder, 'meeting-2.md'), '---\ndate: 2026-01-02\n---\nworld', 'utf8')
   })
 
-  afterEach(() => {
-    // maxRetries: a background reconcile timer can still be writing into .brain when teardown fires,
-    // making a bare rmSync race it to ENOTEMPTY under full-suite parallelism (flaked ~1/full-run).
+  afterEach(async () => {
+    // Drain before teardown, don't just retry around it. These flags are MODULE-level, so leftover work
+    // does not merely race rmSync — it changes the NEXT test's behaviour: reconcileMeetingsInBackground()
+    // opens with `if (backfillPreparing || sourceRefreshRunning || hasActiveBackfill()) return`, so a
+    // still-active backfill from the previous test makes the next one's reconcile a silent no-op and its
+    // waitFor times out with nothing to show. That was the ~1-in-4 full-suite flake.
+    // `preparing` matters as much as `running`: requestBackfill() returns {queued:0, preparing:true} and
+    // finishes its scan on a later turn, so running===false alone does not mean the module is idle.
+    await waitForBrainIdle()
     rmSync(userData, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
     rmSync(meetingsFolder, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
     vi.unstubAllEnvs()
@@ -136,10 +155,20 @@ describe('startBackfill with no configured provider', () => {
 
     reconcileMeetingsInBackground()
 
-    await vi.waitFor(() => {
-      expect(readIndex(getSettings()).ingested[file]?.ok).toBe(true)
-    })
-  })
+    // Explicit timeout: this is the only assertion here waiting on the BACKGROUND reconciliation loop
+    // rather than on work started synchronously by the test, so it pays that loop's own scheduling delay
+    // on top of the extraction. vi.waitFor's 1000ms default is enough on an idle machine but not while
+    // the full suite runs its workers in parallel — which made this the last intermittent failure in the
+    // suite. The assertion is unchanged; only the patience is.
+    await vi.waitFor(
+      () => {
+        expect(readIndex(getSettings()).ingested[file]?.ok).toBe(true)
+      },
+      { timeout: 15_000 }
+    )
+    // The per-test budget has to clear the waitFor above too: vitest's 5s default would abort the test
+    // before that 15s ever elapsed, turning a slow-but-correct run into a failure at the it() line.
+  }, 20_000)
 
   it('marks a changed successfully indexed source for a clean rebuild instead of silently keeping stale intelligence', async () => {
     const file = 'meeting-1.md'
