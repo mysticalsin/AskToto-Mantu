@@ -14,6 +14,12 @@ files:
   - '!node_modules/@dust-tt/client/node_modules/express-rate-limit{,/**/*}'
   - '!node_modules/@dust-tt/client/node_modules/ip-address{,/**/*}'
   - '!node_modules/sherpa-onnx-darwin-*{,/**/*}'
+  # sharp installs its native binaries per-host: building on macOS leaves darwin packages in
+  # node_modules that a Windows install can never load; predist:win force-installs the win32-x64
+  # pair (same pattern as check-sherpa-platform's addon provisioning) and these keep the darwin
+  # copies out of the Windows installer.
+  - '!node_modules/@img/sharp-darwin-*{,/**/*}'
+  - '!node_modules/@img/sharp-libvips-darwin-*{,/**/*}'
   - '!out/**/*.map'
   - '!**/*.d.ts'
 win:
