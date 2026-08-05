@@ -276,6 +276,15 @@ export const TranscriptLineSchema = z.object({
 })
 export type TranscriptLine = z.infer<typeof TranscriptLineSchema>
 
+/** Single source of truth for the import pipeline's decode window. Both decoders that turn a recording
+ *  into PCM windows — main's ffmpeg sidecar (main/ffmpeg-decoder.ts) and the renderer's Chromium
+ *  AudioContext fallback (renderer/lib/import-audio.ts) — chunk at this size, and main/import-jobs.ts
+ *  derives each line's display timestamp from it. A renderer lib may only import from shared (never from
+ *  main), so this lives here rather than in ffmpeg-decoder.ts. Shorter windows give main/whisper-import.ts's
+ *  ported language-follow machine more, smaller chances to notice a mixed-language recording switch than
+ *  one slab spanning the whole switch. */
+export const IMPORT_CHUNK_SECONDS = 12
+
 export const SaveMeetingSchema = z.object({
   title: z.string().default(''),
   mode: z.string().default('general'),

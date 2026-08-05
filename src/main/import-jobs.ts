@@ -1,4 +1,4 @@
-import type { SaveMeeting, TranscriptLine } from '@shared/ipc'
+import { IMPORT_CHUNK_SECONDS, type SaveMeeting, type TranscriptLine } from '@shared/ipc'
 
 /**
  * Main-process import queue. It deliberately persists text checkpoints, not decoded PCM: raw audio is
@@ -45,6 +45,13 @@ export interface ImportJob {
    * this pin a persona switch mid-queue would shape an unrelated import's summary. Absent on jobs
    * checkpointed by older builds; consumers fall back to the live mode. */
   mode?: string
+  /** Decode chunk-window size (seconds, IMPORT_CHUNK_SECONDS) this job's cursor/lines/totalChunks were
+   *  checkpointed against. Stamped once at start() and never changed while a job is in flight. recover()
+   *  compares it against the CURRENT constant: a mismatch (older build, or the constant changed since)
+   *  means `cursor` no longer lines up with the decoder's actual chunk boundaries — resuming would splice
+   *  windows recorded at two different sizes into one transcript. Absent on jobs checkpointed before this
+   *  field existed, which recover() also treats as a mismatch. */
+  chunkSec?: number
   createdAt: number
   updatedAt: number
 }
@@ -77,7 +84,7 @@ export interface ImportJobManagerDeps {
   newId?: () => string
 }
 
-const CHUNK_MS = 30_000
+const CHUNK_MS = IMPORT_CHUNK_SECONDS * 1_000
 
 const terminal = (state: ImportJobState): boolean => state === 'done' || state === 'failed' || state === 'cancelled'
 
@@ -120,6 +127,7 @@ export class ImportJobManager {
       cursor: 0,
       totalChunks: 0,
       lines: [],
+      chunkSec: IMPORT_CHUNK_SECONDS,
       ...(this.deps.personaMode ? { mode: this.deps.personaMode() } : {}),
       createdAt: now,
       updatedAt: now
@@ -149,6 +157,19 @@ export class ImportJobManager {
           await this.persist(job)
           await this.removeCheckpoint(job.jobId)
           continue
+        }
+        // A checkpoint written under a different decode chunk size (older build, or IMPORT_CHUNK_SECONDS
+        // changed since) has a cursor/totalChunks that no longer line up with the current decoder's chunk
+        // boundaries. Resuming would splice windows recorded at two different sizes into one transcript —
+        // wrong line timestamps at best, a rejected "decoder changed the recording chunk count" failure at
+        // worst (the browser-fallback decoder recomputes totalChunks from the new chunk size on its very
+        // first submitted chunk). Re-transcribing the whole file from scratch is slower but correct.
+        if (job.chunkSec !== IMPORT_CHUNK_SECONDS) {
+          job.cursor = 0
+          job.lines = []
+          job.totalChunks = 0
+          job.progressPct = undefined
+          job.chunkSec = IMPORT_CHUNK_SECONDS
         }
         job.state = 'queued'
         job.error = undefined
@@ -240,7 +261,8 @@ export class ImportJobManager {
     if (!Number.isInteger(seq) || seq < 0 || !Number.isInteger(totalChunks) || totalChunks < 0) {
       throw new Error('Invalid decoded audio chunk.')
     }
-    if (samples.length > 16_000 * 35) throw new Error('Decoded audio chunk is too large.')
+    // A window should never exceed one decode chunk plus a few seconds of slack for FFmpeg/decoder jitter.
+    if (samples.length > 16_000 * (IMPORT_CHUNK_SECONDS + 5)) throw new Error('Decoded audio chunk is too large.')
     if (seq < job.cursor) return // replay during resume: this checkpoint already exists
     if (seq !== job.cursor) {
       await this.fail(job, `Decoded audio arrived out of order (expected chunk ${job.cursor + 1}).`)

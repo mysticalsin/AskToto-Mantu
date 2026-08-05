@@ -51,11 +51,11 @@ describe.runIf(gateOk)('bundled FFmpeg import decoder', () => {
     const dir = mkdtempSync(join(tmpdir(), 'asktoto-ffmpeg-test-'))
     temp.push(dir)
     const m4a = join(dir, 'sample.m4a')
-    // The source fixture (en.wav) is only ~3.85s — far short of FFMPEG_CHUNK_SAMPLES (30s), so a plain
+    // The source fixture (en.wav) is only ~3.85s — far short of FFMPEG_CHUNK_SAMPLES, so a plain
     // transcode would decode as a single seq=0 tail chunk and skipThrough=1 would filter EVERYTHING,
     // making this test pass vacuously (seen=[] trivially equals the expected empty array) without ever
     // exercising the resume/skip-through logic. Loop the fixture past 60s so the decode genuinely spans
-    // 3 chunks (two full 30s windows + a short tail) and skipping the first one is real coverage.
+    // several chunks (multiple full windows + a short tail) and skipping the first one is real coverage.
     const encoded = spawnSync(ffmpeg!, ['-y', '-stream_loop', '-1', '-i', wav, '-t', '65', '-c:a', 'aac', m4a], {
       encoding: 'utf8'
     })

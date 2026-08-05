@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import type { TranscriptLine } from '@shared/ipc'
+import { IMPORT_CHUNK_SECONDS, type TranscriptLine } from '@shared/ipc'
 import { ImportJobManager, type ImportJob, type ImportJobStore } from './import-jobs'
 
 class MemoryStore implements ImportJobStore {
@@ -82,8 +82,14 @@ describe('ImportJobManager', () => {
     expect(checkpoint.cursor).toBe(2)
     expect(checkpoint.lines).toEqual<TranscriptLine[]>([
       { speaker: 'unknown', text: 'recognized speech', t: source.mtimeMs },
-      { speaker: 'unknown', text: 'recognized speech', t: source.mtimeMs + 30_000 }
+      { speaker: 'unknown', text: 'recognized speech', t: source.mtimeMs + IMPORT_CHUNK_SECONDS * 1_000 }
     ])
+  })
+
+  it('stamps the current decode chunk size into a freshly started job', async () => {
+    const { manager } = createManager()
+    const job = await manager.start(source)
+    expect(job.chunkSec).toBe(IMPORT_CHUNK_SECONDS)
   })
 
   it('persists decoder progress and reserves 100% for the completed summary handoff', async () => {
@@ -242,6 +248,72 @@ describe('ImportJobManager', () => {
 
     expect(second.decode).not.toHaveBeenCalled()
     expect(second.manager.get('job-1')).toMatchObject({ state: 'done', file: 'already-saved.md' })
+  })
+
+  it('restarts a queued job from scratch on recover() when its checkpoint predates the current chunk size', async () => {
+    const first = createManager()
+    await first.store.save({
+      jobId: 'job-1', sourcePath: source.path, sourceName: source.name, sourceSizeBytes: source.sizeBytes,
+      sourceMtimeMs: source.mtimeMs, title: 'Interview', state: 'decoding', cursor: 3, totalChunks: 7,
+      progressPct: 42, chunkSec: IMPORT_CHUNK_SECONDS + 1,
+      lines: [{ speaker: 'unknown', text: 'stale window', t: source.mtimeMs }],
+      createdAt: 1, updatedAt: 1
+    })
+    const second = createManager()
+    ;(second.store as MemoryStore).jobs.clear()
+    ;(second.store as MemoryStore).jobs.set('job-1', (first.store as MemoryStore).jobs.get('job-1')!)
+
+    await second.manager.recover()
+
+    // A mismatched chunkSec means `cursor` no longer lines up with the current decoder's chunk
+    // boundaries — resuming from it would splice differently-sized windows into one transcript, so
+    // recover() restarts the job from scratch (re-transcribing is correct; resuming is not) rather than
+    // replaying stale progress.
+    expect(second.decode).toHaveBeenCalledTimes(1)
+    expect(second.manager.get('job-1')).toMatchObject({
+      state: 'decoding', cursor: 0, totalChunks: 0, lines: [], chunkSec: IMPORT_CHUNK_SECONDS
+    })
+    expect(second.manager.get('job-1')?.progressPct).toBeUndefined()
+  })
+
+  it('restarts a queued job on recover() when its checkpoint predates the chunkSec field entirely', async () => {
+    const first = createManager()
+    await first.store.save({
+      jobId: 'job-1', sourcePath: source.path, sourceName: source.name, sourceSizeBytes: source.sizeBytes,
+      sourceMtimeMs: source.mtimeMs, title: 'Interview', state: 'decoding', cursor: 3, totalChunks: 7,
+      lines: [{ speaker: 'unknown', text: 'stale window', t: source.mtimeMs }],
+      createdAt: 1, updatedAt: 1
+      // chunkSec omitted entirely — an older build's checkpoint, from before this field existed.
+    })
+    const second = createManager()
+    ;(second.store as MemoryStore).jobs.clear()
+    ;(second.store as MemoryStore).jobs.set('job-1', (first.store as MemoryStore).jobs.get('job-1')!)
+
+    await second.manager.recover()
+
+    expect(second.manager.get('job-1')).toMatchObject({ cursor: 0, totalChunks: 0, lines: [], chunkSec: IMPORT_CHUNK_SECONDS })
+  })
+
+  it('resumes a queued job on recover() when its checkpoint already matches the current chunk size', async () => {
+    const first = createManager()
+    await first.store.save({
+      jobId: 'job-1', sourcePath: source.path, sourceName: source.name, sourceSizeBytes: source.sizeBytes,
+      sourceMtimeMs: source.mtimeMs, title: 'Interview', state: 'decoding', cursor: 3, totalChunks: 7,
+      progressPct: 42, chunkSec: IMPORT_CHUNK_SECONDS,
+      lines: [{ speaker: 'unknown', text: 'kept window', t: source.mtimeMs }],
+      createdAt: 1, updatedAt: 1
+    })
+    const second = createManager()
+    ;(second.store as MemoryStore).jobs.clear()
+    ;(second.store as MemoryStore).jobs.set('job-1', (first.store as MemoryStore).jobs.get('job-1')!)
+
+    await second.manager.recover()
+
+    expect(second.decode).toHaveBeenCalledTimes(1)
+    expect(second.manager.get('job-1')).toMatchObject({
+      state: 'decoding', cursor: 3, totalChunks: 7, progressPct: 42, chunkSec: IMPORT_CHUNK_SECONDS,
+      lines: [{ speaker: 'unknown', text: 'kept window', t: source.mtimeMs }]
+    })
   })
 
   it('dismisses a failed job from both the manager and the persistent store', async () => {

@@ -3,9 +3,10 @@ import { once } from 'node:events'
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import type { Readable } from 'node:stream'
+import { IMPORT_CHUNK_SECONDS } from '@shared/ipc'
 
 export const FFMPEG_SAMPLE_RATE = 16_000
-export const FFMPEG_CHUNK_SECONDS = 30
+export const FFMPEG_CHUNK_SECONDS = IMPORT_CHUNK_SECONDS
 export const FFMPEG_CHUNK_SAMPLES = FFMPEG_SAMPLE_RATE * FFMPEG_CHUNK_SECONDS
 const FFMPEG_CHUNK_BYTES = FFMPEG_CHUNK_SAMPLES * Float32Array.BYTES_PER_ELEMENT
 const MAX_STDERR_BYTES = 16_384
@@ -87,8 +88,8 @@ export function bundledFfmpegPath(resourcesDir: string, platform = process.platf
 }
 
 /**
- * Stream an arbitrary recording through FFmpeg as 16 kHz mono f32le PCM. At most one 30-second chunk
- * plus the decoder's internal buffers is held in JavaScript; the source recording stays on disk.
+ * Stream an arbitrary recording through FFmpeg as 16 kHz mono f32le PCM. At most one FFMPEG_CHUNK_SECONDS
+ * chunk plus the decoder's internal buffers is held in JavaScript; the source recording stays on disk.
  */
 export function startFfmpegDecode(
   executable: string,
