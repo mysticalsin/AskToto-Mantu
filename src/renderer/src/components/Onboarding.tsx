@@ -67,6 +67,26 @@ function ActionRow({ icon: Icon, label, hint, keys }: { icon: typeof Mic; label:
 const managedChipCls =
   'inline-flex items-center gap-1 rounded-full border border-[var(--cl-primary)]/30 bg-[var(--cl-primary-soft)] px-1.5 py-0 text-[10px] font-medium text-[color:var(--color-accent-text)]'
 
+/** Why a step-5 provider tile can't be tapped right now, or `null` if it can. Kept as a discriminated
+ *  reason (not a plain boolean) so ProviderOption can show copy that matches what's actually true —
+ *  'org' is a genuine managed-config/data-residency lock, 'busy' is only ever a transient in-flight
+ *  probe (currently just the CLI tile's ~45s cliDetect/cliTest). Conflating the two previously made
+ *  every tile read as org-restricted for the whole time the CLI tile alone was busy. */
+export type ProviderTileDisabledReason = 'org' | 'busy' | null
+
+/** Pure so it's unit-testable without a render harness (Onboarding.tsx has none). `busy` only ever
+ *  applies to the CLI tile — the API-key and Mantu Dust tiles never pass it, so they can't be disabled
+ *  by another tile's in-flight probe. */
+export function providerTileDisabledReason(opts: {
+  providerLocked: boolean
+  pathAllowed: boolean
+  busy?: boolean
+}): ProviderTileDisabledReason {
+  if (opts.providerLocked || !opts.pathAllowed) return 'org'
+  if (opts.busy) return 'busy'
+  return null
+}
+
 /** One selectable "how to power Métis" path on the provider-choice slide. A plain-language card the
  *  user taps to route themselves — no jargon, no key required to read it. */
 function ProviderOption({
@@ -75,17 +95,17 @@ function ProviderOption({
   badge,
   desc,
   onClick,
-  disabled
+  disabledReason
 }: {
   icon: typeof Mic
   title: string
   badge?: string
   desc: string
   onClick: () => void
-  /** Disables the tile — either a CLI probe is already in flight, or `provider` is locked by managed
-   *  config (settings.managedKeys), in which case the pick would silently be dropped by main anyway. */
-  disabled?: boolean
+  /** See providerTileDisabledReason() — `null`/undefined means tappable. */
+  disabledReason?: ProviderTileDisabledReason
 }): JSX.Element {
+  const disabled = !!disabledReason
   return (
     <button
       type="button"
@@ -102,9 +122,13 @@ function ProviderOption({
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2">
           <span className="text-[13.5px] font-medium text-[color:var(--color-ink)]">{title}</span>
-          {disabled ? (
+          {disabledReason === 'org' ? (
             <span className="rounded-full bg-[var(--color-accent-soft)] px-1.5 py-0.5 text-[10px] font-medium text-[var(--color-accent)]">
               Restricted by your organization
+            </span>
+          ) : disabledReason === 'busy' ? (
+            <span className="inline-flex items-center gap-1 rounded-full bg-white/[0.06] px-1.5 py-0.5 text-[10px] font-medium text-[color:var(--color-ink-2)]">
+              <Loader2 size={10} className="animate-spin" /> Checking…
             </span>
           ) : (
             badge && (
@@ -576,7 +600,7 @@ export function Onboarding({
             badge="No key needed"
             desc="Already use Claude Code or Codex in your terminal? Connect it. Nothing extra to pay, nothing to paste."
             onClick={() => void chooseCli()}
-            disabled={providerLocked || cliBusy || !cliPathAllowed}
+            disabledReason={providerTileDisabledReason({ providerLocked, pathAllowed: cliPathAllowed, busy: cliBusy })}
           />
           {showApiPicker ? (
             <div className="flex flex-col gap-2 rounded-xl border border-[var(--color-hair-soft)] bg-white/[0.02] p-3.5 text-left">
@@ -614,7 +638,7 @@ export function Onboarding({
               title="An API key"
               desc="Claude, GPT, Grok, Kimi, and more. Paste your key and you're set. You pay your provider directly."
               onClick={() => setShowApiPicker(true)}
-              disabled={providerLocked || cliBusy || !apiPathAllowed}
+              disabledReason={providerTileDisabledReason({ providerLocked, pathAllowed: apiPathAllowed })}
             />
           )}
           <ProviderOption
@@ -623,7 +647,7 @@ export function Onboarding({
             badge="One-click setup"
             desc="Use Mantu's shared Dust workspace. Installs and signs you in automatically. No key to paste."
             onClick={() => void chooseDust()}
-            disabled={providerLocked || cliBusy || !dustPathAllowed}
+            disabledReason={providerTileDisabledReason({ providerLocked, pathAllowed: dustPathAllowed })}
           />
         </div>
         {providerLocked && <span className={managedChipCls}>Managed by your organization</span>}
