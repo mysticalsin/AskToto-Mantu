@@ -4,6 +4,7 @@ import { createHash } from 'node:crypto'
 import { spawnSync } from 'node:child_process'
 import { readFileSync, statSync } from 'node:fs'
 import { join } from 'node:path'
+import { nonPortableDylibs } from './lib/macho-dylibs.mjs'
 
 const target = process.argv[2] || process.platform
 const arch = process.argv[3] || (target === 'win' ? 'x64' : process.arch)
@@ -15,9 +16,37 @@ const expected = manifest.binaries?.[key]?.sha256
 
 if (!expected) throw new Error(`No reviewed FFmpeg manifest entry for ${key}.`)
 const stat = statSync(file)
-if (platform !== 'win32' && !(stat.mode & 0o111)) throw new Error(`${file} is not executable.`)
-const actual = createHash('sha256').update(readFileSync(file)).digest('hex')
+// Only the host can answer this. A POSIX execute bit read off a file sitting on NTFS says nothing
+// about the file — Windows has no such permission — so cross-checking a macOS sidecar from a Windows
+// checkout would fail on a bit that does not exist rather than on anything wrong with the binary.
+if (platform === process.platform && process.platform !== 'win32' && !(stat.mode & 0o111)) {
+  throw new Error(`${file} is not executable.`)
+}
+const bytes = readFileSync(file)
+const actual = createHash('sha256').update(bytes).digest('hex')
 if (actual !== expected) throw new Error(`${file} hash mismatch: expected ${expected}, got ${actual}.`)
+
+// A macOS sidecar must load on a machine that has nothing installed but macOS. A binary built on a
+// developer's Mac happily links whatever Homebrew left lying around, keeps working there, and then
+// dies with "Library not loaded" on every user's machine — and in CI it aborts before printing its
+// licence banner, so the gate below can only report the far less useful "could not read the banner".
+// Reading the load commands names the actual defect, and does it from any host, so a non-portable
+// binary cannot be seeded into the ffmpeg-sidecar release in the first place.
+if (platform === 'darwin') {
+  const foreign = nonPortableDylibs(bytes)
+  if (foreign === null) {
+    throw new Error(`${file} matched the reviewed sha256 but is not a Mach-O image, so it cannot run on macOS.`)
+  }
+  if (foreign.length > 0) {
+    throw new Error(
+      `${file} matched the reviewed sha256 but links ${foreign.length} librar${foreign.length === 1 ? 'y' : 'ies'} ` +
+        `that a clean macOS install does not have: ${foreign.join(', ')}. This is not a licensing failure — the ` +
+        `binary was built against locally installed libraries (Homebrew/MacPorts) and will fail with "Library not ` +
+        `loaded" for every user. Rebuild it self-contained with scripts/build-ffmpeg-sidecar-mac.sh, then re-seed ` +
+        `the ffmpeg-sidecar release and the manifest sha256 (docs/ENTERPRISE_RELEASE.md → ffmpeg Sidecar Provisioning).`
+    )
+  }
+}
 // Spawning the binary to read its license banner only works when the target
 // platform matches the actual host — a foreign-platform executable (PE on
 // macOS/Linux, Mach-O on Windows) can't run locally, so cross-verification
