@@ -31,6 +31,17 @@ const SCRIPT = resolve(__dirname, 'check-ffmpeg-sidecar.mjs')
 const platform = process.platform
 const arch = process.arch
 const isWindows = platform === 'win32'
+// On a darwin host the script's target defaults to the host, so the portability gate rejects these
+// fixtures as "not a Mach-O image" before reaching the spawn they exist to exercise — a fixture
+// cannot be both a `#!/bin/sh` script (needed to control the banner, or to force a spawn failure)
+// and a Mach-O image. Linux CI keeps the coverage. Do NOT "fix" this by narrowing the gate to
+// `target === 'mac'`: that would disable the portability check for the host-target run, which is the
+// invocation most likely to catch a bad rebuild on the maintainer's own Mac.
+const isMac = platform === 'darwin'
+// Where the mac target IS the host, the gate goes on to spawn the binary. The synthetic Mach-O
+// fixtures below are headers with no segment, no entry point and no signature, so macOS cannot load
+// them — a fixture limitation, not a gate defect.
+const macTargetIsHost = platform === 'darwin' && arch === 'arm64'
 const binaryName = isWindows ? 'ffmpeg.exe' : 'ffmpeg'
 const key = `${platform}-${arch}/${binaryName}`
 
@@ -74,8 +85,11 @@ function run(args: string[] = []): { status: number | null; output: string } {
 
 /**
  * Seed resources/ffmpeg/darwin-arm64/ffmpeg. Checking the macOS target from any host is the point:
- * the script skips the spawn when the target is not the host, so these cases exercise the
- * portability gate alone, on Linux and Windows CI as well as on a Mac.
+ * on every host EXCEPT darwin/arm64 the script skips the spawn, so these cases exercise the
+ * portability gate alone on Linux and Windows CI. On darwin/arm64 the target IS the host, so the
+ * gate proceeds to the spawn and the synthetic header cannot be loaded — there the accept case can
+ * only assert that the portability gate stayed silent. The end-to-end accept path is covered by the
+ * gate running against the real sidecar during predist.
  */
 function seedMac(content: Buffer): void {
   const dir = join(cwd, 'resources', 'ffmpeg', 'darwin-arm64')
@@ -124,7 +138,7 @@ describe('check-ffmpeg-sidecar licence gate', () => {
   // POSIX-only: asserting on banner CONTENT needs a fixture that prints a chosen string,
   // which on this host means a `#!/bin/sh` script. Windows cannot express that — see the
   // file header — and stock PE binaries print their own text, never an FFmpeg banner.
-  it.skipIf(isWindows)('accepts a binary whose banner reports the LGPL', () => {
+  it.skipIf(isWindows || isMac)('accepts a binary whose banner reports the LGPL', () => {
     seed('#!/bin/sh\necho "GNU Lesser General Public License version 2.1"\n')
     const { status, output } = run()
     expect(output).toContain('[check:ffmpeg] OK')
@@ -132,14 +146,14 @@ describe('check-ffmpeg-sidecar licence gate', () => {
   })
 
   // POSIX-only for the same reason as above: the fixture must emit `--enable-gpl`.
-  it.skipIf(isWindows)('rejects a binary built with GPL/nonfree parts', () => {
+  it.skipIf(isWindows || isMac)('rejects a binary built with GPL/nonfree parts', () => {
     seed('#!/bin/sh\necho "GNU Lesser General Public License --enable-gpl"\n')
     const { status, output } = run()
     expect(output).toContain('is not the reviewed LGPL-only decoder binary')
     expect(status).not.toBe(0)
   })
 
-  it('reports an unexecutable binary as an execution failure, not a licence failure', () => {
+  it.skipIf(isMac)('reports an unexecutable binary as an execution failure, not a licence failure', () => {
     // A shebang naming an interpreter that does not exist. Getting this to fail the SAME way on all
     // three hosts is fiddlier than it looks:
     //   - a raw non-image payload is not enough on Linux, because execvp() falls back to /bin/sh when
@@ -158,7 +172,7 @@ describe('check-ffmpeg-sidecar licence gate', () => {
     expect(output).not.toContain('is not the reviewed LGPL-only decoder binary')
   })
 
-  it('reports a non-zero exit as an execution failure, not a licence failure', () => {
+  it.skipIf(isMac)('reports a non-zero exit as an execution failure, not a licence failure', () => {
     // Runs on every host: this case only needs a real executable that exits non-zero
     // without a banner, which Windows CAN supply (unlike the two banner cases above).
     let expectedExit = 3
@@ -198,8 +212,19 @@ describe('check-ffmpeg-sidecar licence gate', () => {
       ])
     )
     const { status, output } = run(['mac', 'arm64'])
-    expect(output).toContain('[check:ffmpeg] OK')
-    expect(status).toBe(0)
+    // What this case locks is that the portability gate does NOT fire for system-only dylibs.
+    // That holds on every host.
+    expect(output).not.toContain('clean macOS install does not have')
+    expect(output).not.toContain('is not a Mach-O image')
+    if (macTargetIsHost) {
+      // Here the gate goes on to spawn the fixture, and macOS refuses to load a header with no
+      // segment or entry point. That is the fixture's limit, not the gate's, so the only claim
+      // left is that the failure was reported as an execution problem rather than a licence one.
+      expect(output).toContain('This is not a licensing failure')
+    } else {
+      expect(output).toContain('[check:ffmpeg] OK')
+      expect(status).toBe(0)
+    }
   })
 
   it('rejects a macOS sidecar that is not a Mach-O image', () => {
