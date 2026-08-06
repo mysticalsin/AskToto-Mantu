@@ -53,6 +53,36 @@ Re-run this (deleting the old release first, `gh release delete ffmpeg-sidecar-v
 only if the reviewed binaries themselves change — CI's `scripts/check-ffmpeg-sidecar.mjs` verifies the
 downloaded binary's SHA256 against `manifest.json` regardless of how it was provisioned.
 
+### Building the macOS sidecar
+
+**Never seed a macOS binary copied from a package manager or from a build that picked up locally
+installed libraries.** A binary built on a Mac that has Homebrew links Homebrew's dylibs by absolute
+path, runs perfectly on that Mac, and then fails on every user's machine with `Library not loaded`.
+This shipped once: the seeded asset linked `/opt/homebrew/opt/sdl2/lib/libSDL2-2.0.0.dylib`, matched
+its reviewed SHA-256, and aborted under dyld on the CI runner.
+
+Build it from source instead — on a Mac, from a clean checkout:
+
+```bash
+./scripts/build-ffmpeg-sidecar-mac.sh arm64
+```
+
+The script verifies the FFmpeg source tarball against the reviewed SHA-256, configures with
+`--disable-gpl --disable-nonfree --disable-autodetect` (the last flag is what stops configure linking
+whatever it finds on the build machine), confirms with `otool -L` that the result links nothing outside
+`/usr/lib` and `/System/Library`, checks the LGPL banner, ad-hoc signs it, and prints the new SHA-256
+plus the exact re-seed commands. Record that hash and the configure flags in
+`resources/ffmpeg/manifest.json`, then re-upload the asset:
+
+```bash
+gh release upload ffmpeg-sidecar-v1 /tmp/ffmpeg-darwin-arm64 --clobber --repo <owner>/<repo>
+```
+
+`check-ffmpeg-sidecar.mjs` independently reads the Mach-O load commands and fails the build if the
+sidecar declares any non-system dylib, so a non-portable binary cannot reach a release even if it was
+seeded by mistake. That check runs from any host, so `node scripts/check-ffmpeg-sidecar.mjs mac arm64`
+is a valid pre-flight from a Windows or Linux checkout too.
+
 ## Sherpa (Native ASR) Provisioning
 
 `sherpa-onnx-node` (the native Parakeet on-device ASR addon) ships as per-platform optional npm
