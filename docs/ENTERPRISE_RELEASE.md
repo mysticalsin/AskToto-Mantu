@@ -61,22 +61,13 @@ path, runs perfectly on that Mac, and then fails on every user's machine with `L
 This shipped once: the seeded asset linked `/opt/homebrew/opt/sdl2/lib/libSDL2-2.0.0.dylib`, matched
 its reviewed SHA-256, and aborted under dyld on the CI runner.
 
-Build it from source instead — on a Mac, from a clean checkout:
-
-```bash
-./scripts/build-ffmpeg-sidecar-mac.sh arm64
-```
-
-The script verifies the FFmpeg source tarball against the reviewed SHA-256, configures with
-`--disable-gpl --disable-nonfree --disable-autodetect` (the last flag is what stops configure linking
-whatever it finds on the build machine), confirms with `otool -L` that the result links nothing outside
-`/usr/lib` and `/System/Library`, checks the LGPL banner, ad-hoc signs it, and prints the new SHA-256
-plus the exact re-seed commands. Record that hash and the configure flags in
-`resources/ffmpeg/manifest.json`, then re-upload the asset:
-
-```bash
-gh release upload ffmpeg-sidecar-v1 /tmp/ffmpeg-darwin-arm64 --clobber --repo <owner>/<repo>
-```
+Build it from source instead — on a Mac, `./scripts/build-ffmpeg-sidecar-mac.sh arm64`. It verifies
+the FFmpeg source tarball against the reviewed SHA-256, configures with `--disable-gpl
+--disable-nonfree --disable-autodetect` (the last flag is what stops configure linking whatever it
+finds on the build machine), confirms with `otool -L` that the result links nothing outside `/usr/lib`
+and `/System/Library`, checks the LGPL banner, ad-hoc signs it, and prints the new SHA-256 plus the
+re-seed commands. **Full step-by-step, including how to verify it in the packaged app:
+[`MAC_SIDECAR_REBUILD.md`](MAC_SIDECAR_REBUILD.md).**
 
 `check-ffmpeg-sidecar.mjs` independently reads the Mach-O load commands and fails the build if the
 sidecar declares any non-system dylib, so a non-portable binary cannot reach a release even if it was

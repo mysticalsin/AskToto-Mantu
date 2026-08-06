@@ -71,7 +71,13 @@ make -j"$(sysctl -n hw.ncpu)"
 echo "==> Verifying the result is self-contained"
 # Belt and braces: --disable-autodetect should make this impossible, but the whole reason this script
 # exists is that a non-portable binary once got shipped, so prove it here rather than at package time.
-FOREIGN="$(otool -L ffmpeg | tail -n +2 | awk '{print $1}' | grep -v -e '^/usr/lib/' -e '^/System/Library/' || true)"
+# otool runs on its own line so `set -e` catches a broken toolchain — folding it into the pipeline
+# below would let `|| true` swallow otool's own failure and report a binary nothing ever examined.
+DEPS="$(otool -L ffmpeg)"
+# Select on the leading tab rather than `tail -n +2`: otool prints one header line per architecture,
+# so a universal binary has several, and dropping only the first turns the rest into bare filenames
+# that then fail the system-path test.
+FOREIGN="$(printf '%s\n' "$DEPS" | awk '/^\t/ {print $1}' | grep -v -e '^/usr/lib/' -e '^/System/Library/' || true)"
 if [ -n "$FOREIGN" ]; then
   echo "error: the built binary still links non-system libraries:" >&2
   echo "$FOREIGN" >&2
@@ -79,14 +85,25 @@ if [ -n "$FOREIGN" ]; then
 fi
 
 echo "==> Verifying the licence banner"
-if ! ./ffmpeg -L 2>&1 | grep -q "GNU Lesser General Public"; then
-  echo "error: the built binary does not report the LGPL." >&2
+# Run it once and separate "could not execute" from "wrong licence". Testing `! ./ffmpeg -L | grep -q`
+# conflates them: under pipefail any failure to RUN also negates to true and reports a licence
+# problem, while the mirrored nonfree test silently passes because its grep found nothing in the
+# empty output. That is the exact misdiagnosis check-ffmpeg-sidecar.mjs was rewritten to remove.
+if ! LICENSE_OUT="$(./ffmpeg -L 2>&1)"; then
+  echo "error: the freshly built binary could not be executed. This is not a licensing failure." >&2
+  echo "$LICENSE_OUT" >&2
   exit 1
 fi
-if ./ffmpeg -L 2>&1 | grep -q -e "nonfree parts compiled" -e "--enable-gpl"; then
-  echo "error: the built binary reports GPL/nonfree parts." >&2
-  exit 1
-fi
+case "$LICENSE_OUT" in
+  *"GNU Lesser General Public"*) ;;
+  *) echo "error: the built binary does not report the LGPL." >&2; exit 1 ;;
+esac
+case "$LICENSE_OUT" in
+  *"nonfree parts compiled"* | *"--enable-gpl"*)
+    echo "error: the built binary reports GPL/nonfree parts." >&2
+    exit 1
+    ;;
+esac
 
 mkdir -p "$OUT_DIR"
 cp ffmpeg "$OUT_DIR/ffmpeg"

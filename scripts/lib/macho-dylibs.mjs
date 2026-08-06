@@ -16,11 +16,14 @@ const MH_MAGIC_64 = 0xfeedfacf
 const FAT_MAGIC_32 = 0xcafebabe
 const FAT_MAGIC_64 = 0xcafebabf
 
-// Dependency-declaring load commands. LC_ID_DYLIB (0xd) is deliberately absent: it names the image
-// itself, not something dyld goes and loads, so counting it would flag every dylib as its own
-// dependency.
+// Dependency-declaring load commands, all sharing the dylib_command layout. Two deliberate
+// omissions: LC_ID_DYLIB (0xd) names the image itself rather than something dyld loads, so counting
+// it would flag every dylib as its own dependency; LC_PREBOUND_DYLIB (0x10) always accompanies a
+// real LC_LOAD_DYLIB for the same library, so counting it would report the same path twice.
+// LC_LAZY_LOAD_DYLIB carries no LC_REQ_DYLD high bit, unlike the three below it.
 const DYLIB_COMMANDS = new Set([
   0x0000000c, // LC_LOAD_DYLIB
+  0x00000020, // LC_LAZY_LOAD_DYLIB
   0x80000018, // LC_LOAD_WEAK_DYLIB
   0x8000001f, // LC_REEXPORT_DYLIB
   0x80000023 // LC_LOAD_UPWARD_DYLIB
@@ -99,6 +102,9 @@ export function machoLinkedDylibs(buffer) {
   if (magicBE === FAT_MAGIC_32 || magicBE === FAT_MAGIC_64) {
     const wide = magicBE === FAT_MAGIC_64
     const nfat = buffer.readUInt32BE(4)
+    // Fail closed. Zero slices would otherwise walk no images and return [], which the gate reads as
+    // "a valid macOS binary with no dependencies" for a file containing no executable code at all.
+    if (nfat === 0) throw new Error('Universal binary declares no architectures.')
     const entrySize = wide ? 32 : 20
     for (let i = 0; i < nfat; i++) {
       const entry = 8 + i * entrySize
