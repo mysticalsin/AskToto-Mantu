@@ -188,7 +188,14 @@ function decryptEnvelopeV2(buf: Buffer, allowKeychainRecovery = false, filePath?
     // changes. Atomic tmp+rename (mirrors writeSaved above), done synchronously like store.ts's own
     // legacy-format migration since this runs inside an otherwise-synchronous read. Best-effort: a
     // rewrap failure must never fail this read — the caller already has the decrypted content either way.
-    if (canRecover && filePath) {
+    //
+    // Only converge when the file backend is the ACTIVE write backend. On packaged Windows it is not:
+    // safeStorage (DPAPI) is the writer, so every new transcript is 'S:', and safeStorage.isEncryptionAvailable()
+    // is always true there — which made canRecover true and rewrapped every meeting to 'F:' the moment it was
+    // opened, silently materialising a secret-key.bin the profile never needed and moving the meeting off DPAPI.
+    // Gating on useFileBackend() keeps the convergence for the macOS forced-keystore case it was written for
+    // and makes it a no-op wherever safeStorage is the writer.
+    if (canRecover && filePath && useFileBackend()) {
       const tmp = `${filePath}.${randomBytes(6).toString('hex')}.tmp`
       try {
         const updated: EnvelopeV2 = { ...env, kLocal: 'F:' + encryptSecret(contentKeyB64).toString('base64') }
@@ -839,13 +846,34 @@ const transcript = formatTranscript(m.lines)
   }
 }
 
-/** Remove one meeting's autosave draft once it ends normally (its real saveMeeting() already succeeded). */
-export function clearDraftTranscript(settings: Settings, startedAt: number): void {
+/**
+ * Remove one meeting's autosave draft once it ends normally (its real saveMeeting() already succeeded).
+ *
+ * The unlink gets the same bounded retry writeSaved() uses for rename: the default meetings folder is
+ * OneDrive-synced, which routinely holds a just-written file open for upload hashing, and AV/EDR
+ * real-time scanning grabs it too — unlink then throws EPERM/EBUSY on Windows even though nothing is
+ * wrong. A single best-effort attempt leaves the draft on disk, and recoverOrphanDrafts() promotes it
+ * on the next launch, so the user sees their meeting twice with the second copy labelled
+ * "(recovered)". Retrying rides out the transient lock; a genuinely stuck file still degrades to the
+ * old behaviour rather than failing the meeting end.
+ */
+export async function clearDraftTranscript(settings: Settings, startedAt: number): Promise<void> {
   try {
     const file = join(resolveMeetingsFolder(settings), draftFilename(startedAt))
-    if (existsSync(file)) unlinkSync(file)
+    if (!existsSync(file)) return
+    for (let attempt = 0; ; attempt++) {
+      try {
+        await unlink(file)
+        return
+      } catch (e) {
+        const code = (e as NodeJS.ErrnoException).code
+        if (code === 'ENOENT') return
+        if ((code !== 'EPERM' && code !== 'EBUSY') || attempt >= 4) throw e
+        await new Promise((r) => setTimeout(r, 40 * 2 ** attempt))
+      }
+    }
   } catch {
-    /* best-effort */
+    /* best-effort — a stuck draft is recovered on next launch, it must never fail the meeting end */
   }
 }
 
