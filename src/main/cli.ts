@@ -256,7 +256,16 @@ export function cmdShimSpawn(
   // `"<bin>" <args>` — which runs correctly even when bin contains spaces/metacharacters, or args is
   // empty. Without windowsVerbatimArguments, libuv would itself quote the spaced bin, producing a
   // second, nested quote pair that cmd /s's single unwrap does not fully undo (see file header).
-  const inner = [`"${bin}"`, ...args].join(' ')
+  // Quote EVERY argument, not just bin. Joining raw args on a space loses two whole classes of
+  // argument: an empty string contributes nothing and disappears from the child's argv entirely, and
+  // an argument containing a space arrives as two. Both matter here — buildArgs emits
+  // `--allowedTools ''` and the codex `--model` value is free text a user can type into Settings —
+  // so the unquoted form silently delivered `--allowedTools --disallowedTools *`, dropping the
+  // tool-lockdown invariant this file's header declares must never be relaxed.
+  // Quoting is safe unconditionally: the guard above rejects `"` and `%` in every arg, cmd.exe does
+  // not glob, and the child's CRT strips the quotes, so `"*"` still reaches the child as `*`. cmd /s
+  // still peels exactly the one outer pair; these inner pairs are untouched.
+  const inner = [`"${bin}"`, ...args.map((a) => `"${a}"`)].join(' ')
   return { command: comSpecExe(), args: ['/d', '/s', '/c', `"${inner}"`], windowsVerbatimArguments: true }
 }
 
@@ -463,7 +472,13 @@ export function runCliStream(opts: RunCliStreamOpts): { abort: () => void } {
     }
     const child = spawn(spawnTarget.command, spawnTarget.args, {
       cwd,
-      signal: controller.signal,
+      // Do NOT hand the signal to spawn on the Windows .cmd-shim path. Node registers its own abort
+      // listener INSIDE spawn(), before the explicit listener below, and abort listeners fire in
+      // registration order — so Node killed cmd.exe first and the taskkill that follows found a dead
+      // pid ("process not found"), never walked the tree, and left the real claude/codex grandchild
+      // running. Making the explicit listener the single teardown path means nothing races taskkill
+      // to kill cmd.exe. Every other target keeps the built-in behaviour.
+      signal: spawnTarget.windowsVerbatimArguments ? undefined : controller.signal,
       env: { ...cliEnv(opts.providerId), ...spawnTarget.env },
       // SECURITY: never use shell:true — args are passed as an array. On Windows, cmd.exe may be the
       // spawn target for a .cmd shim (see resolveSpawnTarget) but it is never invoked as a shell here.
@@ -479,8 +494,20 @@ export function runCliStream(opts: RunCliStreamOpts): { abort: () => void } {
     })
     // AbortController's own signal-linked kill only terminates this immediate child — on the Windows
     // .cmd-shim path that's cmd.exe, not the grandchild claude/codex node process (see
-    // killWindowsProcessTree). Cascade the kill so an abort/idle-timeout doesn't orphan it.
-    controller.signal.addEventListener('abort', () => killWindowsProcessTree(child.pid), { once: true })
+    // killWindowsProcessTree). On that path spawn() was given no signal (above), so this listener is
+    // the whole teardown: taskkill /T reaps cmd.exe AND its descendants while cmd.exe is still alive
+    // and the tree is still walkable. Elsewhere Node has already killed the child and this is the
+    // harmless cascade it always was.
+    controller.signal.addEventListener(
+      'abort',
+      () => {
+        killWindowsProcessTree(child.pid)
+        // taskkill is async and only exists on win32; on every other platform the shim path never
+        // applies, so nothing was killed above and the child still needs terminating.
+        if (process.platform !== 'win32') child.kill()
+      },
+      { once: true }
+    )
 
     // Write content to stdin — keeps transcript and system text out of argv (ps -ww / /proc).
     // System text (if any) is prepended so the CLI sees it before the user prompt.

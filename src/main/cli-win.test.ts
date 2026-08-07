@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { spawnSync } from 'node:child_process'
 import { EventEmitter } from 'node:events'
 import { PassThrough } from 'node:stream'
 
@@ -15,11 +16,14 @@ vi.mock('electron', () => ({
   shell: { openPath: vi.fn() }
 }))
 
-vi.mock('node:child_process', async () => {
+vi.mock('node:child_process', async (importActual) => {
   const { promisify } = await import('node:util')
+  const actual = await importActual<typeof import('node:child_process')>()
   const execFile: unknown = vi.fn()
   ;(execFile as Record<symbol, unknown>)[promisify.custom] = h.execFileImpl
-  return { execFile, spawn: h.spawnImpl }
+  // spawnSync stays REAL: the argv-delivery test below has to run an actual cmd.exe shim to prove
+  // what the child receives, which is precisely the thing a mocked spawn cannot tell us.
+  return { execFile, spawn: h.spawnImpl, spawnSync: actual.spawnSync }
 })
 
 // The self-contained installer (cli-installer.ts) — the fallback the npm-failure paths now route to
@@ -185,7 +189,7 @@ describe('isCmdShim / cmdShimSpawn / resolveSpawnTarget — Windows shim launch 
     const r = cmdShimSpawn('C:\\npm\\claude.cmd', ['-p', '--model', 'sonnet'])
     expect(r).toEqual({
       command: 'C:\\Windows\\System32\\cmd.exe',
-      args: ['/d', '/s', '/c', '""C:\\npm\\claude.cmd" -p --model sonnet"'],
+      args: ['/d', '/s', '/c', '""C:\\npm\\claude.cmd" "-p" "--model" "sonnet""'],
       windowsVerbatimArguments: true
     })
     if (saved === undefined) delete process.env.ComSpec
@@ -241,7 +245,7 @@ describe('isCmdShim / cmdShimSpawn / resolveSpawnTarget — Windows shim launch 
     ).not.toThrow()
     expect(() => cmdShimSpawn('C:\\Users\\R&D\\AppData\\Roaming\\npm\\claude.cmd', [])).not.toThrow()
     const r = cmdShimSpawn('C:\\Users\\Smith (IT)\\AppData\\Roaming\\npm\\claude.cmd', ['-p'])
-    expect(r.args[3]).toBe('""C:\\Users\\Smith (IT)\\AppData\\Roaming\\npm\\claude.cmd" -p"')
+    expect(r.args[3]).toBe('""C:\\Users\\Smith (IT)\\AppData\\Roaming\\npm\\claude.cmd" "-p""')
     expect(r.windowsVerbatimArguments).toBe(true)
   })
 
@@ -253,13 +257,49 @@ describe('isCmdShim / cmdShimSpawn / resolveSpawnTarget — Windows shim launch 
 
   it('accepts a normal, fully-vocabulary arg list and produces the quoted, verbatim command line', () => {
     const r = cmdShimSpawn('C:\\npm\\claude.cmd', ['-p', '--allowedTools', '', '--disallowedTools', '*'])
+    // Every arg carries its own quotes. The empty --allowedTools value is the point: unquoted it
+    // collapsed into whitespace and vanished from the child's argv, so the child saw
+    // `--allowedTools --disallowedTools *` and the tool lockdown silently did not apply.
     expect(r.args).toEqual([
       '/d',
       '/s',
       '/c',
-      '""C:\\npm\\claude.cmd" -p --allowedTools  --disallowedTools *"'
+      '""C:\\npm\\claude.cmd" "-p" "--allowedTools" "" "--disallowedTools" "*""'
     ])
     expect(r.windowsVerbatimArguments).toBe(true)
+  })
+
+  // A string assertion cannot prove argv DELIVERY — the previous command line looked reasonable and
+  // still lost the empty argument inside cmd.exe. This spawns a real .cmd shim and reads back what
+  // the child actually received. Windows-only: it depends on cmd.exe's own parsing.
+  it.skipIf(process.platform !== 'win32')('delivers an empty argument to the child through cmd.exe', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'cli-shim-'))
+    // A script FILE, not `node -e`: with -e, node keeps parsing leading `--flags` as its own options
+    // and dies on `--allowedTools`. Passing a script path stops node's option parsing, so everything
+    // after it lands in process.argv exactly as cmd.exe delivered it.
+    const helper = join(dir, 'echoargs.mjs')
+    writeFileSync(helper, 'console.log(JSON.stringify(process.argv.slice(2)))\n', 'ascii')
+    const shim = join(dir, 'echoargs.cmd')
+    // .cmd must be CRLF + ASCII: cmd.exe misparses an LF-only batch file.
+    writeFileSync(shim, `@echo off\r\n"${process.execPath}" "${helper}" %*\r\n`, 'ascii')
+    try {
+      const spawned = cmdShimSpawn(shim, ['-p', '--allowedTools', '', '--disallowedTools', '*'])
+      const r = spawnSync(spawned.command, spawned.args, {
+        encoding: 'utf8',
+        windowsVerbatimArguments: spawned.windowsVerbatimArguments
+      })
+      expect(r.error).toBeUndefined()
+      expect(JSON.parse(r.stdout.trim())).toEqual(['-p', '--allowedTools', '', '--disallowedTools', '*'])
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('keeps an argument containing spaces as ONE argument', () => {
+    // codex's --model value is free text a user types into Settings; unquoted, "gpt-5 codex" would
+    // reach the child as two arguments.
+    const r = cmdShimSpawn('C:\\npm\\codex.cmd', ['-m', 'gpt-5 codex'])
+    expect(r.args[3]).toBe('""C:\\npm\\codex.cmd" "-m" "gpt-5 codex""')
   })
 
   it('resolveSpawnTarget spawns a .exe directly (no cmd.exe wrapping, verbatim undefined)', () => {
@@ -276,7 +316,7 @@ describe('isCmdShim / cmdShimSpawn / resolveSpawnTarget — Windows shim launch 
     process.env.SystemRoot = 'C:\\Windows'
     const shim = resolveSpawnTarget('C:\\npm\\claude.cmd', ['-p'])
     expect(shim.command).toBe('C:\\Windows\\System32\\cmd.exe')
-    expect(shim.args).toEqual(['/d', '/s', '/c', '""C:\\npm\\claude.cmd" -p"'])
+    expect(shim.args).toEqual(['/d', '/s', '/c', '""C:\\npm\\claude.cmd" "-p""'])
     expect(shim.windowsVerbatimArguments).toBe(true)
     if (savedComSpec !== undefined) process.env.ComSpec = savedComSpec
     if (savedSystemRoot === undefined) delete process.env.SystemRoot
