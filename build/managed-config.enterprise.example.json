@@ -1,5 +1,5 @@
 {
-  "_comment": "Enterprise deployment policy. Copy to managed-config.json and deploy machine-wide: macOS /Library/Application Support/AskToto/managed-config.json, Windows %ProgramData%\\AskToto\\managed-config.json. Replace placeholder IDs and URLs before rollout.",
+  "_comment": "Enterprise deployment policy. Copy to managed-config.json and deploy machine-wide: macOS /Library/Application Support/Métis/managed-config.json, Windows %ProgramData%\\Métis\\managed-config.json. These paths must match exactly — the app reads only this location (adminManagedConfigPath in src/main/win-security.ts); a policy dropped anywhere else is silently ignored, so the fleet keeps running unmanaged with no error. Replace placeholder IDs and URLs before rollout.",
   "locked": [
     "azureClientId",
     "azureTenantId",

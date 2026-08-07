@@ -67,8 +67,17 @@ the `check:release` preflight enforces `releaseType: release` so the feed never 
 ## Managed configuration
 
 Machine-wide policy file (e.g. lock transcript encryption on, pin the allowed SSO domain) per
-`build/managed-config.example.json`. On Windows the machine-level file is only honored when its
-ACL is admin-owned (`src/main/win-security.ts`) — a non-admin user cannot plant policy.
+`build/managed-config.example.json`. Deploy it to exactly:
+
+```
+%ProgramData%\Métis\managed-config.json
+```
+
+That path is the only one the app reads (`adminManagedConfigPath`, `src/main/win-security.ts`), and
+the directory name is the accented `Métis`. A policy file anywhere else — including
+`%ProgramData%\Metis` or `%ProgramData%\AskToto` — is silently ignored, so the fleet keeps running
+unmanaged with nothing logged. On Windows the machine-level file is only honored when its ACL is
+admin-owned (`src/main/win-security.ts`) — a non-admin user cannot plant policy.
 
 ## Privacy / data posture (for IT review)
 
