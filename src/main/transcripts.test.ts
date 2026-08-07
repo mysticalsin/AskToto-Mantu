@@ -543,7 +543,7 @@ describe('saveDraftTranscript / clearDraftTranscript (crash-recovery autosave)',
     const other: SaveMeeting = { ...meeting, startedAt: 1_600_000_000_000 }
     await saveDraftTranscript(settings, meeting)
     await saveDraftTranscript(settings, other)
-    clearDraftTranscript(settings, meeting.startedAt)
+    await clearDraftTranscript(settings, meeting.startedAt)
     const drafts = readdirSync(folder).filter((f) => f.startsWith('.autosave-draft-'))
     expect(drafts.length).toBe(1) // only `other`'s draft remains
   })
@@ -552,7 +552,9 @@ describe('saveDraftTranscript / clearDraftTranscript (crash-recovery autosave)',
     await expect(
       saveDraftTranscript({ ...settings, meetingsFolder: '/nonexistent/\0bad' }, meeting)
     ).resolves.toBeUndefined()
-    expect(() => clearDraftTranscript({ ...settings, meetingsFolder: '/nonexistent/\0bad' }, meeting.startedAt)).not.toThrow()
+    await expect(
+      clearDraftTranscript({ ...settings, meetingsFolder: '/nonexistent/\0bad' }, meeting.startedAt)
+    ).resolves.toBeUndefined()
   })
 })
 

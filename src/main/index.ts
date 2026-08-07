@@ -3084,7 +3084,7 @@ function registerIpc(): void {
     if (!requireAuth()) throw new Error('Not signed in.')
     const m = SaveMeetingSchema.parse(raw)
     const r = { path: await saveMeeting(getSettings(), m) }
-    clearDraftTranscript(getSettings(), m.startedAt) // the real save landed — this autosave is now stale
+    void clearDraftTranscript(getSettings(), m.startedAt) // the real save landed — this autosave is now stale
     auditLog('transcript.saved', {
       mode: m.mode,
       lines: m.lines.length,
