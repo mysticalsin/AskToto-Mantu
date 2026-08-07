@@ -264,3 +264,4 @@ jobs:
             release/*.appx
             release/*.blockmap
             release/latest*.yml
+            release-appx/*.appx

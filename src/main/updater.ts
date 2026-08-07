@@ -119,6 +119,18 @@ export function initAutoUpdate(getWin: () => BrowserWindow | null): void {
   }
   if (!app.isPackaged) return
   if ((process as NodeJS.Process & { mas?: boolean }).mas) return
+  // The Store (MSIX/AppX) build must never self-update: updating a packaged app is the Store's job,
+  // and a packaged app installing software outside its own package is a certification violation.
+  // Electron sets process.windowsStore for any MSIX/AppX package. Without this the only thing keeping
+  // the updater quiet is that electron-builder happens not to write app-update.yml for an appx-only
+  // target — and that does not hold when the nsis and appx targets share release/win-unpacked (which
+  // both CI and the documented Store flow do), because AppXTarget packs the whole directory. The Store
+  // copy would then download the 1.4 GB NSIS installer and either promise a restart that never
+  // installs, or lay down a second non-Store copy alongside itself.
+  if ((process as NodeJS.Process & { windowsStore?: boolean }).windowsStore) {
+    log.info('[updater] Store package — updates are the Store\'s job, skipping')
+    return
+  }
   // IT kill-switch: a managed-config policy can freeze the version fleet-wide (staged-rollout control).
   if (autoUpdateDisabledByPolicy()) {
     log.info('[updater] auto-update disabled by managed-config policy')
