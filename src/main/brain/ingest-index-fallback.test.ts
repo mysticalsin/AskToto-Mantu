@@ -6,7 +6,7 @@ import { app } from 'electron'
 import { PROVIDER_IDS } from '@shared/providers'
 import type { StreamHandlers, StreamOptions, StreamHandle } from '../llm/shared'
 import { clearApiKey, getSettings, setApiKey, setSettings } from '../store'
-import { brainBackfillProgress, startBackfill, whenIndexWritesSettle } from './ingest'
+import { brainBackfillProgress, ingestFailureDetails, startBackfill, whenIndexWritesSettle } from './ingest'
 import { readIndex } from './store'
 
 vi.mock('electron')
@@ -32,7 +32,7 @@ vi.mock('../llm', () => ({ createStream: createStreamMock }))
  * Meeting-index reliability fix: brain/ingest.ts's cloud failover waterfall (ingest-resilience.test.ts)
  * had nothing to fail over to when only one cloud provider was ever configured (the Cahê pilot's
  * single embedded Kimi key) — a down/unreachable/misconfigured sole provider meant the meeting simply
- * never got indexed. This suite covers the new `localLlm.indexFallback` last-resort candidate appended
+ * never got indexed. This suite covers the new `localLlm.fallback` last-resort candidate appended
  * to the END of pickProviderCandidates()'s cloud waterfall.
  */
 describe('brain ingest — local last-resort index fallback', () => {
@@ -77,7 +77,7 @@ describe('brain ingest — local last-resort index fallback', () => {
         enabled: true,
         modelId: 'qwen3.5-0.8b',
         useFor: { suggest: true, summary: false, vision: true }, // summary OFF: exercise the cloud-waterfall branch, not the exclusive-local one
-        indexFallback: true
+        fallback: true
       }
     })
     createStreamMock.mockReset()
@@ -146,19 +146,19 @@ describe('brain ingest — local last-resort index fallback', () => {
     expect(createStreamMock.mock.calls.map((c) => c[0].providerId)).toEqual(['anthropic', 'openai', 'local'])
   })
 
-  it('leaves legacy behavior unchanged when indexFallback is off — still throws with cloud exhausted', async () => {
+  it('leaves legacy behavior unchanged when fallback is off — still throws with cloud exhausted', async () => {
     writeFileSync(join(meetingsFolder, 'fallback-off.md'), '---\ndate: 2026-01-04\n---\nAcme call.', 'utf8')
     // Deny-all allowlist guarantees zero cloud candidates regardless of any key leaked from an earlier
     // test's _apiKeyCache entry (see the comment in the zero-cloud test above) — the fallback is also
     // explicitly off, so this proves BOTH gates independently keep the pool empty.
     writeFileSync(join(userData, 'managed-config.json'), JSON.stringify({ allowedProviders: [] }), 'utf8')
-    setSettings({ localLlm: { ...getSettings().localLlm, indexFallback: false } })
+    setSettings({ localLlm: { ...getSettings().localLlm, fallback: false } })
     createStreamMock.mockImplementation(respondJson())
 
     // startBackfill's own hasUsableProvider() precheck (ingest.ts) bails out BEFORE ever queuing the
     // job when nothing is eligible — it does not queue-then-fail. The file is left pending (no
     // index.json record at all) for the next reconcile once a provider becomes available, exactly the
-    // legacy "single Kimi key down" outcome this change must not alter when indexFallback is off.
+    // legacy "single Kimi key down" outcome this change must not alter when fallback is off.
     expect(startBackfill()).toEqual({ queued: 0, deferred: 'no-provider' })
     await waitForIdle()
 
@@ -166,11 +166,11 @@ describe('brain ingest — local last-resort index fallback', () => {
     expect(createStreamMock).not.toHaveBeenCalled()
   })
 
-  it('leaves the exclusive local-only mode (useFor.summary) completely unaffected by indexFallback', async () => {
+  it('leaves the exclusive local-only mode (useFor.summary) completely unaffected by fallback', async () => {
     writeFileSync(join(meetingsFolder, 'exclusive-local.md'), '---\ndate: 2026-01-05\n---\nAcme call.', 'utf8')
     setApiKey('anthropic', 'fake-anthropic-key') // a healthy cloud provider IS configured...
     setSettings({
-      localLlm: { ...getSettings().localLlm, useFor: { ...getSettings().localLlm.useFor, summary: true }, indexFallback: false }
+      localLlm: { ...getSettings().localLlm, useFor: { ...getSettings().localLlm.useFor, summary: true }, fallback: false }
     })
     createStreamMock.mockImplementation(respondJson())
 
@@ -184,16 +184,16 @@ describe('brain ingest — local last-resort index fallback', () => {
     expect(createStreamMock.mock.calls[0][0].providerId).toBe('local')
   })
 
-  it('never falls back to local when localLlm.enabled is off, even with indexFallback on', async () => {
+  it('never falls back to local when localLlm.enabled is off, even with fallback on', async () => {
     writeFileSync(join(meetingsFolder, 'local-disabled.md'), '---\ndate: 2026-01-06\n---\nAcme call.', 'utf8')
     // Deny-all allowlist keeps cloud eligibility at zero regardless of any leaked key, isolating this
     // test to proving the ONE thing it's about: localLlm.enabled=false blocks the fallback even though
-    // indexFallback is on and local would otherwise be reachable (localBaseReady's first check).
+    // fallback is on and local would otherwise be reachable (localBaseReady's first check).
     writeFileSync(join(userData, 'managed-config.json'), JSON.stringify({ allowedProviders: [] }), 'utf8')
-    setSettings({ localLlm: { ...getSettings().localLlm, enabled: false, indexFallback: true } })
+    setSettings({ localLlm: { ...getSettings().localLlm, enabled: false, fallback: true } })
     createStreamMock.mockImplementation(respondJson())
 
-    // Same graceful-defer contract as the indexFallback-off test above — nothing queued, nothing
+    // Same graceful-defer contract as the fallback-off test above — nothing queued, nothing
     // attempted, the file waits for a real provider instead of failing loudly.
     expect(startBackfill()).toEqual({ queued: 0, deferred: 'no-provider' })
     await waitForIdle()
@@ -245,6 +245,35 @@ describe('brain ingest — local last-resort index fallback', () => {
     const order = createStreamMock.mock.calls.map((c) => c[0].providerId)
     expect(order.at(-1)).toBe('local')
     expect(order.indexOf('local')).toBe(order.length - 1)
+  })
+
+  it('redacts absolute paths out of per-file failure details before they reach the renderer', () => {
+    // fs errors quote the full path (Windows username included); the ledger key already names the file,
+    // so the embedded path is pure disclosure — a support-channel screenshot of the tooltip must not
+    // leak the local directory layout. Pure-function check, no backfill needed.
+    const details = ingestFailureDetails({
+      version: 1,
+      ingested: {
+        'bad-meeting.md': {
+          at: 2,
+          ok: false,
+          error: "ENOENT: no such file or directory, open 'C:\\Users\\Tony\\OneDrive\\Meetings\\bad-meeting.md'"
+        },
+        'mac-meeting.md': {
+          at: 1,
+          ok: false,
+          error: 'EACCES: permission denied, open /Users/tony/Documents/meetings/mac-meeting.md'
+        },
+        'fine.md': { at: 3, ok: true }
+      }
+    } as never)
+    expect(details).toHaveLength(2)
+    expect(details[0].error).not.toContain('C:\\Users')
+    expect(details[0].error).not.toContain('Tony')
+    expect(details[0].error).toContain('ENOENT')
+    expect(details[0].error).toContain('bad-meeting.md') // basename survives — still actionable
+    expect(details[1].error).not.toContain('/Users/tony')
+    expect(details[1].error).toContain('mac-meeting.md')
   })
 
   it('propagates the last error and records ok:false when local ALSO fails after cloud is exhausted', async () => {

@@ -131,12 +131,15 @@ export function meetingIndexStatus(
 // Knowledge-graph status bar — unchanged from original
 // ---------------------------------------------------------------------------
 
-function GraphBar(): JSX.Element | null {
+function GraphBar({ onOpenSettings }: { onOpenSettings?: () => void }): JSX.Element | null {
   // Mantu Intelligence — the meeting brain (people, accounts, deals, win/loss reasons, graph).
   // Replaces the old graphify note-graph as the "open graph" surface in History.
   const [brain, setBrain] = useState<import('@shared/brain').BrainStatus | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  // Distinguishes the deferred "no-provider" error (fixable via Settings → AI) from any other backfill
+  // failure (network blip, etc.) — only the former gets an Open Settings action below.
+  const [noProvider, setNoProvider] = useState(false)
   useEffect(() => {
     void window.toto.brainStatus().then(setBrain).catch(() => {})
   }, [])
@@ -157,10 +160,16 @@ function GraphBar(): JSX.Element | null {
   const backfill = async (): Promise<void> => {
     setBusy(true)
     setError(null)
+    setNoProvider(false)
     try {
       const result = await window.toto.brainBackfill()
       if (result.deferred === 'no-provider') {
+        // Main already OR's in the local safety net (ingest.ts's pickProviderCandidates appends the
+        // on-device model as a last candidate when localLlm.fallback is on) — this deferral only ever
+        // fires when NEITHER a cloud/CLI provider NOR local fallback is usable, so the message stays
+        // accurate without the renderer re-deriving readiness itself.
         setError('Connect an AI provider in Settings → AI, or enable Métis Local there to index meetings on this device.')
+        setNoProvider(true)
         return
       }
       setBrain(await window.toto.brainStatus())
@@ -219,6 +228,7 @@ function GraphBar(): JSX.Element | null {
           )}
         </div>
         <div className="flex shrink-0 items-center gap-1">
+          {noProvider && onOpenSettings && <TextButton onClick={onOpenSettings}>Open Settings</TextButton>}
           <TextButton
             onClick={() => void backfill()}
             disabled={busy || backfilling}
@@ -426,6 +436,7 @@ const MeetingRow = memo(function MeetingRow({
   isOpen,
   error,
   indexStatus,
+  indexError,
   onSelect,
   onOpen,
   onToggleConnections,
@@ -452,6 +463,9 @@ const MeetingRow = memo(function MeetingRow({
   error: string | null
   /** T6 6d: Mantu Intelligence status dot — null renders nothing (no ingest signal yet). */
   indexStatus: MeetingIndexStatus | null
+  /** FIX 4: the failed source's own error string (bounded — up to 20 across the whole list, see
+   *  ingestStatus above), shown as the failed dot's tooltip. Null when unknown/not failed. */
+  indexError: string | null
   onSelect: (file: string) => void
   onOpen: (file: string) => void
   onToggleConnections: (file: string) => void
@@ -465,6 +479,15 @@ const MeetingRow = memo(function MeetingRow({
 }): JSX.Element {
   const m = meeting
   const hit = 'snippet' in m ? (m as RecallHit) : null
+  // One string for both the pointer tooltip and the accessible name — the dot is this row's only
+  // per-meeting surface of the failure reason, so the two must never drift apart.
+  const indexStatusText =
+    indexStatus === 'indexed'
+      ? 'Indexed in Mantu Intelligence'
+      : indexStatus === 'failed'
+        ? // FIX 4: name the actual reason when it's known, instead of a generic message.
+          `Intelligence extraction failed${indexError ? `: ${indexError}` : ''} — retry from Mantu Intelligence`
+        : 'Queued for Mantu Intelligence indexing'
 
   return (
     <div className={`rounded-lg transition-colors${isSelected ? ' bg-white/[0.08]' : ''}`}>
@@ -511,17 +534,13 @@ const MeetingRow = memo(function MeetingRow({
                 <FileText size={12} className="shrink-0 text-[color:var(--color-ink-3)]" />
               )}
               {/* T6 6d: smallest-possible Mantu Intelligence indicator — a dot, color is state (never
-                  color alone; the title attribute carries the same info as text). */}
+                  color alone; title carries the text for pointer users, aria-label for assistive tech —
+                  it must exist in the accessibility tree, not be aria-hidden decoration). */}
               {indexStatus && (
                 <span
-                  aria-hidden="true"
-                  title={
-                    indexStatus === 'indexed'
-                      ? 'Indexed in Mantu Intelligence'
-                      : indexStatus === 'failed'
-                        ? 'Intelligence extraction failed — retry from Mantu Intelligence'
-                        : 'Queued for Mantu Intelligence indexing'
-                  }
+                  role="img"
+                  aria-label={indexStatusText}
+                  title={indexStatusText}
                   className={`h-1.5 w-1.5 shrink-0 rounded-full ${
                     indexStatus === 'indexed'
                       ? 'bg-[var(--color-success)]'
@@ -673,7 +692,8 @@ export function RecallView({
   activeFile,
   onNewChat,
   onOpenMeeting,
-  onIntelligence
+  onIntelligence,
+  onOpenSettings
 }: {
   onOpenFolder: () => void
   /** Optional: ← back button in the header. */
@@ -688,6 +708,9 @@ export function RecallView({
   onOpenMeeting?: (file: string) => void
   /** Optional: opens the Mantu Intelligence dashboard (brain view). */
   onIntelligence?: () => void
+  /** Optional: opens Settings → AI — GraphBar's no-provider message needs a real way out, and this view
+   *  lives in the same window as Settings (just a `setView` swap in App.tsx). */
+  onOpenSettings?: () => void
 }): JSX.Element {
   const [q, setQ] = useState('')
   // Always the LATEST typed query, readable from a stable (empty-deps) callback — refreshList (below)
@@ -736,10 +759,14 @@ export function RecallView({
   /** T6 6d: per-meeting Mantu Intelligence status feed — indexed/failed filename sets plus whether a
    *  backfill is currently requested, everything meetingIndexStatus needs for the row dot. A separate
    *  poll from GraphBar's own brainStatus fetch below (that bar's busy/error/backfill-run state is local
-   *  to it and needs a tighter cadence while a batch is running); this one only needs the plain sets. */
+   *  to it and needs a tighter cadence while a batch is running); this one only needs the plain sets.
+   *  FIX 4: `errors` mirrors the bounded failedDetails payload (main never ships the whole ledger) — file
+   *  → the same error string powering BrainView's expandable failure detail, so a failed row's tooltip
+   *  can name the actual reason instead of a generic "extraction failed". */
   const [ingestStatus, setIngestStatus] = useState<{
     indexed: ReadonlySet<string>
     failed: ReadonlySet<string>
+    errors: ReadonlyMap<string, string>
     backfillRequested: boolean
   } | null>(null)
   useEffect(() => {
@@ -752,6 +779,9 @@ export function RecallView({
           setIngestStatus({
             indexed: new Set(b.ingestedFiles ?? []),
             failed: new Set(b.failedFiles ?? []),
+            errors: new Map(
+              (b.failedDetails ?? []).map((d) => [d.file, d.exhausted ? `Exhausted: ${d.error}` : d.error])
+            ),
             backfillRequested: !!b.backfillRequested
           })
         })
@@ -1153,7 +1183,7 @@ export function RecallView({
 
       {/* ── KNOWLEDGE GRAPH STATUS ──────────────────────────────────────── */}
       <div className="mb-2">
-        <GraphBar />
+        <GraphBar onOpenSettings={onOpenSettings} />
       </div>
 
       {/* ── DATE-GROUPED MEETING LIST ───────────────────────────────────── */}
@@ -1188,6 +1218,7 @@ export function RecallView({
                     isOpen={open === m.file}
                     error={rowErrors[m.file] ?? null}
                     indexStatus={meetingIndexStatus(m.file, ingestStatus)}
+                    indexError={ingestStatus?.errors.get(m.file) ?? null}
                     onSelect={selectFile}
                     onOpen={openMeeting}
                     onToggleConnections={toggleConnections}

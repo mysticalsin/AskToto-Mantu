@@ -78,6 +78,31 @@ export function localEligibleFor(
 }
 
 /**
+ * "Local as safety net" (localLlm.fallback): whether 'local' may serve THIS request as the strictly-LAST
+ * resort once every cloud/CLI route is exhausted or none was ever configured. Deliberately ignores the
+ * per-mode useFor opt-in — useFor[mode] means "local FIRST for this mode" (it preempts a configured
+ * cloud provider via pickPrimaryProvider), while fallback means "local LAST, only when nothing else can
+ * answer". Everything else about local's v1 scope still binds: in-scope modes only (never answer/recap),
+ * base tier only for text (the same gate localEligibleFor enforces — a deep/thinking escalation must not
+ * land on the small bundled model just because cloud is down), and the full localBaseReady() eligibility
+ * (enabled + provisioned + org allowlist permits 'local'). index.ts consults this at the same two seams
+ * as localEligibleFor — the ineligible chain and pickFailover's candidate filter — plus the primary pick
+ * when NO other provider is ready at all, so a zero-API-key install still gets in-scope answers instead
+ * of "no provider" while a capable model sits on disk.
+ */
+export function localFallbackEligibleFor(
+  req: { mode: AskMode },
+  s: Pick<Settings, 'localLlm'>,
+  tier: ModelTier,
+  allowed: string[] | null
+): boolean {
+  if (!s.localLlm.fallback) return false
+  if (!isLocalScopedMode(req.mode)) return false
+  if (req.mode !== 'vision' && tier !== 'base') return false
+  return localBaseReady(s, allowed)
+}
+
+/**
  * The screenshot toggle is a privacy policy, not only a routing preference. It is intentionally based on
  * user intent rather than current runtime readiness: if installer assets are damaged or org policy blocks
  * local, the request must fail locally with no upload instead of quietly selecting a cloud provider.

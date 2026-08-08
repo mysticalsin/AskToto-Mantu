@@ -181,8 +181,15 @@ describe('AskStart screen fast-path fields (M13)', () => {
 })
 
 describe('SettingsSchema', () => {
-  it('defaults backgroundScreenContext on (inert until Local AI is enabled)', () => {
-    expect(DEFAULT_SETTINGS.backgroundScreenContext).toBe(true)
+  it('defaults backgroundScreenContext OFF — continuous screen capture is its own opt-in', () => {
+    // This used to default on, relying on localLlm.enabled defaulting off to stay inert. With Local AI
+    // now enabled by default (fallback safety net), a true default here would silently start continuous
+    // foreground-window capture + captioning on every fresh install. Both defaults must never be true.
+    expect(DEFAULT_SETTINGS.backgroundScreenContext).toBe(false)
+    expect(SettingsSchema.parse(DEFAULT_SETTINGS).backgroundScreenContext).toBe(false)
+    expect(
+      DEFAULT_SETTINGS.localLlm.enabled && DEFAULT_SETTINGS.backgroundScreenContext
+    ).toBe(false)
   })
 
   it('rejects custom provider with an empty base URL', () => {
@@ -554,7 +561,7 @@ describe('AttentionItemSchema / BrainAttentionResultSchema (brain:attention)', (
   }
 
   it('accepts every item kind and wraps into the {items} result', () => {
-    for (const kind of ['lint', 'ambiguous', 'contradicted_pin']) {
+    for (const kind of ['lint', 'ambiguous', 'contradicted_pin', 'ingest_failed']) {
       expect(AttentionItemSchema.safeParse({ ...valid, kind }).success).toBe(true)
     }
     expect(BrainAttentionResultSchema.safeParse({ items: [valid] }).success).toBe(true)
@@ -566,6 +573,17 @@ describe('AttentionItemSchema / BrainAttentionResultSchema (brain:attention)', (
     expect(AttentionItemSchema.safeParse({ ...valid, entityKind: 'meeting' }).success).toBe(false)
     expect(AttentionItemSchema.safeParse({ ...valid, id: '' }).success).toBe(false)
     expect(BrainAttentionResultSchema.safeParse({}).success).toBe(false)
+  })
+
+  it('accepts an ingest_failed item with entityKind omitted — it is not entity-linked', () => {
+    expect(
+      AttentionItemSchema.safeParse({
+        kind: 'ingest_failed',
+        id: 'bad-meeting.md',
+        label: 'bad-meeting.md',
+        detail: 'Failed to index: Provider timeout'
+      }).success
+    ).toBe(true)
   })
 })
 

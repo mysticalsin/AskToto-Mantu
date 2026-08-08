@@ -1487,10 +1487,10 @@ function LocalAiSection({
         <div className="flex flex-col gap-0.5 pt-1">
           <span className="text-[12px] font-medium text-[color:var(--cl-foreground)]">Fallback</span>
           <ToggleRow
-            label="Use as a meeting-indexing fallback"
-            desc="If every configured cloud provider is unreachable or none is set up, index meetings on-device as a last resort instead of leaving them unindexed."
-            on={settings.localLlm.indexFallback}
-            onChange={(v) => patch({ localLlm: { ...settings.localLlm, indexFallback: v } })}
+            label="Use as a fallback when cloud AI is unavailable"
+            desc="If every configured cloud provider is unreachable or none is set up, run meeting indexing, live suggestions, summaries and screenshot analysis on-device as a last resort — instead of failing. Cloud providers are always preferred when they work."
+            on={settings.localLlm.fallback}
+            onChange={(v) => patch({ localLlm: { ...settings.localLlm, fallback: v } })}
           />
         </div>
 
