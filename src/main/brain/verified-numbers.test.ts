@@ -61,6 +61,37 @@ describe('splitIntoWindows', () => {
     }
   })
 
+  // MQA-017 (docs/qa/BUG-LEDGER.md): `i` advanced only on the push path, so when a window's overlap
+  // seed plus the next line still exceeded `size`, the split branch re-fired on the same line forever —
+  // an infinite loop growing `windows` without bound, on the MAIN process thread (extractMeeting calls
+  // this synchronously). These cases hang the whole app if the forward-progress guard is removed.
+  describe('always terminates — no input can wedge the main process (MQA-017)', () => {
+    it('handles two adjacent lines whose overlap seed cannot fit the next line', () => {
+      const text = ['A'.repeat(60), 'B'.repeat(60), 'C'.repeat(60)].join('\n')
+      const windows = splitIntoWindows(text, 100, 80) // overlap ~ size: the pathological shape
+      expect(windows.length).toBeGreaterThan(0)
+      expect(windows.length).toBeLessThan(50) // bounded, not runaway
+      // No content is lost: every original line still appears somewhere.
+      for (const line of text.split('\n')) expect(windows.some((w) => w.includes(line))).toBe(true)
+    })
+
+    it('emits a single line longer than the window size as its own oversized window', () => {
+      const huge = 'x'.repeat(500)
+      const windows = splitIntoWindows([huge, 'short tail'].join('\n'), 100, 20)
+      expect(windows.length).toBeGreaterThan(0)
+      expect(windows.length).toBeLessThan(50)
+      expect(windows.some((w) => w.includes(huge))).toBe(true)
+      expect(windows.some((w) => w.includes('short tail'))).toBe(true)
+    })
+
+    it('survives an overlap larger than the window size', () => {
+      const text = Array.from({ length: 12 }, (_, i) => `line ${i} ${'z'.repeat(40)}`).join('\n')
+      const windows = splitIntoWindows(text, 50, 500) // overlap > size — degenerate config
+      expect(windows.length).toBeGreaterThan(0)
+      expect(windows.length).toBeLessThan(100)
+    })
+  })
+
   it('carries trailing context (overlap) from one window into the next', () => {
     const lines = Array.from({ length: 30 }, (_, i) => `L${i}`.padEnd(10, '.'))
     const text = lines.join('\n')

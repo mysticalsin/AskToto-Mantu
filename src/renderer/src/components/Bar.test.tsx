@@ -116,3 +116,30 @@ describe('Bar Heard-live chip capture degradation', () => {
     expect(html).not.toContain('Mic only')
   })
 })
+
+// MQA-036 (docs/qa/BUG-LEDGER.md): the eye button toggles `contentProtection` — whether OTHER people can
+// see the Métis overlay in a screen share — but it was labelled "Private view", which is the name of a
+// DIFFERENT setting (`privateView`, whether Métis can see YOUR screen), and its tooltip reported the
+// inverse state. A user mid-screen-share clicked it believing it hid something and instead revealed the
+// overlay to the whole call. The label must describe what the button actually does.
+describe('Bar screen-share visibility control (MQA-036)', () => {
+  it('never labels the contentProtection button with the other setting name "Private view"', () => {
+    const hidden = renderToStaticMarkup(<Bar {...props({ stealth: true })} />)
+    const visible = renderToStaticMarkup(<Bar {...props({ stealth: false })} />)
+    const locked = renderToStaticMarkup(<Bar {...props({ stealth: true, stealthLocked: true })} />)
+
+    for (const html of [hidden, visible, locked]) {
+      expect(html.toLowerCase()).not.toContain('private view')
+    }
+  })
+
+  it('states the CURRENT state and what clicking will do, in both directions', () => {
+    const hidden = renderToStaticMarkup(<Bar {...props({ stealth: true })} />)
+    expect(hidden).toContain('Hidden from screen share')
+    expect(hidden).toContain('click to make Métis visible')
+
+    const visible = renderToStaticMarkup(<Bar {...props({ stealth: false })} />)
+    expect(visible).toContain('Visible in screen share')
+    expect(visible).toContain('click to hide Métis')
+  })
+})

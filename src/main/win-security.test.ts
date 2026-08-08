@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os'
 import {
   evaluateAclTrust,
   isAdminManagedTrusted,
+  readAclForTest,
   readTrustedAdminManaged,
   trustedAdminManagedPath,
   WINDOWS_POWERSHELL,
@@ -193,6 +194,23 @@ describe.runIf(process.platform === 'win32')('isAdminManagedTrusted — real Pro
     // Budget must clear the code's OWN limit: the ACL read spawns System32 powershell.exe with an
     // 8s execFileSync timeout, which already exceeds vitest's 5s per-test default — so on a cold CI
     // runner, where PowerShell start-up is the slow part, this failed as a timeout rather than a verdict.
+  }, 20_000)
+
+  // MQA-008 (docs/qa/BUG-LEDGER.md). The probe built its owner from FileSecurity.Owner, which is a
+  // System.String rather than an IdentityReference — .Translate() threw, the fallback read .Value off a
+  // String and got null, so EVERY file on win32 probed as `owner: ''` and evaluateAclTrust rejected it.
+  // Windows machine policy (requireAuth, allowedProviders, lockedKeys, disableAutoUpdate) was therefore
+  // never enforced, and every reject-direction test above still passed. This asserts the owner resolves.
+  it('resolves a real owner SID from the live ACL probe — an empty owner silently disables all machine policy (MQA-008)', () => {
+    mkdirSync(dir, { recursive: true })
+    writeFileSync(file, JSON.stringify({ requireAuth: true }))
+
+    const probe = readAclForTest(file)
+    expect(probe).not.toBeNull()
+    // A well-formed Windows SID: S-1-<authority>-<sub authorities>. Any file has an owner, so an empty
+    // string here means the probe is broken, not that the file is suspicious.
+    expect(probe?.owner).toMatch(/^S-1-\d+(-\d+)+$/)
+    expect(probe?.aces.length).toBeGreaterThan(0)
   }, 20_000)
 
   it('readTrustedAdminManaged never returns content for that same untrusted file', () => {

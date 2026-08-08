@@ -87,13 +87,33 @@ export function evaluateAclTrust(acl: AclProbe): boolean {
   return ownerOk && !hasUntrustedWrite
 }
 
+/**
+ * Exported ONLY so a test can assert the probe resolves a real owner SID (MQA-008). Every live ACL test
+ * before it asserted the reject direction, which a probe that returns `owner: ''` for every file passes
+ * trivially — the trust decision failed closed and looked correct while silently disabling all Windows
+ * machine policy. Nothing in the app should call this directly; use isAdminManagedTrusted.
+ */
+export function readAclForTest(path: string): AclProbe | null {
+  return readAcl(path)
+}
+
 function readAcl(path: string): AclProbe | null {
   const ps = `
 $ErrorActionPreference='Stop'
 try {
   $a = Get-Acl -LiteralPath ${JSON.stringify(path)}
   function SidOf($ref){ try { return $ref.Translate([System.Security.Principal.SecurityIdentifier]).Value } catch { return $ref.Value } }
-  $out = [ordered]@{ owner = (SidOf $a.Owner); aces = @() }
+  # MQA-008: the owner MUST come from GetOwner(), not from the .Owner property. FileSecurity.Owner is a
+  # System.String (e.g. "BUILTIN\\Administrators"), not an IdentityReference — so SidOf() threw on
+  # .Translate(), fell back to .Value on a String (null), and every managed-config file on win32 was
+  # judged untrusted. Silent effect: requireAuth, allowedProviders, lockedKeys and disableAutoUpdate
+  # were NEVER enforced from a machine policy, while IT saw only a single "not admin-owned" warning.
+  # ACE identities are genuine NTAccount objects, so SidOf stays correct for them.
+  $ownerSid = ''
+  try { $ownerSid = $a.GetOwner([System.Security.Principal.SecurityIdentifier]).Value } catch {
+    try { $ownerSid = (New-Object System.Security.Principal.NTAccount($a.Owner)).Translate([System.Security.Principal.SecurityIdentifier]).Value } catch { $ownerSid = '' }
+  }
+  $out = [ordered]@{ owner = $ownerSid; aces = @() }
   foreach($ace in $a.Access){
     $out.aces += [ordered]@{ sid = (SidOf $ace.IdentityReference); rights = [int]$ace.FileSystemRights.value__; type = $ace.AccessControlType.ToString() }
   }
