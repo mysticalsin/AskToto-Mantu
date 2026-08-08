@@ -78,7 +78,9 @@ function hasUsableProvider(s: Settings): boolean {
  *  over to the next WITHOUT ever reaching a provider these gates would have excluded. An enabled Métis
  *  Local summary setting is an explicit privacy choice: it is the ONLY candidate whenever active — never
  *  waterfalls into a cloud provider, since that would silently upload a transcript the user chose to
- *  keep on-device. */
+ *  keep on-device. Otherwise, when localLlm.indexFallback is on and local is ready, local is appended as
+ *  the LAST candidate after the whole cloud waterfall — so a meeting still gets indexed when every cloud
+ *  provider is down or none is configured, instead of never being indexed at all. */
 function pickProviderCandidates(s: Settings): { provider: ProviderId; model: string; key: string }[] {
   if (s.localLlm.useFor.summary && localBaseReady(s, getAllowedProviders())) {
     return [{ provider: 'local', model: s.localLlm.modelId, key: '' }]
@@ -105,6 +107,17 @@ function pickProviderCandidates(s: Settings): { provider: ProviderId; model: str
     const model = resolveModelTier(p, s.providerModels, s.providerModelsThinking, 'deep', s.providerModelsDeep)
     if (!model) continue
     candidates.push({ provider: p, model, key })
+  }
+  // Last-resort local fallback: appended AFTER every cloud candidate, never ahead of one, so a
+  // meeting still gets indexed when every configured cloud provider has failed or none is configured
+  // at all — instead of throwing 'No configured AI provider' and never indexing it. Distinct from the
+  // useFor.summary exclusive-local branch above (which returns early and never reaches this line):
+  // that's an explicit privacy choice ("local only, never cloud"), this is the opposite direction
+  // ("cloud first, local only once cloud is exhausted"). Gated on the same localBaseReady() eligibility
+  // (enabled, runtime+model provisioned, org allowlist permits 'local') so it can never silently start
+  // local processing for a user/org that hasn't opted in.
+  if (s.localLlm.indexFallback && localBaseReady(s, allowed)) {
+    candidates.push({ provider: 'local', model: s.localLlm.modelId, key: '' })
   }
   return candidates
 }

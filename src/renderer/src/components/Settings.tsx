@@ -1482,6 +1482,19 @@ function LocalAiSection({
               patch({ localLlm: { ...settings.localLlm, useFor: { ...settings.localLlm.useFor, vision: v } } })
             }
           />
+        </div>
+
+        <div className="flex flex-col gap-0.5 pt-1">
+          <span className="text-[12px] font-medium text-[color:var(--cl-foreground)]">Fallback</span>
+          <ToggleRow
+            label="Use as a meeting-indexing fallback"
+            desc="If every configured cloud provider is unreachable or none is set up, index meetings on-device as a last resort instead of leaving them unindexed."
+            on={settings.localLlm.indexFallback}
+            onChange={(v) => patch({ localLlm: { ...settings.localLlm, indexFallback: v } })}
+          />
+        </div>
+
+        <div className="flex flex-col gap-0.5">
           <ToggleRow
             label="Speaker identification (beta)"
             desc="Label who's speaking in meetings using on-device voice recognition. Voice data never leaves this device."
@@ -4063,7 +4076,8 @@ const TABS: {
     desc: 'Provider, API keys, local model, and thinking mode.',
     keywords: [
       'provider', 'api key', 'anthropic', 'openai', 'dust', 'claude code', 'codex', 'local ai',
-      'thinking mode', 'model', 'other providers', 'model provider', 'cli integration'
+      'thinking mode', 'model', 'other providers', 'model provider', 'cli integration',
+      'fallback', 'indexing fallback', 'offline indexing'
     ]
   },
   {
