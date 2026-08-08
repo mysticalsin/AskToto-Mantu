@@ -1,24 +1,26 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { mkdtempSync, rmSync, existsSync, readFileSync, writeFileSync, readdirSync, statSync } from 'node:fs'
-import { join } from 'node:path'
+import { join, dirname } from 'node:path'
 import { tmpdir } from 'node:os'
 import type { Settings } from '@shared/ipc'
 import {
   DealEntitySchema,
   AccountEntitySchema,
+  PersonEntitySchema,
   MeetingExtractionSchema,
   type DealEntity,
   type ProvenanceState,
   type Confidence,
   type MeetingExtraction
 } from '@shared/brain'
-import { writeDeal, writeAccount } from './store'
+import { writeDeal, writeAccount, writePerson, writeMeetingExtraction, slugify } from './store'
 import { ingestExtraction } from './ingest'
 import {
   publishEntity,
   publishMeetingCard,
   publishIndexes,
   publishAll,
+  publishForExtraction,
   removeFromWiki,
   removeWiki,
   wikiDir,
@@ -35,6 +37,26 @@ import {
  */
 
 vi.mock('electron')
+
+/**
+ * QA MQA-031 — every saved meeting is read + decrypted through transcripts.ts's readSavedFile, so
+ * wrapping that one export is how this file counts full-corpus rescans. Partial mock (real
+ * implementation plus a path log), so every other test here keeps exercising the real filesystem;
+ * vi.hoisted because the log has to exist before the mocked module is first evaluated. Entity and
+ * extraction JSON reads go through the same helper and are filtered out at the assertion site — only
+ * the meeting .md files in the meetings-folder root are what this defect rescans.
+ */
+const readLog = vi.hoisted(() => ({ paths: [] as string[] }))
+vi.mock('../transcripts', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../transcripts')>()
+  return {
+    ...actual,
+    readSavedFile: (path: string): string => {
+      readLog.paths.push(path)
+      return actual.readSavedFile(path)
+    }
+  }
+})
 
 const settingsFor = (folder: string, overrides: Partial<Settings> = {}): Settings =>
   ({ meetingsFolder: folder, encryptTranscripts: false, publishBrainPages: true, ...overrides }) as Settings
@@ -383,6 +405,79 @@ describe('publish.ts — Task MI-5 markdown mirror', () => {
       await publishAll(s)
       const second = snapshotDir(wikiDir(s))
       expect(second).toEqual(first)
+    })
+  })
+
+  // ── MQA-031: one confidential scan per publish operation, not one per page ──────────────────────────
+
+  describe('MQA-031 — a publish operation reads each saved meeting at most once, not once per page', () => {
+    const MEETINGS = ['2026-01-01_100000-alpha.md', '2026-02-01_100000-bravo.md', '2026-03-01_100000-charlie.md']
+
+    /** How many times each saved meeting .md in the meetings-folder root was read+decrypted since the
+     *  last reset — the .brain JSON reads that share readSavedFile are excluded by the dirname check. */
+    function meetingReadCounts(): Map<string, number> {
+      const counts = new Map<string, number>()
+      for (const p of readLog.paths) {
+        if (!p.endsWith('.md') || dirname(p) !== folder) continue
+        counts.set(p, (counts.get(p) ?? 0) + 1)
+      }
+      return counts
+    }
+
+    /** 2 people + 1 account + 1 deal, all three meetings, plus one extraction per meeting — enough pages
+     *  that a per-page rescan is unmistakable against a single one. */
+    async function seedCorpus(): Promise<void> {
+      writeMeetingFile(folder, MEETINGS[0], { date: '2026-01-01', title: 'Alpha' })
+      writeMeetingFile(folder, MEETINGS[1], { date: '2026-02-01', title: 'Bravo' })
+      writeMeetingFile(folder, MEETINGS[2], { date: '2026-03-01', title: 'Charlie', confidential: true })
+      const refs = MEETINGS.map((file, i) => ({ file, date: `2026-0${i + 1}-01`, title: file }))
+      await writeAccount(s, 'acme', AccountEntitySchema.parse({ id: 'acme', name: 'Acme', aliases: [], meetings: refs }))
+      await writePerson(s, 'maria-silva', PersonEntitySchema.parse({ id: 'maria-silva', name: 'Maria Silva', aliases: [], meetings: refs }))
+      await writePerson(s, 'jean-dupont', PersonEntitySchema.parse({ id: 'jean-dupont', name: 'Jean Dupont', aliases: [], meetings: refs }))
+      await writeDeal(s, 'acme-renewal', baseDeal({ id: 'acme-renewal', name: 'Acme Renewal', meetings: refs }))
+      for (const file of MEETINGS) {
+        await writeMeetingExtraction(
+          s,
+          slugify(file),
+          MeetingExtractionSchema.parse({ account: { name: 'Acme' }, people: [{ name: 'Maria Silva' }], source_file: file })
+        )
+      }
+    }
+
+    it('publishAll scans the meetings folder once — not once per entity page, note card and index', async () => {
+      await seedCorpus()
+      readLog.paths.length = 0
+
+      await publishAll(s)
+
+      // Before the fix: 4 entity pages + 3 note cards + 1 index each re-read all 3 meetings (24 reads) on
+      // top of the 2 cards' own reads. The ceiling here is one full scan plus one own-read per card.
+      const counts = meetingReadCounts()
+      const total = [...counts.values()].reduce((a, b) => a + b, 0)
+      expect(total).toBeLessThanOrEqual(MEETINGS.length * 2)
+      expect(Math.max(...counts.values())).toBeLessThanOrEqual(2)
+
+      // The single scan is still the real confidential gate, not a skipped one.
+      expect(existsSync(join(wikiDir(s), 'meetings', `${slugify(MEETINGS[0])}.md`))).toBe(true)
+      expect(existsSync(join(wikiDir(s), 'meetings', `${slugify(MEETINGS[2])}.md`))).toBe(false)
+    })
+
+    it('publishForExtraction scans once per merge — the storm that repeats for every meeting of a backfill', async () => {
+      await seedCorpus()
+      readLog.paths.length = 0
+
+      const x = MeetingExtractionSchema.parse({
+        account: { name: 'Acme' },
+        people: [{ name: 'Maria Silva' }, { name: 'Jean Dupont' }],
+        deal: { name: 'Acme Renewal' },
+        source_file: MEETINGS[0]
+      })
+      await publishForExtraction(s, x, { file: MEETINGS[0], date: '2026-01-01', title: 'Alpha' })
+
+      // Before the fix: 1 account + 2 people + 1 deal + 1 card = 5 scans x 3 meetings, per merged meeting.
+      const counts = meetingReadCounts()
+      const total = [...counts.values()].reduce((a, b) => a + b, 0)
+      expect(total).toBeLessThanOrEqual(MEETINGS.length + 1)
     })
   })
 

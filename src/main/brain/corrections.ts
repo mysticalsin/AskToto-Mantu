@@ -124,11 +124,17 @@ export function clearJournalCorruptionLock(s: Settings): boolean {
 //      also durably resolves any sibling conflict copy (Fix G): merges it into corrections.json and
 //      renames the copy out of the way, so the fork is closed the moment any device next writes.
 
+/** MQA-016: an entry this build's CorrectionEntrySchema cannot parse — in practice a NEWER build's
+ *  correction kind, read off a .brain shared through OneDrive between two versions/devices. It is another
+ *  human correction, so it is held verbatim (never re-serialized from a parsed shape) together with the
+ *  array position it was read at, and every rewrite of corrections.json puts it back exactly there. */
+type UnrecognizedEntry = { index: number; item: unknown }
+
 type ParsedJournalFile =
   | { status: 'absent' }
   | { status: 'unreadable' }
   | { status: 'corrupt' }
-  | { status: 'ok'; entries: CorrectionEntry[] }
+  | { status: 'ok'; entries: CorrectionEntry[]; unrecognized: UnrecognizedEntry[] }
 
 /**
  * Parse one on-disk journal file, classifying its state by the RAW ON-DISK bytes (MI-2.5 review round 3)
@@ -142,8 +148,9 @@ type ParsedJournalFile =
  *                                                    refuse transiently, never quarantine/lock/overwrite)
  *   - decodes to non-empty text, JSON/array fails → 'corrupt'     (the ONLY genuine-corruption case →
  *                                                    quarantine + durable lock)
- *   - decodes and parses as an array              → 'ok'          (individual unknown-kind entries skipped
- *                                                    for forward-compat, the rest still replay)
+ *   - decodes and parses as an array              → 'ok'          (individual unknown-kind entries set aside
+ *                                                    for forward-compat — not replayed by this build, but
+ *                                                    kept verbatim so a rewrite can't erase them)
  * Reads the raw buffer directly (not store.ts's cached readJson, whose single catch-all collapses every
  * outcome to `null`) so absent / unreadable / corrupt / tolerated-skip stay distinguishable.
  */
@@ -174,12 +181,28 @@ function parseJournalFile(path: string): ParsedJournalFile {
   }
   if (!Array.isArray(raw)) return { status: 'corrupt' }
   const entries: CorrectionEntry[] = []
-  for (const item of raw) {
-    const parsed = CorrectionEntrySchema.safeParse(item)
+  const unrecognized: UnrecognizedEntry[] = []
+  for (let index = 0; index < raw.length; index++) {
+    const parsed = CorrectionEntrySchema.safeParse(raw[index])
     if (parsed.success) entries.push(parsed.data)
-    else mainLog.warn(`[brain] corrections journal: skipping one unrecognized/malformed entry in ${path}`)
+    else {
+      unrecognized.push({ index, item: raw[index] })
+      mainLog.warn(`[brain] corrections journal: preserving one unrecognized/malformed entry in ${path}`)
+    }
   }
-  return { status: 'ok', entries }
+  return { status: 'ok', entries, unrecognized }
+}
+
+/** The array to WRITE back to `corrections.json`: the typed entries plus every entry parseJournalFile set
+ *  aside, each restored to the position it was read at (a freshly appended entry therefore lands after
+ *  everything). MQA-016: writing `entries` alone permanently erased another build's correction from a
+ *  shared .brain — the exact forward-compat case shared/brain.ts says must be tolerated. */
+function journalToWrite(entries: CorrectionEntry[], unrecognized: UnrecognizedEntry[]): unknown[] {
+  const out: unknown[] = [...entries]
+  for (const u of [...unrecognized].sort((a, b) => a.index - b.index)) {
+    out.splice(Math.min(u.index, out.length), 0, u.item)
+  }
+  return out
 }
 
 /** OneDrive conflict-copy naming (Fix G): any sibling of `corrections.json` that starts with
@@ -291,6 +314,8 @@ export function readCorrectionsJournal(s: Settings): CorrectionEntry[] {
 export interface CorrectionsJournalGate {
   ok: boolean
   entries: CorrectionEntry[]
+  /** Entries this build could not parse, carried verbatim through every rewrite — see UnrecognizedEntry. */
+  unrecognized: UnrecognizedEntry[]
   error?: string
 }
 
@@ -321,7 +346,7 @@ export async function readCorrectionsJournalSafe(
   // a corrections.corrupt-*.json sibling, so the primary would parse as `absent` and (without this gate)
   // the next append would silently start a fresh seq:0 journal, discarding every prior correction.
   if (isJournalCorruptionBlocked(s)) {
-    return { ok: false, entries: [], error: BLOCKED_JOURNAL_ERROR }
+    return { ok: false, entries: [], unrecognized: [], error: BLOCKED_JOURNAL_ERROR }
   }
 
   const primary = parseJournalFile(path)
@@ -332,7 +357,7 @@ export async function readCorrectionsJournalSafe(
   // what preserves it; it recovers on its own once readable. A corrupt-but-decodable file is a different
   // story (handled next): that IS genuine corruption.
   if (primary.status === 'unreadable') {
-    return { ok: false, entries: [], error: UNREADABLE_JOURNAL_ERROR }
+    return { ok: false, entries: [], unrecognized: [], error: UNREADABLE_JOURNAL_ERROR }
   }
 
   if (primary.status === 'corrupt') {
@@ -343,6 +368,7 @@ export async function readCorrectionsJournalSafe(
       return {
         ok: false,
         entries: [],
+        unrecognized: [],
         error: `Correction journal is corrupt and could not be preserved (${e instanceof Error ? e.message : String(e)}). Corrections are paused until this is resolved.`
       }
     }
@@ -357,21 +383,37 @@ export async function readCorrectionsJournalSafe(
     return {
       ok: false,
       entries: [],
+      unrecognized: [],
       error: `The correction journal was corrupt and has been preserved at ${quarantinedTo} for inspection. ${BLOCKED_JOURNAL_ERROR}`
     }
   }
 
   const conflictNames = listConflictCopyNames(s)
   if (conflictNames.length === 0) {
-    return { ok: true, entries: primary.status === 'ok' ? primary.entries : [] }
+    return {
+      ok: true,
+      entries: primary.status === 'ok' ? primary.entries : [],
+      unrecognized: primary.status === 'ok' ? primary.unrecognized : []
+    }
   }
   const sources = [{ sourceId: '__primary__', entries: primary.status === 'ok' ? primary.entries : [] }]
   const resolvedCopies: string[] = []
+  const unrecognized: UnrecognizedEntry[] = primary.status === 'ok' ? [...primary.unrecognized] : []
+  const seenUnrecognized = new Set(unrecognized.map((u) => JSON.stringify(u.item)))
   for (const name of conflictNames) {
     const parsed = parseJournalFile(join(root, name))
     if (parsed.status === 'ok') {
       sources.push({ sourceId: name, entries: parsed.entries })
       resolvedCopies.push(name)
+      // A conflict copy's own forward-compat entries are corrections too, and the copy is about to be
+      // renamed out of the way — carry the ones the primary doesn't already hold, deduped by their bytes
+      // exactly like mergeJournalSources dedupes the typed ones a sync round-trip duplicated.
+      for (const u of parsed.unrecognized) {
+        const identity = JSON.stringify(u.item)
+        if (seenUnrecognized.has(identity)) continue
+        seenUnrecognized.add(identity)
+        unrecognized.push(u)
+      }
     } else if (parsed.status === 'corrupt') {
       // Minor (a): a corrupt conflict copy would otherwise be re-parsed (and re-skipped) on EVERY call
       // forever. Rename it ONCE into the corrupt- namespace (excluded from isConflictCopyName), so it
@@ -385,7 +427,7 @@ export async function readCorrectionsJournalSafe(
     }
   }
   const merged = mergeJournalSources(sources)
-  await writeJson(s, CORRECTIONS_REL, merged)
+  await writeJson(s, CORRECTIONS_REL, journalToWrite(merged, unrecognized))
   for (const name of resolvedCopies) {
     try {
       renameSync(join(root, name), join(root, `${name.replace(/\.json$/i, '')}.merged-${now().replace(/[:.]/g, '-')}.json`))
@@ -393,22 +435,39 @@ export async function readCorrectionsJournalSafe(
       mainLog.warn(`[brain] could not rename resolved conflict copy ${name}:`, e)
     }
   }
-  return { ok: true, entries: merged }
+  return { ok: true, entries: merged, unrecognized }
 }
 
-/** Append one entry, assigning it the next `seq` (the journal's own length — append-only, so entries
- *  are always contiguous 0..n-1). `entry.seq` as passed in is a placeholder, always overwritten here.
- *  `currentEntries` is the already-gate-checked/conflict-resolved journal (from readCorrectionsJournalSafe,
- *  called once per public mutation before this) — every caller runs inside withEntityLock, so nothing
- *  else can have appended between that read and this write. */
+/** Append one entry, assigning it the next free `seq` (see nextJournalSeq — one past the highest seq on
+ *  disk, NOT the array's length, which collides with a set-aside forward-compat entry). `entry.seq` as
+ *  passed in is a placeholder, always overwritten here. `gate` is the already-checked/conflict-resolved
+ *  journal (from readCorrectionsJournalSafe, called once per public mutation before this) — every caller
+ *  runs inside withEntityLock, so nothing else can have appended between that read and this write. It is
+ *  passed whole rather than as bare entries so this rewrite always carries the unrecognized entries back
+ *  to disk with it (MQA-016). */
 async function appendCorrectionEntry(
   s: Settings,
   entry: CorrectionEntry,
-  currentEntries: CorrectionEntry[]
+  gate: CorrectionsJournalGate
 ): Promise<CorrectionEntry> {
-  const withSeq = { ...entry, seq: currentEntries.length } as CorrectionEntry
-  await writeJson(s, CORRECTIONS_REL, [...currentEntries, withSeq])
+  const withSeq = { ...entry, seq: nextJournalSeq(gate) } as CorrectionEntry
+  await writeJson(s, CORRECTIONS_REL, journalToWrite([...gate.entries, withSeq], gate.unrecognized))
   return withSeq
+}
+
+/** The `seq` for the next appended entry: one past the highest already in the journal — INCLUDING an
+ *  unrecognized entry's own seq, which never shows up in `gate.entries`. MQA-016: deriving it from the
+ *  array's LENGTH hands out a seq that is already taken the moment a set-aside entry sits before a
+ *  surviving one, and `seq` is the only handle the record page's "Undo" has on a merge
+ *  (resolveUnmergeRestore resolves by it alone). */
+function nextJournalSeq(gate: CorrectionsJournalGate): number {
+  let max = -1
+  for (const e of gate.entries) if (e.seq > max) max = e.seq
+  for (const u of gate.unrecognized) {
+    const seq = (u.item as { seq?: unknown } | null | undefined)?.seq
+    if (typeof seq === 'number' && Number.isInteger(seq) && seq > max) max = seq
+  }
+  return max + 1
 }
 
 // ── Raw (schema-unchecked) entity file access — tombstones + the alias map ──────────────────────────
@@ -887,7 +946,7 @@ export async function renameEntity(
     if (payload.newName === entity.name) return { ok: true }
     const oldName = entity.name
     const sanitized = { kind: payload.kind, id, newName: payload.newName }
-    await appendCorrectionEntry(s, { seq: 0, at, kind: 'entity_rename', payload: sanitized, snapshot: { oldName } }, gate.entries)
+    await appendCorrectionEntry(s, { seq: 0, at, kind: 'entity_rename', payload: sanitized, snapshot: { oldName } }, gate)
     const r = await applyRename(s, sanitized, { oldName })
     if (!r.ok) return { ok: false, error: r.error }
     return { ok: true }
@@ -1100,7 +1159,7 @@ export async function mergeEntities(
     const entry = await appendCorrectionEntry(
       s,
       { seq: 0, at, kind: 'entity_merge', payload: sanitized, snapshot: pre.snapshot },
-      gate.entries
+      gate
     )
     const r = await applyMerge(s, sanitized, pre.snapshot)
     if (!r.ok) return { ok: false, error: r.error }
@@ -1129,9 +1188,17 @@ function resolveUnmergeRestore(
   payload: { targetSeq: number },
   journal: CorrectionEntry[]
 ): { ok: true; resolved: ResolvedUnmerge } | { ok: false; error: string } {
-  const entry = journal.find(
+  const matches = journal.filter(
     (e): e is Extract<CorrectionEntry, { kind: 'entity_merge' }> => e.seq === payload.targetSeq && e.kind === 'entity_merge'
   )
+  // MQA-016: a journal that reached this build with a duplicated seq (written by a pre-fix build, or by a
+  // fork resolved elsewhere) makes "Undo" ambiguous — and applyUnmerge whole-file overwrites BOTH sides
+  // from the snapshot, so picking the first match silently restores an unrelated pair of entities over
+  // their current state. Refuse instead; nothing is restored and nothing is journaled.
+  if (matches.length > 1) {
+    return { ok: false, error: 'More than one merge shares this correction number — refusing to undo an ambiguous one.' }
+  }
+  const entry = matches[0]
   if (!entry) return { ok: false, error: 'Correction not found.' }
   if (!entry.snapshot) return { ok: false, error: 'No snapshot to restore from — this merge cannot be undone.' }
   const schema = ENTITY_SCHEMA_BY_KIND[entry.payload.kind]
@@ -1179,7 +1246,7 @@ export async function unmergeEntities(
     if (!gate.ok) return { ok: false, error: gate.error }
     const resolved = resolveUnmergeRestore(payload, gate.entries)
     if (!resolved.ok) return { ok: false, error: resolved.error }
-    await appendCorrectionEntry(s, { seq: 0, at, kind: 'entity_unmerge', payload }, gate.entries)
+    await appendCorrectionEntry(s, { seq: 0, at, kind: 'entity_unmerge', payload }, gate)
     const r = await applyUnmerge(s, payload, gate.entries)
     if (!r.ok) return { ok: false, error: r.error }
     return { ok: true }
@@ -1207,6 +1274,26 @@ function pinProvenant<T>(
       )
     : []
   return { value, source_file: '', date: at, quote: undefined, confidence: 'EXTRACTED', state: 'pinned', superseded }
+}
+
+/** How a pin lands on the field it targets. Normally it simply wins (pinProvenant — a human pin is
+ *  unconditional). `foldOntoSurvivor` is replay-only: the pinned entity was merged AWAY, so replay
+ *  redirected the pin onto the merge survivor's own field (see replayCorrections' field_update case), and
+ *  it has to arrive the way the live merge delivered it — as foldProvenant's `from` side. MQA-015:
+ *  pinning it here instead overwrites whatever the survivor's own pin holds, and the later entity_merge
+ *  replay then re-elects that same clobbered value under rule 3 ("into wins"), inverting the precedence
+ *  the live merge already applied. Folding keeps the survivor's pin and files the merged-away one under
+ *  `superseded`, exactly as the live path did. */
+function landPin<T>(
+  current: ProvenantField<T> | undefined,
+  value: T,
+  at: string,
+  valuesEqual: (a: T, b: T) => boolean,
+  foldOntoSurvivor: boolean | undefined
+): ProvenantField<T> {
+  if (!foldOntoSurvivor) return pinProvenant(current, value, at, valuesEqual)
+  // The `from` side is always present here, so foldProvenant can never return undefined.
+  return foldProvenant(pinProvenant(undefined, value, at, valuesEqual), current, valuesEqual)!
 }
 
 // MI-2.5 Fix H: a human-pinned string field is persisted into the entity file AND later loaded into the
@@ -1261,7 +1348,8 @@ async function applyFieldUpdate(
   // snapshot BEFORE it appends the journal entry (the commit point), so the journal-first ordering
   // proven for rename/merge now covers field_update too. A crash between the append and the (idempotent)
   // real write is recovered by replay; a crash after the write is a replay no-op — both converge.
-  opts?: { dryRun?: boolean }
+  // `foldOntoSurvivor` is replay-only, for a pin redirected onto a merge survivor — see landPin.
+  opts?: { dryRun?: boolean; foldOntoSurvivor?: boolean }
 ): Promise<{ ok: boolean; error?: string; snapshot?: { oldField: unknown } }> {
   if (payload.kind === 'person') {
     const found = readPerson(s, payload.id)
@@ -1271,7 +1359,7 @@ async function applyFieldUpdate(
       const parsed = z.string().max(MAX_FIELD_STRING_LEN).safeParse(payload.value)
       if (!parsed.success) return { ok: false, error: 'Invalid value for role.' }
       const old = person.role_provenance
-      person.role_provenance = pinProvenant(old, parsed.data, at, eqStrict)
+      person.role_provenance = landPin(old, parsed.data, at, eqStrict, opts?.foldOntoSurvivor)
       person.role = person.role_provenance.value
       if (!opts?.dryRun) await writePerson(s, payload.id, person)
       return { ok: true, snapshot: { oldField: old } }
@@ -1280,7 +1368,7 @@ async function applyFieldUpdate(
       const parsed = z.string().max(MAX_FIELD_STRING_LEN).safeParse(payload.value)
       if (!parsed.success) return { ok: false, error: 'Invalid value for org.' }
       const old = person.org_provenance
-      person.org_provenance = pinProvenant(old, parsed.data, at, eqStrict)
+      person.org_provenance = landPin(old, parsed.data, at, eqStrict, opts?.foldOntoSurvivor)
       person.account = person.org_provenance.value
       if (!opts?.dryRun) await writePerson(s, payload.id, person)
       return { ok: true, snapshot: { oldField: old } }
@@ -1296,7 +1384,7 @@ async function applyFieldUpdate(
       const parsed = SectorSchema.safeParse(payload.value)
       if (!parsed.success) return { ok: false, error: 'Invalid value for sector.' }
       const old = account.sector_provenance
-      account.sector_provenance = pinProvenant(old, parsed.data, at, eqStrict)
+      account.sector_provenance = landPin(old, parsed.data, at, eqStrict, opts?.foldOntoSurvivor)
       account.sector = account.sector_provenance.value
       account.sector_confidence = account.sector_provenance.confidence
       if (!opts?.dryRun) await writeAccount(s, payload.id, account)
@@ -1313,7 +1401,7 @@ async function applyFieldUpdate(
     const parsed = z.string().max(MAX_FIELD_STRING_LEN).safeParse(payload.value)
     if (!parsed.success) return { ok: false, error: 'Invalid value for stage.' }
     const old = deal.stage_provenance
-    deal.stage_provenance = pinProvenant(old, parsed.data, at, eqStrict)
+    deal.stage_provenance = landPin(old, parsed.data, at, eqStrict, opts?.foldOntoSurvivor)
     deal.stage = deal.stage_provenance.value
     if (!opts?.dryRun) await writeDeal(s, payload.id, deal)
     return { ok: true, snapshot: { oldField: old } }
@@ -1322,7 +1410,7 @@ async function applyFieldUpdate(
     const parsed = BandSchema.nullable().safeParse(payload.value)
     if (!parsed.success) return { ok: false, error: 'Invalid value for win_likelihood_band.' }
     const old = deal.win_likelihood_band_provenance
-    deal.win_likelihood_band_provenance = pinProvenant(old, parsed.data, at, eqStrict)
+    deal.win_likelihood_band_provenance = landPin(old, parsed.data, at, eqStrict, opts?.foldOntoSurvivor)
     deal.win_likelihood_band = deal.win_likelihood_band_provenance.value
     deal.band_evidence = deal.win_likelihood_band_provenance.quote ?? ''
     if (!opts?.dryRun) await writeDeal(s, payload.id, deal)
@@ -1332,7 +1420,7 @@ async function applyFieldUpdate(
     const parsed = VelocitySchema.safeParse(payload.value)
     if (!parsed.success) return { ok: false, error: 'Invalid value for velocity.' }
     const old = deal.velocity_provenance
-    deal.velocity_provenance = pinProvenant(old, parsed.data, at, eqVelocity)
+    deal.velocity_provenance = landPin(old, parsed.data, at, eqVelocity, opts?.foldOntoSurvivor)
     deal.velocity = deal.velocity_provenance.value
     if (!opts?.dryRun) await writeDeal(s, payload.id, deal)
     return { ok: true, snapshot: { oldField: old } }
@@ -1341,7 +1429,7 @@ async function applyFieldUpdate(
     const parsed = AmountValueSchema.safeParse(payload.value)
     if (!parsed.success) return { ok: false, error: 'Invalid value for amount.' }
     const old = deal.amount
-    deal.amount = pinProvenant(old, parsed.data, at, eqAmount)
+    deal.amount = landPin(old, parsed.data, at, eqAmount, opts?.foldOntoSurvivor)
     if (!opts?.dryRun) await writeDeal(s, payload.id, deal)
     return { ok: true, snapshot: { oldField: old } }
   }
@@ -1349,7 +1437,7 @@ async function applyFieldUpdate(
     const parsed = z.string().max(MAX_FIELD_STRING_LEN).safeParse(payload.value)
     if (!parsed.success) return { ok: false, error: 'Invalid value for close_date.' }
     const old = deal.close_date
-    deal.close_date = pinProvenant(old, parsed.data, at, eqStrict)
+    deal.close_date = landPin(old, parsed.data, at, eqStrict, opts?.foldOntoSurvivor)
     if (!opts?.dryRun) await writeDeal(s, payload.id, deal)
     return { ok: true, snapshot: { oldField: old } }
   }
@@ -1375,7 +1463,7 @@ export async function updateEntityField(
     // instead of a durably-pinned entity with no journal trace (which the next rebuild would revert).
     const pre = await applyFieldUpdate(s, sanitized, at, { dryRun: true })
     if (!pre.ok) return { ok: false, error: pre.error }
-    await appendCorrectionEntry(s, { seq: 0, at, kind: 'field_update', payload: sanitized, snapshot: pre.snapshot }, gate.entries)
+    await appendCorrectionEntry(s, { seq: 0, at, kind: 'field_update', payload: sanitized, snapshot: pre.snapshot }, gate)
     const r = await applyFieldUpdate(s, sanitized, at)
     if (!r.ok) return { ok: false, error: r.error }
     return { ok: true }
@@ -1444,7 +1532,7 @@ export async function rejectCommitment(
     // Fix 3: journal-first — precheck read-only, append (commit point), then the real write.
     const pre = await applyRejectCommitment(s, sanitized, { dryRun: true })
     if (!pre.ok) return { ok: false, error: pre.error }
-    await appendCorrectionEntry(s, { seq: 0, at, kind: 'commitment_reject', payload: sanitized }, gate.entries)
+    await appendCorrectionEntry(s, { seq: 0, at, kind: 'commitment_reject', payload: sanitized }, gate)
     const r = await applyRejectCommitment(s, sanitized)
     if (!r.ok) return { ok: false, error: r.error }
     return { ok: true }
@@ -1507,12 +1595,29 @@ export async function replayCorrections(s: Settings): Promise<{ applied: number;
             // a no-op for every case except the one it exists to fix.
             const hit = journalAliases.get(slugify(entry.payload.id))
             const resolvedId = hit && hit.kind === entry.payload.kind ? hit.id : entry.payload.id
-            r = await applyFieldUpdate(s, { ...entry.payload, id: resolvedId }, entry.at)
+            // MQA-015: a REDIRECTED pin is the merged-away side's pin arriving on the SURVIVOR's own
+            // field, so it must land the way the live merge delivered it — folded, not pinned. Pinning it
+            // clobbers the survivor's own pin, and the later entity_merge replay then re-elects the
+            // clobbered value under foldProvenant rule 3, silently replacing the pin the human kept.
+            const mergedAway = hit !== undefined && hit.kind === entry.payload.kind && hit.id !== slugify(entry.payload.id)
+            r = await applyFieldUpdate(s, { ...entry.payload, id: resolvedId }, entry.at, { foldOntoSurvivor: mergedAway })
             break
           }
-          case 'commitment_reject':
-            r = await applyRejectCommitment(s, entry.payload)
+          case 'commitment_reject': {
+            // MQA-014: the same redirect the field_update case needs, for the same reason — re-ingest
+            // routes a since-merged-away person's meetings straight to the survivor, so `personSlug` has
+            // no file of its own at replay time and the rejection is dropped, resurrecting a commitment
+            // the human said was never made. The merge's own replay cannot repair it: pushUnique keeps the
+            // survivor's already-re-ingested 'open' row and skips the snapshot's 'rejected' one.
+            const person = journalAliases.get(slugify(entry.payload.personSlug))
+            const deal = entry.payload.dealSlug ? journalAliases.get(slugify(entry.payload.dealSlug)) : undefined
+            r = await applyRejectCommitment(s, {
+              ...entry.payload,
+              personSlug: person && person.kind === 'person' ? person.id : entry.payload.personSlug,
+              dealSlug: deal && deal.kind === 'deal' ? deal.id : entry.payload.dealSlug
+            })
             break
+          }
         }
         if (r.ok) {
           applied++

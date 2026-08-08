@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { mkdtempSync, rmSync, readFileSync, writeFileSync, existsSync } from 'node:fs'
+import { mkdtempSync, rmSync, readFileSync, writeFileSync, existsSync, statSync } from 'node:fs'
 import { join, basename } from 'node:path'
 import { tmpdir } from 'node:os'
 import { safeStorage } from 'electron'
@@ -15,6 +15,22 @@ vi.mock('electron')
 // for them regardless of source order.
 let testSettings: Settings
 vi.mock('./store', () => ({ getSettings: () => testSettings }))
+
+// MQA-033: the field trigger is an unhydrated OneDrive Files-On-Demand placeholder (or an AV/EDR
+// share-lock) where stat() still succeeds and readFile() throws — not something Node can be made to
+// reproduce deterministically on every platform. So the read is failed at the fs boundary for the paths
+// in this set, leaving stat() (the readCache key) genuinely untouched, exactly as on a placeholder.
+const { unreadablePaths } = vi.hoisted(() => ({ unreadablePaths: new Set<string>() }))
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs/promises')>()
+  const readFile = (async (path: unknown, ...rest: unknown[]) => {
+    if (typeof path === 'string' && unreadablePaths.has(path)) {
+      throw Object.assign(new Error(`EBUSY: resource busy or locked, open '${path}'`), { code: 'EBUSY' })
+    }
+    return (actual.readFile as (...a: never[]) => Promise<unknown>)(path as never, ...(rest as never[]))
+  }) as unknown as typeof actual.readFile
+  return { ...actual, default: { ...actual, readFile }, readFile }
+})
 
 // Language-switch markers must survive the save → reparse → rewrite round trip: recall's line regex
 // rightly skips marker PROSE, so lang tags are re-derived per line via detectLanguage — without that,
@@ -553,5 +569,141 @@ describe('recall — undecryptable rows degrade gracefully', () => {
     const r = await recallRead(corruptFile)
     expect(r.ok).toBe(false)
     if (!r.ok) expect(r.error).toMatch(/could not be decrypted/i)
+  })
+})
+
+// MQA-032 — the meetings folder is an arbitrary user-chosen directory (Settings → Change folder), so
+// "Delete all Métis data" matching on the .md extension alone permanently unlinked the user's own
+// unrelated markdown alongside Métis's files: no backup, no undo, and a confirmation that never
+// promised anything but transcripts, notes and the graph. See docs/qa/BUG-LEDGER.md → MQA-032.
+describe("recall — deleteAllMeetings erases only Métis's own files (MQA-032)", () => {
+  let folder: string
+
+  beforeEach(() => {
+    folder = mkdtempSync(join(tmpdir(), 'asktoto-recall-own-'))
+    testSettings = { meetingsFolder: folder, encryptTranscripts: false } as Settings
+  })
+
+  afterEach(() => {
+    rmSync(folder, { recursive: true, force: true })
+    vi.restoreAllMocks()
+  })
+
+  const meeting: SaveMeeting = {
+    title: 'Q3 planning sync',
+    mode: 'meeting',
+    startedAt: 1_700_000_000_000,
+    lines: [{ speaker: 'them', text: 'Let us lock the roadmap', t: 1_700_000_000_000 }],
+    recap: 'Decided to ship in Q3.'
+  }
+
+  it("MQA-032: leaves the user's own markdown on disk and reports it as skipped", async () => {
+    const saved = await saveMeeting(testSettings, meeting)
+    // The user's own notes, sitting in the directory they pointed Métis at.
+    const foreign = ['ideas.md', 'todo.md', '2026-budget.md']
+    writeFileSync(join(folder, 'ideas.md'), '# Ideas\n\n- Pitch the pilot\n', 'utf8')
+    writeFileSync(join(folder, 'todo.md'), '- [ ] Renew the contract\n', 'utf8')
+    // Carries a `type:` key of its own (Obsidian/Dataview style) — the exact shape listMeetings drops,
+    // so the confirm dialog never counted it either.
+    writeFileSync(join(folder, '2026-budget.md'), '---\ntype: book\n---\n\n# Budget\n', 'utf8')
+
+    const r = await deleteAllMeetings()
+
+    expect(existsSync(saved)).toBe(false)
+    for (const f of foreign) expect(existsSync(join(folder, f))).toBe(true)
+    expect(r.deleted).toBe(1)
+    expect([...r.skipped].sort()).toEqual([...foreign].sort())
+    expect(r.ok).toBe(true)
+  })
+
+  it('MQA-032: still erases every shape Métis owns — meeting, note, draft, renamed and undecryptable', async () => {
+    const saved = await saveMeeting(testSettings, meeting)
+    // A quick note (saveNote's filename shape) and an in-progress autosave (saveDraftTranscript's).
+    writeFileSync(join(folder, '2024-01-01_000000-note-idea.md'), '---\ntype: note\n---\n\n# Idea\n', 'utf8')
+    writeFileSync(join(folder, '.autosave-draft-2024-01-01_000000-123.md'), '---\ntype: meeting-transcript-draft\n---\n', 'utf8')
+    // A transcript the user renamed by hand: the filename no longer identifies it, the frontmatter does.
+    writeFileSync(join(folder, 'renault-kickoff.md'), '---\ntype: meeting-transcript\n---\n\n# Renault\n', 'utf8')
+    // An encrypted save this device cannot decrypt — still ours, and a GDPR wipe must still remove it.
+    writeFileSync(join(folder, 'export.md'), Buffer.concat([Buffer.from('ATKENC2\n'), Buffer.from('not valid json{{{')]))
+
+    const r = await deleteAllMeetings()
+
+    expect(r.skipped).toEqual([])
+    expect(r.deleted).toBe(5)
+    expect(existsSync(saved)).toBe(false)
+    for (const f of ['2024-01-01_000000-note-idea.md', '.autosave-draft-2024-01-01_000000-123.md', 'renault-kickoff.md', 'export.md']) {
+      expect(existsSync(join(folder, f))).toBe(false)
+    }
+  })
+})
+
+// MQA-033 — a transient read error (unhydrated OneDrive Files-On-Demand placeholder, AV/EDR share-lock)
+// was indistinguishable from "not a meeting file": the meeting vanished from History AND search with no
+// signal, and the null was cached against a stat() that hydration never changes, so it stayed invisible
+// for the rest of the session. See docs/qa/BUG-LEDGER.md → MQA-033.
+describe('recall — a transient read failure never hides a meeting (MQA-033)', () => {
+  let folder: string
+
+  beforeEach(() => {
+    folder = mkdtempSync(join(tmpdir(), 'asktoto-recall-unreadable-'))
+    testSettings = { meetingsFolder: folder, encryptTranscripts: false } as Settings
+  })
+
+  afterEach(() => {
+    unreadablePaths.clear()
+    rmSync(folder, { recursive: true, force: true })
+    vi.restoreAllMocks()
+  })
+
+  const meeting: SaveMeeting = {
+    title: 'Renault kickoff',
+    mode: 'meeting',
+    startedAt: 1_700_000_000_000,
+    lines: [{ speaker: 'them', text: 'Renault wants the pilot live in March', t: 1_700_000_000_000 }],
+    recap: 'Pilot in March.'
+  }
+
+  it('MQA-033: lists it as an unavailable stub while the read fails, and recovers once it succeeds', async () => {
+    const file = await saveMeeting(testSettings, meeting)
+    const name = basename(file)
+    const before = statSync(file)
+
+    unreadablePaths.add(file)
+    const during = await listMeetings()
+    const row = during.find((m) => m.file === name)
+    expect(row).toBeDefined() // the row must survive the failed read, not silently disappear
+    expect(row?.locked).toBe(true)
+    expect(row?.title).toContain('Unavailable')
+
+    // Hydration / lock release changes neither mtimeMs nor size — the readCache key — so a cached null
+    // would keep the meeting invisible until the app restarts.
+    unreadablePaths.delete(file)
+    const after = statSync(file)
+    expect(after.mtimeMs).toBe(before.mtimeMs)
+    expect(after.size).toBe(before.size)
+
+    const recovered = await listMeetings()
+    expect(recovered.find((m) => m.file === name)?.title).toBe('Renault kickoff')
+  })
+
+  it('MQA-033: search finds the meeting again as soon as the file reads, without an app restart', async () => {
+    const file = await saveMeeting(testSettings, meeting)
+
+    unreadablePaths.add(file)
+    expect(await searchMeetings('march')).toHaveLength(0) // nothing to match on while it can't be read
+
+    unreadablePaths.delete(file)
+    const hits = await searchMeetings('march')
+    expect(hits).toHaveLength(1)
+    expect(hits[0].title).toBe('Renault kickoff')
+  })
+
+  it('MQA-033: a genuinely non-meeting file is still dropped, and still cached as such', async () => {
+    await saveMeeting(testSettings, meeting)
+    writeFileSync(join(folder, '2024-01-01_000000-other.md'), '---\ntype: book\n---\n\n# Not a meeting\n', 'utf8')
+
+    const list = await listMeetings()
+    expect(list).toHaveLength(1)
+    expect(list[0].title).toBe('Renault kickoff')
   })
 })

@@ -31,7 +31,7 @@ const PARAKEET_FEED_TIMEOUT_MS = 5000 // a single Parakeet window shouldn't take
 // whisper decode — fire-and-forget, never blocking — and once shared/lang-id.ts confidently identifies the
 // audio, post the worker a 'pinLanguage' message (see whisper.worker.ts's block comment for the invariants
 // that message latches: never un-pin once pinned; explicit settings languages are never probed at all).
-const PROBE_WINDOW_BUDGET = 5 // give up pinning off the opening windows after this many and stay 'auto'
+const PROBE_WINDOW_BUDGET = 5 // probe EVERY one of the opening windows this densely, then drop to PROBE_EVERY
 const PROBE_MIN_WORDS = 8 // a near-empty window ("Hello") can only mislead — wait for real substance
 const PROBE_EVERY = 4 // once pinned, re-probe on this cadence to catch a genuine mid-meeting switch
 const SWITCH_AFTER = 2 // consecutive confirming re-probes required before actually re-pinning
@@ -72,6 +72,42 @@ const NETWORK_ERR =
 /** Exported for unit testing — the pure decision behind armNetworkRetry (see useListen below). */
 export function looksLikeNetworkError(message: string, online: boolean): boolean {
   return !online || NETWORK_ERR.test(message)
+}
+
+/**
+ * Exported for unit testing — the pure probe cadence behind pump() (see PROBE_EVERY's block comment).
+ * The un-pinned budget is an opening BURST, not a retirement: a meeting whose first windows are short
+ * openers ("Oi", "Tudo bem?") burns all five of them on returns the PROBE_MIN_WORDS substance gate throws
+ * away, and a probe that never landed must keep trying — an un-pinned whisper decode is hard-coded to
+ * English by transformers.js, so "give up and stay auto" silently means "transcribe the rest of a
+ * Portuguese meeting as English". Falling back to the PROBE_EVERY cadence (not every window) keeps the
+ * steady-state probe load identical to the already-pinned case.
+ */
+export function shouldProbeLanguageWindow(windowIndex: number, pinned: boolean): boolean {
+  if (pinned) return windowIndex % PROBE_EVERY === 0
+  return windowIndex <= PROBE_WINDOW_BUDGET || windowIndex % PROBE_EVERY === 0
+}
+
+/** What the 'them' (system-loopback) side must do when the OS reports an audio-device change. */
+export type ThemDeviceAction = 'ignore' | 'watch' | 'recover' | 'recycle'
+
+/**
+ * Exported for unit testing — the pure decision behind the 'them'-side silent-death recovery (see
+ * armThemProbation and the devicechange effect in useListen). Called twice per device change: with
+ * `sawWindow: null` when the change is debounced, then with the observed boolean when the probation
+ * window expires. A device change that kills the loopback leaves the track in readyState 'live' and fires
+ * no 'ended' event, so a still-registered channel is only trustworthy once it has emitted a window SINCE
+ * the change — the previous session-long "we heard them once" latch could never notice the death.
+ */
+export function themDeviceChangeAction(
+  wantsSystem: boolean,
+  hasThemChannel: boolean,
+  sawWindow: boolean | null
+): ThemDeviceAction {
+  if (!wantsSystem) return 'ignore' // mic-only session — there is no loopback to keep alive
+  if (!hasThemChannel) return 'recover' // nothing to wait on (start-time failure, or a channel already closed)
+  if (sawWindow === null) return 'watch' // registered channel — let it prove itself before tearing it down
+  return sawWindow ? 'ignore' : 'recycle'
 }
 export type AudioSource = 'mic' | 'system' | 'both'
 type Speaker = 'them' | 'you'
@@ -293,6 +329,10 @@ export function useListen(
   const parakeetEmptyRunRef = useRef(0) // consecutive '' returns on flowing audio → engine stall detection
   const themWatchdogRef = useRef<ReturnType<typeof setTimeout> | null>(null) // fires if 'them' emits nothing for THEM_WATCHDOG_MS
   const themHeardRef = useRef(false) // flips true on the first real 'them' window so we clear the watchdog note exactly once
+  // Rolling proof-of-life for the device-change probation (see armThemProbation): true once a 'them' window
+  // has arrived SINCE the probation was armed. Deliberately a bare boolean — the per-window audio callback
+  // that sets it must stay free of clock reads and React state churn.
+  const themWindowSeenRef = useRef(false)
   const onQRef = useRef(onQuestion)
   onQRef.current = onQuestion
   const onFallbackRef = useRef(onEngineFallback)
@@ -533,9 +573,9 @@ export function useListen(
     // loop's timing or backpressure.
     if (asrLanguageRef.current === 'auto') {
       probeWindowCountRef.current += 1
-      const n = probeWindowCountRef.current
-      const due = probePinnedRef.current ? n % PROBE_EVERY === 0 : n <= PROBE_WINDOW_BUDGET
-      if (due) probeLanguageWindow(job.audio, job.speaker)
+      if (shouldProbeLanguageWindow(probeWindowCountRef.current, probePinnedRef.current)) {
+        probeLanguageWindow(job.audio, job.speaker)
+      }
     }
     if (!workerRef.current) {
       busy.current = false
@@ -731,6 +771,37 @@ export function useListen(
     }, THEM_WATCHDOG_MS)
   }
 
+  // Silent-death probation for a 'them' channel after an audio-device change. A default-output switch
+  // mid-meeting (headphones plugged in) can leave the loopback capture in readyState 'live' while it
+  // delivers nothing but silence: no 'ended' event fires, so the track handler never runs and
+  // recoverSystemAudio self-blocks on the still-registered channel — the remote half of the meeting was
+  // lost for good while the Bar kept showing the healthy "Heard live" chip. armThemWatchdog can't cover
+  // this: it disarms permanently once the channel has been heard. Give the channel THEM_WATCHDOG_MS to
+  // deliver ONE window, then recycle it if it delivered none. Armed only by a device change — a naturally
+  // quiet stretch (you talking for 20 s) must never tear down a healthy loopback.
+  function armThemProbation(): void {
+    if (themWatchdogRef.current) clearTimeout(themWatchdogRef.current)
+    themWindowSeenRef.current = false
+    themWatchdogRef.current = setTimeout(() => {
+      themWatchdogRef.current = null
+      if (!liveRef.current || pausedRef.current) return
+      const verdict = themDeviceChangeAction(
+        wantsSystemRef.current,
+        !!channels.current.them,
+        themWindowSeenRef.current
+      )
+      if (verdict !== 'recycle') return
+      console.warn('[listen] them silent since the device change — recycling the loopback capture')
+      closeChannel('them') // recoverSystemAudio refuses to run while a channel is still registered
+      setState((s) => ({
+        ...s,
+        error: THEM_LOST_MSG,
+        captureDegraded: { side: 'them', note: THEM_LOST_MSG, permission: false }
+      }))
+      void recoverSystemAudioRef.current?.()
+    }, THEM_WATCHDOG_MS)
+  }
+
   const openChannel = useCallback(
     async (sp: Speaker, stream: MediaStream): Promise<void> => {
       closeChannel(sp) // close any prior channel for this speaker (avoid orphan on retry)
@@ -766,16 +837,21 @@ export function useListen(
       worklet.port.onmessage = (ev: MessageEvent): void => {
         const data = ev.data as { audio?: Float32Array }
         if (data.audio) {
-          // First real emission from 'them' proves the channel is alive: cancel the watchdog AND clear
-          // the soft note if it's already showing (loopback can arrive AFTER the 20 s window — the note
-          // must not stay stuck for the rest of the session). Guarded by themHeardRef so this runs once.
-          if (sp === 'them' && !themHeardRef.current) {
-            themHeardRef.current = true
-            if (themWatchdogRef.current) {
-              clearTimeout(themWatchdogRef.current)
-              themWatchdogRef.current = null
+          if (sp === 'them') {
+            // Rolling proof-of-life read by armThemProbation — one boolean store, nothing else, so the
+            // per-window path stays as cheap as it was before the probation existed.
+            themWindowSeenRef.current = true
+            // First real emission from 'them' proves the channel is alive: cancel the watchdog AND clear
+            // the soft note if it's already showing (loopback can arrive AFTER the 20 s window — the note
+            // must not stay stuck for the rest of the session). Guarded by themHeardRef so this runs once.
+            if (!themHeardRef.current) {
+              themHeardRef.current = true
+              if (themWatchdogRef.current) {
+                clearTimeout(themWatchdogRef.current)
+                themWatchdogRef.current = null
+              }
+              setState((s) => (s.error === THEM_SILENT_MSG ? { ...s, error: null } : s))
             }
-            setState((s) => (s.error === THEM_SILENT_MSG ? { ...s, error: null } : s))
           }
           pushAudio(sp, data.audio)
         }
@@ -936,14 +1012,22 @@ export function useListen(
   // Follow the default input across device changes while the mic channel is live. A Bluetooth switch
   // often leaves the old track "alive" but permanently silent (no 'ended' event) — the classic silent
   // death. Debounced: connect+disconnect storms settle before we re-acquire once.
+  // The loopback ('them') side dies exactly the same way on a default-OUTPUT change — on Windows the old
+  // render endpoint stays valid, so capture keeps handing us zero-filled buffers with no error and no
+  // 'ended' — and used to have no detector at all past its first window, losing the whole remote side of
+  // the meeting. It is handled here too, but through themDeviceChangeAction rather than a blind restart:
+  // recycling on every device blip would needlessly tear down the macOS SCStream mid-meeting.
   const devChangeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   useEffect(() => {
     const onDeviceChange = (): void => {
-      if (!liveRef.current || !channels.current.you) return
+      if (!liveRef.current) return
       if (devChangeTimerRef.current) clearTimeout(devChangeTimerRef.current)
       devChangeTimerRef.current = setTimeout(() => {
         devChangeTimerRef.current = null
-        void recoverMicRef.current?.()
+        if (channels.current.you) void recoverMicRef.current?.()
+        const action = themDeviceChangeAction(wantsSystemRef.current, !!channels.current.them, null)
+        if (action === 'watch') armThemProbation()
+        else if (action === 'recover') void recoverSystemAudioRef.current?.()
       }, 800)
     }
     navigator.mediaDevices.addEventListener('devicechange', onDeviceChange)

@@ -127,7 +127,12 @@ function readFrontmatterFlag(md: string, key: string): boolean {
  *  publish call (no cache) — this runs once per publish/index-regen, not per keystroke, and correctness
  *  (a just-flagged meeting disappearing from the very next publish) matters far more than the cost of a
  *  handful of extra file reads at this app's single-exec scale. An unreadable/undecryptable meeting file
- *  is never treated as confidential (nor as safe — it simply can't be read at all here). */
+ *  is never treated as confidential (nor as safe — it simply can't be read at all here).
+ *
+ *  QA MQA-031: "once per publish" is what the batch entry points below MUST enforce — each call here is a
+ *  full readdir + synchronous read+decrypt of EVERY saved meeting, so letting publishAll/publishForExtraction
+ *  re-scan per page turns one toggle into O(pages × meetings) blocking main-process reads. They read it once
+ *  and thread the result through `knownConfidential`. */
 export function readConfidentialMeetings(s: Settings): Set<string> {
   const folder = resolveMeetingsFolder(s)
   const out = new Set<string>()
@@ -404,11 +409,18 @@ function renderDealPage(d: DealEntity, confidential: Set<string>): string {
 // ── Public entity publish/remove ──────────────────────────────────────────────────────────────────────
 
 /** Regenerate one entity's wiki page (full-file, idempotent). No-ops when publishing is off, or when the
- *  entity no longer exists (tombstoned/merged away) — in the latter case any stale page is removed. */
-export async function publishEntity(s: Settings, kind: EntityKind, id: string): Promise<void> {
+ *  entity no longer exists (tombstoned/merged away) — in the latter case any stale page is removed.
+ *  `knownConfidential` is the batch callers' already-read set (see readConfidentialMeetings); a lone
+ *  single-entity caller (a rename/merge/correction) omits it and gets the fresh read as before. */
+export async function publishEntity(
+  s: Settings,
+  kind: EntityKind,
+  id: string,
+  knownConfidential?: Set<string>
+): Promise<void> {
   if (!s.publishBrainPages || !id) return
   ensureWikiDirs(s)
-  const confidential = readConfidentialMeetings(s)
+  const confidential = knownConfidential ?? readConfidentialMeetings(s)
   let md: string | null = null
   let meetings: MeetingRef[] = []
   if (kind === 'person') {
@@ -494,13 +506,14 @@ function mdLink(label: string, relPath: string): string {
 }
 
 /** Regenerate one meeting's note card (full-file, idempotent). No-ops when publishing is off. A
- *  confidential-flagged meeting gets NO card — any stale one from before the flag was set is removed. */
-export async function publishMeetingCard(s: Settings, meetingFile: string): Promise<void> {
+ *  confidential-flagged meeting gets NO card — any stale one from before the flag was set is removed.
+ *  `knownConfidential` carries the batch callers' already-read set, exactly as in publishEntity. */
+export async function publishMeetingCard(s: Settings, meetingFile: string, knownConfidential?: Set<string>): Promise<void> {
   if (!s.publishBrainPages) return
   const base = basename(meetingFile)
   if (!base.endsWith('.md')) return
   ensureWikiDirs(s)
-  const confidential = readConfidentialMeetings(s)
+  const confidential = knownConfidential ?? readConfidentialMeetings(s)
   if (confidential.has(base)) {
     await removeMeetingCard(s, base)
     return
@@ -714,11 +727,12 @@ function readAllMeetingRefs(s: Settings): MeetingRef[] {
   return [...seen.values()]
 }
 
-/** Regenerate index.md + AGENTS.md + README.md (full-file, idempotent). No-op when publishing is off. */
-export async function publishIndexes(s: Settings): Promise<void> {
+/** Regenerate index.md + AGENTS.md + README.md (full-file, idempotent). No-op when publishing is off.
+ *  `knownConfidential` carries the batch callers' already-read set, exactly as in publishEntity. */
+export async function publishIndexes(s: Settings, knownConfidential?: Set<string>): Promise<void> {
   if (!s.publishBrainPages) return
   ensureWikiDirs(s)
-  const confidential = readConfidentialMeetings(s)
+  const confidential = knownConfidential ?? readConfidentialMeetings(s)
 
   const accounts = listEntities(s, 'account').map((id) => readAccount(s, id)).filter((a): a is AccountEntity => !!a)
   const people = listEntities(s, 'person').map((id) => readPerson(s, id)).filter((p): p is PersonEntity => !!p)
@@ -784,17 +798,20 @@ export async function publishForExtraction(
   aliasMap?: AliasMap
 ): Promise<void> {
   if (!s.publishBrainPages) return
+  // One scan for the whole merge: this runs on EVERY ingested meeting (live and backfill), so re-reading
+  // the confidential flags per page would re-decrypt the entire meetings folder ~5-10x per meeting.
+  const confidential = readConfidentialMeetings(s)
   const accountSlug = x.account && x.account.name.trim() ? resolveEntitySlug(aliasMap, 'account', x.account.name) : null
-  if (accountSlug) await publishEntity(s, 'account', accountSlug)
+  if (accountSlug) await publishEntity(s, 'account', accountSlug, confidential)
   for (const p of x.people) {
     if (!p.name.trim()) continue
-    await publishEntity(s, 'person', resolveEntitySlug(aliasMap, 'person', p.name))
+    await publishEntity(s, 'person', resolveEntitySlug(aliasMap, 'person', p.name), confidential)
   }
   if (x.deal && (x.deal.name || accountSlug)) {
     const dslug = resolveEntitySlug(aliasMap, 'deal', x.deal.name || `${x.account?.name ?? 'unknown'} deal`)
-    await publishEntity(s, 'deal', dslug)
+    await publishEntity(s, 'deal', dslug, confidential)
   }
-  await publishMeetingCard(s, ref.file)
+  await publishMeetingCard(s, ref.file, confidential)
 }
 
 /** Full regeneration of every wiki page from the current brain state — the rebuildAll completion hook,
@@ -803,14 +820,17 @@ export async function publishForExtraction(
 export async function publishAll(s: Settings): Promise<void> {
   if (!s.publishBrainPages) return
   ensureWikiDirs(s)
+  // One scan for the whole regeneration: a full-corpus rescan per page is O(pages × meetings) synchronous
+  // read+decrypts on the main process, which is what froze the app for minutes on one Confidential toggle.
+  const confidential = readConfidentialMeetings(s)
   for (const kind of ['person', 'account', 'deal'] as const) {
-    for (const id of listEntities(s, kind)) await publishEntity(s, kind, id)
+    for (const id of listEntities(s, kind)) await publishEntity(s, kind, id, confidential)
   }
   for (const slug of listMeetingExtractions(s)) {
     const x = readMeetingExtraction(s, slug)
-    if (x?.source_file) await publishMeetingCard(s, x.source_file)
+    if (x?.source_file) await publishMeetingCard(s, x.source_file, confidential)
   }
-  await publishIndexes(s)
+  await publishIndexes(s, confidential)
 }
 
 /** Delete the entire wiki/ mirror — called when publishBrainPages is turned off (audit-logged by the

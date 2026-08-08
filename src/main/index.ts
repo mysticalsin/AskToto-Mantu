@@ -147,7 +147,9 @@ import {
   rejectCommitment,
   isJournalCorruptionBlocked,
   clearJournalCorruptionLock,
-  readCorrectionsJournal
+  readCorrectionsJournal,
+  readAliasMap,
+  resolveEntitySlug
 } from './brain/corrections'
 import { publishEntity, removeFromWiki, publishAll, removeWiki, wikiDir } from './brain/publish'
 import { computeAttention } from './brain/attention'
@@ -2540,7 +2542,13 @@ function registerIpc(): void {
     const deal = String(p?.deal ?? '')
     const text = String(p?.text ?? '')
     if (!deal || !text) return { ok: false, error: 'Missing commitment.' }
-    const r = await settleCommitment(getSettings(), brainSlugify(deal), text, status as 'open' | 'kept' | 'broken')
+    // The renderer sends the deal's CURRENT display name, but a rename keeps the original id (see
+    // applyRename: "`id` (the slug) never changes"), so slugifying the name here missed the file and every
+    // promise on a renamed deal was permanently unsettleable. Resolve through the alias map exactly as
+    // ingest does; it falls back to slugify(name) when there is no alias, so un-renamed deals are
+    // unaffected (MQA-013).
+    const s = getSettings()
+    const r = await settleCommitment(s, resolveEntitySlug(readAliasMap(s), 'deal', deal), text, status as 'open' | 'kept' | 'broken')
     if (r.ok) {
       await markBrainChanged(getSettings())
       auditLog('brain.commitment.settled', { status })
@@ -2768,27 +2776,31 @@ function registerIpc(): void {
       } catch (err) {
         console.warn('[brain] context assembly failed', err)
       }
-      // Screen fast-path (M13): the renderer asked to answer from the pre-analyzed on-device screen context.
-      // Inject main's OWN cached description (re-validated for freshness/window match), plus a short recent-
-      // conversation tail so the answer fuses what's on screen with what's being said. Best-effort: if the
-      // cache went stale between the renderer's screen:context probe and now, answer from the prompt alone.
-      if (req.wantsScreenContext) {
-        try {
-          const ctx = screenPreprocess.currentFreshContext()
-          if (ctx?.description) {
-            // Same local-first redaction contract as the transcript above (review finding): on macOS the
-            // description can be a VERBATIM OCR extract of the screen — an open password manager or API
-            // key must be stripped before this text reaches a cloud answer provider. The tail is already
-            // redacted (req.transcript was, at parse time).
-            const description = s.redactSensitive ? redactSecrets(ctx.description) : ctx.description
-            const tail = (req.transcript ?? '').slice(-1500).trim()
-            req.screenContext = tail
-              ? `${description}\n\nRecent conversation (most recent speech):\n${tail}`
-              : description
-          }
-        } catch (err) {
-          mainLog.warn(`[screen-preprocess] context injection failed: ${err instanceof Error ? err.message : String(err)}`)
+    }
+    // Screen fast-path (M13): the renderer asked to answer from the pre-analyzed on-device screen context.
+    // Inject main's OWN cached description (re-validated for freshness/window match), plus a short recent-
+    // conversation tail so the answer fuses what's on screen with what's being said. Best-effort: if the
+    // cache went stale between the renderer's screen:context probe and now, answer from the prompt alone.
+    // Deliberately a SIBLING of the brainContext gate above, not nested in it: the fact-check exclusion is
+    // scoped to brainContext (missing GROUNDING_RAIL), while this block carries its own untrusted-data
+    // guard (llm/shared.ts screenContextBlock). Nested, "fact-check what's on my screen" reached the model
+    // with zero screen data — a verdict about a screen it never saw (MQA-009).
+    if (req.mode === 'answer' && req.wantsScreenContext) {
+      try {
+        const ctx = screenPreprocess.currentFreshContext()
+        if (ctx?.description) {
+          // Same local-first redaction contract as the transcript above (review finding): on macOS the
+          // description can be a VERBATIM OCR extract of the screen — an open password manager or API
+          // key must be stripped before this text reaches a cloud answer provider. The tail is already
+          // redacted (req.transcript was, at parse time).
+          const description = s.redactSensitive ? redactSecrets(ctx.description) : ctx.description
+          const tail = (req.transcript ?? '').slice(-1500).trim()
+          req.screenContext = tail
+            ? `${description}\n\nRecent conversation (most recent speech):\n${tail}`
+            : description
         }
+      } catch (err) {
+        mainLog.warn(`[screen-preprocess] context injection failed: ${err instanceof Error ? err.message : String(err)}`)
       }
     }
     const allowed = getAllowedProviders() // org allowlist (null = unrestricted)
@@ -3062,6 +3074,13 @@ function registerIpc(): void {
           },
           onDone: (u) => {
             streams.delete(req.id)
+            // MQA-020 (belt-and-braces half): a provider that completes with ZERO content deltas has not
+            // answered — the user gets a blank bubble and the waterfall stops, because "done" reads as
+            // success. The known instance was claude-cli settling an `is_error: true` terminal line as
+            // success (fixed at source in llm/cli.ts), but ANY strategy that reaches onDone pre-token has
+            // the same effect, so treat it as a pre-token failure here and let the normal failover run.
+            // Only for cloud/CLI: a local no-output must surface rather than silently upload the request.
+            if (!gotToken && provider !== 'local' && failover(attempted.concat(provider))) return
             // Latency + token telemetry (metadata only) — feeds the p50/p95 latency + cost evals (H/D/F).
             auditLog('provider.request', {
               provider,
@@ -3338,13 +3357,15 @@ function registerIpc(): void {
   })
   // Deal outcome — the human closes the loop the LLM never may (see DealEntitySchema.outcome). Main-window
   // only: it's a brain WRITE, like brainCommitmentSettle. Same slug convention too: the renderer sends the
-  // deal's display name in `dealSlug`, slugified here before it reaches the store.
+  // deal's display name in `dealSlug`, resolved to the entity's stable id here before it reaches the store
+  // — through the alias map, not slugify, or a renamed deal could never be closed (MQA-013).
   ipcMain.handle(IPC.brainSetDealOutcome, async (e, raw) => {
     assertMainWindow(e)
     if (!requireAuth()) return { ok: false, error: 'Sign in with your Mantu account first.' }
     const parsed = SetDealOutcomePayloadSchema.safeParse(raw)
     if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message || 'Invalid input.' }
-    const updated = await setDealOutcome(getSettings(), brainSlugify(parsed.data.dealSlug), parsed.data.outcome)
+    const s = getSettings()
+    const updated = await setDealOutcome(s, resolveEntitySlug(readAliasMap(s), 'deal', parsed.data.dealSlug), parsed.data.outcome)
     if (!updated) return { ok: false, error: 'Deal not found.' }
     await markBrainChanged(getSettings())
     auditLog('brain.deal.outcome', { outcome: parsed.data.outcome })

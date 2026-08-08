@@ -100,25 +100,42 @@ function readSettingsAzure(): Partial<AzureConfig> {
 // tenantId flows into the MSAL authority URL `https://login.microsoftonline.com/${tenantId}`, and
 // allowedDomain into the `email.endsWith('@'+allowedDomain)` gate — so a value carrying `/ \ ? # @ :`
 // or whitespace could distort the authority path or the domain-suffix check. Legit values never do:
-// clientId is a GUID, tenantId a GUID or dotted domain, allowedDomain a hostname. This is the format
-// validation the self-service Settings path (and the managed/LKG paths) previously lacked.
+// clientId is a GUID, tenantId a GUID (see isPlausibleAzureConfig), allowedDomain a hostname. This is
+// the format validation the self-service Settings path (and the managed/LKG paths) previously lacked.
 function isSafeConfigValue(v: string): boolean {
   // Positive allowlist: letters, digits, dot, hyphen only. Covers every legit value — clientId
-  // (GUID), tenantId (GUID or dotted domain), allowedDomain (hostname) — while rejecting all
+  // (GUID), tenantId (GUID), allowedDomain (hostname) — while rejecting all
   // whitespace, control chars, and URL-structural metacharacters (/ \ ? # @ : etc.).
   return v.length > 0 && v.length <= 253 && /^[A-Za-z0-9.-]+$/.test(v)
 }
 
+// The only tenantId shape this app can actually sign in with. The MSAL authority URL happily accepts
+// the Entra primary domain (`mantu.onmicrosoft.com`) or a multi-tenant alias (`common`/`organizations`/
+// `consumers`), but the runtime gate in signIn() compares against the id-token `tid` claim, which Entra
+// always issues as the tenant GUID — and Métis is deliberately single-tenant (docs/MANTU-IT-REQUEST.md).
+// Anything but the GUID therefore authenticates at Microsoft and is rejected as "outside your
+// organization" on EVERY attempt, while readConfig() still reports the install as configured: the
+// SignInWall replaces the whole app and the Settings ID fields lock behind it, so the typo (or an
+// unedited `REPLACE-WITH-AZURE-TENANT-ID` from build/managed-config.enterprise.example.json) can never
+// be corrected in-app. Subsumes isSafeConfigValue for this field — hex + hyphens only.
+const TENANT_GUID_RE = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/
+
 /** Reject a resolved config whose fields aren't structurally plausible before they reach the MSAL
- *  authority / the domain gate. This validator only enforces CHARACTER-safety (no whitespace / URL
- *  metachars), not an exact shape, so injection-shaped garbage is rejected while GUIDs/domains pass.
- *  NOTE for the auth owner: although the MSAL authority URL accepts a domain-form tenantId, the runtime
- *  tenant gate in signIn() compares against the id-token `tid` claim, which Entra always issues as the
- *  tenant GUID — so a domain-form tenantId would authenticate then be rejected as "outside your
- *  organization" on every sign-in. In practice tenantId must be the GUID; either enforce that here or
- *  resolve the domain→GUID before the gate compare. (Fail-closed, so a lockout bug, not a bypass.) */
+ *  authority / the domain gate. clientId and allowedDomain are only CHARACTER-checked (no whitespace /
+ *  URL metachars), so injection-shaped garbage is rejected while GUIDs/hostnames pass; tenantId is held
+ *  to the exact GUID shape, because a non-GUID there is not a degraded config but an unrecoverable
+ *  lockout (see TENANT_GUID_RE). A tier that fails here is treated as "no config from this tier", which
+ *  leaves the install unenforced and usable — the same outcome an unsafe clientId already produced. */
 function isPlausibleAzureConfig(c: AzureConfig): boolean {
-  return isSafeConfigValue(c.clientId) && isSafeConfigValue(c.tenantId) && isSafeConfigValue(c.allowedDomain)
+  return isSafeConfigValue(c.clientId) && TENANT_GUID_RE.test(c.tenantId) && isSafeConfigValue(c.allowedDomain)
+}
+
+/** Pure: does the id-token `tid` claim identify the configured tenant? Case-folded because Entra issues
+ *  `tid` lowercase while the portal's "Directory (tenant) ID" is routinely pasted uppercase — see the
+ *  gate in signIn(). Exported for unit tests (auth.test.ts): reaching that gate otherwise needs a full
+ *  interactive MSAL round-trip, and a mismatch here is an unrecoverable lockout, not a retryable error. */
+export function tenantMatches(tid: string, configuredTenantId: string): boolean {
+  return tid.trim().toLowerCase() === configuredTenantId.trim().toLowerCase()
 }
 
 /**
@@ -751,9 +768,19 @@ export async function signIn(): Promise<SignInResult> {
       }
     }
 
-    if (tid !== cfg.tenantId) {
+    // Case-folded compare: Entra issues `tid` as a lowercase GUID, but the portal's "Directory (tenant)
+    // ID" is routinely pasted in uppercase. A raw !== turned that casing difference into a permanent
+    // lockout — the config still counts as configured, so the wall stays up and Settings stays locked
+    // while every retry denies again. expectedTenant is logged so the mismatch is diagnosable at all
+    // (the user-facing string is unchanged: SignInWall keys its friendlier copy off it).
+    if (!tenantMatches(tid, cfg.tenantId)) {
       await purgeRejected()
-      auditLog('auth.denied', { domain: cfg.allowedDomain, attemptedEmail: email, attemptedTenant: tid })
+      auditLog('auth.denied', {
+        domain: cfg.allowedDomain,
+        attemptedEmail: email,
+        attemptedTenant: tid,
+        expectedTenant: cfg.tenantId
+      })
       return { ok: false, configured: true, error: 'That account is outside your organization.' }
     }
     if (!email.endsWith(`@${cfg.allowedDomain.toLowerCase()}`)) {

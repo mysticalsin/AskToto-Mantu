@@ -237,6 +237,31 @@ describe('isResultLine — claude-cli terminal marker (kill-on-result)', () => {
   it('codex-cli has no isResultLine matcher — its terminal marker is unverified, left byte-identical', () => {
     expect(CLI_CONFIGS['codex-cli']!.isResultLine).toBeUndefined()
   })
+
+  // MQA-020: is_error terminal lines were matched as success markers, so a CLI that died on a reached
+  // subscription limit settled as a blank answer and the provider waterfall stopped there.
+  it('MQA-020: an is_error result line is not a success marker, and its error text is recoverable', () => {
+    const cfg = CLI_CONFIGS['claude-cli']!
+    const limitReached = JSON.stringify({
+      type: 'result',
+      subtype: 'error_during_execution',
+      is_error: true,
+      result: 'Claude AI usage limit reached|1754000000'
+    })
+    expect(cfg.isResultLine?.(limitReached)).toBe(false)
+    expect(cfg.errorResultLine?.(limitReached)).toBe('Claude AI usage limit reached|1754000000')
+    // error_* subtype without the is_error flag is the same failed run
+    expect(cfg.isResultLine?.(JSON.stringify({ type: 'result', subtype: 'error_max_turns' }))).toBe(false)
+    expect(cfg.errorResultLine?.(JSON.stringify({ type: 'result', subtype: 'error_max_turns' }))).toBe('error_max_turns')
+  })
+
+  it('MQA-020: successful terminal markers are untouched — errorResultLine only fires on failures', () => {
+    const cfg = CLI_CONFIGS['claude-cli']!
+    expect(cfg.errorResultLine?.(JSON.stringify({ type: 'result', subtype: 'success' }))).toBeNull()
+    expect(cfg.errorResultLine?.(JSON.stringify({ type: 'result' }))).toBeNull()
+    expect(cfg.errorResultLine?.(JSON.stringify({ type: 'stream_event', event: { type: 'message_stop' } }))).toBeNull()
+    expect(cfg.errorResultLine?.('not json at all')).toBeNull()
+  })
 })
 
 describe('runCliStream — kill-on-result settles without waiting for child exit (claude-cli)', () => {
@@ -303,5 +328,49 @@ describe('runCliStream — kill-on-result settles without waiting for child exit
     child.emit('close', 1)
     expect(onDone).toHaveBeenCalledTimes(1)
     expect(onError).not.toHaveBeenCalled()
+  })
+
+  // MQA-020: this is the CLI-as-failover-target path. A reached Claude subscription limit emits no text
+  // deltas and one is_error result line; settling that as onDone blanked the answer panel and — because
+  // index.ts only fails over from onError — silenced the rest of the provider waterfall.
+  it('MQA-020: an is_error result line reports onError with the CLI cause, never a blank onDone', async () => {
+    h.execFileImpl.mockResolvedValue({ stdout: '/usr/local/bin/claude\n', stderr: '' })
+    const { child, stdout } = fakeChild()
+    h.spawnImpl.mockReturnValue(child)
+
+    const onDelta = vi.fn()
+    const onDone = vi.fn()
+    const onError = vi.fn()
+    runCliStream({
+      providerId: 'claude-cli',
+      model: 'opus',
+      system: '',
+      prompt: 'hi',
+      handlers: { onDelta, onDone, onError }
+    })
+
+    await vi.waitFor(() => expect(h.spawnImpl).toHaveBeenCalled())
+    const spawnOpts = h.spawnImpl.mock.calls[0][2] as { signal: AbortSignal }
+    stdout.write(
+      `${JSON.stringify({
+        type: 'result',
+        subtype: 'error_during_execution',
+        is_error: true,
+        result: 'Claude AI usage limit reached|1754000000'
+      })}\n`
+    )
+
+    await vi.waitFor(() => expect(onError).toHaveBeenCalledTimes(1))
+    expect(onError.mock.calls[0][0]).toContain('Claude AI usage limit reached')
+    expect(onError.mock.calls[0][0]).toContain('Claude Code') // the caller must see WHICH provider died
+    expect(onDone).not.toHaveBeenCalled()
+    expect(onDelta).not.toHaveBeenCalled()
+    // Still torn down on the spot: a failed run must not be left running any longer than a good one.
+    expect(spawnOpts.signal.aborted).toBe(true)
+
+    // The non-zero exit that follows must not double-report on top of the error already surfaced.
+    child.emit('close', 1)
+    expect(onError).toHaveBeenCalledTimes(1)
+    expect(onDone).not.toHaveBeenCalled()
   })
 })

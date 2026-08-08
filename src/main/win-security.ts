@@ -17,7 +17,7 @@
 // Both shell out to built-in Windows tools (powershell / icacls); everything is a no-op off win32.
 
 import { execFileSync } from 'node:child_process'
-import { closeSync, fstatSync, openSync, readFileSync, statSync } from 'node:fs'
+import { closeSync, fstatSync, openSync, readFileSync, statSync, type Stats } from 'node:fs'
 import { join } from 'node:path'
 import log from 'electron-log'
 
@@ -135,15 +135,59 @@ try {
   }
 }
 
-// The ACL verdict is deliberately NOT cached. An earlier version cached it keyed on `${mtimeMs}:${size}`
-// (content metadata) on the theory that "a mid-session ACL swap would itself require the very privilege
-// this check denies." That's false: icacls/Set-Acl changes a file's DACL without touching its content,
-// so mtime+size stays constant across an ACL change — the cache key is blind to the exact thing this
-// function exists to check. A file could be hardened (or loosened) via ACL alone and this function would
-// keep returning the stale verdict from before the change until the content also happened to change.
-// Since the ACL check IS the security gate, and callers do a separate readFileSync for content after
-// calling this, the verdict must be fresh on every call. Perf is fine: callers already sit behind
-// getSettings()'s own mtime-keyed cache (store.ts), so this doesn't run on every settings read.
+// The ACL verdict is memoized ONLY under a key its subject cannot forge, and ONLY for seconds.
+//
+// An earlier version cached it keyed on `${mtimeMs}:${size}` alone (content metadata) on the theory that
+// "a mid-session ACL swap would itself require the very privilege this check denies." That was wrong
+// twice over: icacls/Set-Acl changes a DACL without touching content, so the key is blind to the exact
+// thing this module exists to check; and BOTH halves of that key are chosen by whoever creates the file,
+// so a standard user — who already has create/delete on `%ProgramData%\Métis`, the premise of this whole
+// module — could delete an admin-owned policy and drop in a forged one carrying the same mtime and size
+// to inherit its trusted verdict. It also never expired.
+//
+// Removing the cache outright was not sustainable either (MQA-028 / MQA-034): each probe is a SYNCHRONOUS
+// execFileSync(powershell) measured at 0.5-1.9 s on a managed install, requireAuth() alone fires three of
+// them before any privileged IPC handler body runs, and store.ts's allowlist read hangs off a 6 s
+// background tick — seconds of frozen main process per user action, on every IT-managed Windows install.
+//
+// So the memo is keyed on the file's KERNEL-assigned identity (dev + inode) as well as its content
+// metadata, and expires after ACL_VERDICT_TTL_MS:
+//   • dev+ino are handed out by the filesystem, never chosen by the file's creator — a delete-and-replace
+//     (the only swap a non-elevated user can perform, since editing a DACL in place needs WRITE_DAC on a
+//     file they do not own) lands a different inode and re-probes at once, forged mtime/size or not.
+//   • the TTL bounds the one case that key can't see — a PRIVILEGED in-place DACL edit, i.e. IT running
+//     icacls to harden or loosen the policy — to a few seconds of staleness instead of forever.
+const ACL_VERDICT_TTL_MS = 5_000
+
+type AclMemo = { path: string; dev: number; ino: number; mtimeMs: number; size: number; trusted: boolean; at: number }
+// One slot: production probes exactly one path (adminManagedConfigPath()); a second path just evicts it.
+let aclMemo: AclMemo | null = null
+
+/** Trust verdict for the file `st` describes. `st` must be the caller's OWN stat/fstat of the file it is
+ *  about to act on, so a memo can never be applied to a different file than the one that was probed. */
+function aclTrusted(path: string, st: Stats): boolean {
+  const now = Date.now()
+  if (
+    aclMemo &&
+    aclMemo.path === path &&
+    aclMemo.dev === st.dev &&
+    aclMemo.ino === st.ino &&
+    aclMemo.mtimeMs === st.mtimeMs &&
+    aclMemo.size === st.size &&
+    // A clock set backwards must not extend a memo indefinitely — treat any negative age as expired.
+    now - aclMemo.at >= 0 &&
+    now - aclMemo.at < ACL_VERDICT_TTL_MS
+  ) {
+    return aclMemo.trusted
+  }
+  const acl = readAcl(path)
+  // A failed probe memoizes its fail-closed `false` too: otherwise a machine where powershell is missing
+  // or wedged pays readAcl's full 8 s timeout on every privileged IPC call.
+  const trusted = acl ? evaluateAclTrust(acl) : false
+  aclMemo = { path, dev: st.dev, ino: st.ino, mtimeMs: st.mtimeMs, size: st.size, trusted, at: now }
+  return trusted
+}
+
 let warnedUntrusted = false
 
 function warnUntrusted(path: string): void {
@@ -175,15 +219,15 @@ function warnUntrusted(path: string): void {
  */
 export function isAdminManagedTrusted(path: string = adminManagedConfigPath()): boolean {
   if (process.platform !== 'win32') return true
+  let st: Stats
   try {
-    const st = statSync(path)
+    st = statSync(path)
     if (!st.isFile()) return false
   } catch {
     return false // absent → no policy to honor; returning true here reopens the stat→read race
   }
 
-  const acl = readAcl(path)
-  const trusted = acl ? evaluateAclTrust(acl) : false
+  const trusted = aclTrusted(path, st)
   if (!trusted) warnUntrusted(path)
   return trusted
 }
@@ -237,8 +281,7 @@ export function readTrustedAdminManaged(path: string = adminManagedConfigPath())
     const st = fstatSync(fd)
     if (!st.isFile()) return null
 
-    const acl = readAcl(path)
-    const trusted = acl ? evaluateAclTrust(acl) : false
+    const trusted = aclTrusted(path, st)
     if (!trusted) {
       warnUntrusted(path)
       return null
@@ -247,7 +290,8 @@ export function readTrustedAdminManaged(path: string = adminManagedConfigPath())
     // Defend the Get-Acl-by-path step above: confirm the path still resolves to the exact file our fd
     // holds before trusting its content. A swap during the ACL check (this file's window is now the
     // ACL-check's PowerShell round-trip, not "until the caller gets around to reading it") would change
-    // dev/ino here.
+    // dev/ino here. Kept unconditional even when aclTrusted() answered from its memo — that path never
+    // touches the name at all, so this is then a free re-assertion of the identity the memo was keyed on.
     let st2: ReturnType<typeof statSync>
     try {
       st2 = statSync(path)

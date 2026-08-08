@@ -1492,9 +1492,12 @@ export function App(): JSX.Element {
       setRecapSkipped(true)
       ask.clear()
       // No recap means no recap-time auto-save fires — persist the transcript NOW (empty recap) so a
-      // keyless "Done" never discards the meeting. Idempotent via savedRef, so the later leave-Review
-      // rescue won't double-save. (Matches the onboarding promise that transcripts are saved either way.)
-      void saveMeetingNowRef.current?.(listen.lines, meetingStartRef.current, '')
+      // keyless "Done" never discards the meeting. Through the LIVE saver, because this session is still
+      // on screen: the leave-path saver reports nothing, which left "Disregard" with no path to delete, so
+      // it silently kept a meeting the user threw away. Idempotent via savedRef (which the live saver pins),
+      // so the later leave-Review rescue won't double-save. (Matches the onboarding promise that
+      // transcripts are saved either way.)
+      void saveLiveMeetingNowRef.current?.(listen.lines, meetingStartRef.current, '')
       return
     }
     setRecapSkipped(false)
@@ -1547,25 +1550,27 @@ export function App(): JSX.Element {
       started: number,
       recapText: string,
       maxAttempts = MAX_SAVE_RETRIES
-    ): Promise<void> => {
+    ): Promise<string | null> => {
       // Persist a meeting that's being LEFT (New meeting / reset / quit / logout) so a started meeting
       // is never lost. Self-contained: retries with backoff until it lands, and deliberately does NOT
       // write the live session's savedRef/savedPath — the meeting being saved is gone, and writing them
       // here (async, after the next session has already started) would pollute the new session's state
       // (wrong "Analyzing" highlight, wrong recap path). Idempotent against the recap auto-save — which
       // DOES pin savedRef — via the read-only guard. maxAttempts=0 on exit paths: a single best-effort
-      // try, so quitting is never blocked on the full retry loop.
-      if (!lines.length || savedRef.current === String(started)) return
+      // try, so quitting is never blocked on the full retry loop. Resolves to the path it wrote (null when
+      // it skipped or gave up) so a caller that IS still on the live session can pin that state itself —
+      // see saveLiveMeetingNow below.
+      if (!lines.length || savedRef.current === String(started)) return null
       const title = defaultMeetingTitle(lines, mode)
       const payload = { title, mode, startedAt: started, lines, recap: recapText }
       for (let attempt = 0; ; attempt++) {
         try {
-          await window.toto.saveTranscript(payload)
-          return
+          const r = await window.toto.saveTranscript(payload)
+          return r.path
         } catch (e) {
           if (attempt >= maxAttempts) {
             setSaveError(e instanceof Error ? e.message : String(e))
-            return
+            return null
           }
           await new Promise((r) => setTimeout(r, Math.min(1000 * 2 ** attempt, 8000)))
         }
@@ -1577,6 +1582,33 @@ export function App(): JSX.Element {
   // Forward reference for startListen (defined above saveMeetingNow) — see its rescue comment.
   const saveMeetingNowRef = useRef<typeof saveMeetingNow | null>(null)
   saveMeetingNowRef.current = saveMeetingNow
+
+  // Same durable save, but for a meeting that is still ON SCREEN in Review rather than being left behind,
+  // so it publishes the outcome through the two handles discardMeeting reads (savingPromiseRef, then
+  // savedPath/savedRef). Fire-and-forgetting a live save through saveMeetingNow leaves both null, and
+  // "Disregard" then finds no path, skips main's confirm and its delete entirely, and silently KEEPS the
+  // meeting — which is already queued for brain ingest (and wiki publishing) by the save that just landed.
+  // saveMeetingNow itself must stay silent for the exit paths it also serves, hence a variant here.
+  const saveLiveMeetingNow = useCallback(
+    (lines: TranscriptLine[], started: number, recapText: string): Promise<string | null> => {
+      const p = saveMeetingNow(lines, started, recapText).then((path) => {
+        // The save can land after the user already started the NEXT meeting; claiming its path then would
+        // be exactly the cross-session pollution saveMeetingNow avoids.
+        if (path && meetingStartRef.current === started) {
+          savedRef.current = String(started)
+          setSavedPath(path)
+        }
+        return path
+      })
+      savingPromiseRef.current = p
+      return p
+    },
+    [saveMeetingNow]
+  )
+
+  // Forward reference for maybeFireRecap (defined above saveMeetingNow) — same rationale as the ref above.
+  const saveLiveMeetingNowRef = useRef<typeof saveLiveMeetingNow | null>(null)
+  saveLiveMeetingNowRef.current = saveLiveMeetingNow
 
   // "New meeting" from the bar — save the meeting we're leaving, then start a fresh session right away.
   // A single click ends the live meeting and snaps the timer to 0:00 with no other visible change — easy

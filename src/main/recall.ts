@@ -58,17 +58,19 @@ const NOTE_FILENAME = /^\d{4}-\d{2}-\d{2}_\d{6}-note-/ // saveNote always insert
 // without reordering unrelated retention-sweep code.
 const STUB_FILENAME_TIMESTAMP = /^(\d{4})-(\d{2})-(\d{2})_(\d{2})(\d{2})(\d{2})-/
 
-/** Best-effort display stub for an undecryptable-but-real meeting file, so it stays visible (instead of
- *  silently vanishing) with a lock affordance. Returns null for the one case a filename alone can still
- *  rule out as NOT a meeting: a draft autosave or a quick note (see DRAFT_FILENAME/NOTE_FILENAME). */
-function lockedStub(file: string): LockedMeetingSummary | null {
+/** Best-effort display stub for a real meeting file we can't render right now, so it stays visible
+ *  (instead of silently vanishing) with a lock affordance. Returns null for the one case a filename
+ *  alone can still rule out as NOT a meeting: a draft autosave or a quick note (see DRAFT_FILENAME/
+ *  NOTE_FILENAME). `label` names the reason in the title — undecryptable on this device ("Locked", the
+ *  default) vs. temporarily unreadable ("Unavailable", see UNREADABLE); both need the same visible row. */
+function lockedStub(file: string, label = 'Locked'): LockedMeetingSummary | null {
   if (DRAFT_FILENAME.test(file) || NOTE_FILENAME.test(file)) return null
   const m = file.match(STUB_FILENAME_TIMESTAMP)
   const date = m ? new Date(`${m[1]}-${m[2]}-${m[3]}T${m[4]}:${m[5]}:${m[6]}`) : null
   const slugPart = file.replace(/\.md$/, '').replace(STUB_FILENAME_TIMESTAMP, '').replace(/-/g, ' ').trim()
   return {
     file,
-    title: `Locked — ${slugPart || file}`,
+    title: `${label} — ${slugPart || file}`,
     date: date && !isNaN(date.getTime()) ? date.toISOString() : '',
     mode: 'general',
     durationMin: 0,
@@ -82,11 +84,20 @@ function lockedStub(file: string): LockedMeetingSummary | null {
 // that degrades linearly as the library grows, with decryption work on the main process. A stat()
 // replaces the full read+decode when the file is unchanged; any mtime/size change re-reads, and a
 // vanished file drops its entry. Saved meetings are immutable-after-write, so hits are the norm.
-// Null results (non-meeting or undecryptable files) are cached too, so they stop costing reads.
+// Null results (non-meeting or undecryptable files) are cached too, so they stop costing reads — but
+// a file that could not be READ at all is deliberately never cached (see UNREADABLE below).
 const readCache = new Map<string, { mtimeMs: number; size: number; read: Read | null }>()
 // Safety valve: the cache is bounded by the meetings folder size in practice, but never let a
 // pathological folder (or repeated folder switches) grow it without limit.
 const READ_CACHE_MAX = 2000
+
+/** Sentinel for "this file could not be READ at all" — an unhydrated OneDrive Files-On-Demand
+ *  placeholder while offline, or an AV/EDR share-lock (the same transient conditions writeSaved
+ *  already retries around, see transcripts.ts). Kept distinct from `null` ("not a meeting file"),
+ *  which is a permanent verdict and safe to cache. A thrown read is neither: stat() still succeeds on
+ *  a placeholder, and hydration changes neither mtimeMs nor size, so caching that failure would key it
+ *  to a value nothing invalidates and the meeting would stay invisible until the app restarts. */
+const UNREADABLE = Symbol('unreadable')
 
 /** Read + decode one file (async), parse its frontmatter. Null if it isn't a meeting transcript.
  *  Served from readCache when the file is unchanged since the last read. */
@@ -105,14 +116,31 @@ async function readMeeting(folder: string, file: string): Promise<Read | null> {
   const hit = readCache.get(path)
   if (hit && hit.mtimeMs === mtimeMs && hit.size === size) return hit.read
   const read = await readMeetingUncached(path, file)
+  if (read === UNREADABLE) {
+    // Drop any stale entry and cache nothing, so the next list/search retries the read instead of
+    // serving a transient failure the user has no way to invalidate. The meeting keeps its row as a
+    // stub rather than disappearing from History and search with no signal at all.
+    readCache.delete(path)
+    const stub = lockedStub(file, 'Unavailable')
+    return stub ? { text: '', sum: stub } : null
+  }
   if (readCache.size >= READ_CACHE_MAX) readCache.clear()
   readCache.set(path, { mtimeMs, size, read })
   return read
 }
 
-async function readMeetingUncached(path: string, file: string): Promise<Read | null> {
+async function readMeetingUncached(path: string, file: string): Promise<Read | null | typeof UNREADABLE> {
+  let raw: Buffer
   try {
-    const text = decodeSaved(await readFile(path))
+    raw = await readFile(path)
+  } catch {
+    // A THROWN read means "can't read it right now", which is not the same verdict as "not a meeting
+    // file" — the caller must not cache it, and must not drop the meeting. Split out from the catch
+    // below so only the read itself can produce it: decodeSaved never throws (see transcripts.ts).
+    return UNREADABLE
+  }
+  try {
+    const text = decodeSaved(raw)
     if (!text) {
       // decodeSaved returns '' both for "not a meeting file" and for a REAL meeting encrypted at rest
       // that this device's keychain can't decrypt (a different machine/user — see transcripts.ts's
@@ -600,19 +628,58 @@ export async function setMeetingConfidential(
   return { ok: true }
 }
 
+// Every file Métis itself writes into the meetings folder carries one of these frontmatter types (see
+// saveMeeting / saveNote / saveDraftTranscript in transcripts.ts). Used as the ownership check for a
+// file whose NAME no longer matches Métis's own shape (a transcript the user renamed by hand), so an
+// erasure request still erases it.
+const OWNED_FRONTMATTER_TYPES = new Set(['meeting-transcript', 'meeting-transcript-draft', 'note'])
+
+/**
+ * True when this file is one of Métis's own. The meetings folder is an arbitrary user-chosen directory
+ * (Settings → Change folder), so the wipe below cannot delete by `.md` extension alone: it would take
+ * the user's unrelated markdown with it, permanently, with no backup and no undo. Filename shape first
+ * (the cheap decisive signal sweepExpiredMeetings already trusts), then the frontmatter type, then the
+ * encrypted envelope — a save this device can't decrypt is still ours, and must still go.
+ */
+async function isOwnedMeetingFile(folder: string, file: string): Promise<boolean> {
+  if (DRAFT_FILENAME.test(file) || FILENAME_TIMESTAMP.test(file)) return true
+  const path = join(folder, file)
+  try {
+    const text = decodeSaved(await readFile(path))
+    if (!text) return isEncryptedFile(path)
+    return OWNED_FRONTMATTER_TYPES.has(frontmatter(text).type)
+  } catch {
+    return false // unreadable — never guess, skip rather than risk deleting the wrong file
+  }
+}
+
 /**
  * Delete every saved meeting + the index — a genuine "delete all my Métis data" action, for a
  * GDPR/CCPA erasure request or a full account wipe. The caller (index.ts) is responsible for also
  * purging the knowledge graph (purgeGraphArtifacts) and prompting for confirmation first; this
  * function does the actual file removal only. Best-effort per file — one failure doesn't abort the
  * rest, so a partial wipe still removes everything it can.
+ *
+ * Only Métis's own files are touched (isOwnedMeetingFile); anything else the user keeps in that folder
+ * is returned in `skipped` instead of being unlinked, so what the confirmation counted and what the
+ * wipe removes can never diverge.
  */
-export async function deleteAllMeetings(): Promise<{ ok: boolean; deleted: number; failed: string[] }> {
+export async function deleteAllMeetings(): Promise<{
+  ok: boolean
+  deleted: number
+  failed: string[]
+  skipped: string[]
+}> {
   const folder = resolveMeetingsFolder(getSettings())
   const files = await meetingFiles(folder)
   let deleted = 0
   const failed: string[] = []
+  const skipped: string[] = []
   for (const file of files) {
+    if (!(await isOwnedMeetingFile(folder, file))) {
+      skipped.push(file)
+      continue
+    }
     try {
       await unlink(join(folder, file))
       deleted++
@@ -625,7 +692,7 @@ export async function deleteAllMeetings(): Promise<{ ok: boolean; deleted: numbe
   } catch {
     /* best-effort — a missing/unwritable index doesn't fail the overall wipe */
   }
-  return { ok: failed.length === 0, deleted, failed }
+  return { ok: failed.length === 0, deleted, failed, skipped }
 }
 
 // Filenames are always `YYYY-MM-DD_HHMMSS-<slug>.md` (see transcripts.ts) — parsed here rather than
