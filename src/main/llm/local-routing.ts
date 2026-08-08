@@ -125,8 +125,25 @@ export function localVisionPrivacyRequired(
  * no real request could ever route to it — a pointless spawn + standing RAM/CPU cost with no product
  * benefit, not merely a redundant check.
  */
-export function localPrewarmEligible(s: Pick<Settings, 'localLlm'>, allowed: string[] | null): boolean {
-  return s.localLlm.enabled && s.localLlm.useFor.suggest && (!allowed || allowed.includes('local'))
+export function localPrewarmEligible(
+  s: Pick<Settings, 'localLlm'>,
+  allowed: string[] | null,
+  cloudReady = true
+): boolean {
+  if (!s.localLlm.enabled) return false
+  if (allowed && !allowed.includes('local')) return false
+  // "Local first for suggestions" — the original condition: local WILL serve the next suggest.
+  if (s.localLlm.useFor.suggest) return true
+  // MQA-006: with useFor defaulting off, a zero-API-key install never satisfied the condition above, so
+  // the on-device model was always COLD when the fallback finally routed to it — and a cold ~730 MB load
+  // overruns askStart's 15s suggest idle budget, so the user's very first live suggestion on a fresh
+  // install timed out. Warm it only when local is genuinely the likely server (fallback armed AND no
+  // cloud/CLI provider is ready); with a healthy cloud provider configured this stays false, so a
+  // sidecar is never spawned for its standing RAM cost when nothing would route to it.
+  // Coerced, not just returned: a settings object from an older profile (or a test fixture) may carry no
+  // `fallback` key at all, and a bare `undefined` leaking out of a boolean-typed predicate makes every
+  // caller's strict comparison quietly wrong.
+  return s.localLlm.fallback === true && !cloudReady
 }
 
 /**

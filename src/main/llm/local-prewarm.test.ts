@@ -55,6 +55,7 @@ const settingsFor = (overrides: Partial<Settings['localLlm']> = {}): Settings =>
     enabled: true,
     modelId: 'qwen3.5-0.8b',
     useFor: { suggest: true, summary: true, vision: true },
+    fallback: true,
     ...overrides
   }
 })
@@ -68,8 +69,39 @@ describe('localPrewarmEligible', () => {
     expect(localPrewarmEligible(settingsFor({ enabled: false }), null)).toBe(false)
   })
 
-  it('false when useFor.suggest is off, even though localLlm is enabled', () => {
+  it('false when useFor.suggest is off and a cloud provider is ready to answer instead', () => {
+    // Default `cloudReady` is true, preserving the original gate: never spawn a sidecar for its standing
+    // RAM cost when a healthy cloud provider will serve the next suggest anyway.
     expect(localPrewarmEligible(settingsFor({ useFor: { suggest: false, summary: true, vision: true } }), null)).toBe(false)
+  })
+
+  // MQA-006 (docs/qa/BUG-LEDGER.md): with useFor defaulting OFF, a zero-API-key install never prewarmed,
+  // so the fallback always hit a COLD ~730 MB model load and the user's first live suggestion timed out
+  // against the 15s suggest budget. Prewarm now also engages when local is the likely server.
+  describe('zero-API-key install — local is the likely server (MQA-006)', () => {
+    const fallbackOnly = { useFor: { suggest: false, summary: false, vision: false }, fallback: true }
+
+    it('true when the fallback is armed and NO cloud provider is ready', () => {
+      expect(localPrewarmEligible(settingsFor(fallbackOnly), null, false)).toBe(true)
+    })
+
+    it('still false when a cloud provider IS ready — no sidecar for a request that will not route here', () => {
+      expect(localPrewarmEligible(settingsFor(fallbackOnly), null, true)).toBe(false)
+    })
+
+    it('false when the fallback is disarmed, even with no cloud provider ready', () => {
+      expect(
+        localPrewarmEligible(settingsFor({ ...fallbackOnly, fallback: false }), null, false)
+      ).toBe(false)
+    })
+
+    it('still respects the org allowlist — data residency beats warm-start latency', () => {
+      expect(localPrewarmEligible(settingsFor(fallbackOnly), ['anthropic'], false)).toBe(false)
+    })
+
+    it('still requires the master Local AI switch', () => {
+      expect(localPrewarmEligible(settingsFor({ ...fallbackOnly, enabled: false }), null, false)).toBe(false)
+    })
   })
 
   it('is independent of useFor.summary/useFor.vision — only the suggest toggle gates prewarm', () => {
