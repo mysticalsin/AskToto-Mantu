@@ -597,13 +597,19 @@ export const Bar = memo(function Bar(props: BarProps): JSX.Element {
                 (visible) is the exceptional, attention-worthy state where others CAN see the overlay, so
                 it lights with danger as an at-a-glance "you're exposed" cue. Separate from Private View
                 (whether Métis captures YOUR screen), which lives in Settings → Privacy. */}
+            {/* MQA-036: this button toggles contentProtection ("can other people see the Métis overlay in
+                a screen share"), NOT privateView ("can Métis see YOUR screen") — two different settings
+                keys. It was labelled "Private view", the exact name of the OTHER control in
+                Settings → Privacy, and its tooltip showed the inverse state, so a user protecting a live
+                screen share clicked it believing it hid something and instead REVEALED the overlay to
+                everyone on the call. The label now states what it actually does. */}
             <IconTool
               title={
                 props.stealthLocked
-                  ? 'Private view: managed by your organization'
+                  ? 'Hidden from screen share: managed by your organization'
                   : props.stealth
-                    ? 'Private view on'
-                    : 'Private view off'
+                    ? 'Hidden from screen share — click to make Métis visible'
+                    : 'Visible in screen share — click to hide Métis'
               }
               onClick={props.onToggleStealth}
               active={!props.stealth}

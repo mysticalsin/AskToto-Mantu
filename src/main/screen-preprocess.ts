@@ -309,6 +309,16 @@ export function createScreenPreprocess(deps: ScreenPreprocessDeps): ScreenPrepro
     stop,
     isActive: () => started,
     currentFreshContext: () => {
+      // MQA-035: Private View is checked HERE, at the single read authority, not at the two call sites.
+      // describeForWindow already refuses to build a description while Private View is on, but it only
+      // runs on the 6s refresh tick — so a description captured a moment BEFORE the user hit Private View
+      // stayed readable, and both the screen:context IPC and askStart's injection would hand it to a
+      // cloud provider for up to a full tick after the user asked for privacy. Gating the read (and
+      // dropping the cache) makes the switch take effect immediately for every current and future caller.
+      if (deps.privateViewOn()) {
+        cache = null
+        return null
+      }
       const c = cache
       if (!c || !c.description) return null
       if (now() - c.capturedAt > CONTEXT_TTL_MS) return null

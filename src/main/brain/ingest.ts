@@ -290,9 +290,23 @@ export function splitIntoWindows(text: string, size = WINDOW_SIZE, overlap = WIN
         ov.unshift(cur[j])
         ovLen += cur[j].length + 1
       }
-      cur = ov
-      curLen = ovLen
-      continue // re-evaluate this same line against the freshly-seeded (overlap-only) window
+      // MQA-017: `i` only advances on the push path below, so the reseeded window MUST be able to accept
+      // this line — otherwise the same branch fires again on the same `i`, pushes an identical window,
+      // and reseeds identical state forever: an infinite loop that grows `windows` without bound and
+      // wedges the main process (this runs synchronously on it, via extractMeeting). Reachable whenever
+      // one line's overlap seed plus the next line exceeds `size` — e.g. two adjacent very long lines.
+      // Dropping the overlap guarantees forward progress: with an empty `cur` the guard below is false,
+      // so the line is always consumed, and a single line longer than `size` becomes its own oversized
+      // window rather than looping. Losing overlap context on that boundary is the correct trade against
+      // hanging the app.
+      if (ovLen + lineLen > size) {
+        cur = []
+        curLen = 0
+      } else {
+        cur = ov
+        curLen = ovLen
+      }
+      continue // re-evaluate this same line against the freshly-seeded window
     }
     cur.push(line)
     curLen += lineLen

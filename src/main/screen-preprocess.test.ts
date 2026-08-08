@@ -137,6 +137,22 @@ describe('createScreenPreprocess — describe + cache', () => {
     expect(h.sp.currentFreshContext()).toBeNull()
   })
 
+  // MQA-035 (docs/qa/BUG-LEDGER.md): describeForWindow refuses to BUILD a description under Private
+  // View, but only runs on the 6s refresh tick — so a description captured just before the user hit
+  // Private View stayed readable, and both the screen:context IPC and askStart's injection would hand
+  // it to a CLOUD provider for up to a full tick after the user asked for privacy.
+  it('serves null the instant Private View turns on, without waiting for the next refresh tick (MQA-035)', async () => {
+    await h.sp._test.describeForWindow('w1')
+    expect(h.sp.currentFreshContext()).not.toBeNull() // cached while Private View was off
+
+    h.state.privateView = true // user flips the switch — no tick has run yet
+
+    expect(h.sp.currentFreshContext()).toBeNull()
+    // …and the cache is dropped, so turning Private View back off cannot resurrect the old description.
+    h.state.privateView = false
+    expect(h.sp.currentFreshContext()).toBeNull()
+  })
+
   it('serves null once the cached description ages past the freshness TTL', async () => {
     await h.sp._test.describeForWindow('w1')
     expect(h.sp.currentFreshContext()).not.toBeNull()

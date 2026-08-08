@@ -4728,7 +4728,10 @@ export function Settings({
                   />
                   <ToggleRow
                     label="Private View"
-                    desc="Métis won't look at or capture your screen while this is on. Screen questions answer from context only. Same switch as the eye button on the bar."
+                    // MQA-036: the bar's eye button toggles contentProtection (whether OTHERS can see the
+                    // overlay), not this setting (whether MÉTIS can see your screen). Claiming they are
+                    // the same switch is what made the eye button read as a privacy control.
+                    desc="Métis won't look at or capture your screen while this is on. Screen questions answer from context only. Separate from the bar's eye button, which controls whether the Métis overlay is visible in a screen share."
                     on={settings.privateView}
                     onChange={(v) => patch({ privateView: v })}
                     disabled={settings.managedKeys.includes('privateView')}
