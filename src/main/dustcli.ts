@@ -1,15 +1,13 @@
 import { app, shell } from 'electron'
-import { execFile } from 'node:child_process'
-import { promisify } from 'node:util'
+import { spawn } from 'node:child_process'
 import { writeFileSync } from 'node:fs'
 import { randomBytes } from 'node:crypto'
 import { join } from 'node:path'
 import type { DustCliImport } from '@shared/ipc'
-import { resolveBin, resolveSpawnTarget } from './cli'
+import { killWindowsProcessTree, resolveBin, resolveSpawnTarget } from './cli'
 import { clearApiKey, setSettings } from './store'
 import { DUST_KEYCHAIN_SERVICE, readDustSecret } from './dust-secret-store'
 
-const exec = promisify(execFile)
 
 /**
  * Read the local Dust CLI session so Métis can connect to Dust without the user copy-pasting a key.
@@ -88,6 +86,54 @@ export async function importDustCliSession(service: string = DUST_KEYCHAIN_SERVI
 let refreshInflight: Promise<DustCliSession> | null = null
 let lastRefresh: { at: number; session: DustCliSession } | null = null
 const REFRESH_RESULT_TTL_MS = 30_000
+const DUST_STATUS_TIMEOUT_MS = 25_000
+
+/**
+ * Run `dust status` to completion, tearing down the WHOLE process tree if it overruns.
+ *
+ * MQA-019: execFile's built-in `timeout` kills only the immediate child. On Windows the resolved bin is
+ * `dust.cmd`, so that child is cmd.exe and the real `node …dust-cli status` is its grandchild — which
+ * survived the timeout, still mid-refresh and still holding the single-use OAuth refresh token.
+ * `refreshInflight` above tracks Métis's own promise, so it is blind to that orphan: the next refresh
+ * presents the same rotating token, one rotation invalidates the other, and the whole Dust CLI session
+ * dies — precisely the "why am I being asked to run `dust login` again" failure the single-flight guard
+ * exists to prevent. killWindowsProcessTree (cli.ts, shared rather than copied so the two cannot drift)
+ * recurses the tree.
+ *
+ * Never rejects: the caller re-reads the keychain regardless of how the CLI ended.
+ */
+function runDustStatus(target: ReturnType<typeof resolveSpawnTarget>): Promise<void> {
+  return new Promise<void>((resolve) => {
+    const child = spawn(target.command, target.args, {
+      // CI=1 suppresses the spinner / update-check UI.
+      env: { ...process.env, CI: '1', ...target.env },
+      // SECURITY: never shell:true — resolveSpawnTarget routes a .cmd shim through cmd.exe as the target
+      // *executable*, args stay an array, and cmd.exe never re-interprets a joined string.
+      shell: false,
+      windowsHide: true,
+      windowsVerbatimArguments: target.windowsVerbatimArguments,
+      // Nothing ever read this output; ignoring it also means a CLI that tries to read stdin gets EOF
+      // immediately instead of hanging on a pipe no one writes to.
+      stdio: 'ignore'
+    })
+    let done = false
+    const finish = (): void => {
+      if (done) return
+      done = true
+      clearTimeout(timer)
+      resolve()
+    }
+    const timer = setTimeout(() => {
+      killWindowsProcessTree(child.pid)
+      child.kill('SIGTERM') // off-Windows there is no shim indirection, so this alone is sufficient
+      finish()
+    }, DUST_STATUS_TIMEOUT_MS)
+    // 'close' rather than 'exit': it fires once the process has exited AND its stdio is torn down, so a
+    // late kill can never race a child we already consider finished.
+    child.once('close', finish)
+    child.once('error', finish) // spawn failure is best-effort, same as a nonzero exit
+  })
+}
 
 export async function refreshDustCliSession(): Promise<DustCliSession> {
   if (refreshInflight) return refreshInflight
@@ -105,13 +151,7 @@ export async function refreshDustCliSession(): Promise<DustCliSession> {
           // *executable*, args stay an array, cmd.exe never re-interprets a joined string). Best-effort
           // either way: a nonzero exit/timeout is swallowed and we re-read.
           const spawnTarget = resolveSpawnTarget(bin, ['status'])
-          await exec(spawnTarget.command, spawnTarget.args, {
-            timeout: 25_000,
-            env: { ...process.env, CI: '1', ...spawnTarget.env },
-            shell: false,
-            windowsHide: true,
-            windowsVerbatimArguments: spawnTarget.windowsVerbatimArguments
-          })
+          await runDustStatus(spawnTarget)
         } catch {
           // ignore — fall through and re-read the session regardless of exit code
         }

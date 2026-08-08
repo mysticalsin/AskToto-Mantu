@@ -403,8 +403,11 @@ export const ImportDecoderFailedSchema = z.object({
 })
 
 /** Payload for brain:setDealOutcome — the human marks a deal open/won/lost (see DealEntitySchema.outcome
- *  in shared/brain.ts; the LLM never sets it). dealSlug carries the deal's display name, the same
- *  convention brain:commitmentSettle's `deal` field uses — it's slugified in main before the store write. */
+ *  in shared/brain.ts; the LLM never sets it). dealSlug carries the deal's display NAME, the same
+ *  convention brain:commitmentSettle's `deal` field uses. Main resolves it through the correction
+ *  journal's alias map (resolveEntitySlug), NOT by slugifying the name: after a rename the display name
+ *  no longer slugifies to the entity's stable id, and plain slugify made both channels fail with
+ *  "Deal not found." on every renamed deal (MQA-013). */
 export const SetDealOutcomePayloadSchema = z.object({
   dealSlug: z.string().min(1),
   outcome: z.enum(['open', 'won', 'lost'])

@@ -204,6 +204,20 @@ export class ImportJobManager {
   async resume(jobId: string): Promise<ImportJob> {
     const job = this.requireJob(jobId)
     if (job.state !== 'failed') throw new Error('Only a failed import can be resumed.')
+    // Same invariant recover() enforces at the crash path: once `file` is present the meeting is already
+    // durable. Replaying the decoder would run saveMeeting() a second time, and saveMeeting never
+    // overwrites — it picks a fresh non-colliding name, so the user would get a duplicate meeting file, a
+    // duplicate index.md row and a duplicate brain ingest of one conversation. Only the summary is missing.
+    if (job.file) {
+      job.state = 'done'
+      job.error = undefined
+      // Keep whatever the recap stage already reported; explain the interruption only when it never got
+      // that far, so the card says the transcript is safe and only its summary needs a manual retry.
+      job.recapError = job.recapError ?? 'Automatic summary was interrupted. Open the meeting to retry it.'
+      await this.persist(job)
+      await this.removeCheckpoint(job.jobId)
+      return copy(this.requireJob(jobId))
+    }
     job.state = 'queued'
     job.error = undefined
     job.recapError = undefined
@@ -334,22 +348,19 @@ export class ImportJobManager {
         lines: [...job.lines].sort((a, b) => a.t - b.t),
         recap: ''
       })
-      if (this.isCancelled(job)) {
-        // cancel() flipped the job to 'cancelled' while saveMeeting() was in flight. The meeting file
-        // already landed on disk but job.file was never recorded — delete it here so a cancelled import
-        // never leaves an orphaned meeting behind.
-        await this.deleteOrphanedFile(file)
-        return
-      }
+      // cancel() flipped the job to 'cancelled' while saveMeeting() was in flight. The meeting file
+      // already landed on disk but job.file was never recorded — delete it here so a cancelled import
+      // never leaves an orphaned meeting behind.
+      if (await this.abandonIfCancelled(job, file)) return
       job.file = file
       job.state = 'recapping'
       await this.persist(job)
       try {
         const recap = await this.deps.generateRecap(copy(job))
-        if (this.isCancelled(job)) return
+        if (await this.abandonIfCancelled(job, file)) return
         if (recap?.trim()) {
           await this.deps.updateRecap(file, recap)
-          if (this.isCancelled(job)) return
+          if (await this.abandonIfCancelled(job, file)) return
         } else {
           job.recapError = 'No AI provider is configured to create the automatic summary.'
         }
@@ -359,7 +370,7 @@ export class ImportJobManager {
       }
 
       // Queue after the recap stage so Mantu Intelligence sees the durable transcript and summary together.
-      if (this.isCancelled(job)) return
+      if (await this.abandonIfCancelled(job, file)) return
       await this.deps.enqueueIngest(file)
 
       job.progressPct = 100
@@ -440,6 +451,19 @@ export class ImportJobManager {
       // A terminal job is already safely represented by the meeting file; a stale encrypted manifest
       // is preferable to turning a successful import into a failure.
     }
+  }
+
+  /** Every bail-out after saveMeeting() has landed must go through here. cancel() has already erased the
+   *  checkpoint and the renderer hides cancelled cards, so a bare `return` would strand the meeting file
+   *  and its index.md row on disk — a transcript of exactly the recording the user asked to discard, with
+   *  nothing left to reconcile it. Reports whether the caller should stop. */
+  private async abandonIfCancelled(job: ImportJob, file: string): Promise<boolean> {
+    if (!this.isCancelled(job)) return false
+    await this.deleteOrphanedFile(file)
+    // Deliberately not persisted: cancel() already removed this job's checkpoint and re-saving here would
+    // resurrect it at the next restart. The in-memory job just stops pointing at a file that is now gone.
+    job.file = undefined
+    return true
   }
 
   private async deleteOrphanedFile(file: string): Promise<void> {

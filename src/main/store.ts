@@ -181,9 +181,33 @@ function readAllowedFrom(p: string): string[] | null {
 // `trustedAdminManagedPath() ? readFileSync(path) : ...` pattern would reopen). On macOS/Linux the
 // root-owned parent dir already enforces the trust boundary, so it's a plain read there.
 
+// Snapshot of the admin policy content, because the two accessors below run OUTSIDE getSettings()'s
+// cache — on every renderer settings fetch, on every ask, and (via localReady) on screen-preprocess's
+// 6 s tick — and on win32 each raw read runs a synchronous PowerShell Get-Acl probe measured at
+// 0.5-1.9 s, freezing the main process for 10-30% of wall clock (MQA-034).
+//
+// What is cached is the VERIFIED CONTENT, never a bare "this path is trusted" verdict, so a file swapped
+// in behind a forged mtime can at worst make us keep serving bytes that already passed the ACL check —
+// it can never get its own bytes honored. Invalidation matches getSettings()'s own envelope (the admin
+// file's mtime, so an IT policy edit still lands without an app restart), plus a wall-clock ceiling so a
+// DACL-only change — which no mtime can reveal — is re-probed within the minute rather than never.
+const ADMIN_POLICY_REPROBE_MS = 60_000
+let _adminManagedCache: { mtime: number; at: number; content: string | null } | null = null
+
+function adminManagedContent(): string | null {
+  const mtime = safeMtime(adminManagedConfigPath())
+  const now = Date.now()
+  const c = _adminManagedCache
+  // A clock set backwards must not extend the snapshot indefinitely — any negative age counts as stale.
+  if (c && c.mtime === mtime && now - c.at >= 0 && now - c.at < ADMIN_POLICY_REPROBE_MS) return c.content
+  const content = readTrustedAdminManaged()
+  _adminManagedCache = { mtime, at: now, content }
+  return content
+}
+
 /** Enterprise managed defaults: per-user (userData) overlaid by machine-wide admin policy. Validated. */
 export function validatedManaged(): Record<string, unknown> {
-  const admin = readTrustedAdminManaged()
+  const admin = adminManagedContent()
   return {
     ...readManagedFrom(join(dir(), 'managed-config.json')),
     ...(admin ? parseManagedContent(admin) : {}), // machine policy wins over the per-user file (win32: only if admin-trusted)
@@ -194,7 +218,7 @@ export function validatedManaged(): Record<string, unknown> {
 /** Keys that IT has locked; user edits to these are silently dropped. */
 export function getLockedKeys(): string[] {
   const user = readLockedFrom(join(dir(), 'managed-config.json'))
-  const admin = readTrustedAdminManaged()
+  const admin = adminManagedContent()
   const machine = admin ? parseLockedContent(admin) : []
   return [...new Set([...user, ...machine, ...caheEditionPolicy().lockedKeys])]
 }
@@ -207,7 +231,7 @@ export function getLockedKeys(): string[] {
 export function getAllowedProviders(): string[] | null {
   // Machine (admin) policy wins over the per-user managed file, mirroring validatedManaged() precedence.
   // Read from the raw JSON because `allowedProviders` is a policy key, not a settings-schema key.
-  const admin = readTrustedAdminManaged()
+  const admin = adminManagedContent()
   const configured = (admin ? parseAllowedContent(admin) : null) ?? readAllowedFrom(join(dir(), 'managed-config.json'))
   const edition = caheEditionPolicy().allowedProviders
   if (!edition) return configured

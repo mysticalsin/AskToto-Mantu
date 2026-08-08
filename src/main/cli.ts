@@ -76,8 +76,13 @@ function comSpecExe(): string {
  *  /T` recurses the whole process tree rooted at pid; `/F` force-terminates. Best-effort: the process
  *  may have already exited by the time this fires, so failures are swallowed. No-op on non-Windows,
  *  where the plain child.kill() the caller already does is sufficient (no shim indirection).
+ *
+ *  Exported because dustcli.ts needs exactly this behaviour for the same reason (MQA-019: a timed-out
+ *  `dust status` orphaned its grandchild, which then rotated the single-use OAuth refresh token and
+ *  invalidated the session). It briefly existed as a copy there; two copies of a process-kill helper
+ *  drift, and the one that drifts is the one that stops killing the grandchild.
  */
-function killWindowsProcessTree(pid: number | undefined): void {
+export function killWindowsProcessTree(pid: number | undefined): void {
   if (!pid || process.platform !== 'win32') return
   execFile(system32('taskkill.exe'), ['/pid', String(pid), '/T', '/F'], () => {
     /* best-effort — nothing to do if the tree is already gone */
@@ -304,8 +309,20 @@ interface CliConfig {
    *  instead of waiting for process exit — claude-cli's own global hooks can keep the child alive well
    *  past the result line, which would otherwise trip the idle watchdog into a false timeout. */
   isResultLine?(line: string): boolean
+  /** The CLI's own error text when `line` is a terminal marker reporting a FAILED run, else null.
+   *  Optional, and only meaningful next to isResultLine: a failure-shaped terminal line ships zero text
+   *  deltas, so settling it as success hands the renderer a blank answer AND strands the ask — the
+   *  caller's provider waterfall only ever advances from onError. */
+  errorResultLine?(line: string): string | null
   /** codex runs in a throwaway temp cwd so it never touches the user's project. */
   useTmpCwd: boolean
+}
+
+/** claude-cli flags a failed run on the very same terminal `type:'result'` line it uses for a good one:
+ *  `is_error:true` with an `error_*` subtype (error_during_execution, error_max_turns, …). A subscription
+ *  limit reached mid-waterfall is the everyday case, and it produces no text at all. */
+function isErrorResult(obj: { is_error?: unknown; subtype?: unknown }): boolean {
+  return obj.is_error === true || String(obj.subtype ?? '').startsWith('error_')
 }
 
 // exported for unit tests (cli.test.ts) — the locked-down arg arrays are a security invariant
@@ -357,9 +374,25 @@ export const CLI_CONFIGS: Partial<Record<ProviderId, CliConfig>> = {
     isResultLine(line) {
       try {
         const obj = JSON.parse(line)
-        return obj.type === 'result' || (obj.type === 'stream_event' && obj.event?.type === 'message_stop')
+        // SUCCESS-only: type:'result' also carries FAILED runs (see errorResultLine below), and those
+        // must reach onError, not onDone.
+        if (obj.type === 'result') return !isErrorResult(obj)
+        return obj.type === 'stream_event' && obj.event?.type === 'message_stop'
       } catch {
         return false
+      }
+    },
+    errorResultLine(line) {
+      try {
+        const obj = JSON.parse(line)
+        if (obj.type !== 'result' || !isErrorResult(obj)) return null
+        // `result` holds the human-readable cause ("Claude AI usage limit reached|…"); parseLine only
+        // ever emits text_delta, so this line is the ONLY place that text exists. Capped like the
+        // stderr path below — a CLI can dump a lot into it.
+        const text = typeof obj.result === 'string' ? obj.result.trim() : ''
+        return (text || String(obj.subtype ?? '') || 'the CLI reported a failed run').slice(0, 500)
+      } catch {
+        return null
       }
     },
     useTmpCwd: false
@@ -543,11 +576,20 @@ export function runCliStream(opts: RunCliStreamOpts): { abort: () => void } {
       // own global hooks can keep the child alive well after this line ships, which would otherwise
       // trip the idle watchdog into a false 'stream timed out' error. Abort reuses the existing
       // signal-linked kill plumbing (incl. killWindowsProcessTree) to tear the child down now.
-      if (!settled && !controller.signal.aborted && cfg.isResultLine?.(line)) {
-        settled = true
-        wd.clear()
-        opts.handlers.onDone({})
-        controller.abort()
+      if (!settled && !controller.signal.aborted) {
+        // A terminal line can just as well report a FAILED run. It carries no text deltas, so settling
+        // it as success would paint the idle "Ask a question…" placeholder over a dead provider and
+        // stop the waterfall dead — the caller only fails over to the next provider from onError.
+        const cliError = cfg.errorResultLine?.(line)
+        if (cliError) {
+          fail(`${label}: ${cliError}`)
+          controller.abort()
+        } else if (cfg.isResultLine?.(line)) {
+          settled = true
+          wd.clear()
+          opts.handlers.onDone({})
+          controller.abort()
+        }
       }
     })
 

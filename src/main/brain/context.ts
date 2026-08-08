@@ -1,7 +1,9 @@
+import { statSync } from 'node:fs'
+import { join } from 'node:path'
 import type { Settings } from '@shared/ipc'
 import type { MeetingRef, PersonEntity, AccountEntity, DealEntity, ProvenanceState } from '@shared/brain'
 import { RENDERABLE_PROVENANCE_STATES } from '@shared/brain'
-import { listEntities, readPerson, readAccount, readDeal, slugify } from './store'
+import { listEntities, readPerson, readAccount, readDeal, slugify, brainDir } from './store'
 
 /**
  * Receipt Mode (innovation #3) — assemble the slice of the meeting brain that is RELEVANT to the
@@ -48,10 +50,65 @@ function slugInText(slug: string, haystack: string): boolean {
 
 /** Task MI-5 — an entity matches when its OWN id appears in the question, OR any of its `aliases[]`
  *  does (a corrected-away surface form — "Acme Corp" after a rename to "Acme" — still hits the
- *  canonical record, instead of Receipt Mode going silent on a question phrased the old way). */
-function matchesEntity(id: string, aliases: string[], haystack: string): boolean {
-  if (slugInText(id, haystack)) return true
-  return aliases.some((a) => a.trim() && slugInText(slugify(a), haystack))
+ *  canonical record, instead of Receipt Mode going silent on a question phrased the old way). Aliases
+ *  are slugified so every key shares slugInText's hyphen-joined shape with the id. */
+function matchKeys(id: string, aliases: string[]): string[] {
+  return [id, ...aliases.filter((a) => a.trim()).map((a) => slugify(a))].filter(Boolean)
+}
+
+type EntityKind = 'person' | 'account' | 'deal'
+
+/** Deciding whether a file is worth opening only needs `id`/`aliases` — the narrow shape all three
+ *  entity kinds share. */
+const ENTITY_READERS: Record<EntityKind, (s: Settings, slug: string) => { id: string; aliases: string[] } | null> = {
+  person: readPerson,
+  account: readAccount,
+  deal: readDeal
+}
+
+/**
+ * Match keys per entity kind, keyed by the entity directory and stamped with that directory's mtime.
+ *
+ * The header comment above promises only the named handful get read off disk, but `aliases[]` live
+ * INSIDE each entity file — so deciding a match used to mean reading ALL of them, and every answer-mode
+ * ask stat+read+decrypt+Zod-parsed the whole corpus (hundreds of files on a OneDrive-backed `.brain`)
+ * on the synchronous IPC handler, even for a question that named nobody. Pre-filtering on the slug alone
+ * would be cheap but would SHRINK what can match; caching the keys keeps the matchable set identical
+ * while an unchanged corpus costs one stat per kind.
+ *
+ * Directory mtime is a sound stamp because every entity write goes through writeSaved's tmp-file +
+ * rename (transcripts.ts), which mutates the containing directory — a new entity, a removed one, and an
+ * alias added to an existing one all move it. The stamp is re-read AFTER the rebuild so a write landing
+ * mid-rebuild invalidates the entry instead of being swallowed by it. Only keys are cached: entity
+ * CONTENT still comes from readPerson/readAccount/readDeal on every ask.
+ */
+const matchKeyCache = new Map<string, { mtimeMs: number; entries: { slug: string; keys: string[] }[] }>()
+
+function entityDirMtime(dir: string): number {
+  try {
+    return statSync(dir).mtimeMs
+  } catch {
+    return -1 // nothing of this kind ingested yet — no directory, so nothing to match
+  }
+}
+
+/** Slugs whose id or one of its aliases appears as a whole-token run in the question, in listEntities'
+ *  stable sorted order so the MAX_* caps keep selecting the same entities they always did. */
+function matchedSlugs(s: Settings, kind: EntityKind, hay: string): string[] {
+  const dir = join(brainDir(s), 'entities', kind)
+  const mtimeMs = entityDirMtime(dir)
+  let cached = matchKeyCache.get(dir)
+  if (!cached || cached.mtimeMs !== mtimeMs) {
+    const read = ENTITY_READERS[kind]
+    const entries: { slug: string; keys: string[] }[] = []
+    for (const slug of listEntities(s, kind)) {
+      const e = read(s, slug)
+      if (e) entries.push({ slug, keys: matchKeys(e.id, e.aliases) })
+    }
+    cached = { mtimeMs: entityDirMtime(dir), entries }
+    matchKeyCache.set(dir, cached)
+  }
+  return cached.entries.filter((e) => e.keys.some((k) => slugInText(k, hay))).map((e) => e.slug)
 }
 
 /** "meeting title" (date) — the human-readable citation the answer is told to echo. */
@@ -135,25 +192,20 @@ export function buildBrainContext(s: Settings, text: string): { block: string; m
 
   const lines: string[] = []
 
-  const people = listEntities(s, 'person')
-    .map((slug) => readPerson(s, slug))
-    .filter((p): p is PersonEntity => !!p && matchesEntity(p.id, p.aliases, hay))
-    .slice(0, MAX_PEOPLE)
-  for (const p of people) {
-    lines.push(formatPersonWithCommitments(p))
+  for (const slug of matchedSlugs(s, 'person', hay).slice(0, MAX_PEOPLE)) {
+    const p = readPerson(s, slug)
+    if (p) lines.push(formatPersonWithCommitments(p))
   }
 
-  const accounts = listEntities(s, 'account')
-    .map((slug) => readAccount(s, slug))
-    .filter((a): a is AccountEntity => !!a && matchesEntity(a.id, a.aliases, hay))
-    .slice(0, MAX_ACCOUNTS)
-  for (const a of accounts) lines.push(formatAccount(a))
+  for (const slug of matchedSlugs(s, 'account', hay).slice(0, MAX_ACCOUNTS)) {
+    const a = readAccount(s, slug)
+    if (a) lines.push(formatAccount(a))
+  }
 
-  const deals = listEntities(s, 'deal')
-    .map((slug) => readDeal(s, slug))
-    .filter((d): d is DealEntity => !!d && matchesEntity(d.id, d.aliases, hay))
-    .slice(0, MAX_DEALS)
-  for (const d of deals) lines.push(formatDeal(d))
+  for (const slug of matchedSlugs(s, 'deal', hay).slice(0, MAX_DEALS)) {
+    const d = readDeal(s, slug)
+    if (d) lines.push(formatDeal(d))
+  }
 
   if (lines.length === 0) return { block: '', matched: false }
 

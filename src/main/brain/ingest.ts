@@ -22,8 +22,8 @@ import { fnv1a } from '@shared/hash'
 import { alignQuote, verifyNumericFact, extractNumerals, numeralDerivable } from '@shared/grounding'
 import { getSettings, getApiKey, getAllowedProviders } from '../store'
 import { createStream } from '../llm'
-import { isTransient } from '../llm/retry'
 import { localBaseReady } from '../llm/local-routing'
+import { getState as localRuntimeState } from '../llm/local-runtime'
 import { readSavedFile, resolveMeetingsFolder } from '../transcripts'
 import { auditLog, mainLog } from '../logger'
 import {
@@ -105,7 +105,12 @@ function pickProviderCandidates(s: Settings): { provider: ProviderId; model: str
     if (!connected) continue
     if (p === 'dust' && !s.dustWorkspaceId) continue
     const model = resolveModelTier(p, s.providerModels, s.providerModelsThinking, 'deep', s.providerModelsDeep)
-    if (!model) continue
+    // MQA-029: a CLI provider may have no configured model at all (codex-cli ships none and takes its
+    // own default) — requiring one here dropped a connected Codex subscription out of the waterfall
+    // entirely. The ask path exempts kind === 'cli' at both of its seams (index.ts's attempt() ineligible
+    // chain and pickFailover); this pipeline has to exempt it the same way or the two disagree about
+    // which providers exist.
+    if (def.kind !== 'cli' && !model) continue
     candidates.push({ provider: p, model, key })
   }
   // Last-resort local fallback: appended AFTER every cloud candidate, never ahead of one, so a
@@ -116,7 +121,13 @@ function pickProviderCandidates(s: Settings): { provider: ProviderId; model: str
   // ("cloud first, local only once cloud is exhausted"). Gated on the same localBaseReady() eligibility
   // (enabled, runtime+model provisioned, org allowlist permits 'local') so it can never silently start
   // local processing for a user/org that hasn't opted in.
-  if (s.localLlm.fallback && localBaseReady(s, allowed)) {
+  // MQA-018: runtime health, not just provisioning. localBaseReady() proves the binary and model are on
+  // disk and defers "can llama-server actually run?" to a failover that does not exist on this path —
+  // local is appended LAST, so there is nothing after it to catch a spawn failure. And hasUsableProvider()
+  // reads this same list to authorize startRebuild's purge, so a session-long 'unavailable' lockout
+  // (restart budget exhausted, cleared only by relaunch) would otherwise let an automatic source-refresh
+  // rebuild wipe the whole brain and then fail every single re-extraction.
+  if (s.localLlm.fallback && localBaseReady(s, allowed) && localRuntimeState() !== 'unavailable') {
     candidates.push({ provider: 'local', model: s.localLlm.modelId, key: '' })
   }
   return candidates
@@ -128,19 +139,24 @@ function pickProvider(s: Settings): { provider: ProviderId; model: string; key: 
   return pickProviderCandidates(s)[0] ?? null
 }
 
-/** Transport-failure gate for the extraction failover walk (network/4xx/5xx/timeout). Deliberately
- *  BROADER than the interactive ask path's isTransient: that gate treats a non-429 4xx (bad model, dead
- *  endpoint) and an idle-stream timeout as PERMANENT because its fix is "stop hammering the SAME
- *  provider, surface the error" — but this pipeline's known failure mode (a provider consistently
- *  returning e.g. HTTP 404 for a misconfigured/retired model) is exactly that kind of permanent-looking
- *  4xx, and a DIFFERENT eligible provider can still serve the request. Anything that isn't a deliberate
- *  cancel is worth one hop to the next candidate; MAX_INGEST_ATTEMPTS is what stops a transcript with
- *  every provider down from retrying forever, not this gate. */
+/** Failover gate for the extraction walk. Deliberately BROADER than the interactive ask path's
+ *  isTransient: that gate treats a non-429 4xx (bad model, dead endpoint) and an idle-stream timeout as
+ *  PERMANENT because its fix is "stop hammering the SAME provider, surface the error" — but this pipeline's
+ *  known failure mode (a provider consistently returning e.g. HTTP 404 for a misconfigured/retired model)
+ *  is exactly that kind of permanent-looking 4xx, and a DIFFERENT eligible provider can still serve the
+ *  request. Anything that isn't a deliberate cancel is worth one hop to the next candidate;
+ *  MAX_INGEST_ATTEMPTS is what stops a transcript with every provider down from retrying forever, not
+ *  this gate.
+ *
+ *  MQA-022: that contract used to be enforced by matching HTTP-status DIGITS in the message text, which
+ *  silently excluded every credential failure that arrives as prose — Dust rejects an expired OAuth token
+ *  with "The user request does not have a valid authenticated credential." and a CLI provider fails with
+ *  raw stderr, neither carrying a status code. Both read as PERMANENT and halted the walk before the local
+ *  last-resort candidate, so a meeting went unindexed while a ready on-device model sat one hop away. A
+ *  dead credential is permanent for THAT provider and precisely why the next one must be tried. */
 function isIngestTransportFailure(err: unknown): boolean {
   const message = err instanceof Error ? err.message : typeof err === 'string' ? err : ''
-  if (/\babort(ed)?\b/i.test(message)) return false
-  if (isTransient(err)) return true
-  return /timed out|\b4\d\d\b/i.test(message)
+  return !/\babort(ed)?\b/i.test(message)
 }
 
 /** Run one accumulate-the-stream completion against a SPECIFIC candidate. Rejects on stream error. */
@@ -1143,6 +1159,14 @@ function hasActiveBackfill(): boolean {
   return queue.some((job) => job.origin === 'backfill') || [...inFlightJobs].some((job) => job.origin === 'backfill')
 }
 
+/** MQA-023: is any job actually being worked on right now? A job pump() parked in `queue` because no
+ *  provider was configured is queued but NOT in flight, and the recovery paths below have to tell those
+ *  two states apart: pump()'s other call sites all live inside a running job, so once a mid-batch provider
+ *  loss empties the workers the queue can never restart itself — indexing freezes for the whole session. */
+function hasJobsInFlight(): boolean {
+  return inFlightJobs.size > 0
+}
+
 /** Live saves/imports are separate from a historical Index batch, but still need visible status. */
 function hasActiveLiveIngest(): boolean {
   return queue.some((job) => job.origin === 'live') || [...inFlightJobs].some((job) => job.origin === 'live')
@@ -2052,7 +2076,14 @@ export function requestBackfill(options: BackfillStartOptions = {}): BackfillSta
   if (backfillPreparing || sourceRefreshRunning) return { queued: 0, preparing: true }
   // A control cannot normally be clicked during an active run, but keep this guard authoritative for
   // re-entrant IPC callers too. There is already a real batch whose progress will be reported.
-  if (hasActiveBackfill() || backfillLintPending) return { queued: 0 }
+  if (hasActiveBackfill() || backfillLintPending) {
+    // MQA-023: unless that batch is stalled rather than running — pump() parks every remaining job when the
+    // provider disappears mid-backfill and only a running job can call pump() again. Nudging it here is
+    // what makes "Retry index" work after the user pastes a fresh key, instead of silently reporting a
+    // batch that can never move while the progress bar stays frozen.
+    if (!hasJobsInFlight()) pump()
+    return { queued: 0 }
+  }
 
   backfillPreparing = true
   const idx = readIndex(s)
@@ -2080,7 +2111,10 @@ export function requestBackfill(options: BackfillStartOptions = {}): BackfillSta
 export function reconcileMeetingsInBackground(): void {
   try {
     const s = getSettings()
-    if (backfillPreparing || sourceRefreshRunning || hasActiveBackfill()) return
+    // MQA-023: a backfill with jobs still in flight owns the queue and must not be disturbed — but one
+    // whose jobs are all parked (provider lost mid-batch) is exactly what this tick has to revive, so it
+    // no longer bails on hasActiveBackfill() alone. requestBackfill re-pumps the stalled queue below.
+    if (backfillPreparing || sourceRefreshRunning || (hasActiveBackfill() && hasJobsInFlight())) return
     const idx = readIndex(s)
     if (idx.sourceRefreshRequested || hasMeetingSourceDrift(s, idx)) {
       void requestSourceRefresh(s)

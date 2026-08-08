@@ -1361,4 +1361,164 @@ describe('corrections engine', () => {
       expect(merged.filter((e) => e.kind === 'entity_merge')).toHaveLength(2)
     })
   })
+
+  // ── Replay of a correction whose entity was later merged away (MQA-014, MQA-015) ────────────
+  // Both defects live in the same seam: during a rebuild, re-ingest routes a merged-away entity's
+  // meetings straight to the survivor, so the corrected id never materializes as its own file at replay
+  // time. MQA-014 = the redirect is missing for commitment_reject (the rejection is dropped); MQA-015 =
+  // the redirect exists for field_update but lands as an unconditional pin, clobbering the survivor's own.
+  describe('replay after the corrected entity is merged away (MQA-014, MQA-015)', () => {
+    const ALICE = slugify('Alice Adams')
+
+    it('MQA-014: a commitment rejected before the person was merged away is still rejected after a rebuild', async () => {
+      const SURVIVOR = slugify('Alice A. Adams')
+      const alice = MeetingExtractionSchema.parse({
+        people: [{ name: 'Alice Adams', role: null, org: null, confidence: 'EXTRACTED' }],
+        commitments: [{ text: 'send the pricing sheet', by: 'Alice Adams', quote: '"send the pricing sheet"', confidence: 'EXTRACTED' }]
+      })
+      const survivor = MeetingExtractionSchema.parse({
+        people: [{ name: 'Alice A. Adams', role: null, org: null, confidence: 'EXTRACTED' }]
+      })
+      const ingestBoth = async (): Promise<void> => {
+        await ingestExtraction(s, alice, transcriptMd('2026-06-01'), join(folder, 'mqa014-a.md'))
+        await ingestExtraction(s, survivor, transcriptMd('2026-06-02'), join(folder, 'mqa014-b.md'))
+      }
+      const statusOf = (slug: string): string | undefined =>
+        readPerson(s, slug)?.commitments?.find((c) => c.text === 'send the pricing sheet')?.status
+
+      await ingestBoth()
+      // The meeting carries no deal, so the record page's Reject sends no dealSlug — the person ledger is
+      // the ONLY place this rejection is recorded.
+      expect((await rejectCommitment(s, { personSlug: ALICE, text: 'send the pricing sheet' })).ok).toBe(true)
+      expect((await mergeEntities(s, { kind: 'person', fromId: ALICE, intoId: SURVIVOR })).ok).toBe(true)
+      expect(statusOf(SURVIVOR)).toBe('rejected')
+
+      expect(purgeBrain(s, { preserveCorrections: true }).ok).toBe(true)
+      await ingestBoth()
+      const replay = await replayCorrections(s)
+
+      // Without the journal-alias resolution the reject targets alice-adams — a slug the rebuild never
+      // recreates — so it warns "Commitment not found." and the promise reappears as 'open'.
+      expect(replay.warnings).toEqual([])
+      expect(replay.applied).toBe(2)
+      expect(statusOf(SURVIVOR)).toBe('rejected')
+      // One row, not a second 'open' copy alongside it — the merge's pushUnique keeps whichever it sees
+      // first, so a dropped rejection would show up here as an open promise on the survivor's ledger.
+      expect(readPerson(s, SURVIVOR)!.commitments.filter((c) => c.text === 'send the pricing sheet')).toHaveLength(1)
+      expect(readPerson(s, ALICE)).toBeNull() // still tombstoned by the merge replay
+      // (No byte-for-byte snapshot assertion here: this meeting's commitment carries a `by` NAME, and a
+      // merge repaints that display string on rebuild but not live — the same documented live-vs-rebuild
+      // divergence the pre-rename extraction test above records, unrelated to the rejection itself.)
+    })
+
+    const pinnedPerson = (name: string, role: string): MeetingExtraction =>
+      MeetingExtractionSchema.parse({ people: [{ name, role, org: null, confidence: 'EXTRACTED' }] })
+
+    /** Ingest the duplicate + the survivor, pin `role` on each in the given order, then merge the
+     *  duplicate away — the live result is always the SURVIVOR's pin (foldProvenant rule 3). Returns the
+     *  pre-rebuild snapshot so the caller can assert the rebuild reproduces it. */
+    const pinBothThenMerge = async (first: 'survivor' | 'duplicate'): Promise<Record<string, unknown>> => {
+      const BOB = slugify('Bob Baker')
+      const alice = pinnedPerson('Alice Adams', 'Analyst')
+      const bob = pinnedPerson('Bob Baker', 'Engineer')
+      const ingestBoth = async (): Promise<void> => {
+        await ingestExtraction(s, alice, transcriptMd('2026-06-01'), join(folder, 'mqa015-a.md'))
+        await ingestExtraction(s, bob, transcriptMd('2026-06-02'), join(folder, 'mqa015-b.md'))
+      }
+      await ingestBoth()
+      const pins: Array<[string, string]> =
+        first === 'survivor'
+          ? [[BOB, 'Survivor Pin'], [ALICE, 'Source Pin']]
+          : [[ALICE, 'Source Pin'], [BOB, 'Survivor Pin']]
+      for (const [id, value] of pins) {
+        expect((await updateEntityField(s, { kind: 'person', id, field: 'role', value })).ok).toBe(true)
+      }
+      expect((await mergeEntities(s, { kind: 'person', fromId: ALICE, intoId: BOB })).ok).toBe(true)
+      expect(readPerson(s, BOB)!.role).toBe('Survivor Pin')
+      const liveSnapshot = snapshotEntities(s)
+
+      expect(purgeBrain(s, { preserveCorrections: true }).ok).toBe(true)
+      await ingestBoth()
+      const replay = await replayCorrections(s)
+      expect(replay.warnings).toEqual([])
+      return liveSnapshot
+    }
+
+    it('MQA-015: a rebuild keeps the survivor\'s own pin when the merged-away duplicate was pinned later', async () => {
+      const BOB = slugify('Bob Baker')
+      const liveSnapshot = await pinBothThenMerge('survivor')
+
+      // The failing order: the survivor's pin has the LOWER seq, so replay's redirected pin overwrites it
+      // and the merge then re-elects that clobbered value under rule 3 — role silently becomes 'Source Pin'.
+      expect(readPerson(s, BOB)!.role).toBe('Survivor Pin')
+      expect(readPerson(s, BOB)!.role_provenance?.state).toBe('pinned')
+      expect(readPerson(s, BOB)!.role_provenance?.superseded.some((e) => e.value === 'Source Pin')).toBe(true)
+      expect(snapshotEntities(s)).toEqual(liveSnapshot)
+    })
+
+    it('MQA-015: the reverse pin order (duplicate pinned first) converges too', async () => {
+      const BOB = slugify('Bob Baker')
+      const liveSnapshot = await pinBothThenMerge('duplicate')
+
+      expect(readPerson(s, BOB)!.role).toBe('Survivor Pin')
+      expect(snapshotEntities(s)).toEqual(liveSnapshot)
+    })
+  })
+
+  // ── Forward-compat journal entries + seq assignment (MQA-016) ───────────────────────────────
+  describe('forward-compat journal entries and seq assignment (MQA-016)', () => {
+    // A correction written by a NEWER build on a shared .brain — this build cannot parse its kind.
+    const futureEntry = {
+      seq: 0,
+      at: '2026-06-01T00:00:00.000Z',
+      kind: 'entity_relabel',
+      payload: { kind: 'account', id: 'acme-corp', label: 'strategic' }
+    }
+    const journalPath = (): string => join(brainDir(s), 'corrections.json')
+    const readJournalFile = (): unknown[] => JSON.parse(readFileSync(journalPath(), 'utf8'))
+
+    it('MQA-016: an unrecognized entry survives the next append, and that append gets a free seq so Undo hits the merge it names', async () => {
+      await ingestThreeMeetings(s)
+      await ingestExtraction(s, accountOnly('Acme Corportation'), transcriptMd('2026-06-04'), join(folder, 'mqa016a.md'))
+      const DUP_ACCOUNT = slugify('Acme Corportation')
+
+      const personMerge = await mergeEntities(s, { kind: 'person', fromId: M_SILVA_SLUG, intoId: MARIA_SLUG })
+      expect(personMerge.ok).toBe(true)
+      // The shared journal as machine B left it: the newer build's entry FIRST, our merge at seq 1.
+      writeFileSync(journalPath(), JSON.stringify([futureEntry, { ...(readJournalFile()[0] as object), seq: 1 }]), 'utf8')
+
+      const accountMerge = await mergeEntities(s, { kind: 'account', fromId: DUP_ACCOUNT, intoId: ACCOUNT_SLUG })
+      expect(accountMerge.ok).toBe(true)
+      // Pre-fix this was the journal's LENGTH (1) — the seq the person merge already holds.
+      expect(accountMerge.seq).toBe(2)
+
+      expect((await unmergeEntities(s, { targetSeq: accountMerge.seq! })).ok).toBe(true)
+      // Undo restored the pair the user actually merged, and left the unrelated person merge alone.
+      expect(readAccount(s, DUP_ACCOUNT)).not.toBeNull()
+      expect(readPerson(s, M_SILVA_SLUG)).toBeNull()
+      // ...and the newer build's correction is still on disk, verbatim, in the position it was read at.
+      const after = readJournalFile()
+      expect(after[0]).toEqual(futureEntry)
+      expect(after).toHaveLength(4) // relabel + person merge + account merge + the unmerge
+    })
+
+    it('MQA-016: refuses an ambiguous Undo when two merges share a seq, instead of restoring an arbitrary pair', async () => {
+      await ingestThreeMeetings(s)
+      await ingestExtraction(s, accountOnly('Acme Corportation'), transcriptMd('2026-06-04'), join(folder, 'mqa016b.md'))
+      const DUP_ACCOUNT = slugify('Acme Corportation')
+      expect((await mergeEntities(s, { kind: 'person', fromId: M_SILVA_SLUG, intoId: MARIA_SLUG })).ok).toBe(true)
+      expect((await mergeEntities(s, { kind: 'account', fromId: DUP_ACCOUNT, intoId: ACCOUNT_SLUG })).ok).toBe(true)
+
+      // A journal a pre-fix build already collided: both merges carry seq 0.
+      const onDisk = readJournalFile()
+      writeFileSync(journalPath(), JSON.stringify([onDisk[0], { ...(onDisk[1] as object), seq: 0 }]), 'utf8')
+
+      const undo = await unmergeEntities(s, { targetSeq: 0 })
+      expect(undo.ok).toBe(false)
+      expect(undo.error).toMatch(/more than one merge/i)
+      // Refused means refused: neither pair was restored from a stale snapshot.
+      expect(readPerson(s, M_SILVA_SLUG)).toBeNull()
+      expect(readAccount(s, DUP_ACCOUNT)).toBeNull()
+    })
+  })
 })

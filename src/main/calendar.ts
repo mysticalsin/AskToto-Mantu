@@ -12,20 +12,49 @@ import type { CalendarEvent, CalendarTodayResult } from '@shared/ipc'
 
 const GRAPH = 'https://graph.microsoft.com/v1.0'
 
-/** Today's [00:00, next-00:00) as naive ISO strings in the given IANA timezone (Graph reads them with the
- *  Prefer: outlook.timezone header, so no offset math is needed here). */
-function todayBounds(tz: string): { start: string; end: string } {
+/** Wall-clock offset of `tz` at instant `at`, in ms east of UTC. Node exposes no offset accessor, so we
+ *  format the instant in the zone and diff against UTC — that keeps half-hour zones and DST honest. */
+function zoneOffsetMs(tz: string, at: Date): number {
   const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: tz,
+    hourCycle: 'h23',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit'
+  }).formatToParts(at)
+  const num = (type: string): number => Number(parts.find((p) => p.type === type)?.value)
+  const wall = Date.UTC(num('year'), num('month') - 1, num('day'), num('hour'), num('minute'), num('second'))
+  return Math.round((wall - at.getTime()) / 60000) * 60000 // zone offsets are whole minutes
+}
+
+/** The instant of 00:00 local time on calendar date `ymd` ("YYYY-MM-DD") in `tz`. */
+function zonedMidnight(tz: string, ymd: string): Date {
+  const wall = Date.parse(`${ymd}T00:00:00Z`)
+  // Probe the offset twice: the first probe samples the wrong instant whenever the zone shifted that day.
+  const approx = wall - zoneOffsetMs(tz, new Date(wall))
+  return new Date(wall - zoneOffsetMs(tz, new Date(approx)))
+}
+
+/** Today's [00:00, next-00:00) in the given IANA timezone, as absolute (offset-bearing) instants. Graph
+ *  interprets calendarView's startDateTime/endDateTime by the offset carried in the value and is NOT
+ *  impacted by Prefer: outlook.timezone — that header only picks the zone of the *response*. Naive bounds
+ *  therefore query a UTC day, so a Tokyo user's morning standup falls outside "today". */
+function todayBounds(tz: string): { start: string; end: string } {
+  const today = new Intl.DateTimeFormat('en-CA', {
     timeZone: tz,
     year: 'numeric',
     month: '2-digit',
     day: '2-digit'
   }).format(new Date()) // "YYYY-MM-DD" in en-CA
-  const start = `${parts}T00:00:00`
-  const next = new Date(`${parts}T00:00:00Z`)
+  const next = new Date(`${today}T00:00:00Z`)
   next.setUTCDate(next.getUTCDate() + 1)
-  const end = `${next.toISOString().slice(0, 10)}T00:00:00`
-  return { start, end }
+  return {
+    start: zonedMidnight(tz, today).toISOString(),
+    end: zonedMidnight(tz, next.toISOString().slice(0, 10)).toISOString()
+  }
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any

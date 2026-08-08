@@ -1,0 +1,74 @@
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
+
+vi.mock('./auth', () => ({ getGraphToken: vi.fn(async () => 'graph-token') }))
+vi.mock('./logger', () => ({ auditLog: vi.fn() }))
+
+import { calendarToday } from './calendar'
+
+// MQA-026 — "today's agenda" must be the user's LOCAL day. Graph interprets calendarView's
+// startDateTime/endDateTime by the offset carried in the value and ignores Prefer: outlook.timezone for
+// the request bounds, so naive "YYYY-MM-DDT00:00:00" bounds silently query a UTC day: a Tokyo user loses
+// their own morning standup and inherits tomorrow's early meetings. These tests pin the absolute instants.
+
+/** Run calendarToday at a pinned wall clock and return the bounds Graph actually received. */
+async function boundsAt(nowIso: string, tz: string): Promise<{ start: string; end: string; prefer: string }> {
+  vi.setSystemTime(new Date(nowIso))
+  const fetchMock = vi.fn(async () => ({ ok: true, status: 200, json: async () => ({ value: [] }) }))
+  vi.stubGlobal('fetch', fetchMock)
+  const res = await calendarToday(tz)
+  expect(res.ok).toBe(true)
+  const [url, init] = fetchMock.mock.calls[0] as unknown as [string, { headers: Record<string, string> }]
+  const q = new URL(url).searchParams
+  return { start: q.get('startDateTime') || '', end: q.get('endDateTime') || '', prefer: init.headers.Prefer }
+}
+
+describe('calendarToday — local-day window (MQA-026)', () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+  })
+  afterEach(() => {
+    vi.useRealTimers()
+    vi.unstubAllGlobals()
+    vi.clearAllMocks()
+  })
+
+  it('queries the Tokyo day, not the UTC day, for a user east of UTC', async () => {
+    // 2026-08-08T19:15Z is already 2026-08-09 04:15 JST — the naive bounds asked for 09:00 JST → 09:00 JST.
+    const { start, end } = await boundsAt('2026-08-08T19:15:00Z', 'Asia/Tokyo')
+    expect(start).toBe('2026-08-08T15:00:00.000Z') // 2026-08-09 00:00 JST
+    expect(end).toBe('2026-08-09T15:00:00.000Z') // 2026-08-10 00:00 JST
+  })
+
+  it('queries the Los Angeles day, not the UTC day, for a user west of UTC', async () => {
+    const { start, end } = await boundsAt('2026-08-08T19:15:00Z', 'America/Los_Angeles')
+    expect(start).toBe('2026-08-08T07:00:00.000Z') // 2026-08-08 00:00 PDT
+    expect(end).toBe('2026-08-09T07:00:00.000Z') // 2026-08-09 00:00 PDT
+  })
+
+  it('carries a real offset for a half-hour zone', async () => {
+    const { start, end } = await boundsAt('2026-08-08T19:15:00Z', 'Asia/Kolkata')
+    expect(start).toBe('2026-08-08T18:30:00.000Z') // 2026-08-09 00:00 IST (+05:30)
+    expect(end).toBe('2026-08-09T18:30:00.000Z')
+  })
+
+  it('shortens the window to 23h across a spring-forward DST transition', async () => {
+    // 2027-03-14 is the US spring-forward: local midnight is still PST (-08:00), the next one is PDT (-07:00).
+    const { start, end } = await boundsAt('2027-03-14T18:00:00Z', 'America/Los_Angeles')
+    expect(start).toBe('2027-03-14T08:00:00.000Z')
+    expect(end).toBe('2027-03-15T07:00:00.000Z')
+    expect(Date.parse(end) - Date.parse(start)).toBe(23 * 3600_000)
+  })
+
+  it('sends bounds Graph reads as absolute instants, and still asks for responses in the user zone', async () => {
+    const { start, end, prefer } = await boundsAt('2026-08-08T19:15:00Z', 'Asia/Tokyo')
+    // A naive bound (no Z / no ±HH:MM) is read as UTC by Graph regardless of the Prefer header.
+    for (const bound of [start, end]) expect(bound).toMatch(/(Z|[+-]\d{2}:\d{2})$/)
+    expect(prefer).toBe('outlook.timezone="Asia/Tokyo"')
+  })
+
+  it('falls back to UTC bounds when no timezone is supplied', async () => {
+    const { start, end } = await boundsAt('2026-08-08T19:15:00Z', '')
+    expect(start).toBe('2026-08-08T00:00:00.000Z')
+    expect(end).toBe('2026-08-09T00:00:00.000Z')
+  })
+})

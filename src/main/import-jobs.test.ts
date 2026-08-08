@@ -231,6 +231,71 @@ describe('ImportJobManager', () => {
     expect(enqueueIngest).not.toHaveBeenCalled()
   })
 
+  // MQA-024 (docs/qa/BUG-LEDGER.md): cancel() deletes the checkpoint and the renderer hides cancelled
+  // cards, so every bail-out after saveMeeting() has landed must also delete the meeting file — otherwise
+  // the recording the user explicitly discarded stays in History (and syncs) with nothing left to
+  // reconcile it. The recap phase is a multi-minute, cancel-inviting window, not a narrow race.
+  describe('a cancelled import never leaves an orphaned meeting behind (MQA-024)', () => {
+    it('deletes the saved meeting when cancelled while the summary is being generated', async () => {
+      let resolveRecap!: (text: string) => void
+      const generateRecap = vi.fn(() => new Promise<string>((resolve) => { resolveRecap = resolve }))
+      const deleteMeeting = vi.fn(async () => {})
+      const { manager, enqueueIngest } = createManager({ generateRecap, deleteMeeting })
+      await manager.start(source)
+      await manager.acceptDecodedChunk('job-1', 0, 1, new Float32Array([1]))
+      const finishing = manager.finishDecoding('job-1')
+      for (let i = 0; i < 5 && !resolveRecap; i++) await new Promise((resolve) => setTimeout(resolve, 0))
+
+      await manager.cancel('job-1')
+      resolveRecap('late recap')
+      await finishing
+
+      expect(deleteMeeting).toHaveBeenCalledWith('saved-import.md')
+      expect(manager.get('job-1')?.state).toBe('cancelled')
+      expect(manager.get('job-1')?.file).toBeUndefined()
+      expect(enqueueIngest).not.toHaveBeenCalled()
+    })
+
+    it('deletes the saved meeting when cancelled while the summary is being written back', async () => {
+      let resolveUpdate!: () => void
+      const generateRecap = vi.fn(async () => '## Overview\n\nImported summary')
+      const updateRecap = vi.fn(() => new Promise<void>((resolve) => { resolveUpdate = resolve }))
+      const deleteMeeting = vi.fn(async () => {})
+      const { manager, enqueueIngest } = createManager({ generateRecap, updateRecap, deleteMeeting })
+      await manager.start(source)
+      await manager.acceptDecodedChunk('job-1', 0, 1, new Float32Array([1]))
+      const finishing = manager.finishDecoding('job-1')
+      for (let i = 0; i < 5 && !resolveUpdate; i++) await new Promise((resolve) => setTimeout(resolve, 0))
+
+      await manager.cancel('job-1')
+      resolveUpdate()
+      await finishing
+
+      expect(deleteMeeting).toHaveBeenCalledWith('saved-import.md')
+      expect(enqueueIngest).not.toHaveBeenCalled()
+    })
+
+    it('deletes the saved meeting when cancelled while a failing summary is in flight', async () => {
+      let rejectRecap!: (error: Error) => void
+      const generateRecap = vi.fn(() => new Promise<string>((_resolve, reject) => { rejectRecap = reject }))
+      const deleteMeeting = vi.fn(async () => {})
+      const { manager, enqueueIngest } = createManager({ generateRecap, deleteMeeting })
+      await manager.start(source)
+      await manager.acceptDecodedChunk('job-1', 0, 1, new Float32Array([1]))
+      const finishing = manager.finishDecoding('job-1')
+      for (let i = 0; i < 5 && !rejectRecap; i++) await new Promise((resolve) => setTimeout(resolve, 0))
+
+      await manager.cancel('job-1')
+      // A recap failure routes past the generateRecap checkpoint into the pre-ingest one, which was the
+      // last bail-out still returning without cleaning up.
+      rejectRecap(new Error('provider unavailable'))
+      await finishing
+
+      expect(deleteMeeting).toHaveBeenCalledWith('saved-import.md')
+      expect(enqueueIngest).not.toHaveBeenCalled()
+    })
+  })
+
   it('does not decode or duplicate a meeting after a crash during recap', async () => {
     const first = createManager()
     await first.store.save({
@@ -248,6 +313,52 @@ describe('ImportJobManager', () => {
 
     expect(second.decode).not.toHaveBeenCalled()
     expect(second.manager.get('job-1')).toMatchObject({ state: 'done', file: 'already-saved.md' })
+  })
+
+  // MQA-025 (docs/qa/BUG-LEDGER.md): the same invariant recover() enforces has to hold for the Resume
+  // button. saveMeeting() never overwrites — it picks a fresh non-colliding name — so replaying the
+  // decoder for a failure that already wrote its file yields a second meeting file, a second index.md row
+  // and a second brain ingest of one conversation.
+  it('resumes a failure that already saved its meeting without decoding or saving it twice (MQA-025)', async () => {
+    const first = createManager()
+    // A tail failure inside finishDecoding — the checkpoint write losing to an AV/OneDrive file lock —
+    // after the meeting file had already landed. This is exactly the card that offers Resume.
+    await first.store.save({
+      jobId: 'job-1', sourcePath: source.path, sourceName: source.name, sourceSizeBytes: source.sizeBytes,
+      sourceMtimeMs: source.mtimeMs, title: 'Interview', state: 'failed', cursor: 1, totalChunks: 1,
+      chunkSec: IMPORT_CHUNK_SECONDS, error: 'EPERM: operation not permitted',
+      lines: [{ speaker: 'unknown', text: 'saved transcript', t: source.mtimeMs }], file: 'already-saved.md',
+      createdAt: 1, updatedAt: 1
+    })
+    const second = createManager()
+    ;(second.store as MemoryStore).jobs.clear()
+    ;(second.store as MemoryStore).jobs.set('job-1', (first.store as MemoryStore).jobs.get('job-1')!)
+    await second.manager.recover()
+
+    const resumed = await second.manager.resume('job-1')
+
+    expect(second.decode).not.toHaveBeenCalled()
+    expect(second.saveMeeting).not.toHaveBeenCalled()
+    expect(second.enqueueIngest).not.toHaveBeenCalled()
+    expect(resumed).toMatchObject({
+      state: 'done', file: 'already-saved.md', recapError: expect.stringMatching(/interrupted/i)
+    })
+    expect(resumed.error).toBeUndefined()
+    expect((second.store as MemoryStore).jobs.has('job-1')).toBe(false)
+  })
+
+  it('still replays the decoder when a failed import never got as far as saving its meeting (MQA-025)', async () => {
+    const transcribe = vi.fn().mockRejectedValue(new Error('ASR unavailable'))
+    const { manager, decode } = createManager({ transcribe })
+    await manager.start(source)
+    await expect(manager.acceptDecodedChunk('job-1', 0, 1, new Float32Array([1]))).rejects.toThrow(
+      'ASR unavailable'
+    )
+
+    await manager.resume('job-1')
+
+    expect(decode).toHaveBeenCalledTimes(2)
+    expect(manager.get('job-1')?.state).toBe('decoding')
   })
 
   it('restarts a queued job from scratch on recover() when its checkpoint predates the current chunk size', async () => {

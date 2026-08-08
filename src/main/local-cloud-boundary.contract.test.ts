@@ -30,7 +30,11 @@ describe('local processing privacy boundary', () => {
     // On macOS the pre-analyzed screen context can be a VERBATIM OCR extract (open password manager,
     // terminal with an API key). The injection into req.screenContext — which flows to whatever answer
     // provider is active, cloud included — must be built from the redacted local, never the raw field.
-    const start = source.indexOf('if (req.wantsScreenContext) {')
+    // Anchored on the flag, not the full condition: MQA-009 widened the guard to
+    // `req.mode === 'answer' && req.wantsScreenContext` so fact-check-on-screen stops being sent zero
+    // screen data. The redaction invariant below is what this test exists to protect, and it is
+    // independent of which asks reach the block.
+    const start = source.indexOf('req.wantsScreenContext) {')
     expect(start).toBeGreaterThan(-1)
     const end = source.indexOf('} catch (err) {', start)
     expect(end).toBeGreaterThan(start)
@@ -43,5 +47,21 @@ describe('local processing privacy boundary', () => {
     const assignIdx = body.indexOf('req.screenContext =')
     expect(assignIdx).toBeGreaterThan(-1)
     expect(body.slice(assignIdx)).not.toMatch(/ctx\.description/)
+  })
+
+  // MQA-009 (docs/qa/BUG-LEDGER.md): the screen-context injector used to sit INSIDE the
+  // `kind !== 'factcheck'` gate that exists to keep brainContext away from fact-check, so
+  // "fact-check what's on my screen" reached the model with no screen data at all. The two
+  // injections are now siblings: brainContext stays fact-check-excluded, screenContext does not.
+  it('injects screen context for fact-check too — only brainContext is fact-check-excluded (MQA-009)', () => {
+    const screenIdx = source.indexOf('req.wantsScreenContext) {')
+    const brainGateIdx = source.indexOf("req.mode === 'answer' && req.kind !== 'factcheck'")
+    expect(screenIdx).toBeGreaterThan(-1)
+    expect(brainGateIdx).toBeGreaterThan(-1)
+
+    // The screen block must NOT be nested inside the brainContext gate. Its guard carries no
+    // factcheck exclusion of its own.
+    const screenGuard = source.slice(source.lastIndexOf('if (', screenIdx), screenIdx + 30)
+    expect(screenGuard).not.toMatch(/factcheck/)
   })
 })
