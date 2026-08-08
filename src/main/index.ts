@@ -86,6 +86,7 @@ import { isTransient, nextBackoff } from './llm/retry'
 import * as localRuntime from './llm/local-runtime'
 import {
   localEligibleFor,
+  localFallbackEligibleFor,
   localBaseReady,
   localPrewarmEligible,
   localVisionPrivacyRequired,
@@ -123,6 +124,7 @@ import {
   brainBackfillProgress,
   brainLiveIngestProgress,
   ingestFailureCounts,
+  ingestFailureDetails,
   resumeBackfillIfPending,
   reconcileMeetingsInBackground,
   settleCommitment,
@@ -848,6 +850,10 @@ function publicSettings(): PublicSettings {
   const localSuggestReady = localReady && s.localLlm.useFor.suggest
   const localSummaryReady = localReady && s.localLlm.useFor.summary
   const localVisionReady = localReady && s.localLlm.useFor.vision
+  // "Local as safety net" is live: with zero cloud/CLI configured, in-scope asks and meeting indexing
+  // still run on-device (askStart's fallback seams + brain/ingest.ts's last-resort candidate). Surfaced
+  // so renderer readiness gates (index CTA, screen-ask) match what routing will actually do.
+  const localFallbackReady = localReady && s.localLlm.fallback
   return {
     ...s,
     hasApiKey: hasApiKey(s.provider),
@@ -857,8 +863,9 @@ function publicSettings(): PublicSettings {
     contentProtection: contentProtectionOn(),
     providerReady,
     // gates screen-ask so shots never hit a non-vision model — ORs localVisionReady so a local-only setup
-    // (no cloud provider configured at all) still counts as vision-ready.
-    visionReady: (providerReady && activeDef.vision) || localVisionReady,
+    // (no cloud provider configured at all) still counts as vision-ready. localFallbackReady counts too:
+    // askStart's zero-config safety net routes a keyless vision ask to the on-device model.
+    visionReady: (providerReady && activeDef.vision) || localVisionReady || localFallbackReady,
     // "Some configured provider can read images" — not necessarily the ACTIVE one. Mirrors the failover
     // candidate test (~1287): a keyed/CLI-connected provider with vision. Lets the renderer route a
     // screen-ask/quick-action to capture even when the active provider (e.g. Dust) is text-only, because
@@ -873,11 +880,12 @@ function publicSettings(): PublicSettings {
           (p === 'dust' ? dustSelectedAgentVision(s.providerModels['dust']) : PROVIDERS[p].vision) &&
           (!allowed || allowed.includes(p)) &&
           (PROVIDERS[p].kind === 'cli' ? !!s.cliConnected[p] : hasApiKey(p))
-      ) || localVisionReady,
+      ) || localVisionReady || localFallbackReady,
     localReady,
     localSuggestReady,
     localSummaryReady,
     localVisionReady,
+    localFallbackReady,
     // Background on-device screen pre-analysis can actually run (toggle on AND the local model is ready).
     backgroundScreenReady: s.backgroundScreenContext && localReady,
     // Live sidecar process state (distinct from localReady's eligibility check) — drives the Local AI
@@ -2776,27 +2784,33 @@ function registerIpc(): void {
           ? (PROVIDERS[a].kind === 'cli' ? 0 : 1) - (PROVIDERS[b].kind === 'cli' ? 0 : 1)
           : 0
       )
-      return (
-        order.find((p) => {
-          if (tried.includes(p)) return false
-          // Métis Local replaces the generic key/model/vision checks with localEligibleFor — the SAME
-          // mode-scope gate the ineligible chain below enforces, so local can never become a failover
-          // target for an out-of-scope mode (answer/recap or escalated text) even though it's a keyless,
-          // always-vision-capable entry in PROVIDERS (PLAN.md §4.3: "enforced at BOTH gates").
-          if (p === 'local') return localEligibleFor(req, s, tier, allowed)
-          return (
-            (!allowed || allowed.includes(p)) &&
-            (PROVIDERS[p].kind === 'cli' ? !!s.cliConnected[p] : getApiKey(p).length > 0) &&
-            (req.mode !== 'vision' || providerVisionOk(p)) &&
-            // CLI providers (e.g. codex-cli) may have no configured model at all — attempt() below
-            // already exempts kind==='cli' from the "no model" ineligibility check (the CLI just uses
-            // its own default), so a failover candidate must be exempted the same way or a fully
-            // default-configured CLI provider can never be selected.
-            (PROVIDERS[p].kind === 'cli' ||
-              !!resolveModelTier(p, s.providerModels, s.providerModelsThinking, tier, s.providerModelsDeep))
-          )
-        }) ?? null
-      )
+      const found = order.find((p) => {
+        if (tried.includes(p)) return false
+        // Métis Local replaces the generic key/model/vision checks with localEligibleFor — the SAME
+        // mode-scope gate the ineligible chain below enforces, so local can never become a failover
+        // target for an out-of-scope mode (answer/recap or escalated text) even though it's a keyless,
+        // always-vision-capable entry in PROVIDERS (PLAN.md §4.3: "enforced at BOTH gates").
+        if (p === 'local') return localEligibleFor(req, s, tier, allowed)
+        return (
+          (!allowed || allowed.includes(p)) &&
+          (PROVIDERS[p].kind === 'cli' ? !!s.cliConnected[p] : getApiKey(p).length > 0) &&
+          (req.mode !== 'vision' || providerVisionOk(p)) &&
+          // CLI providers (e.g. codex-cli) may have no configured model at all — attempt() below
+          // already exempts kind==='cli' from the "no model" ineligibility check (the CLI just uses
+          // its own default), so a failover candidate must be exempted the same way or a fully
+          // default-configured CLI provider can never be selected.
+          (PROVIDERS[p].kind === 'cli' ||
+            !!resolveModelTier(p, s.providerModels, s.providerModelsThinking, tier, s.providerModelsDeep))
+        )
+      })
+      if (found) return found
+      // Safety net (localLlm.fallback): every cloud/CLI candidate is tried or unconfigured — offer the
+      // on-device model as the strictly-LAST resort so an in-scope ask still gets answered instead of
+      // dying with a provider error. Checked only after the find() above so local-by-fallback can never
+      // jump ahead of an untried cloud candidate (useFor-driven local keeps its normal position via
+      // localEligibleFor inside the find). Same mode-scope + tier + localBaseReady gates as everywhere.
+      if (!tried.includes('local') && localFallbackEligibleFor(req, s, tier, allowed)) return 'local'
+      return null
     }
     // Find the next eligible keyed provider not yet tried and start it — for failover when the primary
     // can't answer (Dust down → your configured Claude/GPT key takes over).
@@ -2873,7 +2887,7 @@ function registerIpc(): void {
       // silently turn a screenshot into a cloud upload.
       const ineligible =
         provider === 'local'
-          ? localEligibleFor(req, s, tier, allowed)
+          ? localEligibleFor(req, s, tier, allowed) || localFallbackEligibleFor(req, s, tier, allowed)
             ? ''
             : localVisionRequired
               ? 'Métis Local could not process this screenshot on this device. Nothing was sent to a cloud provider. Restart Métis, or reinstall it if the bundled model is missing.'
@@ -2898,8 +2912,30 @@ function registerIpc(): void {
         // the error only when NO vision-capable provider is set up.
         const visionGap = req.mode === 'vision' && !providerVisionOk(provider)
         if (visionGap && failover(attempted.concat(provider))) return
-        if (attempted.length === 0) win?.webContents.send(IPC.streamError, { id: req.id, message: ineligible })
-        else if (!failover(attempted.concat(provider))) win?.webContents.send(IPC.streamError, { id: req.id, message: ineligible })
+        if (attempted.length === 0) {
+          // Zero-config safety net (localLlm.fallback): the very FIRST provider can't even start — no
+          // key, CLI not connected, Dust half-configured. Historically this surfaced the setup error
+          // immediately (no failover on a first-attempt ineligibility, unlike runtime failures). With a
+          // provisioned on-device model and fallback on, answer the in-scope ask locally instead: a
+          // fresh zero-API-key install gets a working assistant, and Settings still shows the real
+          // setup state. Out-of-scope modes (answer/recap) fail exactly as before —
+          // localFallbackEligibleFor enforces the same v1 mode scope as every other local gate.
+          // allowCrossProviderFailover: a request pinned to one managed Dust agent (agentOverride) has
+          // no honest substitute — same suppression pickFailover applies at the other two seams. Today's
+          // sole agentOverride caller uses mode:'answer' (out of local scope anyway), but the pinned
+          // contract must hold at THIS seam by construction, not by coincidence of that caller's mode.
+          if (
+            provider !== 'local' &&
+            allowCrossProviderFailover(req) &&
+            localFallbackEligibleFor(req, s, tier, allowed)
+          ) {
+            attempt('local', attempted.concat(provider))
+            return
+          }
+          win?.webContents.send(IPC.streamError, { id: req.id, message: ineligible })
+        } else if (!failover(attempted.concat(provider))) {
+          win?.webContents.send(IPC.streamError, { id: req.id, message: ineligible })
+        }
         return
       }
       const baseURL =
@@ -2995,8 +3031,10 @@ function registerIpc(): void {
             // A request routed to Métis Local stays on-device. Cloud providers may waterfall into another
             // configured provider, but a local failure must be surfaced to the user instead of silently
             // uploading the transcript/screenshot they explicitly chose to process locally.
-            const hasCloudFailover = provider !== 'local' && !!pickFailover(attempted.concat(provider))
-            const retryBudget = hasCloudFailover ? 1 : MAX_TRANSIENT_RETRIES
+            // (pickFailover may also name 'local' here — a sole cloud provider that transport-fails now
+            // retries once and then answers on-device instead of burning the full ~30s retry budget.)
+            const hasFailoverTarget = provider !== 'local' && !!pickFailover(attempted.concat(provider))
+            const retryBudget = hasFailoverTarget ? 1 : MAX_TRANSIENT_RETRIES
             if (!gotToken && retryCount < retryBudget && isTransient(message)) {
               const delayMs = nextBackoff(retryCount)
               auditLog('provider.retry', { provider, attempt: retryCount + 1, delayMs })
@@ -3132,12 +3170,16 @@ function registerIpc(): void {
     // ephemeral per-run counter), these stay visible for as long as a source has ok:false, independent
     // of whether a backfill run happens to be active right now.
     const failure = ingestFailureCounts(idx)
+    // Per-file error text for the same failing sources, bounded to 20 — powers the failed-row tooltip
+    // (RecallView) and the expandable failure detail (BrainView) without shipping the whole ledger.
+    const failureDetails = ingestFailureDetails(idx)
     return {
       meetings: Object.values(idx.ingested).filter((v) => v.ok).length,
       ingestedFiles: Object.entries(idx.ingested).filter(([, v]) => v.ok).map(([file]) => file),
       // 6d: failing-source filenames, the failed-side counterpart to ingestedFiles above — lets a
       // per-meeting indicator (indexed/pending/failed) be derived without a second, heavier IPC call.
       failedFiles: Object.entries(idx.ingested).filter(([, v]) => !v.ok).map(([file]) => file),
+      ...(failureDetails.length ? { failedDetails: failureDetails } : {}),
       backfillRequested: idx.backfillRequested,
       ...counts,
       warnings: idx.warnings.length,

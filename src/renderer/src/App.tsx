@@ -2275,13 +2275,23 @@ export function App(): JSX.Element {
           brainReturnViewRef.current = 'history'
           setView('brain')
         }}
+        // No-provider messaging (GraphBar's "Index meetings" failure) needs a real way out — every view
+        // in this app lives in the same window as Settings, so this is just the same openSettings('ai')
+        // used by Review's own recapUnavailable CTA, not a new cross-window mechanism.
+        onOpenSettings={() => openSettings('ai')}
       />
     ),
-    [reset, savedPath, openPastMeeting]
+    [reset, savedPath, openPastMeeting, openSettings]
   )
   const brainBody = useMemo(
-    () => <BrainView onBack={() => setView(brainReturnViewRef.current)} onOpenMeeting={openPastMeeting} />,
-    [openPastMeeting]
+    () => (
+      <BrainView
+        onBack={() => setView(brainReturnViewRef.current)}
+        onOpenMeeting={openPastMeeting}
+        onOpenSettings={() => openSettings('ai')}
+      />
+    ),
+    [openPastMeeting, openSettings]
   )
   const agendaBody = useMemo(() => <AgendaView />, [])
   const copilotBody = useMemo(

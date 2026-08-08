@@ -535,6 +535,10 @@ export interface BrainStatus {
   /** Failing (ok:false) source filenames — the failed-side counterpart to `ingestedFiles`, so a per-
    *  meeting indicator (indexed/pending/failed) can be derived without a second, heavier IPC round trip. */
   failedFiles?: string[]
+  /** Per-file detail (file/error/exhausted) for up to 20 currently-failing sources — the file-and-reason
+   *  counterpart to `failedFiles` above, deliberately bounded so a large ledger never ships whole over
+   *  IPC. Powers the failed-row tooltip (RecallView) and the expandable failure detail (BrainView). */
+  failedDetails?: { file: string; error: string; exhausted: boolean }[]
   /** True from "a backfill was requested" until the queue fully drains (see ingest.ts's `backfillRequested`
    *  index flag) — lets a per-meeting indicator distinguish "queued, not yet attempted" (pending) from a
    *  source with no ingest activity at all. */

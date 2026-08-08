@@ -1,12 +1,12 @@
 import type { Settings } from '@shared/ipc'
 import type { AttentionItem } from '@shared/ipc'
 import type { ProvenantField } from '@shared/brain'
-import { listEntities, readPerson, readAccount, readDeal } from './store'
-import { lintBrainDetailed } from './ingest'
+import { listEntities, readPerson, readAccount, readDeal, readIndex } from './store'
+import { lintBrainDetailed, ingestFailureDetails } from './ingest'
 
 /**
- * Needs-attention aggregation (Task MI-3) — the three signal classes BrainView's Attention section
- * surfaces, none of them ever auto-resolved:
+ * Needs-attention aggregation (Task MI-3) — the signal classes BrainView's Attention section surfaces,
+ * none of them ever auto-resolved:
  *   - 'lint': a lintBrain contradiction (lintBrainDetailed — the same checks that feed idx.warnings,
  *     here kept entity-linked so the UI can jump straight to the record page).
  *   - 'ambiguous': a provenant field the extractor itself flagged AMBIGUOUS (low-confidence guess).
@@ -14,6 +14,8 @@ import { lintBrainDetailed } from './ingest'
  *     different — mergeProvenant refuses to overwrite a pin, but still records the newer value into
  *     `superseded` (see shared/brain.ts's ProvenantField doc comment), so it's detectable here without
  *     ever silently resolving it either way.
+ *   - 'ingest_failed': a source file that durably failed extraction (idx.ingested[file].ok === false).
+ *     Not entity-linked (no record exists to jump to) — the renderer opens the transcript instead.
  * Read-only; never mutates the store.
  *
  * MI-4 review fix (numeric leak): `describe` is EITHER a formatter (text fields — role/org/sector/
@@ -98,6 +100,21 @@ export function computeAttention(s: Settings): AttentionItem[] {
     // impossibility for these two fields, rather than relying on every caller remembering not to.
     items.push(...fieldItems('deal', slug, d.name, 'Amount', d.amount, 'redact'))
     items.push(...fieldItems('deal', slug, d.name, 'Close date', d.close_date, 'redact'))
+  }
+
+  // Durably failed sources — capped at 10 (this feed is a glance list, not the full ledger; the exact
+  // per-file detail lives in brain:status's failedDetails for the dashboard's own failure banner). No
+  // entityKind: there is no record to jump to, so `id` carries the filename and the renderer opens the
+  // transcript instead.
+  for (const f of ingestFailureDetails(readIndex(s), 10)) {
+    items.push({
+      kind: 'ingest_failed',
+      id: f.file,
+      label: f.file,
+      detail: f.exhausted
+        ? `Exhausted after repeated retries: ${f.error}`
+        : `Failed to index: ${f.error}`
+    })
   }
 
   return items

@@ -75,11 +75,19 @@ export function formatAmount(v: { value: number; currency: string }): string {
   return `${v.value.toLocaleString()} ${v.currency}`
 }
 
-const ATTENTION_PRIORITY: Record<AttentionItem['kind'], number> = { contradicted_pin: 0, ambiguous: 1, lint: 2 }
+const ATTENTION_PRIORITY: Record<AttentionItem['kind'], number> = {
+  contradicted_pin: 0,
+  ambiguous: 1,
+  lint: 2,
+  // Last: a failed source already has its own always-visible banner + Retry action at the top of
+  // BrainView, so this feed entry is a supplement, not the primary way to notice it.
+  ingest_failed: 3
+}
 
 /** Most-urgent-first ordering for the Attention section: a contradicted pin (a human's own correction
- *  disputed by later evidence) outranks an unreviewed AMBIGUOUS guess, which outranks a lint note. Stable
- *  within a kind (Array.sort is stable per spec) and never mutates its input. */
+ *  disputed by later evidence) outranks an unreviewed AMBIGUOUS guess, which outranks a lint note, which
+ *  outranks a failed-ingest notice. Stable within a kind (Array.sort is stable per spec) and never
+ *  mutates its input. */
 export function sortAttentionItems(items: AttentionItem[]): AttentionItem[] {
   return [...items].sort((a, b) => ATTENTION_PRIORITY[a.kind] - ATTENTION_PRIORITY[b.kind])
 }

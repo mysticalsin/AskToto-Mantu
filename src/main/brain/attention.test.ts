@@ -4,7 +4,7 @@ import { basename, join } from 'node:path'
 import { tmpdir } from 'node:os'
 import type { Settings } from '@shared/ipc'
 import { MeetingExtractionSchema, type DealEntity } from '@shared/brain'
-import { ingestExtraction } from './ingest'
+import { ingestExtraction, updateIndex } from './ingest'
 import { updateEntityField } from './corrections'
 import { slugify, setDealOutcome, readMeetingExtraction, readDeal, writeDeal } from './store'
 import { computeAttention } from './attention'
@@ -127,6 +127,34 @@ describe('computeAttention (Task MI-3 needs-attention aggregation)', () => {
     expect(lint?.id).toBe(slugify('Jamie Fox'))
     expect(lint?.label).toBe('Jamie Fox')
     expect(lint?.detail).toContain('multiple accounts')
+  })
+
+  it('flags a durably failed ingest source with kind ingest_failed, no entityKind, and the error + exhausted flag in detail', async () => {
+    await updateIndex(s, (idx) => {
+      idx.ingested['bad-meeting.md'] = { at: Date.now(), ok: false, error: 'Provider timeout', attempts: 6, exhausted: true }
+    })
+
+    const items = computeAttention(s)
+    const failed = items.find((i) => i.kind === 'ingest_failed')
+    expect(failed).toBeDefined()
+    expect(failed?.entityKind).toBeUndefined()
+    expect(failed?.id).toBe('bad-meeting.md')
+    expect(failed?.label).toBe('bad-meeting.md')
+    expect(failed?.detail).toContain('Provider timeout')
+    expect(failed?.detail.toLowerCase()).toContain('exhaust')
+  })
+
+  it('does not flag a successfully ingested source, and caps ingest_failed items', async () => {
+    await updateIndex(s, (idx) => {
+      idx.ingested['good.md'] = { at: Date.now(), ok: true }
+      for (let i = 0; i < 15; i++) {
+        idx.ingested[`bad-${i}.md`] = { at: Date.now() + i, ok: false, error: 'x' }
+      }
+    })
+
+    const failed = computeAttention(s).filter((i) => i.kind === 'ingest_failed')
+    expect(failed.some((i) => i.id === 'good.md')).toBe(false)
+    expect(failed.length).toBeLessThanOrEqual(10)
   })
 })
 

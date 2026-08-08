@@ -33,16 +33,27 @@ describe('pinned Dust-agent requests never fail over to a generic provider', () 
     expect(start).toBeGreaterThan(-1)
     const body = indexSrc.slice(start, start + 900)
     // The guard must come first — before any tier/candidate work — so BOTH seams that consult pickFailover
-    // (the retry-budget sizing at hasCloudFailover and the pre-token failover line) are covered at once.
+    // (the retry-budget sizing at hasFailoverTarget and the pre-token failover line) are covered at once.
     expect(body).toMatch(/if \(!allowCrossProviderFailover\(req\)\) return null/)
   })
 
   it('both failover seams still route through pickFailover (retry budget + pre-token hand-off)', () => {
-    // hasCloudFailover sizes the transient-retry budget from pickFailover; the pre-token failover line does
-    // the actual hand-off. Both consult pickFailover, so a pinned request is suppressed at both without the
-    // two being able to drift apart.
-    expect(indexSrc).toMatch(/hasCloudFailover = provider !== 'local' && !!pickFailover\(attempted\.concat\(provider\)\)/)
+    // hasFailoverTarget sizes the transient-retry budget from pickFailover; the pre-token failover line
+    // does the actual hand-off. Both consult pickFailover, so a pinned request is suppressed at both
+    // without the two being able to drift apart.
+    expect(indexSrc).toMatch(/hasFailoverTarget = provider !== 'local' && !!pickFailover\(attempted\.concat\(provider\)\)/)
     expect(indexSrc).toMatch(/provider !== 'local' && failover\(attempted\.concat\(provider\)\)/)
+  })
+
+  it('the first-attempt local-fallback seam suppresses pinned requests too (not only pickFailover)', () => {
+    // The zero-config safety net (first-attempt ineligibility → attempt('local')) bypasses pickFailover
+    // entirely, so it must carry its own allowCrossProviderFailover guard: a pinned (agentOverride)
+    // request must surface the reconnect-Dust message, never a substitute local answer. Today's only
+    // agentOverride caller happens to use mode:'answer' (out of local scope), but the contract holds by
+    // construction, not by that coincidence.
+    expect(indexSrc).toMatch(
+      /provider !== 'local' &&\s*\n\s*allowCrossProviderFailover\(req\) &&\s*\n\s*localFallbackEligibleFor\(req, s, tier, allowed\)/
+    )
   })
 })
 

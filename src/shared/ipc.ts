@@ -479,10 +479,13 @@ export const MeetingExtractionQuerySchema = z.object({ file: z.string().min(1) }
  *   - 'lint': a lintBrain contradiction (see lintBrainDetailed in main/brain/ingest.ts).
  *   - 'ambiguous': a provenant field whose confidence is 'AMBIGUOUS'.
  *   - 'contradicted_pin': a human-pinned/edited field whose superseded history records a value from a
- *     LATER meeting than the pin itself — recorded (never auto-resolved) per MI-1's supersession rule. */
+ *     LATER meeting than the pin itself — recorded (never auto-resolved) per MI-1's supersession rule.
+ *   - 'ingest_failed': a source file that durably failed extraction (idx.ingested[file].ok === false,
+ *     see main/brain/attention.ts). Not entity-linked — `entityKind` is absent and `id` carries the
+ *     source filename instead, so the renderer opens the transcript rather than a record page. */
 export const AttentionItemSchema = z.object({
-  kind: z.enum(['lint', 'ambiguous', 'contradicted_pin']),
-  entityKind: EntityKindSchema,
+  kind: z.enum(['lint', 'ambiguous', 'contradicted_pin', 'ingest_failed']),
+  entityKind: EntityKindSchema.optional(),
   id: z.string().min(1),
   label: z.string(),
   detail: z.string()
@@ -789,9 +792,13 @@ export const BaseSettingsSchema = z.object({
   /** Background screen preprocessing: when the foreground window changes, quietly analyze the screen with
    *  the ON-DEVICE model and cache the description, so "What's on my screen" answers from pre-computed text
    *  instead of a cold capture + full-image round trip. On-device only — nothing extra is sent to the cloud;
-   *  Private View hard-blocks it. Inert unless localLlm is enabled + provisioned (see backgroundScreenReady).
-   *  Default on, but only DOES anything once a local model is available. */
-  backgroundScreenContext: z.boolean().default(true),
+   *  Private View hard-blocks it. Default OFF — explicit opt-in. This used to default on while relying on
+   *  localLlm.enabled defaulting off to stay inert; now that Local AI is enabled by default (fallback
+   *  safety net), a true default here would silently start continuous foreground-window capture +
+   *  captioning on every fresh install with zero user action. Continuous screen reading is its own
+   *  consent decision, never a side effect of another default. (The Cahê pilot still seeds it true
+   *  explicitly — cahe-embedded-key.ts — which is an explicit per-edition choice, not a default.) */
+  backgroundScreenContext: z.boolean().default(false),
   // How see-through the overlay's glass background is. A multiplier on the default glass alpha values
   // (see --glass-fill etc. in styles.css) — 1 = today's default look, lower = more transparent (see more
   // of what's behind), higher = more opaque/solid (easier to read over a busy desktop). Values above 1
@@ -864,31 +871,44 @@ export const BaseSettingsSchema = z.object({
   // main/store.ts instead of pointing llama-server at a file that can never exist.
   localLlm: z
     .object({
-      enabled: z.boolean().default(false),
+      // Default TRUE: the model + runtime ship inside every installer (electron-builder extraResources;
+      // fetch-local-model.mjs runs in every predist/prepack), so there is nothing to download and the
+      // flag alone costs nothing — the llama-server sidecar spawns lazily on first local request, and
+      // prewarm additionally requires useFor.suggest (local-routing.ts localPrewarmEligible). With every
+      // useFor toggle defaulting FALSE below, default-enabled can never preempt a configured cloud
+      // provider; it only makes the `fallback` safety net (and the Settings toggles) live out of the box,
+      // so a zero-API-key install still indexes meetings and answers in-scope asks on-device.
+      enabled: z.boolean().default(true),
       modelId: BundledLocalModelIdSchema,
+      // All FALSE by default: useFor.X means "local FIRST for X" — it short-circuits even a configured
+      // cloud provider (local-routing.ts pickPrimaryProvider) and, for summary, makes local the EXCLUSIVE
+      // meeting-extraction route (brain/ingest.ts). Those are explicit per-surface privacy choices the
+      // user makes in Settings → Local AI, never defaults: with sparse settings persistence
+      // (main/store.ts setSettings), a default of true here would silently reroute every upgrading user
+      // who never touched Local AI off their configured cloud provider onto the small bundled model.
       useFor: z
         .object({
-          suggest: z.boolean().default(true),
-          summary: z.boolean().default(true),
-          vision: z.boolean().default(true)
+          suggest: z.boolean().default(false),
+          summary: z.boolean().default(false),
+          vision: z.boolean().default(false)
         })
-        .default({ suggest: true, summary: true, vision: true }),
-      // Independent of useFor.summary, which means "local is the EXCLUSIVE extraction route, never
-      // waterfalls into cloud" (a privacy choice). This is the opposite direction: when useFor.summary is
-      // OFF (so brain/ingest.ts's cloud waterfall runs normally), try the on-device model as the LAST
-      // candidate once every configured cloud provider has failed or none is configured at all — so a
-      // meeting still gets indexed instead of silently never being indexed. Only ever reachable when
-      // localLlm.enabled is already true (the user/pilot has opted into Local AI generally) and the
-      // runtime+model are actually provisioned (localBaseReady). Defaults on: it can only ever reduce a
-      // meeting's chance of going unindexed, never increase cloud exposure (on-device is same-or-more
-      // private than cloud, never less).
-      indexFallback: z.boolean().default(true)
+        .default({ suggest: false, summary: false, vision: false }),
+      // "Local as safety net", the opposite direction from useFor: when the normal cloud route is
+      // exhausted — every configured provider failed, or none is configured at all — in-scope work runs
+      // on the on-device model as the strictly-LAST candidate instead of failing with "no provider".
+      // Gates BOTH surfaces: the meeting-index waterfall (brain/ingest.ts pickProviderCandidates) and
+      // in-scope live asks (suggest/summary/vision — local-routing.ts localFallbackEligibleFor). Only
+      // ever reachable when localLlm.enabled is true and the runtime+model are actually provisioned AND
+      // the org allowlist permits 'local' (localBaseReady). Defaults on: it can only ever reduce the
+      // chance of work going undone, never increase cloud exposure (on-device is same-or-more private
+      // than cloud, never less).
+      fallback: z.boolean().default(true)
     })
     .default({
-      enabled: false,
+      enabled: true,
       modelId: BUNDLED_LOCAL_MODEL_ID,
-      useFor: { suggest: true, summary: true, vision: true },
-      indexFallback: true
+      useFor: { suggest: false, summary: false, vision: false },
+      fallback: true
     }),
   // Speaker Intelligence (docs/SPEAKER-INTELLIGENCE-PLAN.md): live "who's speaking" labels on THEM
   // transcript lines via on-device voice embeddings (sherpa-onnx, same addon as Parakeet). Off by
@@ -982,6 +1002,10 @@ export const PublicSettingsSchema = BaseSettingsSchema.extend({
   localSummaryReady: z.boolean().default(false),
   /** localReady AND the user's "Screenshots" use-for toggle is on. */
   localVisionReady: z.boolean().default(false),
+  /** localReady AND localLlm.fallback — "local as safety net" is live: with zero cloud/CLI providers
+   *  configured (or all of them down), in-scope asks and meeting indexing still run on-device. Lets
+   *  renderer readiness gates (index-meetings CTA, screen-ask) match what routing will actually do. */
+  localFallbackReady: z.boolean().default(false),
   /** The `backgroundScreenContext` setting is on AND localReady — i.e. background on-device screen
    *  pre-analysis can actually run. Lets Settings show "on" vs "enable Local AI to use this". */
   backgroundScreenReady: z.boolean().default(false),
@@ -1093,7 +1117,7 @@ export const DEFAULT_SETTINGS: Settings = {
   uiSounds: true,
   quickActionsRainbow: true,
   instantSuggestions: true,
-  backgroundScreenContext: true,
+  backgroundScreenContext: false,
   overlayOpacity: 1,
   showFullTranscriptInReview: false,
   asrQuality: 'fast',
@@ -1115,10 +1139,10 @@ export const DEFAULT_SETTINGS: Settings = {
   bidstackConnected: false,
   bidstackTools: [],
   localLlm: {
-    enabled: false,
+    enabled: true,
     modelId: BUNDLED_LOCAL_MODEL_ID,
-    useFor: { suggest: true, summary: true, vision: true },
-    indexFallback: true
+    useFor: { suggest: false, summary: false, vision: false },
+    fallback: true
   },
   speakerId: { enabled: false },
   tapControl: {

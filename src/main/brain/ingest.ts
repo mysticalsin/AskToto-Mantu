@@ -78,7 +78,7 @@ function hasUsableProvider(s: Settings): boolean {
  *  over to the next WITHOUT ever reaching a provider these gates would have excluded. An enabled Métis
  *  Local summary setting is an explicit privacy choice: it is the ONLY candidate whenever active — never
  *  waterfalls into a cloud provider, since that would silently upload a transcript the user chose to
- *  keep on-device. Otherwise, when localLlm.indexFallback is on and local is ready, local is appended as
+ *  keep on-device. Otherwise, when localLlm.fallback is on and local is ready, local is appended as
  *  the LAST candidate after the whole cloud waterfall — so a meeting still gets indexed when every cloud
  *  provider is down or none is configured, instead of never being indexed at all. */
 function pickProviderCandidates(s: Settings): { provider: ProviderId; model: string; key: string }[] {
@@ -116,7 +116,7 @@ function pickProviderCandidates(s: Settings): { provider: ProviderId; model: str
   // ("cloud first, local only once cloud is exhausted"). Gated on the same localBaseReady() eligibility
   // (enabled, runtime+model provisioned, org allowlist permits 'local') so it can never silently start
   // local processing for a user/org that hasn't opted in.
-  if (s.localLlm.indexFallback && localBaseReady(s, allowed)) {
+  if (s.localLlm.fallback && localBaseReady(s, allowed)) {
     candidates.push({ provider: 'local', model: s.localLlm.modelId, key: '' })
   }
   return candidates
@@ -1183,6 +1183,37 @@ export function ingestFailureCounts(idx: BrainIndex, minTopErrorCount = 3): { fa
     }
   }
   return { failed, exhausted, ...(topError && topCount >= minTopErrorCount ? { topError } : {}) }
+}
+
+/** Raw exception messages can embed full absolute paths (fs errors like ENOENT quote the whole path,
+ *  Windows username included). The ledger key next to the message already identifies the file, so the
+ *  path inside the error text is pure disclosure with no diagnostic value once it reaches the renderer —
+ *  a tooltip screenshot pasted into a support channel would leak the local directory layout. Collapse
+ *  any drive-rooted or home-rooted path down to its basename before the string leaves the main process. */
+function redactPathsInError(error: string): string {
+  return error.replace(/(?:[A-Za-z]:[\\/]|\/(?:Users|home)\/)[^\s'"`)\]}]+/g, (p) => {
+    const base = p.split(/[\\/]/).filter(Boolean).pop() ?? ''
+    return base ? `…${base}` : '…'
+  })
+}
+
+/** Per-file failure detail for up to `limit` currently-failing sources — the file-and-reason counterpart
+ *  to ingestFailureCounts' aggregate numbers above. Most-recently-failed first (record.at descending) so
+ *  the newest, most actionable failures surface when the ledger holds more than `limit`. Deliberately
+ *  bounded: brainStatus is polled every few seconds and must never ship the whole ledger over IPC. */
+export function ingestFailureDetails(
+  idx: BrainIndex,
+  limit = 20
+): { file: string; error: string; exhausted: boolean }[] {
+  return Object.entries(idx.ingested)
+    .filter(([, record]) => !record.ok)
+    .sort(([, a], [, b]) => b.at - a.at)
+    .slice(0, limit)
+    .map(([file, record]) => ({
+      file,
+      error: redactPathsInError(record.error ?? 'Unknown error'),
+      exhausted: !!record.exhausted
+    }))
 }
 
 /** Reads the app-written meeting mode from the leading YAML frontmatter only. */

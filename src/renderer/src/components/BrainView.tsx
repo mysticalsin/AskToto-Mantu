@@ -11,6 +11,7 @@ import {
   ChevronRight,
   ClipboardList,
   ExternalLink,
+  FileWarning,
   HelpCircle,
   Minus,
   RefreshCw,
@@ -24,7 +25,7 @@ import type { AttentionItem, MeetingSummary } from '@shared/ipc'
 import { computeSilence } from '@shared/silence'
 import { buildMarsWeek, renderMarsMarkdown } from '@shared/mars'
 import { MantuMark } from './MantuMark'
-import { Spinner } from './ui'
+import { Spinner, TextButton } from './ui'
 import { WorkProgressMeter } from './WorkProgressMeter'
 import { useFlash } from '../lib/useFlash'
 import { BrainRecordPage, recordKey, sortAttentionItems, type BrainRecordRef, type RecentMerge } from './BrainRecordPage'
@@ -330,12 +331,16 @@ const BAND_ORDER: Record<string, number> = { concerning: 0, mixed: 1, good: 2 }
 
 export function BrainView({
   onBack,
-  onOpenMeeting
+  onOpenMeeting,
+  onOpenSettings
 }: {
   onBack: () => void
   /** Opens a saved meeting read-only (the same handler History/Settings use) — record pages' provenance
    *  chips and meeting timelines, and the Attention section's jump action, all resolve through this. */
   onOpenMeeting?: (file: string) => void
+  /** Opens Settings → AI — this view and Settings live in the same window, so this is just a `setView`
+   *  swap in App.tsx, not a new cross-window mechanism. Wired into the no-provider CTAs below. */
+  onOpenSettings?: () => void
 }): JSX.Element {
   const [data, setData] = useState<BrainRead | null>(null)
   const [marsCopied, flashMarsCopied] = useFlash(2000)
@@ -345,6 +350,9 @@ export function BrainView({
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [backfilling, setBackfilling] = useState(false)
+  // FIX 4: per-file failure detail is collapsed by default — the banner's single-line summary is enough
+  // for the common case, this is an opt-in drill-down for "which files, exactly, and why".
+  const [failuresExpanded, setFailuresExpanded] = useState(false)
   // Drill-down record page (Task MI-3) — in-component navigation state, matching how this dashboard
   // already handles internal sections (no router). Cleared implicitly whenever the header's Back arrow
   // pops it, so returning to the dashboard is always one click regardless of how deep a merge chain went.
@@ -356,6 +364,15 @@ export function BrainView({
   // is false (see src/main/brain/ingest.ts startBackfill), so the button must reflect it instead of
   // giving zero feedback on click. Defaults true so it never flashes disabled before the first read.
   const [providerReady, setProviderReady] = useState(true)
+  // Métis Local as a safety net: with zero cloud/CLI providers configured (or all down), ingest.ts's
+  // pickProviderCandidates still routes to the on-device model as the last candidate — so the readiness
+  // gates below must OR this in, or a local-only setup would show "connect a provider" while indexing
+  // actually works. Defaults false (opt-in setting) so nothing flashes enabled before the first read.
+  const [localFallbackReady, setLocalFallbackReady] = useState(false)
+  // The OTHER local indexing route: useFor.summary makes local the exclusive extraction provider
+  // (ingest.ts's early-return branch), fully independent of the fallback toggle — a local-only privacy
+  // setup with fallback off still indexes, so canIndex must OR this in too.
+  const [localSummaryReady, setLocalSummaryReady] = useState(false)
   // Guards against overlapping polls during a long backfill: brainRead can take longer than the 4s
   // poll interval as ingestion grows, so without this an older, slower-resolving snapshot can land
   // after a newer one and make the KPI tiles/lists visibly jump backward.
@@ -384,6 +401,8 @@ export function BrainView({
       setMeetings(list)
       setAttention(att.items)
       setProviderReady(settings.providerReady)
+      setLocalFallbackReady(settings.localFallbackReady)
+      setLocalSummaryReady(settings.localSummaryReady)
       setError(null)
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
@@ -572,12 +591,34 @@ export function BrainView({
     [data]
   )
 
-  // Commitment Ledger: every open promise across all deals, oldest first (age = urgency).
+  // Commitment Ledger: every open promise across all deals AND deal-less person ledgers, oldest first
+  // (age = urgency). A meeting with no deal only ever lands its spoken commitments on the SPEAKER's
+  // person ledger (see ingest.ts's mergeExtraction comment: "in a deal-less meeting... such commitments
+  // live ONLY here"), so a deal-only source silently dropped them from this rail. Dedupe by normalized
+  // text+by: the SAME commitment can appear on BOTH a deal's ledger and its speaker's person ledger when
+  // a meeting has both (a deal takes every commitment spoken in the meeting; a person's ledger only takes
+  // the ones THEY spoke) — both copies originate from the identical extracted `c.text`/`c.by`, so a plain
+  // trim+lowercase match is exact here without replicating ingest.ts's fuller commitmentKey.
   const openPromises = useMemo(() => {
-    const all: (LedgerCommitment & { deal: string })[] = []
+    const dedupeKey = (c: LedgerCommitment): string => `${c.text.trim().toLowerCase()}|${c.by.trim().toLowerCase()}`
+    const seen = new Set<string>()
+    const all: (LedgerCommitment & { deal?: string; person?: string })[] = []
     for (const d of data?.deals ?? []) {
       for (const c of d.commitments ?? []) {
-        if (c.status === 'open') all.push({ ...c, deal: d.name })
+        if (c.status !== 'open') continue
+        const key = dedupeKey(c)
+        if (seen.has(key)) continue
+        seen.add(key)
+        all.push({ ...c, deal: d.name })
+      }
+    }
+    for (const p of data?.people ?? []) {
+      for (const c of p.commitments ?? []) {
+        if (c.status !== 'open') continue
+        const key = dedupeKey(c)
+        if (seen.has(key)) continue
+        seen.add(key)
+        all.push({ ...c, person: p.name })
       }
     }
     return all.sort((a, b) => (a.date || '').localeCompare(b.date || '')).slice(0, 8)
@@ -598,6 +639,11 @@ export function BrainView({
     [data]
   )
 
+  // Indexing can actually run when a cloud/CLI provider is configured, OR the local safety net is live,
+  // OR the exclusive local-summary route is on — the three branches of ingest.ts's
+  // pickProviderCandidates, so the CTA/hint states below never claim "no provider" while indexing would
+  // actually succeed.
+  const canIndex = providerReady || localFallbackReady || localSummaryReady
   const ingested = status?.meetings ?? 0
   const notIngested = Math.max(0, meetings.length - ingested)
   const bf = status?.backfill
@@ -650,25 +696,52 @@ export function BrainView({
 
       {durableFailed > 0 && !bf?.running && (
         <div
-          className="flex items-center justify-between gap-2 rounded-xl border border-[var(--color-danger)]/30 bg-[var(--color-danger)]/10 px-3 py-2 text-[11px] text-[var(--color-danger)]"
+          className="rounded-xl border border-[var(--color-danger)]/30 bg-[var(--color-danger)]/10 px-3 py-2 text-[11px] text-[var(--color-danger)]"
           role="alert"
         >
-          <div className="flex min-w-0 items-center gap-1.5">
-            <AlertTriangle size={13} className="shrink-0" />
-            <span>
-              {topError
-                ? `Your AI provider is failing: ${topError} — check Settings → AI`
-                : indexProgress?.label ?? 'Some meetings need attention.'}
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex min-w-0 items-center gap-1.5">
+              <AlertTriangle size={13} className="shrink-0" />
+              <span>
+                {topError
+                  ? `Your AI provider is failing: ${topError} — check Settings → AI`
+                  : indexProgress?.label ?? 'Some meetings need attention.'}
+              </span>
+            </div>
+            <span className="flex shrink-0 items-center gap-1">
+              {/* Per-file detail (FIX 4): failedDetails is bounded (up to 20) by main — never the whole
+                  ledger — so this toggle is safe to render unconditionally once any detail exists. */}
+              {(status?.failedDetails?.length ?? 0) > 0 && (
+                <button
+                  type="button"
+                  onClick={() => setFailuresExpanded((v) => !v)}
+                  aria-expanded={failuresExpanded}
+                  className="no-drag focus-ring shrink-0 rounded-full px-2 py-1 text-[11px] font-semibold text-[color:var(--color-danger)] hover:bg-white/[0.08]"
+                >
+                  {failuresExpanded ? 'Hide' : 'Details'}
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() => void startBackfill()}
+                disabled={backfilling}
+                className="no-drag focus-ring shrink-0 rounded-full bg-white/[0.08] px-2.5 py-1 text-[11px] font-semibold text-[color:var(--color-ink)] hover:bg-white/[0.14] disabled:opacity-50"
+              >
+                Retry index
+              </button>
             </span>
           </div>
-          <button
-            type="button"
-            onClick={() => void startBackfill()}
-            disabled={backfilling}
-            className="no-drag focus-ring shrink-0 rounded-full bg-white/[0.08] px-2.5 py-1 text-[11px] font-semibold text-[color:var(--color-ink)] hover:bg-white/[0.14] disabled:opacity-50"
-          >
-            Retry index
-          </button>
+          {failuresExpanded && (status?.failedDetails?.length ?? 0) > 0 && (
+            <ul className="mt-2 flex list-disc flex-col gap-0.5 border-t border-[var(--color-danger)]/20 pl-4 pt-2 text-[color:var(--color-ink-2)]">
+              {status!.failedDetails!.map((d) => (
+                <li key={d.file} className="truncate" title={`${d.file}: ${d.error}`}>
+                  <span className="font-medium">{d.file}</span>
+                  {d.exhausted ? ' (exhausted): ' : ': '}
+                  {d.error}
+                </li>
+              ))}
+            </ul>
+          )}
         </div>
       )}
 
@@ -710,14 +783,17 @@ export function BrainView({
           <button
             type="button"
             onClick={() => void startBackfill()}
-            disabled={backfilling || meetings.length === 0 || !providerReady}
+            disabled={backfilling || meetings.length === 0 || !canIndex}
             className="no-drag focus-ring rounded-full bg-[var(--color-accent)] px-4 py-1.5 text-[12px] font-semibold text-white hover:bg-[var(--color-accent-2)] disabled:opacity-50"
           >
             {backfilling ? 'Starting…' : 'Ingest my meetings'}
           </button>
-          {!providerReady && meetings.length > 0 && (
-            <div className="text-[11px] text-[color:var(--color-ink-3)]">
-              Connect an AI provider in Settings to build your intelligence.
+          {/* canIndex ORs in localFallbackReady — a local-only setup already indexes fine, so this must
+              only claim "no provider" when NEITHER a cloud provider NOR the local safety net is live. */}
+          {!canIndex && meetings.length > 0 && (
+            <div className="flex flex-col items-center gap-0.5 text-[11px] text-[color:var(--color-ink-3)]">
+              <span>Connect an AI provider in Settings to build your intelligence.</span>
+              {onOpenSettings && <TextButton onClick={onOpenSettings}>Open Settings</TextButton>}
             </div>
           )}
         </div>
@@ -751,16 +827,19 @@ export function BrainView({
             <div className="flex items-center justify-between gap-2 rounded-xl border border-[var(--color-hair-soft)] bg-white/[0.02] px-3 py-1.5 text-[11px] text-[color:var(--color-ink-3)]">
               <span>
                 {notIngested} saved meeting{notIngested === 1 ? '' : 's'} not in the brain yet.
-                {!providerReady && ' Connect an AI provider in Settings to ingest them.'}
+                {!canIndex && ' Connect an AI provider in Settings to ingest them.'}
               </span>
-              <button
-                type="button"
-                onClick={() => void startBackfill()}
-                disabled={backfilling || !providerReady}
-                className="no-drag focus-ring shrink-0 rounded-full bg-white/[0.06] px-2.5 py-1 text-[11px] font-semibold text-[color:var(--color-ink-2)] hover:bg-white/10 disabled:opacity-50"
-              >
-                {backfilling ? 'Starting…' : 'Ingest now'}
-              </button>
+              <span className="flex shrink-0 items-center gap-1">
+                {!canIndex && onOpenSettings && <TextButton onClick={onOpenSettings}>Open Settings</TextButton>}
+                <button
+                  type="button"
+                  onClick={() => void startBackfill()}
+                  disabled={backfilling || !canIndex}
+                  className="no-drag focus-ring shrink-0 rounded-full bg-white/[0.06] px-2.5 py-1 text-[11px] font-semibold text-[color:var(--color-ink-2)] hover:bg-white/10 disabled:opacity-50"
+                >
+                  {backfilling ? 'Starting…' : 'Ingest now'}
+                </button>
+              </span>
             </div>
           ) : null}
 
@@ -808,11 +887,18 @@ export function BrainView({
                   .slice(0, 8)
                   .map((item, i) => (
                     <button
-                      key={`${item.kind}:${item.entityKind}:${item.id}:${i}`}
+                      key={`${item.kind}:${item.entityKind ?? 'file'}:${item.id}:${i}`}
                       type="button"
-                      onClick={() => openRecord(item.entityKind, item.id)}
+                      // 'ingest_failed' has no entity to jump to (see AttentionItemSchema's doc comment)
+                      // — its `id` is the source filename, so it opens the transcript instead.
+                      onClick={() =>
+                        item.kind === 'ingest_failed' ? onOpenMeeting?.(item.id) : openRecord(item.entityKind!, item.id)
+                      }
                       className="no-drag focus-ring flex items-center gap-2 rounded-lg px-1.5 py-1 text-left hover:bg-white/[0.06]"
                     >
+                      {item.kind === 'ingest_failed' && (
+                        <FileWarning size={12} className="shrink-0 text-[color:var(--color-danger)]" />
+                      )}
                       <span className="min-w-0 flex-1">
                         <span className="text-[12px] font-semibold text-[color:var(--color-ink)]">{item.label}</span>
                         <span className="block truncate text-[11px] text-[color:var(--color-ink-3)]">{item.detail}</span>
@@ -840,7 +926,8 @@ export function BrainView({
             </div>
           )}
 
-          {/* COMMITMENT LEDGER — open promises across every deal, oldest (most urgent) first */}
+          {/* COMMITMENT LEDGER — open promises across every deal AND deal-less person ledger, oldest
+              (most urgent) first. */}
           {openPromises.length > 0 && (
             <div
               ref={openPromisesRef}
@@ -855,8 +942,12 @@ export function BrainView({
                 {openPromises.map((c) => {
                   const days = c.date ? Math.max(0, Math.floor((Date.now() - Date.parse(c.date)) / 86400000)) : null
                   const yours = c.by === 'you'
+                  // A person-only row (no deal.commitments source, see the useMemo above) has no deal to
+                  // settle against — settleCommitment (ingest.ts) is deal-keyed only, a known limitation,
+                  // not a bug — so the Kept/Broken actions only render for deal-backed rows.
+                  const dealName = c.deal
                   return (
-                    <div key={c.meeting + c.text} className="flex items-center gap-2 text-[12px]" title={c.quote || undefined}>
+                    <div key={c.meeting + c.text + (c.deal ?? c.person ?? '')} className="flex items-center gap-2 text-[12px]" title={c.quote || undefined}>
                       <span
                         className="shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold"
                         style={{
@@ -883,31 +974,38 @@ export function BrainView({
                           {days === 0 ? 'today' : `${days}d`}
                         </span>
                       )}
-                      <span className="min-w-0 max-w-[90px] shrink truncate text-[10px] text-[color:var(--color-ink-3)]" title={c.deal}>
-                        {c.deal}
+                      {/* Deal name today, the speaker's own name for a deal-less commitment — same slot,
+                          same subdued styling, so the source reads without shouting either way. */}
+                      <span
+                        className="min-w-0 max-w-[90px] shrink truncate text-[10px] text-[color:var(--color-ink-3)]"
+                        title={dealName ?? c.person}
+                      >
+                        {dealName ?? c.person}
                       </span>
                       {/* Settlement — the human closes the loop. Settled rows leave this rail on refresh
-                          and feed the per-person kept-promise reliability read. */}
-                      <span className="flex shrink-0 items-center gap-0.5">
-                        <button
-                          type="button"
-                          aria-label="Mark kept"
-                          title="Kept: promise delivered"
-                          onClick={() => void settlePromise(c.deal, c.text, 'kept')}
-                          className="no-drag focus-ring grid h-5 w-5 place-items-center rounded text-[color:var(--color-ink-3)] hover:bg-white/10 hover:text-[var(--color-success)]"
-                        >
-                          <Check size={11} />
-                        </button>
-                        <button
-                          type="button"
-                          aria-label="Mark broken"
-                          title="Broken: promise not delivered"
-                          onClick={() => void settlePromise(c.deal, c.text, 'broken')}
-                          className="no-drag focus-ring grid h-5 w-5 place-items-center rounded text-[color:var(--color-ink-3)] hover:bg-white/10 hover:text-[var(--color-danger)]"
-                        >
-                          <X size={11} />
-                        </button>
-                      </span>
+                          and feed the per-person kept-promise reliability read. Deal-backed rows only. */}
+                      {dealName && (
+                        <span className="flex shrink-0 items-center gap-0.5">
+                          <button
+                            type="button"
+                            aria-label="Mark kept"
+                            title="Kept: promise delivered"
+                            onClick={() => void settlePromise(dealName, c.text, 'kept')}
+                            className="no-drag focus-ring grid h-5 w-5 place-items-center rounded text-[color:var(--color-ink-3)] hover:bg-white/10 hover:text-[var(--color-success)]"
+                          >
+                            <Check size={11} />
+                          </button>
+                          <button
+                            type="button"
+                            aria-label="Mark broken"
+                            title="Broken: promise not delivered"
+                            onClick={() => void settlePromise(dealName, c.text, 'broken')}
+                            className="no-drag focus-ring grid h-5 w-5 place-items-center rounded text-[color:var(--color-ink-3)] hover:bg-white/10 hover:text-[var(--color-danger)]"
+                          >
+                            <X size={11} />
+                          </button>
+                        </span>
+                      )}
                     </div>
                   )
                 })}

@@ -77,6 +77,7 @@ vi.mock('./fm-runtime', () => fmRuntimeMock)
 
 import {
   localEligibleFor,
+  localFallbackEligibleFor,
   localBaseReady,
   localVisionPrivacyRequired,
   pickPrimaryProvider,
@@ -85,7 +86,12 @@ import {
 import { streamLocal } from './local'
 
 type LocalLlmSettings = {
-  localLlm: { enabled: boolean; modelId: string; useFor: { suggest: boolean; summary: boolean; vision: boolean } }
+  localLlm: {
+    enabled: boolean
+    modelId: string
+    useFor: { suggest: boolean; summary: boolean; vision: boolean }
+    fallback: boolean
+  }
 }
 
 const readySettings = (overrides: Partial<LocalLlmSettings['localLlm']> = {}): LocalLlmSettings => ({
@@ -93,6 +99,7 @@ const readySettings = (overrides: Partial<LocalLlmSettings['localLlm']> = {}): L
     enabled: true,
     modelId: 'qwen3.5-0.8b',
     useFor: { suggest: true, summary: true, vision: true },
+    fallback: true,
     ...overrides
   }
 })
@@ -195,6 +202,78 @@ describe('localEligibleFor', () => {
     // to reach the "provider.blocked" / ineligible-with-no-failover branch for it).
     const allowed = ['anthropic']
     const eligible = localEligibleFor({ mode: 'suggest' }, readySettings(), 'base', allowed)
+    expect(pickPrimaryProvider(undefined, eligible, undefined, 'anthropic')).toBe('anthropic')
+  })
+})
+
+// ─── localFallbackEligibleFor — "local as safety net" gate ─────────────────────────────────────────
+describe('localFallbackEligibleFor', () => {
+  // The whole point of fallback: useFor toggles all OFF (the new non-preempting default) must still
+  // allow local as the LAST resort for in-scope modes — useFor means "local FIRST", fallback "local LAST".
+  const fallbackOnly = () => readySettings({ useFor: { suggest: false, summary: false, vision: false } })
+
+  it.each(['suggest', 'summary', 'vision'] as const)(
+    'eligible for in-scope mode "%s" at base tier even with every useFor toggle off',
+    (mode) => {
+      expect(localEligibleFor({ mode }, fallbackOnly(), 'base', null)).toBe(false) // sanity: not local-FIRST
+      expect(localFallbackEligibleFor({ mode }, fallbackOnly(), 'base', null)).toBe(true)
+    }
+  )
+
+  it.each(['answer', 'recap'] as const)(
+    'NEVER eligible for out-of-scope mode "%s" — cloud being down does not expand local\'s v1 scope',
+    (mode) => {
+      expect(localFallbackEligibleFor({ mode }, fallbackOnly(), 'base', null)).toBe(false)
+    }
+  )
+
+  it.each(['think', 'deep'] as const)(
+    'an escalated text ask (tier=%s) must not land on the small bundled model just because cloud is down',
+    (tier) => {
+      expect(localFallbackEligibleFor({ mode: 'suggest' }, fallbackOnly(), tier as ModelTier, null)).toBe(false)
+      expect(localFallbackEligibleFor({ mode: 'summary' }, fallbackOnly(), tier as ModelTier, null)).toBe(false)
+    }
+  )
+
+  it('vision keeps its tier exemption, same as localEligibleFor', () => {
+    expect(localFallbackEligibleFor({ mode: 'vision' }, fallbackOnly(), 'deep', null)).toBe(true)
+  })
+
+  it('fallback=false kills it regardless of everything else being ready', () => {
+    expect(
+      localFallbackEligibleFor({ mode: 'suggest' }, readySettings({ fallback: false }), 'base', null)
+    ).toBe(false)
+  })
+
+  it('enabled=false kills it — the master Local AI switch always wins', () => {
+    expect(
+      localFallbackEligibleFor(
+        { mode: 'suggest' },
+        readySettings({ enabled: false, useFor: { suggest: false, summary: false, vision: false } }),
+        'base',
+        null
+      )
+    ).toBe(false)
+  })
+
+  it('org allowlist excluding "local" fails closed — data residency beats availability', () => {
+    expect(localFallbackEligibleFor({ mode: 'suggest' }, fallbackOnly(), 'base', ['anthropic'])).toBe(false)
+    expect(localFallbackEligibleFor({ mode: 'suggest' }, fallbackOnly(), 'base', ['anthropic', 'local'])).toBe(true)
+  })
+
+  it('unprovisioned runtime or missing model files fail closed', () => {
+    fsState.binaryExists = false
+    expect(localFallbackEligibleFor({ mode: 'suggest' }, fallbackOnly(), 'base', null)).toBe(false)
+    fsState.binaryExists = true
+    localModelsMock.isDownloaded.mockReturnValue(false)
+    expect(localFallbackEligibleFor({ mode: 'suggest' }, fallbackOnly(), 'base', null)).toBe(false)
+  })
+
+  it('is deliberately IGNORED by pickPrimaryProvider — fallback never preempts a configured provider', () => {
+    // index.ts feeds only localEligibleFor into the primary pick; fallback engages solely at the
+    // ineligible/failover seams. A configured cloud provider therefore always answers first.
+    const eligible = localEligibleFor({ mode: 'suggest' }, fallbackOnly(), 'base', null)
+    expect(eligible).toBe(false)
     expect(pickPrimaryProvider(undefined, eligible, undefined, 'anthropic')).toBe('anthropic')
   })
 })
