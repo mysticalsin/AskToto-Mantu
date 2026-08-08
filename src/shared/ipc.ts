@@ -872,12 +872,23 @@ export const BaseSettingsSchema = z.object({
           summary: z.boolean().default(true),
           vision: z.boolean().default(true)
         })
-        .default({ suggest: true, summary: true, vision: true })
+        .default({ suggest: true, summary: true, vision: true }),
+      // Independent of useFor.summary, which means "local is the EXCLUSIVE extraction route, never
+      // waterfalls into cloud" (a privacy choice). This is the opposite direction: when useFor.summary is
+      // OFF (so brain/ingest.ts's cloud waterfall runs normally), try the on-device model as the LAST
+      // candidate once every configured cloud provider has failed or none is configured at all — so a
+      // meeting still gets indexed instead of silently never being indexed. Only ever reachable when
+      // localLlm.enabled is already true (the user/pilot has opted into Local AI generally) and the
+      // runtime+model are actually provisioned (localBaseReady). Defaults on: it can only ever reduce a
+      // meeting's chance of going unindexed, never increase cloud exposure (on-device is same-or-more
+      // private than cloud, never less).
+      indexFallback: z.boolean().default(true)
     })
     .default({
       enabled: false,
       modelId: BUNDLED_LOCAL_MODEL_ID,
-      useFor: { suggest: true, summary: true, vision: true }
+      useFor: { suggest: true, summary: true, vision: true },
+      indexFallback: true
     }),
   // Speaker Intelligence (docs/SPEAKER-INTELLIGENCE-PLAN.md): live "who's speaking" labels on THEM
   // transcript lines via on-device voice embeddings (sherpa-onnx, same addon as Parakeet). Off by
@@ -1106,7 +1117,8 @@ export const DEFAULT_SETTINGS: Settings = {
   localLlm: {
     enabled: false,
     modelId: BUNDLED_LOCAL_MODEL_ID,
-    useFor: { suggest: true, summary: true, vision: true }
+    useFor: { suggest: true, summary: true, vision: true },
+    indexFallback: true
   },
   speakerId: { enabled: false },
   tapControl: {

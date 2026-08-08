@@ -6,7 +6,8 @@ This is a Windows-only Cahê pilot installer. It is intentionally separate from 
 
 - The installed app and Start-menu shortcut are named `Metis Windows Cahe`.
 - It uses a separate Windows application identity and user-data directory, so it does not reuse normal Métis settings, encrypted keys, transcripts, or update state.
-- Kimi Code is the locked active provider for live questions and screenshot analysis. Dust remains available for its workspace/agent connection, but connecting Dust does not replace Kimi as the active provider.
+- Kimi Code is the default active provider for live questions and screenshot analysis, seeded once on first run from a bundled key — it is not locked, and switching providers in Settings → AI sticks across restarts. Dust remains available for its workspace/agent connection.
+- Meeting indexing (Mantu Intelligence extraction) automatically falls back to the on-device Métis Local model if Kimi (or whichever cloud provider is active) is unreachable or unconfigured, so meetings still get indexed instead of silently never being indexed. This install already enables Local AI for the background screen reader, so the fallback works out of the box; toggle it off under Settings → Local AI → Fallback if you'd rather a down/unconfigured provider leave meetings pending instead.
 - The Cahê app does not use the shared Métis auto-update feed. New Cahê builds must be distributed as new Cahê installers.
 
 ## First-run setup

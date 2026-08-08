@@ -56,7 +56,8 @@ describe('bundled local-model settings migration', () => {
     expect(parsed.localLlm).toEqual({
       enabled: true,
       modelId: 'qwen3.5-0.8b',
-      useFor: { suggest: true, summary: false, vision: true }
+      useFor: { suggest: true, summary: false, vision: true },
+      indexFallback: true
     })
   })
 
