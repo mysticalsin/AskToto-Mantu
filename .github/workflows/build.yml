@@ -41,6 +41,10 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run typecheck
+      # Anti-regression gate: every bug in docs/qa/BUG-LEDGER.md marked FIXED must be pinned by a
+      # regression test that cites its MQA id, so a re-broken bug fails a named test instead of
+      # silently shipping again. Runs before the suite — it is fast and its failure is unambiguous.
+      - run: npm run check:bugs
       - run: npm run build
       - run: npm test
 

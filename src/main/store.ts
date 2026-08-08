@@ -19,7 +19,14 @@ import {
   type Settings,
   type DustAgentsResponse
 } from '@shared/ipc'
-import { PROVIDERS, PROVIDER_IDS, dustAgentVision, resolveModel, type ProviderId } from '@shared/providers'
+import {
+  PROVIDERS,
+  PROVIDER_IDS,
+  dustAgentVision,
+  migrateRetiredModelMap,
+  resolveModel,
+  type ProviderId
+} from '@shared/providers'
 import { mainLog } from './logger'
 import { caheEditionPolicy, isCaheEdition } from './cahe-edition'
 import {
@@ -444,6 +451,18 @@ export function getSettings(): Settings {
   // through validKeysOnly() above, via validatedManaged(), so it can't carry a stale provider through.)
   // Any saved key file for that provider is left untouched on disk; it's simply never surfaced again.
   if (raw.provider === 'together' || raw.provider === 'fireworks') raw.provider = DEFAULT_SETTINGS.provider
+  // Migration: model ids the PROVIDER itself retired (see providers.ts RETIRED_MODEL_IDS — currently
+  // DeepSeek's 'deepseek-chat'/'deepseek-reasoner', discontinued 2026-07-24). A persisted per-provider
+  // model override beats every registry default in resolveModelTier, so without this a user who once
+  // picked a now-dead id keeps sending it forever and every request 400s — a failure no amount of
+  // re-entering their (perfectly valid) API key can fix, and one that reads to the user as "the key
+  // stopped working". Applied on READ so it heals existing profiles without waiting for a settings save.
+  for (const field of ['providerModels', 'providerModelsThinking', 'providerModelsDeep'] as const) {
+    const persisted = raw[field]
+    if (!persisted || typeof persisted !== 'object') continue
+    const migrated = migrateRetiredModelMap(persisted as Record<string, string>)
+    if (migrated !== persisted) raw[field] = migrated
+  }
   // NOTE: no contentProtection→privateView migration here. An earlier build briefly repointed the bar's
   // eye button at the new privateView flag, which would have made a pre-split contentProtection=false
   // ("window visible") silently mean something else — a migration guarded that. The eye now controls

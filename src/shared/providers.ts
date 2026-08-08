@@ -106,14 +106,19 @@ export const PROVIDERS: Record<ProviderId, ProviderDef> = {
   deepseek: {
     id: 'deepseek',
     label: 'DeepSeek',
-    blurb: 'Cheap, capable models with a dedicated step-by-step reasoning mode.',
+    blurb: 'Very cheap million-token models; V4 Flash is the low-cost default for everyday use.',
     kind: 'openai',
-    tier: 'more',
+    tier: 'featured',
     baseUrl: 'https://api.deepseek.com/v1',
-    models: ['deepseek-chat', 'deepseek-reasoner'],
-    defaultModel: 'deepseek-chat',
-    fastModel: 'deepseek-chat',
-    thinkModel: 'deepseek-reasoner', // thinking tier: DeepSeek's reasoning model
+    // V4 generation (verified against api-docs.deepseek.com on 2026-08-08). The previous ids
+    // 'deepseek-chat' / 'deepseek-reasoner' were announced for discontinuation on 2026-07-24 — a date
+    // now PAST — so pinning them shipped a provider that can stop answering with no code change on our
+    // side. They are kept only as migration SOURCES (see RETIRED_MODEL_IDS), never as suggestions.
+    models: ['deepseek-v4-flash', 'deepseek-v4-pro'],
+    defaultModel: 'deepseek-v4-flash',
+    fastModel: 'deepseek-v4-flash', // base tier: 1M ctx, ~$0.14/1M in — the cheap everyday model
+    thinkModel: 'deepseek-v4-pro', // think tier: the reasoning-oriented V4 variant
+    deepModel: 'deepseek-v4-pro',
     keyHint: 'sk-…',
     keyPattern: '', // sk- ambiguous
     vision: false,
@@ -179,7 +184,7 @@ export const PROVIDERS: Record<ProviderId, ProviderDef> = {
       'openai/gpt-4o-mini',
       'anthropic/claude-sonnet-5',
       'meta-llama/llama-3.3-70b-instruct',
-      'deepseek/deepseek-chat',
+      'deepseek/deepseek-v4-flash',
       'google/gemini-2.0-flash-001'
     ],
     defaultModel: 'openai/gpt-4o-mini',
@@ -421,6 +426,74 @@ export type ModelTier = (typeof MODEL_TIERS)[number]
  *            think model, so a provider without a distinct deep model degrades to its reasoning model.
  * For Dust the "model" is an agent sId: base/think/deep = providerModels.dust / thinkModels.dust / deepModels.dust.
  */
+/**
+ * Model ids a PROVIDER retired on its own schedule, mapped to the successor that serves the same slot.
+ *
+ * A persisted `providerModels` override outlives any registry edit (it is the user's explicit choice and
+ * beats every default in resolveModelTier), so a provider sunsetting an id silently turns that user's
+ * every request into a 400 that no amount of key-fixing resolves. Migrating on read is the only place
+ * that can catch it — the value is already on disk by the time anything else runs.
+ *
+ * deepseek: 'deepseek-chat' / 'deepseek-reasoner' were announced for discontinuation on 2026-07-24.
+ * DeepSeek documents both as aliases for V4-Flash's non-thinking / thinking modes, so V4-Flash is the
+ * faithful successor for BOTH — deliberately not V4-Pro, which would silently triple a user's token
+ * cost. Users who want the stronger model still get it through the think/deep tier defaults above.
+ */
+const RETIRED_MODEL_IDS: Partial<Record<ProviderId, Record<string, string>>> = {
+  deepseek: {
+    'deepseek-chat': 'deepseek-v4-flash',
+    'deepseek-reasoner': 'deepseek-v4-flash'
+  },
+  openrouter: {
+    'deepseek/deepseek-chat': 'deepseek/deepseek-v4-flash',
+    'deepseek/deepseek-reasoner': 'deepseek/deepseek-v4-flash'
+  }
+}
+
+/**
+ * OpenAI-compatible `reasoning_effort` for providers whose models spend hidden reasoning tokens BY
+ * DEFAULT. Undefined for everyone else, so their request bodies stay byte-identical (openai.ts only
+ * attaches the param when set, and drops it on the param-rejection retry).
+ *
+ * - kimi: kimi-for-coding always reasons and burns tokens; keep it light unless the user turned Métis
+ *   thinking on. Tier-independent, preserving the original behavior this replaced.
+ * - deepseek: V4 Flash/Pro default to THINKING mode. Left alone, a live suggestion — which has only a
+ *   15s idle budget in askStart — would sit behind a reasoning pass and time out, so the base tier
+ *   explicitly asks for low effort and only think/deep (or thinkingMode 'always') asks for high.
+ */
+export function reasoningEffortFor(
+  id: ProviderId,
+  tier: ModelTier,
+  thinkingAlways: boolean
+): 'low' | 'medium' | 'high' | undefined {
+  if (id === 'kimi') return thinkingAlways ? 'high' : 'low'
+  if (id === 'deepseek') return thinkingAlways || tier === 'think' || tier === 'deep' ? 'high' : 'low'
+  return undefined
+}
+
+/** Successor id for a retired model, or the input unchanged. Unknown/custom ids always pass through —
+ *  a user pointing at their own fine-tune must never be rewritten. */
+export function migrateRetiredModelId(id: ProviderId, model: string): string {
+  const trimmed = (model || '').trim()
+  if (!trimmed) return model
+  return RETIRED_MODEL_IDS[id]?.[trimmed] ?? model
+}
+
+/** Whole-map migration for one persisted providerModels-shaped record. Returns the SAME object when
+ *  nothing changed, so callers can cheaply detect a no-op and skip a settings rewrite. */
+export function migrateRetiredModelMap(
+  models: Partial<Record<string, string>>
+): Partial<Record<string, string>> {
+  let changed = false
+  const next: Partial<Record<string, string>> = {}
+  for (const [providerId, model] of Object.entries(models)) {
+    const migrated = typeof model === 'string' ? migrateRetiredModelId(providerId as ProviderId, model) : model
+    if (migrated !== model) changed = true
+    next[providerId] = migrated
+  }
+  return changed ? next : models
+}
+
 export function resolveModelTier(
   id: ProviderId,
   providerModels: Partial<Record<string, string>>,

@@ -79,6 +79,29 @@ describe('store', () => {
     vi.restoreAllMocks()
   })
 
+  it('heals a persisted provider-retired model id on read, without needing a settings save (MQA-001)', () => {
+    // A user who once picked 'deepseek-chat' has it in providerModels forever — and that override beats
+    // every registry default in resolveModelTier. DeepSeek retired the id on 2026-07-24, so without this
+    // migration every request 400s and reads to the user as "my API key stopped working" (MQA tracked).
+    setSettings({
+      provider: 'deepseek',
+      providerModels: { deepseek: 'deepseek-chat' },
+      providerModelsThinking: { deepseek: 'deepseek-reasoner' }
+    })
+
+    const healed = getSettings()
+    expect(healed.providerModels.deepseek).toBe('deepseek-v4-flash')
+    expect(healed.providerModelsThinking.deepseek).toBe('deepseek-v4-flash')
+  })
+
+  it('leaves a live model id and an unrelated provider override untouched', () => {
+    setSettings({ providerModels: { deepseek: 'deepseek-v4-pro', anthropic: 'claude-opus-4-8' } })
+
+    const s = getSettings()
+    expect(s.providerModels.deepseek).toBe('deepseek-v4-pro')
+    expect(s.providerModels.anthropic).toBe('claude-opus-4-8')
+  })
+
   it('layers defaults, managed config, and user overrides', () => {
     // Managed defaults live in userData/managed-config.json for this test.
     const managed = join(userData, 'managed-config.json')

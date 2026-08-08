@@ -1,5 +1,70 @@
 import { describe, it, expect } from 'vitest'
-import { isDustReady, dustStoredAgentMissing, applyInteractiveGuardrail, parseDustUrl, detectProvider, filterAllowedProviders, PROVIDERS, dustAgentVision } from './providers'
+import { isDustReady, dustStoredAgentMissing, applyInteractiveGuardrail, parseDustUrl, detectProvider, filterAllowedProviders, migrateRetiredModelId, migrateRetiredModelMap, reasoningEffortFor, resolveModelTier, PROVIDERS, dustAgentVision } from './providers'
+
+// MQA-001 (docs/qa/BUG-LEDGER.md): the registry shipped DeepSeek's retired 'deepseek-chat' /
+// 'deepseek-reasoner' ids as its defaults after their 2026-07-24 discontinuation date. If these tests
+// fail, read that ledger entry before "fixing" them — the ids must stay on the V4 generation.
+describe('DeepSeek V4 registry (MQA-001)', () => {
+  it('offers only V4 ids — the retired chat/reasoner ids are never suggested', () => {
+    // DeepSeek announced 'deepseek-chat'/'deepseek-reasoner' for discontinuation on 2026-07-24. Shipping
+    // them as suggestions hands users an id that stops answering with no change on our side.
+    expect(PROVIDERS.deepseek.models).toEqual(['deepseek-v4-flash', 'deepseek-v4-pro'])
+    expect(PROVIDERS.deepseek.models).not.toContain('deepseek-chat')
+    expect(PROVIDERS.deepseek.models).not.toContain('deepseek-reasoner')
+  })
+
+  it('resolves V4 Flash for the base tier and V4 Pro for think/deep with no user override', () => {
+    expect(resolveModelTier('deepseek', {}, {}, 'base')).toBe('deepseek-v4-flash')
+    expect(resolveModelTier('deepseek', {}, {}, 'think')).toBe('deepseek-v4-pro')
+    expect(resolveModelTier('deepseek', {}, {}, 'deep', {})).toBe('deepseek-v4-pro')
+  })
+})
+
+describe('migrateRetiredModelId — provider-retired ids heal on read (MQA-001)', () => {
+  it('maps both retired DeepSeek ids to V4 Flash, never to the 3x-pricier Pro', () => {
+    // DeepSeek documents chat/reasoner as aliases for V4-Flash's non-thinking/thinking modes, so Flash is
+    // the faithful successor for both; silently promoting a user to Pro would triple their token cost.
+    expect(migrateRetiredModelId('deepseek', 'deepseek-chat')).toBe('deepseek-v4-flash')
+    expect(migrateRetiredModelId('deepseek', 'deepseek-reasoner')).toBe('deepseek-v4-flash')
+    expect(migrateRetiredModelId('openrouter', 'deepseek/deepseek-chat')).toBe('deepseek/deepseek-v4-flash')
+  })
+
+  it('passes through live ids, custom fine-tunes, other providers, and blanks untouched', () => {
+    expect(migrateRetiredModelId('deepseek', 'deepseek-v4-flash')).toBe('deepseek-v4-flash')
+    expect(migrateRetiredModelId('deepseek', 'my-org/deepseek-chat-ft-2026')).toBe('my-org/deepseek-chat-ft-2026')
+    expect(migrateRetiredModelId('openai', 'deepseek-chat')).toBe('deepseek-chat') // not deepseek's map
+    expect(migrateRetiredModelId('deepseek', '')).toBe('')
+  })
+
+  it('migrates a whole persisted map and returns the SAME object when nothing changed', () => {
+    const stale = { deepseek: 'deepseek-chat', anthropic: 'claude-opus-4-8' }
+    expect(migrateRetiredModelMap(stale)).toEqual({ deepseek: 'deepseek-v4-flash', anthropic: 'claude-opus-4-8' })
+    const clean = { deepseek: 'deepseek-v4-flash' }
+    expect(migrateRetiredModelMap(clean)).toBe(clean) // identity → callers can skip a settings rewrite
+  })
+})
+
+describe('reasoningEffortFor', () => {
+  it('keeps DeepSeek V4 off its default thinking mode at the base tier (live suggest has a 15s budget)', () => {
+    expect(reasoningEffortFor('deepseek', 'base', false)).toBe('low')
+    expect(reasoningEffortFor('deepseek', 'think', false)).toBe('high')
+    expect(reasoningEffortFor('deepseek', 'deep', false)).toBe('high')
+    expect(reasoningEffortFor('deepseek', 'base', true)).toBe('high') // user turned Métis thinking on
+  })
+
+  it('preserves the original tier-independent Kimi behavior exactly', () => {
+    expect(reasoningEffortFor('kimi', 'base', false)).toBe('low')
+    expect(reasoningEffortFor('kimi', 'deep', false)).toBe('low')
+    expect(reasoningEffortFor('kimi', 'base', true)).toBe('high')
+  })
+
+  it('is undefined for every other provider so their request bodies stay byte-identical', () => {
+    for (const id of ['anthropic', 'openai', 'nvidia', 'dust', 'local', 'claude-cli', 'grok'] as const) {
+      expect(reasoningEffortFor(id, 'base', false)).toBeUndefined()
+      expect(reasoningEffortFor(id, 'deep', true)).toBeUndefined()
+    }
+  })
+})
 
 describe('dustAgentVision', () => {
   it('treats every Claude (anthropic) agent as vision-capable', () => {

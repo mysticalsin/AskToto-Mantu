@@ -83,6 +83,14 @@ import {
 } from './store'
 import { createStream } from './llm'
 import { isTransient, nextBackoff } from './llm/retry'
+import {
+  isAuthFailure,
+  isCoolingDown,
+  recordAuthFailure,
+  recordSuccess,
+  resetProviderHealth,
+  unhealthyProviders
+} from './llm/provider-health'
 import * as localRuntime from './llm/local-runtime'
 import {
   localEligibleFor,
@@ -199,7 +207,7 @@ import {
   sweepStaleTempFiles,
   readSavedFile
 } from './transcripts'
-import { getPlatformPermissions } from './platform-perms'
+import { getPlatformPermissions, probeScreenCapture } from './platform-perms'
 import {
   listMeetings,
   searchMeetings,
@@ -236,7 +244,14 @@ import {
   purgeGraphArtifacts
 } from './graphify'
 import { SaveMeetingSchema, SaveNoteSchema } from '@shared/ipc'
-import { PROVIDERS, resolveModelTier, applyInteractiveGuardrail, type ProviderId, type ProviderDef } from '@shared/providers'
+import {
+  PROVIDERS,
+  resolveModelTier,
+  applyInteractiveGuardrail,
+  reasoningEffortFor,
+  type ProviderId,
+  type ProviderDef
+} from '@shared/providers'
 import { routeTier } from '@shared/routing'
 import { redactSecrets } from '@shared/redact'
 import { applySpeakerNames } from '@shared/transcript-align'
@@ -703,8 +718,9 @@ async function runImportedRecap(job: ImportJob): Promise<string | undefined> {
               : undefined,
           model,
           temperature: settings.temperature,
-          // Same Kimi reasoning gate as the live stream: light by default, heavy only when thinking is on.
-          reasoningEffort: provider === 'kimi' ? (settings.thinkingMode === 'always' ? 'high' : 'low') : undefined,
+          // Same reasoning gate as the live stream (providers.ts reasoningEffortFor) — this path always
+          // resolves at the 'think' tier, so a reasoning-by-default model is asked for full effort.
+          reasoningEffort: reasoningEffortFor(provider, 'think', settings.thinkingMode === 'always'),
           idleMs: 120_000,
           freshConversation: true,
           system:
@@ -886,6 +902,9 @@ function publicSettings(): PublicSettings {
     localSummaryReady,
     localVisionReady,
     localFallbackReady,
+    // MQA-004: the honest counterpart to providerReady — which providers actually REJECTED their
+    // credentials recently, so the UI can say "your key stopped working" instead of claiming ready.
+    unhealthyProviders: unhealthyProviders(),
     // Background on-device screen pre-analysis can actually run (toggle on AND the local model is ready).
     backgroundScreenReady: s.backgroundScreenContext && localReady,
     // Live sidecar process state (distinct from localReady's eligibility check) — drives the Local AI
@@ -1888,10 +1907,17 @@ function registerIpc(): void {
         await systemPreferences.askForMediaAccess('microphone').catch(() => false)
       }
       if (systemPreferences.getMediaAccessStatus('screen') !== 'granted') {
-        await desktopCapturer
-          .getSources({ types: ['screen'], thumbnailSize: { width: 1, height: 1 } })
-          .catch(() => [])
+        await probeScreenCapture()
       }
+    }
+    if (process.platform === 'win32') {
+      // Windows used to fall straight through to a bare status read, so onboarding "front-loads the
+      // permission prompts" was a macOS-only promise and a Windows user's first screenshot ask was the
+      // first time anyone discovered capture was blocked. The probe raises no prompt here — it just
+      // establishes the truth while the user is still in setup, where the checklist can act on it.
+      // Mic cannot be prompted from main on Windows (askForMediaAccess is macOS-only); the renderer's
+      // getUserMedia call is what raises that prompt, so this only reports what the OS already knows.
+      await probeScreenCapture()
     }
     return getPlatformPermissions()
   })
@@ -2082,6 +2108,10 @@ function registerIpc(): void {
     if (!requireAuth()) return { hasKeys: hasKeysMap() }
     const parsed = SetApiKeyPayloadSchema.parse(payload)
     setApiKey(parsed.provider, parsed.key)
+    // MQA-003/MQA-004: the recorded "this key is broken" verdict was about the OLD credential. Clearing
+    // it here is what makes pasting a working key feel like it fixed the problem immediately, instead of
+    // the provider staying demoted and flagged until the cooldown happened to expire.
+    resetProviderHealth(parsed.provider)
     // setApiKey() silently treats an empty/whitespace key as "clear the saved key" (store.ts) — audit the
     // actual effect, not just the channel name, so a credential removal is never mislabeled as a set.
     auditLog(parsed.key.trim() ? 'key.set' : 'key.removed', { provider: parsed.provider })
@@ -2093,6 +2123,8 @@ function registerIpc(): void {
     if (!requireAuth()) return { hasKeys: hasKeysMap() }
     const parsed = ClearApiKeyPayloadSchema.parse(payload)
     clearApiKey(parsed.provider)
+    resetProviderHealth(parsed.provider) // same reason as setApiKey above
+
     auditLog('key.removed', { provider: parsed.provider })
     return { hasKeys: hasKeysMap() }
   })
@@ -2636,7 +2668,9 @@ function registerIpc(): void {
     const parsed = LocalPrewarmPayloadSchema.safeParse(payload)
     if (!parsed.success) return
     const s = getSettings()
-    if (!localPrewarmEligible(s, getAllowedProviders())) return
+    // publicSettings().providerReady is the same "can a cloud/CLI provider actually answer" test the ask
+    // path uses — when it is false, local is what will serve the next suggest, so it is worth warming.
+    if (!localPrewarmEligible(s, getAllowedProviders(), publicSettings().providerReady)) return
     // Warm the EXACT same [system, user] prefix a real suggest request sends (F4 hardening) — built by
     // the SAME helper (llm/prewarm.ts) a unit test cross-checks against buildSystem()/userText() directly,
     // so any future drift between the live suggest path and what prewarm warms fails a test.
@@ -2784,7 +2818,7 @@ function registerIpc(): void {
           ? (PROVIDERS[a].kind === 'cli' ? 0 : 1) - (PROVIDERS[b].kind === 'cli' ? 0 : 1)
           : 0
       )
-      const found = order.find((p) => {
+      const eligible = (p: ProviderId): boolean => {
         if (tried.includes(p)) return false
         // Métis Local replaces the generic key/model/vision checks with localEligibleFor — the SAME
         // mode-scope gate the ineligible chain below enforces, so local can never become a failover
@@ -2802,7 +2836,12 @@ function registerIpc(): void {
           (PROVIDERS[p].kind === 'cli' ||
             !!resolveModelTier(p, s.providerModels, s.providerModelsThinking, tier, s.providerModelsDeep))
         )
-      })
+      }
+      // MQA-003: prefer a provider that has not just had its credentials rejected. Deliberately two
+      // passes rather than a filter — a cooling provider is still a legitimate last resort, so it is
+      // demoted, never removed. Skipping it outright would let one revoked key lock a user out of the
+      // only provider they have configured.
+      const found = order.find((p) => eligible(p) && !isCoolingDown(p)) ?? order.find(eligible)
       if (found) return found
       // Safety net (localLlm.fallback): every cloud/CLI candidate is tried or unconfigured — offer the
       // on-device model as the strictly-LAST resort so an in-scope ask still gets answered instead of
@@ -2964,7 +3003,19 @@ function registerIpc(): void {
       // sees any error. Retries (attempted.length > 0) get a much shorter cap: a healthy provider still
       // answers well inside it, while a silent-drop network surfaces the "Connection error." in seconds.
       const RETRY_IDLE_CAP_MS = 20_000
-      const idleMs = attempted.length > 0 ? Math.min(baseIdleMs, RETRY_IDLE_CAP_MS) : baseIdleMs
+      // MQA-006: a COLD Métis Local request must first load ~730 MB of GGUF weights off disk before it can
+      // emit a token — routinely longer than the 15s suggest budget and longer than the retry cap, so the
+      // first on-device answer after launch (exactly what a zero-API-key install gets) died with "Stream
+      // timed out" while the model was still loading correctly. The floor applies only while the sidecar
+      // is not yet running: once warm, local is fast and keeps the normal, tighter budgets. This is a
+      // load allowance, not a licence to hang — a genuinely stuck sidecar still aborts, just later.
+      const LOCAL_COLD_START_IDLE_MS = 90_000
+      const localColdStart = provider === 'local' && !localRuntime.isRunning()
+      const idleMs = localColdStart
+        ? Math.max(baseIdleMs, LOCAL_COLD_START_IDLE_MS)
+        : attempted.length > 0
+          ? Math.min(baseIdleMs, RETRY_IDLE_CAP_MS)
+          : baseIdleMs
       const startedAt = Date.now()
       let gotToken = false
       let ttftMs: number | undefined
@@ -2991,15 +3042,21 @@ function registerIpc(): void {
             : undefined,
         model,
         temperature: s.temperature,
-        // Kimi's kimi-for-coding always reasons (burning tokens). Default it to LOW effort and only go HIGH
-        // when the user turns Métis thinking on (thinkingMode 'always'); undefined for every other provider.
-        reasoningEffort: provider === 'kimi' ? (s.thinkingMode === 'always' ? 'high' : 'low') : undefined,
+        // Reasoning-by-default models (Kimi, DeepSeek V4) burn hidden tokens and stall a 15s live-suggest
+        // budget unless told otherwise — providers.ts reasoningEffortFor decides per provider AND tier;
+        // undefined for every other provider, so their request bodies stay byte-identical.
+        reasoningEffort: reasoningEffortFor(provider, tier, s.thinkingMode === 'always'),
         idleMs,
         system: buildSystem(req, s.mode, s.profile, s.modePrompts, s.contextDocs[s.mode] || [], s.outputLanguage, s.summaryLanguage, s.systemPrompt),
         req,
         handlers: {
           onDelta: (text) => {
-            if (!gotToken) ttftMs = Date.now() - startedAt
+            if (!gotToken) {
+              ttftMs = Date.now() - startedAt
+              // Tokens are flowing, so these credentials demonstrably work — clear any prior auth
+              // verdict (MQA-003/MQA-004) rather than leaving a stale "broken" mark on a live provider.
+              recordSuccess(provider)
+            }
             gotToken = true
             win?.webContents.send(IPC.streamDelta, { id: req.id, text })
           },
@@ -3022,6 +3079,10 @@ function registerIpc(): void {
           onError: (message) => {
             streams.delete(req.id)
             auditLog('provider.failed', { provider, gotToken, retry: retryCount })
+            // MQA-003/MQA-004: remember a CREDENTIAL rejection (not a transport blip) so routing can stop
+            // re-paying this provider's round trip on every subsequent ask, and so Settings can finally
+            // tell the user their key stopped working instead of reporting it ready forever.
+            if (!gotToken && isAuthFailure(message)) recordAuthFailure(provider, String(message))
             // Pre-token transient failure (dropped socket, 5xx, 429, DNS blip): retry the SAME provider
             // with bounded backoff before switching. `gotToken` guards it — once tokens are on the wire
             // we never re-run. A cancel handle keeps an abort during the backoff wait from firing the retry.
@@ -3051,7 +3112,12 @@ function registerIpc(): void {
               : provider === 'dust' &&
                   /oauth|unauthor|expired|authentication credential|invalid.*(token|credential)/i.test(message)
                 ? 'Your Dust session expired and could not refresh automatically. Open Settings and reconnect Dust once.'
-                : message
+                : // MQA-005: a credential rejection used to fall through as the provider's raw string —
+                  // users saw literally "403 status code (no body)", which names neither the problem nor
+                  // the fix. Say which provider failed and where to go, matching the no-key path's copy.
+                  isAuthFailure(message)
+                  ? `${def.label} rejected your API key (it may have been revoked, expired, or run out of credit). Open Settings → AI to re-enter it.`
+                  : message
             win?.webContents.send(IPC.streamError, { id: req.id, message: friendly })
           }
         }
@@ -3075,16 +3141,19 @@ function registerIpc(): void {
     // precedence, explicit") — see local-routing.ts's pickPrimaryProvider for the exact precedence rule.
     const localPrimaryEligible = localEligibleFor(req, s, routeTier(req, s.thinkingMode), allowed)
     const localVisionRequired = localVisionPrivacyRequired(req, s)
-    attempt(
-      pickPrimaryProvider(
-        req.providerOverride,
-        localPrimaryEligible,
-        cliPrimary,
-        s.provider,
-        localVisionRequired
-      ),
-      []
+    const primary = pickPrimaryProvider(
+      req.providerOverride,
+      localPrimaryEligible,
+      cliPrimary,
+      s.provider,
+      localVisionRequired
     )
+    // MQA-003: when the primary's credentials were just rejected, start at the next eligible provider
+    // instead of re-paying its round trip on every ask (measured 6.5–9.3s wasted against a 15s
+    // live-suggest budget). It stays in `attempted` so the walk never circles back to it. pickFailover
+    // returns null for a pinned Dust-agent request, so a pinned ask is never silently substituted.
+    const skipDeadPrimary = isCoolingDown(primary) ? pickFailover([primary]) : null
+    attempt(skipDeadPrimary ?? primary, skipDeadPrimary ? [primary] : [])
     } catch (e) {
       win?.webContents.send(IPC.streamError, {
         id,
@@ -4315,6 +4384,17 @@ if (!app.requestSingleInstanceLock()) {
   }
   recoverImports()
   runStep('registerScreenListeners', registerScreenListeners)
+  // Establish real screen-capture readiness at boot on Windows, where the probe raises NO system prompt
+  // and there is no queryable permission to read instead — without it getPlatformPermissions() reports
+  // 'unknown' forever and the readiness checklist cannot tell the user whether screenshots will work
+  // until one fails mid-meeting. Deliberately NOT run at boot on macOS: there the same call raises the
+  // TCC prompt, which belongs in onboarding (permissionsRequestUpfront) where it is explained, not as an
+  // unattended pop-up seconds after launch. Fire-and-forget: readiness reporting must never delay boot.
+  if (process.platform === 'win32') {
+    runStep('probeScreenCapture', () => {
+      void probeScreenCapture().catch(() => false)
+    })
+  }
   runStep('startMeetingNotifier', startMeetingNotifier)
   runStep('initAutoUpdate', () => initAutoUpdate(() => win))
   // Resume durable live/backfill work and reconcile OneDrive-synced meeting files after first paint.

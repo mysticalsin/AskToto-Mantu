@@ -1006,6 +1006,14 @@ export const PublicSettingsSchema = BaseSettingsSchema.extend({
    *  configured (or all of them down), in-scope asks and meeting indexing still run on-device. Lets
    *  renderer readiness gates (index-meetings CTA, screen-ask) match what routing will actually do. */
   localFallbackReady: z.boolean().default(false),
+  /** Providers whose API key was REJECTED (401/403/402, revoked, out of credit) on consecutive recent
+   *  asks — main/llm/provider-health.ts. `providerReady` above only means "a key string exists", so
+   *  without this the UI reports a provider as ready forever while every ask silently degrades to the
+   *  fallback (MQA-004). Empty is the healthy case. Session-scoped: never persisted, cleared the moment
+   *  the provider's key changes or it answers successfully again. */
+  unhealthyProviders: z
+    .array(z.object({ provider: z.string(), error: z.string(), since: z.number() }))
+    .default([]),
   /** The `backgroundScreenContext` setting is on AND localReady — i.e. background on-device screen
    *  pre-analysis can actually run. Lets Settings show "on" vs "enable Local AI to use this". */
   backgroundScreenReady: z.boolean().default(false),
