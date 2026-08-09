@@ -390,10 +390,11 @@ export class ImportJobManager {
 
       // The user summarized a meeting via import — credit the durable time-saved counters ONCE, now that
       // the file is committed and past every cancel gate (the live-meeting path credits itself in the
-      // saveTranscript IPC handler). Mirror saveMeeting's own duration formula EXACTLY (last line offset
-      // minus the same startedAt it uses, floored at 1) so the counter and the meeting frontmatter agree.
-      const sorted = [...job.lines].sort((a, b) => a.t - b.t)
-      const durMin = sorted.length ? Math.max(1, Math.round((sorted[sorted.length - 1].t - job.sourceMtimeMs) / 60000)) : 0
+      // saveTranscript IPC handler). MQA-111: use the transcript's own span (last line minus first),
+      // which is correct for the import path's 0-based offset timestamps AND matches what
+      // transcripts.meetingDurationMin now stamps into the frontmatter, so the counter and the meeting agree.
+      const ts = job.lines.map((l) => l.t).filter((t) => Number.isFinite(t))
+      const durMin = ts.length ? Math.max(1, Math.round((Math.max(...ts) - Math.min(...ts)) / 60000)) : 0
       this.deps.recordMeetingSummarized?.(durMin)
 
       job.progressPct = 100

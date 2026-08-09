@@ -415,6 +415,32 @@ describe('store', () => {
     })
   })
 
+  // MQA-060 (docs/qa/BUG-LEDGER.md): the Settings input is cleared after a save and never re-renders the
+  // secret, so a Test with an empty box must fall back to the STORED key — otherwise the button could only
+  // test a freshly pasted key, never the one actually in use.
+  describe('testApiKey falls back to the stored key when none is passed (MQA-060)', () => {
+    it('tests the saved key on an empty argument instead of returning "No API key provided"', async () => {
+      setApiKey('openai', 'sk-stored-openai-key')
+      // A dummy allowlist-free env: the network call would run, so pin the allowlist to include openai and
+      // assert we got PAST the empty-key floor (the org gate / network is what runs next, not the floor).
+      const managed = join(userData, 'managed-config.json')
+      writeFileSync(managed, JSON.stringify({ allowedProviders: ['dust'] }), 'utf8') // excludes openai
+      const result = await testApiKey('openai', '   ') // empty/whitespace → should use the stored key
+
+      // It reached the allowlist gate (proving the stored key was picked up), not the empty-key floor.
+      expect(result.error).not.toBe('No API key provided.')
+      expect(result.error).toBe("GPT · OpenAI is not on your organization's approved provider list.")
+    })
+
+    it('still returns the no-key error when the box is empty AND nothing is stored', async () => {
+      // 'grok' is never set in this block, so the module-level _apiKeyCache cannot leak a stored key into
+      // this assertion the way reusing 'openai' from the test above would (see the env-var/cache note in
+      // this file's beforeEach).
+      const result = await testApiKey('grok', '')
+      expect(result).toEqual({ ok: false, error: 'No API key provided.' })
+    })
+  })
+
   describe('Cahê Windows edition policy', () => {
     const caheFlag = 'METIS_CAHE_EDITION'
     let previousCaheFlag: string | undefined

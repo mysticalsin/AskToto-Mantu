@@ -28,6 +28,22 @@ describe('MQA-101 — a dead Dust session trips the circuit breaker and shows th
   })
 })
 
+describe('MQA-113 — the local fallback is preferred over a COOLING cloud provider in pickFailover', () => {
+  it('picks a healthy provider, then local, then a cooling provider only as the absolute last resort', () => {
+    const pf = indexSrc.slice(indexSrc.indexOf('const healthy = order.find'), indexSrc.indexOf('const healthy = order.find') + 1800)
+    // 1) healthy non-cooling provider first.
+    expect(pf).toMatch(/const healthy = order\.find\(\(p\) => eligible\(p\) && !isCoolingDown\(p\)\)/)
+    expect(pf).toMatch(/if \(healthy\) return healthy/)
+    // 2) local fallback BEFORE the cooling-cloud last resort — this is the fix: a 2nd/Nth cooling provider
+    //    must not be retried every ask ahead of the ready on-device model.
+    const localIdx = pf.indexOf("localFallbackEligibleFor(req, s, tier, allowed)) return 'local'")
+    const lastResortIdx = pf.indexOf('return order.find(eligible) ?? null')
+    expect(localIdx).toBeGreaterThan(-1)
+    expect(lastResortIdx).toBeGreaterThan(-1)
+    expect(localIdx).toBeLessThan(lastResortIdx) // local is checked BEFORE the cooling last resort
+  })
+})
+
 describe('MQA-102 — a local completion with zero content surfaces as an error, never a blank bubble', () => {
   it('sends a streamError for a pre-token local onDone instead of falling through to streamDone', () => {
     const onDone = indexSrc.slice(indexSrc.indexOf('onDone: (u) => {'), indexSrc.indexOf('onError: (message) => {'))

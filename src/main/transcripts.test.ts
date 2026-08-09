@@ -28,6 +28,7 @@ import {
   writeSaved,
   resolveMeetingsFolder,
   formatTranscript,
+  meetingDurationMin,
   decryptToTemp
 } from './transcripts'
 import type { SaveMeeting, Settings } from '@shared/ipc'
@@ -1038,5 +1039,28 @@ describe('copy-forward: pre-rebrand "AskToto Meetings" sibling folder (T7 7c)', 
     writeFileSync(join(legacy, 'second.md'), 'SECOND')
     resolveMeetingsFolder(settings) // marker already present — must be a no-op
     expect(existsSync(join(folder, 'second.md'))).toBe(false)
+  })
+})
+
+// MQA-111 (docs/qa/BUG-LEDGER.md): duration must be the transcript's own SPAN (last line minus first),
+// correct whether line.t is a 0-based offset (imports) or a wall-clock timestamp (the live renderer).
+// The old last-minus-startedAt formula turned an offset t into a huge negative that clamped to 1 minute,
+// corrupting conversationMinutes and the time-saved total for every import.
+describe('meetingDurationMin — span is correct under both timestamp conventions (MQA-111)', () => {
+  it('offset-based t (0-based, the import convention) gives the real span, not 1', () => {
+    const startedAt = Date.now()
+    const m = { startedAt, lines: [{ t: 0 }, { t: 30_000 }, { t: 25 * 60_000 }] } // 25-minute span
+    expect(meetingDurationMin(m)).toBe(25)
+  })
+
+  it('wall-clock t (the live-renderer convention) still gives the real elapsed span', () => {
+    const start = 1_700_000_000_000
+    const m = { startedAt: start, lines: [{ t: start }, { t: start + 12 * 60_000 }] } // 12 minutes
+    expect(meetingDurationMin(m)).toBe(12)
+  })
+
+  it('a single-line meeting is a zero span, floored to 1; an empty meeting is 0', () => {
+    expect(meetingDurationMin({ startedAt: 1, lines: [{ t: 5_000 }] })).toBe(1)
+    expect(meetingDurationMin({ startedAt: 1, lines: [] })).toBe(0)
   })
 })

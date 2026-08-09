@@ -891,8 +891,11 @@ function AiSection({
   const onTest = async (): Promise<void> => {
     const trimmed = key.trim()
     const testedProvider = provider // see onSave — guards against a stale resolve after a provider switch
-    if (!trimmed) {
-      setTest({ status: 'error', message: 'Paste a key above to test it.' })
+    // MQA-060: an empty box means "test the key I already saved" (main falls back to the stored key). Only
+    // block when there is neither a pasted key NOR a saved one — otherwise the Test button was a dead end
+    // for the exact case it exists for: checking whether the key already in use still works.
+    if (!trimmed && !settings.hasKeys[provider]) {
+      setTest({ status: 'error', message: 'Paste a key above, or save one first, to test it.' })
       return
     }
     setTest({ status: 'loading' })

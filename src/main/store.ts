@@ -753,13 +753,17 @@ export interface TestKeyResult {
 }
 
 export async function testApiKey(provider: ProviderId, key: string): Promise<TestKeyResult> {
-  const trimmed = key.trim()
-  if (!trimmed) return { ok: false, error: 'No API key provided.' }
   if (PROVIDERS[provider]?.kind === 'cli')
     return {
       ok: false,
       error: 'CLI providers do not use API keys — connect via Settings → CLI Integration.'
     }
+  // MQA-060: an empty key means "test the key I already have saved". The Settings input is cleared after a
+  // save and never re-renders the secret, so without this the Test button could only ever test a freshly
+  // pasted key, never the one actually in use — the exact key an "is it still valid?" check is about.
+  // getApiKey resolves the same value the ask path uses (an env var, else the encrypted store).
+  const trimmed = key.trim() || getApiKey(provider)
+  if (!trimmed) return { ok: false, error: 'No API key provided.' }
 
   const def = PROVIDERS[provider]
   // Org allowlist (data-residency / governance policy) — the SAME gate attempt() enforces at ask time
