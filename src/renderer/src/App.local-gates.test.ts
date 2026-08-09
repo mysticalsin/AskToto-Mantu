@@ -121,24 +121,35 @@ describe('requireProvider(local?) call-site contract (H1)', () => {
   })
 })
 
-// r5/r6 closure: the local-capable chips must be reachable for a local-only setup — App passes the
-// per-task readiness flags into QuickActions, which enables ONLY the summarize chip (summary mode) and
-// the whatnext chip (transcript route fires suggest mode); fact-check and explain keep the cloud gate
-// because their direct branches all fire answer mode.
-describe('QuickActions local reachability (r5/r6)', () => {
+// r5/r6 + fallback closure: the local-capable chips must be reachable for a zero-API-key setup — App
+// passes the per-task readiness flags AND the default-on fallback flag into QuickActions, which enables
+// the summarize chip (summary/vision mode) and the whatnext chip (transcript route fires suggest mode)
+// when EITHER the explicit useFor flag or the fallback is ready; fact-check and explain keep the cloud
+// gate because their direct branches all fire answer mode, which the on-device model never serves.
+describe('QuickActions local reachability (r5/r6 + fallback)', () => {
   const appSrc = readFileSync(join(__dirname, 'App.tsx'), 'utf8')
   const qaSrc = readFileSync(join(__dirname, 'components', 'QuickActions.tsx'), 'utf8')
 
-  it('App passes localSummaryReady and localSuggestReady into QuickActions', () => {
+  it('App passes the per-task readiness flags AND localFallbackReady into QuickActions', () => {
     expect(appSrc).toMatch(/localSummaryReady=\{settings\?\.localSummaryReady \?\? false\}/)
     expect(appSrc).toMatch(/localSuggestReady=\{settings\?\.localSuggestReady \?\? false\}/)
+    expect(appSrc).toMatch(/localFallbackReady=\{settings\?\.localFallbackReady \?\? false\}/)
   })
 
-  it('QuickActions enables exactly the summarize and whatnext chips via their local flags', () => {
-    expect(qaSrc).toMatch(/\(a\.kind === 'summarize' && localSummaryReady\)/)
-    expect(qaSrc).toMatch(/\(a\.kind === 'whatnext' && localSuggestReady\)/)
-    expect(qaSrc).not.toMatch(/a\.kind === 'factcheck' &&/)
-    expect(qaSrc).not.toMatch(/a\.kind === 'explain' &&/)
+  it('QuickActions enables the summarize and whatnext chips via their useFor flag OR the fallback', () => {
+    expect(qaSrc).toMatch(/a\.kind === 'summarize' && \(localSummaryReady \|\| localFallbackReady\)/)
+    expect(qaSrc).toMatch(/a\.kind === 'whatnext' && \(localSuggestReady \|\| localFallbackReady\)/)
+    // Fact-check and Explain are NEVER enabled by a local flag — they are answer-mode, cloud-only.
+    expect(qaSrc).not.toMatch(/a\.kind === 'factcheck' && \(/)
+    expect(qaSrc).not.toMatch(/a\.kind === 'explain' && \(/)
+  })
+
+  it('requireProvider accepts the fallback for every in-scope local task (so zero-key installs are not bounced)', () => {
+    // Without this, a fresh install with no cloud key bounced whatNext/summarize/screen into Settings even
+    // though Métis Local answers suggest/summary/vision on-device.
+    expect(appSrc).toMatch(/settings\?\.localSuggestReady \|\| settings\?\.localFallbackReady/)
+    expect(appSrc).toMatch(/settings\?\.localSummaryReady \|\| settings\?\.localFallbackReady/)
+    expect(appSrc).toMatch(/settings\?\.localVisionReady \|\| settings\?\.localFallbackReady/)
   })
 })
 

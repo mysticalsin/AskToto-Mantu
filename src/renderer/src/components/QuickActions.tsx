@@ -16,7 +16,8 @@ export const QuickActions = memo(function QuickActions({
   rainbowRing,
   providerReady = true,
   localSummaryReady = false,
-  localSuggestReady = false
+  localSuggestReady = false,
+  localFallbackReady = false
 }: {
   onAction: (k: QuickKind) => void
   hint?: string
@@ -33,6 +34,10 @@ export const QuickActions = memo(function QuickActions({
   // Settings after the click instead of before it.
   localSummaryReady?: boolean
   localSuggestReady?: boolean
+  // The default-on safety net serves the in-scope actions (What-to-say-next → suggest, Summarize screen →
+  // summary/vision) on-device with zero cloud keys. Fact-check and Explain fire 'answer' mode, which the
+  // small on-device model never serves, so they stay cloud-gated with a clear tooltip.
+  localFallbackReady?: boolean
 }): JSX.Element {
   return (
     // mt-1.5: a touch more breathing room under the bar — its --shadow-bar reaches well past its own
@@ -42,16 +47,24 @@ export const QuickActions = memo(function QuickActions({
     <div className="fade-up mt-1.5 flex flex-col items-center gap-1.5 px-1">
       <div className="flex flex-wrap items-center justify-center gap-1.5">
         {ACTIONS.map((a) => {
-          const enabled =
-            providerReady ||
-            (a.kind === 'summarize' && localSummaryReady) ||
-            (a.kind === 'whatnext' && localSuggestReady)
+          // In-scope actions (What-to-say-next → suggest, Summarize screen → summary/vision) run on the
+          // on-device model via the default-on fallback, so they light up with zero cloud keys. Fact-check
+          // and Explain are 'answer' mode — the small local model does not serve those — so they need a
+          // cloud provider, and their disabled tooltip says exactly that instead of a generic nudge.
+          const localServes =
+            (a.kind === 'summarize' && (localSummaryReady || localFallbackReady)) ||
+            (a.kind === 'whatnext' && (localSuggestReady || localFallbackReady))
+          const enabled = providerReady || localServes
+          const disabledHint =
+            a.kind === 'factcheck' || a.kind === 'explain'
+              ? 'Connect a cloud provider — Métis Local can’t do this one'
+              : 'Connect an AI provider first'
           return (
           <button
             key={a.kind}
             type="button"
             aria-label={a.label}
-            title={enabled ? undefined : 'Connect an AI provider first'}
+            title={enabled ? undefined : disabledHint}
             aria-disabled={!enabled}
             disabled={!enabled}
             onClick={() => onAction(a.kind)}

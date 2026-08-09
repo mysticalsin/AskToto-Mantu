@@ -735,8 +735,9 @@ export function App(): JSX.Element {
   // auto-answer when the other person asks a question (debounce = suggestEverySec)
   onQuestionRef.current = (_line: TranscriptLine): void => {
     if (!(settings?.autoSuggest ?? true)) return
-    // no provider → don't auto-fire a request that would just error (a local-only setup counts too)
-    if (!settings?.providerReady && !settings?.localSuggestReady) return
+    // no provider → don't auto-fire a request that would just error (a local-only setup counts too,
+    // including the default-on fallback which serves the suggest this fires)
+    if (!settings?.providerReady && !settings?.localSuggestReady && !settings?.localFallbackReady) return
     if (suggest.answer?.streaming) return
     const now = Date.now()
     const everyMs = (settings?.suggestEverySec ?? 15) * 1000
@@ -793,13 +794,17 @@ export function App(): JSX.Element {
   // omitted by callers whose request can't route to Métis Local (answer/recap/mixed-mode entry points).
   const requireProvider = useCallback(
     (local?: 'suggest' | 'summary' | 'vision'): boolean => {
+      // A named in-scope task (suggest/summary/vision) is ready when its explicit useFor toggle is on OR
+      // the default-on safety net (localFallbackReady) can serve it. Without the fallback clause a
+      // zero-API-key install — the exact case Métis Local exists for — bounced every quick action into
+      // Settings even though local answers suggest/summary/vision on-device.
       const localReady =
         local === 'suggest'
-          ? settings?.localSuggestReady
+          ? settings?.localSuggestReady || settings?.localFallbackReady
           : local === 'summary'
-            ? settings?.localSummaryReady
+            ? settings?.localSummaryReady || settings?.localFallbackReady
             : local === 'vision'
-              ? settings?.localVisionReady
+              ? settings?.localVisionReady || settings?.localFallbackReady
               : false
       if (settings?.providerReady || localReady) return true
       // A keyed API provider can still be !providerReady because the org allowlist excludes it
@@ -2913,6 +2918,7 @@ export function App(): JSX.Element {
               providerReady={settings?.providerReady ?? false}
               localSummaryReady={settings?.localSummaryReady ?? false}
               localSuggestReady={settings?.localSuggestReady ?? false}
+              localFallbackReady={settings?.localFallbackReady ?? false}
             />
           )}
           {/* Listen-engine status (offline/reconnecting/crash notes) — shown regardless of which view is
