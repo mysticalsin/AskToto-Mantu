@@ -38,7 +38,7 @@ describe('MQA-004 — a rejected credential is recorded, not forgotten', () => {
   })
 })
 
-describe('MQA-003 — a dead provider is demoted, never re-tried first forever', () => {
+describe('MQA-003 / MQA-021 — a dead provider is demoted, never re-tried first forever', () => {
   it('skips a cooling-down provider when choosing the FIRST provider to try', () => {
     expect(indexSrc).toMatch(/const skipDeadPrimary = isCoolingDown\(primary\) \? pickFailover\(\[primary\]\) : null/)
     expect(indexSrc).toMatch(/attempt\(skipDeadPrimary \?\? primary, skipDeadPrimary \? \[primary\] : \[\]\)/)
