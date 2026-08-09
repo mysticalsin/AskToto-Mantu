@@ -123,11 +123,21 @@ function readFrontmatterFlag(md: string, key: string): boolean {
   return !!m && /^"?true"?$/i.test(m[1].trim())
 }
 
-/** basenames of every saved meeting flagged `confidential: true` in its frontmatter. Read fresh on every
- *  publish call (no cache) — this runs once per publish/index-regen, not per keystroke, and correctness
- *  (a just-flagged meeting disappearing from the very next publish) matters far more than the cost of a
- *  handful of extra file reads at this app's single-exec scale. An unreadable/undecryptable meeting file
- *  is never treated as confidential (nor as safe — it simply can't be read at all here).
+/** basenames of every saved meeting that must be kept OUT of the published wiki: those flagged
+ *  `confidential: true` in their frontmatter, PLUS every meeting this device cannot read. Read fresh on
+ *  every publish call (no cache) — this runs once per publish/index-regen, not per keystroke, and
+ *  correctness (a just-flagged meeting disappearing from the very next publish) matters far more than the
+ *  cost of a handful of extra file reads at this app's single-exec scale.
+ *
+ *  QA MQA-074/MQA-077: unreadable means UNKNOWN, and unknown must fail CLOSED. Every consumer below reads
+ *  absence from this set as "safe to publish" (NOT_CONFIDENTIAL, timelineRows, openCommitmentRows,
+ *  confidentialOnly, topByActivity), so skipping a file whose read throws — a cloud-only OneDrive
+ *  Files-On-Demand placeholder while offline, an AV/sync lock on the very file setMeetingConfidential just
+ *  renamed — or whose envelope cannot be unwrapped here (readSavedFile yields '' for that, see decodeSaved)
+ *  would publish in plaintext exactly the meeting the flag exists to suppress, and would leave a stale note
+ *  card in place. graphify.ts's own confidentiality gate is already fail-closed for the same reason. The
+ *  cost of the conservative direction is only a temporarily unpublished meeting, which the next successful
+ *  publish restores.
  *
  *  QA MQA-031: "once per publish" is what the batch entry points below MUST enforce — each call here is a
  *  full readdir + synchronous read+decrypt of EVERY saved meeting, so letting publishAll/publishForExtraction
@@ -137,12 +147,14 @@ export function readConfidentialMeetings(s: Settings): Set<string> {
   const folder = resolveMeetingsFolder(s)
   const out = new Set<string>()
   for (const f of listSavedMeetingFiles(s)) {
+    let md: string
     try {
-      const md = readSavedFile(join(folder, f))
-      if (md && readFrontmatterFlag(md, 'confidential')) out.add(f)
+      md = readSavedFile(join(folder, f))
     } catch {
-      /* unreadable on this device — skip, never guess */
+      out.add(f)
+      continue
     }
+    if (!md || readFrontmatterFlag(md, 'confidential')) out.add(f)
   }
   return out
 }

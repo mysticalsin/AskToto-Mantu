@@ -1,0 +1,111 @@
+/**
+ * bidstackClient.audit.test.ts — regression cover for the audited defects in the Polo Pre-Sales
+ * (BidStack) MCP client.
+ *
+ * The sibling bidstackClient.test.ts drives a REAL local Streamable HTTP mock and is the right place
+ * for wire-protocol behaviour. It cannot cover this file's subject: CONNECT_TIMEOUT_MS / CALL_TIMEOUT_MS
+ * are module constants, so proving a stalled request is actually bounded against a live server would
+ * mean a 15s/30s wall-clock wait per assertion (and a 60s one to demonstrate the regression). So the
+ * SDK Client is stubbed here instead, and the assertions pin the exact request-level contract the fix
+ * establishes — that the bound rides on tools/list and tools/call, not on `initialize` alone.
+ */
+import { describe, it, expect, vi, beforeEach } from 'vitest'
+
+const sdk = vi.hoisted(() => ({
+  connect: vi.fn(async () => undefined),
+  listTools: vi.fn(async () => ({ tools: [{ name: 'push_meeting_recap' }] })),
+  callTool: vi.fn(async () => ({ content: [{ type: 'text', text: 'ok' }] })),
+  close: vi.fn(async () => undefined)
+}))
+
+// Stubbing the SDK Client is what makes the timeout contract observable: the real client only reveals
+// its per-request bound by stalling for the full DEFAULT_REQUEST_TIMEOUT_MSEC (60s).
+vi.mock('@modelcontextprotocol/sdk/client/index.js', () => ({
+  Client: class {
+    connect = sdk.connect
+    listTools = sdk.listTools
+    callTool = sdk.callTool
+    close = sdk.close
+  }
+}))
+vi.mock('@modelcontextprotocol/sdk/client/streamableHttp.js', () => ({
+  StreamableHTTPClientTransport: class {
+    constructor(_url: URL, _init?: unknown) {}
+  }
+}))
+
+import { connectBidstack, pushToBidstack } from './bidstackClient'
+
+const URL_OK = 'http://127.0.0.1:4001/mcp'
+const KEY = 'test-bidstack-key-123'
+
+describe('bidstackClient — audited defects', () => {
+  beforeEach(() => {
+    sdk.connect.mockClear()
+    sdk.listTools.mockClear()
+    sdk.callTool.mockClear()
+    sdk.close.mockClear()
+    sdk.callTool.mockResolvedValue({ content: [{ type: 'text', text: 'ok' }] })
+  })
+
+  // MQA-065 — the SDK forwards connect()'s options to the `initialize` request only, so tools/list
+  // ran unbounded at the SDK's own 60s default instead of the 15s this module advertises.
+  it('MQA-065: bounds tools/list with the same abort signal and timeout as connect', async () => {
+    const r = await connectBidstack(URL_OK, KEY)
+    expect(r.ok).toBe(true)
+
+    expect(sdk.listTools).toHaveBeenCalledTimes(1)
+    const [params, opts] = sdk.listTools.mock.calls[0] as [unknown, { signal?: AbortSignal; timeout?: number }]
+    expect(params).toBeUndefined() // tools/list takes no params — the bound rides in the 2nd argument
+    expect(opts?.timeout).toBe(15_000)
+    expect(opts?.signal).toBeInstanceOf(AbortSignal)
+    // Same controller as the connect leg: one timer bounds the whole round-trip, not two independent ones.
+    const connectOpts = sdk.connect.mock.calls[0][1] as { signal?: AbortSignal }
+    expect(opts?.signal).toBe(connectOpts?.signal)
+  })
+
+  // MQA-065 — a CRM write is the realistic stall (slow DB, loaded host, buffering proxy): initialize
+  // completes fast, then tools/call hangs.
+  it('MQA-065: bounds tools/call with the same abort signal and timeout as connect', async () => {
+    const args = { title: 'Q3 renewal sync', date: '2026-06-30', summary: 'Discussed renewal terms.' }
+    const r = await pushToBidstack(URL_OK, KEY, 'push_meeting_recap', args)
+    expect(r.ok).toBe(true)
+
+    expect(sdk.callTool).toHaveBeenCalledTimes(1)
+    const [params, resultSchema, opts] = sdk.callTool.mock.calls[0] as [
+      unknown,
+      unknown,
+      { signal?: AbortSignal; timeout?: number }
+    ]
+    expect(params).toEqual({ name: 'push_meeting_recap', arguments: args })
+    expect(resultSchema).toBeUndefined() // leaves the SDK's own CallToolResultSchema default in place
+    expect(opts?.timeout).toBe(30_000)
+    expect(opts?.signal).toBeInstanceOf(AbortSignal)
+    const connectOpts = sdk.connect.mock.calls[0][1] as { signal?: AbortSignal }
+    expect(opts?.signal).toBe(connectOpts?.signal)
+  })
+
+  // MQA-065 — the SDK's RequestTimeout carries no 'abort' substring, so it used to land in the
+  // unknown-reason branch and send the user to re-check an API key that was never the problem.
+  it('MQA-065: reports an SDK request timeout as a timeout, not an unknown failure', async () => {
+    sdk.callTool.mockRejectedValueOnce(new Error('MCP error -32001: Request timed out'))
+
+    const r = await pushToBidstack(URL_OK, KEY, 'push_meeting_recap', { title: 't' })
+    expect(r.ok).toBe(false)
+    expect(r.error).toMatch(/timed out connecting to polo pre-sales/i)
+    expect(r.error).toMatch(/reachable/i)
+    expect(r.error).not.toMatch(/unknown reason/i)
+    expect(r.error).not.toMatch(/api key/i)
+  })
+
+  // MQA-065 — the timeout branch must not swallow the auth/network classifications that already worked.
+  it('MQA-065: still classifies auth and network failures distinctly from a timeout', async () => {
+    sdk.callTool.mockRejectedValueOnce(new Error('HTTP 401 Unauthorized'))
+    const auth = await pushToBidstack(URL_OK, KEY, 'push_meeting_recap', {})
+    expect(auth.error).toMatch(/rejected the api key/i)
+
+    sdk.callTool.mockRejectedValueOnce(new Error('fetch failed: ECONNREFUSED'))
+    const net = await pushToBidstack(URL_OK, KEY, 'push_meeting_recap', {})
+    expect(net.error).toMatch(/could not reach polo pre-sales/i)
+  })
+})

@@ -40,6 +40,15 @@ function isReasoningEffortRejection(e: unknown): boolean {
   const body = rejectionBody(e)
   return !!body && body.includes('reasoning_effort')
 }
+/** MQA-100: `response_format` is only ever set for on-device extraction (llama-server supports it and
+ *  converts it to a GBNF grammar). It joins the same drop-on-rejection ladder as the two params above so
+ *  a runtime that does not implement it degrades to unconstrained decoding — which is exactly today's
+ *  behaviour — instead of failing the request outright. 'grammar' is matched too because llama.cpp
+ *  reports the conflict in those terms. */
+function isResponseFormatRejection(e: unknown): boolean {
+  const body = rejectionBody(e)
+  return !!body && (body.includes('response_format') || body.includes('json_schema') || body.includes('grammar'))
+}
 
 /** Resolve the completion ceiling without changing established cloud-provider budgets. */
 export function outputTokenBudget(model: string, mode: AskStart['mode'], override?: number): number {
@@ -91,7 +100,8 @@ export function streamOpenAI(opts: StreamOptions): StreamHandle {
     // stream_options.include_usage is sent — some providers 400 on it, triggering a retry without it.
     const doStream = async (
       includeUsage: boolean,
-      includeEffort: boolean
+      includeEffort: boolean,
+      includeResponseFormat = true
     ): Promise<{ inputTokens?: number; outputTokens?: number; sawReasoning: boolean; sawContent: boolean }> => {
       const params: any = {
         model: opts.model,
@@ -106,6 +116,12 @@ export function streamOpenAI(opts: StreamOptions): StreamHandle {
       // is unchanged. This is how "Kimi = light thinking by default, heavy only when Métis thinking is on"
       // reaches the wire.
       if (includeEffort && opts.reasoningEffort) params.reasoning_effort = opts.reasoningEffort
+      // MQA-100: constrained decoding for the on-device extraction path. llama-server compiles this into
+      // a GBNF grammar and masks every token that would break JSON syntax, so the output is guaranteed
+      // parseable — the 0.8B bundled model otherwise emits an unterminated object often enough to fail a
+      // real meeting ("No complete JSON object in model output"). Set ONLY by brain/ingest.ts for local;
+      // every other caller leaves it undefined and its request body is byte-identical.
+      if (includeResponseFormat && opts.responseFormat) params.response_format = opts.responseFormat
       if (isOSeries) {
         params.max_completion_tokens = maxTokens
       } else {
@@ -163,13 +179,15 @@ export function streamOpenAI(opts: StreamOptions): StreamHandle {
         if (controller.signal.aborted) throw e1
         const dropUsage = isStreamOptionsRejection(e1)
         const dropEffort = isReasoningEffortRejection(e1)
-        if (!dropUsage && !dropEffort) throw e1
+        const dropFormat = isResponseFormatRejection(e1)
+        if (!dropUsage && !dropEffort && !dropFormat) throw e1
         try {
-          usageResult = await doStream(!dropUsage, !dropEffort)
+          usageResult = await doStream(!dropUsage, !dropEffort, !dropFormat)
         } catch (e2) {
           if (controller.signal.aborted) throw e2
-          if (!isStreamOptionsRejection(e2) && !isReasoningEffortRejection(e2)) throw e2
-          usageResult = await doStream(false, false)
+          if (!isStreamOptionsRejection(e2) && !isReasoningEffortRejection(e2) && !isResponseFormatRejection(e2))
+            throw e2
+          usageResult = await doStream(false, false, false)
         }
       }
       wd.clear()

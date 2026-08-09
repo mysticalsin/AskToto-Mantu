@@ -918,6 +918,12 @@ export async function recoverOrphanDrafts(settings: Settings): Promise<{ recover
           }
           continue
         }
+        // Preserve the DRAFT's own at-rest encryption exactly as found (mirrors appendDebrief /
+        // renameMeeting), NOT the live encryptTranscripts toggle. A draft written while encryption was
+        // on holds recorded third-party speech; promoting it under a since-disabled toggle would rewrite
+        // it as unmarked cleartext into the (OneDrive-synced) meetings folder — a silent at-rest
+        // downgrade, with no prompt and no way back.
+        const wasEncrypted = isEncryptedFile(draftPath)
         const text = decodeSaved(readFileSync(draftPath))
         if (!text) continue // undecryptable on this device — leave it alone
         const promoted = text
@@ -926,7 +932,7 @@ export async function recoverOrphanDrafts(settings: Settings): Promise<{ recover
           .replace(IN_PROGRESS_SUFFIX, ' (recovered)')
         let out = primaryOut
         for (let n = 2; existsSync(out); n++) out = join(folder, `${stampPart}-recovered-${n}.md`)
-        await writeSaved(out, promoted, settings.encryptTranscripts)
+        await writeSaved(out, promoted, wasEncrypted)
         try {
           unlinkSync(draftPath)
         } catch {
@@ -935,9 +941,11 @@ export async function recoverOrphanDrafts(settings: Settings): Promise<{ recover
         }
         recovered++
 
-        // Mirror saveMeeting's exact plaintext-mode index.md bookkeeping (same condition, same row
-        // shape) — a recovered meeting should be just as discoverable from index.md as a normal one.
-        if (!settings.encryptTranscripts) {
+        // Mirror saveMeeting's exact plaintext-mode index.md bookkeeping (same row shape) — a recovered
+        // meeting should be just as discoverable from index.md as a normal one. Keyed on the file we
+        // just wrote, not the live toggle: index.md is always cleartext, so a preserved-encrypted
+        // recovery would otherwise leak the meeting's title and date beside the ciphertext.
+        if (!wasEncrypted) {
           const lines = text.split('\n')
           const dateLine = lines.find((l) => l.startsWith('date: '))
           const modeLine = lines.find((l) => l.startsWith('mode: '))

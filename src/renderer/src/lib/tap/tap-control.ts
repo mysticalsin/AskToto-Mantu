@@ -138,39 +138,48 @@ export async function startTapControl(opts: {
   }
   window.addEventListener('keydown', onKey, true)
 
-  const cap = await startTapCapture({
-    micDeviceId: opts.micDeviceId,
-    sensitivity: opts.sensitivity,
-    onCandidate(c) {
-      const now = performance.now()
-      if (!train.step(now)) {
-        opts.onEvent({ kind: 'reject', reason: 'train' })
-        return
+  let cap: TapCaptureSession
+  try {
+    cap = await startTapCapture({
+      micDeviceId: opts.micDeviceId,
+      sensitivity: opts.sensitivity,
+      onCandidate(c) {
+        const now = performance.now()
+        if (!train.step(now)) {
+          opts.onEvent({ kind: 'reject', reason: 'train' })
+          return
+        }
+        if (now - lastKeydown < KEYDOWN_VETO_MS) {
+          opts.onEvent({ kind: 'reject', reason: 'keyboard' })
+          return
+        }
+        const verdict = runGates(
+          { pcm: c.pcm, sampleRate: c.sampleRate, floorRms: c.floorRms },
+          opts.profile.levelRange
+        )
+        if (!verdict.ok || !verdict.window) {
+          opts.onEvent({ kind: 'reject', reason: verdict.reason ?? 'pre-quiet' })
+          return
+        }
+        const f = extractFeatures(verdict.window, c.sampleRate)
+        const r = classify(f, opts.profile)
+        if (!r.ok) {
+          opts.onEvent({ kind: 'reject', reason: r.reason })
+          return
+        }
+        opts.onEvent({ kind: 'tap', zone: r.zone, distance: r.distance })
+      },
+      onError(message) {
+        opts.onEvent({ kind: 'error', message })
       }
-      if (now - lastKeydown < KEYDOWN_VETO_MS) {
-        opts.onEvent({ kind: 'reject', reason: 'keyboard' })
-        return
-      }
-      const verdict = runGates(
-        { pcm: c.pcm, sampleRate: c.sampleRate, floorRms: c.floorRms },
-        opts.profile.levelRange
-      )
-      if (!verdict.ok || !verdict.window) {
-        opts.onEvent({ kind: 'reject', reason: verdict.reason ?? 'pre-quiet' })
-        return
-      }
-      const f = extractFeatures(verdict.window, c.sampleRate)
-      const r = classify(f, opts.profile)
-      if (!r.ok) {
-        opts.onEvent({ kind: 'reject', reason: r.reason })
-        return
-      }
-      opts.onEvent({ kind: 'tap', zone: r.zone, distance: r.distance })
-    },
-    onError(message) {
-      opts.onEvent({ kind: 'error', message })
-    }
-  })
+    })
+  } catch (e) {
+    // stop() below is the listener's ONLY other release path, and a rejected capture never hands the
+    // caller a session to call it on — without this, every failed arm (mic denied, device busy) orphans
+    // one more capturing keydown listener on window, and the hook re-arms whenever settings change.
+    window.removeEventListener('keydown', onKey, true)
+    throw e
+  }
 
   return {
     setSensitivity: cap.setSensitivity,
@@ -194,8 +203,9 @@ export interface UseTapControlArgs {
 }
 
 /**
- * Lifecycle hook: arms/disarms the pipeline as `active`/profile/mic/sensitivity change. Stale-close
- * safe — a torn-down session's late events are dropped via the generation counter.
+ * Lifecycle hook: arms/disarms the pipeline as `active`/profile/mic change (sensitivity is pushed into
+ * the open session instead). Stale-close safe — a torn-down session's late events are dropped via the
+ * generation counter.
  */
 export function useTapControl(args: UseTapControlArgs): void {
   const gen = useRef(0)
@@ -206,26 +216,49 @@ export function useTapControl(args: UseTapControlArgs): void {
   const sessionRef = useRef<TapControlSession | null>(null)
 
   const { active, profile, micDeviceId, sensitivity } = args
+  const sensitivityRef = useRef(sensitivity)
+  sensitivityRef.current = sensitivity
+
+  // `profile` is a nested object that arrives fresh over IPC on EVERY settings read — window focus and
+  // every patch (including the unattended fallback patches a live meeting writes). Keying the effect on
+  // its object identity re-acquired the mic several times a meeting: taps in each ~100-400 ms
+  // re-acquisition window are lost and makeTrainGate's typing history restarts, so a keystroke-adjacent
+  // false positive can slip through right after a focus. A saved profile is fully identified by these
+  // four fields (createdAt is stamped once, at calibration), so re-arm only on a real recalibration.
+  const profileKey = profile
+    ? `${profile.version}|${profile.sampleRate}|${profile.micDeviceId}|${profile.createdAt}`
+    : ''
+  const profileRef = useRef(profile)
+  profileRef.current = profile
+
   useEffect(() => {
-    if (!active || !profile) return
+    const p = profileRef.current
+    if (!active || !p) return
     // Mic identity is part of the acoustic model — a different mic has a different transfer function.
-    if (profile.micDeviceId !== (micDeviceId ?? profile.micDeviceId)) {
+    if (p.micDeviceId !== (micDeviceId ?? p.micDeviceId)) {
       mismatchRef.current?.()
       return
     }
     const my = ++gen.current
+    const armed = sensitivityRef.current
     void startTapControl({
-      profile,
+      profile: p,
       micDeviceId,
-      sensitivity,
+      sensitivity: armed,
       onEvent(e) {
         if (gen.current !== my) return
         if (e.kind === 'tap') zoneRef.current(e.zone)
       }
     })
       .then((s) => {
-        if (gen.current !== my) s.stop()
-        else sessionRef.current = s
+        if (gen.current !== my) {
+          s.stop()
+          return
+        }
+        sessionRef.current = s
+        // The slider can move while getUserMedia is still resolving — the effect below found no session
+        // to push that change into, so apply it here or the session runs on a stale threshold.
+        if (sensitivityRef.current !== armed) s.setSensitivity(sensitivityRef.current)
       })
       .catch(() => {
         /* mic denied or worklet failed — feature silently unavailable this session */
@@ -235,7 +268,13 @@ export function useTapControl(args: UseTapControlArgs): void {
       sessionRef.current?.stop()
       sessionRef.current = null
     }
-  }, [active, profile, micDeviceId, sensitivity])
+  }, [active, profileKey, micDeviceId])
+
+  // Sensitivity is a live worklet threshold, not part of the acoustic model: push it through the open
+  // session instead of re-arming, or a slider drag cycles the mic once per step.
+  useEffect(() => {
+    sessionRef.current?.setSensitivity(sensitivity)
+  }, [sensitivity])
 
   // Sample-rate drift (same mic, OS changed the device rate) is checked inside the session via the
   // capture's real rate — a profile calibrated at another rate classifies worse; the calibration UI

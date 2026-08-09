@@ -33,6 +33,42 @@ describe('aggregateMetrics', () => {
     expect(m.byProvider).toEqual({ anthropic: 2, dust: 1 })
   })
 
+  // MQA-088: main re-enters attempt() for a same-provider transient retry with the tried-provider list
+  // unchanged, so the retry re-emits provider.request carrying the SAME `retry` flag as the attempt it
+  // repeats. One ask that failed over exactly once must therefore still report one fallback, not two.
+  it('MQA-088: counts a cross-provider failover as a fallback but a same-provider retry as a repeat', () => {
+    const records: AuditRecord[] = [
+      // deepseek 429s, then retries itself — first provider, so `retry` is false on both records.
+      { event: 'provider.request', provider: 'deepseek' },
+      { event: 'provider.failed', provider: 'deepseek' },
+      { event: 'provider.retry', provider: 'deepseek' },
+      { event: 'provider.request', provider: 'deepseek' },
+      { event: 'provider.failed', provider: 'deepseek' },
+      // The one real failover: the ask hops to a different provider.
+      { event: 'provider.request', provider: 'nvidia', retry: true },
+      { event: 'provider.failed', provider: 'nvidia' },
+      // nvidia 429s and retries ITSELF — same-provider, but still carrying the failover flag.
+      { event: 'provider.retry', provider: 'nvidia' },
+      { event: 'provider.request', provider: 'nvidia', retry: true },
+      { event: 'provider.request', phase: 'done', provider: 'nvidia', ttftMs: 300, totalMs: 3000 }
+    ]
+    const m = aggregateMetrics(records)
+    expect(m.fallbacks).toBe(1)
+    expect(m.failures).toBe(3)
+    // Per-provider stays a REQUEST count: a retry really is another request issued to that provider.
+    expect(m.byProvider).toEqual({ deepseek: 2, nvidia: 2 })
+  })
+
+  it('MQA-088: a provider.retry consumed by its own repeat does not mask a later failover', () => {
+    const records: AuditRecord[] = [
+      { event: 'provider.request', provider: 'kimi', retry: true },
+      { event: 'provider.retry', provider: 'kimi' },
+      { event: 'provider.request', provider: 'kimi', retry: true }, // the repeat — consumes the marker
+      { event: 'provider.request', provider: 'kimi', retry: true } // a later ask failing over INTO kimi
+    ]
+    expect(aggregateMetrics(records).fallbacks).toBe(2)
+  })
+
   it('returns safe nulls/zeros for an empty log', () => {
     const m = aggregateMetrics([])
     expect(m.answers).toBe(0)

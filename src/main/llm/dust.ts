@@ -105,33 +105,38 @@ function dustLogger(): Console {
   return logger
 }
 
-// One Dust conversation per meeting, not one per request. Fact-check, Explain, Spotlight Ref, and every
-// other Dust-routed quick-action fired during the SAME meeting reuse this conversation, so the agent sees
-// the accumulated back-and-forth instead of a cold start on every call. Reset exactly once, when a NEW
-// meeting/listening session begins (see resetDustConversation, called from IPC.listeningState on `true`)
-// — never on stop, so a follow-up drafted right after the call still shares context with what happened
-// during it. Scoped to (workspaceId, agentId) so switching agents/workspaces mid-session can't leak one
-// agent's conversation into another's. Also time-bounded (DUST_CONVERSATION_TTL_MS): without this, an
-// unrelated ad-hoc question asked hours or days later — with no new meeting having started in between —
-// would silently inherit that old meeting's private conversation history. Module-level state is safe
-// here: Métis is single-window/single-active-meeting by construction, there is no concurrent-meeting
-// case to isolate against.
+// One Dust conversation per meeting per agent, not one per request. Fact-check, Explain, Spotlight Ref, and
+// every other Dust-routed quick-action fired during the SAME meeting reuse their agent's conversation, so
+// the agent sees the accumulated back-and-forth instead of a cold start on every call. Reset exactly once,
+// when a NEW meeting/listening session begins (see resetDustConversation, called from IPC.listeningState on
+// `true`) — never on stop, so a follow-up drafted right after the call still shares context with what
+// happened during it. A MAP keyed by (workspaceId, agentId), not a single slot: Spotlight Ref is hard-pinned
+// to its own agent sId, so with one slot every Spotlight click both missed the meeting thread AND overwrote
+// it, cold-starting the next chat ask with none of the meeting's accumulated context (and vice versa). The
+// key also keeps agents/workspaces isolated, so switching mid-session can't leak one agent's conversation
+// into another's. Also time-bounded (DUST_CONVERSATION_TTL_MS): without this, an unrelated ad-hoc question
+// asked hours or days later — with no new meeting having started in between — would silently inherit that
+// old meeting's private conversation history. Module-level state is safe here: Métis is
+// single-window/single-active-meeting by construction, there is no concurrent-meeting case to isolate
+// against, and the map only ever holds the handful of agents used inside one meeting.
 type DustConversationRef = { conversationId: string; workspaceId: string; agentId: string; createdAt: number }
 const DUST_CONVERSATION_TTL_MS = 2 * 60 * 60 * 1000 // 2h — covers a meeting plus an immediate follow-up draft
-let activeConversation: DustConversationRef | null = null
+const conversationKey = (workspaceId: string, agentId: string): string => `${workspaceId}::${agentId}`
+const activeConversations = new Map<string, DustConversationRef>()
 // Serializes conversation CREATION per (workspaceId, agentId): two Dust requests fired close together
 // (e.g. the auto-recap and a manual "Generate follow-up" click) must not both see no cached conversation
 // and each call createConversation, forking one meeting into two disconnected Dust conversations. Only
 // the create step needs this gate — once a conversation exists, concurrent postUserMessage calls into it
-// are already safe.
-let creationInFlight: Promise<void> | null = null
+// are already safe. Keyed like the cache it guards: two different agents create independent conversations,
+// so making one wait on the other's create would only add latency.
+const creationInFlight = new Map<string, Promise<void>>()
 // Bumped on every reset so an in-flight createConversation that straddles a meeting-boundary reset can
 // detect it happened and skip repopulating the cache with the (now-stale) previous meeting's conversation.
 let conversationEpoch = 0
 
 /** Call when a new meeting/listening session starts — the next Dust request begins a fresh conversation. */
 export function resetDustConversation(): void {
-  activeConversation = null
+  activeConversations.clear()
   conversationEpoch++
 }
 
@@ -151,17 +156,18 @@ export async function prewarmDustConversation(
   agentId: string
 ): Promise<void> {
   if (!creds.apiKey || !creds.workspaceId || !agentId) return
-  const fresh =
-    activeConversation &&
-    activeConversation.workspaceId === creds.workspaceId &&
-    activeConversation.agentId === agentId &&
-    Date.now() - activeConversation.createdAt < DUST_CONVERSATION_TTL_MS
-  if (fresh || creationInFlight) return // warm already, or a real ask is creating one — don't race it
+  const key = conversationKey(creds.workspaceId, agentId)
+  const cached = activeConversations.get(key)
+  const fresh = !!cached && Date.now() - cached.createdAt < DUST_CONVERSATION_TTL_MS
+  if (fresh || creationInFlight.has(key)) return // warm already, or a real ask is creating one — don't race it
   const epochAtStart = conversationEpoch
   let release: (() => void) | null = null
-  creationInFlight = new Promise((resolve) => {
-    release = resolve
-  })
+  creationInFlight.set(
+    key,
+    new Promise((resolve) => {
+      release = resolve
+    })
+  )
   try {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const api: any = new DustAPI(
@@ -176,14 +182,19 @@ export async function prewarmDustConversation(
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const sId = (created?.value?.conversation as any)?.sId
     if (sId && epochAtStart === conversationEpoch) {
-      activeConversation = { conversationId: sId, workspaceId: creds.workspaceId, agentId, createdAt: Date.now() }
+      activeConversations.set(key, {
+        conversationId: sId,
+        workspaceId: creds.workspaceId,
+        agentId,
+        createdAt: Date.now()
+      })
       auditLog('dust.conversation', { action: 'prewarmed' })
     }
   } catch {
     /* best-effort — the first ask simply creates the conversation itself */
   } finally {
     ;(release as unknown as () => void)?.()
-    creationInFlight = null
+    creationInFlight.delete(key)
   }
 }
 
@@ -273,27 +284,31 @@ export function streamDust(opts: StreamOptions): StreamHandle {
       screenshotFragment = attached.contentFragment
     }
     const workspaceId = creds.workspaceId || ''
+    const cacheKey = conversationKey(workspaceId, opts.model)
     // freshConversation (background jobs like brain ingest): never join OR become the cached meeting
     // conversation — an extraction must not see meeting context, and the meeting must not see it.
-    const isFresh = (c: DustConversationRef | null): c is DustConversationRef =>
-      !opts.freshConversation &&
-      !!c &&
-      c.workspaceId === workspaceId &&
-      c.agentId === opts.model &&
-      Date.now() - c.createdAt < DUST_CONVERSATION_TTL_MS
+    const cachedConversation = (): DustConversationRef | null => {
+      if (opts.freshConversation) return null
+      const c = activeConversations.get(cacheKey)
+      return c && Date.now() - c.createdAt < DUST_CONVERSATION_TTL_MS ? c : null
+    }
 
-    // If a concurrent request is already creating this meeting's conversation, wait for it instead of
+    // If a concurrent request is already creating this agent's conversation, wait for it instead of
     // racing a second createConversation — see creationInFlight comment above. Fresh-conversation
-    // requests skip the gate entirely: they never touch the shared cache slot.
+    // requests skip the gate entirely: they never touch the shared cache.
     let releaseCreationGate: (() => void) | null = null
-    while (!opts.freshConversation && !isFresh(activeConversation)) {
-      if (!creationInFlight) {
-        creationInFlight = new Promise((resolve) => {
-          releaseCreationGate = resolve
-        })
+    while (!opts.freshConversation && !cachedConversation()) {
+      const pending = creationInFlight.get(cacheKey)
+      if (!pending) {
+        creationInFlight.set(
+          cacheKey,
+          new Promise((resolve) => {
+            releaseCreationGate = resolve
+          })
+        )
         break // we now hold the gate — we're the one creating it
       }
-      await creationInFlight.catch(() => {})
+      await pending.catch(() => {})
     }
 
     const messageBody = {
@@ -303,8 +318,8 @@ export function streamDust(opts: StreamOptions): StreamHandle {
     }
     let conversation: unknown
     let messageSId: string
-    if (isFresh(activeConversation)) {
-      const reusable = activeConversation
+    const reusable = cachedConversation()
+    if (reusable) {
       // Screen question on an ongoing conversation: postUserMessage takes no attachment, so the screenshot
       // is attached to the conversation via its own content fragment first, then the message follows.
       if (screenshotFragment) {
@@ -316,7 +331,7 @@ export function streamDust(opts: StreamOptions): StreamHandle {
         if (frag.isErr()) {
           if (await retryIfAuth(frag.error)) return
           // Stale/deleted conversation — fall back to a fresh one (which attaches the fragment at create).
-          activeConversation = null
+          activeConversations.delete(cacheKey)
           return run(creds, allowRetry)
         }
       }
@@ -333,12 +348,12 @@ export function streamDust(opts: StreamOptions): StreamHandle {
         if (await retryIfAuth(posted.error)) return
         // Non-auth failure: the cached conversation may have expired/been deleted server-side — fall
         // back to a fresh one rather than failing the whole ask over a stale cache entry.
-        activeConversation = null
+        activeConversations.delete(cacheKey)
         return run(creds, allowRetry)
       }
       const fetched = await api.getConversation({ conversationId: reusable.conversationId, signal: controller.signal })
       if (fetched.isErr()) {
-        activeConversation = null
+        activeConversations.delete(cacheKey)
         return fail(fetched.error.message)
       }
       conversation = fetched.value
@@ -362,7 +377,7 @@ export function streamDust(opts: StreamOptions): StreamHandle {
         // every future Dust request in this app session (resetDustConversation never touches this gate).
         if (releaseCreationGate) {
           ;(releaseCreationGate as () => void)()
-          creationInFlight = null
+          creationInFlight.delete(cacheKey)
         }
       }
       if (created.isErr()) {
@@ -373,11 +388,16 @@ export function streamDust(opts: StreamOptions): StreamHandle {
       messageSId = created.value.message.sId
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const sId = (conversation as any)?.sId
-      // A fresh-conversation request must not hijack the meeting's cache slot with its throwaway thread.
+      // A fresh-conversation request must not hijack the meeting's cache with its throwaway thread.
       // Nor may a request that straddled a meeting-boundary reset (epoch changed while we awaited
       // createConversation) repopulate the cache with the now-stale previous meeting's conversation.
       if (sId && !opts.freshConversation && epochAtStart === conversationEpoch && !controller.signal.aborted) {
-        activeConversation = { conversationId: sId, workspaceId, agentId: opts.model, createdAt: Date.now() }
+        activeConversations.set(cacheKey, {
+          conversationId: sId,
+          workspaceId,
+          agentId: opts.model,
+          createdAt: Date.now()
+        })
       }
       auditLog('dust.conversation', { action: opts.freshConversation ? 'created-isolated' : 'created' })
     }

@@ -82,6 +82,46 @@ function meetingTime(dateStr: string): string {
   }
 }
 
+/** An in-place recap edit that was saved, paired with the recap text it replaced. */
+export type EditedRecap = { base: string; text: string }
+
+/** The recap markdown every consumer reads (Markdown render, Copy Summary, Export JSON/PDF, CRM payload),
+ *  so an edit reflects everywhere at once. The in-place copy of a saved edit stands only while App is
+ *  still handing back the text that edit was made against: Regenerate re-runs the recap and OVERWRITES
+ *  this meeting on disk, and a copy that outlived that write kept the old edited text on screen — and in
+ *  every export and the CRM payload — while the file said something else, with no recovery short of
+ *  leaving the screen and reopening. Comparing against `base` makes the override yield to the streaming
+ *  regeneration and then to the regenerated recap the moment either arrives. */
+export function displayedRecapText(edited: EditedRecap | null, incoming: string | undefined): string {
+  const text = incoming ?? ''
+  return edited && edited.base === text ? edited.text : text
+}
+
+/** The exact payload "Push to CRM" sends — deliberately thin (see the note on the push panel below). */
+export type CrmPayload = { title: string; date: string; summary: string }
+type CrmPushPhase = 'idle' | 'sending' | 'sent' | 'error'
+
+// Session memory of the CRM pushes that already landed. `pushState` below is plain component state:
+// leaving for History unmounts Review entirely, and re-opening a meeting resets it, so on its own an
+// already-pushed meeting re-arms "Push to CRM" and a second Confirm push files a byte-identical duplicate
+// record. Keyed on the payload rather than the meeting file because the payload is what the CRM actually
+// receives — and because savedPath is still null while a live meeting's autosave is retrying, so a file
+// key would miss a push made in that window. Module scope, not a ref: it has to outlive the component.
+const pushedCrmPayloads = new Set<string>()
+const crmPushKey = (p: CrmPayload): string => JSON.stringify([p.title, p.date, p.summary])
+
+/** Remember a push the CRM accepted, so re-opening this meeting doesn't offer to send it again. */
+export function markCrmPushed(p: CrmPayload): void {
+  pushedCrmPayloads.add(crmPushKey(p))
+}
+
+/** Whether THIS payload already reached the CRM — drives both the "Pushed to Polo Pre-Sales." line and
+ *  the hiding of the "Push to CRM" chip, so neither depends on Review still being mounted. A changed
+ *  recap is a different payload and re-arms the chip, which is correct: it is no longer the same record. */
+export function crmPushDone(phase: CrmPushPhase, p: CrmPayload): boolean {
+  return phase === 'sent' || pushedCrmPayloads.has(crmPushKey(p))
+}
+
 export const Review = memo(function Review({
   recap,
   lines,
@@ -209,27 +249,34 @@ export const Review = memo(function Review({
   // ── Editable recap (past meetings only) ──────────────────────────────────
   // Past-meeting recaps are read-only by default; Edit lets the user fix a mis-heard name, tick an action
   // item, or annotate. `editedRecap` holds the post-save copy shown in place — the recap PROP is owned by
-  // App and isn't re-read from disk here — so null means "follow the prop". `recapText` is the single value
-  // every consumer below (Markdown render, Copy Summary, Export JSON/PDF, CRM payload) reads, so an edit
-  // reflects everywhere at once.
+  // App and isn't re-read from disk here — so null means "follow the prop", and so does a copy whose `base`
+  // no longer matches the prop (see displayedRecapText). `recapText` is the single value every consumer
+  // below (Markdown render, Copy Summary, Export JSON/PDF, CRM payload) reads, so an edit reflects
+  // everywhere at once.
   const [editingRecap, setEditingRecap] = useState(false)
   const [recapDraft, setRecapDraft] = useState('')
   const [recapSaving, setRecapSaving] = useState(false)
   const [recapEditError, setRecapEditError] = useState<string | null>(null)
-  const [editedRecap, setEditedRecap] = useState<string | null>(null)
+  const [editedRecap, setEditedRecap] = useState<EditedRecap | null>(null)
   // A different meeting loaded into this reused Review instance → drop any in-progress/edited state.
   useEffect(() => {
     setEditingRecap(false)
     setEditedRecap(null)
     setRecapEditError(null)
   }, [savedPath])
+  // A regeneration replaces this meeting's recap under us: the prop's id flips from 'past' to the run id
+  // and back. Drop the in-place copy on that flip too, so a re-run that happens to return the exact text
+  // the edit was made against can't resurrect it. Only the copy — an open editor keeps its draft.
+  useEffect(() => {
+    setEditedRecap(null)
+  }, [recap?.id])
   // Track the latest savedPath so a save that resolves AFTER the user navigated to a different past
   // meeting (via the Recent meetings list) bails out instead of painting its result onto the wrong one.
   const savedPathRef = useRef(savedPath)
   useEffect(() => {
     savedPathRef.current = savedPath
   }, [savedPath])
-  const recapText = editedRecap ?? recap?.text ?? ''
+  const recapText = displayedRecapText(editedRecap, recap?.text)
 
   // True while the recap edit panel is open AND the draft actually differs from the saved/displayed
   // text — i.e. there is something a navigation would silently throw away. Gated on editingRecap (not
@@ -274,7 +321,7 @@ export const Review = memo(function Review({
         // Store the trimmed value so the in-place copy matches exactly what a disk re-read would return
         // (updateMeetingRecap + recallRead both trim the recap section).
         const saved = recapDraft.trim()
-        setEditedRecap(saved)
+        setEditedRecap({ base: recap?.text ?? '', text: saved })
         onRecapSaved?.(saved)
         setEditingRecap(false)
       } else {
@@ -392,7 +439,7 @@ export const Review = memo(function Review({
   // note in the plan this feature was built against).
   const [pushOpen, setPushOpen] = useState(false)
   const [pushTool, setPushTool] = useState('')
-  const [pushState, setPushState] = useState<{ phase: 'idle' | 'sending' | 'sent' | 'error'; error: string | null }>({
+  const [pushState, setPushState] = useState<{ phase: CrmPushPhase; error: string | null }>({
     phase: 'idle',
     error: null
   })
@@ -408,7 +455,7 @@ export const Review = memo(function Review({
     if (bidstackTools && bidstackTools.length > 0 && !pushTool) setPushTool(bidstackTools[0])
   }, [bidstackTools, pushTool])
 
-  const crmPayload = useMemo(
+  const crmPayload: CrmPayload = useMemo(
     () => ({
       title: meetingMeta?.title || 'Untitled meeting',
       date: meetingMeta?.date || new Date(startedAt ?? Date.now()).toISOString(),
@@ -416,13 +463,20 @@ export const Review = memo(function Review({
     }),
     [meetingMeta?.title, meetingMeta?.date, recapText, startedAt]
   )
+  // Not just `pushState.phase === 'sent'`: that memory dies with the component, and this meeting may have
+  // been pushed earlier in the session (see pushedCrmPayloads).
+  const crmPushed = crmPushDone(pushState.phase, crmPayload)
 
   const sendToCrm = async (): Promise<void> => {
     if (pushState.phase === 'sending') return
     if (!pushTool) return
+    // Remember the payload that was actually sent — recapText can move on (an edit, a regeneration) while
+    // the call is in flight, and the CRM holds what left here, not what the screen shows when it lands.
+    const payload = crmPayload
     setPushState({ phase: 'sending', error: null })
-    const r = await window.toto.mcpCrmPush({ toolName: pushTool, args: crmPayload })
+    const r = await window.toto.mcpCrmPush({ toolName: pushTool, args: payload })
     if (r.ok) {
+      markCrmPushed(payload)
       setPushState({ phase: 'sent', error: null })
     } else {
       setPushState({ phase: 'error', error: r.error || 'Push failed.' })
@@ -838,7 +892,7 @@ export const Review = memo(function Review({
             <div className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-[color:var(--color-ink-3)]">
               <Send size={12} /> CRM
             </div>
-            {bidstackConnected && !pushOpen && pushState.phase !== 'sent' && (
+            {bidstackConnected && !pushOpen && !crmPushed && (
               <Chip onClick={() => setPushOpen(true)} variant="accent">
                 <Send size={13} /> Push to CRM
               </Chip>
@@ -849,7 +903,7 @@ export const Review = memo(function Review({
             <div className="text-[12px] leading-snug text-[color:var(--color-ink-3)]">
               Connect Polo Pre-Sales in Settings → Mantu Intelligence to push this recap to your CRM.
             </div>
-          ) : pushState.phase === 'sent' ? (
+          ) : crmPushed ? (
             <div className="flex items-center gap-1.5 text-[13px] text-[var(--color-success)]">
               <Check size={13} /> Pushed to Polo Pre-Sales.
             </div>

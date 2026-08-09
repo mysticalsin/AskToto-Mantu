@@ -47,12 +47,26 @@ vi.mock('electron')
  * the meeting .md files in the meetings-folder root are what this defect rescans.
  */
 const readLog = vi.hoisted(() => ({ paths: [] as string[] }))
+
+/**
+ * QA MQA-074 / MQA-077 — the two ways a saved meeting becomes unreadable at publish time, keyed by
+ * basename: `throwOn` is readFileSync throwing (EBUSY/EPERM under an AV or OneDrive sync handle, a
+ * cloud-only Files-On-Demand placeholder while offline), `emptyOn` is readSavedFile's own degradation to
+ * '' for an envelope this device's keychain cannot unwrap (transcripts.ts's decodeSaved). Neither is
+ * reproducible with a real file on a test machine, and both must fail closed.
+ */
+const readFaults = vi.hoisted(() => ({ throwOn: new Set<string>(), emptyOn: new Set<string>() }))
 vi.mock('../transcripts', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../transcripts')>()
   return {
     ...actual,
     readSavedFile: (path: string): string => {
       readLog.paths.push(path)
+      const base = path.split(/[\\/]/).pop() ?? ''
+      if (readFaults.throwOn.has(base)) {
+        throw Object.assign(new Error(`EBUSY: resource busy or locked, open '${path}'`), { code: 'EBUSY' })
+      }
+      if (readFaults.emptyOn.has(base)) return ''
       return actual.readSavedFile(path)
     }
   }
@@ -126,6 +140,8 @@ describe('publish.ts — Task MI-5 markdown mirror', () => {
   beforeEach(() => {
     folder = mkdtempSync(join(tmpdir(), 'asktoto-publish-test-'))
     s = settingsFor(folder)
+    readFaults.throwOn.clear()
+    readFaults.emptyOn.clear()
   })
   afterEach(() => rmSync(folder, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }))
 
@@ -368,12 +384,87 @@ describe('publish.ts — Task MI-5 markdown mirror', () => {
       expect(index).not.toContain('Secret Meeting')
     })
 
-    it('readConfidentialMeetings reads the frontmatter flag, never guessing on an undecryptable file', () => {
+    it('readConfidentialMeetings picks up exactly the meetings flagged in their frontmatter', () => {
       writeMeetingFile(folder, 'a.md', { date: '2026-01-01' })
       writeMeetingFile(folder, 'b.md', { date: '2026-01-02', confidential: true })
       const set = readConfidentialMeetings(s)
       expect(set.has('b.md')).toBe(true)
       expect(set.has('a.md')).toBe(false)
+    })
+  })
+
+  // ── MQA-074 / MQA-077: the confidential gate must fail CLOSED on a meeting it cannot read ────────────
+
+  describe('MQA-074 / MQA-077 — a meeting the publisher cannot read is never published as non-confidential', () => {
+    it('readConfidentialMeetings excludes a file whose read throws, and one that decrypts to nothing', () => {
+      writeMeetingFile(folder, 'readable.md', { date: '2026-01-01' })
+      writeMeetingFile(folder, 'locked.md', { date: '2026-01-02' })
+      writeMeetingFile(folder, 'foreign-key.md', { date: '2026-01-03' })
+      // Neither faulted file carries `confidential: true` on disk — what puts them in the set is that this
+      // device cannot establish that they DON'T, and every consumer treats absence as permission to render.
+      readFaults.throwOn.add('locked.md')
+      readFaults.emptyOn.add('foreign-key.md')
+
+      const set = readConfidentialMeetings(s)
+      expect(set.has('locked.md')).toBe(true)
+      expect(set.has('foreign-key.md')).toBe(true)
+      expect(set.has('readable.md')).toBe(false)
+    })
+
+    it('a confidential meeting locked at publish time keeps its amount, commitment and title out of every wiki surface', async () => {
+      writeMeetingFile(folder, 'open.md', { date: '2026-01-01', title: 'Open Meeting' })
+      writeMeetingFile(folder, 'acme-pricing.md', { date: '2026-02-01', title: 'Acme Pricing', confidential: true })
+      await writeDeal(
+        s,
+        'acme-renewal',
+        baseDeal({
+          id: 'acme-renewal',
+          name: 'Acme Renewal',
+          meetings: [
+            { file: 'open.md', date: '2026-01-01', title: 'Open Meeting' },
+            { file: 'acme-pricing.md', date: '2026-02-01', title: 'Acme Pricing' }
+          ],
+          amount: {
+            value: { value: 777000, currency: 'EUR' },
+            source_file: 'acme-pricing.md',
+            date: '2026-02-01',
+            quote: 'stated aloud',
+            confidence: 'EXTRACTED',
+            state: 'verified', // would render if the source meeting were publishable
+            superseded: []
+          },
+          commitments: [
+            { text: 'send the revised pricing', by: 'you', meeting: 'acme-pricing.md', date: '2026-02-01', status: 'open' }
+          ]
+        })
+      )
+
+      // The flag IS on disk — the file is merely unreadable for the length of this publish run, which is
+      // exactly the window setMeetingConfidential's own tmp+rename opens under OneDrive/AV on Windows.
+      readFaults.throwOn.add('acme-pricing.md')
+      await publishAll(s)
+
+      const deal = readFileSync(join(wikiDir(s), 'deals', 'acme-renewal.md'), 'utf8')
+      expect(deal).not.toContain('777,000')
+      expect(deal).toMatch(/\| Amount \| not established \|/)
+      expect(deal).not.toContain('Acme Pricing')
+      expect(deal).not.toContain('send the revised pricing')
+      expect(deal).toContain('Open Meeting') // the readable meeting still publishes as before
+      expect(readFileSync(join(wikiDir(s), 'index.md'), 'utf8')).not.toContain('Acme Pricing')
+    })
+
+    it('a note card already published for a meeting that later becomes unreadable is removed, not left behind', async () => {
+      writeMeetingFile(folder, 'acme-pricing.md', { date: '2026-02-01', title: 'Acme Pricing' })
+      await publishMeetingCard(s, 'acme-pricing.md')
+      const card = join(wikiDir(s), 'meetings', `${slugify('acme-pricing.md')}.md`)
+      expect(existsSync(card)).toBe(true)
+
+      // Flagged, then locked before the republish reaches it: publishMeetingCard's own read fails too, so
+      // the exclusion set is the only thing left that can still drop the stale card.
+      writeMeetingFile(folder, 'acme-pricing.md', { date: '2026-02-01', title: 'Acme Pricing', confidential: true })
+      readFaults.throwOn.add('acme-pricing.md')
+      await publishMeetingCard(s, 'acme-pricing.md')
+      expect(existsSync(card)).toBe(false)
     })
   })
 

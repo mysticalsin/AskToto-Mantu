@@ -27,6 +27,47 @@ function autoUpdateDisabledByPolicy(): boolean {
   return content ? configDisablesAutoUpdate(content) : false
 }
 
+/** Which channel rule forbids this install from consuming the shared Métis release feed, or null. */
+export type BlockedUpdateChannel = 'cahe' | 'store' | 'policy'
+
+/**
+ * ONE predicate, because BOTH entry points have to honor it: the silent electron-updater flow below and
+ * the manual Settings → About check, which auto-fires whenever the About tab mounts. While these lived
+ * only inside initAutoUpdate, the manual check queried the shared feed unconditionally and offered a
+ * Cahê pilot the standard Métis installer — a different app (appId com.mantu.asktoto, profile
+ * %APPDATA%\Metis) with none of the pilot's state — plus an out-of-band download link to a Store package
+ * and to a fleet its own IT had frozen.
+ * - Cahê is an isolated pilot package distributed as its own installer (see cahe-edition.ts).
+ * - The Store (MSIX/AppX) build must never self-update: updating a packaged app is the Store's job, and
+ *   a packaged app installing software outside its own package is a certification violation. Electron
+ *   sets process.windowsStore for any MSIX/AppX package. Without this the only thing keeping the updater
+ *   quiet is that electron-builder happens not to write app-update.yml for an appx-only target — and that
+ *   does not hold when the nsis and appx targets share release/win-unpacked (which both CI and the
+ *   documented Store flow do), because AppXTarget packs the whole directory. The Store copy would then
+ *   download the 1.4 GB NSIS installer and either promise a restart that never installs, or lay down a
+ *   second non-Store copy alongside itself.
+ * - The IT kill-switch freezes the version fleet-wide (staged-rollout control).
+ */
+export function blockedUpdateChannel(): BlockedUpdateChannel | null {
+  if (shouldDisableAutoUpdate()) return 'cahe'
+  if ((process as NodeJS.Process & { windowsStore?: boolean }).windowsStore) return 'store'
+  if (autoUpdateDisabledByPolicy()) return 'policy'
+  return null
+}
+
+const BLOCKED_LOG: Record<BlockedUpdateChannel, string> = {
+  cahe: 'Cahê edition uses its own distribution channel, skipping shared auto-update feed',
+  store: "Store package — updates are the Store's job, skipping",
+  policy: 'auto-update disabled by managed-config policy'
+}
+
+/** What the Settings → About row says instead of linking to a feed this install must not install from. */
+const BLOCKED_MESSAGE: Record<BlockedUpdateChannel, string> = {
+  cahe: 'This pilot is updated with a new Cahê installer, not from the shared Métis release feed.',
+  store: 'Updates for this package come from the Microsoft Store.',
+  policy: 'Updates are managed by your organisation.'
+}
+
 // ── Manual "Check for updates" (Settings → About) ────────────────────────────────────────────────
 // electron-updater's silent flow above covers signed builds; this explicit check exists so EVERY build
 // — including unsigned macOS ones, where electron-updater cannot install — can still tell the user a
@@ -73,6 +114,12 @@ export function parseLatestRelease(payload: unknown, current: string): UpdateChe
  *  proxy/PAC; plain fetch() in the main process does not — the exact bug behind commit 2a565de). */
 export async function checkForUpdateNow(): Promise<UpdateCheckResult> {
   const current = app.getVersion()
+  // Answer from the channel's own rule BEFORE touching the network: this runs on every About open, so an
+  // unguarded check both contacts the shared feed from installs that must never consume it and renders a
+  // download link to the wrong installer. Reported as a plain message rather than a version comparison —
+  // there is nothing on that feed this install is allowed to follow.
+  const blocked = blockedUpdateChannel()
+  if (blocked) return { ok: false, current, error: BLOCKED_MESSAGE[blocked] }
   const ctrl = new AbortController()
   const timer = setTimeout(() => ctrl.abort(), CHECK_TIMEOUT_MS)
   try {
@@ -106,8 +153,9 @@ const isNotFound = (e: unknown): boolean =>
  *  module-level `win` — the update-downloaded toast would then be dead for the rest of the process life.
  *  Reading through the getter at send time always sees the live window. */
 export function initAutoUpdate(getWin: () => BrowserWindow | null): void {
-  if (shouldDisableAutoUpdate()) {
-    log.info('[updater] Cahê edition uses its own distribution channel, skipping shared auto-update feed')
+  const blocked = blockedUpdateChannel()
+  if (blocked) {
+    log.info(`[updater] ${BLOCKED_LOG[blocked]}`)
     return
   }
   // A portable .exe has no fixed install location electron-updater can replace — it's just a file the
@@ -119,23 +167,6 @@ export function initAutoUpdate(getWin: () => BrowserWindow | null): void {
   }
   if (!app.isPackaged) return
   if ((process as NodeJS.Process & { mas?: boolean }).mas) return
-  // The Store (MSIX/AppX) build must never self-update: updating a packaged app is the Store's job,
-  // and a packaged app installing software outside its own package is a certification violation.
-  // Electron sets process.windowsStore for any MSIX/AppX package. Without this the only thing keeping
-  // the updater quiet is that electron-builder happens not to write app-update.yml for an appx-only
-  // target — and that does not hold when the nsis and appx targets share release/win-unpacked (which
-  // both CI and the documented Store flow do), because AppXTarget packs the whole directory. The Store
-  // copy would then download the 1.4 GB NSIS installer and either promise a restart that never
-  // installs, or lay down a second non-Store copy alongside itself.
-  if ((process as NodeJS.Process & { windowsStore?: boolean }).windowsStore) {
-    log.info('[updater] Store package — updates are the Store\'s job, skipping')
-    return
-  }
-  // IT kill-switch: a managed-config policy can freeze the version fleet-wide (staged-rollout control).
-  if (autoUpdateDisabledByPolicy()) {
-    log.info('[updater] auto-update disabled by managed-config policy')
-    return
-  }
   // Skip if no real update host is configured (placeholder) — avoids failing checks every launch.
   try {
     const yml = readFileSync(join(process.resourcesPath, 'app-update.yml'), 'utf8')

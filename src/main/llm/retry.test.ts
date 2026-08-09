@@ -26,6 +26,15 @@ describe('isTransient', () => {
     expect(isTransient('400 invalid_request_error: bad model')).toBe(false)
   })
 
+  it('MQA-061: retries the bare "Connection error." both SDKs throw when the machine is offline', () => {
+    // APIConnectionError is constructed with no message for an ordinary transport failure, so this exact
+    // literal — with the undici cause already dropped by errMsg — is all the offline path ever produces.
+    expect(isTransient('Connection error.')).toBe(true)
+    expect(isTransient(new Error('Connection error.'))).toBe(true)
+    // A 401 that happens to mention a connection is still auth, never a blind retry.
+    expect(isTransient({ status: 401, message: 'Connection error.' })).toBe(false)
+  })
+
   it('classifies 5xx and 429 as transient, other 4xx as permanent', () => {
     expect(isTransient({ status: 500 })).toBe(true)
     expect(isTransient({ status: 503 })).toBe(true)

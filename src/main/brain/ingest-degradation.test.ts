@@ -292,4 +292,38 @@ describe('brain ingest — provider-degradation paths', () => {
     expect(okCount()).toBe(4)
     expect(createStreamMock).toHaveBeenCalledTimes(4)
   })
+
+  // MQA-100 (docs/qa/BUG-LEDGER.md): observed on a real physical run — the bundled 0.8B model returned an
+  // unterminated object and the meeting failed with "No complete JSON object in model output", leaving it
+  // unindexed until a later reconcile happened to retry it. Now that on-device extraction is the DEFAULT
+  // fallback, "usually valid JSON" is not good enough: llama-server compiles response_format into a GBNF
+  // grammar and masks any token that would break the syntax, making truncation impossible.
+  describe('on-device extraction asks for constrained JSON decoding (MQA-100)', () => {
+    it('sends response_format for a LOCAL extraction, so invalid JSON becomes unrepresentable', async () => {
+      writeFileSync(join(meetingsFolder, 'grammar-local.md'), '---\ndate: 2026-01-10\n---\nAcme call.', 'utf8')
+      writeFileSync(join(userData, 'managed-config.json'), JSON.stringify({ allowedProviders: ['local'] }), 'utf8')
+      createStreamMock.mockImplementation(respondJson())
+
+      expect(startBackfill()).toEqual({ queued: 1 })
+      await waitForIdle()
+
+      const localCall = createStreamMock.mock.calls.find((c) => c[0].providerId === 'local')
+      expect(localCall, 'expected a local extraction call').toBeTruthy()
+      expect(localCall![0].responseFormat).toEqual({ type: 'json_object' })
+    })
+
+    it('does NOT send it to a cloud provider — never risk a working path to fix one that is not broken', async () => {
+      writeFileSync(join(meetingsFolder, 'grammar-cloud.md'), '---\ndate: 2026-01-11\n---\nAcme call.', 'utf8')
+      setApiKey('anthropic', 'fake-anthropic-key')
+      createStreamMock.mockImplementation(respondJson())
+
+      expect(startBackfill()).toEqual({ queued: 1 })
+      await waitForIdle()
+
+      const cloudCall = createStreamMock.mock.calls.find((c) => c[0].providerId === 'anthropic')
+      expect(cloudCall, 'expected a cloud extraction call').toBeTruthy()
+      expect(cloudCall![0].responseFormat).toBeUndefined()
+    })
+  })
+
 })

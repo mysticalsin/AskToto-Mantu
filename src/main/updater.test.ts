@@ -1,11 +1,25 @@
-import { describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 // Activate __mocks__/electron.ts — checkForUpdateNow needs app.getVersion() + net.fetch, and outside a
 // real Electron process the 'electron' package resolves to a binary-path string, not an API surface.
 vi.mock('electron')
 
+// The two channel guards checkForUpdateNow consults. Stubbed so the suite states the channel instead of
+// inheriting the test machine's real edition/ProgramData policy (readTrustedAdminManaged would otherwise
+// probe C:\ProgramData on win32 and make these cases machine-dependent).
+vi.mock('./cahe-edition', () => ({ shouldDisableAutoUpdate: vi.fn(() => false) }))
+vi.mock('./win-security', () => ({ readTrustedAdminManaged: vi.fn((): string | null => null) }))
+
 import { net } from 'electron'
-import { configDisablesAutoUpdate, isNewerVersion, parseLatestRelease, checkForUpdateNow } from './updater'
+import { shouldDisableAutoUpdate } from './cahe-edition'
+import { readTrustedAdminManaged } from './win-security'
+import {
+  blockedUpdateChannel,
+  configDisablesAutoUpdate,
+  isNewerVersion,
+  parseLatestRelease,
+  checkForUpdateNow
+} from './updater'
 
 describe('configDisablesAutoUpdate — enterprise auto-update kill-switch', () => {
   it('disables updates only when disableAutoUpdate is exactly true', () => {
@@ -93,5 +107,69 @@ describe('checkForUpdateNow — never throws, always a human-readable result', (
     const offline = await checkForUpdateNow()
     expect(offline.ok).toBe(false)
     expect(offline.error).toMatch(/could not reach/i)
+  })
+})
+
+// MQA-079 — the manual "Check for updates" row (Settings → About, auto-fired on mount) used to query the
+// shared Metis-Releases feed with no edition/Store/policy check, so a Cahê pilot was offered the standard
+// Métis installer — a different app with an empty profile — and a Store package / an IT-frozen fleet got
+// a working out-of-band download link.
+describe('MQA-079 — blockedUpdateChannel guards the manual check, not just initAutoUpdate', () => {
+  const proc = process as NodeJS.Process & { windowsStore?: boolean }
+
+  beforeEach(() => {
+    vi.mocked(shouldDisableAutoUpdate).mockReturnValue(false)
+    vi.mocked(readTrustedAdminManaged).mockReturnValue(null)
+    delete proc.windowsStore
+    vi.mocked(net.fetch).mockClear()
+  })
+
+  it('reports the three channels that must never consume the shared release feed', () => {
+    expect(blockedUpdateChannel()).toBe(null)
+
+    vi.mocked(shouldDisableAutoUpdate).mockReturnValue(true)
+    expect(blockedUpdateChannel()).toBe('cahe')
+    vi.mocked(shouldDisableAutoUpdate).mockReturnValue(false)
+
+    proc.windowsStore = true
+    expect(blockedUpdateChannel()).toBe('store')
+    delete proc.windowsStore
+
+    vi.mocked(readTrustedAdminManaged).mockReturnValue('{"disableAutoUpdate": true}')
+    expect(blockedUpdateChannel()).toBe('policy')
+  })
+
+  it('never contacts the feed from a Cahê pilot — it is updated with its own installer', async () => {
+    vi.mocked(shouldDisableAutoUpdate).mockReturnValue(true)
+    const r = await checkForUpdateNow()
+    expect(net.fetch).not.toHaveBeenCalled()
+    expect(r.ok).toBe(false)
+    expect(r.available).toBeUndefined() // no version comparison, so no download link can render
+    expect(r.error).toMatch(/Cahê installer/)
+    expect(r.current).toBe('0.1.0-test')
+  })
+
+  it('never contacts the feed from a Store/AppX package', async () => {
+    proc.windowsStore = true
+    const r = await checkForUpdateNow()
+    expect(net.fetch).not.toHaveBeenCalled()
+    expect(r.error).toMatch(/microsoft store/i)
+  })
+
+  it('never contacts the feed on a fleet frozen by an admin managed-config', async () => {
+    vi.mocked(readTrustedAdminManaged).mockReturnValue('{"disableAutoUpdate": true}')
+    const r = await checkForUpdateNow()
+    expect(net.fetch).not.toHaveBeenCalled()
+    expect(r.error).toMatch(/managed by your organisation/i)
+  })
+
+  it('still checks the feed on an ordinary build (guard must not disable updates for everyone)', async () => {
+    vi.mocked(net.fetch).mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ tag_name: 'v99.0.0', html_url: 'https://github.com/mysticalsin/Metis-Releases/releases/tag/v99.0.0' })
+    } as unknown as Response)
+    const r = await checkForUpdateNow()
+    expect(net.fetch).toHaveBeenCalledTimes(1)
+    expect(r.available).toBe(true)
   })
 })

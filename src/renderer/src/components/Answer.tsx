@@ -33,8 +33,15 @@ function parseVerdict(text: string): { key: string; rest: string } | null {
 /** Turn a raw provider error into one actionable line of recovery coaching (section B failure states). */
 function errorHint(error: string): string | null {
   const e = error.toLowerCase()
+  // No hint for main's Dust reconnect message (index.ts: "Open Settings and reconnect Dust once"): the
+  // remedy is already complete, and the key hint below would send the user to re-enter an OAuth token the
+  // Dust CLI minted — one they never typed and cannot re-paste.
+  if (/dust session expired/.test(e)) return null
   if (/rate.?limit|\b429\b|too many request/.test(e)) return 'The provider is rate-limiting you. Wait a moment, or switch providers in Settings.'
-  if (/invalid.*(key|api)|incorrect api key|unauthor|\b401\b|expired/.test(e)) return 'Your API key may be invalid or expired. Update it in Settings → AI.'
+  // `expired` must carry key/api/token context: on its own it also matches a session/OAuth expiry, whose
+  // fix is a reconnect, not a key edit.
+  if (/invalid.*(key|api)|incorrect api key|unauthor|\b401\b|(api|key|token).*expired|expired.*(api|key|token)/.test(e))
+    return 'Your API key may be invalid or expired. Update it in Settings → AI.'
   if (/timed out|timeout|no response/.test(e)) return 'The model took too long. Retry, or pick a faster tier in Settings → Thinking mode.'
   if (/network|fetch failed|enotfound|econnrefused|getaddrinfo|offline|dns/.test(e)) return 'Looks like a network problem. Check your connection, then retry.'
   if (/quota|insufficient|billing|credit|payment/.test(e)) return 'The provider reports a quota or billing issue. Check your account, or switch providers in Settings.'
@@ -203,6 +210,23 @@ export const Answer = memo(function Answer({
     </div>
   ) : null
 
+  // Who is answering (streamMeta). Deliberately computed OUTSIDE the `thinking` branch: state.ts keeps the
+  // previous answer on screen until the new request's first chunk lands, so from the second ask of a session
+  // onward `thinking` is false and an attribution rendered only there is never seen again — precisely when a
+  // silent failover has re-routed the ask to a provider other than the one Settings still shows as active.
+  const who = provider === 'dust' ? 'your Dust agent' : provider ? PROVIDERS[provider]?.label : undefined
+  // Byline on the answer itself: names the brain that actually produced this text, so a failover away from
+  // the configured provider is visible instead of silent, and a request streaming under a stale previous
+  // answer still says who is working on it.
+  const attribution = who ? (
+    <div className="flex items-center gap-1.5 text-[11px] text-[color:var(--color-ink-3)]">
+      <span
+        className={`h-1.5 w-1.5 rounded-full bg-[var(--color-accent)]${streaming ? ' animate-pulse' : ''}`}
+      />
+      {streaming ? `Asking ${who}…` : `Answered by ${who}`}
+    </div>
+  ) : null
+
   const copy = (): void => {
     if (!text) return
     navigator.clipboard
@@ -307,7 +331,6 @@ export const Answer = memo(function Answer({
     // ~40-48s to first token — past ~8s, swap the static label for an elapsed-time count so a long wait
     // still reads as "working" instead of "stuck". Naming the brain ("Asking your Dust agent…") makes the
     // wait attributable instead of anonymous — users forgive an agent working, not a frozen spinner.
-    const who = provider === 'dust' ? 'your Dust agent' : provider ? PROVIDERS[provider]?.label : undefined
     const label =
       thinkingSecs >= 8
         ? `Still working… (${thinkingSecs}s)${who ? `, ${who} is on it` : ''}`
@@ -342,6 +365,7 @@ export const Answer = memo(function Answer({
     <div className="fade-up mx-auto max-w-[620px] flex flex-col gap-2">
       {header}
       {notice}
+      {attribution}
       <div className="develop-in" aria-live="polite" aria-atomic="false" aria-busy={streaming}>
         {verdict ? (
           <div className="flex flex-col gap-2">

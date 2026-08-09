@@ -82,6 +82,20 @@ const defaultMeetingTitle = (lines: TranscriptLine[], mode: ConversationMode): s
   return `${cut.slice(0, lastSpace).trimEnd()}…`
 }
 
+// Would this saveMeetingNow call re-write a meeting some other save already owns? `savedId` is the live
+// session's pinned meeting (savedRef, written only AFTER a save's IPC round trip resolves), `claimed` the
+// ids a save has already taken synchronously. Without the second check the rescue paths — leaving Review
+// with Escape, then starting the next session — all read savedRef as still-empty inside that window and
+// each persist the same transcript again: duplicate .md, duplicate index row, duplicate brain ingest.
+export function meetingSaveIsRedundant(
+  lineCount: number,
+  id: string,
+  savedId: string,
+  claimed: ReadonlySet<string>
+): boolean {
+  return lineCount === 0 || savedId === id || claimed.has(id)
+}
+
 // How long a finished live copilot suggestion stays on screen before it auto-dismisses. Tony's call: a
 // suggestion should be glanceable and then get out of the way — 4 seconds, not lingering.
 const SUGGESTION_TTL_MS = 4000
@@ -149,9 +163,12 @@ export function App(): JSX.Element {
 
   // ── License enforcement master switch ──────────────────────────────────────────────────────────
   // OFF for now: every copy is treated as valid and the activation gate never renders, regardless of
-  // the stored `licenseGateEnabled` setting. All the licensing code (main/license.ts, the LicenseGate
-  // component, the settings toggle, the heartbeat) is intact — flip this ONE constant to `true` to
-  // restore device licensing exactly as before.
+  // the stored `licenseGateEnabled` setting — including a machine-wide managed-config that sets (and
+  // locks) licenseGateEnabled:true, which is completely inert while this is off. All the licensing code
+  // (main/license.ts, the LicenseGate component, the settings toggle, the heartbeat) is intact.
+  // Flipping this constant ALONE ships a brick: Settings.tsx's LICENSE_UI_ENABLED gates the only
+  // activation form in the app, and main's 12h heartbeat is gated on `licenseValid`, which nothing but a
+  // successful activation can set. Both switches move together, in one change, or not at all.
   const LICENSE_ENFORCEMENT = false
   const licenseEnforced = LICENSE_ENFORCEMENT && settings?.licenseGateEnabled === true
 
@@ -301,9 +318,9 @@ export function App(): JSX.Element {
   const [capturing, setCapturing] = useState(false)
   // Synchronous in-flight guard for askScreen(): capturing (state) only flips true via startTransition, so
   // two fast triggers (double-click / hotkey-plus-click) both read the OLD `capturing` and both start a
-  // capture before the deferred state update ever commits — mirrors listen.ts's startingRef pattern. Set
-  // at the very top of askScreen, before any `await`; cleared in its `finally`. `capturing` (state) still
-  // drives the UI exactly as before.
+  // capture before the deferred state update ever commits — mirrors listen.ts's startingRef pattern. Read
+  // and set in askScreen before its first `await` (but after the early returns, which the `finally` that
+  // clears it doesn't cover); cleared in that `finally`. `capturing` (state) still drives the UI as before.
   const capturingRef = useRef(false)
   const [captureError, setCaptureError] = useState<string | null>(null)
   // Set true after consecutive autosave failures during a live meeting (disk full / permissions) so the
@@ -334,6 +351,14 @@ export function App(): JSX.Element {
   // The saved-meeting file an in-flight recapGen run will persist its result to — set by
   // generateSavedRecap, cleared once the persist-on-settle effect below has written (or given up on) it.
   const [recapGenTarget, setRecapGenTarget] = useState<{ file: string } | null>(null)
+  // Set when writing a generated recap back to its .md is REFUSED (recallUpdateRecap ok:false). Review
+  // keeps showing the generated text (recapGenTarget stays set), but without this the refusal was
+  // invisible and the user only discovered it on reopening the meeting, by which point it was gone.
+  const [recapSaveError, setRecapSaveError] = useState<string | null>(null)
+  // True while Desk Tap Control is calibrated but refusing to arm because the profile belongs to a
+  // different microphone (useTapControl's onProfileMismatch). Recalibrating — or switching back to the
+  // mic it was calibrated on — clears it; see the effect next to the useTapControl call below.
+  const [tapMismatch, setTapMismatch] = useState(false)
   // Which Settings tab to open on (e.g. the bar's mode icon → 'personalize', calendar CTA → 'calendar').
   const [settingsInitialTab, setSettingsInitialTab] = useState<'personalize' | 'calendar' | 'ai' | undefined>(
     undefined
@@ -379,6 +404,13 @@ export function App(): JSX.Element {
   const meetingStartRef = useRef(0)
   const savedRef = useRef('')
   const savingRef = useRef(false)
+  // Meeting start ids that saveMeetingNow has already claimed. savedRef is pinned only AFTER a save's IPC
+  // round trip resolves (and never at all by the leave-path saver, which must not touch live-session
+  // state), so two rescues firing inside that window — Stop → Escape out of Review → start the next
+  // session — both read savedRef as empty and each write the same transcript again: a duplicate .md, a
+  // duplicate index row and a duplicate brain ingest / wiki card. This claim is taken synchronously,
+  // before the first await, and released only when a save definitively gives up so a retry stays possible.
+  const claimedSavesRef = useRef<Set<string>>(new Set())
   const [savedPath, setSavedPath] = useState<string | null>(null)
   // Refresh the entity-casing name list once on mount, and again whenever a meeting finishes saving —
   // the best available "the brain might have new names" signal (extraction itself runs async in main
@@ -816,7 +848,11 @@ export function App(): JSX.Element {
       }
     ): Promise<string | null> => {
       if (!requireProvider('vision')) return null
-      if (capturing) return null
+      // The ref, not `capturing` (state): see capturingRef's declaration. Reading the state here let a
+      // double-click / hotkey-plus-click pair both see the pre-transition `false` and both run a capture
+      // + a billed vision request — and on the first screen-ask of a session the lazy <Answer> mount
+      // suspends the transition, so that stale window is the whole chunk-resolution time, not a frame.
+      if (capturingRef.current) return null
       // Mount the Answer view + the "capturing" busy state as ONE transition. `capturing` (not just
       // `view`) drives the first mount of the lazy <Answer> chunk in the render branch below, and React
       // ALWAYS suspends a lazy component's very first render — so a bare synchronous setCapturing(true)
@@ -831,6 +867,9 @@ export function App(): JSX.Element {
         setCaptureError(null)
         setCapturing(true)
       })
+      // Armed here rather than above the early returns: the `finally` that clears it only covers the try
+      // block, so latching it before a bare `return null` would wedge every later screen-ask.
+      capturingRef.current = true
       try {
         // Fast-path (M13): if background preprocessing already has a fresh, on-device description of the
         // current window, answer from it WITHOUT capturing or uploading an image — main injects the cached
@@ -916,7 +955,7 @@ export function App(): JSX.Element {
         setCapturing(false)
       }
     },
-    [ask.run, capturing, requireProvider, settings?.backgroundScreenContext, settings?.providerReady, listen]
+    [ask.run, requireProvider, settings?.backgroundScreenContext, settings?.providerReady, listen]
   )
 
   const assist = useCallback(async (): Promise<void> => {
@@ -1556,11 +1595,14 @@ export function App(): JSX.Element {
       // write the live session's savedRef/savedPath — the meeting being saved is gone, and writing them
       // here (async, after the next session has already started) would pollute the new session's state
       // (wrong "Analyzing" highlight, wrong recap path). Idempotent against the recap auto-save — which
-      // DOES pin savedRef — via the read-only guard. maxAttempts=0 on exit paths: a single best-effort
-      // try, so quitting is never blocked on the full retry loop. Resolves to the path it wrote (null when
-      // it skipped or gave up) so a caller that IS still on the live session can pin that state itself —
-      // see saveLiveMeetingNow below.
-      if (!lines.length || savedRef.current === String(started)) return null
+      // DOES pin savedRef — via the read-only guard, and against ITSELF via claimedSavesRef, which closes
+      // the window between a save starting and savedRef being pinned. maxAttempts=0 on exit paths: a
+      // single best-effort try, so quitting is never blocked on the full retry loop. Resolves to the path
+      // it wrote (null when it skipped or gave up) so a caller that IS still on the live session can pin
+      // that state itself — see saveLiveMeetingNow below.
+      const id = String(started)
+      if (meetingSaveIsRedundant(lines.length, id, savedRef.current, claimedSavesRef.current)) return null
+      claimedSavesRef.current.add(id) // synchronous — see claimedSavesRef's declaration
       const title = defaultMeetingTitle(lines, mode)
       const payload = { title, mode, startedAt: started, lines, recap: recapText }
       for (let attempt = 0; ; attempt++) {
@@ -1569,6 +1611,9 @@ export function App(): JSX.Element {
           return r.path
         } catch (e) {
           if (attempt >= maxAttempts) {
+            // Released only on a definitive give-up, mirroring the auto-save effect's "pin only on
+            // success → failure can retry" rule: a later rescue must still get a chance to persist this.
+            claimedSavesRef.current.delete(id)
             setSaveError(e instanceof Error ? e.message : String(e))
             return null
           }
@@ -1862,6 +1907,7 @@ export function App(): JSX.Element {
       // Cascade into Dust whenever it's configured, same as endReview's live recap — no agentOverride
       // needed, Dust's own think-tier resolution already respects the user's Thinking-agent pick.
       const dustReady = isDustReady(settings?.hasKeys ?? {}, settings?.dustWorkspaceId ?? '', settings?.providerModels ?? {})
+      setRecapSaveError(null) // a retry must not carry the previous attempt's write failure on screen
       // Snapshot BEFORE run() — see recapGenPrevTextRef's comment above.
       recapGenPrevTextRef.current = recapGenAnswerRef.current?.text ?? ''
       recapGenRunIdRef.current = recapGen.run({
@@ -1895,7 +1941,17 @@ export function App(): JSX.Element {
       const owningId = recapGenId // this run's token — only IT may release recapGenTarget below
       void (async () => {
         try {
-          await window.toto.recallUpdateRecap(action.file, action.text)
+          const r = await window.toto.recallUpdateRecap(action.file, action.text)
+          // recallUpdateRecap RESOLVES with {ok:false} for every real failure (file locked by OneDrive/AV,
+          // undecryptable on this device, a recap the payload schema rejects as over-long) and only
+          // REJECTS when the IPC plumbing itself is gone — so falling through to the success path below
+          // took the exact branch the catch was written to avoid: the target got released, Review flipped
+          // back to the still-empty saved recap, and the generated text (the only copy left) vanished.
+          if (!r.ok) {
+            setRecapSaveError(r.error || 'Could not save the generated summary.')
+            return
+          }
+          setRecapSaveError(null)
           // Functional update: read whichever past meeting is open NOW, not whatever was captured when
           // this effect started — the user may have opened a DIFFERENT one while the write was in flight,
           // and a stale closure here would paint THIS text onto THAT meeting instead.
@@ -1992,8 +2048,15 @@ export function App(): JSX.Element {
         setCollapsed(false)
         setFocusSignal((x) => x + 1)
       })
-    } else if (a === 'hide') void window.toto.hide()
-    else if (a === 'reset') guardReviewNav(reset)
+    } else if (a === 'hide') {
+      // toggle(), not hide(): Desk Tap Control is the only caller that reaches this branch (the keyboard
+      // and tray paths resolve 'hide' entirely in main, via toggleVisible), and the zone action it fires
+      // is labelled "Hide / show Métis". window.toto.hide() is one-way, so a second tap on an already
+      // hidden overlay did nothing and the only way back was the global hotkey or the tray — mid-meeting
+      // that also takes the recording timer and Pause/Stop with it. The Escape and minimized-pill sites
+      // below are deliberate one-way dismissals and stay on hide().
+      void window.toto.toggle()
+    } else if (a === 'reset') guardReviewNav(reset)
     else if (a === 'toggle-listen') toggleListen()
     // capture/factcheck/whatnext/explain/summarize/spotlight-ref all navigate the view (setView) just like
     // 'ask'/'reset' above, so they're wrapped in guardReviewNav too — previously only 'ask'/'reset'/
@@ -2020,6 +2083,11 @@ export function App(): JSX.Element {
   // hotkeys — zero new dispatch surface, every existing gate applies. Armed while enabled+calibrated,
   // narrowed to live sessions when armOnlyWhileListening (the default — no idle mic).
   const tapCfg = settings?.tapControl
+  // Cleared here rather than inside onProfileMismatch's counterpart because useTapControl only ever
+  // REPORTS a mismatch — it has no "matched again" callback. Declared before the hook so React runs it
+  // first in the same commit: on a still-mismatched profile the hook re-raises the flag straight after,
+  // and on a recalibration (or switching back to the calibrated mic) it stays down.
+  useEffect(() => setTapMismatch(false), [tapCfg?.profile, settings?.micDeviceId])
   useTapControl({
     active: Boolean(
       tapCfg?.enabled && tapCfg.profile && (!tapCfg.armOnlyWhileListening || listen.listening)
@@ -2033,7 +2101,11 @@ export function App(): JSX.Element {
       if (action && (HOTKEY_ACTIONS as string[]).includes(action)) {
         handlersRef.current(action as HotkeyAction)
       }
-    }
+    },
+    // The mic is part of the acoustic model, so the hook refuses to arm on a profile calibrated against a
+    // different one — and with no callback wired that refusal was completely silent: taps stopped working
+    // for good while Settings still showed Desk Tap Control enabled and "Calibrated and ready."
+    onProfileMismatch: () => setTapMismatch(true)
   })
 
   // Global Escape — the most-expected key on an overlay. Precedence, least to most destructive:
@@ -2798,6 +2870,30 @@ export function App(): JSX.Element {
               >
                 ×
               </button>
+            </div>
+          )}
+          {/* Writing a generated recap back to its .md was refused. The text itself is still on screen
+              (recapGenTarget stays set), but it exists nowhere else — say so while the user can still act
+              on it, instead of letting them navigate away and lose it. */}
+          {recapSaveError && (
+            <div className="fade-up flex items-center justify-between gap-2 rounded-xl border border-[var(--color-danger)]/30 bg-[var(--color-danger)]/10 px-3 py-1.5 text-[11px] leading-snug text-[var(--color-danger)]">
+              <span className="line-clamp-2">Couldn’t save this summary: {recapSaveError}</span>
+              <button
+                type="button"
+                onClick={() => setRecapSaveError(null)}
+                className="no-drag shrink-0 opacity-70 hover:opacity-100"
+                aria-label="Dismiss"
+              >
+                ×
+              </button>
+            </div>
+          )}
+          {/* Desk Tap Control is calibrated but won't arm on this microphone. Not dismissible: it isn't a
+              one-off event, it's a standing state that lasts until the user recalibrates. */}
+          {tapMismatch && view !== 'settings' && (
+            <div className="fade-up rounded-xl border border-[var(--color-warn,#fac775)]/30 bg-[var(--color-warn,#fac775)]/10 px-3 py-1.5 text-[11px] leading-snug text-[color:var(--color-warn,#fac775)]">
+              Desk Tap Control is paused — it was calibrated on a different microphone. Recalibrate it in
+              Settings → Audio.
             </div>
           )}
           {settings && !settings.providerReady && !nudgeExpired && view !== 'settings' && !showListeningChrome && (() => {

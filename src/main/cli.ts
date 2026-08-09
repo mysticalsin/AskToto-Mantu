@@ -240,10 +240,15 @@ export function cmdShimSpawn(
   bin: string,
   args: string[]
 ): { command: string; args: string[]; windowsVerbatimArguments?: boolean } {
-  for (const a of args) {
-    if (/["\r\n&|^%<>()!]/.test(a)) {
+  for (let i = 0; i < args.length; i++) {
+    if (/["\r\n&|^%<>()!]/.test(args[i])) {
+      // Name the flag the rejected value belongs to. Every arg here is a fixed constant except the
+      // model id, so "the value for '-m'" is the difference between a user who knows to change the
+      // model in Settings and one who only sees an unattributable refusal (MQA-087). The value itself
+      // is never echoed — it is free text.
+      const flag = i > 0 ? args[i - 1] : ''
       throw new Error(
-        'refusing to spawn: an argument contains a quote, newline, or cmd.exe metacharacter (unsafe for cmd.exe)'
+        `refusing to spawn: the ${flag ? `value for '${flag}'` : 'argument'} contains a quote, newline, or cmd.exe metacharacter (unsafe for cmd.exe)`
       )
     }
   }
@@ -443,6 +448,18 @@ export interface RunCliStreamOpts {
   }
 }
 
+/** True when `line` is a structured event from the CLI's own JSON protocol, as opposed to free-text
+ *  chatter (claude-cli's global hooks log to stdout too). Only protocol lines count as proof that the
+ *  child is alive — see the watchdog ping site in runCliStream. */
+function isProtocolLine(line: string): boolean {
+  try {
+    const obj: unknown = JSON.parse(line)
+    return typeof obj === 'object' && obj !== null
+  } catch {
+    return false
+  }
+}
+
 /**
  * Spawn the CLI binary and stream its output to handlers.
  * Returns { abort } immediately; the stream runs asynchronously.
@@ -493,6 +510,19 @@ export function runCliStream(opts: RunCliStreamOpts): { abort: () => void } {
       }
     }
 
+    // Everything above this point awaited — resolveBin shells out to `where.exe`/the login shell on a
+    // cold cache and mkdtemp is a real libuv boundary on every codex ask — so a Stop / new-chat /
+    // window-close abort can land BEFORE the spawn below. On the Windows .cmd-shim path spawn() is
+    // deliberately given no signal (see below) and the whole teardown is an 'abort' listener, which
+    // never fires when it is attached to an ALREADY-aborted signal. Spawning here would therefore
+    // start a cmd.exe → claude/codex tree that nothing ever taskkills: it runs the cancelled turn to
+    // completion and outlives the app (MQA-050). Bail before the spawn instead — the caller cancelled,
+    // so there is nothing to report.
+    if (controller.signal.aborted) {
+      await cleanup()
+      return
+    }
+
     const args = cfg.buildArgs({ model: opts.model })
     let spawnTarget: { command: string; args: string[]; env?: Record<string, string>; windowsVerbatimArguments?: boolean }
     try {
@@ -501,6 +531,10 @@ export function runCliStream(opts: RunCliStreamOpts): { abort: () => void } {
       spawnTarget = resolveSpawnTarget(absBin, args)
     } catch (e) {
       wd.clear()
+      // The sandbox cwd was already created above and no child is ever spawned on this path, so the
+      // 'close' handler that normally cleans up can't run — without this every rejected ask orphans an
+      // asktoto-cli-* directory in %TEMP% (MQA-087). Mirrors the same catch in testCli.
+      await cleanup()
       return fail(`${label}: ${e instanceof Error ? e.message : 'refusing unsafe spawn arguments'}`)
     }
     const child = spawn(spawnTarget.command, spawnTarget.args, {
@@ -527,20 +561,21 @@ export function runCliStream(opts: RunCliStreamOpts): { abort: () => void } {
     })
     // AbortController's own signal-linked kill only terminates this immediate child — on the Windows
     // .cmd-shim path that's cmd.exe, not the grandchild claude/codex node process (see
-    // killWindowsProcessTree). On that path spawn() was given no signal (above), so this listener is
+    // killWindowsProcessTree). On that path spawn() was given no signal (above), so this teardown is
     // the whole teardown: taskkill /T reaps cmd.exe AND its descendants while cmd.exe is still alive
     // and the tree is still walkable. Elsewhere Node has already killed the child and this is the
     // harmless cascade it always was.
-    controller.signal.addEventListener(
-      'abort',
-      () => {
-        killWindowsProcessTree(child.pid)
-        // taskkill is async and only exists on win32; on every other platform the shim path never
-        // applies, so nothing was killed above and the child still needs terminating.
-        if (process.platform !== 'win32') child.kill()
-      },
-      { once: true }
-    )
+    const teardown = (): void => {
+      killWindowsProcessTree(child.pid)
+      // taskkill is async and only exists on win32; on every other platform the shim path never
+      // applies, so nothing was killed above and the child still needs terminating.
+      if (process.platform !== 'win32') child.kill()
+    }
+    // addEventListener on an already-aborted signal NEVER fires — the event has come and gone. Any
+    // abort that slips in after the guard above would then leave the tree with no teardown at all, so
+    // run it directly in that case rather than registering a listener that can never run (MQA-050).
+    if (controller.signal.aborted) teardown()
+    else controller.signal.addEventListener('abort', teardown, { once: true })
 
     // Write content to stdin — keeps transcript and system text out of argv (ps -ww / /proc).
     // System text (if any) is prepended so the CLI sees it before the user prompt.
@@ -563,10 +598,16 @@ export function runCliStream(opts: RunCliStreamOpts): { abort: () => void } {
     const rl = createInterface({ input: child.stdout!, crlfDelay: Infinity })
     rl.on('line', (line) => {
       if (!line.trim()) return
+      // The budget above is IDLE time, not a ceiling on the run: every protocol line proves the child
+      // is alive and working. codex-cli's parseLine returns text only for the FINISHED answer
+      // (item.completed/agent_message), so pinging from the delta branch alone left the timer
+      // unpingable for the whole `codex exec` run — a live suggest (15s) or a base ask (45s) was
+      // killed while the model was still reasoning, discarding an answer already in flight (MQA-040).
+      // Free-text chatter deliberately does NOT ping, so a genuinely hung CLI still times out.
+      if (!settled && isProtocolLine(line)) wd.ping()
       try {
         const text = cfg.parseLine(line)
         if (text !== null) {
-          wd.ping()
           opts.handlers.onDelta(text)
         }
       } catch {
@@ -692,14 +733,34 @@ export async function testCli(provider: ProviderId): Promise<CliActionResult> {
 
   if (provider === 'claude-cli') {
     // '-p' with no positional arg reads the prompt from stdin (consistent with runCliStream).
-    testArgs = ['-p', '--output-format', 'text', '--max-turns', '1', '--allowedTools', '']
+    // The lockdown flags and '--model' are not optional here either (MQA-086): this spawn hits the
+    // same live CLI login as a real ask, and '--allowedTools ""' alone is not a deny-all — Claude
+    // Code's allow list is additive over the user's own settings.json, so a bypassPermissions config
+    // would leave their auto-approved tools live for this turn. An absent '--model' is the same
+    // premium-default inheritance buildArgs floors to sonnet, and it would also report "connected"
+    // for a model the interactive path (which is pinned to Sonnet) never actually uses.
+    testArgs = [
+      '-p',
+      '--output-format',
+      'text',
+      '--max-turns',
+      '1',
+      '--allowedTools',
+      '',
+      '--disallowedTools',
+      '*',
+      '--model',
+      'sonnet'
+    ]
   } else {
-    // codex-cli: needs a throwaway cwd
+    // codex-cli: needs a throwaway cwd so the probe never runs in — or writes to — the user's project.
+    // Falling through to the app's own cwd on failure silently dropped that invariant, so fail the
+    // test the way runCliStream does instead (MQA-086).
     try {
       tmpDir = await mkdtemp(join(tmpdir(), 'asktoto-clitest-'))
       testCwd = tmpDir
     } catch {
-      /* proceed without a dedicated cwd */
+      return { ok: false, error: `${label}: could not create a sandbox working directory.` }
     }
     // 'exec' with no positional arg reads the prompt from stdin (consistent with runCliStream).
     testArgs = ['exec', '--skip-git-repo-check', '-c', 'features.shell_tool=false']

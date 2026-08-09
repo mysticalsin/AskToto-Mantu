@@ -632,6 +632,37 @@ describe('recoverOrphanDrafts (crash-recovery promotion)', () => {
     const idx = readdirSync(folder).includes('index.md') ? readFileSync(join(folder, 'index.md'), 'utf8') : ''
     expect(idx).not.toContain('Crashed standup')
   })
+
+  // MQA-076: promotion must inherit the DRAFT's own at-rest encryption, not the live toggle. Turning
+  // encryption off between the crash and the next launch otherwise rewrites recorded third-party speech
+  // as unmarked cleartext and appends the meeting's title to the plaintext index.
+  it('MQA-076: keeps an encrypted draft encrypted when the toggle was turned off since the crash', async () => {
+    const enc = { ...settings, encryptTranscripts: true } as Settings
+    await saveDraftTranscript(enc, meeting)
+    expect(isEncryptedFile(join(folder, draftFiles()[0]))).toBe(true)
+
+    // Same profile, toggle since flipped off — the state recoverOrphanDrafts runs in at the next launch.
+    const r = await recoverOrphanDrafts({ ...settings, encryptTranscripts: false } as Settings)
+
+    expect(r.recovered).toBe(1)
+    const out = join(folder, promotedFiles()[0])
+    expect(isEncryptedFile(out)).toBe(true)
+    expect(readFileSync(out).toString('utf8')).not.toContain('Where are we on the migration?')
+    expect(readSavedFile(out)).toContain('Where are we on the migration?') // readable, just never in the clear
+    const idx = readdirSync(folder).includes('index.md') ? readFileSync(join(folder, 'index.md'), 'utf8') : ''
+    expect(idx).not.toContain('Crashed standup') // cleartext index must not carry an encrypted meeting's title
+  })
+
+  it('MQA-076: promotes a plaintext draft as plaintext even when encryption has since been turned on', async () => {
+    await saveDraftTranscript(settings, meeting) // draft written while encryption was off
+
+    await recoverOrphanDrafts({ ...settings, encryptTranscripts: true } as Settings)
+
+    const out = join(folder, promotedFiles()[0])
+    expect(isEncryptedFile(out)).toBe(false) // preserved exactly as found, in both directions
+    expect(readFileSync(out, 'utf8')).toContain('Where are we on the migration?')
+    expect(readFileSync(join(folder, 'index.md'), 'utf8')).toContain('Crashed standup') // row follows the file
+  })
 })
 
 describe('parseRecapMarkdown', () => {

@@ -45,9 +45,18 @@ export function aggregateMetrics(records: AuditRecord[]): EvalMetrics {
   let tokensIn = 0
   let tokensOut = 0
   const byProvider: Record<string, number> = {}
+  // `fallbacks` is the CROSS-PROVIDER failover count the D-section eval divides by (failover resolves the
+  // ask). The request record's `retry` flag cannot carry that on its own: a same-provider transient retry
+  // re-enters attempt() with the tried-provider list unchanged, so it re-emits `retry` with whatever value
+  // the attempt it repeats had — retrying provider #2+ would otherwise count as a second failover. Main
+  // logs a distinct 'provider.retry' immediately before each same-provider retry; consume it here so the
+  // next request from that provider is recognised as the repeat it is, not a hop to a new provider.
+  const pendingSameProviderRetry: Record<string, number> = {}
 
   for (const r of records) {
-    if (r.event === 'provider.request') {
+    if (r.event === 'provider.retry') {
+      if (r.provider) pendingSameProviderRetry[r.provider] = (pendingSameProviderRetry[r.provider] || 0) + 1
+    } else if (r.event === 'provider.request') {
       // The completion record (phase 'done') carries the latency numbers; the pre-request record carries
       // the provider + retry flag. Count requests on the pre-request record so each ask counts once.
       if (r.phase === 'done') {
@@ -56,8 +65,12 @@ export function aggregateMetrics(records: AuditRecord[]): EvalMetrics {
         if (typeof r.inputTokens === 'number') tokensIn += r.inputTokens
         if (typeof r.outputTokens === 'number') tokensOut += r.outputTokens
       } else {
+        // A retry is genuinely another request issued to that provider, so it still counts here — this
+        // counter is a request count, not an ask count.
         if (r.provider) byProvider[r.provider] = (byProvider[r.provider] || 0) + 1
-        if (r.retry) fallbacks++
+        const pending = r.provider ? pendingSameProviderRetry[r.provider] || 0 : 0
+        if (r.provider && pending > 0) pendingSameProviderRetry[r.provider] = pending - 1
+        if (r.retry && pending === 0) fallbacks++
       }
     } else if (r.event === 'provider.failed') {
       failures++

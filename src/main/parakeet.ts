@@ -12,6 +12,8 @@
 import { app } from 'electron'
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
+import { setFlagsFromString } from 'node:v8'
+import { runInNewContext } from 'node:vm'
 import { mainLog } from './logger'
 
 const MODEL_NAME = 'sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8'
@@ -139,12 +141,52 @@ export async function parakeetTranscribe(samples: Float32Array): Promise<string>
   }
 }
 
-/** Free the recognizer (between meetings / on idle) to release memory. */
-export function parakeetRelease(): void {
+/** Teardown names sherpa-onnx-node might grow. The shipped OfflineRecognizer exposes NONE of them —
+ *  hence the feature test below rather than an optional call, which silently no-ops forever. */
+const TEARDOWN_METHODS = ['free', 'destroy', 'dispose'] as const
+
+/**
+ * Run one full GC so the recognizer wrapper's napi finalizer — the only thing that frees the native
+ * weights — runs at the meeting boundary instead of whenever the main process happens to allocate enough
+ * JS. The addon never calls napi_adjust_external_memory, so V8 sees a few bytes of wrapper and has no
+ * allocation pressure linking it to ~600MB of ONNX weights; without this the release is unbounded in
+ * time. Electron does not boot with --expose-gc, so the flag is flipped for the call and put back.
+ */
+function collectNativeGarbage(): void {
   try {
-    recognizer?.free?.()
+    const exposed = (globalThis as { gc?: () => void }).gc
+    if (exposed) {
+      exposed()
+      return
+    }
+    try {
+      setFlagsFromString('--expose-gc')
+      ;(runInNewContext('gc') as () => void)()
+    } finally {
+      setFlagsFromString('--no-expose-gc')
+    }
+  } catch {
+    /* best-effort — a hardened V8 may refuse the flag; the finalizer then waits for the next full GC */
+  }
+}
+
+/**
+ * Free the recognizer (between meetings / on idle) to release memory.
+ *
+ * Dropping the JS reference is NOT enough: sherpa's OfflineRecognizer has no teardown, so the ~600MB of
+ * native weights survive until V8 finalizes the wrapper — which, with no external-memory pressure
+ * registered, may be never in a quiet main process. The next meeting then builds a SECOND recognizer on
+ * top of the first. So: call a real teardown if this sherpa build has one, then force the collection.
+ */
+export function parakeetRelease(): void {
+  const rec = recognizer
+  recognizer = null
+  if (!rec) return
+  try {
+    const teardown = TEARDOWN_METHODS.find((m) => typeof rec[m] === 'function')
+    if (teardown) rec[teardown]()
   } catch {
     /* best-effort */
   }
-  recognizer = null
+  collectNativeGarbage()
 }

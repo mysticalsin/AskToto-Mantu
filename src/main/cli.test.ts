@@ -12,6 +12,15 @@ vi.mock('electron', () => ({
   shell: { openPath: vi.fn() }
 }))
 
+// The sandbox temp dir (codex-cli's throwaway cwd) is driven through this mock rather than the real
+// filesystem: the abort/cleanup ordering tests below need a deterministic point to observe
+// ("mkdtemp resolved, spawn not yet reached") and an assertable rm, and concurrent agents share %TEMP%.
+const fsp = vi.hoisted(() => ({ mkdtemp: vi.fn(), rm: vi.fn() }))
+vi.mock('node:fs/promises', async (importActual) => {
+  const actual = await importActual<typeof import('node:fs/promises')>()
+  return { ...actual, mkdtemp: fsp.mkdtemp, rm: fsp.rm }
+})
+
 vi.mock('node:child_process', async () => {
   const { promisify } = await import('node:util')
   // execFileAsync = promisify(execFile); wiring the custom symbol lets us resolve {stdout} deterministically.
@@ -26,7 +35,13 @@ vi.mock('node:child_process', async () => {
   return { execFile, spawn: h.spawnImpl }
 })
 
-import { CLI_CONFIGS, cliEnv, resolveBin, idleWatchdog, runCliStream } from './cli'
+import { CLI_CONFIGS, cliEnv, resolveBin, idleWatchdog, runCliStream, testCli } from './cli'
+
+/** Drain pending microtasks + one macrotask turn. setImmediate is deliberately left un-faked by the
+ *  fake-timer blocks below, so this advances the stream/readline plumbing without moving the clock. */
+async function tick(turns = 3): Promise<void> {
+  for (let i = 0; i < turns; i++) await new Promise((resolve) => setImmediate(resolve))
+}
 
 /** A fake ChildProcess: real Readable streams (so readline's createInterface behaves exactly as it
  *  does against a real spawn) wrapped in a real EventEmitter. Mirrors cli-win.test.ts's fakeChild. */
@@ -372,5 +387,208 @@ describe('runCliStream — kill-on-result settles without waiting for child exit
     child.emit('close', 1)
     expect(onError).toHaveBeenCalledTimes(1)
     expect(onDone).not.toHaveBeenCalled()
+  })
+})
+
+describe('runCliStream — Windows .cmd-shim teardown ordering', () => {
+  // Pin win32 + an npm .cmd shim: that is the install shape where spawn() is given no signal, so the
+  // abort listener registered after it is the ONLY teardown — the shape both defects live in.
+  const REAL_PLATFORM = process.platform
+  const TMP_CWD = 'C:\\Temp\\asktoto-cli-test'
+  beforeEach(() => {
+    Object.defineProperty(process, 'platform', { value: 'win32', configurable: true })
+    h.execFileImpl.mockReset()
+    h.spawnImpl.mockReset()
+    fsp.mkdtemp.mockReset()
+    fsp.rm.mockReset()
+    h.execFileImpl.mockResolvedValue({ stdout: 'C:\\npm\\codex.cmd\r\n', stderr: '' })
+    fsp.mkdtemp.mockResolvedValue(TMP_CWD)
+    fsp.rm.mockResolvedValue(undefined)
+    // Neither test may reach spawn — but hand it a usable child anyway, so a regression reports as a
+    // failed assertion below rather than as an unhandled TypeError on undefined.
+    h.spawnImpl.mockReturnValue(fakeChild().child)
+  })
+  afterEach(() => Object.defineProperty(process, 'platform', { value: REAL_PLATFORM, configurable: true }))
+
+  // MQA-050: an abort delivered before spawn() returns left the whole cmd.exe → codex tree running —
+  // spawn got no signal on this path, and the listener that would have taskkill'd it was attached to
+  // an already-aborted signal, which never fires. Stop did not stop, and the tree outlived the app.
+  it('MQA-050: an abort landing before spawn() never starts a tree nothing can kill', async () => {
+    const onError = vi.fn()
+    const r = runCliStream({
+      providerId: 'codex-cli',
+      model: '',
+      system: '',
+      prompt: 'hi',
+      handlers: { onDelta: vi.fn(), onDone: vi.fn(), onError }
+    })
+    // Stop / new chat / window close, delivered inside the resolveBin + mkdtemp await window — the
+    // same window index.ts's askCancel hits on a cold bin cache, and on every codex ask.
+    r.abort()
+
+    await vi.waitFor(() => expect(fsp.mkdtemp).toHaveBeenCalled())
+    await tick()
+
+    expect(h.spawnImpl).not.toHaveBeenCalled()
+    expect(fsp.rm).toHaveBeenCalledWith(TMP_CWD, { recursive: true, force: true })
+    expect(onError).not.toHaveBeenCalled() // a user cancel is not a provider failure
+  })
+
+  // MQA-087: the sandbox cwd is created before the shim guard runs, and no child is ever spawned on a
+  // rejection — so the 'close' handler that normally removes it can't run and %TEMP% collects one
+  // asktoto-cli-* directory per failed ask.
+  it('MQA-087: a shim-guard rejection removes the sandbox cwd and names the offending argument', async () => {
+    const onError = vi.fn()
+    runCliStream({
+      providerId: 'codex-cli',
+      model: 'gpt-5-codex(preview)', // parens are cmd.exe metacharacters — cmdShimSpawn refuses this
+      system: '',
+      prompt: 'hi',
+      handlers: { onDelta: vi.fn(), onDone: vi.fn(), onError }
+    })
+
+    await vi.waitFor(() => expect(onError).toHaveBeenCalledTimes(1))
+
+    expect(h.spawnImpl).not.toHaveBeenCalled()
+    expect(fsp.rm).toHaveBeenCalledWith(TMP_CWD, { recursive: true, force: true })
+    // The model id is the only free-text arg here; without naming it the user cannot tell what to fix.
+    expect(onError.mock.calls[0][0]).toContain("value for '-m'")
+  })
+})
+
+describe('runCliStream — the idle watchdog measures idle time, not total runtime', () => {
+  const REAL_PLATFORM = process.platform
+  const REASONING = JSON.stringify({ type: 'item.completed', item: { type: 'reasoning', text: 'thinking' } })
+  const ANSWER = JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text: 'done' } })
+
+  beforeEach(() => {
+    Object.defineProperty(process, 'platform', { value: 'win32', configurable: true })
+    // Fake ONLY the watchdog's own timer family — readline/PassThrough delivery keeps running on real
+    // nextTick/setImmediate, so lines can be fed in between clock advances.
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    h.execFileImpl.mockReset()
+    h.spawnImpl.mockReset()
+    fsp.mkdtemp.mockReset()
+    fsp.rm.mockReset()
+    h.execFileImpl.mockResolvedValue({ stdout: 'C:\\npm\\codex.cmd\r\n', stderr: '' })
+    fsp.mkdtemp.mockResolvedValue('C:\\Temp\\asktoto-cli-test')
+    fsp.rm.mockResolvedValue(undefined)
+  })
+  afterEach(() => {
+    vi.useRealTimers()
+    Object.defineProperty(process, 'platform', { value: REAL_PLATFORM, configurable: true })
+  })
+
+  // MQA-040: codex-cli's parseLine returns text only for the FINISHED answer, so the only ping site
+  // was unreachable until the run was already over — the per-tier idle budget was in fact a hard
+  // ceiling on the whole `codex exec` runtime, killing healthy runs at 15s (suggest) / 45s (base).
+  it('MQA-040: codex progress lines reset the budget, so a long run is not killed mid-answer', async () => {
+    const { child, stdout } = fakeChild()
+    h.spawnImpl.mockReturnValue(child)
+    const onDelta = vi.fn()
+    const onDone = vi.fn()
+    const onError = vi.fn()
+    runCliStream({
+      providerId: 'codex-cli',
+      model: '',
+      system: '',
+      prompt: 'hi',
+      idleMs: 45_000,
+      handlers: { onDelta, onDone, onError }
+    })
+    await tick(6)
+    expect(h.spawnImpl).toHaveBeenCalled()
+
+    // 132s of a 45s budget, with the CLI reporting progress the whole way — the shape of a real
+    // `codex exec` run, which reasons for far longer than it takes to emit the answer.
+    for (let i = 0; i < 3; i++) {
+      stdout.write(`${REASONING}\n`)
+      await tick()
+      vi.advanceTimersByTime(44_000)
+    }
+    expect(onError).not.toHaveBeenCalled()
+    expect(onDelta).not.toHaveBeenCalled() // a reasoning item is still not answer text
+
+    stdout.write(`${ANSWER}\n`)
+    await tick()
+    expect(onDelta).toHaveBeenCalledWith('done')
+  })
+
+  // The other half of the contract: pinging on PROTOCOL lines only, so a hung child — or one whose
+  // lingering hooks keep logging free text — is still aborted and can still fail over.
+  it('MQA-040: free-text chatter does not ping, so a hung CLI still times out', async () => {
+    const { child, stdout } = fakeChild()
+    h.spawnImpl.mockReturnValue(child)
+    const onError = vi.fn()
+    runCliStream({
+      providerId: 'codex-cli',
+      model: '',
+      system: '',
+      prompt: 'hi',
+      idleMs: 45_000,
+      handlers: { onDelta: vi.fn(), onDone: vi.fn(), onError }
+    })
+    await tick(6)
+    expect(h.spawnImpl).toHaveBeenCalled()
+
+    stdout.write('still working on it\n')
+    await tick()
+    vi.advanceTimersByTime(45_000)
+
+    expect(onError).toHaveBeenCalledTimes(1)
+    expect(onError.mock.calls[0][0]).toContain('timed out')
+  })
+})
+
+describe('testCli — the connection probe spawns under the same lockdown as a real ask', () => {
+  const REAL_PLATFORM = process.platform
+  beforeEach(() => {
+    Object.defineProperty(process, 'platform', { value: 'darwin', configurable: true })
+    h.execFileImpl.mockReset()
+    h.spawnImpl.mockReset()
+    fsp.mkdtemp.mockReset()
+    fsp.rm.mockReset()
+    h.execFileImpl.mockResolvedValue({ stdout: '/usr/local/bin/claude\n', stderr: '' })
+    fsp.rm.mockResolvedValue(undefined)
+  })
+  afterEach(() => Object.defineProperty(process, 'platform', { value: REAL_PLATFORM, configurable: true }))
+
+  // MQA-086: the probe hits the same live CLI login as a real ask. Without the deny list the user's
+  // own auto-approved tools were live for that turn (the allow list is additive over settings.json),
+  // and without --model the turn billed — and reported "connected" for — their premium CLI default.
+  it('MQA-086: the claude-cli probe blocks every tool and pins the model it actually asks with', async () => {
+    const { child, stdout } = fakeChild()
+    h.spawnImpl.mockReturnValue(child)
+
+    const p = testCli('claude-cli')
+    await vi.waitFor(() => expect(h.spawnImpl).toHaveBeenCalled())
+
+    const args = h.spawnImpl.mock.calls[0][1] as string[]
+    expect(args[args.indexOf('--allowedTools') + 1]).toBe('')
+    const di = args.indexOf('--disallowedTools')
+    expect(di).toBeGreaterThan(-1)
+    expect(args[di + 1]).toBe('*')
+    const mi = args.indexOf('--model')
+    expect(mi).toBeGreaterThan(-1)
+    expect(args[mi + 1]).toBe('sonnet') // the interactive ask is pinned to Sonnet — test what ships
+    expect(args).not.toContain('Reply with OK') // the probe prompt still goes via stdin, not argv
+
+    stdout.write('OK')
+    await tick()
+    child.emit('close', 0)
+    await expect(p).resolves.toEqual({ ok: true })
+  })
+
+  // MQA-086: the codex probe used to swallow a mkdtemp failure and run in the app's own cwd, dropping
+  // the "throwaway tmp cwd" half of the file's security invariant.
+  it('MQA-086: the codex-cli probe fails when the sandbox cwd cannot be created, never falling back to the app cwd', async () => {
+    h.execFileImpl.mockResolvedValue({ stdout: '/usr/local/bin/codex\n', stderr: '' })
+    fsp.mkdtemp.mockRejectedValue(new Error('ENOENT'))
+
+    const res = await testCli('codex-cli')
+
+    expect(h.spawnImpl).not.toHaveBeenCalled()
+    expect(res.ok).toBe(false)
+    expect(res.error).toContain('sandbox working directory')
   })
 })

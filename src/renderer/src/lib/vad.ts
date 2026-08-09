@@ -38,6 +38,7 @@ export function isSpeechLikeWindow(buf: Float32Array, n: number): boolean {
   const FRAME = 800 // 50ms @ 16kHz — syllable-scale envelope resolution
   const MIN_FRAMES = 8 // < 0.4s of audio → too little envelope to judge; fail open
   const SPREAD = 2.5 // p90/p10 frame-RMS ratio (~8 dB): speech exceeds it, a steady bed never does
+  const RUN_FRAMES = 6 // 0.3s held above the bed = real speech (the same floor makeVad endpoints on)
   const m = Math.floor(n / FRAME)
   if (m < MIN_FRAMES) return true
   const rms: number[] = []
@@ -54,11 +55,23 @@ export function isSpeechLikeWindow(buf: Float32Array, n: number): boolean {
     const mean = sum / FRAME
     rms.push(Math.sqrt(Math.max(0, sq / FRAME - mean * mean)))
   }
-  rms.sort((a, b) => a - b)
-  const lo = rms[Math.floor(m * 0.1)]
-  const hi = rms[Math.floor(m * 0.9)]
+  const sorted = rms.slice().sort((a, b) => a - b) // order statistics on a copy; the run scan below needs time order
+  const lo = sorted[Math.floor(m * 0.1)]
+  const hi = sorted[Math.floor(m * 0.9)]
   if (hi < 1e-6) return true // effectively silent — the emit-side RMS floor owns that case
-  return hi / Math.max(lo, 1e-6) >= SPREAD
+  if (hi / Math.max(lo, 1e-6) >= SPREAD) return true
+  // p90/p10 asks whether the window is MOSTLY modulated, which a brief remote reply cannot be: a window
+  // that opened seconds before the far end spoke (a bed emits nothing, so the buffer runs to the endpoint
+  // or the 6s cap) is >90% bed, the p90 frame lands on the bed, and the ratio judges the whole window —
+  // real utterance included — non-speech. A sustained run above the bed is speech no matter how little of
+  // the window it fills; a steady bed has no such run by definition, so this cannot readmit one.
+  const gate = Math.max(lo, 1e-6) * SPREAD
+  let held = 0
+  for (let f = 0; f < m; f++) {
+    held = rms[f] >= gate ? held + 1 : 0
+    if (held >= RUN_FRAMES) return true
+  }
+  return false
 }
 
 export function makeVad(): { step: (rms: number, n: number) => boolean; reset: () => void } {
@@ -69,15 +82,36 @@ export function makeVad(): { step: (rms: number, n: number) => boolean; reset: (
   const MIN_SPEECH = Math.round(SR * 0.3) // real speech needed in-window before we'll endpoint (rejects transients)
   const ON = 0.012 // per-quantum RMS to ENTER the speech state
   const OFF = 0.006 // per-quantum RMS to EXIT it (ON > OFF = hysteresis, no flicker at the boundary)
+  // ON/OFF are the FLOOR of an adaptive pair, not the whole rule. Absolute alone, the exit cannot end a
+  // turn on the 3.0×-boosted 'them' channel: a far-end bed (conference comfort noise, hold music, a fan)
+  // lands at or above OFF, so once real speech has set the flag every quantum keeps it set, `silence` is
+  // zeroed forever, and the endpoint below can never fire — remote turns were cut only by the worklet's 6s
+  // hard cap (up to 6s of turn-detection lag, sentences sliced mid-word). Scaling by a tracked noise floor
+  // makes the exit mean "back down to the room", which is what the end of a turn physically is.
+  const OFF_K = 1.4 // exit 1.4× above the floor — clear of a steady bed's own quantum-to-quantum ripple
+  const ON_K = 2.0 // enter 6dB above it, so hysteresis survives at every floor level (ON_K > OFF_K)
+  // The floor must estimate the BED and never the voice. It tracks freely while the VAD is idle (down fast
+  // so a bed that stops is forgotten within ~0.2s, up over ~0.8s so it settles between turns) but is held
+  // to a ~10s creep while the speech state is set: otherwise a monologue drags the floor up to its own
+  // level and endpoints itself mid-sentence. That creep is also the only way out of a bed already above ON
+  // when capture started — the VAD latches on the bed itself there, so the idle path never gets to run.
+  const UP_IDLE = 1.25 // per second
+  const DOWN_IDLE = 6
+  const UP_HELD = 0.1
+  let floor = 0
   let active = false
   let silence = 0
   let speech = 0
   return {
     // Feed one quantum (its RMS + sample count). Returns true when the window should be emitted now.
     step(rms, n) {
+      const rate = active ? (rms > floor ? UP_HELD : 0) : rms > floor ? UP_IDLE : DOWN_IDLE
+      floor += (rms - floor) * Math.min(1, (n / SR) * rate) // clamped: one long quantum must not overshoot
+      const off = Math.max(OFF, floor * OFF_K)
+      const on = Math.max(ON, floor * ON_K)
       if (active) {
-        if (rms < OFF) active = false
-      } else if (rms >= ON) {
+        if (rms < off) active = false
+      } else if (rms >= on) {
         active = true
       }
       if (active) {
@@ -89,6 +123,8 @@ export function makeVad(): { step: (rms: number, n: number) => boolean; reset: (
       return speech >= MIN_SPEECH && silence >= ENDPOINT
     },
     reset() {
+      // `floor` deliberately survives: it describes the channel's background, not the turn. The worklet
+      // resets on every emit, so re-learning it each window would re-latch on the bed once per window.
       active = false
       silence = 0
       speech = 0
