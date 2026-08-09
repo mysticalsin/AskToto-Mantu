@@ -32,7 +32,7 @@ import { HOTKEY_ACTIONS } from '@shared/ipc'
 import { useTapControl } from './lib/tap/tap-control'
 import type { TapProfile } from './lib/tap/classify'
 import { PROVIDERS, isDustReady } from '@shared/providers'
-import { ASSIST_PROMPT, buildNoDecisionPrompt, EMAIL_RECAP_PROMPT, WINS_CLAUSE } from '@shared/prompts'
+import { ASSIST_PROMPT, buildNoDecisionPrompt, EMAIL_RECAP_PROMPT } from '@shared/prompts'
 import { isScreenCapturePermissionError } from '@shared/screen-capture'
 import { detectNoDecisionEnding } from '@shared/wrapup'
 import { transcriptStateKey } from '@shared/hash'
@@ -1415,27 +1415,77 @@ export function App(): JSX.Element {
     settings?.providerModelsSpotlightRef ?? {}
   )
 
-  // "Email recap": a paste-ready follow-up email built from the meeting. Routes through Spotlight Ref by
-  // default when it is connected (grounded in our references, and — when the wins toggle is on — our
-  // relevant customer wins), then the base Dust agent, then the user's active cloud provider. Unlike the
-  // old version it no longer HARD-requires Dust: a zero-Dust user still gets a clean email from whatever
-  // provider is configured (EMAIL_RECAP_PROMPT is provider-agnostic).
-  const generateFollowup = useCallback(() => {
+  // Best-effort one-shot lookup of relevant customer wins from the Spotlight Ref agent — the ONLY agent
+  // that holds our success stories. Runs a self-contained ask on a unique id and collects its text; it
+  // does not go through any useAsk hook, and every stream handler filters by that id, so it can never
+  // pollute the live answer/suggest/follow-up streams. Never rejects: a Dust hiccup just yields '' and the
+  // email is drafted without wins. Returns '' when nothing relevant is on file.
+  const fetchSpotlightWins = useCallback(
+    async (topic: string): Promise<string> => {
+      const refAgent = settings?.providerModelsSpotlightRef?.['dust'] ?? ''
+      if (!spotlightRefReady || !refAgent) return ''
+      const id = `wins-${Date.now()}`
+      return new Promise<string>((resolve) => {
+        let text = ''
+        let settled = false
+        const finish = (value: string): void => {
+          if (settled) return
+          settled = true
+          offDelta()
+          offDone()
+          offErr()
+          resolve(value)
+        }
+        const offDelta = window.toto.onDelta((d) => { if (d.id === id) text += d.text })
+        const offDone = window.toto.onDone((d) => { if (d.id === id) finish(text.trim()) })
+        const offErr = window.toto.onError((e) => { if (e.id === id) finish('') })
+        window.toto
+          .ask({
+            id,
+            mode: 'answer',
+            prompt:
+              `From our reference library, list up to 3 REAL customer wins or case studies relevant to: ${topic}. ` +
+              `For each, one line: the customer (or "a comparable customer" if it must stay anonymous), the result, and why it fits. ` +
+              `Only genuine references from the library — never invent one. If nothing clearly fits, reply with the single word NONE.`,
+            agentOverride: refAgent,
+            providerOverride: 'dust',
+            history: []
+          })
+          .catch(() => finish(''))
+        // Safety net: never hang the email waiting on a wins lookup.
+        setTimeout(() => finish(text.trim()), 30_000)
+      })
+    },
+    [spotlightRefReady, settings?.providerModelsSpotlightRef]
+  )
+
+  // "Email recap": a paste-ready follow-up email built from the meeting. Drafted by the BASE Métis agent
+  // in Dust (the default agent, the same one the Dust CLI uses) — providerOverride 'dust' with NO
+  // agentOverride, which the interactive routing resolves to the base agent AND keeps failover-safe (a
+  // Dust outage falls over to a configured cloud provider rather than dead-ending). No Dust configured at
+  // all → the active provider drafts it; the email no longer HARD-requires Dust. Spotlight Ref is used
+  // ONLY as the source of the success stories, fetched separately and woven in when the wins toggle is on.
+  const generateFollowup = useCallback(async () => {
     const recapText = (pastMeeting ? pastMeeting.recap : ask.answer?.text) ?? ''
     if (!recapText.trim()) return
-    const refAgent = spotlightRefReady ? settings?.providerModelsSpotlightRef?.['dust'] ?? '' : ''
-    const baseDustReady = isDustReady(settings?.hasKeys ?? {}, settings?.dustWorkspaceId ?? '', settings?.providerModels ?? {})
     const title = pastMeeting?.title
+    let winsBlock = ''
+    if (includeWins && spotlightRefReady) {
+      const wins = await fetchSpotlightWins(title || recapText.slice(0, 240))
+      if (wins && !/^none\.?$/i.test(wins)) {
+        winsBlock =
+          '\n\nRelevant proven wins from our reference library (weave in ONLY the genuinely relevant ones, ' +
+          `one short line each, never invent):\n${wins}`
+      }
+    }
+    const baseDustReady = isDustReady(settings?.hasKeys ?? {}, settings?.dustWorkspaceId ?? '', settings?.providerModels ?? {})
     const prompt =
       EMAIL_RECAP_PROMPT +
-      (refAgent && includeWins ? WINS_CLAUSE : '') +
       '\n\nWrite the email in the SAME LANGUAGE as the summary below; do not translate it.' +
       (title ? `\n\nMeeting title: ${title}` : '') +
-      `\n\nMeeting summary:\n${recapText}`
-    // Spotlight Ref (pinned, grounded) → base Dust → active provider. providerOverride is omitted entirely
-    // for the no-Dust case so the ask uses whatever the user has configured.
-    if (refAgent) followup.run({ mode: 'answer', prompt, agentOverride: refAgent, providerOverride: 'dust' })
-    else if (baseDustReady) followup.run({ mode: 'answer', prompt, providerOverride: 'dust' })
+      `\n\nMeeting summary:\n${recapText}` +
+      winsBlock
+    if (baseDustReady) followup.run({ mode: 'answer', prompt, providerOverride: 'dust' })
     else followup.run({ mode: 'answer', prompt })
   }, [
     pastMeeting,
@@ -1443,10 +1493,10 @@ export function App(): JSX.Element {
     followup.run,
     includeWins,
     spotlightRefReady,
+    fetchSpotlightWins,
     settings?.hasKeys,
     settings?.dustWorkspaceId,
-    settings?.providerModels,
-    settings?.providerModelsSpotlightRef
+    settings?.providerModels
   ])
 
   const capture = useCallback(async () => {

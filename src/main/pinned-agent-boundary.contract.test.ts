@@ -64,19 +64,30 @@ describe('renderer pins Spotlight Ref to Dust but lets the generic follow-up cas
     expect(call).toMatch(/providerOverride: 'dust'/)
   })
 
-  it('generateFollowup routes the email recap through Spotlight Ref when connected, else base Dust (failover-safe), else the active provider', () => {
+  it('generateFollowup drafts the email via the BASE Métis Dust agent (no agentOverride, failover-safe), else the active provider', () => {
     const call = appSrc.slice(
       appSrc.indexOf('const generateFollowup = useCallback'),
       appSrc.indexOf('const capture = useCallback')
     )
-    // Spotlight Ref path: pinned agent (grounds the email in our references/wins). The agentOverride pin
-    // deliberately suppresses cross-provider failover — the same pinned-agent contract this file protects
-    // — which is acceptable here because the user opted into grounded output.
-    expect(call).toMatch(/followup\.run\(\{ mode: 'answer', prompt, agentOverride: refAgent, providerOverride: 'dust' \}\)/)
-    // Base Dust path carries providerOverride but NO agentOverride, so a Dust outage still fails over to a
-    // configured cloud provider rather than dead-ending — the property the old assertion protected.
+    // The email itself is the base Métis agent: providerOverride 'dust' with NO agentOverride, so a Dust
+    // outage still fails over to a configured cloud provider rather than dead-ending.
     expect(call).toMatch(/followup\.run\(\{ mode: 'answer', prompt, providerOverride: 'dust' \}\)/)
     // No-Dust path: plain ask on the active provider — the email recap no longer HARD-requires Dust.
     expect(call).toMatch(/followup\.run\(\{ mode: 'answer', prompt \}\)/)
+    // The email generation must NOT pin an agentOverride — Spotlight Ref is only the wins source, fetched
+    // separately (below), never the drafter.
+    expect(call).not.toMatch(/followup\.run\([^)]*agentOverride/)
+  })
+
+  it('Spotlight Ref is used ONLY to fetch the success stories, on its own pinned ask', () => {
+    const wins = appSrc.slice(
+      appSrc.indexOf('const fetchSpotlightWins = useCallback'),
+      appSrc.indexOf('const generateFollowup = useCallback')
+    )
+    // The wins lookup is the ONLY place the email flow pins the Spotlight Ref agent.
+    expect(wins).toMatch(/agentOverride: refAgent/)
+    expect(wins).toMatch(/providerOverride: 'dust'/)
+    // It is self-contained (its own id) so it never pollutes the live answer/suggest/follow-up streams.
+    expect(wins).toMatch(/const id = `wins-\$\{Date\.now\(\)\}`/)
   })
 })
