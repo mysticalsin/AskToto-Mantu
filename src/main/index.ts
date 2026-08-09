@@ -3102,7 +3102,12 @@ function registerIpc(): void {
       // silently turn a screenshot into a cloud upload.
       const ineligible =
         provider === 'local'
-          ? localEligibleFor(req, s, tier, allowed) || localFallbackEligibleFor(req, s, tier, allowed)
+          ? localEligibleFor(req, s, tier, allowed) ||
+            localFallbackEligibleFor(req, s, tier, allowed) ||
+            // The answer-mode floor: pickFailover routes here when every cloud/CLI route is exhausted for an
+            // out-of-scope mode (answer/recap). attempt() must accept it too, or the floor pickFailover
+            // offered would be bounced right back with the "uses your cloud provider" message.
+            localAnswerFloorEligibleFor(req, s, allowed)
             ? ''
             : localVisionRequired
               ? 'Métis Local could not process this screenshot on this device. Nothing was sent to a cloud provider. Restart Métis, or reinstall it if the bundled model is missing.'

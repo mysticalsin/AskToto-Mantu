@@ -119,6 +119,9 @@ describe('cooldown lifecycle (MQA-003)', () => {
   })
 })
 
+// MQA-117 (rate-limit trips the breaker), MQA-118 (credit/quota cooldown), MQA-119 (usage-cap window) —
+// docs/qa/BUG-LEDGER.md. Before this, only isAuthFailure recorded a provider, so a 429/credit/cap was
+// re-tried as primary every ask.
 describe('kind-aware cooldown — rate-limit / quota / usage-cap (OmniRoute integration)', () => {
   it('a rate limit cools IMMEDIATELY (one signal), unlike the 2-strike auth path', () => {
     const t0 = 1_000_000

@@ -280,6 +280,8 @@ describe('localFallbackEligibleFor', () => {
 })
 
 // ─── localAnswerFloorEligibleFor — the "worst case, no API needed" absolute floor ──────────────────────
+// MQA-122 (docs/qa/BUG-LEDGER.md): answer mode had no on-device backup and dead-ended when the sole
+// provider ran out. This gate is what lets the on-device model answer as the absolute last resort.
 describe('localAnswerFloorEligibleFor', () => {
   const fallbackOnly = () => readySettings({ useFor: { suggest: false, summary: false, vision: false } })
 
