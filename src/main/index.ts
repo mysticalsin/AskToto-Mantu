@@ -84,10 +84,14 @@ import {
 } from './store'
 import { createStream } from './llm'
 import { isTransient, nextBackoff } from './llm/retry'
+import { classifyExhaustion, type ExhaustionSignal } from './llm/exhaustion'
+import { isBudgetExhausted, resetHeadroom } from './llm/usage-headroom'
 import {
   isAuthFailure,
   isCoolingDown,
   recordAuthFailure,
+  recordExhausted,
+  recordRateLimited,
   recordSuccess,
   resetProviderHealth,
   unhealthyProviders
@@ -96,6 +100,7 @@ import * as localRuntime from './llm/local-runtime'
 import {
   localEligibleFor,
   localFallbackEligibleFor,
+  localAnswerFloorEligibleFor,
   localBaseReady,
   localPrewarmEligible,
   localVisionPrivacyRequired,
@@ -2228,6 +2233,7 @@ function registerIpc(): void {
     // it here is what makes pasting a working key feel like it fixed the problem immediately, instead of
     // the provider staying demoted and flagged until the cooldown happened to expire.
     resetProviderHealth(parsed.provider)
+    resetHeadroom(parsed.provider) // the old key's remaining-budget snapshot is meaningless for a new key
     // setApiKey() silently treats an empty/whitespace key as "clear the saved key" (store.ts) — audit the
     // actual effect, not just the channel name, so a credential removal is never mislabeled as a set.
     auditLog(parsed.key.trim() ? 'key.set' : 'key.removed', { provider: parsed.provider })
@@ -2240,6 +2246,7 @@ function registerIpc(): void {
     const parsed = ClearApiKeyPayloadSchema.parse(payload)
     clearApiKey(parsed.provider)
     resetProviderHealth(parsed.provider) // same reason as setApiKey above
+    resetHeadroom(parsed.provider)
 
     auditLog('key.removed', { provider: parsed.provider })
     return { hasKeys: hasKeysMap() }
@@ -2949,7 +2956,7 @@ function registerIpc(): void {
     // Pick the next eligible keyed provider not yet tried — the waterfall target when the primary (e.g.
     // Dust) can't answer. Pure (no side effect) so the retry gate can cheaply ask "is there anywhere to
     // fall over to?" before deciding how long to keep retrying a dead primary.
-    const pickFailover = (tried: ProviderId[]): ProviderId | null => {
+    const pickFailover = (tried: ProviderId[], preferFree = false): ProviderId | null => {
       // A request pinned to a specific Dust agent (Spotlight Ref) has NO valid failover target — no other
       // provider hosts that managed agent, so falling over would silently answer from the active generic
       // provider (e.g. Kimi) with a reply that never touched the agent. Returning null here suppresses
@@ -2960,11 +2967,18 @@ function registerIpc(): void {
       // Candidate order honors the CLI-vs-API priority: when 'cli', CLI-kind providers sort first so a
       // failover reaches for another local CLI before a metered API. V8's Array.sort is stable, so equal-
       // rank providers keep their PROVIDERS declaration order; 'api' (default) leaves the order unchanged.
-      const order = (Object.keys(PROVIDERS) as ProviderId[]).slice().sort((a, b) =>
-        s.providerPriority === 'cli'
-          ? (PROVIDERS[a].kind === 'cli' ? 0 : 1) - (PROVIDERS[b].kind === 'cli' ? 0 : 1)
-          : 0
-      )
+      // `preferFree` (set when the primary just ran OUT of credit/tokens, gated on
+      // resilience.preferFreeOnExhaustion) adds a secondary key that floats free-tier providers ahead of
+      // paid ones — "prefer a free backup when the paid one is spent" — without touching the normal order.
+      const order = (Object.keys(PROVIDERS) as ProviderId[]).slice().sort((a, b) => {
+        const cliRank =
+          s.providerPriority === 'cli'
+            ? (PROVIDERS[a].kind === 'cli' ? 0 : 1) - (PROVIDERS[b].kind === 'cli' ? 0 : 1)
+            : 0
+        if (cliRank !== 0) return cliRank
+        if (preferFree) return (PROVIDERS[a].freeTier ? 0 : 1) - (PROVIDERS[b].freeTier ? 0 : 1)
+        return 0
+      })
       const eligible = (p: ProviderId): boolean => {
         if (tried.includes(p)) return false
         // Métis Local replaces the generic key/model/vision checks with localEligibleFor — the SAME
@@ -2984,8 +2998,12 @@ function registerIpc(): void {
             !!resolveModelTier(p, s.providerModels, s.providerModelsThinking, tier, s.providerModelsDeep))
         )
       }
-      // MQA-003: prefer a provider whose credentials have NOT just been rejected.
-      const healthy = order.find((p) => eligible(p) && !isCoolingDown(p))
+      // Budget pre-emption (resilience.budgetPreempt): skip a provider whose live rate-limit headers say it
+      // is about to 429 (usage-headroom.ts). Fail-open — unknown headroom never demotes — and folded into
+      // the `healthy` filter ONLY, so a budget-blocked provider is still reachable as the last resort below.
+      const budgetBlocked = (p: ProviderId): boolean => s.resilience.budgetPreempt && isBudgetExhausted(p)
+      // MQA-003: prefer a provider whose credentials have NOT just been rejected and that has budget left.
+      const healthy = order.find((p) => eligible(p) && !isCoolingDown(p) && !budgetBlocked(p))
       if (healthy) return healthy
       // MQA-113: the on-device fallback is preferred over a provider that is currently cooling down. The
       // first unhealthy provider is skipped above, but a SECOND (or Nth) simultaneously-cooling cloud
@@ -2993,15 +3011,23 @@ function registerIpc(): void {
       // re-walked a known-dead provider (deepseek down AND nvidia down → nvidia retried forever) instead
       // of going straight to local. Local is the honest next hop when all cloud is cooling.
       if (!tried.includes('local') && localFallbackEligibleFor(req, s, tier, allowed)) return 'local'
-      // Absolute last resort: a cooling cloud/CLI provider is still better than dead-ending with an error
-      // when local cannot serve this request (out of local's mode scope, or not provisioned). A cooling
-      // provider is demoted, never removed — one revoked key must not lock a user out of their only provider.
-      return order.find(eligible) ?? null
+      // Near-last resort: a cooling cloud/CLI provider is still better than dead-ending with an error when
+      // local cannot serve this request in-scope. A cooling provider is demoted, never removed — one
+      // revoked key must not lock a user out of their only provider, and a rate-limit may recover mid-walk.
+      const coolingResort = order.find(eligible)
+      if (coolingResort) return coolingResort
+      // The ABSOLUTE floor (the "worst case, no API needed" guarantee): on-device answers even an
+      // out-of-scope mode (answer/recap) when literally nothing else can — every cloud/CLI route exhausted
+      // or unconfigured, and the request is outside local's normal suggest/summary/vision scope. Dead last,
+      // AFTER even a cooling cloud provider that might recover, so it never preempts a real answer.
+      if (!tried.includes('local') && localAnswerFloorEligibleFor(req, s, allowed)) return 'local'
+      return null
     }
     // Find the next eligible keyed provider not yet tried and start it — for failover when the primary
-    // can't answer (Dust down → your configured Claude/GPT key takes over).
-    const failover = (tried: ProviderId[]): boolean => {
-      const next = pickFailover(tried)
+    // can't answer (Dust down → your configured Claude/GPT key takes over). `preferFree` floats free-tier
+    // backups ahead when the just-failed provider ran out of credit/tokens (resilience.preferFreeOnExhaustion).
+    const failover = (tried: ProviderId[], preferFree = false): boolean => {
+      const next = pickFailover(tried, preferFree)
       if (!next) return false
       attempt(next, tried)
       return true
@@ -3011,6 +3037,9 @@ function registerIpc(): void {
     // (transient errors) then fall over to the next one. `retryCount` tracks same-provider transient
     // retries; failover resets it (each provider gets its own retry budget).
     const MAX_TRANSIENT_RETRIES = 3
+    // The longest a rate-limit Retry-After we will WAIT OUT in place during a live ask. Beyond this we fail
+    // straight over to the backup rather than freezing the answer — the whole point of "always a backup".
+    const MAX_ASK_RETRY_WAIT_MS = 12_000
     const attempt = (provider: ProviderId, attempted: ProviderId[], retryCount = 0): void => {
       const def = PROVIDERS[provider]
       if (allowed && !allowed.includes(provider)) {
@@ -3251,6 +3280,23 @@ function registerIpc(): void {
           onError: (message) => {
             streams.delete(req.id)
             auditLog('provider.failed', { provider, gotToken, retry: retryCount })
+            // "You ran out" — a rate limit (429), spent credit, or a Claude Pro / Codex subscription
+            // usage-cap — is NOT a dead key, and each needs its own cooldown + message. Classify it FIRST
+            // (exhaustion.ts), so a rate-limited Claude backs off for its Retry-After window, an out-of-
+            // credit key demotes for ~1h instead of being re-tried as primary every ask, and a spent
+            // subscription window demotes until its reset. This is the OmniRoute integration: the circuit
+            // breaker now remembers token/credit exhaustion, not only credential rejections.
+            const exhaustion: ExhaustionSignal | null =
+              !gotToken && provider !== 'local' ? classifyExhaustion(message) : null
+            if (exhaustion) {
+              if (exhaustion.kind === 'rate-limit') recordRateLimited(provider, exhaustion.retryAfterMs)
+              else
+                recordExhausted(provider, exhaustion.kind, {
+                  retryAfterMs: exhaustion.retryAfterMs,
+                  resetAt: exhaustion.resetAt,
+                  message: String(message)
+                })
+            }
             // MQA-003/MQA-004: remember a CREDENTIAL rejection (not a transport blip) so routing can stop
             // re-paying this provider's round trip on every subsequent ask, and so Settings can finally
             // tell the user their key stopped working instead of reporting it ready forever.
@@ -3258,10 +3304,14 @@ function registerIpc(): void {
             // "does not have a valid authenticated credential" phrasing carries no 401 digits, so the
             // generic isAuthFailure misses it — the circuit breaker never trips for a genuinely dead Dust
             // session. dust.ts already maintains the broadened matcher for exactly this; use it for Dust.
+            // Gated on !exhaustion so a "403 insufficient_quota" is not double-counted as a dead key.
             const isCredentialRejection =
-              provider === 'dust' ? isDustAuthError({ message }) : isAuthFailure(message)
+              !exhaustion && (provider === 'dust' ? isDustAuthError({ message }) : isAuthFailure(message))
             if (!gotToken && isCredentialRejection) recordAuthFailure(provider, String(message))
-            if (!gotToken) retireCli(provider, message)
+            // Do NOT retire a CLI for a usage-cap: a spent Claude Pro / Codex window is a TEMPORARY lockout
+            // that refills at a known time, not a dead login — retiring it would force a needless re-login.
+            // Only a genuine auth failure retires the CLI.
+            if (!gotToken && !exhaustion) retireCli(provider, message)
             // Pre-token transient failure (dropped socket, 5xx, 429, DNS blip): retry the SAME provider
             // with bounded backoff before switching. `gotToken` guards it — once tokens are on the wire
             // we never re-run. A cancel handle keeps an abort during the backoff wait from firing the retry.
@@ -3275,35 +3325,67 @@ function registerIpc(): void {
             // retries once and then answers on-device instead of burning the full ~30s retry budget.)
             const hasFailoverTarget = provider !== 'local' && !!pickFailover(attempted.concat(provider))
             const retryBudget = hasFailoverTarget ? 1 : MAX_TRANSIENT_RETRIES
-            if (!gotToken && retryCount < retryBudget && isTransient(message)) {
-              const delayMs = nextBackoff(retryCount)
+            // A rate-limit is retryable IN PLACE only if the server's window is short enough to wait inside
+            // a live ask — a 5-minute Retry-After means "go to the backup now", not "freeze the UI". A hard
+            // exhaustion (credit/usage-cap) is NEVER retried in place: money and subscription windows do not
+            // return on a sub-second backoff, so we fail straight over.
+            const rateLimitWaitMs =
+              exhaustion?.kind === 'rate-limit' && exhaustion.retryAfterMs != null
+                ? exhaustion.retryAfterMs
+                : null
+            const rateLimitTooLongToWait = rateLimitWaitMs != null && rateLimitWaitMs > MAX_ASK_RETRY_WAIT_MS
+            const hardExhaustion = exhaustion != null && exhaustion.kind !== 'rate-limit'
+            if (
+              !gotToken &&
+              retryCount < retryBudget &&
+              isTransient(message) &&
+              !hardExhaustion &&
+              !rateLimitTooLongToWait
+            ) {
+              const delayMs = nextBackoff(retryCount, { retryAfterMs: rateLimitWaitMs ?? undefined })
               auditLog('provider.retry', { provider, attempt: retryCount + 1, delayMs })
               const timer = setTimeout(() => attempt(provider, attempted, retryCount + 1), delayMs)
               streams.set(req.id, { abort: () => clearTimeout(timer) })
               return
             }
-            // Retries exhausted or non-transient: fall over to another provider (pre-token only).
-            if (!gotToken && provider !== 'local' && failover(attempted.concat(provider))) return
+            // Retries exhausted or non-transient: fall over to another provider (pre-token only). When the
+            // just-failed provider ran OUT (credit/tokens/usage-cap), prefer a free-tier backup or local.
+            const preferFree = exhaustion != null && s.resilience.preferFreeOnExhaustion
+            if (!gotToken && provider !== 'local' && failover(attempted.concat(provider), preferFree)) return
             // Replace raw client transport strings ("Unexpected network error from DustAPI: fetch failed")
             // with a clean message; keep the Dust-auth one-click reconnect path; else pass the message.
-            const friendly = isTransient(message)
-              ? "Connection issue — couldn't reach the provider after retrying. Check your network and try again."
-              : // MQA-101: use dust.ts's maintained matcher, not a second copy of the phrasing regex —
-                // the inline copy missed the current "authenticated credential" wording, so a dead Dust
-                // session surfaced its raw 401 instead of this reconnect prompt.
-                provider === 'dust' && isDustAuthError({ message })
-                ? 'Your Dust session expired and could not refresh automatically. Open Settings and reconnect Dust once.'
-                : // MQA-062: a CLI provider has no API key to "re-enter" — sending the user to Settings →
-                  // AI for a key that does not exist is an actively wrong remedy. Name the real fix: sign
-                  // the CLI back in and reconnect it (retireCli has already retired the stale flag).
-                  def.kind === 'cli' && isAuthFailure(message)
-                  ? `${def.label} is no longer signed in. Sign in to the CLI again, then reconnect it in Settings → CLI Integration.`
-                  : // MQA-005: a credential rejection used to fall through as the provider's raw string —
-                    // users saw literally "403 status code (no body)", which names neither the problem nor
-                    // the fix. Say which provider failed and where to go, matching the no-key path's copy.
-                    isAuthFailure(message)
-                    ? `${def.label} rejected your API key (it may have been revoked, expired, or run out of credit). Open Settings → AI to re-enter it.`
-                    : message
+            // Reaching here means failover found NO backup — so an exhaustion message names the limit and
+            // the fix (add a provider / add credit / wait for the reset) instead of a misleading
+            // "Connection issue" (the old bug: a 429 was reported as a network fault) or a raw provider
+            // string like "Claude AI usage limit reached|1754160000".
+            const friendly = exhaustion
+              ? exhaustion.kind === 'rate-limit'
+                ? `${def.label} is rate-limited right now and no backup is configured. Add another provider in Settings → AI, or wait a moment and try again.`
+                : exhaustion.kind === 'usage-cap'
+                  ? `${def.label} hit its usage limit${
+                      exhaustion.resetAt
+                        ? ` (resets ${new Date(exhaustion.resetAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })})`
+                        : ''
+                    }. Add another provider in Settings → AI to keep going.`
+                  : `${def.label} is out of credit. Add credit or switch providers in Settings → AI.`
+              : isTransient(message)
+                ? "Connection issue — couldn't reach the provider after retrying. Check your network and try again."
+                : // MQA-101: use dust.ts's maintained matcher, not a second copy of the phrasing regex —
+                  // the inline copy missed the current "authenticated credential" wording, so a dead Dust
+                  // session surfaced its raw 401 instead of this reconnect prompt.
+                  provider === 'dust' && isDustAuthError({ message })
+                  ? 'Your Dust session expired and could not refresh automatically. Open Settings and reconnect Dust once.'
+                  : // MQA-062: a CLI provider has no API key to "re-enter" — sending the user to Settings →
+                    // AI for a key that does not exist is an actively wrong remedy. Name the real fix: sign
+                    // the CLI back in and reconnect it (retireCli has already retired the stale flag).
+                    def.kind === 'cli' && isAuthFailure(message)
+                    ? `${def.label} is no longer signed in. Sign in to the CLI again, then reconnect it in Settings → CLI Integration.`
+                    : // MQA-005: a credential rejection used to fall through as the provider's raw string —
+                      // users saw literally "403 status code (no body)", which names neither the problem nor
+                      // the fix. Say which provider failed and where to go, matching the no-key path's copy.
+                      isAuthFailure(message)
+                      ? `${def.label} rejected your API key (it may have been revoked, expired, or disabled). Open Settings → AI to re-enter it.`
+                      : message
             win?.webContents.send(IPC.streamError, { id: req.id, message: friendly })
           }
         }
@@ -3334,11 +3416,14 @@ function registerIpc(): void {
       s.provider,
       localVisionRequired
     )
-    // MQA-003: when the primary's credentials were just rejected, start at the next eligible provider
-    // instead of re-paying its round trip on every ask (measured 6.5–9.3s wasted against a 15s
-    // live-suggest budget). It stays in `attempted` so the walk never circles back to it. pickFailover
-    // returns null for a pinned Dust-agent request, so a pinned ask is never silently substituted.
-    const skipDeadPrimary = isCoolingDown(primary) ? pickFailover([primary]) : null
+    // MQA-003: when the primary's credentials were just rejected — OR its live budget is nearly spent
+    // (resilience.budgetPreempt) — start at the next eligible provider instead of re-paying its round trip
+    // on every ask (measured 6.5–9.3s wasted against a 15s live-suggest budget). It stays in `attempted` so
+    // the walk never circles back to it. pickFailover returns null for a pinned Dust-agent request, so a
+    // pinned ask is never silently substituted.
+    const primaryUnavailable =
+      isCoolingDown(primary) || (s.resilience.budgetPreempt && isBudgetExhausted(primary))
+    const skipDeadPrimary = primaryUnavailable ? pickFailover([primary]) : null
     attempt(skipDeadPrimary ?? primary, skipDeadPrimary ? [primary] : [])
     } catch (e) {
       win?.webContents.send(IPC.streamError, {

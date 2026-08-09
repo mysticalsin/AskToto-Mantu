@@ -29,7 +29,7 @@ describe('pinned Dust-agent requests never fail over to a generic provider', () 
   })
 
   it('pickFailover early-returns null for a pinned (agentOverride) request', () => {
-    const start = indexSrc.indexOf('const pickFailover = (tried: ProviderId[]): ProviderId | null => {')
+    const start = indexSrc.indexOf('const pickFailover = (tried: ProviderId[], preferFree = false): ProviderId | null => {')
     expect(start).toBeGreaterThan(-1)
     const body = indexSrc.slice(start, start + 900)
     // The guard must come first — before any tier/candidate work — so BOTH seams that consult pickFailover
@@ -42,7 +42,7 @@ describe('pinned Dust-agent requests never fail over to a generic provider', () 
     // does the actual hand-off. Both consult pickFailover, so a pinned request is suppressed at both
     // without the two being able to drift apart.
     expect(indexSrc).toMatch(/hasFailoverTarget = provider !== 'local' && !!pickFailover\(attempted\.concat\(provider\)\)/)
-    expect(indexSrc).toMatch(/provider !== 'local' && failover\(attempted\.concat\(provider\)\)/)
+    expect(indexSrc).toMatch(/provider !== 'local' && failover\(attempted\.concat\(provider\), preferFree\)/)
   })
 
   it('the first-attempt local-fallback seam suppresses pinned requests too (not only pickFailover)', () => {

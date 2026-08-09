@@ -913,6 +913,20 @@ export const BaseSettingsSchema = z.object({
       useFor: { suggest: false, summary: false, vision: false },
       fallback: true
     }),
+  // Resilience routing (the OmniRoute integration): what to do when a provider runs out of tokens/credit
+  // rather than a key being rejected. See main/llm/exhaustion.ts + provider-health.ts. Both default ON —
+  // they can only ever KEEP an ask answerable, never expose more than the user already configured.
+  resilience: z
+    .object({
+      // When a PAID primary is exhausted (429/credit/usage-cap), float providers with a free tier
+      // (providers.ts freeTier) — and the on-device model — ahead of other paid providers as the backup.
+      // Never changes the first-choice order; only the order of rescue after an exhaustion.
+      preferFreeOnExhaustion: z.boolean().default(true),
+      // Pre-empt a provider BEFORE it 429s, from the live x-ratelimit-remaining headers it returns on
+      // successful responses (main/llm/usage-headroom.ts). Fail-open: no data = the provider stays eligible.
+      budgetPreempt: z.boolean().default(true)
+    })
+    .default({ preferFreeOnExhaustion: true, budgetPreempt: true }),
   // Speaker Intelligence (docs/SPEAKER-INTELLIGENCE-PLAN.md): live "who's speaking" labels on THEM
   // transcript lines via on-device voice embeddings (sherpa-onnx, same addon as Parakeet). Off by
   // default — it's a beta and the embedding model must be provisioned (fetch-speaker-model.mjs).
@@ -1034,13 +1048,23 @@ export const PublicSettingsSchema = BaseSettingsSchema.extend({
    *  configured (or all of them down), in-scope asks and meeting indexing still run on-device. Lets
    *  renderer readiness gates (index-meetings CTA, screen-ask) match what routing will actually do. */
   localFallbackReady: z.boolean().default(false),
-  /** Providers whose API key was REJECTED (401/403/402, revoked, out of credit) on consecutive recent
-   *  asks — main/llm/provider-health.ts. `providerReady` above only means "a key string exists", so
-   *  without this the UI reports a provider as ready forever while every ask silently degrades to the
-   *  fallback (MQA-004). Empty is the healthy case. Session-scoped: never persisted, cleared the moment
-   *  the provider's key changes or it answers successfully again. */
+  /** Providers currently DEMOTED because a recent ask failed in a way that will keep failing for a while —
+   *  a dead key (401/403), a rate limit (429), spent credit, or a subscription usage-cap — see
+   *  main/llm/provider-health.ts. `providerReady` above only means "a key string exists", so without this
+   *  the UI reports a provider ready forever while every ask silently degrades to the backup (MQA-004).
+   *  `reason` lets the UI distinguish "re-enter your key" from "you hit a limit, resets soon"; `until` is
+   *  the epoch-ms the cooldown expires so it can show "retry in 2m" / "resets ~3:40pm". Empty is the
+   *  healthy case. Session-scoped: never persisted, cleared the moment the key changes or it answers again. */
   unhealthyProviders: z
-    .array(z.object({ provider: z.string(), error: z.string(), since: z.number() }))
+    .array(
+      z.object({
+        provider: z.string(),
+        error: z.string(),
+        since: z.number(),
+        reason: z.enum(['auth', 'rate-limit', 'quota-exhausted', 'usage-cap']).default('auth'),
+        until: z.number().default(0)
+      })
+    )
     .default([]),
   /** The `backgroundScreenContext` setting is on AND localReady — i.e. background on-device screen
    *  pre-analysis can actually run. Lets Settings show "on" vs "enable Local AI to use this". */

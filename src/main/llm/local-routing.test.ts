@@ -78,6 +78,7 @@ vi.mock('./fm-runtime', () => fmRuntimeMock)
 import {
   localEligibleFor,
   localFallbackEligibleFor,
+  localAnswerFloorEligibleFor,
   localBaseReady,
   localVisionPrivacyRequired,
   pickPrimaryProvider,
@@ -275,6 +276,36 @@ describe('localFallbackEligibleFor', () => {
     const eligible = localEligibleFor({ mode: 'suggest' }, fallbackOnly(), 'base', null)
     expect(eligible).toBe(false)
     expect(pickPrimaryProvider(undefined, eligible, undefined, 'anthropic')).toBe('anthropic')
+  })
+})
+
+// ─── localAnswerFloorEligibleFor — the "worst case, no API needed" absolute floor ──────────────────────
+describe('localAnswerFloorEligibleFor', () => {
+  const fallbackOnly = () => readySettings({ useFor: { suggest: false, summary: false, vision: false } })
+
+  it('answers even out-of-scope modes (answer/recap) as the last resort — the whole point of the floor', () => {
+    // localFallbackEligibleFor deliberately refuses answer/recap; the FLOOR accepts them, because here the
+    // alternative is not "a better cloud answer" but no answer at all.
+    for (const mode of ['answer', 'recap'] as const) {
+      expect(localFallbackEligibleFor({ mode }, fallbackOnly(), 'base', null)).toBe(false) // sanity
+      expect(localAnswerFloorEligibleFor({ mode }, fallbackOnly(), null)).toBe(true)
+    }
+  })
+
+  it('ignores tier — a deep/think escalation still gets the floor when nothing else can serve', () => {
+    // Unlike the in-scope fallback (which refuses non-base tiers), the floor takes any tier: a weak
+    // on-device answer beats an error for a hard question with every provider exhausted.
+    expect(localAnswerFloorEligibleFor({ mode: 'answer' }, fallbackOnly(), null)).toBe(true)
+  })
+
+  it('still gated on the safety-net toggle — fallback=false disables the floor', () => {
+    expect(localAnswerFloorEligibleFor({ mode: 'answer' }, readySettings({ fallback: false }), null)).toBe(false)
+  })
+
+  it('still fails closed on the org allowlist and on an unprovisioned runtime', () => {
+    expect(localAnswerFloorEligibleFor({ mode: 'answer' }, fallbackOnly(), ['anthropic'])).toBe(false)
+    fsState.binaryExists = false
+    expect(localAnswerFloorEligibleFor({ mode: 'answer' }, fallbackOnly(), null)).toBe(false)
   })
 })
 
