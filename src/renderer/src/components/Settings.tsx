@@ -5151,14 +5151,14 @@ export function Settings({
                     </a>
                     <span aria-hidden>·</span>
                     <a
-                      href="mailto:support@mantu.com"
+                      href="mailto:twalteur@amaris.com"
                       className="transition-colors hover:text-[color:var(--cl-foreground)]"
                     >
                       Support
                     </a>
                     <span aria-hidden>·</span>
                     <a
-                      href="mailto:support@mantu.com?subject=M%C3%A9tis%20feedback"
+                      href="mailto:twalteur@amaris.com?subject=M%C3%A9tis%20feedback"
                       className="transition-colors hover:text-[color:var(--cl-foreground)]"
                     >
                       Send feedback
