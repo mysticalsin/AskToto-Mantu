@@ -239,4 +239,24 @@ describe('ingestFailureCounts (T6 6c)', () => {
     expect(result.exhausted).toBe(0)
     expect(result.topError).toBeUndefined()
   })
+
+  // MQA-108 (docs/qa/BUG-LEDGER.md): topError flows into the dashboard's failure banner. A shared fs
+  // error embeds a full absolute path with the Windows username — the exact leak redactPathsInError
+  // exists to prevent for the per-file detail list, previously skipped for the aggregate topError.
+  it('redacts an absolute path out of a shared topError before it ships to the renderer', () => {
+    const shared = "ENOENT: no such file or directory, open 'C:\\Users\\Tony\\OneDrive\\Meetings\\q3-sync.md'"
+    const idx = BrainIndexSchema.parse({
+      ingested: {
+        'a.md': { at: 1, ok: false, error: shared },
+        'b.md': { at: 2, ok: false, error: shared },
+        'c.md': { at: 3, ok: false, error: shared }
+      }
+    })
+    const result = ingestFailureCounts(idx)
+    expect(result.topError).toBeDefined()
+    expect(result.topError).not.toContain('C:\\Users')
+    expect(result.topError).not.toContain('Tony')
+    expect(result.topError).toContain('ENOENT') // the diagnostic reason survives
+    expect(result.topError).toContain('q3-sync.md') // basename kept — still actionable
+  })
 })

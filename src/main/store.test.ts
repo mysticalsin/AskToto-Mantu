@@ -7,6 +7,7 @@ import { DEFAULT_SETTINGS } from '@shared/ipc'
 import {
   getSettings,
   setSettings,
+  recordMeetingSummarized,
   getApiKey,
   setApiKey,
   listDustAgents,
@@ -77,6 +78,29 @@ describe('store', () => {
     rmSync(userData, { recursive: true, force: true })
     vi.unstubAllEnvs()
     vi.restoreAllMocks()
+  })
+
+  it('recordMeetingSummarized bumps the durable time-saved counters once per meeting', () => {
+    expect(getSettings().usageStats).toEqual({ meetingsSummarized: 0, conversationMinutes: 0, firstMeetingAt: 0 })
+
+    recordMeetingSummarized(42)
+    let u = getSettings().usageStats
+    expect(u.meetingsSummarized).toBe(1)
+    expect(u.conversationMinutes).toBe(42)
+    expect(u.firstMeetingAt).toBeGreaterThan(0)
+    const firstAt = u.firstMeetingAt
+
+    recordMeetingSummarized(18)
+    u = getSettings().usageStats
+    expect(u.meetingsSummarized).toBe(2)
+    expect(u.conversationMinutes).toBe(60)
+    expect(u.firstMeetingAt).toBe(firstAt) // set once, never moved by a later meeting
+
+    // A zero/garbage duration still counts the meeting but adds no minutes (never poisons the total).
+    recordMeetingSummarized(NaN as unknown as number)
+    u = getSettings().usageStats
+    expect(u.meetingsSummarized).toBe(3)
+    expect(u.conversationMinutes).toBe(60)
   })
 
   it('heals a persisted provider-retired model id on read, without needing a settings save (MQA-001)', () => {

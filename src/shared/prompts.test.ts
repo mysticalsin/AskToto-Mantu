@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { RECAP_PROMPT, MODE_RECAP_FOCUS, recapPromptFor } from './prompts'
+import { RECAP_PROMPT, MODE_RECAP_FOCUS, recapPromptFor, EMAIL_RECAP_PROMPT, MEETING_BRIEF_PROMPT, WINS_CLAUSE } from './prompts'
 
 // Section skeleton transcripts.ts / recall.ts depend on (see prompts.ts's RECAP_PROMPT doc comment).
 // This exact list, in this exact order, must never change shape when mode focus is appended.
@@ -55,5 +55,32 @@ describe('recapPromptFor', () => {
     for (const focus of Object.values(MODE_RECAP_FOCUS)) {
       expect(focus).not.toMatch(banned)
     }
+  })
+})
+
+describe('email + pre-meeting-brief summary prompts', () => {
+  it('the email recap asks for a paste-ready email: subject, next steps, sign-off', () => {
+    expect(EMAIL_RECAP_PROMPT).toMatch(/subject/i)
+    expect(EMAIL_RECAP_PROMPT).toMatch(/next steps/i)
+    expect(EMAIL_RECAP_PROMPT).toMatch(/sign-off/i)
+  })
+
+  it('the pre-meeting brief is grounded — its own sections plus a "never invent" guard', () => {
+    expect(MEETING_BRIEF_PROMPT).toMatch(/## Who/)
+    expect(MEETING_BRIEF_PROMPT).toMatch(/## Open commitments/)
+    expect(MEETING_BRIEF_PROMPT).toMatch(/## Talking points/)
+    expect(MEETING_BRIEF_PROMPT).toMatch(/never invent|Never invent/)
+  })
+
+  it('both carry the humanizer style rules (no AI-tell words, no em-dash)', () => {
+    for (const p of [EMAIL_RECAP_PROMPT, MEETING_BRIEF_PROMPT]) {
+      expect(p).toMatch(/WRITING STYLE/)
+      expect(p).not.toMatch(/—/) // the prompts themselves must not model an em-dash
+    }
+  })
+
+  it('the wins clause invites only REAL references and can be omitted', () => {
+    expect(WINS_CLAUSE).toMatch(/never invent/i)
+    expect(WINS_CLAUSE).toMatch(/omit/i) // "if none clearly fits, omit"
   })
 })

@@ -1306,7 +1306,14 @@ export function ingestFailureCounts(idx: BrainIndex, minTopErrorCount = 3): { fa
       topCount = count
     }
   }
-  return { failed, exhausted, ...(topError && topCount >= minTopErrorCount ? { topError } : {}) }
+  // MQA-108: topError flows straight into the dashboard's failure banner. record.error can be a raw fs
+  // message quoting a full absolute path (Windows username included) — the exact leak redactPathsInError
+  // (below) exists to prevent for the per-file detail list, silently skipped here. Redact before it ships.
+  return {
+    failed,
+    exhausted,
+    ...(topError && topCount >= minTopErrorCount ? { topError: redactPathsInError(topError) } : {})
+  }
 }
 
 /** Raw exception messages can embed full absolute paths (fs errors like ENOENT quote the whole path,

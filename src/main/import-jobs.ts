@@ -75,6 +75,9 @@ export interface ImportJobManagerDeps {
   /** Returns a persisted-meeting recap or undefined when no provider is configured. */
   generateRecap: (job: ImportJob) => Promise<string | undefined>
   updateRecap: (file: string, recap: string) => Promise<void>
+  /** Credit the durable time-saved counters for one summarized meeting (main/store.ts). Optional so the
+   *  import-jobs unit tests need not wire it; the live app always provides it. */
+  recordMeetingSummarized?: (durationMin: number) => void
   onChange?: (job: ImportJob) => void
   /** Resolve only after the owned decoder has stopped, preventing overlapping FIFO jobs. */
   onCancel?: (jobId: string) => void | Promise<void>
@@ -151,7 +154,10 @@ export class ImportJobManager {
         // The meeting file is already durable once `file` is present. A crash during recap must not
         // replay the decoder and create a duplicate meeting; surface it as a completed transcript so
         // the user can open the note and retry its summary manually.
-        if (job.file && job.state === 'recapping') {
+        // MQA-105: 'saving' joins 'recapping' here. Both states now only ever persist WITH a durable
+        // file (see the pump save ordering), so a crash in either window must surface the saved
+        // transcript rather than replay the decoder into a duplicate meeting.
+        if (job.file && (job.state === 'recapping' || job.state === 'saving')) {
           job.state = 'done'
           job.recapError = 'Automatic summary was interrupted. Open the meeting to retry it.'
           await this.persist(job)
@@ -338,9 +344,12 @@ export class ImportJobManager {
       // A completed transcript is intentionally 99% until the automatic summary has been attempted and
       // persisted. The renderer can therefore transition cleanly from transcription to "Creating summary"
       // instead of flashing 100% before the meeting is actually ready.
+      // MQA-105: do NOT persist state 'saving' BEFORE the file exists. The old order left a checkpoint
+      // reading 'saving' with no `file` for the whole span of saveMeeting AND the persist after it, so a
+      // crash once the file had landed replayed the decoder and produced a DUPLICATE meeting. Now 'saving'
+      // is only ever written together with the file, so a recovered 'saving' checkpoint always carries a
+      // durable file and recover() treats it as a completed transcript instead of re-decoding.
       job.progressPct = Math.max(job.progressPct ?? 0, 99)
-      job.state = 'saving'
-      await this.persist(job)
       const file = await this.deps.saveMeeting({
         title: job.title,
         mode: 'meeting',
@@ -348,11 +357,13 @@ export class ImportJobManager {
         lines: [...job.lines].sort((a, b) => a.t - b.t),
         recap: ''
       })
-      // cancel() flipped the job to 'cancelled' while saveMeeting() was in flight. The meeting file
-      // already landed on disk but job.file was never recorded — delete it here so a cancelled import
-      // never leaves an orphaned meeting behind.
-      if (await this.abandonIfCancelled(job, file)) return
       job.file = file
+      job.state = 'saving'
+      await this.persist(job) // the file is now durable AND recorded in the checkpoint, atomically enough
+      // cancel() flipped the job to 'cancelled' while saveMeeting() was in flight. The meeting file
+      // already landed on disk — delete it and drop the checkpoint we just wrote so a cancelled import
+      // never leaves an orphaned meeting OR a resurrectable checkpoint behind.
+      if (await this.abandonIfCancelled(job, file)) return
       job.state = 'recapping'
       await this.persist(job)
       try {
@@ -372,6 +383,18 @@ export class ImportJobManager {
       // Queue after the recap stage so Mantu Intelligence sees the durable transcript and summary together.
       if (await this.abandonIfCancelled(job, file)) return
       await this.deps.enqueueIngest(file)
+      // MQA-104: enqueueIngest does real file I/O (index.json tmp-write+rename), a genuine yield point, so
+      // a cancel racing it would otherwise fall straight through to the 'done' finalization below —
+      // resurrecting the cancelled job as done and never deleting its meeting file. Re-check here.
+      if (await this.abandonIfCancelled(job, file)) return
+
+      // The user summarized a meeting via import — credit the durable time-saved counters ONCE, now that
+      // the file is committed and past every cancel gate (the live-meeting path credits itself in the
+      // saveTranscript IPC handler). Mirror saveMeeting's own duration formula EXACTLY (last line offset
+      // minus the same startedAt it uses, floored at 1) so the counter and the meeting frontmatter agree.
+      const sorted = [...job.lines].sort((a, b) => a.t - b.t)
+      const durMin = sorted.length ? Math.max(1, Math.round((sorted[sorted.length - 1].t - job.sourceMtimeMs) / 60000)) : 0
+      this.deps.recordMeetingSummarized?.(durMin)
 
       job.progressPct = 100
       job.state = 'done'
@@ -460,8 +483,11 @@ export class ImportJobManager {
   private async abandonIfCancelled(job: ImportJob, file: string): Promise<boolean> {
     if (!this.isCancelled(job)) return false
     await this.deleteOrphanedFile(file)
-    // Deliberately not persisted: cancel() already removed this job's checkpoint and re-saving here would
-    // resurrect it at the next restart. The in-memory job just stops pointing at a file that is now gone.
+    // MQA-105: the pump now persists a checkpoint (state 'saving', with the file) BEFORE this check, so
+    // cancel()'s own checkpoint removal is no longer sufficient on its own — drop it again here so a
+    // just-written checkpoint can never resurrect a job the user cancelled. Idempotent (best-effort).
+    await this.removeCheckpoint(job.jobId)
+    // The in-memory job just stops pointing at a file that is now gone.
     job.file = undefined
     return true
   }

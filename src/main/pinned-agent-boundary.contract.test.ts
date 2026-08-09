@@ -64,9 +64,19 @@ describe('renderer pins Spotlight Ref to Dust but lets the generic follow-up cas
     expect(call).toMatch(/providerOverride: 'dust'/)
   })
 
-  it('generateFollowup forces Dust but carries NO agentOverride (so it keeps Dust-down failover)', () => {
-    const call = sliceCall(appSrc, 'const generateFollowup = useCallback', 'followup.run(')
-    expect(call).toMatch(/providerOverride: 'dust'/)
-    expect(call).not.toMatch(/agentOverride/)
+  it('generateFollowup routes the email recap through Spotlight Ref when connected, else base Dust (failover-safe), else the active provider', () => {
+    const call = appSrc.slice(
+      appSrc.indexOf('const generateFollowup = useCallback'),
+      appSrc.indexOf('const capture = useCallback')
+    )
+    // Spotlight Ref path: pinned agent (grounds the email in our references/wins). The agentOverride pin
+    // deliberately suppresses cross-provider failover — the same pinned-agent contract this file protects
+    // — which is acceptable here because the user opted into grounded output.
+    expect(call).toMatch(/followup\.run\(\{ mode: 'answer', prompt, agentOverride: refAgent, providerOverride: 'dust' \}\)/)
+    // Base Dust path carries providerOverride but NO agentOverride, so a Dust outage still fails over to a
+    // configured cloud provider rather than dead-ending — the property the old assertion protected.
+    expect(call).toMatch(/followup\.run\(\{ mode: 'answer', prompt, providerOverride: 'dust' \}\)/)
+    // No-Dust path: plain ask on the active provider — the email recap no longer HARD-requires Dust.
+    expect(call).toMatch(/followup\.run\(\{ mode: 'answer', prompt \}\)/)
   })
 })

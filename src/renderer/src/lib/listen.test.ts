@@ -1,7 +1,13 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, it, expect } from 'vitest'
-import { isQuestion, looksLikeNetworkError, shouldProbeLanguageWindow, themDeviceChangeAction } from './listen'
+import {
+  isQuestion,
+  looksLikeNetworkError,
+  shouldProbeLanguageWindow,
+  themDeviceChangeAction,
+  themTracksLookDead
+} from './listen'
 
 // Normalize CRLF → LF (same rationale as App.mic-only-visibility.test.ts): Windows checkouts would
 // otherwise break any anchor whose newline sits mid-string.
@@ -123,6 +129,61 @@ describe('themDeviceChangeAction — them-side silent-death recovery (MQA-011)',
     expect(listenSrc).toMatch(/void recoverSystemAudioRef\.current\?\.\(\)\n {4}\}, THEM_WATCHDOG_MS\)/)
     // Proof-of-life is recorded per window; nothing heavier than a boolean store on the capture path.
     expect(listenSrc).toMatch(/themWindowSeenRef\.current = true/)
+  })
+})
+
+// MQA-109 — the MQA-011 probation over-corrected: the devicechange effect arms armThemProbation for EVERY
+// 'devicechange' (the Web API fires it for ANY audio/video add/remove, relevant or not), and the timer then
+// recycled a channel that emitted no window in 20s. For a channel already confirmed healthy (themHeardRef),
+// a normal quiet stretch (you talking, the remote briefly silent) legitimately emits nothing — so bare
+// silence must NOT count as death. Recycle a healthy loopback ONLY with positive evidence its tracks died;
+// the pre-fix code returned 'recycle' for exactly this input (its own comment says it "must never").
+describe('themDeviceChangeAction — a healthy loopback survives an unrelated device blip (MQA-109)', () => {
+  it('keeps an already-healthy them channel that only went quiet (no positive death evidence)', () => {
+    // Pre-fix, themDeviceChangeAction(true, true, false) hard-returned 'recycle'; the death-evidence flag
+    // now spares a still-live, unmuted loopback that merely fell silent for the probation window.
+    expect(themDeviceChangeAction(true, true, false, false)).toBe('ignore')
+  })
+
+  it('still recycles a quiet channel when its tracks show positive evidence of death (MQA-011 preserved)', () => {
+    expect(themDeviceChangeAction(true, true, false, true)).toBe('recycle')
+  })
+
+  it('a window during probation keeps the channel regardless of the death-evidence flag', () => {
+    expect(themDeviceChangeAction(true, true, true, false)).toBe('ignore')
+    expect(themDeviceChangeAction(true, true, true, true)).toBe('ignore')
+  })
+})
+
+describe('themTracksLookDead — positive death evidence for an already-healthy loopback (MQA-109)', () => {
+  it('is false while any audio track is still live and unmuted (quiet ≠ dead)', () => {
+    expect(themTracksLookDead([{ readyState: 'live', muted: false }])).toBe(false)
+    // A dead track alongside a live one is not yet fully dead (still delivering audio).
+    expect(
+      themTracksLookDead([{ readyState: 'ended', muted: false }, { readyState: 'live', muted: false }])
+    ).toBe(false)
+  })
+
+  it('is true when every audio track has ended or its source went muted', () => {
+    expect(themTracksLookDead([{ readyState: 'ended', muted: false }])).toBe(true)
+    expect(themTracksLookDead([{ readyState: 'live', muted: true }])).toBe(true)
+    expect(
+      themTracksLookDead([{ readyState: 'ended', muted: false }, { readyState: 'live', muted: true }])
+    ).toBe(true)
+  })
+
+  it('treats an empty track list (channel already torn down) as dead so recovery still fires', () => {
+    expect(themTracksLookDead([])).toBe(true)
+  })
+
+  it('the probation timer gates recycle on positive death evidence, not bare silence (MQA-109 wiring)', () => {
+    // themHeardRef (already-confirmed-healthy) OR a real track anomaly must gate the recycle.
+    expect(listenSrc).toMatch(
+      /const hasDeathEvidence = !themHeardRef\.current \|\| themTracksLookDead\(ch \? ch\.stream\.getAudioTracks\(\) : \[\]\)/
+    )
+    expect(listenSrc).toMatch(
+      /themDeviceChangeAction\(\s*wantsSystemRef\.current,\s*!!ch,\s*themWindowSeenRef\.current,\s*hasDeathEvidence\s*\)/
+    )
   })
 })
 

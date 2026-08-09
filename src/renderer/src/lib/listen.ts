@@ -98,16 +98,40 @@ export type ThemDeviceAction = 'ignore' | 'watch' | 'recover' | 'recycle'
  * window expires. A device change that kills the loopback leaves the track in readyState 'live' and fires
  * no 'ended' event, so a still-registered channel is only trustworthy once it has emitted a window SINCE
  * the change — the previous session-long "we heard them once" latch could never notice the death.
+ *
+ * `hasDeathEvidence` (read only on the expiry call, when sawWindow is a boolean) is the MQA-109 guard: an
+ * absent window during probation is NOT proof of death for a channel that was ALREADY confirmed healthy.
+ * An unrelated device blip during a normal quiet stretch (you talking, the remote briefly silent) emits no
+ * window while the loopback stays perfectly alive; recycling it there tears down a working capture —
+ * exactly what armThemProbation's own contract says must never happen. So an already-healthy channel is
+ * recycled ONLY with positive evidence its tracks actually died; a channel that never proved itself keeps
+ * the original prove-or-die probation. Defaults to true so the debounce call (which returns 'watch' before
+ * ever reading it) and any legacy three-arg caller keep the historical behaviour.
  */
 export function themDeviceChangeAction(
   wantsSystem: boolean,
   hasThemChannel: boolean,
-  sawWindow: boolean | null
+  sawWindow: boolean | null,
+  hasDeathEvidence = true
 ): ThemDeviceAction {
   if (!wantsSystem) return 'ignore' // mic-only session — there is no loopback to keep alive
   if (!hasThemChannel) return 'recover' // nothing to wait on (start-time failure, or a channel already closed)
   if (sawWindow === null) return 'watch' // registered channel — let it prove itself before tearing it down
-  return sawWindow ? 'ignore' : 'recycle'
+  if (sawWindow) return 'ignore' // proved itself again — no gratuitous teardown on a device blip
+  return hasDeathEvidence ? 'recycle' : 'ignore' // MQA-109: quiet ≠ dead for an already-healthy channel
+}
+
+/**
+ * Exported for unit testing — positive death evidence for an already-healthy 'them' channel (MQA-109).
+ * The device-change probation recycles a confirmed-healthy loopback only when its audio actually died, not
+ * merely because it went quiet: every remaining audio track has ended, or its source went muted (an empty
+ * list means the channel is already gone, which also counts as dead so recovery still fires). Only AUDIO
+ * tracks are passed in — the macOS/Windows loopback stream carries a 1fps video track that stays live and
+ * would otherwise mask a dead audio track.
+ */
+export function themTracksLookDead(tracks: { readyState: string; muted: boolean }[]): boolean {
+  if (tracks.length === 0) return true
+  return tracks.every((t) => t.readyState === 'ended' || t.muted)
 }
 export type AudioSource = 'mic' | 'system' | 'both'
 type Speaker = 'them' | 'you'
@@ -785,10 +809,18 @@ export function useListen(
     themWatchdogRef.current = setTimeout(() => {
       themWatchdogRef.current = null
       if (!liveRef.current || pausedRef.current) return
+      // MQA-109: a channel that was already confirmed healthy (themHeardRef) must not be recycled just for
+      // going quiet during probation — only with positive evidence its audio tracks actually died (all
+      // ended, or the source went muted). A channel that never proved itself keeps the original prove-or-die
+      // probation, so its death evidence stays true. Reading the live track state here (not on the per-window
+      // audio callback) keeps the capture hot path allocation-free.
+      const ch = channels.current.them
+      const hasDeathEvidence = !themHeardRef.current || themTracksLookDead(ch ? ch.stream.getAudioTracks() : [])
       const verdict = themDeviceChangeAction(
         wantsSystemRef.current,
-        !!channels.current.them,
-        themWindowSeenRef.current
+        !!ch,
+        themWindowSeenRef.current,
+        hasDeathEvidence
       )
       if (verdict !== 'recycle') return
       console.warn('[listen] them silent since the device change — recycling the loopback capture')

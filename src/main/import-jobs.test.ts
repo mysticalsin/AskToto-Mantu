@@ -347,6 +347,66 @@ describe('ImportJobManager', () => {
     expect((second.store as MemoryStore).jobs.has('job-1')).toBe(false)
   })
 
+  // MQA-104 (docs/qa/BUG-LEDGER.md): enqueueIngest does real index.json I/O, a genuine yield point, so a
+  // cancel racing it must not fall through to the 'done' finalization — that would resurrect the
+  // cancelled job and strand its meeting file. There must be a cancel gate AFTER enqueueIngest, not only
+  // before it.
+  it('a cancel racing the ingest-queue write deletes the meeting and never marks the job done (MQA-104)', async () => {
+    let resolveEnqueue!: () => void
+    const enqueueIngest = vi.fn(() => new Promise<void>((resolve) => { resolveEnqueue = resolve }))
+    const generateRecap = vi.fn(async () => '## Overview\n\nImported summary')
+    const deleteMeeting = vi.fn(async () => {})
+    const recordMeetingSummarized = vi.fn()
+    const { manager } = createManager({ enqueueIngest, generateRecap, deleteMeeting, recordMeetingSummarized })
+    await manager.start(source)
+    await manager.acceptDecodedChunk('job-1', 0, 1, new Float32Array([1]))
+    const finishing = manager.finishDecoding('job-1')
+    for (let i = 0; i < 10 && !resolveEnqueue; i++) await new Promise((resolve) => setTimeout(resolve, 0))
+
+    await manager.cancel('job-1') // cancel WHILE the enqueue write is in flight
+    resolveEnqueue()
+    await finishing
+
+    expect(deleteMeeting).toHaveBeenCalledWith('saved-import.md')
+    expect(manager.get('job-1')?.state).not.toBe('done')
+    expect(recordMeetingSummarized).not.toHaveBeenCalled() // a cancelled import never credits time saved
+  })
+
+  // MQA-105 (docs/qa/BUG-LEDGER.md): the save ordering now persists state 'saving' only together with a
+  // durable file, so a crash in that window recovers as a completed transcript instead of replaying the
+  // decoder into a duplicate meeting.
+  it('recover treats a crash in the saving window (state saving, file present) as a completed transcript (MQA-105)', async () => {
+    const first = createManager()
+    await first.store.save({
+      jobId: 'job-1', sourcePath: source.path, sourceName: source.name, sourceSizeBytes: source.sizeBytes,
+      sourceMtimeMs: source.mtimeMs, title: 'Interview', state: 'saving', cursor: 1, totalChunks: 1,
+      chunkSec: IMPORT_CHUNK_SECONDS,
+      lines: [{ speaker: 'unknown', text: 'saved transcript', t: source.mtimeMs }], file: 'already-saved.md',
+      createdAt: 1, updatedAt: 1
+    })
+    const second = createManager()
+    ;(second.store as MemoryStore).jobs.clear()
+    ;(second.store as MemoryStore).jobs.set('job-1', (first.store as MemoryStore).jobs.get('job-1')!)
+
+    await second.manager.recover()
+
+    expect(second.decode).not.toHaveBeenCalled()
+    expect(second.saveMeeting).not.toHaveBeenCalled()
+    expect(second.manager.get('job-1')).toMatchObject({ state: 'done', file: 'already-saved.md' })
+  })
+
+  it('credits the durable time-saved counter exactly once when an import completes cleanly', async () => {
+    const recordMeetingSummarized = vi.fn()
+    const generateRecap = vi.fn(async () => '## Overview\n\nImported summary')
+    const { manager } = createManager({ recordMeetingSummarized, generateRecap })
+    await manager.start(source)
+    await manager.acceptDecodedChunk('job-1', 0, 1, new Float32Array([1]))
+    await manager.finishDecoding('job-1')
+
+    expect(recordMeetingSummarized).toHaveBeenCalledTimes(1)
+    expect(manager.get('job-1')?.state).toBe('done')
+  })
+
   it('still replays the decoder when a failed import never got as far as saving its meeting (MQA-025)', async () => {
     const transcribe = vi.fn().mockRejectedValue(new Error('ASR unavailable'))
     const { manager, decode } = createManager({ transcribe })

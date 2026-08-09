@@ -648,6 +648,17 @@ export async function saveNote(settings: Settings, n: SaveNote): Promise<string>
   return file
 }
 
+/** Whole minutes of conversation for a meeting — last transcript line's offset minus start, floored at 1
+ *  once any speech exists, 0 for an empty meeting. The single source of the value saveMeeting stamps into
+ *  the frontmatter AND the value recordMeetingSummarized credits, so the tile and the on-disk meetings
+ *  can never disagree about how long a call was. */
+export function meetingDurationMin(m: { startedAt: number; lines: { t: number }[] }): number {
+  if (!m.lines.length) return 0
+  const started = m.startedAt && Number.isFinite(m.startedAt) ? m.startedAt : 0
+  const last = m.lines[m.lines.length - 1].t
+  return Math.max(1, Math.round((last - started) / 60000))
+}
+
 /** Write a meeting as Dust-readable markdown + frontmatter. Returns the file path. */
 export async function saveMeeting(settings: Settings, m: SaveMeeting): Promise<string> {
   const folder = ensureMeetingsFolder(settings)
@@ -673,8 +684,7 @@ export async function saveMeeting(settings: Settings, m: SaveMeeting): Promise<s
     file = join(folder, `${stamp(started)}-${namePart}-${n}.md`)
   }
 
-  const last = m.lines.length ? m.lines[m.lines.length - 1].t : started
-  const durMin = m.lines.length ? Math.max(1, Math.round((last - started) / 60000)) : 0
+  const durMin = meetingDurationMin(m)
   const participants = Array.from(new Set(m.lines.map((l) => speakerLabel(l.speaker))))
 
   const transcript = formatTranscript(m.lines)

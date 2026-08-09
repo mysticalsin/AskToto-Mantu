@@ -34,6 +34,19 @@ export function clearScreenProbe(): void {
 }
 
 /**
+ * MQA-110: fold the outcome of a REAL capture back into the readiness cache. The boot probe is a
+ * point-in-time snapshot; a user who revokes the Windows graphics-capture permission mid-session would
+ * otherwise leave the checklist reporting a stale 'granted' for the life of the process — the very
+ * MQA-002 bug, re-created for the revoke-after-grant case. Every actual capture is itself a probe, so
+ * recording its result here keeps the status honest at zero extra cost (no second getSources call).
+ * win32 only: macOS reads TCC live and never needs this.
+ */
+export function noteScreenCaptureOutcome(succeeded: boolean): void {
+  if (process.platform !== 'win32') return
+  screenProbeResult = succeeded ? 'granted' : 'denied'
+}
+
+/**
  * Attempt a minimal screen capture and remember whether it worked. Returns true when at least one
  * source came back. On macOS this ALSO registers the app with TCC and raises the system prompt, which is
  * why it is called during onboarding there rather than silently at boot.

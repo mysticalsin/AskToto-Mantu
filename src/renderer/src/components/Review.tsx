@@ -134,6 +134,7 @@ export const Review = memo(function Review({
   meetingMeta,
   confidential,
   followupDraft,
+  winsToggle,
   onOpenFolder,
   onSave,
   onDiscard,
@@ -172,6 +173,9 @@ export const Review = memo(function Review({
   onDone?: () => void
   onResume?: () => void
   onGenerateFollowup?: () => void
+  /** Spotlight Ref wins opt-in for the email recap. Present only when Spotlight Ref is connected (it holds
+   *  our wins / case studies); absent otherwise so there is nothing to ground against and no dead control. */
+  winsToggle?: { on: boolean; onToggle: (on: boolean) => void }
   /** Replay the recap generation after a failure (transient Dust/rate-limit blip) — without this the
    *  only recovery was "New meeting", which discards the whole saved session. */
   onRetryRecap?: () => void
@@ -838,9 +842,22 @@ export const Review = memo(function Review({
               <Mail size={12} /> Follow-up
             </div>
             {!followupDraft && (
-              <Chip onClick={onGenerateFollowup} variant="accent">
-                <Mail size={13} /> Generate follow-up
-              </Chip>
+              <div className="flex items-center gap-2">
+                {winsToggle && (
+                  <label className="flex cursor-pointer items-center gap-1.5 text-[11px] text-[color:var(--color-ink-2)]">
+                    <input
+                      type="checkbox"
+                      checked={winsToggle.on}
+                      onChange={(e) => winsToggle.onToggle(e.target.checked)}
+                      className="no-drag size-3.5 cursor-pointer accent-[var(--color-accent)]"
+                    />
+                    Include our wins
+                  </label>
+                )}
+                <Chip onClick={onGenerateFollowup} variant="accent">
+                  <Mail size={13} /> Email recap
+                </Chip>
+              </div>
             )}
           </div>
           {followupDraft?.error ? (

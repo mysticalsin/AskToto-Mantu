@@ -203,8 +203,11 @@ export type LanguageProbe = (samples: Float32Array) => Promise<string>
 /** A recording's opening windows are routinely silence, hold music, or one-word greetings — probing
  *  only window 0 pinned a real French meeting to ENGLISH off its "Hello" call-join chunk (whisper then
  *  quietly TRANSLATED the whole call, field evidence 2026-08-05). Keep probing early windows until one
- *  contains enough real speech for the text language-id to mean something, then pin; give up after
- *  PROBE_WINDOW_BUDGET windows and leave 'auto' (the follow machine's own probes still apply later). */
+ *  contains enough real speech for the text language-id to mean something, then pin. PROBE_WINDOW_BUDGET
+ *  is an opening BURST, not a retirement — after it, probeLanguage keeps trying on the PROBE_EVERY cadence
+ *  (see its guard below) rather than giving up, because an un-pinned whisper decode is hard-coded to
+ *  English by transformers.js, so a probe that never landed must keep trying or the rest of a non-English
+ *  import silently transcribes as English (MQA-106, mirroring listen.ts's shouldProbeLanguageWindow). */
 const PROBE_WINDOW_BUDGET = 5
 const PROBE_MIN_WORDS = 8
 let probePinned = false
@@ -213,7 +216,14 @@ let probePinned = false
  *  decoupled from parakeet.ts; the probe is wired in as a plain callback, so this is testable with a
  *  fake probe instead of a loaded Parakeet model. */
 export async function probeLanguage(samples: Float32Array, probe?: LanguageProbe): Promise<void> {
-  if (!probe || userLanguage !== 'auto' || probePinned || windowCount >= PROBE_WINDOW_BUDGET) return
+  if (!probe || userLanguage !== 'auto' || probePinned) return
+  // Burst-then-cadence, mirroring listen.ts's shouldProbeLanguageWindow (the MQA-012 live-path fix, ported
+  // here for MQA-106). PROBE_WINDOW_BUDGET is an OPENING burst, not a permanent retirement: a >= cutoff
+  // would stop probing forever once the budget is spent on short openers the PROBE_MIN_WORDS gate discards,
+  // and every un-pinned window after that decodes English by construction (see nextDecodeOptions), silently
+  // transcribing the rest of a non-English import as English. After the burst, keep probing on the steady
+  // PROBE_EVERY cadence until a window finally lands a pin.
+  if (windowCount > PROBE_WINDOW_BUDGET && windowCount % PROBE_EVERY !== 0) return
   let text: string
   try {
     text = await probe(samples)

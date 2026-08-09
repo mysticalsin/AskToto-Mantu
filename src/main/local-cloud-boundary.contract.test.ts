@@ -22,7 +22,9 @@ describe('local processing privacy boundary', () => {
   it('never sends a failed local request to a cloud failover provider', () => {
     const start = source.indexOf('onError: (message) => {')
     expect(start).toBeGreaterThan(-1)
-    const body = source.slice(start, start + 2_600)
+    // Window widened: MQA-101 added the Dust-aware credential-rejection line to onError, pushing the
+    // failover line further down. The invariant is unchanged — local never fails over to cloud.
+    const body = source.slice(start, start + 3_600)
     expect(body).toMatch(/provider !== 'local' && failover\(attempted\.concat\(provider\)\)/)
   })
 

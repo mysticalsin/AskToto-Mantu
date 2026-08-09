@@ -32,7 +32,7 @@ import { HOTKEY_ACTIONS } from '@shared/ipc'
 import { useTapControl } from './lib/tap/tap-control'
 import type { TapProfile } from './lib/tap/classify'
 import { PROVIDERS, isDustReady } from '@shared/providers'
-import { ASSIST_PROMPT, buildNoDecisionPrompt } from '@shared/prompts'
+import { ASSIST_PROMPT, buildNoDecisionPrompt, EMAIL_RECAP_PROMPT, WINS_CLAUSE } from '@shared/prompts'
 import { isScreenCapturePermissionError } from '@shared/screen-capture'
 import { detectNoDecisionEnding } from '@shared/wrapup'
 import { transcriptStateKey } from '@shared/hash'
@@ -1405,32 +1405,48 @@ export function App(): JSX.Element {
   // "provider === 'dust' && !req.agentOverride" model gate) — identical agent, but WITHOUT the agentOverride
   // pin this keeps the designed Dust-down failover (allowCrossProviderFailover): if Dust is unreachable, a
   // configured cloud provider can still draft the email rather than dead-ending on a reconnect message.
+  // Whether to weave our wins / case studies (held by the Spotlight Ref agent) into a grounded summary.
+  // On by default when Spotlight Ref is reachable — the user asked for wins surfaced by default while
+  // still being able to turn them off. Ignored when Spotlight Ref is not connected (nothing to ground).
+  const [includeWins, setIncludeWins] = useState(true)
+  const spotlightRefReady = isDustReady(
+    settings?.hasKeys ?? {},
+    settings?.dustWorkspaceId ?? '',
+    settings?.providerModelsSpotlightRef ?? {}
+  )
+
+  // "Email recap": a paste-ready follow-up email built from the meeting. Routes through Spotlight Ref by
+  // default when it is connected (grounded in our references, and — when the wins toggle is on — our
+  // relevant customer wins), then the base Dust agent, then the user's active cloud provider. Unlike the
+  // old version it no longer HARD-requires Dust: a zero-Dust user still gets a clean email from whatever
+  // provider is configured (EMAIL_RECAP_PROMPT is provider-agnostic).
   const generateFollowup = useCallback(() => {
     const recapText = (pastMeeting ? pastMeeting.recap : ask.answer?.text) ?? ''
     if (!recapText.trim()) return
-    const dustReady = isDustReady(settings?.hasKeys ?? {}, settings?.dustWorkspaceId ?? '', settings?.providerModels ?? {})
-    const refAgent = dustReady ? settings?.providerModels?.['dust'] ?? '' : ''
-    if (!refAgent) {
-      openSettings('ai', 'Connect Dust here to generate a follow-up draft.')
-      return
-    }
+    const refAgent = spotlightRefReady ? settings?.providerModelsSpotlightRef?.['dust'] ?? '' : ''
+    const baseDustReady = isDustReady(settings?.hasKeys ?? {}, settings?.dustWorkspaceId ?? '', settings?.providerModels ?? {})
     const title = pastMeeting?.title
     const prompt =
-      'You are drafting a follow-up email after a meeting. Below is the meeting summary. Write a concise, ' +
-      'professional follow-up email to the participants: a short greeting, a 2-3 sentence recap, then the ' +
-      'action items as a checklist with owners, and a closing line proposing next steps. IMPORTANT: write ' +
-      'the entire email in the SAME LANGUAGE as the summary below — do not translate it.' +
+      EMAIL_RECAP_PROMPT +
+      (refAgent && includeWins ? WINS_CLAUSE : '') +
+      '\n\nWrite the email in the SAME LANGUAGE as the summary below; do not translate it.' +
       (title ? `\n\nMeeting title: ${title}` : '') +
-      `\n\nSummary:\n${recapText}`
-    followup.run({ mode: 'answer', prompt, providerOverride: 'dust' })
+      `\n\nMeeting summary:\n${recapText}`
+    // Spotlight Ref (pinned, grounded) → base Dust → active provider. providerOverride is omitted entirely
+    // for the no-Dust case so the ask uses whatever the user has configured.
+    if (refAgent) followup.run({ mode: 'answer', prompt, agentOverride: refAgent, providerOverride: 'dust' })
+    else if (baseDustReady) followup.run({ mode: 'answer', prompt, providerOverride: 'dust' })
+    else followup.run({ mode: 'answer', prompt })
   }, [
     pastMeeting,
     ask.answer,
     followup.run,
+    includeWins,
+    spotlightRefReady,
     settings?.hasKeys,
     settings?.dustWorkspaceId,
     settings?.providerModels,
-    openSettings
+    settings?.providerModelsSpotlightRef
   ])
 
   const capture = useCallback(async () => {
@@ -2459,6 +2475,7 @@ export function App(): JSX.Element {
         meetingMeta={pm ? { title: pm.title, date: pm.date } : undefined}
         confidential={pm ? pm.confidential : false}
         followupDraft={followup.answer}
+        winsToggle={spotlightRefReady ? { on: includeWins, onToggle: setIncludeWins } : undefined}
         onGenerateFollowup={generateFollowup}
         onGenerateRecap={pm ? () => { if (requireProvider()) generateSavedRecap(pm.file, pm.lines) } : undefined}
         onRetryRecap={pm ? () => { if (requireProvider()) generateSavedRecap(pm.file, pm.lines) } : retryAnswer}

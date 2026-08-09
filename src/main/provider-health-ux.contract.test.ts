@@ -19,8 +19,13 @@ import { join } from 'node:path'
 const indexSrc = readFileSync(join(__dirname, 'index.ts'), 'utf8')
 
 describe('MQA-004 — a rejected credential is recorded, not forgotten', () => {
-  it('records an auth failure on a pre-token error', () => {
-    expect(indexSrc).toMatch(/if \(!gotToken && isAuthFailure\(message\)\) recordAuthFailure\(provider, String\(message\)\)/)
+  it('records an auth failure on a pre-token error, using the Dust-aware matcher for Dust (MQA-101)', () => {
+    // MQA-101 widened this: Dust's current "authenticated credential" wording carries no 401 digits, so
+    // the generic isAuthFailure misses it — the cooldown never trips. dust.ts maintains the matcher.
+    expect(indexSrc).toMatch(
+      /const isCredentialRejection =\s*\n?\s*provider === 'dust' \? isDustAuthError\(\{ message \}\) : isAuthFailure\(message\)/
+    )
+    expect(indexSrc).toMatch(/if \(!gotToken && isCredentialRejection\) recordAuthFailure\(provider, String\(message\)\)/)
   })
 
   it('clears the verdict the moment a provider produces a token', () => {

@@ -445,6 +445,37 @@ async function groupMeetings() {
     return 'on → off'
   })
 
+  await check(g, 'saving a meeting credits the durable time-saved counter', async () => {
+    const before = (await settings()).usageStats
+    const t = `Time Saved Probe ${Date.now()}`
+    await page.evaluate(async (title) => window.toto.saveTranscript({
+      title, mode: 'sales', startedAt: Date.now() - 1_800_000, recap: '',
+      lines: [
+        { speaker: 'you', text: 'Kicking off the renewal.', t: 0 },
+        { speaker: 'them', text: 'We are in.', t: 1_500_000 }
+      ]
+    }), t)
+    const after = (await settings()).usageStats
+    assert(after.meetingsSummarized === before.meetingsSummarized + 1,
+      `meetingsSummarized did not increment: ${before.meetingsSummarized} -> ${after.meetingsSummarized}`)
+    assert(after.conversationMinutes > before.conversationMinutes, 'conversationMinutes did not grow')
+    assert(after.firstMeetingAt > 0, 'firstMeetingAt not set')
+    // Clean up the probe meeting so it does not pollute later checks.
+    const hit = (await page.evaluate(() => window.toto.recallList())).find((m) => m.title === t)
+    if (hit) await page.evaluate((f) => window.toto.recallDelete(f), hit.file)
+    return { meetings: after.meetingsSummarized, minutes: after.conversationMinutes }
+  })
+
+  await check(g, 'the time-saved assumption is exposed and adjustable in settings', async () => {
+    const s = await settings()
+    assert(s.timeSaved && typeof s.timeSaved.writeupRatio === 'number', 'timeSaved assumption missing')
+    const before = s.timeSaved.writeupRatio
+    await patch({ timeSaved: { ...s.timeSaved, writeupRatio: 0.35 } })
+    assert((await settings()).timeSaved.writeupRatio === 0.35, 'assumption did not persist')
+    await patch({ timeSaved: { ...s.timeSaved, writeupRatio: before } })
+    return { restoredTo: before }
+  })
+
   await check(g, 'delete removes it from the list', async () => {
     assert(file, 'no file')
     const res = await page.evaluate((f) => window.toto.recallDelete(f), file)

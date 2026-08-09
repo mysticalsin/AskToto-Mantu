@@ -201,14 +201,33 @@ describe('whisper-import language probe (initial pin off a Parakeet decode of wi
     expect(probe).toHaveBeenCalledTimes(1)
   })
 
-  it('gives up after the probe window budget and leaves auto in place', async () => {
-    const probe = vi.fn().mockResolvedValue('Hello') // never substantive
-    for (let i = 0; i < 7; i++) {
+  it('MQA-106: keeps probing on the PROBE_EVERY cadence after the opening burst instead of retiring at the budget', async () => {
+    // Regression of MQA-012 for the import path. A non-English recording whose opening windows are short
+    // greetings/openers burns the whole PROBE_WINDOW_BUDGET burst on returns the PROBE_MIN_WORDS gate
+    // discards. The old `windowCount >= PROBE_WINDOW_BUDGET` hard cutoff then retired the probe forever, so
+    // every later window decoded un-pinned = ENGLISH (transformers.js does not auto-detect), silently
+    // transcribing the rest of a Portuguese import as English. The burst is an OPENING run, not a
+    // retirement: a substantive window arriving later on the PROBE_EVERY cadence must still be able to pin,
+    // mirroring listen.ts's shouldProbeLanguageWindow.
+    const opener = 'Oi' // one word — always below PROBE_MIN_WORDS, discarded before it can (mis)pin
+    const pt = 'a gente vai ver isso com você, não é, para o contrato'
+    const probe = vi.fn().mockResolvedValue(opener)
+
+    // Windows 0-7: the opening burst plus two off-cadence windows — all openers, none pins.
+    for (let w = 0; w < 8; w++) {
       await probeLanguage(new Float32Array(16), probe)
-      nextDecodeOptions()
+      nextDecodeOptions() // advances windowCount well past PROBE_WINDOW_BUDGET
     }
-    expect(probe).toHaveBeenCalledTimes(5) // PROBE_WINDOW_BUDGET
-    expect(nextDecodeOptions().language).toBeUndefined()
+
+    // The remote side finally says something substantive on the next cadence window (windowCount === 8).
+    probe.mockResolvedValue(pt)
+    await probeLanguage(new Float32Array(16), probe)
+
+    // Without the fix the probe is retired at windowCount >= PROBE_WINDOW_BUDGET, this call never fires, and
+    // the language stays undefined (auto) — the whole rest of the import would decode as English. With the
+    // fix the cadence probe fires and pins Portuguese.
+    expect(probe.mock.calls.length).toBeGreaterThanOrEqual(7) // kept probing past the budget
+    expect(nextDecodeOptions()).toEqual({ return_timestamps: false, language: 'portuguese', task: 'transcribe' })
   })
 })
 
