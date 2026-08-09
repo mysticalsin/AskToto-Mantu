@@ -22,10 +22,11 @@ describe('local processing privacy boundary', () => {
   it('never sends a failed local request to a cloud failover provider', () => {
     const start = source.indexOf('onError: (message) => {')
     expect(start).toBeGreaterThan(-1)
-    // Window widened: MQA-101 added the Dust-aware credential-rejection line to onError, pushing the
-    // failover line further down. The invariant is unchanged — local never fails over to cloud.
-    const body = source.slice(start, start + 3_600)
-    expect(body).toMatch(/provider !== 'local' && failover\(attempted\.concat\(provider\)\)/)
+    // Window widened again: the OmniRoute exhaustion-classification block (rate-limit / quota / usage-cap)
+    // and the retry-window handling were inserted ahead of the failover line, pushing it further down. The
+    // invariant is unchanged — local never fails over to cloud. `preferFree` is the free-first backup flag.
+    const body = source.slice(start, start + 6_200)
+    expect(body).toMatch(/provider !== 'local' && failover\(attempted\.concat\(provider\), preferFree\)/)
   })
 
   it('redacts the screen description before it crosses to a cloud provider (redactSensitive)', () => {

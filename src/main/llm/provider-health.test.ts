@@ -2,9 +2,13 @@ import { describe, it, expect, beforeEach } from 'vitest'
 import {
   AUTH_FAILURES_BEFORE_UNHEALTHY,
   COOLDOWN_MS,
+  QUOTA_COOLDOWN_MS,
+  RATE_LIMIT_COOLDOWN_MS,
   isAuthFailure,
   isCoolingDown,
   recordAuthFailure,
+  recordExhausted,
+  recordRateLimited,
   recordSuccess,
   resetAllProviderHealth,
   resetProviderHealth,
@@ -29,11 +33,9 @@ describe('isAuthFailure — only credential rejections are remembered (MQA-004)'
   it.each([
     '401 Authentication Fails, Your api key: ****0000 is invalid',
     '403 status code (no body)',
-    '402 Insufficient Balance',
     'Unauthorized',
     'invalid_api_key: the key was revoked',
     'Your API key has expired',
-    'insufficient credit remaining',
     'permission denied for this model'
   ])('classifies %j as an auth failure', (msg) => {
     expect(isAuthFailure(msg)).toBe(true)
@@ -46,6 +48,10 @@ describe('isAuthFailure — only credential rejections are remembered (MQA-004)'
     'ECONNRESET',
     'socket hang up',
     'model not found',
+    // Credit / quota exhaustion is NOT an auth failure — exhaustion.ts owns it now, so it gets a 1h
+    // "out of credit" cooldown + message instead of the wrong "re-enter your key" treatment.
+    '402 Insufficient Balance',
+    'insufficient credit remaining',
     ''
   ])('does NOT classify %j as an auth failure', (msg) => {
     expect(isAuthFailure(msg)).toBe(false)
@@ -110,5 +116,60 @@ describe('cooldown lifecycle (MQA-003)', () => {
   it('an untouched provider is never cooling down', () => {
     expect(isCoolingDown('anthropic')).toBe(false)
     expect(unhealthyProviders()).toEqual([])
+  })
+})
+
+describe('kind-aware cooldown — rate-limit / quota / usage-cap (OmniRoute integration)', () => {
+  it('a rate limit cools IMMEDIATELY (one signal), unlike the 2-strike auth path', () => {
+    const t0 = 1_000_000
+    recordRateLimited('anthropic', undefined, t0)
+    expect(isCoolingDown('anthropic', t0)).toBe(true)
+    const u = unhealthyProviders(t0)[0]
+    expect(u.provider).toBe('anthropic')
+    expect(u.reason).toBe('rate-limit')
+    // default 60s window when the server declared no Retry-After
+    expect(u.until).toBe(t0 + RATE_LIMIT_COOLDOWN_MS)
+    expect(isCoolingDown('anthropic', t0 + RATE_LIMIT_COOLDOWN_MS)).toBe(false)
+  })
+
+  it('a rate limit honors the server Retry-After as the cooldown window', () => {
+    const t0 = 2_000_000
+    recordRateLimited('openai', 5 * 60_000, t0)
+    expect(isCoolingDown('openai', t0 + 4 * 60_000)).toBe(true)
+    expect(isCoolingDown('openai', t0 + 5 * 60_000)).toBe(false)
+  })
+
+  it('credit exhaustion cools for ~1h and reads as reason "quota-exhausted"', () => {
+    const t0 = 3_000_000
+    recordExhausted('deepseek', 'quota-exhausted', { message: 'Out of credit.' }, t0)
+    const u = unhealthyProviders(t0)[0]
+    expect(u.reason).toBe('quota-exhausted')
+    expect(u.until).toBe(t0 + QUOTA_COOLDOWN_MS)
+    expect(u.error).toBe('Out of credit.')
+  })
+
+  it('a usage-cap cools until the stated reset instant', () => {
+    const t0 = 4_000_000
+    const resetAt = t0 + 5 * 60 * 60 * 1000 // a 5h session reset
+    recordExhausted('claude-cli', 'usage-cap', { resetAt, message: 'Usage limit reached.' }, t0)
+    expect(unhealthyProviders(t0)[0].reason).toBe('usage-cap')
+    expect(isCoolingDown('claude-cli', resetAt - 1)).toBe(true)
+    // Checked last: isCoolingDown at the expiry instant self-heals by deleting the record.
+    expect(isCoolingDown('claude-cli', resetAt)).toBe(false)
+  })
+
+  it('a success clears a rate-limit / quota verdict the same as an auth one', () => {
+    recordRateLimited('anthropic')
+    recordSuccess('anthropic')
+    expect(isCoolingDown('anthropic')).toBe(false)
+    expect(unhealthyProviders()).toEqual([])
+  })
+
+  it('a bogus far-future reset can never lock a provider out beyond the safety cap', () => {
+    const t0 = 5_000_000
+    const insane = t0 + 3650 * 24 * 60 * 60 * 1000 // ten years
+    recordExhausted('nvidia', 'usage-cap', { resetAt: insane }, t0)
+    // bounded to ≤ ~8 days, so it self-heals rather than dead-locking the provider forever
+    expect(isCoolingDown('nvidia', t0 + 9 * 24 * 60 * 60 * 1000)).toBe(false)
   })
 })

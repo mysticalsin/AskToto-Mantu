@@ -147,7 +147,9 @@ describe('MQA-062 — a dead CLI session stops reporting itself as connected', (
     // 2600-char window from `onError:`, so this seam has only a few characters to spare. The reasoning
     // lives on retireCli at module scope.
     const body = onError()
-    expect(body).toMatch(/if \(!gotToken\) retireCli\(provider, message\)/)
+    // Now gated on !exhaustion too: a usage-cap (a spent Claude Pro / Codex window) is a temporary lockout,
+    // not a dead login, so it must NOT retire the CLI — only a genuine auth failure does.
+    expect(body).toMatch(/if \(!gotToken && !exhaustion\) retireCli\(provider, message\)/)
     expect(body.indexOf('retireCli(provider, message)')).toBeLessThan(
       body.indexOf("if (!gotToken && provider !== 'local' && failover(")
     )

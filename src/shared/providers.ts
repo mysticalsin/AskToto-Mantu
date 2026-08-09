@@ -46,6 +46,12 @@ export interface ProviderDef {
   vision: boolean
   /** Where the user gets a key (shown in the UI). '' = none. */
   keyUrl: string
+  /** Offers a usable free tier (no per-token charge for at least some models). Used ONLY when a paid
+   *  primary runs out of credit/tokens: routing then floats these ahead of other paid providers as the
+   *  "prefer a free backup" policy (index.ts pickFailover, gated on resilience.preferFreeOnExhaustion). It
+   *  never changes the normal first-choice order. Honest, not aspirational: set only where a real free tier
+   *  exists on the run-date. `local` is always free and is handled separately as the on-device floor. */
+  freeTier?: boolean
 }
 
 export const PROVIDERS: Record<ProviderId, ProviderDef> = {
@@ -83,6 +89,7 @@ export const PROVIDERS: Record<ProviderId, ProviderDef> = {
   },
   nvidia: {
     id: 'nvidia',
+    freeTier: true,
     label: 'NVIDIA · NIM',
     blurb: 'Open-weight models hosted on NVIDIA infrastructure, including DeepSeek R1.',
     kind: 'openai',
@@ -175,6 +182,7 @@ export const PROVIDERS: Record<ProviderId, ProviderDef> = {
   },
   openrouter: {
     id: 'openrouter',
+    freeTier: true,
     label: 'OpenRouter',
     blurb: 'One key routes to dozens of models from every major lab.',
     kind: 'openai',
@@ -196,6 +204,7 @@ export const PROVIDERS: Record<ProviderId, ProviderDef> = {
   },
   groq: {
     id: 'groq',
+    freeTier: true,
     label: 'Groq',
     blurb: 'The fastest responses, great for live meetings.',
     kind: 'openai',
@@ -211,6 +220,7 @@ export const PROVIDERS: Record<ProviderId, ProviderDef> = {
   },
   mistral: {
     id: 'mistral',
+    freeTier: true,
     label: 'Mistral',
     blurb: 'European-hosted models, useful where data residency matters.',
     kind: 'openai',
@@ -290,6 +300,7 @@ export const PROVIDERS: Record<ProviderId, ProviderDef> = {
   },
   gemini: {
     id: 'gemini',
+    freeTier: true,
     label: 'Gemini · Google',
     blurb: "Google's models with a very large context window.",
     kind: 'openai',

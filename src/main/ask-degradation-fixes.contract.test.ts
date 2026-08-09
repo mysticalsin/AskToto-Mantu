@@ -30,17 +30,17 @@ describe('MQA-101 — a dead Dust session trips the circuit breaker and shows th
 
 describe('MQA-113 — the local fallback is preferred over a COOLING cloud provider in pickFailover', () => {
   it('picks a healthy provider, then local, then a cooling provider only as the absolute last resort', () => {
-    const pf = indexSrc.slice(indexSrc.indexOf('const healthy = order.find'), indexSrc.indexOf('const healthy = order.find') + 1800)
-    // 1) healthy non-cooling provider first.
-    expect(pf).toMatch(/const healthy = order\.find\(\(p\) => eligible\(p\) && !isCoolingDown\(p\)\)/)
+    const pf = indexSrc.slice(indexSrc.indexOf('const healthy = order.find'), indexSrc.indexOf('const healthy = order.find') + 2400)
+    // 1) healthy non-cooling, in-budget provider first.
+    expect(pf).toMatch(/const healthy = order\.find\(\(p\) => eligible\(p\) && !isCoolingDown\(p\) && !budgetBlocked\(p\)\)/)
     expect(pf).toMatch(/if \(healthy\) return healthy/)
-    // 2) local fallback BEFORE the cooling-cloud last resort — this is the fix: a 2nd/Nth cooling provider
-    //    must not be retried every ask ahead of the ready on-device model.
+    // 2) in-scope local fallback BEFORE the cooling-cloud last resort — this is the fix: a 2nd/Nth cooling
+    //    provider must not be retried every ask ahead of the ready on-device model.
     const localIdx = pf.indexOf("localFallbackEligibleFor(req, s, tier, allowed)) return 'local'")
-    const lastResortIdx = pf.indexOf('return order.find(eligible) ?? null')
+    const lastResortIdx = pf.indexOf('const coolingResort = order.find(eligible)')
     expect(localIdx).toBeGreaterThan(-1)
     expect(lastResortIdx).toBeGreaterThan(-1)
-    expect(localIdx).toBeLessThan(lastResortIdx) // local is checked BEFORE the cooling last resort
+    expect(localIdx).toBeLessThan(lastResortIdx) // in-scope local is checked BEFORE the cooling last resort
   })
 })
 

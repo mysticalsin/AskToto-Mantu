@@ -1,6 +1,8 @@
 import OpenAI from 'openai'
 import type { AskStart } from '@shared/ipc'
+import type { ProviderId } from '@shared/providers'
 import { type StreamOptions, type StreamHandle, errMsg, idleWatchdog, userText, imageMime, VISION_GUARD } from './shared'
+import { noteHeadroomFromHeaders, type HeaderBag } from './usage-headroom'
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 function openaiMessages(req: AskStart, system: string): any[] {
@@ -137,12 +139,26 @@ export function streamOpenAI(opts: StreamOptions): StreamHandle {
         if (opts.llamaSlotOptions.cache_prompt !== undefined) params.cache_prompt = opts.llamaSlotOptions.cache_prompt
       }
 
-      const stream = (await client.chat.completions.create(params, {
-        signal: controller.signal
-      })) as unknown as AsyncIterable<{
+      type ChatStream = AsyncIterable<{
         choices?: { delta?: { content?: string; reasoning_content?: string } }[]
         usage?: { prompt_tokens?: number; completion_tokens?: number }
       }>
+      const apiCall = client.chat.completions.create(params, { signal: controller.signal })
+      // Budget pre-emption: snapshot the provider's rate-limit headers (returned on EVERY response,
+      // success included) so routing can skip this provider BEFORE it 429s next time (usage-headroom.ts).
+      // `.withResponse()` exposes the raw Response without changing the stream we consume; guarded so an SDK
+      // that lacks it, or a proxy that omits the headers, degrades to today's behaviour (fail-open).
+      let stream: ChatStream
+      const withResponse = (
+        apiCall as unknown as { withResponse?: () => Promise<{ data: ChatStream; response?: { headers?: HeaderBag } }> }
+      ).withResponse
+      if (typeof withResponse === 'function') {
+        const wr = await withResponse.call(apiCall)
+        noteHeadroomFromHeaders(opts.providerId as ProviderId, wr.response?.headers)
+        stream = wr.data
+      } else {
+        stream = (await apiCall) as unknown as ChatStream
+      }
       let usage: { prompt_tokens?: number; completion_tokens?: number } | undefined
       let sawReasoning = false
       let sawContent = false

@@ -22,8 +22,10 @@ describe('MQA-004 — a rejected credential is recorded, not forgotten', () => {
   it('records an auth failure on a pre-token error, using the Dust-aware matcher for Dust (MQA-101)', () => {
     // MQA-101 widened this: Dust's current "authenticated credential" wording carries no 401 digits, so
     // the generic isAuthFailure misses it — the cooldown never trips. dust.ts maintains the matcher.
+    // Gated on !exhaustion now: an exhaustion signal (429 / credit / usage-cap) is classified FIRST and must
+    // not be double-counted as a credential rejection (e.g. a "403 insufficient_quota" is out-of-credit).
     expect(indexSrc).toMatch(
-      /const isCredentialRejection =\s*\n?\s*provider === 'dust' \? isDustAuthError\(\{ message \}\) : isAuthFailure\(message\)/
+      /const isCredentialRejection =\s*\n?\s*!exhaustion && \(provider === 'dust' \? isDustAuthError\(\{ message \}\) : isAuthFailure\(message\)\)/
     )
     expect(indexSrc).toMatch(/if \(!gotToken && isCredentialRejection\) recordAuthFailure\(provider, String\(message\)\)/)
   })
@@ -45,7 +47,12 @@ describe('MQA-004 — a rejected credential is recorded, not forgotten', () => {
 
 describe('MQA-003 / MQA-021 — a dead provider is demoted, never re-tried first forever', () => {
   it('skips a cooling-down provider when choosing the FIRST provider to try', () => {
-    expect(indexSrc).toMatch(/const skipDeadPrimary = isCoolingDown\(primary\) \? pickFailover\(\[primary\]\) : null/)
+    // The skip now also fires when the primary's live budget is nearly spent (resilience.budgetPreempt),
+    // not only when its credentials were rejected — both mean "don't re-pay this primary's round trip".
+    expect(indexSrc).toMatch(
+      /const primaryUnavailable =\s*\n?\s*isCoolingDown\(primary\) \|\| \(s\.resilience\.budgetPreempt && isBudgetExhausted\(primary\)\)/
+    )
+    expect(indexSrc).toMatch(/const skipDeadPrimary = primaryUnavailable \? pickFailover\(\[primary\]\) : null/)
     expect(indexSrc).toMatch(/attempt\(skipDeadPrimary \?\? primary, skipDeadPrimary \? \[primary\] : \[\]\)/)
   })
 
@@ -53,9 +60,13 @@ describe('MQA-003 / MQA-021 — a dead provider is demoted, never re-tried first
     // Ordered passes, not a filter: a cooling provider is demoted (never a hard block, or one revoked key
     // would lock a user out of their only provider), but it now sits BELOW the local fallback (MQA-113) so
     // a 2nd/Nth dead provider is not re-walked every ask ahead of the ready on-device model.
-    expect(indexSrc).toMatch(/const healthy = order\.find\(\(p\) => eligible\(p\) && !isCoolingDown\(p\)\)/)
+    // healthy now also excludes a provider whose live budget is nearly spent (budgetPreempt, fail-open).
+    expect(indexSrc).toMatch(
+      /const healthy = order\.find\(\(p\) => eligible\(p\) && !isCoolingDown\(p\) && !budgetBlocked\(p\)\)/
+    )
     expect(indexSrc).toMatch(/if \(healthy\) return healthy/)
-    expect(indexSrc).toMatch(/return order\.find\(eligible\) \?\? null/)
+    // The cooling last-resort is now captured before the on-device answer-floor is offered below it.
+    expect(indexSrc).toMatch(/const coolingResort = order\.find\(eligible\)/)
   })
 
   it('a substituted primary stays in `attempted`, so the walk never circles back to it', () => {

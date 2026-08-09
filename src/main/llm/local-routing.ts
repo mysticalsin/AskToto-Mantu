@@ -103,6 +103,28 @@ export function localFallbackEligibleFor(
 }
 
 /**
+ * The ABSOLUTE floor: may 'local' answer THIS request as the strictly-last resort even for a mode that is
+ * out of its normal v1 scope (answer/recap) and at any tier? This is the "worst case, no API needed"
+ * guarantee — when every cloud/CLI provider is exhausted (rate-limited, out of credit, capped, or simply
+ * not configured) and even the free-aggregator hop can't serve, a weak on-device answer beats handing the
+ * user an error. Deliberately looser than localFallbackEligibleFor (which stays scoped to suggest/summary/
+ * vision at base tier, the modes local is actually good at): this ignores mode-scope and tier because the
+ * alternative here is not "a better cloud answer" but "no answer at all".
+ *
+ * Gated only on the same safety-net toggle (localLlm.fallback) and base readiness. index.ts's pickFailover
+ * places this DEAD LAST — after even a cooling cloud provider that might recover — so it can never preempt
+ * a real provider; it only catches the case where the walk would otherwise dead-end at null.
+ */
+export function localAnswerFloorEligibleFor(
+  req: { mode: AskMode },
+  s: Pick<Settings, 'localLlm'>,
+  allowed: string[] | null
+): boolean {
+  if (!s.localLlm.fallback) return false
+  return localBaseReady(s, allowed)
+}
+
+/**
  * The screenshot toggle is a privacy policy, not only a routing preference. It is intentionally based on
  * user intent rather than current runtime readiness: if installer assets are damaged or org policy blocks
  * local, the request must fail locally with no upload instead of quietly selecting a cloud provider.
