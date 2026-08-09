@@ -49,10 +49,13 @@ describe('MQA-003 / MQA-021 — a dead provider is demoted, never re-tried first
     expect(indexSrc).toMatch(/attempt\(skipDeadPrimary \?\? primary, skipDeadPrimary \? \[primary\] : \[\]\)/)
   })
 
-  it('prefers a healthy candidate in the failover walk but still allows a cooling one as last resort', () => {
-    // Two passes, not a filter: demoting must never become a hard block, or one revoked key would lock
-    // a user out of the only provider they have configured.
-    expect(indexSrc).toMatch(/order\.find\(\(p\) => eligible\(p\) && !isCoolingDown\(p\)\) \?\? order\.find\(eligible\)/)
+  it('prefers a healthy candidate, then the local fallback, then a cooling one as the absolute last resort', () => {
+    // Ordered passes, not a filter: a cooling provider is demoted (never a hard block, or one revoked key
+    // would lock a user out of their only provider), but it now sits BELOW the local fallback (MQA-113) so
+    // a 2nd/Nth dead provider is not re-walked every ask ahead of the ready on-device model.
+    expect(indexSrc).toMatch(/const healthy = order\.find\(\(p\) => eligible\(p\) && !isCoolingDown\(p\)\)/)
+    expect(indexSrc).toMatch(/if \(healthy\) return healthy/)
+    expect(indexSrc).toMatch(/return order\.find\(eligible\) \?\? null/)
   })
 
   it('a substituted primary stays in `attempted`, so the walk never circles back to it', () => {

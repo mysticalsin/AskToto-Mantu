@@ -13,6 +13,7 @@ import {
   combineWindowExtractions,
   verifyExtraction,
   mergeExtraction,
+  parseExtractionPayload,
   enqueueIngest
 } from './ingest'
 import { readDeal, readMeetingExtraction, slugify } from './store'
@@ -481,5 +482,59 @@ describe('render-gate property — no unverified figure ever shown (Task MI-4 he
       expect(containsDistinctiveValue(formatDeal(deal))).toBe(true)
       expect(containsDistinctiveValue(renderMarsMarkdown(buildMarsWeek([], [deal], Date.now())))).toBe(true)
     }
+  })
+})
+
+// MQA-112/114/116 (docs/qa/BUG-LEDGER.md): robustness of parseExtractionPayload against the small bundled
+// model's real-world output. These were found by a physical deep test driving on-device indexing.
+describe('parseExtractionPayload — resilience to on-device model output', () => {
+  const base = (over = {}) =>
+    JSON.stringify({
+      title24: 'Intro call',
+      commitments: [{ text: 'Send the deck', by: 'you', due_hint: '', quote: '', confidence: 'EXTRACTED' }],
+      ...over
+    })
+
+  it('MQA-112: a null sub-field no longer fails the whole extraction (account with no name → null, deal keeps its signal)', () => {
+    // The 0.8B model routinely returns {name: null} for a generic meeting instead of nulling the object.
+    const out = parseExtractionPayload(base({ account: { name: null }, deal: { name: null, stage: 'proposal' } }))
+    // An account needs a name (required field, no default) — a nameless one collapses to null.
+    expect(out.account).toBeNull()
+    // A deal legitimately carries a stage signal without a named deal — it survives, name defaults to ''.
+    expect(out.deal?.stage).toBe('proposal')
+    expect(out.deal?.name).toBe('')
+    // …and above all, the meeting's real commitments survive rather than being lost with a rejected parse.
+    expect(out.commitments.map((c) => c.text)).toEqual(['Send the deck'])
+  })
+
+  it('MQA-112: a real named account/deal still parses normally', () => {
+    const out = parseExtractionPayload(base({ account: { name: 'Acme Corp' }, deal: { name: 'Acme Renewal' } }))
+    expect(out.account?.name).toBe('Acme Corp')
+    expect(out.deal?.name).toBe('Acme Renewal')
+  })
+
+  it('MQA-114: a genuinely invalid payload throws a CLEAN message, not a raw ZodError JSON dump', () => {
+    let msg = ''
+    try {
+      parseExtractionPayload(JSON.stringify({ title24: 'x', topics: 'not-an-array' }))
+    } catch (e) {
+      msg = e instanceof Error ? e.message : String(e)
+    }
+    expect(msg).toMatch(/did not match the expected meeting shape/)
+    expect(msg).not.toContain('"code"') // never the serialized ZodError issue array
+    expect(msg).not.toContain('[\n')
+  })
+
+  it('MQA-116: speaker-role labels (You/Them) are dropped from people[], real names kept', () => {
+    const out = parseExtractionPayload(
+      base({
+        people: [
+          { name: 'Them', role: '', org: '', confidence: 'EXTRACTED' },
+          { name: 'you', role: '', org: '', confidence: 'EXTRACTED' },
+          { name: 'Alice Adams', role: 'CTO', org: 'Acme', confidence: 'EXTRACTED' }
+        ]
+      })
+    )
+    expect(out.people.map((p) => p.name)).toEqual(['Alice Adams'])
   })
 })

@@ -654,9 +654,16 @@ export async function saveNote(settings: Settings, n: SaveNote): Promise<string>
  *  can never disagree about how long a call was. */
 export function meetingDurationMin(m: { startedAt: number; lines: { t: number }[] }): number {
   if (!m.lines.length) return 0
-  const started = m.startedAt && Number.isFinite(m.startedAt) ? m.startedAt : 0
-  const last = m.lines[m.lines.length - 1].t
-  return Math.max(1, Math.round((last - started) / 60000))
+  // MQA-111: the transcript's OWN span (last line minus first line), not last-line-minus-startedAt. Line
+  // `t` is documented as a ms offset in some callers (imports build lines with t starting at 0) and a
+  // wall-clock timestamp in others (the live renderer stamps Date.now()). Subtracting the absolute
+  // startedAt from an offset `t` produced a huge negative that clamped to 1, so every import (and any
+  // offset-t caller) credited a 1-minute meeting and corrupted the time-saved total. The span is correct
+  // under BOTH conventions: offsets → last-0, timestamps → last-first ≈ elapsed.
+  const ts = m.lines.map((l) => l.t).filter((t) => Number.isFinite(t))
+  if (!ts.length) return 0
+  const span = Math.max(...ts) - Math.min(...ts)
+  return Math.max(1, Math.round(span / 60000))
 }
 
 /** Write a meeting as Dust-readable markdown + frontmatter. Returns the file path. */

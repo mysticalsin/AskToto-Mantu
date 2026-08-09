@@ -7,7 +7,7 @@ import { PROVIDER_IDS } from '@shared/providers'
 import { BrainIndexSchema } from '@shared/brain'
 import type { StreamHandlers, StreamOptions, StreamHandle } from '../llm/shared'
 import { clearApiKey, getSettings, setApiKey, setSettings } from '../store'
-import { brainBackfillProgress, ingestFailureCounts, startBackfill, MAX_INGEST_ATTEMPTS, whenIndexWritesSettle } from './ingest'
+import { brainBackfillProgress, ingestFailureCounts, ingestFailureDetails, startBackfill, MAX_INGEST_ATTEMPTS, whenIndexWritesSettle } from './ingest'
 import { readIndex } from './store'
 
 vi.mock('electron')
@@ -238,6 +238,25 @@ describe('ingestFailureCounts (T6 6c)', () => {
     expect(result.failed).toBe(2)
     expect(result.exhausted).toBe(0)
     expect(result.topError).toBeUndefined()
+  })
+
+  // MQA-049 (docs/qa/BUG-LEDGER.md): enqueueIngest writes an honest durable PENDING record (ok:false, no
+  // error, attempts:0) BEFORE extraction starts. That is not a failure — counting it lit a false red
+  // "needs attention" banner and an attention item reading "Failed to index: Unknown error" for a meeting
+  // that had only just been queued. isPendingIngestRecord must exclude it from both counts and details.
+  it('does not count a just-queued pending record as a failure (MQA-049)', () => {
+    const idx = BrainIndexSchema.parse({
+      ingested: {
+        'queued.md': { at: 5, ok: false, attempts: 0 }, // the pre-extraction pending marker — NOT a failure
+        'reallyfailed.md': { at: 6, ok: false, error: '503 Service Unavailable', attempts: 2 }
+      }
+    })
+    const counts = ingestFailureCounts(idx)
+    expect(counts.failed).toBe(1) // only the genuinely-failed one
+    expect(counts.exhausted).toBe(0)
+    const details = ingestFailureDetails(idx)
+    expect(details.map((d) => d.file)).toEqual(['reallyfailed.md']) // the pending one is absent
+    expect(details.some((d) => /unknown error/i.test(d.error))).toBe(false)
   })
 
   // MQA-108 (docs/qa/BUG-LEDGER.md): topError flows into the dashboard's failure banner. A shared fs

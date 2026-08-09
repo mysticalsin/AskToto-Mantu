@@ -122,36 +122,74 @@ const OptionalDealCloseDateSchema = z.preprocess(
 )
 
 /** One meeting's structured extraction — the unit the ingest LLM call must return as pure JSON. */
+// MQA-112: the small bundled model (qwen3.5-0.8b) frequently returns an account/deal object with a null
+// sub-field — most often `name: null` for a generic meeting with no company — instead of nulling the whole
+// object. Every required string sub-field then fails Zod (`expected string, received null`), which failed
+// the ENTIRE extraction and lost the meeting's real commitments. Turn any null field into undefined so the
+// field's default applies instead of hard-rejecting. Applied as a preprocess so the object shape below
+// stays the single source of truth for the fields.
+// Turn the listed fields' null values into undefined so their schema DEFAULT applies instead of Zod
+// hard-rejecting a `received null`. Deliberately field-scoped, not blanket: the deal's amount/close_date/
+// win_likelihood_band sidecars have their OWN null handling (OptionalDealAmountSchema etc.) and must be
+// left untouched — a blanket null→undefined broke their documented "null stays null" contract.
+function nullFieldsToUndefined(v: unknown, fields: string[]): unknown {
+  if (v == null || typeof v !== 'object') return v
+  const out: Record<string, unknown> = { ...(v as Record<string, unknown>) }
+  for (const k of fields) if (out[k] === null) out[k] = undefined
+  return out
+}
+
+// An ACCOUNT with no usable name is not a real account (its `name` is a required field with no default —
+// a nameless account never existed before). Collapse it to null. All its fields are plain (name/sector/
+// confidences), so null-normalize them all first.
+function collapseNamelessAccount(v: unknown): unknown {
+  const c = nullFieldsToUndefined(v, ['name', 'sector', 'sector_confidence', 'confidence'])
+  if (c && typeof c === 'object' && ((c as Record<string, unknown>).name ?? '') === '') return null
+  return c
+}
+
+// A DEAL keeps its stage/band/velocity signal even without a named deal, so it is only null-normalized on
+// its plain string fields — never the amount/close_date/band sidecars, which own their null handling.
+function normalizeDealNulls(v: unknown): unknown {
+  return nullFieldsToUndefined(v, ['name', 'stage', 'band_evidence'])
+}
+
 export const MeetingExtractionSchema = z.object({
   schema_version: z.number().default(BRAIN_SCHEMA_VERSION),
   title24: z.string().default(''),
   topics: z.array(z.string()).default([]),
   sentiment: BandSchema.default('mixed'),
-  account: z
-    .object({
-      name: z.string(),
-      sector: SectorSchema.default('other'),
-      sector_confidence: ConfidenceSchema.default('INFERRED'),
-      confidence: ConfidenceSchema.default('EXTRACTED')
-    })
-    .nullable()
-    .default(null),
+  account: z.preprocess(
+    collapseNamelessAccount,
+    z
+      .object({
+        name: z.string(),
+        sector: SectorSchema.default('other'),
+        sector_confidence: ConfidenceSchema.default('INFERRED'),
+        confidence: ConfidenceSchema.default('EXTRACTED')
+      })
+      .nullable()
+      .default(null)
+  ),
   people: z.array(MeetingPersonSchema).default([]),
-  deal: z
-    .object({
-      name: z.string().default(''),
-      stage: z.string().default(''),
-      win_likelihood_band: BandSchema.nullable().default(null),
-      band_evidence: z.string().default(''),
-      velocity: VelocitySchema.default({ signal: 'no-hard-date-found', evidence: '' }),
-      // MI-4: only ever set when an amount/close date was EXPLICITLY stated with a quotable moment —
-      // omitted (not a guessed/inferred figure) otherwise. Verified against the transcript by
-      // ingest.ts's verifyExtraction() before it can reach the DealEntity's amount/close_date sidecars.
-      amount: OptionalDealAmountSchema,
-      close_date: OptionalDealCloseDateSchema
-    })
-    .nullable()
-    .default(null),
+  deal: z.preprocess(
+    normalizeDealNulls,
+    z
+      .object({
+        name: z.string().default(''),
+        stage: z.string().default(''),
+        win_likelihood_band: BandSchema.nullable().default(null),
+        band_evidence: z.string().default(''),
+        velocity: VelocitySchema.default({ signal: 'no-hard-date-found', evidence: '' }),
+        // MI-4: only ever set when an amount/close date was EXPLICITLY stated with a quotable moment —
+        // omitted (not a guessed/inferred figure) otherwise. Verified against the transcript by
+        // ingest.ts's verifyExtraction() before it can reach the DealEntity's amount/close_date sidecars.
+        amount: OptionalDealAmountSchema,
+        close_date: OptionalDealCloseDateSchema
+      })
+      .nullable()
+      .default(null)
+  ),
   signals: z.array(MeetingSignalSchema).default([]),
   missed_signals: z
     .array(

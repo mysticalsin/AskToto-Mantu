@@ -523,9 +523,12 @@ async function groupBrain() {
     return { items: att.items.length, kinds: [...new Set(att.items.map((i) => i.kind))] }
   })
   await check(g, 'entity names feed answers (drives ASR casing bias)', async () => {
-    const names = await page.evaluate(() => window.toto.brainEntityNames())
-    assert(names && typeof names === 'object', 'entity names malformed')
-    return { people: names.people?.length ?? 0, accounts: names.accounts?.length ?? 0 }
+    // MQA-115: BrainEntityNamesResult is a FLAT { names: string[] } (shared/ipc.ts), not
+    // { people, accounts } — the old check read the wrong shape and always reported 0/0 regardless of
+    // real indexed content.
+    const res = await page.evaluate(() => window.toto.brainEntityNames())
+    assert(res && Array.isArray(res.names), 'entity names malformed (expected { names: string[] })')
+    return { names: res.names.length, sample: res.names.slice(0, 4) }
   })
   await check(g, 'a second backfill on an already-indexed folder is a cheap no-op, not a re-extraction', async () => {
     const before = await page.evaluate(() => window.toto.brainStatus())

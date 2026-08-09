@@ -2984,19 +2984,19 @@ function registerIpc(): void {
             !!resolveModelTier(p, s.providerModels, s.providerModelsThinking, tier, s.providerModelsDeep))
         )
       }
-      // MQA-003: prefer a provider that has not just had its credentials rejected. Deliberately two
-      // passes rather than a filter — a cooling provider is still a legitimate last resort, so it is
-      // demoted, never removed. Skipping it outright would let one revoked key lock a user out of the
-      // only provider they have configured.
-      const found = order.find((p) => eligible(p) && !isCoolingDown(p)) ?? order.find(eligible)
-      if (found) return found
-      // Safety net (localLlm.fallback): every cloud/CLI candidate is tried or unconfigured — offer the
-      // on-device model as the strictly-LAST resort so an in-scope ask still gets answered instead of
-      // dying with a provider error. Checked only after the find() above so local-by-fallback can never
-      // jump ahead of an untried cloud candidate (useFor-driven local keeps its normal position via
-      // localEligibleFor inside the find). Same mode-scope + tier + localBaseReady gates as everywhere.
+      // MQA-003: prefer a provider whose credentials have NOT just been rejected.
+      const healthy = order.find((p) => eligible(p) && !isCoolingDown(p))
+      if (healthy) return healthy
+      // MQA-113: the on-device fallback is preferred over a provider that is currently cooling down. The
+      // first unhealthy provider is skipped above, but a SECOND (or Nth) simultaneously-cooling cloud
+      // provider used to be returned by the old "?? order.find(eligible)" last resort — so every ask
+      // re-walked a known-dead provider (deepseek down AND nvidia down → nvidia retried forever) instead
+      // of going straight to local. Local is the honest next hop when all cloud is cooling.
       if (!tried.includes('local') && localFallbackEligibleFor(req, s, tier, allowed)) return 'local'
-      return null
+      // Absolute last resort: a cooling cloud/CLI provider is still better than dead-ending with an error
+      // when local cannot serve this request (out of local's mode scope, or not provisioned). A cooling
+      // provider is demoted, never removed — one revoked key must not lock a user out of their only provider.
+      return order.find(eligible) ?? null
     }
     // Find the next eligible keyed provider not yet tried and start it — for failover when the primary
     // can't answer (Dust down → your configured Claude/GPT key takes over).

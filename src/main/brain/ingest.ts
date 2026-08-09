@@ -516,7 +516,7 @@ function verifyBandEvidence(bandEvidence: string, transcript: string): boolean {
  * the rest of a valid meeting extraction. Preserve the strict persisted schema by removing only those
  * malformed optional entries before validation.
  */
-function parseExtractionPayload(raw: string): MeetingExtraction {
+export function parseExtractionPayload(raw: string): MeetingExtraction {
   const payload: unknown = JSON.parse(extractJsonObject(raw))
   if (payload && typeof payload === 'object' && !Array.isArray(payload)) {
     const extraction = payload as Record<string, unknown>
@@ -531,8 +531,26 @@ function parseExtractionPayload(raw: string): MeetingExtraction {
         : []
     }
   }
-  return MeetingExtractionSchema.parse(payload)
+  // MQA-114: a ZodError's `.message` is the ENTIRE issue array serialized as JSON. That string was flowing
+  // straight into the ingest_failed attention item's user-facing detail ("Failed to index: [ { code: ... "),
+  // dumping a raw schema error at the user. Summarize the first issue into a short, honest reason instead;
+  // the full validation failure is still recoverable from the model output on a manual retry.
+  const result = MeetingExtractionSchema.safeParse(payload)
+  if (!result.success) {
+    const issue = result.error.issues[0]
+    const where = issue?.path?.length ? issue.path.join('.') : 'the response'
+    throw new Error(`The model's summary did not match the expected meeting shape (at ${where}).`)
+  }
+  // MQA-116: the model sometimes lists the transcript's speaker-ROLE labels ('You'/'Them') as if they were
+  // real participants, so they land in people[] and become fake entities the brain then flags as
+  // "linked to multiple accounts". Drop them here — a commitment spoken "by them"/"by you" still routes
+  // correctly through mergeExtraction's own by='them'/'you' handling, which does not depend on a person row.
+  result.data.people = result.data.people.filter((p) => !SPEAKER_ROLE_LABELS.has(p.name.trim().toLowerCase()))
+  return result.data
 }
+
+/** Transcript speaker-role labels that are never real person names (MQA-116). */
+const SPEAKER_ROLE_LABELS = new Set(['you', 'them', 'me', 'unknown', 'speaker', 'participant', 'other'])
 
 async function extractMeeting(
   s: Settings,

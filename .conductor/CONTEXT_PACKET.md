@@ -1,19 +1,26 @@
-# Context Packet — 2026-08-09-0115
+# Context Packet — 2026-08-09-0204
 
 ## Project: Asktoto
 ## Branch: fix/windows-audit-and-release-gate
 
 ## Uncommitted Changes
  M .conductor/CONTEXT_PACKET.md
- M src/main/pinned-agent-boundary.contract.test.ts
- M src/renderer/src/App.tsx
+ M docs/qa/BUG-LEDGER.md
+ M src/main/brain/ingest-resilience.test.ts
+ M src/main/store.test.ts
+ M src/main/store.ts
+ M src/renderer/src/components/Settings.tsx
+?? scripts/qa/deep-brain.mjs
+?? scripts/qa/deep-routing-probe2.mjs
+?? scripts/qa/deep-routing-probe3.mjs
+?? scripts/qa/deep-routing.mjs
 
 ## Recent Commits (last 5)
+c9d9bb0 fix(quick-actions): unblock What-to-say-next and Summarize on a zero-API-key install
+9dd39ff fix(review): draft the email recap via the base Métis Dust agent, use Spotlight Ref only for wins
 5d99d18 feat: time-saved estimate, email recap via Spotlight Ref, and 10 re-audit fixes
 6584b0e fix(brain): reset speaker session labels at the meeting boundary, close the duplicate cooldown row
 fc38f78 chore(conductor): refresh context packet after the QA sweep
-c481051 fix(qa): close the remaining audited findings and constrain on-device JSON decoding
-0f28626 fix(qa): close 23 high-severity audited findings, each pinned by a regression test
 
 ## Active Tasks
 
