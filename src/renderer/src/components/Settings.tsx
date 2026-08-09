@@ -58,8 +58,10 @@ import {
   Eye,
   Settings2,
   Lock,
+  Timer,
   type LucideIcon
 } from 'lucide-react'
+import { formatSavedTime, timeSavedFromTotals } from '@shared/time-saved'
 import {
   DEFAULT_SHORTCUTS,
   HOTKEY_ACTIONS,
@@ -5366,6 +5368,122 @@ let lastMeetings: MeetingSummary[] | null = null
  * (graphs), the knowledge-graph builder, and the recent meetings history with follow-up entry points.
  * Navigation is delegated to the parent (BrainView / History / a meeting's Review are top-level views).
  */
+/**
+ * Time saved — the durable lifetime figure, plus the transparent assumption editor. The estimate is
+ * recomputed live as the user drags the sliders, so the number is visibly THEIRS: they can see exactly
+ * what write-up-per-meeting assumption produces it. Honest by construction — an "≈", the word "estimate",
+ * and every input on screen. A managed/locked `timeSaved` key disables the editor (org policy wins), like
+ * every other locked setting.
+ */
+function TimeSavedSettings({
+  settings,
+  patch
+}: {
+  settings: PublicSettings
+  patch: (p: Partial<PublicSettings>) => void
+}): JSX.Element {
+  const a = settings.timeSaved
+  const saved = timeSavedFromTotals(settings.usageStats, a)
+  const locked = settings.managedKeys?.includes('timeSaved') ?? false
+  const setAssumption = (next: Partial<typeof a>): void => patch({ timeSaved: { ...a, ...next } })
+  const NumberRow = ({
+    label,
+    value,
+    min,
+    max,
+    step,
+    suffix,
+    onChange
+  }: {
+    label: string
+    value: number
+    min: number
+    max: number
+    step: number
+    suffix: string
+    onChange: (v: number) => void
+  }): JSX.Element => (
+    <label className="flex items-center justify-between gap-3 py-1">
+      <span className="text-[12px] text-[color:var(--cl-foreground)]">{label}</span>
+      <span className="flex items-center gap-2">
+        <input
+          type="range"
+          min={min}
+          max={max}
+          step={step}
+          value={value}
+          disabled={locked}
+          onChange={(e) => onChange(Number(e.target.value))}
+          className="no-drag h-1 w-32 cursor-pointer accent-[var(--cl-primary)] disabled:cursor-not-allowed"
+        />
+        <span className="w-14 shrink-0 text-right text-[12px] tabular-nums text-[color:var(--cl-muted-foreground)]">
+          {value}
+          {suffix}
+        </span>
+      </span>
+    </label>
+  )
+  return (
+    <Section
+      title="Time saved"
+      desc="An honest estimate of the meeting write-up Métis has done for you. Adjust the assumption below — the number is yours."
+      icon={Timer}
+    >
+      <div className="cl-card px-3.5 py-3">
+        {saved.meetings === 0 ? (
+          <div className="text-[12px] text-[color:var(--cl-muted-foreground)]">
+            Summarize your first meeting and your time saved shows up here.
+          </div>
+        ) : (
+          <>
+            <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
+              <span className="font-ui text-[24px] font-semibold leading-none text-[color:var(--cl-foreground)]">
+                ≈ {formatSavedTime(saved.savedMinutes)}
+              </span>
+              <span className="text-[11px] text-[color:var(--cl-muted-foreground)]">
+                across {saved.meetings} meeting{saved.meetings === 1 ? '' : 's'} ({Math.round((saved.conversationMinutes / 60) * 10) / 10}h of conversation)
+              </span>
+            </div>
+            <div className="mt-3 flex flex-col gap-0.5 border-t border-[var(--cl-border)] pt-2">
+              <NumberRow
+                label="Write-up time, as % of the meeting"
+                value={Math.round(a.writeupRatio * 100)}
+                min={0}
+                max={60}
+                step={5}
+                suffix="%"
+                onChange={(v) => setAssumption({ writeupRatio: v / 100 })}
+              />
+              <NumberRow
+                label="Minimum credited per meeting"
+                value={a.floorMin}
+                min={0}
+                max={30}
+                step={1}
+                suffix=" min"
+                onChange={(v) => setAssumption({ floorMin: v })}
+              />
+              <NumberRow
+                label="Maximum credited per meeting"
+                value={a.capMin}
+                min={5}
+                max={90}
+                step={5}
+                suffix=" min"
+                onChange={(v) => setAssumption({ capMin: v })}
+              />
+            </div>
+            <div className="mt-2 text-[10.5px] text-[color:var(--cl-muted-foreground)]">
+              Currently crediting ~{saved.perMeetingAvgMin} min of write-up avoided per meeting. This is an
+              estimate, not a measured figure.{locked ? ' Managed by your organization.' : ''}
+            </div>
+          </>
+        )}
+      </div>
+    </Section>
+  )
+}
+
 function IntelligenceTab({
   settings,
   patch,
@@ -5423,6 +5541,8 @@ function IntelligenceTab({
           </button>
         </div>
       </Section>
+
+      <TimeSavedSettings settings={settings} patch={patch} />
 
       <Section
         title="Meetings & follow-up"

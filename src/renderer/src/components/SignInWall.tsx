@@ -41,6 +41,9 @@ export function SignInWall({
 }): JSX.Element {
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState<string | null>(null)
+  // MQA-107 escape hatch. `idle` → show the subtle reset link; `confirm` → a one-line confirm; `busy` →
+  // the reset is running. Kept separate from `busy` (sign-in) so a stuck sign-in and a reset never race.
+  const [resetPhase, setResetPhase] = useState<'idle' | 'confirm' | 'busy'>('idle')
   const domainLabel = status.domain ? `@${status.domain}` : 'your organization'
   const go = async (): Promise<void> => {
     setBusy(true)
@@ -67,6 +70,40 @@ export function SignInWall({
   const cancel = (): void => {
     setBusy(false)
     setErr(null)
+  }
+
+  // MQA-107 — the ledger's own remedy item 2. A well-formed but factually-WRONG self-serve tenant GUID (a
+  // digit-swap typo, or someone else's tenant) passes the shape check, so `configured` is true and this
+  // wall is up, yet every sign-in fails the tenant compare and the Settings ID fields lock behind the wall
+  // — an unrecoverable in-app brick. Offer the escape hatch ONLY when enforcement is self-serve, never for
+  // an IT/env-locked fleet: gate on no live session AND `!enforced` (env/managed requireAuth and
+  // sticky-configured all set `enforced`; a self-serve config that has never signed in does not). The main
+  // process re-checks every gate independently in main/auth.ts (resetSelfServeSso) — including admin-trusted
+  // managed-config, which is not distinguishable from this side — so a fleet lock can never be cleared here.
+  const canReset = !status.signedIn && !status.enforced
+  /** Clear a bricked self-serve Microsoft sign-in setup, then re-bootstrap into the now-usable state. */
+  const doReset = async (): Promise<void> => {
+    setResetPhase('busy')
+    setErr(null)
+    try {
+      // signOut() with no live session routes to main/auth.ts's escape hatch, which clears the self-serve
+      // azure* Settings (the only in-app path that can, since settingsSet is blocked by requireAuth here).
+      await window.toto.signOut()
+      const next = await window.toto.authStatus()
+      if (next.configured || next.enforced) {
+        // Refused or ineffective: enforcement is admin-managed or env-forced, not self-serve. Say so
+        // plainly rather than leaving a dead button — this is the IT-locked fleet the gate protects.
+        setResetPhase('idle')
+        setErr('Microsoft sign-in is managed by your administrator and can’t be reset here. Contact your IT admin.')
+        return
+      }
+      // Self-serve setup cleared — reload so the whole app re-bootstraps and App.tsx drops this wall on its
+      // fresh authStatus read, instead of waiting on the 5-minute auth poll. Rare, deliberate recovery.
+      window.location.reload()
+    } catch (e) {
+      setResetPhase('idle')
+      setErr(friendlyAuthError(e instanceof Error ? e.message : 'Reset failed.', domainLabel))
+    }
   }
   return (
     <div className="cl-root fade-up relative flex min-h-[360px] w-full flex-col items-center justify-center gap-7 overflow-hidden rounded-2xl border border-[var(--cl-border)] p-8 text-center">
@@ -119,6 +156,57 @@ export function SignInWall({
             <div className="flex max-w-[300px] items-start gap-2 rounded-[10px] border border-[var(--color-danger)]/30 bg-[var(--color-danger)]/10 px-3 py-2 text-left">
               <AlertCircle size={14} className="mt-0.5 shrink-0 text-[var(--color-danger)]" />
               <span className="text-[12px] leading-snug text-[var(--color-danger)]">{err}</span>
+            </div>
+          )}
+
+          {/* MQA-107 — recovery from a wrong-tenant self-serve setup. Hidden during an active sign-in and
+              for IT/env-locked fleets (see canReset). */}
+          {canReset && !busy && (
+            <div className="mt-1 flex w-full flex-col items-center gap-2">
+              {resetPhase === 'idle' && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setErr(null)
+                    setResetPhase('confirm')
+                  }}
+                  className="no-drag cl-focus text-[11px] font-medium text-[color:var(--cl-muted-foreground)] underline underline-offset-2 transition hover:text-[color:var(--cl-foreground)]"
+                >
+                  Wrong organization? Reset Microsoft sign-in setup
+                </button>
+              )}
+
+              {resetPhase === 'confirm' && (
+                <div className="flex max-w-[300px] flex-col items-center gap-2.5 rounded-[10px] border border-[var(--cl-border)] px-3 py-2.5 text-center">
+                  <p className="text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
+                    Clears the Microsoft sign-in setup on this device so you can re-enter it in Settings. Your
+                    meetings and data stay untouched.
+                  </p>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={doReset}
+                      className="no-drag cl-focus rounded-[9px] border border-[var(--cl-border)] px-3 py-1.5 text-[12px] font-semibold text-[color:var(--cl-foreground)] transition hover:brightness-110"
+                    >
+                      Reset setup
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setResetPhase('idle')}
+                      className="no-drag cl-focus px-2 py-1.5 text-[12px] font-medium text-[color:var(--cl-muted-foreground)] transition hover:text-[color:var(--cl-foreground)]"
+                    >
+                      Keep it
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {resetPhase === 'busy' && (
+                <p className="flex items-center gap-1.5 text-[11px] text-[color:var(--cl-muted-foreground)]">
+                  <Loader2 size={13} className="animate-spin" />
+                  Resetting…
+                </p>
+              )}
             </div>
           )}
         </div>

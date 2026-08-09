@@ -919,6 +919,31 @@ export const BaseSettingsSchema = z.object({
   speakerId: z
     .object({ enabled: z.boolean().default(false) })
     .default({ enabled: false }),
+  // Durable "time saved" usage counters (shared/time-saved.ts). Incremented ONCE when a meeting file is
+  // first written (main/store.ts recordMeetingSummarized) — a rebuild/re-index never re-counts, and this
+  // survives transcriptRetentionDays deleting the meetings a live sum would need, so the lifetime figure
+  // is honest even after old transcripts are purged. Metadata only (a count and a minute total), never
+  // content. `nextSteps` is deliberately NOT stored here — it is derived live from the brain's open
+  // commitments, which stays accurate as entities merge/settle.
+  usageStats: z
+    .object({
+      meetingsSummarized: z.number().int().nonnegative().default(0),
+      conversationMinutes: z.number().nonnegative().default(0),
+      // 0 = no meeting saved yet (drives the "Summarize your first meeting…" empty state).
+      firstMeetingAt: z.number().nonnegative().default(0)
+    })
+    .default({ meetingsSummarized: 0, conversationMinutes: 0, firstMeetingAt: 0 }),
+  // The adjustable write-up-avoided assumption behind the time-saved estimate. Per meeting, the notes you
+  // would have written by hand ≈ writeupRatio × meeting length, floored/capped so a 3-minute call and a
+  // 3-hour call both land in a sane band. Shown and editable in Settings → Time saved so the number is the
+  // user's own, not a magic figure. See shared/time-saved.ts for the formula these feed.
+  timeSaved: z
+    .object({
+      writeupRatio: z.number().min(0).max(2).default(0.2),
+      floorMin: z.number().min(0).max(240).default(5),
+      capMin: z.number().min(0).max(600).default(30)
+    })
+    .default({ writeupRatio: 0.2, floorMin: 5, capMin: 30 }),
   // Desk Tap Control (src/renderer/src/lib/tap/): tap the desk near the laptop to fire an app action —
   // on-device DSP on a raw (EC/NS/AGC-off) mic stream, calibrated per desk/mic. `profile` is the
   // calibration output (normalization stats, zone centroids, negative examples, data-derived OOD cap);
@@ -1156,6 +1181,8 @@ export const DEFAULT_SETTINGS: Settings = {
     fallback: true
   },
   speakerId: { enabled: false },
+  usageStats: { meetingsSummarized: 0, conversationMinutes: 0, firstMeetingAt: 0 },
+  timeSaved: { writeupRatio: 0.2, floorMin: 5, capMin: 30 },
   tapControl: {
     enabled: false,
     armOnlyWhileListening: true,

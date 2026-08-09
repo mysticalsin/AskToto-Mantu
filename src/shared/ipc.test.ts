@@ -181,6 +181,17 @@ describe('AskStart screen fast-path fields (M13)', () => {
 })
 
 describe('SettingsSchema', () => {
+  it('defaults the time-saved usage counters and assumption, and a profile without them parses', () => {
+    const s = SettingsSchema.parse(DEFAULT_SETTINGS)
+    expect(s.usageStats).toEqual({ meetingsSummarized: 0, conversationMinutes: 0, firstMeetingAt: 0 })
+    expect(s.timeSaved).toEqual({ writeupRatio: 0.2, floorMin: 5, capMin: 30 })
+    // A persisted profile from before these fields existed must parse and get the defaults, not throw.
+    const { usageStats: _u, timeSaved: _t, ...withoutNew } = DEFAULT_SETTINGS
+    const parsed = SettingsSchema.parse(withoutNew)
+    expect(parsed.usageStats.meetingsSummarized).toBe(0)
+    expect(parsed.timeSaved.writeupRatio).toBe(0.2)
+  })
+
   it('defaults backgroundScreenContext OFF — continuous screen capture is its own opt-in', () => {
     // This used to default on, relying on localLlm.enabled defaulting off to stay inert. With Local AI
     // now enabled by default (fallback safety net), a true default here would silently start continuous

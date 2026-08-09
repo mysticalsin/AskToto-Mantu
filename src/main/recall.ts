@@ -652,21 +652,35 @@ export async function setMeetingConfidential(
 const OWNED_FRONTMATTER_TYPES = new Set(['meeting-transcript', 'meeting-transcript-draft', 'note'])
 
 /**
- * True when this file is one of Métis's own. The meetings folder is an arbitrary user-chosen directory
- * (Settings → Change folder), so the wipe below cannot delete by `.md` extension alone: it would take
- * the user's unrelated markdown with it, permanently, with no backup and no undo. Filename shape first
- * (the cheap decisive signal sweepExpiredMeetings already trusts), then the frontmatter type, then the
- * encrypted envelope — a save this device can't decrypt is still ours, and must still go.
+ * Tri-state ownership verdict for a file in the meetings folder. The meetings folder is an arbitrary
+ * user-chosen directory (Settings → Change folder), so the wipe below cannot delete by `.md` extension
+ * alone: it would take the user's unrelated markdown with it, permanently, with no backup and no undo.
+ * Filename shape first (the cheap decisive signal sweepExpiredMeetings already trusts), then the
+ * frontmatter type, then the encrypted envelope — a save this device can't decrypt is still ours, and
+ * must still go. A THROWN read is UNREADABLE, never `false`: "could not read it right now" is not the
+ * same verdict as "confirmed not ours" — collapsing them lets a real, transiently-locked meeting be
+ * silently skipped by an erasure request that then reports success (MQA-103). Mirrors the exact
+ * tri-state discipline readMeetingUncached's UNREADABLE sentinel already establishes above.
  */
-async function isOwnedMeetingFile(folder: string, file: string): Promise<boolean> {
+async function isOwnedMeetingFile(folder: string, file: string): Promise<boolean | typeof UNREADABLE> {
   if (DRAFT_FILENAME.test(file) || FILENAME_TIMESTAMP.test(file)) return true
   const path = join(folder, file)
+  let raw: Buffer
   try {
-    const text = decodeSaved(await readFile(path))
+    raw = await readFile(path)
+  } catch {
+    // A THROWN read is a transient "can't read it right now" (an EBUSY/EPERM AV/EDR or OneDrive
+    // upload-hash lock, or an unhydrated Files-On-Demand placeholder — routine on this folder, see
+    // transcripts.ts), NOT "not a meeting file". Report UNREADABLE so deleteAllMeetings surfaces it as a
+    // FAILURE rather than silently folding a possibly-owned (e.g. hand-renamed) transcript into `skipped`.
+    return UNREADABLE
+  }
+  try {
+    const text = decodeSaved(raw)
     if (!text) return isEncryptedFile(path)
     return OWNED_FRONTMATTER_TYPES.has(frontmatter(text).type)
   } catch {
-    return false // unreadable — never guess, skip rather than risk deleting the wrong file
+    return false // decoded but unparseable — never guess, skip rather than risk deleting the wrong file
   }
 }
 
@@ -693,7 +707,18 @@ export async function deleteAllMeetings(): Promise<{
   const failed: string[] = []
   const skipped: string[] = []
   for (const file of files) {
-    if (!(await isOwnedMeetingFile(folder, file))) {
+    const owned = await isOwnedMeetingFile(folder, file)
+    if (owned === UNREADABLE) {
+      // Could not read the file to decide ownership (a transient lock or an unhydrated OneDrive
+      // placeholder). Count it as FAILED, not `skipped`: a real meeting — especially a hand-renamed one
+      // whose filename no longer identifies it — could be left un-erased, and an erasure request must
+      // never report success while a transcript it was asked to delete is still on disk (MQA-103). This
+      // flips `ok` false so the renderer's error path fires and the user can retry, instead of the wipe
+      // silently folding it into the same bucket as their own unrelated markdown.
+      failed.push(file)
+      continue
+    }
+    if (!owned) {
       skipped.push(file)
       continue
     }

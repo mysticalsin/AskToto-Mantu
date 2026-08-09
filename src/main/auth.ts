@@ -5,7 +5,7 @@ import { randomBytes } from 'node:crypto'
 import { join } from 'node:path'
 import type { PublicClientApplication } from '@azure/msal-node'
 import type { AuthStatus, SignInResult } from '@shared/ipc'
-import { getSettings } from './store'
+import { getSettings, setSettings } from './store'
 import { auditLog, mainLog, setAuditActor } from './logger'
 import { useFileBackend, encryptSecret, decryptSecret } from './secrets'
 import { readTrustedAdminManaged } from './win-security'
@@ -636,6 +636,26 @@ function authEnforced(): boolean {
 }
 
 /**
+ * MQA-107 — is SSO enforcement imposed by ADMIN-TRUSTED machine policy rather than self-serve Settings?
+ * True when the admin-trusted managed-config (readTrustedAdminManaged — the same held-fd, win32
+ * admin-trust-gated read used by readManagedAzure/authEnforced) either forces `{ requireAuth: true }`
+ * OR supplies a full azure block. This is the ONE case the SignInWall's "Reset Microsoft sign-in setup"
+ * escape hatch must refuse: a genuinely IT-locked fleet can never be talked out of enforcement from the
+ * UI. The per-user managed-config file and the in-app Settings are deliberately NOT admin-trusted here
+ * (both are user-writable), so they never make enforcement un-resettable. Exported for auth.test.ts.
+ */
+export function isAdminManagedEnforced(): boolean {
+  const admin = readTrustedAdminManaged()
+  if (!admin) return false
+  try {
+    if (JSON.parse(admin)?.requireAuth === true) return true
+  } catch {
+    /* malformed admin content — fall through to the azure-block check */
+  }
+  return !!azureFromManagedContent(admin).clientId
+}
+
+/**
  * The trust boundary is the MAIN process, not the renderer. Every privileged IPC handler must call
  * this — a renderer-only gate (the SignInWall) is bypassable via DevTools or a renderer compromise.
  * Default: returns true when sign-in isn't enforced (SSO unconfigured) OR the user is signed in.
@@ -817,6 +837,41 @@ export async function signIn(): Promise<SignInResult> {
   }
 }
 
+/**
+ * MQA-107 escape hatch — the recovery the ledger's own item 2 calls for, reachable through the existing
+ * (requireAuth-ungated) signOut IPC so it works even while requireAuth() is blocking settingsSet.
+ *
+ * A syntactically-valid but factually-WRONG self-serve tenant GUID (a digit-swap typo, or another
+ * tenant's GUID copy-pasted by mistake) passes the shape check (TENANT_GUID_RE), so readConfig() reports
+ * configured:true while signIn()'s `tid` compare fails on every attempt — the SignInWall replaces the
+ * whole app and the Settings ID fields lock behind it, with no in-app way back (regression of MQA-027).
+ * Clearing the three self-serve azure* Settings drops the install back to unenforced+usable so the IDs
+ * can be re-entered. The LKG recovery path can't help here: it only exists after a genuine prior sign-in.
+ *
+ * Gated so it can ONLY rescue the genuine self-serve first-time brick, never loosen a real lock:
+ *  - NO live session — the ledger's own gate; never reset out from under a signed-in user.
+ *  - NOT env/managed-forced requireAuth (authEnforced) — an org that hard-requires auth stays locked.
+ *  - NOT admin-trusted managed-config (isAdminManagedEnforced) — an IT-locked fleet can't be reset here.
+ *  - NOT sticky-configured — a device that already had a genuine sign-in isn't bricked (it has the LKG
+ *    recovery path, and sticky would keep enforcement up regardless), so clearing Settings there would
+ *    only destroy a known-good config. This targets exactly the never-signed-in typo case.
+ * Returns true only when it actually cleared a self-serve config. Exported for auth.test.ts.
+ */
+export function resetSelfServeSso(): boolean {
+  loadSession()
+  if (session) return false // must have NO live session
+  if (authEnforced()) return false // env/managed requireAuth stays locked
+  if (isAdminManagedEnforced()) return false // admin-trusted managed policy stays locked
+  if (isStickyConfigured()) return false // prior genuine sign-in → LKG recovery exists, not a brick
+  const s = readSettingsAzure()
+  if (!s.clientId && !s.tenantId && !s.allowedDomain) return false // nothing self-serve to clear
+  setSettings({ azureClientId: '', azureTenantId: '', azureAllowedDomain: '' })
+  // This path writes settings directly (store.setSettings), bypassing the settingsSet IPC handler, so
+  // mirror the 'settings.changed' audit that handler would emit — the cleared keys, for parity/traceability.
+  auditLog('settings.changed', { keys: ['azureClientId', 'azureTenantId', 'azureAllowedDomain'], reason: 'sso_reset' })
+  return true
+}
+
 export function signOut(): void {
   // Load session before clearing so we can detect a genuine (authenticated) sign-out.
   // The sticky-configured flag + LKG recovery config are cleared only when there was a real active
@@ -830,6 +885,13 @@ export function signOut(): void {
   if (wasSignedIn) {
     clearStickyConfigured()
     clearLkgConfig()
+  } else {
+    // No live session: the only caller reaching signOut() here is the SignInWall's "Reset Microsoft
+    // sign-in setup" escape hatch (Settings is unreachable behind the wall). Clear a self-serve azure*
+    // config that bricked the app with a well-formed-but-wrong tenant GUID (MQA-107) so it falls back to
+    // usable. resetSelfServeSso() enforces every gate (self-serve only, never an IT/env lock) and no-ops
+    // when they don't hold, so a routine already-signed-out signOut() stays a no-op.
+    resetSelfServeSso()
   }
   auditLog('auth.signout')
 }

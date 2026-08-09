@@ -15,14 +15,21 @@ import {
   HelpCircle,
   Minus,
   RefreshCw,
+  Timer,
   TrendingUp,
   Users,
   VolumeX,
   X
 } from 'lucide-react'
 import type { BrainRead, BrainStatus, Band, DealEntity, EntityKind, LedgerCommitment } from '@shared/brain'
-import type { AttentionItem, MeetingSummary } from '@shared/ipc'
+import type { AttentionItem, MeetingSummary, Settings } from '@shared/ipc'
 import { computeSilence } from '@shared/silence'
+import {
+  DEFAULT_TIME_SAVED_ASSUMPTIONS,
+  formatSavedTime,
+  timeSavedFromTotals,
+  type TimeSavedAssumptions
+} from '@shared/time-saved'
 import { buildMarsWeek, renderMarsMarkdown } from '@shared/mars'
 import { MantuMark } from './MantuMark'
 import { Spinner, TextButton } from './ui'
@@ -70,6 +77,68 @@ function weekStart(ms: number): number {
 
 const WEEK_MS = 7 * 24 * 60 * 60 * 1000
 const WEEKS_SHOWN = 12
+
+/**
+ * The honest "time saved" card. Deliberately NOT styled like the measured KPI tiles beside it — it shows
+ * an "≈", the word "estimate", and the assumption it rests on, because unlike meeting/people/deal counts
+ * this is a projection, and this codebase never dresses a projection as a measured fact. Empty until the
+ * first meeting is summarized (a "0 hours saved" would read as broken, not honest).
+ */
+function TimeSavedCard({
+  usageStats,
+  assumptions,
+  nextSteps,
+  onAdjust
+}: {
+  usageStats: Settings['usageStats']
+  assumptions: TimeSavedAssumptions
+  nextSteps: number
+  onAdjust: () => void
+}): JSX.Element | null {
+  const saved = timeSavedFromTotals(usageStats, assumptions)
+  if (saved.meetings === 0) {
+    return (
+      <div className="rounded-xl border border-[var(--color-hair-soft)] bg-white/[0.02] px-3.5 py-3">
+        <div className="flex items-center gap-2 text-[color:var(--color-ink-3)]">
+          <Timer size={14} />
+          <span className="text-[12px]">Summarize your first meeting to see the time you save.</span>
+        </div>
+      </div>
+    )
+  }
+  const convHours = Math.round((saved.conversationMinutes / 60) * 10) / 10
+  return (
+    <div className="rounded-xl border border-[var(--color-hair-soft)] bg-gradient-to-b from-white/[0.04] to-white/[0.01] px-3.5 py-3">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="flex items-center gap-1.5 text-[10px] font-medium uppercase tracking-wide text-[color:var(--color-ink-3)]">
+            <Timer size={12} /> Time saved with Métis
+          </div>
+          <div className="mt-1 font-ui text-[26px] font-semibold leading-none tracking-tight text-[color:var(--color-ink)]">
+            ≈ {formatSavedTime(saved.savedMinutes)}
+          </div>
+          <div className="mt-2 flex flex-wrap gap-x-3 gap-y-0.5 text-[11px] text-[color:var(--color-ink-2)]">
+            <span>{saved.meetings} meetings summarized</span>
+            <span>{convHours}h of conversation captured</span>
+            {nextSteps > 0 && <span>{nextSteps} next-steps extracted</span>}
+          </div>
+        </div>
+      </div>
+      <div className="mt-2 flex items-center justify-between gap-2 border-t border-[var(--color-hair-soft)] pt-2">
+        <span className="text-[10.5px] text-[color:var(--color-ink-3)]">
+          Estimate: ~{saved.perMeetingAvgMin} min of write-up avoided per meeting.
+        </span>
+        <button
+          type="button"
+          onClick={onAdjust}
+          className="focus-ring shrink-0 rounded-md px-1.5 py-0.5 text-[10.5px] font-medium text-[color:var(--color-ink-3)] transition-colors hover:text-[color:var(--color-ink)]"
+        >
+          Adjust estimate <ChevronRight size={11} className="ml-0.5 inline align-middle" />
+        </button>
+      </div>
+    </div>
+  )
+}
 
 function StatTile({ value, label }: { value: number | string; label: string }): JSX.Element {
   return (
@@ -373,6 +442,17 @@ export function BrainView({
   // (ingest.ts's early-return branch), fully independent of the fallback toggle — a local-only privacy
   // setup with fallback off still indexes, so canIndex must OR this in too.
   const [localSummaryReady, setLocalSummaryReady] = useState(false)
+  // Durable lifetime usage + the adjustable write-up assumption, for the honest "time saved" card. From
+  // the settings snapshot (usageStats survives retention deletion, so the figure stays true after old
+  // transcripts are purged). See shared/time-saved.ts for the estimate's model.
+  const [usageStats, setUsageStats] = useState<Settings['usageStats']>({
+    meetingsSummarized: 0,
+    conversationMinutes: 0,
+    firstMeetingAt: 0
+  })
+  const [timeSavedAssumptions, setTimeSavedAssumptions] = useState<TimeSavedAssumptions>(
+    DEFAULT_TIME_SAVED_ASSUMPTIONS
+  )
   // Guards against overlapping polls during a long backfill: brainRead can take longer than the 4s
   // poll interval as ingestion grows, so without this an older, slower-resolving snapshot can land
   // after a newer one and make the KPI tiles/lists visibly jump backward.
@@ -403,6 +483,8 @@ export function BrainView({
       setProviderReady(settings.providerReady)
       setLocalFallbackReady(settings.localFallbackReady)
       setLocalSummaryReady(settings.localSummaryReady)
+      setUsageStats(settings.usageStats)
+      setTimeSavedAssumptions(settings.timeSaved)
       setError(null)
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
@@ -624,6 +706,16 @@ export function BrainView({
     return all.sort((a, b) => (a.date || '').localeCompare(b.date || '')).slice(0, 8)
   }, [data])
 
+  // Distinct next-steps (commitments) extracted across the brain, for the time-saved card's context line.
+  // Deduped by text so a commitment landing on both a deal and its speaker's ledger counts once.
+  const nextStepsCount = useMemo(() => {
+    const seen = new Set<string>()
+    for (const d of data?.deals ?? []) for (const c of d.commitments ?? []) seen.add((c.text || '').trim().toLowerCase())
+    for (const p of data?.people ?? []) for (const c of p.commitments ?? []) seen.add((c.text || '').trim().toLowerCase())
+    seen.delete('')
+    return seen.size
+  }, [data])
+
   // Silence Detector: what accounts STOPPED saying — dropped themes, vanished champions, cooling, or
   // gone fully quiet. Computed from the meeting extractions' topic/people timeline; empty until an
   // account has enough history to compare windows. Stamp the real clock once (the analysis is pure).
@@ -842,6 +934,14 @@ export function BrainView({
               </span>
             </div>
           ) : null}
+
+          {/* Honest time-saved estimate — above the measured tiles, visibly distinct from them. */}
+          <TimeSavedCard
+            usageStats={usageStats}
+            assumptions={timeSavedAssumptions}
+            nextSteps={nextStepsCount}
+            onAdjust={() => onOpenSettings?.()}
+          />
 
           {/* FACTUAL — KPI tiles */}
           <div className="flex gap-2">

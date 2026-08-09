@@ -539,6 +539,26 @@ export function getSettings(): Settings {
   return value
 }
 
+/**
+ * Bump the durable time-saved counters when a meeting file is first written. Called from exactly the two
+ * genuine "the user summarized a meeting" events (the saveTranscript IPC and a completed import) — never
+ * from a rebuild/re-index, which re-reads existing files without re-saving, so a meeting is counted once
+ * for its lifetime. Read-modify-write through setSettings: meeting saves are human-paced and never
+ * concurrent in practice, so a lost-update race is not a real exposure here. `durationMin` is the same
+ * value saveMeeting stamps into the frontmatter, so the counter and the on-disk meetings agree.
+ */
+export function recordMeetingSummarized(durationMin: number): void {
+  const cur = getSettings().usageStats
+  const dur = Number.isFinite(durationMin) && durationMin > 0 ? durationMin : 0
+  setSettings({
+    usageStats: {
+      meetingsSummarized: cur.meetingsSummarized + 1,
+      conversationMinutes: cur.conversationMinutes + dur,
+      firstMeetingAt: cur.firstMeetingAt || Date.now()
+    }
+  })
+}
+
 export function setSettings(patch: Partial<Settings>): Settings {
   ensureDir()
   // A user-initiated save is the safe time to recover a legacy Keychain-wrapped

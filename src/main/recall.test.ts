@@ -635,6 +635,33 @@ describe("recall — deleteAllMeetings erases only Métis's own files (MQA-032)"
       expect(existsSync(join(folder, f))).toBe(false)
     }
   })
+
+  // MQA-103 (docs/qa/BUG-LEDGER.md): a hand-renamed transcript whose ownership READ throws transiently
+  // (an EBUSY/EPERM lock, or an unhydrated OneDrive placeholder — routine on this folder) must be
+  // reported as FAILED, never silently folded into `skipped` as if it were the user's own foreign file.
+  // An erasure request that reports success while a real transcript survives is a GDPR/CCPA violation.
+  it('MQA-103: an unreadable hand-renamed transcript is FAILED, not silently skipped, and ok is false', async () => {
+    const saved = await saveMeeting(testSettings, meeting)
+    // A transcript the user renamed by hand — its filename no longer identifies it, so ownership can only
+    // be decided by reading the frontmatter.
+    const renamed = 'acme-renewal.md'
+    writeFileSync(join(folder, renamed), '---\ntype: meeting-transcript\n---\n\n# Acme\n', 'utf8')
+    // The read of exactly that file throws (a transient lock); every other read passes through untouched.
+    const fsp = await import('node:fs/promises')
+    const realReadFile = fsp.readFile
+    vi.spyOn(fsp, 'readFile').mockImplementation((async (p: Parameters<typeof realReadFile>[0], ...rest: unknown[]) => {
+      if (String(p).endsWith(renamed)) throw Object.assign(new Error('EBUSY: resource busy or locked'), { code: 'EBUSY' })
+      return (realReadFile as (...a: unknown[]) => unknown)(p, ...rest)
+    }) as typeof realReadFile)
+
+    const r = await deleteAllMeetings()
+
+    expect(r.failed).toContain(renamed) // surfaced so the user can retry
+    expect(r.skipped).not.toContain(renamed) // NOT quietly treated as a foreign file
+    expect(r.ok).toBe(false) // the wipe cannot report success while a real transcript may remain
+    expect(existsSync(join(folder, renamed))).toBe(true) // and it was NOT deleted — we could not confirm it ours
+    expect(existsSync(saved)).toBe(false) // the readable meeting still got erased
+  })
 })
 
 // MQA-033 — a transient read error (unhydrated OneDrive Files-On-Demand placeholder, AV/EDR share-lock)

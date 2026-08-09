@@ -79,7 +79,8 @@ import {
   encryptionAvailable,
   archiveEncryptedProfile,
   listDustAgents,
-  dustSelectedAgentVision
+  dustSelectedAgentVision,
+  recordMeetingSummarized
 } from './store'
 import { createStream } from './llm'
 import { isTransient, nextBackoff } from './llm/retry'
@@ -195,6 +196,7 @@ import { EncryptedImportJobStore } from './import-job-store'
 import { bundledFfmpegPath, startFfmpegDecode, type FfmpegDecoder } from './ffmpeg-decoder'
 import {
   saveMeeting,
+  meetingDurationMin,
   saveNote,
   appendDebrief,
   saveDraftTranscript,
@@ -209,7 +211,7 @@ import {
   sweepStaleTempFiles,
   readSavedFile
 } from './transcripts'
-import { getPlatformPermissions, probeScreenCapture } from './platform-perms'
+import { getPlatformPermissions, probeScreenCapture, noteScreenCaptureOutcome } from './platform-perms'
 import {
   listMeetings,
   searchMeetings,
@@ -836,6 +838,7 @@ function initializeImportJobs(): void {
     saveMeeting: (meeting) => saveMeeting(getSettings(), meeting),
     deleteMeeting,
     enqueueIngest,
+    recordMeetingSummarized,
     generateRecap: runImportedRecap,
     updateRecap: async (file, recap) => {
       const result = await updateMeetingRecap(getSettings(), file, recap)
@@ -1328,6 +1331,9 @@ async function captureScreenshotOnce(displayId: number): Promise<CapturedScreen>
   // Match the source to the display under the cursor. With one available source it is necessarily the
   // requested display. With several, never fall back to an arbitrary one: sending another monitor to a
   // provider is worse than asking the user to retry after a display-topology change.
+  // MQA-110: this real capture just proved whether screen recording works right now — fold that back
+  // into the readiness cache so a permission revoked after the boot probe stops reporting stale 'granted'.
+  noteScreenCaptureOutcome(sources.length > 0)
   const matched = sources.find((s) => String(s.display_id) === String(disp.id))
   if (!matched && sources.length > 1) {
     auditLog('capture.display_mismatch', {
@@ -3216,6 +3222,18 @@ function registerIpc(): void {
             // the same effect, so treat it as a pre-token failure here and let the normal failover run.
             // Only for cloud/CLI: a local no-output must surface rather than silently upload the request.
             if (!gotToken && provider !== 'local' && failover(attempted.concat(provider))) return
+            // MQA-102: the cloud/CLI branch above is deliberately gated `provider !== 'local'`, so a LOCAL
+            // completion with zero content deltas used to fall straight through to streamDone — the exact
+            // blank-bubble MQA-020 fixed for cloud/CLI, still live for the on-device last resort (the
+            // "my key died" end state, where local is what answers). Surface it as an actionable error
+            // instead. No failover: a local failure must never silently upload the request to cloud.
+            if (!gotToken && provider === 'local') {
+              win?.webContents.send(IPC.streamError, {
+                id: req.id,
+                message: 'Métis Local produced no answer — try again, or add a cloud provider in Settings for longer questions.'
+              })
+              return
+            }
             // Latency + token telemetry (metadata only) — feeds the p50/p95 latency + cost evals (H/D/F).
             auditLog('provider.request', {
               provider,
@@ -3236,7 +3254,13 @@ function registerIpc(): void {
             // MQA-003/MQA-004: remember a CREDENTIAL rejection (not a transport blip) so routing can stop
             // re-paying this provider's round trip on every subsequent ask, and so Settings can finally
             // tell the user their key stopped working instead of reporting it ready forever.
-            if (!gotToken && isAuthFailure(message)) recordAuthFailure(provider, String(message))
+            // MQA-101: Dust's own auth-rejection wording drifts across API versions and the current
+            // "does not have a valid authenticated credential" phrasing carries no 401 digits, so the
+            // generic isAuthFailure misses it — the circuit breaker never trips for a genuinely dead Dust
+            // session. dust.ts already maintains the broadened matcher for exactly this; use it for Dust.
+            const isCredentialRejection =
+              provider === 'dust' ? isDustAuthError({ message }) : isAuthFailure(message)
+            if (!gotToken && isCredentialRejection) recordAuthFailure(provider, String(message))
             if (!gotToken) retireCli(provider, message)
             // Pre-token transient failure (dropped socket, 5xx, 429, DNS blip): retry the SAME provider
             // with bounded backoff before switching. `gotToken` guards it — once tokens are on the wire
@@ -3264,8 +3288,10 @@ function registerIpc(): void {
             // with a clean message; keep the Dust-auth one-click reconnect path; else pass the message.
             const friendly = isTransient(message)
               ? "Connection issue — couldn't reach the provider after retrying. Check your network and try again."
-              : provider === 'dust' &&
-                  /oauth|unauthor|expired|authentication credential|invalid.*(token|credential)/i.test(message)
+              : // MQA-101: use dust.ts's maintained matcher, not a second copy of the phrasing regex —
+                // the inline copy missed the current "authenticated credential" wording, so a dead Dust
+                // session surfaced its raw 401 instead of this reconnect prompt.
+                provider === 'dust' && isDustAuthError({ message })
                 ? 'Your Dust session expired and could not refresh automatically. Open Settings and reconnect Dust once.'
                 : // MQA-062: a CLI provider has no API key to "re-enter" — sending the user to Settings →
                   // AI for a key that does not exist is an actively wrong remedy. Name the real fix: sign
@@ -3351,6 +3377,10 @@ function registerIpc(): void {
     if (!requireAuth()) throw new Error('Not signed in.')
     const m = SaveMeetingSchema.parse(raw)
     const r = { path: await saveMeeting(getSettings(), m) }
+    // Time-saved: the meeting file just landed — credit it ONCE to the durable lifetime counters. This is
+    // the live-meeting save path; the import path credits itself separately once its file is durable. A
+    // rebuild never reaches here, so a meeting is counted once for its lifetime.
+    recordMeetingSummarized(meetingDurationMin(m))
     void clearDraftTranscript(getSettings(), m.startedAt) // the real save landed — this autosave is now stale
     auditLog('transcript.saved', {
       mode: m.mode,

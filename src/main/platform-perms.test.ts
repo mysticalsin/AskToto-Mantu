@@ -1,6 +1,6 @@
 import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest'
 import { desktopCapturer, systemPreferences } from 'electron'
-import { clearScreenProbe, getPlatformPermissions, probeScreenCapture } from './platform-perms'
+import { clearScreenProbe, getPlatformPermissions, noteScreenCaptureOutcome, probeScreenCapture } from './platform-perms'
 
 vi.mock('electron', () => ({
   systemPreferences: { getMediaAccessStatus: vi.fn() },
@@ -109,6 +109,39 @@ describe('getPlatformPermissions — macOS screen recording (MQA-002)', () => {
     setPlatform('darwin')
     vi.mocked(systemPreferences.getMediaAccessStatus).mockReturnValue('not-determined')
     expect(getPlatformPermissions().screenRecording).toBe('unknown')
+  })
+})
+
+// MQA-110 (docs/qa/BUG-LEDGER.md): the boot probe is a point-in-time snapshot. A Windows user who revokes
+// the screen-capture permission mid-session would otherwise leave the checklist reporting a stale
+// 'granted' for the life of the process — the MQA-002 bug re-created for the revoke-after-grant case.
+// Every real capture is itself a probe, so its outcome must fold back into the readiness cache.
+describe('screen readiness re-validates from real capture outcomes (MQA-110)', () => {
+  it('a failed capture downgrades a previously-granted status to denied on Windows', async () => {
+    setPlatform('win32')
+    vi.mocked(systemPreferences.getMediaAccessStatus).mockReturnValue('granted')
+    vi.mocked(desktopCapturer.getSources).mockResolvedValue([{ id: 'screen:0' }] as never)
+    await probeScreenCapture()
+    expect(getPlatformPermissions().screenRecording).toBe('granted')
+
+    noteScreenCaptureOutcome(false) // the OS just refused a real capture (permission revoked)
+    expect(getPlatformPermissions().screenRecording).toBe('denied')
+  })
+
+  it('a successful capture upgrades a stale status back to granted', () => {
+    setPlatform('win32')
+    vi.mocked(systemPreferences.getMediaAccessStatus).mockReturnValue('granted')
+    noteScreenCaptureOutcome(false)
+    expect(getPlatformPermissions().screenRecording).toBe('denied')
+    noteScreenCaptureOutcome(true)
+    expect(getPlatformPermissions().screenRecording).toBe('granted')
+  })
+
+  it('is a no-op off Windows — macOS reads TCC live and must not be overridden by a capture outcome', () => {
+    setPlatform('darwin')
+    vi.mocked(systemPreferences.getMediaAccessStatus).mockReturnValue('granted')
+    noteScreenCaptureOutcome(false) // must NOT flip macOS to denied
+    expect(getPlatformPermissions().screenRecording).toBe('granted')
   })
 })
 
