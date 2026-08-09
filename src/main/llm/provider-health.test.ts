@@ -12,7 +12,11 @@ import {
 } from './provider-health'
 
 /**
- * MQA-003 / MQA-004 (docs/qa/BUG-LEDGER.md). Measured against a live app with a revoked DeepSeek key:
+ * MQA-003 / MQA-004 / MQA-021 (docs/qa/BUG-LEDGER.md). MQA-021 is the same missing circuit breaker,
+ * found independently by the 16-domain audit after MQA-003 had already been fixed here — kept as its own
+ * ledger row (ids are never reused) and pinned by these same tests.
+ *
+ * Measured against a live app with a revoked DeepSeek key:
  * three consecutive suggest asks each re-walked the dead provider first (6.5s / 9.3s / 9.2s against a
  * 15s live-suggest budget), and the settings snapshot still reported `providerReady: true` throughout.
  * These tests pin the memory that makes both behaviors impossible.

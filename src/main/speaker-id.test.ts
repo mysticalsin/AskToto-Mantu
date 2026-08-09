@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import Module from 'node:module'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -242,5 +242,28 @@ describe('parakeetRelease at a meeting boundary (MQA-042)', () => {
     expect((globalThis as { gc?: () => void }).gc).toBeUndefined()
     await parakeet.parakeetTranscribe(new Float32Array(16))
     expect(constructed).toBe(2)
+  })
+})
+
+// MQA-043 (docs/qa/BUG-LEDGER.md): resetSession() was unit-tested but had NO production caller, so the
+// >30min silence gap was the only thing that ever reset session labels. Two meetings closer together
+// than that shared cluster identities — a new participant in meeting two could be labelled "Speaker 3"
+// because two different people had spoken in meeting one. The meeting-start boundary (IPC.listeningState
+// with on=true, the same place the Dust conversation resets) must clear it. index.ts has no unit
+// harness, so this pins the wiring against the source, next to the reset it belongs beside.
+describe('the meeting-start boundary resets speaker session labels (MQA-043)', () => {
+  const indexSrc = readFileSync(join(__dirname, 'index.ts'), 'utf8')
+
+  it('calls resetSession() at the listeningState meeting-start boundary', () => {
+    const start = indexSrc.indexOf('ipcMain.handle(IPC.listeningState')
+    expect(start).toBeGreaterThan(-1)
+    const body = indexSrc.slice(start, start + 2000)
+    expect(body).toMatch(/if \(on\) \{[\s\S]{0,800}?speakerIdInstance\?\.resetSession\(\)/)
+  })
+
+  it('resets it alongside the Dust conversation — one boundary, not two competing ones', () => {
+    const start = indexSrc.indexOf('ipcMain.handle(IPC.listeningState')
+    const body = indexSrc.slice(start, start + 2000)
+    expect(body.indexOf('resetDustConversation()')).toBeLessThan(body.indexOf('speakerIdInstance?.resetSession()'))
   })
 })

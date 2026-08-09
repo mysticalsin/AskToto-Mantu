@@ -3979,6 +3979,14 @@ function registerIpc(): void {
     // instead of leaving it resident in the main process for the rest of the app's life.
     if (on) {
       resetDustConversation()
+      // MQA-043: the same boundary must reset Speaker Intelligence's session labels. speaker-id.ts only
+      // auto-resets after a >30 min silence gap, so two meetings closer together than that inherited the
+      // previous meeting's cluster identities — a new participant would be labelled "Speaker 3" because
+      // two other people spoke in the earlier call. resetSession() existed and was unit-tested but had no
+      // production caller. Deliberately NOT wrapped in a lazy getter: if Speaker Intelligence was never
+      // started this session there is no session state to clear, and building the instance here would
+      // probe the sherpa addon on a path that does not need it.
+      speakerIdInstance?.resetSession()
       // Pre-create the new meeting's conversation in the background (fire-and-forget) so the FIRST
       // quick action / ask of the meeting doesn't pay the createConversation round trip. Keyed to the
       // base agent — the interactive speed pin in attempt() routes all mid-meeting asks there.
