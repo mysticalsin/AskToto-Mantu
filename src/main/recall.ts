@@ -9,13 +9,25 @@ import type { MeetingSummary, RecallHit, RecallReadResult, Settings, TranscriptL
 // transcript markdown files and provides list + keyword search so managers (and Dust agents) can
 // recall past meetings. Reads are ASYNC (off the main-process event loop) and each file is read once.
 
+// A well-formed double-quoted YAML scalar, capturing its body: the shape every title/mode value is
+// written in (see saveMeeting's frontmatter block in transcripts.ts, and renameMeeting below).
+const QUOTED_SCALAR = /^"((?:[^"\\]|\\.)*)"\s*$/
+
 function frontmatter(text: string): Record<string, string> {
   const out: Record<string, string> = {}
   const m = text.match(/^---\n([\s\S]*?)\n---/)
   if (!m) return out
   for (const line of m[1].split('\n')) {
     const kv = line.match(/^([a-z_]+):\s*(.*)$/i)
-    if (kv) out[kv[1]] = kv[2].replace(/^["[]|["\]]$/g, '').trim()
+    if (!kv) continue
+    // Undo the YAML escaping the writers apply (`\` → `\\`, `"` → `\"` — transcripts.ts's yamlSafeTitle
+    // and yamlSafeRenameTitle below): this is the only reader, so without the inverse the escapes reach
+    // History verbatim AND the rename box, which is pre-filled from this same value, re-escapes what was
+    // already escaped on every commit — the backslashes double per rename, unbounded. Anything that is
+    // not a well-formed quoted scalar (the `[a, b]` flow lists this frontmatter also carries, or a plain
+    // unquoted value like `date:`) keeps the original outer-character strip untouched.
+    const quoted = kv[2].match(QUOTED_SCALAR)
+    out[kv[1]] = quoted ? quoted[1].replace(/\\(["\\])/g, '$1') : kv[2].replace(/^["[]|["\]]$/g, '').trim()
   }
   return out
 }
@@ -242,7 +254,12 @@ export async function recallRead(file: string): Promise<RecallReadResult> {
     // before that feature existed, and on any line no name was ever resolved for.
     const lineRe = /^\*\*\[(\d{2}):(\d{2}):(\d{2})\] (Them|You|Speaker)(?: \(([^)]*)\))?:\*\* (.+)$/gm
     let m: RegExpExecArray | null
-    let prevT: number | undefined = startedAt
+    // Seeded at the SAME resolution the comparison runs at: the frontmatter `date` keeps milliseconds
+    // while every reconstructed time below is floored to the whole second, so an unfloored seed reads a
+    // first line inside the start's own second as a midnight crossing and pushes it — and, via prevT,
+    // every line after it — a full day forward. Imported recordings hit that on almost every file: their
+    // startedAt is a raw mtime and line 0 sits exactly on it (see import-jobs.ts).
+    let prevT: number | undefined = startedAt !== undefined ? Math.floor(startedAt / 1000) * 1000 : undefined
     while ((m = lineRe.exec(body)) !== null) {
       const [, hh, mm, ss, speakerLabel, name, lineText] = m
       const d = new Date(baseDate)

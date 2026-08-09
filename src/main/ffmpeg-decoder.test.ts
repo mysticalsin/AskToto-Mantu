@@ -76,3 +76,34 @@ describe.runIf(gateOk)('bundled FFmpeg import decoder', () => {
     expect(seen).toEqual(Array.from({ length: Math.max(0, total - 1) }, (_, index) => index + 1))
   })
 })
+
+// Needs no sidecar/fixture (the point is that FFmpeg cannot be launched at all), so it runs everywhere
+// the gated suite above skips.
+describe('FFmpeg spawn failure', () => {
+  it('MQA-063: reports an unspawnable executable through onError instead of an uncaught exception', async () => {
+    const executable = join(tmpdir(), `asktoto-missing-ffmpeg-${process.pid}${process.platform === 'win32' ? '.exe' : ''}`)
+    expect(existsSync(executable)).toBe(false)
+
+    const failures: Error[] = []
+    const decoder = startFfmpegDecode(executable, join(tmpdir(), 'asktoto-missing-source.m4a'), 0, {
+      onChunk: async () => {},
+      onComplete: async () => {},
+      onError: async (error) => { failures.push(error) }
+    })
+
+    // Node emits ENOENT on the next tick, inside the duration probe's await. Before the fix the
+    // decode child had no 'error' listener yet, so EventEmitter re-threw it (main-process
+    // uncaughtException) and `completed` never settled — hence the explicit race rather than a bare
+    // await, which would only ever surface as a test-runner timeout.
+    let timer: NodeJS.Timeout | undefined
+    const outcome = await Promise.race([
+      decoder.completed.then(() => 'settled' as const),
+      new Promise<'hung'>((resolve) => { timer = setTimeout(() => resolve('hung'), 4_000) })
+    ])
+    clearTimeout(timer)
+
+    expect(outcome).toBe('settled')
+    expect(failures).toHaveLength(1)
+    expect(failures[0].message).toMatch(/ENOENT/)
+  })
+})

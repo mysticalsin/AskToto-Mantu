@@ -148,24 +148,37 @@ const LICENSE_UI_ENABLED: boolean = false
 // up the real field once @shared/ipc catches up, with no edit needed here.
 type SettingsWithAsrWebgpuFallback = PublicSettings & { asrWebgpuFallbackAt?: number | null }
 
+// The CRM disconnect handler answers `{ ok: false, error }` when the stored key file could not be
+// deleted, but the preload signature still types the result as `{ ok: boolean }` — read it through this
+// local extension (same approach as above) so the warning reaches the user with today's types.
+type McpCrmDisconnectResult = { ok: boolean; error?: string }
+
 /**
  * After disconnecting/removing the active provider, pick another provider that is actually ready
  * (CLI providers need a live connection; the rest need a saved key) so the user is never left on a
  * provider that can't answer. Falls back to Anthropic, which then shows the normal "add a key" prompt.
+ * MQA-095: `allowed` is the org data-residency allowlist (null = unrestricted) — a provider outside it
+ * is never "ready", because the main process rejects every ask sent to it. Exported for a focused test.
  */
-function pickReadyProvider(
+export function pickReadyProvider(
   exclude: ProviderId,
   hasKeys: Record<string, boolean>,
   cliConnected: Record<string, boolean>,
   dustWorkspaceId: string,
-  providerModels: Partial<Record<string, string>>
+  providerModels: Partial<Record<string, string>>,
+  allowed: string[] | null
 ): ProviderId {
+  const permitted = (p: ProviderId): boolean => !allowed || allowed.includes(p)
   const ready = PROVIDER_IDS.find((p) => {
-    if (p === exclude) return false
+    if (p === exclude || !permitted(p)) return false
     if (p === 'dust') return isDustReady(hasKeys, dustWorkspaceId, providerModels)
     return PROVIDERS[p].kind === 'cli' ? !!cliConnected[p] : !!hasKeys[p]
   })
-  return ready ?? 'anthropic'
+  if (ready) return ready
+  // Nothing is ready. Anthropic's "add a key" prompt is the normal landing spot, but when the org
+  // excludes it, land on an approved provider instead — otherwise the panel sits on a provider that has
+  // no tile in the grid and that every ask then rejects.
+  return permitted('anthropic') ? 'anthropic' : (PROVIDER_IDS.find(permitted) ?? 'anthropic')
 }
 
 /** The provider Settings nudges the user toward inside "Experience: more models" — an Anthropic key
@@ -275,7 +288,8 @@ function LazyInput({
   className,
   placeholder,
   disabled,
-  id
+  id,
+  list
 }: {
   value: string
   onCommit: (v: string) => void
@@ -283,11 +297,15 @@ function LazyInput({
   placeholder?: string
   disabled?: boolean
   id?: string
+  /** Id of a sibling <datalist> — without it the model fields would lose their suggestion list when
+   *  they moved onto this debounced input. */
+  list?: string
 }): JSX.Element {
   const { local, onChange, onBlur } = useLazyText(value, onCommit)
   return (
     <input
       id={id}
+      list={list}
       value={local}
       disabled={disabled}
       placeholder={placeholder}
@@ -681,8 +699,12 @@ function VocabSuggestions({
   )
 }
 
-/** Friendly hint for an auto-detected or ambiguous pasted key. */
-function detectHint(value: string, current: ProviderId): { kind: 'ok' | 'tip'; text: string } | null {
+/** Friendly hint for an auto-detected or ambiguous pasted key. Exported for a focused test. */
+export function detectHint(
+  value: string,
+  current: ProviderId,
+  allowed: string[] | null
+): { kind: 'ok' | 'tip'; text: string } | null {
   const v = value.trim()
   if (!v) return null
   const id = detectProvider(v)
@@ -690,6 +712,10 @@ function detectHint(value: string, current: ProviderId): { kind: 'ok' | 'tip'; t
     // Only promise an auto-switch when one will actually happen: onKeyChange won't switch to a
     // CLI_PROVIDERS member (e.g. gemini has no selectable UI), so don't claim it did.
     if (id === current || CLI_PROVIDERS.has(id)) return { kind: 'ok', text: `Detected ${PROVIDERS[id].label}.` }
+    // MQA-095: onKeyChange won't switch to a provider the org blocks either — say so, so the paste
+    // isn't silently ignored while this line claims the provider was "Selected automatically."
+    if (allowed && !allowed.includes(id))
+      return { kind: 'tip', text: `Detected ${PROVIDERS[id].label}, restricted by your organization.` }
     return { kind: 'ok', text: `Detected ${PROVIDERS[id].label}. Selected automatically.` }
   }
   if (/^sk-/.test(v)) {
@@ -788,7 +814,11 @@ function AiSection({
     setTest({ status: 'idle' })
     if (locked) return
     const id = detectProvider(value)
-    if (id && id !== provider && !CLI_PROVIDERS.has(id)) {
+    // MQA-095: honour the same org allowlist the tile grid and the Anthropic row enforce below. Without
+    // it, pasting a key whose prefix belongs to a blocked vendor silently activates that vendor, and
+    // every later ask is rejected from a state no tile in this panel represents.
+    const allowed = settings.allowedProviders
+    if (id && id !== provider && !CLI_PROVIDERS.has(id) && (!allowed || allowed.includes(id))) {
       skipClearRef.current = true // keep the key we just captured across the provider switch
       patch({ provider: id })
     }
@@ -881,12 +911,13 @@ function AiSection({
         settings.hasKeys,
         settings.cliConnected ?? {},
         settings.dustWorkspaceId,
-        settings.providerModels
+        settings.providerModels,
+        settings.allowedProviders
       )
     })
   }
 
-  const hint = detectHint(key, provider)
+  const hint = detectHint(key, provider, settings.allowedProviders)
   const q = filter.trim().toLowerCase()
   // Dust + CLI providers have dedicated UI sections; Anthropic has its own always-visible card below;
   // Métis Local (kind === 'local') has its own dedicated LocalAiSection card, rendered separately below —
@@ -954,10 +985,21 @@ function AiSection({
           {saved ? <Check size={14} /> : null}
           {saved ? 'Saved' : 'Save'}
         </button>
+        {/* MQA-060: Test can only ever check the key in the box above — the stored secret is never sent
+            back to the renderer, so with an empty box this button could only produce "Paste a key above
+            to test it.". Disable it there and say why in the tooltip, instead of offering a "verify my
+            key" affordance in the one state where it is guaranteed to fail. */}
         <button
           type="button"
           onClick={onTest}
-          disabled={test.status === 'loading' || envKeyActive}
+          disabled={test.status === 'loading' || envKeyActive || !key.trim()}
+          title={
+            !key.trim() && !envKeyActive
+              ? settings.hasKeys[provider]
+                ? 'The saved key is never shown here, so it can’t be re-tested. Paste a key to test it.'
+                : 'Paste a key above to test it.'
+              : undefined
+          }
           className="no-drag cl-focus flex items-center gap-1 rounded-[10px] border border-[var(--cl-input)] bg-white/[0.04] px-3 py-2.5 text-[13px] text-[color:var(--cl-foreground)] hover:bg-white/[0.08] disabled:opacity-50"
         >
           {test.status === 'loading' ? <Loader2 size={14} className="animate-spin" /> : null}
@@ -1064,7 +1106,11 @@ function AiSection({
               Base model · fast, cheap
             </label>
             <div className="flex items-center gap-2">
-              <input
+              {/* MQA-069: debounced like customBaseUrl below. A plain controlled input here commits
+                  through the settings IPC round-trip on every keystroke, and the re-render then resets
+                  the DOM to the value of an already-resolved earlier patch — fast typing drops
+                  characters and persists a garbled model id that every later request 400s on. */}
+              <LazyInput
                 id={modelInputId}
                 list={`m-${provider}`}
                 // Bind to the RAW stored value (not baseModelName, which resolves through the provider's
@@ -1074,9 +1120,7 @@ function AiSection({
                 // (→ "use default") was never actually possible.
                 value={settings.providerModels[provider] ?? ''}
                 disabled={provider === 'anthropic' || settings.managedKeys.includes('providerModels')}
-                onChange={(e) =>
-                  patch({ providerModels: { ...settings.providerModels, [provider]: e.target.value } })
-                }
+                onCommit={(v) => patch({ providerModels: { ...settings.providerModels, [provider]: v } })}
                 placeholder={def.fastModel || 'base model id'}
                 className={[
                   'flex-1 min-w-0', ctl,
@@ -1090,14 +1134,15 @@ function AiSection({
             <label htmlFor={`think-${provider}`} className="text-[11px] font-medium text-[color:var(--cl-muted-foreground)]">
               Thinking model · hard, coding questions
             </label>
-            <input
+            {/* MQA-069: debounced for the same reason as the Base model field above. */}
+            <LazyInput
               id={`think-${provider}`}
               list={`m-${provider}`}
               value={settings.providerModelsThinking[provider] ?? ''}
               disabled={provider === 'anthropic' || settings.managedKeys.includes('providerModelsThinking')}
-              onChange={(e) =>
+              onCommit={(v) =>
                 patch({
-                  providerModelsThinking: { ...settings.providerModelsThinking, [provider]: e.target.value }
+                  providerModelsThinking: { ...settings.providerModelsThinking, [provider]: v }
                 })
               }
               placeholder={def.thinkModel || def.defaultModel || 'thinking model id'}
@@ -1678,7 +1723,8 @@ function CliIntegration({
         settings.hasKeys,
         nextConnected,
         settings.dustWorkspaceId,
-        settings.providerModels
+        settings.providerModels,
+        settings.allowedProviders
       )
     patch(next)
     setState(id, { phase: 'idle', msg: null, version: null })
@@ -1998,10 +2044,21 @@ function BidstackCard({
   }
 
   const disconnect = async (): Promise<void> => {
-    await window.toto.mcpCrmDisconnect()
+    // MQA-091: main returns ok:false + an explanation when the on-disk key file survived the delete (a
+    // locked/read-only key-bidstack.bin). Discarding it told the user their credential was removed when
+    // it was not. The preload signature still types the result without `error`, so read it through this
+    // local extension — same pattern as SettingsWithAsrWebgpuFallback above.
+    const r = (await window.toto.mcpCrmDisconnect()) as McpCrmDisconnectResult
     await patch({ bidstackConnected: false, bidstackEndpointUrl: '', bidstackTools: [] })
     setEndpointUrl('')
     setApiKey('')
+    if (!r.ok) {
+      // Keep the panel open so the error strip below is on screen — the connection is off either way,
+      // but the surviving key file needs a manual cleanup the user can only do if they're told.
+      setTestState({ phase: 'error', error: r.error || 'Disconnected, but the stored key could not be removed.', tools: null })
+      setOpen(true)
+      return
+    }
     setTestState({ phase: 'idle', error: null, tools: null })
     setOpen(false)
   }
@@ -2588,7 +2645,8 @@ function DustSetup({
         settings.hasKeys,
         settings.cliConnected ?? {},
         settings.dustWorkspaceId,
-        settings.providerModels
+        settings.providerModels,
+        settings.allowedProviders
       )
     await patch(next)
     setAgents(null)
@@ -2606,7 +2664,8 @@ function DustSetup({
           settings.hasKeys,
           settings.cliConnected ?? {},
           settings.dustWorkspaceId,
-          settings.providerModels
+          settings.providerModels,
+          settings.allowedProviders
         )
       })
     // Mirror disconnectDust's reset: a cleared key means any previously loaded agent list/error is stale.

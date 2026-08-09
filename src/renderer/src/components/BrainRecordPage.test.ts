@@ -1,13 +1,20 @@
 import { describe, it, expect } from 'vitest'
+import { createElement } from 'react'
+import { renderToStaticMarkup } from 'react-dom/server'
 import {
+  BrainRecordPage,
   provenanceChipLabel,
   moneyFieldMode,
   sortAttentionItems,
   filterMergeCandidates,
   formatAmount,
   isMeaningfulRename,
-  recordKey
+  mergeBannerApplies,
+  recordKey,
+  type BrainRecordRef,
+  type RecentMerge
 } from './BrainRecordPage'
+import { AccountEntitySchema, PersonEntitySchema, type BrainRead } from '@shared/brain'
 import type { AttentionItem } from '@shared/ipc'
 
 function field(state: 'extracted' | 'verified' | 'edited' | 'pinned', quote?: string, source_file = 'meeting.md') {
@@ -186,5 +193,100 @@ describe('recordKey — the React key that forces a fresh remount on every recor
 
   it('is stable for the same record (no gratuitous remount while editing the SAME entity)', () => {
     expect(recordKey({ kind: 'deal', id: 'acme-core' })).toBe(recordKey({ kind: 'deal', id: 'acme-core' }))
+  })
+})
+
+describe('MQA-045 — the post-merge "Undo" banner is scoped to the record it belongs to', () => {
+  // BrainView holds `recentMerge` for the rest of the dashboard session (Back only pops to the
+  // dashboard) and passes it to whichever record page mounts next, so the banner has to decide for
+  // itself whether it is on the survivor. Rendered statically here — the gate lives in JSX, and a
+  // helper-only assertion would still pass if the call site were dropped.
+  const merge: RecentMerge = {
+    seq: 7,
+    kind: 'account',
+    fromId: 'acme-corportation',
+    fromLabel: 'Acme Corportation',
+    intoId: 'acme-corp',
+    intoLabel: 'Acme Corp'
+  }
+
+  // The record page reads only people/accounts/deals off BrainRead; index/graph/meetings are never
+  // touched on this path, so they are left empty rather than faked into a full brain fixture.
+  const data = {
+    index: {},
+    graph: {},
+    people: [PersonEntitySchema.parse({ id: 'bob-baker', name: 'Bob Baker' })],
+    accounts: [
+      AccountEntitySchema.parse({ id: 'acme-corp', name: 'Acme Corp' }),
+      AccountEntitySchema.parse({ id: 'globex', name: 'Globex' })
+    ],
+    deals: [],
+    meetings: []
+  } as unknown as BrainRead
+
+  const render = (recordRef: BrainRecordRef, recentMerge: RecentMerge | null): string =>
+    renderToStaticMarkup(
+      createElement(BrainRecordPage, {
+        recordRef,
+        data,
+        recentMerge,
+        onOpenRecord: () => {},
+        onRefresh: async () => {},
+        onError: () => {},
+        onMerged: () => {}
+      })
+    )
+
+  it('renders on the survivor the merge landed on', () => {
+    const html = render({ kind: 'account', id: 'acme-corp' }, merge)
+    expect(html).toContain('Acme Corportation')
+    expect(html).toContain('Undo')
+  })
+
+  it('does NOT follow the user onto an unrelated record of another kind', () => {
+    // The repro: merge two accounts, press Back, open person "Bob Baker" — his page offered an Undo
+    // that restores two accounts he is not part of, discarding whatever either gained since the merge.
+    const html = render({ kind: 'person', id: 'bob-baker' }, merge)
+    expect(html).toContain('Bob Baker')
+    expect(html).not.toContain('Acme Corportation')
+    expect(html).not.toContain('Undo')
+  })
+
+  it('does NOT follow the user onto a different record of the SAME kind', () => {
+    const html = render({ kind: 'account', id: 'globex' }, merge)
+    expect(html).not.toContain('Acme Corportation')
+    expect(html).not.toContain('Undo')
+  })
+
+  it('renders nothing when no merge is pending', () => {
+    expect(render({ kind: 'account', id: 'acme-corp' }, null)).not.toContain('Undo')
+  })
+})
+
+describe('mergeBannerApplies — the scoping decision behind the MQA-045 banner gate', () => {
+  const merge: RecentMerge = {
+    seq: 1,
+    kind: 'account',
+    fromId: 'acme-corportation',
+    fromLabel: 'Acme Corportation',
+    intoId: 'acme-corp',
+    intoLabel: 'Acme Corp'
+  }
+
+  it('applies to the survivor', () => {
+    expect(mergeBannerApplies(merge, { kind: 'account', id: 'acme-corp' })).toBe(true)
+  })
+
+  it('does not apply to the merged-away source (that record no longer exists)', () => {
+    expect(mergeBannerApplies(merge, { kind: 'account', id: 'acme-corportation' })).toBe(false)
+  })
+
+  it('does not apply to a same-slug record of another kind', () => {
+    expect(mergeBannerApplies(merge, { kind: 'deal', id: 'acme-corp' })).toBe(false)
+  })
+
+  it('is false when nothing was merged', () => {
+    expect(mergeBannerApplies(null, { kind: 'account', id: 'acme-corp' })).toBe(false)
+    expect(mergeBannerApplies(undefined, { kind: 'account', id: 'acme-corp' })).toBe(false)
   })
 })

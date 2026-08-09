@@ -41,7 +41,10 @@ export function redactSecrets(input: string): string {
   // 2. Recognised API-key / token formats (provider-specific prefixes are near-zero false-positive).
   const keyPatterns: RegExp[] = [
     /\bsk-ant-[A-Za-z0-9_-]{20,}\b/g, // Anthropic
-    /\bsk-[A-Za-z0-9]{20,}\b/g, // OpenAI + generic sk- keys
+    // '-' has to stay in this class. Without it the run stops at the prefix's own dash and never reaches
+    // 20 chars, so every dashed-prefix key walks straight through — including the sk-kimi- key this app
+    // ships itself (see cahe-embedded-key.ts) and OpenAI's current sk-proj- project keys.
+    /\bsk-[A-Za-z0-9_-]{20,}\b/g, // OpenAI + generic sk- keys, flat or dash-prefixed
     /\bgh[posru]_[A-Za-z0-9]{20,}\b/g, // GitHub tokens (ghp_/gho_/ghs_/ghr_/ghu_)
     /\bgithub_pat_[A-Za-z0-9_]{20,}\b/g, // GitHub fine-grained PAT
     /\bxox[baprs]-[A-Za-z0-9-]{10,}\b/g, // Slack tokens

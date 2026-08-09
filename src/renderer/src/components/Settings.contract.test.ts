@@ -10,6 +10,7 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, it, expect } from 'vitest'
+import { pickReadyProvider, detectHint } from './Settings'
 
 // Normalize CRLF → LF: on a Windows checkout Settings.tsx has \r\n line endings, and a marker whose
 // newline sits mid-string (e.g. finding 5's '))}\n          </div>') would never match '))}\r\n...'.
@@ -112,5 +113,94 @@ describe('About footer version', () => {
     expect(source).toContain("import appPackage from '../../../../package.json'")
     expect(source).toMatch(/Métis \{appPackage\.version\} · Mantu/)
     expect(source).not.toMatch(/Métis 1\.0\.0 · Mantu/)
+  })
+})
+
+describe('MQA-060 — the Test button is not offered in the state where it can only fail', () => {
+  const block = blockAfter('onClick={onTest}', '</button>')
+
+  it('is disabled on an empty input, because the stored key is never sent back to the renderer', () => {
+    // Without this the button is enabled whenever a key is SAVED (the field is always empty on open —
+    // it is cleared on mount, on provider change and after every save), so the only thing it can
+    // produce there is onTest's "Paste a key above to test it." error.
+    expect(block).toMatch(/disabled=\{[^}]*!key\.trim\(\)/)
+  })
+
+  it('explains in the tooltip why a saved key cannot be re-tested', () => {
+    expect(block).toMatch(/title=/)
+    expect(block).toMatch(/saved key is never shown here/)
+  })
+})
+
+describe('MQA-069 — the Advanced model fields commit on the debounce boundary, not per keystroke', () => {
+  const advanced = blockAfter('Base model · fast, cheap', 'Creativity ·')
+
+  it('both model inputs are LazyInput + onCommit (no per-keystroke settings write)', () => {
+    // A plain controlled <input> here writes settings.json over IPC on every keystroke and the
+    // re-render then resets the DOM to an already-resolved earlier patch — fast typing drops
+    // characters and persists a garbled model id.
+    expect(advanced).toMatch(/<LazyInput[\s\S]*id=\{modelInputId\}/)
+    expect(advanced).toMatch(/<LazyInput[\s\S]*id=\{`think-\$\{provider\}`\}/)
+    expect(advanced).toMatch(/providerModels:\s*\{\s*\.\.\.settings\.providerModels,\s*\[provider\]:\s*v\s*\}/)
+    expect(advanced).toMatch(
+      /providerModelsThinking:\s*\{\s*\.\.\.settings\.providerModelsThinking,\s*\[provider\]:\s*v\s*\}/
+    )
+    expect(advanced).not.toMatch(/onChange=/)
+  })
+
+  it('LazyInput forwards `list` so the model fields keep their datalist suggestions', () => {
+    expect(blockAfter('function LazyInput(', '\ntype AsrCorrection')).toMatch(/list=\{list\}/)
+  })
+})
+
+describe('MQA-091 — a CRM disconnect that left the key file on disk is reported, not swallowed', () => {
+  const block = blockAfter('const disconnect = async ()', '\n  return (')
+
+  it('checks r.ok and renders the handler’s error instead of closing the card silently', () => {
+    expect(block).toMatch(/const r = \(await window\.toto\.mcpCrmDisconnect\(\)\)/)
+    expect(block).toMatch(/if \(!r\.ok\)/)
+    expect(block).toMatch(/phase: 'error', error: r\.error/)
+  })
+
+  it('keeps the panel open on failure so the existing error strip is on screen', () => {
+    const failure = block.indexOf('if (!r.ok)')
+    expect(failure).toBeGreaterThan(-1)
+    expect(block.indexOf('setOpen(true)', failure)).toBeGreaterThan(failure)
+  })
+})
+
+describe('MQA-095 — provider auto-selection respects the org allowlist', () => {
+  const hasGrokKey = { grok: true }
+
+  it('pickReadyProvider never lands on a ready-but-blocked provider', () => {
+    // Without the allowlist argument this returns 'grok' — a provider with no tile in the grid, that
+    // every ask then rejects with "not on your organization's approved provider list".
+    expect(pickReadyProvider('anthropic', hasGrokKey, {}, '', {}, ['openai'])).toBe('openai')
+  })
+
+  it('falls back to an approved provider when nothing is ready and Anthropic is blocked', () => {
+    expect(pickReadyProvider('grok', {}, {}, '', {}, ['openai'])).toBe('openai')
+  })
+
+  it('is unchanged with no allowlist: the first ready provider wins, else Anthropic', () => {
+    expect(pickReadyProvider('anthropic', hasGrokKey, {}, '', {}, null)).toBe('grok')
+    expect(pickReadyProvider('anthropic', {}, {}, '', {}, null)).toBe('anthropic')
+  })
+
+  it('detectHint stops promising an auto-switch to a blocked provider', () => {
+    const blocked = detectHint('xai-abcdef', 'openai', ['openai'])
+    expect(blocked?.kind).toBe('tip')
+    expect(blocked?.text).toMatch(/restricted by your organization/)
+    // Unrestricted orgs keep the original copy.
+    expect(detectHint('xai-abcdef', 'openai', null)).toEqual({
+      kind: 'ok',
+      text: 'Detected Grok · xAI. Selected automatically.'
+    })
+  })
+
+  it('onKeyChange gates the auto-switch on the allowlist', () => {
+    const block = blockAfter('const onKeyChange = (value: string)', '\n  const onSave')
+    expect(block).toMatch(/const allowed = settings\.allowedProviders/)
+    expect(block).toMatch(/!allowed \|\| allowed\.includes\(id\)/)
   })
 })

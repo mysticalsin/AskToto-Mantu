@@ -54,6 +54,14 @@ export interface StreamOptions {
    * leaves it undefined and its request body is byte-identical to before this field existed.
    */
   llamaSlotOptions?: { id_slot?: number; cache_prompt?: boolean }
+  /**
+   * OpenAI-compatible `response_format`. Set ONLY by brain/ingest.ts for the on-device extraction call
+   * (MQA-100): llama-server turns it into a GBNF grammar and masks any token that would break JSON
+   * syntax, so a small model cannot return an unterminated object. Undefined everywhere else, so every
+   * other provider's request body is unchanged; a runtime that rejects it drops the param on retry
+   * (openai.ts's rejection ladder) rather than failing the request.
+   */
+  responseFormat?: { type: 'json_object' }
 }
 
 export const errMsg = (e: unknown): string => (e instanceof Error ? e.message : String(e))

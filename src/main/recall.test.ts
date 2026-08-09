@@ -707,3 +707,133 @@ describe('recall — a transient read failure never hides a meeting (MQA-033)', 
     expect(list[0].title).toBe('Renault kickoff')
   })
 })
+
+// MQA-078 — the writers escape a title for YAML (`\` → `\\`, `"` → `\"`: transcripts.ts's yamlSafeTitle
+// and this module's yamlSafeRenameTitle), but the single reader never unescaped. History showed the raw
+// escapes, and the rename box — pre-filled from that same value — re-escaped what was already escaped on
+// every commit, doubling the backslashes without bound. See docs/qa/BUG-LEDGER.md → MQA-078.
+describe('recall — quote/backslash titles round-trip through the reader (MQA-078)', () => {
+  let folder: string
+
+  beforeEach(() => {
+    folder = mkdtempSync(join(tmpdir(), 'asktoto-recall-quote-'))
+    testSettings = { meetingsFolder: folder, encryptTranscripts: false } as Settings
+  })
+
+  afterEach(() => {
+    rmSync(folder, { recursive: true, force: true })
+    vi.restoreAllMocks()
+  })
+
+  const meeting: SaveMeeting = {
+    title: 'Renault "Phase 2" renewal',
+    mode: 'meeting',
+    startedAt: 1_700_000_000_000,
+    lines: [{ speaker: 'them', text: 'Phase 2 starts in March', t: 1_700_000_000_000 }],
+    recap: 'Phase 2 agreed.'
+  }
+
+  /** The single level of escaping the writers put in the quoted frontmatter scalar — never more. */
+  const onDisk = (s: string): string => `title: "${s.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`
+
+  it('MQA-078: a saved title keeps its quotes in History and on reopen', async () => {
+    const file = await saveMeeting(testSettings, meeting)
+    expect(readFileSync(file, 'utf8')).toContain(onDisk(meeting.title))
+
+    const read = await recallRead(file)
+    expect(read.ok).toBe(true)
+    if (read.ok) expect(read.title).toBe(meeting.title)
+    expect((await listMeetings()).find((m) => m.file === basename(file))?.title).toBe(meeting.title)
+  })
+
+  it('MQA-078: two consecutive renames never double the escaping', async () => {
+    const file = await saveMeeting(testSettings, meeting)
+
+    const first = 'Renault "Phase 3" renewal'
+    expect((await renameMeeting(testSettings, file, first)).ok).toBe(true)
+    const afterFirst = await recallRead(file)
+    expect(afterFirst.ok).toBe(true)
+    if (afterFirst.ok) expect(afterFirst.title).toBe(first)
+
+    // RecallView pre-fills the rename input with the value it just displayed, so the second commit sends
+    // back whatever the reader returned — the exact path that escalated \" → \\\" → \\\\\\\" on disk.
+    const second = `${afterFirst.ok ? afterFirst.title : ''} \\ Q4`
+    expect((await renameMeeting(testSettings, file, second)).ok).toBe(true)
+
+    const expected = 'Renault "Phase 3" renewal \\ Q4'
+    const afterSecond = await recallRead(file)
+    expect(afterSecond.ok).toBe(true)
+    if (afterSecond.ok) expect(afterSecond.title).toBe(expected)
+    const raw = readFileSync(file, 'utf8')
+    expect(raw).toContain(onDisk(expected))
+    expect(raw).toContain(`# ${expected}`)
+  })
+})
+
+// MQA-097 — the midnight-crossing guard seeded prevT with the millisecond-precision frontmatter start
+// while every reconstructed line time is floored to the whole second, so a first line inside the start's
+// own second looked like a crossing and pushed the whole transcript a day forward. Imported recordings
+// (startedAt = raw file mtime, line 0 exactly on it) hit it every time. See docs/qa/BUG-LEDGER.md → MQA-097.
+describe('recall — sub-second start times do not shift the transcript a day (MQA-097)', () => {
+  let folder: string
+
+  beforeEach(() => {
+    folder = mkdtempSync(join(tmpdir(), 'asktoto-recall-midnight-'))
+    testSettings = { meetingsFolder: folder, encryptTranscripts: false } as Settings
+  })
+
+  afterEach(() => {
+    rmSync(folder, { recursive: true, force: true })
+    vi.restoreAllMocks()
+  })
+
+  it('MQA-097: an imported meeting whose start carries milliseconds stays on its own calendar day', async () => {
+    // What import-jobs.ts produces: startedAt is the source file's raw mtime (a whole second essentially
+    // never), and the first chunk's timestamp is that same value.
+    const started = new Date(2026, 7, 1, 12, 34, 56, 437).getTime()
+    const file = await saveMeeting(testSettings, {
+      title: 'Imported call',
+      mode: 'meeting',
+      startedAt: started,
+      lines: [
+        { speaker: 'unknown', text: 'So the renewal is agreed for March', t: started },
+        { speaker: 'unknown', text: 'And we will confirm the numbers on Friday', t: started + 30_000 },
+        { speaker: 'unknown', text: 'Good, I will send the summary over', t: started + 60_000 }
+      ],
+      recap: 'Renewal agreed.'
+    })
+
+    const read = await recallRead(file)
+    expect(read.ok).toBe(true)
+    if (!read.ok) return
+    expect(read.lines).toHaveLength(3)
+    // The lines are rendered as HH:MM:SS, so the reconstruction is the start floored to the second —
+    // not that second plus 24 hours.
+    expect(read.lines[0].t).toBe(Math.floor(started / 1000) * 1000)
+    expect(new Date(read.lines[0].t).toDateString()).toBe(new Date(started).toDateString())
+    // Backfill derives endedAt from the last line (index.ts) — a day-shifted span widens the calendar
+    // lookup to ~24.5h and guarantees named: 0.
+    expect(read.lines[2].t - read.lines[0].t).toBe(60_000)
+  })
+
+  it('MQA-097: a genuine midnight crossing still pushes the later lines to the next day', async () => {
+    const started = new Date(2026, 7, 1, 23, 59, 30, 250).getTime()
+    const file = await saveMeeting(testSettings, {
+      title: 'Late night sync',
+      mode: 'meeting',
+      startedAt: started,
+      lines: [
+        { speaker: 'them', text: 'We are almost out of time for today', t: started },
+        { speaker: 'you', text: 'One more point before we close this out', t: started + 40_000 }
+      ],
+      recap: 'Ran late.'
+    })
+
+    const read = await recallRead(file)
+    expect(read.ok).toBe(true)
+    if (!read.ok) return
+    expect(read.lines).toHaveLength(2)
+    expect(new Date(read.lines[0].t).toDateString()).toBe(new Date(started).toDateString())
+    expect(read.lines[1].t - read.lines[0].t).toBe(40_000) // 00:00:10 the next day, not 23 hours back
+  })
+})

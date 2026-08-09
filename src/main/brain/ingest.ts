@@ -20,11 +20,14 @@ import { INJECTION_GUARD } from '@shared/prompts'
 import { redactSecrets } from '@shared/redact'
 import { fnv1a } from '@shared/hash'
 import { alignQuote, verifyNumericFact, extractNumerals, numeralDerivable } from '@shared/grounding'
-import { getSettings, getApiKey, getAllowedProviders } from '../store'
+import { getSettings, getApiKey, getAllowedProviders, setApiKey, setSettings } from '../store'
 import { createStream } from '../llm'
 import { localBaseReady } from '../llm/local-routing'
-import { getState as localRuntimeState } from '../llm/local-runtime'
+import { getState as localRuntimeState, activeStreams as localActiveStreams } from '../llm/local-runtime'
 import { readSavedFile, resolveMeetingsFolder } from '../transcripts'
+// Static (eager) import — NOT `await import()`: the main process is bytecode-compiled and dynamic import
+// throws there (see llm/dust.ts's own note). dustcli.ts imports nothing from brain/, so no cycle.
+import { refreshDustCliSession } from '../dustcli'
 import { auditLog, mainLog } from '../logger'
 import {
   slugify,
@@ -159,6 +162,25 @@ function isIngestTransportFailure(err: unknown): boolean {
   return !/\babort(ed)?\b/i.test(message)
 }
 
+/**
+ * MQA-055: re-mint an expired Dust OAuth token so a background extraction self-heals instead of dying on
+ * a 401. Dust CLI tokens live ~1h; ingest was the ONLY Dust caller that omitted this option, so an
+ * unattended backfill spanning the token's expiry failed every remaining meeting while the very same
+ * request through the ask path succeeded. Not a shared helper with index.ts's two identical closures:
+ * index.ts owns the interactive paths and this file must not import it (it is imported BY index.ts).
+ * refreshDustCliSession is single-flighted with a 30s result cache, so concurrent extractions cannot
+ * burn the rotating refresh token.
+ */
+async function refreshDustAuthForIngest(): Promise<{ apiKey: string; workspaceId?: string; baseURL?: string } | null> {
+  const fresh = await refreshDustCliSession()
+  if (!fresh.ok || !fresh.token || !fresh.workspaceId) return null
+  setApiKey('dust', fresh.token)
+  const baseURL = fresh.baseUrl || 'https://dust.tt'
+  setSettings({ dustWorkspaceId: fresh.workspaceId, dustBaseUrl: baseURL, dustTokenMintedAt: Date.now() })
+  auditLog('dust.token.refreshed', {})
+  return { apiKey: fresh.token, workspaceId: fresh.workspaceId, baseURL }
+}
+
 /** Run one accumulate-the-stream completion against a SPECIFIC candidate. Rejects on stream error. */
 function runCompletionOnce(
   s: Settings,
@@ -181,10 +203,19 @@ function runCompletionOnce(
       apiKey: key,
       baseURL: provider === 'custom' ? s.customBaseUrl : provider === 'dust' ? s.dustBaseUrl : def.baseUrl,
       workspaceId: s.dustWorkspaceId,
+      refreshDustAuth: provider === 'dust' ? refreshDustAuthForIngest : undefined,
       model,
       temperature: 0, // extraction wants determinism, not creativity
       idleMs: 120_000,
       maxOutputTokens: isLocal ? 1536 : undefined,
+      // MQA-100: force syntactically valid JSON out of the small bundled model. Extraction parses the
+      // reply as JSON, and the 0.8B model intermittently returns an unterminated object — observed live
+      // as "No complete JSON object in model output" on a real meeting, which leaves that meeting
+      // unindexed until a later reconcile happens to retry it. llama-server compiles this into a GBNF
+      // grammar and masks every token that would break the syntax, so truncation becomes impossible
+      // rather than merely unlikely. Local only: cloud providers already return well-formed JSON, and
+      // sending them a param some proxies reject would risk a working path to fix one that isn't.
+      responseFormat: isLocal ? { type: 'json_object' } : undefined,
       freshConversation: true, // Dust: never join/replace the live meeting's cached conversation
       system,
       req,
@@ -1000,6 +1031,13 @@ export function lintBrain(s: Settings): string[] {
  * normalized text) on the deal's ledger AND any person ledger holding the same promise, so the two
  * copies can't diverge. This is what makes the ledger a live count of what is actually owed, and
  * what makes a per-person kept-promise rate computable at all.
+ *
+ * MQA-085: runs on store.ts's withEntityLock — the one lane every read-modify-write of a `.brain/` entity
+ * file must take (see its doc comment). This is a read-deal → mutate-row → write-deal round trip over the
+ * same deal/person files an in-flight ingest job merges, and mergeExtraction awaits writeAccount between
+ * ITS read and write of the deal: unlocked, a settle landing in that window is overwritten by the job's
+ * older snapshot and the promise silently reappears in the rail. Never called from inside the lane
+ * (its only callers are the IPC handler and tests), so there is no re-entrancy risk.
  */
 export async function settleCommitment(
   s: Settings,
@@ -1007,23 +1045,25 @@ export async function settleCommitment(
   text: string,
   status: 'open' | 'kept' | 'broken'
 ): Promise<{ ok: boolean; error?: string }> {
-  const key = commitmentKey(text)
-  const deal = readDeal(s, dealSlug)
-  if (!deal) return { ok: false, error: 'Deal not found.' }
-  const row = deal.commitments.find((c) => commitmentKey(c.text) === key)
-  if (!row) return { ok: false, error: 'Commitment not found on this deal.' }
-  row.status = status
-  await writeDeal(s, dealSlug, deal)
-  // Mirror onto the named person's own ledger when one holds the same promise.
-  for (const pslug of listEntities(s, 'person')) {
-    const person = readPerson(s, pslug)
-    const match = person?.commitments?.find((c) => commitmentKey(c.text) === key)
-    if (person && match) {
-      match.status = status
-      await writePerson(s, pslug, person)
+  return withEntityLock(async () => {
+    const key = commitmentKey(text)
+    const deal = readDeal(s, dealSlug)
+    if (!deal) return { ok: false, error: 'Deal not found.' }
+    const row = deal.commitments.find((c) => commitmentKey(c.text) === key)
+    if (!row) return { ok: false, error: 'Commitment not found on this deal.' }
+    row.status = status
+    await writeDeal(s, dealSlug, deal)
+    // Mirror onto the named person's own ledger when one holds the same promise.
+    for (const pslug of listEntities(s, 'person')) {
+      const person = readPerson(s, pslug)
+      const match = person?.commitments?.find((c) => commitmentKey(c.text) === key)
+      if (person && match) {
+        match.status = status
+        await writePerson(s, pslug, person)
+      }
     }
-  }
-  return { ok: true }
+    return { ok: true }
+  })
 }
 
 // ── Queue + backfill ─────────────────────────────────────────────────────────
@@ -1159,6 +1199,34 @@ function hasActiveBackfill(): boolean {
   return queue.some((job) => job.origin === 'backfill') || [...inFlightJobs].some((job) => job.origin === 'backfill')
 }
 
+/**
+ * MQA-048: how many extractions may be in flight RIGHT NOW.
+ *
+ * EXTRACT_CONCURRENCY is sized for cloud providers. Local is a two-slot sidecar (local-runtime.ts's
+ * `--parallel 2`) and runCompletionOnce sends every local extraction as mode 'summary', which
+ * llm/local.ts pins to `id_slot: 1` — so three concurrent local extractions serialize on ONE slot for
+ * zero throughput while occupying the slot the live meeting's own summary/recap needs. One at a time is
+ * all the sidecar can actually do, and it leaves the live path a slot to land on.
+ */
+function extractConcurrency(s: Settings): number {
+  return pickProviderCandidates(s)[0]?.provider === 'local' ? 1 : EXTRACT_CONCURRENCY
+}
+
+/**
+ * MQA-048: should a background extraction stand aside for a real user-facing local stream?
+ *
+ * The same rule screen-preprocess.ts applies to its background describe ("Yield to real user-facing local
+ * streams (live suggest/summary) — don't make them wait for a slot"): a meeting being indexed in the
+ * background must never win the sidecar slot a live meeting is waiting on. Only backfill-origin jobs
+ * yield — a just-saved meeting's own ingest is the user's action, not background work — and only while
+ * local is the provider that would serve them. Yielded jobs stay AT THE FRONT of the queue and are
+ * revived by exactly the paths that revive a no-provider stall: a finishing job's pump(), the 60s
+ * reconcile tick, and Retry index (MQA-023).
+ */
+function localExtractionShouldYield(s: Settings): boolean {
+  return pickProviderCandidates(s)[0]?.provider === 'local' && localActiveStreams() > extracting.size
+}
+
 /** MQA-023: is any job actually being worked on right now? A job pump() parked in `queue` because no
  *  provider was configured is queued but NOT in flight, and the recovery paths below have to tell those
  *  two states apart: pump()'s other call sites all live inside a running job, so once a mid-batch provider
@@ -1191,23 +1259,41 @@ export function brainBackfillProgress(): { total: number; done: number; failed?:
 }
 
 /**
+ * MQA-049: is this ok:false record a meeting that hasn't been TRIED yet, rather than one that failed?
+ *
+ * enqueueIngest deliberately writes a durable ok:false record before extraction starts, so a quit right
+ * after Save replays the meeting instead of losing it in RAM. That record is pending, not failed, and it
+ * is uniquely shaped: no error, not exhausted, zero attempts — finishJob's failure record always carries
+ * an error string and bumps attempts to at least 1. Counting it as a failure put a red "needs attention"
+ * banner and a "Failed to index: Unknown error" attention item in front of a meeting that was indexing
+ * normally and succeeded seconds later — on the app's single most common workflow.
+ *
+ * Exported because every failure surface has to agree on the same discriminator: index.ts's brain:status
+ * derives `failedFiles` straight from idx.ingested for RecallView's per-meeting dot, and a dot that says
+ * "failed" while the banner says "indexing" is the same lie in a different place.
+ */
+export function isPendingIngestRecord(record: BrainIndex['ingested'][string]): boolean {
+  return !record.ok && !record.error && !record.exhausted && (record.attempts ?? 0) === 0
+}
+
+/**
  * Durable failure counts computed fresh from idx.ingested — unlike brainBackfillProgress's `failed`
  * above (an EPHEMERAL per-run counter that resets to 0 the moment a new backfill starts), a record with
  * ok:false stays that way until it either succeeds or is deleted, so this never under-reports a failure
- * just because no batch happens to be running right now. No separate storage: every ok:false record IS a
- * currently live, unresolved failure (a fixed source overwrites its record with ok:true), so there is
- * nothing stale to filter by a time window. `failed` and `exhausted` are DISJOINT (a record is one or the
- * other, never both) — `failed + exhausted` is the total count of currently-failing sources. `topError`
- * names the most common error string across BOTH, but only once it is shared by at least
- * `minTopErrorCount` records — a one-off error naming itself as "the" provider problem would be
- * misleading noise, not signal.
+ * just because no batch happens to be running right now. No separate storage: every ok:false record that
+ * is not still PENDING (isPendingIngestRecord above) IS a currently live, unresolved failure (a fixed
+ * source overwrites its record with ok:true), so there is nothing stale to filter by a time window.
+ * `failed` and `exhausted` are DISJOINT (a record is one or the other, never both) — `failed + exhausted`
+ * is the total count of currently-failing sources. `topError` names the most common error string across
+ * BOTH, but only once it is shared by at least `minTopErrorCount` records — a one-off error naming itself
+ * as "the" provider problem would be misleading noise, not signal.
  */
 export function ingestFailureCounts(idx: BrainIndex, minTopErrorCount = 3): { failed: number; exhausted: number; topError?: string } {
   let failed = 0
   let exhausted = 0
   const byError = new Map<string, number>()
   for (const record of Object.values(idx.ingested)) {
-    if (record.ok) continue
+    if (record.ok || isPendingIngestRecord(record)) continue
     if (record.exhausted) exhausted++
     else failed++
     if (record.error) byError.set(record.error, (byError.get(record.error) ?? 0) + 1)
@@ -1238,13 +1324,15 @@ function redactPathsInError(error: string): string {
 /** Per-file failure detail for up to `limit` currently-failing sources — the file-and-reason counterpart
  *  to ingestFailureCounts' aggregate numbers above. Most-recently-failed first (record.at descending) so
  *  the newest, most actionable failures surface when the ledger holds more than `limit`. Deliberately
- *  bounded: brainStatus is polled every few seconds and must never ship the whole ledger over IPC. */
+ *  bounded: brainStatus is polled every few seconds and must never ship the whole ledger over IPC.
+ *  Skips still-pending records for the same reason the counts do (MQA-049) — this list is what the
+ *  attention rail renders as "Failed to index: <reason>", and a pending record has no reason to give. */
 export function ingestFailureDetails(
   idx: BrainIndex,
   limit = 20
 ): { file: string; error: string; exhausted: boolean }[] {
   return Object.entries(idx.ingested)
-    .filter(([, record]) => !record.ok)
+    .filter(([, record]) => !record.ok && !isPendingIngestRecord(record))
     .sort(([, a], [, b]) => b.at - a.at)
     .slice(0, limit)
     .map(([file, record]) => ({
@@ -1642,16 +1730,23 @@ function pump(): void {
     const idx = queue.findIndex((j) => {
       if (j.origin !== 'backfill' || j.strategy === 'reconcile') return true
       s ??= getSettings()
-      return hasUsableProvider(s)
+      return hasUsableProvider(s) && !localExtractionShouldYield(s)
     })
     if (idx === -1) {
-      // Every queued job is a backfill job and no provider is configured — nothing to do right now.
-      if (queue.length > 0 && !loggedNoProviderStall) {
+      // Every queued backfill job is blocked. Two different reasons land here and they need different
+      // handling: no configured provider is something only the user can fix (say so, once per stall),
+      // while MQA-048's yield to a live local stream clears itself within one meeting — logging that
+      // would be noise, and claiming "no configured AI provider" for it would be wrong.
+      if (queue.length > 0 && !hasUsableProvider(s ?? getSettings()) && !loggedNoProviderStall) {
         loggedNoProviderStall = true
         mainLog.warn('[brain] backfill paused: no configured AI provider — will resume next time one is available')
       }
       break
     }
+    // MQA-048: the sidecar cannot run two extractions at once, so starting a second only steals the live
+    // meeting's slot. Checked after the search, not in the while condition, so the single-job path never
+    // pays for a Settings read it cannot act on.
+    if (extracting.size > 0 && extractConcurrency(s ?? getSettings()) <= extracting.size) break
     loggedNoProviderStall = false
     const [job] = queue.splice(idx, 1)
     extracting.add(job)
@@ -1795,6 +1890,15 @@ export async function startRebuild(s: Settings, options: StartRebuildOptions = {
   // Fix 2 (sync guard): a corrupt/blocked journal fails the gate — refuse before touching the store.
   const gate = await readCorrectionsJournalSafe(s)
   if (!gate.ok) return { queued: 0, error: gate.error }
+  // MQA-046: an index.json write can still be mid tmp+rename right now — maybeFinishDrain fires a
+  // DETACHED one and calls maybeStartSourceRefresh on the very next statement, so purgeBrain's rmSync
+  // lands inside that write's window. Either the stray tmp file survives the wipe and fails purgeBrain's
+  // own "nothing but the preserved journal remains" check (a rebuild that refuses for no visible reason),
+  // or the rename completes into the directory purgeBrain re-creates for the journal and resurrects the
+  // PRE-purge ledger: the re-extraction scan then sees every meeting as already indexed, queues nothing,
+  // and a wiped brain reports itself fully indexed. Settling the lane first is what makes the purge the
+  // last writer; everything queued after this point is startRebuild's own work on the fresh store.
+  await whenIndexWritesSettle()
   // Fix F: preserveCorrections copies the journal to escrow and restores it even if the wipe fails —
   // check the result and abort (nothing re-extracted, corrections safe) rather than rebuild atop a
   // half-deleted store.

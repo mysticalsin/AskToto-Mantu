@@ -303,13 +303,26 @@ function MoneyCard({
 
 /** A just-completed merge, tracked by the PARENT (BrainView) rather than this component — the record
  *  page remounts fresh on every navigation (including the one confirmMerge itself triggers), so anything
- *  that must survive that navigation (the "Undo" banner) has to live one level up. */
+ *  that must survive that navigation (the "Undo" banner) has to live one level up. `intoId` names the
+ *  survivor the banner belongs to, so parent-held state that outlives that one navigation can still be
+ *  scoped back to the record it is about. */
 export interface RecentMerge {
   seq: number
   kind: EntityKind
   fromId: string
   fromLabel: string
+  intoId: string
   intoLabel: string
+}
+
+/** Does the post-merge "Undo" banner belong on the record currently open? BrainView keeps `recentMerge`
+ *  for the rest of the dashboard session — only Undo, Dismiss or the next merge clear it, and Back merely
+ *  pops to the dashboard — and hands it to whichever record page is mounted next. Without this gate the
+ *  banner follows the user onto unrelated records and offers an Undo that restores two entities that page
+ *  never mentions, discarding everything either side gained since the merge (unmergeEntities restores a
+ *  point-in-time snapshot). Kept as an exported helper so the scoping is unit-testable without rendering. */
+export function mergeBannerApplies(merge: RecentMerge | null | undefined, ref: BrainRecordRef): boolean {
+  return !!merge && merge.kind === ref.kind && merge.intoId === ref.id
 }
 
 // ─── The record page itself ───────────────────────────────────────────────────────────────────────
@@ -418,7 +431,7 @@ export function BrainRecordPage({
       setMergeTarget(null)
       setMergeQuery('')
       if (r.seq !== undefined) {
-        onMerged({ seq: r.seq, kind, fromId: id, fromLabel: entity.name, intoLabel: target.name })
+        onMerged({ seq: r.seq, kind, fromId: id, fromLabel: entity.name, intoId: target.id, intoLabel: target.name })
       }
       await onRefresh()
       onOpenRecord(kind, target.id)
@@ -467,7 +480,7 @@ export function BrainRecordPage({
 
   return (
     <div className="flex flex-col gap-3">
-      {recentMerge && (
+      {recentMerge && mergeBannerApplies(recentMerge, recordRef) && (
         <div className="flex items-center justify-between gap-2 rounded-xl border border-[var(--color-hair-soft)] bg-[var(--color-accent-soft)] px-3 py-2 text-[12px] text-[color:var(--color-ink-2)]">
           <span>
             Merged {recentMerge.fromLabel} into {recentMerge.intoLabel}.

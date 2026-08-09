@@ -357,6 +357,12 @@ function privateViewOn(): boolean {
 let win: BrowserWindow | null = null
 let tray: Tray | null = null
 let audioArmed = false // loopback capture only granted during an explicit user-initiated Listen
+// Fresh-question boundary state (written by IPC.listeningState / IPC.askResetContext / IPC.askStart, all
+// registered below). Module-level rather than closed over the IPC registration so the render-process-gone
+// recovery can re-sync it: main can never observe the listeningState(false) a dead renderer owed it, and a
+// stuck `listeningActive` disables the boundary for the rest of the app session (MQA-038).
+let listeningActive = false
+let lastPlainAskAt = 0 // 0 = no live follow-up window; the next plain ask always starts clean
 let lastBarHeight = BAR_HEIGHT // remember the bar's content height to restore on settings exit
 let currentWidth = BAR_WIDTH // window width; narrows to PILL_WIDTH while collapsed to the control mini-pill
 // True while collapsed to the control mini-pill. Guards lastBarHeight below: the pill's own (much shorter)
@@ -595,6 +601,18 @@ async function startImportDecoder(job: ImportJob): Promise<void> {
     ffmpegDecoders.set(job.jobId, decoder)
     return
   }
+  // MQA-090: the ffmpeg branch above reaps a finished job's decoder for exactly this reason, and the
+  // hidden-window fallback needs the same reap. A transcription failure inside acceptDecodedChunk marks
+  // its job terminal and pumps the next FIFO job synchronously (fail() -> pump() -> here) long before the
+  // failing job's renderer learns of it and reports back through importDecoderFailed — which is the only
+  // thing that would otherwise free this window. Without the reap the next queued job, and every job
+  // behind it, dies with a false "Another audio decoder is already active."
+  if (decoderWin && !decoderWin.isDestroyed() && decoderJobId && decoderJobId !== job.jobId) {
+    const staleState = importJobs?.get(decoderJobId)?.state
+    if (staleState === 'failed' || staleState === 'cancelled' || staleState === 'done' || staleState === undefined) {
+      await closeImportDecoder(decoderJobId)
+    }
+  }
   if (decoderWin && !decoderWin.isDestroyed()) throw new Error('Another audio decoder is already active.')
 
   decoderJobId = job.jobId
@@ -667,16 +685,28 @@ async function runImportedRecap(job: ImportJob): Promise<string | undefined> {
   // installer-owned runtime is ready, try it first so the transcript stays on-device. Cloud providers
   // remain the explicit fallback when local is disabled or unavailable.
   const localSummaryReady = localEligibleFor({ mode: 'summary' }, settings, 'base', allowed)
+  // MQA-056: the same zero-config safety net (localLlm.fallback) the live-ask seams and brain ingest
+  // already honour. Without it a revoked cloud key left the imported meeting with no summary at all —
+  // while the very same file was being indexed on-device under the identical flag — and the "retry the
+  // summary" the card advises runs as mode:'recap', which is out of local's scope entirely. Strictly
+  // LAST, after every cloud/CLI candidate (including `custom`, which sorts after `local` in PROVIDERS),
+  // so the existing useFor.summary precedence above is untouched: cloud is still preferred when it works.
+  const localFallbackReady =
+    !localSummaryReady && localFallbackEligibleFor({ mode: 'summary' }, settings, 'base', allowed)
   const ordered: ProviderId[] = [
     ...(localSummaryReady ? (['local'] as ProviderId[]) : []),
     ...(settings.dustWorkspaceId && getApiKey('dust') && settings.providerModels.dust ? (['dust'] as ProviderId[]) : []),
     settings.provider,
     ...(Object.keys(PROVIDERS) as ProviderId[])
   ]
-  const candidates = [...new Set(ordered)].filter((provider) => {
+  const deduped = [...new Set(ordered)]
+  const walk = localFallbackReady
+    ? [...deduped.filter((provider) => provider !== 'local'), 'local' as ProviderId]
+    : deduped
+  const candidates = walk.filter((provider) => {
     const def = PROVIDERS[provider]
     if (!def || (allowed && !allowed.includes(provider))) return false
-    if (provider === 'local') return localSummaryReady
+    if (provider === 'local') return localSummaryReady || localFallbackReady
     if (def.kind === 'cli') return !!settings.cliConnected[provider]
     if (!getApiKey(provider)) return false
     if (provider === 'dust' && !settings.dustWorkspaceId) return false
@@ -832,6 +862,23 @@ function loadDotEnv(): void {
     }
     break
   }
+}
+
+/**
+ * MQA-062: a CLI provider holds no key of ours, so a credential rejection from one means the LOCAL CLI
+ * session ended (`claude logout`, an expired CLI OAuth, an uninstalled binary) — not that a key needs
+ * re-entering. `cliConnected` was otherwise write-once: only the user's own Disconnect button ever cleared
+ * it, so providerReady below, the Bar's setup CTA and attempt()'s ineligible chain all kept reporting a
+ * dead CLI as connected for the rest of the app's life while every ask spawned it and failed. Retiring the
+ * flag hands the user back the Connect card and the CTA, and costs one "Reconnect" click in the rare case
+ * the session was really still fine. No-op for API-key providers, whose verdict is provider-health's job.
+ */
+function retireCli(provider: ProviderId, message: string): void {
+  if (PROVIDERS[provider].kind !== 'cli' || !isAuthFailure(message)) return
+  const s = getSettings()
+  if (!s.cliConnected[provider]) return
+  setSettings({ cliConnected: { ...s.cliConnected, [provider]: false } })
+  mainLog.warn(`[cli] ${provider} rejected our credentials — marking it disconnected`)
 }
 
 function publicSettings(): PublicSettings {
@@ -1063,6 +1110,19 @@ function createWindow(): void {
   win.webContents.on('render-process-gone', (_e, details) => {
     mainLog.error(`[renderer-gone] reason=${details.reason} exitCode=${details.exitCode}`)
     auditLog('app.crash', { kind: 'render-process-gone', reason: details.reason, exitCode: details.exitCode })
+    // MQA-038: recovery reloads the SAME window, so createWindow()'s crash/recovery guard above never
+    // runs and the renderer-OWNED module state survives the renderer that set it. The remounted renderer
+    // starts idle and never sends the listeningState(false) it owed us, so `listeningActive` would stay
+    // true for the rest of the session — permanently suspending the fresh-question boundary, so every
+    // later plain ask keeps the dead meeting's Dust conversation and its replayed history. The tray dot
+    // and the power-save block would likewise stay stuck on "meeting in progress" (before-quit reads
+    // them as exactly that). Reset the whole set here, mirroring the meeting-start boundary.
+    resetDustConversation()
+    listeningActive = false
+    lastPlainAskAt = 0
+    audioArmed = false
+    setTrayRecording(false)
+    setRecordingPowerSaveBlock(false)
     if (!win || win.isDestroyed()) return
     if (process.env['ELECTRON_RENDERER_URL']) win.loadURL(process.env['ELECTRON_RENDERER_URL'])
     else win.loadFile(join(__dirname, '../renderer/index.html'))
@@ -1232,8 +1292,8 @@ function onFatal(kind: 'uncaughtException' | 'unhandledRejection', err: unknown)
 // A vision ask issued within CAPTURE_TTL_MS of a (pre-warmed) capture reuses the JPEG instead of paying the
 // ~150-450ms capture cost again. Kept tiny so the screen the model sees is never visibly stale.
 const CAPTURE_TTL_MS = 1500
-let shotCache: { image: string; width: number; height: number; dispId: number; ts: number } | null = null
-type CapturedScreen = { image: string; width: number; height: number; dispId: number }
+let shotCache: { image: string; width: number; height: number; dispId: number; displayMismatch: boolean; ts: number } | null = null
+type CapturedScreen = { image: string; width: number; height: number; dispId: number; displayMismatch: boolean }
 
 async function captureScreenshotOnce(displayId: number): Promise<CapturedScreen> {
   const disp = screen.getAllDisplays().find(({ id }) => id === displayId)
@@ -1269,10 +1329,7 @@ async function captureScreenshotOnce(displayId: number): Promise<CapturedScreen>
   // requested display. With several, never fall back to an arbitrary one: sending another monitor to a
   // provider is worse than asking the user to retry after a display-topology change.
   const matched = sources.find((s) => String(s.display_id) === String(disp.id))
-  // Surfaced to the caller (not just audited) so the renderer can show a soft "wrong screen?" notice
-  // instead of silently answering about a monitor the user didn't ask about.
-  const displayMismatch = !matched && sources.length > 1
-  if (displayMismatch) {
+  if (!matched && sources.length > 1) {
     auditLog('capture.display_mismatch', {
       requested: String(disp.id),
       available: sources.map((s) => String(s.display_id))
@@ -1299,7 +1356,20 @@ async function captureScreenshotOnce(displayId: number): Promise<CapturedScreen>
   if (size.width < 1 || size.height < 1 || jpeg.length < 1) {
     throw new Error('Screen capture returned an empty image. Try again in a moment.')
   }
-  return { image: jpeg.toString('base64'), width: size.width, height: size.height, dispId: disp.id }
+  // MQA-081: the single-source case is NOT proof that the source is the requested display — getScreenSources
+  // WithRetry drops zero-pixel sources, so the cursor's own monitor can be filtered out (asleep/waking, HDR
+  // switch, protected content) while another one survives. The old `sources.length > 1` test read that as
+  // "necessarily the requested display" and sent the other monitor to the vision provider with no signal at
+  // all. Flag it instead — this is the field CaptureResult documents and the renderer's soft "captured a
+  // different monitor" notice already consumes. A blank display_id (some platforms report none) proves
+  // nothing either way, so it is not treated as a mismatch.
+  const capturedId = String(src.display_id ?? '')
+  const displayMismatch = !matched && capturedId !== ''
+  // Report the display actually captured, not the one requested. This is what makes getScreenshot's
+  // "captured a different display" guard a real check rather than a comparison of disp.id with itself, and
+  // it keeps a wrong-monitor frame from being cached under the cursor's display for the capture TTL.
+  const dispId = /^\d+$/.test(capturedId) ? Number(capturedId) : disp.id
+  return { image: jpeg.toString('base64'), width: size.width, height: size.height, dispId, displayMismatch }
 }
 
 /** Share a native capture only between pre-warm and click requests for the same display. */
@@ -1314,7 +1384,7 @@ class PrivateViewBlockedError extends Error {
   }
 }
 
-async function getScreenshot(phase?: string): Promise<{ image: string; width: number; height: number; capturedAt: number }> {
+async function getScreenshot(phase?: string): Promise<{ image: string; width: number; height: number; capturedAt: number; displayMismatch: boolean }> {
   // Private View promises Métis won't look at (or send) the screen while it's on — that has to mean
   // this app's own capture pipeline refuses to run, not just that OTHER apps can't screen-share our window
   // (that's the separate, still-active setContentProtection() call on the BrowserWindow itself).
@@ -1328,8 +1398,8 @@ async function getScreenshot(phase?: string): Promise<{ image: string; width: nu
   }
   const disp = screen.getDisplayNearestPoint(screen.getCursorScreenPoint())
   if (shotCache && Date.now() - shotCache.ts < CAPTURE_TTL_MS && shotCache.dispId === disp.id) {
-    const { image, width, height, ts } = shotCache
-    return { image, width, height, capturedAt: ts }
+    const { image, width, height, ts, displayMismatch } = shotCache
+    return { image, width, height, capturedAt: ts, displayMismatch }
   }
   let shot: CapturedScreen
   try {
@@ -1343,7 +1413,12 @@ async function getScreenshot(phase?: string): Promise<{ image: string; width: nu
     }
     throw e
   }
-  if (shot.dispId !== disp.id) throw new Error('Métis captured a different display than requested. Try again.')
+  // A drift we DETECTED and flagged is handed to the renderer as the documented soft "captured a different
+  // monitor" notice — dead-ending an otherwise usable answer would be worse than telling the user. An
+  // UNFLAGGED drift is still a bug we cannot explain, so it still hard-fails here.
+  if (shot.dispId !== disp.id && !shot.displayMismatch) {
+    throw new Error('Métis captured a different display than requested. Try again.')
+  }
   // Re-check after the async capture: Private View could have been toggled ON while getSources()/resize
   // were in flight. Without this second check, a frame grabbed a moment before the toggle would still be
   // cached and sent to the model — breaking the Private View guarantee on a mid-capture toggle.
@@ -1355,8 +1430,8 @@ async function getScreenshot(phase?: string): Promise<{ image: string; width: nu
   const capturedAt = Date.now()
   shotCache = { ...shot, ts: capturedAt }
   auditLog('capture.screen', { width: shot.width, height: shot.height, bytes: shot.image.length, ...(phase ? { phase } : {}) })
-  const { image, width, height } = shot
-  return { image, width, height, capturedAt }
+  const { image, width, height, displayMismatch } = shot
+  return { image, width, height, capturedAt, displayMismatch }
 }
 
 /** Fill the cache + warm the OS capture pipeline ahead of a real ask. Fire-and-forget; auth-gated. */
@@ -1946,6 +2021,7 @@ function registerIpc(): void {
     // uses ("Confirmed with a native, unmissable modal BEFORE deleting"). Declining silently drops just
     // that one key from the patch; every other setting in the same patch still saves normally.
     const willEncrypt = 'encryptTranscripts' in p ? !!p.encryptTranscripts : wasEncrypted
+    let publishConsentAsked = false
     if ('publishBrainPages' in p && p.publishBrainPages && !cur.publishBrainPages && willEncrypt) {
       const dialogOpts = {
         type: 'warning' as const,
@@ -1961,6 +2037,33 @@ function registerIpc(): void {
       const granted = response === 0
       auditLog('brain.publish.consent', { granted })
       if (!granted) delete (p as Record<string, unknown>).publishBrainPages
+      publishConsentAsked = true
+    }
+    // MQA-070: the same end state — readable meeting intelligence sitting outside the encryption boundary —
+    // is reachable from the OTHER direction: publishing already on, encryption turned on afterwards. The
+    // gate above justifies its modal by that STATE, not by which toggle happened to arrive last, yet only
+    // one of the two edges into it was gated, so this one flipped silently while the Privacy copy started
+    // promising "contents stay locked to this device" over a folder that still holds a plaintext wiki/ —
+    // and keeps regenerating it on every later merge. Declining drops only encryptTranscripts: nothing is
+    // deleted (the wiki was written under its own explicit consent and stays the user's, per the QA #9
+    // no-side-effect rule), and the rest of the patch still saves. Suppressed when the gate above already
+    // asked about this exact combination in the same patch — one decision, not two modals.
+    const willPublish = 'publishBrainPages' in p ? !!p.publishBrainPages : cur.publishBrainPages
+    if (!publishConsentAsked && 'encryptTranscripts' in p && p.encryptTranscripts && !wasEncrypted && willPublish) {
+      const dialogOpts = {
+        type: 'warning' as const,
+        title: 'Keep publishing meeting intelligence?',
+        message: 'Encrypting transcripts does not encrypt your published wiki.',
+        detail:
+          'Publish meeting intelligence is on, so plain-text account/people/deal pages and meeting note cards stay in your meetings folder (wiki/) and keep being rewritten there in plain text after every new meeting — outside the at-rest encryption you are turning on. Meetings flagged confidential are excluded. Cancel to leave encryption off, or turn publishing off first.',
+        buttons: ['Turn on encryption', 'Cancel'],
+        defaultId: 1,
+        cancelId: 1
+      }
+      const { response } = win ? await dialog.showMessageBox(win, dialogOpts) : await dialog.showMessageBox(dialogOpts)
+      const granted = response === 0
+      auditLog('brain.publish.consent', { granted, at: 'encryption-enabled' })
+      if (!granted) delete (p as Record<string, unknown>).encryptTranscripts
     }
     const next = setSettings(p)
     auditLog('settings.changed', { keys: Object.keys(p) })
@@ -1992,7 +2095,12 @@ function registerIpc(): void {
       // Materialize the wiki ONLY when the user EXPLICITLY turned publishing on in THIS patch (it has
       // already passed the consent gate above). Never fire on a derived/side-effect flip of the value
       // caused by an unrelated setting change — that was the silent-publish path in QA #9.
-      void publishAll(next)
+      // Deliberately not awaited (a full regen must not hold up the settings save), but the rejection is
+      // observed: escaping as an unhandledRejection writes a crash-*.log + an app.crash audit line for a
+      // failed publish that never crashed anything (MQA-075, same shape as recallSetConfidential).
+      void publishAll(next).catch((error) =>
+        mainLog.error(`[publish] initial wiki build failed: ${error instanceof Error ? error.message : String(error)}`)
+      )
     }
     win?.setContentProtection(contentProtectionOn())
     syncIntelContentProtection() // keep the dashboard window's Private View in lockstep with the overlay
@@ -2303,12 +2411,21 @@ function registerIpc(): void {
     if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message || 'Invalid input.' }
     const r = await connectBidstack(parsed.data.endpointUrl, parsed.data.apiKey)
     if (!r.ok) return r
-    setBidstackApiKey(parsed.data.apiKey)
-    setSettings({
-      bidstackEndpointUrl: parsed.data.endpointUrl.trim(),
-      bidstackConnected: true,
-      bidstackTools: r.tools ?? []
-    })
+    // MQA-064: bidstackSecrets.ts writes user-facing diagnostics for exactly this step ("Encryption is
+    // unavailable on this machine…", "Métis can't write to its data folder…"), but they are THROWN. An
+    // unhandled throw here rejects the renderer's invoke, and the Settings card has no catch — it sits on
+    // "saving" with the deliberately-authored message never reaching the user. Route it through the
+    // {ok,error} channel the card already renders, mirroring the provider-key save (Settings.tsx).
+    try {
+      setBidstackApiKey(parsed.data.apiKey)
+      setSettings({
+        bidstackEndpointUrl: parsed.data.endpointUrl.trim(),
+        bidstackConnected: true,
+        bidstackTools: r.tools ?? []
+      })
+    } catch (error) {
+      return { ok: false as const, error: error instanceof Error ? error.message : 'Could not store the Polo Pre-Sales API key.' }
+    }
     auditLog('bidstack.connected', { tools: (r.tools ?? []).length })
     return r
   })
@@ -2495,7 +2612,21 @@ function registerIpc(): void {
     const result = await setMeetingConfidential(s, parsed.data.file, parsed.data.confidential)
     if (result.ok) {
       auditLog('transcript.confidential_set', { file: basename(parsed.data.file), confidential: parsed.data.confidential })
-      void publishAll(s)
+      // MQA-075: the republish IS the enforcement — the wiki is static markdown, so until it regenerates
+      // the meeting's title/TL;DR/decisions/deal facts are still on every published page. Fired detached
+      // it could fail (a locked wiki file, an EPERM mkdir) while this handler had already returned ok, so
+      // Review painted "excluded from published intelligence" over pages that still contain the meeting —
+      // and the rejection escaped to the unhandledRejection handler, writing a crash log for a non-crash.
+      // Await it and report the truth instead; the frontmatter write itself is already durable.
+      try {
+        await publishAll(s)
+      } catch (error) {
+        mainLog.error(`[confidential] republish failed: ${error instanceof Error ? error.message : String(error)}`)
+        return {
+          ok: false,
+          error: 'Flag saved, but the published pages could not be updated — this meeting may still appear in your published wiki. Try again.'
+        }
+      }
     }
     return result
   })
@@ -2709,14 +2840,12 @@ function registerIpc(): void {
   })
 
   // --- Ask / LLM streaming ---
-  // Fresh-question boundary state (shared with IPC.listeningState / IPC.askResetContext below). A plain
-  // typed/screen question OUTSIDE a live meeting must not inherit the previous question's Q&A: prior
-  // answers rode along in TWO independent carriers — the renderer's history array (replayed verbatim into
-  // the model's message list) and the server-side Dust conversation (reused for up to 2h regardless of
-  // topic) — and clearing only one leaks through the other. Enforced at main's single ask choke point so
-  // every renderer surface (typed ask, screen ask, fact-check) gets the same rule.
-  let listeningActive = false
-  let lastPlainAskAt = 0 // 0 = no live follow-up window; the next plain ask always starts clean
+  // Fresh-question boundary state (declared at module scope, shared with IPC.listeningState /
+  // IPC.askResetContext below). A plain typed/screen question OUTSIDE a live meeting must not inherit the
+  // previous question's Q&A: prior answers rode along in TWO independent carriers — the renderer's history
+  // array (replayed verbatim into the model's message list) and the server-side Dust conversation (reused
+  // for up to 2h regardless of topic) — and clearing only one leaks through the other. Enforced at main's
+  // single ask choke point so every renderer surface (typed ask, screen ask, fact-check) gets the same rule.
   ipcMain.handle(IPC.askStart, (e, raw) => {
     assertMainWindow(e)
     const id =
@@ -3014,6 +3143,12 @@ function registerIpc(): void {
       // then black-holes packets) that compounds into N x the base budget of blank spinner before the user
       // sees any error. Retries (attempted.length > 0) get a much shorter cap: a healthy provider still
       // answers well inside it, while a silent-drop network surfaces the "Connection error." in seconds.
+      // MQA-037: the cap is a NETWORK diagnostic, so it must never apply to Métis Local — a 127.0.0.1
+      // sidecar cannot be a silent-drop victim, and the zero-config safety net always reaches it with
+      // attempted.length >= 1 (the preceding step was an in-memory config check that never opened a
+      // socket). Without this exemption a warm-sidecar summary/vision fallback got 20s of prefill budget
+      // for the same work the identical useFor-driven request gets 120s/60s for, and local has no
+      // failover to rescue it.
       const RETRY_IDLE_CAP_MS = 20_000
       // MQA-006: a COLD Métis Local request must first load ~730 MB of GGUF weights off disk before it can
       // emit a token — routinely longer than the 15s suggest budget and longer than the retry cap, so the
@@ -3025,7 +3160,7 @@ function registerIpc(): void {
       const localColdStart = provider === 'local' && !localRuntime.isRunning()
       const idleMs = localColdStart
         ? Math.max(baseIdleMs, LOCAL_COLD_START_IDLE_MS)
-        : attempted.length > 0
+        : attempted.length > 0 && provider !== 'local'
           ? Math.min(baseIdleMs, RETRY_IDLE_CAP_MS)
           : baseIdleMs
       const startedAt = Date.now()
@@ -3102,6 +3237,7 @@ function registerIpc(): void {
             // re-paying this provider's round trip on every subsequent ask, and so Settings can finally
             // tell the user their key stopped working instead of reporting it ready forever.
             if (!gotToken && isAuthFailure(message)) recordAuthFailure(provider, String(message))
+            if (!gotToken) retireCli(provider, message)
             // Pre-token transient failure (dropped socket, 5xx, 429, DNS blip): retry the SAME provider
             // with bounded backoff before switching. `gotToken` guards it — once tokens are on the wire
             // we never re-run. A cancel handle keeps an abort during the backoff wait from firing the retry.
@@ -3131,12 +3267,17 @@ function registerIpc(): void {
               : provider === 'dust' &&
                   /oauth|unauthor|expired|authentication credential|invalid.*(token|credential)/i.test(message)
                 ? 'Your Dust session expired and could not refresh automatically. Open Settings and reconnect Dust once.'
-                : // MQA-005: a credential rejection used to fall through as the provider's raw string —
-                  // users saw literally "403 status code (no body)", which names neither the problem nor
-                  // the fix. Say which provider failed and where to go, matching the no-key path's copy.
-                  isAuthFailure(message)
-                  ? `${def.label} rejected your API key (it may have been revoked, expired, or run out of credit). Open Settings → AI to re-enter it.`
-                  : message
+                : // MQA-062: a CLI provider has no API key to "re-enter" — sending the user to Settings →
+                  // AI for a key that does not exist is an actively wrong remedy. Name the real fix: sign
+                  // the CLI back in and reconnect it (retireCli has already retired the stale flag).
+                  def.kind === 'cli' && isAuthFailure(message)
+                  ? `${def.label} is no longer signed in. Sign in to the CLI again, then reconnect it in Settings → CLI Integration.`
+                  : // MQA-005: a credential rejection used to fall through as the provider's raw string —
+                    // users saw literally "403 status code (no body)", which names neither the problem nor
+                    // the fix. Say which provider failed and where to go, matching the no-key path's copy.
+                    isAuthFailure(message)
+                    ? `${def.label} rejected your API key (it may have been revoked, expired, or run out of credit). Open Settings → AI to re-enter it.`
+                    : message
             win?.webContents.send(IPC.streamError, { id: req.id, message: friendly })
           }
         }
@@ -4334,9 +4475,15 @@ if (!app.requestSingleInstanceLock()) {
   // keychain read behind refreshDustCliSession can cost a macOS keychain password prompt on builds
   // whose code identity churns (unsigned dev builds), and a fresh token has nothing to gain from it.
   // The lazy on-401 refresh (refreshDustAuth above) still self-heals expiry invisibly either way.
+  // MQA-051/MQA-054: that freshness window is the ONLY thing this needs to be gated on. The keep-warm
+  // used to be darwin-only, back when the whole Dust CLI path was — but the prompt cost it was avoiding
+  // does not exist off macOS (dust-secret-store.ts: reading the current user's own credential never
+  // prompts on Windows/Linux) and dustcli.ts already routes the Windows `dust.cmd` shim. Gated to darwin
+  // it left Windows with no proactive re-mint at all, so the ~1h token lapsed and the hookless background
+  // paths (brain ingest, which passes no refreshDustAuth) dead-ended on a 401.
   const DUST_TOKEN_FRESH_MS = 45 * 60 * 1000
   const refreshAndPersistDust = (at: string): void => {
-    if (process.platform !== 'darwin' || !hasApiKey('dust')) return
+    if (!hasApiKey('dust')) return
     if (Date.now() - getSettings().dustTokenMintedAt <= DUST_TOKEN_FRESH_MS) return
     void refreshDustCliSession()
       .then((fresh) => {

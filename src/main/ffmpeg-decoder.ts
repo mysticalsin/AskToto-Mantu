@@ -110,6 +110,22 @@ export function startFfmpegDecode(
     return { cancel: () => {}, completed }
   }
 
+  // Node reports the common spawn failures (ENOENT/EACCES/EAGAIN) asynchronously on the next tick —
+  // i.e. while the duration probe below is still awaiting its own child, so the try/catch above never
+  // sees them. EventEmitter re-throws an 'error' event that has no listener yet, which escalated a
+  // quarantined/undeletable-but-unspawnable sidecar from a failed import into a main-process
+  // uncaughtException (fatal crash dialog) and left `completed` unsettled forever. Observe the child
+  // synchronously with the spawn, before anything awaits.
+  let spawnError: Error | null = null
+  child.once('error', (error) => {
+    spawnError = error
+  })
+  const close = once(child, 'close') as Promise<[number | null, NodeJS.Signals | null]>
+  // 'error' can fire before 'close', rejecting this promise while nothing awaits it yet (the stdout
+  // for-await loop below runs first). Observe it immediately so that isn't an unhandled rejection;
+  // `await close` further down still sees the real rejection.
+  close.catch(() => {})
+
   const completed = (async (): Promise<void> => {
     const durationSeconds = await probeDurationSeconds(executable, sourcePath)
     if (cancelled) return
@@ -119,18 +135,9 @@ export function startFfmpegDecode(
       await callbacks.onProgress?.(progressForSamples(skipThrough * FFMPEG_CHUNK_SAMPLES, totalSamples))
     }
     let stderr = ''
-    let spawnError: Error | null = null
     child.stderr.on('data', (chunk: Buffer) => {
       if (stderr.length < MAX_STDERR_BYTES) stderr += chunk.toString('utf8').slice(0, MAX_STDERR_BYTES - stderr.length)
     })
-    child.once('error', (error) => {
-      spawnError = error
-    })
-    const close = once(child, 'close') as Promise<[number | null, NodeJS.Signals | null]>
-    // 'error' can fire before 'close', rejecting this promise while nothing awaits it yet (the stdout
-    // for-await loop below runs first). Observe it immediately so that isn't an unhandled rejection;
-    // `await close` further down still sees the real rejection.
-    close.catch(() => {})
     let pending = Buffer.alloc(0)
     let seq = 0
 

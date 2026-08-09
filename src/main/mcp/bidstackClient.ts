@@ -21,6 +21,7 @@
 
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
+import type { RequestOptions } from '@modelcontextprotocol/sdk/shared/protocol.js'
 import { isIP, isIPv6 } from 'node:net'
 import { promises as dns } from 'node:dns'
 import { mainLog } from '../logger'
@@ -125,7 +126,10 @@ async function validateEndpointUrl(url: string): Promise<string | null> {
 function classifyError(e: unknown, endpointUrl: string): string {
   const raw = errMsg(e)
   const blob = raw.toLowerCase()
-  if (blob.includes('abort')) {
+  // 'timed out'/'-32001' are the MCP SDK's own RequestTimeout shape ("MCP error -32001: Request timed
+  // out"), which carries no 'abort' — without them a server that stalls mid-request lands in the
+  // unknown-reason branch below and points the user at their API key instead of at reachability.
+  if (blob.includes('abort') || blob.includes('timed out') || blob.includes('-32001')) {
     return `Timed out connecting to Polo Pre-Sales at ${endpointUrl}. Check the endpoint is reachable.`
   }
   if (blob.includes('401') || blob.includes('unauthor') || blob.includes('forbidden') || blob.includes('403')) {
@@ -153,7 +157,7 @@ async function withClient<T>(
   endpointUrl: string,
   apiKey: string,
   timeoutMs: number,
-  fn: (client: Client) => Promise<T>
+  fn: (client: Client, opts: RequestOptions) => Promise<T>
 ): Promise<T> {
   // MCP SDK statically imported (NOT `await import()`): the main process is bytecode-compiled and dynamic
   // import throws "A dynamic import callback was not specified" under bytecode, which broke every BidStack
@@ -168,9 +172,14 @@ async function withClient<T>(
   })
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), timeoutMs)
+  // The bound has to ride on every request, not just connect(): the SDK forwards connect's options to
+  // the `initialize` request alone, so a server that completes the handshake and then stalls on
+  // tools/list or tools/call would otherwise run to the SDK's own 60s default — past the timeout this
+  // module advertises, and reported as an unknown failure rather than a timeout.
+  const requestOptions: RequestOptions = { signal: controller.signal, timeout: timeoutMs }
   try {
-    await client.connect(transport, { signal: controller.signal })
-    return await fn(client)
+    await client.connect(transport, requestOptions)
+    return await fn(client, requestOptions)
   } finally {
     clearTimeout(timer)
     try {
@@ -194,8 +203,8 @@ const inFlight = new Map<string, Promise<BidstackConnectResult>>()
 
 async function connectBidstackNow(url: string, key: string): Promise<BidstackConnectResult> {
   try {
-    const tools = await withClient(url, key, CONNECT_TIMEOUT_MS, async (client) => {
-      const res = await client.listTools()
+    const tools = await withClient(url, key, CONNECT_TIMEOUT_MS, async (client, opts) => {
+      const res = await client.listTools(undefined, opts)
       return res.tools.map((t) => t.name)
     })
     return { ok: true, tools }
@@ -253,8 +262,8 @@ export async function pushToBidstack(
   const urlError = await validateEndpointUrl(url)
   if (urlError) return { ok: false, error: urlError }
   try {
-    const result = await withClient(url, key, CALL_TIMEOUT_MS, (client) =>
-      client.callTool({ name: tool, arguments: args })
+    const result = await withClient(url, key, CALL_TIMEOUT_MS, (client, opts) =>
+      client.callTool({ name: tool, arguments: args }, undefined, opts)
     )
     if (result && typeof result === 'object' && (result as { isError?: boolean }).isError) {
       const content = (result as { content?: Array<{ type: string; text?: string }> }).content

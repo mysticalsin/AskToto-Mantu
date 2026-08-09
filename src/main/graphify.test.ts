@@ -6,7 +6,22 @@ import type { Settings } from '@shared/ipc'
 
 vi.mock('electron')
 
-import { computeRelated, windowsPythonDirs, graphifyRefusalReason, graphifySourceDir } from './graphify'
+// pickBackend reads the store directly (the engine pin, the stored keys, the org allowlist). Stub the
+// whole module — the real one opens the keychain and the userData dir, neither of which the test sandbox
+// may touch. vitest hoists vi.mock() above the static imports, so graphify.ts sees the stub.
+const store = vi.hoisted(() => ({
+  settings: {} as Settings,
+  keys: {} as Record<string, string>,
+  allowed: null as string[] | null
+}))
+vi.mock('./store', () => ({
+  getSettings: () => store.settings,
+  getApiKey: (p: string) => store.keys[p] || '',
+  hasApiKey: (p: string) => (store.keys[p] || '').length > 0,
+  getAllowedProviders: () => store.allowed
+}))
+
+import { computeRelated, windowsPythonDirs, graphifyRefusalReason, graphifySourceDir, pickBackend } from './graphify'
 
 // Graph shaped like real graphify output: each concept node is owned by ONE note (its source_file),
 // and the other note links to the same concept node cross-file. This is how shared people/topics
@@ -113,5 +128,49 @@ describe('graphifyRefusalReason / graphifySourceDir (Task MI-5 — graphify inhe
     const settings = s({ encryptTranscripts: true, publishBrainPages: true })
     expect(graphifyRefusalReason(settings)).toBeNull()
     expect(graphifySourceDir(settings)).toBe(join('/meetings', 'wiki'))
+  })
+})
+
+// MQA-058 — Settings sells the three engines as exclusive contracts ("Claude · uses your Anthropic key"),
+// with 'auto' as the separate opt-in to the cascade. A pinned engine whose key is gone must therefore fail
+// closed: the auto-rebuild runs in the background over the WHOLE meetings folder, so falling through would
+// stream every transcript to a vendor the user never picked, silently.
+describe('pickBackend — an explicit engine pick never falls through to another vendor (MQA-058)', () => {
+  beforeEach(() => {
+    store.settings = { graphifyBackend: 'auto' } as Settings
+    store.keys = {}
+    store.allowed = null
+  })
+
+  it('backend "openai" with the OpenAI key removed yields no backend, not the stored Anthropic key', async () => {
+    store.settings = { graphifyBackend: 'openai' } as Settings
+    store.keys = { anthropic: 'sk-ant-still-here' }
+    expect(await pickBackend()).toBeNull()
+  })
+
+  it('backend "claude" with the Anthropic key removed yields no backend, not the stored OpenAI key', async () => {
+    store.settings = { graphifyBackend: 'claude' } as Settings
+    store.keys = { openai: 'sk-openai-still-here' }
+    expect(await pickBackend()).toBeNull()
+  })
+
+  it('an org allowlist that blocks the pinned vendor fails closed instead of swapping vendor', async () => {
+    store.settings = { graphifyBackend: 'claude' } as Settings
+    store.keys = { anthropic: 'sk-ant', openai: 'sk-openai' }
+    store.allowed = ['openai']
+    expect(await pickBackend()).toBeNull()
+  })
+
+  it('still honors an explicit pick whose key is present', async () => {
+    store.settings = { graphifyBackend: 'openai' } as Settings
+    store.keys = { anthropic: 'sk-ant', openai: 'sk-openai' }
+    expect(await pickBackend()).toEqual({ backend: 'openai', apiKey: 'sk-openai' })
+  })
+
+  it('"auto" still cascades to a stored key (claude-cli off the allowlist here, so no CLI probe runs)', async () => {
+    store.settings = { graphifyBackend: 'auto' } as Settings
+    store.keys = { anthropic: 'sk-ant' }
+    store.allowed = ['anthropic', 'openai']
+    expect(await pickBackend()).toEqual({ backend: 'claude', apiKey: 'sk-ant' })
   })
 })

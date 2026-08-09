@@ -12,14 +12,21 @@ const onboardingSrc = readFileSync(
   'utf8'
 )
 
+/** Occurrences of the phrase as a rendered BUTTON label, i.e. immediately followed by the arrow icon
+ *  the button renders. The phrase also legitimately appears in explanatory copy ("…continue without
+ *  signing in below.") and in comments; counting every occurrence made this test fail the moment the
+ *  not-configured sign-in message was reworded to point AT the button, which is not the regression it
+ *  exists to catch. What must stay unique is the control itself. */
+const BUTTON_LABEL = /Continue without signing in <ArrowRight/g
+
 describe('legacy onboarding renders exactly one "Continue without signing in" button', () => {
   it('has a single occurrence of the button label', () => {
-    const count = onboardingSrc.split('Continue without signing in').length - 1
-    expect(count).toBe(1)
+    expect(onboardingSrc.match(BUTTON_LABEL) ?? []).toHaveLength(1)
   })
 
   it('the surviving button is the !signedIn-gated, consent-aware one', () => {
-    const idx = onboardingSrc.indexOf('Continue without signing in')
+    const idx = onboardingSrc.search(BUTTON_LABEL)
+    expect(idx).toBeGreaterThan(-1)
     const before = onboardingSrc.slice(Math.max(0, idx - 600), idx)
     expect(before).toMatch(/\{!signedIn && \(/)
     expect(before).toMatch(/disabled=\{busy \|\| !recordingConsent\}/)

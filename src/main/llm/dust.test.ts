@@ -7,6 +7,7 @@ vi.mock('../auth', () => ({ authStatus: () => ({ email: null, name: null }) }))
 vi.mock('../logger', () => ({ mainLog: { info: vi.fn(), warn: vi.fn() }, auditLog: vi.fn() }))
 
 const calls = { create: 0, post: 0, get: 0 }
+const postedTo: string[] = [] // which conversation each follow-up message joined, in order
 let convCounter = 0
 let throwOnNextCreate = false // one-shot: simulates createConversation rejecting instead of returning Result.Err
 let streamErrOnce: string | null = null // one-shot: streamAgentAnswerEvents returns Result.Err with this message
@@ -33,6 +34,7 @@ vi.mock('@dust-tt/client', () => {
     }
     async postUserMessage(args: { conversationId: string }): Promise<ReturnType<typeof ok>> {
       calls.post++
+      postedTo.push(args.conversationId)
       return ok({ sId: `msg-post-${calls.post}`, conversationId: args.conversationId })
     }
     async getConversation(args: { conversationId: string }): Promise<ReturnType<typeof ok>> {
@@ -91,6 +93,7 @@ describe('Dust conversation continuity (one conversation per meeting)', () => {
     calls.create = 0
     calls.post = 0
     calls.get = 0
+    postedTo.length = 0
     convCounter = 0
     throwOnNextCreate = false
     streamErrOnce = null
@@ -159,6 +162,58 @@ describe('Dust conversation continuity (one conversation per meeting)', () => {
     await waitDone(opts2.handlers)
 
     expect(calls.create).toBe(2)
+  })
+
+  it('MQA-039 / MQA-052: a Spotlight Ref ask keeps its own thread without evicting the base agent conversation', async () => {
+    // Spotlight Ref is hard-pinned to its own agent sId, so it can never join the base agent's meeting
+    // thread — but it must not destroy it either. With a single cache slot, the Spotlight click overwrote
+    // the base agent's entry and the very next chat question cold-started a third conversation with none
+    // of the meeting's accumulated back-and-forth (Dust's server-side conversation is its ONLY continuity
+    // carrier — dust.ts never replays req.history).
+    const first = baseOpts({ model: 'agent-1' })
+    streamDust(first)
+    await waitDone(first.handlers)
+
+    const spotlight = baseOpts({ model: DUST_SPOTLIGHT_REF_AGENT_ID })
+    streamDust(spotlight)
+    await waitDone(spotlight.handlers)
+
+    const backToChat = baseOpts({ model: 'agent-1' })
+    streamDust(backToChat)
+    await waitDone(backToChat.handlers)
+
+    expect(calls.create).toBe(2) // one conversation per agent — NOT a third cold start for the base agent
+    expect(postedTo).toEqual(['conv-1']) // the chat ask rejoined the meeting conversation
+
+    const spotlightAgain = baseOpts({ model: DUST_SPOTLIGHT_REF_AGENT_ID })
+    streamDust(spotlightAgain)
+    await waitDone(spotlightAgain.handlers)
+
+    expect(calls.create).toBe(2) // and Spotlight keeps ITS thread across clicks too
+    expect(postedTo).toEqual(['conv-1', 'conv-2'])
+  })
+
+  it('MQA-052: resetDustConversation clears every agent slot, not just the last one used', async () => {
+    const chat = baseOpts({ model: 'agent-1' })
+    streamDust(chat)
+    await waitDone(chat.handlers)
+
+    const spotlight = baseOpts({ model: DUST_SPOTLIGHT_REF_AGENT_ID })
+    streamDust(spotlight)
+    await waitDone(spotlight.handlers)
+
+    resetDustConversation() // new meeting starts
+
+    const nextChat = baseOpts({ model: 'agent-1' })
+    streamDust(nextChat)
+    await waitDone(nextChat.handlers)
+
+    const nextSpotlight = baseOpts({ model: DUST_SPOTLIGHT_REF_AGENT_ID })
+    streamDust(nextSpotlight)
+    await waitDone(nextSpotlight.handlers)
+
+    expect(calls.create).toBe(4) // both agents start over — no entry survives the meeting boundary
+    expect(postedTo).toEqual([]) // nothing joined a previous meeting's thread
   })
 
   it('starts a fresh conversation once the cached one goes stale past the TTL', async () => {

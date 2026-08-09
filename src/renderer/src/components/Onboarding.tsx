@@ -21,7 +21,14 @@ import {
   Loader2
 } from 'lucide-react'
 import { DEFAULT_SHORTCUTS } from '@shared/ipc'
-import type { PublicSettings, Profile, PlatformPermissions, ProfileRecoveryResult } from '@shared/ipc'
+import type {
+  PublicSettings,
+  Profile,
+  PlatformPermissions,
+  ProfileRecoveryResult,
+  DustCliImport,
+  SignInResult
+} from '@shared/ipc'
 import type { ProviderId } from '@shared/providers'
 import { PROVIDERS, filterAllowedProviders } from '@shared/providers'
 import { MetisMark } from './MetisMark'
@@ -85,6 +92,66 @@ export function providerTileDisabledReason(opts: {
   if (opts.providerLocked || !opts.pathAllowed) return 'org'
   if (opts.busy) return 'busy'
   return null
+}
+
+/** The API-key providers step 5's picker can route to, in preference order. One source for the tile
+ *  grid, the "An API key" tile's enabled state, and the "Something else" escape hatch, so all three
+ *  answer to the same org allowlist. */
+const API_KEY_PROVIDERS: ProviderId[] = ['anthropic', 'openai', 'nvidia', 'minimax']
+
+/** Where step 5's "Something else (DeepSeek, Qwen, Mistral, and more). Pick it in Settings" link lands.
+ *  It used to be the literal 'anthropic', which walked straight past the data-residency allowlist the
+ *  tile grid directly above it filters on — under an allowlist that omits Anthropic the link finished
+ *  onboarding on a provider main rejects on every ask. `null` = the org approves no API-key provider at
+ *  all, in which case the link must not render (the tile that opens this picker is already inert). */
+export function apiPickerFallbackProvider(allowed: string[] | null | undefined): ProviderId | null {
+  return filterAllowedProviders(API_KEY_PROVIDERS, allowed)[0] ?? null
+}
+
+/** Slide 1's reading of signIn(). `ok: true` with `configured: false` is main's "SSO isn't set up on
+ *  this device" short-circuit (auth.ts): no browser opened, no session created. Consuming that as
+ *  success advanced the walkthrough with nothing to show for the click, leaving the user believing they
+ *  were on their work account. Mirrors SignInWall's branch on the same return value. */
+export type SsoVerdict = 'signed-in' | 'not-configured' | 'failed'
+export function ssoSignInVerdict(r: SignInResult): SsoVerdict {
+  if (!r.ok) return 'failed'
+  return r.configured === false ? 'not-configured' : 'signed-in'
+}
+
+/** Copy for step 6's provider readiness row. Dust needs its own branch: it's a one-click OAuth/CLI
+ *  flow with no key to paste, so the generic API-key wording sends the user hunting for a key this
+ *  path never asks for. */
+export function providerReadyCopy(provider: ProviderId): { label: string; hint: string } {
+  const p = PROVIDERS[provider]
+  const label = p?.label ?? 'AI provider'
+  if (p?.kind === 'cli') return { label: `${label} connected`, hint: 'connect it to get live answers' }
+  if (p?.kind === 'dust') return { label: `${label} connected`, hint: 'finish the one-click sign-in to get live answers' }
+  return { label: `${label} API key`, hint: 'add your key to get live answers' }
+}
+
+/** Step 5's Mantu Dust path. Pure + injected (like providerTileDisabledReason) so the ORDER is testable
+ *  without a render harness: dustImportCli writes the key and workspace id in the MAIN process only and
+ *  there is no settings push channel — the renderer refetches settings on window 'focus', which never
+ *  fires on the import path since nothing steals focus (`dust status` runs hidden, the session prompt
+ *  auto-allows). Selecting Dust before the import and never re-reading afterwards left step 6 holding a
+ *  pre-import snapshot, i.e. an amber "add your key" row for a workspace that was already connected. */
+export async function connectDust(deps: {
+  /** patch({ provider: 'dust' }) + advance. Stays first so the user isn't parked on step 5 for the import. */
+  select: () => void
+  importCli: () => Promise<DustCliImport>
+  /** Fire-and-forget installer + `dust login` fallback — it opens a terminal, so the focus refetch covers it. */
+  setupCli: () => void
+  /** Re-reads settings from main; a patch answers with the fresh snapshot. */
+  refreshSettings: () => Promise<void>
+  /** False once onboarding unmounted or the user left the readiness step — a late refresh must not
+   *  overwrite whatever provider they picked in the meantime. */
+  stillLive: () => boolean
+}): Promise<void> {
+  deps.select()
+  const imported = await deps.importCli()
+  if (!imported.ok) deps.setupCli()
+  if (!deps.stillLive()) return
+  await deps.refreshSettings()
 }
 
 /** One selectable "how to power Métis" path on the provider-choice slide. A plain-language card the
@@ -398,8 +465,16 @@ export function Onboarding({
         abandonedSsoRef.current = false
         const r = await window.toto.signIn()
         if (abandonedSsoRef.current) return
-        if (!r.ok) {
-          setErr(r.error || 'Sign-in failed. Use a Mantu Microsoft account.')
+        const verdict = ssoSignInVerdict(r)
+        if (verdict !== 'signed-in') {
+          // 'not-configured' comes back as ok:true, so advancing on it presented a no-op — no browser,
+          // no session — as a successful work-account sign-in. Stay on this slide and say so; the
+          // "Continue without signing in" button right below is then the honest way forward.
+          setErr(
+            verdict === 'not-configured'
+              ? "Microsoft sign-in isn't set up on this device. Continue without signing in below."
+              : r.error || 'Sign-in failed. Use a Mantu Microsoft account.'
+          )
           setBusy(false)
           return
         }
@@ -535,7 +610,9 @@ export function Onboarding({
     const cliPathAllowed = !pathAllow || pathAllow.includes('claude-cli') || pathAllow.includes('codex-cli')
     // The "An API key" tile is inert when the org approves no API-key provider at all — otherwise it
     // would open an empty picker (its own tiles are allow-filtered below).
-    const apiPathAllowed = filterAllowedProviders(['anthropic', 'openai', 'nvidia', 'minimax'], pathAllow).length > 0
+    const apiChoices = filterAllowedProviders(API_KEY_PROVIDERS, pathAllow)
+    const apiPathAllowed = apiChoices.length > 0
+    const apiFallback = apiPickerFallbackProvider(pathAllow)
     const choose = (provider: ProviderId): void => {
       patch({ provider })
       setStep(6)
@@ -573,9 +650,18 @@ export function Onboarding({
     // readiness step reflects it. Cross-platform. If it can't run, the user still lands on step 6 and can
     // finish in Settings — no dead-end.
     const chooseDust = async (): Promise<void> => {
-      choose('dust')
-      const imported = await window.toto.dustImportCli()
-      if (!imported.ok) void window.toto.dustSetupCli()
+      await connectDust({
+        select: () => choose('dust'),
+        importCli: () => window.toto.dustImportCli(),
+        setupCli: () => void window.toto.dustSetupCli(),
+        // Re-patching the provider we just set is the renderer's only way to pull main's post-import
+        // snapshot (setSettings answers with it) — settings are otherwise refetched on window 'focus'
+        // alone, which this path never triggers.
+        refreshSettings: async () => {
+          await patch({ provider: 'dust' })
+        },
+        stillLive: () => mountedRef.current && stepRef.current === 6
+      })
     }
     return (
       <div className="fade-up flex min-h-[300px] w-full flex-col items-center gap-5 px-4 py-7 text-center">
@@ -613,7 +699,7 @@ export function Onboarding({
               <div className="grid grid-cols-2 gap-1.5">
                 {/* Honor the org data-residency allowlist (null = unrestricted) so onboarding never
                     offers a provider every ask would then reject — same source main enforces. */}
-                {filterAllowedProviders(['anthropic', 'openai', 'nvidia', 'minimax'], settings.allowedProviders).map((id) => (
+                {apiChoices.map((id) => (
                   <button
                     key={id}
                     type="button"
@@ -624,13 +710,17 @@ export function Onboarding({
                   </button>
                 ))}
               </div>
-              <button
-                type="button"
-                onClick={() => choose('anthropic')}
-                className="no-drag focus-ring text-left text-[11.5px] text-[color:var(--color-ink-3)] hover:text-[color:var(--color-ink-2)]"
-              >
-                Something else (DeepSeek, Qwen, Mistral, and more). Pick it in Settings
-              </button>
+              {/* Same allowlist as the grid above (see apiPickerFallbackProvider): a hard-coded
+                  'anthropic' here bypassed the very check this block's comment promises. */}
+              {apiFallback && (
+                <button
+                  type="button"
+                  onClick={() => choose(apiFallback)}
+                  className="no-drag focus-ring text-left text-[11.5px] text-[color:var(--color-ink-3)] hover:text-[color:var(--color-ink-2)]"
+                >
+                  Something else (DeepSeek, Qwen, Mistral, and more). Pick it in Settings
+                </button>
+              )}
             </div>
           ) : (
             <ProviderOption
@@ -672,7 +762,7 @@ export function Onboarding({
   }
 
   if (step === 6) {
-    const providerLabel = PROVIDERS[settings.provider]?.label ?? 'AI provider'
+    const readyCopy = providerReadyCopy(settings.provider)
     // Windows has no OS-level permission API, so status is always 'unknown' there — that's a genuine
     // "we can't tell", not a granted status, so it must not be faked into `ok`. Surface it as a
     // not-yet-confirmed row instead, with a working link to the Windows privacy pane as the recovery path.
@@ -702,8 +792,8 @@ export function Onboarding({
           </div>
           <CheckRow
             ok={settings.providerReady}
-            label={PROVIDERS[settings.provider]?.kind === 'cli' ? `${providerLabel} connected` : `${providerLabel} API key`}
-            hint={PROVIDERS[settings.provider]?.kind === 'cli' ? 'connect it to get live answers' : 'add your key to get live answers'}
+            label={readyCopy.label}
+            hint={readyCopy.hint}
             // Settings can only render once the onboarding gate clears (App returns this panel while
             // !onboardingDone), so complete onboarding first — otherwise this link is a silent no-op,
             // a dead end on the one remediation the readiness checklist offers. finish() persists

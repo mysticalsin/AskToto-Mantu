@@ -12,7 +12,7 @@
  */
 import { useEffect, useRef, useState } from 'react'
 import { Check, Cpu, FolderLock, Mic, MonitorUp, Sparkles } from 'lucide-react'
-import type { ConversationMode, ProfileRecoveryResult, PublicSettings } from '@shared/ipc'
+import type { ConversationMode, PermissionStatus, ProfileRecoveryResult, PublicSettings } from '@shared/ipc'
 import type { ProviderId } from '@shared/providers'
 import { PERMISSIONS_POLL_MS } from '../state'
 import { MetisMark } from './MetisMark'
@@ -54,14 +54,27 @@ function ActProgress({ scene }: { scene: Scene }): JSX.Element | null {
   )
 }
 
+// 'restart' = permission is actually granted, but this same-session ScreenCaptureKit handle never saw it
+// (macOS only applies a fresh Screen Recording grant to the NEXT launch) — needs a relaunch, not a prompt.
+// 'blocked' = the OS holds an explicit Deny, which no prompt can undo — only the privacy pane can.
+export type SetupRowState = 'checking' | 'ready' | 'action' | 'blocked' | 'restart' | 'skipped'
+
 interface SetupRow {
   key: string
   label: string
   icon: typeof Cpu
-  // 'restart' = permission is actually granted, but this same-session ScreenCaptureKit handle never saw it
-  // (macOS only applies a fresh Screen Recording grant to the NEXT launch) — needs a relaunch, not a prompt.
-  state: 'checking' | 'ready' | 'action' | 'restart' | 'skipped'
+  state: SetupRowState
   detail?: string
+}
+
+/** The microphone row for an OS permission status. 'denied' MUST be its own state: getUserMedia never
+ *  re-prompts after an explicit Deny and main's requestPermissionsUpfront only asks while the status is
+ *  'not-determined', so in that state the "Allow Microphone" button produces no prompt, no error and no
+ *  change — the OS privacy pane is the only way back, exactly as the screen row already offers. */
+export function micRowStatus(status: PermissionStatus | undefined): { state: SetupRowState; detail: string } {
+  if (status === 'granted') return { state: 'ready', detail: 'granted' }
+  if (status === 'denied') return { state: 'blocked', detail: 'permission denied' }
+  return { state: 'action', detail: 'needs permission' }
 }
 
 export function OnboardingExperience({ onDone, onSkip }: OnboardingExperienceProps): JSX.Element {
@@ -92,7 +105,7 @@ export function OnboardingExperience({ onDone, onSkip }: OnboardingExperiencePro
     ]
     setRows(base)
     screenGrantedRef.current = null
-    const set = (key: string, state: SetupRow['state'], detail?: string): void => {
+    const set = (key: string, state: SetupRowState, detail?: string): void => {
       if (!live) return
       setRows((rs) => rs.map((r) => (r.key === key ? { ...r, state, detail } : r)))
     }
@@ -108,7 +121,8 @@ export function OnboardingExperience({ onDone, onSkip }: OnboardingExperiencePro
       set('brain', 'ready', isWindows ? 'stays on this PC' : 'stays on this Mac')
       await delay(450)
       const perms = await window.toto.getPermissions().catch(() => null)
-      set('mic', perms?.microphone === 'granted' ? 'ready' : 'action', perms?.microphone === 'granted' ? 'granted' : 'needs permission')
+      const mic = micRowStatus(perms?.microphone)
+      set('mic', mic.state, mic.detail)
       await delay(350)
       // Windows has no per-app Screen Recording permission — desktopCapturer captures without one, so the
       // status stays 'unknown' forever there. Treat isWindows as screen-available (matches Onboarding.tsx
@@ -149,8 +163,8 @@ export function OnboardingExperience({ onDone, onSkip }: OnboardingExperiencePro
       setRows((rs) =>
         rs.map((r) => {
           if (r.key === 'mic') {
-            const granted = perms.microphone === 'granted'
-            return { ...r, state: granted ? 'ready' : 'action', detail: granted ? 'granted' : 'needs permission' }
+            const mic = micRowStatus(perms.microphone)
+            return { ...r, state: mic.state, detail: mic.detail }
           }
           if (r.key === 'screen') {
             // On Windows screen capture needs no grant (see mount effect) — always available, never a
@@ -187,8 +201,8 @@ export function OnboardingExperience({ onDone, onSkip }: OnboardingExperiencePro
         .catch(() => {})
     }
     const perms = await window.toto.requestPermissionsUpfront().catch(() => null)
-    const granted = perms?.microphone === 'granted'
-    setRows((rs) => rs.map((r) => (r.key === 'mic' ? { ...r, state: granted ? 'ready' : 'action', detail: granted ? 'granted' : 'needs permission' } : r)))
+    const mic = micRowStatus(perms?.microphone)
+    setRows((rs) => rs.map((r) => (r.key === 'mic' ? { ...r, state: mic.state, detail: mic.detail } : r)))
   }
 
   const restartApp = (): void => {
@@ -203,7 +217,11 @@ export function OnboardingExperience({ onDone, onSkip }: OnboardingExperiencePro
   }
 
   const allReady = rows.length > 0 && rows.every((r) => r.state === 'ready' || r.state === 'skipped')
-  const needsPerms = rows.some((r) => (r.key === 'mic' || r.key === 'screen') && (r.state === 'action' || r.state === 'restart'))
+  // 'blocked' counts here for the same reason 'action' does — it was one of those states before it got
+  // its own name, and Continue must not go primary while the mic is still denied.
+  const needsPerms = rows.some(
+    (r) => (r.key === 'mic' || r.key === 'screen') && (r.state === 'action' || r.state === 'blocked' || r.state === 'restart')
+  )
 
   return (
     <div className="flex h-full w-full select-none flex-col items-center px-10 text-center">
@@ -309,6 +327,22 @@ export function OnboardingExperience({ onDone, onSkip }: OnboardingExperiencePro
                       </button>
                     </div>
                   )}
+                  {r.key === 'mic' && r.state === 'blocked' && (
+                    <div className="mt-1.5 flex flex-wrap items-center gap-2">
+                      <span className="text-[11px] leading-snug text-[color:var(--color-ink-3)]">
+                        {isWindows
+                          ? "Windows is blocking the microphone — turn it back on in Privacy settings."
+                          : "macOS won't ask again once you've said no — turn it back on in Privacy settings."}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => void window.toto.openPermissionSettings('microphone')}
+                        className="no-drag focus-ring rounded-full bg-[var(--color-accent)]/15 px-2.5 py-1 text-[11px] font-semibold text-[color:var(--color-accent-2)] hover:bg-[var(--color-accent)]/25"
+                      >
+                        Open Microphone Settings
+                      </button>
+                    </div>
+                  )}
                   {r.key === 'screen' && r.state === 'action' && (
                     <div className="mt-1.5 flex flex-wrap items-center gap-2">
                       <span className="text-[11px] leading-snug text-[color:var(--color-ink-3)]">
@@ -344,6 +378,7 @@ export function OnboardingExperience({ onDone, onSkip }: OnboardingExperiencePro
                 )}
                 {r.state === 'ready' && <Check size={16} className="mt-0.5 shrink-0 text-[var(--color-accent-2)]" />}
                 {r.state === 'action' && <span className="mt-0.5 shrink-0 text-[11px] font-medium text-[color:var(--color-ink-2)]">needed</span>}
+                {r.state === 'blocked' && <span className="mt-0.5 shrink-0 text-[11px] font-medium text-[color:var(--color-ink-2)]">blocked</span>}
                 {r.state === 'restart' && (
                   <span className="mt-0.5 shrink-0 text-[11px] font-medium text-[color:var(--color-accent-2)]">restart</span>
                 )}

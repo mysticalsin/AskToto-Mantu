@@ -24,6 +24,24 @@ describe('redactSecrets', () => {
     expect(redactSecrets('Authorization: Bearer abcdef0123456789ABCDEF')).toContain('[redacted key]')
   })
 
+  // MQA-080 — the generic sk- class excluded '-', so a dashed prefix stopped the run before it could
+  // reach 20 chars and every such key (including the sk-kimi- one this app ships) left the device raw.
+  it('redacts sk- keys with a dashed prefix (MQA-080)', () => {
+    // Shortest shape cahe-embedded-key.ts accepts — proves the 20-char floor still clears the prefix.
+    expect(redactSecrets('key sk-kimi-AbCdEf0123456789')).toBe('key [redacted key]')
+    expect(redactSecrets('sk-proj-AbCdEf0123456789xyzQWERTY')).toBe('[redacted key]')
+    expect(redactSecrets('sk-or-v1-0123456789abcdef0123')).toBe('[redacted key]')
+    expect(redactSecrets('sk-ant-abc123DEF456ghi789jkl0mn')).toBe('[redacted key]')
+    expect(redactSecrets('sk-0123456789abcdefghijklmno')).toBe('[redacted key]')
+  })
+
+  it('does not let the widened sk- class eat hyphenated prose (MQA-080)', () => {
+    // 'sk' here is mid-word, so the word boundary — not the character class — is what holds the line.
+    const chan = 'posted in #ask-me-anything-2026-planning yesterday'
+    expect(redactSecrets(chan)).toBe(chan)
+    expect(redactSecrets('sk-test-1234')).toBe('sk-test-1234') // far too short to be a key
+  })
+
   it('redacts PEM private-key blocks', () => {
     const pem = '-----BEGIN RSA PRIVATE KEY-----\nMIIabc\n-----END RSA PRIVATE KEY-----'
     expect(redactSecrets(pem)).toBe('[redacted private key]')

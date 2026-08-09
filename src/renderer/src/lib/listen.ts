@@ -1041,23 +1041,27 @@ export function useListen(
   // never opened (permission wasn't granted at start, so the user is on the mic-only fallback), poll for
   // the permission flipping to 'granted' and auto-resume the them channel IN PLACE — no destructive
   // "Toggle Listen" restart. This is the "set up automatically" behaviour: after the one unavoidable macOS
-  // Settings toggle, Métis picks up system audio on its own. Only runs while listening + system was
-  // requested; the getPermissions poll is skipped entirely once 'them' is live.
+  // Settings toggle, Métis picks up system audio on its own. Windows has no permission to wait on, so the
+  // same interval is a plain capture-state retry there. Only runs while listening + system was requested;
+  // the tick is skipped entirely once 'them' is live.
   useEffect(() => {
-    // win32's getPermissions always reports screenRecording as 'unknown' (no such OS-level permission
-    // concept on Windows) — the poll below can structurally never see 'granted' there, so it would just
-    // burn a 3s interval for the whole meeting with zero chance of firing. Skip it entirely on Windows.
-    if (isWindows || !state.listening || !wantsSystemRef.current) return
+    if (!state.listening || !wantsSystemRef.current) return
     const iv = setInterval(() => {
       if (channels.current.them || sysRecoveringRef.current) return // already have it / mid-recovery
+      // Windows never reports 'granted' here (windowsScreenStatus() hard-codes 'unknown' — there is no OS
+      // permission gate to poll), so the poll below can structurally never fire the retry there. Skipping
+      // the whole EFFECT on that basis, as this used to, deleted the retry along with the pointless IPC: a
+      // transient start-time loopback failure (default output mid-switch, another app holding the render
+      // endpoint) left the meeting mic-only until the user stopped and restarted Listen — which splits the
+      // meeting into two transcripts. Retry off actual capture state instead of a string that never flips.
+      if (isWindows) {
+        void recoverSystemAudioRef.current?.()
+        return
+      }
       void window.toto
         .getPermissions()
         .then((p) => {
-          // Windows never reports 'granted' here (windowsScreenStatus() hard-codes 'unknown' — there is no
-          // OS permission gate to poll), which made this watcher dead code there: a transient start-time
-          // loopback failure was never retried. Drive the retry off actual capture state on Windows instead
-          // of a permission string that will never flip.
-          if ((isWindows || p?.screenRecording === 'granted') && !channels.current.them) {
+          if (p?.screenRecording === 'granted' && !channels.current.them) {
             void recoverSystemAudioRef.current?.()
           }
         })

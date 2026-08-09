@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { describe, it, expect } from 'vitest'
 import { makeVad, isSpeechLikeWindow } from './vad'
 import { WHISPER_WORKLET_SRC } from './whisper-worklet-src'
@@ -83,6 +85,49 @@ describe('makeVad — voice-activity endpointing', () => {
     expect(emits).toHaveLength(0)
   })
 
+  // MQA-044 — the 'them' channel is boosted 3.0× (listen.ts) to lift un-AGC'd call speech over the fixed
+  // thresholds, which also lifts a steady far-end bed (conference comfort noise, hold music, a fan) to or
+  // above the 0.006 exit. Once real speech had set the speech flag, the bed kept it set: `silence` was
+  // zeroed every quantum, the endpoint could never fire, and the remote side reached the ASR only when the
+  // worklet's 6s hard cap force-cut it — mid-word, up to 6s after the question ended.
+  it('endpoints a remote turn riding a steady boosted bed (MQA-044)', () => {
+    const BED = 0.009 // a 0.003 far-end bed × the 3.0× boost: above the 0.006 exit, below the 0.012 entry
+    const emits = run([
+      { rms: BED, sec: 2 },
+      { rms: SPEECH, sec: 1.2 },
+      { rms: BED, sec: 3 }
+    ])
+    expect(emits).toHaveLength(1) // latched, the bed produced no endpoint at all — ever
+    // The turn ends 3.2s in; the endpoint must follow it, not a 6s buffer boundary.
+    expect(emits[0].sinceResetSec).toBeGreaterThanOrEqual(3.2 + 0.58)
+    expect(emits[0].sinceResetSec).toBeLessThanOrEqual(3.2 + 1.0)
+  })
+
+  it('escapes the speech state when the bed itself rides above the entry threshold (MQA-044)', () => {
+    const LOUD_BED = 0.015 // above ON, so the VAD latches on the bed alone before anyone has spoken
+    const emits = run([
+      { rms: LOUD_BED, sec: 4 },
+      { rms: SPEECH, sec: 1.2 },
+      { rms: LOUD_BED, sec: 3 }
+    ])
+    expect(emits).toHaveLength(1)
+    expect(emits[0].sinceResetSec).toBeGreaterThan(5.2) // after the turn ended, not part-way through it
+    expect(emits[0].sinceResetSec).toBeLessThanOrEqual(6.5)
+  })
+
+  it('leaves a quiet-room turn exactly where it was (the adaptive floor stays out of the way)', () => {
+    // The mic channel never carries a bed above the absolute floor, so nothing about its endpointing may
+    // move: same single emit, same ~0.6s trailing silence as before the floor existed.
+    const emits = run([
+      { rms: 0.0005, sec: 2 },
+      { rms: SPEECH, sec: 2.5 },
+      { rms: SILENCE, sec: 1.5 }
+    ])
+    expect(emits).toHaveLength(1)
+    expect(emits[0].sinceResetSec).toBeGreaterThanOrEqual(4.5 + 0.58)
+    expect(emits[0].sinceResetSec).toBeLessThanOrEqual(4.5 + 0.75)
+  })
+
   it('reset() clears state so the next turn starts fresh', () => {
     const vad = makeVad()
     for (let i = 0; i < frames(0.5); i++) vad.step(SPEECH, FRAME)
@@ -137,6 +182,27 @@ describe('isSpeechLikeWindow — steady-background gate (them-channel boost fall
     ])
     const buf = envelope(segs)
     expect(isSpeechLikeWindow(buf, buf.length)).toBe(true)
+  })
+
+  it('keeps a short reply that fills under a tenth of a bed-dominated window (MQA-044)', () => {
+    // A bed emits nothing on its own, so the window that finally closes around a brief remote reply opened
+    // seconds earlier and is ~90% bed. The p90 frame then lands on the bed, the ratio reads ~1, and the
+    // real utterance was dropped with the window it arrived in.
+    const buf = envelope([
+      { rms: 0.009, sec: 4 },
+      { rms: 0.08, sec: 0.5 }, // "Sure." — 10 of the window's 102 frames
+      { rms: 0.009, sec: 0.6 }
+    ])
+    expect(isSpeechLikeWindow(buf, buf.length)).toBe(true)
+  })
+
+  it('a lone transient over a bed is still not enough to pass (no run, no speech)', () => {
+    const buf = envelope([
+      { rms: 0.009, sec: 4 },
+      { rms: 0.08, sec: 0.1 }, // click/keystroke: 2 frames, under the 0.3s held-speech floor
+      { rms: 0.009, sec: 0.6 }
+    ])
+    expect(isSpeechLikeWindow(buf, buf.length)).toBe(false)
   })
 
   it('fails open on windows too short to judge (< 0.4s)', () => {
@@ -228,6 +294,17 @@ describe('whisper worklet source', () => {
     expect(messages).toHaveLength(0)
   })
 
+  it('delivers a short remote reply buried in a steady boosted bed (MQA-044)', () => {
+    const messages: Array<{ audio?: Float32Array }> = []
+    const w = instantiateWorklet(messages)
+    // 4s of bed at RMS ~0.009 (a 0.003 far-end bed × the 3.0× them boost), a 0.5s reply, then more bed.
+    // Latched, the VAD never end-pointed: the only cut was the 6s hard cap, and that window is ~92% bed,
+    // so the envelope gate judged it non-speech and the reply never reached the ASR at all.
+    feed(w, concat(tone(4, 0.0127), tone(0.5, 0.113), tone(2, 0.0127)))
+    expect(messages).toHaveLength(1)
+    expect(messages[0].audio!.length).toBeLessThan(6 * SR) // end-pointed, not force-cut at the hard cap
+  })
+
   it('still emits a real utterance: syllabic bursts end-pointed and passed through the gate', () => {
     const messages: Array<{ audio?: Float32Array }> = []
     const w = instantiateWorklet(messages)
@@ -238,5 +315,30 @@ describe('whisper worklet source', () => {
     )
     expect(messages).toHaveLength(1)
     expect(messages[0].audio!.length).toBeGreaterThan(0)
+  })
+})
+
+// Normalize CRLF → LF (same rationale as listen.test.ts): a Windows checkout would otherwise break any
+// anchor whose newline sits mid-string.
+const listenSrc = readFileSync(join(__dirname, 'listen.ts'), 'utf8').replace(/\r\n/g, '\n')
+
+// MQA-041 — the same commit that taught the system-audio watcher to retry off capture state on Windows
+// left an earlier `isWindows ||` in the effect's own early return, so the interval was never created there
+// and the Windows branch inside it was unreachable in every state. A start-time loopback failure (default
+// output mid-switch, another app holding the render endpoint) that healed seconds later therefore ran the
+// whole meeting mic-only: no 'them' track exists, so no 'ended' event can fire, and the devicechange
+// handler only re-acquires the mic. The only recovery left was Stop → Listen, which splits the transcript.
+describe('windows system-audio retry watcher (MQA-041)', () => {
+  it('creates the interval on Windows — the effect gates on session state only', () => {
+    expect(listenSrc).toMatch(/if \(!state\.listening \|\| !wantsSystemRef\.current\) return\n {4}const iv = setInterval/)
+    expect(listenSrc).not.toMatch(/if \(isWindows \|\| !state\.listening/)
+  })
+
+  it('retries capture directly on Windows instead of polling a permission that never flips', () => {
+    expect(listenSrc).toMatch(
+      /if \(isWindows\) \{\n {8}void recoverSystemAudioRef\.current\?\.\(\)\n {8}return\n {6}\}/
+    )
+    // The macOS path keeps its permission gate — a granted flip is still what resumes 'them' there.
+    expect(listenSrc).toMatch(/if \(p\?\.screenRecording === 'granted' && !channels\.current\.them\)/)
   })
 })

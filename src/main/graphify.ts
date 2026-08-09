@@ -178,15 +178,25 @@ async function hasClaudeCli(): Promise<boolean> {
 }
 
 /** Pick the extraction backend + (optional) API key. Prefers the local Claude Code CLI (no key). */
-async function pickBackend(): Promise<{ backend: string; apiKey?: string } | null> {
+// exported for unit tests (graphify.test.ts) — the engine-choice routing is what MQA-058 regressed on
+export async function pickBackend(): Promise<{ backend: string; apiKey?: string } | null> {
   const s = getSettings()
   const pref = s.graphifyBackend
   // Honor the org allowedProviders policy: graphify streams the full transcript to its backend, so a
   // pinned data-residency policy must gate the backend choice the same way the interactive ask path does.
   const allowed = getAllowedProviders()
   const ok = (pid: string): boolean => !allowed || allowed.includes(pid)
-  if (pref === 'claude' && hasApiKey('anthropic') && ok('anthropic')) return { backend: 'claude', apiKey: getApiKey('anthropic') }
-  if (pref === 'openai' && hasApiKey('openai') && ok('openai')) return { backend: 'openai', apiKey: getApiKey('openai') }
+  // An explicit engine pick is exclusive, not a first preference — Settings offers 'auto' as the separate
+  // opt-in to the cascade below. Falling through when the pinned vendor is unusable (key deleted/revoked,
+  // or blocked by the org allowlist) would ship the whole meetings folder to a vendor the user never chose,
+  // silently: the auto-rebuild runs in the background and the engine name is never surfaced in the UI. Fail
+  // closed so buildGraph reports the actionable "No extraction backend." instead. (MQA-058)
+  if (pref === 'claude') {
+    return hasApiKey('anthropic') && ok('anthropic') ? { backend: 'claude', apiKey: getApiKey('anthropic') } : null
+  }
+  if (pref === 'openai') {
+    return hasApiKey('openai') && ok('openai') ? { backend: 'openai', apiKey: getApiKey('openai') } : null
+  }
   // auto: local Claude Code → stored Claude key → stored OpenAI key
   if (ok('claude-cli') && (await hasClaudeCli())) return { backend: 'claude-cli' }
   if (hasApiKey('anthropic') && ok('anthropic')) return { backend: 'claude', apiKey: getApiKey('anthropic') }
