@@ -116,6 +116,23 @@ describe('About footer version', () => {
   })
 })
 
+describe('About footer Support / Send feedback route to the maintained mailbox', () => {
+  // Both the "Support" and "Send feedback" links must reach twalteur@amaris.com. The prior
+  // support@mantu.com mailbox is not monitored for this app, so a bug report or feedback sent there
+  // is silently lost — pin the live address so an edit can't quietly revert it.
+  it('Support links to twalteur@amaris.com', () => {
+    expect(source).toMatch(/href="mailto:twalteur@amaris\.com"[\s\S]{0,120}?>\s*Support/)
+  })
+
+  it('Send feedback links to twalteur@amaris.com (subject preserved)', () => {
+    expect(source).toMatch(/href="mailto:twalteur@amaris\.com\?subject=[^"]*"[\s\S]{0,120}?>\s*Send feedback/)
+  })
+
+  it('the unmonitored support@mantu.com mailbox is gone from the footer', () => {
+    expect(source).not.toMatch(/mailto:support@mantu\.com/)
+  })
+})
+
 describe('MQA-060 — the Test button is not offered in the state where it can only fail', () => {
   const block = blockAfter('onClick={onTest}', '</button>')
 
