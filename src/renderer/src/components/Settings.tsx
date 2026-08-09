@@ -1267,6 +1267,9 @@ function AiSection({
           card, same prominence as Anthropic/CLI above; never appears in the generic tiles below. */}
       <LocalAiSection settings={settings} patch={patch} />
 
+      {/* Backups & limits — what happens when a provider runs out of tokens/credit (the resilience layer). */}
+      <ResilienceSection settings={settings} patch={patch} />
+
       {/* Featured API providers — same prominence as the CLI cards above, so picking GPT/Grok/Kimi/
           Gemini doesn't require digging into a collapsed section. */}
       <Section title="Other providers" desc="Bring your own key from another provider." icon={Network}>
@@ -1402,6 +1405,94 @@ function AiSection({
 // Métis Local is installer-owned. This card can read readiness and enable routing, but it cannot download,
 // replace, or remove the model at runtime.
 // ---------------------------------------------------------------------------
+
+/** Human phrase for a currently-demoted provider, from its cooldown reason + reset instant. */
+function providerLimitLabel(u: { reason: string; until: number }): string {
+  const mins = Math.max(0, Math.round((u.until - Date.now()) / 60000))
+  const when =
+    mins >= 60
+      ? `resets ~${new Date(u.until).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`
+      : mins >= 1
+        ? `retry in ${mins}m`
+        : 'retry shortly'
+  switch (u.reason) {
+    case 'rate-limit':
+      return `rate-limited — ${when}`
+    case 'quota-exhausted':
+      return 'out of credit — add credit or switch providers'
+    case 'usage-cap':
+      return `usage limit reached — ${when}`
+    default:
+      return 'key rejected — re-enter it below'
+  }
+}
+
+/**
+ * Backups & limits — the resilience layer (main/llm/exhaustion.ts + provider-health.ts). Shows any provider
+ * currently demoted because it ran out (rate limit / credit / usage-cap) with its reset, and exposes the two
+ * routing policies. The on-device answer floor itself is governed by Local AI's "safety net" toggle above,
+ * so it is described here but toggled there — one control, not two that can disagree.
+ */
+function ResilienceSection({
+  settings,
+  patch
+}: {
+  settings: PublicSettings
+  patch: (p: Partial<PublicSettings>) => void
+}): JSX.Element {
+  const limited = settings.unhealthyProviders ?? []
+  return (
+    <Section
+      title="Backups & limits"
+      desc="When a provider runs out of tokens or credit, Métis automatically falls back — to a free provider, then to the on-device model — so you are never stuck."
+      icon={ShieldCheck}
+    >
+      <div className="flex flex-col gap-3">
+        <div className="rounded-[10px] border border-[var(--cl-border)] bg-white/[0.02] p-3">
+          {limited.length === 0 ? (
+            <div className="flex items-center gap-2 text-[12px] text-[color:var(--cl-muted-foreground)]">
+              <CircleCheck size={13} className="shrink-0 text-[color:var(--cl-primary)]" />
+              No provider limits hit right now.
+            </div>
+          ) : (
+            <ul className="flex flex-col gap-1.5">
+              {limited.map((u) => (
+                <li key={u.provider} className="flex items-baseline justify-between gap-3 text-[12px]">
+                  <span className="text-[color:var(--cl-foreground)]">
+                    {PROVIDERS[u.provider as ProviderId]?.label ?? u.provider}
+                  </span>
+                  <span className="text-[color:var(--cl-muted-foreground)]">{providerLimitLabel(u)}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+
+        <ToggleRow
+          label="Prefer a free backup when a paid provider runs out"
+          desc="Route to a provider with a free tier (or the on-device model) before another paid one, once the paid primary is spent."
+          on={settings.resilience.preferFreeOnExhaustion}
+          onChange={(v) => patch({ resilience: { ...settings.resilience, preferFreeOnExhaustion: v } })}
+        />
+
+        <ToggleRow
+          label="Switch before hitting a limit"
+          desc="Read each provider's remaining allowance and move to a backup just before it would be rate-limited, instead of after."
+          on={settings.resilience.budgetPreempt}
+          onChange={(v) => patch({ resilience: { ...settings.resilience, budgetPreempt: v } })}
+        />
+
+        <div className="flex items-start gap-2 rounded-[8px] border border-[var(--cl-border)] bg-white/[0.02] px-3 py-2 text-[11px] text-[color:var(--cl-muted-foreground)]">
+          <Cpu size={13} className="mt-0.5 shrink-0" />
+          <span>
+            Worst case, the on-device model answers with no API at all — controlled by <b>Local AI → use as a
+            safety net</b> above.
+          </span>
+        </div>
+      </div>
+    </Section>
+  )
+}
 
 function LocalAiSection({
   settings,

@@ -8,6 +8,15 @@ import { describe, expect, it } from 'vitest'
  * provider and a misleading error. The behaviour is unit-tested in llm/exhaustion.test.ts,
  * llm/provider-health.test.ts and llm/usage-headroom.test.ts; askStart is a single large closure with no
  * injectable seam, so — like the other *.contract.test.ts beside it — the WIRING is pinned against source.
+ *
+ * Ledger rows this file pins (docs/qa/BUG-LEDGER.md):
+ *   MQA-117 — a 429/rate-limit never tripped the breaker; the provider was re-tried as primary every ask.
+ *   MQA-118 — hard credit/quota ("credit balance is too low") not remembered; re-paid every ask.
+ *   MQA-119 — a claude-cli/subscription usage-cap surfaced its raw string and re-hit the cap every ask.
+ *   MQA-120 — exhaustion with no backup showed a misleading "Connection issue" instead of the real limit.
+ *   MQA-121 — the server Retry-After was ignored in the ask path.
+ *   MQA-122 — answer mode had no on-device backup; it dead-ended with an error when the sole provider ran out.
+ *   MQA-123 — pickFailover routed to the answer floor but attempt() bounced it (found by the physical sim).
  */
 const indexSrc = readFileSync(join(__dirname, 'index.ts'), 'utf8')
 
@@ -79,6 +88,16 @@ describe('the backup chain: free-first ordering + the on-device answer floor', (
     expect(coolingIdx).toBeGreaterThan(-1)
     expect(floorIdx).toBeGreaterThan(coolingIdx) // floor is offered AFTER the cooling last resort
     expect(nullIdx).toBeGreaterThan(floorIdx) // and only then does the walk dead-end
+  })
+
+  it('attempt() ACCEPTS the answer floor too — else pickFailover routes to local and attempt bounces it', () => {
+    // The physical sim proved this: without localAnswerFloorEligibleFor in attempt()'s local ineligible
+    // chain, an answer-mode failover to the floor was rejected with the "uses your cloud provider" message
+    // instead of answering on-device. Both seams must agree on the floor.
+    const chain = indexSrc.slice(indexSrc.indexOf('const ineligible ='), indexSrc.indexOf('const ineligible =') + 700)
+    expect(chain).toMatch(/localEligibleFor\(req, s, tier, allowed\) \|\|/)
+    expect(chain).toMatch(/localFallbackEligibleFor\(req, s, tier, allowed\) \|\|/)
+    expect(chain).toMatch(/localAnswerFloorEligibleFor\(req, s, allowed\)/)
   })
 })
 

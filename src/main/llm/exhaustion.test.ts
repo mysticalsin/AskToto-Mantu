@@ -1,6 +1,9 @@
 import { describe, it, expect } from 'vitest'
 import { classifyExhaustion, parseRetryAfterMs, parseCliUsageReset } from './exhaustion'
 
+// Regression coverage for the exhaustion taxonomy behind these ledger rows (docs/qa/BUG-LEDGER.md):
+// MQA-118 (credit/quota classification), MQA-119 (claude-cli usage-cap + reset parse), MQA-121 (Retry-After).
+
 describe('classifyExhaustion — money (quota-exhausted)', () => {
   it('OpenAI insufficient_quota is quota, even carried on a 429', () => {
     const s = classifyExhaustion(
