@@ -4,9 +4,10 @@
 # macOS tags anything downloaded (or synced via OneDrive/Dropbox/Slack/email) with a `com.apple.quarantine`
 # extended attribute. On a build without an Apple Developer ID signature + notarization, Gatekeeper turns
 # that tag into "Apple could not verify Metis is free of malware". The app is fine; macOS simply has no
-# Apple-issued signature to check it against. Removing the quarantine tag is the supported, local way to
-# say "I trust this one" — it is exactly what right-click > Open does, applied up front so the warning
-# never appears. It does NOT disable Gatekeeper system-wide and affects only this app.
+# Apple-issued signature to check it against. Clearing the tag before first launch is what stops the
+# dialog: on macOS 15 and later Control-click > Open no longer bypasses it, leaving System Settings >
+# Privacy & Security > Open Anyway as the only click-through, after the warning has already scared the
+# user off. This affects only this app and does NOT disable Gatekeeper system-wide.
 #
 # Usage: double-click this file in Finder. It installs Metis to /Applications and opens it.
 
