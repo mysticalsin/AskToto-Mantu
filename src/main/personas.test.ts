@@ -49,7 +49,7 @@ describe('buildSystem — grounding & trust', () => {
 
   it('summary / recap use their dedicated prompts and skip the grounding rail', () => {
     const summary = buildSystem(req('summary'), 'general', EMPTY_PROFILE, {}, [])
-    expect(summary).toContain('Summarize this conversation')
+    expect(summary).toContain('Summarize the conversation transcript')
     expect(buildSystem(req('recap'), 'general', EMPTY_PROFILE, {}, [])).toContain('detailed post-meeting document')
     expect(summary).not.toContain('GROUNDING & HONESTY')
   })

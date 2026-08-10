@@ -1,5 +1,15 @@
 import { describe, it, expect } from 'vitest'
-import { RECAP_PROMPT, MODE_RECAP_FOCUS, recapPromptFor, EMAIL_RECAP_PROMPT, MEETING_BRIEF_PROMPT, WINS_CLAUSE } from './prompts'
+import {
+  RECAP_PROMPT,
+  MODE_RECAP_FOCUS,
+  recapPromptFor,
+  EMAIL_RECAP_PROMPT,
+  MEETING_BRIEF_PROMPT,
+  WINS_CLAUSE,
+  DEFAULT_MODE_PROMPTS,
+  ASSIST_PROMPT,
+  buildNoDecisionPrompt
+} from './prompts'
 
 // Section skeleton transcripts.ts / recall.ts depend on (see prompts.ts's RECAP_PROMPT doc comment).
 // This exact list, in this exact order, must never change shape when mode focus is appended.
@@ -21,7 +31,7 @@ describe('recapPromptFor', () => {
     for (const heading of RECAP_SECTION_HEADINGS) expect(s).toContain(heading)
     expect(s).toContain('MODE FOCUS (Sales)')
     expect(s).toMatch(/buying signals/i)
-    expect(s).toMatch(/objections/i)
+    expect(s).toMatch(/objection/i)
   })
 
   it('general returns the plain recap base, unchanged', () => {
@@ -45,7 +55,7 @@ describe('recapPromptFor', () => {
   it('interview, negotiation, presentation, support each append their own distinct focus', () => {
     expect(recapPromptFor('interview')).toMatch(/candidate-relevant exchanges/i)
     expect(recapPromptFor('negotiation')).toMatch(/positions.*interests/i)
-    expect(recapPromptFor('presentation')).toMatch(/audience questions/i)
+    expect(recapPromptFor('presentation')).toMatch(/audience question/i)
     expect(recapPromptFor('support')).toMatch(/reported problem/i)
     expect(recapPromptFor('meeting')).toMatch(/decisions.*owns/i)
   })
@@ -82,5 +92,57 @@ describe('email + pre-meeting-brief summary prompts', () => {
   it('the wins clause invites only REAL references and can be omitted', () => {
     expect(WINS_CLAUSE).toMatch(/never invent/i)
     expect(WINS_CLAUSE).toMatch(/omit/i) // "if none clearly fits, omit"
+  })
+})
+
+describe('DEFAULT_MODE_PROMPTS', () => {
+  const modes = Object.keys(DEFAULT_MODE_PROMPTS)
+
+  it('covers all eight built-in modes', () => {
+    expect(modes.sort()).toEqual(
+      ['general', 'interview', 'meeting', 'negotiation', 'presentation', 'recruiting', 'sales', 'support'].sort()
+    )
+  })
+
+  it('every mode leads with the Métis identity and pins the live-card output format', () => {
+    for (const mode of modes) {
+      const p = DEFAULT_MODE_PROMPTS[mode]
+      expect(p.startsWith('You are Métis')).toBe(true)
+      expect(p).toContain('OUTPUT FORMAT')
+      expect(p).toContain('"Backup:"')
+    }
+  })
+
+  it('every mode ends on a grounding rule: never invent, never filler', () => {
+    for (const mode of modes) {
+      const p = DEFAULT_MODE_PROMPTS[mode]
+      expect(p).toMatch(/never invent/i)
+      expect(p).toMatch(/never filler/i)
+    }
+  })
+
+  it('mode prompts never use banned AI-tell words or em-dashes (humanizer discipline)', () => {
+    const banned = /\b(delve|leverage|robust|comprehensive|seamless|cutting-edge|best-in-class|synergy|paradigm)\b|—/i
+    for (const mode of modes) {
+      expect(DEFAULT_MODE_PROMPTS[mode]).not.toMatch(banned)
+    }
+    expect(ASSIST_PROMPT).not.toMatch(banned)
+    expect(buildNoDecisionPrompt('sample transcript')).not.toMatch(banned)
+  })
+
+  it('recruiting keeps its interview-sheet backbone, STAR drilling, CHALLENGE, and A-D scoring', () => {
+    const p = DEFAULT_MODE_PROMPTS.recruiting
+    for (const anchor of ['INTERVIEW SHEET', 'STAR', 'CHALLENGE', 'A to D', 'notice period', 'work permit']) {
+      expect(p).toContain(anchor)
+    }
+  })
+
+  it('assist keeps the exactly-2-sentences contract; honk keeps NUDGE/SAY THIS and the transcript tail', () => {
+    expect(ASSIST_PROMPT).toContain('exactly 2 sentences')
+    const honk = buildNoDecisionPrompt('x'.repeat(5000))
+    expect(honk).toContain('NUDGE:')
+    expect(honk).toContain('SAY THIS:')
+    expect(honk).toContain('x'.repeat(4000))
+    expect(honk).not.toContain('x'.repeat(4001))
   })
 })
