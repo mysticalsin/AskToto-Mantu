@@ -29,10 +29,10 @@ Pick whichever fits:
 **Double-click `Install Metis.command`** (shipped next to the `.dmg`). It copies Métis to `/Applications`,
 clears the quarantine tag, verifies the signature still seals, and opens the app. One step, no Terminal.
 
-**Or right-click once.** Control-click Métis in Finder, choose **Open**, then confirm. This uses a
-different trust path than double-clicking and works even while `spctl` reports the app as rejected. Only
-needed on first launch. (If macOS offers no Open button, use System Settings → Privacy & Security, find
-the blocked-app notice, and click **Open Anyway**.)
+**Or approve it after the fact.** On macOS 15 and later, Control-click → **Open** no longer bypasses this
+dialog (see `docs/MANTU-IT-REQUEST.md`). Dismiss the warning, then go to System Settings → Privacy &
+Security, scroll to the security section, and click **Open Anyway**. Slower and it surfaces a malware
+warning first, which is why the script above is the better path.
 
 **Or one Terminal command:**
 
