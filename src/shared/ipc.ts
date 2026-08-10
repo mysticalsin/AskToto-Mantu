@@ -1129,6 +1129,7 @@ export const DEFAULT_SETTINGS: Settings = {
   providerModelsThinking: {},
   providerModelsDeep: {},
   providerModelsSpotlightRef: DUST_SPOTLIGHT_REF_AGENT_ID ? { dust: DUST_SPOTLIGHT_REF_AGENT_ID } : {},
+  resilience: { preferFreeOnExhaustion: true, budgetPreempt: true },
   thinkingMode: 'auto',
   askFollowUpMemory: false,
   customBaseUrl: '',
