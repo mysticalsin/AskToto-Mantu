@@ -22,10 +22,11 @@ describe('MQA-004 — a rejected credential is recorded, not forgotten', () => {
   it('records an auth failure on a pre-token error, using the Dust-aware matcher for Dust (MQA-101)', () => {
     // MQA-101 widened this: Dust's current "authenticated credential" wording carries no 401 digits, so
     // the generic isAuthFailure misses it — the cooldown never trips. dust.ts maintains the matcher.
-    // Gated on !exhaustion now: an exhaustion signal (429 / credit / usage-cap) is classified FIRST and must
-    // not be double-counted as a credential rejection (e.g. a "403 insufficient_quota" is out-of-credit).
+    // Gated on !exhaustion (429/credit/usage-cap is classified first, not a dead key) AND provider !== 'local'
+    // (the on-device model has no credentials — a local runtime error must never cool 'local' down and let the
+    // skip-cooling-primary path swap a privacy-pinned vision request to cloud). MQA-124 (docs/qa/BUG-LEDGER.md).
     expect(indexSrc).toMatch(
-      /const isCredentialRejection =\s*\n?\s*!exhaustion && \(provider === 'dust' \? isDustAuthError\(\{ message \}\) : isAuthFailure\(message\)\)/
+      /const isCredentialRejection =\s*\n?\s*!exhaustion &&\s*\n?\s*provider !== 'local' &&\s*\n?\s*\(provider === 'dust' \? isDustAuthError\(\{ message \}\) : isAuthFailure\(message\)\)/
     )
     expect(indexSrc).toMatch(/if \(!gotToken && isCredentialRejection\) recordAuthFailure\(provider, String\(message\)\)/)
   })

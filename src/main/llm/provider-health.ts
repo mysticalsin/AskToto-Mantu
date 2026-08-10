@@ -97,9 +97,15 @@ export function recordAuthFailure(provider: ProviderId, message: string, now = D
   const h = entry(provider)
   h.consecutiveAuthFailures += 1
   h.lastError = message
-  if (h.consecutiveAuthFailures >= AUTH_FAILURES_BEFORE_UNHEALTHY && h.coolingUntil == null) {
+  // Escalate to the auth cooldown even if the provider is ALREADY cooling for a shorter, less-serious
+  // reason (a 60s rate-limit): a dead key will keep failing until a human fixes it, so once the 2-strike
+  // threshold is crossed the auth verdict wins and the cooldown extends to the later of the two expiries.
+  if (
+    h.consecutiveAuthFailures >= AUTH_FAILURES_BEFORE_UNHEALTHY &&
+    (h.coolingUntil == null || h.reason !== 'auth')
+  ) {
     h.reason = 'auth'
-    h.coolingUntil = now + COOLDOWN_MS
+    h.coolingUntil = Math.max(h.coolingUntil ?? 0, now + COOLDOWN_MS)
     h.since = now
   }
   return h.coolingUntil != null

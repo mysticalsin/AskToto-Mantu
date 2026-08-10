@@ -83,6 +83,13 @@ describe('classifyExhaustion — rate-limit', () => {
   it('classifies by status when the body is terse', () => {
     expect(classifyExhaustion('slow down', 429)?.kind).toBe('rate-limit')
   })
+
+  it('"would exceed your account rate limit" is a rate-limit, NOT a 1h usage-cap (audit fix MQA-125)', () => {
+    // Regression: this phrasing used to sit in USAGE_CAP and was checked before RATE_LIMIT, so a per-request
+    // rate limit was demoting the provider for up to an hour instead of ~60s.
+    const s = classifyExhaustion("This request would exceed your account's rate limit. Please slow down.")
+    expect(s?.kind).toBe('rate-limit')
+  })
 })
 
 describe('classifyExhaustion — NOT an exhaustion signal (leaves auth/transient alone)', () => {

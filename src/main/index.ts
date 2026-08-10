@@ -3309,9 +3309,17 @@ function registerIpc(): void {
             // "does not have a valid authenticated credential" phrasing carries no 401 digits, so the
             // generic isAuthFailure misses it — the circuit breaker never trips for a genuinely dead Dust
             // session. dust.ts already maintains the broadened matcher for exactly this; use it for Dust.
-            // Gated on !exhaustion so a "403 insufficient_quota" is not double-counted as a dead key.
+            // Gated on !exhaustion so a "403 insufficient_quota" is not double-counted as a dead key, AND on
+            // provider !== 'local' — the on-device model has no credentials to reject, and a local runtime
+            // error whose text happens to match isAuthFailure (e.g. an EACCES "permission denied" from a
+            // file lock re-hashing the model) must NOT cool 'local' down. If it did, the skip-cooling-primary
+            // fast path would swap a privacy-pinned local vision request onto a cloud provider — uploading a
+            // screenshot the user pinned to on-device-only. Local failures are handled by local-runtime.ts's
+            // own restart budget, never by this credential breaker.
             const isCredentialRejection =
-              !exhaustion && (provider === 'dust' ? isDustAuthError({ message }) : isAuthFailure(message))
+              !exhaustion &&
+              provider !== 'local' &&
+              (provider === 'dust' ? isDustAuthError({ message }) : isAuthFailure(message))
             if (!gotToken && isCredentialRejection) recordAuthFailure(provider, String(message))
             // Do NOT retire a CLI for a usage-cap: a spent Claude Pro / Codex window is a TEMPORARY lockout
             // that refills at a known time, not a dead login — retiring it would force a needless re-login.
@@ -4023,6 +4031,7 @@ function registerIpc(): void {
   // never touches where the user's OWN meetings are saved.
   ipcMain.handle(IPC.addTeamTranscriptFolder, async (e) => {
     assertMainWindow(e)
+    if (!requireAuth()) return publicSettings() // adds a folder to the brain's ingestion set — gate it like every other settings write
     const openDialogOpts: Electron.OpenDialogOptions = {
       properties: ['openDirectory'],
       message: "Choose a shared folder whose transcripts feed this brain (e.g. a teammate's meetings folder)"
@@ -4037,6 +4046,7 @@ function registerIpc(): void {
   })
   ipcMain.handle(IPC.removeTeamTranscriptFolder, async (e, folder: unknown) => {
     assertMainWindow(e)
+    if (!requireAuth()) return publicSettings()
     const target = typeof folder === 'string' ? folder : ''
     const current = getSettings().teamTranscriptFolders ?? []
     setSettings({ teamTranscriptFolders: current.filter((f) => f !== target) })

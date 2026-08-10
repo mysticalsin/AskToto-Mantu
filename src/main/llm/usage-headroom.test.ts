@@ -87,4 +87,18 @@ describe('noteHeadroomFromHeaders', () => {
     noteHeadroomFromHeaders('openai', bag({ 'x-ratelimit-remaining-tokens': 'not-a-number' }))
     expect(isBudgetExhausted('openai')).toBe(false)
   })
+
+  it('a bare-millisecond reset ("743ms") is not misread as 743 MINUTES (audit fix MQA-126)', () => {
+    // Regression: the compact-duration parser matched "743m" out of "743ms", inflating the reset ~60,000×
+    // and pinning the provider budget-exhausted far into the future.
+    const t0 = 3_000_000
+    // A 200 carrying a near-empty budget + a 743ms reset header.
+    noteHeadroomFromHeaders(
+      'groq',
+      bag({ 'x-ratelimit-remaining-tokens': '0', 'x-ratelimit-limit-tokens': '100000', 'x-ratelimit-reset-tokens': '743ms' }),
+      t0
+    )
+    // ~743ms out, NOT ~12h: the snapshot self-heals well before a minute, not stuck for hours.
+    expect(isBudgetExhausted('groq', t0 + 2000)).toBe(false)
+  })
 })

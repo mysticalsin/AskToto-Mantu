@@ -63,10 +63,17 @@ function resetEpoch(h: HeaderBag, names: string[], now: number): number | null {
   for (const name of names) {
     const raw = h.get(name)
     if (raw == null || raw === '') continue
-    // Two shapes: an ISO date (Anthropic) or a compact "1m30s" / seconds (OpenAI).
+    // Two shapes: an ISO date (Anthropic) or a compact "1m30s" / "743ms" / seconds (OpenAI/Go).
     const iso = Date.parse(raw)
     if (!Number.isNaN(iso) && iso > now) return iso
-    const compact = String(raw).match(/(?:(\d+)m)?(?:(\d+(?:\.\d+)?)s)?/)
+    // Bare milliseconds first — else "743ms" matches the (\d+)m branch below and inflates ~60,000×.
+    const msOnly = String(raw).match(/^(\d+)ms$/)
+    if (msOnly) {
+      const ms = Number(msOnly[1])
+      if (ms > 0) return now + ms
+    }
+    // `(?!s)` on the minutes group keeps a trailing "ms" from being read as minutes.
+    const compact = String(raw).match(/(?:(\d+)m(?!s))?(?:(\d+(?:\.\d+)?)s)?/)
     if (compact && (compact[1] || compact[2])) {
       const ms = Number(compact[1] || 0) * 60_000 + Number(compact[2] || 0) * 1000
       if (ms > 0) return now + ms
