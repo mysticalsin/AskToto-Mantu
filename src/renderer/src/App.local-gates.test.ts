@@ -238,10 +238,11 @@ describe('Summarize screen-route mirrors askScreen\'s actual vision gate (findin
   // same anchor here, sliced up to the route computation, to isolate ONLY the summarize branch's
   // canUseScreen (explain's own separate canUseScreen, asserted below, must keep the broader flag).
   const summarizeIdx = source.indexOf("kind === 'summarize'")
-  const summarizeCanUseScreenLine = source
-    .slice(summarizeIdx, source.indexOf('const route = chooseQuickActionRoute', summarizeIdx))
-    .split('\n')
-    .find((l) => l.includes('const canUseScreen'))
+  // canUseScreen here is now a multi-line Boolean(...), so grab the whole block up to the route decision.
+  const summarizeCanUseScreenBlock = source.slice(
+    summarizeIdx,
+    source.indexOf('const route = chooseQuickActionRoute', summarizeIdx)
+  )
 
   const explainIdx = source.indexOf("kind === 'explain'")
   const explainCanUseScreenLine = source
@@ -249,9 +250,14 @@ describe('Summarize screen-route mirrors askScreen\'s actual vision gate (findin
     .split('\n')
     .find((l) => l.includes('const canUseScreen'))
 
-  it('summarize\'s canUseScreen requires providerReady || localVisionReady (what askScreen actually gates on)', () => {
-    expect(summarizeCanUseScreenLine).toMatch(/settings\?\.providerReady \|\| settings\?\.localVisionReady/)
-    expect(summarizeCanUseScreenLine).not.toMatch(/settings\?\.visionAvailable/)
+  it("summarize's canUseScreen mirrors askScreen's full requireProvider('vision') gate incl. localFallbackReady (MQA-130)", () => {
+    // askScreen gates on requireProvider('vision'), which is providerReady || localVisionReady ||
+    // localFallbackReady. summarize's canUseScreen must include ALL three or a zero-cloud Local-AI-fallback
+    // user is wrongly told it can't read the screen (the old form omitted localFallbackReady — the audit bug).
+    expect(summarizeCanUseScreenBlock).toMatch(
+      /settings\?\.providerReady \|\| settings\?\.localVisionReady \|\| settings\?\.localFallbackReady/
+    )
+    expect(summarizeCanUseScreenBlock).not.toMatch(/canUseScreen = Boolean\(\(settings\?\.screenAsk \?\? true\) && settings\?\.visionAvailable/)
   })
 
   it('explain\'s canUseScreen is untouched (still the broader settings.visionAvailable)', () => {

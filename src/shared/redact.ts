@@ -58,7 +58,7 @@ export function redactSecrets(input: string): string {
   // 3. Generic "secret: <value>" assignments — only when a secret-ish label precedes the value, so we don't
   // nuke ordinary numbers/words. Keeps the label, redacts the value.
   text = text.replace(
-    /\b(api[_-]?key|secret|access[_-]?token|auth[_-]?token|password|passwd|client[_-]?secret)"?(\s*[:=]\s*)("?)([^\s"']{6,})\3/gi,
+    /\b(api[_-]?key|secret|access[_-]?token|auth[_-]?token|password|passwd|client[_-]?secret)["']?(\s*[:=]\s*)(["']?)([^\s"']{6,})\3/gi,
     (_m, label, sep) => `${label}${sep}[redacted]`
   )
 

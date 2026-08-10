@@ -161,6 +161,21 @@ describe('kind-aware cooldown — rate-limit / quota / usage-cap (OmniRoute inte
     expect(isCoolingDown('claude-cli', resetAt)).toBe(false)
   })
 
+  it('an auth failure ESCALATES a provider already cooling for a rate-limit (audit fix MQA-127)', () => {
+    // Regression: recordAuthFailure was gated on coolingUntil == null, so two real auth rejections against a
+    // provider already in a 60s rate-limit cooldown never tripped the 10-min auth cooldown — the dead key
+    // would be re-tried as soon as the short rate-limit window elapsed.
+    const t0 = 6_000_000
+    recordRateLimited('deepseek', 60_000, t0) // cooling ~60s for a rate-limit
+    recordAuthFailure('deepseek', '401 invalid key', t0)
+    recordAuthFailure('deepseek', '401 invalid key', t0)
+    const u = unhealthyProviders(t0)[0]
+    expect(u.reason).toBe('auth')
+    // Cooldown now extends to the 10-min auth window, not the elapsed 60s rate-limit.
+    expect(u.until).toBe(t0 + COOLDOWN_MS)
+    expect(isCoolingDown('deepseek', t0 + 60_000 + 1)).toBe(true)
+  })
+
   it('a success clears a rate-limit / quota verdict the same as an auth one', () => {
     recordRateLimited('anthropic')
     recordSuccess('anthropic')

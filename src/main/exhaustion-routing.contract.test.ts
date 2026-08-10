@@ -39,6 +39,12 @@ describe('exhaustion is classified first and drives a kind-aware cooldown', () =
   it('a usage-cap does NOT retire the CLI — it is a temporary window, not a dead login', () => {
     expect(indexSrc).toMatch(/if \(!gotToken && !exhaustion\) retireCli\(provider, message\)/)
   })
+
+  it('never records the on-device model as a credential rejection (privacy-bypass fix, MQA-124)', () => {
+    // A local runtime error whose text matches isAuthFailure must not cool 'local' down — else the
+    // skip-cooling-primary fast path would swap a privacy-pinned local vision request onto cloud.
+    expect(indexSrc).toMatch(/const isCredentialRejection =\s*\n?\s*!exhaustion &&\s*\n?\s*provider !== 'local' &&/)
+  })
 })
 
 describe('the retry vs fail-over decision respects the exhaustion kind', () => {

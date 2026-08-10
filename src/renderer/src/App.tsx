@@ -824,6 +824,7 @@ export function App(): JSX.Element {
       settings?.localSuggestReady,
       settings?.localSummaryReady,
       settings?.localVisionReady,
+      settings?.localFallbackReady, // read in the body (803/805/807); without it the gate acts on a stale flag
       settings?.hasApiKey,
       settings?.provider,
       openSettings
@@ -2318,7 +2319,13 @@ export function App(): JSX.Element {
         // Using the broader flag here could route to 'screen' and then dead-end into Settings via
         // askScreen's narrower gate, even though the local-summary check one line above already approved
         // this request.
-        const canUseScreen = Boolean((settings?.screenAsk ?? true) && (settings?.providerReady || settings?.localVisionReady))
+        // Mirror requireProvider('vision')'s readiness exactly: localVisionReady OR the default-on local
+        // safety net (localFallbackReady). Without the latter, a zero-cloud user on Local AI fallback is
+        // wrongly told it can't read the screen even though the on-device model can.
+        const canUseScreen = Boolean(
+          (settings?.screenAsk ?? true) &&
+            (settings?.providerReady || settings?.localVisionReady || settings?.localFallbackReady)
+        )
         // route.transport is the single source of truth for vision-vs-text — it already prioritizes the
         // screen over a merely-present transcript (see chooseQuickActionRoute); don't re-decide below.
         const route = chooseQuickActionRoute({ kind, input: input.trim(), transcript, canUseScreen })

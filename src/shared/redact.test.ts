@@ -52,6 +52,13 @@ describe('redactSecrets', () => {
     expect(redactSecrets('api_key=ABCDEF123456')).toBe('api_key=[redacted]')
   })
 
+  it('redacts SINGLE-quoted secret values too (audit fix MQA-128)', () => {
+    // Regression: the value char-class excluded ' and the quote group only captured ", so a single-quoted
+    // secret reached the cloud provider / crash log completely unredacted.
+    expect(redactSecrets("password: 'hunter2xyz'")).toBe('password: [redacted]')
+    expect(redactSecrets("client_secret='ABCDEF123456'")).toBe('client_secret=[redacted]')
+  })
+
   it('leaves ordinary meeting text untouched', () => {
     const t = 'We agreed to ship in Q3, owner is Maya, budget is 50000 euros.'
     expect(redactSecrets(t)).toBe(t)

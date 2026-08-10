@@ -48,8 +48,11 @@ const CREDIT_EXHAUSTED =
 
 // A subscription / plan window is spent — refills at a known time. Distinct from money: we can name the
 // reset and must NOT retire the CLI. Scoped wording avoids matching "session expired" (an auth error).
+// NB: deliberately does NOT include "this request would exceed your account's rate limit" — that phrasing
+// is a per-request RATE LIMIT (60s back-off), not a subscription cap; classifying it as a usage-cap would
+// wrongly demote the provider for up to an hour. Subscription caps announce themselves as "usage limit".
 const USAGE_CAP =
-  /usage limit reached|reached your usage limit|you'?ve reached your usage limit|claude (pro|max)?\s*usage limit|plan usage limit|monthly usage limit|this request would exceed your account'?s rate limit/
+  /usage limit reached|reached your usage limit|you'?ve reached your usage limit|claude (pro|max)?\s*usage limit|plan usage limit|monthly usage limit/
 const SESSION_CAP = /session usage limit|session limit reached|5[-\s]?hour (usage )?limit/
 const WEEKLY_CAP = /weekly usage limit|weekly limit reached|weekly limit/
 const DAILY_CAP = /daily (usage )?limit|daily quota/
