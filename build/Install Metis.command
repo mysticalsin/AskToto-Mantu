@@ -45,17 +45,23 @@ if [ "$SRC" != "$DEST" ]; then
   cp -R "$SRC" "$DEST"
 fi
 
-# The actual fix. -r covers the nested helper apps and frameworks inside the bundle, which carry their
-# own copies of the tag; missing one still triggers the warning on first launch.
-echo "Clearing the download quarantine tag"
-xattr -dr com.apple.quarantine "$DEST" 2>/dev/null || true
+# Clear ALL extended attributes, not just com.apple.quarantine. Two separate problems, one fix:
+#   - quarantine is what triggers the "Apple could not verify" dialog, and the nested helper apps carry
+#     their own copies, so it has to be recursive.
+#   - a bundle that has passed through OneDrive (or any cloud sync, or an email/zip round-trip) picks up
+#     Finder metadata that codesign rejects outright as "resource fork, Finder information, or similar
+#     detritus not allowed". That BREAKS the signature, which is what makes macOS render the app icon as
+#     broken or generic. Verified: xattr -cr repairs such a bundle in place, signature valid again.
+echo "Clearing quarantine and cloud-sync metadata"
+xattr -cr "$DEST" 2>/dev/null || true
 
-# Verify the bundle's signature still seals correctly. Catches a partial copy or a corrupted download
-# before the user hits a confusing crash-on-launch instead of a clear message here.
+# Verify the bundle seals correctly. Catches a partial copy or a corrupted download before the user hits
+# a confusing crash-on-launch instead of a clear message here.
 if codesign --verify --deep --strict "$DEST" 2>/dev/null; then
   echo "Signature check passed"
 else
-  echo "Warning: the signature did not verify. The copy may be incomplete. Try downloading again."
+  echo "Warning: the signature did not verify, so this copy may be incomplete."
+  echo "Re-download the .dmg and run this installer again from the mounted disk image."
 fi
 
 echo
