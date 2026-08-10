@@ -19,6 +19,37 @@ Métis ships as normal desktop installers:
 Verification-only artifacts may show OS trust warnings. Tagged public releases fail closed unless both
 platforms pass their production signing and identity-verification gates.
 
+## macOS: "Apple could not verify Métis is free of malware"
+
+This appears on any build that is not Apple-notarized. macOS tags every downloaded or cloud-synced file
+with a `com.apple.quarantine` attribute; with no Apple-issued Developer ID signature to check against,
+Gatekeeper reports it cannot verify the app. It is a missing-signature message, not a malware detection.
+Pick whichever fits:
+
+**Double-click `Install Metis.command`** (shipped next to the `.dmg`). It copies Métis to `/Applications`,
+clears the quarantine tag, verifies the signature still seals, and opens the app. One step, no Terminal.
+
+**Or right-click once.** Control-click Métis in Finder, choose **Open**, then confirm. This uses a
+different trust path than double-clicking and works even while `spctl` reports the app as rejected. Only
+needed on first launch. (If macOS offers no Open button, use System Settings → Privacy & Security, find
+the blocked-app notice, and click **Open Anyway**.)
+
+**Or one Terminal command:**
+
+```bash
+xattr -dr com.apple.quarantine /Applications/Metis.app
+```
+
+`-r` matters: the nested helper apps inside the bundle carry their own copies of the tag, and one left
+behind still triggers the warning. None of these disable Gatekeeper system-wide; they mark this one app
+as trusted, exactly as right-click → Open does.
+
+**Removing the message for everyone, permanently**, requires signing the app with an Apple Developer ID
+and notarizing it — see `docs/SIGNING.md`. That needs a paid Apple Developer Program membership and the
+five release secrets `scripts/check-release-secrets.mjs mac` enforces (`CSC_LINK`, `CSC_KEY_PASSWORD`,
+`APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD`, `APPLE_TEAM_ID`). With those set, `npm run release:build:mac`
+produces a build that installs on any Mac with no warning and no extra step.
+
 ## Build Installers Locally
 
 From the repo root:
