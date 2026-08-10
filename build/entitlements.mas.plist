@@ -20,5 +20,8 @@
     <!-- User-selected transcript and note folders. -->
     <key>com.apple.security.files.user-selected.read-write</key>
     <true/>
+    <!-- Meeting-app detection through Apple Events where permitted. -->
+    <key>com.apple.security.automation.apple-events</key>
+    <true/>
   </dict>
 </plist>
