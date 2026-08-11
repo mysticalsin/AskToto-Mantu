@@ -168,6 +168,7 @@ export const IPC = {
   updateDownloaded: 'update:downloaded',
   updateProgress: 'update:progress',
   updateInstall: 'update:install',
+  updateDownload: 'update:download', // Settings "Update now" — kick the in-app download (progress/downloaded then stream back)
   updateCheck: 'update:check', // manual Settings-driven check against the public releases feed
   recapPdf: 'recap:pdf',
   openMailDraft: 'mail:openDraft',
@@ -1468,6 +1469,13 @@ export interface UpdateCheckResult {
   /** https release page to download from — feed-provided html_url, or the fixed releases page. */
   url?: string
   error?: string
+}
+
+/** Result of IPC.updateDownload — did the in-app download start, or is this a build that must use the
+ *  download page (blocked channel / portable / not the installed app)? See main/updater.ts. */
+export interface UpdateDownloadStart {
+  started: boolean
+  reason?: string
 }
 
 /** Result of recall:export-plain — a user-initiated decrypted markdown copy of one saved meeting, so
