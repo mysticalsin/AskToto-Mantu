@@ -3555,6 +3555,13 @@ const LANGUAGE_OPTIONS = [
 function UpdatesSection(): JSX.Element {
   const [checking, setChecking] = useState(false)
   const [result, setResult] = useState<UpdateCheckResult | null>(null)
+  // The in-app download lifecycle, driven by the electron-updater events (onUpdateProgress/onUpdateReady):
+  // 'idle' → 'downloading' (percent) → 'ready' (Restart & install). 'blocked' means this build can't
+  // self-install (portable / Store / policy / dev) — the download-page link is offered instead.
+  const [phase, setPhase] = useState<'idle' | 'downloading' | 'ready' | 'blocked'>('idle')
+  const [percent, setPercent] = useState(0)
+  const [downloadError, setDownloadError] = useState<string | null>(null)
+
   const check = useCallback((): void => {
     setChecking(true)
     void window.toto
@@ -3566,25 +3573,94 @@ function UpdatesSection(): JSX.Element {
   useEffect(() => {
     check()
   }, [check])
+
+  // Stream download progress + the ready signal from electron-updater the whole time this section is open,
+  // so a download already running in the background (auto-update) shows here too, not only when we started it.
+  useEffect(() => {
+    const offProgress = window.toto.onUpdateProgress((d) => {
+      setPercent(Math.max(0, Math.min(100, Math.round(d?.percent ?? 0))))
+      setPhase((p) => (p === 'ready' ? p : 'downloading'))
+    })
+    const offReady = window.toto.onUpdateReady(() => {
+      setPercent(100)
+      setPhase('ready')
+    })
+    return () => {
+      offProgress()
+      offReady()
+    }
+  }, [])
+
+  const startDownload = useCallback((): void => {
+    setDownloadError(null)
+    setPercent(0)
+    setPhase('downloading')
+    void window.toto
+      .downloadUpdate()
+      .then((r) => {
+        if (!r.started) {
+          setPhase('blocked')
+          if (r.reason) setDownloadError(r.reason)
+        }
+      })
+      .catch((e) => {
+        setPhase('blocked')
+        setDownloadError(e instanceof Error ? e.message : String(e))
+      })
+  }, [])
+
   return (
-    <Section title="Updates" desc="Métis installs updates automatically where the platform allows. Check here any time." icon={RefreshCw}>
+    <Section title="Updates" desc="Métis installs updates automatically where the platform allows. Check, download, and install here any time." icon={RefreshCw}>
       <div className="flex flex-col items-center gap-2">
         {result?.current ? (
-          <span className="text-[12px] text-[color:var(--cl-muted-foreground)]">
-            Installed version: {result.current}
-          </span>
+          <span className="text-[12px] text-[color:var(--cl-muted-foreground)]">Installed version: {result.current}</span>
         ) : null}
-        {result?.ok && result.available && (
+
+        {result?.ok && result.available && phase === 'idle' && (
+          <button
+            onClick={startDownload}
+            className="no-drag focus-ring rounded-full bg-[color:var(--cl-primary)] px-3 py-1.5 text-[12px] font-medium text-[color:var(--cl-primary-foreground)] transition-colors hover:opacity-90"
+          >
+            Download &amp; install version {result.latest}
+          </button>
+        )}
+
+        {phase === 'downloading' && (
+          <div className="flex w-full max-w-[220px] flex-col items-center gap-1.5">
+            <div className="h-1.5 w-full overflow-hidden rounded-full bg-[color:var(--cl-border)]">
+              <div
+                className="h-full rounded-full bg-[color:var(--cl-primary)] transition-[width] duration-300 ease-out"
+                style={{ width: `${percent}%` }}
+              />
+            </div>
+            <span className="text-[11px] text-[color:var(--cl-muted-foreground)]">Downloading update… {percent}%</span>
+          </div>
+        )}
+
+        {phase === 'ready' && (
+          <button
+            onClick={() => void window.toto.installUpdate()}
+            className="no-drag focus-ring rounded-full bg-[color:var(--cl-primary)] px-3 py-1.5 text-[12px] font-medium text-[color:var(--cl-primary-foreground)] transition-colors hover:opacity-90"
+          >
+            Restart &amp; install now
+          </button>
+        )}
+
+        {/* Download-page fallback: a build that cannot self-install (portable / Store / managed / unsigned mac),
+            or any download-start failure. Always reachable so the user is never stranded. */}
+        {result?.ok && result.available && (phase === 'blocked' || phase === 'idle') && (
           <a
             href={result.url}
             target="_blank"
             rel="noopener noreferrer"
-            className="no-drag focus-ring rounded-full bg-[color:var(--cl-primary)]/15 px-3 py-1.5 text-[12px] font-medium text-[color:var(--cl-primary)] transition-colors hover:bg-[color:var(--cl-primary)]/25"
+            className="text-[11px] text-[color:var(--cl-muted-foreground)] underline transition-colors hover:text-[color:var(--cl-foreground)]"
           >
-            Version {result.latest} is available — open the download page
+            {phase === 'blocked' ? 'Open the download page instead' : 'Or open the download page'}
           </a>
         )}
-        {result?.ok && !result.available && (
+        {downloadError && <span className="text-[11px] text-[var(--color-danger)]">{downloadError}</span>}
+
+        {result?.ok && !result.available && phase === 'idle' && (
           <span className="text-[12px] text-[color:var(--cl-muted-foreground)]">You&apos;re on the latest version.</span>
         )}
         {result && !result.ok && <span className="text-[12px] text-[var(--color-danger)]">{result.error}</span>}

@@ -142,6 +142,43 @@ export async function checkForUpdateNow(): Promise<UpdateCheckResult> {
   }
 }
 
+/** Result of asking the app to download-and-install an update in place (Settings → Update now). */
+export interface UpdateDownloadStart {
+  /** True when the electron-updater download was kicked off; progress/ready then arrive via IPC events. */
+  started: boolean
+  /** Why it could not start in-app (channel blocked, portable, or not the installed app) — the UI then
+   *  falls back to the download-page link. Absent when started. */
+  reason?: string
+}
+
+/**
+ * Trigger the in-app download+install (Settings "Update now" button). electron-updater's autoDownload is
+ * on and initAutoUpdate (same guards, on boot) already registered the download-progress / update-downloaded
+ * listeners that stream to the renderer — this just kicks a fresh find-and-download, so the Settings row can
+ * show "Downloading… X%" and then "Restart & install" (quitAndInstall via IPC.updateInstall). Only the
+ * installed, non-blocked build can self-install; every other case returns a reason so the UI shows the
+ * download-page link instead of a button that could never finish.
+ */
+export async function startUpdateDownload(): Promise<UpdateDownloadStart> {
+  const blocked = blockedUpdateChannel()
+  if (blocked) return { started: false, reason: BLOCKED_MESSAGE[blocked] }
+  if (process.platform === 'win32' && process.env.PORTABLE_EXECUTABLE_FILE) {
+    return { started: false, reason: 'This portable build cannot self-install — use the installer from the releases page.' }
+  }
+  if (!app.isPackaged) return { started: false, reason: 'In-app update is only available in the installed app.' }
+  if ((process as NodeJS.Process & { mas?: boolean }).mas) {
+    return { started: false, reason: 'Updates for this build come from the App Store.' }
+  }
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const { autoUpdater } = require('electron-updater')
+    await autoUpdater.checkForUpdates()
+    return { started: true }
+  } catch (e) {
+    return { started: false, reason: (e as Error)?.message || 'Could not start the update download.' }
+  }
+}
+
 /** A 404 means the releases repo/feed doesn't exist (yet) — distinct from a transient network/server
  *  error, which should keep logging normally so a real outage stays visible. */
 const isNotFound = (e: unknown): boolean =>

@@ -33,6 +33,7 @@ import {
   type RecallReadResult,
   type RecallExportPlainResult,
   type UpdateCheckResult,
+  type UpdateDownloadStart,
   type RecallBackfillSpeakersResult,
   type PlatformPermissions,
   type ShortcutFailure,
@@ -290,6 +291,8 @@ const api = {
   onUpdateReady: (cb: (d: { version?: string; notes?: string }) => void): Unsub => sub(IPC.updateDownloaded, cb),
   onUpdateProgress: (cb: (d: { percent?: number }) => void): Unsub => sub(IPC.updateProgress, cb),
   installUpdate: (): Promise<void> => ipcRenderer.invoke(IPC.updateInstall),
+  // Settings "Update now" → start the in-app download; progress/ready arrive via onUpdateProgress/onUpdateReady.
+  downloadUpdate: (): Promise<UpdateDownloadStart> => ipcRenderer.invoke(IPC.updateDownload),
   // Manual releases-feed check for Settings → About → Updates (works on every build, incl. unsigned mac).
   checkForUpdate: (): Promise<UpdateCheckResult> => ipcRenderer.invoke(IPC.updateCheck),
 

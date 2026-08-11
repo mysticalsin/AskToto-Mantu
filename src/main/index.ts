@@ -229,7 +229,7 @@ import {
   deleteAllMeetings,
   sweepExpiredMeetings
 } from './recall'
-import { initAutoUpdate, checkForUpdateNow } from './updater'
+import { initAutoUpdate, checkForUpdateNow, startUpdateDownload } from './updater'
 import { runSelfTest } from './selftest'
 import { readEvalMetrics, aggregateMetrics } from './metrics'
 import { importDustCliSession, refreshDustCliSession, setupDustCli } from './dustcli'
@@ -4213,6 +4213,13 @@ function registerIpc(): void {
   ipcMain.handle(IPC.updateCheck, (e) => {
     assertMainWindow(e)
     return checkForUpdateNow()
+  })
+  // Settings "Update now" → kick the in-app download. Progress + ready then stream to the renderer via the
+  // listeners initAutoUpdate registered (IPC.updateProgress / IPC.updateDownloaded). Returns a reason when
+  // this build cannot self-install so the UI shows the download-page link instead of a stuck button.
+  ipcMain.handle(IPC.updateDownload, (e) => {
+    assertMainWindow(e)
+    return startUpdateDownload()
   })
   ipcMain.handle(IPC.updateInstall, (e) => {
     assertMainWindow(e)

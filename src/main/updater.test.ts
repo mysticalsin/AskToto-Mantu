@@ -18,7 +18,8 @@ import {
   configDisablesAutoUpdate,
   isNewerVersion,
   parseLatestRelease,
-  checkForUpdateNow
+  checkForUpdateNow,
+  startUpdateDownload
 } from './updater'
 
 describe('configDisablesAutoUpdate — enterprise auto-update kill-switch', () => {
@@ -171,5 +172,26 @@ describe('MQA-079 — blockedUpdateChannel guards the manual check, not just ini
     const r = await checkForUpdateNow()
     expect(net.fetch).toHaveBeenCalledTimes(1)
     expect(r.available).toBe(true)
+  })
+})
+
+describe('startUpdateDownload — Settings "Update now" in-app download guard', () => {
+  beforeEach(() => {
+    vi.mocked(shouldDisableAutoUpdate).mockReturnValue(false)
+    vi.mocked(readTrustedAdminManaged).mockReturnValue(null)
+    delete (process as NodeJS.Process & { windowsStore?: boolean }).windowsStore
+  })
+
+  it('does not start a download outside the installed app (app.isPackaged false in test)', async () => {
+    const r = await startUpdateDownload()
+    expect(r.started).toBe(false)
+    expect(r.reason).toMatch(/installed app/i)
+  })
+
+  it('returns the channel reason (never starts a self-install) for a blocked channel', async () => {
+    vi.mocked(shouldDisableAutoUpdate).mockReturnValue(true) // Cahê pilot
+    const r = await startUpdateDownload()
+    expect(r.started).toBe(false)
+    expect(r.reason).toMatch(/Cahê installer/)
   })
 })
