@@ -55,6 +55,11 @@ Video/
 graphify-out/
 docs/superpowers/
 
+# Official Electron zips staged for the mac build by scripts/provision-electron-dist.mjs, which
+# verifies each against Electron's published SHASUMS256.txt before staging. Never committed: ~220 MB
+# of upstream binaries, reproducible from the pinned electron version at any time.
+resources/electron-dist/
+
 # LGPL FFmpeg sidecar binaries are provisioned by CI, but their reviewed manifest and license are
 # tracked here so a mutable GitHub release can never replace both a binary and its trust anchor.
 resources/ffmpeg/*

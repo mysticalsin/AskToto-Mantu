@@ -26,6 +26,16 @@ const target = argv.shift()
 let resourcesArgument
 let postSign = false
 let executableName
+// Two independent expectations, which are NOT the same during a universal build:
+//   --arches       which per-arch payloads (FFmpeg sidecar, Sherpa addon) must be present. A universal
+//                  package carries BOTH in every sub-build, because @electron/universal refuses to
+//                  merge two bundles whose Mach-O file sets differ.
+//   --macho-arches which slices the app's own executable must have. Still THIN in each sub-build, and
+//                  only fat after lipo has merged them.
+// Conflating the two would either demand a fat binary mid-build or accept a universal app whose
+// executable silently lost a slice.
+let packagedArches = ['arm64']
+let machoArches = null
 for (const argument of argv) {
   if (argument === '--post-sign') {
     postSign = true
@@ -34,6 +44,18 @@ for (const argument of argv) {
     if (!executableName || basename(executableName) !== executableName) {
       throw new Error(`Executable name must be a filename, got: ${argument}`)
     }
+  } else if (argument.startsWith('--arches=') || argument.startsWith('--macho-arches=')) {
+    const isMacho = argument.startsWith('--macho-arches=')
+    const raw = argument.slice(argument.indexOf('=') + 1)
+    const parsed = raw
+      .split(',')
+      .map((a) => a.trim())
+      .filter(Boolean)
+    if (!parsed.length || parsed.some((a) => !['arm64', 'x64'].includes(a))) {
+      throw new Error(`${isMacho ? '--macho-arches' : '--arches'} must be a comma list of arm64/x64, got: ${argument}`)
+    }
+    if (isMacho) machoArches = parsed
+    else packagedArches = parsed
   } else if (argument.startsWith('--')) {
     throw new Error(`Unknown option: ${argument}`)
   } else if (!resourcesArgument) {
@@ -52,7 +74,7 @@ if (target !== 'mac' && target !== 'win') {
 
 const defaultRoot =
   target === 'mac'
-    ? join(REPO_ROOT, 'release', 'mac-arm64', 'Metis.app', 'Contents', 'Resources')
+    ? join(REPO_ROOT, 'release', 'mac-universal', 'Metis.app', 'Contents', 'Resources')
     : join(REPO_ROOT, 'release', 'win-unpacked', 'resources')
 const resourcesRoot = resourcesArgument ? resolve(resourcesArgument) : defaultRoot
 
@@ -320,15 +342,47 @@ function readAt(path, offset, bytes) {
   }
 }
 
-function verifyMachOArm64(path) {
+const MACHO_CPU_TYPES = { arm64: 0x0100000c, x64: 0x01000007 }
+
+/**
+ * Assert `path` is a Mach-O carrying EXACTLY the expected architectures — a thin image for one, or a
+ * fat/universal image for several. Reading the header directly (rather than shelling out to lipo)
+ * keeps this a byte-level gate, and checking the set both ways catches the two failures that matter:
+ * a slice missing (dead on that hardware) and an unexpected slice smuggled in.
+ */
+function verifyMachOArches(path, expectedArches) {
+  const expected = [...expectedArches].sort()
   const header = readAt(path, 0, 8)
-  const magic = header.readUInt32LE(0)
-  const cpuType = header.readUInt32LE(4)
-  if (magic !== 0xfeedfacf || cpuType !== 0x0100000c) {
-    throw new Error(
-      `${path}: expected a thin 64-bit arm64 Mach-O (magic=0xfeedfacf cpu=0x0100000c), ` +
-        `got magic=0x${magic.toString(16)} cpu=0x${cpuType.toString(16)}`
-    )
+  // A fat/universal header is stored BIG-endian (FAT_MAGIC 0xcafebabe / FAT_MAGIC_64 0xcafebabf), while
+  // a thin 64-bit Mach-O stores MH_MAGIC_64 little-endian on both x86_64 and arm64. Read each with its
+  // own endianness: reading the fat magic little-endian yields the byte-swapped 0xbebafeca and makes a
+  // perfectly good universal binary look like garbage.
+  const fatMagic = header.readUInt32BE(0)
+  const thinMagic = header.readUInt32LE(0)
+
+  let found
+  if (fatMagic === 0xcafebabe || fatMagic === 0xcafebabf) {
+    // Fat header: big-endian count, then one arch entry (cputype first) per slice.
+    const count = readAt(path, 4, 4).readUInt32BE(0)
+    if (count === 0 || count > 16) throw new Error(`${path}: implausible fat Mach-O slice count ${count}`)
+    const entrySize = fatMagic === 0xcafebabe ? 20 : 32
+    found = []
+    for (let i = 0; i < count; i++) {
+      const cpuType = readAt(path, 8 + i * entrySize, 4).readUInt32BE(0)
+      const name = Object.keys(MACHO_CPU_TYPES).find((k) => MACHO_CPU_TYPES[k] === cpuType)
+      found.push(name ?? `unknown(0x${cpuType.toString(16)})`)
+    }
+  } else if (thinMagic === 0xfeedfacf) {
+    const cpuType = header.readUInt32LE(4)
+    const name = Object.keys(MACHO_CPU_TYPES).find((k) => MACHO_CPU_TYPES[k] === cpuType)
+    found = [name ?? `unknown(0x${cpuType.toString(16)})`]
+  } else {
+    throw new Error(`${path}: not a 64-bit Mach-O image (magic=0x${thinMagic.toString(16)})`)
+  }
+
+  found.sort()
+  if (found.join(',') !== expected.join(',')) {
+    throw new Error(`${path}: expected Mach-O arches [${expected.join(', ')}], got [${found.join(', ')}]`)
   }
 }
 
@@ -373,34 +427,44 @@ for (const [root, files] of runtimeByRoot) {
   requireExactInventory(join(resourcesRoot, root), inventoryFromFiles(files), `${root} runtime`)
 }
 
-for (const asset of LOCAL_MODEL_ASSETS) {
-  await requireAsset(join(resourcesRoot, 'local-llm', 'models', 'qwen3.5-0.8b', asset.file), asset)
-}
+// The Qwen weights are NOT packaged — local-model-download.ts fetches them on first run (see the
+// extraResources note in electron-builder.yml). The exact-inventory assertion below is the load-bearing
+// half of that: it fails if a stale checkout or a future config change smuggles a ~728 MB model.gguf
+// back into the installer, which is what would silently push the release asset past GitHub's 2 GB cap.
+// The licence text still ships and is still byte-verified.
 await requireAsset(join(resourcesRoot, 'local-llm', 'LICENSE.QWEN3.5-APACHE-2.0.txt'), LOCAL_MODEL_LICENSE)
 requireExactInventory(
   join(resourcesRoot, 'local-llm'),
-  inventoryFromFiles([
-    'LICENSE.QWEN3.5-APACHE-2.0.txt',
-    'models/qwen3.5-0.8b/model.gguf',
-    'models/qwen3.5-0.8b/mmproj.gguf'
-  ]),
+  inventoryFromFiles(['LICENSE.QWEN3.5-APACHE-2.0.txt']),
   'Qwen local-model'
 )
 
 const LLAMA_ARCHIVE_PINS = {
-  mac: { '.sha256': '7a43fd3c4ddd30f3c408da7c80975503f18b829da023a7d0e34bdb6f1b1a056f' },
+  // Both mac arches ship in every mac package (the .app is universal and selects at spawn time by
+  // process.arch), so both markers are pinned and both are verified regardless of which sub-build
+  // this run is inspecting.
+  mac: {
+    'arm64/.sha256': '7a43fd3c4ddd30f3c408da7c80975503f18b829da023a7d0e34bdb6f1b1a056f',
+    'x64/.sha256': 'f03f6669c7e34c2768ca4a318dd13e105dec46e1f87a2165d2be7fd6a0ee4716'
+  },
   win: {
     'cpu/.sha256': '422ad9b46f5ab60f7fd2e83783233eba2d9383e6f17d7ee916c80f19eb070e79',
     'vulkan/.sha256': 'fcc0a8c0f0f3140122452ed2728cebb520c5fbc4fc921836ee3a45dd77e18c68'
   }
 }
 
+const macArches = packagedArches
+const expectedMachoArches = machoArches ?? macArches
+
 const platformConfig =
   target === 'mac'
     ? {
         llamaName: 'mac',
-        ffmpegKey: 'darwin-arm64/ffmpeg',
-        sherpaPackage: 'sherpa-onnx-darwin-arm64',
+        // Per-arch: after-pack prunes the foreign FFmpeg arch, and electron-builder's files
+        // allowlist admits only the packaging arch's Sherpa addon (see electron-builder.yml). The
+        // merged universal app is the union of both sub-builds, so it carries both of each.
+        ffmpegKeys: macArches.map((a) => `darwin-${a}/ffmpeg`),
+        sherpaPackages: macArches.map((a) => `sherpa-onnx-darwin-${a}`),
         sherpaNative: [
           'libonnxruntime.1.24.4.dylib',
           'libonnxruntime.dylib',
@@ -411,8 +475,8 @@ const platformConfig =
       }
     : {
         llamaName: 'win',
-        ffmpegKey: 'win32-x64/ffmpeg.exe',
-        sherpaPackage: 'sherpa-onnx-win-x64',
+        ffmpegKeys: ['win32-x64/ffmpeg.exe'],
+        sherpaPackages: ['sherpa-onnx-win-x64'],
         sherpaNative: [
           'onnxruntime.dll',
           'onnxruntime_providers_shared.dll',
@@ -448,16 +512,18 @@ const ffmpegLicenseSource = join(ffmpegSourceRoot, 'LICENSE.LGPL-2.1.txt')
 await requireSameFile(ffmpegManifestSource, join(ffmpegPackagedRoot, 'manifest.json'))
 await requireSameFile(ffmpegLicenseSource, join(ffmpegPackagedRoot, 'LICENSE.LGPL-2.1.txt'))
 const ffmpegManifest = JSON.parse(readFileSync(ffmpegManifestSource, 'utf8'))
-const ffmpegExpected = ffmpegManifest.binaries?.[platformConfig.ffmpegKey]
-if (!ffmpegExpected?.sha256) throw new Error(`No reviewed FFmpeg manifest entry for ${platformConfig.ffmpegKey}`)
 requireExactInventory(
   ffmpegPackagedRoot,
-  inventoryFromFiles(['manifest.json', 'LICENSE.LGPL-2.1.txt', platformConfig.ffmpegKey]),
+  inventoryFromFiles(['manifest.json', 'LICENSE.LGPL-2.1.txt', ...platformConfig.ffmpegKeys]),
   'FFmpeg runtime'
 )
-await requireAsset(join(ffmpegPackagedRoot, platformConfig.ffmpegKey), ffmpegExpected, {
-  verifyHash: !postSign
-})
+for (const ffmpegKey of platformConfig.ffmpegKeys) {
+  const ffmpegExpected = ffmpegManifest.binaries?.[ffmpegKey]
+  if (!ffmpegExpected?.sha256) throw new Error(`No reviewed FFmpeg manifest entry for ${ffmpegKey}`)
+  await requireAsset(join(ffmpegPackagedRoot, ffmpegKey), ffmpegExpected, {
+    verifyHash: !postSign
+  })
+}
 
 const unpackedModules = join(resourcesRoot, 'app.asar.unpacked', 'node_modules')
 const genericSherpa = 'sherpa-onnx-node'
@@ -482,20 +548,22 @@ const genericSherpaFiles = [
   'vad.js'
 ]
 const sourceGenericSherpa = join(REPO_ROOT, 'node_modules', genericSherpa)
-const sourceTargetSherpa = join(REPO_ROOT, 'node_modules', platformConfig.sherpaPackage)
 const packagedGenericSherpa = join(unpackedModules, genericSherpa)
-const packagedTargetSherpa = join(unpackedModules, platformConfig.sherpaPackage)
 await requireDependencyTree(sourceGenericSherpa, packagedGenericSherpa, {
   expectedFiles: genericSherpaFiles,
   label: genericSherpa
 })
-await requireDependencyTree(sourceTargetSherpa, packagedTargetSherpa, {
-  expectedFiles: ['index.js', 'package.json', ...platformConfig.sherpaNative],
-  label: platformConfig.sherpaPackage,
-  nativeFile: (entry) => /\.(?:node|dll|dylib)$/i.test(entry)
-})
-for (const native of platformConfig.sherpaNative) {
-  requireRegularFile(join(packagedTargetSherpa, native))
+for (const sherpaPackage of platformConfig.sherpaPackages) {
+  const sourceTargetSherpa = join(REPO_ROOT, 'node_modules', sherpaPackage)
+  const packagedTargetSherpa = join(unpackedModules, sherpaPackage)
+  await requireDependencyTree(sourceTargetSherpa, packagedTargetSherpa, {
+    expectedFiles: ['index.js', 'package.json', ...platformConfig.sherpaNative],
+    label: sherpaPackage,
+    nativeFile: (entry) => /\.(?:node|dll|dylib)$/i.test(entry)
+  })
+  for (const native of platformConfig.sherpaNative) {
+    requireRegularFile(join(packagedTargetSherpa, native))
+  }
 }
 const packagedSherpaPlatforms = []
 for (const entry of readdirSync(unpackedModules, { withFileTypes: true })) {
@@ -510,8 +578,8 @@ for (const entry of readdirSync(unpackedModules, { withFileTypes: true })) {
 packagedSherpaPlatforms.sort()
 assertEqual(
   packagedSherpaPlatforms,
-  [platformConfig.sherpaPackage],
-  'Exactly one target-specific Sherpa package must be unpacked'
+  [...platformConfig.sherpaPackages].sort(),
+  'Exactly the target architectures’ Sherpa packages must be unpacked'
 )
 
 if (target === 'mac') {
@@ -519,7 +587,10 @@ if (target === 'mac') {
   const appRoot = dirname(contentsDir)
   const macOsDir = join(contentsDir, 'MacOS')
   requireExactInventory(macOsDir, ['Metis'], 'macOS executable directory')
-  verifyMachOArm64(join(macOsDir, 'Metis'))
+  // Thin during an arch sub-build, fat once lipo has merged them — assert exactly the slices this
+  // stage is supposed to have, so a universal package missing a slice fails here rather than on a
+  // user's machine.
+  verifyMachOArches(join(macOsDir, 'Metis'), expectedMachoArches)
   if (postSign) {
     if (process.platform !== 'darwin') throw new Error('macOS post-sign verification must run on macOS')
     execFileSync('codesign', ['--verify', '--deep', '--strict', '--verbose=2', appRoot], { stdio: 'inherit' })

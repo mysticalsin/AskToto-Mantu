@@ -8,6 +8,10 @@
     "darwin-arm64/ffmpeg": {
       "sha256": "3200c1601aedd9b66ddc245673e7d70423208d7b389679f2ef79c50064b42e68"
     },
+    "darwin-x64/ffmpeg": {
+      "sha256": "51a5d611d0071fe81dbde8f58618f53e42de4ef7aa0ff87cb1105d18aea61a14",
+      "note": "Cross-compiled on Apple Silicon by scripts/build-ffmpeg-sidecar-mac.sh x64, which adds --enable-cross-compile --target-os=darwin --cc='clang -arch x86_64' to the shared configuration above. Requires nasm on the build host (x86 SIMD) and Rosetta 2 to run the licence-banner check; neither is linked into the result, which depends only on /usr/lib and /System/Library."
+    },
     "win32-x64/ffmpeg.exe": {
       "sha256": "6daa6d8e42ff640c560ac550cd1ff955270b3310494a6b0da54f8659961f071f"
     }

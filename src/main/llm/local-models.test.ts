@@ -59,29 +59,32 @@ describe('bundled local model runtime', () => {
   })
 
   describe('single pinned manifest', () => {
-    it('ships exactly Qwen3.5 0.8B and contains no runtime URL', () => {
+    it('ships exactly Qwen3.5 0.8B, pinned to an IMMUTABLE upstream revision', () => {
       expect(LOCAL_MODELS.map((model) => model.id)).toEqual(['qwen3.5-0.8b'])
       expect(LOCAL_MODELS[0].label).toBe('Qwen3.5 0.8B')
-      expect(LOCAL_MODELS[0].gguf).not.toHaveProperty('url')
-      expect(LOCAL_MODELS[0].mmproj).not.toHaveProperty('url')
+      // The weights are fetched on first run instead of bundled, which makes this URL part of the
+      // supply chain. A branch or tag ref would let upstream move the bytes underneath us; require a
+      // 40-hex commit in the path so the revision cannot change, and https so it cannot be downgraded.
+      for (const file of [LOCAL_MODELS[0].gguf, LOCAL_MODELS[0].mmproj]) {
+        expect(file.url).toMatch(/^https:\/\//)
+        expect(file.url).toMatch(/\/resolve\/[0-9a-f]{40}\//)
+      }
     })
 
-    it('keeps the verified byte sizes and sha256 pins for both bundled files', () => {
+    it('keeps the verified byte sizes and sha256 pins for both files', () => {
       const model = LOCAL_MODELS[0]
-      expect(model.gguf).toEqual({
-        bytes: 558772480,
-        sha256: '3177ebd67afe4438374da19e690bc1b98756f7e0fea9240e1be404336156a7b5'
-      })
-      expect(model.mmproj).toEqual({
-        bytes: 204987232,
-        sha256: '56e4c6cfe73b0c82e3e82bc518d7591997e61d81f723fc41a586f4fa69ea2453'
-      })
+      expect(model.gguf.bytes).toBe(558772480)
+      expect(model.gguf.sha256).toBe('3177ebd67afe4438374da19e690bc1b98756f7e0fea9240e1be404336156a7b5')
+      expect(model.mmproj.bytes).toBe(204987232)
+      expect(model.mmproj.sha256).toBe('56e4c6cfe73b0c82e3e82bc518d7591997e61d81f723fc41a586f4fa69ea2453')
     })
 
-    it('contains no runtime download, cancellation, or deletion implementation', () => {
+    it('keeps the download OUT of this module — it owns pins and paths only', () => {
+      // The fetch lives in local-model-download.ts so there is exactly one place installed code can
+      // reach the network for weights. Deleting or bypassing that module's verification must not become
+      // possible by quietly adding a second downloader here.
       expect(source).not.toMatch(/node:https|node:http/)
       expect(source).not.toMatch(/downloadModel|cancelDownload|deleteModel/)
-      expect(source).not.toMatch(/huggingface\.co/)
     })
   })
 
@@ -94,16 +97,19 @@ describe('bundled local model runtime', () => {
       })
     })
 
-    it('uses process.resourcesPath/local-llm/models in a packaged app', () => {
+    it('stays in userData when packaged — never inside the signed bundle', () => {
       const resourcesPath = join(userData, 'packaged-resources')
       Object.defineProperty(app, 'isPackaged', { configurable: true, value: true })
       Object.defineProperty(process, 'resourcesPath', { configurable: true, value: resourcesPath })
 
+      // The weights are downloaded, so they must land somewhere writable. Writing into the .app would
+      // fail on a read-only volume and break the bundle's code signature where it did not.
       expect(modelPaths('qwen3.5-0.8b')).toEqual({
-        dir: join(resourcesPath, 'local-llm', 'models', 'qwen3.5-0.8b'),
-        gguf: join(resourcesPath, 'local-llm', 'models', 'qwen3.5-0.8b', 'model.gguf'),
-        mmproj: join(resourcesPath, 'local-llm', 'models', 'qwen3.5-0.8b', 'mmproj.gguf')
+        dir: join(userData, 'local-llm', 'models', 'qwen3.5-0.8b'),
+        gguf: join(userData, 'local-llm', 'models', 'qwen3.5-0.8b', 'model.gguf'),
+        mmproj: join(userData, 'local-llm', 'models', 'qwen3.5-0.8b', 'mmproj.gguf')
       })
+      expect(modelPaths('qwen3.5-0.8b').dir).not.toContain(resourcesPath)
     })
 
     it('rejects the removed 2B model id', () => {
@@ -189,8 +195,8 @@ describe('bundled local model runtime', () => {
       await expect(verifyIntegrity('qwen3.5-0.8b')).rejects.toBeInstanceOf(InsufficientRamError)
     })
 
-    it('reports missing bundled files with reinstall guidance', async () => {
-      await expect(verifyIntegrity('qwen3.5-0.8b')).rejects.toThrow(/Reinstall Métis/)
+    it('reports missing files as a pending first-run download, not a broken install', async () => {
+      await expect(verifyIntegrity('qwen3.5-0.8b')).rejects.toThrow(/not downloaded yet/)
     })
 
     it('detects corruption against the pinned sha256 without deleting installed resources', async () => {

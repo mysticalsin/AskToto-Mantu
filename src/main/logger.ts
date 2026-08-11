@@ -105,6 +105,11 @@ export type AuditEvent =
   | 'local.runtime.restart'
   | 'local.runtime.missing'
   | 'local.model.checksum_fail'
+  // First-run weight download (local-model-download.ts). The weights are no longer bundled, so these
+  // are the audit trail for the only network fetch installed code makes for model files.
+  | 'local.model.download_start'
+  | 'local.model.download_ok'
+  | 'local.model.download_fail'
   | 'screen.preprocess.describe'
   | 'cahe.localai.seeded'
 

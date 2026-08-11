@@ -9,9 +9,12 @@
  * release:win:store (see package.json) so it runs automatically before electron-builder.
  *
  * What it does, per target:
- *   mac       llama-b9957-bin-macos-arm64.tar.gz  -> resources/llama/mac/        (llama-server + *.dylib)
- *   win (cpu) llama-b9957-bin-win-cpu-x64.zip     -> resources/llama/win/cpu/    (llama-server.exe + *.dll)
- *   win (gpu) llama-b9957-bin-win-vulkan-x64.zip  -> resources/llama/win/vulkan/ (llama-server.exe + *.dll)
+ *   mac (arm) llama-b9957-bin-macos-arm64.tar.gz -> resources/llama/mac/arm64/  (llama-server + *.dylib)
+ *   mac (x64) llama-b9957-bin-macos-x64.tar.gz   -> resources/llama/mac/x64/    (llama-server + *.dylib)
+ *   win (cpu) llama-b9957-bin-win-cpu-x64.zip    -> resources/llama/win/cpu/    (llama-server.exe + *.dll)
+ *   win (gpu) llama-b9957-bin-win-vulkan-x64.zip -> resources/llama/win/vulkan/ (llama-server.exe + *.dll)
+ * `mac` fetches BOTH mac assets: the mac package is a universal build, so one .app has to serve Intel
+ * and Apple Silicon and local-runtime.ts selects the matching sidecar by process.arch at spawn time.
  * `win` fetches BOTH win assets: local-runtime.ts prefers the Vulkan (GPU) build at spawn time and falls
  * back to the CPU build once if Vulkan fails to start, so both must be present in a Windows package.
  *
@@ -69,10 +72,21 @@ const TAG = 'b9957'
 const BASE_URL = `https://github.com/ggml-org/llama.cpp/releases/download/${TAG}/`
 
 const ASSETS = {
-  mac: {
+  // Both mac arches ship inside the same universal package: the .app is one bundle serving Intel and
+  // Apple Silicon, so it carries both sidecars and local-runtime.ts picks by process.arch at spawn
+  // time. These stay two separate Mach-O builds rather than one fat binary — llama.cpp publishes
+  // per-arch archives, and lipo-ing them would only re-create what two directories already express.
+  'mac-arm64': {
     file: 'llama-b9957-bin-macos-arm64.tar.gz',
     sha256: '7a43fd3c4ddd30f3c408da7c80975503f18b829da023a7d0e34bdb6f1b1a056f',
-    dest: join(LLAMA_DIR, 'mac'),
+    dest: join(LLAMA_DIR, 'mac', 'arm64'),
+    binary: 'llama-server',
+    keepExt: '.dylib'
+  },
+  'mac-x64': {
+    file: 'llama-b9957-bin-macos-x64.tar.gz',
+    sha256: 'f03f6669c7e34c2768ca4a318dd13e105dec46e1f87a2165d2be7fd6a0ee4716',
+    dest: join(LLAMA_DIR, 'mac', 'x64'),
     binary: 'llama-server',
     keepExt: '.dylib'
   },
@@ -93,7 +107,7 @@ const ASSETS = {
 }
 
 function assetKeysFor(target) {
-  if (target === 'mac') return ['mac']
+  if (target === 'mac') return ['mac-arm64', 'mac-x64']
   if (target === 'win') return ['win-cpu', 'win-vulkan']
   return ['mac', 'win-cpu', 'win-vulkan']
 }

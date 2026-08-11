@@ -73,10 +73,12 @@ extraResources:
     to: graphify_runner.py
   - from: THIRD_PARTY_NOTICES.md
     to: THIRD_PARTY_NOTICES.md
-  # One selected, checksum-pinned Qwen payload is embedded in every installer. Installed application
-  # code has no model downloader and resolves these files only below process.resourcesPath.
-  - from: resources/local-llm/models/qwen3.5-0.8b
-    to: local-llm/models/qwen3.5-0.8b
+  # The Qwen WEIGHTS are deliberately NOT packaged. At ~728 MB they dominated the installer, and a
+  # universal (Intel + Apple Silicon) package carrying them would exceed GitHub's 2 GB per-asset
+  # release limit. src/main/llm/local-model-download.ts fetches them once on first run into userData,
+  # from a pinned immutable upstream revision, and rejects anything whose size or sha256 does not match
+  # the values in local-models.ts. The licence text still ships — it is an Apache-2.0 obligation that
+  # does not depend on when the weights arrive.
   - from: resources/local-llm/LICENSE.QWEN3.5-APACHE-2.0.txt
     to: local-llm/LICENSE.QWEN3.5-APACHE-2.0.txt
   # Bundled ASR model weights — served via asr-model:// protocol (zero runtime download).
@@ -111,6 +113,12 @@ mac:
     - '!node_modules/@dust-tt/client/node_modules/express-rate-limit{,/**/*}'
     - '!node_modules/@dust-tt/client/node_modules/ip-address{,/**/*}'
     - '!node_modules/sherpa-onnx-win-*{,/**/*}'
+    # BOTH mac Sherpa addons stay in the allowlist on purpose. @electron/universal aborts the lipo
+    # merge if any Mach-O exists in one sub-build and not the other, and it offers no opt-out for
+    # files outside the asar — so a universal package requires each sub-build to carry both arches,
+    # not just its own. after-pack.mjs's foreign-arch pruning is therefore suppressed for universal
+    # builds (ASKTOTO_MAC_ARCHES); the merged .app legitimately ships both, and local-runtime.ts /
+    # sherpa-onnx-node select the right one by process.arch at load time.
     - '!out/**/*.map'
     - '!**/*.d.ts'
   # ASCII everywhere on disk (see the productName + win notes): the .app bundle is Metis.app, its helper
@@ -120,11 +128,18 @@ mac:
   target:
     - dmg
     - zip
+  # Architecture is passed on the command line (`electron-builder --mac --universal`) by every mac chain
+  # in package.json, not pinned per-target here — the same reason mac.identity and directories.output are
+  # kept out of this shared yml (see the note at the top). --universal builds arm64 and x64 separately and
+  # lipos them, so every native sidecar must be provisioned for BOTH arches first; the check:ffmpeg /
+  # check:sherpa / check:llama / check-mac-helper gates in those chains are what enforce that.
   # Pinned llama.cpp `llama-server` sidecar that powers Métis Local (on-device suggest/summary/vision) —
-  # mac binary only (win ships its own build below via win.extraResources), so a mac package never
-  # carries the other platform's ~150 MB of dead-weight binaries. Populated by `npm run fetch:llama`
-  # (scripts/fetch-llama-server.mjs) before packaging; local-runtime.ts resolves it at
-  # process.resourcesPath/llama/mac in a packaged build. No separate mac signing entry is needed:
+  # mac binaries only (win ships its own build below via win.extraResources), so a mac package never
+  # carries the other platform's ~150 MB of dead-weight binaries. This tree holds BOTH mac arches
+  # (llama/mac/arm64 + llama/mac/x64): the mac target is universal, so one .app serves Intel and Apple
+  # Silicon, and upstream publishes per-arch archives rather than one fat binary. Populated by
+  # `npm run fetch:llama` (scripts/fetch-llama-server.mjs) before packaging; local-runtime.ts resolves
+  # process.resourcesPath/llama/mac/<process.arch> in a packaged build. No separate mac signing entry is needed:
   # hardenedRuntime + entitlements below make electron-builder sign every executable/dylib it finds
   # inside the packed .app, including this one — the same mechanism that already covers the ffmpeg
   # sidecar above. electron-builder merges this list with the top-level extraResources.
@@ -137,6 +152,13 @@ mac:
     # same hardenedRuntime pass that covers llama-server/ffmpeg. The mas target inherits this list.
     - from: resources/mac-helper
       to: mac-helper
+  # @electron/universal lipos any Mach-O that DIFFERS between the two sub-builds, and aborts on one
+  # that is byte-identical in both unless it matches this pattern (upstream's name is misleading — the
+  # rule is "identical across builds, so skip lipo", not "must be x64"). Every prebuilt native payload
+  # here is exactly that: shipped once per arch under its own path, identical in both halves, and
+  # selected at runtime rather than merged. metis-mac-helper needs no entry — it is already a fat
+  # binary, which @electron/universal detects and skips on its own.
+  x64ArchFiles: '**/{@img,onnxruntime-node,sherpa-onnx-darwin-arm64,sherpa-onnx-darwin-x64,ffmpeg,llama}/**'
   hardenedRuntime: true
   entitlements: build/entitlements.mac.plist
   entitlementsInherit: build/entitlements.mac.plist

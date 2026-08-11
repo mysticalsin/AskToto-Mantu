@@ -4,8 +4,13 @@
 // OCR). Mirrors check-llama-sidecar.mjs: loud exit 1 with the fix, no partial pass.
 // Usage: node scripts/check-mac-helper.mjs <mac|win>   (win exits 0 — the helper is mac-only)
 import { accessSync, constants, existsSync } from 'node:fs'
+import { execFileSync } from 'node:child_process'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+
+// Both slices, because the mac package is universal: an arm64-only helper is not executable on an
+// Intel Mac, and the failure is invisible until a user there gets no screen context at all.
+const REQUIRED_ARCHES = ['arm64', 'x86_64']
 
 const target = process.argv[2]
 if (!target || !['mac', 'win'].includes(target)) {
@@ -33,4 +38,22 @@ try {
   console.error(`mac helper sidecar at ${binary} is not executable — rebuild it: node scripts/build-mac-helper.mjs`)
   process.exit(1)
 }
-console.log('[check-mac-helper] ok')
+
+let arches = []
+try {
+  arches = execFileSync('lipo', ['-archs', binary], { encoding: 'utf8' }).trim().split(/\s+/)
+} catch (err) {
+  console.error(`could not read the architectures of ${binary}: ${err?.message ?? err}`)
+  process.exit(1)
+}
+const missing = REQUIRED_ARCHES.filter((a) => !arches.includes(a))
+if (missing.length) {
+  console.error(
+    `mac helper sidecar at ${binary} is missing the ${missing.join(', ')} slice (has: ${arches.join(', ')}).\n` +
+      'The mac package is universal, so a single-arch helper ships a product that silently loses screen ' +
+      'context on every Mac of the other architecture.\n' +
+      'Rebuild it: node scripts/build-mac-helper.mjs'
+  )
+  process.exit(1)
+}
+console.log(`[check-mac-helper] ok (${arches.join(', ')})`)

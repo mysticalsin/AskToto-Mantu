@@ -120,7 +120,8 @@ function getSpeakerId(): SpeakerId {
   return speakerIdInstance
 }
 import { buildPrewarmMessages } from './llm/prewarm'
-import { listModels as listLocalModels } from './llm/local-models'
+import { listModels as listLocalModels, LOCAL_MODELS } from './llm/local-models'
+import { ensureLocalModel } from './llm/local-model-download'
 import { createScreenPreprocess, type ScreenPreprocess } from './screen-preprocess'
 import { startForegroundWatcher } from './foreground-watcher'
 import { resetDustConversation, prewarmDustConversation, isDustAuthError } from './llm/dust'
@@ -4289,6 +4290,13 @@ if (!app.requestSingleInstanceLock()) {
   // Cahê M13: one-time enable of the on-device model so the background screen reader works out of the box
   // (own marker → also migrates existing pilot profiles upgraded from 1.0.7). See cahe-embedded-key.ts.
   seedCaheLocalAiForBackgroundScreen()
+  // Métis Local weights are no longer bundled in the installer (~728 MB; a universal mac package
+  // carrying them would blow past GitHub's 2 GB release-asset limit), so fetch them once here on first
+  // run. Deliberately NOT awaited: this is a ~728 MB download and startup must not wait on it, nor fail
+  // when the machine is offline or behind a restrictive proxy — Local simply stays unavailable and the
+  // next launch retries. ensureLocalModel() verifies the pinned sha256 and never throws.
+  // local-routing.ts re-reads isDownloaded() per request, so nothing needs notifying when it lands.
+  void ensureLocalModel(LOCAL_MODELS[0].id)
   // Windows toast attribution: a process's AppUserModelID must match the installed shortcut's AUMID
   // (electron-builder sets it to appId) or Windows silently drops native Notifications — which breaks
   // the meeting-reminder toast for portable-build and launch-at-login users (no shortcut in the launch

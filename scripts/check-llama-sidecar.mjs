@@ -1,9 +1,11 @@
 #!/usr/bin/env node
 /** Verify the pinned llama.cpp `llama-server` sidecar binaries for the packaging TARGET exist before
  *  electron-builder runs — without this, a build ships with Métis Local permanently unavailable and no
- *  build-time signal (mirrors check-ffmpeg-sidecar.mjs). Windows ships BOTH the Vulkan (GPU, preferred)
- *  and CPU (fallback) builds — local-runtime.ts falls back to the CPU binary once if Vulkan fails to
- *  spawn, so a Windows package missing either one silently breaks that contract at runtime. */
+ *  build-time signal (mirrors check-ffmpeg-sidecar.mjs). Both targets require TWO binaries, for
+ *  different reasons: Windows ships the Vulkan (GPU, preferred) and CPU (fallback) builds because
+ *  local-runtime.ts falls back to CPU once if Vulkan fails to spawn, and macOS ships arm64 and x64
+ *  because the package is universal and picks by process.arch. Either target missing one of its pair
+ *  silently breaks that contract at runtime. */
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 
@@ -15,7 +17,14 @@ if (target !== 'mac' && target !== 'win') {
 
 const required =
   target === 'mac'
-    ? [join('resources', 'llama', 'mac', 'llama-server')]
+    ? // The mac package is universal, so ONE .app serves Intel and Apple Silicon and has to carry both
+      // sidecars — local-runtime.ts resolves resources/llama/mac/<process.arch>/llama-server at spawn
+      // time. Shipping one arch leaves Métis Local permanently dead on the other half of the install
+      // base with no build-time signal, which is precisely what this gate exists to prevent.
+      [
+        join('resources', 'llama', 'mac', 'arm64', 'llama-server'),
+        join('resources', 'llama', 'mac', 'x64', 'llama-server')
+      ]
     : [
         join('resources', 'llama', 'win', 'vulkan', 'llama-server.exe'),
         join('resources', 'llama', 'win', 'cpu', 'llama-server.exe')
