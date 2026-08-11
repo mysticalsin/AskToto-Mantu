@@ -321,7 +321,9 @@ function resolveBinary() {
   const base = join(REPO_ROOT, 'resources', 'llama')
   const candidates =
     platform === 'mac'
-      ? [join(base, 'mac', 'llama-server')]
+      ? // Mirrors local-runtime.ts resolveBinaryPath(): the mac tree carries both arches for the
+        // universal package, and this bench spawns the binary, so only the running arch can execute.
+        [join(base, 'mac', process.arch, 'llama-server')]
       : [join(base, 'win', 'vulkan', 'llama-server.exe'), join(base, 'win', 'cpu', 'llama-server.exe')]
   let found = candidates.find((p) => existsSync(p))
   if (!found) {

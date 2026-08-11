@@ -141,11 +141,16 @@ describe('extractScreenText — real helper integration (soft-skip when not buil
 })
 
 describe('packaging locks from the Sonnet audit (source-scan)', () => {
-  it('build-mac-helper.mjs pins an explicit deployment target so macOS 26 users can load the helper', () => {
+  it('build-mac-helper.mjs pins an explicit deployment target on BOTH universal slices', () => {
     // Without -target, swiftc stamps the BUILD machine's OS (a macOS 27 beta box) as the binary's
     // minimum and dyld on user machines refuses to load it — silent screen-context degradation.
+    // The helper is built once per arch and lipo'd, so an unpinned triple on either slice reintroduces
+    // that bug for half the install base; assert the pin per target rather than as one literal.
     const script = readFileSync(join(REPO_ROOT, 'scripts', 'build-mac-helper.mjs'), 'utf8')
-    expect(script).toMatch(/'-target',\s*'arm64-apple-macos13\.0'/)
+    expect(script).toMatch(/'arm64-apple-macos13\.0'/)
+    expect(script).toMatch(/'x86_64-apple-macos13\.0'/)
+    // Every -target passed to swiftc must come from that pinned table, never a bare/derived triple.
+    expect(script).toMatch(/'-target',\s*target\.triple/)
   })
 
   it('build-installers.mjs builds + guards the mac helper before its electron-builder --mac invocation', () => {

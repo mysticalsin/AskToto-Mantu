@@ -6,12 +6,22 @@ import { totalmem } from 'node:os'
 import { auditLog, type AuditEvent } from '../logger'
 
 /**
- * Code-reviewed metadata for the model bundled inside every Métis installer.
- * Runtime code never downloads, replaces, or removes these files.
+ * Code-reviewed metadata for the Métis Local model payload.
+ *
+ * These weights are NO LONGER embedded in the installer. At ~728 MB they dominated the download, and
+ * a universal (Intel + Apple Silicon) package cannot carry them and still fit GitHub's 2 GB per-asset
+ * release limit. They are fetched once, on first run, by local-model-download.ts.
+ *
+ * That moves a supply-chain step from build time to run time, so the pins below are what keep it safe
+ * and are NOT advisory: `url` points at an IMMUTABLE upstream revision (a commit hash in the path, not
+ * a branch), and a downloaded file must match `bytes` and `sha256` exactly or it is deleted instead of
+ * used. Never relax these to a mutable ref or a size-only check.
  */
 export interface LocalModelFile {
   bytes: number
   sha256: string
+  /** Pinned upstream source. Read only by the first-run downloader. */
+  url: string
 }
 
 export interface LocalModelEntry {
@@ -29,16 +39,18 @@ export const LOCAL_MODELS: readonly LocalModelEntry[] = [
     minTotalRamGB: 8,
     gguf: {
       bytes: 558772480,
-      sha256: '3177ebd67afe4438374da19e690bc1b98756f7e0fea9240e1be404336156a7b5'
+      sha256: '3177ebd67afe4438374da19e690bc1b98756f7e0fea9240e1be404336156a7b5',
+      url: 'https://huggingface.co/unsloth/Qwen3.5-0.8B-GGUF/resolve/6ab461498e2023f6e3c1baea90a8f0fe38ab64d0/Qwen3.5-0.8B-UD-Q4_K_XL.gguf'
     },
     mmproj: {
       bytes: 204987232,
-      sha256: '56e4c6cfe73b0c82e3e82bc518d7591997e61d81f723fc41a586f4fa69ea2453'
+      sha256: '56e4c6cfe73b0c82e3e82bc518d7591997e61d81f723fc41a586f4fa69ea2453',
+      url: 'https://huggingface.co/unsloth/Qwen3.5-0.8B-GGUF/resolve/6ab461498e2023f6e3c1baea90a8f0fe38ab64d0/mmproj-F16.gguf'
     }
   }
 ]
 
-function getModel(id: string): LocalModelEntry {
+export function getModel(id: string): LocalModelEntry {
   const entry = LOCAL_MODELS.find((model) => model.id === id)
   if (!entry) throw new Error(`Unknown local model id: "${id}"`)
   return entry
@@ -64,8 +76,8 @@ export class ChecksumMismatchError extends Error {
     public readonly actualSha256: string
   ) {
     super(
-      `Bundled model integrity check failed for ${modelId} (${file}): expected ` +
-        `${expectedSha256.slice(0, 8)}..., got ${actualSha256.slice(0, 8)}.... Reinstall Métis to restore it.`
+      `Model integrity check failed for ${modelId} (${file}): expected ` +
+        `${expectedSha256.slice(0, 8)}..., got ${actualSha256.slice(0, 8)}.... The file will be re-downloaded.`
     )
     this.name = 'ChecksumMismatchError'
   }
@@ -95,12 +107,15 @@ export interface LocalModelPaths {
   mmproj: string
 }
 
-function modelsRoot(): string {
-  const base = app.isPackaged ? process.resourcesPath : app.getPath('userData')
-  return join(base, 'local-llm', 'models')
+/**
+ * Always userData, packaged or not: the weights are downloaded on first run, and the .app bundle is
+ * read-only and code-signed — writing into process.resourcesPath would break its seal.
+ */
+export function modelsRoot(): string {
+  return join(app.getPath('userData'), 'local-llm', 'models')
 }
 
-/** Main-process-only paths. Packaged builds read immutable installer resources. */
+/** Main-process-only paths, under the writable per-user model directory. */
 export function modelPaths(id: string): LocalModelPaths {
   getModel(id)
   const dir = join(modelsRoot(), id)
@@ -172,7 +187,7 @@ async function verifyFileChecksum(
   }
 }
 
-/** Re-hash both installer-owned files before a cold llama-server start. */
+/** Re-hash both model files before a cold llama-server start. */
 export async function verifyIntegrity(id: string): Promise<void> {
   assertRamOk(id)
   const entry = getModel(id)
@@ -180,7 +195,10 @@ export async function verifyIntegrity(id: string): Promise<void> {
   for (const file of ['gguf', 'mmproj'] as const) {
     const path = paths[file]
     if (!existsSync(path)) {
-      throw new Error(`Bundled local model "${id}" (${file}) is unavailable. Reinstall Métis to restore it.`)
+      throw new Error(
+        `Local model "${id}" (${file}) is not downloaded yet. Métis fetches it automatically on first run; ` +
+          `check the connection if this persists.`
+      )
     }
     await verifyFileChecksum(id, file, path, entry[file])
   }

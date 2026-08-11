@@ -92,11 +92,18 @@ function llamaResourcesDir(): string {
 /**
  * Candidate binaries for `platform`, in try order. Windows prefers the Vulkan (GPU) build; start()
  * falls back to the CPU build once if Vulkan fails to spawn or exits immediately (PLAN.md §4.5/§8 Rock
- * 1). Mac ships a single arm64 build.
+ * 1). Mac is a universal package carrying BOTH sidecars, so it selects by process.arch and offers a
+ * single candidate — the other arch's binary cannot execute here, so listing it as a fallback would
+ * only turn a clear "binary missing" into a confusing exec-format failure.
  */
 export function resolveBinaryPath(platform: LlamaPlatform = detectPlatform()): BinaryCandidate[] {
   const base = llamaResourcesDir()
-  if (platform === 'mac') return [{ path: join(base, 'mac', 'llama-server'), variant: 'mac' }]
+  if (platform === 'mac') {
+    // process.arch is the arch of the RUNNING slice of a universal binary, which is what has to match
+    // the sidecar — not the hardware. A universal app launched under Rosetta reports x64 and must get
+    // the x64 sidecar, so this is deliberately not a hardware query.
+    return [{ path: join(base, 'mac', process.arch, 'llama-server'), variant: 'mac' }]
+  }
   return [
     { path: join(base, 'win', 'vulkan', 'llama-server.exe'), variant: 'vulkan' },
     { path: join(base, 'win', 'cpu', 'llama-server.exe'), variant: 'cpu' }

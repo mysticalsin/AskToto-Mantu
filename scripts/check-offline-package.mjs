@@ -6,8 +6,19 @@ import { join } from 'node:path'
 const roots = ['src/main', 'src/preload', 'src/renderer/src', 'src/shared']
 const sourceExt = /\.(?:ts|tsx|js|mjs)$/
 const testFile = /\.(?:test|spec)\.(?:ts|tsx|js|mjs)$/
+// The Qwen weights are no longer bundled (they made a universal mac package exceed GitHub's 2 GB
+// release-asset limit), so a runtime download URL is now expected — but ONLY in the two files that were
+// reviewed for it: the pinned manifest and the single downloader that verifies size + sha256 before
+// use. Anywhere else it means a second, unaudited fetch path has appeared, which is exactly what this
+// gate exists to stop. Every other rule below is unchanged.
+const QWEN_DOWNLOAD_ALLOWED = ['src/main/llm/local-models.ts', 'src/main/llm/local-model-download.ts']
+
 const forbidden = [
-  { pattern: /huggingface\.co\/unsloth\/Qwen/i, reason: 'runtime Qwen download URL' },
+  {
+    pattern: /huggingface\.co\/unsloth\/Qwen/i,
+    reason: 'runtime Qwen download URL outside the reviewed downloader',
+    allow: QWEN_DOWNLOAD_ALLOWED
+  },
   { pattern: /sherpa-onnx\/releases\/download\/asr-models/i, reason: 'runtime Parakeet download URL' },
   { pattern: /bundled ASR load failed, retrying remote/i, reason: 'packaged ASR remote fallback' },
   { pattern: /localModels:(?:download|cancel|delete)/, reason: 'runtime local-model mutation IPC' },
@@ -29,7 +40,10 @@ function filesUnder(dir) {
 const failures = []
 for (const file of roots.flatMap(filesUnder)) {
   const text = readFileSync(file, 'utf8')
+  // Compare on posix-style paths so the allowlist behaves identically on Windows checkouts.
+  const normalized = file.split('\\').join('/')
   for (const rule of forbidden) {
+    if (rule.allow?.some((allowed) => normalized === allowed || normalized.endsWith(`/${allowed}`))) continue
     if (rule.pattern.test(text)) failures.push(`${file}: ${rule.reason}`)
   }
 }

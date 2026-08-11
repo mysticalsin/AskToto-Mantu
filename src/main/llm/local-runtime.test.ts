@@ -68,11 +68,16 @@ describe('buildSpawnArgs', () => {
 })
 
 describe('resolveBinaryPath', () => {
-  it('mac: a single candidate ending in llama-server', () => {
+  it('mac: a single candidate under the running arch, not the other one', () => {
     const candidates = resolveBinaryPath('mac')
     expect(candidates).toHaveLength(1)
     expect(candidates[0].variant).toBe('mac')
-    expect(candidates[0].path.endsWith(join('mac', 'llama-server'))).toBe(true)
+    // The universal package ships both arches; the runtime must pick the slice it is executing as.
+    // Asserting only the suffix would pass on a build that hardcoded a single arch, which is the
+    // regression that leaves Métis Local dead on half the install base.
+    expect(candidates[0].path.endsWith(join('mac', process.arch, 'llama-server'))).toBe(true)
+    const otherArch = process.arch === 'arm64' ? 'x64' : 'arm64'
+    expect(candidates[0].path).not.toContain(join('mac', otherArch))
   })
 
   it('win: Vulkan first, CPU fallback second, both ending in llama-server.exe', () => {
@@ -106,7 +111,7 @@ describe('parseBoundPort', () => {
 })
 
 describe('check-llama-sidecar.mjs (guard script)', () => {
-  it('exits 1 with a loud message when the target platform binary is missing', () => {
+  it('exits 1 naming BOTH mac arches when the sidecars are missing', () => {
     const tmp = mkdtempSync(join(tmpdir(), 'llama-guard-'))
     try {
       const result = spawnSync('node', [join(REPO_ROOT, 'scripts', 'check-llama-sidecar.mjs'), 'mac'], {
@@ -114,7 +119,12 @@ describe('check-llama-sidecar.mjs (guard script)', () => {
         encoding: 'utf8'
       })
       expect(result.status).toBe(1)
-      expect(result.stderr).toMatch(/Missing local-LLM sidecar binary/)
+      expect(result.stderr).toMatch(/Missing local-LLM sidecar binaries/)
+      // The mac package is universal, so the guard has to fail on EITHER arch being absent — a build
+      // that provisioned only the host arch would otherwise sail through and ship Métis Local dead on
+      // every Mac of the other kind. Naming both proves the guard covers the pair, not just one.
+      expect(result.stderr).toContain(join('resources', 'llama', 'mac', 'arm64', 'llama-server'))
+      expect(result.stderr).toContain(join('resources', 'llama', 'mac', 'x64', 'llama-server'))
       expect(result.stderr).toMatch(/fetch-llama-server\.mjs mac/)
     } finally {
       rmSync(tmp, { recursive: true, force: true })
@@ -208,7 +218,9 @@ describe('will-quit wiring (index.ts) — F3', () => {
 })
 
 describe('start() integration — real binary + real Qwen3.5-0.8B model', () => {
-  const macBinary = join(REPO_ROOT, 'resources', 'llama', 'mac', 'llama-server')
+  // This test SPAWNS the binary, so it needs the slice this process can actually execute — the
+  // universal package's other arch is present on disk but would fail with an exec-format error.
+  const macBinary = join(REPO_ROOT, 'resources', 'llama', 'mac', process.arch, 'llama-server')
   const gguf = '/Users/tony/AI-Brain-build/llama-spike/Qwen3.5-0.8B-UD-Q4_K_XL.gguf'
   const mmproj = '/Users/tony/AI-Brain-build/llama-spike/mmproj-F16.gguf'
 

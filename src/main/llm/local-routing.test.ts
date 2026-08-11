@@ -24,7 +24,7 @@ vi.mock('node:fs', async (importOriginal) => {
 })
 
 const localRuntimeMock = vi.hoisted(() => ({
-  resolveBinaryPath: vi.fn(() => [{ path: '/resources/llama/mac/llama-server', variant: 'mac' as const }]),
+  resolveBinaryPath: vi.fn(() => [{ path: `/resources/llama/mac/${process.arch}/llama-server`, variant: 'mac' as const }]),
   detectPlatform: vi.fn(() => 'mac' as const),
   isRunning: vi.fn(() => false),
   getState: vi.fn(() => 'stopped' as const),
@@ -108,7 +108,7 @@ const readySettings = (overrides: Partial<LocalLlmSettings['localLlm']> = {}): L
 beforeEach(() => {
   vi.clearAllMocks()
   fsState.binaryExists = true
-  localRuntimeMock.resolveBinaryPath.mockReturnValue([{ path: '/resources/llama/mac/llama-server', variant: 'mac' }])
+  localRuntimeMock.resolveBinaryPath.mockReturnValue([{ path: `/resources/llama/mac/${process.arch}/llama-server`, variant: 'mac' }])
   localRuntimeMock.detectPlatform.mockReturnValue('mac')
   localRuntimeMock.isRunning.mockReturnValue(false)
   localRuntimeMock.getState.mockReturnValue('stopped')

@@ -1,8 +1,14 @@
 #!/usr/bin/env bash
 # Build the reviewed LGPL-only FFmpeg import decoder for macOS, self-contained.
 #
-# Run this on a Mac. It produces resources/ffmpeg/darwin-arm64/ffmpeg and prints the sha256 to
-# record in resources/ffmpeg/manifest.json.
+# Run this on a Mac. It produces resources/ffmpeg/darwin-<arch>/ffmpeg and prints the sha256 to
+# record in resources/ffmpeg/manifest.json. The arch argument is node-style (arm64 | x64) so it
+# matches the directory layout check-ffmpeg-sidecar.mjs looks in and the manifest keys it reads;
+# FFmpeg's own --arch spelling (x86_64) is derived below rather than asked of the caller.
+#
+# Either arch can be built from either kind of Mac: the x64 sidecar cross-compiles cleanly on Apple
+# Silicon, and Rosetta 2 runs the result for the licence-banner check at the end. Building x64 on an
+# Apple Silicon Mac WITHOUT Rosetta installed fails at that check, not at compile time.
 #
 # Why a source build rather than a downloaded binary: the sidecar ships inside the app, so it has to
 # satisfy two constraints at once that no prebuilt macOS binary satisfies. It must be LGPL-only
@@ -19,6 +25,18 @@ SOURCE_SHA256="733984395e0dbbe5c046abda2dc49a5544e7e0e1e2366bba849222ae9e3a03b1"
 ARCH="${1:-arm64}"
 MIN_MACOS="11.0"
 
+# Node's arch names index the shipped layout (resources/ffmpeg/darwin-x64) and the manifest keys;
+# clang and FFmpeg's configure both want the machine name. Map once, here, so no caller has to know
+# that "x64" and "x86_64" are the same thing — mixing the two silently builds the host arch instead.
+case "$ARCH" in
+  arm64) MACHINE_ARCH="arm64" ;;
+  x64)   MACHINE_ARCH="x86_64" ;;
+  *)
+    echo "error: unsupported arch '$ARCH'. Use the node spelling: arm64 or x64." >&2
+    exit 1
+    ;;
+esac
+
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 OUT_DIR="$REPO_ROOT/resources/ffmpeg/darwin-$ARCH"
 WORK_DIR="$(mktemp -d "${TMPDIR:-/tmp}/ffmpeg-sidecar-XXXXXX")"
@@ -27,6 +45,31 @@ trap 'rm -rf "$WORK_DIR"' EXIT
 if [ "$(uname -s)" != "Darwin" ]; then
   echo "error: this builds a macOS binary and must run on macOS (found $(uname -s))." >&2
   exit 1
+fi
+
+# uname -m reports the translated arch under Rosetta, so ask sysctl for the real hardware instead:
+# running this script itself under Rosetta would otherwise make an x86_64 build look native and skip
+# the cross-compile flags, producing an arm64 binary in the darwin-x64 directory.
+HOST_ARCH="$(uname -m)"
+if [ "$(sysctl -in sysctl.proc_translated 2>/dev/null || echo 0)" = "1" ]; then
+  HOST_ARCH="arm64"
+fi
+
+CROSS_FLAGS=()
+if [ "$MACHINE_ARCH" != "$HOST_ARCH" ]; then
+  echo "==> Cross-compiling $MACHINE_ARCH on a $HOST_ARCH host"
+  # --enable-cross-compile stops configure from *running* its probe binaries. They would actually run
+  # here (Rosetta translates x86_64), but only in one direction and only when Rosetta is installed, so
+  # relying on that would make the build's correctness depend on an optional OS component. The explicit
+  # --cc carries the -arch through every compile and link configure performs.
+  CROSS_FLAGS=(--enable-cross-compile --target-os=darwin --cc="clang -arch $MACHINE_ARCH")
+  # The licence banner below has to execute the binary. Only Rosetta can do that for an x86_64 build
+  # on Apple Silicon; say so now rather than after a full compile.
+  if [ "$MACHINE_ARCH" = "x86_64" ] && ! /usr/bin/pgrep -q oahd; then
+    echo "error: building the x64 sidecar on Apple Silicon needs Rosetta 2 to verify the result." >&2
+    echo "  install it with: softwareupdate --install-rosetta --agree-to-license" >&2
+    exit 1
+  fi
 fi
 
 echo "==> Fetching ffmpeg-$VERSION source"
@@ -51,9 +94,10 @@ echo "==> Configuring (LGPL-only, no external dependencies)"
 # while the manifest described a self-contained static build.
 ./configure \
   --prefix="$WORK_DIR/install" \
-  --arch="$ARCH" \
-  --extra-cflags="-mmacosx-version-min=$MIN_MACOS" \
-  --extra-ldflags="-mmacosx-version-min=$MIN_MACOS" \
+  --arch="$MACHINE_ARCH" \
+  "${CROSS_FLAGS[@]+"${CROSS_FLAGS[@]}"}" \
+  --extra-cflags="-arch $MACHINE_ARCH -mmacosx-version-min=$MIN_MACOS" \
+  --extra-ldflags="-arch $MACHINE_ARCH -mmacosx-version-min=$MIN_MACOS" \
   --disable-gpl \
   --disable-nonfree \
   --disable-autodetect \
@@ -67,6 +111,19 @@ echo "==> Configuring (LGPL-only, no external dependencies)"
 
 echo "==> Building"
 make -j"$(sysctl -n hw.ncpu)"
+
+echo "==> Verifying the result is actually $MACHINE_ARCH"
+# A dropped -arch does not fail the build, it just produces the host architecture — which would then
+# pass every check below and ship an arm64 binary inside the darwin-x64 directory, where it dies on
+# the Intel Macs this whole cross-build exists to serve. Assert the arch rather than assume it.
+BUILT_ARCHS="$(lipo -archs ffmpeg)"
+case " $BUILT_ARCHS " in
+  *" $MACHINE_ARCH "*) ;;
+  *)
+    echo "error: built ffmpeg is '$BUILT_ARCHS', expected $MACHINE_ARCH." >&2
+    exit 1
+    ;;
+esac
 
 echo "==> Verifying the result is self-contained"
 # Belt and braces: --disable-autodetect should make this impossible, but the whole reason this script
@@ -89,6 +146,7 @@ echo "==> Verifying the licence banner"
 # conflates them: under pipefail any failure to RUN also negates to true and reports a licence
 # problem, while the mirrored nonfree test silently passes because its grep found nothing in the
 # empty output. That is the exact misdiagnosis check-ffmpeg-sidecar.mjs was rewritten to remove.
+# On a cross-build this runs through Rosetta, which the host check above already confirmed is present.
 if ! LICENSE_OUT="$(./ffmpeg -L 2>&1)"; then
   echo "error: the freshly built binary could not be executed. This is not a licensing failure." >&2
   echo "$LICENSE_OUT" >&2
