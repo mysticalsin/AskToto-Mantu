@@ -488,6 +488,28 @@ async function groupMeetings() {
 
 async function groupBrain() {
   const g = 'brain'
+  // The `meetings` group deletes every transcript it saves as its own cleanup, so by the time this
+  // group runs there is nothing left on disk to index — the commitments check below would find zero
+  // by construction, not because extraction is broken. Save (and auto-enqueue-ingest) a dedicated,
+  // commitment-bearing fixture here and only delete it once this group's own checks are done with it.
+  const commitTitle = `QA Commitment Probe ${new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')}`
+  let commitFile = null
+  await check(g, 'a meeting with a clear next step is saved for indexing', async () => {
+    const res = await page.evaluate(async (title) => window.toto.saveTranscript({
+      title,
+      mode: 'sales',
+      startedAt: Date.now() - 120000,
+      recap: '',
+      lines: [
+        { speaker: 'you', text: 'Thanks for joining — let us talk through the Acme renewal.', t: 0 },
+        { speaker: 'them', text: 'We need the signed security questionnaire before legal can approve it.', t: 30000 },
+        { speaker: 'you', text: 'Understood. I will send you the completed security questionnaire by next Tuesday.', t: 60000 }
+      ]
+    }), commitTitle)
+    assert(res && res.path, `no path returned: ${JSON.stringify(res)}`)
+    commitFile = res.path
+    return res.path
+  })
   await check(g, 'brainStatus answers with a coherent shape', async () => {
     const st = await page.evaluate(() => window.toto.brainStatus())
     assert(st, 'brainStatus returned null')
@@ -536,6 +558,12 @@ async function groupBrain() {
     await sleep(4000)
     const after = await page.evaluate(() => window.toto.brainStatus())
     return { kicked, revisionBefore: before?.revision, revisionAfter: after?.revision }
+  })
+  await check(g, 'clean up the commitment fixture', async () => {
+    if (!commitFile) return 'nothing to clean up'
+    const res = await page.evaluate((f) => window.toto.recallDelete(f), commitFile)
+    assert(res.ok, `cleanup delete failed: ${res.error}`)
+    return 'deleted'
   })
 }
 
