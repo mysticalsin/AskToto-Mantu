@@ -66,23 +66,23 @@ describe("runtime status line reads the true tri-state, not a boolean (finding 2
   })
 })
 
-describe('connectCli() branches on accessDenied instead of misdirecting into reinstall/re-login (finding 3)', () => {
+describe('connectCli() branches on accessDenied instead of misdirecting into a generic "no session" message (finding 3)', () => {
   const block = blockAfter('const connectCli = async ()', '\n  // Save a Dust API key')
 
-  it('checks r.accessDenied before falling through to the setup/reinstall path', () => {
+  it('checks r.accessDenied before falling through to the generic no-session message', () => {
     const deniedIdx = block.indexOf('r.accessDenied')
-    const setupIdx = block.indexOf('No Dust CLI found. Starting setup')
+    const genericIdx = block.indexOf('No Dust CLI session found')
     expect(deniedIdx).toBeGreaterThan(-1)
-    expect(setupIdx).toBeGreaterThan(-1)
-    expect(deniedIdx).toBeLessThan(setupIdx)
+    expect(genericIdx).toBeGreaterThan(-1)
+    expect(deniedIdx).toBeLessThan(genericIdx)
   })
 
-  it('the accessDenied branch returns before reaching dustSetupCli() (no reinstall/re-login)', () => {
+  it('the accessDenied branch returns before reaching the generic no-session message', () => {
     const deniedIdx = block.indexOf('if (r.accessDenied)')
     const nextReturn = block.indexOf('return', deniedIdx)
-    const setupCall = block.indexOf('dustSetupCli()', deniedIdx)
+    const genericIdx = block.indexOf('No Dust CLI session found', deniedIdx)
     expect(nextReturn).toBeGreaterThan(-1)
-    expect(nextReturn).toBeLessThan(setupCall)
+    expect(nextReturn).toBeLessThan(genericIdx)
   })
 })
 

@@ -116,11 +116,6 @@ import { decideDustLiveCheck } from '../lib/dust-live-check'
 const DUST_CREDENTIAL_STORE = isWindows ? 'Windows Credential Manager' : 'Keychain'
 const PROFILE_CREDENTIAL_STORE = isWindows ? 'Windows credential store' : 'Keychain'
 
-// Guards the AUTOMATIC (non-user-initiated) Dust setup relaunch to at most once per app run. Without it,
-// closing + reopening Settings while a `dust login` is still pending would spawn a fresh Terminal each
-// time. Manual "Connect / Reconnect" clicks are user-explicit and intentionally bypass this.
-let dustAutoSetupLaunched = false
-
 // Shared control class for inputs + native <select>s. The trailing bits fix a Windows-only bug where a
 // native <select> rendered as a blank white box (white text on a white native control) until you clicked
 // it to open the popup: `[color-scheme:dark]` makes Chromium paint the native select control dark on
@@ -2563,25 +2558,35 @@ function DustSetup({
     msg: null,
     ok: false
   })
+  // Native OAuth sign-in state machine (main/dust-oauth.ts) — no CLI, no system Node.js. 'waiting' polls
+  // dustLoginPoll every intervalSec until the user finishes the browser consent; 'picking' shows the
+  // returned workspace list; 'polling' here means "finishing with the chosen workspace", not device polling.
+  type DustOAuthPhase = 'idle' | 'starting' | 'waiting' | 'picking' | 'finishing' | 'error'
+  const [oauth, setOauth] = useState<{
+    phase: DustOAuthPhase
+    userCode: string | null
+    verificationUri: string | null
+    deviceCode: string | null
+    intervalSec: number
+    expiresAt: number
+    workspaces: Array<{ sId: string; name: string; role?: string }> | null
+    error: string | null
+  }>({
+    phase: 'idle',
+    userCode: null,
+    verificationUri: null,
+    deviceCode: null,
+    intervalSec: 5,
+    expiresAt: 0,
+    workspaces: null,
+    error: null
+  })
   const linkId = useId()
   const wsId = useId()
   const thinkSel = useId()
   // The manual API-key path is collapsed by default so the one-click "Set up Dust automatically" button
   // is the obvious choice; users who already hold an admin key expand it.
   const [showKeyPath, setShowKeyPath] = useState(false)
-  // Elapsed-seconds counter on the connect button: a cold `dust status` refresh can take ~25s, and a bare
-  // spinner reads as "frozen". Ticking a visible timer makes it clear something is happening. Resets when
-  // the connect settles (cli.busy flips false).
-  const [connectSecs, setConnectSecs] = useState(0)
-  useEffect(() => {
-    if (!cli.busy) {
-      setConnectSecs(0)
-      return
-    }
-    setConnectSecs(0)
-    const id = setInterval(() => setConnectSecs((s) => s + 1), 1000)
-    return () => clearInterval(id)
-  }, [cli.busy])
 
   const isEu = /eu\.dust\.tt/i.test(settings.dustBaseUrl)
   // The one-click CLI setup (dustImportCli/dustSetupCli) is cross-platform now (dust-secret-store reads
@@ -2611,14 +2616,15 @@ function DustSetup({
   const storedAgentMissing = dustStoredAgentMissing(agent, agents)
   const selectedAgentRunsSonnet = !!selectedAgent && selectedAgent.modelProviderId === 'anthropic' && /sonnet/i.test(selectedAgent.modelId || '')
 
-  // Connect locally by importing the Dust CLI session (token + workspace + region) from the keychain.
-  // On success: activate Dust + load the agents (proves the token works) so the user just picks them.
+  // Import an existing `dust login` CLI session (token + workspace + region) from the keychain — the
+  // migration path for a user who already has the CLI installed. The primary path is startDustOAuth below,
+  // which needs neither the CLI nor system Node.js.
   const connectCli = async (): Promise<void> => {
     setCli({ busy: true, msg: null, ok: false })
     const r = await window.toto.dustImportCli()
     if (!r.ok) {
       // Blocked Keychain read, not a missing session — ask to allow access, same as the mount-time live
-      // check below (decideDustLiveCheck), instead of misdirecting into a needless CLI reinstall/re-login.
+      // check below (decideDustLiveCheck), instead of misdirecting into a needless re-login.
       if (r.accessDenied) {
         setCli({
           busy: false,
@@ -2629,25 +2635,18 @@ function DustSetup({
       }
       if (r.incomplete) {
         // `dust login`'s browser OAuth step finished but its separate interactive terminal
-        // workspace-picker step never did. Relaunching setup here would pop a SECOND Terminal window
-        // instead of pointing the user back at the one still waiting — just tell them to finish it there.
+        // workspace-picker step never did — point back at that terminal instead of retrying blind.
         setCli({
           busy: false,
           ok: false,
-          msg: 'Almost there. Finish picking your workspace in the Terminal window from setup (use the arrow keys, press Enter, then wait for "Authentication and workspace selection complete!"). Then click Connect again.'
+          msg: 'Almost there. Finish picking your workspace in the terminal from `dust login` (arrow keys, then Enter). Then click Import again.'
         })
         return
       }
-      // No CLI session found → automatically kick off the setup (install + interactive login) instead of
-      // just printing a command. The login needs a browser OAuth, so it opens in a Terminal window.
-      setCli({ busy: true, ok: false, msg: 'No Dust CLI found. Starting setup…' })
-      const s = await window.toto.dustSetupCli()
       setCli({
         busy: false,
         ok: false,
-        msg: s.ok
-          ? 'Setup opened in Terminal. Finish the Dust login there; Métis will connect automatically.'
-          : s.error || r.error || 'Could not start the Dust CLI setup.'
+        msg: r.error || 'No Dust CLI session found. Run `dust login` in a terminal first, or use the automatic sign-in above.'
       })
       return
     }
@@ -2667,6 +2666,75 @@ function DustSetup({
       await patch({ provider: 'dust' })
     }
     setCli({ busy: false, ok: true, msg: `Connected. Workspace ${r.workspaceId}. Loading agents…` })
+    await loadAgents()
+  }
+
+  const oauthIdle = { phase: 'idle' as const, userCode: null, verificationUri: null, deviceCode: null, intervalSec: 5, expiresAt: 0, workspaces: null, error: null }
+
+  // Step 1: mint a device code, open the browser consent page. Step 2 (polling) is the effect below.
+  const startDustOAuth = async (): Promise<void> => {
+    setOauth({ ...oauthIdle, phase: 'starting' })
+    const r = await window.toto.dustLoginBegin()
+    if (!r.ok || !r.deviceCode) {
+      setOauth({ ...oauthIdle, phase: 'error', error: r.error || 'Could not start Dust sign-in.' })
+      return
+    }
+    setOauth({
+      phase: 'waiting',
+      userCode: r.userCode ?? null,
+      verificationUri: r.verificationUri ?? null,
+      deviceCode: r.deviceCode,
+      intervalSec: r.intervalSec || 5,
+      expiresAt: Date.now() + (r.expiresInSec || 300) * 1000,
+      workspaces: null,
+      error: null
+    })
+  }
+
+  // Poll at the server-given cadence while waiting for the user to finish the browser step. RFC 8628:
+  // 'pending' keeps the same interval, 'slow_down' adds 5s, anything else ends the loop.
+  useEffect(() => {
+    if (oauth.phase !== 'waiting' || !oauth.deviceCode) return
+    let cancelled = false
+    let timer: ReturnType<typeof setTimeout>
+    const deviceCode = oauth.deviceCode
+    const tick = async (intervalSec: number): Promise<void> => {
+      if (cancelled) return
+      if (Date.now() > oauth.expiresAt) {
+        setOauth((o) => (o.phase === 'waiting' ? { ...o, phase: 'error', error: 'Sign-in expired — try again.' } : o))
+        return
+      }
+      const r = await window.toto.dustLoginPoll(deviceCode)
+      if (cancelled) return
+      if (r.status === 'pending') {
+        timer = setTimeout(() => void tick(intervalSec), intervalSec * 1000)
+      } else if (r.status === 'slow_down') {
+        timer = setTimeout(() => void tick(intervalSec), (intervalSec + 5) * 1000)
+      } else if (r.status === 'ok') {
+        setOauth((o) => (o.phase === 'waiting' ? { ...o, phase: 'picking', workspaces: r.workspaces ?? [] } : o))
+      } else {
+        setOauth((o) => (o.phase === 'waiting' ? { ...o, phase: 'error', error: r.error || 'Dust sign-in failed.' } : o))
+      }
+    }
+    timer = setTimeout(() => void tick(oauth.intervalSec), oauth.intervalSec * 1000)
+    return () => {
+      cancelled = true
+      clearTimeout(timer)
+    }
+    // Re-armed only when a fresh device code starts a new wait — not on every render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [oauth.phase, oauth.deviceCode])
+
+  // Step 3: the user picked a workspace — finish the login and load its agents.
+  const pickDustWorkspace = async (sId: string): Promise<void> => {
+    setOauth((o) => ({ ...o, phase: 'finishing' }))
+    const r = await window.toto.dustLoginPickWorkspace(sId)
+    if (!r.ok) {
+      setOauth((o) => ({ ...o, phase: 'error', error: r.error || 'Could not finish sign-in.' }))
+      return
+    }
+    setOauth(oauthIdle)
+    await patch({ provider: 'dust' })
     await loadAgents()
   }
 
@@ -2816,12 +2884,13 @@ function DustSetup({
   //   • run-setup             → no live session behind the saved connection → auto-run install +
   //                             `dust login` (Terminal), so the user is prompted to reconnect instead of
   //                             silently assuming done.
-  // Gated to CLI-origin connections (dustTokenMintedAt, set only by the CLI import/refresh, never by
-  // saveDustKey): a MANUAL API-key connection has keySaved+hasWs but legitimately has NO CLI session, so
-  // probing it would misread as "dead" and wrongly auto-launch the installer for a validly-keyed user.
+  // Gated to CLI-origin connections (dustSessionOrigin, set only by the CLI import/refresh — the OAuth
+  // login sets 'oauth'): a MANUAL API-key or native-OAuth connection legitimately has NO `dust-cli`
+  // keychain item, so probing it would misread as "dead" for no reason. The OAuth path's own on-401
+  // self-heal (main/index.ts's makeRefreshDustAuth) covers its equivalent case on next use.
   const liveCheckedRef = useRef(false)
   useEffect(() => {
-    if (liveCheckedRef.current || !keySaved || !hasWs || !settings.dustTokenMintedAt) return
+    if (liveCheckedRef.current || !keySaved || !hasWs || !settings.dustTokenMintedAt || settings.dustSessionOrigin !== 'cli') return
     liveCheckedRef.current = true
     void (async () => {
       const decision = decideDustLiveCheck(await window.toto.dustProbeSession())
@@ -2834,25 +2903,16 @@ function DustSetup({
         setCli({
           busy: false,
           ok: false,
-          msg: 'Almost there. Finish picking your workspace in the Terminal window from setup (arrow keys, then Enter), then Reconnect.'
+          msg: 'Almost there. Finish picking your workspace in the terminal from `dust login` (arrow keys, then Enter), then Reconnect.'
         })
         return
       }
-      // decision === 'run-setup' — the saved connection is dead. Auto-run setup, but at most once per app
-      // run (dustAutoSetupLaunched); a reopen mid-login points the user at Reconnect instead of a 2nd window.
-      if (dustAutoSetupLaunched) {
-        setCli({ busy: false, ok: false, msg: 'Dust session ended, Reconnect to finish signing in again.' })
-        return
-      }
-      dustAutoSetupLaunched = true
-      setCli({ busy: true, ok: false, msg: 'Dust session ended, reopening setup in Terminal. Log in to reconnect.' })
-      const s = await window.toto.dustSetupCli()
+      // decision === 'run-setup' — the saved CLI session is dead. Nudge toward a fix rather than silently
+      // relaunching anything: there is no more in-app installer/terminal step for the CLI path to reopen.
       setCli({
         busy: false,
         ok: false,
-        msg: s.ok
-          ? 'Setup opened in Terminal. Finish the Dust login there; Métis will reconnect automatically.'
-          : s.error || 'Could not start the Dust CLI setup.'
+        msg: 'Your Dust CLI session ended. Run `dust login` again and Reconnect — or use the automatic sign-in above.'
       })
     })()
     // Probe once on mount for the already-connected case only; connectCli / disconnect handle the rest.
@@ -2893,12 +2953,11 @@ function DustSetup({
       icon={Link2}
     >
       <div className="flex flex-col gap-4">
-        {/* PRIMARY — one click installs the Dust CLI, signs you in, and connects on its own. Same on
-            macOS and Windows: connectCli imports the local session, and if there isn't one it auto-runs
-            the installer + `dust login`; the main-process poll then imports the session automatically. */}
+        {/* PRIMARY — native OAuth sign-in (main/dust-oauth.ts): no CLI install, no system Node.js. One
+            click opens the browser for consent, then Métis's own workspace picker below finishes it. */}
         <div className="flex flex-col gap-2 rounded-[12px] border border-[var(--cl-primary)]/40 bg-[var(--cl-primary-soft)]/50 p-3.5">
           {keySaved && hasWs ? (
-            // Already connected → Reconnect (re-imports a fresh session) + Disconnect (full reset).
+            // Already connected → Reconnect (fresh sign-in) + Disconnect (full reset).
             <div className="flex items-center justify-between gap-2">
               <span className="flex items-center gap-1.5 text-[12px] font-medium text-[color:var(--cl-success)]">
                 <CircleCheck size={14} /> Dust is connected.
@@ -2907,18 +2966,18 @@ function DustSetup({
                 {locked && <span className={managedChipCls}>Managed by your organization</span>}
                 <button
                   type="button"
-                  onClick={connectCli}
-                  disabled={cli.busy || locked}
-                  title="Re-import a fresh session from the Dust CLI"
+                  onClick={() => void startDustOAuth()}
+                  disabled={oauth.phase !== 'idle' || locked}
+                  title="Sign in again to Dust"
                   className="no-drag cl-focus flex items-center gap-1.5 rounded-[8px] bg-[var(--cl-primary)] px-3 py-1.5 text-[12px] font-medium text-white hover:opacity-90 disabled:opacity-50"
                 >
-                  {cli.busy ? <Loader2 size={13} className="animate-spin" /> : <RefreshCw size={13} />}
+                  {oauth.phase !== 'idle' ? <Loader2 size={13} className="animate-spin" /> : <RefreshCw size={13} />}
                   Reconnect
                 </button>
                 <button
                   type="button"
                   onClick={disconnectDust}
-                  disabled={cli.busy || (locked && active)}
+                  disabled={oauth.phase !== 'idle' || (locked && active)}
                   title="Disconnect Dust from Métis"
                   className="no-drag cl-focus flex items-center gap-1.5 rounded-[8px] border border-[var(--cl-destructive)]/30 bg-[var(--cl-destructive)]/10 px-3 py-1.5 text-[12px] font-medium text-[color:var(--cl-destructive)] hover:bg-[var(--cl-destructive)]/20 disabled:opacity-50"
                 >
@@ -2927,24 +2986,84 @@ function DustSetup({
                 </button>
               </div>
             </div>
+          ) : oauth.phase === 'waiting' ? (
+            // Waiting on the browser consent step — show the code in case the browser needs it re-typed,
+            // and a way out in case the user closed the tab or the browser never opened.
+            <div className="flex flex-col items-center gap-2 text-center">
+              <Loader2 size={16} className="animate-spin text-[color:var(--cl-primary)]" />
+              <span className="text-[13px] font-medium text-[color:var(--cl-foreground)]">Waiting for you to finish in your browser…</span>
+              {oauth.userCode && (
+                <span className="rounded-[8px] bg-black/20 px-3 py-1 font-mono text-[15px] tracking-widest text-[color:var(--cl-foreground)]">
+                  {oauth.userCode}
+                </span>
+              )}
+              {oauth.verificationUri && (
+                <a
+                  href={oauth.verificationUri}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-[11px] text-[color:var(--cl-primary)] underline"
+                >
+                  Browser didn&apos;t open? Click here
+                </a>
+              )}
+              <button
+                type="button"
+                onClick={() => setOauth(oauthIdle)}
+                className="no-drag cl-focus text-[11px] text-[color:var(--cl-muted-foreground)] underline"
+              >
+                Cancel
+              </button>
+            </div>
+          ) : oauth.phase === 'picking' ? (
+            // Workspace list from the just-finished sign-in — Métis's own picker replaces dust-cli's
+            // arrow-key terminal UI.
+            <div className="flex flex-col gap-2">
+              <span className="text-center text-[12px] font-medium text-[color:var(--cl-foreground)]">Pick your workspace</span>
+              {(oauth.workspaces ?? []).map((w) => (
+                <button
+                  key={w.sId}
+                  type="button"
+                  onClick={() => void pickDustWorkspace(w.sId)}
+                  className="no-drag cl-focus flex items-center justify-between rounded-[8px] border border-[var(--cl-border)] bg-black/10 px-3 py-2 text-left text-[13px] text-[color:var(--cl-foreground)] hover:border-[var(--cl-primary)]"
+                >
+                  <span>{w.name}</span>
+                  {w.role && <span className="text-[11px] text-[color:var(--cl-muted-foreground)]">{w.role}</span>}
+                </button>
+              ))}
+            </div>
+          ) : oauth.phase === 'finishing' ? (
+            <div className="flex items-center justify-center gap-2 py-2 text-[13px] text-[color:var(--cl-muted-foreground)]">
+              <Loader2 size={16} className="animate-spin" /> Finishing sign-in…
+            </div>
           ) : (
             <>
               <button
                 type="button"
-                onClick={connectCli}
-                disabled={cli.busy || locked}
+                onClick={() => void startDustOAuth()}
+                disabled={oauth.phase === 'starting' || locked}
                 className="no-drag cl-focus flex w-full items-center justify-center gap-2 rounded-[10px] bg-[var(--cl-primary)] px-4 py-3 text-[14px] font-semibold text-white hover:opacity-90 disabled:opacity-50"
               >
-                {cli.busy ? <Loader2 size={16} className="animate-spin" /> : <Wand2 size={16} />}
-                {cli.busy ? `Connecting… ${connectSecs}s` : 'Set up Dust automatically'}
+                {oauth.phase === 'starting' ? <Loader2 size={16} className="animate-spin" /> : <Wand2 size={16} />}
+                {oauth.phase === 'starting' ? 'Starting sign-in…' : 'Set up Dust automatically'}
               </button>
               <span className="text-center text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
-                {cli.busy
-                  ? 'Installing the CLI and signing you in. This can take up to a minute.'
-                  : 'Installs the Dust CLI and signs you in, then Métis connects on its own. No key to copy.'}
+                Opens your browser to sign in, then pick your workspace here. No CLI, no key to copy.
                 {locked && <span className={'ml-1 ' + managedChipCls}>Managed by your organization</span>}
               </span>
+              <button
+                type="button"
+                onClick={() => void connectCli()}
+                disabled={cli.busy || locked}
+                className="no-drag cl-focus mx-auto flex items-center gap-1.5 text-[11px] text-[color:var(--cl-muted-foreground)] underline disabled:opacity-50"
+              >
+                {cli.busy && <Loader2 size={11} className="animate-spin" />}
+                Already signed in with the Dust CLI? Import that session
+              </button>
             </>
+          )}
+          {oauth.error && (
+            <span className="text-center text-[11px] text-[color:var(--cl-destructive)]">{oauth.error}</span>
           )}
           {cli.msg && (
             <span

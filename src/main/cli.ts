@@ -857,9 +857,11 @@ export async function testCli(provider: ProviderId): Promise<CliActionResult> {
 
 /**
  * Open a Terminal (macOS) or console (Windows) window that installs the CLI and walks the user
- * through interactive login. Mirrors setupDustCli() in dustcli.ts — writes a script and
- * shell.openPath's it: a .command file on macOS, a .cmd batch file on Windows (Windows opens .cmd
- * files in a console and runs them, so this needs no extra permission either).
+ * through interactive login: writes a script and shell.openPath's it — a .command file on macOS, a
+ * .cmd batch file on Windows (Windows opens .cmd files in a console and runs them, so this needs no
+ * extra permission either). Dust's own sign-in no longer uses this pattern — see main/dust-oauth.ts's
+ * native OAuth device flow — kept here for the CLI providers (Claude Code, Codex) that genuinely are a
+ * system-installed CLI with an interactive terminal login.
  */
 export async function setupCli(provider: ProviderId): Promise<{ ok: boolean; error?: string }> {
   if (process.platform !== 'darwin' && process.platform !== 'win32') {
@@ -874,7 +876,7 @@ export async function setupCli(provider: ProviderId): Promise<{ ok: boolean; err
   let scriptLines: string[]
 
   // Windows batch bodies: plain ASCII only — the default console codepage mangles accents/emoji —
-  // and `^(` escapes parens for echo. Mirrors WIN_SETUP_SCRIPT in dustcli.ts.
+  // and `^(` escapes parens for echo.
   if (isWin) {
     if (provider === 'claude-cli') {
       scriptLines = [

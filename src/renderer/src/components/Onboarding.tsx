@@ -139,7 +139,8 @@ export async function connectDust(deps: {
   /** patch({ provider: 'dust' }) + advance. Stays first so the user isn't parked on step 5 for the import. */
   select: () => void
   importCli: () => Promise<DustCliImport>
-  /** Fire-and-forget installer + `dust login` fallback — it opens a terminal, so the focus refetch covers it. */
+  /** Fire-and-forget native OAuth device-flow start — it opens the browser, so the focus refetch covers it.
+   *  The user finishes (code + workspace pick) in Settings, where the full flow lives. */
   setupCli: () => void
   /** Re-reads settings from main; a patch answers with the fresh snapshot. */
   refreshSettings: () => Promise<void>
@@ -644,16 +645,16 @@ export function Onboarding({
         if (mountedRef.current) setCliBusy(false)
       }
     }
-    // "Mantu Dust" isn't just a preference — kick off the one-click setup right here so onboarding ends
-    // CONNECTED, not just with Dust selected. Import an existing Dust CLI session, or auto-run the
-    // installer + `dust login` if there's none; the main-process poll then connects on its own and the
-    // readiness step reflects it. Cross-platform. If it can't run, the user still lands on step 6 and can
-    // finish in Settings — no dead-end.
+    // "Mantu Dust" isn't just a preference — kick off sign-in right here so onboarding ends CONNECTED, not
+    // just with Dust selected. Import an existing Dust CLI session if there is one; otherwise start the
+    // native OAuth device flow (opens the browser) fire-and-forget — the user finishes it (code + pick a
+    // workspace) in Settings, where the full flow lives. No dead-end: the user still lands on step 6 and
+    // can finish there either way.
     const chooseDust = async (): Promise<void> => {
       await connectDust({
         select: () => choose('dust'),
         importCli: () => window.toto.dustImportCli(),
-        setupCli: () => void window.toto.dustSetupCli(),
+        setupCli: () => void window.toto.dustLoginBegin(),
         // Re-patching the provider we just set is the renderer's only way to pull main's post-import
         // snapshot (setSettings answers with it) — settings are otherwise refetched on window 'focus'
         // alone, which this path never triggers.

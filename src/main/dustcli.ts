@@ -1,22 +1,19 @@
-import { app, shell } from 'electron'
 import { spawn } from 'node:child_process'
-import { writeFileSync } from 'node:fs'
-import { randomBytes } from 'node:crypto'
-import { join } from 'node:path'
 import type { DustCliImport } from '@shared/ipc'
 import { killWindowsProcessTree, resolveBin, resolveSpawnTarget } from './cli'
-import { clearApiKey, setSettings } from './store'
 import { DUST_KEYCHAIN_SERVICE, readDustSecret } from './dust-secret-store'
 
 
 /**
- * Read the local Dust CLI session so Métis can connect to Dust without the user copy-pasting a key.
+ * Read the local `@dust-tt/dust-cli` session so Métis can connect to Dust without the user copy-pasting a
+ * key — for the user who already has the CLI installed and ran `dust login` themselves.
  *
- * The Dust CLI (`@dust-tt/dust-cli`, command `dust login`) stores its session via keytar under service
- * `dust-cli` (accounts `access_token` / `workspace_sid` / `region`). The per-OS read lives in
- * dust-secret-store.ts (macOS Keychain, Windows Credential Manager, Linux libsecret) — all
- * native-module-free shell-outs. This module orchestrates import, refresh, and first-run setup on top,
- * identically on every platform.
+ * This is a MIGRATION path, not the primary sign-in flow: the primary flow is main/dust-oauth.ts's native
+ * OAuth device flow (no CLI, no system Node.js required). The Dust CLI stores its own session via keytar
+ * under service `dust-cli` (accounts `access_token` / `workspace_sid` / `region`); the per-OS read lives
+ * in dust-secret-store.ts (macOS Keychain, Windows Credential Manager, Linux libsecret) — all
+ * native-module-free shell-outs. This module only imports and refreshes that existing session; it never
+ * installs or launches the CLI itself.
  *
  * The access token is an OAuth token and is short-lived: it works now and survives restarts until it
  * expires, after which `dust status` (refreshDustCliSession) re-mints it with no re-login.
@@ -164,98 +161,4 @@ export async function refreshDustCliSession(): Promise<DustCliSession> {
     }
   })()
   return refreshInflight
-}
-
-// macOS `.command` installer (bash). Opening a `.command` runs it in Terminal with NO Automation
-// permission (unlike osascript). `dust login` needs a browser OAuth, so it must run in a visible window.
-const MAC_SETUP_SCRIPT =
-  [
-    '#!/bin/bash',
-    'clear',
-    'echo "Métis — Dust setup"',
-    'echo "==================="',
-    'echo',
-    'if ! command -v npm >/dev/null 2>&1; then',
-    '  echo "✗ npm / Node.js not found. Install Node from https://nodejs.org, then run this again."',
-    '  echo; echo "Press any key to close."; read -n 1 -s; exit 1',
-    'fi',
-    'echo "Step 1/2  Installing the Dust CLI (npm i -g @dust-tt/dust-cli)…"',
-    'if ! npm i -g @dust-tt/dust-cli; then',
-    '  echo; echo "✗ Install failed (often a permissions issue with global npm)."',
-    '  echo "  Try:  sudo npm i -g @dust-tt/dust-cli   then run this again."',
-    '  echo; echo "Press any key to close."; read -n 1 -s; exit 1',
-    'fi',
-    'echo; echo "Step 2/2  Signing in to Dust (a browser window will open)…"',
-    'echo "After the browser sign-in, THIS window will ask you to pick your workspace — use the arrow"',
-    'echo "keys, press Enter, and wait for \\"Authentication and workspace selection complete!\\" before"',
-    'echo "closing this window."',
-    'dust login',
-    'echo; echo "✓ Done. Return to Métis — it will connect automatically after login."',
-    'echo "You can close this window."'
-  ].join('\n') + '\n'
-
-// Windows `.cmd` installer (batch). Opening a `.cmd` runs it in a console window; `pause` keeps it open.
-// Plain ASCII only — the default console codepage mangles accents/emoji. `^(` escapes parens for echo.
-const WIN_SETUP_SCRIPT =
-  [
-    '@echo off',
-    'title Metis - Dust setup',
-    'cls',
-    'echo Metis - Dust setup',
-    'echo ===================',
-    'echo.',
-    'where npm >nul 2>nul',
-    'if errorlevel 1 (',
-    '  echo npm / Node.js not found. Install Node from https://nodejs.org, then run this again.',
-    '  echo.',
-    '  pause',
-    '  exit /b 1',
-    ')',
-    'echo Step 1/2  Installing the Dust CLI ^(npm i -g @dust-tt/dust-cli^)...',
-    'call npm i -g @dust-tt/dust-cli',
-    'if errorlevel 1 (',
-    '  echo.',
-    '  echo Install failed. Try running this window as Administrator, then run it again.',
-    '  echo.',
-    '  pause',
-    '  exit /b 1',
-    ')',
-    'echo.',
-    'echo Step 2/2  Signing in to Dust ^(a browser window will open^)...',
-    'echo After the browser sign-in, THIS window will ask you to pick your workspace -- use the arrow',
-    'echo keys, press Enter, and wait for "Authentication and workspace selection complete!" before',
-    'echo closing this window.',
-    'call dust login',
-    'echo.',
-    'echo Done. Return to Metis - it will connect automatically after login.',
-    'echo You can close this window.',
-    'pause'
-  ].join('\r\n') + '\r\n'
-
-/**
- * Kick off the Dust CLI setup for a user with no session yet: write an installer script (install the
- * CLI, then run the interactive `dust login`) and open it so a terminal window walks the user through it.
- * Cross-platform — macOS `.command`, Windows `.cmd`; after login the poll (index.ts) auto-imports on
- * every platform. Linux terminal-launching is DE-specific, so there we point the user at the two commands.
- */
-export async function setupDustCli(): Promise<{ ok: boolean; error?: string }> {
-  if (process.platform !== 'darwin' && process.platform !== 'win32') {
-    return {
-      ok: false,
-      error: 'On Linux, run `npm i -g @dust-tt/dust-cli && dust login` in a terminal, then reopen Métis.'
-    }
-  }
-  try {
-    const isWin = process.platform === 'win32'
-    const script = isWin ? WIN_SETUP_SCRIPT : MAC_SETUP_SCRIPT
-    const ext = isWin ? 'cmd' : 'command'
-    const scriptPath = join(app.getPath('temp'), `asktoto-dust-setup-${randomBytes(8).toString('hex')}.${ext}`)
-    // 0o755 (exec bit) matters on macOS; Windows ignores mode and runs `.cmd` by extension.
-    writeFileSync(scriptPath, script, { mode: 0o755, flag: 'wx' })
-    const err = await shell.openPath(scriptPath) // opens in Terminal/Console and runs it
-    if (err) return { ok: false, error: err }
-    return { ok: true }
-  } catch (e) {
-    return { ok: false, error: e instanceof Error ? e.message : String(e) }
-  }
 }
