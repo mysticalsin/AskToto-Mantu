@@ -42,7 +42,9 @@ describe('pinned Dust-agent requests never fail over to a generic provider', () 
     // does the actual hand-off. Both consult pickFailover, so a pinned request is suppressed at both
     // without the two being able to drift apart.
     expect(indexSrc).toMatch(/hasFailoverTarget = provider !== 'local' && !!pickFailover\(attempted\.concat\(provider\)\)/)
-    expect(indexSrc).toMatch(/provider !== 'local' && failover\(attempted\.concat\(provider\), preferFree\)/)
+    // F3 hedge: this call now also forwards the optional race context (undefined outside a hedged ask) —
+    // the pin is on the provider/preferFree args pickFailover-vs-failover parity actually depends on.
+    expect(indexSrc).toMatch(/provider !== 'local' && failover\(attempted\.concat\(provider\), preferFree, race\)/)
   })
 
   it('the first-attempt local-fallback seam suppresses pinned requests too (not only pickFailover)', () => {

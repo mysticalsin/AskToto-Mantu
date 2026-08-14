@@ -25,8 +25,9 @@ describe('local processing privacy boundary', () => {
     // Window widened again: the OmniRoute exhaustion-classification block (rate-limit / quota / usage-cap)
     // and the retry-window handling were inserted ahead of the failover line, pushing it further down. The
     // invariant is unchanged — local never fails over to cloud. `preferFree` is the free-first backup flag.
-    const body = source.slice(start, start + 6_900)
-    expect(body).toMatch(/provider !== 'local' && failover\(attempted\.concat\(provider\), preferFree\)/)
+    const body = source.slice(start, start + 7_400)
+    // F3 hedge: this call now also forwards the optional race context (undefined outside a hedged ask).
+    expect(body).toMatch(/provider !== 'local' && failover\(attempted\.concat\(provider\), preferFree, race\)/)
   })
 
   it('redacts the screen description before it crosses to a cloud provider (redactSensitive)', () => {
