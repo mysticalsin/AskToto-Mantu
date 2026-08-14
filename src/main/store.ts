@@ -940,6 +940,80 @@ export function hasApiKey(provider: ProviderId): boolean {
   return getApiKey(provider).length > 0
 }
 
+// ─── Dust OAuth refresh token — same encryption backend as setApiKey/getApiKey, current format only ───
+// No legacy-format migration here (plaintext / bare safeStorage blob): this secret never existed before
+// the native OAuth flow, so there is no old-format data on disk to migrate. Kept as its own tiny pair of
+// functions rather than widening setApiKey/getApiKey to a free-form key name — a refresh token is not a
+// provider API key (no ENV_VAR fallback, no PROVIDERS-keyed cache) and forcing it through that path would
+// have meant carrying the legacy-migration branches for a secret that can never have legacy data.
+const dustRefreshTokenPath = () => join(dir(), 'dust-refresh.bin')
+
+export function setDustRefreshToken(token: string): void {
+  ensureDir()
+  const trimmed = token.trim()
+  const p = dustRefreshTokenPath()
+  if (!trimmed) {
+    clearDustRefreshToken()
+    return
+  }
+  let blob: Buffer
+  if (useFileBackend()) {
+    prepareFileKeyForWrite()
+    blob = Buffer.concat([AES_KEY_MARKER, encryptSecret(trimmed)])
+  } else {
+    prepareFileKeyForWrite()
+    if (!safeStorage.isEncryptionAvailable()) {
+      throw new Error('Encryption is unavailable on this machine. Métis cannot safely store your Dust session.')
+    }
+    blob = safeStorage.encryptString(trimmed)
+  }
+  const tmp = `${p}.tmp`
+  try {
+    writeFileSync(tmp, blob, { mode: 0o600 })
+    renameSync(tmp, p)
+  } catch (e) {
+    try {
+      if (existsSync(tmp)) rmSync(tmp)
+    } catch {
+      /* ignore */
+    }
+    throw new Error(
+      `Couldn't save your Dust session — Métis can't write to its data folder${
+        e instanceof Error && e.message ? ` (${e.message})` : ''
+      }.`
+    )
+  }
+}
+
+export function getDustRefreshToken(): string {
+  try {
+    const buf = readFileSync(dustRefreshTokenPath())
+    if (buf.length > AES_KEY_MARKER.length && buf.subarray(0, AES_KEY_MARKER.length).equals(AES_KEY_MARKER)) {
+      return decryptSecret(buf.subarray(AES_KEY_MARKER.length))
+    }
+    if (!process.env.ASKTOTO_LOCAL_KEYSTORE && safeStorage.isEncryptionAvailable()) {
+      try {
+        return safeStorage.decryptString(buf)
+      } catch {
+        return ''
+      }
+    }
+    return ''
+  } catch {
+    return ''
+  }
+}
+
+export function clearDustRefreshToken(): void {
+  const p = dustRefreshTokenPath()
+  if (!existsSync(p)) return
+  try {
+    rmSync(p)
+  } catch (e) {
+    mainLog.warn('[store] clearDustRefreshToken: could not delete file', e)
+  }
+}
+
 export function hasKeysMap(): Record<string, boolean> {
   const m: Record<string, boolean> = {}
   for (const p of PROVIDER_IDS) m[p] = hasApiKey(p)

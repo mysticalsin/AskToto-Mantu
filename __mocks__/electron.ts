@@ -26,6 +26,11 @@ export const desktopCapturer = {
   getSources: vi.fn(() => Promise.resolve([]))
 }
 
+export const shell = {
+  openExternal: vi.fn(() => Promise.resolve()),
+  openPath: vi.fn(() => Promise.resolve(''))
+}
+
 // Proxy-aware main-process fetch (updater's release-feed check). Tests stub per-call via
 // vi.mocked(net.fetch).mockResolvedValue(...).
 export const net = {

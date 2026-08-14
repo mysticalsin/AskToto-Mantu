@@ -43,8 +43,11 @@ export const IPC = {
   testApiKey: 'settings:testApiKey',
   dustListAgents: 'dust:listAgents',
   dustImportCli: 'dust:importCli',
-  dustSetupCli: 'dust:setupCli',
   dustProbeSession: 'dust:probeSession',
+  // Native OAuth sign-in (no CLI, no system Node.js) — see main/dust-oauth.ts.
+  dustLoginBegin: 'dust:loginBegin',
+  dustLoginPoll: 'dust:loginPoll',
+  dustLoginPickWorkspace: 'dust:loginPickWorkspace',
   graphifyStatus: 'graphify:status',
   graphifyRebuild: 'graphify:rebuild',
   graphifyRelated: 'graphify:related',
@@ -694,6 +697,11 @@ export const BaseSettingsSchema = z.object({
     .refine((v) => v === '' || /^https:\/\//i.test(v), 'Dust URL must be an https:// URL')
     .default('https://dust.tt')
     .transform((v) => v || 'https://dust.tt'),
+  // Which login path minted the current Dust session — decides how refreshDustAuth (main/index.ts) renews
+  // an expired token. 'oauth' = native device-flow (dust-oauth.ts, refreshDustOAuthSession). 'cli' = the
+  // user ran `dust login` themselves and Métis imported that session (dustcli.ts, refreshDustCliSession).
+  // Never mix the two refresh paths for one session — see dust-oauth.ts's module doc comment.
+  dustSessionOrigin: z.enum(['oauth', 'cli']).default('oauth'),
   // Azure AD (Entra) SSO config. These are PUBLIC identifiers — the PKCE public-client flow uses no
   // client secret — so they live in settings, letting an admin enable Microsoft sign-in in-app without
   // editing env vars or deploying managed-config.json. A machine-wide managed-config still overrides
@@ -1136,6 +1144,7 @@ export const DEFAULT_SETTINGS: Settings = {
   customBaseUrl: '',
   dustWorkspaceId: '',
   dustBaseUrl: 'https://dust.tt',
+  dustSessionOrigin: 'oauth',
   azureClientId: '',
   azureTenantId: '',
   azureAllowedDomain: '',
@@ -1520,10 +1529,25 @@ export interface DustCliImport {
   accessDenied?: boolean
 }
 
-/** Result of kicking off the Dust CLI setup (install + interactive login) when no session exists yet. */
-export interface DustCliSetup {
+/** Result of IPC.dustLoginBegin — a device code was minted and the consent page opened in the browser.
+ *  The renderer shows userCode/verificationUri and starts calling IPC.dustLoginPoll every intervalSec. */
+export interface DustDeviceLoginStart {
   ok: boolean
   error?: string
+  deviceCode?: string
+  userCode?: string
+  verificationUri?: string
+  expiresInSec?: number
+  intervalSec?: number
+}
+
+/** Result of one IPC.dustLoginPoll call. 'ok' carries the workspace list to render a picker from — no
+ *  token ever crosses to the renderer (mirrors DustSessionProbe's no-token discipline above). */
+export type DustDevicePollStatus = 'pending' | 'slow_down' | 'expired' | 'error' | 'ok'
+export interface DustDevicePollResult {
+  status: DustDevicePollStatus
+  error?: string
+  workspaces?: Array<{ sId: string; name: string; role?: string }>
 }
 
 /** Read-only probe of the local Dust CLI session — booleans only, never the token. Unlike DustCliImport

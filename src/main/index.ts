@@ -233,7 +233,14 @@ import {
 import { initAutoUpdate, checkForUpdateNow, startUpdateDownload } from './updater'
 import { runSelfTest } from './selftest'
 import { readEvalMetrics, aggregateMetrics } from './metrics'
-import { importDustCliSession, refreshDustCliSession, setupDustCli } from './dustcli'
+import { importDustCliSession, refreshDustCliSession } from './dustcli'
+import {
+  beginDustDeviceLogin,
+  pollDustDeviceLoginOnce,
+  listDustWorkspacesForToken,
+  completeDustOAuthLogin,
+  refreshDustOAuthSession
+} from './dust-oauth'
 import { asrManifestComplete } from './asr-manifest'
 import { isInsideResourceBase, realResourceBase } from './asr-model-path'
 import { detectCli, testCli, setupCli, installCli, loginCli, prewarmCli } from './cli'
@@ -267,6 +274,34 @@ import { redactSecrets } from '@shared/redact'
 import { applySpeakerNames } from '@shared/transcript-align'
 import { initializeCaheEditionIdentity, isCaheEdition } from './cahe-edition'
 import { importEmbeddedCaheKey, seedCaheLocalAiForBackgroundScreen } from './cahe-embedded-key'
+
+/**
+ * Builds the `refreshDustAuth` callback a Dust-routed stream/recap call hands to createStream — branches
+ * on which login path minted the CURRENT session (dustSessionOrigin) so a mid-stream 401 always re-mints
+ * through the SAME flow the token came from. Mixing the native-OAuth and CLI-import refresh paths for one
+ * session would recreate the single-use-rotating-refresh-token race each refresh function individually
+ * guards against (see dust-oauth.ts's and dustcli.ts's own single-flight comments).
+ */
+function makeRefreshDustAuth(current: {
+  dustSessionOrigin: 'oauth' | 'cli'
+  dustWorkspaceId: string
+  dustBaseUrl: string
+}): () => Promise<{ apiKey: string; workspaceId: string; baseURL: string } | null> {
+  return async () => {
+    if (current.dustSessionOrigin === 'oauth') {
+      const fresh = await refreshDustOAuthSession()
+      if (!fresh.ok || !fresh.token) return null
+      return { apiKey: fresh.token, workspaceId: current.dustWorkspaceId, baseURL: current.dustBaseUrl }
+    }
+    const fresh = await refreshDustCliSession()
+    if (!fresh.ok || !fresh.token || !fresh.workspaceId) return null
+    setApiKey('dust', fresh.token)
+    const baseURL = fresh.baseUrl || 'https://dust.tt'
+    setSettings({ dustWorkspaceId: fresh.workspaceId, dustBaseUrl: baseURL, dustTokenMintedAt: Date.now() })
+    auditLog('dust.token.refreshed', { at: 'cli-mid-stream' })
+    return { apiKey: fresh.token, workspaceId: fresh.workspaceId, baseURL }
+  }
+}
 
 // KEYSTORE BACKEND — the default is PLATFORM-SPECIFIC, not global.
 //
@@ -745,17 +780,7 @@ async function runImportedRecap(job: ImportJob): Promise<string | undefined> {
           apiKey: key,
           baseURL: local ? undefined : provider === 'custom' ? settings.customBaseUrl : provider === 'dust' ? settings.dustBaseUrl : def.baseUrl,
           workspaceId: settings.dustWorkspaceId,
-          refreshDustAuth:
-            provider === 'dust'
-              ? async () => {
-                  const fresh = await refreshDustCliSession()
-                  if (!fresh.ok || !fresh.token || !fresh.workspaceId) return null
-                  setApiKey('dust', fresh.token)
-                  const baseURL = fresh.baseUrl || 'https://dust.tt'
-                  setSettings({ dustWorkspaceId: fresh.workspaceId, dustBaseUrl: baseURL, dustTokenMintedAt: Date.now() })
-                  return { apiKey: fresh.token, workspaceId: fresh.workspaceId, baseURL }
-                }
-              : undefined,
+          refreshDustAuth: provider === 'dust' ? makeRefreshDustAuth(settings) : undefined,
           model,
           temperature: settings.temperature,
           // Same reasoning gate as the live stream (providers.ts reasoningEffortFor) — this path always
@@ -2275,13 +2300,21 @@ function registerIpc(): void {
       r = await listDustAgents()
     }
     if (r.ok) return r
-    // On-401 self-heal: the Dust CLI OAuth token lasts ~1h; refresh it once and retry so the picker
-    // doesn't just go empty when the token lapses between sessions.
+    // On-401 self-heal: the Dust OAuth token lasts ~1h; refresh it once and retry so the picker doesn't
+    // just go empty when the token lapses between sessions. Branches on dustSessionOrigin — a native-OAuth
+    // session must never be refreshed via the CLI path (there is no `dust-cli` keytar item to read) and
+    // vice versa.
     if (isDustAuthError(r.error)) {
-      const s = await refreshDustCliSession()
-      if (!s.ok || !s.token || !s.workspaceId) return r
-      setApiKey('dust', s.token)
-      setSettings({ dustWorkspaceId: s.workspaceId, dustBaseUrl: s.baseUrl || 'https://dust.tt', dustTokenMintedAt: Date.now() })
+      const origin = getSettings().dustSessionOrigin
+      if (origin === 'oauth') {
+        const fresh = await refreshDustOAuthSession()
+        if (!fresh.ok || !fresh.token) return r
+      } else {
+        const s = await refreshDustCliSession()
+        if (!s.ok || !s.token || !s.workspaceId) return r
+        setApiKey('dust', s.token)
+        setSettings({ dustWorkspaceId: s.workspaceId, dustBaseUrl: s.baseUrl || 'https://dust.tt', dustTokenMintedAt: Date.now() })
+      }
       return await listDustAgents()
     }
     // Still unreachable after retries → a clean, actionable message instead of the raw fetch error.
@@ -2299,7 +2332,12 @@ function registerIpc(): void {
     const s = await refreshDustCliSession()
     if (!s.ok || !s.token || !s.workspaceId) return { ok: false, error: s.error, accessDenied: s.accessDenied, incomplete: s.incomplete }
     setApiKey('dust', s.token)
-    setSettings({ dustWorkspaceId: s.workspaceId, dustBaseUrl: s.baseUrl || 'https://dust.tt', dustTokenMintedAt: Date.now() })
+    setSettings({
+      dustWorkspaceId: s.workspaceId,
+      dustBaseUrl: s.baseUrl || 'https://dust.tt',
+      dustTokenMintedAt: Date.now(),
+      dustSessionOrigin: 'cli'
+    })
     return { ok: true, workspaceId: s.workspaceId, baseUrl: s.baseUrl }
   })
 
@@ -2315,54 +2353,40 @@ function registerIpc(): void {
     return { ok: s.ok, accessDenied: s.accessDenied, incomplete: s.incomplete }
   })
 
-  // No CLI session yet → kick off the install + interactive login for the user (opens a Terminal window).
-  // Then poll the keychain until the login lands and import it automatically — one login, zero extra
-  // clicks: without this the user had to come back and press "Connect from Dust CLI" a second time.
-  let dustSetupPoll: ReturnType<typeof setInterval> | null = null
-  let dustSetupPollInFlight = false
-  ipcMain.handle(IPC.dustSetupCli, async (e) => {
+  // Native OAuth sign-in (no CLI, no system Node.js — see main/dust-oauth.ts). `pendingDustLogin` bridges
+  // a successful poll to the workspace-pick step: the access/refresh tokens never cross to the renderer,
+  // so they have to live somewhere in main between "we have tokens" and "the user picked a workspace".
+  // Reset on every dustLoginBegin so a second sign-in attempt can never complete against stale tokens
+  // from an earlier, abandoned attempt.
+  let pendingDustLogin: { accessToken: string; refreshToken: string; region: string } | null = null
+  ipcMain.handle(IPC.dustLoginBegin, async (e) => {
     assertMainWindow(e)
     if (!requireAuth()) return { ok: false, error: 'Sign in with your Mantu account first.' }
-    const r = await setupDustCli()
-    // Poll the OS secret store until `dust login` lands, then auto-import — cross-platform now that the
-    // read (importDustCliSession → dust-secret-store) works on every OS.
-    if (r.ok) {
-      if (dustSetupPoll) clearInterval(dustSetupPoll)
-      const startedAt = Date.now()
-      dustSetupPoll = setInterval(() => {
-        if (Date.now() - startedAt > 5 * 60 * 1000) {
-          if (dustSetupPoll) clearInterval(dustSetupPoll)
-          dustSetupPoll = null
-          // Silent give-up was undiagnosable — this is the only signal that the user never finished
-          // `dust login` (or got stuck on its separate workspace-picker step) within the 5-minute window.
-          auditLog('dust.setup.timeout')
-          return
-        }
-        if (dustSetupPollInFlight) return
-        dustSetupPollInFlight = true
-        void importDustCliSession().then((s) => {
-          if (!s.ok || !s.token || !s.workspaceId) return
-          if (dustSetupPoll) clearInterval(dustSetupPoll)
-          dustSetupPoll = null
-          setApiKey('dust', s.token)
-          setSettings({
-            dustWorkspaceId: s.workspaceId,
-            dustBaseUrl: s.baseUrl || 'https://dust.tt',
-            dustTokenMintedAt: Date.now()
-          })
-          auditLog('dust.token.refreshed', { at: 'setup-autoimport' })
-          if (Notification.isSupported()) {
-            new Notification({
-              title: 'Dust connected',
-              body: 'Métis is linked to your Dust workspace.'
-            }).show()
-          }
-        }).finally(() => {
-          dustSetupPollInFlight = false
-        })
-      }, 5000)
+    pendingDustLogin = null
+    return beginDustDeviceLogin()
+  })
+  ipcMain.handle(IPC.dustLoginPoll, async (e, deviceCodeRaw: unknown) => {
+    assertMainWindow(e)
+    const deviceCode = typeof deviceCodeRaw === 'string' ? deviceCodeRaw : ''
+    if (!deviceCode) return { status: 'error', error: 'Missing device code.' }
+    const r = await pollDustDeviceLoginOnce(deviceCode)
+    if (r.status !== 'ok') return { status: r.status, error: 'error' in r ? r.error : undefined }
+    pendingDustLogin = { accessToken: r.accessToken, refreshToken: r.refreshToken, region: r.region }
+    const ws = await listDustWorkspacesForToken(r.accessToken, r.region)
+    if (!ws.ok) return { status: 'error', error: ws.error }
+    return { status: 'ok', workspaces: ws.workspaces }
+  })
+  ipcMain.handle(IPC.dustLoginPickWorkspace, async (e, workspaceIdRaw: unknown) => {
+    assertMainWindow(e)
+    const workspaceId = typeof workspaceIdRaw === 'string' ? workspaceIdRaw : ''
+    if (!workspaceId) return { ok: false, error: 'Missing workspace id.' }
+    if (!pendingDustLogin) return { ok: false, error: 'Sign-in session expired — start again.' }
+    completeDustOAuthLogin({ ...pendingDustLogin, workspaceId })
+    pendingDustLogin = null
+    if (Notification.isSupported()) {
+      new Notification({ title: 'Dust connected', body: 'Métis is linked to your Dust workspace.' }).show()
     }
-    return r
+    return { ok: true }
   })
 
   // --- CLI providers (Claude Code / Codex / Gemini) ---
@@ -3216,18 +3240,7 @@ function registerIpc(): void {
         // Dust OAuth tokens (imported from the local CLI) expire after ~1h. On a pre-token 401 the
         // stream asks for fresh creds: re-mint via the CLI, persist them, and replay once — so an
         // expired token self-heals invisibly instead of surfacing an error.
-        refreshDustAuth:
-          provider === 'dust'
-            ? async () => {
-                const fresh = await refreshDustCliSession()
-                if (!fresh.ok || !fresh.token || !fresh.workspaceId) return null
-                setApiKey('dust', fresh.token)
-                const baseUrl = fresh.baseUrl || 'https://dust.tt'
-                setSettings({ dustWorkspaceId: fresh.workspaceId, dustBaseUrl: baseUrl, dustTokenMintedAt: Date.now() })
-                auditLog('dust.token.refreshed', {})
-                return { apiKey: fresh.token, workspaceId: fresh.workspaceId, baseURL: baseUrl }
-              }
-            : undefined,
+        refreshDustAuth: provider === 'dust' ? makeRefreshDustAuth(s) : undefined,
         model,
         temperature: s.temperature,
         // Reasoning-by-default models (Kimi, DeepSeek V4) burn hidden tokens and stall a 15s live-suggest
@@ -4637,7 +4650,20 @@ if (!app.requestSingleInstanceLock()) {
   const DUST_TOKEN_FRESH_MS = 45 * 60 * 1000
   const refreshAndPersistDust = (at: string): void => {
     if (!hasApiKey('dust')) return
-    if (Date.now() - getSettings().dustTokenMintedAt <= DUST_TOKEN_FRESH_MS) return
+    const current = getSettings()
+    if (Date.now() - current.dustTokenMintedAt <= DUST_TOKEN_FRESH_MS) return
+    // Branches on dustSessionOrigin — see makeRefreshDustAuth's doc comment for why the two refresh paths
+    // must never be mixed for one session.
+    if (current.dustSessionOrigin === 'oauth') {
+      void refreshDustOAuthSession()
+        .then((fresh) => {
+          if (fresh.ok) auditLog('dust.token.refreshed', { at })
+        })
+        .catch(() => {
+          /* best-effort — the lazy on-401 refresh in dust.ts still covers this */
+        })
+      return
+    }
     void refreshDustCliSession()
       .then((fresh) => {
         if (!fresh.ok || !fresh.token || !fresh.workspaceId) return
