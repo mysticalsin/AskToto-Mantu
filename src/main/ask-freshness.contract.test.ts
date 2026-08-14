@@ -131,7 +131,8 @@ describe('key-exhaustion failover classification (the "Kimi maxed out → next k
   })
 
   it('the pre-token failover seam hands ANY exhausted-retry error to the next provider', () => {
-    expect(indexSrc).toMatch(/if \(!gotToken && provider !== 'local' && failover\(attempted\.concat\(provider\)\)\) return/)
+    // F3 hedge: this call now also forwards the optional race context (undefined outside a hedged ask).
+    expect(indexSrc).toMatch(/if \(!gotToken && provider !== 'local' && failover\(attempted\.concat\(provider\), undefined, race\)\) return/)
   })
 
   it('the reasoning-only-no-answer case (Kimi burning its budget on thinking) stays pre-token → fails over', () => {
@@ -144,7 +145,7 @@ describe('key-exhaustion failover classification (the "Kimi maxed out → next k
     // seam. Matched structurally rather than as one exact line so the first-token block can carry
     // additional bookkeeping (it now also clears the provider-health verdict, MQA-003/MQA-004) without
     // this contract going stale — what must not change is that nothing else assigns gotToken = true.
-    expect(indexSrc).toMatch(/onDelta: \(text\) => \{[\s\S]{0,400}?if \(!gotToken\)[\s\S]{0,400}?gotToken = true/)
+    expect(indexSrc).toMatch(/onDelta: \(text\) => \{[\s\S]{0,400}?if \(!gotToken\)[\s\S]{0,700}?gotToken = true/)
     const gotTokenAssignments = indexSrc.match(/gotToken = true/g) ?? []
     expect(gotTokenAssignments).toHaveLength(1)
   })

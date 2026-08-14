@@ -663,7 +663,9 @@ const BundledLocalModelIdSchema = z.preprocess(
 )
 
 export const BaseSettingsSchema = z.object({
-  provider: ProviderIdSchema.default('anthropic'),
+  // Default provider: NVIDIA NIM (Tony, 2026-08-14) — fast, generous free tier, hedge-raced against a
+  // configured backup (resilience.hedge) so a slow NIM response never costs more than HEDGE_DELAY_MS.
+  provider: ProviderIdSchema.default('nvidia'),
   // CLI-vs-API priority. 'api' (default) keeps the explicitly-chosen `provider` as primary. 'cli' makes a
   // connected CLI integration (Claude/Codex) the primary so the user's local subscription is used before
   // any metered API key, and prefers CLI on failover. With no CLI connected, 'cli' behaves like 'api'.
@@ -935,9 +937,15 @@ export const BaseSettingsSchema = z.object({
       preferFreeOnExhaustion: z.boolean().default(true),
       // Pre-empt a provider BEFORE it 429s, from the live x-ratelimit-remaining headers it returns on
       // successful responses (main/llm/usage-headroom.ts). Fail-open: no data = the provider stays eligible.
-      budgetPreempt: z.boolean().default(true)
+      budgetPreempt: z.boolean().default(true),
+      // Hedge (main/llm/hedge.ts): for a fresh, base-tier interactive ask (answer/vision/suggest), start
+      // a second, backup provider racing the primary if the primary hasn't produced a token within
+      // HEDGE_DELAY_MS — whichever answers first wins and the other is cancelled. A true concurrent race,
+      // not a timeout-then-switch: a primary that DOES answer just slowly still "wins" if it beats the
+      // backup, at the cost of occasionally paying for both when both happen to succeed.
+      hedge: z.boolean().default(true)
     })
-    .default({ preferFreeOnExhaustion: true, budgetPreempt: true }),
+    .default({ preferFreeOnExhaustion: true, budgetPreempt: true, hedge: true }),
   // Speaker Intelligence (docs/SPEAKER-INTELLIGENCE-PLAN.md): live "who's speaking" labels on THEM
   // transcript lines via on-device voice embeddings (sherpa-onnx, same addon as Parakeet). Off by
   // default — it's a beta and the embedding model must be provisioned (fetch-speaker-model.mjs).
@@ -1134,13 +1142,13 @@ export const DUST_BASE_AGENT_ID = 'vJxYHvTRBT' // Dust agent "Métis" — defaul
 export const DUST_SPOTLIGHT_REF_AGENT_ID = 'GOr913Zr5V' // Dust agent "Spotlight Ref"
 
 export const DEFAULT_SETTINGS: Settings = {
-  provider: 'anthropic',
+  provider: 'nvidia',
   providerPriority: 'api',
   providerModels: { dust: DUST_BASE_AGENT_ID },
   providerModelsThinking: {},
   providerModelsDeep: {},
   providerModelsSpotlightRef: DUST_SPOTLIGHT_REF_AGENT_ID ? { dust: DUST_SPOTLIGHT_REF_AGENT_ID } : {},
-  resilience: { preferFreeOnExhaustion: true, budgetPreempt: true },
+  resilience: { preferFreeOnExhaustion: true, budgetPreempt: true, hedge: true },
   thinkingMode: 'auto',
   askFollowUpMemory: false,
   customBaseUrl: '',

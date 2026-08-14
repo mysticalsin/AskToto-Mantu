@@ -1477,6 +1477,13 @@ function ResilienceSection({
           onChange={(v) => patch({ resilience: { ...settings.resilience, budgetPreempt: v } })}
         />
 
+        <ToggleRow
+          label="Race a backup provider on a slow answer"
+          desc="For a quick question, start a second provider if the first hasn't answered within 3 seconds — whichever answers first wins, the other is cancelled. Can occasionally use both."
+          on={settings.resilience.hedge}
+          onChange={(v) => patch({ resilience: { ...settings.resilience, hedge: v } })}
+        />
+
         <div className="flex items-start gap-2 rounded-[8px] border border-[var(--cl-border)] bg-white/[0.02] px-3 py-2 text-[11px] text-[color:var(--cl-muted-foreground)]">
           <Cpu size={13} className="mt-0.5 shrink-0" />
           <span>

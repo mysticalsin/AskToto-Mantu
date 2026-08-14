@@ -79,7 +79,8 @@ describe('the user-facing message names the limit, not a misleading network erro
 describe('the backup chain: free-first ordering + the on-device answer floor', () => {
   it('fails over preferring a free-tier backup when the primary ran OUT (not just any failure)', () => {
     expect(indexSrc).toMatch(/const preferFree = exhaustion != null && s\.resilience\.preferFreeOnExhaustion/)
-    expect(indexSrc).toMatch(/failover\(attempted\.concat\(provider\), preferFree\)/)
+    // F3 hedge: this call now also forwards the optional race context (undefined outside a hedged ask).
+    expect(indexSrc).toMatch(/failover\(attempted\.concat\(provider\), preferFree, race\)/)
   })
 
   it('pickFailover floats free-tier providers ahead only when preferFree is set', () => {

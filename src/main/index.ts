@@ -270,6 +270,7 @@ import {
   type ProviderDef
 } from '@shared/providers'
 import { routeTier } from '@shared/routing'
+import { HedgeRace, HEDGE_DELAY_MS, type HedgeLeg } from './llm/hedge'
 import { redactSecrets } from '@shared/redact'
 import { applySpeakerNames } from '@shared/transcript-align'
 import { initializeCaheEditionIdentity, isCaheEdition } from './cahe-edition'
@@ -3048,13 +3049,19 @@ function registerIpc(): void {
       if (!tried.includes('local') && localAnswerFloorEligibleFor(req, s, allowed)) return 'local'
       return null
     }
+    // F3 hedge: which race (if any) this call is part of, and which of the two legs it is. See hedge.ts's
+    // HedgeRace doc comment for the full contract.
+    type AttemptRace = { gate: HedgeRace; leg: HedgeLeg }
+
     // Find the next eligible keyed provider not yet tried and start it — for failover when the primary
     // can't answer (Dust down → your configured Claude/GPT key takes over). `preferFree` floats free-tier
     // backups ahead when the just-failed provider ran out of credit/tokens (resilience.preferFreeOnExhaustion).
-    const failover = (tried: ProviderId[], preferFree = false): boolean => {
+    // `race`, when present, is forwarded unchanged — a hedged leg's own failover cascade stays part of the
+    // SAME leg (see AttemptRace's doc comment on attempt() below).
+    const failover = (tried: ProviderId[], preferFree = false, race?: AttemptRace): boolean => {
       const next = pickFailover(tried, preferFree)
       if (!next) return false
-      attempt(next, tried)
+      attempt(next, tried, 0, race)
       return true
     }
 
@@ -3065,7 +3072,13 @@ function registerIpc(): void {
     // The longest a rate-limit Retry-After we will WAIT OUT in place during a live ask. Beyond this we fail
     // straight over to the backup rather than freezing the answer — the whole point of "always a backup".
     const MAX_ASK_RETRY_WAIT_MS = 12_000
-    const attempt = (provider: ProviderId, attempted: ProviderId[], retryCount = 0): void => {
+    // F3 hedge (main/llm/hedge.ts): `race` is set ONLY when this whole request is being hedge-raced (see
+    // the primary dispatch at the bottom of this handler). It rides through every recursive attempt() call
+    // this closure makes — the same-provider retry timer AND every failover() call — so a hedged leg's
+    // entire retry/failover cascade stays gated behind the SAME race the whole way down: once the other
+    // leg wins, every handler below (onDelta/onDone/onError) checks race.gate.isLoser(race.leg) first and
+    // silently returns, so a losing leg's own cascading retries can never reach the renderer.
+    const attempt = (provider: ProviderId, attempted: ProviderId[], retryCount = 0, race?: AttemptRace): void => {
       const def = PROVIDERS[provider]
       if (allowed && !allowed.includes(provider)) {
         auditLog('provider.blocked', { provider })
@@ -3081,14 +3094,20 @@ function registerIpc(): void {
             c.def.kind === 'cli' ? !!s.cliConnected[c.id] : getApiKey(c.id).length > 0
           )
           const approvedLabel = (readyApproved ?? approvedCandidates[0])?.def.label
-          win?.webContents.send(IPC.streamError, {
-            id: req.id,
-            message: approvedLabel
-              ? `${def.label} is not on your organization's approved provider list. Switch to ${approvedLabel} in Settings.`
-              : `${def.label} is not on your organization's approved provider list.`
-          })
-        } else if (!failover(attempted.concat(provider))) {
-          win?.webContents.send(IPC.streamError, { id: req.id, message: 'No approved provider could answer.' })
+          // F3 hedge: this leg is out — only actually surface an error once EVERY leg of the race
+          // (including a backup that hasn't started yet) is confirmed dead. See HedgeRace.markDead.
+          if (!race || race.gate.markDead(race.leg) === 'surface') {
+            win?.webContents.send(IPC.streamError, {
+              id: req.id,
+              message: approvedLabel
+                ? `${def.label} is not on your organization's approved provider list. Switch to ${approvedLabel} in Settings.`
+                : `${def.label} is not on your organization's approved provider list.`
+            })
+          }
+        } else if (!failover(attempted.concat(provider), undefined, race)) {
+          if (!race || race.gate.markDead(race.leg) === 'surface') {
+            win?.webContents.send(IPC.streamError, { id: req.id, message: 'No approved provider could answer.' })
+          }
         }
         return
       }
@@ -3156,7 +3175,7 @@ function registerIpc(): void {
         // still gets an answer — `failover` only picks a provider that has both a key and a model. Surface
         // the error only when NO vision-capable provider is set up.
         const visionGap = req.mode === 'vision' && !providerVisionOk(provider)
-        if (visionGap && failover(attempted.concat(provider))) return
+        if (visionGap && failover(attempted.concat(provider), undefined, race)) return
         if (attempted.length === 0) {
           // Zero-config safety net (localLlm.fallback): the very FIRST provider can't even start — no
           // key, CLI not connected, Dust half-configured. Historically this surfaced the setup error
@@ -3174,12 +3193,16 @@ function registerIpc(): void {
             allowCrossProviderFailover(req) &&
             localFallbackEligibleFor(req, s, tier, allowed)
           ) {
-            attempt('local', attempted.concat(provider))
+            attempt('local', attempted.concat(provider), 0, race)
             return
           }
-          win?.webContents.send(IPC.streamError, { id: req.id, message: ineligible })
-        } else if (!failover(attempted.concat(provider))) {
-          win?.webContents.send(IPC.streamError, { id: req.id, message: ineligible })
+          if (!race || race.gate.markDead(race.leg) === 'surface') {
+            win?.webContents.send(IPC.streamError, { id: req.id, message: ineligible })
+          }
+        } else if (!failover(attempted.concat(provider), undefined, race)) {
+          if (!race || race.gate.markDead(race.leg) === 'surface') {
+            win?.webContents.send(IPC.streamError, { id: req.id, message: ineligible })
+          }
         }
         return
       }
@@ -3252,34 +3275,42 @@ function registerIpc(): void {
         req,
         handlers: {
           onDelta: (text) => {
+            // F3 hedge: a leg that already lost the race is aborted, but a chunk already in flight when
+            // abort() fires can still reach here once — swallow it rather than let two legs both paint.
+            if (race && race.gate.isLoser(race.leg)) return
             if (!gotToken) {
               ttftMs = Date.now() - startedAt
               // Tokens are flowing, so these credentials demonstrably work — clear any prior auth
               // verdict (MQA-003/MQA-004) rather than leaving a stale "broken" mark on a live provider.
               recordSuccess(provider)
+              // F3 hedge: this leg's first token is its bid to win — aborts whatever the other leg is doing.
+              if (race) race.gate.declareWinner(race.leg)
             }
             gotToken = true
             win?.webContents.send(IPC.streamDelta, { id: req.id, text })
           },
           onDone: (u) => {
-            streams.delete(req.id)
+            if (race && race.gate.isLoser(race.leg)) return
+            if (!race) streams.delete(req.id)
             // MQA-020 (belt-and-braces half): a provider that completes with ZERO content deltas has not
             // answered — the user gets a blank bubble and the waterfall stops, because "done" reads as
             // success. The known instance was claude-cli settling an `is_error: true` terminal line as
             // success (fixed at source in llm/cli.ts), but ANY strategy that reaches onDone pre-token has
             // the same effect, so treat it as a pre-token failure here and let the normal failover run.
             // Only for cloud/CLI: a local no-output must surface rather than silently upload the request.
-            if (!gotToken && provider !== 'local' && failover(attempted.concat(provider))) return
+            if (!gotToken && provider !== 'local' && failover(attempted.concat(provider), undefined, race)) return
             // MQA-102: the cloud/CLI branch above is deliberately gated `provider !== 'local'`, so a LOCAL
             // completion with zero content deltas used to fall straight through to streamDone — the exact
             // blank-bubble MQA-020 fixed for cloud/CLI, still live for the on-device last resort (the
             // "my key died" end state, where local is what answers). Surface it as an actionable error
             // instead. No failover: a local failure must never silently upload the request to cloud.
             if (!gotToken && provider === 'local') {
-              win?.webContents.send(IPC.streamError, {
-                id: req.id,
-                message: 'Métis Local produced no answer — try again, or add a cloud provider in Settings for longer questions.'
-              })
+              if (!race || race.gate.markDead(race.leg) === 'surface') {
+                win?.webContents.send(IPC.streamError, {
+                  id: req.id,
+                  message: 'Métis Local produced no answer — try again, or add a cloud provider in Settings for longer questions.'
+                })
+              }
               return
             }
             // Latency + token telemetry (metadata only) — feeds the p50/p95 latency + cost evals (H/D/F).
@@ -3294,10 +3325,14 @@ function registerIpc(): void {
               inputTokens: u.inputTokens,
               outputTokens: u.outputTokens
             })
+            // The winning leg's success is the whole race's terminal outcome — drop the combined abort
+            // registration set up before either leg started (see the hedge dispatch below).
+            if (race) streams.delete(req.id)
             win?.webContents.send(IPC.streamDone, { id: req.id, ...u })
           },
           onError: (message) => {
-            streams.delete(req.id)
+            if (race && race.gate.isLoser(race.leg)) return
+            if (!race) streams.delete(req.id)
             auditLog('provider.failed', { provider, gotToken, retry: retryCount })
             // "You ran out" — a rate limit (429), spent credit, or a Claude Pro / Codex subscription
             // usage-cap — is NOT a dead key, and each needs its own cooldown + message. Classify it FIRST
@@ -3371,14 +3406,18 @@ function registerIpc(): void {
             ) {
               const delayMs = nextBackoff(retryCount, { retryAfterMs: rateLimitWaitMs ?? undefined })
               auditLog('provider.retry', { provider, attempt: retryCount + 1, delayMs })
-              const timer = setTimeout(() => attempt(provider, attempted, retryCount + 1), delayMs)
-              streams.set(req.id, { abort: () => clearTimeout(timer) })
+              const timer = setTimeout(() => attempt(provider, attempted, retryCount + 1, race), delayMs)
+              // Under a race the combined abort registration set up before either leg started already
+              // covers cancellation (see the hedge dispatch below) — track this timer there instead of
+              // overwriting it, so cancelling mid-backoff still clears the pending retry.
+              if (race) race.gate.addCleanup(() => clearTimeout(timer))
+              else streams.set(req.id, { abort: () => clearTimeout(timer) })
               return
             }
             // Retries exhausted or non-transient: fall over to another provider (pre-token only). When the
             // just-failed provider ran OUT (credit/tokens/usage-cap), prefer a free-tier backup or local.
             const preferFree = exhaustion != null && s.resilience.preferFreeOnExhaustion
-            if (!gotToken && provider !== 'local' && failover(attempted.concat(provider), preferFree)) return
+            if (!gotToken && provider !== 'local' && failover(attempted.concat(provider), preferFree, race)) return
             // Replace raw client transport strings ("Unexpected network error from DustAPI: fetch failed")
             // with a clean message; keep the Dust-auth one-click reconnect path; else pass the message.
             // Reaching here means failover found NO backup — so an exhaustion message names the limit and
@@ -3413,11 +3452,14 @@ function registerIpc(): void {
                       isAuthFailure(message)
                       ? `${def.label} rejected your API key (it may have been revoked, expired, or disabled). Open Settings → AI to re-enter it.`
                       : message
-            win?.webContents.send(IPC.streamError, { id: req.id, message: friendly })
+            if (!race || race.gate.markDead(race.leg) === 'surface') {
+              win?.webContents.send(IPC.streamError, { id: req.id, message: friendly })
+            }
           }
         }
       })
-      streams.set(req.id, handle)
+      if (race) race.gate.setHandle(race.leg, handle)
+      else streams.set(req.id, handle)
     }
 
     // Honor the CLI-vs-API priority for the FIRST provider tried: 'cli' prefers a connected CLI integration
@@ -3451,7 +3493,40 @@ function registerIpc(): void {
     const primaryUnavailable =
       isCoolingDown(primary) || (s.resilience.budgetPreempt && isBudgetExhausted(primary))
     const skipDeadPrimary = primaryUnavailable ? pickFailover([primary]) : null
-    attempt(skipDeadPrimary ?? primary, skipDeadPrimary ? [primary] : [])
+
+    // F3 hedge: a fresh, base-tier interactive ask (answer/vision/suggest) races a backup provider
+    // against the primary if the primary hasn't produced a token within HEDGE_DELAY_MS — see
+    // main/llm/hedge.ts's HedgeRace for the full contract. Scoped to a genuinely fresh first attempt
+    // (never a preempted-primary substitution) and to requests that could actually fail over at all
+    // (a pinned Dust-agent ask has nothing valid to race against).
+    const hedgeEligible =
+      s.resilience.hedge &&
+      !skipDeadPrimary &&
+      routeTier(req, s.thinkingMode) === 'base' &&
+      (req.mode === 'answer' || req.mode === 'vision' || req.mode === 'suggest') &&
+      allowCrossProviderFailover(req)
+    if (hedgeEligible) {
+      const race = new HedgeRace()
+      let hedgeTimer: NodeJS.Timeout | null = setTimeout(() => {
+        hedgeTimer = null
+        if (race.isDecided()) return
+        const backup = pickFailover([primary])
+        if (!backup) {
+          race.markHedgeUnavailable()
+          return
+        }
+        attempt(backup, [primary], 0, { gate: race, leg: 'hedge' })
+      }, HEDGE_DELAY_MS)
+      streams.set(req.id, {
+        abort: () => {
+          if (hedgeTimer) clearTimeout(hedgeTimer)
+          race.abortAll()
+        }
+      })
+      attempt(primary, [], 0, { gate: race, leg: 'primary' })
+    } else {
+      attempt(skipDeadPrimary ?? primary, skipDeadPrimary ? [primary] : [])
+    }
     } catch (e) {
       win?.webContents.send(IPC.streamError, {
         id,
