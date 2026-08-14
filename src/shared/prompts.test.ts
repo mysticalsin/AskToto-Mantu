@@ -8,7 +8,9 @@ import {
   WINS_CLAUSE,
   DEFAULT_MODE_PROMPTS,
   ASSIST_PROMPT,
-  buildNoDecisionPrompt
+  buildNoDecisionPrompt,
+  COLD_CALL_COACHING_PROMPT,
+  BOOK_MEETING_PROMPT
 } from './prompts'
 
 // Section skeleton transcripts.ts / recall.ts depend on (see prompts.ts's RECAP_PROMPT doc comment).
@@ -58,6 +60,7 @@ describe('recapPromptFor', () => {
     expect(recapPromptFor('presentation')).toMatch(/audience question/i)
     expect(recapPromptFor('support')).toMatch(/reported problem/i)
     expect(recapPromptFor('meeting')).toMatch(/decisions.*owns/i)
+    expect(recapPromptFor('cold-call')).toMatch(/objection/i)
   })
 
   it('focus text never uses banned AI-tell words or em-dashes', () => {
@@ -95,12 +98,29 @@ describe('email + pre-meeting-brief summary prompts', () => {
   })
 })
 
+describe('Cold Calling Mode — coaching + booking prompts', () => {
+  it('coaching asks for the four fixed sections, grounded, with the humanizer style', () => {
+    for (const heading of ['## What to improve', '## What worked', '## Next steps', '## People to invite or send to']) {
+      expect(COLD_CALL_COACHING_PROMPT).toContain(heading)
+    }
+    expect(COLD_CALL_COACHING_PROMPT).toMatch(/never invent/i)
+    expect(COLD_CALL_COACHING_PROMPT).toMatch(/WRITING STYLE/)
+    expect(COLD_CALL_COACHING_PROMPT).not.toMatch(/—/)
+  })
+
+  it('booking drafts outreach per person and has a clean no-op contract', () => {
+    expect(BOOK_MEETING_PROMPT).toMatch(/People to invite or send to/)
+    expect(BOOK_MEETING_PROMPT).toMatch(/ready-to-send/i)
+    expect(BOOK_MEETING_PROMPT).toContain('NONE')
+  })
+})
+
 describe('DEFAULT_MODE_PROMPTS', () => {
   const modes = Object.keys(DEFAULT_MODE_PROMPTS)
 
-  it('covers all eight built-in modes', () => {
+  it('covers all nine built-in modes', () => {
     expect(modes.sort()).toEqual(
-      ['general', 'interview', 'meeting', 'negotiation', 'presentation', 'recruiting', 'sales', 'support'].sort()
+      ['general', 'interview', 'meeting', 'negotiation', 'presentation', 'recruiting', 'sales', 'support', 'cold-call'].sort()
     )
   })
 

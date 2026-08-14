@@ -174,7 +174,7 @@ describe('meeting source provenance', () => {
 
   it('classifies only built-in modes and never content', () => {
     expect(classifyMeetingSourceUse('interview')).toBe('employment')
-    for (const mode of ['general', 'meeting', 'sales', 'negotiation', 'presentation', 'support']) {
+    for (const mode of ['general', 'meeting', 'sales', 'negotiation', 'presentation', 'support', 'cold-call']) {
       expect(classifyMeetingSourceUse(mode)).toBe('eligible')
     }
     expect(classifyMeetingSourceUse('custom-sales')).toBe('unknown')

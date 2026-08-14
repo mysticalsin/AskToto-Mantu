@@ -8,6 +8,7 @@ import {
   Handshake,
   Presentation,
   Headset,
+  PhoneCall,
   Sparkles
 } from 'lucide-react'
 import { modeLabel } from '@shared/ipc'
@@ -17,6 +18,7 @@ const MODES: { id: string; label: string; icon: typeof Users }[] = [
   { id: 'general', label: 'General', icon: MessageSquare },
   { id: 'meeting', label: 'Meeting', icon: Users },
   { id: 'sales', label: 'Sales', icon: TrendingUp },
+  { id: 'cold-call', label: 'Cold Calling', icon: PhoneCall },
   { id: 'interview', label: 'Interview', icon: GraduationCap },
   { id: 'recruiting', label: 'Recruiting', icon: UserSearch },
   { id: 'negotiation', label: 'Negotiation', icon: Handshake },
