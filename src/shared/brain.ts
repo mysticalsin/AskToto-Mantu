@@ -623,7 +623,8 @@ const ELIGIBLE_SOURCE_MODES = new Set([
   'sales',
   'negotiation',
   'presentation',
-  'support'
+  'support',
+  'cold-call'
 ])
 
 /** Classifies configured built-in modes only. Transcript content never affects this result. */

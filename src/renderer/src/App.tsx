@@ -32,7 +32,7 @@ import { HOTKEY_ACTIONS } from '@shared/ipc'
 import { useTapControl } from './lib/tap/tap-control'
 import type { TapProfile } from './lib/tap/classify'
 import { PROVIDERS, isDustReady } from '@shared/providers'
-import { ASSIST_PROMPT, buildNoDecisionPrompt, EMAIL_RECAP_PROMPT } from '@shared/prompts'
+import { ASSIST_PROMPT, buildNoDecisionPrompt, EMAIL_RECAP_PROMPT, COLD_CALL_COACHING_PROMPT, BOOK_MEETING_PROMPT } from '@shared/prompts'
 import { isScreenCapturePermissionError } from '@shared/screen-capture'
 import { detectNoDecisionEnding } from '@shared/wrapup'
 import { transcriptStateKey } from '@shared/hash'
@@ -199,6 +199,11 @@ export function App(): JSX.Element {
   const ask = useAsk() // answer view + recap
   const suggest = useAsk() // live copilot card
   const followup = useAsk() // Review screen's follow-up draft — must NOT reuse `ask`, which already holds the recap there
+  // Cold Calling Mode (see maybeFireRecap + generateBookMeetings below): end-of-call coaching, fired
+  // automatically alongside the recap, and the manual "Book meetings" outreach draft built from it.
+  // Separate instances so neither can clobber the recap or each other.
+  const coaching = useAsk()
+  const booking = useAsk()
   // Generates a recap for a SAVED meeting (an import just finished, or the retroactive "Generate recap"
   // button on a past meeting with none yet) — a separate instance so a background import can never
   // hijack whatever the user is currently looking at (ask.answer stays untouched).
@@ -1505,6 +1510,19 @@ export function App(): JSX.Element {
     settings?.providerModels
   ])
 
+  // Cold Calling Mode — "Book meetings": drafts the actual outreach for everyone named in the coaching
+  // notes' "People to invite or send to" section. Manual, user-confirmed click (Review's Book meetings /
+  // Redo chip) — this can route to a real calendar/scheduling tool through Dust, so it never fires itself.
+  // Same base-Dust-agent routing as generateFollowup: Métis's own conversation plumbing, no special agent.
+  const generateBookMeetings = useCallback(() => {
+    const notes = coaching.answer?.text ?? ''
+    if (!notes.trim()) return
+    const dustReady = isDustReady(settings?.hasKeys ?? {}, settings?.dustWorkspaceId ?? '', settings?.providerModels ?? {})
+    const prompt = BOOK_MEETING_PROMPT + `\n\nCoaching notes:\n${notes}`
+    if (dustReady) booking.run({ mode: 'answer', prompt, providerOverride: 'dust' })
+    else booking.run({ mode: 'answer', prompt })
+  }, [coaching.answer, booking.run, settings?.hasKeys, settings?.dustWorkspaceId, settings?.providerModels])
+
   const capture = useCallback(async () => {
     const q = input.trim()
     // Screen-ask from the Capture button carries memory + records the turn, same as a typed screen-ask.
@@ -1548,6 +1566,8 @@ export function App(): JSX.Element {
     followup.clear() // a new meeting is about to be viewed — a stale draft from whatever was reviewed
     // before must never carry over and render/send as this meeting's follow-up (see followup's own
     // declaration comment above).
+    coaching.clear() // same reasoning — a prior cold call's coaching notes must never bleed into this one
+    booking.clear()
     // A new meeting is the natural conversation boundary (main resets the Dust conversation on
     // listening:on for the same reason) — ad-hoc Q&A from before the meeting must not ride into
     // mid-meeting asks/fact-checks via these refs.
@@ -1572,6 +1592,8 @@ export function App(): JSX.Element {
     listen.start,
     suggest.clear,
     followup.clear,
+    coaching.clear,
+    booking.clear,
     settings?.audioSource,
     settings?.asrQuality,
     settings?.asrEngine,
@@ -1586,6 +1608,22 @@ export function App(): JSX.Element {
   // behavior) silently dropped the last sentence the drain machinery exists to preserve. Gated on
   // pendingRecapRef so it's a no-op on every OTHER listen.listening flip (meeting start, a later
   // unrelated re-render) — only endReview() arms it.
+  // Cold Calling Mode — end-of-call coaching (what to improve, what worked, next steps, who to follow up
+  // with), fired automatically by maybeFireRecap below whenever mode === 'cold-call', and replayable from
+  // Review's Retry. Reads the live transcript fresh each call rather than taking it as an argument, so a
+  // retry click (still on the same, unstarted-over session) replays against the exact same text.
+  const generateColdCallCoaching = useCallback(() => {
+    const tx = listen.text()
+    if (!tx.trim()) return
+    const dustReady = isDustReady(settings?.hasKeys ?? {}, settings?.dustWorkspaceId ?? '', settings?.providerModels ?? {})
+    coaching.run({
+      mode: 'answer',
+      prompt: COLD_CALL_COACHING_PROMPT + `\n\nTranscript (THEM = the prospect, YOU = me):\n"""\n${tx}\n"""`,
+      redactPrompt: true, // the prompt embeds raw transcript text, not a typed question — see AskRequest's own doc comment
+      ...(dustReady ? { providerOverride: 'dust' as const } : {})
+    })
+  }, [listen.text, coaching.run, settings?.hasKeys, settings?.dustWorkspaceId, settings?.providerModels])
+
   const maybeFireRecap = useCallback(() => {
     if (!pendingRecapRef.current || listen.listening) return
     pendingRecapRef.current = false
@@ -1625,7 +1663,10 @@ export function App(): JSX.Element {
       prompt: 'Summarize this meeting.',
       ...(dustReady ? { providerOverride: 'dust' as const } : {})
     })
-  }, [listen.listening, listen.text, listen.lines, ask.run, ask.clear, settings?.providerReady, settings?.hasKeys, settings?.dustWorkspaceId, settings?.providerModels])
+    // Cold Calling Mode's end-of-call coaching rides the same trigger as the recap (a real, non-empty,
+    // provider-ready transcript) but is its own ask so a coaching failure can never blank the recap.
+    if (mode === 'cold-call') generateColdCallCoaching()
+  }, [listen.listening, listen.text, listen.lines, ask.run, ask.clear, settings?.providerReady, settings?.hasKeys, settings?.dustWorkspaceId, settings?.providerModels, mode, generateColdCallCoaching])
 
   // listen.listening flips true -> false exactly once (the moment the post-stop drain settles), so this
   // effect is what actually fires a recap armed by endReview below.
@@ -2580,9 +2621,21 @@ export function App(): JSX.Element {
               }
             : reset
         }
+        // Live cold calls only — coaching/booking are session-only (never persisted), so a reopened past
+        // cold call has nothing to show here even when pm.mode would say 'cold-call'.
+        coldCall={
+          !pm && mode === 'cold-call'
+            ? {
+                coaching: coaching.answer,
+                onRetryCoaching: generateColdCallCoaching,
+                booking: booking.answer,
+                onBookMeetings: generateBookMeetings
+              }
+            : undefined
+        }
       />
     )
-  }, [pastMeeting, recapGenTarget, recapGen.answer, ask.answer, listen.lines, savedPath, saveError, saveAttempts, settings?.showFullTranscriptInReview, settings?.bidstackConnected, settings?.bidstackTools, followup.answer, generateFollowup, requireProvider, generateSavedRecap, retryAnswer, manualSave, discardMeeting, resumePastMeeting, openPastMeeting, reset, recapSkipped, openSettings])
+  }, [pastMeeting, recapGenTarget, recapGen.answer, ask.answer, listen.lines, savedPath, saveError, saveAttempts, settings?.showFullTranscriptInReview, settings?.bidstackConnected, settings?.bidstackTools, followup.answer, generateFollowup, requireProvider, generateSavedRecap, retryAnswer, manualSave, discardMeeting, resumePastMeeting, openPastMeeting, reset, recapSkipped, openSettings, mode, coaching.answer, generateColdCallCoaching, booking.answer, generateBookMeetings])
   const answerBody = useMemo(() => {
     if (!(capturing || captureError || ask.answer)) return null
     // While a new screen capture is in flight (capturing), force the streaming/empty display even when

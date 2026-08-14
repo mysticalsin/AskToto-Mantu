@@ -1,5 +1,5 @@
 import { memo, useEffect, useMemo, useRef, useState } from 'react'
-import { Copy, Check, FileText, ListTree, FolderOpen, Save, RotateCcw, Play, ChevronDown, Download, Clock, Mail, Send, AlertCircle, EarOff, ArrowLeft, Pencil, X, Sparkles, Trash2, Lock } from 'lucide-react'
+import { Copy, Check, FileText, ListTree, FolderOpen, Save, RotateCcw, Play, ChevronDown, Download, Clock, Mail, Send, AlertCircle, EarOff, ArrowLeft, Pencil, X, Sparkles, Trash2, Lock, PhoneCall } from 'lucide-react'
 import type { TranscriptLine, MeetingSummary } from '@shared/ipc'
 import type { AnswerState } from '../state'
 import { isNonSpeechLine } from '@shared/transcript-filter'
@@ -97,6 +97,21 @@ export function displayedRecapText(edited: EditedRecap | null, incoming: string 
   return edited && edited.base === text ? edited.text : text
 }
 
+/** Cold Calling Mode — whether the coaching notes' "People to invite or send to" section actually names
+ *  anyone, so the "Book meetings" action is never offered against an empty section or a "None." verdict.
+ *  Line-based (not a single regex): a blank line separating the heading from the next "## " section is
+ *  itself whitespace, so a naive `\s*` boundary swallows it and misreads the FOLLOWING section as this
+ *  one's body. */
+export function coldCallHasPeopleToFollowUp(coachingText: string): boolean {
+  const lines = coachingText.split(/\r?\n/)
+  const start = lines.findIndex((l) => /^##\s*People to invite or send to\s*:?\s*$/i.test(l.trim()))
+  if (start === -1) return false
+  const body: string[] = []
+  for (let i = start + 1; i < lines.length && !/^##\s/.test(lines[i]); i++) body.push(lines[i])
+  const text = body.join('\n').trim()
+  return text.length > 0 && !/^none\.?$/i.test(text)
+}
+
 /** The exact payload "Push to CRM" sends — deliberately thin (see the note on the push panel below). */
 export type CrmPayload = { title: string; date: string; summary: string }
 type CrmPushPhase = 'idle' | 'sending' | 'sent' | 'error'
@@ -149,7 +164,8 @@ export const Review = memo(function Review({
   isPastMeeting,
   onRecapSaved,
   onDirtyChange,
-  recapUnavailable
+  recapUnavailable,
+  coldCall
 }: {
   recap: AnswerState | null
   lines: TranscriptLine[]
@@ -200,6 +216,15 @@ export const Review = memo(function Review({
    *  fired and left to fail with a red error. Shown in place of the "writing detailed notes…" spinner,
    *  which would otherwise spin forever since no recap request was ever sent. */
   recapUnavailable?: { message: string; onOpenSettings?: () => void }
+  /** Cold Calling Mode only (live session, see App.tsx maybeFireRecap): end-of-call coaching, fired
+   *  automatically alongside the recap, plus the manual "Book meetings" action drafted from it. Session-
+   *  only — not persisted, so a reopened past cold call never carries this. */
+  coldCall?: {
+    coaching: AnswerState | null
+    onRetryCoaching?: () => void
+    booking: AnswerState | null
+    onBookMeetings: () => void
+  }
 }): JSX.Element {
   const [copied, flashCopied] = useFlash(1500)
   const [notesCopied, flashNotesCopied] = useFlash(1500)
@@ -834,6 +859,59 @@ export const Review = memo(function Review({
           </div>
         )}
       </section>
+
+      {coldCall && !editingRecap && (
+        <section aria-live="polite">
+          <div className="mb-1.5 flex items-center justify-between">
+            <div className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-[color:var(--color-ink-3)]">
+              <PhoneCall size={12} /> Cold call coaching
+            </div>
+            {coldCall.coaching?.error && coldCall.onRetryCoaching && (
+              <TextButton icon={RotateCcw} onClick={coldCall.onRetryCoaching}>Retry</TextButton>
+            )}
+          </div>
+          {coldCall.coaching?.error ? (
+            <div className="text-[13px] text-[var(--color-danger)]">{coldCall.coaching.error}</div>
+          ) : coldCall.coaching?.text ? (
+            <div className="flex flex-col gap-2">
+              <Markdown>{coldCall.coaching.text}</Markdown>
+              {!coldCall.coaching.streaming && coldCallHasPeopleToFollowUp(coldCall.coaching.text) && (
+                <div className="flex flex-col gap-2">
+                  {coldCall.booking?.error ? (
+                    <div className="flex items-center gap-1.5">
+                      <div className="text-[12px] text-[var(--color-danger)]">{coldCall.booking.error}</div>
+                      <TextButton icon={RotateCcw} onClick={coldCall.onBookMeetings}>Retry</TextButton>
+                    </div>
+                  ) : coldCall.booking ? (
+                    <div className="flex flex-col gap-2">
+                      {coldCall.booking.streaming && !coldCall.booking.text ? (
+                        <div className="flex items-center gap-2 py-1 text-[13px] text-[color:var(--color-ink-2)]">
+                          <Spinner size={13} /> drafting outreach…
+                        </div>
+                      ) : (
+                        <Markdown>{coldCall.booking.text}</Markdown>
+                      )}
+                      {!coldCall.booking.streaming && (
+                        <div className="flex items-center gap-1.5">
+                          <TextButton icon={RotateCcw} onClick={coldCall.onBookMeetings}>Redo</TextButton>
+                        </div>
+                      )}
+                    </div>
+                  ) : (
+                    <Chip onClick={coldCall.onBookMeetings} variant="accent">
+                      <Send size={13} /> Book meetings
+                    </Chip>
+                  )}
+                </div>
+              )}
+            </div>
+          ) : (
+            <div className="flex items-center gap-2 py-1 text-[13px] text-[color:var(--color-ink-2)]">
+              <Spinner size={13} /> coaching notes…
+            </div>
+          )}
+        </section>
+      )}
 
       {onGenerateFollowup && recapText && !editingRecap && (
         <section aria-live="polite">
