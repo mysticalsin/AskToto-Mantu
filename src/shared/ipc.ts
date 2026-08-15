@@ -179,6 +179,10 @@ export const IPC = {
   mcpSaveConnection: 'mcp:saveConnection',
   mcpDisconnect: 'mcp:disconnect',
   mcpPush: 'mcp:push',
+  // ClickUp's connection has no endpoint/key form to Test/Save — one button runs the whole OAuth 2.1
+  // + PKCE flow (browser consent) and, on success, upserts an mcpConnections entry exactly like
+  // mcpSaveConnection does for a pasted key. Reuses mcpDisconnect/mcpPush unchanged.
+  mcpClickupConnect: 'mcp:clickupConnect',
   licenseActivate: 'license:activate',
   licenseStatus: 'license:status',
   licenseGate: 'license:gate',
@@ -921,6 +925,10 @@ export const BaseSettingsSchema = z.object({
   // old single-connection bidstackEndpointUrl/bidstackConnected/bidstackTools fields — see
   // migrateLegacyBidstackConnection in main/store.ts for how an existing user's data carries forward.
   mcpConnections: z.array(McpConnectionSchema).max(10).default([]),
+  // ClickUp's Dynamic Client Registration (RFC 7591) client_id — public, not a secret, so it lives in
+  // plain settings rather than mcpSecrets.ts. Registered once (main/mcp/clickupOAuth.ts) and cached here
+  // so every later connect/reconnect reuses the same client instead of re-registering.
+  clickupClientId: z.string().default(''),
   // Métis Local uses the single model bundled in every installer. The preprocess is a persisted-settings
   // migration for releases that offered qwen3.5-2b; unknown ids fail validation and fall back safely in
   // main/store.ts instead of pointing llama-server at a file that can never exist.
@@ -1256,6 +1264,7 @@ export const DEFAULT_SETTINGS: Settings = {
   dustTokenMintedAt: 0,
   cliNoticeAck: false,
   mcpConnections: [],
+  clickupClientId: '',
   localLlm: {
     enabled: true,
     modelId: BUNDLED_LOCAL_MODEL_ID,

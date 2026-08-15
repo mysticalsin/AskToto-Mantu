@@ -2380,6 +2380,113 @@ const activePillStyle =
   'flex shrink-0 items-center gap-1 rounded-full bg-[var(--cl-primary-soft)] px-2 py-0.5 text-[11px] font-medium text-[color:var(--cl-primary)]'
 
 /**
+ * ClickUp's connection card — same shell as McpConnectionCard (title/desc/Connected pill/tools list/
+ * Reconnect+Disconnect) but a genuinely different trigger: there's no endpoint/key form to fill in and
+ * Test/Save, ClickUp is OAuth-only (2.1 + PKCE). One "Connect ClickUp" button runs the whole browser
+ * consent flow in main (window.toto.mcpClickupConnect) and, on success, main has already upserted the
+ * mcpConnections entry — this component only reflects that state back, via the same `patch` callback
+ * McpConnectionCard uses so both write through Settings' single settings-patch path.
+ */
+function ClickupCard({ settings, patch }: { settings: PublicSettings; patch: (p: Partial<PublicSettings>) => void }): JSX.Element {
+  const conn = settings.mcpConnections.find((c) => c.id === 'clickup')
+  const connected = conn?.connected ?? false
+  const [state, setState] = useState<{ phase: 'idle' | 'connecting' | 'error'; error: string | null }>({
+    phase: 'idle',
+    error: null
+  })
+
+  const connect = async (): Promise<void> => {
+    setState({ phase: 'connecting', error: null })
+    // Opens the system browser for ClickUp's consent screen — never fired except from this explicit click.
+    const r = await window.toto.mcpClickupConnect()
+    if (r.ok) {
+      await patch({
+        mcpConnections: [
+          ...settings.mcpConnections.filter((c) => c.id !== 'clickup'),
+          { id: 'clickup', kind: 'clickup', label: 'ClickUp', endpointUrl: '', connected: true, tools: r.tools ?? [], extraHeaders: {} }
+        ]
+      })
+      setState({ phase: 'idle', error: null })
+    } else {
+      setState({ phase: 'error', error: r.error || 'Could not connect ClickUp.' })
+    }
+  }
+
+  const disconnect = async (): Promise<void> => {
+    const r = await window.toto.mcpDisconnect({ connectionId: 'clickup' })
+    await patch({
+      mcpConnections: settings.mcpConnections.map((c) => (c.id === 'clickup' ? { ...c, connected: false, tools: [] } : c))
+    })
+    setState(r.ok ? { phase: 'idle', error: null } : { phase: 'error', error: r.error || 'Disconnected, but cleanup failed.' })
+  }
+
+  return (
+    <div
+      className={[
+        'flex flex-col gap-2 rounded-[10px] border p-3',
+        connected ? 'border-[var(--cl-primary)] bg-[var(--cl-primary-soft)]/40' : 'border-[var(--cl-border)] bg-white/[0.02]'
+      ].join(' ')}
+    >
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex flex-col gap-0.5">
+          <span className="text-[12px] font-medium text-[color:var(--cl-foreground)]">ClickUp · task management</span>
+          <span className="text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
+            Push action items from a meeting recap to ClickUp as tasks. Manual and review-first: nothing sends automatically.
+          </span>
+        </div>
+        {connected ? (
+          <span className={activePillStyle}>
+            <CircleCheck size={12} /> Connected
+          </span>
+        ) : null}
+      </div>
+
+      {connected ? (
+        <div className="flex items-center gap-3">
+          <span className="min-w-0 flex-1 truncate text-[11px] text-[color:var(--cl-muted-foreground)]">
+            {conn && conn.tools.length > 0
+              ? `${conn.tools.length} tool${conn.tools.length === 1 ? '' : 's'} available`
+              : 'Connected — no tools reported for this account.'}
+          </span>
+          <button
+            type="button"
+            onClick={() => void connect()}
+            disabled={state.phase === 'connecting'}
+            className="no-drag cl-focus shrink-0 text-[11px] text-[color:var(--cl-muted-foreground)] hover:text-[color:var(--cl-foreground)]"
+          >
+            {state.phase === 'connecting' ? <Loader2 size={12} className="inline animate-spin" /> : 'Reconnect'}
+          </button>
+          <button
+            type="button"
+            onClick={() => void disconnect()}
+            className="no-drag cl-focus shrink-0 text-[11px] text-[color:var(--cl-muted-foreground)] hover:text-[color:var(--cl-destructive)]"
+          >
+            Disconnect
+          </button>
+        </div>
+      ) : (
+        <button
+          type="button"
+          onClick={() => void connect()}
+          disabled={state.phase === 'connecting'}
+          className={secondaryBtnStyle}
+        >
+          {state.phase === 'connecting' ? <Loader2 size={12} className="animate-spin" /> : <Link2 size={12} />}
+          {state.phase === 'connecting' ? 'Waiting for ClickUp…' : 'Connect ClickUp'}
+        </button>
+      )}
+
+      {state.phase === 'error' && state.error && (
+        <div className="flex items-start gap-1.5 text-[11px] text-[color:var(--cl-destructive)]">
+          <AlertCircle size={13} className="mt-px shrink-0" />
+          <span>{state.error}</span>
+        </div>
+      )}
+    </div>
+  )
+}
+
+/**
  * Scrollable, searchable popup for picking a Dust agent — replaces a native <select> so a long agent
  * list (with descriptions) is actually browsable instead of squeezed into the OS's own dropdown chrome.
  * Falls back to a bare text input whenever `agents` hasn't loaded yet (or failed), so an sId can still
@@ -6033,6 +6140,14 @@ function IntelligenceTab({
           apiKeyHint="Personal or workspace access token from Plane → Settings → API tokens"
           extraFields={[{ key: 'X-Workspace-slug', label: 'Workspace slug', placeholder: 'acme' }]}
         />
+      </Section>
+
+      <Section
+        title="ClickUp"
+        desc="Push meeting action items to ClickUp as tasks — see Review → Book next steps. Manual and review-first: nothing sends automatically."
+        icon={ListTree}
+      >
+        <ClickupCard settings={settings} patch={patch} />
       </Section>
     </div>
   )

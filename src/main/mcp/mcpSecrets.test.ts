@@ -147,4 +147,53 @@ describe('mcpSecrets — MCP connection API key storage, keyed by connectionId',
       expect(reloaded.hasMcpApiKey('bidstack')).toBe(false)
     })
   })
+
+  describe('refresh-token slot (OAuth connections — ClickUp today)', () => {
+    it('has no refresh token by default', async () => {
+      const { getMcpRefreshToken } = await import('./mcpSecrets')
+      expect(getMcpRefreshToken('clickup')).toBe('')
+    })
+
+    it('round-trips a saved refresh token, independent of the main API key file', async () => {
+      const { setMcpApiKey, setMcpRefreshToken, getMcpApiKey, getMcpRefreshToken } = await import('./mcpSecrets')
+      setMcpApiKey('clickup', 'clickup-access-token')
+      setMcpRefreshToken('clickup', 'clickup-refresh-token')
+      expect(getMcpApiKey('clickup')).toBe('clickup-access-token')
+      expect(getMcpRefreshToken('clickup')).toBe('clickup-refresh-token')
+      expect(existsSync(join(userData, 'key-mcp-clickup.bin'))).toBe(true)
+      expect(existsSync(join(userData, 'key-mcp-clickup-refresh.bin'))).toBe(true)
+    })
+
+    it('setting an empty refresh token clears it', async () => {
+      const { setMcpRefreshToken, getMcpRefreshToken } = await import('./mcpSecrets')
+      setMcpRefreshToken('clickup', 'something')
+      setMcpRefreshToken('clickup', '')
+      expect(getMcpRefreshToken('clickup')).toBe('')
+    })
+
+    it('clearMcpRefreshToken removes the file and cache, and no-ops cleanly when there is nothing to clear', async () => {
+      const { setMcpRefreshToken, clearMcpRefreshToken, getMcpRefreshToken } = await import('./mcpSecrets')
+      setMcpRefreshToken('clickup', 'to-be-cleared')
+      const p = join(userData, 'key-mcp-clickup-refresh.bin')
+      expect(existsSync(p)).toBe(true)
+      expect(clearMcpRefreshToken('clickup')).toBe(true)
+      expect(existsSync(p)).toBe(false)
+      expect(getMcpRefreshToken('clickup')).toBe('')
+      // A connection that never had a refresh token (e.g. bidstack, plane) clears as a clean no-op.
+      expect(clearMcpRefreshToken('plane')).toBe(true)
+    })
+
+    it('a fresh module load re-reads the persisted refresh token from disk', async () => {
+      const first = await import('./mcpSecrets')
+      first.setMcpRefreshToken('clickup', 'reloaded-refresh-token')
+
+      vi.resetModules()
+      const electron = await import('electron')
+      ;(electron.app.getPath as ReturnType<typeof vi.fn>).mockImplementation((name: string) =>
+        name === 'userData' ? userData : join(userData, name)
+      )
+      const second = await import('./mcpSecrets')
+      expect(second.getMcpRefreshToken('clickup')).toBe('reloaded-refresh-token')
+    })
+  })
 })

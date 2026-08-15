@@ -94,10 +94,15 @@ export type AuditEvent =
   | 'meeting.detect.degraded'
   | 'recall.open'
   | 'recall.export' // user-initiated decrypted md copy of one meeting (recall:export-plain)
-  // Generalized MCP push connections (BidStack CRM, Plane, …) — see main/mcp/mcpClient.ts.
+  // Generalized MCP push connections (BidStack CRM, Plane, ClickUp, …) — see main/mcp/mcpClient.ts.
   | 'mcp.connected'
   | 'mcp.disconnected'
   | 'mcp.push'
+  // ClickUp's OAuth 2.1+PKCE handshake itself (main/mcp/clickupOAuth.ts) — distinct from the generic
+  // mcp.connected above, which fires once the resulting token is actually saved.
+  | 'clickup.oauth.state_mismatch'
+  | 'clickup.oauth.denied'
+  | 'clickup.oauth.failed'
   | 'dust.conversation'
   | 'brain.ingest'
   | 'brain.backfill.start'
