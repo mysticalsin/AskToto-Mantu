@@ -44,7 +44,7 @@ describe('settings:set — main-owned keys are not renderer-writable', () => {
   // attacker-controlled MCP endpoint". A generic settings patch that could rewrite
   // mcpConnections[].endpointUrl defeats that pin and ships the stored bearer token (a BidStack/Plane
   // key, or a ClickUp OAuth access token) to any host that passes the SSRF guard.
-  it('strips MCP connection state, so mcpPush\'s endpoint pin cannot be rewritten from the renderer', () => {
+  it('MQA-137: strips MCP connection state, so mcpPush\'s endpoint pin cannot be rewritten from the renderer', () => {
     const keys = strippedKeys()
     expect(keys).toContain('mcpConnections')
     expect(keys).toContain('clickupClientId')
@@ -81,7 +81,7 @@ describe('settings:set — main-owned keys are not renderer-writable', () => {
   // Every step of the Dust device-login sequence writes or advances credential state, so gating only the
   // FIRST one is decorative: a caller can mint its own WorkOS device code out-of-band, skip begin, and
   // drive poll -> pickWorkspace to install attacker-controlled Dust tokens as this user's credential.
-  it('every Dust login handler gates on requireAuth(), not just the begin step', () => {
+  it('MQA-133: every Dust login handler gates on requireAuth(), not just the begin step', () => {
     for (const channel of ['dustLoginBegin', 'dustLoginPoll', 'dustLoginPickWorkspace']) {
       const start = indexSrc.indexOf(`ipcMain.handle(IPC.${channel}`)
       expect(start, `${channel} handler not found`).toBeGreaterThan(-1)
@@ -94,7 +94,7 @@ describe('settings:set — main-owned keys are not renderer-writable', () => {
   // Dust's credential is a PAIR (provider key + WorkOS refresh token in its own file). Clearing only the
   // key left dust-refresh.bin on disk, so a later refresh could silently re-mint a working key and
   // reconnect an integration the user had explicitly removed.
-  it('clearing the Dust key also clears its refresh token, and reports a file that survived', () => {
+  it('MQA-135: clearing the Dust key also clears its refresh token, and reports a file that survived', () => {
     const start = indexSrc.indexOf('ipcMain.handle(IPC.clearApiKey')
     expect(start).toBeGreaterThan(-1)
     const body = indexSrc.slice(start, start + 1600)
@@ -107,7 +107,7 @@ describe('settings:set — main-owned keys are not renderer-writable', () => {
   // Gating the handlers is only half of it: polling a CALLER-supplied device code would still let a
   // renderer foothold complete a login against a code minted out-of-band against the public WorkOS
   // client id. Main mints it, keeps it, and never hands it over.
-  it('the Dust device code stays in main and is never returned to the renderer', () => {
+  it('MQA-133: the Dust device code stays in main and is never returned to the renderer', () => {
     const start = indexSrc.indexOf('ipcMain.handle(IPC.dustLoginBegin')
     const body = indexSrc.slice(start, start + 900)
     expect(body).toMatch(/pendingDustDeviceCode = r\.ok && r\.deviceCode \? r\.deviceCode : null/)

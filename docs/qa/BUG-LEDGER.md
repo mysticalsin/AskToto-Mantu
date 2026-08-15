@@ -161,6 +161,13 @@ silently wrong · `medium` = degraded or confusing in a real scenario · `low` =
 | MQA-131 | Three Settings sections (Plane, ClickUp, Backups & limits) were never added to their tab's `keywords`, so settings search returned nothing for "Plane", "ClickUp", "NVIDIA" or "Race a backup provider" — the TABS INVARIANT says a Section is only findable if its exact title is a keyword | settings search | minor | FIXED | `src/renderer/src/components/Settings.helpers.test.ts` | physical CDP QA (2026-08-15) |
 | MQA-132 | The hedge race left the backup leg idle until HEDGE_DELAY_MS even when the primary leg was ALREADY dead, so a misconfigured primary that failed at ~0.4s still took 3673ms to answer instead of ~850ms — markDead()'s 'suppress' promises another leg will answer, but nothing had started it | ask a question with a misconfigured/unreachable primary provider | major | FIXED | `src/main/llm/hedge.test.ts` | physical CDP QA (2026-08-15) |
 
+| MQA-133 | Every Dust device-login step after the first skipped requireAuth(), and the poll step trusted a caller-supplied device code — so a renderer foothold could install an attacker's Dust tokens as the user's credential and stream later meetings into the attacker's workspace | connect Dust (native OAuth sign-in) | high | FIXED | `src/main/settings-write-boundary.contract.test.ts` | hardening audit (2026-08-15) |
+| MQA-134 | Under a hedge race, a cloud/CLI leg that finished with zero tokens and no failover target deleted the SHARED abort registration and sent a blank streamDone — orphaning the still-live other leg past Cancel, and ending the ask with an empty answer | ask a question with two providers configured and hedging on | high | FIXED | `src/main/llm/hedge.test.ts` | hardening audit (2026-08-15) |
+| MQA-135 | Removing the Dust key left dust-refresh.bin and dustSessionOrigin:'oauth' behind, so a later hand-pasted Dust key could be silently overwritten by a token re-minted from the disconnected account | remove the Dust key in Settings, then paste a different one | medium | FIXED | `src/main/settings-write-boundary.contract.test.ts` | hardening audit (2026-08-15) |
+| MQA-136 | refreshDustOAuthSession treated refresh_token as required, but it is OPTIONAL per RFC 6749 5.1 — a server that declined to rotate it made setDustRefreshToken(undefined) throw, the catch reported a SUCCESSFUL refresh as a failure, and the burned old token stayed on disk, killing the session until a full re-login | any Dust ask after the access token ages past 45 minutes | high | FIXED | `src/main/dust-oauth.test.ts` | hardening audit (2026-08-15) |
+| MQA-137 | settings:set let the renderer rewrite mcpConnections[].endpointUrl, defeating mcpPush's deliberate endpoint pin and sending the stored MCP bearer token (or ClickUp OAuth access token) to any host passing the SSRF guard | push a recap or a next step to a connected MCP system | high | FIXED | `src/main/settings-write-boundary.contract.test.ts` | hardening audit (2026-08-15) |
+| MQA-138 | McpDisconnectPayloadSchema accepted any string as connectionId, which mcpSecrets.ts interpolates into `key-mcp-<id>.bin` — '../../secret-key' would rmSync the AES file key every stored provider credential is encrypted under | disconnect an MCP connection | high | FIXED | `src/main/mcp/mcpSecrets.test.ts` | hardening audit (2026-08-15) |
+
 
 ## Details
 
@@ -3116,3 +3123,26 @@ deliberately stalled primary.
 one `streamMeta` leg, no error surfaced. Healthy-primary asks are unchanged (512-1023 ms against live
 NVIDIA NIM; the backup never starts). Regression tests naming MQA-132 cover early start, double-start
 from both triggers, an already-won race, an unavailable backup, and a dying hedge leg.
+
+### MQA-133 .. MQA-138 — the 2026-08-15 hardening audit
+
+Six defects found by a six-lens adversarial audit (auth/token handling, MCP + IPC trust boundary, hedge
+concurrency, secrets at rest, crash safety, renderer correctness), each put through a skeptic told to
+refute by default. Findings that did not survive that pass are deliberately not recorded here.
+
+The common shape of MQA-133, MQA-135, MQA-137 and MQA-138: **a guarantee stated in one handler's comment
+was reachable around through a different channel.** mcpPush says "a compromised renderer can't redirect
+the push to an attacker-controlled MCP endpoint" — true of its own payload, false once settings:set could
+rewrite the saved endpoint. dustLoginBegin gates on requireAuth() — irrelevant once the pair that
+actually writes the credential (poll -> pickWorkspace) did not. The lesson worth keeping: an invariant
+belongs at the place that ENFORCES it, and a comment asserting one is a claim to re-test whenever a new
+write path appears.
+
+MQA-134 and MQA-136 are the opposite class — correct-looking code with an unconsidered branch. The hedge
+leg's terminal path had a gate on every sibling case but that one; the Dust refresh assumed a field the
+spec marks optional. Both were only observable as behaviour (a spinner that never ends, a session that
+never recovers), which is why they survived a green suite.
+
+Verification for all six: both typechecks clean, full suite green, and — for the reachable ones — a
+physical check against the running app (Dust login shape against the live WorkOS endpoint; the hedge
+paths driven with a deliberately stalled primary, both with and without an eligible backup).
