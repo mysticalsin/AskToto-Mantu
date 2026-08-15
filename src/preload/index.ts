@@ -318,6 +318,10 @@ const api = {
     ipcRenderer.invoke(IPC.mcpDisconnect, payload),
   mcpPush: (payload: McpPushPayload): Promise<McpPushResult> =>
     ipcRenderer.invoke(IPC.mcpPush, payload),
+  // Runs the whole ClickUp OAuth 2.1 + PKCE consent flow (opens the system browser) and, on success,
+  // returns the same shape mcpTestConnection/mcpSaveConnection do — main has already persisted the
+  // tokens and upserted the mcpConnections entry by the time this resolves.
+  mcpClickupConnect: (): Promise<McpConnectResult> => ipcRenderer.invoke(IPC.mcpClickupConnect),
 
   licenseActivate: (payload: LicenseActivatePayload): Promise<LicenseActivateResult> =>
     ipcRenderer.invoke(IPC.licenseActivate, payload),

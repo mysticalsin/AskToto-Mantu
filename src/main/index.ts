@@ -250,7 +250,22 @@ import { isInsideResourceBase, realResourceBase } from './asr-model-path'
 import { detectCli, testCli, setupCli, installCli, loginCli, prewarmCli } from './cli'
 import { connectMcp, pushToMcp } from './mcp/mcpClient'
 import { activateLicense, checkLicenseGrace, heartbeat } from './license'
-import { setMcpApiKey, getMcpApiKey, clearMcpApiKey, hasMcpApiKey } from './mcp/mcpSecrets'
+import {
+  setMcpApiKey,
+  getMcpApiKey,
+  clearMcpApiKey,
+  hasMcpApiKey,
+  setMcpRefreshToken,
+  getMcpRefreshToken,
+  clearMcpRefreshToken
+} from './mcp/mcpSecrets'
+import {
+  runClickupOAuth,
+  refreshClickupToken,
+  CLICKUP_MCP_ENDPOINT,
+  tryAcquireClickupTokenLock,
+  releaseClickupTokenLock
+} from './mcp/clickupOAuth'
 import {
   graphifyStatus,
   buildGraph,
@@ -2504,17 +2519,21 @@ function registerIpc(): void {
     if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message || 'Invalid input.' }
     const { connectionId } = parsed.data
     const keyRemoved = clearMcpApiKey(connectionId)
+    // A no-op for a connection kind that never had one (BidStack, Plane) — only ClickUp's OAuth token
+    // pair populates this file, but clearing unconditionally means disconnect never has to know which
+    // kinds are OAuth-based.
+    const refreshRemoved = clearMcpRefreshToken(connectionId)
     const s = getSettings()
     setSettings({
       mcpConnections: s.mcpConnections.map((c) => (c.id === connectionId ? { ...c, connected: false, tools: [] } : c))
     })
-    auditLog('mcp.disconnected', { connectionId, keyFileRemoved: keyRemoved })
-    // Don't falsely report a clean disconnect when the secret is still on disk — the connection is marked
-    // off, but the user needs to know the key file survived so they can remove it manually.
-    if (!keyRemoved)
+    auditLog('mcp.disconnected', { connectionId, keyFileRemoved: keyRemoved, refreshFileRemoved: refreshRemoved })
+    // Don't falsely report a clean disconnect when a secret is still on disk — the connection is marked
+    // off, but the user needs to know a file survived so they can remove it manually.
+    if (!keyRemoved || !refreshRemoved)
       return {
         ok: false,
-        error: `Disconnected, but the stored ${mcpLabelFor(connectionId)} key file could not be deleted — remove it manually.`
+        error: `Disconnected, but the stored ${mcpLabelFor(connectionId)} credentials could not be fully deleted — remove them manually.`
       }
     return { ok: true }
   })
@@ -2541,8 +2560,62 @@ function registerIpc(): void {
       return { ok: false, error: `Unknown ${conn.label} tool.` }
     }
     const apiKey = getMcpApiKey(connectionId)
-    const r = await pushToMcp(conn.endpointUrl, apiKey, conn.extraHeaders, toolName, args, conn.label)
+    let r = await pushToMcp(conn.endpointUrl, apiKey, conn.extraHeaders, toolName, args, conn.label)
+    // ClickUp-only: its credential is an OAuth access token, not a pasted key that only changes when the
+    // user edits it — a 401 here can mean the token simply expired. Attempt exactly one refresh + retry
+    // before surfacing reconnect-required, gated on the SAME single-flight lock the interactive OAuth
+    // flow uses (see clickupOAuth.ts) so a background refresh here and a user-initiated Reconnect in
+    // Settings can never both persist tokens at once.
+    if (!r.ok && conn.kind === 'clickup' && /401|403|unauthor|forbidden/i.test(r.error || '')) {
+      if (tryAcquireClickupTokenLock()) {
+        try {
+          const refreshToken = getMcpRefreshToken(connectionId)
+          const refreshed = refreshToken ? await refreshClickupToken(refreshToken) : { ok: false as const }
+          if (refreshed.ok && refreshed.accessToken) {
+            setMcpApiKey(connectionId, refreshed.accessToken)
+            setMcpRefreshToken(connectionId, refreshed.refreshToken ?? refreshToken ?? '')
+            r = await pushToMcp(conn.endpointUrl, refreshed.accessToken, conn.extraHeaders, toolName, args, conn.label)
+          } else {
+            r = { ok: false, error: 'Your ClickUp session expired. Reconnect ClickUp in Settings.' }
+          }
+        } finally {
+          releaseClickupTokenLock()
+        }
+      } else {
+        r = { ok: false, error: 'A ClickUp sign-in or refresh is already in progress. Try again in a moment.' }
+      }
+    }
     auditLog('mcp.push', { connectionId, tool: toolName, ok: r.ok })
+    return r
+  })
+
+  // ClickUp has no endpoint/key form — one button runs the OAuth 2.1 + PKCE consent flow (opens the
+  // system browser), then persists exactly like mcpSaveConnection does for a pasted key.
+  ipcMain.handle(IPC.mcpClickupConnect, async (e) => {
+    assertMainWindow(e)
+    if (!requireAuth()) return { ok: false, error: 'Sign in with your Mantu account first.' }
+    const tokens = await runClickupOAuth()
+    if (!tokens.ok || !tokens.accessToken) return { ok: false, error: tokens.error || 'Could not connect ClickUp.' }
+    const r = await connectMcp(CLICKUP_MCP_ENDPOINT, tokens.accessToken, {}, 'ClickUp')
+    if (!r.ok) return r
+    try {
+      setMcpApiKey('clickup', tokens.accessToken)
+      setMcpRefreshToken('clickup', tokens.refreshToken ?? '')
+      const s = getSettings()
+      const entry: McpConnection = {
+        id: 'clickup',
+        kind: 'clickup',
+        label: 'ClickUp',
+        endpointUrl: CLICKUP_MCP_ENDPOINT,
+        connected: true,
+        tools: r.tools ?? [],
+        extraHeaders: {}
+      }
+      setSettings({ mcpConnections: [...s.mcpConnections.filter((c) => c.id !== 'clickup'), entry] })
+    } catch (error) {
+      return { ok: false as const, error: error instanceof Error ? error.message : 'Could not store the ClickUp connection.' }
+    }
+    auditLog('mcp.connected', { connectionId: 'clickup', tools: (r.tools ?? []).length })
     return r
   })
 

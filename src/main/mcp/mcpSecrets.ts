@@ -17,6 +17,11 @@
  * working with no re-entry. The next setMcpApiKey('bidstack', …) (reconnect/save) writes to the new path
  * only — the old file is left on disk (harmless, matches the settings-migration policy in main/store.ts:
  * no active cleanup, no permanent dual-read branch that grows).
+ *
+ * setMcpRefreshToken/getMcpRefreshToken/clearMcpRefreshToken: a second, independent encrypted slot per
+ * connectionId (key-mcp-<id>-refresh.bin) for connections whose credential is an OAuth token pair rather
+ * than a pasted API key — today only ClickUp (see main/mcp/clickupOAuth.ts). No legacy fallback needed;
+ * refresh tokens didn't exist before this module did.
  */
 
 import { app, safeStorage } from 'electron'
@@ -33,41 +38,63 @@ const LEGACY_BIDSTACK_KEY_FILE = 'key-bidstack.bin'
 const LEGACY_BIDSTACK_MARKER = Buffer.from('ATKBID1\n')
 
 const keyPath = (connectionId: string): string => join(app.getPath('userData'), `key-mcp-${connectionId}.bin`)
+const refreshPath = (connectionId: string): string => join(app.getPath('userData'), `key-mcp-${connectionId}-refresh.bin`)
 
 // One in-memory cache per connectionId — mirrors bidstackSecrets.ts's single-slot `_cache`, generalized
-// to a Map now that more than one connection can hold a key.
+// to a Map now that more than one connection can hold a key. A separate map for refresh tokens: today
+// only OAuth-based connections (ClickUp) ever populate it, but it's keyed the same way so a future
+// second OAuth kind needs no new plumbing.
 const cache = new Map<string, string>()
+const refreshCache = new Map<string, string>()
 
-export function setMcpApiKey(connectionId: string, key: string): void {
-  const trimmed = key.trim()
-  const p = keyPath(connectionId)
-  if (!trimmed) {
-    clearMcpApiKey(connectionId)
-    return
-  }
+/** Encrypt+write one secret to `p`, using the same file-backend/safeStorage choice and error message
+ *  shape store.ts's setApiKey and the rest of this module already use. Never partially writes. */
+function writeSecretFile(p: string, plaintext: string, label: string): void {
   // Fail closed before overwriting: an existing ATKMCP1 blob may be encrypted under a file key this
   // machine can no longer unwrap (Windows DPAPI bound to another account), and those bytes are the
   // only copy. No-op on a profile that has no file key. Mirrors store.ts's setApiKey.
   prepareFileKeyForWrite()
   let blob: Buffer
   if (useFileBackend()) {
-    blob = Buffer.concat([AES_KEY_MARKER, encryptSecret(trimmed)])
+    blob = Buffer.concat([AES_KEY_MARKER, encryptSecret(plaintext)])
   } else {
     if (!safeStorage.isEncryptionAvailable()) {
-      throw new Error('Encryption is unavailable on this machine. Métis cannot safely store this API key.')
+      throw new Error(`Encryption is unavailable on this machine. Métis cannot safely store this ${label}.`)
     }
-    blob = safeStorage.encryptString(trimmed)
+    blob = safeStorage.encryptString(plaintext)
   }
   try {
     writeFileSync(p, blob, { mode: 0o600 })
   } catch (e) {
     throw new Error(
-      `Couldn't save the API key — Métis can't write to its data folder${
+      `Couldn't save the ${label} — Métis can't write to its data folder${
         e instanceof Error && e.message ? ` (${e.message})` : ''
       }.`
     )
   }
+}
+
+export function setMcpApiKey(connectionId: string, key: string): void {
+  const trimmed = key.trim()
+  if (!trimmed) {
+    clearMcpApiKey(connectionId)
+    return
+  }
+  writeSecretFile(keyPath(connectionId), trimmed, 'API key')
   cache.set(connectionId, trimmed)
+}
+
+/** Store an OAuth refresh token for a connection (ClickUp today). A no-op clear when `token` is empty —
+ *  a connection with no refresh token (the common case: ClickUp's live discovery doc advertises no
+ *  refresh_token grant) simply never has this file. */
+export function setMcpRefreshToken(connectionId: string, token: string): void {
+  const trimmed = token.trim()
+  if (!trimmed) {
+    clearMcpRefreshToken(connectionId)
+    return
+  }
+  writeSecretFile(refreshPath(connectionId), trimmed, 'refresh token')
+  refreshCache.set(connectionId, trimmed)
 }
 
 function readKeyFile(p: string, marker: Buffer): string {
@@ -146,5 +173,32 @@ export function clearMcpApiKey(connectionId: string): boolean {
     return false
   }
   cache.set(connectionId, '')
+  return true
+}
+
+export function getMcpRefreshToken(connectionId: string): string {
+  const cached = refreshCache.get(connectionId)
+  if (cached !== undefined) return cached
+  const token = readKeyFile(refreshPath(connectionId), AES_KEY_MARKER)
+  refreshCache.set(connectionId, token)
+  return token
+}
+
+/** Returns false if the on-disk refresh-token file could not be deleted, same contract as
+ *  clearMcpApiKey. A no-op success (true, nothing to do) for a connection that never had one. */
+export function clearMcpRefreshToken(connectionId: string): boolean {
+  const p = refreshPath(connectionId)
+  if (!existsSync(p)) {
+    refreshCache.set(connectionId, '')
+    return true
+  }
+  try {
+    rmSync(p)
+  } catch (e) {
+    mainLog.warn(`[mcp:${connectionId}] could not delete refresh-token file`, e)
+    refreshCache.delete(connectionId)
+    return false
+  }
+  refreshCache.set(connectionId, '')
   return true
 }
