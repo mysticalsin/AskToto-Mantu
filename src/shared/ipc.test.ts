@@ -319,6 +319,25 @@ describe('McpConnectionSchema', () => {
     expect(McpConnectionSchema.safeParse({ id: 'bidstack', kind: 'bidstack', label: '' }).success).toBe(false)
   })
 
+  // The id is interpolated into mcpSecrets.ts's `key-mcp-<id>.bin`, so a free-string id is a path
+  // traversal primitive: '../../secret-key' would target the AES file key that every stored provider
+  // credential is encrypted under. Constrained to the kind enum at every entry point.
+  it('rejects a path-traversing connection id everywhere a connectionId is accepted', () => {
+    for (const id of ['../../secret-key', '..\\..\\secret-key', 'a/b', 'bidstack/../x']) {
+      expect(McpConnectionSchema.safeParse({ id, kind: 'bidstack', label: 'X' }).success, `McpConnection ${id}`).toBe(false)
+      expect(McpDisconnectPayloadSchema.safeParse({ connectionId: id }).success, `disconnect ${id}`).toBe(false)
+      expect(
+        McpPushPayloadSchema.safeParse({ connectionId: id, toolName: 't', args: {} }).success,
+        `push ${id}`
+      ).toBe(false)
+    }
+    // The real ids still pass on each of those entry points.
+    for (const id of ['bidstack', 'plane', 'clickup']) {
+      expect(McpDisconnectPayloadSchema.safeParse({ connectionId: id }).success, `disconnect ${id}`).toBe(true)
+      expect(McpPushPayloadSchema.safeParse({ connectionId: id, toolName: 't', args: {} }).success, `push ${id}`).toBe(true)
+    }
+  })
+
   it('defaults endpointUrl/connected/tools/extraHeaders when only id+kind+label are given', () => {
     const r = McpConnectionSchema.safeParse({ id: 'plane', kind: 'plane', label: 'Plane' })
     expect(r.success).toBe(true)

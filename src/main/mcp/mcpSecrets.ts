@@ -37,8 +37,29 @@ const AES_KEY_MARKER = Buffer.from('ATKMCP1\n')
 const LEGACY_BIDSTACK_KEY_FILE = 'key-bidstack.bin'
 const LEGACY_BIDSTACK_MARKER = Buffer.from('ATKBID1\n')
 
-const keyPath = (connectionId: string): string => join(app.getPath('userData'), `key-mcp-${connectionId}.bin`)
-const refreshPath = (connectionId: string): string => join(app.getPath('userData'), `key-mcp-${connectionId}-refresh.bin`)
+/**
+ * A connectionId is interpolated straight into a filename, so it must never contain a path separator or
+ * a `..` segment: `'../../secret-key'` would resolve out of userData and let a caller read or rmSync an
+ * arbitrary .bin — including secret-key.bin, the AES file key every stored provider credential is
+ * encrypted under. The IPC payload schemas already constrain it to the McpConnectionKind enum; this is
+ * the inner half of that pair, so the invariant holds for ANY caller rather than only the IPC path.
+ * Throwing (not silently sanitizing) keeps a programming error loud instead of writing a secret to a
+ * quietly-wrong file.
+ */
+function assertSafeConnectionId(connectionId: string): void {
+  if (!/^[a-z0-9-]{1,40}$/i.test(connectionId)) {
+    throw new Error(`Unsafe MCP connection id: ${JSON.stringify(connectionId)}`)
+  }
+}
+
+const keyPath = (connectionId: string): string => {
+  assertSafeConnectionId(connectionId)
+  return join(app.getPath('userData'), `key-mcp-${connectionId}.bin`)
+}
+const refreshPath = (connectionId: string): string => {
+  assertSafeConnectionId(connectionId)
+  return join(app.getPath('userData'), `key-mcp-${connectionId}-refresh.bin`)
+}
 
 // One in-memory cache per connectionId — mirrors bidstackSecrets.ts's single-slot `_cache`, generalized
 // to a Map now that more than one connection can hold a key. A separate map for refresh tokens: today
