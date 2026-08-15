@@ -422,6 +422,31 @@ function serializeUserRaw(obj: Record<string, unknown>): Buffer {
   throw new Error('Encryption unavailable — refusing to write settings as plaintext')
 }
 
+/**
+ * Synthesize a `mcpConnections: [{ id: 'bidstack', ... }]` entry from the pre-generalization
+ * bidstackEndpointUrl/bidstackConnected/bidstackTools fields, IN PLACE on `raw` — mutating the object
+ * getSettings() is about to merge/validate, exactly like the retired-model-map migration above it. A
+ * no-op whenever the `mcpConnections` KEY IS PRESENT AT ALL in raw — including an explicit empty array —
+ * see the caller's comment for why that guard matters (checking `.length > 0` instead would treat a
+ * deliberate disconnect's `[]` the same as "never migrated" and keep resurrecting the cleared connection).
+ */
+function migrateLegacyBidstackConnection(raw: Record<string, unknown>): void {
+  if ('mcpConnections' in raw) return
+  const legacyUrl = raw.bidstackEndpointUrl
+  if (typeof legacyUrl !== 'string' || !legacyUrl.trim()) return
+  raw.mcpConnections = [
+    {
+      id: 'bidstack',
+      kind: 'bidstack',
+      label: 'Polo Pre-Sales',
+      endpointUrl: legacyUrl,
+      connected: Boolean(raw.bidstackConnected),
+      tools: Array.isArray(raw.bidstackTools) ? raw.bidstackTools : [],
+      extraHeaders: {}
+    }
+  ]
+}
+
 // ─── Settings memoisation ────────────────────────────────────────────────────────
 // getSettings() is called on every IPC handler and every /ask. The full parse path includes an AES
 // decrypt of settings.json + JSON parse + Zod validation — expensive at conversation pace.
@@ -499,6 +524,17 @@ export function getSettings(): Settings {
   // user layer so org policy always wins.
   const lockedKeys = getLockedKeys()
   if (lockedKeys.length) for (const k of lockedKeys) delete (raw as Record<string, unknown>)[k]
+  // Migration: bidstackEndpointUrl/bidstackConnected/bidstackTools → mcpConnections[{id:'bidstack',...}].
+  // Guarded on mcpConnections being ABSENT/EMPTY, never on the legacy keys' presence — re-deriving from
+  // stale legacy keys on every read would silently clobber a user who deliberately disconnected BidStack
+  // after this migration first ran (mcpConnections would go back to [], then this block would repopulate
+  // it from the still-present legacy fields). Transient like migrateRetiredModelMap above: recomputed on
+  // every getSettings() call, never rewrites settings.json on its own. The stored bearer key itself
+  // doesn't move — main/mcp/mcpSecrets.ts's getMcpApiKey('bidstack') falls back to the legacy
+  // key-bidstack.bin file for connection id 'bidstack' with no re-entry required. The moment the user
+  // touches the connection card (reconnect/disconnect/save), setSettings({ mcpConnections: [...] })
+  // persists the new shape for real and the legacy keys become permanently inert.
+  migrateLegacyBidstackConnection(raw)
   // Task MI-5 (hardened — QA #9): publishBrainPages is EXPLICIT opt-in only (schema default false). It is
   // deliberately NEVER derived from `!encryptTranscripts`. Deriving it meant turning at-rest encryption
   // OFF (an unrelated action) silently flipped publishing ON and materialized a full Dust-readable wiki

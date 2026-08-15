@@ -313,6 +313,95 @@ describe('store', () => {
     })
   })
 
+  describe('mcpConnections migration from legacy bidstackEndpointUrl/bidstackConnected/bidstackTools', () => {
+    it('synthesizes a mcpConnections[0] entry from the legacy fields on read', () => {
+      const settingsFile = join(userData, 'settings.json')
+      writeFileSync(
+        settingsFile,
+        JSON.stringify({
+          bidstackEndpointUrl: 'http://localhost:4001/mcp',
+          bidstackConnected: true,
+          bidstackTools: ['push_meeting_recap']
+        }),
+        'utf8'
+      )
+
+      const s = getSettings()
+      expect(s.mcpConnections).toEqual([
+        {
+          id: 'bidstack',
+          kind: 'bidstack',
+          label: 'Polo Pre-Sales',
+          endpointUrl: 'http://localhost:4001/mcp',
+          connected: true,
+          tools: ['push_meeting_recap'],
+          extraHeaders: {}
+        }
+      ])
+    })
+
+    it('does nothing when there is no legacy endpoint to migrate', () => {
+      const s = getSettings()
+      expect(s.mcpConnections).toEqual([])
+    })
+
+    it('never re-populates mcpConnections once the user explicitly cleared it (a real disconnect)', () => {
+      const settingsFile = join(userData, 'settings.json')
+      // Legacy fields are still present on disk (never actively cleaned up), but the user has since
+      // disconnected through the new UI, which persisted an explicit empty mcpConnections array.
+      writeFileSync(
+        settingsFile,
+        JSON.stringify({
+          bidstackEndpointUrl: 'http://localhost:4001/mcp',
+          bidstackConnected: true,
+          bidstackTools: ['push_meeting_recap'],
+          mcpConnections: []
+        }),
+        'utf8'
+      )
+
+      const s = getSettings()
+      expect(s.mcpConnections).toEqual([])
+    })
+
+    it('leaves a real (non-legacy) mcpConnections entry untouched', () => {
+      const settingsFile = join(userData, 'settings.json')
+      writeFileSync(
+        settingsFile,
+        JSON.stringify({
+          bidstackEndpointUrl: 'http://localhost:4001/mcp',
+          bidstackConnected: true,
+          bidstackTools: ['push_meeting_recap'],
+          mcpConnections: [
+            {
+              id: 'plane',
+              kind: 'plane',
+              label: 'Plane',
+              endpointUrl: 'https://mcp.plane.so/http/api-key/mcp',
+              connected: true,
+              tools: ['workitem'],
+              extraHeaders: { 'X-Workspace-slug': 'acme' }
+            }
+          ]
+        }),
+        'utf8'
+      )
+
+      const s = getSettings()
+      expect(s.mcpConnections).toEqual([
+        {
+          id: 'plane',
+          kind: 'plane',
+          label: 'Plane',
+          endpointUrl: 'https://mcp.plane.so/http/api-key/mcp',
+          connected: true,
+          tools: ['workitem'],
+          extraHeaders: { 'X-Workspace-slug': 'acme' }
+        }
+      ])
+    })
+  })
+
   describe('listDustAgents', () => {
     beforeEach(() => {
       setSettings({ dustWorkspaceId: 'ws-1' })

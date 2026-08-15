@@ -94,9 +94,10 @@ export type AuditEvent =
   | 'meeting.detect.degraded'
   | 'recall.open'
   | 'recall.export' // user-initiated decrypted md copy of one meeting (recall:export-plain)
-  | 'bidstack.connected'
-  | 'bidstack.disconnected'
-  | 'bidstack.push'
+  // Generalized MCP push connections (BidStack CRM, Plane, …) — see main/mcp/mcpClient.ts.
+  | 'mcp.connected'
+  | 'mcp.disconnected'
+  | 'mcp.push'
   | 'dust.conversation'
   | 'brain.ingest'
   | 'brain.backfill.start'

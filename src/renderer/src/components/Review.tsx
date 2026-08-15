@@ -1,6 +1,6 @@
 import { memo, useEffect, useMemo, useRef, useState } from 'react'
 import { Copy, Check, FileText, ListTree, FolderOpen, Save, RotateCcw, Play, ChevronDown, Download, Clock, Mail, Send, AlertCircle, EarOff, ArrowLeft, Pencil, X, Sparkles, Trash2, Lock, PhoneCall } from 'lucide-react'
-import type { TranscriptLine, MeetingSummary } from '@shared/ipc'
+import type { TranscriptLine, MeetingSummary, McpConnection, RecapExport } from '@shared/ipc'
 import type { AnswerState } from '../state'
 import { isNonSpeechLine } from '@shared/transcript-filter'
 import { talkStats } from '@shared/talkstats'
@@ -137,6 +137,30 @@ export function crmPushDone(phase: CrmPushPhase, p: CrmPayload): boolean {
   return phase === 'sent' || pushedCrmPayloads.has(crmPushKey(p))
 }
 
+// ── "Book next steps" — push recap action items to a connected task manager (Plane today) ──────────────
+// One MCP task per (action item × connection) — see the design note on NextStepArgs below for the exact
+// wire shape. Per-card push status; a card that already succeeded this session is remembered the same
+// way pushedCrmPayloads remembers a CRM push, so leaving Review and coming back never re-arms it.
+type NextStepPhase = 'idle' | 'sending' | 'sent' | 'error'
+/** The exact args a single "Book next steps" push sends. `containerId` (when the user filled in a target,
+ *  e.g. a Plane project id) rides in as `project_id` — the one container-scoping key name the design this
+ *  feature was built against calls out as known (unlike the due-date argument name, which is NOT sent
+ *  structured — see dueDateText's own doc comment in shared/ipc.ts). */
+export type NextStepArgs = { title: string; description: string; project_id?: string }
+const pushedNextSteps = new Set<string>()
+const nextStepKey = (connectionId: string, args: NextStepArgs): string =>
+  JSON.stringify([connectionId, args.title, args.description, args.project_id ?? ''])
+
+/** Remember a next-step push that succeeded, so re-opening this meeting doesn't re-offer it. */
+export function markNextStepPushed(connectionId: string, args: NextStepArgs): void {
+  pushedNextSteps.add(nextStepKey(connectionId, args))
+}
+
+/** Whether THIS (connectionId, args) pair already landed — mirrors crmPushDone above. */
+export function nextStepPushed(phase: NextStepPhase, connectionId: string, args: NextStepArgs): boolean {
+  return phase === 'sent' || pushedNextSteps.has(nextStepKey(connectionId, args))
+}
+
 export const Review = memo(function Review({
   recap,
   lines,
@@ -158,8 +182,7 @@ export const Review = memo(function Review({
   onGenerateFollowup,
   onRetryRecap,
   onGenerateRecap,
-  bidstackConnected,
-  bidstackTools,
+  mcpConnections,
   onOpenPastMeeting,
   isPastMeeting,
   onRecapSaved,
@@ -198,10 +221,9 @@ export const Review = memo(function Review({
   /** Retroactively generate a recap for a past meeting that was saved/imported without one. Only
    *  rendered as a button when isPastMeeting && the recap is empty. */
   onGenerateRecap?: () => void
-  /** Whether BidStack CRM is connected (Settings → CLI Integration). Gates "Push to CRM". */
-  bidstackConnected?: boolean
-  /** Tool names discovered from BidStack's MCP server at last connect — populates the tool picker. */
-  bidstackTools?: string[]
+  /** Named MCP push connections (Settings → Mantu Intelligence) — BidStack (kind 'bidstack') gates
+   *  "Push to CRM" below; every other connected, non-BidStack kind (Plane today) gates "Book next steps". */
+  mcpConnections?: McpConnection[]
   /** Opens a "Recent meetings" row as a read-only past-meeting Review (same handler History uses). */
   onOpenPastMeeting?: (file: string) => void
   /** True when reviewing a past meeting reopened from History, so onDone returns to History rather than starting a new meeting. */
@@ -466,6 +488,9 @@ export const Review = memo(function Review({
   // fires a single MCP tool call to BidStack. Payload is deliberately thin: title, date, and the
   // already-AI-summarized recap text — never raw transcript lines or file paths (see the confidentiality
   // note in the plan this feature was built against).
+  const bidstackConn = mcpConnections?.find((c) => c.id === 'bidstack')
+  const bidstackConnected = bidstackConn?.connected ?? false
+  const bidstackTools = bidstackConn?.tools ?? []
   const [pushOpen, setPushOpen] = useState(false)
   const [pushTool, setPushTool] = useState('')
   const [pushState, setPushState] = useState<{ phase: CrmPushPhase; error: string | null }>({
@@ -503,7 +528,7 @@ export const Review = memo(function Review({
     // the call is in flight, and the CRM holds what left here, not what the screen shows when it lands.
     const payload = crmPayload
     setPushState({ phase: 'sending', error: null })
-    const r = await window.toto.mcpCrmPush({ toolName: pushTool, args: payload })
+    const r = await window.toto.mcpPush({ connectionId: 'bidstack', toolName: pushTool, args: payload })
     if (r.ok) {
       markCrmPushed(payload)
       setPushState({ phase: 'sent', error: null })
@@ -511,6 +536,96 @@ export const Review = memo(function Review({
       setPushState({ phase: 'error', error: r.error || 'Push failed.' })
     }
   }
+  // "Book next steps" — manual, review-first, same discipline as "Push to CRM": nothing sends until the
+  // user reviews the exact per-item payload and clicks Confirm. Gated on at least one connected,
+  // non-BidStack mcpConnections entry (Plane today — ClickUp has no UI/IPC wiring yet, see
+  // McpConnectionKindSchema in shared/ipc.ts).
+  const taskConnections = useMemo(() => (mcpConnections ?? []).filter((c) => c.kind !== 'bidstack' && c.connected), [mcpConnections])
+  const [nextStepsOpen, setNextStepsOpen] = useState(false)
+  const [nextStepsData, setNextStepsData] = useState<RecapExport['actionItems'] | null>(null)
+  const [nextStepsLoading, setNextStepsLoading] = useState(false)
+  const [nextStepsFetchError, setNextStepsFetchError] = useState<string | null>(null)
+  const [itemChecked, setItemChecked] = useState<Record<number, boolean>>({})
+  const [itemTitle, setItemTitle] = useState<Record<number, string>>({})
+  const [connChecked, setConnChecked] = useState<Record<string, boolean>>({})
+  const [connTool, setConnTool] = useState<Record<string, string>>({})
+  // Per-connection target container id (e.g. a Plane project id) — component state only, never persisted
+  // to mcpConnections: Métis has no browse/discovery UI for these containers in v1, so the user pastes it
+  // once per session rather than it becoming a stale saved default.
+  const [connTarget, setConnTarget] = useState<Record<string, string>>({})
+  const [stepStatus, setStepStatus] = useState<Record<string, { phase: NextStepPhase; error: string | null }>>({})
+
+  // A different meeting loaded into this reused Review instance → drop the whole panel, mirroring the CRM
+  // push reset above.
+  useEffect(() => {
+    setNextStepsOpen(false)
+    setNextStepsData(null)
+    setNextStepsFetchError(null)
+    setItemChecked({})
+    setItemTitle({})
+    setStepStatus({})
+  }, [savedPath])
+
+  const openNextSteps = async (): Promise<void> => {
+    setNextStepsOpen(true)
+    if (nextStepsData || nextStepsLoading) return // lazy-fetch once per meeting, mirrors the CRM panel's own cost discipline
+    setNextStepsLoading(true)
+    setNextStepsFetchError(null)
+    try {
+      const r = await window.toto.exportRecapJson(recapText)
+      setNextStepsData(r.actionItems)
+      setItemChecked(Object.fromEntries(r.actionItems.map((_, i) => [i, true])))
+      setItemTitle(Object.fromEntries(r.actionItems.map((it, i) => [i, it.text])))
+    } catch (e) {
+      setNextStepsFetchError(e instanceof Error ? e.message : 'Could not read action items from this recap.')
+    } finally {
+      setNextStepsLoading(false)
+    }
+  }
+
+  const nextStepDescription = (item: RecapExport['actionItems'][number]): string => {
+    const lines = [
+      item.text,
+      '',
+      `From meeting: ${meetingMeta?.title || 'Untitled meeting'} (${meetingMeta?.date || new Date(startedAt ?? Date.now()).toISOString()})`
+    ]
+    if (item.owner) lines.push(`Owner: ${item.owner}`)
+    if (item.dueDateText) lines.push(`Mentioned due: ${item.dueDateText}`)
+    return lines.join('\n')
+  }
+
+  const nextStepArgs = (item: RecapExport['actionItems'][number], i: number, connId: string): NextStepArgs => {
+    const title = (itemTitle[i] ?? item.text).trim().slice(0, 300) || item.text.slice(0, 300)
+    const description = nextStepDescription(item)
+    const target = (connTarget[connId] || '').trim()
+    return target ? { title, description, project_id: target } : { title, description }
+  }
+
+  // Sequential, not Promise.all: one connection's failure must never abort another connection's push, and
+  // each card's status has to update independently as its own call resolves.
+  const confirmNextSteps = async (): Promise<void> => {
+    if (!nextStepsData) return
+    const items = nextStepsData.map((it, i) => ({ item: it, i })).filter(({ i }) => itemChecked[i])
+    const conns = taskConnections.filter((c) => connChecked[c.id] ?? true)
+    for (const { item, i } of items) {
+      for (const conn of conns) {
+        const tool = connTool[conn.id] || conn.tools[0]
+        if (!tool) continue
+        const args = nextStepArgs(item, i, conn.id)
+        const key = `${i}:${conn.id}`
+        if (nextStepPushed(stepStatus[key]?.phase ?? 'idle', conn.id, args)) continue
+        setStepStatus((s) => ({ ...s, [key]: { phase: 'sending', error: null } }))
+        const r = await window.toto.mcpPush({ connectionId: conn.id, toolName: tool, args })
+        if (r.ok) {
+          markNextStepPushed(conn.id, args)
+          setStepStatus((s) => ({ ...s, [key]: { phase: 'sent', error: null } }))
+        } else {
+          setStepStatus((s) => ({ ...s, [key]: { phase: 'error', error: r.error || 'Push failed.' } }))
+        }
+      }
+    }
+  }
+
   const copyFollowup = (): void => {
     navigator.clipboard
       .writeText(followupText)
@@ -1082,6 +1197,165 @@ export const Review = memo(function Review({
               </div>
             </div>
           ) : null}
+        </section>
+      )}
+
+      {recapText && !recap?.error && !editingRecap && taskConnections.length > 0 && (
+        <section aria-live="polite">
+          <div className="mb-1.5 flex items-center justify-between">
+            <div className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-[color:var(--color-ink-3)]">
+              <ListTree size={12} /> Next steps
+            </div>
+            {!nextStepsOpen && (
+              <Chip onClick={() => void openNextSteps()} variant="accent">
+                <ListTree size={13} /> Book next steps
+              </Chip>
+            )}
+          </div>
+
+          {nextStepsOpen && (
+            <div className="flex flex-col gap-3">
+              {nextStepsLoading ? (
+                <div className="flex items-center gap-2 py-1 text-[13px] text-[color:var(--color-ink-2)]">
+                  <Spinner size={13} /> reading action items…
+                </div>
+              ) : nextStepsFetchError ? (
+                <div className="flex items-start gap-1.5 text-[11px] text-[var(--color-danger)]">
+                  <AlertCircle size={13} className="mt-px shrink-0" />
+                  <span>{nextStepsFetchError}</span>
+                </div>
+              ) : nextStepsData && nextStepsData.length === 0 ? (
+                <div className="text-[12px] leading-snug text-[color:var(--color-ink-3)]">
+                  No action items found in this recap.
+                </div>
+              ) : nextStepsData ? (
+                <>
+                  {/* Item checklist — each pre-checked, title editable before it becomes a real task title. */}
+                  <div className="flex flex-col gap-1.5">
+                    {nextStepsData.map((item, i) => (
+                      <label key={i} className="flex items-start gap-2 text-[12px]">
+                        <input
+                          type="checkbox"
+                          checked={itemChecked[i] ?? true}
+                          onChange={(e) => setItemChecked((s) => ({ ...s, [i]: e.target.checked }))}
+                          className="mt-1 shrink-0"
+                        />
+                        <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+                          <input
+                            value={itemTitle[i] ?? item.text}
+                            onChange={(e) => setItemTitle((s) => ({ ...s, [i]: e.target.value }))}
+                            disabled={!(itemChecked[i] ?? true)}
+                            className="w-full rounded-lg border border-[var(--color-hair-soft)] bg-white/[0.02] px-2 py-1 text-[12px] text-[color:var(--color-ink)] disabled:opacity-50"
+                          />
+                          {(item.owner || item.dueDateText) && (
+                            <span className="text-[11px] text-[color:var(--color-ink-3)]">
+                              {item.owner ? `Owner: ${item.owner}` : ''}
+                              {item.owner && item.dueDateText ? ' · ' : ''}
+                              {item.dueDateText ? `Mentioned due: ${item.dueDateText}` : ''}
+                            </span>
+                          )}
+                        </div>
+                      </label>
+                    ))}
+                  </div>
+
+                  {/* Connection picker — a next step can go to more than one connected task manager. */}
+                  <div className="flex flex-col gap-2">
+                    {taskConnections.map((conn) => {
+                      const checked = connChecked[conn.id] ?? true
+                      const tool = connTool[conn.id] || conn.tools[0] || ''
+                      return (
+                        <div key={conn.id} className="flex flex-col gap-1.5 rounded-xl border border-[var(--color-hair-soft)] bg-white/[0.02] p-2.5">
+                          <label className="flex items-center gap-2 text-[12px] font-medium text-[color:var(--color-ink)]">
+                            <input
+                              type="checkbox"
+                              checked={checked}
+                              onChange={(e) => setConnChecked((s) => ({ ...s, [conn.id]: e.target.checked }))}
+                            />
+                            {conn.label}
+                          </label>
+                          {checked && (
+                            <div className="flex flex-col gap-1.5 pl-6">
+                              {conn.tools.length > 0 ? (
+                                <select
+                                  value={tool}
+                                  onChange={(e) => setConnTool((s) => ({ ...s, [conn.id]: e.target.value }))}
+                                  className="no-drag rounded-lg border border-[var(--color-hair-soft)] bg-white/[0.02] px-2 py-1.5 text-[12px] text-[color:var(--color-ink)]"
+                                >
+                                  {conn.tools.map((t) => (
+                                    <option key={t} value={t}>
+                                      {t}
+                                    </option>
+                                  ))}
+                                </select>
+                              ) : (
+                                <div className="text-[11px] text-[var(--color-danger)]">
+                                  {conn.label} has no tools in this key's scope, so there's nothing to push to.
+                                </div>
+                              )}
+                              <input
+                                value={connTarget[conn.id] || ''}
+                                onChange={(e) => setConnTarget((s) => ({ ...s, [conn.id]: e.target.value }))}
+                                placeholder={`${conn.label} project ID (optional)`}
+                                className="w-full rounded-lg border border-[var(--color-hair-soft)] bg-white/[0.02] px-2 py-1.5 text-[12px] text-[color:var(--color-ink)]"
+                              />
+                            </div>
+                          )}
+                        </div>
+                      )
+                    })}
+                  </div>
+
+                  {/* Payload preview — one card per checked item × checked connection, exactly what will be
+                      sent. Same review-first discipline as the CRM payload preview above. */}
+                  <div className="flex flex-col gap-1.5">
+                    {nextStepsData.map((item, i) => {
+                      if (!(itemChecked[i] ?? true)) return null
+                      return taskConnections
+                        .filter((c) => connChecked[c.id] ?? true)
+                        .map((conn) => {
+                          const args = nextStepArgs(item, i, conn.id)
+                          const key = `${i}:${conn.id}`
+                          const status = stepStatus[key]
+                          const done = nextStepPushed(status?.phase ?? 'idle', conn.id, args)
+                          return (
+                            <div key={key} className="rounded-xl border border-[var(--color-hair-soft)] bg-white/[0.02] p-2.5 text-[12px]">
+                              <div className="mb-1 flex items-center justify-between text-[11px] font-semibold uppercase tracking-wide text-[color:var(--color-ink-3)]">
+                                <span>{conn.label}</span>
+                                {done ? (
+                                  <span className="flex items-center gap-1 text-[var(--color-success)]">
+                                    <Check size={11} /> Sent
+                                  </span>
+                                ) : status?.phase === 'sending' ? (
+                                  <span className="flex items-center gap-1 text-[color:var(--color-ink-3)]">
+                                    <Spinner size={11} /> Sending
+                                  </span>
+                                ) : null}
+                              </div>
+                              <div className="text-[color:var(--color-ink)]">{args.title}</div>
+                              <div className="mt-0.5 whitespace-pre-wrap text-[color:var(--color-ink-2)]">{args.description}</div>
+                              {status?.phase === 'error' && status.error && (
+                                <div className="mt-1 flex items-start gap-1.5 text-[11px] text-[var(--color-danger)]">
+                                  <AlertCircle size={12} className="mt-px shrink-0" />
+                                  <span>{status.error}</span>
+                                </div>
+                              )}
+                            </div>
+                          )
+                        })
+                    })}
+                  </div>
+
+                  <div className="flex items-center gap-1.5">
+                    <Chip onClick={() => void confirmNextSteps()} variant="accent">
+                      <ListTree size={13} /> Confirm push
+                    </Chip>
+                    <TextButton onClick={() => setNextStepsOpen(false)}>Cancel</TextButton>
+                  </div>
+                </>
+              ) : null}
+            </div>
+          )}
         </section>
       )}
 

@@ -38,11 +38,12 @@ import {
   type RecallBackfillSpeakersResult,
   type PlatformPermissions,
   type ShortcutFailure,
-  type McpCrmTestConnectionPayload,
-  type McpCrmSaveConnectionPayload,
-  type McpCrmPushPayload,
-  type McpCrmConnectResult,
-  type McpCrmPushResult,
+  type McpTestConnectionPayload,
+  type McpSaveConnectionPayload,
+  type McpDisconnectPayload,
+  type McpPushPayload,
+  type McpConnectResult,
+  type McpPushResult,
   type LicenseActivatePayload,
   type LicenseActivateResult,
   type LicenseStatusResult,
@@ -309,13 +310,14 @@ const api = {
   recapPdf: (input: { markdown: string; title?: string }): Promise<{ ok: boolean; path?: string }> =>
     ipcRenderer.invoke(IPC.recapPdf, input),
 
-  mcpCrmTestConnection: (payload: McpCrmTestConnectionPayload): Promise<McpCrmConnectResult> =>
-    ipcRenderer.invoke(IPC.mcpCrmTestConnection, payload),
-  mcpCrmSaveConnection: (payload: McpCrmSaveConnectionPayload): Promise<McpCrmConnectResult> =>
-    ipcRenderer.invoke(IPC.mcpCrmSaveConnection, payload),
-  mcpCrmDisconnect: (): Promise<{ ok: boolean }> => ipcRenderer.invoke(IPC.mcpCrmDisconnect),
-  mcpCrmPush: (payload: McpCrmPushPayload): Promise<McpCrmPushResult> =>
-    ipcRenderer.invoke(IPC.mcpCrmPush, payload),
+  mcpTestConnection: (payload: McpTestConnectionPayload): Promise<McpConnectResult> =>
+    ipcRenderer.invoke(IPC.mcpTestConnection, payload),
+  mcpSaveConnection: (payload: McpSaveConnectionPayload): Promise<McpConnectResult> =>
+    ipcRenderer.invoke(IPC.mcpSaveConnection, payload),
+  mcpDisconnect: (payload: McpDisconnectPayload): Promise<{ ok: boolean; error?: string }> =>
+    ipcRenderer.invoke(IPC.mcpDisconnect, payload),
+  mcpPush: (payload: McpPushPayload): Promise<McpPushResult> =>
+    ipcRenderer.invoke(IPC.mcpPush, payload),
 
   licenseActivate: (payload: LicenseActivatePayload): Promise<LicenseActivateResult> =>
     ipcRenderer.invoke(IPC.licenseActivate, payload),

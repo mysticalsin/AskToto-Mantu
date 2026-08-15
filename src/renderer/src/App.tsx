@@ -2582,8 +2582,7 @@ export function App(): JSX.Element {
         onGenerateFollowup={generateFollowup}
         onGenerateRecap={pm ? () => { if (requireProvider()) generateSavedRecap(pm.file, pm.lines) } : undefined}
         onRetryRecap={pm ? () => { if (requireProvider()) generateSavedRecap(pm.file, pm.lines) } : retryAnswer}
-        bidstackConnected={settings?.bidstackConnected ?? false}
-        bidstackTools={settings?.bidstackTools ?? []}
+        mcpConnections={settings?.mcpConnections ?? []}
         onOpenFolder={async () => {
           // openMeetingsFolder resolves to a non-empty error string on failure (folder missing/moved,
           // couldn't launch the OS file browser) instead of throwing — surface it instead of discarding
@@ -2635,7 +2634,7 @@ export function App(): JSX.Element {
         }
       />
     )
-  }, [pastMeeting, recapGenTarget, recapGen.answer, ask.answer, listen.lines, savedPath, saveError, saveAttempts, settings?.showFullTranscriptInReview, settings?.bidstackConnected, settings?.bidstackTools, followup.answer, generateFollowup, requireProvider, generateSavedRecap, retryAnswer, manualSave, discardMeeting, resumePastMeeting, openPastMeeting, reset, recapSkipped, openSettings, mode, coaching.answer, generateColdCallCoaching, booking.answer, generateBookMeetings])
+  }, [pastMeeting, recapGenTarget, recapGen.answer, ask.answer, listen.lines, savedPath, saveError, saveAttempts, settings?.showFullTranscriptInReview, settings?.mcpConnections, followup.answer, generateFollowup, requireProvider, generateSavedRecap, retryAnswer, manualSave, discardMeeting, resumePastMeeting, openPastMeeting, reset, recapSkipped, openSettings, mode, coaching.answer, generateColdCallCoaching, booking.answer, generateBookMeetings])
   const answerBody = useMemo(() => {
     if (!(capturing || captureError || ask.answer)) return null
     // While a new screen capture is in flight (capturing), force the streaming/empty display even when

@@ -169,10 +169,10 @@ describe('MQA-062 — a dead CLI session stops reporting itself as connected', (
   })
 })
 
-describe('MQA-064 — a failed CRM key write reaches the user instead of wedging the card', () => {
+describe('MQA-064 — a failed MCP key write reaches the user instead of wedging the card', () => {
   it('routes the thrown, user-authored diagnostic through the {ok,error} channel the card renders', () => {
-    const handler = sliceBetween('ipcMain.handle(IPC.mcpCrmSaveConnection', 'ipcMain.handle(IPC.mcpCrmDisconnect')
-    expect(handler).toMatch(/try \{\s*\n\s*setBidstackApiKey\(parsed\.data\.apiKey\)/)
+    const handler = sliceBetween('ipcMain.handle(IPC.mcpSaveConnection', 'ipcMain.handle(IPC.mcpDisconnect')
+    expect(handler).toMatch(/try \{\s*\n\s*setMcpApiKey\(connectionId, apiKey\)/)
     expect(handler).toMatch(/return \{ ok: false as const, error: error instanceof Error \? error\.message :/)
   })
 })

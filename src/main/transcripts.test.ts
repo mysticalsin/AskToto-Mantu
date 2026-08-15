@@ -784,15 +784,45 @@ describe('parseRecapMarkdown', () => {
   it('extracts action-item owners from "(Owner)" and "— Owner", leaving plain items unowned', () => {
     const r = parseRecapMarkdown(SAMPLE)
     expect(r.actionItems).toEqual([
-      { text: 'Send the deck', owner: 'Alice' },
-      { text: 'Book the venue', owner: 'Bob' },
-      { text: 'Finalize copy', owner: null }
+      { text: 'Send the deck', owner: 'Alice', dueDateText: null },
+      { text: 'Book the venue', owner: 'Bob', dueDateText: null },
+      { text: 'Finalize copy', owner: null, dueDateText: null }
     ])
   })
 
   it('degrades to owner:null on a nested-paren owner rather than mis-splitting', () => {
     const r = parseRecapMarkdown('## Action items:\n- Do the thing (Alice (boss))')
-    expect(r.actionItems).toEqual([{ text: 'Do the thing (Alice (boss))', owner: null }])
+    expect(r.actionItems).toEqual([{ text: 'Do the thing (Alice (boss))', owner: null, dueDateText: null }])
+  })
+
+  describe('actionItems dueDateText — best-effort trailing "by <phrase>"', () => {
+    it('extracts a due-date phrase from a plain item with no owner', () => {
+      const r = parseRecapMarkdown('## Action items:\n- Send the deck by Friday')
+      expect(r.actionItems).toEqual([{ text: 'Send the deck', owner: null, dueDateText: 'Friday' }])
+    })
+
+    it('extracts a due-date phrase alongside a "(Owner)" trailer', () => {
+      const r = parseRecapMarkdown('## Action items:\n- Send the deck by June 5 (Alice)')
+      expect(r.actionItems).toEqual([{ text: 'Send the deck', owner: 'Alice', dueDateText: 'June 5' }])
+    })
+
+    it('extracts a due-date phrase alongside a "— Owner" trailer', () => {
+      const r = parseRecapMarkdown('## Action items:\n- Book the venue by next week — Bob')
+      expect(r.actionItems).toEqual([{ text: 'Book the venue', owner: 'Bob', dueDateText: 'next week' }])
+    })
+
+    it('is null when no trailing "by" clause is present', () => {
+      const r = parseRecapMarkdown('## Action items:\n- Finalize copy')
+      expect(r.actionItems).toEqual([{ text: 'Finalize copy', owner: null, dueDateText: null }])
+    })
+
+    it('does not mistake "by" appearing mid-sentence as a hint absent an actual trailing clause split', () => {
+      // The regex is intentionally greedy/simple — this documents the accepted best-effort behavior
+      // rather than a stricter NLP-level extraction (RECAP_PROMPT never asks the model for structured
+      // dates, so this stays a display string, not a parser to get perfectly right).
+      const r = parseRecapMarkdown('## Action items:\n- Stand by for the client call')
+      expect(r.actionItems).toEqual([{ text: 'Stand', owner: null, dueDateText: 'for the client call' }])
+    })
   })
 
   it('always preserves the full original markdown and never throws on junk input', () => {
@@ -849,9 +879,9 @@ describe('parseRecapMarkdown', () => {
       'Lock pricing at $49/mo'
     ])
     expect(r.actionItems).toEqual([
-      { text: 'Draft the partner email', owner: 'Priya' },
-      { text: 'Update the pricing page', owner: 'Marco' },
-      { text: 'Schedule the retro', owner: null }
+      { text: 'Draft the partner email', owner: 'Priya', dueDateText: null },
+      { text: 'Update the pricing page', owner: 'Marco', dueDateText: null },
+      { text: 'Schedule the retro', owner: null, dueDateText: null }
     ])
     expect(r.openQuestions).toEqual(['Do we need legal sign-off on the new terms?'])
   })

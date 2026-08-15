@@ -1,9 +1,9 @@
 /**
- * bidstackClient.audit.test.ts — regression cover for the audited defects in the Polo Pre-Sales
- * (BidStack) MCP client.
+ * mcpClient.audit.test.ts — regression cover for the audited defects in the generalized MCP client
+ * (formerly bidstackClient.audit.test.ts, before mcpClient.ts generalized past BidStack).
  *
- * The sibling bidstackClient.test.ts drives a REAL local Streamable HTTP mock and is the right place
- * for wire-protocol behaviour. It cannot cover this file's subject: CONNECT_TIMEOUT_MS / CALL_TIMEOUT_MS
+ * The sibling mcpClient.test.ts drives a REAL local Streamable HTTP mock and is the right place for
+ * wire-protocol behaviour. It cannot cover this file's subject: CONNECT_TIMEOUT_MS / CALL_TIMEOUT_MS
  * are module constants, so proving a stalled request is actually bounded against a live server would
  * mean a 15s/30s wall-clock wait per assertion (and a 60s one to demonstrate the regression). So the
  * SDK Client is stubbed here instead, and the assertions pin the exact request-level contract the fix
@@ -34,12 +34,14 @@ vi.mock('@modelcontextprotocol/sdk/client/streamableHttp.js', () => ({
   }
 }))
 
-import { connectBidstack, pushToBidstack } from './bidstackClient'
+import { connectMcp, pushToMcp } from './mcpClient'
 
 const URL_OK = 'http://127.0.0.1:4001/mcp'
-const KEY = 'test-bidstack-key-123'
+const KEY = 'test-mcp-key-123'
+const LABEL = 'Polo Pre-Sales'
+const NO_EXTRA_HEADERS = {}
 
-describe('bidstackClient — audited defects', () => {
+describe('mcpClient — audited defects', () => {
   beforeEach(() => {
     sdk.connect.mockClear()
     sdk.listTools.mockClear()
@@ -51,7 +53,7 @@ describe('bidstackClient — audited defects', () => {
   // MQA-065 — the SDK forwards connect()'s options to the `initialize` request only, so tools/list
   // ran unbounded at the SDK's own 60s default instead of the 15s this module advertises.
   it('MQA-065: bounds tools/list with the same abort signal and timeout as connect', async () => {
-    const r = await connectBidstack(URL_OK, KEY)
+    const r = await connectMcp(URL_OK, KEY, NO_EXTRA_HEADERS, LABEL)
     expect(r.ok).toBe(true)
 
     expect(sdk.listTools).toHaveBeenCalledTimes(1)
@@ -68,7 +70,7 @@ describe('bidstackClient — audited defects', () => {
   // completes fast, then tools/call hangs.
   it('MQA-065: bounds tools/call with the same abort signal and timeout as connect', async () => {
     const args = { title: 'Q3 renewal sync', date: '2026-06-30', summary: 'Discussed renewal terms.' }
-    const r = await pushToBidstack(URL_OK, KEY, 'push_meeting_recap', args)
+    const r = await pushToMcp(URL_OK, KEY, NO_EXTRA_HEADERS, 'push_meeting_recap', args, LABEL)
     expect(r.ok).toBe(true)
 
     expect(sdk.callTool).toHaveBeenCalledTimes(1)
@@ -90,7 +92,7 @@ describe('bidstackClient — audited defects', () => {
   it('MQA-065: reports an SDK request timeout as a timeout, not an unknown failure', async () => {
     sdk.callTool.mockRejectedValueOnce(new Error('MCP error -32001: Request timed out'))
 
-    const r = await pushToBidstack(URL_OK, KEY, 'push_meeting_recap', { title: 't' })
+    const r = await pushToMcp(URL_OK, KEY, NO_EXTRA_HEADERS, 'push_meeting_recap', { title: 't' }, LABEL)
     expect(r.ok).toBe(false)
     expect(r.error).toMatch(/timed out connecting to polo pre-sales/i)
     expect(r.error).toMatch(/reachable/i)
@@ -101,11 +103,21 @@ describe('bidstackClient — audited defects', () => {
   // MQA-065 — the timeout branch must not swallow the auth/network classifications that already worked.
   it('MQA-065: still classifies auth and network failures distinctly from a timeout', async () => {
     sdk.callTool.mockRejectedValueOnce(new Error('HTTP 401 Unauthorized'))
-    const auth = await pushToBidstack(URL_OK, KEY, 'push_meeting_recap', {})
+    const auth = await pushToMcp(URL_OK, KEY, NO_EXTRA_HEADERS, 'push_meeting_recap', {}, LABEL)
     expect(auth.error).toMatch(/rejected the api key/i)
 
     sdk.callTool.mockRejectedValueOnce(new Error('fetch failed: ECONNREFUSED'))
-    const net = await pushToBidstack(URL_OK, KEY, 'push_meeting_recap', {})
+    const net = await pushToMcp(URL_OK, KEY, NO_EXTRA_HEADERS, 'push_meeting_recap', {}, LABEL)
     expect(net.error).toMatch(/could not reach polo pre-sales/i)
+  })
+
+  it('a second connection kind (e.g. Plane) gets its own label in every error branch', async () => {
+    sdk.callTool.mockRejectedValueOnce(new Error('MCP error -32001: Request timed out'))
+    const timeout = await pushToMcp(URL_OK, KEY, { 'X-Workspace-slug': 'acme' }, 'push_meeting_recap', {}, 'Plane')
+    expect(timeout.error).toMatch(/timed out connecting to plane/i)
+
+    sdk.callTool.mockRejectedValueOnce(new Error('HTTP 401 Unauthorized'))
+    const auth = await pushToMcp(URL_OK, KEY, { 'X-Workspace-slug': 'acme' }, 'push_meeting_recap', {}, 'Plane')
+    expect(auth.error).toMatch(/plane rejected the api key/i)
   })
 })

@@ -29,9 +29,13 @@ import {
   SetApiKeyPayloadSchema,
   ClearApiKeyPayloadSchema,
   TestApiKeyPayloadSchema,
-  McpCrmTestConnectionPayloadSchema,
-  McpCrmSaveConnectionPayloadSchema,
-  McpCrmPushPayloadSchema,
+  McpTestConnectionPayloadSchema,
+  McpSaveConnectionPayloadSchema,
+  McpDisconnectPayloadSchema,
+  McpPushPayloadSchema,
+  McpConnectionKindSchema,
+  type McpConnection,
+  type McpConnectionKind,
   LicenseActivatePayloadSchema,
   SetDealOutcomePayloadSchema,
   EntityRenamePayloadSchema,
@@ -244,14 +248,9 @@ import {
 import { asrManifestComplete } from './asr-manifest'
 import { isInsideResourceBase, realResourceBase } from './asr-model-path'
 import { detectCli, testCli, setupCli, installCli, loginCli, prewarmCli } from './cli'
-import { connectBidstack, pushToBidstack } from './mcp/bidstackClient'
+import { connectMcp, pushToMcp } from './mcp/mcpClient'
 import { activateLicense, checkLicenseGrace, heartbeat } from './license'
-import {
-  setBidstackApiKey,
-  getBidstackApiKey,
-  clearBidstackApiKey,
-  hasBidstackApiKey
-} from './mcp/bidstackSecrets'
+import { setMcpApiKey, getMcpApiKey, clearMcpApiKey, hasMcpApiKey } from './mcp/mcpSecrets'
 import {
   graphifyStatus,
   buildGraph,
@@ -2429,80 +2428,121 @@ function registerIpc(): void {
     return loginCli(typeof provider === 'string' ? (provider as ProviderId) : 'claude-cli')
   })
 
-  // --- BidStack MCP / CRM push ---
-  // BidStack 360° CRM — MCP push (Settings → CLI Integration card + Review's "Push to CRM").
+  // --- MCP connections: BidStack CRM push + Plane "Book next steps" ---
+  // Generalized from the old single-connection BidStack-only handlers (Settings → Mantu Intelligence
+  // cards + Review's "Push to CRM" / "Book next steps"). `connectionId` identifies WHICH
+  // settings.mcpConnections entry a call targets (id === kind in v1 — see McpConnectionSchema in
+  // shared/ipc.ts). ClickUp has no handler here — it's schema-reserved only (see McpConnectionKindSchema).
+
+  // Default display label for a connection id BEFORE it has ever been saved (so "Test connection" —
+  // which runs before any persistence — still gets a real label for its error/log messages instead of
+  // the bare id). Falls back to a previously saved label (reconnect flow) or the id itself.
+  const MCP_KIND_LABELS: Record<McpConnectionKind, string> = {
+    bidstack: 'Polo Pre-Sales',
+    clickup: 'ClickUp',
+    plane: 'Plane'
+  }
+  function mcpLabelFor(connectionId: string): string {
+    const existing = getSettings().mcpConnections.find((c) => c.id === connectionId)
+    if (existing?.label) return existing.label
+    const kind = McpConnectionKindSchema.safeParse(connectionId)
+    return kind.success ? MCP_KIND_LABELS[kind.data] : connectionId
+  }
+
   // Test connection: connects + authenticates + lists tools, persists NOTHING (mirrors BidStack's own
   // "Test endpoint" button). Lets the user verify before committing an endpoint/key to disk.
-  ipcMain.handle(IPC.mcpCrmTestConnection, async (e, payload: unknown) => {
+  ipcMain.handle(IPC.mcpTestConnection, async (e, payload: unknown) => {
     assertMainWindow(e)
     if (!requireAuth()) return { ok: false, error: 'Sign in with your Mantu account first.' }
-    const parsed = McpCrmTestConnectionPayloadSchema.safeParse(payload)
+    const parsed = McpTestConnectionPayloadSchema.safeParse(payload)
     if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message || 'Invalid input.' }
-    return connectBidstack(parsed.data.endpointUrl, parsed.data.apiKey)
+    return connectMcp(parsed.data.endpointUrl, parsed.data.apiKey, parsed.data.extraHeaders, mcpLabelFor(parsed.data.connectionId))
   })
 
   // Save connection: re-verifies (never trust a stale/unverified endpoint+key) then persists the
-  // endpoint to settings, the key to the BidStack secrets file, and the discovered tools for the picker.
-  ipcMain.handle(IPC.mcpCrmSaveConnection, async (e, payload: unknown) => {
+  // endpoint/label/headers to settings, the key to the per-connection MCP secrets file, and the
+  // discovered tools for the picker.
+  ipcMain.handle(IPC.mcpSaveConnection, async (e, payload: unknown) => {
     assertMainWindow(e)
     if (!requireAuth()) return { ok: false, error: 'Sign in with your Mantu account first.' }
-    const parsed = McpCrmSaveConnectionPayloadSchema.safeParse(payload)
+    const parsed = McpSaveConnectionPayloadSchema.safeParse(payload)
     if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message || 'Invalid input.' }
-    const r = await connectBidstack(parsed.data.endpointUrl, parsed.data.apiKey)
+    const { connectionId, endpointUrl, apiKey, extraHeaders, label } = parsed.data
+    const kindParsed = McpConnectionKindSchema.safeParse(connectionId)
+    if (!kindParsed.success) return { ok: false, error: 'Unknown MCP connection id.' }
+    const r = await connectMcp(endpointUrl, apiKey, extraHeaders, label)
     if (!r.ok) return r
-    // MQA-064: bidstackSecrets.ts writes user-facing diagnostics for exactly this step ("Encryption is
+    // MQA-064: mcpSecrets.ts writes user-facing diagnostics for exactly this step ("Encryption is
     // unavailable on this machine…", "Métis can't write to its data folder…"), but they are THROWN. An
     // unhandled throw here rejects the renderer's invoke, and the Settings card has no catch — it sits on
     // "saving" with the deliberately-authored message never reaching the user. Route it through the
     // {ok,error} channel the card already renders, mirroring the provider-key save (Settings.tsx).
     try {
-      setBidstackApiKey(parsed.data.apiKey)
-      setSettings({
-        bidstackEndpointUrl: parsed.data.endpointUrl.trim(),
-        bidstackConnected: true,
-        bidstackTools: r.tools ?? []
-      })
+      setMcpApiKey(connectionId, apiKey)
+      const s = getSettings()
+      const entry: McpConnection = {
+        id: connectionId,
+        kind: kindParsed.data,
+        label,
+        endpointUrl: endpointUrl.trim(),
+        connected: true,
+        tools: r.tools ?? [],
+        extraHeaders
+      }
+      setSettings({ mcpConnections: [...s.mcpConnections.filter((c) => c.id !== connectionId), entry] })
     } catch (error) {
-      return { ok: false as const, error: error instanceof Error ? error.message : 'Could not store the Polo Pre-Sales API key.' }
+      return { ok: false as const, error: error instanceof Error ? error.message : `Could not store the ${label} API key.` }
     }
-    auditLog('bidstack.connected', { tools: (r.tools ?? []).length })
+    auditLog('mcp.connected', { connectionId, tools: (r.tools ?? []).length })
     return r
   })
 
-  ipcMain.handle(IPC.mcpCrmDisconnect, (e) => {
+  ipcMain.handle(IPC.mcpDisconnect, (e, payload: unknown) => {
     assertMainWindow(e)
     if (!requireAuth()) return { ok: false, error: 'Sign in with your Mantu account first.' }
-    const keyRemoved = clearBidstackApiKey()
-    setSettings({ bidstackConnected: false, bidstackTools: [] })
-    auditLog('bidstack.disconnected', { keyFileRemoved: keyRemoved })
+    const parsed = McpDisconnectPayloadSchema.safeParse(payload)
+    if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message || 'Invalid input.' }
+    const { connectionId } = parsed.data
+    const keyRemoved = clearMcpApiKey(connectionId)
+    const s = getSettings()
+    setSettings({
+      mcpConnections: s.mcpConnections.map((c) => (c.id === connectionId ? { ...c, connected: false, tools: [] } : c))
+    })
+    auditLog('mcp.disconnected', { connectionId, keyFileRemoved: keyRemoved })
     // Don't falsely report a clean disconnect when the secret is still on disk — the connection is marked
     // off, but the user needs to know the key file survived so they can remove it manually.
     if (!keyRemoved)
-      return { ok: false, error: 'Disconnected, but the stored BidStack key file could not be deleted — remove it manually.' }
+      return {
+        ok: false,
+        error: `Disconnected, but the stored ${mcpLabelFor(connectionId)} key file could not be deleted — remove it manually.`
+      }
     return { ok: true }
   })
 
-  // Push: uses the already-saved endpoint + key. Never accepts an endpoint/key from the renderer here —
-  // only a previously tested-and-saved connection can push, so a compromised renderer can't redirect the
-  // push to an attacker-controlled MCP endpoint by passing arbitrary payload fields.
-  ipcMain.handle(IPC.mcpCrmPush, async (e, payload: unknown) => {
+  // Push: uses the already-saved endpoint + key for the named connection. Never accepts an endpoint/key
+  // from the renderer here — only a previously tested-and-saved connection can push, so a compromised
+  // renderer can't redirect the push to an attacker-controlled MCP endpoint by passing arbitrary payload
+  // fields.
+  ipcMain.handle(IPC.mcpPush, async (e, payload: unknown) => {
     assertMainWindow(e)
     if (!requireAuth()) return { ok: false, error: 'Sign in with your Mantu account first.' }
-    const parsed = McpCrmPushPayloadSchema.safeParse(payload)
+    const parsed = McpPushPayloadSchema.safeParse(payload)
     if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message || 'Invalid input.' }
+    const { connectionId, toolName, args } = parsed.data
     const s = getSettings()
-    if (!s.bidstackConnected || !s.bidstackEndpointUrl || !hasBidstackApiKey()) {
-      return { ok: false, error: 'Polo Pre-Sales is not connected. Set it up in Settings → Mantu Intelligence first.' }
+    const conn = s.mcpConnections.find((c) => c.id === connectionId)
+    if (!conn || !conn.connected || !conn.endpointUrl || !hasMcpApiKey(connectionId)) {
+      return { ok: false, error: `${mcpLabelFor(connectionId)} is not connected. Set it up in Settings → Mantu Intelligence first.` }
     }
     // Only a tool the user actually saw and picked when the connection was tested/saved may be invoked —
     // otherwise a compromised or buggy renderer call could reach an unintended (possibly destructive) MCP
-    // tool on the user's live CRM connection.
-    if (!s.bidstackTools.includes(parsed.data.toolName)) {
-      return { ok: false, error: 'Unknown Polo Pre-Sales tool.' }
+    // tool on the user's live connection.
+    if (!conn.tools.includes(toolName)) {
+      return { ok: false, error: `Unknown ${conn.label} tool.` }
     }
-    const apiKey = getBidstackApiKey()
-    const r = await pushToBidstack(s.bidstackEndpointUrl, apiKey, parsed.data.toolName, parsed.data.args)
-    auditLog('bidstack.push', { tool: parsed.data.toolName, ok: r.ok })
+    const apiKey = getMcpApiKey(connectionId)
+    const r = await pushToMcp(conn.endpointUrl, apiKey, conn.extraHeaders, toolName, args, conn.label)
+    auditLog('mcp.push', { connectionId, tool: toolName, ok: r.ok })
     return r
   })
 
@@ -2785,7 +2825,7 @@ function registerIpc(): void {
     if (!(p?.samples instanceof Float32Array)) return ''
     // Cap a single feed chunk generously above the renderer's real ~6s windows (WINDOW_SEC in listen.ts) at
     // 16kHz mono — every other renderer-supplied blob in this file is bounded the same way (debriefSave,
-    // openMailDraft, McpCrmArgValueSchema); without this a malicious/malfunctioning renderer could force a
+    // openMailDraft, McpArgValueSchema); without this a malicious/malfunctioning renderer could force a
     // synchronous decode of an arbitrarily large buffer and hang or OOM the whole app.
     if (p.samples.length > 16_000 * 30) return ''
     const text = await parakeetTranscribe(p.samples)

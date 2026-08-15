@@ -6,9 +6,12 @@ import {
   SettingsSchema,
   DEFAULT_SETTINGS,
   IPC,
-  McpCrmTestConnectionPayloadSchema,
-  McpCrmSaveConnectionPayloadSchema,
-  McpCrmPushPayloadSchema,
+  McpConnectionSchema,
+  McpTestConnectionPayloadSchema,
+  McpSaveConnectionPayloadSchema,
+  McpDisconnectPayloadSchema,
+  McpPushPayloadSchema,
+  RecapExportSchema,
   StreamMetaSchema,
   EntityRenamePayloadSchema,
   EntityMergePayloadSchema,
@@ -266,54 +269,136 @@ describe('SettingsSchema', () => {
     }
   })
 
-  it('defaults bidstackEndpointUrl, bidstackConnected, and bidstackTools', () => {
-    expect(DEFAULT_SETTINGS.bidstackEndpointUrl).toBe('')
-    expect(DEFAULT_SETTINGS.bidstackConnected).toBe(false)
-    expect(DEFAULT_SETTINGS.bidstackTools).toEqual([])
+  it('defaults mcpConnections to an empty array', () => {
+    expect(DEFAULT_SETTINGS.mcpConnections).toEqual([])
   })
 })
 
-// BidStack CRM (MCP push) IPC payload validation — this is what index.ts's mcpCrm:* handlers run
-// every incoming payload through before ever touching the network or persisting anything.
-describe('McpCrmTestConnectionPayloadSchema / McpCrmSaveConnectionPayloadSchema', () => {
-  it('accepts a valid endpoint + key', () => {
-    const r = McpCrmTestConnectionPayloadSchema.safeParse({
+// Generalized MCP push connections (BidStack CRM + Plane "Book next steps") — McpConnectionSchema is the
+// persisted shape in settings.mcpConnections; the Test/Save/Disconnect/Push payload schemas are what
+// index.ts's mcp:* handlers run every incoming payload through before ever touching the network or
+// persisting anything.
+describe('McpConnectionSchema', () => {
+  it('round-trips a full BidStack-kind connection (no extra headers)', () => {
+    const conn = {
+      id: 'bidstack',
+      kind: 'bidstack' as const,
+      label: 'Polo Pre-Sales',
+      endpointUrl: 'http://localhost:4001/mcp',
+      connected: true,
+      tools: ['push_meeting_recap'],
+      extraHeaders: {}
+    }
+    const r = McpConnectionSchema.safeParse(conn)
+    expect(r.success).toBe(true)
+    if (r.success) expect(r.data).toEqual(conn)
+  })
+
+  it('round-trips a Plane-kind connection carrying the X-Workspace-slug extra header', () => {
+    const conn = {
+      id: 'plane',
+      kind: 'plane' as const,
+      label: 'Plane',
+      endpointUrl: 'https://mcp.plane.so/http/api-key/mcp',
+      connected: true,
+      tools: ['workitem'],
+      extraHeaders: { 'X-Workspace-slug': 'acme' }
+    }
+    const r = McpConnectionSchema.safeParse(conn)
+    expect(r.success).toBe(true)
+    if (r.success) expect(r.data).toEqual(conn)
+  })
+
+  it('accepts the schema-reserved clickup kind (no UI/IPC wiring yet, but the shape parses)', () => {
+    expect(McpConnectionSchema.safeParse({ id: 'clickup', kind: 'clickup', label: 'ClickUp' }).success).toBe(true)
+  })
+
+  it('rejects an unknown kind and an empty id/label', () => {
+    expect(McpConnectionSchema.safeParse({ id: 'x', kind: 'jira', label: 'Jira' }).success).toBe(false)
+    expect(McpConnectionSchema.safeParse({ id: '', kind: 'bidstack', label: 'X' }).success).toBe(false)
+    expect(McpConnectionSchema.safeParse({ id: 'bidstack', kind: 'bidstack', label: '' }).success).toBe(false)
+  })
+
+  it('defaults endpointUrl/connected/tools/extraHeaders when only id+kind+label are given', () => {
+    const r = McpConnectionSchema.safeParse({ id: 'plane', kind: 'plane', label: 'Plane' })
+    expect(r.success).toBe(true)
+    if (r.success) {
+      expect(r.data.endpointUrl).toBe('')
+      expect(r.data.connected).toBe(false)
+      expect(r.data.tools).toEqual([])
+      expect(r.data.extraHeaders).toEqual({})
+    }
+  })
+
+  it('a settings.mcpConnections array round-trips through the full SettingsSchema', () => {
+    const conns = [
+      {
+        id: 'bidstack',
+        kind: 'bidstack' as const,
+        label: 'Polo Pre-Sales',
+        endpointUrl: 'http://localhost:4001/mcp',
+        connected: true,
+        tools: [],
+        extraHeaders: {}
+      }
+    ]
+    const parsed = SettingsSchema.safeParse({ ...DEFAULT_SETTINGS, mcpConnections: conns })
+    expect(parsed.success).toBe(true)
+    if (parsed.success) expect(parsed.data.mcpConnections).toEqual(conns)
+  })
+})
+
+describe('McpTestConnectionPayloadSchema / McpSaveConnectionPayloadSchema / McpDisconnectPayloadSchema', () => {
+  it('accepts a valid connectionId + endpoint + key', () => {
+    const r = McpTestConnectionPayloadSchema.safeParse({
+      connectionId: 'bidstack',
       endpointUrl: 'http://localhost:4001/mcp',
       apiKey: 'sk-bidstack-abc'
     })
     expect(r.success).toBe(true)
   })
 
-  it('rejects an empty endpoint URL', () => {
-    const r = McpCrmTestConnectionPayloadSchema.safeParse({ endpointUrl: '', apiKey: 'sk-abc' })
-    expect(r.success).toBe(false)
+  it('defaults extraHeaders to {} when omitted, and accepts it when given (Plane workspace header)', () => {
+    const base = { connectionId: 'plane', endpointUrl: 'https://mcp.plane.so/http/api-key/mcp', apiKey: 'sk-abc' }
+    const r1 = McpTestConnectionPayloadSchema.safeParse(base)
+    expect(r1.success).toBe(true)
+    if (r1.success) expect(r1.data.extraHeaders).toEqual({})
+    const r2 = McpTestConnectionPayloadSchema.safeParse({ ...base, extraHeaders: { 'X-Workspace-slug': 'acme' } })
+    expect(r2.success).toBe(true)
+    if (r2.success) expect(r2.data.extraHeaders).toEqual({ 'X-Workspace-slug': 'acme' })
   })
 
-  it('rejects an empty API key', () => {
-    const r = McpCrmTestConnectionPayloadSchema.safeParse({ endpointUrl: 'http://localhost:4001/mcp', apiKey: '' })
-    expect(r.success).toBe(false)
-  })
-
-  it('rejects a missing field entirely', () => {
-    const r = McpCrmTestConnectionPayloadSchema.safeParse({ endpointUrl: 'http://localhost:4001/mcp' })
-    expect(r.success).toBe(false)
+  it('rejects a missing connectionId, an empty endpoint URL, and an empty API key', () => {
+    expect(McpTestConnectionPayloadSchema.safeParse({ endpointUrl: 'http://localhost:4001/mcp', apiKey: 'x' }).success).toBe(false)
+    expect(McpTestConnectionPayloadSchema.safeParse({ connectionId: 'bidstack', endpointUrl: '', apiKey: 'sk-abc' }).success).toBe(false)
+    expect(
+      McpTestConnectionPayloadSchema.safeParse({ connectionId: 'bidstack', endpointUrl: 'http://localhost:4001/mcp', apiKey: '' })
+        .success
+    ).toBe(false)
   })
 
   it('rejects a non-object payload (e.g. a compromised/malformed renderer message)', () => {
-    expect(McpCrmTestConnectionPayloadSchema.safeParse(null).success).toBe(false)
-    expect(McpCrmTestConnectionPayloadSchema.safeParse('http://localhost:4001/mcp').success).toBe(false)
-    expect(McpCrmTestConnectionPayloadSchema.safeParse(undefined).success).toBe(false)
+    expect(McpTestConnectionPayloadSchema.safeParse(null).success).toBe(false)
+    expect(McpTestConnectionPayloadSchema.safeParse('http://localhost:4001/mcp').success).toBe(false)
+    expect(McpTestConnectionPayloadSchema.safeParse(undefined).success).toBe(false)
   })
 
-  it('SaveConnection uses the identical shape as TestConnection', () => {
-    const payload = { endpointUrl: 'http://localhost:4001/mcp', apiKey: 'sk-abc' }
-    expect(McpCrmSaveConnectionPayloadSchema.safeParse(payload).success).toBe(true)
+  it('SaveConnection extends TestConnection with a required label', () => {
+    const base = { connectionId: 'bidstack', endpointUrl: 'http://localhost:4001/mcp', apiKey: 'sk-abc' }
+    expect(McpSaveConnectionPayloadSchema.safeParse(base).success).toBe(false) // missing label
+    expect(McpSaveConnectionPayloadSchema.safeParse({ ...base, label: 'Polo Pre-Sales' }).success).toBe(true)
+  })
+
+  it('Disconnect only requires a connectionId', () => {
+    expect(McpDisconnectPayloadSchema.safeParse({ connectionId: 'plane' }).success).toBe(true)
+    expect(McpDisconnectPayloadSchema.safeParse({}).success).toBe(false)
   })
 })
 
-describe('McpCrmPushPayloadSchema', () => {
-  it('accepts a tool name with a plain args record', () => {
-    const r = McpCrmPushPayloadSchema.safeParse({
+describe('McpPushPayloadSchema', () => {
+  it('accepts a connectionId + tool name with a plain args record', () => {
+    const r = McpPushPayloadSchema.safeParse({
+      connectionId: 'bidstack',
       toolName: 'push_meeting_recap',
       args: { title: 'Q3 sync', date: '2026-06-30', summary: 'Recap text.' }
     })
@@ -321,48 +406,92 @@ describe('McpCrmPushPayloadSchema', () => {
   })
 
   it('accepts empty args', () => {
-    const r = McpCrmPushPayloadSchema.safeParse({ toolName: 'push_meeting_recap', args: {} })
+    const r = McpPushPayloadSchema.safeParse({ connectionId: 'bidstack', toolName: 'push_meeting_recap', args: {} })
     expect(r.success).toBe(true)
   })
 
+  it('rejects a missing connectionId', () => {
+    const r = McpPushPayloadSchema.safeParse({ toolName: 'push_meeting_recap', args: {} })
+    expect(r.success).toBe(false)
+  })
+
   it('rejects an empty tool name — never silently pushes to an unspecified tool', () => {
-    const r = McpCrmPushPayloadSchema.safeParse({ toolName: '', args: {} })
+    const r = McpPushPayloadSchema.safeParse({ connectionId: 'bidstack', toolName: '', args: {} })
     expect(r.success).toBe(false)
   })
 
   it('rejects a missing args field', () => {
-    const r = McpCrmPushPayloadSchema.safeParse({ toolName: 'push_meeting_recap' })
+    const r = McpPushPayloadSchema.safeParse({ connectionId: 'bidstack', toolName: 'push_meeting_recap' })
     expect(r.success).toBe(false)
   })
 
   it('rejects args that is not a record (e.g. an array or string)', () => {
-    expect(McpCrmPushPayloadSchema.safeParse({ toolName: 'x', args: [] }).success).toBe(false)
-    expect(McpCrmPushPayloadSchema.safeParse({ toolName: 'x', args: 'not-an-object' }).success).toBe(false)
+    expect(McpPushPayloadSchema.safeParse({ connectionId: 'bidstack', toolName: 'x', args: [] }).success).toBe(false)
+    expect(McpPushPayloadSchema.safeParse({ connectionId: 'bidstack', toolName: 'x', args: 'not-an-object' }).success).toBe(
+      false
+    )
   })
 
   it('rejects a nested object/array value inside args — flat primitives only', () => {
-    const r = McpCrmPushPayloadSchema.safeParse({ toolName: 'x', args: { nested: { a: 1 } } })
+    const r = McpPushPayloadSchema.safeParse({ connectionId: 'bidstack', toolName: 'x', args: { nested: { a: 1 } } })
     expect(r.success).toBe(false)
   })
 
   it('rejects an oversized string value inside args', () => {
-    const r = McpCrmPushPayloadSchema.safeParse({ toolName: 'x', args: { summary: 'a'.repeat(50_001) } })
+    const r = McpPushPayloadSchema.safeParse({
+      connectionId: 'bidstack',
+      toolName: 'x',
+      args: { summary: 'a'.repeat(50_001) }
+    })
     expect(r.success).toBe(false)
   })
 
   it('rejects an args object with too many fields', () => {
     const args: Record<string, string> = {}
     for (let i = 0; i < 21; i++) args[`field${i}`] = 'v'
-    const r = McpCrmPushPayloadSchema.safeParse({ toolName: 'x', args })
+    const r = McpPushPayloadSchema.safeParse({ connectionId: 'bidstack', toolName: 'x', args })
     expect(r.success).toBe(false)
   })
 
   it('accepts string/number/boolean/null primitive values within bounds', () => {
-    const r = McpCrmPushPayloadSchema.safeParse({
+    const r = McpPushPayloadSchema.safeParse({
+      connectionId: 'plane',
       toolName: 'x',
       args: { title: 'ok', count: 3, active: true, note: null }
     })
     expect(r.success).toBe(true)
+  })
+})
+
+// "Book next steps" — RecapExportSchema.actionItems gains dueDateText (see parseRecapMarkdown's own
+// dedicated coverage in main/transcripts.test.ts for the extraction regex itself; this is schema shape only).
+describe('RecapExportSchema.actionItems dueDateText', () => {
+  const base = {
+    title24: 'Q3 sync',
+    tags: [],
+    overview: '',
+    topics: [],
+    keyQA: [],
+    decisions: [],
+    openQuestions: [],
+    notableQuotes: [],
+    markdown: ''
+  }
+
+  it('accepts a null dueDateText and a populated one', () => {
+    const r = RecapExportSchema.safeParse({
+      ...base,
+      actionItems: [
+        { text: 'Send the deck', owner: 'Alice', dueDateText: 'Friday' },
+        { text: 'Finalize copy', owner: null, dueDateText: null }
+      ]
+    })
+    expect(r.success).toBe(true)
+  })
+
+  it('rejects an actionItems entry missing dueDateText entirely', () => {
+    const r = RecapExportSchema.safeParse({ ...base, actionItems: [{ text: 'x', owner: null }] })
+    expect(r.success).toBe(false)
   })
 })
 
