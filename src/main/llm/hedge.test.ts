@@ -83,6 +83,69 @@ describe('HedgeRace', () => {
     })
   })
 
+  // Found by physically driving the app: a misconfigured primary died at ~0.4s but the answer still took
+  // 3.7s, because the backup sat idle until HEDGE_DELAY_MS. 'suppress' promises another leg will answer,
+  // so that leg has to actually be running.
+  describe('early hedge start — a dead primary must not leave the backup waiting on the timer', () => {
+    it('pulls the backup forward the moment the primary dies', () => {
+      const race = new HedgeRace()
+      const start = vi.fn()
+      race.setHedgeStarter(start)
+      expect(race.markDead('primary')).toBe('suppress')
+      expect(start).toHaveBeenCalledTimes(1)
+    })
+
+    it('never starts the backup twice when the timer also fires', () => {
+      const race = new HedgeRace()
+      const start = vi.fn(() => race.markHedgeStarted())
+      race.setHedgeStarter(start)
+      race.markDead('primary')
+      race.markDead('primary') // a second exhaustion report must not re-launch it
+      expect(start).toHaveBeenCalledTimes(1)
+    })
+
+    it('does not start the backup once it is already running', () => {
+      const race = new HedgeRace()
+      const start = vi.fn()
+      race.setHedgeStarter(start)
+      race.markHedgeStarted() // the HEDGE_DELAY_MS timer already launched it
+      race.markDead('primary')
+      expect(start).not.toHaveBeenCalled()
+    })
+
+    it('does not start the backup after the race is already won', () => {
+      const race = new HedgeRace()
+      const start = vi.fn()
+      race.setHedgeStarter(start)
+      race.declareWinner('primary')
+      race.markDead('primary')
+      expect(start).not.toHaveBeenCalled()
+    })
+
+    it('does not start a backup that was already found unavailable, and surfaces instead', () => {
+      const race = new HedgeRace()
+      const start = vi.fn()
+      race.setHedgeStarter(start)
+      race.markHedgeUnavailable()
+      expect(race.markDead('primary')).toBe('surface')
+      expect(start).not.toHaveBeenCalled()
+    })
+
+    it('a dying HEDGE leg never tries to start another hedge', () => {
+      const race = new HedgeRace()
+      const start = vi.fn()
+      race.setHedgeStarter(start)
+      race.markDead('hedge')
+      expect(start).not.toHaveBeenCalled()
+    })
+
+    it('is inert when no starter was ever registered (non-hedged asks)', () => {
+      const race = new HedgeRace()
+      expect(() => race.markDead('primary')).not.toThrow()
+      expect(race.markDead('hedge')).toBe('surface')
+    })
+  })
+
   describe('abortAll — user cancel mid-race', () => {
     it('aborts whichever handles are currently registered', () => {
       const race = new HedgeRace()

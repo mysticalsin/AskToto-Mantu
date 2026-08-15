@@ -3622,14 +3622,26 @@ function registerIpc(): void {
       const race = new HedgeRace()
       let hedgeTimer: NodeJS.Timeout | null = setTimeout(() => {
         hedgeTimer = null
+        startHedgeLeg()
+      }, HEDGE_DELAY_MS)
+      // ONE launcher behind both triggers: the HEDGE_DELAY_MS timer (a primary that is merely slow) and
+      // HedgeRace's own early pull-forward (a primary already dead — nothing left to give it time for).
+      // race.markHedgeStarted() makes whichever fires second a no-op.
+      function startHedgeLeg(): void {
         if (race.isDecided()) return
         const backup = pickFailover([primary])
         if (!backup) {
           race.markHedgeUnavailable()
           return
         }
+        race.markHedgeStarted()
+        if (hedgeTimer) {
+          clearTimeout(hedgeTimer)
+          hedgeTimer = null
+        }
         attempt(backup, [primary], 0, { gate: race, leg: 'hedge' })
-      }, HEDGE_DELAY_MS)
+      }
+      race.setHedgeStarter(startHedgeLeg)
       streams.set(req.id, {
         abort: () => {
           if (hedgeTimer) clearTimeout(hedgeTimer)
