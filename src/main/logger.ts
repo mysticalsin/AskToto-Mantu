@@ -48,6 +48,7 @@ export type AuditEvent =
   | 'auth.signin_failed'
   | 'dust.token.refreshed'
   | 'dust.setup.timeout'
+  | 'dust.oauth.login'
   | 'key.set'
   | 'key.removed'
   | 'capture.screen'
