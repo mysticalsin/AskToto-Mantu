@@ -59,6 +59,7 @@ import {
   Settings2,
   Lock,
   Timer,
+  ListTree,
   type LucideIcon
 } from 'lucide-react'
 import { formatSavedTime, timeSavedFromTotals } from '@shared/time-saved'
@@ -85,7 +86,8 @@ import {
   type ShortcutFailure,
   type LocalModelSummary,
   type PlatformPermissions,
-  type UpdateCheckResult
+  type UpdateCheckResult,
+  type McpConnectionKind
 } from '@shared/ipc'
 import {
   PROVIDERS,
@@ -145,10 +147,6 @@ const LICENSE_UI_ENABLED: boolean = false
 // up the real field once @shared/ipc catches up, with no edit needed here.
 type SettingsWithAsrWebgpuFallback = PublicSettings & { asrWebgpuFallbackAt?: number | null }
 
-// The CRM disconnect handler answers `{ ok: false, error }` when the stored key file could not be
-// deleted, but the preload signature still types the result as `{ ok: boolean }` — read it through this
-// local extension (same approach as above) so the warning reaches the user with today's types.
-type McpCrmDisconnectResult = { ok: boolean; error?: string }
 
 /**
  * After disconnecting/removing the active provider, pick another provider that is actually ready
@@ -2091,32 +2089,64 @@ function CliIntegration({
 }
 
 // ---------------------------------------------------------------------------
-// Polo Pre-Sales CRM — MCP push (Settings → Mantu Intelligence)
+// MCP push connections — Polo Pre-Sales CRM + Plane "Book next steps"
+// (Settings → Mantu Intelligence). Generalized from the single BidStack-only
+// card: `kind` doubles as the connection id (v1 constraint — one connection
+// per kind, see McpConnectionSchema in shared/ipc.ts).
 // ---------------------------------------------------------------------------
 
-function BidstackCard({
+function McpConnectionCard({
   settings,
-  patch
+  patch,
+  kind,
+  defaultLabel,
+  title,
+  desc,
+  endpointPlaceholder,
+  apiKeyHint,
+  extraFields
 }: {
   settings: PublicSettings
   patch: (p: Partial<PublicSettings>) => void
+  kind: McpConnectionKind
+  defaultLabel: string
+  title: string
+  desc: string
+  endpointPlaceholder: string
+  apiKeyHint: string
+  /** Extra transport-header inputs beyond the bearer key (e.g. Plane's X-Workspace-slug). Empty for a
+   *  connection whose endpoint needs nothing beyond `Authorization: Bearer <key>` (BidStack). */
+  extraFields?: { key: string; label: string; placeholder: string }[]
 }): JSX.Element {
+  const connectionId = kind
+  const conn = settings.mcpConnections.find((c) => c.id === connectionId)
   const [open, setOpen] = useState(false)
-  const [endpointUrl, setEndpointUrl] = useState(settings.bidstackEndpointUrl || '')
+  const [endpointUrl, setEndpointUrl] = useState(conn?.endpointUrl || '')
   const [apiKey, setApiKey] = useState('')
+  const [extraValues, setExtraValues] = useState<Record<string, string>>(
+    Object.fromEntries((extraFields ?? []).map((f) => [f.key, conn?.extraHeaders?.[f.key] || '']))
+  )
   const [testState, setTestState] = useState<{
     phase: 'idle' | 'testing' | 'tested' | 'saving' | 'error'
     error: string | null
     tools: string[] | null
   }>({ phase: 'idle', error: null, tools: null })
 
-  const connected = settings.bidstackConnected
+  const connected = conn?.connected ?? false
   const endpointId = useId()
   const keyId = useId()
 
+  const extraHeaders = (): Record<string, string> =>
+    Object.fromEntries(Object.entries(extraValues).filter(([, v]) => v.trim()).map(([k, v]) => [k, v.trim()]))
+
   const testConnection = async (): Promise<void> => {
     setTestState({ phase: 'testing', error: null, tools: null })
-    const r = await window.toto.mcpCrmTestConnection({ endpointUrl: endpointUrl.trim(), apiKey: apiKey.trim() })
+    const r = await window.toto.mcpTestConnection({
+      connectionId,
+      endpointUrl: endpointUrl.trim(),
+      apiKey: apiKey.trim(),
+      extraHeaders: extraHeaders()
+    })
     if (r.ok) {
       setTestState({ phase: 'tested', error: null, tools: r.tools ?? [] })
     } else {
@@ -2126,12 +2156,27 @@ function BidstackCard({
 
   const saveConnection = async (): Promise<void> => {
     setTestState((s) => ({ ...s, phase: 'saving' }))
-    const r = await window.toto.mcpCrmSaveConnection({ endpointUrl: endpointUrl.trim(), apiKey: apiKey.trim() })
+    const r = await window.toto.mcpSaveConnection({
+      connectionId,
+      endpointUrl: endpointUrl.trim(),
+      apiKey: apiKey.trim(),
+      extraHeaders: extraHeaders(),
+      label: conn?.label || defaultLabel
+    })
     if (r.ok) {
       await patch({
-        bidstackEndpointUrl: endpointUrl.trim(),
-        bidstackConnected: true,
-        bidstackTools: r.tools ?? []
+        mcpConnections: [
+          ...settings.mcpConnections.filter((c) => c.id !== connectionId),
+          {
+            id: connectionId,
+            kind,
+            label: conn?.label || defaultLabel,
+            endpointUrl: endpointUrl.trim(),
+            connected: true,
+            tools: r.tools ?? [],
+            extraHeaders: extraHeaders()
+          }
+        ]
       })
       setApiKey('')
       setTestState({ phase: 'idle', error: null, tools: null })
@@ -2143,11 +2188,11 @@ function BidstackCard({
 
   const disconnect = async (): Promise<void> => {
     // MQA-091: main returns ok:false + an explanation when the on-disk key file survived the delete (a
-    // locked/read-only key-bidstack.bin). Discarding it told the user their credential was removed when
-    // it was not. The preload signature still types the result without `error`, so read it through this
-    // local extension — same pattern as SettingsWithAsrWebgpuFallback above.
-    const r = (await window.toto.mcpCrmDisconnect()) as McpCrmDisconnectResult
-    await patch({ bidstackConnected: false, bidstackEndpointUrl: '', bidstackTools: [] })
+    // locked/read-only key file). Discarding it told the user their credential was removed when it was not.
+    const r = await window.toto.mcpDisconnect({ connectionId })
+    await patch({
+      mcpConnections: settings.mcpConnections.map((c) => (c.id === connectionId ? { ...c, connected: false, tools: [] } : c))
+    })
     setEndpointUrl('')
     setApiKey('')
     if (!r.ok) {
@@ -2170,10 +2215,8 @@ function BidstackCard({
     >
       <div className="flex items-center justify-between gap-2">
         <div className="flex flex-col gap-0.5">
-          <span className="text-[12px] font-medium text-[color:var(--cl-foreground)]">Polo Pre-Sales · your CRM</span>
-          <span className="text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
-            Push meeting recaps to Polo Pre-Sales over its MCP server. Manual and review-first: nothing sends automatically.
-          </span>
+          <span className="text-[12px] font-medium text-[color:var(--cl-foreground)]">{title}</span>
+          <span className="text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">{desc}</span>
         </div>
         {connected ? (
           <span className={activePillStyle}>
@@ -2184,13 +2227,14 @@ function BidstackCard({
 
       {connected && !open ? (
         <div className="flex items-center gap-3">
-          <span className="min-w-0 flex-1 truncate text-[11px] text-[color:var(--cl-muted-foreground)]" title={settings.bidstackEndpointUrl}>
-            {settings.bidstackEndpointUrl}
+          <span className="min-w-0 flex-1 truncate text-[11px] text-[color:var(--cl-muted-foreground)]" title={conn?.endpointUrl}>
+            {conn?.endpointUrl}
           </span>
           <button
             type="button"
             onClick={() => {
-              setEndpointUrl(settings.bidstackEndpointUrl || '')
+              setEndpointUrl(conn?.endpointUrl || '')
+              setExtraValues(Object.fromEntries((extraFields ?? []).map((f) => [f.key, conn?.extraHeaders?.[f.key] || ''])))
               setOpen(true)
             }}
             className="no-drag cl-focus shrink-0 text-[11px] text-[color:var(--cl-muted-foreground)] hover:text-[color:var(--cl-foreground)]"
@@ -2223,7 +2267,7 @@ function BidstackCard({
                 setEndpointUrl(e.target.value)
                 setTestState({ phase: 'idle', error: null, tools: null })
               }}
-              placeholder="http://localhost:4001/mcp"
+              placeholder={endpointPlaceholder}
               className={'w-full ' + ctl}
             />
           </div>
@@ -2239,10 +2283,31 @@ function BidstackCard({
                 setApiKey(e.target.value)
                 setTestState({ phase: 'idle', error: null, tools: null })
               }}
-              placeholder="Bearer token from Polo Pre-Sales → Developer access → API keys (mcp + write scope)"
+              placeholder={apiKeyHint}
               className={'w-full ' + ctl}
             />
           </div>
+
+          {(extraFields ?? []).map((f) => {
+            const fieldId = `${keyId}-${f.key}`
+            return (
+              <div key={f.key} className="flex flex-col gap-1">
+                <label htmlFor={fieldId} className="text-[11px] font-medium text-[color:var(--cl-muted-foreground)]">
+                  {f.label}
+                </label>
+                <input
+                  id={fieldId}
+                  value={extraValues[f.key] || ''}
+                  onChange={(e) => {
+                    setExtraValues((s) => ({ ...s, [f.key]: e.target.value }))
+                    setTestState({ phase: 'idle', error: null, tools: null })
+                  }}
+                  placeholder={f.placeholder}
+                  className={'w-full ' + ctl}
+                />
+              </div>
+            )
+          })}
 
           {testState.phase === 'error' && testState.error && (
             <div className="flex items-start gap-1.5 text-[11px] text-[color:var(--cl-destructive)]">
@@ -2257,7 +2322,7 @@ function BidstackCard({
                 Connected.{' '}
                 {testState.tools.length > 0
                   ? `Found ${testState.tools.length} tool${testState.tools.length === 1 ? '' : 's'}: ${testState.tools.join(', ')}`
-                  : 'Polo Pre-Sales reported no tools for this key’s scope.'}
+                  : `${defaultLabel} reported no tools for this key’s scope.`}
               </span>
             </div>
           )}
@@ -2296,8 +2361,8 @@ function BidstackCard({
           </div>
           <span className="text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
             Request only the <code className="rounded bg-white/[0.08] px-1">mcp + write</code> scope. This is a
-            push-only integration. The endpoint depends on where your Polo Pre-Sales backend runs; there's no
-            default beyond the local-dev placeholder shown above.
+            push-only integration. The endpoint depends on where your {defaultLabel} backend runs; there's no
+            default beyond the placeholder shown above.
           </span>
         </div>
       )}
@@ -2305,8 +2370,8 @@ function BidstackCard({
   )
 }
 
-// Shared button styles for BidstackCard (module scope — CliIntegration's own primaryBtn/secondaryBtn are
-// local to that component and not exported, so this is a small deliberate duplicate, not a shared import).
+// Shared button styles for McpConnectionCard (module scope — CliIntegration's own primaryBtn/secondaryBtn
+// are local to that component and not exported, so this is a small deliberate duplicate, not a shared import).
 const primaryBtnStyle =
   'no-drag cl-focus flex items-center gap-1.5 rounded-[8px] bg-[var(--cl-primary)] px-3 py-1.5 text-[12px] font-medium text-white hover:opacity-90 disabled:opacity-50'
 const secondaryBtnStyle =
@@ -5940,7 +6005,34 @@ function IntelligenceTab({
         desc="Push meeting recaps to your pre-sales CRM. Manual and review-first: nothing sends automatically."
         icon={MessageSquare}
       >
-        <BidstackCard settings={settings} patch={patch} />
+        <McpConnectionCard
+          settings={settings}
+          patch={patch}
+          kind="bidstack"
+          defaultLabel="Polo Pre-Sales"
+          title="Polo Pre-Sales · your CRM"
+          desc="Push meeting recaps to Polo Pre-Sales over its MCP server. Manual and review-first: nothing sends automatically."
+          endpointPlaceholder="http://localhost:4001/mcp"
+          apiKeyHint="Bearer token from Polo Pre-Sales → Developer access → API keys (mcp + write scope)"
+        />
+      </Section>
+
+      <Section
+        title="Plane"
+        desc="Push meeting action items to Plane as work items — see Review → Book next steps. Manual and review-first: nothing sends automatically."
+        icon={ListTree}
+      >
+        <McpConnectionCard
+          settings={settings}
+          patch={patch}
+          kind="plane"
+          defaultLabel="Plane"
+          title="Plane · task management"
+          desc="Push action items from a meeting recap to Plane as work items. Manual and review-first: nothing sends automatically."
+          endpointPlaceholder="https://mcp.plane.so/http/api-key/mcp"
+          apiKeyHint="Personal or workspace access token from Plane → Settings → API tokens"
+          extraFields={[{ key: 'X-Workspace-slug', label: 'Workspace slug', placeholder: 'acme' }]}
+        />
       </Section>
     </div>
   )

@@ -174,7 +174,7 @@ describe('MQA-091 — a CRM disconnect that left the key file on disk is reporte
   const block = blockAfter('const disconnect = async ()', '\n  return (')
 
   it('checks r.ok and renders the handler’s error instead of closing the card silently', () => {
-    expect(block).toMatch(/const r = \(await window\.toto\.mcpCrmDisconnect\(\)\)/)
+    expect(block).toMatch(/const r = await window\.toto\.mcpDisconnect\(\{ connectionId \}\)/)
     expect(block).toMatch(/if \(!r\.ok\)/)
     expect(block).toMatch(/phase: 'error', error: r\.error/)
   })

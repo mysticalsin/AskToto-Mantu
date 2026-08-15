@@ -1073,14 +1073,22 @@ export function parseRecapMarkdown(markdown: string): RecapExport {
       .map((l) => l.replace(/^\s*[-*]\s+(\[[ xX]\]\s+)?/, '').trim()) // strip bullet + optional [ ]/[x] checkbox
       .filter((l) => l.length > 0)
 
-  const actionItems = bullets(sections['action items']).map((text) => {
+  // Best-effort trailing "by <phrase>" clause on the OWNER-STRIPPED text (e.g. "Send the deck by Friday"
+  // → dueDateText "Friday"). Never parsed into a Date — RECAP_PROMPT only asks the model for "an owner
+  // when stated", never a structured date, so this is display text only (see RecapExportSchema).
+  const splitDueDate = (text: string): { text: string; dueDateText: string | null } => {
+    const by = text.match(/^(.*\S)\s+by\s+(.+)$/i)
+    return by ? { text: by[1].trim(), dueDateText: by[2].trim() } : { text, dueDateText: null }
+  }
+
+  const actionItems = bullets(sections['action items']).map((raw) => {
     // "Do the thing (Alice)". Non-greedy text + a paren-free owner anchored to the end, so a stray inner
     // paren (e.g. "(Alice (boss))") degrades gracefully to owner:null rather than a wrong split.
-    const paren = text.match(/^(.*?\S)\s*\(([^()]+)\)\s*$/)
-    if (paren) return { text: paren[1].trim(), owner: paren[2].trim() }
-    const dash = text.match(/^(.*\S)\s+[—-]\s+(.+)$/) // "Do the thing — Alice" / "Do the thing - Alice"
-    if (dash) return { text: dash[1].trim(), owner: dash[2].trim() }
-    return { text, owner: null as string | null }
+    const paren = raw.match(/^(.*?\S)\s*\(([^()]+)\)\s*$/)
+    if (paren) return { ...splitDueDate(paren[1].trim()), owner: paren[2].trim() }
+    const dash = raw.match(/^(.*\S)\s+[—-]\s+(.+)$/) // "Do the thing — Alice" / "Do the thing - Alice"
+    if (dash) return { ...splitDueDate(dash[1].trim()), owner: dash[2].trim() }
+    return { ...splitDueDate(raw), owner: null as string | null }
   })
 
   // "## Title:" body — first line only, wrapping quotes/emphasis (models mirror the prompt's quoted

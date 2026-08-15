@@ -1,5 +1,13 @@
 import { describe, it, expect } from 'vitest'
-import { displayedRecapText, crmPushDone, markCrmPushed, type CrmPayload } from './Review'
+import {
+  displayedRecapText,
+  crmPushDone,
+  markCrmPushed,
+  type CrmPayload,
+  nextStepPushed,
+  markNextStepPushed,
+  type NextStepArgs
+} from './Review'
 
 // MQA-073 — after editing a past meeting's notes, Regenerate rewrote the file on disk while the screen
 // (and Copy Summary / Export JSON / Export PDF / the CRM payload) kept showing the old edited text.
@@ -69,5 +77,44 @@ describe('crmPushDone — an already-pushed meeting stays pushed across remounts
     const p = payload('umbrella renewal')
     markCrmPushed(p)
     expect(crmPushDone('idle', { ...p, summary: `${p.summary}\n- new action item` })).toBe(false)
+  })
+})
+
+// "Book next steps" — the per (action item × connection) push mirrors crmPushDone/markCrmPushed's own
+// session-memory dedupe, so navigating away and back to an already-pushed item/connection pair never
+// re-arms it and risks a duplicate task.
+describe('nextStepPushed — an already-pushed (item, connection) pair stays pushed across remounts', () => {
+  const args = (title: string): NextStepArgs => ({
+    title,
+    description: `${title}\n\nFrom meeting: Q3 sync (2026-06-12T09:00:00.000Z)`
+  })
+
+  it('arms the card until a push actually succeeds', () => {
+    const a = args('Send the deck')
+    expect(nextStepPushed('idle', 'plane', a)).toBe(false)
+    expect(nextStepPushed('sending', 'plane', a)).toBe(false)
+    expect(nextStepPushed('error', 'plane', a)).toBe(false)
+    expect(nextStepPushed('sent', 'plane', a)).toBe(true)
+  })
+
+  it('still reports pushed after the push state is reset (meeting re-opened, or Review remounted)', () => {
+    const a = args('Book the venue')
+    expect(nextStepPushed('idle', 'plane', a)).toBe(false)
+    markNextStepPushed('plane', a)
+    expect(nextStepPushed('idle', 'plane', a)).toBe(true)
+  })
+
+  it('keys on connectionId — the same item pushed to two connections is tracked independently', () => {
+    const a = args('Finalize copy')
+    markNextStepPushed('plane', a)
+    expect(nextStepPushed('idle', 'plane', a)).toBe(true)
+    expect(nextStepPushed('idle', 'clickup', a)).toBe(false)
+  })
+
+  it('keys on project_id — the same title/description to a different container is a different card', () => {
+    const withProject = { ...args('Draft the follow-up'), project_id: 'proj-1' }
+    markNextStepPushed('plane', withProject)
+    expect(nextStepPushed('idle', 'plane', withProject)).toBe(true)
+    expect(nextStepPushed('idle', 'plane', { ...withProject, project_id: 'proj-2' })).toBe(false)
   })
 })

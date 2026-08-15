@@ -175,10 +175,10 @@ export const IPC = {
   updateCheck: 'update:check', // manual Settings-driven check against the public releases feed
   recapPdf: 'recap:pdf',
   openMailDraft: 'mail:openDraft',
-  mcpCrmTestConnection: 'mcpCrm:testConnection',
-  mcpCrmSaveConnection: 'mcpCrm:saveConnection',
-  mcpCrmDisconnect: 'mcpCrm:disconnect',
-  mcpCrmPush: 'mcpCrm:push',
+  mcpTestConnection: 'mcp:testConnection',
+  mcpSaveConnection: 'mcp:saveConnection',
+  mcpDisconnect: 'mcp:disconnect',
+  mcpPush: 'mcp:push',
   licenseActivate: 'license:activate',
   licenseStatus: 'license:status',
   licenseGate: 'license:gate',
@@ -545,7 +545,18 @@ export const RecapExportSchema = z.object({
   topics: z.array(z.string()),
   keyQA: z.array(z.string()),
   decisions: z.array(z.string()),
-  actionItems: z.array(z.object({ text: z.string(), owner: z.string().nullable() })),
+  actionItems: z.array(
+    z.object({
+      text: z.string(),
+      owner: z.string().nullable(),
+      // Best-effort trailing "by <phrase>" as literally stated (e.g. "Friday", "June 5") — NOT parsed
+      // into a date (RECAP_PROMPT only asks the model for "an owner when stated", never a structured
+      // date). Shown in the "Book next steps" review UI and folded into the task description; never sent
+      // as a structured due-date wire field, since neither ClickUp's nor Plane's exact optional argument
+      // names for a due date are confirmed (see main/mcp/mcpClient.ts's header comment).
+      dueDateText: z.string().nullable()
+    })
+  ),
   openQuestions: z.array(z.string()),
   notableQuotes: z.array(z.string()),
   markdown: z.string()
@@ -661,6 +672,35 @@ const BundledLocalModelIdSchema = z.preprocess(
   (value) => (value === undefined || value === 'qwen3.5-2b' ? BUNDLED_LOCAL_MODEL_ID : value),
   z.string().refine((value) => value === BUNDLED_LOCAL_MODEL_ID, 'Unknown bundled local model.')
 )
+
+// ─── MCP connections (generalized from the single BidStack connection) ──────────────────────────────
+// 'clickup' is schema-reserved only: ClickUp's remote MCP server is OAuth-2.1-with-PKCE only (no bearer
+// API-key path), a materially different auth shape than mcpClient.ts implements today, so it ships as
+// its own scoped follow-up. Keeping the enum member here now means the persisted-settings shape never
+// has to change again when that follow-up lands (Build Law rule 7) — there's just no UI/IPC wiring for
+// it yet.
+export const McpConnectionKindSchema = z.enum(['bidstack', 'clickup', 'plane'])
+export type McpConnectionKind = z.infer<typeof McpConnectionKindSchema>
+
+export const McpConnectionSchema = z.object({
+  // v1 constraint: exactly one connection per kind, so id === kind. Kept as its own field (not derived)
+  // because the id is what secrets/IPC key off — a future multi-workspace case (two Plane workspaces)
+  // changes id generation without touching every call site that reads `kind`.
+  id: z.string().min(1),
+  kind: McpConnectionKindSchema,
+  // Display name used in UI copy and classifyError() messages — replaces the hardcoded "Polo Pre-Sales"
+  // string literal in mcpClient.ts. Defaults to a per-kind label (e.g. "Plane") but is user-editable.
+  label: z.string().min(1).max(60),
+  endpointUrl: z.string().default(''),
+  connected: z.boolean().default(false),
+  tools: z.array(z.string()).default([]),
+  // Transport-level extra headers beyond `Authorization: Bearer <key>` — Plane's hosted PAT endpoint
+  // requires `X-Workspace-slug` alongside the bearer token. Generic (not `planeWorkspaceSlug`) because
+  // it's a mechanical transport concern, not a Plane-specific business field, and BidStack already
+  // proves the "zero extra headers" case — two real shapes justify the generalization.
+  extraHeaders: z.record(z.string(), z.string()).default({})
+})
+export type McpConnection = z.infer<typeof McpConnectionSchema>
 
 export const BaseSettingsSchema = z.object({
   // Default provider: NVIDIA NIM (Tony, 2026-08-14) — fast, generous free tier, hedge-raced against a
@@ -872,16 +912,15 @@ export const BaseSettingsSchema = z.object({
   dustTokenMintedAt: z.number().default(0),
   // Whether the user has acknowledged the CLI integration notice banner.
   cliNoticeAck: z.boolean().default(false),
-  // BidStack 360° CRM — MCP push (Settings → CLI Integration). The API key itself is NOT stored here;
-  // it goes through the same encrypted-file mechanism as provider keys, via main/mcp/bidstackSecrets.ts
-  // (kept out of the ProviderId union — a CRM credential, not an LLM provider). Never hardcode a default
-  // endpoint: BidStack's own Settings UI warns its local fallback is dev-only, so the user must supply
-  // wherever they actually deploy/run BidStack's backend.
-  bidstackEndpointUrl: z.string().default(''),
-  bidstackConnected: z.boolean().default(false),
-  // Tool names BidStack's MCP discovery returned at the last successful connect/save — populates the
-  // "Push to CRM" tool picker in Review.tsx so we never guess/hardcode BidStack's tool names.
-  bidstackTools: z.array(z.string()).default([]),
+  // Named MCP connections — CRM (BidStack) and task managers (Plane; ClickUp is schema-reserved only,
+  // see McpConnectionKindSchema). One connection per kind (id === kind in v1). API keys themselves are
+  // NOT stored here; they go through the same encrypted-file mechanism as provider keys, via
+  // main/mcp/mcpSecrets.ts (kept out of the ProviderId union — these are push credentials, not LLM
+  // providers). Never hardcode a default endpoint: BidStack's own Settings UI warns its local fallback
+  // is dev-only, so the user must supply wherever they actually deploy/run their backend. Replaces the
+  // old single-connection bidstackEndpointUrl/bidstackConnected/bidstackTools fields — see
+  // migrateLegacyBidstackConnection in main/store.ts for how an existing user's data carries forward.
+  mcpConnections: z.array(McpConnectionSchema).max(10).default([]),
   // Métis Local uses the single model bundled in every installer. The preprocess is a persisted-settings
   // migration for releases that offered qwen3.5-2b; unknown ids fail validation and fall back safely in
   // main/store.ts instead of pointing llama-server at a file that can never exist.
@@ -1216,9 +1255,7 @@ export const DEFAULT_SETTINGS: Settings = {
   cliConnected: {},
   dustTokenMintedAt: 0,
   cliNoticeAck: false,
-  bidstackEndpointUrl: '',
-  bidstackConnected: false,
-  bidstackTools: [],
+  mcpConnections: [],
   localLlm: {
     enabled: true,
     modelId: BUNDLED_LOCAL_MODEL_ID,
@@ -1614,37 +1651,52 @@ export interface BrainEntityNamesResult {
   names: string[]
 }
 
-// ─── BidStack CRM (MCP push) ───────────────────────────────────────────────
+// ─── MCP connections (CRM push + "Book next steps") ────────────────────────
+// Generalized from the single BidStack-only mcpCrm:* IPC channels. `connectionId` identifies WHICH
+// mcpConnections entry a call targets (id === kind in v1 — see McpConnectionSchema); main looks the
+// connection up in settings.mcpConnections rather than trusting an endpoint/key the renderer hands it,
+// same defense-in-depth as the old single-connection handlers.
 
-export const McpCrmTestConnectionPayloadSchema = z.object({
-  endpointUrl: z.string().min(1, 'Enter the Polo Pre-Sales MCP endpoint URL.'),
-  apiKey: z.string().min(1, 'Enter the Polo Pre-Sales API key.')
+export const McpTestConnectionPayloadSchema = z.object({
+  connectionId: z.string().min(1, 'Missing MCP connection id.'),
+  endpointUrl: z.string().min(1, 'Enter the MCP endpoint URL.'),
+  apiKey: z.string().min(1, 'Enter the API key.'),
+  extraHeaders: z.record(z.string(), z.string()).default({})
 })
-export type McpCrmTestConnectionPayload = z.infer<typeof McpCrmTestConnectionPayloadSchema>
+export type McpTestConnectionPayload = z.infer<typeof McpTestConnectionPayloadSchema>
 
-export const McpCrmSaveConnectionPayloadSchema = McpCrmTestConnectionPayloadSchema
-export type McpCrmSaveConnectionPayload = z.infer<typeof McpCrmSaveConnectionPayloadSchema>
+export const McpSaveConnectionPayloadSchema = McpTestConnectionPayloadSchema.extend({
+  label: z.string().min(1, 'Name this connection.').max(60)
+})
+export type McpSaveConnectionPayload = z.infer<typeof McpSaveConnectionPayloadSchema>
 
-// Push args are always a small, flat object built by Review.tsx (title/date/summary strings) — bound the
-// shape so a tampered/buggy caller can't hand the MCP tool call an unbounded or deeply-nested payload.
-const McpCrmArgValueSchema = z.union([z.string().max(50_000), z.number(), z.boolean(), z.null()])
-export const McpCrmPushPayloadSchema = z.object({
-  toolName: z.string().min(1, 'Choose a Polo Pre-Sales tool to push to.'),
+export const McpDisconnectPayloadSchema = z.object({
+  connectionId: z.string().min(1, 'Missing MCP connection id.')
+})
+export type McpDisconnectPayload = z.infer<typeof McpDisconnectPayloadSchema>
+
+// Push args are always a small, flat object built by Review.tsx (title/date/summary strings, or a task
+// title/description) — bound the shape so a tampered/buggy caller can't hand the MCP tool call an
+// unbounded or deeply-nested payload.
+const McpArgValueSchema = z.union([z.string().max(50_000), z.number(), z.boolean(), z.null()])
+export const McpPushPayloadSchema = z.object({
+  connectionId: z.string().min(1, 'Missing MCP connection id.'),
+  toolName: z.string().min(1, 'Choose an MCP tool to push to.'),
   args: z
-    .record(z.string(), McpCrmArgValueSchema)
+    .record(z.string(), McpArgValueSchema)
     .refine((a) => Object.keys(a).length <= 20, { message: 'Too many fields in the push payload.' })
 })
-export type McpCrmPushPayload = z.infer<typeof McpCrmPushPayloadSchema>
+export type McpPushPayload = z.infer<typeof McpPushPayloadSchema>
 
-/** Result of testing or saving a BidStack MCP connection — mirrors the SDK's listTools() discovery. */
-export interface McpCrmConnectResult {
+/** Result of testing or saving an MCP connection — mirrors the SDK's listTools() discovery. */
+export interface McpConnectResult {
   ok: boolean
   error?: string
   tools?: string[]
 }
 
-/** Result of pushing to a BidStack MCP tool. */
-export interface McpCrmPushResult {
+/** Result of pushing to an MCP tool. */
+export interface McpPushResult {
   ok: boolean
   error?: string
   result?: unknown
