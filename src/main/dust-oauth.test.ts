@@ -213,7 +213,7 @@ describe('dust-oauth', () => {
     // throw was swallowed by the surrounding catch, so a refresh that had genuinely SUCCEEDED was
     // reported as a failure, the new access token was never stored, and the old (already burned) refresh
     // token stayed on disk — leaving the session unrecoverable until a full re-login.
-    it('succeeds when the server rotates no refresh token, keeping the existing one', async () => {
+    it('MQA-136: succeeds when the server rotates no refresh token, keeping the existing one', async () => {
       completeDustOAuthLogin({ accessToken: 'old-at', refreshToken: 'old-rt', region: 'us-central1', workspaceId: 'ws-1' })
       vi.stubGlobal('fetch', vi.fn(async () => jsonResponse({ access_token: 'new-at' })))
       const r = await refreshDustOAuthSession()
@@ -222,7 +222,7 @@ describe('dust-oauth', () => {
       expect(getDustRefreshToken()).toBe('old-rt') // kept, not wiped
     })
 
-    it('treats a 200 with no access token as a failure rather than storing an empty credential', async () => {
+    it('MQA-136: treats a 200 with no access token as a failure rather than storing an empty credential', async () => {
       completeDustOAuthLogin({ accessToken: 'old-at', refreshToken: 'old-rt', region: 'us-central1', workspaceId: 'ws-1' })
       vi.stubGlobal('fetch', vi.fn(async () => jsonResponse({ refresh_token: 'new-rt' })))
       const r = await refreshDustOAuthSession()

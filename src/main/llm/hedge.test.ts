@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { describe, it, expect, vi } from 'vitest'
 import { HedgeRace } from './hedge'
 
@@ -204,5 +206,37 @@ describe('HedgeRace', () => {
       race.abortAll()
       expect(cleanup).toHaveBeenCalledTimes(1)
     })
+  })
+})
+
+/**
+ * MQA-134 — the wiring half of the race contract, pinned against the real source. index.ts boots Electron
+ * at import time and attempt()/onDone are closures inside the askStart handler, so there is no
+ * index.test.ts (same rationale as ask-freshness.contract.test.ts).
+ *
+ * The defect: a cloud/CLI leg that finished with ZERO tokens and had no failover target fell through to
+ * the success path — under a race that deleted the COMBINED abort registration while the other leg was
+ * still streaming (so a later Cancel found no entry and the live stream ran on, billing), and ended the
+ * ask with a blank streamDone.
+ */
+describe('MQA-134: a zero-token leg with nowhere left to fail over must not end the whole race', () => {
+  const indexSrc = readFileSync(join(__dirname, '..', 'index.ts'), 'utf8')
+
+  it('gates that terminal path through markDead instead of falling into streamDone', () => {
+    const at = indexSrc.indexOf("if (!gotToken && provider !== 'local' && failover(")
+    expect(at, 'the zero-token failover attempt was not found').toBeGreaterThan(-1)
+    // Immediately after the failover attempt, before the local branch and before any success handling.
+    const body = indexSrc.slice(at, at + 1400)
+    expect(body).toMatch(/if \(!gotToken && provider !== 'local'\) \{/)
+    expect(body).toMatch(/race\.gate\.markDead\(race\.leg\) !== 'surface'\) return/)
+    // When it IS terminal the user gets a real error, never a blank "done".
+    expect(body).toMatch(/IPC\.streamError/)
+  })
+
+  it('only surrenders the shared streams entry once the race is genuinely over', () => {
+    const at = indexSrc.indexOf("if (!gotToken && provider !== 'local') {")
+    const body = indexSrc.slice(at, at + 700)
+    // The markDead bail-out precedes the delete, so a suppressed leg never touches the combined handle.
+    expect(body.indexOf("markDead")).toBeLessThan(body.indexOf('streams.delete(req.id)'))
   })
 })

@@ -155,7 +155,7 @@ describe('mcpSecrets — MCP connection API key storage, keyed by connectionId',
     // invariant holds for any caller.
     const hostile = ['../../secret-key', '..\\..\\secret-key', 'a/b', 'a\\b', '', '.', '..', 'x'.repeat(41)]
 
-    it('rejects a traversing or malformed id on every read and write path', async () => {
+    it('MQA-138: rejects a traversing or malformed id on every read and write path', async () => {
       const m = await import('./mcpSecrets')
       for (const id of hostile) {
         expect(() => m.setMcpApiKey(id, 'v'), `setMcpApiKey(${JSON.stringify(id)})`).toThrow(/unsafe mcp connection id/i)
