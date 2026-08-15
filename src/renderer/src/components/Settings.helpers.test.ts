@@ -59,4 +59,22 @@ describe('searchSettingsTabs — settings search must find real section titles, 
     expect(searchSettingsTabs('')).toEqual([])
     expect(searchSettingsTabs('zzz-not-a-real-setting')).toEqual([])
   })
+
+  // Caught by driving the real app: a `<Section title="…">` added without its title landing in the
+  // owning tab's `keywords` is invisible to settings search (the INVARIANT documented above TABS).
+  // Both task-manager connectors and the resilience card shipped that way.
+  it('finds every connector section on the Intelligence tab by its exact title', () => {
+    for (const title of ['Polo Pre-Sales', 'Plane', 'ClickUp']) {
+      expect(searchSettingsTabs(title).map((m) => m.id), `search "${title}"`).toContain('intelligence')
+    }
+  })
+
+  it('finds "Backups & limits" (AI tab) and the hedge toggle that lives inside it', () => {
+    expect(searchSettingsTabs('Backups & limits').map((m) => m.id)).toContain('ai')
+    expect(searchSettingsTabs('Race a backup provider').map((m) => m.id)).toContain('ai')
+  })
+
+  it('finds the default NVIDIA NIM provider by name', () => {
+    expect(searchSettingsTabs('NVIDIA').map((m) => m.id)).toContain('ai')
+  })
 })

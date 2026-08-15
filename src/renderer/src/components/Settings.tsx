@@ -4606,7 +4606,8 @@ const TABS: {
     keywords: [
       'provider', 'api key', 'anthropic', 'openai', 'dust', 'claude code', 'codex', 'local ai',
       'thinking mode', 'model', 'other providers', 'model provider', 'cli integration',
-      'fallback', 'indexing fallback', 'offline indexing'
+      'fallback', 'indexing fallback', 'offline indexing',
+      'backups & limits', 'nvidia', 'nim', 'race a backup provider', 'hedge'
     ]
   },
   {
@@ -4637,7 +4638,10 @@ const TABS: {
     label: 'Intelligence',
     icon: MantuMark,
     desc: 'Your second brain: meetings, wiki, CRM, knowledge graph.',
-    keywords: ['mantu intelligence', 'meetings & follow-up', 'published wiki', 'polo pre-sales', 'crm', 'knowledge graph']
+    keywords: [
+      'mantu intelligence', 'meetings & follow-up', 'published wiki', 'polo pre-sales', 'crm',
+      'knowledge graph', 'plane', 'clickup', 'task management', 'book next steps', 'action items'
+    ]
   },
   {
     id: 'privacy',
