@@ -75,13 +75,47 @@ export class HedgeRace {
     this.hedgeMayStart = false
   }
 
+  /** How the dispatcher starts the backup leg early. Registered once, alongside the HEDGE_DELAY_MS timer
+   *  that is the normal trigger. */
+  private hedgeStarter: (() => void) | null = null
+  private hedgeStarted = false
+
+  /** Wire up the backup leg's launcher so markDead() can pull it forward (see startHedgeEarly below). */
+  setHedgeStarter(fn: () => void): void {
+    this.hedgeStarter = fn
+  }
+
+  /** The backup leg is now running — whether pulled forward or fired by the normal timer. Keeps the two
+   *  triggers from ever starting it twice. */
+  markHedgeStarted(): void {
+    this.hedgeStarted = true
+  }
+
+  /**
+   * Start the backup NOW instead of waiting out the rest of HEDGE_DELAY_MS. Called when the primary leg
+   * is already dead: the delay exists to give a possibly-slow primary a head start, and a dead primary
+   * has nothing left to win with, so waiting only adds latency. Found by physically driving the app —
+   * a misconfigured primary died at ~0.4s but the answer still took 3.7s, because the backup sat idle
+   * until the timer. No-op once the hedge has started, the race is decided, or no backup is available.
+   */
+  private startHedgeEarly(): void {
+    if (this.hedgeStarted || this.winner || !this.hedgeMayStart || !this.hedgeStarter) return
+    this.hedgeStarted = true
+    this.hedgeStarter()
+  }
+
   /** A leg's retry/failover cascade is fully exhausted (no more options for THIS leg). Returns 'surface'
    *  only once every leg that could still answer — including a backup not yet started — is confirmed
-   *  dead; otherwise 'suppress', so the caller swallows its own error and lets the other leg keep racing. */
+   *  dead; otherwise 'suppress', so the caller swallows its own error and lets the other leg keep racing.
+   *  When the primary is the one that died and the backup hasn't started yet, the backup is pulled
+   *  forward rather than left waiting on the timer. */
   markDead(leg: HedgeLeg): 'surface' | 'suppress' {
     this.deadLegs.add(leg)
     const otherLeg: HedgeLeg = leg === 'primary' ? 'hedge' : 'primary'
     const otherStillViable = otherLeg === 'hedge' ? this.hedgeMayStart && !this.deadLegs.has('hedge') : !this.deadLegs.has('primary')
+    // Pull the backup forward BEFORE reporting 'suppress' — 'suppress' is precisely the promise that some
+    // other leg will still answer, so that leg had better actually be running.
+    if (leg === 'primary' && otherStillViable) this.startHedgeEarly()
     return otherStillViable ? 'suppress' : 'surface'
   }
 
