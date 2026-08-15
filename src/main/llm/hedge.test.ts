@@ -83,10 +83,10 @@ describe('HedgeRace', () => {
     })
   })
 
-  // Found by physically driving the app: a misconfigured primary died at ~0.4s but the answer still took
-  // 3.7s, because the backup sat idle until HEDGE_DELAY_MS. 'suppress' promises another leg will answer,
-  // so that leg has to actually be running.
-  describe('early hedge start — a dead primary must not leave the backup waiting on the timer', () => {
+  // MQA-132: found by physically driving the app — a misconfigured primary died at ~0.4s but the answer
+  // still took 3.7s, because the backup sat idle until HEDGE_DELAY_MS. 'suppress' promises another leg
+  // will answer, so that leg has to actually be running.
+  describe('MQA-132: early hedge start — a dead primary must not leave the backup waiting on the timer', () => {
     it('pulls the backup forward the moment the primary dies', () => {
       const race = new HedgeRace()
       const start = vi.fn()

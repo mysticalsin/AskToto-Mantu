@@ -91,7 +91,7 @@ silently wrong · `medium` = degraded or confusing in a real scenario · `low` =
 | MQA-062 | A `claude logout` / `codex logout` is never detected — cliConnected stays true forever, so Métis keeps reporting the CLI provider as ready | ask a question with Claude Code / Codex CLI as the provider  | medium | OPEN | — | degrade-ux-detect |
 | MQA-063 | FFmpeg spawn failure during the duration probe escapes as an uncaught main-process exception (fatal crash dialog) instead of a failed import | import an audio/video recording (every import, ffmpeg path) | medium | FIXED | `src/main/ffmpeg-decoder.test.ts` | import-audio |
 | MQA-064 | Saving the CRM connection wedges the Settings card in "saving" forever when the key write throws — the user-facing error is written but never shown | connect Polo Pre-Sales (Settings → Mantu Intelligence → Set  | medium | FIXED | `src/main/index-audit-fixes.contract.test.ts` | mcp-crm-agenda |
-| MQA-065 | CONNECT/CALL_TIMEOUT_MS never bound the actual MCP request — a stalled tool call blocks for 60s and is then reported as "failed for an unknown reason" | test the CRM connection / push a recap to the CRM | medium | FIXED | `src/main/mcp/bidstackClient.audit.test.ts` | mcp-crm-agenda |
+| MQA-065 | CONNECT/CALL_TIMEOUT_MS never bound the actual MCP request — a stalled tool call blocks for 60s and is then reported as "failed for an unknown reason" | test the CRM connection / push a recap to the CRM | medium | FIXED | `src/main/mcp/mcpClient.audit.test.ts` | mcp-crm-agenda |
 | MQA-066 | With requireAuth enforced but SSO unconfigured, SignInWall tells the user to open Settings → Account — a screen the wall itself makes unreachable | first launch on an enterprise-managed machine (managed-confi | medium | OPEN | — | onboarding-license-auth |
 | MQA-067 | One-click "Mantu Dust" setup connects, but onboarding's readiness row never notices and mislabels it as a missing API key | first-run onboarding — choosing "Mantu Dust · One-click setu | medium | FIXED | `src/renderer/src/components/Onboarding.helpers.test.ts` | onboarding-license-auth |
 | MQA-068 | licenseGateEnabled is a complete no-op — the shipped enterprise policy turns on licensing that has no gate, no activation UI, and no heartbeat | enterprise rollout with device licensing (managed-config lic | medium | OPEN | — | onboarding-license-auth |
@@ -158,6 +158,9 @@ silently wrong · `medium` = degraded or confusing in a real scenario · `low` =
 | MQA-128 | redact.ts's generic label:value secret redactor never matched SINGLE-quoted values, so a single-quoted password/token reached the cloud provider / crash log unredacted | secret redaction before cloud | major | FIXED | `src/shared/redact.test.ts` | 178-agent deep audit (2026-08-10) |
 | MQA-129 | addTeamTranscriptFolder / removeTeamTranscriptFolder IPC handlers were missing the requireAuth() gate every other settings-writing handler has, letting an unauthenticated caller add a folder to the brain's ingestion set | IPC auth · team transcript folders | major | FIXED | `src/main/audit-fixes-2026-08-10.contract.test.ts` | 178-agent deep audit (2026-08-10) |
 | MQA-130 | requireProvider() read settings.localFallbackReady but omitted it from the useCallback deps (stale gate), and the Summarize screen-eligibility check omitted it entirely — so a zero-cloud Local-AI-fallback user got a false "can't summarize screen" | renderer local-fallback gating | major | FIXED | `src/main/audit-fixes-2026-08-10.contract.test.ts` | 178-agent deep audit (2026-08-10) |
+| MQA-131 | Three Settings sections (Plane, ClickUp, Backups & limits) were never added to their tab's `keywords`, so settings search returned nothing for "Plane", "ClickUp", "NVIDIA" or "Race a backup provider" — the TABS INVARIANT says a Section is only findable if its exact title is a keyword | settings search | minor | FIXED | `src/renderer/src/components/Settings.helpers.test.ts` | physical CDP QA (2026-08-15) |
+| MQA-132 | The hedge race left the backup leg idle until HEDGE_DELAY_MS even when the primary leg was ALREADY dead, so a misconfigured primary that failed at ~0.4s still took 3673ms to answer instead of ~850ms — markDead()'s 'suppress' promises another leg will answer, but nothing had started it | ask a question with a misconfigured/unreachable primary provider | major | FIXED | `src/main/llm/hedge.test.ts` | physical CDP QA (2026-08-15) |
+
 
 ## Details
 
@@ -3057,3 +3060,59 @@ Net: the architectural claim (cache never invalidates) is real, but the concrete
 > isolated running app instance over CDP across routing, brain, and settings domains. It confirmed the
 > shipped features work (zero-key on-device suggest/summary/vision, degradation, quick actions, meetings,
 > indexing, time-saved, settings/security) and found 6 real issues.
+
+### MQA-131 — new Settings sections are invisible to settings search
+
+**Repro.** Open Settings, type `Plane` (or `ClickUp`, `NVIDIA`, `Race a backup provider`) into the
+search box. Expected: the tab holding that card. Actual: no result, even though the card renders on the
+Intelligence tab (Plane/ClickUp) or the AI tab (Backups & limits).
+
+**Intended behavior**, quoted from the code that defines the rule —
+`src/renderer/src/components/Settings.tsx`, the comment above `TABS`: "INVARIANT: ... a Section's exact
+title is only findable if some keyword in its tab's list is at least that long and contains it verbatim.
+Whenever a `<Section title=\"...\">` is added or renamed under a tab, add that exact title text to this
+tab's `keywords` too."
+
+**Actual behavior.** The `intelligence` tab's keyword list carried only
+`['mantu intelligence','meetings & follow-up','published wiki','polo pre-sales','crm','knowledge graph']`
+while rendering `<Section title="Plane">` and `<Section title="ClickUp">`; the `ai` tab rendered
+`<Section title="Backups & limits">` (via `ResilienceSection`) with no matching keyword either. The
+Backups & limits gap predates this session; Plane/ClickUp arrived with the task-manager connectors.
+
+**Why unit tests missed it.** `searchSettingsTabs` had tests, but only for sections that were already
+listed — nothing asserted the invariant across the sections that actually render. Found by driving the
+real renderer over CDP and searching for the cards I had just watched render.
+
+**Fix.** Added the missing titles to both tabs' keywords, plus `searchSettingsTabs` cases naming MQA-131
+that assert every connector card and the resilience section are findable, so a future Section added
+without its keyword breaks a test instead of shipping unsearchable.
+
+### MQA-132 — a dead primary leaves the hedge backup waiting out the full delay
+
+**Repro.** Configure the primary provider so it cannot run (here: `provider: 'custom'` with
+`customBaseUrl: https://10.255.255.1/v1`, a non-routable address, and no model set), keep a second
+working provider configured, leave `resilience.hedge` on, and ask a base-tier question. Expected: the
+backup answers about as fast as it normally would. Actual: the answer took **3673 ms** — the primary leg
+died at ~0.4s, then nothing happened until the `HEDGE_DELAY_MS` timer fired at 3000ms and finally started
+the backup.
+
+**Intended behavior**, from `src/main/llm/hedge.ts`'s own contract for `markDead`: it returns `'suppress'`
+only while some other leg "could still answer", i.e. suppressing this leg's error is a promise that
+another leg will produce the answer instead.
+
+**Actual behavior.** `markDead('primary')` returned `'suppress'` (correctly — the hedge leg had not been
+ruled out) but nothing started the hedge leg early, so the promise was only honoured once the delay timer
+happened to fire. `HEDGE_DELAY_MS` exists to give a *slow* primary a head start; a primary that is already
+dead has nothing left to win with, so the remaining delay is pure added latency.
+
+**Why unit tests missed it.** Every `HedgeRace` unit test asserted the surface/suppress accounting, which
+was correct in isolation; the defect is that the dispatcher had no path to act on it early. It only shows
+up as wall-clock latency in a running app. Found by physically driving the app over CDP with a
+deliberately stalled primary.
+
+**Fix.** `HedgeRace` gained `setHedgeStarter`/`markHedgeStarted` and now pulls the backup forward from
+`markDead('primary')`; `main/index.ts` puts the delay timer and the pull-forward behind one
+`startHedgeLeg()` launcher so neither can start the backup twice. Same scenario after the fix: **854 ms**,
+one `streamMeta` leg, no error surfaced. Healthy-primary asks are unchanged (512-1023 ms against live
+NVIDIA NIM; the backup never starts). Regression tests naming MQA-132 cover early start, double-start
+from both triggers, an already-won race, an unavailable backup, and a dying hedge leg.
