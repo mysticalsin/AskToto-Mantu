@@ -78,6 +78,32 @@ describe('settings:set — main-owned keys are not renderer-writable', () => {
     }
   })
 
+  // Every step of the Dust device-login sequence writes or advances credential state, so gating only the
+  // FIRST one is decorative: a caller can mint its own WorkOS device code out-of-band, skip begin, and
+  // drive poll -> pickWorkspace to install attacker-controlled Dust tokens as this user's credential.
+  it('every Dust login handler gates on requireAuth(), not just the begin step', () => {
+    for (const channel of ['dustLoginBegin', 'dustLoginPoll', 'dustLoginPickWorkspace']) {
+      const start = indexSrc.indexOf(`ipcMain.handle(IPC.${channel}`)
+      expect(start, `${channel} handler not found`).toBeGreaterThan(-1)
+      const body = indexSrc.slice(start, start + 700)
+      expect(body, `${channel} must call assertMainWindow`).toMatch(/assertMainWindow\(e\)/)
+      expect(body, `${channel} must gate on requireAuth`).toMatch(/if \(!requireAuth\(\)\)/)
+    }
+  })
+
+  // Dust's credential is a PAIR (provider key + WorkOS refresh token in its own file). Clearing only the
+  // key left dust-refresh.bin on disk, so a later refresh could silently re-mint a working key and
+  // reconnect an integration the user had explicitly removed.
+  it('clearing the Dust key also clears its refresh token, and reports a file that survived', () => {
+    const start = indexSrc.indexOf('ipcMain.handle(IPC.clearApiKey')
+    expect(start).toBeGreaterThan(-1)
+    const body = indexSrc.slice(start, start + 1600)
+    expect(body).toMatch(/parsed\.provider === 'dust'/)
+    expect(body).toMatch(/clearDustRefreshToken\(\)/)
+    // The result must carry the bad news rather than reporting a clean removal.
+    expect(body).toMatch(/dustRefreshRemoved/)
+  })
+
   it('the only writers of mcpConnections are main-side handlers that re-verify the connection first', () => {
     // Each of these persists in MAIN after connectMcp()/runClickupOAuth() succeeded, which is why the
     // renderer never needs to write the key itself.

@@ -56,7 +56,11 @@ interface DeviceAuthorizeResponse {
 
 interface TokenSuccess {
   access_token: string
-  refresh_token: string
+  // OPTIONAL per RFC 6749 §5.1: an authorization server may omit refresh_token from a refresh response
+  // when it is not rotating it. Typed honestly so callers must handle its absence — see
+  // refreshDustOAuthSession, where assuming it was always present turned a SUCCESSFUL refresh into a
+  // permanently dead session.
+  refresh_token?: string
 }
 
 interface TokenError {
@@ -275,9 +279,23 @@ export async function refreshDustOAuthSession(): Promise<DustOAuthRefreshResult>
         lastRefresh = { at: Date.now(), result: r }
         return r
       }
+      // A 200 with no usable access_token is not a success — treat it as a normal failure rather than
+      // storing an empty credential that fails confusingly on the next ask.
+      if (typeof data.access_token !== 'string' || !data.access_token.trim()) {
+        const r = { ok: false, error: 'Dust returned no access token.' }
+        lastRefresh = { at: Date.now(), result: r }
+        return r
+      }
       // Store the NEW refresh token before reporting success — WorkOS refresh tokens are single-use, so a
       // crash between "got the new one" and "stored it" must not leave the OLD (now-burned) token behind.
-      setDustRefreshToken(data.refresh_token)
+      // Only when one was actually returned: refresh_token is OPTIONAL in a refresh response, and passing
+      // undefined here threw inside setDustRefreshToken's token.trim(). The throw was swallowed by the
+      // catch below, so a refresh that had genuinely SUCCEEDED was reported as a failure, the new access
+      // token was never stored, and the old (already burned) refresh token stayed on disk — leaving the
+      // Dust session permanently unrecoverable until a full re-login. Keeping the existing token is
+      // correct when the server chose not to rotate it.
+      const rotated = typeof data.refresh_token === 'string' ? data.refresh_token.trim() : ''
+      if (rotated) setDustRefreshToken(rotated)
       setApiKey('dust', data.access_token)
       setSettings({ dustTokenMintedAt: Date.now() })
       const r = { ok: true, token: data.access_token }
