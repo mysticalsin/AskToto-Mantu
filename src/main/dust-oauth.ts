@@ -1,7 +1,17 @@
 import { shell } from 'electron'
-import { DustAPI } from '@dust-tt/client'
+import { DustAPI, type LoggerInterface } from '@dust-tt/client'
 import { mainLog, auditLog } from './logger'
 import { setApiKey, setDustRefreshToken, getDustRefreshToken, clearDustRefreshToken, setSettings } from './store'
+
+// DustAPI's LoggerInterface is pino-shaped ((args, message) => void) — electron-log's mainLog takes
+// (message, ...args) instead, so it can't be passed directly. 'trace' has no electron-log equivalent;
+// mapped to 'silly', its closest verbosity level.
+const dustApiLogger: LoggerInterface = {
+  error: (args, message) => mainLog.warn(message, args),
+  warn: (args, message) => mainLog.warn(message, args),
+  info: (args, message) => mainLog.info(message, args),
+  trace: (args, message) => mainLog.silly(message, args)
+}
 
 /**
  * Native Dust sign-in — no `@dust-tt/dust-cli`, no system Node.js, no terminal window.
@@ -181,7 +191,7 @@ export async function listDustWorkspacesForToken(
     const api: any = new DustAPI(
       { url: regionToBaseUrl(region) },
       { apiKey: accessToken, workspaceId: 'me' },
-      mainLog
+      dustApiLogger
     )
     const me = await api.me()
     if (me?.isErr?.()) return { ok: false, error: me.error?.message || 'Could not fetch your Dust workspaces.' }
