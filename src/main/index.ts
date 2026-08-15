@@ -2065,6 +2065,19 @@ function registerIpc(): void {
     for (const k of ['licenseKey', 'licenseCompanyName', 'licenseSeatCap', 'licenseExpiresAt', 'licenseValid', 'licenseLastValidatedAt']) {
       if (k in p) delete (p as Record<string, unknown>)[k]
     }
+    // MCP connection STATE is main-owned for the same reason. IPC.mcpPush deliberately reads the endpoint
+    // from saved settings rather than the payload so "a compromised renderer can't redirect the push to an
+    // attacker-controlled MCP endpoint" (see that handler's own comment) — but a generic settings patch
+    // could rewrite mcpConnections[].endpointUrl and defeat exactly that pin, sending the stored bearer
+    // token (a BidStack/Plane key, or a ClickUp OAuth access token) to any host that passes the SSRF
+    // guard. Every legitimate write already happens in main, inside a handler that re-verifies the
+    // connection first: mcpSaveConnection, mcpClickupConnect and mcpDisconnect. The renderer's own
+    // patch({ mcpConnections }) calls are redundant echoes of what main just persisted, and state.ts's
+    // patch() re-seeds React state from this handler's return value, so dropping the key here costs the
+    // UI nothing. clickupClientId is main-owned too (written only by the DCR step).
+    for (const k of ['mcpConnections', 'clickupClientId']) {
+      if (k in p) delete (p as Record<string, unknown>)[k]
+    }
     const cur = getSettings()
     const wasEncrypted = cur.encryptTranscripts
     // Task MI-5 consent gate: turning publishBrainPages ON while transcripts stay encrypted writes
