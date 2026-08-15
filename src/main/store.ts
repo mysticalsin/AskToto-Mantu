@@ -1040,13 +1040,18 @@ export function getDustRefreshToken(): string {
   }
 }
 
-export function clearDustRefreshToken(): void {
+/** Returns false when the token file survived the delete (locked by AV/backup, read-only). A disconnect
+ *  must actually remove the secret, so the caller can tell the user it is still on disk instead of
+ *  reporting a clean removal — same contract as mcpSecrets.ts's clearMcpRefreshToken. */
+export function clearDustRefreshToken(): boolean {
   const p = dustRefreshTokenPath()
-  if (!existsSync(p)) return
+  if (!existsSync(p)) return true
   try {
     rmSync(p)
+    return true
   } catch (e) {
     mainLog.warn('[store] clearDustRefreshToken: could not delete file', e)
+    return false
   }
 }
 

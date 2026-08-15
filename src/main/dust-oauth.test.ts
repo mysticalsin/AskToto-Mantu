@@ -208,6 +208,28 @@ describe('dust-oauth', () => {
       expect(getDustRefreshToken()).toBe('new-rt')
     })
 
+    // refresh_token is OPTIONAL in a refresh response (RFC 6749 §5.1) — a server that is not rotating it
+    // simply omits it. Passing that undefined into setDustRefreshToken threw inside token.trim(); the
+    // throw was swallowed by the surrounding catch, so a refresh that had genuinely SUCCEEDED was
+    // reported as a failure, the new access token was never stored, and the old (already burned) refresh
+    // token stayed on disk — leaving the session unrecoverable until a full re-login.
+    it('succeeds when the server rotates no refresh token, keeping the existing one', async () => {
+      completeDustOAuthLogin({ accessToken: 'old-at', refreshToken: 'old-rt', region: 'us-central1', workspaceId: 'ws-1' })
+      vi.stubGlobal('fetch', vi.fn(async () => jsonResponse({ access_token: 'new-at' })))
+      const r = await refreshDustOAuthSession()
+      expect(r).toEqual({ ok: true, token: 'new-at' })
+      expect(getApiKey('dust')).toBe('new-at')
+      expect(getDustRefreshToken()).toBe('old-rt') // kept, not wiped
+    })
+
+    it('treats a 200 with no access token as a failure rather than storing an empty credential', async () => {
+      completeDustOAuthLogin({ accessToken: 'old-at', refreshToken: 'old-rt', region: 'us-central1', workspaceId: 'ws-1' })
+      vi.stubGlobal('fetch', vi.fn(async () => jsonResponse({ refresh_token: 'new-rt' })))
+      const r = await refreshDustOAuthSession()
+      expect(r.ok).toBe(false)
+      expect(getApiKey('dust')).toBe('old-at') // unchanged
+    })
+
     it('is single-flight: two concurrent callers share one network call', async () => {
       completeDustOAuthLogin({ accessToken: 'old-at', refreshToken: 'old-rt', region: 'us-central1', workspaceId: 'ws-1' })
       let calls = 0

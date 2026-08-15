@@ -77,6 +77,7 @@ import {
   getApiKey,
   setApiKey,
   clearApiKey,
+  clearDustRefreshToken,
   testApiKey,
   hasApiKey,
   hasKeysMap,
@@ -2301,9 +2302,19 @@ function registerIpc(): void {
     clearApiKey(parsed.provider)
     resetProviderHealth(parsed.provider) // same reason as setApiKey above
     resetHeadroom(parsed.provider)
-
-    auditLog('key.removed', { provider: parsed.provider })
-    return { hasKeys: hasKeysMap() }
+    // Dust's credential is a PAIR: the access token (the provider key just cleared) and the WorkOS
+    // refresh token in its own encrypted file. Clearing only the key left dust-refresh.bin on disk, so
+    // the next refresh could silently re-mint a working Dust key and reconnect an integration the user
+    // had explicitly removed — the same "a disconnect must actually remove the secret" rule mcpDisconnect
+    // already follows for its own refresh slot. Report an undeletable file honestly instead of claiming a
+    // clean removal while the secret survives.
+    let dustRefreshRemoved = true
+    if (parsed.provider === 'dust') {
+      dustRefreshRemoved = clearDustRefreshToken()
+      setSettings({ dustTokenMintedAt: 0 })
+    }
+    auditLog('key.removed', { provider: parsed.provider, ...(parsed.provider === 'dust' ? { dustRefreshRemoved } : {}) })
+    return { hasKeys: hasKeysMap(), ...(dustRefreshRemoved ? {} : { error: "Removed the Dust key, but its saved sign-in file couldn't be deleted — remove it manually." }) }
   })
 
   ipcMain.handle(IPC.testApiKey, (e, payload: unknown) => {
@@ -2395,6 +2406,12 @@ function registerIpc(): void {
   })
   ipcMain.handle(IPC.dustLoginPoll, async (e, deviceCodeRaw: unknown) => {
     assertMainWindow(e)
+    // Same gate as dustLoginBegin above. Without it the begin-step's check is decorative: a caller can
+    // mint its own WorkOS device code out-of-band and poll it here, and the pair below then installs
+    // ATTACKER-controlled Dust tokens as this user's credential — so later meeting content is sent to
+    // the attacker's workspace. Every mutating handler in this file gates on requireAuth(); these two
+    // are the ones that actually write the credential.
+    if (!requireAuth()) return { status: 'error', error: 'Sign in with your Mantu account first.' }
     const deviceCode = typeof deviceCodeRaw === 'string' ? deviceCodeRaw : ''
     if (!deviceCode) return { status: 'error', error: 'Missing device code.' }
     const r = await pollDustDeviceLoginOnce(deviceCode)
@@ -2406,6 +2423,9 @@ function registerIpc(): void {
   })
   ipcMain.handle(IPC.dustLoginPickWorkspace, async (e, workspaceIdRaw: unknown) => {
     assertMainWindow(e)
+    // This is the step that actually persists the tokens (completeDustOAuthLogin below) — gate it too,
+    // not just the begin step. See the dustLoginPoll comment above.
+    if (!requireAuth()) return { ok: false, error: 'Sign in with your Mantu account first.' }
     const workspaceId = typeof workspaceIdRaw === 'string' ? workspaceIdRaw : ''
     if (!workspaceId) return { ok: false, error: 'Missing workspace id.' }
     if (!pendingDustLogin) return { ok: false, error: 'Sign-in session expired — start again.' }
@@ -3425,6 +3445,22 @@ function registerIpc(): void {
             // the same effect, so treat it as a pre-token failure here and let the normal failover run.
             // Only for cloud/CLI: a local no-output must surface rather than silently upload the request.
             if (!gotToken && provider !== 'local' && failover(attempted.concat(provider), undefined, race)) return
+            // …and when that failover finds NOTHING left to try, this leg is finished without ever having
+            // answered. Falling through to the success path below would be wrong twice over: under a race
+            // it deletes the COMBINED abort registration (see the hedge dispatch) while the other leg is
+            // still streaming — orphaning it past a user cancel, since askCancel then finds no entry — and
+            // it ends the ask with a blank streamDone, the very MQA-020 empty bubble the branch above
+            // exists to prevent. Die quietly if the other leg can still answer; otherwise surface a real
+            // error, exactly as the local branch below does.
+            if (!gotToken && provider !== 'local') {
+              if (race && race.gate.markDead(race.leg) !== 'surface') return
+              if (race) streams.delete(req.id)
+              win?.webContents.send(IPC.streamError, {
+                id: req.id,
+                message: 'That provider returned an empty answer, and there was no other provider to try. Check your providers in Settings.'
+              })
+              return
+            }
             // MQA-102: the cloud/CLI branch above is deliberately gated `provider !== 'local'`, so a LOCAL
             // completion with zero content deltas used to fall straight through to streamDone — the exact
             // blank-bubble MQA-020 fixed for cloud/CLI, still live for the on-device last resort (the
