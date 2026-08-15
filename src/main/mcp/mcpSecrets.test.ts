@@ -148,6 +148,39 @@ describe('mcpSecrets — MCP connection API key storage, keyed by connectionId',
     })
   })
 
+  describe('connection ids can never escape userData', () => {
+    // The id is interpolated into `key-mcp-<id>.bin`. A traversing id would let a caller rmSync an
+    // arbitrary .bin — including secret-key.bin, the AES file key every stored provider credential is
+    // encrypted under. The IPC schemas constrain this to the kind enum; this is the inner guard, so the
+    // invariant holds for any caller.
+    const hostile = ['../../secret-key', '..\\..\\secret-key', 'a/b', 'a\\b', '', '.', '..', 'x'.repeat(41)]
+
+    it('rejects a traversing or malformed id on every read and write path', async () => {
+      const m = await import('./mcpSecrets')
+      for (const id of hostile) {
+        expect(() => m.setMcpApiKey(id, 'v'), `setMcpApiKey(${JSON.stringify(id)})`).toThrow(/unsafe mcp connection id/i)
+        expect(() => m.getMcpApiKey(id), `getMcpApiKey(${JSON.stringify(id)})`).toThrow(/unsafe mcp connection id/i)
+        expect(() => m.clearMcpApiKey(id), `clearMcpApiKey(${JSON.stringify(id)})`).toThrow(/unsafe mcp connection id/i)
+        expect(() => m.getMcpRefreshToken(id)).toThrow(/unsafe mcp connection id/i)
+        expect(() => m.setMcpRefreshToken(id, 'v')).toThrow(/unsafe mcp connection id/i)
+        expect(() => m.clearMcpRefreshToken(id)).toThrow(/unsafe mcp connection id/i)
+      }
+    })
+
+    it('no file was created outside the profile by any rejected id', async () => {
+      const { readdirSync } = await import('node:fs')
+      expect(readdirSync(userData).filter((f) => f.endsWith('.bin'))).toEqual([])
+    })
+
+    it('still accepts the real connection ids', async () => {
+      const { setMcpApiKey, getMcpApiKey } = await import('./mcpSecrets')
+      for (const id of ['bidstack', 'plane', 'clickup']) {
+        setMcpApiKey(id, `key-for-${id}`)
+        expect(getMcpApiKey(id)).toBe(`key-for-${id}`)
+      }
+    })
+  })
+
   describe('refresh-token slot (OAuth connections — ClickUp today)', () => {
     it('has no refresh token by default', async () => {
       const { getMcpRefreshToken } = await import('./mcpSecrets')
