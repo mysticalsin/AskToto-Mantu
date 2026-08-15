@@ -26,15 +26,18 @@
  * DCR redirect_uri / loopback port: registered once as a portless loopback URI
  * (http://127.0.0.1/callback) and the run-time redirect_uri (with this run's actual ephemeral port) is
  * sent to /authorize without re-registering. This follows RFC 8252 §7.3, which the MCP Authorization
- * spec (2025-06-18) normatively requires authorization servers to honor for native/public clients:
- * "the authorization server MUST allow any port to be specified at the time of the request for loopback
- * IP redirect URIs... and MUST NOT allow the client to register more than one loopback redirect URI for
- * the same IP version and MUST compare loopback redirect URIs without regard to the port." Every
- * mainstream MCP client (Claude Desktop, Cursor, mcp-remote) relies on exactly this, and ClickUp's own
- * MCP setup docs target being consumed by those clients — but this repo's research pass could not find a
- * worked DCR example against ClickUp specifically to confirm it empirically. If ClickUp instead enforces
- * an exact redirect_uri match, connect fails with a typed { ok:false, error } — never a crash — and the
- * fix is to register a fresh client per run using this run's exact port instead of caching client_id.
+ * spec normatively requires authorization servers to honor for native/public clients: "the authorization
+ * server MUST allow any port to be specified at the time of the request for loopback IP redirect URIs...
+ * and MUST compare loopback redirect URIs without regard to the port."
+ *
+ * VERIFIED against the live server (2026-08-15), both halves:
+ *   - POST /oauth/register with exactly the body below → 200, client_id issued,
+ *     token_endpoint_auth_method "none" echoed back (public client, no secret to store).
+ *   - GET /oauth/authorize with the SAME client_id but redirect_uri=http://127.0.0.1:53187/callback →
+ *     302 to ClickUp's consent page, our ported redirect_uri preserved verbatim inside its own signed
+ *     state JWT. So registering portless and racing on an ephemeral port is accepted, not rejected.
+ * If that ever changes, connect fails with a typed { ok:false, error } — never a crash — and the fix is
+ * to register a fresh client per run using this run's exact port instead of caching client_id.
  */
 
 import { shell } from 'electron'
