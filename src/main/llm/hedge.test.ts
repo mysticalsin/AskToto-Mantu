@@ -144,6 +144,31 @@ describe('HedgeRace', () => {
       expect(() => race.markDead('primary')).not.toThrow()
       expect(race.markDead('hedge')).toBe('surface')
     })
+
+    // The worst possible outcome: no answer AND no error. If the primary dies and the early start then
+    // discovers there is no eligible backup, viability must be judged AFTER that discovery — otherwise
+    // markDead reads the stale "hedge might still answer", says 'suppress', and the ask spins forever.
+    it('surfaces (never suppresses) when the early start finds no backup at all', () => {
+      const race = new HedgeRace()
+      // A realistic starter: pickFailover found nothing, so it reports the hedge unavailable.
+      race.setHedgeStarter(() => race.markHedgeUnavailable())
+      expect(race.markDead('primary')).toBe('surface')
+    })
+
+    it('still suppresses when the early start actually launched a backup', () => {
+      const race = new HedgeRace()
+      race.setHedgeStarter(() => race.markHedgeStarted())
+      expect(race.markDead('primary')).toBe('suppress')
+      // ...and once that backup also dies, the failure finally surfaces.
+      expect(race.markDead('hedge')).toBe('surface')
+    })
+
+    it('surfaces when the primary dies after the timer already ruled the backup out', () => {
+      const race = new HedgeRace()
+      race.setHedgeStarter(() => race.markHedgeUnavailable())
+      race.markHedgeUnavailable() // the HEDGE_DELAY_MS timer fired first and found no backup
+      expect(race.markDead('primary')).toBe('surface')
+    })
   })
 
   describe('abortAll — user cancel mid-race', () => {

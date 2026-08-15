@@ -111,11 +111,15 @@ export class HedgeRace {
    *  forward rather than left waiting on the timer. */
   markDead(leg: HedgeLeg): 'surface' | 'suppress' {
     this.deadLegs.add(leg)
+    // Try the backup FIRST, then judge viability — order is load-bearing. startHedgeEarly() calls
+    // pickFailover, and when there is no eligible backup it flips hedgeMayStart to false. Judging first
+    // would read the stale `true`, return 'suppress' on the strength of a leg that was just proven
+    // impossible, and the ask would end with no answer AND no error — a permanent spinner. Deciding
+    // after means "suppress" is only ever said when a leg really is running or still startable.
+    // Self-guarded: a no-op once the hedge has started, the race is won, or the backup is unavailable.
+    if (leg === 'primary') this.startHedgeEarly()
     const otherLeg: HedgeLeg = leg === 'primary' ? 'hedge' : 'primary'
     const otherStillViable = otherLeg === 'hedge' ? this.hedgeMayStart && !this.deadLegs.has('hedge') : !this.deadLegs.has('primary')
-    // Pull the backup forward BEFORE reporting 'suppress' — 'suppress' is precisely the promise that some
-    // other leg will still answer, so that leg had better actually be running.
-    if (leg === 'primary' && otherStillViable) this.startHedgeEarly()
     return otherStillViable ? 'suppress' : 'surface'
   }
 
