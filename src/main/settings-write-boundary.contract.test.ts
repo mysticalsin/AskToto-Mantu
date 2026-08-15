@@ -104,6 +104,23 @@ describe('settings:set — main-owned keys are not renderer-writable', () => {
     expect(body).toMatch(/dustRefreshRemoved/)
   })
 
+  // Gating the handlers is only half of it: polling a CALLER-supplied device code would still let a
+  // renderer foothold complete a login against a code minted out-of-band against the public WorkOS
+  // client id. Main mints it, keeps it, and never hands it over.
+  it('the Dust device code stays in main and is never returned to the renderer', () => {
+    const start = indexSrc.indexOf('ipcMain.handle(IPC.dustLoginBegin')
+    const body = indexSrc.slice(start, start + 900)
+    expect(body).toMatch(/pendingDustDeviceCode = r\.ok && r\.deviceCode \? r\.deviceCode : null/)
+    // The response is destructured to drop the code before it crosses the IPC boundary.
+    expect(body).toMatch(/deviceCode: _withheld/)
+
+    const poll = indexSrc.indexOf('ipcMain.handle(IPC.dustLoginPoll')
+    const pollBody = indexSrc.slice(poll, poll + 900)
+    expect(pollBody).toMatch(/const deviceCode = pendingDustDeviceCode/)
+    // No payload parameter at all — there is nothing for a caller to supply.
+    expect(pollBody).toMatch(/ipcMain\.handle\(IPC\.dustLoginPoll, async \(e\) =>/)
+  })
+
   it('the only writers of mcpConnections are main-side handlers that re-verify the connection first', () => {
     // Each of these persists in MAIN after connectMcp()/runClickupOAuth() succeeded, which is why the
     // renderer never needs to write the key itself.

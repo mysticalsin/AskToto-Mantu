@@ -2311,7 +2311,13 @@ function registerIpc(): void {
     let dustRefreshRemoved = true
     if (parsed.provider === 'dust') {
       dustRefreshRemoved = clearDustRefreshToken()
-      setSettings({ dustTokenMintedAt: 0 })
+      // Take the session OFF the oauth branch as well. refreshAndPersistDust only re-mints while
+      // dustSessionOrigin === 'oauth', so leaving it there means a later hand-pasted Dust key could be
+      // silently overwritten by a token minted from the account the user just disconnected — the exact
+      // resurrection this clear exists to prevent, and the one path still open when the token file could
+      // not be deleted above. Whichever way the user reconnects next sets the origin itself (OAuth at
+      // dust-oauth.ts's completeDustOAuthLogin, CLI at dustImportCli), so this value is inert until then.
+      setSettings({ dustSessionOrigin: 'cli', dustTokenMintedAt: 0 })
     }
     auditLog('key.removed', { provider: parsed.provider, ...(parsed.provider === 'dust' ? { dustRefreshRemoved } : {}) })
     return { hasKeys: hasKeysMap(), ...(dustRefreshRemoved ? {} : { error: "Removed the Dust key, but its saved sign-in file couldn't be deleted — remove it manually." }) }
@@ -2398,22 +2404,30 @@ function registerIpc(): void {
   // Reset on every dustLoginBegin so a second sign-in attempt can never complete against stale tokens
   // from an earlier, abandoned attempt.
   let pendingDustLogin: { accessToken: string; refreshToken: string; region: string } | null = null
+  // The device code stays in MAIN and is never handed to the renderer. Polling a renderer-supplied code
+  // would let a caller complete a login against a code minted out-of-band against the public WorkOS
+  // client id (dust-oauth.ts) — installing someone else's Dust tokens as this user's credential. The
+  // renderer only needs the user code and verification URL to show the consent prompt.
+  let pendingDustDeviceCode: string | null = null
   ipcMain.handle(IPC.dustLoginBegin, async (e) => {
     assertMainWindow(e)
     if (!requireAuth()) return { ok: false, error: 'Sign in with your Mantu account first.' }
     pendingDustLogin = null
-    return beginDustDeviceLogin()
+    pendingDustDeviceCode = null
+    const r = await beginDustDeviceLogin()
+    pendingDustDeviceCode = r.ok && r.deviceCode ? r.deviceCode : null
+    const { deviceCode: _withheld, ...safe } = r
+    return safe
   })
-  ipcMain.handle(IPC.dustLoginPoll, async (e, deviceCodeRaw: unknown) => {
+  ipcMain.handle(IPC.dustLoginPoll, async (e) => {
     assertMainWindow(e)
-    // Same gate as dustLoginBegin above. Without it the begin-step's check is decorative: a caller can
-    // mint its own WorkOS device code out-of-band and poll it here, and the pair below then installs
-    // ATTACKER-controlled Dust tokens as this user's credential — so later meeting content is sent to
-    // the attacker's workspace. Every mutating handler in this file gates on requireAuth(); these two
-    // are the ones that actually write the credential.
+    // Same gate as dustLoginBegin above. Without it the begin-step's check is decorative: this pair is
+    // what actually writes the credential, and pendingDustLogin is set HERE, not by begin. Every mutating
+    // handler in this file gates on requireAuth().
     if (!requireAuth()) return { status: 'error', error: 'Sign in with your Mantu account first.' }
-    const deviceCode = typeof deviceCodeRaw === 'string' ? deviceCodeRaw : ''
-    if (!deviceCode) return { status: 'error', error: 'Missing device code.' }
+    // Main's own code — never one supplied by the caller (see pendingDustDeviceCode above).
+    const deviceCode = pendingDustDeviceCode
+    if (!deviceCode) return { status: 'error', error: 'Start the Dust sign-in again.' }
     const r = await pollDustDeviceLoginOnce(deviceCode)
     if (r.status !== 'ok') return { status: r.status, error: 'error' in r ? r.error : undefined }
     pendingDustLogin = { accessToken: r.accessToken, refreshToken: r.refreshToken, region: r.region }
@@ -2431,6 +2445,7 @@ function registerIpc(): void {
     if (!pendingDustLogin) return { ok: false, error: 'Sign-in session expired — start again.' }
     completeDustOAuthLogin({ ...pendingDustLogin, workspaceId })
     pendingDustLogin = null
+    pendingDustDeviceCode = null // consumed — a finished login must not leave a pollable code behind
     if (Notification.isSupported()) {
       new Notification({ title: 'Dust connected', body: 'Métis is linked to your Dust workspace.' }).show()
     }

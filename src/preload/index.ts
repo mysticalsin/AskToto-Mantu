@@ -85,10 +85,11 @@ const api = {
   dustProbeSession: (): Promise<DustSessionProbe> => ipcRenderer.invoke(IPC.dustProbeSession),
   // Native OAuth sign-in (no CLI, no system Node.js) — begin opens the browser + returns the user code to
   // show; poll is called repeatedly at the returned interval until it resolves 'ok' with a workspace list;
-  // pickWorkspace finishes the login with the chosen workspace. Tokens never cross to the renderer.
-  dustLoginBegin: (): Promise<DustDeviceLoginStart> => ipcRenderer.invoke(IPC.dustLoginBegin),
-  dustLoginPoll: (deviceCode: string): Promise<DustDevicePollResult> =>
-    ipcRenderer.invoke(IPC.dustLoginPoll, deviceCode),
+  // pickWorkspace finishes the login with the chosen workspace. Tokens never cross to the renderer, and
+  // neither does the device code: main keeps it and polls with its own copy, so a caller cannot complete
+  // a login against a code minted out-of-band against the public WorkOS client id.
+  dustLoginBegin: (): Promise<Omit<DustDeviceLoginStart, 'deviceCode'>> => ipcRenderer.invoke(IPC.dustLoginBegin),
+  dustLoginPoll: (): Promise<DustDevicePollResult> => ipcRenderer.invoke(IPC.dustLoginPoll),
   dustLoginPickWorkspace: (workspaceId: string): Promise<{ ok: boolean; error?: string }> =>
     ipcRenderer.invoke(IPC.dustLoginPickWorkspace, workspaceId),
   cliDetect: (provider: ProviderId): Promise<CliActionResult> =>

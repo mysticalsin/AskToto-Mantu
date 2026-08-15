@@ -2745,7 +2745,6 @@ function DustSetup({
     phase: DustOAuthPhase
     userCode: string | null
     verificationUri: string | null
-    deviceCode: string | null
     intervalSec: number
     expiresAt: number
     workspaces: Array<{ sId: string; name: string; role?: string }> | null
@@ -2754,7 +2753,6 @@ function DustSetup({
     phase: 'idle',
     userCode: null,
     verificationUri: null,
-    deviceCode: null,
     intervalSec: 5,
     expiresAt: 0,
     workspaces: null,
@@ -2848,13 +2846,15 @@ function DustSetup({
     await loadAgents()
   }
 
-  const oauthIdle = { phase: 'idle' as const, userCode: null, verificationUri: null, deviceCode: null, intervalSec: 5, expiresAt: 0, workspaces: null, error: null }
+  const oauthIdle = { phase: 'idle' as const, userCode: null, verificationUri: null, intervalSec: 5, expiresAt: 0, workspaces: null, error: null }
 
   // Step 1: mint a device code, open the browser consent page. Step 2 (polling) is the effect below.
   const startDustOAuth = async (): Promise<void> => {
     setOauth({ ...oauthIdle, phase: 'starting' })
     const r = await window.toto.dustLoginBegin()
-    if (!r.ok || !r.deviceCode) {
+    // The device code deliberately never reaches the renderer — main keeps it and polls with its own
+    // copy (see the dustLoginBegin handler). The user code is what this screen actually needs.
+    if (!r.ok || !r.userCode) {
       setOauth({ ...oauthIdle, phase: 'error', error: r.error || 'Could not start Dust sign-in.' })
       return
     }
@@ -2862,7 +2862,6 @@ function DustSetup({
       phase: 'waiting',
       userCode: r.userCode ?? null,
       verificationUri: r.verificationUri ?? null,
-      deviceCode: r.deviceCode,
       intervalSec: r.intervalSec || 5,
       expiresAt: Date.now() + (r.expiresInSec || 300) * 1000,
       workspaces: null,
@@ -2873,17 +2872,16 @@ function DustSetup({
   // Poll at the server-given cadence while waiting for the user to finish the browser step. RFC 8628:
   // 'pending' keeps the same interval, 'slow_down' adds 5s, anything else ends the loop.
   useEffect(() => {
-    if (oauth.phase !== 'waiting' || !oauth.deviceCode) return
+    if (oauth.phase !== 'waiting') return
     let cancelled = false
     let timer: ReturnType<typeof setTimeout>
-    const deviceCode = oauth.deviceCode
     const tick = async (intervalSec: number): Promise<void> => {
       if (cancelled) return
       if (Date.now() > oauth.expiresAt) {
         setOauth((o) => (o.phase === 'waiting' ? { ...o, phase: 'error', error: 'Sign-in expired — try again.' } : o))
         return
       }
-      const r = await window.toto.dustLoginPoll(deviceCode)
+      const r = await window.toto.dustLoginPoll()
       if (cancelled) return
       if (r.status === 'pending') {
         timer = setTimeout(() => void tick(intervalSec), intervalSec * 1000)
@@ -2900,9 +2898,10 @@ function DustSetup({
       cancelled = true
       clearTimeout(timer)
     }
-    // Re-armed only when a fresh device code starts a new wait — not on every render.
+    // Re-armed only when the phase enters 'waiting' — not on every render. (The device code that used to
+    // key this lives in main now and never reaches the renderer.)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [oauth.phase, oauth.deviceCode])
+  }, [oauth.phase])
 
   // Step 3: the user picked a workspace — finish the login and load its agents.
   const pickDustWorkspace = async (sId: string): Promise<void> => {
