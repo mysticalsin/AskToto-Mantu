@@ -554,34 +554,60 @@ export const Review = memo(function Review({
   // once per session rather than it becoming a stale saved default.
   const [connTarget, setConnTarget] = useState<Record<string, string>>({})
   const [stepStatus, setStepStatus] = useState<Record<string, { phase: NextStepPhase; error: string | null }>>({})
+  // Synchronous double-click guard (see confirmNextSteps) + its render-visible twin for the button.
+  const pushingNextStepsRef = useRef(false)
+  const [pushingNextSteps, setPushingNextSteps] = useState(false)
+  // The exact recap text nextStepsData was parsed from, so an edit can invalidate the cache.
+  const [nextStepsSource, setNextStepsSource] = useState<string | null>(null)
 
   // A different meeting loaded into this reused Review instance → drop the whole panel, mirroring the CRM
   // push reset above.
   useEffect(() => {
     setNextStepsOpen(false)
     setNextStepsData(null)
+    setNextStepsSource(null)
     setNextStepsFetchError(null)
     setItemChecked({})
     setItemTitle({})
     setStepStatus({})
   }, [savedPath])
 
-  const openNextSteps = async (): Promise<void> => {
-    setNextStepsOpen(true)
-    if (nextStepsData || nextStepsLoading) return // lazy-fetch once per meeting, mirrors the CRM panel's own cost discipline
+  const loadNextSteps = async (): Promise<void> => {
     setNextStepsLoading(true)
     setNextStepsFetchError(null)
     try {
-      const r = await window.toto.exportRecapJson(recapText)
+      const source = recapText
+      const r = await window.toto.exportRecapJson(source)
       setNextStepsData(r.actionItems)
+      setNextStepsSource(source) // remember WHICH recap these items came from (see the effect below)
       setItemChecked(Object.fromEntries(r.actionItems.map((_, i) => [i, true])))
       setItemTitle(Object.fromEntries(r.actionItems.map((it, i) => [i, it.text])))
+      setStepStatus({}) // different items — a previous run's per-item sent/error marks no longer apply
     } catch (e) {
       setNextStepsFetchError(e instanceof Error ? e.message : 'Could not read action items from this recap.')
     } finally {
       setNextStepsLoading(false)
     }
   }
+
+  const openNextSteps = async (): Promise<void> => {
+    setNextStepsOpen(true)
+    // Lazy-fetch, and re-fetch when the recap has changed since the cache was built — mirrors the CRM
+    // panel's cost discipline without letting it serve items that no longer match what the user sees.
+    if (nextStepsLoading || (nextStepsData && nextStepsSource === recapText)) return
+    await loadNextSteps()
+  }
+
+  // The recap changed UNDER an already-open panel (the user edited it, or regenerated it). The cached
+  // action items describe text that no longer exists, so pushing them would send the user's OLD wording
+  // to their tracker. Re-read instead. Skipped mid-stream: a regenerating recap changes on every delta,
+  // and re-parsing each one would be a fetch storm for text that is not final yet.
+  useEffect(() => {
+    if (!nextStepsOpen || nextStepsLoading || recap?.streaming) return
+    if (nextStepsSource !== null && nextStepsSource !== recapText) void loadNextSteps()
+    // loadNextSteps is re-created every render; the guard above is what makes this converge.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [recapText, nextStepsOpen, nextStepsLoading, nextStepsSource, recap?.streaming])
 
   const nextStepDescription = (item: RecapExport['actionItems'][number]): string => {
     const lines = [
@@ -603,7 +629,25 @@ export const Review = memo(function Review({
 
   // Sequential, not Promise.all: one connection's failure must never abort another connection's push, and
   // each card's status has to update independently as its own call resolves.
+  //
+  // The in-flight guard is a REF, not the `sending` phase in stepStatus: a second click in the same tick
+  // reads the state its own render closed over, where nothing is 'sending' yet and markNextStepPushed has
+  // not run (it only runs after the await resolves) — so both passes sail through the dedupe and create
+  // duplicate tasks in the user's tracker. A ref flips synchronously and is immune to that. The button is
+  // disabled off the matching state so the UI says so too.
   const confirmNextSteps = async (): Promise<void> => {
+    if (!nextStepsData || pushingNextStepsRef.current) return
+    pushingNextStepsRef.current = true
+    setPushingNextSteps(true)
+    try {
+      await runNextStepPushes()
+    } finally {
+      pushingNextStepsRef.current = false
+      setPushingNextSteps(false)
+    }
+  }
+
+  const runNextStepPushes = async (): Promise<void> => {
     if (!nextStepsData) return
     const items = nextStepsData.map((it, i) => ({ item: it, i })).filter(({ i }) => itemChecked[i])
     const conns = taskConnections.filter((c) => connChecked[c.id] ?? true)
@@ -1020,9 +1064,24 @@ export const Review = memo(function Review({
                 </div>
               )}
             </div>
-          ) : (
+          ) : coldCall.coaching?.streaming ? (
             <div className="flex items-center gap-2 py-1 text-[13px] text-[color:var(--color-ink-2)]">
               <Spinner size={13} /> coaching notes…
+            </div>
+          ) : (
+            // coaching === null means it was never STARTED (the call ended with nothing transcribed, so
+            // generateColdCallCoaching returned early). Showing the spinner here — as this branch used to —
+            // left a call that produced no audio spinning forever, with no error and no Retry, because
+            // Retry only renders on an error. Offer the action instead of pretending work is in flight.
+            <div className="flex items-center justify-between gap-2 py-1">
+              <span className="text-[13px] text-[color:var(--color-ink-3)]">
+                No coaching notes yet — nothing was transcribed from this call.
+              </span>
+              {coldCall.onRetryCoaching && (
+                <TextButton icon={RotateCcw} onClick={coldCall.onRetryCoaching}>
+                  Generate
+                </TextButton>
+              )}
             </div>
           )}
         </section>
@@ -1347,8 +1406,9 @@ export const Review = memo(function Review({
                   </div>
 
                   <div className="flex items-center gap-1.5">
-                    <Chip onClick={() => void confirmNextSteps()} variant="accent">
-                      <ListTree size={13} /> Confirm push
+                    <Chip onClick={() => void confirmNextSteps()} variant="accent" disabled={pushingNextSteps}>
+                      {pushingNextSteps ? <Spinner size={13} /> : <ListTree size={13} />}
+                      {pushingNextSteps ? 'Pushing…' : 'Confirm push'}
                     </Chip>
                     <TextButton onClick={() => setNextStepsOpen(false)}>Cancel</TextButton>
                   </div>

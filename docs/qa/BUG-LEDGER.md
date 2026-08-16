@@ -168,6 +168,11 @@ silently wrong · `medium` = degraded or confusing in a real scenario · `low` =
 | MQA-137 | settings:set let the renderer rewrite mcpConnections[].endpointUrl, defeating mcpPush's deliberate endpoint pin and sending the stored MCP bearer token (or ClickUp OAuth access token) to any host passing the SSRF guard | push a recap or a next step to a connected MCP system | high | FIXED | `src/main/settings-write-boundary.contract.test.ts` | hardening audit (2026-08-15) |
 | MQA-138 | McpDisconnectPayloadSchema accepted any string as connectionId, which mcpSecrets.ts interpolates into `key-mcp-<id>.bin` — '../../secret-key' would rmSync the AES file key every stored provider credential is encrypted under | disconnect an MCP connection | high | FIXED | `src/main/mcp/mcpSecrets.test.ts` | hardening audit (2026-08-15) |
 
+| MQA-139 | redactSecrets hand-listed key formats and missed three this app itself accepts — nvapi- (NVIDIA NIM, the DEFAULT provider), gsk_ (Groq) and xai- (Grok) — so those keys passed unredacted into logs and the cloud-send transcript path | any log line or auto-captured transcript containing one of those keys | high | FIXED | `src/shared/redact.test.ts` | hardening audit (2026-08-16) |
+| MQA-140 | "Book next steps" Confirm push had no in-flight guard: the dedupe reads React state and a set written only AFTER the await, so a second click in the same tick creates duplicate tasks in the user's tracker | double-click Confirm push in Review -> Book next steps | high | FIXED | `src/renderer/src/components/Review.audit.test.ts` | hardening audit (2026-08-16) |
+| MQA-141 | The cold-call coaching panel showed a spinner for the never-STARTED case, so a call with nothing transcribed span forever with no error and therefore no Retry button | end a Cold Calling meeting that captured no audio | medium | FIXED | `src/renderer/src/components/Review.audit.test.ts` | hardening audit (2026-08-16) |
+| MQA-142 | Parsed action items were cached until the MEETING changed, so editing or regenerating the recap left "Book next steps" pushing the user's old wording to their tracker | edit the recap, then push next steps | medium | FIXED | `src/renderer/src/components/Review.audit.test.ts` | hardening audit (2026-08-16) |
+
 
 ## Details
 
@@ -3146,3 +3151,23 @@ never recovers), which is why they survived a green suite.
 Verification for all six: both typechecks clean, full suite green, and — for the reachable ones — a
 physical check against the running app (Dust login shape against the live WorkOS endpoint; the hedge
 paths driven with a deliberately stalled primary, both with and without an eligible backup).
+
+### MQA-139 .. MQA-142 — second pass over the hardening audit's candidate list
+
+The 2026-08-15 audit produced 18 candidates but only verified the 8 highest-severity ones; these four came
+from re-checking the remainder by hand rather than letting them lapse.
+
+MQA-139 is the one with real blast radius. redact.ts advertises that it strips "recognised API-key
+formats" before text leaves the device, but the list was hand-maintained and had drifted behind
+providers.ts: `nvapi-`, `gsk_` and `xai-` were never added. NVIDIA NIM had just become the DEFAULT
+provider, which made its key the single most likely one to be present on this machine. Fixed by DERIVING
+the rules from providers.ts's own `keyPattern` prefixes, so the class is closed rather than the three
+instances — a provider added later is covered the moment it is declared, and the test walks every declared
+prefix to prove it. The conservative bias is preserved: ordinary text like "ask nvidia about pricing" is
+still untouched.
+
+MQA-140/141/142 are all in the Review panel and all share a shape: state that was correct for the case it
+was written for and wrong for a case nobody enumerated — a second click in the same tick, a coaching run
+that never started, a recap edited after its action items were parsed. Two of the three end in the user's
+external tracker (duplicate tasks, stale wording), which is why they are worth more than their severity
+labels suggest: they are silent and they are outbound.

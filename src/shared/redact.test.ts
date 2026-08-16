@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { redactSecrets } from './redact'
+import { PROVIDERS } from './providers'
 
 describe('redactSecrets', () => {
   it('redacts Luhn-valid credit cards (grouped or not)', () => {
@@ -63,5 +64,36 @@ describe('redactSecrets', () => {
     const t = 'We agreed to ship in Q3, owner is Maya, budget is 50000 euros.'
     expect(redactSecrets(t)).toBe(t)
     expect(redactSecrets('')).toBe('')
+  })
+})
+
+// MQA-139 — the redactor claimed to cover "recognised API-key formats" but hand-listed them, and three
+// formats this app ITSELF accepts had no rule: nvapi- (NVIDIA NIM, now the default provider), gsk_ (Groq)
+// and xai- (Grok). Those keys reached logs and the cloud-send transcript path in the clear. The rules are
+// derived from providers.ts now, and this suite is what keeps them honest.
+describe('MQA-139: every provider key format this app accepts is redacted', () => {
+  const declared = Object.values(PROVIDERS)
+    .filter((p) => p.keyPattern.startsWith('^') && p.keyPattern.length > 1)
+    .map((p) => ({ id: p.id, prefix: p.keyPattern.slice(1) }))
+
+  it('covers every auto-detectable provider prefix, with none left unlisted', () => {
+    expect(declared.length).toBeGreaterThanOrEqual(6)
+    for (const { id, prefix } of declared) {
+      const key = `${prefix}${'A1b2C3d4E5f6G7h8J9k0'}`
+      const out = redactSecrets(`my key is ${key} ok`)
+      expect(out, `${id} (${prefix}) leaked: ${out}`).not.toContain(key)
+      expect(out, `${id} (${prefix}) not redacted`).toContain('[redacted')
+    }
+  })
+
+  it('redacts the three formats that used to slip through, by name', () => {
+    for (const key of ['nvapi-qVXnZRehdLk0ZmcjNgGYQPhl', 'gsk_A1b2C3d4E5f6G7h8J9k0L1m2', 'xai-A1b2C3d4E5f6G7h8J9k0']) {
+      expect(redactSecrets(`token ${key} here`)).not.toContain(key)
+    }
+  })
+
+  it('still leaves ordinary meeting text alone (the redactor stays conservative)', () => {
+    const plain = 'We should ask nvidia about pricing, and gsk is a pharma company.'
+    expect(redactSecrets(plain)).toBe(plain)
   })
 })

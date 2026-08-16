@@ -8,8 +8,31 @@
  * Applied to the AUTO-CAPTURED transcript on the cloud-send path only — never the user's own typed question
  * (that's deliberate) and never the locally-saved meeting file (that keeps the verbatim original).
  *
- * Pure + provider-agnostic so it lives in shared/ and is fully unit-tested.
+ * Pure so it lives in shared/ and is fully unit-tested. The provider-key half is DERIVED from
+ * providers.ts's own `keyPattern` prefixes rather than hand-listed: three formats this app itself accepts
+ * (nvapi- for NVIDIA NIM — the default provider — plus gsk_ for Groq and xai- for Grok) had no rule here,
+ * so those keys passed through unredacted. Deriving them closes the class instead of the instances: a
+ * provider added later with a new prefix is covered the moment it is declared, and redact.test.ts asserts
+ * that every declared prefix really is redacted.
  */
+
+import { PROVIDERS } from './providers'
+
+/**
+ * One redaction rule per provider prefix this app can auto-detect. `keyPattern` is a RegExp source
+ * anchored at the start ('^nvapi-'); the anchor is dropped and a body requirement added, so the rule
+ * matches a real key sitting inside a sentence rather than a bare mention of the prefix. Providers whose
+ * keys are not reliably prefixed declare '' and contribute nothing — the generic rules below still cover
+ * the common shapes (sk-, JWT, Bearer).
+ */
+const PROVIDER_KEY_PATTERNS: RegExp[] = Array.from(
+  new Set(
+    Object.values(PROVIDERS)
+      .map((p) => p.keyPattern)
+      .filter((src) => src.startsWith('^') && src.length > 1)
+      .map((src) => src.slice(1))
+  )
+).map((prefix) => new RegExp(`${prefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}[A-Za-z0-9._-]{16,}`, 'g'))
 
 /** Luhn check — the checksum every real credit-card number satisfies. Filters out random digit runs. */
 function luhnValid(digits: string): boolean {
@@ -53,7 +76,10 @@ export function redactSecrets(input: string): string {
     /\bBearer\s+[A-Za-z0-9._-]{20,}\b/g, // Authorization: Bearer <token>
     /\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/g // bare JWT (header.payload.sig — eyJ prefix is base64url of '{"')
   ]
-  for (const re of keyPatterns) text = text.replace(re, '[redacted key]')
+  // Provider-declared prefixes first (nvapi-, gsk_, xai-, sk-ant-, sk-or-, sk-kimi-, AIza, eyJ …), then
+  // the generic shapes above. Order does not matter — every rule replaces with the same marker — but the
+  // derived set is what guarantees a newly added provider is never silently uncovered.
+  for (const re of [...PROVIDER_KEY_PATTERNS, ...keyPatterns]) text = text.replace(re, '[redacted key]')
 
   // 3. Generic "secret: <value>" assignments — only when a secret-ish label precedes the value, so we don't
   // nuke ordinary numbers/words. Keeps the label, redacts the value.

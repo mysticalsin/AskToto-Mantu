@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { describe, it, expect } from 'vitest'
 import {
   displayedRecapText,
@@ -116,5 +118,54 @@ describe('nextStepPushed — an already-pushed (item, connection) pair stays pus
     markNextStepPushed('plane', withProject)
     expect(nextStepPushed('idle', 'plane', withProject)).toBe(true)
     expect(nextStepPushed('idle', 'plane', { ...withProject, project_id: 'proj-2' })).toBe(false)
+  })
+})
+
+/**
+ * Review.tsx has no render harness in this repo (see Settings.contract.test.ts's header for the same
+ * rationale), so these three user-facing fixes are pinned against the actual source.
+ */
+describe('Review.tsx — next steps and cold-call coaching cannot strand or duplicate work', () => {
+  const src = readFileSync(join(__dirname, 'Review.tsx'), 'utf8')
+
+  // MQA-140: the dedupe reads React state and a set that is only written AFTER the await, so a second
+  // click in the same tick sails past both and creates duplicate tasks in the user's tracker. A ref flips
+  // synchronously; the CRM push already had an equivalent in-flight guard, next steps did not.
+  it('MQA-140: the next-steps push has a synchronous in-flight guard, not just a state check', () => {
+    const at = src.indexOf('const confirmNextSteps = async')
+    expect(at).toBeGreaterThan(-1)
+    const body = src.slice(at, at + 700)
+    expect(body).toMatch(/pushingNextStepsRef\.current\) return/)
+    expect(body).toMatch(/pushingNextStepsRef\.current = true/)
+    // Released on every path, including a throw mid-push.
+    expect(body).toMatch(/finally \{[\s\S]*?pushingNextStepsRef\.current = false/)
+    // And the button reflects it rather than looking clickable.
+    expect(src).toMatch(/disabled=\{pushingNextSteps\}/)
+  })
+
+  // MQA-141: coaching === null means it was never STARTED (nothing transcribed → generateColdCallCoaching
+  // returns early). The old final `else` showed a spinner for that, so the panel span forever with no
+  // error and therefore no Retry button.
+  it('MQA-141: the cold-call panel only spins while coaching is actually streaming', () => {
+    const at = src.indexOf('Cold call coaching')
+    expect(at).toBeGreaterThan(-1)
+    const body = src.slice(at, at + 5000)
+    expect(body).toMatch(/coldCall\.coaching\?\.streaming \? \(/)
+    // The never-started case offers the action instead of a spinner.
+    expect(body).toMatch(/No coaching notes yet/)
+    expect(body).toMatch(/onRetryCoaching/)
+  })
+
+  // MQA-142: the parsed action items were cached until the meeting changed, so editing the recap left the
+  // panel pushing the user's OLD wording.
+  it('MQA-142: the next-steps cache is keyed to the recap text it was parsed from', () => {
+    expect(src).toMatch(/setNextStepsSource\(source\)/)
+    const open = src.indexOf('const openNextSteps = async')
+    const openBody = src.slice(open, open + 500)
+    expect(openBody).toMatch(/nextStepsData && nextStepsSource === recapText/)
+    // An edit under an already-open panel re-reads rather than serving stale items.
+    expect(src).toMatch(/nextStepsSource !== null && nextStepsSource !== recapText\) void loadNextSteps\(\)/)
+    // ...but never mid-stream, which would be a fetch storm on non-final text.
+    expect(src).toMatch(/nextStepsLoading \|\| recap\?\.streaming\) return/)
   })
 })
