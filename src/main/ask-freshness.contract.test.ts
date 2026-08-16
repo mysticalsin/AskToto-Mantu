@@ -143,9 +143,11 @@ describe('key-exhaustion failover classification (the "Kimi maxed out → next k
     // The load-bearing half is that `gotToken` is set ONLY inside onDelta — i.e. only a real CONTENT
     // delta counts as "answered", so a reasoning-only response still reaches the pre-token failover
     // seam. Matched structurally rather than as one exact line so the first-token block can carry
-    // additional bookkeeping (it now also clears the provider-health verdict, MQA-003/MQA-004) without
-    // this contract going stale — what must not change is that nothing else assigns gotToken = true.
-    expect(indexSrc).toMatch(/onDelta: \(text\) => \{[\s\S]{0,400}?if \(!gotToken\)[\s\S]{0,700}?gotToken = true/)
+    // additional bookkeeping (the provider-health clear for MQA-003/MQA-004, and the hedge's
+    // declareWinner + winner streamMeta re-assert for MQA-143) without this contract going stale. What
+    // must not change — and what the length assertion below actually locks — is that nothing ELSE
+    // anywhere in index.ts assigns gotToken = true; the windows are generous for exactly that reason.
+    expect(indexSrc).toMatch(/onDelta: \(text\) => \{[\s\S]{0,400}?if \(!gotToken\)[\s\S]{0,1200}?gotToken = true/)
     const gotTokenAssignments = indexSrc.match(/gotToken = true/g) ?? []
     expect(gotTokenAssignments).toHaveLength(1)
   })

@@ -240,3 +240,35 @@ describe('MQA-134: a zero-token leg with nowhere left to fail over must not end 
     expect(body.indexOf("markDead")).toBeLessThan(body.indexOf('streams.delete(req.id)'))
   })
 })
+
+/**
+ * MQA-143/144 — two more race-wiring invariants pinned against the real source, same rationale as
+ * MQA-134 above (attempt()/onDelta/onError are closures inside the askStart handler).
+ */
+describe('MQA-143/144: the race reports the right provider and releases its handle', () => {
+  const indexSrc = readFileSync(join(__dirname, '..', 'index.ts'), 'utf8')
+
+  // MQA-143: both legs announce themselves when they start. If the backup started second and the PRIMARY
+  // then won, the UI's last streamMeta named the loser — the answer was attributed to a provider that
+  // produced none of it.
+  it('MQA-143: a losing leg never announces itself, and the winner re-asserts on its first token', () => {
+    const send = indexSrc.indexOf('win?.webContents.send(IPC.streamMeta')
+    expect(send).toBeGreaterThan(-1)
+    // The start-time announcement is gated on not having already lost.
+    expect(indexSrc.slice(send - 220, send)).toMatch(/!race \|\| !race\.gate\.isLoser\(race\.leg\)/)
+    // ...and declaring the win re-sends it, so the last word is always the winner's.
+    const win = indexSrc.indexOf('race.gate.declareWinner(race.leg)')
+    expect(indexSrc.slice(win, win + 400)).toMatch(/send\(IPC\.streamMeta/)
+  })
+
+  // MQA-144: the combined abort registration is installed once, before either leg starts. Every terminal
+  // path has to release it or the HedgeRace and both handles stay reachable for the life of the process.
+  it('MQA-144: every terminal path under a race deletes the combined streams entry', () => {
+    // Success, the raced error, and both zero-token dead ends.
+    const deletes = [...indexSrc.matchAll(/if \(race\) streams\.delete\(req\.id\)/g)]
+    expect(deletes.length).toBeGreaterThanOrEqual(4)
+    const err = indexSrc.indexOf('win?.webContents.send(IPC.streamError, { id: req.id, message: friendly })')
+    expect(err).toBeGreaterThan(-1)
+    expect(indexSrc.slice(err - 320, err)).toMatch(/if \(race\) streams\.delete\(req\.id\)/)
+  })
+})

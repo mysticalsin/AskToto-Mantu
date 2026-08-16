@@ -3372,7 +3372,10 @@ function registerIpc(): void {
       auditLog('provider.request', { provider, model, mode: req.mode, tier, retry: attempted.length > 0 })
       // Tell the waiting UI WHO is answering ("Asking your Dust agent…") — re-sent on retry/failover so
       // the display follows the live attempt. Metadata only (provider id + tier), never the model/agent id.
-      win?.webContents.send(IPC.streamMeta, { id: req.id, provider, tier })
+      // A leg that has already lost the race says nothing: its announcement would overwrite the winner's.
+      if (!race || !race.gate.isLoser(race.leg)) {
+        win?.webContents.send(IPC.streamMeta, { id: req.id, provider, tier })
+      }
       // Per-tier idle budget: a live suggest gives up fast to stay real-time; recaps + deep answers get the
       // full headroom. Bounds time-to-first-token and triggers failover when a provider stalls before a token.
       const baseIdleMs =
@@ -3445,7 +3448,13 @@ function registerIpc(): void {
               // verdict (MQA-003/MQA-004) rather than leaving a stale "broken" mark on a live provider.
               recordSuccess(provider)
               // F3 hedge: this leg's first token is its bid to win — aborts whatever the other leg is doing.
-              if (race) race.gate.declareWinner(race.leg)
+              if (race) {
+                race.gate.declareWinner(race.leg)
+                // Re-assert WHO actually answered. Both legs announce themselves when they start, so if
+                // the backup started second and the primary then won, the UI's last streamMeta named the
+                // loser — the answer would be attributed to a provider that produced none of it.
+                win?.webContents.send(IPC.streamMeta, { id: req.id, provider, tier })
+              }
             }
             gotToken = true
             win?.webContents.send(IPC.streamDelta, { id: req.id, text })
@@ -3483,6 +3492,7 @@ function registerIpc(): void {
             // instead. No failover: a local failure must never silently upload the request to cloud.
             if (!gotToken && provider === 'local') {
               if (!race || race.gate.markDead(race.leg) === 'surface') {
+                if (race) streams.delete(req.id) // terminal for the race — same release as the error path
                 win?.webContents.send(IPC.streamError, {
                   id: req.id,
                   message: 'Métis Local produced no answer — try again, or add a cloud provider in Settings for longer questions.'
@@ -3630,6 +3640,10 @@ function registerIpc(): void {
                       ? `${def.label} rejected your API key (it may have been revoked, expired, or disabled). Open Settings → AI to re-enter it.`
                       : message
             if (!race || race.gate.markDead(race.leg) === 'surface') {
+              // Terminal for the whole race, so release the COMBINED abort registration too. The non-race
+              // path already deleted its entry at the top of onError; without this the map kept the
+              // HedgeRace and both handles alive for every hedged ask that ended in an error.
+              if (race) streams.delete(req.id)
               win?.webContents.send(IPC.streamError, { id: req.id, message: friendly })
             }
           }

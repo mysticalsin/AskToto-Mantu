@@ -173,6 +173,9 @@ silently wrong · `medium` = degraded or confusing in a real scenario · `low` =
 | MQA-141 | The cold-call coaching panel showed a spinner for the never-STARTED case, so a call with nothing transcribed span forever with no error and therefore no Retry button | end a Cold Calling meeting that captured no audio | medium | FIXED | `src/renderer/src/components/Review.audit.test.ts` | hardening audit (2026-08-16) |
 | MQA-142 | Parsed action items were cached until the MEETING changed, so editing or regenerating the recap left "Book next steps" pushing the user's old wording to their tracker | edit the recap, then push next steps | medium | FIXED | `src/renderer/src/components/Review.audit.test.ts` | hardening audit (2026-08-16) |
 
+| MQA-143 | Both hedge legs emit streamMeta when they start, so if the backup started second and the PRIMARY then won, the UI's last streamMeta named the loser — the answer was attributed to a provider that produced none of it | ask a question with hedging on and a slow-but-eventually-winning primary | medium | FIXED | `src/main/llm/hedge.test.ts` | hardening audit (2026-08-16) |
+| MQA-144 | Under a race the combined streams entry was never deleted on the terminal error or local-no-output paths, leaking the HedgeRace and both stream handles for every hedged ask that ended in an error | any hedged ask that ends in an error | low | FIXED | `src/main/llm/hedge.test.ts` | hardening audit (2026-08-16) |
+
 
 ## Details
 
