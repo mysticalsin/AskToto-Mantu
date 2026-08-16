@@ -9,6 +9,8 @@
  * SDK Client is stubbed here instead, and the assertions pin the exact request-level contract the fix
  * establishes — that the bound rides on tools/list and tools/call, not on `initialize` alone.
  */
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 const sdk = vi.hoisted(() => ({
@@ -119,5 +121,23 @@ describe('mcpClient — audited defects', () => {
     sdk.callTool.mockRejectedValueOnce(new Error('HTTP 401 Unauthorized'))
     const auth = await pushToMcp(URL_OK, KEY, { 'X-Workspace-slug': 'acme' }, 'push_meeting_recap', {}, 'Plane')
     expect(auth.error).toMatch(/plane rejected the api key/i)
+  })
+})
+
+// MQA-145 — validateEndpointUrl checks the CONFIGURED url and only that one. fetch defaults to
+// redirect:'follow', so a 302 to a cloud-metadata address would sail past the guard whose whole purpose
+// is that this client can never reach one. The transport refuses redirects instead.
+describe('MQA-145: the SSRF guard cannot be walked around with a redirect', () => {
+  const src = readFileSync(join(__dirname, 'mcpClient.ts'), 'utf8')
+
+  it("sets redirect:'error' on the transport's requestInit", () => {
+    const at = src.indexOf('new StreamableHTTPClientTransport(')
+    expect(at).toBeGreaterThan(-1)
+    expect(src.slice(at, at + 900)).toMatch(/redirect: 'error'/)
+  })
+
+  it('reports a refused redirect as its own actionable message, not as an unreachable server', () => {
+    expect(src).toMatch(/blob\.includes\('redirect'\)/)
+    expect(src).toMatch(/Enter the endpoint's final URL instead/)
   })
 })

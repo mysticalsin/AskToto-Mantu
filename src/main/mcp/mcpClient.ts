@@ -155,6 +155,11 @@ function classifyError(e: unknown, endpointUrl: string, label: string): string {
   if (blob.includes('invalid url') || blob.includes('failed to parse url')) {
     return `"${endpointUrl}" is not a valid URL.`
   }
+  // Redirects are refused outright (see withClient) — tell the user to use the final URL rather than
+  // reporting this as an unreachable server, which would send them looking for the wrong problem.
+  if (blob.includes('redirect')) {
+    return `${label} redirected ${endpointUrl} somewhere else. Enter the endpoint's final URL instead.`
+  }
   // Unclassified failure shape — never return the raw exception text to the renderer (it may contain
   // stack-derived detail, internal module paths, or MCP SDK/fetch internals). `raw` is still logged
   // by the caller's mainLog.warn for diagnostics.
@@ -176,7 +181,15 @@ async function withClient<T>(
   // creates a fresh DustAPI per stream.
   const transport = new StreamableHTTPClientTransport(new URL(endpointUrl), {
     requestInit: {
-      headers: { Authorization: `Bearer ${apiKey}`, ...extraHeaders }
+      headers: { Authorization: `Bearer ${apiKey}`, ...extraHeaders },
+      // validateEndpointUrl() above checks the URL the user configured — and ONLY that one. fetch
+      // defaults to redirect:'follow', so a server answering 302 -> http://169.254.169.254/… would walk
+      // the request straight past a guard whose entire purpose is that this client can never reach a
+      // cloud-metadata address. Refuse redirects instead of re-validating each hop: an MCP endpoint is a
+      // concrete JSON-RPC URL, not a redirector, so following one is never something we want. A server
+      // that genuinely moved surfaces as a clear "endpoint redirected" message (see classifyError) and
+      // the user pastes the final URL.
+      redirect: 'error'
     }
   })
   const controller = new AbortController()
