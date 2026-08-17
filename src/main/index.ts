@@ -189,7 +189,7 @@ import { buildBrainContext } from './brain/context'
 import { buildSystem } from './personas'
 import { initLogging, mainLog, auditLog } from './logger'
 import { installProxyAwareFetch } from './net/install-proxy'
-import { authStatus, signIn as authSignIn, signOut as authSignOut, requireAuth } from './auth'
+import { authStatus, signIn as authSignIn, signOut as authSignOut, requireAuth, ssoBootstrapAllowed } from './auth'
 import { calendarToday } from './calendar'
 import { fetchTeamsTranscriptForMeeting } from './graph-transcript'
 import {
@@ -2098,7 +2098,27 @@ function registerIpc(): void {
     // Trust boundary is main, not the renderer's SignInWall — block the mutation for an unauthenticated
     // caller (DevTools/compromised renderer) when auth is enforced. Return the current (unchanged)
     // settings so the shape matches the normal success return exactly; nothing is persisted.
-    if (!requireAuth()) return publicSettings()
+    //
+    // MQA-066: with ONE exception, and only the exact one that makes the wall escapable. When enforcement
+    // is on but nothing supplies a tenant, the wall's own message tells the user to set SSO up in
+    // Settings → Account — and this line is what made typing it there silently not persist, leaving the
+    // machine unusable with no in-app recovery. ssoBootstrapAllowed() re-checks every gate (no session,
+    // enforcement on, NOTHING resolving a config, and never once sticky-configured), and the patch is
+    // narrowed here to exactly the three self-serve azure fields, so no other privileged setting rides
+    // along. env / machine-wide managed-config still outrank these in readConfig(), so an org deployment
+    // cannot be loosened through this — it can only fill a vacuum.
+    if (!requireAuth()) {
+      if (!ssoBootstrapAllowed()) return publicSettings()
+      const bootstrap: Partial<Record<'azureClientId' | 'azureTenantId' | 'azureAllowedDomain', string>> = {}
+      for (const k of ['azureClientId', 'azureTenantId', 'azureAllowedDomain'] as const) {
+        const v = (patch as Record<string, unknown> | null | undefined)?.[k]
+        if (typeof v === 'string') bootstrap[k] = v
+      }
+      if (Object.keys(bootstrap).length === 0) return publicSettings()
+      setSettings(bootstrap)
+      auditLog('settings.changed', { keys: Object.keys(bootstrap), reason: 'sso_bootstrap' })
+      return publicSettings()
+    }
     const p = patch ?? {}
     // License STATE is server-authoritative: only main's activateLicense/heartbeat (license.ts) may
     // write it. Without this strip, any renderer code could self-issue an unlimited license with a

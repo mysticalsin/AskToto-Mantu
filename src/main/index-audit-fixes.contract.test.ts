@@ -3,7 +3,7 @@ import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 
 // Regression locks for the index.ts findings of the 2026-08 Windows audit (MQA-037, 038, 051, 054, 056,
-// 062, 064, 070, 075, 081, 090). src/main/index.ts boots Electron at import time and every one of these
+// 062, 064, 066, 070, 075, 081, 090). src/main/index.ts boots Electron at import time and every one of these
 // seams is a closure inside an ipcMain handler or a window-event callback, so there is no index.test.ts
 // anywhere in this repo — the established pattern (pinned-agent-boundary.contract.test.ts,
 // ask-freshness.contract.test.ts, c-main-fixes.contract.test.ts) pins the invariant against the actual
@@ -207,6 +207,33 @@ describe('MQA-062 — a dead CLI session stops reporting itself as connected', (
     expect(handler).toMatch(/if \(!requireAuth\(\)\) return publicSettings\(\)/)
     // Returns the refreshed snapshot so a retired flag lands in the panel that asked for the check.
     expect(handler).toMatch(/await verifyCliSessions\(\)\s*\n\s*return publicSettings\(\)/)
+  })
+})
+
+describe('MQA-066 — the enforced-but-unconfigured wall has exactly one way out', () => {
+  const carveOut = (): string => sliceBetween('if (!requireAuth()) {', 'const p = patch ?? {}')
+
+  it('re-checks every gate in main rather than trusting the renderer that reached this handler', () => {
+    expect(carveOut()).toMatch(/if \(!ssoBootstrapAllowed\(\)\) return publicSettings\(\)/)
+  })
+
+  it('narrows the patch to the three self-serve azure fields and nothing else', () => {
+    const body = carveOut()
+    expect(body).toMatch(/\['azureClientId', 'azureTenantId', 'azureAllowedDomain'\] as const/)
+    // Copied key-by-key from a whitelist, never spread from the caller's object — a patch carrying
+    // { azureClientId, licenseValid, provider } must persist only the first.
+    expect(body).toMatch(/if \(typeof v === 'string'\) bootstrap\[k\] = v/)
+    expect(body).not.toMatch(/\.\.\.p\b/)
+    expect(body).not.toMatch(/\.\.\.patch\b/)
+  })
+
+  it('leaves the blanket refusal in place for everything else', () => {
+    // The unauthenticated default is still "persist nothing, return the unchanged snapshot".
+    expect(carveOut()).toMatch(/if \(Object\.keys\(bootstrap\)\.length === 0\) return publicSettings\(\)/)
+  })
+
+  it('audits the write, like every other settings mutation', () => {
+    expect(carveOut()).toMatch(/auditLog\('settings\.changed', \{ keys: Object\.keys\(bootstrap\), reason: 'sso_bootstrap' \}\)/)
   })
 })
 
