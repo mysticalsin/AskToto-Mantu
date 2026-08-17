@@ -1,26 +1,17 @@
-# Context Packet — 2026-08-09-0204
+# Context Packet — 2026-08-16-1652
 
 ## Project: Asktoto
-## Branch: fix/windows-audit-and-release-gate
+## Branch: main
 
 ## Uncommitted Changes
  M .conductor/CONTEXT_PACKET.md
- M docs/qa/BUG-LEDGER.md
- M src/main/brain/ingest-resilience.test.ts
- M src/main/store.test.ts
- M src/main/store.ts
- M src/renderer/src/components/Settings.tsx
-?? scripts/qa/deep-brain.mjs
-?? scripts/qa/deep-routing-probe2.mjs
-?? scripts/qa/deep-routing-probe3.mjs
-?? scripts/qa/deep-routing.mjs
 
 ## Recent Commits (last 5)
-c9d9bb0 fix(quick-actions): unblock What-to-say-next and Summarize on a zero-API-key install
-9dd39ff fix(review): draft the email recap via the base Métis Dust agent, use Spotlight Ref only for wins
-5d99d18 feat: time-saved estimate, email recap via Spotlight Ref, and 10 re-audit fixes
-6584b0e fix(brain): reset speaker session labels at the meeting boundary, close the duplicate cooldown row
-fc38f78 chore(conductor): refresh context packet after the QA sweep
+73cde2b fix(security): refuse redirects in the MCP client so the SSRF guard cannot be walked around
+6c1f8fa fix(llm): attribute a hedged answer to the leg that produced it, and release the race handle
+6f1bcbb fix: redact every provider key format, and stop next-steps stranding or duplicating work
+7823270 docs(qa): log the 2026-08-15 hardening audit as MQA-133..138
+5b6de29 fix(security): keep the Dust device code in main, and take the session off the oauth branch on disconnect
 
 ## Active Tasks
 
