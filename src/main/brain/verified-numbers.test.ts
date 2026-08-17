@@ -14,8 +14,7 @@ import {
   verifyExtraction,
   mergeExtraction,
   parseExtractionPayload,
-  enqueueIngest
-} from './ingest'
+  enqueueIngest, whenIndexWritesSettle } from './ingest'
 import { readDeal, readMeetingExtraction, slugify } from './store'
 import { formatDeal } from './context'
 
@@ -234,8 +233,14 @@ describe('mergeExtraction — deal amount/close_date/band, verification-gated (T
     folder = mkdtempSync(join(tmpdir(), 'asktoto-verified-numbers-'))
     s = { meetingsFolder: folder } as Settings
   })
-  afterEach(() => rmSync(folder, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }))
-
+  // MQA-007: settle the index-write lane BEFORE removing the profile. updateIndex writes
+  // index.json through a tmp+rename, and a detached one can still be in flight here — under
+  // parallel load the rename then lands on a directory this line already deleted, failing an
+  // unrelated test in whichever file happened to be running.
+  afterEach(async () => {
+    await whenIndexWritesSettle()
+    rmSync(folder, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
+  })
   const dealExtraction = (overrides: Partial<NonNullable<MeetingExtraction['deal']>>): MeetingExtraction =>
     MeetingExtractionSchema.parse({
       account: { name: 'Acme Bank', sector: 'banking', confidence: 'EXTRACTED' },
@@ -331,7 +336,7 @@ describe('windowed extraction end-to-end (Task MI-4, kills D2 — mocked createS
   const waitForStoredExtraction = async (file: string): Promise<void> => {
     await vi.waitFor(() => {
       expect(readMeetingExtraction({ meetingsFolder } as Settings, slugify(basename(file)))).not.toBeNull()
-    })
+    }, { timeout: 10_000 })
   }
 
   beforeEach(() => {
@@ -345,7 +350,10 @@ describe('windowed extraction end-to-end (Task MI-4, kills D2 — mocked createS
     setApiKey('anthropic', 'fake-test-key-not-real')
   })
 
-  afterEach(() => {
+  // MQA-007: settle the index-write lane before removing either profile dir — see the note on the
+  // sibling teardown above.
+  afterEach(async () => {
+    await whenIndexWritesSettle()
     rmSync(userData, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
     rmSync(meetingsFolder, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
     vi.restoreAllMocks()

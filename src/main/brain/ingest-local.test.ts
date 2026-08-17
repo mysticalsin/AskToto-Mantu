@@ -84,7 +84,7 @@ describe('automatic brain ingest with Métis Local', () => {
     expect(result).toEqual({ queued: 1 })
     await vi.waitFor(() => {
       expect(brainBackfillProgress()).toEqual({ total: 1, done: 1, running: false })
-    })
+    }, { timeout: 10_000 })
 
     expect(readIndex(getSettings()).ingested['local-only.md']?.ok).toBe(true)
     expect(createStreamMock).toHaveBeenCalled()
@@ -114,7 +114,7 @@ describe('automatic brain ingest with Métis Local', () => {
     expect(startBackfill()).toEqual({ queued: 1 })
     await vi.waitFor(() => {
       expect(readIndex(getSettings()).ingested['local-only.md']?.ok).toBe(true)
-    })
+    }, { timeout: 10_000 })
 
     expect(readMeetingExtraction(getSettings(), 'local-only-md')?.numeric_facts).toEqual([
       expect.objectContaining({ kind: 'headcount', value: 1 })
@@ -131,7 +131,8 @@ describe('automatic brain ingest with Métis Local', () => {
     expect(startBackfill()).toEqual({ queued: 1 })
     await vi.waitFor(() => {
       expect(brainBackfillProgress().running).toBe(false)
-    })
+    }, { timeout: 10_000 })
+    await whenIndexWritesSettle()
 
     expect(readIndex(getSettings()).ingested['local-only.md']?.ok).toBe(true)
     expect(createStreamMock.mock.calls[0][0].providerId).toBe('local')
@@ -145,7 +146,7 @@ describe('automatic brain ingest with Métis Local', () => {
     expect(result).toEqual({ queued: 1 })
     await vi.waitFor(() => {
       expect(readIndex(getSettings()).ingested['local-only.md']?.ok).toBe(true)
-    })
+    }, { timeout: 10_000 })
     expect(readIndex(getSettings()).ingested['README.md']).toBeUndefined()
   })
 
@@ -157,7 +158,7 @@ describe('automatic brain ingest with Métis Local', () => {
 
     await vi.waitFor(() => {
       expect(readIndex(getSettings()).ingested['saved-after-listen.md']?.ok).toBe(true)
-    })
+    }, { timeout: 10_000 })
     expect(createStreamMock.mock.calls.at(-1)?.[0].providerId).toBe('local')
   })
 })

@@ -88,7 +88,7 @@ describe('startBackfill with no configured provider', () => {
     // it back.
     await vi.waitFor(() => {
       expect(readIndex(getSettings()).backfillRequested).toBe(true)
-    })
+    }, { timeout: 10_000 })
     // Exactly one short warning, not one per candidate transcript that would have been queued.
     const brainWarnings = warnSpy.mock.calls.filter((c) => String(c[0]).includes('[brain]'))
     expect(brainWarnings.length).toBe(1)
@@ -134,7 +134,7 @@ describe('startBackfill with no configured provider', () => {
     expect(startBackfill()).toEqual({ queued: 1, deferred: 'no-provider' })
     await vi.waitFor(() => {
       expect(readIndex(getSettings()).ingested[file]?.ok).toBe(true)
-    })
+    }, { timeout: 10_000 })
     expect(readAccount(getSettings(), slugify('Recovered Account'))?.meetings.map((m) => m.file)).toContain(file)
     expect(readIndex(getSettings()).backfillRequested).toBe(true)
     const deal = readDeal(getSettings(), slugify('Recovered renewal'))
@@ -182,7 +182,7 @@ describe('startBackfill with no configured provider', () => {
     expect(startBackfill().queued).toBe(0)
     await vi.waitFor(() => {
       expect((readIndex(getSettings()) as unknown as { sourceRefreshRequested?: boolean }).sourceRefreshRequested).toBe(true)
-    })
+    }, { timeout: 10_000 })
   })
 
   it('marks a deleted successfully indexed source for a clean rebuild instead of retaining its derived facts', async () => {
@@ -197,7 +197,7 @@ describe('startBackfill with no configured provider', () => {
     expect(startBackfill().queued).toBe(0)
     await vi.waitFor(() => {
       expect((readIndex(getSettings()) as unknown as { sourceRefreshRequested?: boolean }).sourceRefreshRequested).toBe(true)
-    })
+    }, { timeout: 10_000 })
   })
 
   it('does not retry a failed unchanged source before its persisted retry window expires during background reconciliation', async () => {

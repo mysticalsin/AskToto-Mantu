@@ -42,7 +42,8 @@ describe('brain ingest — local last-resort index fallback', () => {
   const waitForIdle = async (): Promise<void> => {
     await vi.waitFor(() => {
       expect(brainBackfillProgress().running).toBe(false)
-    })
+    }, { timeout: 10_000 })
+    await whenIndexWritesSettle()
   }
 
   const respondError = (message: string) => (opts: StreamOptions & { handlers: StreamHandlers }): StreamHandle => {

@@ -31,6 +31,27 @@ const vitestConfig = defineConfig({
       'scripts/**/*.{test,spec}.{ts,tsx}',
       'eval/**/*.{test,spec}.{ts,tsx}'
     ],
+    // MQA-007 — a run's verdict must not depend on what else the machine is doing.
+    //
+    // Vitest's 5s default is sized for pure in-memory unit tests. A large part of this suite is not
+    // that: the brain tests stand up a real temp profile, ingest through the real queue/pump/merge, and
+    // write index.json and every entity file through the production tmp+rename durability path, on a
+    // Windows checkout that is routinely under OneDrive/AV. Serially those tests finish in well under a
+    // second; with several vitest processes competing for the same disk (a multi-agent QA sweep, or a
+    // developer running two suites at once) the same correct code crosses 5s and the run goes red — in
+    // whichever file happened to be scheduled worst, which is why it never reproduced twice the same way.
+    //
+    // Raising the budget does not weaken the gate: a genuinely hung test still fails, just later. What it
+    // removes is the class of failure that reports a scheduling accident as a defect — the thing that
+    // erodes trust in a green suite, and that this repo has a documented history of using to mask real
+    // failures. The individual `vi.waitFor` call sites carry their own explicit budgets for the same
+    // reason; this is the floor under the ones that do not.
+    // 30s is where measurement put it, not a guess: the heaviest cases here (corrections' rebuild+replay
+    // convergence proofs, brain's 6-permutation determinism proof) finish in well under a second serially
+    // and crossed 20s only once ~10 vitest processes were competing for one disk. One lever rather than a
+    // scatter of per-test magic numbers.
+    testTimeout: 30_000,
+    hookTimeout: 30_000,
     coverage: {
       provider: 'v8',
       reporter: ['text', 'html'],

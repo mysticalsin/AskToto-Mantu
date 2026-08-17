@@ -37,6 +37,7 @@ vi.mock('./store', async (importOriginal) => {
 
 import { buildBrainContext } from './context'
 import { writePerson, writeAccount, writeDeal } from './store'
+import { whenIndexWritesSettle } from './ingest'
 
 const settingsFor = (folder: string): Settings => ({ meetingsFolder: folder } as Settings)
 
@@ -72,8 +73,14 @@ describe('buildBrainContext — relevance pass cost (MQA-010)', () => {
     }
     opened.length = 0
   })
-  afterEach(() => rmSync(folder, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }))
-
+  // MQA-007: settle the index-write lane BEFORE removing the profile. updateIndex writes
+  // index.json through a tmp+rename, and a detached one can still be in flight here — under
+  // parallel load the rename then lands on a directory this line already deleted, failing an
+  // unrelated test in whichever file happened to be running.
+  afterEach(async () => {
+    await whenIndexWritesSettle()
+    rmSync(folder, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
+  })
   it('MQA-010 — a question that names no entity opens no entity file at all', () => {
     buildBrainContext(s, 'what is the weather in Paris today') // first ask builds the match index
     opened.length = 0

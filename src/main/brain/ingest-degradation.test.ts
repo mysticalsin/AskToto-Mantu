@@ -67,7 +67,11 @@ describe('brain ingest — provider-degradation paths', () => {
   const waitForIdle = async (): Promise<void> => {
     await vi.waitFor(() => {
       expect(brainBackfillProgress().running).toBe(false)
-    }, { timeout: 5000 })
+    }, { timeout: 10_000 })
+    // MQA-007: `running` going false is NOT "every write has landed" — the last job's own index record
+    // is still queued on the serialized lane at that moment (see whenIndexWritesSettle's own note). Every
+    // assertion after this reads index.json, so settling here is what makes them deterministic.
+    await whenIndexWritesSettle()
   }
 
   const respondError = (message: string) => (opts: StreamOptions & { handlers: StreamHandlers }): StreamHandle => {
@@ -317,13 +321,13 @@ describe('brain ingest — provider-degradation paths', () => {
 
     expect(startBackfill()).toEqual({ queued: 4 })
     // EXTRACT_CONCURRENCY jobs occupy the workers; the 4th waits in the queue.
-    await vi.waitFor(() => expect(held).toHaveLength(3), { timeout: 5000 })
+    await vi.waitFor(() => expect(held).toHaveLength(3), { timeout: 10_000 })
 
     // The user clears the dead key mid-batch (Settings → AI) intending to paste a fresh one.
     allowProviders([])
     releaseHeld()
 
-    await vi.waitFor(() => expect(okCount()).toBe(3), { timeout: 5000 })
+    await vi.waitFor(() => expect(okCount()).toBe(3), { timeout: 10_000 })
     expect(createStreamMock).toHaveBeenCalledTimes(3) // the 4th job never started
     expect(brainBackfillProgress().running).toBe(true) // ...and the progress bar says otherwise
 
@@ -337,7 +341,7 @@ describe('brain ingest — provider-degradation paths', () => {
     // hasActiveBackfill() and did nothing at all, leaving the last meeting unindexed for the session.
     requestBackfill()
 
-    await vi.waitFor(() => expect(held).toHaveLength(1), { timeout: 5000 })
+    await vi.waitFor(() => expect(held).toHaveLength(1), { timeout: 10_000 })
     releaseHeld()
     await waitForIdle()
 
@@ -351,7 +355,7 @@ describe('brain ingest — provider-degradation paths', () => {
     // The 60s background tick — the recovery path that must not depend on the user finding a button.
     reconcileMeetingsInBackground()
 
-    await vi.waitFor(() => expect(held).toHaveLength(1), { timeout: 5000 })
+    await vi.waitFor(() => expect(held).toHaveLength(1), { timeout: 10_000 })
     releaseHeld()
     await waitForIdle()
 
