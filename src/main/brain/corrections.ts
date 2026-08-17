@@ -35,6 +35,7 @@ import {
   writeJson,
   ensureV1Backup,
   withEntityLock,
+  cloneEntity,
   readPerson,
   writePerson,
   readAccount,
@@ -750,15 +751,6 @@ function writeTypedEntity(
   if (kind === 'person') return writePerson(s, slug, entity as PersonEntity)
   if (kind === 'account') return writeAccount(s, slug, entity as AccountEntity)
   return writeDeal(s, slug, entity as DealEntity)
-}
-
-/** store.ts's readJson cache returns the SAME cached object reference on a repeat read of an unchanged
- *  file (keyed by path+mtime+size, not by caller) — mutating it in place would silently corrupt any
- *  other holder of that same reference (e.g. a caller that read the same entity moments earlier for its
- *  own purposes, or a snapshot object built from the pre-mutation read). Every correction below clones
- *  before mutating, so it only ever owns the copy it writes. */
-function cloneEntity<T>(entity: T): T {
-  return JSON.parse(JSON.stringify(entity)) as T
 }
 
 /** De-dups by slugify (case/diacritic-insensitive) while preserving whichever spelling was seen first —

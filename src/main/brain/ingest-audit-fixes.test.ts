@@ -21,7 +21,7 @@ import {
   updateIndex,
   whenIndexWritesSettle
 } from './ingest'
-import { readDeal, readIndex, withEntityLock, writeDeal } from './store'
+import { readDeal, readIndex, setDealOutcome, withEntityLock, writeDeal } from './store'
 
 vi.mock('electron')
 
@@ -248,6 +248,63 @@ describe('brain ingest — audited fixes', () => {
     await merge
     expect(order).toEqual(['ingest-merge', 'settle'])
     expect(readDeal(s, DEAL)?.commitments[0].status).toBe('kept')
+  })
+
+  it('MQA-085: marking a deal won waits for the entity lane an ingest merge holds', async () => {
+    const s = getSettings()
+    const DEAL = 'acme-renewal'
+    await writeDeal(s, DEAL, DealEntitySchema.parse({ name: 'Acme Renewal', account: 'Acme' }))
+
+    const order: string[] = []
+    let releaseMerge!: () => void
+    const mergeDone = new Promise<void>((resolve) => {
+      releaseMerge = resolve
+    })
+    const merge = withEntityLock(async () => {
+      await mergeDone
+      order.push('ingest-merge')
+    })
+
+    const marked = setDealOutcome(s, DEAL, 'won').then((d) => {
+      order.push('set-outcome')
+      return d
+    })
+    await settle()
+    releaseMerge()
+
+    expect((await marked)?.outcome).toBe('won')
+    await merge
+    expect(order).toEqual(['ingest-merge', 'set-outcome'])
+    expect(readDeal(s, DEAL)?.outcome).toBe('won')
+    expect(await setDealOutcome(s, 'no-such-deal', 'won')).toBeNull()
+  })
+
+  it('MQA-085: mutates a clone, never the cached entity another holder is still reading', async () => {
+    const s = getSettings()
+    const DEAL = 'acme-renewal'
+    await writeDeal(
+      s,
+      DEAL,
+      DealEntitySchema.parse({
+        name: 'Acme Renewal',
+        account: 'Acme',
+        commitments: [{ text: 'send revised pricing', meeting: 'kickoff.md' }]
+      })
+    )
+    // readJson hands back the SAME object on a repeat read of an unchanged file, so this is the very
+    // reference an in-flight merge (or any earlier reader) is holding.
+    const heldByAnotherReader = readDeal(s, DEAL)!
+    expect(heldByAnotherReader.outcome).toBe('open')
+    expect(heldByAnotherReader.commitments[0].status).toBe('open')
+
+    expect((await setDealOutcome(s, DEAL, 'won'))?.outcome).toBe('won')
+    expect(await settleCommitment(s, DEAL, 'send revised pricing', 'kept')).toEqual({ ok: true })
+
+    // Persisted, and ONLY persisted — the other holder's snapshot still says what was on disk when it read.
+    expect(readDeal(s, DEAL)?.outcome).toBe('won')
+    expect(readDeal(s, DEAL)?.commitments[0].status).toBe('kept')
+    expect(heldByAnotherReader.outcome).toBe('open')
+    expect(heldByAnotherReader.commitments[0].status).toBe('open')
   })
 
   it('MQA-085: still reports the same errors for an unknown deal or commitment', async () => {

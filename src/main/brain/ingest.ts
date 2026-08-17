@@ -23,6 +23,7 @@ import { alignQuote, verifyNumericFact, extractNumerals, numeralDerivable } from
 import { getSettings, getApiKey, getAllowedProviders, setApiKey, setSettings } from '../store'
 import { createStream } from '../llm'
 import { localBaseReady } from '../llm/local-routing'
+import { verifyIntegrity } from '../llm/local-models'
 import { getState as localRuntimeState, activeStreams as localActiveStreams } from '../llm/local-runtime'
 import { readSavedFile, resolveMeetingsFolder } from '../transcripts'
 // Static (eager) import — NOT `await import()`: the main process is bytecode-compiled and dynamic import
@@ -53,6 +54,7 @@ import {
   listMeetingExtractions,
   readMeetingExtraction,
   withEntityLock,
+  cloneEntity,
   purgeBrain
 } from './store'
 import { applyCorrections, readAliasMap, resolveEntitySlug, replayCorrections, readCorrectionsJournalSafe } from './corrections'
@@ -1065,20 +1067,22 @@ export async function settleCommitment(
 ): Promise<{ ok: boolean; error?: string }> {
   return withEntityLock(async () => {
     const key = commitmentKey(text)
-    const deal = readDeal(s, dealSlug)
-    if (!deal) return { ok: false, error: 'Deal not found.' }
-    const row = deal.commitments.find((c) => commitmentKey(c.text) === key)
-    if (!row) return { ok: false, error: 'Commitment not found on this deal.' }
-    row.status = status
+    const readDealFile = readDeal(s, dealSlug)
+    if (!readDealFile) return { ok: false, error: 'Deal not found.' }
+    if (!readDealFile.commitments.some((c) => commitmentKey(c.text) === key)) {
+      return { ok: false, error: 'Commitment not found on this deal.' }
+    }
+    // Clone before mutating — readJson hands back the cached object by reference (see cloneEntity).
+    const deal = cloneEntity(readDealFile)
+    for (const c of deal.commitments) if (commitmentKey(c.text) === key) c.status = status
     await writeDeal(s, dealSlug, deal)
     // Mirror onto the named person's own ledger when one holds the same promise.
     for (const pslug of listEntities(s, 'person')) {
-      const person = readPerson(s, pslug)
-      const match = person?.commitments?.find((c) => commitmentKey(c.text) === key)
-      if (person && match) {
-        match.status = status
-        await writePerson(s, pslug, person)
-      }
+      const readPersonFile = readPerson(s, pslug)
+      if (!readPersonFile?.commitments?.some((c) => commitmentKey(c.text) === key)) continue
+      const person = cloneEntity(readPersonFile)
+      for (const c of person.commitments ?? []) if (commitmentKey(c.text) === key) c.status = status
+      await writePerson(s, pslug, person)
     }
     return { ok: true }
   })
@@ -1905,11 +1909,41 @@ type StartRebuildOptions = {
   onFinished?: () => void | Promise<void>
 }
 
+/**
+ * MQA-018: `hasUsableProvider` asks "is a provider CONFIGURED", which is the right question for queueing a
+ * job and the wrong one for authorizing a purge. When the only candidate is `local`, "configured" is the
+ * weakest possible evidence: the model files pass a byte-SIZE check that a half-synced or corrupted GGUF
+ * also passes, and the failure only surfaces on the cold start that every re-extraction then hits — after
+ * the entire `.brain/` tree is already deleted, with no candidate after local to fail over to. Each
+ * re-extraction then burns its attempts to `exhausted`, which the automatic reconcile tick skips forever,
+ * so a background OneDrive-drift refresh turns a populated graph into 0 people / 0 accounts / 0 deals.
+ *
+ * So the destructive path asks the stronger question, and only when local is genuinely the sole recourse:
+ * re-hash the model against the manifest first. This is not extra work — it is the SAME verifyIntegrity
+ * the first extraction's cold start would run anyway (llm/local.ts's ensureLocalRuntimeStarted), moved to
+ * before the purge instead of after it. RAM is checked inside it too (assertRamOk), and a session-long
+ * 'unavailable' lockout is already excluded upstream in pickProviderCandidates.
+ */
+async function localOnlyRebuildBlocked(s: Settings): Promise<string | null> {
+  const candidates = pickProviderCandidates(s)
+  if (!candidates.every((c) => c.provider === 'local')) return null
+  try {
+    await verifyIntegrity(s.localLlm.modelId)
+    return null
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error)
+    mainLog.warn(`[brain] refusing to rebuild: Métis Local cannot load its model — ${detail}`)
+    return `Métis Local is the only provider available and it cannot load its model right now, so rebuilding would erase Mantu Intelligence without being able to rebuild it. Nothing was changed. ${detail}`
+  }
+}
+
 export async function startRebuild(s: Settings, options: StartRebuildOptions = {}): Promise<{ queued: number; error?: string }> {
   // Do not wipe usable derived data just to discover that no configured provider can recreate it.
   if (!hasUsableProvider(s)) {
     return { queued: 0, error: 'Connect an AI provider in Settings → AI, or enable Métis Local summaries before rebuilding Mantu Intelligence.' }
   }
+  const localOnlyError = await localOnlyRebuildBlocked(s)
+  if (localOnlyError) return { queued: 0, error: localOnlyError }
   const before = readIndex(s)
   const preserveSourceRefresh = options.sourceRefresh || before.sourceRefreshRequested
   // Fix 2 (sync guard): a corrupt/blocked journal fails the gate — refuse before touching the store.
