@@ -1,7 +1,6 @@
 /**
  * app-audit-fixes.contract.test.ts — regression cover for the App.tsx defects in docs/qa/BUG-LEDGER.md:
- * MQA-053, MQA-059, MQA-068, MQA-071, MQA-072, MQA-082, MQA-083, MQA-099. (MQA-066 is deliberately
- * uncovered — see the note above the MQA-068 block for why the renderer-only fix would not hold.)
+ * MQA-053, MQA-059, MQA-066, MQA-068, MQA-071, MQA-072, MQA-082, MQA-083, MQA-099.
  *
  * Two kinds of assertion live here, deliberately:
  *
@@ -41,12 +40,35 @@ function code(block: string): string {
     .join('\n')
 }
 
-// MQA-066 (SignInWall's "Settings → Account" remedy is unreachable) is NOT fixed here and has no test:
-// the renderer-side half — letting 'settings' through the gate and rendering Settings over the wall —
-// opens a panel that cannot complete the remedy, because src/main/index.ts's settings:set handler starts
-// with `if (!requireAuth()) return publicSettings()`, and requireAuth() is false in exactly the state
-// that raises the wall. Typing the Azure client/tenant ID would silently not persist. The fix needs a
-// main-side carve-out, in a file this change does not own.
+// MQA-066 — the renderer half. The note that used to sit here said this could not be fixed from the
+// renderer alone, and it was right: letting 'settings' through the gate opens a panel that cannot
+// complete the remedy, because settings:set starts with `if (!requireAuth()) return publicSettings()`
+// and requireAuth() is false in exactly the state that raises the wall. That main-side carve-out now
+// exists (auth.ts's ssoBootstrapAllowed + the narrowed patch in settings:set, pinned by
+// auth.test.ts and index-audit-fixes.contract.test.ts), so the renderer half below completes it.
+describe('MQA-066 — Settings is reachable from behind the sign-in wall', () => {
+  it('renders Settings in place of the wall, the way the onboarding gate already does', () => {
+    const wall = blockBetween('// Azure AD gate — blocks all use when SSO is configured OR enforced', '// Onboarding gate (first run)')
+    expect(code(wall)).toMatch(/if \(view === 'settings'\) \{/)
+    expect(code(wall)).toMatch(/\{settingsBody\}/)
+    // The wall itself still renders for every other view — this is an escape, not a removal.
+    expect(code(wall)).toMatch(/<SignInWall/)
+  })
+
+  it('hands the wall a route to the screen its own remedy names', () => {
+    const wall = blockBetween('// Azure AD gate — blocks all use when SSO is configured OR enforced', '// Onboarding gate (first run)')
+    // Calendar, not Account: the Entra client/tenant/domain fields live on the Calendar tab, and there is
+    // no Account tab at all — the old copy pointed at a screen that does not exist.
+    expect(code(wall)).toMatch(/onOpenSettings=\{\(\) =>\s*\n?\s*openSettings\('calendar'/)
+  })
+
+  it("lets 'settings' — and only 'settings' — through the sign-in hotkey gate", () => {
+    const gate = blockBetween('const onboardingGate = DEMO == null', 'if (a !== \'hide\' && minimized)')
+    expect(code(gate)).toMatch(/if \(a !== 'hide' && \(onboardingGate \|\| \(signInGate && a !== 'settings'\)\)\) return/)
+    // Onboarding keeps the stricter rule: there the widget genuinely is not usable yet.
+    expect(code(gate)).not.toMatch(/onboardingGate && a !== 'settings'/)
+  })
+})
 
 describe('MQA-068 — the license enforcement switch no longer advertises a safe one-line flip', () => {
   // NOT a behavioural fix: enforcement stays compiled off (flipping it alone would ship a blocking gate

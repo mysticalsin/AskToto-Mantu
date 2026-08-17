@@ -872,6 +872,38 @@ export function resetSelfServeSso(): boolean {
   return true
 }
 
+/**
+ * MQA-066 — may the renderer write the three self-serve azure fields while `requireAuth()` is false?
+ *
+ * The dead end this exists for: managed-config (or ASKTOTO_REQUIRE_AUTH) says `requireAuth: true` but
+ * supplies no tenant. `authEnforced()` alone raises the SignInWall, `signIn()` short-circuits with
+ * `{ok:true, configured:false}`, and the wall's own message — the one the code writes precisely so the
+ * user is not "silently stranded … with no way forward" — sends them to Settings → Account. That screen
+ * is behind the wall, and even reached, `settingsSet` starts with `if (!requireAuth()) return`, so the
+ * IDs would be typed and silently not persist. The machine is unusable with no in-app recovery.
+ *
+ * Every condition below is load-bearing:
+ *  - NO live session and enforcement actually on — otherwise the normal authed path applies and this
+ *    carve-out is not needed.
+ *  - `readConfig() === null` — nothing anywhere resolves a usable config, which IS the dead end. If env
+ *    or managed-config supplies one, the wall has a working sign-in button and needs no bootstrap.
+ *  - NOT sticky-configured — a device that has genuinely signed in before must never let an unauthenticated
+ *    renderer point SSO at a different tenant. That is the attack `isStickyConfigured` was added to stop
+ *    and this must not reopen it.
+ *
+ * What it can and cannot do: env and machine-wide managed-config still WIN over settings in readConfig(),
+ * so an org deployment cannot be loosened through this — it only fills a vacuum. The caller (index.ts's
+ * settingsSet) additionally restricts the patch to exactly the three azure keys, so nothing else in the
+ * privileged settings surface opens along with it.
+ */
+export function ssoBootstrapAllowed(): boolean {
+  loadSession()
+  if (session) return false
+  if (!authEnforced()) return false // a self-serve wall already has the MQA-107 reset escape hatch
+  if (isStickyConfigured()) return false
+  return readConfig() === null
+}
+
 export function signOut(): void {
   // Load session before clearing so we can detect a genuine (authenticated) sign-out.
   // The sticky-configured flag + LKG recovery config are cleared only when there was a real active

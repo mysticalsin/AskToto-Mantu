@@ -2168,7 +2168,12 @@ export function App(): JSX.Element {
     const authNotReady = auth.status == null
     const signInGate =
       DEMO == null && (authNotReady || (!!(auth.status?.configured || auth.status?.enforced) && !auth.status?.signedIn))
-    if (a !== 'hide' && (onboardingGate || signInGate)) return
+    // MQA-066: 'settings' joins 'hide' as an action allowed through the sign-in gate. It is the one action
+    // with no capture / LLM / recording side effect — the class this gate was written to block — and it is
+    // the only route to the Entra IDs the wall itself tells the user to enter when enforcement is on but
+    // no tenant is configured. Still blocked while ONBOARDING is the gate: there the widget genuinely
+    // isn't usable yet, and that gate's own `view === 'settings'` escape already covers its fix-link.
+    if (a !== 'hide' && (onboardingGate || (signInGate && a !== 'settings'))) return
     // From the minimized control-pill the Bar is unmounted, so any action that needs the widget (ask /
     // capture / factcheck / settings / toggle-listen) must expand first — otherwise capture/factcheck
     // would fire an LLM request into nothing (invisible work + wasted spend). 'hide' stays as-is.
@@ -2787,9 +2792,31 @@ export function App(): JSX.Element {
   // sense, even though privileged IPC was already blocked underneath — `enforced` is optional and treated
   // as false until the main process reports it.
   if ((auth.status?.configured || auth.status?.enforced) && !auth.status?.signedIn && DEMO == null) {
+    // MQA-066: mirror the onboarding gate's escape 15 lines below, which exists for the identical reason
+    // — a fix-link that dead-ends because the gate above it is an unconditional early return. Here the
+    // dead end is worse: when enforcement is on but no tenant is configured anywhere, the wall's own
+    // message tells the user to set SSO up in Settings → Account, and no route to Settings survives (the
+    // hotkey, the tray item and the Bar affordance all render or route below this line). Opening Settings
+    // has no capture / LLM / recording side effect, unlike the actions the gate was written to block, and
+    // main still refuses every settings write here except the three azure fields (ssoBootstrapAllowed).
+    if (view === 'settings') {
+      return (
+        <div ref={setRoot} {...windowDrag} className="flex w-full flex-col gap-2 p-1.5">
+          <Suspense fallback={<div className="cl-root rounded-2xl p-6 text-center text-[12px] text-[color:var(--cl-muted-foreground)]">Loading…</div>}>
+            {settingsBody}
+          </Suspense>
+        </div>
+      )
+    }
     return (
       <div ref={setRoot} {...windowDrag} className="w-full p-1.5">
-        <SignInWall status={auth.status} onSignIn={auth.signIn} />
+        <SignInWall
+          status={auth.status}
+          onSignIn={auth.signIn}
+          onOpenSettings={() =>
+            openSettings('calendar', 'Enter your organization’s Microsoft sign-in IDs here, then sign in.')
+          }
+        />
       </div>
     )
   }

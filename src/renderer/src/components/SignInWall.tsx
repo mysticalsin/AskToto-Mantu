@@ -34,13 +34,21 @@ function friendlyAuthError(raw: string, domainLabel: string): string {
 /** Hard gate shown when Azure SSO is configured but the user is not signed in. Blocks all app use. */
 export function SignInWall({
   status,
-  onSignIn
+  onSignIn,
+  onOpenSettings
 }: {
   status: AuthStatus
   onSignIn: () => Promise<SignInResult>
+  /** MQA-066: opens Settings OVER this wall (App.tsx renders it in place of the wall when view is
+   *  'settings'). Without a route out of here, the not-configured remedy below names a screen the wall
+   *  itself makes unreachable — and on a machine whose managed-config sets requireAuth with no tenant,
+   *  that is the whole app. */
+  onOpenSettings?: () => void
 }): JSX.Element {
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState<string | null>(null)
+  // Set alongside the not-configured error so the remedy is a button, not a sentence about a screen.
+  const [showSetup, setShowSetup] = useState(false)
   // MQA-107 escape hatch. `idle` → show the subtle reset link; `confirm` → a one-line confirm; `busy` →
   // the reset is running. Kept separate from `busy` (sign-in) so a stuck sign-in and a reset never race.
   const [resetPhase, setResetPhase] = useState<'idle' | 'confirm' | 'busy'>('idle')
@@ -58,7 +66,13 @@ export function SignInWall({
         // enforced (e.g. sticky-configured from a genuine prior sign-in, or org policy). Treating this
         // as success would silently strand the user behind the wall with a stopped spinner and no
         // feedback or way forward.
-        setErr("Microsoft sign-in isn't configured. Set it up in Settings → Account, or contact your admin.")
+        //
+        // MQA-066: the remedy names Settings → Calendar, which is where the Entra client/tenant/domain
+        // fields actually live — there is no "Account" tab, so the old copy pointed at a screen that does
+        // not exist, from behind a wall that made every Settings route unreachable anyway. The button
+        // below is the route; main permits exactly those three fields to be written from this state.
+        setErr("Microsoft sign-in isn't set up on this device yet. Add your organization's IDs in Settings → Calendar, or contact your admin.")
+        setShowSetup(true)
       }
     } catch (e) {
       setErr(friendlyAuthError(e instanceof Error ? e.message : 'Sign-in failed.', domainLabel))
@@ -157,6 +171,19 @@ export function SignInWall({
               <AlertCircle size={14} className="mt-0.5 shrink-0 text-[var(--color-danger)]" />
               <span className="text-[12px] leading-snug text-[var(--color-danger)]">{err}</span>
             </div>
+          )}
+
+          {/* MQA-066 — the way out. Shown only once sign-in has actually reported "not configured", so a
+              normal, correctly-configured wall is unchanged; opening Settings has no capture/LLM/recording
+              side effect, which is why it is safe to reach from behind this gate. */}
+          {showSetup && onOpenSettings && !busy && (
+            <button
+              type="button"
+              onClick={onOpenSettings}
+              className="no-drag cl-focus w-[280px] rounded-[12px] border border-[var(--cl-border)] px-5 py-2.5 text-[13px] font-semibold text-[color:var(--cl-foreground)] transition hover:brightness-110"
+            >
+              Open Settings → Calendar
+            </button>
           )}
 
           {/* MQA-107 — recovery from a wrong-tenant self-serve setup. Hidden during an active sign-in and
