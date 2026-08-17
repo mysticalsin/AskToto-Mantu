@@ -6,7 +6,7 @@ import type { Settings } from '@shared/ipc'
 import { MeetingExtractionSchema, type MeetingExtraction } from '@shared/brain'
 import { computeSilence } from '@shared/silence'
 import { buildMarsWeek } from '@shared/mars'
-import { ingestExtraction, settleCommitment } from './ingest'
+import { ingestExtraction, settleCommitment, whenIndexWritesSettle } from './ingest'
 import {
   slugify,
   readGraph,
@@ -139,7 +139,14 @@ describe.each([
       .map((slug) => readMeetingExtraction(s, slug))
       .filter((x): x is MeetingExtraction => !!x)
   })
-  afterAll(() => rmSync(folder, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }))
+  // MQA-007: settle the index-write lane BEFORE removing the profile. updateIndex writes index.json
+  // through a tmp+rename, and a detached one can still be in flight here — under parallel load the
+  // rename then lands on a directory this line already deleted, failing an unrelated test in
+  // whichever file happened to be running.
+  afterAll(async () => {
+    await whenIndexWritesSettle()
+    rmSync(folder, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
+  })
 
   it('the UI headline "meetings ingested" number — the ingest-log index — records all 8, ok, stamped', () => {
     const idx = readIndex(s)

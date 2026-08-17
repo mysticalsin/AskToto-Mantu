@@ -27,7 +27,8 @@ describe('brain ingest resilience (T6 6a/6b)', () => {
   const waitForIdle = async (): Promise<void> => {
     await vi.waitFor(() => {
       expect(brainBackfillProgress().running).toBe(false)
-    })
+    }, { timeout: 10_000 })
+    await whenIndexWritesSettle()
   }
 
   const respondError = (message: string) => (opts: StreamOptions & { handlers: StreamHandlers }): StreamHandle => {

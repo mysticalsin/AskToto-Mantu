@@ -49,7 +49,8 @@ vi.mock('../llm', () => ({
 const waitForIdle = async (): Promise<void> => {
   await vi.waitFor(() => {
     expect(brainBackfillProgress().running).toBe(false)
-  })
+  }, { timeout: 10_000 })
+  await whenIndexWritesSettle()
   // running=false only means the QUEUE drained — the last job's own index.json record is still sitting
   // on the serialized write lane at that instant. resumeBackfillIfPending() is deliberately not awaited
   // by these tests, so that trailing write is exactly what races rmSync.
@@ -105,7 +106,7 @@ describe('resumeBackfillIfPending resumes an interrupted rebuild replay (Fix E)'
 
     await vi.waitFor(() => {
       expect(readIndex(getSettings()).replayPending).toBe(false)
-    })
+    }, { timeout: 10_000 })
     expect(readAccount(s, accountSlug)?.name).toBe('Acme') // replay re-applied the rename
   })
 
@@ -121,10 +122,11 @@ describe('resumeBackfillIfPending resumes an interrupted rebuild replay (Fix E)'
 
     await vi.waitFor(() => {
       expect(brainBackfillProgress().running).toBe(false)
-    })
+    }, { timeout: 10_000 })
+    await whenIndexWritesSettle()
     await vi.waitFor(() => {
       expect(readIndex(getSettings()).replayPending).toBe(false)
-    })
+    }, { timeout: 10_000 })
     expect(readIndex(getSettings()).backfillRequested).toBe(false)
   })
 

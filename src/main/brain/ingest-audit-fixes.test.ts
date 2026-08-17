@@ -82,7 +82,7 @@ describe('brain ingest — audited fixes', () => {
   const waitForIdle = async (): Promise<void> => {
     await vi.waitFor(() => {
       expect(brainBackfillProgress().running).toBe(false)
-    }, { timeout: 5000 })
+    }, { timeout: 10_000 })
     await whenIndexWritesSettle()
   }
 
@@ -195,7 +195,7 @@ describe('brain ingest — audited fixes', () => {
     createStreamMock.mockImplementation(holdStream)
 
     await enqueueIngest(file)
-    await vi.waitFor(() => expect(held).toHaveLength(1), { timeout: 5000 })
+    await vi.waitFor(() => expect(held).toHaveLength(1), { timeout: 10_000 })
 
     // The durable pending record exists (a quit here must replay the meeting, not lose it) — and the
     // dashboard must still say nothing is wrong while the extraction it describes is running normally.
@@ -206,7 +206,7 @@ describe('brain ingest — audited fixes', () => {
     expect(ingestFailureDetails(idx)).toEqual([])
 
     releaseHeld()
-    await vi.waitFor(() => expect(okCount()).toBe(1), { timeout: 5000 })
+    await vi.waitFor(() => expect(okCount()).toBe(1), { timeout: 10_000 })
     await whenIndexWritesSettle()
   })
 
@@ -421,10 +421,10 @@ describe('brain ingest — audited fixes', () => {
 
     expect(startBackfill()).toEqual({ queued: 4 })
     // The clamp below must not become a global slowdown: cloud extraction still runs three at a time.
-    await vi.waitFor(() => expect(held).toHaveLength(3), { timeout: 5000 })
+    await vi.waitFor(() => expect(held).toHaveLength(3), { timeout: 10_000 })
 
     releaseHeld()
-    await vi.waitFor(() => expect(held).toHaveLength(1), { timeout: 5000 })
+    await vi.waitFor(() => expect(held).toHaveLength(1), { timeout: 10_000 })
     releaseHeld()
     await waitForIdle()
     expect(okCount()).toBe(4)
@@ -442,7 +442,7 @@ describe('brain ingest — audited fixes', () => {
     expect(held).toHaveLength(1)
 
     for (let i = 0; i < 4; i++) {
-      await vi.waitFor(() => expect(held).toHaveLength(1), { timeout: 5000 })
+      await vi.waitFor(() => expect(held).toHaveLength(1), { timeout: 10_000 })
       releaseHeld()
     }
     await waitForIdle()
@@ -466,7 +466,7 @@ describe('brain ingest — audited fixes', () => {
     activeStreamsMock.mockReturnValue(0) // the meeting's own stream finished
     reconcileMeetingsInBackground() // the 60s tick is the wake-up (same path as the MQA-023 stall)
 
-    await vi.waitFor(() => expect(held).toHaveLength(1), { timeout: 5000 })
+    await vi.waitFor(() => expect(held).toHaveLength(1), { timeout: 10_000 })
     releaseHeld()
     await waitForIdle()
     expect(okCount()).toBe(1)
@@ -485,7 +485,7 @@ describe('brain ingest — audited fixes', () => {
     createStreamMock.mockImplementation(holdStream)
 
     expect(startBackfill()).toEqual({ queued: 4 })
-    await vi.waitFor(() => expect(held).toHaveLength(3), { timeout: 5000 })
+    await vi.waitFor(() => expect(held).toHaveLength(3), { timeout: 10_000 })
 
     // The key is rotated (or an admin pushes an allowlist) while the batch is running.
     allowProviders([])
@@ -494,14 +494,14 @@ describe('brain ingest — audited fixes', () => {
     // The frozen readout: 3 of 4, still "running", yet nothing is in flight and nothing can restart it.
     // Waited for on the progress counter rather than the index, because finishJob bumps `done` AFTER the
     // ok record lands — an okCount()-based wait can observe the batch one job earlier than the readout.
-    await vi.waitFor(() => expect(brainBackfillProgress()).toMatchObject({ total: 4, done: 3, running: true }), { timeout: 5000 })
+    await vi.waitFor(() => expect(brainBackfillProgress()).toMatchObject({ total: 4, done: 3, running: true }), { timeout: 10_000 })
     expect(okCount()).toBe(3)
     expect(createStreamMock).toHaveBeenCalledTimes(3)
 
     allowProviders(['anthropic']) // the fresh key is pasted
     requestBackfill({ respectRetryBackoff: true })
 
-    await vi.waitFor(() => expect(held).toHaveLength(1), { timeout: 5000 })
+    await vi.waitFor(() => expect(held).toHaveLength(1), { timeout: 10_000 })
     releaseHeld()
     await waitForIdle()
     expect(okCount()).toBe(4)

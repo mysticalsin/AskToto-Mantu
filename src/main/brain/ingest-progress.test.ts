@@ -48,7 +48,8 @@ describe('backfill progress bookkeeping across runs', () => {
   const waitForIdle = async (): Promise<void> => {
     await vi.waitFor(() => {
       expect(brainBackfillProgress().running).toBe(false)
-    })
+    }, { timeout: 10_000 })
+    await whenIndexWritesSettle()
   }
 
   beforeEach(() => {
@@ -96,7 +97,7 @@ describe('backfill progress bookkeeping across runs', () => {
     enqueueIngest(join(meetingsFolder, 'live-1.md'))
     await vi.waitFor(() => {
       expect(readIndex(getSettings()).ingested['live-1.md']?.ok).toBe(true)
-    })
+    }, { timeout: 10_000 })
     expect(brainBackfillProgress()).toEqual({ total: 2, done: 2, running: false }) // untouched by the live job
 
     // A second, later backfill run over new transcripts must start its OWN fresh total/done, not
@@ -132,7 +133,7 @@ describe('backfill progress bookkeeping across runs', () => {
     // Give pump() a tick to splice the job out of `queue` and start processing it.
     await vi.waitFor(() => {
       expect(brainBackfillProgress().running).toBe(true)
-    })
+    }, { timeout: 10_000 })
 
     // Re-click "Index meetings" while the only candidate file is still mid-extraction.
     const second = startBackfill()
@@ -167,7 +168,7 @@ describe('backfill progress bookkeeping across runs', () => {
     await enqueueIngest(liveFile)
     await vi.waitFor(() => {
       expect(liveExtractionStarted).toBe(true)
-    })
+    }, { timeout: 10_000 })
 
     // A live-only job must not be painted as a user-requested batch.
     expect(brainBackfillProgress().running).toBe(false)
@@ -179,7 +180,7 @@ describe('backfill progress bookkeeping across runs', () => {
     releaseLive()
     await vi.waitFor(() => {
       expect(readIndex(getSettings()).ingested['live-only.md']?.ok).toBe(true)
-    })
+    }, { timeout: 10_000 })
   })
 
   it('persists a live meeting as pending background work, then clears that state only after it is indexed', async () => {
@@ -203,14 +204,14 @@ describe('backfill progress bookkeeping across runs', () => {
     await vi.waitFor(() => {
       expect(readIndex(getSettings()).backfillRequested).toBe(true)
       expect(brainLiveIngestProgress()).toEqual({ pending: 1, running: true })
-    })
+    }, { timeout: 10_000 })
 
     releaseLive()
     await vi.waitFor(() => {
       expect(readIndex(getSettings()).ingested['durable-live.md']?.ok).toBe(true)
       expect(brainLiveIngestProgress()).toEqual({ pending: 0, running: false })
       expect(readIndex(getSettings()).backfillRequested).toBe(false)
-    })
+    }, { timeout: 10_000 })
   })
 
   it('reconciles a saved extraction with no successful ingest record instead of making Index meetings a no-op', async () => {
@@ -242,7 +243,7 @@ describe('backfill progress bookkeeping across runs', () => {
 
     await vi.waitFor(() => {
       expect(readIndex(getSettings()).ingested[file]?.ok).toBe(true)
-    })
+    }, { timeout: 10_000 })
     // The index write lands before the queue drains — leaving the pump running would let this test's
     // backfill spill into the NEXT test's temp profile and eat its mockImplementationOnce responses.
     await waitForIdle()
@@ -257,7 +258,7 @@ describe('backfill progress bookkeeping across runs', () => {
 
     await vi.waitFor(() => {
       expect(readIndex(getSettings()).ingested['queued-from-ui.md']?.ok).toBe(true)
-    })
+    }, { timeout: 10_000 })
     await waitForIdle() // same reason: don't hand a still-running pump to the next test
   })
 
@@ -313,7 +314,7 @@ describe('backfill progress bookkeeping across runs', () => {
       expect(idx.ingested[file]?.ok).toBe(true)
       expect(readAccount(getSettings(), slugify('Acme'))).toBeNull()
       expect(idx.revision).toBeGreaterThan(1)
-    })
+    }, { timeout: 10_000 })
     await waitForIdle() // same reason: don't hand a still-running pump to the next test
   })
 
@@ -339,6 +340,6 @@ describe('backfill progress bookkeeping across runs', () => {
       expect(idx.sourceRefreshRequested).toBe(false)
       expect(idx.ingested[file]).toBeUndefined()
       expect(readAccount(getSettings(), slugify('Globex'))).toBeNull()
-    })
+    }, { timeout: 10_000 })
   })
 })
