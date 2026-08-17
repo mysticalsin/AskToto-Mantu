@@ -177,6 +177,7 @@ silently wrong · `medium` = degraded or confusing in a real scenario · `low` =
 | MQA-144 | Under a race the combined streams entry was never deleted on the terminal error or local-no-output paths, leaking the HedgeRace and both stream handles for every hedged ask that ended in an error | any hedged ask that ends in an error | low | FIXED | `src/main/llm/hedge.test.ts` | hardening audit (2026-08-16) |
 
 | MQA-145 | The MCP client's SSRF guard validates the CONFIGURED endpoint and only that one, but fetch defaults to redirect:'follow' — a 302 to a cloud-metadata address walked straight past the guard whose whole purpose is that this client can never reach one | connect or push to an MCP endpoint that answers a redirect | medium | FIXED | `src/main/mcp/mcpClient.audit.test.ts` | hardening audit (2026-08-16) |
+| MQA-146 | The compliance one-pager tells a customer's security review that the packages "include Qwen3.5 0.8B" and that "the installed app does not download a model" — the weights were removed from the installer and are fetched on first run | enterprise security review · air-gapped deployment | medium | FIXED | `src/main/packaged-model-claims.contract.test.ts` | Doc corrected to the shipped reality; drift bound to the builder config |
 
 
 ## Details
@@ -3228,3 +3229,21 @@ was written for and wrong for a case nobody enumerated — a second click in the
 that never started, a recap edited after its action items were parsed. Two of the three end in the user's
 external tracker (duplicate tasks, stale wording), which is why they are worth more than their severity
 labels suggest: they are silent and they are outbound.
+
+### MQA-146 — the compliance one-pager describes an installer that no longer exists
+
+**Where.** `docs/compliance/data-flow-onepager.md` · workflow: an enterprise security review of Métis, and any air-gapped deployment decision made from it · fix size: small
+
+**Found by** running `npm run dist:win` during a full QA pass and looking inside the artifact, rather than by reading source. Every automated gate passed — `check:packaged-runtime` OK pre- and post-sign, `check:update-metadata` OK, `check:launch` OK — because none of them asserts anything about a document.
+
+**Intended.** `docs/compliance/data-flow-onepager.md` (Local LLM bullet): "The macOS arm64 and Windows x64 packages include Qwen3.5 0.8B (quantized GGUF plus its multimodal projector) and the pinned llama.cpp `llama-server` b9957 sidecar... The installed app does not download a model or inference runtime."
+
+**Actual.** `find release/win-unpacked -name '*.gguf'` returns **zero files**; the only thing under `resources/local-llm/` is `LICENSE.QWEN3.5-APACHE-2.0.txt`. `electron-builder.yml` says why, deliberately and in its own comment: "The Qwen WEIGHTS are deliberately NOT packaged. At ~728 MB they dominated the installer, and a universal (Intel + Apple Silicon) package carrying them would exceed GitHub's 2 GB per-asset release limit." `src/main/llm/local-model-download.ts` fetches them on first run, and `scripts/check-offline-package.mjs` has already been updated to allowlist that URL in exactly two reviewed files. So the ENGINEERING is coherent and gated — it is only the compliance document that was left behind. Corroborating evidence: `Metis-Setup-1.5.4.exe` is 733.7 MB where 1.5.3 was 1393.2 MB, a ~660 MB drop matching the excluded weights almost exactly.
+
+**Why it matters more than its severity suggests.** This is the document that goes to a customer's security review, and both false halves point the same way — they understate the app's network behaviour. A reviewer approving an air-gapped or egress-restricted deployment on the strength of "does not download a model" would be approving something the build cannot honour. Exactly the MQA-068 shape (a shipped artifact asserting behaviour the build cannot produce), one class of document more sensitive.
+
+**Not everything in the claim was wrong.** The `llama-server` sidecar genuinely ships — verified in the artifact at `resources/llama/win/{cpu,vulkan}/`, 132 MB of thin exe plus per-microarch ggml DLLs, sha256-pinned. So the inference RUNTIME is never downloaded; only the weights are.
+
+**Fix.** The bullet now states the split plainly (runtime bundled, weights fetched once on first run) and, in their place, gives the mitigations a reviewer actually needs: the URL is a **commit-pinned** Hugging Face revision rather than a mutable tag, both byte size and SHA-256 are enforced before use, the fetch goes to Hugging Face rather than to Mantu or any Métis service, and it carries no meeting content, telemetry or identifiers. It also answers the question the exclusion creates and the old text hid — in an air-gapped install there is no local LLM until the file is placed by other means, while **ASR is unaffected** because those weights ARE bundled, so transcription still works with no network at all.
+
+`src/main/packaged-model-claims.contract.test.ts` pins the RELATIONSHIP rather than the prose, the same way `license-enforcement-drift.contract.test.ts` does for MQA-068: while `electron-builder.yml` does not package `resources/local-llm/models`, the compliance doc may not claim it does — and package them again and the same tests demand the doc move with it. It also asserts the mitigations the corrected text now offers are real (commit-pinned URL, not `resolve/main`). Verified by regression: restoring the old sentences fails the suite.
