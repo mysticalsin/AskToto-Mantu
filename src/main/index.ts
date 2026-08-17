@@ -248,7 +248,7 @@ import {
 } from './dust-oauth'
 import { asrManifestComplete } from './asr-manifest'
 import { isInsideResourceBase, realResourceBase } from './asr-model-path'
-import { detectCli, testCli, setupCli, installCli, loginCli, prewarmCli } from './cli'
+import { detectCli, testCli, setupCli, installCli, loginCli, prewarmCli, checkCliSession } from './cli'
 import { connectMcp, pushToMcp } from './mcp/mcpClient'
 import { activateLicense, checkLicenseGrace, heartbeat } from './license'
 import {
@@ -278,6 +278,7 @@ import {
 import { SaveMeetingSchema, SaveNoteSchema } from '@shared/ipc'
 import {
   PROVIDERS,
+  PROVIDER_IDS,
   resolveModelTier,
   applyInteractiveGuardrail,
   reasoningEffortFor,
@@ -929,6 +930,46 @@ function retireCli(provider: ProviderId, message: string): void {
   if (!s.cliConnected[provider]) return
   setSettings({ cliConnected: { ...s.cliConnected, [provider]: false } })
   mainLog.warn(`[cli] ${provider} rejected our credentials — marking it disconnected`)
+}
+
+/**
+ * MQA-062: retiring on a credential rejection only fires once the user has already ASKED something and
+ * watched it fail. Until then Settings shows the card as Connected/Active, providerReady is true and the
+ * Bar's setup CTA stays hidden — the app asserting a session it has not checked. Dust's rule for this
+ * exact credential class (renderer/lib/dust-live-check.ts) is that opening Settings must verify the real
+ * session rather than trust "already connected"; this is that check for the two CLI providers, run once
+ * at startup and whenever the AI settings tab opens.
+ *
+ * Throttled per provider because the probe spawns a (cheap, zero-token) child process and the settings
+ * panel can be opened repeatedly. Only an explicit 'signed-out' retires the flag — see checkCliSession on
+ * why 'unknown' must change nothing.
+ */
+const CLI_SESSION_RECHECK_MS = 60_000
+const cliSessionCheckedAt = new Map<ProviderId, number>()
+let cliSessionSweep: Promise<void> | null = null
+
+async function verifyCliSessions(now = Date.now()): Promise<void> {
+  // Single-flighted: startup and a settings-panel open can land together, and two concurrent sweeps
+  // would spawn the probe twice for the same provider.
+  if (cliSessionSweep) return cliSessionSweep
+  cliSessionSweep = (async () => {
+    for (const provider of PROVIDER_IDS) {
+      if (PROVIDERS[provider].kind !== 'cli') continue
+      if (!getSettings().cliConnected[provider]) continue
+      const last = cliSessionCheckedAt.get(provider) ?? 0
+      if (now - last < CLI_SESSION_RECHECK_MS) continue
+      cliSessionCheckedAt.set(provider, now)
+      const verdict = await checkCliSession(provider)
+      if (verdict !== 'signed-out') continue
+      const s = getSettings()
+      if (!s.cliConnected[provider]) continue // disconnected by the user while the probe ran
+      setSettings({ cliConnected: { ...s.cliConnected, [provider]: false } })
+      mainLog.warn(`[cli] ${provider} is no longer signed in — marking it disconnected`)
+    }
+  })().finally(() => {
+    cliSessionSweep = null
+  })
+  return cliSessionSweep
 }
 
 function publicSettings(): PublicSettings {
@@ -2473,6 +2514,16 @@ function registerIpc(): void {
       setSettings({ cliConnected: { ...s.cliConnected, [p]: true } })
     }
     return r
+  })
+  // MQA-062: the Settings AI tab calls this on open, the way Settings already live-checks Dust. Gated
+  // and shaped like every other settings-writing handler (main window, requireAuth) — it can clear a
+  // cliConnected flag, so an unauthenticated caller must not reach it. Returns the fresh snapshot so a
+  // retired flag lands in the panel that asked, without waiting for the next settings poll.
+  ipcMain.handle(IPC.cliVerifySessions, async (e) => {
+    assertMainWindow(e)
+    if (!requireAuth()) return publicSettings()
+    await verifyCliSessions()
+    return publicSettings()
   })
   ipcMain.handle(IPC.cliSetup, (e, provider: unknown) => {
     assertMainWindow(e)
@@ -4569,7 +4620,12 @@ if (!app.requestSingleInstanceLock()) {
   // doesn't stall on the login-shell PATH lookup (it only ran on sign-in before — i.e. once ever).
   try {
     const s0 = getSettings()
-    if (s0.cliConnected['claude-cli'] || s0.cliConnected['codex-cli']) prewarmCli()
+    if (s0.cliConnected['claude-cli'] || s0.cliConnected['codex-cli']) {
+      prewarmCli()
+      // MQA-062: and check the session those flags claim, once per launch. A `claude logout` between
+      // runs otherwise leaves the app asserting a provider it cannot use until the first ask fails.
+      void verifyCliSessions()
+    }
   } catch {
     /* best-effort warm-up */
   }

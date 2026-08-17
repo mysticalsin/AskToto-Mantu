@@ -221,3 +221,28 @@ describe('MQA-095 — provider auto-selection respects the org allowlist', () =>
     expect(block).toMatch(/!allowed \|\| allowed\.includes\(id\)/)
   })
 })
+
+// MQA-062 — the CLI cards used to render straight off the persisted `cliConnected` flag with no live
+// check, so a `claude logout` in a terminal left them reading Connected/Active indefinitely. Dust already
+// states the rule for this credential class (lib/dust-live-check.ts: "Persisted state can lie … opening
+// Settings must verify the real session instead of taking 'already connected' for granted") and
+// implements it for itself; this is the same check for the two CLI providers.
+describe('MQA-062 — CLI Integration verifies the real session when the panel opens', () => {
+  const block = (): string => blockAfter('const sessionCheckedRef = useRef(false)', 'const [claudeState')
+
+  it('probes through main, not by spawning a billed testCli from the renderer', () => {
+    expect(block()).toMatch(/window\.toto\.cliVerifySessions\(\)/)
+    expect(block()).not.toMatch(/cliTest/)
+  })
+
+  it('only fires when something claims to be connected', () => {
+    expect(block()).toMatch(/if \(!cliConnected\['claude-cli'\] && !cliConnected\['codex-cli'\]\) return/)
+  })
+
+  it('runs once per mount — the ref is set before the await, not after', () => {
+    const body = block()
+    expect(body).toMatch(/if \(sessionCheckedRef\.current\) return/)
+    expect(body.indexOf('sessionCheckedRef.current = true')).toBeLessThan(body.indexOf('window.toto.cliVerifySessions()'))
+    expect(body).toMatch(/\}, \[\]\)/) // mount-only, like the Dust probe above it
+  })
+})

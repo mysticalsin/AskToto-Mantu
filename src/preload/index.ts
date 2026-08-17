@@ -109,6 +109,7 @@ const api = {
   },
   cliLogin: (provider: ProviderId): Promise<{ ok: boolean; error?: string }> =>
     ipcRenderer.invoke(IPC.cliLogin, provider),
+  cliVerifySessions: (): Promise<PublicSettings> => ipcRenderer.invoke(IPC.cliVerifySessions),
   graphifyStatus: (): Promise<GraphStatus> => ipcRenderer.invoke(IPC.graphifyStatus),
   graphifyRebuild: (): Promise<GraphStatus> => ipcRenderer.invoke(IPC.graphifyRebuild),
   graphifyRelated: (file: string): Promise<GraphRelated> =>

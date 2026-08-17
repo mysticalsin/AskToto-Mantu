@@ -1705,6 +1705,23 @@ function CliIntegration({
     }
   }, [])
 
+  // MQA-062: live session check on open, the same rule dust-live-check.ts states for this credential
+  // class — "Persisted state can lie: the user may have run `dust logout` … so opening Settings must
+  // verify the real session instead of taking 'already connected' for granted." `cliConnected` is
+  // written when the user connects and, until the ask path learned to retire it on a rejection, never
+  // written back; a `claude logout` in a terminal leaves these cards reading Connected/Active forever.
+  // Main does the work (zero-token status probe, throttled, retires only on an explicit negative) and
+  // returns the refreshed snapshot, which `patch`-free `onSettings` polling would otherwise deliver late.
+  const sessionCheckedRef = useRef(false)
+  useEffect(() => {
+    if (sessionCheckedRef.current) return
+    if (!cliConnected['claude-cli'] && !cliConnected['codex-cli']) return
+    sessionCheckedRef.current = true
+    void window.toto.cliVerifySessions()
+    // Once per mount, for the already-connected case only — connect/disconnect handle the rest.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
   // Per-CLI card state
   const [claudeState, setClaudeState] = useState<CliCardState>({ phase: 'idle', msg: null, version: null })
   const [codexState, setCodexState] = useState<CliCardState>({ phase: 'idle', msg: null, version: null })

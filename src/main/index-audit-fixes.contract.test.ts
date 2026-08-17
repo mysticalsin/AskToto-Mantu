@@ -168,6 +168,46 @@ describe('MQA-062 — a dead CLI session stops reporting itself as connected', (
     expect(body).toMatch(/def\.kind === 'cli' && isAuthFailure\(message\)\s*\n\s*\? `\$\{def\.label\} is no longer signed in\./)
     expect(body).toMatch(/Settings → CLI Integration/)
   })
+
+  // Retiring on rejection only fires once the user has ALREADY asked something and watched it fail.
+  // These pin the half that finds out first — the same "persisted state can lie" rule Dust follows.
+  const sweep = (): string => sliceBetween('async function verifyCliSessions(', 'function publicSettings()')
+
+  it('only ever probes a provider the settings currently claim is connected', () => {
+    const body = sweep()
+    expect(body).toMatch(/if \(PROVIDERS\[provider\]\.kind !== 'cli'\) continue/)
+    expect(body).toMatch(/if \(!getSettings\(\)\.cliConnected\[provider\]\) continue/)
+  })
+
+  it('retires ONLY on an explicit signed-out verdict, never on an unreadable probe', () => {
+    // checkCliSession is deliberately three-valued; treating 'unknown' as negative would disconnect a
+    // working CLI whenever its version changed its status output.
+    expect(sweep()).toMatch(/if \(verdict !== 'signed-out'\) continue/)
+  })
+
+  it('re-reads the flag after the await, so a user Disconnect during the probe is not undone', () => {
+    const body = sweep()
+    expect(body.indexOf('const s = getSettings()')).toBeGreaterThan(body.indexOf('await checkCliSession(provider)'))
+    expect(body).toMatch(/if \(!s\.cliConnected\[provider\]\) continue/)
+  })
+
+  it('throttles per provider and single-flights the sweep, so an opened panel cannot spawn a probe storm', () => {
+    const body = sweep()
+    expect(body).toMatch(/if \(now - last < CLI_SESSION_RECHECK_MS\) continue/)
+    expect(body).toMatch(/if \(cliSessionSweep\) return cliSessionSweep/)
+  })
+
+  it('runs once at launch, next to the CLI prewarm that already reads the same flags', () => {
+    expect(indexSrc).toMatch(/if \(s0\.cliConnected\['claude-cli'\] \|\| s0\.cliConnected\['codex-cli'\]\) \{[\s\S]{0,400}?void verifyCliSessions\(\)/)
+  })
+
+  it('gates the renderer-facing verify handler like every other settings-WRITING handler (MQA-129)', () => {
+    const handler = sliceBetween('ipcMain.handle(IPC.cliVerifySessions', 'ipcMain.handle(IPC.cliSetup')
+    expect(handler).toMatch(/assertMainWindow\(e\)/)
+    expect(handler).toMatch(/if \(!requireAuth\(\)\) return publicSettings\(\)/)
+    // Returns the refreshed snapshot so a retired flag lands in the panel that asked for the check.
+    expect(handler).toMatch(/await verifyCliSessions\(\)\s*\n\s*return publicSettings\(\)/)
+  })
 })
 
 describe('MQA-064 — a failed MCP key write reaches the user instead of wedging the card', () => {
