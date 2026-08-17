@@ -955,18 +955,26 @@ async function verifyCliSessions(now = Date.now()): Promise<void> {
   // would spawn the probe twice for the same provider.
   if (cliSessionSweep) return cliSessionSweep
   cliSessionSweep = (async () => {
-    for (const provider of PROVIDER_IDS) {
-      if (PROVIDERS[provider].kind !== 'cli') continue
-      if (!getSettings().cliConnected[provider]) continue
-      const last = cliSessionCheckedAt.get(provider) ?? 0
-      if (now - last < CLI_SESSION_RECHECK_MS) continue
-      cliSessionCheckedAt.set(provider, now)
-      const verdict = await checkCliSession(provider)
-      if (verdict !== 'signed-out') continue
-      const s = getSettings()
-      if (!s.cliConnected[provider]) continue // disconnected by the user while the probe ran
-      setSettings({ cliConnected: { ...s.cliConnected, [provider]: false } })
-      mainLog.warn(`[cli] ${provider} is no longer signed in — marking it disconnected`)
+    // Never reject. One caller is a bare `void verifyCliSessions()` at boot, and an async body with no
+    // guard is precisely how a transient settings-read failure becomes an unhandledRejection — which
+    // onFatal turns into a crash-*.log and an `app.crash` audit entry for something that crashed nothing.
+    // Same guarded shape startMeetingPoller uses, and for the same reason.
+    try {
+      for (const provider of PROVIDER_IDS) {
+        if (PROVIDERS[provider].kind !== 'cli') continue
+        if (!getSettings().cliConnected[provider]) continue
+        const last = cliSessionCheckedAt.get(provider) ?? 0
+        if (now - last < CLI_SESSION_RECHECK_MS) continue
+        cliSessionCheckedAt.set(provider, now)
+        const verdict = await checkCliSession(provider)
+        if (verdict !== 'signed-out') continue
+        const s = getSettings()
+        if (!s.cliConnected[provider]) continue // disconnected by the user while the probe ran
+        setSettings({ cliConnected: { ...s.cliConnected, [provider]: false } })
+        mainLog.warn(`[cli] ${provider} is no longer signed in — marking it disconnected`)
+      }
+    } catch (error) {
+      mainLog.warn('[cli] session verification could not complete:', error instanceof Error ? error.message : String(error))
     }
   })().finally(() => {
     cliSessionSweep = null
@@ -2102,9 +2110,9 @@ function registerIpc(): void {
     // settings so the shape matches the normal success return exactly; nothing is persisted.
     //
     // MQA-066: with ONE exception, and only the exact one that makes the wall escapable. When enforcement
-    // is on but nothing supplies a tenant, the wall's own message tells the user to set SSO up in
-    // Settings → Account — and this line is what made typing it there silently not persist, leaving the
-    // machine unusable with no in-app recovery. ssoBootstrapAllowed() re-checks every gate (no session,
+    // is on but nothing supplies a tenant, the wall's own message tells the user to enter the Entra IDs in
+    // Settings → Calendar — and this line is what made typing them there silently not persist, leaving
+    // the machine unusable with no in-app recovery. ssoBootstrapAllowed() re-checks every gate (no session,
     // enforcement on, NOTHING resolving a config, and never once sticky-configured), and the patch is
     // narrowed here to exactly the three self-serve azure fields, so no other privileged setting rides
     // along. env / machine-wide managed-config still outrank these in readConfig(), so an org deployment

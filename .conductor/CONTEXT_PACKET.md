@@ -1,17 +1,17 @@
-# Context Packet — 2026-08-16-1652
+# Context Packet — 2026-08-17-0653
 
 ## Project: Asktoto
-## Branch: main
+## Branch: fix/close-open-ledger-rows
 
 ## Uncommitted Changes
  M .conductor/CONTEXT_PACKET.md
 
 ## Recent Commits (last 5)
-73cde2b fix(security): refuse redirects in the MCP client so the SSRF guard cannot be walked around
-6c1f8fa fix(llm): attribute a hedged answer to the leg that produced it, and release the race handle
-6f1bcbb fix: redact every provider key format, and stop next-steps stranding or duplicating work
-7823270 docs(qa): log the 2026-08-15 hardening audit as MQA-133..138
-5b6de29 fix(security): keep the Dust device code in main, and take the session off the oauth branch on disconnect
+0e4e049 test: make the suite's verdict independent of what else the machine is doing
+af230ef fix(review): remember a CRM push across a relaunch, not just across a remount
+45b222a docs(license): stop shipping a policy and a checklist for licensing that cannot run
+1118365 fix(auth): give the enforced-but-unconfigured sign-in wall a way out
+f3de3f8 fix(cli): find out a CLI session died before the user does
 
 ## Active Tasks
 

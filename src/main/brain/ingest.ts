@@ -1926,7 +1926,10 @@ type StartRebuildOptions = {
  */
 async function localOnlyRebuildBlocked(s: Settings): Promise<string | null> {
   const candidates = pickProviderCandidates(s)
-  if (!candidates.every((c) => c.provider === 'local')) return null
+  // `length > 0` explicitly: every() on an empty array is true, and hashing gigabytes to answer a
+  // question about a provider set that does not exist would be pure cost. The hasUsableProvider guard
+  // above already rules that out today; this stops the invariant depending on caller ordering.
+  if (candidates.length === 0 || !candidates.every((c) => c.provider === 'local')) return null
   try {
     await verifyIntegrity(s.localLlm.modelId)
     return null

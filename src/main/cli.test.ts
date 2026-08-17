@@ -651,6 +651,24 @@ describe('checkCliSession — the zero-token liveness probe behind MQA-062', () 
   it('treats a missing binary as signed-out — an uninstalled CLI cannot be connected', async () => {
     wire(async () => ({ stdout: '' }), null)
     expect(await checkCliSession('claude-cli')).toBe('signed-out')
+    // Confirmed absent means BOTH lookups answered null, not one.
+    expect(h.execFileImpl.mock.calls.filter((c) => (c[1] as string[])?.[0] === '-lc')).toHaveLength(2)
+  })
+
+  it('does not retire a working CLI on a transient lookup failure', async () => {
+    // resolveBin shells out to the login shell on mac/Linux and caches only positive hits, so a hiccup
+    // on the first call is indistinguishable from an uninstall until the second one answers.
+    let lookups = 0
+    h.execFileImpl.mockImplementation((_cmd: string, args: string[]) => {
+      if (args?.[0] === '-lc') {
+        lookups += 1
+        return Promise.resolve({ stdout: lookups === 1 ? '   \n' : '/usr/local/bin/tool\n', stderr: '' })
+      }
+      if (args?.[0] === 'auth') return Promise.resolve({ stdout: JSON.stringify({ loggedIn: true }) })
+      return Promise.reject(new Error(`unexpected execFile args: ${JSON.stringify(args)}`))
+    })
+    expect(await checkCliSession('claude-cli')).toBe('live')
+    expect(lookups).toBe(2)
   })
 
   // The safety property, and the reason the verdict is three-valued: a false "signed out" retires a

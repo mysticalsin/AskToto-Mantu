@@ -226,3 +226,39 @@ describe('crmPushKey / seedCrmPushed — a push survives a relaunch (MQA-092)', 
     expect(crmPushDone('idle', p)).toBe(true)
   })
 })
+
+// MQA-092, the variant the durable marker would otherwise miss. The push panel needs only recapText,
+// not a saved path, and a LIVE meeting's savedPath stays null until autosave lands — which can be
+// deferred behind up to 5 retries with backoff. A push in that window has no file to stamp, so the
+// marker has to be parked and written when the path finally arrives, guarded so it can never land on a
+// different meeting's file.
+describe('the deferred CRM marker — a push that beat its own autosave (MQA-092)', () => {
+  const source = readFileSync(join(__dirname, 'Review.tsx'), 'utf8').replace(/\r\n/g, '\n')
+  const between = (start: string, end: string): string => {
+    const from = source.indexOf(start)
+    expect(from, `anchor moved: ${start}`).toBeGreaterThan(-1)
+    const to = source.indexOf(end, from + start.length)
+    expect(to, `end anchor moved: ${end}`).toBeGreaterThan(-1)
+    return source.slice(from, to)
+  }
+
+  it('parks the fingerprint when there is no file yet instead of dropping it', () => {
+    const send = between('const sendToCrm = async ()', 'const taskConnections')
+    expect(send).toMatch(/if \(file\) void window\.toto\.recallSetCrmPushed\(file, crmPushKey\(payload\)\)/)
+    expect(send).toMatch(/else pendingCrmMarker = crmPushKey\(payload\)/)
+  })
+
+  it('writes the parked marker only once a path exists AND it matches this payload', () => {
+    const flush = between('const crmPayloadKey = crmPushKey(crmPayload)', 'const sendToCrm')
+    // Both halves of the guard are load-bearing: without the fingerprint check, navigating to another
+    // meeting after a file-less push would stamp THIS fingerprint onto THAT meeting's frontmatter.
+    expect(flush).toMatch(/if \(!savedPath \|\| pendingCrmMarker !== crmPayloadKey\) return/)
+    // Cleared before the write, so a re-render mid-flight cannot fire it twice.
+    expect(flush.indexOf('pendingCrmMarker = null')).toBeLessThan(flush.indexOf('recallSetCrmPushed'))
+    expect(flush).toMatch(/\}, \[savedPath, crmPayloadKey\]\)/)
+  })
+
+  it('is one slot, because only the live meeting can lack a path', () => {
+    expect(source).toMatch(/^let pendingCrmMarker: string \| null = null$/m)
+  })
+})

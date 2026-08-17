@@ -197,6 +197,15 @@ describe('MQA-062 — a dead CLI session stops reporting itself as connected', (
     expect(body).toMatch(/if \(cliSessionSweep\) return cliSessionSweep/)
   })
 
+  it('never rejects — one caller is a bare `void` at boot, where a throw becomes a bogus crash dump', () => {
+    // The class the hardening backlog already fixed once for startMeetingNotifier: an unguarded async
+    // body's rejection reaches onFatal, which writes a crash-*.log and an `app.crash` audit line for
+    // something that crashed nothing.
+    const body = sweep()
+    expect(body).toMatch(/try \{[\s\S]*\} catch \(error\) \{[\s\S]*mainLog\.warn\('\[cli\] session verification could not complete:'/)
+    expect(indexSrc).toMatch(/void verifyCliSessions\(\)/)
+  })
+
   it('runs once at launch, next to the CLI prewarm that already reads the same flags', () => {
     expect(indexSrc).toMatch(/if \(s0\.cliConnected\['claude-cli'\] \|\| s0\.cliConnected\['codex-cli'\]\) \{[\s\S]{0,400}?void verifyCliSessions\(\)/)
   })
