@@ -97,6 +97,23 @@ jobs:
   build-macos:
     name: macOS package
     needs: [quality, security]
+    # COST GATE (added 2026-08-17). This job ran on every push to every branch, and a macOS runner bills
+    # at 10x wall-clock against the Actions allowance — so a single feature-branch push could reserve up
+    # to 900 quota-minutes here, plus 180 more on the Windows job below. On a private repo's monthly
+    # allowance that is two or three pushes before everything stops: GitHub then refuses to start ANY
+    # job with "The job was not started because an Actions budget is preventing further use", which is
+    # exactly the state this repo was found in — quality and security failing in 3s with no runner
+    # assigned, and both package jobs skipped, so no installer could be produced at all.
+    #
+    # Packaging still runs everywhere it earns its cost: pushes to main, pull requests into main (so a
+    # branch is packaged before it merges, not after), and workflow_dispatch to package any branch on
+    # demand. What it no longer does is repackage 3.2 GB of sidecars for every intermediate commit on a
+    # work-in-progress branch. The cheap gates are untouched — quality (ubuntu + windows) and security
+    # still run on every push, so branch feedback is unchanged.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event_name == 'pull_request' ||
+      (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'))
     runs-on: macos-latest
     timeout-minutes: 90
     steps:
@@ -190,6 +207,14 @@ jobs:
   build-windows:
     name: Windows package
     needs: [quality, security]
+    # Same cost gate as build-macos above (see the reasoning there). Windows bills at 2x rather than 10x,
+    # but it is the same 90-minute packaging job and the two together are what drained the allowance.
+    # Kept in lockstep deliberately: if a push packages one platform it must package both, or a release
+    # candidate could reach main verified on only one of the two targets it ships.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event_name == 'pull_request' ||
+      (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'))
     runs-on: windows-latest
     timeout-minutes: 90
     steps:
