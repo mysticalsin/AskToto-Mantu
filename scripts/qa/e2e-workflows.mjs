@@ -273,13 +273,20 @@ async function groupAsk() {
     }, id)
     return { afterCancel: out.errored ?? 'no error surfaced (clean cancel)' }
   })
-  await check(g, 'answer mode is out of local scope — it fails with an ACTIONABLE message, not a hang', async () => {
-    const r = await ask({ id: uid('answer'), mode: 'answer', prompt: 'What is our renewal risk?', history: [] }, 90000)
-    assert(r.error, `answer mode unexpectedly succeeded via ${r.providers.at(-1)} — local scope may have widened`)
-    assert(!/TIMEOUT/.test(r.error), 'answer mode HUNG instead of failing fast with no provider')
-    const actionable = /settings|key|connect|provider/i.test(r.error)
-    assert(actionable, `error is not actionable: "${r.error}"`)
-    return { error: r.error, ms: r.doneAt }
+  // Rewritten 2026-08-17. This used to assert that answer mode FAILS with an actionable message,
+  // because local was scoped to suggest/summary/vision. MQA-122 and MQA-123 deliberately changed that:
+  // llm/local-routing.ts's localAnswerFloorEligibleFor is "the ABSOLUTE floor … when every cloud/CLI
+  // provider is exhausted … a weak on-device answer beats handing the user an error". So on a zero-key
+  // install, answer mode succeeding ON LOCAL is the shipped contract, and the old assertion could only
+  // ever fail — a check that can never pass is worse than none, because it trains people to ignore the
+  // suite. Asserts the current contract instead, which is the stronger claim.
+  await check(g, 'answer mode falls to the on-device floor rather than dead-ending (MQA-122/MQA-123)', async () => {
+    const r = await ask({ id: uid('answer'), mode: 'answer', prompt: 'What is our renewal risk?', history: [] }, 180000)
+    assert(!r.error || !/TIMEOUT/.test(r.error), 'answer mode HUNG instead of reaching the on-device floor')
+    assert(!r.error, `answer mode dead-ended instead of falling to local: "${r.error}"`)
+    assert(r.providers.at(-1) === 'local', `expected the on-device floor to serve it, got ${r.providers.at(-1)}`)
+    assert(r.text.trim().length > 0, 'the on-device floor answered with no text at all')
+    return { provider: r.providers.at(-1), chars: r.text.length, ms: r.doneAt }
   })
   await check(g, 'resetAskContext clears conversation state without throwing', async () => {
     await page.evaluate(() => window.toto.resetAskContext())
