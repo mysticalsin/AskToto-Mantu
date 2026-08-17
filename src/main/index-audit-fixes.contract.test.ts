@@ -10,12 +10,13 @@ import { describe, expect, it } from 'vitest'
 // source. Where a fix IS a self-contained expression, the expression itself is lifted out of the source
 // and executed below, so those assertions test the shipped logic rather than its shape.
 //
-// NOT COVERED HERE — MQA-059 (a revoked key silently absorbed by cross-provider failover). Main already
-// computes and ships the honest signal (`unhealthyProviders` on the settings snapshot, index.ts), but no
-// renderer component consumes it, and every remedy the ledger accepts lands in files this change does not
-// own (src/renderer/src/App.tsx to render the banner, src/shared/ipc.ts for a distinct key-failed field).
-// The one index.ts-local option — folding provider health into `providerReady` — is the change the
-// verifier explicitly flagged as riskier, because ~10 renderer gates currently succeed via failover.
+// NOT COVERED HERE — MQA-059 (a revoked key silently absorbed by cross-provider failover). Main's half
+// (computing `unhealthyProviders` and shipping it on the settings snapshot) is pinned by
+// provider-health-ux.contract.test.ts; the renderer half that finally consumes it — the standing notice
+// naming the dead provider, and the settings re-fetch on stream end that makes it appear without a window
+// focus — lives in src/renderer/src/app-audit-fixes.contract.test.ts. Deliberately NOT folded into
+// `providerReady`: the verifier flagged that as the riskier change, because ~10 renderer gates currently
+// succeed via failover and would start failing closed.
 const indexSrc = readFileSync(join(__dirname, 'index.ts'), 'utf8')
 
 /** Slice the source from `from` up to (excluding) the next occurrence of `to`. Sliced inside each test so

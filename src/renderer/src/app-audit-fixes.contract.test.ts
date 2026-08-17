@@ -1,7 +1,7 @@
 /**
  * app-audit-fixes.contract.test.ts — regression cover for the App.tsx defects in docs/qa/BUG-LEDGER.md:
- * MQA-068, MQA-071, MQA-072, MQA-082, MQA-083, MQA-099. (MQA-066 is deliberately uncovered — see the
- * note above the MQA-068 block for why the renderer-only fix would not hold.)
+ * MQA-053, MQA-059, MQA-068, MQA-071, MQA-072, MQA-082, MQA-083, MQA-099. (MQA-066 is deliberately
+ * uncovered — see the note above the MQA-068 block for why the renderer-only fix would not hold.)
  *
  * Two kinds of assertion live here, deliberately:
  *
@@ -200,5 +200,60 @@ describe('MQA-099 — the double-capture guard is armed, not just cleared', () =
     expect(source).toMatch(
       /\[ask\.run, requireProvider, settings\?\.backgroundScreenContext, settings\?\.providerReady, listen\]/
     )
+  })
+})
+
+// ── MQA-053 / MQA-059 — a silently absorbed dead credential is now stated, not swallowed ─────────────
+//
+// Both rows are the same defect seen from two ends: a pre-token 401 on the active provider is
+// non-transient, so index.ts fails over to a second keyed provider and returns BEFORE any streamError —
+// the ask looks normal. providerReady is derived from "a key string exists" (store.ts's hasApiKey), never
+// from whether the key works, so the setup CTA never fires and Settings keeps showing that provider as
+// active with a key saved. Main already computed the honest signal (`unhealthyProviders`); until now no
+// surface the user actually looks at consumed it.
+describe('MQA-053 / MQA-059 — the user is told when the ACTIVE provider stopped working', () => {
+  const block = blockBetween('const dead = (settings.unhealthyProviders ?? []).find(', '})()}')
+
+  it('reads the honest health signal main already ships, not providerReady', () => {
+    expect(code(block)).toMatch(/settings\.unhealthyProviders/)
+    // providerReady cannot express "the key exists and is dead" — gating on it here would render nothing.
+    expect(code(block)).not.toMatch(/settings\.providerReady/)
+  })
+
+  it('fires only for the provider Settings shows as active', () => {
+    expect(code(block)).toMatch(/u\.provider === settings\.provider/)
+  })
+
+  it('fires only for reasons the user must act on, never a transient limit', () => {
+    const body = code(block)
+    expect(body).toMatch(/u\.reason === 'auth'/)
+    expect(body).toMatch(/u\.reason === 'quota-exhausted'/)
+    // A 60s rate limit and a self-resetting session cap are what "Backups & limits" already rides out.
+    expect(body).not.toMatch(/'rate-limit'/)
+    expect(body).not.toMatch(/'usage-cap'/)
+  })
+
+  it('names the provider, says another one is answering, and points at the exact setting', () => {
+    expect(block).toMatch(/was rejected/)
+    expect(block).toMatch(/out of credit/)
+    expect(block).toMatch(/another provider/)
+    expect(block).toMatch(/Settings → AI/)
+    expect(block).toMatch(/openSettings\('ai'/)
+  })
+
+  it('offers a CLI provider the remedy that exists for it — reconnect, not "update your key"', () => {
+    const body = code(block)
+    expect(body).toMatch(/kind === 'cli'/)
+    expect(body).toMatch(/Reconnect it/)
+  })
+
+  it('re-fetches settings when an ask stops streaming, so the notice is not deferred to a window focus', () => {
+    const effect = blockBetween('const wasStreamingRef = useRef(false)', 'const followup = useAsk()')
+    const body = code(effect)
+    expect(body).toMatch(/if \(askStreaming \|\| suggestStreaming\)/)
+    expect(body).toMatch(/wasStreamingRef\.current = true/)
+    // Never on mount: useSettings already fetches there, and a mount-time refetch would be pure noise.
+    expect(body).toMatch(/if \(!wasStreamingRef\.current\) return/)
+    expect(body).toMatch(/void refresh\(\)/)
   })
 })
