@@ -189,8 +189,9 @@ native-binary provisioning (sherpa-onnx, ffmpeg), and the roadmap: **[`docs/askt
 - **Multilingual.** Transcribes any spoken language, assists in the speaker's language, writes the
   recap in the language you pick (Settings → Personalize → Language).
 - **Azure SSO.** Optional, domain-locked Microsoft sign-in; `requireAuth()` guards every privileged IPC.
-- **License gate (optional, off by default).** `licenseGateEnabled` defaults to `false`; when a company
-  turns it on, the app phones home to a self-hosted `license-server/` instance. See
+- **License gate (built, currently compiled off).** The client and a self-hosted `license-server/` are
+  both written, but enforcement is switched off in the app itself (`LICENSE_ENFORCEMENT` in `App.tsx` and
+  `LICENSE_UI_ENABLED` in `Settings.tsx`), so `licenseGateEnabled` activates nothing today. See
   [`docs/license-platform-plan.md`](docs/license-platform-plan.md).
 - **Encryption at rest.** Settings/keys always encrypted (keychain); transcripts envelope-encrypted
   (AES-256-GCM) by default — can be disabled per user or locked on via managed config.

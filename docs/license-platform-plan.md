@@ -56,24 +56,36 @@ running it:
 4. ~~Backups~~ — `scripts/backup.mjs`/`restore.mjs` already implement the daily-copy-off-box plan.
 5. Point Métis installs at the public URL instead of 127.0.0.1. Still open until step 2 lands.
 
-## Phase 3 — enforcement (WIRED, ships inert — gate is off by default)
+## Phase 3 — enforcement (BUILT, and COMPILED OFF — no setting turns it on)
 
-`checkLicenseGrace()` is already wired into a real startup gate in `src/renderer/src/App.tsx`
-(~lines 1746-1773): when `settings.licenseGateEnabled` is true and the verdict says blocked, the
-app shows a blocking activation screen instead of the bar — never a silent exit, always a path to
-activate or retry. `licenseGateEnabled` defaults to `false` (`src/shared/ipc.ts`), so this ships
-inert until an operator turns it on via managed-config or Settings. Remaining work to actually use
-this in a licensed rollout:
+`checkLicenseGrace()` is wired into a real startup gate in `src/renderer/src/App.tsx`: when the gate is
+consulted and the verdict says blocked, the app shows a blocking activation screen instead of the bar —
+never a silent exit, always a path to activate or retry.
+
+**It is never consulted on a shipped build (MQA-068).** `App.tsx`'s `LICENSE_ENFORCEMENT` constant is
+`false`, so `licenseEnforced` is constant-false, `window.toto.licenseGate()` is never called and the
+`<LicenseGate/>` branch is unreachable; `Settings.tsx`'s `LICENSE_UI_ENABLED` is `false`, so the only
+activation form in the app never renders. `licenseValid` can therefore never become true, so main's 12h
+revocation heartbeat — gated on `licenseGateEnabled && licenseValid` — never fires either. This section
+previously said enforcement followed `settings.licenseGateEnabled`; it does not, and the shipped
+enterprise example config was set-and-locking that key on the strength of this paragraph.
+
+Remaining work to actually use this in a licensed rollout:
+
+0. Flip `LICENSE_ENFORCEMENT` (`App.tsx`) and `LICENSE_UI_ENABLED` (`Settings.tsx`) **together**, in one
+   change, and re-verify activation → seat consumption → revocation end to end. Flipping the first alone
+   ships a blocking gate with no form to activate past it. Until this is done, every item below is moot.
 
 1. ~~On launch, when `licenseGateEnabled`~~ — done, see above.
 2. ~~Grace UX~~ — done: 7-30 day offline grace shows a quiet pending note; hard-cap expiry shows
    the blocking screen with "reconnect to re-validate" (see `license-platform-plan.md` Phase 0).
-3. Enterprise rollout: ship the gate default-on ONLY in builds destined for licensed customers
-   (a build-time flag or managed-config key), keeping internal/dev builds unlocked. Still open —
-   today it's a manual per-deployment managed-config toggle, not an automated build-time split.
+3. Enterprise rollout: ship the gate on ONLY in builds destined for licensed customers (a build-time
+   flag), keeping internal/dev builds unlocked. Still open, and step 0 is its prerequisite: there is no
+   per-deployment managed-config toggle today either — `licenseGateEnabled` is inert in both directions.
 4. Kill-switch semantics documented for sales: revoke = blocked at next heartbeat (≤7 days
-   offline, immediate when online). Still open as a sales-facing document; the mechanics
-   themselves are implemented and verified (Phase 0's end-to-end proof).
+   offline, immediate when online). Still open as a sales-facing document. The server side and
+   `main/license.ts` are implemented and unit-verified (Phase 0), but no client heartbeat can fire until
+   step 0 lands — so this must not be sold as live today.
 
 ## Phase 4 — platform niceties (pull-based, build when a real need appears)
 
