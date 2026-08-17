@@ -166,6 +166,10 @@ export const IPC = {
   cliInstall: 'cli:install',
   cliInstallProgress: 'cli:install:progress',
   cliLogin: 'cli:login',
+  // MQA-062: re-verify the real CLI session behind every `cliConnected` flag (a `claude logout` between
+  // launches leaves the flag asserting a session that is gone). Zero-token status probe, throttled in
+  // main; returns the refreshed settings snapshot so the caller sees any retired flag immediately.
+  cliVerifySessions: 'cli:verify-sessions',
   answerFeedback: 'answer:feedback',
   metricsRead: 'metrics:read',
   updateDownloaded: 'update:downloaded',
