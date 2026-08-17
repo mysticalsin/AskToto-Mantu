@@ -365,6 +365,9 @@ export function App(): JSX.Element {
     lines: TranscriptLine[]
     startedAt: number
     confidential: boolean
+    /** MQA-092 — the meeting's saved `crm_pushed` fingerprint, so Review knows a recap that already
+     *  reached the CRM in an earlier session and does not re-arm the push. */
+    crmPushedKey?: string
   } | null>(null)
   // Surfaced when opening a past meeting fails (recallRead ok:false — unreadable/undecrypted file). Every
   // open path (History row, Settings' Mantu Intelligence list, Review's own Recent-meetings/Related panel)
@@ -2129,7 +2132,8 @@ export function App(): JSX.Element {
       recap: r.recap || '',
       lines: r.lines || [],
       startedAt: r.startedAt || 0,
-      confidential: !!r.confidential
+      confidential: !!r.confidential,
+      crmPushedKey: r.crmPushedKey
     })
     setView('review')
     setCollapsed(false)
@@ -2600,6 +2604,7 @@ export function App(): JSX.Element {
         showTranscript={settings?.showFullTranscriptInReview ?? false}
         meetingMeta={pm ? { title: pm.title, date: pm.date } : undefined}
         confidential={pm ? pm.confidential : false}
+        crmPushedKey={pm ? pm.crmPushedKey : undefined}
         followupDraft={followup.answer}
         winsToggle={spotlightRefReady ? { on: includeWins, onToggle: setIncludeWins } : undefined}
         onGenerateFollowup={generateFollowup}

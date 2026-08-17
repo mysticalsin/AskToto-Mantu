@@ -4,7 +4,9 @@ import { describe, it, expect } from 'vitest'
 import {
   displayedRecapText,
   crmPushDone,
+  crmPushKey,
   markCrmPushed,
+  seedCrmPushed,
   type CrmPayload,
   nextStepPushed,
   markNextStepPushed,
@@ -167,5 +169,60 @@ describe('Review.tsx — next steps and cold-call coaching cannot strand or dupl
     expect(src).toMatch(/nextStepsSource !== null && nextStepsSource !== recapText\) void loadNextSteps\(\)/)
     // ...but never mid-stream, which would be a fetch storm on non-final text.
     expect(src).toMatch(/nextStepsLoading \|\| recap\?\.streaming\) return/)
+  })
+})
+
+// MQA-092, the durable half. The session Set above dies with the process, and the push panel has no
+// other memory: push a recap, quit, relaunch, reopen the meeting, and "Push to CRM" is armed again over
+// a record the CRM already holds. The recap's own frontmatter now carries the fingerprint of what was
+// pushed (main/recall.ts's setMeetingCrmPushed), and Review seeds the session Set from it on mount.
+describe('crmPushKey / seedCrmPushed — a push survives a relaunch (MQA-092)', () => {
+  const payload = (name: string): CrmPayload => ({
+    title: name,
+    date: '2026-06-12T09:00:00.000Z',
+    summary: `## Overview\nNotes for ${name}.`
+  })
+
+  it('fits a YAML scalar — main refuses anything else, so this shape is the contract', () => {
+    // The exact regex main/recall.ts and SetCrmPushedPayloadSchema both enforce before interpolating it
+    // into the frontmatter block.
+    expect(crmPushKey(payload('anything at all: with punctuation\nand a newline'))).toMatch(/^[a-z0-9]{1,32}$/)
+  })
+
+  it('is stable for one payload and different for another', () => {
+    const p = payload('acme renewal')
+    expect(crmPushKey(p)).toBe(crmPushKey({ ...p }))
+    expect(crmPushKey(p)).not.toBe(crmPushKey(payload('globex kickoff')))
+    // An edited recap is a different record, so it must hash differently and re-arm the chip.
+    expect(crmPushKey(p)).not.toBe(crmPushKey({ ...p, summary: `${p.summary}\n- new action item` }))
+  })
+
+  it('a seeded fingerprint reports the meeting as already pushed, with no push this session', () => {
+    const p = payload('reopened after a relaunch')
+    expect(crmPushDone('idle', p)).toBe(false)
+    seedCrmPushed(crmPushKey(p)) // what App hands Review from the meeting's crm_pushed frontmatter
+    expect(crmPushDone('idle', p)).toBe(true)
+  })
+
+  it('an absent marker seeds nothing — a never-pushed meeting stays armed', () => {
+    const p = payload('never pushed, reopened')
+    seedCrmPushed(undefined)
+    expect(crmPushDone('idle', p)).toBe(false)
+  })
+
+  it('a stale marker from an earlier recap does not suppress the edited one', () => {
+    const p = payload('edited since the push')
+    seedCrmPushed(crmPushKey(p))
+    expect(crmPushDone('idle', { ...p, summary: `${p.summary}\n- added later` })).toBe(false)
+  })
+
+  it('markCrmPushed and the durable marker agree on one identity', () => {
+    // If these ever diverged, a meeting pushed this session would re-arm after a relaunch — the exact
+    // defect, reintroduced through the back door.
+    const p = payload('one identity')
+    markCrmPushed(p)
+    expect(crmPushDone('idle', p)).toBe(true)
+    seedCrmPushed(crmPushKey(p)) // idempotent: same key, already present
+    expect(crmPushDone('idle', p)).toBe(true)
   })
 })

@@ -49,6 +49,7 @@ import {
   RenameMeetingPayloadSchema,
   UpdateRecapPayloadSchema,
   SetConfidentialPayloadSchema,
+  SetCrmPushedPayloadSchema,
   RecallBackfillSpeakersPayloadSchema,
   ImportAudioStartSchema,
   ImportJobIdSchema,
@@ -232,6 +233,7 @@ import {
   updateMeetingRecap,
   updateMeetingTranscript,
   setMeetingConfidential,
+  setMeetingCrmPushed,
   deleteAllMeetings,
   sweepExpiredMeetings
 } from './recall'
@@ -2900,6 +2902,18 @@ function registerIpc(): void {
       }
     }
     return result
+  })
+
+  // MQA-092: durable record that this recap already reached the CRM. Same guard shape as every other
+  // recall write (main window, requireAuth, zod, basename re-checked inside recall.ts). No republish
+  // here — unlike the confidential flag, this marker changes nothing about what is published; it only
+  // stops the push panel re-offering a send that already happened.
+  ipcMain.handle(IPC.recallSetCrmPushed, async (e, raw) => {
+    assertMainWindow(e)
+    if (!requireAuth()) return { ok: false, error: 'Sign in with your Mantu account first.' }
+    const parsed = SetCrmPushedPayloadSchema.safeParse(raw)
+    if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message || 'Invalid request.' }
+    return setMeetingCrmPushed(getSettings(), parsed.data.file, parsed.data.key)
   })
 
   // Speaker Intelligence: manual (re)trigger of the Teams-transcript speaker-name backfill for a past

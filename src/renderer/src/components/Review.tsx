@@ -4,6 +4,7 @@ import type { TranscriptLine, MeetingSummary, McpConnection, RecapExport } from 
 import type { AnswerState } from '../state'
 import { isNonSpeechLine } from '@shared/transcript-filter'
 import { talkStats } from '@shared/talkstats'
+import { fnv1a } from '@shared/hash'
 import { Markdown } from './Markdown'
 import { Chip, TextButton, Spinner } from './ui'
 import { ReviewEntityStrip } from './ReviewEntityStrip'
@@ -123,11 +124,27 @@ type CrmPushPhase = 'idle' | 'sending' | 'sent' | 'error'
 // receives — and because savedPath is still null while a live meeting's autosave is retrying, so a file
 // key would miss a push made in that window. Module scope, not a ref: it has to outlive the component.
 const pushedCrmPayloads = new Set<string>()
-const crmPushKey = (p: CrmPayload): string => JSON.stringify([p.title, p.date, p.summary])
+
+/**
+ * MQA-092 — the payload's fingerprint, and the single identity both memories agree on: this in-session
+ * Set and the durable `crm_pushed` frontmatter marker main writes (recall.ts's setMeetingCrmPushed).
+ * A hash rather than the payload itself because it has to survive into a YAML scalar; base-36 FNV-1a
+ * because it already exists in shared/hash.ts and this is dedupe, not security. An edited recap hashes
+ * differently and correctly re-arms the chip — that is a different record, not a duplicate.
+ */
+export function crmPushKey(p: CrmPayload): string {
+  return fnv1a(JSON.stringify([p.title, p.date, p.summary])).toString(36)
+}
 
 /** Remember a push the CRM accepted, so re-opening this meeting doesn't offer to send it again. */
 export function markCrmPushed(p: CrmPayload): void {
   pushedCrmPayloads.add(crmPushKey(p))
+}
+
+/** Seed the session memory from a meeting's durable marker, so a push made before the last relaunch is
+ *  still known. Takes the raw fingerprint (not a payload) because that is what the frontmatter holds. */
+export function seedCrmPushed(key: string | undefined): void {
+  if (key) pushedCrmPayloads.add(key)
 }
 
 /** Whether THIS payload already reached the CRM — drives both the "Pushed to Polo Pre-Sales." line and
@@ -172,6 +189,7 @@ export const Review = memo(function Review({
   showTranscript,
   meetingMeta,
   confidential,
+  crmPushedKey,
   followupDraft,
   winsToggle,
   onOpenFolder,
@@ -202,6 +220,9 @@ export const Review = memo(function Review({
   /** Task MI-5 — this meeting's saved `confidential` frontmatter flag, so the toggle below reflects the
    *  actual persisted state (a reopened past meeting) instead of always starting unflagged. */
   confidential?: boolean
+  /** MQA-092 — this meeting's saved `crm_pushed` fingerprint, so a recap pushed to the CRM before the
+   *  last relaunch does not re-arm "Push to CRM". Undefined for a live meeting and for one never pushed. */
+  crmPushedKey?: string
   /** Draft follow-up email from the locked follow-up Dust agent — null until Generate is clicked. */
   followupDraft?: AnswerState | null
   onOpenFolder: () => void
@@ -517,8 +538,14 @@ export const Review = memo(function Review({
     }),
     [meetingMeta?.title, meetingMeta?.date, recapText, startedAt]
   )
+  // MQA-092: fold this meeting's DURABLE marker into the session memory the moment it is known. The Set
+  // alone only survives until the app quits, and the push panel has no other recollection — reopen the
+  // meeting tomorrow and the chip is armed again over a record the CRM already holds.
+  useEffect(() => {
+    seedCrmPushed(crmPushedKey)
+  }, [crmPushedKey])
   // Not just `pushState.phase === 'sent'`: that memory dies with the component, and this meeting may have
-  // been pushed earlier in the session (see pushedCrmPayloads).
+  // been pushed earlier in the session — or in an earlier session (see pushedCrmPayloads / crm_pushed).
   const crmPushed = crmPushDone(pushState.phase, crmPayload)
 
   const sendToCrm = async (): Promise<void> => {
@@ -527,11 +554,16 @@ export const Review = memo(function Review({
     // Remember the payload that was actually sent — recapText can move on (an edit, a regeneration) while
     // the call is in flight, and the CRM holds what left here, not what the screen shows when it lands.
     const payload = crmPayload
+    const file = savedPath
     setPushState({ phase: 'sending', error: null })
     const r = await window.toto.mcpPush({ connectionId: 'bidstack', toolName: pushTool, args: payload })
     if (r.ok) {
       markCrmPushed(payload)
       setPushState({ phase: 'sent', error: null })
+      // Durable half. Best-effort on purpose: the push itself already succeeded, and failing to write a
+      // dedupe marker must never be reported as a failed push — the session memory above still covers
+      // this run. `file` is captured before the await for the same reason payload is.
+      if (file) void window.toto.recallSetCrmPushed(file, crmPushKey(payload)).catch(() => {})
     } else {
       setPushState({ phase: 'error', error: r.error || 'Push failed.' })
     }

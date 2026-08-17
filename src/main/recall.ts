@@ -294,7 +294,10 @@ export async function recallRead(file: string): Promise<RecallReadResult> {
     startedAt,
     recap,
     lines,
-    confidential: fm.confidential === 'true'
+    confidential: fm.confidential === 'true',
+    // MQA-092 — the CRM payload fingerprint of the last push that this meeting's CRM connection
+    // accepted, so re-opening it after a relaunch does not re-arm "Push to CRM" and file a duplicate.
+    crmPushedKey: fm.crm_pushed || undefined
   }
 }
 
@@ -585,6 +588,65 @@ export async function updateMeetingTranscript(
     await writeSaved(fullPath, updated, wasEncrypted)
   } catch {
     return { ok: false, error: 'Could not save the updated transcript.' }
+  }
+  return { ok: true }
+}
+
+/**
+ * MQA-092 — record that this meeting's recap was pushed to the CRM, durably.
+ *
+ * Review holds a session-scoped Set of accepted payloads, which stops the in-session re-arm (leave for
+ * History, open another meeting, come back). It cannot survive a relaunch, and the push panel has no
+ * other memory: reopen the meeting tomorrow and "Push to CRM" is armed again, sending a byte-identical
+ * `{title, date, summary}` the receiving tool has nothing to dedupe on. One duplicate CRM record, and
+ * it is outbound — the user's colleagues see it, not just the user.
+ *
+ * Stores the payload FINGERPRINT rather than a timestamp, matching the session Set's own key: an edited
+ * recap is a genuinely different record and must re-arm the chip, which a bare `crmPushedAt: <date>`
+ * could not express. Frontmatter, via the exact mechanism (and guards) `setMeetingConfidential` uses —
+ * basename-constrained, encryption preserved as found, only the frontmatter block rewritten.
+ */
+export async function setMeetingCrmPushed(
+  settings: Settings,
+  file: string,
+  key: string
+): Promise<{ ok: boolean; error?: string }> {
+  const folder = resolveMeetingsFolder(settings)
+  const safeName = basename(file) // block traversal
+  if (!safeName || !safeName.endsWith('.md') || safeName === 'index.md' || safeName === 'README.md') {
+    return { ok: false, error: 'Invalid meeting file name.' }
+  }
+  // The fingerprint is written into a YAML scalar, so it must not be able to carry a newline or a colon
+  // into the frontmatter block. Review generates it as a base-36 hash; anything else is refused rather
+  // than escaped, because the only caller has no reason to send another shape.
+  if (!/^[a-z0-9]{1,32}$/.test(key)) return { ok: false, error: 'Invalid CRM push key.' }
+
+  const fullPath = join(folder, safeName)
+  let raw: Buffer
+  try {
+    raw = await readFile(fullPath)
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code
+    if (code === 'ENOENT') return { ok: false, error: 'Meeting file not found.' }
+    return { ok: false, error: 'Could not read the meeting file.' }
+  }
+
+  const wasEncrypted = isEncryptedFile(fullPath)
+  const text = decodeSaved(raw)
+  if (!text) return { ok: false, error: 'Meeting file could not be decrypted on this device.' }
+
+  const fmMatch = text.match(/^---\n[\s\S]*?\n---/)
+  if (!fmMatch) return { ok: false, error: 'Not a meeting transcript.' }
+  const newFmBlock = /^crm_pushed:\s*.*$/m.test(fmMatch[0])
+    ? fmMatch[0].replace(/^crm_pushed:\s*.*$/m, `crm_pushed: ${key}`)
+    : fmMatch[0].replace(/\n---$/, `\ncrm_pushed: ${key}\n---`)
+  if (newFmBlock === fmMatch[0]) return { ok: true } // already recorded against this exact payload
+  const updated = text.slice(0, fmMatch.index!) + newFmBlock + text.slice(fmMatch.index! + fmMatch[0].length)
+
+  try {
+    await writeSaved(fullPath, updated, wasEncrypted)
+  } catch {
+    return { ok: false, error: 'Could not record the CRM push.' }
   }
   return { ok: true }
 }

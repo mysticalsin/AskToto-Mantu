@@ -4,7 +4,7 @@ import { join, basename } from 'node:path'
 import { tmpdir } from 'node:os'
 import { safeStorage } from 'electron'
 import { saveMeeting, isEncryptedFile } from './transcripts'
-import { listMeetings, deleteMeeting, recallRead, searchMeetings, deleteAllMeetings, sweepExpiredMeetings, updateMeetingRecap, renameMeeting } from './recall'
+import { listMeetings, deleteMeeting, recallRead, searchMeetings, deleteAllMeetings, sweepExpiredMeetings, updateMeetingRecap, renameMeeting, setMeetingCrmPushed } from './recall'
 import type { Settings, SaveMeeting } from '@shared/ipc'
 
 vi.mock('electron')
@@ -862,5 +862,88 @@ describe('recall — sub-second start times do not shift the transcript a day (M
     expect(read.lines).toHaveLength(2)
     expect(new Date(read.lines[0].t).toDateString()).toBe(new Date(started).toDateString())
     expect(read.lines[1].t - read.lines[0].t).toBe(40_000) // 00:00:10 the next day, not 23 hours back
+  })
+})
+
+// MQA-092 — Review's session Set stops the in-session re-arm; this marker is what survives a relaunch.
+// Without it, pushing a recap, quitting, relaunching and reopening the meeting re-arms "Push to CRM" and
+// a second Confirm files a byte-identical duplicate record in the user's CRM.
+describe('setMeetingCrmPushed — the durable "already pushed to the CRM" marker', () => {
+  let folder: string
+  const meeting: SaveMeeting = {
+    title: 'Acme renewal',
+    mode: 'meeting',
+    startedAt: 1_700_000_000_000,
+    lines: [{ speaker: 'them', text: 'Send the revised pricing', t: 1_700_000_000_000 }],
+    recap: 'Agreed to revise pricing.'
+  }
+
+  beforeEach(() => {
+    folder = mkdtempSync(join(tmpdir(), 'asktoto-recall-crm-'))
+    testSettings = { meetingsFolder: folder, encryptTranscripts: false } as Settings
+  })
+  afterEach(() => rmSync(folder, { recursive: true, force: true }))
+
+  it('writes the fingerprint into frontmatter and reads it back through recallRead', async () => {
+    const file = await saveMeeting(testSettings, meeting)
+    expect((await recallRead(basename(file))).crmPushedKey).toBeUndefined()
+
+    expect(await setMeetingCrmPushed(testSettings, basename(file), 'a1b2c3')).toEqual({ ok: true })
+    expect(readFileSync(file, 'utf8')).toMatch(/^crm_pushed: a1b2c3$/m)
+    expect((await recallRead(basename(file))).crmPushedKey).toBe('a1b2c3')
+  })
+
+  it('leaves the H1, notes and transcript untouched — only the frontmatter block is rewritten', async () => {
+    const file = await saveMeeting(testSettings, meeting)
+    const before = readFileSync(file, 'utf8')
+    await setMeetingCrmPushed(testSettings, basename(file), 'zz9')
+    const after = readFileSync(file, 'utf8')
+    expect(after.slice(after.indexOf('\n---', 4))).toBe(before.slice(before.indexOf('\n---', 4)))
+  })
+
+  it('replaces an earlier fingerprint rather than appending a second line', async () => {
+    const file = await saveMeeting(testSettings, meeting)
+    await setMeetingCrmPushed(testSettings, basename(file), 'first')
+    await setMeetingCrmPushed(testSettings, basename(file), 'second') // the recap was edited and re-pushed
+    const text = readFileSync(file, 'utf8')
+    expect(text.match(/^crm_pushed:/gm)).toHaveLength(1)
+    expect((await recallRead(basename(file))).crmPushedKey).toBe('second')
+  })
+
+  // The key is interpolated into a YAML scalar, so a value carrying a newline or a colon could forge
+  // frontmatter (e.g. `confidential: true`, or a bogus `type:`). Refused, not escaped.
+  it('refuses any key that could break out of the YAML scalar', async () => {
+    const file = await saveMeeting(testSettings, meeting)
+    for (const bad of ['a\nconfidential: true', 'has: colon', 'UPPER', 'has space', '', 'x'.repeat(33), '../../etc']) {
+      expect(await setMeetingCrmPushed(testSettings, basename(file), bad)).toEqual({
+        ok: false,
+        error: 'Invalid CRM push key.'
+      })
+    }
+    expect(readFileSync(file, 'utf8')).not.toMatch(/crm_pushed/)
+  })
+
+  it('refuses a traversing or non-meeting file name, like every other recall write', async () => {
+    for (const bad of ['../../secrets.md', 'index.md', 'README.md', 'notes.txt', '']) {
+      expect((await setMeetingCrmPushed(testSettings, bad, 'a1')).ok).toBe(false)
+    }
+  })
+
+  it('reports a missing meeting instead of creating one', async () => {
+    expect(await setMeetingCrmPushed(testSettings, 'never-existed.md', 'a1')).toEqual({
+      ok: false,
+      error: 'Meeting file not found.'
+    })
+  })
+
+  it('preserves encryption exactly as found', async () => {
+    testSettings = { meetingsFolder: folder, encryptTranscripts: true } as Settings
+    vi.mocked(safeStorage.isEncryptionAvailable).mockReturnValue(true)
+    const file = await saveMeeting(testSettings, meeting)
+    expect(isEncryptedFile(file)).toBe(true)
+
+    expect(await setMeetingCrmPushed(testSettings, basename(file), 'enc1')).toEqual({ ok: true })
+    expect(isEncryptedFile(file)).toBe(true) // still encrypted — never silently downgraded to cleartext
+    expect((await recallRead(basename(file))).crmPushedKey).toBe('enc1')
   })
 })
