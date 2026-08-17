@@ -198,6 +198,24 @@ export function App(): JSX.Element {
 
   const ask = useAsk() // answer view + recap
   const suggest = useAsk() // live copilot card
+  // MQA-053 / MQA-059: provider health is session state main computes as a side effect of answering, and
+  // the settings snapshot is otherwise only re-fetched on window focus. Without this, the ask that
+  // discovered a dead key finishes, cross-provider failover answers it correctly, and the notice below
+  // stays invisible until the user happens to alt-tab away and back. Re-fetch when a visible ask stops
+  // streaming — the exact moment `unhealthyProviders` can have changed.
+  const askStreaming = ask.answer?.streaming ?? false
+  const suggestStreaming = suggest.answer?.streaming ?? false
+  const wasStreamingRef = useRef(false)
+  useEffect(() => {
+    if (askStreaming || suggestStreaming) {
+      wasStreamingRef.current = true
+      return
+    }
+    // Only on a real streaming → idle transition, never on mount (useSettings already fetches there).
+    if (!wasStreamingRef.current) return
+    wasStreamingRef.current = false
+    void refresh()
+  }, [askStreaming, suggestStreaming, refresh])
   const followup = useAsk() // Review screen's follow-up draft — must NOT reuse `ask`, which already holds the recap there
   // Cold Calling Mode (see maybeFireRecap + generateBookMeetings below): end-of-call coaching, fired
   // automatically alongside the recap, and the manual "Book meetings" outreach draft built from it.
@@ -3028,6 +3046,41 @@ export function App(): JSX.Element {
               Settings → Audio.
             </div>
           )}
+          {/* MQA-053 / MQA-059: the ACTIVE provider's credential stopped working and cross-provider
+              failover absorbed it, so the ask still returned a normal-looking answer. providerReady is
+              derived from "a key string exists", never from whether that key works, so the CTA below
+              cannot fire — and Settings goes on showing this provider as active with a key saved. Without
+              this the degradation is permanent and silent: every later ask runs on a different vendor,
+              at a different cost, over a different data path, and the user is never given the one fact
+              that would let them fix it. Scoped to reasons the user must ACT on (a rejected credential,
+              spent credit); a 60s rate limit or a session cap that resets itself is what "Backups &
+              limits" already promises to ride out automatically, and nagging about those would train the
+              user to ignore this. Not dismissible — it is a standing state, not an event, and it clears
+              itself the moment that provider answers again or its key is changed. */}
+          {settings && view !== 'settings' && !showListeningChrome && (() => {
+            const dead = (settings.unhealthyProviders ?? []).find(
+              (u) => u.provider === settings.provider && (u.reason === 'auth' || u.reason === 'quota-exhausted')
+            )
+            if (!dead) return null
+            const label = PROVIDERS[settings.provider]?.label ?? settings.provider
+            const isCli = PROVIDERS[settings.provider]?.kind === 'cli'
+            const what =
+              dead.reason === 'quota-exhausted'
+                ? `${label} is out of credit`
+                : isCli
+                  ? `Your ${label} session was rejected`
+                  : `Your ${label} key was rejected`
+            const remedy = dead.reason === 'quota-exhausted' ? 'Top it up or switch provider' : isCli ? 'Reconnect it' : 'Update it'
+            return (
+              <button
+                type="button"
+                onClick={() => openSettings('ai', `${what}. Métis is answering with another provider meanwhile.`)}
+                className="no-drag focus-ring fade-up flex items-center justify-center gap-1.5 whitespace-nowrap rounded-xl border border-[var(--color-warn,#fac775)]/30 bg-[var(--color-warn,#fac775)]/10 px-3 py-1.5 text-[11px] font-medium text-[color:var(--color-warn,#fac775)]"
+              >
+                {what} — Métis is using another provider. {remedy} in Settings → AI.
+              </button>
+            )
+          })()}
           {settings && !settings.providerReady && !nudgeExpired && view !== 'settings' && !showListeningChrome && (() => {
             const activeDef = PROVIDERS[settings.provider]
             // A keyed API provider can still be blocked by the org allowlist (settings.hasApiKey true,
