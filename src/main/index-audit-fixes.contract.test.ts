@@ -237,6 +237,21 @@ describe('MQA-066 — the enforced-but-unconfigured wall has exactly one way out
   })
 })
 
+describe('MQA-092 — the durable CRM-push marker is written behind the same gates as every recall write', () => {
+  const handler = (): string =>
+    sliceBetween('ipcMain.handle(IPC.recallSetCrmPushed', 'ipcMain.handle(IPC.recallBackfillSpeakers')
+
+  it('carries the main-window + requireAuth gate every settings/recall-WRITING handler carries (MQA-129)', () => {
+    const body = handler()
+    expect(body).toMatch(/assertMainWindow\(e\)/)
+    expect(body).toMatch(/if \(!requireAuth\(\)\)/)
+  })
+
+  it('parses the payload rather than trusting it — the key lands in a YAML scalar', () => {
+    expect(handler()).toMatch(/SetCrmPushedPayloadSchema\.safeParse\(raw\)/)
+  })
+})
+
 describe('MQA-064 — a failed MCP key write reaches the user instead of wedging the card', () => {
   it('routes the thrown, user-authored diagnostic through the {ok,error} channel the card renders', () => {
     const handler = sliceBetween('ipcMain.handle(IPC.mcpSaveConnection', 'ipcMain.handle(IPC.mcpDisconnect')
