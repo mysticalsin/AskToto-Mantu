@@ -147,6 +147,21 @@ export function seedCrmPushed(key: string | undefined): void {
   if (key) pushedCrmPayloads.add(key)
 }
 
+/**
+ * MQA-092 — a push that landed before the meeting had a file yet.
+ *
+ * The push panel needs only `recapText`, not a saved path, and a LIVE meeting's `savedPath` stays null
+ * until autosave lands — which can be deferred behind up to 5 retries with backoff. A push in that
+ * window has nothing to stamp the marker onto, so without this it is remembered for the session and
+ * forgotten at quit: the one case where the durable half would silently not apply.
+ *
+ * One slot, because only the live meeting can have a null savedPath and there is only ever one of those.
+ * The flush below is guarded on the fingerprint matching the CURRENT payload, which makes writing it to
+ * the wrong file impossible by construction: navigate to a different meeting and its payload hashes
+ * differently, so nothing is written.
+ */
+let pendingCrmMarker: string | null = null
+
 /** Whether THIS payload already reached the CRM — drives both the "Pushed to Polo Pre-Sales." line and
  *  the hiding of the "Push to CRM" chip, so neither depends on Review still being mounted. A changed
  *  recap is a different payload and re-arms the chip, which is correct: it is no longer the same record. */
@@ -544,6 +559,14 @@ export const Review = memo(function Review({
   useEffect(() => {
     seedCrmPushed(crmPushedKey)
   }, [crmPushedKey])
+  // ...and stamp a push that beat the meeting's own autosave, once the file finally exists. Guarded on
+  // the fingerprint matching THIS payload, so a marker can never land on a different meeting's file.
+  const crmPayloadKey = crmPushKey(crmPayload)
+  useEffect(() => {
+    if (!savedPath || pendingCrmMarker !== crmPayloadKey) return
+    pendingCrmMarker = null
+    void window.toto.recallSetCrmPushed(savedPath, crmPayloadKey).catch(() => {})
+  }, [savedPath, crmPayloadKey])
   // Not just `pushState.phase === 'sent'`: that memory dies with the component, and this meeting may have
   // been pushed earlier in the session — or in an earlier session (see pushedCrmPayloads / crm_pushed).
   const crmPushed = crmPushDone(pushState.phase, crmPayload)
@@ -562,8 +585,10 @@ export const Review = memo(function Review({
       setPushState({ phase: 'sent', error: null })
       // Durable half. Best-effort on purpose: the push itself already succeeded, and failing to write a
       // dedupe marker must never be reported as a failed push — the session memory above still covers
-      // this run. `file` is captured before the await for the same reason payload is.
+      // this run. `file` is captured before the await for the same reason payload is; with no file yet
+      // (a live meeting whose autosave is still retrying) the marker is parked for the effect above.
       if (file) void window.toto.recallSetCrmPushed(file, crmPushKey(payload)).catch(() => {})
+      else pendingCrmMarker = crmPushKey(payload)
     } else {
       setPushState({ phase: 'error', error: r.error || 'Push failed.' })
     }

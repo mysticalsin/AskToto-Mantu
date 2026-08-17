@@ -2800,8 +2800,8 @@ export function App(): JSX.Element {
     // MQA-066: mirror the onboarding gate's escape 15 lines below, which exists for the identical reason
     // — a fix-link that dead-ends because the gate above it is an unconditional early return. Here the
     // dead end is worse: when enforcement is on but no tenant is configured anywhere, the wall's own
-    // message tells the user to set SSO up in Settings → Account, and no route to Settings survives (the
-    // hotkey, the tray item and the Bar affordance all render or route below this line). Opening Settings
+    // message tells the user to enter the Entra IDs in Settings → Calendar, and no route to Settings
+    // survives (hotkey, tray item and Bar affordance all render or route below this line). Opening Settings
     // has no capture / LLM / recording side effect, unlike the actions the gate was written to block, and
     // main still refuses every settings write here except the three azure fields (ssoBootstrapAllowed).
     if (view === 'settings') {

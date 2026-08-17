@@ -742,9 +742,16 @@ export async function checkCliSession(provider: ProviderId): Promise<'live' | 's
   const cfg = CLI_CONFIGS[provider]
   if (!cfg) return 'unknown'
 
-  // The binary itself is gone (uninstalled, npm prefix changed, PATH edited). Nothing about the stored
-  // flag can be true any more, and this costs one PATH lookup.
-  const absBin = await resolveBin(cfg.bin)
+  // The binary itself is gone (uninstalled, npm prefix changed, PATH edited) — the one variant of this
+  // finding that involves no auth at all, and the only one nothing else catches: the ask path's
+  // retireCli is gated on isAuthFailure, and "not installed" is not an auth failure.
+  //
+  // Looked up TWICE before believing it, because resolveBin cannot distinguish "confirmed absent" from
+  // "the lookup itself failed" — on mac/Linux it shells out to the login shell, which can fail
+  // transiently, and it deliberately caches only positive hits so a second call is a real second lookup.
+  // A genuinely uninstalled CLI answers null both times; a hiccup answers once.
+  let absBin = await resolveBin(cfg.bin)
+  if (!absBin) absBin = await resolveBin(cfg.bin)
   if (!absBin) return 'signed-out'
 
   const args = provider === 'claude-cli' ? ['auth', 'status'] : ['login', 'status']
