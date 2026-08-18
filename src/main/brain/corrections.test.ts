@@ -4,7 +4,7 @@ import { join, basename } from 'node:path'
 import { tmpdir } from 'node:os'
 import type { Settings } from '@shared/ipc'
 import { MeetingExtractionSchema, type MeetingExtraction, type CorrectionEntry } from '@shared/brain'
-import { ingestExtraction } from './ingest'
+import { ingestExtraction, whenIndexWritesSettle } from './ingest'
 import { buildBrainContext } from './context'
 import {
   brainDir,
@@ -87,8 +87,14 @@ describe('corrections engine', () => {
     folder = mkdtempSync(join(tmpdir(), 'asktoto-corrections-test-'))
     s = settingsFor(folder)
   })
-  afterEach(() => rmSync(folder, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }))
-
+  // MQA-007: settle the index-write lane BEFORE removing the profile. updateIndex writes
+  // index.json through a tmp+rename, and a detached one can still be in flight here — under
+  // parallel load the rename then lands on a directory this line already deleted, failing an
+  // unrelated test in whichever file happened to be running.
+  afterEach(async () => {
+    await whenIndexWritesSettle()
+    rmSync(folder, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
+  })
   // Three synthetic meetings — planted directly through ingestExtraction (the exact production path
   // minus the LLM call, mirroring e2e-proof.test.ts's convention), then corrected by hand.
   const meeting1 = (): MeetingExtraction =>
@@ -918,7 +924,11 @@ describe('corrections engine', () => {
       await ingestThreeMeetings(s)
       // A decoy file sitting one level ABOVE the meetings folder — if slugify() were bypassed, an
       // unsanitized '../../../evil' id could plausibly resolve to (something like) this path.
-      const decoyPath = join(folder, '..', 'evil.json')
+      // MQA-007: named after THIS run's profile dir. One level above a mkdtemp profile is the shared
+      // OS temp root, so a fixed `evil.json` is the same path in every concurrent vitest process — each
+      // one's `finally` rmSync deleted the others' decoy, and whoever read it next failed with ENOENT.
+      // A test that fails because another test run existed is exactly the flake this row is about.
+      const decoyPath = join(folder, '..', `${basename(folder)}-evil.json`)
       writeFileSync(
         decoyPath,
         JSON.stringify({ schema_version: 2, id: 'evil', name: 'PWNED', role: null, account: null, meetings: [], quotes: [], stance_trail: [], commitments: [], aliases: [] }),

@@ -22,7 +22,8 @@
  * endpoints return 401. That is the point: it physically reproduces "my API key stopped working".
  */
 import { chromium } from 'playwright-core'
-import { writeFileSync } from 'node:fs'
+import { writeFileSync, rmSync, existsSync } from 'node:fs'
+import { join } from 'node:path'
 
 const CDP = process.env.METIS_CDP ?? 'http://127.0.0.1:9334'
 const OUT = process.env.METIS_QA_OUT ?? 'D:\\tmp-metis-e2e\\qa-report.json'
@@ -273,13 +274,20 @@ async function groupAsk() {
     }, id)
     return { afterCancel: out.errored ?? 'no error surfaced (clean cancel)' }
   })
-  await check(g, 'answer mode is out of local scope — it fails with an ACTIONABLE message, not a hang', async () => {
-    const r = await ask({ id: uid('answer'), mode: 'answer', prompt: 'What is our renewal risk?', history: [] }, 90000)
-    assert(r.error, `answer mode unexpectedly succeeded via ${r.providers.at(-1)} — local scope may have widened`)
-    assert(!/TIMEOUT/.test(r.error), 'answer mode HUNG instead of failing fast with no provider')
-    const actionable = /settings|key|connect|provider/i.test(r.error)
-    assert(actionable, `error is not actionable: "${r.error}"`)
-    return { error: r.error, ms: r.doneAt }
+  // Rewritten 2026-08-17. This used to assert that answer mode FAILS with an actionable message,
+  // because local was scoped to suggest/summary/vision. MQA-122 and MQA-123 deliberately changed that:
+  // llm/local-routing.ts's localAnswerFloorEligibleFor is "the ABSOLUTE floor … when every cloud/CLI
+  // provider is exhausted … a weak on-device answer beats handing the user an error". So on a zero-key
+  // install, answer mode succeeding ON LOCAL is the shipped contract, and the old assertion could only
+  // ever fail — a check that can never pass is worse than none, because it trains people to ignore the
+  // suite. Asserts the current contract instead, which is the stronger claim.
+  await check(g, 'answer mode falls to the on-device floor rather than dead-ending (MQA-122/MQA-123)', async () => {
+    const r = await ask({ id: uid('answer'), mode: 'answer', prompt: 'What is our renewal risk?', history: [] }, 180000)
+    assert(!r.error || !/TIMEOUT/.test(r.error), 'answer mode HUNG instead of reaching the on-device floor')
+    assert(!r.error, `answer mode dead-ended instead of falling to local: "${r.error}"`)
+    assert(r.providers.at(-1) === 'local', `expected the on-device floor to serve it, got ${r.providers.at(-1)}`)
+    assert(r.text.trim().length > 0, 'the on-device floor answered with no text at all')
+    return { provider: r.providers.at(-1), chars: r.text.length, ms: r.doneAt }
   })
   await check(g, 'resetAskContext clears conversation state without throwing', async () => {
     await page.evaluate(() => window.toto.resetAskContext())
@@ -460,9 +468,10 @@ async function groupMeetings() {
       `meetingsSummarized did not increment: ${before.meetingsSummarized} -> ${after.meetingsSummarized}`)
     assert(after.conversationMinutes > before.conversationMinutes, 'conversationMinutes did not grow')
     assert(after.firstMeetingAt > 0, 'firstMeetingAt not set')
-    // Clean up the probe meeting so it does not pollute later checks.
+    // Clean up the probe meeting so it does not pollute later checks. Direct unlink, NOT recallDelete —
+    // that one waits on a native confirm dialog and would park an unattended run (see the brain group).
     const hit = (await page.evaluate(() => window.toto.recallList())).find((m) => m.title === t)
-    if (hit) await page.evaluate((f) => window.toto.recallDelete(f), hit.file)
+    if (hit) rmSync(join(await page.evaluate(async () => (await window.toto.getSettings()).resolvedMeetingsFolder), hit.file), { force: true })
     return { meetings: after.meetingsSummarized, minutes: after.conversationMinutes }
   })
 
@@ -476,14 +485,41 @@ async function groupMeetings() {
     return { restoredTo: before }
   })
 
-  await check(g, 'delete removes it from the list', async () => {
-    assert(file, 'no file')
-    const res = await page.evaluate((f) => window.toto.recallDelete(f), file)
-    assert(res.ok, `delete failed: ${res.error}`)
-    const list = await page.evaluate(() => window.toto.recallList())
-    assert(!list.some((m) => m.file === file), 'deleted meeting still listed')
-    return 'deleted'
-  })
+  // The one place recallDelete SHOULD be exercised: deleting a meeting is real product behaviour and its
+  // native confirmation is PART of that behaviour, so this must not route around it.
+  //
+  // But the confirmation is also why it cannot simply be asserted. With no one to answer the dialog the
+  // promise never settles: an unbounded await parks the whole suite while the rest of main keeps
+  // answering normally, so it reads as a freeze rather than a prompt (it did exactly that on 2026-08-17).
+  // And asserting it unattended would make the suite permanently red for something that is not a defect —
+  // the same "a check that can never pass" trap already removed from the ask group in this file.
+  //
+  // So: bounded, and reported as INFO rather than FAIL when nobody answers. An attended run exercises the
+  // real path; an unattended one says plainly that it did not, and cleans up after itself either way.
+  {
+    const name = 'delete removes it from the list'
+    if (!file) {
+      record(g, name, 'fail', 'no file')
+    } else {
+      const res = await Promise.race([
+        page.evaluate((f) => window.toto.recallDelete(f), file),
+        new Promise((resolve) => setTimeout(() => resolve({ ok: false, error: 'NO_ANSWER' }), 45_000))
+      ])
+      if (res.error === 'NO_ANSWER') {
+        record(g, name, 'info', 'not exercised — recallDelete is waiting on its native confirmation; run this group attended to cover it')
+        try {
+          rmSync(join(await page.evaluate(async () => (await window.toto.getSettings()).resolvedMeetingsFolder), file), { force: true })
+        } catch { /* best-effort: do not leave the fixture behind just because the dialog went unanswered */ }
+      } else {
+        await check(g, name, async () => {
+          assert(res.ok, `delete failed: ${res.error}`)
+          const list = await page.evaluate(() => window.toto.recallList())
+          assert(!list.some((m) => m.file === file), 'deleted meeting still listed')
+          return 'deleted'
+        })
+      }
+    }
+  }
 }
 
 async function groupBrain() {
@@ -559,11 +595,23 @@ async function groupBrain() {
     const after = await page.evaluate(() => window.toto.brainStatus())
     return { kicked, revisionBefore: before?.revision, revisionAfter: after?.revision }
   })
+  // Housekeeping, not an assertion — so it must NOT go through recallDelete. That handler opens a
+  // native confirm dialog (dialog.showMessageBox, Delete/Cancel) and its promise does not settle until
+  // someone answers, which in an unattended run means the whole suite parks here forever with the rest
+  // of main still responding normally — so it reads as a freeze rather than a prompt. The product
+  // behaviour of delete is already asserted in the meetings group, where the confirmation IS the point;
+  // here we just want the fixture gone, so unlink it directly. (2026-08-17: this parked a full run.)
   await check(g, 'clean up the commitment fixture', async () => {
     if (!commitFile) return 'nothing to clean up'
-    const res = await page.evaluate((f) => window.toto.recallDelete(f), commitFile)
-    assert(res.ok, `cleanup delete failed: ${res.error}`)
-    return 'deleted'
+    const folder = await page.evaluate(async () => (await window.toto.getSettings()).resolvedMeetingsFolder)
+    const path = join(folder, commitFile)
+    try {
+      rmSync(path, { force: true })
+    } catch (e) {
+      throw new Error(`could not unlink the fixture at ${path}: ${e.message}`)
+    }
+    assert(!existsSync(path), `fixture still on disk at ${path}`)
+    return 'deleted (direct unlink — recallDelete needs a human to confirm)'
   })
 }
 
@@ -641,10 +689,13 @@ for (const name of selected) {
 
 const passed = results.filter((r) => r.status === 'pass').length
 const failed = results.filter((r) => r.status === 'fail').length
-const summary = { at: new Date().toISOString(), groups: selected, passed, failed, results }
+// Counted separately and never folded into `passed`: a check that did not run must not read as one that
+// succeeded. That is the entire reason the third state exists.
+const skipped = results.filter((r) => r.status === 'info').length
+const summary = { at: new Date().toISOString(), groups: selected, passed, failed, skipped, results }
 writeFileSync(OUT, JSON.stringify(summary, null, 2))
 
-console.log(`\n──────────────\n${passed} passed, ${failed} failed. Report: ${OUT}`)
+console.log(`\n──────────────\n${passed} passed, ${failed} failed${skipped ? `, ${skipped} not exercised` : ''}. Report: ${OUT}`)
 if (failed) {
   console.log('\nFAILURES:')
   for (const r of results.filter((x) => x.status === 'fail')) console.log(`  ${r.group} :: ${r.name} — ${r.detail}`)

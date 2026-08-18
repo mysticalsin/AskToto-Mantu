@@ -40,6 +40,16 @@ vi.mock('../llm/local-runtime', async (importOriginal) => ({
   getState: localRuntimeStateMock
 }))
 
+// The model-load precheck the destructive rebuild path runs when local is the ONLY candidate (MQA-018).
+// The real one re-hashes both GGUFs against the manifest and checks the RAM floor; no test environment
+// here ships those files, so it stands in for "the model would load" the same way localBaseReadyMock
+// stands in for the on-disk provisioning checks. local-models.ts owns the real implementation.
+const verifyIntegrityMock = vi.hoisted(() => vi.fn<(id: string) => Promise<void>>(async () => {}))
+vi.mock('../llm/local-models', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../llm/local-models')>()),
+  verifyIntegrity: verifyIntegrityMock
+}))
+
 const createStreamMock = vi.hoisted(() => vi.fn())
 vi.mock('../llm', () => ({ createStream: createStreamMock }))
 
@@ -57,7 +67,11 @@ describe('brain ingest — provider-degradation paths', () => {
   const waitForIdle = async (): Promise<void> => {
     await vi.waitFor(() => {
       expect(brainBackfillProgress().running).toBe(false)
-    }, { timeout: 5000 })
+    }, { timeout: 10_000 })
+    // MQA-007: `running` going false is NOT "every write has landed" — the last job's own index record
+    // is still queued on the serialized lane at that moment (see whenIndexWritesSettle's own note). Every
+    // assertion after this reads index.json, so settling here is what makes them deterministic.
+    await whenIndexWritesSettle()
   }
 
   const respondError = (message: string) => (opts: StreamOptions & { handlers: StreamHandlers }): StreamHandle => {
@@ -116,6 +130,8 @@ describe('brain ingest — provider-degradation paths', () => {
     held.length = 0
     createStreamMock.mockReset()
     localRuntimeStateMock.mockReturnValue('stopped')
+    verifyIntegrityMock.mockReset()
+    verifyIntegrityMock.mockResolvedValue(undefined)
     localBaseReadyMock.mockClear()
     localBaseReadyMock.mockImplementation((s: { localLlm: { enabled: boolean } }, allowed: string[] | null) => {
       if (!s.localLlm.enabled) return false
@@ -235,6 +251,60 @@ describe('brain ingest — provider-degradation paths', () => {
     expect(readIndex(getSettings()).ingested['healthy-local.md']?.ok).toBe(true)
   })
 
+  /** The two variants the runtime-state gate above cannot see, because neither ever reaches the sidecar:
+   *  a machine under the model's declared RAM floor (assertRamOk) and a model file whose bytes match the
+   *  manifest's size but not its sha256 (a half-synced or corrupted download). Both throw on EVERY cold
+   *  start, so a purge authorized on "local is configured" deletes a brain that nothing can then recreate. */
+  for (const variant of [
+    { label: 'the machine is under the model RAM floor', error: 'Local model "qwen3.5-0.8b" needs 8 GB of RAM; this machine has 4 GB.' },
+    { label: 'the model file is corrupt', error: 'Local model "qwen3.5-0.8b" (gguf) failed its checksum check.' }
+  ]) {
+    it(`MQA-018: refuses to purge when local is the only candidate and ${variant.label}`, async () => {
+      writeFileSync(join(meetingsFolder, 'precious.md'), '---\ndate: 2026-02-07\n---\nAcme renewal call.', 'utf8')
+      allowProviders(['local'])
+      createStreamMock.mockImplementation(respondJson())
+      expect(startBackfill()).toEqual({ queued: 1 })
+      await waitForIdle()
+      expect(listMeetingExtractions(getSettings())).toHaveLength(1)
+
+      // 'stopped' is the healthy idle state — the restart-budget lockout is NOT what fails here. The model
+      // simply cannot be loaded, and only the integrity/RAM precheck can tell.
+      localRuntimeStateMock.mockReturnValue('stopped')
+      verifyIntegrityMock.mockRejectedValue(new Error(variant.error))
+      createStreamMock.mockClear()
+
+      const result = await startRebuild(getSettings())
+
+      expect(result.queued).toBe(0)
+      expect(result.error).toContain('cannot load its model')
+      expect(result.error).toContain(variant.error)
+      // The whole point: the derived store is still there, and no re-extraction was ever attempted.
+      expect(listMeetingExtractions(getSettings())).toHaveLength(1)
+      expect(readIndex(getSettings()).ingested['precious.md']?.ok).toBe(true)
+      expect(createStreamMock).not.toHaveBeenCalled()
+    })
+  }
+
+  it('MQA-018: a keyed cloud provider rebuilds without paying for the local model precheck', async () => {
+    writeFileSync(join(meetingsFolder, 'cloud.md'), '---\ndate: 2026-02-08\n---\nAcme call.', 'utf8')
+    allowProviders(['anthropic', 'local'])
+    setApiKey('anthropic', 'fake-anthropic-key')
+    createStreamMock.mockImplementation(respondJson())
+    expect(startBackfill()).toEqual({ queued: 1 })
+    await waitForIdle()
+
+    // A corrupt local model is irrelevant when a cloud candidate can recreate the brain — and re-hashing
+    // gigabytes to discover that would be pure cost on the common path.
+    verifyIntegrityMock.mockRejectedValue(new Error('Local model "qwen3.5-0.8b" (gguf) failed its checksum check.'))
+
+    const result = await startRebuild(getSettings())
+    await waitForIdle()
+
+    expect(result.error).toBeUndefined()
+    expect(result.queued).toBe(1)
+    expect(verifyIntegrityMock).not.toHaveBeenCalled()
+  })
+
   // ── MQA-023 ────────────────────────────────────────────────────────────────
   // Both stall tests run last: they leave jobs parked in the module-level queue if the fix regresses, and
   // that residue would otherwise contaminate every test after them.
@@ -251,13 +321,13 @@ describe('brain ingest — provider-degradation paths', () => {
 
     expect(startBackfill()).toEqual({ queued: 4 })
     // EXTRACT_CONCURRENCY jobs occupy the workers; the 4th waits in the queue.
-    await vi.waitFor(() => expect(held).toHaveLength(3), { timeout: 5000 })
+    await vi.waitFor(() => expect(held).toHaveLength(3), { timeout: 10_000 })
 
     // The user clears the dead key mid-batch (Settings → AI) intending to paste a fresh one.
     allowProviders([])
     releaseHeld()
 
-    await vi.waitFor(() => expect(okCount()).toBe(3), { timeout: 5000 })
+    await vi.waitFor(() => expect(okCount()).toBe(3), { timeout: 10_000 })
     expect(createStreamMock).toHaveBeenCalledTimes(3) // the 4th job never started
     expect(brainBackfillProgress().running).toBe(true) // ...and the progress bar says otherwise
 
@@ -271,7 +341,7 @@ describe('brain ingest — provider-degradation paths', () => {
     // hasActiveBackfill() and did nothing at all, leaving the last meeting unindexed for the session.
     requestBackfill()
 
-    await vi.waitFor(() => expect(held).toHaveLength(1), { timeout: 5000 })
+    await vi.waitFor(() => expect(held).toHaveLength(1), { timeout: 10_000 })
     releaseHeld()
     await waitForIdle()
 
@@ -285,7 +355,7 @@ describe('brain ingest — provider-degradation paths', () => {
     // The 60s background tick — the recovery path that must not depend on the user finding a button.
     reconcileMeetingsInBackground()
 
-    await vi.waitFor(() => expect(held).toHaveLength(1), { timeout: 5000 })
+    await vi.waitFor(() => expect(held).toHaveLength(1), { timeout: 10_000 })
     releaseHeld()
     await waitForIdle()
 

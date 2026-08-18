@@ -4,7 +4,7 @@ import { basename, join } from 'node:path'
 import { tmpdir } from 'node:os'
 import type { Settings } from '@shared/ipc'
 import { MeetingExtractionSchema, type DealEntity } from '@shared/brain'
-import { ingestExtraction, updateIndex } from './ingest'
+import { ingestExtraction, updateIndex, whenIndexWritesSettle } from './ingest'
 import { updateEntityField } from './corrections'
 import { slugify, setDealOutcome, readMeetingExtraction, readDeal, writeDeal } from './store'
 import { computeAttention } from './attention'
@@ -25,8 +25,14 @@ describe('computeAttention (Task MI-3 needs-attention aggregation)', () => {
     folder = mkdtempSync(join(tmpdir(), 'asktoto-attention-test-'))
     s = settingsFor(folder)
   })
-  afterEach(() => rmSync(folder, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }))
-
+  // MQA-007: settle the index-write lane BEFORE removing the profile. updateIndex writes
+  // index.json through a tmp+rename, and a detached one can still be in flight here — under
+  // parallel load the rename then lands on a directory this line already deleted, failing an
+  // unrelated test in whichever file happened to be running.
+  afterEach(async () => {
+    await whenIndexWritesSettle()
+    rmSync(folder, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
+  })
   it('a clean brain (no entities) produces no items', () => {
     expect(computeAttention(s)).toEqual([])
   })
@@ -170,8 +176,14 @@ describe('brain:meetingExtraction store contract', () => {
     folder = mkdtempSync(join(tmpdir(), 'asktoto-meeting-extraction-test-'))
     s = settingsFor(folder)
   })
-  afterEach(() => rmSync(folder, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }))
-
+  // MQA-007: settle the index-write lane BEFORE removing the profile. updateIndex writes
+  // index.json through a tmp+rename, and a detached one can still be in flight here — under
+  // parallel load the rename then lands on a directory this line already deleted, failing an
+  // unrelated test in whichever file happened to be running.
+  afterEach(async () => {
+    await whenIndexWritesSettle()
+    rmSync(folder, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
+  })
   it('returns the stored extraction for an ingested meeting, keyed by slugify(basename(file))', async () => {
     const x = MeetingExtractionSchema.parse({
       title24: 'Banking sync',
@@ -242,8 +254,14 @@ describe('render-gate property — no unverified NUMBER ever reaches the Attenti
     folder = mkdtempSync(join(tmpdir(), 'asktoto-attention-gate-'))
     s = settingsFor(folder)
   })
-  afterEach(() => rmSync(folder, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }))
-
+  // MQA-007: settle the index-write lane BEFORE removing the profile. updateIndex writes
+  // index.json through a tmp+rename, and a detached one can still be in flight here — under
+  // parallel load the rename then lands on a directory this line already deleted, failing an
+  // unrelated test in whichever file happened to be running.
+  afterEach(async () => {
+    await whenIndexWritesSettle()
+    rmSync(folder, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
+  })
   it('Leak A: an AMBIGUOUS amount never puts its raw figure into the attention detail', async () => {
     const slug = slugify('Ambiguous Amount Deal')
     await writeDeal(

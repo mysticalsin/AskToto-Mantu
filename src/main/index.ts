@@ -49,6 +49,7 @@ import {
   RenameMeetingPayloadSchema,
   UpdateRecapPayloadSchema,
   SetConfidentialPayloadSchema,
+  SetCrmPushedPayloadSchema,
   RecallBackfillSpeakersPayloadSchema,
   ImportAudioStartSchema,
   ImportJobIdSchema,
@@ -189,7 +190,7 @@ import { buildBrainContext } from './brain/context'
 import { buildSystem } from './personas'
 import { initLogging, mainLog, auditLog } from './logger'
 import { installProxyAwareFetch } from './net/install-proxy'
-import { authStatus, signIn as authSignIn, signOut as authSignOut, requireAuth } from './auth'
+import { authStatus, signIn as authSignIn, signOut as authSignOut, requireAuth, ssoBootstrapAllowed } from './auth'
 import { calendarToday } from './calendar'
 import { fetchTeamsTranscriptForMeeting } from './graph-transcript'
 import {
@@ -232,6 +233,7 @@ import {
   updateMeetingRecap,
   updateMeetingTranscript,
   setMeetingConfidential,
+  setMeetingCrmPushed,
   deleteAllMeetings,
   sweepExpiredMeetings
 } from './recall'
@@ -248,7 +250,7 @@ import {
 } from './dust-oauth'
 import { asrManifestComplete } from './asr-manifest'
 import { isInsideResourceBase, realResourceBase } from './asr-model-path'
-import { detectCli, testCli, setupCli, installCli, loginCli, prewarmCli } from './cli'
+import { detectCli, testCli, setupCli, installCli, loginCli, prewarmCli, checkCliSession } from './cli'
 import { connectMcp, pushToMcp } from './mcp/mcpClient'
 import { activateLicense, checkLicenseGrace, heartbeat } from './license'
 import {
@@ -278,6 +280,7 @@ import {
 import { SaveMeetingSchema, SaveNoteSchema } from '@shared/ipc'
 import {
   PROVIDERS,
+  PROVIDER_IDS,
   resolveModelTier,
   applyInteractiveGuardrail,
   reasoningEffortFor,
@@ -929,6 +932,54 @@ function retireCli(provider: ProviderId, message: string): void {
   if (!s.cliConnected[provider]) return
   setSettings({ cliConnected: { ...s.cliConnected, [provider]: false } })
   mainLog.warn(`[cli] ${provider} rejected our credentials — marking it disconnected`)
+}
+
+/**
+ * MQA-062: retiring on a credential rejection only fires once the user has already ASKED something and
+ * watched it fail. Until then Settings shows the card as Connected/Active, providerReady is true and the
+ * Bar's setup CTA stays hidden — the app asserting a session it has not checked. Dust's rule for this
+ * exact credential class (renderer/lib/dust-live-check.ts) is that opening Settings must verify the real
+ * session rather than trust "already connected"; this is that check for the two CLI providers, run once
+ * at startup and whenever the AI settings tab opens.
+ *
+ * Throttled per provider because the probe spawns a (cheap, zero-token) child process and the settings
+ * panel can be opened repeatedly. Only an explicit 'signed-out' retires the flag — see checkCliSession on
+ * why 'unknown' must change nothing.
+ */
+const CLI_SESSION_RECHECK_MS = 60_000
+const cliSessionCheckedAt = new Map<ProviderId, number>()
+let cliSessionSweep: Promise<void> | null = null
+
+async function verifyCliSessions(now = Date.now()): Promise<void> {
+  // Single-flighted: startup and a settings-panel open can land together, and two concurrent sweeps
+  // would spawn the probe twice for the same provider.
+  if (cliSessionSweep) return cliSessionSweep
+  cliSessionSweep = (async () => {
+    // Never reject. One caller is a bare `void verifyCliSessions()` at boot, and an async body with no
+    // guard is precisely how a transient settings-read failure becomes an unhandledRejection — which
+    // onFatal turns into a crash-*.log and an `app.crash` audit entry for something that crashed nothing.
+    // Same guarded shape startMeetingPoller uses, and for the same reason.
+    try {
+      for (const provider of PROVIDER_IDS) {
+        if (PROVIDERS[provider].kind !== 'cli') continue
+        if (!getSettings().cliConnected[provider]) continue
+        const last = cliSessionCheckedAt.get(provider) ?? 0
+        if (now - last < CLI_SESSION_RECHECK_MS) continue
+        cliSessionCheckedAt.set(provider, now)
+        const verdict = await checkCliSession(provider)
+        if (verdict !== 'signed-out') continue
+        const s = getSettings()
+        if (!s.cliConnected[provider]) continue // disconnected by the user while the probe ran
+        setSettings({ cliConnected: { ...s.cliConnected, [provider]: false } })
+        mainLog.warn(`[cli] ${provider} is no longer signed in — marking it disconnected`)
+      }
+    } catch (error) {
+      mainLog.warn('[cli] session verification could not complete:', error instanceof Error ? error.message : String(error))
+    }
+  })().finally(() => {
+    cliSessionSweep = null
+  })
+  return cliSessionSweep
 }
 
 function publicSettings(): PublicSettings {
@@ -2057,7 +2108,27 @@ function registerIpc(): void {
     // Trust boundary is main, not the renderer's SignInWall — block the mutation for an unauthenticated
     // caller (DevTools/compromised renderer) when auth is enforced. Return the current (unchanged)
     // settings so the shape matches the normal success return exactly; nothing is persisted.
-    if (!requireAuth()) return publicSettings()
+    //
+    // MQA-066: with ONE exception, and only the exact one that makes the wall escapable. When enforcement
+    // is on but nothing supplies a tenant, the wall's own message tells the user to enter the Entra IDs in
+    // Settings → Calendar — and this line is what made typing them there silently not persist, leaving
+    // the machine unusable with no in-app recovery. ssoBootstrapAllowed() re-checks every gate (no session,
+    // enforcement on, NOTHING resolving a config, and never once sticky-configured), and the patch is
+    // narrowed here to exactly the three self-serve azure fields, so no other privileged setting rides
+    // along. env / machine-wide managed-config still outrank these in readConfig(), so an org deployment
+    // cannot be loosened through this — it can only fill a vacuum.
+    if (!requireAuth()) {
+      if (!ssoBootstrapAllowed()) return publicSettings()
+      const bootstrap: Partial<Record<'azureClientId' | 'azureTenantId' | 'azureAllowedDomain', string>> = {}
+      for (const k of ['azureClientId', 'azureTenantId', 'azureAllowedDomain'] as const) {
+        const v = (patch as Record<string, unknown> | null | undefined)?.[k]
+        if (typeof v === 'string') bootstrap[k] = v
+      }
+      if (Object.keys(bootstrap).length === 0) return publicSettings()
+      setSettings(bootstrap)
+      auditLog('settings.changed', { keys: Object.keys(bootstrap), reason: 'sso_bootstrap' })
+      return publicSettings()
+    }
     const p = patch ?? {}
     // License STATE is server-authoritative: only main's activateLicense/heartbeat (license.ts) may
     // write it. Without this strip, any renderer code could self-issue an unlimited license with a
@@ -2474,6 +2545,16 @@ function registerIpc(): void {
     }
     return r
   })
+  // MQA-062: the Settings AI tab calls this on open, the way Settings already live-checks Dust. Gated
+  // and shaped like every other settings-writing handler (main window, requireAuth) — it can clear a
+  // cliConnected flag, so an unauthenticated caller must not reach it. Returns the fresh snapshot so a
+  // retired flag lands in the panel that asked, without waiting for the next settings poll.
+  ipcMain.handle(IPC.cliVerifySessions, async (e) => {
+    assertMainWindow(e)
+    if (!requireAuth()) return publicSettings()
+    await verifyCliSessions()
+    return publicSettings()
+  })
   ipcMain.handle(IPC.cliSetup, (e, provider: unknown) => {
     assertMainWindow(e)
     if (!requireAuth()) return { ok: false, error: 'Sign in with your Mantu account first.' }
@@ -2829,6 +2910,18 @@ function registerIpc(): void {
       }
     }
     return result
+  })
+
+  // MQA-092: durable record that this recap already reached the CRM. Same guard shape as every other
+  // recall write (main window, requireAuth, zod, basename re-checked inside recall.ts). No republish
+  // here — unlike the confidential flag, this marker changes nothing about what is published; it only
+  // stops the push panel re-offering a send that already happened.
+  ipcMain.handle(IPC.recallSetCrmPushed, async (e, raw) => {
+    assertMainWindow(e)
+    if (!requireAuth()) return { ok: false, error: 'Sign in with your Mantu account first.' }
+    const parsed = SetCrmPushedPayloadSchema.safeParse(raw)
+    if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message || 'Invalid request.' }
+    return setMeetingCrmPushed(getSettings(), parsed.data.file, parsed.data.key)
   })
 
   // Speaker Intelligence: manual (re)trigger of the Teams-transcript speaker-name backfill for a past
@@ -4569,7 +4662,12 @@ if (!app.requestSingleInstanceLock()) {
   // doesn't stall on the login-shell PATH lookup (it only ran on sign-in before — i.e. once ever).
   try {
     const s0 = getSettings()
-    if (s0.cliConnected['claude-cli'] || s0.cliConnected['codex-cli']) prewarmCli()
+    if (s0.cliConnected['claude-cli'] || s0.cliConnected['codex-cli']) {
+      prewarmCli()
+      // MQA-062: and check the session those flags claim, once per launch. A `claude logout` between
+      // runs otherwise leaves the app asserting a provider it cannot use until the first ask fails.
+      void verifyCliSessions()
+    }
   } catch {
     /* best-effort warm-up */
   }

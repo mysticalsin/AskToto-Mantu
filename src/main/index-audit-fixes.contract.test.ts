@@ -3,19 +3,20 @@ import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 
 // Regression locks for the index.ts findings of the 2026-08 Windows audit (MQA-037, 038, 051, 054, 056,
-// 062, 064, 070, 075, 081, 090). src/main/index.ts boots Electron at import time and every one of these
+// 062, 064, 066, 070, 075, 081, 090). src/main/index.ts boots Electron at import time and every one of these
 // seams is a closure inside an ipcMain handler or a window-event callback, so there is no index.test.ts
 // anywhere in this repo — the established pattern (pinned-agent-boundary.contract.test.ts,
 // ask-freshness.contract.test.ts, c-main-fixes.contract.test.ts) pins the invariant against the actual
 // source. Where a fix IS a self-contained expression, the expression itself is lifted out of the source
 // and executed below, so those assertions test the shipped logic rather than its shape.
 //
-// NOT COVERED HERE — MQA-059 (a revoked key silently absorbed by cross-provider failover). Main already
-// computes and ships the honest signal (`unhealthyProviders` on the settings snapshot, index.ts), but no
-// renderer component consumes it, and every remedy the ledger accepts lands in files this change does not
-// own (src/renderer/src/App.tsx to render the banner, src/shared/ipc.ts for a distinct key-failed field).
-// The one index.ts-local option — folding provider health into `providerReady` — is the change the
-// verifier explicitly flagged as riskier, because ~10 renderer gates currently succeed via failover.
+// NOT COVERED HERE — MQA-059 (a revoked key silently absorbed by cross-provider failover). Main's half
+// (computing `unhealthyProviders` and shipping it on the settings snapshot) is pinned by
+// provider-health-ux.contract.test.ts; the renderer half that finally consumes it — the standing notice
+// naming the dead provider, and the settings re-fetch on stream end that makes it appear without a window
+// focus — lives in src/renderer/src/app-audit-fixes.contract.test.ts. Deliberately NOT folded into
+// `providerReady`: the verifier flagged that as the riskier change, because ~10 renderer gates currently
+// succeed via failover and would start failing closed.
 const indexSrc = readFileSync(join(__dirname, 'index.ts'), 'utf8')
 
 /** Slice the source from `from` up to (excluding) the next occurrence of `to`. Sliced inside each test so
@@ -166,6 +167,97 @@ describe('MQA-062 — a dead CLI session stops reporting itself as connected', (
     const body = onError()
     expect(body).toMatch(/def\.kind === 'cli' && isAuthFailure\(message\)\s*\n\s*\? `\$\{def\.label\} is no longer signed in\./)
     expect(body).toMatch(/Settings → CLI Integration/)
+  })
+
+  // Retiring on rejection only fires once the user has ALREADY asked something and watched it fail.
+  // These pin the half that finds out first — the same "persisted state can lie" rule Dust follows.
+  const sweep = (): string => sliceBetween('async function verifyCliSessions(', 'function publicSettings()')
+
+  it('only ever probes a provider the settings currently claim is connected', () => {
+    const body = sweep()
+    expect(body).toMatch(/if \(PROVIDERS\[provider\]\.kind !== 'cli'\) continue/)
+    expect(body).toMatch(/if \(!getSettings\(\)\.cliConnected\[provider\]\) continue/)
+  })
+
+  it('retires ONLY on an explicit signed-out verdict, never on an unreadable probe', () => {
+    // checkCliSession is deliberately three-valued; treating 'unknown' as negative would disconnect a
+    // working CLI whenever its version changed its status output.
+    expect(sweep()).toMatch(/if \(verdict !== 'signed-out'\) continue/)
+  })
+
+  it('re-reads the flag after the await, so a user Disconnect during the probe is not undone', () => {
+    const body = sweep()
+    expect(body.indexOf('const s = getSettings()')).toBeGreaterThan(body.indexOf('await checkCliSession(provider)'))
+    expect(body).toMatch(/if \(!s\.cliConnected\[provider\]\) continue/)
+  })
+
+  it('throttles per provider and single-flights the sweep, so an opened panel cannot spawn a probe storm', () => {
+    const body = sweep()
+    expect(body).toMatch(/if \(now - last < CLI_SESSION_RECHECK_MS\) continue/)
+    expect(body).toMatch(/if \(cliSessionSweep\) return cliSessionSweep/)
+  })
+
+  it('never rejects — one caller is a bare `void` at boot, where a throw becomes a bogus crash dump', () => {
+    // The class the hardening backlog already fixed once for startMeetingNotifier: an unguarded async
+    // body's rejection reaches onFatal, which writes a crash-*.log and an `app.crash` audit line for
+    // something that crashed nothing.
+    const body = sweep()
+    expect(body).toMatch(/try \{[\s\S]*\} catch \(error\) \{[\s\S]*mainLog\.warn\('\[cli\] session verification could not complete:'/)
+    expect(indexSrc).toMatch(/void verifyCliSessions\(\)/)
+  })
+
+  it('runs once at launch, next to the CLI prewarm that already reads the same flags', () => {
+    expect(indexSrc).toMatch(/if \(s0\.cliConnected\['claude-cli'\] \|\| s0\.cliConnected\['codex-cli'\]\) \{[\s\S]{0,400}?void verifyCliSessions\(\)/)
+  })
+
+  it('gates the renderer-facing verify handler like every other settings-WRITING handler (MQA-129)', () => {
+    const handler = sliceBetween('ipcMain.handle(IPC.cliVerifySessions', 'ipcMain.handle(IPC.cliSetup')
+    expect(handler).toMatch(/assertMainWindow\(e\)/)
+    expect(handler).toMatch(/if \(!requireAuth\(\)\) return publicSettings\(\)/)
+    // Returns the refreshed snapshot so a retired flag lands in the panel that asked for the check.
+    expect(handler).toMatch(/await verifyCliSessions\(\)\s*\n\s*return publicSettings\(\)/)
+  })
+})
+
+describe('MQA-066 — the enforced-but-unconfigured wall has exactly one way out', () => {
+  const carveOut = (): string => sliceBetween('if (!requireAuth()) {', 'const p = patch ?? {}')
+
+  it('re-checks every gate in main rather than trusting the renderer that reached this handler', () => {
+    expect(carveOut()).toMatch(/if \(!ssoBootstrapAllowed\(\)\) return publicSettings\(\)/)
+  })
+
+  it('narrows the patch to the three self-serve azure fields and nothing else', () => {
+    const body = carveOut()
+    expect(body).toMatch(/\['azureClientId', 'azureTenantId', 'azureAllowedDomain'\] as const/)
+    // Copied key-by-key from a whitelist, never spread from the caller's object — a patch carrying
+    // { azureClientId, licenseValid, provider } must persist only the first.
+    expect(body).toMatch(/if \(typeof v === 'string'\) bootstrap\[k\] = v/)
+    expect(body).not.toMatch(/\.\.\.p\b/)
+    expect(body).not.toMatch(/\.\.\.patch\b/)
+  })
+
+  it('leaves the blanket refusal in place for everything else', () => {
+    // The unauthenticated default is still "persist nothing, return the unchanged snapshot".
+    expect(carveOut()).toMatch(/if \(Object\.keys\(bootstrap\)\.length === 0\) return publicSettings\(\)/)
+  })
+
+  it('audits the write, like every other settings mutation', () => {
+    expect(carveOut()).toMatch(/auditLog\('settings\.changed', \{ keys: Object\.keys\(bootstrap\), reason: 'sso_bootstrap' \}\)/)
+  })
+})
+
+describe('MQA-092 — the durable CRM-push marker is written behind the same gates as every recall write', () => {
+  const handler = (): string =>
+    sliceBetween('ipcMain.handle(IPC.recallSetCrmPushed', 'ipcMain.handle(IPC.recallBackfillSpeakers')
+
+  it('carries the main-window + requireAuth gate every settings/recall-WRITING handler carries (MQA-129)', () => {
+    const body = handler()
+    expect(body).toMatch(/assertMainWindow\(e\)/)
+    expect(body).toMatch(/if \(!requireAuth\(\)\)/)
+  })
+
+  it('parses the payload rather than trusting it — the key lands in a YAML scalar', () => {
+    expect(handler()).toMatch(/SetCrmPushedPayloadSchema\.safeParse\(raw\)/)
   })
 })
 

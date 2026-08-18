@@ -72,7 +72,7 @@ describe('team-transcript ingest', () => {
     await vi.waitFor(() => {
       // Indexed under the namespaced key — NOT the bare basename.
       expect(readIndex(getSettings()).ingested[key]?.ok).toBe(true)
-    })
+    }, { timeout: 10_000 })
     expect(readIndex(getSettings()).ingested[file]).toBeUndefined()
     // Attribution: the ingest job re-stamps the stored extraction with the folder owner.
     expect(readMeetingExtraction(getSettings(), extractionSlug(key))?.source_team).toBe('alice')
@@ -95,7 +95,7 @@ describe('team-transcript ingest', () => {
       const idx = readIndex(getSettings())
       expect(idx.ingested[file]?.ok).toBe(true) // own meeting, bare basename
       expect(idx.ingested[`team/bob/${file}`]?.ok).toBe(true) // team file, namespaced — no collision
-    })
+    }, { timeout: 10_000 })
     // The own meeting carries no team tag; only the shared-folder file is attributed to bob.
     expect(readMeetingExtraction(getSettings(), extractionSlug(file))?.source_team).toBe('')
     expect(readMeetingExtraction(getSettings(), extractionSlug(`team/bob/${file}`))?.source_team).toBe('bob')

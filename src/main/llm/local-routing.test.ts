@@ -40,6 +40,7 @@ vi.mock('./local-runtime', () => localRuntimeMock)
 
 const localModelsMock = vi.hoisted(() => ({
   isDownloaded: vi.fn(() => true),
+  assertRamOk: vi.fn((_id: string) => {}),
   modelPaths: vi.fn((id: string) => ({
     dir: `/models/${id}`,
     gguf: `/models/${id}/model.gguf`,
@@ -117,6 +118,7 @@ beforeEach(() => {
   localRuntimeMock.baseURL.mockReturnValue('http://127.0.0.1:54321/v1')
   localRuntimeMock.sessionKey.mockReturnValue('deadbeefsessionkeydeadbeefsessionkeydeadbeefsessionkeydeadbeef')
   localModelsMock.isDownloaded.mockReturnValue(true)
+  localModelsMock.assertRamOk.mockImplementation(() => {})
   localModelsMock.verifyIntegrity.mockResolvedValue(undefined)
   openaiMock.streamOpenAI.mockReturnValue({ abort: vi.fn() })
 })
@@ -347,6 +349,18 @@ describe('localBaseReady (feeds index.ts localReady, local*Ready, and the vision
 
   it('false when the configured model is not downloaded', () => {
     localModelsMock.isDownloaded.mockReturnValue(false)
+    expect(localBaseReady(readySettings(), null)).toBe(false)
+  })
+
+  // MQA-018: isDownloaded is a file-SIZE check, so on a machine below the model's declared RAM floor it
+  // stays true forever while every load throws InsufficientRamError. Eligibility that says "ready" there
+  // is a claim the machine can never honour — and brain ingest reads this same answer to decide whether a
+  // rebuild may purge the store.
+  it('MQA-018: false when the machine is under the model RAM floor, even with the files present', () => {
+    localModelsMock.assertRamOk.mockImplementation(() => {
+      throw new Error('Local model "qwen3.5-0.8b" needs 8 GB of RAM; this machine has 4 GB.')
+    })
+    expect(localModelsMock.isDownloaded()).toBe(true)
     expect(localBaseReady(readySettings(), null)).toBe(false)
   })
 

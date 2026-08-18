@@ -12,7 +12,7 @@ import { existsSync } from 'node:fs'
 import type { AskMode, Settings } from '@shared/ipc'
 import type { ModelTier, ProviderId } from '@shared/providers'
 import { resolveBinaryPath, detectPlatform } from './local-runtime'
-import { isDownloaded } from './local-models'
+import { isDownloaded, assertRamOk } from './local-models'
 
 /** Ask modes Métis Local is scoped to in v1 — never answer/recap; only opted-in vision may exceed base tier. */
 const LOCAL_SCOPED_MODES: ReadonlySet<AskMode> = new Set(['suggest', 'summary', 'vision'])
@@ -41,18 +41,34 @@ function safeIsDownloaded(modelId: string): boolean {
   }
 }
 
+/** MQA-018: the machine's RAM against the model's declared floor. `isDownloaded` is a file-SIZE check
+ *  only, so on a box below `minTotalRamGB` every local call still throws InsufficientRamError from
+ *  verifyIntegrity — deterministically, forever — while eligibility claimed local was ready. listModels()
+ *  already reports exactly this as `unavailableReason: 'insufficient-ram'`; without it here the snapshot
+ *  and the routing decision assert opposite things about the same machine. Same defensive shape as
+ *  safeIsDownloaded: an unknown model id degrades to "not ready", never throws into a routing decision. */
+function safeRamOk(modelId: string): boolean {
+  try {
+    assertRamOk(modelId)
+    return true
+  } catch {
+    return false
+  }
+}
+
 /**
  * Task-independent local readiness: enabled, the runtime binary is provisioned, the configured model is
- * present in the installer, and the org allowlist (if any) permits 'local'. This is `localReady` in the settings
- * snapshot (index.ts's publicSettings()) and the shared base every per-task *Ready flag and
- * localEligibleFor build on — one definition, so the snapshot and the live routing decision can never
- * drift apart.
+ * present in the installer AND loadable on this machine's RAM, and the org allowlist (if any) permits
+ * 'local'. This is `localReady` in the settings snapshot (index.ts's publicSettings()) and the shared base
+ * every per-task *Ready flag and localEligibleFor build on — one definition, so the snapshot and the live
+ * routing decision can never drift apart.
  */
 export function localBaseReady(s: Pick<Settings, 'localLlm'>, allowed: string[] | null): boolean {
   if (!s.localLlm.enabled) return false
   if (allowed && !allowed.includes('local')) return false
   if (!localRuntimeBinaryPresent()) return false
   if (!safeIsDownloaded(s.localLlm.modelId)) return false
+  if (!safeRamOk(s.localLlm.modelId)) return false
   return true
 }
 

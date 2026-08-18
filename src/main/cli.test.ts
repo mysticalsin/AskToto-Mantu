@@ -35,7 +35,7 @@ vi.mock('node:child_process', async () => {
   return { execFile, spawn: h.spawnImpl }
 })
 
-import { CLI_CONFIGS, cliEnv, resolveBin, idleWatchdog, runCliStream, testCli } from './cli'
+import { CLI_CONFIGS, checkCliSession, cliEnv, resolveBin, idleWatchdog, runCliStream, testCli } from './cli'
 
 /** Drain pending microtasks + one macrotask turn. setImmediate is deliberately left un-faked by the
  *  fake-timer blocks below, so this advances the stream/readline plumbing without moving the clock. */
@@ -590,5 +590,117 @@ describe('testCli — the connection probe spawns under the same lockdown as a r
     expect(h.spawnImpl).not.toHaveBeenCalled()
     expect(res.ok).toBe(false)
     expect(res.error).toContain('sandbox working directory')
+  })
+})
+
+
+// MQA-062 — `cliConnected` was write-once, so a `claude logout` in a terminal left the app asserting a
+// provider it could no longer use. The ask path retires the flag on a credential rejection, but only
+// AFTER the user has asked something and watched it fail; this probe is what lets startup and the
+// Settings panel find out first. It must be cheap (no billed turn) and, above all, must never retire a
+// live connection on ambiguous evidence.
+describe('checkCliSession — the zero-token liveness probe behind MQA-062', () => {
+  const REAL_PLATFORM = process.platform
+  // A FRESH copy of cli.ts per case: resolveBin caches positive hits in a module-level map, and the
+  // testCli suite above has already warmed 'claude'/'codex' — without this, the missing-binary case
+  // below could never be reached.
+  let checkCliSession: typeof import('./cli').checkCliSession
+
+  /** Route resolveBin (`$SHELL -lc "command -v <bin>"`) and the status probe to separate fakes. */
+  const wire = (status: () => Promise<{ stdout: string }>, bin: string | null = '/usr/local/bin/tool'): void => {
+    h.execFileImpl.mockImplementation((_cmd: string, args: string[]) => {
+      if (args?.[0] === '-lc') return Promise.resolve({ stdout: bin ? `${bin}\n` : '   \n', stderr: '' })
+      if (args?.[0] === 'auth' || args?.[0] === 'login') return status()
+      return Promise.reject(new Error(`unexpected execFile args: ${JSON.stringify(args)}`))
+    })
+  }
+
+  beforeEach(async () => {
+    Object.defineProperty(process, 'platform', { value: 'darwin', configurable: true })
+    h.execFileImpl.mockReset()
+    vi.resetModules()
+    checkCliSession = (await import('./cli')).checkCliSession
+  })
+  afterEach(() => Object.defineProperty(process, 'platform', { value: REAL_PLATFORM, configurable: true }))
+
+  it('asks the status subcommand, never a billed completion', async () => {
+    wire(async () => ({ stdout: JSON.stringify({ loggedIn: true }) }))
+    expect(await checkCliSession('claude-cli')).toBe('live')
+    const probe = h.execFileImpl.mock.calls.find((c) => (c[1] as string[])?.[0] === 'auth')
+    expect(probe?.[1]).toEqual(['auth', 'status'])
+    // The lockdown args a real ask / testCli carries would mean a spawned model turn — nothing here runs one.
+    expect(JSON.stringify(h.execFileImpl.mock.calls)).not.toContain('--disallowedTools')
+    expect(h.spawnImpl).not.toHaveBeenCalled()
+  })
+
+  it("reads claude's JSON verdict in both directions", async () => {
+    wire(async () => ({ stdout: JSON.stringify({ loggedIn: false, authMethod: null }) }))
+    expect(await checkCliSession('claude-cli')).toBe('signed-out')
+  })
+
+  it("reads codex's line, and 'Not logged in' never matches the positive pattern", async () => {
+    wire(async () => ({ stdout: 'Logged in using ChatGPT\n' }))
+    expect(await checkCliSession('codex-cli')).toBe('live')
+  })
+
+  it('reads a codex negative as signed out', async () => {
+    wire(async () => ({ stdout: 'Not logged in\n' }))
+    expect(await checkCliSession('codex-cli')).toBe('signed-out')
+  })
+
+  it('treats a missing binary as signed-out — an uninstalled CLI cannot be connected', async () => {
+    wire(async () => ({ stdout: '' }), null)
+    expect(await checkCliSession('claude-cli')).toBe('signed-out')
+    // Confirmed absent means BOTH lookups answered null, not one.
+    expect(h.execFileImpl.mock.calls.filter((c) => (c[1] as string[])?.[0] === '-lc')).toHaveLength(2)
+  })
+
+  it('does not retire a working CLI on a transient lookup failure', async () => {
+    // resolveBin shells out to the login shell on mac/Linux and caches only positive hits, so a hiccup
+    // on the first call is indistinguishable from an uninstall until the second one answers.
+    let lookups = 0
+    h.execFileImpl.mockImplementation((_cmd: string, args: string[]) => {
+      if (args?.[0] === '-lc') {
+        lookups += 1
+        return Promise.resolve({ stdout: lookups === 1 ? '   \n' : '/usr/local/bin/tool\n', stderr: '' })
+      }
+      if (args?.[0] === 'auth') return Promise.resolve({ stdout: JSON.stringify({ loggedIn: true }) })
+      return Promise.reject(new Error(`unexpected execFile args: ${JSON.stringify(args)}`))
+    })
+    expect(await checkCliSession('claude-cli')).toBe('live')
+    expect(lookups).toBe(2)
+  })
+
+  // The safety property, and the reason the verdict is three-valued: a false "signed out" retires a
+  // working connection and sends the user off to reconnect for nothing, so anything this probe cannot
+  // read confidently must change nothing.
+  it('answers unknown on an output shape it does not recognise', async () => {
+    wire(async () => ({ stdout: 'usage: claude auth [options]' }))
+    expect(await checkCliSession('claude-cli')).toBe('unknown')
+  })
+
+  it('answers unknown when claude fails to run — it reports its verdict in JSON, not in the exit code', async () => {
+    wire(async () => Promise.reject(new Error('command not found')))
+    expect(await checkCliSession('claude-cli')).toBe('unknown')
+  })
+
+  it('answers unknown on a timeout, for either CLI', async () => {
+    wire(async () => Promise.reject(Object.assign(new Error('timed out'), { killed: true })))
+    expect(await checkCliSession('codex-cli')).toBe('unknown')
+  })
+
+  it('answers unknown on codex output that states nothing either way', async () => {
+    wire(async () => ({ stdout: 'something else entirely' }))
+    expect(await checkCliSession('codex-cli')).toBe('unknown')
+  })
+
+  it('scrubs the API-key env so a keyed environment cannot mask a logged-out CLI', async () => {
+    vi.stubEnv('ANTHROPIC_API_KEY', 'sk-ant-should-not-leak')
+    wire(async () => ({ stdout: JSON.stringify({ loggedIn: true }) }))
+    await checkCliSession('claude-cli')
+    const probe = h.execFileImpl.mock.calls.find((c) => (c[1] as string[])?.[0] === 'auth')
+    const env = (probe?.[2] as { env?: NodeJS.ProcessEnv } | undefined)?.env
+    expect(env?.ANTHROPIC_API_KEY).toBeUndefined()
+    vi.unstubAllEnvs()
   })
 })

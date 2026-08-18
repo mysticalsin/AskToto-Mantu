@@ -219,17 +219,27 @@ describe.runIf(process.platform === 'win32')('isAdminManagedTrusted — real Pro
   // String and got null, so EVERY file on win32 probed as `owner: ''` and evaluateAclTrust rejected it.
   // Windows machine policy (requireAuth, allowedProviders, lockedKeys, disableAutoUpdate) was therefore
   // never enforced, and every reject-direction test above still passed. This asserts the owner resolves.
-  it('resolves a real owner SID from the live ACL probe — an empty owner silently disables all machine policy (MQA-008)', () => {
+  it('resolves a real owner SID from the live ACL probe — an empty owner silently disables all machine policy (MQA-008)', async () => {
     mkdirSync(dir, { recursive: true })
     writeFileSync(file, JSON.stringify({ requireAuth: true }))
 
-    const probe = readAclForTest(file)
+    // MQA-007: the probe is a synchronous powershell.exe spawn under the PRODUCTION 8s execFileSync cap,
+    // which no test budget can extend. On a saturated machine (several vitest processes at once) the spawn
+    // itself can fail or time out, and the probe returns null — "could not run", which is not evidence
+    // either way about MQA-008. Retry with a pause rather than tolerate: a genuinely broken probe returns
+    // the same answer every time, so nothing asserted below is weakened, while a machine that had no
+    // scheduler slot to give gets a real second chance instead of three instant re-failures.
+    let probe = readAclForTest(file)
+    for (let attempt = 0; probe === null && attempt < 4; attempt++) {
+      await new Promise((resolve) => setTimeout(resolve, 500 * (attempt + 1)))
+      probe = readAclForTest(file)
+    }
     expect(probe).not.toBeNull()
     // A well-formed Windows SID: S-1-<authority>-<sub authorities>. Any file has an owner, so an empty
     // string here means the probe is broken, not that the file is suspicious.
     expect(probe?.owner).toMatch(/^S-1-\d+(-\d+)+$/)
     expect(probe?.aces.length).toBeGreaterThan(0)
-  }, 20_000)
+  }, 45_000) // four 8s probes plus their backoff, worst case
 
   it('readTrustedAdminManaged never returns content for that same untrusted file', () => {
     mkdirSync(dir, { recursive: true })
@@ -268,6 +278,14 @@ describe('ACL verdict memo — one probe per burst, never across a swap (MQA-028
   })
 
   it('answers a burst of privileged calls on the same file from a single probe', () => {
+    // MQA-007: freeze the clock, for the same reason the delete-and-replace case below does — this one
+    // must prove MEMOIZATION, not that the machine is fast. The memo is deliberately time-bounded
+    // (ACL_VERDICT_TTL_MS = 5s, a security property), and each read here can spend up to the production
+    // 8s powershell timeout on a saturated machine, so on real time the second call legitimately outlives
+    // the memo and re-probes: a correct product behaviour reported as a failed test. Frozen, the four
+    // reads are the single settings:set turn this is actually about.
+    vi.useFakeTimers()
+    vi.setSystemTime(Date.now())
     const first = readTrustedAdminManaged(file)
     expect(readTrustedAdminManaged(file)).toBe(first)
     expect(isAdminManagedTrusted(file)).toBe(first !== null)

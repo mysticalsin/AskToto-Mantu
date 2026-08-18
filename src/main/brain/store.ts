@@ -256,6 +256,16 @@ export async function writeJson(settings: Settings, rel: string, value: unknown)
 // Lives here, not in ingest.ts, for the same import-cycle reason as commitmentKey/pushUnique/outranks
 // above: corrections.ts cannot import from ingest.ts (ingest.ts already imports FROM corrections.ts), so
 // the ONE primitive both files' mutations must share has to sit below both, not inside either.
+/** readJson's cache returns the SAME object reference on a repeat read of an unchanged file (keyed by
+ *  path+mtime+size, not by caller) — mutating it in place silently edits every other holder of that
+ *  reference, and leaves the cache advertising a value that was never persisted if the write then fails.
+ *  Every read-modify-write below and in corrections.ts clones first, so it only ever owns the copy it
+ *  writes. Lives here beside withEntityLock: the mutations that need it span store.ts, ingest.ts and
+ *  corrections.ts, and corrections.ts cannot import from ingest.ts (see the lock's own note). */
+export function cloneEntity<T>(entity: T): T {
+  return JSON.parse(JSON.stringify(entity)) as T
+}
+
 let entityMutationLock: Promise<void> = Promise.resolve()
 export function withEntityLock<T>(fn: () => Promise<T>): Promise<T> {
   const run = entityMutationLock.then(fn)
@@ -440,17 +450,27 @@ export const writeDeal = (s: Settings, slug: string, v: DealEntity): Promise<voi
  * Set a deal's outcome (open/won/lost) — the human closes the loop the LLM never may (see the
  * DealEntitySchema.outcome doc comment in shared/brain.ts). Returns the updated entity, or null when
  * the slug doesn't match any deal on disk (deleted, mistyped, or never ingested).
+ *
+ * MQA-085: takes `withEntityLock` for the same reason settleCommitment does — this is a
+ * read-deal → mutate → write-deal round trip over the very file an in-flight ingest merge reads at the
+ * top of mergeExtraction and writes back at the bottom, awaiting writeAccount in between. Unlocked, a
+ * "mark won" landing in that window is overwritten by the job's older snapshot and the deal silently
+ * reverts to 'open'. Its only caller is the brain:setDealOutcome IPC handler, never the lane itself, so
+ * there is no re-entrancy risk.
  */
 export async function setDealOutcome(
   s: Settings,
   dealSlug: string,
   outcome: DealEntity['outcome']
 ): Promise<DealEntity | null> {
-  const deal = readDeal(s, dealSlug)
-  if (!deal) return null
-  deal.outcome = outcome
-  await writeDeal(s, dealSlug, deal)
-  return deal
+  return withEntityLock(async () => {
+    const read = readDeal(s, dealSlug)
+    if (!read) return null
+    const deal = cloneEntity(read)
+    deal.outcome = outcome
+    await writeDeal(s, dealSlug, deal)
+    return deal
+  })
 }
 
 /** List entity slugs of a kind (file basenames sans .json). Sorted: readdirSync order is
