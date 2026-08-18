@@ -9,7 +9,8 @@ import {
   tenantMatches,
   signOut,
   resetSelfServeSso,
-  isAdminManagedEnforced
+  isAdminManagedEnforced,
+  ssoBootstrapAllowed
 } from './auth'
 import { getSettings, setSettings } from './store'
 import { readTrustedAdminManaged } from './win-security'
@@ -249,5 +250,91 @@ describe('MQA-107 — SignInWall reset escape hatch recovers a wrong-tenant self
     expect(resetSelfServeSso()).toBe(false)
     signOut()
     expect(authStatus().configured).toBe(false)
+  })
+})
+
+// MQA-107's sibling, and its mirror image. There the config is present but WRONG; here it is absent while
+// enforcement is on — managed-config (or ASKTOTO_REQUIRE_AUTH) says requireAuth:true and supplies no
+// tenant. authEnforced() alone raises the SignInWall, signIn() short-circuits {ok:true, configured:false},
+// and the wall's own message sends the user to enter the IDs in Settings — which settingsSet then refused
+// to persist, because requireAuth() is false in exactly that state. Unusable machine, no in-app recovery.
+describe('MQA-066 — SSO bootstrap escapes an enforced-but-unconfigured wall', () => {
+  let ud: string
+  const AZURE_ENV = ['AZURE_CLIENT_ID', 'AZURE_TENANT_ID', 'ASKTOTO_ALLOWED_DOMAIN', 'ASKTOTO_REQUIRE_AUTH']
+  // Well-formed, and a digit-swap of the real tenant — passes the shape check, can never match `tid`.
+  const WRONG_TENANT = '72f988bf-86f1-41af-91ab-2d7cd011db74'
+
+  beforeEach(() => {
+    ud = mkdtempSync(join(tmpdir(), 'asktoto-auth-bootstrap-test-'))
+    ;(app.getPath as ReturnType<typeof vi.fn>).mockImplementation((n: string) =>
+      n === 'userData' ? ud : join(ud, n)
+    )
+    for (const k of AZURE_ENV) delete process.env[k]
+  })
+  afterEach(() => {
+    rmSync(ud, { recursive: true, force: true })
+    for (const k of AZURE_ENV) delete process.env[k]
+    vi.restoreAllMocks()
+  })
+
+  const enforceWithoutConfig = (): void => {
+    writeFileSync(join(ud, 'managed-config.json'), JSON.stringify({ requireAuth: true }), 'utf8')
+  }
+
+  it('allows the bootstrap in exactly the dead-end state', () => {
+    enforceWithoutConfig()
+    // The state the finding describes, asserted rather than assumed: wall up, nothing configured, and the
+    // ordinary settings write path closed.
+    expect(authStatus().enforced).toBe(true)
+    expect(authStatus().configured).toBe(false)
+    expect(requireAuth()).toBe(false)
+    expect(ssoBootstrapAllowed()).toBe(true)
+  })
+
+  it('refuses it when there is no wall to escape', () => {
+    expect(requireAuth()).toBe(true) // unconfigured + unenforced → nothing blocked, nothing to bootstrap
+    expect(ssoBootstrapAllowed()).toBe(false)
+  })
+
+  // The typo case, and the reason this is NOT gated on "nothing resolves a config". A first shape of the
+  // fix closed the bootstrap the moment any config resolved, which meant one fat-fingered digit in a
+  // tenant GUID re-bricked the machine: every sign-in fails the tenant compare forever, and MQA-107's
+  // reset hatch correctly refuses an authEnforced() fleet. The remedy the wall names has to stay usable
+  // until a sign-in actually succeeds, or the brick has only moved one step later.
+  it('stays open so a mistyped tenant can be corrected', () => {
+    enforceWithoutConfig()
+    setSettings({ azureClientId: 'client-id', azureTenantId: WRONG_TENANT, azureAllowedDomain: 'mantu.com' })
+    expect(authStatus().configured).toBe(true) // a config resolves, and every sign-in against it fails
+    expect(requireAuth()).toBe(false) // still walled
+    expect(ssoBootstrapAllowed()).toBe(true) // ...and still correctable
+  })
+
+  it('cannot override an org deployment — env/managed outrank settings in readConfig()', () => {
+    enforceWithoutConfig()
+    process.env.AZURE_CLIENT_ID = 'client-id'
+    process.env.AZURE_TENANT_ID = TENANT_GUID
+    process.env.ASKTOTO_ALLOWED_DOMAIN = 'mantu.com'
+    // The write is permitted but INERT: a higher tier already answers readConfig(), so what the renderer
+    // puts in settings can never become the tenant this device signs into.
+    setSettings({ azureClientId: 'evil', azureTenantId: WRONG_TENANT, azureAllowedDomain: 'evil.com' })
+    expect(authStatus().domain).toBe('mantu.com')
+  })
+
+  it('never lifts enforcement — authEnforced() does not read these fields at all', () => {
+    enforceWithoutConfig()
+    setSettings({ azureClientId: '', azureTenantId: '', azureAllowedDomain: '' })
+    expect(authStatus().enforced).toBe(true)
+    expect(requireAuth()).toBe(false)
+  })
+
+  // The security property. Once a genuine sign-in has happened, an UNAUTHENTICATED renderer must never be
+  // able to point SSO at a tenant of its choosing — that is precisely what the sticky flag was added to
+  // stop, and this carve-out must not reopen it.
+  it('refuses it on a sticky-configured device, even with every azure field cleared', () => {
+    enforceWithoutConfig()
+    writeFileSync(join(ud, 'auth-configured.flag'), '1', { mode: 0o600 })
+    setSettings({ azureClientId: '', azureTenantId: '', azureAllowedDomain: '' })
+    expect(authStatus().enforced).toBe(true)
+    expect(ssoBootstrapAllowed()).toBe(false)
   })
 })

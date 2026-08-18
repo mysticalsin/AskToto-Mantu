@@ -38,31 +38,59 @@ try {
   let body = await txt()
   console.log('   after boot:', body.slice(0, 120))
 
-  // 2) Onboarding (fresh profile shows it). Complete it: consent → continue → walk → Get started.
-  if (/on-device AI copilot|Your on-device/i.test(body)) {
+  // 2) Onboarding (fresh profile shows it). Drive it the way a user does, to completion.
+  //
+  // Rewritten 2026-08-17. The previous version hard-coded an older wizard — a consent checkbox on the
+  // FIRST scene, then "Continue without signing in", then Next/Decide later/Get started — and failed 6
+  // of 10 steps against the shipped flow, which is: Begin → Set me up → Continue → [pick a mode AND tick
+  // the recording-consent box] → Start → provider choice → readiness → the bar. Verified by driving a
+  // real fresh profile: onboardingDone flips true and the ask input appears.
+  //
+  // Two things made the old script wrong in ways worth not repeating:
+  //   - the consent checkbox moved to the LAST scene, where it gates `Start` (`disabled={!consent}` in
+  //     OnboardingExperience.tsx) — it is a legal affirmation, not a formality, so the driver must tick
+  //     it rather than route around it;
+  //   - Playwright's actionability checks time out on this window (it renders hidden from screen share),
+  //     so `.click()`/`.check()` never fire. Dispatch through the DOM instead; React's handlers run fine.
+  // Rather than re-encode a scene list that will drift again, this walks generically: satisfy any gate
+  // (an unchecked checkbox), then click the last enabled non-destructive control, until the bar appears.
+  if (/on-device AI copilot|Your on-device|on-device meeting copilot/i.test(body)) {
     ok('onboarding shown on first run')
-    // consent checkbox
-    const consent = win.locator('input[type=checkbox]').first()
-    await consent.check({ timeout: 5000 }).then(() => ok('consent checkbox checked')).catch((e) => fail('check consent', e))
-    // Continue without signing in
-    const cont = win.locator('button', { hasText: /Continue without signing in/i }).first()
-    await cont.click({ timeout: 5000 }).then(() => ok('clicked Continue (step1→2)')).catch((e) => fail('click Continue', e))
-    await win.waitForTimeout(400)
-    // Walk steps 2→6: click whichever advancing control is present, priority Get started > Decide later > Next.
+    const advance = () =>
+      win.evaluate(() => {
+        // React tracks input state internally, so a bare `.checked = true` is invisible to it — go
+        // through the native setter and dispatch, the standard workaround.
+        for (const cb of document.querySelectorAll('input[type=checkbox]')) {
+          if (!cb.checked) {
+            const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'checked').set
+            setter.call(cb, true)
+            cb.dispatchEvent(new Event('click', { bubbles: true }))
+            cb.dispatchEvent(new Event('change', { bubbles: true }))
+            return 'consent'
+          }
+        }
+        const skip = /quit|reset|^back$|cancel|sign in with microsoft|skip the tour/i
+        const enabled = [...document.querySelectorAll('button')].filter(
+          (b) => (b.textContent || '').trim() && !skip.test(b.textContent) && !b.disabled
+        )
+        if (!enabled.length) return null
+        const el = enabled[enabled.length - 1] // the primary control sits last in each scene
+        const label = el.textContent.trim().slice(0, 40)
+        el.click()
+        return label
+      })
     let finished = false
-    for (let i = 0; i < 8 && !finished; i++) {
-      const getStarted = win.locator('button:has-text("Get started")').first()
-      const decideLater = win.locator('button:has-text("Decide later")').first()
-      const next = win.locator('button:has-text("Next")').first()
-      if (await getStarted.count()) {
-        await getStarted.click({ timeout: 4000 }).then(() => { finished = true; ok('clicked Get started (finish)') }).catch((e) => fail('click Get started', e))
-      } else if (await decideLater.count()) {
-        await decideLater.click({ timeout: 4000 }).catch(() => {}); await win.waitForTimeout(400)
-      } else if (await next.count()) {
-        await next.click({ timeout: 4000 }).catch(() => {}); await win.waitForTimeout(400)
-      } else { break }
+    const trail = []
+    for (let i = 0; i < 20 && !finished; i++) {
+      finished = await win.evaluate(async () => (await window.toto.getSettings()).onboardingDone === true)
+      if (finished) break
+      const did = await advance()
+      if (!did) break
+      trail.push(did)
+      await win.waitForTimeout(900)
     }
-    if (!finished) fail('completed onboarding walk', new Error('never reached Get started'))
+    if (finished) ok(`completed the onboarding walk (${trail.length} actions: ${trail.join(' → ')})`)
+    else fail('completed onboarding walk', new Error(`stuck after: ${trail.join(' → ') || '(no actionable control)'}`))
     await win.waitForTimeout(600)
     await shot('02-post-onboarding')
     body = await txt()

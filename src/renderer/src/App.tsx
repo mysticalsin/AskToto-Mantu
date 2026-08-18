@@ -198,6 +198,24 @@ export function App(): JSX.Element {
 
   const ask = useAsk() // answer view + recap
   const suggest = useAsk() // live copilot card
+  // MQA-053 / MQA-059: provider health is session state main computes as a side effect of answering, and
+  // the settings snapshot is otherwise only re-fetched on window focus. Without this, the ask that
+  // discovered a dead key finishes, cross-provider failover answers it correctly, and the notice below
+  // stays invisible until the user happens to alt-tab away and back. Re-fetch when a visible ask stops
+  // streaming — the exact moment `unhealthyProviders` can have changed.
+  const askStreaming = ask.answer?.streaming ?? false
+  const suggestStreaming = suggest.answer?.streaming ?? false
+  const wasStreamingRef = useRef(false)
+  useEffect(() => {
+    if (askStreaming || suggestStreaming) {
+      wasStreamingRef.current = true
+      return
+    }
+    // Only on a real streaming → idle transition, never on mount (useSettings already fetches there).
+    if (!wasStreamingRef.current) return
+    wasStreamingRef.current = false
+    void refresh()
+  }, [askStreaming, suggestStreaming, refresh])
   const followup = useAsk() // Review screen's follow-up draft — must NOT reuse `ask`, which already holds the recap there
   // Cold Calling Mode (see maybeFireRecap + generateBookMeetings below): end-of-call coaching, fired
   // automatically alongside the recap, and the manual "Book meetings" outreach draft built from it.
@@ -347,6 +365,9 @@ export function App(): JSX.Element {
     lines: TranscriptLine[]
     startedAt: number
     confidential: boolean
+    /** MQA-092 — the meeting's saved `crm_pushed` fingerprint, so Review knows a recap that already
+     *  reached the CRM in an earlier session and does not re-arm the push. */
+    crmPushedKey?: string
   } | null>(null)
   // Surfaced when opening a past meeting fails (recallRead ok:false — unreadable/undecrypted file). Every
   // open path (History row, Settings' Mantu Intelligence list, Review's own Recent-meetings/Related panel)
@@ -2111,7 +2132,8 @@ export function App(): JSX.Element {
       recap: r.recap || '',
       lines: r.lines || [],
       startedAt: r.startedAt || 0,
-      confidential: !!r.confidential
+      confidential: !!r.confidential,
+      crmPushedKey: r.crmPushedKey
     })
     setView('review')
     setCollapsed(false)
@@ -2150,7 +2172,12 @@ export function App(): JSX.Element {
     const authNotReady = auth.status == null
     const signInGate =
       DEMO == null && (authNotReady || (!!(auth.status?.configured || auth.status?.enforced) && !auth.status?.signedIn))
-    if (a !== 'hide' && (onboardingGate || signInGate)) return
+    // MQA-066: 'settings' joins 'hide' as an action allowed through the sign-in gate. It is the one action
+    // with no capture / LLM / recording side effect — the class this gate was written to block — and it is
+    // the only route to the Entra IDs the wall itself tells the user to enter when enforcement is on but
+    // no tenant is configured. Still blocked while ONBOARDING is the gate: there the widget genuinely
+    // isn't usable yet, and that gate's own `view === 'settings'` escape already covers its fix-link.
+    if (a !== 'hide' && (onboardingGate || (signInGate && a !== 'settings'))) return
     // From the minimized control-pill the Bar is unmounted, so any action that needs the widget (ask /
     // capture / factcheck / settings / toggle-listen) must expand first — otherwise capture/factcheck
     // would fire an LLM request into nothing (invisible work + wasted spend). 'hide' stays as-is.
@@ -2577,6 +2604,7 @@ export function App(): JSX.Element {
         showTranscript={settings?.showFullTranscriptInReview ?? false}
         meetingMeta={pm ? { title: pm.title, date: pm.date } : undefined}
         confidential={pm ? pm.confidential : false}
+        crmPushedKey={pm ? pm.crmPushedKey : undefined}
         followupDraft={followup.answer}
         winsToggle={spotlightRefReady ? { on: includeWins, onToggle: setIncludeWins } : undefined}
         onGenerateFollowup={generateFollowup}
@@ -2769,9 +2797,31 @@ export function App(): JSX.Element {
   // sense, even though privileged IPC was already blocked underneath — `enforced` is optional and treated
   // as false until the main process reports it.
   if ((auth.status?.configured || auth.status?.enforced) && !auth.status?.signedIn && DEMO == null) {
+    // MQA-066: mirror the onboarding gate's escape 15 lines below, which exists for the identical reason
+    // — a fix-link that dead-ends because the gate above it is an unconditional early return. Here the
+    // dead end is worse: when enforcement is on but no tenant is configured anywhere, the wall's own
+    // message tells the user to enter the Entra IDs in Settings → Calendar, and no route to Settings
+    // survives (hotkey, tray item and Bar affordance all render or route below this line). Opening Settings
+    // has no capture / LLM / recording side effect, unlike the actions the gate was written to block, and
+    // main still refuses every settings write here except the three azure fields (ssoBootstrapAllowed).
+    if (view === 'settings') {
+      return (
+        <div ref={setRoot} {...windowDrag} className="flex w-full flex-col gap-2 p-1.5">
+          <Suspense fallback={<div className="cl-root rounded-2xl p-6 text-center text-[12px] text-[color:var(--cl-muted-foreground)]">Loading…</div>}>
+            {settingsBody}
+          </Suspense>
+        </div>
+      )
+    }
     return (
       <div ref={setRoot} {...windowDrag} className="w-full p-1.5">
-        <SignInWall status={auth.status} onSignIn={auth.signIn} />
+        <SignInWall
+          status={auth.status}
+          onSignIn={auth.signIn}
+          onOpenSettings={() =>
+            openSettings('calendar', 'Enter your organization’s Microsoft sign-in IDs here, then sign in.')
+          }
+        />
       </div>
     )
   }
@@ -3028,6 +3078,41 @@ export function App(): JSX.Element {
               Settings → Audio.
             </div>
           )}
+          {/* MQA-053 / MQA-059: the ACTIVE provider's credential stopped working and cross-provider
+              failover absorbed it, so the ask still returned a normal-looking answer. providerReady is
+              derived from "a key string exists", never from whether that key works, so the CTA below
+              cannot fire — and Settings goes on showing this provider as active with a key saved. Without
+              this the degradation is permanent and silent: every later ask runs on a different vendor,
+              at a different cost, over a different data path, and the user is never given the one fact
+              that would let them fix it. Scoped to reasons the user must ACT on (a rejected credential,
+              spent credit); a 60s rate limit or a session cap that resets itself is what "Backups &
+              limits" already promises to ride out automatically, and nagging about those would train the
+              user to ignore this. Not dismissible — it is a standing state, not an event, and it clears
+              itself the moment that provider answers again or its key is changed. */}
+          {settings && view !== 'settings' && !showListeningChrome && (() => {
+            const dead = (settings.unhealthyProviders ?? []).find(
+              (u) => u.provider === settings.provider && (u.reason === 'auth' || u.reason === 'quota-exhausted')
+            )
+            if (!dead) return null
+            const label = PROVIDERS[settings.provider]?.label ?? settings.provider
+            const isCli = PROVIDERS[settings.provider]?.kind === 'cli'
+            const what =
+              dead.reason === 'quota-exhausted'
+                ? `${label} is out of credit`
+                : isCli
+                  ? `Your ${label} session was rejected`
+                  : `Your ${label} key was rejected`
+            const remedy = dead.reason === 'quota-exhausted' ? 'Top it up or switch provider' : isCli ? 'Reconnect it' : 'Update it'
+            return (
+              <button
+                type="button"
+                onClick={() => openSettings('ai', `${what}. Métis is answering with another provider meanwhile.`)}
+                className="no-drag focus-ring fade-up flex items-center justify-center gap-1.5 whitespace-nowrap rounded-xl border border-[var(--color-warn,#fac775)]/30 bg-[var(--color-warn,#fac775)]/10 px-3 py-1.5 text-[11px] font-medium text-[color:var(--color-warn,#fac775)]"
+              >
+                {what} — Métis is using another provider. {remedy} in Settings → AI.
+              </button>
+            )
+          })()}
           {settings && !settings.providerReady && !nudgeExpired && view !== 'settings' && !showListeningChrome && (() => {
             const activeDef = PROVIDERS[settings.provider]
             // A keyed API provider can still be blocked by the org allowlist (settings.hasApiKey true,

@@ -41,7 +41,12 @@ describe('MQA-004 — a rejected credential is recorded, not forgotten', () => {
     expect(indexSrc).toMatch(/clearApiKey\(parsed\.provider\)\s*\n\s*resetProviderHealth\(parsed\.provider\)/)
   })
 
-  it('exposes the unhealthy set to the renderer — providerReady alone cannot express "key is dead"', () => {
+  // MQA-059 is this half's reason to exist: a pre-token 401 on the active provider is non-transient, so
+  // askStart fails over to another keyed provider and returns BEFORE any streamError — the ask looks
+  // normal and providerReady (a key-STRING check) stays true forever. This snapshot field is the only
+  // honest counter-signal main produces; the renderer surface that finally consumes it is pinned in
+  // src/renderer/src/app-audit-fixes.contract.test.ts.
+  it('exposes the unhealthy set to the renderer — providerReady alone cannot express "key is dead" (MQA-059)', () => {
     expect(indexSrc).toMatch(/unhealthyProviders: unhealthyProviders\(\)/)
   })
 })

@@ -2,10 +2,16 @@
  * Phone-home license activation against a self-hosted license server (server side lives in
  * license-server/, built separately — this file only ever speaks its fixed JSON contract).
  *
- * Wired into real enforcement: main/index.ts's license:gate IPC handler calls checkLicenseGrace() for
- * the renderer's boot gate (App.tsx's <LicenseGate/>), and a 12h background interval re-validates via
- * heartbeat() whenever licenseGateEnabled && licenseValid. All of it is a no-op — no network call, no
- * blocking screen — while licenseGateEnabled is false (the shipped default).
+ * MQA-068 — enforcement is COMPILED OFF in the shipped app, and no setting turns it on. The wiring is
+ * all present (main/index.ts's license:gate IPC handler calls checkLicenseGrace() for the renderer's
+ * boot gate, and a 12h interval re-validates via heartbeat() whenever licenseGateEnabled &&
+ * licenseValid) but two renderer constants sit above it: App.tsx's LICENSE_ENFORCEMENT, which stops the
+ * gate ever being consulted, and Settings.tsx's LICENSE_UI_ENABLED, which hides the only activation
+ * form in the app. So licenseValid can never become true, so the heartbeat can never run, so nothing
+ * here executes on a shipped build no matter what licenseGateEnabled says — including a machine-wide
+ * managed-config that sets and locks it. This header used to claim the subsystem was live whenever that
+ * setting was on, which is the drift the ledger row is about: do not restore that phrasing without
+ * flipping BOTH constants and re-verifying activation end to end.
  */
 import { app } from 'electron'
 import { randomUUID } from 'node:crypto'

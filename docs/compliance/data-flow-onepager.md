@@ -16,10 +16,20 @@ Related: [`dpia.md`](./dpia.md) §4 (full risk-mapped data flow), [`tenant-check
   via `sherpa-onnx`) is the default; **Whisper-base** (Xenova ONNX, quantized, via WASM) is the automatic
   fallback. Neither sends audio to a network endpoint to transcribe.
 - **Local LLM summarization/extraction (when selected).** The macOS arm64 and Windows x64 packages
-  include Qwen3.5 0.8B (quantized GGUF plus its multimodal projector) and the pinned llama.cpp
-  `llama-server` b9957 sidecar. They provide a no-cloud-egress path for supported text and visual-input
-  tasks. The installed app does not download a model or inference runtime. Local inference remains an
+  include the pinned llama.cpp `llama-server` b9957 sidecar — the inference runtime is never downloaded.
+  The Qwen3.5 0.8B **weights** (quantized GGUF plus its multimodal projector, ~728 MB) are **not** in the
+  installer: carrying them pushed a universal macOS package past GitHub's 2 GB per-asset release limit.
+  They are fetched **once, on first run**, into the user's own profile directory, from a **pinned,
+  immutable upstream revision** (a commit-pinned Hugging Face URL, not a mutable tag), and are rejected
+  unless both byte size and SHA-256 match the values compiled into the app. That fetch is the only
+  runtime download the app performs, it goes to Hugging Face rather than to Mantu or any Métis service,
+  and it carries no meeting content, telemetry, or identifiers — it is a plain file GET. Once present,
+  local inference is a no-cloud-egress path for supported text and visual-input tasks, and remains an
   opt-in provider rather than the default.
+
+  *Air-gapped / no-egress deployments:* because the weights arrive over the network, an installation with
+  no outbound internet has no local LLM until that file is placed in the profile directory by other means.
+  ASR is unaffected — those weights **are** bundled (see above), so transcription works with no network at all.
 
 ## What lands in the Mantu tenant (OneDrive)
 

@@ -130,14 +130,16 @@ npm run release:win:store
 
 Before shipping, demonstrate:
 
-- A fresh install blocks when `licenseGateEnabled` is true and no license is activated.
-- A valid license activates and consumes exactly one seat.
-- A second machine consumes a second seat.
-- Seat cap blocks the next machine.
-- Revocation blocks the activated machine on the next online check.
-- Offline grace expires after the configured hard cap in code.
 - Managed config prevents user edits to locked keys.
 - Auto-update installs a newer signed direct-release build.
+
+Device licensing is **not** on this list, and must not be added back to it while enforcement is compiled
+off (MQA-068). The six seat/revocation/grace proofs that used to sit here — "a fresh install blocks when
+`licenseGateEnabled` is true", seat consumption, seat cap, revocation, offline grace — describe behaviour
+no shipped build can produce: `App.tsx`'s `LICENSE_ENFORCEMENT` and `Settings.tsx`'s `LICENSE_UI_ENABLED`
+are both `false`, so the gate never renders, there is no activation form, `licenseValid` can never be set
+and the revocation heartbeat never runs. A pre-ship proof that can never pass is worse than no proof: it
+gets ticked off. Restore them in the same change that flips both constants.
 
 ## Store Caveat
 

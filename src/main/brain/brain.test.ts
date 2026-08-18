@@ -12,8 +12,7 @@ import {
   commitmentKey,
   buildExtractionSystem,
   updateIndex,
-  readMeetingSourceMode
-} from './ingest'
+  readMeetingSourceMode, whenIndexWritesSettle } from './ingest'
 import { buildBrainContext } from './context'
 import {
   brainDir,
@@ -64,8 +63,14 @@ describe('brain', () => {
     folder = mkdtempSync(join(tmpdir(), 'asktoto-brain-test-'))
     s = settingsFor(folder)
   })
-  afterEach(() => rmSync(folder, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }))
-
+  // MQA-007: settle the index-write lane BEFORE removing the profile. updateIndex writes
+  // index.json through a tmp+rename, and a detached one can still be in flight here — under
+  // parallel load the rename then lands on a directory this line already deleted, failing an
+  // unrelated test in whichever file happened to be running.
+  afterEach(async () => {
+    await whenIndexWritesSettle()
+    rmSync(folder, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
+  })
   const sampleExtraction = (): MeetingExtraction =>
     MeetingExtractionSchema.parse({
       title24: 'LATAM SAP pricing defense',
@@ -562,7 +567,10 @@ describe('brain', () => {
       // permutations — 18 full write/read round trips against a temp profile, by far the heaviest test
       // in the file. vitest's 5s default is comfortable on an idle machine and not on a loaded CI runner,
       // where it aborts mid-permutation and reports a timeout that looks like a determinism failure.
-    }, 30_000)
+      // MQA-007: raised past the 30s global for the same reason it needed one in the first place — it is
+      // ~18x the I/O of an ordinary test here, so it is the first thing to cross any shared budget when
+      // several suites compete for one disk. Serially it finishes in well under a second.
+    }, 90_000)
 
     it('an EXTRACTED classification beats a weaker one in BOTH merge orders (never-downgrade, bidirectional)', async () => {
       const sectorX = (sector: 'banking' | 'technology', conf: 'EXTRACTED' | 'INFERRED'): MeetingExtraction =>

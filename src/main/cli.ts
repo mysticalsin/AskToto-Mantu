@@ -711,6 +711,93 @@ export async function detectCli(provider: ProviderId): Promise<CliActionResult> 
   }
 }
 
+// ─── checkCliSession ─────────────────────────────────────────────────────────────
+
+/** How long the status probe below may take. These are local commands that read a credential file and
+ *  print — they answer in well under a second — so this is a stuck-process backstop, not a budget. */
+const SESSION_PROBE_TIMEOUT_MS = 8_000
+
+/**
+ * MQA-062: is a CLI provider we recorded as connected actually able to serve an ask RIGHT NOW?
+ *
+ * `cliConnected` was write-once until the ask path learned to retire it on a credential rejection — which
+ * means the app still asserts a dead CLI is ready until the user asks something and gets an error. Dust
+ * solves the identical problem by re-verifying the real session when Settings opens (see
+ * renderer/lib/dust-live-check.ts: "Persisted state can lie"); this is the CLI equivalent.
+ *
+ * Deliberately NOT `testCli`. That runs a real one-turn completion: a 45 s timeout, a spawned child, and a
+ * turn billed against the user's own CLI subscription — unacceptable to fire whenever a settings panel
+ * opens. Both CLIs instead ship a documented, zero-token status command that reads their stored
+ * credential and prints (`claude auth status`, which emits JSON carrying `loggedIn`; `codex login
+ * status`, which prints a line and exits non-zero when there is no session), which is what this uses.
+ * Both were exercised live against the installed CLIs before this was written — `claude auth status`
+ * takes no `--output-format` flag, it is already JSON.
+ *
+ * Three-valued ON PURPOSE, and 'unknown' is the safe default. A false "signed out" verdict would retire a
+ * perfectly good connection and send the user to reconnect for no reason, so anything this probe cannot
+ * read confidently — an unrecognised output shape, a CLI version without the subcommand, a timeout —
+ * answers 'unknown' and changes nothing. Only an explicit negative retires the flag.
+ */
+export async function checkCliSession(provider: ProviderId): Promise<'live' | 'signed-out' | 'unknown'> {
+  const cfg = CLI_CONFIGS[provider]
+  if (!cfg) return 'unknown'
+
+  // The binary itself is gone (uninstalled, npm prefix changed, PATH edited) — the one variant of this
+  // finding that involves no auth at all, and the only one nothing else catches: the ask path's
+  // retireCli is gated on isAuthFailure, and "not installed" is not an auth failure.
+  //
+  // Looked up TWICE before believing it, because resolveBin cannot distinguish "confirmed absent" from
+  // "the lookup itself failed" — on mac/Linux it shells out to the login shell, which can fail
+  // transiently, and it deliberately caches only positive hits so a second call is a real second lookup.
+  // A genuinely uninstalled CLI answers null both times; a hiccup answers once.
+  let absBin = await resolveBin(cfg.bin)
+  if (!absBin) absBin = await resolveBin(cfg.bin)
+  if (!absBin) return 'signed-out'
+
+  const args = provider === 'claude-cli' ? ['auth', 'status'] : ['login', 'status']
+  let spawnTarget: { command: string; args: string[]; env?: Record<string, string>; windowsVerbatimArguments?: boolean }
+  try {
+    spawnTarget = resolveSpawnTarget(absBin, args)
+  } catch {
+    return 'unknown' // refusing an unsafe shim path is not evidence about the session
+  }
+
+  let stdout: string
+  try {
+    const r = await execFileAsync(spawnTarget.command, spawnTarget.args, {
+      windowsHide: true,
+      windowsVerbatimArguments: spawnTarget.windowsVerbatimArguments,
+      timeout: SESSION_PROBE_TIMEOUT_MS,
+      // Same env scrubbing a real ask uses: an ANTHROPIC_API_KEY in the environment must not make a
+      // logged-OUT CLI report itself as authenticated (cliEnv strips exactly those vars).
+      env: { ...cliEnv(provider), ...spawnTarget.env }
+    })
+    stdout = String(r.stdout ?? '')
+  } catch (e) {
+    // A non-zero exit is how codex reports "not logged in". claude answers 0 either way and puts the
+    // verdict in its JSON, so for claude a throw here is a malfunctioning probe, not a verdict.
+    const timedOut = (e as { killed?: boolean }).killed === true
+    if (timedOut || provider === 'claude-cli') return 'unknown'
+    return 'signed-out'
+  }
+
+  if (provider === 'claude-cli') {
+    try {
+      const parsed: unknown = JSON.parse(stdout)
+      const loggedIn = (parsed as { loggedIn?: unknown }).loggedIn
+      if (loggedIn === true) return 'live'
+      if (loggedIn === false) return 'signed-out'
+    } catch {
+      /* not the JSON shape this version emits — fall through to 'unknown' */
+    }
+    return 'unknown'
+  }
+  // codex prints e.g. "Logged in using ChatGPT" on success; only an explicit negative is a verdict.
+  if (/\bnot logged in\b/i.test(stdout)) return 'signed-out'
+  if (/\blogged in\b/i.test(stdout)) return 'live'
+  return 'unknown'
+}
+
 // ─── testCli ─────────────────────────────────────────────────────────────────────
 
 const TEST_TIMEOUT_MS = 45_000

@@ -14,7 +14,7 @@ import {
   type MeetingExtraction
 } from '@shared/brain'
 import { writeDeal, writeAccount, writePerson, writeMeetingExtraction, slugify } from './store'
-import { ingestExtraction } from './ingest'
+import { ingestExtraction, whenIndexWritesSettle } from './ingest'
 import {
   publishEntity,
   publishMeetingCard,
@@ -143,8 +143,14 @@ describe('publish.ts — Task MI-5 markdown mirror', () => {
     readFaults.throwOn.clear()
     readFaults.emptyOn.clear()
   })
-  afterEach(() => rmSync(folder, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }))
-
+  // MQA-007: settle the index-write lane BEFORE removing the profile. updateIndex writes
+  // index.json through a tmp+rename, and a detached one can still be in flight here — under
+  // parallel load the rename then lands on a directory this line already deleted, failing an
+  // unrelated test in whichever file happened to be running.
+  afterEach(async () => {
+    await whenIndexWritesSettle()
+    rmSync(folder, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
+  })
   // ── 1. Render gate — the LOAD-BEARING guarantee, extended from MI-4 to the wiki ────────────────────
 
   describe('render gate — a numeric field never renders unless state ∈ {verified, pinned, edited}', () => {

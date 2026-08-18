@@ -117,6 +117,9 @@ export const IPC = {
   recallRename: 'recall:rename',
   recallUpdateRecap: 'recall:update-recap',
   recallSetConfidential: 'recall:set-confidential',
+  // MQA-092: durable "this recap already reached the CRM" marker, so a relaunch cannot re-arm the push
+  // and file a byte-identical duplicate record. See recall.ts's setMeetingCrmPushed.
+  recallSetCrmPushed: 'recall:set-crm-pushed',
   recallBackfillSpeakers: 'recall:backfillSpeakers',
   recallDeleteAll: 'recall:deleteAll',
   debriefSave: 'debrief:save',
@@ -166,6 +169,10 @@ export const IPC = {
   cliInstall: 'cli:install',
   cliInstallProgress: 'cli:install:progress',
   cliLogin: 'cli:login',
+  // MQA-062: re-verify the real CLI session behind every `cliConnected` flag (a `claude logout` between
+  // launches leaves the flag asserting a session that is gone). Zero-token status probe, throttled in
+  // main; returns the refreshed settings snapshot so the caller sees any retired flag immediately.
+  cliVerifySessions: 'cli:verify-sessions',
   answerFeedback: 'answer:feedback',
   metricsRead: 'metrics:read',
   updateDownloaded: 'update:downloaded',
@@ -1504,6 +1511,16 @@ export const SetConfidentialPayloadSchema = z.object({
 })
 export type SetConfidentialPayload = z.infer<typeof SetConfidentialPayloadSchema>
 
+/** Payload for recall:set-crm-pushed (MQA-092) — records the fingerprint of the CRM payload this
+ *  meeting's push actually delivered, so re-opening it after a relaunch does not re-arm "Push to CRM".
+ *  `key` is Review's base-36 payload hash; the shape is pinned here AND re-checked in main, because it
+ *  is interpolated into a YAML scalar in the meeting's frontmatter. */
+export const SetCrmPushedPayloadSchema = z.object({
+  file: z.string().min(1, 'Missing meeting file.'),
+  key: z.string().regex(/^[a-z0-9]{1,32}$/, 'Invalid CRM push key.')
+})
+export type SetCrmPushedPayload = z.infer<typeof SetCrmPushedPayloadSchema>
+
 /** Payload for recall:backfillSpeakers (Speaker Intelligence) — manually (re)trigger the Teams-transcript
  *  speaker-name backfill for a past meeting (see main/graph-transcript.ts + shared/transcript-align.ts).
  *  `file` is a bare basename (re-basenamed in main for defense), mirroring the other recall:* payloads. */
@@ -1524,6 +1541,10 @@ export interface RecallReadResult {
   /** Task MI-5 — frontmatter `confidential: true`, so a reopened past meeting's toggle reflects its
    *  actual saved state instead of always starting unflagged. */
   confidential?: boolean
+  /** MQA-092 — frontmatter `crm_pushed: <payload fingerprint>`. Seeds Review's push state on mount so a
+   *  meeting pushed before the last relaunch does not offer to push itself again. Absent = never pushed;
+   *  a DIFFERENT fingerprint means the recap was edited since, which correctly re-arms the chip. */
+  crmPushedKey?: string
 }
 
 /** Result of update:check — the manual Settings-driven check against the public releases feed. Exists

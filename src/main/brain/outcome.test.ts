@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os'
 import type { Settings } from '@shared/ipc'
 import { DealEntitySchema, type DealEntity } from '@shared/brain'
 import { brainDir, readDeal, writeDeal, setDealOutcome } from './store'
+import { whenIndexWritesSettle } from './ingest'
 
 vi.mock('electron')
 
@@ -25,8 +26,14 @@ describe.each([
     folder = mkdtempSync(join(tmpdir(), 'asktoto-outcome-test-'))
     s = { meetingsFolder: folder, encryptTranscripts: encrypt } as Settings
   })
-  afterEach(() => rmSync(folder, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }))
-
+  // MQA-007: settle the index-write lane BEFORE removing the profile. updateIndex writes
+  // index.json through a tmp+rename, and a detached one can still be in flight here — under
+  // parallel load the rename then lands on a directory this line already deleted, failing an
+  // unrelated test in whichever file happened to be running.
+  afterEach(async () => {
+    await whenIndexWritesSettle()
+    rmSync(folder, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
+  })
   const DEAL_SLUG = 'acme-core-banking'
 
   const plantDeal = async (overrides: Partial<DealEntity> = {}): Promise<DealEntity> => {

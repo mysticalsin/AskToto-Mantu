@@ -872,6 +872,44 @@ export function resetSelfServeSso(): boolean {
   return true
 }
 
+/**
+ * MQA-066 — may the renderer write the three self-serve azure fields while `requireAuth()` is false?
+ *
+ * The dead end this exists for: managed-config (or ASKTOTO_REQUIRE_AUTH) says `requireAuth: true` but
+ * supplies no tenant. `authEnforced()` alone raises the SignInWall, `signIn()` short-circuits with
+ * `{ok:true, configured:false}`, and the wall's own message — the one the code writes precisely so the
+ * user is not "silently stranded … with no way forward" — sends them to Settings. That screen is behind
+ * the wall, and even reached, `settingsSet` starts with `if (!requireAuth()) return`, so the IDs would be
+ * typed and silently not persist. The machine is unusable with no in-app recovery.
+ *
+ * Deliberately NOT also gated on `readConfig() === null`. That was the first shape of this fix and it
+ * only moved the brick one step later: the user types a tenant GUID, fat-fingers a digit, and now a
+ * config resolves — so the bootstrap closes, every sign-in fails the tenant compare, and MQA-107's reset
+ * hatch is unavailable because it (correctly) refuses to touch an `authEnforced()` fleet. Bricked again,
+ * one step further along. Letting the fields stay writable until a sign-in actually succeeds is what
+ * makes the remedy the wall names a real one.
+ *
+ * The two conditions that remain are the load-bearing ones:
+ *  - NO live session, and enforcement actually on. Otherwise the normal authed path applies, or the wall
+ *    is self-serve and already has the MQA-107 reset hatch.
+ *  - NOT sticky-configured. A device where a genuine interactive sign-in has succeeded must never let an
+ *    unauthenticated renderer point SSO at a different tenant — that is the attack `isStickyConfigured`
+ *    exists to stop, and this must not reopen it.
+ *
+ * Why widening it is still safe. Writing these fields cannot lift enforcement: `authEnforced()` reads
+ * env and managed-config only, and never these. It cannot override an org deployment either: `readConfig`
+ * resolves env → managed → settings, so on a fleet whose admin supplied azure the write is simply inert.
+ * The caller (index.ts's settingsSet) additionally narrows the patch to exactly these three keys, so no
+ * other privileged setting rides along. The whole reachable effect is: a device that has NEVER signed in
+ * successfully, and is walled, can set or correct its own self-serve tenant.
+ */
+export function ssoBootstrapAllowed(): boolean {
+  loadSession()
+  if (session) return false
+  if (!authEnforced()) return false // a self-serve wall already has the MQA-107 reset escape hatch
+  return !isStickyConfigured()
+}
+
 export function signOut(): void {
   // Load session before clearing so we can detect a genuine (authenticated) sign-out.
   // The sticky-configured flag + LKG recovery config are cleared only when there was a real active
