@@ -127,7 +127,7 @@ function getSpeakerId(): SpeakerId {
 }
 import { buildPrewarmMessages } from './llm/prewarm'
 import { listModels as listLocalModels, LOCAL_MODELS } from './llm/local-models'
-import { ensureLocalModel } from './llm/local-model-download'
+import { ensureLocalModel, localModelDownloadState, shouldFetchWeights } from './llm/local-model-download'
 import { createScreenPreprocess, type ScreenPreprocess } from './screen-preprocess'
 import { startForegroundWatcher } from './foreground-watcher'
 import { resetDustConversation, prewarmDustConversation, isDustAuthError } from './llm/dust'
@@ -164,9 +164,14 @@ import {
   readAliasMap,
   resolveEntitySlug
 } from './brain/corrections'
-import { publishEntity, removeFromWiki, publishAll, removeWiki, wikiDir } from './brain/publish'
+import { publishEntity, removeFromWiki, publishAll, publishMeetingCard, removeWiki, wikiDir } from './brain/publish'
 import { computeAttention } from './brain/attention'
-import { openIntelligenceWindow, isIntelligenceSender, syncIntelContentProtection } from './intelligence'
+import {
+  openIntelligenceWindow,
+  closeIntelligenceWindow,
+  isIntelligenceSender,
+  syncIntelContentProtection
+} from './intelligence'
 import {
   readIndex as readBrainIndex,
   writeIndex as writeBrainIndex,
@@ -189,8 +194,16 @@ import {
 import { buildBrainContext } from './brain/context'
 import { buildSystem } from './personas'
 import { initLogging, mainLog, auditLog } from './logger'
+import { beginBootWatch, endBootWatch, describeEarlyDeath } from './boot-sentinel'
 import { installProxyAwareFetch } from './net/install-proxy'
-import { authStatus, signIn as authSignIn, signOut as authSignOut, requireAuth, ssoBootstrapAllowed } from './auth'
+import {
+  authStatus,
+  signIn as authSignIn,
+  signOut as authSignOut,
+  requireAuth,
+  setSessionClearedHandler,
+  ssoBootstrapAllowed
+} from './auth'
 import { calendarToday } from './calendar'
 import { fetchTeamsTranscriptForMeeting } from './graph-transcript'
 import {
@@ -239,6 +252,7 @@ import {
 } from './recall'
 import { initAutoUpdate, checkForUpdateNow, startUpdateDownload } from './updater'
 import { runSelfTest } from './selftest'
+import { devEnv } from './dev-env'
 import { readEvalMetrics, aggregateMetrics } from './metrics'
 import { importDustCliSession, refreshDustCliSession } from './dustcli'
 import {
@@ -290,6 +304,8 @@ import {
 import { routeTier } from '@shared/routing'
 import { HedgeRace, HEDGE_DELAY_MS, type HedgeLeg } from './llm/hedge'
 import { redactSecrets } from '@shared/redact'
+import { isSafeAccelerator } from '@shared/accelerator'
+import { formatResetPhrase } from '@shared/reset-time'
 import { applySpeakerNames } from '@shared/transcript-align'
 import { initializeCaheEditionIdentity, isCaheEdition } from './cahe-edition'
 import { importEmbeddedCaheKey, seedCaheLocalAiForBackgroundScreen } from './cahe-embedded-key'
@@ -400,10 +416,10 @@ const BAR_MIN_HEIGHT = 44 // floor for the resize clamp so the collapsed control
 const PILL_WIDTH = 220 // narrow width for the collapsed control mini-pill (so it isn't a wide click-trap)
 
 /** Content protection hides the window from screen capture. Disable via env for dev/screenshots ONLY —
- *  gated to unpackaged builds so a packaged process can never have capture protection stripped by
- *  `setx ASKTOTO_DISABLE_CP 1` + relaunch (mirrors the safeStorage backend gate in secrets.ts). */
+ *  devEnv() gates it to unpackaged builds so a packaged process can never have capture protection
+ *  stripped by `setx ASKTOTO_DISABLE_CP 1` + relaunch (see dev-env.ts). */
 function contentProtectionOn(): boolean {
-  if (!app.isPackaged && process.env.ASKTOTO_DISABLE_CP) return false
+  if (devEnv('ASKTOTO_DISABLE_CP')) return false
   return getSettings().contentProtection
 }
 
@@ -411,8 +427,12 @@ function contentProtectionOn(): boolean {
 // Distinct from contentProtection above, which only hides the WINDOW from other apps' capture:
 // contentProtection defaults ON (the overlay should be invisible in screen-shares), so using it to
 // also gate our own capture killed screen-asks on every fresh install.
+// Private View is the STRONGER of the two promises — it stops us capturing at all — so the same
+// dev-only env gate applies (MQA-148): this is the single authority behind getScreenshot()'s pre- and
+// post-capture checks and screen-preprocess's describe pass, so an ungated `setx ASKTOTO_DISABLE_CP 1`
+// would open every one of them at once while Settings still read "on".
 function privateViewOn(): boolean {
-  if (process.env.ASKTOTO_DISABLE_CP) return false
+  if (devEnv('ASKTOTO_DISABLE_CP')) return false
   return getSettings().privateView
 }
 
@@ -1027,6 +1047,8 @@ function publicSettings(): PublicSettings {
     // process running with ASKTOTO_DISABLE_CP would show "Content protection: On" in Settings while
     // capture protection is really off.
     contentProtection: contentProtectionOn(),
+    // Same rule for the stronger switch: the Privacy toggle must show what capture actually obeys.
+    privateView: privateViewOn(),
     providerReady,
     // gates screen-ask so shots never hit a non-vision model — ORs localVisionReady so a local-only setup
     // (no cloud provider configured at all) still counts as vision-ready. localFallbackReady counts too:
@@ -1055,8 +1077,10 @@ function publicSettings(): PublicSettings {
     // MQA-004: the honest counterpart to providerReady — which providers actually REJECTED their
     // credentials recently, so the UI can say "your key stopped working" instead of claiming ready.
     unhealthyProviders: unhealthyProviders(),
-    // Background on-device screen pre-analysis can actually run (toggle on AND the local model is ready).
-    backgroundScreenReady: s.backgroundScreenContext && localReady,
+    // Background on-device screen pre-analysis can actually run. Asked of the ENGINE, never recomputed
+    // here: the old `s.backgroundScreenContext && localReady` copy missed the macOS OCR engine (Settings
+    // said "not running" while it captured every 6s) and could not see a dead foreground watcher at all.
+    backgroundScreenReady: screenPreprocess.canRun(),
     // Live sidecar process state (distinct from localReady's eligibility check) — drives the Local AI
     // card's status line only. localRuntimeState is the precise tri-state (stopped/starting/running/
     // unavailable) so the card can distinguish a normal idle stop from a session-long 'unavailable'
@@ -1083,6 +1107,11 @@ function topCenter(width: number, height: number): { x: number; y: number } {
 }
 
 function createWindow(): void {
+  // Idempotent: `second-instance` is registered before app-ready and can call ensureWindow() while boot's
+  // own runStep('createWindow') is still queued behind its awaits. Without this, the boot step would
+  // overwrite `win` with a second BrowserWindow and orphan the first one — still visible, still
+  // always-on-top, unreferenced.
+  if (win && !win.isDestroyed()) return
   // Crash/recovery guard: render-process-gone recovery and the boot-retry path both rebuild the window
   // from scratch, but isMinimized/currentWidth are module-level state that otherwise survives from before
   // the crash. If the overlay had been collapsed to the mini-pill (currentWidth === PILL_WIDTH) at the
@@ -1181,7 +1210,7 @@ function createWindow(): void {
     streams.clear()
     // Import jobs belong to main plus the hidden decoder window, so closing the overlay never abandons
     // a selected recording. Their checkpointed state resumes even if the entire app exits.
-    win = null
+    if (win === self) win = null
   })
 
   // Security: never let model-output links navigate the trusted renderer or open child windows
@@ -1224,6 +1253,13 @@ function createWindow(): void {
     audioArmed = false
     setTrayRecording(false)
     setRecordingPowerSaveBlock(false)
+    // MQA-196: the geometry half of the same root cause. If the overlay was collapsed to the mini-pill
+    // when the renderer died, the remounted App boots `minimized` false and renders the full Bar, but its
+    // mount-effect windowMode('bar') would setBounds({ width: currentWidth }) with the surviving pill
+    // width — squeezing the recovered bar into a ~130px sliver that resizable:false makes unfixable. Same
+    // two lines createWindow's crash guard uses, for the reload path that never reaches it.
+    isMinimized = false
+    currentWidth = BAR_WIDTH
     if (!win || win.isDestroyed()) return
     if (process.env['ELECTRON_RENDERER_URL']) win.loadURL(process.env['ELECTRON_RENDERER_URL'])
     else win.loadFile(join(__dirname, '../renderer/index.html'))
@@ -1265,7 +1301,7 @@ function resizeTo(height: number): void {
   // laptop + external monitor of different heights, a streaming answer clamps to the wrong monitor and the
   // window jumps vertically while the cursor sits on the other screen.
   const { workArea } = screen.getDisplayMatching(win.getBounds())
-  const h = Math.max(BAR_MIN_HEIGHT, Math.min(Math.round(height), workArea.height - 48))
+  const h = clampHeight(Math.round(height), workArea.height)
   const b = win.getBounds()
   if (h === b.height && currentWidth === b.width) {
     // Only remember this height for restore-on-expand when it's the real bar, not the mini-pill's
@@ -1307,7 +1343,11 @@ function setWindowMode(): void {
   const b = win.getBounds()
   let x = Math.round(b.x + (b.width - currentWidth) / 2)
   x = Math.max(workArea.x + 16, Math.min(x, workArea.x + workArea.width - currentWidth - 16))
-  win.setBounds({ x, y: b.y, width: currentWidth, height: lastBarHeight }, false)
+  // lastBarHeight was measured on whatever display the bar was on at the time. The renderer sends
+  // windowMode('bar') on every mount — including the reload after a renderer crash — which can land after
+  // the overlay has moved to a shorter monitor, so re-apply that monitor's ceiling instead of restoring a
+  // height it cannot show (resizable:false leaves no manual way back).
+  win.setBounds({ x, y: b.y, width: currentWidth, height: clampHeight(lastBarHeight, workArea.height) }, false)
 }
 
 /** Self-heal a null `win` (e.g. a one-time createWindow() throw during boot) by retrying the window
@@ -1479,16 +1519,22 @@ async function captureScreenshotOnce(displayId: number): Promise<CapturedScreen>
 /** Share a native capture only between pre-warm and click requests for the same display. */
 const captureScreenshot = createKeyedSingleFlight<number, CapturedScreen>(captureScreenshotOnce)
 
+/** The one wording for the one promise. getScreenshot() throws it when Private View blocks a LIVE capture;
+ *  IPC.askStart sends it verbatim when it refuses an already-captured frame (MQA-182). Keeping both on the
+ *  same string is what lets the renderer's /private view/i copy paths recognise either one. */
+const PRIVATE_VIEW_BLOCKED_MESSAGE =
+  'Private View is on — screen capture is blocked. Turn it off to let Métis see your screen.'
+
 /** Thrown by getScreenshot() when Private View is on — lets callers show a specific message instead of a
  *  generic capture failure. */
 class PrivateViewBlockedError extends Error {
   constructor() {
-    super('Private View is on — screen capture is blocked. Turn it off to let Métis see your screen.')
+    super(PRIVATE_VIEW_BLOCKED_MESSAGE)
     this.name = 'PrivateViewBlockedError'
   }
 }
 
-async function getScreenshot(phase?: string): Promise<{ image: string; width: number; height: number; capturedAt: number; displayMismatch: boolean }> {
+async function getScreenshot(phase?: string): Promise<{ image: string; width: number; height: number; capturedAt: number; dispId: number; displayMismatch: boolean }> {
   // Private View promises Métis won't look at (or send) the screen while it's on — that has to mean
   // this app's own capture pipeline refuses to run, not just that OTHER apps can't screen-share our window
   // (that's the separate, still-active setContentProtection() call on the BrowserWindow itself).
@@ -1502,8 +1548,8 @@ async function getScreenshot(phase?: string): Promise<{ image: string; width: nu
   }
   const disp = screen.getDisplayNearestPoint(screen.getCursorScreenPoint())
   if (shotCache && Date.now() - shotCache.ts < CAPTURE_TTL_MS && shotCache.dispId === disp.id) {
-    const { image, width, height, ts, displayMismatch } = shotCache
-    return { image, width, height, capturedAt: ts, displayMismatch }
+    const { image, width, height, ts, dispId, displayMismatch } = shotCache
+    return { image, width, height, capturedAt: ts, dispId, displayMismatch }
   }
   let shot: CapturedScreen
   try {
@@ -1534,8 +1580,11 @@ async function getScreenshot(phase?: string): Promise<{ image: string; width: nu
   const capturedAt = Date.now()
   shotCache = { ...shot, ts: capturedAt }
   auditLog('capture.screen', { width: shot.width, height: shot.height, bytes: shot.image.length, ...(phase ? { phase } : {}) })
-  const { image, width, height, displayMismatch } = shot
-  return { image, width, height, capturedAt, displayMismatch }
+  // dispId is the monitor this frame is really OF. Callers that cache a DERIVED artifact (the background
+  // screen description) need it: the capture always follows the cursor, which an alt-tab does not move,
+  // so without it a cached description cannot tell it is about a monitor the user has looked away from.
+  const { image, width, height, dispId, displayMismatch } = shot
+  return { image, width, height, capturedAt, dispId, displayMismatch }
 }
 
 /** Fill the cache + warm the OS capture pipeline ahead of a real ask. Fire-and-forget; auth-gated. */
@@ -1557,6 +1606,8 @@ const screenPreprocess: ScreenPreprocess = createScreenPreprocess({
     return { backgroundScreenContext: s.backgroundScreenContext, localLlm: s.localLlm }
   },
   localReady: () => localBaseReady(getSettings(), getAllowedProviders()),
+  authorized: requireAuth,
+  currentDisplayId: () => screen.getDisplayNearestPoint(screen.getCursorScreenPoint()).id,
   privateViewOn,
   ensureLocalRuntimeStarted,
   runtime: {
@@ -1579,15 +1630,33 @@ const screenPreprocess: ScreenPreprocess = createScreenPreprocess({
   audit: (event, data) => auditLog(event as Parameters<typeof auditLog>[0], data)
 })
 
-/** (Re)start or stop background screen preprocessing to match current auth + settings eligibility. Safe to
- *  call repeatedly — it's a no-op when the running state already matches. */
+/**
+ * The ONE place that reconciles background screen preprocessing with reality. Call it from every event
+ * that can change canRun(): boot, a settings write, sign-in, session clear, and the local-model download
+ * landing. Safe to call repeatedly — it's a no-op when the running state already matches.
+ *
+ * Auth is not re-checked here: it is a dep of the engine's own eligibility (screen-preprocess.ts), so the
+ * lifecycle and the `backgroundScreenReady` flag Settings renders read one expression instead of two that
+ * drifted apart (MQA-178/MQA-179).
+ */
 function refreshScreenPreprocess(): void {
-  if (!requireAuth()) {
-    screenPreprocess.stop()
-    return
-  }
   screenPreprocess.refresh()
 }
+
+/**
+ * Revoke everything privileged that outlives a single IPC call, the moment the session does. ONE place
+ * on purpose: the sign-out handler used to tear down only what it remembered, so the background screen
+ * pre-analysis engine kept capturing + describing (MQA-154) and the Intelligence dashboard kept
+ * rendering the decrypted brain (MQA-169) for a signed-out user, with no in-app way to stop either.
+ * Registered on auth's session-cleared hook rather than called from the handler, because a session also
+ * ends with no user action at all — max-age eviction and the background re-validation sweep. Import
+ * jobs stay at the handler: cancelAll() is async and this hook is not.
+ */
+function revokePrivilegedSurface(): void {
+  refreshScreenPreprocess() // stops the watcher child, the 6s tick and the cached description
+  if (!requireAuth()) closeIntelligenceWindow()
+}
+setSessionClearedHandler(revokePrivilegedSurface)
 
 /** Clamp a single axis (pos/size) into a work-area span, without inverting when the window is bigger
  *  than the display. Math.min(Math.max(pos, areaPos), areaPos + areaSpan - size) assumes
@@ -1596,6 +1665,13 @@ function refreshScreenPreprocess(): void {
 function clampAxis(pos: number, size: number, areaPos: number, areaSpan: number): number {
   if (size >= areaSpan) return areaPos
   return Math.min(Math.max(pos, areaPos), areaPos + areaSpan - size)
+}
+
+/** Ceiling a window height to a display's work area, keeping the 48px reserve. Lives here rather than
+ *  inside resizeTo because the ceiling has to be re-applied every time the overlay lands on a DIFFERENT
+ *  display — while the rest of resizeTo (width, recenter, lastBarHeight) must NOT run on those paths. */
+function clampHeight(height: number, areaHeight: number): number {
+  return Math.max(BAR_MIN_HEIGHT, Math.min(height, areaHeight - 48))
 }
 
 // How much of the window must stay visibly reachable on some display while it's being dragged — enough
@@ -1625,12 +1701,28 @@ function isReachable(x: number, y: number, width: number, height: number): boole
   })
 }
 
+/** Re-apply the work-area height ceiling when a move lands the window on a DIFFERENT display than it
+ *  left. Every setBounds on the move/reanchor paths spreads the old bounds, so a window grown to fit a
+ *  4K panel keeps that height when it is dragged onto a 1080p monitor — hanging a thousand pixels below
+ *  the bottom edge, where resizable:false leaves the user no way to fix it. Height only: x/y stay the
+ *  caller's, except that y is re-checked, because the caller validated it against the OLD (taller)
+ *  height and a shorter window can lose the overlap that made that position reachable. */
+function refitToDisplay(next: Electron.Rectangle, fromDisplayId: number): Electron.Rectangle {
+  const { id, workArea } = screen.getDisplayMatching(next)
+  if (id === fromDisplayId) return next
+  const height = clampHeight(next.height, workArea.height)
+  if (height === next.height) return next
+  const y = clampAxisMargin(next.y, height, workArea.y, workArea.height, DRAG_VISIBLE_MARGIN)
+  return { ...next, height, y }
+}
+
 function moveBy(dx: number, dy: number): void {
   // Self-heal a null win (e.g. a one-time createWindow() throw during boot) — mirrors sendHotkey/
   // toggleVisible so scroll/move hotkeys recover instead of staying permanently dead for the process life.
   const w = ensureWindow()
   if (!w) return
   const b = w.getBounds()
+  const fromDisplayId = screen.getDisplayMatching(b).id
   const x = b.x + dx
   const y = b.y + dy
   // Free movement anywhere that keeps the window reachable on SOME display — covers dragging clean
@@ -1639,7 +1731,7 @@ function moveBy(dx: number, dy: number): void {
   // to stick a drag pinned to that display's edge, since the matched display never changed until the
   // window had already fully crossed onto it — which the clamp itself was preventing.
   if (isReachable(x, y, b.width, b.height)) {
-    w.setBounds({ ...b, x, y })
+    w.setBounds(refitToDisplay({ ...b, x, y }, fromDisplayId))
     return
   }
   // Unreachable (flung past every display): pull back onto the display nearest the ATTEMPTED position,
@@ -1647,7 +1739,7 @@ function moveBy(dx: number, dy: number): void {
   const { workArea } = screen.getDisplayMatching({ x, y, width: b.width, height: b.height })
   const cx = clampAxisMargin(x, b.width, workArea.x, workArea.width, DRAG_VISIBLE_MARGIN)
   const cy = clampAxisMargin(y, b.height, workArea.y, workArea.height, DRAG_VISIBLE_MARGIN)
-  w.setBounds({ ...b, x: cx, y: cy })
+  w.setBounds(refitToDisplay({ ...b, x: cx, y: cy }, fromDisplayId))
 }
 
 /**
@@ -1662,12 +1754,24 @@ function registerScreenListeners(): void {
     if (!win) return
     const b = win.getBounds()
     const { workArea: wa } = screen.getDisplayMatching(b)
+    // Height first, and BEFORE the reachability guard below. A window grown to fit a tall display keeps
+    // that height when the display is unplugged or its resolution shrinks — and in that state it is
+    // normally still partly visible, so the guard would skip exactly the case that leaves the overlay
+    // hanging off the bottom of the remaining screen with resizable:false and no in-app fix.
+    const height = clampHeight(b.height, wa.height)
     const visible =
       b.x + b.width > wa.x && b.x < wa.x + wa.width && b.y + b.height > wa.y && b.y < wa.y + wa.height
-    if (visible) return // still (partly) on a real display — leave it where the user put it
+    if (visible) {
+      // Still (partly) on a real display — leave it where the user put it, sliding up only as far as the
+      // newly clamped height needs to sit inside the work area (same slide resizeTo does).
+      if (height !== b.height) {
+        win.setBounds({ ...b, y: Math.min(b.y, wa.y + wa.height - height - 8), height })
+      }
+      return
+    }
     const x = clampAxis(b.x, b.width, wa.x, wa.width)
-    const y = clampAxis(b.y, b.height, wa.y, wa.height)
-    win.setBounds({ ...b, x, y })
+    const y = clampAxis(b.y, height, wa.y, wa.height)
+    win.setBounds({ ...b, x, y, height })
   }
   screen.on('display-removed', reanchor)
   screen.on('display-added', reanchor)
@@ -1735,6 +1839,15 @@ function registerShortcuts(): void {
   for (const [action, fn] of Object.entries(shortcutActions)) {
     const accel = resolveShortcut(action as HotkeyAction, user)
     if (!accel) continue
+    // settings.json is user-editable and ipc's `shortcuts` field accepts any string, so what lands here is
+    // untrusted. A navigation key bound globally (MQA-184: the recorder used to commit 'Shift+Tab') takes
+    // that key away from every app for as long as Metis runs, and a bare key would fire on ordinary typing.
+    // Refuse it here rather than at the recorder alone, and report it so the Settings banner offers a rebind.
+    if (!isSafeAccelerator(accel)) {
+      mainLog.warn(`[shortcuts] unsafe accelerator for ${action}: ${accel}`)
+      shortcutFailures.push({ action, accel })
+      continue
+    }
     const dupeOf = claimedBy.get(accel)
     if (dupeOf) {
       mainLog.warn(`[shortcuts] duplicate accelerator for ${action}: ${accel} (already bound to ${dupeOf})`)
@@ -1998,14 +2111,12 @@ function managedEffectsSnapshot(): string {
  *  at-rest encryption is effectively ON. Exists because a managed-config/admin `encryptTranscripts:true`
  *  never goes through settingsSet (it's picked up live by getSettings()'s mtime cache, and a locked key
  *  is dropped from every settingsSet patch besides), so the settingsSet-time purge below never fires for
- *  it — graph.json/graph.html would otherwise linger forever, undeletable in-app, defeating the org
- *  encryption guarantee. Safe to call on every settingsGet poll and at boot: graphHtml() is a single
- *  existsSync, and purgeGraphArtifacts() itself no-ops once the files are gone. */
+ *  it — graph.json/graph.html/graphify-out would otherwise linger forever, undeletable in-app, defeating
+ *  the org encryption guarantee. Safe to call on every settingsGet poll and at boot: purgeGraphArtifacts()
+ *  is three existsSync calls once the artifacts are gone, and it reports whether it actually removed
+ *  anything — which is what keeps the audit line from being written on every poll forever. */
 function purgeGraphIfEncryptedAndStale(reason: string): void {
-  if (getSettings().encryptTranscripts && graphHtml()) {
-    purgeGraphArtifacts()
-    auditLog('graph.purged', { reason })
-  }
+  if (getSettings().encryptTranscripts && purgeGraphArtifacts()) auditLog('graph.purged', { reason })
 }
 let lastAppliedManagedSnapshot: string | null = null
 
@@ -2216,11 +2327,18 @@ function registerIpc(): void {
     // Start/stop background screen pre-analysis to match the new settings (backgroundScreenContext toggle,
     // or Local AI being enabled/disabled/provisioned) — takes effect immediately, no relaunch.
     refreshScreenPreprocess()
+    // Local AI turned back ON → arm the weight fetch here (MQA-186). Boot is the only other trigger and
+    // it now skips while the toggle is off, so without this edge a user who declined the download once
+    // could never get it: Settings would report the model unavailable for the rest of the install's life.
+    if (!cur.localLlm.enabled && next.localLlm.enabled && shouldFetchWeights(next.localLlm.modelId, true)) {
+      void ensureLocalModel(next.localLlm.modelId)
+        .then(() => refreshScreenPreprocess())
+        .catch((e) => mainLog.warn('[settings] local model provisioning failed:', e))
+    }
     // At-rest encryption just turned on → purge any previously-built CLEARTEXT knowledge graph so it
     // can't leak meeting topics/entities the encryption is meant to protect. (Builds are already
     // blocked while encryption is on, so no graph will be regenerated until it's turned back off.)
-    if (!wasEncrypted && next.encryptTranscripts) {
-      purgeGraphArtifacts()
+    if (!wasEncrypted && next.encryptTranscripts && purgeGraphArtifacts()) {
       auditLog('graph.purged', { reason: 'encryption-enabled' })
     }
     // publishBrainPages turned off → the wiki mirror is derived-never-canonical, so delete it outright
@@ -2838,6 +2956,14 @@ function registerIpc(): void {
     const result = await deleteMeeting(safeName)
     if (result.ok) {
       auditLog('transcript.deleted', { file: safeName })
+      // The published note card is derived from a file that no longer exists — publishMeetingCard unlinks
+      // it in exactly that case (and no-ops when publishing is off). Done here rather than left to the
+      // next rebuild: requestSourceRefresh below bails on a busy queue, a pending replay, or a profile
+      // with no usable provider, which would leave the deleted meeting's plaintext card on disk for good.
+      await publishMeetingCard(getSettings(), safeName).catch((error) => {
+        const detail = error instanceof Error ? error.message : String(error)
+        mainLog.warn(`[publish] could not remove the note card for a deleted meeting: ${detail}`)
+      })
       await requestSourceRefresh(getSettings())
     }
     return result
@@ -2988,11 +3114,15 @@ function registerIpc(): void {
     assertMainWindow(e)
     if (!requireAuth()) return { ok: false, error: 'Sign in with your Mantu account first.' }
     const meetings = await listMeetings()
-    if (meetings.length === 0) return { ok: true, deleted: 0 }
     const dialogOpts = {
       type: 'warning' as const,
       title: 'Delete all Métis data',
-      message: `Delete all ${meetings.length} saved meeting${meetings.length === 1 ? '' : 's'}?`,
+      // Zero meetings is NOT an empty profile: the derived artifacts (.brain, the published wiki mirror,
+      // the graph) outlive the transcripts they were built from, so a folder whose meetings were already
+      // deleted one at a time still has plaintext to erase. This flow runs for it too.
+      message: meetings.length
+        ? `Delete all ${meetings.length} saved meeting${meetings.length === 1 ? '' : 's'}?`
+        : 'Delete all Métis data on this device?',
       detail:
         'This permanently removes every saved transcript, note, and the knowledge graph from this device. This cannot be undone.',
       buttons: ['Delete everything', 'Cancel'],
@@ -3002,14 +3132,28 @@ function registerIpc(): void {
     const { response } = win ? await dialog.showMessageBox(win, dialogOpts) : await dialog.showMessageBox(dialogOpts)
     if (response !== 0) return { ok: false, error: 'cancelled' }
     const result = await deleteAllMeetings()
-    purgeGraphArtifacts() // legacy userData/graph artifacts
+    purgeGraphArtifacts() // legacy userData/graph artifacts + the runner's graphify-out/ manifest
     const brainPurge = purgeBrain(getSettings()) // the `.brain/` knowledge store — entities, quotes, graph
+    // The wiki mirror is that same derived knowledge in CLEARTEXT (publish.ts writes it with
+    // `encrypt: false` by design), so an erasure that skipped it would leave a readable copy of every
+    // meeting, person and open commitment behind — and, with the brain gone, one nothing can ever prune.
+    // Unconditional, not gated on publishBrainPages: a mirror survives the publish OFF edge whenever that
+    // removal failed, and this promise is "everything", not "everything currently enabled".
+    const wiki = removeWiki(getSettings())
     auditLog('transcript.deleted', {
       bulk: true,
       deleted: result.deleted,
       failed: result.failed.length,
-      brainPurged: brainPurge.ok
+      brainPurged: brainPurge.ok,
+      wikiRemoved: wiki.ok
     })
+    if (!wiki.ok) {
+      return {
+        ...result,
+        ok: false,
+        error: 'Deleted the transcripts, but the published wiki pages could not be removed. Close anything using the meetings folder, then try again.'
+      }
+    }
     return result
   })
 
@@ -3082,11 +3226,14 @@ function registerIpc(): void {
     return { text }
   })
 
-  // --- Métis Local (on-device LLM): bundled-model readiness metadata ---
-  // Paths stay in main; the renderer only learns whether the installer-owned files are ready.
+  // --- Métis Local (on-device LLM): model readiness metadata ---
+  // Paths stay in main; the renderer only learns whether the weights are usable, and — since they are
+  // fetched on first run rather than shipped — whether that fetch is running, failed, or never started
+  // (MQA-187). Folded into this one channel deliberately: no second push channel to keep in sync, and
+  // nothing new crosses the boundary beyond a status word and a fraction.
   ipcMain.handle(IPC.localModelsList, (e) => {
     assertMainWindow(e)
-    return listLocalModels()
+    return listLocalModels(localModelDownloadState())
   })
 
   // Live-meeting pre-warm (PLAN.md §4.4): a debounced transcript tail from the renderer's
@@ -3154,6 +3301,18 @@ function registerIpc(): void {
     }
     try {
     const req = AskStartSchema.parse(raw)
+    // MQA-182: Private View means Métis does not look at OR SEND your screen — and an already-captured
+    // frame is still your screen. The renderer keeps the last vision request verbatim so Retry / "Go
+    // deeper" can replay it (state.ts lastReqRef), and that replay used to reach the provider minutes
+    // after the user flipped the switch. getScreenshot() re-checks the switch after its own async
+    // capture for exactly this reason (see its post-capture check); every path that can send a frame has
+    // to re-check it at SEND time, and this handler is the trust boundary the renderer cannot bypass.
+    // Keyed on the payload, not the mode: the schema permits an image on a non-vision mode too.
+    if (req.image && privateViewOn()) {
+      auditLog('capture.blocked', { reason: 'private_view', at: 'ask' })
+      win?.webContents.send(IPC.streamError, { id: req.id, message: PRIVATE_VIEW_BLOCKED_MESSAGE })
+      return
+    }
     const s = getSettings()
     // Fresh-question boundary (see the state block above): a plain interactive ask outside a live meeting
     // starts clean unless the user opted into follow-up memory — and even then the memory expires after
@@ -3225,6 +3384,15 @@ function registerIpc(): void {
         mainLog.warn(`[screen-preprocess] context injection failed: ${err instanceof Error ? err.message : String(err)}`)
       }
     }
+    // MQA-180: the injection above is best-effort, and on a REPLAY it usually finds nothing — Retry / "Go
+    // deeper" re-send the renderer's intent flag verbatim (state.ts lastReqRef) long after the cached
+    // description expired, the user changed windows, or Private View went on. The renderer set its
+    // "Viewed screen" badge from that intent flag alone, so an ask that reached the provider with zero
+    // screen data still rendered as grounded. Main is the only side that knows what actually went out:
+    // report the verdict on stream:meta. `undefined` for every other ask — main has no verdict there and
+    // the renderer keeps what run() set (a vision ask carries its own image).
+    const screenGrounded =
+      req.mode === 'answer' && req.wantsScreenContext ? !!req.screenContext : undefined
     const allowed = getAllowedProviders() // org allowlist (null = unrestricted)
 
     // Screen-vision capability. Static per provider, EXCEPT Dust: its ability to read a screenshot depends
@@ -3306,6 +3474,13 @@ function registerIpc(): void {
     // F3 hedge: which race (if any) this call is part of, and which of the two legs it is. See hedge.ts's
     // HedgeRace doc comment for the full contract.
     type AttemptRace = { gate: HedgeRace; leg: HedgeLeg }
+    // MQA-161: every provider the PRIMARY leg has actually reached, in order. A leg that fails over keeps
+    // its leg identity, so picking the backup against the id the primary STARTED on would let the hedge
+    // race the provider the primary just moved to — pickFailover is pure, so with identical inputs it
+    // returns exactly that provider: one ask, two byte-identical billed requests (prompt, transcript and,
+    // on a vision ask, the whole screenshot), both sharing a single failure mode. The hedge exists to buy
+    // provider diversity, so it must exclude the whole chain, not one id.
+    const primaryChain: ProviderId[] = []
 
     // Find the next eligible keyed provider not yet tried and start it — for failover when the primary
     // can't answer (Dust down → your configured Claude/GPT key takes over). `preferFree` floats free-tier
@@ -3333,6 +3508,9 @@ function registerIpc(): void {
     // leg wins, every handler below (onDelta/onDone/onError) checks race.gate.isLoser(race.leg) first and
     // silently returns, so a losing leg's own cascading retries can never reach the renderer.
     const attempt = (provider: ProviderId, attempted: ProviderId[], retryCount = 0, race?: AttemptRace): void => {
+      // Recorded on ENTRY, before any eligibility work: a provider the primary merely bounced off is still
+      // one the hedge must not duplicate.
+      if (race?.leg === 'primary' && !primaryChain.includes(provider)) primaryChain.push(provider)
       const def = PROVIDERS[provider]
       if (allowed && !allowed.includes(provider)) {
         auditLog('provider.blocked', { provider })
@@ -3408,7 +3586,7 @@ function registerIpc(): void {
             localAnswerFloorEligibleFor(req, s, allowed)
             ? ''
             : localVisionRequired
-              ? 'Métis Local could not process this screenshot on this device. Nothing was sent to a cloud provider. Restart Métis, or reinstall it if the bundled model is missing.'
+              ? 'Métis Local could not process this screenshot on this device. Nothing was sent to a cloud provider. Open Settings → AI → Local AI to see whether the on-device model is ready.'
               : 'Métis Local handles live suggestions, summaries and screenshots — this request type uses your cloud provider.'
           : def.kind === 'cli' && !s.cliConnected[provider]
             ? `${def.label} is not connected. Open Settings → CLI Integration to set it up.`
@@ -3467,7 +3645,7 @@ function registerIpc(): void {
       // the display follows the live attempt. Metadata only (provider id + tier), never the model/agent id.
       // A leg that has already lost the race says nothing: its announcement would overwrite the winner's.
       if (!race || !race.gate.isLoser(race.leg)) {
-        win?.webContents.send(IPC.streamMeta, { id: req.id, provider, tier })
+        win?.webContents.send(IPC.streamMeta, { id: req.id, provider, tier, usedScreen: screenGrounded })
       }
       // Per-tier idle budget: a live suggest gives up fast to stay real-time; recaps + deep answers get the
       // full headroom. Bounds time-to-first-token and triggers failover when a provider stalls before a token.
@@ -3546,7 +3724,7 @@ function registerIpc(): void {
                 // Re-assert WHO actually answered. Both legs announce themselves when they start, so if
                 // the backup started second and the primary then won, the UI's last streamMeta named the
                 // loser — the answer would be attributed to a provider that produced none of it.
-                win?.webContents.send(IPC.streamMeta, { id: req.id, provider, tier })
+                win?.webContents.send(IPC.streamMeta, { id: req.id, provider, tier, usedScreen: screenGrounded })
               }
             }
             gotToken = true
@@ -3710,7 +3888,7 @@ function registerIpc(): void {
                 : exhaustion.kind === 'usage-cap'
                   ? `${def.label} hit its usage limit${
                       exhaustion.resetAt
-                        ? ` (resets ${new Date(exhaustion.resetAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })})`
+                        ? ` (${formatResetPhrase(exhaustion.resetAt)})`
                         : ''
                     }. Add another provider in Settings → AI to keep going.`
                   : `${def.label} is out of credit. Add credit or switch providers in Settings → AI.`
@@ -3786,6 +3964,14 @@ function registerIpc(): void {
     const hedgeEligible =
       s.resilience.hedge &&
       !skipDeadPrimary &&
+      // MQA-147: never race a LOCAL primary. The hedge leg is a fresh dispatch, not a failover out of the
+      // local leg, so neither `provider !== 'local'` failover guard ever sees it — a screenshot the user
+      // pinned to on-device (localVisionPrivacyRequired) was POSTed to a keyed cloud provider 3s in, and a
+      // local no-output silently uploaded the request instead of surfacing. This one conjunct subsumes the
+      // vision pin (pickPrimaryProvider returns 'local' whenever it is set) and closes the same hole for an
+      // in-scope local suggest. Without a race, the local leg's own terminals run un-suppressed, so the
+      // "Nothing was sent to a cloud provider" message is actually delivered rather than markDead-swallowed.
+      primary !== 'local' &&
       routeTier(req, s.thinkingMode) === 'base' &&
       (req.mode === 'answer' || req.mode === 'vision' || req.mode === 'suggest') &&
       allowCrossProviderFailover(req)
@@ -3800,7 +3986,11 @@ function registerIpc(): void {
       // race.markHedgeStarted() makes whichever fires second a no-op.
       function startHedgeLeg(): void {
         if (race.isDecided()) return
-        const backup = pickFailover([primary])
+        // Snapshot, not the live array: primaryChain keeps growing under the primary leg while the hedge
+        // runs, and `attempted` rides into every recursive attempt() this leg makes. Passing it on means the
+        // hedge's OWN failover cascade also refuses to walk back onto a provider the primary already holds.
+        const tried = primaryChain.slice()
+        const backup = pickFailover(tried)
         if (!backup) {
           race.markHedgeUnavailable()
           return
@@ -3810,7 +4000,7 @@ function registerIpc(): void {
           clearTimeout(hedgeTimer)
           hedgeTimer = null
         }
-        attempt(backup, [primary], 0, { gate: race, leg: 'hedge' })
+        attempt(backup, tried, 0, { gate: race, leg: 'hedge' })
       }
       race.setHedgeStarter(startHedgeLeg)
       streams.set(req.id, {
@@ -4650,10 +4840,13 @@ if (!app.requestSingleInstanceLock()) {
   app.quit()
 } else {
   app.on('second-instance', () => {
-    if (win) {
-      if (!win.isVisible()) win.show()
-      win.focus()
-    }
+    // Relaunching the shortcut is the user's "bring it back" gesture, so it must self-heal a null `win`
+    // (a boot-time createWindow() throw leaves the app alive in the tray with no window) instead of
+    // no-opping forever. ensureWindow() also filters a destroyed-but-non-null window.
+    const w = ensureWindow()
+    if (!w) return
+    if (!w.isVisible()) w.show()
+    w.focus()
   })
   app.whenReady().then(async () => {
   initLogging() // route main-process logs to a rotated file before anything else can fail
@@ -4681,11 +4874,23 @@ if (!app.requestSingleInstanceLock()) {
   seedCaheLocalAiForBackgroundScreen()
   // Métis Local weights are no longer bundled in the installer (~728 MB; a universal mac package
   // carrying them would blow past GitHub's 2 GB release-asset limit), so fetch them once here on first
-  // run. Deliberately NOT awaited: this is a ~728 MB download and startup must not wait on it, nor fail
+  // run. Deliberately NOT awaited: this is a ~763 MB download and startup must not wait on it, nor fail
   // when the machine is offline or behind a restrictive proxy — Local simply stays unavailable and the
   // next launch retries. ensureLocalModel() verifies the pinned sha256 and never throws.
-  // local-routing.ts re-reads isDownloaded() per request, so nothing needs notifying when it lands.
-  void ensureLocalModel(LOCAL_MODELS[0].id)
+  // GATED (MQA-186): this used to fire unconditionally, so a machine under the model's RAM floor paid
+  // 763 MB for weights assertRamOk would refuse to load, and a user who had switched Local AI off got
+  // the transfer anyway with no way to decline it. shouldFetchWeights answers both. Because this is the
+  // only trigger, the settings handler re-arms it on the OFF→ON edge — see the localLlm.enabled branch
+  // in IPC.setSettings — otherwise switching Local AI back on would leave no path to the weights at all.
+  // local-routing.ts re-reads isDownloaded() per request, so no ROUTING decision needs notifying. The
+  // background screen reader does: its eligibility is evaluated when the engine is refreshed, and the boot
+  // refresh below runs while this download is still in flight — without this re-arm, a first-run user who
+  // opted in gets an inert fast path until some unrelated setting changes (MQA-178).
+  if (shouldFetchWeights(LOCAL_MODELS[0].id, getSettings().localLlm.enabled)) {
+    void ensureLocalModel(LOCAL_MODELS[0].id)
+      .then(() => refreshScreenPreprocess())
+      .catch((e) => mainLog.warn('[boot] local model provisioning failed:', e))
+  }
   // Windows toast attribution: a process's AppUserModelID must match the installed shortcut's AUMID
   // (electron-builder sets it to appId) or Windows silently drops native Notifications — which breaks
   // the meeting-reminder toast for portable-build and launch-at-login users (no shortcut in the launch
@@ -4724,13 +4929,24 @@ if (!app.requestSingleInstanceLock()) {
       try { unlinkSync(join(ud, f)) } catch { /* ignore */ }
     }
   } catch { /* best-effort — never block startup */ }
+  // MQA-175: the JS-level handlers below cannot see every death. A native C++ exception — Chromium's
+  // OSCrypt raising std::out_of_range on a sync-mangled encrypted file, the shape that killed six
+  // consecutive launches of the shipped 1.5.4 Windows build — unwinds past V8 entirely, so nothing in
+  // this process ever runs again: no crash-*.log, no audit line, no window, no dialog. Only the NEXT
+  // launch can report it, and only if this one left a mark before doing the dangerous work.
+  const earlyDeath = beginBootWatch(app.getPath('userData'), app.getVersion())
+  if (earlyDeath) persistCrash('boot-early-death', describeEarlyDeath(earlyDeath), 'previous launch died before boot completed')
   // Never let an unhandled error crash the overlay silently — log to file, audit, write a crash dump, and
   // (for a fatal exception) offer a one-time relaunch while defaulting to keep-alive.
   process.on('uncaughtException', (err) => onFatal('uncaughtException', err))
   process.on('unhandledRejection', (reason) => onFatal('unhandledRejection', reason))
-  if (process.env.ASKTOTO_SELFTEST) {
+  // The self-test suite runs destructively against the LIVE profile (it overwrites, then deletes,
+  // settings.json and managed-config.json), so devEnv() keeps it out of packaged builds — otherwise a
+  // persistent `setx ASKTOTO_SELFTEST out.json` re-wipes the profile and quits on every launch.
+  const selfTestOut = devEnv('ASKTOTO_SELFTEST')
+  if (selfTestOut) {
     try {
-      await runSelfTest(process.env.ASKTOTO_SELFTEST)
+      await runSelfTest(selfTestOut)
     } catch (e) {
       console.error('selftest failed', e)
     }
@@ -4751,7 +4967,13 @@ if (!app.requestSingleInstanceLock()) {
     sweepExpiredMeetings(getSettings().transcriptRetentionDays).then((r) => {
       if (r.deleted > 0) {
         auditLog('transcript.deleted', { bulk: true, expired: true, deleted: r.deleted })
-        void requestSourceRefresh(getSettings())
+        // Deliberately not awaited (the sweep must not hold the interval), but the rejection is observed:
+        // `void` attaches no handler, so a transient index.json write failure would escape as an
+        // unhandledRejection and write a crash-*.log + an app.crash audit line for something that never
+        // crashed — same shape as MQA-075. The refresh flag is re-requested by the 60s reconcile tick.
+        void requestSourceRefresh(getSettings()).catch((e) =>
+          mainLog.warn('[brain] source refresh after retention sweep failed:', e instanceof Error ? e.message : String(e))
+        )
       }
     }).catch(() => { /* best-effort — never block startup or the interval */ })
   }
@@ -5090,6 +5312,12 @@ if (!app.requestSingleInstanceLock()) {
   runStep('createTray', createTray)
   runStep('registerShortcuts', registerShortcuts)
   runStep('createWindow', createWindow)
+  // screen-preprocess documents refresh() as "Call on startup and after settings change" — only the second
+  // half was ever wired, so an opted-in user got a dead fast path (and a silent cloud image upload on every
+  // screen ask) for the whole session after each relaunch (MQA-178). Deliberately AFTER createWindow: the
+  // eligibility read drags in the local-model trust probe, which must not sit on the first-paint path; and
+  // ahead of registerIpc so the renderer's first getSettings() already sees the reconciled readiness flag.
+  runStep('refreshScreenPreprocess', refreshScreenPreprocess)
   // Synchronous OneDrive filesystem work (mkdir + two writeFileSync calls on first run) — nothing
   // before the window depends on the folder existing yet (saveMeeting/saveNote create it themselves on
   // first use), so it no longer sits ahead of createWindow on the boot path.
@@ -5126,10 +5354,23 @@ if (!app.requestSingleInstanceLock()) {
   // depending on cloud-sync events; provider-free runs only repair already-saved local extractions.
   const BRAIN_RECONCILE_MS = 60 * 1000
   setTimeout(() => {
-    resumeBackfillIfPending()
-    reconcileMeetingsInBackground()
+    // MQA-175: this timer is the boot step an unreadable `.brain` kills — it is the first thing after
+    // launch that decrypts index.json. When the previous run died before boot completed, this launch
+    // deliberately does not walk back into it: the brain resume and its reconcile interval are skipped
+    // for this session only, so the user reaches a working app instead of a sixth silent vanish. The
+    // watch is cleared at the end of this callback either way, so the very next launch is normal again.
+    if (earlyDeath) {
+      mainLog.warn(`[boot] safe start — skipping the brain backfill/reconcile resume: ${describeEarlyDeath(earlyDeath)}`)
+      auditLog('app.crash', { kind: 'safe_start', consecutive: earlyDeath.consecutive })
+    } else {
+      resumeBackfillIfPending()
+      reconcileMeetingsInBackground()
+      // Registered here rather than alongside the timer so safe start skips the recurring brain work too,
+      // not just the single resume — the reconcile tick reads the same index.json.
+      trackTimer(setInterval(reconcileMeetingsInBackground, BRAIN_RECONCILE_MS))
+    }
+    endBootWatch(app.getPath('userData'))
   }, 15_000)
-  trackTimer(setInterval(reconcileMeetingsInBackground, BRAIN_RECONCILE_MS))
 
   app.on('activate', () => {
     if (!win) createWindow()
@@ -5171,6 +5412,14 @@ app.on('before-quit', (e) => {
 })
 
 app.on('will-quit', () => {
+  // MQA-175: quitting before the boot watch closed on its own is a normal exit, not an early death —
+  // clear it here so the next launch is not pushed into safe start by a user who simply quit fast.
+  // Own try, like every other step below: a failure here must never skip the sidecar kill.
+  try {
+    endBootWatch(app.getPath('userData'))
+  } catch (e) {
+    mainLog.warn('[will-quit] endBootWatch failed', e)
+  }
   // will-quit can fire BEFORE the app ever finished becoming ready — a quit requested during the async
   // startup sequence, an automation/Playwright app.close(), or an early abort. Calling globalShortcut in
   // that window throws "globalShortcut cannot be used before the app is ready" as an UNCAUGHT exception

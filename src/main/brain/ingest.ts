@@ -753,7 +753,10 @@ export async function mergeExtraction(
   // extraction fields don't exist on any pre-MI-4 test fixture either).
   preparedText?: string
 ): Promise<void> {
-  const graph = readGraph(s)
+  // Every read below clones before it mutates (see cloneEntity): readJson hands back the cached instance
+  // for an unchanged file, so mutating it in place would leave the cache serving this meeting's facts to
+  // every other reader even when one of the awaited writes here fails and the merge aborts unpersisted.
+  const graph = cloneEntity(readGraph(s))
   const addNode = (id: string, type: 'account' | 'person' | 'deal' | 'sector' | 'meeting', label: string): void =>
     pushUnique(graph.nodes, { id, type, label }, (n) => n.id)
   const addEdge = (from: string, to: string, rel: string, confidence: MeetingExtraction['people'][number]['confidence']): void =>
@@ -764,7 +767,7 @@ export async function mergeExtraction(
 
   const accountSlug = x.account && x.account.name.trim() ? resolveEntitySlug(aliasMap, 'account', x.account.name) : null
   if (x.account && accountSlug) {
-    const acc = readAccount(s, accountSlug) ?? {
+    const acc = cloneEntity(readAccount(s, accountSlug)) ?? {
       schema_version: BRAIN_SCHEMA_VERSION,
       id: accountSlug,
       aliases: [],
@@ -803,7 +806,7 @@ export async function mergeExtraction(
   for (const p of x.people) {
     if (!p.name.trim()) continue
     const pslug = resolveEntitySlug(aliasMap, 'person', p.name)
-    const person = readPerson(s, pslug) ?? {
+    const person = cloneEntity(readPerson(s, pslug)) ?? {
       schema_version: BRAIN_SCHEMA_VERSION,
       id: pslug,
       aliases: [],
@@ -855,7 +858,7 @@ export async function mergeExtraction(
     addEdge(`person:${pslug}`, meetingId, 'attends', p.confidence)
     if (accountSlug) {
       addEdge(`person:${pslug}`, `account:${accountSlug}`, 'works-at', p.org ? 'EXTRACTED' : 'INFERRED')
-      const acc = readAccount(s, accountSlug)
+      const acc = cloneEntity(readAccount(s, accountSlug))
       if (acc) {
         pushUnique(acc.people, p.name, (n) => n)
         await writeAccount(s, accountSlug, acc)
@@ -866,7 +869,7 @@ export async function mergeExtraction(
 
   if (x.deal && (x.deal.name || accountSlug)) {
     const dslug = resolveEntitySlug(aliasMap, 'deal', x.deal.name || `${x.account?.name ?? 'unknown'} deal`)
-    const deal = readDeal(s, dslug) ?? {
+    const deal = cloneEntity(readDeal(s, dslug)) ?? {
       schema_version: BRAIN_SCHEMA_VERSION,
       id: dslug,
       aliases: [],
@@ -975,7 +978,7 @@ export async function mergeExtraction(
     addEdge(`deal:${dslug}`, meetingId, 'discussed-in', 'EXTRACTED')
     if (accountSlug) {
       addEdge(`deal:${dslug}`, `account:${accountSlug}`, 'belongs-to', x.account!.confidence)
-      const acc = readAccount(s, accountSlug)
+      const acc = cloneEntity(readAccount(s, accountSlug))
       if (acc) {
         pushUnique(acc.deals, deal.name, (n) => n)
         await writeAccount(s, accountSlug, acc)
@@ -1649,6 +1652,22 @@ function currentMeetingSourceVersions(s: Settings): Map<string, string> | null {
       if (!version) return null
       versions.set(file, version)
     }
+    // Team transcripts drift exactly like own meetings — a teammate edits or deletes a file in the
+    // shared folder and OneDrive syncs it here — so their namespaced keys ("team/<owner>/<file>", the
+    // same identity startBackfill's team scan writes into idx.ingested) belong in this same map.
+    // A shared folder that is momentarily unavailable is unreadable, NOT empty: fail the whole scan
+    // rather than report its transcripts as deleted (same conservative rule as hasIncompleteMeetingSource).
+    for (const teamFolder of s.teamTranscriptFolders ?? []) {
+      if (!teamFolder) continue
+      if (!existsSync(teamFolder)) return null
+      const owner = basename(teamFolder) || 'team'
+      for (const file of readdirSync(teamFolder)) {
+        if (!isMeetingTranscriptFile(file)) continue
+        const version = meetingSourceVersion(join(teamFolder, file))
+        if (!version) return null
+        versions.set(`team/${owner}/${file}`, version)
+      }
+    }
     return versions
   } catch (error) {
     mainLog.warn(`[brain] could not inspect meeting source versions: ${error instanceof Error ? error.message : String(error)}`)
@@ -1665,11 +1684,6 @@ function hasMeetingSourceDrift(s: Settings, idx: BrainIndex): boolean {
   if (!current) return false
   for (const [file, record] of Object.entries(idx.ingested)) {
     if (!record.ok) continue
-    // Skip namespaced team-transcript keys ("team/<owner>/<file>"): they don't live in the meetings folder,
-    // so currentMeetingSourceVersions (keyed by basename) never has them — treating that absence as a
-    // deletion would falsely trip a full rebuild on every reconcile. Own-meeting keys are bare basenames and
-    // never contain '/'. A changed team file re-ingests via its own sourceVersion check in the team scan.
-    if (file.includes('/')) continue
     const version = current.get(file)
     if (!version || !record.sourceVersion || record.sourceVersion !== version) return true
   }
@@ -2068,7 +2082,7 @@ export function startBackfill(onDrained?: () => void | Promise<void>, options: B
   const idx = readIndex(s)
   const providerAvailable = hasUsableProvider(s)
   if (!options.allowSourceRefresh && (idx.sourceRefreshRequested || hasMeetingSourceDrift(s, idx))) {
-    void requestSourceRefresh(s)
+    void requestSourceRefresh(s).catch((e) => mainLog.warn('[brain] source refresh request failed:', e))
     return providerAvailable ? { queued: 0 } : { queued: 0, deferred: 'no-provider' }
   }
   if (!idx.backfillRequested) updateIndexDetached(s, (i) => { i.backfillRequested = true })
@@ -2283,7 +2297,9 @@ export function reconcileMeetingsInBackground(): void {
     if (backfillPreparing || sourceRefreshRunning || (hasActiveBackfill() && hasJobsInFlight())) return
     const idx = readIndex(s)
     if (idx.sourceRefreshRequested || hasMeetingSourceDrift(s, idx)) {
-      void requestSourceRefresh(s)
+      // The try/catch below only catches synchronous throws; an async rejection escaping here would be
+      // reported as an unhandledRejection → a false app.crash record on EVERY 60s tick (same as MQA-155).
+      void requestSourceRefresh(s).catch((e) => mainLog.warn('[brain] source refresh request failed:', e))
       return
     }
     if (!hasUsableProvider(s) && !hasSavedReconciliationCandidate(s)) return

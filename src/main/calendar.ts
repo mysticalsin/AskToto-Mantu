@@ -12,6 +12,12 @@ import type { CalendarEvent, CalendarTodayResult } from '@shared/ipc'
 
 const GRAPH = 'https://graph.microsoft.com/v1.0'
 
+// Nothing above this call has a deadline — the IPC handler, preload and AgendaView all just await — and a
+// proxy or captive portal that completes the handshake then drops the socket would otherwise ride undici's
+// 300 s default, leaving the tray panel on "Loading agenda…" for five minutes. Same bound as every other
+// outbound call in main (license.ts's ACTIVATE_TIMEOUT_MS); Graph answers a 25-event calendarView in ~1 s.
+const GRAPH_TIMEOUT_MS = 10_000
+
 /** Wall-clock offset of `tz` at instant `at`, in ms east of UTC. Node exposes no offset accessor, so we
  *  format the instant in the zone and diff against UTC — that keeps half-hour zones and DST honest. */
 function zoneOffsetMs(tz: string, at: Date): number {
@@ -83,7 +89,8 @@ export async function calendarToday(tz: string): Promise<CalendarTodayResult> {
       `${GRAPH}/me/calendarView?startDateTime=${encodeURIComponent(start)}&endDateTime=${encodeURIComponent(end)}` +
       `&$select=subject,start,end,location,isAllDay,onlineMeeting,attendees&$orderby=start/dateTime&$top=25`
     const res = await fetch(url, {
-      headers: { Authorization: `Bearer ${token}`, Prefer: `outlook.timezone="${zone}"` }
+      headers: { Authorization: `Bearer ${token}`, Prefer: `outlook.timezone="${zone}"` },
+      signal: AbortSignal.timeout(GRAPH_TIMEOUT_MS)
     })
     if (res.status === 401 || res.status === 403) return { ok: false, needsConsent: true }
     if (!res.ok) return { ok: false, error: 'Calendar unavailable — try again.' }

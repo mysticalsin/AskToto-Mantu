@@ -1,7 +1,11 @@
-import { app, net, type BrowserWindow } from 'electron'
+import { app, net, Notification, type BrowserWindow } from 'electron'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import log from 'electron-log'
+// Via logger.ts, never `electron-log` directly: logger.ts is where the app's logging policy lives,
+// including the redirect that keeps a non-app process (a vitest worker) out of the installed app's
+// %APPDATA%/asktoto/logs/main.log. That redirect is a module-load side effect, so a module that reaches
+// the electron-log singleton without loading logger.ts silently writes into the real user's log.
+import { mainLog as log } from './logger'
 import { IPC, type UpdateCheckResult } from '@shared/ipc'
 import { shouldDisableAutoUpdate } from './cahe-edition'
 import { readTrustedAdminManaged } from './win-security'
@@ -142,6 +146,12 @@ export async function checkForUpdateNow(): Promise<UpdateCheckResult> {
   }
 }
 
+/** True only while a download THIS process started (Settings → "Download & install") is running.
+ *  electron-updater emits one 'error' event for every failure — the silent boot / 6-hourly check
+ *  included — and turning an untouched Settings row into a scary failure the user never asked for is
+ *  worse than staying quiet, so only an in-flight download may raise a user-facing error. */
+let downloadInFlight = false
+
 /** Result of asking the app to download-and-install an update in place (Settings → Update now). */
 export interface UpdateDownloadStart {
   /** True when the electron-updater download was kicked off; progress/ready then arrive via IPC events. */
@@ -172,7 +182,18 @@ export async function startUpdateDownload(): Promise<UpdateDownloadStart> {
   try {
     // eslint-disable-next-line @typescript-eslint/no-var-requires
     const { autoUpdater } = require('electron-updater')
-    await autoUpdater.checkForUpdates()
+    // checkForUpdates() resolves as soon as the FEED answers — the download it kicked off is still
+    // running behind `downloadPromise`, so "started" can only mean "there is a download to watch".
+    const downloadPromise = (await autoUpdater.checkForUpdates())?.downloadPromise
+    if (!downloadPromise) return { started: false, reason: 'No update is available to download right now.' }
+    downloadInFlight = true
+    // Own the promise electron-updater hands back. Its failure is reported to the renderer by the 'error'
+    // listener in initAutoUpdate; left unheld it also reaches index.ts's unhandledRejection hook, which
+    // persists an app.crash audit line and a crash-*.log for a download that merely failed.
+    const settle = (): void => {
+      downloadInFlight = false
+    }
+    void downloadPromise.then(settle, settle)
     return { started: true }
   } catch (e) {
     return { started: false, reason: (e as Error)?.message || 'Could not start the update download.' }
@@ -226,8 +247,8 @@ export function initAutoUpdate(getWin: () => BrowserWindow | null): void {
     autoUpdater.autoInstallOnAppQuit = true
     // AppUpdater's own constructor registers a default 'error' listener that unconditionally logs the
     // full stack via its logger, regardless of cause — on a 404 that's a full HttpError stack PLUS our
-    // own warn below PLUS the checkForUpdatesAndNotify() rejection below (electron-updater both emits
-    // 'error' AND rethrows into the promise), three lines for the exact same failure every launch.
+    // own warn below PLUS the check() rejection below (electron-updater both emits 'error' AND rethrows
+    // into the promise), three lines for the exact same failure every launch.
     // Replace the default listener with our own so a 404 — the releases repo not existing yet, an
     // already-diagnosed, expected state — logs just one short line, while every other error keeps its
     // current (full-stack) visibility. Safe: an EventEmitter only throws on an unhandled 'error' emit
@@ -237,6 +258,15 @@ export function initAutoUpdate(getWin: () => BrowserWindow | null): void {
       if (isNotFound(e)) {
         log.warn('[updater] update feed not available (404)')
         return
+      }
+      // A download the user is watching just died. Tell the renderer so the Settings row leaves its
+      // progress bar and offers the download page — the message is ours, never electron-updater's, whose
+      // text embeds the feed URL and request context (nothing crosses the bridge unredacted).
+      if (downloadInFlight) {
+        downloadInFlight = false
+        getWin()?.webContents.send(IPC.updateError, {
+          message: 'The update download failed. Open the download page to install manually.'
+        })
       }
       // Non-404: keep the same full-stack visibility the removed default listener used to provide.
       log.warn('[updater] error', e?.stack || e?.message || e)
@@ -255,8 +285,16 @@ export function initAutoUpdate(getWin: () => BrowserWindow | null): void {
             : Array.isArray(raw)
               ? raw.map((x) => String(x?.note ?? '')).filter(Boolean).join('\n\n').trim() || undefined
               : undefined
-        // In-app banner (UpdateReadyToast) alongside the OS notification checkForUpdatesAndNotify already shows.
         getWin()?.webContents.send(IPC.updateDownloaded, { version: i?.version, notes })
+        // The OS notification checkForUpdatesAndNotify used to raise (see check() below for why it is
+        // gone). Skipped for a download the user started from Settings — they are already watching that
+        // row, and the in-app UpdateReadyToast lands either way.
+        if (!downloadInFlight && Notification.isSupported()) {
+          new Notification({
+            title: 'A new update is ready to install',
+            body: `${app.name} version ${i?.version} has been downloaded and will be automatically installed on exit`
+          }).show()
+        }
       }
     )
     // Stream download progress to the renderer so the update UI can show a "Downloading… X%" state rather
@@ -264,12 +302,23 @@ export function initAutoUpdate(getWin: () => BrowserWindow | null): void {
     autoUpdater.on('download-progress', (p: { percent?: number }) => {
       getWin()?.webContents.send(IPC.updateProgress, { percent: Math.round(p?.percent ?? 0) })
     })
-    // checkForUpdatesAndNotify shows the OS notification when an update is ready; the 'error' listener above
-    // already logs any failure (short for 404, full otherwise), so swallow the duplicate rejection here.
+    // NOT checkForUpdatesAndNotify: it fires its OS notification from `void it.downloadPromise.then(…)`,
+    // a derived promise it never handles and we cannot reach, so every failed background download became
+    // an unhandledRejection — i.e. a crash-*.log and an `app.crash` audit line for a failed download. Hold
+    // the download promise ourselves; the notification now comes from the update-downloaded listener above.
+    // The 'error' listener already logs any failure (short for 404, full otherwise), so swallow the
+    // duplicate rejection here.
     const check = (): void => {
-      void autoUpdater.checkForUpdatesAndNotify().catch(() => {
-        /* already logged by the 'error' listener above */
-      })
+      void autoUpdater
+        .checkForUpdates()
+        .then((r: { downloadPromise?: Promise<unknown> | null } | null) => {
+          void r?.downloadPromise?.catch(() => {
+            /* already logged by the 'error' listener above */
+          })
+        })
+        .catch(() => {
+          /* already logged by the 'error' listener above */
+        })
     }
     check()
     // Re-check every 6h so a long-running app picks up a release the SAME day, not only at the next launch.

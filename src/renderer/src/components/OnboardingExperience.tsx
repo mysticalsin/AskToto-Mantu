@@ -11,7 +11,7 @@
  *   needs comes back through onDone.
  */
 import { useEffect, useRef, useState } from 'react'
-import { Check, Cpu, FolderLock, Mic, MonitorUp, Sparkles } from 'lucide-react'
+import { Check, FolderLock, Mic, MonitorUp, Sparkles } from 'lucide-react'
 import type { ConversationMode, PermissionStatus, ProfileRecoveryResult, PublicSettings } from '@shared/ipc'
 import type { ProviderId } from '@shared/providers'
 import { PERMISSIONS_POLL_MS } from '../state'
@@ -62,7 +62,7 @@ export type SetupRowState = 'checking' | 'ready' | 'action' | 'blocked' | 'resta
 interface SetupRow {
   key: string
   label: string
-  icon: typeof Cpu
+  icon: typeof Sparkles
   state: SetupRowState
   detail?: string
 }
@@ -97,7 +97,12 @@ export function OnboardingExperience({ onDone, onSkip }: OnboardingExperiencePro
     if (scene !== 'setup') return
     let live = true
     const base: SetupRow[] = [
-      { key: 'silicon', label: isWindows ? 'Hardware acceleration' : 'Apple Silicon acceleration', icon: Cpu, state: 'checking' },
+      // No acceleration row (MQA-201): it asserted "ready / detected" unconditionally, justified by a
+      // claim that the build was arm64-only. It is not — the mac target is universal (electron-builder
+      // verifies x64 Mach-O slices) and Windows ships x64 only. Nor can the renderer honestly answer the
+      // question at this point: on Windows the llama variant
+      // (vulkan vs cpu) is only decided when a sidecar is first spawned, which has not happened yet at
+      // onboarding. docs/ONBOARDING-EXPERIENCE.md's rule is to show only rows that are actually true.
       { key: 'asr', label: 'On-device transcription', icon: Sparkles, state: 'checking' },
       { key: 'brain', label: 'Private meeting brain', icon: FolderLock, state: 'checking' },
       { key: 'mic', label: 'Microphone', icon: Mic, state: 'checking' },
@@ -113,8 +118,6 @@ export function OnboardingExperience({ onDone, onSkip }: OnboardingExperiencePro
     void (async () => {
       const delay = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
       await delay(500)
-      set('silicon', 'ready', 'detected') // this build only ships arm64; reaching here IS the check
-      await delay(450)
       const bundled = await window.toto.asrBundled().catch(() => false)
       set('asr', bundled ? 'ready' : 'action', bundled ? 'Parakeet + Whisper bundled' : 'models missing in this build')
       await delay(450)

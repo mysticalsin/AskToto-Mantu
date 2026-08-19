@@ -63,6 +63,7 @@ import {
   type LucideIcon
 } from 'lucide-react'
 import { formatSavedTime, timeSavedFromTotals } from '@shared/time-saved'
+import { formatResetPhrase } from '@shared/reset-time'
 import {
   DEFAULT_SHORTCUTS,
   HOTKEY_ACTIONS,
@@ -1404,7 +1405,7 @@ function providerLimitLabel(u: { reason: string; until: number }): string {
   const mins = Math.max(0, Math.round((u.until - Date.now()) / 60000))
   const when =
     mins >= 60
-      ? `resets ~${new Date(u.until).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`
+      ? formatResetPhrase(u.until)
       : mins >= 1
         ? `retry in ${mins}m`
         : 'retry shortly'
@@ -1502,33 +1503,52 @@ function LocalAiSection({
   patch: (p: Partial<PublicSettings>) => void
 }): JSX.Element {
   const [models, setModels] = useState<LocalModelSummary[] | null>(null)
+  // The weights are fetched on first run, not shipped, so this list is a moving target: a card opened
+  // during onboarding is looking at a download in progress. Poll while one is running so it reaches
+  // "Ready" on its own instead of freezing on the snapshot taken when the panel mounted (MQA-187).
   useEffect(() => {
     let mounted = true
-    void window.toto.localModelsList().then(
-      (list) => {
-        if (mounted) setModels(list)
-      },
-      () => {
-        if (mounted) setModels([])
-      }
-    )
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const read = (): void => {
+      void window.toto.localModelsList().then(
+        (list) => {
+          if (!mounted) return
+          setModels(list)
+          if (list.some((m) => m.unavailableReason === 'downloading')) timer = setTimeout(read, 1500)
+        },
+        () => {
+          if (mounted) setModels([])
+        }
+      )
+    }
+    read()
     return () => {
       mounted = false
+      if (timer) clearTimeout(timer)
     }
   }, [])
 
   const model = models?.[0]
+  const downloading = model?.unavailableReason === 'downloading'
+  const percent = Math.round((model?.downloadProgress ?? 0) * 100)
+  // One wording for the blocked case, used by both the status strip and the card. It names the host that
+  // has to be reachable and when Métis tries again. The old copy said the files were "missing or
+  // incomplete" and told the user to reinstall Métis — an instruction the build gate guarantees cannot
+  // work, because no installer contains the weights (MQA-188/191).
+  const downloadFailedText =
+    'Could not download the on-device model. Métis retries on the next launch — check that huggingface.co is reachable from this network.'
+  const notDownloadedText = 'Not downloaded yet. Métis fetches the on-device model automatically on first run.'
 
   return (
     <Section
       title="Local AI"
-      desc="Runs the model included with Métis on this device. Live suggestions, summaries, Mantu Intelligence extraction, and screenshot reads stay local."
+      desc="Runs a small model on this device. Live suggestions, summaries, Mantu Intelligence extraction, and screenshot reads stay local."
       icon={Cpu}
     >
       <div className="flex flex-col gap-3">
         <ToggleRow
           label="Enable Métis Local"
-          desc="The model is Included with Métis. There is no separate model download after installation."
+          desc="Métis downloads the model (~730 MB) once, on first run — it is not part of the installer. Turning this off skips that download."
           on={settings.localLlm.enabled}
           onChange={(v) => patch({ localLlm: { ...settings.localLlm, enabled: v } })}
         />
@@ -1536,23 +1556,29 @@ function LocalAiSection({
         <div className="flex items-center gap-2 rounded-[8px] border border-[var(--cl-border)] bg-white/[0.02] px-3 py-2 text-[11px] text-[color:var(--cl-muted-foreground)]">
           <Cpu size={13} className="shrink-0" />
           {models === null
-            ? 'Checking bundled model...'
+            ? 'Checking the on-device model...'
             : model?.unavailableReason === 'insufficient-ram'
-              ? `Unavailable: the bundled model needs at least ${model.minTotalRamGB} GB RAM.`
-              : !model?.ready
-                ? 'Unavailable: the bundled model files are missing or incomplete. Reinstall Métis to restore them.'
-              : settings.localRuntimeState === 'running'
-              ? `Running: ${model?.label ?? settings.localLlm.modelId}`
-              : settings.localRuntimeState === 'starting'
-                ? 'Starting the on-device model...'
-                : settings.localRuntimeState === 'unavailable'
-                  ? 'Unavailable: the on-device model stopped responding this session. Restart Métis to re-enable it.'
-                  : 'Ready: starts automatically on the next local request.'}
+              ? `Unavailable: the on-device model needs at least ${model.minTotalRamGB} GB RAM.`
+              : model?.unavailableReason === 'downloading'
+                ? `Downloading the on-device model... ${percent}%`
+                : model?.unavailableReason === 'download-failed'
+                  ? downloadFailedText
+                  : model?.unavailableReason === 'not-downloaded'
+                    ? notDownloadedText
+                    : !model?.ready
+                      ? 'Unavailable: Métis could not read the on-device model status.'
+                      : settings.localRuntimeState === 'running'
+                        ? `Running: ${model?.label ?? settings.localLlm.modelId}`
+                        : settings.localRuntimeState === 'starting'
+                          ? 'Starting the on-device model...'
+                          : settings.localRuntimeState === 'unavailable'
+                            ? 'Unavailable: the on-device model stopped responding this session. Restart Métis to re-enable it.'
+                            : 'Ready: starts automatically on the next local request.'}
         </div>
 
         {models === null ? (
           <div className="flex items-center gap-2 text-[11px] text-[color:var(--cl-muted-foreground)]">
-            <Loader2 size={12} className="animate-spin" /> Checking bundled model...
+            <Loader2 size={12} className="animate-spin" /> Checking the on-device model...
           </div>
         ) : model ? (
           <div
@@ -1560,14 +1586,18 @@ function LocalAiSection({
               'flex flex-col gap-2 rounded-[10px] border p-3',
               model.ready
                 ? 'border-[var(--cl-primary)] bg-[var(--cl-primary-soft)]/40'
-                : 'border-[var(--cl-destructive)]/30 bg-[var(--cl-destructive)]/5'
+                : // A running first-run download is a normal state, not a fault: it must not be dressed
+                  // as one while it is working (MQA-187).
+                  downloading
+                  ? 'border-[var(--cl-border)] bg-white/[0.02]'
+                  : 'border-[var(--cl-destructive)]/30 bg-[var(--cl-destructive)]/5'
             ].join(' ')}
           >
             <div className="flex items-center justify-between gap-2">
               <div className="flex flex-col gap-0.5">
                 <span className="text-[12px] font-medium text-[color:var(--cl-foreground)]">{model.label}</span>
                 <span className="text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
-                  Included with Métis. Needs {model.minTotalRamGB} GB RAM.
+                  Downloaded once on first run. Needs {model.minTotalRamGB} GB RAM.
                 </span>
               </div>
               <span
@@ -1575,25 +1605,37 @@ function LocalAiSection({
                   'flex shrink-0 items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium',
                   model.ready
                     ? 'bg-[var(--cl-primary-soft)] text-[color:var(--cl-primary)]'
-                    : 'bg-[var(--cl-destructive)]/10 text-[color:var(--cl-destructive)]'
+                    : downloading
+                      ? 'bg-white/[0.06] text-[color:var(--cl-muted-foreground)]'
+                      : 'bg-[var(--cl-destructive)]/10 text-[color:var(--cl-destructive)]'
                 ].join(' ')}
               >
-                {model.ready ? <CircleCheck size={12} /> : <AlertCircle size={12} />}
-                {model.ready ? 'Ready' : 'Unavailable'}
+                {model.ready ? <CircleCheck size={12} /> : downloading ? <Loader2 size={12} className="animate-spin" /> : <AlertCircle size={12} />}
+                {model.ready ? 'Ready' : downloading ? `Downloading ${percent}%` : 'Unavailable'}
               </span>
             </div>
-            {!model.ready && (
+            {downloading && (
+              <div className="h-1 w-full overflow-hidden rounded-full bg-white/[0.08]">
+                <div
+                  className="h-full rounded-full bg-[var(--cl-primary)] transition-[width] duration-500 ease-out"
+                  style={{ width: `${percent}%` }}
+                />
+              </div>
+            )}
+            {!model.ready && !downloading && (
               <p className="text-[11px] leading-snug text-[color:var(--cl-destructive)]">
                 {model.unavailableReason === 'insufficient-ram'
                   ? `This model needs at least ${model.minTotalRamGB} GB RAM.`
-                  : 'The bundled model files are missing or incomplete. Reinstall Métis to restore them.'}
+                  : model.unavailableReason === 'download-failed'
+                    ? downloadFailedText
+                    : notDownloadedText}
               </p>
             )}
           </div>
         ) : (
           <div className="flex items-start gap-1.5 text-[11px] text-[color:var(--cl-destructive)]">
             <AlertCircle size={13} className="mt-px shrink-0" />
-            <span>Unavailable: Métis could not read the bundled model manifest. Reinstall Métis.</span>
+            <span>Unavailable: Métis could not read the on-device model status. Restart Métis if this persists.</span>
           </div>
         )}
 
@@ -3899,9 +3941,16 @@ function UpdatesSection(): JSX.Element {
       setPercent(100)
       setPhase('ready')
     })
+    // A download that was running just died (proxy, sleep, checksum, signature). 'blocked' is the state
+    // that renders the download-page link, so the fallback below stops being unreachable mid-download.
+    const offError = window.toto.onUpdateError((d) => {
+      setPhase('blocked')
+      setDownloadError(d?.message ?? 'The update download failed. Open the download page to install manually.')
+    })
     return () => {
       offProgress()
       offReady()
+      offError()
     }
   }, [])
 
@@ -5229,8 +5278,14 @@ export function Settings({
                     label="Preload screen context (on-device)"
                     desc={
                       settings.backgroundScreenReady || !settings.backgroundScreenContext
-                        ? "When you switch windows, Métis quietly reads your screen with the on-device model so 'What's on my screen' answers instantly. Stays on your device, nothing extra is sent to the cloud, and Private View turns it off."
-                        : 'Enable Local AI (below) to use this. The background reader runs entirely on the on-device model.'
+                        ? // Deliberately does not name the local model as the reader: on macOS the
+                          // reader can be the Vision OCR helper, with no model involved at all.
+                          "When you switch windows, Métis quietly reads your screen on this device so 'What's on my screen' answers instantly. Stays on your device, nothing extra is sent to the cloud, and Private View turns it off."
+                        : settings.localReady
+                          ? // Local AI is ready, so the missing piece is the OS window signal — telling
+                            // this user to enable Local AI would just be the opposite lie.
+                            "Not running on this machine — Métis can't tell when you switch windows, so screen asks capture live instead."
+                          : 'Enable Local AI (below) to use this. The background reader never leaves your device.'
                     }
                     on={settings.backgroundScreenContext}
                     onChange={(v) => patch({ backgroundScreenContext: v })}
@@ -7025,7 +7080,6 @@ function keyEventToAccelerator(e: React.KeyboardEvent<HTMLInputElement>): string
   else if (key === 'Escape') main = 'Escape'
   else if (key === 'Backspace') main = 'Backspace'
   else if (key === 'Delete') main = 'Delete'
-  else if (key === 'Tab') main = 'Tab'
   else if (key.length === 1) main = key.toUpperCase() // A-Z, 0-9, punctuation
   // Function keys (F1-F24), PageUp/PageDown, Home, End, Insert — pass through as-is
 
@@ -7062,24 +7116,41 @@ function KeyRecorder({
   const [preview, setPreview] = useState<string | null>(null)
   const [conflictMsg, setConflictMsg] = useState<string | null>(null)
   const inputRef = useRef<HTMLInputElement>(null)
+  const triggerRef = useRef<HTMLButtonElement>(null)
+  // True when recording ended by keypress (cancel or commit) rather than because focus had already moved
+  // away. The input unmounts either way, so without this focus falls to <body> and a keyboard user restarts
+  // from the top of a nine-tab Settings panel.
+  const returnFocus = useRef(false)
 
-  // Auto-focus the capture input when recording starts
+  // Auto-focus the capture input when recording starts; hand focus back to the row's trigger when a
+  // keypress ends it, so the keyboard user stays where they were.
   useEffect(() => {
-    if (recording) inputRef.current?.focus()
+    if (recording) {
+      inputRef.current?.focus()
+      return
+    }
+    if (!returnFocus.current) return
+    returnFocus.current = false
+    triggerRef.current?.focus()
   }, [recording])
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLInputElement>): void => {
+    // Tab stays sequential-focus navigation. Cancelling it here made the recorder a keyboard trap
+    // (WCAG 2.1.2, No Keyboard Trap): Tab did nothing, and Shift+Tab did not escape but RECORDED, binding
+    // reverse-tab as an OS-global hotkey. Let the browser move focus — the resulting blur ends recording.
+    if (e.key === 'Tab') return
+    e.preventDefault()
+    // Escape is the advertised way out (the hint under the field says so), so it stops here. Left to bubble
+    // it also reaches App's window-level Escape handler, which closes the entire Settings panel — an exit
+    // that throws away the user's place is not an exit.
+    e.stopPropagation()
     if (e.key === 'Escape') {
-      // Cancel recording without trapping the keystroke — don't stopPropagation, so it still bubbles to
-      // any other listener (e.g. an overlay's own Escape handler) that might also care.
-      e.preventDefault()
+      returnFocus.current = true
       setRecording(false)
       setPreview(null)
       setConflictMsg(null)
       return
     }
-    e.preventDefault()
-    e.stopPropagation()
     const acc = keyEventToAccelerator(e)
     if (acc === null) {
       setPreview(null)
@@ -7096,12 +7167,16 @@ function KeyRecorder({
     setConflictMsg(null)
     setPreview(acc)
     setTimeout(() => {
+      returnFocus.current = true
       setRecording(false)
       setPreview(null)
     }, 120)
   }
 
   const onBlur = (): void => {
+    // Focus has already gone somewhere the user chose (Tab, or a click) — pulling it back to the trigger
+    // would fight them.
+    returnFocus.current = false
     setRecording(false)
     setPreview(null)
     setConflictMsg(null)
@@ -7120,6 +7195,9 @@ function KeyRecorder({
           title="Press your desired key combination"
           className="no-drag cl-input font-ui min-w-0 flex-1 cursor-pointer select-none px-2 py-1 text-[12px] border-[var(--cl-primary)] bg-[var(--cl-primary-soft)] text-[color:var(--cl-primary)] outline-none ring-1 ring-[var(--cl-primary)] transition-colors"
         />
+        <span className="text-[11px] text-[color:var(--cl-muted-foreground)]">
+          Press Esc to cancel · Tab to move on
+        </span>
         {conflictMsg && (
           <span className="text-[11px] text-[color:var(--cl-destructive)]">{conflictMsg}</span>
         )}
@@ -7129,6 +7207,7 @@ function KeyRecorder({
 
   return (
     <button
+      ref={triggerRef}
       type="button"
       onClick={() => setRecording(true)}
       title="Click then press your desired key combination"
@@ -7192,7 +7271,8 @@ function Shortcuts({
             <AlertCircle size={13} className="mt-px shrink-0" />
             <span>
               {failures.length === 1 ? "This shortcut couldn't" : "These shortcuts couldn't"} be
-              registered. Another app likely owns the key combo. Rebind {failures.length === 1 ? 'it' : 'them'} below.
+              registered — either another app already owns the combo, or it is a navigation key Métis will
+              not take over globally. Rebind {failures.length === 1 ? 'it' : 'them'} below.
             </span>
           </div>
           {failures.map((f) => (

@@ -324,7 +324,15 @@ self.onmessage = async (e: MessageEvent): Promise<void> => {
       if (text) followLanguage(text)
       post({ type: 'text', text, speaker })
     } catch (err) {
-      post({ type: 'error', message: err instanceof Error ? err.message : String(err), speaker })
+      // Same rule as the load-failure branch above, which this used to ignore: the engine's own text
+      // ("Aborted(). Build with -sASSERTIONS for more info.", "memory access out of bounds") is a WASM
+      // stack fragment, not something a user mid-meeting can act on — and it landed in the live danger
+      // banner, which has no dismiss control. Raw detail goes to the log post; the user gets one fixed
+      // line, which listen.ts retracts by exact match on the next window that decodes. Deliberately NOT
+      // silent (an empty text reply): a permanently dead WASM module would then produce an empty
+      // transcript with no signal anywhere.
+      post({ type: 'log', message: `ASR window failed: ${String((err as Error)?.message || err)}` })
+      post({ type: 'error', message: 'Part of the audio could not be transcribed. Transcription is continuing.', speaker })
     }
   }
 }

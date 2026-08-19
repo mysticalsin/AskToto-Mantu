@@ -11,6 +11,10 @@ function makeHarness(init?: {
   activeStreams?: number
   /** Inject the optional OCR dep (mac path). ocrText/ocrThrow on state drive its behavior per test. */
   withOcr?: boolean
+  /** SSO session state — the engine's own gate, so canRun() answers for the Settings copy too. */
+  authorized?: boolean
+  /** Foreground-watcher health at start(): false is linux / a mac install with no bundled helper. */
+  watcherHealthy?: boolean
 }) {
   let clock = 1_000_000
   const state = {
@@ -21,7 +25,13 @@ function makeHarness(init?: {
     image: 'IMG_A',
     describeBody: 'A code editor with an error panel.' as string | null,
     ocrText: null as string | null,
-    ocrThrow: false
+    ocrThrow: false,
+    authorized: init?.authorized ?? true,
+    watcherHealthy: init?.watcherHealthy ?? true,
+    /** Display the capture actually came from, and the display the user is looking at right now. */
+    dispId: 1,
+    currentDisplayId: 1,
+    displayMismatch: false
   }
   let ocrCalls = 0
   let currentWin: ForegroundInfo | null = null
@@ -38,12 +48,21 @@ function makeHarness(init?: {
   })
 
   const deps: ScreenPreprocessDeps = {
-    getScreenshot: async () => ({ image: state.image, width: 1280, height: 800, capturedAt: clock }),
+    getScreenshot: async () => ({
+      image: state.image,
+      width: 1280,
+      height: 800,
+      capturedAt: clock,
+      dispId: state.dispId,
+      displayMismatch: state.displayMismatch
+    }),
     getSettings: () => ({
       backgroundScreenContext: state.backgroundScreenContext,
       localLlm: { enabled: true, modelId: 'qwen3.5-0.8b' }
     }),
     localReady: () => state.localReady,
+    authorized: () => state.authorized,
+    currentDisplayId: () => state.currentDisplayId,
     privateViewOn: () => state.privateView,
     ensureLocalRuntimeStarted: ensureStarted,
     runtime: {
@@ -57,7 +76,7 @@ function makeHarness(init?: {
     startWatcher: (onChange) => {
       // Record onChange so the test can drive it; expose current() over the harness-controlled window.
       void onChange
-      watcher = { stop: vi.fn(), current: () => currentWin }
+      watcher = { stop: vi.fn(), current: () => currentWin, healthy: () => state.watcherHealthy }
       return watcher
     },
     extractScreenText: init?.withOcr
@@ -333,5 +352,96 @@ describe('createScreenPreprocess — OCR available without the local LLM (Qwen n
     expect(h.ocrCalls()).toBe(1)
     expect(h.fetchCalls()).toBe(1) // VLM fallback still runs when the runtime is ready
     expect(h.peek()?.description).toBe('A code editor with an error panel.')
+  })
+})
+
+/**
+ * MQA-179 — "can the background reader run?" used to be answered twice: once by the engine's own
+ * eligible() and once by an independent expression in index.ts that drives the Settings copy. canRun()
+ * is now the single authority both sides read.
+ */
+describe('createScreenPreprocess — one authority for "can this run" (MQA-179)', () => {
+  it('MQA-179 — canRun() is the engine gate itself: true on OCR alone, with no local model (macOS)', () => {
+    const h = makeHarness({ withOcr: true, localReady: false })
+    expect(h.sp.canRun()).toBe(true)
+    h.sp.refresh()
+    expect(h.sp.isActive()).toBe(true) // and the lifecycle agrees with the flag Settings renders
+  })
+
+  it('MQA-179 — canRun() is false without a session, so a signed-out app never claims the reader is on', () => {
+    const h = makeHarness({ authorized: false })
+    expect(h.sp.canRun()).toBe(false)
+    h.sp.refresh()
+    expect(h.sp.isActive()).toBe(false)
+  })
+})
+
+/**
+ * MQA-181 — every invalidation this cache has (drop on focus change, refuse on window mismatch) is fed by
+ * the foreground watcher. When the watcher dies the guards go quiet instead of failing closed, and the
+ * engine keeps serving the description of the window the user already left.
+ */
+describe('createScreenPreprocess — a dead window signal must fail closed (MQA-181)', () => {
+  it('MQA-181 — a watcher that dies mid-session stops the cache being served, instead of answering about the window the user just left', async () => {
+    const h = makeHarness()
+    h.sp.refresh()
+    h.setWindow('w1')
+    await h.sp._test.describeForWindow('w1')
+    expect(h.sp.currentFreshContext()?.description).toBe('A code editor with an error panel.')
+
+    // The producer is killed (AppLocker/WDAC blocks Add-Type, EDR kills the spawn, restart budget spent).
+    // No focus event will ever arrive again, so nothing can drop this entry when the user alt-tabs.
+    h.state.watcherHealthy = false
+
+    expect(h.sp.currentFreshContext()).toBeNull()
+    // …and it is dropped, not merely hidden: a later health blip must not resurrect a stale screen.
+    h.state.watcherHealthy = true
+    expect(h.sp.currentFreshContext()).toBeNull()
+  })
+
+  it('MQA-181 — with no window signal at all the engine refuses to start rather than run blind', () => {
+    const h = makeHarness({ watcherHealthy: false }) // linux, or a mac install missing the bundled helper
+    h.sp.refresh()
+    expect(h.sp.isActive()).toBe(false)
+    expect(h.sp.canRun()).toBe(false) // and Settings reads "not running" instead of "on"
+  })
+
+  it('MQA-181 — a describe keyed to a blank window id is never committed', async () => {
+    // The refresh tick used to pass `activeWindowId() ?? ''`, and the commit guard waved a null window
+    // through — so entries landed under a falsy windowId that the read-side guard can never match.
+    const h = makeHarness()
+    h.sp.refresh() // watcher alive, but it has not reported a window yet
+    await h.sp._test.describeForWindow('')
+    expect(h.peek()).toBeNull()
+  })
+})
+
+/**
+ * MQA-183 — the frame is captured from the display under the CURSOR, but cached keyed only by the
+ * foreground window. Alt-tab to a window on another monitor and the cursor stays put: the entry then
+ * describes a monitor the user is not looking at, and both guards pass.
+ */
+describe('createScreenPreprocess — the description is bound to the display it came from (MQA-183)', () => {
+  it('MQA-183 — serves null once the user is looking at a different monitor than the one described', async () => {
+    const h = makeHarness()
+    h.sp.refresh()
+    h.setWindow('w1')
+    h.state.dispId = 2 // pointer was resting over monitor 2 when the tick fired
+    h.state.currentDisplayId = 2
+    await h.sp._test.describeForWindow('w1')
+    expect(h.sp.currentFreshContext()).not.toBeNull()
+
+    h.state.currentDisplayId = 1 // pointer back on the monitor the focused window is actually on
+    expect(h.sp.currentFreshContext()).toBeNull()
+  })
+
+  it('MQA-183 — a frame main already flagged as the wrong monitor is never cached at all', async () => {
+    const h = makeHarness()
+    h.sp.refresh()
+    h.setWindow('w1')
+    h.state.displayMismatch = true
+    await h.sp._test.describeForWindow('w1')
+    expect(h.peek()).toBeNull()
+    expect(h.fetchCalls()).toBe(0) // and no inference is spent describing it
   })
 })

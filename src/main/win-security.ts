@@ -19,7 +19,8 @@
 import { execFileSync } from 'node:child_process'
 import { closeSync, fstatSync, openSync, readFileSync, statSync, type Stats } from 'node:fs'
 import { join } from 'node:path'
-import log from 'electron-log'
+// Via logger.ts, never `electron-log` directly — see the note on the same import in updater.ts.
+import { mainLog as log } from './logger'
 
 // Invoke Windows system tools by ABSOLUTE %SystemRoot%\System32 path, never bare name. Windows'
 // CreateProcess search order includes the current working directory, so a bare `powershell`/`icacls`

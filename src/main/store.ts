@@ -334,14 +334,27 @@ function tryRecoveredSettings(): Record<string, unknown> | null {
   return recovered
 }
 
-/** Sparse user overrides (only keys the user actually changed). Decrypts at-rest encryption. */
-function readUserRaw(): Record<string, unknown> {
+/**
+ * Sparse user overrides (only keys the user actually changed). Decrypts at-rest encryption.
+ *
+ * Returns `null` — NOT `{}` — when settings.json exists but the read itself threw (EPERM/EACCES/EBUSY/
+ * EIO/EISDIR: an AV/EDR or backup lock, a broken ACL, a redirected or roaming %APPDATA% share). A read
+ * that FAILED is not "the user has no settings": collapsing the two let setSettings merge a one-key
+ * patch onto {} and rename it over the only copy of the profile, wiping meetingsFolder, contextDocs,
+ * mcpConnections and everything else with no `.recovered` backup to undo it. Only ENOENT — the file
+ * genuinely is not there — means "no overrides". Callers must handle `null` explicitly: getSettings
+ * degrades to DEFAULT+managed so the app still runs, setSettings refuses to write.
+ */
+function readUserRaw(): Record<string, unknown> | null {
   let buf: Buffer
   try {
     buf = readFileSync(settingsPath())
-  } catch {
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code !== 'ENOENT') return null
     // No live file — nothing to preserve, but a previous unreadable-settings event may have already left
     // a `.recovered` sibling behind (e.g. an update wiped settings.json outright). Try it before giving up.
+    // Deliberately NOT reached for an unreadable-but-present file: merging a stale `.recovered` over a
+    // live settings.json we simply could not open is the same data loss with extra steps.
     return tryRecoveredSettings() ?? {}
   }
 
@@ -493,7 +506,12 @@ export function getSettings(): Settings {
   // Layering: DEFAULT < managed (org policy, live) < user overrides.
   const managed = validatedManaged()
   const base = { ...DEFAULT_SETTINGS, ...managed }
-  const raw = readUserRaw()
+  // null = settings.json is there but could not be read right now (see readUserRaw). Serve DEFAULT+managed
+  // so the app still starts and every IPC handler still answers, but never memoise that snapshot below:
+  // the live file's mtime is unchanged, so a cached "no overrides" would outlive the lock and keep showing
+  // a fresh-install-shaped profile until something happened to touch the file.
+  const stored = readUserRaw()
+  const raw = stored ?? {}
   // Migration: 'together' and 'fireworks' were removed as LLM providers. A settings.json written before
   // the removal may still name one as the active provider — coerce it back to the default so a stale
   // value never resurfaces a provider the UI no longer offers. (managed-config is already filtered
@@ -519,11 +537,6 @@ export function getSettings(): Settings {
   // needed. The migration was also actively harmful: its `!('privateView' in raw)` guard re-fired on
   // every legitimate contentProtection=false write (privateView is rarely in the sparse user layer),
   // deleting the change and snapping the window back to hidden — the "visible toggle is broken" bug.
-  // Locked keys are authoritative on READ too, not just on write: a value persisted before a lock (or a
-  // hand-edited settings.json) must not override the managed/default value. Strip locked keys from the
-  // user layer so org policy always wins.
-  const lockedKeys = getLockedKeys()
-  if (lockedKeys.length) for (const k of lockedKeys) delete (raw as Record<string, unknown>)[k]
   // Migration: bidstackEndpointUrl/bidstackConnected/bidstackTools → mcpConnections[{id:'bidstack',...}].
   // Guarded on mcpConnections being ABSENT/EMPTY, never on the legacy keys' presence — re-deriving from
   // stale legacy keys on every read would silently clobber a user who deliberately disconnected BidStack
@@ -535,6 +548,12 @@ export function getSettings(): Settings {
   // touches the connection card (reconnect/disconnect/save), setSettings({ mcpConnections: [...] })
   // persists the new shape for real and the legacy keys become permanently inert.
   migrateLegacyBidstackConnection(raw)
+  // Locked keys are authoritative on READ too, not just on write: a value persisted before a lock (or a
+  // hand-edited settings.json) must not override the managed/default value. Strip locked keys from the
+  // user layer so org policy always wins. Runs AFTER every migration above so a migration's synthesized
+  // value is stripped too — a legacy field must not be able to resurrect a key IT has locked.
+  const lockedKeys = getLockedKeys()
+  if (lockedKeys.length) for (const k of lockedKeys) delete (raw as Record<string, unknown>)[k]
   // Task MI-5 (hardened — QA #9): publishBrainPages is EXPLICIT opt-in only (schema default false). It is
   // deliberately NEVER derived from `!encryptTranscripts`. Deriving it meant turning at-rest encryption
   // OFF (an unrelated action) silently flipped publishing ON and materialized a full Dust-readable wiki
@@ -571,7 +590,8 @@ export function getSettings(): Settings {
     value = repaired.success ? repaired.data : SettingsSchema.parse(DEFAULT_SETTINGS) // always valid
   }
 
-  _settingsCache = { value, ...m }
+  // Only memoise a result derived from a settings.json we could actually read — see `stored` above.
+  if (stored !== null) _settingsCache = { value, ...m }
   return value
 }
 
@@ -629,7 +649,16 @@ export function setSettings(patch: Partial<Settings>): Settings {
   if (pm && typeof pm === 'object' && 'dust' in pm && !String(pm.dust ?? '').trim()) {
     pm.dust = DUST_BASE_AGENT_ID
   }
-  const next = { ...readUserRaw(), ...allowed }
+  // Fail closed when settings.json is present but unreadable (readUserRaw returns null). This write is a
+  // read-merge-rename over the only copy of the profile, so merging onto "no overrides" would erase every
+  // setting the user ever saved — with no `.recovered` backup, because nothing was ever read to preserve.
+  const prev = readUserRaw()
+  if (prev === null) {
+    throw new Error(
+      `Couldn't save settings — Métis can't read its existing settings file at ${settingsPath()}, and saving now would erase everything already saved there. This is usually antivirus, a backup tool, or a synced profile folder holding the file open. Try again in a moment.`
+    )
+  }
+  const next = { ...prev, ...allowed }
   // Atomic write: a crash mid-write must not corrupt settings.json and wipe every setting + context doc.
   // Encrypted at rest (context docs + profile PII never hit disk as plaintext).
   const p = settingsPath()

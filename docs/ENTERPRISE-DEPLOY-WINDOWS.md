@@ -16,6 +16,22 @@ Companion docs: `SIGNING.md` (cert/env reference) · `MANTU-IT-REQUEST.md` (owne
 
 Both executables embed the on-device ASR models (~2.2 GB) — no first-run download, works offline.
 
+## Required egress
+
+Transcription needs none of this — the ASR models are in the executable (above). One capability does
+reach the network on first launch:
+
+| Host | When | Why | If blocked |
+|---|---|---|---|
+| `huggingface.co` and the CDN host it redirects to | Once, on first launch, per user profile | Fetches the ~730 MB Métis Local (Qwen3.5 0.8B) weights into `%APPDATA%\Métis\local-llm\models\qwen3.5-0.8b\`. They are deliberately **not** in the installer: a universal package carrying them would exceed GitHub's 2 GB per-asset release limit. The URL is pinned to an immutable upstream commit and the files are size- and SHA-256-verified before use. | Métis Local stays unavailable and the app falls back to the configured cloud/CLI provider. Settings → AI → Local AI reports the failed download and the next launch retries. Transcription and everything else are unaffected. |
+
+The request goes through the machine's configured proxy (`HTTP(S)_PROXY`, the Windows system proxy, or a
+PAC script), so a proxy-only fleet works as long as the host is allowed.
+
+To roll out without that egress: pre-place `model.gguf` and `mmproj.gguf` in the path above via your
+deployment tooling (sizes and hashes must match `src/main/llm/local-models.ts`), or have users turn
+**Settings → AI → Local AI → Enable Métis Local** off, which skips the download entirely.
+
 ## Signing model (current state)
 
 Builds are Authenticode-signed with an **internal self-signed certificate**:

@@ -72,3 +72,44 @@ describe('calendarToday — local-day window (MQA-026)', () => {
     expect(end).toBe('2026-08-09T00:00:00.000Z')
   })
 })
+
+// MQA-189 — the Graph call must carry a deadline. A proxy or captive portal that completes the TLS
+// handshake and then silently drops leaves an unbounded fetch waiting on undici's 300 s default, and
+// nothing above calendarToday bounds it (the IPC handler, preload and AgendaView all just await), so the
+// tray panel sits on "Loading agenda…" for five minutes with no error and no cancel. The already-written
+// "Calendar unavailable — try again." branch can only fire if something makes the fetch reject.
+describe('calendarToday — bounded Graph fetch (MQA-189)', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    vi.restoreAllMocks()
+    vi.clearAllMocks()
+  })
+
+  it('MQA-189 aborts a black-holed Graph request and reports it as unavailable instead of spinning', async () => {
+    const timeoutSpy = vi.spyOn(AbortSignal, 'timeout')
+    const stall = new AbortController()
+    timeoutSpy.mockReturnValue(stall.signal)
+
+    // The black-holing proxy: the response never arrives, so the signal is the ONLY thing that can end
+    // this call — exactly as undici behaves, rejecting with a TimeoutError DOMException on abort.
+    const fetchMock = vi.fn(
+      (_url: string, init: { signal?: AbortSignal }) =>
+        new Promise((_resolve, reject) => {
+          init.signal?.addEventListener('abort', () =>
+            reject(new DOMException('The operation was aborted due to timeout', 'TimeoutError'))
+          )
+        })
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    const pending = calendarToday('Europe/Paris')
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1))
+    const [, init] = fetchMock.mock.calls[0] as unknown as [string, { signal?: AbortSignal }]
+
+    expect(init.signal).toBeInstanceOf(AbortSignal)
+    expect(timeoutSpy).toHaveBeenCalledWith(10_000) // the same bound license.ts:25 uses for its own POST
+
+    stall.abort(new DOMException('The operation was aborted due to timeout', 'TimeoutError'))
+    await expect(pending).resolves.toEqual({ ok: false, error: 'Calendar unavailable — try again.' })
+  })
+})

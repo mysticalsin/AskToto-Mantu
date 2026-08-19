@@ -219,6 +219,12 @@ export interface AnswerState {
   // AND still carry the trust chip (previously the chip only showed when label was the literal string
   // 'Viewed screen', which overwrote — and so could never coexist with — the user's actual question).
   usedScreen?: boolean
+  // True when this answer ASKED for the screen fast path and main reported it had no screen context left
+  // to inject (MQA-180: the description expired, focus moved, or Private View went on between the ask and
+  // the send — routine on a Retry / "Go deeper" replay, which re-sends the intent flag minutes later).
+  // The badge above is already cleared by then; this is what lets the UI say WHY, instead of degrading
+  // silently — the same contract the live capture path holds for a failed capture.
+  screenMissed?: boolean
   // True only for AMBIENT auto-suggestions (req.mode === 'suggest'). Gates the copilot auto-dismiss
   // TTL: user-initiated turns on the same surface (typed questions, Assist, quick actions) must stay
   // until the user acts — auto-wiping them 4-7s after they finish is data loss (and a WCAG 2.2.1 miss).
@@ -330,7 +336,22 @@ export function useAsk(): {
     })
     const offMeta = window.toto.onMeta((m: StreamMeta) => {
       if (m.id !== idRef.current) return
-      setAnswer((a) => (a && a.id === m.id ? { ...a, provider: m.provider, tier: m.tier } : a))
+      setAnswer((a) =>
+        a && a.id === m.id
+          ? {
+              ...a,
+              provider: m.provider,
+              tier: m.tier,
+              // Screen grounding is MAIN's verdict, not ours: run() below can only set usedScreen from
+              // the INTENT flag it sent, and on the fast path main decides at send time whether its
+              // on-device description still existed (MQA-180). Absent = no verdict (plain/vision asks),
+              // so the optimistic value stands.
+              ...(m.usedScreen === undefined
+                ? {}
+                : { usedScreen: m.usedScreen, screenMissed: !m.usedScreen })
+            }
+          : a
+      )
     })
     const offErr = window.toto.onError((e: StreamError) => {
       if (e.id !== idRef.current) return
@@ -345,7 +366,18 @@ export function useAsk(): {
       pendingReplaceRef.current = false
       setAnswer((a) =>
         a
-          ? { ...a, streaming: false, error: aborted ? null : e.message, text: !aborted && noOutput ? '' : a.text }
+          ? {
+              ...a,
+              streaming: false,
+              error: aborted ? null : e.message,
+              text: !aborted && noOutput ? '' : a.text,
+              // No output means no answer — so the "Viewed screen" badge (and the Bar's freshness chip it
+              // gates) has nothing left to describe. Main can reject an ask BEFORE any provider attempt,
+              // e.g. Private View refusing a replayed screenshot (MQA-182); leaving the badge up would
+              // claim a screen this request never sent. A partial answer keeps its badge: it really did
+              // see the screen.
+              usedScreen: !aborted && noOutput ? false : a.usedScreen
+            }
           : aborted
             ? null
             : { id: e.id, text: '', streaming: false, error: e.message, prompt: '' }

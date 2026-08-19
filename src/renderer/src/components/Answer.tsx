@@ -355,7 +355,12 @@ export const Answer = memo(function Answer({
         {header}
         {notice}
         <div className="rounded-lg border border-[var(--color-hair-soft)] bg-white/[0.03] px-3 py-6 text-center text-[13px] text-[color:var(--color-ink-2)]">
-          Ask a question or press {accelLabel(captureAccel ?? 'CommandOrControl+Shift+S')} to capture your screen.
+          {/* Capture can be UNBOUND ('' is the unbind sentinel — see the shortcuts schema in shared/ipc.ts),
+              so never print a key hint with an empty key in it. Point at the bar's camera button instead,
+              which is always there. Same truthfulness rule Bar.tsx:555 already applies to its tooltip. */}
+          {captureAccel
+            ? `Ask a question or press ${accelLabel(captureAccel)} to capture your screen.`
+            : 'Ask a question, or use the camera button in the bar to capture your screen.'}
         </div>
       </div>
     )

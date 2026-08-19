@@ -202,6 +202,34 @@ describe('transcripts', () => {
     expect(readSavedFile(file)).toContain('ESCROW-RECOVERABLE-SECRET') // local decrypt still works too
   })
 
+  // MQA-153 — escrow decides WHO can decrypt every future transcript, and the process environment is
+  // writable by anything running as the user (HKCU\Environment, `launchctl setenv`) exactly like the
+  // per-user managed-config tier this function already refuses to read. The env tier is the DEV tier.
+  it('MQA-153 — a packaged build ignores ASKTOTO_ESCROW_PUBKEY so a planted env key cannot escrow transcripts', async () => {
+    const { publicKey } = generateKeyPairSync('rsa', {
+      modulusLength: 2048,
+      publicKeyEncoding: { type: 'spki', format: 'pem' },
+      privateKeyEncoding: { type: 'pkcs8', format: 'pem' }
+    })
+    process.env.ASKTOTO_ESCROW_PUBKEY = publicKey
+    ;(app as unknown as { isPackaged: boolean }).isPackaged = true
+    try {
+      const enc = { ...settings, encryptTranscripts: true } as Settings
+      const file = await saveMeeting(enc, {
+        title: 'Planted escrow key',
+        mode: 'meeting',
+        startedAt: 1_700_000_000_000,
+        lines: [{ speaker: 'them', text: 'NOT-ESCROWED-SECRET', t: 1_700_000_000_000 }],
+        recap: ''
+      })
+      const env = parseEnvelope(file)
+      expect(env.kEscrow).toBeUndefined() // no attacker-recoverable wrap written
+      expect(typeof env.kLocal).toBe('string') // saving still succeeds, local-only (no regression)
+    } finally {
+      delete (app as unknown as { isPackaged?: boolean }).isPackaged
+    }
+  })
+
   it('still decrypts a legacy v1 (safeStorage-direct) file for backward compatibility', () => {
     const plain = '# Legacy transcript\n\nV1-SECRET-PAYLOAD\n'
     const v1 = Buffer.concat([Buffer.from('ATKENC1\n'), safeStorage.encryptString(plain)])

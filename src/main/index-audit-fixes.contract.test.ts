@@ -338,10 +338,13 @@ describe('MQA-081 — a wrong-monitor capture is flagged and keyed to the displa
     expect(resolveCapture()({ display_id: '' }, undefined, { id: 22 })).toEqual({ displayMismatch: false, dispId: 22 })
   })
 
-  it('carries the flag out to the caller, through the cache as well as a fresh capture', () => {
+  it('carries the flag AND the captured display out to the caller, through the cache as well as a fresh capture', () => {
+    // MQA-183 added dispId to the same two returns: a consumer that CACHES a derived artifact (the
+    // background screen description) needs to know which monitor the frame was of, not just that main
+    // noticed a mismatch. Both fields travel on both paths or the cache-hit path silently drops them.
     expect(indexSrc).toMatch(/type CapturedScreen = \{[^}]*displayMismatch: boolean/)
-    expect(indexSrc).toMatch(/return \{ image, width, height, capturedAt: ts, displayMismatch \}/)
-    expect(indexSrc).toMatch(/return \{ image, width, height, capturedAt, displayMismatch \}/)
+    expect(indexSrc).toMatch(/return \{ image, width, height, capturedAt: ts, dispId, displayMismatch \}/)
+    expect(indexSrc).toMatch(/return \{ image, width, height, capturedAt, dispId, displayMismatch \}/)
   })
 
   it('keeps the "captured a different display" guard as a real check, not a tautology', () => {

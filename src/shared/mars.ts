@@ -27,8 +27,8 @@ export interface MarsMeetingRow {
 }
 
 export interface MarsWeek {
-  weekStart: string // ISO date (inclusive)
-  weekEnd: string // ISO date (inclusive)
+  weekStart: string // local calendar day, YYYY-MM-DD (inclusive)
+  weekEnd: string // local calendar day, YYYY-MM-DD (inclusive)
   meetings: MarsMeetingRow[]
   newAccounts: string[] // accounts whose FIRST recorded meeting is inside the week
   won: { name: string; account: string }[] // human-marked outcomes only
@@ -42,7 +42,26 @@ export interface MarsWeek {
   pipelineValue: { currency: string; total: number }[]
 }
 
-const isoDay = (t: number): string => new Date(t).toISOString().slice(0, 10)
+/**
+ * Local (not UTC) calendar-day key, "YYYY-MM-DD" — the same rule History groups by
+ * (RecallView.localDateKey), so the draft dates a meeting on the day the user actually held it.
+ * Meeting frontmatter carries a full ISO instant (`new Date(started).toISOString()`), and slicing
+ * that to 10 characters yields the UTC day: west of UTC every evening meeting would be reported on
+ * the following day, and the 7-day window would slide with it.
+ */
+function localDay(when: string | number): string {
+  // A bare `YYYY-MM-DD` frontmatter date (common in hand-authored and vault-exported transcripts —
+  // see ingest.ts's readFrontmatterDate) is already a calendar day with no instant attached. Parsing
+  // it would read it as UTC midnight and shift it a day west of UTC, inventing an offset that was
+  // never in the data.
+  if (typeof when === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(when)) return when
+  const d = new Date(when)
+  // Deal meeting refs (touchedThisWeek) never pass through `parse`, so an unparseable date reaches
+  // here; the raw prefix keeps the string comparisons below ordered instead of poisoning every one
+  // of them with "Invalid Date".
+  if (isNaN(d.getTime())) return String(when).slice(0, 10)
+  return d.toLocaleDateString('en-CA')
+}
 
 function parse(d: string): number {
   const t = new Date(d).getTime()
@@ -50,18 +69,18 @@ function parse(d: string): number {
 }
 
 /**
- * Assemble the week's factual skeleton. The week is the 7 days ending at `now` (inclusive) — Mars is
+ * Assemble the week's factual skeleton. The week is the 7 LOCAL calendar days ending at `now` (inclusive) — Mars is
  * filled at week's end, so "the last 7 days" is the window that matters.
  */
 export function buildMarsWeek(extractions: MeetingExtraction[], deals: DealEntity[], now: number): MarsWeek {
   const end = now
   const start = now - 6 * DAY
-  const startDay = isoDay(start)
-  const endDay = isoDay(end)
+  const startDay = localDay(start)
+  const endDay = localDay(end)
 
   const dated = extractions.filter((x) => Number.isFinite(parse(x.date)))
   const inWeek = (x: MeetingExtraction): boolean => {
-    const d = x.date.slice(0, 10)
+    const d = localDay(x.date)
     return d >= startDay && d <= endDay
   }
 
@@ -71,7 +90,7 @@ export function buildMarsWeek(extractions: MeetingExtraction[], deals: DealEntit
     const name = x.account?.name?.trim()
     if (!name) continue
     const key = name.toLowerCase()
-    const day = x.date.slice(0, 10)
+    const day = localDay(x.date)
     const prev = firstSeen.get(key)
     if (!prev || day < prev) firstSeen.set(key, day)
   }
@@ -80,7 +99,7 @@ export function buildMarsWeek(extractions: MeetingExtraction[], deals: DealEntit
   const meetings: MarsMeetingRow[] = week.map((x) => {
     const account = x.account?.name?.trim() ?? ''
     return {
-      date: x.date.slice(0, 10),
+      date: localDay(x.date),
       title: x.title24 || '(untitled)',
       account,
       stage: x.deal?.stage ?? '',
@@ -95,7 +114,7 @@ export function buildMarsWeek(extractions: MeetingExtraction[], deals: DealEntit
   // Outcomes are only ever set by explicit human action (see DealEntitySchema) — safe to report as fact.
   // A deal counts for THIS week when its most recent meeting falls inside the window.
   const touchedThisWeek = (d: DealEntity): boolean =>
-    d.meetings.some((m) => m.date && m.date.slice(0, 10) >= startDay && m.date.slice(0, 10) <= endDay)
+    d.meetings.some((m) => m.date && localDay(m.date) >= startDay && localDay(m.date) <= endDay)
   const won = deals.filter((d) => d.outcome === 'won' && touchedThisWeek(d)).map((d) => ({ name: d.name, account: d.account }))
   const lost = deals.filter((d) => d.outcome === 'lost' && touchedThisWeek(d)).map((d) => ({ name: d.name, account: d.account }))
   const atRisk = deals

@@ -173,6 +173,33 @@ describe('HedgeRace', () => {
     })
   })
 
+  // MQA-151: once a winner exists it is the ONLY leg that can still be heard — the loser is aborted and
+  // startHedgeLeg refuses to launch a backup. markDead ignored `winner` entirely, so the still-true
+  // hedgeMayStart read as "the backup might answer": a winner that died mid-stream (idle watchdog at +45s,
+  // a socket reset after its first token) was told to stay quiet, and index.ts's onError then sent neither
+  // streamError nor streamDone and never released the combined streams entry — a spinner that never stops.
+  describe('MQA-151: a decided race — the winner dying mid-stream surfaces, a loser still suppresses', () => {
+    it('MQA-151 — the winning leg dying after its first token surfaces instead of hanging forever', () => {
+      const race = new HedgeRace()
+      race.setHedgeStarter(vi.fn()) // a backup is still nominally startable — the stale "might answer"
+      race.declareWinner('primary')
+      expect(race.markDead('primary')).toBe('surface')
+    })
+
+    it('MQA-151 — a leg that already LOST still suppresses, so it cannot overwrite the winner', () => {
+      const race = new HedgeRace()
+      race.declareWinner('primary')
+      expect(race.markDead('hedge')).toBe('suppress')
+    })
+
+    it('MQA-151 — holds with the hedge as winner too', () => {
+      const race = new HedgeRace()
+      race.declareWinner('hedge')
+      expect(race.markDead('hedge')).toBe('surface')
+      expect(race.markDead('primary')).toBe('suppress')
+    })
+  })
+
   describe('abortAll — user cancel mid-race', () => {
     it('aborts whichever handles are currently registered', () => {
       const race = new HedgeRace()
@@ -270,5 +297,51 @@ describe('MQA-143/144: the race reports the right provider and releases its hand
     const err = indexSrc.indexOf('win?.webContents.send(IPC.streamError, { id: req.id, message: friendly })')
     expect(err).toBeGreaterThan(-1)
     expect(indexSrc.slice(err - 320, err)).toMatch(/if \(race\) streams\.delete\(req\.id\)/)
+  })
+})
+
+/**
+ * MQA-161 — the dispatcher half of "exactly two legs, on two DIFFERENT providers". Pinned against the real
+ * source for the same reason as MQA-134/143/144 above: startHedgeLeg()/attempt() are closures inside
+ * index.ts's askStart handler, which boots Electron at import time.
+ *
+ * The defect: the backup was picked with pickFailover([primary]) against the id the primary leg STARTED
+ * on. A leg that fails over keeps its leg identity, so by t = HEDGE_DELAY_MS the primary may already be
+ * streaming from provider X while pickFailover still counted X untried — and, pickFailover being pure with
+ * identical inputs, it returned exactly X. Two byte-identical requests (full system prompt + transcript,
+ * and on a vision ask the whole base64 screenshot) billed to one provider, both sharing one failure mode.
+ */
+describe('MQA-161: the hedge backup is picked against every provider the primary leg actually reached', () => {
+  const indexSrc = readFileSync(join(__dirname, '..', 'index.ts'), 'utf8')
+
+  it('MQA-161 — attempt() records the live provider chain of the primary leg', () => {
+    const at = indexSrc.indexOf('const primaryChain: ProviderId[] = []')
+    expect(at, 'no primaryChain — the hedge can still race the provider the primary moved to').toBeGreaterThan(-1)
+    const attemptAt = indexSrc.indexOf('const attempt = (provider: ProviderId')
+    expect(attemptAt).toBeGreaterThan(-1)
+    // Recorded on ENTRY, before any eligibility work, so a provider the primary bounced off still counts.
+    expect(indexSrc.slice(attemptAt, attemptAt + 400)).toMatch(
+      /race\?\.leg === 'primary' &&[\s\S]*primaryChain\.push\(provider\)/
+    )
+  })
+
+  it('MQA-161 — startHedgeLeg excludes the whole chain, not just the original primary id', () => {
+    const at = indexSrc.indexOf('function startHedgeLeg(): void {')
+    expect(at).toBeGreaterThan(-1)
+    const body = indexSrc.slice(at, indexSrc.indexOf('race.setHedgeStarter(startHedgeLeg)', at))
+    expect(body).not.toMatch(/pickFailover\(\[primary\]\)/)
+    expect(body).toMatch(/const tried = primaryChain\.slice\(\)/)
+    expect(body).toMatch(/pickFailover\(tried\)/)
+    // ...and the hedge leg carries the same exclusion into its OWN failover cascade, or it walks straight
+    // back onto the provider the primary is streaming from.
+    expect(body).toMatch(/attempt\(backup, tried, 0, \{ gate: race, leg: 'hedge' \}\)/)
+  })
+
+  it('MQA-161 — no eligible backup outside the chain still reports the hedge unavailable', () => {
+    const at = indexSrc.indexOf('function startHedgeLeg(): void {')
+    const body = indexSrc.slice(at, indexSrc.indexOf('race.setHedgeStarter(startHedgeLeg)', at))
+    // markHedgeUnavailable is what lets markDead('primary') surface instead of promising a leg that will
+    // never run — the permanent-spinner failure hedge.ts's own comment warns about.
+    expect(body).toMatch(/if \(!backup\) \{[\s\S]{0,40}race\.markHedgeUnavailable\(\)/)
   })
 })

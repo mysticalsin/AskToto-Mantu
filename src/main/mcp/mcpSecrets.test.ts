@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { mkdtempSync, rmSync, existsSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, rmSync, existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { app } from 'electron'
@@ -227,6 +227,74 @@ describe('mcpSecrets — MCP connection API key storage, keyed by connectionId',
       )
       const second = await import('./mcpSecrets')
       expect(second.getMcpRefreshToken('clickup')).toBe('reloaded-refresh-token')
+    })
+  })
+
+  describe('durable writes — a failed save must not destroy the credential it was replacing', () => {
+    // Node opens with 'w', which truncates the existing file before the first new byte lands. Anything
+    // that fails after that open (ENOSPC, EIO, an EDR/AV handle denial, a hard kill) leaves a 0-byte or
+    // partial blob exactly where the previous ciphertext was — and it reads back as "no credential".
+    async function reloadWithFailingWriteOn(match: string) {
+      vi.resetModules()
+      const realFs = await vi.importActual<typeof import('node:fs')>('node:fs')
+      vi.doMock('node:fs', () => ({
+        ...realFs,
+        default: realFs,
+        writeFileSync: (p: Parameters<typeof realFs.writeFileSync>[0], data: unknown, opts?: unknown) => {
+          if (String(p).includes(match)) {
+            realFs.writeFileSync(p, Buffer.alloc(0)) // the O_TRUNC half already landed…
+            throw Object.assign(new Error('ENOSPC: no space left on device, write'), { code: 'ENOSPC' })
+          }
+          return (realFs.writeFileSync as (...a: unknown[]) => void)(p, data, opts)
+        }
+      }))
+      return reimport()
+    }
+
+    async function reimport() {
+      const electron = await import('electron')
+      ;(electron.app.getPath as ReturnType<typeof vi.fn>).mockImplementation((name: string) =>
+        name === 'userData' ? userData : join(userData, name)
+      )
+      return import('./mcpSecrets')
+    }
+
+    afterEach(() => {
+      vi.doUnmock('node:fs')
+    })
+
+    it('MQA-171 — a write that fails after the file is opened leaves the previous refresh token intact', async () => {
+      const seed = await import('./mcpSecrets')
+      seed.setMcpRefreshToken('clickup', 'still-valid-refresh-token')
+      const p = join(userData, 'key-mcp-clickup-refresh.bin')
+      const before = readFileSync(p)
+
+      const failing = await reloadWithFailingWriteOn('key-mcp-clickup-refresh.bin')
+      expect(() => failing.setMcpRefreshToken('clickup', 'rotated-refresh-token')).toThrow(
+        /Couldn't save the refresh token/
+      )
+
+      vi.doUnmock('node:fs')
+      vi.resetModules()
+      const after = await reimport()
+      expect(readFileSync(p)).toEqual(before)
+      expect(after.getMcpRefreshToken('clickup')).toBe('still-valid-refresh-token')
+      expect(existsSync(`${p}.tmp`)).toBe(false)
+    })
+
+    it('MQA-171 — a failed API-key save leaves the previously saved key readable', async () => {
+      const seed = await import('./mcpSecrets')
+      seed.setMcpApiKey('plane', 'plane-key-in-use')
+      const p = join(userData, 'key-mcp-plane.bin')
+
+      const failing = await reloadWithFailingWriteOn('key-mcp-plane.bin')
+      expect(() => failing.setMcpApiKey('plane', 'plane-key-replacement')).toThrow(/Couldn't save the API key/)
+
+      vi.doUnmock('node:fs')
+      vi.resetModules()
+      const after = await reimport()
+      expect(after.getMcpApiKey('plane')).toBe('plane-key-in-use')
+      expect(existsSync(`${p}.tmp`)).toBe(false)
     })
   })
 })

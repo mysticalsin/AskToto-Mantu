@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { mkdtempSync, rmSync, existsSync, readFileSync, writeFileSync, readdirSync, statSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, rmSync, existsSync, readFileSync, writeFileSync, readdirSync, statSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { tmpdir } from 'node:os'
 import type { Settings } from '@shared/ipc'
@@ -8,12 +8,14 @@ import {
   AccountEntitySchema,
   PersonEntitySchema,
   MeetingExtractionSchema,
+  BrainIndexSchema,
   type DealEntity,
   type ProvenanceState,
   type Confidence,
   type MeetingExtraction
 } from '@shared/brain'
-import { writeDeal, writeAccount, writePerson, writeMeetingExtraction, slugify } from './store'
+import { writeDeal, writeAccount, writePerson, writeMeetingExtraction, writeIndex, slugify } from './store'
+import { readAliasMap } from './corrections'
 import { ingestExtraction, whenIndexWritesSettle } from './ingest'
 import {
   publishEntity,
@@ -68,6 +70,25 @@ vi.mock('../transcripts', async (importOriginal) => {
       }
       if (readFaults.emptyOn.has(base)) return ''
       return actual.readSavedFile(path)
+    }
+  }
+})
+
+/**
+ * QA MQA-152 — readAliasMap is the OTHER full-corpus scan a publish run makes: corrections.ts's
+ * readEntityAliasMap raw-reads and decrypts every entity file (deliberately bypassing store.ts's cache)
+ * and then decodes the corrections journal. Counting its calls is how this file proves a batch publish
+ * builds it ONCE instead of once per note card. Partial mock — real implementation plus a counter —
+ * mirroring the ../transcripts wrapper above.
+ */
+const aliasScans = vi.hoisted(() => ({ n: 0 }))
+vi.mock('./corrections', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./corrections')>()
+  return {
+    ...actual,
+    readAliasMap: (...args: Parameters<typeof actual.readAliasMap>) => {
+      aliasScans.n += 1
+      return actual.readAliasMap(...args)
     }
   }
 })
@@ -578,6 +599,129 @@ describe('publish.ts — Task MI-5 markdown mirror', () => {
     })
   })
 
+  // ── MQA-152: the alias map is built once per batch publish, not once per note card ──────────────────
+
+  describe('MQA-152 — a batch publish builds the alias map once, not once per note card', () => {
+    const CARDS = ['2026-01-01_100000-alpha.md', '2026-02-01_100000-bravo.md', '2026-03-01_100000-charlie.md']
+
+    /** Three publishable note cards over a two-entity brain — enough that one scan per card is
+     *  unmistakable against one scan for the whole run. */
+    async function seedCards(): Promise<void> {
+      await writeAccount(s, 'acme', AccountEntitySchema.parse({ id: 'acme', name: 'Acme', aliases: [] }))
+      await writePerson(s, 'maria-silva', PersonEntitySchema.parse({ id: 'maria-silva', name: 'Maria Silva', aliases: [] }))
+      for (const [i, file] of CARDS.entries()) {
+        writeMeetingFile(folder, file, { date: `2026-0${i + 1}-01`, title: `Card ${i}` })
+        await writeMeetingExtraction(
+          s,
+          slugify(file),
+          MeetingExtractionSchema.parse({ account: { name: 'Acme' }, people: [{ name: 'Maria Silva' }], source_file: file })
+        )
+      }
+    }
+
+    it('MQA-152 — publishAll builds the alias map once for the whole regeneration, not once per meeting card', async () => {
+      await seedCards()
+      aliasScans.n = 0
+
+      await publishAll(s)
+
+      expect(aliasScans.n).toBe(1)
+      // The single scan is still the real alias resolution, not a skipped one.
+      const card = readFileSync(join(wikiDir(s), 'meetings', `${slugify(CARDS[0])}.md`), 'utf8')
+      expect(card).toContain('../people/maria-silva.md')
+      expect(card).toContain('../accounts/acme.md')
+    })
+
+    it('MQA-152 — publishForExtraction reuses the map ingest already built instead of rebuilding it for the card', async () => {
+      await seedCards()
+      const aliasMap = readAliasMap(s) // exactly what ingestExtraction hands it, one statement before the call
+      aliasScans.n = 0
+
+      const x = MeetingExtractionSchema.parse({
+        account: { name: 'Acme' },
+        people: [{ name: 'Maria Silva' }],
+        source_file: CARDS[0]
+      })
+      await publishForExtraction(s, x, { file: CARDS[0], date: '2026-01-01', title: 'Card 0' }, aliasMap)
+
+      expect(aliasScans.n).toBe(0)
+      expect(readFileSync(join(wikiDir(s), 'meetings', `${slugify(CARDS[0])}.md`), 'utf8')).toContain('../people/maria-silva.md')
+    })
+  })
+
+  // ── MQA-159: the confidential flag must reach team-folder transcripts too ───────────────────────────
+
+  describe("MQA-159 — a teammate's confidential meeting never reaches the published wiki", () => {
+    let teamFolder: string
+    let teamKey: string
+
+    beforeEach(() => {
+      teamFolder = mkdtempSync(join(tmpdir(), 'asktoto-team-test-'))
+      teamKey = `team/${teamFolder.split(/[\\/]/).pop()}/alice-pricing.md`
+      s = settingsFor(folder, { teamTranscriptFolders: [teamFolder] })
+    })
+    afterEach(() => rmSync(teamFolder, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }))
+
+    /** The deal this device's brain built out of the shared meeting. Ingest files a team transcript under
+     *  `team/<owner>/<file>` (ingest.ts's backfill scan), so that key — not a basename — is what its
+     *  MeetingRef and its commitments carry. The own meeting keeps the deal publishable, so the
+     *  assertions below are about what the page contains, not about whether it exists at all. */
+    async function seedDealFromTeamMeeting(): Promise<void> {
+      writeMeetingFile(folder, 'own.md', { date: '2026-01-01', title: 'Bob Kickoff' })
+      await writeDeal(
+        s,
+        'acme-renewal',
+        baseDeal({
+          id: 'acme-renewal',
+          name: 'Acme Renewal',
+          meetings: [
+            { file: 'own.md', date: '2026-01-01', title: 'Bob Kickoff' },
+            { file: teamKey, date: '2026-02-01', title: 'Alice Pricing Negotiation' }
+          ],
+          commitments: [
+            { text: 'drop the floor price to 40k', by: 'Alice', meeting: teamKey, date: '2026-02-01', status: 'open' }
+          ]
+        })
+      )
+    }
+
+    it('MQA-159 — a team-folder meeting flagged confidential is excluded from every published page', async () => {
+      writeMeetingFile(teamFolder, 'alice-pricing.md', { date: '2026-02-01', title: 'Alice Pricing Negotiation', confidential: true })
+      await seedDealFromTeamMeeting()
+
+      await publishAll(s)
+
+      const all = Object.values(snapshotDir(wikiDir(s))).join('\n')
+      expect(all).not.toContain('Alice Pricing Negotiation')
+      expect(all).not.toContain('drop the floor price to 40k')
+      expect(all).toContain('Bob Kickoff') // the own meeting still publishes as before
+    })
+
+    it('MQA-159 — an unreachable team folder fails CLOSED: an already-ingested team meeting stays unpublished', async () => {
+      // The refs live in .brain and outlive the share; the ingest index is the only durable record that
+      // this key is a team key at all once the folder is gone (revoked, offline, not yet synced).
+      await writeIndex(s, BrainIndexSchema.parse({ ingested: { [teamKey]: { at: 1, ok: true } } }))
+      await seedDealFromTeamMeeting()
+      rmSync(teamFolder, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
+
+      await publishAll(s)
+
+      const all = Object.values(snapshotDir(wikiDir(s))).join('\n')
+      expect(all).not.toContain('Alice Pricing Negotiation')
+      expect(all).not.toContain('drop the floor price to 40k')
+      expect(all).toContain('Bob Kickoff')
+    })
+
+    it('MQA-159 — a team meeting never publishes a note card built from the own same-named meeting', async () => {
+      writeMeetingFile(teamFolder, 'alice-pricing.md', { date: '2026-02-01', title: 'Alice Pricing Negotiation' })
+      writeMeetingFile(folder, 'alice-pricing.md', { date: '2026-03-01', title: 'Bob Unrelated Meeting' })
+
+      await publishMeetingCard(s, teamKey)
+
+      expect(existsSync(join(wikiDir(s), 'meetings', `${slugify('alice-pricing.md')}.md`))).toBe(false)
+    })
+  })
+
   // ── 4. Consent no-op ─────────────────────────────────────────────────────────────────────────────────
 
   describe('consent gate — publishBrainPages off is a true no-op everywhere', () => {
@@ -605,6 +749,29 @@ describe('publish.ts — Task MI-5 markdown mirror', () => {
       const r = removeWiki(s)
       expect(r.ok).toBe(true)
       expect(existsSync(wikiDir(s))).toBe(false)
+    })
+
+    // MQA-149: recallDeleteAll erases the mirror too, and `wiki/` sits INSIDE the user's own meetings
+    // folder — an arbitrary directory they chose (often OneDrive). An rm -rf of that root would take
+    // their unrelated files with it: the same unowned-data hazard isOwnedMeetingFile guards against in
+    // recall.ts's delete-all. So the wipe covers exactly what the publisher authors, nothing else.
+    it('MQA-149 — removeWiki erases every published page but never a file the user keeps under wiki/', async () => {
+      writeMeetingFile(folder, 'm1.md', { date: '2026-01-01' })
+      await writeAccount(s, 'acme', AccountEntitySchema.parse({ id: 'acme', name: 'Acme', aliases: [] }))
+      await publishAll(s)
+      const mine = join(wikiDir(s), 'my-own-notes.md')
+      writeFileSync(mine, '# not published by Metis\n', 'utf8')
+      mkdirSync(join(wikiDir(s), 'personal'), { recursive: true })
+      writeFileSync(join(wikiDir(s), 'personal', 'journal.md'), 'private\n', 'utf8')
+
+      const r = removeWiki(s)
+
+      expect(existsSync(mine)).toBe(true)
+      expect(readFileSync(join(wikiDir(s), 'personal', 'journal.md'), 'utf8')).toBe('private\n')
+      for (const own of ['accounts', 'people', 'deals', 'meetings', 'index.md', 'AGENTS.md', 'README.md', 'CLAUDE.md']) {
+        expect(existsSync(join(wikiDir(s), own)), own).toBe(false)
+      }
+      expect(r.ok).toBe(true)
     })
   })
 

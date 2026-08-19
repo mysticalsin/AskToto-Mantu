@@ -58,6 +58,12 @@ const withContext = (q: string, transcript: string): string =>
 
 // Soft, dismissible notice text for a multi-monitor screen-capture mismatch (see hasDisplayMismatch below).
 const CAPTURE_DISPLAY_MISMATCH_NOTICE = 'Captured a different monitor than your cursor — that may not be the right screen.'
+// Soft, dismissible notice for a screen ask that reached the model WITHOUT the screen (MQA-180). The fast
+// path sends an intent flag and main injects its own on-device description; a Retry / "Go deeper" replay
+// re-sends that flag long after the description expired, so the answer is text-only. Same voice as the
+// capture-failure copy above — the degrade is announced, never silent.
+const SCREEN_CONTEXT_LOST_NOTICE =
+  'Métis couldn’t see your screen for this answer. Answering from context only — ask again to re-capture.'
 // Defensive read of an optional main-process signal: `displayMismatch` isn't declared on CaptureResult yet
 // (shared/ipc.ts), so this is typed as an optional field on a minimal shape rather than asserted directly —
 // reads as `undefined`/falsy with zero changes needed here once main starts sending it.
@@ -87,6 +93,20 @@ const defaultMeetingTitle = (lines: TranscriptLine[], mode: ConversationMode): s
 // ids a save has already taken synchronously. Without the second check the rescue paths — leaving Review
 // with Escape, then starting the next session — all read savedRef as still-empty inside that window and
 // each persist the same transcript again: duplicate .md, duplicate index row, duplicate brain ingest.
+// Desk Tap Control refuses to arm on a profile calibrated against a different microphone (the mic is part
+// of the acoustic model). That refusal is a STANDING state — "paused until you recalibrate" — not an
+// event, so it is derived from the same settings snapshot useTapControl reads rather than latched in
+// React state. Latched, it was cleared by an effect keyed on `tapCfg?.profile`, which arrives as a fresh
+// object identity from every settings read, while the hook (keyed on a stable profile string) never
+// re-raised it: the warning vanished seconds after appearing and the feature went silently dead again.
+// Mirrors the hook's own condition, including "no explicit device selected" never counting as a mismatch.
+export function tapProfileMismatch(
+  tap: { enabled: boolean; profile: { micDeviceId: string } | null } | undefined,
+  micDeviceId: string | undefined
+): boolean {
+  return Boolean(tap?.enabled && tap.profile && micDeviceId && tap.profile.micDeviceId !== micDeviceId)
+}
+
 export function meetingSaveIsRedundant(
   lineCount: number,
   id: string,
@@ -94,6 +114,27 @@ export function meetingSaveIsRedundant(
   claimed: ReadonlySet<string>
 ): boolean {
   return lineCount === 0 || savedId === id || claimed.has(id)
+}
+
+// Errors cross the IPC boundary wrapped as "Error invoking remote method '<channel>': ..." — plumbing the
+// user must never be shown. Shared by the save path below and the two screen-capture catches.
+const IPC_INVOKE_WRAPPER = /^Error invoking remote method '[^']*':\s*(?:Error:\s*)?/
+
+// A failed transcript save used to show the raw rejection: the channel name, then an fs errno, then the
+// .tmp path of the atomic write. Nothing in that names a cause the user can clear, and main's 'Not signed
+// in.' throw arrived wearing the identical wrapper, so a dropped session and a locked file read the same.
+// Translate the causes we can actually diagnose into the one action that fixes each; keep the OS's own
+// words (minus the plumbing) for everything else, because a vaguer line would be less true, not kinder.
+// Every branch ends at the Save chip, which is genuinely armed in this state (Review.tsx's disabled rule).
+export function saveFailureReason(err: unknown): string {
+  const raw = (err instanceof Error ? err.message : String(err)).replace(IPC_INVOKE_WRAPPER, '')
+  if (/not signed in/i.test(raw)) return "you're signed out. Sign in, then press Save."
+  if (/\bENOSPC\b/.test(raw)) return 'the disk is full. Free up some space, then press Save.'
+  if (/\bEPERM\b|\bEACCES\b/.test(raw))
+    return "Métis isn't allowed to write to your meetings folder. Fix its permissions or pick another folder in Settings, then press Save."
+  if (/\bEBUSY\b/.test(raw)) return 'another program is holding the file open. Close it, then press Save.'
+  if (/\bENOENT\b/.test(raw)) return 'your meetings folder is missing. Pick a folder in Settings, then press Save.'
+  return raw
 }
 
 // How long a finished live copilot suggestion stays on screen before it auto-dismisses. Tony's call: a
@@ -381,10 +422,6 @@ export function App(): JSX.Element {
   // keeps showing the generated text (recapGenTarget stays set), but without this the refusal was
   // invisible and the user only discovered it on reopening the meeting, by which point it was gone.
   const [recapSaveError, setRecapSaveError] = useState<string | null>(null)
-  // True while Desk Tap Control is calibrated but refusing to arm because the profile belongs to a
-  // different microphone (useTapControl's onProfileMismatch). Recalibrating — or switching back to the
-  // mic it was calibrated on — clears it; see the effect next to the useTapControl call below.
-  const [tapMismatch, setTapMismatch] = useState(false)
   // Which Settings tab to open on (e.g. the bar's mode icon → 'personalize', calendar CTA → 'calendar').
   const [settingsInitialTab, setSettingsInitialTab] = useState<'personalize' | 'calendar' | 'ai' | undefined>(
     undefined
@@ -455,6 +492,11 @@ export function App(): JSX.Element {
   }, [savedPath])
   const [saveError, setSaveError] = useState<string | null>(null)
   const [saveAttempts, setSaveAttempts] = useState(0)
+  // The auto-save ladder is spent — no further attempt is scheduled. saveAttempts alone can't say this:
+  // it reaches MAX_SAVE_RETRIES a full backoff step BEFORE the last attempt runs, so reading the counter
+  // as "gave up" would announce a dead end while a retry was still pending. Set only where the retry loop
+  // actually stops, so the status line under the banner is true in both directions.
+  const [saveGaveUp, setSaveGaveUp] = useState(false)
   const MAX_SAVE_RETRIES = 5
   const [updateReady, setUpdateReady] = useState<{ open: boolean; version?: string; notes?: string; percent?: number }>({ open: false })
   const [newMeetingToast, setNewMeetingToast] = useState(false)
@@ -556,6 +598,18 @@ export function App(): JSX.Element {
   // lives in Bar's ScreenFreshnessChip (own 500ms interval), not here.
   const showingScreenChip = view === 'copilot' ? !!suggest.answer?.usedScreen : !!ask.answer?.usedScreen
 
+  // MQA-180: main reported this answer is NOT grounded in the screen even though the ask asked for the
+  // screen fast path — its cached description expired, focus moved, or Private View went on between the
+  // ask and the send (routine on a Retry / "Go deeper" replay, which re-sends the intent flag minutes
+  // later). The "Viewed screen" badge and the freshness chip already cleared themselves off that verdict;
+  // this says WHY, exactly as the live capture path announces its own degrade instead of quietly
+  // answering without the screen. Clears only its OWN notice, so a capture/permission notice underneath
+  // survives, and goes as soon as an answer is grounded again.
+  useEffect(() => {
+    if (ask.answer?.screenMissed) setCaptureError(SCREEN_CONTEXT_LOST_NOTICE)
+    else setCaptureError((prev) => (prev === SCREEN_CONTEXT_LOST_NOTICE ? null : prev))
+  }, [ask.answer?.screenMissed, ask.answer?.id])
+
   const manualSave = useCallback(async (): Promise<void> => {
     const a = ask.answer
     if (!a || a.streaming || !listen.lines.length) return
@@ -572,9 +626,11 @@ export function App(): JSX.Element {
       setSavedPath(r.path)
       setSaveError(null)
       setSaveAttempts(0)
+      setSaveGaveUp(false)
     } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e)
-      setSaveError(msg)
+      // A manual retry that fails does NOT restart the ladder, so saveGaveUp stays as it was: still true
+      // after a give-up (the terminal line remains correct), still false while the ladder is running.
+      setSaveError(saveFailureReason(e))
     }
   }, [ask.answer, listen.lines, mode])
 
@@ -626,12 +682,16 @@ export function App(): JSX.Element {
         setSavedPath(r.path)
         setSaveError(null)
         setSaveAttempts(0)
+        setSaveGaveUp(false)
         return r.path
       } catch (e) {
-        const msg = e instanceof Error ? e.message : String(e)
-        setSaveError(msg)
+        setSaveError(saveFailureReason(e))
         if (saveAttempts < MAX_SAVE_RETRIES) {
           setSaveAttempts((c) => c + 1)
+        } else {
+          // Last rung: saveAttempts is this effect's only re-trigger, so leaving it alone here is what
+          // ends the ladder. Say so — the screen used to keep claiming "Retrying…" from here on.
+          setSaveGaveUp(true)
         }
         return null
       } finally {
@@ -955,10 +1015,7 @@ export function App(): JSX.Element {
         // lost across the boundary), so we match on the message content, not `instanceof`.
         // Errors cross the IPC boundary wrapped as "Error invoking remote method 'capture:screen': ..."
         // — strip the plumbing before showing anything to the user.
-        const raw = (e instanceof Error ? e.message : String(e)).replace(
-          /^Error invoking remote method '[^']*':\s*(?:Error:\s*)?/,
-          ''
-        )
+        const raw = (e instanceof Error ? e.message : String(e)).replace(IPC_INVOKE_WRAPPER, '')
         const needsScreenPermission = isScreenCapturePermissionError(raw)
         setCaptureError(
           /private view/i.test(raw)
@@ -1028,10 +1085,7 @@ export function App(): JSX.Element {
         // Private View and transient capture failures can use the transcript-only suggestion. A denied
         // screen permission cannot: that would turn a requested visual ask into an unannounced provider
         // request without the screen the user selected.
-        const raw = (e instanceof Error ? e.message : String(e)).replace(
-          /^Error invoking remote method '[^']*':\s*(?:Error:\s*)?/,
-          ''
-        )
+        const raw = (e instanceof Error ? e.message : String(e)).replace(IPC_INVOKE_WRAPPER, '')
         const needsScreenPermission = isScreenCapturePermissionError(raw)
         setCaptureError(
           /private view/i.test(raw)
@@ -1582,6 +1636,7 @@ export function App(): JSX.Element {
     // already-settled save promise be read as if it belonged to this one (see its own declaration comment).
     setSaveError(null)
     setSaveAttempts(0)
+    setSaveGaveUp(false)
     listen.clear()
     suggest.clear()
     followup.clear() // a new meeting is about to be viewed — a stale draft from whatever was reviewed
@@ -1748,7 +1803,7 @@ export function App(): JSX.Element {
             // Released only on a definitive give-up, mirroring the auto-save effect's "pin only on
             // success → failure can retry" rule: a later rescue must still get a chance to persist this.
             claimedSavesRef.current.delete(id)
-            setSaveError(e instanceof Error ? e.message : String(e))
+            setSaveError(saveFailureReason(e)) // same banner as the auto-save ladder — same plain words
             return null
           }
           await new Promise((r) => setTimeout(r, Math.min(1000 * 2 ** attempt, 8000)))
@@ -2223,11 +2278,9 @@ export function App(): JSX.Element {
   // hotkeys — zero new dispatch surface, every existing gate applies. Armed while enabled+calibrated,
   // narrowed to live sessions when armOnlyWhileListening (the default — no idle mic).
   const tapCfg = settings?.tapControl
-  // Cleared here rather than inside onProfileMismatch's counterpart because useTapControl only ever
-  // REPORTS a mismatch — it has no "matched again" callback. Declared before the hook so React runs it
-  // first in the same commit: on a still-mismatched profile the hook re-raises the flag straight after,
-  // and on a recalibration (or switching back to the calibrated mic) it stays down.
-  useEffect(() => setTapMismatch(false), [tapCfg?.profile, settings?.micDeviceId])
+  // Derived, never latched — see tapProfileMismatch. Recalibrating, switching back to the calibrated mic,
+  // or turning the feature off all resolve it on the next render with no callback to wire.
+  const tapMismatch = tapProfileMismatch(tapCfg, settings?.micDeviceId)
   useTapControl({
     active: Boolean(
       tapCfg?.enabled && tapCfg.profile && (!tapCfg.armOnlyWhileListening || listen.listening)
@@ -2241,11 +2294,7 @@ export function App(): JSX.Element {
       if (action && (HOTKEY_ACTIONS as string[]).includes(action)) {
         handlersRef.current(action as HotkeyAction)
       }
-    },
-    // The mic is part of the acoustic model, so the hook refuses to arm on a profile calibrated against a
-    // different one — and with no callback wired that refusal was completely silent: taps stopped working
-    // for good while Settings still showed Desk Tap Control enabled and "Calibrated and ready."
-    onProfileMismatch: () => setTapMismatch(true)
+    }
   })
 
   // Global Escape — the most-expected key on an overlay. Precedence, least to most destructive:
@@ -2600,6 +2649,7 @@ export function App(): JSX.Element {
         saveError={pm ? null : saveError}
         saveAttempts={pm ? 0 : saveAttempts}
         maxSaveAttempts={MAX_SAVE_RETRIES}
+        saveGaveUp={pm ? false : saveGaveUp}
         startedAt={pm ? pm.startedAt : meetingStartRef.current}
         showTranscript={settings?.showFullTranscriptInReview ?? false}
         meetingMeta={pm ? { title: pm.title, date: pm.date } : undefined}
@@ -2662,7 +2712,7 @@ export function App(): JSX.Element {
         }
       />
     )
-  }, [pastMeeting, recapGenTarget, recapGen.answer, ask.answer, listen.lines, savedPath, saveError, saveAttempts, settings?.showFullTranscriptInReview, settings?.mcpConnections, followup.answer, generateFollowup, requireProvider, generateSavedRecap, retryAnswer, manualSave, discardMeeting, resumePastMeeting, openPastMeeting, reset, recapSkipped, openSettings, mode, coaching.answer, generateColdCallCoaching, booking.answer, generateBookMeetings])
+  }, [pastMeeting, recapGenTarget, recapGen.answer, ask.answer, listen.lines, savedPath, saveError, saveAttempts, saveGaveUp, settings?.showFullTranscriptInReview, settings?.mcpConnections, followup.answer, generateFollowup, requireProvider, generateSavedRecap, retryAnswer, manualSave, discardMeeting, resumePastMeeting, openPastMeeting, reset, recapSkipped, openSettings, mode, coaching.answer, generateColdCallCoaching, booking.answer, generateBookMeetings])
   const answerBody = useMemo(() => {
     if (!(capturing || captureError || ask.answer)) return null
     // While a new screen capture is in flight (capturing), force the streaming/empty display even when

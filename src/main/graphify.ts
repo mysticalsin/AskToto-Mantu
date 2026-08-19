@@ -97,6 +97,11 @@ function graphJsonPath(): string {
 function graphHtmlPath(): string {
   return join(outDir(), 'graph.html')
 }
+/** graphify's own working directory: the runner chdirs into outDir(), and graphify writes its manifest
+ *  (and any cache) to `graphify-out/` relative to that cwd — see resources/graphify_runner.py. */
+function runnerOutDir(): string {
+  return join(outDir(), 'graphify-out')
+}
 
 // --- Python interpreter resolution (cached) -------------------------------------------------------
 
@@ -463,20 +468,29 @@ export function graphHtml(): string | null {
 }
 
 /**
- * Delete the plaintext graph artifacts (graph.json + graph.html) from userData/graph.
+ * Delete every plaintext graph artifact Metis owns under userData/graph: graph.json, graph.html, and the
+ * runner's own `graphify-out/` (resources/graphify_runner.py chdirs into this directory precisely so
+ * graphify's manifest lands here, and that manifest keys every scanned note by its plaintext
+ * `slug(title)` filename plus mtime + MD5 — the meeting titles opaqueNamePart exists to hide).
  *
- * Called when at-rest encryption is toggled ON. Once notes are encrypted on disk the graph can no
- * longer be (re)built, but a previously-built CLEARTEXT graph would otherwise linger on disk —
- * graph.json holds every meeting's topics/entities and graph.html renders them — leaking exactly the
- * meeting content the encryption is meant to protect. Best-effort: never throws (a failed unlink must
- * not crash the settings write that triggered it).
+ * Called when at-rest encryption is toggled ON, and from the full "Delete all Metis data" wipe. Once
+ * notes are encrypted on disk the graph can no longer be (re)built, but previously-built CLEARTEXT
+ * artifacts would otherwise linger on disk — graph.json holds every meeting's topics/entities,
+ * graph.html renders them, manifest.json names them — leaking exactly the meeting content the
+ * encryption is meant to protect. Best-effort: never throws (a failed unlink must not crash the
+ * settings write that triggered it). Returns whether anything was actually removed, so a caller only
+ * audit-logs `graph.purged` for a purge that really happened.
  */
-export function purgeGraphArtifacts(): void {
-  for (const p of [graphJsonPath(), graphHtmlPath()]) {
+export function purgeGraphArtifacts(): boolean {
+  let removed = false
+  for (const p of [graphJsonPath(), graphHtmlPath(), runnerOutDir()]) {
     try {
-      if (existsSync(p)) rmSync(p, { force: true })
+      if (!existsSync(p)) continue
+      rmSync(p, { recursive: true, force: true })
+      removed = true
     } catch (e) {
       console.warn('[graphify] purgeGraphArtifacts: could not remove', p, e)
     }
   }
+  return removed
 }

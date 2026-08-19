@@ -102,8 +102,21 @@ async function assertNoEmbeddedKimiKey(path) {
   })
 }
 
+// The key is in neither of these: electron-builder.cahe.win.yml copies it to resources/cahe/ as an
+// extraResource (outside app.asar), and NSIS ships win-unpacked inside an LZMA-compressed app-64.7z,
+// so a raw byte scan of the .exe cannot see it. Scanning the packaged extraResources directory is what
+// makes this gate's refusal real; the two below stay as a net for a key that lands somewhere it was
+// never meant to be.
 await assertNoEmbeddedKimiKey(appAsar)
 await assertNoEmbeddedKimiKey(installer)
+const packagedCaheResources = join(outputRoot, 'win-unpacked', 'resources', 'cahe')
+// Absent on a deliberately keyless build (METIS_CAHE_ALLOW_KEYLESS=1) — nothing to scan, not a failure.
+if (existsSync(packagedCaheResources)) {
+  for (const entry of readdirSync(packagedCaheResources, { recursive: true })) {
+    const file = join(packagedCaheResources, entry)
+    if (statSync(file).isFile()) await assertNoEmbeddedKimiKey(file)
+  }
+}
 console.log(
   embeddedKeyFound
     ? `[check:cahe-package] OK ${installers[0]} — current bytecode, distinct identity, embedded Kimi key explicitly allowed (METIS_CAHE_EMBED_KEY=1)`

@@ -177,6 +177,9 @@ export const IPC = {
   metricsRead: 'metrics:read',
   updateDownloaded: 'update:downloaded',
   updateProgress: 'update:progress',
+  // A download the user started failed mid-flight. Without this the Settings row kept a progress bar that
+  // could never finish and hid its own download-page fallback (which only renders in 'blocked'/'idle').
+  updateError: 'update:error',
   updateInstall: 'update:install',
   updateDownload: 'update:download', // Settings "Update now" — kick the in-app download (progress/downloaded then stream back)
   updateCheck: 'update:check', // manual Settings-driven check against the public releases feed
@@ -674,7 +677,13 @@ export type StreamError = z.infer<typeof StreamErrorSchema>
 export const StreamMetaSchema = z.object({
   id: z.string(),
   provider: ProviderIdSchema,
-  tier: z.enum(['base', 'think', 'deep'])
+  tier: z.enum(['base', 'think', 'deep']),
+  /** Whether THIS answer is really grounded in the user's screen. Sent only where main is the authority:
+   *  a screen fast-path ask (wantsScreenContext) carries an INTENT flag, never the description itself, so
+   *  only main knows whether its on-device cache still had one at send time — and Retry/"Go deeper" replay
+   *  that flag long after it expired. Absent = main has no verdict (plain text and vision asks), and the
+   *  renderer keeps the value it set at run() time. */
+  usedScreen: z.boolean().optional()
 })
 export type StreamMeta = z.infer<typeof StreamMetaSchema>
 
@@ -831,7 +840,12 @@ export const BaseSettingsSchema = z.object({
   suggestEverySec: z.number().min(5).max(120),
   mode: z.string().min(1).max(60).default('general'),
   profile: ProfileSchema.default({}),
-  shortcuts: z.record(z.string(), z.string().min(1)).default({}),
+  // Values may be EMPTY: '' is the codebase's unbind sentinel, not a malformed entry. resolveShortcut
+  // (main/index.ts) resolves with `??` so a stored '' survives instead of falling back to the shipped
+  // default, and registerShortcuts skips falsy accelerators. A `.min(1)` here made Settings' "Clear"
+  // button a silent no-op: store.ts's validKeysOnly drops the WHOLE shortcuts record when one value
+  // fails, so the old global accelerator stayed bound with no error shown.
+  shortcuts: z.record(z.string(), z.string()).default({}),
   autoSuggest: z.boolean().default(true),
   // Cluely "Uses Screen": when on (and the active provider is vision-capable), a hero ask captures the
   // screen and answers about it. Default on. Gated by the derived `visionReady` flag in PublicSettings.
@@ -940,14 +954,13 @@ export const BaseSettingsSchema = z.object({
   // plain settings rather than mcpSecrets.ts. Registered once (main/mcp/clickupOAuth.ts) and cached here
   // so every later connect/reconnect reuses the same client instead of re-registering.
   clickupClientId: z.string().default(''),
-  // Métis Local uses the single model bundled in every installer. The preprocess is a persisted-settings
-  // migration for releases that offered qwen3.5-2b; unknown ids fail validation and fall back safely in
+  // Métis Local uses a single on-device model. The preprocess is a persisted-settings migration for
+  // releases that offered qwen3.5-2b; unknown ids fail validation and fall back safely in
   // main/store.ts instead of pointing llama-server at a file that can never exist.
   localLlm: z
     .object({
-      // Default TRUE: the model + runtime ship inside every installer (electron-builder extraResources;
-      // fetch-local-model.mjs runs in every predist/prepack), so there is nothing to download and the
-      // flag alone costs nothing — the llama-server sidecar spawns lazily on first local request, and
+      // Default TRUE: the llama-server RUNTIME ships inside every installer, and the flag alone costs
+      // nothing at runtime — the sidecar spawns lazily on first local request, and
       // prewarm additionally requires useFor.suggest (local-routing.ts localPrewarmEligible). With every
       // useFor toggle defaulting FALSE below, default-enabled can never preempt a configured cloud
       // provider; it only makes the `fallback` safety net (and the Settings toggles) live out of the box,
@@ -1143,8 +1156,11 @@ export const PublicSettingsSchema = BaseSettingsSchema.extend({
       })
     )
     .default([]),
-  /** The `backgroundScreenContext` setting is on AND localReady — i.e. background on-device screen
-   *  pre-analysis can actually run. Lets Settings show "on" vs "enable Local AI to use this". */
+  /** Background on-device screen pre-analysis can actually run RIGHT NOW, straight from the engine's own
+   *  gate (screen-preprocess.ts canRun(), never recomputed renderer-side): session valid, the
+   *  `backgroundScreenContext` setting on, an on-device reader available (local model OR the macOS Vision
+   *  OCR helper), and a live OS foreground-window signal. Lets Settings say "on" vs the right reason it
+   *  is not — pair it with `localReady` to tell "no on-device reader" from "no window signal". */
   backgroundScreenReady: z.boolean().default(false),
   /** Whether the llama-server sidecar process is running RIGHT NOW — distinct from `localReady` (which is
    *  eligibility to route there, not live process state; the sidecar starts lazily on first local request
@@ -1746,14 +1762,21 @@ export interface McpPushResult {
 // at module scope), so this structurally mirrors its renderer-safe summary. `.strict()` prevents a future
 // path, port, or session key from silently crossing the main-to-renderer boundary.
 
-/** Renderer-safe metadata for the installer-owned model. */
+/** Renderer-safe metadata for the on-device model. The weights are NOT in the installer (see
+ *  main/llm/local-models.ts): they are fetched once on first run, so "not ready" has to distinguish
+ *  downloading / failed / never-attempted — the renderer told users to reinstall for all three
+ *  (MQA-187/191), which no installer can satisfy. */
 export const LocalModelSummarySchema = z
   .object({
     id: z.string(),
     label: z.string(),
     minTotalRamGB: z.number(),
     ready: z.boolean(),
-    unavailableReason: z.enum(['missing-files', 'insufficient-ram']).nullable()
+    unavailableReason: z
+      .enum(['insufficient-ram', 'downloading', 'download-failed', 'not-downloaded'])
+      .nullable(),
+    /** 0..1 while `unavailableReason === 'downloading'`, 0 otherwise. */
+    downloadProgress: z.number().min(0).max(1)
   })
   .strict()
 export type LocalModelSummary = z.infer<typeof LocalModelSummarySchema>
