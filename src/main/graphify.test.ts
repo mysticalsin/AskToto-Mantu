@@ -1,8 +1,9 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { mkdtempSync, mkdirSync, rmSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { Settings } from '@shared/ipc'
+import { app } from 'electron'
 
 vi.mock('electron')
 
@@ -21,7 +22,14 @@ vi.mock('./store', () => ({
   getAllowedProviders: () => store.allowed
 }))
 
-import { computeRelated, windowsPythonDirs, graphifyRefusalReason, graphifySourceDir, pickBackend } from './graphify'
+import {
+  computeRelated,
+  windowsPythonDirs,
+  graphifyRefusalReason,
+  graphifySourceDir,
+  pickBackend,
+  purgeGraphArtifacts
+} from './graphify'
 
 // Graph shaped like real graphify output: each concept node is owned by ONE note (its source_file),
 // and the other note links to the same concept node cross-file. This is how shared people/topics
@@ -172,5 +180,65 @@ describe('pickBackend — an explicit engine pick never falls through to another
     store.keys = { anthropic: 'sk-ant' }
     store.allowed = ['anthropic', 'openai']
     expect(await pickBackend()).toEqual({ backend: 'claude', apiKey: 'sk-ant' })
+  })
+})
+
+
+// MQA-170 — "purge the CLEARTEXT graph" has to clear everything Metis's runner wrote under
+// userData/graph, not just the two filenames the app itself names. resources/graphify_runner.py chdirs
+// INTO that directory so graphify's own graphify-out/manifest.json lands there, and that manifest keys
+// every scanned note by its plaintext `slug(title)` filename — exactly the meeting titles opaqueNamePart
+// exists to hide once at-rest encryption is on.
+describe('purgeGraphArtifacts — the whole graph directory Metis owns (MQA-170)', () => {
+  let userData: string
+
+  beforeEach(() => {
+    userData = mkdtempSync(join(tmpdir(), 'asktoto-graphpurge-'))
+    ;(app.getPath as ReturnType<typeof vi.fn>).mockImplementation((name: string) =>
+      name === 'userData' ? userData : `/tmp/asktoto-${name}`
+    )
+  })
+  afterEach(() => {
+    ;(app.getPath as ReturnType<typeof vi.fn>).mockImplementation((name: string) =>
+      name === 'userData' ? '/tmp/asktoto-test-userdata' : `/tmp/asktoto-${name}`
+    )
+    rmSync(userData, { recursive: true, force: true })
+  })
+
+  /** One successful build's worth of artifacts: the two files the app names plus the runner's manifest,
+   *  seeded with a real meeting filename so a leak is unmistakable. */
+  function seedBuiltGraph(): { json: string; html: string; manifest: string } {
+    const dir = join(userData, 'graph')
+    mkdirSync(join(dir, 'graphify-out'), { recursive: true })
+    const json = join(dir, 'graph.json')
+    const html = join(dir, 'graph.html')
+    const manifest = join(dir, 'graphify-out', 'manifest.json')
+    writeFileSync(json, '{"nodes":[],"links":[]}', 'utf8')
+    writeFileSync(html, '<html></html>', 'utf8')
+    writeFileSync(
+      manifest,
+      JSON.stringify({ '/meetings/2026-08-19_143000-acme-q3-renewal-pushback.md': { mtime: 1, hash: 'abc' } }),
+      'utf8'
+    )
+    return { json, html, manifest }
+  }
+
+  it('MQA-170 — removes the runner manifest that lists every meeting by its plaintext title, not just graph.json/graph.html', () => {
+    const { json, html, manifest } = seedBuiltGraph()
+
+    const purged = purgeGraphArtifacts()
+
+    expect(existsSync(manifest)).toBe(false)
+    expect(existsSync(join(userData, 'graph', 'graphify-out'))).toBe(false)
+    expect(existsSync(json)).toBe(false)
+    expect(existsSync(html)).toBe(false)
+    expect(purged).toBe(true)
+  })
+
+  it('MQA-170 — reports whether anything was actually purged, so a caller cannot audit-log a purge that never happened', () => {
+    expect(purgeGraphArtifacts()).toBe(false)
+    seedBuiltGraph()
+    expect(purgeGraphArtifacts()).toBe(true)
+    expect(purgeGraphArtifacts()).toBe(false)
   })
 })

@@ -1,5 +1,16 @@
 import { sha256Hex } from './sha256.ts'
 
+// Windows reserved device names — a path whose basename (before the first '.') case-insensitively
+// matches one of these fails to open at all, even for a tmp file, regardless of extension.
+const WIN_RESERVED_NAMES = new Set([
+  'con',
+  'prn',
+  'aux',
+  'nul',
+  'com1', 'com2', 'com3', 'com4', 'com5', 'com6', 'com7', 'com8', 'com9',
+  'lpt1', 'lpt2', 'lpt3', 'lpt4', 'lpt5', 'lpt6', 'lpt7', 'lpt8', 'lpt9'
+])
+
 /**
  * MUST match the host store's slugify (src/main/brain/store.ts) byte-for-byte in behavior — these
  * slugs join adapter-side entities to graph node ids minted at ingest. The previous local slug()
@@ -23,6 +34,10 @@ export function slug(s: string): string {
   // same slug and silently merge their entity files. Only truncate when needed, and disambiguate the
   // truncation with a short content hash so different long names still map to different slugs.
   const base = full.length > 60 ? `${full.slice(0, 51)}-${sha256Hex(full).slice(0, 8)}` : full
+  // The store suffixes a slug that is a bare Windows reserved device name so the entity file can be
+  // opened at all, and the node id it mints carries that suffix — so the mirror must suffix too or the
+  // join misses (an account literally named "AUX" is ingested as account:aux-x, looked up as aux).
+  if (base && WIN_RESERVED_NAMES.has(base)) return `${base}-x`
   if (base) return base
   const hash = sha256Hex(s.normalize('NFKC')).slice(0, 8)
   return `x-${hash}`

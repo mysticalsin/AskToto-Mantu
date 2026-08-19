@@ -1,6 +1,23 @@
 import log from 'electron-log'
 import { app } from 'electron'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+
+// Only the installed app owns a user profile. electron-log resolves its own file path, and outside an
+// Electron main process it silently falls back to NodeExternalApi, whose log directory is
+// `<appData>/<package.json name>/logs` — byte for byte the directory the installed app writes to. So a
+// vitest worker (or any node script) that imported a main module appended into the real user's
+// %APPDATA%/asktoto/logs/main.log, the file support reads to diagnose a field crash. `process.type` is
+// electron-log's OWN main/node discriminator (its src/index.js), so reusing it here cannot disagree with
+// which path resolver it picked. Anything that is not the app logs to a scratch directory instead.
+const isAppMainProcess = process.type === 'browser'
+
+/** Where log files go when this code is NOT the installed app's main process (tests, node scripts). */
+const nonAppLogDir = join(tmpdir(), 'asktoto-nonapp-logs')
+
+if (!isAppMainProcess) {
+  log.transports.file.resolvePathFn = (): string => join(nonAppLogDir, 'main.log')
+}
 
 let initialized = false
 
@@ -32,7 +49,8 @@ try {
   audit.transports.file.level = 'info'
   audit.transports.file.maxSize = 5 * 1024 * 1024
   audit.transports.file.format = '{text}' // we format the whole line as JSON ourselves
-  audit.transports.file.resolvePathFn = (): string => join(app.getPath('userData'), 'logs', 'audit.log')
+  audit.transports.file.resolvePathFn = (): string =>
+    isAppMainProcess ? join(app.getPath('userData'), 'logs', 'audit.log') : join(nonAppLogDir, 'audit.log')
   audit.transports.file.writeOptions = { ...audit.transports.file.writeOptions, mode: 0o600 }
 } catch {
   /* best-effort */

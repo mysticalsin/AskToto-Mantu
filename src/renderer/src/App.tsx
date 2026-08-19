@@ -87,6 +87,20 @@ const defaultMeetingTitle = (lines: TranscriptLine[], mode: ConversationMode): s
 // ids a save has already taken synchronously. Without the second check the rescue paths — leaving Review
 // with Escape, then starting the next session — all read savedRef as still-empty inside that window and
 // each persist the same transcript again: duplicate .md, duplicate index row, duplicate brain ingest.
+// Desk Tap Control refuses to arm on a profile calibrated against a different microphone (the mic is part
+// of the acoustic model). That refusal is a STANDING state — "paused until you recalibrate" — not an
+// event, so it is derived from the same settings snapshot useTapControl reads rather than latched in
+// React state. Latched, it was cleared by an effect keyed on `tapCfg?.profile`, which arrives as a fresh
+// object identity from every settings read, while the hook (keyed on a stable profile string) never
+// re-raised it: the warning vanished seconds after appearing and the feature went silently dead again.
+// Mirrors the hook's own condition, including "no explicit device selected" never counting as a mismatch.
+export function tapProfileMismatch(
+  tap: { enabled: boolean; profile: { micDeviceId: string } | null } | undefined,
+  micDeviceId: string | undefined
+): boolean {
+  return Boolean(tap?.enabled && tap.profile && micDeviceId && tap.profile.micDeviceId !== micDeviceId)
+}
+
 export function meetingSaveIsRedundant(
   lineCount: number,
   id: string,
@@ -381,10 +395,6 @@ export function App(): JSX.Element {
   // keeps showing the generated text (recapGenTarget stays set), but without this the refusal was
   // invisible and the user only discovered it on reopening the meeting, by which point it was gone.
   const [recapSaveError, setRecapSaveError] = useState<string | null>(null)
-  // True while Desk Tap Control is calibrated but refusing to arm because the profile belongs to a
-  // different microphone (useTapControl's onProfileMismatch). Recalibrating — or switching back to the
-  // mic it was calibrated on — clears it; see the effect next to the useTapControl call below.
-  const [tapMismatch, setTapMismatch] = useState(false)
   // Which Settings tab to open on (e.g. the bar's mode icon → 'personalize', calendar CTA → 'calendar').
   const [settingsInitialTab, setSettingsInitialTab] = useState<'personalize' | 'calendar' | 'ai' | undefined>(
     undefined
@@ -2223,11 +2233,9 @@ export function App(): JSX.Element {
   // hotkeys — zero new dispatch surface, every existing gate applies. Armed while enabled+calibrated,
   // narrowed to live sessions when armOnlyWhileListening (the default — no idle mic).
   const tapCfg = settings?.tapControl
-  // Cleared here rather than inside onProfileMismatch's counterpart because useTapControl only ever
-  // REPORTS a mismatch — it has no "matched again" callback. Declared before the hook so React runs it
-  // first in the same commit: on a still-mismatched profile the hook re-raises the flag straight after,
-  // and on a recalibration (or switching back to the calibrated mic) it stays down.
-  useEffect(() => setTapMismatch(false), [tapCfg?.profile, settings?.micDeviceId])
+  // Derived, never latched — see tapProfileMismatch. Recalibrating, switching back to the calibrated mic,
+  // or turning the feature off all resolve it on the next render with no callback to wire.
+  const tapMismatch = tapProfileMismatch(tapCfg, settings?.micDeviceId)
   useTapControl({
     active: Boolean(
       tapCfg?.enabled && tapCfg.profile && (!tapCfg.armOnlyWhileListening || listen.listening)
@@ -2241,11 +2249,7 @@ export function App(): JSX.Element {
       if (action && (HOTKEY_ACTIONS as string[]).includes(action)) {
         handlersRef.current(action as HotkeyAction)
       }
-    },
-    // The mic is part of the acoustic model, so the hook refuses to arm on a profile calibrated against a
-    // different one — and with no callback wired that refusal was completely silent: taps stopped working
-    // for good while Settings still showed Desk Tap Control enabled and "Calibrated and ready."
-    onProfileMismatch: () => setTapMismatch(true)
+    }
   })
 
   // Global Escape — the most-expected key on an overlay. Precedence, least to most destructive:

@@ -30,6 +30,30 @@ describe('local processing privacy boundary', () => {
     expect(body).toMatch(/provider !== 'local' && failover\(attempted\.concat\(provider\), preferFree, race\)/)
   })
 
+  // MQA-147: the F3 hedge leg is a FRESH dispatch, not a failover out of the local leg, so neither
+  // `provider !== 'local'` guard above ever sees it. With the primary pinned on-device — a screenshot under
+  // localVisionPrivacyRequired, or an in-scope local suggest — the HEDGE_DELAY_MS timer used to run
+  // pickFailover([primary]) and start a keyed cloud provider carrying the unmodified req, base64 image
+  // included. Aborting the loser afterwards does not un-send it. `primary !== 'local'` is the one conjunct
+  // that closes both cases: with no race at all, the local leg's own terminal paths run un-suppressed and
+  // the "Nothing was sent to a cloud provider" message is actually delivered instead of markDead-swallowed.
+  it('MQA-147 — never hedge-races a local primary against a cloud provider', () => {
+    const start = source.indexOf('const hedgeEligible =')
+    expect(start).toBeGreaterThan(-1)
+    const end = source.indexOf('if (hedgeEligible) {', start)
+    expect(end).toBeGreaterThan(start)
+    const gate = source.slice(start, end)
+    expect(gate).toMatch(/primary !== 'local'/)
+  })
+
+  it('MQA-147 — a local primary therefore dispatches with no race, so its own guards still apply', () => {
+    // The else branch of the hedge dispatch passes no AttemptRace, which is what makes index.ts's
+    // `if (!race || race.gate.markDead(race.leg) === 'surface')` terminals actually surface for local.
+    expect(source).toMatch(
+      /\} else \{\s*[\s\S]{0,120}attempt\(skipDeadPrimary \?\? primary, skipDeadPrimary \? \[primary\] : \[\]\)/
+    )
+  })
+
   it('redacts the screen description before it crosses to a cloud provider (redactSensitive)', () => {
     // On macOS the pre-analyzed screen context can be a VERBATIM OCR extract (open password manager,
     // terminal with an API key). The injection into req.screenContext — which flows to whatever answer

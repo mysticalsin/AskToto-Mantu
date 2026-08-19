@@ -118,6 +118,13 @@ export class HedgeRace {
     // after means "suppress" is only ever said when a leg really is running or still startable.
     // Self-guarded: a no-op once the hedge has started, the race is won, or the backup is unavailable.
     if (leg === 'primary') this.startHedgeEarly()
+    // MQA-151: once a winner exists, the other leg is aborted and startHedgeLeg refuses to launch a backup,
+    // so `hedgeMayStart` below is a stale "might still answer". The WINNER dying after its first token (idle
+    // watchdog, a mid-stream socket reset) is therefore the ask's real terminal outcome — suppressing it left
+    // no streamDone and no streamError, a spinner that never stops and the combined streams entry unreleased.
+    // A LOSER reaching here (its own retry backoff fired after it lost) must still stay silent, or its error
+    // would land on top of the winner's live answer.
+    if (this.winner !== null) return this.winner === leg ? 'surface' : 'suppress'
     const otherLeg: HedgeLeg = leg === 'primary' ? 'hedge' : 'primary'
     const otherStillViable = otherLeg === 'hedge' ? this.hedgeMayStart && !this.deadLegs.has('hedge') : !this.deadLegs.has('primary')
     return otherStillViable ? 'suppress' : 'surface'

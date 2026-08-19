@@ -246,3 +246,28 @@ describe('MQA-062 — CLI Integration verifies the real session when the panel o
     expect(body).toMatch(/\}, \[\]\)/) // mount-only, like the Dust probe above it
   })
 })
+
+// MQA-164 — the in-app download had no failure path: main logged the electron-updater 'error' and told
+// nobody, so UpdatesSection stayed in phase 'downloading' — a progress bar that could never move again,
+// with its own download-page fallback ("Always reachable so the user is never stranded") hidden, because
+// that link renders only in phase 'blocked' or 'idle'.
+describe('MQA-164 — a failed update download leaves the Settings row with a way out', () => {
+  const block = (): string => blockAfter('function UpdatesSection(', '\nfunction ModePromptEditor')
+
+  it('subscribes to the download-failure channel alongside progress and ready', () => {
+    expect(block()).toMatch(/window\.toto\.onUpdateError\(/)
+  })
+
+  it('moves out of the fake progress bar into the state that renders the download-page link', () => {
+    const body = block()
+    const handler = body.slice(body.indexOf('window.toto.onUpdateError('))
+    expect(handler).toMatch(/setPhase\('blocked'\)/)
+    expect(handler).toMatch(/setDownloadError\(/)
+  })
+
+  // The renderer can only see the event if preload bridges it — the whole path is main → preload → row.
+  it('is bridged by preload on the shared update:error channel', () => {
+    const preload = readFileSync(join(__dirname, '../../../preload/index.ts'), 'utf8')
+    expect(preload).toMatch(/onUpdateError: .*sub\(IPC\.updateError, cb\)/)
+  })
+})

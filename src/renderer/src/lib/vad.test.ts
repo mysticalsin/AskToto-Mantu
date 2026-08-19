@@ -335,9 +335,13 @@ describe('windows system-audio retry watcher (MQA-041)', () => {
   })
 
   it('retries capture directly on Windows instead of polling a permission that never flips', () => {
-    expect(listenSrc).toMatch(
-      /if \(isWindows\) \{\n {8}void recoverSystemAudioRef\.current\?\.\(\)\n {8}return\n {6}\}/
-    )
+    // Anchored on the branch's CONTENT, not its exact text: MQA-163 added backoff pacing inside it, and
+    // what MQA-041 needs pinned is that the Windows tick re-acquires off capture state and never reaches
+    // the permission poll below.
+    const branch = listenSrc.match(/\n {6}if \(isWindows\) \{\n([\s\S]*?)\n {6}\}\n {6}void window\.toto/)
+    expect(branch).not.toBeNull()
+    expect(branch![1]).toContain('void recoverSystemAudioRef.current?.()')
+    expect(branch![1]).not.toContain('getPermissions')
     // The macOS path keeps its permission gate — a granted flip is still what resumes 'them' there.
     expect(listenSrc).toMatch(/if \(p\?\.screenRecording === 'granted' && !channels\.current\.them\)/)
   })

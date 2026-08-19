@@ -3899,9 +3899,16 @@ function UpdatesSection(): JSX.Element {
       setPercent(100)
       setPhase('ready')
     })
+    // A download that was running just died (proxy, sleep, checksum, signature). 'blocked' is the state
+    // that renders the download-page link, so the fallback below stops being unreachable mid-download.
+    const offError = window.toto.onUpdateError((d) => {
+      setPhase('blocked')
+      setDownloadError(d?.message ?? 'The update download failed. Open the download page to install manually.')
+    })
     return () => {
       offProgress()
       offReady()
+      offError()
     }
   }, [])
 

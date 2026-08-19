@@ -25,7 +25,7 @@
  */
 
 import { app, safeStorage } from 'electron'
-import { existsSync, readFileSync, writeFileSync, rmSync } from 'node:fs'
+import { existsSync, readFileSync, renameSync, writeFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { useFileBackend, encryptSecret, decryptSecret, prepareFileKeyForWrite } from '../secrets'
 import { mainLog } from '../logger'
@@ -84,9 +84,19 @@ function writeSecretFile(p: string, plaintext: string, label: string): void {
     }
     blob = safeStorage.encryptString(plaintext)
   }
+  // Atomic write: a crash mid-write must not leave a truncated/corrupt file where the previous
+  // ciphertext was (it would silently read back as "no key" and cost a re-paste or a re-consent).
+  // Same tmp-file + rename pattern as store.ts's setApiKey.
+  const tmp = `${p}.tmp`
   try {
-    writeFileSync(p, blob, { mode: 0o600 })
+    writeFileSync(tmp, blob, { mode: 0o600 })
+    renameSync(tmp, p)
   } catch (e) {
+    try {
+      if (existsSync(tmp)) rmSync(tmp) // don't leave an orphaned .tmp behind
+    } catch {
+      /* ignore */
+    }
     throw new Error(
       `Couldn't save the ${label} — Métis can't write to its data folder${
         e instanceof Error && e.message ? ` (${e.message})` : ''
