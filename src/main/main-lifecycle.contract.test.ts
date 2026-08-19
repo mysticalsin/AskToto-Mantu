@@ -8,7 +8,10 @@ import { describe, expect, it, vi } from 'vitest'
  * time, so both seams are lifted out of the raw source and executed here against stubs — the assertions
  * exercise the shipped expression, not merely its shape.
  */
-const indexSrc = readFileSync(join(__dirname, 'index.ts'), 'utf8')
+// Normalized to LF: .gitattributes does not pin eol for src/**/*.ts, so a Windows checkout with
+// core.autocrlf yields CRLF and every marker below containing a literal \n stops matching. These
+// assertions are about the shipped expression, never about how git wrote the line endings.
+const indexSrc = readFileSync(join(__dirname, 'index.ts'), 'utf8').replace(/\r\n/g, '\n')
 
 /** Slice the source from `from` up to (excluding) the next occurrence of `to`. Sliced inside each test so
  *  one drifted marker reports as its own failure instead of aborting collection for the whole file. */
@@ -82,7 +85,7 @@ describe('MQA-155 — a failed post-sweep source refresh is observed, never fabr
   it('MQA-155 — the two fire-and-forget refreshes in ingest.ts observe their rejections too', () => {
     // Same defect shape, same 6-hour blast radius: reconcileMeetingsInBackground's try/catch cannot catch
     // an async rejection, so a bare `void` there re-fabricates a crash record every 60s while fs stays hot.
-    const ingestSrc = readFileSync(join(__dirname, 'brain', 'ingest.ts'), 'utf8')
+    const ingestSrc = readFileSync(join(__dirname, 'brain', 'ingest.ts'), 'utf8').replace(/\r\n/g, '\n')
     expect(ingestSrc).not.toMatch(/void requestSourceRefresh\([^)]*\)\s*$/m)
   })
 })
