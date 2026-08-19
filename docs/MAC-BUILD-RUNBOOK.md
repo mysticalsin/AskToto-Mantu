@@ -55,7 +55,17 @@ npm ci
 npm run dist                 # predist runs automatically first
 ```
 
-`predist` self-provisions, in this order, before packaging starts:
+> **One thing `predist` does NOT provision: the ffmpeg sidecar.** `check-ffmpeg-sidecar.mjs` only
+> *verifies* `resources/ffmpeg/darwin-{arm64,x64}/ffmpeg` against the hash-pinned
+> `resources/ffmpeg/manifest.json`; the binaries themselves are gitignored, so a clean clone fails on
+> the very first predist step with `ENOENT ... resources/ffmpeg/darwin-arm64/ffmpeg`. Restore them
+> first, either from the `ffmpeg-sidecar-v1` GitHub release (`docs/ENTERPRISE_RELEASE.md` →
+> ffmpeg Sidecar Provisioning) or by copying them out of a checkout that already has them. Verify
+> with `node scripts/check-ffmpeg-sidecar.mjs mac arm64 && node scripts/check-ffmpeg-sidecar.mjs mac x64`
+> before starting — the hashes must match the manifest, and the ones re-seeded by `cc125a8` differ
+> from every binary built before it.
+
+Everything else `predist` does provision, in this order, before packaging starts:
 
 ```
 check-ffmpeg-sidecar mac arm64 / x64     provision-mac-natives
