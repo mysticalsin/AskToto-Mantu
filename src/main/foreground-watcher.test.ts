@@ -1,3 +1,4 @@
+import { join } from 'node:path'
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 // foreground-watcher.ts imports mac-helper.ts (electron + logger chain) for the darwin spawn spec — mock
@@ -116,6 +117,65 @@ describe('startForegroundWatcher — darwin with the helper present', () => {
       expect(w.current()).toEqual(events[0])
     } finally {
       w.stop()
+    }
+  })
+})
+
+/**
+ * MQA-181 — screen-preprocess drops its cached description on a focus change and refuses to serve one for
+ * the wrong window; both guards are fed by THIS watcher. A watcher that is inert or has given up therefore
+ * has to say so, or the engine downstream keeps answering about the window the user already left.
+ */
+describe('startForegroundWatcher — health reporting (MQA-181)', () => {
+  it('MQA-181 — linux: the inert handle reports itself unhealthy', () => {
+    const w = startForegroundWatcher(() => {}, { platform: 'linux' })
+    expect(w.healthy()).toBe(false)
+  })
+
+  it('MQA-181 — darwin without the bundled helper: the inert handle reports itself unhealthy', () => {
+    macHelperMock.macWatcherSpawnSpec.mockReturnValue(null)
+    const w = startForegroundWatcher(() => {}, { platform: 'darwin' })
+    expect(w.healthy()).toBe(false)
+  })
+
+  it('MQA-181 — a live watcher is healthy, and stopping it makes it unhealthy again', async () => {
+    macHelperMock.macWatcherSpawnSpec.mockReturnValue({
+      command: process.execPath,
+      args: ['-e', 'process.stdout.write("com.apple.finder\\t769\\tFinder\\n");setTimeout(()=>{},30000)']
+    })
+    const events: Array<{ windowId: string }> = []
+    const w = startForegroundWatcher((info) => events.push(info), { platform: 'darwin' })
+    try {
+      await vi.waitFor(() => expect(events.length).toBeGreaterThan(0), { timeout: 5000 })
+      expect(w.healthy()).toBe(true)
+    } finally {
+      w.stop()
+    }
+    expect(w.healthy()).toBe(false)
+  })
+
+  it('MQA-181 — an unspawnable producer gives up after the restart budget instead of claiming health forever', async () => {
+    // ENOENT arrives on the async 'error' event, where node emits 'close' rather than 'exit' — the only
+    // restart path used to hang off 'exit', so this watcher was dead on the first attempt while still
+    // reporting nothing. Fake timers skip the 2s backoff between the bounded retries.
+    macHelperMock.macWatcherSpawnSpec.mockReturnValue({
+      command: join(__dirname, 'metis-no-such-watcher-binary'),
+      args: []
+    })
+    const errors: string[] = []
+    vi.useFakeTimers()
+    try {
+      const w = startForegroundWatcher(() => {}, {
+        platform: 'darwin',
+        onError: (m) => errors.push(m)
+      })
+      // 6 attempts = the initial spawn + MAX_RESTARTS; each needs its async 'error' turn plus the backoff.
+      for (let i = 0; i < 7; i++) await vi.advanceTimersByTimeAsync(2100)
+      expect(w.healthy()).toBe(false)
+      expect(errors.join(' ')).toContain('giving up')
+      w.stop()
+    } finally {
+      vi.useRealTimers()
     }
   })
 })

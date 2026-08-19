@@ -58,6 +58,12 @@ const withContext = (q: string, transcript: string): string =>
 
 // Soft, dismissible notice text for a multi-monitor screen-capture mismatch (see hasDisplayMismatch below).
 const CAPTURE_DISPLAY_MISMATCH_NOTICE = 'Captured a different monitor than your cursor — that may not be the right screen.'
+// Soft, dismissible notice for a screen ask that reached the model WITHOUT the screen (MQA-180). The fast
+// path sends an intent flag and main injects its own on-device description; a Retry / "Go deeper" replay
+// re-sends that flag long after the description expired, so the answer is text-only. Same voice as the
+// capture-failure copy above — the degrade is announced, never silent.
+const SCREEN_CONTEXT_LOST_NOTICE =
+  'Métis couldn’t see your screen for this answer. Answering from context only — ask again to re-capture.'
 // Defensive read of an optional main-process signal: `displayMismatch` isn't declared on CaptureResult yet
 // (shared/ipc.ts), so this is typed as an optional field on a minimal shape rather than asserted directly —
 // reads as `undefined`/falsy with zero changes needed here once main starts sending it.
@@ -565,6 +571,18 @@ export function App(): JSX.Element {
   // current answer/suggestion stopped being screen-grounded. The actual ticking/label formatting now
   // lives in Bar's ScreenFreshnessChip (own 500ms interval), not here.
   const showingScreenChip = view === 'copilot' ? !!suggest.answer?.usedScreen : !!ask.answer?.usedScreen
+
+  // MQA-180: main reported this answer is NOT grounded in the screen even though the ask asked for the
+  // screen fast path — its cached description expired, focus moved, or Private View went on between the
+  // ask and the send (routine on a Retry / "Go deeper" replay, which re-sends the intent flag minutes
+  // later). The "Viewed screen" badge and the freshness chip already cleared themselves off that verdict;
+  // this says WHY, exactly as the live capture path announces its own degrade instead of quietly
+  // answering without the screen. Clears only its OWN notice, so a capture/permission notice underneath
+  // survives, and goes as soon as an answer is grounded again.
+  useEffect(() => {
+    if (ask.answer?.screenMissed) setCaptureError(SCREEN_CONTEXT_LOST_NOTICE)
+    else setCaptureError((prev) => (prev === SCREEN_CONTEXT_LOST_NOTICE ? null : prev))
+  }, [ask.answer?.screenMissed, ask.answer?.id])
 
   const manualSave = useCallback(async (): Promise<void> => {
     const a = ask.answer

@@ -5236,8 +5236,14 @@ export function Settings({
                     label="Preload screen context (on-device)"
                     desc={
                       settings.backgroundScreenReady || !settings.backgroundScreenContext
-                        ? "When you switch windows, Métis quietly reads your screen with the on-device model so 'What's on my screen' answers instantly. Stays on your device, nothing extra is sent to the cloud, and Private View turns it off."
-                        : 'Enable Local AI (below) to use this. The background reader runs entirely on the on-device model.'
+                        ? // Deliberately does not name the local model as the reader: on macOS the
+                          // reader can be the Vision OCR helper, with no model involved at all.
+                          "When you switch windows, Métis quietly reads your screen on this device so 'What's on my screen' answers instantly. Stays on your device, nothing extra is sent to the cloud, and Private View turns it off."
+                        : settings.localReady
+                          ? // Local AI is ready, so the missing piece is the OS window signal — telling
+                            // this user to enable Local AI would just be the opposite lie.
+                            "Not running on this machine — Métis can't tell when you switch windows, so screen asks capture live instead."
+                          : 'Enable Local AI (below) to use this. The background reader never leaves your device.'
                     }
                     on={settings.backgroundScreenContext}
                     onChange={(v) => patch({ backgroundScreenContext: v })}

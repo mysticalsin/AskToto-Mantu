@@ -677,7 +677,13 @@ export type StreamError = z.infer<typeof StreamErrorSchema>
 export const StreamMetaSchema = z.object({
   id: z.string(),
   provider: ProviderIdSchema,
-  tier: z.enum(['base', 'think', 'deep'])
+  tier: z.enum(['base', 'think', 'deep']),
+  /** Whether THIS answer is really grounded in the user's screen. Sent only where main is the authority:
+   *  a screen fast-path ask (wantsScreenContext) carries an INTENT flag, never the description itself, so
+   *  only main knows whether its on-device cache still had one at send time — and Retry/"Go deeper" replay
+   *  that flag long after it expired. Absent = main has no verdict (plain text and vision asks), and the
+   *  renderer keeps the value it set at run() time. */
+  usedScreen: z.boolean().optional()
 })
 export type StreamMeta = z.infer<typeof StreamMetaSchema>
 
@@ -1146,8 +1152,11 @@ export const PublicSettingsSchema = BaseSettingsSchema.extend({
       })
     )
     .default([]),
-  /** The `backgroundScreenContext` setting is on AND localReady — i.e. background on-device screen
-   *  pre-analysis can actually run. Lets Settings show "on" vs "enable Local AI to use this". */
+  /** Background on-device screen pre-analysis can actually run RIGHT NOW, straight from the engine's own
+   *  gate (screen-preprocess.ts canRun(), never recomputed renderer-side): session valid, the
+   *  `backgroundScreenContext` setting on, an on-device reader available (local model OR the macOS Vision
+   *  OCR helper), and a live OS foreground-window signal. Lets Settings say "on" vs the right reason it
+   *  is not — pair it with `localReady` to tell "no on-device reader" from "no window signal". */
   backgroundScreenReady: z.boolean().default(false),
   /** Whether the llama-server sidecar process is running RIGHT NOW — distinct from `localReady` (which is
    *  eligibility to route there, not live process state; the sidecar starts lazily on first local request

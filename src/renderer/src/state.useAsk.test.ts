@@ -23,7 +23,7 @@
  * production code in src/renderer/src/state.ts under the timing model the bug actually depends on.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import type { StreamDelta, StreamDone } from '@shared/ipc'
+import type { StreamDelta, StreamDone, StreamError, StreamMeta } from '@shared/ipc'
 
 type Cleanup = void | (() => void)
 
@@ -149,6 +149,8 @@ type TotoStub = {
   onError: (cb: (d: unknown) => void) => () => void
   __fireDelta: (d: StreamDelta) => void
   __fireDone: (d: StreamDone) => void
+  __fireMeta: (m: StreamMeta) => void
+  __fireError: (e: StreamError) => void
 }
 
 // state.ts batches every delta after the first via requestAnimationFrame, which node doesn't provide.
@@ -163,6 +165,8 @@ type TotoStub = {
 function installTotoStub(): TotoStub {
   let deltaCb: ((d: StreamDelta) => void) | null = null
   let doneCb: ((d: StreamDone) => void) | null = null
+  let metaCb: ((m: StreamMeta) => void) | null = null
+  let errorCb: ((e: StreamError) => void) | null = null
   const stub: TotoStub = {
     ask: vi.fn().mockResolvedValue(undefined),
     cancel: vi.fn().mockResolvedValue(undefined),
@@ -178,10 +182,22 @@ function installTotoStub(): TotoStub {
         doneCb = null
       }
     },
-    onMeta: () => () => {},
-    onError: () => () => {},
+    onMeta: (cb) => {
+      metaCb = cb as (m: StreamMeta) => void
+      return () => {
+        metaCb = null
+      }
+    },
+    onError: (cb) => {
+      errorCb = cb as (e: StreamError) => void
+      return () => {
+        errorCb = null
+      }
+    },
     __fireDelta: (d) => deltaCb?.(d),
-    __fireDone: (d) => doneCb?.(d)
+    __fireDone: (d) => doneCb?.(d),
+    __fireMeta: (m) => metaCb?.(m),
+    __fireError: (e) => errorCb?.(e)
   }
   ;(globalThis as unknown as { window: { toto: TotoStub } }).window = { toto: stub }
   return stub
@@ -257,5 +273,106 @@ describe('useAsk follow-up turns replace, never concatenate', () => {
 
     expect(view.result.answer?.text).toBe('NO-IDEA')
     expect(view.result.answer?.text).not.toContain('confirmed above')
+  })
+})
+
+
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────
+// MQA-180 / MQA-182 — the "Viewed screen" trust badge must never outrun the data behind it.
+//
+// run() sets usedScreen OPTIMISTICALLY: on the screen fast path the renderer sends an INTENT flag only
+// (wantsScreenContext), and MAIN decides at send time whether its on-device description still existed.
+// Retry / "Go deeper" replay that flag verbatim minutes later — long after the description expired or
+// Private View went on — so the renderer cannot be the authority on whether an answer saw the screen.
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────
+describe("MQA-180 — the screen badge follows main's verdict, not the renderer's intent", () => {
+  let toto: TotoStub
+
+  beforeEach(() => {
+    host.__reset()
+    toto = installTotoStub()
+  })
+
+  it('clears usedScreen when main reports the screen context was gone at send time', async () => {
+    const view = renderAsk()
+    const id = view.result.run({
+      mode: 'answer',
+      prompt: 'what am I looking at?',
+      wantsScreenContext: true
+    })
+    await host.__settle()
+    // Optimistic at run() time — all the renderer knows is that it ASKED for the screen fast path.
+    expect(view.result.answer?.usedScreen).toBe(true)
+
+    // Main injected nothing (stale/absent on-device description) and says so.
+    toto.__fireMeta({ id, provider: 'anthropic', tier: 'base', usedScreen: false })
+    await host.__settle()
+
+    expect(view.result.answer?.usedScreen).toBe(false)
+    expect(view.result.answer?.screenMissed).toBe(true)
+  })
+
+  it('confirms the badge when main did inject a fresh description', async () => {
+    const view = renderAsk()
+    const id = view.result.run({ mode: 'answer', prompt: 'what is this error?', wantsScreenContext: true })
+    await host.__settle()
+    toto.__fireMeta({ id, provider: 'anthropic', tier: 'base', usedScreen: true })
+    await host.__settle()
+
+    expect(view.result.answer?.usedScreen).toBe(true)
+    expect(view.result.answer?.screenMissed).toBe(false)
+  })
+
+  it('leaves a real vision answer alone when main sends no screen verdict', async () => {
+    const view = renderAsk()
+    const id = view.result.run({ mode: 'vision', image: 'ZmFrZQ==', prompt: 'read this' })
+    await host.__settle()
+    // A vision ask carries the image itself, so main has no verdict to give — the renderer keeps its own.
+    toto.__fireMeta({ id, provider: 'anthropic', tier: 'base' })
+    await host.__settle()
+
+    expect(view.result.answer?.usedScreen).toBe(true)
+    expect(view.result.answer?.provider).toBe('anthropic')
+  })
+})
+
+describe('MQA-182 — a request that produced nothing stops claiming it viewed the screen', () => {
+  let toto: TotoStub
+
+  beforeEach(() => {
+    host.__reset()
+    toto = installTotoStub()
+  })
+
+  it('drops the badge when the ask is rejected before any output (Private View blocks the replay)', async () => {
+    const view = renderAsk()
+    const id = view.result.run({ mode: 'vision', image: 'ZmFrZQ==', prompt: 'what is on my screen?' })
+    await host.__settle()
+    expect(view.result.answer?.usedScreen).toBe(true)
+
+    // Main refuses the stored frame at the IPC boundary once Private View is on — nothing was sent, so
+    // there is no screen-grounded answer for the badge (or the Bar's freshness chip) to describe.
+    toto.__fireError({
+      id,
+      message: 'Private View is on — screen capture is blocked. Turn it off to let Métis see your screen.'
+    })
+    await host.__settle()
+
+    expect(view.result.answer?.error).toMatch(/Private View/)
+    expect(view.result.answer?.text).toBe('')
+    expect(view.result.answer?.usedScreen).toBe(false)
+  })
+
+  it('keeps the badge when the stream failed AFTER real output — that answer really did view the screen', async () => {
+    const view = renderAsk()
+    const id = view.result.run({ mode: 'vision', image: 'ZmFrZQ==', prompt: 'read this' })
+    await host.__settle()
+    toto.__fireDelta({ id, text: 'The screen shows a stack trace' })
+    await host.__settle()
+    toto.__fireError({ id, message: 'provider dropped the connection' })
+    await host.__settle()
+
+    expect(view.result.answer?.text).toBe('The screen shows a stack trace')
+    expect(view.result.answer?.usedScreen).toBe(true)
   })
 })

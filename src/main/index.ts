@@ -1075,8 +1075,10 @@ function publicSettings(): PublicSettings {
     // MQA-004: the honest counterpart to providerReady — which providers actually REJECTED their
     // credentials recently, so the UI can say "your key stopped working" instead of claiming ready.
     unhealthyProviders: unhealthyProviders(),
-    // Background on-device screen pre-analysis can actually run (toggle on AND the local model is ready).
-    backgroundScreenReady: s.backgroundScreenContext && localReady,
+    // Background on-device screen pre-analysis can actually run. Asked of the ENGINE, never recomputed
+    // here: the old `s.backgroundScreenContext && localReady` copy missed the macOS OCR engine (Settings
+    // said "not running" while it captured every 6s) and could not see a dead foreground watcher at all.
+    backgroundScreenReady: screenPreprocess.canRun(),
     // Live sidecar process state (distinct from localReady's eligibility check) — drives the Local AI
     // card's status line only. localRuntimeState is the precise tri-state (stopped/starting/running/
     // unavailable) so the card can distinguish a normal idle stop from a session-long 'unavailable'
@@ -1504,16 +1506,22 @@ async function captureScreenshotOnce(displayId: number): Promise<CapturedScreen>
 /** Share a native capture only between pre-warm and click requests for the same display. */
 const captureScreenshot = createKeyedSingleFlight<number, CapturedScreen>(captureScreenshotOnce)
 
+/** The one wording for the one promise. getScreenshot() throws it when Private View blocks a LIVE capture;
+ *  IPC.askStart sends it verbatim when it refuses an already-captured frame (MQA-182). Keeping both on the
+ *  same string is what lets the renderer's /private view/i copy paths recognise either one. */
+const PRIVATE_VIEW_BLOCKED_MESSAGE =
+  'Private View is on — screen capture is blocked. Turn it off to let Métis see your screen.'
+
 /** Thrown by getScreenshot() when Private View is on — lets callers show a specific message instead of a
  *  generic capture failure. */
 class PrivateViewBlockedError extends Error {
   constructor() {
-    super('Private View is on — screen capture is blocked. Turn it off to let Métis see your screen.')
+    super(PRIVATE_VIEW_BLOCKED_MESSAGE)
     this.name = 'PrivateViewBlockedError'
   }
 }
 
-async function getScreenshot(phase?: string): Promise<{ image: string; width: number; height: number; capturedAt: number; displayMismatch: boolean }> {
+async function getScreenshot(phase?: string): Promise<{ image: string; width: number; height: number; capturedAt: number; dispId: number; displayMismatch: boolean }> {
   // Private View promises Métis won't look at (or send) the screen while it's on — that has to mean
   // this app's own capture pipeline refuses to run, not just that OTHER apps can't screen-share our window
   // (that's the separate, still-active setContentProtection() call on the BrowserWindow itself).
@@ -1527,8 +1535,8 @@ async function getScreenshot(phase?: string): Promise<{ image: string; width: nu
   }
   const disp = screen.getDisplayNearestPoint(screen.getCursorScreenPoint())
   if (shotCache && Date.now() - shotCache.ts < CAPTURE_TTL_MS && shotCache.dispId === disp.id) {
-    const { image, width, height, ts, displayMismatch } = shotCache
-    return { image, width, height, capturedAt: ts, displayMismatch }
+    const { image, width, height, ts, dispId, displayMismatch } = shotCache
+    return { image, width, height, capturedAt: ts, dispId, displayMismatch }
   }
   let shot: CapturedScreen
   try {
@@ -1559,8 +1567,11 @@ async function getScreenshot(phase?: string): Promise<{ image: string; width: nu
   const capturedAt = Date.now()
   shotCache = { ...shot, ts: capturedAt }
   auditLog('capture.screen', { width: shot.width, height: shot.height, bytes: shot.image.length, ...(phase ? { phase } : {}) })
-  const { image, width, height, displayMismatch } = shot
-  return { image, width, height, capturedAt, displayMismatch }
+  // dispId is the monitor this frame is really OF. Callers that cache a DERIVED artifact (the background
+  // screen description) need it: the capture always follows the cursor, which an alt-tab does not move,
+  // so without it a cached description cannot tell it is about a monitor the user has looked away from.
+  const { image, width, height, dispId, displayMismatch } = shot
+  return { image, width, height, capturedAt, dispId, displayMismatch }
 }
 
 /** Fill the cache + warm the OS capture pipeline ahead of a real ask. Fire-and-forget; auth-gated. */
@@ -1582,6 +1593,8 @@ const screenPreprocess: ScreenPreprocess = createScreenPreprocess({
     return { backgroundScreenContext: s.backgroundScreenContext, localLlm: s.localLlm }
   },
   localReady: () => localBaseReady(getSettings(), getAllowedProviders()),
+  authorized: requireAuth,
+  currentDisplayId: () => screen.getDisplayNearestPoint(screen.getCursorScreenPoint()).id,
   privateViewOn,
   ensureLocalRuntimeStarted,
   runtime: {
@@ -1604,13 +1617,16 @@ const screenPreprocess: ScreenPreprocess = createScreenPreprocess({
   audit: (event, data) => auditLog(event as Parameters<typeof auditLog>[0], data)
 })
 
-/** (Re)start or stop background screen preprocessing to match current auth + settings eligibility. Safe to
- *  call repeatedly — it's a no-op when the running state already matches. */
+/**
+ * The ONE place that reconciles background screen preprocessing with reality. Call it from every event
+ * that can change canRun(): boot, a settings write, sign-in, session clear, and the local-model download
+ * landing. Safe to call repeatedly — it's a no-op when the running state already matches.
+ *
+ * Auth is not re-checked here: it is a dep of the engine's own eligibility (screen-preprocess.ts), so the
+ * lifecycle and the `backgroundScreenReady` flag Settings renders read one expression instead of two that
+ * drifted apart (MQA-178/MQA-179).
+ */
 function refreshScreenPreprocess(): void {
-  if (!requireAuth()) {
-    screenPreprocess.stop()
-    return
-  }
   screenPreprocess.refresh()
 }
 
@@ -3217,6 +3233,18 @@ function registerIpc(): void {
     }
     try {
     const req = AskStartSchema.parse(raw)
+    // MQA-182: Private View means Métis does not look at OR SEND your screen — and an already-captured
+    // frame is still your screen. The renderer keeps the last vision request verbatim so Retry / "Go
+    // deeper" can replay it (state.ts lastReqRef), and that replay used to reach the provider minutes
+    // after the user flipped the switch. getScreenshot() re-checks the switch after its own async
+    // capture for exactly this reason (see its post-capture check); every path that can send a frame has
+    // to re-check it at SEND time, and this handler is the trust boundary the renderer cannot bypass.
+    // Keyed on the payload, not the mode: the schema permits an image on a non-vision mode too.
+    if (req.image && privateViewOn()) {
+      auditLog('capture.blocked', { reason: 'private_view', at: 'ask' })
+      win?.webContents.send(IPC.streamError, { id: req.id, message: PRIVATE_VIEW_BLOCKED_MESSAGE })
+      return
+    }
     const s = getSettings()
     // Fresh-question boundary (see the state block above): a plain interactive ask outside a live meeting
     // starts clean unless the user opted into follow-up memory — and even then the memory expires after
@@ -3288,6 +3316,15 @@ function registerIpc(): void {
         mainLog.warn(`[screen-preprocess] context injection failed: ${err instanceof Error ? err.message : String(err)}`)
       }
     }
+    // MQA-180: the injection above is best-effort, and on a REPLAY it usually finds nothing — Retry / "Go
+    // deeper" re-send the renderer's intent flag verbatim (state.ts lastReqRef) long after the cached
+    // description expired, the user changed windows, or Private View went on. The renderer set its
+    // "Viewed screen" badge from that intent flag alone, so an ask that reached the provider with zero
+    // screen data still rendered as grounded. Main is the only side that knows what actually went out:
+    // report the verdict on stream:meta. `undefined` for every other ask — main has no verdict there and
+    // the renderer keeps what run() set (a vision ask carries its own image).
+    const screenGrounded =
+      req.mode === 'answer' && req.wantsScreenContext ? !!req.screenContext : undefined
     const allowed = getAllowedProviders() // org allowlist (null = unrestricted)
 
     // Screen-vision capability. Static per provider, EXCEPT Dust: its ability to read a screenshot depends
@@ -3540,7 +3577,7 @@ function registerIpc(): void {
       // the display follows the live attempt. Metadata only (provider id + tier), never the model/agent id.
       // A leg that has already lost the race says nothing: its announcement would overwrite the winner's.
       if (!race || !race.gate.isLoser(race.leg)) {
-        win?.webContents.send(IPC.streamMeta, { id: req.id, provider, tier })
+        win?.webContents.send(IPC.streamMeta, { id: req.id, provider, tier, usedScreen: screenGrounded })
       }
       // Per-tier idle budget: a live suggest gives up fast to stay real-time; recaps + deep answers get the
       // full headroom. Bounds time-to-first-token and triggers failover when a provider stalls before a token.
@@ -3619,7 +3656,7 @@ function registerIpc(): void {
                 // Re-assert WHO actually answered. Both legs announce themselves when they start, so if
                 // the backup started second and the primary then won, the UI's last streamMeta named the
                 // loser — the answer would be attributed to a provider that produced none of it.
-                win?.webContents.send(IPC.streamMeta, { id: req.id, provider, tier })
+                win?.webContents.send(IPC.streamMeta, { id: req.id, provider, tier, usedScreen: screenGrounded })
               }
             }
             gotToken = true
@@ -4772,8 +4809,13 @@ if (!app.requestSingleInstanceLock()) {
   // run. Deliberately NOT awaited: this is a ~728 MB download and startup must not wait on it, nor fail
   // when the machine is offline or behind a restrictive proxy — Local simply stays unavailable and the
   // next launch retries. ensureLocalModel() verifies the pinned sha256 and never throws.
-  // local-routing.ts re-reads isDownloaded() per request, so nothing needs notifying when it lands.
+  // local-routing.ts re-reads isDownloaded() per request, so no ROUTING decision needs notifying. The
+  // background screen reader does: its eligibility is evaluated when the engine is refreshed, and the boot
+  // refresh below runs while this download is still in flight — without this re-arm, a first-run user who
+  // opted in gets an inert fast path until some unrelated setting changes (MQA-178).
   void ensureLocalModel(LOCAL_MODELS[0].id)
+    .then(() => refreshScreenPreprocess())
+    .catch((e) => mainLog.warn('[boot] local model provisioning failed:', e))
   // Windows toast attribution: a process's AppUserModelID must match the installed shortcut's AUMID
   // (electron-builder sets it to appId) or Windows silently drops native Notifications — which breaks
   // the meeting-reminder toast for portable-build and launch-at-login users (no shortcut in the launch
@@ -5195,6 +5237,12 @@ if (!app.requestSingleInstanceLock()) {
   runStep('createTray', createTray)
   runStep('registerShortcuts', registerShortcuts)
   runStep('createWindow', createWindow)
+  // screen-preprocess documents refresh() as "Call on startup and after settings change" — only the second
+  // half was ever wired, so an opted-in user got a dead fast path (and a silent cloud image upload on every
+  // screen ask) for the whole session after each relaunch (MQA-178). Deliberately AFTER createWindow: the
+  // eligibility read drags in the local-model trust probe, which must not sit on the first-paint path; and
+  // ahead of registerIpc so the renderer's first getSettings() already sees the reconciled readiness flag.
+  runStep('refreshScreenPreprocess', refreshScreenPreprocess)
   // Synchronous OneDrive filesystem work (mkdir + two writeFileSync calls on first run) — nothing
   // before the window depends on the folder existing yet (saveMeeting/saveNote create it themselves on
   // first use), so it no longer sits ahead of createWindow on the boot path.
