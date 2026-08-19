@@ -7,7 +7,7 @@ import { PROVIDER_IDS } from '@shared/providers'
 import { MeetingExtractionSchema } from '@shared/brain'
 import { getSettings, setSettings } from '../store'
 import { extractionSlug, startBackfill, whenIndexWritesSettle } from './ingest'
-import { readIndex, readMeetingExtraction, writeMeetingExtraction } from './store'
+import { readIndex, readMeetingExtraction, writeIndex, writeMeetingExtraction } from './store'
 
 vi.mock('electron')
 
@@ -36,7 +36,7 @@ describe('team-transcript ingest', () => {
       const envVar = {
         anthropic: 'ANTHROPIC_API_KEY', openai: 'OPENAI_API_KEY', nvidia: 'NVIDIA_API_KEY',
         deepseek: 'DEEPSEEK_API_KEY', qwen: 'DASHSCOPE_API_KEY', minimax: 'MINIMAX_API_KEY',
-        kimi: 'MOONSHOT_API_KEY', openrouter: 'OPENROUTER_API_KEY', groq: 'GROQ_API_KEY',
+        kimi: 'KIMI_API_KEY', openrouter: 'OPENROUTER_API_KEY', groq: 'GROQ_API_KEY', grok: 'XAI_API_KEY',
         together: 'TOGETHER_API_KEY', fireworks: 'FIREWORKS_API_KEY', mistral: 'MISTRAL_API_KEY',
         dust: 'DUST_API_KEY', 'claude-cli': '', 'codex-cli': '', gemini: 'GEMINI_API_KEY',
         custom: 'ASKTOTO_CUSTOM_API_KEY'
@@ -107,5 +107,42 @@ describe('team-transcript ingest', () => {
 
     // OneDrive can make a shared folder briefly unavailable; the scan must stay safe (no throw).
     expect(() => startBackfill()).not.toThrow()
+  })
+
+  it('MQA-160 — an edited team transcript that already indexed OK is marked for a clean rebuild', async () => {
+    const teamFolder = join(sharedRoot, 'alice')
+    mkdirSync(teamFolder)
+    const file = 'weekly-sync.md'
+    writeFileSync(join(teamFolder, file), '---\ndate: 2026-02-01\n---\nAlice weekly sync notes.', 'utf8')
+    setSettings({ meetingsFolder, teamTranscriptFolders: [teamFolder] })
+    const key = `team/alice/${file}`
+    // Ingested successfully against bytes that no longer match what is on disk — Alice edited her own
+    // transcript (a debrief append, a corrected name) and OneDrive synced the change into this brain.
+    // Same shape ingest-backfill.test.ts pins for an own meeting; a team file must drift identically.
+    await writeIndex(getSettings(), {
+      ...readIndex(getSettings()),
+      ingested: { [key]: { at: Date.now(), ok: true, sourceVersion: 'stale-version' } }
+    } as never)
+
+    expect(startBackfill().queued).toBe(0)
+    await vi.waitFor(() => {
+      expect(readIndex(getSettings()).sourceRefreshRequested).toBe(true)
+    }, { timeout: 10_000 })
+  })
+
+  it('MQA-160 — an unavailable shared folder is never read as a deleted team transcript', async () => {
+    const teamFolder = join(sharedRoot, 'carol')
+    setSettings({ meetingsFolder, teamTranscriptFolders: [teamFolder] })
+    const key = `team/carol/offsite.md`
+    await writeIndex(getSettings(), {
+      ...readIndex(getSettings()),
+      ingested: { [key]: { at: Date.now(), ok: true, sourceVersion: '1:1' } }
+    } as never)
+
+    // Files On-Demand can make the shared folder vanish for a moment; purging the whole brain because
+    // of that would be far worse than waiting for it to come back.
+    startBackfill()
+    await whenIndexWritesSettle()
+    expect(readIndex(getSettings()).sourceRefreshRequested).toBeFalsy()
   })
 })

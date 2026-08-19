@@ -305,6 +305,9 @@ const api = {
 
   onUpdateReady: (cb: (d: { version?: string; notes?: string }) => void): Unsub => sub(IPC.updateDownloaded, cb),
   onUpdateProgress: (cb: (d: { percent?: number }) => void): Unsub => sub(IPC.updateProgress, cb),
+  // A download that was already running died. Without this the Settings row keeps a progress bar that
+  // will never move again and hides its own download-page fallback.
+  onUpdateError: (cb: (d: { message?: string }) => void): Unsub => sub(IPC.updateError, cb),
   installUpdate: (): Promise<void> => ipcRenderer.invoke(IPC.updateInstall),
   // Settings "Update now" → start the in-app download; progress/ready arrive via onUpdateProgress/onUpdateReady.
   downloadUpdate: (): Promise<UpdateDownloadStart> => ipcRenderer.invoke(IPC.updateDownload),

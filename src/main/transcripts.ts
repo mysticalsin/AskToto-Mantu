@@ -18,6 +18,7 @@ import type { SaveMeeting, SaveNote, Settings, RecapExport, TranscriptLine } fro
 import { encryptSecret, decryptSecret, useFileBackend } from './secrets'
 import { readTrustedAdminManaged, lockPathToCurrentUserWin32 } from './win-security'
 import { mainLog, auditLog } from './logger'
+import { devEnv, isPackagedBuild } from './dev-env'
 
 // Optional at-rest encryption for transcripts/notes. Two on-disk formats share one fixed-length
 // `ATKENC<n>\n` magic prefix so detection stays a simple prefix check:
@@ -66,6 +67,9 @@ function resolveEscrowPem(raw: string | null | undefined): string | null {
   return null
 }
 
+/** One warning per process — readEscrowPubKey runs on every encrypted write. */
+let warnedIgnoredEscrowEnv = false
+
 /** Raw-parse an `escrowPubKey` string out of managed-config.json text (escrow isn't a Settings schema key). */
 function escrowFromManagedContent(raw: string): string | null {
   try {
@@ -86,10 +90,21 @@ function escrowFromManagedContent(raw: string): string | null {
  * anything running as them), so a planted `escrowPubKey` there would silently wrap every transcript to an
  * attacker key (readable off OneDrive). Escrow is therefore admin-machine-path-only (ACL-gated by
  * trustedAdminManagedPath) or env (dev) — the per-user tier is deliberately NOT consulted here.
+ *
+ * The process environment is user-writable on exactly the same terms (HKCU\Environment, `launchctl
+ * setenv`), so devEnv() closes the env tier in packaged builds (MQA-153).
  */
 function readEscrowPubKey(): string | null {
-  const fromEnv = resolveEscrowPem(process.env.ASKTOTO_ESCROW_PUBKEY)
+  const fromEnv = resolveEscrowPem(devEnv('ASKTOTO_ESCROW_PUBKEY'))
   if (fromEnv) return fromEnv
+  // An install that was configured through the dev variable would otherwise lose escrow in silence: the
+  // warn below only fires for a key we actually tried to use.
+  if (!warnedIgnoredEscrowEnv && process.env.ASKTOTO_ESCROW_PUBKEY && isPackagedBuild()) {
+    warnedIgnoredEscrowEnv = true
+    mainLog.warn(
+      'Métis: ASKTOTO_ESCROW_PUBKEY is a dev-only switch and is ignored in a packaged build; set escrowPubKey in the machine-wide managed-config instead'
+    )
+  }
   try {
     // readTrustedAdminManaged() is null on win32 unless admin-owned + not user-writable, and reads
     // through the same held fd that verified that trust (closes the check-path/read-path TOCTOU).
@@ -100,6 +115,35 @@ function readEscrowPubKey(): string | null {
     /* ignore */
   }
   return null
+}
+
+// The ONE native boundary in this file, and the one place a read can die in a way no JS can observe.
+//
+// safeStorage.decryptString drops into Chromium's OSCrypt. Its Windows implementation
+// (components/os_crypt/sync/os_crypt_win.cc) reads a 'v10'-prefixed blob as 'v10' + 12-byte nonce +
+// AES-GCM ciphertext + tag, and slices out the body with `ciphertext.substr(15)` — no length check
+// first. std::string::substr throws std::out_of_range when the position is past the end, and that is a
+// native C++ exception (0xE06D7363): it unwinds straight past V8, so `uncaughtException`, the
+// surrounding try/catch, and every fatal handler this app installs are all blind to it. The process
+// simply vanishes — no window, no dialog, no crash-*.log, no audit line. That is MQA-175, observed on
+// six consecutive launches of the shipped 1.5.4 Windows build against a sync-mangled
+// `.brain/index.json`. A bad blob that is merely WRONG (right length, wrong bytes) is fine — OSCrypt
+// returns false and Electron throws an ordinary JS error. Only a SHORT one kills the process.
+//
+// So the length is checked here, on the JS side, before the boundary is crossed. The bound is exactly
+// the position os_crypt_win.cc indexes to, not the size of a well-formed blob: a real Windows envelope
+// is at least 31 bytes (3 + 12 + 16) and macOS's AES-128-CBC form at least 19, so anything legitimate
+// clears this by a wide margin while every blob that could throw is refused as a normal JS Error — which
+// tryDecodeSaved below already turns into a typed "undecryptable" outcome.
+const OSCRYPT_V10_PREFIX = Buffer.from('v10', 'utf8')
+const OSCRYPT_V10_MIN_INDEXABLE = OSCRYPT_V10_PREFIX.length + 12 // the substr(15) os_crypt_win.cc does
+
+function unwrapWithKeychain(blob: Buffer): string {
+  if (blob.length === 0) throw new Error('wrapped key is empty')
+  if (blob.subarray(0, OSCRYPT_V10_PREFIX.length).equals(OSCRYPT_V10_PREFIX) && blob.length < OSCRYPT_V10_MIN_INDEXABLE) {
+    throw new Error('wrapped key is a truncated OSCrypt v10 blob')
+  }
+  return safeStorage.decryptString(blob)
 }
 
 /**
@@ -159,8 +203,8 @@ function encryptEnvelopeV2(content: string): Buffer {
 }
 
 /** Decrypt a v2 envelope. Handles the 'S:' (safeStorage), 'F:' (file-backend), and legacy (bare
- *  base64) kLocal encodings. Throws on malformed/foreign-keychain input so tryDecodeSaved degrades
- *  to the UNDECRYPTABLE path instead of crashing a read.
+ *  base64) kLocal encodings. Throws on malformed/foreign-keychain input so tryDecodeSaved can turn it
+ *  into a typed failure (SavedDecode) instead of crashing a read.
  *
  *  `allowKeychainRecovery` (default false, the boot/bulk-read behavior — see index.ts's forced local
  *  keystore note) lets an explicit single-file user read reach an 'S:'-wrapped envelope anyway when this
@@ -181,7 +225,7 @@ function decryptEnvelopeV2(buf: Buffer, allowKeychainRecovery = false, filePath?
       throw new Error('Keychain-wrapped transcript is unavailable while the local keystore is active')
     }
     const raw = env.kLocal.startsWith('S:') ? env.kLocal.slice(2) : env.kLocal
-    contentKeyB64 = safeStorage.decryptString(Buffer.from(raw, 'base64'))
+    contentKeyB64 = unwrapWithKeychain(Buffer.from(raw, 'base64'))
     // Self-healing: this device's Keychain just proved it can still unwrap the SAME content key —
     // rewrap it under the current file-backend key so every later read (bulk list/search included)
     // converges to 'F:' without ever touching the Keychain again. iv/tag/ct are untouched; only kLocal
@@ -225,36 +269,51 @@ const UNDECRYPTABLE_MSG =
   'decrypt it. Open it on the machine where it was created, or turn off at-rest encryption in Settings ' +
   'before saving if you need transcripts portable across devices.\n'
 
-/** Decode saved bytes, decrypting if the at-rest marker is present. Returns null when an encrypted file
- *  can't be decrypted on this machine (foreign keychain), so callers degrade instead of throwing.
+/** The outcome of decoding saved bytes. "Cannot be decrypted here" is a VALUE, never an exception —
+ *  that is the whole point (MQA-175): the callers that must distinguish an intact-elsewhere file from a
+ *  genuinely empty one (the brain index, the corrections journal) get to branch on it, and no read path
+ *  can be taken down by whatever the envelope happens to contain. */
+export type SavedDecode = { ok: true; text: string } | { ok: false; reason: string }
+
+/** Decode saved bytes, decrypting if the at-rest marker is present.
  *  `allowKeychainRecovery`/`filePath` are forwarded to decryptEnvelopeV2 — see its doc comment; the v1
  *  legacy branch below gets the same recovery bypass but never self-heals (no envelope kLocal to rewrap). */
-function tryDecodeSaved(buf: Buffer, allowKeychainRecovery = false, filePath?: string): string | null {
+function tryDecodeSaved(buf: Buffer, allowKeychainRecovery = false, filePath?: string): SavedDecode {
   // v2 envelope: AES-256-GCM content key wrapped by safeStorage (+ optional org escrow).
   if (buf.length >= MARKER_LEN && buf.subarray(0, MARKER_LEN).equals(ENC_MARKER_V2)) {
     try {
-      return decryptEnvelopeV2(buf, allowKeychainRecovery, filePath)
-    } catch {
-      return null // malformed or foreign-keychain — never throw out of a read path
+      return { ok: true, text: decryptEnvelopeV2(buf, allowKeychainRecovery, filePath) }
+    } catch (e) {
+      // malformed, auth-tag failure, or foreign keychain — never throw out of a read path
+      return { ok: false, reason: e instanceof Error ? e.message : String(e) }
     }
   }
   // v1 (legacy): safeStorage-direct. Kept for full backward compatibility with existing transcripts.
   if (buf.length >= ENC_MARKER.length && buf.subarray(0, ENC_MARKER.length).equals(ENC_MARKER)) {
     const canRecover = allowKeychainRecovery && safeStorage.isEncryptionAvailable()
-    if (process.env.ASKTOTO_LOCAL_KEYSTORE && !canRecover) return null
+    if (process.env.ASKTOTO_LOCAL_KEYSTORE && !canRecover) {
+      return { ok: false, reason: 'keychain-wrapped transcript is unavailable while the local keystore is active' }
+    }
     try {
-      return safeStorage.decryptString(buf.subarray(ENC_MARKER.length))
-    } catch {
-      return null // undecryptable on this device — never throw out of a read path
+      return { ok: true, text: unwrapWithKeychain(buf.subarray(ENC_MARKER.length)) }
+    } catch (e) {
+      return { ok: false, reason: e instanceof Error ? e.message : String(e) }
     }
   }
-  return buf.toString('utf8')
+  return { ok: true, text: buf.toString('utf8') }
+}
+
+/** Decode saved bytes into the typed outcome above. Never throws. */
+export function decodeSavedResult(buf: Buffer): SavedDecode {
+  return tryDecodeSaved(buf)
 }
 
 /** Decode saved bytes, decrypting if needed. Never throws; yields '' for an undecryptable file so
- *  search/list keep working. Use decryptToTemp() for the user-facing Open path (it shows the notice). */
+ *  search/list keep working. Use decodeSavedResult() when '' and "unreadable" must not be confused, and
+ *  decryptToTemp() for the user-facing Open path (it shows the notice). */
 export function decodeSaved(buf: Buffer): string {
-  return tryDecodeSaved(buf) ?? ''
+  const r = tryDecodeSaved(buf)
+  return r.ok ? r.text : ''
 }
 
 /** Read a saved transcript/note (sync), transparently decrypting if it was written encrypted. */
@@ -332,7 +391,8 @@ export function decryptToTemp(path: string): string {
   // leaving the user with a dead "Open" click.
   let content: string
   try {
-    content = tryDecodeSaved(readFileSync(path), true, path) ?? UNDECRYPTABLE_MSG
+    const decoded = tryDecodeSaved(readFileSync(path), true, path)
+    content = decoded.ok ? decoded.text : UNDECRYPTABLE_MSG
   } catch {
     content = UNDECRYPTABLE_MSG
   }

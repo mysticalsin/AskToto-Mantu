@@ -1,5 +1,6 @@
 import { app } from 'electron'
 import { join } from 'node:path'
+import { isPackagedBuild } from './dev-env'
 
 // The pilot shows the standard Métis brand to the user (window, taskbar, shortcut) but keeps a fully
 // isolated profile, updater identity, and executable name so it can never share state with — or
@@ -26,10 +27,12 @@ export interface CaheEditionPolicy {
 
 /**
  * The Cahê edition is a separately packaged Windows executable. The environment switch is deliberately
- * limited to local test/build harnesses; installed copies identify themselves from their executable name.
+ * limited to local test/build harnesses (it is user-writable, and honoring it in a shipped build would
+ * repoint userData and park the install on the blocked 'cahe' update channel); installed copies identify
+ * themselves from their executable name.
  */
 export function detectCaheEdition({ platform, packaged, executablePath, environment }: CaheRuntime): boolean {
-  if (environment.METIS_CAHE_EDITION === '1') return true
+  if (!packaged && environment.METIS_CAHE_EDITION === '1') return true
   const executable = executablePath.split(/[\\/]/).at(-1)?.toLowerCase()
   return platform === 'win32' && packaged && executable === CAHE_EXECUTABLE_NAME.toLowerCase()
 }
@@ -37,7 +40,8 @@ export function detectCaheEdition({ platform, packaged, executablePath, environm
 export function isCaheEdition(): boolean {
   return detectCaheEdition({
     platform: process.platform,
-    packaged: app.isPackaged,
+    // Fail-closed read: this runs at module load, before app ready (see dev-env.ts).
+    packaged: isPackagedBuild(),
     executablePath: process.execPath,
     environment: process.env
   })

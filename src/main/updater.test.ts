@@ -1,4 +1,5 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { EventEmitter } from 'node:events'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 // Activate __mocks__/electron.ts — checkForUpdateNow needs app.getVersion() + net.fetch, and outside a
 // real Electron process the 'electron' package resolves to a binary-path string, not an API surface.
@@ -9,18 +10,31 @@ vi.mock('electron')
 // probe C:\ProgramData on win32 and make these cases machine-dependent).
 vi.mock('./cahe-edition', () => ({ shouldDisableAutoUpdate: vi.fn(() => false) }))
 vi.mock('./win-security', () => ({ readTrustedAdminManaged: vi.fn((): string | null => null) }))
+// initAutoUpdate reads app-update.yml out of process.resourcesPath, which does not exist outside a
+// packaged app — the only fs read in this module, stubbed to a configured feed so the wiring runs.
+vi.mock('node:fs', () => ({ readFileSync: vi.fn(() => 'provider: github\nowner: mysticalsin\n') }))
 
-import { net } from 'electron'
+import { app, net, Notification, type BrowserWindow } from 'electron'
+import { IPC } from '@shared/ipc'
 import { shouldDisableAutoUpdate } from './cahe-edition'
 import { readTrustedAdminManaged } from './win-security'
 import {
   blockedUpdateChannel,
   configDisablesAutoUpdate,
+  initAutoUpdate,
   isNewerVersion,
   parseLatestRelease,
   checkForUpdateNow,
   startUpdateDownload
 } from './updater'
+
+/** Stand-in for electron-updater's AppUpdater: the same EventEmitter surface updater.ts wires to. */
+class FakeAutoUpdater extends EventEmitter {
+  logger: unknown = null
+  autoDownload = false
+  autoInstallOnAppQuit = false
+  checkForUpdates = vi.fn(async (): Promise<{ downloadPromise?: Promise<unknown> | null } | null> => null)
+}
 
 describe('configDisablesAutoUpdate — enterprise auto-update kill-switch', () => {
   it('disables updates only when disableAutoUpdate is exactly true', () => {
@@ -193,5 +207,105 @@ describe('startUpdateDownload — Settings "Update now" in-app download guard', 
     const r = await startUpdateDownload()
     expect(r.started).toBe(false)
     expect(r.reason).toMatch(/Cahê installer/)
+  })
+})
+
+// MQA-164 — a download that failed mid-flight was reported to the log file and nowhere else: there was no
+// update:error channel at all, so Settings → About kept a frozen "Downloading update… X%" bar while the
+// download-page fallback (rendered only in phase 'blocked' or 'idle') stayed hidden, and the rejected
+// downloadPromise nobody held reached index.ts's unhandledRejection hook, which persists an app.crash
+// audit line plus a crash-*.log for something that is not a crash.
+describe('MQA-164 — a failed update download reaches the renderer', () => {
+  const electronApp = app as unknown as { isPackaged?: boolean; name?: string }
+  const proc = process as NodeJS.Process & { resourcesPath?: string; windowsStore?: boolean }
+  const send = vi.fn()
+  const win = { webContents: { send } } as unknown as BrowserWindow
+  let fake: FakeAutoUpdater
+  let moduleId: string
+
+  beforeEach(() => {
+    // Only the 6-hourly re-check interval is faked: setImmediate has to stay real for the
+    // unhandled-rejection probe below (Node emits the event after the microtask queue drains).
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] })
+    vi.mocked(shouldDisableAutoUpdate).mockReturnValue(false)
+    vi.mocked(readTrustedAdminManaged).mockReturnValue(null)
+    delete proc.windowsStore
+    send.mockClear()
+    vi.mocked(Notification).mockClear()
+    electronApp.isPackaged = true
+    electronApp.name = 'Métis'
+    proc.resourcesPath = 'C:/fake-resources' // only join()'d, then handed to the mocked readFileSync above
+    // updater.ts lazy-requires electron-updater (boot cost), which vi.mock cannot intercept — seed the
+    // CJS cache with a fake AppUpdater instead, so both entry points get the same event emitter we drive.
+    fake = new FakeAutoUpdater()
+    moduleId = require.resolve('electron-updater')
+    require.cache[moduleId] = { id: moduleId, filename: moduleId, loaded: true, exports: { autoUpdater: fake } } as never
+  })
+
+  afterEach(() => {
+    delete require.cache[moduleId]
+    delete electronApp.isPackaged
+    delete proc.resourcesPath
+    vi.useRealTimers()
+  })
+
+  it('MQA-164 — forwards a mid-flight download failure so the download-page fallback becomes reachable', async () => {
+    initAutoUpdate(() => win)
+    let failDownload = (_e: Error): void => {}
+    fake.checkForUpdates.mockResolvedValue({
+      downloadPromise: new Promise<never>((_resolve, reject) => {
+        failDownload = reject
+      })
+    })
+
+    expect(await startUpdateDownload()).toEqual({ started: true })
+
+    // electron-updater emits 'error' from downloadUpdate's errorHandler BEFORE rejecting the promise.
+    fake.emit('error', new Error('HttpError: 403 for https://objects.githubusercontent.com/x?token=abc123'))
+
+    const call = send.mock.calls.find((c) => c[0] === IPC.updateError)
+    expect(call, 'no update:error was sent to the renderer').toBeTruthy()
+    expect(call?.[1].message).toMatch(/download page/i)
+    // electron-updater's own message embeds the feed URL and request context; nothing crosses the bridge raw.
+    expect(call?.[1].message).not.toMatch(/githubusercontent|token=/)
+
+    failDownload(new Error('403'))
+    await Promise.resolve()
+  })
+
+  it('MQA-164 — holds the download promise so a failure is not recorded as a fake app crash', async () => {
+    const unhandled: unknown[] = []
+    const onUnhandled = (r: unknown): void => void unhandled.push(r)
+    process.on('unhandledRejection', onUnhandled)
+    try {
+      initAutoUpdate(() => win)
+      const failure = new Error('sha512 checksum mismatch')
+      fake.checkForUpdates.mockImplementation(async () => ({ downloadPromise: Promise.reject(failure) }))
+      await startUpdateDownload()
+      fake.emit('error', failure)
+      await new Promise((r) => setImmediate(r))
+    } finally {
+      process.off('unhandledRejection', onUnhandled)
+    }
+    expect(unhandled).toEqual([])
+  })
+
+  it('MQA-164 — the silent background check never flips an untouched Settings row into an error', () => {
+    initAutoUpdate(() => win)
+    // No user-started download: this is the boot / 6-hourly check failing on a flaky network.
+    fake.emit('error', new Error('getaddrinfo ENOTFOUND github.com'))
+    expect(send.mock.calls.some((c) => c[0] === IPC.updateError)).toBe(false)
+  })
+
+  // Dropping checkForUpdatesAndNotify (it leaked the unhandled rejection above) must not cost the OS
+  // notification it used to raise for a download the user never asked for.
+  it('MQA-164 — a background download still shows the OS "update ready" notification', () => {
+    initAutoUpdate(() => win)
+    fake.emit('update-downloaded', { version: '1.5.5', releaseNotes: 'Fixes the thing' })
+
+    expect(send).toHaveBeenCalledWith(IPC.updateDownloaded, { version: '1.5.5', notes: 'Fixes the thing' })
+    expect(vi.mocked(Notification)).toHaveBeenCalledWith(
+      expect.objectContaining({ body: expect.stringContaining('1.5.5') })
+    )
   })
 })

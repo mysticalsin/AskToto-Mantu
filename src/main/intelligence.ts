@@ -3,6 +3,7 @@ import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { existsSync } from 'node:fs'
 import { getSettings } from './store'
+import { devEnv } from './dev-env'
 
 /** Private View (content protection) for the dashboard — mirrors the overlay's contentProtectionOn().
  *  The dashboard aggregates the most sensitive cross-meeting data (people/accounts/deals/quotes/
@@ -10,7 +11,7 @@ import { getSettings } from './store'
  *  The env escape hatch is dev/screenshot-only — gated to unpackaged builds so a packaged process can
  *  never have capture protection stripped by `setx ASKTOTO_DISABLE_CP 1` + relaunch. */
 const intelCpOn = (): boolean =>
-  (app.isPackaged || !process.env.ASKTOTO_DISABLE_CP) && getSettings().contentProtection
+  !devEnv('ASKTOTO_DISABLE_CP') && getSettings().contentProtection
 
 /** Re-apply Private View to the (open) dashboard window — called from settingsSet when the toggle flips,
  *  same as the overlay's win.setContentProtection() re-apply. */
@@ -46,6 +47,13 @@ function bundleIndexHtml(): string | null {
     join(app.getAppPath(), 'intelligence', 'dist', 'index.html') // `electron .` dev run
   ]
   return candidates.find((p) => existsSync(p)) ?? null
+}
+
+/** Tear the dashboard down. Called when the session ends: every brain channel is auth-gated, but an
+ *  already-open window keeps rendering the decrypted brain (people/accounts/deals/quotes/commitments)
+ *  without asking main again, so the gate only holds if the window itself goes. */
+export function closeIntelligenceWindow(): void {
+  if (intelWin && !intelWin.isDestroyed()) intelWin.destroy()
 }
 
 export function openIntelligenceWindow(): { ok: boolean; error?: string } {

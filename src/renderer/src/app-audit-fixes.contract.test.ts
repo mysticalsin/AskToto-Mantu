@@ -17,7 +17,7 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, it, expect } from 'vitest'
-import { meetingSaveIsRedundant } from './App'
+import { meetingSaveIsRedundant, tapProfileMismatch } from './App'
 
 // Normalize CRLF → LF: this is a Windows checkout, so any anchor whose newline sits mid-string would
 // never match against \r\n.
@@ -173,17 +173,46 @@ describe("MQA-082 — a desk-tap zone bound to 'Hide / show Métis' can show aga
   })
 })
 
-describe('MQA-083 — a mic change no longer kills Desk Tap Control silently', () => {
-  const block = blockBetween('useTapControl({', '\n  })')
-
-  it('passes onProfileMismatch, so the hook’s refusal to arm is actually reported', () => {
-    expect(block).toMatch(/onProfileMismatch: \(\) => setTapMismatch\(true\)/)
+// MQA-083 closed the silent half (the hook's refusal to arm was reported at all). MQA-158 is what that
+// first fix left behind: the report was latched in React state and cleared by an effect keyed on
+// `tapCfg?.profile`, a nested object that arrives as a brand-new identity from EVERY settings read — the
+// same IPC churn tap-control.ts absorbs with its string profileKey. So a window focus, the streaming→idle
+// refresh, or any of the patches a live meeting writes on its own (asrLastFallbackAt, micOnlyFallbackAt)
+// cleared the flag, while the hook — keyed on that stable string — never re-raised it. The amber banner
+// vanished within seconds, Settings still said "Calibrated and ready.", and no desk tap ever worked again:
+// the exact silently-dead-feature state MQA-083 exists to prevent. The banner's own comment already calls
+// it "a standing state, not an event", so it is now DERIVED from the settings snapshot the hook reads,
+// which cannot desynchronize from it.
+describe('MQA-083 / MQA-158 — a mic change no longer kills Desk Tap Control silently', () => {
+  const calibratedOn = (micDeviceId: string): { enabled: boolean; profile: { micDeviceId: string } } => ({
+    enabled: true,
+    profile: { micDeviceId }
   })
 
-  it('clears the flag when the profile or the selected mic changes', () => {
-    // useTapControl only ever reports a mismatch — it has no "matched again" callback, so a recalibration
-    // would otherwise leave the warning up forever.
-    expect(source).toMatch(/useEffect\(\(\) => setTapMismatch\(false\), \[tapCfg\?\.profile, settings\?\.micDeviceId\]\)/)
+  it('MQA-158 — reports the mismatch whenever the selected mic is not the calibrated one', () => {
+    expect(tapProfileMismatch(calibratedOn('default'), 'usb-headset')).toBe(true)
+  })
+
+  it('MQA-158 — survives a settings re-fetch that changes nothing but object identity', () => {
+    const overIpc = JSON.parse(JSON.stringify(calibratedOn('default')))
+    expect(tapProfileMismatch(overIpc, 'usb-headset')).toBe(true)
+  })
+
+  it('MQA-158 — is false in every state that genuinely resolves it', () => {
+    expect(tapProfileMismatch(calibratedOn('usb-headset'), 'usb-headset')).toBe(false) // switched back
+    expect(tapProfileMismatch(calibratedOn('usb-headset'), '')).toBe(false) // following the system default
+    expect(tapProfileMismatch(calibratedOn('usb-headset'), undefined)).toBe(false)
+    expect(tapProfileMismatch({ enabled: false, profile: { micDeviceId: 'default' } }, 'usb')).toBe(false)
+    expect(tapProfileMismatch({ enabled: true, profile: null }, 'usb')).toBe(false) // never calibrated
+    expect(tapProfileMismatch(undefined, 'usb')).toBe(false)
+  })
+
+  it('MQA-158 — the banner reads that derivation instead of a latched flag', () => {
+    expect(source).toMatch(/const tapMismatch = tapProfileMismatch\(tapCfg, settings\?\.micDeviceId\)/)
+    // Nothing left to clear out of band — the setState a routine settings re-fetch reset is gone, and with
+    // it the need for a "matched again" callback the hook never had.
+    expect(source).not.toMatch(/setTapMismatch/)
+    expect(source).not.toMatch(/onProfileMismatch/)
   })
 
   it('renders a recalibrate prompt naming where to do it', () => {

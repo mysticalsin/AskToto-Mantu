@@ -177,6 +177,9 @@ export const IPC = {
   metricsRead: 'metrics:read',
   updateDownloaded: 'update:downloaded',
   updateProgress: 'update:progress',
+  // A download the user started failed mid-flight. Without this the Settings row kept a progress bar that
+  // could never finish and hid its own download-page fallback (which only renders in 'blocked'/'idle').
+  updateError: 'update:error',
   updateInstall: 'update:install',
   updateDownload: 'update:download', // Settings "Update now" — kick the in-app download (progress/downloaded then stream back)
   updateCheck: 'update:check', // manual Settings-driven check against the public releases feed

@@ -43,3 +43,13 @@ export const ipcMain = {
 }
 
 export const BrowserWindow = vi.fn()
+
+// Native OS notification. `new Notification(opts)` records the options on the mock, and the object it
+// returns carries a `show` spy, so a test can assert both that something was shown and what it said.
+export const Notification = Object.assign(
+  vi.fn(function (this: { options: unknown; show: () => void }, options: { title?: string; body?: string }) {
+    this.options = options
+    this.show = vi.fn()
+  }),
+  { isSupported: vi.fn(() => true) }
+)

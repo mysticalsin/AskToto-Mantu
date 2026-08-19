@@ -49,6 +49,30 @@ describe('Cahê Windows edition', () => {
     ).toBe(true)
   })
 
+  // MQA-168 — the env switch is a local test/build-harness affordance (see detectCaheEdition's doc
+  // comment). Honored in a shipped build it would repoint userData, skip the rename migration, and —
+  // permanently, while the variable is set — put the install on the blocked 'cahe' update channel, so a
+  // user-writable `setx METIS_CAHE_EDITION 1` would silently end security updates.
+  it('MQA-168 — ignores the METIS_CAHE_EDITION switch in a packaged build, which is identified by executable name', () => {
+    expect(
+      detectCaheEdition({
+        platform: 'win32',
+        packaged: true,
+        executablePath: 'C:/Program Files/Metis/Metis.exe',
+        environment: { METIS_CAHE_EDITION: '1' }
+      })
+    ).toBe(false)
+    // The real shipped pilot is unaffected: it still identifies itself by executable name.
+    expect(
+      detectCaheEdition({
+        platform: 'win32',
+        packaged: true,
+        executablePath: `C:/Program Files/${CAHE_APP_NAME}/${CAHE_EXECUTABLE_NAME}`,
+        environment: { METIS_CAHE_EDITION: '1' }
+      })
+    ).toBe(true)
+  })
+
   it('imposes no allowlist, locked keys, or managed defaults — same policy as a non-Cahê build', () => {
     // Kimi is still the out-of-box default (seeded once by cahe-embedded-key.ts's marker-gated first-run
     // seed via setSettings), but that is a plain user-layer default, not an edition-level lock: the pilot
