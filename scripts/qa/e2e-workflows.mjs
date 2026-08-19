@@ -647,10 +647,78 @@ async function groupWindow() {
   })
 }
 
+// The screen-ask feature, proven through the app's OWN capture pipeline (window.toto.capture ->
+// IPC.captureScreen -> getScreenshot -> captureScreenshotOnce), not a reimplementation of it. A unit
+// test can only prove the arithmetic; this proves desktopCapturer actually hands this machine a real
+// frame, which is the half that breaks in the field (driver/DXGI fallbacks, permission revocation,
+// a display topology change). Restores privateView in a finally: a QA run must never leave the
+// user's privacy switch flipped.
+async function groupScreen() {
+  const g = 'screen'
+  const before = await settings()
+
+  try {
+    await check(g, 'privateView defaults OFF, so screen-asks work on a fresh profile', async () => {
+      assert(before.privateView === false, `privateView is ${before.privateView} — screen-asks are dead on arrival`)
+      return { privateView: before.privateView, contentProtection: before.contentProtection }
+    })
+
+    await check(g, 'capture() returns a decodable, non-trivial JPEG of the screen', async () => {
+      const t0 = Date.now()
+      const shot = await page.evaluate(() => window.toto.capture())
+      const ms = Date.now() - t0
+      assert(shot && typeof shot.image === 'string', 'capture() returned no image')
+      const buf = Buffer.from(shot.image, 'base64')
+      // SOI..EOI: a truncated frame decodes to "something" but is not a complete image, and that is
+      // exactly the shape a provider rejects with an unhelpful 400.
+      assert(buf[0] === 0xff && buf[1] === 0xd8, 'not a JPEG (missing SOI)')
+      assert(buf[buf.length - 2] === 0xff && buf[buf.length - 1] === 0xd9, 'truncated JPEG (missing EOI)')
+      assert(buf.length > 5000, `implausibly small frame (${buf.length} B) — likely a blank capture`)
+      assert(shot.width > 200 && shot.height > 200, `implausible dimensions ${shot.width}x${shot.height}`)
+      return { bytes: buf.length, size: `${shot.width}x${shot.height}`, ms, displayMismatch: shot.displayMismatch }
+    })
+
+    await check(g, 'Private View ON refuses to capture, and says so specifically', async () => {
+      await page.evaluate(() => window.toto.setSettings({ privateView: true }))
+      await sleep(300)
+      const r = await page.evaluate(async () => {
+        try {
+          const shot = await window.toto.capture()
+          return { threw: false, hasImage: typeof shot?.image === 'string' && shot.image.length > 1000 }
+        } catch (e) {
+          return { threw: true, message: String(e?.message ?? e) }
+        }
+      })
+      assert(r.threw || !r.hasImage, 'Private View was ON and capture STILL returned a frame')
+      const msg = r.threw ? r.message : ''
+      // A generic "couldn't capture your screen" here is a real defect: the user turned this on
+      // themselves and has no way to connect the failure back to the switch.
+      assert(/private\s*view/i.test(msg), `refusal did not name Private View: ${msg.slice(0, 120)}`)
+      return { message: msg.slice(0, 120) }
+    })
+
+    await check(g, 'capture recovers once Private View is turned back off', async () => {
+      await page.evaluate(() => window.toto.setSettings({ privateView: false }))
+      await sleep(300)
+      const shot = await page.evaluate(() => window.toto.capture())
+      assert(shot && typeof shot.image === 'string' && shot.image.length > 1000, 'capture did not recover')
+      return { bytes: Buffer.from(shot.image, 'base64').length }
+    })
+
+    await check(g, 'screenContext answers without throwing (null is a valid answer)', async () => {
+      const ctx = await page.evaluate(() => window.toto.screenContext())
+      return { hasContext: Boolean(ctx && ctx.text) }
+    })
+  } finally {
+    await page.evaluate((v) => window.toto.setSettings({ privateView: v }), before.privateView)
+  }
+}
+
 const GROUPS = {
   boot: groupBoot,
   settings: groupSettings,
   ask: groupAsk,
+  screen: groupScreen,
   degrade: groupDegrade,
   meetings: groupMeetings,
   brain: groupBrain,
