@@ -18,7 +18,10 @@ import { StreamMetaSchema } from '@shared/ipc'
  *            description from its own cache. On a replay that cache is usually empty, so the ask reached
  *            the provider with zero screen data while the UI still showed "Viewed screen".
  */
-const indexSrc = readFileSync(join(__dirname, 'index.ts'), 'utf8')
+// Normalized to LF like its siblings below: .gitattributes does not pin eol for src/**/*.ts, so a
+// Windows checkout with core.autocrlf yields CRLF and every marker containing a literal \n stops
+// matching. The assertion is about the shipped expression, never about how git wrote the line ends.
+const indexSrc = readFileSync(join(__dirname, 'index.ts'), 'utf8').replace(/\r\n/g, '\n')
 const stateSrc = readFileSync(join(__dirname, '..', 'renderer', 'src', 'state.ts'), 'utf8').replace(
   /\r\n/g,
   '\n'
