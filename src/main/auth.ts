@@ -408,6 +408,22 @@ const REVALIDATE_INTERVAL_MS = 30 * 60 * 1000 // 30 min
 
 let revalidationTimer: ReturnType<typeof setInterval> | null = null
 
+let sessionClearedHandler: (() => void) | null = null
+
+/**
+ * Register main's teardown for "the session is gone" (index.ts's revokePrivilegedSurface). auth.ts must
+ * not import window/engine modules, so the teardown is injected rather than reached for.
+ *
+ * It hangs off clearSession() rather than the sign-out IPC handler because the handler is only one of
+ * the ways a session ends: the max-age eviction in loadSession/authStatus and the background
+ * re-validation sweep (expiry, or an admin revoking the seat) clear it with no user action and no IPC
+ * call at all. Anything privileged that outlives a single call — the background screen pre-analysis
+ * engine, the Intelligence dashboard window — must die on every one of those, not just the remembered one.
+ */
+export function setSessionClearedHandler(fn: () => void): void {
+  sessionClearedHandler = fn
+}
+
 /** Drop the current session from memory AND disk (mirrors the stale-domain / sign-out clear path). */
 function clearSession(): void {
   session = null
@@ -421,6 +437,13 @@ function clearSession(): void {
     if (existsSync(msalCachePath())) rmSync(msalCachePath())
   } catch {
     /* best-effort */
+  }
+  // Last, and never fatal: a half-cleared session (identity gone from memory but still on disk because a
+  // window refused to close) would be strictly worse than a surface that outlived it.
+  try {
+    sessionClearedHandler?.()
+  } catch (e) {
+    mainLog.warn('[auth] session teardown failed:', e instanceof Error ? e.message : String(e))
   }
 }
 

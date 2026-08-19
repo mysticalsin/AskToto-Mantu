@@ -1,11 +1,10 @@
 import { createHash } from 'node:crypto'
-import { createReadStream, createWriteStream, existsSync, mkdirSync, renameSync, rmSync, statSync } from 'node:fs'
-import { get as httpsGet } from 'node:https'
-import type { IncomingMessage } from 'node:http'
+import { createReadStream, createWriteStream, mkdirSync, renameSync, rmSync, statSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { pipeline } from 'node:stream/promises'
+import { net } from 'electron'
 import { auditLog } from '../logger'
-import { getModel, modelPaths, type LocalModelFile } from './local-models'
+import { assertRamOk, getModel, modelPaths, type LocalModelDownloadState, type LocalModelFile } from './local-models'
 
 /**
  * First-run downloader for the Métis Local weights.
@@ -23,51 +22,57 @@ import { getModel, modelPaths, type LocalModelFile } from './local-models'
  *   - bytes land in a `.partial` file and are renamed into place only after that check passes, so a
  *     half-written or tampered file can never be mistaken for a usable model by a later run.
  *
+ * Transport is Electron's `net.fetch`, NOT `node:https` (MQA-185). node:https consults neither the OS/PAC
+ * proxy nor HTTP(S)_PROXY, and `setGlobalDispatcher` in net/install-proxy.ts only rebinds undici's
+ * `fetch` — so a node:https request was the single outbound call in the whole main process that could
+ * not traverse a corporate proxy. Since this fetch is the ONLY way an installed app can obtain the
+ * weights, that made Métis Local permanently unprovisionable on exactly the managed networks
+ * install-proxy.ts exists for. net.fetch resolves the proxy per request host, which also covers a PAC
+ * that routes huggingface.co differently from the provider host install-proxy.ts probes with.
+ *
  * Failure is non-fatal by design. Métis Local is one route among several — a machine that is offline,
- * behind a proxy, or short on disk simply keeps using the cloud/CLI routes, and the next launch
- * retries. Nothing here is allowed to block or crash app startup.
+ * behind a blocked proxy, or short on disk simply keeps using the cloud/CLI routes, and the next launch
+ * retries. Nothing here is allowed to block or crash app startup. It is no longer SILENT, though: the
+ * state below is what Settings reads, so an in-flight or failed fetch reads as itself instead of as a
+ * damaged install (MQA-186/187).
  */
 
 const REQUEST_TIMEOUT_MS = 60_000
 const IDLE_TIMEOUT_MS = 120_000
 const MAX_ATTEMPTS = 3
 
-export interface DownloadProgress {
-  modelId: string
-  /** 0..1 across BOTH files, weighted by their pinned byte counts. */
-  progress: number
-  receivedBytes: number
-  totalBytes: number
-}
-
-type ProgressListener = (p: DownloadProgress) => void
+const IDLE: LocalModelDownloadState = { modelId: null, status: 'idle', progress: 0 }
 
 let inFlight: Promise<boolean> | null = null
+let state: LocalModelDownloadState = IDLE
 
-function openResponse(url: string, redirectsLeft = 5): Promise<IncomingMessage> {
-  return new Promise((resolve, reject) => {
-    const req = httpsGet(url, (res) => {
-      const status = res.statusCode ?? 0
-      if (status >= 300 && status < 400 && res.headers.location) {
-        res.resume()
-        if (redirectsLeft <= 0) {
-          reject(new Error(`too many redirects for ${url}`))
-          return
-        }
-        // Hugging Face 302s the actual bytes to a CDN host.
-        openResponse(new URL(res.headers.location, url).toString(), redirectsLeft - 1).then(resolve, reject)
-        return
-      }
-      if (status !== 200) {
-        res.resume()
-        reject(new Error(`HTTP ${status} for ${url}`))
-        return
-      }
-      resolve(res)
-    })
-    req.setTimeout(REQUEST_TIMEOUT_MS, () => req.destroy(new Error(`request timeout for ${url}`)))
-    req.on('error', reject)
-  })
+/**
+ * What the fetch is doing right now. Read by the localModels:list IPC handler and folded into the summary
+ * Settings already polls, so there is no second channel to keep in sync — and nothing new can cross the
+ * main→renderer boundary beyond a status word and a fraction.
+ */
+export function localModelDownloadState(): LocalModelDownloadState {
+  return state
+}
+
+/**
+ * Whether this machine should fetch the ~763 MB of weights at all.
+ *
+ * Two reasons not to, both of which boot used to ignore — it fetched unconditionally (MQA-186):
+ *   - Local AI is switched off. The transfer is then pure waste of the user's bandwidth, and the toggle
+ *     is the only "not now" the product offers. Callers MUST re-arm on the OFF→ON edge: this module has
+ *     no other trigger, so gating without re-arming would strand the user with no path to the weights.
+ *   - The machine is under the model's RAM floor. assertRamOk refuses every load below it, so the bytes
+ *     could never be used; listModels() already reported such a machine `insufficient-ram`.
+ */
+export function shouldFetchWeights(modelId: string, localAiEnabled: boolean): boolean {
+  if (!localAiEnabled) return false
+  try {
+    assertRamOk(modelId)
+  } catch {
+    return false
+  }
+  return true
 }
 
 function sha256Of(path: string): Promise<string> {
@@ -91,7 +96,6 @@ async function alreadyValid(path: string, spec: LocalModelFile): Promise<boolean
 }
 
 async function downloadOne(
-  modelId: string,
   file: 'gguf' | 'mmproj',
   spec: LocalModelFile,
   dest: string,
@@ -101,21 +105,48 @@ async function downloadOne(
   const partial = `${dest}.partial`
   rmSync(partial, { force: true })
 
-  const res = await openResponse(spec.url)
-
-  // Reject on the declared length before writing anything: a redirect to a login/error page or a
-  // swapped asset is caught here rather than after streaming half a gigabyte to disk.
-  const declared = Number(res.headers['content-length'])
-  if (Number.isFinite(declared) && declared !== spec.bytes) {
-    res.destroy()
-    throw new Error(`${file}: server declared ${declared} bytes, expected ${spec.bytes}`)
+  // One controller carries both deadlines. net.fetch hands back a Response, not a socket, so the idle
+  // guard node:https got from res.setTimeout has to be rebuilt here: a proxy that accepts the connection
+  // and then stops sending bytes would otherwise hold the transfer open indefinitely.
+  const ctrl = new AbortController()
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const arm = (ms: number, why: string): void => {
+    clearTimeout(timer)
+    timer = setTimeout(() => ctrl.abort(new Error(why)), ms)
   }
-
-  res.setTimeout(IDLE_TIMEOUT_MS, () => res.destroy(new Error(`${file}: stalled mid-download`)))
-  res.on('data', (chunk: Buffer) => onChunk(chunk.length))
+  arm(REQUEST_TIMEOUT_MS, `${file}: request timeout for ${spec.url}`)
 
   try {
-    await pipeline(res, createWriteStream(partial))
+    const res = await net.fetch(spec.url, { signal: ctrl.signal })
+    if (!res.ok) throw new Error(`${file}: HTTP ${res.status} for ${spec.url}`)
+
+    // Reject on the declared length before writing anything: a redirect to a login/error page or a
+    // swapped asset is caught here rather than after streaming half a gigabyte to disk.
+    const header = res.headers.get('content-length')
+    const declared = header === null ? Number.NaN : Number(header)
+    if (Number.isFinite(declared) && declared !== spec.bytes) {
+      throw new Error(`${file}: server declared ${declared} bytes, expected ${spec.bytes}`)
+    }
+    if (!res.body) throw new Error(`${file}: response carried no body`)
+
+    // `getReader()` rather than async iteration: it is the one traversal API every ReadableStream
+    // implementation exposes, and it is what cli-installer.ts's download already uses.
+    const reader = res.body.getReader()
+    arm(IDLE_TIMEOUT_MS, `${file}: stalled mid-download`)
+    await pipeline(
+      (async function* () {
+        for (;;) {
+          const { done, value } = await reader.read()
+          if (done) return
+          if (!value) continue
+          arm(IDLE_TIMEOUT_MS, `${file}: stalled mid-download`)
+          onChunk(value.byteLength)
+          yield value
+        }
+      })(),
+      createWriteStream(partial)
+    )
+
     const size = statSync(partial).size
     if (size !== spec.bytes) throw new Error(`${file}: got ${size} bytes, expected ${spec.bytes}`)
     const digest = await sha256Of(partial)
@@ -125,25 +156,28 @@ async function downloadOne(
     // Only now is the file allowed to exist under its real name.
     renameSync(partial, dest)
   } catch (err) {
+    ctrl.abort()
     rmSync(partial, { force: true })
     throw err
+  } finally {
+    clearTimeout(timer)
   }
 }
 
 /**
  * Ensure both weight files are present and valid, downloading them if not.
  * Resolves true when the model is ready. Never throws — callers treat false as "Local unavailable".
- * Concurrent calls share one download rather than racing for the same files.
+ * Concurrent callers share one download rather than racing for the same files.
  */
-export function ensureLocalModel(modelId: string, onProgress?: ProgressListener): Promise<boolean> {
+export function ensureLocalModel(modelId: string): Promise<boolean> {
   if (inFlight) return inFlight
-  inFlight = run(modelId, onProgress).finally(() => {
+  inFlight = run(modelId).finally(() => {
     inFlight = null
   })
   return inFlight
 }
 
-async function run(modelId: string, onProgress?: ProgressListener): Promise<boolean> {
+async function run(modelId: string): Promise<boolean> {
   let entry
   try {
     entry = getModel(modelId)
@@ -158,8 +192,8 @@ async function run(modelId: string, onProgress?: ProgressListener): Promise<bool
 
   const totalBytes = files.reduce((sum, f) => sum + f.spec.bytes, 0)
   let received = 0
-  const emit = (): void => {
-    onProgress?.({ modelId, progress: totalBytes ? Math.min(1, received / totalBytes) : 0, receivedBytes: received, totalBytes })
+  const publish = (status: LocalModelDownloadState['status']): void => {
+    state = { modelId, status, progress: totalBytes ? Math.min(1, received / totalBytes) : 0 }
   }
 
   const missing = []
@@ -167,9 +201,12 @@ async function run(modelId: string, onProgress?: ProgressListener): Promise<bool
     if (await alreadyValid(f.dest, f.spec)) received += f.spec.bytes
     else missing.push(f)
   }
-  emit()
-  if (!missing.length) return true
+  if (!missing.length) {
+    state = IDLE
+    return true
+  }
 
+  publish('downloading')
   auditLog('local.model.download_start', { modelId, files: missing.map((f) => f.key) })
 
   for (const f of missing) {
@@ -182,15 +219,15 @@ async function run(modelId: string, onProgress?: ProgressListener): Promise<bool
     for (let attempt = 1; attempt <= MAX_ATTEMPTS && !ok; attempt++) {
       try {
         received = base
-        await downloadOne(modelId, f.key, f.spec, f.dest, (n) => {
+        await downloadOne(f.key, f.spec, f.dest, (n) => {
           received += n
-          emit()
+          publish('downloading')
         })
         ok = true
       } catch (err) {
         lastErr = err
         received = base
-        emit()
+        publish('downloading')
       }
     }
     if (!ok) {
@@ -199,20 +236,16 @@ async function run(modelId: string, onProgress?: ProgressListener): Promise<bool
         file: f.key,
         error: lastErr instanceof Error ? lastErr.message : String(lastErr)
       })
+      // Held at 'failed' rather than reset, because this is what Settings now reads: the card says the
+      // fetch could not complete and names what has to be reachable, instead of the old "the bundled
+      // model files are missing or incomplete — reinstall Métis", which no installer can satisfy
+      // (MQA-187/191).
+      publish('failed')
       return false
     }
   }
 
   auditLog('local.model.download_ok', { modelId })
+  state = IDLE
   return true
-}
-
-/** True when neither weight file is on disk yet — used to decide whether to announce the download. */
-export function isLocalModelMissing(modelId: string): boolean {
-  try {
-    const paths = modelPaths(modelId)
-    return !existsSync(paths.gguf) || !existsSync(paths.mmproj)
-  } catch {
-    return true
-  }
 }

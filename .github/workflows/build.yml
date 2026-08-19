@@ -67,15 +67,29 @@ jobs:
         run: npm audit --audit-level=critical
       - name: Dependency audit (report high, non-blocking)
         run: npm audit --audit-level=high || true
-      # Secret scan: fail if a key-shaped string is committed to source (allow .env.example placeholders).
-      # Test files are excluded — redact.test.ts intentionally contains fake key-shaped strings to verify
-      # the redaction function actually catches them; that's the test working, not a leak.
+      # Secret scan: fail if a key-shaped string is committed to source.
+      #
+      # The prefix list is not hand-picked: it is every prefix src/shared/providers.ts declares as a
+      # `keyPattern`, folded into one dashed-prefix term (sk-<vendor>-) plus the non-sk prefixes. The old
+      # literal list named only sk-ant- and sk-or-, so it could not match sk-kimi- — the format this
+      # product embeds itself (src/main/cahe-embedded-key.ts, build/cahe-kimi.local.json) — and the gate
+      # went green on the one credential it exists to stop. \b keeps the generic sk- term off ordinary
+      # dashed words ("risk-management-…"). scripts/ci-secret-scan.contract.test.ts executes this exact
+      # regex against those declared prefixes, so the two lists cannot drift apart again.
+      #
+      # Roots cover where keys actually live, not just src/: scripts/ (the .mjs build and release chain,
+      # hence --include='*.mjs'), build/ (the Cahê key file), intelligence/src (a real source tree shipped
+      # as extraResources), and both packaging overlays. Excluded: *.test.ts and scripts/qa, which plant
+      # deliberately dead key-shaped fixtures to exercise the redaction and degrade paths — that is the
+      # harness working, not a leak.
       - name: Secret scan
         run: |
-          if grep -rInE '(nvapi-|sk-ant-|sk-or-|gsk_|fw_|tgp_v1_)[A-Za-z0-9_-]{16,}' \
-            --include='*.ts' --include='*.tsx' --include='*.js' --include='*.json' --include='*.yml' \
-            --exclude='*.test.ts' --exclude='*.test.tsx' \
-            src .github electron-builder.yml 2>/dev/null; then
+          if grep -rInE '\b(nvapi-|sk-[A-Za-z0-9]+-|gsk_|xai-|AIza|eyJ|fw_|tgp_v1_)[A-Za-z0-9_-]{16,}' \
+            --include='*.ts' --include='*.tsx' --include='*.js' --include='*.mjs' \
+            --include='*.json' --include='*.yml' \
+            --exclude='*.test.ts' --exclude='*.test.tsx' --exclude-dir=qa \
+            src scripts build intelligence/src .github \
+            electron-builder.yml electron-builder.win.yml electron-builder.cahe.win.yml package.json 2>/dev/null; then
             echo "::error::Possible committed secret found"; exit 1
           fi
           echo "No committed secrets found."

@@ -153,7 +153,10 @@ describe('bundled local model runtime', () => {
           label: model.label,
           minTotalRamGB: model.minTotalRamGB,
           ready: false,
-          unavailableReason: 'missing-files'
+          // MQA-187/191: "missing files" was rendered as a damaged install. With no download state to
+          // fold in, a never-attempted fetch is exactly that and nothing stronger.
+          unavailableReason: 'not-downloaded',
+          downloadProgress: 0
         }
       ])
 
@@ -170,9 +173,31 @@ describe('bundled local model runtime', () => {
           label: model.label,
           minTotalRamGB: model.minTotalRamGB,
           ready: true,
-          unavailableReason: null
+          unavailableReason: null,
+          downloadProgress: 0
         }
       ])
+    })
+
+    it('MQA-186 — under the RAM floor, the RAM cause outranks the missing weights', () => {
+      // The weights are deliberately not fetched below minTotalRamGB (shouldFetchWeights), so a
+      // "not downloaded yet" verdict would point at a download that is never going to be attempted and
+      // hide the only thing the user can act on.
+      setTotalMemGB(4)
+      expect(listModels()[0]).toMatchObject({ ready: false, unavailableReason: 'insufficient-ram' })
+    })
+
+    it('MQA-187 — an in-flight fetch reads as downloading, with its progress, not as absent files', () => {
+      expect(
+        listModels({ modelId: LOCAL_MODELS[0].id, status: 'downloading', progress: 0.42 })[0]
+      ).toMatchObject({ ready: false, unavailableReason: 'downloading', downloadProgress: 0.42 })
+    })
+
+    it('MQA-191 — download state for a DIFFERENT model id is ignored, never mislabelled', () => {
+      expect(listModels({ modelId: 'some-other-model', status: 'downloading', progress: 0.9 })[0]).toMatchObject({
+        unavailableReason: 'not-downloaded',
+        downloadProgress: 0
+      })
     })
 
     it('reports insufficient RAM honestly even when both bundled files are present', () => {

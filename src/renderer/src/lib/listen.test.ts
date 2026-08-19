@@ -2,12 +2,17 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, it, expect } from 'vitest'
 import {
+  degradedAfterMicRecovery,
   isQuestion,
   looksLikeNetworkError,
+  probeResultIsStale,
   shouldProbeLanguageWindow,
+  sysRetryDelayMs,
   themDeviceChangeAction,
+  themRecoveryFailureIsNoop,
   themTracksLookDead
 } from './listen'
+import type { CaptureDegraded } from './listen'
 
 // Normalize CRLF → LF (same rationale as App.mic-only-visibility.test.ts): Windows checkouts would
 // otherwise break any anchor whose newline sits mid-string.
@@ -226,5 +231,180 @@ describe('shouldProbeLanguageWindow — auto-language probe cadence (MQA-012)', 
     expect(listenSrc).toMatch(
       /shouldProbeLanguageWindow\(probeWindowCountRef\.current, probePinnedRef\.current\)/
     )
+  })
+})
+
+// MQA-156 — `captureDegraded` is a SINGLE slot but two independent sides can be degraded at once. On a
+// mic-only session (Screen Recording denied, so the start-time entry is {side:'them'}), a mic blip wrote
+// {side:'you'} over that entry and the mic recovery ~200ms later cleared it outright — so the Bar's chip
+// went back to the confident red "Heard live" for the rest of a meeting whose remote half was never being
+// captured. That is the exact 2026-07-20 failure the field exists to prevent (see its doc block).
+const THEM_PERMISSION_DEGRADED: CaptureDegraded = {
+  side: 'them',
+  note: 'System audio needs Screen Recording permission. Listening to microphone only; grant it in System Settings → Privacy & Security → Screen Recording, then restart Listen.',
+  permission: true
+}
+const MIC_DEGRADED: CaptureDegraded = {
+  side: 'you',
+  note: 'Microphone lost (device change or sleep). Reconnecting…',
+  permission: false
+}
+
+describe('degradedAfterMicRecovery — a mic recovery must not erase a live them degradation (MQA-156)', () => {
+  it('MQA-156 — restores the still-live them cause instead of claiming full health', () => {
+    // The 2026-07-20 shape: mic-only because Screen Recording is denied, mic drops and comes back.
+    expect(degradedAfterMicRecovery(MIC_DEGRADED, THEM_PERMISSION_DEGRADED, true, false)).toEqual(
+      THEM_PERMISSION_DEGRADED
+    )
+  })
+
+  it('MQA-156 — clears the degradation when the mic really was the only side missing', () => {
+    expect(degradedAfterMicRecovery(MIC_DEGRADED, null, true, true)).toBeNull() // them channel is live
+    expect(degradedAfterMicRecovery(MIC_DEGRADED, null, false, false)).toBeNull() // mic-only session by choice
+    // A stale remembered cause must not resurrect a them side that is actually capturing again.
+    expect(degradedAfterMicRecovery(MIC_DEGRADED, THEM_PERMISSION_DEGRADED, true, true)).toBeNull()
+  })
+
+  it('MQA-156 — leaves a them entry alone (that side clears itself on its own recovery)', () => {
+    expect(degradedAfterMicRecovery(THEM_PERMISSION_DEGRADED, THEM_PERMISSION_DEGRADED, true, false)).toEqual(
+      THEM_PERMISSION_DEGRADED
+    )
+    expect(degradedAfterMicRecovery(null, THEM_PERMISSION_DEGRADED, true, false)).toBeNull()
+  })
+
+  it('MQA-156 — is what recoverMic writes, and every them-degradation site remembers its cause', () => {
+    // The clear site that used to lie.
+    expect(listenSrc).toMatch(
+      /captureDegraded: degradedAfterMicRecovery\(\s*s\.captureDegraded,\s*themDegradedRef\.current,\s*wantsSystemRef\.current,\s*!!channels\.current\.them\s*\)/
+    )
+    // Remembered at the start-time mic-only fallback, at a mid-session 'them' death, and at the
+    // probation recycle — and dropped again only once 'them' is genuinely capturing (or a new session).
+    expect(listenSrc).toMatch(/themDegradedRef\.current = captureDegraded\?\.side === 'them' \? captureDegraded : null/)
+    expect(listenSrc).toMatch(/themDegradedRef\.current = \{ side: 'them', note: THEM_LOST_MSG, permission: false \}/)
+    expect(listenSrc).toMatch(/themDegradedRef\.current = null/)
+  })
+})
+
+// MQA-157 — probeLanguageWindow's stale-result guard checked liveRef, which start() re-raises for the NEXT
+// session, so a Parakeet probe dispatched by meeting 1 (its first call pays a multi-second sherpa model
+// load) could resolve inside meeting 2 and post {type:'pinLanguage'} to the freshly reset worker — pinning
+// an English call to the previous meeting's Portuguese. The file already carries the right primitive for
+// this (sessionEpochRef, which stop()'s drain checks for exactly the same reason).
+describe('probeResultIsStale — a probe must not outlive its session (MQA-157)', () => {
+  it('MQA-157 — discards a result dispatched by a session that has since been replaced', () => {
+    // liveRef/engine/language all look current in session 2 — only the epoch reveals the leak.
+    expect(probeResultIsStale(1, 2, true, 'whisper', 'auto')).toBe(true)
+  })
+
+  it('MQA-157 — keeps a result from the session that dispatched it', () => {
+    expect(probeResultIsStale(2, 2, true, 'whisper', 'auto')).toBe(false)
+  })
+
+  it('MQA-157 — keeps the pre-existing stop/engine/language guards (added to, not replaced)', () => {
+    expect(probeResultIsStale(2, 2, false, 'whisper', 'auto')).toBe(true) // stopped
+    expect(probeResultIsStale(2, 2, true, 'parakeet', 'auto')).toBe(true) // mid-session engine switch
+    expect(probeResultIsStale(2, 2, true, 'apple', 'auto')).toBe(true)
+    expect(probeResultIsStale(2, 2, true, 'whisper', 'fr')).toBe(true) // user set an explicit language
+  })
+
+  it('MQA-157 — is the guard probeLanguageWindow runs, stamped with the epoch at dispatch time', () => {
+    // The stamp must be taken when the probe is FIRED (synchronously inside the session that owns it),
+    // not read back out of the ref after the round trip — which is what made liveRef useless here.
+    expect(listenSrc).toMatch(
+      /const probeLanguageWindow = useCallback\(\(audio: Float32Array, speaker: Speaker\): void => \{\n\s*const epoch = sessionEpochRef\.current/
+    )
+    expect(listenSrc).toMatch(
+      /if \(\s*probeResultIsStale\(\s*epoch,\s*sessionEpochRef\.current,\s*liveRef\.current,\s*engineRef\.current,\s*asrLanguageRef\.current\s*\)\s*\)\s*\n?\s*return/
+    )
+  })
+})
+
+// MQA-163 — the Windows half of the system-audio watcher retried a FULL display-capture acquisition every
+// 3 s, unconditionally, for as long as the session wanted system audio and had no 'them' channel. On a
+// machine where WASAPI loopback cannot start at all (VDI/RDP with no render endpoint, every output
+// disabled, another app holding the endpoint exclusively) that is ~2400 acquisitions in a 2 h meeting —
+// and each one that falls through to the video-bound form runs up to 3 desktopCapturer.getSources screen
+// enumerations, i.e. the exact screen-grabbing path the audio-only attempt exists to avoid. It also
+// re-rendered the whole App tree on that 3 s cadence via a value-identical setState spread.
+//
+// The retry must stay reachable forever, though: the headline case in the watcher's own comment (another
+// app holding the render endpoint) fires no 'devicechange', so a terminal give-up would re-open MQA-041's
+// mic-only-for-the-whole-meeting failure. Hence capped backoff, no terminal state.
+describe('sysRetryDelayMs — the Windows loopback retry is paced, never abandoned (MQA-163)', () => {
+  /** Replay the watcher's 3 s tick loop over a meeting whose loopback never comes back. Mirrors the
+   *  effect: skip the tick until the timestamp passes, then arm the next delay off the failure count. */
+  const replayTicks = (meetingMs: number): number[] => {
+    const fires: number[] = []
+    let failures = 0
+    let nextAt = 0
+    for (let now = 3000; now <= meetingMs; now += 3000) {
+      if (now < nextAt) continue
+      nextAt = now + sysRetryDelayMs(failures++)
+      fires.push(now)
+    }
+    return fires
+  }
+
+  it('MQA-163 — backs off instead of re-acquiring display capture on every 3 s tick', () => {
+    expect(sysRetryDelayMs(0)).toBe(3000)
+    expect(sysRetryDelayMs(1)).toBe(6000)
+    expect(sysRetryDelayMs(2)).toBe(12000)
+    expect(sysRetryDelayMs(3)).toBe(24000)
+  })
+
+  it('MQA-163 — holds at a ceiling, so a long meeting cannot outrun the schedule', () => {
+    expect(sysRetryDelayMs(4)).toBe(30_000)
+    expect(sysRetryDelayMs(200)).toBe(30_000) // 3000 * 2**200 overflows to Infinity — still capped
+  })
+
+  it('MQA-163 — a 2 h dead-loopback meeting costs a few hundred attempts, not a few thousand', () => {
+    const fires = replayTicks(2 * 60 * 60 * 1000)
+    expect(fires.length).toBeLessThan(300) // was 2400: one per 3 s tick
+  })
+
+  it('MQA-163 — never gives up: still retrying at the end of the meeting', () => {
+    // A terminal cap would resurrect MQA-041 for the one failure mode that emits no devicechange.
+    const meetingMs = 2 * 60 * 60 * 1000
+    const fires = replayTicks(meetingMs)
+    expect(meetingMs - fires[fires.length - 1]).toBeLessThanOrEqual(30_000)
+    // The opening blip — the case the watcher was written for — is still caught in the first seconds.
+    expect(fires[0]).toBe(3000)
+  })
+
+  it('MQA-163 — is what the Windows branch of the watcher actually runs', () => {
+    // The pre-fix shape: an unconditional re-acquire on every tick.
+    expect(listenSrc).not.toMatch(
+      /if \(isWindows\) \{\n {8}void recoverSystemAudioRef\.current\?\.\(\)\n {8}return\n {6}\}/
+    )
+    expect(listenSrc).toMatch(/if \(now < sysRetryNextAtRef\.current\) return/)
+    expect(listenSrc).toMatch(
+      /sysRetryNextAtRef\.current = now \+ sysRetryDelayMs\(sysRetryAttemptsRef\.current\+\+\)/
+    )
+    // Reset in all three places recovery becomes plausible again: a new session, a successful re-acquire,
+    // and a real device change (which must get an immediate attempt, not wait out the backoff).
+    expect(listenSrc.match(/sysRetryAttemptsRef\.current = 0/g)).toHaveLength(3)
+  })
+})
+
+// MQA-163 (second half) — the failed-retry catch spread a fresh state object every time, so a watcher
+// that could never succeed re-rendered App on its own cadence for a value-identical state.
+describe('themRecoveryFailureIsNoop — a repeated failure must not re-render the tree (MQA-163)', () => {
+  it('MQA-163 — the second and every later failure of a stuck loopback writes nothing', () => {
+    // The steady state of the scenario: the note and the degradation entry are both already up, and the
+    // retry keeps failing. Under the old code each of those failures spread a fresh state object.
+    expect(themRecoveryFailureIsNoop('System-audio capture stopped…', THEM_PERMISSION_DEGRADED)).toBe(true)
+  })
+
+  it('MQA-163 — still writes while either half of the state is missing', () => {
+    expect(themRecoveryFailureIsNoop(null, null)).toBe(false) // first failure of a mid-session loss
+    expect(themRecoveryFailureIsNoop(null, THEM_PERMISSION_DEGRADED)).toBe(false) // note was cleared
+    expect(themRecoveryFailureIsNoop('System-audio capture stopped…', null)).toBe(false)
+  })
+
+  it('MQA-163 — is the guard the failed-retry catch bails out on', () => {
+    expect(listenSrc).toMatch(/themRecoveryFailureIsNoop\(s\.error, s\.captureDegraded\)\n\s*\? s\n\s*:/)
+    // The write itself still only ever RAISES — an existing captureDegraded carries the more specific
+    // start-time cause (the Screen-Recording copy) and must survive the retry.
+    expect(listenSrc).toMatch(/captureDegraded: s\.captureDegraded \?\? \{ side: 'them', note: THEM_LOST_MSG, permission: false \}/)
   })
 })

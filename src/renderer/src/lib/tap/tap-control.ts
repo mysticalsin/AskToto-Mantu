@@ -198,8 +198,6 @@ export interface UseTapControlArgs {
   sensitivity: number
   /** Fired with the recognized zone index — caller maps it to a HotkeyAction and dispatches. */
   onZone: (zone: number) => void
-  /** Profile was calibrated on a different mic/rate — surface a "recalibrate" prompt. */
-  onProfileMismatch?: () => void
 }
 
 /**
@@ -211,8 +209,6 @@ export function useTapControl(args: UseTapControlArgs): void {
   const gen = useRef(0)
   const zoneRef = useRef(args.onZone)
   zoneRef.current = args.onZone
-  const mismatchRef = useRef(args.onProfileMismatch)
-  mismatchRef.current = args.onProfileMismatch
   const sessionRef = useRef<TapControlSession | null>(null)
 
   const { active, profile, micDeviceId, sensitivity } = args
@@ -235,10 +231,9 @@ export function useTapControl(args: UseTapControlArgs): void {
     const p = profileRef.current
     if (!active || !p) return
     // Mic identity is part of the acoustic model — a different mic has a different transfer function.
-    if (p.micDeviceId !== (micDeviceId ?? p.micDeviceId)) {
-      mismatchRef.current?.()
-      return
-    }
+    // Not reported from here: App derives the standing "paused — recalibrate" banner from the same
+    // settings snapshot (tapProfileMismatch), so the two can never disagree about whether it is armed.
+    if (p.micDeviceId !== (micDeviceId ?? p.micDeviceId)) return
     const my = ++gen.current
     const armed = sensitivityRef.current
     void startTapControl({

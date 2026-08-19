@@ -66,8 +66,11 @@ export async function runSelfTest(outPath: string): Promise<void> {
   }
 
   // 3. Real transcript save: collision-safe + index + README + Dust frontmatter
+  // `folder` is hoisted so the restore below can live in a `finally`: this suite borrows the profile
+  // (meetingsFolder + encryptTranscripts:false), and a throw part-way through must not leave it there —
+  // that state writes every later meeting as cleartext into a directory this function then deletes.
+  const folder = join(tmpdir(), 'asktoto-selftest-' + Date.now())
   try {
-    const folder = join(tmpdir(), 'asktoto-selftest-' + Date.now())
     // Plaintext mode exercises the human-readable index + Dust frontmatter bookkeeping deterministically.
     // (The shipped default is encryptTranscripts:true, where the index is intentionally skipped so titles/
     //  dates don't leak and the file is ciphertext — that path is covered by its own check below.)
@@ -93,11 +96,12 @@ export async function runSelfTest(outPath: string): Promise<void> {
       'encrypted transcript is ciphertext at rest',
       existsSync(fe) && !readFileSync(fe, 'utf8').includes('Can you walk me through it?')
     )
+  } catch (e) {
+    ok('transcript save suite', false, String(e))
+  } finally {
     setSettings({ meetingsFolder: '', encryptTranscripts: true })
     rmSync(folder, { recursive: true, force: true })
     rmSync(settingsFile, { force: true })
-  } catch (e) {
-    ok('transcript save suite', false, String(e))
   }
 
   // 4. Cross-platform OneDrive detection returns a string

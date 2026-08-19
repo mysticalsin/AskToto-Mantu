@@ -8,39 +8,27 @@ import { createHash } from 'node:crypto'
 import { slug } from './slug.ts'
 
 /**
- * Parity test against the host store's slugify (src/main/brain/store.ts). This file runs under Vitest's
- * node environment, so it's allowed to import `node:crypto` directly to compute the SAME expected hash
- * store.ts would produce — slug.ts itself must stay node:crypto-free (see slug.ts's doc comment) because
- * it ships in the browser bundle.
+ * MQA-174 — byte-for-byte parity against the host store's slugify (src/main/brain/store.ts) is proved in
+ * src/main/brain/slug-parity.test.ts, which imports BOTH real functions. It used to be "proved" here by a
+ * hand-written copy of slugify() — a copy that had itself drifted (no Windows-reserved-name branch, and a
+ * plain 60-char truncation where the store truncates to 51 + an 8-hex hash), so it certified a parity that
+ * did not exist and let slug() ship without the reserved-name branch for a month. A hand copy of the thing
+ * under test is not an oracle; it is a second implementation that can drift with the first.
+ *
+ * What stays here is the dashboard-local behavior of slug() stated directly, with no mirror to drift from.
  */
-function storeSlugify(s: string): string {
-  const base = s
-    .toLowerCase()
-    .normalize('NFKD')
-    .replace(/[̀-ͯ]/g, '')
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-    .slice(0, 60)
-  if (base) return base
-  const hash = createHash('sha256').update(s.normalize('NFKC')).digest('hex').slice(0, 8)
-  return `x-${hash}`
-}
-
 describe('slug', () => {
-  const cases = [
-    'Acme Corp',
-    "L'Oréal",
-    '株式会社アクメ',
-    '🎉🚀',
-    ''
-  ]
-
-  it.each(cases)('matches store.ts slugify byte-for-byte for %j', (name) => {
-    expect(slug(name)).toBe(storeSlugify(name))
-  })
-
   it('produces the expected ASCII slug for a plain latin name', () => {
     expect(slug('Acme Corp')).toBe('acme-corp')
+  })
+
+  it('MQA-174 — suffixes a bare Windows reserved device name, as the store does when it mints the node id', () => {
+    expect(slug('AUX')).toBe('aux-x')
+    expect(slug('con')).toBe('con-x')
+    expect(slug('LPT9')).toBe('lpt9-x')
+    // The check is on the WHOLE slug, not a prefix — these are ordinary names.
+    expect(slug('Con Edison')).toBe('con-edison')
+    expect(slug('Auxilium')).toBe('auxilium')
   })
 
   it('strips diacritics so accented and unaccented names collide on purpose', () => {

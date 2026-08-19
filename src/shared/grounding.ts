@@ -74,19 +74,27 @@ function tokenizeWords(s: string): { tok: string; start: number; end: number }[]
   return out
 }
 
-// Length of the longest common SUBSEQUENCE of two token arrays — tolerant of tokens inserted into
-// `b` (ASR filler words like "uh") without giving them any credit, since they simply don't extend
-// the subsequence. Missing/substituted `a` tokens cost exactly one point each.
-function lcsLen(a: string[], b: string[]): number {
-  let prevRow = new Array(b.length + 1).fill(0)
+// Length of the longest common SUBSEQUENCE of `a` and the `b[from, to)` slice — tolerant of tokens
+// inserted into `b` (ASR filler words like "uh") without giving them any credit, since they simply
+// don't extend the subsequence. Missing/substituted `a` tokens cost exactly one point each.
+// The window is passed as a RANGE into the caller's flat token array rather than as its own array:
+// alignQuote scores O(quote) overlapping windows per anchor, and materializing each one cost a
+// slice() + map() allocation per window on top of this table (MQA-150).
+function lcsLen(a: string[], b: string[], from: number, to: number): number {
+  const n = to - from
+  // Two reused rows: the recurrence only ever reads the previous row and the cells already written in
+  // the current one, so swapping buffers is equivalent to allocating a fresh row per i.
+  let prev = new Array<number>(n + 1).fill(0)
+  let cur = new Array<number>(n + 1).fill(0)
   for (let i = 1; i <= a.length; i++) {
-    const row = new Array(b.length + 1).fill(0)
-    for (let j = 1; j <= b.length; j++) {
-      row[j] = a[i - 1] === b[j - 1] ? prevRow[j - 1] + 1 : Math.max(prevRow[j], row[j - 1])
+    for (let j = 1; j <= n; j++) {
+      cur[j] = a[i - 1] === b[from + j - 1] ? prev[j - 1] + 1 : Math.max(prev[j], cur[j - 1])
     }
-    prevRow = row
+    const spent = prev
+    prev = cur
+    cur = spent
   }
-  return prevRow[b.length]
+  return prev[n]
 }
 
 /** Find `quote` in `transcript`. Exact indexOf (after NFKC + whitespace-collapse + casefold normalization) first;
@@ -111,22 +119,48 @@ export function alignQuote(quote: string, transcript: string, threshold = 0.85):
   const transcriptTokens = tokenizeWords(t)
   if (queryTokens.length === 0 || transcriptTokens.length === 0) return null
 
-  const slack = Math.max(2, Math.ceil(queryTokens.length * 0.3))
+  const qLen = queryTokens.length
+  const tLen = transcriptTokens.length
+  const transcriptWords = transcriptTokens.map((x) => x.tok)
+  const slack = Math.max(2, Math.ceil(qLen * 0.3))
+
+  // MQA-150 — anchor guard. Scoring EVERY start position costs O(transcript × quote³): the LCS table
+  // alone is O(quote × window) and it is rebuilt for ~0.3·quote widths at each of the transcript's
+  // tokens, so a 120 KB transcript spent seconds of BLOCKED MAIN PROCESS on a single quote (verification
+  // runs synchronously inside ingest). `hits[i]` counts how many of the first i transcript tokens are
+  // query tokens; a start whose WIDEST window cannot even contain enough query tokens to clear
+  // `threshold` cannot produce a match, so its LCS tables are never built.
+  //
+  // Verdict-preserving, not a heuristic narrowing: LCS length is bounded by the number of window tokens
+  // that appear in the query at all, and every enumerated window is either >= qLen long (so the score
+  // divisor is its own length, >= qLen) or a short tail window (divisor qLen) — so
+  // min(hits, qLen) / qLen is an upper bound on the score of EVERY window at that start. Skipping a
+  // start whose upper bound is below `threshold` therefore only ever discards windows that could not
+  // have been returned: if the true best clears the threshold it is still enumerated (and reached in the
+  // same start/len order, so an equal-scoring tie still resolves to the same earliest window), and if it
+  // does not, the function returns null either way.
+  const queryVocabulary = new Set(queryTokens)
+  const hits = new Int32Array(tLen + 1)
+  for (let i = 0; i < tLen; i++) hits[i + 1] = hits[i] + (queryVocabulary.has(transcriptWords[i]) ? 1 : 0)
+
   let best: AlignMatch | null = null
-  for (let start = 0; start < transcriptTokens.length; start++) {
-    const maxLen = Math.min(queryTokens.length + slack, transcriptTokens.length - start)
-    for (let len = Math.min(queryTokens.length, maxLen); len <= maxLen; len++) {
-      const window = transcriptTokens.slice(start, start + len)
-      const overlap = lcsLen(queryTokens, window.map((w) => w.tok))
+  scan: for (let start = 0; start < tLen; start++) {
+    const maxLen = Math.min(qLen + slack, tLen - start)
+    if (Math.min(hits[start + maxLen] - hits[start], qLen) / qLen < threshold) continue
+    for (let len = Math.min(qLen, maxLen); len <= maxLen; len++) {
+      const overlap = lcsLen(queryTokens, transcriptWords, start, start + len)
       // Score 1.0 is reserved for a genuine verbatim (post-normalization) contiguous match — the exact
       // path above already claims those, so anything reaching this fuzzy path is by definition NOT a
       // literal substring. Dividing by max(queryLen, windowLen) rather than queryLen alone means any
       // window wider than the query (i.e. one that had to skip/absorb extra transcript tokens to align
       // — inserted filler, a substituted/rejected number nearby, ASR noise) scores strictly < 1: the
       // window can only reach the query's own length when it contains nothing but the query's tokens.
-      const score = overlap / Math.max(queryTokens.length, window.length)
+      const score = overlap / Math.max(qLen, len)
       if (!best || score > best.score) {
-        best = { start: window[0].start, end: window[window.length - 1].end, score }
+        best = { start: transcriptTokens[start].start, end: transcriptTokens[start + len - 1].end, score }
+        // Nothing can beat 1 (overlap can never exceed the divisor) and a later tie would lose to this
+        // window anyway on the strict `>` above, so the remaining scan cannot change the answer.
+        if (score >= 1) break scan
       }
     }
   }

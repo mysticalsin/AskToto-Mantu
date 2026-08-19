@@ -75,6 +75,19 @@ export function looksLikeNetworkError(message: string, online: boolean): boolean
 }
 
 /**
+ * Exported for unit testing — which live-banner note survives a window that decoded successfully.
+ * A Whisper decode failure is per-window, not per-session (the very next window normally transcribes
+ * fine), yet its note used to sit in the danger banner for the rest of the meeting because nothing ever
+ * retracted it. `decodeNote` is the exact text the failing window put up, so the retraction is an
+ * exact-string match — the same contract as OFFLINE_MSG/THEM_SILENT_MSG above, and the reason a fuzzy
+ * "clear anything engine-shaped" rule is wrong: it would erase MIC_LOST_MSG/THEM_LOST_MSG/DROPPED_MSG,
+ * which describe conditions a decoded window says nothing about.
+ */
+export function noteAfterDecodedWindow(current: string | null, decodeNote: string | null): string | null {
+  return decodeNote !== null && current === decodeNote ? null : current
+}
+
+/**
  * Exported for unit testing — the pure probe cadence behind pump() (see PROBE_EVERY's block comment).
  * The un-pinned budget is an opening BURST, not a retirement: a meeting whose first windows are short
  * openers ("Oi", "Tudo bem?") burns all five of them on returns the PROBE_MIN_WORDS substance gate throws
@@ -86,6 +99,26 @@ export function looksLikeNetworkError(message: string, online: boolean): boolean
 export function shouldProbeLanguageWindow(windowIndex: number, pinned: boolean): boolean {
   if (pinned) return windowIndex % PROBE_EVERY === 0
   return windowIndex <= PROBE_WINDOW_BUDGET || windowIndex % PROBE_EVERY === 0
+}
+
+/**
+ * Exported for unit testing — the pure staleness decision behind probeLanguageWindow's `.then` (see
+ * useListen below). A probe is a fire-and-forget IPC round trip with no timeout whose first call of a
+ * session pays the multi-second sherpa model load (parakeetRelease frees it between meetings), so it can
+ * still be in flight when the user stops and starts a new meeting. `live` alone cannot express that:
+ * start() raises it again for the NEXT session, so a session-1 probe resolving inside session 2 passed
+ * the guard and pinned session 2's freshly reset worker to session 1's language. The session epoch
+ * stamped at dispatch is the identity that survives the round trip — the same primitive stop()'s drain
+ * uses to refuse to clobber a session it no longer owns.
+ */
+export function probeResultIsStale(
+  dispatchEpoch: number,
+  currentEpoch: number,
+  live: boolean,
+  engine: 'whisper' | 'parakeet' | 'apple',
+  language: string
+): boolean {
+  return dispatchEpoch !== currentEpoch || !live || engine !== 'whisper' || language !== 'auto'
 }
 
 /** What the 'them' (system-loopback) side must do when the OS reports an audio-device change. */
@@ -213,6 +246,56 @@ export interface CaptureDegraded {
   permission: boolean
 }
 
+/**
+ * Exported for unit testing — the pure decision behind recoverMic's success path (see useListen below).
+ * `captureDegraded` is ONE slot but both sides can be degraded at once: on a mic-only session (Screen
+ * Recording denied) a mic drop overwrites the 'them' entry with {side:'you'}, and the recovery ~200ms
+ * later cleared the slot outright — so the Bar's chip went back to the confident red "Heard live" while
+ * the remote half of the meeting was still not being captured and never would be (MQA-156), which is the
+ * exact 2026-07-20 failure this field exists to prevent. A mic recovery may therefore only retire the
+ * 'you' entry: while the session still wants system audio and has no 'them' channel, the remembered
+ * 'them' cause — which carries the specific Screen-Recording copy and `permission` — is exposed again.
+ */
+export function degradedAfterMicRecovery(
+  current: CaptureDegraded | null,
+  themDegraded: CaptureDegraded | null,
+  wantsSystem: boolean,
+  hasThemChannel: boolean
+): CaptureDegraded | null {
+  if (current?.side !== 'you') return current
+  return wantsSystem && !hasThemChannel ? themDegraded : null
+}
+
+/**
+ * Delay before the next Windows system-audio retry, given how many have already failed back-to-back.
+ * Doubles from the watcher's 3 s tick and holds at a 30 s ceiling — bounded work, but NEVER terminal.
+ *
+ * Both halves matter. A machine where WASAPI loopback cannot start at all (VDI/RDP with no render
+ * endpoint, every output disabled, an app holding the endpoint exclusively) used to pay a full
+ * getDisplayMedia acquisition every 3 s for the whole meeting — and each attempt that falls through to
+ * the video-bound form runs up to 3 desktopCapturer.getSources screen enumerations, which is the exact
+ * screen-grabbing path the audio-only attempt exists to avoid. Giving up entirely is not the answer
+ * either: the headline case in the watcher's own comment (another app holding the render endpoint) emits
+ * no 'devicechange', so nothing else would ever re-arm and the meeting stays mic-only — MQA-041.
+ */
+export function sysRetryDelayMs(consecutiveFailures: number): number {
+  return Math.min(3000 * 2 ** consecutiveFailures, 30_000)
+}
+
+/**
+ * A failed 'them' re-acquire only ever RAISES: the sticky note when there is none, and the degradation
+ * entry when there is none (an existing one carries the more specific start-time cause, e.g. the
+ * Screen-Recording copy, and must survive). So once both are set the write is a no-op — and it must then
+ * leave the state object alone rather than spreading a value-identical copy: the Windows retry above runs
+ * on a repeating cadence for the whole meeting, and every spread re-rendered the entire App tree.
+ */
+export function themRecoveryFailureIsNoop(
+  error: string | null,
+  captureDegraded: CaptureDegraded | null
+): boolean {
+  return error !== null && captureDegraded !== null
+}
+
 export interface ListenApi {
   listening: boolean
   /** True only once capture is actually confirmed (mic and/or system audio channel open) — see the
@@ -338,6 +421,9 @@ export function useListen(
   const queue = useRef<{ audio: Float32Array; speaker: Speaker }[]>([])
   const busy = useRef(false)
   const readyRef = useRef(false)
+  // Exact text of the note a failed audio window put in the banner, so the next window that decodes can
+  // retract THAT note and nothing else (see noteAfterDecodedWindow). Null whenever nothing is outstanding.
+  const decodeNoteRef = useRef<string | null>(null)
   const liveRef = useRef(false) // true only between start() and stop() — guards stale results
   // Synchronous in-flight guard for start(): a rapid double-click/double-hotkey on Listen calls start()
   // twice before React re-renders listen.listening to true (that state update is async), so a boolean
@@ -357,19 +443,37 @@ export function useListen(
   // has arrived SINCE the probation was armed. Deliberately a bare boolean — the per-window audio callback
   // that sets it must stay free of clock reads and React state churn.
   const themWindowSeenRef = useRef(false)
+  // The 'them'-side degradation cause, held independently of the single exposed `captureDegraded` slot so
+  // a mic blip's {side:'you'} write + clear cannot erase a still-live mic-only stretch (MQA-156). Written
+  // by every site that degrades 'them', dropped only when 'them' is genuinely capturing again or a new
+  // session starts.
+  const themDegradedRef = useRef<CaptureDegraded | null>(null)
   const onQRef = useRef(onQuestion)
   onQRef.current = onQuestion
   const onFallbackRef = useRef(onEngineFallback)
   onFallbackRef.current = onEngineFallback
   // Compiled once per corrections-list change (not per line) — word-boundary + case-insensitive so
   // correcting "Toto" never also corrupts "Tomato".
+  // The identity guard is what makes "once per list change" true: as a bare render-body assignment this
+  // ran once per RENDER, and App re-renders ~60x/s for the whole of a streaming answer (useAsk's flush is
+  // rAF-batched), so a 500-name brain rebuilt 500 Unicode RegExps every animation frame. Both incoming
+  // arrays are referentially stable between fetches (App's `entityNames` state and `settings.asrCorrections`),
+  // so identity is exactly "the list changed".
   const correctionsRef = useRef<{ re: RegExp; to: string }[]>([])
-  correctionsRef.current = (corrections ?? [])
-    .filter((c) => c.from.trim())
-    .map((c) => ({ re: new RegExp(`\\b${escapeRegExp(c.from.trim())}\\b`, 'gi'), to: c.to }))
+  const compiledCorrectionsForRef = useRef<typeof corrections>(undefined)
+  if (compiledCorrectionsForRef.current !== corrections) {
+    compiledCorrectionsForRef.current = corrections
+    correctionsRef.current = (corrections ?? [])
+      .filter((c) => c.from.trim())
+      .map((c) => ({ re: new RegExp(`\\b${escapeRegExp(c.from.trim())}\\b`, 'gi'), to: c.to }))
+  }
   // Compiled once per entityNames-list change (not per line), same idiom as correctionsRef above.
   const entityCasingRef = useRef<ReturnType<typeof compileEntityCasingCandidates>>([])
-  entityCasingRef.current = compileEntityCasingCandidates(entityNames ?? [])
+  const compiledCasingForRef = useRef<typeof entityNames>(undefined)
+  if (compiledCasingForRef.current !== entityNames) {
+    compiledCasingForRef.current = entityNames
+    entityCasingRef.current = compileEntityCasingCandidates(entityNames ?? [])
+  }
   // Preferred mic, read through a ref so the latest choice is used on every (re)acquire.
   const micDeviceIdRef = useRef<string>('')
   micDeviceIdRef.current = micDeviceId ?? ''
@@ -457,12 +561,24 @@ export function useListen(
   // so every exit here is silent. Mirrors whisper-import.ts's probeLanguage + reprobeForSwitch, merged into
   // one function since listen.ts (unlike the import job) drives its own single probe cadence in pump().
   const probeLanguageWindow = useCallback((audio: Float32Array, speaker: Speaker): void => {
+    const epoch = sessionEpochRef.current
     window.toto
       .parakeetFeed(audio, speaker)
       .then((res) => {
         // The session may have moved on (stopped, switched engine, or the user set an explicit language)
         // by the time this async round trip resolves — a stale probe must not touch the current state.
-        if (!liveRef.current || engineRef.current !== 'whisper' || asrLanguageRef.current !== 'auto') return
+        // The epoch stamped at dispatch is what makes "same session" checkable: liveRef is true again for
+        // the NEXT meeting, so without it a probe from the previous one pinned this worker (MQA-157).
+        if (
+          probeResultIsStale(
+            epoch,
+            sessionEpochRef.current,
+            liveRef.current,
+            engineRef.current,
+            asrLanguageRef.current
+          )
+        )
+          return
         const text = typeof res === 'string' ? res : res.text
         // A near-empty window ("Hello") can only mislead — wait for a window with real substance.
         if (text.trim().split(/\s+/).filter(Boolean).length < PROBE_MIN_WORDS) return
@@ -646,12 +762,26 @@ export function useListen(
         // — same pattern as pump → fallBackToWhisper above. It only runs later, once this handler actually
         // fires, by which point it's fully initialized; deliberately omitted from this useCallback's deps.
         if (!armNetworkRetry(m.message ?? '')) {
-          setState((s) => ({ ...s, error: m.message ?? 'transcription error', loading: false }))
+          const note = m.message ?? 'transcription error'
+          // armNetworkRetry declines once the model is loaded because this is a per-window decode
+          // failure, not a load failure — and a per-window failure is transient. Record the exact note so
+          // the next successful window takes it back down; a LOAD failure (readyRef false) stays sticky,
+          // because nothing is going to recover it on its own.
+          if (readyRef.current) decodeNoteRef.current = note
+          setState((s) => ({ ...s, error: note, loading: false }))
         }
         busy.current = false
         pump()
       } else if (m.type === 'text') {
         commitLine(m.text || '', (m.speaker as Speaker) || 'you')
+        if (decodeNoteRef.current) {
+          const note = decodeNoteRef.current
+          decodeNoteRef.current = null
+          setState((s) => {
+            const next = noteAfterDecodedWindow(s.error, note)
+            return next === s.error ? s : { ...s, error: next }
+          })
+        }
         busy.current = false
         pump()
       }
@@ -825,11 +955,8 @@ export function useListen(
       if (verdict !== 'recycle') return
       console.warn('[listen] them silent since the device change — recycling the loopback capture')
       closeChannel('them') // recoverSystemAudio refuses to run while a channel is still registered
-      setState((s) => ({
-        ...s,
-        error: THEM_LOST_MSG,
-        captureDegraded: { side: 'them', note: THEM_LOST_MSG, permission: false }
-      }))
+      themDegradedRef.current = { side: 'them', note: THEM_LOST_MSG, permission: false }
+      setState((s) => ({ ...s, error: THEM_LOST_MSG, captureDegraded: themDegradedRef.current }))
       void recoverSystemAudioRef.current?.()
     }, THEM_WATCHDOG_MS)
   }
@@ -918,7 +1045,8 @@ export function useListen(
             setState((s) => ({ ...s, error: MIC_LOST_MSG, captureDegraded: { side: 'you', note: MIC_LOST_MSG, permission: false } }))
             void recoverMicRef.current?.()
           } else {
-            setState((s) => ({ ...s, error: THEM_LOST_MSG, captureDegraded: { side: 'them', note: THEM_LOST_MSG, permission: false } }))
+            themDegradedRef.current = { side: 'them', note: THEM_LOST_MSG, permission: false }
+            setState((s) => ({ ...s, error: THEM_LOST_MSG, captureDegraded: themDegradedRef.current }))
             void recoverSystemAudioRef.current?.()
           }
         }
@@ -963,7 +1091,12 @@ export function useListen(
       setState((s) => ({
         ...s,
         error: s.error === MIC_LOST_MSG ? null : s.error,
-        captureDegraded: s.captureDegraded?.side === 'you' ? null : s.captureDegraded
+        captureDegraded: degradedAfterMicRecovery(
+          s.captureDegraded,
+          themDegradedRef.current,
+          wantsSystemRef.current,
+          !!channels.current.them
+        )
       }))
     } catch {
       // Nothing to acquire (no mic connected) — the sticky MIC_LOST_MSG stays until a device change
@@ -985,6 +1118,11 @@ export function useListen(
   // True while the current session requested system audio ('system'/'both') — gates the live permission
   // watcher so a mic-only session never tries to grab the loopback.
   const wantsSystemRef = useRef(false)
+  // Pacing for the Windows arm of that watcher (see sysRetryDelayMs). Reset wherever recovery becomes
+  // plausible again — a new session, a successful re-acquire, a real device change — so the backoff only
+  // ever tracks a genuinely stuck loopback.
+  const sysRetryAttemptsRef = useRef(0)
+  const sysRetryNextAtRef = useRef(0)
   const recoverSystemAudioRef = useRef<(() => Promise<void>) | null>(null)
   recoverSystemAudioRef.current = async (): Promise<void> => {
     if (!liveRef.current || sysRecoveringRef.current) return
@@ -1015,6 +1153,9 @@ export function useListen(
         return
       }
       await openChannel('them', sys)
+      themDegradedRef.current = null // 'them' is capturing again — nothing left to restore on a later mic blip
+      sysRetryAttemptsRef.current = 0 // recovered — a later loss starts its backoff from scratch
+      sysRetryNextAtRef.current = 0
       setState((s) => ({
         ...s,
         // Clear the mid-session loss note AND the start-time mic-only note (held in captureDegraded.note):
@@ -1029,13 +1170,16 @@ export function useListen(
       }))
     } catch {
       // Couldn't re-acquire (permission genuinely revoked, or no loopback available) — leave the sticky
-      // note so the live permission watcher / a devicechange can retrigger recovery later. Keep an existing
-      // captureDegraded (it carries the more specific start-time cause, e.g. the permission note).
-      setState((s) => ({
-        ...s,
-        error: s.error === null ? THEM_LOST_MSG : s.error,
-        captureDegraded: s.captureDegraded ?? { side: 'them', note: THEM_LOST_MSG, permission: false }
-      }))
+      // note so the live permission watcher / a devicechange can retrigger recovery later.
+      setState((s) =>
+        themRecoveryFailureIsNoop(s.error, s.captureDegraded)
+          ? s
+          : {
+              ...s,
+              error: s.error === null ? THEM_LOST_MSG : s.error,
+              captureDegraded: s.captureDegraded ?? { side: 'them', note: THEM_LOST_MSG, permission: false }
+            }
+      )
     } finally {
       sysRecoveringRef.current = false
     }
@@ -1059,7 +1203,13 @@ export function useListen(
         if (channels.current.you) void recoverMicRef.current?.()
         const action = themDeviceChangeAction(wantsSystemRef.current, !!channels.current.them, null)
         if (action === 'watch') armThemProbation()
-        else if (action === 'recover') void recoverSystemAudioRef.current?.()
+        else if (action === 'recover') {
+          // A real device change is new evidence, not another blind retry — try immediately and drop
+          // whatever backoff the watcher had built up.
+          sysRetryAttemptsRef.current = 0
+          sysRetryNextAtRef.current = 0
+          void recoverSystemAudioRef.current?.()
+        }
       }, 800)
     }
     navigator.mediaDevices.addEventListener('devicechange', onDeviceChange)
@@ -1086,7 +1236,12 @@ export function useListen(
       // transient start-time loopback failure (default output mid-switch, another app holding the render
       // endpoint) left the meeting mic-only until the user stopped and restarted Listen — which splits the
       // meeting into two transcripts. Retry off actual capture state instead of a string that never flips.
+      // Paced, because there is no permission flip to wait on here and nothing else bounds the loop when
+      // the loopback is simply unavailable for the whole call — see sysRetryDelayMs.
       if (isWindows) {
+        const now = Date.now()
+        if (now < sysRetryNextAtRef.current) return
+        sysRetryNextAtRef.current = now + sysRetryDelayMs(sysRetryAttemptsRef.current++)
         void recoverSystemAudioRef.current?.()
         return
       }
@@ -1144,6 +1299,8 @@ export function useListen(
         busy.current = false
         liveRef.current = true
         wantsSystemRef.current = source === 'system' || source === 'both'
+        sysRetryAttemptsRef.current = 0 // fresh session → no carried-over loopback-retry backoff
+        sysRetryNextAtRef.current = 0
         pausedRef.current = false
         disarmNetworkRetry() // a fresh session supersedes any retry armed for the previous one
         crashedRef.current = false // fresh session — re-enable stop()'s teardown after any prior crash
@@ -1158,6 +1315,7 @@ export function useListen(
         pinnedLangRef.current = null
         probeWindowCountRef.current = 0
         probeSwitchRunRef.current = null
+        themDegradedRef.current = null // fresh session → no carried-over 'them' degradation cause
         setState((s) => ({ ...s, error: null, captureDegraded: null, listening: true, paused: false }))
         try {
           await window.toto.setListeningState(true)
@@ -1389,6 +1547,7 @@ export function useListen(
         const captureDegraded: CaptureDegraded | null = note
           ? { side: micOk ? 'them' : 'you', note, permission: micOk && isSysPermDenied }
           : null
+        themDegradedRef.current = captureDegraded?.side === 'them' ? captureDegraded : null
         // At least one channel (mic and/or system loopback) is confirmed open here — this is the point
         // a consent/recording indicator should key off, not the optimistic `listening: true` set at the
         // top of start() before any capture was actually acquired.

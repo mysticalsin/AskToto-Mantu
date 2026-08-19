@@ -1,5 +1,5 @@
 import { app } from 'electron'
-import { existsSync, mkdirSync, readdirSync, unlinkSync, rmSync } from 'node:fs'
+import { closeSync, existsSync, mkdirSync, openSync, readdirSync, readSync, unlinkSync, rmSync } from 'node:fs'
 import { join, basename } from 'node:path'
 import type { Settings } from '@shared/ipc'
 import {
@@ -16,7 +16,7 @@ import {
   type LedgerCommitment
 } from '@shared/brain'
 import { resolveMeetingsFolder, readSavedFile, writeSaved, parseRecapMarkdown } from '../transcripts'
-import { listEntities, readPerson, readAccount, readDeal, readMeetingExtraction, listMeetingExtractions, slugify } from './store'
+import { listEntities, readPerson, readAccount, readDeal, readIndex, readMeetingExtraction, listMeetingExtractions, slugify } from './store'
 import { readAliasMap, resolveEntitySlug, type AliasMap } from './corrections'
 
 /**
@@ -40,6 +40,12 @@ import { readAliasMap, resolveEntitySlug, type AliasMap } from './corrections'
 
 const KIND_DIR: Record<EntityKind, string> = { person: 'people', account: 'accounts', deal: 'deals' }
 
+/** Everything under `wiki/` this module authors: the per-kind page directories plus `meetings/`, and the
+ *  four generated root docs. `wiki/` lives inside the user's OWN meetings folder, so removeWiki deletes
+ *  exactly this set and never the folder wholesale — see removeWiki. */
+const WIKI_DIRS = [...Object.values(KIND_DIR), 'meetings']
+const WIKI_ROOT_DOCS = ['index.md', 'AGENTS.md', 'README.md', 'CLAUDE.md'] as const
+
 export function wikiDir(s: Settings): string {
   return join(resolveMeetingsFolder(s), 'wiki')
 }
@@ -61,7 +67,7 @@ function meetingCardPath(s: Settings, file: string): string {
 
 function ensureWikiDirs(s: Settings): void {
   const root = wikiDir(s)
-  for (const d of [root, join(root, 'accounts'), join(root, 'people'), join(root, 'deals'), join(root, 'meetings')]) {
+  for (const d of [root, ...WIKI_DIRS.map((name) => join(root, name))]) {
     if (!existsSync(d)) mkdirSync(d, { recursive: true })
   }
 }
@@ -107,10 +113,25 @@ function formatNumber(n: number): string {
 
 // ── Confidential meetings ─────────────────────────────────────────────────────────────────────────────
 
+/** The same predicate ingest.ts's isMeetingTranscriptFile applies, so the exclusion set below is keyed
+ *  over exactly the files the ingester turns into meetings. */
+function isMeetingFileName(f: string): boolean {
+  return f.endsWith('.md') && !f.startsWith('.') && f !== 'index.md' && f !== 'README.md'
+}
+
 function listSavedMeetingFiles(s: Settings): string[] {
   const folder = resolveMeetingsFolder(s)
   if (!existsSync(folder)) return []
-  return readdirSync(folder).filter((f) => f.endsWith('.md') && !f.startsWith('.') && f !== 'index.md' && f !== 'README.md')
+  return readdirSync(folder).filter(isMeetingFileName)
+}
+
+/** The namespace ingest.ts files a shared-folder transcript under: `team/<owner>/<file>`, owner being
+ *  the shared folder's own name (ingest.ts's backfill scan). That key — never a basename — is what a
+ *  team meeting's MeetingRefs and commitments carry, so it is what the exclusion set must contain. */
+const TEAM_KEY_PREFIX = 'team/'
+
+function teamMeetingKey(teamFolder: string, file: string): string {
+  return `${TEAM_KEY_PREFIX}${basename(teamFolder) || 'team'}/${file}`
 }
 
 /** Checks `key: true` WITHIN the leading `---`-delimited frontmatter block only — never a coincidental
@@ -123,9 +144,80 @@ function readFrontmatterFlag(md: string, key: string): boolean {
   return !!m && /^"?true"?$/i.test(m[1].trim())
 }
 
-/** basenames of every saved meeting that must be kept OUT of the published wiki: those flagged
- *  `confidential: true` in their frontmatter, PLUS every meeting this device cannot read. Read fresh on
- *  every publish call (no cache) — this runs once per publish/index-regen, not per keystroke, and
+/** True only when `md` carries a COMPLETE leading frontmatter block. The team scan below reads a bounded
+ *  head rather than the whole file, so "no closing `---` in what I read" must be distinguished from "read
+ *  the whole thing, no flag there" — the first is unknown and has to fail closed. */
+function hasFrontmatterBlock(md: string): boolean {
+  return /^---\n[\s\S]*?\n---/.test(md)
+}
+
+/** How much of a team transcript is read to decide its confidential flag. Frontmatter sits at byte 0 and
+ *  is a handful of short lines; 8 KiB is orders of magnitude more than any Métis file writes. */
+const FRONTMATTER_HEAD_BYTES = 8192
+
+/** Frontmatter-only read of a TEAM folder's transcript. The own-folder loop can afford readSavedFile's
+ *  whole-file read+decrypt — local disk, and MQA-031 already hoisted it to once per publish — but the
+ *  team half runs over a teammate's network/OneDrive share on every merge, where pulling entire
+ *  transcripts down would reintroduce exactly the main-process stall MQA-031 removed. Returns null for
+ *  anything this device cannot read as plaintext frontmatter, including an ATKENC envelope wrapped under
+ *  the teammate's own key (which readSavedFile could not decrypt here either), so the caller fails closed
+ *  on it. */
+function readTeamFrontmatterHead(path: string): string | null {
+  let fd: number | null = null
+  try {
+    fd = openSync(path, 'r')
+    const buf = Buffer.alloc(FRONTMATTER_HEAD_BYTES)
+    const read = readSync(fd, buf, 0, FRONTMATTER_HEAD_BYTES, 0)
+    return buf.subarray(0, read).toString('utf8')
+  } catch {
+    return null
+  } finally {
+    try {
+      if (fd !== null) closeSync(fd)
+    } catch {
+      /* best-effort */
+    }
+  }
+}
+
+/** The team-folder half of the exclusion set.
+ *
+ *  A teammate's transcript is ingested under `team/<owner>/<file>` (see TEAM_KEY_PREFIX), so the
+ *  basename scan of the user's OWN folder can never exclude one — its refs and commitments carry the
+ *  namespaced key. Same fail-closed rule as MQA-074/MQA-077, widened to the folder itself: a share is far
+ *  likelier to be gone (revoked, offline, not yet synced) than the user's own folder, while the refs
+ *  ingested from it persist in `.brain` regardless. So a team meeting publishes ONLY when its file is
+ *  read here and proves it carries no `confidential: true`; an unreadable file, an unreachable folder, or
+ *  a key we only know from the ingest index all stay excluded. The ingest index is what makes an
+ *  unreachable share fail closed — it remembers every team key ever ingested when the folder is no longer
+ *  there to enumerate. */
+function addConfidentialTeamMeetings(s: Settings, out: Set<string>): void {
+  const known = new Set<string>()
+  const cleared = new Set<string>()
+  for (const teamFolder of s.teamTranscriptFolders ?? []) {
+    if (!teamFolder) continue
+    let files: string[] = []
+    try {
+      if (existsSync(teamFolder)) files = readdirSync(teamFolder).filter(isMeetingFileName)
+    } catch {
+      continue // unreachable share — its keys stay excluded via the ingest-index seed below
+    }
+    for (const f of files) {
+      const key = teamMeetingKey(teamFolder, f)
+      known.add(key)
+      const head = readTeamFrontmatterHead(join(teamFolder, f))
+      if (head && hasFrontmatterBlock(head) && !readFrontmatterFlag(head, 'confidential')) cleared.add(key)
+    }
+  }
+  for (const key of Object.keys(readIndex(s).ingested)) if (key.startsWith(TEAM_KEY_PREFIX)) known.add(key)
+  for (const key of known) if (!cleared.has(key)) out.add(key)
+}
+
+/** The ingest keys of every meeting that must be kept OUT of the published wiki — a basename for the
+ *  user's own meetings, `team/<owner>/<file>` for a shared-folder one (see addConfidentialTeamMeetings):
+ *  those flagged `confidential: true` in their frontmatter, PLUS every meeting this device cannot read
+ *  and every team meeting it cannot positively clear. Read fresh on every publish call (no cache) —
+ *  this runs once per publish/index-regen, not per keystroke, and
  *  correctness (a just-flagged meeting disappearing from the very next publish) matters far more than the
  *  cost of a handful of extra file reads at this app's single-exec scale.
  *
@@ -156,6 +248,7 @@ export function readConfidentialMeetings(s: Settings): Set<string> {
     }
     if (!md || readFrontmatterFlag(md, 'confidential')) out.add(f)
   }
+  addConfidentialTeamMeetings(s, out)
   return out
 }
 
@@ -519,9 +612,19 @@ function mdLink(label: string, relPath: string): string {
 
 /** Regenerate one meeting's note card (full-file, idempotent). No-ops when publishing is off. A
  *  confidential-flagged meeting gets NO card — any stale one from before the flag was set is removed.
- *  `knownConfidential` carries the batch callers' already-read set, exactly as in publishEntity. */
-export async function publishMeetingCard(s: Settings, meetingFile: string, knownConfidential?: Set<string>): Promise<void> {
+ *  `knownConfidential`/`knownAliases` carry the batch callers' already-built set and alias map, exactly
+ *  as in publishEntity. */
+export async function publishMeetingCard(
+  s: Settings,
+  meetingFile: string,
+  knownConfidential?: Set<string>,
+  knownAliases?: AliasMap
+): Promise<void> {
   if (!s.publishBrainPages) return
+  // A shared-folder transcript lives in the teammate's folder, not this device's meetings folder, so it
+  // has no note card here. Reducing its namespaced key to a basename would resolve to the user's OWN
+  // same-named meeting and publish (or delete) that meeting's card under the shared slug.
+  if (meetingFile.startsWith(TEAM_KEY_PREFIX)) return
   const base = basename(meetingFile)
   if (!base.endsWith('.md')) return
   ensureWikiDirs(s)
@@ -552,8 +655,12 @@ export async function publishMeetingCard(s: Settings, meetingFile: string, known
   const title = fm.title || parsed.title24 || base.replace(/\.md$/, '')
   const date = fm.date || ''
 
-  const aliasMap: AliasMap = readAliasMap(s)
   const extraction = readMeetingExtraction(s, meetingSlug(base))
+  // QA MQA-152: readAliasMap raw-reads and decrypts EVERY entity file plus the corrections journal
+  // (corrections.ts), so a batch caller must hand its already-built map down rather than let each card
+  // rebuild one — the same O(cards × corpus) main-process stall MQA-031 removed for the confidential
+  // scan. Only the extraction-gated links below consume it, so a card without an extraction pays nothing.
+  const aliasMap: AliasMap | undefined = extraction ? (knownAliases ?? readAliasMap(s)) : undefined
 
   const attendeeLinks: string[] = []
   if (extraction) {
@@ -790,10 +897,15 @@ export async function publishIndexes(s: Settings, knownConfidential?: Set<string
     '"not established"), a meeting timeline, open commitments, and a changelog. See AGENTS.md for the full contract.'
   ].join('\n')
 
-  await writeWikiFile(join(wikiDir(s), 'index.md'), body)
-  await writeWikiFile(join(wikiDir(s), 'AGENTS.md'), AGENTS_MD)
-  await writeWikiFile(join(wikiDir(s), 'README.md'), README_MD)
-  await writeWikiFile(join(wikiDir(s), 'CLAUDE.md'), CLAUDE_MD)
+  // Keyed by WIKI_ROOT_DOCS so the set removeWiki erases can never drift from the set published here:
+  // a fifth root doc added to the array without a body is a type error, not a file that survives erasure.
+  const docs: Record<(typeof WIKI_ROOT_DOCS)[number], string> = {
+    'index.md': body,
+    'AGENTS.md': AGENTS_MD,
+    'README.md': README_MD,
+    'CLAUDE.md': CLAUDE_MD
+  }
+  for (const name of WIKI_ROOT_DOCS) await writeWikiFile(join(wikiDir(s), name), docs[name])
 }
 
 // ── Hooks: per-merge entity+card publish, full rebuild ───────────────────────────────────────────────
@@ -823,7 +935,10 @@ export async function publishForExtraction(
     const dslug = resolveEntitySlug(aliasMap, 'deal', x.deal.name || `${x.account?.name ?? 'unknown'} deal`)
     await publishEntity(s, 'deal', dslug, confidential)
   }
-  await publishMeetingCard(s, ref.file, confidential)
+  // The map ingestExtraction already built for this merge (ingest.ts) — the card's links must resolve
+  // through the SAME one mergeExtraction routed the entities with, and rebuilding it here would be a
+  // second full-corpus scan per ingested meeting.
+  await publishMeetingCard(s, ref.file, confidential, aliasMap)
 }
 
 /** Full regeneration of every wiki page from the current brain state — the rebuildAll completion hook,
@@ -835,24 +950,41 @@ export async function publishAll(s: Settings): Promise<void> {
   // One scan for the whole regeneration: a full-corpus rescan per page is O(pages × meetings) synchronous
   // read+decrypts on the main process, which is what froze the app for minutes on one Confidential toggle.
   const confidential = readConfidentialMeetings(s)
+  // Same "once for the whole regeneration" rule for the alias map (QA MQA-152): it is the other
+  // full-corpus read+decrypt a card needs, and no page written below mutates an entity, so one map
+  // serves every card.
+  const aliases = readAliasMap(s)
   for (const kind of ['person', 'account', 'deal'] as const) {
     for (const id of listEntities(s, kind)) await publishEntity(s, kind, id, confidential)
   }
   for (const slug of listMeetingExtractions(s)) {
     const x = readMeetingExtraction(s, slug)
-    if (x?.source_file) await publishMeetingCard(s, x.source_file, confidential)
+    if (x?.source_file) await publishMeetingCard(s, x.source_file, confidential, aliases)
   }
   await publishIndexes(s, confidential)
 }
 
-/** Delete the entire wiki/ mirror — called when publishBrainPages is turned off (audit-logged by the
- *  caller). Best-effort, mirrors purgeBrain's own "never throw out of a wipe" convention. */
+/** Delete the published wiki/ mirror — called when publishBrainPages is turned off, and by the full
+ *  "Delete all Metis data" erasure (audit-logged by both callers). Removes exactly what this module
+ *  authors (WIKI_DIRS + WIKI_ROOT_DOCS), then the root only once nothing else is left in it: `wiki/`
+ *  sits inside the user's own meetings folder, so an rm -rf of the root would destroy unrelated files
+ *  they keep there — the same unowned-data hazard isOwnedMeetingFile guards in recall.ts's delete-all.
+ *  Best-effort, mirrors purgeBrain's own "never throw out of a wipe" convention; `ok` reports that no
+ *  published page survived. */
 export function removeWiki(s: Settings): { ok: boolean } {
   const root = wikiDir(s)
-  try {
-    if (existsSync(root)) rmSync(root, { recursive: true, force: true })
-    return { ok: !existsSync(root) }
-  } catch {
-    return { ok: !existsSync(root) }
+  const owned = [...WIKI_DIRS, ...WIKI_ROOT_DOCS].map((name) => join(root, name))
+  for (const p of owned) {
+    try {
+      if (existsSync(p)) rmSync(p, { recursive: true, force: true })
+    } catch {
+      /* best-effort — a survivor is reported through `ok` below */
+    }
   }
+  try {
+    if (existsSync(root) && readdirSync(root).length === 0) rmSync(root, { recursive: true, force: true })
+  } catch {
+    /* best-effort */
+  }
+  return { ok: !owned.some((p) => existsSync(p)) }
 }

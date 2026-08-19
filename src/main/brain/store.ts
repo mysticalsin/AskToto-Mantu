@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readdirSync, rmSync, renameSync, statSync, cpSync } from 'node:fs'
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, renameSync, statSync, cpSync } from 'node:fs'
 import { join, basename } from 'node:path'
 import { createHash, randomBytes } from 'node:crypto'
 import type { Settings } from '@shared/ipc'
@@ -18,7 +18,8 @@ import {
   type Confidence,
   type ProvenantField
 } from '@shared/brain'
-import { resolveMeetingsFolder, readSavedFile, writeSaved } from '../transcripts'
+import { resolveMeetingsFolder, readSavedFile, writeSaved, decodeSavedResult } from '../transcripts'
+import { mainLog } from '../logger'
 
 /**
  * Brain store — plain JSON files under `<meetings folder>/.brain/`.
@@ -412,8 +413,59 @@ export function ensureV1Backup(settings: Settings): void {
 
 // ── Typed accessors ──────────────────────────────────────────────────────────
 
-export const readIndex = (s: Settings): BrainIndex =>
-  readJson(s, 'index.json', (v) => BrainIndexSchema.parse(v)) ?? BrainIndexSchema.parse({})
+// MQA-175: one quarantine attempt per path per process. The rename below normally makes the primary
+// absent (so this never fires twice anyway); the set only bounds the case where the rename itself keeps
+// failing — a OneDrive/AV hold on the file — so a 3-10s poller cannot spin on it or spam the log. The
+// next launch retries from scratch.
+const indexQuarantineAttempted = new Set<string>()
+
+/**
+ * MQA-175 — preserve an `index.json` that can never produce an index on this device, and let the app
+ * carry on with a rebuildable empty one.
+ *
+ * Same protocol as the corrections journal's own corrupt-input handling (corrections.ts: quarantine
+ * under a `<name>.corrupt-<ISO>.json` sibling, log it, never delete), with one deliberate difference
+ * that follows from what the two files ARE: corrections.json is irreplaceable human input, so an
+ * undecryptable one is refused TRANSIENTLY and left untouched. index.json is DERIVED state — every byte
+ * of it is rebuildable from the transcripts — and leaving it in place meant every single read paid to
+ * decrypt the same poison again, forever, with no trace of why the brain looked empty.
+ *
+ * Nothing is destroyed: the bytes are renamed, not removed, so a file that is merely intact-elsewhere
+ * (encrypted under another device's keychain on a shared OneDrive `.brain`) can still be recovered by
+ * hand. That is strictly better than the previous behaviour, which silently read it as an empty index
+ * and then OVERWROTE it on the next ingest.
+ */
+function quarantineUnusableIndex(s: Settings): void {
+  const p = join(brainDir(s), 'index.json')
+  if (indexQuarantineAttempted.has(p)) return
+  let buf: Buffer
+  try {
+    buf = readFileSync(p)
+  } catch {
+    return // absent, or transiently unreadable — nothing to preserve, and never a corruption
+  }
+  if (buf.length === 0) return // torn to zero bytes: no content to preserve, treated as an empty index
+  indexQuarantineAttempted.add(p)
+  const decoded = decodeSavedResult(buf)
+  const to = join(brainDir(s), `index.corrupt-${new Date().toISOString().replace(/[:.]/g, '-')}.json`)
+  try {
+    renameSync(p, to)
+    jsonCache.delete(p)
+    mainLog.warn(
+      `[brain] index.json was ${decoded.ok ? 'unparseable' : `undecryptable (${decoded.reason})`} — preserved to ${to}; the brain index will be rebuilt from the transcripts`
+    )
+  } catch (e) {
+    mainLog.warn('[brain] could not set aside an unusable index.json:', e)
+  }
+}
+
+export const readIndex = (s: Settings): BrainIndex => {
+  const idx = readJson(s, 'index.json', (v) => BrainIndexSchema.parse(v))
+  if (idx) return idx
+  // null means absent OR unusable — readJson collapses both. Only the unusable case renames anything.
+  quarantineUnusableIndex(s)
+  return BrainIndexSchema.parse({})
+}
 export const writeIndex = (s: Settings, v: BrainIndex): Promise<void> => writeJson(s, 'index.json', v)
 
 export const readGraph = (s: Settings): BrainGraph =>

@@ -133,9 +133,16 @@ export function TextButton({
  *  descriptions run full sentences — this wraps at a fixed width instead of stretching off-screen. */
 export function FieldHint({ text, children }: { text: string; children: ReactNode }): JSX.Element {
   return (
-    <span className="group focus-ring relative inline-flex" tabIndex={0} role="button" aria-label={text}>
-      {children}
-      <span className="pointer-events-none absolute left-0 top-full z-20 mt-1.5 w-max max-w-[260px] rounded-lg bg-black/90 px-2.5 py-1.5 text-left text-[11px] font-medium leading-snug text-white opacity-0 shadow-lg transition-opacity duration-150 group-hover:opacity-100 group-focus:opacity-100">
+    <span className="group relative inline-flex">
+      {/* A real <button>, not a <span role="button">, for two reasons a span cannot satisfy: only a button
+          has native Enter/Space activation (so the announced role is not a promise the element breaks), and
+          only a button counts as *interactive content* — inside ToggleRow's `<label htmlFor>` a click on a
+          span was forwarded to the labelled switch, so clicking the hint on e.g. "Hide from screen capture"
+          flipped the very setting it was explaining. */}
+      <button type="button" aria-label={text} className="focus-ring peer inline-flex cursor-help">
+        {children}
+      </button>
+      <span className="pointer-events-none absolute left-0 top-full z-20 mt-1.5 w-max max-w-[260px] rounded-lg bg-black/90 px-2.5 py-1.5 text-left text-[11px] font-medium leading-snug text-white opacity-0 shadow-lg transition-opacity duration-150 group-hover:opacity-100 peer-focus-visible:opacity-100">
         {text}
       </span>
     </span>

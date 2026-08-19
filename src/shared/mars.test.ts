@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, afterEach } from 'vitest'
 import { MeetingExtractionSchema, DealEntitySchema, type MeetingExtraction, type DealEntity } from './brain'
 import { buildMarsWeek, renderMarsMarkdown } from './mars'
 
@@ -97,5 +97,75 @@ describe('renderMarsMarkdown', () => {
     expect(md).toContain('stage: proposal')
     expect(md).toContain('none marked won this week') // absence stated, never invented
     expect(md).toContain('the Mars bucket (prospection / cold call / QM) is yours to confirm')
+  })
+})
+
+/**
+ * MQA-195 — the Mars draft must date meetings by the LOCAL calendar day, exactly as History does
+ * (RecallView.localDateKey). Meeting frontmatter carries a full ISO instant, so truncating it to
+ * 10 characters yields the UTC day: west of UTC every evening meeting is reported on the following
+ * day, and the 7-day window slides with it — dropping a Saturday-morning meeting out of the week and
+ * claiming a range that runs into tomorrow.
+ *
+ * TZ is pinned rather than trusted from the host (Node/V8 re-resolve process.env.TZ on every Date
+ * call), so the reproduction is deterministic wherever the suite runs.
+ */
+describe('MQA-195 — Mars week is bucketed by the local calendar day', () => {
+  const ORIGINAL_TZ = process.env.TZ
+  // Fri 2026-08-14 19:00 PDT — the user's Friday evening, already Saturday in UTC.
+  const FRIDAY_EVENING = new Date('2026-08-15T02:00:00.000Z').getTime()
+
+  const extraction = (date: string, title: string, account: string | null = 'Acme'): MeetingExtraction =>
+    MeetingExtractionSchema.parse({
+      title24: title,
+      date,
+      source_file: `${title}.md`,
+      sentiment: 'mixed',
+      account: account === null ? null : { name: account, sector: 'banking' }
+    })
+
+  afterEach(() => {
+    if (ORIGINAL_TZ === undefined) delete process.env.TZ
+    else process.env.TZ = ORIGINAL_TZ
+  })
+
+  it('MQA-195: an evening meeting is reported on the day the user held it, and the window covers the local week', () => {
+    process.env.TZ = 'America/Los_Angeles'
+    const w = buildMarsWeek(
+      [
+        extraction('2026-08-08T16:00:00.000Z', 'saturday morning', 'NewCo'), // Sat 2026-08-08 09:00 PDT
+        extraction('2026-08-10', 'monday note'), // bare frontmatter date — a calendar day, no instant
+        extraction('2026-08-13T01:15:00.000Z', 'wednesday evening'), // Wed 2026-08-12 18:15 PDT
+        extraction('2026-08-15T02:00:00.000Z', 'friday evening'), // Fri 2026-08-14 19:00 PDT
+        extraction('2026-08-08T04:00:00.000Z', 'last friday night') // Fri 2026-08-07 21:00 PDT — previous week
+      ],
+      [],
+      FRIDAY_EVENING
+    )
+
+    expect(w.weekStart).toBe('2026-08-08')
+    expect(w.weekEnd).toBe('2026-08-14') // never a day the user has not lived yet
+    expect(w.meetings.map((m) => [m.title, m.date])).toEqual([
+      ['saturday morning', '2026-08-08'],
+      ['monday note', '2026-08-10'], // a bare date is already a calendar day — never shifted by a zone
+      ['wednesday evening', '2026-08-12'],
+      ['friday evening', '2026-08-14']
+    ])
+    expect(w.newAccounts).toContain('NewCo')
+
+    const md = renderMarsMarkdown(w)
+    expect(md).toContain('# Mars week draft: 2026-08-08 → 2026-08-14')
+    expect(md).toContain('- 2026-08-12: wednesday evening')
+  })
+
+  it('MQA-195: a deal touched on a local in-week day counts, and an unparseable meeting date is ignored', () => {
+    process.env.TZ = 'America/Los_Angeles'
+    const deals = [
+      deal({ name: 'SatDeal', outcome: 'won', meetings: [{ file: 'a.md', date: '2026-08-08T16:00:00.000Z', title: '' }] }),
+      deal({ name: 'LastWeekDeal', outcome: 'won', meetings: [{ file: 'b.md', date: '2026-08-08T04:00:00.000Z', title: '' }] }),
+      deal({ name: 'GarbageDate', outcome: 'won', meetings: [{ file: 'c.md', date: 'not a date', title: '' }] })
+    ]
+    const w = buildMarsWeek([], deals, FRIDAY_EVENING)
+    expect(w.won.map((d) => d.name)).toEqual(['SatDeal'])
   })
 })

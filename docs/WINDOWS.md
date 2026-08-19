@@ -174,8 +174,12 @@ intentional, disclosed convenience for this pilot only, not a general pattern.
    ```
 
    Without `METIS_CAHE_EMBED_KEY=1`, `scripts/check-cahe-package.mjs` hard-refuses the package the
-   moment it finds an `sk-kimi-` pattern inside `app.asar` or the installer `.exe`
-   (`Refusing Cahê package with an embedded Kimi API key: …`) — this is the safe default; a normal Métis
+   moment it finds an `sk-kimi-` pattern in the packaged `win-unpacked/resources/cahe/` bundle — the
+   extraResource that actually carries the key — or in `app.asar` or the installer `.exe`
+   (`Refusing Cahê package with an embedded Kimi API key: …`). Those last two are a net for a key that
+   lands somewhere it was never meant to be, not coverage of this one: NSIS ships `win-unpacked` inside
+   an LZMA-compressed payload, so a byte scan of the `.exe` cannot see `cahe/kimi.json` there at all.
+   This is the safe default; a normal Métis
    build (`electron-builder.win.yml`) never bundles `cahe-kimi.local.json` in the first place, since only
    the Cahê config lists it under `extraResources`. **With** the flag set, the same scan still runs but
    tolerates the key, printing a loud multi-line warning that names the file it found the key in and

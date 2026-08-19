@@ -37,6 +37,12 @@ export interface ForegroundWatcher {
   stop: () => void
   /** The most recent foreground window observed, or null before the first event. */
   current: () => ForegroundInfo | null
+  /** False when this handle can no longer report window changes at all: an inert platform (no producer,
+   *  or a mac install missing the bundled helper), a producer that exhausted its restart budget, or a
+   *  stopped watcher. Callers that INVALIDATE state on window changes must treat false as "the signal is
+   *  gone" and stop trusting anything keyed to a window — a watcher that has given up looks exactly like
+   *  a user who never switches apps (MQA-181). */
+  healthy: () => boolean
 }
 
 /**
@@ -129,7 +135,8 @@ const RESTART_BACKOFF_MS = 2000
  * Start watching the foreground window. `onChange` fires once per distinct active window (debounce/settle
  * is the caller's concern — this reports raw changes). The watcher self-restarts a crashed script up to
  * MAX_RESTARTS times (a killed powershell shouldn't silently end the feature for the session), then gives
- * up and reports via onError. stop() cancels restarts and kills the process.
+ * up, reports via onError, and flips healthy() to false so callers can stop trusting the window signal.
+ * stop() cancels restarts and kills the process.
  */
 export function startForegroundWatcher(
   onChange: (info: ForegroundInfo) => void,
@@ -139,6 +146,7 @@ export function startForegroundWatcher(
   let latest: ForegroundInfo | null = null
   let child: ChildProcess | null = null
   let stopped = false
+  let gaveUp = false
   let restarts = 0
   let restartTimer: NodeJS.Timeout | null = null
 
@@ -151,7 +159,7 @@ export function startForegroundWatcher(
     spawnSpec = macWatcherSpawnSpec()
   }
   if (!spawnSpec) {
-    return { stop: () => {}, current: () => null }
+    return { stop: () => {}, current: () => null, healthy: () => false }
   }
   const { command, args } = spawnSpec
 
@@ -165,11 +173,28 @@ export function startForegroundWatcher(
 
   const spawnOnce = (): void => {
     if (stopped) return
+    // One restart per attempt, whatever combination of error/exit/close the failure produces.
+    let settled = false
+    /** Every way an attempt can die routes here: a synchronous spawn throw, an async 'error' (ENOENT/
+     *  EACCES — where node emits 'close' and NEVER 'exit', so hanging the restart off 'exit' alone left
+     *  the watcher permanently dead while still claiming to watch), and a normal exit. */
+    const failed = (message: string): void => {
+      if (stopped || gaveUp || settled) return
+      settled = true
+      opts.onError?.(message)
+      if (restarts >= MAX_RESTARTS) {
+        gaveUp = true
+        opts.onError?.('foreground watcher failed too many times; giving up for this session')
+        return
+      }
+      restarts++
+      restartTimer = setTimeout(spawnOnce, RESTART_BACKOFF_MS)
+    }
     let proc: ChildProcess
     try {
       proc = spawn(command, args, { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] })
     } catch (e) {
-      opts.onError?.(e instanceof Error ? e.message : String(e))
+      failed(e instanceof Error ? e.message : String(e))
       return
     }
     child = proc
@@ -189,16 +214,10 @@ export function startForegroundWatcher(
     // hiccup is caught inside the loop; a fatal spawn/parse error shows up as an early exit handled below.
     proc.stderr?.on('data', () => {})
     proc.on('error', (e: Error) => {
-      opts.onError?.(e instanceof Error ? e.message : String(e))
+      failed(e instanceof Error ? e.message : String(e))
     })
     proc.on('exit', () => {
-      if (stopped) return
-      if (restarts >= MAX_RESTARTS) {
-        opts.onError?.('foreground watcher exited too many times; giving up for this session')
-        return
-      }
-      restarts++
-      restartTimer = setTimeout(spawnOnce, RESTART_BACKOFF_MS)
+      failed('foreground watcher exited')
     })
   }
 
@@ -220,6 +239,7 @@ export function startForegroundWatcher(
         child = null
       }
     },
-    current: () => latest
+    current: () => latest,
+    healthy: () => !stopped && !gaveUp
   }
 }

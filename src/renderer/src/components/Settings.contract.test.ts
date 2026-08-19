@@ -26,16 +26,51 @@ function blockAfter(startAnchor: string, endMarker: string): string {
   return source.slice(start, end)
 }
 
-describe('Local AI is a bundled, read-only capability', () => {
+describe('Local AI tells the truth about a model that is downloaded, not bundled (MQA-187/188/191)', () => {
   const block = blockAfter('function LocalAiSection(', '\nfunction StepBadge(')
+  // Copy assertions run over the code with `//` comments stripped. The comments explain WHY the old
+  // wording was wrong and legitimately quote it; that text never reaches a user.
+  const copy = block.replace(/^\s*\/\/.*$/gm, '')
 
-  it('loads readiness metadata but exposes no runtime model management', () => {
+  it('loads readiness metadata and exposes no runtime model management', () => {
+    // Still read-only: no download/cancel/delete controls and no extra IPC channel. The download state
+    // rides the existing localModels:list summary (see shared/ipc.ts LocalModelSummarySchema).
     expect(block).toMatch(/window\.toto\.localModelsList\(\)/)
-    expect(block).not.toMatch(/localModelsDownload|localModelsCancel|localModelsDelete|onLocalModelsProgress/)
+    expect(block).not.toMatch(/localModelsDownload|localModelsCancel|localModelsDelete/)
   })
 
-  it('says the model is included with Métis and renders ready or unavailable state', () => {
-    expect(block).toMatch(/Included with Métis/)
+  it('MQA-188 — never claims the model ships in the installer', () => {
+    // electron-builder.yml copies only the licence file; scripts/check-packaged-runtime.mjs fails the
+    // build if a .gguf ever returns. "Included with Métis" was false on every install, ready ones too.
+    expect(copy).not.toMatch(/Included with Métis/)
+    expect(copy).not.toMatch(/no separate model download/i)
+    expect(copy).not.toMatch(/bundled model/i)
+    // ...and says what actually happens instead.
+    expect(block).toMatch(/first run/i)
+  })
+
+  it('MQA-191 — never tells the user to reinstall, which cannot restore weights no installer carries', () => {
+    expect(copy).not.toMatch(/[Rr]einstall/)
+  })
+
+  it('MQA-187 — an in-flight download reads as a download, with its progress', () => {
+    expect(block).toMatch(/unavailableReason === 'downloading'/)
+    expect(block).toMatch(/downloadProgress/)
+    expect(block).toMatch(/Downloading/)
+  })
+
+  it('MQA-187 — a failed download names what has to be reachable and when it retries', () => {
+    expect(block).toMatch(/unavailableReason === 'download-failed'/)
+    expect(block).toMatch(/huggingface\.co/)
+    expect(block).toMatch(/next launch/i)
+  })
+
+  it('MQA-187 — the card re-polls while a download is running instead of freezing on its mount snapshot', () => {
+    expect(block).toMatch(/setTimeout/)
+    expect(block).toMatch(/'downloading'/)
+  })
+
+  it('still renders ready, unavailable and the RAM floor', () => {
     expect(block).toMatch(/model\.ready/)
     expect(block).toMatch(/model\.unavailableReason === 'insufficient-ram'/)
     expect(block).toMatch(/Ready/)
@@ -244,5 +279,30 @@ describe('MQA-062 — CLI Integration verifies the real session when the panel o
     expect(body).toMatch(/if \(sessionCheckedRef\.current\) return/)
     expect(body.indexOf('sessionCheckedRef.current = true')).toBeLessThan(body.indexOf('window.toto.cliVerifySessions()'))
     expect(body).toMatch(/\}, \[\]\)/) // mount-only, like the Dust probe above it
+  })
+})
+
+// MQA-164 — the in-app download had no failure path: main logged the electron-updater 'error' and told
+// nobody, so UpdatesSection stayed in phase 'downloading' — a progress bar that could never move again,
+// with its own download-page fallback ("Always reachable so the user is never stranded") hidden, because
+// that link renders only in phase 'blocked' or 'idle'.
+describe('MQA-164 — a failed update download leaves the Settings row with a way out', () => {
+  const block = (): string => blockAfter('function UpdatesSection(', '\nfunction ModePromptEditor')
+
+  it('subscribes to the download-failure channel alongside progress and ready', () => {
+    expect(block()).toMatch(/window\.toto\.onUpdateError\(/)
+  })
+
+  it('moves out of the fake progress bar into the state that renders the download-page link', () => {
+    const body = block()
+    const handler = body.slice(body.indexOf('window.toto.onUpdateError('))
+    expect(handler).toMatch(/setPhase\('blocked'\)/)
+    expect(handler).toMatch(/setDownloadError\(/)
+  })
+
+  // The renderer can only see the event if preload bridges it — the whole path is main → preload → row.
+  it('is bridged by preload on the shared update:error channel', () => {
+    const preload = readFileSync(join(__dirname, '../../../preload/index.ts'), 'utf8')
+    expect(preload).toMatch(/onUpdateError: .*sub\(IPC\.updateError, cb\)/)
   })
 })

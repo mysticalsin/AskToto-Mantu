@@ -17,9 +17,16 @@
  *  - Screen-hash dedupe: an unchanged screen re-uses the existing description (only its freshness stamp is
  *    bumped) — a static screen costs a capture + hash, never a re-inference.
  *  - Throttled + single-flight: at most one describe at a time, no more often than MIN_DESCRIBE_INTERVAL_MS.
- *  - Gated: runs only when the `backgroundScreenContext` setting is on AND either the local model is ready
- *    (enabled, provisioned, org-allowed) or on-device OCR is available (macOS Vision helper — needs no LLM
- *    at all). Neither → the module is inert and screen-asks use today's live path.
+ *  - Gated: runs only when the session is valid AND the `backgroundScreenContext` setting is on AND either
+ *    the local model is ready (enabled, provisioned, org-allowed) or on-device OCR is available (macOS
+ *    Vision helper — needs no LLM at all) AND the OS foreground-window signal is live. Any missing →
+ *    the module is inert and screen-asks use today's live path. canRun() is that one expression, and it
+ *    is also what main reports to Settings, so the UI can never describe a state the engine isn't in.
+ *  - Fails closed on a lost window signal: the cache is only trustworthy because a focus change drops it.
+ *    A watcher that never started or has given up freezes that signal, so the engine stops and the ask
+ *    falls back to a live capture — a slower right answer beats a confident wrong one.
+ *  - Display-bound: the frame comes from the display under the CURSOR, which an alt-tab does not move, so
+ *    each entry records the monitor it describes and is refused once the user looks at a different one.
  *
  * Dependency-injected so the whole engine (eligibility, freshness/window matching, hash dedupe, the describe
  * request) is unit-testable with no Electron, no real sidecar, and no timers.
@@ -31,6 +38,15 @@ export interface ScreenShot {
   width: number
   height: number
   capturedAt: number
+  /** Electron Display.id of the monitor this frame actually came from. The capture always targets the
+   *  display under the CURSOR, which is not necessarily the one the focused window lives on — binding it
+   *  to the cache entry is what lets the read side refuse a description of a monitor the user has since
+   *  looked away from (MQA-183). */
+  dispId: number
+  /** main asked for one display and the OS handed back another (a zero-pixel source got filtered out).
+   *  The live capture path surfaces this to the user as a soft notice; a background describe has no such
+   *  channel, so a flagged frame is simply never cached. */
+  displayMismatch: boolean
 }
 
 export interface ScreenPreprocessDeps {
@@ -43,6 +59,13 @@ export interface ScreenPreprocessDeps {
   }
   /** localBaseReady(settings, allowedProviders) — enabled + binary provisioned + model present + org-allowed. */
   localReady: () => boolean
+  /** requireAuth() — a signed-out session must never leave a background capture loop running (MQA-154),
+   *  and must never be told by Settings that one is (MQA-179). Part of eligibility so there is exactly
+   *  one expression deciding both. */
+  authorized: () => boolean
+  /** Display.id of the monitor the user is looking at right now (the cursor's display) — the same rule
+   *  the capture itself uses. Injected rather than imported so the engine stays Electron-free. */
+  currentDisplayId: () => number
   /** True while Private View is on — dynamic, re-checked at every describe. */
   privateViewOn: () => boolean
   /** Spin up / confirm the local sidecar for the configured model (from llm/local.ts). */
@@ -78,6 +101,11 @@ export interface ScreenContext {
 }
 
 export interface ScreenPreprocess {
+  /** The SINGLE authority for "can the background screen reader run right now?" — session + setting +
+   *  an on-device reader (local model or OCR) + a live foreground-window signal. `refresh()` drives the
+   *  lifecycle from it and main's `backgroundScreenReady` reports it, so the UI can never claim a state
+   *  the engine is not in (MQA-179). */
+  canRun: () => boolean
   /** (Re)start or stop the engine to match current eligibility. Call on startup and after settings change. */
   refresh: () => void
   /** Tear down: kill the watcher, clear timers, drop any cached description. */
@@ -99,6 +127,8 @@ interface CacheEntry {
   description: string
   capturedAt: number
   windowId: string
+  /** The monitor this description is OF — not necessarily the one the focused window is on. */
+  dispId: number
   screenHash: number
 }
 
@@ -140,15 +170,27 @@ export function createScreenPreprocess(deps: ScreenPreprocessDeps): ScreenPrepro
   let started = false
   let debounceTimer: NodeJS.Timeout | null = null
   let refreshTimer: NodeJS.Timeout | null = null
+  // Latched for the session once the foreground watcher proves it cannot report window changes on this
+  // machine. Every invalidation this cache has (drop on focus change, refuse on window mismatch) is fed
+  // by that watcher, so without it a cached description is a coin flip on the user's next alt-tab.
+  let windowSignalDead = false
 
   // The dep is only ever wired on macOS (index.ts passes extractScreenText iff process.platform === 'darwin');
   // its presence IS the "OCR available" signal — no separate platform check needed here.
   const ocrAvailable = (): boolean => !!deps.extractScreenText
 
   const eligible = (): boolean =>
-    deps.getSettings().backgroundScreenContext === true && (deps.localReady() || ocrAvailable())
+    deps.authorized() &&
+    deps.getSettings().backgroundScreenContext === true &&
+    (deps.localReady() || ocrAvailable())
+
+  /** Eligibility AND a window signal that still works — what both the lifecycle and Settings read. */
+  const canRun = (): boolean => eligible() && !windowSignalDead
 
   const activeWindowId = (): string | null => watcher?.current()?.windowId ?? currentWindowId
+
+  /** The watcher is alive and can still report focus changes. False = the cache cannot be invalidated. */
+  const windowSignalOk = (): boolean => watcher?.healthy() === true
 
   async function describeOnce(imageB64: string): Promise<string> {
     const s = deps.getSettings()
@@ -207,10 +249,19 @@ export function createScreenPreprocess(deps: ScreenPreprocessDeps): ScreenPrepro
     lastDescribeAt = now()
     try {
       const shot = await deps.getScreenshot('bg-screen')
+      // main itself flagged this frame as coming from a monitor other than the one it asked for. The live
+      // capture path can tell the user that; a background describe cannot, and caching it would answer
+      // "what's on my screen" about a monitor nobody looked at. Skip the pass instead (MQA-183).
+      if (shot.displayMismatch) return
       const hash = fnv1a(shot.image)
       // Unchanged screen: keep the existing description but refresh its stamp so it stays "fresh" without a
-      // re-inference. Only valid if it's still the same window we described.
-      if (cache && cache.windowId === forWindowId && cache.screenHash === hash) {
+      // re-inference. Only valid if it's still the same window, on the same monitor, that we described.
+      if (
+        cache &&
+        cache.windowId === forWindowId &&
+        cache.dispId === shot.dispId &&
+        cache.screenHash === hash
+      ) {
         cache = { ...cache, capturedAt: now() }
         return
       }
@@ -236,10 +287,16 @@ export function createScreenPreprocess(deps: ScreenPreprocessDeps): ScreenPrepro
       }
       if (!text) return
       // Commit only if the user hasn't switched away mid-describe (else we'd cache the wrong window's text
-      // under the new window's focus). If the watcher can't report a window, trust forWindowId.
-      const stillHere = activeWindowId() === null || activeWindowId() === forWindowId
-      if (!stillHere) return
-      cache = { description: text, capturedAt: now(), windowId: forWindowId, screenHash: hash }
+      // under the new window's focus). An unknown window is NOT waved through any more: it used to commit
+      // under a falsy windowId that the read-side guard could never match (MQA-181).
+      if (activeWindowId() !== forWindowId) return
+      cache = {
+        description: text,
+        capturedAt: now(),
+        windowId: forWindowId,
+        dispId: shot.dispId,
+        screenHash: hash
+      }
       // `mode` is only meaningful (and only emitted) where an OCR engine exists — keeps the Windows
       // audit-log record byte-identical to pre-OCR builds (review finding).
       deps.audit?.(
@@ -271,7 +328,17 @@ export function createScreenPreprocess(deps: ScreenPreprocessDeps): ScreenPrepro
   }
 
   function onRefreshTick(): void {
-    const wid = activeWindowId() ?? ''
+    // The watcher gave up mid-session (killed powershell, restart budget spent). From here on nothing can
+    // drop the cache when the user switches apps, so shut down rather than keep describing blind.
+    if (!windowSignalOk()) {
+      cache = null
+      stop()
+      windowSignalDead = true
+      log('warn', '[screen-preprocess] foreground-window signal lost — stopping (screen asks capture live)')
+      return
+    }
+    const wid = activeWindowId()
+    if (wid === null) return // no window observed yet — a description keyed to nothing is unusable
     void describeForWindow(wid)
   }
 
@@ -279,6 +346,15 @@ export function createScreenPreprocess(deps: ScreenPreprocessDeps): ScreenPrepro
     if (started) return
     started = true
     watcher = deps.startWatcher(handleWindowChange)
+    // No producer on this machine (linux, or a mac install without the bundled helper) — the engine would
+    // capture every 6s and cache descriptions nothing could ever invalidate. A confidently wrong answer
+    // about the window the user just left is worse than the live capture the ask falls back to.
+    if (!windowSignalOk()) {
+      stop()
+      windowSignalDead = true
+      log('warn', '[screen-preprocess] no foreground-window signal — background screen context stays off')
+      return
+    }
     refreshTimer = setInterval(onRefreshTick, REFRESH_INTERVAL_MS)
     log('info', '[screen-preprocess] started (on-device background screen context)')
   }
@@ -302,8 +378,9 @@ export function createScreenPreprocess(deps: ScreenPreprocessDeps): ScreenPrepro
   }
 
   return {
+    canRun,
     refresh: () => {
-      if (eligible()) start()
+      if (canRun()) start()
       else if (started) stop()
     },
     stop,
@@ -322,10 +399,20 @@ export function createScreenPreprocess(deps: ScreenPreprocessDeps): ScreenPrepro
       const c = cache
       if (!c || !c.description) return null
       if (now() - c.capturedAt > CONTEXT_TTL_MS) return null
+      // MQA-181: the window guard below is only a guard while the watcher is alive to move the window.
+      // A dead watcher freezes activeWindowId() at whatever it last saw, so a stale description matches
+      // itself and gets served for the previous app. Drop it and let the ask capture live instead.
+      if (!windowSignalOk()) {
+        cache = null
+        return null
+      }
       const wid = activeWindowId()
-      // If focus has moved to a different window since the describe, the description is about the wrong
-      // screen — treat it as absent so the ask falls back to a live capture.
-      if (wid && c.windowId && wid !== c.windowId) return null
+      // If focus has moved to a different window since the describe — or no window is known at all — the
+      // description is about the wrong screen; treat it as absent so the ask falls back to a live capture.
+      if (wid === null || wid !== c.windowId) return null
+      // MQA-183: the frame came from the display under the cursor, which alt-tab does not move. Once the
+      // user is looking at a different monitor, this description is of a screen they are not on.
+      if (deps.currentDisplayId() !== c.dispId) return null
       return { description: c.description, capturedAt: c.capturedAt }
     },
     _test: {
