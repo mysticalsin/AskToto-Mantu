@@ -840,7 +840,12 @@ export const BaseSettingsSchema = z.object({
   suggestEverySec: z.number().min(5).max(120),
   mode: z.string().min(1).max(60).default('general'),
   profile: ProfileSchema.default({}),
-  shortcuts: z.record(z.string(), z.string().min(1)).default({}),
+  // Values may be EMPTY: '' is the codebase's unbind sentinel, not a malformed entry. resolveShortcut
+  // (main/index.ts) resolves with `??` so a stored '' survives instead of falling back to the shipped
+  // default, and registerShortcuts skips falsy accelerators. A `.min(1)` here made Settings' "Clear"
+  // button a silent no-op: store.ts's validKeysOnly drops the WHOLE shortcuts record when one value
+  // fails, so the old global accelerator stayed bound with no error shown.
+  shortcuts: z.record(z.string(), z.string()).default({}),
   autoSuggest: z.boolean().default(true),
   // Cluely "Uses Screen": when on (and the active provider is vision-capable), a hero ask captures the
   // screen and answers about it. Default on. Gated by the derived `visionReady` flag in PublicSettings.
@@ -949,14 +954,13 @@ export const BaseSettingsSchema = z.object({
   // plain settings rather than mcpSecrets.ts. Registered once (main/mcp/clickupOAuth.ts) and cached here
   // so every later connect/reconnect reuses the same client instead of re-registering.
   clickupClientId: z.string().default(''),
-  // Métis Local uses the single model bundled in every installer. The preprocess is a persisted-settings
-  // migration for releases that offered qwen3.5-2b; unknown ids fail validation and fall back safely in
+  // Métis Local uses a single on-device model. The preprocess is a persisted-settings migration for
+  // releases that offered qwen3.5-2b; unknown ids fail validation and fall back safely in
   // main/store.ts instead of pointing llama-server at a file that can never exist.
   localLlm: z
     .object({
-      // Default TRUE: the model + runtime ship inside every installer (electron-builder extraResources;
-      // fetch-local-model.mjs runs in every predist/prepack), so there is nothing to download and the
-      // flag alone costs nothing — the llama-server sidecar spawns lazily on first local request, and
+      // Default TRUE: the llama-server RUNTIME ships inside every installer, and the flag alone costs
+      // nothing at runtime — the sidecar spawns lazily on first local request, and
       // prewarm additionally requires useFor.suggest (local-routing.ts localPrewarmEligible). With every
       // useFor toggle defaulting FALSE below, default-enabled can never preempt a configured cloud
       // provider; it only makes the `fallback` safety net (and the Settings toggles) live out of the box,
@@ -1758,14 +1762,21 @@ export interface McpPushResult {
 // at module scope), so this structurally mirrors its renderer-safe summary. `.strict()` prevents a future
 // path, port, or session key from silently crossing the main-to-renderer boundary.
 
-/** Renderer-safe metadata for the installer-owned model. */
+/** Renderer-safe metadata for the on-device model. The weights are NOT in the installer (see
+ *  main/llm/local-models.ts): they are fetched once on first run, so "not ready" has to distinguish
+ *  downloading / failed / never-attempted — the renderer told users to reinstall for all three
+ *  (MQA-187/191), which no installer can satisfy. */
 export const LocalModelSummarySchema = z
   .object({
     id: z.string(),
     label: z.string(),
     minTotalRamGB: z.number(),
     ready: z.boolean(),
-    unavailableReason: z.enum(['missing-files', 'insufficient-ram']).nullable()
+    unavailableReason: z
+      .enum(['insufficient-ram', 'downloading', 'download-failed', 'not-downloaded'])
+      .nullable(),
+    /** 0..1 while `unavailableReason === 'downloading'`, 0 otherwise. */
+    downloadProgress: z.number().min(0).max(1)
   })
   .strict()
 export type LocalModelSummary = z.infer<typeof LocalModelSummarySchema>

@@ -98,6 +98,17 @@ export function displayedRecapText(edited: EditedRecap | null, incoming: string 
   return edited && edited.base === text ? edited.text : text
 }
 
+/** The line under a save-failure banner. It used to be an unconditional present-tense "Retrying… attempt
+ *  N / M" gated on nothing but `attempts > 0`, so once App's backoff ladder stopped scheduling attempts
+ *  the screen went on promising a retry that would never come — the user's only cue said "in progress"
+ *  while the meeting sat unwritten. A status line may only claim work that is actually pending; when the
+ *  ladder has given up it names the Save chip instead, which is armed in exactly this state. */
+export function saveStatusLine(attempts: number, max: number, gaveUp: boolean): string | null {
+  if (gaveUp) return 'Automatic retries have stopped. Press Save to try again.'
+  if (attempts > 0) return `Retrying… attempt ${Math.min(attempts, max)} / ${max}`
+  return null
+}
+
 /** Cold Calling Mode — whether the coaching notes' "People to invite or send to" section actually names
  *  anyone, so the "Book meetings" action is never offered against an empty section or a "None." verdict.
  *  Line-based (not a single regex): a blank line separating the heading from the next "## " section is
@@ -200,6 +211,7 @@ export const Review = memo(function Review({
   saveError,
   saveAttempts,
   maxSaveAttempts,
+  saveGaveUp,
   startedAt,
   showTranscript,
   meetingMeta,
@@ -229,6 +241,8 @@ export const Review = memo(function Review({
   saveError: string | null
   saveAttempts?: number
   maxSaveAttempts?: number
+  /** True once App's auto-save ladder has stopped scheduling attempts — see saveStatusLine. */
+  saveGaveUp?: boolean
   startedAt?: number
   showTranscript?: boolean // opt-in: auto-expand the full transcript; default summary-only
   meetingMeta?: { title: string; date: string }
@@ -823,11 +837,11 @@ export const Review = memo(function Review({
       {saveError && !savedPath && (
         <div className="rounded-xl border border-[var(--color-danger)]/30 bg-[var(--color-danger)]/10 px-3 py-2 text-[12px] text-[var(--color-danger)]">
           <div>Couldn't save the transcript: {saveError}</div>
-          {saveAttempts !== undefined && maxSaveAttempts !== undefined && saveAttempts > 0 && (
-            <div className="mt-1 text-[11px] opacity-80">
-              Retrying… attempt {Math.min(saveAttempts, maxSaveAttempts)} / {maxSaveAttempts}
-            </div>
-          )}
+          {(() => {
+            if (saveAttempts === undefined || maxSaveAttempts === undefined) return null
+            const status = saveStatusLine(saveAttempts, maxSaveAttempts, saveGaveUp ?? false)
+            return status ? <div className="mt-1 text-[11px] opacity-80">{status}</div> : null
+          })()}
         </div>
       )}
       {savedPath && !meetingMeta && (

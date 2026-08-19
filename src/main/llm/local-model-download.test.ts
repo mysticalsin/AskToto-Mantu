@@ -1,6 +1,21 @@
-import { describe, expect, it } from 'vitest'
-import { readFileSync } from 'node:fs'
+import { describe, expect, it, beforeEach, afterEach, vi } from 'vitest'
+import { createHash } from 'node:crypto'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync, mkdirSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+
+vi.mock('electron')
+vi.mock('../logger', () => ({ auditLog: vi.fn(), mainLog: { info: vi.fn(), warn: vi.fn(), error: vi.fn() } }))
+
+const ramState = vi.hoisted(() => ({ totalMemBytes: 64 * 1024 ** 3 }))
+vi.mock('node:os', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:os')>()
+  return { ...actual, totalmem: () => ramState.totalMemBytes }
+})
+
+import { app, net } from 'electron'
+import { ensureLocalModel, localModelDownloadState, shouldFetchWeights } from './local-model-download'
+import { listModels, modelPaths, type LocalModelEntry } from './local-models'
 
 const REPO_ROOT = join(__dirname, '..', '..', '..')
 const source = readFileSync(join(REPO_ROOT, 'src', 'main', 'llm', 'local-model-download.ts'), 'utf8')
@@ -8,9 +23,9 @@ const source = readFileSync(join(REPO_ROOT, 'src', 'main', 'llm', 'local-model-d
 /**
  * The weights are no longer shipped inside the installer, so this module is now the ONLY place
  * installed application code fetches model bytes from the network. Bundling used to provide the
- * supply-chain guarantee; these checks are what replace it. They are source-level on purpose — the
- * download itself is a ~728 MB network operation that a unit test must not perform, but the rules that
- * make it safe are structural and can be asserted directly.
+ * supply-chain guarantee; these checks are what replace it. The integrity rules are asserted at source
+ * level on purpose — the real download is ~763 MB and a unit test must not perform it — while transport
+ * and download state are exercised for real against a stubbed net.fetch.
  */
 describe('local model first-run downloader', () => {
   it('verifies the pinned sha256 and refuses to keep a mismatch', () => {
@@ -48,13 +63,185 @@ describe('local model first-run downloader', () => {
     expect(source).toMatch(/if \(inFlight\) return inFlight/)
   })
 
-  it('uses https only', () => {
-    // The request itself comes from node:https. node:http may be referenced ONLY as a type import
-    // (IncomingMessage), which emits no runtime code and cannot originate a plaintext request.
-    expect(source).toMatch(/import \{ get as httpsGet \} from 'node:https'/)
-    const httpImports = source.match(/^import .*'node:http'.*$/gm) ?? []
-    for (const line of httpImports) expect(line).toMatch(/^import type /)
+  it('MQA-185 — routes the weight fetch through the proxy-aware transport, never node:https', () => {
+    // node:https honours neither HTTP(S)_PROXY nor the OS/PAC proxy, and install-proxy.ts's
+    // setGlobalDispatcher only rebinds undici's fetch. A node:https request here is the one outbound
+    // call in the main process a corporate proxy cannot carry — on the only path to the weights.
+    expect(source).toMatch(/import \{ net \} from 'electron'/)
+    expect(source).toMatch(/net\.fetch\(/)
+    expect(source).not.toMatch(/from 'node:https'/)
+    expect(source).not.toMatch(/from 'node:http'/)
     // No plaintext URL for weights, in any form.
     expect(source).not.toMatch(/http:\/\/[a-z]/i)
+  })
+
+  it('MQA-185 — keeps a rolling idle deadline, which net.fetch does not give for free', () => {
+    // node:https had res.setTimeout for a connection that goes quiet mid-transfer. A Response body has
+    // no equivalent, so dropping it while changing transport would silently remove a real protection.
+    expect(source).toMatch(/stalled mid-download/)
+    expect(source).toMatch(/AbortController/)
+  })
+})
+
+// ─── Behavioural: transport, download state, and the boot eligibility gate ───────────────────────────
+
+const CHUNK_A = Buffer.from('weights-part-one')
+const CHUNK_B = Buffer.from('weights-part-two')
+const GGUF = Buffer.concat([CHUNK_A, CHUNK_B])
+const MMPROJ = Buffer.from('mmproj-bytes')
+const sha = (b: Buffer): string => createHash('sha256').update(b).digest('hex')
+
+const TEST_ENTRY: LocalModelEntry = {
+  id: 'qwen3.5-0.8b',
+  label: 'Qwen3.5 0.8B',
+  minTotalRamGB: 8,
+  gguf: { bytes: GGUF.length, sha256: sha(GGUF), url: 'https://huggingface.co/test/model.gguf' },
+  mmproj: { bytes: MMPROJ.length, sha256: sha(MMPROJ), url: 'https://huggingface.co/test/mmproj.gguf' }
+}
+
+vi.mock('./local-models', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./local-models')>()
+  return { ...actual, getModel: vi.fn(() => TEST_ENTRY) }
+})
+
+function bodyOf(chunks: Buffer[]): ReadableStream<Uint8Array> {
+  let i = 0
+  return new ReadableStream<Uint8Array>({
+    pull(c) {
+      if (i < chunks.length) c.enqueue(new Uint8Array(chunks[i++]))
+      else c.close()
+    }
+  })
+}
+
+function responseOf(chunks: Buffer[], total: number): unknown {
+  return {
+    ok: true,
+    status: 200,
+    headers: new Headers({ 'content-length': String(total) }),
+    body: bodyOf(chunks)
+  }
+}
+
+describe('MQA-185/186 — the first-run fetch is proxy-aware and observable', () => {
+  let userData: string
+  const mockGetPath = app.getPath as ReturnType<typeof vi.fn>
+  const mockFetch = net.fetch as unknown as ReturnType<typeof vi.fn>
+
+  beforeEach(() => {
+    userData = mkdtempSync(join(tmpdir(), 'metis-dl-test-'))
+    mockGetPath.mockImplementation((name: string) => (name === 'userData' ? userData : join(userData, name)))
+    ramState.totalMemBytes = 64 * 1024 ** 3
+    mockFetch.mockReset()
+  })
+
+  afterEach(() => {
+    rmSync(userData, { recursive: true, force: true })
+  })
+
+  it('MQA-185 — fetches the weights over Electron net.fetch so a corporate proxy can carry them', async () => {
+    mockFetch.mockImplementation((url: string) =>
+      Promise.resolve(
+        url.endsWith('model.gguf')
+          ? responseOf([CHUNK_A, CHUNK_B], GGUF.length)
+          : responseOf([MMPROJ], MMPROJ.length)
+      )
+    )
+
+    await expect(ensureLocalModel('qwen3.5-0.8b')).resolves.toBe(true)
+
+    expect(mockFetch).toHaveBeenCalledWith('https://huggingface.co/test/model.gguf', expect.anything())
+    expect(mockFetch).toHaveBeenCalledWith('https://huggingface.co/test/mmproj.gguf', expect.anything())
+    const paths = modelPaths('qwen3.5-0.8b')
+    expect(readFileSync(paths.gguf)).toEqual(GGUF)
+    expect(readFileSync(paths.mmproj)).toEqual(MMPROJ)
+  })
+
+  it('MQA-186/187 — a failed fetch reports itself as a failed download, not as missing files', async () => {
+    mockFetch.mockRejectedValue(new Error('connect ETIMEDOUT'))
+
+    await expect(ensureLocalModel('qwen3.5-0.8b')).resolves.toBe(false)
+
+    expect(localModelDownloadState()).toMatchObject({ modelId: 'qwen3.5-0.8b', status: 'failed' })
+    expect(listModels(localModelDownloadState())[0]).toMatchObject({
+      ready: false,
+      unavailableReason: 'download-failed'
+    })
+  })
+
+  it('MQA-186 — reports real progress while the transfer is in flight', async () => {
+    let release: () => void = () => {}
+    const gate = new Promise<void>((r) => {
+      release = r
+    })
+    let sawFirstChunk: () => void = () => {}
+    const firstChunk = new Promise<void>((r) => {
+      sawFirstChunk = r
+    })
+
+    mockFetch.mockImplementation((url: string) => {
+      if (!url.endsWith('model.gguf')) return Promise.resolve(responseOf([MMPROJ], MMPROJ.length))
+      let stage = 0
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        headers: new Headers({ 'content-length': String(GGUF.length) }),
+        body: new ReadableStream<Uint8Array>({
+          async pull(c) {
+            if (stage === 0) {
+              stage = 1
+              c.enqueue(new Uint8Array(CHUNK_A))
+              sawFirstChunk()
+              return
+            }
+            if (stage === 1) {
+              stage = 2
+              await gate
+              c.enqueue(new Uint8Array(CHUNK_B))
+              return
+            }
+            c.close()
+          }
+        })
+      })
+    })
+
+    const done = ensureLocalModel('qwen3.5-0.8b')
+    await firstChunk
+    await new Promise((r) => setTimeout(r, 20))
+
+    const mid = localModelDownloadState()
+    expect(mid.status).toBe('downloading')
+    expect(mid.progress).toBeGreaterThan(0)
+    expect(mid.progress).toBeLessThan(1)
+    expect(listModels(mid)[0]).toMatchObject({ ready: false, unavailableReason: 'downloading' })
+    expect(listModels(mid)[0].downloadProgress).toBeGreaterThan(0)
+
+    release()
+    await expect(done).resolves.toBe(true)
+    expect(localModelDownloadState().status).toBe('idle')
+  })
+
+  it('MQA-186 — does not fetch 763 MB onto a machine that can never load it', () => {
+    ramState.totalMemBytes = 4 * 1024 ** 3
+    expect(shouldFetchWeights('qwen3.5-0.8b', true)).toBe(false)
+    ramState.totalMemBytes = 8 * 1024 ** 3
+    expect(shouldFetchWeights('qwen3.5-0.8b', true)).toBe(true)
+  })
+
+  it('MQA-186 — Local AI switched off is a real deferral: no download is started', () => {
+    expect(shouldFetchWeights('qwen3.5-0.8b', false)).toBe(false)
+  })
+
+  it('MQA-186 — an already-provisioned model reports idle, not downloading', async () => {
+    const paths = modelPaths('qwen3.5-0.8b')
+    mkdirSync(paths.dir, { recursive: true })
+    writeFileSync(paths.gguf, GGUF)
+    writeFileSync(paths.mmproj, MMPROJ)
+
+    await expect(ensureLocalModel('qwen3.5-0.8b')).resolves.toBe(true)
+    expect(net.fetch).not.toHaveBeenCalled()
+    expect(localModelDownloadState()).toMatchObject({ status: 'idle' })
+    expect(existsSync(`${paths.gguf}.partial`)).toBe(false)
   })
 })

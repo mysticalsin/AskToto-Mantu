@@ -1,4 +1,6 @@
 import { describe, it, expect, vi } from 'vitest'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import {
   apiPickerFallbackProvider,
   connectDust,
@@ -163,5 +165,29 @@ describe('MQA-093 — a DENIED microphone is not the same row state as one that 
     expect(micRowStatus('granted')).toEqual({ state: 'ready', detail: 'granted' })
     expect(micRowStatus('unknown')).toEqual({ state: 'action', detail: 'needs permission' })
     expect(micRowStatus(undefined)).toEqual({ state: 'action', detail: 'needs permission' })
+  })
+})
+
+describe('MQA-201 — scene 4 never fakes a check', () => {
+  // docs/ONBOARDING-EXPERIENCE.md: "Rows animate from spinner -> state, using REAL signals ... (only show
+  // rows that are actually true - never fake a check.)" The acceleration row was an unconditional
+  // set('silicon', 'ready', 'detected') justified by "this build only ships arm64" - false on both
+  // shipped platforms: the mac target is universal (electron-builder.yml, built with --universal and
+  // gate-verified for x64 Mach-O slices) and Windows ships x64 only. It also fed allReady, so a
+  // fabricated row is what let the "Everything's ready" headline render.
+  const src = readFileSync(join(__dirname, 'OnboardingExperience.tsx'), 'utf8')
+
+  it('does not assert hardware acceleration it never checked', () => {
+    expect(src).not.toMatch(/set\('silicon'/)
+    expect(src).not.toMatch(/Apple Silicon acceleration|Hardware acceleration/)
+    expect(src).not.toMatch(/this build only ships arm64/)
+  })
+
+  it('every remaining setup row is derived from a real signal', () => {
+    // asrBundled / getPermissions, plus the two rows whose verdict is a platform fact the renderer
+    // genuinely knows (the brain path, and Windows having no per-app screen-recording permission).
+    expect(src).toMatch(/window\.toto\.asrBundled\(\)/)
+    expect(src).toMatch(/window\.toto\.getPermissions\(\)/)
+    expect(src).toMatch(/micRowStatus\(perms\?\.microphone\)/)
   })
 })

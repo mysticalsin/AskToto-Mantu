@@ -132,7 +132,8 @@ function fileMatches(path: string, expectedBytes: number): boolean {
 
 /**
  * Kept under its existing internal name because local routing already consumes it.
- * In packaged builds this means "the bundled files are present with pinned sizes".
+ * Means "both weight files are on disk with their pinned sizes" - they arrive over the network on first
+ * run (local-model-download.ts), they are never in the installer.
  */
 export function isDownloaded(id: string): boolean {
   const entry = getModel(id)
@@ -140,24 +141,59 @@ export function isDownloaded(id: string): boolean {
   return fileMatches(paths.gguf, entry.gguf.bytes) && fileMatches(paths.mmproj, entry.mmproj.bytes)
 }
 
+/**
+ * Live state of the first-run weight fetch. The VALUE lives in local-model-download.ts (which owns the
+ * transfer); the TYPE lives here so listModels() can fold it into the one summary the renderer already
+ * polls. Absent "files are missing" is ambiguous between "downloading right now", "the fetch failed" and
+ * "never attempted" - and the renderer told users to reinstall for all three (MQA-187/188/191).
+ */
+export interface LocalModelDownloadState {
+  modelId: string | null
+  status: 'idle' | 'downloading' | 'failed'
+  /** 0..1 across BOTH files, weighted by their pinned byte counts. Meaningful while `downloading`. */
+  progress: number
+}
+
+export type LocalModelUnavailableReason =
+  | 'insufficient-ram'
+  | 'downloading'
+  | 'download-failed'
+  | 'not-downloaded'
+
 export interface LocalModelSummary {
   id: string
   label: string
   minTotalRamGB: number
   ready: boolean
-  unavailableReason: 'missing-files' | 'insufficient-ram' | null
+  unavailableReason: LocalModelUnavailableReason | null
+  /** 0..1 while `unavailableReason === 'downloading'`, 0 otherwise. */
+  downloadProgress: number
 }
 
-export function listModels(): LocalModelSummary[] {
+export function listModels(download?: LocalModelDownloadState): LocalModelSummary[] {
   return LOCAL_MODELS.map((model) => {
     const filesPresent = isDownloaded(model.id)
     const enoughRam = totalRamGB() >= model.minTotalRamGB
+    const dl = download && download.modelId === model.id ? download : undefined
+    // RAM is checked FIRST because it now decides whether the weights are fetched at all
+    // (shouldFetchWeights in local-model-download.ts): below the floor nothing is downloading and nothing
+    // ever will be, so reporting "not downloaded" would hide the only cause the user can act on.
+    const reason: LocalModelUnavailableReason | null = !enoughRam
+      ? 'insufficient-ram'
+      : filesPresent
+        ? null
+        : dl?.status === 'downloading'
+          ? 'downloading'
+          : dl?.status === 'failed'
+            ? 'download-failed'
+            : 'not-downloaded'
     return {
       id: model.id,
       label: model.label,
       minTotalRamGB: model.minTotalRamGB,
       ready: filesPresent && enoughRam,
-      unavailableReason: !filesPresent ? 'missing-files' : enoughRam ? null : 'insufficient-ram'
+      unavailableReason: reason,
+      downloadProgress: reason === 'downloading' ? (dl?.progress ?? 0) : 0
     }
   })
 }

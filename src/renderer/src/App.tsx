@@ -116,6 +116,27 @@ export function meetingSaveIsRedundant(
   return lineCount === 0 || savedId === id || claimed.has(id)
 }
 
+// Errors cross the IPC boundary wrapped as "Error invoking remote method '<channel>': ..." — plumbing the
+// user must never be shown. Shared by the save path below and the two screen-capture catches.
+const IPC_INVOKE_WRAPPER = /^Error invoking remote method '[^']*':\s*(?:Error:\s*)?/
+
+// A failed transcript save used to show the raw rejection: the channel name, then an fs errno, then the
+// .tmp path of the atomic write. Nothing in that names a cause the user can clear, and main's 'Not signed
+// in.' throw arrived wearing the identical wrapper, so a dropped session and a locked file read the same.
+// Translate the causes we can actually diagnose into the one action that fixes each; keep the OS's own
+// words (minus the plumbing) for everything else, because a vaguer line would be less true, not kinder.
+// Every branch ends at the Save chip, which is genuinely armed in this state (Review.tsx's disabled rule).
+export function saveFailureReason(err: unknown): string {
+  const raw = (err instanceof Error ? err.message : String(err)).replace(IPC_INVOKE_WRAPPER, '')
+  if (/not signed in/i.test(raw)) return "you're signed out. Sign in, then press Save."
+  if (/\bENOSPC\b/.test(raw)) return 'the disk is full. Free up some space, then press Save.'
+  if (/\bEPERM\b|\bEACCES\b/.test(raw))
+    return "Métis isn't allowed to write to your meetings folder. Fix its permissions or pick another folder in Settings, then press Save."
+  if (/\bEBUSY\b/.test(raw)) return 'another program is holding the file open. Close it, then press Save.'
+  if (/\bENOENT\b/.test(raw)) return 'your meetings folder is missing. Pick a folder in Settings, then press Save.'
+  return raw
+}
+
 // How long a finished live copilot suggestion stays on screen before it auto-dismisses. Tony's call: a
 // suggestion should be glanceable and then get out of the way — 4 seconds, not lingering.
 const SUGGESTION_TTL_MS = 4000
@@ -471,6 +492,11 @@ export function App(): JSX.Element {
   }, [savedPath])
   const [saveError, setSaveError] = useState<string | null>(null)
   const [saveAttempts, setSaveAttempts] = useState(0)
+  // The auto-save ladder is spent — no further attempt is scheduled. saveAttempts alone can't say this:
+  // it reaches MAX_SAVE_RETRIES a full backoff step BEFORE the last attempt runs, so reading the counter
+  // as "gave up" would announce a dead end while a retry was still pending. Set only where the retry loop
+  // actually stops, so the status line under the banner is true in both directions.
+  const [saveGaveUp, setSaveGaveUp] = useState(false)
   const MAX_SAVE_RETRIES = 5
   const [updateReady, setUpdateReady] = useState<{ open: boolean; version?: string; notes?: string; percent?: number }>({ open: false })
   const [newMeetingToast, setNewMeetingToast] = useState(false)
@@ -600,9 +626,11 @@ export function App(): JSX.Element {
       setSavedPath(r.path)
       setSaveError(null)
       setSaveAttempts(0)
+      setSaveGaveUp(false)
     } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e)
-      setSaveError(msg)
+      // A manual retry that fails does NOT restart the ladder, so saveGaveUp stays as it was: still true
+      // after a give-up (the terminal line remains correct), still false while the ladder is running.
+      setSaveError(saveFailureReason(e))
     }
   }, [ask.answer, listen.lines, mode])
 
@@ -654,12 +682,16 @@ export function App(): JSX.Element {
         setSavedPath(r.path)
         setSaveError(null)
         setSaveAttempts(0)
+        setSaveGaveUp(false)
         return r.path
       } catch (e) {
-        const msg = e instanceof Error ? e.message : String(e)
-        setSaveError(msg)
+        setSaveError(saveFailureReason(e))
         if (saveAttempts < MAX_SAVE_RETRIES) {
           setSaveAttempts((c) => c + 1)
+        } else {
+          // Last rung: saveAttempts is this effect's only re-trigger, so leaving it alone here is what
+          // ends the ladder. Say so — the screen used to keep claiming "Retrying…" from here on.
+          setSaveGaveUp(true)
         }
         return null
       } finally {
@@ -983,10 +1015,7 @@ export function App(): JSX.Element {
         // lost across the boundary), so we match on the message content, not `instanceof`.
         // Errors cross the IPC boundary wrapped as "Error invoking remote method 'capture:screen': ..."
         // — strip the plumbing before showing anything to the user.
-        const raw = (e instanceof Error ? e.message : String(e)).replace(
-          /^Error invoking remote method '[^']*':\s*(?:Error:\s*)?/,
-          ''
-        )
+        const raw = (e instanceof Error ? e.message : String(e)).replace(IPC_INVOKE_WRAPPER, '')
         const needsScreenPermission = isScreenCapturePermissionError(raw)
         setCaptureError(
           /private view/i.test(raw)
@@ -1056,10 +1085,7 @@ export function App(): JSX.Element {
         // Private View and transient capture failures can use the transcript-only suggestion. A denied
         // screen permission cannot: that would turn a requested visual ask into an unannounced provider
         // request without the screen the user selected.
-        const raw = (e instanceof Error ? e.message : String(e)).replace(
-          /^Error invoking remote method '[^']*':\s*(?:Error:\s*)?/,
-          ''
-        )
+        const raw = (e instanceof Error ? e.message : String(e)).replace(IPC_INVOKE_WRAPPER, '')
         const needsScreenPermission = isScreenCapturePermissionError(raw)
         setCaptureError(
           /private view/i.test(raw)
@@ -1610,6 +1636,7 @@ export function App(): JSX.Element {
     // already-settled save promise be read as if it belonged to this one (see its own declaration comment).
     setSaveError(null)
     setSaveAttempts(0)
+    setSaveGaveUp(false)
     listen.clear()
     suggest.clear()
     followup.clear() // a new meeting is about to be viewed — a stale draft from whatever was reviewed
@@ -1776,7 +1803,7 @@ export function App(): JSX.Element {
             // Released only on a definitive give-up, mirroring the auto-save effect's "pin only on
             // success → failure can retry" rule: a later rescue must still get a chance to persist this.
             claimedSavesRef.current.delete(id)
-            setSaveError(e instanceof Error ? e.message : String(e))
+            setSaveError(saveFailureReason(e)) // same banner as the auto-save ladder — same plain words
             return null
           }
           await new Promise((r) => setTimeout(r, Math.min(1000 * 2 ** attempt, 8000)))
@@ -2622,6 +2649,7 @@ export function App(): JSX.Element {
         saveError={pm ? null : saveError}
         saveAttempts={pm ? 0 : saveAttempts}
         maxSaveAttempts={MAX_SAVE_RETRIES}
+        saveGaveUp={pm ? false : saveGaveUp}
         startedAt={pm ? pm.startedAt : meetingStartRef.current}
         showTranscript={settings?.showFullTranscriptInReview ?? false}
         meetingMeta={pm ? { title: pm.title, date: pm.date } : undefined}
@@ -2684,7 +2712,7 @@ export function App(): JSX.Element {
         }
       />
     )
-  }, [pastMeeting, recapGenTarget, recapGen.answer, ask.answer, listen.lines, savedPath, saveError, saveAttempts, settings?.showFullTranscriptInReview, settings?.mcpConnections, followup.answer, generateFollowup, requireProvider, generateSavedRecap, retryAnswer, manualSave, discardMeeting, resumePastMeeting, openPastMeeting, reset, recapSkipped, openSettings, mode, coaching.answer, generateColdCallCoaching, booking.answer, generateBookMeetings])
+  }, [pastMeeting, recapGenTarget, recapGen.answer, ask.answer, listen.lines, savedPath, saveError, saveAttempts, saveGaveUp, settings?.showFullTranscriptInReview, settings?.mcpConnections, followup.answer, generateFollowup, requireProvider, generateSavedRecap, retryAnswer, manualSave, discardMeeting, resumePastMeeting, openPastMeeting, reset, recapSkipped, openSettings, mode, coaching.answer, generateColdCallCoaching, booking.answer, generateBookMeetings])
   const answerBody = useMemo(() => {
     if (!(capturing || captureError || ask.answer)) return null
     // While a new screen capture is in flight (capturing), force the streaming/empty display even when

@@ -127,7 +127,7 @@ function getSpeakerId(): SpeakerId {
 }
 import { buildPrewarmMessages } from './llm/prewarm'
 import { listModels as listLocalModels, LOCAL_MODELS } from './llm/local-models'
-import { ensureLocalModel } from './llm/local-model-download'
+import { ensureLocalModel, localModelDownloadState, shouldFetchWeights } from './llm/local-model-download'
 import { createScreenPreprocess, type ScreenPreprocess } from './screen-preprocess'
 import { startForegroundWatcher } from './foreground-watcher'
 import { resetDustConversation, prewarmDustConversation, isDustAuthError } from './llm/dust'
@@ -304,6 +304,8 @@ import {
 import { routeTier } from '@shared/routing'
 import { HedgeRace, HEDGE_DELAY_MS, type HedgeLeg } from './llm/hedge'
 import { redactSecrets } from '@shared/redact'
+import { isSafeAccelerator } from '@shared/accelerator'
+import { formatResetPhrase } from '@shared/reset-time'
 import { applySpeakerNames } from '@shared/transcript-align'
 import { initializeCaheEditionIdentity, isCaheEdition } from './cahe-edition'
 import { importEmbeddedCaheKey, seedCaheLocalAiForBackgroundScreen } from './cahe-embedded-key'
@@ -1251,6 +1253,13 @@ function createWindow(): void {
     audioArmed = false
     setTrayRecording(false)
     setRecordingPowerSaveBlock(false)
+    // MQA-196: the geometry half of the same root cause. If the overlay was collapsed to the mini-pill
+    // when the renderer died, the remounted App boots `minimized` false and renders the full Bar, but its
+    // mount-effect windowMode('bar') would setBounds({ width: currentWidth }) with the surviving pill
+    // width — squeezing the recovered bar into a ~130px sliver that resizable:false makes unfixable. Same
+    // two lines createWindow's crash guard uses, for the reload path that never reaches it.
+    isMinimized = false
+    currentWidth = BAR_WIDTH
     if (!win || win.isDestroyed()) return
     if (process.env['ELECTRON_RENDERER_URL']) win.loadURL(process.env['ELECTRON_RENDERER_URL'])
     else win.loadFile(join(__dirname, '../renderer/index.html'))
@@ -1292,7 +1301,7 @@ function resizeTo(height: number): void {
   // laptop + external monitor of different heights, a streaming answer clamps to the wrong monitor and the
   // window jumps vertically while the cursor sits on the other screen.
   const { workArea } = screen.getDisplayMatching(win.getBounds())
-  const h = Math.max(BAR_MIN_HEIGHT, Math.min(Math.round(height), workArea.height - 48))
+  const h = clampHeight(Math.round(height), workArea.height)
   const b = win.getBounds()
   if (h === b.height && currentWidth === b.width) {
     // Only remember this height for restore-on-expand when it's the real bar, not the mini-pill's
@@ -1334,7 +1343,11 @@ function setWindowMode(): void {
   const b = win.getBounds()
   let x = Math.round(b.x + (b.width - currentWidth) / 2)
   x = Math.max(workArea.x + 16, Math.min(x, workArea.x + workArea.width - currentWidth - 16))
-  win.setBounds({ x, y: b.y, width: currentWidth, height: lastBarHeight }, false)
+  // lastBarHeight was measured on whatever display the bar was on at the time. The renderer sends
+  // windowMode('bar') on every mount — including the reload after a renderer crash — which can land after
+  // the overlay has moved to a shorter monitor, so re-apply that monitor's ceiling instead of restoring a
+  // height it cannot show (resizable:false leaves no manual way back).
+  win.setBounds({ x, y: b.y, width: currentWidth, height: clampHeight(lastBarHeight, workArea.height) }, false)
 }
 
 /** Self-heal a null `win` (e.g. a one-time createWindow() throw during boot) by retrying the window
@@ -1654,6 +1667,13 @@ function clampAxis(pos: number, size: number, areaPos: number, areaSpan: number)
   return Math.min(Math.max(pos, areaPos), areaPos + areaSpan - size)
 }
 
+/** Ceiling a window height to a display's work area, keeping the 48px reserve. Lives here rather than
+ *  inside resizeTo because the ceiling has to be re-applied every time the overlay lands on a DIFFERENT
+ *  display — while the rest of resizeTo (width, recenter, lastBarHeight) must NOT run on those paths. */
+function clampHeight(height: number, areaHeight: number): number {
+  return Math.max(BAR_MIN_HEIGHT, Math.min(height, areaHeight - 48))
+}
+
 // How much of the window must stay visibly reachable on some display while it's being dragged — enough
 // to grab it back, not the whole thing. Below this it's treated as flung off-screen and pulled back in.
 const DRAG_VISIBLE_MARGIN = 40
@@ -1681,12 +1701,28 @@ function isReachable(x: number, y: number, width: number, height: number): boole
   })
 }
 
+/** Re-apply the work-area height ceiling when a move lands the window on a DIFFERENT display than it
+ *  left. Every setBounds on the move/reanchor paths spreads the old bounds, so a window grown to fit a
+ *  4K panel keeps that height when it is dragged onto a 1080p monitor — hanging a thousand pixels below
+ *  the bottom edge, where resizable:false leaves the user no way to fix it. Height only: x/y stay the
+ *  caller's, except that y is re-checked, because the caller validated it against the OLD (taller)
+ *  height and a shorter window can lose the overlap that made that position reachable. */
+function refitToDisplay(next: Electron.Rectangle, fromDisplayId: number): Electron.Rectangle {
+  const { id, workArea } = screen.getDisplayMatching(next)
+  if (id === fromDisplayId) return next
+  const height = clampHeight(next.height, workArea.height)
+  if (height === next.height) return next
+  const y = clampAxisMargin(next.y, height, workArea.y, workArea.height, DRAG_VISIBLE_MARGIN)
+  return { ...next, height, y }
+}
+
 function moveBy(dx: number, dy: number): void {
   // Self-heal a null win (e.g. a one-time createWindow() throw during boot) — mirrors sendHotkey/
   // toggleVisible so scroll/move hotkeys recover instead of staying permanently dead for the process life.
   const w = ensureWindow()
   if (!w) return
   const b = w.getBounds()
+  const fromDisplayId = screen.getDisplayMatching(b).id
   const x = b.x + dx
   const y = b.y + dy
   // Free movement anywhere that keeps the window reachable on SOME display — covers dragging clean
@@ -1695,7 +1731,7 @@ function moveBy(dx: number, dy: number): void {
   // to stick a drag pinned to that display's edge, since the matched display never changed until the
   // window had already fully crossed onto it — which the clamp itself was preventing.
   if (isReachable(x, y, b.width, b.height)) {
-    w.setBounds({ ...b, x, y })
+    w.setBounds(refitToDisplay({ ...b, x, y }, fromDisplayId))
     return
   }
   // Unreachable (flung past every display): pull back onto the display nearest the ATTEMPTED position,
@@ -1703,7 +1739,7 @@ function moveBy(dx: number, dy: number): void {
   const { workArea } = screen.getDisplayMatching({ x, y, width: b.width, height: b.height })
   const cx = clampAxisMargin(x, b.width, workArea.x, workArea.width, DRAG_VISIBLE_MARGIN)
   const cy = clampAxisMargin(y, b.height, workArea.y, workArea.height, DRAG_VISIBLE_MARGIN)
-  w.setBounds({ ...b, x: cx, y: cy })
+  w.setBounds(refitToDisplay({ ...b, x: cx, y: cy }, fromDisplayId))
 }
 
 /**
@@ -1718,12 +1754,24 @@ function registerScreenListeners(): void {
     if (!win) return
     const b = win.getBounds()
     const { workArea: wa } = screen.getDisplayMatching(b)
+    // Height first, and BEFORE the reachability guard below. A window grown to fit a tall display keeps
+    // that height when the display is unplugged or its resolution shrinks — and in that state it is
+    // normally still partly visible, so the guard would skip exactly the case that leaves the overlay
+    // hanging off the bottom of the remaining screen with resizable:false and no in-app fix.
+    const height = clampHeight(b.height, wa.height)
     const visible =
       b.x + b.width > wa.x && b.x < wa.x + wa.width && b.y + b.height > wa.y && b.y < wa.y + wa.height
-    if (visible) return // still (partly) on a real display — leave it where the user put it
+    if (visible) {
+      // Still (partly) on a real display — leave it where the user put it, sliding up only as far as the
+      // newly clamped height needs to sit inside the work area (same slide resizeTo does).
+      if (height !== b.height) {
+        win.setBounds({ ...b, y: Math.min(b.y, wa.y + wa.height - height - 8), height })
+      }
+      return
+    }
     const x = clampAxis(b.x, b.width, wa.x, wa.width)
-    const y = clampAxis(b.y, b.height, wa.y, wa.height)
-    win.setBounds({ ...b, x, y })
+    const y = clampAxis(b.y, height, wa.y, wa.height)
+    win.setBounds({ ...b, x, y, height })
   }
   screen.on('display-removed', reanchor)
   screen.on('display-added', reanchor)
@@ -1791,6 +1839,15 @@ function registerShortcuts(): void {
   for (const [action, fn] of Object.entries(shortcutActions)) {
     const accel = resolveShortcut(action as HotkeyAction, user)
     if (!accel) continue
+    // settings.json is user-editable and ipc's `shortcuts` field accepts any string, so what lands here is
+    // untrusted. A navigation key bound globally (MQA-184: the recorder used to commit 'Shift+Tab') takes
+    // that key away from every app for as long as Metis runs, and a bare key would fire on ordinary typing.
+    // Refuse it here rather than at the recorder alone, and report it so the Settings banner offers a rebind.
+    if (!isSafeAccelerator(accel)) {
+      mainLog.warn(`[shortcuts] unsafe accelerator for ${action}: ${accel}`)
+      shortcutFailures.push({ action, accel })
+      continue
+    }
     const dupeOf = claimedBy.get(accel)
     if (dupeOf) {
       mainLog.warn(`[shortcuts] duplicate accelerator for ${action}: ${accel} (already bound to ${dupeOf})`)
@@ -2270,6 +2327,14 @@ function registerIpc(): void {
     // Start/stop background screen pre-analysis to match the new settings (backgroundScreenContext toggle,
     // or Local AI being enabled/disabled/provisioned) — takes effect immediately, no relaunch.
     refreshScreenPreprocess()
+    // Local AI turned back ON → arm the weight fetch here (MQA-186). Boot is the only other trigger and
+    // it now skips while the toggle is off, so without this edge a user who declined the download once
+    // could never get it: Settings would report the model unavailable for the rest of the install's life.
+    if (!cur.localLlm.enabled && next.localLlm.enabled && shouldFetchWeights(next.localLlm.modelId, true)) {
+      void ensureLocalModel(next.localLlm.modelId)
+        .then(() => refreshScreenPreprocess())
+        .catch((e) => mainLog.warn('[settings] local model provisioning failed:', e))
+    }
     // At-rest encryption just turned on → purge any previously-built CLEARTEXT knowledge graph so it
     // can't leak meeting topics/entities the encryption is meant to protect. (Builds are already
     // blocked while encryption is on, so no graph will be regenerated until it's turned back off.)
@@ -3161,11 +3226,14 @@ function registerIpc(): void {
     return { text }
   })
 
-  // --- Métis Local (on-device LLM): bundled-model readiness metadata ---
-  // Paths stay in main; the renderer only learns whether the installer-owned files are ready.
+  // --- Métis Local (on-device LLM): model readiness metadata ---
+  // Paths stay in main; the renderer only learns whether the weights are usable, and — since they are
+  // fetched on first run rather than shipped — whether that fetch is running, failed, or never started
+  // (MQA-187). Folded into this one channel deliberately: no second push channel to keep in sync, and
+  // nothing new crosses the boundary beyond a status word and a fraction.
   ipcMain.handle(IPC.localModelsList, (e) => {
     assertMainWindow(e)
-    return listLocalModels()
+    return listLocalModels(localModelDownloadState())
   })
 
   // Live-meeting pre-warm (PLAN.md §4.4): a debounced transcript tail from the renderer's
@@ -3518,7 +3586,7 @@ function registerIpc(): void {
             localAnswerFloorEligibleFor(req, s, allowed)
             ? ''
             : localVisionRequired
-              ? 'Métis Local could not process this screenshot on this device. Nothing was sent to a cloud provider. Restart Métis, or reinstall it if the bundled model is missing.'
+              ? 'Métis Local could not process this screenshot on this device. Nothing was sent to a cloud provider. Open Settings → AI → Local AI to see whether the on-device model is ready.'
               : 'Métis Local handles live suggestions, summaries and screenshots — this request type uses your cloud provider.'
           : def.kind === 'cli' && !s.cliConnected[provider]
             ? `${def.label} is not connected. Open Settings → CLI Integration to set it up.`
@@ -3820,7 +3888,7 @@ function registerIpc(): void {
                 : exhaustion.kind === 'usage-cap'
                   ? `${def.label} hit its usage limit${
                       exhaustion.resetAt
-                        ? ` (resets ${new Date(exhaustion.resetAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })})`
+                        ? ` (${formatResetPhrase(exhaustion.resetAt)})`
                         : ''
                     }. Add another provider in Settings → AI to keep going.`
                   : `${def.label} is out of credit. Add credit or switch providers in Settings → AI.`
@@ -4806,16 +4874,23 @@ if (!app.requestSingleInstanceLock()) {
   seedCaheLocalAiForBackgroundScreen()
   // Métis Local weights are no longer bundled in the installer (~728 MB; a universal mac package
   // carrying them would blow past GitHub's 2 GB release-asset limit), so fetch them once here on first
-  // run. Deliberately NOT awaited: this is a ~728 MB download and startup must not wait on it, nor fail
+  // run. Deliberately NOT awaited: this is a ~763 MB download and startup must not wait on it, nor fail
   // when the machine is offline or behind a restrictive proxy — Local simply stays unavailable and the
   // next launch retries. ensureLocalModel() verifies the pinned sha256 and never throws.
+  // GATED (MQA-186): this used to fire unconditionally, so a machine under the model's RAM floor paid
+  // 763 MB for weights assertRamOk would refuse to load, and a user who had switched Local AI off got
+  // the transfer anyway with no way to decline it. shouldFetchWeights answers both. Because this is the
+  // only trigger, the settings handler re-arms it on the OFF→ON edge — see the localLlm.enabled branch
+  // in IPC.setSettings — otherwise switching Local AI back on would leave no path to the weights at all.
   // local-routing.ts re-reads isDownloaded() per request, so no ROUTING decision needs notifying. The
   // background screen reader does: its eligibility is evaluated when the engine is refreshed, and the boot
   // refresh below runs while this download is still in flight — without this re-arm, a first-run user who
   // opted in gets an inert fast path until some unrelated setting changes (MQA-178).
-  void ensureLocalModel(LOCAL_MODELS[0].id)
-    .then(() => refreshScreenPreprocess())
-    .catch((e) => mainLog.warn('[boot] local model provisioning failed:', e))
+  if (shouldFetchWeights(LOCAL_MODELS[0].id, getSettings().localLlm.enabled)) {
+    void ensureLocalModel(LOCAL_MODELS[0].id)
+      .then(() => refreshScreenPreprocess())
+      .catch((e) => mainLog.warn('[boot] local model provisioning failed:', e))
+  }
   // Windows toast attribution: a process's AppUserModelID must match the installed shortcut's AUMID
   // (electron-builder sets it to appId) or Windows silently drops native Notifications — which breaks
   // the meeting-reminder toast for portable-build and launch-at-login users (no shortcut in the launch

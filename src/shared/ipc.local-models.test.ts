@@ -7,7 +7,8 @@ describe('bundled local-model IPC contract', () => {
     label: 'Qwen3.5 0.8B',
     minTotalRamGB: 8,
     ready: true,
-    unavailableReason: null
+    unavailableReason: null,
+    downloadProgress: 0
   }
 
   it('exposes only the read-only model list channel', () => {
@@ -34,6 +35,20 @@ describe('bundled local-model IPC contract', () => {
     ).toBe(true)
     expect(LocalModelSummarySchema.safeParse({ ...valid, unavailableReason: 'network' }).success).toBe(false)
     expect(LocalModelSummarySchema.safeParse(null).success).toBe(false)
+  })
+
+  it('MQA-187/191 — carries the first-run download state, so "not ready" is never just "missing files"', () => {
+    // The weights are fetched on first run, so the renderer must be able to tell an in-flight or blocked
+    // download apart from a machine that will never be eligible. Reinstalling fixes none of them.
+    for (const reason of ['downloading', 'download-failed', 'not-downloaded']) {
+      expect(LocalModelSummarySchema.safeParse({ ...valid, ready: false, unavailableReason: reason }).success).toBe(true)
+    }
+    // 'missing-files' framed a normal first-run state as a damaged install; it is gone, not aliased.
+    expect(LocalModelSummarySchema.safeParse({ ...valid, unavailableReason: 'missing-files' }).success).toBe(false)
+    expect(LocalModelSummarySchema.safeParse({ ...valid, downloadProgress: 0.5 }).success).toBe(true)
+    expect(LocalModelSummarySchema.safeParse({ ...valid, downloadProgress: 1.5 }).success).toBe(false)
+    const { downloadProgress: _p, ...withoutProgress } = valid
+    expect(LocalModelSummarySchema.safeParse(withoutProgress).success).toBe(false)
   })
 })
 

@@ -26,16 +26,51 @@ function blockAfter(startAnchor: string, endMarker: string): string {
   return source.slice(start, end)
 }
 
-describe('Local AI is a bundled, read-only capability', () => {
+describe('Local AI tells the truth about a model that is downloaded, not bundled (MQA-187/188/191)', () => {
   const block = blockAfter('function LocalAiSection(', '\nfunction StepBadge(')
+  // Copy assertions run over the code with `//` comments stripped. The comments explain WHY the old
+  // wording was wrong and legitimately quote it; that text never reaches a user.
+  const copy = block.replace(/^\s*\/\/.*$/gm, '')
 
-  it('loads readiness metadata but exposes no runtime model management', () => {
+  it('loads readiness metadata and exposes no runtime model management', () => {
+    // Still read-only: no download/cancel/delete controls and no extra IPC channel. The download state
+    // rides the existing localModels:list summary (see shared/ipc.ts LocalModelSummarySchema).
     expect(block).toMatch(/window\.toto\.localModelsList\(\)/)
-    expect(block).not.toMatch(/localModelsDownload|localModelsCancel|localModelsDelete|onLocalModelsProgress/)
+    expect(block).not.toMatch(/localModelsDownload|localModelsCancel|localModelsDelete/)
   })
 
-  it('says the model is included with Métis and renders ready or unavailable state', () => {
-    expect(block).toMatch(/Included with Métis/)
+  it('MQA-188 — never claims the model ships in the installer', () => {
+    // electron-builder.yml copies only the licence file; scripts/check-packaged-runtime.mjs fails the
+    // build if a .gguf ever returns. "Included with Métis" was false on every install, ready ones too.
+    expect(copy).not.toMatch(/Included with Métis/)
+    expect(copy).not.toMatch(/no separate model download/i)
+    expect(copy).not.toMatch(/bundled model/i)
+    // ...and says what actually happens instead.
+    expect(block).toMatch(/first run/i)
+  })
+
+  it('MQA-191 — never tells the user to reinstall, which cannot restore weights no installer carries', () => {
+    expect(copy).not.toMatch(/[Rr]einstall/)
+  })
+
+  it('MQA-187 — an in-flight download reads as a download, with its progress', () => {
+    expect(block).toMatch(/unavailableReason === 'downloading'/)
+    expect(block).toMatch(/downloadProgress/)
+    expect(block).toMatch(/Downloading/)
+  })
+
+  it('MQA-187 — a failed download names what has to be reachable and when it retries', () => {
+    expect(block).toMatch(/unavailableReason === 'download-failed'/)
+    expect(block).toMatch(/huggingface\.co/)
+    expect(block).toMatch(/next launch/i)
+  })
+
+  it('MQA-187 — the card re-polls while a download is running instead of freezing on its mount snapshot', () => {
+    expect(block).toMatch(/setTimeout/)
+    expect(block).toMatch(/'downloading'/)
+  })
+
+  it('still renders ready, unavailable and the RAM floor', () => {
     expect(block).toMatch(/model\.ready/)
     expect(block).toMatch(/model\.unavailableReason === 'insufficient-ram'/)
     expect(block).toMatch(/Ready/)
