@@ -26,6 +26,7 @@ const read = (rel: string): string => readFileSync(join(REPO, rel), 'utf8').repl
 const builder = read('electron-builder.yml')
 const compliance = read('docs/compliance/data-flow-onepager.md')
 const manifest = read('src/main/llm/local-models.ts')
+const settingsUi = read('src/renderer/src/components/Settings.tsx')
 
 /** True when the builder copies the weights directory rather than only the licence file. */
 const weightsArePackaged = /^\s*-\s*from:\s*resources\/local-llm\/models\s*$/m.test(builder)
@@ -71,5 +72,43 @@ describe('MQA-146 — the compliance one-pager may not out-run what the installe
 
   it('the sidecar genuinely IS bundled, so that half of the claim stays true', () => {
     expect(builder).toMatch(/resources\/llama/)
+  })
+})
+
+/**
+ * MQA-188/191 — the renderer was left behind when the weights were unbundled.
+ *
+ * MQA-146 corrected the document that goes to a customer's security review, but the test it left behind
+ * reads only the builder config, that document and the main-process manifest. The Settings card went on
+ * saying "The model is Included with Métis. There is no separate model download after installation." and
+ * offering "Reinstall Métis to restore them" — a remedy scripts/check-packaged-runtime.mjs guarantees
+ * cannot work, since it fails the build if a .gguf ever reappears under resources/local-llm.
+ *
+ * So bind the UI to the builder the same way: while the weights are excluded, the app may not claim
+ * otherwise in front of a user. Package them again and this test demands the copy move with them.
+ */
+describe('MQA-188/191 — the in-app copy may not out-run what the installer actually ships', () => {
+  const localAi = (): string => {
+    const start = settingsUi.indexOf('function LocalAiSection(')
+    const end = settingsUi.indexOf('\nfunction StepBadge(', start)
+    expect(start).toBeGreaterThan(-1)
+    expect(end).toBeGreaterThan(start)
+    // Strip `//` comments: they quote the old wording to explain why it was wrong, and no user reads them.
+    return settingsUi.slice(start, end).replace(/^\s*\/\/.*$/gm, '')
+  }
+
+  it('does not tell the user the model is included with the app', () => {
+    if (weightsArePackaged) return
+    expect(localAi()).not.toMatch(/Included with Métis|no separate model download/i)
+  })
+
+  it('does not offer reinstalling as the remedy for weights the installer does not carry', () => {
+    if (weightsArePackaged) return
+    expect(localAi()).not.toMatch(/[Rr]einstall/)
+  })
+
+  it('says instead that the model is fetched on first run', () => {
+    if (weightsArePackaged) return
+    expect(localAi()).toMatch(/first run/i)
   })
 })

@@ -17,6 +17,7 @@ import { describe, expect, it } from 'vitest'
  *   MQA-121 — the server Retry-After was ignored in the ask path.
  *   MQA-122 — answer mode had no on-device backup; it dead-ended with an error when the sole provider ran out.
  *   MQA-123 — pickFailover routed to the answer floor but attempt() bounced it (found by the physical sim).
+ *   MQA-203 — a multi-day reset was phrased as a bare clock time, so a weekly cap read as "later today".
  */
 const indexSrc = readFileSync(join(__dirname, 'index.ts'), 'utf8')
 
@@ -71,8 +72,10 @@ describe('the user-facing message names the limit, not a misleading network erro
     expect(indexSrc).toMatch(/is out of credit\./)
   })
 
-  it('a usage-cap message shows the reset time when the provider stated one', () => {
-    expect(indexSrc).toMatch(/exhaustion\.resetAt[\s\S]{0,120}?toLocaleTimeString/)
+  it('a usage-cap message shows WHEN it resets, day-aware, when the provider stated one (MQA-203)', () => {
+    // Was pinned to a bare toLocaleTimeString, which locked in MQA-203: a weekly cap ~7 days out printed
+    // only a clock time, so it read as "later today" and the user retried every morning for a week.
+    expect(indexSrc).toMatch(/exhaustion\.resetAt[\s\S]{0,120}?formatResetPhrase\(exhaustion\.resetAt\)/)
   })
 })
 

@@ -75,6 +75,19 @@ export function looksLikeNetworkError(message: string, online: boolean): boolean
 }
 
 /**
+ * Exported for unit testing — which live-banner note survives a window that decoded successfully.
+ * A Whisper decode failure is per-window, not per-session (the very next window normally transcribes
+ * fine), yet its note used to sit in the danger banner for the rest of the meeting because nothing ever
+ * retracted it. `decodeNote` is the exact text the failing window put up, so the retraction is an
+ * exact-string match — the same contract as OFFLINE_MSG/THEM_SILENT_MSG above, and the reason a fuzzy
+ * "clear anything engine-shaped" rule is wrong: it would erase MIC_LOST_MSG/THEM_LOST_MSG/DROPPED_MSG,
+ * which describe conditions a decoded window says nothing about.
+ */
+export function noteAfterDecodedWindow(current: string | null, decodeNote: string | null): string | null {
+  return decodeNote !== null && current === decodeNote ? null : current
+}
+
+/**
  * Exported for unit testing — the pure probe cadence behind pump() (see PROBE_EVERY's block comment).
  * The un-pinned budget is an opening BURST, not a retirement: a meeting whose first windows are short
  * openers ("Oi", "Tudo bem?") burns all five of them on returns the PROBE_MIN_WORDS substance gate throws
@@ -408,6 +421,9 @@ export function useListen(
   const queue = useRef<{ audio: Float32Array; speaker: Speaker }[]>([])
   const busy = useRef(false)
   const readyRef = useRef(false)
+  // Exact text of the note a failed audio window put in the banner, so the next window that decodes can
+  // retract THAT note and nothing else (see noteAfterDecodedWindow). Null whenever nothing is outstanding.
+  const decodeNoteRef = useRef<string | null>(null)
   const liveRef = useRef(false) // true only between start() and stop() — guards stale results
   // Synchronous in-flight guard for start(): a rapid double-click/double-hotkey on Listen calls start()
   // twice before React re-renders listen.listening to true (that state update is async), so a boolean
@@ -746,12 +762,26 @@ export function useListen(
         // — same pattern as pump → fallBackToWhisper above. It only runs later, once this handler actually
         // fires, by which point it's fully initialized; deliberately omitted from this useCallback's deps.
         if (!armNetworkRetry(m.message ?? '')) {
-          setState((s) => ({ ...s, error: m.message ?? 'transcription error', loading: false }))
+          const note = m.message ?? 'transcription error'
+          // armNetworkRetry declines once the model is loaded because this is a per-window decode
+          // failure, not a load failure — and a per-window failure is transient. Record the exact note so
+          // the next successful window takes it back down; a LOAD failure (readyRef false) stays sticky,
+          // because nothing is going to recover it on its own.
+          if (readyRef.current) decodeNoteRef.current = note
+          setState((s) => ({ ...s, error: note, loading: false }))
         }
         busy.current = false
         pump()
       } else if (m.type === 'text') {
         commitLine(m.text || '', (m.speaker as Speaker) || 'you')
+        if (decodeNoteRef.current) {
+          const note = decodeNoteRef.current
+          decodeNoteRef.current = null
+          setState((s) => {
+            const next = noteAfterDecodedWindow(s.error, note)
+            return next === s.error ? s : { ...s, error: next }
+          })
+        }
         busy.current = false
         pump()
       }

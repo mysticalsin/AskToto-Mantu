@@ -28,6 +28,14 @@ const TRANSCRIPT_SCOPES = ['OnlineMeetingTranscript.Read.All']
 // still found.
 const CALENDAR_LOOKUP_PAD_MS = 15 * 60_000
 
+// One deadline for the WHOLE chain below, not one per hop. The four Graph calls run sequentially, so
+// per-hop bounds would still let a socket that goes dead mid-request (dropping proxy, wifi roam, resume
+// from sleep) hold a user-invoked "backfill speakers" in Review for 4x as long — and unbounded, 4x
+// undici's 300 s default is ~20 minutes of a spinner. 15 s is the house bound for an outbound token/Graph
+// exchange (mcp/clickupOAuth.ts's FETCH_TIMEOUT_MS); overrunning it degrades to the same quiet null as
+// every other failure here.
+const CHAIN_TIMEOUT_MS = 15_000
+
 interface GraphCalendarEventLite {
   onlineMeeting?: { joinUrl?: string }
 }
@@ -40,13 +48,18 @@ function odataQuote(value: string): string {
 
 /** Find the join link of a calendar event overlapping [startedAt, endedAt] (+ padding) that has an online
  *  meeting attached. Mirrors calendarToday's own calendarView + fetch pattern (see main/calendar.ts). */
-async function findJoinUrlFromCalendar(token: string, startedAt: number, endedAt: number): Promise<string | null> {
+async function findJoinUrlFromCalendar(
+  token: string,
+  startedAt: number,
+  endedAt: number,
+  signal: AbortSignal
+): Promise<string | null> {
   const start = new Date(startedAt - CALENDAR_LOOKUP_PAD_MS).toISOString()
   const end = new Date(endedAt + CALENDAR_LOOKUP_PAD_MS).toISOString()
   const url =
     `${GRAPH}/me/calendarView?startDateTime=${encodeURIComponent(start)}&endDateTime=${encodeURIComponent(end)}` +
     `&$select=subject,start,end,onlineMeeting&$orderby=start/dateTime&$top=25`
-  const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } })
+  const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` }, signal })
   if (!res.ok) return null
   const data = (await res.json()) as { value?: GraphCalendarEventLite[] }
   const withJoin = (data.value || []).find(
@@ -56,10 +69,10 @@ async function findJoinUrlFromCalendar(token: string, startedAt: number, endedAt
 }
 
 /** Resolve a joinWebUrl to its onlineMeeting id. */
-async function resolveOnlineMeetingId(token: string, joinUrl: string): Promise<string | null> {
+async function resolveOnlineMeetingId(token: string, joinUrl: string, signal: AbortSignal): Promise<string | null> {
   const filter = `JoinWebUrl eq '${odataQuote(joinUrl)}'`
   const url = `${GRAPH}/me/onlineMeetings?$filter=${encodeURIComponent(filter)}`
-  const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } })
+  const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` }, signal })
   if (!res.ok) return null
   const data = (await res.json()) as { value?: Array<{ id?: string }> }
   const id = data.value?.[0]?.id
@@ -68,9 +81,9 @@ async function resolveOnlineMeetingId(token: string, joinUrl: string): Promise<s
 
 /** List a meeting's transcripts and return the newest one's id (by createdDateTime), or null when none
  *  exist yet (transcription was never started/finished for this meeting). */
-async function newestTranscriptId(token: string, meetingId: string): Promise<string | null> {
+async function newestTranscriptId(token: string, meetingId: string, signal: AbortSignal): Promise<string | null> {
   const url = `${GRAPH}/me/onlineMeetings/${encodeURIComponent(meetingId)}/transcripts`
-  const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } })
+  const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` }, signal })
   if (!res.ok) return null
   const data = (await res.json()) as { value?: Array<{ id?: string; createdDateTime?: string }> }
   const list = (data.value || []).filter(
@@ -86,11 +99,16 @@ async function newestTranscriptId(token: string, meetingId: string): Promise<str
 }
 
 /** Fetch one transcript's content as raw VTT text. */
-async function fetchTranscriptVtt(token: string, meetingId: string, transcriptId: string): Promise<string | null> {
+async function fetchTranscriptVtt(
+  token: string,
+  meetingId: string,
+  transcriptId: string,
+  signal: AbortSignal
+): Promise<string | null> {
   const url =
     `${GRAPH}/me/onlineMeetings/${encodeURIComponent(meetingId)}/transcripts/${encodeURIComponent(transcriptId)}` +
     `/content?$format=text/vtt`
-  const res = await fetch(url, { headers: { Authorization: `Bearer ${token}`, Accept: 'text/vtt' } })
+  const res = await fetch(url, { headers: { Authorization: `Bearer ${token}`, Accept: 'text/vtt' }, signal })
   if (!res.ok) return null
   return res.text()
 }
@@ -123,22 +141,23 @@ export async function fetchTeamsTranscriptForMeeting(opts: {
   }
 
   try {
-    const joinUrl = opts.joinUrl || (await findJoinUrlFromCalendar(token, opts.startedAt, opts.endedAt))
+    const signal = AbortSignal.timeout(CHAIN_TIMEOUT_MS)
+    const joinUrl = opts.joinUrl || (await findJoinUrlFromCalendar(token, opts.startedAt, opts.endedAt, signal))
     if (!joinUrl) {
       mainLog.warn('[graph-transcript] no calendar event with an online-meeting join link found for this window')
       return null
     }
-    const meetingId = await resolveOnlineMeetingId(token, joinUrl)
+    const meetingId = await resolveOnlineMeetingId(token, joinUrl, signal)
     if (!meetingId) {
       mainLog.warn('[graph-transcript] could not resolve an onlineMeeting id for the join link')
       return null
     }
-    const transcriptId = await newestTranscriptId(token, meetingId)
+    const transcriptId = await newestTranscriptId(token, meetingId, signal)
     if (!transcriptId) {
       mainLog.warn('[graph-transcript] no transcripts available yet for this meeting')
       return null
     }
-    const vtt = await fetchTranscriptVtt(token, meetingId, transcriptId)
+    const vtt = await fetchTranscriptVtt(token, meetingId, transcriptId, signal)
     if (!vtt) {
       mainLog.warn('[graph-transcript] transcript content fetch failed')
       return null

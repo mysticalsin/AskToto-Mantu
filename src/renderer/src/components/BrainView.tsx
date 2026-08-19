@@ -75,7 +75,6 @@ function weekStart(ms: number): number {
   return d.getTime()
 }
 
-const WEEK_MS = 7 * 24 * 60 * 60 * 1000
 const WEEKS_SHOWN = 12
 
 /**
@@ -182,26 +181,45 @@ function Chip({
   )
 }
 
+export interface WeeklyBarData {
+  weeks: { w: number; n: number }[]
+  max: number
+  maxIdx: number
+}
+
+/**
+ * The WEEKS_SHOWN meetings-per-week columns (oldest first), the bar scale, and the busiest column.
+ * Pure and `now`-injected so the bucketing is testable across a DST boundary. Exported for unit testing.
+ */
+export function computeWeeklyBars(meetings: MeetingSummary[], now: number): WeeklyBarData {
+  // Step back seven CALENDAR days at a time instead of subtracting 7*24h: `weekStart` returns local
+  // Monday midnights, and consecutive local Monday midnights are 7d ± 1h apart across a DST
+  // transition. Fixed-millisecond columns therefore miss every bucket key on the far side of a
+  // transition (bars read zero) and, going into spring-forward, land on Sunday 23:00 — mislabelling
+  // the axis too. `setDate` preserves the wall-clock fields, so each column stays a real Monday 00:00.
+  const columns: number[] = []
+  const cursor = new Date(weekStart(now))
+  for (let i = 0; i < WEEKS_SHOWN; i++) {
+    columns.unshift(cursor.getTime())
+    cursor.setDate(cursor.getDate() - 7)
+  }
+  const counts = new Map<number, number>()
+  for (const m of meetings) {
+    const ms = Date.parse(m.date)
+    if (isNaN(ms)) continue
+    const w = weekStart(ms)
+    counts.set(w, (counts.get(w) || 0) + 1)
+  }
+  // No range guard needed: a bucket outside the 12 columns is simply never read.
+  const weeks = columns.map((w) => ({ w, n: counts.get(w) || 0 }))
+  const max = Math.max(1, ...weeks.map((x) => x.n))
+  const maxIdx = weeks.reduce((best, x, i) => (x.n > weeks[best].n ? i : best), 0)
+  return { weeks, max, maxIdx }
+}
+
 /** Meetings-per-week bars: single hue, thin marks, rounded data ends, native tooltips per bar. */
 function WeeklyBars({ meetings }: { meetings: MeetingSummary[] }): JSX.Element {
-  const { weeks, max, maxIdx } = useMemo(() => {
-    const now = weekStart(Date.now())
-    const counts = new Map<number, number>()
-    for (const m of meetings) {
-      const ms = Date.parse(m.date)
-      if (isNaN(ms)) continue
-      const w = weekStart(ms)
-      if (w > now || w < now - (WEEKS_SHOWN - 1) * WEEK_MS) continue
-      counts.set(w, (counts.get(w) || 0) + 1)
-    }
-    const weeks = Array.from({ length: WEEKS_SHOWN }, (_, i) => {
-      const w = now - (WEEKS_SHOWN - 1 - i) * WEEK_MS
-      return { w, n: counts.get(w) || 0 }
-    })
-    const max = Math.max(1, ...weeks.map((x) => x.n))
-    const maxIdx = weeks.reduce((best, x, i) => (x.n > weeks[best].n ? i : best), 0)
-    return { weeks, max, maxIdx }
-  }, [meetings])
+  const { weeks, max, maxIdx } = useMemo(() => computeWeeklyBars(meetings, Date.now()), [meetings])
 
   const W = 480
   const H = 64
