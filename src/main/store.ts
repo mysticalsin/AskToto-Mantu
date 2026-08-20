@@ -46,6 +46,7 @@ import { adminManagedConfigPath, readTrustedAdminManaged } from './win-security'
 import { DustAPI } from '@dust-tt/client'
 import Anthropic from '@anthropic-ai/sdk'
 import OpenAI from 'openai'
+import { stripProxyFaultMarker } from './llm/retry'
 
 const dir = () => app.getPath('userData')
 const settingsPath = () => join(dir(), 'settings.json')
@@ -897,7 +898,11 @@ export async function testApiKey(provider: ProviderId, key: string): Promise<Tes
     }
     return { ok: true }
   } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e)
+    // Strip the gateway's operator-fault marker: it is routing plumbing for the ask path (see
+    // llm/retry.ts), and this string goes straight onto the Settings → Test button. The SENTENCE is
+    // exactly what the user should see here — a proxy whose account token is dead is worth saying
+    // plainly — but "[metis-proxy-config]" in front of it is noise they cannot act on.
+    const msg = stripProxyFaultMarker(e instanceof Error ? e.message : String(e))
     return { ok: false, error: msg }
   }
 }

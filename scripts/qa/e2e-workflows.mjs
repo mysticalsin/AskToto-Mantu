@@ -834,6 +834,29 @@ async function groupCloudflare() {
       return { unhealthy: s.unhealthyProviders }
     })
 
+    await check(g, "an operator-fault gateway failure names the OPERATOR, not the user's network", async () => {
+      // The gateway reports "my account token is dead" as a 502 — right, because the caller's key was
+      // fine. But 502 also matches the transient-retry pattern, so this used to be rewritten to
+      // "Connection issue — check your network": every user in the org pointed at their wifi while the
+      // real cause was a secret on the proxy. Needs no fallback available, or something else answers
+      // and no terminal error is ever shown.
+      const policy = (await settings()).allowedProviders
+      if (!policy || policy.includes('local') || policy.length !== 1) {
+        record(g, "an operator-fault gateway failure names the OPERATOR, not the user's network", 'info',
+          'not exercised — needs a profile whose allowedProviders is exactly ["cloudflare"], so no fallback can answer and the terminal message is actually shown')
+        return undefined
+      }
+      await page.evaluate((u) => window.toto.setSettings({ cloudflareBaseUrl: u }), `${MOCK}/gateway-cred`)
+      await sleep(300)
+      const r = await ask({ id: uid('cf-operator'), mode: 'answer', prompt: 'Say OK.' }, 120000)
+      const msg = String(r.error ?? '')
+      assert(!/check your network/i.test(msg), `still blaming the user's network: ${msg}`)
+      assert(/operator|CLOUDFLARE_API_TOKEN/i.test(msg), `did not name the operator fault: ${msg}`)
+      // The routing marker is plumbing; it must never reach a user.
+      assert(!msg.includes('[metis-proxy-config]'), 'the routing marker leaked into the user-facing message')
+      return { message: msg.slice(0, 90) }
+    })
+
     await check(g, 'testApiKey rejects a bad proxy key with the real reason', async () => {
       const r = await page.evaluate(() => window.toto.testApiKey('cloudflare', 'definitely-wrong'))
       assert(r && r.ok === false, `expected a rejection, got ${JSON.stringify(r)}`)

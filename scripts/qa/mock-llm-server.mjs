@@ -99,7 +99,7 @@ const handler = (req, res) => {
     if (url.includes('/gateway-cred/')) {
       // The OPERATOR's Cloudflare token is bad. The Worker deliberately maps its own 401/403 to 502 so
       // the app never tells the user to re-enter a proxy key that is perfectly fine.
-      return errorJson(res, 502, 'Upstream provider rejected the gateway credential')
+      return errorJson(res, 502, '[metis-proxy-config] Cloudflare rejected this proxy account credential. The operator needs to check CLOUDFLARE_API_TOKEN and CF_ACCOUNT_ID.')
     }
     if (url.includes('/badbody/')) {
       // 200, but JSON instead of SSE — a misconfigured proxy that answers without streaming.
