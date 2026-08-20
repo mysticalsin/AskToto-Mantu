@@ -71,10 +71,18 @@ calendar metadata (Microsoft 365).
 **Recipients / processors:**
 - Microsoft 365 / OneDrive (storage of the encrypted brain/transcript files; already covered by Mantu's
   M365 DPA — see [`tenant-checklist.md`](./tenant-checklist.md)).
-- The cloud LLM provider selected in Settings, if any (`src/shared/providers.ts` lists 15: Anthropic,
-  OpenAI, NVIDIA NIM, DeepSeek, Qwen, MiniMax, Kimi, OpenRouter, Groq, Mistral, Grok, Gemini, Dust, plus a
-  custom OpenAI-compatible endpoint and two CLI passthroughs). Only the provider(s) actually configured
+- The cloud LLM provider selected in Settings, if any (`src/shared/providers.ts` lists 18 entries, 17 of
+  them remote: Anthropic, OpenAI, NVIDIA NIM, DeepSeek, Qwen, MiniMax, Kimi, OpenRouter, Groq, Mistral,
+  Grok, Gemini, Dust, Cloudflare, plus a custom OpenAI-compatible endpoint and two CLI passthroughs. The
+  18th, `local`, is the on-device model and transmits nothing). Only the provider(s) actually configured
   receive data; this is a per-user setting, not a fixed list of live recipients.
+- Cloudflare, when selected, is **two** recipients rather than one, because it is not called directly:
+  the prompt goes to a Worker the operator deploys into their own Cloudflare account (that account holds
+  the Cloudflare API token as a Wrangler secret; Métis never has it), and from there to
+  `api.cloudflare.com`, which under Unified Billing serves the request from Workers AI, OpenAI, Anthropic
+  or Google depending on the configured `{provider}/{model}` id. If the operator's AI Gateway has logging
+  enabled, prompts and completions are stored in that Cloudflare account. See
+  [`../CLOUDFLARE.md`](../CLOUDFLARE.md).
 - Dust.tt — today only as an optional Q&A provider over the corpus (existing); **(planned — Phase 5)**
   additionally as a read recipient of published entity pages/note cards via the OneDrive connector, gated
   by the `publishBrainPages` setting (default follows `!encryptTranscripts`) and a per-meeting confidential
@@ -88,8 +96,11 @@ existing `transcript.deleted` action). Target defaults are proposed in
 **International transfers:** depends entirely on which cloud LLM provider (if any) is configured. Mistral
 is EU-hosted. Dust supports an EU workspace (`eu.dust.tt`) but defaults to `dust.tt` unless explicitly
 configured otherwise. The remaining providers (Anthropic, OpenAI, NVIDIA, DeepSeek, Qwen, MiniMax, Kimi,
-OpenRouter, Groq, Grok, Gemini) are non-EU-hosted as far as is known without vendor-by-vendor verification;
-no SCC/adequacy inventory exists per provider today. **See open question in [`README.md`](./README.md).**
+OpenRouter, Groq, Grok, Gemini, Cloudflare) are non-EU-hosted as far as is known without vendor-by-vendor
+verification; no SCC/adequacy inventory exists per provider today. Cloudflare carries a second, local
+variable: the transfer depends on the region of the operator's own Cloudflare account *and* on whichever
+upstream lab the configured model id resolves to, so it must be recorded per deployment rather than once
+for the product. **See open question in [`README.md`](./README.md).**
 
 ## 3. Necessity and proportionality
 

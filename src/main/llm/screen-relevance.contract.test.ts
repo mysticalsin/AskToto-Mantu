@@ -3,7 +3,7 @@ import { userText, VISION_GUARD } from './shared'
 import type { AskStart } from '@shared/ipc'
 
 /**
- * The screen must be EVIDENCE, never the subject.
+ * MQA-211 — the screen must be EVIDENCE, never the subject.
  *
  * Both screen paths attach context unconditionally: the screen block rides on every answer-mode ask once
  * an on-device description is cached, and a screenshot is attached to every vision ask. Neither is gated

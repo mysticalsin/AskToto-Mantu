@@ -31,7 +31,7 @@ import type { HotkeyAction, TranscriptLine, ConversationMode, ChatTurn, LicenseG
 import { HOTKEY_ACTIONS } from '@shared/ipc'
 import { useTapControl } from './lib/tap/tap-control'
 import type { TapProfile } from './lib/tap/classify'
-import { PROVIDERS, isDustReady } from '@shared/providers'
+import { PROVIDERS, isDustReady, providerBaseUrl, requiresUserBaseUrl } from '@shared/providers'
 import { ASSIST_PROMPT, buildNoDecisionPrompt, EMAIL_RECAP_PROMPT, COLD_CALL_COACHING_PROMPT, BOOK_MEETING_PROMPT } from '@shared/prompts'
 import { isScreenCapturePermissionError } from '@shared/screen-capture'
 import { detectNoDecisionEnding } from '@shared/wrapup'
@@ -893,15 +893,24 @@ export function App(): JSX.Element {
               ? settings?.localVisionReady || settings?.localFallbackReady
               : false
       if (settings?.providerReady || localReady) return true
-      // A keyed API provider can still be !providerReady because the org allowlist excludes it
-      // (settings.allowedProviders) — that user already has a valid key, so "add your API key" is the
-      // wrong remedy; point them at switching providers instead.
-      const blockedByOrg = !!settings?.hasApiKey && !!settings?.provider && PROVIDERS[settings.provider]?.kind !== 'cli'
+      // MQA-216: three distinct reasons a keyed provider is still !providerReady, three different
+      // remedies. Test the allowlist itself — a saved key alone never proved an org policy, and reading
+      // it that way told a user whose only mistake was not having pasted the Worker URL yet that their
+      // employer had restricted them. Endpoint case second, because it is the ordinary Cloudflare state
+      // between the operator sending the key and sending the URL.
+      const blockedByOrg =
+        !!settings?.provider && !!settings.allowedProviders && !settings.allowedProviders.includes(settings.provider)
+      const needsEndpoint =
+        !!settings?.provider &&
+        requiresUserBaseUrl(settings.provider) &&
+        !providerBaseUrl(settings.provider, settings).trim()
       openSettings(
         'ai',
         blockedByOrg
           ? 'Your organization restricts which providers you can use. Switch to an approved provider here.'
-          : 'Add an API key or connect a provider here to ask questions.'
+          : needsEndpoint
+            ? `No endpoint URL set for ${PROVIDERS[settings!.provider].label}. Open Settings → Advanced and add it.`
+            : 'Add an API key or connect a provider here to ask questions.'
       )
       return false
     },
@@ -911,7 +920,9 @@ export function App(): JSX.Element {
       settings?.localSummaryReady,
       settings?.localVisionReady,
       settings?.localFallbackReady, // read in the body (803/805/807); without it the gate acts on a stale flag
-      settings?.hasApiKey,
+      settings?.allowedProviders,
+      settings?.customBaseUrl,
+      settings?.cloudflareBaseUrl, // both read by providerBaseUrl for the needsEndpoint branch
       settings?.provider,
       openSettings
     ]
@@ -3165,18 +3176,24 @@ export function App(): JSX.Element {
           })()}
           {settings && !settings.providerReady && !nudgeExpired && view !== 'settings' && !showListeningChrome && (() => {
             const activeDef = PROVIDERS[settings.provider]
-            // A keyed API provider can still be blocked by the org allowlist (settings.hasApiKey true,
-            // providerReady false) — "add your API key" is the wrong remedy there; the user needs to
-            // switch to an approved provider, not enter a key they already have.
-            const blockedByOrg = settings.hasApiKey && activeDef.kind !== 'cli'
+            // MQA-216: same three cases as requireProvider above, in the same order. Reading a saved key
+            // as proof of an org policy made the CTA tell a Cloudflare user to "switch to an approved
+            // provider" when all they were missing was the Worker URL their operator sends separately.
+            const blockedByOrg = !!settings.allowedProviders && !settings.allowedProviders.includes(settings.provider)
+            const needsEndpoint =
+              requiresUserBaseUrl(settings.provider) && !providerBaseUrl(settings.provider, settings).trim()
             const cta = activeDef.kind === 'cli'
               ? `Connect ${activeDef.label} in Settings`
               : blockedByOrg
                 ? 'Switch to an approved provider'
-                : `Add your ${activeDef.label} API key`
+                : needsEndpoint
+                  ? `Add your ${activeDef.label} endpoint URL`
+                  : `Add your ${activeDef.label} API key`
             const notice = blockedByOrg
               ? "Your organization restricts which providers you can use. Switch to an approved provider here."
-              : 'Add an API key or connect a provider here to ask questions.'
+              : needsEndpoint
+                ? `No endpoint URL set for ${activeDef.label}. Open Settings → Advanced and add it.`
+                : 'Add an API key or connect a provider here to ask questions.'
             return (
               <button
                 type="button"
