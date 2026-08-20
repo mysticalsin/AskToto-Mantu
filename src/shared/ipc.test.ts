@@ -239,6 +239,37 @@ describe('SettingsSchema', () => {
     expect(result.success).toBe(true)
   })
 
+  it('defaults cloudflareBaseUrl empty — Métis ships no Cloudflare endpoint and no account token', () => {
+    // A packaged Electron app cannot keep a secret (`npx asar extract`), and a default endpoint would be
+    // the first half of shipping one. Each operator deploys their own Worker and pastes its URL.
+    expect(DEFAULT_SETTINGS.cloudflareBaseUrl).toBe('')
+    expect(SettingsSchema.parse(DEFAULT_SETTINGS).cloudflareBaseUrl).toBe('')
+  })
+
+  it('rejects a non-https Cloudflare Worker URL', () => {
+    // The METIS_PROXY_KEY rides this connection in an Authorization header — plaintext http would leak it.
+    const invalid = { ...DEFAULT_SETTINGS, cloudflareBaseUrl: 'http://worker.example.com/v1' }
+    const result = SettingsSchema.safeParse(invalid)
+    expect(result.success).toBe(false)
+    if (!result.success) {
+      expect(result.error.issues.some((i) => i.path.includes('cloudflareBaseUrl'))).toBe(true)
+    }
+  })
+
+  it('accepts an https Cloudflare Worker URL', () => {
+    const valid = { ...DEFAULT_SETTINGS, cloudflareBaseUrl: 'https://metis-ai.example.workers.dev/v1' }
+    expect(SettingsSchema.safeParse(valid).success).toBe(true)
+  })
+
+  it("selecting Cloudflare before its URL is set still parses — readiness is enforced at request time", () => {
+    // Deliberately unlike provider:'custom', whose cross-field refine makes a bare provider patch fail the
+    // full-object re-parse — which is why Settings.tsx has to seed a placeholder URL for it. Cloudflare
+    // needs no such workaround: publicSettings().providerReady, attempt()'s eligibility chain and
+    // pickFailover all require the https endpoint, so an unconfigured Cloudflare never gets a request.
+    const midSetup = { ...DEFAULT_SETTINGS, provider: 'cloudflare' as const, cloudflareBaseUrl: '' }
+    expect(SettingsSchema.safeParse(midSetup).success).toBe(true)
+  })
+
   it('accepts the default settings', () => {
     const result = SettingsSchema.safeParse(DEFAULT_SETTINGS)
     expect(result.success).toBe(true)

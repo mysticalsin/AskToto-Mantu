@@ -14,6 +14,7 @@ export type ProviderId =
   | 'claude-cli'
   | 'codex-cli'
   | 'gemini'
+  | 'cloudflare'
   | 'local'
   | 'custom'
 export type ProviderKind = 'anthropic' | 'openai' | 'dust' | 'cli' | 'local' // wire protocol
@@ -315,6 +316,37 @@ export const PROVIDERS: Record<ProviderId, ProviderDef> = {
     vision: true,
     keyUrl: 'https://aistudio.google.com/apikey'
   },
+  cloudflare: {
+    id: 'cloudflare',
+    label: 'Cloudflare · AI Gateway',
+    blurb: "Your company's own Cloudflare Worker — one endpoint reaching Workers AI, OpenAI, Anthropic and Google.",
+    kind: 'openai',
+    tier: 'more',
+    // Deliberately EMPTY. Cloudflare's REST endpoint is account-scoped
+    // (POST /client/v4/accounts/{ACCOUNT_ID}/ai/v1/chat/completions) and authenticates with a Cloudflare
+    // ACCOUNT token — a secret that must never ship inside the app, because `npx asar extract` recovers
+    // any embedded string (scripts/check-cahe-package.mjs exists to refuse exactly that build). So the
+    // account token lives as a Wrangler secret on an operator-deployed Worker, and this provider points at
+    // that Worker's URL, held per install in settings.cloudflareBaseUrl. See requiresUserBaseUrl().
+    baseUrl: '',
+    // `{provider}/{model}` — Cloudflare's own catalog plus the third-party models Unified Billing reaches
+    // through the same account token, so one credential covers several labs.
+    models: [
+      'workers-ai/@cf/meta/llama-3.3-70b-instruct-fp8-fast',
+      'openai/gpt-5.5',
+      'anthropic/claude-sonnet-4-5',
+      'google-ai-studio/gemini-2.5-flash'
+    ],
+    defaultModel: 'workers-ai/@cf/meta/llama-3.3-70b-instruct-fp8-fast',
+    fastModel: 'workers-ai/@cf/meta/llama-3.3-70b-instruct-fp8-fast', // base: the fp8-fast Llama, cheapest + quickest
+    thinkModel: 'anthropic/claude-sonnet-4-5', // think: a frontier model, billed through the same Cloudflare account
+    keyHint: 'METIS_PROXY_KEY from your operator',
+    keyPattern: '', // operator-chosen shared secret — no fixed prefix to auto-detect
+    // The resolved base/fast model is text-only. Left false rather than aspirational: the same rule the
+    // mistral/qwen entries follow, and it keeps screen-ask from routing a screenshot somewhere it can't be read.
+    vision: false,
+    keyUrl: '' // issued by whoever deployed the Worker, not by a signup page
+  },
   local: {
     id: 'local',
     label: 'Métis Local · on-device',
@@ -360,6 +392,43 @@ export function filterAllowedProviders(
 ): ProviderId[] {
   if (!allowed) return ids
   return ids.filter((id) => allowed.includes(id))
+}
+
+/** The endpoint fields a user/operator can set. Narrow on purpose so providerBaseUrl() stays callable
+ *  from main, the brain pipeline and the key tester without any of them importing the whole Settings type. */
+export interface ProviderEndpointSettings {
+  customBaseUrl: string
+  dustBaseUrl: string
+  cloudflareBaseUrl: string
+}
+
+/**
+ * True when the registry ships NO endpoint for this provider, so the app cannot send a request until the
+ * user supplies one.
+ *  - 'custom'     — any OpenAI-compatible endpoint the user already runs.
+ *  - 'cloudflare' — the operator's own Cloudflare Worker. Cloudflare's REST endpoint authenticates with a
+ *    Cloudflare ACCOUNT token, which a packaged Electron app is not a safe place for (`npx asar extract`
+ *    recovers any embedded string; scripts/check-cahe-package.mjs already refuses a build that embeds a
+ *    key). The account token therefore stays a Wrangler secret on the Worker, and each install holds only
+ *    the per-user METIS_PROXY_KEY plus that Worker's URL.
+ * Callers use this to fail LOUDLY on a missing endpoint instead of letting the OpenAI SDK fall through to
+ * its own default base URL — which would send the user's key and prompt to api.openai.com.
+ */
+export function requiresUserBaseUrl(id: ProviderId): boolean {
+  return id === 'custom' || id === 'cloudflare'
+}
+
+/**
+ * The base URL a request to `id` must actually use: the user's endpoint where one is required, the user's
+ * Dust region where set, otherwise the registry's built-in. Single source of truth for the four call sites
+ * that each repeated this ternary (live ask, import recap, brain ingest, key test) — one of which had
+ * already drifted out of sync with the others.
+ */
+export function providerBaseUrl(id: ProviderId, s: ProviderEndpointSettings): string {
+  if (id === 'custom') return s.customBaseUrl
+  if (id === 'cloudflare') return s.cloudflareBaseUrl
+  if (id === 'dust') return s.dustBaseUrl
+  return PROVIDERS[id].baseUrl
 }
 
 /**

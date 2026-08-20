@@ -93,6 +93,7 @@ import {
 import {
   PROVIDERS,
   PROVIDER_IDS,
+  requiresUserBaseUrl,
   detectProvider,
   parseDustUrl,
   resolveModelTier,
@@ -752,12 +753,12 @@ function AiSection({
   const [test, setTest] = useState<{ status: 'idle' | 'loading' | 'ok' | 'error'; message?: string }>({
     status: 'idle'
   })
-  // "Custom" has no working provider without a base URL — that field lives inside "Advanced", so
-  // start it open whenever Custom is active (and re-open if the user switches TO Custom later) rather
-  // than leaving the one field Custom actually requires hidden behind a collapsed toggle.
-  const [adv, setAdv] = useState(provider === 'custom')
+  // "Custom" and "Cloudflare" have no working provider without a base URL — that field lives inside
+  // "Advanced", so start it open whenever one of them is active (and re-open if the user switches TO one
+  // later) rather than leaving the one field they actually require hidden behind a collapsed toggle.
+  const [adv, setAdv] = useState(requiresUserBaseUrl(provider))
   useEffect(() => {
-    if (provider === 'custom') setAdv(true)
+    if (requiresUserBaseUrl(provider)) setAdv(true)
   }, [provider])
   const [filter, setFilter] = useState('')
   const skipClearRef = useRef(false) // don't wipe a freshly-pasted key when detection switches provider
@@ -797,11 +798,11 @@ function AiSection({
     setTest({ status: 'idle' })
   }, [provider])
 
-  // Custom has nothing to configure without a base URL, and that field lives inside the collapsed
-  // Advanced section — without this, picking Custom shows an empty card until a failed Save surfaces
-  // the requirement. Auto-open Advanced so the base-URL field is visible the moment Custom is chosen.
+  // Custom/Cloudflare have nothing to configure without a base URL, and that field lives inside the
+  // collapsed Advanced section — without this, picking one shows an empty card until a failed Save
+  // surfaces the requirement. Auto-open Advanced so the base-URL field is visible the moment it matters.
   useEffect(() => {
-    if (provider === 'custom') setAdv(true)
+    if (requiresUserBaseUrl(provider)) setAdv(true)
   }, [provider])
 
   // Auto-detect provider from the key as the user pastes/types.
@@ -922,8 +923,9 @@ function AiSection({
   // Métis Local (kind === 'local') has its own dedicated LocalAiSection card, rendered separately below —
   // exclude all three from the generic tiles grid. The remainder splits by `tier`: 'featured' (GPT, Grok,
   // Kimi, Gemini) gets its own always-visible grid right under Anthropic's card, matching the CLI
-  // cards' prominence; 'more' (NVIDIA, DeepSeek, Qwen, MiniMax, OpenRouter, Groq, Mistral, custom)
-  // stays tucked in the collapsed "Experience: more models" section.
+  // cards' prominence; 'more' (NVIDIA, DeepSeek, Qwen, MiniMax, OpenRouter, Groq, Mistral, Cloudflare,
+  // custom) stays tucked in the collapsed "Experience: more models" section. Cloudflare sits in 'more'
+  // because it only works once an operator has deployed the Worker and handed out a METIS_PROXY_KEY.
   // When the org sets a data-residency allowlist, only approved providers are offered — mirroring what
   // the main process enforces at request time, so the UI can't offer a provider every ask would reject.
   const orgAllowed = settings.allowedProviders
@@ -1176,6 +1178,32 @@ function AiSection({
                 className={['flex-1 min-w-0', ctl, settings.managedKeys.includes('customBaseUrl') ? 'opacity-60' : ''].join(' ')}
               />
               <ManagedChip keys={settings.managedKeys} k="customBaseUrl" />
+            </div>
+          )}
+          {provider === 'cloudflare' && (
+            <div className="flex flex-col gap-1">
+              <label htmlFor={baseUrlInputId} className="text-[11px] font-medium text-[color:var(--cl-muted-foreground)]">
+                Worker endpoint URL
+              </label>
+              <div className="flex items-center gap-2">
+                {/* MQA-069: debounced for the same reason as the model fields above. The placeholder is
+                    the hostname cloudflare-proxy/README.md's deploy step actually produces, and keeps the
+                    /v1 suffix visible: the OpenAI client appends /chat/completions to whatever is here. */}
+                <LazyInput
+                  id={baseUrlInputId}
+                  value={settings.cloudflareBaseUrl}
+                  disabled={settings.managedKeys.includes('cloudflareBaseUrl')}
+                  onCommit={(v) => patch({ cloudflareBaseUrl: v })}
+                  placeholder="https://metis-cloudflare-proxy.your-subdomain.workers.dev/v1"
+                  className={['flex-1 min-w-0', ctl, settings.managedKeys.includes('cloudflareBaseUrl') ? 'opacity-60' : ''].join(' ')}
+                />
+                <ManagedChip keys={settings.managedKeys} k="cloudflareBaseUrl" />
+              </div>
+              <p className="text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
+                Your team deploys a small Cloudflare Worker that holds the Cloudflare account token as a
+                Wrangler secret; Métis never stores that token. Paste the Worker&rsquo;s URL here and your
+                METIS_PROXY_KEY in the key field above.
+              </p>
             </div>
           )}
           <label className="flex items-center justify-between gap-3 px-1 text-[12px] text-[color:var(--cl-muted-foreground)]">
@@ -4672,7 +4700,8 @@ const TABS: {
       'provider', 'api key', 'anthropic', 'openai', 'dust', 'claude code', 'codex', 'local ai',
       'thinking mode', 'model', 'other providers', 'model provider', 'cli integration',
       'fallback', 'indexing fallback', 'offline indexing',
-      'backups & limits', 'nvidia', 'nim', 'race a backup provider', 'hedge'
+      'backups & limits', 'nvidia', 'nim', 'race a backup provider', 'hedge',
+      'cloudflare', 'worker', 'ai gateway', 'workers ai', 'metis_proxy_key'
     ]
   },
   {

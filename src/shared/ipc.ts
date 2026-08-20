@@ -19,6 +19,7 @@ export const ProviderIdSchema = z.enum([
   'claude-cli',
   'codex-cli',
   'gemini',
+  'cloudflare',
   'local',
   'custom'
 ])
@@ -742,6 +743,23 @@ export const BaseSettingsSchema = z.object({
       'Custom endpoint must be an https:// URL'
     )
     .default(''),
+  // The operator-deployed Cloudflare Worker that fronts Cloudflare's AI REST API. Métis never holds the
+  // Cloudflare ACCOUNT token — that stays a Wrangler secret on the Worker — so this URL plus the per-user
+  // METIS_PROXY_KEY (stored through the same encrypted setApiKey/getApiKey path as every other provider
+  // key, never here) is the whole client-side configuration.
+  //
+  // Deliberately NOT added to SettingsSchema's cross-field refine below, unlike customBaseUrl: that refine
+  // makes a bare {provider:'custom'} patch fail the full-object re-parse, which is why Settings.tsx has to
+  // seed a placeholder URL when the user picks Custom. Readiness is enforced where it belongs instead —
+  // publicSettings().providerReady, the ask-time eligibility chain and pickFailover all require an https
+  // endpoint before Cloudflare can answer, so an unconfigured Cloudflare simply never gets a request.
+  cloudflareBaseUrl: z
+    .string()
+    .refine(
+      (v) => v === '' || /^https:\/\//i.test(v),
+      'Cloudflare Worker endpoint must be an https:// URL'
+    )
+    .default(''),
   // Per-provider THINKING-tier model override (parallel to providerModels). For Dust this is the
   // thinking agent sId. Empty → fall back to the provider's built-in think model. See shared/routing.ts.
   providerModelsThinking: z.record(z.string(), z.string()).default({}),
@@ -1226,6 +1244,7 @@ export const DEFAULT_SETTINGS: Settings = {
   thinkingMode: 'auto',
   askFollowUpMemory: false,
   customBaseUrl: '',
+  cloudflareBaseUrl: '',
   dustWorkspaceId: '',
   dustBaseUrl: 'https://dust.tt',
   dustSessionOrigin: 'oauth',

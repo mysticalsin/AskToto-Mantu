@@ -3,7 +3,22 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <!-- Keep in sync with src/shared/providers.ts. Custom providers need a custom build (arbitrary HTTPS is intentionally not allowed). -->
+    <!--
+      Keep in sync with src/shared/providers.ts. Custom providers need a custom build (arbitrary HTTPS is
+      intentionally not allowed).
+
+      This list covers what the RENDERER may reach. Provider chat/completions traffic is not renderer
+      traffic: every ask is streamed from the main process (src/main/llm/*, Node's fetch), which no page
+      CSP applies to — which is why providers already shipping here (Grok's api.x.ai, Gemini's
+      generativelanguage.googleapis.com) have no entry and still work.
+
+      Cloudflare is therefore deliberately absent too, and could not be pinned even if it were needed: its
+      endpoint is the OPERATOR's own Worker URL, different per install (settings.cloudflareBaseUrl), so the
+      only connect-src that would cover it is a blanket https: — exactly the arbitrary-HTTPS grant this
+      policy exists to refuse. Widening it for one main-process provider would weaken the renderer for
+      every other one. If a renderer-side Cloudflare call is ever genuinely needed, pin that single
+      operator URL in a custom build rather than opening the wildcard.
+    -->
     <meta
       http-equiv="Content-Security-Policy"
       content="default-src 'self'; base-uri 'self'; object-src 'none'; form-action 'none'; frame-src 'none'; img-src 'self' data: blob:; media-src 'self' blob: data:; connect-src 'self' blob: asr-model: https://api.anthropic.com https://api.openai.com/v1 https://api.moonshot.ai/v1 https://integrate.api.nvidia.com/v1 https://api.deepseek.com/v1 https://dashscope-intl.aliyuncs.com/compatible-mode/v1 https://api.minimax.io/v1 https://openrouter.ai/api/v1 https://api.groq.com/openai/v1 https://api.together.xyz/v1 https://api.fireworks.ai/inference/v1 https://api.mistral.ai/v1 https://dust.tt https://*.dust.tt https://huggingface.co https://cdn.jsdelivr.net https://*.hf.co; script-src 'self' 'wasm-unsafe-eval' blob: asr-model:; style-src 'self' 'unsafe-inline'; font-src 'self' data:; worker-src 'self' blob:;"

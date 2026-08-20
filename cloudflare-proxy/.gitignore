@@ -1,0 +1,8 @@
+# `wrangler dev` reads secrets from .dev.vars. That file holds a REAL Cloudflare account token, and the
+# repo root's .gitignore covers .env but not this name — so the ignore lives here, next to the thing it
+# protects, and is committed before anyone is told to create the file it protects (see README.md).
+.dev.vars
+.dev.vars.*
+
+# wrangler's local state / build cache.
+.wrangler/
