@@ -2,8 +2,8 @@
 /** Verify the reviewed LGPL FFmpeg import-decoder sidecar before packaging. */
 import { createHash } from 'node:crypto'
 import { spawnSync } from 'node:child_process'
-import { readFileSync, statSync } from 'node:fs'
-import { join } from 'node:path'
+import { existsSync, readFileSync, statSync } from 'node:fs'
+import { join, sep } from 'node:path'
 import { nonPortableDylibs } from './lib/macho-dylibs.mjs'
 
 const target = process.argv[2] || process.platform
@@ -15,6 +15,31 @@ const key = `${platform}-${arch}/${platform === 'win32' ? 'ffmpeg.exe' : 'ffmpeg
 const expected = manifest.binaries?.[key]?.sha256
 
 if (!expected) throw new Error(`No reviewed FFmpeg manifest entry for ${key}.`)
+// The reviewed sidecars are untracked on purpose — only manifest.json and the licence are in git — so
+// on a fresh clone and on a cold CI runner this file is simply absent. A bare statSync reported that as
+// `ENOENT ... stat 'resources/ffmpeg/darwin-x64/ffmpeg'`, naming a path the operator has never heard of
+// at the very first command of `npm run dist`, with no hint that the remedy is a release download. Name
+// the release and the command instead, exactly as build.yml's hard gate does for the runner.
+if (!existsSync(file)) {
+  const asset = `ffmpeg-${platform}-${arch}${platform === 'win32' ? '.exe' : ''}`
+  // Posix separators throughout: the remedy below is a bash command line (that is what CI and every
+  // runbook use), and a Windows-style path pasted into it would not resolve.
+  const path = file.split(sep).join('/')
+  throw new Error(
+    `Missing ${path}. The reviewed FFmpeg sidecars are untracked (git carries only ` +
+      `resources/ffmpeg/manifest.json and the licence), so this binary comes from this repo's ` +
+      `ffmpeg-sidecar-v1 GitHub release:\n` +
+      `  gh release download ffmpeg-sidecar-v1 --pattern '${asset}' --dir resources/ffmpeg --clobber\n` +
+      `  mv resources/ffmpeg/${asset} ${path}${platform === 'win32' ? '' : ` && chmod +x ${path}`}\n` +
+      `If that release carries no ${asset} asset yet, a maintainer holding the reviewed binary must seed ` +
+      `it once — docs/ENTERPRISE_RELEASE.md, "ffmpeg Sidecar Provisioning"` +
+      (platform === 'darwin'
+        ? `. Build the macOS binary from source with scripts/build-ffmpeg-sidecar-mac.sh ${arch} ` +
+          `(docs/MAC_SIDECAR_REBUILD.md); never copy one from a package manager, and re-seeding requires ` +
+          `updating the reviewed sha256 in the manifest.`
+        : '.')
+  )
+}
 const stat = statSync(file)
 // Only the host can answer this. A POSIX execute bit read off a file sitting on NTFS says nothing
 // about the file — Windows has no such permission — so cross-checking a macOS sidecar from a Windows

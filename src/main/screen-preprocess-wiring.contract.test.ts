@@ -46,6 +46,46 @@ describe('MQA-178 — the engine is armed at boot, not only when some other sett
   })
 })
 
+describe('MQA-209 — arming at boot must not raise the macOS Screen Recording prompt', () => {
+  it('MQA-209 — the engine is wired with a darwin-only screen-grant gate', () => {
+    // On macOS the background loop's own capture is what registers the app with TCC and raises the
+    // system dialog (captureScreenshotOnce lets `not-determined` through on purpose), so the boot
+    // reconcile MQA-178 added would pop an unexplained prompt ~6s after launch. Off darwin the dep
+    // stays undefined: Windows has no queryable screen grant and its capture raises no prompt.
+    const deps = sliceBetween(
+      indexSrc,
+      'createScreenPreprocess({',
+      'function refreshScreenPreprocess'
+    )
+    expect(deps).toMatch(/screenCaptureGranted:[\s\S]{0,80}process\.platform === 'darwin'/)
+    expect(deps).toContain("getMediaAccessStatus('screen') === 'granted'")
+  })
+
+  it('MQA-209 — the "not running" copy no longer blames the window signal on macOS', () => {
+    // The gate adds a SECOND way to be off on a Mac (no Screen Recording grant), and the existing copy
+    // asserted the other one as fact. Same rule as MQA-179: never describe a state the engine isn't in.
+    const toggle = sliceBetween(
+      settingsSrc,
+      'label="Preload screen context (on-device)"',
+      '</Section>'
+    )
+    expect(toggle).toContain('Screen Recording')
+    expect(toggle).toMatch(/isWindows[\s\S]{0,400}can't tell when you switch windows/)
+  })
+
+  it('MQA-209 — onboarding reconciles the engine right after it asks for the grant', () => {
+    // permissionsRequestUpfront is where the prompt belongs, and it is the one moment the gate above can
+    // change. macOS usually defers a fresh grant to the next launch (where the boot reconcile catches
+    // it), so this is the cheap cover for the case where the status has already flipped.
+    const handler = sliceBetween(
+      indexSrc,
+      'ipcMain.handle(IPC.permissionsRequestUpfront',
+      'return getPlatformPermissions()'
+    )
+    expect(handler).toContain('refreshScreenPreprocess()')
+  })
+})
+
 describe('MQA-179 — Settings reads the engine’s own gate, not a second expression', () => {
   it('MQA-179 — backgroundScreenReady is derived from screenPreprocess.canRun()', () => {
     expect(indexSrc).toContain('backgroundScreenReady: screenPreprocess.canRun()')

@@ -16,6 +16,17 @@
  * Automation, so CI shows the actual stack instead of "no window appeared".
  *
  * Usage: node scripts/check-packaged-launch.mjs <path-to-exe-or-app> [--timeout-seconds 120]
+ *
+ * macOS is NOT covered. The window/dialog inspection below is Win32 (PowerShell + UI Automation), and
+ * the mac equivalents are all conditional on things a build host may not grant: osascript automation
+ * needs a TCC prompt that an unattended build cannot answer, and electron-log writes main.log to
+ * ~/Library/Logs/<product> there rather than under the userData override this gate isolates with. So
+ * no mac chain in package.json calls this script, and the non-win32 branch below refuses instead of
+ * exiting 0. The gap it leaves is specific and worth naming: the mac target is universal, but
+ * electron-vite emits exactly ONE out/main/index.jsc, compiled by spawning the build host's own
+ * Electron, and electron-builder packages that single file into both slices. The non-host slice
+ * therefore runs V8 bytecode it did not produce — precisely the mismatch this gate exists to catch —
+ * so the darwin branch prints the manual two-slice procedure that does cover it.
  */
 import { spawn, execFileSync } from 'node:child_process'
 import { mkdtempSync, existsSync, readFileSync, readdirSync, writeFileSync, rmSync } from 'node:fs'
@@ -36,9 +47,24 @@ if (!existsSync(target)) {
 }
 // Windows-only by construction: the window/dialog inspection below is Win32. Refuse loudly rather
 // than exiting 0 elsewhere — a gate that silently passes is worse than no gate. macOS needs its own
-// equivalent before the mac release path can claim this coverage.
+// equivalent before the mac release path can claim this coverage; until then, hand the maintainer the
+// manual check rather than leaving the gap silent.
 if (process.platform !== 'win32') {
-  console.error(`[check:launch] FAIL — this gate only runs on Windows (host is ${process.platform}).`)
+  console.error(
+    `[check:launch] FAIL — this gate is Win32-only (host is ${process.platform}); there is no macOS equivalent yet.`
+  )
+  if (process.platform === 'darwin') {
+    console.error(
+      '[check:launch] Verify a mac build by hand instead, and verify BOTH slices: the universal .app\n' +
+        "[check:launch]   carries one out/main/index.jsc, built by this host's Electron, and V8 bytecode is\n" +
+        '[check:launch]   tied to the arch that produced it, so the other slice is unproven until it runs.\n' +
+        '[check:launch]     open release/mac-universal/Metis.app\n' +
+        '[check:launch]     arch -x86_64 release/mac-universal/Metis.app/Contents/MacOS/Metis   # Apple Silicon host, Rosetta 2\n' +
+        '[check:launch]   A window must appear for each. An immediate "Error" dialog naming cachedDataRejected\n' +
+        '[check:launch]   is the 1.2.0/1.5.3 DOA — rebuild from a clean out/ on that architecture.\n' +
+        '[check:launch]   (An Intel host cannot execute the arm64 slice at all: build the DMG on Apple Silicon.)'
+    )
+  }
   process.exit(2)
 }
 

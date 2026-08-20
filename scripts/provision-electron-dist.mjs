@@ -20,7 +20,12 @@
  * result with `-c.electronDist=resources/electron-dist`, which makes it skip its own downloader
  * (see app-builder-lib ElectronFramework.unpack → selectElectron: a DIRECTORY containing
  * `electron-v${version}-${platformName}-${arch}.zip` is extracted directly). One directory serves
- * both arches of a universal build because that filename is resolved per arch.
+ * every mac target because that filename is resolved per platformName AND per arch: both arches of a
+ * universal build, and the separate `mas` archive the Mac App Store target asks for
+ * (app-builder-lib macPackager.getPlatformConfig sets platformName='mas' for it). Staging the darwin
+ * zip for a mas build would NOT fail loudly — selectElectron would not find the name it wants and
+ * would fall through to its "custom already-unpacked distribution" branch, copying the directory
+ * verbatim into a broken .app — so the platform is explicit here rather than inferred.
  *
  * Scoped to the mac chains on purpose — it is wired via the CLI flag in package.json's mac scripts,
  * NOT as a top-level `electronDist` in electron-builder.yml, because a Windows build would then look
@@ -30,7 +35,8 @@
  * Idempotent: a staged zip whose sha256 already matches is left alone and re-verified, never
  * re-downloaded. Re-run cost after the first build is one small SHASUMS fetch.
  *
- * Usage: node scripts/provision-electron-dist.mjs [arch...]   (default: arm64 x64)
+ * Usage: node scripts/provision-electron-dist.mjs [--platform=darwin|mas] [arch...]
+ *        (defaults: --platform=darwin, arches arm64 x64)
  */
 import { createHash } from 'node:crypto'
 import { createWriteStream, existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync } from 'node:fs'
@@ -41,11 +47,24 @@ import { fileURLToPath } from 'node:url'
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
 const OUT_DIR = join(REPO_ROOT, 'resources', 'electron-dist')
-const PLATFORM = 'darwin'
 const REQUEST_TIMEOUT_MS = 60_000
 
-const arches = process.argv.slice(2).filter((a) => !a.startsWith('-'))
+const argv = process.argv.slice(2)
+const arches = argv.filter((a) => !a.startsWith('-'))
 const ARCHES = arches.length ? arches : ['arm64', 'x64']
+
+// Only the two mac platformNames electron-builder can ask this project for. Reject anything else here,
+// before a single byte is fetched: an unrecognised name would resolve to an archive that does not
+// exist, and the failure would surface as a confusing SHASUMS miss halfway through a build.
+const PLATFORMS = ['darwin', 'mas']
+const platformFlag = argv.find((a) => a.startsWith('--platform='))
+const PLATFORM = platformFlag ? platformFlag.slice('--platform='.length) : 'darwin'
+if (!PLATFORMS.includes(PLATFORM)) {
+  console.error(
+    `provision-electron-dist: unknown --platform "${PLATFORM}" — expected one of: ${PLATFORMS.join(', ')}`
+  )
+  process.exit(1)
+}
 
 /** Electron version actually installed, so this can never drift from what electron-builder packages. */
 function electronVersion() {

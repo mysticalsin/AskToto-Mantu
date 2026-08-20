@@ -41,16 +41,29 @@ checkout that already has the reviewed binaries:
 
 ```bash
 cp resources/ffmpeg/darwin-arm64/ffmpeg /tmp/ffmpeg-darwin-arm64
+cp resources/ffmpeg/darwin-x64/ffmpeg /tmp/ffmpeg-darwin-x64
 cp resources/ffmpeg/win32-x64/ffmpeg.exe /tmp/ffmpeg-win32-x64.exe
 gh release create ffmpeg-sidecar-v1 \
-  /tmp/ffmpeg-darwin-arm64 /tmp/ffmpeg-win32-x64.exe \
+  /tmp/ffmpeg-darwin-arm64 /tmp/ffmpeg-darwin-x64 /tmp/ffmpeg-win32-x64.exe \
   resources/ffmpeg/manifest.json resources/ffmpeg/LICENSE.LGPL-2.1.txt \
   --repo <owner>/<repo> --title "ffmpeg sidecar v1" \
   --notes "Reviewed LGPL-only ffmpeg binaries for CI provisioning (see manifest.json for SHA256s)."
 ```
 
-Re-run this (deleting the old release first, `gh release delete ffmpeg-sidecar-v1 --repo <owner>/<repo>`)
-only if the reviewed binaries themselves change — CI's `scripts/check-ffmpeg-sidecar.mjs` verifies the
+One asset per binary pinned in `manifest.json` — three, not two. The mac build is **universal**, so
+both mac arches are load-bearing: `predist` runs `check-ffmpeg-sidecar.mjs mac arm64` *and* `mac x64`,
+and `check-packaged-runtime.mjs mac --arches=arm64,x64` hashes both `darwin-<arch>/ffmpeg` files back
+out of the finished `.app`. Omitting `ffmpeg-darwin-x64` does not yield an arm64-only build; it fails
+`npm run dist` on its second command, on every Mac and in CI's own `build-macos` job.
+
+Adding one asset to a release that already exists (no delete, no re-upload of the others):
+
+```bash
+gh release upload ffmpeg-sidecar-v1 /tmp/ffmpeg-darwin-x64 --clobber --repo <owner>/<repo>
+```
+
+Re-run the full seed above (deleting the old release first, `gh release delete ffmpeg-sidecar-v1 --repo
+<owner>/<repo>`) only if the reviewed binaries themselves change — CI's `scripts/check-ffmpeg-sidecar.mjs` verifies the
 downloaded binary's SHA256 against `manifest.json` regardless of how it was provisioned.
 
 ### Building the macOS sidecar
@@ -61,7 +74,12 @@ path, runs perfectly on that Mac, and then fails on every user's machine with `L
 This shipped once: the seeded asset linked `/opt/homebrew/opt/sdl2/lib/libSDL2-2.0.0.dylib`, matched
 its reviewed SHA-256, and aborted under dyld on the CI runner.
 
-Build it from source instead — on a Mac, `./scripts/build-ffmpeg-sidecar-mac.sh arm64`. It verifies
+Build it from source instead — on a Mac, `./scripts/build-ffmpeg-sidecar-mac.sh arm64` and
+`./scripts/build-ffmpeg-sidecar-mac.sh x64`. The x64 asset is a **cross-build produced on Apple
+Silicon**: it needs `nasm` on the build host (x86 SIMD) and Rosetta 2 to run the licence-banner
+check, neither of which is linked into the result — see the `darwin-x64/ffmpeg` note in
+`resources/ffmpeg/manifest.json`. Without nasm that cross-build fails at `configure`, not at the
+licence check. Each run verifies
 the FFmpeg source tarball against the reviewed SHA-256, configures with `--disable-gpl
 --disable-nonfree --disable-autodetect` (the last flag is what stops configure linking whatever it
 finds on the build machine), confirms with `otool -L` that the result links nothing outside `/usr/lib`

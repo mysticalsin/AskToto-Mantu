@@ -103,6 +103,15 @@ function seedMac(content: Buffer): void {
   )
 }
 
+/** Pin a manifest entry for a binary that is NOT on disk — the fresh-clone / cold-runner case. */
+function seedManifestOnly(key: string): void {
+  mkdirSync(join(cwd, 'resources', 'ffmpeg'), { recursive: true })
+  writeFileSync(
+    join(cwd, 'resources', 'ffmpeg', 'manifest.json'),
+    JSON.stringify({ binaries: { [key]: { sha256: 'f'.repeat(64) } } })
+  )
+}
+
 /** A little-endian 64-bit Mach-O executable that declares the given dylib dependencies. */
 function machoWithDylibs(names: string[]): Buffer {
   const commands = names.map((name) => {
@@ -234,6 +243,34 @@ describe('check-ffmpeg-sidecar licence gate', () => {
     const { status, output } = run(['mac', 'arm64'])
     expect(status).not.toBe(0)
     expect(output).toContain('is not a Mach-O image')
+  })
+
+  // A binary that is simply ABSENT is the common case on a fresh clone and on a cold CI runner: the
+  // reviewed sidecars are untracked by design, so `npm run dist` opens with a check for a file git has
+  // never carried. Until MQA-206 that check was a bare `statSync`, so the whole mac chain died on
+  // `ENOENT: no such file or directory, stat 'resources/ffmpeg/darwin-x64/ffmpeg'` — a path the person
+  // reading it has never heard of, with no hint that the fix is a release download. The gate must name
+  // the release and the command, the way build.yml's hard gate already does for the runner.
+  it('tells a mac operator where a MISSING sidecar comes from instead of throwing a raw ENOENT', () => {
+    seedManifestOnly('darwin-arm64/ffmpeg')
+    const { status, output } = run(['mac', 'arm64'])
+    expect(status).not.toBe(0)
+    expect(output).toContain('resources/ffmpeg/darwin-arm64/ffmpeg')
+    expect(output).toContain('ffmpeg-sidecar-v1')
+    expect(output).toContain('ffmpeg-darwin-arm64')
+    expect(output).toContain('gh release download')
+    expect(output).toContain('docs/ENTERPRISE_RELEASE.md')
+    // The raw stat failure is what this replaced; leaking it back means the remedy went with it.
+    expect(output).not.toContain('ENOENT')
+  })
+
+  it('names the .exe asset when the missing sidecar is the Windows one', () => {
+    seedManifestOnly('win32-x64/ffmpeg.exe')
+    const { status, output } = run(['win', 'x64'])
+    expect(status).not.toBe(0)
+    expect(output).toContain('ffmpeg-win32-x64.exe')
+    expect(output).toContain('ffmpeg-sidecar-v1')
+    expect(output).not.toContain('ENOENT')
   })
 
   it('still fails on a hash mismatch before ever running the binary', () => {
