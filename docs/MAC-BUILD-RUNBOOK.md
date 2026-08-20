@@ -1,8 +1,28 @@
 # Building the macOS DMG
 
 Everything a Mac needs to produce a Métis `.dmg`, in order, with nothing to figure out on the day.
-Written 2026-08-18 against `v1.5.4` (`main` @ `9b3ea10`) and verified command-by-command from the
-scripts themselves — every claim below was checked, not assumed.
+Written 2026-08-18 against `v1.5.4` and verified command-by-command from the scripts themselves —
+every claim below was checked, not assumed.
+
+**Revalidated 2026-08-19 for `1.6.0` (`main` @ `f938aeb`).** What was re-checked, and how:
+
+- Every one of the 17 scripts the mac chains invoke (`predist`, `dist`, `dist:local`,
+  `release:build:mac`, `release:mas`) exists and parses (`node --check`). No chain names a script
+  that is missing.
+- Artifact names below were re-derived from `electron-builder.yml:127` (`artifactName:
+  Metis-${version}.${ext}`, targets `dmg` + `zip`), not copied forward.
+- The three entitlements files the mac and MAS configs reference all exist under `build/`.
+- The **Windows** half of the same 1.6.0 tree was built end to end on this date: signed installers,
+  `check:packaged-runtime` OK pre- and post-sign, `check:update-metadata` OK, and `check:launch`
+  confirming the packaged app shows its window. That does not prove the mac build, but it does mean
+  the shared steps (`build`, `build:intelligence`, `fetch-models`, the bytecode compile) are known
+  good at this commit.
+
+> **Not verified on macOS.** 1.6.0 carries 57 defect fixes (ledger `MQA-147`..`MQA-204`), several of
+> which touch darwin-only branches — the dev-env gating of `ASKTOTO_DISABLE_CP` /
+> `ASKTOTO_ESCROW_PUBKEY`, screen-preprocess OCR eligibility and `macHelperPresent()`, the boot
+> sentinel, and overlay placement. All of it was authored and tested on Windows, so those branches
+> are **unexercised**. Expect the build itself to work; smoke-test the app once it does.
 
 ## Why this file exists
 
@@ -42,18 +62,22 @@ Install the tools first and neither matters:
 xcode-select --install
 ```
 
-## Path A — unsigned DMG (what you want for testing, and for 1.5.4 right now)
+## Path A — unsigned DMG (what you want for testing, and for 1.6.0 right now)
 
 **No signing secrets required.** `npm run dist` passes `ASKTOTO_ADHOC_SIGN=1` and
 `-c.mac.identity=null`, and `check-release-secrets` is *not* in this path (verified).
 
 ```bash
 git clone <repo> && cd AskToto-Mantu
-git checkout v1.5.4          # or: git checkout main
+git checkout main            # 1.6.0 — there is no v1.6.0 TAG yet, see "Tagging" below
 nvm use                      # honours .nvmrc → 22.22.3
 npm ci
 npm run dist                 # predist runs automatically first
 ```
+
+> `git checkout v1.6.0` will fail today: the newest tag in the repo is `v1.5.4`. Build from `main`,
+> or create the tag first (below). `package.json` decides the artifact version, not the tag — so a
+> build from `main` is already a 1.6.0 build.
 
 `predist` self-provisions, in this order, before packaging starts:
 
@@ -79,10 +103,14 @@ check-update-metadata latest-mac.yml  the update feed matches what was built
 Output lands in `release/`:
 
 ```
-Metis-1.5.4.dmg          Metis-1.5.4.dmg.blockmap
-Metis-1.5.4.zip          Metis-1.5.4.zip.blockmap
+Metis-1.6.0.dmg          Metis-1.6.0.dmg.blockmap
+Metis-1.6.0.zip          Metis-1.6.0.zip.blockmap
 latest-mac.yml
 ```
+
+Those names come from `electron-builder.yml:127` (`artifactName: Metis-${version}.${ext}`, targets
+`dmg` and `zip`) interpolated with `package.json`'s `version`. Bump the version and the filenames
+follow automatically — there is nothing to edit here per release.
 
 An unsigned DMG triggers Gatekeeper on other machines — that is expected, and
 `docs/INSTALL.md` covers the bypass for macOS 15+.
@@ -98,34 +126,58 @@ npm run release:build:mac
 This one *does* gate on `check-release-secrets mac` and `check:xcode`, and finishes with
 `verify-signing --require-notarized`. Use it only when shipping publicly.
 
-## Attaching the result to the v1.5.4 release
+## Tagging and publishing 1.6.0
 
-A `v1.5.4` **draft** already exists on both `mysticalsin/AskToto-Mantu` and
-`mysticalsin/Metis-Releases`, and the Windows assets on it were refreshed on 2026-08-18 from
-`main` @ `9b3ea10`.
+Unlike 1.5.4, **there is no v1.6.0 tag or release yet** — nothing to clobber, nothing stale to work
+around. `main` carries `version: 1.6.0` (commit `f938aeb`).
 
-> **The Mac assets on that draft are stale.** `Metis-1.5.4.dmg` and `Metis-1.5.4.zip` there were built
-> **2026-08-11**, which is **36 commits and 11 security fixes** before the current tag. They must be
-> replaced, not published. Same for `latest-mac.yml`, whose hashes point at that old build.
+Create the tag first. `scripts/check-version-parity.mjs` runs as the first step of the release
+workflow and **fails the build** if the tag does not exactly match `package.json` — that gate exists
+because electron-builder derives the published release from `package.json`, so a mismatched tag
+publishes onto the OLD release and clobbers its assets:
+
+```bash
+git checkout main && git pull
+node scripts/check-version-parity.mjs   # self-test: GITHUB_REF_NAME=v1.6.0 node scripts/…
+git tag v1.6.0 && git push origin v1.6.0 && git push github v1.6.0
+```
+
+Then attach the Mac artifacts built above:
 
 ```bash
 cd release
-gh release upload v1.5.4 \
-  Metis-1.5.4.dmg Metis-1.5.4.dmg.blockmap \
-  Metis-1.5.4.zip Metis-1.5.4.zip.blockmap \
+gh release create v1.6.0 --draft --title "v1.6.0" --repo mysticalsin/Metis-Releases \
+  Metis-1.6.0.dmg Metis-1.6.0.dmg.blockmap \
+  Metis-1.6.0.zip Metis-1.6.0.zip.blockmap \
+  latest-mac.yml
+```
+
+If the draft already exists (CI got there first, or you are adding Mac assets to a release that
+already has the Windows ones), upload into it instead — `--clobber` replaces same-named assets:
+
+```bash
+gh release upload v1.6.0 \
+  Metis-1.6.0.dmg Metis-1.6.0.dmg.blockmap \
+  Metis-1.6.0.zip Metis-1.6.0.zip.blockmap \
   latest-mac.yml \
   --repo mysticalsin/Metis-Releases --clobber
 ```
 
-`--clobber` is what replaces the stale ones. Verify before publishing the draft:
+Verify before publishing the draft:
 
 ```bash
-gh release view v1.5.4 --repo mysticalsin/Metis-Releases \
+gh release view v1.6.0 --repo mysticalsin/Metis-Releases \
   --json assets --jq '.assets[] | "\(.createdAt)  \(.name)"'
 ```
 
-Every asset should carry a date at or after the tag — anything still showing 2026-08-11 is the old
-build and has not been replaced.
+Every asset should carry a date at or after the tag, and `latest-mac.yml` must read `version:
+1.6.0` — a stale feed file is the one asset whose wrongness is invisible until clients fail to
+update.
+
+**Both platforms share one `v1.6.0` release, but two feed files.** `latest.yml` (Windows) and
+`latest-mac.yml` (Mac) are written by their own builds; uploading one never updates the other. The
+Windows assets for 1.6.0 — `Metis-Setup-1.6.0.exe`, `Metis-Portable-1.6.0.exe`, its `.blockmap` and
+`latest.yml` — were built and verified on 2026-08-19 and live in `release/` on the Windows machine.
 
 ## If CI is meant to do this instead
 
