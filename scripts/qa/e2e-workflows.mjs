@@ -24,6 +24,10 @@
 import { chromium } from 'playwright-core'
 import { writeFileSync, rmSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
+// Used only by the `cloudflare` group, to probe the mock gateway from THIS process rather than from the
+// CSP-restricted renderer. `rejectUnauthorized: false` is safe and necessary here: the mock serves a
+// throwaway self-signed cert on 127.0.0.1, and this is test tooling, never shipped code.
+import { request as httpsRequest } from 'node:https'
 
 const CDP = process.env.METIS_CDP ?? 'http://127.0.0.1:9334'
 const OUT = process.env.METIS_QA_OUT ?? 'D:\\tmp-metis-e2e\\qa-report.json'
@@ -299,6 +303,19 @@ async function groupDegrade() {
   const g = 'degrade'
   const DEAD_DEEPSEEK = 'sk-dead0000000000000000000000000000000000'
   const DEAD_NVIDIA = 'nvapi-dead000000000000000000000000000000000000'
+
+  // This group proves failover by giving DeepSeek and NVIDIA deliberately dead keys and watching the
+  // walk step off them. Under an org data-residency allowlist that excludes those two, main refuses
+  // them at request time — correctly — so the walk goes straight to local and every assertion here
+  // reads as "the primary was skipped", which looks exactly like the failover bug this group exists to
+  // catch. That is a red meaning "could not run", and it trains the reader to ignore real failures.
+  // Skip honestly instead; run the group against a profile with no allowlist to cover it.
+  const policy = (await settings()).allowedProviders
+  if (policy && !(policy.includes('deepseek') && policy.includes('nvidia'))) {
+    record(g, 'failover through dead provider keys', 'info',
+      `not exercised — org allowedProviders is ${JSON.stringify(policy)}, which forbids the providers this group needs; run it against a profile with no managed-config allowlist`)
+    return
+  }
 
   await clearAllKeys()
 
@@ -731,11 +748,112 @@ async function groupScreen() {
   }
 }
 
+// Cloudflare reaches the model through an operator-deployed Worker, which means a whole class of
+// failure that a direct provider cannot produce: the hop itself. Silent degradation to the on-device
+// model is the CORRECT behaviour here (a user mid-meeting must keep getting answers), so the thing
+// worth pinning is that no shape dead-ends or hangs, and that a bad METIS_PROXY_KEY — the one failure
+// only the user can fix — is still recorded so Settings can say so.
+//
+// Requires the mock: MOCK_TLS_CERT=… MOCK_TLS_KEY=… node scripts/qa/mock-llm-server.mjs 8788
+// and the app launched with NODE_TLS_REJECT_UNAUTHORIZED=0 so undici accepts the self-signed cert.
+// Skips itself (INFO, never a false PASS) when the mock is not reachable.
+async function groupCloudflare() {
+  const g = 'cloudflare'
+  const MOCK = process.env.METIS_MOCK_BASE ?? 'https://127.0.0.1:8788'
+  const before = await settings()
+
+  // Probe from THIS process, not the renderer: the renderer's CSP pins connect-src per provider, so a
+  // fetch to the mock is blocked there and would report "unreachable" even with the mock running. The
+  // app itself reaches providers from the main process, which CSP does not govern.
+  const reachable = await new Promise((resolve) => {
+    try {
+      const u = new URL(`${MOCK}/ok/v1/chat/completions`)
+      const req = httpsRequest(
+        { hostname: u.hostname, port: u.port, path: u.pathname, method: 'POST', rejectUnauthorized: false, timeout: 4000 },
+        (res) => { res.resume(); resolve((res.statusCode ?? 0) < 500) }
+      )
+      req.on('error', () => resolve(false))
+      req.on('timeout', () => { req.destroy(); resolve(false) })
+      req.end(JSON.stringify({ model: 'x', messages: [], stream: true }))
+    } catch { resolve(false) }
+  })
+
+  if (!reachable) {
+    record(g, 'mock gateway reachable', 'info', `not exercised — no mock at ${MOCK}; start scripts/qa/mock-llm-server.mjs to cover this group`)
+    return
+  }
+
+  try {
+    await page.evaluate(async (u) => {
+      await window.toto.setApiKey('cloudflare', 'qa-proxy-key')
+      await window.toto.setSettings({ cloudflareBaseUrl: `${u}/ok`, provider: 'cloudflare' })
+    }, MOCK)
+    await sleep(500)
+
+    await check(g, 'a healthy gateway is answered BY cloudflare, not the on-device floor', async () => {
+      const r = await ask({ id: uid('cf-ok'), mode: 'answer', prompt: 'Say OK.' })
+      assert(r.providers.includes('cloudflare'), `expected cloudflare, walk was ${JSON.stringify(r.providers)}`)
+      assert(r.text.trim().length > 0, 'no text streamed back')
+      return { walk: r.providers }
+    })
+
+    await check(g, 'cloudflare serves SCREEN asks too (its default model is multimodal)', async () => {
+      const s = await settings()
+      assert(s.visionReady === true, 'visionReady is false — screenshots would fall to the on-device model')
+      return { visionReady: s.visionReady, model: s.providerModels?.cloudflare ?? '(default)' }
+    })
+
+    // Every way the hop can fail. None may dead-end or hang: the user keeps getting answers.
+    for (const [scenario, label] of [
+      ['auth-bad', 'a wrong METIS_PROXY_KEY'],
+      ['gateway-cred', "the operator's own Cloudflare token being bad (502)"],
+      ['forbidden', 'a 403 from the gateway'],
+      ['upstream-error', 'a 500 from the gateway'],
+      ['badbody', 'a 200 that is not SSE'],
+      ['midstream', 'a stream that dies mid-answer'],
+      ['hang', 'a gateway that never answers']
+    ]) {
+      await check(g, `keeps answering through ${label}`, async () => {
+        await page.evaluate((u) => window.toto.setSettings({ cloudflareBaseUrl: u }), `${MOCK}/${scenario}`)
+        await sleep(300)
+        const r = await ask({ id: uid('cf-' + scenario), mode: 'answer', prompt: 'Say OK.' }, 120000)
+        assert(!String(r.error ?? '').includes('TIMEOUT'), `dead end: ${r.error}`)
+        assert(r.text.trim().length > 0 || Boolean(r.error), 'neither an answer nor an error — silent failure')
+        return { walk: r.providers, servedBy: r.providers[r.providers.length - 1] ?? '(none)', answered: r.text.trim().length > 0 }
+      })
+    }
+
+    await check(g, 'a bad proxy key is RECORDED, so Settings can tell the user to fix it', async () => {
+      // Degrading silently forever would leave the user on the weaker on-device model with no idea why.
+      await page.evaluate((u) => window.toto.setSettings({ cloudflareBaseUrl: u }), `${MOCK}/auth-bad`)
+      await sleep(300)
+      for (let i = 0; i < 2; i++) await ask({ id: uid('cf-auth'), mode: 'answer', prompt: 'ping' }, 60000)
+      const s = await settings()
+      const flagged = JSON.stringify(s.unhealthyProviders ?? []).includes('cloudflare')
+      assert(flagged, 'cloudflare never reached unhealthyProviders — the user is never told their key is wrong')
+      return { unhealthy: s.unhealthyProviders }
+    })
+
+    await check(g, 'testApiKey rejects a bad proxy key with the real reason', async () => {
+      const r = await page.evaluate(() => window.toto.testApiKey('cloudflare', 'definitely-wrong'))
+      assert(r && r.ok === false, `expected a rejection, got ${JSON.stringify(r)}`)
+      return { error: String(r.error ?? '').slice(0, 80) }
+    })
+  } finally {
+    await page.evaluate(
+      (v) => window.toto.setSettings({ cloudflareBaseUrl: v.url, provider: v.provider }),
+      { url: before.cloudflareBaseUrl ?? '', provider: before.provider }
+    )
+    await page.evaluate(() => window.toto.clearApiKey('cloudflare')).catch(() => {})
+  }
+}
+
 const GROUPS = {
   boot: groupBoot,
   settings: groupSettings,
   ask: groupAsk,
   screen: groupScreen,
+  cloudflare: groupCloudflare,
   degrade: groupDegrade,
   meetings: groupMeetings,
   brain: groupBrain,
