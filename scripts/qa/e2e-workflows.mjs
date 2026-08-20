@@ -757,6 +757,12 @@ async function groupScreen() {
 // Requires the mock: MOCK_TLS_CERT=… MOCK_TLS_KEY=… node scripts/qa/mock-llm-server.mjs 8788
 // and the app launched with NODE_TLS_REJECT_UNAUTHORIZED=0 so undici accepts the self-signed cert.
 // Skips itself (INFO, never a false PASS) when the mock is not reachable.
+// Smallest valid baseline JPEG (1x1), inline so a screen-ask carries a REAL attachment through
+// openai.ts's image_url branch instead of degrading to a text ask. Bare base64, no data: prefix —
+// AskStartSchema rejects anything else.
+const TINY_JPEG_B64 =
+  '/9j/4AAQSkZJRgABAQEAYABgAAD/2wBDAAgGBgcGBQgHBwcJCQgKDBQNDAsLDBkSEw8UHRofHh0aHBwgJC4nICIsIxwcKDcpLDAxNDQ0Hyc5PTgyPC4zNDL/wAALCAABAAEBAREA/8QAFAABAAAAAAAAAAAAAAAAAAAACf/EABQQAQAAAAAAAAAAAAAAAAAAAAD/2gAIAQEAAD8AKp//2Q=='
+
 async function groupCloudflare() {
   const g = 'cloudflare'
   const MOCK = process.env.METIS_MOCK_BASE ?? 'https://127.0.0.1:8788'
@@ -798,9 +804,18 @@ async function groupCloudflare() {
     })
 
     await check(g, 'cloudflare serves SCREEN asks too (its default model is multimodal)', async () => {
+      // MQA-212. Reading visionReady proves nothing here: index.ts ORs in localFallbackReady, which this
+      // suite already asserts true, so the flag is satisfied by the on-device floor even when cloudflare
+      // cannot see — it stayed green in the pre-fix state whose measured walk was ["local","local"].
+      // Send a real screen-ask and read the walk instead.
+      const r = await ask({ id: uid('cf-vision'), mode: 'vision', prompt: 'What is on screen?', image: TINY_JPEG_B64 })
+      assert(
+        r.providers[0] === 'cloudflare',
+        `screen-ask did not reach cloudflare first, walk was ${JSON.stringify(r.providers)}`
+      )
+      assert(r.text.trim().length > 0, 'no text streamed back for the screen-ask')
       const s = await settings()
-      assert(s.visionReady === true, 'visionReady is false — screenshots would fall to the on-device model')
-      return { visionReady: s.visionReady, model: s.providerModels?.cloudflare ?? '(default)' }
+      return { walk: r.providers, model: s.providerModels?.cloudflare ?? '(default)' }
     })
 
     // Every way the hop can fail. None may dead-end or hang: the user keeps getting answers.
@@ -860,7 +875,11 @@ async function groupCloudflare() {
     await check(g, 'testApiKey rejects a bad proxy key with the real reason', async () => {
       const r = await page.evaluate(() => window.toto.testApiKey('cloudflare', 'definitely-wrong'))
       assert(r && r.ok === false, `expected a rejection, got ${JSON.stringify(r)}`)
-      return { error: String(r.error ?? '').slice(0, 80) }
+      // MQA-213. This surface returns the upstream message verbatim, so it is the one that leaks the
+      // routing marker first if the strip is ever dropped — assert the message, not just the boolean.
+      const err = String(r.error ?? '')
+      assert(!err.includes('[metis-proxy-config]'), `the routing marker reached the Test button: ${err}`)
+      return { error: err.slice(0, 80) }
     })
   } finally {
     await page.evaluate(

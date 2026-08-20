@@ -168,6 +168,35 @@ describe('forwarding to the Cloudflare AI REST API', () => {
     await worker.fetch(chatRequest(), env())
     expect(new Headers(withoutGateway[0][1].headers).get('cf-aig-gateway-id')).toBeNull()
   })
+
+  it('rebuilds the response headers instead of forwarding whatever Cloudflare attached', async () => {
+    stubUpstream(
+      new Response('{"ok":true}', {
+        status: 200,
+        headers: {
+          'content-type': 'application/json',
+          'set-cookie': '__cf_bm=bot-management-cookie',
+          'cf-ray': '8a1b2c3d4e5f6789-CDG',
+          'cf-aig-cache-status': 'MISS'
+        }
+      })
+    )
+
+    const res = await worker.fetch(chatRequest(), env())
+
+    // The other half of the leak boundary the test above proves in the request direction: the request
+    // headers are built fresh so the caller's key never travels up, and these are built fresh so the
+    // operator's edge metadata never travels down. Shortening the return to
+    // `new Response(upstream.body, upstream)` — the idiomatic-looking one-liner — passes every other
+    // case in this file while shipping the operator's ray ids, gateway cache status and Cloudflare's
+    // bot cookie to every Métis install.
+    expect(res.headers.get('set-cookie')).toBeNull()
+    expect(res.headers.get('cf-ray')).toBeNull()
+    expect(res.headers.get('cf-aig-cache-status')).toBeNull()
+    // Only the two this file writes itself survive.
+    expect(res.headers.get('content-type')).toBe('application/json')
+    expect(res.headers.get('cache-control')).toBe('no-store')
+  })
 })
 
 describe('streaming', () => {

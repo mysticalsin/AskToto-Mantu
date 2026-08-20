@@ -793,6 +793,12 @@ async function runImportedRecap(job: ImportJob): Promise<string | undefined> {
     if (provider === 'local') return localSummaryReady || localFallbackReady
     if (def.kind === 'cli') return !!settings.cliConnected[provider]
     if (!getApiKey(provider)) return false
+    // MQA-215: same rule as pickFailover and the brain-ingest walk. A provider whose endpoint the USER
+    // supplies (Custom, and Cloudflare's operator-deployed Worker) is not a candidate until it has one.
+    // Cloudflare ships a default model, so a stored METIS_PROXY_KEY alone would otherwise leave it in
+    // this waterfall as the LAST cloud candidate, and streamOpenAI's own guard message would become the
+    // lastError an import that failed for unrelated reasons reports back to the user.
+    if (requiresUserBaseUrl(provider) && !providerBaseUrl(provider, settings)) return false
     if (provider === 'dust' && !settings.dustWorkspaceId) return false
     return !!resolveModelTier(provider, settings.providerModels, settings.providerModelsThinking, 'think', settings.providerModelsDeep)
   })

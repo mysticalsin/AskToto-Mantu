@@ -10,17 +10,20 @@
   // No compatibility_flags: this Worker uses only web-standard APIs (fetch, Request/Response, Headers,
   // WebCrypto, ReadableStream). nodejs_compat would add a polyfill surface nothing here needs.
 
-  // Worker logs, so a failing deploy is diagnosable from the dashboard. The Worker logs no request or
-  // response bodies, so this does not create a second copy of anyone's prompts. (AI Gateway logging is
-  // separate and is configured on the account's gateway — see ../docs/CLOUDFLARE.md.)
-  "observability": { "enabled": true }
-
   // The three credentials are Wrangler SECRETS, never listed here — this file is committed:
   //   wrangler secret put CLOUDFLARE_API_TOKEN
   //   wrangler secret put CF_ACCOUNT_ID
   //   wrangler secret put METIS_PROXY_KEY
   //
   // Optional, and a plain var rather than a secret because a gateway id is not a credential. Uncomment
-  // to pin one AI Gateway instead of the account's default:
-  // "vars": { "CF_AI_GATEWAY_ID": "<YOUR_GATEWAY_ID>" }
+  // the line below to pin one AI Gateway instead of the account's default. It sits ABOVE the last member,
+  // with its own trailing comma already written, so uncommenting one line yields a valid file — the
+  // earlier layout put it last, where uncommenting it produced two members with no comma between them
+  // and `wrangler deploy` died on the config parse before it uploaded anything.
+  // "vars": { "CF_AI_GATEWAY_ID": "<YOUR_GATEWAY_ID>" },
+
+  // Worker logs, so a failing deploy is diagnosable from the dashboard. The Worker logs no request or
+  // response bodies, so this does not create a second copy of anyone's prompts. (AI Gateway logging is
+  // separate and is configured on the account's gateway — see ../docs/CLOUDFLARE.md.)
+  "observability": { "enabled": true }
 }

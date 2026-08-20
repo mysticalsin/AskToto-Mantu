@@ -283,7 +283,7 @@ describe('Cloudflare provider registry', () => {
     expect(PROVIDERS.cloudflare.kind).toBe('openai')
   })
 
-  it('claims vision only because its resolved base/fast model can actually read an image', () => {
+  it('MQA-212: claims vision only because its resolved base/fast model can actually read an image', () => {
     // `vision` is a per-PROVIDER flag but a screen-ask runs on the resolved BASE model, so the two must
     // agree or screenshots go somewhere unreadable. Llama 4 Scout is natively multimodal (Cloudflare's
     // own catalog lists Vision: Yes), which is the whole reason it is the default rather than the

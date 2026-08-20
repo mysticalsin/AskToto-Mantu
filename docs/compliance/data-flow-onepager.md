@@ -79,9 +79,9 @@ affect whether its processing stays local, so it is not counted as part of the p
 |---|---|---|---|
 | ASR (default) | Parakeet TDT 0.6B v3 (NVIDIA NeMo), int8 | On-device, via `sherpa-onnx` | 25 European languages, auto-detect |
 | ASR (fallback) | Whisper-base (Xenova, ONNX, quantized) | On-device, via WASM in the renderer | Automatic fallback if Parakeet is unavailable |
-| Text summarization/extraction (local option) | Qwen3.5 0.8B (UD-Q4_K_XL GGUF + mmproj-F16) | On-device, via bundled llama.cpp `llama-server` b9957 | Bundled in macOS arm64 and Windows x64 packages; no runtime download |
-| Text summarization/extraction (cloud option) | User-selected: Claude (Anthropic), GPT (OpenAI), or one of 12 other providers | Provider's cloud infrastructure | Per-user Settings choice; see [`dpia.md`](./dpia.md) R2 for the transfer implications |
-| Vision (local option) | Qwen3.5 0.8B + mmproj-F16 | On-device, via bundled llama.cpp `llama-server` b9957 | Uses the same installer-owned payload for supported screenshot requests; no runtime download |
+| Text summarization/extraction (local option) | Qwen3.5 0.8B (UD-Q4_K_XL GGUF + mmproj-F16) | On-device, via bundled llama.cpp `llama-server` b9957 | The sidecar ships in the installer (macOS universal: Apple Silicon + Intel; Windows x64). The ~728 MB weights do not: the app fetches them once per user profile from a pinned immutable revision, size- and SHA-256-verified before use |
+| Text summarization/extraction (cloud option) | User-selected: Claude (Anthropic), GPT (OpenAI), or any other provider in `src/shared/providers.ts` | Provider's cloud infrastructure — except **Cloudflare**, which goes first to a Worker in the operator's own Cloudflare account and only then to a vendor | Per-user Settings choice; see [`dpia.md`](./dpia.md) R2 for the transfer implications and [`../CLOUDFLARE.md`](../CLOUDFLARE.md) for the Cloudflare hop |
+| Vision (local option) | Qwen3.5 0.8B + mmproj-F16 | On-device, via bundled llama.cpp `llama-server` b9957 | Uses the same first-run payload as the row above for supported screenshot requests; inference itself never leaves the device |
 
 ## Diagram
 

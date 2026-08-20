@@ -184,15 +184,16 @@ committed before this paragraph existed, on purpose. Never move those values int
 `src/index.test.ts` covers the two things that can hurt someone if they are wrong — the auth boundary
 and the account token not leaking back out — plus the streaming passthrough, all without deploying.
 
-It is **not** part of the repo's `npm test` run: the root `vitest.config.ts` scopes `include` to `src/`,
-`intelligence/src/`, `scripts/` and `eval/`, and this directory is not part of the Electron app or of
-any installer. Run it explicitly, from the repo root:
+It **is** part of the repo's `npm test` run. The root `vitest.config.ts` scopes `include` to `src/`,
+`intelligence/src/`, `scripts/` and `eval/`, so its globs can never reach this directory — which is why
+`package.json`'s `test` script chains `test:proxy` explicitly. A suite that never runs is not a suite.
+To run only this one, from the repo root:
 
 ```sh
-./node_modules/.bin/vitest run --config cloudflare-proxy/vitest.config.ts
+npm run test:proxy
 ```
 
-Type-check the Worker against the Cloudflare runtime's globals (also not part of `npm run typecheck`,
+Type-check the Worker against the Cloudflare runtime's globals (not part of `npm run typecheck`,
 which describes the Electron main and renderer trees):
 
 ```sh
