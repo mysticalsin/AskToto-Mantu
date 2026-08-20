@@ -79,6 +79,25 @@ function errorResponse(status: number, message: string): Response {
   return jsonResponse(status, { error: { message, type: 'metis_proxy_error' } })
 }
 
+/**
+ * Marker for failures ONLY THE OPERATOR can fix — a dead account token, a half-deployed Worker.
+ *
+ * It lives in the message text, not just `type`, because that is the only field that survives the trip:
+ * the OpenAI SDK folds an error into `${status} ${message}` and Métis's adapter passes just `e.message`
+ * on, dropping `.status` and `.type`. Without a marker in the text, these land in Métis as a bare 502,
+ * match its transient-retry pattern, and get rewritten to "Connection issue — check your network" —
+ * pointing every user in the org at their wifi while the real cause is a secret in this Worker.
+ *
+ * Deliberately NOT stamped on transient upstream failures (a 5xx blip, a fetch error). Those SHOULD be
+ * treated as transient and retried; marking them would let a 30-second outage read as a misconfiguration.
+ */
+const OPERATOR_FAULT = '[metis-proxy-config]'
+
+/** An error the operator, and only the operator, can clear. */
+function configErrorResponse(status: number, message: string): Response {
+  return jsonResponse(status, { error: { message: `${OPERATOR_FAULT} ${message}`, type: 'metis_proxy_config_error' } })
+}
+
 function isConfigured(env: Env): boolean {
   return Boolean(env.CLOUDFLARE_API_TOKEN && env.CF_ACCOUNT_ID && env.METIS_PROXY_KEY)
 }
@@ -101,7 +120,7 @@ function isConfigured(env: Env): boolean {
  */
 function mapUpstreamFailure(status: number): Response {
   if (status === 401 || status === 403) {
-    return errorResponse(
+    return configErrorResponse(
       502,
       'Cloudflare rejected this proxy account credential. The operator needs to check CLOUDFLARE_API_TOKEN and CF_ACCOUNT_ID.'
     )
@@ -134,7 +153,7 @@ export default {
     // every correct key as invalid — and, more importantly, so an unset METIS_PROXY_KEY can never be
     // matched by an empty presented key.
     if (!isConfigured(env)) {
-      return errorResponse(
+      return configErrorResponse(
         503,
         'This proxy is not configured. The operator must set CLOUDFLARE_API_TOKEN, CF_ACCOUNT_ID and METIS_PROXY_KEY.'
       )

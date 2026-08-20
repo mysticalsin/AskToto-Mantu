@@ -89,7 +89,7 @@ import {
   recordMeetingSummarized
 } from './store'
 import { createStream } from './llm'
-import { isTransient, nextBackoff } from './llm/retry'
+import { isProxyOperatorFault, isTransient, nextBackoff, stripProxyFaultMarker } from './llm/retry'
 import { classifyExhaustion, type ExhaustionSignal } from './llm/exhaustion'
 import { isBudgetExhausted, resetHeadroom } from './llm/usage-headroom'
 import {
@@ -1074,7 +1074,12 @@ function publicSettings(): PublicSettings {
         (p) =>
           (p === 'dust' ? dustSelectedAgentVision(s.providerModels['dust']) : PROVIDERS[p].vision) &&
           (!allowed || allowed.includes(p)) &&
-          (PROVIDERS[p].kind === 'cli' ? !!s.cliConnected[p] : hasApiKey(p))
+          (PROVIDERS[p].kind === 'cli' ? !!s.cliConnected[p] : hasApiKey(p)) &&
+          // A key alone is not reachability. Cloudflare (and custom) answer at an endpoint the operator
+          // supplies, so a stored METIS_PROXY_KEY with no Worker URL yet is a provider that can never be
+          // reached — and advertising vision on it makes the app CAPTURE THE USER'S SCREEN, and prewarm
+          // more captures, for a request that cannot be sent. Same gate providerReady already applies.
+          (!requiresUserBaseUrl(p) || !!providerBaseUrl(p, s))
       ) || localVisionReady || localFallbackReady,
     localReady,
     localSuggestReady,
@@ -3928,8 +3933,17 @@ function registerIpc(): void {
                         : ''
                     }. Add another provider in Settings → AI to keep going.`
                   : `${def.label} is out of credit. Add credit or switch providers in Settings → AI.`
-              : isTransient(message)
-                ? "Connection issue — couldn't reach the provider after retrying. Check your network and try again."
+              : // A gateway between Métis and the model can fail for a reason only its OPERATOR can
+                // clear — a dead account token, a half-deployed Worker. Those arrive as a 502/503, which
+                // matches isTransient below, so without this branch the user is told to check their
+                // network while the real cause is a secret on the proxy. The proxy marks exactly those
+                // (and deliberately NOT its transient upstream blips, which SHOULD retry), so the marker
+                // is the signal that this sentence is already the actionable one — pass it through
+                // rather than replacing it. Ahead of isTransient because 502 matches both.
+                isProxyOperatorFault(message)
+                ? stripProxyFaultMarker(message)
+                : isTransient(message)
+                  ? "Connection issue — couldn't reach the provider after retrying. Check your network and try again."
                 : // MQA-101: use dust.ts's maintained matcher, not a second copy of the phrasing regex —
                   // the inline copy missed the current "authenticated credential" wording, so a dead Dust
                   // session surfaced its raw 401 instead of this reconnect prompt.

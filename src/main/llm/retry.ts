@@ -53,6 +53,31 @@ const AUTH_PATTERN =
 const ABORT_PATTERN = /\babort(ed)?\b|aborterror/
 
 /**
+ * A gateway between Métis and a model (the Cloudflare Worker in cloudflare-proxy/) can fail for a reason
+ * only its OPERATOR can clear: a dead account token, a half-deployed Worker. It reports those as 502/503
+ * — correctly, since the caller's own key was fine and answering 401 would send the user off to re-enter
+ * a credential that works. But 502/503 also matches TRANSIENT_PATTERN above, so on the terminal-error
+ * path such a failure would be rewritten to "Connection issue — check your network": every user in the
+ * org pointed at their wifi while the real cause is a secret on the proxy, and Settings → Test showing
+ * the true sentence at the same time.
+ *
+ * The proxy therefore marks exactly these, and deliberately NOT its transient upstream blips — those
+ * should keep retrying. The marker rides in the message text because that is all that survives: the
+ * OpenAI SDK folds an error into `${status} ${message}` and the adapter forwards only `e.message`.
+ */
+const PROXY_OPERATOR_FAULT_MARKER = '[metis-proxy-config]'
+
+/** Is this failure one the gateway's operator must fix, rather than a transient blip or a user error? */
+export function isProxyOperatorFault(err: unknown): boolean {
+  return errorBlob(err).text.includes(PROXY_OPERATOR_FAULT_MARKER.toLowerCase())
+}
+
+/** The operator-facing sentence, without the routing marker the user has no use for. */
+export function stripProxyFaultMarker(message: string): string {
+  return message.split(PROXY_OPERATOR_FAULT_MARKER).join('').replace(/\s{2,}/g, ' ').trim()
+}
+
+/**
  * Should this failure be retried against the SAME provider before failing over? True only for transient
  * transport/server errors; false for auth, aborts, and permanent request errors.
  */

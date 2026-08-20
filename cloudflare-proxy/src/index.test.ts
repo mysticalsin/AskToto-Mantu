@@ -220,6 +220,24 @@ describe('upstream failures', () => {
     expect(res.status).toBe(502)
     expect(text).not.toContain(ACCOUNT_TOKEN)
     expect(text).toContain('CLOUDFLARE_API_TOKEN')
+    // ...and it must be MARKED as an operator fault. A bare 502 matches Métis's transient-retry
+    // pattern, so without the marker this sentence is discarded and the user is told to check their
+    // network while the real cause is a secret in this Worker.
+    expect(text).toContain('[metis-proxy-config]')
+    expect(JSON.parse(text).error.type).toBe('metis_proxy_config_error')
+  })
+
+  it('does NOT mark an ordinary upstream outage as an operator fault', () => {
+    // The negative that keeps the marker meaningful: a 5xx blip should stay transient and keep
+    // retrying. Marking it would turn a 30-second Cloudflare outage into "your operator broke this".
+    return (async () => {
+      stubUpstream(new Response(leakedBody, { status: 503 }))
+      const res = await worker.fetch(chatRequest(), env())
+      const text = await res.text()
+      expect(res.status).toBe(502)
+      expect(text).not.toContain('[metis-proxy-config]')
+      expect(JSON.parse(text).error.type).toBe('metis_proxy_error')
+    })()
   })
 
   it('preserves 429 so the client can back off, without echoing the body', async () => {
