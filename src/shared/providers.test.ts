@@ -263,7 +263,7 @@ describe('Cloudflare provider registry', () => {
   it("uses Cloudflare's {provider}/{model} ids, including the third-party models one token reaches", () => {
     // Unified Billing means the operator's single Cloudflare token also reaches OpenAI/Anthropic/Google
     // models — the reason this provider is worth having over pointing 'custom' at Workers AI.
-    expect(PROVIDERS.cloudflare.defaultModel).toBe('workers-ai/@cf/meta/llama-3.3-70b-instruct-fp8-fast')
+    expect(PROVIDERS.cloudflare.defaultModel).toBe('workers-ai/@cf/meta/llama-4-scout-17b-16e-instruct')
     for (const m of PROVIDERS.cloudflare.models) expect(m).toMatch(/^[a-z0-9-]+\/.+/)
     expect(PROVIDERS.cloudflare.models).toContain('openai/gpt-5.5')
     expect(PROVIDERS.cloudflare.models).toContain('anthropic/claude-sonnet-4-5')
@@ -271,7 +271,7 @@ describe('Cloudflare provider registry', () => {
   })
 
   it('resolves a cheap base tier and a frontier think/deep tier with no user override', () => {
-    expect(resolveModelTier('cloudflare', {}, {}, 'base')).toBe('workers-ai/@cf/meta/llama-3.3-70b-instruct-fp8-fast')
+    expect(resolveModelTier('cloudflare', {}, {}, 'base')).toBe('workers-ai/@cf/meta/llama-4-scout-17b-16e-instruct')
     expect(resolveModelTier('cloudflare', {}, {}, 'think')).toBe('anthropic/claude-sonnet-4-5')
     // No distinct deep model, so deep degrades to think — never silently back down to the base model.
     expect(resolveModelTier('cloudflare', {}, {}, 'deep', {})).toBe('anthropic/claude-sonnet-4-5')
@@ -283,9 +283,19 @@ describe('Cloudflare provider registry', () => {
     expect(PROVIDERS.cloudflare.kind).toBe('openai')
   })
 
-  it('claims neither vision nor a free tier, because the resolved model and the billing say otherwise', () => {
-    // The base/fast model is text-only; claiming vision would route screenshots somewhere unreadable.
-    expect(PROVIDERS.cloudflare.vision).toBe(false)
+  it('claims vision only because its resolved base/fast model can actually read an image', () => {
+    // `vision` is a per-PROVIDER flag but a screen-ask runs on the resolved BASE model, so the two must
+    // agree or screenshots go somewhere unreadable. Llama 4 Scout is natively multimodal (Cloudflare's
+    // own catalog lists Vision: Yes), which is the whole reason it is the default rather than the
+    // text-only 3.3-70b that used to be. Assert the COUPLING, not just the flag: a future default that
+    // is text-only must fail here rather than silently breaking screen-asks.
+    expect(PROVIDERS.cloudflare.vision).toBe(true)
+    const base = resolveModelTier('cloudflare', {}, {}, 'base')
+    expect(base).toBe('workers-ai/@cf/meta/llama-4-scout-17b-16e-instruct')
+    expect(PROVIDERS.cloudflare.models).toContain(base)
+  })
+
+  it('claims no free tier, because requests bill to the operator', () => {
     // Requests bill to the operator's Cloudflare account, so it must never float ahead of a paid provider
     // as a "free backup" when another provider runs out of credit (index.ts pickFailover's preferFree).
     expect(PROVIDERS.cloudflare.freeTier).toBeUndefined()
