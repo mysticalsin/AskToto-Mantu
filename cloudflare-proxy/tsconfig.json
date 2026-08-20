@@ -1,0 +1,26 @@
+{
+  // Scoped to this directory on purpose. The repo's tsconfig.node.json / tsconfig.web.json describe the
+  // Electron main and renderer trees; this Worker targets the Cloudflare runtime, whose globals come
+  // from the WebWorker lib rather than from @types/node or the DOM. `npm run typecheck` at the repo
+  // root does not read this file, and should not — cloudflare-proxy/ is not part of the app build.
+  //
+  //   npx tsc --noEmit -p cloudflare-proxy/tsconfig.json
+  //
+  // No @cloudflare/workers-types dependency: this Worker deliberately uses only web-standard APIs, so
+  // the stock WebWorker lib types all of them. Add the package only if a binding (KV, D1, AI) is ever
+  // introduced here, which would be a different Worker than this shim.
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "lib": ["ES2022", "WebWorker"],
+    "types": [],
+    "strict": true,
+    "skipLibCheck": true,
+    "noEmit": true
+  },
+  "include": ["src/**/*"],
+  // Same split the root configs use: the test runs under Vitest in Node, with Node and Vitest globals
+  // that the Workers lib above deliberately does not describe.
+  "exclude": ["**/*.test.ts"]
+}

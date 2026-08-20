@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { isDustReady, dustStoredAgentMissing, applyInteractiveGuardrail, parseDustUrl, detectProvider, filterAllowedProviders, migrateRetiredModelId, migrateRetiredModelMap, reasoningEffortFor, resolveModelTier, PROVIDERS, dustAgentVision } from './providers'
+import { isDustReady, dustStoredAgentMissing, applyInteractiveGuardrail, parseDustUrl, detectProvider, filterAllowedProviders, migrateRetiredModelId, migrateRetiredModelMap, providerBaseUrl, reasoningEffortFor, requiresUserBaseUrl, resolveModelTier, PROVIDERS, PROVIDER_IDS, dustAgentVision } from './providers'
 
 // MQA-001 (docs/qa/BUG-LEDGER.md): the registry shipped DeepSeek's retired 'deepseek-chat' /
 // 'deepseek-reasoner' ids as its defaults after their 2026-07-24 discontinuation date. If these tests
@@ -225,5 +225,108 @@ describe('filterAllowedProviders — org data-residency allowlist', () => {
   it('returns empty when the allowlist excludes every candidate', () => {
     expect(filterAllowedProviders(['anthropic', 'openai'], ['dust'])).toEqual([])
     expect(filterAllowedProviders(['anthropic', 'openai'], [])).toEqual([])
+  })
+})
+
+
+/**
+ * Cloudflare — an OPERATOR-hosted provider.
+ *
+ * Cloudflare's AI REST API is account-scoped and authenticates with a Cloudflare ACCOUNT token. A packaged
+ * Electron app is not a safe place for one: `npx asar extract` recovers any embedded string, which is the
+ * whole reason scripts/check-cahe-package.mjs refuses a build with a key in it. So the account token stays
+ * a Wrangler secret on a Worker the operator deploys, and Métis holds only that Worker's URL plus a
+ * per-user METIS_PROXY_KEY. These tests pin that shape so a later "convenience default" cannot undo it.
+ */
+describe('Cloudflare provider registry', () => {
+  it('ships NO endpoint and NO credential — the operator supplies both', () => {
+    expect(PROVIDERS.cloudflare.baseUrl).toBe('')
+    expect(requiresUserBaseUrl('cloudflare')).toBe(true)
+    // No "get a key" link: the METIS_PROXY_KEY is issued by whoever deployed the Worker, not a signup page.
+    expect(PROVIDERS.cloudflare.keyUrl).toBe('')
+    // An operator-chosen shared secret has no fixed prefix, so any keyPattern here would be a guess that
+    // hijacks a paste meant for another provider.
+    expect(PROVIDERS.cloudflare.keyPattern).toBe('')
+    expect(detectProvider('an-operator-chosen-shared-secret')).toBeNull()
+  })
+
+  it('carries no key-shaped literal anywhere in its entry', () => {
+    // The registry entry is exactly where a "just for testing" credential would get pasted, and it would
+    // survive into the shipped asar. Assert the recognizable token shapes instead of trusting review.
+    const entry = JSON.stringify(PROVIDERS.cloudflare)
+    expect(entry).not.toMatch(/sk-[A-Za-z0-9_-]{16}/)
+    expect(entry).not.toMatch(/bearer\s+\S/i)
+    // Cloudflare account tokens are long opaque strings; no legitimate field here is a 40-char run.
+    expect(entry).not.toMatch(/[A-Za-z0-9_-]{40,}/)
+  })
+
+  it("uses Cloudflare's {provider}/{model} ids, including the third-party models one token reaches", () => {
+    // Unified Billing means the operator's single Cloudflare token also reaches OpenAI/Anthropic/Google
+    // models — the reason this provider is worth having over pointing 'custom' at Workers AI.
+    expect(PROVIDERS.cloudflare.defaultModel).toBe('workers-ai/@cf/meta/llama-3.3-70b-instruct-fp8-fast')
+    for (const m of PROVIDERS.cloudflare.models) expect(m).toMatch(/^[a-z0-9-]+\/.+/)
+    expect(PROVIDERS.cloudflare.models).toContain('openai/gpt-5.5')
+    expect(PROVIDERS.cloudflare.models).toContain('anthropic/claude-sonnet-4-5')
+    expect(PROVIDERS.cloudflare.models).toContain('google-ai-studio/gemini-2.5-flash')
+  })
+
+  it('resolves a cheap base tier and a frontier think/deep tier with no user override', () => {
+    expect(resolveModelTier('cloudflare', {}, {}, 'base')).toBe('workers-ai/@cf/meta/llama-3.3-70b-instruct-fp8-fast')
+    expect(resolveModelTier('cloudflare', {}, {}, 'think')).toBe('anthropic/claude-sonnet-4-5')
+    // No distinct deep model, so deep degrades to think — never silently back down to the base model.
+    expect(resolveModelTier('cloudflare', {}, {}, 'deep', {})).toBe('anthropic/claude-sonnet-4-5')
+  })
+
+  it('speaks the OpenAI wire protocol, so it reuses the existing streaming client unchanged', () => {
+    // Cloudflare's endpoint is /ai/v1/chat/completions with the same body and SSE framing as OpenAI.
+    // Anything other than 'openai' here would mean a second adapter had been written for no reason.
+    expect(PROVIDERS.cloudflare.kind).toBe('openai')
+  })
+
+  it('claims neither vision nor a free tier, because the resolved model and the billing say otherwise', () => {
+    // The base/fast model is text-only; claiming vision would route screenshots somewhere unreadable.
+    expect(PROVIDERS.cloudflare.vision).toBe(false)
+    // Requests bill to the operator's Cloudflare account, so it must never float ahead of a paid provider
+    // as a "free backup" when another provider runs out of credit (index.ts pickFailover's preferFree).
+    expect(PROVIDERS.cloudflare.freeTier).toBeUndefined()
+  })
+})
+
+describe('providerBaseUrl / requiresUserBaseUrl', () => {
+  const endpoints = {
+    customBaseUrl: 'https://my-vllm.internal/v1',
+    dustBaseUrl: 'https://eu.dust.tt',
+    cloudflareBaseUrl: 'https://metis-ai.example.workers.dev/v1'
+  }
+
+  it("sends each user-configurable provider to ITS OWN setting, never another provider's", () => {
+    expect(providerBaseUrl('cloudflare', endpoints)).toBe('https://metis-ai.example.workers.dev/v1')
+    expect(providerBaseUrl('custom', endpoints)).toBe('https://my-vllm.internal/v1')
+    expect(providerBaseUrl('dust', endpoints)).toBe('https://eu.dust.tt')
+  })
+
+  it('returns the registry endpoint for every provider that ships one', () => {
+    expect(providerBaseUrl('groq', endpoints)).toBe('https://api.groq.com/openai/v1')
+    expect(providerBaseUrl('nvidia', endpoints)).toBe(PROVIDERS.nvidia.baseUrl)
+    expect(providerBaseUrl('anthropic', endpoints)).toBe('') // SDK default, unchanged by these settings
+  })
+
+  it('returns EMPTY — never a substitute endpoint — when the user configured none', () => {
+    // Every caller checks for this empty string before sending. Handing back some default instead is the
+    // failure mode the whole helper exists to prevent: the OpenAI SDK's own default base URL is
+    // api.openai.com, so a Cloudflare key and prompt would go to OpenAI.
+    const blank = { customBaseUrl: '', dustBaseUrl: '', cloudflareBaseUrl: '' }
+    expect(providerBaseUrl('cloudflare', blank)).toBe('')
+    expect(providerBaseUrl('custom', blank)).toBe('')
+  })
+
+  it('flags EVERY OpenAI-kind provider that ships no endpoint, so a new one cannot default to OpenAI', () => {
+    // The forward-looking invariant: add another bring-your-own-endpoint provider and forget
+    // requiresUserBaseUrl, and this fails instead of shipping a silent redirect to api.openai.com.
+    const openAiKindWithoutEndpoint = PROVIDER_IDS.filter(
+      (id) => PROVIDERS[id].kind === 'openai' && !PROVIDERS[id].baseUrl
+    )
+    expect(openAiKindWithoutEndpoint).toEqual(['cloudflare', 'custom'])
+    for (const id of openAiKindWithoutEndpoint) expect(requiresUserBaseUrl(id)).toBe(true)
   })
 })

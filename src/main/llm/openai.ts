@@ -1,6 +1,6 @@
 import OpenAI from 'openai'
 import type { AskStart } from '@shared/ipc'
-import type { ProviderId } from '@shared/providers'
+import { PROVIDERS, requiresUserBaseUrl, type ProviderId } from '@shared/providers'
 import { type StreamOptions, type StreamHandle, errMsg, idleWatchdog, userText, imageMime, VISION_GUARD } from './shared'
 import { noteHeadroomFromHeaders, type HeaderBag } from './usage-headroom'
 
@@ -61,15 +61,18 @@ export function outputTokenBudget(model: string, mode: AskStart['mode'], overrid
 
 /** OpenAI-compatible (GPT, Kimi/Moonshot, custom base URL) — the default for any non-cli/dust/anthropic kind. */
 export function streamOpenAI(opts: StreamOptions): StreamHandle {
-  // Guard against silently falling through to the SDK's default baseURL (api.openai.com) when the
-  // Custom provider has no endpoint configured — without this, a misconfigured 'custom' entry would
-  // send its key and model to OpenAI's real backend instead of failing loudly.
-  if (opts.providerId === 'custom' && !opts.baseURL) {
+  // Guard against silently falling through to the SDK's default baseURL (api.openai.com) when a
+  // provider whose endpoint the USER supplies has none configured — without this, a misconfigured
+  // 'custom' (or 'cloudflare', whose endpoint is the operator's own Worker) entry would send its key
+  // and model to OpenAI's real backend instead of failing loudly.
+  if (requiresUserBaseUrl(opts.providerId) && !opts.baseURL) {
     // Fire asynchronously so the caller has already stored the returned handle before onError runs.
     // A synchronous onError re-enters attempt()/failover in index.ts and its streams.set would be
     // clobbered by this dummy handle, leaving Cancel/quit unable to abort the real fallback stream.
     queueMicrotask(() =>
-      opts.handlers.onError('No endpoint URL set for the Custom provider. Open Settings and add one.')
+      opts.handlers.onError(
+        `No endpoint URL set for ${PROVIDERS[opts.providerId].label}. Open Settings and add one.`
+      )
     )
     return { abort: () => {} }
   }

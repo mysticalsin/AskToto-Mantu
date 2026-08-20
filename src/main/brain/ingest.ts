@@ -1,7 +1,13 @@
 import { basename, join } from 'node:path'
 import { existsSync, readdirSync, statSync } from 'node:fs'
 import type { Settings, AskStart } from '@shared/ipc'
-import { PROVIDERS, resolveModelTier, type ProviderId } from '@shared/providers'
+import {
+  PROVIDERS,
+  providerBaseUrl,
+  requiresUserBaseUrl,
+  resolveModelTier,
+  type ProviderId
+} from '@shared/providers'
 import {
   BRAIN_EXTRACTION_PROMPT,
   BRAIN_SCHEMA_VERSION,
@@ -109,6 +115,11 @@ function pickProviderCandidates(s: Settings): { provider: ProviderId; model: str
     const connected = def.kind === 'cli' ? !!s.cliConnected[p] : key.length > 0
     if (!connected) continue
     if (p === 'dust' && !s.dustWorkspaceId) continue
+    // Same rule as the ask path's pickFailover: a provider whose endpoint the USER supplies (Custom, or
+    // Cloudflare's operator-deployed Worker) is not a candidate until it has one. Cloudflare ships a
+    // default model, so a key alone would otherwise put it in this waterfall with no URL — and the OpenAI
+    // SDK's own default base URL is api.openai.com, which is exactly where a transcript must not go.
+    if (requiresUserBaseUrl(p) && !providerBaseUrl(p, s)) continue
     const model = resolveModelTier(p, s.providerModels, s.providerModelsThinking, 'deep', s.providerModelsDeep)
     // MQA-029: a CLI provider may have no configured model at all (codex-cli ships none and takes its
     // own default) — requiring one here dropped a connected Codex subscription out of the waterfall
@@ -203,7 +214,7 @@ function runCompletionOnce(
       providerId: provider,
       kind: def.kind,
       apiKey: key,
-      baseURL: provider === 'custom' ? s.customBaseUrl : provider === 'dust' ? s.dustBaseUrl : def.baseUrl,
+      baseURL: providerBaseUrl(provider, s),
       workspaceId: s.dustWorkspaceId,
       refreshDustAuth: provider === 'dust' ? refreshDustAuthForIngest : undefined,
       model,

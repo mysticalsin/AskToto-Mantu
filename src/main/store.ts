@@ -24,6 +24,8 @@ import {
   PROVIDER_IDS,
   dustAgentVision,
   migrateRetiredModelMap,
+  providerBaseUrl,
+  requiresUserBaseUrl,
   resolveModel,
   type ProviderId
 } from '@shared/providers'
@@ -87,6 +89,9 @@ const ENV_VAR: Record<ProviderId, string> = {
   'claude-cli': '',
   'codex-cli': '',
   gemini: 'GEMINI_API_KEY',
+  // The shared secret the operator's Worker checks, NOT a Cloudflare account token — that one never
+  // leaves the operator's infrastructure (it is a Wrangler secret on the Worker itself).
+  cloudflare: 'METIS_PROXY_KEY',
   local: '', // keyless — Métis Local's per-session sidecar key lives only in local-runtime.ts memory
   custom: 'ASKTOTO_CUSTOM_API_KEY'
 }
@@ -861,9 +866,15 @@ export async function testApiKey(provider: ProviderId, key: string): Promise<Tes
         messages: [{ role: 'user', content: 'hi' }]
       })
     } else {
-      const baseURL = provider === 'custom' ? settings.customBaseUrl : def.baseUrl
-      if (provider === 'custom' && !baseURL) {
-        return { ok: false, error: 'Custom provider requires a base URL in Advanced settings.' }
+      const baseURL = providerBaseUrl(provider, settings)
+      if (requiresUserBaseUrl(provider) && !baseURL) {
+        return {
+          ok: false,
+          error:
+            provider === 'cloudflare'
+              ? 'Cloudflare needs your Worker URL in Advanced settings first.'
+              : 'Custom provider requires a base URL in Advanced settings.'
+        }
       }
       // Precedence must match the real ask flow (resolveModelTier / resolveModel in providers.ts): a
       // user's Advanced Base-model override wins over the built-in fastModel, so Test never reports

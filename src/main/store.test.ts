@@ -61,10 +61,13 @@ describe('store', () => {
     // of the isolated temp profile: a machine exporting a real KIMI_API_KEY / OPENAI_API_KEY / … fails
     // the key assertions AND makes Vitest print that live credential in the diff. Clear every provider
     // key var so this suite only ever observes what it wrote itself. Every name in store.ts's ENV_VAR
-    // map ends in `_API_KEY`, so the sweep stays correct as providers are added — if a future provider
-    // env var breaks that convention, add it here explicitly.
+    // map ends in `_API_KEY` EXCEPT Cloudflare's METIS_PROXY_KEY (that credential is the operator's
+    // Worker secret, not a provider API key, and is named for what it actually is) — so that one is
+    // listed explicitly, exactly as this comment has always instructed. Any further provider whose env
+    // var breaks the convention goes in the same list.
+    const EXPLICIT_NON_API_KEY_VARS = new Set(['METIS_PROXY_KEY'])
     for (const name of Object.keys(process.env)) {
-      if (name.endsWith('_API_KEY')) vi.stubEnv(name, undefined)
+      if (name.endsWith('_API_KEY') || EXPLICIT_NON_API_KEY_VARS.has(name)) vi.stubEnv(name, undefined)
     }
     mockAppGetPath.mockImplementation((name: string) => {
       if (name === 'userData') return userData
@@ -465,6 +468,34 @@ describe('store', () => {
         modelProviderId: 'anthropic',
         modelId: 'claude-sonnet'
       })
+    })
+  })
+
+  // Cloudflare is the one provider whose endpoint Métis cannot know: each operator deploys their own
+  // Worker (holding the Cloudflare ACCOUNT token as a Wrangler secret) and hands out a METIS_PROXY_KEY.
+  describe('Cloudflare — operator-supplied endpoint', () => {
+    it('refuses to Test a key before the Worker URL is set, without making a network call', async () => {
+      // Without this guard the OpenAI SDK falls back to its own default base URL (api.openai.com) and the
+      // "Test" button would send the METIS_PROXY_KEY to OpenAI. A sandboxed test has no network, so the
+      // specific message (not a connection error) is what proves the guard fired first.
+      setSettings({ cloudflareBaseUrl: '' })
+
+      const result = await testApiKey('cloudflare', 'operator-issued-proxy-secret')
+
+      expect(result.ok).toBe(false)
+      expect(result.error).toBe('Cloudflare needs your Worker URL in Advanced settings first.')
+    })
+
+    it('stores the METIS_PROXY_KEY through the same encrypted path as every other provider key', async () => {
+      // The per-user proxy key is a credential, so it must never land in settings.json next to the URL.
+      setApiKey('cloudflare', 'operator-issued-proxy-secret')
+      setSettings({ cloudflareBaseUrl: 'https://metis-ai.example.workers.dev/v1' })
+
+      expect(getApiKey('cloudflare')).toBe('operator-issued-proxy-secret')
+      const persisted = readPersisted(join(userData, 'settings.json'))
+      expect(JSON.stringify(persisted)).not.toContain('operator-issued-proxy-secret')
+      // The endpoint itself is not a secret and does belong in settings.
+      expect(persisted.cloudflareBaseUrl).toBe('https://metis-ai.example.workers.dev/v1')
     })
   })
 

@@ -295,6 +295,8 @@ import { SaveMeetingSchema, SaveNoteSchema } from '@shared/ipc'
 import {
   PROVIDERS,
   PROVIDER_IDS,
+  providerBaseUrl,
+  requiresUserBaseUrl,
   resolveModelTier,
   applyInteractiveGuardrail,
   reasoningEffortFor,
@@ -817,7 +819,7 @@ async function runImportedRecap(job: ImportJob): Promise<string | undefined> {
           providerId: provider,
           kind: def.kind,
           apiKey: key,
-          baseURL: local ? undefined : provider === 'custom' ? settings.customBaseUrl : provider === 'dust' ? settings.dustBaseUrl : def.baseUrl,
+          baseURL: local ? undefined : providerBaseUrl(provider, settings),
           workspaceId: settings.dustWorkspaceId,
           refreshDustAuth: provider === 'dust' ? makeRefreshDustAuth(settings) : undefined,
           model,
@@ -1028,7 +1030,12 @@ function publicSettings(): PublicSettings {
           ? !!s.dustWorkspaceId.trim() && !!s.providerModels.dust
           : s.provider === 'custom'
             ? /^https:\/\//i.test(s.customBaseUrl) && !!s.providerModels.custom
-            : true))
+            : // Cloudflare ships a default model but NO endpoint (the operator's own Worker), so the
+              // https URL is the whole extra setup step. Unlike Custom it needs no model check —
+              // resolveModelTier always yields the registry default.
+              s.provider === 'cloudflare'
+              ? /^https:\/\//i.test(s.cloudflareBaseUrl)
+              : true))
   // Métis Local readiness (PLAN.md §4.3) — task-independent base, then one per in-scope task. Derived by
   // local-routing.ts's localBaseReady() so this snapshot and the live routing decision (attempt()/
   // pickFailover below) can never drift apart.
@@ -3452,6 +3459,12 @@ function registerIpc(): void {
         return (
           (!allowed || allowed.includes(p)) &&
           (PROVIDERS[p].kind === 'cli' ? !!s.cliConnected[p] : getApiKey(p).length > 0) &&
+          // A provider whose endpoint the USER supplies (Custom, Cloudflare's operator Worker) is only a
+          // candidate once it actually has one. Cloudflare ships a default model, so without this check a
+          // key alone would make it eligible and the walk would hand the request to streamOpenAI with no
+          // baseURL — where the SDK's own default is api.openai.com. Failing the candidate here keeps the
+          // walk moving to a provider that CAN answer instead of burning the attempt on a guard error.
+          (!requiresUserBaseUrl(p) || !!providerBaseUrl(p, s)) &&
           (req.mode !== 'vision' || providerVisionOk(p)) &&
           // CLI providers (e.g. codex-cli) may have no configured model at all — attempt() below
           // already exempts kind==='cli' from the "no model" ineligibility check (the CLI just uses
@@ -3586,6 +3599,11 @@ function registerIpc(): void {
       ) {
         model = (s.providerModels['dust'] || '').trim() || model
       }
+      // Where this attempt will actually send the request: the user's endpoint for the providers that
+      // require one (Custom, Cloudflare's operator Worker), the user's Dust region, else the registry's
+      // built-in. Resolved BEFORE the eligibility chain because a missing user endpoint is an eligibility
+      // failure, not a stream failure.
+      const baseURL = providerBaseUrl(provider, s)
       // Métis Local replaces the ENTIRE generic key/model/vision chain below with localEligibleFor — the
       // same mode-scope + readiness gate the settings snapshot and pickFailover's candidate filter use, so
       // an out-of-scope request (answer/recap or escalated text) can never actually route to the local
@@ -3611,11 +3629,16 @@ function registerIpc(): void {
                 ? provider === 'dust'
                   ? `No ${tier === 'think' ? 'thinking' : 'base'} Dust agent set. Open Settings → Connect Dust and pick your agents.`
                   : `No model set for ${def.label}. Pick a model in Settings.`
-                : req.mode === 'vision' && !providerVisionOk(provider)
-                  ? `${def.label} can't read screenshots. Switch to Claude or GPT in Settings, or ask without a screen capture.`
-                  : provider === 'dust' && !s.dustWorkspaceId
-                    ? 'Add your Dust workspace ID in Settings → AI → Dust setup.'
-                    : ''
+                : // Endpoint-is-yours providers (Custom, Cloudflare's operator-deployed Worker) cannot be
+                  // reached without a URL. Say so HERE, where the message is actionable and the flow can
+                  // still fail over, rather than letting streamOpenAI's own guard surface it mid-stream.
+                  def.kind !== 'cli' && requiresUserBaseUrl(provider) && !baseURL
+                  ? `No endpoint URL set for ${def.label}. Open Settings → Advanced and add it.`
+                  : req.mode === 'vision' && !providerVisionOk(provider)
+                    ? `${def.label} can't read screenshots. Switch to Claude or GPT in Settings, or ask without a screen capture.`
+                    : provider === 'dust' && !s.dustWorkspaceId
+                      ? 'Add your Dust workspace ID in Settings → AI → Dust setup.'
+                      : ''
       if (ineligible) {
         // Vision turn, but the active provider can't read images (e.g. Dust agents). Transparently fail
         // over to a configured vision-capable provider (Claude/GPT) so a user who captured their screen
@@ -3653,8 +3676,6 @@ function registerIpc(): void {
         }
         return
       }
-      const baseURL =
-        provider === 'custom' ? s.customBaseUrl : provider === 'dust' ? s.dustBaseUrl : def.baseUrl
       auditLog('provider.request', { provider, model, mode: req.mode, tier, retry: attempted.length > 0 })
       // Tell the waiting UI WHO is answering ("Asking your Dust agent…") — re-sent on retry/failover so
       // the display follows the live attempt. Metadata only (provider id + tier), never the model/agent id.
