@@ -15,6 +15,9 @@ function makeHarness(init?: {
   authorized?: boolean
   /** Foreground-watcher health at start(): false is linux / a mac install with no bundled helper. */
   watcherHealthy?: boolean
+  /** macOS Screen Recording (TCC) grant. Omit entirely for the Windows wiring, where index.ts leaves the
+   *  dep undefined because there is no queryable screen grant and a capture raises no prompt. */
+  screenCaptureGranted?: boolean
 }) {
   let clock = 1_000_000
   const state = {
@@ -28,12 +31,14 @@ function makeHarness(init?: {
     ocrThrow: false,
     authorized: init?.authorized ?? true,
     watcherHealthy: init?.watcherHealthy ?? true,
+    screenCaptureGranted: init?.screenCaptureGranted ?? true,
     /** Display the capture actually came from, and the display the user is looking at right now. */
     dispId: 1,
     currentDisplayId: 1,
     displayMismatch: false
   }
   let ocrCalls = 0
+  let shots = 0
   let currentWin: ForegroundInfo | null = null
   let watcher: ForegroundWatcher | null = null
   let fetchCalls = 0
@@ -48,14 +53,19 @@ function makeHarness(init?: {
   })
 
   const deps: ScreenPreprocessDeps = {
-    getScreenshot: async () => ({
-      image: state.image,
-      width: 1280,
-      height: 800,
-      capturedAt: clock,
-      dispId: state.dispId,
-      displayMismatch: state.displayMismatch
-    }),
+    // Counted, because on macOS this call IS the permission prompt: a capture taken while the Screen
+    // Recording grant is still `not-determined` is what registers the app with TCC (MQA-209).
+    getScreenshot: async () => {
+      shots++
+      return {
+        image: state.image,
+        width: 1280,
+        height: 800,
+        capturedAt: clock,
+        dispId: state.dispId,
+        displayMismatch: state.displayMismatch
+      }
+    },
     getSettings: () => ({
       backgroundScreenContext: state.backgroundScreenContext,
       localLlm: { enabled: true, modelId: 'qwen3.5-0.8b' }
@@ -86,6 +96,9 @@ function makeHarness(init?: {
           return state.ocrText
         }
       : undefined,
+    // Wired only when the test asks for it, mirroring index.ts: the dep exists on darwin and nowhere else.
+    screenCaptureGranted:
+      init?.screenCaptureGranted === undefined ? undefined : () => state.screenCaptureGranted,
     fetchImpl,
     now: () => clock,
     log: () => {}
@@ -104,6 +117,7 @@ function makeHarness(init?: {
     },
     fetchCalls: () => fetchCalls,
     ocrCalls: () => ocrCalls,
+    shots: () => shots,
     peek: () => sp._test.peekCache()
   }
 }
@@ -373,6 +387,55 @@ describe('createScreenPreprocess — one authority for "can this run" (MQA-179)'
     expect(h.sp.canRun()).toBe(false)
     h.sp.refresh()
     expect(h.sp.isActive()).toBe(false)
+  })
+})
+
+/**
+ * MQA-209 — MQA-178 armed this engine at boot. On macOS the first capture is also the permission
+ * request: `getScreenshot()` reaches desktopCapturer while the Screen Recording grant is
+ * `not-determined` precisely so the system dialog appears (index.ts, captureScreenshotOnce). An engine
+ * armed at boot therefore pops an unexplained TCC prompt seconds after launch — the exact pop-up the
+ * neighbouring `probeScreenCapture` boot step is win32-gated to avoid. The grant is part of eligibility
+ * now, so the boot path stays silent until the user has granted, and MQA-178 still holds once they have.
+ */
+describe('createScreenPreprocess — the boot arm must not raise the macOS TCC prompt (MQA-209)', () => {
+  it('MQA-209 — darwin without the Screen Recording grant: nothing starts and nothing captures', async () => {
+    const h = makeHarness({ withOcr: true, screenCaptureGranted: false })
+    expect(h.sp.canRun()).toBe(false) // …and Settings reads "not running", which is the truth
+    h.sp.refresh()
+    expect(h.sp.isActive()).toBe(false)
+    h.setWindow('w1')
+    await h.sp._test.describeForWindow('w1')
+    expect(h.shots()).toBe(0) // no capture => nothing that could raise the system permission dialog
+    expect(h.peek()).toBeNull()
+  })
+
+  it('MQA-209 — darwin WITH the grant: the engine still arms at boot and describes (MQA-178 intact)', async () => {
+    const h = makeHarness({ withOcr: true, screenCaptureGranted: true })
+    h.state.ocrText = 'Inbox — 3 unread'
+    expect(h.sp.canRun()).toBe(true)
+    h.sp.refresh()
+    expect(h.sp.isActive()).toBe(true)
+    h.setWindow('w1')
+    await h.sp._test.describeForWindow('w1')
+    expect(h.shots()).toBe(1)
+    expect(h.sp.currentFreshContext()?.description).toBe('Inbox — 3 unread')
+  })
+
+  it('MQA-209 — a grant that lands mid-session arms the engine on the next reconcile', () => {
+    const h = makeHarness({ withOcr: true, screenCaptureGranted: false })
+    h.sp.refresh()
+    expect(h.sp.isActive()).toBe(false)
+    h.state.screenCaptureGranted = true // onboarding's permissionsRequestUpfront just obtained it
+    h.sp.refresh()
+    expect(h.sp.isActive()).toBe(true) // no relaunch needed — that would be MQA-178 all over again
+  })
+
+  it('MQA-209 — Windows is untouched: no screen-grant dep, the engine arms exactly as before', () => {
+    const h = makeHarness() // the dep index.ts leaves undefined off darwin
+    expect(h.sp.canRun()).toBe(true)
+    h.sp.refresh()
+    expect(h.sp.isActive()).toBe(true)
   })
 })
 

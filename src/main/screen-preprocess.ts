@@ -19,7 +19,8 @@
  *  - Throttled + single-flight: at most one describe at a time, no more often than MIN_DESCRIBE_INTERVAL_MS.
  *  - Gated: runs only when the session is valid AND the `backgroundScreenContext` setting is on AND either
  *    the local model is ready (enabled, provisioned, org-allowed) or on-device OCR is available (macOS
- *    Vision helper — needs no LLM at all) AND the OS foreground-window signal is live. Any missing →
+ *    Vision helper — needs no LLM at all) AND, on macOS, Screen Recording is ALREADY granted (this loop
+ *    must never be what raises the TCC prompt) AND the OS foreground-window signal is live. Any missing →
  *    the module is inert and screen-asks use today's live path. canRun() is that one expression, and it
  *    is also what main reports to Settings, so the UI can never describe a state the engine isn't in.
  *  - Fails closed on a lost window signal: the cache is only trustworthy because a focus change drops it.
@@ -89,6 +90,14 @@ export interface ScreenPreprocessDeps {
    *  local LLM isn't ready, OCR is the whole engine (it needs no LLM) — a null OCR result yields no
    *  description rather than falling back, since the VLM fallback itself requires the local runtime. */
   extractScreenText?: (imageB64: string) => Promise<string | null>
+  /** macOS only: is the Screen Recording (TCC) grant already in place? On darwin this engine's first
+   *  capture IS the permission request — main deliberately lets a `not-determined` status through to
+   *  desktopCapturer because that is what registers the app with TCC and makes the system show its
+   *  dialog. Since the engine is armed at boot (MQA-178), that dialog would appear unexplained seconds
+   *  after launch, which is exactly what the win32-only boot probe next to it refuses to do (MQA-209).
+   *  Part of eligibility rather than of the capture, so canRun() — what Settings renders — stays the one
+   *  truth. Undefined off darwin: there is no queryable screen grant there and a capture prompts nothing. */
+  screenCaptureGranted?: () => boolean
   fetchImpl?: typeof fetch
   now?: () => number
   log?: (level: 'warn' | 'info', message: string) => void
@@ -179,10 +188,16 @@ export function createScreenPreprocess(deps: ScreenPreprocessDeps): ScreenPrepro
   // its presence IS the "OCR available" signal — no separate platform check needed here.
   const ocrAvailable = (): boolean => !!deps.extractScreenText
 
+  // MQA-209: on macOS a capture is how the app asks for Screen Recording, so a background loop that runs
+  // before the grant exists raises the system dialog with nothing on screen that asked for it. No dep
+  // (Windows/linux) = no such gate to satisfy; the user-facing prompt belongs to onboarding.
+  const captureAllowed = (): boolean => !deps.screenCaptureGranted || deps.screenCaptureGranted()
+
   const eligible = (): boolean =>
     deps.authorized() &&
     deps.getSettings().backgroundScreenContext === true &&
-    (deps.localReady() || ocrAvailable())
+    (deps.localReady() || ocrAvailable()) &&
+    captureAllowed()
 
   /** Eligibility AND a window signal that still works — what both the lifecycle and Settings read. */
   const canRun = (): boolean => eligible() && !windowSignalDead

@@ -82,15 +82,60 @@ jobs:
           elif [ -f resources/ffmpeg/ffmpeg-darwin-arm64 ]; then
             mv resources/ffmpeg/ffmpeg-darwin-arm64 resources/ffmpeg/darwin-arm64/ffmpeg
             chmod +x resources/ffmpeg/darwin-arm64/ffmpeg
+            # A freshly downloaded, unsigned Mach-O is quarantined by the OS, and Gatekeeper then
+            # kills it on exec - which is exactly what check-ffmpeg-sidecar.mjs does to read the
+            # licence banner. Safe to strip: that same script verifies the file against the reviewed
+            # sha256 in resources/ffmpeg/manifest.json before it is ever executed, so trust comes
+            # from the hash, not from the OS. build.yml has carried this line since the gate landed.
+            xattr -d com.apple.quarantine resources/ffmpeg/darwin-arm64/ffmpeg 2>/dev/null || true
           fi
       # Hard gate: fail loudly with the exact one-time seed command if provisioning above didn't produce a
       # binary, instead of predist's check-ffmpeg-sidecar.mjs throwing a raw ENOENT deep inside the build.
-      - name: Require the ffmpeg sidecar to be present
+      - name: Require the ffmpeg sidecar to be present (darwin-arm64)
         run: |
           if [ ! -f "resources/ffmpeg/darwin-arm64/ffmpeg" ]; then
             echo "::error::Missing resources/ffmpeg/darwin-arm64/ffmpeg and the ffmpeg-sidecar-v1 release could not provision it."
             echo "::error::One-time seed (run once locally by a maintainer holding the reviewed binaries in resources/ffmpeg/):"
-            echo "::error::  cp resources/ffmpeg/darwin-arm64/ffmpeg /tmp/ffmpeg-darwin-arm64 && cp resources/ffmpeg/win32-x64/ffmpeg.exe /tmp/ffmpeg-win32-x64.exe && gh release create ffmpeg-sidecar-v1 /tmp/ffmpeg-darwin-arm64 /tmp/ffmpeg-win32-x64.exe --repo $GITHUB_REPOSITORY --title 'ffmpeg sidecar v1' --notes 'Reviewed LGPL-only ffmpeg binaries for CI provisioning (tracked manifest.json contains SHA256s).'"
+            echo "::error::  cp resources/ffmpeg/darwin-arm64/ffmpeg /tmp/ffmpeg-darwin-arm64 && cp resources/ffmpeg/darwin-x64/ffmpeg /tmp/ffmpeg-darwin-x64 && cp resources/ffmpeg/win32-x64/ffmpeg.exe /tmp/ffmpeg-win32-x64.exe && gh release create ffmpeg-sidecar-v1 /tmp/ffmpeg-darwin-arm64 /tmp/ffmpeg-darwin-x64 /tmp/ffmpeg-win32-x64.exe --repo $GITHUB_REPOSITORY --title 'ffmpeg sidecar v1' --notes 'Reviewed LGPL-only ffmpeg binaries for CI provisioning (tracked manifest.json contains SHA256s).'"
+            exit 1
+          fi
+      # The Intel half of the universal build. Deliberately a SECOND cache entry with its own id and
+      # key rather than another path on the arm64 one: with a shared id, an arm64 cache hit would skip
+      # this download too, and the gate below would then fail a job that was one step from complete.
+      - uses: actions/cache@v4
+        id: ffmpeg-cache-x64
+        with:
+          path: resources/ffmpeg/darwin-x64
+          key: ffmpeg-sidecar-v1-darwin-x64-${{ hashFiles('resources/ffmpeg/manifest.json') }}
+      - name: Provision ffmpeg sidecar (darwin-x64)
+        if: steps.ffmpeg-cache-x64.outputs.cache-hit != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p resources/ffmpeg/darwin-x64
+          if ! gh release download ffmpeg-sidecar-v1 --repo "$GITHUB_REPOSITORY" \
+               --pattern 'ffmpeg-darwin-x64' \
+               --dir resources/ffmpeg --clobber; then
+            echo "::warning::Could not download the ffmpeg-sidecar-v1 release assets - falling through to the hard gate below."
+          elif [ -f resources/ffmpeg/ffmpeg-darwin-x64 ]; then
+            mv resources/ffmpeg/ffmpeg-darwin-x64 resources/ffmpeg/darwin-x64/ffmpeg
+            chmod +x resources/ffmpeg/darwin-x64/ffmpeg
+            # Same quarantine strip, same justification as the arm64 step above: the download is
+            # unsigned and quarantined, and trust comes from the reviewed sha256, not from Gatekeeper.
+            xattr -d com.apple.quarantine resources/ffmpeg/darwin-x64/ffmpeg 2>/dev/null || true
+          fi
+      # Hard gate for the second arch. Not optional and not droppable: package.json's predist checks
+      # `mac x64` as well as `mac arm64`, and check-packaged-runtime.mjs --arches=arm64,x64 hashes both
+      # out of the finished universal .app, so a missing Intel binary would only move the failure to the
+      # far side of 40 minutes of packaging.
+      - name: Require the ffmpeg sidecar to be present (darwin-x64)
+        run: |
+          if [ ! -f "resources/ffmpeg/darwin-x64/ffmpeg" ]; then
+            echo "::error::Missing resources/ffmpeg/darwin-x64/ffmpeg and the ffmpeg-sidecar-v1 release could not provision it."
+            echo "::error::This binary is cross-compiled on Apple Silicon by scripts/build-ffmpeg-sidecar-mac.sh x64 (needs nasm and Rosetta 2 on that Mac) - see resources/ffmpeg/manifest.json and docs/ENTERPRISE_RELEASE.md."
+            echo "::error::One-time seed (run once locally by a maintainer holding the reviewed binaries in resources/ffmpeg/):"
+            echo "::error::  cp resources/ffmpeg/darwin-arm64/ffmpeg /tmp/ffmpeg-darwin-arm64 && cp resources/ffmpeg/darwin-x64/ffmpeg /tmp/ffmpeg-darwin-x64 && cp resources/ffmpeg/win32-x64/ffmpeg.exe /tmp/ffmpeg-win32-x64.exe && gh release create ffmpeg-sidecar-v1 /tmp/ffmpeg-darwin-arm64 /tmp/ffmpeg-darwin-x64 /tmp/ffmpeg-win32-x64.exe --repo $GITHUB_REPOSITORY --title 'ffmpeg sidecar v1' --notes 'Reviewed LGPL-only ffmpeg binaries for CI provisioning (tracked manifest.json contains SHA256s).'"
+            echo "::error::Adding it to a release that already exists: gh release upload ffmpeg-sidecar-v1 /tmp/ffmpeg-darwin-x64 --clobber --repo $GITHUB_REPOSITORY"
             exit 1
           fi
       # Hard gate: a v* tag with these secrets missing must fail the job, not publish an unsigned build.
@@ -204,7 +249,7 @@ jobs:
           if [ ! -f "resources/ffmpeg/win32-x64/ffmpeg.exe" ]; then
             echo "::error::Missing resources/ffmpeg/win32-x64/ffmpeg.exe and the ffmpeg-sidecar-v1 release could not provision it."
             echo "::error::One-time seed (run once locally by a maintainer holding the reviewed binaries in resources/ffmpeg/):"
-            echo "::error::  cp resources/ffmpeg/darwin-arm64/ffmpeg /tmp/ffmpeg-darwin-arm64 && cp resources/ffmpeg/win32-x64/ffmpeg.exe /tmp/ffmpeg-win32-x64.exe && gh release create ffmpeg-sidecar-v1 /tmp/ffmpeg-darwin-arm64 /tmp/ffmpeg-win32-x64.exe --repo $GITHUB_REPOSITORY --title 'ffmpeg sidecar v1' --notes 'Reviewed LGPL-only ffmpeg binaries for CI provisioning (tracked manifest.json contains SHA256s).'"
+            echo "::error::  cp resources/ffmpeg/darwin-arm64/ffmpeg /tmp/ffmpeg-darwin-arm64 && cp resources/ffmpeg/darwin-x64/ffmpeg /tmp/ffmpeg-darwin-x64 && cp resources/ffmpeg/win32-x64/ffmpeg.exe /tmp/ffmpeg-win32-x64.exe && gh release create ffmpeg-sidecar-v1 /tmp/ffmpeg-darwin-arm64 /tmp/ffmpeg-darwin-x64 /tmp/ffmpeg-win32-x64.exe --repo $GITHUB_REPOSITORY --title 'ffmpeg sidecar v1' --notes 'Reviewed LGPL-only ffmpeg binaries for CI provisioning (tracked manifest.json contains SHA256s).'"
             exit 1
           fi
       - name: Require signing secrets before releasing

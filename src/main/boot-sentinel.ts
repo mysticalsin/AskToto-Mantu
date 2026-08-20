@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync, type Stats } from 'node:fs'
 import { join } from 'node:path'
 
 /**
@@ -21,6 +21,9 @@ import { join } from 'node:path'
 
 const SENTINEL = 'boot-incomplete.json'
 
+/** One minidump found in the Crashpad database, with the mtime that decides which one is newest. */
+type CrashDump = { name: string; mtimeMs: number }
+
 /** The run currently in progress, as recorded on disk. `consecutive` counts the early deaths that
  *  immediately preceded it, so a repeat offender is distinguishable from a one-off. */
 export type BootRecord = { startedAt: string; pid: number; version: string; consecutive: number }
@@ -34,25 +37,49 @@ function sentinelPath(userData: string): string {
   return join(userData, SENTINEL)
 }
 
-/** Newest `.dmp` under `<userData>/Crashpad/reports`, by mtime. Null when there is none (or the
- *  directory is unreadable) — a missing dump must never turn the trace into an error. */
+/** Newest `.dmp` in the Crashpad database under `<userData>/Crashpad`, by mtime. Null when there is none
+ *  (or nothing is readable) — a missing dump must never turn the trace into an error.
+ *
+ *  MQA-210: the database's SUBDIRECTORIES are platform-specific — Crashpad on Windows keeps reports in
+ *  `reports/`, on macOS and Linux in `new/`, `pending/` and `completed/`. This used to look only in
+ *  `reports/`, so on a Mac the scan threw ENOENT and every early-death trace said "minidump: none" on
+ *  exactly the platform whose packaged app has never been launch-verified. Scanning the root and one
+ *  level below it costs a couple of tiny directory reads and encodes no platform's shape at all. */
 export function newestCrashDump(userData: string): string | null {
-  const dir = join(userData, 'Crashpad', 'reports')
-  let newest: { name: string; mtimeMs: number } | null = null
-  try {
-    for (const name of readdirSync(dir)) {
-      if (!name.toLowerCase().endsWith('.dmp')) continue
-      try {
-        const { mtimeMs } = statSync(join(dir, name))
-        if (!newest || mtimeMs > newest.mtimeMs) newest = { name, mtimeMs }
-      } catch {
-        /* raced with Crashpad's own cleanup — skip this entry */
-      }
+  // Both readers answer null instead of throwing: a directory this platform does not use, and an entry
+  // Crashpad's own cleanup deleted mid-scan, are both normal — neither may cost us the trace.
+  const listOrNull = (dir: string): string[] | null => {
+    try {
+      return readdirSync(dir)
+    } catch {
+      return null
     }
-  } catch {
-    return null // no reports directory yet
   }
-  return newest?.name ?? null
+  const statOrNull = (p: string): Stats | null => {
+    try {
+      return statSync(p)
+    } catch {
+      return null
+    }
+  }
+  const scan = (dir: string, depth: number): CrashDump | null => {
+    const names = listOrNull(dir)
+    if (!names) return null
+    let newest: CrashDump | null = null
+    for (const name of names) {
+      const st = statOrNull(join(dir, name))
+      if (!st) continue
+      let found: CrashDump | null = null
+      if (st.isDirectory()) {
+        if (depth > 0) found = scan(join(dir, name), depth - 1)
+      } else if (name.toLowerCase().endsWith('.dmp')) {
+        found = { name, mtimeMs: st.mtimeMs }
+      }
+      if (found && (!newest || found.mtimeMs > newest.mtimeMs)) newest = found
+    }
+    return newest
+  }
+  return scan(join(userData, 'Crashpad'), 1)?.name ?? null
 }
 
 /**

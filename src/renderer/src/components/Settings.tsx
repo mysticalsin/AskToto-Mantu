@@ -5282,9 +5282,15 @@ export function Settings({
                           // reader can be the Vision OCR helper, with no model involved at all.
                           "When you switch windows, Métis quietly reads your screen on this device so 'What's on my screen' answers instantly. Stays on your device, nothing extra is sent to the cloud, and Private View turns it off."
                         : settings.localReady
-                          ? // Local AI is ready, so the missing piece is the OS window signal — telling
-                            // this user to enable Local AI would just be the opposite lie.
-                            "Not running on this machine — Métis can't tell when you switch windows, so screen asks capture live instead."
+                          ? isWindows
+                            ? // Local AI is ready, so the missing piece is the OS window signal — telling
+                              // this user to enable Local AI would just be the opposite lie.
+                              "Not running on this machine — Métis can't tell when you switch windows, so screen asks capture live instead."
+                            : // On macOS there is a second way to be off: the reader is gated on Screen
+                              // Recording already being granted, because its own capture would otherwise be
+                              // what raises the system prompt (MQA-209). The renderer can't tell the two
+                              // apart, so name the actionable one first rather than guess wrong.
+                              'Not running on this machine — check Screen Recording under Permissions below (a new grant needs a restart). Screen asks capture live instead.'
                           : 'Enable Local AI (below) to use this. The background reader never leaves your device.'
                     }
                     on={settings.backgroundScreenContext}

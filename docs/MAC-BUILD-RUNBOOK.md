@@ -8,7 +8,8 @@ every claim below was checked, not assumed.
 
 - Every one of the 17 scripts the mac chains invoke (`predist`, `dist`, `dist:local`,
   `release:build:mac`, `release:mas`) exists and parses (`node --check`). No chain names a script
-  that is missing.
+  that is missing. **That is not the same as the build being runnable** — see the ffmpeg staging
+  section below, which is a hard prerequisite this file previously denied existed.
 - Artifact names below were re-derived from `electron-builder.yml:127` (`artifactName:
   Metis-${version}.${ext}`, targets `dmg` + `zip`), not copied forward.
 - The three entitlements files the mac and MAS configs reference all exist under `build/`.
@@ -42,24 +43,84 @@ llama-b9957/libggml-cpu.0.dylib: Can't create '...': Invalid argument
 fetch-llama-server FAILED
 ```
 
-(Verified on this repo, 2026-08-18.) Nothing needs staging anyway — `predist` downloads everything
-downloadable, on the Mac, by itself. Start from a clean clone.
+(Verified on this repo, 2026-08-18.)
+
+## One thing DOES need staging: the ffmpeg sidecars
+
+**Read this before Path A.** An earlier revision of this file said "nothing needs staging, start from
+a clean clone." That was wrong, and it is the single most likely way to lose an afternoon.
+
+`resources/ffmpeg/manifest.json` pins three reviewed LGPL binaries — `darwin-arm64/ffmpeg`,
+`darwin-x64/ffmpeg`, `win32-x64/ffmpeg.exe`. **None of them are in git** (only the manifest and the
+licence are). `predist` *verifies* them; it never *fetches* them. Its first two commands are
+`check-ffmpeg-sidecar.mjs mac arm64` and `... mac x64`, so a clean clone stops there.
+
+They come from this repo's **`ffmpeg-sidecar-v1` GitHub release** (see
+`docs/ENTERPRISE_RELEASE.md` → "ffmpeg Sidecar Provisioning"; CI does exactly this in
+`.github/workflows/build.yml`):
+
+```bash
+mkdir -p resources/ffmpeg/darwin-arm64 resources/ffmpeg/darwin-x64
+gh release download ffmpeg-sidecar-v1 --repo <owner>/<repo> \
+  --pattern 'ffmpeg-darwin-*' --dir resources/ffmpeg --clobber
+mv resources/ffmpeg/ffmpeg-darwin-arm64 resources/ffmpeg/darwin-arm64/ffmpeg
+mv resources/ffmpeg/ffmpeg-darwin-x64   resources/ffmpeg/darwin-x64/ffmpeg
+chmod +x resources/ffmpeg/darwin-*/ffmpeg
+# A freshly downloaded unsigned Mach-O is quarantined, and Gatekeeper kills it on exec.
+# check-ffmpeg-sidecar runs the binary to read its licence banner, so strip the attribute.
+# Trust comes from the sha256 in manifest.json, which is verified before it is ever run.
+xattr -d com.apple.quarantine resources/ffmpeg/darwin-*/ffmpeg 2>/dev/null || true
+```
+
+> ### ⚠️ `ffmpeg-darwin-x64` may not exist in that release yet
+>
+> As of 2026-08-19 the `ffmpeg-sidecar-v1` release carries only `ffmpeg-darwin-arm64` and
+> `ffmpeg-win32-x64.exe`. The x64 requirement arrived with the universal (Intel + Apple Silicon)
+> build in `cc9faf5`, which never added a way to obtain the binary — so **`npm run dist` cannot
+> currently succeed on any Mac**, and CI's `build-macos` job would fail the same way.
+>
+> **A maintainer must produce it once, on a Mac**, and upload it:
+>
+> ```bash
+> ./scripts/build-ffmpeg-sidecar-mac.sh x64     # needs nasm + Rosetta 2
+> cp resources/ffmpeg/darwin-x64/ffmpeg /tmp/ffmpeg-darwin-x64
+> gh release upload ffmpeg-sidecar-v1 /tmp/ffmpeg-darwin-x64 --repo <owner>/<repo> --clobber
+> ```
+>
+> The script prints a **new** sha256 — that value has to be committed into
+> `resources/ffmpeg/manifest.json`, because the manifest is the reviewed trust anchor and a rebuilt
+> binary will not match the old pin. This is a maintainer step, not a clone-and-run step.
+>
+> **Want a DMG before that happens?** Build **arm64-only** — it needs just the arm64 binary that is
+> already in the release. See "Path A-arm64" below. You lose Intel-Mac support, nothing else.
 
 ## Prerequisites
 
 | What | Why | Check |
 |---|---|---|
 | macOS (Apple Silicon or Intel) | the target, and the only host that can produce it | — |
-| **Xcode command line tools** | `swiftc` + `lipo` + `xcrun` build the mac-helper; `hdiutil`/`codesign` make and validate the DMG | `xcode-select -p` |
+| **Xcode command line tools** — enough for Path A | `swiftc` + `lipo` + `xcrun` build the mac-helper; `hdiutil`/`codesign` make and validate the DMG | `xcode-select -p` |
+| **Full Xcode.app** — required for Path B only | `check-xcode-tools.mjs` runs `xcodebuild -version` and resolves `notarytool`; neither ships with the Command Line Tools | `xcodebuild -version` |
 | **Node 22.22.3** exactly | pinned in `engines`, `.nvmrc` and `.node-version`; `release-gates.test.ts` asserts CI uses the same | `node -v` |
 | ~10 GB free disk | 3.2 GB of sidecars + a universal package + the DMG | — |
 
 `scripts/check-xcode-tools.mjs` fails early and actionably if the toolchain is missing — it is only
-wired into the *signed release* path, so for an unsigned build you find out when `swiftc` is invoked.
-Install the tools first and neither matters:
+wired into the *signed release* path (Path B), so for an unsigned build you find out when `swiftc` is
+invoked instead.
+
+For Path A the Command Line Tools are sufficient:
 
 ```bash
 xcode-select --install
+```
+
+For Path B you need the full Xcode.app — `xcodebuild` and `notarytool` do not exist in the Command
+Line Tools, and `check-xcode-tools.mjs` says so itself when it fails:
+
+```bash
+# install Xcode from the App Store, then point the toolchain at it
+sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
+xcodebuild -version   # must succeed before `npm run release:build:mac`
 ```
 
 ## Path A — unsigned DMG (what you want for testing, and for 1.6.0 right now)
@@ -79,11 +140,50 @@ npm run dist                 # predist runs automatically first
 > or create the tag first (below). `package.json` decides the artifact version, not the tag — so a
 > build from `main` is already a 1.6.0 build.
 
-`predist` self-provisions, in this order, before packaging starts:
+### Path A-arm64 — Apple Silicon only, buildable today
+
+Use this while `ffmpeg-darwin-x64` is still missing from the `ffmpeg-sidecar-v1` release. It needs
+only the arm64 sidecar, which the release already carries. The result runs natively on Apple
+Silicon and **not at all** on Intel Macs — that is the whole trade.
+
+Stage only arm64 (the `mkdir`/`mv`/`chmod`/`xattr` block above, dropping the `darwin-x64` lines),
+then:
+
+```bash
+npm run check:main-imports
+node scripts/check-ffmpeg-sidecar.mjs mac arm64
+node scripts/check-sherpa-platform.mjs mac arm64
+node scripts/provision-mac-natives.mjs
+node scripts/provision-electron-dist.mjs
+node scripts/fetch-llama-server.mjs mac && node scripts/check-llama-sidecar.mjs mac
+node scripts/build-mac-helper.mjs      && node scripts/check-mac-helper.mjs mac
+node scripts/fetch-local-model.mjs     && node scripts/check-local-model.mjs
+node scripts/fetch-speaker-model.mjs && node scripts/fetch-models.mjs
+npm run build:intelligence && npm run build
+
+ASKTOTO_ADHOC_SIGN=1 ASKTOTO_MAC_ARCHES=arm64 \
+  npx electron-builder --mac --arm64 \
+  -c.npmRebuild=false -c.electronDist=resources/electron-dist \
+  --publish never -c.mac.identity=null
+
+node scripts/check-packaged-runtime.mjs mac --arches=arm64 --macho-arches=arm64 --post-sign
+node scripts/check-update-metadata.mjs release/latest-mac.yml
+```
+
+This is `predist` + `dist` with every `x64` step removed and `--universal` replaced by `--arm64`;
+the arch flags are passed on the command line by every chain in `package.json` rather than pinned in
+`electron-builder.yml`, which is what makes the substitution safe. Output is still
+`Metis-1.6.0.dmg` / `.zip` — the filename carries no arch, so **do not** publish an arm64-only DMG
+under the same name as a universal one without saying so in the release notes.
+
+`predist` runs this, in this order, before packaging starts. Note which steps **fetch** and which
+only **verify** — the ffmpeg ones only verify, which is why they need the staging step above:
 
 ```
-check-ffmpeg-sidecar mac arm64 / x64     provision-mac-natives
-check-sherpa-platform mac arm64 / x64    provision-electron-dist
+check-ffmpeg-sidecar mac arm64 / x64     VERIFY ONLY — stage these yourself (see above)
+check-sherpa-platform mac arm64 / x64    verify (provision-mac-natives supplies them)
+provision-mac-natives                    fetch
+provision-electron-dist                  fetch
 fetch-llama-server mac  → check-llama-sidecar mac
 build-mac-helper        → check-mac-helper mac      ← the Swift compile
 fetch-local-model       → check-local-model

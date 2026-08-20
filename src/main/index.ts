@@ -1626,14 +1626,24 @@ const screenPreprocess: ScreenPreprocess = createScreenPreprocess({
   // Windows keeps the VLM-only path (extractScreenText returns null without a helper anyway, but gating
   // here keeps the win32 wiring visibly identical to before).
   extractScreenText: process.platform === 'darwin' ? extractScreenText : undefined,
+  // macOS: never let this background loop be the thing that asks for Screen Recording. captureScreenshotOnce
+  // deliberately lets a `not-determined` status reach desktopCapturer because that is what registers the app
+  // with TCC and raises the system dialog — fine for a user-initiated capture, wrong for a loop armed at boot
+  // (MQA-178), which would pop an unexplained prompt seconds after launch (MQA-209). Undefined off darwin:
+  // Windows has no queryable screen grant and its capture prompts nothing.
+  screenCaptureGranted:
+    process.platform === 'darwin'
+      ? () => systemPreferences.getMediaAccessStatus('screen') === 'granted'
+      : undefined,
   log: (level, message) => (level === 'warn' ? mainLog.warn(message) : mainLog.info(message)),
   audit: (event, data) => auditLog(event as Parameters<typeof auditLog>[0], data)
 })
 
 /**
  * The ONE place that reconciles background screen preprocessing with reality. Call it from every event
- * that can change canRun(): boot, a settings write, sign-in, session clear, and the local-model download
- * landing. Safe to call repeatedly — it's a no-op when the running state already matches.
+ * that can change canRun(): boot, a settings write, sign-in, session clear, the local-model download
+ * landing, and the onboarding permission request (on macOS the Screen Recording grant is part of
+ * eligibility — MQA-209). Safe to call repeatedly — it's a no-op when the running state already matches.
  *
  * Auth is not re-checked here: it is a dep of the engine's own eligibility (screen-preprocess.ts), so the
  * lifecycle and the `backgroundScreenReady` flag Settings renders read one expression instead of two that
@@ -2211,6 +2221,11 @@ function registerIpc(): void {
       // getUserMedia call is what raises that prompt, so this only reports what the OS already knows.
       await probeScreenCapture()
     }
+    // The grant just asked for here is part of the background screen reader's eligibility on macOS
+    // (MQA-209), so reconcile at the one moment it can change. Often it won't have yet: macOS applies a
+    // fresh Screen Recording grant to the NEXT launch (PermissionsSection offers that relaunch), and the
+    // boot reconcile picks it up there. This costs one no-op call to cover the case where it already did.
+    refreshScreenPreprocess()
     return getPlatformPermissions()
   })
 
@@ -5317,6 +5332,8 @@ if (!app.requestSingleInstanceLock()) {
   // screen ask) for the whole session after each relaunch (MQA-178). Deliberately AFTER createWindow: the
   // eligibility read drags in the local-model trust probe, which must not sit on the first-paint path; and
   // ahead of registerIpc so the renderer's first getSettings() already sees the reconciled readiness flag.
+  // Silent on macOS by construction: eligibility now requires the Screen Recording grant to ALREADY exist
+  // (screenCaptureGranted above), so this reconcile can never be what raises the TCC prompt (MQA-209).
   runStep('refreshScreenPreprocess', refreshScreenPreprocess)
   // Synchronous OneDrive filesystem work (mkdir + two writeFileSync calls on first run) — nothing
   // before the window depends on the folder existing yet (saveMeeting/saveNote create it themselves on
