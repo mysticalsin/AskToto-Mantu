@@ -332,19 +332,26 @@ export const PROVIDERS: Record<ProviderId, ProviderDef> = {
     // `{provider}/{model}` — Cloudflare's own catalog plus the third-party models Unified Billing reaches
     // through the same account token, so one credential covers several labs.
     models: [
+      'workers-ai/@cf/meta/llama-4-scout-17b-16e-instruct',
       'workers-ai/@cf/meta/llama-3.3-70b-instruct-fp8-fast',
       'openai/gpt-5.5',
       'anthropic/claude-sonnet-4-5',
       'google-ai-studio/gemini-2.5-flash'
     ],
-    defaultModel: 'workers-ai/@cf/meta/llama-3.3-70b-instruct-fp8-fast',
-    fastModel: 'workers-ai/@cf/meta/llama-3.3-70b-instruct-fp8-fast', // base: the fp8-fast Llama, cheapest + quickest
+    // Llama 4 Scout is natively multimodal and Cloudflare-hosted, so ONE model serves both typed asks and
+    // screen-asks without reaching a third-party lab (and without a second credential). That matters here
+    // because `vision` below is a per-PROVIDER flag, not per-model: the base/fast model IS what a screen-ask
+    // gets, so a text-only default would have to leave vision false and push every screenshot to the
+    // on-device model. 131k context, $0.27/M in — cheap enough to be the everyday default.
+    defaultModel: 'workers-ai/@cf/meta/llama-4-scout-17b-16e-instruct',
+    fastModel: 'workers-ai/@cf/meta/llama-4-scout-17b-16e-instruct',
     thinkModel: 'anthropic/claude-sonnet-4-5', // think: a frontier model, billed through the same Cloudflare account
     keyHint: 'METIS_PROXY_KEY from your operator',
     keyPattern: '', // operator-chosen shared secret — no fixed prefix to auto-detect
-    // The resolved base/fast model is text-only. Left false rather than aspirational: the same rule the
-    // mistral/qwen entries follow, and it keeps screen-ask from routing a screenshot somewhere it can't be read.
-    vision: false,
+    // True because the resolved base/fast model above genuinely reads images. Keep these two in lockstep:
+    // flipping the default back to a text-only model without clearing this would send screenshots to a
+    // model that cannot see them, which is the failure `vision` exists to prevent.
+    vision: true,
     keyUrl: '' // issued by whoever deployed the Worker, not by a signup page
   },
   local: {
