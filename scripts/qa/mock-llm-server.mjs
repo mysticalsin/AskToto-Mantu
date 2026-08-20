@@ -14,6 +14,16 @@
  *   low-headroom → 200 SSE completion + x-ratelimit-remaining-tokens: 10 / limit 100000 (0.01% left)
  *   ok           → 200 SSE completion + healthy headers
  *
+ * Gateway/proxy shapes — a Cloudflare Worker sits between Métis and the model, so it fails in ways a
+ * direct provider cannot. Driven by the `cloudflare` group in e2e-workflows.mjs:
+ *   auth-bad       → 401 "Invalid METIS_PROXY_KEY"   (the USER's credential — only they can fix it)
+ *   gateway-cred   → 502                             (the OPERATOR's Cloudflare token; NOT the user's key)
+ *   forbidden      → 403
+ *   upstream-error → 500
+ *   badbody        → 200 with JSON instead of SSE    (proxy answers without streaming)
+ *   midstream      → SSE that dies mid-answer, no [DONE]
+ *   hang           → accepts and never answers       (exercises the CLIENT-side timeout)
+ *
  * Usage: node scripts/qa/mock-llm-server.mjs [port]   (default 8788). Prints "listening <port>".
  */
 import http from 'node:http'
@@ -72,6 +82,39 @@ const handler = (req, res) => {
     }
     if (url.includes('/low-headroom/')) {
       return sse(res, { 'x-ratelimit-remaining-tokens': '10', 'x-ratelimit-limit-tokens': '100000' })
+    }
+    // --- Gateway/proxy failure shapes (the `cloudflare` group drives these) ---------------------
+    // A Métis operator's Cloudflare Worker sits between the app and the model, so it can fail in ways
+    // a direct provider never does. Each of these is a shape that provider genuinely emits.
+    if (url.includes('/auth-bad/')) {
+      // The USER's METIS_PROXY_KEY is wrong — the one failure only they can fix.
+      return errorJson(res, 401, 'Invalid METIS_PROXY_KEY')
+    }
+    if (url.includes('/forbidden/')) {
+      return errorJson(res, 403, 'Forbidden')
+    }
+    if (url.includes('/upstream-error/')) {
+      return errorJson(res, 500, 'Internal error')
+    }
+    if (url.includes('/gateway-cred/')) {
+      // The OPERATOR's Cloudflare token is bad. The Worker deliberately maps its own 401/403 to 502 so
+      // the app never tells the user to re-enter a proxy key that is perfectly fine.
+      return errorJson(res, 502, 'Upstream provider rejected the gateway credential')
+    }
+    if (url.includes('/badbody/')) {
+      // 200, but JSON instead of SSE — a misconfigured proxy that answers without streaming.
+      res.writeHead(200, { 'content-type': 'application/json' })
+      return res.end(JSON.stringify({ not: 'an sse stream' }))
+    }
+    if (url.includes('/midstream/')) {
+      // Starts streaming, then the socket dies with no [DONE] — a dropped hop mid-answer.
+      res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache', connection: 'keep-alive' })
+      res.write(`data: ${JSON.stringify({ choices: [{ delta: { content: 'This answer starts fine' } }] })}\n\n`)
+      res.write(`data: ${JSON.stringify({ choices: [{ delta: { content: ' and then stops' } }] })}\n\n`)
+      return setTimeout(() => res.destroy(), 400)
+    }
+    if (url.includes('/hang/')) {
+      return // accept and never answer: exercises the client-side timeout, not the server's
     }
     // default: healthy
     return sse(res, { 'x-ratelimit-remaining-tokens': '90000', 'x-ratelimit-limit-tokens': '100000' })
