@@ -1,5 +1,5 @@
 /**
- * dashboard-state.contract.test.ts — MQA-221 and MQA-222.
+ * dashboard-state.contract.test.ts — MQA-221, MQA-222 and MQA-225.
  *
  * Both defects are render-path behaviour in a React hook and two views. This app's vitest run has no
  * jsdom (every sibling suite here is pure-lib), so these follow the repo's established structural-proof
@@ -14,6 +14,9 @@
  *
  *   MQA-222 — a view with no data must still be a page: its own heading and standfirst, plus a sentence
  *   about how records get here. Returning a bare sentence is one line shorter and looks like a bug.
+ *
+ *   MQA-225 — one page must not print two different numbers for one set. The tiles and the cards below
+ *   them have to read the same deduped list, because ingest writes a promise onto two ledgers.
  */
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -91,4 +94,24 @@ describe('MQA-222 — an empty view is still a page', () => {
       expect(block).toMatch(/body=".*Métis extracts them from your meetings/)
     })
   }
+})
+
+describe('MQA-225 — the Briefing tiles and the cards under them count the same set', () => {
+  const briefing = read('views', 'BriefingView.tsx')
+
+  it('derives the ledger from the deduped list, not a raw concat of both ledgers', () => {
+    expect(briefing).toMatch(/const ledger = useMemo\(\(\) => ledgerTotals\(owned\.map\(\(o\) => o\.commitment\)\), \[owned\]\)/)
+  })
+
+  it('no longer rebuilds an undeduped list beside it', () => {
+    // ingest.ts writes one promise onto BOTH the deal ledger and the person ledger when `by` matches a
+    // named attendee, so concatenating them double-counts every such promise. That is exactly what the
+    // tiles did while the cards below used the deduping flattenCommitments.
+    expect(briefing).not.toMatch(/const allCommitments = useMemo/)
+    expect(briefing).not.toMatch(/ledgerTotals\(allCommitments\)/)
+  })
+
+  it('still dedupes on the full identity, so two genuinely different promises both survive', () => {
+    expect(briefing).toMatch(/\$\{c\.text\}\|\|\$\{c\.by\}\|\|\$\{c\.meeting\}\|\|\$\{c\.date\}/)
+  })
 })
