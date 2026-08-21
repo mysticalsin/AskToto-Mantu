@@ -1163,19 +1163,16 @@ export function App(): JSX.Element {
         // the unconditional setInput('') below would still fire and silently drop whatever the user just
         // typed, with no feedback that the ask never went out.
         return
-      } else if (priorAnswerOk) {
-        // Typed follow-up while an answer is already showing: stay fast — no new capture. The prior
-        // turn's text already describes what was on screen, so the model reasons from that; an explicit
-        // fresh look is one click away (Capture button / ⌘⇧S, already an unconditional re-screenshot).
+      } else {
+        // MQA-236: a TYPED question never captures. The first-question-of-a-session branch used to route
+        // through the screen-capture ask here — a silent screenshot the user never asked for, and under the shipped
+        // Cloudflare default (vision: false) it routed the ask to the slow on-device vision model
+        // instead of the fast Worker. Screen intent is now always explicit: the Capture button, ⌘⇧S, or
+        // blank Enter ("look at my screen"). screenAsk keeps governing exactly those explicit paths.
         setView('answer')
         setCollapsed(false)
         const id = ask.run({ mode: 'answer', prompt: q, history: historyRef.current })
         pendingUserRef.current = { id, q }
-      } else {
-        // First question of this session — screenshot + the question together. allowTextFallback: the
-        // user typed a real question, so if Screen Recording is off it must still get a text answer (with
-        // the "screen is off" notice) instead of being swallowed — chat must work without screen access.
-        void askScreen(q, { history: historyRef.current, record: q, allowTextFallback: true })
       }
     } else {
       if (!q) return

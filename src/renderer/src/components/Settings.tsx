@@ -5412,8 +5412,8 @@ export function Settings({
                 </Section>
                 <Section title="Screen access" desc="Whether Métis can see your own screen to answer what's in front of you." icon={Eye}>
                   <ToggleRow
-                    label="Let Métis see your screen automatically"
-                    desc="When on, quick actions and the first ask capture your screen for a vision model. Turn off to answer from text only."
+                    label="Let Métis see your screen on request"
+                    desc="Governs the explicit screen asks — the Capture button, its shortcut, quick actions, and pressing Enter with an empty box. Typed questions never capture your screen."
                     on={settings.screenAsk}
                     onChange={(v) => patch({ screenAsk: v })}
                     disabled={settings.managedKeys.includes('screenAsk')}
