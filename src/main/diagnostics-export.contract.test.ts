@@ -53,3 +53,12 @@ describe('diagnostics export — logs out, content never', () => {
     expect(preloadSrc).toMatch(/diagnosticsExport: \(\): Promise<DiagnosticsExportResult> => ipcRenderer\.invoke\(IPC\.diagnosticsExport\)/)
   })
 })
+
+describe('DevTools posture — disabled where they are not a development tool', () => {
+  it('every BrowserWindow gates devTools on the shared packaged-build constant', () => {
+    expect(indexSrc).toMatch(/const DEVTOOLS_ENABLED = !app\.isPackaged \|\| process\.env\.ASKTOTO_DEVTOOLS === '1'/)
+    const gated = indexSrc.split('devTools: DEVTOOLS_ENABLED').length - 1
+    const windows = indexSrc.split('new BrowserWindow(').length - 1
+    expect(gated, 'every window construction must carry the gate').toBe(windows)
+  })
+})
