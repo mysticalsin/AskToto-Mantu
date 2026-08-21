@@ -224,7 +224,6 @@ import {
   parakeetAddonError
 } from './parakeet'
 import { appleSpeechLocale, appleSpeechTranscribe } from './apple-speech'
-import { preloadTransformersBinding } from './whisper-import'
 import { resetLanguageFollow as resetImportLanguageFollow, whisperImportTranscribe } from './whisper-import'
 import { pickAudioFile, consumePickedAudio } from './import-audio'
 import { ImportJobManager, type ImportJob } from './import-jobs'
@@ -5018,11 +5017,6 @@ if (!app.requestSingleInstanceLock()) {
     w.focus()
   })
   app.whenReady().then(async () => {
-  // MQA-234: must run before ANYTHING can load sherpa-onnx (live Listen's parakeetFeed probe, the
-  // import path's own language probe, the ASR gate) — see preloadTransformersBinding's doc comment.
-  // Order is the entire fix: transformers-then-sherpa loads both; sherpa-then-transformers kills the
-  // 'whisper' import engine with an ORT DLL collision, silently, in every packaged build.
-  preloadTransformersBinding()
   initLogging() // route main-process logs to a rotated file before anything else can fail
   await installProxyAwareFetch() // route provider fetch through the env/OS proxy so Dust etc. work behind a corporate proxy
   // Warm the CLI binary cache at boot when a CLI provider is connected, so the session's FIRST CLI ask
