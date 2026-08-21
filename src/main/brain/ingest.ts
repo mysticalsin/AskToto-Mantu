@@ -58,6 +58,7 @@ import {
   writeDeal,
   listEntities,
   listMeetingExtractions,
+  removeMeetingExtraction,
   readMeetingExtraction,
   withEntityLock,
   cloneEntity,
@@ -2009,6 +2010,24 @@ export async function startRebuild(s: Settings, options: StartRebuildOptions = {
     await options.onFinished?.()
   }, { allowSourceRefresh: true })
   return { queued: r.queued }
+}
+
+/**
+ * MQA-230: the provider-free half of deleting ONE meeting. The deferred source refresh below re-derives
+ * the entity files, but it no-ops for as long as no provider is usable — while the deleted meeting's own
+ * extraction JSON (verbatim quotes, commitments, numeric facts) and its ledger row need no provider to
+ * remove. Erase those NOW, synchronously with the transcript unlink, so the most sensitive derived
+ * artifact never outlives the file the user was told is gone. Entity-file residue attributed to this
+ * meeting remains until the refresh runs; brainStatus.cleanupPending makes that wait visible.
+ */
+export async function exciseDeletedMeeting(s: Settings, file: string): Promise<{ gone: boolean }> {
+  const key = basename(file)
+  const removed = removeMeetingExtraction(s, extractionSlug(key))
+  await updateIndex(s, (idx) => {
+    if (idx.ingested[key]) delete idx.ingested[key]
+    idx.revision += 1
+  })
+  return removed
 }
 
 /** Persisted source edits/deletions are replayed as a clean rebuild when a provider is ready. */

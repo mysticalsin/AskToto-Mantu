@@ -1,4 +1,5 @@
 import { readFile, readdir, stat, unlink, writeFile } from 'node:fs/promises'
+import { exciseDeletedMeeting } from './brain/ingest'
 import { join, basename } from 'node:path'
 import { resolveMeetingsFolder, decodeSaved, isEncryptedFile, writeSaved, formatTranscript, DEBRIEF_HEADING } from './transcripts'
 import { getSettings } from './store'
@@ -823,7 +824,14 @@ export async function sweepExpiredMeetings(retentionDays: number): Promise<{ del
     const t = new Date(`${y}-${mo}-${d}T${h}:${mi}:${s}`).getTime()
     if (!Number.isFinite(t) || t >= cutoff) continue
     const r = await deleteMeeting(file)
-    if (r.ok) deleted++
+    if (r.ok) {
+      deleted++
+      // MQA-230: same provider-free excise the interactive delete performs — the expired meeting's own
+      // extraction JSON + ledger row must not wait for a source refresh that needs a usable provider.
+      await exciseDeletedMeeting(getSettings(), file).catch(() => {
+        /* best-effort — the sweep's caller already requests the source refresh that re-derives */
+      })
+    }
   }
   return { deleted }
 }

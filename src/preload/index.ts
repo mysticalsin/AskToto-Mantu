@@ -33,6 +33,7 @@ import {
   type CalendarTodayResult,
   type RecallReadResult,
   type RecallExportPlainResult,
+  type DiagnosticsExportResult,
   type UpdateCheckResult,
   type UpdateDownloadStart,
   type RecallBackfillSpeakersResult,
@@ -196,6 +197,7 @@ const api = {
   // at-rest encryption is on.
   recallExportPlain: (file: string): Promise<RecallExportPlainResult> =>
     ipcRenderer.invoke(IPC.recallExportPlain, file),
+  diagnosticsExport: (): Promise<DiagnosticsExportResult> => ipcRenderer.invoke(IPC.diagnosticsExport),
   // title is shown in the native confirm dialog the main process pops up before deleting; optional.
   recallDelete: (file: string, title?: string): Promise<{ ok: boolean; error?: string }> =>
     ipcRenderer.invoke(IPC.recallDelete, file, title),

@@ -3932,6 +3932,39 @@ const LANGUAGE_OPTIONS = [
   'Polish', 'Arabic', 'Chinese', 'Japanese', 'Korean', 'Hindi', 'Russian', 'Turkish'
 ]
 
+/** Settings → About → Diagnostics. Nothing in this app uploads anywhere (zero telemetry, crash upload
+ *  off), so when support needs the log trail the user exports it themselves: main + audit logs, crash
+ *  dumps and the boot sentinel into a folder they choose — never meetings, the brain, or settings. */
+function SupportBundleSection(): JSX.Element {
+  const [busy, setBusy] = useState(false)
+  const [result, setResult] = useState<{ ok: boolean; path?: string; files?: number; error?: string; cancelled?: boolean } | null>(null)
+  const exportBundle = async (): Promise<void> => {
+    setBusy(true)
+    try {
+      setResult(await window.toto.diagnosticsExport())
+    } finally {
+      setBusy(false)
+    }
+  }
+  return (
+    <Section title="Diagnostics" desc="Export the app's logs for support. Never includes meetings, notes, or the knowledge graph.">
+      <div className="flex flex-col items-center gap-2">
+        <TextButton onClick={() => void exportBundle()} disabled={busy}>
+          {busy ? 'Exporting…' : 'Export diagnostics bundle'}
+        </TextButton>
+        {result?.ok && (
+          <span className="text-[12px] text-[color:var(--cl-muted-foreground)]">
+            Exported {result.files} file{result.files === 1 ? '' : 's'} to {result.path}
+          </span>
+        )}
+        {result && !result.ok && !result.cancelled && (
+          <span className="text-[12px] text-[var(--color-danger)]">{result.error}</span>
+        )}
+      </div>
+    </Section>
+  )
+}
+
 /** Settings → About → Updates. electron-updater's silent flow still auto-installs where the platform
  *  supports it (it then shows the UpdateReadyToast); this row exists so EVERY build — including
  *  unsigned macOS ones that cannot auto-install — can still DISCOVER that a newer version was
@@ -5449,7 +5482,7 @@ export function Settings({
                   desc="On-device performance and quality from your local audit log. Never leaves this device."
                   icon={FileSearch}
                 >
-                  <DiagnosticsSection />
+                  <SupportBundleSection />
                 </Section>
               </div>
             )}
@@ -5649,6 +5682,7 @@ export function Settings({
                     moved to Privacy. About is the story — plus the update check, which lives here so
                     every build (including ones that can't auto-install) can still discover a release. */}
                 <UpdatesSection />
+                <DiagnosticsSection />
                 <Section title="Why “Métis”" desc="The name is the mission." icon={Sparkles}>
                   <div className="flex flex-col items-center gap-2 pb-1 text-center">
                     <MetisMark size={76} />

@@ -1391,6 +1391,16 @@ export function BrainView({
             </div>
           )}
 
+          {/* MQA-230: a deleted meeting's transcript + extraction are removed synchronously, but items
+              attributed to it inside entity files wait on the next source refresh (needs a usable
+              provider). Say so — a silent wait reads as a completed delete. */}
+          {status?.cleanupPending && (
+            <div className="rounded-xl border border-[var(--color-hair-soft)] bg-white/[0.03] px-3 py-2 text-[11px] text-[color:var(--color-ink-2)]">
+              Cleanup after a deleted meeting is pending — references to it are removed automatically the
+              next time indexing runs.
+            </div>
+          )}
+
           {/* Lint warnings — contradictions the ingest refused to auto-resolve (the replay-failure notice
               is shown in the banner above, so it's filtered out here to avoid duplication + being cut off). */}
           {(() => {

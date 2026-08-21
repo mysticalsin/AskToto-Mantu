@@ -123,6 +123,9 @@ export const IPC = {
   recallSetCrmPushed: 'recall:set-crm-pushed',
   recallBackfillSpeakers: 'recall:backfillSpeakers',
   recallDeleteAll: 'recall:deleteAll',
+  // Support diagnosability: copy the log trail (main + audit + crash dumps + boot sentinel) into a
+  // user-chosen folder — the ONLY way that data reaches support, since nothing uploads by design.
+  diagnosticsExport: 'diagnostics:export',
   debriefSave: 'debrief:save',
   brainCommitmentSettle: 'brain:commitmentSettle',
   brainSetDealOutcome: 'brain:setDealOutcome',
@@ -1622,6 +1625,16 @@ export interface UpdateDownloadStart {
 /** Result of recall:export-plain — a user-initiated decrypted markdown copy of one saved meeting, so
  *  external tools (Claude local ingesting into the second brain, an email, an archive) can read it even
  *  when at-rest encryption is on. Always explicit per meeting; never a bulk decrypt. */
+export interface DiagnosticsExportResult {
+  ok: boolean
+  /** Folder the bundle was written to. */
+  path?: string
+  /** How many files were copied. */
+  files?: number
+  cancelled?: boolean
+  error?: string
+}
+
 export interface RecallExportPlainResult {
   ok: boolean
   /** Absolute path the copy was written to (absent when the user cancelled the save dialog). */

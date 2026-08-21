@@ -72,3 +72,43 @@ describe('MQA-170 — the graph purge covers the runner directory and only audit
     expect(edge).toMatch(/if \(!wasEncrypted && next\.encryptTranscripts && purgeGraphArtifacts\(\)\)/)
   })
 })
+
+describe('MQA-230 — single-meeting delete erases its derived data without waiting for a provider', () => {
+  const singleDelete = (): string => sliceBetween('ipcMain.handle(IPC.recallDelete,', '// Recall rename:')
+
+  it('excises the extraction + ledger row synchronously, before the deferred refresh', () => {
+    // The deferred source refresh no-ops for as long as no provider is usable, so the meeting's own
+    // extraction JSON (verbatim quotes, commitments) used to outlive the transcript indefinitely.
+    const body = singleDelete()
+    const excise = body.indexOf('exciseDeletedMeeting(getSettings(), safeName)')
+    const refresh = body.indexOf('requestSourceRefresh(getSettings())')
+    expect(excise, 'recallDelete must call exciseDeletedMeeting').toBeGreaterThan(-1)
+    expect(refresh, 'the deferred refresh stays (entity residue still re-derives)').toBeGreaterThan(-1)
+    expect(excise, 'excise runs BEFORE the refresh request').toBeLessThan(refresh)
+  })
+
+  it('a locked extraction file is logged, never silently ignored and never a failed delete', () => {
+    const body = singleDelete()
+    expect(body).toMatch(/if \(!gone\) mainLog\.warn/)
+    expect(body).toMatch(/\.catch\(\(error\) => \{[\s\S]*?excise failed for a deleted meeting/)
+  })
+
+  it('exciseDeletedMeeting removes the extraction file and the index ledger row', () => {
+    const ingestSrc = readFileSync(join(__dirname, 'brain', 'ingest.ts'), 'utf8')
+    const start = ingestSrc.indexOf('export async function exciseDeletedMeeting')
+    expect(start).toBeGreaterThan(-1)
+    const body = ingestSrc.slice(start, start + 600)
+    expect(body).toMatch(/removeMeetingExtraction\(s, extractionSlug\(key\)\)/)
+    expect(body).toMatch(/delete idx\.ingested\[key\]/)
+    expect(body).toMatch(/idx\.revision \+= 1/)
+  })
+
+  it('the pending entity residue is visible, not silent: brainStatus carries cleanupPending', () => {
+    const status = sliceBetween('ipcMain.handle(IPC.brainStatus', 'ipcMain.handle(IPC.brainRead')
+    expect(status).toMatch(/cleanupPending: idx\.sourceRefreshRequested === true/)
+  })
+
+  it('the confirm dialog now names the extracted knowledge it deletes', () => {
+    expect(singleDelete()).toMatch(/its extracted knowledge from this device/)
+  })
+})
