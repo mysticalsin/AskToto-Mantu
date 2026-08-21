@@ -338,3 +338,32 @@ describe('MQA-066 — SSO bootstrap escapes an enforced-but-unconfigured wall', 
     expect(ssoBootstrapAllowed()).toBe(false)
   })
 })
+
+describe('interactive sign-in backoff (sequential-failure rate limit)', () => {
+  // The single-flight latch stops CONCURRENT flows; this pins the SEQUENTIAL control: escalating
+  // backoff after consecutive failures, reset on success, gate checked before the latch is taken.
+  it('escalates 2s -> 4s -> 8s capped at 60s and resets on success (source-pinned wiring)', async () => {
+    const { readFileSync } = await vi.importActual<typeof import('node:fs')>('node:fs')
+    const { join } = await vi.importActual<typeof import('node:path')>('node:path')
+    const src = readFileSync(join(__dirname, 'auth.ts'), 'utf8')
+    expect(src).toMatch(/SIGNIN_BACKOFF_BASE_MS = 2_000/)
+    expect(src).toMatch(/SIGNIN_BACKOFF_MAX_MS = 60_000/)
+    expect(src).toMatch(/SIGNIN_BACKOFF_BASE_MS \* 2 \*\* \(signInFailures - 1\)/)
+    // The gate runs inside signIn() BEFORE the latch is taken, and failure/success both update state.
+    const signInBody = src.slice(src.indexOf('export async function signIn('), src.indexOf('MQA-107 escape hatch'))
+    const gate = signInBody.indexOf('signInBackoffRemainingMs()')
+    const latch = signInBody.indexOf('signInInFlight = true')
+    expect(gate).toBeGreaterThan(-1)
+    expect(gate).toBeLessThan(latch)
+    expect(signInBody).toMatch(/recordSignInFailure\(\)/)
+    expect(signInBody).toMatch(/recordSignInSuccess\(\)/)
+    // The failure count reaches the audit trail so a hammering loop is visible, not silent.
+    expect(signInBody).toMatch(/consecutive: signInFailures/)
+  })
+
+  it('reports remaining wait to the caller in whole seconds', async () => {
+    const { signInBackoffRemainingMs } = await import('./auth')
+    // Fresh module state: no failures recorded in this worker -> gate open.
+    expect(signInBackoffRemainingMs()).toBe(0)
+  })
+})

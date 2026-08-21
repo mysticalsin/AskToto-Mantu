@@ -393,6 +393,34 @@ let loaded = false
 // "rate limit auth endpoints" discipline applied at the main-process trust boundary, not the renderer.
 let signInInFlight = false
 
+// Sequential-failure backoff on interactive sign-in. The single-flight latch above stops CONCURRENT
+// flows; nothing stopped a loop of back-to-back failed attempts (a stuck renderer, a scripted local
+// abuser) from hammering Entra and the loopback listener — security.md's "rate limit all auth
+// endpoints" floor relied entirely on Entra's own throttling. Escalates 2s -> 4s -> 8s ... capped at
+// 60s after each consecutive failure, resets on any success. In-memory on purpose (mirrors
+// provider-health.ts): a restart clears it, which is fine — the control is about runaway loops, not
+// durable lockout of the machine's only user.
+const SIGNIN_BACKOFF_BASE_MS = 2_000
+const SIGNIN_BACKOFF_MAX_MS = 60_000
+let signInFailures = 0
+let signInBlockedUntil = 0
+
+/** Pure-ish gate, exported for tests: how long (ms) until the next interactive attempt is allowed. */
+export function signInBackoffRemainingMs(now = Date.now()): number {
+  return Math.max(0, signInBlockedUntil - now)
+}
+
+function recordSignInFailure(now = Date.now()): void {
+  signInFailures += 1
+  const delay = Math.min(SIGNIN_BACKOFF_MAX_MS, SIGNIN_BACKOFF_BASE_MS * 2 ** (signInFailures - 1))
+  signInBlockedUntil = now + delay
+}
+
+function recordSignInSuccess(): void {
+  signInFailures = 0
+  signInBlockedUntil = 0
+}
+
 // Thread the signed-in user's identity into every audit record (auth.ts is the source of truth for who's
 // signed in). Registered once at module load; the callback reads the live `session` binding lazily so it
 // always reflects the current signed-in user (or none) at the time each audit line is written.
@@ -715,6 +743,14 @@ export async function signIn(): Promise<SignInResult> {
   // Reject a second interactive flow while one is already running (see signInInFlight). Returning
   // ok:false surfaces a clear message on the wall/Settings rather than silently opening a 2nd browser.
   if (signInInFlight) return { ok: false, configured: true, error: 'A sign-in is already in progress.' }
+  const waitMs = signInBackoffRemainingMs()
+  if (waitMs > 0) {
+    return {
+      ok: false,
+      configured: true,
+      error: `Too many failed sign-in attempts. Try again in ${Math.ceil(waitMs / 1000)}s.`
+    }
+  }
   signInInFlight = true
   try {
     // PCA is wired to the encrypted on-disk token cache (makePca) so the Graph token survives for later
@@ -849,9 +885,11 @@ export async function signIn(): Promise<SignInResult> {
     writeLkgConfig(cfg)
     writeStickyConfigured()
     auditLog('auth.signin', { domain: cfg.allowedDomain })
+    recordSignInSuccess()
     return { ok: true, configured: true, email }
   } catch (e) {
-    auditLog('auth.signin_failed', { reason: coarseSignInFailure(e) })
+    recordSignInFailure()
+    auditLog('auth.signin_failed', { reason: coarseSignInFailure(e), consecutive: signInFailures })
     return { ok: false, configured: true, error: e instanceof Error ? e.message : String(e) }
   } finally {
     // Always release the single-flight latch — success, denial, timeout, or throw — so a failed attempt
