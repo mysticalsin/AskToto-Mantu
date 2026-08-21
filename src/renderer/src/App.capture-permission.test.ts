@@ -84,26 +84,24 @@ describe('screen-capture permission recovery', () => {
   })
 })
 
-describe('MQA-236 (part 2) — nothing captures a frame without a screen gesture', () => {
-  const bar = readFileSync(join(__dirname, 'components', 'Bar.tsx'), 'utf8').replace(/
-/g, '
-')
-  const mainSrc = readFileSync(join(__dirname, '..', '..', 'main', 'index.ts'), 'utf8').replace(/
-/g, '
-')
+describe('MQA-236 (part 2) - nothing captures a frame without a screen gesture', () => {
+  const CRLF = new RegExp(String.fromCharCode(13) + String.fromCharCode(10), 'g')
+  const bar = readFileSync(join(__dirname, 'components', 'Bar.tsx'), 'utf8').replace(CRLF, String.fromCharCode(10))
+  const mainSrc = readFileSync(join(__dirname, '..', '..', 'main', 'index.ts'), 'utf8').replace(CRLF, String.fromCharCode(10))
 
   it('focusing the ask input never pre-warms capture (prewarmCapture takes a REAL frame)', () => {
     expect(bar).not.toMatch(/onFocus=\{[^}]*prewarmCapture/)
   })
 
-  it('the warm rides hovering the Capture tool — the one place intent is signalled before the click', () => {
+  it('the warm rides hovering the Capture tool - the one place intent is signalled before the click', () => {
     expect(bar).toMatch(/onMouseEnter=\{\(\) => \{ if \(props\.canPrewarm\) void window\.toto\.prewarmCapture\(\) \}\}/)
   })
 
   it('signing in never captures a frame either', () => {
     // The old post-sign-in prewarmCapture() call took a screenshot the instant auth completed.
-    const signin = mainSrc.slice(mainSrc.indexOf('MQA-236: no prewarmCapture() here anymore') - 200, mainSrc.indexOf('MQA-236: no prewarmCapture() here anymore') + 400)
-    expect(signin).toBeTruthy()
+    const at = mainSrc.indexOf('MQA-236: no prewarmCapture() here anymore')
+    expect(at).toBeGreaterThan(-1)
+    const signin = mainSrc.slice(at - 200, at + 400)
     expect(signin).not.toMatch(/^\s*prewarmCapture\(\)/m)
   })
 })
