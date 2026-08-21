@@ -803,19 +803,22 @@ async function groupCloudflare() {
       return { walk: r.providers }
     })
 
-    await check(g, 'cloudflare serves SCREEN asks too (its default model is multimodal)', async () => {
-      // MQA-212. Reading visionReady proves nothing here: index.ts ORs in localFallbackReady, which this
-      // suite already asserts true, so the flag is satisfied by the on-device floor even when cloudflare
-      // cannot see — it stayed green in the pre-fix state whose measured walk was ["local","local"].
-      // Send a real screen-ask and read the walk instead.
+    await check(g, 'a SCREEN ask goes on-device, never to a gateway that cannot carry an image', async () => {
+      // MQA-227 (supersedes MQA-212). Cloudflare's OpenAI-compatible endpoint rejects every image_url
+      // shape with code 6004 — a transport limit, not a model one — so PROVIDERS.cloudflare.vision is
+      // false and a screen-ask must route to the on-device model. Asserting the WALK, because the old
+      // check read `visionReady`, which localFallbackReady satisfies on its own: it could not fail.
       const r = await ask({ id: uid('cf-vision'), mode: 'vision', prompt: 'What is on screen?', image: TINY_JPEG_B64 })
       assert(
-        r.providers[0] === 'cloudflare',
-        `screen-ask did not reach cloudflare first, walk was ${JSON.stringify(r.providers)}`
+        !r.providers.includes('cloudflare'),
+        `a screen-ask reached cloudflare, which cannot accept an image: ${JSON.stringify(r.providers)}`
+      )
+      assert(
+        r.providers.includes('local'),
+        `screen-ask did not reach the on-device model, walk was ${JSON.stringify(r.providers)}`
       )
       assert(r.text.trim().length > 0, 'no text streamed back for the screen-ask')
-      const s = await settings()
-      return { walk: r.providers, model: s.providerModels?.cloudflare ?? '(default)' }
+      return { walk: r.providers }
     })
 
     // Every way the hop can fail. None may dead-end or hang: the user keeps getting answers.
