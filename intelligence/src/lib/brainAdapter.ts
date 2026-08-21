@@ -153,8 +153,18 @@ function categorize(text: string): Category {
 }
 
 /** Normalizes a brain commitment (ledger entry, loose `status: string`) into the display shape's strict
- *  status union — an unrecognized/legacy status defaults to 'open', mirroring LedgerCommitmentSchema's
- *  own default and the same fallback goingCold.ts already applies to missing statuses. */
+ *  status union.
+ *
+ *  Callers MUST drop `status === 'rejected'` rows before calling this. 'rejected' is a human override for
+ *  a promise that was never actually made (LedgerCommitmentSchema, src/shared/brain.ts) — its schema
+ *  comment says every `status === 'open'` filter excludes it for free, which is true of every surface
+ *  that FILTERS on open and exactly false here, because this function MAPS anything unrecognized TO
+ *  'open'. Left unfiltered, a promise the user struck out in Métis came back as a live obligation on the
+ *  dashboard they make decisions from, counted in the open tile, the aging buckets and the attention
+ *  score, while goingCold.ts (which does filter) disagreed about the same row.
+ *
+ *  With rejected rows excluded at both call sites, the fallback below only ever catches a genuinely
+ *  legacy status with no value, mirroring LedgerCommitmentSchema's own default. */
 function toCommitment(c: BrainCommitment): Commitment {
   return {
     text: c.text,
@@ -210,7 +220,7 @@ function toDeal(d: BrainDeal, accountBySlug: Map<string, BrainAccount>, meetings
     velocity: d.velocity,
     claims,
     call_grades,
-    commitments: (d.commitments ?? []).map(toCommitment),
+    commitments: (d.commitments ?? []).filter((c) => c.status !== 'rejected').map(toCommitment),
     meetings: d.meetings,
     field_state: fieldState([
       ['stage', d.stage_provenance],
@@ -528,7 +538,7 @@ export function brainToDashboard(b: BrainRead): DashboardData {
     role: p.role,
     account: p.account,
     stance_trail: p.stance_trail ?? [],
-    commitments: (p.commitments ?? []).map(toCommitment),
+    commitments: (p.commitments ?? []).filter((c) => c.status !== 'rejected').map(toCommitment),
     meetings: p.meetings ?? [],
     field_state: fieldState([
       ['role', p.role_provenance],

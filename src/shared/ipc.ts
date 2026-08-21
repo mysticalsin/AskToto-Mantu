@@ -728,9 +728,14 @@ export const McpConnectionSchema = z.object({
 export type McpConnection = z.infer<typeof McpConnectionSchema>
 
 export const BaseSettingsSchema = z.object({
-  // Default provider: NVIDIA NIM (Tony, 2026-08-14) — fast, generous free tier, hedge-raced against a
-  // configured backup (resilience.hedge) so a slow NIM response never costs more than HEDGE_DELAY_MS.
-  provider: ProviderIdSchema.default('nvidia'),
+  // Default provider: Cloudflare (Tony, 2026-08-21), replacing NVIDIA NIM (2026-08-14). One endpoint the
+  // operator deploys reaches Workers AI, OpenAI, Anthropic and Google on a single account credential, so
+  // a fleet is configured once rather than per vendor per user. The build ships the operator's Worker URL
+  // as cloudflareBaseUrl's default (a URL is not a secret); the METIS_PROXY_KEY never ships and is the one
+  // string a user pastes. Until that key exists the provider is simply not ready, and the walk behaves as
+  // it always has: an explicitly enabled on-device model short-circuits first (localLlm.useFor), then
+  // Cloudflare, then NVIDIA NIM, then whatever keys the user added themselves.
+  provider: ProviderIdSchema.default('cloudflare'),
   // CLI-vs-API priority. 'api' (default) keeps the explicitly-chosen `provider` as primary. 'cli' makes a
   // connected CLI integration (Claude/Codex) the primary so the user's local subscription is used before
   // any metered API key, and prefers CLI on failover. With no CLI connected, 'cli' behaves like 'api'.
@@ -1234,7 +1239,7 @@ export const DUST_BASE_AGENT_ID = 'vJxYHvTRBT' // Dust agent "Métis" — defaul
 export const DUST_SPOTLIGHT_REF_AGENT_ID = 'GOr913Zr5V' // Dust agent "Spotlight Ref"
 
 export const DEFAULT_SETTINGS: Settings = {
-  provider: 'nvidia',
+  provider: 'cloudflare', // keep in lockstep with BaseSettingsSchema's ProviderIdSchema default above
   providerPriority: 'api',
   providerModels: { dust: DUST_BASE_AGENT_ID },
   providerModelsThinking: {},

@@ -438,3 +438,64 @@ describe('brainToDashboard — going cold (single-threaded structural risk, sani
     expect(acmeExpansionNode.single_threaded).toBe(false)
   })
 })
+
+describe('MQA-220 — a rejected commitment never reaches the dashboard', () => {
+  // 'rejected' is a human override: the user opened the record in Métis and struck out a promise the
+  // extractor misheard. The adapter used to map every unrecognized status to 'open', so that struck-out
+  // promise came back as a live obligation here — counted in the open tile, aged into the 90+ day
+  // bucket, and scored into Needs attention — while goingCold.ts (which filters on 'open') disagreed
+  // about the very same row. Métis said gone, Intelligence said still owed.
+  const withRejected: BrainRead = {
+    ...FIXTURE,
+    deals: FIXTURE.deals.map((d, i) =>
+      i === 0
+        ? {
+            ...d,
+            commitments: [
+              ...(d.commitments ?? []),
+              { text: 'Never actually promised this', by: 'you', due_hint: '', quote: '', confidence: 'EXTRACTED', meeting: 'm2.md', date: '2026-02-02', status: 'rejected' }
+            ]
+          }
+        : d
+    ),
+    people: FIXTURE.people.map((p, i) =>
+      i === 0
+        ? {
+            ...p,
+            commitments: [
+              ...(p.commitments ?? []),
+              { text: 'Misheard person promise', by: 'Jane Doe', due_hint: '', quote: '', meeting: 'm2.md', date: '2026-02-02', status: 'rejected' }
+            ]
+          }
+        : p
+    )
+  }
+  const adapted = brainToDashboard(withRejected)
+
+  it('drops it from the deal ledger', () => {
+    const texts = adapted.deals.flatMap((d) => d.commitments.map((c) => c.text))
+    expect(texts).not.toContain('Never actually promised this')
+    // The real rows on the same deal must survive — this is a filter, not a purge.
+    expect(texts).toContain('Send updated SOW')
+  })
+
+  it('drops it from the person ledger', () => {
+    const texts = adapted.people.flatMap((p) => p.commitments.map((c) => c.text))
+    expect(texts).not.toContain('Misheard person promise')
+    expect(texts).toContain('Loop in procurement')
+  })
+
+  it('never relabels it as open, which is how it used to come back', () => {
+    const all = [
+      ...adapted.deals.flatMap((d) => d.commitments),
+      ...adapted.people.flatMap((p) => p.commitments)
+    ]
+    expect(all.filter((c) => c.status === 'open').map((c) => c.text)).not.toContain('Never actually promised this')
+    // Same open count as the untouched fixture: adding a rejected row must move no number on the page.
+    const baseline = [
+      ...dashboard.deals.flatMap((d) => d.commitments),
+      ...dashboard.people.flatMap((p) => p.commitments)
+    ].filter((c) => c.status === 'open').length
+    expect(all.filter((c) => c.status === 'open').length).toBe(baseline)
+  })
+})
