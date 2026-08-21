@@ -53,7 +53,6 @@ const KNOWN_EXCEPTIONS = new Set<string>([
   'dust.setup.timeout',
   // No transcript-import feature exists in src/main at all (grepped for any import-adjacent transcript
   // code) — this event predates or outlived a feature that is no longer in the tree.
-  'transcript.imported',
   // index.ts's own comments say meeting-detect was removed from the app; this event is its last trace.
   'meeting.detect.degraded'
 ])

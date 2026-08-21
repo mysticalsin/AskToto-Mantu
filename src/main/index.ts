@@ -224,7 +224,10 @@ import {
   parakeetAddonError
 } from './parakeet'
 import { appleSpeechLocale, appleSpeechTranscribe } from './apple-speech'
-import { resetLanguageFollow as resetImportLanguageFollow, whisperImportTranscribe } from './whisper-import'
+import { resetLanguageFollow as resetImportLanguageFollow, whisperImportTranscribe, stopWhisperHost } from './whisper-import'
+import { buildPolishPrompt, parsePolishResponse, polishBatches, type PolishLine } from './polish'
+import { detectLanguage as detectTextLanguage } from '@shared/lang-id'
+import type { TranscriptLine } from '@shared/ipc'
 import { pickAudioFile, consumePickedAudio } from './import-audio'
 import { ImportJobManager, type ImportJob } from './import-jobs'
 import { EncryptedImportJobStore } from './import-job-store'
@@ -669,7 +672,10 @@ async function startImportDecoder(job: ImportJob): Promise<void> {
       }
     }
     if (ffmpegDecoders.size) throw new Error('Another audio decoder is already active.')
-    const decoder = startFfmpegDecode(ffmpeg, job.sourcePath, job.cursor, {
+    // vad-v1 jobs: cursor counts WINDOWS (phase 2); a resume re-decodes the whole file (seconds of
+    // ffmpeg) and the deterministic re-segmentation + window cursor skip the already-transcribed part.
+    const skipThrough = job.pipeline === 'vad-v1' ? 0 : job.cursor
+    const decoder = startFfmpegDecode(ffmpeg, job.sourcePath, skipThrough, {
       onChunk: async (seq, samples) => {
         await importJobs?.acceptDecodedChunk(job.jobId, seq, 0, samples)
       },
@@ -773,6 +779,105 @@ function importedTranscriptText(lines: ImportJob['lines']): string {
   return lines.map((line) => `SPEAKER: ${line.text}`).join('\n')
 }
 
+/** Text-side language name for one probe window's Parakeet decode, or null when inconclusive. */
+function detectImportLanguage(text: string): string | null {
+  return detectTextLanguage(text).lang ?? null
+}
+
+/**
+ * MQA-235: the Plaud-style polish pass over a finished import's lines — stutter/punctuation cleanup,
+ * never a paraphrase, per-line, order-preserving (src/main/polish.ts owns the prompt + strict parsing).
+ *
+ * Redaction rule, decided not defaulted: with `redactSensitive` ON, a cloud polish would ship the raw
+ * transcript off-device, and redacting first would write REDACTED text into the saved transcript (the
+ * polish output replaces the lines — unlike the recap, which only derives from them). So under
+ * redaction the pass runs on-device or not at all. Fail-open everywhere: any fault keeps the raw lines.
+ */
+async function runImportPolish(lines: TranscriptLine[]): Promise<TranscriptLine[]> {
+  const settings = getSettings()
+  const allowed = getAllowedProviders()
+  const localReady =
+    localEligibleFor({ mode: 'summary' }, settings, 'base', allowed) ||
+    localFallbackEligibleFor({ mode: 'summary' }, settings, 'base', allowed)
+  const cloudReady =
+    (!allowed || allowed.includes(settings.provider)) &&
+    (PROVIDERS[settings.provider]?.kind === 'cli'
+      ? !!settings.cliConnected[settings.provider]
+      : getApiKey(settings.provider).length > 0) &&
+    (!requiresUserBaseUrl(settings.provider) || !!providerBaseUrl(settings.provider, settings))
+  const candidates: ProviderId[] = settings.redactSensitive
+    ? localReady
+      ? (['local'] as ProviderId[])
+      : []
+    : [
+        ...(cloudReady ? [settings.provider] : []),
+        ...(localReady ? (['local'] as ProviderId[]) : [])
+      ]
+  if (!candidates.length) return lines
+
+  const out = [...lines]
+  const asPolish = (l: TranscriptLine): PolishLine => ({
+    speaker: l.name || l.speaker,
+    t: new Date(l.t).toISOString().slice(11, 19),
+    text: l.text
+  })
+  // polishBatches slices are contiguous and ordered — track the running offset directly.
+  let offset = 0
+  for (const batch of polishBatches(lines.map(asPolish))) {
+    const prompt = buildPolishPrompt(batch)
+    let cleaned: string[] | null = null
+    for (const provider of candidates) {
+      const def = PROVIDERS[provider]
+      const local = provider === 'local'
+      const model = local
+        ? settings.localLlm.modelId
+        : applyInteractiveGuardrail(
+            provider,
+            'base',
+            resolveModelTier(provider, settings.providerModels, settings.providerModelsThinking, 'base', settings.providerModelsDeep) || def.defaultModel
+          )
+      try {
+        const raw = await new Promise<string>((resolvePolish, rejectPolish) => {
+          let text = ''
+          createStream({
+            providerId: provider,
+            kind: def.kind,
+            apiKey: local ? '' : getApiKey(provider),
+            baseURL: local ? undefined : providerBaseUrl(provider, settings),
+            workspaceId: settings.dustWorkspaceId,
+            model,
+            temperature: 0,
+            idleMs: 120_000,
+            freshConversation: true,
+            system:
+              'You clean up raw speech-to-text transcript lines. Follow the instructions in the user message exactly and output only the JSON array.',
+            req: { id: `import-polish-${Date.now()}`, mode: 'summary', prompt, history: [] },
+            handlers: {
+              onDelta: (delta) => {
+                text += delta
+              },
+              onDone: () => resolvePolish(text),
+              onError: (error) => rejectPolish(new Error(String(error)))
+            }
+          })
+        })
+        cleaned = parsePolishResponse(raw, batch.length)
+        if (cleaned) break
+      } catch {
+        /* try the next candidate */
+      }
+    }
+    if (!cleaned) return lines // one unparseable batch = polish off for the whole meeting, raw kept
+    for (let i = 0; i < batch.length; i++) {
+      const next = cleaned[i]?.trim()
+      if (next) out[offset + i] = { ...out[offset + i], text: next }
+    }
+    offset += batch.length
+  }
+  auditLog('transcript.imported', { polished: true, lines: out.length })
+  return out
+}
+
 async function runImportedRecap(job: ImportJob): Promise<string | undefined> {
   const settings = getSettings()
   const allowed = getAllowedProviders()
@@ -848,7 +953,9 @@ async function runImportedRecap(job: ImportJob): Promise<string | undefined> {
           freshConversation: true,
           system:
             buildSystem(req, personaMode, settings.profile, settings.modePrompts, settings.contextDocs[personaMode] || [], settings.outputLanguage, settings.summaryLanguage, settings.systemPrompt) +
-            '\n\nThis is an imported recording with no speaker diarization. Do not attribute statements to YOU or THEM.',
+            (job.lines.some((l) => l.name)
+              ? '\n\nThis is an imported recording. Lines carry on-device voice-matched speaker labels (e.g. "Speaker 1" or an enrolled name) — attribute statements to those labels, never to YOU or THEM.'
+              : '\n\nThis is an imported recording with no speaker diarization. Do not attribute statements to YOU or THEM.'),
           req,
           handlers: {
             onDelta: (delta) => {
@@ -890,9 +997,12 @@ function initializeImportJobs(): void {
       // One reset per job, at decode start — a new import must never inherit the previous one's
       // converged language (same reasoning as the live worker's session-start resetFollow).
       resetImportLanguageFollow(getSettings().asrLanguage)
+      // MQA-235: fresh diarization session per recording — cluster labels ("Speaker 1") are meeting-
+      // scoped, never carried across imports.
+      getSpeakerId().resetSession()
       return startImportDecoder(job)
     },
-    transcribe: async (samples) => {
+    transcribe: async (samples, opts) => {
       const engine = getSettings().asrEngine
       if (engine === 'parakeet') {
         await ensureParakeetModel()
@@ -909,7 +1019,12 @@ function initializeImportJobs(): void {
         // decode of that same first window, before whisper-base's own unreliable per-window auto-detect
         // gets a chance to hallucinate a wrong one. Wired here rather than inside whisper-import.ts so
         // that module stays decoupled from parakeet.ts — a plain callback, easy to fake in tests.
-        return await whisperImportTranscribe(samples, getSettings().asrLanguage, async (probeSamples) => {
+        // MQA-235: the manager's whole-recording majority vote outranks both the per-window guess and
+        // the single window-0 probe (a greeting in the other language mis-pinned a whole meeting on
+        // 2026-08-05). The user's explicit Settings pin still outranks the vote.
+        const userPin = getSettings().asrLanguage
+        const language = userPin !== 'auto' ? userPin : (opts?.language ?? 'auto')
+        return await whisperImportTranscribe(samples, language, async (probeSamples) => {
           await ensureParakeetModel()
           return parakeetTranscribe(probeSamples)
         })
@@ -924,6 +1039,25 @@ function initializeImportJobs(): void {
         return parakeetTranscribe(samples)
       }
     },
+    // MQA-235: one language-ID vote sample — Parakeet decodes the window (language-agnostic), text-side
+    // lang-id classifies it. Same signal probeLanguage uses, but the manager votes across windows spread
+    // over the whole recording instead of trusting window 0.
+    probeLanguageName: async (samples) => {
+      try {
+        await ensureParakeetModel()
+        const text = await parakeetTranscribe(samples)
+        if (text.trim().split(/\s+/).filter(Boolean).length < 4) return null
+        return detectImportLanguage(text)
+      } catch {
+        return null
+      }
+    },
+    // MQA-235: diarize one utterance window — enrolled profile name or session cluster label. Same
+    // CAM++ extractor the live path uses; a fresh session is reset per job in `decode` above.
+    speakerFor: async (samples) => getSpeakerId().labelWindow(samples)?.name ?? null,
+    polish: (lines) => runImportPolish(lines),
+    // Free the whisper helper's model memory between imports; the next job spawns a fresh child.
+    onIdle: () => stopWhisperHost(),
     saveMeeting: (meeting) => saveMeeting(getSettings(), meeting),
     deleteMeeting,
     enqueueIngest,
