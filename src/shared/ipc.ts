@@ -884,8 +884,10 @@ export const BaseSettingsSchema = z.object({
   // fails, so the old global accelerator stayed bound with no error shown.
   shortcuts: z.record(z.string(), z.string()).default({}),
   autoSuggest: z.boolean().default(true),
-  // Cluely "Uses Screen": when on (and the active provider is vision-capable), a hero ask captures the
-  // screen and answers about it. Default on. Gated by the derived `visionReady` flag in PublicSettings.
+  // Screen asks: when on (and a vision-capable provider exists), the EXPLICIT screen paths — Capture
+  // button, its shortcut, quick actions, blank Enter — capture the screen and answer about it. Default
+  // on. MQA-236: a TYPED question never captures regardless of this flag; screen intent is always an
+  // explicit gesture, never inferred from asking a question.
   screenAsk: z.boolean().default(true),
   showLiveTranscript: z.boolean().default(false),
   meetingsFolder: z.string().default(''),
@@ -1055,11 +1057,14 @@ export const BaseSettingsSchema = z.object({
     })
     .default({ preferFreeOnExhaustion: true, budgetPreempt: true, hedge: true }),
   // Speaker Intelligence (docs/SPEAKER-INTELLIGENCE-PLAN.md): live "who's speaking" labels on THEM
-  // transcript lines via on-device voice embeddings (sherpa-onnx, same addon as Parakeet). Off by
-  // default — it's a beta and the embedding model must be provisioned (fetch-speaker-model.mjs).
+  // transcript lines via on-device voice embeddings (sherpa-onnx, same addon as Parakeet). ON by
+  // default since 2026-08-21 (MQA-235 / Plaud-parity work): the embedding model ships in every build
+  // (runtime-assets-manifest.json pins resources/models/speaker/embedding.onnx; check-packaged-runtime
+  // verifies it), the whole pass is on-device, and speaker-id.ts degrades to unlabeled lines when the
+  // extractor is unavailable — so the default costs nothing where it cannot work.
   speakerId: z
-    .object({ enabled: z.boolean().default(false) })
-    .default({ enabled: false }),
+    .object({ enabled: z.boolean().default(true) })
+    .default({ enabled: true }),
   // Durable "time saved" usage counters (shared/time-saved.ts). Incremented ONCE when a meeting file is
   // first written (main/store.ts recordMeetingSummarized) — a rebuild/re-index never re-counts, and this
   // survives transcriptRetentionDays deleting the meetings a live sum would need, so the lifetime figure
@@ -1336,7 +1341,7 @@ export const DEFAULT_SETTINGS: Settings = {
     useFor: { suggest: false, summary: false, vision: false },
     fallback: true
   },
-  speakerId: { enabled: false },
+  speakerId: { enabled: true },
   usageStats: { meetingsSummarized: 0, conversationMinutes: 0, firstMeetingAt: 0 },
   timeSaved: { writeupRatio: 0.2, floorMin: 5, capMin: 30 },
   tapControl: {
