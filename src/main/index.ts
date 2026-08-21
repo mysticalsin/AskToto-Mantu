@@ -3434,6 +3434,28 @@ function registerIpc(): void {
     const providerVisionOk = (p: ProviderId): boolean =>
       p === 'dust' ? dustSelectedAgentVision(s.providerModels['dust']) : PROVIDERS[p].vision
 
+    // MQA-228: the "can't read screenshots" advice must name a provider the user is actually ALLOWED to
+    // switch to. The static "Switch to Claude or GPT" wording sent org-policy users at providers the
+    // allowlist blocks — following the advice dead-ended on the approved-provider-list error. Prefer a
+    // target that is already keyed/CLI-connected (immediately actionable), else any allowed vision-capable
+    // provider; when the policy leaves none at all, say THAT instead of advising an impossible switch.
+    // 'local' is excluded as a switch target: when it was eligible, the fallback path already answered
+    // before this message could surface, so naming it here would always be advice that just failed.
+    const visionSwitchAdvice = (blocked: ProviderId): string => {
+      const candidates = (Object.keys(PROVIDERS) as ProviderId[]).filter(
+        (p) => p !== blocked && p !== 'local' && providerVisionOk(p) && (!allowed || allowed.includes(p))
+      )
+      const ready = candidates.find((p) =>
+        PROVIDERS[p].kind === 'cli' ? !!s.cliConnected[p] : getApiKey(p).length > 0
+      )
+      const target = ready ?? candidates[0]
+      if (target)
+        return `Switch to ${PROVIDERS[target].label} in Settings, or ask without a screen capture.`
+      return allowed
+        ? "Your organization's approved providers can't read screenshots — ask without a screen capture."
+        : 'Ask without a screen capture.'
+    }
+
     // Pick the next eligible keyed provider not yet tried — the waterfall target when the primary (e.g.
     // Dust) can't answer. Pure (no side effect) so the retry gate can cheaply ask "is there anywhere to
     // fall over to?" before deciding how long to keep retrying a dead primary.
@@ -3646,7 +3668,7 @@ function registerIpc(): void {
                   def.kind !== 'cli' && requiresUserBaseUrl(provider) && !baseURL
                   ? `No endpoint URL set for ${def.label}. Open Settings → Advanced and add it.`
                   : req.mode === 'vision' && !providerVisionOk(provider)
-                    ? `${def.label} can't read screenshots. Switch to Claude or GPT in Settings, or ask without a screen capture.`
+                    ? `${def.label} can't read screenshots. ${visionSwitchAdvice(provider)}`
                     : provider === 'dust' && !s.dustWorkspaceId
                       ? 'Add your Dust workspace ID in Settings → AI → Dust setup.'
                       : ''
