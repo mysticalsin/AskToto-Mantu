@@ -123,7 +123,11 @@ export interface Deal {
     // real extraction pipeline actually produces.
     grade: 'good' | 'mixed' | 'concerning' | 'not-applicable'
     note: string
-    is_client_facing: boolean
+    // true when the meeting's extraction named an account. ABSENT, not false, when it did not: the
+    // bundled model often returns a null account name (MQA-112) and the whole sidecar is nulled, so a
+    // missing account is missing attribution — never evidence the call was internal. Same contract as
+    // GraphNode.is_client_facing below, which callers already gate with `!== undefined`.
+    is_client_facing?: boolean
   }>
   commitments: Commitment[]
   // Every meeting ref this deal was tagged in, including ones extraction hasn't landed for yet — a

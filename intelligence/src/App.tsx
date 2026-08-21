@@ -108,7 +108,21 @@ function EmbedRoute() {
       </div>
     )
   }
-  return <EmbedView data={data} />
+  return (
+    <div className="min-h-screen bg-[var(--color-mantu-bg)]">
+      {/* Same rule as the full dashboard (MQA-221): the embed shows the same numbers, so it owes the
+          same disclosure when they stop updating. Compact, because that is this surface's whole point. */}
+      {stale && (
+        <div
+          className="border-b border-amber-500/30 bg-amber-500/10 px-3 py-1 text-[10px] text-amber-200"
+          role="status"
+        >
+          Last successful read — refresh failed
+        </div>
+      )}
+      <EmbedView data={data} />
+    </div>
+  )
 }
 
 export default function App() {

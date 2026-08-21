@@ -346,7 +346,9 @@ export function DealView({ data }: Props) {
                     <div className="min-w-0">
                       <div className="flex items-center gap-1.5 text-xs font-medium text-white/80">
                         {cg.label}
-                        {!cg.is_client_facing && (
+                        {/* `=== false` on purpose: undefined means the extraction never named an
+                            account, which is missing attribution, not proof of an internal call. */}
+                        {cg.is_client_facing === false && (
                           <span className="rounded-full bg-white/10 px-1.5 py-0.5 text-[9px] font-normal uppercase tracking-wide text-white/40">
                             internal
                           </span>
