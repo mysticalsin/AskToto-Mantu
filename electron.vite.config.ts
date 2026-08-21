@@ -11,7 +11,14 @@ export default defineConfig({
     // renderer can't load bytecode). This is a hardening bar, not absolute protection.
     build: {
       bytecode: true,
-      rollupOptions: { input: { index: resolve(__dirname, 'src/main/index.ts') } }
+      rollupOptions: {
+        input: {
+          index: resolve(__dirname, 'src/main/index.ts'),
+          // MQA-234: the whisper utilityProcess child. Its own entry so it never shares a chunk with
+          // main — the whole point is that transformers/onnxruntime-node load ONLY in the child.
+          'whisper-asr-host': resolve(__dirname, 'src/main/whisper-asr-host.ts')
+        }
+      }
     },
     resolve: {
       alias: { '@shared': resolve(__dirname, 'src/shared') }
