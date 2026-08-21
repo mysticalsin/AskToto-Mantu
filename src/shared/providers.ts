@@ -321,7 +321,10 @@ export const PROVIDERS: Record<ProviderId, ProviderDef> = {
     label: 'Cloudflare · AI Gateway',
     blurb: "Your company's own Cloudflare Worker — one endpoint reaching Workers AI, OpenAI, Anthropic and Google.",
     kind: 'openai',
-    tier: 'more',
+    // 'featured', and the default provider (ipc.ts DEFAULT_SETTINGS). It was 'more' while it was an
+    // expert option; it is now the route this product is configured around, so burying it behind the
+    // collapsed "Experience: more models" drawer would hide the one card most installs need to touch.
+    tier: 'featured',
     // Deliberately EMPTY. Cloudflare's REST endpoint is account-scoped
     // (POST /client/v4/accounts/{ACCOUNT_ID}/ai/v1/chat/completions) and authenticates with a Cloudflare
     // ACCOUNT token — a secret that must never ship inside the app, because `npx asar extract` recovers

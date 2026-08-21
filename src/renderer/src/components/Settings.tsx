@@ -923,9 +923,10 @@ function AiSection({
   // Métis Local (kind === 'local') has its own dedicated LocalAiSection card, rendered separately below —
   // exclude all three from the generic tiles grid. The remainder splits by `tier`: 'featured' (GPT, Grok,
   // Kimi, Gemini) gets its own always-visible grid right under Anthropic's card, matching the CLI
-  // cards' prominence; 'more' (NVIDIA, DeepSeek, Qwen, MiniMax, OpenRouter, Groq, Mistral, Cloudflare,
-  // custom) stays tucked in the collapsed "Experience: more models" section. Cloudflare sits in 'more'
-  // because it only works once an operator has deployed the Worker and handed out a METIS_PROXY_KEY.
+  // cards' prominence; 'more' (Qwen, OpenRouter, Groq, Mistral, Grok, Gemini, Dust, custom) stays tucked
+  // in the collapsed "Experience: more models" section. Cloudflare is 'featured' and is the default
+  // provider: it is the one card most installs must touch, because the Worker URL ships preset and the
+  // METIS_PROXY_KEY is the single string a user pastes.
   // When the org sets a data-residency allowlist, only approved providers are offered — mirroring what
   // the main process enforces at request time, so the UI can't offer a provider every ask would reject.
   const orgAllowed = settings.allowedProviders
