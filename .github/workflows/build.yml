@@ -59,14 +59,24 @@ jobs:
           node-version: 22.22.3
           cache: npm
       - run: npm ci
-      # SCA gate: block on CRITICAL. npm still reports Dust's bundled MCP SDK metadata even though
-      # postinstall removes that unused server tree and check-packaged-runtime verifies the finished
-      # app.asar contains only the safe root express-rate-limit/ip-address versions. Escalate to high
-      # once @dust-tt/client publishes a package without the stale bundled dependency metadata.
+      # SCA gate: block on CRITICAL and HIGH. Sharp's 4 bundled libvips CVEs (CVE-2026-33327,
+      # CVE-2026-33328, CVE-2026-35590, CVE-2026-35591 — GHSA-f88m-g3jw-g9cj) were the concrete case
+      # that made "high" worth blocking on: they shipped in the sharp <0.35 that
+      # @huggingface/transformers pulls in, and this step's old `|| true` let that severity through
+      # silently. sharp is now pinned to >=0.35 via the root "overrides" entry.
+      # Known residual: npm still reports Dust's bundled MCP SDK metadata (express-rate-limit,
+      # ip-address) as high-severity even though postinstall (scripts/prune-dust-bundle.mjs) removes
+      # that unused server tree from disk and check-packaged-runtime verifies the finished app.asar
+      # never contains it — npm audit reads package-lock.json's declared tree, not the pruned disk
+      # state, so this is a false positive this gate cannot distinguish from a real one. It blocks
+      # CI until @dust-tt/client publishes a release without the stale bundled dependency metadata.
       - name: Dependency audit (block on critical)
         run: npm audit --audit-level=critical
-      - name: Dependency audit (report high, non-blocking)
-        run: npm audit --audit-level=high || true
+      # Blocking on HIGH via a bare `npm audit --audit-level=high` would leave CI permanently red on
+      # the two Dust-bundle false positives named above — check-audit.mjs blocks on every high/critical
+      # EXCEPT findings confined to the pruned @dust-tt tree, so the gate is both strict and green.
+      - name: Dependency audit (block on high, Dust-bundle carve-out)
+        run: node scripts/check-audit.mjs
       # Secret scan: fail if a key-shaped string is committed to source.
       #
       # The prefix list is not hand-picked: it is every prefix src/shared/providers.ts declares as a
@@ -93,6 +103,32 @@ jobs:
             echo "::error::Possible committed secret found"; exit 1
           fi
           echo "No committed secrets found."
+      # Repo-wide secret scan (gitleaks). The step above is deliberately narrow — it only recognizes this
+      # product's OWN provider key-prefix shapes (src/shared/providers.ts). This step runs the SAME
+      # checked-out tree through gitleaks's large, community-maintained detection ruleset instead
+      # (hundreds of provider key shapes this repo doesn't itself enumerate) — Build Law rule 5 (mature
+      # maintained tooling over hand-rolled detection) and rule 8 (a narrow product-specific check PLUS a
+      # broad community ruleset is how mature products actually run secret scanning; neither replaces the
+      # other). Ubuntu-only, no separate Windows leg needed: this `security` job already runs on
+      # ubuntu-latest alone, and GitHub's ubuntu-latest runners ship Docker preinstalled.
+      #
+      # Pinned to the exact image digest verified locally (docker pull zricethezav/gitleaks:v8.30.1 ==
+      # sha256:c00b6bd0…8abbb7f), not `:latest` — a mutable tag is a supply-chain risk this gate exists to
+      # guard against, so it does not carry one itself.
+      #
+      # actions/checkout above uses its default shallow (depth-1) clone, so gitleaks scans the ONE commit
+      # this push/PR actually introduces, not the repo's full history on every run — that is the tree-state
+      # check that matters here (does what just landed contain a secret), and it keeps this step's cost
+      # constant as the repo's commit count grows. A one-time FULL-HISTORY scan was run locally against
+      # .gitleaks.toml before this workflow change shipped (608 commits, 18.84 MB, `no leaks found`) to
+      # prove the baseline this allowlist was tuned against is actually clean — see .gitleaks.toml's own
+      # header comment for the 5 false positives that scan found and why each is allowlisted, not a real
+      # leak.
+      - name: Gitleaks secret scan (repo-wide)
+        run: |
+          docker run --rm -v "$PWD:/repo" -w /repo \
+            zricethezav/gitleaks@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f \
+            detect --source=/repo --config=/repo/.gitleaks.toml --redact -v --no-banner --exit-code=1
       # SBOM (CycloneDX) for the supply-chain evidence package.
       - name: Generate SBOM
         run: npx --yes @cyclonedx/cyclonedx-npm --output-file sbom.json || echo "SBOM step skipped"
