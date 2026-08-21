@@ -813,6 +813,19 @@ async function groupCloudflare() {
         !r.providers.includes('cloudflare'),
         `a screen-ask reached cloudflare, which cannot accept an image: ${JSON.stringify(r.providers)}`
       )
+      // Under an org allowlist that excludes 'local' (e.g. exactly ["cloudflare"]), NO provider may carry
+      // an image, so the honest outcome is a dead-end with advice that does not name a policy-blocked
+      // provider (MQA-228) — not a walk onto the on-device model the policy forbids.
+      const policyBlocksLocal = (await settings()).allowedProviders?.includes('local') === false
+      if (policyBlocksLocal) {
+        assert(r.providers.length === 0, `policy excludes every vision route, yet the walk was ${JSON.stringify(r.providers)}`)
+        assert(Boolean(r.error), 'no error surfaced for a screen-ask no approved provider can serve')
+        assert(
+          !/Claude or GPT/.test(String(r.error)),
+          `advice names policy-blocked providers: ${r.error}`
+        )
+        return { walk: r.providers, error: r.error }
+      }
       assert(
         r.providers.includes('local'),
         `screen-ask did not reach the on-device model, walk was ${JSON.stringify(r.providers)}`
