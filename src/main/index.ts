@@ -20,7 +20,15 @@ import {
   systemPreferences
 } from 'electron'
 import { join, basename, dirname, resolve, extname } from 'node:path'
-import { readFileSync, existsSync, writeFileSync, realpathSync, readdirSync, unlinkSync, createReadStream, statSync, renameSync, rmdirSync } from 'node:fs'
+import { readFileSync, existsSync, writeFileSync, realpathSync, readdirSync, unlinkSync, createReadStream, statSync, renameSync, rmdirSync, mkdirSync, copyFileSync } from 'node:fs'
+
+// Enterprise checkbox: DevTools stay reachable only where they are a development tool. No secret ever
+// reaches the renderer (publicSettings strips key material), but DevTools on a packaged build still
+// exposes in-memory renderer state (transcript text, screen-context strings) to anyone at the keyboard,
+// and every security questionnaire asks. ASKTOTO_DEVTOOLS=1 is the deliberate field-debugging override —
+// an env var a local user could set, which is fine: whoever controls the local environment already owns
+// this session; the control is about the DEFAULT posture, not about defeating a local admin.
+const DEVTOOLS_ENABLED = !app.isPackaged || process.env.ASKTOTO_DEVTOOLS === '1'
 import { pathToFileURL } from 'node:url'
 import { randomBytes } from 'node:crypto'
 import {
@@ -67,6 +75,7 @@ import {
   type AskStart,
   type ImportJobView,
   type ScreenContextResult,
+  type DiagnosticsExportResult,
   type RecallExportPlainResult
 } from '@shared/ipc'
 import {
@@ -139,6 +148,7 @@ import {
 } from './screen-capture'
 import {
   enqueueIngest,
+  exciseDeletedMeeting,
   markBrainChanged,
   requestBackfill,
   requestSourceRefresh,
@@ -710,6 +720,7 @@ async function startImportDecoder(job: ImportJob): Promise<void> {
       sandbox: true,
       contextIsolation: true,
       nodeIntegration: false,
+      devTools: DEVTOOLS_ENABLED,
       backgroundThrottling: false,
       webSecurity: true
     }
@@ -1176,6 +1187,7 @@ function createWindow(): void {
       sandbox: true,
       contextIsolation: true,
       nodeIntegration: false,
+      devTools: DEVTOOLS_ENABLED,
       backgroundThrottling: false,
       webSecurity: true
     }
@@ -2970,6 +2982,68 @@ function registerIpc(): void {
   // Recall delete: GDPR right-to-erasure for a saved meeting — removes the file + its index row.
   // Confirmed with a native, unmissable modal BEFORE deleting (sync — blocks until the user answers) so a
   // single click is unambiguous: no "did that register?" two-click pattern that's easy to misread as broken.
+  // Support diagnosability: nothing in this app uploads anywhere by design (crashReporter
+  // uploadToServer:false, zero telemetry), so the ONLY way the log trail reaches support is the user
+  // exporting it. Copies logs/ (main + audit + rotated audit generations), crash-*.log dumps, and the
+  // boot sentinel into a user-chosen folder, plus a MANIFEST naming the app version and every file
+  // copied. Deliberately NEVER copies meetings, .brain/, wiki/, or settings.json — diagnostics must not
+  // become an accidental data-exfiltration path for content.
+  ipcMain.handle(IPC.diagnosticsExport, async (e): Promise<DiagnosticsExportResult> => {
+    assertMainWindow(e)
+    if (!requireAuth()) return { ok: false, error: 'Sign in with your Mantu account first.' }
+    try {
+      const stamp = new Date().toISOString().slice(0, 16).replace(/[:T]/g, '-')
+      const dialogOpts = {
+        title: 'Export diagnostics bundle',
+        defaultPath: join(app.getPath('downloads'), `Metis-diagnostics-${stamp}`),
+        buttonLabel: 'Export here'
+      }
+      const res = win ? await dialog.showSaveDialog(win, dialogOpts) : await dialog.showSaveDialog(dialogOpts)
+      if (res.canceled || !res.filePath) return { ok: false, cancelled: true }
+      const dest = res.filePath
+      mkdirSync(dest, { recursive: true })
+      const userData = app.getPath('userData')
+      const copied: string[] = []
+      const copy = (src: string, name: string): void => {
+        try {
+          copyFileSync(src, join(dest, name))
+          copied.push(name)
+        } catch {
+          /* a locked/absent file is skipped, and the manifest shows exactly what made it */
+        }
+      }
+      const logsDir = join(userData, 'logs')
+      if (existsSync(logsDir)) {
+        for (const f of readdirSync(logsDir)) {
+          if (/\.log$/.test(f)) copy(join(logsDir, f), f)
+        }
+      }
+      for (const f of readdirSync(userData)) {
+        if (/^crash-.*\.log$/.test(f)) copy(join(userData, f), f)
+      }
+      const sentinel = join(userData, 'boot-incomplete.json')
+      if (existsSync(sentinel)) copy(sentinel, 'boot-incomplete.json')
+      const manifest = [
+        `Métis diagnostics bundle`,
+        `exported: ${new Date().toISOString()}`,
+        `version: ${app.getVersion()}`,
+        `platform: ${process.platform} ${process.arch}`,
+        `packaged: ${app.isPackaged}`,
+        ``,
+        `files (${copied.length}):`,
+        ...copied.map((f) => `  ${f}`),
+        ``,
+        `Deliberately NOT included: meeting transcripts, the .brain/ knowledge store, the wiki mirror,`,
+        `and settings.json — this bundle is for diagnosing the app, never for moving content.`
+      ].join('\n')
+      writeFileSync(join(dest, 'MANIFEST.txt'), manifest, 'utf8')
+      auditLog('diagnostics.export', { files: copied.length })
+      return { ok: true, path: dest, files: copied.length }
+    } catch {
+      return { ok: false, error: 'Could not export the diagnostics bundle.' }
+    }
+  })
+
   ipcMain.handle(IPC.recallDelete, async (e, file: unknown, title: unknown) => {
     assertMainWindow(e)
     if (!requireAuth()) return { ok: false, error: 'Sign in with your Mantu account first.' }
@@ -2979,7 +3053,7 @@ function registerIpc(): void {
       type: 'warning' as const,
       title: 'Delete meeting',
       message: `Delete "${label}"?`,
-      detail: 'This removes the saved transcript and notes from disk. This cannot be undone.',
+      detail: 'This removes the saved transcript, its notes, and its extracted knowledge from this device. This cannot be undone.',
       buttons: ['Delete', 'Cancel'],
       defaultId: 1,
       cancelId: 1
@@ -2997,6 +3071,18 @@ function registerIpc(): void {
         const detail = error instanceof Error ? error.message : String(error)
         mainLog.warn(`[publish] could not remove the note card for a deleted meeting: ${detail}`)
       })
+      // MQA-230: the deleted meeting's own extraction JSON + ledger row need no provider to remove —
+      // erase them NOW rather than leaving them to the refresh below, which no-ops while no provider is
+      // usable. Best-effort like the card removal above: a locked file must not fail the delete the user
+      // already confirmed, but it is logged so the residue is never silent.
+      await exciseDeletedMeeting(getSettings(), safeName)
+        .then(({ gone }) => {
+          if (!gone) mainLog.warn(`[brain] extraction for a deleted meeting could not be removed: ${safeName}`)
+        })
+        .catch((error) => {
+          const detail = error instanceof Error ? error.message : String(error)
+          mainLog.warn(`[brain] excise failed for a deleted meeting: ${detail}`)
+        })
       await requestSourceRefresh(getSettings())
     }
     return result
@@ -4201,7 +4287,11 @@ function registerIpc(): void {
       ...(failure.topError ? { topError: failure.topError } : {}),
       // MI-2.5 review round 3: computed fresh from the on-disk sentinel each poll — lets BrainView offer
       // the in-app "Reset corrections lock" recovery instead of a hand-deleted hidden .brain file.
-      corruptionBlocked: isJournalCorruptionBlocked(s)
+      corruptionBlocked: isJournalCorruptionBlocked(s),
+      // MQA-230: entity files can still hold items attributed to an already-deleted meeting until the
+      // deferred source refresh runs (it needs a usable provider). Surfaced so the UI can say the
+      // cleanup is pending instead of silently claiming the delete was complete.
+      cleanupPending: idx.sourceRefreshRequested === true
     }
   })
   ipcMain.handle(IPC.brainBackfill, (e) => {
@@ -4621,7 +4711,7 @@ function registerIpc(): void {
     const html = recapMarkdownToHtml(md, input?.title)
     const pdfWin = new BrowserWindow({
       show: false,
-      webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false, webSecurity: true }
+      webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false, devTools: DEVTOOLS_ENABLED, webSecurity: true }
     })
     try {
       await pdfWin.loadURL('data:text/html;charset=UTF-8,' + encodeURIComponent(html))
