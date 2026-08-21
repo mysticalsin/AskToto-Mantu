@@ -499,3 +499,60 @@ describe('MQA-220 — a rejected commitment never reaches the dashboard', () => 
     expect(all.filter((c) => c.status === 'open').length).toBe(baseline)
   })
 })
+
+describe('MQA-223 — account identity survives display-name drift on the structural-risk rail', () => {
+  // `a.name`, `d.account` and `p.account` are three display strings frozen independently at different
+  // first-creation timestamps in ingest.ts. Two extractions of the same company therefore differ by a
+  // trailing period or a capital. goingCold used to key its people-per-account map on the raw lowercased
+  // string while every other join in the app used slug(), so the drifted spelling became a second,
+  // person-less account: a false "unmapped" badge and a false "single-threaded" risk on a healthy
+  // account, on the exact panel a user reads to decide who to call next.
+  const drifted: BrainRead = {
+    ...FIXTURE,
+    // The account record spells it one way; the people mapped to it spell it the other.
+    people: FIXTURE.people.map((p) => (p.account === 'Acme Corp' ? { ...p, account: 'ACME Corp.' } : p))
+  }
+  const adapted = brainToDashboard(drifted)
+
+  it('still counts the mapped people, so the account is not reported as unmapped', () => {
+    const acme = adapted.account_graph.nodes.find((n) => n.id === 'account:acme-corp')
+    expect(acme, 'the account node must still exist under its slug').toBeDefined()
+    expect(acme!.unmapped).toBe(false)
+  })
+
+  it('does not invent a single-threaded risk on a deal that has two mapped contacts', () => {
+    const acmeExpansion = adapted.account_graph.nodes.find((n) => n.id === 'deal:acme-expansion')
+    expect(acmeExpansion!.single_threaded).toBe(false)
+  })
+
+  it('reaches the same verdicts as the undrifted fixture, which is the whole point', () => {
+    const baseline = dashboard.account_graph.nodes.find((n) => n.id === 'deal:acme-expansion')!
+    const drift = adapted.account_graph.nodes.find((n) => n.id === 'deal:acme-expansion')!
+    expect(drift.single_threaded).toBe(baseline.single_threaded)
+    expect(drift.unmapped).toBe(baseline.unmapped)
+  })
+})
+
+describe('MQA-224 — a call with no extracted account is unattributed, not "internal"', () => {
+  // The bundled local model routinely returns a null account name, and ingest nulls the whole sidecar.
+  // Deriving `is_client_facing: !!m.account` turned that silence into a positive claim, so a real client
+  // call wore an INTERNAL chip on the deal page and read as "Internal (not client-facing)" in the graph
+  // — a wrong label about who you were talking to, produced by the extractor having a bad day.
+  const unattributed: BrainRead = {
+    ...FIXTURE,
+    meetings: (FIXTURE.meetings ?? []).map((m, i) => (i === 0 ? { ...m, account: null } : m))
+  }
+  const adapted = brainToDashboard(unattributed)
+  const grades = adapted.deals.flatMap((d) => d.call_grades)
+
+  it('leaves the flag absent rather than asserting false', () => {
+    const unset = grades.filter((g) => g.is_client_facing === undefined)
+    expect(unset.length).toBeGreaterThan(0)
+    expect(grades.some((g) => g.is_client_facing === false)).toBe(false)
+  })
+
+  it('still marks a call that DID name an account', () => {
+    const attributed = brainToDashboard(FIXTURE).deals.flatMap((d) => d.call_grades)
+    expect(attributed.some((g) => g.is_client_facing === true)).toBe(true)
+  })
+})

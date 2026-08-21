@@ -201,7 +201,7 @@ function toDeal(d: BrainDeal, accountBySlug: Map<string, BrainAccount>, meetings
         label: m.title24 || ref.title,
         grade: m.sentiment,
         note: m.topics.slice(0, 3).join(' · '),
-        is_client_facing: !!m.account
+        is_client_facing: m.account ? true : undefined
       }
     })
     .filter((g): g is NonNullable<typeof g> => g !== null)
@@ -465,7 +465,7 @@ export function brainToDashboard(b: BrainRead): DashboardData {
         community_label: '',
         ref: ref?.file,
         date: ref?.date,
-        is_client_facing: ref ? !!meetingsByFile.get(ref.file)?.account : undefined,
+        is_client_facing: ref && meetingsByFile.get(ref.file)?.account ? true : undefined,
         last_touch: t?.lastTouch,
         days_quiet: t?.daysQuiet,
         freshness: t?.freshness,

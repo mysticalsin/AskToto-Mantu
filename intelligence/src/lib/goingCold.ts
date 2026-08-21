@@ -112,7 +112,7 @@ export function buildGoingCold(b: BrainRead, now: number): GoingCold {
     // here rather than silently treating undefined as "not open".
     const open = (d.commitments ?? []).filter((c) => (c.status ?? 'open') === 'open')
     if (!open.length || !d.account) continue
-    const key = d.account.toLowerCase()
+    const key = slug(d.account)
     openByAccount.set(key, [...(openByAccount.get(key) ?? []), ...open])
   }
 
@@ -128,7 +128,7 @@ export function buildGoingCold(b: BrainRead, now: number): GoingCold {
         label: a.name,
         type: 'account',
         daysQuiet: t.daysQuiet,
-        hook: hookFor(openByAccount.get(a.name.toLowerCase()) ?? [], lastTitle)
+        hook: hookFor(openByAccount.get(slug(a.name)) ?? [], lastTitle)
       })
     }
   }
@@ -142,7 +142,7 @@ export function buildGoingCold(b: BrainRead, now: number): GoingCold {
       // A person's own open commitments beat the account-level pool as a reopener. Same legacy-status
       // fallback as the deal-level pool above.
       const own = (p.commitments ?? []).filter((c) => (c.status ?? 'open') === 'open')
-      const pool = own.length ? own : p.account ? (openByAccount.get(p.account.toLowerCase()) ?? []) : []
+      const pool = own.length ? own : p.account ? (openByAccount.get(slug(p.account)) ?? []) : []
       const lastTitle = [...(p.meetings ?? [])].filter((m) => m.date).sort((x, y) => x.date.localeCompare(y.date)).pop()?.title ?? ''
       rail.push({ nodeId: id, label: p.name, type: 'person', account: p.account ?? undefined, daysQuiet: t.daysQuiet, hook: hookFor(pool, lastTitle) })
     }
@@ -155,21 +155,28 @@ export function buildGoingCold(b: BrainRead, now: number): GoingCold {
 
   rail.sort((a, b2) => b2.daysQuiet - a.daysQuiet)
 
-  // Structural risk: how many humans are mapped at each account?
+  // Structural risk: how many humans are mapped at each account? Keyed by slug, never by raw name.
+  // `a.name`, `d.account` and `p.account` are three display strings frozen independently, at different
+  // first-creation timestamps in ingest.ts, so casing and punctuation drift between two extractions of
+  // the same company must still resolve to one account — the convention brainAdapter's accountSummaries
+  // and AccountsView's dealsHere/peopleHere already follow. Joining on the raw lowercased string meant
+  // "Acme Corp." and "Acme Corp" counted as two accounts, and this rail then reported the real one as
+  // having nobody mapped: a false "unmapped" badge and a false "single-threaded" risk on a healthy
+  // account, on the panel a user reads to decide who to call.
   const peopleAtAccount = new Map<string, number>()
   for (const p of b.people) {
     if (!p.account) continue
-    const k = p.account.toLowerCase()
+    const k = slug(p.account)
     peopleAtAccount.set(k, (peopleAtAccount.get(k) ?? 0) + 1)
   }
   const singleThreaded = new Set<string>()
   for (const d of b.deals) {
     if (d.outcome !== 'open' || !d.account) continue
-    if ((peopleAtAccount.get(d.account.toLowerCase()) ?? 0) <= 1) singleThreaded.add(`deal:${slug(d.name)}`)
+    if ((peopleAtAccount.get(slug(d.account)) ?? 0) <= 1) singleThreaded.add(`deal:${slug(d.name)}`)
   }
   const unmapped = new Set<string>()
   for (const a of b.accounts) {
-    if ((peopleAtAccount.get(a.name.toLowerCase()) ?? 0) === 0) unmapped.add(`account:${slug(a.name)}`)
+    if ((peopleAtAccount.get(slug(a.name)) ?? 0) === 0) unmapped.add(`account:${slug(a.name)}`)
   }
 
   return { touch, rail, singleThreaded, unmapped }
