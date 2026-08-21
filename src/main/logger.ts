@@ -1,7 +1,9 @@
 import log from 'electron-log'
 import { app } from 'electron'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, dirname } from 'node:path'
+import { createHash } from 'node:crypto'
+import { existsSync, readFileSync, readdirSync, renameSync, unlinkSync } from 'node:fs'
 
 // Only the installed app owns a user profile. electron-log resolves its own file path, and outside an
 // Electron main process it silently falls back to NodeExternalApi, whose log directory is
@@ -44,16 +46,95 @@ export const mainLog = log
 // A separate, append-only AUDIT log for security-relevant events — one JSON object per line, its own
 // rotated file (userData/logs/audit.log), kept distinct from the noisy diagnostic log.
 const audit = log.create({ logId: 'audit' })
+
+/** How many rotated audit generations to keep (`audit-<stamp>.log`), oldest pruned first. At the 5MB
+ *  rotation size this bounds total retained history to ~100MB — a real compliance window, unlike the
+ *  previous single `.old` generation (~10MB total, oldest half silently overwritten). Deliberately a
+ *  constant, not a setting: retention of the security trail is the operator's policy (docs/AUDIT-LOG.md),
+ *  not a per-user preference a compromised session could shrink. */
+export const AUDIT_ARCHIVE_GENERATIONS = 20
+
+const auditFilePath = (): string =>
+  isAppMainProcess ? join(app.getPath('userData'), 'logs', 'audit.log') : join(nonAppLogDir, 'audit.log')
+
 try {
   audit.transports.console.level = false
   audit.transports.file.level = 'info'
   audit.transports.file.maxSize = 5 * 1024 * 1024
   audit.transports.file.format = '{text}' // we format the whole line as JSON ourselves
-  audit.transports.file.resolvePathFn = (): string =>
-    isAppMainProcess ? join(app.getPath('userData'), 'logs', 'audit.log') : join(nonAppLogDir, 'audit.log')
+  audit.transports.file.resolvePathFn = auditFilePath
   audit.transports.file.writeOptions = { ...audit.transports.file.writeOptions, mode: 0o600 }
+  // Generational archives instead of electron-log's single-`.old` overwrite: rotation renames the full
+  // file to `audit-<epoch-ms>.log` beside it and prunes past AUDIT_ARCHIVE_GENERATIONS. The hash chain
+  // below runs UNBROKEN across generations (seq/prev never reset on rotation), so the verifier walks the
+  // archives in order and proves the whole retained window, not just the live file.
+  audit.transports.file.archiveLogFn = (file): void => {
+    try {
+      const oldPath = file.toString()
+      const dir = dirname(oldPath)
+      renameSync(oldPath, join(dir, `audit-${Date.now()}.log`))
+      const archives = readdirSync(dir)
+        .filter((f) => /^audit-\d+\.log$/.test(f))
+        .sort()
+      for (const stale of archives.slice(0, Math.max(0, archives.length - AUDIT_ARCHIVE_GENERATIONS))) {
+        unlinkSync(join(dir, stale))
+      }
+    } catch {
+      /* rotation is best-effort; a failed rename falls back to appending past maxSize */
+    }
+  }
 } catch {
   /* best-effort */
+}
+
+// --- Tamper evidence -------------------------------------------------------------------------------
+// Every record carries `seq` (monotonic across the whole trail, never reset by rotation) and `prev`
+// (hex SHA-256 of the previous record's exact line). Editing, deleting, or reordering any line breaks
+// the chain at that point, and `node scripts/verify-audit-log.mjs <logs-dir>` finds the break. The
+// chain tip is resumed from disk at startup — from the live file's last line, else the newest archive —
+// so an app restart continues the chain instead of starting a parallel one. Records written by builds
+// that predate the chain simply lack the fields; the verifier reports them as a legacy prefix.
+const sha256 = (line: string): string => createHash('sha256').update(line, 'utf8').digest('hex')
+
+let chainSeq = 0
+let chainPrev = 'GENESIS'
+let chainLoaded = false
+
+function lastAuditLine(p: string): string | null {
+  try {
+    // electron-log writes CRLF on Windows — resume from the logical line, never with a trailing \r.
+    const lines = readFileSync(p, 'utf8')
+      .split('\n')
+      .map((l) => l.replace(/\r$/, ''))
+      .filter((l) => l.length > 0)
+    return lines.length ? lines[lines.length - 1] : null
+  } catch {
+    return null
+  }
+}
+
+function loadChainTip(): void {
+  chainLoaded = true
+  try {
+    const live = auditFilePath()
+    let tip = existsSync(live) ? lastAuditLine(live) : null
+    if (tip === null) {
+      const dir = dirname(live)
+      const newest = existsSync(dir)
+        ? readdirSync(dir).filter((f) => /^audit-\d+\.log$/.test(f)).sort().pop()
+        : undefined
+      if (newest) tip = lastAuditLine(join(dir, newest))
+    }
+    if (tip !== null) {
+      const parsed = JSON.parse(tip) as { seq?: unknown }
+      chainSeq = typeof parsed.seq === 'number' && Number.isFinite(parsed.seq) ? parsed.seq : 0
+      chainPrev = sha256(tip)
+    }
+  } catch {
+    // An unreadable/corrupt tip must never block auditing — the verifier will surface the discontinuity.
+    chainSeq = 0
+    chainPrev = 'GENESIS'
+  }
 }
 
 export type AuditEvent =
@@ -137,6 +218,8 @@ export type AuditEvent =
   | 'local.model.download_fail'
   | 'screen.preprocess.describe'
   | 'cahe.localai.seeded'
+  // Support diagnosability: the user exported the log trail to a folder (metadata only — file count).
+  | 'diagnostics.export'
 
 // Lazy actor resolver — set once by the main process (wired to authStatus().email) so every audit
 // record can carry the signed-in identity without logger.ts importing auth.ts (which would be
@@ -160,8 +243,35 @@ export function auditLog(event: AuditEvent, detail: Record<string, unknown> = {}
     } catch {
       /* a broken resolver must never block the audit write */
     }
-    audit.info(JSON.stringify({ ts: new Date().toISOString(), event, ...(actor ? { actor } : {}), ...detail }))
+    if (!chainLoaded) loadChainTip()
+    chainSeq += 1
+    const line = JSON.stringify({
+      ts: new Date().toISOString(),
+      seq: chainSeq,
+      prev: chainPrev,
+      event,
+      ...(actor ? { actor } : {}),
+      ...detail
+    })
+    // Advance the tip BEFORE handing the line to the transport: audit.info is synchronous here
+    // (file transport sync:true), but the chain must stay correct even if a future transport buffers.
+    chainPrev = sha256(line)
+    audit.info(line)
   } catch {
     /* never let auditing break the app */
   }
 }
+
+/** Test seam: the current chain tip, so a behavioral test can prove continuity without parsing files. */
+export function auditChainTip(): { seq: number; prev: string } {
+  if (!chainLoaded) loadChainTip()
+  return { seq: chainSeq, prev: chainPrev }
+}
+
+/** Test seam: where the audit trail lives for this process (the real userData in the app, tmp in tests). */
+export function auditLogPath(): string {
+  return auditFilePath()
+}
+
+/** Basename pattern of a rotated audit generation — shared with scripts/verify-audit-log.mjs. */
+export const AUDIT_ARCHIVE_PATTERN = /^audit-\d+\.log$/
