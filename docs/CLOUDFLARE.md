@@ -81,23 +81,34 @@ Model ids are typed the same way as for any other provider, in Cloudflare's form
 
 ## Model ids: `{provider}/{model}`
 
-Cloudflare's AI REST API is OpenAI-compatible, and the `model` field carries **both** the upstream
-provider and the model:
+Cloudflare's AI REST API is OpenAI-compatible. There are **two** id forms, and they are not
+interchangeable. Everything below was run against a live account before being written down.
 
-| `model` value | Runs on |
-| --- | --- |
-| `workers-ai/@cf/meta/llama-3.3-70b-instruct-fp8-fast` | Cloudflare's own Workers AI |
-| `openai/gpt-5.5` | OpenAI, billed through Cloudflare |
-| `anthropic/claude-sonnet-4-5` | Anthropic, billed through Cloudflare |
-| `google-ai-studio/gemini-2.5-flash` | Google AI Studio, billed through Cloudflare |
+| `model` value | Runs on | Works out of the box |
+| --- | --- | --- |
+| `@cf/meta/llama-4-scout-17b-16e-instruct` | Cloudflare's own Workers AI | Yes — this is the default |
+| `@cf/meta/llama-3.3-70b-instruct-fp8-fast` | Workers AI | Yes |
+| `@cf/openai/gpt-oss-120b` | Workers AI (returns a `reasoning` field) | Yes — the think tier |
+| `openai/gpt-5.5` | OpenAI, billed through Cloudflare | Only with a funded gateway |
 
-Two consequences worth stating plainly:
+- **Workers AI ids are bare `@cf/…`.** A `workers-ai/` prefix is rejected outright: `AiError: No such
+  model`. Métis shipped that prefix once and every ask 404'd, which is MQA-226 — the mock gateway could
+  not catch it because a mock echoes whatever model it is handed.
+- **The `{provider}/{model}` form is only for the third-party labs.** It is real, but it bills through
+  Unified Billing: with no credit, `openai/gpt-5.5` answers `Insufficient balance; add money to your
+  gateway or use BYOK`. That is why no default points at one. `anthropic/…` and `google-ai-studio/…`
+  ids were listed here previously and are not valid at this endpoint at all.
+- **The Workers Free plan refuses some catalogue models** with `is not available on the Workers Free
+  plan`. Check `GET /accounts/{id}/ai/models/search` for what your own account actually serves.
 
-- **One token reaches many vendors.** Third-party models bill through Cloudflare's Unified Billing, so
-  the operator does not hold an OpenAI key, an Anthropic key and a Google key to offer all three. This
-  is the main reason to choose Cloudflare as a provider at all.
-- **Leaving off the provider prefix will fail.** `gpt-5.5` is not a valid id here; `openai/gpt-5.5` is.
-  A bad id comes back as a `404` with `Cloudflare AI rejected the request (upstream status 404)`.
+## Screen-asks do not go to Cloudflare
+
+`PROVIDERS.cloudflare.vision` is **false**, and not because of the model — Llama 4 Scout is genuinely
+multimodal. This endpoint has no way to carry the image: every `image_url` shape is rejected with
+`Property image_url only supports base64 encoded image data` (code 6004), both a `data:image/jpeg;base64,…`
+URL and bare base64, on Scout and on the dedicated `llama-3.2-11b-vision-instruct` alike. It is a
+transport limit, not a model one (MQA-227). Screen-asks therefore route to the on-device model, which
+works. Re-test against a live endpoint before ever flipping that flag back.
 
 ## What AI Gateway adds, whether you ask for it or not
 
