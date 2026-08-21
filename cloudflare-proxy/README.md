@@ -98,7 +98,7 @@ curl -N https://metis-cloudflare-proxy.<YOUR_SUBDOMAIN>.workers.dev/v1/chat/comp
   -H "Authorization: Bearer <YOUR_METIS_PROXY_KEY>" \
   -H "Content-Type: application/json" \
   -d '{
-        "model": "workers-ai/@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+        "model": "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
         "messages": [{"role": "user", "content": "Say hello in five words."}],
         "stream": true
       }'

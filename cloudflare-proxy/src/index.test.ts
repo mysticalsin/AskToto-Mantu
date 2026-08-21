@@ -37,7 +37,7 @@ function env(overrides: Partial<Env> = {}): Env {
 }
 
 const BODY = JSON.stringify({
-  model: 'workers-ai/@cf/meta/llama-3.3-70b-instruct-fp8-fast',
+  model: '@cf/meta/llama-3.3-70b-instruct-fp8-fast',
   messages: [{ role: 'user', content: 'hello' }],
   stream: true
 })

@@ -727,6 +727,17 @@ export const McpConnectionSchema = z.object({
 })
 export type McpConnection = z.infer<typeof McpConnectionSchema>
 
+/**
+ * The operator-deployed Worker Métis talks to by default. A URL, never a credential: the Cloudflare
+ * account token lives as a Wrangler secret ON this Worker and never ships, which is the whole reason
+ * the Worker exists. Shipping the endpoint means a user pastes one string (their METIS_PROXY_KEY)
+ * instead of two, and an org can still override it per install through managed config.
+ *
+ * Verified live before being pinned here: GET /health returns configured:true, an unauthenticated POST
+ * returns 401, and an authenticated one streams SSE frames back.
+ */
+export const METIS_WORKER_URL = 'https://metis-cloudflare-proxy.tony-walteur.workers.dev/v1'
+
 export const BaseSettingsSchema = z.object({
   // Default provider: Cloudflare (Tony, 2026-08-21), replacing NVIDIA NIM (2026-08-14). One endpoint the
   // operator deploys reaches Workers AI, OpenAI, Anthropic and Google on a single account credential, so
@@ -764,7 +775,7 @@ export const BaseSettingsSchema = z.object({
       (v) => v === '' || /^https:\/\//i.test(v),
       'Cloudflare Worker endpoint must be an https:// URL'
     )
-    .default(''),
+    .default(METIS_WORKER_URL),
   // Per-provider THINKING-tier model override (parallel to providerModels). For Dust this is the
   // thinking agent sId. Empty → fall back to the provider's built-in think model. See shared/routing.ts.
   providerModelsThinking: z.record(z.string(), z.string()).default({}),
@@ -1249,7 +1260,7 @@ export const DEFAULT_SETTINGS: Settings = {
   thinkingMode: 'auto',
   askFollowUpMemory: false,
   customBaseUrl: '',
-  cloudflareBaseUrl: '',
+  cloudflareBaseUrl: METIS_WORKER_URL,
   dustWorkspaceId: '',
   dustBaseUrl: 'https://dust.tt',
   dustSessionOrigin: 'oauth',
