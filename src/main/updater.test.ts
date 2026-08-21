@@ -21,6 +21,7 @@ import { readTrustedAdminManaged } from './win-security'
 import {
   blockedUpdateChannel,
   configDisablesAutoUpdate,
+  configUpdateFeedUrl,
   initAutoUpdate,
   isNewerVersion,
   parseLatestRelease,
@@ -307,5 +308,37 @@ describe('MQA-164 — a failed update download reaches the renderer', () => {
     expect(vi.mocked(Notification)).toHaveBeenCalledWith(
       expect.objectContaining({ body: expect.stringContaining('1.5.5') })
     )
+  })
+})
+
+describe('enterprise private update feed (admin managed-config `updateFeedUrl`)', () => {
+  it('accepts only an https URL', () => {
+    expect(configUpdateFeedUrl('{"updateFeedUrl":"https://updates.corp.example/metis/"}')).toBe(
+      'https://updates.corp.example/metis/'
+    )
+    expect(configUpdateFeedUrl('{"updateFeedUrl":"  https://u.example/x "}')).toBe('https://u.example/x')
+  })
+
+  it('rejects http, non-strings, missing keys, and malformed JSON (fall back to the built-in feed)', () => {
+    expect(configUpdateFeedUrl('{"updateFeedUrl":"http://insecure.example/"}')).toBeNull()
+    expect(configUpdateFeedUrl('{"updateFeedUrl":42}')).toBeNull()
+    expect(configUpdateFeedUrl('{}')).toBeNull()
+    expect(configUpdateFeedUrl('not json')).toBeNull()
+    expect(configUpdateFeedUrl('{"updateFeedUrl":"ftp://x"}')).toBeNull()
+  })
+
+  it('is applied at BOTH updater entry points, and only from the ACL-trusted ADMIN policy path', async () => {
+    // Whoever controls the feed controls what binary gets offered — a user-writable config must never
+    // redirect the channel. applyAdminUpdateFeed reads readTrustedAdminManaged(), the same fd-pinned
+    // path disableAutoUpdate trusts, and both require('electron-updater') sites call it.
+    // node:fs is MOCKED at the top of this file — reach for the real one to read the source.
+    const { readFileSync } = await vi.importActual<typeof import('node:fs')>('node:fs')
+    const { join } = await vi.importActual<typeof import('node:path')>('node:path')
+    const src = readFileSync(join(__dirname, 'updater.ts'), 'utf8')
+    const fn = src.slice(src.indexOf('function applyAdminUpdateFeed'), src.indexOf('export type BlockedUpdateChannel'))
+    expect(fn).toMatch(/readTrustedAdminManaged\(\)/)
+    expect(fn).not.toMatch(/userData/)
+    const callSites = src.split('applyAdminUpdateFeed(autoUpdater)').length - 1
+    expect(callSites, 'the manual check AND initAutoUpdate must both apply the feed').toBe(2)
   })
 })
