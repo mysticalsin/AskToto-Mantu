@@ -270,10 +270,14 @@ describe('Cloudflare provider registry', () => {
     for (const m of PROVIDERS.cloudflare.models) expect(m).toMatch(/^@cf\/.+/)
   })
 
-  it('resolves a cheap base tier and a reasoning think/deep tier with no user override', () => {
+  it('resolves a cheap base tier, a fast think tier, and a reasoning deep tier with no user override', () => {
     expect(resolveModelTier('cloudflare', {}, {}, 'base')).toBe('@cf/meta/llama-4-scout-17b-16e-instruct')
-    expect(resolveModelTier('cloudflare', {}, {}, 'think')).toBe('@cf/openai/gpt-oss-120b')
-    // No distinct deep model, so deep degrades to think — never silently back down to the base model.
+    // MQA-229: think must stream visible text immediately. gpt-oss-120b used to sit here and spent
+    // 3.6-14.2s on hidden reasoning before its first visible token (measured through the live Worker),
+    // while routing.ts sends every "why/how/explain/compare" question to this tier — so the app's most
+    // common ask shape blew the 2-3s answer budget. The 70B fp8-fast model answers in ~0.4s to first
+    // visible token; the reasoning model is reserved for the DEEP tier, where depth is the point.
+    expect(resolveModelTier('cloudflare', {}, {}, 'think')).toBe('@cf/meta/llama-3.3-70b-instruct-fp8-fast')
     expect(resolveModelTier('cloudflare', {}, {}, 'deep', {})).toBe('@cf/openai/gpt-oss-120b')
   })
 
@@ -293,7 +297,8 @@ describe('Cloudflare provider registry', () => {
       ...PROVIDERS.cloudflare.models,
       PROVIDERS.cloudflare.defaultModel,
       PROVIDERS.cloudflare.fastModel,
-      PROVIDERS.cloudflare.thinkModel ?? PROVIDERS.cloudflare.defaultModel
+      PROVIDERS.cloudflare.thinkModel ?? PROVIDERS.cloudflare.defaultModel,
+      PROVIDERS.cloudflare.deepModel ?? PROVIDERS.cloudflare.defaultModel
     ]) {
       expect(id, `${id} must be a bare Workers AI id`).toMatch(/^@cf\//)
       expect(id, `${id} must not carry the rejected workers-ai/ prefix`).not.toMatch(/^workers-ai\//)
