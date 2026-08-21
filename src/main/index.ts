@@ -3053,7 +3053,8 @@ function registerIpc(): void {
   ipcMain.handle(IPC.authSignIn, async (e) => {
     assertMainWindow(e)
     const status = await authSignIn()
-    prewarmCapture() // warm the cold capture pipeline now that we're signed in (no-op if not authed)
+    // MQA-236: no prewarmCapture() here anymore — it takes a REAL frame, and signing in is not screen
+    // intent. The warm rides hovering the Capture button (Bar.tsx), the moment intent is signalled.
     prewarmCli() // warm the CLI binary cache so the first CLI ask doesn't stall on a login-shell lookup
     refreshScreenPreprocess() // start background screen pre-analysis if eligible now that we're signed in
     return status
