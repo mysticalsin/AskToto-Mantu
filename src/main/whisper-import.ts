@@ -53,19 +53,6 @@ function loadTransformers(): any | null {
   return transformersModule
 }
 
-/**
- * MQA-234: load @huggingface/transformers' native binding (onnxruntime-node) BEFORE anything loads
- * sherpa-onnx. Both ship an onnxruntime DLL under the same name; on Windows, whichever loads second
- * fails with ERR_DLOPEN_FAILED "The operating system cannot run %1" — and it is always transformers
- * that loses, because the import path's own language probe loads sherpa FIRST by design. Net effect
- * in every packaged build: the 'whisper' import engine silently ran Parakeet forever. Proven in the
- * packaged main process: sherpa->transformers fails, transformers->sherpa BOTH load. Call this once
- * at startup, before any Parakeet/sherpa touch; the model pipeline itself stays lazy (ensureAsr).
- */
-export function preloadTransformersBinding(): boolean {
-  return loadTransformers() !== null
-}
-
 let asr: any = null
 let loadingAsr: Promise<any> | null = null
 

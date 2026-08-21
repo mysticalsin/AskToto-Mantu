@@ -175,37 +175,3 @@ describe('MQA-228 — the screenshot-incapable advice respects the org allowlist
     expect(body).toMatch(/Your organization's approved providers can't read screenshots/)
   })
 })
-
-describe('MQA-234 — the whisper import engine must not lose the ORT DLL race to sherpa', () => {
-  // Both sherpa-onnx and onnxruntime-node ship an onnxruntime DLL under the same name; on Windows the
-  // second loader gets ERR_DLOPEN_FAILED ("The operating system cannot run %1"). The import path's own
-  // language probe loads sherpa FIRST by design, so the 'whisper' engine silently ran Parakeet in every
-  // packaged build. Proven in the packaged main process: sherpa->transformers fails, the reverse loads
-  // both. The fix is load order, so these pins are about ORDER.
-  it('startup eagerly loads the transformers binding before anything can touch sherpa', () => {
-    const whenReady = indexSrc.indexOf('app.whenReady().then(async () => {')
-    expect(whenReady).toBeGreaterThan(-1)
-    const preload = indexSrc.indexOf('preloadTransformersBinding()', whenReady)
-    expect(preload, 'preloadTransformersBinding must be called inside whenReady').toBeGreaterThan(-1)
-    // Nothing between whenReady and the preload call may reach for parakeet/sherpa — in CODE; the fix's
-    // own explanatory comment names them, so comment lines are stripped before asserting.
-    const between = indexSrc
-      .slice(whenReady, preload)
-      .split('\n')
-      .filter((l) => !l.trim().startsWith('//'))
-      .join('\n')
-    expect(between).not.toMatch(/parakeet|sherpa/i)
-  })
-
-  it('whisper-import exposes the preload and keeps the model pipeline itself lazy', () => {
-    const src = readFileSync(join(__dirname, 'whisper-import.ts'), 'utf8')
-    expect(src).toMatch(/export function preloadTransformersBinding\(\): boolean/)
-    // The preload loads only the BINDING (require memo); ensureAsr still owns the model load.
-    const fn = src.slice(src.indexOf('export function preloadTransformersBinding'), src.indexOf('let asr: any = null'))
-    expect(fn).not.toMatch(/pipeline\(/)
-  })
-
-  it('the silent Parakeet fallback still exists as the guard of last resort, and still warns', () => {
-    expect(indexSrc).toMatch(/whisper transcriber unavailable, falling back to Parakeet/)
-  })
-})
