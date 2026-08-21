@@ -267,3 +267,16 @@ describe('the meeting-start boundary resets speaker session labels (MQA-043)', (
     expect(body.indexOf('resetDustConversation()')).toBeLessThan(body.indexOf('speakerIdInstance?.resetSession()'))
   })
 })
+
+describe('MQA-237 — embeddings must never use N-API external buffers (dead-in-Electron class)', () => {
+  it('compute is called with enableExternalBuffer=false', () => {
+    // Electron's main process forbids external ArrayBuffers; sherpa's default wraps its output in one,
+    // which threw on every window and killed Speaker Intelligence silently since it shipped — these
+    // plain-node tests passed the whole time, which is exactly why the pin is structural.
+    const { readFileSync } = require('node:fs') as typeof import('node:fs')
+    const { join } = require('node:path') as typeof import('node:path')
+    const src = readFileSync(join(__dirname, 'speaker-id.ts'), 'utf8')
+    expect(src).toMatch(/extractor\.compute\(stream, false\)/)
+    expect(src).not.toMatch(/extractor\.compute\(stream\)/)
+  })
+})

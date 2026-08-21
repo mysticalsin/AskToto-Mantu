@@ -95,7 +95,12 @@ function buildSherpaExtractor(): EmbeddingExtractor | null {
         try {
           const stream = extractor.createStream()
           stream.acceptWaveform({ samples, sampleRate: SAMPLE_RATE })
-          const embedding = extractor.compute(stream) as Float32Array | number[]
+          // MQA-237: Electron's main process forbids N-API external ArrayBuffers ("External buffers
+          // are not allowed"), and sherpa's compute() wraps its output in one by default — so this
+          // threw on EVERY window and Speaker Intelligence has been silently dead in the app since it
+          // shipped (plain-node unit tests pass; only in-Electron use hits the guard). The binding's own
+          // escape hatch: enableExternalBuffer=false copies the embedding instead.
+          const embedding = extractor.compute(stream, false) as Float32Array | number[]
           const arr = embedding instanceof Float32Array ? embedding : Float32Array.from(embedding)
           return arr.length > 0 ? arr : null
         } catch (e) {
