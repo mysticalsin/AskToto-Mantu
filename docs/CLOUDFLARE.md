@@ -87,8 +87,8 @@ interchangeable. Everything below was run against a live account before being wr
 | `model` value | Runs on | Works out of the box |
 | --- | --- | --- |
 | `@cf/meta/llama-4-scout-17b-16e-instruct` | Cloudflare's own Workers AI | Yes — this is the default |
-| `@cf/meta/llama-3.3-70b-instruct-fp8-fast` | Workers AI | Yes |
-| `@cf/openai/gpt-oss-120b` | Workers AI (returns a `reasoning` field) | Yes — the think tier |
+| `@cf/meta/llama-3.3-70b-instruct-fp8-fast` | Workers AI | Yes — the think tier (first visible token ~0.4s; the reasoning model that used to sit here spent 3.6-14.2s on hidden reasoning first, MQA-229) |
+| `@cf/openai/gpt-oss-120b` | Workers AI (returns a `reasoning` field) | Yes — the deep tier (coding/math; slow to first visible token by design) |
 | `openai/gpt-5.5` | OpenAI, billed through Cloudflare | Only with a funded gateway |
 
 - **Workers AI ids are bare `@cf/…`.** A `workers-ai/` prefix is rejected outright: `AiError: No such

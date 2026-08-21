@@ -345,10 +345,18 @@ export const PROVIDERS: Record<ProviderId, ProviderDef> = {
     ],
     defaultModel: '@cf/meta/llama-4-scout-17b-16e-instruct',
     fastModel: '@cf/meta/llama-4-scout-17b-16e-instruct',
+    // MQA-229: the think tier must still FEEL instant. gpt-oss-120b is a reasoning model that spends its
+    // first seconds on hidden reasoning — measured live through the deployed Worker: first VISIBLE token
+    // at 3.6-14.2s, against a 2-3s answer budget — and routing.ts sends every "why/how/explain/compare"
+    // question to this tier, so most real asks sat behind that dead air. llama-3.3-70b-fp8-fast reaches
+    // its first visible token in ~0.4s (same prompt, same Worker) and is the strongest non-reasoning
+    // model this plan serves. gpt-oss-120b keeps the DEEP tier below: coding/math/explicit "think deeply"
+    // asks are rare and genuinely want the reasoning pass.
+    thinkModel: '@cf/meta/llama-3.3-70b-instruct-fp8-fast',
     // gpt-oss-120b returns a real `reasoning` field alongside its answer and runs on the free plan.
     // Verified live; the previous `anthropic/claude-sonnet-4-5` was wrong twice over — not a valid id at
     // this endpoint, and a third-party route that needs Unified Billing credit.
-    thinkModel: '@cf/openai/gpt-oss-120b',
+    deepModel: '@cf/openai/gpt-oss-120b',
     keyHint: 'METIS_PROXY_KEY from your operator',
     keyPattern: '', // operator-chosen shared secret — no fixed prefix to auto-detect
     // MQA-227: FALSE, and not because of the model. Llama 4 Scout really is multimodal, but Cloudflare's
