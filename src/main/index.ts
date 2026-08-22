@@ -1055,6 +1055,7 @@ function initializeImportJobs(): void {
     // MQA-235: diarize one utterance window — enrolled profile name or session cluster label. Same
     // CAM++ extractor the live path uses; a fresh session is reset per job in `decode` above.
     speakerFor: async (samples) => getSpeakerId().labelWindow(samples)?.name ?? null,
+    finalizeSpeakers: () => getSpeakerId().finalizeSession(),
     polish: (lines) => runImportPolish(lines),
     // Free the whisper helper's model memory between imports; the next job spawns a fresh child.
     onIdle: () => stopWhisperHost(),
