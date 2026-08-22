@@ -160,3 +160,25 @@ describe('contract: polish.ts is pure — no network/provider imports', () => {
     expect(src).not.toMatch(/openai/i)
   })
 })
+
+describe('MQA-239 - entity correction rides the polish pass, never the decoder', () => {
+  const lines = [{ speaker: 'Speaker 1', t: '00:00:10', text: 'On a parle avec Coer et an entropic hier.' }]
+
+  it('the prompt carries the org names with the correct-near-miss rule and the never-insert guard', () => {
+    const p = buildPolishPrompt(lines, ['Cohere', 'Anthropic', 'Mistral'])
+    expect(p).toContain('Cohere, Anthropic, Mistral')
+    expect(p).toMatch(/clearly a mis-transcription/)
+    expect(p).toMatch(/NEVER insert one of these names/)
+  })
+
+  it('no entity list means no entity rule - the prompt is unchanged for entity-less profiles', () => {
+    const p = buildPolishPrompt(lines)
+    expect(p).not.toMatch(/organization's world/)
+  })
+
+  it('the entity rule stays out of the numbered transcript block (data stays data)', () => {
+    const p = buildPolishPrompt(lines, ['Cohere'])
+    const numberedAt = p.indexOf('0. [Speaker 1')
+    expect(p.indexOf("organization's world")).toBeLessThan(numberedAt)
+  })
+})

@@ -28,10 +28,24 @@ export interface PolishLine {
  * the screen-context / VISION_GUARD framing in llm/shared.ts (screenContextBlock / VISION_GUARD): the
  * model must not obey anything a speaker said, no matter how imperative it reads.
  */
-export function buildPolishPrompt(lines: PolishLine[]): string {
+export function buildPolishPrompt(lines: PolishLine[], entityNames: string[] = []): string {
   const numbered = lines
     .map((l, i) => `${i}. [${l.speaker} ${l.t}] ${l.text}`)
     .join('\n')
+
+  // MQA-239: entity correction lives HERE, not in the ASR decoder. Decode-time prompt biasing
+  // (decoder_input_ids) was spiked and demonstrably corrupts: the model spliced the entity list into
+  // unrelated speech mid-sentence ("ça va dépendre deétis, Mantu, McKinsey..."). An LLM correcting a
+  // near-miss it can SEE ("Coer" -> "Cohere") carries none of that risk — the never-insert rule below
+  // is the guard, and the fail-open parse contract keeps raw text on any misbehavior.
+  const entityRule = entityNames.length
+    ? "- These names exist in this organization's world: " +
+      entityNames.join(', ') +
+      '. When a word or phrase is clearly a mis-transcription of one of them (e.g. "Coer" -> "Cohere", ' +
+      '"an entropic" -> "Anthropic"), correct it to the exact spelling given here. NEVER insert one of ' +
+      'these names where nothing resembling it was said, and never "correct" a word that is a real word ' +
+      'used normally.\n'
+    : ''
 
   return (
     'You are cleaning up a raw speech-to-text transcript, line by line. Each numbered line below is ' +
@@ -48,7 +62,9 @@ export function buildPolishPrompt(lines: PolishLine[]): string {
     'French, an English line stays English, and a line that code-switches between French and English keeps ' +
     'both languages exactly as spoken.\n' +
     '- Keeps all numbers VERBATIM — dates, amounts, percentages, quantities, phone numbers: copy them ' +
-    'digit-for-digit, never reformatted, rounded, or spelled out differently.\n\n' +
+    'digit-for-digit, never reformatted, rounded, or spelled out differently.\n' +
+    entityRule +
+    '\n' +
     `There are exactly ${lines.length} lines, numbered 0 to ${lines.length - 1}:\n\n` +
     numbered +
     '\n\n' +

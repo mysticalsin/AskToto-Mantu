@@ -823,8 +823,21 @@ async function runImportPolish(lines: TranscriptLine[]): Promise<TranscriptLine[
   })
   // polishBatches slices are contiguous and ordered — track the running offset directly.
   let offset = 0
+  // MQA-239: the org's known people/account names, so the polish can correct near-miss transcriptions
+  // ("Coer" -> "Cohere") — the decode-time alternative was spiked and rejected (it splices names into
+  // unrelated speech; see polish.ts). Capped small on purpose: a kitchen-sink list dilutes the rule.
+  const entityNames = (() => {
+    try {
+      const s2 = getSettings()
+      const people = listBrainEntities(s2, 'person').map((slug) => readBrainPerson(s2, slug)?.name)
+      const accounts = listBrainEntities(s2, 'account').map((slug) => readBrainAccount(s2, slug)?.name)
+      return Array.from(new Set([...people, ...accounts].filter((n): n is string => !!n))).slice(0, 60)
+    } catch {
+      return []
+    }
+  })()
   for (const batch of polishBatches(lines.map(asPolish))) {
-    const prompt = buildPolishPrompt(batch)
+    const prompt = buildPolishPrompt(batch, entityNames)
     let cleaned: string[] | null = null
     for (const provider of candidates) {
       const def = PROVIDERS[provider]
