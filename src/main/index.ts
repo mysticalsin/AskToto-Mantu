@@ -836,9 +836,12 @@ async function runImportPolish(lines: TranscriptLine[]): Promise<TranscriptLine[
       return []
     }
   })()
-  for (const batch of polishBatches(lines.map(asPolish))) {
+  // Batches of 8, not the module default 24: live runs showed a 24-line French batch's JSON answer
+  // (3000+ chars) frequently arrives truncated/malformed, and strict parsing rightly rejects it.
+  // Short outputs parse; a batch that still fails is split in half and each half retried once, and
+  // ONLY the finally-unparseable slice keeps its raw lines — one bad batch no longer costs the meeting.
+  const polishOne = async (batch: PolishLine[]): Promise<string[] | null> => {
     const prompt = buildPolishPrompt(batch, entityNames)
-    let cleaned: string[] | null = null
     for (const provider of candidates) {
       const def = PROVIDERS[provider]
       const local = provider === 'local'
@@ -878,20 +881,34 @@ async function runImportPolish(lines: TranscriptLine[]): Promise<TranscriptLine[
             }
           })
         })
-        cleaned = parsePolishResponse(raw, batch.length)
-        if (cleaned) break
+        const cleaned = parsePolishResponse(raw, batch.length)
+        if (cleaned) return cleaned
         mainLog.warn(`[polish] ${provider} answered but the response did not parse (len ${raw.length}): ${raw.slice(0, 160)}`)
       } catch (e) {
         mainLog.warn(`[polish] ${provider} failed: ${e instanceof Error ? e.message : String(e)}`)
       }
     }
-    if (!cleaned) {
-      mainLog.warn('[polish] batch unparseable on every candidate — keeping raw lines for the whole meeting')
-      return lines // one unparseable batch = polish off for the whole meeting, raw kept
-    }
-    for (let i = 0; i < batch.length; i++) {
+    return null
+  }
+  const applyCleaned = (cleaned: string[], at: number, count: number): void => {
+    for (let i = 0; i < count; i++) {
       const next = cleaned[i]?.trim()
-      if (next) out[offset + i] = { ...out[offset + i], text: next }
+      if (next) out[at + i] = { ...out[at + i], text: next }
+    }
+  }
+  for (const batch of polishBatches(lines.map(asPolish), 8)) {
+    const cleaned = await polishOne(batch)
+    if (cleaned) {
+      applyCleaned(cleaned, offset, batch.length)
+    } else if (batch.length > 1) {
+      const mid = Math.ceil(batch.length / 2)
+      const first = await polishOne(batch.slice(0, mid))
+      if (first) applyCleaned(first, offset, mid)
+      const second = await polishOne(batch.slice(mid))
+      if (second) applyCleaned(second, offset + mid, batch.length - mid)
+      if (!first || !second) mainLog.warn('[polish] a split batch still failed — its lines stay raw')
+    } else {
+      mainLog.warn('[polish] single-line batch unparseable — line stays raw')
     }
     offset += batch.length
   }
