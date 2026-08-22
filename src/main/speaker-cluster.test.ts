@@ -87,3 +87,65 @@ describe('createSpeakerClusterer', () => {
     expect(c.centroid('nope')).toBeNull()
   })
 })
+
+describe('MQA-238 - mergePass repairs online over-splitting at session end', () => {
+  const dim = 16
+  // Orthogonal supports: voice A lives in the first half of the dims, voice B in the second — their
+  // cosine is ~0 by construction, the way two real voices' embeddings are far apart. (Two sine trains
+  // over the same dims are heavily correlated and made this fixture merge everything.)
+  const base = (which: 'A' | 'B'): Float32Array => {
+    const v = new Float32Array(dim)
+    const lo = which === 'A' ? 0 : dim / 2
+    for (let i = 0; i < dim / 2; i++) v[lo + i] = 1 + 0.1 * Math.sin(i)
+    return v
+  }
+  const noisy = (b: Float32Array, drift: number, phase: number): Float32Array => {
+    const v = new Float32Array(dim)
+    for (let i = 0; i < dim; i++) v[i] = b[i] + drift * Math.sin(phase + i * 0.7)
+    return v
+  }
+
+  it('collapses drift-fragmented clusters of one voice back into one label and relabels densely', () => {
+    // Aggressive threshold forces fragmentation the way real compressed audio does.
+    const c = createSpeakerClusterer({ threshold: 0.995, alpha: 0.2 })
+    const A = base('A')
+    const B = base('B') // genuinely different voice
+    const labels: string[] = []
+    for (let k = 0; k < 6; k++) labels.push(c.assign(noisy(A, 0.15, k)).label)
+    for (let k = 0; k < 6; k++) labels.push(c.assign(noisy(B, 0.15, k)).label)
+    expect(c.size()).toBeGreaterThan(2) // the defect: one voice split into several
+    const mapping = c.mergePass({ mergeThreshold: 0.9, minorityFloor: 1 })
+    // Every original label maps somewhere, and the survivors are exactly two, densely numbered.
+    const finals = new Set(labels.map((l) => mapping.get(l)))
+    expect(finals.size).toBe(2)
+    expect([...finals].sort()).toEqual(['Speaker 1', 'Speaker 2'])
+    // Same-voice fragments all landed on the same final label.
+    const finalsA = new Set(labels.slice(0, 6).map((l) => mapping.get(l)))
+    const finalsB = new Set(labels.slice(6).map((l) => mapping.get(l)))
+    expect(finalsA.size).toBe(1)
+    expect(finalsB.size).toBe(1)
+    expect(finalsA).not.toEqual(finalsB)
+  })
+
+  it('absorbs minority tail fragments into their nearest survivor even below the merge threshold', () => {
+    const c = createSpeakerClusterer({ threshold: 0.9999 })
+    const A = base('A')
+    c.assign(noisy(A, 0.02, 0))
+    c.assign(noisy(A, 0.02, 1))
+    c.assign(noisy(A, 0.02, 2))
+    c.assign(noisy(A, 0.6, 9)) // a far-drifted one-window fragment of the same voice
+    expect(c.size()).toBeGreaterThan(1)
+    const mapping = c.mergePass({ mergeThreshold: 0.999, minorityFloor: 2 })
+    expect(new Set(mapping.values()).size).toBe(1)
+  })
+
+  it('never merges two genuinely distinct, well-populated voices', () => {
+    const c = createSpeakerClusterer({ threshold: 0.995 })
+    const A = base('A')
+    const B = base('B')
+    for (let k = 0; k < 5; k++) c.assign(noisy(A, 0.05, k))
+    for (let k = 0; k < 5; k++) c.assign(noisy(B, 0.05, k))
+    const mapping = c.mergePass({ mergeThreshold: 0.9, minorityFloor: 1 })
+    expect(new Set(mapping.values()).size).toBe(2)
+  })
+})

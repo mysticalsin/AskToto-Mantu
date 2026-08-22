@@ -80,6 +80,9 @@ export interface ImportJobManagerDeps {
   /** MQA-235: diarize one utterance window — an enrolled profile name or a session cluster label
    *  ("Speaker N"), null when the extractor is unavailable/degenerate. Absent = lines stay 'unknown'. */
   speakerFor?: (samples: Float32Array) => Promise<string | null>
+  /** MQA-238: whole-recording speaker-cluster merge, called once after the window loop. Returns the
+   *  old->final label mapping applied to every line's `name`; null/absent = no relabel. */
+  finalizeSpeakers?: () => Map<string, string> | null
   /** Plaud-style cleanup pass over the finished lines (stutters/punctuation, never a paraphrase).
    *  Fail-open: a throw keeps the raw lines. */
   polish?: (lines: TranscriptLine[]) => Promise<TranscriptLine[]>
@@ -460,8 +463,15 @@ export class ImportJobManager {
     let votedLanguage: string | null = null
     if (this.deps.probeLanguageName && windows.length > 0) {
       const picks = new Set<number>()
-      for (let i = 0; i < LANGUAGE_VOTE_PROBES; i++) {
-        picks.add(Math.min(windows.length - 1, Math.floor(((i + 0.5) / LANGUAGE_VOTE_PROBES) * windows.length)))
+      // Short recordings (proven on a 60s clip that mis-voted): 5 spread picks over few windows collapse
+      // into 2-3 distinct probes and the vote abstains or lands wrong — probe EVERY window instead; the
+      // >=2 agreement floor below still guards a single garbled probe.
+      if (windows.length <= 2 * LANGUAGE_VOTE_PROBES) {
+        for (let i = 0; i < windows.length; i++) picks.add(i)
+      } else {
+        for (let i = 0; i < LANGUAGE_VOTE_PROBES; i++) {
+          picks.add(Math.min(windows.length - 1, Math.floor(((i + 0.5) / LANGUAGE_VOTE_PROBES) * windows.length)))
+        }
       }
       const tally = new Map<string, number>()
       for (const idx of picks) {
@@ -524,6 +534,21 @@ export class ImportJobManager {
     if (job.lines.length === 0) {
       await this.fail(job, 'No speech was recognized in this recording.')
       return
+    }
+
+    // MQA-238: the online clusterer only looks backward, so one drifting voice fragments into several
+    // labels. Now that every window has been seen, merge the session's clusters and relabel the lines.
+    if (this.deps.finalizeSpeakers) {
+      try {
+        const mapping = this.deps.finalizeSpeakers()
+        if (mapping) {
+          for (const line of job.lines) {
+            if (line.name && mapping.has(line.name)) line.name = mapping.get(line.name)
+          }
+        }
+      } catch {
+        /* best-effort — fragmented labels beat a failed import */
+      }
     }
 
     // Plaud-style polish: stutter/punctuation cleanup, never a paraphrase. Fail-open by contract — the

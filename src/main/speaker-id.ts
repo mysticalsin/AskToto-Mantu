@@ -124,6 +124,10 @@ export interface SpeakerId {
   deleteProfile: (name: string) => boolean
   /** True when the extractor is loadable (model present + addon healthy). */
   available: () => boolean
+  /** MQA-238: whole-session cluster merge at import end — see SpeakerClusterer.mergePass. Returns the
+   *  old->final label mapping so already-emitted lines can be relabeled. Profile-matched names are
+   *  untouched (they never came from the clusterer). */
+  finalizeSession: () => Map<string, string>
   resetSession: () => void
 }
 
@@ -223,6 +227,7 @@ export function createSpeakerId(deps: SpeakerIdDeps = {}): SpeakerId {
       saveProfiles()
       return true
     },
+    finalizeSession: () => clusterer.mergePass(),
     listProfiles: () => loadProfiles().map((p) => ({ name: p.name, samples: p.samples })),
     deleteProfile: (name) => {
       const list = loadProfiles()
