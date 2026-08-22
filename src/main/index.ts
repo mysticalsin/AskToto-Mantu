@@ -864,7 +864,11 @@ async function runImportPolish(lines: TranscriptLine[]): Promise<TranscriptLine[
             freshConversation: true,
             system:
               'You clean up raw speech-to-text transcript lines. Follow the instructions in the user message exactly and output only the JSON array.',
-            req: { id: `import-polish-${Date.now()}`, mode: 'summary', prompt, history: [] },
+            // mode 'answer', deliberately: 'summary' makes userText() build a summarize-the-transcript
+            // scaffold and DISCARD the prompt — both candidates answered an empty summary request
+            // (cloudflare: "[", local: '["Summarize it as instructed."]'). 'answer' passes the prompt
+            // through verbatim, which is the whole job here.
+            req: { id: `import-polish-${Date.now()}`, mode: 'answer', prompt, history: [] },
             handlers: {
               onDelta: (delta) => {
                 text += delta
@@ -876,11 +880,15 @@ async function runImportPolish(lines: TranscriptLine[]): Promise<TranscriptLine[
         })
         cleaned = parsePolishResponse(raw, batch.length)
         if (cleaned) break
-      } catch {
-        /* try the next candidate */
+        mainLog.warn(`[polish] ${provider} answered but the response did not parse (len ${raw.length}): ${raw.slice(0, 160)}`)
+      } catch (e) {
+        mainLog.warn(`[polish] ${provider} failed: ${e instanceof Error ? e.message : String(e)}`)
       }
     }
-    if (!cleaned) return lines // one unparseable batch = polish off for the whole meeting, raw kept
+    if (!cleaned) {
+      mainLog.warn('[polish] batch unparseable on every candidate — keeping raw lines for the whole meeting')
+      return lines // one unparseable batch = polish off for the whole meeting, raw kept
+    }
     for (let i = 0; i < batch.length; i++) {
       const next = cleaned[i]?.trim()
       if (next) out[offset + i] = { ...out[offset + i], text: next }
