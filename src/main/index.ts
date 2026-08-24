@@ -1247,9 +1247,10 @@ function publicSettings(): PublicSettings {
   const localSuggestReady = localReady && s.localLlm.useFor.suggest
   const localSummaryReady = localReady && s.localLlm.useFor.summary
   const localVisionReady = localReady && s.localLlm.useFor.vision
-  // "Local as safety net" is live: with zero cloud/CLI configured, in-scope asks and meeting indexing
-  // still run on-device (askStart's fallback seams + brain/ingest.ts's last-resort candidate). Surfaced
-  // so renderer readiness gates (index CTA, screen-ask) match what routing will actually do.
+  // "Local as safety net" is live: with zero cloud/CLI configured, meeting indexing and — through the
+  // absolute floor — asks of ANY mode still run on-device (askStart's fallback seams + brain/ingest.ts's
+  // last-resort candidate). Surfaced so renderer readiness gates match what routing will actually do:
+  // this one flag is what tells the renderer not to demand an API key it does not need (MQA-242).
   const localFallbackReady = localReady && s.localLlm.fallback
   return {
     ...s,
@@ -3978,6 +3979,27 @@ function registerIpc(): void {
             localFallbackEligibleFor(req, s, tier, allowed)
           ) {
             attempt('local', attempted.concat(provider), 0, race)
+            return
+          }
+          // Out-of-scope modes (answer, recap) used to stop right here and surface "No API key for X.
+          // Open Settings (gear) and add it." — even with a provisioned on-device model and the safety
+          // net on. That is the single most common thing anyone asks Métis (type a question), so a user
+          // who had deliberately turned the local model ON and added no key was told the app could not
+          // answer, while the model that could sat idle on their disk. The absolute floor
+          // (localAnswerFloorEligibleFor) exists precisely for this case and attempt()'s own eligibility
+          // chain above already accepts it — only this seam never offered it.
+          //
+          // Routed through failover() rather than jumping straight to 'local' so the floor keeps its
+          // rank: pickFailover places it DEAD LAST, after every keyed provider and even a cooling one,
+          // so a user whose ACTIVE provider is merely misconfigured still gets their other key (or the
+          // actionable setup error), not a silently weaker on-device answer. Gated on the floor being
+          // genuinely available so an install without local behaves exactly as it did before.
+          if (
+            provider !== 'local' &&
+            allowCrossProviderFailover(req) &&
+            localAnswerFloorEligibleFor(req, s, allowed) &&
+            failover(attempted.concat(provider), undefined, race)
+          ) {
             return
           }
           if (!race || race.gate.markDead(race.leg) === 'surface') {

@@ -26,17 +26,16 @@ export const QuickActions = memo(function QuickActions({
   // chevron pattern in Bar.tsx) with a tooltip instead of only surfacing the gate after a click bounces
   // the user into Settings. Defaults to true so existing callers are unaffected until wired.
   providerReady?: boolean
-  // Métis Local can serve the Summarize chip without any cloud provider (its non-vision branch fires
-  // summary mode, which App.tsx gates on requireProvider('summary')), and the What-to-say-next chip
-  // (its transcript-backed route fires suggest mode; App.tsx re-gates the rarer no-transcript answer
-  // route bare). Fact-check and Explain stay cloud-gated: their direct branches all fire answer mode,
-  // which the local model never serves — enabling them local-only would just bounce the user into
-  // Settings after the click instead of before it.
+  // The per-task opt-ins. Métis Local can serve the Summarize chip without any cloud provider (its
+  // non-vision branch fires summary mode, which App.tsx gates on requireProvider('summary')), and the
+  // What-to-say-next chip (its transcript-backed route fires suggest mode). Neither reaches Fact-check or
+  // Explain, whose branches fire answer mode.
   localSummaryReady?: boolean
   localSuggestReady?: boolean
-  // The default-on safety net serves the in-scope actions (What-to-say-next → suggest, Summarize screen →
-  // summary/vision) on-device with zero cloud keys. Fact-check and Explain fire 'answer' mode, which the
-  // small on-device model never serves, so they stay cloud-gated with a clear tooltip.
+  // The default-on safety net, and the floor for EVERY chip: main routes any mode to the on-device model
+  // as the last resort when no cloud/CLI provider can answer, answer mode included. A zero-API-key install
+  // with the net on therefore gets all four chips live — dimming Fact-check and Explain there would refuse
+  // a request main would have served, and leave the user staring at a key prompt they do not need.
   localFallbackReady?: boolean
 }): JSX.Element {
   return (
@@ -47,14 +46,18 @@ export const QuickActions = memo(function QuickActions({
     <div className="fade-up mt-1.5 flex flex-col items-center gap-1.5 px-1">
       <div className="flex flex-wrap items-center justify-center gap-1.5">
         {ACTIONS.map((a) => {
-          // In-scope actions (What-to-say-next → suggest, Summarize screen → summary/vision) run on the
-          // on-device model via the default-on fallback, so they light up with zero cloud keys. Fact-check
-          // and Explain are 'answer' mode — the small local model does not serve those — so they need a
-          // cloud provider, and their disabled tooltip says exactly that instead of a generic nudge.
+          // The safety net is the ABSOLUTE floor in main's routing (localAnswerFloorEligibleFor): with it
+          // on and the model ready, local serves any mode once nothing else can — including the 'answer'
+          // mode behind Fact-check and Explain. So it enables every chip. The per-task useFor toggles are
+          // narrower and only reach the two in-scope actions (What-to-say-next → suggest, Summarize
+          // screen → summary/vision), which is why they stay listed by kind.
           const localServes =
-            (a.kind === 'summarize' && (localSummaryReady || localFallbackReady)) ||
-            (a.kind === 'whatnext' && (localSuggestReady || localFallbackReady))
+            localFallbackReady ||
+            (a.kind === 'summarize' && localSummaryReady) ||
+            (a.kind === 'whatnext' && localSuggestReady)
           const enabled = providerReady || localServes
+          // Only reachable with the net OFF (it enables everything), i.e. local is scoped to its in-scope
+          // tasks — so for these two the honest remedy really is a cloud provider.
           const disabledHint =
             a.kind === 'factcheck' || a.kind === 'explain'
               ? 'Connect a cloud provider — Métis Local can’t do this one'
