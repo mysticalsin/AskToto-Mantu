@@ -16,6 +16,22 @@
  * dust's tree that ALSO affects a path outside it — fails the build. Drop the carve-out when
  * @dust-tt/client publishes a release without the stale bundled metadata.
  *
+ * INDEPENDENTLY CONFIRMED (2026-08-24). An authenticated `snyk test --all-projects
+ * --strict-out-of-sync=false --severity-threshold=high` across all six scannable manifests reported
+ * exactly ONE high finding, and it is this same carve-out:
+ *
+ *     express-rate-limit@8.2.1 — Allocation of Resources Without Limits or Throttling
+ *     via @dust-tt/client@1.2.6 > @modelcontextprotocol/sdk@1.26.0 > express-rate-limit@8.2.1
+ *
+ * Verified against the BUILT artefact rather than the lockfile: that nested path has zero entries in the
+ * shipped app.asar, and the copies that do ship are the root ones — express-rate-limit@8.6.2 and
+ * @modelcontextprotocol/sdk@1.29.0, both above every version the advisory names as fixed. Every other
+ * manifest (intelligence, license-server ×2) came back clean.
+ *
+ * Two gaps that scan could not cover, so nobody should read it as total: native-app/MetisKit/Package.swift
+ * needs a Swift toolchain (macOS), and Snyk Code (SAST) is not enabled for this organization — the
+ * dependency scan says nothing about our own source.
+ *
  * Usage: node scripts/check-audit.mjs   (exit 0 = clean or excused-only; 1 = real findings)
  */
 import { execSync } from 'node:child_process'
