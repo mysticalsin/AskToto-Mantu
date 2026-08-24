@@ -28,7 +28,7 @@ describe('bundled Parakeet runtime', () => {
   afterEach(() => {
     rmSync(resourcesPath, { recursive: true, force: true })
     if (originalResourcesPath) Object.defineProperty(process, 'resourcesPath', originalResourcesPath)
-    else delete (process as NodeJS.Process & { resourcesPath?: string }).resourcesPath
+    else delete (process as unknown as { resourcesPath?: string }).resourcesPath
     vi.unstubAllGlobals()
   })
 

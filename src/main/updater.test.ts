@@ -194,7 +194,7 @@ describe('startUpdateDownload — Settings "Update now" in-app download guard', 
   beforeEach(() => {
     vi.mocked(shouldDisableAutoUpdate).mockReturnValue(false)
     vi.mocked(readTrustedAdminManaged).mockReturnValue(null)
-    delete (process as NodeJS.Process & { windowsStore?: boolean }).windowsStore
+    delete (process as unknown as { windowsStore?: boolean }).windowsStore
   })
 
   it('does not start a download outside the installed app (app.isPackaged false in test)', async () => {

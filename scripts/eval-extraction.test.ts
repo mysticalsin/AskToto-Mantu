@@ -57,7 +57,7 @@ describe('scoreCategory', () => {
   it('phonetic-confusion spellings still count as a match after normalization', () => {
     const golden = { m1: { accounts: [{ name: "L'Oréal" }] } }
     const actual = { m1: { accounts: [{ name: "L'Oreal" }] } }
-    const r = scoreCategory(golden, actual, 'accounts', (a) => normalizeKey(a.name))
+    const r = scoreCategory(golden, actual, 'accounts', (a: Record<string, unknown>) => normalizeKey(a.name))
     expect(r).toEqual({ tp: 1, fp: 0, fn: 0, precision: 1, recall: 1 })
   })
 
@@ -96,7 +96,7 @@ describe('scoreExtraction', () => {
       }
     }
     const rows = scoreExtraction(golden, actual)
-    const byCategory = Object.fromEntries(rows.map((r) => [r.category, r]))
+    const byCategory = Object.fromEntries(rows.map((r: Record<string, unknown>) => [r.category, r]))
     expect(byCategory.people).toMatchObject({ tp: 1, fp: 0, fn: 0 })
     expect(byCategory.accounts).toMatchObject({ tp: 0, fp: 0, fn: 1 })
     expect(byCategory.deals).toMatchObject({ tp: 1, fp: 1, fn: 0 })
@@ -185,7 +185,7 @@ describe('runEval (reads real golden + actual directories)', () => {
     await writeFile(join(actualDir, '01-acme.json'), JSON.stringify(realExtraction))
 
     const rows = runEval(actualDir, goldenDir)
-    const byCategory = Object.fromEntries(rows.map((r) => [r.category, r]))
+    const byCategory = Object.fromEntries(rows.map((r: Record<string, unknown>) => [r.category, r]))
     expect(byCategory.people).toMatchObject({ tp: 1, fp: 0, fn: 1 }) // Sarah Chen hit, Nobody Here missed
     expect(byCategory.accounts).toMatchObject({ tp: 1, fp: 0, fn: 0 })
     expect(byCategory.numeric_facts).toMatchObject({ tp: 1, fp: 0, fn: 0 })

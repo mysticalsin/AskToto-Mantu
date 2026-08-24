@@ -15,7 +15,10 @@ const anthro = vi.hoisted(() => {
     finalMessage: vi.fn(() => new Promise(() => {})),
     abort: vi.fn()
   }
-  const streamFn = vi.fn(() => stream)
+  // Typed to the shape createStream actually calls it with. Inferred from the stub body it had a
+  // ZERO-parameter tuple, so reading calls[0][0] — the params object the assertions are entirely
+  // about — was a type error against a call production makes every time.
+  const streamFn = vi.fn((_params: { system: { text: string }[]; messages: { content: unknown }[] }) => stream)
   // Regular function (not arrow) so it can be invoked with `new` from createStream.
   const ctor = vi.fn(function () {
     return { messages: { stream: streamFn } }
@@ -30,10 +33,11 @@ vi.mock('openai', () => ({
 }))
 
 import { createStream } from './llm'
+import type { StreamHandlers } from './llm/shared'
 
 const req = (mode: AskStart['mode'] = 'answer'): AskStart =>
   ({ id: 'x', mode, prompt: 'hello', history: [] }) as AskStart
-const handlers = (): { onDelta: ReturnType<typeof vi.fn>; onDone: ReturnType<typeof vi.fn>; onError: ReturnType<typeof vi.fn> } => ({
+const handlers = (): StreamHandlers => ({
   onDelta: vi.fn(),
   onDone: vi.fn(),
   onError: vi.fn()
@@ -64,7 +68,7 @@ describe('createStream — routing', () => {
 
   it('kind=anthropic constructs the SDK client and registers a text listener', () => {
     createStream({
-      providerId: 'claude-api',
+      providerId: 'anthropic',
       kind: 'anthropic',
       apiKey: 'k',
       model: 'claude',
@@ -79,7 +83,7 @@ describe('createStream — routing', () => {
 
   it('depth=deeper appends the go-deeper directive to the user turn, NOT the cached system prefix', () => {
     const r = createStream({
-      providerId: 'claude-api',
+      providerId: 'anthropic',
       kind: 'anthropic',
       apiKey: 'k',
       model: 'claude',
@@ -88,10 +92,7 @@ describe('createStream — routing', () => {
       req: { id: 'x', mode: 'answer', prompt: 'hello', history: [], depth: 'deeper' } as AskStart,
       handlers: handlers()
     })
-    const params = anthro.streamFn.mock.calls[0][0] as {
-      system: { text: string }[]
-      messages: { content: unknown }[]
-    }
+    const params = anthro.streamFn.mock.calls[0][0]
     const last = params.messages[params.messages.length - 1]
     const content = typeof last.content === 'string' ? last.content : JSON.stringify(last.content)
     expect(content).toContain('Go deeper') // directive rides in the per-turn user message
@@ -107,7 +108,7 @@ describe('createStream — idle watchdog (anthropic)', () => {
   it('fires onError when the stream yields no tokens within the idle window', () => {
     const hs = handlers()
     createStream({
-      providerId: 'claude-api',
+      providerId: 'anthropic',
       kind: 'anthropic',
       apiKey: 'k',
       model: 'claude',

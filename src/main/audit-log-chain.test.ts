@@ -55,7 +55,7 @@ describe('MQA-232 — every audit record chains to the one before it', () => {
     tampered[0] = tampered[0].replace('"probe":"chain-1"', '"probe":"edited"')
     const r = verifyAuditLines(tampered)
     expect(r.ok).toBe(false)
-    expect(r.breaks.some((b) => /altered/.test(b.reason))).toBe(true)
+    expect(r.breaks.some((b: Record<string, unknown>) => /altered/.test(b.reason))).toBe(true)
   })
 
   it('DETECTS a deleted record', () => {
@@ -63,14 +63,14 @@ describe('MQA-232 — every audit record chains to the one before it', () => {
     const tampered = lines.filter((_, i) => i !== 1)
     const r = verifyAuditLines(tampered)
     expect(r.ok).toBe(false)
-    expect(r.breaks.some((b) => /seq jumped|altered/.test(b.reason))).toBe(true)
+    expect(r.breaks.some((b: Record<string, unknown>) => /seq jumped|altered/.test(b.reason))).toBe(true)
   })
 
   it('DETECTS truncate-and-append (unchained line after the chain started)', () => {
     const lines = readLines()
     const r = verifyAuditLines([...lines, JSON.stringify({ ts: 'x', event: 'app.crash' })])
     expect(r.ok).toBe(false)
-    expect(r.breaks.some((b) => /truncate-and-append/.test(b.reason))).toBe(true)
+    expect(r.breaks.some((b: Record<string, unknown>) => /truncate-and-append/.test(b.reason))).toBe(true)
   })
 
   it('legacy pre-chain records are a reported prefix, never a false failure', () => {

@@ -7,6 +7,19 @@ import { saveMeeting, isEncryptedFile } from './transcripts'
 import { listMeetings, deleteMeeting, recallRead, searchMeetings, deleteAllMeetings, sweepExpiredMeetings, updateMeetingRecap, renameMeeting, setMeetingCrmPushed } from './recall'
 import type { Settings, SaveMeeting } from '@shared/ipc'
 
+/**
+ * The lines a successful read must have.
+ *
+ * `lines` is optional on the result type, so indexing it is a type error — correctly, because a read that
+ * parsed nothing returns none. The tests were reaching straight into it behind an `if (r.ok)` that does
+ * not narrow it. This makes the assumption an ASSERTION: an absent lines[] is a failure of the thing under
+ * test, and it now says so instead of surfacing as "possibly undefined" or being cast away.
+ */
+function linesOf(r: { lines?: { t: number; speaker: string; text: string; lang?: string }[] }): { t: number; speaker: string; text: string; lang?: string }[] {
+  if (!r.lines) throw new Error('read returned no lines — the transcript did not parse')
+  return r.lines
+}
+
 vi.mock('electron')
 
 // Stub the settings store entirely — recall.ts/transcripts.ts only ever read it via getSettings(), and
@@ -303,8 +316,8 @@ describe('recall — recallRead recap extraction', () => {
     expect(r.ok).toBe(true)
     if (r.ok) {
       expect(r.lines).toHaveLength(2)
-      expect(r.lines[0]).toMatchObject({ speaker: 'them', text: 'Let us lock the roadmap' })
-      expect(r.lines[1]).toMatchObject({ speaker: 'you', text: 'Agreed, ship Q3' })
+      expect(linesOf(r)[0]).toMatchObject({ speaker: 'them', text: 'Let us lock the roadmap' })
+      expect(linesOf(r)[1]).toMatchObject({ speaker: 'you', text: 'Agreed, ship Q3' })
     }
   })
 
@@ -362,7 +375,7 @@ describe('recall — updateMeetingRecap', () => {
     if (read.ok) {
       expect(read.recap).toBe(edited) // round-trips through its own internal "## " headings
       expect(read.lines).toHaveLength(2) // "## Full transcript" boundary intact
-      expect(read.lines[1]).toMatchObject({ speaker: 'you', text: 'Agreed, ship Q3' })
+      expect(linesOf(read)[1]).toMatchObject({ speaker: 'you', text: 'Agreed, ship Q3' })
       expect(read.title).toBe('Q3 planning sync') // frontmatter untouched by a recap edit
     }
   })
@@ -836,11 +849,11 @@ describe('recall — sub-second start times do not shift the transcript a day (M
     expect(read.lines).toHaveLength(3)
     // The lines are rendered as HH:MM:SS, so the reconstruction is the start floored to the second —
     // not that second plus 24 hours.
-    expect(read.lines[0].t).toBe(Math.floor(started / 1000) * 1000)
-    expect(new Date(read.lines[0].t).toDateString()).toBe(new Date(started).toDateString())
+    expect(linesOf(read)[0].t).toBe(Math.floor(started / 1000) * 1000)
+    expect(new Date(linesOf(read)[0].t).toDateString()).toBe(new Date(started).toDateString())
     // Backfill derives endedAt from the last line (index.ts) — a day-shifted span widens the calendar
     // lookup to ~24.5h and guarantees named: 0.
-    expect(read.lines[2].t - read.lines[0].t).toBe(60_000)
+    expect(linesOf(read)[2].t - linesOf(read)[0].t).toBe(60_000)
   })
 
   it('MQA-097: a genuine midnight crossing still pushes the later lines to the next day', async () => {
@@ -860,8 +873,8 @@ describe('recall — sub-second start times do not shift the transcript a day (M
     expect(read.ok).toBe(true)
     if (!read.ok) return
     expect(read.lines).toHaveLength(2)
-    expect(new Date(read.lines[0].t).toDateString()).toBe(new Date(started).toDateString())
-    expect(read.lines[1].t - read.lines[0].t).toBe(40_000) // 00:00:10 the next day, not 23 hours back
+    expect(new Date(linesOf(read)[0].t).toDateString()).toBe(new Date(started).toDateString())
+    expect(linesOf(read)[1].t - linesOf(read)[0].t).toBe(40_000) // 00:00:10 the next day, not 23 hours back
   })
 })
 
