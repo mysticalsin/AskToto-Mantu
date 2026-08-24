@@ -53,3 +53,31 @@ export const Notification = Object.assign(
   }),
   { isSupported: vi.fn(() => true) }
 )
+
+/** Display geometry. Real code positions windows against the work area (e.g. intelligence.ts places the
+ *  dashboard clear of the always-on-top overlay), so the mock must answer getPrimaryDisplay or those
+ *  modules throw on import-time-adjacent calls. A plain 1800x1082 desktop with no reserved edges. */
+export const screen = {
+  getPrimaryDisplay: vi.fn(() => ({
+    workArea: { x: 0, y: 0, width: 1800, height: 1082 },
+    bounds: { x: 0, y: 0, width: 1800, height: 1130 },
+    scaleFactor: 1
+  })),
+  getAllDisplays: vi.fn(() => [
+    {
+      id: 1,
+      workArea: { x: 0, y: 0, width: 1800, height: 1082 },
+      bounds: { x: 0, y: 0, width: 1800, height: 1130 },
+      scaleFactor: 1
+    }
+  ]),
+  getDisplayMatching: vi.fn(() => ({
+    id: 1,
+    workArea: { x: 0, y: 0, width: 1800, height: 1082 },
+    bounds: { x: 0, y: 0, width: 1800, height: 1130 },
+    scaleFactor: 1
+  })),
+  getCursorScreenPoint: vi.fn(() => ({ x: 0, y: 0 })),
+  on: vi.fn(),
+  removeListener: vi.fn()
+}
