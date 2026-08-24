@@ -277,6 +277,7 @@ silently wrong · `medium` = degraded or confusing in a real scenario · `low` =
 | MQA-244 | Commitments spoken by "you"/"them" were silently dropped in any meeting with no deal - MQA-116 strips those speaker-role labels from people[], leaving the person loop nothing to match `by` against, while a comment claimed mergeExtraction had its own by='them'/'you' handling that never existed | index a 1:1, internal sync or standup with no deal; read next steps | high | FIXED | `src/main/brain/verified-numbers.test.ts` | Metis's own transcription labels speakers this way, so it was the common case; unrouted commitments now land in the user's own ledger with `by` preserved verbatim |
 | MQA-245 | Saved transcripts rendered a diarization cluster label wrapped in the generic role label - "Speaker (Speaker 1)" - in the durable file the user reads and may share | open a saved imported meeting | low | FIXED | `src/main/transcripts.test.ts` | Writer emits the bare cluster label; recall.ts's line regex gained that form, so the round trip is preserved and older files still parse unchanged |
 | MQA-246 | An imported recording transcribed by the floor Whisper model gave the user no signal at all, while the live-listen path surfaces an honest "reduced" note for its own engine swap | import any recording | medium | FIXED | `src/main/whisper-asr-host.test.ts` | The high tier is absent from the package so the probe always degrades; the ready message now names the tier and a dismissable Settings note records it once |
+| MQA-247 | Every imported recording decodes with the floor Whisper model on EVERY platform, because the high tier cannot be bundled (1.6 GiB of weights + a 0.77 GiB installer is over GitHub's hard 2 GiB per-asset limit) and nothing fetches it on demand | import any recording, any platform | medium | OPEN | - | MQA-246 disclosed the degradation; this is the fix. Same shape MQA-146 applied to the LLM weights for the same 2 GiB reason: fetch on first use, size- and SHA-256-pinned, disk-checked |
 | MQA-231 | Four high-severity libvips CVEs shipped inside both installers via `sharp <0.35` (asarUnpack'd, pulled transitively by `@huggingface/transformers`) while CI's soft-failing high-severity audit step (`npm audit --audit-level=high` with an or-true suffix) reported exactly that severity without blocking | `npm audit --omit=dev` on the shipped tree | high | FIXED | `scripts/dependency-cve-gate.contract.test.ts` | sharp pinned to >=0.35 via root `overrides` (0.35.3 installs; the four advisories clear), `predist:win`'s force-installed `@img` platform pair bumped to the matching 0.35 generation, and CI now BLOCKS on high through `scripts/check-audit.mjs` — which excuses only findings confined to the pruned `@dust-tt/client` bundle (postinstall deletes that tree; check-packaged-runtime proves the asar never carries it), so the gate is strict without being permanently red on a known false positive. Repo-wide gitleaks scan (digest-pinned) added beside the existing narrow provider-prefix scan |
  on Windows — every reader strips `
 ` before hashing or the chain false-breaks on its own first link |
@@ -4318,3 +4319,29 @@ with the note that an immediate "Error" dialog naming `cachedDataRejected` is th
 **Repro (why the obvious fix is wrong).** Reverse the order (transformers binding preloaded at whenReady): both REQUIRES succeed, but the first real Parakeet decode kills the app with a native crash — sherpa resolves against the wrong resident onnxruntime.dll. Reproduced twice via `node scripts/check-packaged-asr.mjs` (app dies mid-job, `Target page, context or browser has been closed`). The attempted fix (commit 3e16fa7) is reverted.
 
 **Fix direction.** Run the transformers/onnxruntime-node stack in an Electron utilityProcess for imports — Float32Array windows in, text out over MessagePort; sherpa stays alone in main. Larger but correct; also unlocks running whisper-large-v3-turbo for imports without main-process memory pressure. Do NOT retry load-order tricks: whichever engine loads second is broken, at load or at decode.
+
+### MQA-247 — the high-accuracy transcription model is unshippable and unfetchable
+
+**Repro.** Import any recording on any platform. `src/main/whisper-asr-host.ts`'s `resolveTier()` walks
+`MODEL_TIERS` and returns the first entry whose directory exists under the packaged models path. The first
+entry is `onnx-community/whisper-large-v3-turbo`; `electron-builder.yml` excludes it
+(`!onnx-community/whisper-large-v3-turbo/**`), so that directory never exists in a packaged app and the
+probe always falls through to `Xenova/whisper-base`. Confirmed by the shipped 1.6.1 build: the packaged
+`ready` message reports `tier: 'Xenova/whisper-base', degraded: true`.
+
+**Why it is excluded, and why that is correct.** `du -sh` on the fetched model is 1.6 GiB. The 1.6.1
+Windows installer is 0.77 GiB. Bundling puts a single release asset at ~2.37 GiB, over GitHub's hard 2 GiB
+per-asset limit — `scripts/check-release.mjs` fails at 1.9 GiB by design. The exclusion is not the defect.
+
+**What the defect is.** There is no third option today: the model can neither ship nor be obtained, so the
+best available transcription is unreachable on every install. `electron-builder.yml`'s comment asserted the
+exclusion had "no import-path benefit", which is false — `MODEL_TIERS` ranks this model first precisely
+because it is better — and that false claim is why the consequence went unexamined. MQA-246 made the
+degradation visible to the user; visibility is not the fix.
+
+**The fix.** The same one MQA-146 applied to the LLM weights for the identical 2 GiB reason: fetch on first
+use into the per-user profile, size- and SHA-256-pinned against an immutable upstream revision, verified
+before use, behind the free-disk pre-flight added in 14e4e6d. `src/main/llm/local-model-download.ts` is the
+working reference; this needs the multi-file (7 required + 4 optional) variant of it, a progress channel,
+and a Settings affordance. Deliberately NOT rushed into 1.6.1 — a 1.6 GiB downloader shipped half-tested
+would be a worse defect than the one it fixes.
