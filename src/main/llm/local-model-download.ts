@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { createReadStream, createWriteStream, mkdirSync, renameSync, rmSync, statSync } from 'node:fs'
+import { createReadStream, createWriteStream, mkdirSync, renameSync, rmSync, statSync, statfsSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { pipeline } from 'node:stream/promises'
 import { net } from 'electron'
@@ -36,6 +36,50 @@ import { assertRamOk, getModel, modelPaths, type LocalModelDownloadState, type L
  * state below is what Settings reads, so an in-flight or failed fetch reads as itself instead of as a
  * damaged install (MQA-186/187).
  */
+
+/**
+ * Spare room demanded on top of the weights themselves.
+ *
+ * Not padding for its own sake: the transfer writes a `.partial` alongside whatever else the volume is
+ * doing, and macOS needs slack for its own bookkeeping. Filling a startup volume to zero does not fail
+ * politely — Chromium CHECK()s on a failed write and aborts with SIGTRAP, and the Crashpad handler that
+ * would report it dies the same way, so the user sees an app that vanishes with no crash dialog and no
+ * log. Observed exactly that on 2026-08-24 with a volume at 98%: three separate Electron binaries and
+ * the crash handler itself all died with `brk 0` within seconds of launch. Refusing the download is the
+ * only outcome that leaves the machine usable.
+ */
+const DISK_HEADROOM_BYTES = 512 * 1024 * 1024
+
+/**
+ * Refuse a transfer the volume cannot hold, BEFORE a single byte is written.
+ *
+ * The module contract above promises that a machine "short on disk simply keeps using the cloud/CLI
+ * routes". Nothing enforced that: the only disk check was the post-write size comparison, which is
+ * reached AFTER the volume has already been filled. With the weights now 3.58 GB (Qwen3.5 4B, up from
+ * 763 MB) that gap stopped being theoretical.
+ *
+ * Unmeasurable is not the same as insufficient: if statfs throws — an exotic filesystem, a path that
+ * vanished between mkdir and here — we proceed rather than block a download that would have worked.
+ * The post-write size and SHA-256 checks still catch a truncated result, so failing open here cannot
+ * let a bad file be kept.
+ */
+function assertRoomFor(bytes: number, dir: string, file: string): void {
+  let freeBytes: number
+  try {
+    const fs = statfsSync(dir)
+    freeBytes = fs.bavail * fs.bsize
+  } catch {
+    return
+  }
+  const needed = bytes + DISK_HEADROOM_BYTES
+  if (freeBytes >= needed) return
+  const gb = (n: number): string => `${(n / 1e9).toFixed(1)} GB`
+  throw new Error(
+    `${file}: not enough free disk space — needs ${gb(needed)} (${gb(bytes)} of weights plus ` +
+      `${gb(DISK_HEADROOM_BYTES)} of headroom) but only ${gb(freeBytes)} is available. ` +
+      `Free up space and reopen Métis; the download retries on the next launch.`
+  )
+}
 
 const REQUEST_TIMEOUT_MS = 60_000
 const IDLE_TIMEOUT_MS = 120_000
@@ -102,6 +146,8 @@ async function downloadOne(
   onChunk: (bytes: number) => void
 ): Promise<void> {
   mkdirSync(dirname(dest), { recursive: true })
+  // Before the network is touched: a transfer that cannot fit must not start.
+  assertRoomFor(spec.bytes, dirname(dest), file)
   const partial = `${dest}.partial`
   rmSync(partial, { force: true })
 

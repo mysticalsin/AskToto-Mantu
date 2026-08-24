@@ -8,6 +8,16 @@ vi.mock('electron')
 vi.mock('../logger', () => ({ auditLog: vi.fn(), mainLog: { info: vi.fn(), warn: vi.fn(), error: vi.fn() } }))
 
 const ramState = vi.hoisted(() => ({ totalMemBytes: 64 * 1024 ** 3 }))
+// Free disk space is steerable the same way RAM is. Default is deliberately huge so every existing
+// test behaves as before; only the preflight test lowers it.
+const diskState = vi.hoisted(() => ({ freeBytes: 512 * 1024 ** 3 }))
+vi.mock('node:fs', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs')>()
+  return {
+    ...actual,
+    statfsSync: () => ({ bsize: 4096, bavail: Math.floor(diskState.freeBytes / 4096) })
+  }
+})
 vi.mock('node:os', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:os')>()
   return { ...actual, totalmem: () => ramState.totalMemBytes }
@@ -132,6 +142,8 @@ describe('MQA-185/186 — the first-run fetch is proxy-aware and observable', ()
     userData = mkdtempSync(join(tmpdir(), 'metis-dl-test-'))
     mockGetPath.mockImplementation((name: string) => (name === 'userData' ? userData : join(userData, name)))
     ramState.totalMemBytes = 64 * 1024 ** 3
+    // Reset per test: the preflight test lowers this and must not leak into its neighbours.
+    diskState.freeBytes = 512 * 1024 ** 3
     mockFetch.mockReset()
   })
 
@@ -167,6 +179,40 @@ describe('MQA-185/186 — the first-run fetch is proxy-aware and observable', ()
       ready: false,
       unavailableReason: 'download-failed'
     })
+  })
+
+  // Filling a startup volume to zero does not fail politely. Observed 2026-08-24 on a volume at 98%:
+  // Chromium CHECK()s on a failed write and aborts with SIGTRAP, and the Crashpad handler that would
+  // report it dies the same way — three separate Electron binaries and the crash handler itself all
+  // died with `brk 0` within seconds of launch, with no dialog and no log. The module contract always
+  // promised a machine "short on disk simply keeps using the cloud/CLI routes"; nothing enforced it,
+  // and the only disk check ran AFTER the volume was already full. At 3.58 GB (Qwen3.5 4B, up from
+  // 763 MB) that gap stopped being theoretical.
+  it('refuses the download when the volume cannot hold it, without touching the network', async () => {
+    // Enough for the weights themselves but not for weights + headroom.
+    diskState.freeBytes = GGUF.length + 1024
+    mockFetch.mockResolvedValue(responseOf([GGUF], GGUF.length))
+
+    await expect(ensureLocalModel('qwen3.5-0.8b')).resolves.toBe(false)
+
+    // The point of a PREflight: no request is issued at all, so nothing is streamed to a full disk.
+    expect(mockFetch).not.toHaveBeenCalled()
+    expect(localModelDownloadState()).toMatchObject({ modelId: 'qwen3.5-0.8b', status: 'failed' })
+    expect(listModels(localModelDownloadState())[0]).toMatchObject({
+      ready: false,
+      unavailableReason: 'download-failed'
+    })
+  })
+
+  it('proceeds when free space cannot be measured, rather than blocking a download that would work', () => {
+    // Unmeasurable is not insufficient. If statfs throws — an exotic filesystem, a path that vanished
+    // between mkdir and the check — the download proceeds. The post-write size and SHA-256 checks
+    // still guard the result, so failing open here cannot let a bad file be kept.
+    expect(source).toContain('statfsSync(dir)')
+    const fn = source.slice(source.indexOf('function assertRoomFor'))
+    const body = fn.slice(0, fn.indexOf('const REQUEST_TIMEOUT_MS'))
+    expect(body).toContain('catch {')
+    expect(body.slice(body.indexOf('catch {'))).toContain('return')
   })
 
   it('MQA-186 — reports real progress while the transfer is in flight', async () => {
