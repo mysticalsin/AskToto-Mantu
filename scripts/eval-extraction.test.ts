@@ -21,14 +21,14 @@ describe('scoreCategory', () => {
   it('perfect match: precision and recall both 1, zero fp/fn', () => {
     const golden = { m1: { people: [{ name: 'Sarah Chen' }, { name: 'James Walsh' }] } }
     const actual = { m1: { people: [{ name: 'Sarah Chen' }, { name: 'James Walsh' }] } }
-    const r = scoreCategory(golden, actual, 'people', (p) => normalizeKey(p.name))
+    const r = scoreCategory(golden, actual, 'people', (p: Record<string, string>) => normalizeKey(p.name))
     expect(r).toEqual({ tp: 2, fp: 0, fn: 0, precision: 1, recall: 1 })
   })
 
   it('one miss (false negative): recall drops, precision stays perfect', () => {
     const golden = { m1: { people: [{ name: 'Sarah Chen' }, { name: 'James Walsh' }] } }
     const actual = { m1: { people: [{ name: 'Sarah Chen' }] } } // James Walsh missed
-    const r = scoreCategory(golden, actual, 'people', (p) => normalizeKey(p.name))
+    const r = scoreCategory(golden, actual, 'people', (p: Record<string, string>) => normalizeKey(p.name))
     expect(r.tp).toBe(1)
     expect(r.fp).toBe(0)
     expect(r.fn).toBe(1)
@@ -39,7 +39,7 @@ describe('scoreCategory', () => {
   it('one hallucination (false positive): precision drops, recall stays perfect', () => {
     const golden = { m1: { people: [{ name: 'Sarah Chen' }] } }
     const actual = { m1: { people: [{ name: 'Sarah Chen' }, { name: 'Nonexistent Person' }] } }
-    const r = scoreCategory(golden, actual, 'people', (p) => normalizeKey(p.name))
+    const r = scoreCategory(golden, actual, 'people', (p: Record<string, string>) => normalizeKey(p.name))
     expect(r.tp).toBe(1)
     expect(r.fp).toBe(1)
     expect(r.fn).toBe(0)
@@ -50,7 +50,7 @@ describe('scoreCategory', () => {
   it('a meeting with no actual output at all counts every golden item as a miss', () => {
     const golden = { m1: { people: [{ name: 'Sarah Chen' }] } }
     const actual = { m1: {} }
-    const r = scoreCategory(golden, actual, 'people', (p) => normalizeKey(p.name))
+    const r = scoreCategory(golden, actual, 'people', (p: Record<string, string>) => normalizeKey(p.name))
     expect(r).toEqual({ tp: 0, fp: 0, fn: 1, precision: 1, recall: 0 })
   })
 

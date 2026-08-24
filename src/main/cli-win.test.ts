@@ -11,6 +11,27 @@ import { PassThrough } from 'node:stream'
 // spawn mock, needed for the installCli Windows-stderr tests below.
 const h = vi.hoisted(() => ({ execFileImpl: vi.fn(), spawnImpl: vi.fn() }))
 
+/**
+ * MQA-251 — resolveBin's Windows branch probes the real filesystem.
+ *
+ * After `where` misses it walks npmGlobalBinCandidates() and returns the first path that existsSync().
+ * The "no CLI on this machine" tests below therefore passed or failed depending on whether the DEVELOPER
+ * happened to have Claude Code installed — deterministic per machine, invisible in review, and read as
+ * flakiness because it changed with test order and host rather than with the commit.
+ *
+ * Default is the real existsSync so every other test in this file is untouched; the tests that need a
+ * genuine miss set `binProbe.hit = false` and get one on any machine.
+ */
+const binProbe = vi.hoisted(() => ({ hit: null as boolean | null }))
+vi.mock('node:fs', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs')>()
+  return {
+    ...actual,
+    existsSync: (p: Parameters<typeof actual.existsSync>[0]) =>
+      binProbe.hit === null ? actual.existsSync(p) : binProbe.hit
+  }
+})
+
 vi.mock('electron', () => ({
   app: { getPath: () => '/tmp' },
   shell: { openPath: vi.fn() }
@@ -47,7 +68,8 @@ import {
   cmdShimSpawn,
   resolveSpawnTarget,
   INSTALL_PERMISSION_ERROR_RE,
-  installCli
+  installCli,
+  clearBinCache
 } from './cli'
 
 const REAL_PLATFORM = process.platform
@@ -121,6 +143,7 @@ describe('resolveBin — Windows: `where` first, then a real-fs APPDATA probe fa
   const savedAppData = process.env.APPDATA
 
   beforeEach(() => {
+    clearBinCache()
     h.execFileImpl.mockReset()
     tmpDir = mkdtempSync(join(tmpdir(), 'asktoto-cliwin-'))
     setPlatform('win32')
@@ -355,11 +378,18 @@ describe('INSTALL_PERMISSION_ERROR_RE — routes global-install failures to the 
 
 describe('installCli — Windows npm-not-found detection (cmd.exe phrasing, not the POSIX shell one)', () => {
   beforeEach(() => {
+    clearBinCache()
     h.execFileImpl.mockReset()
     h.spawnImpl.mockReset()
     setPlatform('win32')
+    // "Nothing is installed" must MEAN nothing is installed, on any machine — not "nothing is installed
+    // unless the person running the tests happens to have the CLI".
+    binProbe.hit = false
   })
-  afterEach(() => setPlatform(REAL_PLATFORM))
+  afterEach(() => {
+    setPlatform(REAL_PLATFORM)
+    binProbe.hit = null
+  })
 
   it('no npm on the machine: skips the shell entirely and self-installs on embedded Node (one-click)', async () => {
     // resolveBin('claude') misses AND resolveBin('npm') misses — the pre-2026-07-16 behavior was a

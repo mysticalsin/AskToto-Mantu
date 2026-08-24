@@ -24,7 +24,7 @@ class MemoryStore implements ImportJobStore {
 function createManager(overrides: Partial<ConstructorParameters<typeof ImportJobManager>[0]> = {}) {
   const store = new MemoryStore()
   const decode = vi.fn()
-  const transcribe = vi.fn(async () => 'recognized speech')
+  const transcribe = vi.fn(async (_pcm?: unknown, _opts?: unknown) => 'recognized speech')
   const saveMeeting = vi.fn(async () => 'saved-import.md')
   const enqueueIngest = vi.fn()
   const generateRecap = vi.fn(async () => undefined)

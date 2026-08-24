@@ -92,6 +92,23 @@ export function killWindowsProcessTree(pid: number | undefined): void {
 // ─── Binary resolution: login shell (mac/Linux) or `where` + npm global probe (Windows) ────────
 const binCache = new Map<string, string | null>()
 
+/**
+ * Drop every cached binary lookup (MQA-251).
+ *
+ * resolveBin's cache is a module-level Map consulted BEFORE the platform branch, which makes it a piece
+ * of state that outlives any single test. On a developer machine with a real CLI installed, one lookup
+ * cached an absolute Windows path; every later test that stubbed process.platform to darwin then got that
+ * Windows path back and spawned through cmd.exe, so its POSIX-shaped assertions failed. On a machine with
+ * no CLI installed the cache stayed empty (only positive hits are cached) and the same tests passed.
+ *
+ * That is why the failure looked like flakiness: it was deterministic per machine, and per test ORDER,
+ * but not per commit. Exported so a test can start from a known-empty cache instead of inheriting
+ * whichever lookup happened to run first.
+ */
+export function clearBinCache(): void {
+  binCache.clear()
+}
+
 /** Parse `where <bin>` stdout: return the first hit ending in .cmd or .exe. `where` can list several
  *  shadowed matches (e.g. an extension-less dir entry) — only a .cmd shim or .exe is launchable. */
 export function parseWhereOutput(stdout: string): string | null {

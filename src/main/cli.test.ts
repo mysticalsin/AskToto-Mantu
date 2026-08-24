@@ -35,7 +35,32 @@ vi.mock('node:child_process', async () => {
   return { execFile, spawn: h.spawnImpl }
 })
 
-import { CLI_CONFIGS, checkCliSession, cliEnv, resolveBin, idleWatchdog, runCliStream, testCli } from './cli'
+import { CLI_CONFIGS, checkCliSession, cliEnv, resolveBin, idleWatchdog, runCliStream, testCli,
+  clearBinCache
+} from './cli'
+
+/**
+ * MQA-251 — a test must not leak work into the next one.
+ *
+ * runCliStream returns `{ abort }` and does its work asynchronously. Several tests below fired it and
+ * discarded the handle, so an in-flight resolveBin could still reach spawn AFTER the next test's
+ * beforeEach had run mockReset() — landing the PREVIOUS test's call at `calls[0]` of the next one, under
+ * the previous test's stubbed platform. That is why these tests passed when run alone and failed beside
+ * their siblings, and why one full-suite run reported 0 failures and the next reported 5.
+ *
+ * It looked like an AbortSignal race in production code. It was a leak in the tests. Aborting every
+ * started stream removes the overlap outright, rather than making the assertions tolerant of it — a
+ * tolerant assertion would have buried this instead of surfacing it.
+ */
+let liveStream: { abort: () => void } | undefined
+afterEach(() => {
+  try {
+    liveStream?.abort()
+  } catch {
+    /* already settled */
+  }
+  liveStream = undefined
+})
 
 /** Drain pending microtasks + one macrotask turn. setImmediate is deliberately left un-faked by the
  *  fake-timer blocks below, so this advances the stream/readline plumbing without moving the clock. */
@@ -159,6 +184,7 @@ describe('resolveBin — login-shell lookup with in-process caching', () => {
   const REAL_PLATFORM = process.platform
   beforeEach(() => {
     Object.defineProperty(process, 'platform', { value: 'darwin', configurable: true })
+    clearBinCache()
     h.execFileImpl.mockReset()
   })
   afterEach(() => Object.defineProperty(process, 'platform', { value: REAL_PLATFORM, configurable: true }))
@@ -285,6 +311,7 @@ describe('runCliStream — kill-on-result settles without waiting for child exit
   const REAL_PLATFORM = process.platform
   beforeEach(() => {
     Object.defineProperty(process, 'platform', { value: 'darwin', configurable: true })
+    clearBinCache()
     h.execFileImpl.mockReset()
     h.spawnImpl.mockReset()
   })
@@ -297,7 +324,7 @@ describe('runCliStream — kill-on-result settles without waiting for child exit
 
     const onDone = vi.fn()
     const onError = vi.fn()
-    runCliStream({
+    liveStream = runCliStream({
       providerId: 'claude-cli',
       model: 'opus',
       system: '',
@@ -327,7 +354,7 @@ describe('runCliStream — kill-on-result settles without waiting for child exit
 
     const onDone = vi.fn()
     const onError = vi.fn()
-    runCliStream({
+    liveStream = runCliStream({
       providerId: 'claude-cli',
       model: 'opus',
       system: '',
@@ -356,7 +383,7 @@ describe('runCliStream — kill-on-result settles without waiting for child exit
     const onDelta = vi.fn()
     const onDone = vi.fn()
     const onError = vi.fn()
-    runCliStream({
+    liveStream = runCliStream({
       providerId: 'claude-cli',
       model: 'opus',
       system: '',
@@ -397,6 +424,7 @@ describe('runCliStream — Windows .cmd-shim teardown ordering', () => {
   const TMP_CWD = 'C:\\Temp\\asktoto-cli-test'
   beforeEach(() => {
     Object.defineProperty(process, 'platform', { value: 'win32', configurable: true })
+    clearBinCache()
     h.execFileImpl.mockReset()
     h.spawnImpl.mockReset()
     fsp.mkdtemp.mockReset()
@@ -439,7 +467,7 @@ describe('runCliStream — Windows .cmd-shim teardown ordering', () => {
   // asktoto-cli-* directory per failed ask.
   it('MQA-087: a shim-guard rejection removes the sandbox cwd and names the offending argument', async () => {
     const onError = vi.fn()
-    runCliStream({
+    liveStream = runCliStream({
       providerId: 'codex-cli',
       model: 'gpt-5-codex(preview)', // parens are cmd.exe metacharacters — cmdShimSpawn refuses this
       system: '',
@@ -466,6 +494,7 @@ describe('runCliStream — the idle watchdog measures idle time, not total runti
     // Fake ONLY the watchdog's own timer family — readline/PassThrough delivery keeps running on real
     // nextTick/setImmediate, so lines can be fed in between clock advances.
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    clearBinCache()
     h.execFileImpl.mockReset()
     h.spawnImpl.mockReset()
     fsp.mkdtemp.mockReset()
@@ -488,7 +517,7 @@ describe('runCliStream — the idle watchdog measures idle time, not total runti
     const onDelta = vi.fn()
     const onDone = vi.fn()
     const onError = vi.fn()
-    runCliStream({
+    liveStream = runCliStream({
       providerId: 'codex-cli',
       model: '',
       system: '',
@@ -520,7 +549,7 @@ describe('runCliStream — the idle watchdog measures idle time, not total runti
     const { child, stdout } = fakeChild()
     h.spawnImpl.mockReturnValue(child)
     const onError = vi.fn()
-    runCliStream({
+    liveStream = runCliStream({
       providerId: 'codex-cli',
       model: '',
       system: '',
@@ -544,6 +573,7 @@ describe('testCli — the connection probe spawns under the same lockdown as a r
   const REAL_PLATFORM = process.platform
   beforeEach(() => {
     Object.defineProperty(process, 'platform', { value: 'darwin', configurable: true })
+    clearBinCache()
     h.execFileImpl.mockReset()
     h.spawnImpl.mockReset()
     fsp.mkdtemp.mockReset()
@@ -617,6 +647,7 @@ describe('checkCliSession — the zero-token liveness probe behind MQA-062', () 
 
   beforeEach(async () => {
     Object.defineProperty(process, 'platform', { value: 'darwin', configurable: true })
+    clearBinCache()
     h.execFileImpl.mockReset()
     vi.resetModules()
     checkCliSession = (await import('./cli')).checkCliSession

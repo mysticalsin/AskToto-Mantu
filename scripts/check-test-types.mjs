@@ -37,9 +37,10 @@ const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 
 /**
  * The number of errors accepted today. Only ever revise this DOWNWARD.
- * 2026-08-24: 159 → 139 after fixing the two real shape defects (MQA-248).
+ * 2026-08-24: 159 → 139 (the two real shape defects, MQA-248) → 129 (implicit-any callbacks, a
+ * delete-cast that kept its field required, and a mock stub typed to the real call shape).
  */
-const BASELINE = 139
+const BASELINE = 129
 
 let output = ''
 try {

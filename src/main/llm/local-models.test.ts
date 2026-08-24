@@ -54,7 +54,7 @@ describe('bundled local model runtime', () => {
   afterEach(() => {
     rmSync(userData, { recursive: true, force: true })
     if (originalResourcesPath) Object.defineProperty(process, 'resourcesPath', originalResourcesPath)
-    else delete (process as NodeJS.Process & { resourcesPath?: string }).resourcesPath
+    else delete (process as unknown as { resourcesPath?: string }).resourcesPath
     vi.restoreAllMocks()
   })
 
