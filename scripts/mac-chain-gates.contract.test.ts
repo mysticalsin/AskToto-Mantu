@@ -117,9 +117,10 @@ describe('MQA-207 — the launch gate never silently covers a host it cannot ins
   })
 
   it('MQA-207: the darwin refusal names the manual check that covers the universal DMG', () => {
-    // The universal .app carries ONE out/main/index.jsc, emitted by whichever Electron the build host
-    // runs, so the other slice executes bytecode it did not produce. Until there is a mac gate, the
-    // refusal has to hand the maintainer the two commands that actually exercise both slices.
+    // The two slices still differ in everything this Win32 script could never inspect — per-arch native
+    // modules, the ffmpeg/llama-server sidecars, signing — so the refusal has to hand the maintainer the
+    // two commands that actually exercise both, and name cachedDataRejected as the signature to
+    // recognise if the bytecode ever comes back (MQA-240, pinned in scripts/release-gates.test.ts).
     expect(launchGate).toContain('arch -x86_64')
     expect(launchGate).toContain('release/mac-universal/Metis.app')
     expect(launchGate).toMatch(/cachedDataRejected/)

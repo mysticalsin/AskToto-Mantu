@@ -84,7 +84,8 @@ describe('deterministic packaging toolchain', () => {
     expect(viteConfig).toContain("externalizeDeps: { exclude: ['zod'] }")
   })
 
-  // MQA-207. This used to assert a bare `bytecode: true`. That assertion encoded a bug: a V8 code
+  // MQA-240 (the DOA itself; MQA-207 is the missing mac launch gate that let it through).
+  // This used to assert a bare `bytecode: true`. That assertion encoded a bug: a V8 code
   // cache is per-architecture, so the single out/main/index.jsc baked into a --universal package is
   // loadable by only ONE of its two slices. The Intel slice died on launch with
   // "Invalid or incompatible cached data (cachedDataRejected)", reported from a real 1.6.0 DMG.
