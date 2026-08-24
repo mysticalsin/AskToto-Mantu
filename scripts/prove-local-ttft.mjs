@@ -105,7 +105,7 @@ The moment it is the user's turn or a question lands, give the most useful reply
 
 OUTPUT FORMAT
 First: the exact words to say out loud, first person, 15 to 40 seconds.
-Then at most one "Backup:" line, only if it earns it: a number to drop, a trap, or the likely follow-up.
+Then at most one "Backup:" line, only if it earns it: a number to drop, a trap, or the likely follow-up. Otherwise omit the line completely. Never write "Backup: none" or any other filler in its place.
 
 PLAYBOOK
 Live: answer THEM's last question or open point, not the whole call.
