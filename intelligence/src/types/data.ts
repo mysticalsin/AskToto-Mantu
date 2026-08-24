@@ -92,6 +92,15 @@ export interface MeetingRef {
   title: string
 }
 
+/** A deal amount as the brain actually recorded it — the currency it was SPOKEN in, never FX-converted
+ *  (nothing in the pipeline does currency conversion, so pretending otherwise would fabricate a number). */
+export interface DealAmount {
+  value: number
+  currency: string
+  // Verbatim transcript moment the figure was grounded in ('' if the extraction recorded none).
+  quote: string
+}
+
 export interface Deal {
   bid_id: string
   account: string
@@ -105,7 +114,16 @@ export interface Deal {
   // band (previously '?? mixed') fabricates a qualitative sales signal and inflates the mixed count in
   // every chart/summary. Views render null as an explicit "ungraded" state.
   win_likelihood_band: WinLikelihoodBand | null
-  value_usd: number | null
+  // MI-4 render-gate invariant (src/shared/brain.ts's RENDERABLE_PROVENANCE_STATES): a bare LLM
+  // extraction must NEVER render as a real figure, no matter how confident. `amount`/`close_date` are
+  // populated ONLY once a human has verified/pinned/edited the value (field_state.amount/close_date would
+  // read 'verified'/'pinned'/'edited'); `amount_pending`/`close_date_pending` carry an extraction still
+  // awaiting that confirmation, to be shown as a suggestion (AcceptSuggestion), never as a stated fact.
+  // At most one of the pair (amount, amount_pending) is non-null at a time — same for close_date.
+  amount: DealAmount | null
+  amount_pending: DealAmount | null
+  close_date: string | null
+  close_date_pending: { value: string; quote: string } | null
   stage: string
   // Why the band is what it is, in the extraction's own words — '' when the brain recorded none.
   band_evidence: string
@@ -201,9 +219,11 @@ export interface ScopeSummary {
   key: string
   label: string
   deal_count: number
-  // null = no value data exists in this scope's sources (the live brain never extracts money from
-  // transcripts). Views must render the absence honestly ("no value data"), never a fabricated $0.
-  total_value_usd: number | null
+  // Per-currency totals across this scope's deals with a HUMAN-CONFIRMED amount (deal.amount, never
+  // amount_pending — an unverified extraction must not inflate a rollup) — never summed ACROSS
+  // currencies, since nothing in the pipeline does FX conversion. Empty array = no confirmed value data
+  // in this scope; views must render that honestly ("no value data"), never a fabricated $0.
+  total_value: Array<{ currency: string; value: number }>
   band_counts: Record<WinLikelihoodBand, number>
   insight_ids: string[]
 }
