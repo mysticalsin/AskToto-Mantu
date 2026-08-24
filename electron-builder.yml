@@ -101,6 +101,15 @@ extraResources:
     to: ort
   - from: resources/runtime-assets-manifest.json
     to: runtime-assets-manifest.json
+  # Optional, disclosed installer-embedded Cloudflare proxy key (docs/CLOUDFLARE.md, src/main/
+  # embedded-cloudflare-key.ts). build/cloudflare-embed/ is a real, always-present directory (tracked via
+  # .gitkeep) that is EMPTY on a normal build — electron-builder copies whatever it finds, so packaging
+  # never fails when there's nothing to embed. An operator who wants a fresh install to reach the default
+  # Cloudflare provider with zero paste-a-key setup drops a local, gitignored key.json into it first (see
+  # scripts/check-embedded-cloudflare-key.mjs, which scans every Windows packaging chain so this is never
+  # accidental).
+  - from: build/cloudflare-embed
+    to: cloudflare-embed
 mac:
   category: public.app-category.productivity
   # electron-builder treats a target-specific `files` override as the complete app allowlist. Keep the

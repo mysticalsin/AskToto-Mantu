@@ -79,6 +79,38 @@ Model ids are typed the same way as for any other provider, in Cloudflare's form
 
 ---
 
+## Optional: an installer-embedded proxy key, so a fresh install needs zero setup
+
+Cloudflare is the DEFAULT provider (`BaseSettingsSchema.provider`), and it ships the Worker URL above —
+but not a `METIS_PROXY_KEY`, so a brand-new install still has no cloud route until someone pastes one in
+Settings. An operator can optionally close that last gap the same disclosed, opt-in way the Cahê pilot
+already embeds its Kimi key (`src/main/cahe-embedded-key.ts`) — this is the general-build counterpart,
+`src/main/embedded-cloudflare-key.ts`:
+
+1. Generate a **separate** key — never the operator's own `METIS_PROXY_KEY` — and add it to the Worker's
+   `METIS_PROXY_KEYS` array under its own label, e.g. `"embedded-default:<value>"`
+   (`cloudflare-proxy/src/index.ts`'s multi-key union). A labeled key is revoked independently, by
+   removing just that entry, without touching any other user's key. Size it as a minimum-quota fallback
+   on the Worker side, not a shared admin credential.
+2. Drop that value into `build/cloudflare-embed/key.json` (gitignored — never commit it) as
+   `{"proxyKey": "<value>"}`.
+3. Build with `METIS_EMBED_CLOUDFLARE_KEY=1 npm run dist:win` (or `release:build:win`). Without that env
+   var, `scripts/check-embedded-cloudflare-key.mjs` refuses the package outright rather than silently
+   shipping a key nobody meant to embed.
+
+The key is **extractable from the installer** — same rule as the "Métis does not ship a Cloudflare
+token" section above: `npx asar extract` (or, since this ships as a plain `extraResources` file outside
+the asar, just reading the file) recovers it in seconds. Nothing changes that. What makes this safe to
+ship is the key's SCOPE, not secrecy — a revocable, rate-limited, minimum-quota label — never the
+operator's real key.
+
+On first launch, `importEmbeddedCloudflareKey()` seeds the bundled key into the app's own encrypted
+keystore (the same AES file keystore a pasted key goes through) exactly once per profile, and never
+overwrites a key the user already has — their own paste (or an earlier seed) always wins, permanently,
+even across later updates.
+
+---
+
 ## Model ids: `{provider}/{model}`
 
 Cloudflare's AI REST API is OpenAI-compatible. There are **two** id forms, and they are not
