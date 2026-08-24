@@ -55,10 +55,65 @@ if (!existsSync(target)) {
 // than exiting 0 elsewhere — a gate that silently passes is worse than no gate. macOS needs its own
 // equivalent before the mac release path can claim this coverage; until then, hand the maintainer the
 // manual check rather than leaving the gap silent.
+/**
+ * macOS (MQA-249). The Win32 path below asserts on the real top-level window; the mac equivalents all need
+ * a TCC Automation grant an unattended build cannot answer, which is why this gate refused on darwin for
+ * so long. The missing piece was a portable positive signal, and there now is one: index.ts's createWindow
+ * emits an unconditional `app.started` audit event, and auditLog writes to userData/logs/audit.log — a
+ * path ASKTOTO_USERDATA relocates (electron-log's main.log does not, on macOS it goes to ~/Library/Logs).
+ *
+ * So: launch the .app against a clean temp profile, wait for that line to appear, and fail if it never
+ * does. That covers the failure class that shipped DOA twice — a main process that dies before any of our
+ * code runs writes nothing.
+ *
+ * NOT wired into any mac chain yet. It has never been executed on macOS (written on Windows), and wiring
+ * an unverified gate into every mac build would trade a known gap for an unknown one. Run it by hand once
+ * on a Mac; when it passes, add it to dist/dist:local/release:build:mac and MQA-207 can stop being
+ * ACCEPTED. Deliberately opt-in until then rather than claimed as covered.
+ */
+if (process.platform === 'darwin' && process.env.ASKTOTO_MAC_LAUNCH_GATE === '1') {
+  const appPath = target.endsWith('.app') ? target : target.replace(/(\.app)(\/.*)?$/, '$1')
+  const profile = mkdtempSync(join(tmpdir(), 'metis-launch-mac-'))
+  const auditLog = join(profile, 'logs', 'audit.log')
+  // Launch the executable directly rather than via `open`: `open` detaches into launchd, which loses the
+  // ASKTOTO_USERDATA environment this gate depends on to find the audit trail it is about to read.
+  // Poll that trail rather than the process table — a process that exists but never reached createWindow
+  // is precisely the DOA case, and only the log distinguishes the two.
+  const proc = spawn(join(appPath, 'Contents', 'MacOS', 'Metis'), [], {
+    stdio: 'ignore',
+    detached: true,
+    env: { ...process.env, ASKTOTO_USERDATA: profile }
+  })
+  proc.unref()
+  const deadline = Date.now() + timeoutSeconds * 1000
+  let started = false
+  while (Date.now() < deadline) {
+    if (existsSync(auditLog) && /"event"\s*:\s*"app\.started"/.test(readFileSync(auditLog, 'utf8'))) {
+      started = true
+      break
+    }
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 500)
+  }
+  try { process.kill(-proc.pid, 'SIGKILL') } catch {}
+  try { rmSync(profile, { recursive: true, force: true }) } catch {}
+  if (!started) {
+    console.error(`[check:launch] FAIL — ${appPath} never wrote app.started within ${timeoutSeconds}s.`)
+    console.error('[check:launch]   A main process that dies before createWindow writes nothing — that is the')
+    console.error('[check:launch]   cachedDataRejected DOA class this gate exists to catch.')
+    process.exit(1)
+  }
+  console.log(`[check:launch] OK — ${appPath} started and wrote app.started on a clean profile.`)
+  process.exit(0)
+}
+
 if (process.platform !== 'win32') {
   console.error(
     `[check:launch] FAIL — this gate is Win32-only (host is ${process.platform}); there is no macOS equivalent yet.`
   )
+  if (process.platform === 'darwin') {
+    console.error('[check:launch] A darwin implementation exists but is opt-in until verified on a Mac:')
+    console.error('[check:launch]   ASKTOTO_MAC_LAUNCH_GATE=1 node scripts/check-packaged-launch.mjs release/mac-universal/Metis.app')
+  }
   if (process.platform === 'darwin') {
     console.error(
       '[check:launch] Verify a mac build by hand instead, and verify BOTH slices — they differ in the\n' +

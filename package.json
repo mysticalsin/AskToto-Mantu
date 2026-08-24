@@ -28,7 +28,7 @@
     "postbuild": "node scripts/check-built-offline.mjs",
     "preview": "electron-vite preview",
     "start": "electron-vite preview",
-    "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
+    "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json && node scripts/check-test-types.mjs",
     "test": "vitest run && npm run test:proxy",
     "//test:proxy": "The Worker under cloudflare-proxy/ needs its own vitest config (WebWorker lib, its own root), so the root config's include globs can never reach it — a positional path filter silently matches nothing. Chained into `test` so CI's single `npm test` covers it; a suite that never runs is not a suite.",
     "test:proxy": "vitest run --config cloudflare-proxy/vitest.config.ts",
@@ -61,7 +61,8 @@
     "check:packaged-asr": "node scripts/check-packaged-asr.mjs",
     "check:embedded-cloudflare-key": "node scripts/check-embedded-cloudflare-key.mjs",
     "check:bugs": "node scripts/check-bug-ledger.mjs",
-    "check:build-host": "node scripts/check-build-host.mjs"
+    "check:build-host": "node scripts/check-build-host.mjs",
+    "typecheck:tests": "node scripts/check-test-types.mjs"
   },
   "comment": "Only main-process runtime deps live in 'dependencies' (electron-builder bundles these into the app). All renderer deps are bundled by Vite at build time and kept in devDependencies to keep the package small.",
   "overrides": {

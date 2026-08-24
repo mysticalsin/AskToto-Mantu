@@ -155,3 +155,53 @@ describe('MQA-240 — the artifact itself is asserted to be bytecode-free, not j
     }
   })
 })
+
+describe('MQA-249 — a portable "this build came up" signal, and the macOS gate built on it', () => {
+  /**
+   * MQA-207 stayed ACCEPTED because the macOS launch gate had no positive signal to assert on: the Win32
+   * path reads the real window via UI Automation, whose mac equivalents need a TCC grant an unattended
+   * build cannot answer, and electron-log's main.log ignores the ASKTOTO_USERDATA override on macOS.
+   *
+   * The audit trail does not ignore it. So createWindow now emits one unconditional event, and the gate
+   * reads that. Pinned here because the two halves are useless apart — an event nothing asserts on is
+   * noise, and a gate asserting on an event that stopped firing passes forever.
+   */
+  const indexSrc = readFileSync(join(root, 'src', 'main', 'index.ts'), 'utf8')
+  const loggerSrc = readFileSync(join(root, 'src', 'main', 'logger.ts'), 'utf8')
+
+  it('MQA-249: createWindow emits app.started unconditionally', () => {
+    const createWindow = indexSrc.slice(indexSrc.indexOf('function createWindow(): void {'))
+    const body = createWindow.slice(0, createWindow.indexOf('\n}\n'))
+    expect(body).toMatch(/auditLog\('app\.started'/)
+    // Before any early return that could skip it — other than the idempotency guard, which only fires
+    // when a window already exists and the app has therefore demonstrably already started.
+    const guard = body.indexOf('if (win && !win.isDestroyed()) return')
+    expect(guard).toBeGreaterThan(-1)
+    expect(body.indexOf("auditLog('app.started'")).toBeGreaterThan(guard)
+  })
+
+  it('MQA-249: the event is a registered audit event, so it survives the type checker', () => {
+    expect(loggerSrc).toMatch(/'app\.started'/)
+  })
+
+  it('MQA-249: the darwin gate asserts on that trail, and on nothing weaker', () => {
+    expect(launchGate).toMatch(/ASKTOTO_MAC_LAUNCH_GATE/)
+    expect(launchGate).toMatch(/app\\.started/)
+    // It must read the audit log, not merely observe that a process exists — a process that never reached
+    // createWindow is exactly the DOA case, and only the log distinguishes the two.
+    expect(launchGate).toMatch(/logs', 'audit\.log'|'audit\.log'/)
+    expect(launchGate).toMatch(/ASKTOTO_USERDATA: profile/)
+  })
+
+  it('MQA-249: it is opt-in until someone has actually run it on a Mac', () => {
+    // Written on Windows and never executed on macOS. Wiring an unverified gate into every mac build
+    // would trade a known gap for an unknown one, so the chains stay unchanged and the refusal advertises
+    // the manual command instead. When it passes on a Mac, wire it in and MQA-207 can close.
+    for (const name of MAC_BUILD_CHAINS) {
+      expect(pkg.scripts[name], `${name} must not depend on the unverified gate`).not.toContain(
+        'check-packaged-launch.mjs'
+      )
+    }
+    expect(launchGate).toMatch(/ASKTOTO_MAC_LAUNCH_GATE=1 node scripts\/check-packaged-launch\.mjs/)
+  })
+})
