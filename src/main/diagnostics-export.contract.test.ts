@@ -5,7 +5,7 @@
  * pinned against the real source — the same structural-proof pattern every sibling *.contract.test.ts
  * uses for main-process seams.
  */
-import { readFileSync } from 'node:fs'
+import { readFileSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 
@@ -55,10 +55,30 @@ describe('diagnostics export — logs out, content never', () => {
 })
 
 describe('DevTools posture — disabled where they are not a development tool', () => {
-  it('every BrowserWindow gates devTools on the shared packaged-build constant', () => {
-    expect(indexSrc).toMatch(/const DEVTOOLS_ENABLED = !app\.isPackaged \|\| process\.env\.ASKTOTO_DEVTOOLS === '1'/)
-    const gated = indexSrc.split('devTools: DEVTOOLS_ENABLED').length - 1
-    const windows = indexSrc.split('new BrowserWindow(').length - 1
-    expect(gated, 'every window construction must carry the gate').toBe(windows)
+  // This assertion used to read ONLY index.ts while claiming to cover "every BrowserWindow". It
+  // therefore counted 3 == 3 and passed, while src/main/intelligence.ts constructed a fourth window
+  // with no devTools key at all — Electron's default is true, so DevTools were openable in a shipped
+  // build on the window whose preload can read the decrypted brain. Walk the whole directory instead,
+  // so a new window anywhere in src/main cannot be born ungated.
+  const mainFiles = readdirSync(__dirname)
+    .filter((f) => f.endsWith('.ts') && !f.endsWith('.test.ts') && !f.endsWith('.contract.test.ts'))
+    .map((f) => ({ file: f, src: readFileSync(join(__dirname, f), 'utf8') }))
+    .filter((f) => f.src.includes('new BrowserWindow('))
+
+  it('the shared gate is fail-closed and routed through the dev-env hatch', () => {
+    const devEnvSrc = readFileSync(join(__dirname, 'dev-env.ts'), 'utf8')
+    expect(devEnvSrc).toMatch(/export function devToolsEnabled\(\): boolean/)
+    expect(devEnvSrc).toContain("!isPackagedBuild() || devEnv('ASKTOTO_DEVTOOLS') === '1'")
+  })
+
+  it('every BrowserWindow in src/main gates devTools — not just the ones in index.ts', () => {
+    // Guard against the file list silently emptying and the test passing vacuously.
+    expect(mainFiles.length, 'no BrowserWindow construction found in src/main').toBeGreaterThan(0)
+    for (const { file, src } of mainFiles) {
+      const windows = src.split('new BrowserWindow(').length - 1
+      const gated =
+        src.split('devTools: DEVTOOLS_ENABLED').length - 1 + (src.split('devTools: devToolsEnabled()').length - 1)
+      expect(gated, `${file}: every window construction must carry the devTools gate`).toBe(windows)
+    }
   })
 })

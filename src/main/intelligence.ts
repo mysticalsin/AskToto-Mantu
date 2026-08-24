@@ -3,7 +3,7 @@ import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { existsSync } from 'node:fs'
 import { getSettings } from './store'
-import { devEnv } from './dev-env'
+import { devEnv, devToolsEnabled } from './dev-env'
 
 /** Private View (content protection) for the dashboard — mirrors the overlay's contentProtectionOn().
  *  The dashboard aggregates the most sensitive cross-meeting data (people/accounts/deals/quotes/
@@ -140,6 +140,10 @@ export function openIntelligenceWindow(avoid?: {
       sandbox: true,
       contextIsolation: true,
       nodeIntegration: false,
+      // This window had NO devTools key, so Electron's default (true) applied and DevTools were
+      // openable in a packaged build — on the one window whose preload can read the decrypted brain.
+      // Same shared gate the three windows in index.ts use.
+      devTools: devToolsEnabled(),
       webSecurity: true
     }
   })
