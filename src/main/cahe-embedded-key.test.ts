@@ -57,7 +57,7 @@ describe('Cahê embedded Kimi key seed', () => {
     rmSync(userData, { recursive: true, force: true })
     rmSync(resourcesPath, { recursive: true, force: true })
     if (originalResourcesPath) Object.defineProperty(process, 'resourcesPath', originalResourcesPath)
-    else delete (process as NodeJS.Process & { resourcesPath?: string }).resourcesPath
+    else delete (process as unknown as { resourcesPath?: string }).resourcesPath
   })
 
   it('is a no-op outside the Cahê edition — no marker, no keystore lookup, no provider seed', () => {
