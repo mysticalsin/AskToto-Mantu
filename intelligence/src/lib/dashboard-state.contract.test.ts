@@ -75,6 +75,15 @@ describe('MQA-222 — an empty view is still a page', () => {
     expect(emptyState).toMatch(/role="status"/)
   })
 
+  // MQA-241: each view now renders a SECOND, earlier <EmptyState> for the distinct "deep-linked to a
+  // slug that no longer exists" case (an unknown ?person=/?acct= with a non-empty collection) — so "the
+  // first <EmptyState in the file" is no longer necessarily the genuinely-empty-collection one this test
+  // pins. Anchor on the true-empty headline itself, then walk back to ITS <EmptyState> tag.
+  const EMPTY_HEADLINE: Record<string, string> = {
+    PeopleView: 'No people mapped yet.',
+    AccountsView: 'No accounts mapped yet.'
+  }
+
   for (const [name, source] of [
     ['PeopleView', people],
     ['AccountsView', accounts]
@@ -87,7 +96,9 @@ describe('MQA-222 — an empty view is still a page', () => {
     })
 
     it(`${name}'s empty state says how records actually get here`, () => {
-      const start = source.indexOf('<EmptyState')
+      const headlineAt = source.indexOf(EMPTY_HEADLINE[name])
+      expect(headlineAt, `${name} must still render its true "nothing mapped yet" EmptyState`).toBeGreaterThan(-1)
+      const start = source.lastIndexOf('<EmptyState', headlineAt)
       const block = source.slice(start, source.indexOf('/>', start))
       expect(block).toMatch(/title=/)
       expect(block).toMatch(/standfirst=/)
