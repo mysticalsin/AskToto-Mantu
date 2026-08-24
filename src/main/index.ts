@@ -28,7 +28,9 @@ import { readFileSync, existsSync, writeFileSync, realpathSync, readdirSync, unl
 // and every security questionnaire asks. ASKTOTO_DEVTOOLS=1 is the deliberate field-debugging override —
 // an env var a local user could set, which is fine: whoever controls the local environment already owns
 // this session; the control is about the DEFAULT posture, not about defeating a local admin.
-const DEVTOOLS_ENABLED = !app.isPackaged || process.env.ASKTOTO_DEVTOOLS === '1'
+// Shared with intelligence.ts so every window in src/main gates on ONE decision — see
+// dev-env.ts's devToolsEnabled() for why this moved out of this file.
+const DEVTOOLS_ENABLED = devToolsEnabled()
 import { pathToFileURL } from 'node:url'
 import { randomBytes } from 'node:crypto'
 import {
@@ -265,7 +267,7 @@ import {
 } from './recall'
 import { initAutoUpdate, checkForUpdateNow, startUpdateDownload } from './updater'
 import { runSelfTest } from './selftest'
-import { devEnv } from './dev-env'
+import { devEnv, devToolsEnabled } from './dev-env'
 import { readEvalMetrics, aggregateMetrics } from './metrics'
 import { importDustCliSession, refreshDustCliSession } from './dustcli'
 import {

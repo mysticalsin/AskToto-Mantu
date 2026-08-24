@@ -108,4 +108,9 @@ After signing secrets are configured, bump `package.json`'s `version` first, the
 `package.json` exactly. See `docs/ENTERPRISE_RELEASE.md`'s Operator Setup (step 9) for the full
 release checklist and current CI blockers.
 
-The Release workflow publishes signed installers to `mysticalsin/AskToto-Mantu`. Installed direct-release apps then update from that feed — except the Windows portable exe, which has no update mechanism (see above).
+The Release workflow publishes signed installers to `mysticalsin/Metis-Releases`, not to this source
+repo. `release.yml` derives the publish target by reading `owner:`/`repo:` out of
+`electron-builder.yml`'s `publish` block, which names `mysticalsin/Metis-Releases` — the same public
+feed `src/main/updater.ts` polls. `AskToto-Mantu` is private, so nothing installed could ever have
+updated from it. Installed direct-release apps update from that public feed — except the Windows
+portable exe, which has no update mechanism (see above).
