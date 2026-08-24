@@ -1040,12 +1040,7 @@ export async function setupCli(provider: ProviderId): Promise<{ ok: boolean; err
       '  echo "✗ npm / Node.js not found. Install Node from https://nodejs.org, then run this again."',
       '  echo; echo "Press any key to close."; read -n 1 -s; exit 1',
       'fi',
-      'echo "Step 1/2  Installing Claude Code CLI (npm i -g @anthropic-ai/claude-code)…"',
-      'if ! npm i -g @anthropic-ai/claude-code; then',
-      '  echo; echo "✗ Install failed (often a permissions issue with global npm)."',
-      '  echo "  Try:  sudo npm i -g @anthropic-ai/claude-code   then run this again."',
-      '  echo; echo "Press any key to close."; read -n 1 -s; exit 1',
-      'fi',
+      ...npmInstallWithDiagnosis('@anthropic-ai/claude-code', 'Step 1/2  Installing Claude Code CLI (npm i -g @anthropic-ai/claude-code)…'),
       'echo; echo "Step 2/2  Signing in to Claude (type /login at the prompt below)…"',
       'echo "────────────────────────────────────────────────"',
       'claude',
@@ -1063,12 +1058,7 @@ export async function setupCli(provider: ProviderId): Promise<{ ok: boolean; err
       '  echo "✗ npm / Node.js not found. Install Node from https://nodejs.org, then run this again."',
       '  echo; echo "Press any key to close."; read -n 1 -s; exit 1',
       'fi',
-      'echo "Step 1/2  Installing OpenAI Codex CLI (npm i -g @openai/codex)…"',
-      'if ! npm i -g @openai/codex; then',
-      '  echo; echo "✗ Install failed (often a permissions issue with global npm)."',
-      '  echo "  Try:  sudo npm i -g @openai/codex   then run this again."',
-      '  echo; echo "Press any key to close."; read -n 1 -s; exit 1',
-      'fi',
+      ...npmInstallWithDiagnosis('@openai/codex', 'Step 1/2  Installing OpenAI Codex CLI (npm i -g @openai/codex)…'),
       'echo; echo "Step 2/2  Signing in to OpenAI Codex…"',
       'codex login',
       'echo; echo "✓ Done. Go back to Métis and click \\"Connect\\" again."',
@@ -1091,6 +1081,62 @@ export async function setupCli(provider: ProviderId): Promise<{ ok: boolean; err
   } catch (e) {
     return { ok: false, error: e instanceof Error ? e.message : String(e) }
   }
+}
+
+/**
+ * What to tell a user whose global npm install just failed — and, more importantly, what NOT to tell them.
+ *
+ * This block used to say `Try: sudo npm i -g <pkg>`. That advice is worse than useless: it is the most
+ * common CAUSE of the failure it claims to fix. Reported from a real install (2026-08-24):
+ *
+ *     npm error code EEXIST
+ *     npm error Invalid response body while trying to fetch …/eventsource-parser:
+ *       EACCES: permission denied, mkdir '/Users/<user>/.npm/_cacache/content-v2/sha512/79/da'
+ *
+ * Read the path. That is the user's OWN cache under $HOME — not a system directory. It is unwritable
+ * because an earlier `sudo npm …` created part of it as root. Every further sudo run roots a few more
+ * files, so the advice deepened the exact hole the user was standing in, and left their npm permanently
+ * broken for ordinary use. npm's own documentation says not to sudo global installs for this reason.
+ *
+ * So the two failures are told apart by where the unwritable path is, because they have opposite fixes:
+ *   - under $HOME/.npm → the cache is root-owned. Chown it back, once, and never sudo npm again.
+ *   - anywhere else → the global prefix is not writable. Point npm at a prefix the user owns, which is
+ *     the durable fix rather than escalating privileges for every future install.
+ *
+ * `set -o pipefail` matters here: the install is piped to tee so the log can be inspected, and without it
+ * the `if` would read tee's exit status and treat every failure as a success.
+ */
+export function npmInstallWithDiagnosis(pkg: string, step: string): string[] {
+  return [
+    'set -o pipefail',
+    'NPM_LOG="$(mktemp -t metis-npm 2>/dev/null || mktemp)"',
+    `echo "${step}"`,
+    `if ! npm i -g ${pkg} 2>&1 | tee "$NPM_LOG"; then`,
+    '  echo',
+    '  if grep -qE "(EACCES|EEXIST|EPERM).*(\.npm/_cacache|\.npm/)" "$NPM_LOG" || grep -q "_cacache" "$NPM_LOG"; then',
+    '    echo "✗ Install failed — your npm cache is owned by root, not by you."',
+    '    echo',
+    '    echo "  This is what a previous \"sudo npm …\" leaves behind. Running sudo again would root a few"',
+    '    echo "  more files and make it harder to undo, so do NOT do that."',
+    '    echo',
+    '    echo "  Hand the cache back to yourself — once:"',
+    '    echo "      sudo chown -R \$(id -u):\$(id -g) \"$HOME/.npm\""',
+    '    echo',
+    '    echo "  Then run this again WITHOUT sudo."',
+    '  else',
+    '    echo "✗ Install failed — npm could not write to its global folder."',
+    '    echo',
+    '    echo "  Rather than installing as root, give npm a folder you own:"',
+    '    echo "      mkdir -p \"$HOME/.npm-global\""',
+    '    echo "      npm config set prefix \"$HOME/.npm-global\""',
+    '    echo "      then add this line to ~/.zshrc:  export PATH=\$HOME/.npm-global/bin:\$PATH"',
+    '    echo',
+    '    echo "  Open a new terminal, then run this again."',
+    '  fi',
+    '  echo "  Full log: $NPM_LOG"',
+    '  echo; echo "Press any key to close."; read -n 1 -s; exit 1',
+    'fi'
+  ]
 }
 
 // ─── installCli ──────────────────────────────────────────────────────────────────

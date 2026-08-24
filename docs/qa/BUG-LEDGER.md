@@ -280,6 +280,8 @@ silently wrong · `medium` = degraded or confusing in a real scenario · `low` =
 | MQA-247 | Every imported recording decodes with the floor Whisper model on EVERY platform, because the high tier cannot be bundled (1.6 GiB of weights + a 0.77 GiB installer is over GitHub's hard 2 GiB per-asset limit) and nothing fetches it on demand | import any recording, any platform | medium | OPEN | - | MQA-246 disclosed the degradation; this is the fix. Same shape MQA-146 applied to the LLM weights for the same 2 GiB reason: fetch on first use, size- and SHA-256-pinned, disk-checked |
 | MQA-248 | No test file has ever been typechecked - both tsconfigs exclude `**/*.test.ts` - so a test calling production code with a shape that no longer exists is invisible; the identical `-c undefined` omission that shipped in a tagged release was still present 20 times in local-runtime.concurrency.test.ts | any interface change with a stale test caller | high | FIXED | `scripts/check-test-types.test.ts`, `src/main/llm/local-runtime.concurrency.test.ts` | Ratchet gate wired into `npm run typecheck`: 159 errors down to 139, may fall, may never rise; proven to fail at 140 |
 | MQA-249 | macOS had no launch gate because no portable "the app came up" signal existed - the Win32 path needs UI Automation and electron-log's main.log ignores ASKTOTO_USERDATA on macOS | build a mac release | medium | FIXED | `scripts/mac-chain-gates.contract.test.ts` | createWindow now emits one unconditional `app.started` audit event (audit.log DOES honour the override); the darwin gate reads it. Opt-in via ASKTOTO_MAC_LAUNCH_GATE=1 until run on a Mac - never executed on macOS |
+| MQA-250 | The CLI install failure advice told the user to run `sudo npm i -g <pkg>` - which is the most common CAUSE of the failure it claimed to fix, and deepens it on every run | connect Claude Code or Codex CLI on a machine where a previous sudo npm left a root-owned ~/.npm | high | FIXED | `src/main/cli-install-advice.test.ts` | Reported from a real install: EACCES on the user's OWN ~/.npm/_cacache. Now diagnoses cache-vs-prefix from npm's output and gives the opposite, correct fix for each; never suggests sudo npm |
+| MQA-251 | cli.test.ts and cli-win.test.ts are order- or timing-dependent: the same commit produces 0 failures on one full-suite run and 5 on the next, and they fail deterministically when the two files are run alone | run the suite twice, or run just those two files | medium | OPEN | - | `TypeError: Cannot read properties of undefined (reading 'aborted')` - an AbortSignal race, plus an arg-array assertion seeing '/d'. A suite that is not deterministically green cannot be used as evidence, which is the real cost |
 | MQA-231 | Four high-severity libvips CVEs shipped inside both installers via `sharp <0.35` (asarUnpack'd, pulled transitively by `@huggingface/transformers`) while CI's soft-failing high-severity audit step (`npm audit --audit-level=high` with an or-true suffix) reported exactly that severity without blocking | `npm audit --omit=dev` on the shipped tree | high | FIXED | `scripts/dependency-cve-gate.contract.test.ts` | sharp pinned to >=0.35 via root `overrides` (0.35.3 installs; the four advisories clear), `predist:win`'s force-installed `@img` platform pair bumped to the matching 0.35 generation, and CI now BLOCKS on high through `scripts/check-audit.mjs` — which excuses only findings confined to the pruned `@dust-tt/client` bundle (postinstall deletes that tree; check-packaged-runtime proves the asar never carries it), so the gate is strict without being permanently red on a known false positive. Repo-wide gitleaks scan (digest-pinned) added beside the existing narrow provider-prefix scan |
  on Windows — every reader strips `
 ` before hashing or the chain false-breaks on its own first link |
@@ -4347,3 +4349,33 @@ before use, behind the free-disk pre-flight added in 14e4e6d. `src/main/llm/loca
 working reference; this needs the multi-file (7 required + 4 optional) variant of it, a progress channel,
 and a Settings affordance. Deliberately NOT rushed into 1.6.1 — a 1.6 GiB downloader shipped half-tested
 would be a worse defect than the one it fixes.
+
+### MQA-251 — the CLI suite is not deterministically green
+
+**Repro.** At commit `718b889`, with a clean tree (`git stash push -u -- src/ docs/`):
+
+```
+npx vitest run                     ->  2 failed | 244 passed (246);  5 tests failed
+npm test          (an hour prior)  ->  246 passed (246);             0 tests failed
+npx vitest run src/main/cli.test.ts src/main/cli-win.test.ts
+                                   ->  2 failed (2);                 5 tests failed  (every attempt)
+```
+
+Same commit, same machine, different outcomes. Isolated, they fail every time; in a full run they
+sometimes pass, which is the signature of state leaking between files rather than a defect in the
+assertions.
+
+**Symptoms.** `TypeError: Cannot read properties of undefined (reading 'aborted')` in the runCliStream
+kill-on-result tests — an AbortSignal that is undefined at the moment it is read, i.e. a race between the
+spawn stub and the abort path. Separately `expected '/d' to be ''`, a cmd.exe argument array observed
+mid-mutation.
+
+**Why it is OPEN rather than fixed.** It was found while auditing, not while changing this code, and a
+flake fixed by guessing is a flake that comes back wearing a different hat. It needs the actual leak
+identified — most likely a module-level `AbortController` or spawn stub shared across files — rather than
+a retry or a timeout bump, both of which would hide it.
+
+**Why it matters more than five tests.** Every "N passed, 0 failed" claim in this repo rests on the suite
+being deterministic. It is not, so any such claim is worth exactly as much as the run it came from. That is
+the same class of problem as MQA-248 (tests excluded from typecheck) and the skipped-integration-test gap:
+a green signal that is not measuring what people believe it measures.
