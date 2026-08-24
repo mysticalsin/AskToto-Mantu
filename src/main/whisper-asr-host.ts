@@ -39,6 +39,14 @@ const MODEL_TIERS = [
 ]
 const MODEL_REVISION = 'main'
 
+/** The best tier whose files are actually present, else the always-bundled floor. Pure file presence, so
+ *  it is answerable the moment modelsPath is known — which is what lets the `ready` message report the
+ *  tier BEFORE the (lazy) model load, rather than leaving the caller to guess. */
+function resolveTier(dir: string | null): (typeof MODEL_TIERS)[number] {
+  if (!dir) return MODEL_TIERS[MODEL_TIERS.length - 1]
+  return MODEL_TIERS.find((t) => existsSync(join(dir, t.id))) ?? MODEL_TIERS[MODEL_TIERS.length - 1]
+}
+
 let modelsPath: string | null = null
 let transformersModule: any = undefined // undefined = unprobed, null = probed and failed
 let asr: any = null
@@ -67,7 +75,7 @@ async function ensureAsr(): Promise<any> {
   env.localModelPath = modelsPath
   env.allowRemoteModels = false // offline-only, same guarantee as the renderer's bundled worker
   env.useBrowserCache = false
-  const tier = MODEL_TIERS.find((t) => existsSync(join(modelsPath as string, t.id))) ?? MODEL_TIERS[MODEL_TIERS.length - 1]
+  const tier = resolveTier(modelsPath)
   console.error(`[whisper-asr-host] loading ${tier.id}`)
   loadingAsr = pipeline('automatic-speech-recognition', tier.id, { dtype: tier.dtype, revision: MODEL_REVISION })
     .then((p: any) => {
@@ -107,7 +115,10 @@ if (port) {
     if (!msg || typeof msg !== 'object') return
     if (msg.type === 'init') {
       modelsPath = typeof msg.modelsPath === 'string' ? msg.modelsPath : null
-      port.postMessage({ type: 'ready' })
+      // MQA-246: say WHICH tier loaded. The high tier is not in the package today, so the find() above
+      // always falls through to the whisper-base floor — a real degradation the user had no way to see.
+      const readyTier = resolveTier(modelsPath)
+      port.postMessage({ type: 'ready', tier: readyTier.id, degraded: readyTier.id !== MODEL_TIERS[0].id })
       return
     }
     if (msg.type === 'transcribe') {
