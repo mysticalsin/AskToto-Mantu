@@ -33,6 +33,16 @@ vi.mock('@dust-tt/client', () => {
   return { DustAPI }
 })
 
+// testApiKey's OpenAI-shaped path, so the catch block that renders the Test button's message can be
+// driven with a real upstream failure. Class, not an arrow: store.ts calls `new OpenAI(...)`.
+const chatCompletionsCreate = vi.fn()
+vi.mock('openai', () => {
+  class OpenAI {
+    chat = { completions: { create: (...args: unknown[]): unknown => chatCompletionsCreate(...args) } }
+  }
+  return { default: OpenAI }
+})
+
 // Mirror store.ts at-rest encryption so tests can read what was persisted. Two markers exist: V1 =
 // safeStorage (prod), V2 = AES-GCM file backend (dev / unpackaged — what these tests run under).
 const ENC_V1 = Buffer.from('ATKENC1\n')
@@ -75,6 +85,7 @@ describe('store', () => {
     })
     vi.spyOn(console, 'warn').mockImplementation(() => {})
     getAgentConfigurations.mockReset()
+    chatCompletionsCreate.mockReset()
   })
 
   afterEach(() => {
@@ -496,6 +507,24 @@ describe('store', () => {
       expect(JSON.stringify(persisted)).not.toContain('operator-issued-proxy-secret')
       // The endpoint itself is not a secret and does belong in settings.
       expect(persisted.cloudflareBaseUrl).toBe('https://metis-ai.example.workers.dev/v1')
+    })
+
+    it('MQA-213: Test shows the operator sentence, and never the routing marker that carries it', async () => {
+      setSettings({ cloudflareBaseUrl: 'https://metis-ai.example.workers.dev/v1' })
+      // What the Worker actually puts on the wire when Cloudflare rejects the OPERATOR's account token.
+      // The '[metis-proxy-config]' prefix exists so the ask path can tell an operator fault from an
+      // ordinary 502 blip; it is routing plumbing, and a user cannot act on it.
+      chatCompletionsCreate.mockRejectedValue(
+        new Error(
+          '502 [metis-proxy-config] Cloudflare rejected this proxy account credential. The operator needs to check CLOUDFLARE_API_TOKEN and CF_ACCOUNT_ID.'
+        )
+      )
+
+      const result = await testApiKey('cloudflare', 'operator-issued-proxy-secret')
+
+      expect(result.ok).toBe(false)
+      expect(result.error).toContain('The operator needs to check CLOUDFLARE_API_TOKEN')
+      expect(result.error).not.toContain('[metis-proxy-config]')
     })
   })
 

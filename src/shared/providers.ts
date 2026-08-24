@@ -321,7 +321,10 @@ export const PROVIDERS: Record<ProviderId, ProviderDef> = {
     label: 'Cloudflare · AI Gateway',
     blurb: "Your company's own Cloudflare Worker — one endpoint reaching Workers AI, OpenAI, Anthropic and Google.",
     kind: 'openai',
-    tier: 'more',
+    // 'featured', and the default provider (ipc.ts DEFAULT_SETTINGS). It was 'more' while it was an
+    // expert option; it is now the route this product is configured around, so burying it behind the
+    // collapsed "Experience: more models" drawer would hide the one card most installs need to touch.
+    tier: 'featured',
     // Deliberately EMPTY. Cloudflare's REST endpoint is account-scoped
     // (POST /client/v4/accounts/{ACCOUNT_ID}/ai/v1/chat/completions) and authenticates with a Cloudflare
     // ACCOUNT token — a secret that must never ship inside the app, because `npx asar extract` recovers
@@ -329,29 +332,41 @@ export const PROVIDERS: Record<ProviderId, ProviderDef> = {
     // account token lives as a Wrangler secret on an operator-deployed Worker, and this provider points at
     // that Worker's URL, held per install in settings.cloudflareBaseUrl. See requiresUserBaseUrl().
     baseUrl: '',
-    // `{provider}/{model}` — Cloudflare's own catalog plus the third-party models Unified Billing reaches
-    // through the same account token, so one credential covers several labs.
+    // MQA-226: Workers AI ids are BARE `@cf/...` at this endpoint. The `workers-ai/` prefix these used to
+    // carry is rejected outright — "No such model" — so every ask on the shipped default 404'd. The
+    // `{provider}/{model}` form IS real, but only for the third-party labs behind Unified Billing
+    // (`openai/gpt-5.5` answers "Insufficient balance; add money to your gateway or use BYOK"), so it
+    // needs a funded gateway and cannot be a default. Every id below was run against a live account
+    // before being listed; models the Workers Free plan refuses were dropped rather than guessed at.
     models: [
-      'workers-ai/@cf/meta/llama-4-scout-17b-16e-instruct',
-      'workers-ai/@cf/meta/llama-3.3-70b-instruct-fp8-fast',
-      'openai/gpt-5.5',
-      'anthropic/claude-sonnet-4-5',
-      'google-ai-studio/gemini-2.5-flash'
+      '@cf/meta/llama-4-scout-17b-16e-instruct',
+      '@cf/meta/llama-3.3-70b-instruct-fp8-fast',
+      '@cf/openai/gpt-oss-120b'
     ],
-    // Llama 4 Scout is natively multimodal and Cloudflare-hosted, so ONE model serves both typed asks and
-    // screen-asks without reaching a third-party lab (and without a second credential). That matters here
-    // because `vision` below is a per-PROVIDER flag, not per-model: the base/fast model IS what a screen-ask
-    // gets, so a text-only default would have to leave vision false and push every screenshot to the
-    // on-device model. 131k context, $0.27/M in — cheap enough to be the everyday default.
-    defaultModel: 'workers-ai/@cf/meta/llama-4-scout-17b-16e-instruct',
-    fastModel: 'workers-ai/@cf/meta/llama-4-scout-17b-16e-instruct',
-    thinkModel: 'anthropic/claude-sonnet-4-5', // think: a frontier model, billed through the same Cloudflare account
+    defaultModel: '@cf/meta/llama-4-scout-17b-16e-instruct',
+    fastModel: '@cf/meta/llama-4-scout-17b-16e-instruct',
+    // MQA-229: the think tier must still FEEL instant. gpt-oss-120b is a reasoning model that spends its
+    // first seconds on hidden reasoning — measured live through the deployed Worker: first VISIBLE token
+    // at 3.6-14.2s, against a 2-3s answer budget — and routing.ts sends every "why/how/explain/compare"
+    // question to this tier, so most real asks sat behind that dead air. llama-3.3-70b-fp8-fast reaches
+    // its first visible token in ~0.4s (same prompt, same Worker) and is the strongest non-reasoning
+    // model this plan serves. gpt-oss-120b keeps the DEEP tier below: coding/math/explicit "think deeply"
+    // asks are rare and genuinely want the reasoning pass.
+    thinkModel: '@cf/meta/llama-3.3-70b-instruct-fp8-fast',
+    // gpt-oss-120b returns a real `reasoning` field alongside its answer and runs on the free plan.
+    // Verified live; the previous `anthropic/claude-sonnet-4-5` was wrong twice over — not a valid id at
+    // this endpoint, and a third-party route that needs Unified Billing credit.
+    deepModel: '@cf/openai/gpt-oss-120b',
     keyHint: 'METIS_PROXY_KEY from your operator',
     keyPattern: '', // operator-chosen shared secret — no fixed prefix to auto-detect
-    // True because the resolved base/fast model above genuinely reads images. Keep these two in lockstep:
-    // flipping the default back to a text-only model without clearing this would send screenshots to a
-    // model that cannot see them, which is the failure `vision` exists to prevent.
-    vision: true,
+    // MQA-227: FALSE, and not because of the model. Llama 4 Scout really is multimodal, but Cloudflare's
+    // OpenAI-compatible route has no way to carry the image: every `image_url` shape is rejected with
+    // "Property image_url only supports base64 encoded image data" (code 6004) — both a
+    // `data:image/jpeg;base64,...` URL and bare base64, on Scout AND on the dedicated
+    // llama-3.2-11b-vision-instruct. It is a transport limit, not a model one. Claiming vision here would
+    // capture the user's screen and upload it for a request that always errors; false sends screen-asks
+    // to the on-device model, which works. Revisit only against a live endpoint, never against the mock.
+    vision: false,
     keyUrl: '' // issued by whoever deployed the Worker, not by a signup page
   },
   local: {

@@ -28,9 +28,12 @@ describe('MQA-186 — the first-run weight fetch is gated, and the gate is not a
   it('boot asks whether this machine should fetch the weights before starting a 763 MB transfer', () => {
     const boot = sliceBetween(src, 'app.whenReady().then(async () => {', 'app.setAppUserModelId')
     // The RAM floor and the Local AI toggle are both answered by one predicate in the downloader.
-    expect(boot).toMatch(/shouldFetchWeights\(LOCAL_MODELS\[0\]\.id, getSettings\(\)\.localLlm\.enabled\)/)
+    // The model is chosen by HARDWARE (bestModelForMachine), not by registry position — indexing
+    // LOCAL_MODELS[0] would silently fetch whichever entry happened to be listed first.
+    expect(boot).toMatch(/const best = bestModelForMachine\(\)/)
+    expect(boot).toMatch(/shouldFetchWeights\(best\.id, getSettings\(\)\.localLlm\.enabled\)/)
     // ...and the call it guards is the one that costs the bytes.
-    expect(boot).toMatch(/ensureLocalModel\(LOCAL_MODELS\[0\]\.id\)/)
+    expect(boot).toMatch(/ensureLocalModel\(best\.id\)/)
   })
 
   it('turning Local AI back on re-arms the fetch, so declining once is not permanent', () => {

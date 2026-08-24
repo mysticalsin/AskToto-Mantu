@@ -49,8 +49,12 @@ describe('LocalPrewarmPayloadSchema', () => {
 // ─── localPrewarmEligible (local-routing.ts) — the handler's settings gate ────────────────────────────
 import { localPrewarmEligible } from './local-routing'
 
-const settingsFor = (overrides: Partial<Settings['localLlm']> = {}): Settings => ({
+const settingsFor = (
+  overrides: Partial<Settings['localLlm']> = {},
+  resilience: Partial<Settings['resilience']> = {}
+): Settings => ({
   ...DEFAULT_SETTINGS,
+  resilience: { ...DEFAULT_SETTINGS.resilience, ...resilience },
   localLlm: {
     enabled: true,
     modelId: 'qwen3.5-0.8b',
@@ -59,6 +63,10 @@ const settingsFor = (overrides: Partial<Settings['localLlm']> = {}): Settings =>
     ...overrides
   }
 })
+// The hedge races an on-device leg on every interactive ask, which alone justifies warming. Tests that
+// probe the OLDER "is local the likely server?" gate must therefore disarm it explicitly, or they are
+// really just re-testing the hedge branch.
+const NO_HEDGE = { hedge: false } as Partial<Settings['resilience']>
 
 describe('localPrewarmEligible', () => {
   it('true when enabled and useFor.suggest is on, with no allowlist restriction', () => {
@@ -69,10 +77,38 @@ describe('localPrewarmEligible', () => {
     expect(localPrewarmEligible(settingsFor({ enabled: false }), null)).toBe(false)
   })
 
-  it('false when useFor.suggest is off and a cloud provider is ready to answer instead', () => {
-    // Default `cloudReady` is true, preserving the original gate: never spawn a sidecar for its standing
-    // RAM cost when a healthy cloud provider will serve the next suggest anyway.
-    expect(localPrewarmEligible(settingsFor({ useFor: { suggest: false, summary: true, vision: true } }), null)).toBe(false)
+  it('false when useFor.suggest is off, cloud is ready, and the hedge is disarmed', () => {
+    // The original gate: never spawn a sidecar for its standing RAM cost when a healthy cloud provider
+    // will serve the next suggest and nothing else would route on-device. Still true with hedge off.
+    expect(
+      localPrewarmEligible(
+        settingsFor({ useFor: { suggest: false, summary: true, vision: true } }, NO_HEDGE),
+        null
+      )
+    ).toBe(false)
+  })
+
+  // The hedge (index.ts hedgeDelayMs) starts an on-device leg at t=0 on EVERY interactive ask, so the
+  // "nothing routes here while cloud is healthy" premise no longer holds. Left cold that leg loads
+  // ~730 MB mid-request and loses the race it exists to win, so warming on intent is the whole point.
+  describe('hedge races a local leg on every ask', () => {
+    const noLocalFirst = { useFor: { suggest: false, summary: false, vision: false }, fallback: true }
+
+    it('true even with a healthy cloud provider, when hedge and fallback are both armed', () => {
+      expect(localPrewarmEligible(settingsFor(noLocalFirst), null, true)).toBe(true)
+    })
+
+    it('false once the hedge is disarmed — nothing would race, so nothing to warm', () => {
+      expect(localPrewarmEligible(settingsFor(noLocalFirst, NO_HEDGE), null, true)).toBe(false)
+    })
+
+    it('false when the safety net is disarmed, since the hedge has no local leg to start', () => {
+      expect(localPrewarmEligible(settingsFor({ ...noLocalFirst, fallback: false }), null, true)).toBe(false)
+    })
+
+    it('still respects the org allowlist — data residency beats warm-start latency', () => {
+      expect(localPrewarmEligible(settingsFor(noLocalFirst), ['anthropic'], true)).toBe(false)
+    })
   })
 
   // MQA-006 (docs/qa/BUG-LEDGER.md): with useFor defaulting OFF, a zero-API-key install never prewarmed,
@@ -85,8 +121,9 @@ describe('localPrewarmEligible', () => {
       expect(localPrewarmEligible(settingsFor(fallbackOnly), null, false)).toBe(true)
     })
 
-    it('still false when a cloud provider IS ready — no sidecar for a request that will not route here', () => {
-      expect(localPrewarmEligible(settingsFor(fallbackOnly), null, true)).toBe(false)
+    it('still false when a cloud provider IS ready AND the hedge is disarmed', () => {
+      // With the hedge off nothing races on-device, so a healthy cloud provider means no sidecar.
+      expect(localPrewarmEligible(settingsFor(fallbackOnly, NO_HEDGE), null, true)).toBe(false)
     })
 
     it('false when the fallback is disarmed, even with no cloud provider ready', () => {
@@ -268,13 +305,24 @@ describe('local:prewarm handler-gating (composed from the tested primitives abov
     expect(localRuntimeMock.prewarm).not.toHaveBeenCalled()
   })
 
-  it('useFor.suggest off -> no prewarm call, even with localLlm enabled', async () => {
+  it('useFor.suggest off AND hedge disarmed -> no prewarm call, even with localLlm enabled', async () => {
+    // With the hedge armed this DOES warm now (it races an on-device leg on every ask) — the case below
+    // is the one where genuinely nothing would route on-device.
     await runPrewarmHandler(
-      settingsFor({ useFor: { suggest: false, summary: true, vision: true } }),
+      settingsFor({ useFor: { suggest: false, summary: true, vision: true } }, NO_HEDGE),
       null,
       'THEM: any transcript tail'
     )
     expect(localRuntimeMock.prewarm).not.toHaveBeenCalled()
+  })
+
+  it('useFor.suggest off but hedge armed -> DOES warm, so the raced leg is not cold', async () => {
+    await runPrewarmHandler(
+      settingsFor({ useFor: { suggest: false, summary: true, vision: true }, fallback: true }),
+      null,
+      'THEM: any transcript tail'
+    )
+    expect(localRuntimeMock.prewarm).toHaveBeenCalled()
   })
 
   // F6 hardening: the allowlist gate, end to end through the composed handler.

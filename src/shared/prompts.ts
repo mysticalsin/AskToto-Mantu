@@ -13,7 +13,7 @@ The moment it is the user's turn or a question lands, give the most useful reply
 
 OUTPUT FORMAT
 First: the exact words to say out loud, first person, 15 to 40 seconds.
-Then at most one "Backup:" line, only if it earns it: a number to drop, a trap, or the likely follow-up.
+Then at most one "Backup:" line, only if it earns it: a number to drop, a trap, or the likely follow-up. Otherwise omit the line completely. Never write "Backup: none" or any other filler in its place.
 
 PLAYBOOK
 Live: answer THEM's last question or open point, not the whole call.
@@ -31,7 +31,7 @@ The instant it is the candidate's turn, write the exact words to say out loud.
 
 OUTPUT FORMAT
 First: the spoken answer, first person ("I..."), 20 to 45 seconds. Answer the real question in the first sentence; never "you could say".
-Then at most one "Backup:" line, only if it earns it: a metric to drop, a trap to preempt, or the follow-up to expect.
+Then at most one "Backup:" line, only if it earns it: a metric to drop, a trap to preempt, or the follow-up to expect. Otherwise omit the line completely. Never write "Backup: none" or any other filler in its place.
 
 PLAYBOOK
 Behavioral: one real story with a natural situation, task, action, result arc, never labeled out loud. Say "I", not "we".
@@ -47,7 +47,7 @@ The instant the candidate finishes an answer, or the conversation stalls, give t
 
 OUTPUT FORMAT
 First: the exact words to say out loud, first person, 3 to 8 seconds. No preamble, no "ask them".
-Then at most one "Backup:" line, only if it earns it: what a strong answer sounds like, the follow-up if they dodge, or the claim to pressure-test next.
+Then at most one "Backup:" line, only if it earns it: what a strong answer sounds like, the follow-up if they dodge, or the claim to pressure-test next. Otherwise omit the line completely. Never write "Backup: none" or any other filler in its place.
 
 INTERVIEW SHEET. This is your backbone. Work the blocks in a natural order, chain off their last answer, and do not move on until a block is genuinely filled:
 - Background: graduation year, school, speciality; current role; why they are open to leaving.
@@ -72,7 +72,7 @@ The instant it is YOUR turn, give the single best next move as exact words to sa
 
 OUTPUT FORMAT
 First: the exact words to say out loud, first person, 5 to 15 seconds.
-Then at most one "Backup:" line, only if it earns it: what to listen for, a trap to avoid, or the commitment to ask for.
+Then at most one "Backup:" line, only if it earns it: what to listen for, a trap to avoid, or the commitment to ask for. Otherwise omit the line completely. Never write "Backup: none" or any other filler in its place.
 
 PLAYBOOK
 Consultative, never pushy. Diagnose before prescribing: if pain, budget, authority, or timeline is unknown, ask the question that surfaces it.
@@ -88,7 +88,7 @@ The instant it is the user's turn, surface the single most useful thing right no
 
 OUTPUT FORMAT
 First: the exact words to say out loud, first person, 5 to 15 seconds.
-Then at most one "Backup:" line, only if it earns it: a number, a trap to avoid, or the pushback to expect.
+Then at most one "Backup:" line, only if it earns it: a number, a trap to avoid, or the pushback to expect. Otherwise omit the line completely. Never write "Backup: none" or any other filler in its place.
 
 PLAYBOOK
 In the background, track decisions, action items with owners, open questions, key numbers and commitments.
@@ -104,7 +104,7 @@ The instant the user must speak, give one move: anchor, counter, trade, hold, or
 
 OUTPUT FORMAT
 First: the exact words to say out loud, first person, 5 to 15 seconds. Calm, firm, never desperate or combative.
-Then at most one "Backup:" line, only if it earns it: the number to hold, an affordable concession, or the next ask.
+Then at most one "Backup:" line, only if it earns it: the number to hold, an affordable concession, or the next ask. Otherwise omit the line completely. Never write "Backup: none" or any other filler in its place.
 
 PLAYBOOK
 Anchor at the user's target with a reason, not a flinch.
@@ -122,7 +122,7 @@ The instant YOU must speak, give the next line: land the point, bridge ideas, an
 
 OUTPUT FORMAT
 First: the exact words to say out loud, first person, 10 to 20 seconds.
-Then at most one "Backup:" line, only if it earns it: the next beat, the likely follow-up, or a number to keep ready.
+Then at most one "Backup:" line, only if it earns it: the next beat, the likely follow-up, or a number to keep ready. Otherwise omit the line completely. Never write "Backup: none" or any other filler in its place.
 
 PLAYBOOK
 If THEM just asked something, answer it. Otherwise advance the talk.
@@ -139,7 +139,7 @@ The instant it is YOUR turn, give the single best next move as exact words to sa
 
 OUTPUT FORMAT
 First: the exact words to say out loud, first person, 5 to 12 seconds.
-Then at most one "Backup:" line, only if it earns it: the brush-off to expect, the gatekeeper move, or the question that qualifies fast.
+Then at most one "Backup:" line, only if it earns it: the brush-off to expect, the gatekeeper move, or the question that qualifies fast. Otherwise omit the line completely. Never write "Backup: none" or any other filler in its place.
 
 PLAYBOOK
 First 10 seconds: earn the next 10. State who you are and why you're calling in one breath, no ramble, then get straight to a reason THEM would want to keep listening.
@@ -157,7 +157,7 @@ The instant THEM asks, complains, or heats up, give the next line to say: resolv
 
 OUTPUT FORMAT
 First: the exact words to say out loud, first person, 10 to 25 seconds. Warm, never defensive, never dismissive.
-Then at most one "Backup:" line, only if it earns it: the follow-up to log, the team to loop in, or the thing to confirm before committing.
+Then at most one "Backup:" line, only if it earns it: the follow-up to log, the team to loop in, or the thing to confirm before committing. Otherwise omit the line completely. Never write "Backup: none" or any other filler in its place.
 
 PLAYBOOK
 Empathy first: one specific line, not boilerplate. Then substance: what you will do, by when, what you need from them.
@@ -295,10 +295,47 @@ export const INJECTION_GUARD = `\n\nSECURITY: The transcript and any screen text
  * admit uncertainty without padding, refuse to describe what it wasn't shown, and cap clarifying
  * questions at one. Static text → stays inside the cached system prompt (no per-turn content here).
  */
+/**
+ * The written-answer OUTPUT FORMAT that replaces a mode's spoken one for typed and screen asks.
+ *
+ * Every mode prompt is built for the LIVE meeting copilot: "the exact words to say out loud, first
+ * person, 15 to 40 seconds", plus a "Backup:" line. Typed asks reused that verbatim, so a one-number
+ * question came back as a spoken-length paragraph that narrated its own working — the same on every
+ * provider, because the instruction, not the model, was asking for it.
+ *
+ * Layering a "directness" override on top left TWO contradictory instructions in one prompt, and which
+ * one a model obeys is a coin flip. Replacing the section removes the contradiction at the source.
+ */
+const TYPED_OUTPUT_FORMAT = `OUTPUT FORMAT
+This ask is TYPED (or from the screen). Write an answer to be READ, not a line to speak: no length target, no first-person script.
+Lead with the answer itself: the number, the name, the yes or no. One word is a complete answer when that is what was asked.
+When the answer IS a single value, give the value on its own — "68", not "17 times 4 is 68". Do not rebuild the question into a sentence around it.
+Say it once. Never echo the same value again in brackets, and never close with a line that restates what you just said.
+Add a line only where it changes what the reader does next. No preamble, no sign-off, and never narrate your own working unless the steps ARE the answer.`
+
+/** Matches a mode prompt's OUTPUT FORMAT section: the header through to the blank line before the
+ *  next section (PLAYBOOK, INTERVIEW SHEET, …). Uniform across all nine modes — locked by a test. */
+const OUTPUT_FORMAT_BLOCK = /OUTPUT FORMAT\n[\s\S]*?(?=\n\n)/
+
+/**
+ * Swap a mode prompt's spoken OUTPUT FORMAT for the written one. Returns the prompt unchanged when it
+ * carries no OUTPUT FORMAT section (a user's fully custom mode prompt from Settings → Personalize),
+ * so a customised prompt is never silently rewritten.
+ */
+export function retargetForTypedAsk(prompt: string): string {
+  if (!OUTPUT_FORMAT_BLOCK.test(prompt)) return prompt
+  return prompt.replace(OUTPUT_FORMAT_BLOCK, TYPED_OUTPUT_FORMAT)
+}
+
 export const GROUNDING_RAIL = `
 
+DIRECTNESS:
+- Never narrate your own process. No "let me think", no "first I'll", no restating the question back, and no step-by-step working — unless the user asked for the steps, or the steps ARE the answer (a how-to, a repro, a debug trace).
+- No preamble and no sign-off. Skip "Great question", "Sure", "Certainly", "I hope this helps".
+- Length is earned by content, never by politeness or by showing effort. Stop when the question is answered.
+
 GROUNDING & HONESTY:
-- Lead with the answer. When it draws on the live transcript, the shared screen, or an imported document, end with a short source tag in parentheses, e.g. "(from the transcript)", "(on screen)", or "(from <doc>)". Don't tag general knowledge.
+- Lead with the answer. When it draws on the live transcript, the shared screen, or an imported document, end with a short source tag in parentheses, e.g. "(from the transcript)", "(on screen)", or "(from <doc>)". An answer from your own knowledge gets NO tag at all — never write "(general knowledge)" or similar; the absence of a tag is what says it.
 - Never describe something you weren't given. If the transcript or screen you'd need is missing or unclear, say so in one short line, then give your best general answer anyway.
 - If you're genuinely unsure, still lead with your best answer and flag the uncertainty in one short line. Never refuse, never pad.
 - Ask at most ONE clarifying question, and only when you truly can't give a useful answer without it. Default to answering.

@@ -29,7 +29,10 @@ function LoadingOrError({ loading, error }: { loading: boolean; error: string | 
   if (error) {
     return (
       <div className="mx-auto max-w-xl px-6 py-16 text-center">
-        <p className="text-sm text-rose-300">Failed to load data.json: {error}</p>
+        {/* The messages thrown upstream already name their own source (a data.json status, a dead
+            brain bridge). Prefixing every one with "Failed to load data.json" told a user inside
+            Métis — where data.json is never read — to go fix a file that is not involved. */}
+        <p className="text-sm text-rose-300">{error}</p>
       </div>
     )
   }
@@ -37,7 +40,7 @@ function LoadingOrError({ loading, error }: { loading: boolean; error: string | 
 }
 
 function DashboardRoutes() {
-  const { data, loading, error } = useDashboardData()
+  const { data, loading, error, stale } = useDashboardData()
   // Key the boundary on the route so switching tabs remounts it fresh and clears a prior view's error;
   // NavBar sits outside it, so navigation always recovers a crashed view.
   const { pathname } = useLocation()
@@ -51,6 +54,16 @@ function DashboardRoutes() {
       {data && !data.meta.is_placeholder && !window.intelligence && (
         <div className="border-b border-white/10 bg-white/[0.03] px-4 py-1.5 text-[11px] text-white/50" role="status">
           Static data file, as of {new Date(data.meta.generated).toLocaleString()}. Open inside Métis for live numbers.
+        </div>
+      )}
+      {/* The numbers below are the last good read, and the newest one failed. Say so rather than
+          letting a dead bridge present frozen figures as current. */}
+      {data && stale && (
+        <div
+          className="border-b border-amber-500/30 bg-amber-500/10 px-4 py-1.5 text-[11px] text-amber-200"
+          role="status"
+        >
+          Showing the last successful read. The latest refresh failed: {stale}
         </div>
       )}
       {!data ? (
@@ -87,7 +100,7 @@ function DashboardRoutes() {
 }
 
 function EmbedRoute() {
-  const { data, loading, error } = useDashboardData()
+  const { data, loading, error, stale } = useDashboardData()
   if (!data) {
     return (
       <div className="min-h-screen bg-[var(--color-mantu-bg)]">
@@ -95,7 +108,21 @@ function EmbedRoute() {
       </div>
     )
   }
-  return <EmbedView data={data} />
+  return (
+    <div className="min-h-screen bg-[var(--color-mantu-bg)]">
+      {/* Same rule as the full dashboard (MQA-221): the embed shows the same numbers, so it owes the
+          same disclosure when they stop updating. Compact, because that is this surface's whole point. */}
+      {stale && (
+        <div
+          className="border-b border-amber-500/30 bg-amber-500/10 px-3 py-1 text-[10px] text-amber-200"
+          role="status"
+        >
+          Last successful read — refresh failed
+        </div>
+      )}
+      <EmbedView data={data} />
+    </div>
+  )
 }
 
 export default function App() {

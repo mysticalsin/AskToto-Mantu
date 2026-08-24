@@ -757,6 +757,12 @@ async function groupScreen() {
 // Requires the mock: MOCK_TLS_CERT=… MOCK_TLS_KEY=… node scripts/qa/mock-llm-server.mjs 8788
 // and the app launched with NODE_TLS_REJECT_UNAUTHORIZED=0 so undici accepts the self-signed cert.
 // Skips itself (INFO, never a false PASS) when the mock is not reachable.
+// Smallest valid baseline JPEG (1x1), inline so a screen-ask carries a REAL attachment through
+// openai.ts's image_url branch instead of degrading to a text ask. Bare base64, no data: prefix —
+// AskStartSchema rejects anything else.
+const TINY_JPEG_B64 =
+  '/9j/4AAQSkZJRgABAQEAYABgAAD/2wBDAAgGBgcGBQgHBwcJCQgKDBQNDAsLDBkSEw8UHRofHh0aHBwgJC4nICIsIxwcKDcpLDAxNDQ0Hyc5PTgyPC4zNDL/wAALCAABAAEBAREA/8QAFAABAAAAAAAAAAAAAAAAAAAACf/EABQQAQAAAAAAAAAAAAAAAAAAAAD/2gAIAQEAAD8AKp//2Q=='
+
 async function groupCloudflare() {
   const g = 'cloudflare'
   const MOCK = process.env.METIS_MOCK_BASE ?? 'https://127.0.0.1:8788'
@@ -797,10 +803,35 @@ async function groupCloudflare() {
       return { walk: r.providers }
     })
 
-    await check(g, 'cloudflare serves SCREEN asks too (its default model is multimodal)', async () => {
-      const s = await settings()
-      assert(s.visionReady === true, 'visionReady is false — screenshots would fall to the on-device model')
-      return { visionReady: s.visionReady, model: s.providerModels?.cloudflare ?? '(default)' }
+    await check(g, 'a SCREEN ask goes on-device, never to a gateway that cannot carry an image', async () => {
+      // MQA-227 (supersedes MQA-212). Cloudflare's OpenAI-compatible endpoint rejects every image_url
+      // shape with code 6004 — a transport limit, not a model one — so PROVIDERS.cloudflare.vision is
+      // false and a screen-ask must route to the on-device model. Asserting the WALK, because the old
+      // check read `visionReady`, which localFallbackReady satisfies on its own: it could not fail.
+      const r = await ask({ id: uid('cf-vision'), mode: 'vision', prompt: 'What is on screen?', image: TINY_JPEG_B64 })
+      assert(
+        !r.providers.includes('cloudflare'),
+        `a screen-ask reached cloudflare, which cannot accept an image: ${JSON.stringify(r.providers)}`
+      )
+      // Under an org allowlist that excludes 'local' (e.g. exactly ["cloudflare"]), NO provider may carry
+      // an image, so the honest outcome is a dead-end with advice that does not name a policy-blocked
+      // provider (MQA-228) — not a walk onto the on-device model the policy forbids.
+      const policyBlocksLocal = (await settings()).allowedProviders?.includes('local') === false
+      if (policyBlocksLocal) {
+        assert(r.providers.length === 0, `policy excludes every vision route, yet the walk was ${JSON.stringify(r.providers)}`)
+        assert(Boolean(r.error), 'no error surfaced for a screen-ask no approved provider can serve')
+        assert(
+          !/Claude or GPT/.test(String(r.error)),
+          `advice names policy-blocked providers: ${r.error}`
+        )
+        return { walk: r.providers, error: r.error }
+      }
+      assert(
+        r.providers.includes('local'),
+        `screen-ask did not reach the on-device model, walk was ${JSON.stringify(r.providers)}`
+      )
+      assert(r.text.trim().length > 0, 'no text streamed back for the screen-ask')
+      return { walk: r.providers }
     })
 
     // Every way the hop can fail. None may dead-end or hang: the user keeps getting answers.
@@ -860,7 +891,11 @@ async function groupCloudflare() {
     await check(g, 'testApiKey rejects a bad proxy key with the real reason', async () => {
       const r = await page.evaluate(() => window.toto.testApiKey('cloudflare', 'definitely-wrong'))
       assert(r && r.ok === false, `expected a rejection, got ${JSON.stringify(r)}`)
-      return { error: String(r.error ?? '').slice(0, 80) }
+      // MQA-213. This surface returns the upstream message verbatim, so it is the one that leaks the
+      // routing marker first if the strip is ever dropped — assert the message, not just the boolean.
+      const err = String(r.error ?? '')
+      assert(!err.includes('[metis-proxy-config]'), `the routing marker reached the Test button: ${err}`)
+      return { error: err.slice(0, 80) }
     })
   } finally {
     await page.evaluate(

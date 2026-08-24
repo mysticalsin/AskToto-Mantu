@@ -1,5 +1,30 @@
 import type { Category, DealOutcome, GraphNode, Grounding, WinLikelihoodBand } from '../types/data'
 
+/** Currency's own display symbol via Intl (falls back to the ISO code itself if Intl doesn't know it) —
+ *  never assume USD: the brain records deal amounts in whatever currency was actually spoken. */
+export function currencySymbol(currency: string): string {
+  try {
+    const parts = new Intl.NumberFormat('en', { style: 'currency', currency, currencyDisplay: 'narrowSymbol' }).formatToParts(0)
+    return parts.find((p) => p.type === 'currency')?.value ?? currency
+  } catch {
+    return currency
+  }
+}
+
+/** One deal amount, abbreviated (e.g. "€120K", "$1.4M"). */
+export function fmtAmount(currency: string, n: number): string {
+  const sym = currencySymbol(currency)
+  if (n >= 1_000_000) return `${sym}${(n / 1_000_000).toFixed(1)}M`
+  if (n >= 1_000) return `${sym}${(n / 1_000).toFixed(0)}K`
+  return `${sym}${n}`
+}
+
+/** A scope's total_value (ScopeSummary) — never summed across currencies (nothing in this pipeline does
+ *  FX conversion), so a scope with deals in two currencies shows both totals side by side. */
+export function fmtScopeTotal(totals: Array<{ currency: string; value: number }>): string {
+  return totals.length ? totals.map((t) => fmtAmount(t.currency, t.value)).join(' · ') : 'N/A'
+}
+
 export const bandColor: Record<WinLikelihoodBand, string> = {
   good: '#35c98f',
   mixed: '#e0a836',

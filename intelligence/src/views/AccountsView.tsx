@@ -6,6 +6,7 @@ import { freshnessColor, freshnessLabel } from '../lib/format'
 import { slug } from '../lib/slug'
 import { Timeline } from '../components/Timeline'
 import { AcceptSuggestion } from '../components/AcceptSuggestion'
+import { EmptyState } from '../components/EmptyState'
 
 interface Props {
   data: DashboardData
@@ -25,7 +26,7 @@ export function AccountsView({ data }: Props) {
   }, [acctParam])
 
   const account = useMemo(
-    () => data.accounts.find((a) => a.slug === selected) ?? data.accounts[0],
+    () => data.accounts.find((a) => a.slug === selected),
     [data.accounts, selected],
   )
 
@@ -41,8 +42,26 @@ export function AccountsView({ data }: Props) {
   }
 
   if (!account) {
+    // Distinguish a genuinely empty brain from a deep-link to a slug that no longer exists (renamed
+    // account, stale bookmark, hand-typed URL) — the old `?? data.accounts[0]` silently showed the
+    // WRONG account instead, with no signal that anything was off.
+    if (acctParam && data.accounts.length > 0) {
+      return (
+        <EmptyState
+          title="Accounts"
+          standfirst="Every mapped account — relationships, deals, and why you win or lose."
+          headline={`No account named "${acctParam}"`}
+          body="It may have been renamed or merged into another account. Pick one from the list below."
+        />
+      )
+    }
     return (
-      <div className="mx-auto max-w-7xl px-6 py-8 text-sm text-white/50">No accounts available.</div>
+      <EmptyState
+        title="Accounts"
+        standfirst="Every mapped account — relationships, deals, and why you win or lose."
+        headline="No accounts mapped yet."
+        body="Accounts appear here as Métis extracts them from your meetings. Once a meeting names a company, it shows up with the people mapped to it, the deals in flight, and the quoted lines behind every win and loss."
+      />
     )
   }
 

@@ -7,6 +7,7 @@ import { ledgerTotals } from '../lib/ledgerstats'
 import { slug } from '../lib/slug'
 import { Timeline } from '../components/Timeline'
 import { AcceptSuggestion } from '../components/AcceptSuggestion'
+import { EmptyState } from '../components/EmptyState'
 
 interface Props {
   data: DashboardData
@@ -44,7 +45,7 @@ export function PeopleView({ data }: Props) {
   }, [personParam])
 
   const person = useMemo(
-    () => data.people.find((p) => p.slug === selected) ?? data.people[0],
+    () => data.people.find((p) => p.slug === selected),
     [data.people, selected],
   )
 
@@ -59,7 +60,26 @@ export function PeopleView({ data }: Props) {
   }
 
   if (!person) {
-    return <div className="mx-auto max-w-7xl px-6 py-8 text-sm text-white/50">No people mapped yet.</div>
+    // Deep-link to a slug that no longer exists (renamed contact, stale bookmark) is a different case
+    // from a genuinely empty brain — the old `?? data.people[0]` silently showed the WRONG person instead.
+    if (personParam && data.people.length > 0) {
+      return (
+        <EmptyState
+          title="People"
+          standfirst="Every mapped contact — role, commitments, and the stances they've taken."
+          headline={`No person named "${personParam}"`}
+          body="It may have been renamed or merged into another contact. Pick one from the list below."
+        />
+      )
+    }
+    return (
+      <EmptyState
+        title="People"
+        standfirst="Every mapped contact — role, commitments, and the stances they've taken."
+        headline="No people mapped yet."
+        body="People appear here as Métis extracts them from your meetings. Record or import a meeting where attendees are named, and each one shows up with their role, the commitments they made, and the positions they took."
+      />
+    )
   }
 
   const node = nodeById.get(`person:${person.slug}`)

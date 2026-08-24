@@ -1,9 +1,26 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { mkdtempSync, rmSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { EventEmitter } from 'node:events'
 
-const electron = vi.hoisted(() => ({ app: { isPackaged: true } }))
+// MQA-234: the transformers/onnxruntime-node stack no longer loads in this process at all — it runs in an
+// isolated Electron utilityProcess (whisper-asr-host.ts, see whisper-asr-host.test.ts for that seam's own
+// coverage) and this module only ships Float32 windows across `utilityProcess.fork()` and gets text back.
+// So the RPC boundary here is a fake child: an EventEmitter (matching UtilityProcess's `.on('message'/
+// 'exit', ...)`) plus a `postMessage` spy the tests read the outgoing request id from, and `stderr`/
+// `stdout` stub streams (ensureHost() in whisper-import.ts subscribes to both unconditionally).
+class FakeChild extends EventEmitter {
+  readonly postMessage = vi.fn()
+  readonly kill = vi.fn()
+  readonly stderr = new EventEmitter()
+  readonly stdout = new EventEmitter()
+}
+
+// isPackaged: false so modelsDir() (whisper-import.ts) resolves against the repo's own resources/
+// directory instead of the packaged app's process.resourcesPath, which does not exist in this test
+// process — the RPC tests below never touch the filesystem it points at anyway (the child is fully faked).
+const electron = vi.hoisted(() => ({
+  app: { isPackaged: false },
+  utilityProcess: { fork: vi.fn() }
+}))
 const logger = vi.hoisted(() => ({ mainLog: { error: vi.fn(), warn: vi.fn(), info: vi.fn() } }))
 
 vi.mock('electron', () => electron)
@@ -17,8 +34,22 @@ import {
   probeLanguage,
   reprobeForSwitch,
   resetLanguageFollow,
+  stopWhisperHost,
   whisperImportTranscribe
 } from './whisper-import'
+
+/** Waits for the fake child's postMessage spy to have recorded a request of the given type, and returns
+ *  it — transcribeRemote() posts synchronously once whisperImportTranscribe's two no-op probe awaits
+ *  (probeLanguage/reprobeForSwitch, both immediate no-ops with no probe supplied) have flushed, which
+ *  takes a couple of microtask ticks, not zero. */
+async function waitForRequest(child: FakeChild, type: string): Promise<{ id: number; [key: string]: unknown }> {
+  for (let i = 0; i < 50; i++) {
+    const found = child.postMessage.mock.calls.map(([m]) => m as { type: string; id: number }).find((m) => m.type === type)
+    if (found) return found
+    await new Promise((resolve) => setTimeout(resolve, 0))
+  }
+  throw new Error(`fake child never received a '${type}' postMessage`)
+}
 
 // Mirrors the essential cases from renderer/src/lib/whisper.worker.test.ts (PR #29) against the ported
 // follow machine, driving nextDecodeOptions()/followLanguage() directly instead of round-tripping through
@@ -329,32 +360,76 @@ describe('whisper-import runaway-decode-loop guard (finalizeDecodedText)', () =>
   })
 })
 
-describe('whisper-import model load failure', () => {
-  let resourcesPath: string
-  let originalResourcesPath: PropertyDescriptor | undefined
+// MQA-234: transformers no longer loads in-process, so whisperImportTranscribe's only remaining
+// responsibility on the failure/lifecycle path is the RPC plumbing to the whisper-asr-host.ts child —
+// covered here against a fully-controllable fake child. What the child itself does when its model files
+// are actually missing (the old "reinstall guidance" coverage) now lives at the seam that owns it:
+// whisper-asr-host.test.ts.
+describe('whisper-import utilityProcess RPC (MQA-234: transformers isolated into its own child)', () => {
+  let child: FakeChild
 
   beforeEach(() => {
-    resourcesPath = mkdtempSync(join(tmpdir(), 'metis-whisper-import-test-'))
-    originalResourcesPath = Object.getOwnPropertyDescriptor(process, 'resourcesPath')
-    Object.defineProperty(process, 'resourcesPath', { configurable: true, value: resourcesPath })
-    logger.mainLog.error.mockClear()
+    child = new FakeChild()
+    electron.utilityProcess.fork.mockReset().mockReturnValue(child)
+    resetLanguageFollow('auto')
   })
 
   afterEach(() => {
-    rmSync(resourcesPath, { recursive: true, force: true })
-    if (originalResourcesPath) Object.defineProperty(process, 'resourcesPath', originalResourcesPath)
-    else delete (process as NodeJS.Process & { resourcesPath?: string }).resourcesPath
+    // Every test either resolves/rejects the one in-flight request or kills the child itself; this just
+    // guarantees no live host handle leaks from a failed test into the next one's fork() call count.
+    stopWhisperHost()
   })
 
-  // Mirrors parakeet.test.ts's "fails locally with reinstall guidance when packaged assets are missing"
-  // coverage for the other bundled ASR engine. Points env.localModelPath (via app.isPackaged +
-  // process.resourcesPath) at an empty directory — allowRemoteModels stays false, so transformers.js fails
-  // fast on the missing local file instead of attempting any network fetch or loading real model weights.
-  it('fails with reinstall guidance when the bundled model files are missing, without downloading anything', async () => {
-    await expect(whisperImportTranscribe(new Float32Array(16), 'auto')).rejects.toThrow(/Reinstall Métis/)
-    expect(logger.mainLog.error).toHaveBeenCalledWith(
-      '[whisper-import] model load failed:',
-      expect.stringContaining('was not found locally')
-    )
+  it("rejects with the child's reported message when it answers a transcribe request with an error", async () => {
+    const pending = whisperImportTranscribe(new Float32Array(16), 'auto')
+    const req = await waitForRequest(child, 'transcribe')
+
+    child.emit('message', {
+      type: 'error',
+      id: req.id,
+      message: 'The bundled transcription files are missing or damaged. Reinstall Métis from a complete installer.'
+    })
+
+    await expect(pending).rejects.toThrow(/Reinstall Métis/)
+  })
+
+  it('resolves with the transcribed text on a matching result message', async () => {
+    const pending = whisperImportTranscribe(new Float32Array(16), 'auto')
+    const req = await waitForRequest(child, 'transcribe')
+
+    child.emit('message', { type: 'result', id: req.id, text: 'hello there' })
+
+    await expect(pending).resolves.toBe('hello there')
+  })
+
+  it('rejects every in-flight call when the child exits mid-request', async () => {
+    const pending = whisperImportTranscribe(new Float32Array(16), 'auto')
+    await waitForRequest(child, 'transcribe')
+
+    child.emit('exit', 137) // OOM/native-fault style abrupt exit — not a graceful shutdown
+
+    await expect(pending).rejects.toThrow(/exited unexpectedly/)
+  })
+
+  it('stopWhisperHost() kills the live child, and the next transcribe call forks a fresh one', async () => {
+    const first = whisperImportTranscribe(new Float32Array(16), 'auto')
+    const firstReq = await waitForRequest(child, 'transcribe')
+    child.emit('message', { type: 'result', id: firstReq.id, text: 'first' })
+    await expect(first).resolves.toBe('first')
+    expect(electron.utilityProcess.fork).toHaveBeenCalledTimes(1)
+
+    stopWhisperHost()
+    expect(child.kill).toHaveBeenCalledTimes(1)
+
+    const second = new FakeChild()
+    electron.utilityProcess.fork.mockReturnValue(second)
+    const pending = whisperImportTranscribe(new Float32Array(16), 'auto')
+    const secondReq = await waitForRequest(second, 'transcribe')
+
+    expect(electron.utilityProcess.fork).toHaveBeenCalledTimes(2)
+    child.emit('message', { type: 'result', id: 999, text: 'must not resolve the new call' }) // stale child, ignored
+    second.emit('message', { type: 'result', id: secondReq.id, text: 'second' })
+
+    await expect(pending).resolves.toBe('second')
   })
 })

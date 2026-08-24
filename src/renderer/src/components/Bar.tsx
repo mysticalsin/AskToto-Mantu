@@ -244,6 +244,7 @@ export interface BarProps {
 function IconTool({
   title,
   onClick,
+  onMouseEnter,
   active,
   danger,
   rainbow,
@@ -257,6 +258,9 @@ function IconTool({
 }: {
   title: string
   onClick: () => void
+  /** Optional hover hook — used by the Capture tool to pre-warm the OS capture pipeline at the one
+   *  moment screen intent is actually signalled (MQA-236: never on text-input focus). */
+  onMouseEnter?: () => void
   active?: boolean
   danger?: boolean
   rainbow?: boolean
@@ -288,6 +292,7 @@ function IconTool({
         aria-expanded={ariaExpanded}
         disabled={disabled}
         onClick={onClick}
+        onMouseEnter={onMouseEnter}
         className={[
           'no-drag focus-ring peer grid place-items-center rounded-[10px] p-1 transition-colors duration-[var(--duration-hover)] active:scale-[0.92]',
           rainbow ? 'rainbow-ring' : '',
@@ -497,7 +502,9 @@ export const Bar = memo(function Bar(props: BarProps): JSX.Element {
             ref={inputRef}
             value={props.value}
             onChange={(e) => props.onChange(e.target.value)}
-            onFocus={() => { if (props.canPrewarm) void window.toto.prewarmCapture() }}
+            // MQA-236: focusing the box to TYPE must not touch the screen — prewarmCapture() takes a
+            // real frame ('prewarm' capture in main). The warm now rides hovering the Capture button,
+            // the one place screen intent is actually signalled before the click.
             onKeyDown={(e) => {
               if (e.key === 'Enter' && !e.shiftKey) {
                 e.preventDefault()
@@ -582,6 +589,7 @@ export const Bar = memo(function Bar(props: BarProps): JSX.Element {
             <IconTool
               title={props.captureAccel ? `Capture screen (${accelLabel(props.captureAccel)})` : 'Capture screen'}
               onClick={props.onCapture}
+              onMouseEnter={() => { if (props.canPrewarm) void window.toto.prewarmCapture() }}
             >
               {props.capturing ? <Spinner size={19} /> : <Image size={19} strokeWidth={ICON_STROKE} />}
             </IconTool>

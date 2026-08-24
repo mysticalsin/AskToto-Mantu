@@ -308,3 +308,31 @@ describe('MQA-053 / MQA-059 — the user is told when the ACTIVE provider stoppe
     expect(body).toMatch(/void refresh\(\)/)
   })
 })
+
+// MQA-216 — the "your organization restricts which providers you can use" sentence was reached by
+// reading a saved API key as proof of an org policy, so the one state Cloudflare spends its whole
+// first run in — key pasted, operator's Worker URL not yet pasted — told the user their employer had
+// blocked them. Both surfaces that render it now test the allowlist itself and give the endpoint case
+// its own remedy.
+describe('MQA-216 — a missing endpoint URL is never reported as an org policy block', () => {
+  for (const [name, block] of [
+    ['the quick-action gate', blockBetween('const blockedByOrg =', 'return false')],
+    ['the under-bar CTA', blockBetween('const activeDef = PROVIDERS[settings.provider]', 'return (')]
+  ] as const) {
+    it(`${name} decides "blocked" from allowedProviders, not from having a key`, () => {
+      const body = code(block)
+      expect(body).toMatch(/allowedProviders/)
+      expect(body).toMatch(/!settings.*allowedProviders.*includes\(/)
+      // The exact misread: a stored key standing in for an org policy.
+      expect(body).not.toMatch(/blockedByOrg =\s*!*settings\??\.?hasApiKey/)
+    })
+
+    it(`${name} sends a provider whose endpoint the user supplies to the field that fixes it`, () => {
+      const body = code(block)
+      expect(body).toMatch(/requiresUserBaseUrl\(/)
+      expect(body).toMatch(/providerBaseUrl\(/)
+      expect(body).toMatch(/No endpoint URL set for/)
+      expect(body).toMatch(/Settings → Advanced/)
+    })
+  }
+})

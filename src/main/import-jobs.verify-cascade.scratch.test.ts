@@ -2,10 +2,10 @@ import { describe, expect, it } from 'vitest'
 import { ImportJobManager, type ImportJob, type ImportJobStore } from './import-jobs'
 
 /**
- * Scratch verification test (adversarial review): mirrors the index.ts hidden-window handler ordering.
- * The importDecoderComplete handler awaits finishDecoding() FIRST and closes the decoder window only
- * afterwards (finally), while startImportDecoder throws 'Another audio decoder is already active.'
- * whenever the previous decoder window is still alive.
+ * Scratch verification test (adversarial review), ported to the vad-v1 pipeline (MQA-235): mirrors the
+ * index.ts decoder lifecycle ordering. The ffmpeg onComplete handler releases the decoder slot BEFORE
+ * finishDecoding (which now owns the whole ASR phase), while startImportDecoder throws
+ * 'Another audio decoder is already active.' whenever a previous decoder is still alive.
  */
 
 const store: ImportJobStore = {
@@ -18,9 +18,21 @@ function source(name: string) {
   return { path: `/tmp/${name}`, name, sizeBytes: 10, mtimeMs: 1 }
 }
 
-describe('scratch: queued import cascade', () => {
-  it('hidden-window ordering: completing job A fails queued job B', async () => {
-    let decoderAlive = false // mirrors decoderWin lifetime in index.ts
+/** One 12s slab carrying a VAD-visible utterance (same fixture technique as import-jobs.test.ts). */
+function speechSlab(): Float32Array {
+  const rate = 16_000
+  const slab = new Float32Array(rate * 12)
+  // 2s of 220Hz "speech" with a syllabic amplitude wobble so isSpeechLikeWindow accepts it.
+  for (let i = 0; i < rate * 2; i++) {
+    const t = i / rate
+    slab[rate + i] = 0.3 * Math.sin(2 * Math.PI * 220 * t) * (0.55 + 0.45 * Math.sin(2 * Math.PI * 3 * t))
+  }
+  return slab
+}
+
+describe('scratch: queued import cascade (vad-v1)', () => {
+  it('hidden-window ordering: completing job A fails queued job B while its decoder is still alive', async () => {
+    let decoderAlive = false // mirrors decoderWin lifetime in index.ts (browser-fallback decoder)
     const started: string[] = []
     const manager = new ImportJobManager({
       store,
@@ -40,10 +52,11 @@ describe('scratch: queued import cascade', () => {
     const jobB = await manager.start(source('b.m4a'))
     expect(started).toEqual([jobA.jobId]) // B queued behind A
 
-    // Decoder for A submits its only chunk, then completes — exactly as the
-    // importDecoderComplete IPC handler does: finishDecoding BEFORE closeImportDecoder.
-    await manager.acceptDecodedChunk(jobA.jobId, 0, 1, new Float32Array(16000))
-    await manager.finishDecoding(jobA.jobId, 1)
+    // The BROWSER-fallback decoder path closes its hidden window only AFTER finishDecoding returns
+    // (finally block) — and finishDecoding now runs the whole ASR phase, so B is pumped while A's
+    // decoder is still alive and must fail loudly rather than hang.
+    await manager.acceptDecodedChunk(jobA.jobId, 0, 0, speechSlab())
+    await manager.finishDecoding(jobA.jobId)
     decoderAlive = false // closeImportDecoder runs only now (finally block)
 
     expect(manager.get(jobA.jobId)?.state).toBe('done')
@@ -53,7 +66,12 @@ describe('scratch: queued import cascade', () => {
     expect(started).toEqual([jobA.jobId]) // B never got a decoder
   })
 
-  it('ffmpeg ordering: transcription failure on A cascade-fails queued B and C', async () => {
+  it('ffmpeg ordering: a phase-2 ASR failure on A does NOT cascade — the slot is already free, B decodes', async () => {
+    // Under the legacy pipeline ASR ran inside acceptDecodedChunk, so an ASR crash failed A while its
+    // ffmpeg slot was still registered and queued B/C cascade-failed on 'already active'. Under vad-v1
+    // the ffmpeg onComplete handler releases the slot BEFORE finishDecoding runs the ASR phase
+    // (index.ts: "Release the process slot before finishDecoding pumps the next FIFO job") — so an ASR
+    // failure on A now pumps B into a WORKING decoder. That is the improved contract this pins.
     const ffmpegDecoders = new Set<string>() // mirrors index.ts ffmpegDecoders map
     const started: string[] = []
     const manager = new ImportJobManager({
@@ -74,17 +92,16 @@ describe('scratch: queued import cascade', () => {
 
     const jobA = await manager.start(source('a.m4a'))
     const jobB = await manager.start(source('b.m4a'))
-    const jobC = await manager.start(source('c.m4a'))
 
-    // ffmpeg onChunk: acceptDecodedChunk rejects after retries; fail(A) pumps B while A's
-    // decoder is still registered (index.ts deletes it only later, in onError).
-    await expect(manager.acceptDecodedChunk(jobA.jobId, 0, 0, new Float32Array(16000))).rejects.toThrow('ASR crashed')
-    ffmpegDecoders.delete(jobA.jobId) // onError cleanup happens only after the rejection propagated
+    await manager.acceptDecodedChunk(jobA.jobId, 0, 0, speechSlab())
+    // ffmpeg onComplete: slot released FIRST, then finishDecoding runs phase 2 and the ASR crash lands.
+    ffmpegDecoders.delete(jobA.jobId)
+    await manager.finishDecoding(jobA.jobId)
 
     expect(manager.get(jobA.jobId)?.state).toBe('failed')
-    expect(manager.get(jobB.jobId)?.state).toBe('failed')
-    expect(manager.get(jobB.jobId)?.error).toBe('Another audio decoder is already active.')
-    expect(manager.get(jobC.jobId)?.state).toBe('failed')
-    expect(started).toEqual([jobA.jobId]) // B and C never decoded
+    expect(manager.get(jobA.jobId)?.error).toBe('ASR crashed')
+    // B was pumped into a free slot and is decoding — no cascade.
+    expect(manager.get(jobB.jobId)?.state).toBe('decoding')
+    expect(started).toEqual([jobA.jobId, jobB.jobId])
   })
 })

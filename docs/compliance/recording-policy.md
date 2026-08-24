@@ -66,7 +66,7 @@ recording start, logged").
 | Artifact | Target retention | Status |
 |---|---|---|
 | Raw audio | N/A — not persisted to disk in the current architecture (processed transiently in memory during live transcription only) | Already true today by design, not a policy to enforce |
-| Verbatim transcript | 30–90 days | **Target only** — no automated deletion exists; today, retained until the user manually deletes the file |
+| Verbatim transcript | 30–90 days | Automated: `transcriptRetentionDays` (off by default, admin-lockable via managed-config) sweeps expired meetings at launch and every 6 hours, audit-logged (`sweepExpiredMeetings` in `src/main/recall.ts`, wired in `src/main/index.ts`). The enterprise example policy ships it at 90 days |
 | Minutes / recap / brain extraction | 12 months, unless the meeting/deal is project-tagged (then retained for the life of the project) | **Target only** — same gap |
 | Audit log | 12 months (ISO 27001 A.8.15 posture) | **Target only** — current audit log rotates by size (5MB), not by time |
 

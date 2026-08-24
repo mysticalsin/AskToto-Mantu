@@ -164,7 +164,7 @@ export function localVisionPrivacyRequired(
  * benefit, not merely a redundant check.
  */
 export function localPrewarmEligible(
-  s: Pick<Settings, 'localLlm'>,
+  s: Pick<Settings, 'localLlm' | 'resilience'>,
   allowed: string[] | null,
   cloudReady = true
 ): boolean {
@@ -172,6 +172,13 @@ export function localPrewarmEligible(
   if (allowed && !allowed.includes('local')) return false
   // "Local first for suggestions" — the original condition: local WILL serve the next suggest.
   if (s.localLlm.useFor.suggest) return true
+  // The hedge now starts an on-device backup at t=0 on every interactive ask (index.ts's hedgeDelayMs),
+  // so the MQA-006 rationale below — "nothing would route to it while cloud is healthy" — no longer
+  // holds: something routes to it on EVERY ask. Left cold, that leg spawns a ~730 MB load mid-request,
+  // loses the race it was started to win, and competes for CPU with the cloud stream it cannot beat.
+  // Warming on intent makes the race real. The sidecar still idle-stops after 15 minutes
+  // (local-runtime.ts IDLE_STOP_MS), so this buys speed without a permanently resident model.
+  if (s.resilience?.hedge === true && s.localLlm.fallback === true) return true
   // MQA-006: with useFor defaulting off, a zero-API-key install never satisfied the condition above, so
   // the on-device model was always COLD when the fallback finally routed to it — and a cold ~730 MB load
   // overruns askStart's 15s suggest idle budget, so the user's very first live suggestion on a fresh
