@@ -90,7 +90,11 @@ function dustLogger(): Console {
         return a
       })
       const blob = blobOf(sanitized)
-      if (DUST_BENIGN.test(blob)) return // expected + handled elsewhere — don't alarm the console
+      // Named rather than "handled elsewhere": an unspecific pointer is the shape that let three real
+      // defects hide behind a comment (MQA-244 the worst). These lines are console noise from the Dust
+      // client during a normal reconnect; the failure they describe surfaces through streamDust's own
+      // error path (onError / the auth-retry below), which is what actually acts on it.
+      if (DUST_BENIGN.test(blob)) return
       mainLog[level]('[dust-client]', redactSecrets(blob))
     } catch {
       /* logging must never throw into the stream */
