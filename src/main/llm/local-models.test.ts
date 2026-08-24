@@ -78,7 +78,7 @@ describe('bundled local model runtime', () => {
           expect(file.bytes).toBeGreaterThan(0)
         }
       }
-      // Ids must be unique — getModel()/resolveModelId() both resolve by id.
+      // Ids must be unique — getModel() resolves by id.
       expect(new Set(LOCAL_MODELS.map((m) => m.id)).size).toBe(LOCAL_MODELS.length)
     })
 

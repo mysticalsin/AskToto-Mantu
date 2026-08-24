@@ -159,11 +159,6 @@ export function spawnProfileFor(entry: LocalModelEntry, totalRamGB = totalRamGBV
   return { ctxSize: Math.min(entry.ctxSize, 8192), parallel: 2, gpuLayers: 0 }
 }
 
-export function resolveModelId(persistedId: string | undefined): string {
-  if (persistedId && LOCAL_MODELS.some((m) => m.id === persistedId)) return persistedId
-  return bestModelForMachine().id
-}
-
 export class InsufficientRamError extends Error {
   constructor(
     public readonly modelId: string,
