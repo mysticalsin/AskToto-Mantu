@@ -963,6 +963,11 @@ export const BaseSettingsSchema = z.object({
   // Same tracking as asrLastFallbackAt, for a WebGPU→CPU (or other backend) ASR fallback — set by the
   // renderer, surfaced as a Settings → Speech note. Optional: absent on older persisted settings.
   asrWebgpuFallbackAt: z.number().nullable().optional(),
+  // MQA-246: an IMPORT that ran on the floor transcription model (the high tier is not in the package,
+  // so whisper-asr-host's tier probe always degrades). Same checkable-in-Settings contract as the two
+  // notes above — imports previously gave no signal at all, so the weakest model was indistinguishable
+  // from the best on a durable transcript the user may act on. Optional: absent on older settings.
+  asrImportTierFallbackAt: z.number().nullable().optional(),
   // Same checkable-in-Settings contract as the two ASR notes above, for a CAPTURE degradation: a session
   // that requested system audio ran (in whole or in part) with the microphone only — most commonly the
   // macOS Screen Recording permission being off. Set by the renderer the moment the degraded stretch

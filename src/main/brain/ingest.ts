@@ -557,14 +557,26 @@ export function parseExtractionPayload(raw: string): MeetingExtraction {
   }
   // MQA-116: the model sometimes lists the transcript's speaker-ROLE labels ('You'/'Them') as if they were
   // real participants, so they land in people[] and become fake entities the brain then flags as
-  // "linked to multiple accounts". Drop them here — a commitment spoken "by them"/"by you" still routes
-  // correctly through mergeExtraction's own by='them'/'you' handling, which does not depend on a person row.
+  // "linked to multiple accounts". Drop them here.
+  //
+  // This used to claim a commitment spoken "by them"/"by you" still routed "correctly through
+  // mergeExtraction's own by='them'/'you' handling". No such handling existed (MQA-244) — the claim was
+  // written as if it were true and nothing tested it, so dropping these names silently dropped their
+  // commitments in every deal-less meeting. mergeExtraction now routes anything no ledger claimed to the
+  // user's own ledger; see the SELF_PERSON_SLUG block there. A comment asserting a safety property the
+  // code does not have is worse than no comment: it stops the next reader from checking.
   result.data.people = result.data.people.filter((p) => !SPEAKER_ROLE_LABELS.has(p.name.trim().toLowerCase()))
   return result.data
 }
 
 /** Transcript speaker-role labels that are never real person names (MQA-116). */
 const SPEAKER_ROLE_LABELS = new Set(['you', 'them', 'me', 'unknown', 'speaker', 'participant', 'other'])
+
+/** The user's own ledger (MQA-244). Deliberately one of the role labels above, so extraction can never
+ *  mint a competing person entity with this slug — those names are filtered out before they reach the
+ *  merge. Commitments no other ledger claimed land here. */
+export const SELF_PERSON_SLUG = 'you'
+export const SELF_PERSON_NAME = 'You'
 
 async function extractMeeting(
   s: Settings,
@@ -815,6 +827,11 @@ export async function mergeExtraction(
     await writeAccount(s, accountSlug, acc)
   }
 
+  // MQA-244: every commitment must reach a ledger that is actually rendered, or it is silently lost.
+  // Keys of the ones that did — the person loop matches on `by` == a person's name, the deal branch
+  // takes all of them, and whatever neither claimed is routed to the user's own ledger below.
+  const routedCommitments = new Set<string>()
+
   for (const p of x.people) {
     if (!p.name.trim()) continue
     const pslug = resolveEntitySlug(aliasMap, 'person', p.name)
@@ -857,12 +874,13 @@ export async function mergeExtraction(
     }
     // Commitments spoken BY this person (matched by name) join their personal ledger — over time this
     // yields a kept-promise read per counterpart, a signal no transcript-only tool can compute.
-    // Accepted design: in a deal-less meeting (x.deal is null, below) there is no ledger to also add
-    // these to, so such commitments live ONLY here and stay 'open' forever (settleCommitment is
-    // deal-keyed) — a known, accepted limitation, not a bug to fix.
+    // A commitment routed here stays 'open' until a later meeting settles it (settleCommitment is
+    // deal-keyed, so in a deal-less meeting that only happens once a deal appears) — a real limitation,
+    // but the row EXISTS and is rendered, which is the part that matters.
     person.commitments ??= []
     for (const c of x.commitments) {
       if (c.by.toLowerCase() === p.name.toLowerCase()) {
+        routedCommitments.add(commitmentKey(c.text))
         pushUnique(person.commitments, { ...c, meeting: ref.file, date: ref.date, status: 'open' as const }, (t) => commitmentKey(t.text))
       }
     }
@@ -979,6 +997,7 @@ export async function mergeExtraction(
     // Commitment Ledger: promises spoken in this meeting join the deal's ledger as open obligations.
     // Status stays 'open' until later evidence or a human marks it — the merge never guesses.
     for (const c of x.commitments) {
+      routedCommitments.add(commitmentKey(c.text))
       pushUnique(
         deal.commitments,
         { ...c, meeting: ref.file, date: ref.date, status: 'open' as const },
@@ -997,6 +1016,50 @@ export async function mergeExtraction(
       }
     }
     await writeDeal(s, dslug, deal)
+  }
+
+  // MQA-244: the commitments no ledger claimed.
+  //
+  // `by` is one of "you" | "them" | a person's name (src/shared/brain.ts's extraction contract), and
+  // Métis's own transcription labels speakers exactly that way — so "you"/"them" is the COMMON case,
+  // not an edge one. Those labels are stripped from people[] on the way in (MQA-116: they were becoming
+  // fake person entities flagged as "linked to multiple accounts"), which left the person loop above
+  // with nothing to match `by` against. The deal branch takes every commitment, so a meeting attached to
+  // a deal was fine and this went unnoticed. A meeting with no deal — an internal sync, a 1:1, a
+  // standup — had neither route, and every promise spoken in it was dropped with the ingest still
+  // reporting success. An empty next-steps list was indistinguishable from a meeting with no actions.
+  //
+  // They are routed to the user's own ledger rather than guessed onto a participant. That is not a
+  // fallback bucket, it is the correct owner: "I'll send the deck by Tuesday" is the user's to do, and
+  // "they'll come back with numbers" is the user's to chase. `by` is preserved verbatim on the row, so
+  // the rendered page still says who promised. No guessing — which is the same rule the deal merge
+  // above states for itself.
+  const unrouted = x.commitments.filter((c) => !routedCommitments.has(commitmentKey(c.text)))
+  if (unrouted.length) {
+    const self = cloneEntity(readPerson(s, SELF_PERSON_SLUG)) ?? {
+      schema_version: BRAIN_SCHEMA_VERSION,
+      id: SELF_PERSON_SLUG,
+      aliases: [],
+      name: SELF_PERSON_NAME,
+      role: null,
+      account: null,
+      meetings: [],
+      quotes: [],
+      stance_trail: [],
+      commitments: []
+    }
+    pushUnique(self.meetings, ref, (m) => m.file)
+    self.commitments ??= []
+    for (const c of unrouted) {
+      pushUnique(
+        self.commitments,
+        { ...c, meeting: ref.file, date: ref.date, status: 'open' as const },
+        (t) => commitmentKey(t.text)
+      )
+    }
+    await writePerson(s, SELF_PERSON_SLUG, self)
+    addNode(`person:${SELF_PERSON_SLUG}`, 'person', SELF_PERSON_NAME)
+    addEdge(`person:${SELF_PERSON_SLUG}`, meetingId, 'attends', 'EXTRACTED')
   }
 
   await writeGraph(s, graph)

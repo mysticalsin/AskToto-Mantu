@@ -126,3 +126,32 @@ describe('MQA-207 — the launch gate never silently covers a host it cannot ins
     expect(launchGate).toMatch(/cachedDataRejected/)
   })
 })
+
+describe('MQA-240 — the artifact itself is asserted to be bytecode-free, not just the flag', () => {
+  /**
+   * The flag (ASKTOTO_MAC_UNIVERSAL=1) is pinned in release-gates.test.ts. This pins the OUTCOME, because
+   * a flag is a thing a person can forget and the artifact is the thing a user runs. check-packaged-runtime
+   * already runs in every mac chain, so the check costs nothing extra and fails the build rather than the
+   * user's Mac — which is exactly what was missing when the 1.6.0 DMG shipped unlaunchable on Intel.
+   */
+  const runtimeGate = readFileSync(join(root, 'scripts', 'check-packaged-runtime.mjs'), 'utf8')
+
+  it('MQA-240: the runtime gate refuses any .jsc in a mac package', () => {
+    expect(runtimeGate).toMatch(/cachedDataRejected/)
+    expect(runtimeGate).toMatch(/endsWith\('\.jsc'\)/)
+    expect(runtimeGate).toMatch(/ASKTOTO_MAC_UNIVERSAL=1/)
+  })
+
+  it('MQA-240: it also refuses a loader-sized index.js, so a stripped .jsc cannot pass as a bundle', () => {
+    expect(runtimeGate).toMatch(/mainBytes < 50_000/)
+  })
+
+  it('MQA-240: every mac chain runs that gate', () => {
+    for (const name of MAC_BUILD_CHAINS) {
+      if (name === 'release:mas') continue // single-arch, and it has no universal merge to get wrong
+      expect(chainWithHook(name), `${name} does not run check-packaged-runtime`).toContain(
+        'scripts/check-packaged-runtime.mjs mac'
+      )
+    }
+  })
+})

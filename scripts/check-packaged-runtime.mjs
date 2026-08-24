@@ -582,6 +582,46 @@ assertEqual(
   'Exactly the target architectures’ Sherpa packages must be unpacked'
 )
 
+// MQA-240: a universal macOS package must carry PLAIN JavaScript as its main process, never V8 bytecode.
+//
+// V8's cached-data tag mixes the V8 version, the flag set and the host's CPU features, so a .jsc is only
+// loadable by the architecture that produced it. electron-vite emits exactly ONE out/main/index.jsc — the
+// build host's — and --universal merges both sub-builds into a single app.asar, so the other slice is
+// handed bytecode it cannot load and dies at bytecode-loader.cjs before any Metis code runs. That is the
+// 1.6.0 DMG: dead on arrival on every Intel Mac.
+//
+// electron.vite.config.ts turns bytecode off for that target via ASKTOTO_MAC_UNIVERSAL=1, and package.json
+// sets it on the three --universal chains. This asserts the OUTCOME rather than the flag, because the flag
+// is a thing a person can forget and the artifact is the thing users run. Cheap, and it is the check whose
+// absence let a signed, notarised, unlaunchable installer ship.
+if (target === 'mac') {
+  const mainEntries = listPackage(join(resourcesRoot, 'app.asar')).filter((entry) =>
+    /^[\/]out[\/]main[\/]/.test(entry)
+  )
+  if (!mainEntries.length) throw new Error('app.asar contains no out/main entries — the main process is missing')
+  const bytecode = mainEntries.filter((entry) => entry.toLowerCase().endsWith('.jsc'))
+  if (bytecode.length) {
+    throw new Error(
+      `Universal macOS package carries ${bytecode.length} V8 bytecode file(s) — the non-host slice cannot ` +
+        `load them and will die on launch with cachedDataRejected: ${bytecode.join(', ')}.
+` +
+        '  Build the --universal chains with ASKTOTO_MAC_UNIVERSAL=1 (see electron.vite.config.ts) and rebuild from a clean out/.'
+    )
+  }
+  // A bytecode build also leaves index.js as a ~72-byte require() shim, so size is a second, independent
+  // signal that the real bundle is present rather than a loader pointing at a .jsc that was stripped.
+  const loader = mainEntries.find((entry) => /[\/]index\.js$/.test(entry))
+  if (!loader) throw new Error('app.asar has no out/main/index.js — the main-process entry is missing')
+  const mainBytes = extractFile(join(resourcesRoot, 'app.asar'), loader.replace(/^[\/]+/, '')).length
+  if (mainBytes < 50_000) {
+    throw new Error(
+      `out/main/index.js is only ${mainBytes} bytes — that is a bytecode loader shim, not the main-process ` +
+        'bundle. See the bytecode note above.'
+    )
+  }
+  console.log(`[check:packaged-runtime] OK mac main process is plain JavaScript (${mainBytes} bytes, 0 .jsc)`)
+}
+
 if (target === 'mac') {
   const contentsDir = dirname(resourcesRoot)
   const appRoot = dirname(contentsDir)
