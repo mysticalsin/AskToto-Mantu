@@ -27,11 +27,11 @@ const localRuntimeMock = vi.hoisted(() => ({
   resolveBinaryPath: vi.fn(() => [{ path: `/resources/llama/mac/${process.arch}/llama-server`, variant: 'mac' as const }]),
   detectPlatform: vi.fn(() => 'mac' as const),
   isRunning: vi.fn(() => false),
-  getState: vi.fn(() => 'stopped' as const),
+  getState: vi.fn((): import('./local-runtime').RuntimeState => 'stopped'),
   getActiveModelKey: vi.fn((): string | null => null),
-  start: vi.fn(async () => {}),
-  markActivity: vi.fn(),
-  beginStream: vi.fn(),
+  start: vi.fn(async (_paths: import('./local-runtime').ModelPaths, _platform?: import('./local-runtime').LlamaPlatform) => {}),
+  markActivity: vi.fn((_opts?: unknown) => {}),
+  beginStream: vi.fn((_opts?: unknown) => {}),
   endStream: vi.fn(),
   baseURL: vi.fn(() => 'http://127.0.0.1:54321/v1'),
   sessionKey: vi.fn(() => 'deadbeefsessionkeydeadbeefsessionkeydeadbeefsessionkeydeadbeef')
@@ -51,7 +51,10 @@ const localModelsMock = vi.hoisted(() => ({
 vi.mock('./local-models', () => localModelsMock)
 
 const openaiMock = vi.hoisted(() => ({
-  streamOpenAI: vi.fn(() => ({ abort: vi.fn() }))
+  // Typed to the real signature, not inferred from the stub body. Inference gave this a ZERO-parameter
+  // tuple, so every `mock.calls[0][0]` below was a type error against a call production makes on every
+  // request — the test was describing reality and the types were describing the stub.
+  streamOpenAI: vi.fn((_opts: import('./shared').StreamOptions) => ({ abort: vi.fn() }))
 }))
 vi.mock('./openai', () => openaiMock)
 
@@ -63,12 +66,12 @@ const fmRuntimeMock = vi.hoisted(() => ({
   FM_SYSTEM_MODEL: 'system',
   disabledByEnv: vi.fn(() => false),
   supported: vi.fn(() => false),
-  getState: vi.fn(() => 'stopped' as const),
+  getState: vi.fn((): import('./local-runtime').RuntimeState => 'stopped'),
   probeAvailability: vi.fn(async () => ({ available: false, reason: 'binary-missing' })),
-  start: vi.fn(async () => {}),
+  start: vi.fn(async (_paths: import('./local-runtime').ModelPaths, _platform?: import('./local-runtime').LlamaPlatform) => {}),
   baseURL: vi.fn(() => 'http://127.0.0.1:9999/v1'),
-  markActivity: vi.fn(),
-  beginStream: vi.fn(),
+  markActivity: vi.fn((_opts?: unknown) => {}),
+  beginStream: vi.fn((_opts?: unknown) => {}),
   endStream: vi.fn(),
   activeStreams: vi.fn(() => 0),
   prewarm: vi.fn(),
@@ -464,7 +467,7 @@ describe('streamLocal', () => {
     streamLocal(baseOpts(mode))
     await flush()
     expect(openaiMock.streamOpenAI).toHaveBeenCalledOnce()
-    const passed = openaiMock.streamOpenAI.mock.calls[0][0] as StreamOptions
+    const passed = openaiMock.streamOpenAI.mock.calls[0][0]
     expect(passed.llamaSlotOptions).toEqual(expected)
   })
 
@@ -475,14 +478,14 @@ describe('streamLocal', () => {
   ] as const)('bounds local %s generation to %i tokens', async (mode, expected) => {
     streamLocal(baseOpts(mode))
     await flush()
-    const passed = openaiMock.streamOpenAI.mock.calls[0][0] as StreamOptions
+    const passed = openaiMock.streamOpenAI.mock.calls[0][0]
     expect(passed.maxOutputTokens).toBe(expected)
   })
 
   it('honors an explicit caller budget for structured brain extraction', async () => {
     streamLocal(baseOpts('summary', { maxOutputTokens: 1536 }))
     await flush()
-    const passed = openaiMock.streamOpenAI.mock.calls[0][0] as StreamOptions
+    const passed = openaiMock.streamOpenAI.mock.calls[0][0]
     expect(passed.maxOutputTokens).toBe(1536)
   })
 
@@ -499,7 +502,7 @@ describe('streamLocal', () => {
       })
     )
     await flush()
-    const passed = openaiMock.streamOpenAI.mock.calls[0][0] as StreamOptions
+    const passed = openaiMock.streamOpenAI.mock.calls[0][0]
     expect(passed.req.history).toEqual([])
     expect(passed.req.transcript).toBe('Current conversation')
   })
@@ -519,7 +522,7 @@ describe('streamLocal', () => {
       })
     )
     await flush()
-    const passed = openaiMock.streamOpenAI.mock.calls[0][0] as StreamOptions
+    const passed = openaiMock.streamOpenAI.mock.calls[0][0]
     expect(passed.system.length).toBeLessThanOrEqual(40_000)
     expect(passed.system).toMatch(/^SECURITY:/)
     expect(passed.system).toContain('LANGUAGE: English')
@@ -531,7 +534,7 @@ describe('streamLocal', () => {
   it('injects localRuntime.sessionKey() as the apiKey — never the (blank) opts.apiKey it was called with', async () => {
     streamLocal(baseOpts('suggest'))
     await flush()
-    const passed = openaiMock.streamOpenAI.mock.calls[0][0] as StreamOptions
+    const passed = openaiMock.streamOpenAI.mock.calls[0][0]
     expect(passed.apiKey).toBe('deadbeefsessionkeydeadbeefsessionkeydeadbeefsessionkeydeadbeef')
     expect(localRuntimeMock.sessionKey).toHaveBeenCalled()
   })
@@ -545,7 +548,7 @@ describe('streamLocal', () => {
   it('sets baseURL from localRuntime.baseURL(), overriding whatever opts.baseURL carried in', async () => {
     streamLocal(baseOpts('suggest', { baseURL: 'https://should-be-ignored.example' }))
     await flush()
-    const passed = openaiMock.streamOpenAI.mock.calls[0][0] as StreamOptions
+    const passed = openaiMock.streamOpenAI.mock.calls[0][0]
     expect(passed.baseURL).toBe('http://127.0.0.1:54321/v1')
   })
 
@@ -681,7 +684,7 @@ describe('streamLocal', () => {
   it('releases the stream via endStream() exactly once when the inner stream completes (onDone)', async () => {
     streamLocal(baseOpts('suggest'))
     await flush()
-    const passed = openaiMock.streamOpenAI.mock.calls[0][0] as StreamOptions
+    const passed = openaiMock.streamOpenAI.mock.calls[0][0]
     passed.handlers.onDone({})
     expect(localRuntimeMock.endStream).toHaveBeenCalledOnce()
   })
@@ -689,7 +692,7 @@ describe('streamLocal', () => {
   it('releases the stream via endStream() exactly once when the inner stream errors (onError)', async () => {
     streamLocal(baseOpts('suggest'))
     await flush()
-    const passed = openaiMock.streamOpenAI.mock.calls[0][0] as StreamOptions
+    const passed = openaiMock.streamOpenAI.mock.calls[0][0]
     passed.handlers.onError('boom')
     expect(localRuntimeMock.endStream).toHaveBeenCalledOnce()
   })
@@ -704,7 +707,7 @@ describe('streamLocal', () => {
   it('never double-releases when abort() fires after the stream already terminated on its own', async () => {
     const handle = streamLocal(baseOpts('suggest'))
     await flush()
-    const passed = openaiMock.streamOpenAI.mock.calls[0][0] as StreamOptions
+    const passed = openaiMock.streamOpenAI.mock.calls[0][0]
     passed.handlers.onError('boom')
     handle.abort() // late — must be a no-op for the release count
     expect(localRuntimeMock.endStream).toHaveBeenCalledOnce()

@@ -160,7 +160,7 @@ describe('localPrewarmEligible', () => {
 // ─── ensureLocalRuntimeStarted (local.ts) — the handler's start-ensure wiring ──────────────────────────
 const localRuntimeMock = vi.hoisted(() => ({
   isRunning: vi.fn(() => false),
-  getState: vi.fn(() => 'stopped' as const),
+  getState: vi.fn((): import('./local-runtime').RuntimeState => 'stopped'),
   getActiveModelKey: vi.fn((): string | null => null),
   start: vi.fn(async () => {}),
   markActivity: vi.fn(),

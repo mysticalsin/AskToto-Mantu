@@ -1,6 +1,16 @@
 {
   "extends": "./tsconfig.node.json",
-  "compilerOptions": { "composite": false, "noEmit": true },
-  "include": ["src/main/**/*", "src/preload/**/*", "src/shared/**/*", "scripts/**/*.ts"],
+  "compilerOptions": {
+    "composite": false,
+    "noEmit": true,
+    "allowJs": true,
+    "checkJs": false
+  },
+  "include": [
+    "src/main/**/*",
+    "src/preload/**/*",
+    "src/shared/**/*",
+    "scripts/**/*.ts"
+  ],
   "exclude": []
 }

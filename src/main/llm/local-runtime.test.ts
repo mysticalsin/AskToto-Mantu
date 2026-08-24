@@ -24,6 +24,12 @@ import { LOCAL_MODELS, spawnProfileFor } from './local-models'
 
 const REPO_ROOT = process.cwd()
 
+// MQA-248: ModelPaths/SpawnArgsInput gained ctxSize/parallel/gpuLayers when the sidecar learned to size
+// itself to the machine. Five call sites here still passed only { gguf, mmproj } — the identical omission
+// that shipped `-c undefined` into a tagged release, and the third file found carrying it. Derived from
+// production's own profile so it cannot drift again.
+const SPAWN_PROFILE = spawnProfileFor(LOCAL_MODELS[LOCAL_MODELS.length - 1])
+
 describe('buildSpawnArgs', () => {
   // The spawn contract (PLAN.md §4.4) is IDENTICAL on mac and win — parameterize over both platforms to
   // prove that invariant explicitly rather than assuming it.
@@ -70,7 +76,7 @@ describe('buildSpawnArgs', () => {
   })
 
   it('never puts the api key on argv — it travels via the LLAMA_API_KEY env var instead (ps-visibility fix)', () => {
-    const args = buildSpawnArgs({ gguf: 'g', mmproj: 'm' })
+    const args = buildSpawnArgs({ gguf: 'g', mmproj: 'm', ...SPAWN_PROFILE })
     expect(args).not.toContain('--api-key')
     // SpawnArgsInput has no apiKey field at all (enforced at compile time) — the key is only ever
     // handed to the child via spawn()'s env option (see spawnAndWaitHealthy), never argv.
@@ -378,7 +384,7 @@ describe('port-line timeout — a sidecar that starts but never reports a listen
 
     let outcome: 'resolved' | 'rejected' | undefined
     let err: unknown
-    void h.runtime.start({ gguf: '/m/a.gguf', mmproj: '/m/a.mmproj' }, 'mac').then(
+    void h.runtime.start({ gguf: '/m/a.gguf', mmproj: '/m/a.mmproj', ...SPAWN_PROFILE }, 'mac').then(
       () => {
         outcome = 'resolved'
       },
@@ -424,7 +430,7 @@ describe('sticky CPU fallback — a Vulkan sidecar that crashes AFTER reaching r
   it('pins the CPU build for the rest of the session instead of auto-restarting Vulkan into a crash loop', async () => {
     const h = await loadIsolatedRuntime()
     vi.stubGlobal('fetch', async () => ({ status: 200 }))
-    const paths = { gguf: '/m/a.gguf', mmproj: '/m/a.mmproj' }
+    const paths = { gguf: '/m/a.gguf', mmproj: '/m/a.mmproj', ...SPAWN_PROFILE }
 
     const p = h.runtime.start(paths, 'win')
     expect(h.calls[0].path).toContain(join('win', 'vulkan', 'llama-server.exe'))
@@ -454,13 +460,13 @@ describe('sticky CPU fallback — a Vulkan sidecar that crashes AFTER reaching r
   it('leaves the Vulkan-first order intact when no Vulkan crash has happened this session', async () => {
     const h = await loadIsolatedRuntime()
     vi.stubGlobal('fetch', async () => ({ status: 200 }))
-    const paths = { gguf: '/m/a.gguf', mmproj: '/m/a.mmproj' }
+    const paths = { gguf: '/m/a.gguf', mmproj: '/m/a.mmproj', ...SPAWN_PROFILE }
 
     const p = h.runtime.start(paths, 'win')
     emitListening(h, 0, 56001)
     await p
     // A model SWITCH is not a crash — the GPU build must still be preferred.
-    const p2 = h.runtime.start({ gguf: '/m/b.gguf', mmproj: '/m/b.mmproj' }, 'win')
+    const p2 = h.runtime.start({ gguf: '/m/b.gguf', mmproj: '/m/b.mmproj', ...SPAWN_PROFILE }, 'win')
     await waitUntil(() => h.calls.length === 2)
     expect(h.calls[1].path).toContain(join('win', 'vulkan', 'llama-server.exe'))
     emitListening(h, 1, 56002)

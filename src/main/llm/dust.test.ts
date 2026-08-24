@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { type AskStart, DUST_SPOTLIGHT_REF_AGENT_ID } from '@shared/ipc'
 import { streamDust, resetDustConversation } from './dust'
+import type { StreamHandlers } from './shared'
 
 vi.mock('electron', () => ({ app: { getPath: () => '/tmp' } }))
 vi.mock('../auth', () => ({ authStatus: () => ({ email: null, name: null }) }))
@@ -75,13 +76,23 @@ function baseOpts(overrides: Partial<Parameters<typeof streamDust>[0]> = {}): Pa
 
 /** Drain microtasks until the stream settles — avoids real/fake-timer polling since the mock API never
  *  uses a real timer, only chained Promises. */
+/** A StreamHandlers callback is typed as a plain function; in these tests it is always a vi.fn(). Narrow
+ *  at the point of use rather than loosening the production type, which is what the tests exist to pin. */
+function mockOf(f: unknown): { mock: { calls: unknown[][] } } {
+  return f as { mock: { calls: unknown[][] } }
+}
+
 async function waitDone(handlers: {
-  onDone: ReturnType<typeof vi.fn>
-  onError: ReturnType<typeof vi.fn>
+  // `ReturnType<typeof vi.fn>` is a Mock with NO call signature attached, so passing a real
+  // StreamHandlers object here was a type error on all twenty call sites — the helper's parameter
+  // described the stub rather than what every caller actually hands it. Accept the real shape and
+  // narrow to the mock surface only where the mock surface is used.
+  onDone: StreamHandlers['onDone']
+  onError: StreamHandlers['onError']
 }): Promise<void> {
   for (let i = 0; i < 500; i++) {
-    if (handlers.onDone.mock.calls.length) return
-    if (handlers.onError.mock.calls.length) throw new Error(String(handlers.onError.mock.calls[0][0]))
+    if (mockOf(handlers.onDone).mock.calls.length) return
+    if (mockOf(handlers.onError).mock.calls.length) throw new Error(String(mockOf(handlers.onError).mock.calls[0][0]))
     await new Promise((r) => setImmediate(r))
   }
   throw new Error(`timed out waiting for Dust stream to settle — calls=${JSON.stringify(calls)}`)
@@ -299,11 +310,11 @@ describe('streamDust surfaces a stale-agent error as an actionable re-pick messa
     streamErrOnce = 'Failed to retrieve agent message'
     const opts = baseOpts()
     streamDust(opts)
-    for (let i = 0; i < 500 && !opts.handlers.onError.mock.calls.length; i++) {
+    for (let i = 0; i < 500 && !mockOf(opts.handlers.onError).mock.calls.length; i++) {
       await new Promise((r) => setImmediate(r))
     }
     expect(opts.handlers.onError).toHaveBeenCalledTimes(1)
-    const msg = String(opts.handlers.onError.mock.calls[0][0])
+    const msg = String(mockOf(opts.handlers.onError).mock.calls[0][0])
     expect(msg).toContain('Settings')
     expect(msg).not.toContain('Failed to retrieve agent message')
   })
@@ -316,11 +327,11 @@ describe('streamDust surfaces a stale-agent error as an actionable re-pick messa
     streamErrOnce = 'Failed to retrieve agent message'
     const opts = baseOpts({ model: DUST_SPOTLIGHT_REF_AGENT_ID })
     streamDust(opts)
-    for (let i = 0; i < 500 && !opts.handlers.onError.mock.calls.length; i++) {
+    for (let i = 0; i < 500 && !mockOf(opts.handlers.onError).mock.calls.length; i++) {
       await new Promise((r) => setImmediate(r))
     }
     expect(opts.handlers.onError).toHaveBeenCalledTimes(1)
-    const msg = String(opts.handlers.onError.mock.calls[0][0])
+    const msg = String(mockOf(opts.handlers.onError).mock.calls[0][0])
     expect(msg).toContain('Spotlight Ref')
     expect(msg).not.toContain('Failed to retrieve agent message')
   })

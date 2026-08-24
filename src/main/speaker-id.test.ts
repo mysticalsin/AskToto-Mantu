@@ -193,7 +193,7 @@ describe('parakeetRelease at a meeting boundary (MQA-042)', () => {
   afterEach(() => {
     electron.app.isPackaged = false
     if (originalResourcesPath) Object.defineProperty(process, 'resourcesPath', originalResourcesPath)
-    else delete (process as NodeJS.Process & { resourcesPath?: string }).resourcesPath
+    else delete (process as unknown as { resourcesPath?: string }).resourcesPath
     rmSync(resourcesPath, { recursive: true, force: true })
     loader._load = originalLoad
     vi.unstubAllGlobals()
