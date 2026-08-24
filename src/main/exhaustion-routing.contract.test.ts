@@ -100,6 +100,30 @@ describe('the backup chain: free-first ordering + the on-device answer floor', (
     expect(nullIdx).toBeGreaterThan(floorIdx) // and only then does the walk dead-end
   })
 
+  it('MQA-241: a FIRST-attempt ineligibility reaches the floor too, not just an exhausted provider', () => {
+    // The third seam, and the one that was missed. MQA-122/123 fixed the floor for a provider that RAN
+    // OUT mid-session; a provider that was never configured at all takes a different branch —
+    // `attempted.length === 0`, which deliberately does not fail over — and that branch only offered the
+    // in-scope net (localFallbackEligibleFor), which is false for answer/recap by design. So the single
+    // most common request in the app, a typed question, dead-ended on "No API key for X. Open Settings
+    // (gear) and add it." on exactly the install Métis Local exists for: local model on, no key.
+    //
+    // The call must go through failover(), not straight to attempt('local', ...). pickFailover ranks the
+    // floor dead last, so a user whose ACTIVE provider is merely misconfigured still reaches their other
+    // key or the actionable setup error, instead of being quietly downgraded to the on-device model.
+    // Anchored on the zero-config net's own comment: `if (attempted.length === 0)` appears more than
+    // once in askStart, and this is the branch that decides between local and the setup error.
+    const anchor = 'Zero-config safety net (localLlm.fallback)'
+    expect(indexSrc.indexOf(anchor), 'seam anchor not found (source moved?)').toBeGreaterThan(-1)
+    const firstAttempt = indexSrc.slice(indexSrc.indexOf(anchor))
+    const seam = firstAttempt.slice(0, firstAttempt.indexOf('} else if'))
+    expect(seam).toMatch(/localAnswerFloorEligibleFor\(req, s, allowed\) &&\s*\n\s*failover\(attempted\.concat\(provider\), undefined, race\)/)
+    // Still gated on the same pinned-agent rule as the in-scope net beside it.
+    expect(seam).toMatch(/allowCrossProviderFailover\(req\) &&\s*\n\s*localAnswerFloorEligibleFor/)
+    // And it must sit AFTER the in-scope net, so an in-scope mode keeps taking the direct local hop.
+    expect(seam.indexOf('localFallbackEligibleFor')).toBeLessThan(seam.indexOf('localAnswerFloorEligibleFor'))
+  })
+
   it('attempt() ACCEPTS the answer floor too — else pickFailover routes to local and attempt bounces it', () => {
     // The physical sim proved this: without localAnswerFloorEligibleFor in attempt()'s local ineligible
     // chain, an answer-mode failover to the floor was rejected with the "uses your cloud provider" message

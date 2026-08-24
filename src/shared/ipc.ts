@@ -1037,11 +1037,14 @@ export const BaseSettingsSchema = z.object({
       // exhausted — every configured provider failed, or none is configured at all — in-scope work runs
       // on the on-device model as the strictly-LAST candidate instead of failing with "no provider".
       // Gates BOTH surfaces: the meeting-index waterfall (brain/ingest.ts pickProviderCandidates) and
-      // in-scope live asks (suggest/summary/vision — local-routing.ts localFallbackEligibleFor). Only
-      // ever reachable when localLlm.enabled is true and the runtime+model are actually provisioned AND
-      // the org allowlist permits 'local' (localBaseReady). Defaults on: it can only ever reduce the
-      // chance of work going undone, never increase cloud exposure (on-device is same-or-more private
-      // than cloud, never less).
+      // in-scope live asks (suggest/summary/vision — local-routing.ts localFallbackEligibleFor), and
+      // beneath that the absolute floor (localAnswerFloorEligibleFor), which drops the mode and tier
+      // limits entirely so a plain typed question is answered on-device rather than met with "add an API
+      // key" — the alternative there is not a better cloud answer, it is no answer. Only ever reachable
+      // when localLlm.enabled is true and the runtime+model are actually provisioned AND the org
+      // allowlist permits 'local' (localBaseReady). Defaults on: it can only ever reduce the chance of
+      // work going undone, never increase cloud exposure (on-device is same-or-more private than cloud,
+      // never less).
       fallback: z.boolean().default(true)
     })
     .default({

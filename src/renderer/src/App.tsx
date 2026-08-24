@@ -850,8 +850,11 @@ export function App(): JSX.Element {
     if (!listen.listening || honkedRef.current) return
     // providerReady only — NOT localSuggestReady. The honk always fires suggest.run({ mode: 'answer', ... })
     // (buildNoDecisionPrompt is deliberately answer-shaped, a free-form nudge, not a suggest-card prompt),
-    // and Métis Local never serves 'answer' mode. Gating on localSuggestReady here would let a local-only
-    // setup pass this check and then hit the same provider error the fired request was supposed to avoid.
+    // and localSuggestReady is the suggest-mode opt-in, so it says nothing about whether answer mode can
+    // be served. Nor is this widened to localFallbackReady, which genuinely would serve it: the honk is
+    // the one request in the app the USER never asked for, and spending an unprompted multi-second
+    // sidecar inference on a machine small enough to be running the on-device model is a worse trade than
+    // staying quiet. Local answers what the user asks for; it does not volunteer.
     if (!(settings?.autoSuggest ?? true) || !settings?.providerReady) return
     if (suggest.answer?.streaming) return
     const verdict = detectNoDecisionEnding(listen.lines, meetingStartRef.current, Date.now())
@@ -875,24 +878,29 @@ export function App(): JSX.Element {
   // Single readiness gate for EVERY user-initiated request entry point (not just submit). When the
   // active provider has no key / no CLI connection, route the user to Settings instead of firing an
   // LLM request that fails reactively with a red stream error. Returns false → the caller must bail.
-  // `local` names the in-scope Métis Local task this call site is ABOUT to fire (suggest/summary/vision)
-  // so a local-only setup (no cloud provider configured at all) answers instead of bouncing to Settings —
-  // omitted by callers whose request can't route to Métis Local (answer/recap/mixed-mode entry points).
+  // `local` names the in-scope Métis Local task this call site is ABOUT to fire (suggest/summary/vision),
+  // which is what the per-task useFor toggles gate; it is omitted by call sites that fire answer/recap or
+  // that can fire either depending on runtime state.
   const requireProvider = useCallback(
     (local?: 'suggest' | 'summary' | 'vision'): boolean => {
-      // A named in-scope task (suggest/summary/vision) is ready when its explicit useFor toggle is on OR
-      // the default-on safety net (localFallbackReady) can serve it. Without the fallback clause a
-      // zero-API-key install — the exact case Métis Local exists for — bounced every quick action into
-      // Settings even though local answers suggest/summary/vision on-device.
-      const localReady =
+      // A named in-scope task is ready when its explicit useFor toggle is on. Without this a zero-API-key
+      // install — the exact case Métis Local exists for — bounced every quick action into Settings even
+      // though local answers suggest/summary/vision on-device.
+      const localTaskReady =
         local === 'suggest'
-          ? settings?.localSuggestReady || settings?.localFallbackReady
+          ? settings?.localSuggestReady
           : local === 'summary'
-            ? settings?.localSummaryReady || settings?.localFallbackReady
+            ? settings?.localSummaryReady
             : local === 'vision'
-              ? settings?.localVisionReady || settings?.localFallbackReady
+              ? settings?.localVisionReady
               : false
-      if (settings?.providerReady || localReady) return true
+      // The safety net applies to EVERY mode, not only the in-scope three. main's routing floor
+      // (localAnswerFloorEligibleFor) deliberately ignores mode and tier: when no cloud/CLI provider can
+      // answer, a weak on-device answer beats an error, so with the net on, local serves answer and recap
+      // too. This gate used to stop at the three in-scope tasks and hand a bare call `false`, which is why
+      // a user with the local model enabled and no API key was told to "add an API key" for the one thing
+      // Métis Local is for: typing a question. The renderer was refusing a request main would have served.
+      if (settings?.providerReady || localTaskReady || settings?.localFallbackReady) return true
       // MQA-216: three distinct reasons a keyed provider is still !providerReady, three different
       // remedies. Test the allowlist itself — a saved key alone never proved an org policy, and reading
       // it that way told a user whose only mistake was not having pasted the Worker URL yet that their
@@ -3227,7 +3235,11 @@ export function App(): JSX.Element {
               </button>
             )
           })()}
-          {settings && !settings.providerReady && !nudgeExpired && view !== 'settings' && !showListeningChrome && (() => {
+          {/* Suppressed once the on-device safety net can answer: this CTA asks for an API key, and a user
+              running Métis Local with no cloud provider does not need one — that install is finished, not
+              half-configured. Telling them to "Add your Cloudflare API key" while the local model answers
+              every question is the app contradicting itself. Same flag the requireProvider gate reads. */}
+          {settings && !settings.providerReady && !settings.localFallbackReady && !nudgeExpired && view !== 'settings' && !showListeningChrome && (() => {
             const activeDef = PROVIDERS[settings.provider]
             // MQA-216: same three cases as requireProvider above, in the same order. Reading a saved key
             // as proof of an org policy made the CTA tell a Cloudflare user to "switch to an approved
