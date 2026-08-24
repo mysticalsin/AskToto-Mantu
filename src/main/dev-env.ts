@@ -33,3 +33,20 @@ export function isPackagedBuild(): boolean {
 export function devEnv(name: string): string | undefined {
   return isPackagedBuild() ? undefined : process.env[name]
 }
+
+/**
+ * Whether DevTools may be opened. Packaged builds say no.
+ *
+ * This lives here, not as a module const in index.ts, because it must be reachable from EVERY window
+ * construction in src/main — and it was not. intelligence.ts's dashboard window was built with no
+ * `devTools` key at all, so Electron's default (true) applied and DevTools were available in shipped
+ * builds on the one window whose preload can read the decrypted brain. The commit that introduced the
+ * gate claimed it covered every BrowserWindow; its contract test only counted occurrences inside
+ * index.ts, so the fourth window was invisible to it.
+ *
+ * Routing through devEnv() also hardens the override: ASKTOTO_DEVTOOLS is a dev-only hatch, and a
+ * packaged build must ignore a planted environment variable (see the note at the top of this file).
+ */
+export function devToolsEnabled(): boolean {
+  return !isPackagedBuild() || devEnv('ASKTOTO_DEVTOOLS') === '1'
+}
