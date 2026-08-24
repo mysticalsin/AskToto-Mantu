@@ -20,6 +20,7 @@ import {
   sessionKey,
   baseURL
 } from './local-runtime'
+import { LOCAL_MODELS, spawnProfileFor } from './local-models'
 
 const REPO_ROOT = process.cwd()
 
@@ -246,7 +247,15 @@ describe('start() integration — real binary + real Qwen3.5-0.8B model', () => 
   run(
     title,
     async () => {
-      await start({ gguf, mmproj }, 'mac')
+      // MQA: ModelPaths gained ctxSize/parallel/gpuLayers when the sidecar became machine-sized
+      // (local-models.ts spawnProfileFor). This call site was not updated, so buildSpawnArgs emitted
+      // the literal `-c undefined` and llama-server died with `stoi: no conversion` before ever
+      // becoming healthy. Typecheck could not catch it — tsconfig.node.json excludes **/*.test.ts.
+      // Derive the profile the way production does (local.ts) rather than hardcoding numbers, so a
+      // future sizing change cannot silently desynchronise this test from the shipped path again.
+      const entry = LOCAL_MODELS.find((m) => m.id === 'qwen3.5-0.8b')
+      if (!entry) throw new Error('qwen3.5-0.8b is no longer a known local model; update this test')
+      await start({ gguf, mmproj, ...spawnProfileFor(entry) }, 'mac')
       try {
         expect(isRunning()).toBe(true)
         expect(sessionKey()).toMatch(/^[0-9a-f]{64}$/)

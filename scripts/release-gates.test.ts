@@ -81,8 +81,42 @@ describe('deterministic packaging toolchain', () => {
     const viteConfig = readFileSync(join(root, 'electron.vite.config.ts'), 'utf8')
     expect(viteConfig).not.toContain('externalizeDepsPlugin')
     expect(viteConfig).not.toContain('bytecodePlugin')
-    expect(viteConfig).toContain('bytecode: true')
     expect(viteConfig).toContain("externalizeDeps: { exclude: ['zod'] }")
+  })
+
+  // MQA-207. This used to assert a bare `bytecode: true`. That assertion encoded a bug: a V8 code
+  // cache is per-architecture, so the single out/main/index.jsc baked into a --universal package is
+  // loadable by only ONE of its two slices. The Intel slice died on launch with
+  // "Invalid or incompatible cached data (cachedDataRejected)", reported from a real 1.6.0 DMG.
+  it('MQA-207: main-process bytecode is on by default and off only for the mac universal package', () => {
+    const viteConfig = readFileSync(join(root, 'electron.vite.config.ts'), 'utf8')
+    expect(viteConfig).toContain("const MAC_UNIVERSAL = process.env.ASKTOTO_MAC_UNIVERSAL === '1'")
+    expect(viteConfig).toContain('bytecode: !MAC_UNIVERSAL')
+    // Fail-open in the right direction: with the flag unset, bytecode is ON.
+    expect(viteConfig).not.toContain('bytecode: false')
+  })
+
+  it('MQA-207: every --universal mac chain disables bytecode, and no single-arch chain does', () => {
+    const scripts = pkg.scripts as Record<string, string>
+    const universal = Object.entries(scripts).filter(([, v]) => v.includes('--universal'))
+    expect(universal.length).toBeGreaterThanOrEqual(3)
+    for (const [name, body] of universal) {
+      expect(body, `${name} builds --universal so it must disable bytecode`).toContain(
+        'ASKTOTO_MAC_UNIVERSAL=1 npm run build'
+      )
+    }
+    for (const [name, body] of Object.entries(scripts)) {
+      if (body.includes('ASKTOTO_MAC_UNIVERSAL')) {
+        expect(body, `${name} sets the universal flag but does not build --universal`).toContain('--universal')
+      }
+    }
+  })
+
+  it('MQA-207: single-architecture Windows chains keep their bytecode', () => {
+    const scripts = pkg.scripts as Record<string, string>
+    for (const name of ['dist:win', 'dist:win:appx', 'installers:win:cahe']) {
+      if (scripts[name]) expect(scripts[name]).not.toContain('ASKTOTO_MAC_UNIVERSAL')
+    }
   })
 })
 

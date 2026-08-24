@@ -27,7 +27,7 @@
  * Usage: node scripts/provision-mac-natives.mjs
  */
 import { execFileSync } from 'node:child_process'
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync, readFileSync, readdirSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -75,13 +75,32 @@ execFileSync('npm', ['install', '--no-save', '--force', ...packages], {
 
 // Prove the install produced every addon rather than trusting npm's exit code — `--force` downgrades
 // a genuine resolution failure to a warning, and the packaged app would then be missing an arch.
-const required = [
-  'sherpa-onnx-darwin-arm64/sherpa-onnx.node',
-  'sherpa-onnx-darwin-x64/sherpa-onnx.node',
-  '@img/sharp-darwin-arm64/lib/sharp-darwin-arm64.node',
-  '@img/sharp-darwin-x64/lib/sharp-darwin-x64.node'
+const required = ['sherpa-onnx-darwin-arm64/sherpa-onnx.node', 'sherpa-onnx-darwin-x64/sherpa-onnx.node']
+
+// sharp bakes its own version into the prebuilt addon's FILENAME — @img/sharp-darwin-arm64 ships
+// lib/sharp-darwin-arm64-0.35.3.node, not lib/sharp-darwin-arm64.node. An exact-filename check
+// therefore breaks on every sharp bump even though the install succeeded, and it did exactly that
+// when the sharp CVE fix moved the pin to 0.35.3: predist died with "missing after install" and no
+// macOS DMG could be built at all. Match the addon by prefix + extension instead. This is not a
+// weakening — the gate still proves an addon for BOTH arches is physically present, which is the
+// whole point (npm install --force downgrades a real resolution failure to a warning); it just
+// stops asserting a filename npm owns and changes without notice.
+const sharpAddons = ['arm64', 'x64'].map((arch) => ({
+  label: `@img/sharp-darwin-${arch}/lib/sharp-darwin-${arch}*.node`,
+  dir: join(REPO_ROOT, 'node_modules', '@img', `sharp-darwin-${arch}`, 'lib'),
+  prefix: `sharp-darwin-${arch}`
+}))
+
+const missing = [
+  ...required.filter((r) => !existsSync(join(REPO_ROOT, 'node_modules', r))),
+  ...sharpAddons
+    .filter(
+      (a) =>
+        !existsSync(a.dir) ||
+        !readdirSync(a.dir).some((f) => f.startsWith(a.prefix) && f.endsWith('.node'))
+    )
+    .map((a) => a.label)
 ]
-const missing = required.filter((r) => !existsSync(join(REPO_ROOT, 'node_modules', r)))
 if (missing.length) {
   console.error(
     `\nprovision-mac-natives FAILED — missing after install:\n${missing.map((m) => `  ✗ ${m}`).join('\n')}\n` +
