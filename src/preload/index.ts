@@ -278,6 +278,13 @@ const api = {
 
   // Métis Local (on-device LLM): read-only readiness for the model included in the installer.
   localModelsList: (): Promise<LocalModelSummary[]> => ipcRenderer.invoke(IPC.localModelsList),
+  // MQA-247: the high-accuracy transcription model, fetched on demand rather than shipped (1.61 GB would
+  // put the installer over GitHub's 2 GiB per-asset limit). Paths never cross this boundary — the renderer
+  // gets readiness, a status word, a fraction, and the byte count it must show before asking for consent.
+  asrModelState: (): Promise<{ status: string; progress: number; error?: string; ready: boolean; bytes: number }> =>
+    ipcRenderer.invoke(IPC.asrModelState),
+  asrModelFetch: (): Promise<{ ok: boolean }> => ipcRenderer.invoke(IPC.asrModelFetch),
+  asrModelRemove: (): Promise<{ ok: boolean }> => ipcRenderer.invoke(IPC.asrModelRemove),
   // Fire-and-forget: keep the local sidecar's per-slot KV cache hot while a meeting is live (PLAN.md
   // §4.4's pre-warm path). The renderer never learns the sidecar's port/key — this only ever sends
   // transcript text; main resolves the runtime/model/session key on its own.
