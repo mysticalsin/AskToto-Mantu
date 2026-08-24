@@ -37,7 +37,7 @@ const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 
 /**
  * The number of errors accepted today. Only ever revise this DOWNWARD.
- * 2026-08-24: 159 → 139 → 129 → 36.
+ * 2026-08-24: 159 → 139 → 129 → 36 → 30.
  *
  * The last pass typed the mocks to the signatures production actually calls, rather than letting them be
  * inferred from a stub body — which is what had made `mock.calls[0][0]` a type error against a call the
@@ -45,7 +45,7 @@ const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
  * providerId that does not exist ('claude-api'), and FIVE more `{ gguf, mmproj }` omissions — the same
  * `-c undefined` shape, in a third file.
  */
-const BASELINE = 36
+const BASELINE = 30
 
 let output = ''
 try {

@@ -14,9 +14,17 @@ import { join } from 'node:path'
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 const sdk = vi.hoisted(() => ({
-  connect: vi.fn(async () => undefined),
-  listTools: vi.fn(async () => ({ tools: [{ name: 'push_meeting_recap' }] })),
-  callTool: vi.fn(async () => ({ content: [{ type: 'text', text: 'ok' }] })),
+  // Typed to the SDK's real call shapes rather than inferred from the stub bodies. Inference gave these
+  // zero-parameter tuples, so every assertion below that reads the params or the { signal } options —
+  // which is the entire point of this suite, since it exists to prove the abort signal and audit metadata
+  // are passed — was a type error against calls production makes on every MCP request.
+  connect: vi.fn(async (_transport?: unknown, _opts?: { signal?: AbortSignal; timeout?: number }) => undefined),
+  listTools: vi.fn(async (_params?: unknown, _opts?: { signal?: AbortSignal; timeout?: number }) => ({
+    tools: [{ name: 'push_meeting_recap' }]
+  })),
+  callTool: vi.fn(async (_params?: unknown, _resultSchema?: unknown, _opts?: { signal?: AbortSignal; timeout?: number }) => ({
+    content: [{ type: 'text', text: 'ok' }]
+  })),
   close: vi.fn(async () => undefined)
 }))
 
@@ -59,12 +67,12 @@ describe('mcpClient — audited defects', () => {
     expect(r.ok).toBe(true)
 
     expect(sdk.listTools).toHaveBeenCalledTimes(1)
-    const [params, opts] = sdk.listTools.mock.calls[0] as [unknown, { signal?: AbortSignal; timeout?: number }]
+    const [params, opts] = sdk.listTools.mock.calls[0]
     expect(params).toBeUndefined() // tools/list takes no params — the bound rides in the 2nd argument
     expect(opts?.timeout).toBe(15_000)
     expect(opts?.signal).toBeInstanceOf(AbortSignal)
     // Same controller as the connect leg: one timer bounds the whole round-trip, not two independent ones.
-    const connectOpts = sdk.connect.mock.calls[0][1] as { signal?: AbortSignal }
+    const connectOpts = sdk.connect.mock.calls[0][1]
     expect(opts?.signal).toBe(connectOpts?.signal)
   })
 
@@ -85,7 +93,7 @@ describe('mcpClient — audited defects', () => {
     expect(resultSchema).toBeUndefined() // leaves the SDK's own CallToolResultSchema default in place
     expect(opts?.timeout).toBe(30_000)
     expect(opts?.signal).toBeInstanceOf(AbortSignal)
-    const connectOpts = sdk.connect.mock.calls[0][1] as { signal?: AbortSignal }
+    const connectOpts = sdk.connect.mock.calls[0][1]
     expect(opts?.signal).toBe(connectOpts?.signal)
   })
 
