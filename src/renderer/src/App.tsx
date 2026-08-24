@@ -1373,6 +1373,50 @@ export function App(): JSX.Element {
     suggest.answer?.streaming,
     speculative.answer?.streaming
   ])
+  // 1b) TYPED-ask intent warms the on-device model too. The hedge starts a local leg at t=0 on every
+  //     interactive ask (index.ts's hedgeDelayMs), but the warm-up above only ever runs during a LIVE
+  //     meeting — so a typed question spawned that leg cold, made it load ~730 MB mid-request, and lost
+  //     the race it exists to win. The first keystroke is the earliest honest signal an ask is coming;
+  //     warming there means the race is real by the time Enter is pressed. Debounced to once per 30s and
+  //     suppressed while anything is streaming, so typing never fans out repeated spawns. Main re-checks
+  //     eligibility (localPrewarmEligible) and silently no-ops when local could not serve this install.
+  const typedPrewarmAtRef = useRef(0)
+  // Warm on FOCUS, not just on the first keystroke. The on-device model went from ~0.7 GB to ~2.7 GB
+  // when the 4B replaced the 0.8B, and its cold start rose with it — measured 41s cold against ~2s warm.
+  // Typing a question takes a few seconds, so a keystroke trigger alone still left most of that load in
+  // front of the answer. Bringing Métis to the front is the earliest honest signal that an ask is coming.
+  // Same 30s debounce and streaming guard as below; main re-checks eligibility and no-ops when local
+  // could not serve this install, so this never spawns a sidecar nothing would route to.
+  useEffect(() => {
+    const onFocus = (): void => {
+      if (listen.listening || !settings?.localFallbackReady) return
+      if (Date.now() - typedPrewarmAtRef.current < 30_000) return
+      typedPrewarmAtRef.current = Date.now()
+      void window.toto.localPrewarm('warm')
+    }
+    window.addEventListener('focus', onFocus)
+    return () => window.removeEventListener('focus', onFocus)
+  }, [listen.listening, settings?.localFallbackReady])
+  useEffect(() => {
+    if (!input.trim() || listen.listening) return
+    if (!settings?.localFallbackReady) return
+    if (ask.answer?.streaming || suggest.answer?.streaming || speculative.answer?.streaming) return
+    if (Date.now() - typedPrewarmAtRef.current < 30_000) return
+    typedPrewarmAtRef.current = Date.now()
+    // Send the real typed text, never '': LocalPrewarmPayloadSchema requires `text` min length 1, so an
+    // empty ping is rejected by safeParse and the handler returns silently — the warm-up looked wired but
+    // never fired (caught by watching for the sidecar process, not by reading the code). Capped well under
+    // the schema's 24k ceiling. The dominant cost being bought here is the ~730 MB model load, not an
+    // exact KV-cache prefix match, so the ask's own text is the right thing to warm on.
+    void window.toto.localPrewarm(input.trim().slice(0, 2000))
+  }, [
+    input,
+    listen.listening,
+    settings?.localFallbackReady,
+    ask.answer?.streaming,
+    suggest.answer?.streaming,
+    speculative.answer?.streaming
+  ])
   // 2) Any REAL suggest run replacing the card (new id), or the meeting ending, switches the copilot
   //    card back off the speculative answer.
   const liveSuggestId = suggest.answer?.id
@@ -2519,6 +2563,16 @@ export function App(): JSX.Element {
   // Back arrow return there, instead of a single hardcoded destination.
   const brainReturnViewRef = useRef<View>('history')
 
+  // The full Mantu Intelligence dashboard is its own BrowserWindow — once it's actually open, the bar's
+  // History/Intelligence panel is just competing with it for screen space. Collapse back to the idle bar
+  // (same minimize Escape already does) so the dashboard window is what the user looks at next, not a
+  // still-expanded panel behind it. Wired into both real "open the dashboard" entry points below: History's
+  // own button and the in-bar BrainView glance's footer button.
+  const minimizeForIntelligence = useCallback(() => {
+    setView('answer')
+    setCollapsed(true)
+  }, [setView])
+
   // Panel body — memoized so state changes unrelated to the active view/answer (typing in the ask input,
   // the elapsed-meeting clock, focus signals, etc.) don't rebuild this whole element tree on every App
   // render. Without this, `body` was a fresh JSX literal every single render, which defeated memo(Bar)'s
@@ -2586,9 +2640,10 @@ export function App(): JSX.Element {
         // in this app lives in the same window as Settings, so this is just the same openSettings('ai')
         // used by Review's own recapUnavailable CTA, not a new cross-window mechanism.
         onOpenSettings={() => openSettings('ai')}
+        onDashboardOpen={minimizeForIntelligence}
       />
     ),
-    [reset, savedPath, openPastMeeting, openSettings]
+    [reset, savedPath, openPastMeeting, openSettings, minimizeForIntelligence]
   )
   const brainBody = useMemo(
     () => (
@@ -2596,9 +2651,10 @@ export function App(): JSX.Element {
         onBack={() => setView(brainReturnViewRef.current)}
         onOpenMeeting={openPastMeeting}
         onOpenSettings={() => openSettings('ai')}
+        onDashboardOpen={minimizeForIntelligence}
       />
     ),
-    [openPastMeeting, openSettings]
+    [openPastMeeting, openSettings, minimizeForIntelligence]
   )
   const agendaBody = useMemo(() => <AgendaView />, [])
   const copilotBody = useMemo(

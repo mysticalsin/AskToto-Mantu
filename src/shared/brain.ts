@@ -517,7 +517,14 @@ export const BrainIndexSchema = z.object({
   /** Monotonic state revision. Dashboard status polling uses this to refresh same-count changes. */
   revision: z.number().int().nonnegative().default(0),
   /** A source edit/delete requires a clean derived-brain rebuild, not an incremental merge. */
-  sourceRefreshRequested: z.boolean().default(false)
+  sourceRefreshRequested: z.boolean().default(false),
+  // Daily cap on BULK background rescans (Mantu Intelligence dashboard open + the periodic OneDrive
+  // reconciliation tick) — see ingest.ts's requestBackfill(). Deliberately does NOT gate a live meeting's
+  // own save-time enqueueIngest(): that is the user's own new meeting and must always index immediately;
+  // this only bounds how often the app goes looking for OLD/drifted work on its own. `dailyRunDate` is a
+  // plain 'YYYY-MM-DD' (local calendar day); a mismatch against today resets `dailyRunCount` to 0.
+  dailyRunDate: z.string().default(''),
+  dailyRunCount: z.number().int().nonnegative().default(0)
 })
 export type BrainIndex = z.infer<typeof BrainIndexSchema>
 

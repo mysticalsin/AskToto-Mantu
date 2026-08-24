@@ -135,7 +135,7 @@ function getSpeakerId(): SpeakerId {
   return speakerIdInstance
 }
 import { buildPrewarmMessages } from './llm/prewarm'
-import { listModels as listLocalModels, LOCAL_MODELS } from './llm/local-models'
+import { listModels as listLocalModels, bestModelForMachine } from './llm/local-models'
 import { ensureLocalModel, localModelDownloadState, shouldFetchWeights } from './llm/local-model-download'
 import { createScreenPreprocess, type ScreenPreprocess } from './screen-preprocess'
 import { startForegroundWatcher } from './foreground-watcher'
@@ -318,12 +318,14 @@ import {
 } from '@shared/providers'
 import { routeTier } from '@shared/routing'
 import { HedgeRace, HEDGE_DELAY_MS, type HedgeLeg } from './llm/hedge'
+import { ThinkStripper } from './llm/think-strip'
 import { redactSecrets } from '@shared/redact'
 import { isSafeAccelerator } from '@shared/accelerator'
 import { formatResetPhrase } from '@shared/reset-time'
 import { applySpeakerNames } from '@shared/transcript-align'
 import { initializeCaheEditionIdentity, isCaheEdition } from './cahe-edition'
 import { importEmbeddedCaheKey, seedCaheLocalAiForBackgroundScreen } from './cahe-embedded-key'
+import { importEmbeddedCloudflareKey } from './embedded-cloudflare-key'
 
 /**
  * Builds the `refreshDustAuth` callback a Dust-routed stream/recap call hands to createStream — branches
@@ -428,6 +430,12 @@ app.commandLine.appendSwitch('disable-renderer-backgrounding')
 const BAR_WIDTH = 880
 const BAR_HEIGHT = 84 // initial idle height of the slimmer two-row widget; useAutoResize grows it for answers
 const BAR_MIN_HEIGHT = 44 // floor for the resize clamp so the collapsed control mini-pill can shrink fully
+// Ceiling used when telling the Intelligence dashboard what to open clear of. NOT BAR_HEIGHT: that is the
+// initial idle constant (84), while a real collapsed bar measures ~120 once its two rows render, so
+// capping at 84 described a shorter bar than exists and the collision check missed a 23px overlap that
+// was really there. This is the height a COLLAPSED bar can occupy, with margin — high enough to cover the
+// real thing, low enough that an expanded panel (up to ~992) cannot shove the dashboard off-screen.
+const BAR_COLLAPSED_MAX_HEIGHT = 160
 const PILL_WIDTH = 220 // narrow width for the collapsed control mini-pill (so it isn't a wide click-trap)
 
 /** Content protection hides the window from screen capture. Disable via env for dev/screenshots ONLY —
@@ -461,6 +469,12 @@ let audioArmed = false // loopback capture only granted during an explicit user-
 let listeningActive = false
 let lastPlainAskAt = 0 // 0 = no live follow-up window; the next plain ask always starts clean
 let lastBarHeight = BAR_HEIGHT // remember the bar's content height to restore on settings exit
+// The top edge the USER last put the window at (drag, hotkey move, display reanchor). resizeTo slides the
+// window up when a growing panel would run off the bottom, but that slide used to be permanent: it wrote
+// the raised y back as the new position, and shrinking never undid it. One long answer therefore walked a
+// bar parked near the bottom all the way to the top of the screen, 24px at a time, and it stayed there.
+// Keeping the anchor separate lets the slide be temporary — up to fit, back down when the content shrinks.
+let userAnchorY: number | null = null
 let currentWidth = BAR_WIDTH // window width; narrows to PILL_WIDTH while collapsed to the control mini-pill
 // True while collapsed to the control mini-pill. Guards lastBarHeight below: the pill's own (much shorter)
 // content height must never overwrite the remembered full-bar height, or expanding back out would apply
@@ -1513,9 +1527,12 @@ function resizeTo(height: number): void {
     return // idempotent — skip a no-op setBounds (belt-and-braces with the renderer-side resize dedup)
   }
   if (!isMinimized) lastBarHeight = h
-  // Keep the panel fully on-screen; if it would grow below the work area, slide it up.
+  // Keep the panel fully on-screen; if it would grow below the work area, slide it up — TEMPORARILY.
+  // Measured against the user's own anchor rather than the current (possibly already-slid) top edge, so
+  // the window returns to where they put it once the content shrinks again.
   const maxY = workArea.y + workArea.height - h - 8
-  const y = Math.min(b.y, maxY)
+  const anchor = userAnchorY ?? b.y
+  const y = Math.max(workArea.y + 8, Math.min(anchor, maxY))
   // When the width changes (collapse to / expand from the mini-pill), recenter around the old midpoint
   // so the overlay stays put; otherwise keep the left edge. Clamp x into the work area either way.
   let x = currentWidth === b.width ? b.x : Math.round(b.x + (b.width - currentWidth) / 2)
@@ -1944,7 +1961,9 @@ function moveBy(dx: number, dy: number): void {
   // to stick a drag pinned to that display's edge, since the matched display never changed until the
   // window had already fully crossed onto it — which the clamp itself was preventing.
   if (isReachable(x, y, b.width, b.height)) {
-    w.setBounds(refitToDisplay({ ...b, x, y }, fromDisplayId))
+    const next = refitToDisplay({ ...b, x, y }, fromDisplayId)
+    userAnchorY = next.y // a deliberate move re-arms the anchor resizeTo slides against
+    w.setBounds(next)
     return
   }
   // Unreachable (flung past every display): pull back onto the display nearest the ATTEMPTED position,
@@ -1952,7 +1971,9 @@ function moveBy(dx: number, dy: number): void {
   const { workArea } = screen.getDisplayMatching({ x, y, width: b.width, height: b.height })
   const cx = clampAxisMargin(x, b.width, workArea.x, workArea.width, DRAG_VISIBLE_MARGIN)
   const cy = clampAxisMargin(y, b.height, workArea.y, workArea.height, DRAG_VISIBLE_MARGIN)
-  w.setBounds(refitToDisplay({ ...b, x: cx, y: cy }, fromDisplayId))
+  const pulled = refitToDisplay({ ...b, x: cx, y: cy }, fromDisplayId)
+  userAnchorY = pulled.y
+  w.setBounds(pulled)
 }
 
 /**
@@ -4018,6 +4039,35 @@ function registerIpc(): void {
       const startedAt = Date.now()
       let gotToken = false
       let ttftMs: number | undefined
+      // Strips a reasoning model's inline <think>…</think> out of the answer stream (llm/think-strip.ts).
+      // One per attempt: each leg/retry is its own stream, and the stripper carries position state.
+      // Sitting here rather than in a provider strategy is the point — every provider funnels through
+      // this one onDelta, so the guarantee holds for cloud, CLI, Dust, a custom endpoint and on-device
+      // alike, instead of being re-implemented per strategy and drifting.
+      const think = new ThinkStripper()
+      // Every visible token goes through here. `gotToken` deliberately tracks VISIBLE output, not raw
+      // deltas: a model part-way through a think block has not answered yet, so it must not win the
+      // hedge race, stop the MQA-020 empty-answer failover, or report a TTFT it hasn't earned. The
+      // provider's own stall watchdog still sees the raw deltas, so a long think can't trip a timeout.
+      const paint = (text: string): void => {
+        if (!text) return
+        if (!gotToken) {
+          ttftMs = Date.now() - startedAt
+          // Tokens are flowing, so these credentials demonstrably work — clear any prior auth
+          // verdict (MQA-003/MQA-004) rather than leaving a stale "broken" mark on a live provider.
+          recordSuccess(provider)
+          // F3 hedge: this leg's first token is its bid to win — aborts whatever the other leg is doing.
+          if (race) {
+            race.gate.declareWinner(race.leg)
+            // Re-assert WHO actually answered. Both legs announce themselves when they start, so if
+            // the backup started second and the primary then won, the UI's last streamMeta named the
+            // loser — the answer would be attributed to a provider that produced none of it.
+            win?.webContents.send(IPC.streamMeta, { id: req.id, provider, tier, usedScreen: screenGrounded })
+          }
+        }
+        gotToken = true
+        win?.webContents.send(IPC.streamDelta, { id: req.id, text })
+      }
       const handle = createStream({
         providerId: provider,
         kind: def.kind,
@@ -4042,25 +4092,15 @@ function registerIpc(): void {
             // F3 hedge: a leg that already lost the race is aborted, but a chunk already in flight when
             // abort() fires can still reach here once — swallow it rather than let two legs both paint.
             if (race && race.gate.isLoser(race.leg)) return
-            if (!gotToken) {
-              ttftMs = Date.now() - startedAt
-              // Tokens are flowing, so these credentials demonstrably work — clear any prior auth
-              // verdict (MQA-003/MQA-004) rather than leaving a stale "broken" mark on a live provider.
-              recordSuccess(provider)
-              // F3 hedge: this leg's first token is its bid to win — aborts whatever the other leg is doing.
-              if (race) {
-                race.gate.declareWinner(race.leg)
-                // Re-assert WHO actually answered. Both legs announce themselves when they start, so if
-                // the backup started second and the primary then won, the UI's last streamMeta named the
-                // loser — the answer would be attributed to a provider that produced none of it.
-                win?.webContents.send(IPC.streamMeta, { id: req.id, provider, tier, usedScreen: screenGrounded })
-              }
-            }
-            gotToken = true
-            win?.webContents.send(IPC.streamDelta, { id: req.id, text })
+            paint(think.push(text))
           },
           onDone: (u) => {
             if (race && race.gate.isLoser(race.leg)) return
+            // Release whatever the stripper is still holding: a tail that could have been a partial tag,
+            // or — only when the answer would otherwise be blank — an unterminated think block. Must run
+            // BEFORE the !gotToken check below, or a response that was entirely one unclosed think block
+            // would be judged content-less and fail over despite having something to show.
+            paint(think.flush())
             if (!race) streams.delete(req.id)
             // MQA-020 (belt-and-braces half): a provider that completes with ZERO content deltas has not
             // answered — the user gets a blank bubble and the waterfall stops, because "done" reads as
@@ -4315,10 +4355,21 @@ function registerIpc(): void {
       allowCrossProviderFailover(req)
     if (hedgeEligible) {
       const race = new HedgeRace()
+      // TRUE RACE (Tony's call): ANY cloud/CLI provider — Cloudflare or otherwise — and the on-device
+      // model start TOGETHER and
+      // the fastest answer wins. HEDGE_DELAY_MS exists to stop a merely-slow PAID primary being billed
+      // twice for one ask, but an on-device backup has no per-request cost and no quota, so that head
+      // start would be pure latency whenever the cloud turns out to be the slower of the two. Quality is
+      // preserved because HedgeRace declares the winner on FIRST TOKEN, not on start order — a healthy
+      // cloud provider that answers faster still wins and still serves its answer; local only takes the
+      // ask when it genuinely gets there first, which is the cloud-is-slow / cloud-is-down case.
+      // This early pick decides the DELAY only: startHedgeLeg re-picks the provider at fire time against
+      // the live primaryChain, so a primary that fails over in the meantime is still excluded correctly.
+      const hedgeDelayMs = pickFailover([primary]) === 'local' ? 0 : HEDGE_DELAY_MS
       let hedgeTimer: NodeJS.Timeout | null = setTimeout(() => {
         hedgeTimer = null
         startHedgeLeg()
-      }, HEDGE_DELAY_MS)
+      }, hedgeDelayMs)
       // ONE launcher behind both triggers: the HEDGE_DELAY_MS timer (a primary that is merely slow) and
       // HedgeRace's own early pull-forward (a primary already dead — nothing left to give it time for).
       // race.markHedgeStarted() makes whichever fires second a no-op.
@@ -4414,7 +4465,22 @@ function registerIpc(): void {
   ipcMain.handle(IPC.brainOpenDashboard, (e) => {
     assertMainWindow(e)
     if (!requireAuth()) throw new Error('Not signed in.')
-    const result = openIntelligenceWindow()
+    // Hand the overlay's live bounds over so the dashboard opens clear of it. The bar is always-on-top,
+    // so anywhere the two intersect the dashboard is the one that gets covered (measured: the bar hid its
+    // top 23px across the full width). Undefined when the overlay is gone — placement then just centres.
+    // Height is capped deliberately, NOT taken live. The renderer collapses the panel only
+    // after this IPC resolves (RecallView/BrainView call onDashboardOpen in the .then), so sampling the
+    // live bounds here measured the still-EXPANDED bar — up to ~992px tall — and placed the dashboard
+    // below that, i.e. off the bottom of the screen. Placing against the idle rectangle the bar is about
+    // to return to is deterministic and does not depend on a React render landing first.
+    const avoid =
+      win && !win.isDestroyed() && win.isVisible()
+        ? (() => {
+            const b = win.getBounds()
+            return { ...b, height: Math.min(b.height, BAR_COLLAPSED_MAX_HEIGHT) }
+          })()
+        : undefined
+    const result = openIntelligenceWindow(avoid)
     // Opening the full dashboard is an explicit request for current meeting knowledge. Kick off one
     // backlog pass for saved transcripts that predate the brain; new saves already call enqueueIngest.
     // This is deliberately fire-and-forget so a slow OneDrive listing never delays the window itself.
@@ -5214,6 +5280,10 @@ if (!app.requestSingleInstanceLock()) {
   // Cahê M13: one-time enable of the on-device model so the background screen reader works out of the box
   // (own marker → also migrates existing pilot profiles upgraded from 1.0.7). See cahe-embedded-key.ts.
   seedCaheLocalAiForBackgroundScreen()
+  // Every build (not just Cahê): seed an optional installer-embedded Cloudflare proxy key, once per
+  // profile, so a fresh install of the default provider can answer with zero paste-a-key setup when the
+  // operator chose to embed one. See embedded-cloudflare-key.ts — a no-op when no bundle was packaged.
+  importEmbeddedCloudflareKey()
   // Métis Local weights are no longer bundled in the installer (~728 MB; a universal mac package
   // carrying them would blow past GitHub's 2 GB release-asset limit), so fetch them once here on first
   // run. Deliberately NOT awaited: this is a ~763 MB download and startup must not wait on it, nor fail
@@ -5228,10 +5298,45 @@ if (!app.requestSingleInstanceLock()) {
   // background screen reader does: its eligibility is evaluated when the engine is refreshed, and the boot
   // refresh below runs while this download is still in flight — without this re-arm, a first-run user who
   // opted in gets an inert fast path until some unrelated setting changes (MQA-178).
-  if (shouldFetchWeights(LOCAL_MODELS[0].id, getSettings().localLlm.enabled)) {
-    void ensureLocalModel(LOCAL_MODELS[0].id)
-      .then(() => refreshScreenPreprocess())
-      .catch((e) => mainLog.warn('[boot] local model provisioning failed:', e))
+  // Pick by hardware, not by list position: bestModelForMachine() returns the strongest entry whose RAM
+  // floor this machine clears. A profile still holding the SMALL floor model is upgraded here rather than
+  // left behind — when that id was persisted it was the only model that existed, so it was never a user
+  // choice to respect. An explicit pick of any other id is left alone. The upgrade only rewrites the
+  // setting; ensureLocalModel then fetches whatever is missing, and a machine below the bigger model's
+  // floor simply resolves back to the small one.
+  {
+    const best = bestModelForMachine()
+    const current = getSettings().localLlm.modelId
+    if (current !== best.id && current === 'qwen3.5-0.8b') {
+      try {
+        setSettings({ localLlm: { ...getSettings().localLlm, modelId: best.id } })
+        mainLog.info(`[boot] upgraded the on-device model to ${best.id}`)
+      } catch (e) {
+        mainLog.warn('[boot] on-device model upgrade failed:', e)
+      }
+    }
+    if (shouldFetchWeights(best.id, getSettings().localLlm.enabled)) {
+      void ensureLocalModel(best.id)
+        .then(() => refreshScreenPreprocess())
+        .catch((e) => mainLog.warn('[boot] local model provisioning failed:', e))
+    }
+    // Warm the sidecar at BOOT so the first ask is never the cold one. The 4B costs ~42s to load and
+    // ~2s once warm, and warming on focus/keystroke still left most of that load in front of the answer.
+    // Deliberately delayed and fire-and-forget: startup must not wait on it, and it must not compete with
+    // window creation or the weight fetch above. localPrewarmEligible re-checks enabled/allowlist/hedge,
+    // and the spawn profile (spawnProfileFor) already sizes the sidecar for this machine's RAM, so on a
+    // small machine this warms a CPU-only, ~2.8 GB configuration rather than the offloaded one.
+    setTimeout(() => {
+      try {
+        const cur = getSettings()
+        if (!localPrewarmEligible(cur, getAllowedProviders(), publicSettings().providerReady)) return
+        void prewarmLocal(cur.localLlm.modelId, buildPrewarmMessages('warm', cur)).catch((e) =>
+          mainLog.warn('[boot] local prewarm failed:', e instanceof Error ? e.message : String(e))
+        )
+      } catch (e) {
+        mainLog.warn('[boot] local prewarm skipped:', e instanceof Error ? e.message : String(e))
+      }
+    }, 4000).unref?.()
   }
   // Windows toast attribution: a process's AppUserModelID must match the installed shortcut's AUMID
   // (electron-builder sets it to appId) or Windows silently drops native Notifications — which breaks
