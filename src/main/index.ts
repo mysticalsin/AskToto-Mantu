@@ -135,7 +135,7 @@ function getSpeakerId(): SpeakerId {
   return speakerIdInstance
 }
 import { buildPrewarmMessages } from './llm/prewarm'
-import { listModels as listLocalModels, bestModelForMachine } from './llm/local-models'
+import { listModels as listLocalModels, bestModelForMachine, isDownloaded as localModelDownloaded } from './llm/local-models'
 import { ensureLocalModel, localModelDownloadState, shouldFetchWeights } from './llm/local-model-download'
 import { createScreenPreprocess, type ScreenPreprocess } from './screen-preprocess'
 import { startForegroundWatcher } from './foreground-watcher'
@@ -5315,20 +5315,18 @@ if (!app.requestSingleInstanceLock()) {
         mainLog.warn('[boot] on-device model upgrade failed:', e)
       }
     }
-    if (shouldFetchWeights(best.id, getSettings().localLlm.enabled)) {
-      void ensureLocalModel(best.id)
-        .then(() => refreshScreenPreprocess())
-        .catch((e) => mainLog.warn('[boot] local model provisioning failed:', e))
-    }
-    // Warm the sidecar at BOOT so the first ask is never the cold one. The 4B costs ~42s to load and
-    // ~2s once warm, and warming on focus/keystroke still left most of that load in front of the answer.
-    // Deliberately delayed and fire-and-forget: startup must not wait on it, and it must not compete with
-    // window creation or the weight fetch above. localPrewarmEligible re-checks enabled/allowlist/hedge,
-    // and the spawn profile (spawnProfileFor) already sizes the sidecar for this machine's RAM, so on a
-    // small machine this warms a CPU-only, ~2.8 GB configuration rather than the offloaded one.
-    setTimeout(() => {
+    // Warm the sidecar so the first ask is never the cold one — measured 42s cold against ~2.3s warm.
+    // Gated on the weights actually being PRESENT: on a fresh install they are still downloading (~3.4 GB,
+    // in the background, right through onboarding), and warming then would fight that transfer for I/O to
+    // load a model that is not there yet. So there are two triggers and one guard: warm shortly after boot
+    // when the model is already on disk, and warm off the back of the fetch when it has just landed.
+    // Fire-and-forget either way — startup never waits on it, and localPrewarmEligible re-checks
+    // enabled/allowlist/hedge. spawnProfileFor already sizes the sidecar for this machine's RAM, so on a
+    // small machine this warms the CPU-only ~2.1 GB configuration rather than the offloaded one.
+    const warmLocalIfReady = (): void => {
       try {
         const cur = getSettings()
+        if (!localModelDownloaded(cur.localLlm.modelId)) return
         if (!localPrewarmEligible(cur, getAllowedProviders(), publicSettings().providerReady)) return
         void prewarmLocal(cur.localLlm.modelId, buildPrewarmMessages('warm', cur)).catch((e) =>
           mainLog.warn('[boot] local prewarm failed:', e instanceof Error ? e.message : String(e))
@@ -5336,7 +5334,18 @@ if (!app.requestSingleInstanceLock()) {
       } catch (e) {
         mainLog.warn('[boot] local prewarm skipped:', e instanceof Error ? e.message : String(e))
       }
-    }, 4000).unref?.()
+    }
+    if (shouldFetchWeights(best.id, getSettings().localLlm.enabled)) {
+      void ensureLocalModel(best.id)
+        .then(() => {
+          refreshScreenPreprocess()
+          // The weights just landed (first run, mid-onboarding). Warm now rather than leaving the very
+          // first ask to pay the full cold load.
+          warmLocalIfReady()
+        })
+        .catch((e) => mainLog.warn('[boot] local model provisioning failed:', e))
+    }
+    setTimeout(warmLocalIfReady, 4000).unref?.()
   }
   // Windows toast attribution: a process's AppUserModelID must match the installed shortcut's AUMID
   // (electron-builder sets it to appId) or Windows silently drops native Notifications — which breaks
